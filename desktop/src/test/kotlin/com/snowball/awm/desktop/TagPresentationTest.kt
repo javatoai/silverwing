@@ -94,7 +94,7 @@ class TagPresentationTest {
         )
 
         assertEquals(
-            "自动将 feature/task-42 合入 upstream/uat 时检测到冲突。",
+            "我在将服务 operation-center 的 feature/task-42 分支合并到 upstream/uat 时遇到了冲突，请你解决。",
             tagConflictSummary(conflict),
         )
     }
@@ -122,7 +122,7 @@ class TagPresentationTest {
         )
 
         assertEquals(
-            "自动将 feature/task-42 合入 upstream/uat 时检测到冲突。\n冲突文件：src/A.kt、src/B.kt",
+            "我在将服务 operation-center 的 feature/task-42 分支合并到 upstream/uat 时遇到了冲突，请你解决。\n冲突文件：src/A.kt、src/B.kt",
             tagConflictCopyText(conflict),
         )
     }

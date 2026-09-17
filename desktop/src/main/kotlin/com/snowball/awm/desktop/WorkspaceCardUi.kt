@@ -1571,6 +1571,7 @@ private fun WorkspaceCardActions(
     val workspaceLabel = workspace.moduleName.ifBlank { workspace.serviceName }
     val workspaceLoading = controller.busy && controller.activeOperation?.contains(workspaceLabel) == true
     val tagLoading = workspaceLoading && controller.activeOperation?.contains("Tag") == true
+    val customCommands = controller.workspaceCommands(task, workspace)
     val toolbarPresentation = workspaceToolbarPresentationFor(
         workspace = workspace,
         canBuildTag = controller.canBuildTag(task, workspace),
@@ -1597,6 +1598,20 @@ private fun WorkspaceCardActions(
                 }
                 ActionIconButton("复制工作区完整路径", { controller.copyText(workspace.worktreePath, "工作区路径已复制") }, Modifier.size(34.dp)) {
                     Icon(Icons.Outlined.ContentCopy, "复制路径", Modifier.size(18.dp))
+                }
+            }
+        }
+        if (customCommands.isNotEmpty()) {
+            IconActionGroup {
+                customCommands.forEach { command ->
+                    ActionIconButton(
+                        "${command.name} · ${workspaceCommandDisplay(command)}",
+                        { controller.runWorkspaceCommand(task, workspace, command) },
+                        Modifier.size(34.dp),
+                        enabled = !controller.busy && !controller.workspaceCommandRunning,
+                    ) {
+                        Icon(workspaceCommandIcon(command.iconKey), command.name, Modifier.size(18.dp))
+                    }
                 }
             }
         }

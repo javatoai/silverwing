@@ -44,6 +44,7 @@ import com.snowball.awm.core.TagOperation
 import com.snowball.awm.core.TagOperationState
 import com.snowball.awm.core.TagHistoryItem
 import com.snowball.awm.core.TagWorkspaceCheck
+import com.snowball.awm.core.tagMergeConflictMessage
 import com.snowball.awm.core.userFacingLabel
 import com.snowball.awm.core.tagRetryKind
 import com.snowball.awm.core.TagRetryKind
@@ -646,7 +647,7 @@ private fun TagWorkspaceCheckResult(check: TagWorkspaceCheck?) {
 
 internal fun tagConflictSummary(operation: TagOperation): String {
     val target = operation.targetBranch?.let { "${operation.remote}/$it" } ?: "目标分支"
-    return "自动将 ${operation.sourceBranch} 合入 $target 时检测到冲突。"
+    return tagMergeConflictMessage(operation.serviceName, operation.sourceBranch, target)
 }
 
 internal fun tagConflictFilesSummary(operation: TagOperation): String =

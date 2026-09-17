@@ -8,6 +8,16 @@ import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 
+enum class CommandOutputStream {
+    STDOUT,
+    STDERR,
+}
+
+data class CommandOutputLine(
+    val stream: CommandOutputStream,
+    val text: String,
+)
+
 interface CommandRunner {
     fun run(
         command: List<String>,
@@ -17,12 +27,38 @@ interface CommandRunner {
     ): CommandResult
 }
 
-class ProcessCommandRunner : CommandRunner {
+interface StreamingCommandRunner : CommandRunner {
+    fun runStreaming(
+        command: List<String>,
+        workingDirectory: Path? = null,
+        timeout: Duration = Duration.ofMinutes(10),
+        environment: Map<String, String> = emptyMap(),
+        onOutput: (CommandOutputLine) -> Unit,
+    ): CommandResult
+}
+
+class ProcessCommandRunner : StreamingCommandRunner {
     override fun run(
         command: List<String>,
         workingDirectory: Path?,
         timeout: Duration,
         environment: Map<String, String>,
+    ): CommandResult = runInternal(command, workingDirectory, timeout, environment, null)
+
+    override fun runStreaming(
+        command: List<String>,
+        workingDirectory: Path?,
+        timeout: Duration,
+        environment: Map<String, String>,
+        onOutput: (CommandOutputLine) -> Unit,
+    ): CommandResult = runInternal(command, workingDirectory, timeout, environment, onOutput)
+
+    private fun runInternal(
+        command: List<String>,
+        workingDirectory: Path?,
+        timeout: Duration,
+        environment: Map<String, String>,
+        onOutput: ((CommandOutputLine) -> Unit)?,
     ): CommandResult {
         require(command.isNotEmpty()) { "命令不能为空" }
         require(!timeout.isNegative && !timeout.isZero) { "timeout must be greater than zero" }
@@ -42,10 +78,18 @@ class ProcessCommandRunner : CommandRunner {
         var stderrFuture: Future<String>? = null
         return try {
             stdoutFuture = executor.submit<String> {
-                process.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
+                if (onOutput == null) {
+                    process.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
+                } else {
+                    readStreamingOutput(process.inputStream, CommandOutputStream.STDOUT, onOutput)
+                }
             }
             stderrFuture = executor.submit<String> {
-                process.errorStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
+                if (onOutput == null) {
+                    process.errorStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
+                } else {
+                    readStreamingOutput(process.errorStream, CommandOutputStream.STDERR, onOutput)
+                }
             }
             val finished = waitForProcess(process, deadline, observedProcesses)
             if (!finished) {
@@ -67,6 +111,19 @@ class ProcessCommandRunner : CommandRunner {
             throw error
         } finally {
             executor.shutdownNow()
+        }
+    }
+
+    private fun readStreamingOutput(
+        stream: java.io.InputStream,
+        outputStream: CommandOutputStream,
+        onOutput: (CommandOutputLine) -> Unit,
+    ): String = buildString {
+        stream.bufferedReader(StandardCharsets.UTF_8).useLines { lines ->
+            lines.forEach { line ->
+                onOutput(CommandOutputLine(outputStream, line))
+                append(line).append('\n')
+            }
         }
     }
 

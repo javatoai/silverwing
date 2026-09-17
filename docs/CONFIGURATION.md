@@ -16,11 +16,11 @@ agents/task-templates.json
 
 ## 严格数组 schema
 
-1.0.x 的 `config.json` 使用严格字符串 schema，当前写入版本为 `"1.0.8"`。顶层仓库和组均为数组，数组顺序就是界面顺序：
+1.0.x 的 `config.json` 使用严格字符串 schema，当前写入版本为 `"1.0.9"`。顶层仓库和组均为数组，数组顺序就是界面顺序：
 
 ```json
 {
-  "schemaVersion": "1.0.8",
+  "schemaVersion": "1.0.9",
   "taskRoot": "C:\\Users\\alice\\awm\\tasks",
   "developmentTools": [
     { "type": "INTELLIJ_IDEA", "path": "C:\\Tools\\idea64.exe" },
@@ -176,7 +176,7 @@ agents/task-templates.json
 
 已存在且唯一的需求目录会复用；如果递归查找到多个 `<需求编号>` 或 `<需求编号>-*` 目录，操作会明确失败，不自动选择。发现已有过程文档 manifest 时会校验需求身份，身份不一致则停止写入。AWM 不移动、删除或自动迁移历史资料目录，`.awm/HANDOFF.md` 仍位于任务目录中。
 
-未知字段，以及主版本或次版本不同的 schema 都会被拒绝，应用不会自动迁移或改写原文件。同一主次版本的 PATCH 版本可直接读取，并在下一次正常保存时更新为当前 PATCH。0.12.x 及更早版本的配置与任务清单不会被 1.0.x 读取、迁移或删除；旧的独立过程文档目录保持原样。升级时请先备份用户数据，手工移除旧配置中的 `requirementDocumentationRoot`，将 schema 改为 `1.0.8`，然后在设置页重新保存需求资料根目录与子目录。
+未知字段，以及主版本或次版本不同的 schema 都会被拒绝，应用不会自动迁移或改写原文件。同一主次版本的 PATCH 版本可直接读取，并在下一次正常保存时更新为当前 PATCH。0.12.x 及更早版本的配置与任务清单不会被 1.0.x 读取、迁移或删除；旧的独立过程文档目录保持原样。升级时请先备份用户数据，手工移除旧配置中的 `requirementDocumentationRoot`，将 schema 改为 `1.0.9`，然后在设置页重新保存需求资料根目录与子目录。
 
 ## 组
 
@@ -261,11 +261,11 @@ Bootstrap 是服务级快照，对该服务新创建的每个 Worktree 或独立
 
 ## 任务工作区工具与任务 schema
 
-`agent-workspace.json` 使用严格字符串 schema，当前写入版本为 `"1.0.8"`。创建任务时会继承所属组的 `defaultWorkspaceToolIds`，用户可以在创建页增减。任务本身创建成功后，工具适配器逐项打开；其中一个失败不会回滚 Git 工作区，也不会阻止其他工具。1.0.x 不读取、迁移或删除 0.12.x 及更早版本的配置和任务清单。
+`agent-workspace.json` 使用严格字符串 schema，当前写入版本为 `"1.0.9"`。创建任务时会继承所属组的 `defaultWorkspaceToolIds`，用户可以在创建页增减。任务本身创建成功后，工具适配器逐项打开；其中一个失败不会回滚 Git 工作区，也不会阻止其他工具。1.0.x 不读取、迁移或删除 0.12.x 及更早版本的配置和任务清单。
 
 ```json
 {
-  "schemaVersion": "1.0.8",
+  "schemaVersion": "1.0.9",
   "lifecycleStatus": "ACTIVE",
   "services": [
     {

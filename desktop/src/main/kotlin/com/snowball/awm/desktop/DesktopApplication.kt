@@ -94,6 +94,8 @@ import com.snowball.awm.core.WorkspaceGitHistoryService
 import com.snowball.awm.core.WorkspaceGitCommit
 import com.snowball.awm.core.WorkspaceGitStatusService
 import com.snowball.awm.core.WorkspaceGitOperationService
+import com.snowball.awm.core.WorkspaceCommandConfig
+import com.snowball.awm.core.WorkspaceCommandService
 import com.snowball.awm.core.WorkspaceGitBatchMode
 import com.snowball.awm.core.WorkspaceGitBatchResult
 import com.snowball.awm.core.GitWorkspaceGitStatusReader
@@ -282,6 +284,7 @@ class DesktopApplication(
     private val gitStatusService: WorkspaceGitStatusService = WorkspaceGitStatusService(GitWorkspaceGitStatusReader(gitClient)),
     private val gitFilePreviewService: WorkspaceGitFilePreviewService = WorkspaceGitFilePreviewService(gitClient),
     private val gitHistoryService: WorkspaceGitHistoryService = WorkspaceGitHistoryService(GitWorkspaceGitHistoryReader(gitClient)),
+    private val workspaceCommandService: WorkspaceCommandService = WorkspaceCommandService(),
     private val gitOperationService: WorkspaceGitOperationService = WorkspaceGitOperationService(gitClient, repositoryLock),
     private val taskBranchCatalog: TaskBranchCatalog = GitTaskBranchCatalog(gitClient),
     private val desktopIntegration: DesktopIntegration = DesktopIntegration(),
@@ -387,6 +390,7 @@ class DesktopApplication(
             gitStatus = gitStatusService,
             gitFilePreviews = gitFilePreviewService,
             gitHistory = gitHistoryService,
+            workspaceCommands = workspaceCommandService,
             workspaceTools = workspaceToolLaunchService,
             gitOperations = gitOperationService,
             taskBranchCatalog = taskBranchCatalog,
@@ -1104,6 +1108,17 @@ class DesktopApplication(
 
     suspend fun workspaceGitHistory(worktreePath: String): List<WorkspaceGitCommit> =
         taskController.workspaceGitHistory(worktreePath)
+
+    val workspaceCommandState: WorkspaceCommandExecutionState?
+        get() = taskController.workspaceCommandState
+    val workspaceCommandRunning: Boolean
+        get() = taskController.workspaceCommandRunning
+    fun workspaceCommands(task: TaskManifest, workspace: ServiceWorkspace): List<WorkspaceCommandConfig> =
+        taskController.workspaceCommands(task, workspace)
+    fun runWorkspaceCommand(task: TaskManifest, workspace: ServiceWorkspace, command: WorkspaceCommandConfig): Boolean =
+        taskController.runWorkspaceCommand(task, workspace, command)
+    fun cancelWorkspaceCommand() = taskController.cancelWorkspaceCommand()
+    fun dismissWorkspaceCommand() = taskController.dismissWorkspaceCommand()
 
 
     fun openWorkspace(workspace: ServiceWorkspace, type: com.snowball.awm.core.DevelopmentToolType = workspace.developmentTool) =

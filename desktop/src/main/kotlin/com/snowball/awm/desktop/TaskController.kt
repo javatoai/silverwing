@@ -31,6 +31,9 @@ import com.snowball.awm.core.WorkspaceGitHealthState
 import com.snowball.awm.core.WorkspaceGitCommit
 import com.snowball.awm.core.WorkspaceGitHistoryService
 import com.snowball.awm.core.WorkspaceGitStatusService
+import com.snowball.awm.core.WorkspaceCommandConfig
+import com.snowball.awm.core.WorkspaceCommandService
+import com.snowball.awm.core.CommandOutputLine
 import com.snowball.awm.core.WorkspaceToolLaunchService
 import com.snowball.awm.core.WorkspaceGitOperationService
 import com.snowball.awm.core.WorkspaceGitBatchMode
@@ -42,6 +45,7 @@ import com.snowball.awm.core.WorkspaceRepairResult
 import com.snowball.awm.core.WorkspaceModuleRemovalConfirmation
 import com.snowball.awm.core.WorkspaceModuleRemovalPreview
 import com.snowball.awm.core.WorkspaceModuleRemovalResult
+import com.snowball.awm.core.WorkspaceHealth
 import com.snowball.awm.core.CommitMessageTemplate
 import com.snowball.awm.core.EventSink
 import com.snowball.awm.core.NoOpEventSink
@@ -55,6 +59,28 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import java.nio.file.Path
+
+enum class WorkspaceCommandExecutionStatus {
+    RUNNING,
+    SUCCEEDED,
+    FAILED,
+    CANCELLED,
+}
+
+data class WorkspaceCommandExecutionState(
+    val taskKey: String,
+    val workspaceKey: String,
+    val workspaceLabel: String,
+    val command: WorkspaceCommandConfig,
+    val workingDirectory: String,
+    val status: WorkspaceCommandExecutionStatus,
+    val lines: List<CommandOutputLine> = emptyList(),
+    val truncated: Boolean = false,
+    val exitCode: Int? = null,
+    val error: String? = null,
+    val startedAtMillis: Long = System.currentTimeMillis(),
+    val durationMillis: Long? = null,
+)
 
 /** Immutable state exposed by task use cases to the presentation layer. */
 data class TaskUiState(
@@ -95,6 +121,7 @@ class TaskController internal constructor(
     private val gitStatus: WorkspaceGitStatusService,
     private val gitFilePreviews: WorkspaceGitFilePreviewService,
     private val gitHistory: WorkspaceGitHistoryService,
+    private val workspaceCommands: WorkspaceCommandService,
     private val workspaceTools: WorkspaceToolLaunchService,
     private val gitOperations: WorkspaceGitOperationService,
     private val taskBranchCatalog: TaskBranchCatalog,
@@ -114,6 +141,9 @@ class TaskController internal constructor(
     private var gitStatusJob: Job? = null
     private var branchCandidateRevision = 0L
     private var branchCandidateJob: Job? = null
+    private var workspaceCommandRevision = 0L
+    private var workspaceCommandJob: Job? = null
+    private var workspaceCommandActive by mutableStateOf(false)
     private val createBranchReuseInspection = CreateTaskBranchReuseInspection(scope, ioDispatcher, onError)
     private var gitHealth by mutableStateOf<Map<String, WorkspaceGitHealth>>(emptyMap())
     private var deleteRisks by mutableStateOf<Map<String, DeleteRiskInspection>>(emptyMap())
@@ -124,6 +154,8 @@ class TaskController internal constructor(
     var branchCandidates by mutableStateOf<TaskBranchCandidatesState>(TaskBranchCandidatesState.Idle)
         private set
     var batchGitPreviews by mutableStateOf<BatchGitPreviewState>(BatchGitPreviewState.Idle)
+        private set
+    var workspaceCommandState by mutableStateOf<WorkspaceCommandExecutionState?>(null)
         private set
 
     val state: TaskUiState
@@ -137,6 +169,7 @@ class TaskController internal constructor(
         )
 
     fun select(task: TaskManifest) {
+        cancelWorkspaceCommandForTaskSwitch()
         session.selectedTask = task
         repairPreview = null
         repairResult = null
@@ -536,6 +569,144 @@ class TaskController internal constructor(
         task.services.distinctBy(WorkspaceGitOperationService::workspacePathKey)
 
     fun workspaceKey(workspace: ServiceWorkspace): String = WorkspaceGitOperationService.workspacePathKey(workspace)
+
+    private fun configuredWorkspaceCommands(task: TaskManifest, workspace: ServiceWorkspace): List<WorkspaceCommandConfig> =
+        session.config.groups
+            .firstOrNull { it.id == task.groupId }
+            ?.services
+            ?.firstOrNull { it.id == workspace.groupServiceId }
+            ?.modules
+            ?.firstOrNull { it.id == workspace.moduleId }
+            ?.customCommands
+            .orEmpty()
+
+    fun workspaceCommands(task: TaskManifest, workspace: ServiceWorkspace): List<WorkspaceCommandConfig> {
+        if (workspace.health !in setOf(WorkspaceHealth.READY, WorkspaceHealth.READY_WITH_WARNINGS)) return emptyList()
+        return configuredWorkspaceCommands(task, workspace)
+            .filter(WorkspaceCommandConfig::enabled)
+    }
+
+    val workspaceCommandRunning: Boolean
+        get() = workspaceCommandActive
+
+    fun runWorkspaceCommand(
+        task: TaskManifest,
+        workspace: ServiceWorkspace,
+        command: WorkspaceCommandConfig,
+    ): Boolean {
+        if (workspaceCommandRunning || workspace.health !in setOf(WorkspaceHealth.READY, WorkspaceHealth.READY_WITH_WARNINGS)) return false
+        val configured = configuredWorkspaceCommands(task, workspace)
+            .firstOrNull { it.id == command.id }
+            ?: return false
+        if (!configured.enabled) return false
+        val revision = ++workspaceCommandRevision
+        val workspaceKey = workspaceKey(workspace)
+        val commandWorkingDirectory = Path.of(workspace.worktreePath)
+            .toAbsolutePath()
+            .normalize()
+            .resolve(configured.workingDirectory)
+            .normalize()
+            .toString()
+        val startedAt = System.currentTimeMillis()
+        val collectedLines = java.util.Collections.synchronizedList(mutableListOf<CommandOutputLine>())
+        var collectedTruncated = false
+        workspaceCommandState = WorkspaceCommandExecutionState(
+            taskKey = task.taskDirectoryName,
+            workspaceKey = workspaceKey,
+            workspaceLabel = workspace.moduleName.ifBlank { workspace.serviceName },
+            command = configured,
+            workingDirectory = commandWorkingDirectory,
+            status = WorkspaceCommandExecutionStatus.RUNNING,
+            startedAtMillis = startedAt,
+        )
+        workspaceCommandActive = true
+        workspaceCommandJob = scope.launch {
+            try {
+                val result = runInterruptible(ioDispatcher) {
+                    workspaceCommands.execute(Path.of(workspace.worktreePath), configured) { line ->
+                        synchronized(collectedLines) {
+                            if (collectedLines.size < MAX_WORKSPACE_COMMAND_LOG_LINES) collectedLines += line
+                            else {
+                                collectedLines.removeAt(0)
+                                collectedLines += line
+                                collectedTruncated = true
+                            }
+                        }
+                        scope.launch {
+                            if (revision != workspaceCommandRevision) return@launch
+                            val current = workspaceCommandState ?: return@launch
+                            if (current.status != WorkspaceCommandExecutionStatus.RUNNING) return@launch
+                            val snapshot = synchronized(collectedLines) { collectedLines.toList() }
+                            workspaceCommandState = current.copy(lines = snapshot, truncated = collectedTruncated)
+                        }
+                    }
+                }
+                if (revision != workspaceCommandRevision) return@launch
+                val snapshot = synchronized(collectedLines) { collectedLines.toList() }
+                workspaceCommandState = workspaceCommandState?.copy(
+                    lines = snapshot,
+                    truncated = collectedTruncated,
+                    status = if (result.succeeded) WorkspaceCommandExecutionStatus.SUCCEEDED else WorkspaceCommandExecutionStatus.FAILED,
+                    exitCode = result.exitCode,
+                    durationMillis = System.currentTimeMillis() - startedAt,
+                    error = if (result.succeeded) {
+                        null
+                    } else {
+                        result.stderr.lineSequence().firstOrNull { it.isNotBlank() }
+                            ?: "命令退出码：${result.exitCode}"
+                    },
+                )
+            } catch (cancelled: CancellationException) {
+                if (revision == workspaceCommandRevision) {
+                    val snapshot = synchronized(collectedLines) { collectedLines.toList() }
+                    workspaceCommandState = workspaceCommandState?.copy(
+                        lines = snapshot,
+                        truncated = collectedTruncated,
+                        status = WorkspaceCommandExecutionStatus.CANCELLED,
+                        durationMillis = System.currentTimeMillis() - startedAt,
+                    )
+                }
+            } catch (error: Throwable) {
+                if (revision == workspaceCommandRevision) {
+                    val snapshot = synchronized(collectedLines) { collectedLines.toList() }
+                    workspaceCommandState = workspaceCommandState?.copy(
+                        lines = snapshot,
+                        truncated = collectedTruncated,
+                        status = WorkspaceCommandExecutionStatus.FAILED,
+                        durationMillis = System.currentTimeMillis() - startedAt,
+                        error = error.message ?: error::class.simpleName,
+                    )
+                }
+            } finally {
+                workspaceCommandJob = null
+                workspaceCommandActive = false
+            }
+        }
+        return true
+    }
+
+    fun cancelWorkspaceCommand() {
+        val current = workspaceCommandState
+        if (current?.status != WorkspaceCommandExecutionStatus.RUNNING) return
+        ++workspaceCommandRevision
+        workspaceCommandJob?.cancel()
+        workspaceCommandState = current.copy(
+            status = WorkspaceCommandExecutionStatus.CANCELLED,
+            durationMillis = System.currentTimeMillis() - current.startedAtMillis,
+        )
+    }
+
+    fun dismissWorkspaceCommand() {
+        if (workspaceCommandState?.status == WorkspaceCommandExecutionStatus.RUNNING) return
+        workspaceCommandState = null
+    }
+
+    private fun cancelWorkspaceCommandForTaskSwitch() {
+        ++workspaceCommandRevision
+        workspaceCommandJob?.cancel()
+        workspaceCommandJob = null
+        workspaceCommandState = null
+    }
 
     suspend fun previewWorkspaceFile(
         worktreePath: String,

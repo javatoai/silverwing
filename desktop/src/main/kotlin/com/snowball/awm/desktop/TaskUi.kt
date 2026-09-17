@@ -290,6 +290,7 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
                     },
                 )
             }
+            WorkspaceCommandDialog(controller, task)
             if (failedTools.isNotEmpty()) {
                 SectionHeader("工作区工具打开失败", "任务创建不受影响，可单独重试失败工具")
                 failedTools.forEach { launch ->

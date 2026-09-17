@@ -62,7 +62,8 @@ internal fun tagOperationGuidance(operation: TagOperation, taskFolder: String): 
     return when (tagRetryKind(operation)) {
         TagRetryKind.RESOLVE_CONFLICT -> {
             val target = operation.targetBranch?.let { "${operation.remote}/$it" } ?: "目标分支"
-            "请将 ${operation.sourceBranch} 合入 $target，解决冲突后提交并推送 $target，再执行 `$retry` 重新构建"
+            "${tagMergeConflictMessage(operation.serviceName, operation.sourceBranch, target)}\n" +
+                "解决冲突后提交并推送 $target，再执行 `$retry` 重新构建"
         }
         TagRetryKind.RETRY_INTERRUPTED ->
             "上次Tag构建被中断，尚未合并目标分支或创建测试Tag；执行 `$retry` 重新构建"

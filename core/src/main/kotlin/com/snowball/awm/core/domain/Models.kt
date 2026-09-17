@@ -6,10 +6,10 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.json.JsonNames
 
-/** Persisted data follows the product release line and is deliberately strict. */
-const val CURRENT_PRODUCT_VERSION = "1.0.8"
-const val CURRENT_APP_CONFIG_SCHEMA_VERSION = CURRENT_PRODUCT_VERSION
-const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = CURRENT_PRODUCT_VERSION
+/** Persisted data uses explicit strict schema versions independent of the product build version. */
+const val CURRENT_PRODUCT_VERSION = "1.0.10"
+const val CURRENT_APP_CONFIG_SCHEMA_VERSION = "1.0.9"
+const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = "1.0.9"
 const val DEFAULT_GROUP_ID = "default"
 const val DEFAULT_GROUP_NAME = "默认组"
 const val DEFAULT_TAG_HISTORY_MAX_GROUPS = 20
@@ -85,6 +85,27 @@ data class BootstrapConfig(
     val commands: List<BootstrapCommand> = emptyList(),
 )
 
+/** One service-owned command exposed as a shortcut on its task workspaces. */
+@Serializable
+data class WorkspaceCommandConfig(
+    val id: String,
+    val name: String,
+    val iconKey: String = "build",
+    val executable: String,
+    val arguments: List<String> = emptyList(),
+    val workingDirectory: String = ".",
+    val timeoutSeconds: Long = 1_800,
+    val enabled: Boolean = true,
+) {
+    init {
+        require(id.isNotBlank()) { "快捷命令 ID 不能为空" }
+        require(name.isNotBlank()) { "快捷命令名称不能为空" }
+        require(iconKey.isNotBlank()) { "快捷命令图标不能为空" }
+        require(executable.isNotBlank()) { "快捷命令可执行程序不能为空" }
+        require(timeoutSeconds > 0) { "快捷命令超时必须大于 0" }
+    }
+}
+
 /** A persisted physical repository selected explicitly by the user. */
 @Serializable
 data class RepositoryConfig(
@@ -127,6 +148,7 @@ data class ServiceModuleConfig(
     @JsonNames("uatRef")
     val tagTargetRef: String? = "origin/release/test",
     val tagMessagePrefix: String = "Tag",
+    val customCommands: List<WorkspaceCommandConfig> = emptyList(),
 ) {
     init {
         require(id.isNotBlank()) { "模块 ID 不能为空" }
@@ -139,6 +161,9 @@ data class ServiceModuleConfig(
         if (tagEnabled && tagMode == TagBuildMode.MERGE_TO_TARGET_BRANCH) {
             require(!tagTargetRef.isNullOrBlank()) { "合并到目标分支模式必须配置测试Tag目标分支" }
             RemoteBranchRef.parse(tagTargetRef)
+        }
+        require(customCommands.map { it.id.lowercase() }.distinct().size == customCommands.size) {
+            "同一模块内快捷命令 ID 不能重复（忽略大小写）"
         }
     }
 }

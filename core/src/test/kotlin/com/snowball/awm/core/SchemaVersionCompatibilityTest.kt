@@ -7,10 +7,10 @@ import kotlin.test.assertTrue
 
 class SchemaVersionCompatibilityTest {
     @Test
-    fun `current product and persisted schemas share the 1 0 8 release version`() {
-        assertEquals("1.0.8", CURRENT_PRODUCT_VERSION)
-        assertEquals(CURRENT_PRODUCT_VERSION, CURRENT_APP_CONFIG_SCHEMA_VERSION)
-        assertEquals(CURRENT_PRODUCT_VERSION, CURRENT_TASK_MANIFEST_SCHEMA_VERSION)
+    fun `current product and persisted schemas use their current versions`() {
+        assertEquals("1.0.10", CURRENT_PRODUCT_VERSION)
+        assertEquals("1.0.9", CURRENT_APP_CONFIG_SCHEMA_VERSION)
+        assertEquals("1.0.9", CURRENT_TASK_MANIFEST_SCHEMA_VERSION)
     }
 
     @Test

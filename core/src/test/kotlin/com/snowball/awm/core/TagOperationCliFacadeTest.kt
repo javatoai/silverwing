@@ -57,7 +57,7 @@ class TagOperationCliFacadeTest {
 
         val guidance = conflict.toReport("task-42").guidance.orEmpty()
 
-        assertTrue(guidance.contains("feature/task-42 合入 origin/release/test"))
+        assertTrue(guidance.contains("我在将服务 服务 的 feature/task-42 分支合并到 origin/release/test 时遇到了冲突，请你解决。"))
         assertTrue(guidance.contains("awm tag retry --task task-42 --operation operation-42"))
     }
 

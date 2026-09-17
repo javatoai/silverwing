@@ -63,12 +63,47 @@ import com.snowball.awm.core.ServiceModuleConfig
 import com.snowball.awm.core.StandardWorktreeModuleNaming
 import com.snowball.awm.core.TagBuildMode
 import com.snowball.awm.core.WorkspaceStrategy
+import com.snowball.awm.core.WorkspaceCommandConfig
+import com.snowball.awm.core.validateWorkspaceCommand
 import com.snowball.awm.core.validated
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.nio.file.Path
 import java.util.UUID
+
+internal data class WorkspaceCommandEditorDraft(
+    val id: String,
+    val name: String,
+    val iconKey: String,
+    val executable: String,
+    val arguments: List<String>,
+    val workingDirectory: String,
+    val timeoutSeconds: String,
+    val enabled: Boolean,
+) {
+    fun toConfig(): WorkspaceCommandConfig = WorkspaceCommandConfig(
+        id = id,
+        name = name,
+        iconKey = iconKey,
+        executable = executable,
+        arguments = arguments,
+        workingDirectory = workingDirectory,
+        timeoutSeconds = timeoutSeconds.toLongOrNull() ?: 0,
+        enabled = enabled,
+    )
+}
+
+internal fun WorkspaceCommandConfig.toEditorDraft(): WorkspaceCommandEditorDraft = WorkspaceCommandEditorDraft(
+    id = id,
+    name = name,
+    iconKey = iconKey,
+    executable = executable,
+    arguments = arguments,
+    workingDirectory = workingDirectory,
+    timeoutSeconds = timeoutSeconds.toString(),
+    enabled = enabled,
+)
 
 internal data class ServiceModuleEditorDraft(
     val id: String,
@@ -80,6 +115,7 @@ internal data class ServiceModuleEditorDraft(
     val tagMode: TagBuildMode = TagBuildMode.MERGE_TO_TARGET_BRANCH,
     val tagTargetRef: String = "origin/release/test",
     val tagMessagePrefix: String = "Tag",
+    val customCommands: List<WorkspaceCommandEditorDraft> = emptyList(),
 ) {
     fun toConfig(): ServiceModuleConfig = ServiceModuleConfig(
         id = id,
@@ -91,6 +127,8 @@ internal data class ServiceModuleEditorDraft(
         tagMode = tagMode,
         tagTargetRef = if (tagMode == TagBuildMode.CURRENT_BRANCH) null else tagTargetRef.trim(),
         tagMessagePrefix = tagMessagePrefix.trim(),
+        customCommands = customCommands.map(WorkspaceCommandEditorDraft::toConfig)
+            .map { it.validateWorkspaceCommand() },
     )
 }
 
@@ -108,6 +146,7 @@ internal fun ServiceModuleConfig.toEditorDraft(): ServiceModuleEditorDraft = Ser
     tagMode = tagMode,
     tagTargetRef = tagTargetRef.orEmpty(),
     tagMessagePrefix = tagMessagePrefix,
+    customCommands = customCommands.map(WorkspaceCommandConfig::toEditorDraft),
 )
 
 @Composable
@@ -409,6 +448,122 @@ private fun ServiceToolsSection(
 }
 
 @Composable
+private fun ModuleCustomCommandsSection(
+    commands: List<WorkspaceCommandEditorDraft>,
+    onCommandsChange: (List<WorkspaceCommandEditorDraft>) -> Unit,
+) {
+    SectionHeader("快捷命令", "仅对当前模块显示；参数每行一个，不经过 Shell 拼接")
+    if (commands.isEmpty()) {
+        Text("尚未配置快捷命令。可以添加 Maven clean、install、deploy 等命令。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    commands.forEachIndexed { index, command ->
+        var argumentsText by remember(command.id) { mutableStateOf(command.arguments.joinToString("\n")) }
+        OutlinedCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        command.name,
+                        { value -> onCommandsChange(commands.replaceAt(index, command.copy(name = value))) },
+                        Modifier.weight(1f),
+                        label = { Text("命令名称") },
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        command.executable,
+                        { value -> onCommandsChange(commands.replaceAt(index, command.copy(executable = value))) },
+                        Modifier.weight(1f),
+                        label = { Text("可执行程序") },
+                        singleLine = true,
+                    )
+                    IconButton(onClick = { onCommandsChange(commands.filterIndexed { current, _ -> current != index }) }) {
+                        Icon(Icons.Outlined.Delete, "删除快捷命令")
+                    }
+                }
+                Text("图标", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    workspaceCommandIconKeys.forEach { iconKey ->
+                        FilterChip(
+                            selected = command.iconKey == iconKey,
+                            onClick = { onCommandsChange(commands.replaceAt(index, command.copy(iconKey = iconKey))) },
+                            leadingIcon = { Icon(workspaceCommandIcon(iconKey), null, Modifier.size(17.dp)) },
+                            label = { Text(workspaceCommandIconLabel(iconKey)) },
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    argumentsText,
+                    { value ->
+                        argumentsText = value
+                        onCommandsChange(commands.replaceAt(index, command.copy(arguments = value.lines().filter(String::isNotBlank))))
+                    },
+                    Modifier.fillMaxWidth(),
+                    label = { Text("参数（每行一个）") },
+                    minLines = 2,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        command.workingDirectory,
+                        { value -> onCommandsChange(commands.replaceAt(index, command.copy(workingDirectory = value))) },
+                        Modifier.weight(1f),
+                        label = { Text("工作目录（工作区内相对路径）") },
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        command.timeoutSeconds,
+                        { value -> onCommandsChange(commands.replaceAt(index, command.copy(timeoutSeconds = value))) },
+                        Modifier.width(150.dp),
+                        label = { Text("超时（秒）") },
+                        singleLine = true,
+                    )
+                    Switch(command.enabled, { checked -> onCommandsChange(commands.replaceAt(index, command.copy(enabled = checked))) })
+                    Text("启用")
+                }
+                val preview = runCatching { command.toConfig() }.getOrNull()?.let(::workspaceCommandDisplay)
+                    ?: (listOf(command.executable) + command.arguments).joinToString(" ")
+                SelectionContainer {
+                    Text("预览：$preview", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+    }
+    OutlinedButton(onClick = {
+        onCommandsChange(
+            commands + WorkspaceCommandEditorDraft(
+                id = "command-${UUID.randomUUID()}",
+                name = "Maven命令",
+                iconKey = "build",
+                executable = "mvn",
+                arguments = emptyList(),
+                workingDirectory = ".",
+                timeoutSeconds = "1800",
+                enabled = true,
+            ),
+        )
+    }) {
+        Icon(Icons.Outlined.Add, null)
+        Spacer(Modifier.width(4.dp))
+        Text("添加快捷命令")
+    }
+}
+
+private fun workspaceCommandIconLabel(iconKey: String): String = when (iconKey) {
+    "build" -> "构建"
+    "maven" -> "Maven"
+    "maven-clean" -> "Maven Clean"
+    "maven-install" -> "Maven Install"
+    "maven-deploy" -> "Maven Deploy"
+    "play" -> "执行"
+    "terminal" -> "终端"
+    "package" -> "打包"
+    "upload" -> "上传"
+    "refresh" -> "刷新"
+    "code" -> "代码"
+    "database" -> "数据库"
+    "settings" -> "设置"
+    else -> "命令"
+}
+
+@Composable
 private fun ServiceModulesSection(
     modules: List<ServiceModuleEditorDraft>,
     onModulesChange: (List<ServiceModuleEditorDraft>) -> Unit,
@@ -658,6 +813,10 @@ private fun ModuleEditor(module: ServiceModuleEditorDraft, repositoryId: String,
                     controller = controller,
                 )
             }
+            ModuleCustomCommandsSection(
+                commands = module.customCommands,
+                onCommandsChange = { onChange(module.copy(customCommands = it)) },
+            )
         }
     }
 }

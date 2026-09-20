@@ -34,7 +34,26 @@ data class CodexPluginCatalogItem(
     val description: String = "",
     val version: String? = null,
     val installed: Boolean = false,
+    /** Codex CLI 返回的插件本地缓存目录，仅用于只读预览。 */
+    val sourcePath: String? = null,
     val bundledSkills: List<String> = emptyList(),
+)
+
+/** 插件本地清单的安全只读预览。 */
+data class CodexPluginPreview(
+    val name: String,
+    val version: String? = null,
+    val description: String = "",
+    val author: String? = null,
+    val category: String? = null,
+    val capabilities: List<String> = emptyList(),
+    val readme: String? = null,
+    val skills: List<CodexPluginPreviewSkill> = emptyList(),
+)
+
+data class CodexPluginPreviewSkill(
+    val name: String,
+    val description: String = "",
 )
 
 /** Last successful state for one SilverWing-managed Marketplace source. */
@@ -252,6 +271,77 @@ class CodexExtensionsService(
         }
     }
 
+    /**
+     * 只读读取 Codex 已缓存插件的清单和内置 Skill。绝不访问远程仓库，
+     * 也不执行插件中的脚本、MCP 或其他文件。
+     */
+    fun previewPlugin(source: CodexPluginMarketplaceSource, pluginName: String): CodexPluginPreview = synchronized(stateLock) {
+        val state = loadState()
+        val status = requireNotNull(state.marketplaces[source.id]) { "请先加载插件来源“${source.name}”" }
+        val plugin = status.plugins.firstOrNull { it.name == pluginName }
+            ?: throw IllegalArgumentException("插件来源“${source.name}”中找不到 $pluginName")
+        val cacheRoot = requireNotNull(status.cacheDirectory) { "Codex 未提供插件来源的本地缓存目录，请先刷新来源" }
+        val pluginPath = requireNotNull(plugin.sourcePath) { "Codex 未提供插件“$pluginName”的本地目录，请先刷新来源" }
+        val root = Path.of(cacheRoot).toAbsolutePath().normalize()
+        val directory = Path.of(pluginPath).toAbsolutePath().normalize()
+        require(directory.startsWith(root)) { "插件预览路径超出 Marketplace 缓存目录" }
+        require(Files.isDirectory(directory, NOFOLLOW_LINKS) && !Files.isSymbolicLink(directory)) {
+            "插件缓存目录不存在或不是普通目录：$directory"
+        }
+        val manifestFile = directory.resolve(PLUGIN_MANIFEST).normalize()
+        require(manifestFile.startsWith(directory) && Files.isRegularFile(manifestFile, NOFOLLOW_LINKS) && !Files.isSymbolicLink(manifestFile)) {
+            "插件缺少 .codex-plugin/plugin.json：$directory"
+        }
+        val manifest = parseCodexJson(readPreviewFile(manifestFile, "插件清单")) as? JsonObject
+            ?: throw IllegalArgumentException("插件清单不是 JSON 对象：$directory")
+        val interfaceInfo = manifest.objectValue("interface")
+        val manifestName = manifest.string("name") ?: plugin.name
+        val skillsDirectory = manifest.string("skills")?.let { value ->
+            val relative = value.removePrefix("./").removeSuffix("/")
+            safeChild(directory, relative, "插件 Skill 目录")
+        }
+        val skills = skillsDirectory?.let { discoverPluginSkills(it) }.orEmpty()
+        return CodexPluginPreview(
+            name = manifestName,
+            version = manifest.string("version") ?: plugin.version,
+            description = manifest.string("description") ?: interfaceInfo?.string("longDescription", "shortDescription") ?: plugin.description,
+            author = manifest.objectValue("author")?.string("name") ?: interfaceInfo?.string("developerName"),
+            category = interfaceInfo?.string("category"),
+            capabilities = interfaceInfo?.arrayValue("capabilities")?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty(),
+            readme = readOptionalPreviewFile(directory.resolve("README.md")),
+            skills = skills,
+        )
+    }
+
+    /** 只读返回当前插件内已经发现的 Skill 正文。 */
+    fun previewPluginSkill(source: CodexPluginMarketplaceSource, pluginName: String, skillName: String): String = synchronized(stateLock) {
+        val preview = previewPlugin(source, pluginName)
+        require(preview.skills.any { it.name == skillName }) { "插件“$pluginName”中找不到内置 Skill：$skillName" }
+        val status = requireNotNull(loadState().marketplaces[source.id]) { "请先加载插件来源“${source.name}”" }
+        val plugin = requireNotNull(status.plugins.firstOrNull { it.name == pluginName })
+        val directory = Path.of(requireNotNull(plugin.sourcePath)).toAbsolutePath().normalize()
+        val manifest = parseCodexJson(readPreviewFile(directory.resolve(PLUGIN_MANIFEST), "插件清单")) as JsonObject
+        val relative = requireNotNull(manifest.string("skills")) { "插件没有配置内置 Skill 目录" }.removePrefix("./").removeSuffix("/")
+        val skillDirectory = safeChild(safeChild(directory, relative, "插件 Skill 目录"), skillName, "插件 Skill 路径")
+        validateSkillDirectory(skillDirectory, skillName)
+        return readSkillFile(skillDirectory)
+    }
+
+    /**
+     * 只读返回已成功发现的 Skill 正文。调用方只能传入运行时清单中存在的
+     * Skill，避免 UI 借由 sourcePath 读取来源缓存外的任意文件。
+     */
+    fun previewSkill(source: SkillSource, skillName: String): String = synchronized(stateLock) {
+        val state = loadState()
+        val status = requireNotNull(state.skillSources[source.id]) { "请先加载 Skill 来源“${source.name}”" }
+        val skill = status.skills.firstOrNull { it.name == skillName }
+            ?: throw IllegalArgumentException("Skill 来源“${source.name}”中找不到 $skillName")
+        val checkout = skillCheckout(source)
+        val sourceDirectory = safeChild(checkout, skill.sourcePath, "Skill 来源路径")
+        validateSkillDirectory(sourceDirectory, skillName)
+        return readSkillFile(sourceDirectory)
+    }
+
     /** Copies an entire discovered Skill to the user Skill root after an explicit takeover when needed. */
     fun installSkill(source: SkillSource, skillName: String, takeOver: Boolean = false): ExternalSkillSourceSnapshot = synchronized(stateLock) {
         val state = loadState()
@@ -304,6 +394,9 @@ class CodexExtensionsService(
         val state = loadState()
         val old = state.marketplaces[source.id] ?: CodexPluginMarketplaceSnapshot(source.id)
         return try {
+            require(!source.requiresRootMarketplaceMigration()) {
+                "插件来源“${source.name}”使用旧版子目录 Marketplace（${source.marketplaceDirectory}）。请移除后按仓库根目录重新添加。"
+            }
             val marketplaceName = old.marketplaceName ?: if (registerWhenMissing) registerMarketplace(source) else null
             require(!marketplaceName.isNullOrBlank()) { "无法识别 Codex Marketplace 名称" }
             if (upgrade) runCodex("plugin", "marketplace", "upgrade", marketplaceName, "--json")
@@ -330,7 +423,6 @@ class CodexExtensionsService(
         val command = buildList {
             addAll(listOf("plugin", "marketplace", "add", source.repositoryUrl))
             source.ref?.let { addAll(listOf("--ref", it)) }
-            if (source.marketplaceDirectory != ".") addAll(listOf("--sparse", source.marketplaceDirectory))
             add("--json")
         }
         val added = runCodex(*command.toTypedArray())
@@ -444,6 +536,29 @@ class CodexExtensionsService(
         val skillFile = directory.resolve(SKILL_FILE)
         require(Files.size(skillFile) <= MAX_SKILL_FILE_BYTES) { "Skill 文件过大，无法安全读取：$directory" }
         return Files.readString(skillFile)
+    }
+
+    /** 只枚举 manifest 指定目录的一层 Skill，避免将插件目录当作任意文件浏览器。 */
+    private fun discoverPluginSkills(root: Path): List<CodexPluginPreviewSkill> {
+        require(Files.isDirectory(root, NOFOLLOW_LINKS) && !Files.isSymbolicLink(root)) { "插件 Skill 目录不存在或不是普通目录：$root" }
+        return discoverSkillDirectories(root).map { directory ->
+            validateSkillDirectory(directory)
+            val content = readSkillFile(directory)
+            val frontMatter = SKILL_FRONT_MATTER.find(content)?.groupValues?.get(1)
+                ?: throw IllegalArgumentException("Skill 缺少 YAML frontmatter：$directory")
+            val name = frontMatterValue(frontMatter, "name") ?: directory.fileName.toString()
+            val description = frontMatterValue(frontMatter, "description").orEmpty()
+            CodexPluginPreviewSkill(name, description)
+        }.sortedBy(CodexPluginPreviewSkill::name)
+    }
+
+    private fun readOptionalPreviewFile(file: Path): String? =
+        if (Files.isRegularFile(file, NOFOLLOW_LINKS) && !Files.isSymbolicLink(file)) readPreviewFile(file, "README") else null
+
+    private fun readPreviewFile(file: Path, label: String): String {
+        require(Files.isRegularFile(file, NOFOLLOW_LINKS) && !Files.isSymbolicLink(file)) { "$label 不存在或不是普通文件：$file" }
+        require(Files.size(file) <= MAX_PLUGIN_PREVIEW_FILE_BYTES) { "$label 文件过大，无法安全读取：$file" }
+        return Files.readString(file)
     }
 
     private fun installSkillDirectory(source: Path, skillName: String) {
@@ -669,7 +784,9 @@ class CodexExtensionsService(
         const val SKILL_SOURCES_DIRECTORY = "skill-sources"
         const val SKILL_BACKUPS_DIRECTORY = "skill-backups"
         const val SKILL_FILE = "SKILL.md"
+        const val PLUGIN_MANIFEST = ".codex-plugin/plugin.json"
         const val MAX_SKILL_FILE_BYTES = 512 * 1024
+        const val MAX_PLUGIN_PREVIEW_FILE_BYTES = 512 * 1024
         const val MAX_ERROR_LENGTH = 4_000
         val CODEX_TIMEOUT: Duration = Duration.ofMinutes(2)
         val GIT_TIMEOUT: Duration = Duration.ofMinutes(5)
@@ -727,7 +844,9 @@ internal fun parseMarketplaceList(output: String): List<CodexMarketplaceRecord> 
 /** Parses `codex plugin list --available --json`; unknown fields are intentionally ignored. */
 fun parseCodexPluginList(output: String): List<CodexPluginCatalogItem> {
     val root = parseCodexJson(output)
-    val objects = namedObjectArray(root, "plugins", "items") ?: root.asObjectList()
+    // 当前 Codex CLI 会把 Marketplace 候选项放到 available；旧版本则使用
+    // plugins/items。三者都读取，避免已安装与可安装插件被静默漏掉。
+    val objects = namedObjectArray(root, "plugins", "items", "available", "installed") ?: root.asObjectList()
     return objects.mapNotNull { item ->
         val nested = item.objectValue("plugin") ?: item
         val name = nested.string("name", "id") ?: return@mapNotNull null
@@ -744,7 +863,8 @@ fun parseCodexPluginList(output: String): List<CodexPluginCatalogItem> {
                 else -> null
             }
         }.orEmpty()
-        CodexPluginCatalogItem(name, description, version, installed, bundledSkills.distinct())
+        val sourcePath = nested.objectValue("source")?.string("path", "directory") ?: nested.string("sourcePath", "path")
+        CodexPluginCatalogItem(name, description, version, installed, sourcePath, bundledSkills.distinct())
     }.distinctBy(CodexPluginCatalogItem::name).sortedBy(CodexPluginCatalogItem::name)
 }
 

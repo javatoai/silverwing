@@ -59,6 +59,7 @@ import com.snowball.silverwing.core.RepositoryConfig
 import com.snowball.silverwing.core.RepositoryInspector
 import com.snowball.silverwing.core.RepositoryOperationLock
 import com.snowball.silverwing.core.RemoteBranchCatalog
+import com.snowball.silverwing.core.RemoteGitBranchCatalog
 import com.snowball.silverwing.core.RepositoryRemoteCatalog
 import com.snowball.silverwing.core.RequirementMetadataProvider
 import com.snowball.silverwing.core.RequirementMetadata
@@ -371,6 +372,7 @@ class DesktopApplication(
             extensions = codexExtensionsService,
             operations = settingsOperationRunner,
             applyConfig = ::applyConfig,
+            branchCatalog = RemoteGitBranchCatalog(gitExecutable = gitExecutable::resolve),
         )
     }
     private val requirementMetadataCoordinator = RequirementMetadataCoordinator(

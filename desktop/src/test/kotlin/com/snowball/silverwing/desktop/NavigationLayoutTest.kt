@@ -20,9 +20,9 @@ class NavigationLayoutTest {
     }
 
     @Test
-    fun `refresh action follows the sidebar brand presentation`() {
-        assertEquals(SidebarRefreshPlacement.BRAND_ROW, sidebarRefreshPlacement(NavigationLayout.EXPANDED))
-        assertEquals(SidebarRefreshPlacement.BELOW_BRAND, sidebarRefreshPlacement(NavigationLayout.COMPACT))
+    fun `sidebar layout selection has no refresh placement dependency`() {
+        assertEquals(NavigationLayout.EXPANDED, navigationLayoutFor(COMPACT_NAVIGATION_MAX_WIDTH_DP))
+        assertEquals(NavigationLayout.COMPACT, navigationLayoutFor(COMPACT_NAVIGATION_MAX_WIDTH_DP - 1f))
     }
 
     @Test

@@ -8,14 +8,40 @@ import com.snowball.silverwing.core.CodexExtensionOwnership
 import com.snowball.silverwing.core.CodexExtensionsService
 import com.snowball.silverwing.core.CodexExtensionsSnapshot
 import com.snowball.silverwing.core.CodexPluginCatalogItem
+import com.snowball.silverwing.core.CodexPluginPreview
 import com.snowball.silverwing.core.CodexPluginMarketplaceSource
 import com.snowball.silverwing.core.ConfigStore
 import com.snowball.silverwing.core.ExternalSkillCatalogItem
 import com.snowball.silverwing.core.SkillSource
+import com.snowball.silverwing.core.RemoteGitBranchCatalog
 
 internal data class CodexExtensionsUiState(
     val snapshot: CodexExtensionsSnapshot,
 )
+
+/** 统一表示来源编辑器的远程分支查询状态。 */
+internal sealed interface RemoteBranchLoadState {
+    data object Idle : RemoteBranchLoadState
+    data object Loading : RemoteBranchLoadState
+    data class Loaded(val branches: List<String>) : RemoteBranchLoadState
+    data class Failed(val message: String) : RemoteBranchLoadState
+}
+
+/** 右侧 Skill 文档预览的异步读取状态。 */
+internal sealed interface SkillPreviewState {
+    data object Empty : SkillPreviewState
+    data object Loading : SkillPreviewState
+    data class Loaded(val content: String) : SkillPreviewState
+    data class Failed(val message: String) : SkillPreviewState
+}
+
+/** 右侧插件概览与内置 Skill 文档预览的异步读取状态。 */
+internal sealed interface PluginPreviewState {
+    data object Empty : PluginPreviewState
+    data object Loading : PluginPreviewState
+    data class Loaded(val content: CodexPluginPreview) : PluginPreviewState
+    data class Failed(val message: String) : PluginPreviewState
+}
 
 /** Keeps UI configuration writes and local Codex/Skill side effects in one deliberately serialized lane. */
 internal class CodexExtensionsController(
@@ -24,12 +50,25 @@ internal class CodexExtensionsController(
     private val extensions: CodexExtensionsService,
     private val operations: OperationRunner,
     private val applyConfig: (AppConfig) -> Unit,
+    private val branchCatalog: RemoteGitBranchCatalog,
 ) {
     var state by mutableStateOf(CodexExtensionsUiState(cachedSnapshot()))
         private set
 
     fun refreshCached() {
         state = CodexExtensionsUiState(cachedSnapshot())
+    }
+
+    fun loadRemoteBranches(repositoryUrl: String, onResult: (RemoteBranchLoadState) -> Unit): Boolean {
+        onResult(RemoteBranchLoadState.Loading)
+        return operations.run(
+            activeMessage = "正在读取远程分支…",
+            successMessage = "远程分支已加载",
+            cancellable = true,
+            block = { branchCatalog.load(repositoryUrl) },
+            onSuccess = { onResult(RemoteBranchLoadState.Loaded(it)) },
+            onFailure = { error -> onResult(RemoteBranchLoadState.Failed(error.message ?: "远程分支读取失败")) },
+        )
     }
 
     fun addMarketplace(source: CodexPluginMarketplaceSource): Boolean = operations.run(
@@ -99,6 +138,30 @@ internal class CodexExtensionsController(
         onFailure = { refreshCached() },
     )
 
+    fun previewPlugin(source: CodexPluginMarketplaceSource, plugin: CodexPluginCatalogItem, onResult: (PluginPreviewState) -> Unit): Boolean {
+        onResult(PluginPreviewState.Loading)
+        return operations.run(
+            activeMessage = "正在读取 ${plugin.name}…",
+            successMessage = "插件概览已加载",
+            cancellable = true,
+            block = { extensions.previewPlugin(source, plugin.name) },
+            onSuccess = { onResult(PluginPreviewState.Loaded(it)) },
+            onFailure = { error -> onResult(PluginPreviewState.Failed(error.message ?: "插件概览读取失败")) },
+        )
+    }
+
+    fun previewPluginSkill(source: CodexPluginMarketplaceSource, plugin: CodexPluginCatalogItem, skillName: String, onResult: (SkillPreviewState) -> Unit): Boolean {
+        onResult(SkillPreviewState.Loading)
+        return operations.run(
+            activeMessage = "正在读取 $skillName…",
+            successMessage = "内置 Skill 文档已加载",
+            cancellable = true,
+            block = { extensions.previewPluginSkill(source, plugin.name, skillName) },
+            onSuccess = { onResult(SkillPreviewState.Loaded(it)) },
+            onFailure = { error -> onResult(SkillPreviewState.Failed(error.message ?: "内置 Skill 文档读取失败")) },
+        )
+    }
+
     fun addSkillSource(source: SkillSource): Boolean = operations.run(
         activeMessage = "正在添加 Skill 来源…",
         successMessage = "Skill 来源已保存",
@@ -143,6 +206,18 @@ internal class CodexExtensionsController(
 
     fun skillOwnership(sourceId: String, skill: ExternalSkillCatalogItem): CodexExtensionOwnership =
         extensions.skillOwnership(sourceId, skill.name)
+
+    fun previewSkill(source: SkillSource, skill: ExternalSkillCatalogItem, onResult: (SkillPreviewState) -> Unit): Boolean {
+        onResult(SkillPreviewState.Loading)
+        return operations.run(
+            activeMessage = "正在读取 ${skill.name}…",
+            successMessage = "Skill 文档已加载",
+            cancellable = true,
+            block = { extensions.previewSkill(source, skill.name) },
+            onSuccess = { onResult(SkillPreviewState.Loaded(it)) },
+            onFailure = { error -> onResult(SkillPreviewState.Failed(error.message ?: "Skill 文档读取失败")) },
+        )
+    }
 
     fun installSkill(source: SkillSource, skill: ExternalSkillCatalogItem, takeOver: Boolean): Boolean = operations.run(
         activeMessage = "正在安装 ${skill.name}…",

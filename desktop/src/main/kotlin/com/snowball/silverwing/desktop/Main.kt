@@ -33,7 +33,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
-import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.ContentCopy
@@ -342,18 +341,8 @@ internal enum class NavigationLayout {
     COMPACT,
 }
 
-internal enum class SidebarRefreshPlacement {
-    BRAND_ROW,
-    BELOW_BRAND,
-}
-
 internal fun navigationLayoutFor(availableWidthDp: Float): NavigationLayout =
     if (availableWidthDp < COMPACT_NAVIGATION_MAX_WIDTH_DP) NavigationLayout.COMPACT else NavigationLayout.EXPANDED
-
-internal fun sidebarRefreshPlacement(layout: NavigationLayout): SidebarRefreshPlacement = when (layout) {
-    NavigationLayout.EXPANDED -> SidebarRefreshPlacement.BRAND_ROW
-    NavigationLayout.COMPACT -> SidebarRefreshPlacement.BELOW_BRAND
-}
 
 /** Non-task pages retain a small breathing space after their large page title is removed. */
 internal fun navigationContentTopPaddingFor(item: NavigationItem): Float =
@@ -377,9 +366,9 @@ private fun Sidebar(
     layout: NavigationLayout,
     onSelected: (NavigationItem) -> Unit,
 ) {
-    when (sidebarRefreshPlacement(layout)) {
-        SidebarRefreshPlacement.BRAND_ROW -> ExpandedSidebar(controller, onSelected)
-        SidebarRefreshPlacement.BELOW_BRAND -> CompactSidebar(controller, onSelected)
+    when (layout) {
+        NavigationLayout.EXPANDED -> ExpandedSidebar(controller, onSelected)
+        NavigationLayout.COMPACT -> CompactSidebar(controller, onSelected)
     }
 }
 
@@ -394,22 +383,6 @@ private fun ExpandedSidebar(controller: DesktopApplication, onSelected: (Navigat
         shape = RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp),
     ) {
         Column(Modifier.padding(horizontal = 10.dp, vertical = 16.dp)) {
-            Row(Modifier.padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Surface(color = BrandBlue, shape = RoundedCornerShape(12.dp), shadowElevation = 3.dp) {
-                    Icon(Icons.Outlined.AccountTree, "silverwing", Modifier.padding(9.dp), tint = Color.White)
-                }
-                Spacer(Modifier.width(10.dp))
-                Text("silverwing", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-                ActionIconButton(
-                    label = "刷新状态",
-                    onClick = controller.taskController::refresh,
-                    modifier = Modifier.size(34.dp),
-                    enabled = !controller.busy,
-                ) {
-                    Icon(Icons.Outlined.Refresh, "刷新状态", Modifier.size(18.dp))
-                }
-            }
-            Spacer(Modifier.height(20.dp))
             Text(
                 "工作空间",
                 Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
@@ -478,32 +451,6 @@ private fun CompactSidebar(controller: DesktopApplication, onSelected: (Navigati
             Modifier.fillMaxHeight().padding(horizontal = 10.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            TooltipBox(
-                positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
-                tooltip = { PlainTooltip { Text("silverwing") } },
-                state = rememberTooltipState(),
-            ) {
-                Surface(
-                    Modifier.size(44.dp).semantics { contentDescription = "silverwing" },
-                    color = BrandBlue,
-                    shape = RoundedCornerShape(12.dp),
-                    shadowElevation = 2.dp,
-                ) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Outlined.AccountTree, null, Modifier.size(23.dp), tint = Color.White)
-                    }
-                }
-            }
-            Spacer(Modifier.height(6.dp))
-            ActionIconButton(
-                label = "刷新状态",
-                onClick = controller.taskController::refresh,
-                modifier = Modifier.size(34.dp),
-                enabled = !controller.busy,
-            ) {
-                Icon(Icons.Outlined.Refresh, "刷新状态", Modifier.size(18.dp))
-            }
-            Spacer(Modifier.height(8.dp))
             visibleNavigationItems(controller).forEach { item ->
                 CompactNavigationItem(
                     item = item,

@@ -64,7 +64,7 @@ data class CodexPluginMarketplaceSource(
     val name: String,
     val repositoryUrl: String,
     val ref: String? = null,
-    /** Relative Marketplace directory; `.` means the repository root. */
+    /** Marketplace sources only support the repository root; legacy child paths need migration. */
     val marketplaceDirectory: String = "plugins",
 ) {
     init {
@@ -75,6 +75,9 @@ data class CodexPluginMarketplaceSource(
         validateExtensionRelativePath(marketplaceDirectory, "插件 Marketplace 目录")
     }
 }
+
+/** A configured Marketplace stored with a child directory from an older SilverWing release. */
+fun CodexPluginMarketplaceSource.requiresRootMarketplaceMigration(): Boolean = marketplaceDirectory != "."
 
 /** A remote Git repository from which standalone Codex Skills can be installed. */
 @Serializable
@@ -102,10 +105,10 @@ fun validateRemoteGitUrl(value: String): String {
     if (normalized.matches(Regex("git@[A-Za-z0-9.-]+:[^\\s]+"))) return normalized
     val uri = runCatching { URI(normalized) }.getOrElse { throw IllegalArgumentException("Git 仓库地址格式不合法") }
     val scheme = uri.scheme?.lowercase()
-    require(scheme == "https" || scheme == "ssh") { "仅支持 HTTPS 或 SSH Git 仓库地址" }
+    require(scheme == "http" || scheme == "https" || scheme == "ssh") { "仅支持 HTTP、HTTPS 或 SSH Git 仓库地址" }
     require(!uri.host.isNullOrBlank() && !uri.path.isNullOrBlank() && uri.path != "/") { "Git 仓库地址必须包含主机和仓库路径" }
     require(uri.rawQuery == null && uri.rawFragment == null) { "Git 仓库地址不能包含查询参数或片段" }
-    require(scheme != "https" || uri.rawUserInfo.isNullOrBlank()) { "HTTPS Git 仓库地址不能包含账号、Token 或密码" }
+    require(scheme !in setOf("http", "https") || uri.rawUserInfo.isNullOrBlank()) { "HTTP(S) Git 仓库地址不能包含账号、Token 或密码" }
     require(scheme != "ssh" || uri.rawUserInfo.isNullOrBlank() || uri.rawUserInfo.matches(Regex("[A-Za-z0-9._-]+"))) {
         "SSH Git 仓库地址中的账号不合法"
     }

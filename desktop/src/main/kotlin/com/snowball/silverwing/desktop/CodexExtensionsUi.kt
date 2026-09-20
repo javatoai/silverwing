@@ -2,6 +2,7 @@ package com.snowball.silverwing.desktop
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -12,6 +13,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -21,6 +27,8 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -28,6 +36,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -35,17 +47,25 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.snowball.silverwing.core.CodexExtensionOwnership
 import com.snowball.silverwing.core.CodexPluginCatalogItem
 import com.snowball.silverwing.core.CodexPluginMarketplaceSource
 import com.snowball.silverwing.core.ExternalSkillCatalogItem
 import com.snowball.silverwing.core.SkillSource
+import com.snowball.silverwing.core.defaultExtensionSourceName
+import com.snowball.silverwing.core.preferredRemoteGitBranch
+import com.snowball.silverwing.core.requiresRootMarketplaceMigration
 import java.util.UUID
 
 private data class PendingPluginAction(
@@ -78,22 +98,22 @@ internal fun SettingsCodexPluginsSection(controller: DesktopApplication) {
     var pendingAction by remember { mutableStateOf<PendingPluginAction?>(null) }
 
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        SettingsCard(
-            "Codex 插件",
-            "添加带 Marketplace 清单的 Git 仓库；SilverWing 通过本机 Codex CLI 注册、刷新、安装或卸载插件。",
-        ) {
-            Text(
-                "仅保存仓库地址、ref 和 Marketplace 相对目录。认证继续使用本机 Git/Codex 已有凭据；进入本页不会自动联网。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            OutlinedButton(onClick = { adding = true }, enabled = !controller.settingsBusy) {
-                Icon(Icons.Outlined.Add, null, Modifier.size(18.dp))
-                Spacer(Modifier.width(5.dp))
-                Text("添加插件来源")
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("插件来源", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "${controller.config.codexPluginMarketplaceSources.size} 个来源",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
-            if (controller.settingsBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
+            Button(onClick = { adding = true }, enabled = !controller.settingsBusy) {
+                Icon(Icons.Outlined.Add, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("添加来源")
+            }
         }
+        if (controller.settingsBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
 
         if (controller.config.codexPluginMarketplaceSources.isEmpty()) {
             SettingsEmptyState("还没有插件来源。仓库中需包含 Codex Marketplace JSON 清单。")
@@ -105,7 +125,7 @@ internal fun SettingsCodexPluginsSection(controller: DesktopApplication) {
                     repositoryUrl = source.repositoryUrl,
                     details = listOfNotNull(
                         source.ref?.let { "ref：$it" },
-                        "Marketplace：${source.marketplaceDirectory}",
+                        if (source.requiresRootMarketplaceMigration()) "需要迁移：旧版子目录 ${source.marketplaceDirectory}" else "Marketplace：仓库根目录",
                         status?.marketplaceName?.let { "Codex 名称：$it" },
                         status?.cacheDirectory?.let { "缓存：$it" },
                         status?.updatedAt?.let { "最近成功：$it" },
@@ -122,6 +142,7 @@ internal fun SettingsCodexPluginsSection(controller: DesktopApplication) {
     }
 
     if (adding) PluginSourceEditorDialog(
+        extensions = extensions,
         onDismiss = { adding = false },
         onSave = { source ->
             extensions.addMarketplace(source)
@@ -133,6 +154,7 @@ internal fun SettingsCodexPluginsSection(controller: DesktopApplication) {
             source = source,
             plugins = snapshot.marketplaces[source.id]?.plugins.orEmpty(),
             error = snapshot.marketplaces[source.id]?.error,
+            extensions = extensions,
             ownership = { extensions.pluginOwnership(source.id, it) },
             enabled = !controller.settingsBusy,
             onDismiss = { viewing = null },
@@ -192,24 +214,31 @@ internal fun SettingsExternalSkillsSection(controller: DesktopApplication) {
     var viewing by remember { mutableStateOf<SkillSource?>(null) }
     var removing by remember { mutableStateOf<SkillSource?>(null) }
     var pendingAction by remember { mutableStateOf<PendingSkillAction?>(null) }
+    // 安装状态存于本机扩展服务；操作成功后递增版本，确保已打开的弹窗会
+    // 重新读取归属状态，而不是继续显示打开瞬间的旧按钮。
+    var ownershipVersion by remember { mutableStateOf(0) }
 
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        SettingsCard(
-            "Skills",
-            "从 Git 仓库发现独立 Skill，并安装到当前用户的 ~/.agents/skills；不会执行来源仓库中的脚本。",
-        ) {
-            Text(
-                "未填写目录时只查找仓库的 .agents/skills 和 skills。刷新只更新缓存，已安装 Skill 需手动点击更新。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            OutlinedButton(onClick = { adding = true }, enabled = !controller.settingsBusy) {
-                Icon(Icons.Outlined.Add, null, Modifier.size(18.dp))
-                Spacer(Modifier.width(5.dp))
-                Text("添加 Skill 来源")
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("Skill 来源", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "${controller.config.skillSources.size} 个来源",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
-            if (controller.settingsBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
+            Button(
+                onClick = { adding = true },
+                enabled = !controller.settingsBusy,
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+            ) {
+                Icon(Icons.Outlined.Add, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("添加来源")
+            }
         }
+        if (controller.settingsBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
 
         if (controller.config.skillSources.isEmpty()) {
             SettingsEmptyState("还没有 Skill 来源。可添加包含 SKILL.md 的 Git 仓库。")
@@ -236,6 +265,7 @@ internal fun SettingsExternalSkillsSection(controller: DesktopApplication) {
     }
 
     if (adding) SkillSourceEditorDialog(
+        extensions = extensions,
         onDismiss = { adding = false },
         onSave = { source ->
             extensions.addSkillSource(source)
@@ -247,7 +277,8 @@ internal fun SettingsExternalSkillsSection(controller: DesktopApplication) {
             source = source,
             skills = snapshot.skillSources[source.id]?.skills.orEmpty(),
             error = snapshot.skillSources[source.id]?.error,
-            ownership = { extensions.skillOwnership(source.id, it) },
+            extensions = extensions,
+            ownership = { skill -> ownershipVersion.let { extensions.skillOwnership(source.id, skill) } },
             enabled = !controller.settingsBusy,
             onDismiss = { viewing = null },
             onAction = { skill, ownership, action ->
@@ -303,6 +334,7 @@ internal fun SettingsExternalSkillsSection(controller: DesktopApplication) {
                     SkillCatalogAction.INSTALL -> extensions.installSkill(action.source, action.skill, action.takeOver)
                 }
                 pendingAction = null
+                ownershipVersion++
             },
         )
     }
@@ -360,44 +392,93 @@ private fun SettingsEmptyState(message: String) {
 }
 
 @Composable
-private fun PluginSourceEditorDialog(onDismiss: () -> Unit, onSave: (CodexPluginMarketplaceSource) -> Unit) {
+private fun PluginSourceEditorDialog(
+    extensions: CodexExtensionsController,
+    onDismiss: () -> Unit,
+    onSave: (CodexPluginMarketplaceSource) -> Unit,
+) {
     var name by remember { mutableStateOf("") }
     var url by remember { mutableStateOf("") }
     var ref by remember { mutableStateOf("") }
-    var directory by remember { mutableStateOf("plugins") }
+    var branches by remember { mutableStateOf<RemoteBranchLoadState>(RemoteBranchLoadState.Idle) }
     var error by remember { mutableStateOf<String?>(null) }
     SourceEditorDialog(
         title = "添加 Codex 插件来源",
         fields = {
             OutlinedTextField(name, { name = it; error = null }, Modifier.fillMaxWidth(), label = { Text("显示名称") }, singleLine = true)
-            OutlinedTextField(url, { url = it; error = null }, Modifier.fillMaxWidth(), label = { Text("Git 仓库地址") }, placeholder = { Text("https://github.com/org/plugins.git 或 git@gitlab.example:team/plugins.git") }, singleLine = true)
-            OutlinedTextField(ref, { ref = it; error = null }, Modifier.fillMaxWidth(), label = { Text("Git ref（可选）") }, singleLine = true)
-            OutlinedTextField(directory, { directory = it; error = null }, Modifier.fillMaxWidth(), label = { Text("Marketplace 相对目录") }, supportingText = { Text("默认 plugins；仓库根目录填写 .") }, singleLine = true)
+            ExtensionRepositoryUrlField(
+                url = url,
+                onUrlChanged = { changed ->
+                    url = changed
+                    if (name.isBlank()) name = defaultExtensionSourceName(changed)
+                    branches = RemoteBranchLoadState.Idle; ref = ""; error = null
+                },
+                onLoad = { value -> extensions.loadRemoteBranches(value) { branches = it } },
+                placeholder = "http(s)://git.example/team/plugins.git 或 git@gitlab.example:team/plugins.git",
+            )
+            RemoteBranchPicker(
+                ref = ref,
+                state = branches,
+                onSelected = { ref = it; error = null },
+                onReload = {
+                    if (runCatching { com.snowball.silverwing.core.validateRemoteGitUrl(url.trim()) }.isSuccess) {
+                        extensions.loadRemoteBranches(url.trim()) { branches = it }
+                    } else {
+                        error = "请先填写合法的 Git 仓库地址"
+                    }
+                },
+            )
+            Text("Marketplace 固定使用仓库根目录。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         },
         error = error,
         onDismiss = onDismiss,
         onConfirm = {
             runCatching {
-                CodexPluginMarketplaceSource(UUID.randomUUID().toString(), name.trim(), url.trim(), ref.trim().ifBlank { null }, directory.trim())
+                CodexPluginMarketplaceSource(UUID.randomUUID().toString(), name.trim(), url.trim(), ref.trim().ifBlank { null }, ".")
             }.onSuccess(onSave).onFailure { error = it.message ?: "插件来源配置不合法" }
         },
     )
 }
 
 @Composable
-private fun SkillSourceEditorDialog(onDismiss: () -> Unit, onSave: (SkillSource) -> Unit) {
+private fun SkillSourceEditorDialog(
+    extensions: CodexExtensionsController,
+    onDismiss: () -> Unit,
+    onSave: (SkillSource) -> Unit,
+) {
     var name by remember { mutableStateOf("") }
     var url by remember { mutableStateOf("") }
     var ref by remember { mutableStateOf("") }
-    var directory by remember { mutableStateOf("") }
+    var directory by remember { mutableStateOf("skills") }
+    var branches by remember { mutableStateOf<RemoteBranchLoadState>(RemoteBranchLoadState.Idle) }
     var error by remember { mutableStateOf<String?>(null) }
     SourceEditorDialog(
         title = "添加 Skill 来源",
         fields = {
             OutlinedTextField(name, { name = it; error = null }, Modifier.fillMaxWidth(), label = { Text("显示名称") }, singleLine = true)
-            OutlinedTextField(url, { url = it; error = null }, Modifier.fillMaxWidth(), label = { Text("Git 仓库地址") }, placeholder = { Text("https://github.com/org/skills.git 或 git@gitlab.example:team/skills.git") }, singleLine = true)
-            OutlinedTextField(ref, { ref = it; error = null }, Modifier.fillMaxWidth(), label = { Text("Git ref（可选）") }, singleLine = true)
-            OutlinedTextField(directory, { directory = it; error = null }, Modifier.fillMaxWidth(), label = { Text("Skill 相对目录（可选）") }, supportingText = { Text("留空时自动查找 .agents/skills 和 skills") }, singleLine = true)
+            ExtensionRepositoryUrlField(
+                url = url,
+                onUrlChanged = { changed ->
+                    url = changed
+                    if (name.isBlank()) name = defaultExtensionSourceName(changed)
+                    branches = RemoteBranchLoadState.Idle; ref = ""; error = null
+                },
+                onLoad = { value -> extensions.loadRemoteBranches(value) { branches = it } },
+                placeholder = "http(s)://git.example/team/skills.git 或 git@gitlab.example:team/skills.git",
+            )
+            RemoteBranchPicker(
+                ref = ref,
+                state = branches,
+                onSelected = { ref = it; error = null },
+                onReload = {
+                    if (runCatching { com.snowball.silverwing.core.validateRemoteGitUrl(url.trim()) }.isSuccess) {
+                        extensions.loadRemoteBranches(url.trim()) { branches = it }
+                    } else {
+                        error = "请先填写合法的 Git 仓库地址"
+                    }
+                },
+            )
+            OutlinedTextField(directory, { directory = it; error = null }, Modifier.fillMaxWidth(), label = { Text("Skill 相对目录") }, supportingText = { Text("默认 skills；可自行修改") }, singleLine = true)
         },
         error = error,
         onDismiss = onDismiss,
@@ -407,6 +488,75 @@ private fun SkillSourceEditorDialog(onDismiss: () -> Unit, onSave: (SkillSource)
             }.onSuccess(onSave).onFailure { error = it.message ?: "Skill 来源配置不合法" }
         },
     )
+}
+
+@Composable
+private fun ExtensionRepositoryUrlField(
+    url: String,
+    onUrlChanged: (String) -> Unit,
+    onLoad: (String) -> Unit,
+    placeholder: String,
+) {
+    OutlinedTextField(
+        value = url,
+        onValueChange = onUrlChanged,
+        modifier = Modifier.fillMaxWidth().onFocusChanged { focus ->
+            if (!focus.isFocused && runCatching { com.snowball.silverwing.core.validateRemoteGitUrl(url.trim()) }.isSuccess) {
+                onLoad(url.trim())
+            }
+        },
+        label = { Text("Git 仓库地址") },
+        placeholder = { Text(placeholder) },
+        singleLine = true,
+    )
+}
+
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun RemoteBranchPicker(
+    ref: String,
+    state: RemoteBranchLoadState,
+    onSelected: (String) -> Unit,
+    onReload: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val branches = (state as? RemoteBranchLoadState.Loaded)?.branches.orEmpty()
+    androidx.compose.runtime.LaunchedEffect(branches) {
+        if (ref.isBlank()) preferredRemoteGitBranch(branches)?.let(onSelected)
+    }
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it && state is RemoteBranchLoadState.Loaded }) {
+        OutlinedTextField(
+            value = ref,
+            onValueChange = onSelected,
+            modifier = Modifier.menuAnchor().fillMaxWidth(),
+            readOnly = false,
+            enabled = state !is RemoteBranchLoadState.Loading,
+            label = { Text("Git ref（可选）") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+            supportingText = {
+                when (state) {
+                    RemoteBranchLoadState.Idle -> Text("可手动填写；填写地址并离开输入框后会自动读取分支")
+                    RemoteBranchLoadState.Loading -> Text("正在读取远程分支…")
+                    is RemoteBranchLoadState.Failed -> Text("读取失败，仍可手动填写分支：${state.message}")
+                    is RemoteBranchLoadState.Loaded -> if (branches.isEmpty()) Text("仓库没有可选分支；可不选择 ref")
+                }
+            },
+            singleLine = true,
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            branches.forEach { branch ->
+                DropdownMenuItem(text = { Text(branch) }, onClick = { onSelected(branch); expanded = false })
+            }
+        }
+    }
+    OutlinedButton(
+        onClick = onReload,
+        enabled = state !is RemoteBranchLoadState.Loading,
+    ) {
+        Icon(Icons.Outlined.Refresh, null, Modifier.size(18.dp))
+        Spacer(Modifier.width(5.dp))
+        Text(if (state is RemoteBranchLoadState.Loaded) "重新读取分支" else "读取分支")
+    }
 }
 
 @Composable
@@ -436,44 +586,129 @@ private fun PluginCatalogDialog(
     source: CodexPluginMarketplaceSource,
     plugins: List<CodexPluginCatalogItem>,
     error: String?,
+    extensions: CodexExtensionsController,
     ownership: (CodexPluginCatalogItem) -> CodexExtensionOwnership,
     enabled: Boolean,
     onDismiss: () -> Unit,
     onAction: (CodexPluginCatalogItem, CodexExtensionOwnership) -> Unit,
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("${source.name} 的插件（${plugins.size}）") },
-        text = {
-            Column(Modifier.widthIn(min = 560.dp, max = 860.dp).heightIn(max = 620.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    var selected by remember(source.id, plugins) { mutableStateOf(plugins.firstOrNull()) }
+    var preview by remember(source.id, selected?.name) { mutableStateOf<PluginPreviewState>(PluginPreviewState.Empty) }
+    var selectedSkill by remember(source.id, selected?.name) { mutableStateOf<String?>(null) }
+    var skillPreview by remember(source.id, selected?.name, selectedSkill) { mutableStateOf<SkillPreviewState>(SkillPreviewState.Empty) }
+    LaunchedEffect(source.id, selected?.name) {
+        selectedSkill = null
+        selected?.let { plugin -> extensions.previewPlugin(source, plugin) { preview = it } }
+    }
+    LaunchedEffect(source.id, selected?.name, selectedSkill) {
+        val plugin = selected
+        val skill = selectedSkill
+        if (plugin != null && skill != null) extensions.previewPluginSkill(source, plugin, skill) { skillPreview = it }
+    }
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        OutlinedCard(
+            Modifier.fillMaxWidth(0.80f).fillMaxHeight(0.80f).widthIn(min = 900.dp, max = 1600.dp),
+            colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+        ) {
+            Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("${source.name} 的插件（${plugins.size}）", style = MaterialTheme.typography.titleLarge)
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
                 if (plugins.isEmpty() && error == null) Text("尚无已加载的插件。可先关闭窗口后点击“刷新”。", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                plugins.forEach { plugin ->
-                    val pluginOwnership = ownership(plugin)
-                    OutlinedCard(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                Text(plugin.name, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                                plugin.version?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                            }
-                            plugin.description.takeIf(String::isNotBlank)?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                            if (plugin.bundledSkills.isNotEmpty()) Text("内置 Skills：${plugin.bundledSkills.joinToString("、")}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Text(pluginOwnership.displayText(), style = MaterialTheme.typography.labelMedium, color = pluginOwnership.color())
-                                val label = when (pluginOwnership) {
-                                    CodexExtensionOwnership.NOT_INSTALLED -> "安装"
-                                    CodexExtensionOwnership.EXTERNAL -> "接管"
-                                    CodexExtensionOwnership.MANAGED -> "卸载"
+                if (plugins.isNotEmpty()) Row(Modifier.weight(1f).fillMaxWidth()) {
+                    OutlinedCard(Modifier.weight(0.34f).fillMaxHeight()) {
+                        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            plugins.forEach { plugin ->
+                                val isSelected = selected?.name == plugin.name
+                                val pluginOwnership = ownership(plugin)
+                                Column(
+                                    Modifier.fillMaxWidth()
+                                        .background(if (isSelected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+                                        .clickable { selected = plugin }
+                                        .padding(10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                                ) {
+                                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                        Text(plugin.name, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        plugin.version?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                                    }
+                                    Text(plugin.description.ifBlank { "暂无说明" }, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    Text(pluginOwnership.displayText(), style = MaterialTheme.typography.labelSmall, color = pluginOwnership.color())
                                 }
-                                OutlinedButton(onClick = { onAction(plugin, pluginOwnership) }, enabled = enabled) { Text(label) }
+                            }
+                        }
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    OutlinedCard(Modifier.weight(0.66f).fillMaxHeight()) {
+                        Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            selected?.let { plugin ->
+                                val pluginOwnership = ownership(plugin)
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(plugin.name, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold)
+                                        Text("${plugin.version ?: "未标注版本"} · ${pluginOwnership.displayText()}", style = MaterialTheme.typography.labelSmall, color = pluginOwnership.color())
+                                    }
+                                    val label = when (pluginOwnership) {
+                                        CodexExtensionOwnership.NOT_INSTALLED -> "安装"
+                                        CodexExtensionOwnership.EXTERNAL -> "接管"
+                                        CodexExtensionOwnership.MANAGED -> "卸载"
+                                    }
+                                    OutlinedButton(onClick = { onAction(plugin, pluginOwnership) }, enabled = enabled) { Text(label) }
+                                }
+                                HorizontalDivider()
+                                if (selectedSkill != null) {
+                                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                        Text("内置 Skill：$selectedSkill", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                                        TextButton(onClick = { selectedSkill = null }) { Text("返回概览") }
+                                    }
+                                    when (val current = skillPreview) {
+                                        SkillPreviewState.Empty -> Text("请选择一个内置 Skill", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        SkillPreviewState.Loading -> LinearProgressIndicator(Modifier.fillMaxWidth())
+                                        is SkillPreviewState.Failed -> Text(current.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                                        is SkillPreviewState.Loaded -> Box(Modifier.weight(1f).fillMaxWidth()) { AgentsMarkdownPreview(current.content) }
+                                    }
+                                } else {
+                                    when (val current = preview) {
+                                        PluginPreviewState.Empty -> Text("请选择一个插件", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        PluginPreviewState.Loading -> LinearProgressIndicator(Modifier.fillMaxWidth())
+                                        is PluginPreviewState.Failed -> Text(current.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                                        is PluginPreviewState.Loaded -> PluginOverview(current.content, Modifier.weight(1f).fillMaxWidth(), onSkillSelected = { selectedSkill = it })
+                                    }
+                                }
                             }
                         }
                     }
                 }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text("关闭") }
+                }
             }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
-    )
+        }
+    }
+}
+
+@Composable
+private fun PluginOverview(
+    preview: com.snowball.silverwing.core.CodexPluginPreview,
+    modifier: Modifier,
+    onSkillSelected: (String) -> Unit,
+) {
+    Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(preview.description.ifBlank { "该插件未提供说明。" }, style = MaterialTheme.typography.bodyMedium)
+        preview.author?.let { Text("作者：$it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        preview.category?.let { Text("分类：$it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        if (preview.capabilities.isNotEmpty()) Text("能力：${preview.capabilities.joinToString(" · ")}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("内置 Skills（${preview.skills.size}）", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+        if (preview.skills.isEmpty()) Text("该插件没有可预览的内置 Skill。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        preview.skills.forEach { skill ->
+            OutlinedCard(Modifier.fillMaxWidth().clickable { onSkillSelected(skill.name) }) {
+                Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text(skill.name, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold)
+                    skill.description.takeIf(String::isNotBlank)?.let { Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis) }
+                }
+            }
+        }
+        preview.readme?.takeIf(String::isNotBlank)?.let { Text("README 已缓存，可在后续版本单独打开预览。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+    }
 }
 
 @Composable
@@ -481,47 +716,82 @@ private fun SkillCatalogDialog(
     source: SkillSource,
     skills: List<ExternalSkillCatalogItem>,
     error: String?,
+    extensions: CodexExtensionsController,
     ownership: (ExternalSkillCatalogItem) -> CodexExtensionOwnership,
     enabled: Boolean,
     onDismiss: () -> Unit,
     onAction: (ExternalSkillCatalogItem, CodexExtensionOwnership, SkillCatalogAction) -> Unit,
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("${source.name} 的 Skills（${skills.size}）") },
-        text = {
-            Column(Modifier.widthIn(min = 560.dp, max = 860.dp).heightIn(max = 620.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    var selected by remember(source.id, skills) { mutableStateOf(skills.firstOrNull()) }
+    var preview by remember(source.id, selected?.name) { mutableStateOf<SkillPreviewState>(SkillPreviewState.Empty) }
+    LaunchedEffect(source.id, selected?.name) {
+        selected?.let { skill -> extensions.previewSkill(source, skill) { preview = it } }
+    }
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        OutlinedCard(
+            Modifier.fillMaxWidth(0.80f).fillMaxHeight(0.80f).widthIn(min = 900.dp, max = 1600.dp),
+            colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+        ) {
+            Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("${source.name} 的 Skills（${skills.size}）", style = MaterialTheme.typography.titleLarge)
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
                 if (skills.isEmpty() && error == null) Text("尚无已加载的 Skill。可先关闭窗口后点击“刷新”。", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                skills.forEach { skill ->
-                    val skillOwnership = ownership(skill)
-                    OutlinedCard(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                Text(skill.name, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                                Text(skill.sourcePath, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (skills.isNotEmpty()) Row(Modifier.weight(1f).fillMaxWidth()) {
+                    OutlinedCard(Modifier.weight(0.34f).fillMaxHeight()) {
+                        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            skills.forEach { skill ->
+                                val isSelected = selected?.name == skill.name
+                                Column(
+                                    Modifier.fillMaxWidth()
+                                        .background(if (isSelected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+                                        .clickable { selected = skill }
+                                        .padding(10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                                ) {
+                                    Text(skill.name, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(skill.description, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                }
                             }
-                            Text(skill.description, style = MaterialTheme.typography.bodySmall)
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Text(skillOwnership.displayText(), style = MaterialTheme.typography.labelMedium, color = skillOwnership.color())
-                                when (skillOwnership) {
-                                    CodexExtensionOwnership.MANAGED -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        OutlinedButton(onClick = { onAction(skill, skillOwnership, SkillCatalogAction.UPDATE) }, enabled = enabled) { Text("更新") }
-                                        OutlinedButton(onClick = { onAction(skill, skillOwnership, SkillCatalogAction.UNINSTALL) }, enabled = enabled) { Text("卸载") }
+                        }
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    OutlinedCard(Modifier.weight(0.66f).fillMaxHeight()) {
+                        Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            selected?.let { skill ->
+                                val skillOwnership = ownership(skill)
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(skill.name, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold)
+                                        Text(skill.sourcePath, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
-                                    else -> {
-                                        val label = if (skillOwnership == CodexExtensionOwnership.EXTERNAL) "接管" else "安装"
-                                        OutlinedButton(onClick = { onAction(skill, skillOwnership, SkillCatalogAction.INSTALL) }, enabled = enabled) { Text(label) }
+                                    when (skillOwnership) {
+                                        CodexExtensionOwnership.MANAGED -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            OutlinedButton(onClick = { onAction(skill, skillOwnership, SkillCatalogAction.UPDATE) }, enabled = enabled) { Text("更新") }
+                                            OutlinedButton(onClick = { onAction(skill, skillOwnership, SkillCatalogAction.UNINSTALL) }, enabled = enabled) { Text("卸载") }
+                                        }
+                                        else -> {
+                                            val label = if (skillOwnership == CodexExtensionOwnership.EXTERNAL) "接管" else "安装"
+                                            OutlinedButton(onClick = { onAction(skill, skillOwnership, SkillCatalogAction.INSTALL) }, enabled = enabled) { Text(label) }
+                                        }
                                     }
+                                }
+                                HorizontalDivider()
+                                when (val current = preview) {
+                                    SkillPreviewState.Empty -> Text("请选择一个 Skill", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    SkillPreviewState.Loading -> LinearProgressIndicator(Modifier.fillMaxWidth())
+                                    is SkillPreviewState.Failed -> Text(current.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                                    is SkillPreviewState.Loaded -> AgentsMarkdownPreview(current.content)
                                 }
                             }
                         }
                     }
                 }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text("关闭") }
+                }
             }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
-    )
+        }
+    }
 }
 
 @Composable

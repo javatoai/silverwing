@@ -353,6 +353,12 @@ internal fun SettingsScreen(controller: DesktopApplication) {
             ) {
                 LazyColumn(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     items(sections, key = { it.key }) { section ->
+                        if (section.startsGroup && section != sections.first()) {
+                            HorizontalDivider(
+                                Modifier.padding(vertical = 6.dp),
+                                color = MaterialTheme.colorScheme.outlineVariant,
+                            )
+                        }
                         Surface(
                             Modifier.fillMaxWidth().clickable { navigateToSection(section.key) },
                             color = if (selectedSection == section.key) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
@@ -2081,6 +2087,27 @@ private fun SettingsFeishuSection(
 @Composable
 private fun SettingsLogsSection(controller: DesktopApplication) {
     SettingsCard("诊断与日志", "查看最近错误、打开日志目录或导出诊断包。") {
+        OutlinedCard(Modifier.fillMaxWidth()) {
+            Row(
+                Modifier.fillMaxWidth().padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("刷新本地状态", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "重新读取任务、归档、服务与本地 Git 状态；不会修改仓库内容。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                OutlinedButton(onClick = controller.taskController::refresh, enabled = !controller.busy) {
+                    Icon(Icons.Outlined.Refresh, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text("刷新状态")
+                }
+            }
+        }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("最近错误", style = MaterialTheme.typography.titleSmall)

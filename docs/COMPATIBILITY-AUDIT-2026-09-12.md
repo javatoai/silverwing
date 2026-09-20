@@ -56,7 +56,7 @@
 | 合计 | 628 项：626 通过、2 跳过 |
 | Desktop 编译及 `createDistributable` | 成功生成 Windows 应用目录，包含 CLI、7 个依赖 JAR 及自带 Java runtime |
 | Windows 批处理真实进程 | 中文、空格、括号、`&`、`%`、单引号、`!`、`^`、PATH 查找、盘符根路径及 `--new-window` 参数测试通过 |
-| 便携 CLI 脱离系统 JDK | 复制至含中文及空格的路径，将进程内 `JAVA_HOME` 指向不存在目录、PATH 限制为 Windows 系统目录后，`awm.cmd --help` 和 `awm.cmd agent inspect --json` 均成功 |
+| 便携 CLI 脱离系统 JDK | 复制至含中文及空格的路径，将进程内 `JAVA_HOME` 指向不存在目录、PATH 限制为 Windows 系统目录后，`silverwing.cmd --help` 和 `silverwing.cmd agent inspect --json` 均成功 |
 | CLI 数据隔离 | inspect 使用工作区 `build/compatibility-audit/isolated-home` 作为 `user.home`；输出指向该临时目录，并正确提示未配置需求资料目录 |
 | CLI 版本文件 | `1.0.5` 产物字节为 `31-2E-30-2E-35-0A`，即 `1.0.5` 加 LF |
 | 版本生成任务缓存 | 重复运行 `:desktop:writePortableCliVersion` 成功复用 Gradle configuration cache，输出保持有效 |
@@ -70,12 +70,12 @@
 ```powershell
 .\gradlew.bat clean :core:test :desktop:compileKotlin :desktop:createDistributable
 .\gradlew.bat :desktop:clean :desktop:test :desktop:createDistributable
-.\gradlew.bat :core:test --tests com.snowball.awm.core.FileLockingTest --tests com.snowball.awm.core.WorkspaceGitStatusTest --tests com.snowball.awm.core.WorkspacePathAliasIntegrationTest :desktop:test :desktop:createDistributable
+.\gradlew.bat :core:test --tests com.snowball.silverwing.core.FileLockingTest --tests com.snowball.silverwing.core.WorkspaceGitStatusTest --tests com.snowball.silverwing.core.WorkspacePathAliasIntegrationTest :desktop:test :desktop:createDistributable
 ```
 
 临时 init script 只将测试进程并发设为 4，位于已忽略的 `.gradle` 目录，不改变项目默认构建设置。第二条命令首次运行有一条新测试对协程异常文本格式的断言过严；调整为验证原始错误、附加错误和 busy 清除后，第三条命令重新执行全部 Desktop 测试并通过。
 
-最终 Core 统计基于完整测试 XML 快照，叠加三个类的最终补测结果；快照及便携 CLI 输出保存在已忽略的 `build/compatibility-audit/`。Windows 应用目录为 `desktop/build/compose/binaries/main/app/Agent Workspace Manager/`。
+最终 Core 统计基于完整测试 XML 快照，叠加三个类的最终补测结果；快照及便携 CLI 输出保存在已忽略的 `build/compatibility-audit/`。Windows 应用目录为 `desktop/build/compose/binaries/main/app/silverwing/`。
 
 ## 验证边界与已有支持限制
 
@@ -83,4 +83,4 @@
 - 本轮未执行桌面 GUI 人工验收，也未安装 EXE/MSI；便携 CLI 验证不等于所有图形界面及安装流程已经验收。
 - macOS 签名公证、Terminal Automation 权限、Codex 协议可用性预检仍见 [已知问题](KNOWN-ISSUES.md)。
 - 沿用现有支持范围：Apple Silicon Mac、Windows x64；macOS CLI 一键安装及 Cursor 独立启动器的 Finder 自动发现范围保持既有约定。
-- 锁键解析规则更新后，旧进程仍可能持有旧规则生成的锁；使用新构建前应结束旧版本 AWM/CLI 操作。
+- 锁键解析规则更新后，旧进程仍可能持有旧规则生成的锁；使用新构建前应结束旧版本 silverwing/CLI 操作。

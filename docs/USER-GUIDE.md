@@ -1,6 +1,6 @@
 # 日常使用指南
 
-Agent Workspace Manager（AWM）用于把一个研发任务准备成明确、可追溯的本地 Agent 工作区。它管理任务、服务工作区、Git 风险状态、`AGENTS.md` 和当前唯一的交付动作：Tag。
+silverwing 用于把一个研发任务准备成明确、可追溯的本地 Agent 工作区。它管理任务、服务工作区、Git 风险状态、`AGENTS.md` 和当前唯一的交付动作：Tag。
 
 ## 适用场景
 
@@ -9,11 +9,11 @@ Agent Workspace Manager（AWM）用于把一个研发任务准备成明确、可
 - 需求来自飞书，团队按组（业务线）管理服务；
 - 提交测试环境前需要创建可追溯的 Tag。
 
-AWM 隔离的是代码工作目录和 Git 工作区；端口、数据库、Docker、凭据和外部测试环境仍由项目本身管理。
+silverwing 隔离的是代码工作目录和 Git 工作区；端口、数据库、Docker、凭据和外部测试环境仍由项目本身管理。
 
 ## 首次设置
 
-1. 首次启动会自动创建 `~/awm/tasks` 并将它设为任务根目录，不需要手动选择。每个任务会在该目录下创建一个子目录；如需调整，可在设置页选择新目录。
+1. 首次启动会自动创建 `~/silverwing/tasks` 并将它设为任务根目录，不需要手动选择。每个任务会在该目录下创建一个子目录；如需调整，可在设置页选择新目录。
 2. 使用“添加仓库”选择本地 Git 主仓库。可多选目录；非 Git、Bare 仓库、临时 Linked Worktree 和重复仓库会被跳过。
 3. 在组中添加服务并设置显示名称、基础分支、工作区策略及需要时的 Tag 规则。
 4. 可选：填写 IDE、终端和任务完成后默认打开的工作区工具。
@@ -21,9 +21,11 @@ AWM 隔离的是代码工作目录和 Git 工作区；端口、数据库、Docke
 
 未创建额外组时，应用保留一个默认组，并在任务与服务页面隐藏组层级。
 
-设置导航平铺展示外观、目录、服务与仓库、开发工具、协作说明、Meegle、Genbu、AWM CLI、Git 和诊断日志，不设置分组或折叠层级。“协作说明”管理全局与组级 `AGENTS.md`，“任务说明模板”仍用于创建任务时填充人工说明。
+设置导航平铺展示外观、目录、服务与仓库、开发工具、协作说明、Meegle、Genbu、Codex 插件、Skills、silverwing CLI、Git 和诊断日志，不设置分组或折叠层级。“协作说明”管理全局与组级 `AGENTS.md`，“任务说明模板”仍用于创建任务时填充人工说明。
 
-如果当前任务根目录已有任务，更换目录后会先显示迁移确认。迁移期间请关闭相关 IDE 和终端；AWM 会保留脏文件和未跟踪文件、修复标准 Worktree 注册，并在全部校验成功后切换配置。失败会自动恢复旧目录；若只剩旧目录因文件占用无法删除，迁移仍然生效并显示待清理路径。
+“Codex 插件”仅管理带 Marketplace 清单的 Git 来源。添加来源会注册到本机 Codex 并读取可用插件；之后只有手动刷新才会联网更新。插件安装或卸载后需要新建或重启 Codex 会话。“Skills”管理外部 Git Skill 来源：默认扫描仓库中的 `.agents/skills` 与 `skills`，安装到 `~/.agents/skills/<name>`。若已有同名 Skill，必须明确确认接管，覆盖或卸载前会在 `~/silverwing/codex/skill-backups/` 留下本机备份。
+
+如果当前任务根目录已有任务，更换目录后会先显示迁移确认。迁移期间请关闭相关 IDE 和终端；silverwing 会保留脏文件和未跟踪文件、修复标准 Worktree 注册，并在全部校验成功后切换配置。失败会自动恢复旧目录；若只剩旧目录因文件占用无法删除，迁移仍然生效并显示待清理路径。
 
 ## 创建研发任务
 
@@ -59,7 +61,7 @@ AWM 隔离的是代码工作目录和 Git 工作区；端口、数据库、Docke
 
 任务详情可逐个复制当前实际分支和路径、打开 IDE/终端/文件夹、查看工作数据、添加服务，以及在满足开关条件时构建 Tag。创建任务时，分支输入框可搜索所选标准 Worktree 服务的远程 Heads；下拉查询不会执行 fetch 或读取 Tag。
 
-启动后，AWM 会在后台静默查找尚未填写路径的开发工具。Windows 只检查 Program Files、`%LOCALAPPDATA%\Programs`、JetBrains Toolbox 已知目录和 PATH；macOS 只检查 `/Applications`、`~/Applications`、JetBrains Toolbox 已知目录和 PATH，不会联网或递归扫描磁盘。手动保存的路径优先级最高，即使当前无效也不会被自动结果覆盖；未找到时不会提示。
+启动后，silverwing 会在后台静默查找尚未填写路径的开发工具。Windows 只检查 Program Files、`%LOCALAPPDATA%\Programs`、JetBrains Toolbox 已知目录和 PATH；macOS 只检查 `/Applications`、`~/Applications`、JetBrains Toolbox 已知目录和 PATH，不会联网或递归扫描磁盘。手动保存的路径优先级最高，即使当前无效也不会被自动结果覆盖；未找到时不会提示。
 
 开发工具设置会显示每项路径是否可用，并把“手动选择”“测试打开”及“恢复自动/重新检测”放在路径输入框右侧。Git、Meegle 与 Genbu 命令同样显示当前命令来源；清除手动路径或点击“恢复自动”后，会重新使用自动探测或 PATH 回退。
 
@@ -74,8 +76,8 @@ Git 设置页只读取本机 Git 可执行文件、版本、用户配置来源�
 说明分为三层：
 
 ```text
-~/awm/agents/global/AGENTS.md
-~/awm/agents/groups/<groupId>/AGENTS.md
+~/silverwing/agents/global/AGENTS.md
+~/silverwing/agents/groups/<groupId>/AGENTS.md
 <任务目录>/AGENTS.md
 ```
 

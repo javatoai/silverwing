@@ -55,7 +55,7 @@ abstract class CreateJlinkRuntime : DefaultTask() {
         ).redirectErrorStream(true).start()
         val log = process.inputStream.bufferedReader().use { it.readText() }
         if (process.waitFor() != 0) {
-            throw GradleException("无法构建 AWM CLI 运行时：${log.ifBlank { "jlink 退出失败" }}")
+            throw GradleException("无法构建 silverwing CLI 运行时：${log.ifBlank { "jlink 退出失败" }}")
         }
     }
 
@@ -68,9 +68,9 @@ abstract class CreateJlinkRuntime : DefaultTask() {
 }
 
 val macPackageVersion = version.toString()
-val portableCliVersion = layout.buildDirectory.file("generated/portable-cli/VERSION")
+val portableCliVersion = layout.buildDirectory.file("generated/silverwing/VERSION")
 val portableCliVersionText = version.toString()
-val portableCliRuntime = layout.buildDirectory.dir("generated/portable-cli-runtime")
+val portableCliRuntime = layout.buildDirectory.dir("generated/silverwing-runtime")
 val jlinkFileName = if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) "jlink.exe" else "jlink"
 val portableCliJlink = javaToolchains.launcherFor {
     languageVersion.set(JavaLanguageVersion.of(21))
@@ -100,21 +100,21 @@ val preparePortableCliRuntime = tasks.register<CreateJlinkRuntime>("preparePorta
  */
 val preparePortableCli = tasks.register<Sync>("preparePortableCli") {
     dependsOn(":cli:installDist", writePortableCliVersion, preparePortableCliRuntime)
-    from(project(":cli").layout.buildDirectory.dir("install/awm")) {
+    from(project(":cli").layout.buildDirectory.dir("install/silverwing")) {
         include("lib/**")
-        into("cli")
+        into("silverwing")
     }
     from(project(":cli").layout.projectDirectory.dir("src/main/portable")) {
-        into("cli")
+        into("silverwing")
     }
     from(portableCliVersion) {
-        into("cli")
+        into("silverwing")
     }
     from(portableCliRuntime) {
-        into("cli-runtime")
+        into("silverwing-runtime")
     }
-    from(rootProject.layout.projectDirectory.dir("skills/awm")) {
-        into("skills/awm")
+    from(rootProject.layout.projectDirectory.dir("skills/silverwing")) {
+        into("skills/silverwing")
     }
     into(layout.buildDirectory.dir("app-resources/common"))
 }
@@ -150,17 +150,17 @@ dependencies {
 
 compose.resources {
     publicResClass = true
-    packageOfResClass = "com.snowball.awm.desktop.generated.resources"
+    packageOfResClass = "com.snowball.silverwing.desktop.generated.resources"
 }
 
 compose.desktop {
     application {
-        mainClass = "com.snowball.awm.desktop.MainKt"
+        mainClass = "com.snowball.silverwing.desktop.MainKt"
 
         nativeDistributions {
             appResourcesRootDir.set(layout.buildDirectory.dir("app-resources"))
             targetFormats(TargetFormat.Msi, TargetFormat.Exe, TargetFormat.Dmg)
-            packageName = "Agent Workspace Manager"
+            packageName = "silverwing"
             // Keep native package metadata aligned with the Gradle product version.
             packageVersion = macPackageVersion
             description = "Task-level Agent development workspace orchestrator"
@@ -168,16 +168,16 @@ compose.desktop {
 
             windows {
                 iconFile.set(project.file("src/main/resources/app-icon.ico"))
-                menuGroup = "Agent Workspace Manager"
+                menuGroup = "silverwing"
                 shortcut = true
                 perUserInstall = true
-                upgradeUuid = "60326f10-0981-4396-9cb6-a2d2ea1a62c4"
+                upgradeUuid = "03e01129-8c93-438e-81d4-fd7e6b76259e"
             }
 
             macOS {
                 iconFile.set(project.file("src/main/resources/app-icon.icns"))
-                bundleID = "com.snowball.awm"
-                dockName = "Agent Workspace Manager"
+                bundleID = "com.snowball.silverwing"
+                dockName = "silverwing"
             }
         }
     }

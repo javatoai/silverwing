@@ -2,9 +2,9 @@
 
 ## 配置目录
 
-Windows 使用 `%USERPROFILE%\awm`，macOS 使用 `~/awm`。首次启动时，如果 `config.json` 不存在，AWM 会创建应用目录和 `tasks` 子目录，并原子写入以 `~/awm/tasks` 为 `taskRoot` 的当前版本配置。默认任务目录无法创建时，AWM 会保留一份可继续编辑的当前版本配置、显示错误，并允许在设置中选择其他可写目录。已有配置中的自定义 `taskRoot` 保持不变；程序不会探测或读取旧的 `~/.AgentWorkspaceManager`。
+Windows 使用 `%USERPROFILE%\silverwing`，macOS 使用 `~/silverwing`。首次启动时，silverwing 会创建应用目录、`tasks` 子目录，以及 `config` 目录下的全部配置分片。默认任务目录无法创建时，程序仍会写入可继续编辑的默认配置、显示错误，并允许在设置中选择其他可写目录。已有配置中的自定义 `taskRoot` 保持不变；程序不会探测、读取、迁移或改写旧产品目录。
 
-1.0.x 的说明文件固定保存在：
+说明文件固定保存在：
 
 ```text
 agents/global/AGENTS.md
@@ -12,110 +12,43 @@ agents/groups/<groupId>/AGENTS.md
 agents/task-templates.json
 ```
 
-磁盘文件是唯一可信来源；说明正文不重复保存在 `config.json`。
+磁盘文件是唯一可信来源；说明正文不重复保存在配置分片中。
 
-## 严格数组 schema
+## 分功能严格配置分片
 
-1.0.x 的 `config.json` 使用严格字符串 schema，当前写入版本为 `"1.0.9"`。顶层仓库和组均为数组，数组顺序就是界面顺序：
+配置不再使用单一 `config.json`。`~/silverwing/config/` 必须恰好包含以下八个 JSON 文件；每个文件均有独立的严格 `"schema": 1` 字段，未知字段、缺失文件、重复/额外 ZIP 条目和不匹配 schema 都会被拒绝，不会被自动修复或迁移。
 
-```json
-{
-  "schemaVersion": "1.0.9",
-  "taskRoot": "C:\\Users\\alice\\awm\\tasks",
-  "developmentTools": [
-    { "type": "INTELLIJ_IDEA", "path": "C:\\Tools\\idea64.exe" },
-    { "type": "VISUAL_STUDIO_CODE", "path": "C:\\Tools\\Code.exe" }
-  ],
-  "defaultDevelopmentTool": "INTELLIJ_IDEA",
-  "allowTemporaryDevelopmentToolSelection": false,
-  "blockedGitWriteBranches": ["master", "main"],
-  "terminalExecutable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-  "requirementMaterialsRoot": null,
-  "requirementMaterialsSubdirectory": null,
-  "meegleExecutablePath": null,
-  "genbuExecutablePath": null,
-  "repositories": [
-    {
-      "id": "repo-…",
-      "name": "order-service",
-      "rootPath": "Q:\\services\\order-service",
-      "gitCommonDirectory": "Q:\\services\\order-service\\.git",
-      "originUrl": "git@github.com:example/order-service.git",
-      "currentBranch": "master",
-      "defaultRemoteBranch": "master"
-    }
-  ],
-  "groups": [
-    {
-      "id": "default",
-      "name": "默认组",
-      "tagEnabled": true,
-      "defaultBranchPrefix": "feature/zhangsan_{num}_",
-      "defaultWorkspaceToolIds": ["codex"],
-      "services": [
-        {
-          "id": "service-order",
-          "repositoryId": "repo-…",
-          "displayName": "订单服务",
-          "enabled": true,
-          "genbuProbeEnabled": false,
-          "genbuServiceName": "service-order",
-          "developmentTool": "INTELLIJ_IDEA",
-          "commitMessageTemplate": "feat: {num} 完成开发",
-          "modules": [
-            {
-              "id": "default",
-              "name": "default",
-              "strategy": "STANDARD_WORKTREE",
-              "baseRef": "origin/master",
-              "baseRemote": "origin",
-              "tagEnabled": true,
-              "tagMode": "MERGE_TO_TARGET_BRANCH",
-              "tagTargetRef": "origin/release/test",
-              "tagMessagePrefix": "Tag"
-            },
-            {
-              "id": "reporting",
-              "name": "reporting",
-              "strategy": "INDEPENDENT_CLONE",
-              "baseRef": "origin/develop",
-              "baseRemote": "origin",
-              "tagEnabled": false,
-              "tagMode": "CURRENT_BRANCH",
-              "tagTargetRef": null,
-              "tagMessagePrefix": "Tag"
-            }
-          ],
-          "bootstrap": {
-            "copyRules": [],
-            "commands": []
-          }
-        }
-      ]
-    }
-  ],
-  "theme": "SYSTEM",
-  "tagEnabled": true,
-  "tagHistoryMaxGroups": 20
-}
-```
+| 文件 | 保存内容 |
+| --- | --- |
+| `layout.json` | 组顺序、名称、组级 Tag 开关、默认分支前缀与工作区工具 |
+| `workspace.json` | 任务根目录与仓库 |
+| `services.json` | 组内服务、模块、Bootstrap 与模块专属快捷命令 |
+| `tag.json` | 全局 Tag 开关与历史保留组数 |
+| `tools.json` | 终端、开发工具、默认工具与临时选择开关 |
+| `git.json` | Git 可执行程序与受保护分支 |
+| `integrations.json` | Meegle、Genbu、需求资料目录、Codex 插件市场和外部 Skill 来源定义 |
+| `appearance.json` | 主题与界面显示偏好 |
+
+业务层仍读取和保存完整 `AppConfig`；保存时只原子替换实际发生变化的分片。每次写入前会将完整分片集归档为 `~/silverwing/backups/silverwing-config-<timestamp>.zip`，最多保留最近 10 份。导出、导入和恢复也统一使用包含全部八个分片的 `silverwing-config-<timestamp>.zip`。
+
+Codex 插件市场的本机注册信息、最近成功的插件目录缓存、外部 Skill 的 Git 检出、接管记录和可恢复备份保存在 `~/silverwing/codex/`。它们不属于可导出的配置：导入只恢复来源定义，不会自动联网、注册市场或安装插件与 Skill。
 
 ## Tag设置
 
-`tagEnabled` 是全局 Tag 开关，默认值为 `true`。关闭后，桌面端会隐藏 Tag 导航、工作区构建入口、组和模块中的 Tag 配置，以及 Tag Skill 入口；Tag 设置本身仍保留，方便重新开启。核心用例和 `awm tag` CLI 也会拒绝新的 Tag 操作。
+`tagEnabled` 是全局 Tag 开关，默认值为 `true`。关闭后，桌面端会隐藏 Tag 导航、工作区构建入口、组和模块中的 Tag 配置，以及 Tag Skill 入口；Tag 设置本身仍保留，方便重新开启。核心用例和 `silverwing tag` CLI 也会拒绝新的 Tag 操作。
 
-`tagHistoryMaxGroups` 控制本地 Tag 构建历史最多保留的组数，默认值为 `20`，允许范围为 `1`–`1000`。单次批量构建产生的记录属于同一组；超过上限时，AWM 按组的最近更新时间从旧到新清理整组记录，只删除任务目录中的 Tag 操作记录和历史汇总，不删除 Git Tag、代码或任务。应用启动读取历史、任务列表变化、Tag 构建完成或保存该设置后都会执行清理。
+`tagHistoryMaxGroups` 控制本地 Tag 构建历史最多保留的组数，默认值为 `20`，允许范围为 `1`–`1000`。单次批量构建产生的记录属于同一组；超过上限时，silverwing 按组的最近更新时间从旧到新清理整组记录，只删除任务目录中的 Tag 操作记录和历史汇总，不删除 Git Tag、代码或任务。应用启动读取历史、任务列表变化、Tag 构建完成或保存该设置后都会执行清理。
 
 ## 任务根目录迁移
 
-在设置页选择新的任务根目录后，AWM 先进行只读预检。旧目录没有任务时直接保存；存在任务时展示迁移方式、任务数、工作区数和数据量，用户确认后才开始迁移。
+在设置页选择新的任务根目录后，silverwing 先进行只读预检。旧目录没有任务时直接保存；存在任务时展示迁移方式、任务数、工作区数和数据量，用户确认后才开始迁移。
 
 - 新旧目录不能相同或互相包含；目标必须为空且可写，并有足够空间。
 - 所有任务清单必须可读且为当前版本，工作区必须位于对应任务目录内；发现冲突会阻止整批迁移。
 - 同磁盘整体移动任务目录；跨磁盘不跟随符号链接地复制并保留基础文件属性。
 - 标准 Worktree 执行 `git worktree repair`；独立克隆保留完整 `.git`。
-- AWM 校验 HEAD、分支、仓库身份以及暂存、未暂存和未跟踪文件状态，更新清单路径并重新生成 `AGENTS.md` 系统区。
-- 全部任务成功后才原子更新 `taskRoot` 并清理旧目录。清理失败时新目录仍生效，界面会列出待清理路径；迁移日志位于 `~/awm/migrations/task-root.json`，下次启动会继续清理或回滚。
+- silverwing 校验 HEAD、分支、仓库身份以及暂存、未暂存和未跟踪文件状态，更新清单路径并重新生成 `AGENTS.md` 系统区。
+- 全部任务成功后才原子更新 `taskRoot` 并清理旧目录。清理失败时新目录仍生效，界面会列出待清理路径；迁移日志位于 `~/silverwing/migrations/task-root.json`，下次启动会继续清理或回滚。
 
 需求资料目录由 `requirementMaterialsRoot` 独立管理，不随任务根目录迁移。
 
@@ -172,11 +105,11 @@ agents/task-templates.json
 <requirementMaterialsRoot>/<Sprint>/<需求编号>-<任务文件夹名>/<requirementMaterialsSubdirectory>
 ```
 
-桌面端普通任务只创建上述资料目录，不创建过程文档。`awm agent plan/apply` 复用同一需求资料目录，并在其 `write_root`（上式最后的资料子目录）内补写 `.awm-requirement.json`、`00-需求总览.md` 等过程文档；Sprint 层的 `.awm-iteration.json`、`00-迭代任务总览.md` 保留在资料根下。需求目录名始终使用任务文件夹名，Agent 请求中的需求标题仅作为 Markdown 标题。
+桌面端普通任务只创建上述资料目录，不创建过程文档。`silverwing agent plan/apply` 复用同一需求资料目录，并在其 `write_root`（上式最后的资料子目录）内补写 `.silverwing-requirement.json`、`00-需求总览.md` 等过程文档；Sprint 层的 `.silverwing-iteration.json`、`00-迭代任务总览.md` 保留在资料根下。需求目录名始终使用任务文件夹名，Agent 请求中的需求标题仅作为 Markdown 标题。
 
-已存在且唯一的需求目录会复用；如果递归查找到多个 `<需求编号>` 或 `<需求编号>-*` 目录，操作会明确失败，不自动选择。发现已有过程文档 manifest 时会校验需求身份，身份不一致则停止写入。AWM 不移动、删除或自动迁移历史资料目录，`.awm/HANDOFF.md` 仍位于任务目录中。
+已存在且唯一的需求目录会复用；如果递归查找到多个 `<需求编号>` 或 `<需求编号>-*` 目录，操作会明确失败，不自动选择。发现已有过程文档 manifest 时会校验需求身份，身份不一致则停止写入。silverwing 不移动、删除或自动迁移历史资料目录，`.silverwing/HANDOFF.md` 仍位于任务目录中。
 
-未知字段，以及主版本或次版本不同的 schema 都会被拒绝，应用不会自动迁移或改写原文件。同一主次版本的 PATCH 版本可直接读取，并在下一次正常保存时更新为当前 PATCH。0.12.x 及更早版本的配置与任务清单不会被 1.0.x 读取、迁移或删除；旧的独立过程文档目录保持原样。升级时请先备份用户数据，手工移除旧配置中的 `requirementDocumentationRoot`，将 schema 改为 `1.0.9`，然后在设置页重新保存需求资料根目录与子目录。
+配置分片始终严格使用 `schema: 1`；任务清单使用产品 `2.0.x` schema 行。silverwing 不读取、迁移、删除或改写旧产品的配置、任务清单或独立过程文档目录。需要保存或转移当前 silverwing 配置时，请在设置页导出完整 ZIP，再在目标环境验证后导入。
 
 ## 组
 
@@ -215,9 +148,9 @@ agents/task-templates.json
 
 创建前会执行 `fetch --prune --no-tags <remote>`，并从最新的 `refs/remotes/<remote>/<branch>` 创建 Worktree；不会切换或移动用户本地 `master`。普通任务创建不受本地同名 Tag 冲突影响。标准服务创建 Worktree 后按服务配置执行 Bootstrap。
 
-每次启动后，AWM 会在后台静默补齐 `developmentTools` 中仍未配置的工具，不阻塞界面、不弹窗、不联网，也不会递归扫描磁盘。已有配置即使路径已经失效也不会被覆盖。Windows 依次检查 Program Files、`%LOCALAPPDATA%\Programs`、JetBrains Toolbox 稳定版目录和 `where.exe` 可解析的 PATH；macOS 依次检查 `/Applications`、`~/Applications`、JetBrains Toolbox 稳定版目录和 PATH 中的命令。探测完成时会重新读取配置，并通过一次原子更新只补仍为空的类型，因此不会覆盖探测期间用户手动保存的路径。支持 IntelliJ IDEA、WebStorm、PyCharm、Visual Studio Code、Android Studio 和 DevEco Studio；未找到的类型保持为空。
+每次启动后，silverwing 会在后台静默补齐 `developmentTools` 中仍未配置的工具，不阻塞界面、不弹窗、不联网，也不会递归扫描磁盘。已有配置即使路径已经失效也不会被覆盖。Windows 依次检查 Program Files、`%LOCALAPPDATA%\Programs`、JetBrains Toolbox 稳定版目录和 `where.exe` 可解析的 PATH；macOS 依次检查 `/Applications`、`~/Applications`、JetBrains Toolbox 稳定版目录和 PATH 中的命令。探测完成时会重新读取配置，并通过一次原子更新只补仍为空的类型，因此不会覆盖探测期间用户手动保存的路径。支持 IntelliJ IDEA、WebStorm、PyCharm、Visual Studio Code、Android Studio 和 DevEco Studio；未找到的类型保持为空。
 
-`allowTemporaryDevelopmentToolSelection` 默认关闭。关闭时，任务工具栏和工作区行只用各自默认开发工具打开；开启后才显示临时 IDE 下拉。该开关不会让 AWM 在任务创建完成后自动打开服务。
+`allowTemporaryDevelopmentToolSelection` 默认关闭。关闭时，任务工具栏和工作区行只用各自默认开发工具打开；开启后才显示临时 IDE 下拉。该开关不会让 silverwing 在任务创建完成后自动打开服务。
 
 ### 独立克隆
 
@@ -244,13 +177,13 @@ agents/task-templates.json
 冲突时任务级优先，其次是组级，再其次是全局。任务文件用以下协议分隔系统区和人工区：
 
 ```text
-<!-- AWM:GENERATED:BEGIN -->
+<!-- SILVERWING:GENERATED:BEGIN -->
 …系统生成内容…
-<!-- AWM:GENERATED:END -->
+<!-- SILVERWING:GENERATED:END -->
 
-<!-- AWM:TASK-NOTES:BEGIN -->
+<!-- SILVERWING:TASK-NOTES:BEGIN -->
 …用户可编辑内容…
-<!-- AWM:TASK-NOTES:END -->
+<!-- SILVERWING:TASK-NOTES:END -->
 ```
 
 重新生成只替换系统区并保留人工区。应用使用 WatchService、窗口聚焦补检、内容哈希、防抖和原子写入同步文件；外部修改与未保存编辑冲突时必须由用户选择磁盘版本或本地版本。标记缺失或重复时会停止自动覆盖，等待用户修复。
@@ -261,11 +194,11 @@ Bootstrap 是服务级快照，对该服务新创建的每个 Worktree 或独立
 
 ## 任务工作区工具与任务 schema
 
-`agent-workspace.json` 使用严格字符串 schema，当前写入版本为 `"1.0.9"`。创建任务时会继承所属组的 `defaultWorkspaceToolIds`，用户可以在创建页增减。任务本身创建成功后，工具适配器逐项打开；其中一个失败不会回滚 Git 工作区，也不会阻止其他工具。1.0.x 不读取、迁移或删除 0.12.x 及更早版本的配置和任务清单。
+`silverwing.json` 使用严格字符串 schema，当前写入版本为 `"2.0.0"`。创建任务时会继承所属组的 `defaultWorkspaceToolIds`，用户可以在创建页增减。任务本身创建成功后，工具适配器逐项打开；其中一个失败不会回滚 Git 工作区，也不会阻止其他工具。silverwing 不读取、迁移或删除旧产品的配置和任务清单。
 
 ```json
 {
-  "schemaVersion": "1.0.9",
+  "schemaVersion": "2.0.0",
   "lifecycleStatus": "ACTIVE",
   "services": [
     {
@@ -294,8 +227,8 @@ Bootstrap 是服务级快照，对该服务新创建的每个 Worktree 或独立
 
 `lifecycleStatus` 只表示任务属于活跃还是已归档；每个服务的 `health` 只表示工作区是否可用。任务整体健康度由服务动态聚合，不会作为第三个状态字段写入 JSON。`branchCreatedByTask` 标记本次任务是否创建了本地分支，失败回滚只会删除该类分支；`forceWorktreeAttach` 标记恢复时是否需要以 `git worktree add --force` 再次附加已被其他 Worktree 检出的分支。
 
-`blockedGitWriteBranches` 按完整本地分支名忽略大小写匹配，默认保护 `master`、`main`，不支持通配符。受保护分支仍可作为基础分支被检出，但 AWM 会在任何写入前阻止 Commit、Push、Commit & Push，以及需要写入该分支的 Tag 流程。
+`blockedGitWriteBranches` 按完整本地分支名忽略大小写匹配，默认保护 `master`、`main`，不支持通配符。受保护分支仍可作为基础分支被检出，但 silverwing 会在任何写入前阻止 Commit、Push、Commit & Push，以及需要写入该分支的 Tag 流程。
 
 未注册的工具 ID 会原样保留在配置中并在界面显示为“当前不可用”。Core 只认识通用工具 ID 和执行结果，不依赖 Codex、Claude、Cursor 的 URI 或命令。
 
-AWM 生成的任务、Tag 操作、历史记录、JSONL 事件和 AGENTS.md 时间统一使用 `Asia/Shanghai` 时区，格式为 `yyyy-MM-dd HH:mm:ss`。这不会重写 Git 提交时间、远程 Tag 原始时间或文件系统修改时间。
+silverwing 生成的任务、Tag 操作、历史记录、JSONL 事件和 AGENTS.md 时间统一使用 `Asia/Shanghai` 时区，格式为 `yyyy-MM-dd HH:mm:ss`。这不会重写 Git 提交时间、远程 Tag 原始时间或文件系统修改时间。

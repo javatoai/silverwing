@@ -44,7 +44,7 @@
     const file = button.dataset.lightbox;
     if (!file || !modal || !modalImage) return;
     modalImage.src = `./assets/screenshots/${file}`;
-    modalImage.alt = button.querySelector('img')?.alt || 'AWM 界面截图';
+    modalImage.alt = button.querySelector('img')?.alt || 'silverwing 界面截图';
     if (modalCaption) modalCaption.textContent = button.dataset.caption || '';
     modal.classList.add('is-open');
     modal.setAttribute('aria-hidden', 'false');

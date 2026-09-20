@@ -14,7 +14,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "agent-workspace-manager"
+rootProject.name = "silverwing"
 
 include(":core")
 include(":cli")

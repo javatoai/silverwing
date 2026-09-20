@@ -1,4 +1,4 @@
-name: Release packages
+name: silverwing release packages
 
 on:
   push:
@@ -88,7 +88,7 @@ jobs:
         run: .\scripts\build-windows.ps1
         shell: pwsh
         env:
-          AWM_RELEASE_SKIP_UNSTABLE_GIT_TESTS: "true"
+          SILVERWING_RELEASE_SKIP_UNSTABLE_GIT_TESTS: "true"
 
       - name: Stage Windows release assets
         id: stage
@@ -101,15 +101,15 @@ jobs:
 
           $portable = Get-ChildItem 'desktop\build\compose\binaries\main\zip\*-portable.zip' | Select-Object -First 1
           if (-not $portable) { throw 'Portable zip not found' }
-          Copy-Item $portable.FullName (Join-Path $out "Agent-Workspace-Manager-$version-windows-portable.zip")
+          Copy-Item $portable.FullName (Join-Path $out "silverwing-$version-windows-portable.zip")
 
           $exe = Get-ChildItem 'desktop\build\compose\binaries\main\exe\*.exe' | Select-Object -First 1
           if (-not $exe) { throw 'EXE installer not found' }
-          Copy-Item $exe.FullName (Join-Path $out "Agent-Workspace-Manager-$version-windows-setup.exe")
+          Copy-Item $exe.FullName (Join-Path $out "silverwing-$version-windows-setup.exe")
 
           $msi = Get-ChildItem 'desktop\build\compose\binaries\main\msi\*.msi' | Select-Object -First 1
           if (-not $msi) { throw 'MSI installer not found' }
-          Copy-Item $msi.FullName (Join-Path $out "Agent-Workspace-Manager-$version-windows.msi")
+          Copy-Item $msi.FullName (Join-Path $out "silverwing-$version-windows.msi")
 
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           Get-ChildItem $out | ForEach-Object { Write-Host $_.FullName }
@@ -117,7 +117,7 @@ jobs:
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: windows-packages
+          name: silverwing-windows-packages
           path: dist/windows/*
           if-no-files-found: error
           retention-days: 14
@@ -141,7 +141,7 @@ jobs:
 
       - name: Build macOS distributables
         env:
-          AWM_RELEASE_SKIP_UNSTABLE_GIT_TESTS: "true"
+          SILVERWING_RELEASE_SKIP_UNSTABLE_GIT_TESTS: "true"
         run: |
           # These files may be checked out with CRLF from a Windows workspace.
           # Normalize them before executing them on the macOS runner.
@@ -166,13 +166,13 @@ jobs:
           version=$(sed -n 's/.*version *= *"\([^"]*\)".*/\1/p' build.gradle.kts | head -n1)
           mkdir -p dist/macos
           dmg=$(ls desktop/build/compose/binaries/main/dmg/*.dmg | head -n1)
-          cp "$dmg" "dist/macos/Agent-Workspace-Manager-${version}-macos.dmg"
+          cp "$dmg" "dist/macos/silverwing-${version}-macos.dmg"
           ls -la dist/macos
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: macos-packages
+          name: silverwing-macos-packages
           path: dist/macos/*
           if-no-files-found: error
           retention-days: 14
@@ -185,13 +185,13 @@ jobs:
       - name: Download Windows packages
         uses: actions/download-artifact@v4
         with:
-          name: windows-packages
+          name: silverwing-windows-packages
           path: release-assets
 
       - name: Download macOS packages
         uses: actions/download-artifact@v4
         with:
-          name: macos-packages
+          name: silverwing-macos-packages
           path: release-assets
 
       - name: Resolve release metadata
@@ -202,7 +202,7 @@ jobs:
           short_sha="${GITHUB_SHA::7}"
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-            echo "name=Agent Workspace Manager ${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "name=silverwing ${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
             echo "make_latest=true" >> "$GITHUB_OUTPUT"
           else
@@ -256,7 +256,7 @@ jobs:
           make_latest: ${{ steps.meta.outputs.make_latest }}
           generate_release_notes: ${{ startsWith(github.ref, 'refs/tags/') }}
           body: |
-            自动构建 Agent Workspace Manager 桌面产物。
+            自动构建 silverwing 桌面产物。
 
             - **Windows**：绿色 portable zip、Setup EXE、MSI
             - **macOS**：DMG

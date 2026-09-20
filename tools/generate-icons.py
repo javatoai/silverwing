@@ -1,4 +1,4 @@
-"""Generate deterministic app icons from the AWM vector geometry."""
+"""Generate deterministic app icons from the silverwing vector geometry."""
 
 from __future__ import annotations
 

@@ -1,6 +1,6 @@
 # 发布指南
 
-版本升级规则见 [VERSIONING.md](VERSIONING.md)。发布前必须确认本次是否影响 `config.json` 或 `agent-workspace.json` 字段。
+版本升级规则见 [VERSIONING.md](VERSIONING.md)。发布前必须确认本次是否影响任一配置分片或 `silverwing.json` 字段。
 
 ## 分支与标签
 

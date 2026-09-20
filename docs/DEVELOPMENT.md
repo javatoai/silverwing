@@ -53,6 +53,6 @@ Compose 只读取 UI 状态并发出回调；Git、JSON、文件写入、剪贴�
 
 ## 本地数据与测试数据
 
-应用数据默认保存于 `~/awm`，默认任务根目录为 `~/awm/tasks`，不在仓库内。不要将真实 `config.json`、任务清单、迁移日志、日志、Meegle 输出或任何凭据提交到 Git。
+应用数据默认保存于 `~/silverwing`，默认任务根目录为 `~/silverwing/tasks`，配置分片位于 `~/silverwing/config/`，不在仓库内。不要将真实配置分片、任务清单、迁移日志、日志、Meegle 输出或任何凭据提交到 Git。
 
 配置和任务 schema 是严格版本化的。旧 schema 会被拒绝且原文件保持不变；不要为了本地调试而手工降低 schema 版本。

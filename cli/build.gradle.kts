@@ -14,6 +14,6 @@ dependencies {
 }
 
 application {
-    applicationName = "awm"
-    mainClass = "com.snowball.awm.cli.MainKt"
+    applicationName = "silverwing"
+    mainClass = "com.snowball.silverwing.cli.MainKt"
 }

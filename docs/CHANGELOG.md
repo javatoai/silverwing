@@ -2,6 +2,12 @@
 
 本项目采用 `vX.Y.Z` 标签发布桌面安装包。重大行为变化会在对应版本说明中记录；配置与任务数据 schema 的兼容边界以 [配置与使用](CONFIGURATION.md) 为准。
 
+## 2.0.0
+
+- 产品、桌面安装包、CLI、任务元数据、GitHub 仓库和发布资产统一改名为 `silverwing`；Codex Skill 改为 `$silverwing`。
+- 运行时配置改为 `~/silverwing/config/` 下的八个独立严格 JSON 分片，导入、导出和备份统一使用完整配置 ZIP。
+- 任务清单改为 `silverwing.json`，不读取、不迁移旧产品的数据或运行时目录。
+
 ## 1.0.10
 
 - 提交历史支持显示提交时间、短 hash 和提交人，并优化为独立卡片布局。
@@ -40,8 +46,8 @@
 
 ## 1.0.3
 
-- 移除 Codex 插件分发形态（`plugins/awm-codex`），Agent 技能统一维护在 `skills/awm`；Tag 构建命令参考拆分为 `skills/awm/references/tag-builds.md` 并由主文档引用。
-- Agent CLI 新增 `awm tag` 命令组（build/status/history/retry/workspace-check）：直接对已有任务执行 Tag 构建，输出包含失败原因、冲突分支与冲突文件、Genbu 三态状态和可执行的修复指引；`retry` 按记录状态自动选择重试路径，Genbu 构建失败可重新打Tag（版本号自动 +1）；`status` 实时刷新 Genbu 构建与发版状态；组或模块已关闭测试Tag 时直接报错不落废记录，重复指定同一模块只构建一次。
+- 移除 Codex 插件分发形态（`plugins/silverwing-codex`），Agent 技能统一维护在 `skills/silverwing`；Tag 构建命令参考拆分为 `skills/silverwing/references/tag-builds.md` 并由主文档引用。
+- Agent CLI 新增 `silverwing tag` 命令组（build/status/history/retry/workspace-check）：直接对已有任务执行 Tag 构建，输出包含失败原因、冲突分支与冲突文件、Genbu 三态状态和可执行的修复指引；`retry` 按记录状态自动选择重试路径，Genbu 构建失败可重新打Tag（版本号自动 +1）；`status` 实时刷新 Genbu 构建与发版状态；组或模块已关闭测试Tag 时直接报错不落废记录，重复指定同一模块只构建一次。
 - 需求资料目录的 Sprint 选择规则放宽：本地已有可复用目录时始终复用；需求只关联一个 Sprint 时直接使用它（不再要求进行中）；关联多个 Sprint 时仍要求恰好一个进行中。
 - Genbu Tag 状态切换为 `genbu query-tag --json` 结构化输出，构建、UAT 发版、生产发版三个阶段按 初始/构建中/成功/失败 分类展示；构建失败的记录停止自动轮询。
 - Tag 构建历史形成完整闭环：本地构建失败可“重试构建Tag”，部分完成可“继续构建Tag”，Genbu 构建失败可“重新打Tag”（版本号自动 +1）；所有重试均复用原记录，不产生重复历史行。
@@ -53,7 +59,7 @@
 
 ## 1.0.1
 
-- 默认应用目录统一为 `~/awm`，新环境自动使用 `~/awm/tasks`；设置页支持带预检、Git Worktree 修复、回滚和恢复日志的任务根目录迁移。
+- 默认应用目录统一为 `~/silverwing`，新环境自动使用 `~/silverwing/tasks`；设置页支持带预检、Git Worktree 修复、回滚和恢复日志的任务根目录迁移。
 - 创建任务时预览可选的需求资料目录；未配置资料目录时，创建流程不再展示相关字段或提示。
 - 启动后后台静默补齐尚未配置的开发工具路径，并在写入前重新读取配置，避免覆盖用户并发保存的路径。
 - 设置页改为平铺布局，飞书项目统一改名为 Meegle，开发工具操作与路径输入同行展示。
@@ -68,8 +74,8 @@
 
 ## 0.12.0
 
-- 需求资料根统一承载桌面端资料与 `$awm` / `awm agent` 过程文档；移除独立的 `requirementDocumentationRoot` 配置。
-- 桌面端继续创建或复用 `<资料根>/<Sprint>/<需求编号>-<任务文件夹名>/<资料子目录>`，Agent 在同一 `write_root` 内补写需求总览、过程文档和 Sprint 总览，任务交接文件仍写入任务目录的 `.awm/HANDOFF.md`。
+- 需求资料根统一承载桌面端资料与 `$silverwing` / `silverwing agent` 过程文档；移除独立的 `requirementDocumentationRoot` 配置。
+- 桌面端继续创建或复用 `<资料根>/<Sprint>/<需求编号>-<任务文件夹名>/<资料子目录>`，Agent 在同一 `write_root` 内补写需求总览、过程文档和 Sprint 总览，任务交接文件仍写入任务目录的 `.silverwing/HANDOFF.md`。
 - 配置与任务清单 schema 严格升级到 `0.12.0`，不读取、迁移或删除 0.11.x 及更早数据；升级需手工移除旧字段并重新保存资料根配置，旧独立过程文档目录保持原样。
 
 ## 0.11.1
@@ -82,10 +88,10 @@
 ## 0.11.0
 
 - 配置与任务清单 schema 升至严格的 `0.11.0`，新增 Agent CLI 的需求过程文档根目录与任务交接上下文；0.10.x 及更早版本不会读取或迁移。
-- Windows 绿色包的 CLI 安装与卸载增加所有权标记和完整性检查：不会覆盖或删除用户自定义的 `awm.cmd`，可识别不完整安装并提供恢复性卸载；PATH 的引号和尾部分隔符等价写法不会重复写入或遗留。
+- Windows 绿色包的 CLI 安装与卸载增加所有权标记和完整性检查：不会覆盖或删除用户自定义的 `silverwing.cmd`，可识别不完整安装并提供恢复性卸载；PATH 的引号和尾部分隔符等价写法不会重复写入或遗留。
 - 设置页新增 CLI 卸载入口；若运行中的 CLI 占用文件，保留入口和 PATH 以便稍后重试清理。
 - Agent CLI 的配置读取允许同一 schema 下的前向字段，但保持只读，避免不同版本桌面端写入的额外字段阻断插件工作流或被 CLI 丢弃。
-- 绿色包继续携带独立的精简 Java 运行时；README 补充 Windows/macOS/Linux CLI 说明与 Codex 插件安装、显式 `$awm` 调用流程。
+- 绿色包继续携带独立的精简 Java 运行时；README 补充 Windows/macOS/Linux CLI 说明与 Codex 插件安装、显式 `$silverwing` 调用流程。
 
 ## 0.10.1
 
@@ -158,7 +164,7 @@
 ## 0.8.1
 
 - 服务配置弹窗改为左侧分组导航（基本信息、工具与提交、工作区模块、Bootstrap），弹窗加宽以容纳分组内容。
-- 任务详情新增 AGENTS.md 预览按钮，预览与保存同源渲染；主页侧边栏头部精简为图标与 AWM。
+- 任务详情新增 AGENTS.md 预览按钮，预览与保存同源渲染；主页侧边栏头部精简为图标与 silverwing。
 - 任务详情头部的“有警告”“已归档”状态前移到需求状态之后；需求标题读取失败时可点击重试图标强制刷新。
 - 批量 Tag 与批量 Commit、Commit & Push、Push 弹窗默认不选中任何工作区，并提供“全选”“全不选”快捷操作。
 - Tag 构建成功的复制文本调整为先需求链接与发版提示、再列出版本清单。
@@ -239,7 +245,7 @@
 
 ## 0.3.0
 
-- 产品更名为 Agent Workspace Manager（AWM），定位为任务级 Agent 开发工作区编排器；
+- 产品更名为 silverwing，定位为任务级 Agent 开发工作区编排器；
 - 移除 CLI，仅保留 `core` 与 `desktop`；
 - 引入组、服务、模块、标准 Worktree 与独立克隆策略；
 - 增加三级 `AGENTS.md` 合成、磁盘同步和冲突保护；

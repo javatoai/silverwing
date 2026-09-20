@@ -1,4 +1,4 @@
 # Unix entry points must remain runnable even when checked out with core.autocrlf=true.
 /gradlew text eol=lf
 /scripts/*.sh text eol=lf
-/cli/src/main/portable/bin/awm text eol=lf
+/cli/src/main/portable/bin/silverwing text eol=lf

@@ -7,7 +7,7 @@ Gradle 模块：
 ```text
 core      领域模型、应用编排、Git/JSON/文件系统基础设施
 desktop   Compose Desktop 展示、输入和窗口生命周期
-cli       只面向 Agent 的 JSON 命令行入口（awm agent / awm tag）
+cli       只面向 Agent 的 JSON 命令行入口（silverwing agent / silverwing tag）
 ```
 
 代码按以下依赖方向组织：
@@ -24,7 +24,7 @@ CLI     -> Application -> Domain
 - **Application**：通过用例服务编排配置、任务、刷新、工作区创建和 Agent 文档，不包含 Compose 控件。
 - **Infrastructure**：实现 Git、JSON、原子文件写入、WatchService 和外部系统适配器。
 - **Desktop**：`Main` 负责窗口、主题、导航和装配；`AppSessionStore`、`OperationCoordinator` 以及任务、设置、Agent、交付控制器维护展示状态和回调，不直接执行 Git 命令、解析 JSON 或拼接 AGENTS.md。
-- **CLI**：`awm` 只暴露 JSON 协议命令，不实现业务规则。`AgentOperationService` 承载任务创建的两阶段 plan/apply 协议，`TagOperationCliFacade` 承载 Tag 构建闭环；后者与桌面 `DeliveryController` 是同一套应用层 Tag 用例的两个入口，共享预检、Git 写策略和仓库锁。
+- **CLI**：`silverwing` 只暴露 JSON 协议命令，不实现业务规则。`AgentOperationService` 承载任务创建的两阶段 plan/apply 协议，`TagOperationCliFacade` 承载 Tag 构建闭环；后者与桌面 `DeliveryController` 是同一套应用层 Tag 用例的两个入口，共享预检、Git 写策略和仓库锁。
 
 0.5.0 将任务生命周期与工作区健康拆为两个正交模型。`TaskLifecycleStatus` 只决定活跃/归档导航；`WorkspaceHealth` 只决定创建、重试、Git、IDE 和交付能力。任务健康由工作区动态聚合，不写入 JSON。桌面层的 `RequirementController` 负责 Meegle 请求去重、缓存、并发限制和过期回写保护，`DesktopActions` 是剪贴板与操作系统动作的唯一边界。
 
@@ -32,21 +32,21 @@ CLI     -> Application -> Domain
 
 ## 启动和刷新边界
 
-首次启动会创建 `~/awm`、`~/awm/tasks` 和当前版本 `config.json`。后续启动读取本地配置、处理未完成的任务根目录迁移日志、读取任务清单和 Agent 文件，并在后台静默补齐尚未配置的开发工具路径、解析系统终端和检查最近任务的本地 Git 状态；这些启动探测只访问固定本机候选目录与 PATH，不阻塞 UI、不递归扫描磁盘、不联网。不探测旧的 `~/.AgentWorkspaceManager`，不 Fetch、不访问飞书。顶部手动刷新会校验已配置仓库、重新读取任务与 Agent 文件、刷新飞书状态和当前任务 Git 状态。
+首次启动会创建 `~/silverwing`、`~/silverwing/tasks` 和 `~/silverwing/config/` 下的八个当前配置分片。后续启动读取本地配置、处理未完成的任务根目录迁移日志、读取任务清单和 Agent 文件，并在后台静默补齐尚未配置的开发工具路径、解析系统终端和检查最近任务的本地 Git 状态；这些启动探测只访问固定本机候选目录与 PATH，不阻塞 UI、不递归扫描磁盘、不联网。不探测旧产品目录，不 Fetch、不访问飞书。顶部手动刷新会校验已配置仓库、重新读取任务与 Agent 文件、刷新飞书状态和当前任务 Git 状态。
 
 ## 持久化
 
-- 全局配置：`~/awm/config.json`
-- 默认任务根目录：`~/awm/tasks`
-- 任务说明模板：`~/awm/agents/task-templates.json`
-- 全局说明：`~/awm/agents/global/AGENTS.md`
-- 组说明：`~/awm/agents/groups/<groupId>/AGENTS.md`
-- 任务清单：`<taskDir>/agent-workspace.json`
+- 配置目录：`~/silverwing/config/`（`layout.json`、`workspace.json`、`services.json`、`tag.json`、`tools.json`、`git.json`、`integrations.json`、`appearance.json`）
+- 默认任务根目录：`~/silverwing/tasks`
+- 任务说明模板：`~/silverwing/agents/task-templates.json`
+- 全局说明：`~/silverwing/agents/global/AGENTS.md`
+- 组说明：`~/silverwing/agents/groups/<groupId>/AGENTS.md`
+- 任务清单：`<taskDir>/silverwing.json`
 - 最终说明：`<taskDir>/AGENTS.md`
 - Tag 操作快照：`<taskDir>/tag-operations/*.json`
 - 构建历史：`<taskDir>/tag-build-history.jsonl`
-- 仓库锁：`~/awm/locks/<git-common-dir-hash>.lock`
-- 任务根目录迁移日志：`~/awm/migrations/task-root.json`
+- 仓库锁：`~/silverwing/locks/<git-common-dir-hash>.lock`
+- 任务根目录迁移日志：`~/silverwing/migrations/task-root.json`
 
 配置和任务使用严格 schema。文件写入采用同目录临时文件加原子替换，避免进程中断留下半个 JSON 或覆盖用户正在维护的 Agent 文档。
 

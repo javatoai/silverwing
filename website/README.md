@@ -1,6 +1,6 @@
-# AWM Project Website
+# silverwing Project Website
 
-这是 Agent Workspace Manager 的独立静态介绍页，不参与 Gradle 构建。
+这是 silverwing 的独立静态介绍页，不参与 Gradle 构建。
 
 ## 本地预览
 

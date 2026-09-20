@@ -1,0 +1,17 @@
+#!/usr/bin/env sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SILVERWING_CLI_HOME=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+
+if [ -x "$SILVERWING_CLI_HOME/../runtime/bin/java" ]; then
+  SILVERWING_JAVA="$SILVERWING_CLI_HOME/../runtime/bin/java"
+elif [ -x "$SILVERWING_CLI_HOME/../silverwing-runtime/bin/java" ]; then
+  SILVERWING_JAVA="$SILVERWING_CLI_HOME/../silverwing-runtime/bin/java"
+elif [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/java" ]; then
+  SILVERWING_JAVA="$JAVA_HOME/bin/java"
+else
+  SILVERWING_JAVA=java
+fi
+
+exec "$SILVERWING_JAVA" -cp "$SILVERWING_CLI_HOME/lib/*" com.snowball.silverwing.cli.MainKt "$@"

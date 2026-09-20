@@ -1,6 +1,6 @@
 # 已知问题与支持边界
 
-本文记录 AWM `1.0.8` 已确认的问题、测试缺口和明确接受的平台限制。任务迁移路径别名误判已在 `1.0.2` 修复。这里的“已知”不代表都会在近期修复；产品支持范围变化后应同步更新本文。
+本文记录 silverwing `2.0.0` 已确认的问题、测试缺口和明确接受的平台限制。这里的“已知”不代表都会在近期修复；产品支持范围变化后应同步更新本文。
 
 ## 待处理问题
 
@@ -15,9 +15,9 @@
 ### macOS 终端命令依赖 Automation 权限
 
 - **影响平台**：macOS。
-- **现象**：从 AWM 打开 Terminal 并执行 Genbu、Meegle 等命令时，系统可能首次请求控制 Terminal 的 Automation 权限；用户拒绝后命令无法自动执行。
+- **现象**：从 silverwing 打开 Terminal 并执行 Genbu、Meegle 等命令时，系统可能首次请求控制 Terminal 的 Automation 权限；用户拒绝后命令无法自动执行。
 - **原因**：当前通过 `osascript` 调用 Terminal 执行命令。
-- **临时处理**：在系统设置中允许 AWM 控制 Terminal，或复制命令后手工执行。
+- **临时处理**：在系统设置中允许 silverwing 控制 Terminal，或复制命令后手工执行。
 - **状态**：权限失败提示和引导仍可加强。
 
 ### Codex 可用状态未进行协议预检
@@ -52,6 +52,6 @@ Windows 安装包由 x64 Runner 构建。Windows ARM64 没有独立的原生构�
 
 本轮开发代码已通过登录 shell 的 PATH 查找 `cursor`，改善 Finder 启动时的发现能力；但仍未增加独立的 `/Applications/Cursor.app` 扫描。若只安装应用而没有配置 shell 启动命令，仍可能显示不可用。独立应用扫描不在本轮修复范围内。
 
-### AWM CLI 一键安装仅支持 Windows
+### silverwing CLI 一键安装仅支持 Windows
 
-设置页中的 CLI 安装、卸载和用户 PATH 管理仅支持 Windows。macOS 不提供一键安装；需要使用应用资源中的 `resources/cli/bin/awm` 并由用户自行配置 PATH。该差异当前不安排修复。
+设置页中的 CLI 安装、卸载和用户 PATH 管理仅支持 Windows。macOS 不提供一键安装；需要使用应用资源中的 `resources/cli/bin/silverwing` 并由用户自行配置 PATH。该差异当前不安排修复。

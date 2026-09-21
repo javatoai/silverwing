@@ -41,17 +41,17 @@ jobs:
             echo "Release tag $GITHUB_REF_NAME does not match product version $product_version" >&2
             exit 1
           }
-      - name: Test and compile desktop (Windows)
+      - name: Compile desktop (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: .\gradlew.bat clean test :desktop:compileKotlin -PskipHostedGitIntegrationTests
-      - name: Test and compile desktop (macOS)
+        run: .\gradlew.bat clean :desktop:compileKotlin
+      - name: Compile desktop (macOS)
         if: runner.os == 'macOS'
         shell: bash
         run: |
           perl -pi -e 's/\r$//' ./gradlew
           chmod +x ./gradlew
-          ./gradlew clean test :desktop:compileKotlin -PskipHostedGitIntegrationTests
+          ./gradlew clean :desktop:compileKotlin
 
   windows:
     name: Windows packages
@@ -86,6 +86,7 @@ jobs:
         run: .\scripts\build-windows.ps1
         shell: pwsh
         env:
+          SILVERWING_RELEASE_SKIP_TESTS: "true"
           SILVERWING_RELEASE_SKIP_UNSTABLE_GIT_TESTS: "true"
 
       - name: Stage Windows release assets

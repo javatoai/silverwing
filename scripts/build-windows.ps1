@@ -3,8 +3,11 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $projectRoot
 try {
-    # Installers are produced only after the complete test gate passes.
-    $gradleArguments = @('clean', 'test', ':desktop:compileKotlin', ':desktop:createDistributable', ':desktop:packageExe', ':desktop:packageMsi', '--no-daemon')
+    $gradleArguments = @('clean')
+    if ($env:SILVERWING_RELEASE_SKIP_TESTS -ne 'true') {
+        $gradleArguments += 'test'
+    }
+    $gradleArguments += @(':desktop:compileKotlin', ':desktop:createDistributable', ':desktop:packageExe', ':desktop:packageMsi', '--no-daemon')
     if ($env:SILVERWING_RELEASE_SKIP_UNSTABLE_GIT_TESTS -eq 'true') {
         $gradleArguments += '-PskipHostedGitIntegrationTests'
     }

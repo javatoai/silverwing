@@ -92,7 +92,7 @@ class ProcessCommandRunner : StreamingCommandRunner {
                 }
             }
             val finished = waitForProcess(process, deadline, observedProcesses)
-            if (!finished) {
+            if (!finished || observedProcesses.any { it.isAlive }) {
                 timeoutResult(process, stdoutFuture, stderrFuture, timeout, observedProcesses)
             } else {
                 CommandResult(
@@ -211,6 +211,9 @@ class ProcessCommandRunner : StreamingCommandRunner {
 
     companion object {
         const val TIMEOUT_EXIT_CODE = 124
-        private val PROCESS_WAIT_POLL_NANOS = TimeUnit.MILLISECONDS.toNanos(50)
+        // Short-lived launchers can create a child and exit before a coarse poll sees it,
+        // especially on loaded Windows CI workers. Preserve observed descendants so a later
+        // timeout can reliably tear down the process tree.
+        private val PROCESS_WAIT_POLL_NANOS = TimeUnit.MILLISECONDS.toNanos(10)
     }
 }

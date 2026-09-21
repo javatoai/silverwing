@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.util.zip.ZipInputStream
 import kotlin.test.assertFailsWith
 
@@ -123,6 +124,31 @@ class ConfigStoreTest {
         }
         assertFalse(before.getValue("appearance.json").contentEquals(Files.readAllBytes(paths.config.resolve("appearance.json"))))
         assertEquals(EXPECTED_SHARDS, zipEntries(store.backups().single().path))
+    }
+
+    @Test
+    fun `failed multi shard replacement restores the complete previous configuration`() {
+        val paths = ApplicationPaths(temporary.resolve("rollback"))
+        val initial = ConfigStore(paths)
+        initial.save(AppConfig(taskRoot = "D:/before"))
+        val before = shardBytes(paths)
+        var replacementCount = 0
+        val failing = ConfigStore(paths, replaceShard = { source, target ->
+            assertEquals(paths.config.toAbsolutePath().normalize(), source.parent.toAbsolutePath().normalize())
+            replacementCount++
+            if (replacementCount == 2) error("simulated shard replacement failure")
+            Files.move(source, target, StandardCopyOption.REPLACE_EXISTING)
+        })
+
+        assertFailsWith<IllegalStateException> {
+            failing.save(initial.load().copy(taskRoot = "D:/after", theme = ThemePreference.DARK))
+        }
+
+        assertEquals(EXPECTED_SHARDS, shardNames(paths))
+        before.forEach { (name, bytes) ->
+            assertTrue(bytes.contentEquals(Files.readAllBytes(paths.config.resolve(name))), name)
+        }
+        assertEquals(initial.load(), failing.load())
     }
 
     @Test

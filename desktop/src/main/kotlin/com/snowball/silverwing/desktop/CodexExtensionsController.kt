@@ -5,15 +5,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.snowball.silverwing.core.AppConfig
 import com.snowball.silverwing.core.CodexExtensionOwnership
-import com.snowball.silverwing.core.CodexExtensionsService
+import com.snowball.silverwing.core.CodexExtensionsApplicationService
 import com.snowball.silverwing.core.CodexExtensionsSnapshot
 import com.snowball.silverwing.core.CodexPluginCatalogItem
 import com.snowball.silverwing.core.CodexPluginPreview
 import com.snowball.silverwing.core.CodexPluginMarketplaceSource
-import com.snowball.silverwing.core.ConfigStore
 import com.snowball.silverwing.core.ExternalSkillCatalogItem
 import com.snowball.silverwing.core.SkillSource
-import com.snowball.silverwing.core.RemoteGitBranchCatalog
 
 internal data class CodexExtensionsUiState(
     val snapshot: CodexExtensionsSnapshot,
@@ -43,14 +41,11 @@ internal sealed interface PluginPreviewState {
     data class Failed(val message: String) : PluginPreviewState
 }
 
-/** Keeps UI configuration writes and local Codex/Skill side effects in one deliberately serialized lane. */
+/** Keeps presentation state and operation callbacks for Codex extensions. */
 internal class CodexExtensionsController(
-    private val session: AppSessionStore,
-    private val configStore: ConfigStore,
-    private val extensions: CodexExtensionsService,
+    private val extensions: CodexExtensionsApplicationService,
     private val operations: OperationRunner,
     private val applyConfig: (AppConfig) -> Unit,
-    private val branchCatalog: RemoteGitBranchCatalog,
 ) {
     var state by mutableStateOf(CodexExtensionsUiState(cachedSnapshot()))
         private set
@@ -65,7 +60,7 @@ internal class CodexExtensionsController(
             activeMessage = "正在读取远程分支…",
             successMessage = "远程分支已加载",
             cancellable = true,
-            block = { branchCatalog.load(repositoryUrl) },
+            block = { extensions.loadRemoteBranches(repositoryUrl) },
             onSuccess = { onResult(RemoteBranchLoadState.Loaded(it)) },
             onFailure = { error -> onResult(RemoteBranchLoadState.Failed(error.message ?: "远程分支读取失败")) },
         )
@@ -75,16 +70,8 @@ internal class CodexExtensionsController(
         activeMessage = "正在添加 Codex 插件来源…",
         successMessage = "插件来源已保存",
         cancellable = true,
-        block = {
-            val updated = configStore.update { config ->
-                require(config.codexPluginMarketplaceSources.none { it.id.equals(source.id, ignoreCase = true) }) {
-                    "插件来源 ID 已存在"
-                }
-                config.copy(codexPluginMarketplaceSources = config.codexPluginMarketplaceSources + source)
-            }
-            updated to extensions.addMarketplace(source)
-        },
-        onSuccess = { (config, _) ->
+        block = { extensions.addMarketplace(source) },
+        onSuccess = { config ->
             applyConfig(config)
             refreshCached()
         },
@@ -104,12 +91,7 @@ internal class CodexExtensionsController(
         activeMessage = "正在移除 Codex 插件来源…",
         successMessage = "插件来源已移除；已安装插件保持不变",
         cancellable = true,
-        block = {
-            extensions.removeMarketplace(source)
-            configStore.update { config ->
-                config.copy(codexPluginMarketplaceSources = config.codexPluginMarketplaceSources.filterNot { it.id == source.id })
-            }
-        },
+        block = { extensions.removeMarketplace(source) },
         onSuccess = {
             applyConfig(it)
             refreshCached()
@@ -166,14 +148,8 @@ internal class CodexExtensionsController(
         activeMessage = "正在添加 Skill 来源…",
         successMessage = "Skill 来源已保存",
         cancellable = true,
-        block = {
-            val updated = configStore.update { config ->
-                require(config.skillSources.none { it.id.equals(source.id, ignoreCase = true) }) { "Skill 来源 ID 已存在" }
-                config.copy(skillSources = config.skillSources + source)
-            }
-            updated to extensions.addSkillSource(source)
-        },
-        onSuccess = { (config, _) ->
+        block = { extensions.addSkillSource(source) },
+        onSuccess = { config ->
             applyConfig(config)
             refreshCached()
         },
@@ -193,10 +169,7 @@ internal class CodexExtensionsController(
         activeMessage = "正在移除 Skill 来源…",
         successMessage = "Skill 来源已移除；已安装 Skill 保持不变",
         cancellable = true,
-        block = {
-            extensions.removeSkillSource(source)
-            configStore.update { config -> config.copy(skillSources = config.skillSources.filterNot { it.id == source.id }) }
-        },
+        block = { extensions.removeSkillSource(source) },
         onSuccess = {
             applyConfig(it)
             refreshCached()
@@ -232,7 +205,7 @@ internal class CodexExtensionsController(
         activeMessage = "正在更新 ${skill.name}…",
         successMessage = "Skill 已更新；请新建或重启 Codex 会话后使用",
         cancellable = true,
-        block = { extensions.installSkill(source, skill.name) },
+        block = { extensions.installSkill(source, skill.name, takeOver = false) },
         onSuccess = { refreshCached() },
         onFailure = { refreshCached() },
     )
@@ -246,6 +219,5 @@ internal class CodexExtensionsController(
         onFailure = { refreshCached() },
     )
 
-    private fun cachedSnapshot(): CodexExtensionsSnapshot =
-        extensions.snapshot(session.config.codexPluginMarketplaceSources, session.config.skillSources)
+    private fun cachedSnapshot(): CodexExtensionsSnapshot = extensions.snapshot()
 }

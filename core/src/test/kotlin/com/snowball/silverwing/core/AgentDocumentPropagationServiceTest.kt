@@ -3,46 +3,12 @@ package com.snowball.silverwing.core
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class AgentDocumentPropagationServiceTest {
     @Test
-    fun `group change regenerates only matching legacy tasks`() {
+    fun `shared rule changes never rewrite task local routers`() {
         val root = Files.createTempDirectory("agent-propagation-")
-        val manifests = ManifestStore()
-        fun save(name: String, group: String, layout: AgentDocumentLayout = AgentDocumentLayout.INLINE_V1) {
-            val directory = root.resolve(name)
-            manifests.save(
-                directory,
-                TaskManifest(
-                    folderName = name,
-                    taskDirectoryName = name,
-                    featureBranch = "feature/$name",
-                    createdAt = "2026-08-08T00:00:00Z",
-                    updatedAt = "2026-08-08T00:00:00Z",
-                    lifecycleStatus = TaskLifecycleStatus.ACTIVE,
-                    services = emptyList(),
-                    groupId = group,
-                    agentDocumentLayout = layout,
-                ),
-            )
-        }
-        save("a", "alpha")
-        save("b", "beta")
-        save("referenced", "alpha", AgentDocumentLayout.REFERENCED_V2)
-        val documents = CountingDocuments()
-        val result = AgentDocumentPropagationService(manifests, documents, NoOpTaskOperationLock).propagate(
-            AppConfig(taskRoot = root.toString()),
-            AgentInstructionScope.Group("alpha"),
-        )
-
-        assertEquals(listOf("a"), result.updatedTaskDirectories.map { it.fileName.toString() })
-        assertEquals(listOf("a"), documents.tasks)
-    }
-
-    @Test
-    fun `task deleted after scan is not recreated by propagation`() {
-        val root = Files.createTempDirectory("agent-propagation-delete-")
         val directory = root.resolve("task")
         val manifests = ManifestStore()
         manifests.save(
@@ -58,23 +24,16 @@ class AgentDocumentPropagationServiceTest {
             ),
         )
         val documents = CountingDocuments()
-        val deletingLock = object : TaskOperationLock {
-            override fun <T> withLock(taskDirectory: java.nio.file.Path, block: () -> T): T {
-                Files.walk(taskDirectory).use { paths ->
-                    paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
-                }
-                return block()
-            }
-        }
 
-        val result = AgentDocumentPropagationService(manifests, documents, deletingLock).propagate(
+        val result = AgentDocumentPropagationService(manifests, documents, NoOpTaskOperationLock).propagate(
             AppConfig(taskRoot = root.toString()),
             AgentInstructionScope.Global,
         )
 
-        assertFalse(Files.exists(directory))
-        assertEquals(0, documents.tasks.size)
-        assertEquals(1, result.failures.size)
+        assertTrue(result.updatedTaskDirectories.isEmpty())
+        assertTrue(result.failures.isEmpty())
+        assertTrue(documents.tasks.isEmpty())
+        assertEquals(true, Files.isDirectory(directory))
     }
 }
 

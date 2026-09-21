@@ -9,7 +9,7 @@ import kotlin.io.path.createDirectories
 
 /** Writes the self-contained handoff required by Agent CLI tasks. */
 object HandoffDocumentWriter {
-    const val DIRECTORY_NAME = ".silverwing"
+    const val DIRECTORY_NAME = ".workspace"
     const val FILE_NAME = "HANDOFF.md"
 
     fun write(taskDirectory: Path, suppliedMarkdown: String?): Path {
@@ -29,7 +29,7 @@ object HandoffDocumentWriter {
 
     /** No conversation/session identifier is stored; the document stands alone. */
     fun template(): String = """
-        # silverwing 任务交接
+        # 任务交接
 
         ## 目标
 

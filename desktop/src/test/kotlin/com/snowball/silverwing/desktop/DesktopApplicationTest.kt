@@ -732,10 +732,11 @@ class DesktopApplicationTest {
                 requirementLink = "REQ-123 raw requirement",
                 notes = "notes",
             )
+            val previewContent = preview.files.joinToString("\n") { it.content }
 
-            assertContains(preview, "REQ-123 raw requirement")
-            assertContains(preview, root.resolve("tasks").resolve("支付 订单优化").toString())
-            assertFalse(preview.contains("## 需求资料目录"))
+            assertContains(previewContent, "REQ-123 raw requirement")
+            assertContains(previewContent, root.resolve("tasks").resolve("支付 订单优化").toString())
+            assertFalse(previewContent.contains("## 需求资料目录"))
         } finally {
             controller.close()
         }
@@ -817,9 +818,10 @@ class DesktopApplicationTest {
                     writeRoot = materialsPath.toString(),
                 ),
             )
+            val previewContent = preview.files.joinToString("\n") { it.content }
 
-            assertContains(preview, "## 需求资料目录")
-            assertContains(preview, materialsPath.toAbsolutePath().normalize().toString())
+            assertContains(previewContent, "## 需求资料目录")
+            assertContains(previewContent, materialsPath.toAbsolutePath().normalize().toString())
         } finally {
             controller.close()
         }

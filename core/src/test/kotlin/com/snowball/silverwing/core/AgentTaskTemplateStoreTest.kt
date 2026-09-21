@@ -95,10 +95,12 @@ class AgentTaskTemplateStoreTest {
     }
 
     @Test
-    fun `reserved silverwing markers are rejected`() {
-        assertFailsWith<IllegalArgumentException> {
-            store().saveAll(listOf(template("a", "恶意", "包含 ${AgentDocumentService.TASK_NOTES_BEGIN} 标记")))
-        }
+    fun `template content is stored verbatim because task rules are now an independent file`() {
+        val content = "包含普通 HTML 注释 <!-- task-rule -->"
+
+        store().saveAll(listOf(template("a", "任务规则", content)))
+
+        assertEquals(content, store().list().single().content)
     }
 
     @Test

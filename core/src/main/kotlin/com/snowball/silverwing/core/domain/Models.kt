@@ -582,7 +582,7 @@ data class ServiceWorkspace(
 
 @Serializable
 enum class AgentDocumentLayout {
-    /** Existing task documents keep the legacy inline three-level content. */
+    /** Historical metadata retained for persisted manifests; instruction files are always referenced. */
     INLINE_V1,
 
     /** New tasks keep the root AGENTS.md stable and reference split instruction files. */
@@ -608,8 +608,8 @@ data class TaskManifest(
     val workspaceToolLaunches: List<WorkspaceToolLaunch> = emptyList(),
     /** Present only for tasks created through the guarded Agent CLI flow. */
     val agentContext: AgentTaskContext? = null,
-    /** Defaults to the legacy layout so persisted tasks are never migrated implicitly. */
-    val agentDocumentLayout: AgentDocumentLayout = AgentDocumentLayout.INLINE_V1,
+    /** All newly created tasks use the stable root-router and split instruction files. */
+    val agentDocumentLayout: AgentDocumentLayout = AgentDocumentLayout.REFERENCED_V2,
 )
 
 /**
@@ -621,12 +621,12 @@ data class AgentTaskContext(
     val protocolVersion: String = "1",
     val documentationDirectory: String,
     val iterationLabel: String,
-    val handoffRelativePath: String = ".silverwing/HANDOFF.md",
+    val handoffRelativePath: String = ".workspace/HANDOFF.md",
 ) {
     init {
         require(documentationDirectory.isNotBlank()) { "需求过程文档目录不能为空" }
         require(iterationLabel.isNotBlank()) { "迭代名称不能为空" }
-        require(handoffRelativePath == ".silverwing/HANDOFF.md") { "交接文件路径必须是 .silverwing/HANDOFF.md" }
+        require(handoffRelativePath == ".workspace/HANDOFF.md") { "交接文件路径必须是 .workspace/HANDOFF.md" }
     }
 }
 

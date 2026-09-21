@@ -34,12 +34,7 @@ class WorkspaceCommandService(
     }
 
     private fun resolveWorkingDirectory(root: Path, rawValue: String): Path {
-        val relative = Path.of(rawValue.trim().ifBlank { "." })
-        require(!relative.isAbsolute) { "快捷命令工作目录必须是工作区内相对路径：$rawValue" }
-        require(relative.none { it.toString() == ".." }) { "快捷命令工作目录不能包含 ..：$rawValue" }
-        require(relative.none { it.toString().equals(".git", ignoreCase = true) }) {
-            "快捷命令工作目录不能访问 .git：$rawValue"
-        }
+        val relative = validatedWorkspaceRelativeDirectory(rawValue)
         val resolved = root.resolve(relative).normalize()
         require(resolved.startsWith(root)) { "快捷命令工作目录超出工作区：$rawValue" }
         require(Files.isDirectory(resolved)) { "快捷命令工作目录不存在：$resolved" }
@@ -76,11 +71,18 @@ class WorkspaceCommandService(
 }
 
 fun WorkspaceCommandConfig.validateWorkspaceCommand(): WorkspaceCommandConfig = apply {
-    require(workingDirectory.isNotBlank()) { "快捷命令工作目录不能为空" }
-    val relative = Path.of(workingDirectory.trim())
-    require(!relative.isAbsolute) { "快捷命令工作目录必须是相对路径：$workingDirectory" }
-    require(relative.none { it.toString() == ".." }) { "快捷命令工作目录不能包含 ..：$workingDirectory" }
+    validatedWorkspaceRelativeDirectory(workingDirectory)
+}
+
+/** Parses the configuration value once so validation and execution cannot drift apart. */
+private fun validatedWorkspaceRelativeDirectory(rawValue: String): Path {
+    val value = rawValue.trim()
+    require(value.isNotEmpty()) { "快捷命令工作目录不能为空" }
+    val relative = Path.of(value)
+    require(!relative.isAbsolute) { "快捷命令工作目录必须是相对路径：$rawValue" }
+    require(relative.none { it.toString() == ".." }) { "快捷命令工作目录不能包含 ..：$rawValue" }
     require(relative.none { it.toString().equals(".git", ignoreCase = true) }) {
-        "快捷命令工作目录不能访问 .git：$workingDirectory"
+        "快捷命令工作目录不能访问 .git：$rawValue"
     }
+    return relative
 }

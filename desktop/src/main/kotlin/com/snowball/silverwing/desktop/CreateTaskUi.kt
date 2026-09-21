@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.snowball.silverwing.core.AgentTaskTemplate
+import com.snowball.silverwing.core.AgentDocumentPreview
 import com.snowball.silverwing.core.BranchPrefixResolver
 import com.snowball.silverwing.core.BranchReuseConflict
 import com.snowball.silverwing.core.BranchReuseKey
@@ -173,7 +174,7 @@ internal fun CreateTaskDialog(
         branchConflicts = null
         if (hasDraftChanges) confirmDiscard = true else onDismiss()
     }
-    var preview by remember { mutableStateOf("") }
+    var preview by remember { mutableStateOf<AgentDocumentPreview?>(null) }
     var previewLoading by remember { mutableStateOf(false) }
     var previewError by remember { mutableStateOf<String?>(null) }
     val previewSelections = effectiveSelections()
@@ -189,6 +190,7 @@ internal fun CreateTaskDialog(
     ) {
         previewLoading = true
         previewError = null
+        preview = null
         try {
             preview = controller.previewAgentsAsync(
                 draft.taskName,
@@ -612,7 +614,18 @@ internal fun CreateTaskDialog(
                                         Modifier.padding(16.dp),
                                         color = MaterialTheme.colorScheme.error,
                                     )
-                                    else -> AgentsMarkdownPreview(preview)
+                                    else -> preview?.let { documentPreview ->
+                                        MarkdownFileTabsPreview(
+                                            files = documentPreview.files.map { MarkdownPreviewFile(it.relativePath, it.content) },
+                                            modifier = Modifier.fillMaxSize(),
+                                            initialPath = documentPreview.rootFile.relativePath,
+                                            onCopySource = { file -> controller.copyText(markdownPreviewSourceCopyPayload(file), "Markdown 源码已复制") },
+                                        )
+                                    } ?: Text(
+                                        "尚未生成 Agent 文件预览",
+                                        Modifier.padding(16.dp),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
                                 }
                             }
                         }

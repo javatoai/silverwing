@@ -4,7 +4,6 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -36,6 +35,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.DropdownMenuItem
@@ -56,12 +56,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.snowball.silverwing.core.CodexExtensionOwnership
 import com.snowball.silverwing.core.CodexPluginCatalogItem
 import com.snowball.silverwing.core.CodexPluginMarketplaceSource
+import com.snowball.silverwing.core.CodexPluginMarketplaceSnapshot
 import com.snowball.silverwing.core.ExternalSkillCatalogItem
+import com.snowball.silverwing.core.ExternalSkillSourceSnapshot
 import com.snowball.silverwing.core.SkillSource
 import com.snowball.silverwing.core.defaultExtensionSourceName
 import com.snowball.silverwing.core.preferredRemoteGitBranch
@@ -123,15 +126,9 @@ internal fun SettingsCodexPluginsSection(controller: DesktopApplication) {
                 ExtensionSourceCard(
                     title = source.name,
                     repositoryUrl = source.repositoryUrl,
-                    details = listOfNotNull(
-                        source.ref?.let { "ref：$it" },
-                        if (source.requiresRootMarketplaceMigration()) "需要迁移：旧版子目录 ${source.marketplaceDirectory}" else "Marketplace：仓库根目录",
-                        status?.marketplaceName?.let { "Codex 名称：$it" },
-                        status?.cacheDirectory?.let { "缓存：$it" },
-                        status?.updatedAt?.let { "最近成功：$it" },
-                    ).joinToString(" · "),
+                    metadataLines = pluginSourceMetadataLines(source, status),
                     error = status?.error,
-                    countLabel = status?.plugins?.size?.let { "$it 个插件" },
+                    countLabel = extensionSourceCountLabel(status?.plugins?.size, "插件"),
                     onView = { viewing = source },
                     onRefresh = { extensions.refreshMarketplace(source) },
                     onRemove = { removing = source },
@@ -157,6 +154,7 @@ internal fun SettingsCodexPluginsSection(controller: DesktopApplication) {
             extensions = extensions,
             ownership = { extensions.pluginOwnership(source.id, it) },
             enabled = !controller.settingsBusy,
+            onCopySource = { content -> controller.copyText(content, "Markdown 源码已复制") },
             onDismiss = { viewing = null },
             onAction = { plugin, ownership ->
                 pendingAction = PendingPluginAction(
@@ -248,13 +246,9 @@ internal fun SettingsExternalSkillsSection(controller: DesktopApplication) {
                 ExtensionSourceCard(
                     title = source.name,
                     repositoryUrl = source.repositoryUrl,
-                    details = listOfNotNull(
-                        source.ref?.let { "ref：$it" },
-                        "目录：${source.skillRoot ?: "自动发现"}",
-                        status?.updatedAt?.let { "最近成功：$it" },
-                    ).joinToString(" · "),
+                    metadataLines = skillSourceMetadataLines(source, status),
                     error = status?.error,
-                    countLabel = status?.skills?.size?.let { "$it 个 Skill" },
+                    countLabel = extensionSourceCountLabel(status?.skills?.size, "Skill"),
                     onView = { viewing = source },
                     onRefresh = { extensions.refreshSkillSource(source) },
                     onRemove = { removing = source },
@@ -280,6 +274,7 @@ internal fun SettingsExternalSkillsSection(controller: DesktopApplication) {
             extensions = extensions,
             ownership = { skill -> ownershipVersion.let { extensions.skillOwnership(source.id, skill) } },
             enabled = !controller.settingsBusy,
+            onCopySource = { content -> controller.copyText(content, "Markdown 源码已复制") },
             onDismiss = { viewing = null },
             onAction = { skill, ownership, action ->
                 pendingAction = PendingSkillAction(
@@ -344,7 +339,7 @@ internal fun SettingsExternalSkillsSection(controller: DesktopApplication) {
 private fun ExtensionSourceCard(
     title: String,
     repositoryUrl: String,
-    details: String,
+    metadataLines: List<String>,
     error: String?,
     countLabel: String?,
     onView: () -> Unit,
@@ -357,31 +352,147 @@ private fun ExtensionSourceCard(
         colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(title, fontWeight = FontWeight.SemiBold)
-                    Text(repositoryUrl, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Row(
+            Modifier.fillMaxWidth().padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        title,
+                        // Keep the count next to its source title instead of pushing it to the
+                        // right edge of the card. The action group remains independently aligned.
+                        Modifier.weight(1f, fill = false),
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    countLabel?.let { SourceItemCountBadge(it) }
                 }
-                countLabel?.let { Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary) }
+                Text(repositoryUrl, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                metadataLines.filter { it.isNotBlank() }.forEach { metadata ->
+                    Text(
+                        metadata,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                error?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, maxLines = 4, overflow = TextOverflow.Ellipsis)
+                }
             }
-            if (details.isNotBlank()) Text(details, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            error?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, maxLines = 4, overflow = TextOverflow.Ellipsis)
-            }
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onView, enabled = enabled) {
-                    Icon(Icons.Outlined.Visibility, null, Modifier.size(18.dp)); Spacer(Modifier.width(5.dp)); Text("查看")
+            Spacer(Modifier.width(8.dp))
+            IconActionGroup {
+                ActionIconButton("查看来源内容", onView, Modifier.size(32.dp), enabled) {
+                    Icon(Icons.Outlined.Visibility, "查看来源内容", Modifier.size(17.dp))
                 }
-                OutlinedButton(onClick = onRefresh, enabled = enabled) {
-                    Icon(Icons.Outlined.Refresh, null, Modifier.size(18.dp)); Spacer(Modifier.width(5.dp)); Text("刷新")
+                ActionIconButton("刷新来源", onRefresh, Modifier.size(32.dp), enabled) {
+                    Icon(Icons.Outlined.Refresh, "刷新来源", Modifier.size(17.dp))
                 }
-                OutlinedButton(onClick = onRemove, enabled = enabled) {
-                    Icon(Icons.Outlined.Delete, null, Modifier.size(18.dp)); Spacer(Modifier.width(5.dp)); Text("移除")
+                ActionIconButton("移除来源", onRemove, Modifier.size(32.dp), enabled) {
+                    Icon(
+                        Icons.Outlined.Delete,
+                        "移除来源",
+                        Modifier.size(17.dp),
+                        tint = MaterialTheme.colorScheme.error,
+                    )
                 }
             }
         }
     }
+}
+
+@Composable
+private fun SourceItemCountBadge(label: String) {
+    val color = MaterialTheme.colorScheme.primary
+    Surface(
+        color = color.copy(alpha = 0.10f),
+        shape = RoundedCornerShape(50),
+        border = BorderStroke(1.dp, color.copy(alpha = 0.20f)),
+    ) {
+        Text(
+            label,
+            Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            color = color,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            softWrap = false,
+        )
+    }
+}
+
+internal fun extensionSourceCountLabel(count: Int?, itemName: String): String? = count?.let {
+    val separator = if (itemName.firstOrNull()?.code?.let { code -> code in 0..0x7f } == true) " " else ""
+    "$it 个$separator$itemName"
+}
+
+internal fun pluginSourceMetadataLines(
+    source: CodexPluginMarketplaceSource,
+    status: CodexPluginMarketplaceSnapshot?,
+): List<String> {
+    val sourceDetails = listOfNotNull(
+        source.ref?.let { "分支：$it" },
+        if (source.requiresRootMarketplaceMigration()) "需要迁移：旧版子目录 ${source.marketplaceDirectory}" else "Marketplace：仓库根目录",
+    ).joinToString(" · ")
+    val runtimeDetails = listOfNotNull(
+        status?.marketplaceName
+            ?.takeUnless { it.equals(source.name, ignoreCase = true) }
+            ?.let { "Codex 名称：$it" },
+        status?.updatedAt?.let { "最近成功：$it" },
+    ).joinToString(" · ")
+    return listOfNotNull(sourceDetails.takeIf { it.isNotBlank() }, runtimeDetails.takeIf { it.isNotBlank() })
+}
+
+internal fun skillSourceMetadataLines(
+    source: SkillSource,
+    status: ExternalSkillSourceSnapshot?,
+): List<String> = listOfNotNull(
+    listOfNotNull(
+        source.ref?.let { "分支：$it" },
+        skillSourceDirectoryStatus(source, status),
+    ).joinToString(" · ").takeIf { it.isNotBlank() },
+    status?.updatedAt?.let { "最近成功：$it" },
+)
+
+internal fun skillSourceDirectoryStatus(source: SkillSource, status: ExternalSkillSourceSnapshot?): String {
+    val roots = effectiveSkillSourceRoots(source, status)
+    return when {
+        roots.isNotEmpty() -> "发现目录：${roots.joinToString("、")}"
+        status?.updatedAt != null && status.error == null -> "未发现有效 Skill 目录"
+        else -> "尚未发现目录"
+    }
+}
+
+internal fun effectiveSkillSourceRoots(source: SkillSource, status: ExternalSkillSourceSnapshot?): List<String> {
+    val persistedRoots = status?.discoveredRoots.orEmpty()
+        .mapNotNull(::repositoryRelativePathOrNull)
+        .distinct()
+    if (persistedRoots.isNotEmpty()) return persistedRoots
+
+    val skills = status?.skills.orEmpty()
+    if (skills.isEmpty()) return emptyList()
+    source.skillRoot?.let { configuredRoot ->
+        return listOfNotNull(repositoryRelativePathOrNull(configuredRoot))
+    }
+    return skills.mapNotNull { skill ->
+        val path = skill.sourcePath.replace('\\', '/')
+        when {
+            path == ".agents/skills" || path.startsWith(".agents/skills/") -> ".agents/skills"
+            path == "skills" || path.startsWith("skills/") -> "skills"
+            else -> null
+        }
+    }.distinct()
+}
+
+private fun repositoryRelativePathOrNull(value: String): String? {
+    val normalized = value.trim().replace('\\', '/')
+    if (normalized.isBlank() || normalized.startsWith('/') || Regex("^[A-Za-z]:").containsMatchIn(normalized)) return null
+    val withoutLeadingCurrentDirectory = normalized.removePrefix("./").trimEnd('/')
+    if (withoutLeadingCurrentDirectory.split('/').any { it.isEmpty() || it == ".." }) return null
+    return withoutLeadingCurrentDirectory.ifBlank { "." }
 }
 
 @Composable
@@ -589,6 +700,7 @@ private fun PluginCatalogDialog(
     extensions: CodexExtensionsController,
     ownership: (CodexPluginCatalogItem) -> CodexExtensionOwnership,
     enabled: Boolean,
+    onCopySource: (String) -> Unit,
     onDismiss: () -> Unit,
     onAction: (CodexPluginCatalogItem, CodexExtensionOwnership) -> Unit,
 ) {
@@ -664,7 +776,14 @@ private fun PluginCatalogDialog(
                                         SkillPreviewState.Empty -> Text("请选择一个内置 Skill", color = MaterialTheme.colorScheme.onSurfaceVariant)
                                         SkillPreviewState.Loading -> LinearProgressIndicator(Modifier.fillMaxWidth())
                                         is SkillPreviewState.Failed -> Text(current.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                                        is SkillPreviewState.Loaded -> Box(Modifier.weight(1f).fillMaxWidth()) { AgentsMarkdownPreview(current.content) }
+                                        is SkillPreviewState.Loaded -> Box(Modifier.weight(1f).fillMaxWidth()) {
+                                            MarkdownDocumentPreview(
+                                                content = current.content,
+                                                modifier = Modifier.fillMaxSize(),
+                                                documentKey = selectedSkill,
+                                                onCopySource = { onCopySource(current.content) },
+                                            )
+                                        }
                                     }
                                 } else {
                                     when (val current = preview) {
@@ -719,6 +838,7 @@ private fun SkillCatalogDialog(
     extensions: CodexExtensionsController,
     ownership: (ExternalSkillCatalogItem) -> CodexExtensionOwnership,
     enabled: Boolean,
+    onCopySource: (String) -> Unit,
     onDismiss: () -> Unit,
     onAction: (ExternalSkillCatalogItem, CodexExtensionOwnership, SkillCatalogAction) -> Unit,
 ) {
@@ -780,7 +900,12 @@ private fun SkillCatalogDialog(
                                     SkillPreviewState.Empty -> Text("请选择一个 Skill", color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     SkillPreviewState.Loading -> LinearProgressIndicator(Modifier.fillMaxWidth())
                                     is SkillPreviewState.Failed -> Text(current.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                                    is SkillPreviewState.Loaded -> AgentsMarkdownPreview(current.content)
+                                    is SkillPreviewState.Loaded -> MarkdownDocumentPreview(
+                                        content = current.content,
+                                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                                        documentKey = selected?.name ?: current.content,
+                                        onCopySource = { onCopySource(current.content) },
+                                    )
                                 }
                             }
                         }

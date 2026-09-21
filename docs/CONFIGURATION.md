@@ -107,7 +107,7 @@ Codex 插件市场的本机注册信息、最近成功的插件目录缓存、�
 
 桌面端普通任务只创建上述资料目录，不创建过程文档。`silverwing agent plan/apply` 复用同一需求资料目录，并在其 `write_root`（上式最后的资料子目录）内补写 `.silverwing-requirement.json`、`00-需求总览.md` 等过程文档；Sprint 层的 `.silverwing-iteration.json`、`00-迭代任务总览.md` 保留在资料根下。需求目录名始终使用任务文件夹名，Agent 请求中的需求标题仅作为 Markdown 标题。
 
-已存在且唯一的需求目录会复用；如果递归查找到多个 `<需求编号>` 或 `<需求编号>-*` 目录，操作会明确失败，不自动选择。发现已有过程文档 manifest 时会校验需求身份，身份不一致则停止写入。silverwing 不移动、删除或自动迁移历史资料目录，`.silverwing/HANDOFF.md` 仍位于任务目录中。
+已存在且唯一的需求目录会复用；如果递归查找到多个 `<需求编号>` 或 `<需求编号>-*` 目录，操作会明确失败，不自动选择。发现已有过程文档 manifest 时会校验需求身份，身份不一致则停止写入。silverwing 不移动、删除或自动迁移历史资料目录，任务交接文件位于任务目录的 `.workspace/HANDOFF.md`。
 
 配置分片始终严格使用 `schema: 1`；任务清单使用产品 `2.0.x` schema 行。silverwing 不读取、迁移、删除或改写旧产品的配置、任务清单或独立过程文档目录。需要保存或转移当前 silverwing 配置时，请在设置页导出完整 ZIP，再在目标环境验证后导入。
 
@@ -165,28 +165,26 @@ Codex 插件市场的本机注册信息、最近成功的插件目录缓存、�
 
 `MERGE_TO_TARGET_BRANCH` 会把当前分支安全合并并推送到 `tagTargetRef` 后，在目标提交上创建 Tag。`CURRENT_BRANCH` 不需要目标分支，会先把当前分支非强制推送到任务记录的 `pushRemote`，再直接在当前 HEAD 创建 Tag。独立克隆始终使用任务中实际克隆的分支。
 
-## 三级 AGENTS.md
+## 分片 AGENTS.md
 
-最终任务说明按以下层级合成：
-
-1. 系统生成的任务与工作区信息；
-2. 全局说明；
-3. 组说明；
-4. 任务人工说明。
-
-冲突时任务级优先，其次是组级，再其次是全局。任务文件用以下协议分隔系统区和人工区：
+任务根目录的 `AGENTS.md` 是稳定路由文件，只包含读取顺序；它不会包含需求、服务、Worktree 或人工说明，也不会随着这些内容变化而重写。
 
 ```text
-<!-- SILVERWING:GENERATED:BEGIN -->
-…系统生成内容…
-<!-- SILVERWING:GENERATED:END -->
-
-<!-- SILVERWING:TASK-NOTES:BEGIN -->
-…用户可编辑内容…
-<!-- SILVERWING:TASK-NOTES:END -->
+<任务目录>/
+  AGENTS.md
+  silverwing.json
+  .workspace/
+    HANDOFF.md
+    agent/
+      TASK-CONTEXT.md
+      WORKTREE-SCOPE.md
+      RULE-SOURCES.md
+      TASK-RULES.md
 ```
 
-重新生成只替换系统区并保留人工区。应用使用 WatchService、窗口聚焦补检、内容哈希、防抖和原子写入同步文件；外部修改与未保存编辑冲突时必须由用户选择磁盘版本或本地版本。标记缺失或重复时会停止自动覆盖，等待用户修复。
+`TASK-CONTEXT.md` 记录需求、资料目录、交接和任务清单说明；`WORKTREE-SCOPE.md` 列出可修改 Worktree 与只读仓库；`RULE-SOURCES.md` 指向全局与组规则；`TASK-RULES.md` 是唯一可直接编辑的任务专属规则。规则优先级为任务专属规则、组规则、全局规则。
+
+应用使用 WatchService、窗口聚焦补检、内容哈希、防抖和原子写入同步可编辑规则文件；外部修改与未保存编辑冲突时必须由用户选择磁盘版本或本地版本。普通任务更新只写对应分片，不会覆盖根路由文件；仅显式刷新 Agent 文档时才会补建缺失的根路由。
 
 ## Bootstrap
 

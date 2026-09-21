@@ -37,13 +37,13 @@ class TaskApplicationServiceTest {
         )
 
         val taskDirectory = root.resolve("tasks").resolve("AGENT-HANDOFF")
-        assertTrue(Files.readString(taskDirectory.resolve("AGENTS.md")).contains("SILVERWING:AGENT-ROUTER:V2"))
+        assertTrue(Files.readString(taskDirectory.resolve("AGENTS.md")).startsWith("# 任务说明"))
         assertTrue(
             Files.readString(
-                taskDirectory.resolve(".silverwing").resolve("agent").resolve("TASK-CONTEXT.md"),
-            ).contains("silverwing 任务交接（仅 Agent CLI 创建）"),
+                taskDirectory.resolve(".workspace").resolve("agent").resolve("TASK-CONTEXT.md"),
+            ).contains("任务交接（仅 Agent CLI 创建）"),
         )
-        val handoff = Files.readString(taskDirectory.resolve(".silverwing").resolve("HANDOFF.md"))
+        val handoff = Files.readString(taskDirectory.resolve(".workspace").resolve("HANDOFF.md"))
         assertTrue(handoff.contains("[REDACTED]"))
         assertTrue(!handoff.contains("should-be-redacted"))
     }

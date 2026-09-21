@@ -89,7 +89,7 @@ class AgentOperationServiceTest {
         assertEquals(AgentOperationState.APPLIED, applied.state)
         assertEquals("2026-08-23T00:00:00Z", applied.confirmedAt)
         assertNotNull(taskOperations.createdRequest)
-        assertEquals(".silverwing/HANDOFF.md", taskOperations.createdRequest!!.agentContext!!.handoffRelativePath)
+        assertEquals(".workspace/HANDOFF.md", taskOperations.createdRequest!!.agentContext!!.handoffRelativePath)
         val auditHandoff = requireNotNull(plan.request.handoffMarkdown)
         assertTrue(auditHandoff.contains("[REDACTED]"))
         assertTrue(!auditHandoff.contains("raw-secret-must-not-reach-audit"))

@@ -2,7 +2,6 @@ package com.snowball.silverwing.desktop
 
 import com.snowball.silverwing.core.AgentConflictResolution
 import com.snowball.silverwing.core.AgentDocumentConflictException
-import com.snowball.silverwing.core.AgentDocumentLayout
 import com.snowball.silverwing.core.AgentDocumentPropagationService
 import com.snowball.silverwing.core.AgentDocumentService
 import com.snowball.silverwing.core.AgentFileMonitor
@@ -64,12 +63,13 @@ class AgentInstructionsConflictTest {
     }
 
     @Test
-    fun `task local resolution preserves a disk edit made after the conflict appeared`() = runTest {
+    fun `task rule resolution preserves a disk edit made after the conflict appeared`() = runTest {
         val task = task()
         fixture(this, StandardTestDispatcher(testScheduler), listOf(task)).use { fixture ->
             val controller = fixture.controller
             val directory = fixture.taskRoot.resolve(task.taskDirectoryName)
-            val file = directory.resolve("AGENTS.md")
+            val root = Files.readString(directory.resolve("AGENTS.md"))
+            val file = fixture.documents.taskNotesFile(directory, task)
             controller.readTaskNotes(task)
             controller.markTaskNotesEdited(task, "local notes")
             fixture.documents.writeTaskDocument(directory, task, emptyList(), "first external notes")
@@ -81,17 +81,16 @@ class AgentInstructionsConflictTest {
             assertTrue(controller.resolveConflict(AgentConflictResolution.USE_LOCAL))
             testScheduler.advanceUntilIdle()
 
-            assertEquals("second external notes", fixture.documents.extractTaskNotes(Files.readString(file)))
+            assertEquals("second external notes", Files.readString(file))
             assertIs<AgentDocumentConflictException>(fixture.errors.single())
-            assertEquals("second external notes", fixture.documents.extractTaskNotes(controller.state.conflict!!.diskContent))
-            assertEquals("local notes", fixture.documents.extractTaskNotes(controller.state.conflict!!.localContent))
+            assertEquals("second external notes", controller.state.conflict!!.diskContent)
+            assertEquals("local notes", controller.state.conflict!!.localContent)
 
-            // Confirming the refreshed conflict can now regenerate the document.
-            fixture.documents.saveGlobal("latest global instructions")
+            // Confirming the refreshed conflict writes only the editable rules file.
             assertTrue(controller.resolveConflict(AgentConflictResolution.USE_LOCAL))
             testScheduler.advanceUntilIdle()
-            assertEquals("local notes", fixture.documents.extractTaskNotes(Files.readString(file)))
-            assertTrue(Files.readString(file).contains("latest global instructions"))
+            assertEquals("local notes", Files.readString(file))
+            assertEquals(root, Files.readString(directory.resolve("AGENTS.md")))
             assertNull(controller.state.conflict)
             assertEquals(Files.readString(file), fixture.monitor.snapshot(file)?.content)
         }
@@ -99,7 +98,7 @@ class AgentInstructionsConflictTest {
 
     @Test
     fun `referenced task rules are monitored and resolved without touching the root router`() = runTest {
-        val task = task(AgentDocumentLayout.REFERENCED_V2)
+        val task = task()
         fixture(this, StandardTestDispatcher(testScheduler), listOf(task)).use { fixture ->
             val controller = fixture.controller
             val directory = fixture.taskRoot.resolve(task.taskDirectoryName)
@@ -171,7 +170,7 @@ class AgentInstructionsConflictTest {
         return Fixture(controller, monitor, paths, documents, taskRoot, errors)
     }
 
-    private fun task(layout: AgentDocumentLayout = AgentDocumentLayout.INLINE_V1) = TaskManifest(
+    private fun task() = TaskManifest(
         folderName = "task",
         taskDirectoryName = "task",
         featureBranch = "feature/task",
@@ -179,7 +178,6 @@ class AgentInstructionsConflictTest {
         updatedAt = "2026-09-12 00:00:00",
         services = emptyList(),
         groupId = "group",
-        agentDocumentLayout = layout,
     )
 
     private data class Fixture(

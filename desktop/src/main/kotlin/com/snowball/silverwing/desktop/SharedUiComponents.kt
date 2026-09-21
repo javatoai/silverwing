@@ -12,9 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.Commit
@@ -40,9 +38,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.mikepenz.markdown.compose.Markdown
-import com.mikepenz.markdown.m3.markdownColor
-import com.mikepenz.markdown.m3.markdownTypography
 import com.snowball.silverwing.core.ThemePreference
 import com.snowball.silverwing.core.WorkspaceStrategy
 
@@ -298,36 +293,3 @@ internal val ThemePreference.displayName: String
         ThemePreference.LIGHT -> "浅色"
         ThemePreference.DARK -> "深色"
     }
-
-/** Read-only Material 3 rendering used exclusively for generated AGENTS.md previews. */
-@Composable
-internal fun AgentsMarkdownPreview(content: String) {
-    val verticalScroll = rememberScrollState()
-    Box(Modifier.fillMaxSize().padding(15.dp).verticalScroll(verticalScroll)) {
-        // Markdown tables and code blocks own their horizontal scrolling. Wrapping the whole
-        // renderer in another horizontal scroll would measure those children with infinite
-        // width and crashes on layouts that activate the renderer's internal overflow path.
-        Markdown(
-            content = content,
-            colors = markdownColor(),
-            // Default Markdown h1/h2 styles map to Material display styles, which are
-            // too prominent inside a compact task preview.
-            typography = markdownTypography(
-                h1 = MaterialTheme.typography.titleLarge,
-                h2 = MaterialTheme.typography.titleMedium,
-                h3 = MaterialTheme.typography.titleSmall,
-                h4 = MaterialTheme.typography.labelLarge,
-                h5 = MaterialTheme.typography.labelLarge,
-                h6 = MaterialTheme.typography.labelLarge,
-                text = MaterialTheme.typography.bodyMedium,
-                paragraph = MaterialTheme.typography.bodyMedium,
-                table = MaterialTheme.typography.bodySmall,
-                code = MaterialTheme.typography.bodySmall,
-                inlineCode = MaterialTheme.typography.bodySmall,
-            ),
-            modifier = Modifier.fillMaxWidth(),
-            // Parsing is asynchronous; retaining the last result avoids preview flicker while typing.
-            retainState = true,
-        )
-    }
-}

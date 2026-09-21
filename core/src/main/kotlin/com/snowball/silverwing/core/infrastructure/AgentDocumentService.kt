@@ -9,7 +9,31 @@ import java.nio.file.StandardOpenOption
 import kotlin.io.path.createDirectories
 import kotlin.io.path.exists
 
-class AgentDocumentFormatException(message: String) : IllegalStateException(message)
+/** A single Markdown file that will be written for a task's Agent instructions. */
+data class AgentDocumentPreviewFile(
+    val relativePath: String,
+    val content: String,
+) {
+    init {
+        require(relativePath.isNotBlank()) { "Agent 预览文件路径不能为空" }
+    }
+
+    val fileName: String get() = relativePath.substringAfterLast('/')
+}
+
+/** Structured task Agent preview. Files stay independent instead of being rendered as one synthetic Markdown document. */
+data class AgentDocumentPreview(
+    val files: List<AgentDocumentPreviewFile>,
+) {
+    init {
+        require(files.isNotEmpty()) { "Agent 预览至少需要一个文件" }
+        require(files.map(AgentDocumentPreviewFile::relativePath).distinct().size == files.size) {
+            "Agent 预览文件路径不能重复"
+        }
+    }
+
+    val rootFile: AgentDocumentPreviewFile get() = files.first()
+}
 
 interface AgentDocuments {
     fun readGlobal(): String
@@ -53,14 +77,12 @@ class AgentDocumentService(
     override fun readGlobal(): String = readOrEmpty(paths.globalAgents)
 
     override fun saveGlobal(content: String) {
-        validateUserContent(content, "全局 Agent 说明")
         writeAtomically(paths.globalAgents, content)
     }
 
     override fun readGroup(groupId: String): String = readOrEmpty(paths.groupAgents(groupId))
 
     override fun saveGroup(groupId: String, content: String) {
-        validateUserContent(content, "组 Agent 说明")
         writeAtomically(paths.groupAgents(groupId), content)
     }
 
@@ -90,95 +112,31 @@ class AgentDocumentService(
         repositories: List<RepositoryInfo>,
         taskNotes: String?,
         restoreRootRouter: Boolean,
-    ): Path = when (manifest.agentDocumentLayout) {
-        AgentDocumentLayout.INLINE_V1 -> writeInlineTaskDocument(taskDirectory, manifest, repositories, taskNotes)
-        AgentDocumentLayout.REFERENCED_V2 -> writeReferencedTaskDocuments(
-            taskDirectory,
-            manifest,
-            repositories,
-            taskNotes,
-            restoreRootRouter,
-        )
-    }
+    ): Path = writeReferencedTaskDocuments(
+        taskDirectory,
+        manifest,
+        repositories,
+        taskNotes,
+        restoreRootRouter,
+    )
 
-    /** Returns the only user-editable task rules file for the selected layout. */
-    fun taskNotesFile(taskDirectory: Path, manifest: TaskManifest): Path = when (manifest.agentDocumentLayout) {
-        AgentDocumentLayout.INLINE_V1 -> taskDirectory.resolve(AgentsMdWriter.FILE_NAME)
-        AgentDocumentLayout.REFERENCED_V2 -> taskAgentDirectory(taskDirectory).resolve(TASK_RULES_FILE_NAME)
-    }
+    /** Returns the only user-editable task rules file. */
+    fun taskNotesFile(taskDirectory: Path, manifest: TaskManifest): Path =
+        taskAgentDirectory(taskDirectory).resolve(TASK_RULES_FILE_NAME)
 
     fun taskAgentDirectory(taskDirectory: Path): Path =
         taskDirectory.resolve(HandoffDocumentWriter.DIRECTORY_NAME).resolve(TASK_AGENT_DIRECTORY_NAME)
 
-    fun taskNotesFromDocument(manifest: TaskManifest, document: String): String = when (manifest.agentDocumentLayout) {
-        AgentDocumentLayout.INLINE_V1 -> extractTaskNotes(document)
-        AgentDocumentLayout.REFERENCED_V2 -> document.trimEnd('\r', '\n')
-    }
+    fun taskNotesFromDocument(manifest: TaskManifest, document: String): String = document.trimEnd('\r', '\n')
 
-    fun replaceTaskNotesDocument(manifest: TaskManifest, document: String, notes: String): String = when (manifest.agentDocumentLayout) {
-        AgentDocumentLayout.INLINE_V1 -> replaceInlineTaskNotes(document, notes)
-        AgentDocumentLayout.REFERENCED_V2 -> notes.trimEnd()
-    }
-
-    private fun writeInlineTaskDocument(
-        taskDirectory: Path,
-        manifest: TaskManifest,
-        repositories: List<RepositoryInfo>,
-        taskNotes: String?,
-    ): Path {
-        taskDirectory.createDirectories()
-        val target = taskDirectory.resolve(AgentsMdWriter.FILE_NAME)
-        val preservedNotes = when {
-            taskNotes != null -> taskNotes
-            target.exists() -> extractTaskNotes(Files.readString(target))
-            else -> ""
-        }
-        validateUserContent(preservedNotes, "任务人工说明")
-        val generated = buildGeneratedContent(taskDirectory, manifest, repositories)
-        val document = buildString {
-            appendLine(GENERATED_BEGIN)
-            append(generated.trimEnd())
-            appendLine()
-            appendLine(GENERATED_END)
-            appendLine()
-            appendLine(TASK_NOTES_BEGIN)
-            if (preservedNotes.isNotBlank()) {
-                appendLine(preservedNotes.trimEnd())
-            }
-            appendLine(TASK_NOTES_END)
-        }
-        writeAtomically(target, document)
-        return target
-    }
+    fun replaceTaskNotesDocument(manifest: TaskManifest, document: String, notes: String): String = notes.trimEnd()
 
     fun renderPreview(
         taskDirectory: Path,
         manifest: TaskManifest,
         repositories: List<RepositoryInfo>,
         taskNotes: String,
-    ): String = when (manifest.agentDocumentLayout) {
-        AgentDocumentLayout.INLINE_V1 -> renderInlinePreview(taskDirectory, manifest, repositories, taskNotes)
-        AgentDocumentLayout.REFERENCED_V2 -> renderReferencedPreview(taskDirectory, manifest, repositories, taskNotes)
-    }
-
-    private fun renderInlinePreview(
-        taskDirectory: Path,
-        manifest: TaskManifest,
-        repositories: List<RepositoryInfo>,
-        taskNotes: String,
-    ): String {
-        val generated = buildGeneratedContent(taskDirectory, manifest, repositories)
-        return buildString {
-            appendLine(GENERATED_BEGIN)
-            append(generated.trimEnd())
-            appendLine()
-            appendLine(GENERATED_END)
-            appendLine()
-            appendLine(TASK_NOTES_BEGIN)
-            if (taskNotes.isNotBlank()) appendLine(taskNotes.trimEnd())
-            appendLine(TASK_NOTES_END)
-        }
-    }
+    ): AgentDocumentPreview = renderReferencedPreview(taskDirectory, manifest, repositories, taskNotes)
 
     private fun writeReferencedTaskDocuments(
         taskDirectory: Path,
@@ -201,7 +159,6 @@ class AgentDocumentService(
         val rules = agentDirectory.resolve(TASK_RULES_FILE_NAME)
         when {
             taskNotes != null -> {
-                validateUserContent(taskNotes, "任务人工说明")
                 writeIfChanged(rules, taskNotes.trimEnd())
             }
             !rules.exists() -> writeAtomically(rules, "")
@@ -214,25 +171,18 @@ class AgentDocumentService(
         manifest: TaskManifest,
         repositories: List<RepositoryInfo>,
         taskNotes: String,
-    ): String = buildString {
-        appendLine("# Agent 文件预览")
-        appendPreviewFile(AgentsMdWriter.FILE_NAME, renderReferencedRootRouter())
-        appendPreviewFile(relativeTaskAgentPath(TASK_CONTEXT_FILE_NAME), renderTaskContext(manifest))
-        appendPreviewFile(relativeTaskAgentPath(WORKTREE_SCOPE_FILE_NAME), renderWorktreeScope(manifest, repositories))
-        appendPreviewFile(relativeTaskAgentPath(RULE_SOURCES_FILE_NAME), renderRuleSources(manifest))
-        appendPreviewFile(relativeTaskAgentPath(TASK_RULES_FILE_NAME), taskNotes.trimEnd())
-    }
-
-    private fun StringBuilder.appendPreviewFile(relativePath: String, content: String) {
-        appendLine("## `$relativePath`")
-        appendLine()
-        if (content.isBlank()) appendLine("（空）") else appendLine(content.trimEnd())
-        appendLine()
-    }
+    ): AgentDocumentPreview = AgentDocumentPreview(
+        listOf(
+            AgentDocumentPreviewFile(AgentsMdWriter.FILE_NAME, renderReferencedRootRouter()),
+            AgentDocumentPreviewFile(relativeTaskAgentPath(TASK_CONTEXT_FILE_NAME), renderTaskContext(manifest)),
+            AgentDocumentPreviewFile(relativeTaskAgentPath(WORKTREE_SCOPE_FILE_NAME), renderWorktreeScope(manifest, repositories)),
+            AgentDocumentPreviewFile(relativeTaskAgentPath(RULE_SOURCES_FILE_NAME), renderRuleSources(manifest)),
+            AgentDocumentPreviewFile(relativeTaskAgentPath(TASK_RULES_FILE_NAME), taskNotes.trimEnd()),
+        ),
+    )
 
     private fun renderReferencedRootRouter(): String = """
-        <!-- SILVERWING:AGENT-ROUTER:V2 -->
-        # silverwing 任务说明
+        # 任务说明
 
         > 本文件是稳定的系统路由。不要在这里写任务专属要求；请编辑 `${relativeTaskAgentPath(TASK_RULES_FILE_NAME)}`。
 
@@ -249,14 +199,14 @@ class AgentDocumentService(
     private fun renderTaskContext(manifest: TaskManifest): String = buildString {
         appendLine("# 任务上下文")
         appendLine()
-        appendLine("> 本文件由 silverwing 生成，会随需求和任务上下文更新。")
+        appendLine("> 本文件由系统生成，会随需求和任务上下文更新。")
         appendLine()
         append(AgentsMdWriter.renderTaskContext(manifest).trimEnd())
         appendLine()
         appendLine()
         appendLine("## 系统元数据")
         appendLine()
-        appendLine("- `silverwing.json` 是任务元数据，仅供读取；不要手动改写。")
+        appendLine("- 任务清单是只读元数据；不要手动改写。")
         appendLine("- `${HandoffDocumentWriter.DIRECTORY_NAME}/${HandoffDocumentWriter.FILE_NAME}` 存在时，是 Agent CLI 任务的交接记录。")
         appendLine()
     }
@@ -267,7 +217,7 @@ class AgentDocumentService(
     ): String = buildString {
         appendLine("# Worktree 范围")
         appendLine()
-        appendLine("> 本文件由 silverwing 生成，会随服务和 Worktree 变动更新。")
+        appendLine("> 本文件由系统生成，会随服务和 Worktree 变动更新。")
         appendLine()
         append(AgentsMdWriter.renderWorktreeScope(manifest, repositories).trimEnd())
         appendLine()
@@ -295,68 +245,6 @@ class AgentDocumentService(
     private fun relativeTaskAgentPath(fileName: String): String =
         "${HandoffDocumentWriter.DIRECTORY_NAME}/$TASK_AGENT_DIRECTORY_NAME/$fileName"
 
-    fun extractTaskNotes(document: String): String {
-        val generatedBegin = uniqueMarkerIndex(document, GENERATED_BEGIN)
-        val generatedEnd = uniqueMarkerIndex(document, GENERATED_END)
-        val begin = document.indexOf(TASK_NOTES_BEGIN)
-        val end = document.indexOf(TASK_NOTES_END)
-        if (generatedBegin < 0 || generatedEnd < 0 || begin < 0 || end < 0 ||
-            !(generatedBegin < generatedEnd && generatedEnd < begin && begin < end) ||
-            document.indexOf(TASK_NOTES_BEGIN, begin + TASK_NOTES_BEGIN.length) >= 0 ||
-            document.indexOf(TASK_NOTES_END, end + TASK_NOTES_END.length) >= 0
-        ) {
-            throw AgentDocumentFormatException(
-                "AGENTS.md 的 SILVERWING:TASK-NOTES 标记缺失或损坏；为避免覆盖人工内容，已停止生成。",
-            )
-        }
-        return document.substring(begin + TASK_NOTES_BEGIN.length, end).trim('\r', '\n')
-    }
-
-    private fun replaceInlineTaskNotes(document: String, notes: String): String {
-        extractTaskNotes(document)
-        val begin = document.indexOf(TASK_NOTES_BEGIN) + TASK_NOTES_BEGIN.length
-        val end = document.indexOf(TASK_NOTES_END)
-        return buildString {
-            append(document.substring(0, begin)); appendLine()
-            if (notes.isNotBlank()) appendLine(notes.trimEnd())
-            append(document.substring(end))
-        }
-    }
-
-    private fun uniqueMarkerIndex(document: String, marker: String): Int {
-        val first = document.indexOf(marker)
-        if (first < 0 || document.indexOf(marker, first + marker.length) >= 0) return -1
-        return first
-    }
-
-    private fun buildGeneratedContent(
-        taskDirectory: Path,
-        manifest: TaskManifest,
-        repositories: List<RepositoryInfo>,
-    ): String {
-        val global = readGlobal()
-        val group = readGroup(manifest.groupId)
-        validateUserContent(global, "全局 Agent 说明")
-        validateUserContent(group, "组 Agent 说明")
-        return buildString {
-            append(AgentsMdWriter.render(taskDirectory, manifest, repositories, ""))
-            appendInstructionSection("全局 Agent 说明", global)
-            appendInstructionSection("组 Agent 说明", group)
-            appendLine()
-            appendLine("## 说明优先级")
-            appendLine()
-            appendLine("发生冲突时按：任务人工说明 > 组说明 > 全局说明。")
-        }
-    }
-
-    private fun StringBuilder.appendInstructionSection(title: String, content: String) {
-        if (content.isBlank()) return
-        appendLine()
-        appendLine("## $title")
-        appendLine()
-        appendLine(content.trim())
-    }
-
     private fun readOrEmpty(path: Path): String =
         if (path.exists()) Files.readString(path) else ""
 
@@ -370,11 +258,6 @@ class AgentDocumentService(
             }
         }
         return path
-    }
-
-    private fun validateUserContent(content: String, label: String) {
-        val reserved = listOf(GENERATED_BEGIN, GENERATED_END, TASK_NOTES_BEGIN, TASK_NOTES_END)
-        require(reserved.none(content::contains)) { "$label 包含 silverwing 保留标记，已拒绝保存或生成" }
     }
 
     private fun writeAtomically(target: Path, content: String) {
@@ -399,10 +282,6 @@ class AgentDocumentService(
     }
 
     companion object {
-        const val GENERATED_BEGIN = "<!-- SILVERWING:GENERATED:BEGIN -->"
-        const val GENERATED_END = "<!-- SILVERWING:GENERATED:END -->"
-        const val TASK_NOTES_BEGIN = "<!-- SILVERWING:TASK-NOTES:BEGIN -->"
-        const val TASK_NOTES_END = "<!-- SILVERWING:TASK-NOTES:END -->"
         const val TASK_AGENT_DIRECTORY_NAME = "agent"
         const val TASK_CONTEXT_FILE_NAME = "TASK-CONTEXT.md"
         const val WORKTREE_SCOPE_FILE_NAME = "WORKTREE-SCOPE.md"

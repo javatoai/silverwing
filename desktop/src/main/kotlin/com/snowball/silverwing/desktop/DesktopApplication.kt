@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.snowball.silverwing.core.AgentDocumentService
+import com.snowball.silverwing.core.AgentDocumentPreview
 import com.snowball.silverwing.core.AgentConflictResolution
 import com.snowball.silverwing.core.AgentFileChange
 import com.snowball.silverwing.core.AgentFileMonitor
@@ -14,6 +15,7 @@ import com.snowball.silverwing.core.ApplicationPaths
 import com.snowball.silverwing.core.BatchRepositoryAddResult
 import com.snowball.silverwing.core.BranchReuseKey
 import com.snowball.silverwing.core.ConfigStore
+import com.snowball.silverwing.core.CodexExtensionsApplicationService
 import com.snowball.silverwing.core.CodexExtensionsService
 import com.snowball.silverwing.core.CURRENT_PRODUCT_VERSION
 import com.snowball.silverwing.core.DeleteRisk
@@ -356,9 +358,10 @@ class DesktopApplication(
     private val tagSkillInstallationService: TagSkillInstallationService = PackagedTagSkillInstallationService()
     var tagSkillInstallationStatus by mutableStateOf(tagSkillInstallationService.inspect())
         private set
-    private val codexExtensionsService: CodexExtensionsService = CodexExtensionsService(
-        paths = paths,
-        gitExecutable = gitExecutable::resolve,
+    private val codexExtensions: CodexExtensionsApplicationService = CodexExtensionsApplicationService(
+        configurations = configStore,
+        extensions = CodexExtensionsService(paths = paths, gitExecutable = gitExecutable::resolve),
+        branchCatalog = RemoteGitBranchCatalog(gitExecutable = gitExecutable::resolve),
     )
     private val operationRunner = OperationRunner(operationCoordinator, scope, ioDispatcher)
     private val settingsOperationCoordinator = OperationCoordinator(onError = ::recordError)
@@ -367,12 +370,9 @@ class DesktopApplication(
     private val meegleOperationRunner = OperationRunner(meegleOperationCoordinator, scope, ioDispatcher)
     internal val codexExtensionsController by lazy {
         CodexExtensionsController(
-            session = sessionStore,
-            configStore = configStore,
-            extensions = codexExtensionsService,
+            extensions = codexExtensions,
             operations = settingsOperationRunner,
             applyConfig = ::applyConfig,
-            branchCatalog = RemoteGitBranchCatalog(gitExecutable = gitExecutable::resolve),
         )
     }
     private val requirementMetadataCoordinator = RequirementMetadataCoordinator(
@@ -866,7 +866,7 @@ class DesktopApplication(
         notes: String,
         serviceSelections: List<TaskServiceSelection> = emptyList(),
         requirementMaterials: RequirementMaterialsDirectory = RequirementMaterialsDirectory(),
-    ): String = agentInstructionsController.preview(
+    ): AgentDocumentPreview = agentInstructionsController.preview(
         folderName,
         branch,
         groupId,
@@ -885,7 +885,7 @@ class DesktopApplication(
         notes: String,
         serviceSelections: List<TaskServiceSelection> = emptyList(),
         requirementMaterials: RequirementMaterialsDirectory = RequirementMaterialsDirectory(),
-    ): String = agentInstructionsController.previewAsync(
+    ): AgentDocumentPreview = agentInstructionsController.previewAsync(
         folderName,
         branch,
         groupId,
@@ -895,8 +895,8 @@ class DesktopApplication(
         serviceSelections,
         requirementMaterials,
     )
-    fun previewTaskAgents(task: TaskManifest, notes: String): String = agentInstructionsController.previewTask(task, notes)
-    suspend fun previewTaskAgentsAsync(task: TaskManifest, notes: String): String = agentInstructionsController.previewTaskAsync(task, notes)
+    fun previewTaskAgents(task: TaskManifest, notes: String): AgentDocumentPreview = agentInstructionsController.previewTask(task, notes)
+    suspend fun previewTaskAgentsAsync(task: TaskManifest, notes: String): AgentDocumentPreview = agentInstructionsController.previewTaskAsync(task, notes)
     fun createTask(
         folderName: String,
         branch: String,

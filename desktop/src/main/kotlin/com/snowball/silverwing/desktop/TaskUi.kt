@@ -59,6 +59,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.snowball.silverwing.core.AgentTaskTemplate
+import com.snowball.silverwing.core.AgentDocumentPreview
 import com.snowball.silverwing.core.AppConfig
 import com.snowball.silverwing.core.RequirementMaterialsStatus
 import com.snowball.silverwing.core.ServiceWorkspace
@@ -122,7 +123,7 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
     var addModuleServiceId by remember(task.folderName) { mutableStateOf<String?>(null) }
     var removalPreview by remember(task.folderName) { mutableStateOf<WorkspaceModuleRemovalPreview?>(null) }
     var removalChecking by remember(task.folderName) { mutableStateOf(false) }
-    var agentsPreview by remember(task.folderName) { mutableStateOf<String?>(null) }
+    var agentsPreview by remember(task.folderName) { mutableStateOf<AgentDocumentPreview?>(null) }
     var agentsPreviewLoading by remember(task.folderName) { mutableStateOf(false) }
     var agentsPreviewError by remember(task.folderName) { mutableStateOf<String?>(null) }
     var agentsPreviewRequest by remember(task.folderName) { mutableStateOf(0) }
@@ -505,7 +506,11 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
         )
     }
     agentsPreview?.let { preview ->
-        TaskAgentsPreviewDialog(preview, onDismiss = { agentsPreview = null })
+        TaskAgentsPreviewDialog(
+            preview = preview,
+            onCopySource = { file -> controller.copyText(markdownPreviewSourceCopyPayload(file), "Markdown 源码已复制") },
+            onDismiss = { agentsPreview = null },
+        )
     }
 }
 
@@ -827,7 +832,11 @@ private fun BatchGitResultDialog(controller: DesktopApplication, result: Workspa
 }
 
 @Composable
-private fun TaskAgentsPreviewDialog(content: String, onDismiss: () -> Unit) {
+private fun TaskAgentsPreviewDialog(
+    preview: AgentDocumentPreview,
+    onCopySource: (MarkdownPreviewFile) -> Unit,
+    onDismiss: () -> Unit,
+) {
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
             Modifier.width(860.dp).height(640.dp),
@@ -845,7 +854,12 @@ private fun TaskAgentsPreviewDialog(content: String, onDismiss: () -> Unit) {
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
                     shape = RoundedCornerShape(12.dp),
                 ) {
-                    AgentsMarkdownPreview(content)
+                    MarkdownFileTabsPreview(
+                        files = preview.files.map { MarkdownPreviewFile(it.relativePath, it.content) },
+                        modifier = Modifier.fillMaxSize(),
+                        initialPath = preview.rootFile.relativePath,
+                        onCopySource = onCopySource,
+                    )
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 14.dp), horizontalArrangement = Arrangement.End) {

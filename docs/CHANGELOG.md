@@ -75,7 +75,7 @@
 ## 0.12.0
 
 - 需求资料根统一承载桌面端资料与 `$silverwing` / `silverwing agent` 过程文档；移除独立的 `requirementDocumentationRoot` 配置。
-- 桌面端继续创建或复用 `<资料根>/<Sprint>/<需求编号>-<任务文件夹名>/<资料子目录>`，Agent 在同一 `write_root` 内补写需求总览、过程文档和 Sprint 总览，任务交接文件仍写入任务目录的 `.silverwing/HANDOFF.md`。
+- 桌面端继续创建或复用 `<资料根>/<Sprint>/<需求编号>-<任务文件夹名>/<资料子目录>`，Agent 在同一 `write_root` 内补写需求总览、过程文档和 Sprint 总览，任务交接文件写入任务目录的 `.workspace/HANDOFF.md`。
 - 配置与任务清单 schema 严格升级到 `0.12.0`，不读取、迁移或删除 0.11.x 及更早数据；升级需手工移除旧字段并重新保存资料根配置，旧独立过程文档目录保持原样。
 
 ## 0.11.1

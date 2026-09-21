@@ -7,6 +7,7 @@ import com.snowball.silverwing.core.AgentConflictResolution
 import com.snowball.silverwing.core.AgentDocumentPropagationService
 import com.snowball.silverwing.core.AgentDocumentService
 import com.snowball.silverwing.core.AgentDocumentLayout
+import com.snowball.silverwing.core.AgentDocumentPreview
 import com.snowball.silverwing.core.AgentFileChange
 import com.snowball.silverwing.core.AgentFileMonitor
 import com.snowball.silverwing.core.AgentInstructionScope
@@ -85,13 +86,11 @@ class AgentInstructionsController internal constructor(
     fun markGroupEdited(groupId: String, content: String) = monitor.markLocalEdit(paths.groupAgents(groupId), content)
 
     fun saveGlobal(content: String): Boolean = operations.run("正在保存全局 AGENTS.md…", "全局 AGENTS.md 已保存", block = {
-        requireNoReservedMarkers(content)
         monitor.save(paths.globalAgents, content)
         requirePropagationSucceeded(propagation.propagate(session.config, AgentInstructionScope.Global).failures)
     })
 
     fun saveGroup(groupId: String, content: String): Boolean = operations.run("正在保存组 AGENTS.md…", "组 AGENTS.md 已保存", block = {
-        requireNoReservedMarkers(content)
         monitor.save(paths.groupAgents(groupId), content)
         requirePropagationSucceeded(propagation.propagate(session.config, AgentInstructionScope.Group(groupId)).failures)
     })
@@ -100,7 +99,6 @@ class AgentInstructionsController internal constructor(
         operations.run("正在保存模板…", "模板已保存", block = {
             val trimmedName = name.trim()
             val trimmedContent = content.trim()
-            requireNoReservedMarkers(trimmedContent)
             val now = SilverWingTime.format(Instant.now())
             templateStore.update { current ->
                 if (id == null || current.none { it.id == id }) {
@@ -133,7 +131,6 @@ class AgentInstructionsController internal constructor(
     }
 
     fun saveTaskNotes(task: TaskManifest, notes: String): Boolean = operations.run("正在保存任务说明…", "任务说明已保存", block = {
-        requireNoReservedMarkers(notes)
         val directory = taskDirectory(task)
         val path = documents.taskNotesFile(directory, task)
         val current = monitor.snapshot(path)?.content ?: monitor.track(path).content
@@ -145,7 +142,6 @@ class AgentInstructionsController internal constructor(
     fun markTaskNotesEdited(task: TaskManifest, notes: String) {
         val path = documents.taskNotesFile(taskDirectory(task), task)
         runCatching {
-            requireNoReservedMarkers(notes)
             val current = monitor.snapshot(path)?.content ?: monitor.track(path).content
             monitor.markLocalEdit(path, documents.replaceTaskNotesDocument(task, current, notes))
         }.onFailure(showError)
@@ -189,11 +185,11 @@ class AgentInstructionsController internal constructor(
     }
 
     /** Renders exactly what [saveTaskNotes] would write, without touching disk. */
-    fun previewTask(task: TaskManifest, notes: String): String =
+    fun previewTask(task: TaskManifest, notes: String): AgentDocumentPreview =
         documents.renderPreview(taskDirectory(task), task, session.config.repositories.map(RepositoryConfig::toInfo), notes)
 
     /** Renders a task preview away from Compose's dispatcher. */
-    suspend fun previewTaskAsync(task: TaskManifest, notes: String): String = runInterruptible(ioDispatcher) {
+    suspend fun previewTaskAsync(task: TaskManifest, notes: String): AgentDocumentPreview = runInterruptible(ioDispatcher) {
         documents.renderPreview(taskDirectory(task), task, session.config.repositories.map(RepositoryConfig::toInfo), notes)
     }
 
@@ -206,7 +202,7 @@ class AgentInstructionsController internal constructor(
         notes: String,
         serviceSelections: List<TaskServiceSelection> = emptyList(),
         requirementMaterials: RequirementMaterialsDirectory = RequirementMaterialsDirectory(),
-    ): String {
+    ): AgentDocumentPreview {
         val config = session.config
         val root = config.taskRoot?.let(Path::of) ?: paths.temp
         val normalizedName = folderName.ifBlank { "任务名称" }
@@ -268,7 +264,7 @@ class AgentInstructionsController internal constructor(
         notes: String,
         serviceSelections: List<TaskServiceSelection> = emptyList(),
         requirementMaterials: RequirementMaterialsDirectory = RequirementMaterialsDirectory(),
-    ): String = runInterruptible(ioDispatcher) {
+    ): AgentDocumentPreview = runInterruptible(ioDispatcher) {
         preview(folderName, branch, groupId, serviceIds, requirementLink, notes, serviceSelections, requirementMaterials)
     }
 
@@ -287,16 +283,6 @@ class AgentInstructionsController internal constructor(
             }
             result.onSuccess { showStatus("Agent 文件已从磁盘同步") }.onFailure(showError)
         }
-    }
-
-    private fun requireNoReservedMarkers(content: String) {
-        val marker = listOf(
-            AgentDocumentService.GENERATED_BEGIN,
-            AgentDocumentService.GENERATED_END,
-            AgentDocumentService.TASK_NOTES_BEGIN,
-            AgentDocumentService.TASK_NOTES_END,
-        ).firstOrNull(content::contains) ?: return
-        require(false) { "内容不能包含 silverwing 保留标记：$marker" }
     }
 
     private fun requirePropagationSucceeded(failures: Map<Path, String>) {

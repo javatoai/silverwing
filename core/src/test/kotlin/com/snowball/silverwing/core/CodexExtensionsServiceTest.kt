@@ -50,6 +50,33 @@ class CodexExtensionsServiceTest {
     }
 
     @Test
+    fun `Marketplace refresh recognizes current Codex JSON when source was already added`() {
+        val runner = MarketplaceRunner().apply {
+            registered = true
+            currentCodexJson = true
+        }
+        val service = CodexExtensionsService(
+            ApplicationPaths(temporary.resolve("current-codex-home")),
+            runner,
+            codexExecutable = { "codex-test" },
+        )
+        val source = CodexPluginMarketplaceSource(
+            id = "current-marketplace",
+            name = "当前格式来源",
+            repositoryUrl = "https://example.test/team/plugins.git",
+            ref = "main",
+            marketplaceDirectory = ".",
+        )
+
+        val added = service.refreshMarketplace(source)
+
+        assertEquals("team-marketplace", added.marketplaceName)
+        assertEquals(null, added.error)
+        assertEquals("C:/cache/team-marketplace", added.cacheDirectory)
+        assertEquals(listOf("team-tools"), added.plugins.map { it.name })
+    }
+
+    @Test
     fun `Skill source discovers standard locations and takeover keeps a backup before exact uninstall`() {
         val runner = SkillGitRunner()
         val paths = ApplicationPaths(temporary.resolve("home"))
@@ -60,7 +87,20 @@ class CodexExtensionsServiceTest {
         val discovered = service.addSkillSource(source)
 
         assertEquals(listOf("check", "deploy"), discovered.skills.map { it.name })
+        assertEquals(listOf(".agents/skills", "skills"), discovered.discoveredRoots)
         assertTrue(runner.commands.any { it.first() == "git-test" && "clone" in it })
+        val reloaded = CodexExtensionsService(paths, runner, gitExecutable = { "git-test" })
+            .snapshot(emptyList(), listOf(source))
+            .skillSources
+            .getValue(source.id)
+        assertEquals(discovered.discoveredRoots, reloaded.discoveredRoots)
+
+        runner.failRefresh = true
+        val failedRefresh = service.refreshSkillSource(source)
+        assertEquals(discovered.skills, failedRefresh.skills)
+        assertEquals(discovered.discoveredRoots, failedRefresh.discoveredRoots)
+        assertContains(failedRefresh.error.orEmpty(), "temporary Git failure")
+        runner.failRefresh = false
 
         val external = userHome.resolve(".agents/skills/deploy")
         Files.createDirectories(external)
@@ -91,6 +131,23 @@ class CodexExtensionsServiceTest {
 
         assertFalse(Files.exists(external))
         assertTrue(Files.exists(sibling.resolve("SKILL.md")))
+    }
+
+    @Test
+    fun `Skill source omits empty directories from discovered roots`() {
+        val runner = SkillGitRunner()
+        val service = CodexExtensionsService(
+            ApplicationPaths(temporary.resolve("empty-source-home")),
+            runner,
+            gitExecutable = { "git-test" },
+        )
+        val source = SkillSource("empty", "空目录", "https://example.test/skills.git", skillRoot = "empty")
+
+        val discovered = service.addSkillSource(source)
+
+        assertEquals(emptyList(), discovered.skills)
+        assertEquals(emptyList(), discovered.discoveredRoots)
+        assertEquals(null, discovered.error)
     }
 
     @Test
@@ -231,6 +288,7 @@ class CodexExtensionsServiceTest {
         val discovered = service.addSkillSource(source)
 
         assertEquals(listOf("root-skill"), discovered.skills.map { it.name })
+        assertEquals(listOf("."), discovered.discoveredRoots)
         assertEquals(".", discovered.skills.single().sourcePath)
         service.installSkill(source, "root-skill")
         assertTrue(Files.exists(userHome.resolve(".agents/skills/root-skill/SKILL.md")))
@@ -241,6 +299,7 @@ class CodexExtensionsServiceTest {
         val commands = mutableListOf<List<String>>()
         var registered = false
         var failList = false
+        var currentCodexJson = false
 
         override fun run(command: List<String>, workingDirectory: Path?, timeout: Duration, environment: Map<String, String>): CommandResult {
             commands += command
@@ -248,13 +307,23 @@ class CodexExtensionsServiceTest {
                 command.drop(1).take(3) == listOf("plugin", "marketplace", "list") -> if (failList) {
                     CommandResult(1, "", "bad Codex config")
                 } else if (registered) {
-                    CommandResult(0, """{"marketplaces":[{"name":"team-marketplace","source":"https://example.test/team/plugins.git"}]}""", "")
+                    val json = if (currentCodexJson) {
+                        """{"marketplaces":[{"name":"team-marketplace","root":"C:/cache/team-marketplace","marketplaceSource":{"sourceType":"git","source":"https://example.test/team/plugins.git"}}]}"""
+                    } else {
+                        """{"marketplaces":[{"name":"team-marketplace","source":"https://example.test/team/plugins.git"}]}"""
+                    }
+                    CommandResult(0, json, "")
                 } else {
                     CommandResult(0, """{"marketplaces":[]}""", "")
                 }
                 command.drop(1).take(3) == listOf("plugin", "marketplace", "add") -> {
                     registered = true
-                    CommandResult(0, """{"name":"team-marketplace"}""", "")
+                    val json = if (currentCodexJson) {
+                        """{"marketplaceName":"team-marketplace","installedRoot":"C:/cache/team-marketplace","alreadyAdded":true}"""
+                    } else {
+                        """{"name":"team-marketplace"}"""
+                    }
+                    CommandResult(0, json, "")
                 }
                 command.drop(1).take(2) == listOf("plugin", "list") && failList -> CommandResult(1, "", "bad Codex config")
                 command.drop(1).take(2) == listOf("plugin", "list") -> CommandResult(
@@ -269,12 +338,17 @@ class CodexExtensionsServiceTest {
 
     private class SkillGitRunner : CommandRunner {
         val commands = mutableListOf<List<String>>()
+        var failRefresh = false
 
         override fun run(command: List<String>, workingDirectory: Path?, timeout: Duration, environment: Map<String, String>): CommandResult {
             commands += command
+            if (failRefresh && ("pull" in command || "fetch" in command)) {
+                return CommandResult(1, "", "temporary Git failure")
+            }
             if ("clone" in command) {
                 val checkout = Path.of(command.last())
                 Files.createDirectories(checkout.resolve(".git"))
+                Files.createDirectories(checkout.resolve("empty"))
                 skill(checkout.resolve("skills/deploy"), "deploy", "Deploy a service")
                 skill(checkout.resolve(".agents/skills/check"), "check", "Check a service")
             }

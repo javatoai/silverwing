@@ -47,15 +47,5 @@ class AgentTaskTemplateStore(
     private fun validate(templates: List<AgentTaskTemplate>) {
         val names = templates.map { it.name.trim() }
         require(names.distinct().size == names.size) { "模板名称不能重复" }
-        val reserved = listOf(
-            AgentDocumentService.GENERATED_BEGIN,
-            AgentDocumentService.GENERATED_END,
-            AgentDocumentService.TASK_NOTES_BEGIN,
-            AgentDocumentService.TASK_NOTES_END,
-        )
-        templates.forEach { template ->
-            val marker = reserved.firstOrNull(template.content::contains)
-            require(marker == null) { "模板「${template.name}」包含 silverwing 保留标记：$marker" }
-        }
     }
 }

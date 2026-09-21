@@ -82,8 +82,18 @@ data class ExternalSkillCatalogItem(
 data class ExternalSkillSourceSnapshot(
     val sourceId: String,
     val skills: List<ExternalSkillCatalogItem> = emptyList(),
+    /**
+     * Repository-relative directories that actually produced at least one valid Skill during
+     * the last successful refresh. This is runtime cache data, not user configuration.
+     */
+    val discoveredRoots: List<String> = emptyList(),
     val updatedAt: String? = null,
     val error: String? = null,
+)
+
+private data class DiscoveredSkillCatalog(
+    val roots: List<String>,
+    val skills: List<ExternalSkillCatalogItem>,
 )
 
 data class CodexExtensionsSnapshot(
@@ -240,8 +250,14 @@ class CodexExtensionsService(
         val old = loadState().skillSources[source.id] ?: ExternalSkillSourceSnapshot(source.id)
         try {
             val checkout = ensureSkillCheckout(source)
-            val skills = discoverSkills(source, checkout)
-            val status = ExternalSkillSourceSnapshot(source.id, skills, now(), null)
+            val discovered = discoverSkills(source, checkout)
+            val status = ExternalSkillSourceSnapshot(
+                sourceId = source.id,
+                skills = discovered.skills,
+                discoveredRoots = discovered.roots,
+                updatedAt = now(),
+                error = null,
+            )
             val state = loadState()
             persist(state.copy(skillSources = state.skillSources + (source.id to status)))
             status
@@ -468,16 +484,23 @@ class CodexExtensionsService(
         return checkout
     }
 
-    private fun discoverSkills(source: SkillSource, checkout: Path): List<ExternalSkillCatalogItem> {
+    private fun discoverSkills(source: SkillSource, checkout: Path): DiscoveredSkillCatalog {
         val roots = source.skillRoot?.let { listOf(safeChild(checkout, it, "Skill 目录")) }
             ?: listOf(checkout.resolve(".agents").resolve("skills"), checkout.resolve("skills"))
-        val discovered = roots.filter { Files.isDirectory(it, NOFOLLOW_LINKS) && !Files.isSymbolicLink(it) }
-            .flatMap { root -> discoverSkillDirectories(root).map { directory -> parseSkill(directory, checkout) } }
+        val discoveredByRoot = roots
+            .filter { Files.isDirectory(it, NOFOLLOW_LINKS) && !Files.isSymbolicLink(it) }
+            .map { root -> root to discoverSkillDirectories(root).map { directory -> parseSkill(directory, checkout) } }
+            .filter { (_, skills) -> skills.isNotEmpty() }
+        val discovered = discoveredByRoot
+            .flatMap { (_, skills) -> skills }
             .sortedBy(ExternalSkillCatalogItem::name)
         require(discovered.map(ExternalSkillCatalogItem::name).distinct().size == discovered.size) {
             "Skill 来源“${source.name}”包含重复的 Skill 名称"
         }
-        return discovered
+        return DiscoveredSkillCatalog(
+            roots = discoveredByRoot.map { (root, _) -> relativeToCheckout(checkout, root) }.distinct(),
+            skills = discovered,
+        )
     }
 
     private fun discoverSkillDirectories(root: Path): List<Path> {
@@ -502,9 +525,17 @@ class CodexExtensionsService(
             ?: throw IllegalArgumentException("Skill 缺少 description：$directory")
         require(name.matches(SKILL_NAME_PATTERN)) { "Skill name 不合法：$name" }
         require(description.isNotBlank()) { "Skill description 不能为空：$name" }
-        val sourcePath = checkout.relativize(directory).toString().replace('\\', '/').ifBlank { "." }
+        val sourcePath = relativeToCheckout(checkout, directory)
         return ExternalSkillCatalogItem(name, description, sourcePath)
     }
+
+    private fun relativeToCheckout(checkout: Path, path: Path): String = checkout
+        .toAbsolutePath()
+        .normalize()
+        .relativize(path.toAbsolutePath().normalize())
+        .toString()
+        .replace('\\', '/')
+        .ifBlank { "." }
 
     private fun frontMatterValue(frontMatter: String, key: String): String? =
         Regex("(?m)^${Regex.escape(key)}:\\s*(.+?)\\s*$")
@@ -834,9 +865,20 @@ internal fun parseMarketplaceList(output: String): List<CodexMarketplaceRecord> 
     val root = parseCodexJson(output)
     val objects = namedObjectArray(root, "marketplaces", "items", "sources") ?: root.asObjectList()
     return objects.mapNotNull { item ->
-        val name = item.string("name", "marketplace", "id") ?: return@mapNotNull null
-        val source = item.string("source", "url", "repositoryUrl") ?: item.objectValue("source")?.string("url", "repositoryUrl", "path")
-        val cacheDirectory = item.string("cacheDirectory", "cache_path", "cachePath", "resolvedPath", "root", "directory", "path")
+        val name = item.string("name", "marketplaceName", "marketplace", "id") ?: return@mapNotNull null
+        val source = item.string("source", "url", "repositoryUrl")
+            ?: item.objectValue("source")?.string("source", "url", "repositoryUrl", "path")
+            ?: item.objectValue("marketplaceSource")?.string("source", "url", "repositoryUrl", "path")
+        val cacheDirectory = item.string(
+            "cacheDirectory",
+            "cache_path",
+            "cachePath",
+            "resolvedPath",
+            "installedRoot",
+            "root",
+            "directory",
+            "path",
+        )
         CodexMarketplaceRecord(name, source, cacheDirectory)
     }.distinctBy(CodexMarketplaceRecord::name)
 }

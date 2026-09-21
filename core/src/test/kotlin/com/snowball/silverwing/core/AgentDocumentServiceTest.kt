@@ -5,7 +5,6 @@ import java.nio.file.Path
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.io.TempDir
@@ -27,27 +26,20 @@ class AgentDocumentServiceTest {
     }
 
     @Test
-    fun `task document combines three levels and preserves the direct edit area`() {
-        val paths = ApplicationPaths(temporary.resolve("home"))
-        val service = AgentDocumentService(paths)
-        service.saveGlobal("全局约定")
-        service.saveGroup("growth", "增长组约定")
+    fun `historic layout metadata still writes the neutral referenced document set`() {
+        val service = AgentDocumentService(ApplicationPaths(temporary.resolve("home")))
         val taskDirectory = temporary.resolve("tasks").resolve("OBT-123")
-        val manifest = manifest(groupId = "growth")
+        val manifest = manifest().copy(agentDocumentLayout = AgentDocumentLayout.INLINE_V1)
 
-        service.writeTaskDocument(taskDirectory, manifest, emptyList(), "任务第一次说明")
-        val first = Files.readString(taskDirectory.resolve("AGENTS.md"))
-        assertTrue(first.indexOf("全局约定") < first.indexOf("增长组约定"))
-        assertTrue(first.indexOf("增长组约定") < first.indexOf("任务第一次说明"))
+        service.createTaskDocument(taskDirectory, manifest, emptyList(), "任务第一次说明")
 
-        val directlyEdited = first.replace("任务第一次说明", "模型直接追加的任务说明")
-        Files.writeString(taskDirectory.resolve("AGENTS.md"), directlyEdited)
-        service.saveGlobal("更新后的全局约定")
-        service.writeTaskDocument(taskDirectory, manifest, emptyList())
-
-        val refreshed = Files.readString(taskDirectory.resolve("AGENTS.md"))
-        assertTrue(refreshed.contains("更新后的全局约定"))
-        assertTrue(refreshed.contains("模型直接追加的任务说明"))
+        val root = Files.readString(taskDirectory.resolve("AGENTS.md"))
+        val rules = service.taskNotesFile(taskDirectory, manifest)
+        assertTrue(root.startsWith("# 任务说明"))
+        assertFalse(root.contains("<!--"))
+        assertFalse(root.contains("silverwing", ignoreCase = true))
+        assertEquals("任务第一次说明", Files.readString(rules))
+        assertFalse(Files.exists(taskDirectory.resolve(".silverwing")))
     }
 
     @Test
@@ -81,12 +73,16 @@ class AgentDocumentServiceTest {
         val root = taskDirectory.resolve("AGENTS.md")
         val stableRoot = Files.readString(root)
         val agentDirectory = service.taskAgentDirectory(taskDirectory)
-        assertTrue(stableRoot.contains("SILVERWING:AGENT-ROUTER:V2"))
+        assertTrue(stableRoot.startsWith("# 任务说明"))
+        assertFalse(stableRoot.contains("<!--"))
+        assertFalse(stableRoot.contains("silverwing", ignoreCase = true))
         assertTrue(stableRoot.contains("TASK-CONTEXT.md"))
         assertFalse(stableRoot.contains(initial.requirementLink))
         assertFalse(stableRoot.contains("第一版任务规则"))
         assertTrue(Files.readString(agentDirectory.resolve(AgentDocumentService.TASK_CONTEXT_FILE_NAME)).contains(initial.requirementLink))
-        assertTrue(Files.readString(agentDirectory.resolve(AgentDocumentService.TASK_CONTEXT_FILE_NAME)).contains("HANDOFF.md"))
+        val context = Files.readString(agentDirectory.resolve(AgentDocumentService.TASK_CONTEXT_FILE_NAME))
+        assertTrue(context.contains("HANDOFF.md"))
+        assertFalse(context.contains("silverwing", ignoreCase = true))
         assertTrue(Files.readString(agentDirectory.resolve(AgentDocumentService.WORKTREE_SCOPE_FILE_NAME)).contains(workspace.worktreePath))
         assertTrue(Files.readString(agentDirectory.resolve(AgentDocumentService.RULE_SOURCES_FILE_NAME)).contains(paths.globalAgents.toAbsolutePath().normalize().toString()))
         assertEquals("第一版任务规则", Files.readString(agentDirectory.resolve(AgentDocumentService.TASK_RULES_FILE_NAME)))
@@ -111,7 +107,7 @@ class AgentDocumentServiceTest {
     }
 
     @Test
-    fun `referenced preview enumerates every agent file`() {
+    fun `referenced preview keeps every agent file independent with root first`() {
         val service = AgentDocumentService(ApplicationPaths(temporary.resolve("home-preview")))
         val preview = service.renderPreview(
             temporary.resolve("tasks").resolve("OBT-789"),
@@ -120,36 +116,39 @@ class AgentDocumentServiceTest {
             "任务规则",
         )
 
-        assertTrue(preview.contains("# Agent 文件预览"))
-        assertTrue(preview.contains("AGENTS.md"))
-        assertTrue(preview.contains(AgentDocumentService.TASK_CONTEXT_FILE_NAME))
-        assertTrue(preview.contains(AgentDocumentService.WORKTREE_SCOPE_FILE_NAME))
-        assertTrue(preview.contains(AgentDocumentService.RULE_SOURCES_FILE_NAME))
-        assertTrue(preview.contains(AgentDocumentService.TASK_RULES_FILE_NAME))
-        assertTrue(preview.contains("任务规则"))
+        val agentPath = "${HandoffDocumentWriter.DIRECTORY_NAME}/${AgentDocumentService.TASK_AGENT_DIRECTORY_NAME}"
+        assertEquals(
+            listOf(
+                "AGENTS.md",
+                "$agentPath/${AgentDocumentService.TASK_CONTEXT_FILE_NAME}",
+                "$agentPath/${AgentDocumentService.WORKTREE_SCOPE_FILE_NAME}",
+                "$agentPath/${AgentDocumentService.RULE_SOURCES_FILE_NAME}",
+                "$agentPath/${AgentDocumentService.TASK_RULES_FILE_NAME}",
+            ),
+            preview.files.map(AgentDocumentPreviewFile::relativePath),
+        )
+        assertEquals("AGENTS.md", preview.rootFile.relativePath)
+        assertTrue(preview.rootFile.content.startsWith("# 任务说明"))
+        assertFalse(preview.rootFile.content.contains("<!--"))
+        assertFalse(preview.rootFile.content.contains("silverwing", ignoreCase = true))
+        assertFalse(preview.rootFile.content.contains("# 任务上下文"))
+        assertTrue(preview.files[1].content.contains("# 任务上下文"))
+        assertTrue(preview.files.last().content.contains("任务规则"))
     }
 
     @Test
-    fun `malformed task markers stop regeneration without changing the file`() {
-        val paths = ApplicationPaths(temporary.resolve("home"))
-        val service = AgentDocumentService(paths)
-        val taskDirectory = temporary.resolve("tasks").resolve("broken")
-        Files.createDirectories(taskDirectory)
-        val malformed = "人工文件，没有 silverwing 标记"
-        Files.writeString(taskDirectory.resolve("AGENTS.md"), malformed)
+    fun `preview remains split even when manifest has historic layout metadata`() {
+        val service = AgentDocumentService(ApplicationPaths(temporary.resolve("home-inline-preview")))
+        val preview = service.renderPreview(
+            temporary.resolve("tasks").resolve("OBT-790"),
+            manifest(),
+            emptyList(),
+            "任务规则",
+        )
 
-        assertFailsWith<AgentDocumentFormatException> {
-            service.writeTaskDocument(taskDirectory, manifest(), emptyList())
-        }
-        assertEquals(malformed, Files.readString(taskDirectory.resolve("AGENTS.md")))
-    }
-
-    @Test
-    fun `reserved markers are rejected in user maintained content`() {
-        val service = AgentDocumentService(ApplicationPaths(temporary.resolve("home-reserved")))
-        assertFailsWith<IllegalArgumentException> {
-            service.saveGlobal("do not write ${AgentDocumentService.TASK_NOTES_BEGIN}")
-        }
+        assertEquals(5, preview.files.size)
+        assertEquals("AGENTS.md", preview.rootFile.relativePath)
+        assertEquals("任务规则", preview.files.last().content)
     }
 
     @Test
@@ -164,7 +163,7 @@ class AgentDocumentServiceTest {
     }
 
     @Test
-    fun `generated workspace table keeps the edit boundary without redundant task facts`() {
+    fun `generated context and workspace scope keep the edit boundary without redundant task facts`() {
         val workspace = ServiceWorkspace(
             repositoryId = "repo",
             serviceName = "订单服务",
@@ -175,18 +174,14 @@ class AgentDocumentServiceTest {
             health = WorkspaceHealth.READY,
             baseRef = "origin/master",
         )
-        val rendered = AgentsMdWriter.render(
-            temporary.resolve("tasks").resolve("table"),
-            manifest().copy(
-                services = listOf(workspace),
-                requirementMaterials = RequirementMaterialsDirectory(
-                    status = RequirementMaterialsStatus.READY,
-                    writeRoot = "D:/requirements/Sprint/OBT-123/研发资料",
-                ),
+        val manifest = manifest().copy(
+            services = listOf(workspace),
+            requirementMaterials = RequirementMaterialsDirectory(
+                status = RequirementMaterialsStatus.READY,
+                writeRoot = "D:/requirements/Sprint/OBT-123/研发资料",
             ),
-            emptyList(),
-            "人工说明",
         )
+        val rendered = AgentsMdWriter.renderTaskContext(manifest) + AgentsMdWriter.renderWorktreeScope(manifest, emptyList())
 
         assertTrue("需求链接" in rendered)
         assertTrue("需求资料目录" in rendered)
@@ -195,20 +190,17 @@ class AgentDocumentServiceTest {
         assertTrue("origin/master" in rendered)
         assertTrue("STANDARD_WORKTREE" in rendered)
         assertTrue("C:/tasks/table/orders" in rendered)
-        assertTrue("人工说明" in rendered)
         assertFalse("C:/source/orders" in rendered)
         assertFalse("## 基本信息" in rendered)
         assertFalse("feature/orders" in rendered)
         assertFalse("READY" in rendered)
+        assertFalse("silverwing" in rendered.lowercase())
     }
 
     @Test
-    fun `generated document omits materials section when materials are not requested`() {
-        val rendered = AgentsMdWriter.render(
-            temporary.resolve("tasks").resolve("task"),
+    fun `generated task context omits materials section when materials are not requested`() {
+        val rendered = AgentsMdWriter.renderTaskContext(
             manifest().copy(requirementMaterials = RequirementMaterialsDirectory()),
-            emptyList(),
-            "",
         )
 
         assertFalse("## 需求资料目录" in rendered)

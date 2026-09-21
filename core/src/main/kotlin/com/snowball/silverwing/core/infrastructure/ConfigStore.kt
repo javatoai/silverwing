@@ -55,6 +55,8 @@ class ConfigStore(
         encodeDefaults = true
     },
     private val initializeDefaultTaskRoot: (Path) -> Unit = { it.createDirectories() },
+    /** Isolated so the failure rollback path can be verified without faulting the whole filesystem. */
+    private val replaceShard: (Path, Path) -> Unit = ::moveAtomically,
 ) : ConfigurationRepository {
     private val json = Json(json) {
         prettyPrint = true
@@ -97,6 +99,7 @@ class ConfigStore(
             )
             val content = Files.list(path).use { entries ->
                 entries.filter(Files::isRegularFile)
+                    .filter { !isShardStagingFile(it) }
                     .toList()
                     .sortedBy { it.name }
                     .joinToString("\n\n") { file -> "[${file.name}]\n${Files.readString(file)}" }
@@ -192,8 +195,12 @@ class ConfigStore(
     /** Exports the complete shard set as one standard ZIP archive. */
     fun exportTo(target: Path): Path {
         val normalized = requireZip(target, "导出目标")
-        val current = readCurrent()
-        writeZip(normalized, current.files)
+        // Capture all bytes under the same cross-process lock as writes.  ZIP creation
+        // deliberately happens afterwards, so a slow export never blocks a save.
+        val snapshot = withMutationLock {
+            readCurrent().files.mapValues { (_, content) -> content.copyOf() }
+        }
+        writeZip(normalized, snapshot)
         return normalized
     }
 
@@ -250,7 +257,7 @@ class ConfigStore(
 
     private fun readShardFiles(): Map<String, ByteArray> {
         require(Files.isDirectory(paths.config)) { "配置目录不存在或不是目录：${paths.config}" }
-        val entries = Files.list(paths.config).use { stream -> stream.toList() }
+        val entries = Files.list(paths.config).use { stream -> stream.filter { !isShardStagingFile(it) }.toList() }
         val names = entries.map { it.name }.toSet()
         require(names.all { it in SHARD_NAMES }) { "配置目录包含未知文件" }
         require(entries.all(Files::isRegularFile)) { "配置目录只能包含配置分片文件" }
@@ -404,16 +411,65 @@ class ConfigStore(
     }
 
     private fun writeShards(shards: Shards, names: Collection<String>) {
-        paths.home.createDirectories()
         paths.config.createDirectories()
-        val temporary = names.associateWith { name ->
-            Files.createTempFile(paths.home, ".${name.removeSuffix(".json")}-", ".json.tmp")
+        val selectedNames = names.distinct()
+        val originals = selectedNames.associateWith { name ->
+            val target = shardPath(name)
+            if (Files.exists(target)) Files.readAllBytes(target) else null
         }
+        val temporary = linkedMapOf<String, Path>()
         try {
+            selectedNames.forEach { name ->
+                temporary[name] = Files.createTempFile(
+                    paths.config,
+                    "$SHARD_STAGING_PREFIX${name.removeSuffix(".json")}-",
+                    SHARD_STAGING_SUFFIX,
+                )
+            }
             temporary.forEach { (name, path) -> Files.write(path, encodeShard(name, shards)) }
-            temporary.forEach { (name, path) -> moveAtomically(path, shardPath(name)) }
+            val replaced = mutableListOf<String>()
+            try {
+                temporary.forEach { (name, path) ->
+                    // Record before the move: a filesystem implementation may move then
+                    // report an error, and that target must still be restored.
+                    replaced += name
+                    replaceShard(path, shardPath(name))
+                }
+            } catch (failure: Throwable) {
+                rollbackShards(originals, replaced, failure)
+                throw failure
+            }
         } finally {
-            temporary.values.forEach(Files::deleteIfExists)
+            temporary.values.forEach { path -> runCatching { Files.deleteIfExists(path) } }
+        }
+    }
+
+    /** Restores already-attempted targets in reverse order after a replacement failure. */
+    private fun rollbackShards(
+        originals: Map<String, ByteArray?>,
+        replaced: List<String>,
+        originalFailure: Throwable,
+    ) {
+        replaced.asReversed().forEach { name ->
+            runCatching {
+                val target = shardPath(name)
+                val original = originals.getValue(name)
+                if (original == null) {
+                    Files.deleteIfExists(target)
+                } else {
+                    val staging = Files.createTempFile(
+                        paths.config,
+                        "${SHARD_STAGING_PREFIX}rollback-${name.removeSuffix(".json")}-",
+                        SHARD_STAGING_SUFFIX,
+                    )
+                    try {
+                        Files.write(staging, original)
+                        moveAtomically(staging, target)
+                    } finally {
+                        Files.deleteIfExists(staging)
+                    }
+                }
+            }.exceptionOrNull()?.let(originalFailure::addSuppressed)
         }
     }
 
@@ -468,18 +524,10 @@ class ConfigStore(
     private fun hasConfigurationData(): Boolean = when {
         !Files.exists(paths.config) -> false
         !Files.isDirectory(paths.config) -> true
-        else -> Files.list(paths.config).use { it.findAny().isPresent }
+        else -> Files.list(paths.config).use { entries -> entries.anyMatch { !isShardStagingFile(it) } }
     }
 
     private fun shardPath(name: String): Path = paths.config.resolve(name)
-
-    private fun moveAtomically(source: Path, target: Path) {
-        try {
-            Files.move(source, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
-        } catch (_: AtomicMoveNotSupportedException) {
-            Files.move(source, target, StandardCopyOption.REPLACE_EXISTING)
-        }
-    }
 
     private fun <T> withMutationLock(block: () -> T): T = processMutationLock.withLock {
         FileLocking.withExclusiveLock(
@@ -513,7 +561,20 @@ class ConfigStore(
         const val ZIP_EXTENSION = ".zip"
         const val MAX_BACKUPS = 10
         const val CONFIG_LOCK_FILE = "config.lock"
+        const val SHARD_STAGING_PREFIX = ".silverwing-shard-"
+        const val SHARD_STAGING_SUFFIX = ".json.tmp"
         val mutationLocks = ConcurrentHashMap<String, ReentrantLock>()
+    }
+}
+
+private fun isShardStagingFile(path: Path): Boolean =
+    path.name.startsWith(".silverwing-shard-") && path.name.endsWith(".json.tmp")
+
+private fun moveAtomically(source: Path, target: Path) {
+    try {
+        Files.move(source, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+    } catch (_: AtomicMoveNotSupportedException) {
+        Files.move(source, target, StandardCopyOption.REPLACE_EXISTING)
     }
 }
 

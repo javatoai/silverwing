@@ -91,8 +91,8 @@ class ProcessCommandRunner : StreamingCommandRunner {
                     readStreamingOutput(process.errorStream, CommandOutputStream.STDERR, onOutput)
                 }
             }
-            val finished = waitForProcess(process, deadline, observedProcesses)
-            if (!finished || observedProcesses.any { it.isAlive }) {
+            val finished = waitForProcessTree(process, deadline, observedProcesses)
+            if (!finished) {
                 timeoutResult(process, stdoutFuture, stderrFuture, timeout, observedProcesses)
             } else {
                 CommandResult(
@@ -166,18 +166,23 @@ class ProcessCommandRunner : StreamingCommandRunner {
     private fun remainingNanos(deadline: Long): Long =
         if (deadline == Long.MAX_VALUE) Long.MAX_VALUE else (deadline - System.nanoTime()).coerceAtLeast(0)
 
-    private fun waitForProcess(
+    private fun waitForProcessTree(
         process: Process,
         deadline: Long,
         observedProcesses: MutableSet<ProcessHandle>,
     ): Boolean {
         while (true) {
             observeDescendants(process, observedProcesses)
+            if (!process.isAlive && observedProcesses.none { it.isAlive }) return true
+
             val remaining = remainingNanos(deadline)
-            if (remaining <= 0) return !process.isAlive
-            if (process.waitFor(minOf(remaining, PROCESS_WAIT_POLL_NANOS), TimeUnit.NANOSECONDS)) {
-                observeDescendants(process, observedProcesses)
-                return true
+            if (remaining <= 0) return false
+
+            val pollNanos = minOf(remaining, PROCESS_WAIT_POLL_NANOS)
+            if (process.isAlive) {
+                process.waitFor(pollNanos, TimeUnit.NANOSECONDS)
+            } else {
+                TimeUnit.NANOSECONDS.sleep(pollNanos)
             }
         }
     }

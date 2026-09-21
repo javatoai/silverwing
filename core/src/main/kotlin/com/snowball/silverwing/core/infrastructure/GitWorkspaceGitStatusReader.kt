@@ -2,6 +2,7 @@ package com.snowball.silverwing.core
 
 import java.nio.file.Files
 import java.nio.file.Path
+import kotlinx.coroutines.CancellationException
 
 /** Reads only local Git metadata; it deliberately never fetches or contacts a remote. */
 class GitWorkspaceGitStatusReader(
@@ -26,6 +27,7 @@ class GitWorkspaceGitStatusReader(
                     "--git-common-dir",
                 )
             }.getOrElse { error ->
+                rethrowCancellation(error)
                 return WorkspaceGitHealth(
                     state = WorkspaceGitHealthState.FAILED,
                     issue = WorkspaceGitIssue.NOT_GIT,
@@ -45,7 +47,7 @@ class GitWorkspaceGitStatusReader(
                 message = "目标目录不是 Git 顶层目录：$worktreePath",
             )
             val identityMatches = when (workspace.strategy) {
-                WorkspaceStrategy.STANDARD_WORKTREE -> runCatching {
+                WorkspaceStrategy.STANDARD_WORKTREE -> {
                     val repository = Path.of(workspace.repositoryPath).toAbsolutePath().normalize()
                     val expectedCommonDirectory = git.readOnly(
                         repository,
@@ -54,7 +56,7 @@ class GitWorkspaceGitStatusReader(
                         "--git-common-dir",
                     ).stdout.trim().let(Path::of).toAbsolutePath().normalize()
                     commonDirectory.canonicalOrNormalized() == expectedCommonDirectory.canonicalOrNormalized()
-                }.getOrDefault(false)
+                }
                 WorkspaceStrategy.INDEPENDENT_CLONE ->
                     git.readOnly(
                         worktreePath,
@@ -126,6 +128,7 @@ class GitWorkspaceGitStatusReader(
                 )
             }
         }.getOrElse { error ->
+            rethrowCancellation(error)
             WorkspaceGitHealth(
                 WorkspaceGitHealthState.FAILED,
                 pushState = LocalPushState.FAILED,
@@ -133,6 +136,13 @@ class GitWorkspaceGitStatusReader(
                 issue = WorkspaceGitIssue.INSPECTION_FAILED,
                 expectedBranch = workspace.branch,
             )
+        }
+    }
+
+    private fun rethrowCancellation(error: Throwable) {
+        when (error) {
+            is CancellationException -> throw error
+            is InterruptedException -> throw error
         }
     }
 

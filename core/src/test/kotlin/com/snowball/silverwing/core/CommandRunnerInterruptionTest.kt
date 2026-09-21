@@ -40,6 +40,25 @@ class CommandRunnerInterruptionTest {
         assertTrue(awaitProcessExit(childPid), "inherited output child $childPid is still alive")
     }
 
+    @Test
+    fun `parent exit waits for a short lived descendant before declaring timeout`() {
+        val start = System.nanoTime()
+
+        val result = ProcessCommandRunner().run(
+            command = listOf(
+                javaExecutable(),
+                "-cp",
+                System.getProperty("java.class.path"),
+                ExitingParentWithShortLivedChildProcess::class.java.name,
+            ),
+            timeout = Duration.ofSeconds(2),
+        )
+        val elapsed = Duration.ofNanos(System.nanoTime() - start).toMillis()
+
+        assertEquals(0, result.exitCode)
+        assertTrue(elapsed < 1_800, "short-lived descendant took $elapsed ms")
+    }
+
     private fun awaitChildPid(path: Path): Long {
         val deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos()
         while (System.nanoTime() < deadline) {
@@ -117,6 +136,26 @@ object HoldingOutputProcess {
     @JvmStatic
     fun main(args: Array<String>) {
         Thread.sleep(4_000)
+    }
+}
+
+object ExitingParentWithShortLivedChildProcess {
+    @JvmStatic
+    fun main(args: Array<String>) {
+        ProcessBuilder(
+            javaExecutable(),
+            "-cp",
+            System.getProperty("java.class.path"),
+            ShortLivedChildProcess::class.java.name,
+        ).inheritIO().start()
+        Thread.sleep(200)
+    }
+}
+
+object ShortLivedChildProcess {
+    @JvmStatic
+    fun main(args: Array<String>) {
+        Thread.sleep(600)
     }
 }
 

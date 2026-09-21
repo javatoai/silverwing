@@ -441,12 +441,13 @@ class TaskController internal constructor(
         }, onSuccess = { reloadTasks(it.folderName) })
 
     fun refreshGitStatus() {
+        val revision = ++gitStatusRevision
         gitStatusJob?.cancel()
         val task = session.selectedTask ?: run {
+            gitStatusJob = null
             gitHealth = emptyMap()
             return
         }
-        val revision = ++gitStatusRevision
         val paths = task.services.map(::normalizedWorkspacePath).distinct()
         gitHealth = paths.associateWith { WorkspaceGitHealth(WorkspaceGitHealthState.CHECKING) }
         gitStatusJob = scope.launch {

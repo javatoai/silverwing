@@ -6,6 +6,7 @@ import java.time.Duration
 import org.junit.jupiter.api.io.TempDir
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.CompletableDeferred
@@ -269,6 +270,92 @@ class WorkspaceGitStatusTest {
         assertEquals(2, health.unpushedCommitCount)
         assertEquals(3, invocations.size)
         assertTrue(invocations.all { "--no-optional-locks" in it })
+    }
+
+    @Test
+    fun `reader reports a source repository probe failure instead of an identity mismatch`() {
+        val repository = Files.createDirectories(temporary.resolve("source-probe-repository"))
+        val worktree = Files.createDirectories(temporary.resolve("source-probe-worktree"))
+        val branch = "feature/source-probe"
+        val runner = object : CommandRunner {
+            override fun run(
+                command: List<String>,
+                workingDirectory: Path?,
+                timeout: Duration,
+                environment: Map<String, String>,
+            ): CommandResult {
+                val commandRepository = command[command.indexOf("-C") + 1]
+                return when {
+                    "--show-toplevel" in command -> CommandResult(
+                        0,
+                        listOf(
+                            worktree.toAbsolutePath().normalize(),
+                            worktree.resolve(".git").toAbsolutePath().normalize(),
+                            repository.resolve(".git").toAbsolutePath().normalize(),
+                        ).joinToString("\n"),
+                        "",
+                    )
+                    commandRepository == repository.toString() && "--git-common-dir" in command ->
+                        CommandResult(124, "", "injected source repository probe failure")
+                    else -> error("Unexpected Git command: ${command.joinToString(" ")}")
+                }
+            }
+        }
+        val workspace = ServiceWorkspace(
+            repositoryId = "repo",
+            serviceName = "service",
+            repositoryPath = repository.toString(),
+            worktreePath = worktree.toString(),
+            developmentTool = DevelopmentToolType.INTELLIJ_IDEA,
+            branch = branch,
+        )
+
+        val health = GitWorkspaceGitStatusReader(GitClient(runner)).read(workspace)
+
+        assertEquals(WorkspaceGitIssue.INSPECTION_FAILED, health.issue)
+        assertTrue(health.message.orEmpty().contains("injected source repository probe failure"))
+    }
+
+    @Test
+    fun `reader preserves interruption while reading the source repository identity`() {
+        val repository = Files.createDirectories(temporary.resolve("cancelled-source-repository"))
+        val worktree = Files.createDirectories(temporary.resolve("cancelled-source-worktree"))
+        val runner = object : CommandRunner {
+            override fun run(
+                command: List<String>,
+                workingDirectory: Path?,
+                timeout: Duration,
+                environment: Map<String, String>,
+            ): CommandResult {
+                val commandRepository = command[command.indexOf("-C") + 1]
+                return when {
+                    "--show-toplevel" in command -> CommandResult(
+                        0,
+                        listOf(
+                            worktree.toAbsolutePath().normalize(),
+                            worktree.resolve(".git").toAbsolutePath().normalize(),
+                            repository.resolve(".git").toAbsolutePath().normalize(),
+                        ).joinToString("\n"),
+                        "",
+                    )
+                    commandRepository == repository.toString() && "--git-common-dir" in command ->
+                        throw InterruptedException("injected cancellation")
+                    else -> error("Unexpected Git command: ${command.joinToString(" ")}")
+                }
+            }
+        }
+        val workspace = ServiceWorkspace(
+            repositoryId = "repo",
+            serviceName = "service",
+            repositoryPath = repository.toString(),
+            worktreePath = worktree.toString(),
+            developmentTool = DevelopmentToolType.INTELLIJ_IDEA,
+            branch = "feature/cancelled-source-probe",
+        )
+
+        assertFailsWith<InterruptedException> {
+            GitWorkspaceGitStatusReader(GitClient(runner)).read(workspace)
+        }
     }
 
     @Test

@@ -8,7 +8,7 @@ import kotlinx.serialization.json.JsonNames
 import java.net.URI
 
 /** Persisted data uses explicit strict schema versions independent of the product build version. */
-const val CURRENT_PRODUCT_VERSION = "2.0.0"
+const val CURRENT_PRODUCT_VERSION = "2.0.1"
 const val CURRENT_APP_CONFIG_SCHEMA_VERSION = "2.0.0"
 const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = "2.0.0"
 const val DEFAULT_GROUP_ID = "default"

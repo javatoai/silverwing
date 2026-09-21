@@ -2,6 +2,11 @@
 
 本项目采用 `vX.Y.Z` 标签发布桌面安装包。重大行为变化会在对应版本说明中记录；配置与任务数据 schema 的兼容边界以 [配置与使用](CONFIGURATION.md) 为准。
 
+## 2.0.1
+
+- GitHub 发布工作流仅在推送 `vX.Y.Z` 标签时执行，不再因 `master` 推送重复构建和发布持续版本。
+- 修正任务根目录迁移的回归覆盖：稳定根 `AGENTS.md`、Worktree 范围和任务专属规则分别从对应分片文件验证。
+
 ## 2.0.0
 
 - 产品、桌面安装包、CLI、任务元数据、GitHub 仓库和发布资产统一改名为 `silverwing`；Codex Skill 改为 `$silverwing`。

@@ -102,6 +102,8 @@ class TaskRootMigrationServiceTest {
         )
         ManifestStore().save(sourceTask, manifest)
         val paths = ApplicationPaths(temporary.resolve("standard/home"))
+        val documents = AgentDocumentService(paths)
+        documents.createTaskDocument(sourceTask, manifest, listOf(repository.toInfo()))
         val configStore = ConfigStore(paths).also {
             it.save(AppConfig(taskRoot = sourceRoot.toString(), repositories = listOf(repository)))
         }
@@ -109,7 +111,7 @@ class TaskRootMigrationServiceTest {
         val service = TaskRootMigrationService(
             configStore = configStore,
             paths = paths,
-            agentDocuments = AgentDocumentService(paths),
+            agentDocuments = documents,
             sameFileStore = { _, _ -> true },
         )
 
@@ -130,7 +132,12 @@ class TaskRootMigrationServiceTest {
         assertTrue(Files.isSameFile(migratedWorktree, GitClient().topLevel(migratedWorktree)))
         assertEquals("feature/migrate", GitClient().currentBranch(migratedWorktree))
         assertTrue(GitClient().worktrees(repositoryPath).any { Files.isSameFile(it.path, migratedWorktree) })
-        assertTrue(Files.readString(migratedTask.resolve("AGENTS.md")).contains(migratedWorktree.toString()))
+        assertTrue(Files.readString(migratedTask.resolve("AGENTS.md")).contains(".workspace/agent/WORKTREE-SCOPE.md"))
+        assertTrue(
+            Files.readString(
+                documents.taskAgentDirectory(migratedTask).resolve(AgentDocumentService.WORKTREE_SCOPE_FILE_NAME),
+            ).contains(migratedWorktree.toString()),
+        )
         assertEquals(targetRoot.toAbsolutePath().normalize().toString(), configStore.load().taskRoot)
     }
 
@@ -385,7 +392,7 @@ class TaskRootMigrationServiceTest {
         val fixture = independentFixture("config-failure", "TASK-5")
         val original = ManifestStore().load(fixture.sourceTask)
         val documents = AgentDocumentService(fixture.paths)
-        documents.writeTaskDocument(
+        documents.createTaskDocument(
             fixture.sourceTask,
             original,
             listOf(fixture.repository.toInfo()),
@@ -412,9 +419,17 @@ class TaskRootMigrationServiceTest {
         assertTrue(fixture.workspace.exists())
         assertFalse(fixture.targetRoot.resolve(fixture.sourceTask.fileName).exists())
         assertEquals(fixture.sourceRoot.toAbsolutePath().normalize().toString(), fixture.store.load().taskRoot)
-        val restoredAgents = Files.readString(fixture.sourceTask.resolve("AGENTS.md"))
-        assertTrue(restoredAgents.contains(fixture.workspace.toString()))
-        assertTrue(restoredAgents.contains("保留人工说明"))
+        assertTrue(Files.readString(fixture.sourceTask.resolve("AGENTS.md")).contains(".workspace/agent/TASK-RULES.md"))
+        assertTrue(
+            Files.readString(
+                documents.taskAgentDirectory(fixture.sourceTask).resolve(AgentDocumentService.WORKTREE_SCOPE_FILE_NAME),
+            ).contains(fixture.workspace.toString()),
+        )
+        assertTrue(
+            Files.readString(
+                documents.taskAgentDirectory(fixture.sourceTask).resolve(AgentDocumentService.TASK_RULES_FILE_NAME),
+            ).contains("保留人工说明"),
+        )
         assertIndependentOwnership(fixture.sourceTask)
     }
 

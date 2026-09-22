@@ -31,6 +31,8 @@ class CodexRequirementAiNamingServiceTest {
 
         assertEquals(RequirementAiNamingSuggestion("支付超时优化", "payment_timeout"), suggestion)
         assertEquals("codex-test", runner.command.first())
+        assertEquals("gpt-5.6-luna", runner.command[runner.command.indexOf("--model") + 1])
+        assertTrue(runner.command.indexOf("--model") < runner.command.indexOf("exec"))
         assertTrue(runner.command.indexOf("--ask-for-approval") < runner.command.indexOf("exec"))
         assertEquals("never", runner.command[runner.command.indexOf("--ask-for-approval") + 1])
         assertTrue("--ephemeral" in runner.command)
@@ -41,6 +43,22 @@ class CodexRequirementAiNamingServiceTest {
         assertTrue(runner.input.contains("支付优化"))
         assertFalse(runner.input.contains("feature/"))
         assertFalse(Files.exists(temporary.resolve("home/temp/requirement-ai-naming-result.json")))
+    }
+
+    @Test
+    fun `uses the configured model as the Codex top level model argument`() {
+        val runner = RecordingInputRunner()
+        val service = CodexRequirementAiNamingService(
+            paths = ApplicationPaths(temporary.resolve("configured-model-home")),
+            runner = runner,
+            codexExecutable = { "codex-test" },
+            modelProvider = { "gpt-5.6-sol" },
+        )
+
+        service.suggest(RequirementAiContext("标题", "正文"))
+
+        assertEquals("gpt-5.6-sol", runner.command[runner.command.indexOf("--model") + 1])
+        assertTrue(runner.command.indexOf("--model") < runner.command.indexOf("exec"))
     }
 
     @Test

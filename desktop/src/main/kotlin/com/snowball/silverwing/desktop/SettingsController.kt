@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.snowball.silverwing.core.AppConfig
+import com.snowball.silverwing.core.RequirementAiNamingModel
 import com.snowball.silverwing.core.SilverWingTime
 import com.snowball.silverwing.core.BatchRepositoryAddResult
 import com.snowball.silverwing.core.ConfigStore
@@ -22,6 +23,7 @@ import com.snowball.silverwing.core.MeegleExecutable
 import com.snowball.silverwing.core.normalizeMeegleExecutablePath
 import com.snowball.silverwing.core.LarkCliService
 import com.snowball.silverwing.core.LarkCliStatus
+import com.snowball.silverwing.core.LarkAuthenticationState
 import com.snowball.silverwing.core.LarkDeviceCodeChallenge
 import com.snowball.silverwing.core.LarkCommandSource
 import com.snowball.silverwing.core.LarkExecutable
@@ -715,9 +717,17 @@ class SettingsController internal constructor(
         "正在保存 AI 命名设置…",
         if (enabled) "已开启 AI 需求命名" else "已关闭 AI 需求命名",
         onFailure = onFailure,
-        saveKey = "groups",
+        saveKey = "task-creation",
         runner = settingsOperations,
     ) { it.copy(aiRequirementNamingEnabled = enabled) }
+
+    fun setAiRequirementNamingModel(model: String, onFailure: (Throwable) -> Unit = {}): Boolean = mutate(
+        "正在保存 AI 命名模型…",
+        "AI 命名模型已保存",
+        onFailure = onFailure,
+        saveKey = "task-creation",
+        runner = settingsOperations,
+    ) { it.copy(aiRequirementNamingModel = RequirementAiNamingModel.requireValid(model.trim())) }
 
     fun refreshMeegleStatus(force: Boolean = false) {
         if (!force && meegleCli is MeegleCliState.Loading) return
@@ -869,7 +879,13 @@ class SettingsController internal constructor(
     private fun markLarkLoggedOut() {
         val previous = (larkCli as? LarkCliState.Ready)?.status
         larkCli = LarkCliState.Ready(
-            previous?.copy(authenticated = false, tokenStatus = null, expiresAt = null, authenticationError = null)
+            previous?.copy(
+                authenticated = false,
+                authenticationState = LarkAuthenticationState.LOGIN_REQUIRED,
+                tokenStatus = null,
+                expiresAt = null,
+                authenticationError = null,
+            )
                 ?: LarkCliStatus(installed = true, authenticated = false),
         )
         clearLarkDeviceCodeLogin()

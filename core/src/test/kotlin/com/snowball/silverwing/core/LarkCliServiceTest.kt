@@ -38,6 +38,97 @@ class LarkCliServiceTest {
     }
 
     @Test
+    fun `status retries without json when a legacy cli rejects the flag`() {
+        val commands = mutableListOf<List<String>>()
+        val service = ProcessLarkCliService(
+            runner = recordingRunner { command ->
+                commands += command
+                when {
+                    command.last() == "--version" -> CommandResult(0, "lark-cli version 1.0.41", "")
+                    command.last() == "--json" -> CommandResult(1, "", "Error: unknown flag: --json")
+                    else -> CommandResult(
+                        0,
+                        """{"brand":"feishu","identities":{"user":{"status":"ready","available":true,"tokenStatus":"valid"}}}""",
+                        "",
+                    )
+                }
+            },
+            isWindows = false,
+        )
+
+        val status = service.status()
+
+        assertTrue(status.authenticated)
+        assertEquals(
+            listOf(
+                listOf("lark-cli", "--version"),
+                listOf("lark-cli", "auth", "status", "--json"),
+                listOf("lark-cli", "auth", "status"),
+            ),
+            commands,
+        )
+    }
+
+    @Test
+    fun `status accepts an available user while the cli refreshes its credential`() {
+        val service = ProcessLarkCliService(
+            runner = recordingRunner { command ->
+                if (command.last() == "--version") CommandResult(0, "1.0.41", "") else CommandResult(
+                    0,
+                    """{"brand":"feishu","identities":{"user":{"status":"ready","available":true,"tokenStatus":"needs_refresh"}}}""",
+                    "",
+                )
+            },
+            isWindows = false,
+        )
+
+        val status = service.status()
+
+        assertTrue(status.authenticated)
+        assertEquals("needs_refresh", status.tokenStatus)
+        assertTrue(status.authenticationError == null)
+    }
+
+    @Test
+    fun `status accepts the current cli success envelope`() {
+        val service = ProcessLarkCliService(
+            runner = recordingRunner { command ->
+                if (command.last() == "--version") CommandResult(0, "1.0.96", "") else CommandResult(
+                    0,
+                    """{"ok":true,"identity":"user","data":{"brand":"feishu","identities":{"user":{"status":"ready","available":true,"tokenStatus":"valid"}}}}""",
+                    "",
+                )
+            },
+            isWindows = false,
+        )
+
+        val status = service.status()
+
+        assertTrue(status.authenticated)
+        assertEquals("feishu", status.brand)
+    }
+
+    @Test
+    fun `status reports a current cli error envelope as a check failure`() {
+        val service = ProcessLarkCliService(
+            runner = recordingRunner { command ->
+                if (command.last() == "--version") CommandResult(0, "1.0.96", "") else CommandResult(
+                    0,
+                    """{"ok":false,"error":{"message":"credential store is unavailable","type":"credential_error"}}""",
+                    "",
+                )
+            },
+            isWindows = false,
+        )
+
+        val status = service.status()
+
+        assertFalse(status.authenticated)
+        assertEquals(LarkAuthenticationState.CHECK_FAILED, status.authenticationState)
+        assertTrue(status.authenticationError.orEmpty().contains("credential store is unavailable"))
+    }
+
+    @Test
     fun `login requires selected domains and never defaults to all`() {
         val commands = mutableListOf<List<String>>()
         val service = ProcessLarkCliService(
@@ -57,6 +148,25 @@ class LarkCliServiceTest {
             listOf("lark-cli", "auth", "login", "--domain", "docs", "--domain", "drive", "--no-wait", "--json"),
             commands.single(),
         )
+    }
+
+    @Test
+    fun `device code initialization accepts the current cli success envelope`() {
+        val service = ProcessLarkCliService(
+            runner = recordingRunner {
+                CommandResult(
+                    0,
+                    """{"ok":true,"data":{"verification_url":"https://example.test/verify","device_code":"opaque-code","expires_in":240}}""",
+                    "",
+                )
+            },
+            isWindows = false,
+        )
+
+        val challenge = service.beginDeviceCodeLogin(listOf("docs"))
+
+        assertEquals("https://example.test/verify", challenge.verificationUrl)
+        assertEquals(240, challenge.expiresInSeconds)
     }
 
     @Test
@@ -87,20 +197,61 @@ class LarkCliServiceTest {
     }
 
     @Test
-    fun `logout uses json mode and reports failures`() {
+    fun `logout retries without json when a legacy cli rejects the flag`() {
         val commands = mutableListOf<List<String>>()
         val service = ProcessLarkCliService(
             runner = recordingRunner { command ->
                 commands += command
-                CommandResult(1, "", "credential store is locked")
+                if (command.last() == "--json") {
+                    CommandResult(1, "", "Error: unknown flag: --json")
+                } else {
+                    CommandResult(0, "logged out", "")
+                }
             },
+            isWindows = true,
+        )
+
+        service.logout()
+
+        assertEquals(
+            listOf(
+                listOf("lark-cli.cmd", "auth", "logout", "--json"),
+                listOf("lark-cli.cmd", "auth", "logout"),
+            ),
+            commands,
+        )
+    }
+
+    @Test
+    fun `logout reports non compatibility failures`() {
+        val service = ProcessLarkCliService(
+            runner = recordingRunner { CommandResult(1, "", "credential store is locked") },
             isWindows = true,
         )
 
         val error = assertFailsWith<IllegalStateException> { service.logout() }
 
         assertTrue(error.message.orEmpty().contains("credential store is locked"))
-        assertEquals(listOf("lark-cli.cmd", "auth", "logout", "--json"), commands.single())
+    }
+
+    @Test
+    fun `logout accepts a success envelope whose data is not an object`() {
+        val service = ProcessLarkCliService(
+            runner = recordingRunner { CommandResult(0, """{"ok":true,"data":"logged out"}""", "") },
+            isWindows = false,
+        )
+
+        service.logout()
+    }
+
+    @Test
+    fun `logout accepts a success envelope without data`() {
+        val service = ProcessLarkCliService(
+            runner = recordingRunner { CommandResult(0, """{"ok":true}""", "") },
+            isWindows = false,
+        )
+
+        service.logout()
     }
 
     @Test

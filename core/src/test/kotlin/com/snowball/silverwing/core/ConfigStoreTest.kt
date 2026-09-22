@@ -43,6 +43,7 @@ class ConfigStoreTest {
         assertTrue(Files.isDirectory(paths.tasks))
         assertEquals(listOf(DEFAULT_GROUP_NAME), config.groups.map { it.name })
         assertFalse(config.aiRequirementNamingEnabled)
+        assertEquals(RequirementAiNamingModel.DEFAULT, config.aiRequirementNamingModel)
         assertEquals(EXPECTED_SHARDS, shardNames(paths))
         EXPECTED_SHARDS.forEach { name ->
             assertTrue(Files.readString(paths.config.resolve(name)).contains("\"schema\": 2"), name)
@@ -102,6 +103,7 @@ class ConfigStoreTest {
                 SkillSource("team-skills", "团队 Skills", "git@example.test:team/skills.git", "main", "skills"),
             ),
             aiRequirementNamingEnabled = true,
+            aiRequirementNamingModel = "gpt-5.6-sol",
         )
 
         ConfigStore(paths).save(expected)
@@ -111,6 +113,7 @@ class ConfigStoreTest {
         assertTrue(Files.readString(paths.config.resolve("services.json")).contains("支付 API"))
         assertTrue(Files.readString(paths.config.resolve("integrations.json")).contains("team-marketplace"))
         assertTrue(Files.readString(paths.config.resolve("integrations.json")).contains("\"aiRequirementNamingEnabled\": true"))
+        assertTrue(Files.readString(paths.config.resolve("integrations.json")).contains("\"aiRequirementNamingModel\": \"gpt-5.6-sol\""))
     }
 
     @Test

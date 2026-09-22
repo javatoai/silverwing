@@ -233,6 +233,9 @@ class ConfigStore(
             if (current.aiRequirementNamingEnabled != imported.aiRequirementNamingEnabled) {
                 add("AI 需求命名：${if (current.aiRequirementNamingEnabled) "开启" else "关闭"} → ${if (imported.aiRequirementNamingEnabled) "开启" else "关闭"}")
             }
+            if (current.aiRequirementNamingModel != imported.aiRequirementNamingModel) {
+                add("AI 命名模型：${current.aiRequirementNamingModel} → ${imported.aiRequirementNamingModel}")
+            }
             if (current.tagEnabled != imported.tagEnabled) {
                 add("全局测试Tag：${if (current.tagEnabled) "开启" else "关闭"} → ${if (imported.tagEnabled) "开启" else "关闭"}")
             }
@@ -345,6 +348,7 @@ class ConfigStore(
             codexPluginMarketplaceSources = integrations.codexPluginMarketplaceSources,
             skillSources = integrations.skillSources,
             aiRequirementNamingEnabled = integrations.aiRequirementNamingEnabled,
+            aiRequirementNamingModel = integrations.aiRequirementNamingModel,
         )
         return DecodedConfig(
             config = config,
@@ -391,6 +395,7 @@ class ConfigStore(
                 codexPluginMarketplaceSources = config.codexPluginMarketplaceSources,
                 skillSources = config.skillSources,
                 aiRequirementNamingEnabled = config.aiRequirementNamingEnabled,
+                aiRequirementNamingModel = config.aiRequirementNamingModel,
             ),
             appearance = AppearanceShard(
                 theme = config.theme,
@@ -656,6 +661,8 @@ private data class IntegrationsShard(
     val schema: Int = CONFIG_SHARD_SCHEMA,
     /** Schema 2 requires an explicit value; schema 1 configurations are rejected before decode. */
     val aiRequirementNamingEnabled: Boolean,
+    /** Added after schema 2 shipped; missing values use the current safe default. */
+    val aiRequirementNamingModel: String = RequirementAiNamingModel.DEFAULT,
     val meegleProjects: List<MeegleProjectConfig> = emptyList(),
     val meegleExecutablePath: String? = null,
     val genbuExecutablePath: String? = null,

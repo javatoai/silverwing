@@ -105,9 +105,11 @@ import com.snowball.silverwing.core.CommandVersionStatus
 import com.snowball.silverwing.core.MeegleCliStatus
 import com.snowball.silverwing.core.MeegleProjectConfig
 import com.snowball.silverwing.core.LarkCliStatus
+import com.snowball.silverwing.core.LarkAuthenticationState
 import com.snowball.silverwing.core.LarkCommandSource
 import com.snowball.silverwing.core.LARK_BUSINESS_DOMAINS
 import com.snowball.silverwing.core.ThemePreference
+import com.snowball.silverwing.core.RequirementAiNamingModel
 import com.snowball.silverwing.core.TaskRootMigrationMode
 import com.snowball.silverwing.core.TaskRootMigrationPhase
 import com.snowball.silverwing.core.TaskRootMigrationProgress
@@ -134,6 +136,9 @@ internal fun SettingsScreen(controller: DesktopApplication) {
     }
     var tagHistoryMaxGroupsInput by remember(controller.config.tagHistoryMaxGroups) {
         mutableStateOf(controller.config.tagHistoryMaxGroups.toString())
+    }
+    var aiRequirementNamingModel by remember(controller.config.aiRequirementNamingModel) {
+        mutableStateOf(controller.config.aiRequirementNamingModel)
     }
     var showTaskDetailGitActionGroup by remember(controller.config.showTaskDetailGitActionGroup) {
         mutableStateOf(controller.config.showTaskDetailGitActionGroup)
@@ -227,6 +232,13 @@ internal fun SettingsScreen(controller: DesktopApplication) {
         }
         controller.updateTagHistoryMaxGroups(value) {
             tagHistoryMaxGroupsInput = controller.config.tagHistoryMaxGroups.toString()
+        }
+    }
+    fun saveAiRequirementNamingModel() {
+        val normalized = aiRequirementNamingModel.trim()
+        aiRequirementNamingModel = normalized
+        controller.setAiRequirementNamingModel(normalized) {
+            aiRequirementNamingModel = controller.config.aiRequirementNamingModel
         }
     }
     fun currentToolConfigs(): List<DevelopmentToolConfig> = DevelopmentToolType.entries.mapNotNull { type ->
@@ -497,6 +509,15 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     onTerminalChange = { terminal = it },
                     saving = saving("tools"),
                     onSaveDevelopmentTools = ::saveDevelopmentTools,
+                )
+            }
+            if (selectedSection == "task-creation") item {
+                SettingsTaskCreationSection(
+                    controller = controller,
+                    aiRequirementNamingModel = aiRequirementNamingModel,
+                    onAiRequirementNamingModelChange = { aiRequirementNamingModel = it },
+                    onSaveAiRequirementNamingModel = ::saveAiRequirementNamingModel,
+                    saving = saving("task-creation"),
                 )
             }
             if (selectedSection == "task-area") item {
@@ -1007,6 +1028,7 @@ internal fun larkCliDetectionPhase(state: LarkCliState): CliDetectionPhase = whe
     is LarkCliState.Loading -> CliDetectionPhase.LOADING
     is LarkCliState.Ready -> when {
         !state.status.installed -> CliDetectionPhase.FAILED
+        state.status.authenticationState == LarkAuthenticationState.CHECK_FAILED -> CliDetectionPhase.FAILED
         !state.status.authenticated -> CliDetectionPhase.AUTH_REQUIRED
         else -> CliDetectionPhase.READY
     }
@@ -1014,10 +1036,17 @@ internal fun larkCliDetectionPhase(state: LarkCliState): CliDetectionPhase = whe
 }
 
 internal fun larkLoginActionVisible(status: LarkCliStatus?): Boolean =
-    status?.installed == true && !status.authenticated
+    status?.installed == true && status.authenticationState == LarkAuthenticationState.LOGIN_REQUIRED
 
 internal fun larkLogoutActionVisible(status: LarkCliStatus?): Boolean =
-    status?.installed == true && status.authenticated
+    status?.installed == true && status.authenticationState == LarkAuthenticationState.AUTHENTICATED
+
+internal fun larkTokenStatusLabel(tokenStatus: String): String = when (tokenStatus.lowercase()) {
+    "valid" -> "有效"
+    "needs_refresh" -> "等待自动刷新"
+    "expired" -> "已过期"
+    else -> "状态未知"
+}
 
 internal fun larkLoginActionEnabled(
     status: LarkCliStatus?,
@@ -1324,7 +1353,9 @@ private fun LarkCliStatusPanel(
         is LarkCliState.Failed -> cliState.message
         is LarkCliState.Ready -> when {
             !cliState.status.installed -> "未安装或无法启动 Lark CLI"
-            !cliState.status.authenticated -> cliState.status.authenticationError?.let { "登录状态检查失败：$it" } ?: "未登录"
+            cliState.status.authenticationState == LarkAuthenticationState.CHECK_FAILED ->
+                "登录状态检查失败：${cliState.status.authenticationError ?: "Lark CLI 返回了无法识别的登录状态"}"
+            !cliState.status.authenticated -> "未登录"
             else -> null
         }
         else -> null
@@ -1341,7 +1372,11 @@ private fun LarkCliStatusPanel(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 current.tokenStatus?.let {
-                    Text("凭据状态：$it", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        "凭据状态：${larkTokenStatusLabel(it)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }
@@ -1866,35 +1901,8 @@ private fun SettingsGroupsSection(
     onRenameGroup: (GroupConfig) -> Unit,
     onDeleteGroup: (GroupConfig) -> Unit,
 ) {
-    val saving = controller.settingsSaveState("groups") == SettingsSaveState.SAVING
     SettingsCard("项目组", "按项目组维护仓库和服务；只能删除没有服务和任务引用的空组。") {
         AutoSaveStatus(controller, "groups")
-        Surface(
-            Modifier.fillMaxWidth(),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-            shape = RoundedCornerShape(10.dp),
-        ) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("开启 AI 生成分支名和文件夹名", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        "选中需求后，仅将标题和正文发送给本机 Codex CLI，自动补全未手动修改的文件夹名和分支名。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Spacer(Modifier.width(12.dp))
-                Switch(
-                    checked = controller.config.aiRequirementNamingEnabled,
-                    onCheckedChange = { controller.setAiRequirementNamingEnabled(it) },
-                    enabled = !controller.busy && !saving,
-                )
-            }
-        }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         controller.config.groups.forEachIndexed { index, group ->
             GroupSettingsRow(
                 controller = controller,
@@ -2224,6 +2232,75 @@ private fun SettingsToolsSection(
 }
 
 @Composable
+private fun SettingsTaskCreationSection(
+    controller: DesktopApplication,
+    aiRequirementNamingModel: String,
+    onAiRequirementNamingModelChange: (String) -> Unit,
+    onSaveAiRequirementNamingModel: () -> Unit,
+    saving: Boolean,
+) {
+    val normalizedModel = aiRequirementNamingModel.trim()
+    val modelInputError = when {
+        normalizedModel.isEmpty() -> "AI 命名模型不能为空。"
+        normalizedModel.any(Char::isWhitespace) -> "AI 命名模型不能包含空白字符。"
+        else -> null
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        AutoSaveStatus(controller, "task-creation")
+        SettingsCard(
+            "AI 分支名和文件夹名",
+            "为创建任务时的需求命名设置本机 Codex CLI 行为。",
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("开启 AI 生成分支名和文件夹名", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "选中需求后，仅将标题和正文发送给本机 Codex CLI，自动补全尚未手动修改的文件夹名和分支名。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Switch(
+                    checked = controller.config.aiRequirementNamingEnabled,
+                    onCheckedChange = { controller.setAiRequirementNamingEnabled(it) },
+                    enabled = !controller.busy && !saving,
+                )
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            OutlinedTextField(
+                value = aiRequirementNamingModel,
+                onValueChange = onAiRequirementNamingModelChange,
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("AI 命名模型") },
+                placeholder = { Text(RequirementAiNamingModel.DEFAULT) },
+                supportingText = {
+                    Text(
+                        modelInputError
+                            ?: "用于生成任务文件夹名和分支名；默认 ${RequirementAiNamingModel.DEFAULT}。",
+                    )
+                },
+                isError = modelInputError != null,
+                singleLine = true,
+                enabled = !controller.busy && !saving,
+            )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Button(
+                    onClick = onSaveAiRequirementNamingModel,
+                    enabled = !controller.busy && !saving && modelInputError == null &&
+                        aiRequirementNamingModel != controller.config.aiRequirementNamingModel,
+                ) {
+                    Text("保存模型")
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun SettingsTaskAreaSection(
     controller: DesktopApplication,
     showTaskDetailGitActionGroup: Boolean,
@@ -2244,7 +2321,7 @@ private fun SettingsTaskAreaSection(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         AutoSaveStatus(controller, "task-area")
-        SettingsCard("任务工具栏", "控制任务详情顶部的可选操作入口。") {
+        SettingsCard("任务详情工具栏", "控制任务详情顶部的可选操作入口。") {
             TaskAreaToolGroupSwitchRow(
                 title = "Git 工具组",
                 description = "显示提交、提交并推送和推送操作。",
@@ -3165,7 +3242,7 @@ private fun settingsCardIcon(title: String): ImageVector {
         "全局与组说明" -> Icons.AutoMirrored.Outlined.Article
         "任务说明模板" -> Icons.Outlined.Edit
         "开发工具" -> Icons.Outlined.Build
-        "任务工具栏", "工作区卡片工具栏" -> Icons.Outlined.AccountTree
+        "任务详情工具栏", "工作区卡片工具栏", "AI 分支名和文件夹名" -> Icons.Outlined.AccountTree
         "silverwing CLI", "silverwing Skill" -> Icons.Outlined.Terminal
         "Codex 插件", "Skills" -> Icons.Outlined.Extension
         "分支" -> Icons.Outlined.AccountTree

@@ -1,6 +1,7 @@
 package com.snowball.silverwing.desktop
 
 import com.snowball.silverwing.core.LarkCliStatus
+import com.snowball.silverwing.core.LarkAuthenticationState
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -9,7 +10,7 @@ import kotlin.test.assertTrue
 class LarkSettingsPresentationTest {
     @Test
     fun `installed unauthenticated status exposes login and domain selection keeps the page idle`() {
-        val status = LarkCliStatus(installed = true, brand = "feishu", authenticationError = "not logged in")
+        val status = LarkCliStatus(installed = true, brand = "feishu")
         val state = LarkCliState.Ready(status)
 
         assertEquals(CliDetectionPhase.AUTH_REQUIRED, larkCliDetectionPhase(state))
@@ -39,5 +40,25 @@ class LarkSettingsPresentationTest {
         assertEquals(CliDetectionPhase.FAILED, larkCliDetectionPhase(LarkCliState.Ready(missing)))
         assertFalse(larkLoginActionVisible(missing))
         assertEquals(CliDetectionPhase.FAILED, larkCliDetectionPhase(LarkCliState.Failed("parse failed")))
+    }
+
+    @Test
+    fun `status check failures are distinct from a user that needs to log in`() {
+        val failed = LarkCliStatus(
+            installed = true,
+            authenticationState = LarkAuthenticationState.CHECK_FAILED,
+            authenticationError = "返回格式无法识别",
+        )
+
+        assertEquals(CliDetectionPhase.FAILED, larkCliDetectionPhase(LarkCliState.Ready(failed)))
+        assertFalse(larkLoginActionVisible(failed))
+        assertFalse(larkLogoutActionVisible(failed))
+    }
+
+    @Test
+    fun `credential states use user facing labels`() {
+        assertEquals("有效", larkTokenStatusLabel("valid"))
+        assertEquals("等待自动刷新", larkTokenStatusLabel("needs_refresh"))
+        assertEquals("状态未知", larkTokenStatusLabel("future-state"))
     }
 }

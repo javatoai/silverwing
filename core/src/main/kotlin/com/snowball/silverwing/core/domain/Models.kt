@@ -387,8 +387,11 @@ data class AppConfig(
     val skillSources: List<SkillSource> = emptyList(),
     /** Sends only a selected requirement title and body to the local Codex CLI to suggest names. */
     val aiRequirementNamingEnabled: Boolean = false,
+    /** Codex model used only when AI requirement naming is explicitly enabled. */
+    val aiRequirementNamingModel: String = RequirementAiNamingModel.DEFAULT,
 ) {
     init {
+        RequirementAiNamingModel.requireValid(aiRequirementNamingModel)
         requirementMaterialsSubdirectory?.let(::validateRequirementMaterialsSubdirectory)
         require(groups.isNotEmpty()) { "至少需要一个组" }
         require(groups.map { it.id }.distinct().size == groups.size) { "组 ID 不能重复" }

@@ -296,7 +296,7 @@ class DesktopApplication(
     private val requirementMetadataProvider: RequirementMetadataProvider = MeegleRequirementMetadataProvider(meegleExecutable = meegleExecutable),
     private val requirementAiContextProvider: RequirementAiContextProvider =
         MeegleRequirementAiContextProvider(meegleExecutable = meegleExecutable),
-    private val requirementAiNamingService: RequirementAiNamingService = CodexRequirementAiNamingService(paths),
+    requirementAiNamingService: RequirementAiNamingService? = null,
     private val requirementAiBranchValidator: BranchReferenceValidator = GitBranchReferenceValidator(gitExecutable = gitExecutable),
     private val requirementLinkSource: MeegleRequirementLinkSource = MeegleRequirementLinkSource(metadata = requirementMetadataProvider, meegleExecutable = meegleExecutable),
     private val requirementLinkFailures: RequirementLinkFailureLog = RequirementLinkFailureLog(paths),
@@ -365,6 +365,11 @@ class DesktopApplication(
     var taskManifestIssues by mutableStateOf(initialTasks.manifestIssues)
         private set
     val sessionStore = AppSessionStore(initialConfig, initialTasks.manifests)
+    private val configuredRequirementAiNamingService: RequirementAiNamingService =
+        requirementAiNamingService ?: CodexRequirementAiNamingService(
+            paths = paths,
+            modelProvider = { sessionStore.config.aiRequirementNamingModel },
+        )
     val operationCoordinator = OperationCoordinator(
         initialError = initial.exceptionOrNull()?.let { "配置读取失败：${it.message}" } ?: taskScanWarning,
         onError = ::recordError,
@@ -406,7 +411,7 @@ class DesktopApplication(
         scope = scope,
         coordinator = requirementMetadataCoordinator,
         aiContextProvider = requirementAiContextProvider,
-        aiNamingService = requirementAiNamingService,
+        aiNamingService = configuredRequirementAiNamingService,
         branchValidator = requirementAiBranchValidator,
         linkSource = requirementLinkSource,
         failureLog = requirementLinkFailures,
@@ -869,6 +874,8 @@ class DesktopApplication(
         if (!enabled) requirementController.cancelDraftAiNaming()
         return settingsController.setAiRequirementNamingEnabled(enabled, onFailure)
     }
+    fun setAiRequirementNamingModel(model: String, onFailure: (Throwable) -> Unit = {}): Boolean =
+        settingsController.setAiRequirementNamingModel(model, onFailure)
     fun chooseDirectory(initialPath: String? = null, onSelected: (String) -> Unit) = settingsController.chooseDirectory(initialPath, onSelected)
     fun chooseFile(initialPath: String? = null, onSelected: (String) -> Unit) = settingsController.chooseFile(initialPath, onSelected)
     fun chooseApplication(initialPath: String? = null, onSelected: (String) -> Unit) =
@@ -1418,7 +1425,8 @@ class DesktopApplication(
         val requirementConfigurationChanged = config.meegleProjects != updated.meegleProjects ||
             config.requirementMaterialsRoot != updated.requirementMaterialsRoot ||
             config.requirementMaterialsSubdirectory != updated.requirementMaterialsSubdirectory
-        val aiNamingConfigurationChanged = config.aiRequirementNamingEnabled != updated.aiRequirementNamingEnabled
+        val aiNamingConfigurationChanged = config.aiRequirementNamingEnabled != updated.aiRequirementNamingEnabled ||
+            config.aiRequirementNamingModel != updated.aiRequirementNamingModel
         val tagConfigurationChanged = config.tagEnabled != updated.tagEnabled ||
             config.tagHistoryMaxGroups != updated.tagHistoryMaxGroups
         config = updated

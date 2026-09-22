@@ -2,6 +2,14 @@ package com.snowball.silverwing.core
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.time.Duration
 import java.util.Locale
 
@@ -35,10 +43,17 @@ val LARK_BUSINESS_DOMAINS: List<String> = listOf(
     "wiki",
 )
 
+enum class LarkAuthenticationState { AUTHENTICATED, LOGIN_REQUIRED, CHECK_FAILED }
+
 data class LarkCliStatus(
     val installed: Boolean,
     val version: String? = null,
     val authenticated: Boolean = false,
+    val authenticationState: LarkAuthenticationState = if (authenticated) {
+        LarkAuthenticationState.AUTHENTICATED
+    } else {
+        LarkAuthenticationState.LOGIN_REQUIRED
+    },
     val brand: String? = null,
     val tokenStatus: String? = null,
     val expiresAt: String? = null,
@@ -73,7 +88,6 @@ class LarkDeviceCodeChallenge(
         "login",
         "--device-code",
         deviceCode,
-        "--json",
     )
 
     fun redactSecrets(message: String): String = message
@@ -97,8 +111,8 @@ class ProcessLarkCliService(
         }
         val version = normalizeVersion(versionResult.stdout.trim().ifBlank { versionResult.stderr.trim() }.ifBlank { "未知" })
         val authResult = runCatching {
-            runner.run(
-                listOf(command, "auth", "status", "--json"),
+            runJsonCommandWithLegacyFallback(
+                listOf(command, "auth", "status"),
                 timeout = Duration.ofSeconds(15),
                 environment = environment,
             )
@@ -106,6 +120,7 @@ class ProcessLarkCliService(
             return LarkCliStatus(
                 installed = true,
                 version = version,
+                authenticationState = LarkAuthenticationState.CHECK_FAILED,
                 authenticationError = safeError(error.message.orEmpty()),
             )
         }
@@ -113,37 +128,43 @@ class ProcessLarkCliService(
             return LarkCliStatus(
                 installed = true,
                 version = version,
+                authenticationState = LarkAuthenticationState.CHECK_FAILED,
                 authenticationError = safeError(commandError(authResult)),
             )
         }
-        val auth = runCatching { json.decodeFromString<AuthStatusResponse>(authResult.stdout) }
+        val auth = runCatching { parseAuthStatus(authResult.stdout) }
             .getOrElse { error ->
                 return LarkCliStatus(
                     installed = true,
                     version = version,
-                    authenticationError = safeError("Lark 登录状态 JSON 解析失败：${error.message}"),
+                    authenticationState = LarkAuthenticationState.CHECK_FAILED,
+                    authenticationError = safeError(error.message.orEmpty()).ifBlank {
+                        "Lark 登录状态返回格式无法识别"
+                    },
                 )
             }
-        val user = auth.identities?.user
-        val authenticated = user?.available == true &&
-            user.status.equals("ready", ignoreCase = true) &&
-            user.tokenStatus.equals("valid", ignoreCase = true)
+        val user = auth.response.userIdentity(auth.declaredIdentity)
+        val authenticated = user?.available == true
         return LarkCliStatus(
             installed = true,
             version = version,
             authenticated = authenticated,
-            brand = auth.brand,
+            authenticationState = if (authenticated) {
+                LarkAuthenticationState.AUTHENTICATED
+            } else {
+                LarkAuthenticationState.LOGIN_REQUIRED
+            },
+            brand = auth.response.brand,
             tokenStatus = user?.tokenStatus,
             expiresAt = user?.expiresAt,
-            authenticationError = user?.message?.let(::safeError),
         )
     }
 
     override fun logout() {
         val command = executable()
         val result = runCatching {
-            runner.run(
-                listOf(command, "auth", "logout", "--json"),
+            runJsonCommandWithLegacyFallback(
+                listOf(command, "auth", "logout"),
                 timeout = Duration.ofSeconds(15),
                 environment = larkExecutable.environment(),
             )
@@ -151,6 +172,7 @@ class ProcessLarkCliService(
             throw IllegalStateException("退出 Lark 登录失败：${safeError(error.message.orEmpty())}", error)
         }
         check(result.succeeded) { "退出 Lark 登录失败：${safeError(commandError(result))}" }
+        ensureNoCliErrorEnvelope(result.stdout, "退出 Lark 登录")
     }
 
     override fun beginDeviceCodeLogin(domains: List<String>): LarkDeviceCodeChallenge {
@@ -167,16 +189,15 @@ class ProcessLarkCliService(
                 add(it)
             }
             add("--no-wait")
-            add("--json")
         }
         val result = runCatching {
-            runner.run(args, timeout = Duration.ofSeconds(30), environment = larkExecutable.environment())
+            runJsonCommandWithLegacyFallback(args, timeout = Duration.ofSeconds(30), environment = larkExecutable.environment())
         }.getOrElse { error ->
             throw IllegalStateException("生成 Lark 登录授权链接失败：${safeError(error.message.orEmpty())}", error)
         }
         check(result.succeeded) { "生成 Lark 登录授权链接失败：${safeError(commandError(result))}" }
-        val response = runCatching { json.decodeFromString<DeviceCodeInitResponse>(result.stdout) }
-            .getOrElse { error -> throw IllegalStateException("Lark 登录授权 JSON 解析失败：${error.message}", error) }
+        val response = runCatching { parseDeviceCodeInitResponse(result.stdout) }
+            .getOrElse { error -> throw IllegalStateException("Lark 登录授权返回格式无法识别", error) }
         return LarkDeviceCodeChallenge(
             verificationUrl = response.verificationUrl,
             expiresInSeconds = response.expiresInSeconds,
@@ -187,7 +208,7 @@ class ProcessLarkCliService(
     override fun completeDeviceCodeLogin(challenge: LarkDeviceCodeChallenge) {
         val timeoutSeconds = challenge.expiresInSeconds.coerceIn(1L, MAX_LOGIN_WAIT_SECONDS)
         val result = runCatching {
-            runner.run(
+            runJsonCommandWithLegacyFallback(
                 challenge.pollingCommand(executable()),
                 timeout = Duration.ofSeconds(timeoutSeconds),
                 environment = larkExecutable.environment(),
@@ -199,6 +220,13 @@ class ProcessLarkCliService(
             )
         }
         check(result.succeeded) { "确认 Lark 登录授权失败：${challenge.redactSecrets(safeError(commandError(result)))}" }
+        runCatching { ensureNoCliErrorEnvelope(result.stdout, "确认 Lark 登录授权") }
+            .getOrElse { error ->
+                throw IllegalStateException(
+                    "确认 Lark 登录授权失败：${challenge.redactSecrets(safeError(error.message.orEmpty()))}",
+                    error,
+                )
+            }
     }
 
     private fun executable(): String = larkExecutable.resolve()
@@ -207,6 +235,13 @@ class ProcessLarkCliService(
     private data class AuthStatusResponse(
         val brand: String? = null,
         val identities: IdentitySet? = null,
+        val identity: String? = null,
+        val user: UserIdentity? = null,
+        val status: String? = null,
+        val available: Boolean? = null,
+        val message: String? = null,
+        val tokenStatus: String? = null,
+        val expiresAt: String? = null,
     )
 
     @Serializable
@@ -215,7 +250,7 @@ class ProcessLarkCliService(
     @Serializable
     private data class UserIdentity(
         val status: String? = null,
-        val available: Boolean = false,
+        val available: Boolean? = null,
         val message: String? = null,
         val tokenStatus: String? = null,
         val expiresAt: String? = null,
@@ -228,6 +263,91 @@ class ProcessLarkCliService(
         @kotlinx.serialization.SerialName("expires_in") val expiresInSeconds: Long = 0,
         val hint: String? = null,
     )
+
+    private data class ParsedAuthStatus(
+        val response: AuthStatusResponse,
+        val declaredIdentity: String?,
+    )
+
+    private data class CliPayload(
+        val data: JsonElement? = null,
+        val declaredIdentity: String? = null,
+    )
+
+    private fun parseAuthStatus(output: String): ParsedAuthStatus {
+        val payload = parseSuccessfulCliPayload(output, "Lark 登录状态")
+        return ParsedAuthStatus(
+            response = json.decodeFromJsonElement<AuthStatusResponse>(
+                payload.data?.jsonObject ?: throw IllegalStateException("Lark 登录状态成功响应缺少 data 对象"),
+            ),
+            declaredIdentity = payload.declaredIdentity,
+        )
+    }
+
+    private fun parseDeviceCodeInitResponse(output: String): DeviceCodeInitResponse =
+        json.decodeFromJsonElement(
+            parseSuccessfulCliPayload(output, "Lark 登录授权").data?.jsonObject
+                ?: throw IllegalStateException("Lark 登录授权成功响应缺少 data 对象"),
+        )
+
+    private fun AuthStatusResponse.userIdentity(declaredIdentity: String?): UserIdentity? =
+        identities?.user ?: user ?: run {
+            val isUser = identity.equals("user", ignoreCase = true) ||
+                declaredIdentity.equals("user", ignoreCase = true)
+            if (!isUser && available == null) return@run null
+            UserIdentity(
+                status = status,
+                available = available,
+                message = message,
+                tokenStatus = tokenStatus,
+                expiresAt = expiresAt,
+            )
+        }
+
+    private fun runJsonCommandWithLegacyFallback(
+        command: List<String>,
+        timeout: Duration,
+        environment: Map<String, String>,
+    ): CommandResult {
+        val jsonResult = runner.run(command + "--json", timeout = timeout, environment = environment)
+        if (jsonResult.succeeded || !jsonFlagUnsupported(jsonResult)) return jsonResult
+        return runner.run(command, timeout = timeout, environment = environment)
+    }
+
+    private fun jsonFlagUnsupported(result: CommandResult): Boolean {
+        val output = commandError(result)
+        return output.contains("--json", ignoreCase = true) &&
+            (output.contains("unknown flag", ignoreCase = true) || output.contains("unknown option", ignoreCase = true))
+    }
+
+    private fun ensureNoCliErrorEnvelope(output: String, operation: String) {
+        if (!output.trimStart().startsWith("{")) return
+        parseSuccessfulCliPayload(output, operation)
+    }
+
+    private fun parseSuccessfulCliPayload(output: String, operation: String): CliPayload {
+        val root = json.parseToJsonElement(output.trim()).jsonObject
+        return when (root["ok"]?.jsonPrimitive?.booleanOrNull) {
+            false -> throw IllegalStateException("$operation 失败：${cliEnvelopeError(root)}")
+            true -> CliPayload(
+                data = root["data"],
+                declaredIdentity = root["identity"]?.jsonPrimitive?.contentOrNull,
+            )
+            null -> CliPayload(data = root, declaredIdentity = root["identity"]?.jsonPrimitive?.contentOrNull)
+        }
+    }
+
+    private fun cliEnvelopeError(root: JsonObject): String {
+        val error = root["error"]
+        val detail = when (error) {
+            is JsonObject -> listOf("message", "hint", "type")
+                .mapNotNull { key -> error[key]?.jsonPrimitive?.contentOrNull }
+                .joinToString("：")
+            is JsonPrimitive -> error.contentOrNull
+            else -> null
+        }
+        return detail ?: root["message"]?.jsonPrimitive?.contentOrNull ?: "未知错误"
+    }
 
     private fun commandError(result: CommandResult): String =
         result.stderr.ifBlank { result.stdout }.trim().ifBlank { "退出码 ${result.exitCode}" }

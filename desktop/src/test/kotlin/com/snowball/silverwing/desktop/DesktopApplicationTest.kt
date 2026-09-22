@@ -753,6 +753,30 @@ class DesktopApplicationTest {
 
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
+    fun `AI naming model saves independently in task creation settings`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val root = Files.createTempDirectory("SILVERWING-ai-naming-model")
+        val paths = ApplicationPaths(root.resolve("home"))
+        val store = ConfigStore(paths)
+        val controller = DesktopApplication(paths = paths, configStore = store, ioDispatcher = dispatcher)
+        try {
+            controller.setAiRequirementNamingModel("gpt-5.6-sol")
+            assertEquals(SettingsSaveState.SAVING, controller.settingsSaveState("task-creation"))
+
+            advanceUntilIdle()
+
+            assertEquals("gpt-5.6-sol", controller.config.aiRequirementNamingModel)
+            assertEquals("gpt-5.6-sol", store.load().aiRequirementNamingModel)
+            assertEquals(SettingsSaveState.SAVED, controller.settingsSaveState("task-creation"))
+        } finally {
+            controller.close()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
     fun `requirement materials settings save independently and normalize values`() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         Dispatchers.setMain(dispatcher)

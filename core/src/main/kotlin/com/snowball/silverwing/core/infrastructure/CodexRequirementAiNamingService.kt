@@ -18,6 +18,7 @@ class CodexRequirementAiNamingService(
     private val paths: ApplicationPaths,
     private val runner: CommandRunner = ProcessCommandRunner(),
     private val codexExecutable: () -> String = { "codex" },
+    private val modelProvider: () -> String = { RequirementAiNamingModel.DEFAULT },
 ) : RequirementAiNamingService {
     override fun suggest(
         context: RequirementAiContext,
@@ -29,8 +30,11 @@ class CodexRequirementAiNamingService(
             val schemaFile = temporaryDirectory.resolve("output-schema.json")
             val outputFile = temporaryDirectory.resolve("result.json")
             Files.writeString(schemaFile, OUTPUT_SCHEMA, StandardCharsets.UTF_8)
+            val model = RequirementAiNamingModel.requireValid(modelProvider())
             val command = listOf(
                 codexExecutable(),
+                "--model",
+                model,
                 // 当前 Codex CLI 把审批策略定义为顶层参数而非 exec 子命令参数；放在 exec 前
                 // 才不会被本机 CLI 拒绝。
                 "--ask-for-approval",

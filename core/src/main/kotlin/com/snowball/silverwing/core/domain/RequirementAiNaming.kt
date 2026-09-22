@@ -1,6 +1,24 @@
 package com.snowball.silverwing.core
 
 /**
+ * The model identifier passed to the local Codex CLI for requirement naming.
+ *
+ * It intentionally stays a small, user-configurable CLI token instead of a
+ * product-specific model enum: Codex can add models without requiring a
+ * SilverWing release.
+ */
+object RequirementAiNamingModel {
+    const val DEFAULT = "gpt-5.6-luna"
+
+    fun requireValid(value: String): String {
+        require(value.isNotBlank()) { "AI 命名模型不能为空" }
+        require(value == value.trim()) { "AI 命名模型不能包含首尾空白" }
+        require(value.none(Char::isWhitespace)) { "AI 命名模型不能包含空白字符" }
+        return value
+    }
+}
+
+/**
  * A deliberately small result returned by the local Codex CLI for one requirement.
  *
  * The folder name is shown in the creation form only; it is not persisted as a separate

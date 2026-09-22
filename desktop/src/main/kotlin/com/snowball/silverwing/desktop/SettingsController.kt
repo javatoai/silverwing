@@ -21,6 +21,9 @@ import com.snowball.silverwing.core.MeegleDeviceCodeLoginResult
 import com.snowball.silverwing.core.MeegleCommandSource
 import com.snowball.silverwing.core.MeegleExecutable
 import com.snowball.silverwing.core.normalizeMeegleExecutablePath
+import com.snowball.silverwing.core.CodexCommandSource
+import com.snowball.silverwing.core.CodexExecutable
+import com.snowball.silverwing.core.normalizeCodexExecutablePath
 import com.snowball.silverwing.core.LarkCliService
 import com.snowball.silverwing.core.LarkCliStatus
 import com.snowball.silverwing.core.LarkAuthenticationState
@@ -202,6 +205,7 @@ class SettingsController internal constructor(
     private val meegleProjectCatalog: MeegleProjectCatalog,
     private val meegleCliService: MeegleCliService,
     private val meegleExecutable: MeegleExecutable = MeegleExecutable.pathFallback(),
+    private val codexExecutable: CodexExecutable = CodexExecutable.pathFallback(),
     private val larkExecutable: LarkExecutable = LarkExecutable.pathFallback(),
     private val larkCliService: LarkCliService = com.snowball.silverwing.core.ProcessLarkCliService(larkExecutable = larkExecutable),
     private val gitExecutable: GitExecutable = GitExecutable.pathFallback(),
@@ -299,6 +303,20 @@ class SettingsController internal constructor(
     /** The currently effective Meegle command and where it came from; safe on the UI thread. */
     fun meegleCommandResolution(): Pair<String, MeegleCommandSource> =
         meegleExecutable.current() to meegleExecutable.source()
+
+    fun updateCodexExecutablePath(raw: String, onFailure: (Throwable) -> Unit = {}): Boolean = mutate(
+        "正在保存 Codex CLI 命令路径…",
+        "Codex CLI 命令路径已保存",
+        onFailure,
+        "task-creation",
+        settingsOperations,
+    ) { config ->
+        config.copy(codexExecutablePath = normalizeCodexExecutablePath(raw))
+    }
+
+    /** The currently effective Codex command and where it came from; safe on the UI thread. */
+    fun codexCommandResolution(): Pair<String, CodexCommandSource> =
+        codexExecutable.current() to codexExecutable.source()
 
     fun updateLarkExecutablePath(raw: String, onFailure: (Throwable) -> Unit = {}): Boolean = mutate(
         "正在保存 Lark CLI 命令路径…",

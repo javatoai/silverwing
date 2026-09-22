@@ -339,6 +339,7 @@ class ConfigStore(
             blockedGitWriteBranches = git.blockedGitWriteBranches,
             meegleProjects = integrations.meegleProjects,
             meegleExecutablePath = integrations.meegleExecutablePath,
+            codexExecutablePath = integrations.codexExecutablePath,
             gitExecutablePath = git.gitExecutablePath,
             genbuExecutablePath = integrations.genbuExecutablePath,
             genbuExecutableAutoDetected = integrations.genbuExecutableAutoDetected,
@@ -387,6 +388,7 @@ class ConfigStore(
             integrations = IntegrationsShard(
                 meegleProjects = config.meegleProjects,
                 meegleExecutablePath = config.meegleExecutablePath,
+                codexExecutablePath = config.codexExecutablePath,
                 genbuExecutablePath = config.genbuExecutablePath,
                 genbuExecutableAutoDetected = config.genbuExecutableAutoDetected,
                 larkExecutablePath = config.larkExecutablePath,
@@ -665,6 +667,7 @@ private data class IntegrationsShard(
     val aiRequirementNamingModel: String = RequirementAiNamingModel.DEFAULT,
     val meegleProjects: List<MeegleProjectConfig> = emptyList(),
     val meegleExecutablePath: String? = null,
+    val codexExecutablePath: String? = null,
     val genbuExecutablePath: String? = null,
     val genbuExecutableAutoDetected: Boolean = false,
     val larkExecutablePath: String? = null,

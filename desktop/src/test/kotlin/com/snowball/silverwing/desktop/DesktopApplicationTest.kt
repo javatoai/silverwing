@@ -12,6 +12,7 @@ import com.snowball.silverwing.core.CommandRunner
 import com.snowball.silverwing.core.ConfiguredGitExecutable
 import com.snowball.silverwing.core.ConfiguredGenbuExecutable
 import com.snowball.silverwing.core.ConfiguredMeegleExecutable
+import com.snowball.silverwing.core.CodexCommandSource
 import com.snowball.silverwing.core.GenbuCommandSource
 import com.snowball.silverwing.core.GitCommandSource
 import com.snowball.silverwing.core.LocalGitEnvironmentInspector
@@ -248,6 +249,64 @@ class DesktopApplicationTest {
             assertEquals(MeegleCommandSource.CONFIGURED, resolution.second)
         } finally {
             controller.close()
+        }
+    }
+
+    @Test
+    fun `configured Codex executable is available after application initialization`() {
+        val root = Files.createTempDirectory("SILVERWING-codex-executable")
+        val paths = ApplicationPaths(root.resolve("home"))
+        val executable = Files.createFile(root.resolve("codex.exe")).toAbsolutePath().toString()
+        val store = ConfigStore(paths)
+        store.save(AppConfig(codexExecutablePath = executable))
+
+        val controller = DesktopApplication(paths = paths, configStore = store)
+        try {
+            val resolution = controller.codexCommandResolution()
+            assertEquals(executable, resolution.first)
+            assertEquals(CodexCommandSource.CONFIGURED, resolution.second)
+        } finally {
+            controller.close()
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `Codex detection exposes the resolved command version`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val root = Files.createTempDirectory("SILVERWING-codex-version")
+        val paths = ApplicationPaths(root.resolve("home"))
+        val executable = Files.createFile(root.resolve("codex.exe")).toAbsolutePath().toString()
+        val store = ConfigStore(paths)
+        store.save(AppConfig(codexExecutablePath = executable))
+        val commands = mutableListOf<List<String>>()
+        val runner = object : CommandRunner {
+            override fun run(
+                command: List<String>,
+                workingDirectory: Path?,
+                timeout: Duration,
+                environment: Map<String, String>,
+            ): CommandResult {
+                commands += command
+                return CommandResult(0, "codex-cli 1.2.3\n", "")
+            }
+        }
+        val controller = DesktopApplication(
+            paths = paths,
+            configStore = store,
+            cliVersionRunner = runner,
+            ioDispatcher = dispatcher,
+        )
+        try {
+            controller.detectCodexCliPath()
+            advanceUntilIdle()
+
+            assertEquals("codex-cli 1.2.3", controller.codexCliVersion?.version)
+            assertEquals(listOf(listOf(executable, "--version")), commands)
+        } finally {
+            controller.close()
+            Dispatchers.resetMain()
         }
     }
 

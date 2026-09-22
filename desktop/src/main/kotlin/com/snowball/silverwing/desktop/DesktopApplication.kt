@@ -17,6 +17,9 @@ import com.snowball.silverwing.core.BranchReuseKey
 import com.snowball.silverwing.core.ConfigStore
 import com.snowball.silverwing.core.CodexExtensionsApplicationService
 import com.snowball.silverwing.core.CodexExtensionsService
+import com.snowball.silverwing.core.CodexCommandSource
+import com.snowball.silverwing.core.CodexExecutable
+import com.snowball.silverwing.core.ConfiguredCodexExecutable
 import com.snowball.silverwing.core.CURRENT_PRODUCT_VERSION
 import com.snowball.silverwing.core.DeleteRisk
 import com.snowball.silverwing.core.DesktopIntegration
@@ -32,6 +35,7 @@ import com.snowball.silverwing.core.GitClient
 import com.snowball.silverwing.core.GitCommandSource
 import com.snowball.silverwing.core.GitWorkspaceLifecycle
 import com.snowball.silverwing.core.CommandRunner
+import com.snowball.silverwing.core.CommandVersionStatus
 import com.snowball.silverwing.core.ProcessCommandRunner
 import com.snowball.silverwing.core.MeegleCommandSource
 import com.snowball.silverwing.core.MeegleRequirementAiContextProvider
@@ -220,6 +224,8 @@ class DesktopApplication(
     private val meegleExecutable: ConfiguredMeegleExecutable = ConfiguredMeegleExecutable(meegleExecutablePath::get),
     private val larkExecutablePath: AtomicReference<String?> = AtomicReference(null),
     private val larkExecutable: ConfiguredLarkExecutable = ConfiguredLarkExecutable(larkExecutablePath::get),
+    private val codexExecutablePath: AtomicReference<String?> = AtomicReference(null),
+    private val codexExecutable: CodexExecutable = ConfiguredCodexExecutable(codexExecutablePath::get),
     private val genbuExecutablePath: AtomicReference<String?> = AtomicReference(null),
     private val genbuExecutable: ConfiguredGenbuExecutable = ConfiguredGenbuExecutable(genbuExecutablePath::get),
     private val cliVersionRunner: CommandRunner = ProcessCommandRunner(),
@@ -353,6 +359,7 @@ class DesktopApplication(
     private val initialConfig = initial.getOrDefault(AppConfig()).also {
         meegleExecutablePath.set(it.meegleExecutablePath)
         larkExecutablePath.set(it.larkExecutablePath)
+        codexExecutablePath.set(it.codexExecutablePath)
         gitExecutablePath.set(it.gitExecutablePath)
         genbuExecutablePath.set(it.genbuExecutablePath)
     }
@@ -365,9 +372,16 @@ class DesktopApplication(
     var taskManifestIssues by mutableStateOf(initialTasks.manifestIssues)
         private set
     val sessionStore = AppSessionStore(initialConfig, initialTasks.manifests)
+    var codexCliPathLoading by mutableStateOf(false)
+        private set
+    var codexCliPathError by mutableStateOf<String?>(null)
+        private set
+    var codexCliVersion by mutableStateOf<CommandVersionStatus?>(null)
+        private set
     private val configuredRequirementAiNamingService: RequirementAiNamingService =
         requirementAiNamingService ?: CodexRequirementAiNamingService(
             paths = paths,
+            codexExecutable = codexExecutable,
             modelProvider = { sessionStore.config.aiRequirementNamingModel },
         )
     val operationCoordinator = OperationCoordinator(
@@ -384,7 +398,11 @@ class DesktopApplication(
         private set
     private val codexExtensions: CodexExtensionsApplicationService = CodexExtensionsApplicationService(
         configurations = configStore,
-        extensions = CodexExtensionsService(paths = paths, gitExecutable = gitExecutable::resolve),
+        extensions = CodexExtensionsService(
+            paths = paths,
+            gitExecutable = gitExecutable::resolve,
+            codexExecutable = codexExecutable,
+        ),
         branchCatalog = RemoteGitBranchCatalog(gitExecutable = gitExecutable::resolve),
     )
     private val operationRunner = OperationRunner(operationCoordinator, scope, ioDispatcher)
@@ -467,6 +485,7 @@ class DesktopApplication(
             meegleProjectCatalog = meegleProjectCatalog,
             meegleCliService = meegleCliService,
             meegleExecutable = meegleExecutable,
+            codexExecutable = codexExecutable,
             larkCliService = larkCliService,
             larkExecutable = larkExecutable,
             gitExecutable = gitExecutable,
@@ -529,6 +548,7 @@ class DesktopApplication(
         private set(value) {
             meegleExecutablePath.set(value.meegleExecutablePath)
             larkExecutablePath.set(value.larkExecutablePath)
+            codexExecutablePath.set(value.codexExecutablePath)
             gitExecutablePath.set(value.gitExecutablePath)
             genbuExecutablePath.set(value.genbuExecutablePath)
             sessionStore.config = value
@@ -568,6 +588,29 @@ class DesktopApplication(
     fun refreshCliInstallationStatus() {
         cliInstallationStatus = cliInstallationService.inspect()
         tagSkillInstallationStatus = tagSkillInstallationService.inspect()
+    }
+
+    /** Resolves the command off the UI thread so task-creation settings can show the actual CLI path. */
+    fun detectCodexCliPath() {
+        if (codexCliPathLoading) return
+        codexCliPathLoading = true
+        codexCliPathError = null
+        codexCliVersion = null
+        scope.launch {
+            try {
+                val version = withContext(ioDispatcher) {
+                    codexExecutable.probe()
+                    codexExecutable.version(runner = cliVersionRunner)
+                }
+                codexCliVersion = version
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                codexCliPathError = error.message ?: "无法检测本机 Codex CLI"
+            } finally {
+                codexCliPathLoading = false
+            }
+        }
     }
 
     fun refreshTagSkillInstallationStatus() {
@@ -719,6 +762,11 @@ class DesktopApplication(
 
     fun updateMeegleExecutablePath(raw: String, onFailure: (Throwable) -> Unit = {}): Boolean =
         settingsController.updateMeegleExecutablePath(raw, onFailure)
+
+    fun updateCodexExecutablePath(raw: String, onFailure: (Throwable) -> Unit = {}): Boolean =
+        settingsController.updateCodexExecutablePath(raw, onFailure)
+
+    fun codexCommandResolution(): Pair<String, CodexCommandSource> = settingsController.codexCommandResolution()
 
     fun updateLarkExecutablePath(raw: String, onFailure: (Throwable) -> Unit = {}): Boolean =
         settingsController.updateLarkExecutablePath(raw, onFailure)

@@ -121,7 +121,7 @@ class CodexExtensionsService(
     private val paths: ApplicationPaths = ApplicationPaths.systemDefault(),
     private val runner: CommandRunner = ProcessCommandRunner(),
     private val gitExecutable: () -> String = { "git" },
-    private val codexExecutable: () -> String = { "codex" },
+    private val codexExecutable: CodexExecutable = AutoDetectedCodexExecutable(),
     private val userHome: () -> Path = { Path.of(System.getProperty("user.home")) },
     private val clock: Clock = Clock.systemUTC(),
 ) {
@@ -758,8 +758,8 @@ class CodexExtensionsService(
     }
 
     private fun runCodex(vararg arguments: String): CommandResult {
-        val command = listOf(codexExecutable()) + arguments
-        val result = runner.run(command, timeout = CODEX_TIMEOUT)
+        val command = listOf(codexExecutable.resolve()) + arguments
+        val result = runner.run(command, timeout = CODEX_TIMEOUT, environment = codexExecutable.environment())
         if (!result.succeeded) throw CodexExtensionCommandException("Codex 命令失败：${command.joinToString(" ")}", result)
         return result
     }

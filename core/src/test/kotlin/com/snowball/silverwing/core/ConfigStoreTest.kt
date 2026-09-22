@@ -90,6 +90,7 @@ class ConfigStoreTest {
             blockedGitWriteBranches = listOf("main"),
             meegleProjects = listOf(MeegleProjectConfig("PAY", "pay")),
             meegleExecutablePath = "D:/tools/meegle.exe",
+            codexExecutablePath = "D:/tools/codex.exe",
             larkExecutablePath = "D:/tools/lark-cli.cmd",
             gitExecutablePath = "D:/tools/git.exe",
             genbuExecutablePath = "D:/tools/genbu.exe",
@@ -114,6 +115,7 @@ class ConfigStoreTest {
         assertTrue(Files.readString(paths.config.resolve("integrations.json")).contains("team-marketplace"))
         assertTrue(Files.readString(paths.config.resolve("integrations.json")).contains("\"aiRequirementNamingEnabled\": true"))
         assertTrue(Files.readString(paths.config.resolve("integrations.json")).contains("\"aiRequirementNamingModel\": \"gpt-5.6-sol\""))
+        assertTrue(Files.readString(paths.config.resolve("integrations.json")).contains("\"codexExecutablePath\": \"D:/tools/codex.exe\""))
     }
 
     @Test

@@ -369,6 +369,8 @@ data class AppConfig(
     val meegleProjects: List<MeegleProjectConfig> = emptyList(),
     /** Absolute path to the Meegle CLI executable; null means auto-detect. */
     val meegleExecutablePath: String? = null,
+    /** Absolute path to the Codex CLI executable; null means auto-detect. */
+    val codexExecutablePath: String? = null,
     /** Absolute path to the Git executable; null means auto-detect. */
     val gitExecutablePath: String? = null,
     /** Absolute path to the Genbu CLI executable; null means auto-detect. */

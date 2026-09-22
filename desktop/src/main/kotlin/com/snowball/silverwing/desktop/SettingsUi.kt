@@ -93,6 +93,7 @@ import kotlinx.coroutines.launch
 import com.snowball.silverwing.core.AgentTaskTemplate
 import com.snowball.silverwing.core.ApplicationEventClipboard
 import com.snowball.silverwing.core.MeegleCommandSource
+import com.snowball.silverwing.core.CodexCommandSource
 import com.snowball.silverwing.core.GitCommandSource
 import com.snowball.silverwing.core.GenbuCommandSource
 import com.snowball.silverwing.core.ConfigStore
@@ -814,6 +815,24 @@ internal fun cliMoreActionsEnabled(
 /** 命令路径编辑默认收起；明确的保存失败需要把恢复入口直接展示出来。 */
 internal fun cliManualConfigInitiallyExpanded(pathSaveFailed: Boolean): Boolean = pathSaveFailed
 
+/**
+ * 自动发现的可执行文件仅作为编辑器默认值；只有用户主动保存后才会成为手动配置。
+ * 这样既能展示当前实际使用的路径，也不会因打开设置而改写配置。
+ */
+internal fun cliPathEditorInitialValue(configuredPath: String, discoveredPath: String? = null): String =
+    configuredPath.ifBlank { discoveredPath.orEmpty() }
+
+internal fun cliPathEditorHasChanges(
+    pathInput: String,
+    configuredPath: String,
+    discoveredPath: String? = null,
+): Boolean = pathInput.trim() != cliPathEditorInitialValue(configuredPath, discoveredPath).trim()
+
+internal fun codexDiscoveredExecutablePath(command: String, source: CodexCommandSource): String? = when (source) {
+    CodexCommandSource.DESKTOP_APP, CodexCommandSource.PROBED -> command.ifBlank { null }
+    CodexCommandSource.CONFIGURED, CodexCommandSource.PATH_FALLBACK -> null
+}
+
 private fun genbuSourceLabel(source: GenbuCommandSource): String = when (source) {
     GenbuCommandSource.CONFIGURED -> "手动配置"
     GenbuCommandSource.PROBED -> "自动探测"
@@ -832,6 +851,13 @@ private fun meegleSourceLabel(source: MeegleCommandSource): String = when (sourc
     MeegleCommandSource.PATH_FALLBACK -> "PATH 回退"
 }
 
+private fun codexSourceLabel(source: CodexCommandSource): String = when (source) {
+    CodexCommandSource.CONFIGURED -> "手动配置"
+    CodexCommandSource.DESKTOP_APP -> "Codex Desktop"
+    CodexCommandSource.PROBED -> "自动探测"
+    CodexCommandSource.PATH_FALLBACK -> "PATH 回退"
+}
+
 @Composable
 private fun CliCommandPanel(
     controller: DesktopApplication,
@@ -841,6 +867,7 @@ private fun CliCommandPanel(
     phase: CliDetectionPhase,
     failure: String? = null,
     configuredPath: String,
+    discoveredPath: String? = null,
     pathLabel: String,
     pathPlaceholder: String,
     saving: Boolean,
@@ -855,13 +882,18 @@ private fun CliCommandPanel(
     separateToolbarActionGroup: Boolean = false,
     extra: @Composable ColumnScope.() -> Unit = {},
 ) {
-    var pathInput by remember(pathLabel, configuredPath) { mutableStateOf(configuredPath) }
+    val initialPath = cliPathEditorInitialValue(configuredPath, discoveredPath)
+    var pathInput by remember(pathLabel) { mutableStateOf(initialPath) }
+    var pathInputEdited by remember(pathLabel) { mutableStateOf(false) }
     var pathEditorExpanded by remember(pathLabel) { mutableStateOf(cliManualConfigInitiallyExpanded(pathSaveFailed)) }
     var moreActionsExpanded by remember(pathLabel) { mutableStateOf(false) }
+    LaunchedEffect(pathLabel, configuredPath, discoveredPath) {
+        if (!pathInputEdited) pathInput = initialPath
+    }
     LaunchedEffect(pathLabel, pathSaveFailed) {
         if (pathSaveFailed) pathEditorExpanded = true
     }
-    val pathChanged = pathInput.trim() != configuredPath.trim()
+    val pathChanged = cliPathEditorHasChanges(pathInput, configuredPath, discoveredPath)
     val phaseLabel = when (phase) {
         CliDetectionPhase.IDLE -> "尚未检测"
         CliDetectionPhase.LOADING -> "检测中"
@@ -952,10 +984,11 @@ private fun CliCommandPanel(
                         value = pathInput,
                         onValueChange = {
                             pathInput = it
+                            pathInputEdited = true
                             onPathChange(it)
                         },
                         modifier = modifier.onFocusChanged { focus ->
-                            if (!focus.isFocused && pathInput.trim() != configuredPath.trim()) onSavePath(pathInput)
+                            if (!focus.isFocused && pathChanged) onSavePath(pathInput)
                         },
                         label = { Text(pathLabel) },
                         placeholder = { Text(pathPlaceholder) },
@@ -999,7 +1032,8 @@ private fun CliCommandPanel(
                 if (configuredPath.isNotBlank()) {
                     OutlinedButton(
                         onClick = {
-                            pathInput = ""
+                            pathInput = cliPathEditorInitialValue("", discoveredPath)
+                            pathInputEdited = false
                             onPathChange("")
                             onSavePath("")
                         },
@@ -2239,6 +2273,14 @@ private fun SettingsTaskCreationSection(
     onSaveAiRequirementNamingModel: () -> Unit,
     saving: Boolean,
 ) {
+    LaunchedEffect(controller.config.codexExecutablePath) { controller.detectCodexCliPath() }
+    val (codexCommand, codexSource) = controller.codexCommandResolution()
+    val codexPhase = when {
+        controller.codexCliPathLoading -> CliDetectionPhase.LOADING
+        controller.codexCliPathError != null -> CliDetectionPhase.FAILED
+        codexSource == CodexCommandSource.PATH_FALLBACK -> CliDetectionPhase.IDLE
+        else -> CliDetectionPhase.READY
+    }
     val normalizedModel = aiRequirementNamingModel.trim()
     val modelInputError = when {
         normalizedModel.isEmpty() -> "AI 命名模型不能为空。"
@@ -2271,6 +2313,28 @@ private fun SettingsTaskCreationSection(
                 )
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            CliCommandPanel(
+                controller = controller,
+                command = codexCommand,
+                source = codexSourceLabel(codexSource),
+                version = controller.codexCliVersion,
+                phase = codexPhase,
+                failure = controller.codexCliPathError,
+                configuredPath = controller.config.codexExecutablePath.orEmpty(),
+                discoveredPath = codexDiscoveredExecutablePath(codexCommand, codexSource),
+                pathLabel = "Codex CLI 可执行文件路径",
+                pathPlaceholder = if (System.getProperty("os.name").startsWith("Windows", true))
+                    "例如 C:\\Users\\你\\AppData\\Local\\OpenAI\\Codex\\bin\\<版本>\\codex.exe"
+                else "例如 /usr/local/bin/codex",
+                saving = saving,
+                pathSaveFailed = controller.settingsSaveState("task-creation") == SettingsSaveState.FAILED,
+                onPathChange = {},
+                onSavePath = { raw -> controller.updateCodexExecutablePath(raw) },
+                onChoosePath = { initial ->
+                    controller.chooseApplication(initial) { selected -> controller.updateCodexExecutablePath(selected) }
+                },
+                onRefresh = controller::detectCodexCliPath,
+            )
             OutlinedTextField(
                 value = aiRequirementNamingModel,
                 onValueChange = onAiRequirementNamingModelChange,

@@ -19,7 +19,7 @@ class CodexExtensionsServiceTest {
     fun `Marketplace add refresh install uninstall use argument safe Codex commands and retain source cache`() {
         val runner = MarketplaceRunner()
         val paths = ApplicationPaths(temporary.resolve("home"))
-        val service = CodexExtensionsService(paths, runner, codexExecutable = { "codex-test" })
+        val service = CodexExtensionsService(paths, runner, codexExecutable = CodexExecutable { "codex-test" })
         val source = CodexPluginMarketplaceSource(
             id = "team-marketplace",
             name = "团队插件",
@@ -58,7 +58,7 @@ class CodexExtensionsServiceTest {
         val service = CodexExtensionsService(
             ApplicationPaths(temporary.resolve("current-codex-home")),
             runner,
-            codexExecutable = { "codex-test" },
+            codexExecutable = CodexExecutable { "codex-test" },
         )
         val source = CodexPluginMarketplaceSource(
             id = "current-marketplace",
@@ -225,7 +225,7 @@ class CodexExtensionsServiceTest {
     @Test
     fun `legacy child Marketplace is reported instead of invoking sparse registration`() {
         val runner = MarketplaceRunner()
-        val service = CodexExtensionsService(ApplicationPaths(temporary.resolve("legacy")), runner, codexExecutable = { "codex-test" })
+        val service = CodexExtensionsService(ApplicationPaths(temporary.resolve("legacy")), runner, codexExecutable = CodexExecutable { "codex-test" })
         val source = CodexPluginMarketplaceSource("legacy", "旧来源", "https://example.test/plugins.git", marketplaceDirectory = "plugins")
 
         val result = service.refreshMarketplace(source)
@@ -262,7 +262,7 @@ class CodexExtensionsServiceTest {
     @Test
     fun `plugin preview reads only plugin files beneath the cached Marketplace`() {
         val runner = PluginPreviewRunner(temporary.resolve("marketplace-cache"))
-        val service = CodexExtensionsService(ApplicationPaths(temporary.resolve("preview-home")), runner, codexExecutable = { "codex-test" })
+        val service = CodexExtensionsService(ApplicationPaths(temporary.resolve("preview-home")), runner, codexExecutable = CodexExecutable { "codex-test" })
         val source = CodexPluginMarketplaceSource("preview-marketplace", "预览插件", "https://example.test/plugins.git", marketplaceDirectory = ".")
 
         val status = service.addMarketplace(source)

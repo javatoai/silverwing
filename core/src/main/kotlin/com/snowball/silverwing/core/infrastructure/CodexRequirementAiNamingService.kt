@@ -17,7 +17,7 @@ import java.util.Comparator
 class CodexRequirementAiNamingService(
     private val paths: ApplicationPaths,
     private val runner: CommandRunner = ProcessCommandRunner(),
-    private val codexExecutable: () -> String = { "codex" },
+    private val codexExecutable: CodexExecutable = AutoDetectedCodexExecutable(),
     private val modelProvider: () -> String = { RequirementAiNamingModel.DEFAULT },
 ) : RequirementAiNamingService {
     override fun suggest(
@@ -32,7 +32,7 @@ class CodexRequirementAiNamingService(
             Files.writeString(schemaFile, OUTPUT_SCHEMA, StandardCharsets.UTF_8)
             val model = RequirementAiNamingModel.requireValid(modelProvider())
             val command = listOf(
-                codexExecutable(),
+                codexExecutable.resolve(),
                 "--model",
                 model,
                 // 当前 Codex CLI 把审批策略定义为顶层参数而非 exec 子命令参数；放在 exec 前
@@ -57,6 +57,7 @@ class CodexRequirementAiNamingService(
                 input = prompt(context, forbiddenFolderNames),
                 workingDirectory = temporaryDirectory,
                 timeout = Duration.ofSeconds(60),
+                environment = codexExecutable.environment(),
             )
             check(result.succeeded) {
                 "Codex CLI 生成命名失败：${commandError(result)}"

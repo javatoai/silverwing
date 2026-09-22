@@ -21,7 +21,7 @@ class CodexRequirementAiNamingServiceTest {
         val service = CodexRequirementAiNamingService(
             paths = ApplicationPaths(temporary.resolve("home")),
             runner = runner,
-            codexExecutable = { "codex-test" },
+            codexExecutable = CodexExecutable { "codex-test" },
         )
 
         val suggestion = service.suggest(
@@ -51,7 +51,7 @@ class CodexRequirementAiNamingServiceTest {
         val service = CodexRequirementAiNamingService(
             paths = ApplicationPaths(temporary.resolve("configured-model-home")),
             runner = runner,
-            codexExecutable = { "codex-test" },
+            codexExecutable = CodexExecutable { "codex-test" },
             modelProvider = { "gpt-5.6-sol" },
         )
 
@@ -68,7 +68,7 @@ class CodexRequirementAiNamingServiceTest {
             runner = RecordingInputRunner(
                 """{"folderName":"支付超时优化","branchSuffix":"payment_timeout","other":"ignored"}""",
             ),
-            codexExecutable = { "codex-test" },
+            codexExecutable = CodexExecutable { "codex-test" },
         )
 
         assertFailsWith<IllegalArgumentException> {

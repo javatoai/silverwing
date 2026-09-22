@@ -167,21 +167,120 @@ class MeegleCliServiceTest {
     }
 
     @Test
-    fun `login uses browser oauth command and ten minute timeout`() {
-        var capturedCommand = emptyList<String>()
-        var capturedTimeout = Duration.ZERO
+    fun `logout clears the current Meegle CLI profile`() {
+        val commands = mutableListOf<List<String>>()
         val runner = object : CommandRunner {
             override fun run(command: List<String>, workingDirectory: Path?, timeout: Duration, environment: Map<String, String>): CommandResult {
-                capturedCommand = command
-                capturedTimeout = timeout
-                return CommandResult(0, "{}", "")
+                commands += command
+                return CommandResult(0, "✓ [default] Logged out\n", "")
             }
         }
 
-        ProcessMeegleCliService(runner, isWindows = false).login()
+        ProcessMeegleCliService(runner, isWindows = true).logout()
 
-        assertEquals(listOf("meegle", "auth", "login", "--host", "project.feishu.cn", "--format", "json"), capturedCommand)
-        assertEquals(Duration.ofMinutes(10), capturedTimeout)
+        assertEquals(listOf("meegle.cmd", "auth", "logout"), commands.single())
+    }
+
+    @Test
+    fun `logout surfaces the CLI error without claiming success`() {
+        val runner = object : CommandRunner {
+            override fun run(command: List<String>, workingDirectory: Path?, timeout: Duration, environment: Map<String, String>) =
+                CommandResult(1, "", "credential store is locked")
+        }
+
+        val error = assertFailsWith<IllegalStateException> {
+            ProcessMeegleCliService(runner, isWindows = false).logout()
+        }
+
+        assertTrue(error.message.orEmpty().contains("credential store is locked"))
+    }
+
+    @Test
+    fun `device code login initializes then polls once without exposing its secret`() {
+        val commands = mutableListOf<List<String>>()
+        val timeouts = mutableListOf<Duration>()
+        val runner = object : CommandRunner {
+            override fun run(command: List<String>, workingDirectory: Path?, timeout: Duration, environment: Map<String, String>): CommandResult {
+                commands += command
+                timeouts += timeout
+                return when (command[command.indexOf("--phase") + 1]) {
+                    "init" -> CommandResult(
+                        0,
+                        """{"device_code":"opaque-device-code","user_code":"ABCD-EFGH","verification_uri":"https://project.feishu.cn/device","verification_uri_complete":"https://project.feishu.cn/device?code=ABCD-EFGH","expires_in":600,"client_id":"opaque-client-id","interval":3}""",
+                        "",
+                    )
+                    "poll" -> CommandResult(0, """{"status":"ok"}""", "")
+                    else -> error("Unexpected Meegle phase")
+                }
+            }
+        }
+
+        val service = ProcessMeegleCliService(runner, isWindows = false)
+        val challenge = service.beginDeviceCodeLogin()
+
+        assertEquals("ABCD-EFGH", challenge.userCode)
+        assertEquals("https://project.feishu.cn/device?code=ABCD-EFGH", challenge.authorizationUrl)
+        assertEquals(3, challenge.pollingIntervalSeconds)
+        assertEquals("poll [已隐藏] [已隐藏]", challenge.redactSecrets("poll opaque-device-code opaque-client-id"))
+        assertEquals(MeegleDeviceCodeLoginResult.AUTHORIZED, service.completeDeviceCodeLogin(challenge))
+
+        assertEquals(
+            listOf("meegle", "auth", "login", "--device-code", "--phase", "init", "--host", "project.feishu.cn", "--format", "json"),
+            commands[0],
+        )
+        assertEquals(
+            listOf(
+                "meegle", "auth", "login", "--device-code", "--phase", "poll", "--device-code-value", "opaque-device-code",
+                "--client-id", "opaque-client-id", "--host", "project.feishu.cn", "--once", "--format", "json",
+            ),
+            commands[1],
+        )
+        assertEquals(listOf(Duration.ofSeconds(30), Duration.ofSeconds(20)), timeouts)
+    }
+
+    @Test
+    fun `device code poll preserves a server request to slow down`() {
+        val runner = object : CommandRunner {
+            override fun run(command: List<String>, workingDirectory: Path?, timeout: Duration, environment: Map<String, String>): CommandResult =
+                when (command[command.indexOf("--phase") + 1]) {
+                    "init" -> CommandResult(
+                        0,
+                        """{"device_code":"opaque-device-code","user_code":"ABCD-EFGH","verification_uri":"https://project.feishu.cn/device","expires_in":600,"client_id":"opaque-client-id"}""",
+                        "",
+                    )
+                    "poll" -> CommandResult(0, """{"status":"slow_down"}""", "")
+                    else -> error("Unexpected Meegle phase")
+                }
+        }
+
+        val service = ProcessMeegleCliService(runner, isWindows = false)
+
+        assertEquals(
+            MeegleDeviceCodeLoginResult.SLOW_DOWN,
+            service.completeDeviceCodeLogin(service.beginDeviceCodeLogin()),
+        )
+    }
+
+    @Test
+    fun `device code poll reports expiration and caps a malformed server interval`() {
+        val runner = object : CommandRunner {
+            override fun run(command: List<String>, workingDirectory: Path?, timeout: Duration, environment: Map<String, String>): CommandResult =
+                when (command[command.indexOf("--phase") + 1]) {
+                    "init" -> CommandResult(
+                        0,
+                        """{"device_code":"opaque-device-code","user_code":"ABCD-EFGH","verification_uri":"https://project.feishu.cn/device","expires_in":600,"client_id":"opaque-client-id","interval":999999999}""",
+                        "",
+                    )
+                    "poll" -> CommandResult(0, """{"status":"expired_token"}""", "")
+                    else -> error("Unexpected Meegle phase")
+                }
+        }
+
+        val service = ProcessMeegleCliService(runner, isWindows = false)
+        val challenge = service.beginDeviceCodeLogin()
+
+        assertEquals(60, challenge.pollingIntervalSeconds)
+        assertEquals(MeegleDeviceCodeLoginResult.EXPIRED, service.completeDeviceCodeLogin(challenge))
     }
 
 }

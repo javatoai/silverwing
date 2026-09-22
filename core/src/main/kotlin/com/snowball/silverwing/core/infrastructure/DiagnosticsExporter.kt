@@ -82,6 +82,7 @@ class DiagnosticsExporter(
         developmentTools = developmentTools.map { it.copy(path = "<configured:${it.type.name}>") },
         terminalExecutable = terminalExecutable?.let { "<configured>" },
         meegleExecutablePath = meegleExecutablePath?.let { "<configured>" },
+        larkExecutablePath = larkExecutablePath?.let { "<configured>" },
         gitExecutablePath = gitExecutablePath?.let { "<configured>" },
         genbuExecutablePath = genbuExecutablePath?.let { "<configured>" },
     )

@@ -25,6 +25,20 @@ interface CommandRunner {
         timeout: Duration = Duration.ofMinutes(10),
         environment: Map<String, String> = emptyMap(),
     ): CommandResult
+
+    /**
+     * 以显式 UTF-8 标准输入启动命令。
+     *
+     * 绝大多数既有命令不需要输入；默认抛错实现既保持轻量测试替身兼容，也要求传递
+     * 敏感结构化输入的调用方明确选择支持标准输入的执行器。
+     */
+    fun runWithInput(
+        command: List<String>,
+        input: String,
+        workingDirectory: Path? = null,
+        timeout: Duration = Duration.ofMinutes(10),
+        environment: Map<String, String> = emptyMap(),
+    ): CommandResult = throw UnsupportedOperationException("当前命令执行器不支持标准输入")
 }
 
 interface StreamingCommandRunner : CommandRunner {
@@ -43,7 +57,15 @@ class ProcessCommandRunner : StreamingCommandRunner {
         workingDirectory: Path?,
         timeout: Duration,
         environment: Map<String, String>,
-    ): CommandResult = runInternal(command, workingDirectory, timeout, environment, null)
+    ): CommandResult = runInternal(command, workingDirectory, timeout, environment, null, null)
+
+    override fun runWithInput(
+        command: List<String>,
+        input: String,
+        workingDirectory: Path?,
+        timeout: Duration,
+        environment: Map<String, String>,
+    ): CommandResult = runInternal(command, workingDirectory, timeout, environment, null, input)
 
     override fun runStreaming(
         command: List<String>,
@@ -51,7 +73,7 @@ class ProcessCommandRunner : StreamingCommandRunner {
         timeout: Duration,
         environment: Map<String, String>,
         onOutput: (CommandOutputLine) -> Unit,
-    ): CommandResult = runInternal(command, workingDirectory, timeout, environment, onOutput)
+    ): CommandResult = runInternal(command, workingDirectory, timeout, environment, onOutput, null)
 
     private fun runInternal(
         command: List<String>,
@@ -59,6 +81,7 @@ class ProcessCommandRunner : StreamingCommandRunner {
         timeout: Duration,
         environment: Map<String, String>,
         onOutput: ((CommandOutputLine) -> Unit)?,
+        input: String?,
     ): CommandResult {
         require(command.isNotEmpty()) { "命令不能为空" }
         require(!timeout.isNegative && !timeout.isZero) { "timeout must be greater than zero" }
@@ -70,7 +93,11 @@ class ProcessCommandRunner : StreamingCommandRunner {
                 redirectInput(ProcessBuilder.Redirect.PIPE)
             }
             .start()
-        process.outputStream.close()
+        if (input == null) {
+            process.outputStream.close()
+        } else {
+            process.outputStream.bufferedWriter(StandardCharsets.UTF_8).use { writer -> writer.write(input) }
+        }
 
         val executor = Executors.newFixedThreadPool(2)
         val observedProcesses = linkedSetOf<ProcessHandle>()

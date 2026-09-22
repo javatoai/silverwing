@@ -5,9 +5,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.FlowRowScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -27,6 +29,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.automirrored.outlined.Article
+import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.automirrored.outlined.Subject
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AccountTree
@@ -42,12 +45,14 @@ import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Sell
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenuItem
@@ -83,6 +88,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.snowball.silverwing.core.AgentTaskTemplate
 import com.snowball.silverwing.core.ApplicationEventClipboard
@@ -98,6 +104,9 @@ import com.snowball.silverwing.core.LocalGitEnvironmentSnapshot
 import com.snowball.silverwing.core.CommandVersionStatus
 import com.snowball.silverwing.core.MeegleCliStatus
 import com.snowball.silverwing.core.MeegleProjectConfig
+import com.snowball.silverwing.core.LarkCliStatus
+import com.snowball.silverwing.core.LarkCommandSource
+import com.snowball.silverwing.core.LARK_BUSINESS_DOMAINS
 import com.snowball.silverwing.core.ThemePreference
 import com.snowball.silverwing.core.TaskRootMigrationMode
 import com.snowball.silverwing.core.TaskRootMigrationPhase
@@ -165,12 +174,16 @@ internal fun SettingsScreen(controller: DesktopApplication) {
     var genbuPath by remember(controller.config.genbuExecutablePath) {
         mutableStateOf(controller.config.genbuExecutablePath.orEmpty())
     }
+    var larkPath by remember(controller.config.larkExecutablePath) {
+        mutableStateOf(controller.config.larkExecutablePath.orEmpty())
+    }
     val meegleProjects = remember(controller.config.meegleProjects) {
         mutableStateMapOf<Int, MeegleProjectConfig>().apply {
             controller.config.meegleProjects.forEachIndexed { index, project -> put(index, project) }
         }
     }
     var meegleMenuExpanded by remember { mutableStateOf(false) }
+    var larkDomainDialog by remember { mutableStateOf(false) }
     var backupMenuExpanded by remember { mutableStateOf(false) }
     var restoreBackup by remember { mutableStateOf<ConfigStore.Backup?>(null) }
     var importPreview by remember { mutableStateOf<ConfigStore.ImportPreview?>(null) }
@@ -293,6 +306,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
         if (selectedSection == "cli") controller.refreshCliInstallationStatus()
         if (selectedSection == "codex-plugins" || selectedSection == "skills") controller.codexExtensionsController.refreshCached()
         if (selectedSection == "feishu") controller.refreshMeegleStatus()
+        if (selectedSection == "lark") controller.refreshLarkStatus()
         if (selectedSection == "git") controller.refreshLocalGit()
         if (selectedSection == "genbu") controller.refreshGenbu()
     }
@@ -332,7 +346,10 @@ internal fun SettingsScreen(controller: DesktopApplication) {
         }
     }
     DisposableEffect(selectedSection) {
-        onDispose { if (selectedSection == "feishu") controller.cancelMeegleProjectLoad() }
+        onDispose {
+            if (selectedSection == "feishu") controller.cancelMeegleProjectLoad()
+            if (selectedSection == "lark") controller.cancelLarkDeviceCodeLogin()
+        }
     }
 
     Box(Modifier.fillMaxSize()) {
@@ -521,6 +538,15 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     onSaveBlockedGitBranches = ::saveBlockedGitBranches,
                 )
             }
+            if (selectedSection == "lark") item {
+                SettingsLarkSection(
+                    controller = controller,
+                    larkPath = larkPath,
+                    onLarkPathChange = { larkPath = it },
+                    saving = saving("lark"),
+                    onLogin = { larkDomainDialog = true },
+                )
+            }
             if (selectedSection == "genbu") item {
                 SettingsGenbuSection(
                     controller = controller,
@@ -563,6 +589,28 @@ internal fun SettingsScreen(controller: DesktopApplication) {
             onDismiss = {},
             onConfirm = {},
         )
+    }
+    if (larkDomainDialog) {
+        LarkBusinessDomainDialog(
+            onDismiss = { larkDomainDialog = false },
+            onConfirm = { domains ->
+                larkDomainDialog = false
+                controller.loginLark(domains)
+            },
+        )
+    }
+    if (selectedSection == "lark") {
+        controller.larkDeviceCodeLoginState?.let { login ->
+            LarkDeviceCodeAuthorizationDialog(
+                state = login,
+                onDismiss = controller::cancelLarkDeviceCodeLogin,
+                onOpenAuthorizationPage = controller::openLarkDeviceCodeAuthorizationUrl,
+                onCopyAuthorizationUrl = {
+                    controller.copyText(login.authorizationUrl, "Lark 授权链接已复制")
+                },
+                onCancel = controller::cancelLarkDeviceCodeLogin,
+            )
+        }
     }
     if (newGroup) NameDialog("创建组", "", onDismiss = { newGroup = false }) {
         controller.addGroup(it) { newGroup = false }
@@ -695,6 +743,9 @@ internal fun normalizeSettingsSection(stored: String, supported: Set<String>): S
 
 internal enum class CliDetectionPhase { IDLE, LOADING, READY, AUTH_REQUIRED, FAILED }
 
+/** CLI 设置页的最大阅读宽度，避免宽屏把状态信息和命令路径拉得过散。 */
+private const val CLI_SETTINGS_MAX_CONTENT_WIDTH_DP = 1_040f
+
 internal fun meegleCliDetectionPhase(state: MeegleCliState): CliDetectionPhase = when (state) {
     MeegleCliState.Idle -> CliDetectionPhase.IDLE
     is MeegleCliState.Loading -> CliDetectionPhase.LOADING
@@ -709,6 +760,9 @@ internal fun meegleCliDetectionPhase(state: MeegleCliState): CliDetectionPhase =
 internal fun meegleLoginActionVisible(status: MeegleCliStatus?): Boolean =
     status?.installed == true && !status.authenticated
 
+internal fun meegleLogoutActionVisible(status: MeegleCliStatus?): Boolean =
+    status?.installed == true && status.authenticated
+
 internal fun meegleLoginActionEnabled(
     status: MeegleCliStatus?,
     cliState: MeegleCliState,
@@ -718,6 +772,26 @@ internal fun meegleLoginActionEnabled(
     cliState !is MeegleCliState.Loading &&
     !saving &&
     !busy
+
+internal fun meegleLogoutActionEnabled(
+    status: MeegleCliStatus?,
+    cliState: MeegleCliState,
+    saving: Boolean,
+    busy: Boolean,
+): Boolean = meegleLogoutActionVisible(status) &&
+    cliState !is MeegleCliState.Loading &&
+    !saving &&
+    !busy
+
+/** “更多操作”只包含辅助动作；没有可用命令或页面正忙时不应打开它。 */
+internal fun cliMoreActionsEnabled(
+    command: String,
+    saving: Boolean,
+    busy: Boolean,
+): Boolean = command.isNotBlank() && !saving && !busy
+
+/** 命令路径编辑默认收起；明确的保存失败需要把恢复入口直接展示出来。 */
+internal fun cliManualConfigInitiallyExpanded(pathSaveFailed: Boolean): Boolean = pathSaveFailed
 
 private fun genbuSourceLabel(source: GenbuCommandSource): String = when (source) {
     GenbuCommandSource.CONFIGURED -> "手动配置"
@@ -740,7 +814,6 @@ private fun meegleSourceLabel(source: MeegleCommandSource): String = when (sourc
 @Composable
 private fun CliCommandPanel(
     controller: DesktopApplication,
-    title: String,
     command: String,
     source: String,
     version: CommandVersionStatus?,
@@ -750,13 +823,23 @@ private fun CliCommandPanel(
     pathLabel: String,
     pathPlaceholder: String,
     saving: Boolean,
+    operationBusy: Boolean = false,
+    pathSaveFailed: Boolean,
     onPathChange: (String) -> Unit,
     onSavePath: (String) -> Unit,
     onChoosePath: (String) -> Unit,
     onRefresh: () -> Unit,
+    toolbarSummary: (@Composable () -> Unit)? = null,
+    toolbarActions: @Composable FlowRowScope.() -> Unit = {},
+    separateToolbarActionGroup: Boolean = false,
     extra: @Composable ColumnScope.() -> Unit = {},
 ) {
-    var pathInput by remember(title, configuredPath) { mutableStateOf(configuredPath) }
+    var pathInput by remember(pathLabel, configuredPath) { mutableStateOf(configuredPath) }
+    var pathEditorExpanded by remember(pathLabel) { mutableStateOf(cliManualConfigInitiallyExpanded(pathSaveFailed)) }
+    var moreActionsExpanded by remember(pathLabel) { mutableStateOf(false) }
+    LaunchedEffect(pathLabel, pathSaveFailed) {
+        if (pathSaveFailed) pathEditorExpanded = true
+    }
     val pathChanged = pathInput.trim() != configuredPath.trim()
     val phaseLabel = when (phase) {
         CliDetectionPhase.IDLE -> "尚未检测"
@@ -771,67 +854,124 @@ private fun CliCommandPanel(
         CliDetectionPhase.FAILED -> MaterialTheme.colorScheme.error
         CliDetectionPhase.IDLE, CliDetectionPhase.LOADING -> MaterialTheme.colorScheme.onSurfaceVariant
     }
-    OutlinedCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                Text(phaseLabel, color = phaseColor, style = MaterialTheme.typography.labelSmall)
-            }
-            GitEnvironmentGrid(
-                listOf(
-                    GitEnvironmentField("版本号", version?.version ?: "不可用", monospace = true),
-                    GitEnvironmentField("当前命令", command.ifBlank { "未解析" }, monospace = true),
-                    GitEnvironmentField("命令来源", source),
-                    GitEnvironmentField("检测状态", failure ?: phaseLabel),
-                ),
-            )
-            version?.error?.let { error ->
-                Text("版本检测失败：$error", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-            }
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onRefresh, enabled = phase != CliDetectionPhase.LOADING && !saving) {
-                    Icon(Icons.Outlined.Refresh, null, Modifier.size(17.dp))
-                    Spacer(Modifier.width(5.dp))
-                    Text("重新检测")
-                }
-                OutlinedButton(
-                    onClick = { controller.copyCliCommandPath(command) },
-                    enabled = command.isNotBlank() && !saving,
-                ) {
-                    Icon(Icons.Outlined.ContentCopy, null, Modifier.size(17.dp))
-                    Spacer(Modifier.width(5.dp))
-                    Text("复制命令路径")
-                }
-                OutlinedButton(
-                    onClick = { controller.runCliInTerminal(command) },
-                    enabled = command.isNotBlank() && !saving,
-                ) {
-                    Icon(Icons.Outlined.Terminal, null, Modifier.size(17.dp))
-                    Spacer(Modifier.width(5.dp))
-                    Text("在终端中运行")
-                }
-            }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Text("手动配置", style = MaterialTheme.typography.titleSmall)
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = pathInput,
-                    onValueChange = {
-                        pathInput = it
-                        onPathChange(it)
-                    },
-                    modifier = Modifier.weight(1f).onFocusChanged { focus ->
-                        if (!focus.isFocused && pathInput.trim() != configuredPath.trim()) onSavePath(pathInput)
-                    },
-                    label = { Text(pathLabel) },
-                    placeholder = { Text(pathPlaceholder) },
-                    supportingText = { Text("留空时使用自动探测或 PATH 回退。") },
-                    singleLine = true,
-                    readOnly = controller.busy || saving,
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("连接状态", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Surface(
+                color = phaseColor.copy(alpha = 0.12f),
+                shape = RoundedCornerShape(50),
+            ) {
+                Text(
+                    phaseLabel,
+                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = phaseColor,
                 )
-                OutlinedButton(onClick = { onChoosePath(pathInput) }, enabled = !controller.pathPickerBusy && !controller.busy && !saving) {
-                    Icon(Icons.Outlined.Folder, null)
-                    Text("选择")
+            }
+        }
+        GitEnvironmentGrid(
+            listOf(
+                GitEnvironmentField("版本号", version?.version ?: "不可用", monospace = true),
+                GitEnvironmentField("当前命令", command.ifBlank { "未解析" }, monospace = true),
+                GitEnvironmentField("命令来源", source),
+                GitEnvironmentField("检测状态", phaseLabel),
+            ),
+        )
+        failure?.let { error ->
+            Text(error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+        version?.error?.let { error ->
+            Text("版本检测失败：$error", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+        CliActionToolbar(
+            summary = toolbarSummary,
+            onRefresh = onRefresh,
+            refreshEnabled = phase != CliDetectionPhase.LOADING && !saving && !controller.busy && !operationBusy,
+            moreEnabled = cliMoreActionsEnabled(command, saving, controller.busy || operationBusy),
+            moreActionsExpanded = moreActionsExpanded,
+            onMoreActionsExpandedChange = { moreActionsExpanded = it },
+            onCopyCommand = { controller.copyCliCommandPath(command) },
+            onRunInTerminal = { controller.runCliInTerminal(command) },
+            actions = toolbarActions,
+            separateActionGroup = separateToolbarActionGroup,
+        )
+        extra()
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("命令位置", style = MaterialTheme.typography.titleSmall)
+                SelectionContainer {
+                    Text(
+                        configuredPath.ifBlank { "$source · ${command.ifBlank { "自动探测" }}" },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = if (pathEditorExpanded) 2 else 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            TextButton(
+                onClick = { pathEditorExpanded = !pathEditorExpanded },
+                enabled = !controller.busy && !operationBusy && !saving,
+            ) {
+                Text(if (pathEditorExpanded) "收起" else "编辑")
+                Icon(
+                    if (pathEditorExpanded) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown,
+                    null,
+                    Modifier.size(17.dp),
+                )
+            }
+        }
+        if (pathEditorExpanded) {
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val compactEditor = maxWidth < 560.dp
+                val pathField: @Composable (Modifier) -> Unit = { modifier ->
+                    OutlinedTextField(
+                        value = pathInput,
+                        onValueChange = {
+                            pathInput = it
+                            onPathChange(it)
+                        },
+                        modifier = modifier.onFocusChanged { focus ->
+                            if (!focus.isFocused && pathInput.trim() != configuredPath.trim()) onSavePath(pathInput)
+                        },
+                        label = { Text(pathLabel) },
+                        placeholder = { Text(pathPlaceholder) },
+                        supportingText = { Text("留空时使用自动探测或 PATH 回退。") },
+                        singleLine = true,
+                        readOnly = controller.busy || operationBusy || saving,
+                    )
+                }
+                val chooseButton: @Composable (Modifier) -> Unit = { modifier ->
+                    OutlinedButton(
+                        onClick = { onChoosePath(pathInput) },
+                        modifier = modifier,
+                        enabled = !controller.pathPickerBusy && !controller.busy && !operationBusy && !saving,
+                    ) {
+                        Icon(Icons.Outlined.Folder, null)
+                        Spacer(Modifier.width(4.dp))
+                        Text("选择")
+                    }
+                }
+                if (compactEditor) {
+                    Column(
+                        Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalAlignment = Alignment.End,
+                    ) {
+                        pathField(Modifier.fillMaxWidth())
+                        chooseButton(Modifier)
+                    }
+                } else {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        pathField(Modifier.weight(1f))
+                        chooseButton(Modifier)
+                    }
                 }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -842,18 +982,179 @@ private fun CliCommandPanel(
                             onPathChange("")
                             onSavePath("")
                         },
-                        enabled = !controller.busy && !saving,
+                        enabled = !controller.busy && !operationBusy && !saving,
                     ) {
                         Text("恢复自动")
                     }
                     Spacer(Modifier.width(8.dp))
                 }
-                Button(onClick = { onSavePath(pathInput) }, enabled = pathChanged && !controller.busy && !saving) {
+                Button(onClick = { onSavePath(pathInput) }, enabled = pathChanged && !controller.busy && !operationBusy && !saving) {
                     Text("保存手动配置")
                 }
             }
-            extra()
         }
+    }
+}
+
+private fun larkSourceLabel(source: LarkCommandSource): String = when (source) {
+    LarkCommandSource.CONFIGURED -> "手动配置"
+    LarkCommandSource.PROBED -> "自动探测"
+    LarkCommandSource.PATH_FALLBACK -> "PATH 回退"
+}
+
+internal fun larkCliDetectionPhase(state: LarkCliState): CliDetectionPhase = when (state) {
+    LarkCliState.Idle -> CliDetectionPhase.IDLE
+    is LarkCliState.Loading -> CliDetectionPhase.LOADING
+    is LarkCliState.Ready -> when {
+        !state.status.installed -> CliDetectionPhase.FAILED
+        !state.status.authenticated -> CliDetectionPhase.AUTH_REQUIRED
+        else -> CliDetectionPhase.READY
+    }
+    is LarkCliState.Failed -> CliDetectionPhase.FAILED
+}
+
+internal fun larkLoginActionVisible(status: LarkCliStatus?): Boolean =
+    status?.installed == true && !status.authenticated
+
+internal fun larkLogoutActionVisible(status: LarkCliStatus?): Boolean =
+    status?.installed == true && status.authenticated
+
+internal fun larkLoginActionEnabled(
+    status: LarkCliStatus?,
+    cliState: LarkCliState,
+    saving: Boolean,
+    busy: Boolean,
+    deviceLoginActive: Boolean,
+): Boolean = larkLoginActionVisible(status) &&
+    cliState !is LarkCliState.Loading && !saving && !busy && !deviceLoginActive
+
+internal fun larkLogoutActionEnabled(
+    status: LarkCliStatus?,
+    cliState: LarkCliState,
+    saving: Boolean,
+    busy: Boolean,
+): Boolean = larkLogoutActionVisible(status) &&
+    cliState !is LarkCliState.Loading && !saving && !busy
+
+/**
+ * CLI 的低频操作使用同一条扁平工具栏，避免每个操作各自形成一个带描边的视觉块。
+ * Meegle 可传入认证摘要；宽屏时摘要与操作左右分置，窄屏时保持“状态后操作”的阅读顺序。
+ */
+@Composable
+private fun CliActionToolbar(
+    summary: (@Composable () -> Unit)?,
+    onRefresh: () -> Unit,
+    refreshEnabled: Boolean,
+    moreEnabled: Boolean,
+    moreActionsExpanded: Boolean,
+    onMoreActionsExpandedChange: (Boolean) -> Unit,
+    onCopyCommand: () -> Unit,
+    onRunInTerminal: () -> Unit,
+    actions: @Composable FlowRowScope.() -> Unit,
+    separateActionGroup: Boolean,
+) {
+    val utilityActions: @Composable FlowRowScope.() -> Unit = {
+        CliToolbarTextButton(
+            label = "重新检测",
+            icon = Icons.Outlined.Refresh,
+            onClick = onRefresh,
+            enabled = refreshEnabled,
+        )
+        Box {
+            CliToolbarTextButton(
+                label = "更多",
+                icon = Icons.Outlined.MoreHoriz,
+                onClick = { onMoreActionsExpandedChange(true) },
+                enabled = moreEnabled,
+            )
+            SilverWingDropdownMenu(
+                expanded = moreActionsExpanded,
+                onDismissRequest = { onMoreActionsExpandedChange(false) },
+            ) {
+                DropdownMenuItem(
+                    text = { Text("复制命令路径") },
+                    onClick = {
+                        onMoreActionsExpandedChange(false)
+                        onCopyCommand()
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text("在终端中运行") },
+                    onClick = {
+                        onMoreActionsExpandedChange(false)
+                        onRunInTerminal()
+                    },
+                )
+            }
+        }
+    }
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val compact = maxWidth < 560.dp
+        val actionRow: @Composable () -> Unit = {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                utilityActions()
+                if (separateActionGroup && !compact) Spacer(Modifier.width(8.dp))
+                actions()
+            }
+        }
+        when {
+            summary == null -> Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Spacer(Modifier.weight(1f))
+                actionRow()
+            }
+            compact -> Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                summary()
+                actionRow()
+            }
+            else -> Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) { summary() }
+                actionRow()
+            }
+        }
+    }
+}
+
+@Composable
+private fun CliToolbarTextButton(
+    label: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+    enabled: Boolean,
+    error: Boolean = false,
+) {
+    TextButton(
+        onClick = onClick,
+        enabled = enabled,
+        colors = if (error) {
+            ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+        } else {
+            ButtonDefaults.textButtonColors()
+        },
+    ) {
+        Icon(icon, null, Modifier.size(18.dp))
+        Spacer(Modifier.width(5.dp))
+        Text(label)
+    }
+}
+
+/**
+ * CLI 页面在宽屏上保持可读的行长，窄窗口时仍随父容器收缩。
+ *
+ * 这层只负责页面宽度，不引入新的视觉边框；具体内容继续由同级的 SettingsCard 承载。
+ */
+@Composable
+private fun CliSettingsContent(content: @Composable ColumnScope.() -> Unit) {
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+        Column(
+            modifier = Modifier
+                .widthIn(max = CLI_SETTINGS_MAX_CONTENT_WIDTH_DP.dp)
+                .fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            content = content,
+        )
     }
 }
 
@@ -953,29 +1254,305 @@ private fun SettingsGenbuSection(
         is GenbuSettingsState.Loaded -> CliDetectionPhase.READY
         is GenbuSettingsState.Failed -> CliDetectionPhase.FAILED
     }
-    SettingsCard("Genbu", "配置并检查生产版本查询命令。") {
-        AutoSaveStatus(controller, "genbu")
-        CliCommandPanel(
-            controller = controller,
-            title = "Genbu 命令",
-            command = command,
-            source = genbuSourceLabel(source),
-            version = loaded?.version,
-            phase = phase,
-            failure = (state as? GenbuSettingsState.Failed)?.message,
-            configuredPath = genbuPath,
-            pathLabel = "Genbu 可执行文件路径",
-            pathPlaceholder = if (System.getProperty("os.name").startsWith("Windows", true))
-                "例如 C:\\tools\\genbu.exe" else "例如 /usr/local/bin/genbu",
-            saving = saving,
-            onPathChange = onGenbuPathChange,
-            onSavePath = { raw ->
-                controller.updateGenbuExecutablePath(raw) { onGenbuPathChange(controller.config.genbuExecutablePath.orEmpty()) }
-            },
-            onChoosePath = { initial -> controller.chooseApplication(initial) { onGenbuPathChange(it) } },
-            onRefresh = { controller.refreshGenbu(force = true) },
-        )
+    CliSettingsContent {
+        SettingsCard("Genbu CLI", "配置并检查生产版本查询命令。", cliHeader = true) {
+            AutoSaveStatus(controller, "genbu")
+            CliCommandPanel(
+                controller = controller,
+                command = command,
+                source = genbuSourceLabel(source),
+                version = loaded?.version,
+                phase = phase,
+                failure = (state as? GenbuSettingsState.Failed)?.message,
+                configuredPath = genbuPath,
+                pathLabel = "Genbu 可执行文件路径",
+                pathPlaceholder = if (System.getProperty("os.name").startsWith("Windows", true))
+                    "例如 C:\\tools\\genbu.exe" else "例如 /usr/local/bin/genbu",
+                saving = saving,
+                pathSaveFailed = controller.settingsSaveState("genbu") == SettingsSaveState.FAILED,
+                onPathChange = onGenbuPathChange,
+                onSavePath = { raw ->
+                    controller.updateGenbuExecutablePath(raw) { onGenbuPathChange(controller.config.genbuExecutablePath.orEmpty()) }
+                },
+                onChoosePath = { initial -> controller.chooseApplication(initial) { onGenbuPathChange(it) } },
+                onRefresh = { controller.refreshGenbu(force = true) },
+            )
+        }
     }
+}
+
+@Composable
+private fun SettingsLarkSection(
+    controller: DesktopApplication,
+    larkPath: String,
+    onLarkPathChange: (String) -> Unit,
+    saving: Boolean,
+    onLogin: () -> Unit,
+) {
+    CliSettingsContent {
+        SettingsCard("Lark CLI", "连接、授权并管理本机的 Lark 命令。", cliHeader = true) {
+            AutoSaveStatus(controller, "lark")
+            LarkCliStatusPanel(
+                controller = controller,
+                larkPath = larkPath,
+                onLarkPathChange = onLarkPathChange,
+                saving = saving,
+                onLogin = onLogin,
+            )
+        }
+    }
+}
+
+@Composable
+private fun LarkCliStatusPanel(
+    controller: DesktopApplication,
+    larkPath: String,
+    onLarkPathChange: (String) -> Unit,
+    saving: Boolean,
+    onLogin: () -> Unit,
+) {
+    val cliState = controller.larkCliState
+    val status = when (cliState) {
+        is LarkCliState.Ready -> cliState.status
+        is LarkCliState.Loading -> cliState.previous
+        LarkCliState.Idle, is LarkCliState.Failed -> null
+    }
+    val (command, source) = controller.larkCommandResolution()
+    val phase = larkCliDetectionPhase(cliState)
+    val deviceLogin = controller.larkDeviceCodeLoginState
+    val failure = when (cliState) {
+        is LarkCliState.Failed -> cliState.message
+        is LarkCliState.Ready -> when {
+            !cliState.status.installed -> "未安装或无法启动 Lark CLI"
+            !cliState.status.authenticated -> cliState.status.authenticationError?.let { "登录状态检查失败：$it" } ?: "未登录"
+            else -> null
+        }
+        else -> null
+    }
+    val toolbarSummary: (@Composable () -> Unit)? = status?.let { current ->
+        {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    buildString {
+                        append("品牌：${current.brand ?: "Lark"}")
+                        current.expiresAt?.let { append(" · 凭据有效期：$it") }
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                current.tokenStatus?.let {
+                    Text("凭据状态：$it", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+    }
+    CliCommandPanel(
+        controller = controller,
+        command = command,
+        source = larkSourceLabel(source),
+        version = status?.version?.let { CommandVersionStatus(command = command, version = it) },
+        phase = phase,
+        failure = failure,
+        configuredPath = larkPath,
+        pathLabel = "Lark CLI 可执行文件路径",
+        pathPlaceholder = if (System.getProperty("os.name").startsWith("Windows", true))
+            "例如 C:\\tools\\lark-cli.cmd" else "例如 /usr/local/bin/lark-cli",
+        saving = saving,
+        operationBusy = controller.larkBusy,
+        pathSaveFailed = controller.settingsSaveState("lark") == SettingsSaveState.FAILED,
+        onPathChange = onLarkPathChange,
+        onSavePath = { raw -> controller.updateLarkExecutablePath(raw) },
+        onChoosePath = { initial -> controller.chooseApplication(initial) { onLarkPathChange(it) } },
+        onRefresh = { controller.refreshLarkStatus(force = true) },
+        toolbarSummary = toolbarSummary,
+        separateToolbarActionGroup = true,
+        toolbarActions = {
+            status?.let { current ->
+                if (larkLogoutActionVisible(current)) {
+                    CliToolbarTextButton(
+                        label = "退出登录",
+                        icon = Icons.AutoMirrored.Outlined.Logout,
+                        onClick = controller::logoutLark,
+                        enabled = larkLogoutActionEnabled(current, cliState, saving, controller.larkBusy),
+                        error = true,
+                    )
+                } else if (larkLoginActionVisible(current)) {
+                    CliToolbarTextButton(
+                        label = "登录 Lark CLI",
+                        icon = Icons.AutoMirrored.Outlined.OpenInNew,
+                        onClick = onLogin,
+                        enabled = larkLoginActionEnabled(current, cliState, saving, controller.larkBusy, deviceLogin != null),
+                    )
+                }
+            }
+        },
+        extra = {
+            if (status?.let(::larkLoginActionVisible) == true && deviceLogin == null) {
+                Text(
+                    "登录时选择业务域；授权页会自动打开，完成后自动更新登录状态。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (controller.larkBusy && controller.larkOperationCancellable) {
+                TextButton(onClick = controller::cancelLarkOperation) { Text("取消操作") }
+            }
+            controller.larkOperationError?.let { error ->
+                SelectionContainer { Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+            }
+        },
+    )
+}
+
+@Composable
+private fun LarkBusinessDomainDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (List<String>) -> Unit,
+) {
+    var selected by remember { mutableStateOf(emptySet<String>()) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("选择 Lark 业务域") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    "只申请所选业务域所需权限。每次登录都需要重新选择，至少选择一项。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Column(
+                    Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    LARK_BUSINESS_DOMAINS.forEach { domain ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable {
+                                selected = if (domain in selected) selected - domain else selected + domain
+                            },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(
+                                checked = domain in selected,
+                                onCheckedChange = { checked ->
+                                    selected = if (checked) selected + domain else selected - domain
+                                },
+                            )
+                            Column(Modifier.padding(vertical = 4.dp)) {
+                                Text(larkBusinessDomainLabel(domain))
+                                Text(domain, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onConfirm(selected.toList()) }, enabled = selected.isNotEmpty()) { Text("开始授权") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
+}
+
+@Composable
+private fun LarkDeviceCodeAuthorizationDialog(
+    state: LarkDeviceCodeLoginUiState,
+    onDismiss: () -> Unit,
+    onOpenAuthorizationPage: () -> Boolean,
+    onCopyAuthorizationUrl: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    val expiresAt = state.expiresAtEpochMillis
+        ?: (System.currentTimeMillis() + state.expiresInSeconds.coerceIn(0L, 24L * 60L * 60L) * 1_000L)
+    var remainingSeconds by remember(state.authorizationUrl, state.expiresAtEpochMillis) {
+        mutableStateOf(((expiresAt - System.currentTimeMillis()).coerceAtLeast(0L) / 1_000L))
+    }
+    LaunchedEffect(state.authorizationUrl, state.expiresAtEpochMillis) {
+        while (remainingSeconds > 0) {
+            delay(1_000)
+            remainingSeconds = ((expiresAt - System.currentTimeMillis()).coerceAtLeast(0L) / 1_000L)
+        }
+    }
+    val minutes = remainingSeconds / 60
+    val seconds = remainingSeconds % 60
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(if (state.polling) "等待 Lark 授权" else "Lark 授权")
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    if (state.polling) {
+                        "授权页已自动打开，请在浏览器中完成授权。Silverwing 会自动确认登录结果。"
+                    } else {
+                        "正在准备授权，请稍候。"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    if (remainingSeconds > 0) {
+                        "授权链接剩余 ${minutes}分${seconds.toString().padStart(2, '0')}秒"
+                    } else {
+                        "授权链接已过期，请取消后重新登录。"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (remainingSeconds > 0) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.error
+                    },
+                )
+                state.error?.let { error ->
+                    SelectionContainer {
+                        Text(error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onOpenAuthorizationPage() }) {
+                Icon(Icons.AutoMirrored.Outlined.OpenInNew, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(5.dp))
+                Text("重新打开授权页")
+            }
+        },
+        dismissButton = {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = onCopyAuthorizationUrl) {
+                    Icon(Icons.Outlined.ContentCopy, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text("复制链接")
+                }
+                TextButton(onClick = onCancel) { Text("取消") }
+            }
+        },
+    )
+}
+
+private fun larkBusinessDomainLabel(domain: String): String = when (domain) {
+    "application" -> "应用"
+    "approval" -> "审批"
+    "apps" -> "应用管理"
+    "attendance" -> "考勤"
+    "base" -> "多维表格"
+    "calendar" -> "日历"
+    "contact" -> "通讯录"
+    "docs" -> "云文档"
+    "drive" -> "云空间"
+    "event" -> "事件"
+    "im" -> "即时消息"
+    "mail" -> "邮箱"
+    "markdown" -> "Markdown 文档"
+    "mindnotes" -> "思维笔记"
+    "minutes" -> "会议纪要"
+    "note" -> "笔记"
+    "okr" -> "OKR"
+    "sheets" -> "电子表格"
+    "slides" -> "幻灯片"
+    "task" -> "任务"
+    "vc" -> "视频会议"
+    "wiki" -> "知识库"
+    else -> domain
 }
 
 @Composable
@@ -1289,8 +1866,35 @@ private fun SettingsGroupsSection(
     onRenameGroup: (GroupConfig) -> Unit,
     onDeleteGroup: (GroupConfig) -> Unit,
 ) {
-    SettingsCard("服务与仓库", "按任务组维护仓库和服务；只能删除没有服务和任务引用的空组。") {
+    val saving = controller.settingsSaveState("groups") == SettingsSaveState.SAVING
+    SettingsCard("项目组", "按项目组维护仓库和服务；只能删除没有服务和任务引用的空组。") {
         AutoSaveStatus(controller, "groups")
+        Surface(
+            Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+            shape = RoundedCornerShape(10.dp),
+        ) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("开启 AI 生成分支名和文件夹名", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "选中需求后，仅将标题和正文发送给本机 Codex CLI，自动补全未手动修改的文件夹名和分支名。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Switch(
+                    checked = controller.config.aiRequirementNamingEnabled,
+                    onCheckedChange = { controller.setAiRequirementNamingEnabled(it) },
+                    enabled = !controller.busy && !saving,
+                )
+            }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         controller.config.groups.forEachIndexed { index, group ->
             GroupSettingsRow(
                 controller = controller,
@@ -1742,44 +2346,47 @@ private fun SettingsGitSection(
     saving: Boolean,
     onSaveBlockedGitBranches: (List<String>) -> Unit,
 ) {
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        SettingsCard("Git 环境", "自动探测或配置 Git 命令，并读取本机身份和全局配置。") {
+    CliSettingsContent {
+        SettingsCard("Git 命令", "自动探测或配置 Git 命令。", cliHeader = true) {
             AutoSaveStatus(controller, "git")
             GitEnvironmentPanel(controller, controller.localGitSettingsState)
         }
+        SettingsCard("Git 身份与全局配置", "查看当前用户、凭据与全局 Git 配置。", cliHeader = true) {
+            GitEnvironmentDetails(controller, controller.localGitSettingsState)
+        }
         SettingsCard("分支写保护", "保护指定分支，避免在 silverwing 内执行 Git 写操作。") {
             AutoSaveStatus(controller, "git-write-policy")
-        Text("分支写保护", style = MaterialTheme.typography.titleSmall)
-        Text("在以下实际当前分支上禁用 Commit、Push、Commit & Push，以及需要写入分支的测试Tag流程。按完整名称忽略大小写匹配。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-                blockedGitBranchInput,
-                onBlockedGitBranchInputChange,
-                Modifier.weight(1f),
-                label = { Text("受保护分支") },
-                placeholder = { Text("例如 master") },
-                singleLine = true,
-            )
-            OutlinedButton(
-                onClick = {
-                    onSaveBlockedGitBranches(blockedGitWriteBranches + blockedGitBranchInput.trim())
-                    onBlockedGitBranchInputChange("")
-                },
-                enabled = blockedGitBranchInput.isNotBlank() && blockedGitWriteBranches.none { it.equals(blockedGitBranchInput.trim(), true) } && !saving,
-            ) { Icon(Icons.Outlined.Add, null, Modifier.size(17.dp)); Spacer(Modifier.width(4.dp)); Text("添加") }
-        }
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            blockedGitWriteBranches.forEach { branch ->
-                Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(10.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
-                    Row(Modifier.padding(start = 10.dp, end = 3.dp, top = 3.dp, bottom = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(branch)
-                        ActionIconButton("删除写保护分支 $branch", { onSaveBlockedGitBranches(blockedGitWriteBranches - branch) }, Modifier.size(28.dp), enabled = !saving) {
-                            Icon(Icons.Outlined.Delete, null, Modifier.size(15.dp))
+            Text("分支写保护", style = MaterialTheme.typography.titleSmall)
+            Text("在以下实际当前分支上禁用 Commit、Push、Commit & Push，以及需要写入分支的测试Tag流程。按完整名称忽略大小写匹配。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    blockedGitBranchInput,
+                    onBlockedGitBranchInputChange,
+                    Modifier.weight(1f),
+                    label = { Text("受保护分支") },
+                    placeholder = { Text("例如 master") },
+                    singleLine = true,
+                )
+                OutlinedButton(
+                    onClick = {
+                        onSaveBlockedGitBranches(blockedGitWriteBranches + blockedGitBranchInput.trim())
+                        onBlockedGitBranchInputChange("")
+                    },
+                    enabled = blockedGitBranchInput.isNotBlank() && blockedGitWriteBranches.none { it.equals(blockedGitBranchInput.trim(), true) } && !saving,
+                ) { Icon(Icons.Outlined.Add, null, Modifier.size(17.dp)); Spacer(Modifier.width(4.dp)); Text("添加") }
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                blockedGitWriteBranches.forEach { branch ->
+                    Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(10.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+                        Row(Modifier.padding(start = 10.dp, end = 3.dp, top = 3.dp, bottom = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(branch)
+                            ActionIconButton("删除写保护分支 $branch", { onSaveBlockedGitBranches(blockedGitWriteBranches - branch) }, Modifier.size(28.dp), enabled = !saving) {
+                                Icon(Icons.Outlined.Delete, null, Modifier.size(15.dp))
+                            }
                         }
                     }
                 }
             }
-        }
         }
     }
 }
@@ -1787,11 +2394,9 @@ private fun SettingsGitSection(
 @Composable
 private fun GitEnvironmentPanel(controller: DesktopApplication, state: LocalGitSettingsState) {
     val snapshot = displayedGitSnapshot(state)
-    val refreshing = state is LocalGitSettingsState.Loading
     val (command, source) = controller.gitCommandResolution()
     CliCommandPanel(
         controller = controller,
-        title = "Git 命令",
         command = command,
         source = gitSourceLabel(source),
         version = snapshot?.gitVersion?.let { CommandVersionStatus(command = command, version = it) },
@@ -1807,31 +2412,37 @@ private fun GitEnvironmentPanel(controller: DesktopApplication, state: LocalGitS
         pathPlaceholder = if (System.getProperty("os.name").startsWith("Windows", true))
             "例如 C:\\Program Files\\Git\\cmd\\git.exe" else "例如 /usr/bin/git",
         saving = controller.settingsSaveState("git") == SettingsSaveState.SAVING,
+        pathSaveFailed = controller.settingsSaveState("git") == SettingsSaveState.FAILED,
         onPathChange = {},
         onSavePath = { raw ->
             controller.updateGitExecutablePath(raw) { }
         },
         onChoosePath = { initial -> controller.chooseApplication(initial) { selected -> controller.updateGitExecutablePath(selected) } },
         onRefresh = { controller.refreshLocalGit(force = true) },
-        extra = {
-            snapshot?.let {
-                GitEnvironmentSummary(it)
-                OutlinedButton(onClick = { controller.copyText(formatLocalGitSettings(it), "Git 信息已复制") }) {
-                    Icon(Icons.Outlined.ContentCopy, null, Modifier.size(17.dp))
-                    Spacer(Modifier.width(5.dp))
-                    Text("复制全部 Git 信息")
-                }
-            }
-            (state as? LocalGitSettingsState.Failed)?.let { failureState ->
-                OutlinedButton(onClick = { controller.copyText(failureState.message, "Git 错误已复制") }) {
-                    Icon(Icons.Outlined.ContentCopy, null, Modifier.size(17.dp))
-                    Spacer(Modifier.width(5.dp))
-                    Text("复制错误")
-                }
-            }
-            if (snapshot == null && state is LocalGitSettingsState.Loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-        },
     )
+}
+
+@Composable
+private fun GitEnvironmentDetails(controller: DesktopApplication, state: LocalGitSettingsState) {
+    val snapshot = displayedGitSnapshot(state)
+    snapshot?.let {
+        GitEnvironmentSummary(it)
+        OutlinedButton(onClick = { controller.copyText(formatLocalGitSettings(it), "Git 信息已复制") }) {
+            Icon(Icons.Outlined.ContentCopy, null, Modifier.size(17.dp))
+            Spacer(Modifier.width(5.dp))
+            Text("复制全部 Git 信息")
+        }
+    }
+    if (state is LocalGitSettingsState.Loading) {
+        LinearProgressIndicator(Modifier.fillMaxWidth())
+    }
+    (state as? LocalGitSettingsState.Failed)?.let { failureState ->
+        Text(failureState.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        TextButton(onClick = { controller.copyText(failureState.message, "Git 错误已复制") }) { Text("复制错误") }
+    }
+    if (snapshot == null && state is LocalGitSettingsState.Idle) {
+        Text("进入此页面后会读取本机 Git 环境。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
 }
 
 
@@ -1881,22 +2492,40 @@ private fun GitEnvironmentSection(title: String, fields: List<GitEnvironmentFiel
 
 @Composable
 private fun GitEnvironmentGrid(fields: List<GitEnvironmentField>) {
-    fields.chunked(2).forEach { row ->
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(18.dp),
-            verticalAlignment = Alignment.Top,
-        ) {
-            row.forEach { field ->
-                GitEnvironmentValue(
-                    label = field.label,
-                    value = field.value,
-                    origin = field.origin,
-                    monospace = field.monospace,
-                    modifier = Modifier.weight(1f),
-                )
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        if (maxWidth < 600.dp) {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                fields.forEach { field ->
+                    GitEnvironmentValue(
+                        label = field.label,
+                        value = field.value,
+                        origin = field.origin,
+                        monospace = field.monospace,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
-            if (row.size == 1) Spacer(Modifier.weight(1f))
+        } else {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                fields.chunked(2).forEach { row ->
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(18.dp),
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        row.forEach { field ->
+                            GitEnvironmentValue(
+                                label = field.label,
+                                value = field.value,
+                                origin = field.origin,
+                                monospace = field.monospace,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        if (row.size == 1) Spacer(Modifier.weight(1f))
+                    }
+                }
+            }
         }
     }
 }
@@ -1912,9 +2541,22 @@ private fun GitEnvironmentValue(
     SelectionContainer {
         Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(value, style = MaterialTheme.typography.bodyMedium, fontFamily = if (monospace) FontFamily.Monospace else null)
+            Text(
+                value,
+                style = MaterialTheme.typography.bodyMedium,
+                fontFamily = if (monospace) FontFamily.Monospace else null,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
             origin?.let {
-                Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = FontFamily.Monospace)
+                Text(
+                    it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
     }
@@ -2004,19 +2646,86 @@ private fun SettingsFeishuSection(
     saving: Boolean,
     onSaveMeegleProjects: () -> Unit,
 ) {
-    SettingsCard("Meegle", "管理创建任务时用于读取需求的 Meegle 项目。") {
-        AutoSaveStatus(controller, "feishu")
-        MeegleCliStatusPanel(controller)
-        Text("Meegle 项目", style = MaterialTheme.typography.titleSmall)
-        Text(
-            "点击添加后从本机 Meegle CLI 读取项目；创建任务时会拉取已配置项目中的 Meegle 需求链接。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        meegleProjects.toSortedMap().forEach { (index, project) ->
-            OutlinedCard(Modifier.fillMaxWidth()) {
+    CliSettingsContent {
+        SettingsCard("Meegle CLI", "连接、授权并配置用于读取需求的 Meegle 命令。", cliHeader = true) {
+            AutoSaveStatus(controller, "feishu")
+            MeegleCliStatusPanel(controller)
+        }
+        SettingsCard("Meegle 项目 (${meegleProjects.size})", "创建任务时会从已配置项目读取 Meegle 需求链接。") {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (meegleProjects.isEmpty()) "尚未配置项目" else "${meegleProjects.size} 个已配置项目",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.weight(1f))
+                Box {
+                    Button(
+                        onClick = {
+                            onMeegleMenuExpandedChange(true)
+                            controller.refreshMeegleStatus(force = true)
+                        },
+                        enabled = (controller.meegleCliState as? MeegleCliState.Ready)?.status?.authenticated == true &&
+                            !saving &&
+                            !controller.busy,
+                    ) {
+                        Icon(Icons.Outlined.Add, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(5.dp))
+                        Text("添加项目")
+                    }
+                    SilverWingDropdownMenu(
+                        expanded = meegleMenuExpanded,
+                        onDismissRequest = { onMeegleMenuExpandedChange(false) },
+                        modifier = Modifier.widthIn(max = 560.dp),
+                    ) {
+                        when (val state = controller.meegleProjectCatalogState) {
+                            MeegleProjectCatalogState.Idle, MeegleProjectCatalogState.Loading ->
+                                DropdownMenuItem(text = { Text("正在读取 Meegle 项目…") }, onClick = {}, enabled = false)
+                            is MeegleProjectCatalogState.Failed ->
+                                DropdownMenuItem(
+                                    text = { Text("读取失败：${state.message}", color = MaterialTheme.colorScheme.error) },
+                                    onClick = { controller.loadMeegleProjects(force = true) },
+                                )
+                            is MeegleProjectCatalogState.Loaded -> {
+                                val selectedKeys = meegleProjects.values.map(MeegleProjectConfig::projectKey).toSet()
+                                val available = state.projects.filterNot { it.projectKey in selectedKeys }
+                                if (available.isEmpty()) {
+                                    DropdownMenuItem(text = { Text("没有可添加的项目") }, onClick = {}, enabled = false)
+                                }
+                                available.forEach { project ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Column {
+                                                Text("${project.name} · ${project.simpleName}")
+                                                Text(project.projectKey, style = MaterialTheme.typography.labelSmall)
+                                            }
+                                        },
+                                        onClick = {
+                                            val index = (meegleProjects.keys.maxOrNull() ?: -1) + 1
+                                            meegleProjects[index] = MeegleProjectConfig(project.projectKey, project.simpleName)
+                                            onMeegleMenuExpandedChange(false)
+                                            onSaveMeegleProjects()
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (meegleProjects.isEmpty()) {
+                Text(
+                    "登录后点击“添加项目”读取本机 Meegle CLI 可访问的项目。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            meegleProjects.toSortedMap().entries.forEachIndexed { listIndex, entry ->
+                val index = entry.key
+                val project = entry.value
+                if (listIndex > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp),
+                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -2026,57 +2735,6 @@ private fun SettingsFeishuSection(
                     }
                     ActionIconButton("删除 Meegle 项目配置", { meegleProjects.remove(index); onSaveMeegleProjects() }, enabled = !controller.busy && !saving) {
                         Icon(Icons.Outlined.Delete, "删除项目")
-                    }
-                }
-            }
-        }
-        Box {
-            OutlinedButton(
-                onClick = {
-                    onMeegleMenuExpandedChange(true)
-                    controller.refreshMeegleStatus(force = true)
-                },
-                enabled = (controller.meegleCliState as? MeegleCliState.Ready)?.status?.authenticated == true && !saving,
-            ) {
-                Icon(Icons.Outlined.Add, null, Modifier.size(18.dp))
-                Spacer(Modifier.width(5.dp))
-                Text("添加项目")
-            }
-            SilverWingDropdownMenu(
-                expanded = meegleMenuExpanded,
-                onDismissRequest = { onMeegleMenuExpandedChange(false) },
-                modifier = Modifier.widthIn(min = 520.dp, max = 700.dp),
-            ) {
-                when (val state = controller.meegleProjectCatalogState) {
-                    MeegleProjectCatalogState.Idle, MeegleProjectCatalogState.Loading ->
-                        DropdownMenuItem(text = { Text("正在读取 Meegle 项目…") }, onClick = {}, enabled = false)
-                    is MeegleProjectCatalogState.Failed ->
-                        DropdownMenuItem(
-                            text = { Text("读取失败：${state.message}", color = MaterialTheme.colorScheme.error) },
-                            onClick = { controller.loadMeegleProjects(force = true) },
-                        )
-                    is MeegleProjectCatalogState.Loaded -> {
-                        val selectedKeys = meegleProjects.values.map(MeegleProjectConfig::projectKey).toSet()
-                        val available = state.projects.filterNot { it.projectKey in selectedKeys }
-                        if (available.isEmpty()) {
-                            DropdownMenuItem(text = { Text("没有可添加的项目") }, onClick = {}, enabled = false)
-                        }
-                        available.forEach { project ->
-                            DropdownMenuItem(
-                                text = {
-                                    Column {
-                                        Text("${project.name} · ${project.simpleName}")
-                                        Text(project.projectKey, style = MaterialTheme.typography.labelSmall)
-                                    }
-                                },
-                                onClick = {
-                                    val index = (meegleProjects.keys.maxOrNull() ?: -1) + 1
-                                    meegleProjects[index] = MeegleProjectConfig(project.projectKey, project.simpleName)
-                                    onMeegleMenuExpandedChange(false)
-                                    onSaveMeegleProjects()
-                                },
-                            )
-                        }
                     }
                 }
             }
@@ -2171,25 +2829,9 @@ private fun MeegleCliStatusPanel(controller: DesktopApplication) {
         }
         else -> null
     }
-    CliCommandPanel(
-        controller = controller,
-        title = "Meegle CLI",
-        command = command,
-        source = meegleSourceLabel(source),
-        version = status?.version?.let { CommandVersionStatus(command = command, version = it) },
-        phase = phase,
-        failure = failure,
-        configuredPath = controller.config.meegleExecutablePath.orEmpty(),
-        pathLabel = "Meegle 可执行文件路径",
-        pathPlaceholder = if (System.getProperty("os.name").startsWith("Windows", true))
-            "例如 C:\\tools\\meegle.cmd" else "例如 /opt/homebrew/bin/meegle",
-        saving = saving,
-        onPathChange = {},
-        onSavePath = { raw -> controller.updateMeegleExecutablePath(raw) },
-        onChoosePath = { initial -> controller.chooseApplication(initial) { selected -> controller.updateMeegleExecutablePath(selected) } },
-        onRefresh = { controller.refreshMeegleStatus(force = true) },
-        extra = {
-            status?.let { current ->
+    val toolbarSummary: (@Composable () -> Unit)? = status?.let { current ->
+        {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     buildString {
                         append("站点：${current.host ?: "project.feishu.cn"}")
@@ -2201,22 +2843,139 @@ private fun MeegleCliStatusPanel(controller: DesktopApplication) {
                 if (current.authenticated && (current.expiresInMinutes ?: Long.MAX_VALUE) <= 5) {
                     Text("登录凭据即将过期，建议刷新或重新登录", style = MaterialTheme.typography.labelSmall, color = WarningAmber)
                 }
+            }
+        }
+    }
+    CliCommandPanel(
+        controller = controller,
+        command = command,
+        source = meegleSourceLabel(source),
+        version = status?.version?.let { CommandVersionStatus(command = command, version = it) },
+        phase = phase,
+        failure = failure,
+        configuredPath = controller.config.meegleExecutablePath.orEmpty(),
+        pathLabel = "Meegle 可执行文件路径",
+        pathPlaceholder = if (System.getProperty("os.name").startsWith("Windows", true))
+            "例如 C:\\tools\\meegle.cmd" else "例如 /opt/homebrew/bin/meegle",
+        saving = saving,
+        pathSaveFailed = controller.settingsSaveState("feishu") == SettingsSaveState.FAILED,
+        onPathChange = {},
+        onSavePath = { raw -> controller.updateMeegleExecutablePath(raw) },
+        onChoosePath = { initial -> controller.chooseApplication(initial) { selected -> controller.updateMeegleExecutablePath(selected) } },
+        onRefresh = { controller.refreshMeegleStatus(force = true) },
+        toolbarSummary = toolbarSummary,
+        separateToolbarActionGroup = status?.let(::meegleLoginActionVisible) == true,
+        toolbarActions = {
+            status?.let { current ->
+                if (meegleLogoutActionVisible(current)) {
+                    CliToolbarTextButton(
+                        label = "退出登录",
+                        icon = Icons.AutoMirrored.Outlined.Logout,
+                        onClick = controller::logoutMeegle,
+                        enabled = meegleLogoutActionEnabled(current, cliState, saving, controller.meegleBusy),
+                        error = true,
+                    )
+                }
                 if (meegleLoginActionVisible(current)) {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Button(
-                            onClick = controller::copyMeegleLoginCommand,
-                            enabled = meegleLoginActionEnabled(current, cliState, saving, controller.meegleBusy),
-                        ) { Text("复制登录命令") }
-                        Text(
-                            "请在命令行执行复制的命令，完成后点击“重新检测”。",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                    val deviceLogin = controller.meegleDeviceCodeLoginState
+                    val loginEnabled = meegleLoginActionEnabled(current, cliState, saving, controller.meegleBusy)
+                    CliToolbarTextButton(
+                        label = "复制登录命令",
+                        icon = Icons.Outlined.ContentCopy,
+                        onClick = controller::copyMeegleLoginCommand,
+                        enabled = loginEnabled,
+                    )
+                    CliToolbarTextButton(
+                        label = if (deviceLogin == null) "登录 Meegle" else "重新生成验证码",
+                        icon = Icons.AutoMirrored.Outlined.OpenInNew,
+                        onClick = { controller.loginMeegle() },
+                        enabled = loginEnabled,
+                    )
+                }
+            }
+        },
+        extra = {
+            status?.takeIf(::meegleLoginActionVisible)?.let {
+                val deviceLogin = controller.meegleDeviceCodeLoginState
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (deviceLogin == null) {
+                            Text(
+                                "点击后会自动打开浏览器，并在授权完成后自动更新登录状态。",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else {
+                            Surface(
+                                modifier = Modifier.fillMaxWidth(),
+                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.48f),
+                                shape = RoundedCornerShape(12.dp),
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    Text(
+                                        if (deviceLogin.polling) "正在等待浏览器授权" else "请在浏览器完成授权",
+                                        style = MaterialTheme.typography.titleSmall,
+                                    )
+                                    Text(
+                                        if (deviceLogin.polling) {
+                                            "授权页已自动打开，正在检测登录结果。"
+                                        } else {
+                                            "自动检测没有完成。完成浏览器授权后可立即重新检测。"
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Text("授权码", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    SelectionContainer {
+                                        Text(
+                                            deviceLogin.userCode,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.SemiBold,
+                                        )
+                                    }
+                                    FlowRow(
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                                    ) {
+                                        OutlinedButton(onClick = controller::openMeegleDeviceCodeAuthorizationUrl) {
+                                            Text("打开授权页")
+                                        }
+                                        OutlinedButton(
+                                            onClick = { controller.copyText(deviceLogin.userCode, "Meegle 授权码已复制") },
+                                        ) { Text("复制授权码") }
+                                        if (!deviceLogin.polling) {
+                                            OutlinedButton(onClick = { controller.completeMeegleDeviceCodeLogin() }) {
+                                                Text("立即检测")
+                                            }
+                                        }
+                                        TextButton(onClick = controller::cancelMeegleDeviceCodeLogin, enabled = !controller.meegleBusy) {
+                                            Text("取消")
+                                        }
+                                    }
+                                    Text(
+                                        "验证码约 ${(deviceLogin.expiresInSeconds + 59) / 60} 分钟内有效。",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    deviceLogin.error?.let { error ->
+                                        SelectionContainer {
+                                            Text(
+                                                error,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.error,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
                 }
             }
             if (controller.meegleBusy && controller.meegleOperationCancellable) {
-                TextButton(onClick = { controller.cancelMeegleOperation() }) { Text("取消登录") }
+                TextButton(onClick = { controller.cancelMeegleOperation() }) { Text("取消操作") }
             }
             controller.meegleOperationError?.let { error ->
                 SelectionContainer { Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
@@ -2355,7 +3114,12 @@ internal fun formatLocalGitSettings(snapshot: LocalGitEnvironmentSnapshot): Stri
 }.trimEnd()
 
 @Composable
-internal fun SettingsCard(title: String, subtitle: String, content: @Composable ColumnScope.() -> Unit) {
+internal fun SettingsCard(
+    title: String,
+    subtitle: String,
+    cliHeader: Boolean = false,
+    content: @Composable ColumnScope.() -> Unit,
+) {
     OutlinedCard(
         Modifier.fillMaxWidth(),
         colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -2363,15 +3127,21 @@ internal fun SettingsCard(title: String, subtitle: String, content: @Composable 
     ) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(10.dp)) {
-                    Icon(
-                        settingsCardIcon(title),
-                        null,
-                        Modifier.padding(9.dp).size(20.dp),
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
+                Surface(
+                    modifier = Modifier.size(if (cliHeader) 36.dp else 38.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shape = RoundedCornerShape(10.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            settingsCardIcon(title),
+                            null,
+                            Modifier.size(if (cliHeader) 18.dp else 20.dp),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
                 }
-                Spacer(Modifier.width(11.dp))
+                Spacer(Modifier.width(if (cliHeader) 10.dp else 11.dp))
                 Column {
                     Text(title, style = MaterialTheme.typography.titleMedium)
                     Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -2383,26 +3153,29 @@ internal fun SettingsCard(title: String, subtitle: String, content: @Composable 
     }
 }
 
-private fun settingsCardIcon(title: String): ImageVector = when (title) {
-    "外观" -> Icons.Outlined.Palette
-    "Tag设置" -> Icons.Outlined.Sell
-    "任务路径设置" -> Icons.Outlined.Folder
-    "需求资料目录设置" -> Icons.Outlined.Folder
-    "配置目录" -> Icons.Outlined.Description
-    "服务与仓库" -> Icons.Outlined.Group
-    "全局与组说明" -> Icons.AutoMirrored.Outlined.Article
-    "任务说明模板" -> Icons.Outlined.Edit
-    "开发工具" -> Icons.Outlined.Build
-    "任务工具栏", "工作区卡片工具栏" -> Icons.Outlined.AccountTree
-    "silverwing CLI", "silverwing Skill" -> Icons.Outlined.Terminal
-    "Codex 插件", "Skills" -> Icons.Outlined.Extension
-    "分支" -> Icons.Outlined.AccountTree
-    "Git 环境" -> Icons.Outlined.Terminal
-    "分支写保护" -> Icons.Outlined.Lock
-    "Genbu" -> Icons.Outlined.Sell
-    "Meegle" -> Icons.Outlined.Link
-    "诊断与日志" -> Icons.AutoMirrored.Outlined.Subject
-    else -> Icons.Outlined.Description
+private fun settingsCardIcon(title: String): ImageVector {
+    if (title.startsWith("Meegle 项目")) return Icons.Outlined.Link
+    return when (title) {
+        "外观" -> Icons.Outlined.Palette
+        "Tag设置" -> Icons.Outlined.Sell
+        "任务路径设置" -> Icons.Outlined.Folder
+        "需求资料目录设置" -> Icons.Outlined.Folder
+        "配置目录" -> Icons.Outlined.Description
+        "项目组" -> Icons.Outlined.Group
+        "全局与组说明" -> Icons.AutoMirrored.Outlined.Article
+        "任务说明模板" -> Icons.Outlined.Edit
+        "开发工具" -> Icons.Outlined.Build
+        "任务工具栏", "工作区卡片工具栏" -> Icons.Outlined.AccountTree
+        "silverwing CLI", "silverwing Skill" -> Icons.Outlined.Terminal
+        "Codex 插件", "Skills" -> Icons.Outlined.Extension
+        "分支" -> Icons.Outlined.AccountTree
+        "Git 环境", "Git 命令", "Git 身份与全局配置", "Genbu CLI", "Meegle CLI", "Lark CLI" -> Icons.Outlined.Terminal
+        "分支写保护" -> Icons.Outlined.Lock
+        "Genbu" -> Icons.Outlined.Sell
+        "Meegle", "Meegle 项目" -> Icons.Outlined.Link
+        "诊断与日志" -> Icons.AutoMirrored.Outlined.Subject
+        else -> Icons.Outlined.Description
+    }
 }
 
 internal data class PathFieldModifierTargets(

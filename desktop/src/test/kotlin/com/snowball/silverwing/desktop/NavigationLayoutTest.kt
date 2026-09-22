@@ -20,12 +20,6 @@ class NavigationLayoutTest {
     }
 
     @Test
-    fun `sidebar layout selection has no refresh placement dependency`() {
-        assertEquals(NavigationLayout.EXPANDED, navigationLayoutFor(COMPACT_NAVIGATION_MAX_WIDTH_DP))
-        assertEquals(NavigationLayout.COMPACT, navigationLayoutFor(COMPACT_NAVIGATION_MAX_WIDTH_DP - 1f))
-    }
-
-    @Test
     fun `all page titles are removed while non task destinations retain a compact top gutter`() {
         assertEquals(0f, navigationContentTopPaddingFor(NavigationItem.TASKS))
         assertEquals(16f, navigationContentTopPaddingFor(NavigationItem.ARCHIVED))

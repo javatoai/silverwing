@@ -23,7 +23,7 @@ import kotlin.io.path.exists
 import kotlin.io.path.name
 import kotlin.concurrent.withLock
 
-private const val CONFIG_SHARD_SCHEMA = 1
+private const val CONFIG_SHARD_SCHEMA = 2
 
 class UnsupportedConfigVersionException(
     val actualVersion: String?,
@@ -230,6 +230,9 @@ class ConfigStore(
             if (current.repositories.size != imported.repositories.size) add("仓库：${current.repositories.size} → ${imported.repositories.size}")
             if (current.developmentTools != imported.developmentTools) add("开发工具配置将更新")
             if (current.meegleProjects != imported.meegleProjects) add("飞书项目：${current.meegleProjects.size} → ${imported.meegleProjects.size}")
+            if (current.aiRequirementNamingEnabled != imported.aiRequirementNamingEnabled) {
+                add("AI 需求命名：${if (current.aiRequirementNamingEnabled) "开启" else "关闭"} → ${if (imported.aiRequirementNamingEnabled) "开启" else "关闭"}")
+            }
             if (current.tagEnabled != imported.tagEnabled) {
                 add("全局测试Tag：${if (current.tagEnabled) "开启" else "关闭"} → ${if (imported.tagEnabled) "开启" else "关闭"}")
             }
@@ -336,10 +339,12 @@ class ConfigStore(
             gitExecutablePath = git.gitExecutablePath,
             genbuExecutablePath = integrations.genbuExecutablePath,
             genbuExecutableAutoDetected = integrations.genbuExecutableAutoDetected,
+            larkExecutablePath = integrations.larkExecutablePath,
             requirementMaterialsRoot = integrations.requirementMaterialsRoot,
             requirementMaterialsSubdirectory = integrations.requirementMaterialsSubdirectory,
             codexPluginMarketplaceSources = integrations.codexPluginMarketplaceSources,
             skillSources = integrations.skillSources,
+            aiRequirementNamingEnabled = integrations.aiRequirementNamingEnabled,
         )
         return DecodedConfig(
             config = config,
@@ -380,10 +385,12 @@ class ConfigStore(
                 meegleExecutablePath = config.meegleExecutablePath,
                 genbuExecutablePath = config.genbuExecutablePath,
                 genbuExecutableAutoDetected = config.genbuExecutableAutoDetected,
+                larkExecutablePath = config.larkExecutablePath,
                 requirementMaterialsRoot = config.requirementMaterialsRoot,
                 requirementMaterialsSubdirectory = config.requirementMaterialsSubdirectory,
                 codexPluginMarketplaceSources = config.codexPluginMarketplaceSources,
                 skillSources = config.skillSources,
+                aiRequirementNamingEnabled = config.aiRequirementNamingEnabled,
             ),
             appearance = AppearanceShard(
                 theme = config.theme,
@@ -647,10 +654,13 @@ private data class GitShard(
 @Serializable
 private data class IntegrationsShard(
     val schema: Int = CONFIG_SHARD_SCHEMA,
+    /** Schema 2 requires an explicit value; schema 1 configurations are rejected before decode. */
+    val aiRequirementNamingEnabled: Boolean,
     val meegleProjects: List<MeegleProjectConfig> = emptyList(),
     val meegleExecutablePath: String? = null,
     val genbuExecutablePath: String? = null,
     val genbuExecutableAutoDetected: Boolean = false,
+    val larkExecutablePath: String? = null,
     val requirementMaterialsRoot: String? = null,
     val requirementMaterialsSubdirectory: String? = null,
     val codexPluginMarketplaceSources: List<CodexPluginMarketplaceSource> = emptyList(),

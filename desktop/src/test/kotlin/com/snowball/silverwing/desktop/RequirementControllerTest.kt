@@ -1,7 +1,12 @@
 package com.snowball.silverwing.desktop
 
 import com.snowball.silverwing.core.AppConfig
+import com.snowball.silverwing.core.BranchReferenceValidator
 import com.snowball.silverwing.core.MeegleProjectConfig
+import com.snowball.silverwing.core.RequirementAiContext
+import com.snowball.silverwing.core.RequirementAiContextProvider
+import com.snowball.silverwing.core.RequirementAiNamingService
+import com.snowball.silverwing.core.RequirementAiNamingSuggestion
 import com.snowball.silverwing.core.RequirementMetadata
 import com.snowball.silverwing.core.RequirementMetadataProvider
 import com.snowball.silverwing.core.RequirementMaterialsRequest
@@ -28,6 +33,7 @@ import java.time.Clock
 import java.time.Instant
 import java.time.ZoneId
 import java.time.Duration
+import java.nio.file.Files
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -35,6 +41,107 @@ import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class RequirementControllerTest {
+    @Test
+    fun `AI naming stays off until enabled then retries an occupied folder`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val root = Files.createTempDirectory("silverwing-ai-naming-test-")
+        Files.createDirectories(root.resolve("支付超时优化"))
+        val contextCalls = AtomicInteger()
+        val suggestions = listOf(
+            RequirementAiNamingSuggestion("支付超时优化", "payment_timeout"),
+            RequirementAiNamingSuggestion("订单状态", "order_status"),
+        ).iterator()
+        val forbiddenAtEachAttempt = mutableListOf<Set<String>>()
+        val session = AppSessionStore(
+            AppConfig(
+                taskRoot = root.toString(),
+                meegleProjects = listOf(MeegleProjectConfig("project", "obt")),
+            ),
+            emptyList(),
+        )
+        val controller = RequirementController(
+            session = session,
+            scope = this,
+            coordinator = RequirementMetadataCoordinator(
+                provider = RequirementMetadataProvider { null },
+                scope = this,
+                ioDispatcher = dispatcher,
+            ),
+            aiContextProvider = RequirementAiContextProvider { _, _ ->
+                contextCalls.incrementAndGet()
+                RequirementAiContext("支付订单状态优化", "补齐订单状态同步和超时处理。")
+            },
+            aiNamingService = object : RequirementAiNamingService {
+                override fun suggest(
+                    context: RequirementAiContext,
+                    forbiddenFolderNames: Set<String>,
+                ): RequirementAiNamingSuggestion {
+                    forbiddenAtEachAttempt += forbiddenFolderNames
+                    return suggestions.next()
+                }
+            },
+            branchValidator = BranchReferenceValidator { true },
+            ioDispatcher = dispatcher,
+        )
+        try {
+            var result: RequirementAiNamingSuggestion? = null
+            controller.requestDraftAiNaming(LINK, "feature/{num}_", enabled = false) { result = it }
+            advanceUntilIdle()
+
+            assertEquals(0, contextCalls.get())
+            assertIs<RequirementAiNamingUiState.Idle>(controller.aiNamingState)
+
+            controller.requestDraftAiNaming(LINK, "feature/{num}_", enabled = true) { result = it }
+            advanceUntilIdle()
+
+            assertEquals(1, contextCalls.get())
+            assertEquals(RequirementAiNamingSuggestion("订单状态", "order_status"), result)
+            assertEquals(listOf(emptySet(), setOf("支付超时优化")), forbiddenAtEachAttempt)
+            assertEquals(
+                RequirementAiNamingSuggestion("订单状态", "order_status"),
+                assertIs<RequirementAiNamingUiState.Ready>(controller.aiNamingState).suggestion,
+            )
+        } finally {
+            Files.walk(root).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
+        }
+    }
+
+    @Test
+    fun `cancelling AI naming before it runs leaves no result`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val contextCalls = AtomicInteger()
+        val controller = RequirementController(
+            session = AppSessionStore(AppConfig(), emptyList()),
+            scope = this,
+            coordinator = RequirementMetadataCoordinator(
+                provider = RequirementMetadataProvider { null },
+                scope = this,
+                ioDispatcher = dispatcher,
+            ),
+            aiContextProvider = RequirementAiContextProvider { _, _ ->
+                contextCalls.incrementAndGet()
+                RequirementAiContext("标题", "正文")
+            },
+            aiNamingService = object : RequirementAiNamingService {
+                override fun suggest(
+                    context: RequirementAiContext,
+                    forbiddenFolderNames: Set<String>,
+                ) = RequirementAiNamingSuggestion("任务优化", "task_update")
+            },
+            branchValidator = BranchReferenceValidator { true },
+            ioDispatcher = dispatcher,
+        )
+        var result: RequirementAiNamingSuggestion? = null
+
+        controller.requestDraftAiNaming(LINK, "feature/", enabled = true) { result = it }
+        controller.cancelDraftAiNaming()
+        advanceUntilIdle()
+
+        assertEquals(0, contextCalls.get())
+        assertEquals(null, result)
+        assertIs<RequirementAiNamingUiState.Idle>(controller.aiNamingState)
+    }
+
     @Test
     fun `same key shares in flight request and success cache while force bypasses cache`() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)

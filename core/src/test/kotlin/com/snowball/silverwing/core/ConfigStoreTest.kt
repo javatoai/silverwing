@@ -33,7 +33,7 @@ class ConfigStoreTest {
     }
 
     @Test
-    fun `missing configuration initializes all strict schema one shards`() {
+    fun `missing configuration initializes all strict schema two shards`() {
         val paths = ApplicationPaths(temporary.resolve("home"))
         val store = ConfigStore(paths)
 
@@ -42,9 +42,10 @@ class ConfigStoreTest {
         assertTrue(store.exists())
         assertTrue(Files.isDirectory(paths.tasks))
         assertEquals(listOf(DEFAULT_GROUP_NAME), config.groups.map { it.name })
+        assertFalse(config.aiRequirementNamingEnabled)
         assertEquals(EXPECTED_SHARDS, shardNames(paths))
         EXPECTED_SHARDS.forEach { name ->
-            assertTrue(Files.readString(paths.config.resolve(name)).contains("\"schema\": 1"), name)
+            assertTrue(Files.readString(paths.config.resolve(name)).contains("\"schema\": 2"), name)
         }
     }
 
@@ -88,6 +89,7 @@ class ConfigStoreTest {
             blockedGitWriteBranches = listOf("main"),
             meegleProjects = listOf(MeegleProjectConfig("PAY", "pay")),
             meegleExecutablePath = "D:/tools/meegle.exe",
+            larkExecutablePath = "D:/tools/lark-cli.cmd",
             gitExecutablePath = "D:/tools/git.exe",
             genbuExecutablePath = "D:/tools/genbu.exe",
             genbuExecutableAutoDetected = true,
@@ -99,6 +101,7 @@ class ConfigStoreTest {
             skillSources = listOf(
                 SkillSource("team-skills", "团队 Skills", "git@example.test:team/skills.git", "main", "skills"),
             ),
+            aiRequirementNamingEnabled = true,
         )
 
         ConfigStore(paths).save(expected)
@@ -107,6 +110,7 @@ class ConfigStoreTest {
         assertTrue(Files.readString(paths.config.resolve("layout.json")).contains("payments"))
         assertTrue(Files.readString(paths.config.resolve("services.json")).contains("支付 API"))
         assertTrue(Files.readString(paths.config.resolve("integrations.json")).contains("team-marketplace"))
+        assertTrue(Files.readString(paths.config.resolve("integrations.json")).contains("\"aiRequirementNamingEnabled\": true"))
     }
 
     @Test
@@ -159,14 +163,25 @@ class ConfigStoreTest {
 
         val tag = paths.config.resolve("tag.json")
         val original = Files.readString(tag)
-        Files.writeString(tag, original.replace("\"schema\": 1", "\"schema\": 2"))
+        Files.writeString(tag, original.replace("\"schema\": 2", "\"schema\": 1"))
         assertFailsWith<UnsupportedConfigVersionException> { store.load() }
-        assertEquals(original.replace("\"schema\": 1", "\"schema\": 2"), Files.readString(tag))
+        assertEquals(original.replace("\"schema\": 2", "\"schema\": 1"), Files.readString(tag))
 
         Files.writeString(tag, original.replace("\n}", ",\n  \"unknown\": true\n}"))
         assertThrows(SerializationException::class.java) { store.load() }
 
         Files.write(tag, original.toByteArray())
+        val integrations = paths.config.resolve("integrations.json")
+        val originalIntegrations = Files.readString(integrations)
+        val missingAiNamingField = originalIntegrations.replace(
+            Regex("\\s*\\\"aiRequirementNamingEnabled\\\": false,\\r?\\n"),
+            "",
+        )
+        Files.writeString(integrations, missingAiNamingField)
+        assertThrows(SerializationException::class.java) { store.load() }
+        assertEquals(missingAiNamingField, Files.readString(integrations))
+
+        Files.writeString(integrations, originalIntegrations)
         Files.delete(paths.config.resolve("tools.json"))
         assertFailsWith<IllegalArgumentException> { store.load() }
     }

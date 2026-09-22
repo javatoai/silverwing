@@ -14,6 +14,7 @@ class MeegleSettingsPresentationTest {
 
         assertEquals(CliDetectionPhase.AUTH_REQUIRED, meegleCliDetectionPhase(state))
         assertTrue(meegleLoginActionVisible(status))
+        assertFalse(meegleLogoutActionVisible(status))
         assertTrue(meegleLoginActionEnabled(status, state, saving = false, busy = false))
     }
 
@@ -38,13 +39,26 @@ class MeegleSettingsPresentationTest {
     }
 
     @Test
-    fun `manual login command uses configured executable and oauth arguments`() {
+    fun `authenticated status exposes a logout action only when idle`() {
+        val status = MeegleCliStatus(installed = true, authenticated = true)
+        val ready = MeegleCliState.Ready(status)
+
+        assertTrue(meegleLogoutActionVisible(status))
+        assertFalse(meegleLoginActionVisible(status))
+        assertTrue(meegleLogoutActionEnabled(status, ready, saving = false, busy = false))
+        assertFalse(meegleLogoutActionEnabled(status, MeegleCliState.Loading(status), saving = false, busy = false))
+        assertFalse(meegleLogoutActionEnabled(status, ready, saving = true, busy = false))
+        assertFalse(meegleLogoutActionEnabled(status, ready, saving = false, busy = true))
+    }
+
+    @Test
+    fun `manual login command uses configured executable and device code arguments`() {
         assertEquals(
-            "& 'F:\\npm pkgs\\global\\meegle.cmd' auth login --host project.feishu.cn --format json",
+            "& 'F:\\npm pkgs\\global\\meegle.cmd' auth login --device-code --host project.feishu.cn --format json",
             buildMeegleLoginCommand("F:\\npm pkgs\\global\\meegle.cmd", "Windows 11"),
         )
         assertEquals(
-            "meegle auth login --host project.feishu.cn --format json",
+            "meegle auth login --device-code --host project.feishu.cn --format json",
             buildMeegleLoginCommand("meegle", "Linux"),
         )
     }

@@ -16,7 +16,7 @@ agents/task-templates.json
 
 ## 分功能严格配置分片
 
-配置不再使用单一 `config.json`。`~/silverwing/config/` 必须恰好包含以下八个 JSON 文件；每个文件均有独立的严格 `"schema": 1` 字段，未知字段、缺失文件、重复/额外 ZIP 条目和不匹配 schema 都会被拒绝，不会被自动修复或迁移。
+配置不再使用单一 `config.json`。`~/silverwing/config/` 必须恰好包含以下八个 JSON 文件；每个文件均有独立的严格 `"schema": 2` 字段，未知字段、缺失文件、重复/额外 ZIP 条目和不匹配 schema 都会被拒绝，不会被自动修复或迁移。
 
 | 文件 | 保存内容 |
 | --- | --- |
@@ -26,7 +26,7 @@ agents/task-templates.json
 | `tag.json` | 全局 Tag 开关与历史保留组数 |
 | `tools.json` | 终端、开发工具、默认工具与临时选择开关 |
 | `git.json` | Git 可执行程序与受保护分支 |
-| `integrations.json` | Meegle、Genbu、需求资料目录、Codex 插件市场和外部 Skill 来源定义 |
+| `integrations.json` | Meegle、Lark、Genbu、需求资料目录、AI 需求命名开关、Codex 插件市场和外部 Skill 来源定义 |
 | `appearance.json` | 主题与界面显示偏好 |
 
 业务层仍读取和保存完整 `AppConfig`；保存时只原子替换实际发生变化的分片。每次写入前会将完整分片集归档为 `~/silverwing/backups/silverwing-config-<timestamp>.zip`，最多保留最近 10 份。导出、导入和恢复也统一使用包含全部八个分片的 `silverwing-config-<timestamp>.zip`。
@@ -86,6 +86,8 @@ Codex 插件市场的本机注册信息、最近成功的插件目录缓存、�
 每个模块都会使用稳定的 `服务名-模块名` 目录。模块 ID、名称和目录名忽略大小写不得重复；独立克隆模块可以选择原仓库的任意远程作为来源，基础 Ref 使用 `<来源 remote>/<branch>` 格式。新建 clone 会将所选来源 URL 命名为自身的 `origin`，因此后续 Push、恢复和 Git 操作仍统一使用 `origin`。
 
 `meegleExecutablePath` 为 `null` 时，应用会通过平台 login shell 自动探测 Meegle CLI 并缓存结果；也可以在设置页填写已存在、可执行的绝对路径。探测失败时回退到 PATH 中的 `meegle.cmd`（Windows）或 `meegle`（macOS/Linux）。
+
+`larkExecutablePath` 为 `null` 时，应用会优先通过 `where.exe lark-cli.cmd`（Windows）或平台 login shell 探测 Lark CLI，并将首次成功识别到的绝对路径写回配置；也可以在设置页填写已存在、可执行的绝对路径，探测失败时回退到 PATH 中的 `lark-cli.cmd`（Windows）或 `lark-cli`（macOS/Linux）。登录时每次手动选择业务域，授权链接和设备码只在内存中短暂存在。
 
 `genbuExecutablePath` 为 `null` 时，应用通过 `where.exe genbu.exe`（Windows）或平台 shell 自动探测，并会将首次成功识别到的绝对路径自动写回配置。填写已存在、可执行的绝对路径后，该路径只在自动探测未找到 Genbu 时作为兜底使用；自动识别到的命令始终优先。
 

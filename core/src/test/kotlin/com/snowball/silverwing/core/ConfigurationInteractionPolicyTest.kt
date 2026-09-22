@@ -72,7 +72,7 @@ class ConfigurationInteractionPolicyTest {
         assertTrue("\"tagEnabled\"" in json)
         assertTrue("\"tagTargetRef\"" in json)
         assertTrue("\"tagMessagePrefix\"" in json)
-        assertTrue("\"schema\": 1" in json)
+        assertTrue("\"schema\": 2" in json)
         assertFalse("uatRemote" in json)
         assertFalse("cloneUatBranch" in json)
     }

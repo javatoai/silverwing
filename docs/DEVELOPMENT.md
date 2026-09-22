@@ -13,7 +13,7 @@
 Windows：
 
 ```powershell
-.\gradlew.bat test
+.\gradlew.bat fastTest
 .\gradlew.bat :desktop:compileKotlin
 .\gradlew.bat :desktop:run
 ```
@@ -21,7 +21,7 @@ Windows：
 macOS/Linux：
 
 ```bash
-./gradlew test
+./gradlew fastTest
 ./gradlew :desktop:compileKotlin
 ./gradlew :desktop:run
 ```
@@ -46,10 +46,10 @@ Compose 只读取 UI 状态并发出回调；Git、JSON、文件写入、剪贴�
 提交前至少运行：
 
 ```powershell
-.\gradlew.bat test :desktop:compileKotlin
+.\gradlew.bat fastTest :desktop:compileKotlin
 ```
 
-涉及 Git 生命周期、删除、归档、Tag 或工作区策略时，必须补充 Core 测试。涉及 Compose 交互时，至少启动开发版进行人工验证。修改发布相关文件时，运行对应平台的打包脚本。
+`fastTest` 会跳过会创建仓库、clone 与 worktree 的慢速 Git 集成测试，适用于日常开发。需要改动 Git 生命周期、删除、归档、Tag 或工作区策略时，必须额外运行完整 `test`；涉及 Compose 交互时，至少启动开发版进行人工验证。修改发布相关文件时，运行对应平台的打包脚本。
 
 ## 本地数据与测试数据
 

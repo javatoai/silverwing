@@ -27,8 +27,71 @@ data class MeegleCliStatus(
 
 interface MeegleCliService {
     fun status(): MeegleCliStatus
-    fun login(host: String = "project.feishu.cn")
+    /** 清理当前 CLI profile 的本地登录凭据；不修改 SilverWing 保存的项目配置。 */
+    fun logout()
+    fun beginDeviceCodeLogin(host: String = "project.feishu.cn"): MeegleDeviceCodeChallenge
+    fun completeDeviceCodeLogin(challenge: MeegleDeviceCodeChallenge): MeegleDeviceCodeLoginResult
 }
+
+private const val MIN_MEEGLE_DEVICE_CODE_POLL_INTERVAL_SECONDS = 2L
+private const val MAX_MEEGLE_DEVICE_CODE_POLL_INTERVAL_SECONDS = 60L
+
+/** Meegle 设备码授权中可展示给用户的短期信息。 */
+class MeegleDeviceCodeChallenge(
+    val host: String,
+    val verificationUri: String,
+    val verificationUriComplete: String?,
+    val userCode: String,
+    val expiresInSeconds: Long,
+    private val deviceCode: String,
+    private val clientId: String,
+    val pollingIntervalSeconds: Long = 5,
+) {
+    init {
+        require(host.isNotBlank()) { "Meegle 登录站点不能为空" }
+        require(verificationUri.isNotBlank()) { "Meegle 设备码登录缺少授权链接" }
+        require(userCode.isNotBlank()) { "Meegle 设备码登录缺少授权码" }
+        require(expiresInSeconds > 0) { "Meegle 设备码登录缺少有效期" }
+        require(deviceCode.isNotBlank() && clientId.isNotBlank()) { "Meegle 设备码登录响应不完整" }
+        require(pollingIntervalSeconds in MIN_MEEGLE_DEVICE_CODE_POLL_INTERVAL_SECONDS..MAX_MEEGLE_DEVICE_CODE_POLL_INTERVAL_SECONDS) {
+            "Meegle 设备码轮询间隔必须在 $MIN_MEEGLE_DEVICE_CODE_POLL_INTERVAL_SECONDS 到 $MAX_MEEGLE_DEVICE_CODE_POLL_INTERVAL_SECONDS 秒之间"
+        }
+    }
+
+    /** CLI 返回完整链接时优先使用它，让浏览器可以预填授权码。 */
+    val authorizationUrl: String get() = verificationUriComplete?.takeIf(String::isNotBlank) ?: verificationUri
+
+    /**
+     * 不透明的设备码和 client id 仅用于轮询，保留在核心层，不能被 UI 渲染或复制。
+     */
+    internal fun pollingCommand(executable: String): List<String> = listOf(
+        executable,
+        "auth",
+        "login",
+        "--device-code",
+        "--phase",
+        "poll",
+        "--device-code-value",
+        deviceCode,
+        "--client-id",
+        clientId,
+        "--host",
+        host,
+        "--once",
+        "--format",
+        "json",
+    )
+
+    /**
+     * 设备码轮询的底层错误可能原样回显命令参数。错误展示前统一脱敏，避免短期凭据进入
+     * UI、诊断日志或截图。
+     */
+    fun redactSecrets(message: String): String = message
+        .replace(deviceCode, "[已隐藏]")
+        .replace(clientId, "[已隐藏]")
+}
+
+enum class MeegleDeviceCodeLoginResult { AUTHORIZED, PENDING, SLOW_DOWN, EXPIRED }
 
 class ProcessMeegleCliService(
     private val runner: CommandRunner = ProcessCommandRunner(),
@@ -73,15 +136,58 @@ class ProcessMeegleCliService(
         )
     }
 
-    override fun login(host: String) {
+    override fun logout() {
+        val command = executable()
+        val result = runner.run(
+            listOf(command, "auth", "logout"),
+            timeout = Duration.ofSeconds(10),
+            environment = meegleExecutable.environment(),
+        )
+        check(result.succeeded) { "退出 Meegle 登录失败：${commandError(result)}" }
+    }
+
+    override fun beginDeviceCodeLogin(host: String): MeegleDeviceCodeChallenge {
         require(host.isNotBlank()) { "Meegle 登录站点不能为空" }
         val command = executable()
         val result = runner.run(
-            listOf(command, "auth", "login", "--host", host, "--format", "json"),
-            timeout = Duration.ofMinutes(10),
+            listOf(command, "auth", "login", "--device-code", "--phase", "init", "--host", host, "--format", "json"),
+            timeout = Duration.ofSeconds(30),
             environment = meegleExecutable.environment(),
         )
-        check(result.succeeded) { "Meegle OAuth 登录失败：${commandError(result)}" }
+        check(result.succeeded) { "生成 Meegle 登录验证码失败：${commandError(result)}" }
+        val response = runCatching { json.decodeFromString<DeviceCodeInitResponse>(result.stdout) }
+            .getOrElse { error -> throw IllegalStateException("Meegle 登录验证码 JSON 解析失败：${error.message}", error) }
+        return MeegleDeviceCodeChallenge(
+            host = host,
+            verificationUri = response.verificationUri,
+            verificationUriComplete = response.verificationUriComplete,
+            userCode = response.userCode,
+            expiresInSeconds = response.expiresInSeconds,
+            deviceCode = response.deviceCode,
+            clientId = response.clientId,
+            pollingIntervalSeconds = response.interval.coerceIn(
+                MIN_MEEGLE_DEVICE_CODE_POLL_INTERVAL_SECONDS,
+                MAX_MEEGLE_DEVICE_CODE_POLL_INTERVAL_SECONDS,
+            ),
+        )
+    }
+
+    override fun completeDeviceCodeLogin(challenge: MeegleDeviceCodeChallenge): MeegleDeviceCodeLoginResult {
+        val result = runner.run(
+            challenge.pollingCommand(executable()),
+            timeout = Duration.ofSeconds(20),
+            environment = meegleExecutable.environment(),
+        )
+        check(result.succeeded) { "确认 Meegle 登录授权失败：${commandError(result)}" }
+        val response = runCatching { json.decodeFromString<DeviceCodePollResponse>(result.stdout) }
+            .getOrElse { error -> throw IllegalStateException("Meegle 登录授权状态 JSON 解析失败：${error.message}", error) }
+        return when (response.status) {
+            "ok" -> MeegleDeviceCodeLoginResult.AUTHORIZED
+            "authorization_pending" -> MeegleDeviceCodeLoginResult.PENDING
+            "slow_down" -> MeegleDeviceCodeLoginResult.SLOW_DOWN
+            "expired_token" -> MeegleDeviceCodeLoginResult.EXPIRED
+            else -> throw IllegalStateException("Meegle 登录授权状态异常：${response.status.ifBlank { "未知" }}")
+        }
     }
 
     private fun executable(): String = meegleExecutable.resolve()
@@ -91,6 +197,22 @@ class ProcessMeegleCliService(
         val authenticated: Boolean = false,
         val host: String? = null,
         @kotlinx.serialization.SerialName("expires_in_minutes") val expiresInMinutes: Long? = null,
+    )
+
+    @Serializable
+    private data class DeviceCodeInitResponse(
+        @kotlinx.serialization.SerialName("device_code") val deviceCode: String = "",
+        @kotlinx.serialization.SerialName("user_code") val userCode: String = "",
+        @kotlinx.serialization.SerialName("verification_uri") val verificationUri: String = "",
+        @kotlinx.serialization.SerialName("verification_uri_complete") val verificationUriComplete: String? = null,
+        @kotlinx.serialization.SerialName("expires_in") val expiresInSeconds: Long = 0,
+        @kotlinx.serialization.SerialName("client_id") val clientId: String = "",
+        val interval: Long = 5,
+    )
+
+    @Serializable
+    private data class DeviceCodePollResponse(
+        val status: String = "",
     )
 
     private fun commandError(result: CommandResult): String =

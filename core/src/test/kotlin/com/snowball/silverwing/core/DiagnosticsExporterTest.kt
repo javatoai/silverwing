@@ -25,6 +25,7 @@ class DiagnosticsExporterTest {
             developmentTools = listOf(DevelopmentToolConfig(DevelopmentToolType.PYCHARM, "C:/secret/user/PyCharm.exe")),
             terminalExecutable = "C:/secret/terminal.exe",
             meegleExecutablePath = "C:/secret/user/meegle.cmd",
+            larkExecutablePath = "C:/secret/user/lark-cli.cmd",
             gitExecutablePath = "C:/secret/user/git.exe",
             genbuExecutablePath = "C:/secret/user/genbu.exe",
         )
@@ -41,6 +42,7 @@ class DiagnosticsExporterTest {
             assertFalse(configText.contains("C:/secret"))
             assertTrue(configText.contains("<configured:PYCHARM>"))
             assertTrue(configText.contains("\"meegleExecutablePath\": \"<configured>\""))
+            assertTrue(configText.contains("\"larkExecutablePath\": \"<configured>\""))
             assertTrue(configText.contains("\"gitExecutablePath\": \"<configured>\""))
             assertTrue(configText.contains("\"genbuExecutablePath\": \"<configured>\""))
         }

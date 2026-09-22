@@ -33,13 +33,6 @@ class MeegleExecutableTest {
     }
 
     @Test
-    fun `probe command display follows the same platform definition`() {
-        assertEquals("where.exe meegle.cmd", meegleProbeCommandDisplay("Windows 11"))
-        assertEquals("/bin/zsh -lc 'command -v meegle'", meegleProbeCommandDisplay("Mac OS X"))
-        assertEquals("/bin/bash -lc 'command -v meegle'", meegleProbeCommandDisplay("Linux"))
-    }
-
-    @Test
     fun `probe output parsing takes the first absolute path line`() {
         assertEquals("/opt/homebrew/bin/meegle", parseMeegleProbeOutput("/opt/homebrew/bin/meegle\n", "Mac OS X"))
         assertEquals(

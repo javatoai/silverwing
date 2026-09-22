@@ -21,7 +21,7 @@ silverwing 隔离的是代码工作目录和 Git 工作区；端口、数据库�
 
 未创建额外组时，应用保留一个默认组，并在任务与服务页面隐藏组层级。
 
-设置导航平铺展示外观、目录、服务与仓库、开发工具、协作说明、Meegle、Genbu、Codex 插件、Skills、silverwing CLI、Git 和诊断日志，不设置分组或折叠层级。“协作说明”管理全局与组级 `AGENTS.md`，“任务说明模板”仍用于创建任务时填充人工说明。
+设置导航平铺展示外观、目录、项目组、开发工具、协作说明、Meegle CLI、Lark CLI、Genbu CLI、silverwing CLI、Codex 插件、Skills、Git 和诊断日志，不设置分组或折叠层级。“协作说明”管理全局与组级 `AGENTS.md`，“任务说明模板”仍用于创建任务时填充人工说明。
 
 “Codex 插件”仅管理带 Marketplace 清单的 Git 来源。添加来源会注册到本机 Codex 并读取可用插件；之后只有手动刷新才会联网更新。插件安装或卸载后需要新建或重启 Codex 会话。“Skills”管理外部 Git Skill 来源：默认扫描仓库中的 `.agents/skills` 与 `skills`，安装到 `~/.agents/skills/<name>`。若已有同名 Skill，必须明确确认接管，覆盖或卸载前会在 `~/silverwing/codex/skill-backups/` 留下本机备份。
 

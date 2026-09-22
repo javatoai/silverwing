@@ -55,7 +55,9 @@ class RemoteBranchRequestIdentityTest {
             pathPicker = picker, branchCatalog = catalog, meegleProjectCatalog = MeegleProjectCatalog { emptyList() },
             meegleCliService = object : MeegleCliService {
                 override fun status() = MeegleCliStatus(false)
-                override fun login(host: String) = Unit
+                override fun logout() = Unit
+                override fun beginDeviceCodeLogin(host: String) = error("No login expected")
+                override fun completeDeviceCodeLogin(challenge: MeegleDeviceCodeChallenge) = error("No login expected")
             }, localGitInspector = LocalGitEnvironmentInspector(), scope = childScope, ioDispatcher = Dispatchers.IO,
             operations = runner, settingsOperations = runner, meegleOperations = runner,
             applyConfig = {}, reloadTasks = {}, showError = { throw it }, showStatus = {},

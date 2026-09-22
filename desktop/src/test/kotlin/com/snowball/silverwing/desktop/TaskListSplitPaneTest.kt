@@ -45,11 +45,6 @@ class TaskListSplitPaneTest {
     }
 
     @Test
-    fun `task screens keep a compact gutter beside the navigation boundary`() {
-        assertEquals(8f, taskScreenHorizontalPadding())
-    }
-
-    @Test
     fun `create task entry is available only for active tasks`() {
         assertEquals(true, taskCreateEntryVisible(archived = false))
         assertEquals(false, taskCreateEntryVisible(archived = true))

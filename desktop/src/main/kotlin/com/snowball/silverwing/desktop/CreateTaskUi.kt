@@ -82,6 +82,22 @@ internal fun taskInformationLayout(): TaskInformationLayout = TaskInformationLay
 
 internal fun taskNameSupportingMessage(error: String?): String? = error
 
+/** 显示短暂的本机 Codex 工作状态，不与表单字段争夺视觉层级。 */
+@Composable
+private fun AiNamingStatusRow(message: String, loading: Boolean = false) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (loading) {
+            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+            Spacer(Modifier.width(8.dp))
+        }
+        Text(
+            message,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (loading) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
+        )
+    }
+}
+
 internal typealias CreateTaskAction = (String, String, String, List<String>, String, String, List<String>, Set<BranchReuseKey>, List<TaskServiceSelection>) -> Unit
 
 /** Owns the exact draft checked by preflight, including through a reuse-confirmation dialog. */
@@ -119,6 +135,11 @@ internal fun CreateTaskDialog(
     var selectedTemplateId by remember { mutableStateOf<String?>(null) }
     var pendingTemplate by remember { mutableStateOf<AgentTaskTemplate?>(null) }
     var groupId by remember { mutableStateOf(initialGroup.id) }
+    // AI 请求可能在用户切换项目组后才返回。单独保存当前前缀，避免把旧项目组的
+    // 分支前缀写回新项目组的草稿。
+    var aiNamingBranchPrefix by remember { mutableStateOf(initialGroup.defaultBranchPrefix) }
+    // 只有从候选列表明确选中的需求才能触发自动命名；手工填写链接不应把内容发送给 Codex。
+    var aiSelectedRequirementLink by remember { mutableStateOf<String?>(null) }
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
     var selectedToolIds by remember { mutableStateOf(initialGroup.defaultWorkspaceToolIds.toSet()) }
     var rightTab by remember { mutableStateOf("notes") }
@@ -142,6 +163,17 @@ internal fun CreateTaskDialog(
         val branchChanged = draft.branch != updated.branch
         draft = updated
         if (branchChanged) retargetSelectedServiceBranches(updated.branch)
+    }
+    fun requestAiNaming(link: String) {
+        controller.requestRequirementAiNaming(
+            link = link,
+            branchPrefix = aiNamingBranchPrefix,
+            enabled = controller.config.aiRequirementNamingEnabled,
+        ) { suggestion ->
+            // applyAiNaming 会再次核对当前需求及两个手工编辑标记，迟到结果不会覆盖用户修改
+            // 或另一个已选需求。
+            updateDraft(draft.applyAiNaming(link, suggestion, aiNamingBranchPrefix))
+        }
     }
     fun effectiveBaseOverrides(): List<ModuleBaseOverride> = group.services.filter { it.id in selected }.flatMap { service ->
         taskModuleOverrides(service, draft.branch, baseOverrideValues, targetBranchValues)
@@ -168,6 +200,8 @@ internal fun CreateTaskDialog(
         draft.branchEdited || notes.isNotBlank() || selected.isNotEmpty() || groupId != initialGroup.id ||
         selectedToolIds != initialGroup.defaultWorkspaceToolIds.toSet()
     val requestDismiss = {
+        // 即使随后会弹出放弃确认，点击关闭也应先作为取消边界；若用户继续编辑，可明确点击“重新生成”。
+        controller.cancelRequirementAiNaming()
         controller.taskController.cancelCreateBranchReuseInspection()
         checkingBranchReuse = false
         pendingCreation = null
@@ -232,6 +266,7 @@ internal fun CreateTaskDialog(
             controller.taskController.cancelCreateBranchReuseInspection()
             pendingCreation = null
             controller.cancelRemoteBranchLoads()
+            controller.cancelRequirementAiNaming()
             controller.requirementController.clearMaterialsPreview()
         }
     }
@@ -269,7 +304,13 @@ internal fun CreateTaskDialog(
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
                             OutlinedTextField(
                                 draft.requirementLink,
-                                { updateDraft(draft.changeRequirement(it, group.defaultBranchPrefix)) },
+                                {
+                                    // 手工输入链接只是普通表单编辑，不能触发 AI；同时使上一个候选需求的
+                                    // 请求失效，避免迟到结果写入当前草稿。
+                                    aiSelectedRequirementLink = null
+                                    controller.cancelRequirementAiNaming()
+                                    updateDraft(draft.changeRequirement(it, group.defaultBranchPrefix))
+                                },
                                 Modifier.weight(1f),
                                 label = { Text("需求编号或飞书需求链接（可选）") },
                                 supportingText = {
@@ -324,6 +365,10 @@ internal fun CreateTaskDialog(
                                                 },
                                                 onClick = {
                                                     updateDraft(draft.changeRequirement(candidate.url, group.defaultBranchPrefix, candidate.title))
+                                                    aiSelectedRequirementLink = candidate.url
+                                                    if (controller.config.aiRequirementNamingEnabled) {
+                                                        requestAiNaming(candidate.url)
+                                                    }
                                                     requirementMenuExpanded = false
                                                 },
                                             )
@@ -337,6 +382,51 @@ internal fun CreateTaskDialog(
                                 CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                                 Spacer(Modifier.width(8.dp))
                                 Text("正在拉取飞书需求链接", style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                        when (val aiNamingState = controller.requirementAiNamingState) {
+                            RequirementAiNamingUiState.Idle -> Unit
+                            RequirementAiNamingUiState.LoadingContext -> AiNamingStatusRow(
+                                message = "正在读取需求正文…",
+                                loading = true,
+                            )
+                            is RequirementAiNamingUiState.Generating -> AiNamingStatusRow(
+                                message = if (aiNamingState.attempt == 1) {
+                                    "正在生成文件夹名和分支名…"
+                                } else {
+                                    "文件夹名已存在，正在生成其他名称…"
+                                },
+                                loading = true,
+                            )
+                            is RequirementAiNamingUiState.Ready -> Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Text(
+                                    "已生成文件夹名和分支名",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                val selectedLink = aiSelectedRequirementLink
+                                if (controller.config.aiRequirementNamingEnabled && selectedLink == draft.requirementLink) {
+                                    TextButton(onClick = { requestAiNaming(selectedLink) }) { Text("重新生成") }
+                                }
+                            }
+                            is RequirementAiNamingUiState.Failed -> Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Text(
+                                    "AI 命名失败：${aiNamingState.reason}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                val selectedLink = aiSelectedRequirementLink
+                                if (controller.config.aiRequirementNamingEnabled && selectedLink == draft.requirementLink) {
+                                    TextButton(onClick = { requestAiNaming(selectedLink) }) { Text("重新生成") }
+                                }
                             }
                         }
                         OutlinedTextField(
@@ -395,6 +485,7 @@ internal fun CreateTaskDialog(
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                                 controller.config.groups.forEach { candidate -> FilterChip(groupId == candidate.id, {
                                     groupId = candidate.id
+                                    aiNamingBranchPrefix = candidate.defaultBranchPrefix
                                     selected = emptySet()
                                     selectedToolIds = candidate.defaultWorkspaceToolIds.toSet()
                                     serviceSearch = ""

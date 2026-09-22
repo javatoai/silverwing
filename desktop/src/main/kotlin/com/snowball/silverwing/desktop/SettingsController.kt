@@ -15,9 +15,17 @@ import com.snowball.silverwing.core.DevelopmentToolType
 import com.snowball.silverwing.core.MeegleProjectCatalog
 import com.snowball.silverwing.core.MeegleCliService
 import com.snowball.silverwing.core.MeegleCliStatus
+import com.snowball.silverwing.core.MeegleDeviceCodeChallenge
+import com.snowball.silverwing.core.MeegleDeviceCodeLoginResult
 import com.snowball.silverwing.core.MeegleCommandSource
 import com.snowball.silverwing.core.MeegleExecutable
 import com.snowball.silverwing.core.normalizeMeegleExecutablePath
+import com.snowball.silverwing.core.LarkCliService
+import com.snowball.silverwing.core.LarkCliStatus
+import com.snowball.silverwing.core.LarkDeviceCodeChallenge
+import com.snowball.silverwing.core.LarkCommandSource
+import com.snowball.silverwing.core.LarkExecutable
+import com.snowball.silverwing.core.normalizeLarkExecutablePath
 import com.snowball.silverwing.core.GitCommandSource
 import com.snowball.silverwing.core.GitExecutable
 import com.snowball.silverwing.core.GenbuCommandSource
@@ -48,6 +56,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
@@ -62,6 +71,7 @@ data class SettingsUiState(
     val pathPickerBusy: Boolean,
     val meegleProjects: MeegleProjectCatalogState,
     val meegleCli: MeegleCliState,
+    val larkCli: LarkCliState,
     val localGit: LocalGitSettingsState,
     val genbu: GenbuSettingsState,
     val saveStates: Map<String, SettingsSaveState>,
@@ -98,6 +108,40 @@ sealed interface MeegleCliState {
     data class Failed(val message: String) : MeegleCliState
 }
 
+sealed interface LarkCliState {
+    data object Idle : LarkCliState
+    data class Loading(val previous: LarkCliStatus? = null) : LarkCliState
+    data class Ready(val status: LarkCliStatus) : LarkCliState
+    data class Failed(val message: String) : LarkCliState
+}
+
+/** 只保存可展示的信息；设备码本身只留在核心服务的短期挑战对象中。 */
+data class MeegleDeviceCodeLoginUiState(
+    val authorizationUrl: String,
+    val userCode: String,
+    val expiresInSeconds: Long,
+    /** 自动轮询期间不再要求用户额外点击“完成授权”。 */
+    val polling: Boolean = false,
+    /** 仅保存已脱敏的可恢复错误，方便用户决定重新检测还是重新生成验证码。 */
+    val error: String? = null,
+)
+
+data class LarkDeviceCodeLoginUiState(
+    val authorizationUrl: String,
+    val expiresInSeconds: Long,
+    /** 只用于页面显示倒计时，不包含授权凭据。 */
+    val expiresAtEpochMillis: Long? = null,
+    val polling: Boolean = false,
+    val error: String? = null,
+)
+
+/** 设备码通常只存活数分钟；限制异常响应的值，避免溢出或无限后台轮询。 */
+private const val MAX_MEEGLE_DEVICE_CODE_LIFETIME_SECONDS = 24L * 60L * 60L
+private const val MAX_MEEGLE_DEVICE_CODE_POLL_DELAY_MILLIS = 60_000L
+private const val MAX_MEEGLE_DEVICE_CODE_ERROR_LENGTH = 240
+private const val MAX_LARK_DEVICE_CODE_LIFETIME_SECONDS = 24L * 60L * 60L
+private const val MAX_LARK_DEVICE_CODE_ERROR_LENGTH = 240
+
 sealed interface LocalGitSettingsState {
     data object Idle : LocalGitSettingsState
     data class Loading(val previous: LocalGitEnvironmentSnapshot? = null) : LocalGitSettingsState
@@ -129,6 +173,11 @@ private data class MeegleExecutableAutoSave(
     val savedDetectedPath: Boolean,
 )
 
+private data class LarkExecutableAutoSave(
+    val config: AppConfig,
+    val savedDetectedPath: Boolean,
+)
+
 private data class GitExecutableAutoSave(
     val config: AppConfig,
     val savedDetectedPath: Boolean,
@@ -151,6 +200,8 @@ class SettingsController internal constructor(
     private val meegleProjectCatalog: MeegleProjectCatalog,
     private val meegleCliService: MeegleCliService,
     private val meegleExecutable: MeegleExecutable = MeegleExecutable.pathFallback(),
+    private val larkExecutable: LarkExecutable = LarkExecutable.pathFallback(),
+    private val larkCliService: LarkCliService = com.snowball.silverwing.core.ProcessLarkCliService(larkExecutable = larkExecutable),
     private val gitExecutable: GitExecutable = GitExecutable.pathFallback(),
     private val genbuExecutable: GenbuExecutable = GenbuExecutable.pathFallback(),
     private val cliVersionRunner: CommandRunner = ProcessCommandRunner(),
@@ -160,10 +211,14 @@ class SettingsController internal constructor(
     private val operations: OperationRunner,
     private val settingsOperations: OperationRunner,
     private val meegleOperations: OperationRunner,
+    private val larkOperations: OperationRunner = meegleOperations,
     private val applyConfig: (AppConfig) -> Unit,
     private val reloadTasks: () -> Unit,
     private val showError: (Throwable) -> Unit,
     private val showStatus: (String) -> Unit,
+    /** 将浏览器打开动作留在桌面层，便于测试且不让设置控制器依赖 AWT。 */
+    private val openMeegleAuthorizationPage: (String) -> Result<Unit> = { Result.success(Unit) },
+    private val openLarkAuthorizationPage: (String) -> Result<Unit> = { Result.success(Unit) },
 ) {
     private val remoteBranchJobs = mutableMapOf<String, Job>()
     private var remoteBranches by mutableStateOf<Map<String, RemoteBranchesState>>(emptyMap())
@@ -173,6 +228,24 @@ class SettingsController internal constructor(
     private var meegleProjects by mutableStateOf<MeegleProjectCatalogState>(MeegleProjectCatalogState.Idle)
     private var meegleProjectJob: Job? = null
     private var meegleCli by mutableStateOf<MeegleCliState>(MeegleCliState.Idle)
+    /**
+     * 状态刷新与设备码登录会并行运行。每次新请求递增版本号，避免较早的 CLI
+     * 结果在较晚返回时覆盖已经确认成功的登录状态。
+     */
+    private var meegleStatusRefreshGeneration = 0L
+    private var meegleStatusRefreshJob: Job? = null
+    private var meegleDeviceCodeLogin by mutableStateOf<MeegleDeviceCodeLoginUiState?>(null)
+    private var meegleDeviceCodeChallenge: MeegleDeviceCodeChallenge? = null
+    private var meegleDeviceCodePollJob: Job? = null
+    private var meegleDeviceCodeExpiresAtMillis: Long? = null
+    private var meegleDeviceCodeBrowserOpenFailed = false
+    private var larkCli by mutableStateOf<LarkCliState>(LarkCliState.Idle)
+    private var larkStatusRefreshGeneration = 0L
+    private var larkStatusRefreshJob: Job? = null
+    private var larkDeviceCodeLogin by mutableStateOf<LarkDeviceCodeLoginUiState?>(null)
+    private var larkDeviceCodeChallenge: LarkDeviceCodeChallenge? = null
+    private var larkDeviceCodePollJob: Job? = null
+    private var larkDeviceCodeExpiresAtMillis: Long? = null
     private var localGit by mutableStateOf<LocalGitSettingsState>(LocalGitSettingsState.Idle)
     private var genbu by mutableStateOf<GenbuSettingsState>(GenbuSettingsState.Idle)
     private var genbuJob: Job? = null
@@ -190,6 +263,7 @@ class SettingsController internal constructor(
             pathPickerBusy,
             meegleProjects,
             meegleCli,
+            larkCli,
             localGit,
             genbu,
             saveStates,
@@ -197,6 +271,9 @@ class SettingsController internal constructor(
         )
 
     fun saveState(key: String): SettingsSaveState = saveStates[key] ?: SettingsSaveState.IDLE
+
+    val meegleDeviceCodeLoginState: MeegleDeviceCodeLoginUiState? get() = meegleDeviceCodeLogin
+    val larkDeviceCodeLoginState: LarkDeviceCodeLoginUiState? get() = larkDeviceCodeLogin
 
     fun updateMeegleProjects(projects: List<MeegleProjectConfig>, onFailure: (Throwable) -> Unit = {}): Boolean = mutate(
         "正在保存飞书需求配置…",
@@ -220,6 +297,20 @@ class SettingsController internal constructor(
     /** The currently effective Meegle command and where it came from; safe on the UI thread. */
     fun meegleCommandResolution(): Pair<String, MeegleCommandSource> =
         meegleExecutable.current() to meegleExecutable.source()
+
+    fun updateLarkExecutablePath(raw: String, onFailure: (Throwable) -> Unit = {}): Boolean = mutate(
+        "正在保存 Lark CLI 命令路径…",
+        "Lark CLI 命令路径已保存",
+        onFailure,
+        "lark",
+        settingsOperations,
+        onCompleted = { refreshLarkStatus(force = true) },
+    ) { config ->
+        config.copy(larkExecutablePath = normalizeLarkExecutablePath(raw))
+    }
+
+    fun larkCommandResolution(): Pair<String, LarkCommandSource> =
+        larkExecutable.current() to larkExecutable.source()
 
     fun updateGitExecutablePath(raw: String, onFailure: (Throwable) -> Unit = {}): Boolean = mutate(
         "正在保存 Git 命令路径…",
@@ -620,39 +711,61 @@ class SettingsController internal constructor(
         groups.updateGroupDefaults(groupId, prefix, tools)
     }
 
+    fun setAiRequirementNamingEnabled(enabled: Boolean, onFailure: (Throwable) -> Unit = {}): Boolean = mutate(
+        "正在保存 AI 命名设置…",
+        if (enabled) "已开启 AI 需求命名" else "已关闭 AI 需求命名",
+        onFailure = onFailure,
+        saveKey = "groups",
+        runner = settingsOperations,
+    ) { it.copy(aiRequirementNamingEnabled = enabled) }
+
     fun refreshMeegleStatus(force: Boolean = false) {
         if (!force && meegleCli is MeegleCliState.Loading) return
+        meegleStatusRefreshJob?.cancel()
+        val generation = ++meegleStatusRefreshGeneration
         val existingMeeglePath = session.config.meegleExecutablePath
         val shouldAutoDetect = existingMeeglePath.isNullOrBlank()
         meegleCli = MeegleCliState.Loading((meegleCli as? MeegleCliState.Ready)?.status)
-        scope.launch {
-            val (autoSave, result) = withContext(ioDispatcher) {
-                val autoSaveResult = runCatching { autoSaveMeegleExecutablePath(shouldAutoDetect) }
-                if (autoSaveResult.isFailure) {
-                    null to Result.failure(autoSaveResult.exceptionOrNull()!!)
-                } else {
-                    autoSaveResult.getOrNull() to runCatching { meegleCliService.status() }
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            val currentJob = currentCoroutineContext()[Job]
+            try {
+                val (autoSave, result) = withContext(ioDispatcher) {
+                    val autoSaveResult = runCatching { autoSaveMeegleExecutablePath(shouldAutoDetect) }
+                    if (autoSaveResult.isFailure) {
+                        null to Result.failure(autoSaveResult.exceptionOrNull()!!)
+                    } else {
+                        autoSaveResult.getOrNull() to runCatching { meegleCliService.status() }
+                    }
                 }
-            }
-            autoSave?.let {
-                val current = session.config
-                if (current.meegleExecutablePath == existingMeeglePath) {
-                    applyConfig(current.copy(meegleExecutablePath = it.config.meegleExecutablePath))
+                // 旧请求即使已经在后台完成，也不能再改写当前页面的登录状态。
+                if (!isCurrentMeegleStatusRefresh(generation, currentJob)) return@launch
+                autoSave?.let {
+                    val current = session.config
+                    if (current.meegleExecutablePath == existingMeeglePath) {
+                        applyConfig(current.copy(meegleExecutablePath = it.config.meegleExecutablePath))
+                    }
+                    if (it.savedDetectedPath) {
+                        setSaveState("feishu", SettingsSaveState.SAVED)
+                        showStatus("已自动检测并保存 Meegle 命令路径")
+                    }
                 }
-                if (it.savedDetectedPath) {
-                    setSaveState("feishu", SettingsSaveState.SAVED)
-                    showStatus("已自动检测并保存 Meegle 命令路径")
+                if (shouldAutoDetect && autoSave == null && result.isFailure) {
+                    setSaveState("feishu", SettingsSaveState.FAILED)
                 }
+                meegleCli = result.fold(
+                    onSuccess = { MeegleCliState.Ready(it) },
+                    onFailure = { MeegleCliState.Failed(it.message ?: "检查 Meegle CLI 状态失败") },
+                )
+                if (result.getOrNull()?.authenticated == true) {
+                    clearMeegleDeviceCodeLogin()
+                    loadMeegleProjects(force = true)
+                }
+            } finally {
+                if (meegleStatusRefreshJob === currentJob) meegleStatusRefreshJob = null
             }
-            if (shouldAutoDetect && autoSave == null && result.isFailure) {
-                setSaveState("feishu", SettingsSaveState.FAILED)
-            }
-            meegleCli = result.fold(
-                onSuccess = { MeegleCliState.Ready(it) },
-                onFailure = { MeegleCliState.Failed(it.message ?: "检查 Meegle CLI 状态失败") },
-            )
-            if (result.getOrNull()?.authenticated == true) loadMeegleProjects(force = true)
         }
+        meegleStatusRefreshJob = job
+        job.start()
     }
 
     private fun autoSaveMeegleExecutablePath(shouldAutoDetect: Boolean): MeegleExecutableAutoSave? {
@@ -673,20 +786,498 @@ class SettingsController internal constructor(
         return MeegleExecutableAutoSave(updated, savedDetectedPath)
     }
 
-    fun loginMeegle(): Boolean = meegleOperations.run(
-        activeMessage = "正在等待 Meegle 浏览器登录…",
-        successMessage = "Meegle 登录成功",
-        cancellable = true,
-        block = {
-            meegleCliService.login("project.feishu.cn")
-            meegleCliService.status().also { check(it.authenticated) { "浏览器授权完成后仍未检测到 Meegle 登录状态" } }
-        },
-        onSuccess = {
-            meegleCli = MeegleCliState.Ready(it)
-            loadMeegleProjects(force = true)
-        },
-        onFailure = { refreshMeegleStatus(force = true) },
-    )
+    fun refreshLarkStatus(force: Boolean = false) {
+        if (!force && larkCli is LarkCliState.Loading) return
+        larkStatusRefreshJob?.cancel()
+        val generation = ++larkStatusRefreshGeneration
+        val existingPath = session.config.larkExecutablePath
+        val shouldAutoDetect = existingPath.isNullOrBlank()
+        larkCli = LarkCliState.Loading((larkCli as? LarkCliState.Ready)?.status)
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            val currentJob = currentCoroutineContext()[Job]
+            try {
+                val (autoSave, result) = withContext(ioDispatcher) {
+                    val autoSaveResult = runCatching { autoSaveLarkExecutablePath(shouldAutoDetect) }
+                    if (autoSaveResult.isFailure) {
+                        null to Result.failure(autoSaveResult.exceptionOrNull()!!)
+                    } else {
+                        autoSaveResult.getOrNull() to runCatching { larkCliService.status() }
+                    }
+                }
+                if (!isCurrentLarkStatusRefresh(generation, currentJob)) return@launch
+                autoSave?.let {
+                    val current = session.config
+                    if (current.larkExecutablePath == existingPath) {
+                        applyConfig(current.copy(larkExecutablePath = it.config.larkExecutablePath))
+                    }
+                    if (it.savedDetectedPath) {
+                        setSaveState("lark", SettingsSaveState.SAVED)
+                        showStatus("已自动检测并保存 Lark CLI 命令路径")
+                    }
+                }
+                if (shouldAutoDetect && autoSave == null && result.isFailure) {
+                    setSaveState("lark", SettingsSaveState.FAILED)
+                }
+                larkCli = result.fold(
+                    onSuccess = { LarkCliState.Ready(it) },
+                    onFailure = { LarkCliState.Failed(it.message ?: "检查 Lark CLI 状态失败") },
+                )
+            } finally {
+                if (larkStatusRefreshJob === currentJob) larkStatusRefreshJob = null
+            }
+        }
+        larkStatusRefreshJob = job
+        job.start()
+    }
+
+    private fun autoSaveLarkExecutablePath(shouldAutoDetect: Boolean): LarkExecutableAutoSave? {
+        if (!shouldAutoDetect) return null
+        val detected = larkExecutable.probe()
+        if (larkExecutable.source() != LarkCommandSource.PROBED) return null
+        val normalized = normalizeLarkExecutablePath(detected)
+            ?: error("自动探测到的 Lark CLI 命令路径为空")
+        var savedDetectedPath = false
+        val updated = configStore.update { current ->
+            if (current.larkExecutablePath.isNullOrBlank()) {
+                savedDetectedPath = true
+                current.copy(larkExecutablePath = normalized)
+            } else {
+                current
+            }
+        }
+        return LarkExecutableAutoSave(updated, savedDetectedPath)
+    }
+
+    fun logoutLark(): Boolean {
+        val started = larkOperations.run(
+            activeMessage = "正在退出 Lark 登录…",
+            successMessage = "Lark 已退出登录",
+            cancellable = true,
+            block = larkCliService::logout,
+            onSuccess = {
+                markLarkLoggedOut()
+                refreshLarkStatus(force = true)
+            },
+        )
+        if (started) {
+            invalidateLarkStatusRefresh()
+            clearLarkDeviceCodeLogin()
+        }
+        return started
+    }
+
+    private fun markLarkLoggedOut() {
+        val previous = (larkCli as? LarkCliState.Ready)?.status
+        larkCli = LarkCliState.Ready(
+            previous?.copy(authenticated = false, tokenStatus = null, expiresAt = null, authenticationError = null)
+                ?: LarkCliStatus(installed = true, authenticated = false),
+        )
+        clearLarkDeviceCodeLogin()
+    }
+
+    fun loginLark(domains: List<String>): Boolean {
+        if (domains.isEmpty()) {
+            showError(IllegalArgumentException("至少选择一个 Lark 业务域"))
+            return false
+        }
+        // 生成新授权前先取消旧挑战；成功回调在后台异步执行，不能在 run 返回后清理新挑战。
+        clearLarkDeviceCodeLogin()
+        val started = larkOperations.run(
+            activeMessage = "正在生成 Lark 登录授权链接…",
+            successMessage = "已打开 Lark 授权页，正在自动检测登录状态",
+            cancellable = true,
+            block = { larkCliService.beginDeviceCodeLogin(domains) },
+            onSuccess = { challenge ->
+                larkDeviceCodeChallenge = challenge
+                larkDeviceCodeExpiresAtMillis = deviceCodeExpiresAtMillis(challenge.expiresInSeconds)
+                larkDeviceCodeLogin = LarkDeviceCodeLoginUiState(
+                    authorizationUrl = challenge.verificationUrl,
+                    expiresInSeconds = challenge.expiresInSeconds,
+                    expiresAtEpochMillis = larkDeviceCodeExpiresAtMillis,
+                )
+                val browserError = openLarkAuthorizationPage(challenge.verificationUrl).exceptionOrNull()
+                startLarkDeviceCodePolling(challenge, browserError?.let { larkBrowserErrorMessage(challenge, it) })
+            },
+        )
+        if (started) {
+            invalidateLarkStatusRefresh()
+        }
+        return started
+    }
+
+    fun openLarkDeviceCodeAuthorizationUrl(): Boolean {
+        val challenge = larkDeviceCodeChallenge ?: run {
+            showError(IllegalStateException("请先生成 Lark 登录授权链接"))
+            return false
+        }
+        val error = openLarkAuthorizationPage(challenge.verificationUrl).exceptionOrNull()
+        updateLarkDeviceCodeLogin(challenge) {
+            it.copy(error = error?.let { failure -> larkBrowserErrorMessage(challenge, failure) })
+        }
+        return error == null
+    }
+
+    fun cancelLarkDeviceCodeLogin() = clearLarkDeviceCodeLogin()
+
+    private fun startLarkDeviceCodePolling(challenge: LarkDeviceCodeChallenge, initialError: String? = null) {
+        if (larkDeviceCodeChallenge !== challenge) return
+        larkDeviceCodePollJob?.cancel()
+        updateLarkDeviceCodeLogin(challenge) { it.copy(polling = true, error = initialError) }
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            val currentJob = currentCoroutineContext()[Job]
+            try {
+                if (isLarkDeviceCodeExpired()) {
+                    markLarkDeviceCodeExpired(challenge)
+                    return@launch
+                }
+                try {
+                    runInterruptible(ioDispatcher) { larkCliService.completeDeviceCodeLogin(challenge) }
+                    val status = runInterruptible(ioDispatcher) { larkCliService.status() }
+                    if (status.authenticated && isCurrentLarkDeviceCodePolling(challenge, currentJob)) {
+                        invalidateLarkStatusRefresh()
+                        larkCli = LarkCliState.Ready(status)
+                        clearLarkDeviceCodeLogin(cancelPolling = false)
+                        showStatus("Lark 登录成功")
+                        return@launch
+                    }
+                    updateLarkDeviceCodeLogin(challenge) {
+                        it.copy(polling = false, error = "授权已完成，但未能确认 Lark 登录状态，请重新检测。")
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Throwable) {
+                    if (isCurrentLarkDeviceCodePolling(challenge, currentJob)) {
+                        val message = larkPollingErrorMessage(challenge, error)
+                        clearLarkDeviceCodeLogin(cancelPolling = false)
+                        showError(IllegalStateException(message))
+                    }
+                }
+            } finally {
+                if (larkDeviceCodePollJob === currentJob) larkDeviceCodePollJob = null
+            }
+        }
+        larkDeviceCodePollJob = job
+        job.start()
+    }
+
+    private fun isCurrentLarkDeviceCodePolling(challenge: LarkDeviceCodeChallenge, job: Job?): Boolean =
+        larkDeviceCodeChallenge === challenge && larkDeviceCodePollJob === job
+
+    private fun isCurrentLarkStatusRefresh(generation: Long, job: Job?): Boolean =
+        larkStatusRefreshGeneration == generation && larkStatusRefreshJob === job
+
+    private fun invalidateLarkStatusRefresh() {
+        larkStatusRefreshGeneration += 1
+        larkStatusRefreshJob?.cancel()
+        larkStatusRefreshJob = null
+    }
+
+    private fun updateLarkDeviceCodeLogin(
+        challenge: LarkDeviceCodeChallenge,
+        update: (LarkDeviceCodeLoginUiState) -> LarkDeviceCodeLoginUiState,
+    ) {
+        if (larkDeviceCodeChallenge === challenge) larkDeviceCodeLogin = larkDeviceCodeLogin?.let(update)
+    }
+
+    private fun isLarkDeviceCodeExpired(): Boolean =
+        larkDeviceCodeExpiresAtMillis?.let { System.currentTimeMillis() >= it } ?: true
+
+    private fun markLarkDeviceCodeExpired(challenge: LarkDeviceCodeChallenge) {
+        if (larkDeviceCodeChallenge === challenge) {
+            clearLarkDeviceCodeLogin(cancelPolling = false)
+            showError(IllegalStateException("Lark 授权链接已过期，请重新登录。"))
+        }
+    }
+
+    private fun deviceCodeExpiresAtMillis(expiresInSeconds: Long): Long =
+        System.currentTimeMillis() + expiresInSeconds.coerceAtMost(MAX_LARK_DEVICE_CODE_LIFETIME_SECONDS) * 1_000L
+
+    private fun larkPollingErrorMessage(challenge: LarkDeviceCodeChallenge, error: Throwable): String {
+        val detail = challenge.redactSecrets(error.message.orEmpty())
+            .lineSequence()
+            .firstOrNull()
+            ?.trim()
+            ?.take(MAX_LARK_DEVICE_CODE_ERROR_LENGTH)
+            .orEmpty()
+        return if (detail.isBlank()) "自动检测 Lark 授权失败，请重试。" else "自动检测 Lark 授权失败：$detail"
+    }
+
+    private fun larkBrowserErrorMessage(challenge: LarkDeviceCodeChallenge, error: Throwable): String =
+        challenge.redactSecrets(error.message.orEmpty())
+            .lineSequence()
+            .firstOrNull()
+            ?.trim()
+            ?.take(MAX_LARK_DEVICE_CODE_ERROR_LENGTH)
+            .orEmpty()
+            .ifBlank { "无法打开 Lark 授权页，请手动复制授权链接。" }
+
+    private fun clearLarkDeviceCodeLogin(cancelPolling: Boolean = true) {
+        if (cancelPolling) larkDeviceCodePollJob?.cancel()
+        larkDeviceCodePollJob = null
+        larkDeviceCodeChallenge = null
+        larkDeviceCodeExpiresAtMillis = null
+        larkDeviceCodeLogin = null
+    }
+
+    /**
+     * 只退出 Meegle CLI 的本地身份，不删除用户已保存的项目映射；重新登录后仍可复用它们。
+     * 退出开始时同时终止设备码轮询和旧状态查询，避免它们把 UI 又改回“已登录”。
+     */
+    fun logoutMeegle(): Boolean {
+        val started = meegleOperations.run(
+            activeMessage = "正在退出 Meegle 登录…",
+            successMessage = "Meegle 已退出登录",
+            cancellable = true,
+            block = meegleCliService::logout,
+            onSuccess = {
+                markMeegleLoggedOut()
+                // 再读取一次真实 CLI 状态，能识别环境变量或其他 profile 仍提供凭据的情况。
+                refreshMeegleStatus(force = true)
+            },
+        )
+        if (started) {
+            invalidateMeegleStatusRefresh()
+            clearMeegleDeviceCodeLogin()
+        }
+        return started
+    }
+
+    private fun markMeegleLoggedOut() {
+        val previous = (meegleCli as? MeegleCliState.Ready)?.status
+        meegleCli = MeegleCliState.Ready(
+            previous?.copy(
+                authenticated = false,
+                expiresInMinutes = null,
+                authenticationError = null,
+            ) ?: MeegleCliStatus(installed = true, authenticated = false),
+        )
+        clearMeegleDeviceCodeLogin()
+        meegleProjectJob?.cancel()
+        meegleProjectJob = null
+        // 只清理本次会话中读取到的目录缓存，绝不删除用户保存的项目配置。
+        meegleProjects = MeegleProjectCatalogState.Idle
+    }
+
+    /**
+     * 子进程没有交互式终端，不能执行需要 localhost 回调的默认 OAuth 流程。
+     * 因此使用设备码：生成后自动打开浏览器，并在后台按服务端给出的间隔轮询授权状态。
+     */
+    fun loginMeegle(): Boolean {
+        // 生成新授权前先取消旧挑战；成功回调在后台异步执行，不能在 run 返回后清理新挑战。
+        clearMeegleDeviceCodeLogin()
+        val started = meegleOperations.run(
+            activeMessage = "正在生成 Meegle 登录验证码…",
+            successMessage = "已打开 Meegle 授权页，正在自动检测登录状态",
+            cancellable = true,
+            block = { meegleCliService.beginDeviceCodeLogin("project.feishu.cn") },
+            onSuccess = { challenge ->
+                meegleDeviceCodeChallenge = challenge
+                meegleDeviceCodeExpiresAtMillis = deviceCodeExpiresAtMillis(challenge)
+                meegleDeviceCodeLogin = MeegleDeviceCodeLoginUiState(
+                    authorizationUrl = challenge.authorizationUrl,
+                    userCode = challenge.userCode,
+                    expiresInSeconds = challenge.expiresInSeconds,
+                )
+                val browserOpenError = openMeegleAuthorizationUrl(challenge)
+                meegleDeviceCodeBrowserOpenFailed = browserOpenError != null
+                startMeegleDeviceCodePolling(challenge, initialError = browserOpenError)
+            },
+        )
+        if (started) {
+            // 新登录已经开始，先使旧的“未登录”检查失效，避免它稍后覆盖授权结果。
+            invalidateMeegleStatusRefresh()
+        }
+        return started
+    }
+
+    /** 用户在自动检测暂时失败后可立即再试一次；正常流程无需点击此操作。 */
+    fun completeMeegleDeviceCodeLogin(): Boolean {
+        val challenge = meegleDeviceCodeChallenge ?: run {
+            showError(IllegalStateException("请先生成 Meegle 登录验证码"))
+            return false
+        }
+        if (meegleDeviceCodePollJob?.isActive == true) return false
+        if (isMeegleDeviceCodeExpired()) {
+            updateMeegleDeviceCodeLogin(challenge) { it.copy(polling = false, error = "授权码已过期，请重新生成验证码。") }
+            return false
+        }
+        startMeegleDeviceCodePolling(challenge, initialDelayMillis = 0)
+        return true
+    }
+
+    /** 自动打开失败时，用户仍可从卡片手动重新打开授权页。 */
+    fun openMeegleDeviceCodeAuthorizationUrl(): Boolean {
+        val challenge = meegleDeviceCodeChallenge ?: run {
+            showError(IllegalStateException("请先生成 Meegle 登录验证码"))
+            return false
+        }
+        val error = openMeegleAuthorizationUrl(challenge)
+        meegleDeviceCodeBrowserOpenFailed = error != null
+        updateMeegleDeviceCodeLogin(challenge) { it.copy(error = error) }
+        return error == null
+    }
+
+    fun cancelMeegleDeviceCodeLogin() {
+        clearMeegleDeviceCodeLogin()
+    }
+
+    /**
+     * 使用独立 Job 轮询，避免把几分钟的设备码等待占用为一个全局“忙碌”操作。
+     * Job 只会更新与自己对应的挑战，重新生成或取消验证码时旧 Job 的结果会被忽略。
+     */
+    private fun startMeegleDeviceCodePolling(
+        challenge: MeegleDeviceCodeChallenge,
+        initialDelayMillis: Long = challenge.pollingIntervalSeconds * 1_000L,
+        initialError: String? = null,
+    ) {
+        if (meegleDeviceCodeChallenge !== challenge) return
+        meegleDeviceCodePollJob?.cancel()
+        updateMeegleDeviceCodeLogin(challenge) { it.copy(polling = true, error = initialError) }
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            val currentJob = currentCoroutineContext()[Job]
+            var pollDelayMillis = initialDelayMillis.coerceAtLeast(0L)
+            var authorizationAccepted = false
+            try {
+                while (isCurrentMeegleDeviceCodePolling(challenge, currentJob)) {
+                    if (isMeegleDeviceCodeExpired()) {
+                        markMeegleDeviceCodeExpired(challenge, authorizationAccepted)
+                        return@launch
+                    }
+                    if (pollDelayMillis > 0) delay(pollDelayMillis)
+                    if (!isCurrentMeegleDeviceCodePolling(challenge, currentJob)) return@launch
+                    if (isMeegleDeviceCodeExpired()) {
+                        markMeegleDeviceCodeExpired(challenge, authorizationAccepted)
+                        return@launch
+                    }
+                    try {
+                        if (authorizationAccepted) {
+                            val status = runInterruptible(ioDispatcher) { meegleCliService.status() }
+                            if (status.authenticated && isCurrentMeegleDeviceCodePolling(challenge, currentJob)) {
+                                invalidateMeegleStatusRefresh()
+                                clearMeegleDeviceCodeLogin(cancelPolling = false)
+                                meegleCli = MeegleCliState.Ready(status)
+                                loadMeegleProjects(force = true)
+                                showStatus("Meegle 登录成功")
+                                return@launch
+                            }
+                            updateMeegleDeviceCodeLogin(challenge) {
+                                it.copy(error = "已收到授权结果，正在确认登录状态…")
+                            }
+                            pollDelayMillis = challenge.pollingIntervalSeconds * 1_000L
+                        } else {
+                            when (runInterruptible(ioDispatcher) { meegleCliService.completeDeviceCodeLogin(challenge) }) {
+                                MeegleDeviceCodeLoginResult.AUTHORIZED -> {
+                                    authorizationAccepted = true
+                                    pollDelayMillis = 0L
+                                }
+
+                                MeegleDeviceCodeLoginResult.PENDING -> {
+                                    if (!meegleDeviceCodeBrowserOpenFailed) {
+                                        updateMeegleDeviceCodeLogin(challenge) { it.copy(error = null) }
+                                    }
+                                    pollDelayMillis = challenge.pollingIntervalSeconds * 1_000L
+                                }
+
+                                MeegleDeviceCodeLoginResult.SLOW_DOWN -> {
+                                    pollDelayMillis = (pollDelayMillis + 5_000L)
+                                        .coerceAtLeast(challenge.pollingIntervalSeconds * 1_000L)
+                                        .coerceAtMost(MAX_MEEGLE_DEVICE_CODE_POLL_DELAY_MILLIS)
+                                }
+
+                                MeegleDeviceCodeLoginResult.EXPIRED -> {
+                                    markMeegleDeviceCodeExpired(challenge, authorizationAccepted = false)
+                                    return@launch
+                                }
+                            }
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Throwable) {
+                        if (isCurrentMeegleDeviceCodePolling(challenge, currentJob)) {
+                            updateMeegleDeviceCodeLogin(challenge) {
+                                it.copy(polling = true, error = pollingErrorMessage(challenge, error))
+                            }
+                            pollDelayMillis = challenge.pollingIntervalSeconds * 1_000L
+                        }
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } finally {
+                if (meegleDeviceCodePollJob === currentJob) meegleDeviceCodePollJob = null
+            }
+        }
+        meegleDeviceCodePollJob = job
+        job.start()
+    }
+
+    private fun isCurrentMeegleDeviceCodePolling(challenge: MeegleDeviceCodeChallenge, job: Job?): Boolean =
+        meegleDeviceCodeChallenge === challenge && meegleDeviceCodePollJob === job
+
+    private fun isCurrentMeegleStatusRefresh(generation: Long, job: Job?): Boolean =
+        meegleStatusRefreshGeneration == generation && meegleStatusRefreshJob === job
+
+    /** 让正在后台运行的旧状态检查失效；它返回后也不能覆盖较新的登录结果。 */
+    private fun invalidateMeegleStatusRefresh() {
+        meegleStatusRefreshGeneration += 1
+        meegleStatusRefreshJob?.cancel()
+        meegleStatusRefreshJob = null
+    }
+
+    private fun updateMeegleDeviceCodeLogin(
+        challenge: MeegleDeviceCodeChallenge,
+        update: (MeegleDeviceCodeLoginUiState) -> MeegleDeviceCodeLoginUiState,
+    ) {
+        if (meegleDeviceCodeChallenge === challenge) {
+            meegleDeviceCodeLogin = meegleDeviceCodeLogin?.let(update)
+        }
+    }
+
+    private fun isMeegleDeviceCodeExpired(): Boolean =
+        meegleDeviceCodeExpiresAtMillis?.let { System.currentTimeMillis() >= it } ?: true
+
+    private fun markMeegleDeviceCodeExpired(challenge: MeegleDeviceCodeChallenge, authorizationAccepted: Boolean) {
+        updateMeegleDeviceCodeLogin(challenge) {
+            it.copy(
+                polling = false,
+                error = if (authorizationAccepted) {
+                    "已收到授权结果，但未能确认登录状态。请点击“刷新”确认。"
+                } else {
+                    "授权码已过期，请重新生成验证码。"
+                },
+            )
+        }
+    }
+
+    private fun deviceCodeExpiresAtMillis(challenge: MeegleDeviceCodeChallenge): Long =
+        System.currentTimeMillis() + challenge.expiresInSeconds.coerceAtMost(MAX_MEEGLE_DEVICE_CODE_LIFETIME_SECONDS) * 1_000L
+
+    private fun pollingErrorMessage(challenge: MeegleDeviceCodeChallenge, error: Throwable): String {
+        val detail = challenge.redactSecrets(error.message.orEmpty())
+            .lineSequence()
+            .firstOrNull()
+            ?.trim()
+            ?.take(MAX_MEEGLE_DEVICE_CODE_ERROR_LENGTH)
+            .orEmpty()
+        return if (detail.isBlank()) {
+            "自动检测授权状态失败，将自动重试。"
+        } else {
+            "自动检测授权状态失败：$detail。将自动重试。"
+        }
+    }
+
+    private fun openMeegleAuthorizationUrl(challenge: MeegleDeviceCodeChallenge): String? =
+        openMeegleAuthorizationPage(challenge.authorizationUrl).exceptionOrNull()
+            ?.let { "未能自动打开授权页，请点击“打开授权页”重试。" }
+
+    private fun clearMeegleDeviceCodeLogin(cancelPolling: Boolean = true) {
+        if (cancelPolling) meegleDeviceCodePollJob?.cancel()
+        meegleDeviceCodePollJob = null
+        meegleDeviceCodeChallenge = null
+        meegleDeviceCodeExpiresAtMillis = null
+        meegleDeviceCodeBrowserOpenFailed = false
+        meegleDeviceCodeLogin = null
+    }
 
     fun chooseDirectory(initial: String? = null, selected: (String) -> Unit) = choose({ pathPicker.pickDirectory(initial) }) { it?.let(selected) }
     fun chooseFile(initial: String? = null, selected: (String) -> Unit) = choose({ pathPicker.pickFile(initial) }) { it?.let(selected) }

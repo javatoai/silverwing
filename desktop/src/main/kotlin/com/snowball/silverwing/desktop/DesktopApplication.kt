@@ -26,6 +26,7 @@ import com.snowball.silverwing.core.DevelopmentToolStartupDetection
 import com.snowball.silverwing.core.ConfiguredGitExecutable
 import com.snowball.silverwing.core.ConfiguredGenbuExecutable
 import com.snowball.silverwing.core.ConfiguredMeegleExecutable
+import com.snowball.silverwing.core.ConfiguredLarkExecutable
 import com.snowball.silverwing.core.GitBranchReferenceValidator
 import com.snowball.silverwing.core.GitClient
 import com.snowball.silverwing.core.GitCommandSource
@@ -33,12 +34,15 @@ import com.snowball.silverwing.core.GitWorkspaceLifecycle
 import com.snowball.silverwing.core.CommandRunner
 import com.snowball.silverwing.core.ProcessCommandRunner
 import com.snowball.silverwing.core.MeegleCommandSource
+import com.snowball.silverwing.core.MeegleRequirementAiContextProvider
 import com.snowball.silverwing.core.MeegleRequirementMetadataProvider
 import com.snowball.silverwing.core.MeegleProjectConfig
 import com.snowball.silverwing.core.MeegleProjectCatalog
 import com.snowball.silverwing.core.CliMeegleProjectCatalog
 import com.snowball.silverwing.core.MeegleCliService
 import com.snowball.silverwing.core.ProcessMeegleCliService
+import com.snowball.silverwing.core.LarkCliService
+import com.snowball.silverwing.core.ProcessLarkCliService
 import com.snowball.silverwing.core.LocalGitEnvironmentInspector
 import com.snowball.silverwing.core.DiagnosticsExporter
 import com.snowball.silverwing.core.ApplicationEvent
@@ -65,6 +69,11 @@ import com.snowball.silverwing.core.RemoteGitBranchCatalog
 import com.snowball.silverwing.core.RepositoryRemoteCatalog
 import com.snowball.silverwing.core.RequirementMetadataProvider
 import com.snowball.silverwing.core.RequirementMetadata
+import com.snowball.silverwing.core.RequirementAiContextProvider
+import com.snowball.silverwing.core.RequirementAiNamingService
+import com.snowball.silverwing.core.RequirementAiNamingSuggestion
+import com.snowball.silverwing.core.CodexRequirementAiNamingService
+import com.snowball.silverwing.core.BranchReferenceValidator
 import com.snowball.silverwing.core.RequirementMaterialsDirectory
 import com.snowball.silverwing.core.RequirementMaterialsService
 import com.snowball.silverwing.core.ServiceWorkspace
@@ -157,7 +166,7 @@ internal fun buildMeegleLoginCommand(
 ): String {
     require(command.isNotBlank()) { "Meegle 命令不能为空" }
     val displayed = TerminalLaunchCommand.display(
-        listOf(command, "auth", "login", "--host", "project.feishu.cn", "--format", "json"),
+        listOf(command, "auth", "login", "--device-code", "--host", "project.feishu.cn", "--format", "json"),
         osName,
     )
     return if (osName.startsWith("Windows", ignoreCase = true)) "& $displayed" else displayed
@@ -209,6 +218,8 @@ class DesktopApplication(
     private val errorLogReader: ApplicationErrorLogReader = ApplicationErrorLogReader(paths),
     private val meegleExecutablePath: AtomicReference<String?> = AtomicReference(null),
     private val meegleExecutable: ConfiguredMeegleExecutable = ConfiguredMeegleExecutable(meegleExecutablePath::get),
+    private val larkExecutablePath: AtomicReference<String?> = AtomicReference(null),
+    private val larkExecutable: ConfiguredLarkExecutable = ConfiguredLarkExecutable(larkExecutablePath::get),
     private val genbuExecutablePath: AtomicReference<String?> = AtomicReference(null),
     private val genbuExecutable: ConfiguredGenbuExecutable = ConfiguredGenbuExecutable(genbuExecutablePath::get),
     private val cliVersionRunner: CommandRunner = ProcessCommandRunner(),
@@ -283,6 +294,10 @@ class DesktopApplication(
     ),
     val deliveryRegistry: DeliveryPipelineRegistry = DeliveryPipelineRegistry(listOf(tagDelivery)),
     private val requirementMetadataProvider: RequirementMetadataProvider = MeegleRequirementMetadataProvider(meegleExecutable = meegleExecutable),
+    private val requirementAiContextProvider: RequirementAiContextProvider =
+        MeegleRequirementAiContextProvider(meegleExecutable = meegleExecutable),
+    private val requirementAiNamingService: RequirementAiNamingService = CodexRequirementAiNamingService(paths),
+    private val requirementAiBranchValidator: BranchReferenceValidator = GitBranchReferenceValidator(gitExecutable = gitExecutable),
     private val requirementLinkSource: MeegleRequirementLinkSource = MeegleRequirementLinkSource(metadata = requirementMetadataProvider, meegleExecutable = meegleExecutable),
     private val requirementLinkFailures: RequirementLinkFailureLog = RequirementLinkFailureLog(paths),
     private val gitStatusService: WorkspaceGitStatusService = WorkspaceGitStatusService(GitWorkspaceGitStatusReader(gitClient)),
@@ -297,6 +312,7 @@ class DesktopApplication(
     private val repositoryRemoteCatalog: RepositoryRemoteCatalog = GitRepositoryRemoteCatalog(gitClient),
     private val meegleProjectCatalog: MeegleProjectCatalog = CliMeegleProjectCatalog(meegleExecutable = meegleExecutable),
     private val meegleCliService: MeegleCliService = ProcessMeegleCliService(meegleExecutable = meegleExecutable),
+    private val larkCliService: LarkCliService = ProcessLarkCliService(larkExecutable = larkExecutable),
     private val localGitInspector: LocalGitEnvironmentInspector = LocalGitEnvironmentInspector(gitExecutable = gitExecutable),
     private val workspaceToolRegistry: TaskWorkspaceToolRegistry = TaskWorkspaceToolRegistry(
         listOf(CodexWorkspaceToolLauncher(), CursorWorkspaceToolLauncher()),
@@ -306,6 +322,8 @@ class DesktopApplication(
         manifests,
     ),
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    /** 测试可替换浏览器入口；生产环境仍使用系统默认浏览器。 */
+    private val meegleAuthorizationUrlOpener: ((String) -> Result<Unit>)? = null,
 ) : AutoCloseable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var startupMigrationWarnings: List<String> = emptyList()
@@ -334,6 +352,7 @@ class DesktopApplication(
 
     private val initialConfig = initial.getOrDefault(AppConfig()).also {
         meegleExecutablePath.set(it.meegleExecutablePath)
+        larkExecutablePath.set(it.larkExecutablePath)
         gitExecutablePath.set(it.gitExecutablePath)
         genbuExecutablePath.set(it.genbuExecutablePath)
     }
@@ -368,6 +387,8 @@ class DesktopApplication(
     private val settingsOperationRunner = OperationRunner(settingsOperationCoordinator, scope, ioDispatcher)
     private val meegleOperationCoordinator = OperationCoordinator(onError = ::recordError)
     private val meegleOperationRunner = OperationRunner(meegleOperationCoordinator, scope, ioDispatcher)
+    private val larkOperationCoordinator = OperationCoordinator(onError = ::recordError)
+    private val larkOperationRunner = OperationRunner(larkOperationCoordinator, scope, ioDispatcher)
     internal val codexExtensionsController by lazy {
         CodexExtensionsController(
             extensions = codexExtensions,
@@ -384,6 +405,9 @@ class DesktopApplication(
         session = sessionStore,
         scope = scope,
         coordinator = requirementMetadataCoordinator,
+        aiContextProvider = requirementAiContextProvider,
+        aiNamingService = requirementAiNamingService,
+        branchValidator = requirementAiBranchValidator,
         linkSource = requirementLinkSource,
         failureLog = requirementLinkFailures,
         ioDispatcher = ioDispatcher,
@@ -438,6 +462,8 @@ class DesktopApplication(
             meegleProjectCatalog = meegleProjectCatalog,
             meegleCliService = meegleCliService,
             meegleExecutable = meegleExecutable,
+            larkCliService = larkCliService,
+            larkExecutable = larkExecutable,
             gitExecutable = gitExecutable,
             genbuExecutable = genbuExecutable,
             cliVersionRunner = cliVersionRunner,
@@ -447,10 +473,19 @@ class DesktopApplication(
             operations = operationRunner,
             settingsOperations = settingsOperationRunner,
             meegleOperations = meegleOperationRunner,
+            larkOperations = larkOperationRunner,
             applyConfig = ::applyConfig,
             reloadTasks = { reloadTasks() },
             showError = ::showError,
             showStatus = ::showStatus,
+            openMeegleAuthorizationPage = { url ->
+                meegleAuthorizationUrlOpener?.invoke(url)
+                    ?: runCatching { desktopIntegration.openUrl(url) }
+            },
+            openLarkAuthorizationPage = { url ->
+                meegleAuthorizationUrlOpener?.invoke(url)
+                    ?: runCatching { desktopIntegration.openUrl(url) }
+            },
         )
     }
     val agentInstructionsController: AgentInstructionsController by lazy {
@@ -488,6 +523,7 @@ class DesktopApplication(
         get() = sessionStore.config
         private set(value) {
             meegleExecutablePath.set(value.meegleExecutablePath)
+            larkExecutablePath.set(value.larkExecutablePath)
             gitExecutablePath.set(value.gitExecutablePath)
             genbuExecutablePath.set(value.genbuExecutablePath)
             sessionStore.config = value
@@ -515,11 +551,15 @@ class DesktopApplication(
     val activeOperationCancelling: Boolean get() = operationCoordinator.cancelling
     fun cancelActiveOperation(): Boolean = operationRunner.cancel()
     val meegleBusy: Boolean get() = meegleOperationCoordinator.busy
+    val larkBusy: Boolean get() = larkOperationCoordinator.busy
     val settingsBusy: Boolean get() = settingsOperationCoordinator.busy
-    val hasActiveOperations: Boolean get() = busy || settingsBusy || meegleBusy
+    val hasActiveOperations: Boolean get() = busy || settingsBusy || meegleBusy || larkBusy
     val meegleOperationCancellable: Boolean get() = meegleOperationCoordinator.cancellable
     val meegleOperationError: String? get() = meegleOperationCoordinator.errorMessage
     fun cancelMeegleOperation(): Boolean = meegleOperationRunner.cancel()
+    val larkOperationCancellable: Boolean get() = larkOperationCoordinator.cancellable
+    val larkOperationError: String? get() = larkOperationCoordinator.errorMessage
+    fun cancelLarkOperation(): Boolean = larkOperationRunner.cancel()
     fun refreshCliInstallationStatus() {
         cliInstallationStatus = cliInstallationService.inspect()
         tagSkillInstallationStatus = tagSkillInstallationService.inspect()
@@ -657,12 +697,28 @@ class DesktopApplication(
         requirementController.requestDraftMetadata(link, onResult)
     }
 
+    val requirementAiNamingState: RequirementAiNamingUiState get() = requirementController.aiNamingState
+
+    fun requestRequirementAiNaming(
+        link: String,
+        branchPrefix: String,
+        enabled: Boolean,
+        onResult: (RequirementAiNamingSuggestion) -> Unit,
+    ) = requirementController.requestDraftAiNaming(link, branchPrefix, enabled, onResult)
+
+    fun cancelRequirementAiNaming() = requirementController.cancelDraftAiNaming()
+
     /** Saves the configured Feishu project identities without enabling any automatic query. */
     fun updateMeegleProjects(projects: List<MeegleProjectConfig>, onFailure: (Throwable) -> Unit = {}): Boolean =
         settingsController.updateMeegleProjects(projects, onFailure)
 
     fun updateMeegleExecutablePath(raw: String, onFailure: (Throwable) -> Unit = {}): Boolean =
         settingsController.updateMeegleExecutablePath(raw, onFailure)
+
+    fun updateLarkExecutablePath(raw: String, onFailure: (Throwable) -> Unit = {}): Boolean =
+        settingsController.updateLarkExecutablePath(raw, onFailure)
+
+    fun larkCommandResolution() = settingsController.larkCommandResolution()
 
     fun meegleCommandResolution(): Pair<String, MeegleCommandSource> = settingsController.meegleCommandResolution()
 
@@ -808,6 +864,11 @@ class DesktopApplication(
     fun setGroupTagEnabled(groupId: String, enabled: Boolean) = settingsController.setGroupTagEnabled(groupId, enabled)
     fun updateGroupDefaults(groupId: String, branchPrefix: String, workspaceToolIds: List<String>, onFailure: (Throwable) -> Unit = {}) =
         settingsController.updateGroupDefaults(groupId, branchPrefix, workspaceToolIds, onFailure)
+    fun setAiRequirementNamingEnabled(enabled: Boolean, onFailure: (Throwable) -> Unit = {}): Boolean {
+        // 关闭开关是隐私边界，必须立即取消，不能等待异步保存结束；已填入的表单值保持不变。
+        if (!enabled) requirementController.cancelDraftAiNaming()
+        return settingsController.setAiRequirementNamingEnabled(enabled, onFailure)
+    }
     fun chooseDirectory(initialPath: String? = null, onSelected: (String) -> Unit) = settingsController.chooseDirectory(initialPath, onSelected)
     fun chooseFile(initialPath: String? = null, onSelected: (String) -> Unit) = settingsController.chooseFile(initialPath, onSelected)
     fun chooseApplication(initialPath: String? = null, onSelected: (String) -> Unit) =
@@ -820,6 +881,9 @@ class DesktopApplication(
     fun repositoryRemotesState(repositoryId: String) = settingsController.repositoryRemotesState(repositoryId)
     val meegleProjectCatalogState: MeegleProjectCatalogState get() = settingsController.state.meegleProjects
     val meegleCliState: MeegleCliState get() = settingsController.state.meegleCli
+    val meegleDeviceCodeLoginState: MeegleDeviceCodeLoginUiState? get() = settingsController.meegleDeviceCodeLoginState
+    val larkCliState: LarkCliState get() = settingsController.state.larkCli
+    val larkDeviceCodeLoginState: LarkDeviceCodeLoginUiState? get() = settingsController.larkDeviceCodeLoginState
     val localGitSettingsState: LocalGitSettingsState get() = settingsController.state.localGit
     fun settingsSaveState(key: String): SettingsSaveState = settingsController.saveState(key)
     fun refreshLocalGit(force: Boolean = false) = settingsController.refreshLocalGit(force)
@@ -832,6 +896,15 @@ class DesktopApplication(
     fun cancelMeegleProjectLoad() = settingsController.cancelMeegleProjectLoad()
     fun refreshMeegleStatus(force: Boolean = false) = settingsController.refreshMeegleStatus(force)
     fun loginMeegle() = settingsController.loginMeegle()
+    fun logoutMeegle() = settingsController.logoutMeegle()
+    fun completeMeegleDeviceCodeLogin() = settingsController.completeMeegleDeviceCodeLogin()
+    fun openMeegleDeviceCodeAuthorizationUrl() = settingsController.openMeegleDeviceCodeAuthorizationUrl()
+    fun cancelMeegleDeviceCodeLogin() = settingsController.cancelMeegleDeviceCodeLogin()
+    fun refreshLarkStatus(force: Boolean = false) = settingsController.refreshLarkStatus(force)
+    fun loginLark(domains: List<String>) = settingsController.loginLark(domains)
+    fun logoutLark() = settingsController.logoutLark()
+    fun openLarkDeviceCodeAuthorizationUrl() = settingsController.openLarkDeviceCodeAuthorizationUrl()
+    fun cancelLarkDeviceCodeLogin() = settingsController.cancelLarkDeviceCodeLogin()
     fun addRepository(groupId: String, selectedDirectory: String, strategy: WorkspaceStrategy) =
         settingsController.addRepository(groupId, selectedDirectory, strategy)
     fun addRepositories(groupId: String, selectedDirectories: List<String>, onCompleted: () -> Unit = {}) =
@@ -1345,6 +1418,7 @@ class DesktopApplication(
         val requirementConfigurationChanged = config.meegleProjects != updated.meegleProjects ||
             config.requirementMaterialsRoot != updated.requirementMaterialsRoot ||
             config.requirementMaterialsSubdirectory != updated.requirementMaterialsSubdirectory
+        val aiNamingConfigurationChanged = config.aiRequirementNamingEnabled != updated.aiRequirementNamingEnabled
         val tagConfigurationChanged = config.tagEnabled != updated.tagEnabled ||
             config.tagHistoryMaxGroups != updated.tagHistoryMaxGroups
         config = updated
@@ -1357,6 +1431,7 @@ class DesktopApplication(
         repositories = updated.repositories.map(RepositoryConfig::toInfo)
         if (terminalConfigurationChanged) detectTerminalInBackground()
         if (requirementConfigurationChanged) requirementController.onConfigurationChanged()
+        if (aiNamingConfigurationChanged) requirementController.cancelDraftAiNaming()
         updated.groups.forEach { group ->
             runCatching {
                 agentDocuments.ensureGroupFile(group.id)

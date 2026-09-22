@@ -329,7 +329,7 @@ data class GroupConfig(
     }
 }
 
-/** Version 2.0.0 is an aggregate boundary; persisted runtime settings use strict shard schema 1. */
+/** Version 2.0.0 is an aggregate boundary; persisted runtime settings use strict shard schema 2. */
 @Serializable
 data class AppConfig(
     val schemaVersion: String = CURRENT_APP_CONFIG_SCHEMA_VERSION,
@@ -375,6 +375,8 @@ data class AppConfig(
     val genbuExecutablePath: String? = null,
     /** True only when SILVERWING persisted the path found by automatic Genbu detection. */
     val genbuExecutableAutoDetected: Boolean = false,
+    /** Absolute path to the Lark CLI executable; null means auto-detect. */
+    val larkExecutablePath: String? = null,
     /** Absolute root for requirement research materials; null/blank disables the integration. */
     val requirementMaterialsRoot: String? = null,
     /** One safe child directory segment under each requirement directory; null/blank disables the integration. */
@@ -383,6 +385,8 @@ data class AppConfig(
     val codexPluginMarketplaceSources: List<CodexPluginMarketplaceSource> = emptyList(),
     /** Git sources providing standalone, user-scoped Codex Skills. */
     val skillSources: List<SkillSource> = emptyList(),
+    /** Sends only a selected requirement title and body to the local Codex CLI to suggest names. */
+    val aiRequirementNamingEnabled: Boolean = false,
 ) {
     init {
         requirementMaterialsSubdirectory?.let(::validateRequirementMaterialsSubdirectory)

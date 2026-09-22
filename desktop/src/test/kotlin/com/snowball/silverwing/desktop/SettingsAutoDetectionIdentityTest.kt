@@ -96,7 +96,9 @@ class SettingsAutoDetectionIdentityTest {
             meegleProjectCatalog = MeegleProjectCatalog { error("No project lookup expected") },
             meegleCliService = object : MeegleCliService {
                 override fun status() = MeegleCliStatus(installed = true)
-                override fun login(host: String) = error("No login expected")
+                override fun logout() = Unit
+                override fun beginDeviceCodeLogin(host: String) = error("No login expected")
+                override fun completeDeviceCodeLogin(challenge: MeegleDeviceCodeChallenge) = error("No login expected")
             },
             meegleExecutable = object : MeegleExecutable {
                 override fun resolve() = detected

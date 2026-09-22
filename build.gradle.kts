@@ -28,7 +28,7 @@ val fastTestRequested = gradle.startParameter.taskNames.any { taskName ->
 
 allprojects {
     group = "com.snowball.silverwing"
-    version = "2.0.3"
+    version = "2.0.4"
 }
 
 subprojects {

@@ -134,6 +134,33 @@ class CodexExtensionsServiceTest {
     }
 
     @Test
+    fun `local Skill uninstall backs up any safe direct Skill directory before removal`() {
+        val paths = ApplicationPaths(temporary.resolve("local-skill-delete-home"))
+        val userHome = temporary.resolve("local-skill-delete-user")
+        val service = CodexExtensionsService(paths = paths, userHome = { userHome })
+        val skill = userHome.resolve(".agents/skills/manual-local-skill")
+        val sibling = userHome.resolve(".agents/skills/keep-me")
+        Files.createDirectories(skill.resolve("references"))
+        Files.writeString(skill.resolve("SKILL.md"), "# Manually installed Skill\n")
+        Files.writeString(skill.resolve("references/checklist.md"), "# Checklist\n")
+        Files.createDirectories(sibling)
+        Files.writeString(sibling.resolve("SKILL.md"), "# Keep\n")
+
+        service.uninstallLocalSkill("manual-local-skill")
+
+        assertFalse(Files.exists(skill))
+        assertTrue(Files.exists(sibling.resolve("SKILL.md")))
+        val backupRoot = paths.codex.resolve("skill-backups")
+        assertTrue(Files.list(backupRoot).use { backups ->
+            backups.anyMatch { backup ->
+                Files.readString(backup.resolve("SKILL.md")) == "# Manually installed Skill\n" &&
+                    Files.readString(backup.resolve("references/checklist.md")) == "# Checklist\n"
+            }
+        })
+        assertFailsWith<IllegalArgumentException> { service.uninstallLocalSkill("../keep-me") }
+    }
+
+    @Test
     fun `Skill source omits empty directories from discovered roots`() {
         val runner = SkillGitRunner()
         val service = CodexExtensionsService(

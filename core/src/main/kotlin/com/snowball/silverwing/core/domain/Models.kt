@@ -4,12 +4,13 @@ package com.snowball.silverwing.core
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
+import kotlinx.serialization.Required
 import kotlinx.serialization.json.JsonNames
 import java.net.URI
 
 /** Persisted data uses explicit strict schema versions independent of the product build version. */
 const val CURRENT_PRODUCT_VERSION = "2.0.4"
-const val CURRENT_APP_CONFIG_SCHEMA_VERSION = "2.0.0"
+const val CURRENT_APP_CONFIG_SCHEMA_VERSION = "6.0.0"
 const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = "2.0.0"
 const val DEFAULT_GROUP_ID = "default"
 const val DEFAULT_GROUP_NAME = "默认组"
@@ -227,29 +228,20 @@ enum class TagBuildMode {
 data class ServiceModuleConfig(
     val id: String,
     val name: String = "default",
-    val baseRef: String = "origin/master",
-    val baseRemote: String = "origin",
+    /** Null follows the owning service's master branch. */
+    @Required val masterBranch: String? = null,
     val strategy: WorkspaceStrategy = WorkspaceStrategy.STANDARD_WORKTREE,
-    @JsonNames("uatTagEnabled")
     val tagEnabled: Boolean = true,
     val tagMode: TagBuildMode = TagBuildMode.MERGE_TO_TARGET_BRANCH,
-    @JsonNames("uatRef")
-    val tagTargetRef: String? = "origin/release/test",
+    /** Null inherits the owning service's test Tag baseline. */
+    val tagTargetRef: String? = null,
     val tagMessagePrefix: String = "Tag",
     val customCommands: List<WorkspaceCommandConfig> = emptyList(),
 ) {
     init {
         require(id.isNotBlank()) { "模块 ID 不能为空" }
-        require(baseRef.isNotBlank()) { "模块基础分支不能为空" }
-        require(baseRemote.isNotBlank()) { "模块基础远程不能为空" }
-        val parsedBase = RemoteBranchRef.parse(baseRef)
-        require(parsedBase.remote == baseRemote) {
-            "基础分支远程必须与基础远程一致：${parsedBase.remote} != $baseRemote"
-        }
-        if (tagEnabled && tagMode == TagBuildMode.MERGE_TO_TARGET_BRANCH) {
-            require(!tagTargetRef.isNullOrBlank()) { "合并到目标分支模式必须配置测试Tag目标分支" }
-            RemoteBranchRef.parse(tagTargetRef)
-        }
+        masterBranch?.let(RemoteBranchRef::parse)
+        tagTargetRef?.let(RemoteBranchRef::parse)
         require(customCommands.map { it.id.lowercase() }.distinct().size == customCommands.size) {
             "同一模块内快捷命令 ID 不能重复（忽略大小写）"
         }
@@ -267,6 +259,10 @@ data class GroupServiceConfig(
     val genbuProbeEnabled: Boolean = false,
     /** Genbu service name; defaults to the service display name used by existing configurations. */
     val genbuServiceName: String = displayName,
+    /** Default module branch and local commit-history comparison ref. */
+    @Required val masterBranch: String = "origin/master",
+    /** Default target for new task test Tags when a module has no override. */
+    @Required val testTagBaselineRef: String = "origin/release/test",
     val developmentTool: DevelopmentToolType = DevelopmentToolType.INTELLIJ_IDEA,
     val modules: List<ServiceModuleConfig> = listOf(
         ServiceModuleConfig(id = "default"),
@@ -280,6 +276,8 @@ data class GroupServiceConfig(
         require(repositoryId.isNotBlank()) { "仓库 ID 不能为空" }
         require(displayName.isNotBlank()) { "服务名称不能为空" }
         require(!genbuProbeEnabled || genbuServiceName.isNotBlank()) { "启用 Genbu 探测时必须配置 Genbu 服务名" }
+        RemoteBranchRef.parse(masterBranch)
+        RemoteBranchRef.parse(testTagBaselineRef)
         require(modules.isNotEmpty()) { "服务至少需要一个工作区模块" }
         require(modules.map { it.id.lowercase() }.distinct().size == modules.size) { "同一服务内模块 ID 不能重复（忽略大小写）" }
         StandardWorktreeModuleNaming.requireValid(modules)
@@ -291,37 +289,43 @@ data class GroupServiceConfig(
             repositoryId: String,
             displayName: String,
             developmentTool: DevelopmentToolType = DevelopmentToolType.INTELLIJ_IDEA,
-            baseRef: String = "origin/master",
+            masterBranch: String = "origin/master",
         ): GroupServiceConfig = GroupServiceConfig(
             id = id,
             repositoryId = repositoryId,
             displayName = displayName,
             developmentTool = developmentTool,
-            modules = listOf(ServiceModuleConfig(id = "default", baseRef = baseRef)),
+            masterBranch = masterBranch,
+            modules = listOf(ServiceModuleConfig(id = "default")),
         )
     }
+
+    fun effectiveMasterBranch(module: ServiceModuleConfig): String = module.masterBranch ?: masterBranch
+
+    fun effectiveMasterRemote(module: ServiceModuleConfig): String =
+        RemoteBranchRef.parse(effectiveMasterBranch(module)).remote
+
+    fun resolvedModule(module: ServiceModuleConfig): ServiceModuleConfig =
+        module.copy(masterBranch = effectiveMasterBranch(module))
+
+    fun effectiveTagTargetRef(module: ServiceModuleConfig): String? =
+        if (module.tagEnabled && module.tagMode == TagBuildMode.MERGE_TO_TARGET_BRANCH) {
+            module.tagTargetRef ?: testTagBaselineRef
+        } else null
 }
 
 @Serializable
 data class GroupConfig(
     val id: String,
     val name: String,
-    @JsonNames("uatTagEnabled")
     val tagEnabled: Boolean = true,
     val services: List<GroupServiceConfig> = emptyList(),
-    val defaultBranchPrefix: String = "",
-    val defaultWorkspaceToolIds: List<String> = emptyList(),
 ) {
     init {
         require(id.isNotBlank()) { "组 ID 不能为空" }
         require(id.matches(Regex("[A-Za-z0-9._-]+"))) { "组 ID 只能包含字母、数字、点、下划线和连字符" }
         require(TaskNaming.directoryName(id) == id) { "组 ID 必须是安全且稳定的目录片段" }
         require(name.isNotBlank()) { "组名称不能为空" }
-        require(defaultBranchPrefix.none(Char::isWhitespace)) { "默认分支名前缀不能包含空白字符" }
-        require(defaultWorkspaceToolIds.all(String::isNotBlank)) { "工作区工具 ID 不能为空" }
-        require(defaultWorkspaceToolIds.distinct().size == defaultWorkspaceToolIds.size) {
-            "同一组内的默认工作区工具不能重复"
-        }
         require(services.map { it.repositoryId }.distinct().size == services.size) {
             "同一仓库在一个组内只能出现一次"
         }
@@ -329,11 +333,13 @@ data class GroupConfig(
     }
 }
 
-/** Version 2.0.0 is an aggregate boundary; persisted runtime settings use strict shard schema 2. */
+/** Persisted runtime settings use strict shard schema 6. */
 @Serializable
 data class AppConfig(
     val schemaVersion: String = CURRENT_APP_CONFIG_SCHEMA_VERSION,
     val taskRoot: String? = null,
+    /** Shared branch prefix for every newly created task, independent of its project group. */
+    val defaultBranchPrefix: String = "",
     val repositories: List<RepositoryConfig> = emptyList(),
     val groups: List<GroupConfig> = listOf(
         GroupConfig(DEFAULT_GROUP_ID, DEFAULT_GROUP_NAME),
@@ -348,6 +354,8 @@ data class AppConfig(
     val defaultDevelopmentTool: DevelopmentToolType = DevelopmentToolType.INTELLIJ_IDEA,
     /** Shows temporary IDE selectors beside the normal default-tool open actions. */
     val allowTemporaryDevelopmentToolSelection: Boolean = false,
+    /** Workspace tools selected by default for every new task, independent of its project group. */
+    val defaultWorkspaceToolIds: List<String> = emptyList(),
     /** Shows the batch Git action group in the task-detail toolbar. */
     val showTaskDetailGitActionGroup: Boolean = false,
     /** Shows the task-directory action group in the task-detail toolbar. */
@@ -371,6 +379,16 @@ data class AppConfig(
     val meegleExecutablePath: String? = null,
     /** Absolute path to the Codex CLI executable; null means auto-detect. */
     val codexExecutablePath: String? = null,
+    /** Optional shared HTTP(S) proxy endpoint for selected locally launched command categories. */
+    val commandProxyUrl: String? = null,
+    /** Optional comma-separated standard NO_PROXY patterns for selected proxy commands. */
+    val commandProxyNoProxy: String? = null,
+    /** Optional proxy login; it is paired with [commandProxyPassword]. */
+    val commandProxyUsername: String? = null,
+    /** Optional proxy password; it is paired with [commandProxyUsername]. */
+    val commandProxyPassword: String? = null,
+    /** Command categories explicitly permitted to use [commandProxyUrl]. */
+    val commandProxyTargets: Set<CommandProxyTarget> = emptySet(),
     /** Absolute path to the Git executable; null means auto-detect. */
     val gitExecutablePath: String? = null,
     /** Absolute path to the Genbu CLI executable; null means auto-detect. */
@@ -394,6 +412,22 @@ data class AppConfig(
 ) {
     init {
         RequirementAiNamingModel.requireValid(aiRequirementNamingModel)
+        require(defaultBranchPrefix.none(Char::isWhitespace)) { "默认分支名前缀不能包含空白字符" }
+        require(defaultWorkspaceToolIds.all(String::isNotBlank)) { "工作区工具 ID 不能为空" }
+        require(defaultWorkspaceToolIds.distinct().size == defaultWorkspaceToolIds.size) {
+            "默认工作区工具不能重复"
+        }
+        val normalizedCommandProxy = normalizeCommandProxyUrl(commandProxyUrl)
+        val normalizedCommandProxyNoProxy = normalizeCommandProxyNoProxy(commandProxyNoProxy)
+        val proxyAuthentication = commandProxyAuthentication(commandProxyUsername, commandProxyPassword)
+        require(normalizedCommandProxy != null || (
+            commandProxyTargets.isEmpty() &&
+                normalizedCommandProxyNoProxy == null &&
+                proxyAuthentication == null
+            )
+        ) {
+            "未配置命令代理地址时不能设置代理命令、例外地址或认证信息"
+        }
         requirementMaterialsSubdirectory?.let(::validateRequirementMaterialsSubdirectory)
         require(groups.isNotEmpty()) { "至少需要一个组" }
         require(groups.map { it.id }.distinct().size == groups.size) { "组 ID 不能重复" }

@@ -26,6 +26,11 @@ class DiagnosticsExporterTest {
             terminalExecutable = "C:/secret/terminal.exe",
             meegleExecutablePath = "C:/secret/user/meegle.cmd",
             codexExecutablePath = "C:/secret/user/codex.exe",
+            commandProxyUrl = "http://127.0.0.1:7890",
+            commandProxyNoProxy = "*.internal",
+            commandProxyUsername = "proxy-user",
+            commandProxyPassword = "proxy-password",
+            commandProxyTargets = setOf(CommandProxyTarget.CODEX),
             larkExecutablePath = "C:/secret/user/lark-cli.cmd",
             gitExecutablePath = "C:/secret/user/git.exe",
             genbuExecutablePath = "C:/secret/user/genbu.exe",
@@ -44,6 +49,11 @@ class DiagnosticsExporterTest {
             assertTrue(configText.contains("<configured:PYCHARM>"))
             assertTrue(configText.contains("\"meegleExecutablePath\": \"<configured>\""))
             assertTrue(configText.contains("\"codexExecutablePath\": \"<configured>\""))
+            assertTrue(configText.contains("\"commandProxyUrl\": \"<configured>\""))
+            assertFalse(configText.contains("127.0.0.1:7890"))
+            assertFalse(configText.contains("*.internal"))
+            assertFalse(configText.contains("proxy-user"))
+            assertFalse(configText.contains("proxy-password"))
             assertTrue(configText.contains("\"larkExecutablePath\": \"<configured>\""))
             assertTrue(configText.contains("\"gitExecutablePath\": \"<configured>\""))
             assertTrue(configText.contains("\"genbuExecutablePath\": \"<configured>\""))

@@ -16,15 +16,15 @@ agents/task-templates.json
 
 ## 分功能严格配置分片
 
-配置不再使用单一 `config.json`。`~/silverwing/config/` 必须恰好包含以下八个 JSON 文件；每个文件均有独立的严格 `"schema": 2` 字段，未知字段、缺失文件、重复/额外 ZIP 条目和不匹配 schema 都会被拒绝，不会被自动修复或迁移。
+配置不再使用单一 `config.json`。`~/silverwing/config/` 必须恰好包含以下八个 JSON 文件；每个文件均有独立的严格 `"schema": 6` 字段，未知字段、缺失文件、重复/额外 ZIP 条目和不匹配 schema 都会被拒绝，不会被自动修复或迁移。旧 schema 5 配置不会被读取或改写。
 
 | 文件 | 保存内容 |
 | --- | --- |
-| `layout.json` | 组顺序、名称、组级 Tag 开关、默认分支前缀与工作区工具 |
-| `workspace.json` | 任务根目录与仓库 |
+| `layout.json` | 组顺序、名称与组级 Tag 开关 |
+| `workspace.json` | 任务根目录、仓库与全局默认分支前缀 |
 | `services.json` | 组内服务、模块、Bootstrap 与模块专属快捷命令 |
 | `tag.json` | 全局 Tag 开关与历史保留组数 |
-| `tools.json` | 终端、开发工具、默认工具与临时选择开关 |
+| `tools.json` | 终端、开发工具、全局默认打开工具与临时选择开关 |
 | `git.json` | Git 可执行程序与受保护分支 |
 | `integrations.json` | Meegle、Lark、Genbu、需求资料目录、AI 需求命名开关、Codex 插件市场和外部 Skill 来源定义 |
 | `appearance.json` | 主题与界面显示偏好 |
@@ -57,33 +57,35 @@ Codex 插件市场的本机注册信息、最近成功的插件目录缓存、�
 `genbuProbeEnabled` 是服务级开关，默认 `false`。开启后，Tag 构建页面会用 `where.exe genbu.exe` 自动发现本机 `genbu` CLI，并在页面打开期间以 `genbu query-tag --json <服务> <精确 Tag>` 查询所有带 Tag 记录的构建、UAT 发版和生产发版三个阶段的状态（初始/构建中/成功/失败）及其返回的完成时间；`genbuServiceName` 默认使用服务展示名称，可在服务配置中改为 Genbu 的实际服务名。自动轮询会跳过已完成 UAT 发布、构建失败、被更晚 Tag 覆盖或已确认未在 Genbu 找到的记录；页面的“刷新 Genbu”会强制重新查询全部带 Tag 记录。当某条记录的 Genbu 构建结果为失败时，行内提供“重新打Tag”按钮：重新执行完整 Tag 流程，版本号在失败 Tag 基础上自动 +1，并原地替换该条构建记录。
 
 ```json
+{
+"masterBranch": "origin/master",
+"testTagBaselineRef": "origin/release/test",
 "modules": [
   {
     "id": "feign-master",
     "name": "主线客户端",
     "strategy": "STANDARD_WORKTREE",
-    "baseRef": "origin/master",
-    "baseRemote": "origin",
+    "masterBranch": null,
     "tagEnabled": true,
     "tagMode": "MERGE_TO_TARGET_BRANCH",
-    "tagTargetRef": "origin/release/test",
+    "tagTargetRef": null,
     "tagMessagePrefix": "Tag"
   },
   {
     "id": "feign-development",
     "name": "开发客户端",
     "strategy": "INDEPENDENT_CLONE",
-    "baseRef": "origin/development",
-    "baseRemote": "origin",
+    "masterBranch": "origin/development",
     "tagEnabled": false,
     "tagMode": "CURRENT_BRANCH",
     "tagTargetRef": null,
     "tagMessagePrefix": "Tag"
   }
 ]
+}
 ```
 
-每个模块都会使用稳定的 `服务名-模块名` 目录。模块 ID、名称和目录名忽略大小写不得重复；独立克隆模块可以选择原仓库的任意远程作为来源，基础 Ref 使用 `<来源 remote>/<branch>` 格式。新建 clone 会将所选来源 URL 命名为自身的 `origin`，因此后续 Push、恢复和 Git 操作仍统一使用 `origin`。
+服务的 `masterBranch` 为必填远程分支。模块 `masterBranch: null` 实时继承服务值，填写 `<来源 remote>/<branch>` 时独立覆盖；模块 `tagTargetRef: null` 独立继承服务的 `testTagBaselineRef`。创建任务时把最终分支写入任务清单快照，之后修改服务配置不会改变已有任务。每个模块都会使用稳定的 `服务名-模块名` 目录。模块 ID、名称和目录名忽略大小写不得重复；新建独立克隆会将所选来源 URL 命名为自身的 `origin`，后续 Push、恢复和 Git 操作仍统一使用 `origin`。
 
 `meegleExecutablePath` 为 `null` 时，应用会通过平台 login shell 自动探测 Meegle CLI 并缓存结果；也可以在设置页填写已存在、可执行的绝对路径。探测失败时回退到 PATH 中的 `meegle.cmd`（Windows）或 `meegle`（macOS/Linux）。
 
@@ -111,7 +113,7 @@ Codex 插件市场的本机注册信息、最近成功的插件目录缓存、�
 
 已存在且唯一的需求目录会复用；如果递归查找到多个 `<需求编号>` 或 `<需求编号>-*` 目录，操作会明确失败，不自动选择。发现已有过程文档 manifest 时会校验需求身份，身份不一致则停止写入。silverwing 不移动、删除或自动迁移历史资料目录，任务交接文件位于任务目录的 `.workspace/HANDOFF.md`。
 
-配置分片始终严格使用 `schema: 1`；任务清单使用产品 `2.0.x` schema 行。silverwing 不读取、迁移、删除或改写旧产品的配置、任务清单或独立过程文档目录。需要保存或转移当前 silverwing 配置时，请在设置页导出完整 ZIP，再在目标环境验证后导入。
+配置分片严格使用 `schema: 6`，应用配置版本为 `6.0.0`；任务清单仍使用 `2.0.0`。silverwing 不读取、迁移或改写旧 schema 配置。需要保存或转移当前 silverwing 配置时，请在设置页导出完整 ZIP，再在目标环境验证后导入。
 
 ## 组
 
@@ -120,7 +122,7 @@ Codex 插件市场的本机注册信息、最近成功的插件目录缓存、�
 - 设置页可创建、重命名、排序组；只有空组可以删除，且必须保留至少一个组。
 - 一个仓库可以加入多个组，但同一组内只能出现一次。
 - 组内服务也使用数组保存并支持排序。
-- `defaultBranchPrefix` 可包含唯一占位符 `{num}`。飞书链接优先使用工作项 ID；其他 URL 忽略 query/fragment 后从 path 取最后一段数字，普通文本取最后一段数字。无法解析时必须手工修正分支后才能创建。
+- 全局 `defaultBranchPrefix` 可包含唯一占位符 `{num}`。飞书链接优先使用工作项 ID；其他 URL 忽略 query/fragment 后从 path 取最后一段数字，普通文本取最后一段数字。无法解析时必须手工修正分支后才能创建。
 
 ## 人工添加仓库
 
@@ -141,11 +143,11 @@ Codex 插件市场的本机注册信息、最近成功的插件目录缓存、�
 
 ### 标准 Worktree
 
-标准服务至少有一个模块。每个模块指定 `baseRemote`、基础 Ref、Tag 模式和 Tag 子开关。合并模式的 `tagTargetRef` 使用 `<remote>/<branch>` 格式，例如 `origin/release/test`：
+标准服务至少有一个模块。服务指定主分支；模块主分支默认继承服务，也可独立覆盖。合并模式的测试 Tag 目标同样默认继承服务，可独立覆盖为 `<remote>/<branch>`，例如 `origin/release/test`：
 
-- 每个模块都创建独立 Worktree，即使多个模块使用相同基础 Ref；
+- 每个模块都创建独立 Worktree，即使多个模块使用相同主分支；
 - 单模块保留用户输入的任务分支名；
-- 多模块按模块名自动添加后缀，例如 `feature/ABC-api`、`feature/ABC-jobs/nightly`；创建页可以分别覆盖每个模块的基础分支和目标分支；
+- 多模块按模块名自动添加后缀，例如 `feature/ABC-api`、`feature/ABC-jobs/nightly`；创建页可以分别覆盖每个模块的本次主分支和目标分支；
 - 模块名只允许英文字母、数字、`-`、`_`、`/`，忽略大小写后不能重复；目录名会将 `/` 转为 `-`，转换后也不能冲突。
 
 创建前会执行 `fetch --prune --no-tags <remote>`，并从最新的 `refs/remotes/<remote>/<branch>` 创建 Worktree；不会切换或移动用户本地 `master`。普通任务创建不受本地同名 Tag 冲突影响。标准服务创建 Worktree 后按服务配置执行 Bootstrap。
@@ -156,7 +158,7 @@ Codex 插件市场的本机注册信息、最近成功的插件目录缓存、�
 
 ### 独立克隆
 
-独立克隆服务必须保存默认来源远程和基础分支，创建任务时可以覆盖。它从所选来源远程的 URL 完整克隆，并在新目录中将该来源命名为 `origin`；随后直接切到该分支，不创建额外 Feature 分支或 Linked Worktree。创建与恢复后执行 Bootstrap，归档和删除仍会进行 Git 安全检查。
+独立克隆模块默认继承服务主分支，也可以单独配置主分支；创建任务时还可临时覆盖。它从主分支对应远程的 URL 完整克隆，并在新目录中将该来源命名为 `origin`；随后直接切到该分支，不创建额外 Feature 分支或 Linked Worktree。创建与恢复后执行 Bootstrap，归档和删除仍会进行 Git 安全检查。
 
 ## Tag 开关与模式
 
@@ -194,7 +196,7 @@ Bootstrap 是服务级快照，对该服务新创建的每个 Worktree 或独立
 
 ## 任务工作区工具与任务 schema
 
-`silverwing.json` 使用严格字符串 schema，当前写入版本为 `"2.0.0"`。创建任务时会继承所属组的 `defaultWorkspaceToolIds`，用户可以在创建页增减。任务本身创建成功后，工具适配器逐项打开；其中一个失败不会回滚 Git 工作区，也不会阻止其他工具。silverwing 不读取、迁移或删除旧产品的配置和任务清单。
+`silverwing.json` 使用严格字符串 schema，当前写入版本为 `"2.0.0"`。创建任务时会继承全局 `defaultWorkspaceToolIds`，用户可以在创建页增减。任务本身创建成功后，工具适配器逐项打开；其中一个失败不会回滚 Git 工作区，也不会阻止其他工具。silverwing 不读取、迁移或删除旧产品的配置和任务清单。
 
 ```json
 {
@@ -227,7 +229,7 @@ Bootstrap 是服务级快照，对该服务新创建的每个 Worktree 或独立
 
 `lifecycleStatus` 只表示任务属于活跃还是已归档；每个服务的 `health` 只表示工作区是否可用。任务整体健康度由服务动态聚合，不会作为第三个状态字段写入 JSON。`branchCreatedByTask` 标记本次任务是否创建了本地分支，失败回滚只会删除该类分支；`forceWorktreeAttach` 标记恢复时是否需要以 `git worktree add --force` 再次附加已被其他 Worktree 检出的分支。
 
-`blockedGitWriteBranches` 按完整本地分支名忽略大小写匹配，默认保护 `master`、`main`，不支持通配符。受保护分支仍可作为基础分支被检出，但 silverwing 会在任何写入前阻止 Commit、Push、Commit & Push，以及需要写入该分支的 Tag 流程。
+`blockedGitWriteBranches` 按完整本地分支名忽略大小写匹配，默认保护 `master`、`main`，不支持通配符。受保护分支仍可作为主分支被检出，但 silverwing 会在任何写入前阻止 Commit、Push、Commit & Push，以及需要写入该分支的 Tag 流程。
 
 未注册的工具 ID 会原样保留在配置中并在界面显示为“当前不可用”。Core 只认识通用工具 ID 和执行结果，不依赖 Codex、Claude、Cursor 的 URI 或命令。
 

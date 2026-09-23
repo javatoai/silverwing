@@ -13,6 +13,88 @@ import kotlin.test.assertTrue
 
 class TaskApplicationServiceTest {
     @Test
+    fun `new task snapshots resolved master branch while later service changes do not alter it`() {
+        val root = Files.createTempDirectory("task-master-branch-")
+        val provisioner = RecordingProvisioner(WorkspaceStrategy.STANDARD_WORKTREE)
+        val application = TaskApplicationService(
+            provisioning = WorkspaceProvisioningService(listOf(provisioner)),
+            agentDocuments = RecordingAgentDocuments(),
+            operationLock = NoOpTaskOperationLock,
+        )
+        val original = taskConfig(root)
+        val group = original.groups.single()
+        val standard = group.services.first { it.id == "standard" }
+        val inherited = original.copy(groups = listOf(group.copy(services = listOf(
+            standard.copy(masterBranch = "upstream/develop"),
+        ))))
+
+        val first = application.create(inherited, CreateGroupedTaskRequest(
+            folderName = "FIRST",
+            featureBranch = "feature/first",
+            groupId = "alpha",
+            serviceIds = listOf("standard"),
+        ))
+        assertEquals("upstream/develop", first.services.single().baseRef)
+        assertEquals("upstream", first.services.single().pushRemote)
+
+        val changed = original.copy(groups = listOf(group.copy(services = listOf(
+            standard.copy(masterBranch = "origin/main"),
+        ))))
+        val second = application.create(changed, CreateGroupedTaskRequest(
+            folderName = "SECOND",
+            featureBranch = "feature/second",
+            groupId = "alpha",
+            serviceIds = listOf("standard"),
+        ))
+        assertEquals("origin/main", second.services.single().baseRef)
+        assertEquals("upstream/develop", ManifestStore().load(root.resolve("FIRST")).services.single().baseRef)
+        assertEquals("upstream/develop", provisioner.requests.first().service.effectiveMasterBranch(provisioner.requests.first().service.modules.single()))
+    }
+
+    @Test
+    fun `new task snapshots service test baseline or module override`() {
+        val root = Files.createTempDirectory("task-tag-baseline-")
+        val provisioner = RecordingProvisioner(WorkspaceStrategy.STANDARD_WORKTREE)
+        val application = TaskApplicationService(
+            provisioning = WorkspaceProvisioningService(listOf(provisioner)),
+            agentDocuments = RecordingAgentDocuments(),
+            operationLock = NoOpTaskOperationLock,
+        )
+        val original = taskConfig(root)
+        val group = original.groups.single()
+        val standard = group.services.first { it.id == "standard" }
+        val inherited = original.copy(groups = listOf(group.copy(services = listOf(
+            standard.copy(testTagBaselineRef = "origin/qa"),
+        ))))
+        val first = application.create(inherited, CreateGroupedTaskRequest(
+            folderName = "INHERITED",
+            featureBranch = "feature/inherited",
+            groupId = "alpha",
+            serviceIds = listOf("standard"),
+        ))
+        assertEquals("origin/qa", provisioner.requests.last().service.modules.single().tagTargetRef)
+        assertEquals("origin/qa", first.services.single().tagTargetRef)
+
+        val changedBaseline = inherited.copy(groups = listOf(group.copy(services = listOf(
+            standard.copy(testTagBaselineRef = "origin/release/test"),
+        ))))
+        assertEquals("qa", TagPolicy.resolve(changedBaseline, first, first.services.single().selectionKey).targetBranch)
+
+        val override = inherited.copy(groups = listOf(group.copy(services = listOf(
+            standard.copy(testTagBaselineRef = "origin/qa", modules = listOf(
+                standard.modules.single().copy(tagTargetRef = "origin/hotfix"),
+            )),
+        ))))
+        val second = application.create(override, CreateGroupedTaskRequest(
+            folderName = "OVERRIDE",
+            featureBranch = "feature/override",
+            groupId = "alpha",
+            serviceIds = listOf("standard"),
+        ))
+        assertEquals("origin/hotfix", second.services.single().tagTargetRef)
+    }
+
+    @Test
     fun `Agent CLI context creates a handoff while a normal request remains opt in`() {
         val root = Files.createTempDirectory("agent-handoff-task-")
         val application = TaskApplicationService(
@@ -102,10 +184,10 @@ class TaskApplicationServiceTest {
 
         assertEquals("alpha", manifest.groupId)
         assertEquals(listOf(WorkspaceStrategy.STANDARD_WORKTREE), standard.requests.map { it.service.modules.single().strategy })
-        assertEquals("upstream/develop", standard.requests.single().service.modules.single().baseRef)
-        assertEquals("upstream", standard.requests.single().service.modules.single().baseRemote)
+        assertEquals("upstream/develop", standard.requests.single().service.effectiveMasterBranch(standard.requests.single().service.modules.single()))
+        assertEquals("upstream", standard.requests.single().service.effectiveMasterRemote(standard.requests.single().service.modules.single()))
         assertEquals(mapOf("default" to "feature/custom-standard"), standard.requests.single().moduleBranches)
-        assertEquals("origin/release/test", clone.requests.single().service.modules.single().baseRef)
+        assertEquals("origin/release/test", clone.requests.single().service.effectiveMasterBranch(clone.requests.single().service.modules.single()))
         assertEquals(2, manifest.services.size)
         assertEquals("2026-08-08 08:00:00", manifest.createdAt)
         assertEquals("2026-08-08 08:00:00", manifest.updatedAt)
@@ -667,7 +749,7 @@ class TaskApplicationServiceTest {
 
         assertEquals(listOf("clone"), updated.services.map(ServiceWorkspace::groupServiceId))
         assertEquals("feature/task-20", clone.requests.single().requestedFeatureBranch)
-        assertEquals("origin/master", clone.requests.single().service.modules.single().baseRef)
+        assertEquals("origin/master", clone.requests.single().service.effectiveMasterBranch(clone.requests.single().service.modules.single()))
         assertEquals("2026-08-08 09:02:03", updated.updatedAt)
         assertEquals(null, documents.lastNotes)
     }
@@ -1142,7 +1224,7 @@ private fun taskConfig(taskRoot: Path): AppConfig {
                         id = "clone",
                         repositoryId = "repo-b",
                         displayName = "Repo B",
-                        modules = listOf(ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/master")),
+                        modules = listOf(ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, masterBranch = "origin/master")),
                     ),
                 ),
             ),
@@ -1167,18 +1249,19 @@ private class RecordingProvisioner(
                 repositoryPath = request.repository.rootPath,
                 worktreePath = request.taskDirectory.resolve(request.service.id).toString(),
                 developmentTool = request.service.developmentTool,
-                branch = if (strategy == WorkspaceStrategy.INDEPENDENT_CLONE) request.service.modules.first().baseRef.removePrefix("origin/") else request.requestedFeatureBranch.orEmpty(),
+                branch = if (strategy == WorkspaceStrategy.INDEPENDENT_CLONE) request.service.effectiveMasterBranch(request.service.modules.first()).removePrefix("origin/") else request.requestedFeatureBranch.orEmpty(),
                 health = WorkspaceHealth.READY,
                 groupServiceId = request.service.id,
                 moduleId = request.service.modules.single().id,
                 moduleName = request.service.modules.single().name,
                 strategy = strategy,
-                baseRef = request.service.modules.single().baseRef,
+                baseRef = request.service.effectiveMasterBranch(request.service.modules.single()),
                 targetBranch = request.moduleBranches[request.service.modules.single().id],
                 tagEnabled = request.service.modules.single().tagEnabled,
                 tagMode = request.service.modules.single().tagMode,
                 tagTargetRef = request.service.modules.single().tagTargetRef,
                 tagMessagePrefix = request.service.modules.single().tagMessagePrefix,
+                pushRemote = request.service.effectiveMasterRemote(request.service.modules.single()),
             ),
         )
     }

@@ -74,16 +74,18 @@ class WorkspaceCommandServiceTest {
     @Test
     fun `module config defaults custom commands to empty and serializes them`() {
         val json = Json { encodeDefaults = true }
-        val legacy = """
+        val current = """
             {
               "id": "orders",
               "repositoryId": "repo-orders",
               "displayName": "Orders",
-              "modules": [{"id": "default", "baseRef": "origin/master", "baseRemote": "origin"}]
+              "masterBranch": "origin/master",
+              "testTagBaselineRef": "origin/release/test",
+              "modules": [{"id": "default", "masterBranch": null}]
             }
         """.trimIndent()
 
-        val decoded = json.decodeFromString<GroupServiceConfig>(legacy)
+        val decoded = json.decodeFromString<GroupServiceConfig>(current)
         assertTrue(decoded.modules.single().customCommands.isEmpty())
 
         val configured = decoded.copy(

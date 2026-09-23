@@ -23,7 +23,7 @@ import kotlin.io.path.exists
 import kotlin.io.path.name
 import kotlin.concurrent.withLock
 
-private const val CONFIG_SHARD_SCHEMA = 2
+private const val CONFIG_SHARD_SCHEMA = 6
 
 class UnsupportedConfigVersionException(
     val actualVersion: String?,
@@ -293,12 +293,24 @@ class ConfigStore(
 
     private fun decodeShards(files: Map<String, ByteArray>): DecodedConfig {
         val layout = decodeShard<LayoutShard>(LAYOUT_FILE, files.getValue(LAYOUT_FILE))
-        val workspace = decodeShard<WorkspaceShard>(WORKSPACE_FILE, files.getValue(WORKSPACE_FILE))
+        val workspace = decodeShard<WorkspaceShard>(
+            WORKSPACE_FILE,
+            files.getValue(WORKSPACE_FILE),
+            requiredFields = setOf("defaultBranchPrefix"),
+        )
         val services = decodeShard<ServicesShard>(SERVICES_FILE, files.getValue(SERVICES_FILE))
         val tag = decodeShard<TagShard>(TAG_FILE, files.getValue(TAG_FILE))
-        val tools = decodeShard<ToolsShard>(TOOLS_FILE, files.getValue(TOOLS_FILE))
+        val tools = decodeShard<ToolsShard>(
+            TOOLS_FILE,
+            files.getValue(TOOLS_FILE),
+            requiredFields = setOf("defaultWorkspaceToolIds"),
+        )
         val git = decodeShard<GitShard>(GIT_FILE, files.getValue(GIT_FILE))
-        val integrations = decodeShard<IntegrationsShard>(INTEGRATIONS_FILE, files.getValue(INTEGRATIONS_FILE))
+        val integrations = decodeShard<IntegrationsShard>(
+            INTEGRATIONS_FILE,
+            files.getValue(INTEGRATIONS_FILE),
+            requiredFields = setOf("commandProxyUrl", "commandProxyTargets"),
+        )
         val appearance = decodeShard<AppearanceShard>(APPEARANCE_FILE, files.getValue(APPEARANCE_FILE))
         val servicesByGroup = services.groups.associateBy(GroupServicesShard::groupId)
         require(servicesByGroup.size == services.groups.size) { "services.json 包含重复组 ID" }
@@ -312,13 +324,12 @@ class ConfigStore(
                 name = group.name,
                 tagEnabled = group.tagEnabled,
                 services = serviceGroup.services,
-                defaultBranchPrefix = group.defaultBranchPrefix,
-                defaultWorkspaceToolIds = group.defaultWorkspaceToolIds,
             )
         }
         val config = AppConfig(
             schemaVersion = CURRENT_APP_CONFIG_SCHEMA_VERSION,
             taskRoot = workspace.taskRoot,
+            defaultBranchPrefix = workspace.defaultBranchPrefix,
             repositories = workspace.repositories,
             groups = groups,
             theme = appearance.theme,
@@ -328,6 +339,7 @@ class ConfigStore(
             developmentTools = tools.developmentTools,
             defaultDevelopmentTool = tools.defaultDevelopmentTool,
             allowTemporaryDevelopmentToolSelection = tools.allowTemporaryDevelopmentToolSelection,
+            defaultWorkspaceToolIds = tools.defaultWorkspaceToolIds,
             showTaskDetailGitActionGroup = appearance.showTaskDetailGitActionGroup,
             showTaskDetailPathActionGroup = appearance.showTaskDetailPathActionGroup,
             showWorkspaceGitActionGroup = appearance.showWorkspaceGitActionGroup,
@@ -340,6 +352,11 @@ class ConfigStore(
             meegleProjects = integrations.meegleProjects,
             meegleExecutablePath = integrations.meegleExecutablePath,
             codexExecutablePath = integrations.codexExecutablePath,
+            commandProxyUrl = integrations.commandProxyUrl,
+            commandProxyNoProxy = integrations.commandProxyNoProxy,
+            commandProxyUsername = integrations.commandProxyUsername,
+            commandProxyPassword = integrations.commandProxyPassword,
+            commandProxyTargets = integrations.commandProxyTargets,
             gitExecutablePath = git.gitExecutablePath,
             genbuExecutablePath = integrations.genbuExecutablePath,
             genbuExecutableAutoDetected = integrations.genbuExecutableAutoDetected,
@@ -358,10 +375,17 @@ class ConfigStore(
         )
     }
 
-    private inline fun <reified T> decodeShard(name: String, bytes: ByteArray): T {
+    private inline fun <reified T> decodeShard(
+        name: String,
+        bytes: ByteArray,
+        requiredFields: Set<String> = emptySet(),
+    ): T {
         val element = json.parseToJsonElement(bytes.toString(Charsets.UTF_8))
-        val schema = element.jsonObject[SCHEMA_FIELD]?.jsonPrimitive?.intOrNull
+        val objectValue = element.jsonObject
+        val schema = objectValue[SCHEMA_FIELD]?.jsonPrimitive?.intOrNull
         if (schema != CONFIG_SHARD_SCHEMA) throw UnsupportedConfigVersionException(schema?.toString())
+        val missing = requiredFields.filterNot(objectValue::containsKey)
+        require(missing.isEmpty()) { "$name 缺少必填字段：${missing.joinToString()}" }
         return json.decodeFromJsonElement(element)
     }
 
@@ -372,10 +396,14 @@ class ConfigStore(
         return Shards(
             layout = LayoutShard(
                 groups = config.groups.map {
-                    GroupLayoutShard(it.id, it.name, it.tagEnabled, it.defaultBranchPrefix, it.defaultWorkspaceToolIds)
+                    GroupLayoutShard(it.id, it.name, it.tagEnabled)
                 },
             ),
-            workspace = WorkspaceShard(taskRoot = config.taskRoot, repositories = config.repositories),
+            workspace = WorkspaceShard(
+                taskRoot = config.taskRoot,
+                defaultBranchPrefix = config.defaultBranchPrefix,
+                repositories = config.repositories,
+            ),
             services = ServicesShard(groups = config.groups.map { GroupServicesShard(it.id, it.services) }),
             tag = TagShard(tagEnabled = config.tagEnabled, tagHistoryMaxGroups = config.tagHistoryMaxGroups),
             tools = ToolsShard(
@@ -383,12 +411,18 @@ class ConfigStore(
                 developmentTools = config.developmentTools,
                 defaultDevelopmentTool = config.defaultDevelopmentTool,
                 allowTemporaryDevelopmentToolSelection = config.allowTemporaryDevelopmentToolSelection,
+                defaultWorkspaceToolIds = config.defaultWorkspaceToolIds,
             ),
             git = GitShard(blockedGitWriteBranches = config.blockedGitWriteBranches, gitExecutablePath = config.gitExecutablePath),
             integrations = IntegrationsShard(
                 meegleProjects = config.meegleProjects,
                 meegleExecutablePath = config.meegleExecutablePath,
                 codexExecutablePath = config.codexExecutablePath,
+                commandProxyUrl = config.commandProxyUrl,
+                commandProxyNoProxy = config.commandProxyNoProxy,
+                commandProxyUsername = config.commandProxyUsername,
+                commandProxyPassword = config.commandProxyPassword,
+                commandProxyTargets = config.commandProxyTargets,
                 genbuExecutablePath = config.genbuExecutablePath,
                 genbuExecutableAutoDetected = config.genbuExecutableAutoDetected,
                 larkExecutablePath = config.larkExecutablePath,
@@ -612,14 +646,13 @@ private data class GroupLayoutShard(
     val id: String,
     val name: String,
     val tagEnabled: Boolean = true,
-    val defaultBranchPrefix: String = "",
-    val defaultWorkspaceToolIds: List<String> = emptyList(),
 )
 
 @Serializable
 private data class WorkspaceShard(
     val schema: Int = CONFIG_SHARD_SCHEMA,
     val taskRoot: String? = null,
+    val defaultBranchPrefix: String = "",
     val repositories: List<RepositoryConfig> = emptyList(),
 )
 
@@ -649,6 +682,7 @@ private data class ToolsShard(
     val developmentTools: List<DevelopmentToolConfig> = emptyList(),
     val defaultDevelopmentTool: DevelopmentToolType = DevelopmentToolType.INTELLIJ_IDEA,
     val allowTemporaryDevelopmentToolSelection: Boolean = false,
+    val defaultWorkspaceToolIds: List<String> = emptyList(),
 )
 
 @Serializable
@@ -661,13 +695,21 @@ private data class GitShard(
 @Serializable
 private data class IntegrationsShard(
     val schema: Int = CONFIG_SHARD_SCHEMA,
-    /** Schema 2 requires an explicit value; schema 1 configurations are rejected before decode. */
+    /** Every current configuration explicitly records this integration setting. */
     val aiRequirementNamingEnabled: Boolean,
-    /** Added after schema 2 shipped; missing values use the current safe default. */
+    /** Model used when AI naming is enabled. */
     val aiRequirementNamingModel: String = RequirementAiNamingModel.DEFAULT,
     val meegleProjects: List<MeegleProjectConfig> = emptyList(),
     val meegleExecutablePath: String? = null,
     val codexExecutablePath: String? = null,
+    /** Explicit value prevents inherited proxy behavior from changing silently. */
+    val commandProxyUrl: String?,
+    /** Optional bypass patterns retained with the proxy endpoint. */
+    val commandProxyNoProxy: String? = null,
+    /** Optional proxy authentication retained only when both values are present. */
+    val commandProxyUsername: String? = null,
+    val commandProxyPassword: String? = null,
+    val commandProxyTargets: Set<CommandProxyTarget>,
     val genbuExecutablePath: String? = null,
     val genbuExecutableAutoDetected: Boolean = false,
     val larkExecutablePath: String? = null,

@@ -393,7 +393,6 @@ private fun TagHistoryRow(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(Modifier.width(8.dp))
-                StatusPill(operation.state.userFacingLabel())
                 genbuTagStatusLabels(operation, controller.isGenbuProbeEnabled(operation)).forEach { label ->
                     Spacer(Modifier.width(4.dp))
                     StatusPill(label)
@@ -693,9 +692,4 @@ internal fun genbuTagStatusLabels(operation: TagOperation, probeEnabled: Boolean
             else -> "UAT未发布"
         },
     )
-    when (status.production) {
-        GenbuStageStatus.SUCCESS -> add("已生产发布")
-        GenbuStageStatus.FAILED -> add("生产发布失败")
-        else -> {}
-    }
 }

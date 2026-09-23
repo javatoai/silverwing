@@ -216,6 +216,7 @@ class AgentInstructionsController internal constructor(
             val repository = repositories[service.repositoryId] ?: return@flatMap emptyList()
             val selectedModules = selectionsByService[service.id]?.modules ?: service.modules.map { configured ->
                 TaskModuleSelection.configured(
+                    service,
                     configured,
                     if (service.modules.size == 1) normalizedBranch else "$normalizedBranch-${configured.name}",
                 )
@@ -232,10 +233,10 @@ class AgentInstructionsController internal constructor(
                     repository.id, service.displayName, repository.rootPath,
                     directory.resolve(WorkspaceLayout.moduleDirectoryName(service, module)).toString(),
                     service.developmentTool, branch, groupServiceId = service.id, moduleId = module.id,
-                    moduleName = ModuleDisplayNaming.resolve(module.name, service.displayName, module.baseRef, service.modules.size),
-                    strategy = module.strategy, originUrl = repository.originUrl, baseRef = module.baseRef,
+                    moduleName = ModuleDisplayNaming.resolve(module.name, service.displayName, baseRef, service.modules.size),
+                    strategy = module.strategy, originUrl = repository.originUrl, baseRef = baseRef,
                     moduleSource = selectedModule.source, targetBranch = target.ifBlank { null }, tagEnabled = module.tagEnabled,
-                    tagMode = module.tagMode, tagTargetRef = module.tagTargetRef, tagMessagePrefix = module.tagMessagePrefix,
+                    tagMode = module.tagMode, tagTargetRef = service.effectiveTagTargetRef(module), tagMessagePrefix = module.tagMessagePrefix,
                 )
             }
         }

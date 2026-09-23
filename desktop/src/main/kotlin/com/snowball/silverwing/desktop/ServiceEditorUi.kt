@@ -109,11 +109,10 @@ internal data class ServiceModuleEditorDraft(
     val id: String,
     val name: String = StandardWorktreeModuleNaming.DEFAULT_NAME,
     val strategy: WorkspaceStrategy = WorkspaceStrategy.STANDARD_WORKTREE,
-    val baseRef: String = "origin/master",
-    val baseRemote: String = "origin",
+    val masterBranch: String? = null,
     val tagEnabled: Boolean = true,
     val tagMode: TagBuildMode = TagBuildMode.MERGE_TO_TARGET_BRANCH,
-    val tagTargetRef: String = "origin/release/test",
+    val tagTargetRef: String? = null,
     val tagMessagePrefix: String = "Tag",
     val customCommands: List<WorkspaceCommandEditorDraft> = emptyList(),
 ) {
@@ -121,11 +120,10 @@ internal data class ServiceModuleEditorDraft(
         id = id,
         name = name.trim().ifBlank { StandardWorktreeModuleNaming.DEFAULT_NAME },
         strategy = strategy,
-        baseRef = normalizeBaseRefForStrategy(strategy, baseRef),
-        baseRemote = baseRemote.trim(),
+        masterBranch = masterBranch?.trim(),
         tagEnabled = tagEnabled,
         tagMode = tagMode,
-        tagTargetRef = if (tagMode == TagBuildMode.CURRENT_BRANCH) null else tagTargetRef.trim(),
+        tagTargetRef = if (tagMode == TagBuildMode.CURRENT_BRANCH) null else tagTargetRef?.trim(),
         tagMessagePrefix = tagMessagePrefix.trim(),
         customCommands = customCommands.map(WorkspaceCommandEditorDraft::toConfig)
             .map { it.validateWorkspaceCommand() },
@@ -140,11 +138,10 @@ internal fun ServiceModuleConfig.toEditorDraft(): ServiceModuleEditorDraft = Ser
     id = id,
     name = name,
     strategy = strategy,
-    baseRef = baseRef,
-    baseRemote = baseRemote,
+    masterBranch = masterBranch,
     tagEnabled = tagEnabled,
     tagMode = tagMode,
-    tagTargetRef = tagTargetRef.orEmpty(),
+    tagTargetRef = tagTargetRef,
     tagMessagePrefix = tagMessagePrefix,
     customCommands = customCommands.map(WorkspaceCommandConfig::toEditorDraft),
 )
@@ -158,6 +155,8 @@ internal fun ServiceEditorDialog(controller: DesktopApplication, service: GroupS
     var enabled by remember { mutableStateOf(service.enabled) }
     var genbuProbeEnabled by remember { mutableStateOf(service.genbuProbeEnabled) }
     var genbuServiceName by remember { mutableStateOf(service.genbuServiceName) }
+    var masterBranch by remember { mutableStateOf(service.masterBranch) }
+    var testTagBaselineRef by remember { mutableStateOf(service.testTagBaselineRef) }
     var developmentTool by remember { mutableStateOf(service.developmentTool) }
     var commitMessageTemplate by remember { mutableStateOf(service.commitMessageTemplate) }
     val initialModuleDrafts = remember(service) { service.modules.map(ServiceModuleConfig::toEditorDraft) }
@@ -172,7 +171,8 @@ internal fun ServiceEditorDialog(controller: DesktopApplication, service: GroupS
     var confirmDiscard by remember { mutableStateOf(false) }
     var selectedSection by remember { mutableStateOf("basic") }
     val hasDraftChanges = name != service.displayName || enabled != service.enabled || genbuProbeEnabled != service.genbuProbeEnabled ||
-        genbuServiceName != service.genbuServiceName || developmentTool != service.developmentTool || commitMessageTemplate != service.commitMessageTemplate ||
+        genbuServiceName != service.genbuServiceName || masterBranch != service.masterBranch ||
+        testTagBaselineRef != service.testTagBaselineRef || developmentTool != service.developmentTool || commitMessageTemplate != service.commitMessageTemplate ||
         modules != initialModuleDrafts ||
         bootstrapConfig != service.bootstrap || bootstrapText != initialBootstrapText
     val requestDismiss = { if (hasDraftChanges) confirmDiscard = true else onDismiss() }
@@ -258,6 +258,12 @@ internal fun ServiceEditorDialog(controller: DesktopApplication, service: GroupS
                                 onGenbuProbeEnabledChange = { genbuProbeEnabled = it },
                                 genbuServiceName = genbuServiceName,
                                 onGenbuServiceNameChange = { genbuServiceName = it },
+                                masterBranch = masterBranch,
+                                onMasterBranchChange = { masterBranch = it },
+                                testTagBaselineRef = testTagBaselineRef,
+                                onTestTagBaselineRefChange = { testTagBaselineRef = it },
+                                repositoryId = service.repositoryId,
+                                controller = controller,
                             )
                             "tools" -> ServiceToolsSection(
                                 developmentTool = developmentTool,
@@ -269,6 +275,8 @@ internal fun ServiceEditorDialog(controller: DesktopApplication, service: GroupS
                                 modules = modules,
                                 onModulesChange = { modules = it },
                                 repositoryId = service.repositoryId,
+                                masterBranch = masterBranch,
+                                testTagBaselineRef = testTagBaselineRef,
                                 controller = controller,
                             )
                             "bootstrap" -> ServiceBootstrapSection(
@@ -309,13 +317,15 @@ internal fun ServiceEditorDialog(controller: DesktopApplication, service: GroupS
                                 displayName = name.trim(), enabled = enabled,
                                 genbuProbeEnabled = genbuProbeEnabled,
                                 genbuServiceName = genbuServiceName.trim(),
+                                masterBranch = masterBranch.trim(),
+                                testTagBaselineRef = testTagBaselineRef.trim(),
                                 developmentTool = developmentTool,
                                 commitMessageTemplate = commitMessageTemplate.trim(),
                                 modules = normalizedModules,
                                 bootstrap = bootstrap,
                             )
                         }.onSuccess(onSave).onFailure { serviceValidationError = OperationFailureDetails.format(it) }
-                    }, enabled = name.isNotBlank() && modules.isNotEmpty() && modules.all { it.baseRef.isNotBlank() }) { Icon(Icons.Outlined.Save, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("保存配置") }
+                    }, enabled = name.isNotBlank() && masterBranch.isNotBlank() && testTagBaselineRef.isNotBlank() && modules.isNotEmpty() && modules.all { it.masterBranch == null || it.masterBranch.isNotBlank() }) { Icon(Icons.Outlined.Save, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("保存配置") }
                 }
             }
         }
@@ -407,11 +417,17 @@ private fun ServiceBasicSection(
     onGenbuProbeEnabledChange: (Boolean) -> Unit,
     genbuServiceName: String,
     onGenbuServiceNameChange: (String) -> Unit,
+    masterBranch: String,
+    onMasterBranchChange: (String) -> Unit,
+    testTagBaselineRef: String,
+    onTestTagBaselineRefChange: (String) -> Unit,
+    repositoryId: String,
+    controller: DesktopApplication,
 ) {
-    SectionHeader("基本信息", "展示名称用于服务列表与任务界面；停用后创建任务时不再可选")
+    SectionHeader("基本信息")
     OutlinedTextField(name, onNameChange, Modifier.fillMaxWidth(), label = { Text("展示名称") })
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("启用服务", style = MaterialTheme.typography.titleSmall)
+        Text("启用服务（关闭后新任务不可选）", style = MaterialTheme.typography.titleSmall)
         Switch(enabled, onEnabledChange)
     }
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -428,6 +444,22 @@ private fun ServiceBasicSection(
             singleLine = true,
         )
     }
+    RemoteBranchPicker(
+        masterBranch,
+        onMasterBranchChange,
+        "主分支",
+        repositoryId,
+        controller,
+        Modifier.fillMaxWidth(),
+    )
+    RemoteBranchPicker(
+        testTagBaselineRef,
+        onTestTagBaselineRefChange,
+        "测试 Tag 默认目标",
+        repositoryId,
+        controller,
+        Modifier.fillMaxWidth(),
+    )
 }
 
 @Composable
@@ -437,7 +469,7 @@ private fun ServiceToolsSection(
     commitMessageTemplate: String,
     onCommitMessageTemplateChange: (String) -> Unit,
 ) {
-    SectionHeader("工具与提交", "IDE 是系统建议，可手工修改；保存值始终作为最终依据")
+    SectionHeader("工具与提交")
     Text("默认开发工具", style = MaterialTheme.typography.titleSmall)
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         DevelopmentToolType.entries.forEach { value ->
@@ -452,7 +484,7 @@ private fun ModuleCustomCommandsSection(
     commands: List<WorkspaceCommandEditorDraft>,
     onCommandsChange: (List<WorkspaceCommandEditorDraft>) -> Unit,
 ) {
-    SectionHeader("快捷命令", "仅对当前模块显示；参数每行一个，不经过 Shell 拼接")
+    SectionHeader("快捷命令")
     if (commands.isEmpty()) {
         Text("尚未配置快捷命令。可以添加 Maven clean、install、deploy 等命令。", color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
@@ -498,6 +530,7 @@ private fun ModuleCustomCommandsSection(
                     },
                     Modifier.fillMaxWidth(),
                     label = { Text("参数（每行一个）") },
+                    supportingText = { Text("直接传参，不经过 Shell") },
                     minLines = 2,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -568,11 +601,13 @@ private fun ServiceModulesSection(
     modules: List<ServiceModuleEditorDraft>,
     onModulesChange: (List<ServiceModuleEditorDraft>) -> Unit,
     repositoryId: String,
+    masterBranch: String,
+    testTagBaselineRef: String,
     controller: DesktopApplication,
 ) {
-    SectionHeader("工作区模块", "同一服务可同时包含 Worktree 和独立克隆模块")
+    SectionHeader("工作区模块")
     modules.forEachIndexed { index, module ->
-        ModuleEditor(module, repositoryId, controller, canDelete = modules.size > 1, onChange = { changed -> onModulesChange(modules.mapIndexed { i, value -> if (i == index) changed else value }) }, onDelete = { onModulesChange(modules.filterIndexed { i, _ -> i != index }) })
+        ModuleEditor(module, repositoryId, masterBranch, testTagBaselineRef, controller, canDelete = modules.size > 1, onChange = { changed -> onModulesChange(modules.mapIndexed { i, value -> if (i == index) changed else value }) }, onDelete = { onModulesChange(modules.filterIndexed { i, _ -> i != index }) })
     }
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         OutlinedButton(onClick = {
@@ -600,7 +635,7 @@ private fun ServiceBootstrapSection(
     onError: (String?) -> Unit,
 ) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        SectionHeader("Bootstrap", "创建工作区后复制本机文件并执行初始化命令")
+        SectionHeader("Bootstrap")
         Spacer(Modifier.weight(1f))
         FilterChip(mode == "form", { onSwitchToForm() }, label = { Text("表单配置") })
         Spacer(Modifier.width(6.dp))
@@ -744,7 +779,7 @@ internal fun validateServiceWorkspaceModules(
 }
 
 @Composable
-private fun ModuleEditor(module: ServiceModuleEditorDraft, repositoryId: String, controller: DesktopApplication, canDelete: Boolean, onChange: (ServiceModuleEditorDraft) -> Unit, onDelete: () -> Unit) {
+private fun ModuleEditor(module: ServiceModuleEditorDraft, repositoryId: String, serviceMasterBranch: String, testTagBaselineRef: String, controller: DesktopApplication, canDelete: Boolean, onChange: (ServiceModuleEditorDraft) -> Unit, onDelete: () -> Unit) {
     OutlinedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -754,8 +789,6 @@ private fun ModuleEditor(module: ServiceModuleEditorDraft, repositoryId: String,
                         onClick = {
                             onChange(module.copy(
                                 strategy = strategy,
-                                baseRef = normalizeBaseRefForStrategy(strategy, module.baseRef),
-                                baseRemote = module.baseRemote,
                             ))
                         },
                         label = { Text(strategy.displayName) },
@@ -775,37 +808,61 @@ private fun ModuleEditor(module: ServiceModuleEditorDraft, repositoryId: String,
                     Icon(Icons.Outlined.Delete, "删除模块")
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                RemoteNamePicker(
-                    value = module.baseRemote,
-                    repositoryId = repositoryId,
-                    controller = controller,
-                    onSelected = { remote ->
-                        val branch = module.baseRef.substringAfter('/', module.baseRef)
-                        onChange(module.copy(baseRemote = remote, baseRef = "$remote/$branch"))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("自定义主分支", Modifier.weight(1f))
+                Switch(
+                    checked = module.masterBranch != null,
+                    onCheckedChange = { custom ->
+                        onChange(module.copy(masterBranch = if (custom) serviceMasterBranch else null))
                     },
-                    modifier = Modifier.width(160.dp),
                 )
-                RemoteBranchPicker(
-                    module.baseRef,
-                    { onChange(module.copy(baseRef = it)) },
-                    "基础分支",
-                    repositoryId,
-                    controller,
-                    Modifier.weight(1f),
-                    remote = module.baseRemote,
-                )
+            }
+            if (module.masterBranch == null) {
+                Text("继承服务主分支：$serviceMasterBranch", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                val selectedRemote = module.masterBranch.substringBefore('/')
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    RemoteNamePicker(
+                        value = selectedRemote,
+                        repositoryId = repositoryId,
+                        controller = controller,
+                        onSelected = { remote ->
+                            val branch = module.masterBranch.substringAfter('/', "")
+                            onChange(module.copy(masterBranch = "$remote/$branch"))
+                        },
+                        modifier = Modifier.width(160.dp),
+                    )
+                    RemoteBranchPicker(
+                        module.masterBranch,
+                        { onChange(module.copy(masterBranch = it)) },
+                        "主分支",
+                        repositoryId,
+                        controller,
+                        Modifier.weight(1f),
+                        remote = selectedRemote,
+                    )
+                }
             }
             if (controller.config.tagEnabled) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("测试Tag", Modifier.weight(1f)); Switch(module.tagEnabled, { onChange(module.copy(tagEnabled = it)) })
                 }
-                if (module.tagEnabled) TagModeSelector(module.tagMode) { mode ->
-                    onChange(module.copy(tagMode = mode, tagTargetRef = if (mode == TagBuildMode.CURRENT_BRANCH) "" else module.tagTargetRef.ifBlank { "origin/release/test" }))
+                if (module.tagEnabled) TagModeSelector(module.tagMode) { mode -> onChange(module.copy(tagMode = mode)) }
+                if (module.tagEnabled && module.tagMode == TagBuildMode.MERGE_TO_TARGET_BRANCH) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("自定义测试 Tag 目标", Modifier.weight(1f))
+                        Switch(
+                            checked = module.tagTargetRef != null,
+                            onCheckedChange = { override ->
+                                onChange(module.copy(tagTargetRef = if (override) testTagBaselineRef else null))
+                            },
+                        )
+                    }
+                    if (module.tagTargetRef == null) Text("继承服务测试 Tag 默认目标：$testTagBaselineRef", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 if (module.tagEnabled) TagConfigurationFields(
-                    targetVisible = module.tagMode == TagBuildMode.MERGE_TO_TARGET_BRANCH,
-                    targetRef = module.tagTargetRef,
+                    targetVisible = module.tagMode == TagBuildMode.MERGE_TO_TARGET_BRANCH && module.tagTargetRef != null,
+                    targetRef = module.tagTargetRef.orEmpty(),
                     onTargetRefChange = { onChange(module.copy(tagTargetRef = it)) },
                     messagePrefix = module.tagMessagePrefix,
                     onMessagePrefixChange = { onChange(module.copy(tagMessagePrefix = it)) },

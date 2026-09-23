@@ -204,8 +204,9 @@ internal fun SettingsCodexPluginsSection(controller: DesktopApplication) {
     }
 }
 
+/** Settings-only management surface for remote Skill sources and their installations. */
 @Composable
-internal fun SettingsExternalSkillsSection(controller: DesktopApplication) {
+internal fun SettingsSkillSourcesSection(controller: DesktopApplication) {
     val extensions = controller.codexExtensionsController
     val snapshot = extensions.state.snapshot
     var adding by remember { mutableStateOf(false) }
@@ -216,12 +217,16 @@ internal fun SettingsExternalSkillsSection(controller: DesktopApplication) {
     // 重新读取归属状态，而不是继续显示打开瞬间的旧按钮。
     var ownershipVersion by remember { mutableStateOf(0) }
 
+    LaunchedEffect(Unit) {
+        extensions.refreshCached()
+    }
+
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text("Skill 来源", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text("Skill 安装", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Text(
-                    "${controller.config.skillSources.size} 个来源",
+                    "管理 Git 来源，并将发现的 Skill 安装到本机。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

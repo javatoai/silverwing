@@ -84,7 +84,7 @@ class ConfigurationInteractionPolicyTest {
             id = "clone",
             repositoryId = "repo2",
             displayName = "Clone",
-            modules = listOf(ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/main")),
+            modules = listOf(ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, masterBranch = "origin/main")),
         )
         val repositories = listOf(
             RepositoryConfig("repo", "repo", "C:/repo", "C:/repo/.git"),

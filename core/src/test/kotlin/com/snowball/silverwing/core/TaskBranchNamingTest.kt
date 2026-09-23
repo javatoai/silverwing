@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Test
 class TaskBranchNamingTest {
     @Test
     fun `single module keeps the requested branch`() {
-        val modules = listOf(ServiceModuleConfig(id = "master", name = "default", baseRef = "origin/master"))
+        val modules = listOf(ServiceModuleConfig(id = "master", name = "default", masterBranch = "origin/master"))
 
         assertEquals(
             mapOf("master" to "feature/OBT-123"),
@@ -18,8 +18,8 @@ class TaskBranchNamingTest {
     @Test
     fun `multiple modules append their configured module names`() {
         val modules = listOf(
-            ServiceModuleConfig(id = "master", name = "master", baseRef = "origin/master"),
-            ServiceModuleConfig(id = "release", name = "release-test", baseRef = "origin/release/test"),
+            ServiceModuleConfig(id = "master", name = "master", masterBranch = "origin/master"),
+            ServiceModuleConfig(id = "release", name = "release-test", masterBranch = "origin/release/test"),
         )
 
         assertEquals(
@@ -34,8 +34,8 @@ class TaskBranchNamingTest {
     @Test
     fun `modules on the same base branch receive independent module branches`() {
         val modules = listOf(
-            ServiceModuleConfig(id = "one", name = "api", baseRef = "origin/master"),
-            ServiceModuleConfig(id = "two", name = "job", baseRef = "origin/master"),
+            ServiceModuleConfig(id = "one", name = "api", masterBranch = "origin/master"),
+            ServiceModuleConfig(id = "two", name = "job", masterBranch = "origin/master"),
         )
 
         assertEquals(
@@ -50,8 +50,8 @@ class TaskBranchNamingTest {
     @Test
     fun `multi module branch suffix preserves valid slash separated module names`() {
         val modules = listOf(
-            ServiceModuleConfig(id = "front", name = "bp/web", baseRef = "origin/master"),
-            ServiceModuleConfig(id = "backend", name = "bp_api", baseRef = "origin/master"),
+            ServiceModuleConfig(id = "front", name = "bp/web", masterBranch = "origin/master"),
+            ServiceModuleConfig(id = "backend", name = "bp_api", masterBranch = "origin/master"),
         )
 
         assertEquals(
@@ -69,8 +69,8 @@ class TaskBranchNamingTest {
             TaskBranchNaming.derive(
                 "feature/OBT-123",
                 listOf(
-                    ServiceModuleConfig(id = "one", name = "default", baseRef = "origin/master"),
-                    ServiceModuleConfig(id = "two", name = "DEFAULT", baseRef = "origin/develop"),
+                    ServiceModuleConfig(id = "one", name = "default", masterBranch = "origin/master"),
+                    ServiceModuleConfig(id = "two", name = "DEFAULT", masterBranch = "origin/develop"),
                 ),
             )
         }
@@ -78,8 +78,8 @@ class TaskBranchNamingTest {
             TaskBranchNaming.derive(
                 "feature/OBT-123",
                 listOf(
-                    ServiceModuleConfig(id = "one", name = "valid", baseRef = "origin/master"),
-                    ServiceModuleConfig(id = "two", name = "invalid name", baseRef = "origin/develop"),
+                    ServiceModuleConfig(id = "one", name = "valid", masterBranch = "origin/master"),
+                    ServiceModuleConfig(id = "two", name = "invalid name", masterBranch = "origin/develop"),
                 ),
             )
         }
@@ -88,8 +88,8 @@ class TaskBranchNamingTest {
     @Test
     fun `explicit module branch overrides only the selected module default`() {
         val modules = listOf(
-            ServiceModuleConfig(id = "api", name = "api", baseRef = "origin/master"),
-            ServiceModuleConfig(id = "job", name = "job", baseRef = "origin/master"),
+            ServiceModuleConfig(id = "api", name = "api", masterBranch = "origin/master"),
+            ServiceModuleConfig(id = "job", name = "job", masterBranch = "origin/master"),
         )
 
         assertEquals(
@@ -108,8 +108,8 @@ class TaskBranchNamingTest {
     @Test
     fun `explicit module target branches cannot collide`() {
         val modules = listOf(
-            ServiceModuleConfig(id = "api", name = "api", baseRef = "origin/master"),
-            ServiceModuleConfig(id = "job", name = "job", baseRef = "origin/master"),
+            ServiceModuleConfig(id = "api", name = "api", masterBranch = "origin/master"),
+            ServiceModuleConfig(id = "job", name = "job", masterBranch = "origin/master"),
         )
 
         assertThrows(IllegalArgumentException::class.java) {
@@ -176,8 +176,8 @@ class TaskBranchNamingTest {
     @Test
     fun `base ref qualification does not replace the configured module suffix`() {
         val modules = listOf(
-            ServiceModuleConfig(id = "release", name = "release", baseRef = "origin/release/test"),
-            ServiceModuleConfig(id = "master", name = "master", baseRef = "origin/master"),
+            ServiceModuleConfig(id = "release", name = "release", masterBranch = "origin/release/test"),
+            ServiceModuleConfig(id = "master", name = "master", masterBranch = "origin/master"),
         )
 
         assertEquals(

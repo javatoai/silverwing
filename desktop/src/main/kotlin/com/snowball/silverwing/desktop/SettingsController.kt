@@ -9,6 +9,7 @@ import com.snowball.silverwing.core.SilverWingTime
 import com.snowball.silverwing.core.BatchRepositoryAddResult
 import com.snowball.silverwing.core.ConfigStore
 import com.snowball.silverwing.core.GroupConfigurationService
+import com.snowball.silverwing.core.TaskCreationDefaultsService
 import com.snowball.silverwing.core.GroupServiceConfig
 import com.snowball.silverwing.core.MeegleProjectConfig
 import com.snowball.silverwing.core.DevelopmentToolConfig
@@ -43,6 +44,10 @@ import com.snowball.silverwing.core.LocalGitEnvironmentSnapshot
 import com.snowball.silverwing.core.CommandVersionProbe
 import com.snowball.silverwing.core.CommandVersionStatus
 import com.snowball.silverwing.core.CommandRunner
+import com.snowball.silverwing.core.CommandProxyTarget
+import com.snowball.silverwing.core.commandProxyAuthentication
+import com.snowball.silverwing.core.normalizeCommandProxyNoProxy
+import com.snowball.silverwing.core.normalizeCommandProxyUrl
 import com.snowball.silverwing.core.ProcessCommandRunner
 import com.snowball.silverwing.core.RemoteBranchCatalog
 import com.snowball.silverwing.core.RepositoryRemoteCatalog
@@ -198,6 +203,7 @@ class SettingsController internal constructor(
     private val session: AppSessionStore,
     private val configStore: ConfigStore,
     private val groups: GroupConfigurationService,
+    private val taskCreationDefaults: TaskCreationDefaultsService = TaskCreationDefaultsService(configStore),
     private val taskRootMigrations: TaskRootMigrationService,
     private val pathPicker: NativePathPicker,
     private val branchCatalog: RemoteBranchCatalog,
@@ -211,6 +217,7 @@ class SettingsController internal constructor(
     private val gitExecutable: GitExecutable = GitExecutable.pathFallback(),
     private val genbuExecutable: GenbuExecutable = GenbuExecutable.pathFallback(),
     private val cliVersionRunner: CommandRunner = ProcessCommandRunner(),
+    private val genbuVersionRunner: CommandRunner = cliVersionRunner,
     private val localGitInspector: LocalGitEnvironmentInspector,
     private val scope: CoroutineScope,
     private val ioDispatcher: CoroutineDispatcher,
@@ -317,6 +324,36 @@ class SettingsController internal constructor(
     /** The currently effective Codex command and where it came from; safe on the UI thread. */
     fun codexCommandResolution(): Pair<String, CodexCommandSource> =
         codexExecutable.current() to codexExecutable.source()
+
+    /** Saves the shared proxy endpoint and the exact command families that may use it. */
+    fun updateCommandProxy(
+        rawUrl: String,
+        rawNoProxy: String,
+        rawUsername: String,
+        rawPassword: String,
+        targets: Set<CommandProxyTarget>,
+        onFailure: (Throwable) -> Unit = {},
+    ): Boolean = mutate(
+        "正在保存命令网络代理…",
+        "命令网络代理已保存",
+        onFailure,
+        "network-proxy",
+        settingsOperations,
+    ) { config ->
+        val normalized = normalizeCommandProxyUrl(rawUrl)
+        val normalizedNoProxy = normalizeCommandProxyNoProxy(rawNoProxy)
+        val authentication = commandProxyAuthentication(rawUsername, rawPassword)
+        require(normalized != null || (normalizedNoProxy == null && authentication == null)) {
+            "请先填写代理主机和端口，再设置例外地址或认证信息"
+        }
+        config.copy(
+            commandProxyUrl = normalized,
+            commandProxyNoProxy = if (normalized == null) null else normalizedNoProxy,
+            commandProxyUsername = if (normalized == null) null else authentication?.username,
+            commandProxyPassword = if (normalized == null) null else authentication?.password,
+            commandProxyTargets = if (normalized == null) emptySet() else targets,
+        )
+    }
 
     fun updateLarkExecutablePath(raw: String, onFailure: (Throwable) -> Unit = {}): Boolean = mutate(
         "正在保存 Lark CLI 命令路径…",
@@ -439,7 +476,7 @@ class SettingsController internal constructor(
     }
 
     private fun readCliVersion(command: String): CommandVersionStatus =
-        CommandVersionProbe.probe(command, cliVersionRunner)
+        CommandVersionProbe.probe(command, genbuVersionRunner)
 
     private fun applyGenbuAutoSave(saved: GenbuExecutableAutoSave, expectedPath: String?, expectedAutoDetected: Boolean) {
         val current = session.config
@@ -727,8 +764,24 @@ class SettingsController internal constructor(
     ) {
         groups.setGroupTagEnabled(groupId, enabled)
     }
-    fun updateGroupDefaults(groupId: String, prefix: String, tools: List<String>, onFailure: (Throwable) -> Unit = {}) = mutateWithService("正在保存组默认配置…", "组默认配置已保存", onFailure = onFailure, saveKey = "groups", runner = settingsOperations) {
-        groups.updateGroupDefaults(groupId, prefix, tools)
+    fun updateDefaultBranchPrefix(prefix: String, onFailure: (Throwable) -> Unit = {}) = mutateWithService(
+        "正在保存默认分支名前缀…",
+        "默认分支名前缀已保存",
+        onFailure = onFailure,
+        saveKey = "branch-naming",
+        runner = settingsOperations,
+    ) {
+        taskCreationDefaults.updateBranchPrefix(prefix)
+    }
+
+    fun updateDefaultWorkspaceToolIds(toolIds: List<String>, onFailure: (Throwable) -> Unit = {}) = mutateWithService(
+        "正在保存任务创建默认工具…",
+        "任务创建默认工具已保存",
+        onFailure = onFailure,
+        saveKey = "task-creation",
+        runner = settingsOperations,
+    ) {
+        taskCreationDefaults.updateWorkspaceToolIds(toolIds)
     }
 
     fun setAiRequirementNamingEnabled(enabled: Boolean, onFailure: (Throwable) -> Unit = {}): Boolean = mutate(

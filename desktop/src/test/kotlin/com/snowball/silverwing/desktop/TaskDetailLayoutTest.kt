@@ -1,6 +1,8 @@
 package com.snowball.silverwing.desktop
 
 import com.snowball.silverwing.core.LocalPushState
+import com.snowball.silverwing.core.DevelopmentToolType
+import com.snowball.silverwing.core.ServiceWorkspace
 import com.snowball.silverwing.core.WorkspaceGitCommit
 import com.snowball.silverwing.core.WorkspaceFileComparison
 import com.snowball.silverwing.core.WorkspaceFileComparisonLine
@@ -15,6 +17,7 @@ import com.snowball.silverwing.core.WorkspaceGitFileChangeKind
 import com.snowball.silverwing.core.WorkspaceGitFilePreview
 import com.snowball.silverwing.core.WorkspaceGitHealth
 import com.snowball.silverwing.core.WorkspaceGitHealthState
+import com.snowball.silverwing.core.WorkspaceStrategy
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -63,6 +66,38 @@ class TaskDetailLayoutTest {
     @Test
     fun `project name copy omits the module name`() {
         assertEquals("SILVERWING-test-project", workspaceProjectNameForCopy(" SILVERWING-test-project "))
+    }
+
+    @Test
+    fun `workspace branch row shows only the verified branch for either workspace strategy`() {
+        WorkspaceStrategy.entries.forEach { strategy ->
+            val workspace = branchTestWorkspace(strategy)
+
+            assertEquals(
+                WorkspaceBranchPresentation("feature/current", "feature/current"),
+                workspaceBranchPresentation(workspace, "feature/current"),
+            )
+        }
+    }
+
+    @Test
+    fun `unverified branch keeps its suffix while copying only the saved branch`() {
+        val workspace = branchTestWorkspace(WorkspaceStrategy.INDEPENDENT_CLONE)
+        val expected = WorkspaceBranchPresentation("feature/saved（未验证）", "feature/saved")
+
+        assertEquals(expected, workspaceBranchPresentation(workspace, null))
+        assertEquals(expected, workspaceBranchPresentation(workspace, "   "))
+    }
+
+    @Test
+    fun `commit history uses task master snapshot and maps a clone source to its local origin`() {
+        val standard = branchTestWorkspace(WorkspaceStrategy.STANDARD_WORKTREE).copy(baseRef = "upstream/main")
+        val clone = branchTestWorkspace(WorkspaceStrategy.INDEPENDENT_CLONE).copy(baseRef = "upstream/main")
+
+        assertEquals(WorkspaceHistoryBaseline("upstream/main", "upstream/main"), workspaceHistoryBaseline(standard, "origin/develop"))
+        assertEquals(WorkspaceHistoryBaseline("upstream/main", "origin/main"), workspaceHistoryBaseline(clone, "origin/develop"))
+        assertEquals(WorkspaceHistoryBaseline("origin/develop", "origin/develop"), workspaceHistoryBaseline(standard.copy(baseRef = null), "origin/develop"))
+        assertNull(workspaceHistoryBaseline(standard.copy(baseRef = null), null))
     }
 
     @Test
@@ -152,22 +187,23 @@ class TaskDetailLayoutTest {
     }
 
     @Test
-    fun `commit history header uses the short hash and application local time`() {
+    fun `commit history summary prioritizes local time committer and subject`() {
         assertEquals(
-            "2026-09-14 15:58:05 · abcdef1 · silverwing Tests",
+            "2026-09-14 15:58:05 · Committer · subject",
             workspaceGitCommitHeader(
                 WorkspaceGitCommit(
                     shortHash = "abcdef1",
                     committedAt = Instant.parse("2026-09-14T07:58:05Z"),
                     message = "subject\n\nbody",
-                    authorName = "silverwing Tests",
+                    authorName = "Author",
+                    committerName = "Committer",
                 ),
             ),
         )
     }
 
     @Test
-    fun `commit history exposes the author label and separates subject from body`() {
+    fun `commit history exposes committer label and separates subject from body`() {
         val commit = WorkspaceGitCommit(
             shortHash = "abcdef1",
             committedAt = Instant.parse("2026-09-14T07:58:05Z"),
@@ -175,15 +211,17 @@ class TaskDetailLayoutTest {
             authorName = "silverwing Tests",
         )
 
-        assertEquals("提交人：silverwing Tests", workspaceGitCommitAuthorLabel(commit))
+        assertEquals("提交人：silverwing Tests", workspaceGitCommitterLabel(commit))
         assertEquals(
             WorkspaceGitCommitMessageParts("subject", "body line"),
             workspaceGitCommitMessageParts(commit.message),
         )
         assertEquals(
             "未知提交人",
-            workspaceGitCommitAuthorName(commit.copy(authorName = "  ")),
+            workspaceGitCommitterName(commit.copy(committerName = "  ")),
         )
+        assertEquals(WorkspaceCommitHistoryLayout.STACKED, workspaceCommitHistoryLayout(500f))
+        assertEquals(WorkspaceCommitHistoryLayout.HORIZONTAL, workspaceCommitHistoryLayout(900f))
     }
 
     @Test
@@ -306,5 +344,15 @@ class TaskDetailLayoutTest {
         )
         assertEquals(WorkspaceStatusPlacement.THIRD_ROW, workspaceStatusPlacement(health))
     }
+
+    private fun branchTestWorkspace(strategy: WorkspaceStrategy) = ServiceWorkspace(
+        repositoryId = "repo-service",
+        serviceName = "service",
+        repositoryPath = "/tmp/service",
+        worktreePath = "/tmp/task/service",
+        developmentTool = DevelopmentToolType.INTELLIJ_IDEA,
+        branch = "feature/saved",
+        strategy = strategy,
+    )
 
 }

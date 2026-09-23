@@ -9,6 +9,7 @@ import com.snowball.silverwing.core.DevelopmentToolStartupDetection
 import com.snowball.silverwing.core.DevelopmentToolType
 import com.snowball.silverwing.core.CommandResult
 import com.snowball.silverwing.core.CommandRunner
+import com.snowball.silverwing.core.CommandOutputLine
 import com.snowball.silverwing.core.ConfiguredGitExecutable
 import com.snowball.silverwing.core.ConfiguredGenbuExecutable
 import com.snowball.silverwing.core.ConfiguredMeegleExecutable
@@ -39,6 +40,7 @@ import com.snowball.silverwing.core.TaskWorkspaceToolAvailability
 import com.snowball.silverwing.core.TaskWorkspaceToolDescriptor
 import com.snowball.silverwing.core.TaskWorkspaceToolLauncher
 import com.snowball.silverwing.core.TaskWorkspaceToolRegistry
+import com.snowball.silverwing.core.StreamingCommandRunner
 import com.snowball.silverwing.core.WorkspaceHealth
 import com.snowball.silverwing.core.TaskLifecycleStatus
 import java.nio.file.Files
@@ -213,6 +215,7 @@ class DesktopApplicationTest {
         val controller = DesktopApplication(
             paths = paths,
             configStore = store,
+            processCommandRunner = runner,
             genbuExecutablePath = configuredPath,
             genbuExecutable = executable,
             cliVersionRunner = runner,
@@ -227,7 +230,7 @@ class DesktopApplicationTest {
             val loaded = assertIs<GenbuSettingsState.Loaded>(controller.genbuSettingsState)
             assertEquals(detected.toString(), loaded.command)
             assertEquals(GenbuCommandSource.PROBED, loaded.source)
-            assertTrue(loaded.version?.succeeded == true)
+            assertTrue(loaded.version?.succeeded == true, "Genbu version probe did not succeed: $loaded")
         } finally {
             controller.close()
             Dispatchers.resetMain()
@@ -1101,11 +1104,11 @@ class DesktopApplicationTest {
         val store = ConfigStore(paths)
         store.save(
             AppConfig(
+                defaultWorkspaceToolIds = listOf("claude", "legacy-tool"),
                 groups = listOf(
                     GroupConfig(
                         id = "g",
                         name = "G",
-                        defaultWorkspaceToolIds = listOf("claude", "legacy-tool"),
                     ),
                 ),
             ),
@@ -1113,7 +1116,7 @@ class DesktopApplicationTest {
         val registry = TaskWorkspaceToolRegistry(listOf(tool("claude"), tool("cursor")))
         val controller = DesktopApplication(paths = paths, configStore = store, workspaceToolRegistry = registry)
         try {
-            val options = controller.workspaceToolOptions("g").associateBy(WorkspaceToolOption::id)
+            val options = controller.workspaceToolOptions().associateBy(WorkspaceToolOption::id)
 
             assertEquals(true, options.getValue("claude").available)
             assertEquals(true, options.getValue("cursor").available)
@@ -1228,7 +1231,7 @@ class DesktopApplicationTest {
                 ServiceModuleConfig(
                     id = "clone",
                     strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
-                    baseRef = "origin/main",
+                    masterBranch = "origin/main",
                     tagEnabled = false,
                 ),
             ),
@@ -1353,7 +1356,7 @@ class DesktopApplicationTest {
         override fun open(context: TaskWorkspaceContext) = Unit
     }
 
-    private class RecordingCommandRunner(private val result: CommandResult) : CommandRunner {
+    private class RecordingCommandRunner(private val result: CommandResult) : StreamingCommandRunner {
         var calls = 0
             private set
 
@@ -1366,6 +1369,14 @@ class DesktopApplicationTest {
             calls++
             return result
         }
+
+        override fun runStreaming(
+            command: List<String>,
+            workingDirectory: Path?,
+            timeout: Duration,
+            environment: Map<String, String>,
+            onOutput: (CommandOutputLine) -> Unit,
+        ): CommandResult = run(command, workingDirectory, timeout, environment)
     }
 
     private class RecordingMeegleCliService(

@@ -258,11 +258,8 @@ internal fun MetaPill(text: String) {
 }
 
 @Composable
-internal fun SectionHeader(title: String, subtitle: String, modifier: Modifier = Modifier) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(title, style = MaterialTheme.typography.titleMedium)
-        Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
+internal fun SectionHeader(title: String, modifier: Modifier = Modifier) {
+    Text(title, modifier, style = MaterialTheme.typography.titleMedium)
 }
 
 @Composable

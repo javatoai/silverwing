@@ -25,13 +25,30 @@ class MeegleRequirementAiContextProvider(
             ?: throw IllegalStateException("需求链接缺少可用的 Meegle 项目")
         val summary = workItemGet(resolvedProjectKey, workItem.workItemId)
         val title = title(summary) ?: throw IllegalStateException("需求缺少标题")
-        val body = standardFieldBody(summary) ?: directBody(summary) ?: customFieldBody(summary, resolvedProjectKey, workItem)
+        val body = findBody(summary, resolvedProjectKey, workItem, ::normalizeBody)
             ?: throw IllegalStateException("需求缺少可读取的正文")
         return RequirementAiContext(
             title = title,
             body = RequirementAiContext.truncateBody(normalizeBody(body)),
         )
     }
+
+    /** Full, untruncated body for read-only work-item previews; blank means no readable content. */
+    fun fetchFullBody(requirementLink: String, projectKey: String): String? {
+        val workItem = FeishuWorkItemLink.parse(requirementLink)
+            ?: throw IllegalArgumentException("仅支持飞书工作项链接")
+        val summary = workItemGet(projectKey, workItem.workItemId)
+        return findBody(summary, projectKey, workItem, String::trim)
+    }
+
+    private fun findBody(
+        summary: JsonElement,
+        projectKey: String,
+        workItem: FeishuWorkItemLink,
+        normalize: (String) -> String,
+    ): String? = standardFieldBody(summary, normalize)
+        ?: directBody(summary, normalize)
+        ?: customFieldBody(summary, projectKey, workItem, normalize)
 
     private fun workItemGet(projectKey: String, workItemId: String, fieldKey: String? = null): JsonElement {
         val command = buildList {
@@ -52,7 +69,12 @@ class MeegleRequirementAiContextProvider(
         return execute(command, "读取需求")
     }
 
-    private fun customFieldBody(summary: JsonElement, projectKey: String, workItem: FeishuWorkItemLink): String? {
+    private fun customFieldBody(
+        summary: JsonElement,
+        projectKey: String,
+        workItem: FeishuWorkItemLink,
+        normalize: (String) -> String,
+    ): String? {
         val type = textAt(summary, "work_item_attribute", "work_item_type", "key")
             ?: textAt(summary, "work_item_attribute", "work_item_type", "name")
             ?: workItem.kind
@@ -73,7 +95,7 @@ class MeegleRequirementAiContextProvider(
             fieldValues(fieldValue, fieldKey)
                 .asSequence()
                 .mapNotNull(::textFrom)
-                .map(::normalizeBody)
+                .map(normalize)
                 .firstOrNull(String::isNotBlank)
                 ?.let { return it }
         }
@@ -85,16 +107,16 @@ class MeegleRequirementAiContextProvider(
             textAt(element, "field_name")?.let { name -> CONTENT_FIELD_NAMES.any { it.equals(name, ignoreCase = true) } } == true
         }
 
-    private fun directBody(root: JsonElement): String? = DIRECT_BODY_PATHS.asSequence()
+    private fun directBody(root: JsonElement, normalize: (String) -> String): String? = DIRECT_BODY_PATHS.asSequence()
         .mapNotNull { path -> textFrom(elementAt(root, path)) }
-        .map(::normalizeBody)
+        .map(normalize)
         .firstOrNull(String::isNotBlank)
 
     /**
      * Meegle 的标准 Description 不在顶层，而是位于 work_item_fields。
      * 这是首选路径，命中后不必再查询字段元数据，既避免误报缺正文也减少一次 CLI 调用。
      */
-    private fun standardFieldBody(root: JsonElement): String? = arrayAt(root, "work_item_fields")
+    private fun standardFieldBody(root: JsonElement, normalize: (String) -> String): String? = arrayAt(root, "work_item_fields")
         .asSequence()
         .filter { field ->
             val key = textAt(field, "key")
@@ -104,7 +126,7 @@ class MeegleRequirementAiContextProvider(
         }
         .mapNotNull { field -> (field as? JsonObject)?.get("value") }
         .mapNotNull(::textFrom)
-        .map(::normalizeBody)
+        .map(normalize)
         .firstOrNull(String::isNotBlank)
 
     private fun title(root: JsonElement): String? = sequenceOf(

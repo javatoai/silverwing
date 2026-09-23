@@ -10,12 +10,11 @@ import kotlin.test.assertTrue
 
 class MixedModuleAndGitWritePolicyTest {
     @Test
-    fun `worktree base ref remote must match its configured base remote`() {
+    fun `module master branch must include its remote`() {
         assertFailsWith<IllegalArgumentException> {
             ServiceModuleConfig(
                 id = "default",
-                baseRef = "origin/master",
-                baseRemote = "upstream",
+                masterBranch = "master",
                 strategy = WorkspaceStrategy.STANDARD_WORKTREE,
             )
         }
@@ -28,8 +27,8 @@ class MixedModuleAndGitWritePolicyTest {
             repositoryId = "repo",
             displayName = "Mixed",
             modules = listOf(
-                ServiceModuleConfig("api", "api", "origin/master", "origin", WorkspaceStrategy.STANDARD_WORKTREE),
-                ServiceModuleConfig("docs", "docs", "origin/develop", "origin", WorkspaceStrategy.INDEPENDENT_CLONE, tagEnabled = false),
+                ServiceModuleConfig("api", "api", "origin/master", WorkspaceStrategy.STANDARD_WORKTREE),
+                ServiceModuleConfig("docs", "docs", "origin/develop", WorkspaceStrategy.INDEPENDENT_CLONE, tagEnabled = false),
             ),
         )
         val json = Json { encodeDefaults = true }

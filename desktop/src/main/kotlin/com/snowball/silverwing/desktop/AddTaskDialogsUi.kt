@@ -41,6 +41,7 @@ import com.snowball.silverwing.core.AddTaskModulesRequest
 import com.snowball.silverwing.core.BranchReuseConflict
 import com.snowball.silverwing.core.BranchReuseKey
 import com.snowball.silverwing.core.GroupServiceConfig
+import com.snowball.silverwing.core.RemoteBranchRef
 import com.snowball.silverwing.core.ServiceModuleConfig
 import com.snowball.silverwing.core.TaskManifest
 import com.snowball.silverwing.core.TaskModuleSource
@@ -229,8 +230,8 @@ internal fun AddTaskServicesDialog(
                                             )
                                             RemoteBranchPicker(
                                                 value = module.baseRef,
-                                                onValueChange = { value -> moduleDraftsByService[service.id] = moduleRefs.replaceAt(index, module.copy(baseRef = value)) },
-                                                label = "${module.name} · 本次基础分支",
+                                                onValueChange = { value -> moduleDraftsByService[service.id] = moduleRefs.replaceAt(index, module.copy(baseRef = value, baseRemote = value.substringBefore('/', "").ifBlank { module.baseRemote })) },
+                                                label = "${module.name} · 本次主分支",
                                                 repositoryId = service.repositoryId,
                                                 controller = controller,
                                                 modifier = Modifier.weight(1f),
@@ -260,13 +261,13 @@ internal fun AddTaskServicesDialog(
                                     OutlinedButton(onClick = {
                                         moduleDraftsByService[service.id] = retargetUntouchedModules(moduleRefs + TaskModuleUiDraft(
                                             id = "module-${UUID.randomUUID()}", name = "module-${moduleRefs.size + 1}", strategy = WorkspaceStrategy.STANDARD_WORKTREE,
-                                            baseRef = "origin/master", baseRemote = "origin", targetBranch = "", source = TaskModuleSource.TEMPORARY,
+                                            baseRef = service.masterBranch, baseRemote = RemoteBranchRef.parse(service.masterBranch).remote, targetBranch = "", source = TaskModuleSource.TEMPORARY,
                                         ), task.featureBranch)
                                     }) { Text("添加 Worktree") }
                                     OutlinedButton(onClick = {
                                         moduleDraftsByService[service.id] = retargetUntouchedModules(moduleRefs + TaskModuleUiDraft(
                                             id = "clone-${UUID.randomUUID()}", name = "clone-${moduleRefs.size + 1}", strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
-                                            baseRef = "origin/master", baseRemote = "origin", targetBranch = "", source = TaskModuleSource.TEMPORARY,
+                                            baseRef = service.masterBranch, baseRemote = RemoteBranchRef.parse(service.masterBranch).remote, targetBranch = "", source = TaskModuleSource.TEMPORARY,
                                         ), task.featureBranch)
                                     }) { Text("添加克隆") }
                                 }
@@ -341,7 +342,7 @@ internal fun AddTaskModuleDialog(
             availableConfigured.firstOrNull()?.let(::configuredDraft)
                 ?: TaskModuleUiDraft(
                     id = "module-${UUID.randomUUID()}", name = "module", strategy = WorkspaceStrategy.STANDARD_WORKTREE,
-                    baseRef = "origin/master", baseRemote = "origin", targetBranch = addedTarget("module"),
+                    baseRef = service.masterBranch, baseRemote = RemoteBranchRef.parse(service.masterBranch).remote, targetBranch = addedTarget("module"),
                     source = TaskModuleSource.TEMPORARY,
                 ),
         )
@@ -370,14 +371,14 @@ internal fun AddTaskModuleDialog(
                     OutlinedButton(onClick = {
                         module = TaskModuleUiDraft(
                             id = "module-${UUID.randomUUID()}", name = "module", strategy = WorkspaceStrategy.STANDARD_WORKTREE,
-                            baseRef = "origin/master", baseRemote = "origin", targetBranch = addedTarget("module"),
+                            baseRef = service.masterBranch, baseRemote = RemoteBranchRef.parse(service.masterBranch).remote, targetBranch = addedTarget("module"),
                             source = TaskModuleSource.TEMPORARY,
                         )
                     }) { Text("临时 Worktree") }
                     OutlinedButton(onClick = {
                         module = TaskModuleUiDraft(
                             id = "clone-${UUID.randomUUID()}", name = "clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
-                            baseRef = "origin/master", baseRemote = "origin", targetBranch = addedTarget("clone"),
+                            baseRef = service.masterBranch, baseRemote = RemoteBranchRef.parse(service.masterBranch).remote, targetBranch = addedTarget("clone"),
                             source = TaskModuleSource.TEMPORARY,
                         )
                     }) { Text("临时克隆") }
@@ -410,7 +411,9 @@ internal fun AddTaskModuleDialog(
                         },
                         modifier = Modifier.width(180.dp),
                     )
-                    RemoteBranchPicker(module.baseRef, { module = module.copy(baseRef = it) }, "基础分支", service.repositoryId, controller, Modifier.weight(1f), remote = module.baseRemote)
+                    RemoteBranchPicker(module.baseRef, { value ->
+                        module = module.copy(baseRef = value, baseRemote = value.substringBefore('/', "").ifBlank { module.baseRemote })
+                    }, "主分支", service.repositoryId, controller, Modifier.weight(1f), remote = module.baseRemote)
                 }
                 TaskTargetBranchField(
                     module.targetBranch,

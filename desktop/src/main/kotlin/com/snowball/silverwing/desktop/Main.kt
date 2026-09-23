@@ -37,8 +37,10 @@ import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Info
@@ -47,7 +49,6 @@ import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.Save
-import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Sell
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Terminal
@@ -235,9 +236,11 @@ private fun AgentWorkspaceApp(controller: DesktopApplication) {
                     ) {
                         when (controller.navigation) {
                             NavigationItem.TASKS -> TasksScreen(controller, archived = false) { showCreate = true }
+                            NavigationItem.REQUIREMENTS -> ParticipatedWorkItemsScreen(controller)
                             NavigationItem.ARCHIVED -> TasksScreen(controller, archived = true) { showCreate = true }
                             NavigationItem.SERVICES -> ServicesScreen(controller)
                             NavigationItem.TAG -> TagScreen(controller)
+                            NavigationItem.SKILLS -> LocalSkillsScreen(controller)
                             NavigationItem.SETTINGS -> SettingsScreen(controller)
                         }
                     }
@@ -346,7 +349,7 @@ internal fun navigationLayoutFor(availableWidthDp: Float): NavigationLayout =
 
 /** Non-task pages retain a small breathing space after their large page title is removed. */
 internal fun navigationContentTopPaddingFor(item: NavigationItem): Float =
-    if (item == NavigationItem.TASKS) 0f else 16f
+    if (item == NavigationItem.TASKS || item == NavigationItem.REQUIREMENTS) 0f else 16f
 
 internal fun sidebarWidthFor(layout: NavigationLayout): Float = when (layout) {
     NavigationLayout.EXPANDED -> EXPANDED_SIDEBAR_WIDTH_DP
@@ -423,21 +426,11 @@ private fun ExpandedSidebar(controller: DesktopApplication, onSelected: (Navigat
                 }
                 Spacer(Modifier.height(4.dp))
             }
-            Spacer(Modifier.weight(1f))
-            Row(Modifier.padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Outlined.Security, "本地安全执行", Modifier.size(20.dp), tint = SuccessGreen)
-                Spacer(Modifier.width(7.dp))
-                Column {
-                    Text("本地安全执行", style = MaterialTheme.typography.labelMedium)
-                    Text("不上传源代码", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
         }
     }
 }
 
 @Composable
-@OptIn(ExperimentalMaterial3Api::class)
 private fun CompactSidebar(controller: DesktopApplication, onSelected: (NavigationItem) -> Unit) {
     Surface(
         Modifier.width(COMPACT_SIDEBAR_WIDTH_DP.dp).fillMaxHeight().border(
@@ -459,22 +452,6 @@ private fun CompactSidebar(controller: DesktopApplication, onSelected: (Navigati
                     onSelected = { onSelected(item) },
                 )
                 Spacer(Modifier.height(6.dp))
-            }
-            Spacer(Modifier.weight(1f))
-            TooltipBox(
-                positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
-                tooltip = { PlainTooltip { Text("本地安全执行\n不上传源代码") } },
-                state = rememberTooltipState(),
-            ) {
-                Surface(
-                    Modifier.size(44.dp).semantics { contentDescription = "本地安全执行，不上传源代码" },
-                    color = SuccessGreen.copy(alpha = 0.10f),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Outlined.Security, null, Modifier.size(22.dp), tint = SuccessGreen)
-                    }
-                }
             }
         }
     }
@@ -536,19 +513,25 @@ private fun CompactNavigationItem(
 }
 
 private fun visibleNavigationItems(controller: DesktopApplication): List<NavigationItem> =
-    NavigationItem.entries.filter { item -> item != NavigationItem.TAG || controller.showsTagNavigation }
+    visibleNavigationItemsFor(controller.showsTagNavigation)
+
+internal fun visibleNavigationItemsFor(showTagNavigation: Boolean): List<NavigationItem> =
+    NavigationItem.entries.filter { item -> item != NavigationItem.TAG || showTagNavigation }
 
 private fun navigationIcon(item: NavigationItem): ImageVector = when (item) {
     NavigationItem.TASKS -> Icons.Outlined.Workspaces
+    NavigationItem.REQUIREMENTS -> Icons.Outlined.Description
     NavigationItem.ARCHIVED -> Icons.Outlined.Archive
     NavigationItem.SERVICES -> Icons.Outlined.Dns
     NavigationItem.TAG -> Icons.Outlined.Sell
+    NavigationItem.SKILLS -> Icons.Outlined.Extension
     NavigationItem.SETTINGS -> Icons.Outlined.Settings
 }
 
 private fun navigationCount(controller: DesktopApplication, item: NavigationItem): Int? = when (item) {
     NavigationItem.TASKS -> controller.tasks.count { it.lifecycleStatus != TaskLifecycleStatus.ARCHIVED }
+    NavigationItem.REQUIREMENTS -> null
     NavigationItem.ARCHIVED -> controller.tasks.count { it.lifecycleStatus == TaskLifecycleStatus.ARCHIVED }
     NavigationItem.SERVICES -> controller.config.groups.sumOf { it.services.size }
-    NavigationItem.TAG, NavigationItem.SETTINGS -> null
+    NavigationItem.TAG, NavigationItem.SKILLS, NavigationItem.SETTINGS -> null
 }

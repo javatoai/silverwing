@@ -19,6 +19,9 @@ class CodexRequirementAiNamingService(
     private val runner: CommandRunner = ProcessCommandRunner(),
     private val codexExecutable: CodexExecutable = AutoDetectedCodexExecutable(),
     private val modelProvider: () -> String = { RequirementAiNamingModel.DEFAULT },
+    /** User-safe diagnostic only; the configured endpoint itself is never surfaced. */
+    private val proxyEnabled: () -> Boolean = { false },
+    private val redactProxyEndpoint: (String) -> String = { it },
 ) : RequirementAiNamingService {
     override fun suggest(
         context: RequirementAiContext,
@@ -60,7 +63,7 @@ class CodexRequirementAiNamingService(
                 environment = codexExecutable.environment(),
             )
             check(result.succeeded) {
-                "Codex CLI 生成命名失败：${commandError(result)}"
+                "Codex CLI 生成命名失败（${codexProxyStatus(proxyEnabled())}）：${commandError(result)}"
             }
             check(Files.isRegularFile(outputFile)) { "Codex CLI 未返回命名结果" }
             return parseSuggestion(Files.readString(outputFile, StandardCharsets.UTF_8))
@@ -95,14 +98,16 @@ class CodexRequirementAiNamingService(
     private fun JsonObject.string(key: String): String? =
         (get(key) as? JsonPrimitive)?.contentOrNull
 
-    private fun commandError(result: CommandResult): String = result.stderr
-        .ifBlank { result.stdout }
-        .lineSequence()
-        .firstOrNull()
-        ?.trim()
-        ?.take(300)
-        .orEmpty()
-        .ifBlank { "退出码 ${result.exitCode}" }
+    private fun commandError(result: CommandResult): String = redactProxyEndpoint(
+        result.stderr
+            .ifBlank { result.stdout }
+            .lineSequence()
+            .firstOrNull()
+            ?.trim()
+            ?.take(300)
+            .orEmpty()
+            .ifBlank { "退出码 ${result.exitCode}" },
+    )
 
     private fun deleteTree(directory: Path) {
         if (!Files.exists(directory)) return
@@ -128,3 +133,5 @@ class CodexRequirementAiNamingService(
         """
     }
 }
+
+internal fun codexProxyStatus(enabled: Boolean): String = if (enabled) "Codex 代理已启用" else "Codex 代理未启用"

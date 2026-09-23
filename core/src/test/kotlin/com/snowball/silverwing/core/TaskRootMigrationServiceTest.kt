@@ -624,7 +624,7 @@ class TaskRootMigrationServiceTest {
         val sourceRoot = Files.createDirectories(base.resolve("tasks"))
         val sourceTask = Files.createDirectories(sourceRoot.resolve(taskName))
         val module = ServiceModuleConfig(
-            "clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/master", tagEnabled = false,
+            "clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, masterBranch = "origin/master", tagEnabled = false,
         )
         val service = GroupServiceConfig("service-clone", repository.id, "Clone", modules = listOf(module))
         val provisioned = IndependentCloneProvisioner().provision(

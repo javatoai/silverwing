@@ -35,15 +35,19 @@ class GroupConfigurationServiceTest {
     }
 
     @Test
-    fun `group defaults preserve branch prefix and unknown workspace tool ids`() {
-        val repository = InMemoryConfigurationRepository(AppConfig())
+    fun `group mutations leave global task creation defaults untouched`() {
+        val repository = InMemoryConfigurationRepository(
+            AppConfig(
+                defaultBranchPrefix = "feature/pay-",
+                defaultWorkspaceToolIds = listOf("codex", "future-tool"),
+            ),
+        )
         val service = GroupConfigurationService(repository, StubRepositoryInspector())
 
-        service.updateGroupDefaults(DEFAULT_GROUP_ID, "feature/pay-", listOf("codex", "future-tool"))
+        service.addGroup("Second")
 
-        val group = repository.load().groups.single()
-        assertEquals("feature/pay-", group.defaultBranchPrefix)
-        assertEquals(listOf("codex", "future-tool"), group.defaultWorkspaceToolIds)
+        assertEquals("feature/pay-", repository.load().defaultBranchPrefix)
+        assertEquals(listOf("codex", "future-tool"), repository.load().defaultWorkspaceToolIds)
     }
 
     @Test
@@ -56,7 +60,8 @@ class GroupConfigurationServiceTest {
         service.addRepository(second.id, Path.of("C:/repo-a"))
 
         assertEquals(1, repository.load().repositories.size)
-        assertEquals("origin/main", repository.load().group(DEFAULT_GROUP_ID).services.single().modules.single().baseRef)
+        val configuredService = repository.load().group(DEFAULT_GROUP_ID).services.single()
+        assertEquals("origin/main", configuredService.effectiveMasterBranch(configuredService.modules.single()))
         assertEquals(1, repository.load().group(DEFAULT_GROUP_ID).services.size)
         assertEquals(1, repository.load().group(second.id).services.size)
         assertFailsWith<IllegalArgumentException> {

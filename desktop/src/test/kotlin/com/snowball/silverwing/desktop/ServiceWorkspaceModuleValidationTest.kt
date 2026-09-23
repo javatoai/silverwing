@@ -1,6 +1,7 @@
 package com.snowball.silverwing.desktop
 
 import com.snowball.silverwing.core.ServiceModuleConfig
+import com.snowball.silverwing.core.GroupServiceConfig
 import com.snowball.silverwing.core.WorkspaceStrategy
 import kotlin.test.Test
 import kotlin.test.assertContains
@@ -15,24 +16,26 @@ class ServiceWorkspaceModuleValidationTest {
             normalizeBaseRefForStrategy(WorkspaceStrategy.INDEPENDENT_CLONE, "upstream/master"),
         )
         assertEquals(
+            "upstream",
+            GroupServiceConfig(
+                id = "service",
+                repositoryId = "repo",
+                displayName = "Service",
+            ).effectiveMasterRemote(ServiceModuleEditorDraft(
+                id = "clone",
+                strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
+                masterBranch = "upstream/release/test",
+                tagEnabled = false,
+            ).toConfig()),
+        )
+        assertEquals(
             "upstream/release/test",
             ServiceModuleEditorDraft(
                 id = "clone",
                 strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
-                baseRef = "upstream/release/test",
-                baseRemote = "upstream",
+                masterBranch = "upstream/release/test",
                 tagEnabled = false,
-            ).toConfig().baseRef,
-        )
-        assertEquals(
-            "upstream",
-            ServiceModuleEditorDraft(
-                id = "clone",
-                strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
-                baseRef = "upstream/release/test",
-                baseRemote = "upstream",
-                tagEnabled = false,
-            ).toConfig().baseRemote,
+            ).toConfig().masterBranch,
         )
         assertEquals(
             "upstream/develop",
@@ -74,7 +77,7 @@ class ServiceWorkspaceModuleValidationTest {
         val cloneDraft = ServiceModuleEditorDraft(
             id = "clone",
             strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
-            baseRef = "",
+            masterBranch = "",
             tagEnabled = false,
         )
         val tagDraft = ServiceModuleEditorDraft(id = "api", tagTargetRef = "")
@@ -87,8 +90,8 @@ class ServiceWorkspaceModuleValidationTest {
     fun `clone modules may share a base branch`() {
         validateServiceWorkspaceModules(
             listOf(
-                ServiceModuleConfig(id = "one", name = "api", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/master", tagEnabled = false),
-                ServiceModuleConfig(id = "two", name = "job", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/master", tagEnabled = false),
+                ServiceModuleConfig(id = "one", name = "api", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, masterBranch = "origin/master", tagEnabled = false),
+                ServiceModuleConfig(id = "two", name = "job", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, masterBranch = "origin/master", tagEnabled = false),
             ),
         )
     }

@@ -60,6 +60,7 @@ import com.snowball.silverwing.core.BranchReuseConflict
 import com.snowball.silverwing.core.BranchReuseKey
 import com.snowball.silverwing.core.CreateGroupedTaskRequest
 import com.snowball.silverwing.core.ModuleBaseOverride
+import com.snowball.silverwing.core.RemoteBranchRef
 import com.snowball.silverwing.core.RequirementMaterialsDirectory
 import com.snowball.silverwing.core.RequirementMaterialsResult
 import com.snowball.silverwing.core.RequirementMaterialsStatus
@@ -128,20 +129,19 @@ internal fun CreateTaskDialog(
     onCreate: CreateTaskAction,
 ) {
     val initialGroup = controller.config.groups.first()
+    val initialBranchPrefix = remember { controller.config.defaultBranchPrefix }
+    val initialDefaultToolIds = remember { controller.config.defaultWorkspaceToolIds.toSet() }
     var draft by remember {
-        mutableStateOf(RequirementDraftState(branch = initialGroup.defaultBranchPrefix))
+        mutableStateOf(RequirementDraftState(branch = initialBranchPrefix))
     }
     var notes by remember { mutableStateOf("") }
     var selectedTemplateId by remember { mutableStateOf<String?>(null) }
     var pendingTemplate by remember { mutableStateOf<AgentTaskTemplate?>(null) }
     var groupId by remember { mutableStateOf(initialGroup.id) }
-    // AI 请求可能在用户切换项目组后才返回。单独保存当前前缀，避免把旧项目组的
-    // 分支前缀写回新项目组的草稿。
-    var aiNamingBranchPrefix by remember { mutableStateOf(initialGroup.defaultBranchPrefix) }
     // 只有从候选列表明确选中的需求才能触发自动命名；手工填写链接不应把内容发送给 Codex。
     var aiSelectedRequirementLink by remember { mutableStateOf<String?>(null) }
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var selectedToolIds by remember { mutableStateOf(initialGroup.defaultWorkspaceToolIds.toSet()) }
+    var selectedToolIds by remember { mutableStateOf(initialDefaultToolIds) }
     var rightTab by remember { mutableStateOf("notes") }
     var requirementMenuExpanded by remember { mutableStateOf(false) }
     var requirementSearch by remember { mutableStateOf("") }
@@ -154,7 +154,7 @@ internal fun CreateTaskDialog(
     val targetBranchValues = remember(groupId) { mutableStateMapOf<String, String>() }
     val moduleDraftsByService = remember(groupId) { mutableStateMapOf<String, List<TaskModuleUiDraft>>() }
     val group = controller.config.groups.first { it.id == groupId }
-    val toolOptions = controller.workspaceToolOptions(groupId)
+    val toolOptions = controller.workspaceToolOptions()
     fun retargetSelectedServiceBranches(taskBranch: String) {
         val updated = retargetServiceModuleDrafts(moduleDraftsByService.toMap(), taskBranch)
         updated.forEach { (serviceId, modules) -> moduleDraftsByService[serviceId] = modules }
@@ -165,14 +165,15 @@ internal fun CreateTaskDialog(
         if (branchChanged) retargetSelectedServiceBranches(updated.branch)
     }
     fun requestAiNaming(link: String) {
+        val branchPrefix = controller.config.defaultBranchPrefix
         controller.requestRequirementAiNaming(
             link = link,
-            branchPrefix = aiNamingBranchPrefix,
+            branchPrefix = branchPrefix,
             enabled = controller.config.aiRequirementNamingEnabled,
         ) { suggestion ->
             // applyAiNaming 会再次核对当前需求及两个手工编辑标记，迟到结果不会覆盖用户修改
             // 或另一个已选需求。
-            updateDraft(draft.applyAiNaming(link, suggestion, aiNamingBranchPrefix))
+            updateDraft(draft.applyAiNaming(link, suggestion, branchPrefix))
         }
     }
     fun effectiveBaseOverrides(): List<ModuleBaseOverride> = group.services.filter { it.id in selected }.flatMap { service ->
@@ -198,7 +199,7 @@ internal fun CreateTaskDialog(
     } ?: RequirementMaterialsDirectory()
     val hasDraftChanges = draft.requirementLink.isNotBlank() || draft.taskName.isNotBlank() ||
         draft.branchEdited || notes.isNotBlank() || selected.isNotEmpty() || groupId != initialGroup.id ||
-        selectedToolIds != initialGroup.defaultWorkspaceToolIds.toSet()
+        selectedToolIds != initialDefaultToolIds
     val requestDismiss = {
         // 即使随后会弹出放弃确认，点击关闭也应先作为取消边界；若用户继续编辑，可明确点击“重新生成”。
         controller.cancelRequirementAiNaming()
@@ -283,10 +284,7 @@ internal fun CreateTaskDialog(
                             Icon(Icons.Outlined.Add, null, Modifier.padding(10.dp), tint = MaterialTheme.colorScheme.onPrimary)
                         }
                         Spacer(Modifier.width(13.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text("创建研发任务", style = MaterialTheme.typography.headlineSmall)
-                            Text("选择组和服务，并实时确认最终 Agent 文件", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
+                        Text("创建研发任务", Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall)
                         MetaPill("已选 ${selected.size} 个服务")
                     }
                 }
@@ -300,7 +298,7 @@ internal fun CreateTaskDialog(
                         Modifier.fillMaxSize().padding(15.dp).verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(informationLayout.formItemSpacingDp.dp),
                     ) {
-                        SectionHeader("任务信息", "名称和分支将用于创建任务目录与 Git 分支")
+                        SectionHeader("任务信息")
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
                             OutlinedTextField(
                                 draft.requirementLink,
@@ -309,7 +307,7 @@ internal fun CreateTaskDialog(
                                     // 请求失效，避免迟到结果写入当前草稿。
                                     aiSelectedRequirementLink = null
                                     controller.cancelRequirementAiNaming()
-                                    updateDraft(draft.changeRequirement(it, group.defaultBranchPrefix))
+                                    updateDraft(draft.changeRequirement(it, controller.config.defaultBranchPrefix))
                                 },
                                 Modifier.weight(1f),
                                 label = { Text("需求编号或飞书需求链接（可选）") },
@@ -364,7 +362,7 @@ internal fun CreateTaskDialog(
                                                     }
                                                 },
                                                 onClick = {
-                                                    updateDraft(draft.changeRequirement(candidate.url, group.defaultBranchPrefix, candidate.title))
+                                                    updateDraft(draft.changeRequirement(candidate.url, controller.config.defaultBranchPrefix, candidate.title))
                                                     aiSelectedRequirementLink = candidate.url
                                                     if (controller.config.aiRequirementNamingEnabled) {
                                                         requestAiNaming(candidate.url)
@@ -481,20 +479,17 @@ internal fun CreateTaskDialog(
                         )
                         if (controller.config.groups.size > 1) {
                             Spacer(Modifier.height(2.dp))
-                            SectionHeader("所属组", "任务创建后归属不可自动迁移")
+                            SectionHeader("所属组（创建后不可迁移）")
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                                 controller.config.groups.forEach { candidate -> FilterChip(groupId == candidate.id, {
                                     groupId = candidate.id
-                                    aiNamingBranchPrefix = candidate.defaultBranchPrefix
                                     selected = emptySet()
-                                    selectedToolIds = candidate.defaultWorkspaceToolIds.toSet()
                                     serviceSearch = ""
-                                    updateDraft(draft.changeGroup(candidate.defaultBranchPrefix))
                                 }, label = { Text(candidate.name) }) }
                             }
                         }
                         Spacer(Modifier.height(2.dp))
-                        SectionHeader("选择服务", "标准服务创建 Worktree，独立克隆直接切换配置分支")
+                        SectionHeader("选择服务")
                         OutlinedTextField(
                             value = serviceSearch,
                             onValueChange = { serviceSearch = it },
@@ -588,8 +583,8 @@ internal fun CreateTaskDialog(
                                                     )
                                                     RemoteBranchPicker(
                                                         value = module.baseRef,
-                                                        onValueChange = { value -> moduleDraftsByService[service.id] = serviceModules.replaceAt(index, module.copy(baseRef = value)) },
-                                                        label = "${module.name} · 本次基础分支",
+                                                        onValueChange = { value -> moduleDraftsByService[service.id] = serviceModules.replaceAt(index, module.copy(baseRef = value, baseRemote = value.substringBefore('/', "").ifBlank { module.baseRemote })) },
+                                                        label = "${module.name} · 本次主分支",
                                                         repositoryId = service.repositoryId,
                                                         controller = controller,
                                                         modifier = Modifier.weight(1f),
@@ -601,7 +596,7 @@ internal fun CreateTaskDialog(
                                                     onValueChange = { value ->
                                                         moduleDraftsByService[service.id] = serviceModules.replaceAt(index, module.copy(targetBranch = value, targetEdited = true))
                                                     },
-                                                    label = if (module.strategy == WorkspaceStrategy.STANDARD_WORKTREE) "目标分支（必填）" else "目标分支（可空，空则直接检出基础分支）",
+                                                    label = if (module.strategy == WorkspaceStrategy.STANDARD_WORKTREE) "目标分支（必填）" else "目标分支（可空，空则直接检出主分支）",
                                                     modifier = Modifier.fillMaxWidth(),
                                                 )
                                             }
@@ -619,7 +614,7 @@ internal fun CreateTaskDialog(
                                             OutlinedButton(onClick = {
                                                 val added = serviceModules + TaskModuleUiDraft(
                                                     id = "module-${UUID.randomUUID()}", name = "module-${serviceModules.size + 1}",
-                                                    strategy = WorkspaceStrategy.STANDARD_WORKTREE, baseRef = "origin/master", baseRemote = "origin",
+                                                    strategy = WorkspaceStrategy.STANDARD_WORKTREE, baseRef = service.masterBranch, baseRemote = RemoteBranchRef.parse(service.masterBranch).remote,
                                                     targetBranch = "", source = TaskModuleSource.TEMPORARY,
                                                 )
                                                 moduleDraftsByService[service.id] = retargetUntouchedModules(added, draft.branch)
@@ -627,7 +622,7 @@ internal fun CreateTaskDialog(
                                             OutlinedButton(onClick = {
                                                 val added = serviceModules + TaskModuleUiDraft(
                                                     id = "clone-${UUID.randomUUID()}", name = "clone-${serviceModules.size + 1}",
-                                                    strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/master", baseRemote = "origin",
+                                                    strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = service.masterBranch, baseRemote = RemoteBranchRef.parse(service.masterBranch).remote,
                                                     targetBranch = "", source = TaskModuleSource.TEMPORARY,
                                                 )
                                                 moduleDraftsByService[service.id] = retargetUntouchedModules(added, draft.branch)

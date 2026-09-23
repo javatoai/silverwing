@@ -6,6 +6,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import com.snowball.silverwing.core.GroupServiceConfig
 import com.snowball.silverwing.core.ModuleBaseOverride
+import com.snowball.silverwing.core.RemoteBranchRef
 import com.snowball.silverwing.core.TaskBranchNaming
 import com.snowball.silverwing.core.TaskModuleSelection
 import com.snowball.silverwing.core.TaskModuleSource
@@ -44,7 +45,7 @@ internal data class TaskModuleUiDraft(
     val source: TaskModuleSource = TaskModuleSource.CONFIGURED,
     val tagEnabled: Boolean = false,
     val tagMode: TagBuildMode = TagBuildMode.MERGE_TO_TARGET_BRANCH,
-    val tagTargetRef: String? = "origin/release/test",
+    val tagTargetRef: String? = null,
     val tagMessagePrefix: String = "Tag",
 ) {
     fun toSelection(): TaskModuleSelection = TaskModuleSelection(
@@ -52,7 +53,7 @@ internal data class TaskModuleUiDraft(
         name = name,
         strategy = strategy,
         baseRef = normalizeBaseRefForStrategy(strategy, baseRef),
-        baseRemote = baseRemote,
+        baseRemote = RemoteBranchRef.parse(baseRef).remote,
         targetBranch = targetBranch.trim().takeIf(String::isNotBlank),
         source = source,
         tagEnabled = tagEnabled,
@@ -68,12 +69,12 @@ internal fun configuredTaskModuleDrafts(service: GroupServiceConfig, taskBranch:
             id = module.id,
             name = module.name,
             strategy = module.strategy,
-            baseRef = module.baseRef,
-            baseRemote = module.baseRemote,
+            baseRef = service.effectiveMasterBranch(module),
+            baseRemote = service.effectiveMasterRemote(module),
             targetBranch = defaultTaskModuleTargetBranch(taskBranch, service, module.id),
             tagEnabled = module.tagEnabled,
             tagMode = module.tagMode,
-            tagTargetRef = module.tagTargetRef,
+            tagTargetRef = service.effectiveTagTargetRef(module),
             tagMessagePrefix = module.tagMessagePrefix,
         )
     }
@@ -120,7 +121,7 @@ internal fun taskModuleOverrides(
             ModuleBaseOverride(
                 serviceId = service.id,
                 moduleId = module.id,
-                baseRef = baseOverrides[key] ?: module.baseRef,
+                baseRef = baseOverrides[key] ?: service.effectiveMasterBranch(module),
                 targetBranch = (targetOverrides[key] ?: targetDefaults.getValue(module.id)).takeIf(String::isNotBlank),
             )
     }

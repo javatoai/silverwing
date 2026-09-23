@@ -19,6 +19,19 @@ class CommandRunnerInterruptionTest {
     lateinit var temporary: Path
 
     @Test
+    fun `short git command does not wait for a Windows console host`() {
+        val start = System.nanoTime()
+        val result = ProcessCommandRunner().run(
+            command = listOf("git", "check-ref-format", "--branch", "feature/short-lived"),
+            timeout = Duration.ofSeconds(3),
+        )
+        val elapsed = Duration.ofNanos(System.nanoTime() - start).toMillis()
+
+        assertEquals(0, result.exitCode, result.stderr)
+        assertTrue(elapsed < 2_500, "short Git command took $elapsed ms")
+    }
+
+    @Test
     fun `timeout also bounds inherited output pipe readers`() {
         val start = System.nanoTime()
         val childPidFile = temporary.resolve("child.pid")

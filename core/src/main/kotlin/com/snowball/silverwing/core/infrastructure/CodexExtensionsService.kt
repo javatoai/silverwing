@@ -120,6 +120,11 @@ class CodexExtensionTakeoverRequiredException(message: String) : IllegalStateExc
 class CodexExtensionsService(
     private val paths: ApplicationPaths = ApplicationPaths.systemDefault(),
     private val runner: CommandRunner = ProcessCommandRunner(),
+    /** Git source refreshes follow the Git proxy policy, not the Codex CLI policy. */
+    private val gitRunner: CommandRunner = runner,
+    private val codexProxyEnabled: () -> Boolean = { false },
+    private val gitProxyEnabled: () -> Boolean = { false },
+    private val redactProxyEndpoint: (String) -> String = { it },
     private val gitExecutable: () -> String = { "git" },
     private val codexExecutable: CodexExecutable = AutoDetectedCodexExecutable(),
     private val userHome: () -> Path = { Path.of(System.getProperty("user.home")) },
@@ -400,6 +405,24 @@ class CodexExtensionsService(
             ),
         )
         return loadState().skillSources[source.id] ?: ExternalSkillSourceSnapshot(source.id)
+    }
+
+    /**
+     * Removes one safely discovered local Skill regardless of its installation source.
+     * A complete backup is created before deletion, and any matching managed-source
+     * record is cleared so a later source installation starts from a clean state.
+     */
+    fun uninstallLocalSkill(directoryName: String) = synchronized(stateLock) {
+        val destination = localSkillDestination(directoryName)
+        validateSkillDirectory(destination)
+        backupSkillDestination(destination, "local-skill")
+        deleteExactSkillDirectory(destination)
+        val state = loadState()
+        persist(
+            state.copy(
+                managedSkills = state.managedSkills.filterNot { it.skillName == directoryName },
+            ),
+        )
     }
 
     private fun refreshMarketplaceLocked(
@@ -744,9 +767,17 @@ class CodexExtensionsService(
 
     private fun skillDestination(skillName: String): Path {
         require(skillName.matches(SKILL_NAME_PATTERN)) { "Skill 名称不合法：$skillName" }
+        return localSkillDestination(skillName)
+    }
+
+    private fun localSkillDestination(directoryName: String): Path {
+        val name = directoryName.trim()
+        require(name.isNotBlank() && name != "." && name != ".." && '/' !in name && '\\' !in name) {
+            "Skill 目录名不安全"
+        }
         val normalizedRoot = userHome().resolve(".agents").resolve("skills").toAbsolutePath().normalize()
-        val destination = normalizedRoot.resolve(skillName).normalize()
-        require(destination.parent == normalizedRoot) { "Skill 安装路径不安全：$skillName" }
+        val destination = normalizedRoot.resolve(name).normalize()
+        require(destination.parent == normalizedRoot) { "Skill 安装路径不安全：$directoryName" }
         return destination
     }
 
@@ -760,13 +791,25 @@ class CodexExtensionsService(
     private fun runCodex(vararg arguments: String): CommandResult {
         val command = listOf(codexExecutable.resolve()) + arguments
         val result = runner.run(command, timeout = CODEX_TIMEOUT, environment = codexExecutable.environment())
-        if (!result.succeeded) throw CodexExtensionCommandException("Codex 命令失败：${command.joinToString(" ")}", result)
+        if (!result.succeeded) {
+            throw CodexExtensionCommandException(
+                "Codex 命令失败（${codexProxyStatus(codexProxyEnabled())}）：${command.joinToString(" ")}",
+                result,
+                codexProxyStatus(codexProxyEnabled()),
+            )
+        }
         return result
     }
 
     private fun runGit(command: List<String>): CommandResult {
-        val result = runner.run(command, timeout = GIT_TIMEOUT)
-        if (!result.succeeded) throw CodexExtensionCommandException("Git 命令失败：${command.drop(1).joinToString(" ")}", result)
+        val result = gitRunner.run(command, timeout = GIT_TIMEOUT)
+        if (!result.succeeded) {
+            throw CodexExtensionCommandException(
+                "Git 命令失败（${gitProxyStatus(gitProxyEnabled())}）：${command.drop(1).joinToString(" ")}",
+                result,
+                gitProxyStatus(gitProxyEnabled()),
+            )
+        }
         return result
     }
 
@@ -803,10 +846,12 @@ class CodexExtensionsService(
     private fun now(): String = SilverWingTime.format(Instant.now(clock))
 
     private fun detail(error: Throwable): String = when (error) {
-        is CodexExtensionCommandException -> error.result.stderr.ifBlank { error.result.stdout }
-            .trim()
-            .ifBlank { error.message ?: "命令执行失败" }
-            .take(MAX_ERROR_LENGTH)
+        is CodexExtensionCommandException -> listOf(
+            redactProxyEndpoint(
+                error.result.stderr.ifBlank { error.result.stdout }.trim().ifBlank { error.message ?: "命令执行失败" },
+            ),
+            error.proxyStatus,
+        ).filterNotNull().filter(String::isNotBlank).joinToString("\n").take(MAX_ERROR_LENGTH)
         else -> (error.message ?: error::class.simpleName ?: "未知错误").take(MAX_ERROR_LENGTH)
     }
 
@@ -829,7 +874,10 @@ class CodexExtensionsService(
 class CodexExtensionCommandException(
     message: String,
     val result: CommandResult,
+    val proxyStatus: String? = null,
 ) : RuntimeException("$message\n${result.stderr.ifBlank { result.stdout }}")
+
+private fun gitProxyStatus(enabled: Boolean): String = if (enabled) "Git 代理已启用" else "Git 代理未启用"
 
 @Serializable
 private data class ExtensionsRuntimeState(

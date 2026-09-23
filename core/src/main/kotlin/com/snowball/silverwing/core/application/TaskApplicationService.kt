@@ -55,15 +55,14 @@ data class TaskModuleSelection(
     val source: TaskModuleSource = TaskModuleSource.CONFIGURED,
     val tagEnabled: Boolean = false,
     val tagMode: TagBuildMode = TagBuildMode.MERGE_TO_TARGET_BRANCH,
-    val tagTargetRef: String? = "origin/release/test",
+    val tagTargetRef: String? = null,
     val tagMessagePrefix: String = "Tag",
 ) {
     fun toConfig(): ServiceModuleConfig = ServiceModuleConfig(
         id = id,
         name = name,
         strategy = strategy,
-        baseRef = baseRef,
-        baseRemote = baseRemote,
+        masterBranch = baseRef,
         tagEnabled = tagEnabled && source == TaskModuleSource.CONFIGURED,
         tagMode = tagMode,
         tagTargetRef = tagTargetRef,
@@ -71,12 +70,12 @@ data class TaskModuleSelection(
     )
 
     companion object {
-        fun configured(module: ServiceModuleConfig, targetBranch: String?): TaskModuleSelection = TaskModuleSelection(
+        fun configured(service: GroupServiceConfig, module: ServiceModuleConfig, targetBranch: String?): TaskModuleSelection = TaskModuleSelection(
             id = module.id,
             name = module.name,
             strategy = module.strategy,
-            baseRef = module.baseRef,
-            baseRemote = module.baseRemote,
+            baseRef = service.effectiveMasterBranch(module),
+            baseRemote = service.effectiveMasterRemote(module),
             targetBranch = targetBranch,
             tagEnabled = module.tagEnabled,
             tagMode = module.tagMode,
@@ -93,7 +92,7 @@ data class ModuleBaseOverride(
     val targetBranch: String? = null,
 ) {
     init {
-        require(serviceId.isNotBlank() && moduleId.isNotBlank() && baseRef.isNotBlank()) { "基础分支覆盖项不能为空" }
+        require(serviceId.isNotBlank() && moduleId.isNotBlank() && baseRef.isNotBlank()) { "主分支覆盖项不能为空" }
         require(targetBranch == null || targetBranch.isNotBlank()) { "创建后分支不能为空" }
     }
 }
@@ -444,14 +443,12 @@ class TaskApplicationService(
                 val configuredService = group.services.firstOrNull { it.id == workspace.groupServiceId }
                     ?: error("回滚服务配置不存在：${workspace.groupServiceId}")
                 val service = configuredService.copy(modules = workspaces.map { item ->
-                    val base = item.baseRef ?: error("回滚模块缺少基础分支快照：${item.moduleName}")
-                    val parsed = RemoteBranchRef.parse(base)
+                    val base = item.baseRef ?: error("回滚模块缺少主分支快照：${item.moduleName}")
                     ServiceModuleConfig(
                         id = item.moduleId,
                         name = item.moduleName,
                         strategy = item.strategy,
-                        baseRef = base,
-                        baseRemote = parsed.remote,
+                        masterBranch = base,
                         tagEnabled = item.tagEnabled,
                         tagMode = item.tagMode,
                         tagTargetRef = item.tagTargetRef,
@@ -689,14 +686,12 @@ class TaskApplicationService(
                     ?: error("失败服务已不在组配置中：$serviceId")
                 val recorded = manifest.services.filter { it.groupServiceId == serviceId }
                 val service = configuredService.copy(modules = recorded.map { workspace ->
-                    val base = workspace.baseRef ?: error("失败模块缺少基础分支快照：${workspace.moduleName}")
-                    val parsed = RemoteBranchRef.parse(base)
+                    val base = workspace.baseRef ?: error("失败模块缺少主分支快照：${workspace.moduleName}")
                     ServiceModuleConfig(
                         id = workspace.moduleId,
                         name = workspace.moduleName,
                         strategy = workspace.strategy,
-                        baseRef = base,
-                        baseRemote = parsed.remote,
+                        masterBranch = base,
                         tagEnabled = workspace.tagEnabled,
                         tagMode = workspace.tagMode,
                         tagTargetRef = workspace.tagTargetRef,
@@ -904,19 +899,18 @@ class TaskApplicationService(
         } else {
             require(legacyServiceIds.isNotEmpty()) { "至少选择一个服务" }
             require(legacyOverrides.map { it.serviceId to it.moduleId }.distinct().size == legacyOverrides.size) {
-                "基础分支覆盖项不能重复"
+                "主分支覆盖项不能重复"
             }
             legacyServiceIds.map { serviceId ->
                 val service = group.services.firstOrNull { it.id == serviceId && it.enabled }
                     ?: throw IllegalArgumentException("组 ${group.name} 中不存在或未启用服务：$serviceId")
                 val byModule = legacyOverrides.filter { it.serviceId == serviceId }.associateBy(ModuleBaseOverride::moduleId)
-                require(byModule.keys.all { id -> service.modules.any { it.id == id } }) { "基础分支覆盖引用了不存在的模块" }
+                require(byModule.keys.all { id -> service.modules.any { it.id == id } }) { "主分支覆盖引用了不存在的模块" }
                 TaskServiceSelection(serviceId, service.modules.map { module ->
                     val override = byModule[module.id]
-                    val baseRef = override?.baseRef ?: module.baseRef
-                    val remote = override?.let { RemoteBranchRef.parse(baseRef).remote } ?: module.baseRemote
+                    val baseRef = override?.baseRef ?: service.effectiveMasterBranch(module)
                     val target = override?.targetBranch ?: defaultSelectionTarget(requestedFeatureBranch, service.modules, module)
-                    TaskModuleSelection.configured(module.copy(baseRef = baseRef, baseRemote = remote), target)
+                    TaskModuleSelection.configured(service, module.copy(masterBranch = baseRef), target)
                 })
             }
         }
@@ -926,7 +920,11 @@ class TaskApplicationService(
         return effectiveSelections.map { selection ->
             val configured = group.services.firstOrNull { it.id == selection.serviceId && it.enabled }
                 ?: throw IllegalArgumentException("组 ${group.name} 中不存在或未启用服务：${selection.serviceId}")
-            val modules = selection.modules.map(TaskModuleSelection::toConfig)
+            val modules = selection.modules.map { selected ->
+                selected.toConfig().let { module ->
+                    module.copy(tagTargetRef = configured.effectiveTagTargetRef(module))
+                }
+            }
             StandardWorktreeModuleNaming.requireValid(modules)
             require(modules.map { it.id.lowercase() }.distinct().size == modules.size) { "模块 ID 不能重复（忽略大小写）" }
             val branches = selection.modules.associate { selected ->

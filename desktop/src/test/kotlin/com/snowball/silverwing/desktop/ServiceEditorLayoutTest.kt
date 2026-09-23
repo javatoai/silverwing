@@ -1,5 +1,6 @@
 package com.snowball.silverwing.desktop
 
+import com.snowball.silverwing.core.TagBuildMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -10,6 +11,28 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.unit.dp
 
 class ServiceEditorLayoutTest {
+    @Test
+    fun `module editor keeps inherited master separate from explicit override`() {
+        val inherited = ServiceModuleEditorDraft(id = "default")
+        assertNull(inherited.toConfig().masterBranch)
+
+        val custom = inherited.copy(masterBranch = "upstream/main")
+        assertEquals("upstream/main", custom.toConfig().masterBranch)
+        assertEquals("upstream/main", custom.toConfig().toEditorDraft().masterBranch)
+        assertNull(custom.copy(masterBranch = null).toConfig().masterBranch)
+    }
+
+    @Test
+    fun `module editor keeps inherited test target distinct from explicit override`() {
+        val inherited = ServiceModuleEditorDraft(id = "default")
+        assertNull(inherited.toConfig().tagTargetRef)
+
+        val override = inherited.copy(tagTargetRef = "origin/qa")
+        assertEquals("origin/qa", override.toConfig().tagTargetRef)
+        assertEquals("origin/qa", override.toConfig().toEditorDraft().tagTargetRef)
+        assertNull(override.copy(tagMode = TagBuildMode.CURRENT_BRANCH).toConfig().tagTargetRef)
+    }
+
     @Test
     fun `service editor widens to host the section navigation`() {
         val policy = serviceEditorDialogWidthPolicy()

@@ -176,6 +176,29 @@ class MeegleRequirementAiContextProviderTest {
         assertEquals("长正文需求", context.title)
     }
 
+    @Test
+    fun `full body preview does not truncate or remove Markdown line breaks`() {
+        val body = "# 标题\\n\\n" + "字".repeat(4_100)
+        val runner = SequenceRunner(listOf(CommandResult(0, """{"name":"长正文","description":"$body"}""", "")))
+        val provider = MeegleRequirementAiContextProvider(runner, isWindows = false)
+
+        val content = provider.fetchFullBody("https://project.feishu.cn/obt/userstory/detail/123", "project-payment")
+
+        assertEquals("# 标题\n\n" + "字".repeat(4_100), content)
+    }
+
+    @Test
+    fun `full body preview distinguishes empty content from command failure`() {
+        val noContent = SequenceRunner(listOf(
+            CommandResult(0, """{"name":"无正文"}""", ""),
+            *Array(4) { CommandResult(0, """{"list":[]}""", "") },
+        ))
+        val provider = MeegleRequirementAiContextProvider(noContent, isWindows = false)
+
+        assertEquals(null, provider.fetchFullBody("https://project.feishu.cn/obt/bug/detail/123", "project-payment"))
+        assertTrue(noContent.commands.any { "meta-fields" in it })
+    }
+
     private class SequenceRunner(
         private val results: List<CommandResult>,
     ) : CommandRunner {

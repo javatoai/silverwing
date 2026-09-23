@@ -83,14 +83,17 @@ class WindowPreferencesTest {
     }
 
     @Test
-    fun `settings selection restores supported keys and maps only active legacy keys`() {
-        val supported = settingsNavigationSections().map { it.key }.toSet()
+    fun `settings selection remembers categories and maps legacy pages to their owner`() {
+        val supported = settingsNavigationCategories().map { it.key }.toSet()
 
-        assertEquals("logs", normalizeSettingsSection("logs", supported))
-        assertEquals("paths", normalizeSettingsSection("paths", supported))
-        assertEquals("feishu", normalizeSettingsSection("advanced", supported))
-        assertEquals("basic", normalizeSettingsSection("unknown", supported))
-        assertEquals("basic", normalizeSettingsSection("overview", supported))
-        assertEquals("basic", normalizeSettingsSection("branches", supported))
+        assertEquals("system", normalizeSettingsCategory("logs", supported))
+        assertEquals("storage", normalizeSettingsCategory("paths", supported))
+        assertEquals("commands", normalizeSettingsCategory("advanced", supported))
+        assertEquals("tasks", normalizeSettingsCategory("task-creation", supported))
+        assertEquals("tasks", normalizeSettingsCategory("codex-task-creation", supported))
+        assertEquals("basic", normalizeSettingsCategory("unknown", supported))
+        assertEquals("basic", normalizeSettingsCategory("overview", supported))
+        assertEquals("basic", normalizeSettingsCategory("branches", supported))
+        assertEquals("basic", normalizeSettingsCategory("skills", supported))
     }
 }

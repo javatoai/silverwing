@@ -1,7 +1,11 @@
 package com.snowball.silverwing.core
 
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.builtins.SetSerializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -25,7 +29,7 @@ class DiagnosticsExporter(
         val target = paths.diagnostics.resolve("silverwing-diagnostics-${System.currentTimeMillis()}.zip")
         ZipOutputStream(Files.newOutputStream(target)).use { zip ->
             zip.text("system.txt", systemSummary())
-            zip.text("config-summary.json", json.encodeToString(config.sanitizedForDiagnostics()))
+            zip.text("config-summary.json", sanitizedConfigJson(config))
             zip.text("repositories.txt", repositorySummary(config))
             manifestFailures?.takeIf(String::isNotBlank)?.let { zip.text("task-scan-failures.txt", it) }
             if (paths.logs.exists()) {
@@ -83,10 +87,36 @@ class DiagnosticsExporter(
         terminalExecutable = terminalExecutable?.let { "<configured>" },
         meegleExecutablePath = meegleExecutablePath?.let { "<configured>" },
         codexExecutablePath = codexExecutablePath?.let { "<configured>" },
+        // AppConfig validates proxy endpoints. Leave the field null while copying and
+        // replace it in the serialized JSON below with a non-sensitive status marker.
+        commandProxyUrl = null,
+        commandProxyNoProxy = null,
+        commandProxyUsername = null,
+        commandProxyPassword = null,
+        commandProxyTargets = emptySet(),
         larkExecutablePath = larkExecutablePath?.let { "<configured>" },
         gitExecutablePath = gitExecutablePath?.let { "<configured>" },
         genbuExecutablePath = genbuExecutablePath?.let { "<configured>" },
     )
+
+    private fun sanitizedConfigJson(config: AppConfig): String {
+        val safeConfig = config.sanitizedForDiagnostics()
+        val configJson = json.encodeToJsonElement(AppConfig.serializer(), safeConfig).jsonObject
+        val redacted = if (config.commandProxyUrl == null) {
+            configJson
+        } else {
+            JsonObject(
+                configJson + mapOf(
+                    "commandProxyUrl" to JsonPrimitive("<configured>"),
+                    "commandProxyTargets" to json.encodeToJsonElement(
+                        SetSerializer(CommandProxyTarget.serializer()),
+                        config.commandProxyTargets,
+                    ),
+                ),
+            )
+        }
+        return json.encodeToString(redacted)
+    }
 
     private fun gitVersion(): String = runCatching {
         val result = git.version()

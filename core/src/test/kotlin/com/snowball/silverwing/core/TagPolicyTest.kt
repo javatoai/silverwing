@@ -32,7 +32,7 @@ class TagPolicyTest {
             id = "clone-a",
             repositoryId = "repo-a",
             displayName = "A clone",
-            modules = listOf(ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/master", tagEnabled = true, tagTargetRef = "origin/uat/test")),
+            modules = listOf(ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, masterBranch = "origin/master", tagEnabled = true, tagTargetRef = "origin/uat/test")),
         )
         val workspace = workspace("repo-a", "clone-a", "clone").copy(
             strategy = WorkspaceStrategy.INDEPENDENT_CLONE,

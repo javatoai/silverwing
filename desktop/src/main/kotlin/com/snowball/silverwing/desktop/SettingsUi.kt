@@ -66,6 +66,8 @@ import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SecondaryScrollableTabRow
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -84,6 +86,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -94,6 +97,7 @@ import com.snowball.silverwing.core.AgentTaskTemplate
 import com.snowball.silverwing.core.ApplicationEventClipboard
 import com.snowball.silverwing.core.MeegleCommandSource
 import com.snowball.silverwing.core.CodexCommandSource
+import com.snowball.silverwing.core.CURRENT_PRODUCT_VERSION
 import com.snowball.silverwing.core.GitCommandSource
 import com.snowball.silverwing.core.GenbuCommandSource
 import com.snowball.silverwing.core.ConfigStore
@@ -103,6 +107,8 @@ import com.snowball.silverwing.core.GroupConfig
 import com.snowball.silverwing.core.GitConfigValue
 import com.snowball.silverwing.core.LocalGitEnvironmentSnapshot
 import com.snowball.silverwing.core.CommandVersionStatus
+import com.snowball.silverwing.core.CommandProxyProtocol
+import com.snowball.silverwing.core.CommandProxyTarget
 import com.snowball.silverwing.core.MeegleCliStatus
 import com.snowball.silverwing.core.MeegleProjectConfig
 import com.snowball.silverwing.core.LarkCliStatus
@@ -111,6 +117,10 @@ import com.snowball.silverwing.core.LarkCommandSource
 import com.snowball.silverwing.core.LARK_BUSINESS_DOMAINS
 import com.snowball.silverwing.core.ThemePreference
 import com.snowball.silverwing.core.RequirementAiNamingModel
+import com.snowball.silverwing.core.buildCommandProxyUrl
+import com.snowball.silverwing.core.commandProxyAuthentication
+import com.snowball.silverwing.core.commandProxyEndpoint
+import com.snowball.silverwing.core.normalizeCommandProxyNoProxy
 import com.snowball.silverwing.core.TaskRootMigrationMode
 import com.snowball.silverwing.core.TaskRootMigrationPhase
 import com.snowball.silverwing.core.TaskRootMigrationProgress
@@ -140,6 +150,39 @@ internal fun SettingsScreen(controller: DesktopApplication) {
     }
     var aiRequirementNamingModel by remember(controller.config.aiRequirementNamingModel) {
         mutableStateOf(controller.config.aiRequirementNamingModel)
+    }
+    var defaultBranchPrefix by remember(controller.config.defaultBranchPrefix) {
+        mutableStateOf(controller.config.defaultBranchPrefix)
+    }
+    val configuredCommandProxyEndpoint = remember(controller.config.commandProxyUrl) {
+        commandProxyEndpoint(controller.config.commandProxyUrl)
+    }
+    var commandProxyProtocol by remember(controller.config.commandProxyUrl) {
+        mutableStateOf(configuredCommandProxyEndpoint?.protocol ?: CommandProxyProtocol.HTTP)
+    }
+    var commandProxyHost by remember(controller.config.commandProxyUrl) {
+        mutableStateOf(configuredCommandProxyEndpoint?.host.orEmpty())
+    }
+    var commandProxyPort by remember(controller.config.commandProxyUrl) {
+        mutableStateOf(configuredCommandProxyEndpoint?.port?.toString() ?: "80")
+    }
+    var commandProxyNoProxy by remember(controller.config.commandProxyNoProxy) {
+        mutableStateOf(controller.config.commandProxyNoProxy.orEmpty())
+    }
+    var commandProxyAuthenticationEnabled by remember(
+        controller.config.commandProxyUsername,
+        controller.config.commandProxyPassword,
+    ) {
+        mutableStateOf(controller.config.commandProxyUsername != null && controller.config.commandProxyPassword != null)
+    }
+    var commandProxyUsername by remember(controller.config.commandProxyUsername) {
+        mutableStateOf(controller.config.commandProxyUsername.orEmpty())
+    }
+    var commandProxyPassword by remember(controller.config.commandProxyPassword) {
+        mutableStateOf(controller.config.commandProxyPassword.orEmpty())
+    }
+    var commandProxyTargets by remember(controller.config.commandProxyTargets) {
+        mutableStateOf(controller.config.commandProxyTargets)
     }
     var showTaskDetailGitActionGroup by remember(controller.config.showTaskDetailGitActionGroup) {
         mutableStateOf(controller.config.showTaskDetailGitActionGroup)
@@ -216,11 +259,17 @@ internal fun SettingsScreen(controller: DesktopApplication) {
         }
     }
     val groupAgentErrors = remember { mutableStateMapOf<String, String>() }
-    val sections = remember { settingsNavigationSections() }
-    val initialSection = remember { WindowPreferences.load().settingsSection }
-    var selectedSection by remember { mutableStateOf(normalizeSettingsSection(initialSection, sections.map { it.key }.toSet())) }
-    fun navigateToSection(key: String) {
-        selectedSection = key
+    val categories = remember { settingsNavigationCategories() }
+    val initialCategory = remember { WindowPreferences.load().settingsSection }
+    var selectedCategoryKey by remember {
+        mutableStateOf(normalizeSettingsCategory(initialCategory, categories.map { it.key }.toSet()))
+    }
+    val selectedCategory = categories.firstOrNull { it.key == selectedCategoryKey } ?: categories.first()
+    var selectedPageKey by remember(selectedCategory.key) {
+        mutableStateOf(selectedCategory.pages.first().key)
+    }
+    fun navigateToCategory(key: String) {
+        if (key != selectedCategoryKey) selectedCategoryKey = key
         WindowPreferences.saveSettingsSection(key)
     }
     fun saving(key: String) = controller.settingsSaveState(key) == SettingsSaveState.SAVING
@@ -240,6 +289,56 @@ internal fun SettingsScreen(controller: DesktopApplication) {
         aiRequirementNamingModel = normalized
         controller.setAiRequirementNamingModel(normalized) {
             aiRequirementNamingModel = controller.config.aiRequirementNamingModel
+        }
+    }
+    fun saveDefaultBranchPrefix() {
+        val normalized = defaultBranchPrefix.trim()
+        defaultBranchPrefix = normalized
+        controller.updateDefaultBranchPrefix(normalized) {
+            defaultBranchPrefix = controller.config.defaultBranchPrefix
+        }
+    }
+    fun saveCommandProxy() {
+        val endpoint = buildCommandProxyUrl(commandProxyProtocol, commandProxyHost, commandProxyPort).orEmpty()
+        controller.updateCommandProxy(
+            endpoint,
+            commandProxyNoProxy,
+            if (commandProxyAuthenticationEnabled) commandProxyUsername else "",
+            if (commandProxyAuthenticationEnabled) commandProxyPassword else "",
+            commandProxyTargets,
+        ) {
+            val restored = commandProxyEndpoint(controller.config.commandProxyUrl)
+            commandProxyProtocol = restored?.protocol ?: CommandProxyProtocol.HTTP
+            commandProxyHost = restored?.host.orEmpty()
+            commandProxyPort = restored?.port?.toString() ?: "80"
+            commandProxyNoProxy = controller.config.commandProxyNoProxy.orEmpty()
+            commandProxyAuthenticationEnabled = controller.config.commandProxyUsername != null &&
+                controller.config.commandProxyPassword != null
+            commandProxyUsername = controller.config.commandProxyUsername.orEmpty()
+            commandProxyPassword = controller.config.commandProxyPassword.orEmpty()
+            commandProxyTargets = controller.config.commandProxyTargets
+        }
+    }
+    fun clearCommandProxy() {
+        commandProxyProtocol = CommandProxyProtocol.HTTP
+        commandProxyHost = ""
+        commandProxyPort = "80"
+        commandProxyNoProxy = ""
+        commandProxyAuthenticationEnabled = false
+        commandProxyUsername = ""
+        commandProxyPassword = ""
+        commandProxyTargets = emptySet()
+        controller.updateCommandProxy("", "", "", "", emptySet()) {
+            val restored = commandProxyEndpoint(controller.config.commandProxyUrl)
+            commandProxyProtocol = restored?.protocol ?: CommandProxyProtocol.HTTP
+            commandProxyHost = restored?.host.orEmpty()
+            commandProxyPort = restored?.port?.toString() ?: "80"
+            commandProxyNoProxy = controller.config.commandProxyNoProxy.orEmpty()
+            commandProxyAuthenticationEnabled = controller.config.commandProxyUsername != null &&
+                controller.config.commandProxyPassword != null
+            commandProxyUsername = controller.config.commandProxyUsername.orEmpty()
+            commandProxyPassword = controller.config.commandProxyPassword.orEmpty()
+            commandProxyTargets = controller.config.commandProxyTargets
         }
     }
     fun currentToolConfigs(): List<DevelopmentToolConfig> = DevelopmentToolType.entries.mapNotNull { type ->
@@ -314,14 +413,16 @@ internal fun SettingsScreen(controller: DesktopApplication) {
         }
     }
 
-    LaunchedEffect(selectedSection) {
-        if (selectedSection == "paths") controller.refreshConfigFileSnapshot()
-        if (selectedSection == "cli") controller.refreshCliInstallationStatus()
-        if (selectedSection == "codex-plugins" || selectedSection == "skills") controller.codexExtensionsController.refreshCached()
-        if (selectedSection == "feishu") controller.refreshMeegleStatus()
-        if (selectedSection == "lark") controller.refreshLarkStatus()
-        if (selectedSection == "git") controller.refreshLocalGit()
-        if (selectedSection == "genbu") controller.refreshGenbu()
+    LaunchedEffect(selectedPageKey) {
+        if (selectedPageKey == "config-backup") controller.refreshConfigFileSnapshot()
+        if (selectedPageKey == "cli") controller.refreshCliInstallationStatus()
+        if (selectedPageKey == "codex-plugins" || selectedPageKey == "skill-sources") {
+            controller.codexExtensionsController.refreshCached()
+        }
+        if (selectedPageKey == "feishu") controller.refreshMeegleStatus()
+        if (selectedPageKey == "lark") controller.refreshLarkStatus()
+        if (selectedPageKey == "git") controller.refreshLocalGit()
+        if (selectedPageKey == "genbu") controller.refreshGenbu()
     }
     LaunchedEffect(controller.agentRevision, controller.config.groups) {
         globalAgentsLoading = true
@@ -358,10 +459,10 @@ internal fun SettingsScreen(controller: DesktopApplication) {
             }
         }
     }
-    DisposableEffect(selectedSection) {
+    DisposableEffect(selectedPageKey) {
         onDispose {
-            if (selectedSection == "feishu") controller.cancelMeegleProjectLoad()
-            if (selectedSection == "lark") controller.cancelLarkDeviceCodeLogin()
+            if (selectedPageKey == "feishu") controller.cancelMeegleProjectLoad()
+            if (selectedPageKey == "lark") controller.cancelLarkDeviceCodeLogin()
         }
     }
 
@@ -382,32 +483,43 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
             ) {
                 LazyColumn(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    items(sections, key = { it.key }) { section ->
-                        if (section.startsGroup && section != sections.first()) {
-                            HorizontalDivider(
-                                Modifier.padding(vertical = 6.dp),
-                                color = MaterialTheme.colorScheme.outlineVariant,
-                            )
-                        }
+                    items(categories, key = { it.key }) { category ->
                         Surface(
-                            Modifier.fillMaxWidth().clickable { navigateToSection(section.key) },
-                            color = if (selectedSection == section.key) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                            Modifier.fillMaxWidth().clickable { navigateToCategory(category.key) },
+                            color = if (selectedCategory.key == category.key) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
                             shape = RoundedCornerShape(10.dp),
                         ) {
                             Text(
-                                section.label,
+                                category.label,
                                 Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                                fontWeight = if (selectedSection == section.key) FontWeight.SemiBold else FontWeight.Normal,
-                                color = if (selectedSection == section.key) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                                fontWeight = if (selectedCategory.key == category.key) FontWeight.SemiBold else FontWeight.Normal,
+                                color = if (selectedCategory.key == category.key) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
                             )
                         }
                     }
                 }
             }
-            LazyColumn(
-                Modifier.weight(1f).fillMaxHeight(),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
+            Column(Modifier.weight(1f).fillMaxHeight()) {
+                if (selectedCategory.showsTabs()) {
+                    SecondaryScrollableTabRow(
+                        selectedTabIndex = selectedCategory.pages.indexOfFirst { it.key == selectedPageKey }
+                            .coerceAtLeast(0),
+                        edgePadding = 0.dp,
+                    ) {
+                        selectedCategory.pages.forEach { page ->
+                            Tab(
+                                selected = selectedPageKey == page.key,
+                                onClick = { selectedPageKey = page.key },
+                                text = { Text(page.label) },
+                            )
+                        }
+                    }
+                    Spacer(Modifier.heightIn(min = 16.dp))
+                }
+                LazyColumn(
+                    Modifier.weight(1f).fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
             controller.configurationLoadError?.let { error ->
                 item {
                     val snapshot = controller.configFileSnapshot
@@ -436,13 +548,13 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     }
                 }
             }
-            if (selectedSection == "basic") item {
+            if (selectedPageKey == "basic") item {
                 SettingsBasicSection(
                     controller = controller,
                     saving = saving("basic"),
                 )
             }
-            if (selectedSection == "tag") item {
+            if (selectedPageKey == "tag") item {
                 SettingsTagSection(
                     controller = controller,
                     maxGroupsInput = tagHistoryMaxGroupsInput,
@@ -451,7 +563,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     saving = saving("tag"),
                 )
             }
-            if (selectedSection == "paths") item {
+            if (selectedPageKey == "paths") item {
                 SettingsPathsSection(
                     controller = controller,
                     taskRoot = taskRoot,
@@ -461,13 +573,18 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     requirementMaterialsSubdirectory = requirementMaterialsSubdirectory,
                     onRequirementMaterialsSubdirectoryChange = { requirementMaterialsSubdirectory = it },
                     saving = saving("paths"),
+                )
+            }
+            if (selectedPageKey == "config-backup") item {
+                SettingsConfigAndBackupSection(
+                    controller = controller,
                     backupMenuExpanded = backupMenuExpanded,
                     onBackupMenuExpandedChange = { backupMenuExpanded = it },
                     onRestoreBackup = { restoreBackup = it },
                     onImportPreview = { importPreview = it },
                 )
             }
-            if (selectedSection == "groups") item {
+            if (selectedPageKey == "groups") item {
                 SettingsGroupsSection(
                     controller = controller,
                     onNewGroup = { newGroup = true },
@@ -475,7 +592,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     onDeleteGroup = { deleteGroupTarget = it },
                 )
             }
-            if (selectedSection == "agents") item {
+            if (selectedPageKey == "agents") item {
                 SettingsAgentsSection(
                     controller = controller,
                     agentScope = agentScope,
@@ -492,7 +609,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     groupAgentErrors = groupAgentErrors,
                 )
             }
-            if (selectedSection == "agents") item {
+            if (selectedPageKey == "agents") item {
                 SettingsTaskTemplatesSection(
                     controller = controller,
                     onNewTemplate = { newTemplate = true },
@@ -500,7 +617,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     onDeleteTemplate = { deleteTemplateTarget = it },
                 )
             }
-            if (selectedSection == "tools") item {
+            if (selectedPageKey == "tools") item {
                 SettingsToolsSection(
                     controller = controller,
                     developmentToolPaths = developmentToolPaths,
@@ -512,7 +629,16 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     onSaveDevelopmentTools = ::saveDevelopmentTools,
                 )
             }
-            if (selectedSection == "task-creation") item {
+            if (selectedPageKey == "branch-naming") item {
+                SettingsBranchNamingSection(
+                    controller = controller,
+                    defaultBranchPrefix = defaultBranchPrefix,
+                    onDefaultBranchPrefixChange = { defaultBranchPrefix = it },
+                    onSaveDefaultBranchPrefix = ::saveDefaultBranchPrefix,
+                    saving = saving("branch-naming"),
+                )
+            }
+            if (selectedPageKey == "task-creation") item {
                 SettingsTaskCreationSection(
                     controller = controller,
                     aiRequirementNamingModel = aiRequirementNamingModel,
@@ -521,7 +647,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     saving = saving("task-creation"),
                 )
             }
-            if (selectedSection == "task-area") item {
+            if (selectedPageKey == "task-area") item {
                 SettingsTaskAreaSection(
                     controller = controller,
                     showTaskDetailGitActionGroup = showTaskDetailGitActionGroup,
@@ -541,16 +667,53 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     saving = saving("task-area"),
                 )
             }
-            if (selectedSection == "cli") item {
+            if (selectedPageKey == "network-proxy") item {
+                SettingsNetworkProxySection(
+                    controller = controller,
+                    protocol = commandProxyProtocol,
+                    onProtocolChange = { protocol ->
+                        if (commandProxyProtocol != protocol) {
+                            if (commandProxyPort == commandProxyProtocol.defaultPort.toString()) {
+                                commandProxyPort = protocol.defaultPort.toString()
+                            }
+                            commandProxyProtocol = protocol
+                        }
+                    },
+                    host = commandProxyHost,
+                    onHostChange = { commandProxyHost = it },
+                    port = commandProxyPort,
+                    onPortChange = { commandProxyPort = it },
+                    noProxy = commandProxyNoProxy,
+                    onNoProxyChange = { commandProxyNoProxy = it },
+                    authenticationEnabled = commandProxyAuthenticationEnabled,
+                    onAuthenticationEnabledChange = { enabled ->
+                        commandProxyAuthenticationEnabled = enabled
+                        if (!enabled) {
+                            commandProxyUsername = ""
+                            commandProxyPassword = ""
+                        }
+                    },
+                    username = commandProxyUsername,
+                    onUsernameChange = { commandProxyUsername = it },
+                    password = commandProxyPassword,
+                    onPasswordChange = { commandProxyPassword = it },
+                    selectedTargets = commandProxyTargets,
+                    onSelectedTargetsChange = { commandProxyTargets = it },
+                    saving = saving("network-proxy"),
+                    onSave = ::saveCommandProxy,
+                    onClear = ::clearCommandProxy,
+                )
+            }
+            if (selectedPageKey == "cli") item {
                 SettingsCliSection(controller)
             }
-            if (selectedSection == "codex-plugins") item {
+            if (selectedPageKey == "codex-plugins") item {
                 SettingsCodexPluginsSection(controller)
             }
-            if (selectedSection == "skills") item {
-                SettingsExternalSkillsSection(controller)
+            if (selectedPageKey == "skill-sources") item {
+                SettingsSkillSourcesSection(controller)
             }
-            if (selectedSection == "git") item {
+            if (selectedPageKey == "git") item {
                 SettingsGitSection(
                     controller = controller,
                     blockedGitBranchInput = blockedGitBranchInput,
@@ -560,7 +723,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     onSaveBlockedGitBranches = ::saveBlockedGitBranches,
                 )
             }
-            if (selectedSection == "lark") item {
+            if (selectedPageKey == "lark") item {
                 SettingsLarkSection(
                     controller = controller,
                     larkPath = larkPath,
@@ -569,7 +732,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     onLogin = { larkDomainDialog = true },
                 )
             }
-            if (selectedSection == "genbu") item {
+            if (selectedPageKey == "genbu") item {
                 SettingsGenbuSection(
                     controller = controller,
                     genbuPath = genbuPath,
@@ -577,7 +740,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     saving = saving("genbu"),
                 )
             }
-            if (selectedSection == "feishu") item {
+            if (selectedPageKey == "feishu") item {
                 SettingsFeishuSection(
                     controller = controller,
                     meegleProjects = meegleProjects,
@@ -587,8 +750,12 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     onSaveMeegleProjects = ::saveMeegleProjects,
                 )
             }
-            if (selectedSection == "logs") item {
+            if (selectedPageKey == "logs") item {
                 SettingsLogsSection(controller)
+            }
+            if (selectedPageKey == "about") item {
+                SettingsAboutSection(controller)
+            }
             }
             }
         }
@@ -621,7 +788,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
             },
         )
     }
-    if (selectedSection == "lark") {
+    if (selectedPageKey == "lark") {
         controller.larkDeviceCodeLoginState?.let { login ->
             LarkDeviceCodeAuthorizationDialog(
                 state = login,
@@ -756,17 +923,7 @@ private fun formatByteSize(bytes: Long): String = when {
     else -> "$bytes B"
 }
 
-internal fun normalizeSettingsSection(stored: String, supported: Set<String>): String = when (stored) {
-    "advanced" -> "feishu"
-    "genbu" -> if ("genbu" in supported) "genbu" else "basic"
-    in supported -> stored
-    else -> "basic"
-}
-
 internal enum class CliDetectionPhase { IDLE, LOADING, READY, AUTH_REQUIRED, FAILED }
-
-/** CLI 设置页的最大阅读宽度，避免宽屏把状态信息和命令路径拉得过散。 */
-private const val CLI_SETTINGS_MAX_CONTENT_WIDTH_DP = 1_040f
 
 internal fun meegleCliDetectionPhase(state: MeegleCliState): CliDetectionPhase = when (state) {
     MeegleCliState.Idle -> CliDetectionPhase.IDLE
@@ -1203,22 +1360,14 @@ private fun CliToolbarTextButton(
     }
 }
 
-/**
- * CLI 页面在宽屏上保持可读的行长，窄窗口时仍随父容器收缩。
- *
- * 这层只负责页面宽度，不引入新的视觉边框；具体内容继续由同级的 SettingsCard 承载。
- */
+/** 设置页共用主内容区的完整可用宽度；局部控件自行保留必要的阅读宽度。 */
 @Composable
-private fun CliSettingsContent(content: @Composable ColumnScope.() -> Unit) {
-    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
-        Column(
-            modifier = Modifier
-                .widthIn(max = CLI_SETTINGS_MAX_CONTENT_WIDTH_DP.dp)
-                .fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-            content = content,
-        )
-    }
+private fun SettingsPageContent(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        content = content,
+    )
 }
 
 @Composable
@@ -1226,7 +1375,7 @@ private fun SettingsBasicSection(
     controller: DesktopApplication,
     saving: Boolean,
 ) {
-    SettingsCard("外观", "调整本机界面的显示方式。") {
+    SettingsCard("外观") {
         AutoSaveStatus(controller, "basic")
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("界面主题", style = MaterialTheme.typography.titleSmall)
@@ -1255,7 +1404,7 @@ private fun SettingsTagSection(
 ) {
     val parsedMaxGroups = maxGroupsInput.toIntOrNull()
     val maxGroupsValid = parsedMaxGroups != null && parsedMaxGroups in 1..MAX_TAG_HISTORY_GROUPS
-    SettingsCard("Tag设置", "控制测试 Tag 功能及历史记录保留数量。") {
+    SettingsCard("Tag设置") {
         AutoSaveStatus(controller, "tag")
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -1317,8 +1466,8 @@ private fun SettingsGenbuSection(
         is GenbuSettingsState.Loaded -> CliDetectionPhase.READY
         is GenbuSettingsState.Failed -> CliDetectionPhase.FAILED
     }
-    CliSettingsContent {
-        SettingsCard("Genbu CLI", "配置并检查生产版本查询命令。", cliHeader = true) {
+    SettingsPageContent {
+        SettingsCard("Genbu CLI", cliHeader = true) {
             AutoSaveStatus(controller, "genbu")
             CliCommandPanel(
                 controller = controller,
@@ -1352,8 +1501,8 @@ private fun SettingsLarkSection(
     saving: Boolean,
     onLogin: () -> Unit,
 ) {
-    CliSettingsContent {
-        SettingsCard("Lark CLI", "连接、授权并管理本机的 Lark 命令。", cliHeader = true) {
+    SettingsPageContent {
+        SettingsCard("Lark CLI", cliHeader = true) {
             AutoSaveStatus(controller, "lark")
             LarkCliStatusPanel(
                 controller = controller,
@@ -1634,36 +1783,11 @@ private fun SettingsPathsSection(
     requirementMaterialsSubdirectory: String,
     onRequirementMaterialsSubdirectoryChange: (String) -> Unit,
     saving: Boolean,
-    backupMenuExpanded: Boolean,
-    onBackupMenuExpandedChange: (Boolean) -> Unit,
-    onRestoreBackup: (ConfigStore.Backup) -> Unit,
-    onImportPreview: (ConfigStore.ImportPreview) -> Unit,
 ) {
     val materialsSaving = controller.settingsSaveState("requirement-materials-root") == SettingsSaveState.SAVING ||
         controller.settingsSaveState("requirement-materials-subdirectory") == SettingsSaveState.SAVING
-    var backups by remember { mutableStateOf<List<ConfigStore.Backup>?>(null) }
-    var backupsLoading by remember { mutableStateOf(false) }
-    var backupLoadError by remember { mutableStateOf<String?>(null) }
-    var importLoading by remember { mutableStateOf(false) }
-    val ioScope = rememberCoroutineScope()
-    LaunchedEffect(backupMenuExpanded) {
-        if (!backupMenuExpanded) return@LaunchedEffect
-        backupsLoading = true
-        backups = null
-        backupLoadError = null
-        try {
-            backups = controller.configBackupsAsync()
-            backupsLoading = false
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Throwable) {
-            backupLoadError = error.message ?: error::class.simpleName ?: "无法读取配置备份"
-            controller.showError(error)
-            backupsLoading = false
-        }
-    }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        SettingsCard("任务路径设置", "选择 silverwing 扫描任务的根目录。") {
+        SettingsCard("任务路径设置") {
             AutoSaveStatus(controller, "paths")
             PathField(
                 "任务根目录",
@@ -1683,7 +1807,7 @@ private fun SettingsPathsSection(
             }
             TaskManifestIssues(controller)
         }
-        SettingsCard("需求资料目录设置", "需求编号已填写且以下两项均不为空时，silverwing 会创建或复用需求资料目录；silverwing CLI 会在同一目录补充过程文档。") {
+        SettingsCard("需求资料目录设置") {
             AutoSaveStatus(controller, "requirement-materials-root")
             AutoSaveStatus(controller, "requirement-materials-subdirectory")
             PathField(
@@ -1728,7 +1852,40 @@ private fun SettingsPathsSection(
                 style = MaterialTheme.typography.bodySmall,
             )
         }
-        SettingsCard("配置目录", "silverwing 配置按功能拆分存储；可在此预览当前配置分片并管理配置备份。") {
+    }
+}
+
+@Composable
+private fun SettingsConfigAndBackupSection(
+    controller: DesktopApplication,
+    backupMenuExpanded: Boolean,
+    onBackupMenuExpandedChange: (Boolean) -> Unit,
+    onRestoreBackup: (ConfigStore.Backup) -> Unit,
+    onImportPreview: (ConfigStore.ImportPreview) -> Unit,
+) {
+    var backups by remember { mutableStateOf<List<ConfigStore.Backup>?>(null) }
+    var backupsLoading by remember { mutableStateOf(false) }
+    var backupLoadError by remember { mutableStateOf<String?>(null) }
+    var importLoading by remember { mutableStateOf(false) }
+    val ioScope = rememberCoroutineScope()
+    LaunchedEffect(backupMenuExpanded) {
+        if (!backupMenuExpanded) return@LaunchedEffect
+        backupsLoading = true
+        backups = null
+        backupLoadError = null
+        try {
+            backups = controller.configBackupsAsync()
+            backupsLoading = false
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            backupLoadError = error.message ?: error::class.simpleName ?: "无法读取配置备份"
+            controller.showError(error)
+            backupsLoading = false
+        }
+    }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        SettingsCard("配置与备份") {
             ConfigFilePreview(controller)
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Text("配置操作", style = MaterialTheme.typography.titleSmall)
@@ -1786,7 +1943,7 @@ private fun SettingsCliSection(controller: DesktopApplication) {
     var confirmUninstall by remember { mutableStateOf(false) }
     var confirmTagSkillOverwrite by remember { mutableStateOf(false) }
     var confirmTagSkillUninstall by remember { mutableStateOf(false) }
-    SettingsCard("silverwing CLI", "将绿色包内置的 silverwing CLI 安装为当前用户可用的 silverwing 命令。") {
+    SettingsCard("silverwing CLI") {
         Text("安装状态", style = MaterialTheme.typography.titleSmall)
         SelectionContainer {
             Text(status.message, style = MaterialTheme.typography.bodyMedium)
@@ -1837,7 +1994,7 @@ private fun SettingsCliSection(controller: DesktopApplication) {
             )
         }
     }
-    if (controller.config.tagEnabled) SettingsCard("silverwing Skill", "安装仅包含测试 Tag 操作的 silverwing Skill，不包含任务创建流程。") {
+    if (controller.config.tagEnabled) SettingsCard("silverwing Skill") {
         Text("安装状态", style = MaterialTheme.typography.titleSmall)
         SelectionContainer {
             Text(tagSkillStatus.message, style = MaterialTheme.typography.bodyMedium)
@@ -1935,7 +2092,7 @@ private fun SettingsGroupsSection(
     onRenameGroup: (GroupConfig) -> Unit,
     onDeleteGroup: (GroupConfig) -> Unit,
 ) {
-    SettingsCard("项目组", "按项目组维护仓库和服务；只能删除没有服务和任务引用的空组。") {
+    SettingsCard("项目组") {
         AutoSaveStatus(controller, "groups")
         controller.config.groups.forEachIndexed { index, group ->
             GroupSettingsRow(
@@ -1969,7 +2126,7 @@ private fun SettingsAgentsSection(
     groupAgentLoaded: Map<String, Boolean>,
     groupAgentErrors: Map<String, String>,
 ) {
-    SettingsCard("全局与组说明", "磁盘中的全局/组 AGENTS.md 是唯一准确来源；新任务会在新 Agent 会话中读取，旧任务仍会同步。") {
+    SettingsCard("全局与组说明") {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(agentScope == "global", { onAgentScopeChange("global") }, label = { Text("全局") })
             controller.config.groups.forEach { group ->
@@ -2043,7 +2200,7 @@ private fun SettingsTaskTemplatesSection(
     onEditTemplate: (AgentTaskTemplate) -> Unit,
     onDeleteTemplate: (AgentTaskTemplate) -> Unit,
 ) {
-    SettingsCard("任务说明模板", "创建任务时可勾选一个模板自动填充任务人工说明；模板修改不影响已创建的任务。") {
+    SettingsCard("任务说明模板") {
         if (controller.agentTaskTemplates.isEmpty()) {
             Text("还没有模板。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -2137,10 +2294,7 @@ private fun SettingsToolsSection(
             pathCheckLoading = false
         }
     }
-    SettingsCard(
-        "开发工具",
-        "启动后会在后台静默探测尚未填写的工具路径；已有路径即使失效也不会被覆盖。工作区快捷打开会使用该工作区配置的开发工具。",
-    ) {
+    SettingsCard("开发工具") {
         AutoSaveStatus(controller, "tools")
         DevelopmentToolType.entries.forEach { type ->
             val value = developmentToolPaths[type].orEmpty()
@@ -2266,6 +2420,47 @@ private fun SettingsToolsSection(
 }
 
 @Composable
+private fun SettingsBranchNamingSection(
+    controller: DesktopApplication,
+    defaultBranchPrefix: String,
+    onDefaultBranchPrefixChange: (String) -> Unit,
+    onSaveDefaultBranchPrefix: () -> Unit,
+    saving: Boolean,
+) {
+    val normalizedBranchPrefix = defaultBranchPrefix.trim()
+    val branchPrefixInputError = normalizedBranchPrefix
+        .takeIf { it.any(Char::isWhitespace) }
+        ?.let { "默认分支名前缀不能包含空白字符。" }
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        AutoSaveStatus(controller, "branch-naming")
+        SettingsCard("分支名设置") {
+            OutlinedTextField(
+                value = defaultBranchPrefix,
+                onValueChange = onDefaultBranchPrefixChange,
+                modifier = Modifier.fillMaxWidth().onFocusChanged { focus ->
+                    if (!focus.isFocused && branchPrefixInputError == null &&
+                        normalizedBranchPrefix != controller.config.defaultBranchPrefix
+                    ) {
+                        onSaveDefaultBranchPrefix()
+                    }
+                },
+                label = { Text("默认分支名前缀") },
+                placeholder = { Text("例如 feature/zhangsan_{num}_") },
+                supportingText = {
+                    Text(
+                        branchPrefixInputError
+                            ?: "对所有项目组生效；{num} 会从需求链接或文本的最后一段数字解析，创建页仍可修改。",
+                    )
+                },
+                isError = branchPrefixInputError != null,
+                singleLine = true,
+                readOnly = controller.busy || saving,
+            )
+        }
+    }
+}
+
+@Composable
 private fun SettingsTaskCreationSection(
     controller: DesktopApplication,
     aiRequirementNamingModel: String,
@@ -2289,14 +2484,32 @@ private fun SettingsTaskCreationSection(
     }
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         AutoSaveStatus(controller, "task-creation")
-        SettingsCard(
-            "AI 分支名和文件夹名",
-            "为创建任务时的需求命名设置本机 Codex CLI 行为。",
-        ) {
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+        SettingsCard("创建任务后自动打开") {
+            controller.workspaceToolOptions().forEach { tool ->
+                val checked = tool.id in controller.config.defaultWorkspaceToolIds
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = checked,
+                        onCheckedChange = { enabled ->
+                            controller.updateDefaultWorkspaceToolIds(
+                                toggledDefaultWorkspaceToolIds(controller.config.defaultWorkspaceToolIds, tool.id, enabled),
+                            )
+                        },
+                        enabled = (tool.available || checked) && !controller.busy && !saving,
+                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(tool.displayName)
+                        Text(
+                            if (tool.available) tool.description else "当前不可用：${tool.unavailableReason}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (tool.available) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+            }
+        }
+        SettingsCard("AI 命名") {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("开启 AI 生成分支名和文件夹名", style = MaterialTheme.typography.titleSmall)
                     Text(
@@ -2364,6 +2577,246 @@ private fun SettingsTaskCreationSection(
     }
 }
 
+internal data class CommandProxyTargetPresentation(
+    val target: CommandProxyTarget,
+    val title: String,
+    val description: String,
+)
+
+internal fun commandProxyTargetPresentations(): List<CommandProxyTargetPresentation> = listOf(
+    CommandProxyTargetPresentation(
+        CommandProxyTarget.CODEX,
+        "Codex CLI",
+        "AI 命名、Codex 插件 Marketplace 与版本检测。",
+    ),
+    CommandProxyTargetPresentation(
+        CommandProxyTarget.GIT,
+        "Git",
+        "仓库、远程分支、插件和 Skill 来源拉取。",
+    ),
+    CommandProxyTargetPresentation(
+        CommandProxyTarget.WORKSPACE_COMMAND,
+        "服务快捷命令",
+        "Maven、Gradle 和服务配置的初始化命令。",
+    ),
+    CommandProxyTargetPresentation(
+        CommandProxyTarget.MEEGLE,
+        "Meegle CLI",
+        "需求、项目、登录状态与需求资料查询。",
+    ),
+    CommandProxyTargetPresentation(
+        CommandProxyTarget.LARK,
+        "Lark CLI",
+        "Lark 授权、登录状态与本机命令。",
+    ),
+    CommandProxyTargetPresentation(
+        CommandProxyTarget.GENBU,
+        "Genbu CLI",
+        "Tag 构建和 UAT 发布状态查询。",
+    ),
+)
+
+@Composable
+private fun SettingsNetworkProxySection(
+    controller: DesktopApplication,
+    protocol: CommandProxyProtocol,
+    onProtocolChange: (CommandProxyProtocol) -> Unit,
+    host: String,
+    onHostChange: (String) -> Unit,
+    port: String,
+    onPortChange: (String) -> Unit,
+    noProxy: String,
+    onNoProxyChange: (String) -> Unit,
+    authenticationEnabled: Boolean,
+    onAuthenticationEnabledChange: (Boolean) -> Unit,
+    username: String,
+    onUsernameChange: (String) -> Unit,
+    password: String,
+    onPasswordChange: (String) -> Unit,
+    selectedTargets: Set<CommandProxyTarget>,
+    onSelectedTargetsChange: (Set<CommandProxyTarget>) -> Unit,
+    saving: Boolean,
+    onSave: () -> Unit,
+    onClear: () -> Unit,
+) {
+    val endpoint = runCatching { buildCommandProxyUrl(protocol, host, port) }
+    val proxyInputError = endpoint.exceptionOrNull()?.message
+    val noProxyResult = runCatching { normalizeCommandProxyNoProxy(noProxy) }
+    val noProxyInputError = noProxyResult.exceptionOrNull()?.message
+    val authenticationInputError = when {
+        !authenticationEnabled -> null
+        username.trim().isEmpty() || password.isEmpty() -> "启用代理认证后，账号和密码必须同时填写"
+        else -> runCatching { commandProxyAuthentication(username, password) }.exceptionOrNull()?.message
+    }
+    val canUseProxy = endpoint.getOrNull() != null
+    val desiredUsername = if (authenticationEnabled) username.trim().ifBlank { null } else null
+    val desiredPassword = if (authenticationEnabled) password.ifEmpty { null } else null
+    val changed = endpoint.getOrNull() != controller.config.commandProxyUrl ||
+        noProxyResult.getOrNull() != controller.config.commandProxyNoProxy ||
+        desiredUsername != controller.config.commandProxyUsername ||
+        desiredPassword != controller.config.commandProxyPassword ||
+        selectedTargets != controller.config.commandProxyTargets
+    val actionsEnabled = !controller.busy && !saving
+
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        AutoSaveStatus(controller, "network-proxy")
+        SettingsCard("网络代理") {
+            Text("手动代理配置", style = MaterialTheme.typography.titleSmall)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("代理协议", style = MaterialTheme.typography.bodyMedium)
+                CommandProxyProtocol.entries.forEach { option ->
+                    FilterChip(
+                        selected = protocol == option,
+                        onClick = { onProtocolChange(option) },
+                        label = { Text(option.displayName) },
+                        enabled = actionsEnabled,
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                OutlinedTextField(
+                    value = host,
+                    onValueChange = onHostChange,
+                    modifier = Modifier.weight(1f),
+                    label = { Text("主机地址") },
+                    placeholder = { Text("例如 127.0.0.1 或 proxy.example.com") },
+                    isError = proxyInputError != null,
+                    singleLine = true,
+                    enabled = actionsEnabled,
+                )
+                OutlinedTextField(
+                    value = port,
+                    onValueChange = onPortChange,
+                    modifier = Modifier.widthIn(min = 132.dp, max = 160.dp),
+                    label = { Text("端口") },
+                    placeholder = { Text("80") },
+                    isError = proxyInputError != null,
+                    singleLine = true,
+                    enabled = actionsEnabled,
+                )
+            }
+            if (proxyInputError != null) {
+                Text(
+                    proxyInputError,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            OutlinedTextField(
+                value = noProxy,
+                onValueChange = onNoProxyChange,
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("不通过代理的地址") },
+                placeholder = { Text("例如 *.example.com, 192.168.*") },
+                supportingText = {
+                    Text(noProxyInputError ?: "多个地址以逗号分隔；可填写域名、IP 或通配符。")
+                },
+                isError = noProxyInputError != null,
+                singleLine = true,
+                enabled = actionsEnabled && canUseProxy,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(
+                    checked = authenticationEnabled,
+                    onCheckedChange = onAuthenticationEnabledChange,
+                    enabled = actionsEnabled && canUseProxy,
+                )
+                Column(Modifier.weight(1f)) {
+                    Text("代理认证", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        if (canUseProxy) "需要账号密码时启用。"
+                        else "先填写有效的主机和端口，才能启用认证。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            if (authenticationEnabled) {
+                OutlinedTextField(
+                    value = username,
+                    onValueChange = onUsernameChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("账号") },
+                    isError = authenticationInputError != null,
+                    singleLine = true,
+                    enabled = actionsEnabled && canUseProxy,
+                )
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = onPasswordChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("密码") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    isError = authenticationInputError != null,
+                    singleLine = true,
+                    enabled = actionsEnabled && canUseProxy,
+                )
+                Text(
+                    authenticationInputError ?: "账号和密码会保存到 integrations.json；请妥善保护配置文件及其备份。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (authenticationInputError == null) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.error
+                    },
+                )
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Text("通过代理执行", style = MaterialTheme.typography.titleSmall)
+            if (!canUseProxy) Text("先填写有效代理地址，才能选择命令类别。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            commandProxyTargetPresentations().forEachIndexed { index, option ->
+                if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(
+                        checked = option.target in selectedTargets,
+                        onCheckedChange = { selected ->
+                            onSelectedTargetsChange(
+                                if (selected) selectedTargets + option.target else selectedTargets - option.target,
+                            )
+                        },
+                        enabled = actionsEnabled && canUseProxy,
+                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(option.title, style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            option.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (host.isNotBlank() || noProxy.isNotBlank() || authenticationEnabled || selectedTargets.isNotEmpty()) {
+                    OutlinedButton(onClick = onClear, enabled = actionsEnabled) { Text("清空") }
+                }
+                Button(
+                    onClick = onSave,
+                    enabled = actionsEnabled && proxyInputError == null && noProxyInputError == null &&
+                        authenticationInputError == null && changed,
+                ) { Text("保存代理设置") }
+            }
+        }
+    }
+}
+
 @Composable
 private fun SettingsTaskAreaSection(
     controller: DesktopApplication,
@@ -2385,7 +2838,7 @@ private fun SettingsTaskAreaSection(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         AutoSaveStatus(controller, "task-area")
-        SettingsCard("任务详情工具栏", "控制任务详情顶部的可选操作入口。") {
+        SettingsCard("任务详情工具栏") {
             TaskAreaToolGroupSwitchRow(
                 title = "Git 工具组",
                 description = "显示提交、提交并推送和推送操作。",
@@ -2402,7 +2855,7 @@ private fun SettingsTaskAreaSection(
                 enabled = !controller.busy && !saving,
             )
         }
-        SettingsCard("工作区卡片工具栏", "控制每张 Worktree 卡片的可选操作入口。") {
+        SettingsCard("工作区卡片工具栏") {
             TaskAreaToolGroupSwitchRow(
                 title = "Git 工具组",
                 description = "显示提交、提交并推送和推送操作。",
@@ -2419,7 +2872,7 @@ private fun SettingsTaskAreaSection(
                 enabled = !controller.busy && !saving,
             )
         }
-        SettingsCard("复制图标", "控制任务详情与 Worktree 卡片中的常驻信息复制操作。") {
+        SettingsCard("复制图标") {
             TaskAreaToolGroupSwitchRow(
                 title = "分支名复制",
                 description = "显示 Worktree 卡片中分支名旁的复制图标。",
@@ -2487,17 +2940,16 @@ private fun SettingsGitSection(
     saving: Boolean,
     onSaveBlockedGitBranches: (List<String>) -> Unit,
 ) {
-    CliSettingsContent {
-        SettingsCard("Git 命令", "自动探测或配置 Git 命令。", cliHeader = true) {
+    SettingsPageContent {
+        SettingsCard("Git 命令", cliHeader = true) {
             AutoSaveStatus(controller, "git")
             GitEnvironmentPanel(controller, controller.localGitSettingsState)
         }
-        SettingsCard("Git 身份与全局配置", "查看当前用户、凭据与全局 Git 配置。", cliHeader = true) {
+        SettingsCard("Git 身份与全局配置", cliHeader = true) {
             GitEnvironmentDetails(controller, controller.localGitSettingsState)
         }
-        SettingsCard("分支写保护", "保护指定分支，避免在 silverwing 内执行 Git 写操作。") {
+        SettingsCard("分支写保护") {
             AutoSaveStatus(controller, "git-write-policy")
-            Text("分支写保护", style = MaterialTheme.typography.titleSmall)
             Text("在以下实际当前分支上禁用 Commit、Push、Commit & Push，以及需要写入分支的测试Tag流程。按完整名称忽略大小写匹配。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
@@ -2787,12 +3239,12 @@ private fun SettingsFeishuSection(
     saving: Boolean,
     onSaveMeegleProjects: () -> Unit,
 ) {
-    CliSettingsContent {
-        SettingsCard("Meegle CLI", "连接、授权并配置用于读取需求的 Meegle 命令。", cliHeader = true) {
+    SettingsPageContent {
+        SettingsCard("Meegle CLI", cliHeader = true) {
             AutoSaveStatus(controller, "feishu")
             MeegleCliStatusPanel(controller)
         }
-        SettingsCard("Meegle 项目 (${meegleProjects.size})", "创建任务时会从已配置项目读取 Meegle 需求链接。") {
+        SettingsCard("Meegle 项目 (${meegleProjects.size})") {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     if (meegleProjects.isEmpty()) "尚未配置项目" else "${meegleProjects.size} 个已配置项目",
@@ -2884,8 +3336,44 @@ private fun SettingsFeishuSection(
 }
 
 @Composable
+private fun SettingsAboutSection(controller: DesktopApplication) {
+    SettingsCard("关于 SilverWing") {
+        Text("SilverWing", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+        Text(
+            "版本 $CURRENT_PRODUCT_VERSION",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Text("开源仓库", style = MaterialTheme.typography.titleSmall)
+        SelectionContainer {
+            Text(
+                SILVERWING_OPEN_SOURCE_REPOSITORY_URL,
+                style = MaterialTheme.typography.bodyMedium,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { controller.openUrl(SILVERWING_OPEN_SOURCE_REPOSITORY_URL) }) {
+                Icon(Icons.AutoMirrored.Outlined.OpenInNew, null, Modifier.size(17.dp))
+                Spacer(Modifier.width(5.dp))
+                Text("打开仓库")
+            }
+            OutlinedButton(onClick = {
+                controller.copyText(SILVERWING_OPEN_SOURCE_REPOSITORY_URL, "开源仓库地址已复制")
+            }) {
+                Icon(Icons.Outlined.ContentCopy, null, Modifier.size(17.dp))
+                Spacer(Modifier.width(5.dp))
+                Text("复制地址")
+            }
+        }
+    }
+}
+
+@Composable
 private fun SettingsLogsSection(controller: DesktopApplication) {
-    SettingsCard("诊断与日志", "查看最近错误、打开日志目录或导出诊断包。") {
+    SettingsCard("诊断与日志") {
         OutlinedCard(Modifier.fillMaxWidth()) {
             Row(
                 Modifier.fillMaxWidth().padding(12.dp),
@@ -2908,10 +3396,7 @@ private fun SettingsLogsSection(controller: DesktopApplication) {
             }
         }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("最近错误", style = MaterialTheme.typography.titleSmall)
-                Text("展示 application 日志中最近 10 条 ERROR 记录。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+            Text("最近错误", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
             TextButton(onClick = controller::refreshErrorLog) { Text("刷新") }
             TextButton(onClick = {
                 controller.copyText(
@@ -3150,19 +3635,7 @@ private fun GroupSettingsRow(
     onRename: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    var branchPrefix by remember(group.id, group.defaultBranchPrefix) { mutableStateOf(group.defaultBranchPrefix) }
-    var selectedToolIds by remember(group.id, group.defaultWorkspaceToolIds) {
-        mutableStateOf(group.defaultWorkspaceToolIds.toSet())
-    }
-    val toolOptions = controller.workspaceToolOptions(group.id)
     val defaultsSaving = controller.settingsSaveState("groups") == SettingsSaveState.SAVING
-    fun saveDefaults() {
-        controller.updateGroupDefaults(group.id, branchPrefix, selectedToolIds.toList()) {
-            val persisted = controller.config.groups.firstOrNull { it.id == group.id } ?: group
-            branchPrefix = persisted.defaultBranchPrefix
-            selectedToolIds = persisted.defaultWorkspaceToolIds.toSet()
-        }
-    }
     OutlinedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -3188,44 +3661,6 @@ private fun GroupSettingsRow(
                     ) { Icon(Icons.Outlined.Delete, "删除") }
                 }
                 ActionIconButton("重命名组", onRename) { Icon(Icons.Outlined.Edit, "重命名") }
-            }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            OutlinedTextField(
-                branchPrefix,
-                { branchPrefix = it },
-                Modifier.fillMaxWidth().onFocusChanged { focus ->
-                    if (!focus.isFocused && branchPrefix != group.defaultBranchPrefix) saveDefaults()
-                },
-                label = { Text("默认分支名前缀") },
-                placeholder = { Text("例如 feature/zhangsan_{num}_") },
-                supportingText = { Text("{num} 会从需求链接或文本的最后一段数字解析；创建页仍可继续修改。") },
-                singleLine = true,
-                readOnly = controller.busy || defaultsSaving,
-            )
-            Text("任务完成后默认打开", style = MaterialTheme.typography.titleSmall)
-            if (toolOptions.isEmpty()) {
-                Text("当前没有已注册的任务工作区工具。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            } else {
-                toolOptions.forEach { tool ->
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(
-                            checked = tool.id in selectedToolIds,
-                            onCheckedChange = { checked ->
-                                selectedToolIds = if (checked) selectedToolIds + tool.id else selectedToolIds - tool.id
-                                saveDefaults()
-                            },
-                            enabled = tool.available && !controller.busy && !defaultsSaving,
-                        )
-                        Column(Modifier.weight(1f)) {
-                            Text(tool.displayName)
-                            Text(
-                                if (tool.available) tool.description else "当前不可用：${tool.unavailableReason}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (tool.available) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
-                            )
-                        }
-                    }
-                }
             }
         }
     }
@@ -3257,7 +3692,6 @@ internal fun formatLocalGitSettings(snapshot: LocalGitEnvironmentSnapshot): Stri
 @Composable
 internal fun SettingsCard(
     title: String,
-    subtitle: String,
     cliHeader: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
@@ -3283,10 +3717,7 @@ internal fun SettingsCard(
                     }
                 }
                 Spacer(Modifier.width(if (cliHeader) 10.dp else 11.dp))
-                Column {
-                    Text(title, style = MaterialTheme.typography.titleMedium)
-                    Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+                Text(title, style = MaterialTheme.typography.titleMedium)
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             content()
@@ -3306,11 +3737,11 @@ private fun settingsCardIcon(title: String): ImageVector {
         "全局与组说明" -> Icons.AutoMirrored.Outlined.Article
         "任务说明模板" -> Icons.Outlined.Edit
         "开发工具" -> Icons.Outlined.Build
-        "任务详情工具栏", "工作区卡片工具栏", "AI 分支名和文件夹名" -> Icons.Outlined.AccountTree
+        "任务详情工具栏", "工作区卡片工具栏", "AI 分支名和文件夹名", "AI 命名", "分支名设置" -> Icons.Outlined.AccountTree
         "silverwing CLI", "silverwing Skill" -> Icons.Outlined.Terminal
-        "Codex 插件", "Skills" -> Icons.Outlined.Extension
+        "Codex 插件", "创建任务后自动打开" -> Icons.Outlined.Extension
         "分支" -> Icons.Outlined.AccountTree
-        "Git 环境", "Git 命令", "Git 身份与全局配置", "Genbu CLI", "Meegle CLI", "Lark CLI" -> Icons.Outlined.Terminal
+        "Git 环境", "Git 命令", "Git 身份与全局配置", "Genbu CLI", "Meegle CLI", "Lark CLI", "命令网络代理" -> Icons.Outlined.Terminal
         "分支写保护" -> Icons.Outlined.Lock
         "Genbu" -> Icons.Outlined.Sell
         "Meegle", "Meegle 项目" -> Icons.Outlined.Link

@@ -71,7 +71,7 @@ class WorkspaceLifecycleIntegrationTest {
             id = "clone-risk",
             repositoryId = repository.id,
             displayName = "clone-risk",
-            modules = listOf(ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/master")),
+            modules = listOf(ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, masterBranch = "origin/master")),
         )
         val taskRoot = temporary.resolve("clone-risk-tasks")
         val config = AppConfig(
@@ -117,7 +117,7 @@ class WorkspaceLifecycleIntegrationTest {
                 ServiceModuleConfig(
                     "clone",
                     strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
-                    baseRef = "origin/master",
+                    masterBranch = "origin/master",
                 ),
             ),
         )
@@ -153,7 +153,7 @@ class WorkspaceLifecycleIntegrationTest {
                 ServiceModuleConfig(
                     "clone",
                     strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
-                    baseRef = "origin/master",
+                    masterBranch = "origin/master",
                 ),
             ),
         )
@@ -194,7 +194,7 @@ class WorkspaceLifecycleIntegrationTest {
                 ServiceModuleConfig(
                     "clone",
                     strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
-                    baseRef = "origin/master",
+                    masterBranch = "origin/master",
                 ),
             ),
         )
@@ -289,7 +289,7 @@ class WorkspaceLifecycleIntegrationTest {
             id = "clone-owner",
             repositoryId = repository.id,
             displayName = "clone-owner",
-            modules = listOf(ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/master")),
+            modules = listOf(ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, masterBranch = "origin/master")),
         )
         val taskRoot = temporary.resolve("clone-owner-tasks")
         val config = AppConfig(

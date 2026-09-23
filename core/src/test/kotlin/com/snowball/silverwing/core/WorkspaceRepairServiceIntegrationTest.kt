@@ -186,7 +186,7 @@ class WorkspaceRepairServiceIntegrationTest {
             WorkspaceStrategy.STANDARD_WORKTREE -> GroupServiceConfig.standard("service", "repo", "Service")
             WorkspaceStrategy.INDEPENDENT_CLONE -> GroupServiceConfig(
                 id = "service", repositoryId = "repo", displayName = "Service",
-                modules = listOf(ServiceModuleConfig("default", strategy = strategy, baseRef = "origin/master")),
+                modules = listOf(ServiceModuleConfig("default", strategy = strategy, masterBranch = "origin/master")),
             )
         }
         val taskRoot = root.resolve("tasks")

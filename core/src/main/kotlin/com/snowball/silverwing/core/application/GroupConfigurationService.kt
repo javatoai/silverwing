@@ -67,20 +67,6 @@ class GroupConfigurationService(
         config.copy(groups = config.groups.replaceGroup(groupId) { it.copy(tagEnabled = enabled) })
     }
 
-    fun updateGroupDefaults(
-        groupId: String,
-        defaultBranchPrefix: String,
-        defaultWorkspaceToolIds: List<String>,
-    ): AppConfig = update { config ->
-        val prefix = defaultBranchPrefix.trim()
-        val toolIds = defaultWorkspaceToolIds.map(String::trim).filter(String::isNotEmpty).distinct()
-        config.copy(
-            groups = config.groups.replaceGroup(groupId) {
-                it.copy(defaultBranchPrefix = prefix, defaultWorkspaceToolIds = toolIds)
-            },
-        )
-    }
-
     fun addRepository(
         groupId: String,
         selectedDirectory: Path,
@@ -101,20 +87,19 @@ class GroupConfigurationService(
                     repositoryId = repository.id,
                     displayName = repository.name,
                     developmentTool = config.defaultDevelopmentTool,
-                    baseRef = "origin/${repository.defaultRemoteBranch ?: "master"}",
+                    masterBranch = "origin/${repository.defaultRemoteBranch ?: "master"}",
                 )
                 WorkspaceStrategy.INDEPENDENT_CLONE -> GroupServiceConfig(
                     id = "service-${repository.id.removePrefix("repo-")}",
                     repositoryId = repository.id,
                     displayName = repository.name,
                     developmentTool = config.defaultDevelopmentTool,
+                    masterBranch = repository.defaultRemoteBranch?.let { "origin/$it" }
+                        ?: throw IllegalArgumentException("无法确定 origin 的默认远程分支，请先设置 origin/HEAD"),
                     modules = listOf(ServiceModuleConfig(
                         id = "clone-default",
                         name = "default",
                         strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
-                        baseRef = repository.defaultRemoteBranch?.let { "origin/$it" }
-                            ?: throw IllegalArgumentException("无法确定 origin 的默认远程分支，请先设置 origin/HEAD"),
-                        baseRemote = "origin",
                         tagEnabled = false,
                     )),
                 )
@@ -220,7 +205,7 @@ class GroupConfigurationService(
         repositoryId = repository.id,
         displayName = repository.name,
         developmentTool = developmentTool,
-        baseRef = "origin/${repository.defaultRemoteBranch ?: "master"}",
+        masterBranch = "origin/${repository.defaultRemoteBranch ?: "master"}",
     )
 }
 

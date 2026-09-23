@@ -11,10 +11,29 @@ class TaskModuleBranchDraftTest {
         repositoryId = "repo",
         displayName = "Backend",
         modules = listOf(
-            ServiceModuleConfig(id = "api", name = "api", baseRef = "origin/master"),
-            ServiceModuleConfig(id = "job", name = "jobs/nightly", baseRef = "origin/master"),
+            ServiceModuleConfig(id = "api", name = "api", masterBranch = "origin/master"),
+            ServiceModuleConfig(id = "job", name = "jobs/nightly", masterBranch = "origin/master"),
         ),
     )
+
+    @Test
+    fun `task drafts resolve current inherited master and test tag targets`() {
+        val inherited = service.copy(
+            masterBranch = "upstream/main",
+            testTagBaselineRef = "origin/qa",
+            modules = listOf(ServiceModuleConfig(id = "api", name = "api")),
+        )
+
+        val draft = configuredTaskModuleDrafts(inherited, "feature/REQ-1").single()
+        assertEquals("upstream/main", draft.baseRef)
+        assertEquals("upstream", draft.baseRemote)
+        assertEquals("origin/qa", draft.tagTargetRef)
+
+        val changed = inherited.copy(masterBranch = "origin/develop", testTagBaselineRef = "upstream/release/test")
+        val updated = configuredTaskModuleDrafts(changed, "feature/REQ-2").single()
+        assertEquals("origin/develop", updated.baseRef)
+        assertEquals("upstream/release/test", updated.tagTargetRef)
+    }
 
     @Test
     fun `multi module targets are independent even when base refs match`() {

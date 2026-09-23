@@ -84,4 +84,7 @@ class CodexExtensionsApplicationService(
 
     fun uninstallSkill(source: SkillSource, skillName: String): ExternalSkillSourceSnapshot =
         extensions.uninstallSkill(source, skillName)
+
+    /** Deletes one safely identified local Skill and preserves a recoverable backup. */
+    fun uninstallLocalSkill(directoryName: String) = extensions.uninstallLocalSkill(directoryName)
 }

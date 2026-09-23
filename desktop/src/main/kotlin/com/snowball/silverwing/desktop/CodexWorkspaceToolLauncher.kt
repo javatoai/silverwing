@@ -44,7 +44,7 @@ class CodexWorkspaceToolLauncher(
     override val descriptor = TaskWorkspaceToolDescriptor(
         id = ID,
         displayName = "Codex",
-        description = "任务完成后在 Codex 中打开任务目录",
+        description = "任务创建完成后在 Codex 中打开任务目录",
     )
 
     override fun availability(): TaskWorkspaceToolAvailability = TaskWorkspaceToolAvailability.Available

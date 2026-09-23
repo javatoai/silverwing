@@ -30,6 +30,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.mikepenz.markdown.compose.Markdown
@@ -98,6 +99,34 @@ internal fun MarkdownDocumentPreview(
     when (mode) {
         MarkdownPreviewMode.RENDERED -> MarkdownRenderedContent(content, modifier)
         MarkdownPreviewMode.SOURCE -> MarkdownSourceContent(content, modifier)
+    }
+}
+
+/** Reusable read-only source viewer for scripts and other plain-text documents. */
+@Composable
+internal fun PlainTextDocumentPreview(
+    content: String,
+    modifier: Modifier = Modifier,
+    onCopySource: (() -> Unit)? = null,
+) {
+    Column(modifier) {
+        onCopySource?.let { copy ->
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ActionIconButton(
+                    label = "复制文件内容",
+                    onClick = copy,
+                    modifier = Modifier.size(30.dp),
+                    enabled = content.isNotEmpty(),
+                ) {
+                    Icon(Icons.Outlined.ContentCopy, "复制文件内容", Modifier.size(16.dp))
+                }
+            }
+        }
+        MarkdownSourceContent(content, Modifier.weight(1f).fillMaxWidth())
     }
 }
 
@@ -182,6 +211,39 @@ internal fun MarkdownPreviewToolbarActions(
     }
 }
 
+/** One compact file identity row with room for the caller's preview actions. */
+@Composable
+internal fun DocumentPreviewFileHeader(
+    fileName: String?,
+    relativePath: String,
+    modifier: Modifier = Modifier,
+    actions: @Composable () -> Unit,
+) {
+    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).padding(end = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            fileName?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Text(
+                relativePath,
+                style = if (fileName == null) MaterialTheme.typography.labelMedium else MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        actions()
+    }
+}
+
 /**
  * Reusable horizontal document selector. It keeps the selected file while its content refreshes,
  * and falls back to the first file only if the selected path is no longer present.
@@ -221,16 +283,11 @@ internal fun MarkdownFileTabsPreview(
                 }
             }
         }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                selectedFile.path,
-                Modifier.weight(1f),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontFamily = FontFamily.Monospace,
-                style = MaterialTheme.typography.labelMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+        DocumentPreviewFileHeader(
+            fileName = null,
+            relativePath = selectedFile.path,
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp),
+        ) {
             MarkdownPreviewToolbarActions(
                 mode = mode,
                 onModeChange = { mode = it },

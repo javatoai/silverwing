@@ -293,9 +293,9 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
             }
             WorkspaceCommandDialog(controller, task)
             if (failedTools.isNotEmpty()) {
-                SectionHeader("工作区工具打开失败", "任务创建不受影响，可单独重试失败工具")
+                SectionHeader("工作区工具打开失败")
                 failedTools.forEach { launch ->
-                    val option = controller.workspaceToolOptions(task.groupId).firstOrNull { it.id == launch.toolId }
+                    val option = controller.workspaceToolOptions().firstOrNull { it.id == launch.toolId }
                     OutlinedCard(Modifier.fillMaxWidth()) {
                         Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
@@ -321,7 +321,7 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
                 }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            SectionHeader("任务人工说明", "保存到 TASK-RULES.md；需求和 Worktree 变动不会重写根 AGENTS.md")
+            SectionHeader("任务人工说明")
             if (templates.isNotEmpty()) {
                 Text(
                     "从模板填充（单选）",
@@ -588,8 +588,8 @@ private fun WorkspaceModuleRemovalDialog(
                         buildString {
                             appendLine("路径：${preview.workspacePath}")
                             appendLine("分支：${preview.branch}")
-                            appendLine("基础分支：${preview.baseRef.orEmpty()}")
-                            appendLine("相对基础分支：ahead ${preview.commitsAheadOfBase} / behind ${preview.commitsBehindBase}")
+                            appendLine("主分支：${preview.baseRef.orEmpty()}")
+                            appendLine("相对主分支：ahead ${preview.commitsAheadOfBase} / behind ${preview.commitsBehindBase}")
                             appendLine("未推送提交：${preview.unpushedCommits}")
                             if (preview.changedFiles.isNotEmpty()) {
                                 appendLine("未提交文件：")
@@ -846,7 +846,6 @@ private fun TaskAgentsPreviewDialog(
             Column(Modifier.fillMaxSize()) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("Agent 文件预览", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-                    MetaPill("与保存后内容一致")
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Surface(

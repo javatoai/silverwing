@@ -141,13 +141,13 @@ class WorkspaceModuleRemovalService(
             val actualBranch = git.currentBranch(target) ?: error("Detached HEAD 工作区不能自动删除")
             require(actualBranch == workspace.branch) { "当前分支与任务记录不一致：$actualBranch != ${workspace.branch}" }
             require(git.status(target).operationInProgress == null) { "存在进行中的 Git 操作，完成或中止后再删除" }
-            val baseRef = workspace.baseRef ?: error("任务记录缺少基础分支，无法可靠检查删除风险")
+            val baseRef = workspace.baseRef ?: error("任务记录缺少主分支，无法可靠检查删除风险")
             val parsedBase = RemoteBranchRef.parse(baseRef)
             git.fetch(target, parsedBase.remote)
-            require(git.refExists(target, "refs/remotes/$baseRef")) { "远程基础分支不存在：$baseRef" }
+            require(git.refExists(target, "refs/remotes/$baseRef")) { "远程主分支不存在：$baseRef" }
             val counts = git.run(target, "rev-list", "--left-right", "--count", "$baseRef...HEAD").stdout.trim()
                 .split(Regex("\\s+"))
-            require(counts.size == 2) { "无法读取当前 HEAD 相对基础分支的差异" }
+            require(counts.size == 2) { "无法读取当前 HEAD 相对主分支的差异" }
             val status = git.status(target)
             val files = git.run(target, "status", "--short", "--untracked-files=all").stdout
                 .lineSequence().filter(String::isNotBlank).toList()

@@ -27,6 +27,21 @@ interface CommandRunner {
     ): CommandResult
 
     /**
+     * Runs a command while explicitly removing selected inherited environment variables.
+     *
+     * The overload preserves lightweight existing [CommandRunner] test doubles: only
+     * [ProcessCommandRunner] needs to act on removals, while old implementations keep
+     * their previous behavior unless a caller opts into this controlled path.
+     */
+    fun run(
+        command: List<String>,
+        workingDirectory: Path? = null,
+        timeout: Duration = Duration.ofMinutes(10),
+        environment: Map<String, String> = emptyMap(),
+        environmentToRemove: Set<String>,
+    ): CommandResult = run(command, workingDirectory, timeout, environment)
+
+    /**
      * 以显式 UTF-8 标准输入启动命令。
      *
      * 绝大多数既有命令不需要输入；默认抛错实现既保持轻量测试替身兼容，也要求传递
@@ -39,6 +54,16 @@ interface CommandRunner {
         timeout: Duration = Duration.ofMinutes(10),
         environment: Map<String, String> = emptyMap(),
     ): CommandResult = throw UnsupportedOperationException("当前命令执行器不支持标准输入")
+
+    /** Equivalent controlled-environment overload for commands that receive standard input. */
+    fun runWithInput(
+        command: List<String>,
+        input: String,
+        workingDirectory: Path? = null,
+        timeout: Duration = Duration.ofMinutes(10),
+        environment: Map<String, String> = emptyMap(),
+        environmentToRemove: Set<String>,
+    ): CommandResult = runWithInput(command, input, workingDirectory, timeout, environment)
 }
 
 interface StreamingCommandRunner : CommandRunner {
@@ -49,6 +74,16 @@ interface StreamingCommandRunner : CommandRunner {
         environment: Map<String, String> = emptyMap(),
         onOutput: (CommandOutputLine) -> Unit,
     ): CommandResult
+
+    /** Controlled-environment overload for live process output. */
+    fun runStreaming(
+        command: List<String>,
+        workingDirectory: Path? = null,
+        timeout: Duration = Duration.ofMinutes(10),
+        environment: Map<String, String> = emptyMap(),
+        onOutput: (CommandOutputLine) -> Unit,
+        environmentToRemove: Set<String>,
+    ): CommandResult = runStreaming(command, workingDirectory, timeout, environment, onOutput)
 }
 
 class ProcessCommandRunner : StreamingCommandRunner {
@@ -57,7 +92,15 @@ class ProcessCommandRunner : StreamingCommandRunner {
         workingDirectory: Path?,
         timeout: Duration,
         environment: Map<String, String>,
-    ): CommandResult = runInternal(command, workingDirectory, timeout, environment, null, null)
+    ): CommandResult = runInternal(command, workingDirectory, timeout, environment, emptySet(), null, null)
+
+    override fun run(
+        command: List<String>,
+        workingDirectory: Path?,
+        timeout: Duration,
+        environment: Map<String, String>,
+        environmentToRemove: Set<String>,
+    ): CommandResult = runInternal(command, workingDirectory, timeout, environment, environmentToRemove, null, null)
 
     override fun runWithInput(
         command: List<String>,
@@ -65,7 +108,16 @@ class ProcessCommandRunner : StreamingCommandRunner {
         workingDirectory: Path?,
         timeout: Duration,
         environment: Map<String, String>,
-    ): CommandResult = runInternal(command, workingDirectory, timeout, environment, null, input)
+    ): CommandResult = runInternal(command, workingDirectory, timeout, environment, emptySet(), null, input)
+
+    override fun runWithInput(
+        command: List<String>,
+        input: String,
+        workingDirectory: Path?,
+        timeout: Duration,
+        environment: Map<String, String>,
+        environmentToRemove: Set<String>,
+    ): CommandResult = runInternal(command, workingDirectory, timeout, environment, environmentToRemove, null, input)
 
     override fun runStreaming(
         command: List<String>,
@@ -73,13 +125,23 @@ class ProcessCommandRunner : StreamingCommandRunner {
         timeout: Duration,
         environment: Map<String, String>,
         onOutput: (CommandOutputLine) -> Unit,
-    ): CommandResult = runInternal(command, workingDirectory, timeout, environment, onOutput, null)
+    ): CommandResult = runInternal(command, workingDirectory, timeout, environment, emptySet(), onOutput, null)
+
+    override fun runStreaming(
+        command: List<String>,
+        workingDirectory: Path?,
+        timeout: Duration,
+        environment: Map<String, String>,
+        onOutput: (CommandOutputLine) -> Unit,
+        environmentToRemove: Set<String>,
+    ): CommandResult = runInternal(command, workingDirectory, timeout, environment, environmentToRemove, onOutput, null)
 
     private fun runInternal(
         command: List<String>,
         workingDirectory: Path?,
         timeout: Duration,
         environment: Map<String, String>,
+        environmentToRemove: Set<String>,
         onOutput: ((CommandOutputLine) -> Unit)?,
         input: String?,
     ): CommandResult {
@@ -89,7 +151,8 @@ class ProcessCommandRunner : StreamingCommandRunner {
         val process = ProcessBuilder(command)
             .directory(workingDirectory?.toFile())
             .apply {
-                environment().putAll(environment)
+                val processEnvironment = environment()
+                applyCommandEnvironment(processEnvironment, environment, environmentToRemove)
                 redirectInput(ProcessBuilder.Redirect.PIPE)
             }
             .start()
@@ -215,11 +278,11 @@ class ProcessCommandRunner : StreamingCommandRunner {
     }
 
     private fun observeDescendants(process: Process, observedProcesses: MutableSet<ProcessHandle>) {
-        observedProcesses += process.toHandle().descendants().toList()
+        observedProcesses += process.toHandle().descendants().filter(::isCommandDescendant).toList()
     }
 
     private fun destroyProcessTree(process: Process, observedProcesses: Set<ProcessHandle>) {
-        process.toHandle().descendants().toList().asReversed().forEach { descendant ->
+        process.toHandle().descendants().filter(::isCommandDescendant).toList().asReversed().forEach { descendant ->
             descendant.destroy()
         }
         observedProcesses.toList().asReversed().forEach { descendant ->
@@ -233,12 +296,20 @@ class ProcessCommandRunner : StreamingCommandRunner {
         val handles = linkedSetOf<ProcessHandle>().apply {
             add(process.toHandle())
             addAll(observedProcesses)
-            addAll(process.toHandle().descendants().toList())
-            observedProcesses.forEach { addAll(it.descendants().toList()) }
+            addAll(process.toHandle().descendants().filter(::isCommandDescendant).toList())
+            observedProcesses.forEach { addAll(it.descendants().filter(::isCommandDescendant).toList()) }
         }
         handles.toList().asReversed().forEach { handle ->
             if (handle.isAlive) handle.destroyForcibly()
         }
+    }
+
+    private fun isCommandDescendant(handle: ProcessHandle): Boolean {
+        if (!System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) return true
+        // Windows may keep a console host alive after the launched command exits.
+        // It is OS infrastructure, not part of the command whose completion we await or kill.
+        val executable = handle.info().command().orElse("").replace('\\', '/').substringAfterLast('/')
+        return !executable.equals("conhost.exe", ignoreCase = true)
     }
 
     companion object {
@@ -248,4 +319,24 @@ class ProcessCommandRunner : StreamingCommandRunner {
         // timeout can reliably tear down the process tree.
         private val PROCESS_WAIT_POLL_NANOS = TimeUnit.MILLISECONDS.toNanos(10)
     }
+}
+
+/**
+ * Applies a controlled environment policy without mutating the parent JVM.
+ *
+ * Matching removals case-insensitively is necessary on Windows, whose process
+ * environment is case-insensitive even though [MutableMap] itself is not.
+ */
+internal fun applyCommandEnvironment(
+    processEnvironment: MutableMap<String, String>,
+    additions: Map<String, String>,
+    removals: Set<String>,
+) {
+    removals.forEach { requestedName ->
+        processEnvironment.keys
+            .filter { actualName -> actualName.equals(requestedName, ignoreCase = true) }
+            .toList()
+            .forEach(processEnvironment::remove)
+    }
+    processEnvironment.putAll(additions)
 }

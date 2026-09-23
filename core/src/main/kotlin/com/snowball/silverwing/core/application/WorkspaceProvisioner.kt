@@ -88,7 +88,7 @@ private fun resolvedModuleDisplayNames(request: WorkspaceProvisionRequest): Map<
                 ?: ModuleDisplayNaming.resolve(
                     module.name,
                     request.service.displayName,
-                    module.baseRef,
+                    request.service.effectiveMasterBranch(module),
                     request.service.modules.size,
                 )
             )
@@ -166,8 +166,8 @@ class WorkspaceBranchReuseInspector(
         module: ServiceModuleConfig,
         target: String,
     ): BranchReuseConflict? {
-        val base = RemoteBranchRef.parse(module.baseRef)
-        require(remoteHeadExists(git, repository, base.remote, base.branch)) { "远程基础分支不存在：${base.remote}/${base.branch}" }
+        val base = RemoteBranchRef.parse(service.effectiveMasterBranch(module))
+        require(remoteHeadExists(git, repository, base.remote, base.branch)) { "远程主分支不存在：${base.remote}/${base.branch}" }
         if (target.isBlank()) return null
         val targetSha = remoteHeadSha(git, repository, base.remote, target) ?: return null
         return BranchReuseConflict(
@@ -191,9 +191,10 @@ class WorkspaceBranchReuseInspector(
         repositoryPath: Path,
     ): BranchReuseConflict? {
         require(branch.isNotBlank()) { "Worktree 模块目标分支不能为空：${module.name}" }
-        git.fetch(repositoryPath, module.baseRemote)
-        val featureRemotes = branchReuseRemotes(module)
-        featureRemotes.filter { it != module.baseRemote }.forEach { git.fetch(repositoryPath, it) }
+        val masterRemote = service.effectiveMasterRemote(module)
+        git.fetch(repositoryPath, masterRemote)
+        val featureRemotes = branchReuseRemotes(service, module)
+        featureRemotes.filter { it != masterRemote }.forEach { git.fetch(repositoryPath, it) }
         val localSha = git.run(repositoryPath, "rev-parse", "--verify", "refs/heads/$branch", check = false)
             .takeIf(CommandResult::succeeded)?.stdout?.trim()?.ifBlank { null }
         val localExists = localSha != null
@@ -208,7 +209,7 @@ class WorkspaceBranchReuseInspector(
             key = BranchReuseKey(repository.id, branch, branchReuseFingerprint(localSha, remoteRefs, occupied)),
             serviceId = service.id,
             serviceName = service.displayName,
-            moduleName = ModuleDisplayNaming.resolve(module.name, service.displayName, module.baseRef, service.modules.size),
+            moduleName = ModuleDisplayNaming.resolve(module.name, service.displayName, service.effectiveMasterBranch(module), service.modules.size),
             localExists = localExists,
             remoteRefs = remoteRefs.map(Pair<String, String>::first),
             occupiedWorktreePaths = occupied.map { it.path.toString() },
@@ -265,13 +266,15 @@ class StandardWorktreeProvisioner(
                 val branch = branches.getValue(module.id)
                 val target = request.taskDirectory.resolve(WorkspaceLayout.moduleDirectoryName(request.service, module)).toAbsolutePath().normalize()
                 require(target.parent == request.taskDirectory.toAbsolutePath().normalize()) { "Worktree 必须位于任务目录的直接子级" }
-                git.fetch(repositoryPath, module.baseRemote)
-                val baseBranch = TaskBranchNaming.normalizeBaseRef(module)
-                val remoteBaseRef = "${module.baseRemote}/$baseBranch"
-                require(git.refExists(repositoryPath, "refs/remotes/$remoteBaseRef")) { "远程基础分支不存在：$remoteBaseRef" }
+                val masterBranch = request.service.effectiveMasterBranch(module)
+                val masterRemote = request.service.effectiveMasterRemote(module)
+                git.fetch(repositoryPath, masterRemote)
+                val baseBranch = TaskBranchNaming.normalizeBaseRef(masterBranch)
+                val remoteBaseRef = "$masterRemote/$baseBranch"
+                require(git.refExists(repositoryPath, "refs/remotes/$remoteBaseRef")) { "远程主分支不存在：$remoteBaseRef" }
                 require(git.run(repositoryPath, "check-ref-format", "--branch", branch, check = false).succeeded) { "分支名不合法：$branch" }
-                val featureRemotes = branchReuseRemotes(module)
-                featureRemotes.filter { it != module.baseRemote }.forEach { git.fetch(repositoryPath, it) }
+                val featureRemotes = branchReuseRemotes(request.service, module)
+                featureRemotes.filter { it != masterRemote }.forEach { git.fetch(repositoryPath, it) }
                 val localSha = git.run(repositoryPath, "rev-parse", "--verify", "refs/heads/$branch", check = false)
                     .takeIf(CommandResult::succeeded)?.stdout?.trim()?.ifBlank { null }
                 val localExists = localSha != null
@@ -296,7 +299,7 @@ class StandardWorktreeProvisioner(
                 when {
                     localExists -> git.addExistingWorktree(repositoryPath, target, branch, forceAttach)
                     remoteBranches.isNotEmpty() -> git.addTrackedRemoteWorktree(repositoryPath, target, branch, remoteBranches.first().first.substringBefore('/'))
-                    else -> git.addWorktree(repositoryPath, target, branch, remoteBaseRef, module.baseRemote)
+                    else -> git.addWorktree(repositoryPath, target, branch, remoteBaseRef, masterRemote)
                 }
                 val branchCreatedByTask = !localExists
                 created += CreatedStandardWorktree(target, branch, branchCreatedByTask)
@@ -313,7 +316,7 @@ class StandardWorktreeProvisioner(
                     groupServiceId = request.service.id,
                     moduleId = module.id,
                     moduleName = request.moduleDisplayNames[module.id]
-                        ?: ModuleDisplayNaming.resolve(module.name, request.service.displayName, module.baseRef, request.service.modules.size),
+                        ?: ModuleDisplayNaming.resolve(module.name, request.service.displayName, masterBranch, request.service.modules.size),
                     strategy = strategy,
                     moduleSource = request.moduleSources[module.id] ?: TaskModuleSource.CONFIGURED,
                     originUrl = request.repository.originUrl,
@@ -321,11 +324,11 @@ class StandardWorktreeProvisioner(
                     targetBranch = branch,
                     tagEnabled = module.tagEnabled,
                     tagMode = module.tagMode,
-                    tagTargetRef = module.tagTargetRef,
+                    tagTargetRef = request.service.effectiveTagTargetRef(module),
                     tagMessagePrefix = module.tagMessagePrefix,
                     branchCreatedByTask = branchCreatedByTask,
                     forceWorktreeAttach = forceAttach,
-                    pushRemote = module.baseRemote,
+                    pushRemote = masterRemote,
                 )
             }
         } catch (error: Throwable) {
@@ -357,10 +360,10 @@ class StandardWorktreeProvisioner(
     }
 }
 
-private fun branchReuseRemotes(module: ServiceModuleConfig): List<String> = buildList {
-    add(module.baseRemote)
+private fun branchReuseRemotes(service: GroupServiceConfig, module: ServiceModuleConfig): List<String> = buildList {
+    add(service.effectiveMasterRemote(module))
     if (module.tagEnabled && module.tagMode == TagBuildMode.MERGE_TO_TARGET_BRANCH) {
-        add(RemoteBranchRef.parse(requireNotNull(module.tagTargetRef)).remote)
+        add(RemoteBranchRef.parse(requireNotNull(service.effectiveTagTargetRef(module))).remote)
     }
 }.distinct()
 
@@ -376,14 +379,15 @@ class IndependentCloneProvisioner(
         val createdTargets = mutableListOf<Pair<Path, String>>()
         try {
             request.service.modules.forEach { module ->
-                val base = RemoteBranchRef.parse(module.baseRef)
+                val masterBranch = request.service.effectiveMasterBranch(module)
+                val base = RemoteBranchRef.parse(masterBranch)
                 val sourceUrl = sourceRemoteUrl(git, request.repository, base.remote)
                 val requestedTarget = request.moduleBranches[module.id]?.trim().orEmpty().ifBlank { null }
                 val target = request.taskDirectory.resolve(WorkspaceLayout.moduleDirectoryName(request.service, module)).toAbsolutePath().normalize()
                 require(target.parent == request.taskDirectory.toAbsolutePath().normalize()) { "独立克隆必须位于任务目录的直接子级" }
                 require(!Files.exists(target)) { "目标目录已存在：$target" }
                 require(remoteHeadExists(git, request.repository, base.remote, base.branch)) {
-                    "远程基础分支不存在：${base.remote}/${base.branch}"
+                    "远程主分支不存在：${base.remote}/${base.branch}"
                 }
                 val targetSha = requestedTarget?.let { remoteHeadSha(git, request.repository, base.remote, it) }
                 val targetExists = targetSha != null
@@ -430,18 +434,18 @@ class IndependentCloneProvisioner(
                     groupServiceId = request.service.id,
                     moduleId = module.id,
                     moduleName = request.moduleDisplayNames[module.id]
-                        ?: ModuleDisplayNaming.resolve(module.name, request.service.displayName, module.baseRef, request.service.modules.size),
+                        ?: ModuleDisplayNaming.resolve(module.name, request.service.displayName, masterBranch, request.service.modules.size),
                     strategy = strategy,
                     moduleSource = request.moduleSources[module.id] ?: TaskModuleSource.CONFIGURED,
                     originUrl = sourceUrl,
-                    baseRef = module.baseRef,
+                    baseRef = masterBranch,
                     targetBranch = requestedTarget,
                     tagEnabled = module.tagEnabled,
                     tagMode = module.tagMode,
-                    tagTargetRef = module.tagTargetRef,
+                    tagTargetRef = request.service.effectiveTagTargetRef(module),
                     tagMessagePrefix = module.tagMessagePrefix,
                     // The selected source URL is deliberately named `origin` in every new clone.
-                    // Source selection is preserved by baseRef/baseRemote for diagnostics and repair.
+                    // The task snapshot keeps the original qualified master branch in baseRef.
                     pushRemote = "origin",
                 )
             }

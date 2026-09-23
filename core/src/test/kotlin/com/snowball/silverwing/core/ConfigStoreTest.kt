@@ -11,6 +11,8 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.util.zip.ZipInputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import kotlin.test.assertFailsWith
 
 class ConfigStoreTest {
@@ -33,7 +35,7 @@ class ConfigStoreTest {
     }
 
     @Test
-    fun `missing configuration initializes all strict schema two shards`() {
+    fun `missing configuration initializes all strict schema six shards`() {
         val paths = ApplicationPaths(temporary.resolve("home"))
         val store = ConfigStore(paths)
 
@@ -44,9 +46,14 @@ class ConfigStoreTest {
         assertEquals(listOf(DEFAULT_GROUP_NAME), config.groups.map { it.name })
         assertFalse(config.aiRequirementNamingEnabled)
         assertEquals(RequirementAiNamingModel.DEFAULT, config.aiRequirementNamingModel)
+        assertEquals(null, config.commandProxyUrl)
+        assertEquals(null, config.commandProxyNoProxy)
+        assertEquals(null, config.commandProxyUsername)
+        assertEquals(null, config.commandProxyPassword)
+        assertTrue(config.commandProxyTargets.isEmpty())
         assertEquals(EXPECTED_SHARDS, shardNames(paths))
         EXPECTED_SHARDS.forEach { name ->
-            assertTrue(Files.readString(paths.config.resolve(name)).contains("\"schema\": 2"), name)
+            assertTrue(Files.readString(paths.config.resolve(name)).contains("\"schema\": 6"), name)
         }
     }
 
@@ -61,15 +68,17 @@ class ConfigStoreTest {
         )
         val expected = AppConfig(
             taskRoot = "D:/tasks",
+            defaultBranchPrefix = "feature/pay-",
             repositories = listOf(repository),
             groups = listOf(
                 GroupConfig(
                     id = "payments",
                     name = "支付",
                     tagEnabled = false,
-                    defaultBranchPrefix = "feature/pay-",
-                    defaultWorkspaceToolIds = listOf("codex"),
-                    services = listOf(GroupServiceConfig.standard("api", repository.id, "支付 API")),
+                    services = listOf(GroupServiceConfig.standard("api", repository.id, "支付 API").copy(
+                        masterBranch = "origin/develop",
+                        testTagBaselineRef = "origin/qa",
+                    )),
                 ),
             ),
             theme = ThemePreference.DARK,
@@ -79,6 +88,7 @@ class ConfigStoreTest {
             developmentTools = listOf(DevelopmentToolConfig(DevelopmentToolType.VISUAL_STUDIO_CODE, "D:/tools/Code.exe")),
             defaultDevelopmentTool = DevelopmentToolType.VISUAL_STUDIO_CODE,
             allowTemporaryDevelopmentToolSelection = true,
+            defaultWorkspaceToolIds = listOf("codex"),
             showTaskDetailGitActionGroup = true,
             showTaskDetailPathActionGroup = true,
             showWorkspaceGitActionGroup = true,
@@ -91,6 +101,11 @@ class ConfigStoreTest {
             meegleProjects = listOf(MeegleProjectConfig("PAY", "pay")),
             meegleExecutablePath = "D:/tools/meegle.exe",
             codexExecutablePath = "D:/tools/codex.exe",
+            commandProxyUrl = "http://127.0.0.1:7890",
+            commandProxyNoProxy = "localhost,*.internal",
+            commandProxyUsername = "proxy-user",
+            commandProxyPassword = "proxy-password",
+            commandProxyTargets = setOf(CommandProxyTarget.CODEX, CommandProxyTarget.GIT),
             larkExecutablePath = "D:/tools/lark-cli.cmd",
             gitExecutablePath = "D:/tools/git.exe",
             genbuExecutablePath = "D:/tools/genbu.exe",
@@ -111,11 +126,26 @@ class ConfigStoreTest {
 
         assertEquals(expected, ConfigStore(paths).load())
         assertTrue(Files.readString(paths.config.resolve("layout.json")).contains("payments"))
+        assertFalse(Files.readString(paths.config.resolve("layout.json")).contains("defaultBranchPrefix"))
+        assertFalse(Files.readString(paths.config.resolve("layout.json")).contains("defaultWorkspaceToolIds"))
+        assertTrue(Files.readString(paths.config.resolve("workspace.json")).contains("\"defaultBranchPrefix\": \"feature/pay-\""))
+        assertTrue(Files.readString(paths.config.resolve("tools.json")).contains("\"defaultWorkspaceToolIds\": ["))
         assertTrue(Files.readString(paths.config.resolve("services.json")).contains("支付 API"))
+        assertTrue(Files.readString(paths.config.resolve("services.json")).contains("\"masterBranch\": \"origin/develop\""))
+        assertTrue(Files.readString(paths.config.resolve("services.json")).contains("\"testTagBaselineRef\": \"origin/qa\""))
+        assertTrue(Files.readString(paths.config.resolve("services.json")).contains("\"masterBranch\": null"))
+        assertFalse(Files.readString(paths.config.resolve("services.json")).contains("\"historyBaselineRef\""))
+        assertFalse(Files.readString(paths.config.resolve("services.json")).contains("\"baseRef\""))
+        assertFalse(Files.readString(paths.config.resolve("services.json")).contains("\"baseRemote\""))
         assertTrue(Files.readString(paths.config.resolve("integrations.json")).contains("team-marketplace"))
         assertTrue(Files.readString(paths.config.resolve("integrations.json")).contains("\"aiRequirementNamingEnabled\": true"))
         assertTrue(Files.readString(paths.config.resolve("integrations.json")).contains("\"aiRequirementNamingModel\": \"gpt-5.6-sol\""))
         assertTrue(Files.readString(paths.config.resolve("integrations.json")).contains("\"codexExecutablePath\": \"D:/tools/codex.exe\""))
+        assertTrue(Files.readString(paths.config.resolve("integrations.json")).contains("\"commandProxyUrl\": \"http://127.0.0.1:7890\""))
+        assertTrue(Files.readString(paths.config.resolve("integrations.json")).contains("\"commandProxyNoProxy\": \"localhost,*.internal\""))
+        assertTrue(Files.readString(paths.config.resolve("integrations.json")).contains("\"commandProxyUsername\": \"proxy-user\""))
+        assertTrue(Files.readString(paths.config.resolve("integrations.json")).contains("\"commandProxyPassword\": \"proxy-password\""))
+        assertTrue(Files.readString(paths.config.resolve("integrations.json")).contains("\"commandProxyTargets\""))
     }
 
     @Test
@@ -168,9 +198,9 @@ class ConfigStoreTest {
 
         val tag = paths.config.resolve("tag.json")
         val original = Files.readString(tag)
-        Files.writeString(tag, original.replace("\"schema\": 2", "\"schema\": 1"))
+        Files.writeString(tag, original.replace("\"schema\": 6", "\"schema\": 5"))
         assertFailsWith<UnsupportedConfigVersionException> { store.load() }
-        assertEquals(original.replace("\"schema\": 2", "\"schema\": 1"), Files.readString(tag))
+        assertEquals(original.replace("\"schema\": 6", "\"schema\": 5"), Files.readString(tag))
 
         Files.writeString(tag, original.replace("\n}", ",\n  \"unknown\": true\n}"))
         assertThrows(SerializationException::class.java) { store.load() }
@@ -187,6 +217,67 @@ class ConfigStoreTest {
         assertEquals(missingAiNamingField, Files.readString(integrations))
 
         Files.writeString(integrations, originalIntegrations)
+        val missingProxyFields = originalIntegrations.replace(
+            Regex("\\s*\\\"commandProxyUrl\\\": null,\\r?\\n"),
+            "",
+        ).replace(
+            Regex("\\s*\\\"commandProxyTargets\\\": \\[\\],\\r?\\n"),
+            "",
+        )
+        Files.writeString(integrations, missingProxyFields)
+        assertFailsWith<IllegalArgumentException> { store.load() }
+        assertEquals(missingProxyFields, Files.readString(integrations))
+
+        Files.writeString(integrations, originalIntegrations)
+        val workspace = paths.config.resolve("workspace.json")
+        val originalWorkspace = Files.readString(workspace)
+        val missingBranchPrefix = originalWorkspace.replace(
+            "\"defaultBranchPrefix\"",
+            "\"missingBranchPrefix\"",
+        )
+        Files.writeString(workspace, missingBranchPrefix)
+        assertFailsWith<IllegalArgumentException> { store.load() }
+        assertEquals(missingBranchPrefix, Files.readString(workspace))
+
+        Files.writeString(workspace, originalWorkspace)
+        val tools = paths.config.resolve("tools.json")
+        val originalTools = Files.readString(tools)
+        val missingDefaultWorkspaceTools = originalTools.replace(
+            "\"defaultWorkspaceToolIds\"",
+            "\"missingDefaultWorkspaceToolIds\"",
+        )
+        Files.writeString(tools, missingDefaultWorkspaceTools)
+        assertFailsWith<IllegalArgumentException> { store.load() }
+        assertEquals(missingDefaultWorkspaceTools, Files.readString(tools))
+
+        Files.writeString(tools, originalTools)
+        val services = paths.config.resolve("services.json")
+        val withService = store.load().copy(
+            repositories = listOf(RepositoryConfig("repo", "仓库", "D:/repo", "D:/repo/.git")),
+            groups = listOf(GroupConfig(
+                id = "test",
+                name = "测试",
+                services = listOf(GroupServiceConfig.standard("service", "repo", "服务")),
+            )),
+        )
+        store.save(withService)
+        val serviceJson = Files.readString(services)
+        val missingServiceBaseline = serviceJson.replace(Regex("\\s*\\\"masterBranch\\\": \\\"origin/master\\\",\\r?\\n"), "")
+        Files.writeString(services, missingServiceBaseline)
+        assertFailsWith<SerializationException> { store.load() }
+        assertEquals(missingServiceBaseline, Files.readString(services))
+
+        val missingModuleMaster = serviceJson.replace(Regex("\\s*\\\"masterBranch\\\": null,\\r?\\n"), "")
+        Files.writeString(services, missingModuleMaster)
+        assertFailsWith<SerializationException> { store.load() }
+        assertEquals(missingModuleMaster, Files.readString(services))
+
+        val missingTestBaseline = serviceJson.replace(Regex("\\s*\\\"testTagBaselineRef\\\": \\\"origin/release/test\\\",\\r?\\n"), "")
+        Files.writeString(services, missingTestBaseline)
+        assertFailsWith<SerializationException> { store.load() }
+        assertEquals(missingTestBaseline, Files.readString(services))
+
+        Files.writeString(services, serviceJson)
         Files.delete(paths.config.resolve("tools.json"))
         assertFailsWith<IllegalArgumentException> { store.load() }
     }
@@ -217,6 +308,33 @@ class ConfigStoreTest {
     }
 
     @Test
+    fun `schema five archives are rejected without modifying current shards`() {
+        val paths = ApplicationPaths(temporary.resolve("archive-version"))
+        val store = ConfigStore(paths)
+        store.save(AppConfig(taskRoot = "D:/tasks"))
+        val before = shardBytes(paths)
+        val archive = store.exportTo(temporary.resolve("schema-six.zip"))
+        val oldArchive = temporary.resolve("schema-five.zip")
+        ZipInputStream(Files.newInputStream(archive)).use { input ->
+            ZipOutputStream(Files.newOutputStream(oldArchive)).use { output ->
+                while (true) {
+                    val entry = input.nextEntry ?: break
+                    val content = input.readAllBytes().toString(Charsets.UTF_8)
+                    output.putNextEntry(ZipEntry(entry.name))
+                    output.write(content.replace("\"schema\": 6", "\"schema\": 5").toByteArray())
+                    output.closeEntry()
+                    input.closeEntry()
+                }
+            }
+        }
+        assertFailsWith<UnsupportedConfigVersionException> { store.previewImport(oldArchive) }
+        assertFailsWith<UnsupportedConfigVersionException> { store.importFrom(oldArchive) }
+        before.forEach { (name, bytes) ->
+            assertTrue(bytes.contentEquals(Files.readAllBytes(paths.config.resolve(name))), name)
+        }
+    }
+
+    @Test
     fun `file snapshot exposes every shard without parsing`() {
         val paths = ApplicationPaths(temporary.resolve("snapshot"))
         val store = ConfigStore(paths)
@@ -237,7 +355,7 @@ class ConfigStoreTest {
         val store = ConfigStore(ApplicationPaths(temporary.resolve("version")))
 
         assertFailsWith<UnsupportedConfigVersionException> {
-            store.save(AppConfig(schemaVersion = "1.0.9"))
+            store.save(AppConfig(schemaVersion = "5.0.0"))
         }
         assertFalse(store.exists())
     }

@@ -716,8 +716,8 @@ class TaskController internal constructor(
         gitFilePreviews.preview(worktreePath, change)
     }
 
-    suspend fun workspaceGitHistory(worktreePath: String): List<WorkspaceGitCommit> = runInterruptible(ioDispatcher) {
-        gitHistory.read(Path.of(worktreePath).toAbsolutePath().normalize())
+    suspend fun workspaceGitHistory(worktreePath: String, baselineRef: String? = null): List<WorkspaceGitCommit> = runInterruptible(ioDispatcher) {
+        gitHistory.read(Path.of(worktreePath).toAbsolutePath().normalize(), baselineRef)
     }
 
     fun loadBatchGitPreviews(task: TaskManifest) {

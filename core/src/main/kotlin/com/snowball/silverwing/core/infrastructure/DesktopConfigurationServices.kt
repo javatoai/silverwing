@@ -97,7 +97,7 @@ class GitTaskBranchCatalog(private val git: GitClient = GitClient()) : TaskBranc
                     contexts += TaskBranchQueryContext(
                         serviceName = service.displayName,
                         root = root,
-                        remote = module.baseRemote,
+                        remote = service.effectiveMasterRemote(module),
                         workspaceKey = workspaceKey,
                         suffix = suffix,
                         singlePhysicalModule = service.modules.size == 1,

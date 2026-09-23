@@ -17,8 +17,13 @@ import com.snowball.silverwing.core.BranchReuseKey
 import com.snowball.silverwing.core.ConfigStore
 import com.snowball.silverwing.core.CodexExtensionsApplicationService
 import com.snowball.silverwing.core.CodexExtensionsService
+import com.snowball.silverwing.core.LocalSkillCatalogApplicationService
 import com.snowball.silverwing.core.CodexCommandSource
 import com.snowball.silverwing.core.CodexExecutable
+import com.snowball.silverwing.core.AutoDetectedCodexExecutable
+import com.snowball.silverwing.core.CommandProxyAuthentication
+import com.snowball.silverwing.core.CommandProxyEnvironmentProvider
+import com.snowball.silverwing.core.CommandProxyTarget
 import com.snowball.silverwing.core.ConfiguredCodexExecutable
 import com.snowball.silverwing.core.CURRENT_PRODUCT_VERSION
 import com.snowball.silverwing.core.DeleteRisk
@@ -37,6 +42,8 @@ import com.snowball.silverwing.core.GitWorkspaceLifecycle
 import com.snowball.silverwing.core.CommandRunner
 import com.snowball.silverwing.core.CommandVersionStatus
 import com.snowball.silverwing.core.ProcessCommandRunner
+import com.snowball.silverwing.core.ProxyTargetCommandRunner
+import com.snowball.silverwing.core.StreamingCommandRunner
 import com.snowball.silverwing.core.MeegleCommandSource
 import com.snowball.silverwing.core.MeegleRequirementAiContextProvider
 import com.snowball.silverwing.core.MeegleRequirementMetadataProvider
@@ -56,6 +63,7 @@ import com.snowball.silverwing.core.FeishuWorkItemLink
 import com.snowball.silverwing.core.JsonlEventSink
 import com.snowball.silverwing.core.error
 import com.snowball.silverwing.core.MeegleRequirementLinkSource
+import com.snowball.silverwing.core.MeegleParticipatedWorkItemsSource
 import com.snowball.silverwing.core.RequirementLinkFailureLog
 import com.snowball.silverwing.core.GitRepositoryInspector
 import com.snowball.silverwing.core.GroupConfigurationService
@@ -144,9 +152,11 @@ import java.util.concurrent.atomic.AtomicReference
 
 enum class NavigationItem(val title: String, val subtitle: String) {
     TASKS("研发任务", "Tasks"),
+    REQUIREMENTS("需求列表", "Requirements"),
     ARCHIVED("已归档", "Archived"),
     SERVICES("服务仓库", "Services"),
     TAG("Tag构建", "Tag Builds"),
+    SKILLS("Skills", "Skills"),
     SETTINGS("设置", "Settings"),
 }
 
@@ -220,26 +230,93 @@ class DesktopApplication(
     private val paths: ApplicationPaths = ApplicationPaths.systemDefault(),
     private val events: EventSink = JsonlEventSink(paths),
     private val errorLogReader: ApplicationErrorLogReader = ApplicationErrorLogReader(paths),
+    private val commandProxyUrl: AtomicReference<String?> = AtomicReference(null),
+    private val commandProxyNoProxy: AtomicReference<String?> = AtomicReference(null),
+    private val commandProxyUsername: AtomicReference<String?> = AtomicReference(null),
+    private val commandProxyPassword: AtomicReference<String?> = AtomicReference(null),
+    private val commandProxyTargets: AtomicReference<Set<CommandProxyTarget>> = AtomicReference(emptySet()),
+    private val processCommandRunner: StreamingCommandRunner = ProcessCommandRunner(),
+    private val commandProxyEnvironment: CommandProxyEnvironmentProvider = CommandProxyEnvironmentProvider(
+        proxyUrl = commandProxyUrl::get,
+        enabledTargets = commandProxyTargets::get,
+        noProxy = commandProxyNoProxy::get,
+        authentication = {
+            val username = commandProxyUsername.get()
+            val password = commandProxyPassword.get()
+            if (username == null || password == null) null else CommandProxyAuthentication(username, password)
+        },
+    ),
+    private val codexCommandRunner: ProxyTargetCommandRunner = ProxyTargetCommandRunner(
+        processCommandRunner,
+        CommandProxyTarget.CODEX,
+        commandProxyEnvironment,
+    ),
+    private val gitCommandRunner: ProxyTargetCommandRunner = ProxyTargetCommandRunner(
+        processCommandRunner,
+        CommandProxyTarget.GIT,
+        commandProxyEnvironment,
+    ),
+    private val workspaceCommandRunner: ProxyTargetCommandRunner = ProxyTargetCommandRunner(
+        processCommandRunner,
+        CommandProxyTarget.WORKSPACE_COMMAND,
+        commandProxyEnvironment,
+    ),
+    private val meegleCommandRunner: ProxyTargetCommandRunner = ProxyTargetCommandRunner(
+        processCommandRunner,
+        CommandProxyTarget.MEEGLE,
+        commandProxyEnvironment,
+    ),
+    private val larkCommandRunner: ProxyTargetCommandRunner = ProxyTargetCommandRunner(
+        processCommandRunner,
+        CommandProxyTarget.LARK,
+        commandProxyEnvironment,
+    ),
+    private val genbuCommandRunner: ProxyTargetCommandRunner = ProxyTargetCommandRunner(
+        processCommandRunner,
+        CommandProxyTarget.GENBU,
+        commandProxyEnvironment,
+    ),
     private val meegleExecutablePath: AtomicReference<String?> = AtomicReference(null),
-    private val meegleExecutable: ConfiguredMeegleExecutable = ConfiguredMeegleExecutable(meegleExecutablePath::get),
+    private val meegleExecutable: ConfiguredMeegleExecutable = ConfiguredMeegleExecutable(
+        meegleExecutablePath::get,
+        runner = meegleCommandRunner,
+    ),
     private val larkExecutablePath: AtomicReference<String?> = AtomicReference(null),
-    private val larkExecutable: ConfiguredLarkExecutable = ConfiguredLarkExecutable(larkExecutablePath::get),
+    private val larkExecutable: ConfiguredLarkExecutable = ConfiguredLarkExecutable(
+        larkExecutablePath::get,
+        runner = larkCommandRunner,
+    ),
     private val codexExecutablePath: AtomicReference<String?> = AtomicReference(null),
-    private val codexExecutable: CodexExecutable = ConfiguredCodexExecutable(codexExecutablePath::get),
+    private val codexExecutable: CodexExecutable = ConfiguredCodexExecutable(
+        codexExecutablePath::get,
+        automatic = AutoDetectedCodexExecutable(runner = codexCommandRunner),
+    ),
     private val genbuExecutablePath: AtomicReference<String?> = AtomicReference(null),
-    private val genbuExecutable: ConfiguredGenbuExecutable = ConfiguredGenbuExecutable(genbuExecutablePath::get),
-    private val cliVersionRunner: CommandRunner = ProcessCommandRunner(),
+    private val genbuExecutable: ConfiguredGenbuExecutable = ConfiguredGenbuExecutable(
+        genbuExecutablePath::get,
+        runner = genbuCommandRunner,
+    ),
+    /** Kept injectable for Codex command detection tests; production uses the Codex target runner. */
+    private val cliVersionRunner: CommandRunner = codexCommandRunner,
     private val gitExecutablePath: AtomicReference<String?> = AtomicReference(null),
-    private val gitExecutable: ConfiguredGitExecutable = ConfiguredGitExecutable(gitExecutablePath::get),
-    private val gitClient: GitClient = GitClient(executable = gitExecutable),
-    private val bootstrapService: BootstrapService = BootstrapService(git = gitClient),
-    private val diagnosticsExporter: DiagnosticsExporter = DiagnosticsExporter(paths, git = gitClient, meegleExecutable = meegleExecutable),
+    private val gitExecutable: ConfiguredGitExecutable = ConfiguredGitExecutable(
+        gitExecutablePath::get,
+        runner = gitCommandRunner,
+    ),
+    private val gitClient: GitClient = GitClient(runner = gitCommandRunner, executable = gitExecutable),
+    private val bootstrapService: BootstrapService = BootstrapService(runner = workspaceCommandRunner, git = gitClient),
+    private val diagnosticsExporter: DiagnosticsExporter = DiagnosticsExporter(
+        paths,
+        runner = meegleCommandRunner,
+        git = gitClient,
+        meegleExecutable = meegleExecutable,
+    ),
     private val configStore: ConfigStore = ConfigStore(paths),
     private val developmentToolStartupDetection: DevelopmentToolStartupDetection =
         DevelopmentToolAutoDetectionService(configStore),
     private val manifests: ManifestStore = ManifestStore(),
     private val requirementMaterialsService: RequirementMaterialsService =
-        RequirementMaterialsService(meegleExecutable = meegleExecutable),
+        RequirementMaterialsService(runner = meegleCommandRunner, meegleExecutable = meegleExecutable),
     private val repositoryInspector: RepositoryInspector = GitRepositoryInspector(gitClient),
     private val groupConfigurations: GroupConfigurationService =
         GroupConfigurationService(configStore, repositoryInspector),
@@ -278,7 +355,7 @@ class DesktopApplication(
         requirementMaterials = requirementMaterialsService,
         lifecycle = GitWorkspaceLifecycle(git = gitClient, bootstrap = bootstrapService, repositoryLock = repositoryLock),
         operationLock = operationLock,
-        branchValidator = GitBranchReferenceValidator(gitExecutable = gitExecutable),
+        branchValidator = GitBranchReferenceValidator(runner = gitCommandRunner, gitExecutable = gitExecutable),
         branchReuseInspector = branchReuseInspector,
         repairs = workspaceRepairs,
         moduleRemoval = WorkspaceModuleRemovalService(
@@ -296,30 +373,56 @@ class DesktopApplication(
         TagBuildService(paths = paths, git = gitClient, repositoryLock = repositoryLock),
     ),
     private val genbuTagProbes: GenbuTagProbeService = GenbuTagProbeService(
-        genbu = ProcessGenbuTagStatusService(executable = genbuExecutable),
+        genbu = ProcessGenbuTagStatusService(executable = genbuExecutable, runner = genbuCommandRunner),
     ),
     val deliveryRegistry: DeliveryPipelineRegistry = DeliveryPipelineRegistry(listOf(tagDelivery)),
-    private val requirementMetadataProvider: RequirementMetadataProvider = MeegleRequirementMetadataProvider(meegleExecutable = meegleExecutable),
+    private val requirementMetadataProvider: RequirementMetadataProvider = MeegleRequirementMetadataProvider(
+        runner = meegleCommandRunner,
+        meegleExecutable = meegleExecutable,
+    ),
     private val requirementAiContextProvider: RequirementAiContextProvider =
-        MeegleRequirementAiContextProvider(meegleExecutable = meegleExecutable),
+        MeegleRequirementAiContextProvider(runner = meegleCommandRunner, meegleExecutable = meegleExecutable),
     requirementAiNamingService: RequirementAiNamingService? = null,
-    private val requirementAiBranchValidator: BranchReferenceValidator = GitBranchReferenceValidator(gitExecutable = gitExecutable),
-    private val requirementLinkSource: MeegleRequirementLinkSource = MeegleRequirementLinkSource(metadata = requirementMetadataProvider, meegleExecutable = meegleExecutable),
+    private val requirementAiBranchValidator: BranchReferenceValidator = GitBranchReferenceValidator(
+        runner = gitCommandRunner,
+        gitExecutable = gitExecutable,
+    ),
+    private val requirementLinkSource: MeegleRequirementLinkSource = MeegleRequirementLinkSource(
+        runner = meegleCommandRunner,
+        metadata = requirementMetadataProvider,
+        meegleExecutable = meegleExecutable,
+    ),
+    private val participatedWorkItemsSource: MeegleParticipatedWorkItemsSource = MeegleParticipatedWorkItemsSource(
+        runner = meegleCommandRunner,
+        meegleExecutable = meegleExecutable,
+    ),
     private val requirementLinkFailures: RequirementLinkFailureLog = RequirementLinkFailureLog(paths),
     private val gitStatusService: WorkspaceGitStatusService = WorkspaceGitStatusService(GitWorkspaceGitStatusReader(gitClient)),
     private val gitFilePreviewService: WorkspaceGitFilePreviewService = WorkspaceGitFilePreviewService(gitClient),
     private val gitHistoryService: WorkspaceGitHistoryService = WorkspaceGitHistoryService(GitWorkspaceGitHistoryReader(gitClient)),
-    private val workspaceCommandService: WorkspaceCommandService = WorkspaceCommandService(),
+    private val workspaceCommandService: WorkspaceCommandService = WorkspaceCommandService(runner = workspaceCommandRunner),
     private val gitOperationService: WorkspaceGitOperationService = WorkspaceGitOperationService(gitClient, repositoryLock),
     private val taskBranchCatalog: TaskBranchCatalog = GitTaskBranchCatalog(gitClient),
     private val desktopIntegration: DesktopIntegration = DesktopIntegration(),
     private val nativePathPicker: NativePathPicker = FileKitNativePathPicker(),
     private val remoteBranchCatalog: RemoteBranchCatalog = GitRemoteBranchCatalog(gitClient),
     private val repositoryRemoteCatalog: RepositoryRemoteCatalog = GitRepositoryRemoteCatalog(gitClient),
-    private val meegleProjectCatalog: MeegleProjectCatalog = CliMeegleProjectCatalog(meegleExecutable = meegleExecutable),
-    private val meegleCliService: MeegleCliService = ProcessMeegleCliService(meegleExecutable = meegleExecutable),
-    private val larkCliService: LarkCliService = ProcessLarkCliService(larkExecutable = larkExecutable),
-    private val localGitInspector: LocalGitEnvironmentInspector = LocalGitEnvironmentInspector(gitExecutable = gitExecutable),
+    private val meegleProjectCatalog: MeegleProjectCatalog = CliMeegleProjectCatalog(
+        runner = meegleCommandRunner,
+        meegleExecutable = meegleExecutable,
+    ),
+    private val meegleCliService: MeegleCliService = ProcessMeegleCliService(
+        runner = meegleCommandRunner,
+        meegleExecutable = meegleExecutable,
+    ),
+    private val larkCliService: LarkCliService = ProcessLarkCliService(
+        runner = larkCommandRunner,
+        larkExecutable = larkExecutable,
+    ),
+    private val localGitInspector: LocalGitEnvironmentInspector = LocalGitEnvironmentInspector(
+        runner = gitCommandRunner,
+        gitExecutable = gitExecutable,
+    ),
     private val workspaceToolRegistry: TaskWorkspaceToolRegistry = TaskWorkspaceToolRegistry(
         listOf(CodexWorkspaceToolLauncher(), CursorWorkspaceToolLauncher()),
     ),
@@ -362,6 +465,11 @@ class DesktopApplication(
         codexExecutablePath.set(it.codexExecutablePath)
         gitExecutablePath.set(it.gitExecutablePath)
         genbuExecutablePath.set(it.genbuExecutablePath)
+        commandProxyUrl.set(it.commandProxyUrl)
+        commandProxyNoProxy.set(it.commandProxyNoProxy)
+        commandProxyUsername.set(it.commandProxyUsername)
+        commandProxyPassword.set(it.commandProxyPassword)
+        commandProxyTargets.set(it.commandProxyTargets)
     }
     private var resolvedTerminal by mutableStateOf(TerminalLaunchCommand.resolve(initialConfig.terminalExecutable))
     private var terminalDetectionGeneration = 0L
@@ -381,8 +489,11 @@ class DesktopApplication(
     private val configuredRequirementAiNamingService: RequirementAiNamingService =
         requirementAiNamingService ?: CodexRequirementAiNamingService(
             paths = paths,
+            runner = codexCommandRunner,
             codexExecutable = codexExecutable,
             modelProvider = { sessionStore.config.aiRequirementNamingModel },
+            proxyEnabled = codexCommandRunner::proxyEnabled,
+            redactProxyEndpoint = commandProxyEnvironment::redactConfiguredEndpoint,
         )
     val operationCoordinator = OperationCoordinator(
         initialError = initial.exceptionOrNull()?.let { "配置读取失败：${it.message}" } ?: taskScanWarning,
@@ -400,11 +511,20 @@ class DesktopApplication(
         configurations = configStore,
         extensions = CodexExtensionsService(
             paths = paths,
+            runner = codexCommandRunner,
+            gitRunner = gitCommandRunner,
+            codexProxyEnabled = codexCommandRunner::proxyEnabled,
+            gitProxyEnabled = gitCommandRunner::proxyEnabled,
+            redactProxyEndpoint = commandProxyEnvironment::redactConfiguredEndpoint,
             gitExecutable = gitExecutable::resolve,
             codexExecutable = codexExecutable,
         ),
-        branchCatalog = RemoteGitBranchCatalog(gitExecutable = gitExecutable::resolve),
+        branchCatalog = RemoteGitBranchCatalog(
+            runner = gitCommandRunner,
+            gitExecutable = gitExecutable::resolve,
+        ),
     )
+    private val localSkillCatalogs = LocalSkillCatalogApplicationService()
     private val operationRunner = OperationRunner(operationCoordinator, scope, ioDispatcher)
     private val settingsOperationCoordinator = OperationCoordinator(onError = ::recordError)
     private val settingsOperationRunner = OperationRunner(settingsOperationCoordinator, scope, ioDispatcher)
@@ -417,6 +537,21 @@ class DesktopApplication(
             extensions = codexExtensions,
             operations = settingsOperationRunner,
             applyConfig = ::applyConfig,
+        )
+    }
+    internal val localSkillsController by lazy {
+        LocalSkillsController(
+            skills = localSkillCatalogs,
+            uninstallLocalSkill = codexExtensions::uninstallLocalSkill,
+            scope = scope,
+            ioDispatcher = ioDispatcher,
+        )
+    }
+    internal val participatedWorkItemsController by lazy {
+        ParticipatedWorkItemsController(
+            source = participatedWorkItemsSource,
+            scope = scope,
+            ioDispatcher = ioDispatcher,
         )
     }
     private val requirementMetadataCoordinator = RequirementMetadataCoordinator(
@@ -491,6 +626,7 @@ class DesktopApplication(
             gitExecutable = gitExecutable,
             genbuExecutable = genbuExecutable,
             cliVersionRunner = cliVersionRunner,
+            genbuVersionRunner = genbuCommandRunner,
             localGitInspector = localGitInspector,
             scope = scope,
             ioDispatcher = ioDispatcher,
@@ -551,6 +687,11 @@ class DesktopApplication(
             codexExecutablePath.set(value.codexExecutablePath)
             gitExecutablePath.set(value.gitExecutablePath)
             genbuExecutablePath.set(value.genbuExecutablePath)
+            commandProxyUrl.set(value.commandProxyUrl)
+            commandProxyNoProxy.set(value.commandProxyNoProxy)
+            commandProxyUsername.set(value.commandProxyUsername)
+            commandProxyPassword.set(value.commandProxyPassword)
+            commandProxyTargets.set(value.commandProxyTargets)
             sessionStore.config = value
         }
     var repositories by mutableStateOf(config.repositories.map(RepositoryConfig::toInfo))
@@ -702,8 +843,8 @@ class DesktopApplication(
     val globalAgentsPath: String get() = paths.globalAgents.toAbsolutePath().normalize().toString()
     fun groupAgentsPath(groupId: String): String = paths.groupAgents(groupId).toAbsolutePath().normalize().toString()
 
-    fun workspaceToolOptions(groupId: String): List<WorkspaceToolOption> {
-        val configuredIds = config.group(groupId).defaultWorkspaceToolIds
+    fun workspaceToolOptions(): List<WorkspaceToolOption> {
+        val configuredIds = config.defaultWorkspaceToolIds
         val descriptors = workspaceToolRegistry.descriptors().associateBy(TaskWorkspaceToolDescriptor::id)
         return (descriptors.keys + configuredIds).distinct().map { toolId ->
             val descriptor = descriptors[toolId]
@@ -765,6 +906,15 @@ class DesktopApplication(
 
     fun updateCodexExecutablePath(raw: String, onFailure: (Throwable) -> Unit = {}): Boolean =
         settingsController.updateCodexExecutablePath(raw, onFailure)
+
+    fun updateCommandProxy(
+        rawUrl: String,
+        rawNoProxy: String,
+        rawUsername: String,
+        rawPassword: String,
+        targets: Set<CommandProxyTarget>,
+        onFailure: (Throwable) -> Unit = {},
+    ): Boolean = settingsController.updateCommandProxy(rawUrl, rawNoProxy, rawUsername, rawPassword, targets, onFailure)
 
     fun codexCommandResolution(): Pair<String, CodexCommandSource> = settingsController.codexCommandResolution()
 
@@ -915,8 +1065,10 @@ class DesktopApplication(
     fun moveGroup(groupId: String, offset: Int) = settingsController.moveGroup(groupId, offset)
     fun deleteGroup(groupId: String, onCompleted: () -> Unit = {}) = settingsController.deleteGroup(groupId, onCompleted)
     fun setGroupTagEnabled(groupId: String, enabled: Boolean) = settingsController.setGroupTagEnabled(groupId, enabled)
-    fun updateGroupDefaults(groupId: String, branchPrefix: String, workspaceToolIds: List<String>, onFailure: (Throwable) -> Unit = {}) =
-        settingsController.updateGroupDefaults(groupId, branchPrefix, workspaceToolIds, onFailure)
+    fun updateDefaultBranchPrefix(branchPrefix: String, onFailure: (Throwable) -> Unit = {}) =
+        settingsController.updateDefaultBranchPrefix(branchPrefix, onFailure)
+    fun updateDefaultWorkspaceToolIds(workspaceToolIds: List<String>, onFailure: (Throwable) -> Unit = {}) =
+        settingsController.updateDefaultWorkspaceToolIds(workspaceToolIds, onFailure)
     fun setAiRequirementNamingEnabled(enabled: Boolean, onFailure: (Throwable) -> Unit = {}): Boolean {
         // 关闭开关是隐私边界，必须立即取消，不能等待异步保存结束；已填入的表单值保持不变。
         if (!enabled) requirementController.cancelDraftAiNaming()
@@ -945,6 +1097,10 @@ class DesktopApplication(
     fun refreshGenbu(force: Boolean = false) = settingsController.refreshGenbu(force)
     fun openGenbuSettings() {
         WindowPreferences.saveSettingsSection("genbu")
+        navigation = NavigationItem.SETTINGS
+    }
+    fun openMeegleSettings() {
+        WindowPreferences.saveSettingsSection("commands")
         navigation = NavigationItem.SETTINGS
     }
     fun loadMeegleProjects(force: Boolean = false) = settingsController.loadMeegleProjects(force)
@@ -1250,8 +1406,8 @@ class DesktopApplication(
     suspend fun previewWorkspaceFile(worktreePath: String, change: WorkspaceGitFileChange): WorkspaceGitFilePreview =
         taskController.previewWorkspaceFile(worktreePath, change)
 
-    suspend fun workspaceGitHistory(worktreePath: String): List<WorkspaceGitCommit> =
-        taskController.workspaceGitHistory(worktreePath)
+    suspend fun workspaceGitHistory(worktreePath: String, baselineRef: String? = null): List<WorkspaceGitCommit> =
+        taskController.workspaceGitHistory(worktreePath, baselineRef)
 
     val workspaceCommandState: WorkspaceCommandExecutionState?
         get() = taskController.workspaceCommandState

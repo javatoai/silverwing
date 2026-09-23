@@ -23,7 +23,7 @@ class WorkspacePathAliasIntegrationTest {
             gitCommonDirectory = alias.resolve("source/.git").toString(),
         )
         val locks = RepositoryOperationLock(ApplicationPaths(temporary.resolve("app")))
-        val service = GroupServiceConfig.standard("alias-service", repository.id, "alias", baseRef = "origin/master")
+        val service = GroupServiceConfig.standard("alias-service", repository.id, "alias", masterBranch = "origin/master")
         val branch = "feature/alias"
 
         assertTrue(WorkspaceBranchReuseInspector(repositoryLock = locks).inspect(repository, service, branch).isEmpty())

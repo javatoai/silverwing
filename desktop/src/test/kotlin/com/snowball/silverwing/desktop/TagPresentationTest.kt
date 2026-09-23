@@ -202,7 +202,7 @@ class TagPresentationTest {
             ),
         )
         assertEquals(
-            listOf("已构建", "UAT已发布", "已生产发布"),
+            listOf("已构建", "UAT已发布"),
             genbuTagStatusLabels(
                 operation(TagOperationState.SUCCESS).copy(
                     genbuStatus = GenbuTagProbeStatus(
@@ -214,7 +214,7 @@ class TagPresentationTest {
             ),
         )
         assertEquals(
-            listOf("已构建", "UAT已发布", "生产发布失败"),
+            listOf("已构建", "UAT已发布"),
             genbuTagStatusLabels(
                 operation(TagOperationState.SUCCESS).copy(
                     genbuStatus = GenbuTagProbeStatus(

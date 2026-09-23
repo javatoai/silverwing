@@ -30,8 +30,8 @@ class TaskBranchCatalogTest {
             repositoryId = repository.id,
             displayName = "Service",
             modules = listOf(
-                ServiceModuleConfig("master", name = "master", baseRef = "origin/master"),
-                ServiceModuleConfig("test", name = "release-test", baseRef = "origin/release/test"),
+                ServiceModuleConfig("master", name = "master", masterBranch = "origin/master"),
+                ServiceModuleConfig("test", name = "release-test", masterBranch = "origin/release/test"),
             ),
         )
         val config = AppConfig(repositories = listOf(repository), groups = listOf(GroupConfig("default", "Default", services = listOf(service))))
@@ -65,8 +65,8 @@ class TaskBranchCatalogTest {
             repositoryId = repository.id,
             displayName = "Service",
             modules = listOf(
-                ServiceModuleConfig("api", name = "api", baseRef = "origin/master"),
-                ServiceModuleConfig("job", name = "job", baseRef = "origin/master"),
+                ServiceModuleConfig("api", name = "api", masterBranch = "origin/master"),
+                ServiceModuleConfig("job", name = "job", masterBranch = "origin/master"),
             ),
         )
         val config = AppConfig(repositories = listOf(repository), groups = listOf(GroupConfig("default", "Default", services = listOf(service))))
@@ -91,8 +91,8 @@ class TaskBranchCatalogTest {
             repositoryId = repository.id,
             displayName = "Service",
             modules = listOf(
-                ServiceModuleConfig("api", name = "api", baseRef = "origin/master"),
-                ServiceModuleConfig("docs", name = "docs", baseRef = "origin/master", strategy = WorkspaceStrategy.INDEPENDENT_CLONE),
+                ServiceModuleConfig("api", name = "api", masterBranch = "origin/master"),
+                ServiceModuleConfig("docs", name = "docs", masterBranch = "origin/master", strategy = WorkspaceStrategy.INDEPENDENT_CLONE),
             ),
         )
         val config = AppConfig(repositories = listOf(repository), groups = listOf(GroupConfig("default", "Default", services = listOf(service))))

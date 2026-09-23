@@ -29,8 +29,7 @@ class WorkspaceProvisionerIntegrationTest {
             modules = listOf(
                 ServiceModuleConfig(
                     id = "default",
-                    baseRef = "upstream/master",
-                    baseRemote = "upstream",
+                    masterBranch = "upstream/master",
                     tagEnabled = false,
                     tagTargetRef = null,
                 ),
@@ -54,8 +53,7 @@ class WorkspaceProvisionerIntegrationTest {
             modules = listOf(
                 ServiceModuleConfig(
                     id = "default",
-                    baseRef = "origin/master",
-                    baseRemote = "origin",
+                    masterBranch = "origin/master",
                     tagEnabled = false,
                     tagTargetRef = null,
                 ),
@@ -86,7 +84,7 @@ class WorkspaceProvisionerIntegrationTest {
         GitTestSupport.run(seed, "tag", "-f", "same-tag")
         GitTestSupport.run(seed, "push", "--force", "origin", "refs/tags/same-tag")
         val repository = GitRepositoryInspector().inspect(repositoryPath)
-        val service = GroupServiceConfig.standard("tag-service", repository.id, "tag", baseRef = "origin/master")
+        val service = GroupServiceConfig.standard("tag-service", repository.id, "tag", masterBranch = "origin/master")
 
         val workspace = StandardWorktreeProvisioner().provision(
             WorkspaceProvisionRequest(temporary.resolve("tag-conflict-create").resolve("task"), repository, service, "feature/tag-safe"),
@@ -166,7 +164,7 @@ class WorkspaceProvisionerIntegrationTest {
         val (remote, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("provision-lock"))
         val repositoryPath = GitTestSupport.clone(remote, temporary.resolve("provision-lock/service"))
         val repository = GitRepositoryInspector().inspect(repositoryPath)
-        val service = GroupServiceConfig.standard("service", repository.id, "Service", baseRef = "origin/master")
+        val service = GroupServiceConfig.standard("service", repository.id, "Service", masterBranch = "origin/master")
         val taskDirectory = temporary.resolve("provision-lock/task")
         val lock = RepositoryOperationLock(ApplicationPaths(temporary.resolve("provision-lock-home")))
         val provisioner = StandardWorktreeProvisioner(repositoryLock = lock)
@@ -190,7 +188,7 @@ class WorkspaceProvisionerIntegrationTest {
             id = "service-clone",
             repositoryId = repository.id,
             displayName = "复杂单仓",
-            modules = listOf(ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/master", tagEnabled = true)),
+            modules = listOf(ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, masterBranch = "origin/master", tagEnabled = true)),
         )
 
         val workspace = IndependentCloneProvisioner().provision(
@@ -219,8 +217,7 @@ class WorkspaceProvisionerIntegrationTest {
         val module = ServiceModuleConfig(
             id = "clone",
             strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
-            baseRef = "upstream/master",
-            baseRemote = "upstream",
+            masterBranch = "upstream/master",
             tagEnabled = false,
         )
         val service = GroupServiceConfig("service-clone", repository.id, "Clone", modules = listOf(module))
@@ -242,7 +239,7 @@ class WorkspaceProvisionerIntegrationTest {
         val (remote, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("clone-target-new"))
         val repositoryPath = GitTestSupport.clone(remote, temporary.resolve("clone-target-new/source"))
         val repository = GitRepositoryInspector().inspect(repositoryPath)
-        val module = ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/master", tagEnabled = false)
+        val module = ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, masterBranch = "origin/master", tagEnabled = false)
         val service = GroupServiceConfig("service-clone", repository.id, "Clone", modules = listOf(module))
 
         val workspace = IndependentCloneProvisioner().provision(
@@ -270,7 +267,7 @@ class WorkspaceProvisionerIntegrationTest {
         val module = ServiceModuleConfig(
             id = "clone",
             strategy = WorkspaceStrategy.INDEPENDENT_CLONE,
-            baseRef = "origin/master",
+            masterBranch = "origin/master",
             tagEnabled = false,
         )
         val service = GroupServiceConfig(
@@ -329,7 +326,7 @@ class WorkspaceProvisionerIntegrationTest {
         GitTestSupport.run(seed, "push", "-u", "origin", "feature/shared")
         val repositoryPath = GitTestSupport.clone(remote, root.resolve("source"))
         val repository = GitRepositoryInspector().inspect(repositoryPath)
-        val module = ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/master", tagEnabled = false)
+        val module = ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, masterBranch = "origin/master", tagEnabled = false)
         val service = GroupServiceConfig("service-clone", repository.id, "Clone", modules = listOf(module))
         val request = WorkspaceProvisionRequest(
             root.resolve("task"), repository, service,
@@ -359,7 +356,7 @@ class WorkspaceProvisionerIntegrationTest {
         GitTestSupport.run(seed, "push", "-u", "origin", "feature/shared")
         val repositoryPath = GitTestSupport.clone(remote, root.resolve("source"))
         val repository = GitRepositoryInspector().inspect(repositoryPath)
-        val module = ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/master", tagEnabled = false)
+        val module = ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, masterBranch = "origin/master", tagEnabled = false)
         val service = GroupServiceConfig("service-clone", repository.id, "Clone", modules = listOf(module))
         val request = WorkspaceProvisionRequest(root.resolve("task"), repository, service, moduleBranches = mapOf("clone" to "feature/shared"))
         val conflict = WorkspaceBranchReuseInspector().inspect(repository, service, "", request.moduleBranches).single()
@@ -379,7 +376,7 @@ class WorkspaceProvisionerIntegrationTest {
         val (remote, _) = GitTestSupport.createRemoteWithSeed(root)
         val repositoryPath = GitTestSupport.clone(remote, root.resolve("source"))
         val repository = GitRepositoryInspector().inspect(repositoryPath)
-        val module = ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/master", tagEnabled = false)
+        val module = ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, masterBranch = "origin/master", tagEnabled = false)
         val service = GroupServiceConfig("service-clone", repository.id, "Clone", modules = listOf(module))
         val taskDirectory = root.resolve("task")
         val target = taskDirectory.resolve(WorkspaceLayout.moduleDirectoryName(service, module))
@@ -411,7 +408,7 @@ class WorkspaceProvisionerIntegrationTest {
         val (remote, _) = GitTestSupport.createRemoteWithSeed(root)
         val repositoryPath = GitTestSupport.clone(remote, root.resolve("source"))
         val repository = GitRepositoryInspector().inspect(repositoryPath)
-        val module = ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/master", tagEnabled = false)
+        val module = ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, masterBranch = "origin/master", tagEnabled = false)
         val service = GroupServiceConfig("service-clone", repository.id, "Clone", modules = listOf(module))
         val request = WorkspaceProvisionRequest(root.resolve("task"), repository, service, moduleBranches = mapOf("clone" to ""))
         val provisioner = IndependentCloneProvisioner()
@@ -435,7 +432,7 @@ class WorkspaceProvisionerIntegrationTest {
         GitTestSupport.run(seed, "push", "-u", "origin", "feature/shared")
         val repositoryPath = GitTestSupport.clone(remote, root.resolve("source"))
         val repository = GitRepositoryInspector().inspect(repositoryPath)
-        val module = ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, baseRef = "origin/master", tagEnabled = false)
+        val module = ServiceModuleConfig("clone", strategy = WorkspaceStrategy.INDEPENDENT_CLONE, masterBranch = "origin/master", tagEnabled = false)
         val service = GroupServiceConfig("service-clone", repository.id, "Clone", modules = listOf(module))
         val request = WorkspaceProvisionRequest(root.resolve("task"), repository, service, moduleBranches = mapOf("clone" to "feature/shared"))
         val conflict = WorkspaceBranchReuseInspector().inspect(repository, service, "", request.moduleBranches).single()
@@ -486,7 +483,7 @@ class WorkspaceProvisionerIntegrationTest {
             id = "latest-service",
             repositoryId = repository.id,
             displayName = "latest",
-            baseRef = "origin/master",
+            masterBranch = "origin/master",
         )
 
         val workspace = StandardWorktreeProvisioner().provision(
@@ -559,7 +556,7 @@ class WorkspaceProvisionerIntegrationTest {
         val repository = GitRepositoryInspector().inspect(repositoryPath)
         val branch = "feature/reuse-local"
         GitTestSupport.run(repositoryPath, "branch", branch, "origin/master")
-        val service = GroupServiceConfig.standard("reuse-local", repository.id, "reuse-local", baseRef = "origin/master")
+        val service = GroupServiceConfig.standard("reuse-local", repository.id, "reuse-local", masterBranch = "origin/master")
         val provisioner = StandardWorktreeProvisioner()
 
         assertThrows(Throwable::class.java) {
@@ -593,7 +590,7 @@ class WorkspaceProvisionerIntegrationTest {
         GitTestSupport.run(repositoryPath, "branch", branch, "origin/master")
         val git = GitClient()
         git.addExistingWorktree(repositoryPath, temporary.resolve("reuse-occupied").resolve("existing"), branch)
-        val service = GroupServiceConfig.standard("reuse-occupied", repository.id, "reuse-occupied", baseRef = "origin/master")
+        val service = GroupServiceConfig.standard("reuse-occupied", repository.id, "reuse-occupied", masterBranch = "origin/master")
 
         val workspace = StandardWorktreeProvisioner().provision(
             WorkspaceProvisionRequest(
@@ -623,7 +620,7 @@ class WorkspaceProvisionerIntegrationTest {
         GitClient().addExistingWorktree(repositoryPath, stale, branch)
         Files.walk(stale).use { it.sorted(Comparator.reverseOrder()).forEach(Files::delete) }
 
-        val service = GroupServiceConfig.standard("reuse-stale", repository.id, "reuse-stale", baseRef = "origin/master")
+        val service = GroupServiceConfig.standard("reuse-stale", repository.id, "reuse-stale", masterBranch = "origin/master")
         val conflicts = WorkspaceBranchReuseInspector().inspect(repository, service, branch)
 
         assertEquals(listOf(branch), conflicts.map { it.key.branch })
@@ -641,7 +638,7 @@ class WorkspaceProvisionerIntegrationTest {
         val locked = temporary.resolve("reuse-locked").resolve("locked-worktree")
         GitClient().addExistingWorktree(repositoryPath, locked, branch)
         GitTestSupport.run(repositoryPath, "worktree", "lock", "--reason", "protected", locked.toString())
-        val service = GroupServiceConfig.standard("reuse-locked", repository.id, "reuse-locked", baseRef = "origin/master")
+        val service = GroupServiceConfig.standard("reuse-locked", repository.id, "reuse-locked", masterBranch = "origin/master")
 
         val conflict = WorkspaceBranchReuseInspector().inspect(repository, service, branch).single()
         assertEquals(listOf(locked.toString()), conflict.lockedWorktreePaths)
@@ -665,7 +662,7 @@ class WorkspaceProvisionerIntegrationTest {
         val repository = GitRepositoryInspector().inspect(repositoryPath)
         val branch = "feature/reuse-changed"
         GitTestSupport.run(repositoryPath, "branch", branch, "origin/master")
-        val service = GroupServiceConfig.standard("reuse-changed", repository.id, "reuse-changed", baseRef = "origin/master")
+        val service = GroupServiceConfig.standard("reuse-changed", repository.id, "reuse-changed", masterBranch = "origin/master")
         val confirmation = WorkspaceBranchReuseInspector().inspect(repository, service, branch).single().key
         GitClient().addExistingWorktree(repositoryPath, temporary.resolve("reuse-changed").resolve("other"), branch)
 
@@ -690,7 +687,7 @@ class WorkspaceProvisionerIntegrationTest {
         GitTestSupport.run(seed, "push", "-u", "origin", branch)
         val repositoryPath = GitTestSupport.clone(remote, temporary.resolve("reuse-remote").resolve("service"))
         val repository = GitRepositoryInspector().inspect(repositoryPath)
-        val service = GroupServiceConfig.standard("reuse-remote", repository.id, "reuse-remote", baseRef = "origin/master")
+        val service = GroupServiceConfig.standard("reuse-remote", repository.id, "reuse-remote", masterBranch = "origin/master")
 
         val workspace = StandardWorktreeProvisioner().provision(
             WorkspaceProvisionRequest(

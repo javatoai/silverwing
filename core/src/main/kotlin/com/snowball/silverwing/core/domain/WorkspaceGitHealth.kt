@@ -27,6 +27,10 @@ data class WorkspaceGitCommit(
     val committedAt: Instant,
     val message: String,
     val authorName: String = "",
+    val fullHash: String = shortHash,
+    val committerName: String = authorName,
+    val committerEmail: String = "",
+    val authorEmail: String = "",
 )
 
 enum class WorkspaceGitIssue {

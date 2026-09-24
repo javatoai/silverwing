@@ -58,6 +58,9 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       # Packages are uploaded straight to the draft release instead of
       # actions/upload-artifact: artifact storage is metered per account and a
       # single release already fills the free allowance, while release assets are not.
@@ -68,6 +71,7 @@ jobs:
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" --jq '"tag ref: \(.ref)"'
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "Release $tag already exists; reusing it."
           else
@@ -75,7 +79,6 @@ jobs:
             printf '自动构建 silverwing 桌面产物。\n\n- **Windows**：绿色 portable zip、Setup EXE、MSI\n- **macOS**：DMG\n\nCommit: `%s`\n' "$GITHUB_SHA" > "$notes"
             gh release create "$tag" \
               --draft \
-              --verify-tag \
               --title "silverwing $tag" \
               --generate-notes \
               --notes-file "$notes"
@@ -222,6 +225,9 @@ jobs:
     needs: [windows, macos]
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Verify staged release assets
         shell: bash
         env:

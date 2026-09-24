@@ -901,6 +901,9 @@ class DesktopApplication(
     fun updateMeegleProjects(projects: List<MeegleProjectConfig>, onFailure: (Throwable) -> Unit = {}): Boolean =
         settingsController.updateMeegleProjects(projects, onFailure)
 
+    fun updateMeegleDefaultSprintProjectKey(projectKey: String?, onFailure: (Throwable) -> Unit = {}): Boolean =
+        settingsController.updateMeegleDefaultSprintProjectKey(projectKey, onFailure)
+
     fun updateMeegleExecutablePath(raw: String, onFailure: (Throwable) -> Unit = {}): Boolean =
         settingsController.updateMeegleExecutablePath(raw, onFailure)
 

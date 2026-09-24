@@ -208,6 +208,7 @@ fun main() {
 private fun AgentWorkspaceApp(controller: DesktopApplication) {
     val snackbar = remember { SnackbarHostState() }
     var showCreate by remember { mutableStateOf(false) }
+    var createTaskRequirement by remember { mutableStateOf<CreateTaskRequirement?>(null) }
 
     LaunchedEffect(controller.statusMessage) {
         val message = controller.statusMessage
@@ -236,7 +237,10 @@ private fun AgentWorkspaceApp(controller: DesktopApplication) {
                     ) {
                         when (controller.navigation) {
                             NavigationItem.TASKS -> TasksScreen(controller, archived = false) { showCreate = true }
-                            NavigationItem.REQUIREMENTS -> ParticipatedWorkItemsScreen(controller)
+                            NavigationItem.REQUIREMENTS -> ParticipatedWorkItemsScreen(controller) { item ->
+                                createTaskRequirement = CreateTaskRequirement(item.title, item.url)
+                                showCreate = true
+                            }
                             NavigationItem.ARCHIVED -> TasksScreen(controller, archived = true) { showCreate = true }
                             NavigationItem.SERVICES -> ServicesScreen(controller)
                             NavigationItem.TAG -> TagScreen(controller)
@@ -274,9 +278,17 @@ private fun AgentWorkspaceApp(controller: DesktopApplication) {
     }
 
     if (showCreate) {
-        CreateTaskDialog(controller, onDismiss = { showCreate = false }) { name, branch, group, services, link, notes, tools, reuseKeys, selections ->
+        CreateTaskDialog(
+            controller,
+            onDismiss = {
+                showCreate = false
+                createTaskRequirement = null
+            },
+            initialRequirement = createTaskRequirement,
+        ) { name, branch, group, services, link, notes, tools, reuseKeys, selections ->
             controller.taskController.create(name, branch, group, services, link, notes, tools, reuseKeys, selections) {
                 showCreate = false
+                createTaskRequirement = null
             }
         }
     }
@@ -356,11 +368,22 @@ internal fun sidebarWidthFor(layout: NavigationLayout): Float = when (layout) {
     NavigationLayout.COMPACT -> COMPACT_SIDEBAR_WIDTH_DP
 }
 
-/** Keeps badges legible in the narrow rail without spending horizontal space on large counts. */
-internal fun compactNavigationCountLabel(count: Int?): String? = when {
-    count == null || count <= 0 -> null
-    count > 9 -> "9+"
-    else -> count.toString()
+internal fun compactNavigationCountLabel(count: Int?): String? =
+    count?.takeIf { it > 0 }?.toString()
+
+internal data class NavigationBadge(
+    val label: String,
+    val compactLabel: String?,
+    val description: String,
+)
+
+internal fun requirementsNavigationBadge(days: java.math.BigDecimal?): NavigationBadge {
+    val label = formatMySprintEstimateNumber(days)
+    return NavigationBadge(
+        label = label,
+        compactLabel = label,
+        description = "所选 Sprint 我的估时总计：" + if (days == null) "暂不可用" else "$label 天",
+    )
 }
 
 @Composable
@@ -376,6 +399,7 @@ private fun Sidebar(
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun ExpandedSidebar(controller: DesktopApplication, onSelected: (NavigationItem) -> Unit) {
     Surface(
         Modifier.width(EXPANDED_SIDEBAR_WIDTH_DP.dp).fillMaxHeight().border(
@@ -417,9 +441,20 @@ private fun ExpandedSidebar(controller: DesktopApplication, onSelected: (Navigat
                             Text(item.title, fontWeight = if (selectedItem) FontWeight.SemiBold else FontWeight.Normal)
                             Text(item.subtitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        navigationCount(controller, item)?.let { count ->
-                            Surface(color = if (selectedItem) MaterialTheme.colorScheme.surface.copy(alpha = 0.75f) else MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(20.dp)) {
-                                Text(count.toString(), Modifier.padding(horizontal = 7.dp, vertical = 2.dp), style = MaterialTheme.typography.labelSmall)
+                        navigationBadge(controller, item)?.let { badge ->
+                            TooltipBox(
+                                positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
+                                tooltip = { PlainTooltip { Text(badge.description) } },
+                                state = rememberTooltipState(),
+                            ) {
+                                Surface(
+                                    modifier = Modifier.semantics { contentDescription = badge.description },
+                                    color = if (selectedItem) MaterialTheme.colorScheme.surface.copy(alpha = 0.75f) else MaterialTheme.colorScheme.surfaceVariant,
+                                    shape = RoundedCornerShape(20.dp),
+                                ) {
+                                    Text(badge.label, Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                                        style = MaterialTheme.typography.labelSmall, maxLines = 1, softWrap = false)
+                                }
                             }
                         }
                     }
@@ -447,7 +482,7 @@ private fun CompactSidebar(controller: DesktopApplication, onSelected: (Navigati
             visibleNavigationItems(controller).forEach { item ->
                 CompactNavigationItem(
                     item = item,
-                    count = navigationCount(controller, item),
+                    badge = navigationBadge(controller, item),
                     selected = item == controller.navigation,
                     onSelected = { onSelected(item) },
                 )
@@ -461,16 +496,16 @@ private fun CompactSidebar(controller: DesktopApplication, onSelected: (Navigati
 @OptIn(ExperimentalMaterial3Api::class)
 private fun CompactNavigationItem(
     item: NavigationItem,
-    count: Int?,
+    badge: NavigationBadge?,
     selected: Boolean,
     onSelected: () -> Unit,
 ) {
-    val countLabel = compactNavigationCountLabel(count)
+    val countLabel = badge?.compactLabel
     val accessibilityLabel = buildString {
         append(item.title)
         append("，")
         append(item.subtitle)
-        count?.let { append("，$it 项") }
+        badge?.let { append("，${it.description}") }
     }
     TooltipBox(
         positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
@@ -528,10 +563,15 @@ private fun navigationIcon(item: NavigationItem): ImageVector = when (item) {
     NavigationItem.SETTINGS -> Icons.Outlined.Settings
 }
 
-private fun navigationCount(controller: DesktopApplication, item: NavigationItem): Int? = when (item) {
-    NavigationItem.TASKS -> controller.tasks.count { it.lifecycleStatus != TaskLifecycleStatus.ARCHIVED }
-    NavigationItem.REQUIREMENTS -> null
-    NavigationItem.ARCHIVED -> controller.tasks.count { it.lifecycleStatus == TaskLifecycleStatus.ARCHIVED }
-    NavigationItem.SERVICES -> controller.config.groups.sumOf { it.services.size }
-    NavigationItem.TAG, NavigationItem.SKILLS, NavigationItem.SETTINGS -> null
+private fun navigationBadge(controller: DesktopApplication, item: NavigationItem): NavigationBadge? {
+    if (item == NavigationItem.REQUIREMENTS) {
+        return requirementsNavigationBadge(controller.participatedWorkItemsController.state.totalMySprintEstimateDays)
+    }
+    val count = when (item) {
+        NavigationItem.TASKS -> controller.tasks.count { it.lifecycleStatus != TaskLifecycleStatus.ARCHIVED }
+        NavigationItem.ARCHIVED -> controller.tasks.count { it.lifecycleStatus == TaskLifecycleStatus.ARCHIVED }
+        NavigationItem.SERVICES -> controller.config.groups.sumOf { it.services.size }
+        else -> return null
+    }
+    return NavigationBadge(count.toString(), compactNavigationCountLabel(count), "$count 项")
 }

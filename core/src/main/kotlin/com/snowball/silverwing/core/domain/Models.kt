@@ -375,6 +375,8 @@ data class AppConfig(
     /** Exact local branch names on which SILVERWING refuses every commit or branch push. */
     val blockedGitWriteBranches: List<String> = listOf("master", "main"),
     val meegleProjects: List<MeegleProjectConfig> = emptyList(),
+    /** Configured project key used as the default Sprint team space, not a Sprint ID. */
+    val meegleDefaultSprintProjectKey: String? = null,
     /** Absolute path to the Meegle CLI executable; null means auto-detect. */
     val meegleExecutablePath: String? = null,
     /** Absolute path to the Codex CLI executable; null means auto-detect. */

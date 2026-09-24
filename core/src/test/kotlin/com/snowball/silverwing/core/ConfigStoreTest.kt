@@ -46,6 +46,7 @@ class ConfigStoreTest {
         assertEquals(listOf(DEFAULT_GROUP_NAME), config.groups.map { it.name })
         assertFalse(config.aiRequirementNamingEnabled)
         assertEquals(RequirementAiNamingModel.DEFAULT, config.aiRequirementNamingModel)
+        assertEquals(null, config.meegleDefaultSprintProjectKey)
         assertEquals(null, config.commandProxyUrl)
         assertEquals(null, config.commandProxyNoProxy)
         assertEquals(null, config.commandProxyUsername)
@@ -98,7 +99,8 @@ class ConfigStoreTest {
             showTaskAreaRequirementCopyIcons = false,
             showTaskAreaProjectNameCopyIcons = false,
             blockedGitWriteBranches = listOf("main"),
-            meegleProjects = listOf(MeegleProjectConfig("PAY", "pay")),
+            meegleProjects = listOf(MeegleProjectConfig("fixture-pay", "pay")),
+            meegleDefaultSprintProjectKey = "fixture-pay",
             meegleExecutablePath = "D:/tools/meegle.exe",
             codexExecutablePath = "D:/tools/codex.exe",
             commandProxyUrl = "http://127.0.0.1:7890",
@@ -138,6 +140,7 @@ class ConfigStoreTest {
         assertFalse(Files.readString(paths.config.resolve("services.json")).contains("\"baseRef\""))
         assertFalse(Files.readString(paths.config.resolve("services.json")).contains("\"baseRemote\""))
         assertTrue(Files.readString(paths.config.resolve("integrations.json")).contains("team-marketplace"))
+        assertTrue(Files.readString(paths.config.resolve("integrations.json")).contains("\"meegleDefaultSprintProjectKey\": \"fixture-pay\""))
         assertTrue(Files.readString(paths.config.resolve("integrations.json")).contains("\"aiRequirementNamingEnabled\": true"))
         assertTrue(Files.readString(paths.config.resolve("integrations.json")).contains("\"aiRequirementNamingModel\": \"gpt-5.6-sol\""))
         assertTrue(Files.readString(paths.config.resolve("integrations.json")).contains("\"codexExecutablePath\": \"D:/tools/codex.exe\""))
@@ -146,6 +149,54 @@ class ConfigStoreTest {
         assertTrue(Files.readString(paths.config.resolve("integrations.json")).contains("\"commandProxyUsername\": \"proxy-user\""))
         assertTrue(Files.readString(paths.config.resolve("integrations.json")).contains("\"commandProxyPassword\": \"proxy-password\""))
         assertTrue(Files.readString(paths.config.resolve("integrations.json")).contains("\"commandProxyTargets\""))
+    }
+
+    @Test
+    fun `existing integrations without a default Sprint project load as unspecified without rewrite`() {
+        val paths = ApplicationPaths(temporary.resolve("legacy-sprint-default"))
+        val store = ConfigStore(paths)
+        val expected = AppConfig(meegleProjects = listOf(MeegleProjectConfig("fixture-alpha", "alpha")))
+        store.save(expected)
+        val integrations = paths.config.resolve("integrations.json")
+        val original = Files.readString(integrations)
+        val withoutDefault = original.lineSequence()
+            .filterNot { it.contains("\"meegleDefaultSprintProjectKey\"") }
+            .joinToString("\n")
+        assertFalse(original == withoutDefault)
+        Files.writeString(integrations, withoutDefault)
+
+        assertEquals(null, AppConfig().meegleDefaultSprintProjectKey)
+        assertEquals(expected, store.load())
+        assertEquals(null, store.load().meegleDefaultSprintProjectKey)
+        assertEquals(withoutDefault, Files.readString(integrations))
+        assertTrue(store.backups().isEmpty())
+    }
+
+    @Test
+    fun `default Sprint project updates only integrations and preserves all other settings`() {
+        val paths = ApplicationPaths(temporary.resolve("sprint-default-only"))
+        val store = ConfigStore(paths)
+        val initial = AppConfig(
+            meegleProjects = listOf(MeegleProjectConfig("fixture-alpha", "alpha")),
+            meegleExecutablePath = "D:/fixture/meegle.exe",
+            commandProxyUrl = "http://127.0.0.1:7890",
+            commandProxyTargets = setOf(CommandProxyTarget.MEEGLE),
+            theme = ThemePreference.DARK,
+            defaultBranchPrefix = "fixture/",
+        )
+        store.save(initial)
+        val before = shardBytes(paths)
+
+        val selected = store.update { it.copy(meegleDefaultSprintProjectKey = "fixture-alpha") }
+
+        assertEquals(initial.copy(meegleDefaultSprintProjectKey = "fixture-alpha"), selected)
+        assertEquals(selected, ConfigStore(paths).load())
+        EXPECTED_SHARDS.filterNot { it == "integrations.json" }.forEach { name ->
+            assertTrue(before.getValue(name).contentEquals(Files.readAllBytes(paths.config.resolve(name))), name)
+        }
+        assertFalse(before.getValue("integrations.json").contentEquals(Files.readAllBytes(paths.config.resolve("integrations.json"))))
+        assertEquals(initial, store.update { it.copy(meegleDefaultSprintProjectKey = null) })
+        assertEquals(initial, ConfigStore(paths).load())
     }
 
     @Test

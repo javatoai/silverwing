@@ -60,10 +60,27 @@ class NavigationLayoutTest {
     }
 
     @Test
-    fun `compact badges omit empty counts and cap long counts`() {
+    fun `estimate badges preserve full decimals in both layouts and announce days instead of counts`() {
+        listOf("0" to "0", "12.500" to "12.5", "1000.00" to "1000").forEach { (value, label) ->
+            val badge = requirementsNavigationBadge(java.math.BigDecimal(value))
+            assertEquals(label, badge.label)
+            assertEquals(label, badge.compactLabel)
+            assertEquals("所选 Sprint 我的估时总计：$label 天", badge.description)
+        }
+        val unknown = requirementsNavigationBadge(null)
+        assertEquals("—", unknown.label)
+        assertEquals("—", unknown.compactLabel)
+        assertEquals("所选 Sprint 我的估时总计：暂不可用", unknown.description)
+    }
+
+    @Test
+    fun `compact badges omit empty counts and preserve exact positive counts`() {
         assertNull(compactNavigationCountLabel(null))
         assertNull(compactNavigationCountLabel(0))
         assertEquals("7", compactNavigationCountLabel(7))
-        assertEquals("9+", compactNavigationCountLabel(10))
+        assertEquals("9", compactNavigationCountLabel(9))
+        assertEquals("10", compactNavigationCountLabel(10))
+        assertEquals("26", compactNavigationCountLabel(26))
+        assertEquals("100", compactNavigationCountLabel(100))
     }
 }

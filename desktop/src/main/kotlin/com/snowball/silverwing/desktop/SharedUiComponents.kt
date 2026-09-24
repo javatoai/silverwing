@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.Commit
 import androidx.compose.material.icons.outlined.Publish
@@ -36,6 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.snowball.silverwing.core.ThemePreference
@@ -120,6 +122,34 @@ internal fun IconActionGroup(content: @Composable RowScope.() -> Unit) {
     }
 }
 
+/** Filled primary "+" affordance so every create-task entry point looks the same. */
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+internal fun PrimaryAddIconButton(
+    label: String,
+    onClick: () -> Unit,
+    size: Dp = 36.dp,
+    iconSize: Dp = 20.dp,
+    cornerRadius: Dp = 12.dp,
+    modifier: Modifier = Modifier,
+) {
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
+        tooltip = { PlainTooltip { Text(label) } },
+        state = rememberTooltipState(),
+    ) {
+        Surface(
+            modifier = modifier.size(size),
+            color = MaterialTheme.colorScheme.primary,
+            shape = RoundedCornerShape(cornerRadius),
+        ) {
+            IconButton(onClick = onClick, modifier = Modifier.fillMaxSize()) {
+                Icon(Icons.Outlined.Add, label, Modifier.size(iconSize), tint = MaterialTheme.colorScheme.onPrimary)
+            }
+        }
+    }
+}
+
 /** Shared Git action cluster used wherever a commit/push trio is offered. */
 @Composable
 internal fun GitActionIconGroup(
@@ -188,7 +218,7 @@ private fun requirementStatusCategory(status: String): RequirementStatusCategory
 }
 
 @Composable
-private fun RequirementStatusPill(status: String) {
+internal fun RequirementStatusPill(status: String) {
     val color = when (requirementStatusCategory(status)) {
         RequirementStatusCategory.PLANNING -> MaterialTheme.colorScheme.primary
         RequirementStatusCategory.DEVELOPMENT -> MaterialTheme.colorScheme.tertiary

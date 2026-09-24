@@ -350,6 +350,7 @@ class ConfigStore(
             showTaskAreaProjectNameCopyIcons = appearance.showTaskAreaProjectNameCopyIcons,
             blockedGitWriteBranches = git.blockedGitWriteBranches,
             meegleProjects = integrations.meegleProjects,
+            meegleDefaultSprintProjectKey = integrations.meegleDefaultSprintProjectKey,
             meegleExecutablePath = integrations.meegleExecutablePath,
             codexExecutablePath = integrations.codexExecutablePath,
             commandProxyUrl = integrations.commandProxyUrl,
@@ -416,6 +417,7 @@ class ConfigStore(
             git = GitShard(blockedGitWriteBranches = config.blockedGitWriteBranches, gitExecutablePath = config.gitExecutablePath),
             integrations = IntegrationsShard(
                 meegleProjects = config.meegleProjects,
+                meegleDefaultSprintProjectKey = config.meegleDefaultSprintProjectKey,
                 meegleExecutablePath = config.meegleExecutablePath,
                 codexExecutablePath = config.codexExecutablePath,
                 commandProxyUrl = config.commandProxyUrl,
@@ -700,6 +702,7 @@ private data class IntegrationsShard(
     /** Model used when AI naming is enabled. */
     val aiRequirementNamingModel: String = RequirementAiNamingModel.DEFAULT,
     val meegleProjects: List<MeegleProjectConfig> = emptyList(),
+    val meegleDefaultSprintProjectKey: String? = null,
     val meegleExecutablePath: String? = null,
     val codexExecutablePath: String? = null,
     /** Explicit value prevents inherited proxy behavior from changing silently. */

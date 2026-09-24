@@ -400,10 +400,14 @@ internal fun SettingsScreen(controller: DesktopApplication) {
         }
     }
     fun saveMeegleProjects() {
-        controller.updateMeegleProjects(meegleProjects.toSortedMap().values.toList()) {
+        fun restoreProjects() {
             meegleProjects.clear()
             controller.config.meegleProjects.forEachIndexed { index, project -> meegleProjects[index] = project }
         }
+        val started = controller.updateMeegleProjects(meegleProjects.toSortedMap().values.toList()) {
+            restoreProjects()
+        }
+        if (!started) restoreProjects()
     }
     fun saveBlockedGitBranches(updated: List<String>) {
         val previous = blockedGitWriteBranches
@@ -3331,6 +3335,58 @@ private fun SettingsFeishuSection(
                     }
                 }
             }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Text("默认 Sprint 团队空间", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "多个 Sprint 同时进行时，优先选择此空间中唯一进行中的 Sprint；仍有多个时手动选择。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            // Read only the persisted selection; rejected or failed saves must not appear successful.
+            val configuredProjects = controller.config.meegleProjects
+            val defaultProjectKey = controller.config.meegleDefaultSprintProjectKey
+            val defaultProject = configuredProjects.firstOrNull { it.projectKey == defaultProjectKey }
+            var defaultMenuExpanded by remember { mutableStateOf(false) }
+            val selectionEnabled = !controller.busy && !saving
+            Box(Modifier.widthIn(max = 440.dp).fillMaxWidth()) {
+                OutlinedButton(
+                    onClick = { defaultMenuExpanded = true },
+                    enabled = selectionEnabled,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        defaultProject?.let { "${it.simpleName} · ${it.projectKey}" } ?: defaultProjectKey ?: "未指定",
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Icon(Icons.Outlined.KeyboardArrowDown, null, Modifier.size(18.dp))
+                }
+                SilverWingDropdownMenu(
+                    expanded = defaultMenuExpanded && selectionEnabled,
+                    onDismissRequest = { defaultMenuExpanded = false },
+                    modifier = Modifier.widthIn(max = 440.dp).heightIn(max = 360.dp),
+                ) {
+                    (listOf<MeegleProjectConfig?>(null) + configuredProjects).forEach { project ->
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    project?.let { "${it.simpleName} · ${it.projectKey}" } ?: "未指定",
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            },
+                            enabled = selectionEnabled && project?.projectKey != defaultProjectKey,
+                            onClick = {
+                                defaultMenuExpanded = false
+                                controller.updateMeegleDefaultSprintProjectKey(project?.projectKey)
+                            },
+                        )
+                    }
+                }
+            }
+            AutoSaveStatus(controller, "feishu")
         }
     }
 }

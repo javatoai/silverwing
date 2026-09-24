@@ -294,7 +294,27 @@ class SettingsController internal constructor(
         onFailure,
         "feishu",
         settingsOperations,
-    ) { it.copy(meegleProjects = projects) }
+    ) { config ->
+        config.copy(
+            meegleProjects = projects,
+            meegleDefaultSprintProjectKey = config.meegleDefaultSprintProjectKey?.takeIf { key ->
+                projects.any { it.projectKey == key }
+            },
+        )
+    }
+
+    fun updateMeegleDefaultSprintProjectKey(projectKey: String?, onFailure: (Throwable) -> Unit = {}): Boolean = mutate(
+        "正在保存默认 Sprint 团队空间…",
+        "默认 Sprint 团队空间已保存",
+        onFailure,
+        "feishu",
+        settingsOperations,
+    ) { config ->
+        require(projectKey == null || config.meegleProjects.any { it.projectKey == projectKey }) {
+            "默认 Sprint 团队空间必须是已配置的 Meegle 项目"
+        }
+        config.copy(meegleDefaultSprintProjectKey = projectKey)
+    }
 
     fun updateMeegleExecutablePath(raw: String, onFailure: (Throwable) -> Unit = {}): Boolean = mutate(
         "正在保存 Meegle 命令路径…",

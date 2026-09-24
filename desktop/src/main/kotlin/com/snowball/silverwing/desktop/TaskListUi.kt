@@ -24,7 +24,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.ArrowForward
-import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
@@ -235,7 +234,7 @@ private fun CompactTaskListButton(visibleTaskCount: Int, onClick: () -> Unit, on
             Text("任务列表（$visibleTaskCount）")
         }
         if (onCreate != null) {
-            CreateTaskIconButton(onCreate)
+            PrimaryAddIconButton("创建任务", onCreate)
         }
     }
 }
@@ -280,7 +279,7 @@ private fun TaskListPane(
                         Text("$filteredCount/$visibleCount", Modifier.padding(horizontal = 9.dp, vertical = 4.dp), style = MaterialTheme.typography.labelMedium)
                     }
                     if (taskCreateEntryVisible(archived)) {
-                        CreateTaskIconButton(onCreate)
+                        PrimaryAddIconButton("创建任务", onCreate)
                     }
                 }
                 OutlinedTextField(
@@ -304,31 +303,6 @@ private fun TaskListPane(
                     archived = archived,
                     modifier = Modifier.fillMaxSize().padding(10.dp),
                     onSelect = onTaskSelected,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-@OptIn(ExperimentalMaterial3Api::class)
-private fun CreateTaskIconButton(onClick: () -> Unit) {
-    TooltipBox(
-        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
-        tooltip = { PlainTooltip { Text("创建任务") } },
-        state = rememberTooltipState(),
-    ) {
-        Surface(
-            modifier = Modifier.size(36.dp),
-            color = MaterialTheme.colorScheme.primary,
-            shape = RoundedCornerShape(12.dp),
-        ) {
-            androidx.compose.material3.IconButton(onClick = onClick, modifier = Modifier.fillMaxSize()) {
-                Icon(
-                    Icons.Outlined.Add,
-                    contentDescription = "创建任务",
-                    modifier = Modifier.size(20.dp),
-                    tint = MaterialTheme.colorScheme.onPrimary,
                 )
             }
         }

@@ -101,6 +101,18 @@ private fun AiNamingStatusRow(message: String, loading: Boolean = false) {
 
 internal typealias CreateTaskAction = (String, String, String, List<String>, String, String, List<String>, Set<BranchReuseKey>, List<TaskServiceSelection>) -> Unit
 
+/** Requirement chosen outside the dialog (for example from the requirements list) that seeds the create form. */
+internal data class CreateTaskRequirement(val title: String, val url: String)
+
+/** Seeds the create form for an externally chosen requirement; an absent seed keeps the blank form. */
+internal fun initialCreateTaskDraft(
+    branchPrefix: String,
+    requirement: CreateTaskRequirement?,
+): RequirementDraftState {
+    val initial = RequirementDraftState(branch = branchPrefix)
+    return requirement?.let { initial.changeRequirement(it.url, branchPrefix, it.title) } ?: initial
+}
+
 /** Owns the exact draft checked by preflight, including through a reuse-confirmation dialog. */
 internal class CreateTaskSubmissionSnapshot(request: CreateGroupedTaskRequest, toolIds: List<String>) {
     val request = request.copy(
@@ -126,20 +138,21 @@ internal class CreateTaskSubmissionSnapshot(request: CreateGroupedTaskRequest, t
 internal fun CreateTaskDialog(
     controller: DesktopApplication,
     onDismiss: () -> Unit,
+    initialRequirement: CreateTaskRequirement? = null,
     onCreate: CreateTaskAction,
 ) {
     val initialGroup = controller.config.groups.first()
     val initialBranchPrefix = remember { controller.config.defaultBranchPrefix }
     val initialDefaultToolIds = remember { controller.config.defaultWorkspaceToolIds.toSet() }
     var draft by remember {
-        mutableStateOf(RequirementDraftState(branch = initialBranchPrefix))
+        mutableStateOf(initialCreateTaskDraft(initialBranchPrefix, initialRequirement))
     }
     var notes by remember { mutableStateOf("") }
     var selectedTemplateId by remember { mutableStateOf<String?>(null) }
     var pendingTemplate by remember { mutableStateOf<AgentTaskTemplate?>(null) }
     var groupId by remember { mutableStateOf(initialGroup.id) }
-    // 只有从候选列表明确选中的需求才能触发自动命名；手工填写链接不应把内容发送给 Codex。
-    var aiSelectedRequirementLink by remember { mutableStateOf<String?>(null) }
+    // 只有从候选列表或外部需求明确选中的需求才能触发自动命名；手工填写链接不应把内容发送给 Codex。
+    var aiSelectedRequirementLink by remember { mutableStateOf(initialRequirement?.url) }
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
     var selectedToolIds by remember { mutableStateOf(initialDefaultToolIds) }
     var rightTab by remember { mutableStateOf("notes") }
@@ -251,6 +264,11 @@ internal fun CreateTaskDialog(
         controller.requestRequirementMetadata(requestedLink) { metadata ->
             updateDraft(draft.applyMetadata(requestedLink, metadata))
         }
+    }
+    LaunchedEffect(Unit) {
+        // 外部带入的需求（如需求列表的“+”按钮）属于明确选择，与候选点击一致地触发自动命名。
+        val seed = initialRequirement
+        if (seed != null && controller.config.aiRequirementNamingEnabled) requestAiNaming(seed.url)
     }
     LaunchedEffect(
         draft.requirementLink,

@@ -119,7 +119,7 @@ jobs:
           name: silverwing-windows-packages
           path: dist/windows/*
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 2
 
   macos:
     name: macOS packages
@@ -174,7 +174,7 @@ jobs:
           name: silverwing-macos-packages
           path: dist/macos/*
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 2
 
   publish:
     name: Publish GitHub Release

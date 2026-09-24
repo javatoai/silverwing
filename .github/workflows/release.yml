@@ -53,9 +53,43 @@ jobs:
           chmod +x ./gradlew
           ./gradlew clean :desktop:compileKotlin
 
+  prepare-release:
+    name: Prepare draft release
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      # Packages are uploaded straight to the draft release instead of
+      # actions/upload-artifact: artifact storage is metered per account and a
+      # single release already fills the free allowance, while release assets are not.
+      - name: Create draft release ${{ github.ref_name }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists; reusing it."
+          else
+            notes=$(mktemp)
+            printf '自动构建 silverwing 桌面产物。\n\n- **Windows**：绿色 portable zip、Setup EXE、MSI\n- **macOS**：DMG\n\nCommit: `%s`\n' "$GITHUB_SHA" > "$notes"
+            gh release create "$tag" \
+              --draft \
+              --verify-tag \
+              --title "silverwing $tag" \
+              --generate-notes \
+              --notes-file "$notes"
+          fi
+
+      - name: Show draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release view "$GITHUB_REF_NAME" --json tagName,isDraft,url --jq '"tag=\(.tagName) draft=\(.isDraft) url=\(.url)"'
+
   windows:
     name: Windows packages
-    needs: verify
+    needs: [verify, prepare-release]
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -113,17 +147,20 @@ jobs:
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           Get-ChildItem $out | ForEach-Object { Write-Host $_.FullName }
 
-      - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: silverwing-windows-packages
-          path: dist/windows/*
-          if-no-files-found: error
-          retention-days: 2
+      - name: Upload Windows packages to release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = Get-ChildItem 'dist\windows' -File | ForEach-Object { $_.FullName }
+          if (-not $files) { throw 'No Windows packages staged' }
+          gh release upload "$env:GITHUB_REF_NAME" @files --clobber
+          gh release view "$env:GITHUB_REF_NAME" --json assets --jq '.assets[] | "\(.name) \(.size)"'
 
   macos:
     name: macOS packages
-    needs: verify
+    needs: [verify, prepare-release]
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -168,58 +205,44 @@ jobs:
           cp "$dmg" "dist/macos/silverwing-${version}-macos.dmg"
           ls -la dist/macos
 
-      - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: silverwing-macos-packages
-          path: dist/macos/*
-          if-no-files-found: error
-          retention-days: 2
+      - name: Upload macOS packages to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(dist/macos/*)
+          [ ${#files[@]} -gt 0 ] || { echo 'No macOS packages staged' >&2; exit 1; }
+          gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
+          gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[] | "\(.name) \(.size)"'
 
   publish:
     name: Publish GitHub Release
     needs: [windows, macos]
     runs-on: ubuntu-latest
     steps:
-      - name: Download Windows packages
-        uses: actions/download-artifact@v4
-        with:
-          name: silverwing-windows-packages
-          path: release-assets
-
-      - name: Download macOS packages
-        uses: actions/download-artifact@v4
-        with:
-          name: silverwing-macos-packages
-          path: release-assets
-
-      - name: Resolve release metadata
-        id: meta
+      - name: Verify staged release assets
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-          echo "name=silverwing ${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-          echo "prerelease=false" >> "$GITHUB_OUTPUT"
-          echo "make_latest=true" >> "$GITHUB_OUTPUT"
-          ls -la release-assets
+          tag="$GITHUB_REF_NAME"
+          gh release view "$tag" --json isDraft,assets --jq '"draft=\(.isDraft)", (.assets[] | "  \(.name) \(.size) bytes")'
+          names=$(gh release view "$tag" --json assets --jq '.assets[].name')
+          for suffix in -windows-portable.zip -windows-setup.exe -windows.msi -macos.dmg; do
+            grep -q -- "$suffix\$" <<< "$names" || {
+              echo "Release $tag is missing an asset matching *$suffix" >&2
+              exit 1
+            }
+          done
 
-      - name: Create or update GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.meta.outputs.tag }}
-          name: ${{ steps.meta.outputs.name }}
-          prerelease: ${{ steps.meta.outputs.prerelease }}
-          make_latest: ${{ steps.meta.outputs.make_latest }}
-          generate_release_notes: ${{ startsWith(github.ref, 'refs/tags/') }}
-          body: |
-            自动构建 silverwing 桌面产物。
-
-            - **Windows**：绿色 portable zip、Setup EXE、MSI
-            - **macOS**：DMG
-
-            Commit: `${{ github.sha }}`
-          files: release-assets/*
-          fail_on_unmatched_files: true
+      - name: Publish release
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+          gh release view "$GITHUB_REF_NAME" --json tagName,isDraft,url --jq '"published tag=\(.tagName) draft=\(.isDraft) url=\(.url)"'

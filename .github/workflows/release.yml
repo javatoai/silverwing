@@ -252,3 +252,45 @@ jobs:
           set -euo pipefail
           gh release edit "$GITHUB_REF_NAME" --draft=false --latest
           gh release view "$GITHUB_REF_NAME" --json tagName,isDraft,url --jq '"published tag=\(.tagName) draft=\(.isDraft) url=\(.url)"'
+
+  sync-feishu-wiki:
+    name: Sync release to Feishu Wiki
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Lark CLI
+        run: npm install --global @larksuite/cli@1.0.96
+
+      - name: Download published release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          release_dir="$RUNNER_TEMP/silverwing-release"
+          mkdir -p "$release_dir/assets"
+          gh release view "$GITHUB_REF_NAME" \
+            --json tagName,url,publishedAt,body,assets > "$release_dir/release.json"
+          gh release download "$GITHUB_REF_NAME" --dir "$release_dir/assets"
+          test -n "$(find "$release_dir/assets" -maxdepth 1 -type f -print -quit)"
+          printf 'FEISHU_RELEASE_DIR=%s\n' "$release_dir" >> "$GITHUB_ENV"
+
+      - name: Sync release page and attachments
+        shell: bash
+        env:
+          FEISHU_RELEASE_APP_ID: ${{ secrets.FEISHU_RELEASE_APP_ID }}
+          FEISHU_RELEASE_APP_SECRET: ${{ secrets.FEISHU_RELEASE_APP_SECRET }}
+          FEISHU_RELEASE_PARENT_NODE_TOKEN: ${{ secrets.FEISHU_RELEASE_PARENT_NODE_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 scripts/publish_feishu_release.py \
+            --release-json "$FEISHU_RELEASE_DIR/release.json" \
+            --assets-dir "$FEISHU_RELEASE_DIR/assets"

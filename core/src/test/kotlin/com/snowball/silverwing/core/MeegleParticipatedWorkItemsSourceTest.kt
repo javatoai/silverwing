@@ -782,6 +782,22 @@ class MeegleParticipatedWorkItemsSourceTest {
     }
 
     @Test
+    fun `completed zero point child keeps the parent personal estimate`() = runBlocking {
+        val completedChild = node(
+            people = listOf(personalRow(points = "2")),
+            subTasks = listOf(subTask(points = "0", finished = true)),
+        )
+
+        val result = load(runner(intercept = { command ->
+            if (command.isAction("workflow", "get-node")) ok(page(completedChild.toString())) else null
+        }, block = ::singleItemMql))
+
+        assertDays("2", result.items.single().mySprintEstimateDays)
+        assertTrue(result.items.single().metadataWarnings.isEmpty())
+        assertTrue(result.failures.isEmpty())
+    }
+
+    @Test
     fun `shared child points cannot be attributed to me even outside the sprint`() = runBlocking {
         for (start in listOf("1970-01-01T00:00:00.100Z", "1970-01-01T00:00:00.050Z")) {
             val shared = node(subTasks = listOf(subTask(owners = listOf("me", "other"), start = start, end = start)))
@@ -2290,12 +2306,14 @@ class MeegleParticipatedWorkItemsSourceTest {
         points: String = "2",
         start: String = "1970-01-01T00:00:00.100Z",
         end: String = "1970-01-01T00:00:00.200Z",
+        finished: Boolean = false,
     ): JsonObject = JsonObject(mapOf(
         "sub_task_id" to JsonPrimitive(key),
         "owner" to JsonPrimitive(JsonArray(owners.map { JsonObject(mapOf("username" to JsonPrimitive(it))) }).toString()),
         "points" to Json.parseToJsonElement(points),
         "estimate_start_date" to JsonPrimitive(start),
         "estimate_end_date" to JsonPrimitive(end),
+        "is_finished" to JsonPrimitive(finished),
     ))
 
     private fun assertDays(expected: String, actual: BigDecimal?, message: String? = null) {

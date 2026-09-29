@@ -75,7 +75,11 @@ internal fun personalWorkItemEstimate(
 }
 
 private data class PersonalNodeSchedule(val points: BigDecimal?, val start: Long?, val end: Long?)
-private data class SubTaskEstimate(val owners: Set<String>, val schedule: PersonalNodeSchedule)
+private data class SubTaskEstimate(
+    val owners: Set<String>,
+    val schedule: PersonalNodeSchedule,
+    val finished: Boolean,
+)
 private data class NodeEstimates(
     val personalSchedules: List<PersonalNodeSchedule>,
     val subTasks: Map<String, SubTaskEstimate>,
@@ -90,8 +94,15 @@ private data class NodeEstimates(
             }
             val childTotal = mine.fold(BigDecimal.ZERO) { total, schedule -> total + (schedule.points ?: BigDecimal.ZERO) }
             val rollup = personalSchedules.singleOrNull()?.points ?: BigDecimal.ZERO
-            require(childTotal.compareTo(rollup) == 0) { "子项个人估分与节点个人汇总不一致，无法确认明细完整性" }
-            mine
+            val completedZeroPointChild = subTasks.values.any { child ->
+                currentUserKey in child.owners && child.finished && child.schedule.points?.signum() == 0
+            }
+            if (childTotal.compareTo(rollup) < 0 && completedZeroPointChild) {
+                personalSchedules
+            } else {
+                require(childTotal.compareTo(rollup) == 0) { "子项个人估分与节点个人汇总不一致，无法确认明细完整性" }
+                mine
+            }
         }
         return schedules.fold(BigDecimal.ZERO) { total, schedule ->
             val points = schedule.points ?: return@fold total
@@ -117,7 +128,11 @@ private fun nodeEstimates(node: JsonObject, currentUserKey: String): NodeEstimat
         val start = child.optionalOffsetMillis("estimate_start_date")
         val end = child.optionalOffsetMillis("estimate_end_date")
         if (start != null && end != null) require(start <= end) { "子项 $id 排期开始时间晚于结束时间" }
-        val estimate = SubTaskEstimate(userKeys, PersonalNodeSchedule(child.optionalPoints(), start, end))
+        val finished = child["is_finished"]?.let { value ->
+            require(value is JsonPrimitive) { "子项 $id 完成状态无效" }
+            requireNotNull(value.booleanOrNull) { "子项 $id 完成状态无效" }
+        } ?: false
+        val estimate = SubTaskEstimate(userKeys, PersonalNodeSchedule(child.optionalPoints(), start, end), finished)
         val prior = subTasks.putIfAbsent(id, estimate)
         require(prior == null || prior == estimate) { "子项 $id 的估分明细重复且不一致" }
     }

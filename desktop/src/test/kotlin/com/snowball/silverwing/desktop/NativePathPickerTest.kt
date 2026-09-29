@@ -23,10 +23,8 @@ class NativePathPickerTest {
     }
 
     @Test
-    fun `application picker filters to app bundles only on macOS`() {
-        assertEquals(listOf("app"), applicationPickerExtensions("Mac OS X"))
-        assertEquals(emptyList<String>(), applicationPickerExtensions("Windows 11"))
-        assertEquals(emptyList<String>(), applicationPickerExtensions("Linux"))
+    fun `application picker accepts arbitrary executable files on macOS`() {
+        assertEquals(emptyList<String>(), applicationPickerExtensions())
     }
 
     @Test

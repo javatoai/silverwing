@@ -1,4 +1,4 @@
-"""Generate deterministic app icons from the silverwing vector geometry."""
+"""Generate rounded SilverWing app icons from the canonical brand artwork."""
 
 from __future__ import annotations
 
@@ -6,59 +6,26 @@ import io
 import struct
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageOps
+from PIL import Image, ImageChops, ImageDraw, ImageOps
 
 
 ROOT = Path(__file__).resolve().parents[1]
 RESOURCE_DIR = ROOT / "desktop" / "src" / "main" / "resources"
 COMPOSE_RESOURCE_DIR = ROOT / "desktop" / "src" / "main" / "composeResources" / "drawable"
+MASTER_ICON = ROOT / "tools" / "assets" / "silverwing-icon-master.png"
 
 
 def render(size: int) -> Image.Image:
-    scale = 4
-    canvas = size * scale
-    image = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
-    margin = int(canvas * 0.0625)
-    radius = int(canvas * 0.2265)
-    gradient = Image.linear_gradient("L").resize((canvas, canvas))
-    gradient = ImageOps.colorize(gradient, "#3B82F6", "#1D4ED8").convert("RGBA")
-    mask = Image.new("L", (canvas, canvas), 0)
-    ImageDraw.Draw(mask).rounded_rectangle(
-        (margin, margin, canvas - margin, canvas - margin),
-        radius=radius,
+    with Image.open(MASTER_ICON) as source:
+        image = ImageOps.fit(source.convert("RGBA"), (size, size), Image.Resampling.LANCZOS)
+    rounded = Image.new("L", (size, size), 0)
+    ImageDraw.Draw(rounded).rounded_rectangle(
+        (0, 0, size - 1, size - 1),
+        radius=round(size * 0.22),
         fill=255,
     )
-    image.paste(gradient, mask=mask)
-    draw = ImageDraw.Draw(image)
-
-    white = (255, 255, 255, 255)
-    width = int(canvas * 0.0703)
-    points = [
-        (int(canvas * 0.3515), int(canvas * 0.287)),
-        (int(canvas * 0.3515), int(canvas * 0.451)),
-        (int(canvas * 0.412), int(canvas * 0.512)),
-        (int(canvas * 0.588), int(canvas * 0.512)),
-        (int(canvas * 0.648), int(canvas * 0.572)),
-        (int(canvas * 0.648), int(canvas * 0.701)),
-    ]
-    draw.line(points, fill=white, width=width, joint="curve")
-    draw.line(
-        [
-            (int(canvas * 0.3515), int(canvas * 0.512)),
-            (int(canvas * 0.3515), int(canvas * 0.701)),
-        ],
-        fill=white,
-        width=width,
-    )
-    node_radius = int(canvas * 0.080)
-    for x, y in (
-        (int(canvas * 0.3515), int(canvas * 0.266)),
-        (int(canvas * 0.3515), int(canvas * 0.734)),
-        (int(canvas * 0.648), int(canvas * 0.734)),
-    ):
-        draw.ellipse((x - node_radius, y - node_radius, x + node_radius, y + node_radius), fill=white)
-
-    return image.resize((size, size), Image.Resampling.LANCZOS)
+    image.putalpha(ImageChops.multiply(image.getchannel("A"), rounded))
+    return image
 
 
 def write_icns(images: dict[int, Image.Image], destination: Path) -> None:

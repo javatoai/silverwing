@@ -13,18 +13,14 @@ import publish_feishu_release as subject  # noqa: E402
 
 
 class FakeLark:
-    def __init__(self, items: list[dict[str, Any]]) -> None:
-        self.items = items
+    def __init__(self, fail_media_insert: bool = False) -> None:
         self.calls: list[tuple[list[str], str | None]] = []
+        self.fail_media_insert = fail_media_insert
 
     def __call__(self, command: list[str], stdin: str | None = None) -> str:
         self.calls.append((command, stdin))
         if command[:3] == ["lark-cli", "config", "init"]:
             return "configured"
-        if command[:3] == ["lark-cli", "wiki", "+node-get"]:
-            return json.dumps({"ok": True, "data": {"node": {"space_id": "space-1"}}})
-        if command[:3] == ["lark-cli", "wiki", "+node-list"]:
-            return json.dumps({"ok": True, "data": {"items": self.items}})
         if command[:3] == ["lark-cli", "docs", "+create"]:
             return json.dumps(
                 {
@@ -41,6 +37,8 @@ class FakeLark:
             ["lark-cli", "docs", "+update"],
             ["lark-cli", "docs", "+media-insert"],
         ):
+            if command[:3] == ["lark-cli", "docs", "+media-insert"] and self.fail_media_insert:
+                raise subject.PublishError("attachment upload failed")
             return json.dumps({"ok": True, "data": {"document": {}}})
         raise AssertionError(f"Unexpected Lark CLI command: {command}")
 
@@ -73,9 +71,9 @@ class PublishFeishuReleaseTest(unittest.TestCase):
         self.temporary.cleanup()
 
     def test_new_tag_creates_page_and_attaches_every_release_asset(self) -> None:
-        fake = FakeLark([])
+        fake = FakeLark()
 
-        document_url, created, attachment_count = subject.synchronize_release(
+        document_id, document_url, created, attachment_count = subject.synchronize_release(
             self.release,
             self.assets_directory,
             self.environment,
@@ -83,6 +81,7 @@ class PublishFeishuReleaseTest(unittest.TestCase):
             self.root,
         )
 
+        self.assertEqual("doc-created", document_id)
         self.assertTrue(created)
         self.assertEqual("https://example.feishu.cn/docx/doc-created", document_url)
         self.assertEqual(2, attachment_count)
@@ -92,22 +91,15 @@ class PublishFeishuReleaseTest(unittest.TestCase):
         attachments = [command for command, _ in fake.calls if command[2] == "+media-insert"]
         self.assertEqual(2, len(attachments))
         self.assertEqual({"silverwing-windows.zip", "silverwing-macos.dmg"}, {Path(call[call.index("--file") + 1]).name for call in attachments})
+        self.assertFalse(any(command[1:3] == ["wiki", "+node-list"] for command, _ in fake.calls))
+        self.assertNotIn("--format", create_call)
         self.assertFalse(list(self.root.glob(".feishu-release-*.md")))
 
-    def test_existing_tag_page_is_overwritten_then_reattached(self) -> None:
-        fake = FakeLark(
-            [
-                {
-                    "title": "v9.9.9",
-                    "node_type": "origin",
-                    "obj_type": "docx",
-                    "obj_token": "doc-existing",
-                    "url": "https://example.feishu.cn/wiki/wiki-existing",
-                }
-            ]
-        )
+    def test_existing_release_marker_is_overwritten_then_reattached(self) -> None:
+        fake = FakeLark()
+        self.release["body"] += "\n<!-- silverwing-feishu-document: doc-existing -->\n"
 
-        document_url, created, attachment_count = subject.synchronize_release(
+        document_id, document_url, created, attachment_count = subject.synchronize_release(
             self.release,
             self.assets_directory,
             self.environment,
@@ -116,23 +108,23 @@ class PublishFeishuReleaseTest(unittest.TestCase):
         )
 
         self.assertFalse(created)
-        self.assertEqual("https://example.feishu.cn/wiki/wiki-existing", document_url)
+        self.assertEqual("doc-existing", document_id)
+        self.assertIsNone(document_url)
         self.assertEqual(2, attachment_count)
         self.assertFalse(any(command[2] == "+create" for command, _ in fake.calls))
         update_call = next(command for command, _ in fake.calls if command[2] == "+update")
         self.assertEqual("doc-existing", update_call[update_call.index("--doc") + 1])
         self.assertEqual("overwrite", update_call[update_call.index("--command") + 1])
+        self.assertNotIn("--format", update_call)
 
-    def test_duplicate_tag_pages_fail_before_writing(self) -> None:
-        duplicate = {
-            "title": "v9.9.9",
-            "node_type": "origin",
-            "obj_type": "docx",
-            "obj_token": "doc-duplicate",
-        }
-        fake = FakeLark([duplicate, {**duplicate, "obj_token": "doc-other"}])
+    def test_duplicate_release_markers_fail_before_writing(self) -> None:
+        fake = FakeLark()
+        self.release["body"] += (
+            "\n<!-- silverwing-feishu-document: doc-one -->"
+            "\n<!-- silverwing-feishu-document: doc-two -->\n"
+        )
 
-        with self.assertRaisesRegex(subject.PublishError, "多个同名 Tag 页面"):
+        with self.assertRaisesRegex(subject.PublishError, "多个飞书页面标记"):
             subject.synchronize_release(
                 self.release,
                 self.assets_directory,
@@ -143,6 +135,26 @@ class PublishFeishuReleaseTest(unittest.TestCase):
 
         self.assertFalse(any(command[1:3] == ["docs", "+create"] for command, _ in fake.calls))
         self.assertFalse(any(command[1:3] == ["docs", "+update"] for command, _ in fake.calls))
+
+    def test_attachment_failure_keeps_result_for_a_safe_retry(self) -> None:
+        fake = FakeLark(fail_media_insert=True)
+        result_path = self.root / "result.json"
+
+        with self.assertRaisesRegex(subject.PublishError, "attachment upload failed"):
+            subject.synchronize_release(
+                self.release,
+                self.assets_directory,
+                self.environment,
+                fake,
+                self.root,
+                result_path,
+            )
+
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        self.assertEqual("doc-created", result["documentId"])
+        self.assertTrue(result["created"])
+        self.assertEqual(0, result["attachmentCount"])
+        self.assertFalse(result["attachmentsCompleted"])
 
     def test_markdown_keeps_release_notes_and_attachment_list(self) -> None:
         markdown = subject.release_markdown(

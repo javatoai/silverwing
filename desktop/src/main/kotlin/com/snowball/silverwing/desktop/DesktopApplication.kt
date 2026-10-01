@@ -1538,6 +1538,8 @@ class DesktopApplication(
     fun runCliInTerminal(command: String) = desktopActions.runCliInTerminal(command)
     fun openUrl(url: String) = desktopActions.openUrl(url)
     fun copyText(text: String, message: String = "已复制") = desktopActions.copy(text, message)
+    fun copyFile(path: Path) = desktopActions.copyFile(path)
+    fun copyFiles(paths: List<Path>) = desktopActions.copyFiles(paths)
 
     /** Called from Window.onFocusEvent as the inexpensive external-file fallback. */
     fun onWindowFocused() {

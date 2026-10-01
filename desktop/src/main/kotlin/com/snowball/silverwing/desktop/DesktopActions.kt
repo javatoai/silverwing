@@ -5,7 +5,11 @@ import com.snowball.silverwing.core.DesktopIntegration
 import com.snowball.silverwing.core.DevelopmentToolType
 import com.snowball.silverwing.core.ServiceWorkspace
 import java.awt.Toolkit
+import java.awt.datatransfer.DataFlavor
+import java.awt.datatransfer.Transferable
+import java.awt.datatransfer.UnsupportedFlavorException
 import java.awt.datatransfer.StringSelection
+import java.io.File
 import java.nio.file.Path
 import java.nio.file.Files
 
@@ -70,7 +74,37 @@ class DesktopActions internal constructor(
         Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(text), null)
     }.onSuccess { onStatus(message) }
 
+    /** Copies existing files or folders as a native file-list clipboard payload. */
+    fun copyFiles(paths: List<Path>) = attempt {
+        require(paths.isNotEmpty()) { "请先选择文件或文件夹" }
+        val normalized = paths.map { it.toAbsolutePath().normalize() }.distinct()
+        normalized.forEach { path ->
+            require(!Files.isSymbolicLink(path) && (Files.isRegularFile(path) || Files.isDirectory(path))) {
+                "文件或文件夹不存在：$path"
+            }
+        }
+        val selected = withoutCopiedDescendants(normalized)
+        Toolkit.getDefaultToolkit().systemClipboard.setContents(FileListTransferable(selected.map(Path::toFile)), null)
+    }.onSuccess { onStatus("文件引用已复制") }
+
+    fun copyFile(path: Path) = copyFiles(listOf(path))
+
     private fun attempt(block: () -> Unit): Result<Unit> = runCatching(block).onFailure(onError)
+}
+
+internal fun withoutCopiedDescendants(paths: List<Path>): List<Path> = paths.distinct().filter { path ->
+    paths.none { parent -> parent != path && Files.isDirectory(parent) && path.startsWith(parent) }
+}
+
+private class FileListTransferable(private val files: List<File>) : Transferable {
+    override fun getTransferDataFlavors(): Array<DataFlavor> = arrayOf(DataFlavor.javaFileListFlavor)
+
+    override fun isDataFlavorSupported(flavor: DataFlavor): Boolean = flavor == DataFlavor.javaFileListFlavor
+
+    override fun getTransferData(flavor: DataFlavor): Any {
+        if (!isDataFlavorSupported(flavor)) throw UnsupportedFlavorException(flavor)
+        return files
+    }
 }
 
 internal fun temporaryDevelopmentToolSelectionEnabled(config: AppConfig): Boolean =

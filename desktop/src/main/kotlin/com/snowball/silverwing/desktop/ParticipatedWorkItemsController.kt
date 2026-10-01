@@ -15,6 +15,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.nio.file.Path
 
 internal data class ParticipatedWorkItemsUiState(
     val items: List<ParticipatedWorkItem> = emptyList(),
@@ -42,6 +43,12 @@ internal sealed interface ParticipatedWorkItemBodyState {
     data class Failed(val itemKey: String, val message: String) : ParticipatedWorkItemBodyState
 }
 
+internal sealed interface ParticipatedWorkItemImageState {
+    data object Loading : ParticipatedWorkItemImageState
+    data class Loaded(val path: Path) : ParticipatedWorkItemImageState
+    data class Failed(val message: String) : ParticipatedWorkItemImageState
+}
+
 /** Keeps list and lazily loaded body in memory for this application session only. */
 internal class ParticipatedWorkItemsController(
     private val source: ParticipatedWorkItemsSource,
@@ -53,6 +60,8 @@ internal class ParticipatedWorkItemsController(
     var selectedKey by mutableStateOf<String?>(null)
         private set
     var bodyState by mutableStateOf<ParticipatedWorkItemBodyState>(ParticipatedWorkItemBodyState.Idle)
+        private set
+    var bodyImageStates by mutableStateOf<Map<String, ParticipatedWorkItemImageState>>(emptyMap())
         private set
 
     private var projectKeys: List<String>? = null
@@ -136,6 +145,7 @@ internal class ParticipatedWorkItemsController(
     private fun clearSelection() {
         bodyGeneration++
         bodyCache.clear()
+        bodyImageStates = emptyMap()
         selectedKey = null
         bodyState = ParticipatedWorkItemBodyState.Idle
     }
@@ -144,8 +154,10 @@ internal class ParticipatedWorkItemsController(
         if (selectedKey == item.key && !forceBody && bodyState !is ParticipatedWorkItemBodyState.Idle) return
         selectedKey = item.key
         val generation = ++bodyGeneration
+        bodyImageStates = emptyMap()
         if (!forceBody) bodyCache[item.key]?.let {
             bodyState = ParticipatedWorkItemBodyState.Ready(item.key, it)
+            loadBodyImages(item, it, generation)
             return
         }
         bodyState = ParticipatedWorkItemBodyState.Loading(item.key)
@@ -162,6 +174,7 @@ internal class ParticipatedWorkItemsController(
                 onSuccess = { content ->
                     bodyCache[item.key] = content
                     bodyState = ParticipatedWorkItemBodyState.Ready(item.key, content)
+                    loadBodyImages(item, content, generation)
                 },
                 onFailure = { error ->
                     bodyState = ParticipatedWorkItemBodyState.Failed(
@@ -170,6 +183,43 @@ internal class ParticipatedWorkItemsController(
                     )
                 },
             )
+        }
+    }
+
+    fun retryBodyImage(item: ParticipatedWorkItem, fileUrl: String) {
+        if (selectedKey != item.key || fileUrl !in bodyImageStates) return
+        val ready = bodyState as? ParticipatedWorkItemBodyState.Ready ?: return
+        if (ready.itemKey != item.key) return
+        val generation = bodyGeneration
+        bodyImageStates = bodyImageStates + (fileUrl to ParticipatedWorkItemImageState.Loading)
+        downloadBodyImage(item, fileUrl, generation, retry = true)
+    }
+
+    private fun loadBodyImages(item: ParticipatedWorkItem, content: String, generation: Long) {
+        val imageUrls = meegleRichTextImageUrls(content)
+        bodyImageStates = imageUrls.associateWith { ParticipatedWorkItemImageState.Loading }
+        imageUrls.forEach { fileUrl -> downloadBodyImage(item, fileUrl, generation, retry = false) }
+    }
+
+    private fun downloadBodyImage(item: ParticipatedWorkItem, fileUrl: String, generation: Long, retry: Boolean) {
+        scope.launch {
+            val result = try {
+                Result.success(withContext(ioDispatcher) { source.downloadBodyImage(item, fileUrl, retry) })
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                Result.failure(error)
+            }
+            if (generation != bodyGeneration || selectedKey != item.key) return@launch
+            bodyImageStates = bodyImageStates + (fileUrl to result.fold(
+                onSuccess = { path ->
+                    if (path == null) ParticipatedWorkItemImageState.Failed("当前数据源不支持读取此图片")
+                    else ParticipatedWorkItemImageState.Loaded(path)
+                },
+                onFailure = { error ->
+                    ParticipatedWorkItemImageState.Failed(error.message.orEmpty().ifBlank { "图片下载失败" })
+                },
+            ))
         }
     }
 }

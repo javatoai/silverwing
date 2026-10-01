@@ -21,6 +21,20 @@ class AppSessionStoreTest {
     }
 
     @Test
+    fun `archived route remains reachable when there are no active tasks`() {
+        val archived = task("archived", TaskLifecycleStatus.ARCHIVED)
+        val session = AppSessionStore(AppConfig(), listOf(archived))
+
+        session.navigation = NavigationItem.ARCHIVED
+
+        assertEquals(archived, session.selectedTask)
+        assertEquals(NavigationItem.TASKS, sidebarNavigationSelection(session.navigation))
+
+        session.navigation = NavigationItem.TASKS
+        assertEquals(null, session.selectedTask)
+    }
+
+    @Test
     fun `navigation preserves a selection already visible in destination category`() {
         val newest = task("newest", TaskLifecycleStatus.ARCHIVED)
         val selected = task("selected", TaskLifecycleStatus.ARCHIVED)

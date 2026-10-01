@@ -35,9 +35,21 @@ internal data class LocalSkillFileTreeRow(
 internal fun buildLocalSkillFileTree(
     skillDirectoryName: String,
     files: List<LocalSkillFileEntry>,
+    directoryPaths: List<String> = emptyList(),
 ): LocalSkillFileTreeNode.Directory {
     require(skillDirectoryName.isNotBlank()) { "Skill 目录名不能为空" }
     val root = MutableDirectory(skillDirectoryName, "")
+    directoryPaths.forEach { relativePath ->
+        val segments = relativePath.split('/')
+        require(relativePath.isNotBlank() && segments.all { it.isNotBlank() && it != "." && it != ".." }) {
+            "目录路径不安全：$relativePath"
+        }
+        var directory = root
+        segments.forEach { segment ->
+            val childPath = listOf(directory.relativePath, segment).filter(String::isNotBlank).joinToString("/")
+            directory = directory.directories.getOrPut(segment) { MutableDirectory(segment, childPath) }
+        }
+    }
     files.forEach { file ->
         val segments = file.relativePath.split('/')
         require(file.relativePath.isNotBlank() && segments.all { it.isNotBlank() && it != "." && it != ".." }) {

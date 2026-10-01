@@ -14,11 +14,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.ContentCopy
-import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -101,8 +99,8 @@ internal fun TaskDetailHeader(
     physicalWorkspaces: List<ServiceWorkspace>,
     groupName: String?,
     showGroup: Boolean,
-    onArchive: () -> Unit,
-    onDelete: () -> Unit,
+    canPreviewRequirementMaterials: Boolean,
+    onPreviewRequirementMaterials: () -> Unit,
 ) {
     val abnormalCount = physicalWorkspaces.count { workspace ->
         controller.gitHealth(workspace)?.state in setOf(WorkspaceGitHealthState.MISSING, WorkspaceGitHealthState.FAILED)
@@ -128,7 +126,7 @@ internal fun TaskDetailHeader(
                     requirementNumber = requirementNumber,
                     modifier = Modifier.weight(1f),
                 )
-                TaskLifecycleActions(controller, task, onArchive, onDelete)
+                TaskHeaderMaterialsAction(canPreviewRequirementMaterials, onPreviewRequirementMaterials)
             }
             TaskDetailHeaderLayout.STACKED -> Column(
                 Modifier.fillMaxWidth().padding(horizontal = 2.dp, vertical = 2.dp),
@@ -144,7 +142,7 @@ internal fun TaskDetailHeader(
                     requirementNumber = requirementNumber,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                TaskLifecycleActions(controller, task, onArchive, onDelete, Modifier.fillMaxWidth())
+                TaskHeaderMaterialsAction(canPreviewRequirementMaterials, onPreviewRequirementMaterials, Modifier.fillMaxWidth())
             }
         }
     }
@@ -201,33 +199,31 @@ private fun TaskHeaderContent(
                 }
             }
         }
-        RequirementMaterialsDirectoryRow(controller, task)
+        RequirementMaterialsStatusNotice(controller, task)
     }
 }
 
 @Composable
-private fun RequirementMaterialsDirectoryRow(controller: DesktopApplication, task: TaskManifest) {
+private fun RequirementMaterialsStatusNotice(controller: DesktopApplication, task: TaskManifest) {
     when (task.requirementMaterials.status) {
-        RequirementMaterialsStatus.NOT_REQUESTED -> Unit
+        RequirementMaterialsStatus.NOT_REQUESTED -> {
+            Text(
+                when {
+                    task.requirementLink.isBlank() -> "需求资料未关联：任务缺少需求链接"
+                    !controller.config.requirementMaterialsConfigured -> "需求资料未关联：请先配置目录"
+                    else -> "需求资料未关联"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         RequirementMaterialsStatus.READY -> Unit
         RequirementMaterialsStatus.FAILED -> {
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text(
-                    "需求资料目录未就绪：${task.requirementMaterials.failureReason ?: "未知原因"}",
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-                OutlinedButton(onClick = { controller.retryRequirementMaterials(task) }, enabled = !controller.busy) {
-                    Icon(Icons.Outlined.Refresh, null, Modifier.size(17.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("重试资料目录")
-                }
-            }
+            Text(
+                "需求资料关联失败，请在更多操作中重试",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
         }
     }
 }
@@ -303,44 +299,21 @@ private fun TaskHeaderMetadata(
 }
 
 @Composable
-private fun TaskLifecycleActions(
-    controller: DesktopApplication,
-    task: TaskManifest,
-    onArchive: () -> Unit,
-    onDelete: () -> Unit,
+private fun TaskHeaderMaterialsAction(
+    enabled: Boolean,
+    onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    FlowRow(
-        modifier,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-        itemVerticalAlignment = Alignment.CenterVertically,
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier,
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
-        when (taskLifecyclePrimaryAction(task.lifecycleStatus)) {
-            TaskLifecyclePrimaryAction.RESTORE -> OutlinedButton(
-                onClick = { controller.restoreTask(task) },
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            ) {
-                Icon(Icons.Outlined.Restore, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("恢复")
-            }
-            TaskLifecyclePrimaryAction.ARCHIVE -> OutlinedButton(
-                onClick = onArchive,
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            ) {
-                Icon(Icons.Outlined.Archive, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("归档")
-            }
-        }
-        OutlinedButton(
-            onClick = onDelete,
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.45f)),
-        ) {
-            Icon(Icons.Outlined.Delete, null, Modifier.size(17.dp))
-            Spacer(Modifier.width(5.dp))
-            Text("删除任务")
-        }
+        Icon(Icons.Outlined.Description, null, Modifier.size(18.dp))
+        Spacer(Modifier.width(6.dp))
+        Text("需求资料")
     }
 }
 

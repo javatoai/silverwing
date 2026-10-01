@@ -348,6 +348,25 @@ class CodexExtensionsService(
         return readSkillFile(skillDirectory)
     }
 
+    /** Returns the validated local SKILL.md backing a cached plugin preview. */
+    fun previewPluginSkillPath(source: CodexPluginMarketplaceSource, pluginName: String, skillName: String): Path = synchronized(stateLock) {
+        val preview = previewPlugin(source, pluginName)
+        require(preview.skills.any { it.name == skillName }) { "插件“$pluginName”中找不到内置 Skill：$skillName" }
+        val status = requireNotNull(loadState().marketplaces[source.id]) { "请先加载插件来源“${source.name}”" }
+        val plugin = requireNotNull(status.plugins.firstOrNull { it.name == pluginName })
+        val directory = Path.of(requireNotNull(plugin.sourcePath)).toAbsolutePath().normalize()
+        val manifest = parseCodexJson(readPreviewFile(directory.resolve(PLUGIN_MANIFEST), "插件清单")) as JsonObject
+        val relative = requireNotNull(manifest.string("skills")) { "插件没有配置内置 Skill 目录" }
+            .removePrefix("./").removeSuffix("/")
+        val skillDirectory = safeChild(safeChild(directory, relative, "插件 Skill 目录"), skillName, "插件 Skill 路径")
+        validateSkillDirectory(skillDirectory, skillName)
+        skillDirectory.resolve(SKILL_FILE).also { file ->
+            require(Files.isRegularFile(file, NOFOLLOW_LINKS) && !Files.isSymbolicLink(file)) {
+                "插件 Skill 文档不存在或不是普通文件：$skillDirectory"
+            }
+        }
+    }
+
     /**
      * 只读返回已成功发现的 Skill 正文。调用方只能传入运行时清单中存在的
      * Skill，避免 UI 借由 sourcePath 读取来源缓存外的任意文件。
@@ -361,6 +380,22 @@ class CodexExtensionsService(
         val sourceDirectory = safeChild(checkout, skill.sourcePath, "Skill 来源路径")
         validateSkillDirectory(sourceDirectory, skillName)
         return readSkillFile(sourceDirectory)
+    }
+
+    /** Returns the validated local SKILL.md backing a cached external Skill preview. */
+    fun previewSkillPath(source: SkillSource, skillName: String): Path = synchronized(stateLock) {
+        val state = loadState()
+        val status = requireNotNull(state.skillSources[source.id]) { "请先加载 Skill 来源“${source.name}”" }
+        val skill = status.skills.firstOrNull { it.name == skillName }
+            ?: throw IllegalArgumentException("Skill 来源“${source.name}”中找不到 $skillName")
+        val checkout = skillCheckout(source)
+        val sourceDirectory = safeChild(checkout, skill.sourcePath, "Skill 来源路径")
+        validateSkillDirectory(sourceDirectory, skillName)
+        sourceDirectory.resolve(SKILL_FILE).also { file ->
+            require(Files.isRegularFile(file, NOFOLLOW_LINKS) && !Files.isSymbolicLink(file)) {
+                "Skill 文档不存在或不是普通文件：$sourceDirectory"
+            }
+        }
     }
 
     /** Copies an entire discovered Skill to the user Skill root after an explicit takeover when needed. */

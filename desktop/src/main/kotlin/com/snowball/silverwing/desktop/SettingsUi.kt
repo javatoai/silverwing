@@ -135,6 +135,9 @@ internal fun SettingsScreen(controller: DesktopApplication) {
     var requirementMaterialsSubdirectory by remember(controller.config.requirementMaterialsSubdirectory) {
         mutableStateOf(controller.config.requirementMaterialsSubdirectory.orEmpty())
     }
+    var expandRequirementMaterialsSecondLevelFolders by remember {
+        mutableStateOf(WindowPreferences.load().expandRequirementMaterialsSecondLevelFolders)
+    }
     val developmentToolPaths = remember(controller.config.developmentTools) {
         mutableStateMapOf<DevelopmentToolType, String>().apply {
             DevelopmentToolType.entries.forEach { type ->
@@ -576,6 +579,11 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     onRequirementMaterialsRootChange = { requirementMaterialsRoot = it },
                     requirementMaterialsSubdirectory = requirementMaterialsSubdirectory,
                     onRequirementMaterialsSubdirectoryChange = { requirementMaterialsSubdirectory = it },
+                    expandRequirementMaterialsSecondLevelFolders = expandRequirementMaterialsSecondLevelFolders,
+                    onExpandRequirementMaterialsSecondLevelFoldersChange = { enabled ->
+                        expandRequirementMaterialsSecondLevelFolders = enabled
+                        WindowPreferences.saveExpandRequirementMaterialsSecondLevelFolders(enabled)
+                    },
                     saving = saving("paths"),
                 )
             }
@@ -1786,6 +1794,8 @@ private fun SettingsPathsSection(
     onRequirementMaterialsRootChange: (String) -> Unit,
     requirementMaterialsSubdirectory: String,
     onRequirementMaterialsSubdirectoryChange: (String) -> Unit,
+    expandRequirementMaterialsSecondLevelFolders: Boolean,
+    onExpandRequirementMaterialsSecondLevelFoldersChange: (Boolean) -> Unit,
     saving: Boolean,
 ) {
     val materialsSaving = controller.settingsSaveState("requirement-materials-root") == SettingsSaveState.SAVING ||
@@ -1854,6 +1864,14 @@ private fun SettingsPathsSection(
                 if (controller.config.requirementMaterialsConfigured) "需求资料目录功能已配置" else "根路径和子目录名均填写后才会启用需求资料目录功能",
                 color = if (controller.config.requirementMaterialsConfigured) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall,
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            TaskAreaToolGroupSwitchRow(
+                title = "默认展开二级目录文件夹",
+                description = "打开需求资料目录时自动展开前两级文件夹；默认关闭。",
+                checked = expandRequirementMaterialsSecondLevelFolders,
+                onCheckedChange = onExpandRequirementMaterialsSecondLevelFoldersChange,
+                enabled = true,
             )
         }
     }

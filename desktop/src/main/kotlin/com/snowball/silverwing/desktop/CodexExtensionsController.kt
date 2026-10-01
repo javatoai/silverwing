@@ -12,6 +12,7 @@ import com.snowball.silverwing.core.CodexPluginPreview
 import com.snowball.silverwing.core.CodexPluginMarketplaceSource
 import com.snowball.silverwing.core.ExternalSkillCatalogItem
 import com.snowball.silverwing.core.SkillSource
+import java.nio.file.Path
 
 internal data class CodexExtensionsUiState(
     val snapshot: CodexExtensionsSnapshot,
@@ -144,6 +145,9 @@ internal class CodexExtensionsController(
         )
     }
 
+    fun previewPluginSkillPath(source: CodexPluginMarketplaceSource, plugin: CodexPluginCatalogItem, skillName: String): Path =
+        extensions.previewPluginSkillPath(source, plugin.name, skillName)
+
     fun addSkillSource(source: SkillSource): Boolean = operations.run(
         activeMessage = "正在添加 Skill 来源…",
         successMessage = "Skill 来源已保存",
@@ -191,6 +195,9 @@ internal class CodexExtensionsController(
             onFailure = { error -> onResult(SkillPreviewState.Failed(error.message ?: "Skill 文档读取失败")) },
         )
     }
+
+    fun previewSkillPath(source: SkillSource, skill: ExternalSkillCatalogItem): Path =
+        extensions.previewSkillPath(source, skill.name)
 
     fun installSkill(source: SkillSource, skill: ExternalSkillCatalogItem, takeOver: Boolean): Boolean = operations.run(
         activeMessage = "正在安装 ${skill.name}…",

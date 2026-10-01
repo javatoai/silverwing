@@ -49,6 +49,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.snowball.silverwing.core.LocalSkillCatalogItem
 import com.snowball.silverwing.core.LocalSkillFileEntry
+import java.nio.file.Path
 
 /** Primary browser for Skills installed in the current user's standard directory. */
 @Composable
@@ -186,6 +187,7 @@ internal fun LocalSkillsScreen(controller: DesktopApplication) {
                     LocalSkillsContent(
                         controller = controller,
                         skills = catalogState.catalog.skills,
+                        skillRootPath = catalogState.catalog.root,
                         selected = selected,
                         onSelected = { selectedDirectoryName = it.directoryName },
                         filesState = visibleFilesState,
@@ -220,6 +222,7 @@ internal fun LocalSkillsScreen(controller: DesktopApplication) {
 private fun LocalSkillsContent(
     controller: DesktopApplication,
     skills: List<LocalSkillCatalogItem>,
+    skillRootPath: String,
     selected: LocalSkillCatalogItem?,
     onSelected: (LocalSkillCatalogItem) -> Unit,
     filesState: LocalSkillFilesState,
@@ -326,6 +329,7 @@ private fun LocalSkillsContent(
                         val previewContent = (previewState as? LocalSkillFilePreviewState.Loaded)
                             ?.takeIf { it.directoryName == skill.directoryName && it.relativePath == file.relativePath }
                             ?.content
+                        val sourcePath = Path.of(skillRootPath).resolve(skill.directoryName).resolve(file.relativePath).normalize()
                         var mode by remember(skill.directoryName, file.relativePath) { mutableStateOf(initialMarkdownPreviewMode()) }
                         DocumentPreviewFileHeader(
                             fileName = file.relativePath.substringAfterLast('/'),
@@ -336,6 +340,9 @@ private fun LocalSkillsContent(
                                     mode = mode,
                                     onModeChange = { mode = it },
                                     onCopySource = { previewContent?.let { controller.copyText(it, "Markdown 源码已复制") } },
+                                    sourcePath = sourcePath,
+                                    onCopyPath = { controller.copyText(it.toAbsolutePath().toString(), "文件路径已复制") },
+                                    onCopyFile = controller::copyFile,
                                     copyEnabled = !previewContent.isNullOrEmpty(),
                                 )
                             } else {
@@ -367,6 +374,14 @@ private fun LocalSkillsContent(
                                             content = previewState.content,
                                             mode = mode,
                                             modifier = Modifier.weight(1f).fillMaxWidth(),
+                                            onCopyCode = { controller.copyText(it, "代码已复制") },
+                                            sourcePath = sourcePath,
+                                            allowedRoot = Path.of(skillRootPath).resolve(skill.directoryName),
+                                            onNavigateLocalLink = { relativePath, _ ->
+                                                (filesState as? LocalSkillFilesState.Loaded)?.catalog?.files
+                                                    ?.firstOrNull { it.relativePath == relativePath && it.markdown }
+                                                    ?.let(onSelectedFile)
+                                            },
                                         )
                                     } else {
                                         PlainTextDocumentPreview(

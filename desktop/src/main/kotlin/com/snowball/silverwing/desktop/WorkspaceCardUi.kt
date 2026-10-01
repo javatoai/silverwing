@@ -95,6 +95,7 @@ import com.snowball.silverwing.core.WorkspaceGitFilePreview
 import com.snowball.silverwing.core.WorkspaceGitHealth
 import com.snowball.silverwing.core.WorkspaceGitHealthState
 import com.snowball.silverwing.core.WorkspaceGitIssue
+import com.snowball.silverwing.core.WorkspaceCommandConfig
 import com.snowball.silverwing.core.WorkspaceFileComparison
 import com.snowball.silverwing.core.WorkspaceFileComparisonLine
 import com.snowball.silverwing.core.WorkspaceFileComparisonLineKind
@@ -107,9 +108,11 @@ import com.snowball.silverwing.core.WorkspaceStrategy
 import com.snowball.silverwing.core.health
 import kotlinx.coroutines.CancellationException
 
-internal const val WORKSPACE_CARD_SIDE_BY_SIDE_MIN_WIDTH_DP = 860f
 private val WorkspaceCardSideActionChromeWidth = 86.dp
-private val WorkspaceCardSummaryMinimumWidth = 300.dp
+internal const val WORKSPACE_CARD_SUMMARY_MIN_WIDTH_DP = 240f
+private const val WORKSPACE_CARD_ACTION_BUTTON_WIDTH_DP = 34f
+private const val WORKSPACE_CARD_ACTION_GROUP_HORIZONTAL_PADDING_DP = 6f
+private const val WORKSPACE_CARD_ACTION_GROUP_SPACING_DP = 8f
 
 internal enum class WorkspaceCardLayout { SIDE_BY_SIDE, STACKED }
 
@@ -161,8 +164,37 @@ internal data class WorkspaceBranchCopyAllocation(
     val copyX: Int,
 )
 
-internal fun workspaceCardLayout(availableWidthDp: Float): WorkspaceCardLayout = when {
-    availableWidthDp >= WORKSPACE_CARD_SIDE_BY_SIDE_MIN_WIDTH_DP -> WorkspaceCardLayout.SIDE_BY_SIDE
+internal fun workspaceCardActionGroupButtonCounts(
+    presentation: WorkspaceToolbarPresentation,
+    customCommandCount: Int,
+): List<Int> = buildList {
+    if (presentation.showPathActionGroup) add(3)
+    if (customCommandCount > 0) add(customCommandCount)
+    if (presentation.showGitActionGroup) add(3)
+    if (presentation.showTagAction) add(1)
+    add(if (presentation.showAddModuleAction) 2 else 1)
+    add(1)
+    if (presentation.showRetryAction) add(1)
+}
+
+/** Width for the visible controls plus a readable summary; measured from the current toolbar. */
+internal fun workspaceCardSideBySideMinWidthDp(actionGroupButtonCounts: List<Int>): Float {
+    val groupWidths = actionGroupButtonCounts.fold(0f) { totalWidth, buttonCount ->
+        totalWidth + WORKSPACE_CARD_ACTION_GROUP_HORIZONTAL_PADDING_DP +
+            buttonCount.coerceAtLeast(0) * WORKSPACE_CARD_ACTION_BUTTON_WIDTH_DP
+    }
+    val groupGaps = (actionGroupButtonCounts.size - 1).coerceAtLeast(0) * WORKSPACE_CARD_ACTION_GROUP_SPACING_DP
+    return WorkspaceCardSideActionChromeWidth.value +
+        WORKSPACE_CARD_SUMMARY_MIN_WIDTH_DP +
+        groupWidths +
+        groupGaps
+}
+
+internal fun workspaceCardLayout(
+    availableWidthDp: Float,
+    actionGroupButtonCounts: List<Int>,
+): WorkspaceCardLayout = when {
+    availableWidthDp >= workspaceCardSideBySideMinWidthDp(actionGroupButtonCounts) -> WorkspaceCardLayout.SIDE_BY_SIDE
     else -> WorkspaceCardLayout.STACKED
 }
 
@@ -225,6 +257,13 @@ internal fun WorkspaceCard(
 ) {
     val health = controller.gitHealth(workspace)
     val branchPresentation = workspaceBranchPresentation(workspace, health?.actualBranch)
+    val customCommands = controller.workspaceCommands(task, workspace)
+    val toolbarPresentation = workspaceToolbarPresentationFor(
+        workspace = workspace,
+        canBuildTag = controller.canBuildTag(task, workspace),
+        showAddModule = showAddModule,
+        config = controller.config,
+    )
     var commitMode by remember { mutableStateOf<String?>(null) }
     var commitMessage by remember(task, workspace) { mutableStateOf(controller.defaultCommitMessage(task, workspace)) }
     OutlinedCard(
@@ -235,9 +274,10 @@ internal fun WorkspaceCard(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         BoxWithConstraints(Modifier.fillMaxWidth()) {
-            val layout = workspaceCardLayout(maxWidth.value)
+            val actionGroupButtonCounts = workspaceCardActionGroupButtonCounts(toolbarPresentation, customCommands.size)
+            val layout = workspaceCardLayout(maxWidth.value, actionGroupButtonCounts)
             val sideBySideActionMaxWidth =
-                (maxWidth - WorkspaceCardSideActionChromeWidth - WorkspaceCardSummaryMinimumWidth)
+                (maxWidth - WorkspaceCardSideActionChromeWidth - WORKSPACE_CARD_SUMMARY_MIN_WIDTH_DP.dp)
                     .coerceAtLeast(0.dp)
             when (layout) {
                 WorkspaceCardLayout.SIDE_BY_SIDE -> {
@@ -260,9 +300,10 @@ internal fun WorkspaceCard(
                             controller = controller,
                             task = task,
                             workspace = workspace,
+                            customCommands = customCommands,
+                            toolbarPresentation = toolbarPresentation,
                             onCommit = { controller.loadBatchGitPreviews(task); commitMessage = controller.defaultCommitMessage(task, workspace); commitMode = "commit" },
                             onCommitAndPush = { controller.loadBatchGitPreviews(task); commitMessage = controller.defaultCommitMessage(task, workspace); commitMode = "commitPush" },
-                            showAddModule = showAddModule,
                             onAddModule = onAddModule,
                             canDeleteModule = task.services.size > 1,
                             onDeleteModule = onDeleteModule,
@@ -293,9 +334,10 @@ internal fun WorkspaceCard(
                             controller = controller,
                             task = task,
                             workspace = workspace,
+                            customCommands = customCommands,
+                            toolbarPresentation = toolbarPresentation,
                             onCommit = { controller.loadBatchGitPreviews(task); commitMessage = controller.defaultCommitMessage(task, workspace); commitMode = "commit" },
                             onCommitAndPush = { controller.loadBatchGitPreviews(task); commitMessage = controller.defaultCommitMessage(task, workspace); commitMode = "commitPush" },
-                            showAddModule = showAddModule,
                             onAddModule = onAddModule,
                             canDeleteModule = task.services.size > 1,
                             onDeleteModule = onDeleteModule,
@@ -1578,9 +1620,10 @@ private fun WorkspaceCardActions(
     controller: DesktopApplication,
     task: TaskManifest,
     workspace: ServiceWorkspace,
+    customCommands: List<WorkspaceCommandConfig>,
+    toolbarPresentation: WorkspaceToolbarPresentation,
     onCommit: () -> Unit,
     onCommitAndPush: () -> Unit,
-    showAddModule: Boolean,
     onAddModule: () -> Unit,
     canDeleteModule: Boolean,
     onDeleteModule: () -> Unit,
@@ -1592,13 +1635,6 @@ private fun WorkspaceCardActions(
     val workspaceLabel = workspace.moduleName.ifBlank { workspace.serviceName }
     val workspaceLoading = controller.busy && controller.activeOperation?.contains(workspaceLabel) == true
     val tagLoading = workspaceLoading && controller.activeOperation?.contains("Tag") == true
-    val customCommands = controller.workspaceCommands(task, workspace)
-    val toolbarPresentation = workspaceToolbarPresentationFor(
-        workspace = workspace,
-        canBuildTag = controller.canBuildTag(task, workspace),
-        showAddModule = showAddModule,
-        config = controller.config,
-    )
     FlowRow(
         modifier,
         horizontalArrangement = if (alignToEnd) {

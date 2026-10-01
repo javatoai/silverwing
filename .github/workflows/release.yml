@@ -293,4 +293,29 @@ jobs:
           set -euo pipefail
           python3 scripts/publish_feishu_release.py \
             --release-json "$FEISHU_RELEASE_DIR/release.json" \
-            --assets-dir "$FEISHU_RELEASE_DIR/assets"
+            --assets-dir "$FEISHU_RELEASE_DIR/assets" \
+            --result-json "$FEISHU_RELEASE_DIR/feishu-sync-result.json"
+
+      - name: Persist Feishu page reference
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          result="$FEISHU_RELEASE_DIR/feishu-sync-result.json"
+          if [ ! -s "$result" ]; then
+            echo "No Feishu page reference was created."
+            exit 0
+          fi
+          created=$(jq -r '.created' "$result")
+          [ "$created" = true ] || exit 0
+          document_id=$(jq -r '.documentId' "$result")
+          [[ "$document_id" =~ ^[A-Za-z0-9_-]+$ ]] || {
+            echo "Invalid Feishu document ID returned by sync" >&2
+            exit 1
+          }
+          notes=$(mktemp)
+          gh release view "$GITHUB_REF_NAME" --json body --jq '.body' > "$notes"
+          printf '\n\n<!-- silverwing-feishu-document: %s -->\n' "$document_id" >> "$notes"
+          gh release edit "$GITHUB_REF_NAME" --notes-file "$notes"

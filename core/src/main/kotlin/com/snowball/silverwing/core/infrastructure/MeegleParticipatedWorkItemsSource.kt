@@ -17,6 +17,11 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
 import java.math.BigDecimal
+import java.net.URI
+import java.nio.file.Files
+import java.nio.file.LinkOption.NOFOLLOW_LINKS
+import java.nio.file.Path
+import java.security.MessageDigest
 import java.time.Duration
 import java.time.OffsetDateTime
 import java.util.Locale
@@ -220,6 +225,9 @@ interface ParticipatedWorkItemsSource {
         defaultSprintProjectKey: String? = null,
     ): ParticipatedWorkItemsResult
     fun loadBody(item: ParticipatedWorkItem): String?
+
+    /** Downloads a Meegle rich-text image into the temporary image cache when supported. */
+    fun downloadBodyImage(item: ParticipatedWorkItem, fileUrl: String, retry: Boolean = false): Path? = null
 }
 
 /** Discovers selectable sprints and reads participated items only for the selected sprint. */
@@ -344,6 +352,54 @@ class MeegleParticipatedWorkItemsSource(
 
     override fun loadBody(item: ParticipatedWorkItem): String? =
         bodyReader.fetchFullBody(item.url, item.projectKey)
+
+    override fun downloadBodyImage(item: ParticipatedWorkItem, fileUrl: String, retry: Boolean): Path {
+        require(isMeegleRichTextImageUrl(fileUrl)) { "不是受支持的飞书项目图片链接" }
+        val imageDirectory = Path.of(System.getProperty("java.io.tmpdir"))
+            .resolve("silverwing")
+            .resolve("meegle-images")
+            .resolve(cacheToken(item.key))
+        Files.createDirectories(imageDirectory)
+        val output = imageDirectory.resolve("${cacheToken(fileUrl)}.image")
+        if (!retry && Files.isRegularFile(output, NOFOLLOW_LINKS)) return output
+
+        val arguments = mutableListOf(
+            meegleExecutable.resolve(), "attachment", "+download", fileUrl,
+            "--project-key", item.projectKey,
+            "--work-item-id", item.id,
+            "--output", output.toString(),
+        )
+        if (retry) arguments += "--overwrite"
+        val result = runner.run(
+            arguments,
+            timeout = Duration.ofMinutes(2),
+            environment = meegleExecutable.environment(),
+        )
+        check(result.succeeded) {
+            "飞书图片下载失败：${imageDownloadError(result, fileUrl)}"
+        }
+        check(Files.isRegularFile(output, NOFOLLOW_LINKS) && Files.size(output) > 0) { "Meegle CLI 未生成有效的图片文件" }
+        return output
+    }
+
+    private fun isMeegleRichTextImageUrl(value: String): Boolean = runCatching {
+        val uri = URI(value)
+        uri.scheme.equals("https", ignoreCase = true) &&
+            uri.host.equals("project.feishu.cn", ignoreCase = true) &&
+            uri.rawUserInfo == null &&
+            uri.rawPath.startsWith("/goapi/v5/platform/file/stream/download/")
+    }.getOrDefault(false)
+
+    private fun cacheToken(value: String): String = MessageDigest.getInstance("SHA-256")
+        .digest(value.toByteArray(Charsets.UTF_8))
+        .take(16)
+        .joinToString("") { "%02x".format(it) }
+
+    private fun imageDownloadError(result: CommandResult, fileUrl: String): String =
+        result.stderr.ifBlank { result.stdout }
+            .replace(fileUrl, "<图片链接>")
+            .lineSequence().firstOrNull()?.trim()?.take(240)
+            .orEmpty().ifBlank { "Meegle CLI 返回 ${result.exitCode}" }
 
     private suspend fun querySprintDate(
         project: MeegleProjectConfig,

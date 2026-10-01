@@ -440,12 +440,45 @@ private fun RequirementsDetailPane(
                 is ParticipatedWorkItemBodyState.Ready -> if (body.itemKey == item.key) {
                     if (body.content.isBlank()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text("该工作项没有可读取的正文", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    } else MarkdownDocumentPreview(
-                        content = body.content,
-                        modifier = Modifier.fillMaxSize(),
-                        documentKey = item.key,
-                        onCopySource = { controller.copyText(body.content, "Markdown 源码已复制") },
-                    )
+                    } else {
+                        val loadedImages = catalog.bodyImageStates.mapNotNull { (url, state) ->
+                            (state as? ParticipatedWorkItemImageState.Loaded)?.let { url to it.path }
+                        }.toMap()
+                        val pendingImages = catalog.bodyImageStates.count { it.value is ParticipatedWorkItemImageState.Loading }
+                        val failedImages = catalog.bodyImageStates.filterValues { it is ParticipatedWorkItemImageState.Failed }
+                        Column(Modifier.fillMaxSize()) {
+                            if (pendingImages > 0) {
+                                Row(
+                                    Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                                    Text("正在加载 $pendingImages 张图片", style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                            failedImages.forEach { (url, state) ->
+                                val message = (state as ParticipatedWorkItemImageState.Failed).message
+                                Row(
+                                    Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Text("图片加载失败：$message", Modifier.weight(1f),
+                                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                                    OutlinedButton(onClick = { catalog.retryBodyImage(item, url) }) { Text("重试") }
+                                }
+                            }
+                            MarkdownDocumentPreview(
+                                content = markdownWithLocalImagePaths(body.content, loadedImages),
+                                modifier = Modifier.weight(1f).fillMaxWidth(),
+                                documentKey = item.key,
+                                onCopySource = { controller.copyText(body.content, "Markdown 源码已复制") },
+                                onCopyCode = { controller.copyText(it, "代码已复制") },
+                            )
+                        }
+                    }
                 }
                 is ParticipatedWorkItemBodyState.Failed -> if (body.itemKey == item.key) {
                     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center,

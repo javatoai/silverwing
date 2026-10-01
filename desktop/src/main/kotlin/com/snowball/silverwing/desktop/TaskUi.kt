@@ -3,6 +3,7 @@ package com.snowball.silverwing.desktop
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -22,9 +23,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.Sell
 import androidx.compose.material.icons.outlined.Terminal
@@ -33,6 +38,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -101,7 +107,12 @@ internal fun taskDetailToolbarPresentationFor(config: AppConfig): TaskDetailTool
     )
 
 @Composable
-internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modifier: Modifier) {
+internal fun TaskDetail(
+    controller: DesktopApplication,
+    task: TaskManifest,
+    modifier: Modifier,
+    onPreviewRequirementMaterials: (Path) -> Unit,
+) {
     var notes by remember(task.folderName, task.updatedAt) { mutableStateOf("") }
     var notesLoading by remember(task.folderName, task.updatedAt) { mutableStateOf(true) }
     var notesError by remember(task.folderName, task.updatedAt) { mutableStateOf<String?>(null) }
@@ -116,6 +127,7 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
     var showAddServices by remember(task.folderName) { mutableStateOf(false) }
     var showBatchTag by remember(task.folderName) { mutableStateOf(false) }
     var showBranchInfo by remember(task.folderName) { mutableStateOf(false) }
+    var requirementMaterialsMenuExpanded by remember(task.folderName, task.requirementMaterials.status) { mutableStateOf(false) }
     var batchGitMode by remember(task.folderName) { mutableStateOf<WorkspaceGitBatchMode?>(null) }
     var lastBatchGitMode by remember(task.folderName) { mutableStateOf(WorkspaceGitBatchMode.PUSH) }
     var batchGitInitialSelection by remember(task.folderName) { mutableStateOf<Set<String>?>(null) }
@@ -143,6 +155,10 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
     LaunchedEffect(task.folderName, requirementMaterialsDirectory) {
         requirementMaterialsActionGroup = controller.requirementMaterialsActionGroupAsync(requirementMaterialsDirectory)
     }
+    val requirementMaterialsPath = requirementMaterialsDirectory
+        ?.let { runCatching { Path.of(it) }.getOrNull() }
+    val requirementMaterialsActionsEnabled =
+        requirementMaterialsActionGroup == RequirementMaterialsActionGroup.WORK_DATA && requirementMaterialsPath != null
     val failedTools = task.workspaceToolLaunches.filter { it.status != WorkspaceToolLaunchStatus.OPENED }
     val failedServiceIds = task.services.filter { it.health == WorkspaceHealth.FAILED }
         .map(ServiceWorkspace::groupServiceId).filter(String::isNotBlank).distinct()
@@ -206,8 +222,8 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
                 physicalWorkspaces = physicalWorkspaces,
                 groupName = group?.name,
                 showGroup = controller.config.groups.size > 1,
-                onArchive = { confirmArchive = true },
-                onDelete = { confirmDelete = true },
+                canPreviewRequirementMaterials = requirementMaterialsActionsEnabled,
+                onPreviewRequirementMaterials = { requirementMaterialsPath?.let(onPreviewRequirementMaterials) },
             )
             FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (toolbarPresentation.showPathActionGroup) {
@@ -266,14 +282,95 @@ internal fun TaskDetail(controller: DesktopApplication, task: TaskManifest, modi
                     ActionIconButton("打开工作数据", { controller.openWorkData(task) }, Modifier.size(34.dp)) {
                         Icon(Icons.Outlined.Folder, "工作数据", Modifier.size(18.dp))
                     }
-                    if (requirementMaterialsActionGroup == RequirementMaterialsActionGroup.WORK_DATA) {
-                        requirementMaterialsDirectory?.let { path ->
-                            ActionIconButton("打开资料目录", { controller.openDirectory(path) }, Modifier.size(34.dp)) {
-                                Icon(Icons.Outlined.FolderOpen, "打开资料目录", Modifier.size(18.dp))
+                }
+                IconActionGroup {
+                    Box {
+                        ActionIconButton("更多操作", { requirementMaterialsMenuExpanded = true }, Modifier.size(34.dp)) {
+                            Icon(Icons.Outlined.MoreVert, "更多操作", Modifier.size(18.dp))
+                        }
+                        SilverWingDropdownMenu(
+                            expanded = requirementMaterialsMenuExpanded,
+                            onDismissRequest = { requirementMaterialsMenuExpanded = false },
+                        ) {
+                            when (task.requirementMaterials.status) {
+                                RequirementMaterialsStatus.READY -> {
+                                    DropdownMenuItem(
+                                        text = { Text("打开需求资料目录") },
+                                        enabled = requirementMaterialsActionsEnabled,
+                                        onClick = {
+                                            requirementMaterialsMenuExpanded = false
+                                            requirementMaterialsDirectory?.let(controller::openDirectory)
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("复制需求资料路径") },
+                                        enabled = requirementMaterialsActionsEnabled,
+                                        onClick = {
+                                            requirementMaterialsMenuExpanded = false
+                                            requirementMaterialsPath?.toAbsolutePath()?.normalize()?.toString()?.let {
+                                                controller.copyText(it, "需求资料路径已复制")
+                                            }
+                                        },
+                                    )
+                                }
+                                RequirementMaterialsStatus.NOT_REQUESTED, RequirementMaterialsStatus.FAILED -> {
+                                    val canAssociate = controller.config.requirementMaterialsConfigured &&
+                                        task.requirementLink.isNotBlank()
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(if (task.requirementMaterials.status == RequirementMaterialsStatus.FAILED) {
+                                                "重试关联需求资料"
+                                            } else {
+                                                "关联需求资料"
+                                            })
+                                        },
+                                        enabled = canAssociate && !controller.busy,
+                                        onClick = {
+                                            requirementMaterialsMenuExpanded = false
+                                            controller.retryRequirementMaterials(task)
+                                        },
+                                    )
+                                    if (!controller.config.requirementMaterialsConfigured && task.requirementLink.isNotBlank()) {
+                                        DropdownMenuItem(
+                                            text = { Text("配置需求资料") },
+                                            onClick = {
+                                                requirementMaterialsMenuExpanded = false
+                                                controller.navigation = NavigationItem.SETTINGS
+                                            },
+                                        )
+                                    }
+                                }
                             }
-                            ActionIconButton("复制资料目录路径", { controller.copyText(path, "资料目录路径已复制") }, Modifier.size(34.dp)) {
-                                Icon(Icons.Outlined.ContentCopy, "复制资料目录路径", Modifier.size(18.dp))
+                            HorizontalDivider()
+                            when (taskLifecyclePrimaryAction(task.lifecycleStatus)) {
+                                TaskLifecyclePrimaryAction.ARCHIVE -> DropdownMenuItem(
+                                    text = { Text("归档任务") },
+                                    leadingIcon = { Icon(Icons.Outlined.Archive, null) },
+                                    enabled = !controller.busy,
+                                    onClick = {
+                                        requirementMaterialsMenuExpanded = false
+                                        confirmArchive = true
+                                    },
+                                )
+                                TaskLifecyclePrimaryAction.RESTORE -> DropdownMenuItem(
+                                    text = { Text("恢复任务") },
+                                    leadingIcon = { Icon(Icons.Outlined.Restore, null) },
+                                    enabled = !controller.busy,
+                                    onClick = {
+                                        requirementMaterialsMenuExpanded = false
+                                        controller.restoreTask(task)
+                                    },
+                                )
                             }
+                            DropdownMenuItem(
+                                text = { Text("删除任务", color = MaterialTheme.colorScheme.error) },
+                                leadingIcon = { Icon(Icons.Outlined.Delete, null, tint = MaterialTheme.colorScheme.error) },
+                                enabled = !controller.busy,
+                                onClick = {
+                                    requirementMaterialsMenuExpanded = false
+                                    confirmDelete = true
+                                },
+                            )
                         }
                     }
                 }

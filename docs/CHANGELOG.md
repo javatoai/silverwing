@@ -2,6 +2,10 @@
 
 本项目采用 `vX.Y.Z` 标签发布桌面安装包。重大行为变化会在对应版本说明中记录；配置与任务数据 schema 的兼容边界以 [配置与使用](CONFIGURATION.md) 为准。
 
+## 2.1.3
+
+- 修复 GitHub Release 同步飞书知识库时对 Wiki 根节点响应的字段解析，正确读取官方 CLI 返回的 `data.space_id`。
+
 ## 2.1.2
 
 - GitHub 正式 Release 发布后自动同步到指定飞书知识库根页面：按 Tag 创建或更新子文档，写入自动 Release Notes，并附加 Windows 与 macOS 安装包文件卡片。

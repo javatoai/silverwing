@@ -283,7 +283,7 @@ class TaskController internal constructor(
         }, onSuccess = { reloadTasks(); onCompleted() })
 
     fun retryRequirementMaterials(task: TaskManifest, onCompleted: () -> Unit = {}): Boolean =
-        operations.run("正在重试需求资料目录…", "需求资料目录已更新", cancellable = true, block = {
+        operations.run("正在关联或更新需求资料目录…", "需求资料目录已更新", cancellable = true, block = {
             tasks.retryRequirementMaterials(session.config, taskDirectory(task))
         }, onSuccess = { updated ->
             reloadTasks(updated.folderName)

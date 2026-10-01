@@ -24,7 +24,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.ArrowForward
+import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.Workspaces
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -86,16 +88,6 @@ internal fun TasksScreen(controller: DesktopApplication, archived: Boolean, onCr
     LaunchedEffect(archived, visibleTasks.joinToString { "${it.taskDirectoryName}:${it.requirementLink}" }) {
         controller.requirementController.refreshAll()
     }
-    if (visibleTasks.isEmpty()) {
-        if (archived) {
-            EmptyState("还没有已归档任务", "归档后的任务会保留在这里，可随时恢复。", "返回研发任务") {
-                controller.navigation = NavigationItem.TASKS
-            }
-        } else {
-            EmptyState("还没有研发任务", "从已配置的服务创建 Worktree 或独立克隆", "创建第一个任务", onCreate)
-        }
-        return
-    }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val horizontalPadding = taskScreenHorizontalPadding().dp
         val availableContentWidth = maxWidth.value - horizontalPadding.value * 2
@@ -103,6 +95,11 @@ internal fun TasksScreen(controller: DesktopApplication, archived: Boolean, onCr
         val selectedTask = controller.selectedTask?.takeIf {
             (it.lifecycleStatus == TaskLifecycleStatus.ARCHIVED) == archived
         }
+        var materialsBrowserTaskName by remember(archived) { mutableStateOf<String?>(null) }
+        LaunchedEffect(selectedTask?.folderName) {
+            if (materialsBrowserTaskName != selectedTask?.folderName) materialsBrowserTaskName = null
+        }
+        val materialsBrowserTask = selectedTask?.takeIf { it.folderName == materialsBrowserTaskName }
         var compactPane by remember(archived) {
             mutableStateOf(if (selectedTask == null) TaskMasterDetailPane.LIST else TaskMasterDetailPane.DETAIL)
         }
@@ -125,7 +122,18 @@ internal fun TasksScreen(controller: DesktopApplication, archived: Boolean, onCr
             availableWidthDp = availableContentWidth,
         ).dp
 
-        when (layout) {
+        if (materialsBrowserTask != null) {
+            RequirementMaterialsBrowser(
+                controller = controller,
+                task = materialsBrowserTask,
+                modifier = Modifier.fillMaxSize().padding(
+                    start = horizontalPadding,
+                    end = horizontalPadding,
+                    bottom = 16.dp,
+                ),
+                onClose = { materialsBrowserTaskName = null },
+            )
+        } else when (layout) {
             TaskMasterDetailLayout.SPLIT_PANE -> {
                 Row(
                     Modifier.fillMaxSize()
@@ -141,6 +149,7 @@ internal fun TasksScreen(controller: DesktopApplication, archived: Boolean, onCr
                         onTaskQueryChange = { taskQuery = it },
                         onTaskSelected = controller::selectTask,
                         onCreate = onCreate,
+                        onSwitchTaskCategory = { controller.navigation = if (archived) NavigationItem.TASKS else NavigationItem.ARCHIVED },
                         modifier = Modifier.width(displayedTaskListPaneWidth).fillMaxHeight(),
                     )
                     TaskListPaneResizeHandle(
@@ -159,9 +168,14 @@ internal fun TasksScreen(controller: DesktopApplication, archived: Boolean, onCr
                             WindowPreferences.saveTaskListPaneWidth(preferredTaskListPaneWidth.floatValue.roundToInt())
                         },
                     )
-                    selectedTask?.let {
-                        TaskDetail(controller, it, Modifier.weight(1f).fillMaxHeight())
-                    }
+                    selectedTask?.let { task ->
+                        TaskDetail(
+                            controller = controller,
+                            task = task,
+                            modifier = Modifier.weight(1f).fillMaxHeight(),
+                            onPreviewRequirementMaterials = { materialsBrowserTaskName = task.folderName },
+                        )
+                    } ?: TaskListEmptyDetail(archived, Modifier.weight(1f).fillMaxHeight())
                 }
             }
 
@@ -177,13 +191,17 @@ internal fun TasksScreen(controller: DesktopApplication, archived: Boolean, onCr
                     if (compactPane == TaskMasterDetailPane.DETAIL && selectedTask != null) {
                         CompactTaskListButton(
                             visibleTaskCount = visibleTasks.size,
+                            archived = archived,
+                            destinationTaskCount = destinationTaskCount(controller.tasks, archived),
                             onClick = { compactPane = TaskMasterDetailPane.LIST },
+                            onSwitchTaskCategory = { controller.navigation = if (archived) NavigationItem.TASKS else NavigationItem.ARCHIVED },
                             onCreate = if (taskCreateEntryVisible(archived)) onCreate else null,
                         )
                         TaskDetail(
-                            controller,
-                            selectedTask,
-                            Modifier.weight(1f).fillMaxWidth(),
+                            controller = controller,
+                            task = selectedTask,
+                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                            onPreviewRequirementMaterials = { materialsBrowserTaskName = selectedTask.folderName },
                         )
                     } else {
                         TaskListPane(
@@ -199,6 +217,7 @@ internal fun TasksScreen(controller: DesktopApplication, archived: Boolean, onCr
                                 compactPane = TaskMasterDetailPane.DETAIL
                             },
                             onCreate = onCreate,
+                            onSwitchTaskCategory = { controller.navigation = if (archived) NavigationItem.TASKS else NavigationItem.ARCHIVED },
                             modifier = Modifier.fillMaxSize(),
                         )
                     }
@@ -226,15 +245,79 @@ internal fun taskMasterDetailLayout(availableContentWidthDp: Float): TaskMasterD
     }
 
 @Composable
-private fun CompactTaskListButton(visibleTaskCount: Int, onClick: () -> Unit, onCreate: (() -> Unit)?) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        OutlinedButton(onClick = onClick) {
-            Icon(Icons.AutoMirrored.Outlined.ArrowBack, null, Modifier.size(18.dp))
-            Spacer(Modifier.width(6.dp))
-            Text("任务列表（$visibleTaskCount）")
+private fun CompactTaskListButton(
+    visibleTaskCount: Int,
+    archived: Boolean,
+    destinationTaskCount: Int,
+    onClick: () -> Unit,
+    onSwitchTaskCategory: () -> Unit,
+    onCreate: (() -> Unit)?,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(onClick = onClick, modifier = Modifier.weight(1f)) {
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("任务列表（$visibleTaskCount）")
+            }
+            if (onCreate != null) {
+                PrimaryAddIconButton("创建任务", onCreate)
+            }
         }
-        if (onCreate != null) {
-            PrimaryAddIconButton("创建任务", onCreate)
+        TaskCategorySwitchButton(
+            archived = archived,
+            destinationTaskCount = destinationTaskCount,
+            onClick = onSwitchTaskCategory,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+@Composable
+private fun TaskCategorySwitchButton(
+    archived: Boolean,
+    destinationTaskCount: Int,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    OutlinedButton(onClick = onClick, modifier = modifier) {
+        Icon(
+            if (archived) Icons.Outlined.Workspaces else Icons.Outlined.Archive,
+            null,
+            Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(if (archived) "返回研发任务" else "查看归档 ($destinationTaskCount)")
+    }
+}
+
+@Composable
+private fun TaskListEmptyDetail(archived: Boolean, modifier: Modifier = Modifier) {
+    Box(modifier, contentAlignment = Alignment.Center) {
+        Text(
+            if (archived) "选择一项已归档任务查看详情" else "暂无研发任务，可查看归档任务",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyLarge,
+        )
+    }
+}
+
+private fun destinationTaskCount(tasks: List<TaskManifest>, archived: Boolean): Int =
+    tasks.count { (it.lifecycleStatus == TaskLifecycleStatus.ARCHIVED) != archived }
+
+@Composable
+private fun CategoryEmptyMessage(archived: Boolean, hasVisibleTasks: Boolean) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            when {
+                hasVisibleTasks -> "没有匹配的任务"
+                archived -> "还没有已归档任务"
+                else -> "还没有研发任务"
+            },
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (!hasVisibleTasks && !archived) {
+            Text("可以切换查看已归档任务", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
         }
     }
 }
@@ -250,6 +333,7 @@ private fun TaskListPane(
     onTaskQueryChange: (String) -> Unit,
     onTaskSelected: (TaskManifest) -> Unit,
     onCreate: () -> Unit,
+    onSwitchTaskCategory: () -> Unit,
     modifier: Modifier,
 ) {
     Surface(
@@ -269,7 +353,7 @@ private fun TaskListPane(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        "任务列表",
+                        if (archived) "已归档任务" else "研发任务",
                         Modifier.weight(1f),
                         style = MaterialTheme.typography.titleMedium,
                         maxLines = 1,
@@ -282,6 +366,12 @@ private fun TaskListPane(
                         PrimaryAddIconButton("创建任务", onCreate)
                     }
                 }
+                TaskCategorySwitchButton(
+                    archived = archived,
+                    destinationTaskCount = destinationTaskCount(controller.tasks, archived),
+                    onClick = onSwitchTaskCategory,
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 OutlinedTextField(
                     taskQuery,
                     onTaskQueryChange,
@@ -294,7 +384,7 @@ private fun TaskListPane(
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             if (taskItems.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("没有匹配的任务", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    CategoryEmptyMessage(archived, hasVisibleTasks = visibleCount > 0)
                 }
             } else {
                 TaskList(

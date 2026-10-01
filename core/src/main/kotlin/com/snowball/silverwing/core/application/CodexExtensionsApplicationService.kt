@@ -1,5 +1,7 @@
 package com.snowball.silverwing.core
 
+import java.nio.file.Path
+
 /**
  * Coordinates portable extension-source configuration with machine-local Codex
  * operations. Desktop callers only receive application-level results and never
@@ -56,6 +58,9 @@ class CodexExtensionsApplicationService(
     fun previewPluginSkill(source: CodexPluginMarketplaceSource, pluginName: String, skillName: String): String =
         extensions.previewPluginSkill(source, pluginName, skillName)
 
+    fun previewPluginSkillPath(source: CodexPluginMarketplaceSource, pluginName: String, skillName: String): Path =
+        extensions.previewPluginSkillPath(source, pluginName, skillName)
+
     fun addSkillSource(source: SkillSource): AppConfig {
         val updated = configurations.update { config ->
             require(config.skillSources.none { it.id.equals(source.id, ignoreCase = true) }) { "Skill 来源 ID 已存在" }
@@ -78,6 +83,8 @@ class CodexExtensionsApplicationService(
         extensions.skillOwnership(sourceId, skillName)
 
     fun previewSkill(source: SkillSource, skillName: String): String = extensions.previewSkill(source, skillName)
+
+    fun previewSkillPath(source: SkillSource, skillName: String): Path = extensions.previewSkillPath(source, skillName)
 
     fun installSkill(source: SkillSource, skillName: String, takeOver: Boolean): ExternalSkillSourceSnapshot =
         extensions.installSkill(source, skillName, takeOver)

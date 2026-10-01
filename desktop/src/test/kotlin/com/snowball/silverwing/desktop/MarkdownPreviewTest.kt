@@ -3,6 +3,11 @@ package com.snowball.silverwing.desktop
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import org.intellij.markdown.ast.ASTNode
+import org.intellij.markdown.flavours.gfm.GFMElementTypes
+import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor
+import org.intellij.markdown.parser.MarkdownParser
 
 class MarkdownPreviewTest {
     @Test
@@ -43,5 +48,23 @@ class MarkdownPreviewTest {
         val file = MarkdownPreviewFile(".workspace/agent/TASK-RULES.md", "# 标题\n\n`原始 Markdown`")
 
         assertEquals("# 标题\n\n`原始 Markdown`", markdownPreviewSourceCopyPayload(file))
+    }
+
+    @Test
+    fun `preview recognizes tables with Windows and Unix line endings while copy retains the source`() {
+        val lines = listOf(
+            "## 实施范围", "", "本次分流仅覆盖现有订阅：", "",
+            "| 项目 | 范围 |", "| --- | --- |",
+            "| Topic | `TOPIC-FP-IOS-THIRD-MINI-APP` |",
+            "| 分流识别 | 字符串 `appCode` 命中名单 |", "",
+        )
+        for (lineEnding in listOf("\n", "\r\n", "\r")) {
+            val source = lines.joinToString(lineEnding)
+            val rendered = markdownPreviewRenderInput(source)
+            val ast = MarkdownParser(GFMFlavourDescriptor()).buildMarkdownTreeFromString(rendered)
+            fun hasTable(node: ASTNode): Boolean = node.type == GFMElementTypes.TABLE || node.children.any(::hasTable)
+            assertTrue(hasTable(ast), "Table not recognized for line ending ${lineEnding.toByteArray().toList()}")
+            assertEquals(source, markdownPreviewSourceCopyPayload(MarkdownPreviewFile("实施计划.md", source)))
+        }
     }
 }

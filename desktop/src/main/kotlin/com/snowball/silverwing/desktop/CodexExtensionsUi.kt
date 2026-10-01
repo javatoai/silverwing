@@ -69,6 +69,7 @@ import com.snowball.silverwing.core.SkillSource
 import com.snowball.silverwing.core.defaultExtensionSourceName
 import com.snowball.silverwing.core.preferredRemoteGitBranch
 import com.snowball.silverwing.core.requiresRootMarketplaceMigration
+import java.nio.file.Path
 import java.util.UUID
 
 private data class PendingPluginAction(
@@ -155,6 +156,9 @@ internal fun SettingsCodexPluginsSection(controller: DesktopApplication) {
             ownership = { extensions.pluginOwnership(source.id, it) },
             enabled = !controller.settingsBusy,
             onCopySource = { content -> controller.copyText(content, "Markdown 源码已复制") },
+            onCopyCode = { content -> controller.copyText(content, "代码已复制") },
+            onCopyPath = { path -> controller.copyText(path.toAbsolutePath().toString(), "文件路径已复制") },
+            onCopyFile = controller::copyFile,
             onDismiss = { viewing = null },
             onAction = { plugin, ownership ->
                 pendingAction = PendingPluginAction(
@@ -280,6 +284,9 @@ internal fun SettingsSkillSourcesSection(controller: DesktopApplication) {
             ownership = { skill -> ownershipVersion.let { extensions.skillOwnership(source.id, skill) } },
             enabled = !controller.settingsBusy,
             onCopySource = { content -> controller.copyText(content, "Markdown 源码已复制") },
+            onCopyCode = { content -> controller.copyText(content, "代码已复制") },
+            onCopyPath = { path -> controller.copyText(path.toAbsolutePath().toString(), "文件路径已复制") },
+            onCopyFile = controller::copyFile,
             onDismiss = { viewing = null },
             onAction = { skill, ownership, action ->
                 pendingAction = PendingSkillAction(
@@ -706,6 +713,9 @@ private fun PluginCatalogDialog(
     ownership: (CodexPluginCatalogItem) -> CodexExtensionOwnership,
     enabled: Boolean,
     onCopySource: (String) -> Unit,
+    onCopyCode: (String) -> Unit,
+    onCopyPath: (Path) -> Unit,
+    onCopyFile: (Path) -> Unit,
     onDismiss: () -> Unit,
     onAction: (CodexPluginCatalogItem, CodexExtensionOwnership) -> Unit,
 ) {
@@ -782,11 +792,22 @@ private fun PluginCatalogDialog(
                                         SkillPreviewState.Loading -> LinearProgressIndicator(Modifier.fillMaxWidth())
                                         is SkillPreviewState.Failed -> Text(current.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                                         is SkillPreviewState.Loaded -> Box(Modifier.weight(1f).fillMaxWidth()) {
+                                            val sourcePath = remember(source.id, selected?.name, selectedSkill, current.content) {
+                                                selected?.let { plugin ->
+                                                    selectedSkill?.let { skill ->
+                                                        runCatching { extensions.previewPluginSkillPath(source, plugin, skill) }.getOrNull()
+                                                    }
+                                                }
+                                            }
                                             MarkdownDocumentPreview(
                                                 content = current.content,
                                                 modifier = Modifier.fillMaxSize(),
                                                 documentKey = selectedSkill,
                                                 onCopySource = { onCopySource(current.content) },
+                                                sourcePath = sourcePath,
+                                                onCopyPath = onCopyPath,
+                                                onCopyFile = onCopyFile,
+                                                onCopyCode = onCopyCode,
                                             )
                                         }
                                     }
@@ -844,6 +865,9 @@ private fun SkillCatalogDialog(
     ownership: (ExternalSkillCatalogItem) -> CodexExtensionOwnership,
     enabled: Boolean,
     onCopySource: (String) -> Unit,
+    onCopyCode: (String) -> Unit,
+    onCopyPath: (Path) -> Unit,
+    onCopyFile: (Path) -> Unit,
     onDismiss: () -> Unit,
     onAction: (ExternalSkillCatalogItem, CodexExtensionOwnership, SkillCatalogAction) -> Unit,
 ) {
@@ -905,12 +929,21 @@ private fun SkillCatalogDialog(
                                     SkillPreviewState.Empty -> Text("请选择一个 Skill", color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     SkillPreviewState.Loading -> LinearProgressIndicator(Modifier.fillMaxWidth())
                                     is SkillPreviewState.Failed -> Text(current.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                                    is SkillPreviewState.Loaded -> MarkdownDocumentPreview(
-                                        content = current.content,
-                                        modifier = Modifier.weight(1f).fillMaxWidth(),
-                                        documentKey = selected?.name ?: current.content,
-                                        onCopySource = { onCopySource(current.content) },
-                                    )
+                                    is SkillPreviewState.Loaded -> {
+                                        val sourcePath = remember(source.id, selected?.name, current.content) {
+                                            selected?.let { skill -> runCatching { extensions.previewSkillPath(source, skill) }.getOrNull() }
+                                        }
+                                        MarkdownDocumentPreview(
+                                            content = current.content,
+                                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                                            documentKey = selected?.name ?: current.content,
+                                            onCopySource = { onCopySource(current.content) },
+                                            sourcePath = sourcePath,
+                                            onCopyPath = onCopyPath,
+                                            onCopyFile = onCopyFile,
+                                            onCopyCode = onCopyCode,
+                                        )
+                                    }
                                 }
                             }
                         }

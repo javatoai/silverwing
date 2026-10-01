@@ -23,7 +23,7 @@ class NavigationLayoutTest {
     fun `all page titles are removed while non task destinations retain a compact top gutter`() {
         assertEquals(0f, navigationContentTopPaddingFor(NavigationItem.TASKS))
         assertEquals(0f, navigationContentTopPaddingFor(NavigationItem.REQUIREMENTS))
-        assertEquals(16f, navigationContentTopPaddingFor(NavigationItem.ARCHIVED))
+        assertEquals(0f, navigationContentTopPaddingFor(NavigationItem.ARCHIVED))
         assertEquals(16f, navigationContentTopPaddingFor(NavigationItem.SERVICES))
         assertEquals(16f, navigationContentTopPaddingFor(NavigationItem.TAG))
         assertEquals(16f, navigationContentTopPaddingFor(NavigationItem.SKILLS))
@@ -42,12 +42,13 @@ class NavigationLayoutTest {
     }
 
     @Test
-    fun `requirement list sits immediately below development tasks`() {
+    fun `archived task route is hidden while remaining inside development tasks navigation`() {
         val items = visibleNavigationItemsFor(showTagNavigation = true)
-        val index = items.indexOf(NavigationItem.REQUIREMENTS)
 
-        assertEquals(NavigationItem.TASKS, items[index - 1])
-        assertEquals(NavigationItem.ARCHIVED, items[index + 1])
+        assertEquals(NavigationItem.TASKS, sidebarNavigationSelection(NavigationItem.ARCHIVED))
+        assertEquals(NavigationItem.TASKS, items.first())
+        assertEquals(NavigationItem.REQUIREMENTS, items[1])
+        assertFalse(NavigationItem.ARCHIVED in items)
         assertTrue(NavigationItem.REQUIREMENTS in visibleNavigationItemsFor(showTagNavigation = false))
     }
 

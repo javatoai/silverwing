@@ -13,6 +13,9 @@ internal object WindowPreferences {
     internal const val CURRENT_LAYOUT_VERSION = 2
     private const val LAYOUT_VERSION_KEY = "layoutVersion"
     private const val TASK_LIST_PANE_WIDTH_KEY = "taskListPaneWidth"
+    private const val MATERIALS_DIRECTORY_PANE_WIDTH_KEY = "materialsDirectoryPaneWidth"
+    private const val EXPAND_REQUIREMENT_MATERIALS_SECOND_LEVEL_FOLDERS_KEY =
+        "expandRequirementMaterialsSecondLevelFolders"
 
     private const val DEFAULT_WIDTH = 1600
     private const val DEFAULT_HEIGHT = 980
@@ -23,6 +26,8 @@ internal object WindowPreferences {
         val maximized: Boolean = true,
         val settingsSection: String = "basic",
         val taskListPaneWidth: Int? = null,
+        val materialsDirectoryPaneWidth: Int? = null,
+        val expandRequirementMaterialsSecondLevelFolders: Boolean = false,
     )
 
     fun load(): Snapshot = snapshotFor(
@@ -32,6 +37,11 @@ internal object WindowPreferences {
         layoutVersion = preferences.getInt(LAYOUT_VERSION_KEY, 0),
         settingsSection = preferences.get("settingsSection", "basic"),
         taskListPaneWidth = preferences.getInt(TASK_LIST_PANE_WIDTH_KEY, 0).takeIf { it > 0 },
+        materialsDirectoryPaneWidth = preferences.getInt(MATERIALS_DIRECTORY_PANE_WIDTH_KEY, 0).takeIf { it > 0 },
+        expandRequirementMaterialsSecondLevelFolders = preferences.getBoolean(
+            EXPAND_REQUIREMENT_MATERIALS_SECOND_LEVEL_FOLDERS_KEY,
+            false,
+        ),
     )
 
     fun saveWindow(width: Int, height: Int, maximized: Boolean) {
@@ -62,6 +72,14 @@ internal object WindowPreferences {
         preferences.putInt(TASK_LIST_PANE_WIDTH_KEY, width)
     }
 
+    fun saveMaterialsDirectoryPaneWidth(width: Int) {
+        preferences.putInt(MATERIALS_DIRECTORY_PANE_WIDTH_KEY, width)
+    }
+
+    fun saveExpandRequirementMaterialsSecondLevelFolders(enabled: Boolean) {
+        preferences.putBoolean(EXPAND_REQUIREMENT_MATERIALS_SECOND_LEVEL_FOLDERS_KEY, enabled)
+    }
+
     internal fun physicalToLogical(
         width: Int,
         height: Int,
@@ -85,12 +103,16 @@ internal object WindowPreferences {
         layoutVersion: Int = 0,
         settingsSection: String = "basic",
         taskListPaneWidth: Int? = null,
+        materialsDirectoryPaneWidth: Int? = null,
+        expandRequirementMaterialsSecondLevelFolders: Boolean = false,
     ): Snapshot = Snapshot(
         width = width,
         height = height,
         maximized = layoutVersion < CURRENT_LAYOUT_VERSION || maximized,
         settingsSection = settingsSection,
         taskListPaneWidth = taskListPaneWidth,
+        materialsDirectoryPaneWidth = materialsDirectoryPaneWidth,
+        expandRequirementMaterialsSecondLevelFolders = expandRequirementMaterialsSecondLevelFolders,
     )
 }
 

@@ -26,6 +26,7 @@ class WindowPreferencesTest {
         assertTrue(WindowPreferences.Snapshot().maximized)
         assertEquals("basic", WindowPreferences.Snapshot().settingsSection)
         assertEquals(null, WindowPreferences.Snapshot().taskListPaneWidth)
+        assertFalse(WindowPreferences.Snapshot().expandRequirementMaterialsSecondLevelFolders)
     }
 
     @Test
@@ -71,6 +72,14 @@ class WindowPreferencesTest {
         assertEquals(
             316,
             WindowPreferences.snapshotFor(taskListPaneWidth = 316).taskListPaneWidth,
+        )
+    }
+
+    @Test
+    fun `requirement materials second level expansion preference is retained in the snapshot`() {
+        assertTrue(
+            WindowPreferences.snapshotFor(expandRequirementMaterialsSecondLevelFolders = true)
+                .expandRequirementMaterialsSecondLevelFolders,
         )
     }
 

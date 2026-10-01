@@ -42,12 +42,40 @@ class TaskDetailLayoutTest {
     }
 
     @Test
-    fun `workspace card stacks actions below the 860 dp action layout breakpoint`() {
-        assertEquals(WorkspaceCardLayout.STACKED, workspaceCardLayout(0f))
-        assertEquals(WorkspaceCardLayout.STACKED, workspaceCardLayout(720f))
-        assertEquals(WorkspaceCardLayout.STACKED, workspaceCardLayout(859.9f))
-        assertEquals(WorkspaceCardLayout.SIDE_BY_SIDE, workspaceCardLayout(860f))
-        assertEquals(WorkspaceCardLayout.SIDE_BY_SIDE, workspaceCardLayout(1200f))
+    fun `workspace card stays side by side until its visible controls meet the summary minimum`() {
+        val actionGroups = listOf(1, 2, 1)
+        val minimumWidth = workspaceCardSideBySideMinWidthDp(actionGroups)
+
+        assertEquals(496f, minimumWidth)
+        assertEquals(WorkspaceCardLayout.STACKED, workspaceCardLayout(minimumWidth - 0.1f, actionGroups))
+        assertEquals(WorkspaceCardLayout.SIDE_BY_SIDE, workspaceCardLayout(minimumWidth, actionGroups))
+        assertEquals(WorkspaceCardLayout.SIDE_BY_SIDE, workspaceCardLayout(720f, actionGroups))
+    }
+
+    @Test
+    fun `workspace card breakpoint only counts currently visible action groups`() {
+        val hidden = WorkspaceToolbarPresentation(
+            showPathActionGroup = false,
+            showGitActionGroup = false,
+            showTagAction = false,
+            showAddModuleAction = false,
+            showRetryAction = false,
+            developmentTool = DevelopmentToolType.INTELLIJ_IDEA,
+        )
+        val allVisible = hidden.copy(
+            showPathActionGroup = true,
+            showGitActionGroup = true,
+            showTagAction = true,
+            showAddModuleAction = true,
+            showRetryAction = true,
+        )
+
+        assertEquals(listOf(1, 1), workspaceCardActionGroupButtonCounts(hidden, customCommandCount = 0))
+        assertEquals(listOf(3, 2, 3, 1, 2, 1, 1), workspaceCardActionGroupButtonCounts(allVisible, customCommandCount = 2))
+        assertTrue(
+            workspaceCardSideBySideMinWidthDp(workspaceCardActionGroupButtonCounts(allVisible, 2)) >
+                workspaceCardSideBySideMinWidthDp(workspaceCardActionGroupButtonCounts(hidden, 0)),
+        )
     }
 
     @Test

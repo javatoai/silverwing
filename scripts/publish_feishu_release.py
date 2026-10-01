@@ -22,6 +22,11 @@ class PublishError(RuntimeError):
 CommandInvoker = Callable[[list[str], str | None], str]
 
 
+RELEASE_DOCUMENT_MARKER = re.compile(
+    r"<!--\s*silverwing-feishu-document:\s*([A-Za-z0-9_-]+)\s*-->"
+)
+
+
 def require_environment(environment: Mapping[str, str], name: str) -> str:
     value = environment.get(name, "").strip()
     if not value:
@@ -165,6 +170,18 @@ def release_markdown(release: Mapping[str, Any], asset_names: Sequence[str]) -> 
     return "\n".join(lines) + "\n"
 
 
+def release_document_id(release: Mapping[str, Any]) -> str | None:
+    body = release.get("body")
+    if body is None:
+        return None
+    if not isinstance(body, str):
+        raise PublishError("GitHub Release 更新说明格式错误")
+    matches = RELEASE_DOCUMENT_MARKER.findall(body)
+    if len(matches) > 1:
+        raise PublishError("GitHub Release 中存在多个飞书页面标记")
+    return matches[0] if matches else None
+
+
 def write_markdown_file(working_directory: Path, content: str) -> Path:
     with tempfile.NamedTemporaryFile(
         mode="w",
@@ -178,78 +195,15 @@ def write_markdown_file(working_directory: Path, content: str) -> Path:
         return Path(temporary.name)
 
 
-def node_data(invoke: CommandInvoker, parent_node_token: str) -> dict[str, Any]:
-    data = lark_data(
-        invoke,
-        [
-            "wiki",
-            "+node-get",
-            "--as",
-            "bot",
-            "--node-token",
-            parent_node_token,
-            "--format",
-            "json",
-        ],
-    )
-    node = data.get("node")
-    if not isinstance(node, dict):
-        raise PublishError("无法解析飞书知识库根节点")
-    return node
-
-
-def find_release_node(
-    invoke: CommandInvoker,
-    parent_node_token: str,
-    tag: str,
-) -> dict[str, Any] | None:
-    parent = node_data(invoke, parent_node_token)
-    space_id = parent.get("space_id")
-    if not isinstance(space_id, str) or not space_id:
-        raise PublishError("飞书知识库根节点缺少 space_id")
-    data = lark_data(
-        invoke,
-        [
-            "wiki",
-            "+node-list",
-            "--as",
-            "bot",
-            "--space-id",
-            space_id,
-            "--parent-node-token",
-            parent_node_token,
-            "--page-all",
-            "--page-limit",
-            "0",
-            "--format",
-            "json",
-        ],
-    )
-    items = data.get("items")
-    if not isinstance(items, list):
-        raise PublishError("无法读取飞书知识库子页面")
-    matches = [
-        item
-        for item in items
-        if isinstance(item, dict)
-        and item.get("title") == tag
-        and item.get("node_type") == "origin"
-        and item.get("obj_type") == "docx"
-    ]
-    if len(matches) > 1:
-        raise PublishError(f"知识库中存在多个同名 Tag 页面：{tag}")
-    return matches[0] if matches else None
-
-
 def create_or_update_release_page(
     invoke: CommandInvoker,
     parent_node_token: str,
     tag: str,
     markdown_file: Path,
+    existing_document_id: str | None,
 ) -> tuple[str, str | None, bool]:
-    existing = find_release_node(invoke, parent_node_token, tag)
     content_reference = f"@./{markdown_file.name}"
-    if existing is None:
+    if existing_document_id is None:
         data = lark_data(
             invoke,
             [
@@ -265,8 +219,6 @@ def create_or_update_release_page(
                 "markdown",
                 "--content",
                 content_reference,
-                "--format",
-                "json",
             ],
         )
         document = data.get("document")
@@ -278,9 +230,6 @@ def create_or_update_release_page(
         url = document.get("url") if isinstance(document.get("url"), str) else None
         return document_id, url, True
 
-    document_id = existing.get("obj_token")
-    if not isinstance(document_id, str) or not document_id:
-        raise PublishError("已有 Tag 页面缺少 Docx ID")
     lark_data(
         invoke,
         [
@@ -289,19 +238,16 @@ def create_or_update_release_page(
             "--as",
             "bot",
             "--doc",
-            document_id,
+            existing_document_id,
             "--command",
             "overwrite",
             "--doc-format",
             "markdown",
             "--content",
             content_reference,
-            "--format",
-            "json",
         ],
     )
-    url = existing.get("url") if isinstance(existing.get("url"), str) else None
-    return document_id, url, False
+    return existing_document_id, None, False
 
 
 def append_attachments(
@@ -337,10 +283,12 @@ def synchronize_release(
     environment: Mapping[str, str],
     invoke: CommandInvoker,
     working_directory: Path,
-) -> tuple[str | None, bool, int]:
+    result_path: Path | None = None,
+) -> tuple[str, str | None, bool, int]:
     app_id = require_environment(environment, "FEISHU_RELEASE_APP_ID")
     app_secret = require_environment(environment, "FEISHU_RELEASE_APP_SECRET")
     parent_node_token = require_environment(environment, "FEISHU_RELEASE_PARENT_NODE_TOKEN")
+    existing_document_id = release_document_id(release)
     assets = release_assets(release, assets_directory)
     markdown_file = write_markdown_file(
         working_directory,
@@ -365,9 +313,30 @@ def synchronize_release(
             parent_node_token,
             str(release["tagName"]),
             markdown_file,
+            existing_document_id,
         )
+        if result_path:
+            write_result(
+                result_path,
+                str(release["tagName"]),
+                document_id,
+                document_url,
+                created,
+                attachment_count=0,
+                attachments_completed=False,
+            )
         append_attachments(invoke, document_id, assets)
-        return document_url, created, len(assets)
+        if result_path:
+            write_result(
+                result_path,
+                str(release["tagName"]),
+                document_id,
+                document_url,
+                created,
+                attachment_count=len(assets),
+                attachments_completed=True,
+            )
+        return document_id, document_url, created, len(assets)
     finally:
         markdown_file.unlink(missing_ok=True)
 
@@ -390,10 +359,31 @@ def write_summary(tag: str, document_url: str | None, created: bool, attachment_
         summary.write("\n".join(lines) + "\n")
 
 
+def write_result(
+    path: Path,
+    tag: str,
+    document_id: str,
+    document_url: str | None,
+    created: bool,
+    attachment_count: int,
+    attachments_completed: bool,
+) -> None:
+    result = {
+        "tag": tag,
+        "documentId": document_id,
+        "documentUrl": document_url,
+        "created": created,
+        "attachmentCount": attachment_count,
+        "attachmentsCompleted": attachments_completed,
+    }
+    path.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--release-json", type=Path, required=True)
     parser.add_argument("--assets-dir", type=Path, required=True)
+    parser.add_argument("--result-json", type=Path)
     arguments = parser.parse_args(argv)
     working_directory = Path.cwd()
 
@@ -402,12 +392,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         app_secret = require_environment(os.environ, "FEISHU_RELEASE_APP_SECRET")
         parent_node_token = require_environment(os.environ, "FEISHU_RELEASE_PARENT_NODE_TOKEN")
         invoke = command_invoker(working_directory, (app_secret, parent_node_token))
-        document_url, created, attachment_count = synchronize_release(
+        _, document_url, created, attachment_count = synchronize_release(
             release,
             arguments.assets_dir,
             os.environ,
             invoke,
             working_directory,
+            arguments.result_json,
         )
         write_summary(str(release["tagName"]), document_url, created, attachment_count)
         print(f"飞书知识库同步完成：{release['tagName']}，附件 {attachment_count} 个")

@@ -361,7 +361,10 @@ internal fun navigationLayoutFor(availableWidthDp: Float): NavigationLayout =
 
 /** Non-task pages retain a small breathing space after their large page title is removed. */
 internal fun navigationContentTopPaddingFor(item: NavigationItem): Float =
-    if (item == NavigationItem.TASKS || item == NavigationItem.REQUIREMENTS) 0f else 16f
+    when (item) {
+        NavigationItem.TASKS, NavigationItem.ARCHIVED, NavigationItem.REQUIREMENTS -> 0f
+        else -> 16f
+    }
 
 internal fun sidebarWidthFor(layout: NavigationLayout): Float = when (layout) {
     NavigationLayout.EXPANDED -> EXPANDED_SIDEBAR_WIDTH_DP
@@ -417,7 +420,7 @@ private fun ExpandedSidebar(controller: DesktopApplication, onSelected: (Navigat
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             visibleNavigationItems(controller).forEach { item ->
-                val selectedItem = item == controller.navigation
+                val selectedItem = sidebarNavigationSelection(controller.navigation) == item
                 Surface(
                     Modifier.fillMaxWidth().clickable(onClickLabel = item.title) { onSelected(item) },
                     color = if (selectedItem) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
@@ -483,7 +486,7 @@ private fun CompactSidebar(controller: DesktopApplication, onSelected: (Navigati
                 CompactNavigationItem(
                     item = item,
                     badge = navigationBadge(controller, item),
-                    selected = item == controller.navigation,
+                    selected = sidebarNavigationSelection(controller.navigation) == item,
                     onSelected = { onSelected(item) },
                 )
                 Spacer(Modifier.height(6.dp))
@@ -551,7 +554,12 @@ private fun visibleNavigationItems(controller: DesktopApplication): List<Navigat
     visibleNavigationItemsFor(controller.showsTagNavigation)
 
 internal fun visibleNavigationItemsFor(showTagNavigation: Boolean): List<NavigationItem> =
-    NavigationItem.entries.filter { item -> item != NavigationItem.TAG || showTagNavigation }
+    NavigationItem.entries.filter { item ->
+        item != NavigationItem.ARCHIVED && (item != NavigationItem.TAG || showTagNavigation)
+    }
+
+internal fun sidebarNavigationSelection(current: NavigationItem): NavigationItem =
+    if (current == NavigationItem.ARCHIVED) NavigationItem.TASKS else current
 
 private fun navigationIcon(item: NavigationItem): ImageVector = when (item) {
     NavigationItem.TASKS -> Icons.Outlined.Workspaces

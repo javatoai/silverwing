@@ -11,6 +11,7 @@ import com.snowball.silverwing.core.LocalSkillFileEntry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 
@@ -78,20 +79,27 @@ internal class LocalSkillsController(
     private var filesRequest = 0L
     private var previewRequest = 0L
     private var uninstallRequest = 0L
+    private var catalogJob: Job? = null
+    private var filesJob: Job? = null
+    private var previewJob: Job? = null
 
     fun refresh() {
         val request = ++catalogRequest
         filesRequest += 1
         previewRequest += 1
+        catalogJob?.cancel()
+        filesJob?.cancel()
+        previewJob?.cancel()
         filesState = LocalSkillFilesState.Empty
         previewState = LocalSkillFilePreviewState.Empty
         catalogState = LocalSkillCatalogLoadState.Loading
-        scope.launch {
+        catalogJob = scope.launch {
             try {
                 val catalog = runInterruptible(ioDispatcher) { skills.list() }
                 if (request == catalogRequest) catalogState = LocalSkillCatalogLoadState.Loaded(catalog)
-            } catch (_: CancellationException) {
-                // The application is closing; there is no user-visible failure to report.
+            } catch (cancelled: CancellationException) {
+                if (request == catalogRequest) catalogState = LocalSkillCatalogLoadState.Idle
+                throw cancelled
             } catch (error: Throwable) {
                 if (request == catalogRequest) {
                     catalogState = LocalSkillCatalogLoadState.Failed(error.message ?: "无法读取本机 Skill 目录")
@@ -103,14 +111,17 @@ internal class LocalSkillsController(
     fun loadFiles(skill: LocalSkillCatalogItem) {
         val request = ++filesRequest
         previewRequest += 1
+        filesJob?.cancel()
+        previewJob?.cancel()
         filesState = LocalSkillFilesState.Loading
         previewState = LocalSkillFilePreviewState.Empty
-        scope.launch {
+        filesJob = scope.launch {
             try {
                 val catalog = runInterruptible(ioDispatcher) { skills.files(skill.directoryName) }
                 if (request == filesRequest) filesState = LocalSkillFilesState.Loaded(catalog)
-            } catch (_: CancellationException) {
-                // The application is closing; there is no user-visible failure to report.
+            } catch (cancelled: CancellationException) {
+                if (request == filesRequest) filesState = LocalSkillFilesState.Empty
+                throw cancelled
             } catch (error: Throwable) {
                 if (request == filesRequest) {
                     filesState = LocalSkillFilesState.Failed(
@@ -124,15 +135,17 @@ internal class LocalSkillsController(
 
     fun preview(skill: LocalSkillCatalogItem, file: LocalSkillFileEntry) {
         val request = ++previewRequest
+        previewJob?.cancel()
         previewState = LocalSkillFilePreviewState.Loading
-        scope.launch {
+        previewJob = scope.launch {
             try {
                 val content = runInterruptible(ioDispatcher) { skills.preview(skill.directoryName, file.relativePath) }
                 if (request == previewRequest) {
                     previewState = LocalSkillFilePreviewState.Loaded(skill.directoryName, file.relativePath, content)
                 }
-            } catch (_: CancellationException) {
-                // The application is closing; there is no user-visible failure to report.
+            } catch (cancelled: CancellationException) {
+                if (request == previewRequest) previewState = LocalSkillFilePreviewState.Empty
+                throw cancelled
             } catch (error: Throwable) {
                 if (request == previewRequest) {
                     previewState = LocalSkillFilePreviewState.Failed(

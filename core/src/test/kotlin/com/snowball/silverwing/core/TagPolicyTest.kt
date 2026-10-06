@@ -6,6 +6,28 @@ import kotlin.test.assertFailsWith
 
 class TagPolicyTest {
     @Test
+    fun `history resolution keeps merge mode and original target even when current target is absent`() {
+        val workspace = workspace("repo-a", "service-a", "api").copy(tagMode = TagBuildMode.CURRENT_BRANCH, tagTargetRef = null)
+        val task = manifest(workspace)
+        val config = AppConfig(groups = listOf(GroupConfig("g", "G")))
+        val operation = TagOperation(
+            operationId = "old", folderName = task.folderName, serviceName = workspace.serviceName,
+            repositoryId = workspace.repositoryId, sourceBranch = workspace.branch, targetBranch = "release/original",
+            remote = "upstream", tagMode = TagBuildMode.MERGE_TO_TARGET_BRANCH, state = TagOperationState.FAILED,
+            createdAt = task.createdAt, updatedAt = task.updatedAt, groupServiceId = workspace.groupServiceId,
+            moduleId = workspace.moduleId,
+        )
+        val target = TagPolicy.resolveHistorical(config, task, operation)
+        assertEquals("upstream", target.remote)
+        assertEquals("release/original", target.targetBranch)
+        assertEquals(TagBuildMode.MERGE_TO_TARGET_BRANCH, target.mode)
+        assertFailsWith<IllegalStateException> { TagPolicy.resolveHistorical(config.copy(tagEnabled = false), task, operation) }
+        assertFailsWith<IllegalStateException> {
+            TagPolicy.resolveHistorical(config, task.copy(services = listOf(workspace.copy(tagEnabled = false))), operation)
+        }
+    }
+
+    @Test
     fun `group and child switches both gate tag creation`() {
         val module = ServiceModuleConfig("api", "API", tagEnabled = true)
         val service = GroupServiceConfig(

@@ -35,11 +35,11 @@ class ServiceEditorLayoutTest {
 
     @Test
     fun `service editor widens to host the section navigation`() {
-        val policy = serviceEditorDialogWidthPolicy()
-
-        assertEquals(0.72f, policy.fillFraction)
-        assertEquals(860, policy.minWidthDp)
-        assertEquals(1200, policy.maxWidthDp)
+        val wide = serviceEditorBounds(1500f, 900f)
+        assertEquals(1000f, wide.width)
+        assertTrue(!wide.compact)
+        assertTrue(serviceEditorBounds(839f, 600f).compact)
+        assertTrue(!serviceEditorBounds(840f, 600f).compact)
     }
 
     @Test

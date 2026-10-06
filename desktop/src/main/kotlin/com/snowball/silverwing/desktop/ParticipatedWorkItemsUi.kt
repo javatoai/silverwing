@@ -40,6 +40,7 @@ import androidx.compose.material3.TooltipAnchorPosition
 import androidx.compose.material3.TooltipBox
 import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberTooltipState
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -287,6 +288,7 @@ private fun RequirementsListSection(
                 Icon(Icons.Outlined.Refresh, "刷新需求列表", Modifier.size(18.dp))
             }
         }
+        if (controller.config.aiRequirementNamingEnabled) NamingPreparationControls(controller.namingCoordinator)
         if (state.loading) {
             androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
         }
@@ -418,7 +420,7 @@ private fun RequirementsDetailPane(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     Text(item.title, style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f, fill = false))
+                        modifier = Modifier.weight(1f))
                     // Optical centering on the title's first line: the button is taller than the line box.
                     PrimaryAddIconButton(
                         "基于该需求创建研发任务",
@@ -433,65 +435,7 @@ private fun RequirementsDetailPane(
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            when (val body = catalog.bodyState) {
-                is ParticipatedWorkItemBodyState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
-                is ParticipatedWorkItemBodyState.Ready -> if (body.itemKey == item.key) {
-                    if (body.content.isBlank()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("该工作项没有可读取的正文", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    } else {
-                        val loadedImages = catalog.bodyImageStates.mapNotNull { (url, state) ->
-                            (state as? ParticipatedWorkItemImageState.Loaded)?.let { url to it.path }
-                        }.toMap()
-                        val pendingImages = catalog.bodyImageStates.count { it.value is ParticipatedWorkItemImageState.Loading }
-                        val failedImages = catalog.bodyImageStates.filterValues { it is ParticipatedWorkItemImageState.Failed }
-                        Column(Modifier.fillMaxSize()) {
-                            if (pendingImages > 0) {
-                                Row(
-                                    Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                ) {
-                                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                                    Text("正在加载 $pendingImages 张图片", style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            }
-                            failedImages.forEach { (url, state) ->
-                                val message = (state as ParticipatedWorkItemImageState.Failed).message
-                                Row(
-                                    Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                ) {
-                                    Text("图片加载失败：$message", Modifier.weight(1f),
-                                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                                    OutlinedButton(onClick = { catalog.retryBodyImage(item, url) }) { Text("重试") }
-                                }
-                            }
-                            MarkdownDocumentPreview(
-                                content = markdownWithLocalImagePaths(body.content, loadedImages),
-                                modifier = Modifier.weight(1f).fillMaxWidth(),
-                                documentKey = item.key,
-                                onCopySource = { controller.copyText(body.content, "Markdown 源码已复制") },
-                                onCopyCode = { controller.copyText(it, "代码已复制") },
-                            )
-                        }
-                    }
-                }
-                is ParticipatedWorkItemBodyState.Failed -> if (body.itemKey == item.key) {
-                    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center,
-                        horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("正文读取失败：${body.message}", color = MaterialTheme.colorScheme.error)
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedButton(onClick = { catalog.select(item, forceBody = true) }) { Text("重试") }
-                    }
-                }
-                ParticipatedWorkItemBodyState.Idle -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("正在准备正文预览", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
+            RequirementBodyContent(controller, catalog.bodyReader, item, Modifier.weight(1f).fillMaxWidth())
         }
     }
 }

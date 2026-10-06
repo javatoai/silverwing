@@ -7,14 +7,13 @@ data class RequirementAiContext(
 ) {
     init {
         require(title.isNotBlank()) { "需求标题不能为空" }
-        require(body.isNotBlank()) { "需求正文不能为空" }
         require(body.codePointCount(0, body.length) <= MAX_BODY_CODE_POINTS) {
             "需求正文不能超过 $MAX_BODY_CODE_POINTS 个字符"
         }
     }
 
     companion object {
-        const val MAX_BODY_CODE_POINTS = 4_000
+        const val MAX_BODY_CODE_POINTS = 50
 
         fun truncateBody(value: String): String {
             if (value.codePointCount(0, value.length) <= MAX_BODY_CODE_POINTS) return value
@@ -34,4 +33,11 @@ interface RequirementAiNamingService {
         context: RequirementAiContext,
         forbiddenFolderNames: Set<String> = emptySet(),
     ): RequirementAiNamingSuggestion
+
+    /** Captures the model at the request boundary, before a queued request can outlive a settings change. */
+    fun suggestWithModel(
+        context: RequirementAiContext,
+        forbiddenFolderNames: Set<String>,
+        model: String,
+    ): RequirementAiNamingSuggestion = suggest(context, forbiddenFolderNames)
 }

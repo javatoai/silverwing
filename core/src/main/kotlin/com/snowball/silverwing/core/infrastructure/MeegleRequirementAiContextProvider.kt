@@ -25,8 +25,7 @@ class MeegleRequirementAiContextProvider(
             ?: throw IllegalStateException("需求链接缺少可用的 Meegle 项目")
         val summary = workItemGet(resolvedProjectKey, workItem.workItemId)
         val title = title(summary) ?: throw IllegalStateException("需求缺少标题")
-        val body = findBody(summary, resolvedProjectKey, workItem, ::normalizeBody)
-            ?: throw IllegalStateException("需求缺少可读取的正文")
+        val body = findBody(summary, resolvedProjectKey, workItem, ::normalizeBody).orEmpty()
         return RequirementAiContext(
             title = title,
             body = RequirementAiContext.truncateBody(normalizeBody(body)),
@@ -152,17 +151,16 @@ class MeegleRequirementAiContextProvider(
         val parts = mutableListOf<String>()
         fun collect(current: JsonElement) {
             when (current) {
-                is JsonPrimitive -> current.contentOrNull?.takeIf(String::isNotBlank)?.let(parts::add)
+                is JsonPrimitive -> if (current.isString) current.contentOrNull?.takeIf(String::isNotBlank)?.let(parts::add)
                 is JsonArray -> current.forEach(::collect)
                 is JsonObject -> {
-                    val preferred = listOf("text", "text_value", "string_value", "content", "value", "label")
-                        .firstNotNullOfOrNull { key -> current[key] }
+                    val preferred = listOf("text", "text_value", "string_value", "content", "value", "label", "insert")
+                        .firstNotNullOfOrNull { key -> current[key]?.takeUnless { it is kotlinx.serialization.json.JsonNull } }
                     if (preferred != null) {
                         collect(preferred)
                         current["children"]?.let(::collect)
-                    } else {
-                        current.values.forEach(::collect)
-                    }
+                    } else listOf("children", "blocks", "paragraphs", "elements", "nodes", "ops")
+                        .forEach { key -> current[key]?.let(::collect) }
                 }
             }
         }

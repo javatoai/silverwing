@@ -1006,7 +1006,7 @@ class DesktopApplicationTest {
 
             assertContains(previewContent, "REQ-123 raw requirement")
             assertContains(previewContent, root.resolve("tasks").resolve("支付 订单优化").toString())
-            assertFalse(previewContent.contains("## 需求资料目录"))
+            assertFalse(previewContent.contains("## 任务资料目录"))
         } finally {
             controller.close()
         }
@@ -1090,7 +1090,7 @@ class DesktopApplicationTest {
             )
             val previewContent = preview.files.joinToString("\n") { it.content }
 
-            assertContains(previewContent, "## 需求资料目录")
+            assertContains(previewContent, "## 任务资料目录")
             assertContains(previewContent, materialsPath.toAbsolutePath().normalize().toString())
         } finally {
             controller.close()

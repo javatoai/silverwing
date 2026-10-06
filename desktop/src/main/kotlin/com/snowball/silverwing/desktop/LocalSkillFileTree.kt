@@ -41,24 +41,24 @@ internal fun buildLocalSkillFileTree(
     val root = MutableDirectory(skillDirectoryName, "")
     directoryPaths.forEach { relativePath ->
         val segments = relativePath.split('/')
-        require(relativePath.isNotBlank() && segments.all { it.isNotBlank() && it != "." && it != ".." }) {
+        require(relativePath.isNotEmpty() && segments.all { it.isNotEmpty() && it != "." && it != ".." }) {
             "目录路径不安全：$relativePath"
         }
         var directory = root
         segments.forEach { segment ->
-            val childPath = listOf(directory.relativePath, segment).filter(String::isNotBlank).joinToString("/")
+            val childPath = listOf(directory.relativePath, segment).filter(String::isNotEmpty).joinToString("/")
             directory = directory.directories.getOrPut(segment) { MutableDirectory(segment, childPath) }
         }
     }
     files.forEach { file ->
         val segments = file.relativePath.split('/')
-        require(file.relativePath.isNotBlank() && segments.all { it.isNotBlank() && it != "." && it != ".." }) {
+        require(file.relativePath.isNotEmpty() && segments.all { it.isNotEmpty() && it != "." && it != ".." }) {
             "Skill 文件路径不安全：${file.relativePath}"
         }
         var directory = root
         segments.dropLast(1).forEach { segment ->
             val relativePath = listOf(directory.relativePath, segment)
-                .filter(String::isNotBlank)
+                .filter(String::isNotEmpty)
                 .joinToString("/")
             directory = directory.directories.getOrPut(segment) {
                 MutableDirectory(segment, relativePath)

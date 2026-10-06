@@ -2,10 +2,7 @@ package com.snowball.silverwing.desktop
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -33,6 +30,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.SecondaryTabRow
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -53,12 +52,12 @@ import java.nio.file.Path
 
 /** Primary browser for Skills installed in the current user's standard directory. */
 @Composable
-internal fun LocalSkillsScreen(controller: DesktopApplication) {
-    val localSkills = controller.localSkillsController
+internal fun LocalSkillsScreen(controller: DesktopApplication, localSkills: LocalSkillsController = controller.localSkillsController) {
     val catalogState = localSkills.catalogState
     val catalog = (catalogState as? LocalSkillCatalogLoadState.Loaded)?.catalog
     var selectedDirectoryName by remember { mutableStateOf<String?>(null) }
-    var selectedFilePath by remember { mutableStateOf<String?>(null) }
+    var fileSelection by remember { mutableStateOf<LocalSkillFileSelection?>(null) }
+    var compactPane by remember { mutableStateOf(LocalSkillsCompactPane.SKILLS) }
     var uninstallTarget by remember { mutableStateOf<LocalSkillCatalogItem?>(null) }
     var expandedDirectoriesBySkill by remember { mutableStateOf<Map<String, Set<String>>>(emptyMap()) }
     val selected = catalog?.skills?.firstOrNull { it.directoryName == selectedDirectoryName }
@@ -72,7 +71,9 @@ internal fun LocalSkillsScreen(controller: DesktopApplication) {
             ?: LocalSkillFilesState.Empty
         else -> current
     }
-    val selectedFile = filesCatalog?.files?.firstOrNull { it.relativePath == selectedFilePath }
+    val selectedFile = filesCatalog?.files?.firstOrNull {
+        fileSelection?.directoryName == selected?.directoryName && it.relativePath == fileSelection?.relativePath
+    }
         ?: filesCatalog?.files?.firstOrNull()
     val uninstalling = localSkills.uninstallState is LocalSkillUninstallState.Removing
     val expandedDirectories = selected?.let { expandedDirectoriesBySkill[it.directoryName] } ?: emptySet()
@@ -86,119 +87,152 @@ internal fun LocalSkillsScreen(controller: DesktopApplication) {
 
     LaunchedEffect(Unit) { localSkills.refresh() }
     LaunchedEffect(catalog?.skills) {
-        selectedDirectoryName = catalog?.skills?.firstOrNull()?.directoryName
+        val loaded = catalog ?: return@LaunchedEffect
+        if (loaded.skills.isEmpty()) fileSelection = null
+        if (loaded.skills.none { it.directoryName == selectedDirectoryName }) {
+            selectedDirectoryName = loaded.skills.firstOrNull()?.directoryName
+        }
     }
     LaunchedEffect(selected?.directoryName) {
-        selectedFilePath = null
-        selected?.let(localSkills::loadFiles)
+        val skill = selected
+        if (skill == null) {
+            if (catalog != null) fileSelection = null
+            return@LaunchedEffect
+        }
+        if (fileSelection?.directoryName != skill.directoryName) fileSelection = LocalSkillFileSelection(skill.directoryName, null)
+        localSkills.loadFiles(skill)
     }
     LaunchedEffect(selected?.directoryName, filesCatalog?.files) {
-        selectedFilePath = filesCatalog?.files?.firstOrNull()?.relativePath
+        val loaded = filesCatalog ?: return@LaunchedEffect
+        val previous = fileSelection?.takeIf { it.directoryName == loaded.directoryName }?.relativePath
+        fileSelection = LocalSkillFileSelection(loaded.directoryName,
+            previous?.takeIf { path -> loaded.files.any { it.relativePath == path } } ?: loaded.files.firstOrNull()?.relativePath)
     }
     LaunchedEffect(selected?.directoryName, selectedFile?.relativePath) {
         if (selected != null && selectedFile != null) localSkills.preview(selected, selectedFile)
     }
 
-    Column(
-        Modifier.fillMaxSize().padding(start = 28.dp, end = 28.dp, bottom = 28.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+    BoxWithConstraints(
+        Modifier.fillMaxSize().padding(start = MAIN_CONTENT_START_PADDING_DP.dp, end = 28.dp, bottom = 28.dp),
     ) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(
-                    "本机 Skills${catalog?.skills?.size?.let { "（$it）" }.orEmpty()}",
-                    style = MaterialTheme.typography.titleLarge,
-                )
-                Text(
-                    catalog?.root ?: "~/.agents/skills",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            ActionIconButton(
-                label = selected?.let { "卸载 ${it.name}" } ?: "请选择要卸载的 Skill",
-                onClick = { selected?.let { uninstallTarget = it } },
-                modifier = Modifier.size(30.dp),
-                enabled = selected != null && !uninstalling && catalogState is LocalSkillCatalogLoadState.Loaded,
-                loading = uninstalling,
-            ) {
-                Icon(
-                    Icons.Outlined.Delete,
-                    "卸载 Skill",
-                    Modifier.size(16.dp),
-                    tint = MaterialTheme.colorScheme.error,
-                )
-            }
-            ActionIconButton(
-                label = "刷新本机 Skill",
-                onClick = {
-                    expandedDirectoriesBySkill = emptyMap()
-                    localSkills.refresh()
-                },
-                modifier = Modifier.size(30.dp),
-                enabled = !uninstalling,
-                loading = catalogState is LocalSkillCatalogLoadState.Loading,
-            ) {
-                Icon(Icons.Outlined.Refresh, "刷新本机 Skill", Modifier.size(16.dp))
-            }
-        }
-        when (val uninstall = localSkills.uninstallState) {
-            LocalSkillUninstallState.Idle -> Unit
-            is LocalSkillUninstallState.Removing -> Text(
-                "正在卸载 ${uninstall.directoryName}…",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            is LocalSkillUninstallState.Succeeded -> Text(
-                "${uninstall.directoryName} 已卸载，恢复备份已保留在 SilverWing 本机目录。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary,
-            )
-            is LocalSkillUninstallState.Failed -> Text(
-                "卸载 ${uninstall.directoryName} 失败：${uninstall.message}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-            )
-        }
-        when (catalogState) {
-            LocalSkillCatalogLoadState.Idle,
-            LocalSkillCatalogLoadState.Loading -> LinearProgressIndicator(Modifier.fillMaxWidth())
-            is LocalSkillCatalogLoadState.Failed -> Text(
-                catalogState.message,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-            )
-            is LocalSkillCatalogLoadState.Loaded -> {
-                if (catalogState.catalog.skills.isEmpty()) {
-                    OutlinedCard(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text("尚未发现本机 Skill", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                            Text(
-                                "请确认 ${catalogState.catalog.root} 下的直接子目录包含 SKILL.md。",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                } else {
-                    LocalSkillsContent(
-                        controller = controller,
-                        skills = catalogState.catalog.skills,
-                        skillRootPath = catalogState.catalog.root,
-                        selected = selected,
-                        onSelected = { selectedDirectoryName = it.directoryName },
-                        filesState = visibleFilesState,
-                        expandedDirectories = expandedDirectories,
-                        onToggleDirectory = ::toggleDirectory,
-                        selectedFile = selectedFile,
-                        onSelectedFile = { selectedFilePath = it.relativePath },
-                        previewState = localSkills.previewState,
-                        paneWidthSession = localSkills.paneWidthSession,
-                        modifier = Modifier.weight(1f),
+        val compact = maxWidth < 960.dp
+        Column(
+            Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text(
+                        "本机 Skills${catalog?.skills?.size?.let { "（$it）" }.orEmpty()}",
+                        style = MaterialTheme.typography.titleLarge,
                     )
+                    Text(
+                        catalog?.root ?: "~/.agents/skills",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                ActionIconButton(
+                    label = selected?.let { "卸载 ${it.name}" } ?: "请选择要卸载的 Skill",
+                    onClick = { selected?.let { uninstallTarget = it } },
+                    modifier = Modifier.size(30.dp),
+                    enabled = selected != null && !uninstalling && catalogState is LocalSkillCatalogLoadState.Loaded,
+                    loading = uninstalling,
+                ) {
+                    Icon(
+                        Icons.Outlined.Delete,
+                        "卸载 Skill",
+                        Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.error,
+                    )
+                }
+                ActionIconButton(
+                    label = "刷新本机 Skill",
+                    onClick = {
+                        expandedDirectoriesBySkill = emptyMap()
+                        localSkills.refresh()
+                    },
+                    modifier = Modifier.size(30.dp),
+                    enabled = !uninstalling,
+                    loading = catalogState is LocalSkillCatalogLoadState.Loading,
+                ) {
+                    Icon(Icons.Outlined.Refresh, "刷新本机 Skill", Modifier.size(16.dp))
+                }
+            }
+            when (val uninstall = localSkills.uninstallState) {
+                LocalSkillUninstallState.Idle -> Unit
+                is LocalSkillUninstallState.Removing -> Text(
+                    "正在卸载 ${uninstall.directoryName}…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                is LocalSkillUninstallState.Succeeded -> Text(
+                    "${uninstall.directoryName} 已卸载，恢复备份已保留在 SilverWing 本机目录。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                is LocalSkillUninstallState.Failed -> Text(
+                    "卸载 ${uninstall.directoryName} 失败：${uninstall.message}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            if (compact) {
+                SecondaryTabRow(selectedTabIndex = compactPane.ordinal) {
+                    LocalSkillsCompactPane.entries.forEach { pane ->
+                        Tab(selected = compactPane == pane, onClick = { compactPane = pane },
+                            text = { Text(pane.label) })
+                    }
+                }
+            }
+            when (catalogState) {
+                LocalSkillCatalogLoadState.Idle,
+                LocalSkillCatalogLoadState.Loading -> LinearProgressIndicator(Modifier.fillMaxWidth())
+                is LocalSkillCatalogLoadState.Failed -> Text(
+                    catalogState.message,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                is LocalSkillCatalogLoadState.Loaded -> {
+                    if (catalogState.catalog.skills.isEmpty()) {
+                        OutlinedCard(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text("尚未发现本机 Skill", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    "请确认 ${catalogState.catalog.root} 下的直接子目录包含 SKILL.md。",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    } else {
+                        LocalSkillsContent(
+                            controller = controller,
+                            skills = catalogState.catalog.skills,
+                            skillRootPath = catalogState.catalog.root,
+                            selected = selected,
+                            onSelected = {
+                                if (selectedDirectoryName != it.directoryName) fileSelection = LocalSkillFileSelection(it.directoryName, null)
+                                selectedDirectoryName = it.directoryName
+                                compactPane = LocalSkillsCompactPane.DIRECTORY
+                            },
+                            filesState = visibleFilesState,
+                            expandedDirectories = expandedDirectories,
+                            onToggleDirectory = ::toggleDirectory,
+                            selectedFile = selectedFile,
+                            onSelectedFile = { file ->
+                                selected?.let { fileSelection = LocalSkillFileSelection(it.directoryName, file.relativePath) }
+                                compactPane = LocalSkillsCompactPane.DOCUMENT
+                            },
+                            previewState = localSkills.previewState,
+                            paneWidthSession = localSkills.paneWidthSession,
+                            compactPane = compactPane.takeIf { compact },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                 }
             }
         }
@@ -218,6 +252,13 @@ internal fun LocalSkillsScreen(controller: DesktopApplication) {
     }
 }
 
+/** 只保存选择标识；文件路径不能跨 Skill 套用，读取中的空状态也不是删除结果。 */
+private data class LocalSkillFileSelection(val directoryName: String, val relativePath: String?)
+
+private enum class LocalSkillsCompactPane(val label: String) {
+    SKILLS("Skills"), DIRECTORY("目录"), DOCUMENT("文档"),
+}
+
 @Composable
 private fun LocalSkillsContent(
     controller: DesktopApplication,
@@ -232,173 +273,195 @@ private fun LocalSkillsContent(
     onSelectedFile: (LocalSkillFileEntry) -> Unit,
     previewState: LocalSkillFilePreviewState,
     paneWidthSession: LocalSkillsPaneWidthSession,
+    compactPane: LocalSkillsCompactPane?,
     modifier: Modifier = Modifier,
 ) {
+    val skillList: @Composable (Modifier) -> Unit = { paneModifier ->
+        LocalSkillListPane(skills, selected, onSelected, paneModifier)
+    }
+    val directory: @Composable (Modifier) -> Unit = { paneModifier ->
+        LocalSkillDirectoryPane(filesState, expandedDirectories, onToggleDirectory, selectedFile, onSelectedFile, paneModifier)
+    }
+    val document: @Composable (Modifier) -> Unit = { paneModifier ->
+        LocalSkillDocumentPane(controller, skillRootPath, selected, filesState, selectedFile,
+            onSelectedFile, previewState, compactPane != null, paneModifier)
+    }
+    if (compactPane != null) {
+        // Compose only the active panel; navigation and selection live outside this branch.
+        when (compactPane) {
+            LocalSkillsCompactPane.SKILLS -> skillList(modifier.fillMaxSize())
+            LocalSkillsCompactPane.DIRECTORY -> directory(modifier.fillMaxSize())
+            LocalSkillsCompactPane.DOCUMENT -> document(modifier.fillMaxSize())
+        }
+        return
+    }
     BoxWithConstraints(modifier.fillMaxSize()) {
         val availableWidthDp = maxWidth.value
         val layout = resolveLocalSkillsPaneLayout(availableWidthDp, paneWidthSession.preferences)
-        val horizontalScroll = rememberScrollState()
-        Box(Modifier.fillMaxSize().horizontalScroll(horizontalScroll)) {
-            Row(Modifier.width(layout.canvasWidthDp.dp).fillMaxHeight()) {
-                OutlinedCard(Modifier.width(layout.skillListWidthDp.dp).fillMaxHeight()) {
-            LazyColumn(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                items(skills, key = LocalSkillCatalogItem::directoryName) { skill ->
-                    val isSelected = selected?.directoryName == skill.directoryName
-                    Column(
-                        Modifier.fillMaxWidth()
-                            .background(if (isSelected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
-                            .clickable { onSelected(skill) }
-                            .padding(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(3.dp),
-                    ) {
-                        Text(
-                            skill.name,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            skill.description,
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+        Row(Modifier.fillMaxSize()) {
+            skillList(Modifier.width(layout.skillListWidthDp.dp).fillMaxHeight())
+            LocalSkillsPaneResizeHandle(
+                label = "拖动调整 Skill 列表和目录宽度",
+                onResizeStart = { paneWidthSession.preferences = layout.toPreferences() },
+                onResize = { dragAmountDp ->
+                    val current = resolveLocalSkillsPaneLayout(availableWidthDp, paneWidthSession.preferences)
+                    paneWidthSession.preferences = resizeLocalSkillsPaneLayout(
+                        availableWidthDp, current, LocalSkillsPaneBoundary.SKILL_LIST_AND_DIRECTORY, dragAmountDp,
+                    ).toPreferences()
+                },
+            )
+            directory(Modifier.width(layout.directoryWidthDp.dp).fillMaxHeight())
+            LocalSkillsPaneResizeHandle(
+                label = "拖动调整目录和文件预览宽度",
+                onResizeStart = { paneWidthSession.preferences = layout.toPreferences() },
+                onResize = { dragAmountDp ->
+                    val current = resolveLocalSkillsPaneLayout(availableWidthDp, paneWidthSession.preferences)
+                    paneWidthSession.preferences = resizeLocalSkillsPaneLayout(
+                        availableWidthDp, current, LocalSkillsPaneBoundary.DIRECTORY_AND_PREVIEW, dragAmountDp,
+                    ).toPreferences()
+                },
+            )
+            document(Modifier.width(layout.previewWidthDp.dp).fillMaxHeight())
+        }
+    }
+}
+
+@Composable
+private fun LocalSkillListPane(
+    skills: List<LocalSkillCatalogItem>,
+    selected: LocalSkillCatalogItem?,
+    onSelected: (LocalSkillCatalogItem) -> Unit,
+    modifier: Modifier,
+) {
+    OutlinedCard(modifier) {
+        LazyColumn(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            items(skills, key = LocalSkillCatalogItem::directoryName) { skill ->
+                val isSelected = selected?.directoryName == skill.directoryName
+                Column(
+                    Modifier.fillMaxWidth()
+                        .background(if (isSelected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+                        .clickable { onSelected(skill) }.padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    Text(skill.name, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(skill.description, style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LocalSkillDirectoryPane(
+    filesState: LocalSkillFilesState,
+    expandedDirectories: Set<String>,
+    onToggleDirectory: (String) -> Unit,
+    selectedFile: LocalSkillFileEntry?,
+    onSelectedFile: (LocalSkillFileEntry) -> Unit,
+    modifier: Modifier,
+) {
+    OutlinedCard(modifier) {
+        Column(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("目录", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            when (filesState) {
+                LocalSkillFilesState.Empty,
+                LocalSkillFilesState.Loading -> LinearProgressIndicator(Modifier.fillMaxWidth())
+                is LocalSkillFilesState.Failed -> Text(filesState.message, color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall)
+                is LocalSkillFilesState.Loaded -> {
+                    if (filesState.catalog.files.isEmpty()) {
+                        Text("目录中没有可预览文件", color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall)
+                    } else {
+                        LocalSkillDirectoryTree(filesState.catalog.directoryName, filesState.catalog.files,
+                            expandedDirectories, selectedFile, onToggleDirectory, onSelectedFile,
+                            Modifier.weight(1f).fillMaxWidth())
+                    }
+                    if (filesState.catalog.truncated) {
+                        Text("仅显示前 2,000 个文件", style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
         }
-                LocalSkillsPaneResizeHandle(
-                    label = "拖动调整 Skill 列表和目录宽度",
-                    onResizeStart = { paneWidthSession.preferences = layout.toPreferences() },
-                    onResize = { dragAmountDp ->
-                        val current = resolveLocalSkillsPaneLayout(availableWidthDp, paneWidthSession.preferences)
-                        paneWidthSession.preferences = resizeLocalSkillsPaneLayout(
-                            availableWidthDp = availableWidthDp,
-                            current = current,
-                            boundary = LocalSkillsPaneBoundary.SKILL_LIST_AND_DIRECTORY,
-                            dragAmountDp = dragAmountDp,
-                        ).toPreferences()
-                    },
-                )
-                OutlinedCard(Modifier.width(layout.directoryWidthDp.dp).fillMaxHeight()) {
-            Column(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("目录", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                when (filesState) {
-                    LocalSkillFilesState.Empty,
-                    LocalSkillFilesState.Loading -> LinearProgressIndicator(Modifier.fillMaxWidth())
-                    is LocalSkillFilesState.Failed -> Text(
-                        filesState.message,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    is LocalSkillFilesState.Loaded -> {
-                        LocalSkillDirectoryTree(
-                            skillDirectoryName = filesState.catalog.directoryName,
-                            files = filesState.catalog.files,
-                            expandedDirectories = expandedDirectories,
-                            selectedFile = selectedFile,
-                            onToggleDirectory = onToggleDirectory,
-                            onSelectedFile = onSelectedFile,
-                            modifier = Modifier.weight(1f).fillMaxWidth(),
-                        )
-                        if (filesState.catalog.truncated) {
-                            Text("仅显示前 2,000 个文件", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun LocalSkillDocumentPane(
+    controller: DesktopApplication,
+    skillRootPath: String,
+    selected: LocalSkillCatalogItem?,
+    filesState: LocalSkillFilesState,
+    selectedFile: LocalSkillFileEntry?,
+    onSelectedFile: (LocalSkillFileEntry) -> Unit,
+    previewState: LocalSkillFilePreviewState,
+    compact: Boolean,
+    modifier: Modifier,
+) {
+    OutlinedCard(modifier) {
+        Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            selected?.let { skill ->
+                selectedFile?.let { file ->
+                    val previewContent = (previewState as? LocalSkillFilePreviewState.Loaded)
+                        ?.takeIf { it.directoryName == skill.directoryName && it.relativePath == file.relativePath }?.content
+                    val sourcePath = Path.of(skillRootPath).resolve(skill.directoryName).resolve(file.relativePath).normalize()
+                    var mode by remember(skill.directoryName, file.relativePath) { mutableStateOf(initialMarkdownPreviewMode()) }
+                    val outline = rememberMarkdownOutlineState(previewContent.orEmpty(), sourcePath,
+                        sourcePath, Path.of(skillRootPath).resolve(skill.directoryName))
+                    val actions: @Composable () -> Unit = {
+                        if (file.markdown) {
+                            MarkdownPreviewToolbarActions(
+                                mode = mode, onModeChange = { mode = it },
+                                onCopySource = { previewContent?.let { controller.copyText(it, "Markdown 源码已复制") } },
+                                sourcePath = sourcePath,
+                                onCopyPath = { controller.copyText(it.toAbsolutePath().toString(), "文件路径已复制") },
+                                onCopyFile = controller::copyFile, copyEnabled = !previewContent.isNullOrEmpty(),
+                                outlineState = outline,
+                            )
+                        } else {
+                            ActionIconButton(label = "复制文件内容",
+                                onClick = { previewContent?.let { controller.copyText(it, "文件内容已复制") } },
+                                modifier = Modifier.size(30.dp), enabled = !previewContent.isNullOrEmpty()) {
+                                Icon(Icons.Outlined.ContentCopy, "复制文件内容", Modifier.size(16.dp))
+                            }
                         }
                     }
-                }
-            }
-        }
-                LocalSkillsPaneResizeHandle(
-                    label = "拖动调整目录和文件预览宽度",
-                    onResizeStart = { paneWidthSession.preferences = layout.toPreferences() },
-                    onResize = { dragAmountDp ->
-                        val current = resolveLocalSkillsPaneLayout(availableWidthDp, paneWidthSession.preferences)
-                        paneWidthSession.preferences = resizeLocalSkillsPaneLayout(
-                            availableWidthDp = availableWidthDp,
-                            current = current,
-                            boundary = LocalSkillsPaneBoundary.DIRECTORY_AND_PREVIEW,
-                            dragAmountDp = dragAmountDp,
-                        ).toPreferences()
-                    },
-                )
-                OutlinedCard(Modifier.width(layout.previewWidthDp.dp).fillMaxHeight()) {
-            Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                selected?.let { skill ->
-                    selectedFile?.let { file ->
-                        val previewContent = (previewState as? LocalSkillFilePreviewState.Loaded)
-                            ?.takeIf { it.directoryName == skill.directoryName && it.relativePath == file.relativePath }
-                            ?.content
-                        val sourcePath = Path.of(skillRootPath).resolve(skill.directoryName).resolve(file.relativePath).normalize()
-                        var mode by remember(skill.directoryName, file.relativePath) { mutableStateOf(initialMarkdownPreviewMode()) }
-                        DocumentPreviewFileHeader(
-                            fileName = file.relativePath.substringAfterLast('/'),
-                            relativePath = "${skill.directoryName}/${file.relativePath}",
-                        ) {
-                            if (file.markdown) {
-                                MarkdownPreviewToolbarActions(
-                                    mode = mode,
-                                    onModeChange = { mode = it },
-                                    onCopySource = { previewContent?.let { controller.copyText(it, "Markdown 源码已复制") } },
-                                    sourcePath = sourcePath,
-                                    onCopyPath = { controller.copyText(it.toAbsolutePath().toString(), "文件路径已复制") },
-                                    onCopyFile = controller::copyFile,
-                                    copyEnabled = !previewContent.isNullOrEmpty(),
-                                )
-                            } else {
-                                ActionIconButton(
-                                    label = "复制文件内容",
-                                    onClick = { previewContent?.let { controller.copyText(it, "文件内容已复制") } },
-                                    modifier = Modifier.size(30.dp),
-                                    enabled = !previewContent.isNullOrEmpty(),
-                                ) {
-                                    Icon(Icons.Outlined.ContentCopy, "复制文件内容", Modifier.size(16.dp))
-                                }
-                            }
+                    DocumentPreviewFileHeader(fileName = file.relativePath.substringAfterLast('/'),
+                        relativePath = "${skill.directoryName}/${file.relativePath}") {
+                        if (!compact) actions()
+                    }
+                    if (compact) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { actions() }
+                    HorizontalDivider()
+                    when (previewState) {
+                        LocalSkillFilePreviewState.Empty,
+                        LocalSkillFilePreviewState.Loading -> LinearProgressIndicator(Modifier.fillMaxWidth())
+                        is LocalSkillFilePreviewState.Failed -> {
+                            if (previewState.directoryName == skill.directoryName && previewState.relativePath == file.relativePath) {
+                                Text(previewState.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                            } else LinearProgressIndicator(Modifier.fillMaxWidth())
                         }
-                        HorizontalDivider()
-                        when (previewState) {
-                            LocalSkillFilePreviewState.Empty,
-                            LocalSkillFilePreviewState.Loading -> LinearProgressIndicator(Modifier.fillMaxWidth())
-                            is LocalSkillFilePreviewState.Failed -> {
-                                if (previewState.directoryName == skill.directoryName && previewState.relativePath == file.relativePath) {
-                                    Text(previewState.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                                } else {
-                                    LinearProgressIndicator(Modifier.fillMaxWidth())
-                                }
-                            }
-                            is LocalSkillFilePreviewState.Loaded -> {
-                                if (previewState.directoryName == skill.directoryName && previewState.relativePath == file.relativePath) {
-                                    if (file.markdown) {
-                                        MarkdownDocumentPreview(
-                                            content = previewState.content,
-                                            mode = mode,
-                                            modifier = Modifier.weight(1f).fillMaxWidth(),
-                                            onCopyCode = { controller.copyText(it, "代码已复制") },
-                                            sourcePath = sourcePath,
-                                            allowedRoot = Path.of(skillRootPath).resolve(skill.directoryName),
-                                            onNavigateLocalLink = { relativePath, _ ->
-                                                (filesState as? LocalSkillFilesState.Loaded)?.catalog?.files
-                                                    ?.firstOrNull { it.relativePath == relativePath && it.markdown }
-                                                    ?.let(onSelectedFile)
-                                            },
-                                        )
-                                    } else {
-                                        PlainTextDocumentPreview(
-                                            content = previewState.content,
-                                            modifier = Modifier.weight(1f).fillMaxWidth(),
-                                        )
-                                    }
-                                } else {
-                                    LinearProgressIndicator(Modifier.fillMaxWidth())
-                                }
-                            }
+                        is LocalSkillFilePreviewState.Loaded -> {
+                            if (previewState.directoryName == skill.directoryName && previewState.relativePath == file.relativePath) {
+                                if (file.markdown) {
+                                    MarkdownDocumentPreview(
+                                        content = previewState.content, mode = mode, modifier = Modifier.weight(1f).fillMaxWidth(),
+                                        onCopyCode = { controller.copyText(it, "代码已复制") }, sourcePath = sourcePath,
+                                        allowedRoot = Path.of(skillRootPath).resolve(skill.directoryName),
+                                        outlineState = outline,
+                                        onNavigateLocalLink = { relativePath, _ ->
+                                            (filesState as? LocalSkillFilesState.Loaded)?.catalog?.files
+                                                ?.firstOrNull { it.relativePath == relativePath && it.markdown }?.let(onSelectedFile)
+                                        },
+                                    )
+                                } else PlainTextDocumentPreview(previewState.content, Modifier.weight(1f).fillMaxWidth())
+                            } else LinearProgressIndicator(Modifier.fillMaxWidth())
                         }
-                    } ?: Text("请选择一个文件", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } ?: Text("请选择一个 Skill", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-            }
+                    }
+                } ?: Text("请选择一个文件", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } ?: Text("请选择一个 Skill", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

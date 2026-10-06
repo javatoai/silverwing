@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.supervisorScope
 
 object RequirementReference {
@@ -116,7 +117,7 @@ class WorkspaceGitOperationService(
     fun previews(workspaces: List<ServiceWorkspace>): Map<String, WorkspaceGitChangePreview> = runBlocking {
         supervisorScope {
             workspaces.distinctBy(::workspacePathKey).map { workspace ->
-                async(dispatcher) { workspacePathKey(workspace) to preview(workspace) }
+                async(dispatcher) { runInterruptible { workspacePathKey(workspace) to preview(workspace) } }
             }.awaitAll().toMap()
         }
     }

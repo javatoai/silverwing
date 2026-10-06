@@ -221,10 +221,10 @@ class ConfigStore(
             }
             if (current.taskRoot != imported.taskRoot) add("任务路径：${current.taskRoot.orEmpty()} → ${imported.taskRoot.orEmpty()}")
             if (current.requirementMaterialsRoot != imported.requirementMaterialsRoot) {
-                add("需求资料根路径：${current.requirementMaterialsRoot.orEmpty()} → ${imported.requirementMaterialsRoot.orEmpty()}")
+                add("任务资料根路径：${current.requirementMaterialsRoot.orEmpty()} → ${imported.requirementMaterialsRoot.orEmpty()}")
             }
             if (current.requirementMaterialsSubdirectory != imported.requirementMaterialsSubdirectory) {
-                add("需求资料子目录：${current.requirementMaterialsSubdirectory.orEmpty()} → ${imported.requirementMaterialsSubdirectory.orEmpty()}")
+                add("任务资料子目录：${current.requirementMaterialsSubdirectory.orEmpty()} → ${imported.requirementMaterialsSubdirectory.orEmpty()}")
             }
             if (current.groups.size != imported.groups.size) add("任务组：${current.groups.size} → ${imported.groups.size}")
             if (current.repositories.size != imported.repositories.size) add("仓库：${current.repositories.size} → ${imported.repositories.size}")
@@ -232,6 +232,9 @@ class ConfigStore(
             if (current.meegleProjects != imported.meegleProjects) add("飞书项目：${current.meegleProjects.size} → ${imported.meegleProjects.size}")
             if (current.aiRequirementNamingEnabled != imported.aiRequirementNamingEnabled) {
                 add("AI 需求命名：${if (current.aiRequirementNamingEnabled) "开启" else "关闭"} → ${if (imported.aiRequirementNamingEnabled) "开启" else "关闭"}")
+            }
+            if (current.aiRequirementNamingPrewarmEnabled != imported.aiRequirementNamingPrewarmEnabled) {
+                add("AI 命名自动预热设置将更新")
             }
             if (current.aiRequirementNamingModel != imported.aiRequirementNamingModel) {
                 add("AI 命名模型：${current.aiRequirementNamingModel} → ${imported.aiRequirementNamingModel}")
@@ -241,6 +244,9 @@ class ConfigStore(
             }
             if (current.tagHistoryMaxGroups != imported.tagHistoryMaxGroups) {
                 add("Tag历史保留组数：${current.tagHistoryMaxGroups} → ${imported.tagHistoryMaxGroups}")
+            }
+            if (current.allowTaskTagTargetEditing != imported.allowTaskTagTargetEditing) {
+                add("任务测试目标分支修改：${if (current.allowTaskTagTargetEditing) "开启" else "关闭"} → ${if (imported.allowTaskTagTargetEditing) "开启" else "关闭"}")
             }
             if (isEmpty() && current != imported) add("配置内容存在其他变化")
         }
@@ -335,6 +341,7 @@ class ConfigStore(
             theme = appearance.theme,
             tagEnabled = tag.tagEnabled,
             tagHistoryMaxGroups = tag.tagHistoryMaxGroups,
+            allowTaskTagTargetEditing = tag.allowTaskTagTargetEditing,
             terminalExecutable = tools.terminalExecutable,
             developmentTools = tools.developmentTools,
             defaultDevelopmentTool = tools.defaultDevelopmentTool,
@@ -367,6 +374,7 @@ class ConfigStore(
             codexPluginMarketplaceSources = integrations.codexPluginMarketplaceSources,
             skillSources = integrations.skillSources,
             aiRequirementNamingEnabled = integrations.aiRequirementNamingEnabled,
+            aiRequirementNamingPrewarmEnabled = integrations.aiRequirementNamingPrewarmEnabled,
             aiRequirementNamingModel = integrations.aiRequirementNamingModel,
         )
         return DecodedConfig(
@@ -406,7 +414,11 @@ class ConfigStore(
                 repositories = config.repositories,
             ),
             services = ServicesShard(groups = config.groups.map { GroupServicesShard(it.id, it.services) }),
-            tag = TagShard(tagEnabled = config.tagEnabled, tagHistoryMaxGroups = config.tagHistoryMaxGroups),
+            tag = TagShard(
+                tagEnabled = config.tagEnabled,
+                tagHistoryMaxGroups = config.tagHistoryMaxGroups,
+                allowTaskTagTargetEditing = config.allowTaskTagTargetEditing,
+            ),
             tools = ToolsShard(
                 terminalExecutable = config.terminalExecutable,
                 developmentTools = config.developmentTools,
@@ -433,6 +445,7 @@ class ConfigStore(
                 codexPluginMarketplaceSources = config.codexPluginMarketplaceSources,
                 skillSources = config.skillSources,
                 aiRequirementNamingEnabled = config.aiRequirementNamingEnabled,
+                aiRequirementNamingPrewarmEnabled = config.aiRequirementNamingPrewarmEnabled,
                 aiRequirementNamingModel = config.aiRequirementNamingModel,
             ),
             appearance = AppearanceShard(
@@ -675,6 +688,7 @@ private data class TagShard(
     val schema: Int = CONFIG_SHARD_SCHEMA,
     val tagEnabled: Boolean = true,
     val tagHistoryMaxGroups: Int = DEFAULT_TAG_HISTORY_MAX_GROUPS,
+    val allowTaskTagTargetEditing: Boolean = false,
 )
 
 @Serializable
@@ -699,6 +713,7 @@ private data class IntegrationsShard(
     val schema: Int = CONFIG_SHARD_SCHEMA,
     /** Every current configuration explicitly records this integration setting. */
     val aiRequirementNamingEnabled: Boolean,
+    val aiRequirementNamingPrewarmEnabled: Boolean = true,
     /** Model used when AI naming is enabled. */
     val aiRequirementNamingModel: String = RequirementAiNamingModel.DEFAULT,
     val meegleProjects: List<MeegleProjectConfig> = emptyList(),

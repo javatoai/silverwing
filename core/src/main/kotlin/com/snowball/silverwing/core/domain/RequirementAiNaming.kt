@@ -8,7 +8,7 @@ package com.snowball.silverwing.core
  * SilverWing release.
  */
 object RequirementAiNamingModel {
-    const val DEFAULT = "gpt-5.6-luna"
+    const val DEFAULT = "gpt-6-luna"
 
     fun requireValid(value: String): String {
         require(value.isNotBlank()) { "AI 命名模型不能为空" }
@@ -68,11 +68,7 @@ object RequirementAiNamingRules {
         return RequirementAiNamingSuggestion(folderName, branchSuffix)
     }
 
-    /** 仅把已在本机解析的组前缀与校验后的模型后缀拼接，前缀不会发送给模型。 */
-    fun composeBranch(resolvedPrefix: String, branchSuffix: String): String = when {
-        resolvedPrefix.isBlank() -> branchSuffix
-        resolvedPrefix.endsWith('/') || resolvedPrefix.endsWith('_') || resolvedPrefix.endsWith('-') ->
-            resolvedPrefix + branchSuffix
-        else -> "${resolvedPrefix}_$branchSuffix"
-    }
+    /** 只替换明确的占位符；没有 {ai} 时，模型不能改变用户的分支规则。 */
+    fun composeBranch(resolvedPrefix: String, branchSuffix: String): String =
+        resolvedPrefix.replace("{ai}", branchSuffix)
 }

@@ -107,6 +107,27 @@ class RequirementControllerTest {
     }
 
     @Test
+    fun `empty branch rule still permits AI folder naming without validating an unchanged branch`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val controller = RequirementController(
+            session = AppSessionStore(AppConfig(), emptyList()), scope = this,
+            coordinator = RequirementMetadataCoordinator(RequirementMetadataProvider { null }, this, ioDispatcher = dispatcher),
+            aiContextProvider = RequirementAiContextProvider { _, _ -> RequirementAiContext("支付优化", "") },
+            aiNamingService = object : RequirementAiNamingService {
+                override fun suggest(context: RequirementAiContext, forbiddenFolderNames: Set<String>) =
+                    RequirementAiNamingSuggestion("支付优化", "payment_update")
+            },
+            branchValidator = BranchReferenceValidator { error("An unchanged branch is validated at task creation") },
+            ioDispatcher = dispatcher,
+        )
+        var result: RequirementAiNamingSuggestion? = null
+        controller.requestDraftAiNaming(LINK, "", enabled = true) { result = it }
+        advanceUntilIdle()
+        assertEquals("支付优化", result?.folderName)
+        assertIs<RequirementAiNamingUiState.Ready>(controller.aiNamingState)
+    }
+
+    @Test
     fun `cancelling AI naming before it runs leaves no result`() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val contextCalls = AtomicInteger()

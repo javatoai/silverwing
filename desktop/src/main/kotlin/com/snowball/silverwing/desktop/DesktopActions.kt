@@ -12,6 +12,15 @@ import java.awt.datatransfer.StringSelection
 import java.io.File
 import java.nio.file.Path
 import java.nio.file.Files
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 
 /**
  * The sole adapter for clipboard and operating-system actions. UI and feature
@@ -23,7 +32,44 @@ class DesktopActions internal constructor(
     private val onSettingsRequired: () -> Unit,
     private val onStatus: (String) -> Unit,
     private val onError: (Throwable) -> Unit,
+    private val fileOpening: SystemFileOpening = PlatformSystemFileOpening(),
 ) {
+    var fileOpenBusy by mutableStateOf(false)
+        private set
+    private val fileOpenMutex = Mutex()
+    val fileApplicationChooserAvailable: Boolean get() = fileOpening.chooserAvailable
+    suspend fun defaultFileApplication(path: Path): DefaultFileApplication = fileOpening.defaultApplication(path)
+    suspend fun openFile(path: Path, chooseApplication: Boolean = false): FileOpenResult {
+        currentCoroutineContext().ensureActive()
+        if (!fileOpenMutex.tryLock()) return FileOpenResult.Cancelled
+        fileOpenBusy = true
+        try {
+            val result = try {
+                if (chooseApplication) fileOpening.chooseApplication(path) else fileOpening.open(path)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                FileOpenResult.Failed(failure)
+            }
+            currentCoroutineContext().ensureActive()
+            when (result) {
+                FileOpenResult.Submitted -> onStatus("已交给系统打开")
+                FileOpenResult.Cancelled -> Unit
+                is FileOpenResult.Failed -> onError(result.error)
+            }
+            return result
+        } finally { fileOpenBusy = false; fileOpenMutex.unlock() }
+    }
+    suspend fun revealFile(path: Path) {
+        val result = withContext(Dispatchers.IO) {
+            try { Result.success(integration.reveal(path)) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) { Result.failure(failure) }
+        }
+        result.onFailure(onError)
+    }
+    fun close() = fileOpening.close()
+
     fun openWorkspace(workspace: ServiceWorkspace, type: DevelopmentToolType = workspace.developmentTool) {
         val path = config().developmentTools.firstOrNull { it.type == type }?.path
         if (path.isNullOrBlank()) {
@@ -32,21 +78,6 @@ class DesktopActions internal constructor(
             return
         }
         attempt { integration.openDevelopmentTool(Path.of(workspace.worktreePath), type, path) }
-    }
-
-    /** Creates and opens SILVERWING's task-local work-data directory in IDEA. */
-    fun openWorkData(taskDirectory: Path, type: DevelopmentToolType = config().defaultDevelopmentTool) {
-        val path = config().developmentTools.firstOrNull { it.type == type }?.path
-        if (path.isNullOrBlank()) {
-            onSettingsRequired()
-            onError(IllegalStateException("请先在设置中配置 ${type.displayName} 路径"))
-            return
-        }
-        attempt {
-            val directory = taskDirectory.resolve("ai-data")
-            Files.createDirectories(directory)
-            integration.openDevelopmentTool(directory, type, path)
-        }
     }
 
     fun reveal(path: Path) = attempt { integration.reveal(path) }

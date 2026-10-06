@@ -18,13 +18,18 @@ class SettingsExperienceTest {
         val byKey = categories.associateBy(SettingsNavigationCategory::key)
 
         assertEquals(
-            listOf("基础", "存储", "研发配置", "任务", "Codex", "命令", "Skill 安装", "代理", "Git", "系统与诊断"),
+            listOf("基础", "存储", "研发配置", "研发任务", "Codex", "CLI", "Skill 安装", "代理", "Git", "系统与诊断"),
             categories.map(SettingsNavigationCategory::label),
         )
         assertEquals(
-            listOf("项目组", "分支名设置", "Tag 设置", "开发工具"),
+            listOf("项目组", "开发工具"),
             byKey.getValue("development").pages.map(SettingsNavigationPage::label),
         )
+        assertEquals(
+            listOf("Git 配置", "分支名设置", "Tag 设置"),
+            byKey.getValue("git").pages.map(SettingsNavigationPage::label),
+        )
+        assertEquals(listOf("git", "branch-naming", "tag"), byKey.getValue("git").pages.map(SettingsNavigationPage::key))
         assertEquals(
             listOf("Meegle CLI", "Lark CLI", "Genbu CLI", "silverwing CLI"),
             byKey.getValue("commands").pages.map(SettingsNavigationPage::label),
@@ -33,15 +38,15 @@ class SettingsExperienceTest {
             listOf("任务创建区", "任务详情区", "任务协作说明"),
             byKey.getValue("tasks").pages.map(SettingsNavigationPage::label),
         )
-        assertEquals(listOf("Codex 插件"), byKey.getValue("codex").pages.map(SettingsNavigationPage::label))
+        assertEquals(listOf("Codex 插件", "MCP 管理"), byKey.getValue("codex").pages.map(SettingsNavigationPage::label))
         assertEquals("Skill 安装", byKey.getValue("skill-sources").pages.single().label)
         assertEquals("task-creation", byKey.getValue("tasks").pages.first().key)
         assertFalse(categories.flatMap { it.pages }.any { it.key == "codex-task-creation" })
         assertFalse(byKey.getValue("basic").showsTabs())
-        assertFalse(byKey.getValue("codex").showsTabs())
+        assertTrue(byKey.getValue("codex").showsTabs())
         assertFalse(byKey.getValue("skill-sources").showsTabs())
         assertFalse(byKey.getValue("proxy").showsTabs())
-        assertFalse(byKey.getValue("git").showsTabs())
+        assertTrue(byKey.getValue("git").showsTabs())
         assertTrue(byKey.getValue("storage").showsTabs())
         assertTrue(byKey.getValue("development").showsTabs())
         assertTrue(byKey.getValue("tasks").showsTabs())
@@ -51,6 +56,10 @@ class SettingsExperienceTest {
         assertEquals("tasks", normalizeSettingsCategory("codex-task-creation", byKey.keys))
         assertEquals("codex", normalizeSettingsCategory("codex-plugins", byKey.keys))
         assertEquals("commands", normalizeSettingsCategory("lark", byKey.keys))
+        assertEquals("git", normalizeSettingsCategory("branch-naming", byKey.keys))
+        assertEquals("git", normalizeSettingsCategory("tag", byKey.keys))
+        assertEquals("git", normalizeSettingsCategory("git", byKey.keys))
+        assertEquals("development", normalizeSettingsCategory("development", byKey.keys))
         assertEquals("system", normalizeSettingsCategory("logs", byKey.keys))
         assertEquals("https://gitlab.snowballtech.com/common/silverwing", SILVERWING_OPEN_SOURCE_REPOSITORY_URL)
     }

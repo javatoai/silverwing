@@ -28,10 +28,10 @@ import java.time.Instant
 
 class TaskDetailLayoutTest {
     @Test
-    fun `ready materials actions belong to the work data group`() {
+    fun `ready materials actions require an existing materials directory`() {
         val directory = Files.createTempDirectory("SILVERWING-materials-actions-").toFile()
         try {
-            assertEquals(RequirementMaterialsActionGroup.WORK_DATA, requirementMaterialsActionGroupFor(directory.absolutePath))
+            assertEquals(RequirementMaterialsActionGroup.MATERIALS, requirementMaterialsActionGroupFor(directory.absolutePath))
             Files.delete(directory.toPath())
             assertNull(requirementMaterialsActionGroupFor(directory.absolutePath))
         } finally {
@@ -71,7 +71,7 @@ class TaskDetailLayoutTest {
         )
 
         assertEquals(listOf(1, 1), workspaceCardActionGroupButtonCounts(hidden, customCommandCount = 0))
-        assertEquals(listOf(3, 2, 3, 1, 2, 1, 1), workspaceCardActionGroupButtonCounts(allVisible, customCommandCount = 2))
+        assertEquals(listOf(3, 2, 4, 1, 2, 1, 1), workspaceCardActionGroupButtonCounts(allVisible, customCommandCount = 2))
         assertTrue(
             workspaceCardSideBySideMinWidthDp(workspaceCardActionGroupButtonCounts(allVisible, 2)) >
                 workspaceCardSideBySideMinWidthDp(workspaceCardActionGroupButtonCounts(hidden, 0)),
@@ -126,32 +126,6 @@ class TaskDetailLayoutTest {
         assertEquals(WorkspaceHistoryBaseline("upstream/main", "origin/main"), workspaceHistoryBaseline(clone, "origin/develop"))
         assertEquals(WorkspaceHistoryBaseline("origin/develop", "origin/develop"), workspaceHistoryBaseline(standard.copy(baseRef = null), "origin/develop"))
         assertNull(workspaceHistoryBaseline(standard.copy(baseRef = null), null))
-    }
-
-    @Test
-    fun `short branch keeps copy directly after its natural text width`() {
-        val allocation = workspaceBranchCopyAllocation(
-            availableWidth = 1_000,
-            naturalBranchWidth = 420,
-            copyWidth = 28,
-            gapWidth = 7,
-        )
-
-        assertEquals(420, allocation.branchWidth)
-        assertEquals(427, allocation.copyX)
-    }
-
-    @Test
-    fun `long branch reserves the copy action while its text can wrap`() {
-        val allocation = workspaceBranchCopyAllocation(
-            availableWidth = 500,
-            naturalBranchWidth = 800,
-            copyWidth = 28,
-            gapWidth = 7,
-        )
-
-        assertEquals(465, allocation.branchWidth)
-        assertEquals(472, allocation.copyX)
     }
 
     @Test

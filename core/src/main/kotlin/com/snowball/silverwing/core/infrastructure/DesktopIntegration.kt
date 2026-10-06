@@ -55,8 +55,7 @@ class DesktopIntegration(
                 runner.run(listOf("explorer.exe", "/select,${path.toAbsolutePath()}"))
             os.startsWith("Mac", ignoreCase = true) ->
                 runner.run(listOf("open", "-R", path.toAbsolutePath().toString()))
-            Desktop.isDesktopSupported() -> Desktop.getDesktop().open(path.toFile())
-            else -> error("当前系统不支持打开文件管理器")
+            else -> openDirectory(if (Files.isDirectory(path)) path else requireNotNull(path.toAbsolutePath().parent))
         }
     }
 

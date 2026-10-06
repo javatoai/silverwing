@@ -69,6 +69,13 @@ class LocalSkillsTreeTest {
 
     private fun file(path: String, markdown: Boolean = false) = LocalSkillFileEntry(path, sizeBytes = 10, markdown = markdown)
 
+    @Test
+    fun `spaces in legal file and directory names remain significant in tree keys`() {
+        val tree = buildLocalSkillFileTree("需求资料", listOf(file(" 目录/ 说明.md"), file(" /文档.txt"), file(" 文档.txt")), listOf(" ", " 目录"))
+        val rows = visibleLocalSkillFileTreeRows(tree, setOf(" ", " 目录"))
+        assertEquals(setOf("directory:", "directory: ", "directory: 目录", "file: 目录/ 说明.md", "file: /文档.txt", "file: 文档.txt"), rows.map { it.key }.toSet())
+    }
+
     private fun nodeKey(node: LocalSkillFileTreeNode): String = when (node) {
         is LocalSkillFileTreeNode.Directory -> "directory:${node.relativePath}"
         is LocalSkillFileTreeNode.File -> "file:${node.entry.relativePath}"

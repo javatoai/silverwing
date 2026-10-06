@@ -44,7 +44,10 @@ class ConfigStoreTest {
         assertTrue(store.exists())
         assertTrue(Files.isDirectory(paths.tasks))
         assertEquals(listOf(DEFAULT_GROUP_NAME), config.groups.map { it.name })
-        assertFalse(config.aiRequirementNamingEnabled)
+        assertTrue(config.aiRequirementNamingEnabled)
+        assertTrue(config.aiRequirementNamingPrewarmEnabled)
+        assertEquals(3, config.tagHistoryMaxGroups)
+        assertFalse(config.allowTaskTagTargetEditing)
         assertEquals(RequirementAiNamingModel.DEFAULT, config.aiRequirementNamingModel)
         assertEquals(null, config.meegleDefaultSprintProjectKey)
         assertEquals(null, config.commandProxyUrl)
@@ -56,6 +59,23 @@ class ConfigStoreTest {
         EXPECTED_SHARDS.forEach { name ->
             assertTrue(Files.readString(paths.config.resolve(name)).contains("\"schema\": 6"), name)
         }
+    }
+
+    @Test
+    fun `schema six tag settings without task target editing remain disabled without rewriting the shard`() {
+        val paths = ApplicationPaths(temporary.resolve("existing-tag-settings"))
+        val store = ConfigStore(paths)
+        store.save(AppConfig())
+        val tagFile = paths.config.resolve("tag.json")
+        val existing = """{"schema":6,"tagEnabled":true,"tagHistoryMaxGroups":7}"""
+        Files.writeString(tagFile, existing)
+
+        val config = store.load()
+
+        assertFalse(config.allowTaskTagTargetEditing)
+        assertTrue(config.tagEnabled)
+        assertEquals(7, config.tagHistoryMaxGroups)
+        assertEquals(existing, Files.readString(tagFile))
     }
 
     @Test
@@ -85,6 +105,7 @@ class ConfigStoreTest {
             theme = ThemePreference.DARK,
             tagEnabled = false,
             tagHistoryMaxGroups = 7,
+            allowTaskTagTargetEditing = true,
             terminalExecutable = "wt.exe",
             developmentTools = listOf(DevelopmentToolConfig(DevelopmentToolType.VISUAL_STUDIO_CODE, "D:/tools/Code.exe")),
             defaultDevelopmentTool = DevelopmentToolType.VISUAL_STUDIO_CODE,
@@ -127,6 +148,7 @@ class ConfigStoreTest {
         ConfigStore(paths).save(expected)
 
         assertEquals(expected, ConfigStore(paths).load())
+        assertTrue(Files.readString(paths.config.resolve("tag.json")).contains("\"allowTaskTagTargetEditing\": true"))
         assertTrue(Files.readString(paths.config.resolve("layout.json")).contains("payments"))
         assertFalse(Files.readString(paths.config.resolve("layout.json")).contains("defaultBranchPrefix"))
         assertFalse(Files.readString(paths.config.resolve("layout.json")).contains("defaultWorkspaceToolIds"))
@@ -260,7 +282,7 @@ class ConfigStoreTest {
         val integrations = paths.config.resolve("integrations.json")
         val originalIntegrations = Files.readString(integrations)
         val missingAiNamingField = originalIntegrations.replace(
-            Regex("\\s*\\\"aiRequirementNamingEnabled\\\": false,\\r?\\n"),
+            Regex("\\s*\\\"aiRequirementNamingEnabled\\\": (?:true|false),\\r?\\n"),
             "",
         )
         Files.writeString(integrations, missingAiNamingField)

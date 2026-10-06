@@ -146,6 +146,10 @@ class SettingsAutoDetectionIdentityTest {
             assertEquals(expected, session.config)
             assertEquals(expected, store.load())
             assertEquals(if (manualPath) 0 else 1, applied.size)
+            if (manualPath && refresh in setOf(Refresh.GENBU_FOCUS, Refresh.GENBU_STATUS)) {
+                assertEquals(manual to GenbuCommandSource.CONFIGURED, controller.genbuCommandResolution(),
+                    "A pending detection must not put the previous command back in the Genbu header")
+            }
         } finally {
             scope.cancel()
             io.runAll()

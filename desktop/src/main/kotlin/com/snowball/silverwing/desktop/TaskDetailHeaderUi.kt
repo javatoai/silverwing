@@ -47,17 +47,6 @@ import com.snowball.silverwing.core.isHttpUrl
 import com.snowball.silverwing.core.RequirementReference
 import com.snowball.silverwing.core.RequirementMaterialsStatus
 
-internal const val TASK_DETAIL_HEADER_SIDE_BY_SIDE_MIN_WIDTH_DP = 720f
-
-internal enum class TaskDetailHeaderLayout { SIDE_BY_SIDE, STACKED }
-
-internal fun taskDetailHeaderLayout(availableWidthDp: Float): TaskDetailHeaderLayout =
-    if (availableWidthDp >= TASK_DETAIL_HEADER_SIDE_BY_SIDE_MIN_WIDTH_DP) {
-        TaskDetailHeaderLayout.SIDE_BY_SIDE
-    } else {
-        TaskDetailHeaderLayout.STACKED
-    }
-
 internal enum class TaskLifecyclePrimaryAction { ARCHIVE, RESTORE }
 
 internal fun taskLifecyclePrimaryAction(status: TaskLifecycleStatus): TaskLifecyclePrimaryAction =
@@ -68,19 +57,15 @@ internal data class ParticipantSummary(
     val details: String,
 )
 
-/** Visibility of each persistent inline copy affordance in the task area. */
+/** 需求链接仍保留可配置的复制图标，项目和分支直接点击文字复制。 */
 internal data class TaskAreaCopyIconPresentation(
-    val showBranchNameCopyIcons: Boolean,
     val showRequirementCopyIcons: Boolean,
-    val showProjectNameCopyIcons: Boolean,
 )
 
 /** The former single toggle remains a compatibility fallback for already-saved configurations. */
 internal fun taskAreaCopyIconPresentationFor(config: AppConfig): TaskAreaCopyIconPresentation =
     TaskAreaCopyIconPresentation(
-        showBranchNameCopyIcons = config.showTaskAreaCopyIcons && config.showTaskAreaBranchCopyIcons,
         showRequirementCopyIcons = config.showTaskAreaCopyIcons && config.showTaskAreaRequirementCopyIcons,
-        showProjectNameCopyIcons = config.showTaskAreaCopyIcons && config.showTaskAreaProjectNameCopyIcons,
     )
 
 internal fun participantSummary(role: String, names: List<String>, inlineLimit: Int = 2): ParticipantSummary? {
@@ -99,53 +84,13 @@ internal fun TaskDetailHeader(
     physicalWorkspaces: List<ServiceWorkspace>,
     groupName: String?,
     showGroup: Boolean,
-    canPreviewRequirementMaterials: Boolean,
-    onPreviewRequirementMaterials: () -> Unit,
 ) {
     val abnormalCount = physicalWorkspaces.count { workspace ->
         controller.gitHealth(workspace)?.state in setOf(WorkspaceGitHealthState.MISSING, WorkspaceGitHealthState.FAILED)
     }
     val requirementNumber = task.requirementId ?: RequirementReference.number(task.requirementLink)
-    // The detail page already provides the enclosing surface. Keeping another outlined card
-    // here made the first screenful read as a stack of unrelated boxes, especially on macOS.
-    // Let the task identity be a lightweight heading and reserve borders for workspace cards.
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
-        when (taskDetailHeaderLayout(maxWidth.value)) {
-            TaskDetailHeaderLayout.SIDE_BY_SIDE -> Row(
-                Modifier.fillMaxWidth().padding(horizontal = 2.dp, vertical = 2.dp),
-                verticalAlignment = Alignment.Top,
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                TaskHeaderContent(
-                    controller = controller,
-                    task = task,
-                    requirementState = requirementState,
-                    groupName = groupName,
-                    showGroup = showGroup,
-                    abnormalCount = abnormalCount,
-                    requirementNumber = requirementNumber,
-                    modifier = Modifier.weight(1f),
-                )
-                TaskHeaderMaterialsAction(canPreviewRequirementMaterials, onPreviewRequirementMaterials)
-            }
-            TaskDetailHeaderLayout.STACKED -> Column(
-                Modifier.fillMaxWidth().padding(horizontal = 2.dp, vertical = 2.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                TaskHeaderContent(
-                    controller = controller,
-                    task = task,
-                    requirementState = requirementState,
-                    groupName = groupName,
-                    showGroup = showGroup,
-                    abnormalCount = abnormalCount,
-                    requirementNumber = requirementNumber,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                TaskHeaderMaterialsAction(canPreviewRequirementMaterials, onPreviewRequirementMaterials, Modifier.fillMaxWidth())
-            }
-        }
-    }
+    TaskHeaderContent(controller, task, requirementState, groupName, showGroup, abnormalCount,
+        requirementNumber, Modifier.fillMaxWidth().padding(2.dp))
 }
 
 @Composable
@@ -209,9 +154,9 @@ private fun RequirementMaterialsStatusNotice(controller: DesktopApplication, tas
         RequirementMaterialsStatus.NOT_REQUESTED -> {
             Text(
                 when {
-                    task.requirementLink.isBlank() -> "需求资料未关联：任务缺少需求链接"
-                    !controller.config.requirementMaterialsConfigured -> "需求资料未关联：请先配置目录"
-                    else -> "需求资料未关联"
+                    task.requirementLink.isBlank() -> "任务资料未关联：任务缺少需求链接"
+                    !controller.config.requirementMaterialsConfigured -> "任务资料未关联：请先配置目录"
+                    else -> "任务资料未关联"
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -220,7 +165,7 @@ private fun RequirementMaterialsStatusNotice(controller: DesktopApplication, tas
         RequirementMaterialsStatus.READY -> Unit
         RequirementMaterialsStatus.FAILED -> {
             Text(
-                "需求资料关联失败，请在更多操作中重试",
+                "任务资料关联失败，请在更多操作中重试",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
@@ -271,7 +216,6 @@ private fun TaskHeaderMetadata(
                     }
                     RequirementUiState.NotLoaded -> Spacer(Modifier.weight(1f))
                 }
-                RequirementStatePill(requirementState)
                 if (requirementState == RequirementUiState.Failed) {
                     ActionIconButton("重试读取需求", onRetryRequirement, Modifier.size(30.dp)) {
                         Icon(Icons.Outlined.Refresh, "重试读取需求", Modifier.size(15.dp))
@@ -295,25 +239,6 @@ private fun TaskHeaderMetadata(
             if (showGroup) MetaPill(groupName ?: task.groupId)
             if (abnormalCount > 0) WorkspaceProblemPill("$abnormalCount 个工作区异常")
         }
-    }
-}
-
-@Composable
-private fun TaskHeaderMaterialsAction(
-    enabled: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    OutlinedButton(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = modifier,
-        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-    ) {
-        Icon(Icons.Outlined.Description, null, Modifier.size(18.dp))
-        Spacer(Modifier.width(6.dp))
-        Text("需求资料")
     }
 }
 

@@ -25,7 +25,6 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Visibility
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.HorizontalDivider
@@ -34,14 +33,19 @@ import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.foundation.clickable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -49,6 +53,9 @@ import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
@@ -60,6 +67,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mikepenz.markdown.model.ImageTransformer
+import com.mikepenz.markdown.model.ImageData
+import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.input.pointer.PointerIcon
 import com.mikepenz.markdown.coil3.Coil3ImageTransformerImpl
 import com.mikepenz.markdown.compose.Markdown
 import com.mikepenz.markdown.compose.components.CurrentComponentsBridge
@@ -69,15 +81,33 @@ import com.mikepenz.markdown.compose.elements.MarkdownCodeFence
 import com.mikepenz.markdown.compose.elements.MarkdownTable
 import com.mikepenz.markdown.compose.elements.MarkdownTableHeader
 import com.mikepenz.markdown.compose.elements.MarkdownTableRow
+import com.mikepenz.markdown.compose.extendedspans.ExtendedSpans
+import com.mikepenz.markdown.compose.extendedspans.RoundedCornerSpanPainter
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.model.markdownDimens
+import com.mikepenz.markdown.model.markdownExtendedSpans
 import com.mikepenz.markdown.model.markdownPadding
+import com.mikepenz.markdown.model.rememberMarkdownState
+import com.mikepenz.markdown.model.State as MarkdownParseState
 import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
 import java.nio.file.Path
 import java.net.URI
 import kotlin.math.roundToInt
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+
+internal fun markdownSelectionSpans(): ExtendedSpans = ExtendedSpans(
+    // 行内代码底色先画在文字后方，避免 SpanStyle 的不透明底色盖住选中高亮。
+    // 零圆角和零边距保留现有外观；每个文本块须使用独立实例维护自己的布局。
+    RoundedCornerSpanPainter(
+        cornerRadius = 0.sp,
+        padding = RoundedCornerSpanPainter.TextPaddingValues(),
+        topMargin = 0.sp,
+        bottomMargin = 0.sp,
+    ),
+)
 
 /** One independently previewable Markdown file. */
 internal data class MarkdownPreviewFile(
@@ -148,14 +178,26 @@ internal fun MarkdownDocumentPreview(
     allowedRoot: Path? = null,
     onNavigateLocalLink: ((String, String?) -> Unit)? = null,
     headingAnchor: String? = null,
+    onImageClick: ((Painter) -> Unit)? = null,
+    outlineState: MarkdownOutlineState? = null,
 ) {
+    if (LocalDocumentFind.current == null) {
+        val find = remember(sourcePath, content) { DocumentFindState() }
+        DocumentFindScope(find, modifier) { Column(Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { FindDocumentButton() }
+            DocumentFindBar(find)
+            MarkdownDocumentPreview(content, mode, Modifier.weight(1f).fillMaxWidth(), onCopyCode, sourcePath, allowedRoot,
+                onNavigateLocalLink, headingAnchor, onImageClick, outlineState)
+        } }
+        return
+    }
     val scheme = MaterialTheme.colorScheme
     val selection = remember(scheme.primary) {
         TextSelectionColors(handleColor = scheme.primary, backgroundColor = scheme.primary.copy(alpha = 0.22f))
     }
     CompositionLocalProvider(LocalTextSelectionColors provides selection) {
         when (mode) {
-            MarkdownPreviewMode.RENDERED -> MarkdownRenderedContent(content, modifier, onCopyCode, sourcePath, allowedRoot, onNavigateLocalLink, headingAnchor)
+            MarkdownPreviewMode.RENDERED -> MarkdownRenderedContent(content, modifier, onCopyCode, sourcePath, allowedRoot, onNavigateLocalLink, headingAnchor, onImageClick, outlineState)
             MarkdownPreviewMode.SOURCE -> MarkdownSourceContent(content, modifier)
         }
     }
@@ -168,6 +210,15 @@ internal fun PlainTextDocumentPreview(
     modifier: Modifier = Modifier,
     onCopySource: (() -> Unit)? = null,
 ) {
+    if (LocalDocumentFind.current == null) {
+        val find = remember(content) { DocumentFindState() }
+        DocumentFindScope(find, modifier) { Column(Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { FindDocumentButton() }
+            DocumentFindBar(find)
+            PlainTextDocumentPreview(content, Modifier.weight(1f).fillMaxWidth(), onCopySource)
+        } }
+        return
+    }
     Column(modifier) {
         onCopySource?.let { copy ->
             Row(
@@ -203,29 +254,44 @@ internal fun MarkdownDocumentPreview(
     onCopyPath: ((Path) -> Unit)? = null,
     onCopyFile: ((Path) -> Unit)? = null,
     onCopyCode: ((String) -> Unit)? = null,
+    onImageClick: ((Painter) -> Unit)? = null,
 ) {
-    var mode by remember(documentKey) { mutableStateOf(initialMarkdownPreviewMode()) }
+    if (LocalDocumentFind.current == null) {
+        val find = remember(documentKey) { DocumentFindState() }
+        DocumentFindScope(find, modifier) { MarkdownDocumentPreview(content, Modifier.fillMaxSize(), documentKey,
+            onCopySource, sourcePath, onCopyPath, onCopyFile, onCopyCode, onImageClick) }
+        return
+    }
+    val localMode = remember(documentKey) { mutableStateOf(initialMarkdownPreviewMode()) }
+    val modeState = LocalMaterialsReadingState.current?.mode ?: localMode
+    val outline = rememberMarkdownOutlineState(content, documentKey, sourcePath)
     Column(modifier) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.End,
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            FindDocumentButton()
             MarkdownPreviewToolbarActions(
-                mode = mode,
-                onModeChange = { mode = it },
+                mode = modeState.value,
+                onModeChange = { modeState.value = it },
                 onCopySource = onCopySource,
                 sourcePath = sourcePath,
                 onCopyPath = onCopyPath,
                 onCopyFile = onCopyFile,
                 copyEnabled = content.isNotEmpty(),
+                outlineState = outline,
             )
         }
+        LocalDocumentFind.current?.let { DocumentFindBar(it) }
         MarkdownDocumentPreview(
             content = content,
-            mode = mode,
+            mode = modeState.value,
             modifier = Modifier.weight(1f).fillMaxWidth(),
             onCopyCode = onCopyCode,
+            onImageClick = onImageClick,
+            sourcePath = sourcePath,
+            outlineState = outline,
         )
     }
 }
@@ -239,14 +305,16 @@ internal fun MarkdownPreviewModeToggle(
     fileTypeLabel: String = "Markdown",
 ) {
     val presentation = markdownPreviewTogglePresentation(mode)
+    val actionLabel = if (fileTypeLabel == "Markdown") presentation.label
+        else if (mode == MarkdownPreviewMode.RENDERED) "查看${fileTypeLabel}源码" else "查看${fileTypeLabel}预览"
     ActionIconButton(
-        label = if (fileTypeLabel == "Markdown") presentation.label else if (mode == MarkdownPreviewMode.RENDERED) "查看${fileTypeLabel}源码" else "查看${fileTypeLabel}预览",
+        label = actionLabel,
         onClick = { onModeChange(presentation.targetMode) },
         modifier = modifier,
     ) {
         when (presentation.icon) {
-            MarkdownPreviewToggleIcon.CODE -> Icon(Icons.Outlined.Code, presentation.label, Modifier.size(16.dp))
-            MarkdownPreviewToggleIcon.VISIBILITY -> Icon(Icons.Outlined.Visibility, presentation.label, Modifier.size(16.dp))
+            MarkdownPreviewToggleIcon.CODE -> Icon(Icons.Outlined.Code, actionLabel, Modifier.size(16.dp))
+            MarkdownPreviewToggleIcon.VISIBILITY -> Icon(Icons.Outlined.Visibility, actionLabel, Modifier.size(16.dp))
         }
     }
 }
@@ -263,12 +331,16 @@ internal fun MarkdownPreviewToolbarActions(
     copyEnabled: Boolean = true,
     modifier: Modifier = Modifier,
     fileTypeLabel: String = "Markdown",
+    outlineState: MarkdownOutlineState? = null,
 ) {
     Row(
         modifier,
         horizontalArrangement = Arrangement.spacedBy(2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        outlineState?.let { outline ->
+            MarkdownOutlineButton(outline, { onModeChange(MarkdownPreviewMode.RENDERED) }, Modifier.size(30.dp))
+        }
         MarkdownPreviewModeToggle(mode, onModeChange, Modifier.size(30.dp), fileTypeLabel)
         onCopySource?.let { copy ->
             val existingFile = sourcePath?.takeIf { Files.isRegularFile(it, NOFOLLOW_LINKS) && !Files.isSymbolicLink(it) }
@@ -281,7 +353,7 @@ internal fun MarkdownPreviewToolbarActions(
                 ) {
                     Icon(Icons.Outlined.ContentCopy, "复制…", Modifier.size(16.dp))
                 }
-                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                SilverWingDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                     DropdownMenuItem(
                         text = { Text("复制${fileTypeLabel}源码") },
                         leadingIcon = { Icon(Icons.Outlined.ContentCopy, null) },
@@ -374,6 +446,7 @@ internal fun MarkdownFileTabsPreview(
     val selectedFile = selectMarkdownPreviewFile(files, selectedPath)!!
     val selectedIndex = files.indexOf(selectedFile)
     var mode by remember(selectedFile.path) { mutableStateOf(initialMarkdownPreviewMode()) }
+    val outline = rememberMarkdownOutlineState(selectedFile.content, selectedFile.path)
 
     Column(modifier) {
         if (files.size > 1) {
@@ -397,12 +470,14 @@ internal fun MarkdownFileTabsPreview(
                 onModeChange = { mode = it },
                 onCopySource = { onCopySource(selectedFile) },
                 copyEnabled = selectedFile.content.isNotEmpty(),
+                outlineState = outline,
             )
         }
         MarkdownDocumentPreview(
             content = selectedFile.content,
             mode = mode,
             modifier = Modifier.weight(1f).fillMaxWidth(),
+            outlineState = outline,
         )
     }
 }
@@ -416,28 +491,64 @@ private fun MarkdownRenderedContent(
     allowedRoot: Path?,
     onNavigateLocalLink: ((String, String?) -> Unit)?,
     headingAnchor: String?,
+    onImageClick: ((Painter) -> Unit)?,
+    outlineState: MarkdownOutlineState?,
 ) {
-    val verticalScroll = rememberScrollState()
+    val imageClick by rememberUpdatedState(onImageClick)
+    val zoomableImages = remember {
+        object : ImageTransformer by Coil3ImageTransformerImpl {
+            @Composable override fun transform(link: String): ImageData? {
+                val data = Coil3ImageTransformerImpl.transform(link) ?: return null
+                return if (imageClick == null || !data.painter.intrinsicSize.width.isFinite() || data.painter.intrinsicSize.width <= 0f) data else data.copy(modifier = data.modifier
+                    .pointerHoverIcon(PointerIcon.Hand).clickable(onClickLabel = "放大图片") { imageClick?.invoke(data.painter) })
+            }
+        }
+    }
     val scheme = MaterialTheme.colorScheme
+    val syntaxPalette = workspacePreviewPalette()
     val bodyStyle = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp, lineHeight = 24.sp)
     val frontMatter = remember(content) { splitLeadingMarkdownFrontMatter(content) }
+    val renderedContent = remember(content, sourcePath, allowedRoot) {
+        markdownPreviewRenderInput(frontMatter?.remainingContent ?: content, sourcePath, allowedRoot)
+    }
+    val markdownState = rememberMarkdownState(renderedContent, retainState = true)
+    val parsed by markdownState.state.collectAsState()
+    val renderReady = (parsed as? MarkdownParseState.Success)?.content == renderedContent
+    val verticalScroll = rememberMaterialsScrollState("markdown-rendered", ready = renderReady)
     val clipboardManager = LocalClipboardManager.current
+    val outline = outlineState ?: rememberMarkdownOutlineState(content, sourcePath = sourcePath, allowedRoot = allowedRoot)
+    val headingAnchors = remember(outline.entries) { outline.entries.associate { it.startOffset to it.anchor } }
     val headingOffsets = remember(content) { mutableStateMapOf<String, Int>() }
     var viewportTop by remember(content) { mutableStateOf(0f) }
-    val targetOffset = headingAnchor?.let { headingOffsets[it] }
-    LaunchedEffect(headingAnchor, targetOffset, content) {
-        if (targetOffset != null) verticalScroll.animateScrollTo(targetOffset.coerceAtLeast(0))
+    LaunchedEffect(headingAnchor, content) {
+        if (headingAnchor != null && outline.navigationRequest == null) {
+            val offset = snapshotFlow { headingOffsets[headingAnchor] }.filterNotNull().first()
+            // Saved positions restore after measurement; an explicit navigation wins afterward.
+            repeat(2) { withFrameNanos { } }
+            verticalScroll.animateScrollTo(offset.coerceAtLeast(0))
+        }
     }
-    fun recordHeading(raw: String, y: Float) {
-        val slug = markdownHeadingSlug(raw)
-        if (slug.isNotEmpty()) headingOffsets[slug] = (y - viewportTop + verticalScroll.value).roundToInt()
+    val navigation = outline.navigationRequest
+    LaunchedEffect(outline, navigation, content) {
+        if (navigation != null) {
+            val offset = snapshotFlow { headingOffsets[navigation.anchor] }.filterNotNull().first()
+            repeat(2) { withFrameNanos { } }
+            verticalScroll.animateScrollTo(offset.coerceAtLeast(0))
+            outline.finishNavigation(navigation)
+        }
+    }
+    fun recordHeading(startOffset: Int, y: Float) {
+        if (!renderReady) return
+        headingAnchors[startOffset]?.let { slug ->
+            headingOffsets[slug] = (y - viewportTop + verticalScroll.value).roundToInt()
+        }
     }
     val defaultUriHandler = LocalUriHandler.current
     val uriHandler = remember(defaultUriHandler, sourcePath, allowedRoot, onNavigateLocalLink) {
         object : UriHandler {
             override fun openUri(uri: String) {
                 val local = resolveLocalMarkdownDestination(sourcePath, allowedRoot, uri)
-                if (local != null && local.first.toString().endsWith(".md", ignoreCase = true)) {
+                if (local != null && (local.first.toString().endsWith(".md", ignoreCase = true) || local.first.toString().endsWith(".markdown", ignoreCase = true))) {
                     val relative = allowedRoot!!.toAbsolutePath().normalize().relativize(local.first).joinToString("/")
                     onNavigateLocalLink?.invoke(relative, local.second)
                 } else if (runCatching { URI(uri).scheme?.lowercase() in setOf("http", "https", "mailto") }.getOrDefault(false)) {
@@ -445,9 +556,6 @@ private fun MarkdownRenderedContent(
                 }
             }
         }
-    }
-    val renderedContent = remember(content, sourcePath, allowedRoot) {
-        markdownPreviewRenderInput(frontMatter?.remainingContent ?: content, sourcePath, allowedRoot)
     }
     CompositionLocalProvider(LocalUriHandler provides uriHandler) {
     SelectionContainer {
@@ -463,17 +571,20 @@ private fun MarkdownRenderedContent(
                         HorizontalDivider(color = scheme.outlineVariant)
                         Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             val properties = remember(metadata.lines) { parseFrontMatterProperties(metadata.lines) }
-                            if (properties == null) metadata.lines.forEach { line -> Text(line, style = bodyStyle, softWrap = true) }
-                            else properties.forEach { property ->
+                            if (properties == null) metadata.lines.forEachIndexed { index, line ->
+                                SearchableText(line, style = bodyStyle, softWrap = true, sourceOrder = Long.MIN_VALUE + index)
+                            }
+                            else properties.forEachIndexed { index, property ->
+                                val propertyOrder = Long.MIN_VALUE + (index.toLong() shl 32)
                                 Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.Top) {
-                                    Text(property.name, modifier = Modifier.widthIn(min = 120.dp).padding(end = 12.dp), style = bodyStyle.copy(fontSize = 13.sp), color = scheme.onSurfaceVariant)
+                                    SearchableText(property.name, modifier = Modifier.widthIn(min = 120.dp).padding(end = 12.dp), style = bodyStyle.copy(fontSize = 13.sp), color = scheme.onSurfaceVariant, sourceOrder = propertyOrder)
                                     if (property.name == "tags") FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        property.values.forEach { value ->
+                                        property.values.forEachIndexed { valueIndex, value ->
                                             Surface(shape = RoundedCornerShape(14.dp), color = scheme.secondaryContainer) {
-                                                Text(value, Modifier.padding(horizontal = 8.dp, vertical = 3.dp), style = bodyStyle.copy(fontSize = 12.sp), color = scheme.onSecondaryContainer)
+                                                SearchableText(value, Modifier.padding(horizontal = 8.dp, vertical = 3.dp), style = bodyStyle.copy(fontSize = 12.sp), color = scheme.onSecondaryContainer, sourceOrder = propertyOrder + valueIndex + 1)
                                             }
                                         }
-                                    } else Text(property.values.joinToString(", "), style = bodyStyle, softWrap = true)
+                                    } else SearchableText(property.values.joinToString(", "), style = bodyStyle, softWrap = true, sourceOrder = propertyOrder + 1)
                                 }
                             }
                         }
@@ -481,7 +592,8 @@ private fun MarkdownRenderedContent(
                     }
                     if (frontMatter == null || frontMatter.remainingContent.isNotBlank()) {
             Markdown(
-                content = renderedContent,
+                markdownState = markdownState,
+                extendedSpans = markdownExtendedSpans { remember { markdownSelectionSpans() } },
                 colors = markdownColor(
                     text = scheme.onSurface,
                     codeBackground = scheme.surfaceVariant,
@@ -524,8 +636,14 @@ private fun MarkdownRenderedContent(
                     tableCornerSize = 8.dp,
                 ),
                 components = markdownComponents(
+                    paragraph = { model -> SearchableMarkdownText(model.content, model.node, model.typography.paragraph) },
+                    text = { model -> SearchableMarkdownText(model.content, model.node, model.typography.text) },
+                    codeBlock = { model -> SearchableMarkdownText(model.content, model.node, model.typography.code) },
                     codeFence = { model ->
                         MarkdownCodeFence(model.content, model.node, model.typography.code) { code, language, style ->
+                            val highlightedCode = remember(code, language, syntaxPalette) {
+                                workspaceHighlightedText(code, syntaxLanguageFromLabel(language), syntaxPalette)
+                            }
                             MarkdownCodeBackground(
                                 color = scheme.surfaceVariant,
                                 shape = RoundedCornerShape(8.dp),
@@ -557,25 +675,25 @@ private fun MarkdownRenderedContent(
                                         }
                                     }
                                     HorizontalDivider(color = scheme.outlineVariant.copy(alpha = 0.5f))
-                                    Text(
-                                        code,
-                                        style = style,
-                                        fontFamily = FontFamily.Monospace,
+                                    SearchableText(
+                                        highlightedCode,
+                                        style = style.copy(fontFamily = FontFamily.Monospace),
                                         modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
                                         softWrap = true,
+                                        sourceOrder = model.node.startOffset.toLong(),
                                     )
                                 }
                             }
                         }
                     },
-                    heading1 = { model -> MarkdownSectionHeading(18.dp, { y -> recordHeading(model.content.substring(model.node.startOffset, model.node.endOffset), y) }) { CurrentComponentsBridge.heading1(model) } },
-                    heading2 = { model -> MarkdownSectionHeading(14.dp, { y -> recordHeading(model.content.substring(model.node.startOffset, model.node.endOffset), y) }) { CurrentComponentsBridge.heading2(model) } },
-                    heading3 = { model -> MarkdownAnchorHeading({ y -> recordHeading(model.content.substring(model.node.startOffset, model.node.endOffset), y) }) { CurrentComponentsBridge.heading3(model) } },
-                    heading4 = { model -> MarkdownAnchorHeading({ y -> recordHeading(model.content.substring(model.node.startOffset, model.node.endOffset), y) }) { CurrentComponentsBridge.heading4(model) } },
-                    heading5 = { model -> MarkdownAnchorHeading({ y -> recordHeading(model.content.substring(model.node.startOffset, model.node.endOffset), y) }) { CurrentComponentsBridge.heading5(model) } },
-                    heading6 = { model -> MarkdownAnchorHeading({ y -> recordHeading(model.content.substring(model.node.startOffset, model.node.endOffset), y) }) { CurrentComponentsBridge.heading6(model) } },
-                    setextHeading1 = { model -> MarkdownSectionHeading(18.dp, { y -> recordHeading(model.content.substring(model.node.startOffset, model.node.endOffset), y) }) { CurrentComponentsBridge.setextHeading1(model) } },
-                    setextHeading2 = { model -> MarkdownSectionHeading(14.dp, { y -> recordHeading(model.content.substring(model.node.startOffset, model.node.endOffset), y) }) { CurrentComponentsBridge.setextHeading2(model) } },
+                    heading1 = { model -> MarkdownSectionHeading(18.dp, { y -> recordHeading(model.node.startOffset, y) }, headingAnchors[model.node.startOffset]) { SearchableMarkdownText(model.content, model.node, model.typography.h1, org.intellij.markdown.MarkdownTokenTypes.ATX_CONTENT) } },
+                    heading2 = { model -> MarkdownSectionHeading(14.dp, { y -> recordHeading(model.node.startOffset, y) }, headingAnchors[model.node.startOffset]) { SearchableMarkdownText(model.content, model.node, model.typography.h2, org.intellij.markdown.MarkdownTokenTypes.ATX_CONTENT) } },
+                    heading3 = { model -> MarkdownAnchorHeading({ y -> recordHeading(model.node.startOffset, y) }, headingAnchors[model.node.startOffset]) { SearchableMarkdownText(model.content, model.node, model.typography.h3, org.intellij.markdown.MarkdownTokenTypes.ATX_CONTENT) } },
+                    heading4 = { model -> MarkdownAnchorHeading({ y -> recordHeading(model.node.startOffset, y) }, headingAnchors[model.node.startOffset]) { SearchableMarkdownText(model.content, model.node, model.typography.h4, org.intellij.markdown.MarkdownTokenTypes.ATX_CONTENT) } },
+                    heading5 = { model -> MarkdownAnchorHeading({ y -> recordHeading(model.node.startOffset, y) }, headingAnchors[model.node.startOffset]) { SearchableMarkdownText(model.content, model.node, model.typography.h5, org.intellij.markdown.MarkdownTokenTypes.ATX_CONTENT) } },
+                    heading6 = { model -> MarkdownAnchorHeading({ y -> recordHeading(model.node.startOffset, y) }, headingAnchors[model.node.startOffset]) { SearchableMarkdownText(model.content, model.node, model.typography.h6, org.intellij.markdown.MarkdownTokenTypes.ATX_CONTENT) } },
+                    setextHeading1 = { model -> MarkdownSectionHeading(18.dp, { y -> recordHeading(model.node.startOffset, y) }, headingAnchors[model.node.startOffset]) { SearchableMarkdownText(model.content, model.node, model.typography.h1, org.intellij.markdown.MarkdownTokenTypes.SETEXT_CONTENT) } },
+                    setextHeading2 = { model -> MarkdownSectionHeading(14.dp, { y -> recordHeading(model.node.startOffset, y) }, headingAnchors[model.node.startOffset]) { SearchableMarkdownText(model.content, model.node, model.typography.h2, org.intellij.markdown.MarkdownTokenTypes.SETEXT_CONTENT) } },
                     table = { model ->
                         val raw = model.content.substring(model.node.startOffset, model.node.endOffset)
                         val selectable = remember(raw) { parsePreviewMarkdownTable(raw) }
@@ -599,9 +717,8 @@ private fun MarkdownRenderedContent(
                         )
                     },
                 ),
-                imageTransformer = Coil3ImageTransformerImpl,
+                imageTransformer = zoomableImages,
                 modifier = Modifier.fillMaxWidth(),
-                retainState = true,
             )
                     }
                 }
@@ -726,31 +843,32 @@ internal fun markdownHeadingSlug(raw: String): String = raw.lines().firstOrNull(
     .trim().replace(Regex("[\\s-]+"), "-")
 
 @Composable
-private fun MarkdownSectionHeading(topPadding: Dp, onPosition: (Float) -> Unit, content: @Composable () -> Unit) {
-    Column(Modifier.fillMaxWidth().onGloballyPositioned { onPosition(it.positionInRoot().y) }.padding(top = topPadding, bottom = 4.dp)) {
+private fun MarkdownSectionHeading(topPadding: Dp, onPosition: (Float) -> Unit, anchor: String?, content: @Composable () -> Unit) {
+    Column(Modifier.fillMaxWidth().semantics { heading(); anchor?.let { testTag = "markdown-heading-$it" } }
+        .onGloballyPositioned { onPosition(it.positionInRoot().y) }.padding(top = topPadding, bottom = 4.dp)) {
         content()
         HorizontalDivider(Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
     }
 }
 
 @Composable
-private fun MarkdownAnchorHeading(onPosition: (Float) -> Unit, content: @Composable () -> Unit) {
-    Box(Modifier.fillMaxWidth().onGloballyPositioned { onPosition(it.positionInRoot().y) }) { content() }
+private fun MarkdownAnchorHeading(onPosition: (Float) -> Unit, anchor: String?, content: @Composable () -> Unit) {
+    Box(Modifier.fillMaxWidth().semantics { heading(); anchor?.let { testTag = "markdown-heading-$it" } }
+        .onGloballyPositioned { onPosition(it.positionInRoot().y) }) { content() }
 }
 
 @Composable
 private fun MarkdownSourceContent(content: String, modifier: Modifier) {
-    val verticalScroll = rememberScrollState()
-    val horizontalScroll = rememberScrollState()
+    val verticalScroll = rememberMaterialsScrollState("source-vertical")
+    val horizontalScroll = rememberMaterialsScrollState("source-horizontal")
     SelectionContainer {
         Box(modifier.padding(15.dp).verticalScroll(verticalScroll).horizontalScroll(horizontalScroll)) {
             if (content.isBlank()) {
                 Text("（空）", color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else {
-                Text(
+                SearchableText(
                     content,
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                     softWrap = false,
                 )
             }

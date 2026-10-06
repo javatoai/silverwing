@@ -36,32 +36,9 @@ class RemoteBranchRequestIdentityTest {
                 return listOf("origin/new")
             }
         }
-        val paths = ApplicationPaths(temporary.resolve("home"))
-        val store = ConfigStore(paths)
-        val config = AppConfig(repositories = listOf(RepositoryConfig("repo", "repo", temporary.resolve("repo").toString(), temporary.resolve("repo/.git").toString())))
-        val session = AppSessionStore(config, emptyList())
         val uiDispatcher = StandardTestDispatcher(testScheduler)
         val childScope = CoroutineScope(SupervisorJob() + uiDispatcher)
-        val runner = OperationRunner(OperationCoordinator(), childScope, Dispatchers.IO)
-        val picker = object : NativePathPicker {
-            override suspend fun pickDirectory(initialPath: String?) = null
-            override suspend fun pickDirectories(initialPath: String?): List<String>? = null
-            override suspend fun pickFile(initialPath: String?, extensions: List<String>) = null
-            override suspend fun pickApplication(initialPath: String?) = null
-        }
-        val controller = SettingsController(
-            session = session, configStore = store, groups = GroupConfigurationService(store),
-            taskRootMigrations = TaskRootMigrationService(configStore = store, paths = paths),
-            pathPicker = picker, branchCatalog = catalog, meegleProjectCatalog = MeegleProjectCatalog { emptyList() },
-            meegleCliService = object : MeegleCliService {
-                override fun status() = MeegleCliStatus(false)
-                override fun logout() = Unit
-                override fun beginDeviceCodeLogin(host: String) = error("No login expected")
-                override fun completeDeviceCodeLogin(challenge: MeegleDeviceCodeChallenge) = error("No login expected")
-            }, localGitInspector = LocalGitEnvironmentInspector(), scope = childScope, ioDispatcher = Dispatchers.IO,
-            operations = runner, settingsOperations = runner, meegleOperations = runner,
-            applyConfig = {}, reloadTasks = {}, showError = { throw it }, showStatus = {},
-        )
+        val controller = controller(catalog, childScope, Dispatchers.IO)
         try {
             controller.loadRemoteBranches("repo")
             testScheduler.runCurrent()
@@ -92,5 +69,57 @@ class RemoteBranchRequestIdentityTest {
             childScope.cancel()
             testScheduler.runCurrent()
         }
+    }
+
+    @Test
+    fun `failed GitLab requests do not block or replace GitHub branch results`() = runTest {
+        val calls = mutableListOf<String>()
+        val catalog = object : RemoteBranchCatalog {
+            override fun list(repository: Path, remote: String): List<String> {
+                calls += remote
+                if (remote == "origin") error("GitLab repository not found")
+                return listOf("github/master", "github/feature/nested")
+            }
+        }
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val controller = controller(catalog, backgroundScope, dispatcher)
+        controller.loadRemoteBranches("repo", "origin")
+        controller.loadRemoteBranches("repo", "github")
+        testScheduler.runCurrent()
+        assertIs<RemoteBranchesState.Failed>(controller.remoteBranchState("repo", "origin"))
+        val github = assertIs<RemoteBranchesState.Loaded>(controller.remoteBranchState("repo", "github"))
+        assertEquals(listOf("github/master", "github/feature/nested"), github.branches)
+
+        controller.loadRemoteBranches("repo", "origin", force = true)
+        testScheduler.runCurrent()
+        assertEquals(github, controller.remoteBranchState("repo", "github"))
+        assertEquals(listOf("origin", "github", "origin"), calls)
+    }
+
+    private fun controller(catalog: RemoteBranchCatalog, childScope: CoroutineScope, ioDispatcher: CoroutineDispatcher): SettingsController {
+        val paths = ApplicationPaths(temporary.resolve("home"))
+        val store = ConfigStore(paths)
+        val config = AppConfig(repositories = listOf(RepositoryConfig("repo", "repo", temporary.resolve("repo").toString(), temporary.resolve("repo/.git").toString())))
+        val session = AppSessionStore(config, emptyList())
+        val runner = OperationRunner(OperationCoordinator(), childScope, Dispatchers.IO)
+        val picker = object : NativePathPicker {
+            override suspend fun pickDirectory(initialPath: String?) = null
+            override suspend fun pickDirectories(initialPath: String?): List<String>? = null
+            override suspend fun pickFile(initialPath: String?, extensions: List<String>) = null
+            override suspend fun pickApplication(initialPath: String?) = null
+        }
+        return SettingsController(
+            session = session, configStore = store, groups = GroupConfigurationService(store),
+            taskRootMigrations = TaskRootMigrationService(configStore = store, paths = paths),
+            pathPicker = picker, branchCatalog = catalog, meegleProjectCatalog = MeegleProjectCatalog { emptyList() },
+            meegleCliService = object : MeegleCliService {
+                override fun status() = MeegleCliStatus(false)
+                override fun logout() = Unit
+                override fun beginDeviceCodeLogin(host: String) = error("No login expected")
+                override fun completeDeviceCodeLogin(challenge: MeegleDeviceCodeChallenge) = error("No login expected")
+            }, localGitInspector = LocalGitEnvironmentInspector(), scope = childScope, ioDispatcher = ioDispatcher,
+            operations = runner, settingsOperations = runner, meegleOperations = runner,
+            applyConfig = {}, reloadTasks = {}, showError = { throw it }, showStatus = {},
+        )
     }
 }

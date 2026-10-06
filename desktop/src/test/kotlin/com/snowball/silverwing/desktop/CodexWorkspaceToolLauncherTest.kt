@@ -15,6 +15,16 @@ import kotlin.test.assertFalse
 class CodexWorkspaceToolLauncherTest {
     @TempDir lateinit var temporary: Path
 
+    @Test fun `opens a bound thread and rejects arbitrary URI content`() {
+        val opened = mutableListOf<URI>()
+        val launcher = CodexWorkspaceToolLauncher(ExternalUriOpener { opened += it })
+        val id = "01a0fd65-1c49-7952-9725-369dfb7527b1"
+        launcher.openThread(id)
+        assertEquals("codex://threads/$id", opened.single().toString())
+        kotlin.test.assertFailsWith<IllegalArgumentException> { launcher.openThread("new?path=other") }
+        assertEquals(1, opened.size)
+    }
+
     @Test
     fun `opens encoded task directory through the current Codex new-thread deep link`() {
         val opened = mutableListOf<URI>()

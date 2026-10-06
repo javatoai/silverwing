@@ -147,6 +147,7 @@ class TaskApplicationService(
     private val moduleRemoval: WorkspaceModuleRemovalService = WorkspaceModuleRemovalService(manifests, agentDocuments, operationLock),
     private val bootstrap: BootstrapService = BootstrapService(),
     private val clock: Clock = Clock.systemUTC(),
+    private val tagTargetValidator: TaskTagTargetValidator = GitTaskTagTargetValidator(),
 ) {
     fun inspectModuleRemoval(config: AppConfig, taskDirectory: Path, workspacePath: String): WorkspaceModuleRemovalPreview =
         moduleRemoval.inspect(config, taskDirectory, workspacePath)
@@ -748,6 +749,35 @@ class TaskApplicationService(
             }
             throw error
         }
+    }
+
+    /** Changes only this task module's destination for future Tags. */
+    fun updateTagTarget(
+        config: AppConfig,
+        taskDirectory: Path,
+        groupServiceId: String,
+        moduleId: String,
+        expectedTargetRef: String?,
+        targetRef: String,
+    ): TaskManifest = operationLock.withLock(taskDirectory) {
+        val manifest = manifests.load(taskDirectory)
+        require(manifest.lifecycleStatus == TaskLifecycleStatus.ACTIVE) { "归档任务不能修改测试目标分支" }
+        val workspace = TagPolicy.requireWorkspace(config, manifest, "$groupServiceId:$moduleId")
+        require(workspace.tagMode == TagBuildMode.MERGE_TO_TARGET_BRANCH) { "当前分支模式不支持设置测试目标分支" }
+        require(workspace.tagTargetRef == expectedTargetRef) { "测试目标分支已被其他操作修改，请关闭后重新打开设置" }
+        val target = RemoteBranchRef.parse(targetRef)
+        val validated = lifecycle.validateForMutation(config, taskDirectory, manifest, workspace)
+        tagTargetValidator.validate(validated.repository, target)
+        val updated = manifest.copy(
+            updatedAt = SilverWingTime.format(Instant.now(clock)),
+            services = manifest.services.map { current ->
+                if (current.groupServiceId == groupServiceId && current.moduleId == moduleId) {
+                    current.copy(tagTargetRef = target.toString())
+                } else current
+            },
+        )
+        manifests.save(taskDirectory, updated)
+        updated
     }
 
     fun saveTaskNotes(config: AppConfig, taskDirectory: Path, notes: String): Path = operationLock.withLock(taskDirectory) {

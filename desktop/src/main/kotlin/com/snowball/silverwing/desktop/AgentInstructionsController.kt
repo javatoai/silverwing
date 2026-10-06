@@ -32,6 +32,7 @@ import com.snowball.silverwing.core.WorkspaceStrategy
 import com.snowball.silverwing.core.toInfo
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -44,6 +45,51 @@ data class AgentInstructionsUiState(
     val conflict: AgentFileChange.Conflict?,
     val templates: List<AgentTaskTemplate>,
 )
+
+/** 页面重新创建和异步读取都共享同一份任务草稿；内容只在明确接受磁盘版本时被丢弃。 */
+internal class TaskNotesDraft {
+    var notes by mutableStateOf("")
+        private set
+    var loaded by mutableStateOf(false)
+        private set
+    var loading by mutableStateOf(false)
+        private set
+    var error by mutableStateOf<String?>(null)
+        private set
+    var dirty by mutableStateOf(false)
+        private set
+    var contentRevision by mutableStateOf(0L)
+        private set
+    private var request = 0L
+    val ready: Boolean get() = loaded || dirty
+
+    internal data class ReadToken(val request: Long, val contentRevision: Long)
+    fun beginRead(): ReadToken {
+        loading = true; error = null
+        return ReadToken(++request, contentRevision)
+    }
+    fun completeRead(token: ReadToken, content: String) {
+        if (token.request != request) return
+        if (!dirty && token.contentRevision == contentRevision) replaceContent(content)
+        loaded = true; loading = false; error = null
+    }
+    fun failRead(token: ReadToken, failure: Throwable) {
+        if (token.request != request) return
+        loading = false; error = failure.message ?: failure::class.simpleName ?: "无法读取需求说明"
+    }
+    fun cancelRead(token: ReadToken) { if (token.request == request) loading = false }
+    fun edit(content: String) { replaceContent(content); dirty = true }
+    fun markSaved(savedRevision: Long) { if (contentRevision == savedRevision) dirty = false }
+    fun acceptDisk(content: String, force: Boolean = false) {
+        if (dirty && !force) return
+        // 同内容的磁盘决策也应让此前已开始的读取失效。
+        request++; loading = false; error = null; loaded = true
+        replaceContent(content); dirty = false
+    }
+    private fun replaceContent(content: String) {
+        if (notes != content) { notes = content; contentRevision++ }
+    }
+}
 
 /** Owns three-level AGENTS.md editing, monitoring, propagation and conflict resolution. */
 class AgentInstructionsController internal constructor(
@@ -66,6 +112,8 @@ class AgentInstructionsController internal constructor(
     private var revision by mutableStateOf(0L)
     private var conflict by mutableStateOf<AgentFileChange.Conflict?>(null)
     private val pendingConflicts = linkedMapOf<Path, AgentFileChange.Conflict>()
+    private val taskNotesDrafts = mutableMapOf<Path, TaskNotesDraft>()
+    private val taskNotesManifests = mutableMapOf<Path, TaskManifest>()
     private var templates by mutableStateOf(runCatching { templateStore.list() }.getOrDefault(emptyList()))
     val state: AgentInstructionsUiState get() = AgentInstructionsUiState(revision, conflict, templates)
 
@@ -119,27 +167,75 @@ class AgentInstructionsController internal constructor(
         revision++
     }
 
-    fun readTaskNotes(task: TaskManifest): String = runCatching {
-        val content = monitor.track(documents.taskNotesFile(taskDirectory(task), task)).content
-        if (content.isNotBlank()) documents.taskNotesFromDocument(task, content) else ""
-    }.getOrElse { showError(it); "" }
-
-    /** Reads and parses task-level notes without blocking Compose's dispatcher. */
-    suspend fun readTaskNotesAsync(task: TaskManifest): String = runInterruptible(ioDispatcher) {
-        val content = monitor.track(documents.taskNotesFile(taskDirectory(task), task)).content
-        if (content.isNotBlank()) documents.taskNotesFromDocument(task, content) else ""
+    internal fun notesDraftFor(task: TaskManifest): TaskNotesDraft {
+        val path = taskNotesPath(task)
+        taskNotesManifests[path] = task
+        return taskNotesDrafts.getOrPut(path) { TaskNotesDraft() }
     }
 
-    fun saveTaskNotes(task: TaskManifest, notes: String): Boolean = operations.run("正在保存任务说明…", "任务说明已保存", block = {
+    private fun trackedTaskNotes(path: Path, content: String): String =
+        taskNotesManifests[path.toAbsolutePath().normalize()]?.let { documents.taskNotesFromDocument(it, content) }
+            ?: content.trimEnd('\r', '\n')
+
+    private fun taskNotesPath(task: TaskManifest): Path =
+        documents.taskNotesFile(taskDirectory(task), task).toAbsolutePath().normalize()
+
+    fun readTaskNotes(task: TaskManifest): String {
+        notesDraftFor(task).takeIf { it.dirty }?.let { return it.notes }
+        return runCatching {
+            val content = monitor.track(documents.taskNotesFile(taskDirectory(task), task)).content
+            if (content.isNotBlank()) documents.taskNotesFromDocument(task, content) else ""
+        }.getOrElse { showError(it); "" }
+    }
+
+    /** Reads and parses task-level notes without blocking Compose's dispatcher. */
+    suspend fun readTaskNotesAsync(task: TaskManifest): String {
+        notesDraftFor(task).takeIf { it.dirty }?.let { return it.notes }
+        val path = taskNotesPath(task)
+        return runInterruptible(ioDispatcher) {
+            val content = monitor.track(path).content
+            if (content.isNotBlank()) documents.taskNotesFromDocument(task, content) else ""
+        }
+    }
+
+    internal suspend fun loadTaskNotesDraftAsync(task: TaskManifest) {
+        val draft = notesDraftFor(task)
+        val token = draft.beginRead()
+        try { draft.completeRead(token, readTaskNotesAsync(task)) }
+        catch (cancelled: CancellationException) { draft.cancelRead(token); throw cancelled }
+        catch (failure: Throwable) { draft.failRead(token, failure) }
+    }
+
+    fun saveTaskNotes(task: TaskManifest, notes: String): Boolean {
+        val draft = notesDraftFor(task)
+        draft.edit(notes)
+        val savedRevision = draft.contentRevision
         val directory = taskDirectory(task)
         val path = documents.taskNotesFile(directory, task)
-        val current = monitor.snapshot(path)?.content ?: monitor.track(path).content
-        monitor.save(path, documents.replaceTaskNotesDocument(task, current, notes))
-        tasks.saveTaskNotes(session.config, directory, notes)
-        monitor.checkNow()
-    })
+        val config = session.config
+        val retainDraft = {
+            draft.edit(draft.notes)
+            monitor.markLocalEdit(path, documents.replaceTaskNotesDocument(task, "", draft.notes))
+        }
+        return operations.run("正在保存需求说明…", "需求说明已保存", block = {
+            val current = monitor.snapshot(path)?.content ?: monitor.track(path).content
+            monitor.save(path, documents.replaceTaskNotesDocument(task, current, notes))
+            tasks.saveTaskNotes(config, directory, notes)
+            monitor.checkNow()
+        }, onFailure = { failure ->
+            // 规则文件可能已写入但系统文件生成失败；此时草稿仍然属于用户。
+            runCatching(retainDraft)
+                .onFailure { if (it !== failure) failure.addSuppressed(it) }
+        }, onCancelled = {
+            runCatching(retainDraft).onFailure(showError)
+        }, onSuccess = {
+            draft.markSaved(savedRevision)
+            if (draft.dirty) runCatching { monitor.markLocalEdit(path, documents.replaceTaskNotesDocument(task, "", draft.notes)) }.onFailure(showError)
+        })
+    }
 
     fun markTaskNotesEdited(task: TaskManifest, notes: String) {
+        notesDraftFor(task).edit(notes)
         val path = documents.taskNotesFile(taskDirectory(task), task)
         runCatching {
             val current = monitor.snapshot(path)?.content ?: monitor.track(path).content
@@ -153,14 +249,18 @@ class AgentInstructionsController internal constructor(
 
     fun resolveConflict(resolution: AgentConflictResolution): Boolean {
         val current = conflict ?: return false
+        val normalizedPath = current.path.toAbsolutePath().normalize()
+        val resolvingDraftRevision = taskNotesDrafts[normalizedPath]?.contentRevision
         val task = session.tasks.firstOrNull {
             documents.taskNotesFile(taskDirectory(it), it).toAbsolutePath().normalize() == current.path.toAbsolutePath().normalize()
         }
+        val config = session.config
+        val directory = task?.let(taskDirectory)
         return operations.run("正在处理 Agent 文件冲突…", "Agent 文件冲突已处理", block = {
             if (resolution == AgentConflictResolution.USE_LOCAL && task != null) {
                 monitor.resolve(current.path, resolution, expectedDiskContent = current.diskContent) { localContent ->
                     val notes = documents.taskNotesFromDocument(task, localContent)
-                    tasks.saveTaskNotes(session.config, taskDirectory(task), notes)
+                    tasks.saveTaskNotes(config, requireNotNull(directory), notes)
                 }
             } else {
                 monitor.resolve(current.path, resolution, expectedDiskContent = current.diskContent)
@@ -170,6 +270,20 @@ class AgentInstructionsController internal constructor(
             if (pendingConflicts[normalized] === current) pendingConflicts.remove(normalized)
             conflict = pendingConflicts.values.firstOrNull()
             revision++
+            taskNotesDrafts[normalized]?.let { draft ->
+                if (resolution == AgentConflictResolution.USE_DISK) {
+                    if (resolvingDraftRevision == draft.contentRevision || resolvingDraftRevision == null && !draft.dirty) {
+                        monitor.snapshot(normalized)?.let { draft.acceptDisk(trackedTaskNotes(normalized, it.content), force = true) }
+                    } else taskNotesManifests[normalized]?.let { manifest ->
+                        runCatching { monitor.markLocalEdit(normalized, documents.replaceTaskNotesDocument(manifest, "", draft.notes)) }.onFailure(showError)
+                    }
+                } else {
+                    resolvingDraftRevision?.let(draft::markSaved)
+                    if (draft.dirty) taskNotesManifests[normalized]?.let { manifest ->
+                        runCatching { monitor.markLocalEdit(normalized, documents.replaceTaskNotesDocument(manifest, "", draft.notes)) }.onFailure(showError)
+                    }
+                }
+            }
             if (resolution == AgentConflictResolution.USE_LOCAL && task == null) synchronize(current.path)
         })
     }
@@ -180,7 +294,10 @@ class AgentInstructionsController internal constructor(
                 pendingConflicts[change.path.toAbsolutePath().normalize()] = change
                 conflict = pendingConflicts.values.firstOrNull()
             }
-            is AgentFileChange.Reloaded -> { revision++; synchronize(change.path) }
+            is AgentFileChange.Reloaded -> {
+                taskNotesDrafts[change.path.toAbsolutePath().normalize()]?.acceptDisk(trackedTaskNotes(change.path, change.content))
+                revision++; synchronize(change.path)
+            }
         }
     }
 
@@ -189,8 +306,12 @@ class AgentInstructionsController internal constructor(
         documents.renderPreview(taskDirectory(task), task, session.config.repositories.map(RepositoryConfig::toInfo), notes)
 
     /** Renders a task preview away from Compose's dispatcher. */
-    suspend fun previewTaskAsync(task: TaskManifest, notes: String): AgentDocumentPreview = runInterruptible(ioDispatcher) {
-        documents.renderPreview(taskDirectory(task), task, session.config.repositories.map(RepositoryConfig::toInfo), notes)
+    suspend fun previewTaskAsync(task: TaskManifest, notes: String): AgentDocumentPreview {
+        val directory = taskDirectory(task)
+        val repositories = session.config.repositories.map(RepositoryConfig::toInfo)
+        return runInterruptible(ioDispatcher) {
+            documents.renderPreview(directory, task, repositories, notes)
+        }
     }
 
     fun preview(

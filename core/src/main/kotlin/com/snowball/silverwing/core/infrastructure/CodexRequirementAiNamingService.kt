@@ -22,22 +22,32 @@ class CodexRequirementAiNamingService(
     /** User-safe diagnostic only; the configured endpoint itself is never surfaced. */
     private val proxyEnabled: () -> Boolean = { false },
     private val redactProxyEndpoint: (String) -> String = { it },
+    private val onReasoningFallback: () -> Unit = {},
 ) : RequirementAiNamingService {
+    private val fallbackReported = java.util.concurrent.atomic.AtomicBoolean()
     override fun suggest(
         context: RequirementAiContext,
         forbiddenFolderNames: Set<String>,
+    ): RequirementAiNamingSuggestion = suggestWithModel(context, forbiddenFolderNames, modelProvider())
+
+    override fun suggestWithModel(
+        context: RequirementAiContext,
+        forbiddenFolderNames: Set<String>,
+        model: String,
     ): RequirementAiNamingSuggestion {
+        val selectedModel = RequirementAiNamingModel.requireValid(model)
         Files.createDirectories(paths.temp)
         val temporaryDirectory = Files.createTempDirectory(paths.temp, "requirement-ai-naming-")
         try {
             val schemaFile = temporaryDirectory.resolve("output-schema.json")
             val outputFile = temporaryDirectory.resolve("result.json")
             Files.writeString(schemaFile, OUTPUT_SCHEMA, StandardCharsets.UTF_8)
-            val model = RequirementAiNamingModel.requireValid(modelProvider())
             val command = listOf(
                 codexExecutable.resolve(),
+                "-c",
+                "model_reasoning_effort=\"low\"",
                 "--model",
-                model,
+                selectedModel,
                 // 当前 Codex CLI 把审批策略定义为顶层参数而非 exec 子命令参数；放在 exec 前
                 // 才不会被本机 CLI 拒绝。
                 "--ask-for-approval",
@@ -55,13 +65,23 @@ class CodexRequirementAiNamingService(
                 "--cd",
                 temporaryDirectory.toString(),
             )
-            val result = runner.runWithInput(
+            var result = runner.runWithInput(
                 command = command,
                 input = prompt(context, forbiddenFolderNames),
                 workingDirectory = temporaryDirectory,
                 timeout = Duration.ofSeconds(60),
                 environment = codexExecutable.environment(),
             )
+            val failureText = result.stderr + result.stdout
+            if (!result.succeeded && failureText.contains("reasoning", true) &&
+                listOf("unsupported", "not supported", "invalid value").any { failureText.contains(it, true) }) {
+                if (fallbackReported.compareAndSet(false, true)) runCatching(onReasoningFallback)
+                // A failed first invocation can leave a partial last-message file behind.
+                Files.deleteIfExists(outputFile)
+                result = runner.runWithInput(command = command.toMutableList().apply { removeAt(2); removeAt(1) },
+                    input = prompt(context, forbiddenFolderNames), workingDirectory = temporaryDirectory,
+                    timeout = Duration.ofSeconds(60), environment = codexExecutable.environment())
+            }
             check(result.succeeded) {
                 "Codex CLI 生成命名失败（${codexProxyStatus(proxyEnabled())}）：${commandError(result)}"
             }
@@ -96,7 +116,7 @@ class CodexRequirementAiNamingService(
     }
 
     private fun JsonObject.string(key: String): String? =
-        (get(key) as? JsonPrimitive)?.contentOrNull
+        (get(key) as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
 
     private fun commandError(result: CommandResult): String = redactProxyEndpoint(
         result.stderr

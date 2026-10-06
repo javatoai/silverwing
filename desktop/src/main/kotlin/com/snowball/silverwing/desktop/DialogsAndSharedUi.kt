@@ -35,6 +35,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -260,6 +261,9 @@ internal fun TagResultDialog(
 @Composable
 internal fun DeleteTaskDialog(controller: DesktopApplication, task: TaskManifest, onDismiss: () -> Unit) {
     LaunchedEffect(task.taskDirectoryName) { controller.requestDeleteRisk(task) }
+    DisposableEffect(controller, task.taskDirectoryName) {
+        onDispose { controller.clearDeleteRisk(task) }
+    }
     val inspection = controller.deleteRiskInspections[task.taskDirectoryName]
     val loading = inspection == null || inspection.loading
     val risks = inspection?.risks.orEmpty()
@@ -290,7 +294,9 @@ internal fun DeleteTaskDialog(controller: DesktopApplication, task: TaskManifest
                 LinearProgressIndicator(Modifier.fillMaxWidth())
                 Text("正在检查 Git 状态…", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            inspectionError?.let { Text("删除检查失败：$it", color = MaterialTheme.colorScheme.error) }
+            inspectionError?.let {
+                DeleteRiskFailure(it, enabled = !controller.busy) { controller.requestDeleteRisk(task) }
+            }
             risks.forEach {
                 val unpushed = if (it.unpushedCommits > 0) "，${it.unpushedCommits} 个仅本地提交" else ""
                 val detail = it.statusCheckError ?: "存在未提交改动、Git 操作或未推送提交$unpushed"
@@ -305,6 +311,14 @@ internal fun DeleteTaskDialog(controller: DesktopApplication, task: TaskManifest
         ) { Text("永久删除任务") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
+}
+
+@Composable
+internal fun DeleteRiskFailure(message: String, enabled: Boolean, onRetry: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("删除检查失败：$message", color = MaterialTheme.colorScheme.error)
+        TextButton(onClick = onRetry, enabled = enabled) { Text("重新检查") }
+    }
 }
 
 internal fun deleteTaskExternalWindowWarning(): String =

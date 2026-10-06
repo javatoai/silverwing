@@ -1,9 +1,12 @@
 package com.snowball.silverwing.core
 
 import java.util.Locale
+import kotlinx.serialization.Serializable
 
+@Serializable
 data class RequirementPerson(val name: String, val email: String? = null)
 
+@Serializable
 data class RequirementParticipants(
     val qcOwners: List<RequirementPerson> = emptyList(),
     val productManagers: List<RequirementPerson> = emptyList(),
@@ -11,6 +14,7 @@ data class RequirementParticipants(
     val isEmpty: Boolean get() = qcOwners.isEmpty() && productManagers.isEmpty()
 }
 
+@Serializable
 data class RequirementMetadata(
     val title: String? = null,
     val status: String?,

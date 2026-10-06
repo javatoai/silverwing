@@ -83,12 +83,12 @@ class OperationCoordinator(
         errorMessage = null
     }
 
-    fun fail(error: Throwable) {
+    fun fail(error: Throwable, showFeedback: Boolean = true) {
         busy = false
         activeMessage = null
         cancellable = false
         cancelling = false
-        errorMessage = OperationFailureDetails.format(error)
+        errorMessage = if (showFeedback) OperationFailureDetails.format(error) else null
         onError(error)
     }
 

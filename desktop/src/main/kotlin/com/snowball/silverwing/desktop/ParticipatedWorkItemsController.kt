@@ -12,10 +12,15 @@ import java.math.BigDecimal
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.nio.file.Path
+import java.time.Clock
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
 
 internal data class ParticipatedWorkItemsUiState(
     val items: List<ParticipatedWorkItem> = emptyList(),
@@ -49,27 +54,31 @@ internal sealed interface ParticipatedWorkItemImageState {
     data class Failed(val message: String) : ParticipatedWorkItemImageState
 }
 
-/** Keeps list and lazily loaded body in memory for this application session only. */
+/** The two readers share bodies; complete list snapshots are persisted with their query and account context. */
 internal class ParticipatedWorkItemsController(
     private val source: ParticipatedWorkItemsSource,
     private val scope: CoroutineScope,
     private val ioDispatcher: CoroutineDispatcher,
+    private val bodyRepository: RequirementBodyRepository = RequirementBodyRepository(source),
+    private val onListLoaded: (List<ParticipatedWorkItem>) -> Unit = {},
+    private val onSelected: (ParticipatedWorkItem) -> Unit = {},
+    private val cacheAccess: RequirementCacheAccess? = null,
+    private val clock: Clock = Clock.systemUTC(),
 ) {
     var state by mutableStateOf(ParticipatedWorkItemsUiState())
         private set
     var selectedKey by mutableStateOf<String?>(null)
         private set
-    var bodyState by mutableStateOf<ParticipatedWorkItemBodyState>(ParticipatedWorkItemBodyState.Idle)
-        private set
-    var bodyImageStates by mutableStateOf<Map<String, ParticipatedWorkItemImageState>>(emptyMap())
-        private set
+    internal val bodyReader = RequirementBodyController(bodyRepository, scope, ioDispatcher)
+    val bodyState get() = bodyReader.bodyState
+    val bodyImageStates get() = bodyReader.bodyImageStates
 
     private var projectKeys: List<String>? = null
     private var defaultProjectKey: String? = null
     private var listGeneration = 0L
-    private var bodyGeneration = 0L
     private var listJob: Job? = null
-    private val bodyCache = mutableMapOf<String, String>()
+    private var loadedIdentity: String? = null
+    private var listFetchedAt: Long? = null
 
     fun load(
         projects: List<MeegleProjectConfig>,
@@ -83,12 +92,14 @@ internal class ParticipatedWorkItemsController(
         val sameDefaultProject = defaultSprintProjectKey == defaultProjectKey
         val requestedSprintKey = sprintKey ?: state.selectedSprintKey.takeIf { sameProjects }
         val sameSelection = sameProjects && requestedSprintKey == state.selectedSprintKey
-        if (!force && sameSelection && sameDefaultProject && (state.initialized || state.loading)) return
+        if (!force && sameSelection && sameDefaultProject &&
+            (state.loading || (cacheAccess == null && state.initialized && state.error == null &&
+                listFetchedAt?.let { RequirementReadCache.fresh(it, clock.millis()) } == true))) return
         projectKeys = signature
         defaultProjectKey = defaultSprintProjectKey
         val generation = ++listGeneration
         listJob?.cancel()
-        val oldItems = if (sameSelection) state.items else emptyList()
+        var oldItems = if (sameSelection) state.items else emptyList()
         if (!sameSelection) clearSelection()
         state = state.copy(
             items = oldItems,
@@ -98,14 +109,34 @@ internal class ParticipatedWorkItemsController(
             sprints = if (sameProjects) state.sprints else emptyList(),
             selectedSprintKey = requestedSprintKey,
         )
-        listJob = scope.launch {
+        val job = scope.launch(start = CoroutineStart.LAZY) {
             val result = try {
-                withContext(ioDispatcher) { source.load(snapshot, requestedSprintKey, defaultSprintProjectKey) }
+                val identity = if (cacheAccess == null) "session" else cacheAccess.identity(ioDispatcher)
+                coroutineContext.ensureActive()
+                if (generation != listGeneration) return@launch
+                if (identity == null || identity != loadedIdentity) {
+                    oldItems = emptyList()
+                    clearSelection()
+                    state = state.copy(items = emptyList(), sprints = emptyList())
+                }
+                loadedIdentity = identity
+                val saved = withContext(ioDispatcher) {
+                    readList(snapshot, requestedSprintKey, defaultSprintProjectKey, force, identity)
+                }
+                listFetchedAt = saved.fetchedAt
+                saved.value
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
+                if (error is RequirementIdentityChangedException && generation == listGeneration) {
+                    oldItems = emptyList()
+                    clearSelection()
+                    state = state.copy(items = emptyList(), sprints = emptyList())
+                    loadedIdentity = null
+                }
                 ParticipatedWorkItemsResult(emptyList(), listOf(error.message.orEmpty().ifBlank { "查询失败" }))
             }
+            coroutineContext.ensureActive()
             if (generation != listGeneration) return@launch
             val sprints = result.sprints ?: state.sprints
             val resolvedSprintKey = if (result.sprints == null) requestedSprintKey else result.selectedSprintKey
@@ -135,91 +166,58 @@ internal class ParticipatedWorkItemsController(
                     "部分人员或估分读取失败。${it.lineSequence().first().trim().take(160)}"
                 },
             )
-            if (!hasIncompleteResult) bodyCache.clear()
             val next = items.firstOrNull { it.key == selectedKey } ?: items.firstOrNull()
             if (next == null) clearSelection()
             else select(next, forceBody = !hasIncompleteResult && force)
+            onListLoaded(result.items)
         }
+        listJob = job
+        job.invokeOnCompletion { cause ->
+            if (generation == listGeneration && listJob === job) {
+                listJob = null
+                // Completion also covers cancellation before the coroutine body starts.
+                if (cause is CancellationException) {
+                    state = state.copy(loading = false, initialized = false, listComplete = false)
+                }
+            }
+        }
+        job.start()
+    }
+
+    private suspend fun readList(
+        projects: List<MeegleProjectConfig>, sprintKey: String?, defaultProject: String?, force: Boolean, identity: String?,
+    ): RequirementCachedValue<ParticipatedWorkItemsResult> {
+        // Source.load returns all pages for every supported type, so no hidden pagination/filter state is omitted.
+        val projectsKey = Json.encodeToString(ListSerializer(MeegleProjectConfig.serializer()), projects)
+        fun key(sprint: String?) = requirementReadKey("participated-list-all-pages-v1", identity.orEmpty(), projectsKey, sprint, defaultProject)
+        val cache = cacheAccess?.cache?.takeIf { identity != null }
+        if (!force) cache?.read(key(sprintKey), ParticipatedWorkItemsResult.serializer())?.let { return it }
+        val result = source.load(projects, sprintKey, defaultProject)
+        cacheAccess?.verify(identity, ioDispatcher)
+        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+        val fetchedAt = clock.millis()
+        if (result.failures.isEmpty() && result.items.all { it.metadataWarnings.isEmpty() }) {
+            cache?.write(key(sprintKey), ParticipatedWorkItemsResult.serializer(), result, fetchedAt)
+            // Auto-select and explicit selection of the same sprint are aliases of the same complete snapshot.
+            if (sprintKey == null && result.selectedSprintKey != null) {
+                cache?.write(key(result.selectedSprintKey), ParticipatedWorkItemsResult.serializer(), result, fetchedAt)
+            } else if (force && cache?.read(key(null), ParticipatedWorkItemsResult.serializer())?.value?.selectedSprintKey == result.selectedSprintKey) {
+                cache?.write(key(null), ParticipatedWorkItemsResult.serializer(), result, fetchedAt)
+            }
+        }
+        return RequirementCachedValue(result, fetchedAt)
     }
 
     private fun clearSelection() {
-        bodyGeneration++
-        bodyCache.clear()
-        bodyImageStates = emptyMap()
         selectedKey = null
-        bodyState = ParticipatedWorkItemBodyState.Idle
+        bodyReader.clear()
     }
 
     fun select(item: ParticipatedWorkItem, forceBody: Boolean = false) {
-        if (selectedKey == item.key && !forceBody && bodyState !is ParticipatedWorkItemBodyState.Idle) return
         selectedKey = item.key
-        val generation = ++bodyGeneration
-        bodyImageStates = emptyMap()
-        if (!forceBody) bodyCache[item.key]?.let {
-            bodyState = ParticipatedWorkItemBodyState.Ready(item.key, it)
-            loadBodyImages(item, it, generation)
-            return
-        }
-        bodyState = ParticipatedWorkItemBodyState.Loading(item.key)
-        scope.launch {
-            val result = try {
-                Result.success(withContext(ioDispatcher) { source.loadBody(item).orEmpty() })
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Throwable) {
-                Result.failure(error)
-            }
-            if (generation != bodyGeneration || selectedKey != item.key) return@launch
-            result.fold(
-                onSuccess = { content ->
-                    bodyCache[item.key] = content
-                    bodyState = ParticipatedWorkItemBodyState.Ready(item.key, content)
-                    loadBodyImages(item, content, generation)
-                },
-                onFailure = { error ->
-                    bodyState = ParticipatedWorkItemBodyState.Failed(
-                        item.key,
-                        error.message.orEmpty().ifBlank { "正文读取失败" },
-                    )
-                },
-            )
-        }
+        onSelected(item)
+        bodyReader.select(item, forceBody)
     }
 
-    fun retryBodyImage(item: ParticipatedWorkItem, fileUrl: String) {
-        if (selectedKey != item.key || fileUrl !in bodyImageStates) return
-        val ready = bodyState as? ParticipatedWorkItemBodyState.Ready ?: return
-        if (ready.itemKey != item.key) return
-        val generation = bodyGeneration
-        bodyImageStates = bodyImageStates + (fileUrl to ParticipatedWorkItemImageState.Loading)
-        downloadBodyImage(item, fileUrl, generation, retry = true)
-    }
-
-    private fun loadBodyImages(item: ParticipatedWorkItem, content: String, generation: Long) {
-        val imageUrls = meegleRichTextImageUrls(content)
-        bodyImageStates = imageUrls.associateWith { ParticipatedWorkItemImageState.Loading }
-        imageUrls.forEach { fileUrl -> downloadBodyImage(item, fileUrl, generation, retry = false) }
-    }
-
-    private fun downloadBodyImage(item: ParticipatedWorkItem, fileUrl: String, generation: Long, retry: Boolean) {
-        scope.launch {
-            val result = try {
-                Result.success(withContext(ioDispatcher) { source.downloadBodyImage(item, fileUrl, retry) })
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Throwable) {
-                Result.failure(error)
-            }
-            if (generation != bodyGeneration || selectedKey != item.key) return@launch
-            bodyImageStates = bodyImageStates + (fileUrl to result.fold(
-                onSuccess = { path ->
-                    if (path == null) ParticipatedWorkItemImageState.Failed("当前数据源不支持读取此图片")
-                    else ParticipatedWorkItemImageState.Loaded(path)
-                },
-                onFailure = { error ->
-                    ParticipatedWorkItemImageState.Failed(error.message.orEmpty().ifBlank { "图片下载失败" })
-                },
-            ))
-        }
-    }
+    fun retryBodyImage(item: ParticipatedWorkItem, fileUrl: String) = bodyReader.retryBodyImage(item, fileUrl)
 }

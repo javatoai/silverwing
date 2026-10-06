@@ -6,6 +6,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.supervisorScope
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -27,6 +28,7 @@ import java.time.OffsetDateTime
 import java.util.Locale
 
 /** A read-only Meegle work item from one explicitly configured project. */
+@Serializable
 data class ParticipatedWorkItem(
     val projectKey: String,
     val projectName: String,
@@ -38,7 +40,7 @@ data class ParticipatedWorkItem(
     val developers: List<RequirementPerson> = emptyList(),
     val qcOwners: List<RequirementPerson> = emptyList(),
     val productManagers: List<RequirementPerson> = emptyList(),
-    val mySprintEstimateDays: BigDecimal? = null,
+    @Serializable(with = RequirementEstimateSerializer::class) val mySprintEstimateDays: BigDecimal? = null,
     val metadataWarnings: List<String> = emptyList(),
     val status: String? = null,
 ) {
@@ -200,6 +202,7 @@ private fun JsonObject.optionalMillis(key: String): Long? {
     return requireNotNull(value.longOrNull) { "排期 $key 不是有效毫秒时间戳" }
 }
 
+@Serializable
 data class ParticipatedSprint(
     val projectKey: String,
     val projectName: String,
@@ -210,6 +213,7 @@ data class ParticipatedSprint(
     val key: String get() = "$projectKey:$id"
 }
 
+@Serializable
 data class ParticipatedWorkItemsResult(
     val items: List<ParticipatedWorkItem>,
     val failures: List<String> = emptyList(),

@@ -35,14 +35,12 @@ internal fun settingsNavigationCategories(): List<SettingsNavigationCategory> = 
         "研发配置",
         listOf(
             SettingsNavigationPage("groups", "项目组"),
-            SettingsNavigationPage("branch-naming", "分支名设置"),
-            SettingsNavigationPage("tag", "Tag 设置"),
             SettingsNavigationPage("tools", "开发工具"),
         ),
     ),
     SettingsNavigationCategory(
         "tasks",
-        "任务",
+        "研发任务",
         listOf(
             SettingsNavigationPage("task-creation", "任务创建区"),
             SettingsNavigationPage("task-area", "任务详情区"),
@@ -52,11 +50,11 @@ internal fun settingsNavigationCategories(): List<SettingsNavigationCategory> = 
     SettingsNavigationCategory(
         "codex",
         "Codex",
-        listOf(SettingsNavigationPage("codex-plugins", "Codex 插件")),
+        listOf(SettingsNavigationPage("codex-plugins", "Codex 插件"), SettingsNavigationPage("codex-mcp", "MCP 管理")),
     ),
     SettingsNavigationCategory(
         "commands",
-        "命令",
+        "CLI",
         listOf(
             SettingsNavigationPage("feishu", "Meegle CLI"),
             SettingsNavigationPage("lark", "Lark CLI"),
@@ -66,7 +64,15 @@ internal fun settingsNavigationCategories(): List<SettingsNavigationCategory> = 
     ),
     SettingsNavigationCategory("skill-sources", "Skill 安装", listOf(SettingsNavigationPage("skill-sources", "Skill 安装"))),
     SettingsNavigationCategory("proxy", "代理", listOf(SettingsNavigationPage("network-proxy", "网络代理"))),
-    SettingsNavigationCategory("git", "Git", listOf(SettingsNavigationPage("git", "Git"))),
+    SettingsNavigationCategory(
+        "git",
+        "Git",
+        listOf(
+            SettingsNavigationPage("git", "Git 配置"),
+            SettingsNavigationPage("branch-naming", "分支名设置"),
+            SettingsNavigationPage("tag", "Tag 设置"),
+        ),
+    ),
     SettingsNavigationCategory(
         "system",
         "系统与诊断",
@@ -85,13 +91,13 @@ internal fun normalizeSettingsCategory(savedValue: String, supportedKeys: Set<St
     val category = when (savedValue) {
         "basic", "overview", "branches", "skills" -> "basic"
         "paths", "config-backup", "storage" -> "storage"
-        "groups", "branch-naming", "tag", "tools", "development" -> "development"
+        "groups", "tools", "development" -> "development"
         "task-creation", "codex-task-creation", "task-area", "agents", "tasks" -> "tasks"
-        "codex-plugins", "codex" -> "codex"
+        "codex-plugins", "codex-mcp", "codex" -> "codex"
         "feishu", "lark", "genbu", "cli", "advanced", "commands" -> "commands"
         "skill-sources" -> "skill-sources"
         "network-proxy", "proxy" -> "proxy"
-        "git" -> "git"
+        "git", "branch-naming", "tag" -> "git"
         "logs", "about", "system" -> "system"
         else -> "basic"
     }

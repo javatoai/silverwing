@@ -2,7 +2,9 @@ package com.snowball.silverwing.desktop
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -78,13 +80,18 @@ internal fun TagScreen(controller: DesktopApplication) {
     val visibleOperationCount = visibleHistory.sumOf(FilteredTagHistoryItem::visibleOperationCount)
     val visibleOperationIds = visibleTagOperationIds(visibleHistory)
     LaunchedEffect(query, onlyProblems) { selectedOperationIds = emptySet() }
+    val existingOperationIds = controller.tagHistory.map { it.operationId }.toSet()
+    LaunchedEffect(existingOperationIds) {
+        selectedOperationIds = selectedOperationIds intersect existingOperationIds
+        if (selectedOperationIds.isEmpty()) showDeleteSelectedConfirmation = false
+    }
     if (showDeleteSelectedConfirmation) {
         ConfirmDialog(
             title = "删除 ${selectedOperationIds.size} 条Tag构建记录",
-            message = "将永久删除选中的本地Tag构建记录及历史汇总。不会删除 Git Tag、代码、任务或需求资料目录。",
+            message = "将永久删除选中的本地Tag构建记录及历史汇总。不会删除 Git Tag、代码、任务或任务资料目录。",
             confirmLabel = "删除所选",
             destructive = true,
-            enabled = !controller.busy,
+            enabled = selectedOperationIds.isNotEmpty() && !controller.busy,
             onDismiss = { showDeleteSelectedConfirmation = false },
             onConfirm = {
                 if (controller.deleteTagHistory(selectedOperationIds)) {
@@ -101,7 +108,7 @@ internal fun TagScreen(controller: DesktopApplication) {
         if (controller.enabledGenbuProbeServiceCount == 0) {
             OutlinedCard(Modifier.fillMaxWidth()) {
                 Text(
-                    "Genbu 探测尚未启用：请在“服务仓库 → 编辑服务 → 基本信息”中为需要的服务开启。",
+                    "Genbu 探测尚未启用：请在“服务仓库 → 配置 → Genbu”中为需要的服务开启。",
                     Modifier.padding(12.dp),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -112,61 +119,18 @@ internal fun TagScreen(controller: DesktopApplication) {
             EmptyState("还没有构建记录", "进入研发任务，在对应工作区点击“测试Tag”。", "前往研发任务") { controller.navigation = NavigationItem.TASKS }
             return@Column
         }
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                modifier = Modifier.weight(1f),
-                label = { Text("筛选构建记录") },
-                placeholder = { Text("按服务、任务、测试Tag或分支筛选") },
-                singleLine = true,
-            )
-            FilterChip(
-                selected = onlyProblems,
-                onClick = { onlyProblems = !onlyProblems },
-                label = { Text("仅问题${if (problemCount > 0) " ($problemCount)" else ""}") },
-            )
-            OutlinedButton(
-                onClick = controller::refreshGenbuTagProbes,
-                enabled = controller.enabledGenbuProbeServiceCount > 0 && !controller.isGenbuTagProbeRefreshing,
-            ) {
-                Icon(Icons.Outlined.Refresh, null, Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(if (controller.isGenbuTagProbeRefreshing) "刷新中…" else "刷新 Genbu")
-            }
-        }
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "已选 ${selectedOperationIds.size} 条",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            OutlinedButton(
-                onClick = { selectedOperationIds = visibleOperationIds },
-                enabled = visibleOperationIds.isNotEmpty() && !controller.busy,
-            ) { Text("全选") }
-            OutlinedButton(
-                onClick = { selectedOperationIds = emptySet() },
-                enabled = selectedOperationIds.isNotEmpty() && !controller.busy,
-            ) { Text("全不选") }
-            Spacer(Modifier.weight(1f))
-            Button(
-                onClick = { showDeleteSelectedConfirmation = true },
-                enabled = selectedOperationIds.isNotEmpty() && !controller.busy,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.error,
-                    contentColor = MaterialTheme.colorScheme.onError,
-                ),
-            ) { Text("删除所选 (${selectedOperationIds.size})") }
-        }
+        TagHistoryToolbar(
+            query = query, onQueryChange = { query = it },
+            onlyProblems = onlyProblems, onProblemsToggle = { onlyProblems = !onlyProblems },
+            problemCount = problemCount,
+            canRefresh = controller.enabledGenbuProbeServiceCount > 0,
+            refreshing = controller.isGenbuTagProbeRefreshing, onRefresh = controller::refreshGenbuTagProbes,
+            selectedCount = selectedOperationIds.size, canSelectAll = visibleOperationIds.isNotEmpty(),
+            busy = controller.busy,
+            onSelectAll = { selectedOperationIds = visibleOperationIds },
+            onClearSelection = { selectedOperationIds = emptySet() },
+            onDelete = { showDeleteSelectedConfirmation = true },
+        )
         Text(
             "$visibleOperationCount / ${controller.tagHistory.size} 条构建记录 · ${visibleHistory.size} 个展示项",
             style = MaterialTheme.typography.bodySmall,
@@ -197,6 +161,68 @@ internal fun TagScreen(controller: DesktopApplication) {
                         )
                         if (index < visibleHistory.lastIndex) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun TagHistoryToolbar(
+    query: String, onQueryChange: (String) -> Unit,
+    onlyProblems: Boolean, onProblemsToggle: () -> Unit, problemCount: Int,
+    canRefresh: Boolean, refreshing: Boolean, onRefresh: () -> Unit,
+    selectedCount: Int, canSelectAll: Boolean, busy: Boolean,
+    onSelectAll: () -> Unit, onClearSelection: () -> Unit, onDelete: () -> Unit,
+) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val compact = maxWidth < 620.dp
+        val search: @Composable (Modifier) -> Unit = { modifier ->
+            OutlinedTextField(query, onQueryChange, modifier,
+                label = { Text("筛选构建记录") },
+                placeholder = { Text("按服务、任务、测试Tag或分支筛选") }, singleLine = true)
+        }
+        val filters: @Composable () -> Unit = {
+            FilterChip(selected = onlyProblems, onClick = onProblemsToggle,
+                label = { Text("仅问题${if (problemCount > 0) " ($problemCount)" else ""}") })
+            OutlinedButton(onClick = onRefresh, enabled = canRefresh && !refreshing) {
+                Icon(Icons.Outlined.Refresh, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(if (refreshing) "刷新中…" else "刷新 Genbu")
+            }
+        }
+        val selection: @Composable () -> Unit = {
+            Text("已选 $selectedCount 条", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            OutlinedButton(onSelectAll, enabled = canSelectAll && !busy) { Text("全选") }
+            OutlinedButton(onClearSelection, enabled = selectedCount > 0 && !busy) { Text("全不选") }
+        }
+        val deletion: @Composable () -> Unit = {
+            Button(onDelete, enabled = selectedCount > 0 && !busy,
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error,
+                    contentColor = MaterialTheme.colorScheme.onError)) { Text("删除所选 ($selectedCount)") }
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (compact) {
+                search(Modifier.fillMaxWidth())
+                FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) { filters() }
+                FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) {
+                    selection()
+                    deletion()
+                }
+            } else {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    search(Modifier.weight(1f))
+                    filters()
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    selection()
+                    Spacer(Modifier.weight(1f))
+                    deletion()
                 }
             }
         }

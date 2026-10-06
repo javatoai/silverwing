@@ -64,6 +64,61 @@ class WorkspaceProvisionerIntegrationTest {
     }
 
     @Test
+    fun `selected GitHub source can list and provision while GitLab tag remote is unavailable`() {
+        val root = temporary.resolve("isolated-remote-new")
+        val (remote, seed) = GitTestSupport.createRemoteWithSeed(root)
+        val source = GitTestSupport.clone(remote, root.resolve("source"))
+        GitTestSupport.run(source, "remote", "rename", "origin", "github")
+        val unavailableGitlab = root.resolve("missing-gitlab.git").toString()
+        GitTestSupport.run(source, "remote", "add", "origin", unavailableGitlab)
+        val repository = GitRepositoryInspector().inspect(source)
+        val service = GroupServiceConfig.standard("service", repository.id, "Service", masterBranch = "github/master")
+        val catalog = GitRemoteBranchCatalog()
+
+        assertThrows(GitException::class.java) { catalog.list(source, "origin") }
+        assertEquals(listOf("github/master"), catalog.list(source, "github"))
+        assertTrue(WorkspaceBranchReuseInspector().inspect(repository, service, "feature/new").isEmpty())
+        val workspace = StandardWorktreeProvisioner().provision(
+            WorkspaceProvisionRequest(root.resolve("task"), repository, service, "feature/new"),
+        ).single()
+
+        assertEquals("github/master", workspace.baseRef)
+        assertEquals("github", workspace.pushRemote)
+        assertEquals(GitClient().resolve(seed, "master"), GitClient().resolve(Path.of(workspace.worktreePath), "HEAD"))
+        assertEquals("origin/release/test", workspace.tagTargetRef)
+        assertEquals(unavailableGitlab, GitClient().remoteUrl(source, "origin"))
+    }
+
+    @Test
+    fun `GitHub branch reuse still requires confirmation when GitLab tag remote is unavailable`() {
+        val root = temporary.resolve("isolated-remote-reuse")
+        val (remote, seed) = GitTestSupport.createRemoteWithSeed(root)
+        val branch = "feature/existing"
+        GitTestSupport.run(seed, "switch", "-c", branch)
+        Files.writeString(seed.resolve("feature.txt"), "feature\n")
+        GitTestSupport.run(seed, "add", "feature.txt")
+        GitTestSupport.run(seed, "commit", "-m", "feature")
+        GitTestSupport.run(seed, "push", "origin", branch)
+        val source = GitTestSupport.clone(remote, root.resolve("source"))
+        GitTestSupport.run(source, "remote", "rename", "origin", "github")
+        GitTestSupport.run(source, "remote", "add", "origin", root.resolve("missing-gitlab.git").toString())
+        val repository = GitRepositoryInspector().inspect(source)
+        val service = GroupServiceConfig.standard("service", repository.id, "Service", masterBranch = "github/master")
+        val conflict = WorkspaceBranchReuseInspector().inspect(repository, service, branch).single()
+
+        assertEquals(listOf("github/$branch"), conflict.remoteRefs)
+        assertThrows(IllegalArgumentException::class.java) {
+            StandardWorktreeProvisioner().provision(WorkspaceProvisionRequest(root.resolve("unconfirmed-task"), repository, service, branch))
+        }
+        val workspace = StandardWorktreeProvisioner().provision(
+            WorkspaceProvisionRequest(root.resolve("confirmed-task"), repository, service, branch, setOf(conflict.key)),
+        ).single()
+
+        assertEquals(GitClient().resolve(seed, branch), GitClient().resolve(Path.of(workspace.worktreePath), "HEAD"))
+        assertEquals("github/$branch", GitTestSupport.run(Path.of(workspace.worktreePath), "rev-parse", "--abbrev-ref", "@{upstream}"))
+    }
+
+    @Test
     fun `local repository remote catalog returns configured remote names`() {
         val (remote, _) = GitTestSupport.createRemoteWithSeed(temporary.resolve("remote-catalog"))
         val repositoryPath = GitTestSupport.clone(remote, temporary.resolve("remote-catalog/source"))

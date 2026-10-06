@@ -30,28 +30,37 @@ internal fun prettyJsonOrNull(source: String): String? = runCatching {
 @Composable
 internal fun JsonDocumentPreview(content: String, modifier: Modifier = Modifier) {
     val pretty = remember(content) { prettyJsonOrNull(content) }
+    val scheme = MaterialTheme.colorScheme
+    val displayed = remember(content, pretty, scheme.primary, scheme.secondary, scheme.tertiary) {
+        if (pretty == null) AnnotatedString(content)
+        else highlightedJson(pretty, scheme.primary, scheme.secondary, scheme.tertiary)
+    }
     Column(modifier) {
         if (pretty == null) Text("JSON 解析失败，显示原文。", color = MaterialTheme.colorScheme.error)
         SelectionContainer {
-            Text(
-                if (pretty == null) AnnotatedString(content) else highlightedJson(pretty),
-                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-                fontFamily = FontFamily.Monospace,
+            SearchableText(
+                displayed,
+                modifier = Modifier.fillMaxSize().verticalScroll(rememberMaterialsScrollState("json")).padding(16.dp),
+                style = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace),
             )
         }
     }
 }
 
-private val jsonTokens = Regex("\"(?:\\\\.|[^\"\\\\])*\"(?=\\s*:)|\"(?:\\\\.|[^\"\\\\])*\"|\\b(?:true|false|null)\\b|-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?")
+private val jsonTokens = Regex("\"(?:\\\\.|[^\"\\\\])*+\"|\\b(?:true|false|null)\\b|-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?")
 
-private fun highlightedJson(text: String): AnnotatedString = buildAnnotatedString {
+internal fun highlightedJson(text: String, keyColor: Color, stringColor: Color, literalColor: Color): AnnotatedString = buildAnnotatedString {
     append(text)
     jsonTokens.findAll(text).forEach { match ->
         val token = match.value
+        var following = match.range.last + 1
+        // Inspect only the adjacent whitespace. Copying and trimming the entire
+        // suffix for every string made large JSON documents quadratic.
+        while (following < text.length && text[following].isWhitespace()) following++
         val color = when {
-            token.startsWith('"') && text.drop(match.range.last + 1).trimStart().startsWith(':') -> Color(0xFF6750A4)
-            token.startsWith('"') -> Color(0xFF087F5B)
-            else -> Color(0xFFB05A00)
+            token.startsWith('"') && text.getOrNull(following) == ':' -> keyColor
+            token.startsWith('"') -> stringColor
+            else -> literalColor
         }
         addStyle(SpanStyle(color = color), match.range.first, match.range.last + 1)
     }

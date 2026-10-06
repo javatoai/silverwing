@@ -13,6 +13,8 @@ internal object WindowPreferences {
     internal const val CURRENT_LAYOUT_VERSION = 2
     private const val LAYOUT_VERSION_KEY = "layoutVersion"
     private const val TASK_LIST_PANE_WIDTH_KEY = "taskListPaneWidth"
+    private const val TASK_LIST_PANE_COLLAPSED_KEY = "taskListPaneCollapsed"
+    private const val WORKSPACE_NAVIGATION_COLLAPSED_KEY = "workspaceNavigationCollapsed"
     private const val MATERIALS_DIRECTORY_PANE_WIDTH_KEY = "materialsDirectoryPaneWidth"
     private const val EXPAND_REQUIREMENT_MATERIALS_SECOND_LEVEL_FOLDERS_KEY =
         "expandRequirementMaterialsSecondLevelFolders"
@@ -26,22 +28,26 @@ internal object WindowPreferences {
         val maximized: Boolean = true,
         val settingsSection: String = "basic",
         val taskListPaneWidth: Int? = null,
+        val taskListPaneCollapsed: Boolean = false,
         val materialsDirectoryPaneWidth: Int? = null,
         val expandRequirementMaterialsSecondLevelFolders: Boolean = false,
+        val workspaceNavigationCollapsed: Boolean = false,
     )
 
-    fun load(): Snapshot = snapshotFor(
+    fun load(preferences: Preferences = this.preferences): Snapshot = snapshotFor(
         width = preferences.getInt("width", DEFAULT_WIDTH),
         height = preferences.getInt("height", DEFAULT_HEIGHT),
         maximized = preferences.getBoolean("maximized", false),
         layoutVersion = preferences.getInt(LAYOUT_VERSION_KEY, 0),
         settingsSection = preferences.get("settingsSection", "basic"),
         taskListPaneWidth = preferences.getInt(TASK_LIST_PANE_WIDTH_KEY, 0).takeIf { it > 0 },
+        taskListPaneCollapsed = preferences.getBoolean(TASK_LIST_PANE_COLLAPSED_KEY, false),
         materialsDirectoryPaneWidth = preferences.getInt(MATERIALS_DIRECTORY_PANE_WIDTH_KEY, 0).takeIf { it > 0 },
         expandRequirementMaterialsSecondLevelFolders = preferences.getBoolean(
             EXPAND_REQUIREMENT_MATERIALS_SECOND_LEVEL_FOLDERS_KEY,
             false,
         ),
+        workspaceNavigationCollapsed = preferences.getBoolean(WORKSPACE_NAVIGATION_COLLAPSED_KEY, false),
     )
 
     fun saveWindow(width: Int, height: Int, maximized: Boolean) {
@@ -68,8 +74,17 @@ internal object WindowPreferences {
         preferences.put("settingsSection", section)
     }
 
+    fun saveWorkspaceNavigationCollapsed(collapsed: Boolean, preferences: Preferences = this.preferences) {
+        preferences.putBoolean(WORKSPACE_NAVIGATION_COLLAPSED_KEY, collapsed)
+    }
+
     fun saveTaskListPaneWidth(width: Int) {
         preferences.putInt(TASK_LIST_PANE_WIDTH_KEY, width)
+    }
+
+    fun saveTaskListPaneLayout(width: Int, collapsed: Boolean) {
+        saveTaskListPaneWidth(width)
+        preferences.putBoolean(TASK_LIST_PANE_COLLAPSED_KEY, collapsed)
     }
 
     fun saveMaterialsDirectoryPaneWidth(width: Int) {
@@ -103,16 +118,20 @@ internal object WindowPreferences {
         layoutVersion: Int = 0,
         settingsSection: String = "basic",
         taskListPaneWidth: Int? = null,
+        taskListPaneCollapsed: Boolean = false,
         materialsDirectoryPaneWidth: Int? = null,
         expandRequirementMaterialsSecondLevelFolders: Boolean = false,
+        workspaceNavigationCollapsed: Boolean = false,
     ): Snapshot = Snapshot(
         width = width,
         height = height,
         maximized = layoutVersion < CURRENT_LAYOUT_VERSION || maximized,
         settingsSection = settingsSection,
         taskListPaneWidth = taskListPaneWidth,
+        taskListPaneCollapsed = taskListPaneCollapsed,
         materialsDirectoryPaneWidth = materialsDirectoryPaneWidth,
         expandRequirementMaterialsSecondLevelFolders = expandRequirementMaterialsSecondLevelFolders,
+        workspaceNavigationCollapsed = workspaceNavigationCollapsed,
     )
 }
 

@@ -5,6 +5,17 @@ import kotlin.test.assertEquals
 
 class RemoteBranchPickerPresentationTest {
     @Test
+    fun `selected remote is retained while its branch draft is incomplete or invalid`() {
+        assertEquals("github", branchPickerRemote("github/master"))
+        assertEquals("github", branchPickerRemote("github/"))
+        assertEquals("github", branchPickerRemote("github/feature/"))
+        assertEquals("github", branchPickerRemote("github/invalid..branch"))
+        assertEquals("upstream", branchPickerRemote("github/master", "upstream"))
+        assertEquals("origin", branchPickerRemote(""))
+        assertEquals("origin", branchPickerRemote("master"))
+    }
+
+    @Test
     fun `refresh and failure retain the last usable branch options`() {
         val branches = listOf("origin/main", "origin/release/test")
 

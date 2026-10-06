@@ -10,7 +10,7 @@ import kotlin.test.assertTrue
 
 class TaskDetailHeaderPresentationTest {
     @Test
-    fun `inline copy icon groups are independently configurable and retain the legacy fallback`() {
+    fun `requirement copy icons remain configurable and retain the legacy fallback`() {
         val independentlyConfigured = taskAreaCopyIconPresentationFor(
             AppConfig(
                 showTaskAreaBranchCopyIcons = false,
@@ -19,26 +19,11 @@ class TaskDetailHeaderPresentationTest {
             ),
         )
 
-        assertFalse(independentlyConfigured.showBranchNameCopyIcons)
         assertTrue(independentlyConfigured.showRequirementCopyIcons)
-        assertFalse(independentlyConfigured.showProjectNameCopyIcons)
 
         val legacyDisabled = taskAreaCopyIconPresentationFor(AppConfig(showTaskAreaCopyIcons = false))
-        assertFalse(legacyDisabled.showBranchNameCopyIcons)
         assertFalse(legacyDisabled.showRequirementCopyIcons)
-        assertFalse(legacyDisabled.showProjectNameCopyIcons)
-    }
-
-    @Test
-    fun `header keeps metadata and lifecycle actions side by side at 720dp and above`() {
-        assertEquals(TaskDetailHeaderLayout.SIDE_BY_SIDE, taskDetailHeaderLayout(720f))
-        assertEquals(TaskDetailHeaderLayout.SIDE_BY_SIDE, taskDetailHeaderLayout(1_280f))
-    }
-
-    @Test
-    fun `header stacks lifecycle actions below metadata below 720dp`() {
-        assertEquals(TaskDetailHeaderLayout.STACKED, taskDetailHeaderLayout(719.9f))
-        assertEquals(TaskDetailHeaderLayout.STACKED, taskDetailHeaderLayout(0f))
+        assertFalse(taskAreaCopyIconPresentationFor(AppConfig(showTaskAreaRequirementCopyIcons = false)).showRequirementCopyIcons)
     }
 
     @Test

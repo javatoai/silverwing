@@ -14,7 +14,7 @@ const val CURRENT_APP_CONFIG_SCHEMA_VERSION = "6.0.0"
 const val CURRENT_TASK_MANIFEST_SCHEMA_VERSION = "2.0.0"
 const val DEFAULT_GROUP_ID = "default"
 const val DEFAULT_GROUP_NAME = "默认组"
-const val DEFAULT_TAG_HISTORY_MAX_GROUPS = 20
+const val DEFAULT_TAG_HISTORY_MAX_GROUPS = 3
 const val MAX_TAG_HISTORY_GROUPS = 1000
 
 @Serializable
@@ -349,6 +349,8 @@ data class AppConfig(
     val tagEnabled: Boolean = true,
     /** Maximum number of grouped Tag history cards retained across all known tasks. */
     val tagHistoryMaxGroups: Int = DEFAULT_TAG_HISTORY_MAX_GROUPS,
+    /** Allows the desktop task details to edit a module's test Tag target branch. */
+    val allowTaskTagTargetEditing: Boolean = false,
     val terminalExecutable: String? = null,
     val developmentTools: List<DevelopmentToolConfig> = emptyList(),
     val defaultDevelopmentTool: DevelopmentToolType = DevelopmentToolType.INTELLIJ_IDEA,
@@ -408,7 +410,8 @@ data class AppConfig(
     /** Git sources providing standalone, user-scoped Codex Skills. */
     val skillSources: List<SkillSource> = emptyList(),
     /** Sends only a selected requirement title and body to the local Codex CLI to suggest names. */
-    val aiRequirementNamingEnabled: Boolean = false,
+    val aiRequirementNamingEnabled: Boolean = true,
+    val aiRequirementNamingPrewarmEnabled: Boolean = true,
     /** Codex model used only when AI requirement naming is explicitly enabled. */
     val aiRequirementNamingModel: String = RequirementAiNamingModel.DEFAULT,
 ) {
@@ -508,17 +511,17 @@ private val WINDOWS_RESERVED_DIRECTORY_NAMES = buildSet {
 fun validateRequirementMaterialsSubdirectory(value: String): String {
     val normalized = value.trim()
     if (normalized.isEmpty()) return normalized
-    require(normalized != "." && normalized != "..") { "需求资料子目录不能是 . 或 .." }
-    require(normalized.none { it == '/' || it == '\\' }) { "需求资料子目录只能是单层目录名" }
+    require(normalized != "." && normalized != "..") { "任务资料子目录不能是 . 或 .." }
+    require(normalized.none { it == '/' || it == '\\' }) { "任务资料子目录只能是单层目录名" }
     require(normalized.none { it.code < 0x20 || it in "<>:\"|?*" }) {
-        "需求资料子目录包含 Windows 不允许的字符"
+        "任务资料子目录包含 Windows 不允许的字符"
     }
     require(!normalized.endsWith('.') && !normalized.endsWith(' ')) {
-        "需求资料子目录不能以点或空格结尾"
+        "任务资料子目录不能以点或空格结尾"
     }
     val reservedBase = normalized.substringBefore('.').uppercase()
     require(reservedBase !in WINDOWS_RESERVED_DIRECTORY_NAMES) {
-        "需求资料子目录不能使用 Windows 保留名称"
+        "任务资料子目录不能使用 Windows 保留名称"
     }
     return normalized
 }
@@ -612,9 +615,10 @@ data class ServiceWorkspace(
     val baseRef: String? = null,
     /** Null means an independent clone works directly on its configured base branch. */
     val targetBranch: String? = branch,
-    /** Immutable Tag behavior captured when the task module is created. */
+    /** Tag permissions and mode captured when the task module is created. */
     val tagEnabled: Boolean = false,
     val tagMode: TagBuildMode = TagBuildMode.MERGE_TO_TARGET_BRANCH,
+    /** Task-local target for new Tags; historical operations retain their recorded target. */
     val tagTargetRef: String? = null,
     val tagMessagePrefix: String = "Tag",
     /** True only when this request created the local branch and may remove it during a failed transaction. */

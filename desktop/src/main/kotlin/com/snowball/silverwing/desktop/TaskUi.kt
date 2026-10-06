@@ -84,15 +84,14 @@ import java.nio.file.LinkOption
 import java.nio.file.Path
 
 internal enum class RequirementMaterialsActionGroup {
-    TASK_DIRECTORY,
-    WORK_DATA,
+    MATERIALS,
 }
 
 internal fun requirementMaterialsActionGroupFor(directory: String?): RequirementMaterialsActionGroup? =
     directory
         ?.takeIf(String::isNotBlank)
         ?.takeIf { path -> runCatching { Files.isDirectory(Path.of(path), LinkOption.NOFOLLOW_LINKS) }.getOrDefault(false) }
-        ?.let { RequirementMaterialsActionGroup.WORK_DATA }
+        ?.let { RequirementMaterialsActionGroup.MATERIALS }
 
 /** Visibility of the optional, task-level action groups in the detail toolbar. */
 internal data class TaskDetailToolbarPresentation(
@@ -111,22 +110,15 @@ internal fun TaskDetail(
     controller: DesktopApplication,
     task: TaskManifest,
     modifier: Modifier,
-    onPreviewRequirementMaterials: (Path) -> Unit,
 ) {
-    var notes by remember(task.folderName, task.updatedAt) { mutableStateOf("") }
-    var notesLoading by remember(task.folderName, task.updatedAt) { mutableStateOf(true) }
-    var notesError by remember(task.folderName, task.updatedAt) { mutableStateOf<String?>(null) }
-    var notesLoadAttempt by remember(task.folderName, task.updatedAt) { mutableStateOf(0) }
-    val templates = controller.agentTaskTemplates
-    var selectedTemplateId by remember(task.folderName, task.updatedAt, controller.agentRevision) {
-        mutableStateOf(selectedTemplateIdForNotes(notes, templates))
-    }
-    var pendingTemplate by remember(task.folderName) { mutableStateOf<AgentTaskTemplate?>(null) }
     var confirmArchive by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     var showAddServices by remember(task.folderName) { mutableStateOf(false) }
     var showBatchTag by remember(task.folderName) { mutableStateOf(false) }
     var showBranchInfo by remember(task.folderName) { mutableStateOf(false) }
+    var showAiConfiguration by remember(task) { mutableStateOf(false) }
+    var showAiContextCopy by remember(task) { mutableStateOf(false) }
+    var showCodexAssociation by remember(task) { mutableStateOf(false) }
     var requirementMaterialsMenuExpanded by remember(task.folderName, task.requirementMaterials.status) { mutableStateOf(false) }
     var batchGitMode by remember(task.folderName) { mutableStateOf<WorkspaceGitBatchMode?>(null) }
     var lastBatchGitMode by remember(task.folderName) { mutableStateOf(WorkspaceGitBatchMode.PUSH) }
@@ -135,10 +127,6 @@ internal fun TaskDetail(
     var addModuleServiceId by remember(task.folderName) { mutableStateOf<String?>(null) }
     var removalPreview by remember(task.folderName) { mutableStateOf<WorkspaceModuleRemovalPreview?>(null) }
     var removalChecking by remember(task.folderName) { mutableStateOf(false) }
-    var agentsPreview by remember(task.folderName) { mutableStateOf<AgentDocumentPreview?>(null) }
-    var agentsPreviewLoading by remember(task.folderName) { mutableStateOf(false) }
-    var agentsPreviewError by remember(task.folderName) { mutableStateOf<String?>(null) }
-    var agentsPreviewRequest by remember(task.folderName) { mutableStateOf(0) }
     val group = controller.config.groups.firstOrNull { it.id == task.groupId }
     val tagWorkspaces = task.services.filter { controller.canBuildTag(task, it) }
     val physicalWorkspaces = controller.physicalWorkspaces(task)
@@ -158,56 +146,12 @@ internal fun TaskDetail(
     val requirementMaterialsPath = requirementMaterialsDirectory
         ?.let { runCatching { Path.of(it) }.getOrNull() }
     val requirementMaterialsActionsEnabled =
-        requirementMaterialsActionGroup == RequirementMaterialsActionGroup.WORK_DATA && requirementMaterialsPath != null
+        requirementMaterialsActionGroup == RequirementMaterialsActionGroup.MATERIALS && requirementMaterialsPath != null
     val failedTools = task.workspaceToolLaunches.filter { it.status != WorkspaceToolLaunchStatus.OPENED }
     val failedServiceIds = task.services.filter { it.health == WorkspaceHealth.FAILED }
         .map(ServiceWorkspace::groupServiceId).filter(String::isNotBlank).distinct()
     val tagOperationLoading = controller.busy && controller.activeOperation?.contains("Tag") == true
     val allWorkspacesGitLoading = controller.busy && controller.activeOperation?.contains("全部工作区") == true
-    val notesReady = !notesLoading && notesError == null
-    LaunchedEffect(task.folderName, task.updatedAt, controller.agentRevision, notesLoadAttempt) {
-        notesLoading = true
-        notesError = null
-        try {
-            val loaded = controller.readTaskNotesAsync(task)
-            notes = loaded
-            selectedTemplateId = selectedTemplateIdForNotes(loaded, templates)
-            notesLoading = false
-        } catch (cancelled: kotlinx.coroutines.CancellationException) {
-            throw cancelled
-        } catch (error: Throwable) {
-            notesError = error.message ?: error::class.simpleName ?: "无法读取任务规则"
-            controller.showError(error)
-            notesLoading = false
-        }
-    }
-    LaunchedEffect(task.folderName, agentsPreviewRequest) {
-        if (agentsPreviewRequest == 0) return@LaunchedEffect
-        agentsPreviewLoading = true
-        agentsPreviewError = null
-        agentsPreview = null
-        try {
-            agentsPreview = controller.previewTaskAgentsAsync(task, notes)
-            agentsPreviewLoading = false
-        } catch (cancelled: kotlinx.coroutines.CancellationException) {
-            throw cancelled
-        } catch (error: Throwable) {
-            agentsPreviewError = error.message ?: error::class.simpleName ?: "无法生成 Agent 文件预览"
-            controller.showError(error)
-            agentsPreviewLoading = false
-        }
-    }
-    LaunchedEffect(controller.agentRevision) {
-        selectedTemplateId = selectedTemplateIdForNotes(notes, templates)
-        pendingTemplate = pendingTemplate?.takeIf { pending ->
-            templates.any { it.id == pending.id && it.content == pending.content }
-        }
-    }
-    fun applyTemplate(notesResult: TemplateFillResult.Applied) {
-        notes = notesResult.notes
-        selectedTemplateId = notesResult.selectedTemplateId
-        controller.markTaskNotesEdited(task, notesResult.notes)
-    }
     Surface(
         modifier,
         color = MaterialTheme.colorScheme.surface,
@@ -222,8 +166,6 @@ internal fun TaskDetail(
                 physicalWorkspaces = physicalWorkspaces,
                 groupName = group?.name,
                 showGroup = controller.config.groups.size > 1,
-                canPreviewRequirementMaterials = requirementMaterialsActionsEnabled,
-                onPreviewRequirementMaterials = { requirementMaterialsPath?.let(onPreviewRequirementMaterials) },
             )
             FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (toolbarPresentation.showPathActionGroup) {
@@ -279,9 +221,6 @@ internal fun TaskDetail(
                     ActionIconButton("查看分支信息", { showBranchInfo = true }, Modifier.size(34.dp)) {
                         Icon(Icons.Outlined.AccountTree, "分支信息", Modifier.size(18.dp))
                     }
-                    ActionIconButton("打开工作数据", { controller.openWorkData(task) }, Modifier.size(34.dp)) {
-                        Icon(Icons.Outlined.Folder, "工作数据", Modifier.size(18.dp))
-                    }
                 }
                 IconActionGroup {
                     Box {
@@ -292,10 +231,19 @@ internal fun TaskDetail(
                             expanded = requirementMaterialsMenuExpanded,
                             onDismissRequest = { requirementMaterialsMenuExpanded = false },
                         ) {
+                            DropdownMenuItem(text = { Text("在 Codex 中打开") }, enabled = !controller.busy,
+                                onClick = { requirementMaterialsMenuExpanded = false; controller.openTaskInCodex(task) })
+                            DropdownMenuItem(text = { Text("关联 Codex 会话") }, enabled = !controller.busy,
+                                onClick = { requirementMaterialsMenuExpanded = false; showCodexAssociation = true })
+                            DropdownMenuItem(text = { Text("AI 配置") },
+                                onClick = { requirementMaterialsMenuExpanded = false; showAiConfiguration = true })
+                            DropdownMenuItem(text = { Text("复制 AI 上下文…") },
+                                onClick = { requirementMaterialsMenuExpanded = false; showAiContextCopy = true })
+                            HorizontalDivider()
                             when (task.requirementMaterials.status) {
                                 RequirementMaterialsStatus.READY -> {
                                     DropdownMenuItem(
-                                        text = { Text("打开需求资料目录") },
+                                        text = { Text("打开任务资料目录") },
                                         enabled = requirementMaterialsActionsEnabled,
                                         onClick = {
                                             requirementMaterialsMenuExpanded = false
@@ -303,12 +251,12 @@ internal fun TaskDetail(
                                         },
                                     )
                                     DropdownMenuItem(
-                                        text = { Text("复制需求资料路径") },
+                                        text = { Text("复制任务资料路径") },
                                         enabled = requirementMaterialsActionsEnabled,
                                         onClick = {
                                             requirementMaterialsMenuExpanded = false
                                             requirementMaterialsPath?.toAbsolutePath()?.normalize()?.toString()?.let {
-                                                controller.copyText(it, "需求资料路径已复制")
+                                                controller.copyText(it, "任务资料路径已复制")
                                             }
                                         },
                                     )
@@ -319,9 +267,9 @@ internal fun TaskDetail(
                                     DropdownMenuItem(
                                         text = {
                                             Text(if (task.requirementMaterials.status == RequirementMaterialsStatus.FAILED) {
-                                                "重试关联需求资料"
+                                                "重试关联任务资料"
                                             } else {
-                                                "关联需求资料"
+                                                "关联任务资料"
                                             })
                                         },
                                         enabled = canAssociate && !controller.busy,
@@ -332,7 +280,7 @@ internal fun TaskDetail(
                                     )
                                     if (!controller.config.requirementMaterialsConfigured && task.requirementLink.isNotBlank()) {
                                         DropdownMenuItem(
-                                            text = { Text("配置需求资料") },
+                                            text = { Text("配置任务资料") },
                                             onClick = {
                                                 requirementMaterialsMenuExpanded = false
                                                 controller.navigation = NavigationItem.SETTINGS
@@ -417,64 +365,8 @@ internal fun TaskDetail(
                     }
                 }
             }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            SectionHeader("任务人工说明")
-            if (templates.isNotEmpty()) {
-                Text(
-                    "从模板填充（单选）",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                    templates.forEach { template ->
-                        FilterChip(
-                            selected = selectedTemplateId == template.id,
-                            onClick = {
-                                val selected = templates.firstOrNull { it.id == selectedTemplateId }
-                                when (val result = resolveTemplateToggle(notes, selected, template)) {
-                                    is TemplateFillResult.Applied -> applyTemplate(result)
-                                    is TemplateFillResult.NeedsConfirmation -> pendingTemplate = result.target
-                                }
-                            },
-                            enabled = !controller.busy && notesReady,
-                            label = { Text(template.name) },
-                        )
-                    }
-                }
-            }
-            OutlinedTextField(notes, {
-                notes = it
-                controller.markTaskNotesEdited(task, it)
-            }, Modifier.fillMaxWidth(), minLines = 4, maxLines = 6, readOnly = controller.busy || !notesReady, label = { Text("任务说明") })
-            if (notesLoading) {
-                Text("正在读取任务说明…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            notesError?.let { error ->
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("读取失败：$error", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                    TextButton(onClick = { notesLoadAttempt++ }, enabled = !controller.busy) { Text("重试") }
-                }
-            }
-            agentsPreviewError?.let { error ->
-                Text("预览失败：$error", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                OutlinedButton(
-                    onClick = { agentsPreviewRequest++ },
-                    enabled = !controller.busy && notesReady && !agentsPreviewLoading,
-                ) {
-                    if (agentsPreviewLoading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                    else Icon(Icons.Outlined.Visibility, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp)); Text("预览")
-                }
-                Spacer(Modifier.width(8.dp))
-                Button(onClick = { controller.saveTaskNotes(task, notes) }, enabled = !controller.busy && notesReady) {
-                    Icon(Icons.Outlined.Save, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("保存")
-                }
-                if (failedServiceIds.isNotEmpty()) {
-                    Spacer(Modifier.width(8.dp))
-                    OutlinedButton(onClick = { controller.retryFailedServices(task) }, enabled = !controller.busy) { Text("重试全部失败服务") }
-                }
+            if (failedServiceIds.isNotEmpty()) {
+                OutlinedButton(onClick = { controller.retryFailedServices(task) }, enabled = !controller.busy) { Text("重试全部失败服务") }
             }
         }
     }
@@ -487,23 +379,18 @@ internal fun TaskDetail(
     ) {
         controller.archiveTask(task, onCompleted = { confirmArchive = false })
     }
-    pendingTemplate?.let { template ->
-        ConfirmDialog(
-            title = "替换任务人工说明？",
-            message = "当前说明已被手动修改，应用模板“${template.name}”将替换现有内容。",
-            confirmLabel = "替换说明",
-            enabled = !controller.busy && notesReady,
-            onDismiss = { pendingTemplate = null },
-            onConfirm = {
-                applyTemplate(TemplateFillResult.Applied(template.content, template.id))
-                pendingTemplate = null
-            },
-        )
-    }
     if (confirmDelete) DeleteTaskDialog(controller, task) {
         controller.clearDeleteRisk(task)
         confirmDelete = false
     }
+    if (showAiConfiguration) TaskAiConfigurationDialog(controller, task) { showAiConfiguration = false }
+    if (showAiContextCopy) AiContextCopyDialog(task, onDismiss = { showAiContextCopy = false },
+        requirementTitle = controller.requirementController.loadedMetadataFor(task)?.title,
+        materialsRoot = requirementMaterialsPath,
+        currentBranches = task.services.mapNotNull { workspace -> controller.gitHealth(workspace)?.actualBranch?.let { workspace.worktreePath to it } }.toMap(),
+        loadRequirementBody = { controller.loadTaskRequirementBodyForCopy(task) },
+        onCopied = { controller.showStatus("AI 上下文已复制") })
+    if (showCodexAssociation) CodexTaskAssociationDialog(controller, task) { showCodexAssociation = false }
     if (showAddServices) AddTaskServicesDialog(controller, task, onDismiss = { showAddServices = false }) { ids, reuseKeys, selections ->
         controller.addServices(task, ids, reuseKeys, selections) { showAddServices = false }
     }
@@ -552,7 +439,12 @@ internal fun TaskDetail(
             workspaces = physicalWorkspaces,
             mode = mode,
             initialSelection = batchGitInitialSelection,
-            onDismiss = { if (!controller.busy) batchGitMode = null },
+            onDismiss = {
+                if (!controller.busy) {
+                    controller.cancelBatchGitPreviews()
+                    batchGitMode = null
+                }
+            },
             onExecute = { selectedKeys, messages, fingerprints ->
                 controller.batchGit(task, mode, selectedKeys, messages, fingerprints) { result ->
                     lastBatchGitMode = mode
@@ -602,13 +494,7 @@ internal fun TaskDetail(
             confirmButton = { Button(onClick = controller::clearWorkspaceRepairResult) { Text("关闭") } },
         )
     }
-    agentsPreview?.let { preview ->
-        TaskAgentsPreviewDialog(
-            preview = preview,
-            onCopySource = { file -> controller.copyText(markdownPreviewSourceCopyPayload(file), "Markdown 源码已复制") },
-            onDismiss = { agentsPreview = null },
-        )
-    }
+
 }
 
 @Composable
@@ -926,42 +812,4 @@ private fun BatchGitResultDialog(controller: DesktopApplication, result: Workspa
             }
         },
     )
-}
-
-@Composable
-private fun TaskAgentsPreviewDialog(
-    preview: AgentDocumentPreview,
-    onCopySource: (MarkdownPreviewFile) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(
-            Modifier.width(860.dp).height(640.dp),
-            shape = RoundedCornerShape(22.dp),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        ) {
-            Column(Modifier.fillMaxSize()) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Agent 文件预览", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-                }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                Surface(
-                    Modifier.weight(1f).fillMaxWidth().padding(18.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    MarkdownFileTabsPreview(
-                        files = preview.files.map { MarkdownPreviewFile(it.relativePath, it.content) },
-                        modifier = Modifier.fillMaxSize(),
-                        initialPath = preview.rootFile.relativePath,
-                        onCopySource = onCopySource,
-                    )
-                }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 14.dp), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onDismiss) { Text("关闭") }
-                }
-            }
-        }
-    }
 }

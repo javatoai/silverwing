@@ -138,6 +138,7 @@ internal fun ServicesScreen(controller: DesktopApplication) {
                             )
                         }
                         if (group.services.isNotEmpty()) {
+                            Spacer(Modifier.width(8.dp))
                             OutlinedButton(onClick = { reorderMode = !reorderMode }) {
                                 Text(if (reorderMode) "完成排序" else "调整顺序")
                             }
@@ -188,8 +189,8 @@ internal fun ServicesScreen(controller: DesktopApplication) {
     addToGroup?.let { groupId -> AddRepositoryDialog(controller, onDismiss = { addToGroup = null }) { paths ->
         controller.settingsController.addRepositories(groupId, paths) { addToGroup = null }
     } }
-    editTarget?.let { (groupId, service) -> ServiceEditorDialog(controller, service, onDismiss = { editTarget = null }) {
-        controller.settingsController.updateService(groupId, it) { editTarget = null }
+    editTarget?.let { (groupId, service) -> ServiceEditorDialog(controller, service, onDismiss = { editTarget = null }) { draft, onFailure ->
+        controller.settingsController.updateService(groupId, draft, onFailure = onFailure, onCompleted = { editTarget = null })
     } }
     removeTarget?.let { (groupId, service) ->
         ConfirmDialog(
@@ -217,7 +218,7 @@ internal fun serviceMatchesQuery(service: GroupServiceConfig, repository: Reposi
 }
 
 @Composable
-private fun ServiceListRow(
+internal fun ServiceListRow(
     service: GroupServiceConfig,
     repository: RepositoryConfig?,
     canMoveUp: Boolean,

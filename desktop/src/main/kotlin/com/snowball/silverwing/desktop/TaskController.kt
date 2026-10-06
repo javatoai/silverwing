@@ -36,6 +36,8 @@ import com.snowball.silverwing.core.WorkspaceCommandService
 import com.snowball.silverwing.core.CommandOutputLine
 import com.snowball.silverwing.core.WorkspaceToolLaunchService
 import com.snowball.silverwing.core.WorkspaceGitOperationService
+import com.snowball.silverwing.core.WorkspaceMainBranchMerger
+import com.snowball.silverwing.core.WorkspaceMainBranchMergeService
 import com.snowball.silverwing.core.WorkspaceGitBatchMode
 import com.snowball.silverwing.core.WorkspaceGitBatchResult
 import com.snowball.silverwing.core.WorkspaceGitChangePreview
@@ -54,6 +56,7 @@ import com.snowball.silverwing.core.toInfo
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
@@ -136,11 +139,20 @@ class TaskController internal constructor(
     private val onError: (Throwable) -> Unit,
     private val isBusy: () -> Boolean,
     private val events: EventSink = NoOpEventSink,
+    private val mainBranchMerger: WorkspaceMainBranchMerger = WorkspaceMainBranchMergeService(),
 ) {
+    internal val mainBranchMerge = WorkspaceMainBranchMergeController(
+        config = { session.config }, selectedTask = { session.selectedTask }, taskDirectory = { taskDirectory(it) },
+        merger = mainBranchMerger, operations = operations, isBusy = isBusy, refreshGitStatus = ::refreshGitStatus,
+    )
     private var gitStatusRevision = 0L
     private var gitStatusJob: Job? = null
     private var branchCandidateRevision = 0L
     private var branchCandidateJob: Job? = null
+    private var batchPreviewRevision = 0L
+    private var batchPreviewJob: Job? = null
+    private val deleteRiskJobs = mutableMapOf<String, Job>()
+    private val deleteRiskPaths = mutableMapOf<String, Path>()
     private var workspaceCommandRevision = 0L
     private var workspaceCommandJob: Job? = null
     private var workspaceCommandActive by mutableStateOf(false)
@@ -169,11 +181,12 @@ class TaskController internal constructor(
         )
 
     fun select(task: TaskManifest) {
+        mainBranchMerge.selectionChanged()
         cancelWorkspaceCommandForTaskSwitch()
         session.selectedTask = task
         repairPreview = null
         repairResult = null
-        batchGitPreviews = BatchGitPreviewState.Idle
+        cancelBatchGitPreviews()
         refreshGitStatus()
         onRequirementSelected(task)
     }
@@ -259,22 +272,39 @@ class TaskController internal constructor(
 
     fun requestDeleteRisk(task: TaskManifest) {
         val key = task.taskDirectoryName
-        if (deleteRisks[key]?.loading == true) return
-        deleteRisks = deleteRisks + (key to DeleteRiskInspection())
         val config = session.config
-        scope.launch {
-            val result = withContext(ioDispatcher) {
-                runCatching { tasks.inspectDeleteRisk(config, taskDirectory(config, task)) }
+        val path = taskDirectory(config, task).toAbsolutePath().normalize()
+        if (deleteRiskPaths[key] == path && deleteRisks[key]?.loading == true) return
+        clearDeleteRisk(task)
+        deleteRiskPaths[key] = path
+        deleteRisks = deleteRisks + (key to DeleteRiskInspection())
+        lateinit var job: Job
+        fun current() = deleteRiskJobs[key] === job && deleteRiskPaths[key] == path &&
+            session.config.taskRoot?.let { Path.of(it).resolve(task.taskDirectoryName).toAbsolutePath().normalize() } == path
+        job = operations.read(
+            block = { tasks.inspectDeleteRisk(config, path) },
+            onSuccess = { if (current()) deleteRisks = deleteRisks + (key to DeleteRiskInspection(loading = false, risks = it)) },
+            onFailure = { if (current()) deleteRisks = deleteRisks + (key to DeleteRiskInspection(loading = false, error = it.message ?: "删除风险检查失败")) },
+            onCancelled = { if (current()) deleteRisks = deleteRisks + (key to DeleteRiskInspection(loading = false, error = "检查已取消，请重新检查")) },
+        )
+        deleteRiskJobs[key] = job
+        job.invokeOnCompletion {
+            if (deleteRiskJobs[key] === job) {
+                deleteRiskJobs.remove(key)
+                if (deleteRisks[key]?.loading == true) {
+                    deleteRisks = deleteRisks + (key to DeleteRiskInspection(loading = false, error = "检查已取消，请重新检查"))
+                }
             }
-            deleteRisks = deleteRisks + (key to result.fold(
-                onSuccess = { DeleteRiskInspection(loading = false, risks = it) },
-                onFailure = { DeleteRiskInspection(loading = false, error = it.message ?: "删除风险检查失败") },
-            ))
         }
+        job.start()
     }
 
     fun clearDeleteRisk(task: TaskManifest) {
-        deleteRisks = deleteRisks - task.taskDirectoryName
+        val key = task.taskDirectoryName
+        val job = deleteRiskJobs.remove(key)
+        deleteRiskPaths.remove(key)
+        deleteRisks = deleteRisks - key
+        job?.cancel()
     }
 
     fun delete(task: TaskManifest, discardChanges: Boolean, onCompleted: () -> Unit = {}): Boolean =
@@ -283,7 +313,7 @@ class TaskController internal constructor(
         }, onSuccess = { reloadTasks(); onCompleted() })
 
     fun retryRequirementMaterials(task: TaskManifest, onCompleted: () -> Unit = {}): Boolean =
-        operations.run("正在关联或更新需求资料目录…", "需求资料目录已更新", cancellable = true, block = {
+        operations.run("正在关联或更新任务资料目录…", "任务资料目录已更新", cancellable = true, block = {
             tasks.retryRequirementMaterials(session.config, taskDirectory(task))
         }, onSuccess = { updated ->
             reloadTasks(updated.folderName)
@@ -430,6 +460,32 @@ class TaskController internal constructor(
             workspaceTools.retry(taskDirectory(task), task, toolId)
         }, onSuccess = { reloadTasks(it.folderName) })
 
+    fun updateTagTarget(
+        task: TaskManifest,
+        workspace: ServiceWorkspace,
+        targetRef: String,
+        onFailure: (Throwable) -> Unit,
+        onCancelled: () -> Unit,
+        onCompleted: () -> Unit,
+    ): Boolean = operations.run(
+        "正在保存 ${workspace.operationLabel()} 测试目标分支…",
+        "测试目标分支已保存",
+        showErrorFeedback = false,
+        block = {
+            val config = session.config
+            check(config.tagEnabled && config.allowTaskTagTargetEditing) {
+                "请先在 Tag 设置中开启“允许在任务详情修改测试目标分支”"
+            }
+            tasks.updateTagTarget(
+                config, taskDirectory(task), workspace.groupServiceId, workspace.moduleId,
+                workspace.tagTargetRef, targetRef,
+            )
+        },
+        onFailure = onFailure,
+        onCancelled = onCancelled,
+        onSuccess = { reloadTasks(it.folderName); onCompleted() },
+    )
+
     fun clearWorkspaceWarnings(task: TaskManifest, workspace: ServiceWorkspace): Boolean =
         operations.run("正在清除警告…", "警告已清除", block = {
             tasks.clearWorkspaceWarnings(session.config, taskDirectory(task), workspace.worktreePath)
@@ -475,9 +531,10 @@ class TaskController internal constructor(
         }
         branchCandidates = TaskBranchCandidatesState.Loading()
         val config = session.config
-        branchCandidateJob = scope.launch {
-            val result = runCatching {
-                withContext(ioDispatcher) {
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            val runningJob = coroutineContext[Job]
+            try {
+                val result = withContext(ioDispatcher) {
                     taskBranchCatalog.list(config, groupId, serviceIds) { progress: TaskBranchCatalogProgress ->
                         scope.launch {
                             if (
@@ -490,14 +547,28 @@ class TaskController internal constructor(
                         }
                     }
                 }
+                if (revision == branchCandidateRevision && branchCandidateJob === runningJob) {
+                    branchCandidates = TaskBranchCandidatesState.Loaded(result)
+                }
+            } catch (cancelled: CancellationException) {
+                if (revision == branchCandidateRevision && branchCandidateJob === runningJob) branchCandidates = TaskBranchCandidatesState.Idle
+                throw cancelled
+            } catch (error: Throwable) {
+                if (revision == branchCandidateRevision && branchCandidateJob === runningJob) {
+                    branchCandidates = TaskBranchCandidatesState.Failed(error.message ?: "远程分支查询失败")
+                }
+            } finally {
+                if (branchCandidateJob === runningJob) branchCandidateJob = null
             }
-            if (revision != branchCandidateRevision) return@launch
-            branchCandidates = result.fold(
-                onSuccess = TaskBranchCandidatesState::Loaded,
-                onFailure = { TaskBranchCandidatesState.Failed(it.message ?: "远程分支查询失败") },
-            )
-            branchCandidateJob = null
         }
+        branchCandidateJob = job
+        job.invokeOnCompletion {
+            if (branchCandidateJob === job) {
+                branchCandidateJob = null
+                if (branchCandidates is TaskBranchCandidatesState.Loading) branchCandidates = TaskBranchCandidatesState.Idle
+            }
+        }
+        job.start()
     }
 
     fun cancelTaskBranchCandidates() {
@@ -544,7 +615,6 @@ class TaskController internal constructor(
     fun clearRepairPreview() { repairPreview = null }
     fun clearRepairResult() { repairResult = null }
 
-    fun openWorkData(task: TaskManifest) = desktopActions.openWorkData(taskDirectory(task))
 
     fun defaultCommitMessage(task: TaskManifest, workspace: ServiceWorkspace): String {
         val template = session.config.group(task.groupId).services.firstOrNull { it.id == workspace.groupServiceId }
@@ -621,7 +691,8 @@ class TaskController internal constructor(
             startedAtMillis = startedAt,
         )
         workspaceCommandActive = true
-        workspaceCommandJob = scope.launch {
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            val runningJob = coroutineContext[Job]
             try {
                 val result = runInterruptible(ioDispatcher) {
                     workspaceCommands.execute(Path.of(workspace.worktreePath), configured) { line ->
@@ -679,10 +750,26 @@ class TaskController internal constructor(
                     )
                 }
             } finally {
-                workspaceCommandJob = null
-                workspaceCommandActive = false
+                if (workspaceCommandJob === runningJob) {
+                    workspaceCommandJob = null
+                    workspaceCommandActive = false
+                }
             }
         }
+        workspaceCommandJob = job
+        job.invokeOnCompletion {
+            if (workspaceCommandJob === job) {
+                workspaceCommandJob = null
+                workspaceCommandActive = false
+                if (workspaceCommandState?.status == WorkspaceCommandExecutionStatus.RUNNING) {
+                    workspaceCommandState = workspaceCommandState?.copy(
+                        status = WorkspaceCommandExecutionStatus.CANCELLED,
+                        durationMillis = System.currentTimeMillis() - startedAt,
+                    )
+                }
+            }
+        }
+        job.start()
         return true
     }
 
@@ -705,14 +792,13 @@ class TaskController internal constructor(
     private fun cancelWorkspaceCommandForTaskSwitch() {
         ++workspaceCommandRevision
         workspaceCommandJob?.cancel()
-        workspaceCommandJob = null
         workspaceCommandState = null
     }
 
     suspend fun previewWorkspaceFile(
         worktreePath: String,
         change: WorkspaceGitFileChange,
-    ): WorkspaceGitFilePreview = withContext(ioDispatcher) {
+    ): WorkspaceGitFilePreview = runInterruptible(ioDispatcher) {
         gitFilePreviews.preview(worktreePath, change)
     }
 
@@ -721,18 +807,37 @@ class TaskController internal constructor(
     }
 
     fun loadBatchGitPreviews(task: TaskManifest) {
+        val revision = ++batchPreviewRevision
+        batchPreviewJob?.cancel()
         batchGitPreviews = BatchGitPreviewState.Loading
-        val taskKey = task.taskDirectoryName
-        scope.launch {
-            val result = withContext(ioDispatcher) {
-                runCatching { gitOperations.previews(physicalWorkspaces(task)) }
+        val path = taskDirectory(task).toAbsolutePath().normalize()
+        lateinit var job: Job
+        fun current() = revision == batchPreviewRevision && batchPreviewJob === job &&
+            session.selectedTask?.let { selected ->
+                session.config.taskRoot?.let { Path.of(it).resolve(selected.taskDirectoryName).toAbsolutePath().normalize() }
+            } == path
+        job = operations.read(
+            block = { gitOperations.previews(physicalWorkspaces(task)) },
+            onSuccess = { if (current()) batchGitPreviews = BatchGitPreviewState.Loaded(it) },
+            onFailure = { if (current()) batchGitPreviews = BatchGitPreviewState.Failed(it.message ?: "Git 变更预览失败") },
+            onCancelled = { if (current()) batchGitPreviews = BatchGitPreviewState.Idle },
+        )
+        batchPreviewJob = job
+        job.invokeOnCompletion {
+            if (batchPreviewJob === job) {
+                batchPreviewJob = null
+                if (batchGitPreviews is BatchGitPreviewState.Loading) batchGitPreviews = BatchGitPreviewState.Idle
             }
-            if (session.selectedTask?.taskDirectoryName != taskKey) return@launch
-            batchGitPreviews = result.fold(
-                onSuccess = { BatchGitPreviewState.Loaded(it) },
-                onFailure = { BatchGitPreviewState.Failed(it.message ?: "Git 变更预览失败") },
-            )
         }
+        job.start()
+    }
+
+    fun cancelBatchGitPreviews() {
+        batchPreviewRevision++
+        val job = batchPreviewJob
+        batchPreviewJob = null
+        batchGitPreviews = BatchGitPreviewState.Idle
+        job?.cancel()
     }
 
     fun batchGit(

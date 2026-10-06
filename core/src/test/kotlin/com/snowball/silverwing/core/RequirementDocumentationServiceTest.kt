@@ -329,7 +329,7 @@ class RequirementDocumentationServiceTest {
                 .plan(materialsConfig(root), link, "登录优化", directoryFolderName = "任务目录")
         }
 
-        assertTrue(error.message.orEmpty().contains("必须位于需求资料写入目录"))
+        assertTrue(error.message.orEmpty().contains("必须位于任务资料写入目录"))
     }
 
     private class FixedIterations(private val values: List<RequirementSprint>) : RequirementIterationProvider {

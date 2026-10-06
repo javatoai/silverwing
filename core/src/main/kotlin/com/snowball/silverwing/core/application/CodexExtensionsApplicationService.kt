@@ -12,6 +12,9 @@ class CodexExtensionsApplicationService(
     private val extensions: CodexExtensionsService = CodexExtensionsService(),
     private val branchCatalog: RemoteGitBranchCatalog = RemoteGitBranchCatalog(),
 ) {
+    /** Reads persisted configuration after a source operation completed only partially. */
+    fun configurationSnapshot(): AppConfig = configurations.load()
+
     fun snapshot(): CodexExtensionsSnapshot {
         val config = configurations.load()
         return extensions.snapshot(config.codexPluginMarketplaceSources, config.skillSources)

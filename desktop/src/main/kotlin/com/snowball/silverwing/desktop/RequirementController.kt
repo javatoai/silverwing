@@ -26,16 +26,19 @@ import com.snowball.silverwing.core.TaskNaming
 import com.snowball.silverwing.core.fetch
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.nio.file.Files
@@ -51,10 +54,15 @@ sealed interface RequirementUiState {
     data object Failed : RequirementUiState
 }
 
-private data class RequirementRequestKey(val projectKey: String?, val link: String)
+private data class RequirementRequestKey(val projectKey: String?, val link: String, val account: String?) {
+    val persistentKey: String get() = requirementReadKey("metadata", account.orEmpty(), projectKey,
+        FeishuWorkItemLink.parse(link)?.let { "project.feishu.cn/${it.space}/${it.kind}/${it.workItemId}" } ?: link)
+}
 internal sealed interface RequirementFetchResult {
     data class Success(val metadata: RequirementMetadata) : RequirementFetchResult
     data object Failure : RequirementFetchResult
+    /** Presentation-only outcome for an independently cancelled shared request; never cached or logged. */
+    data object Cancelled : RequirementFetchResult
 }
 private data class RequirementCacheEntry(val result: RequirementFetchResult, val expiresAtMillis: Long)
 
@@ -78,7 +86,7 @@ sealed interface RequirementAiNamingUiState {
     data object Idle : RequirementAiNamingUiState
     data object LoadingContext : RequirementAiNamingUiState
     data class Generating(val attempt: Int) : RequirementAiNamingUiState
-    data class Ready(val suggestion: RequirementAiNamingSuggestion) : RequirementAiNamingUiState
+    data class Ready(val suggestion: RequirementAiNamingSuggestion, val cached: Boolean = false) : RequirementAiNamingUiState
     data class Failed(val reason: String) : RequirementAiNamingUiState
 }
 
@@ -94,38 +102,85 @@ internal class RequirementMetadataCoordinator(
     maxConcurrency: Int = 4,
     private val successTtl: Duration = Duration.ofMinutes(5),
     private val failureTtl: Duration = Duration.ofSeconds(30),
+    private val cacheAccess: RequirementCacheAccess? = null,
 ) {
-    private val mutex = Mutex()
+    private data class MetadataRequest(val forced: Boolean, val result: Deferred<RequirementFetchResult>)
+    private val requestLock = Any()
     private val semaphore = Semaphore(maxConcurrency)
     private val cache = mutableMapOf<RequirementRequestKey, RequirementCacheEntry>()
-    private val inFlight = mutableMapOf<RequirementRequestKey, Deferred<RequirementFetchResult>>()
+    private val inFlight = mutableMapOf<RequirementRequestKey, MetadataRequest>()
+    private var epoch = 0L
+    internal val inFlightCount: Int get() = synchronized(requestLock) { inFlight.size }
 
     suspend fun fetch(link: String, projectKey: String?, force: Boolean = false): RequirementFetchResult {
-        val key = RequirementRequestKey(projectKey, link.trim())
-        val now = clock.millis()
-        val deferred = mutex.withLock {
-            if (!force) {
-                cache[key]?.takeIf { it.expiresAtMillis > now }?.let { return it.result }
+        currentCoroutineContext().ensureActive()
+        val identity = if (cacheAccess == null) "session" else cacheAccess.identity(ioDispatcher)
+        currentCoroutineContext().ensureActive()
+        val key = RequirementRequestKey(projectKey, link.trim(), identity)
+        val request = synchronized(requestLock) {
+            // A normal consumer joins the latest refresh instead of returning its older cache.
+            inFlight[key]?.takeIf { !it.result.isCompleted && (!force || it.forced) }?.let { return@synchronized it }
+            if (!force && identity != null) {
+                cache[key]?.takeIf { it.expiresAtMillis > clock.millis() }?.let { return it.result }
             }
-            inFlight[key] ?: scope.async(ioDispatcher) {
-                semaphore.withPermit {
-                    runCatching { provider.fetch(key.link, key.projectKey) }
-                        .getOrNull()
-                        ?.let(RequirementFetchResult::Success)
-                        ?: RequirementFetchResult.Failure
-                }
-            }.also { inFlight[key] = it }
+            if (cache[key]?.expiresAtMillis?.let { it <= clock.millis() } == true) cache.remove(key)
+            createRequest(key, force)
         }
-        val result = deferred.await()
-        mutex.withLock {
-            if (inFlight[key] === deferred) inFlight.remove(key)
-            val ttl = if (result is RequirementFetchResult.Success) successTtl else failureTtl
-            cache[key] = RequirementCacheEntry(result, clock.millis() + ttl.toMillis())
-        }
-        return result
+        return request.result.await()
     }
 
-    suspend fun clear() = mutex.withLock { cache.clear() }
+    /** Request completion owns cache publication and cleanup, independently of its consumers. */
+    private fun createRequest(key: RequirementRequestKey, force: Boolean): MetadataRequest {
+        val parent = SupervisorJob(scope.coroutineContext[Job])
+        val generation = epoch
+        lateinit var request: MetadataRequest
+        val deferred = scope.async(ioDispatcher + parent, start = CoroutineStart.LAZY) {
+            var fetchedAt = clock.millis()
+            var fetchedLive = false
+            val result = semaphore.withPermit {
+                try {
+                    val saved = if (!force && key.account != null) cacheAccess?.cache?.read(key.persistentKey, RequirementMetadata.serializer()) else null
+                    if (saved != null) {
+                        fetchedAt = saved.fetchedAt
+                        RequirementFetchResult.Success(saved.value)
+                    } else {
+                        val metadata = runInterruptible { provider.fetch(key.link, key.projectKey) }
+                        cacheAccess?.verify(key.account, ioDispatcher)
+                        fetchedAt = clock.millis()
+                        fetchedLive = true
+                        metadata?.let(RequirementFetchResult::Success) ?: RequirementFetchResult.Failure
+                    }
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { RequirementFetchResult.Failure }
+            }
+            currentCoroutineContext().ensureActive()
+            synchronized(requestLock) {
+                // Superseded requests can still return to their original consumers, but never
+                // publish into the cache or remove the newer refresh.
+                if (key.account != null && generation == epoch && inFlight[key] === request) {
+                    val ttl = if (result is RequirementFetchResult.Success) successTtl else failureTtl
+                    if (result is RequirementFetchResult.Success) {
+                        if (fetchedLive) cacheAccess?.cache?.write(key.persistentKey, RequirementMetadata.serializer(), result.metadata, fetchedAt)
+                        cache[key] = RequirementCacheEntry(result,
+                            minOf(clock.millis() + ttl.toMillis(), fetchedAt + REQUIREMENT_CACHE_TTL.toMillis()))
+                    } else if (!force && cache[key]?.let { it.result is RequirementFetchResult.Success && it.expiresAtMillis > clock.millis() } != true) {
+                        cache[key] = RequirementCacheEntry(result, clock.millis() + ttl.toMillis())
+                    }
+                }
+            }
+            result
+        }
+        request = MetadataRequest(force, deferred)
+        inFlight[key] = request
+        deferred.invokeOnCompletion {
+            synchronized(requestLock) { if (inFlight[key] === request) inFlight.remove(key) }
+            parent.complete()
+        }
+        deferred.start()
+        return request
+    }
+
+    suspend fun clear() = synchronized(requestLock) { epoch++; cache.clear(); inFlight.clear() }
 }
 
 /**
@@ -138,6 +193,7 @@ class RequirementController internal constructor(
     private val coordinator: RequirementMetadataCoordinator,
     private val aiContextProvider: RequirementAiContextProvider? = null,
     private val aiNamingService: RequirementAiNamingService? = null,
+    private val namingCoordinator: (() -> RequirementAiNamingCoordinator)? = null,
     private val branchValidator: BranchReferenceValidator = GitBranchReferenceValidator(),
     private val linkSource: MeegleRequirementLinkSource? = null,
     private val failureLog: RequirementLinkFailureLog? = null,
@@ -178,7 +234,7 @@ class RequirementController internal constructor(
         }
         val projectKey = projectKey(parsed, session.config)
         scope.launch {
-            val result = coordinator.fetch(task.requirementLink, projectKey)
+            val result = fetchMetadataResult(task.requirementLink, projectKey)
             if (result is RequirementFetchResult.Failure) recordMetadataFailure(projectKey)
             onResult((result as? RequirementFetchResult.Success)?.metadata)
         }
@@ -202,7 +258,7 @@ class RequirementController internal constructor(
         val link = task.requirementLink
         val projectKey = projectKey(parsed, session.config)
         scope.launch {
-            val result = coordinator.fetch(link, projectKey, force)
+            val result = fetchMetadataResult(link, projectKey, force)
             val stillCurrent = generations[identity] == generation &&
                 session.tasks.any { it.taskDirectoryName == identity && it.requirementLink == link }
             if (!stillCurrent) return@launch
@@ -212,6 +268,7 @@ class RequirementController internal constructor(
                     recordMetadataFailure(projectKey)
                     RequirementUiState.Failed
                 }
+                RequirementFetchResult.Cancelled -> RequirementUiState.Failed
             })
         }
     }
@@ -227,12 +284,20 @@ class RequirementController internal constructor(
         val projectKey = projectKey(parsed, session.config)
         draftJob = scope.launch {
             delay(250)
-            val result = coordinator.fetch(link, projectKey)
+            val result = fetchMetadataResult(link, projectKey)
             if (generation != draftGeneration) return@launch
             if (result is RequirementFetchResult.Failure) recordMetadataFailure(projectKey)
             onResult((result as? RequirementFetchResult.Success)?.metadata)
         }
     }
+
+    /** A shared provider can cancel independently; the active UI must still finish loading. */
+    private suspend fun fetchMetadataResult(link: String, projectKey: String?, force: Boolean = false): RequirementFetchResult =
+        try { coordinator.fetch(link, projectKey, force) }
+        catch (cancelled: CancellationException) {
+            currentCoroutineContext().ensureActive()
+            RequirementFetchResult.Cancelled
+        }
 
     /**
      * Generates folder/branch suggestions only after the caller explicitly selected a candidate.
@@ -243,6 +308,7 @@ class RequirementController internal constructor(
         link: String,
         branchPrefix: String,
         enabled: Boolean,
+        force: Boolean = false,
         onResult: (RequirementAiNamingSuggestion) -> Unit,
     ) {
         val generation = ++aiNamingGeneration
@@ -267,35 +333,40 @@ class RequirementController internal constructor(
         aiNamingState = RequirementAiNamingUiState.LoadingContext
         aiNamingJob = scope.launch {
             try {
-                val context = withContext(ioDispatcher ?: Dispatchers.IO) {
+                val shared = namingCoordinator?.invoke()
+                val context = if (shared == null) withContext(ioDispatcher ?: Dispatchers.IO) {
                     runInterruptible { contextProvider.fetch(link, projectKey) }
-                }
+                } else null
                 if (generation != aiNamingGeneration) return@launch
                 val forbiddenNames = linkedSetOf<String>()
                 repeat(MAX_AI_NAMING_ATTEMPTS) { index ->
                     val attempt = index + 1
                     aiNamingState = RequirementAiNamingUiState.Generating(attempt)
-                    val suggestion = withContext(ioDispatcher ?: Dispatchers.IO) {
+                    var usedCache = false
+                    val suggestion = if (shared != null) shared.suggestWithSource(link, projectKey, force || index > 0, forbiddenNames.toSet()).let { result ->
+                        usedCache = result.cached; result.suggestion
+                    } else withContext(ioDispatcher ?: Dispatchers.IO) {
                         // 重试历史在服务边界处必须是不可变快照，服务不能修改控制器状态，也不能
                         // 观察到稍后重试才加入的名称。
-                        runInterruptible { namingService.suggest(context, forbiddenNames.toSet()) }
+                        runInterruptible { namingService.suggest(requireNotNull(context), forbiddenNames.toSet()) }
                     }
                     if (generation != aiNamingGeneration) return@launch
                     val available = withContext(ioDispatcher ?: Dispatchers.IO) {
                         runInterruptible {
                             val validated = RequirementAiNamingRules.requireValid(suggestion)
-                            val resolvedPrefix = BranchPrefixResolver.resolve(branchPrefix, link) ?: branchPrefix
-                            require(!BranchPrefixResolver.containsUnresolvedPlaceholder(resolvedPrefix)) {
-                                "无法从需求链接解析分支前缀中的编号"
+                            // 没有 {ai} 时只生成文件夹名；用户尚未填写的分支由创建任务时校验。
+                            if ("{ai}" in branchPrefix) {
+                                val resolvedPrefix = BranchPrefixResolver.resolve(branchPrefix, link) ?: branchPrefix
+                                val branch = RequirementAiNamingRules.composeBranch(resolvedPrefix, validated.branchSuffix)
+                                require(!BranchPrefixResolver.containsUnresolvedPlaceholder(branch)) { "分支规则中仍有未解析的占位符" }
+                                require(branchValidator.isValid(branch)) { "AI 生成的分支名不符合 Git 规则：$branch" }
                             }
-                            val branch = RequirementAiNamingRules.composeBranch(resolvedPrefix, validated.branchSuffix)
-                            require(branchValidator.isValid(branch)) { "AI 生成的分支名不符合 Git 规则：$branch" }
                             !folderExists(validated.folderName)
                         }
                     }
                     if (generation != aiNamingGeneration) return@launch
                     if (available) {
-                        aiNamingState = RequirementAiNamingUiState.Ready(suggestion)
+                        aiNamingState = RequirementAiNamingUiState.Ready(suggestion, usedCache)
                         onResult(suggestion)
                         return@launch
                     }
@@ -303,7 +374,11 @@ class RequirementController internal constructor(
                 }
                 aiNamingState = RequirementAiNamingUiState.Failed("AI 生成的文件夹名已存在，请手工修改或重新生成")
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
-                throw cancelled
+                // A shared request can cancel independently while this form is still active.
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                if (generation == aiNamingGeneration) {
+                    aiNamingState = RequirementAiNamingUiState.Failed("命名请求已取消，请重新生成")
+                }
             } catch (error: Throwable) {
                 if (generation == aiNamingGeneration) {
                     aiNamingState = RequirementAiNamingUiState.Failed(
@@ -348,7 +423,7 @@ class RequirementController internal constructor(
                 onFailure = { error ->
                     RequirementMaterialsPreviewState.Failed(
                         requirementId = requirementMaterials.parseRequirementId(input),
-                        reason = "需求资料目录预检失败：${error.message ?: error::class.simpleName}",
+                        reason = "任务资料目录预检失败：${error.message ?: error::class.simpleName}",
                     )
                 },
             )
@@ -401,7 +476,7 @@ class RequirementController internal constructor(
         clearMaterialsPreview()
     }
 
-    /** 在切换需求、关闭窗口或关闭设置开关时中断本机 Codex 进程。 */
+    /** 切换需求或关闭窗口时取消草稿订阅；共享预热请求由会话协调器管理。 */
     fun cancelDraftAiNaming() {
         aiNamingGeneration++
         aiNamingJob?.cancel()

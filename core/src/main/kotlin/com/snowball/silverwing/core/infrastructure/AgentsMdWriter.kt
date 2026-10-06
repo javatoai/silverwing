@@ -21,7 +21,7 @@ object AgentsMdWriter {
             appendLine()
         }
         if (manifest.requirementMaterials.status != RequirementMaterialsStatus.NOT_REQUESTED) {
-            appendLine("## 需求资料目录")
+            appendLine("## 任务资料目录")
             appendLine()
             when (manifest.requirementMaterials.status) {
                 RequirementMaterialsStatus.NOT_REQUESTED -> Unit

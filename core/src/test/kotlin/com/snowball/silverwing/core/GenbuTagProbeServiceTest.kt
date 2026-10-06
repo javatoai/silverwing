@@ -6,14 +6,83 @@ import java.nio.file.Path
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
+import java.util.concurrent.CancellationException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.test.assertFails
+import kotlin.test.assertFailsWith
+import kotlin.test.assertSame
 
 class GenbuTagProbeServiceTest {
     @TempDir
     lateinit var temporary: Path
+
+    @Test
+    fun `cancelled background and explicit queries preserve saved status and permit retry`() {
+        for (single in listOf(false, true)) {
+            for (cancellation in listOf(CancellationException("cancelled"), InterruptedException("interrupted"))) {
+                val fixture = fixture()
+                val original = operation("1.0.0.1", "2026-08-25 10:00:00")
+                fixture.store.save(fixture.taskDirectory, original)
+                var cancel = true
+                val probes = GenbuTagProbeService(fixture.store, GenbuTagStatusProvider { _, _ ->
+                    if (cancel) throw cancellation
+                    buildingResult()
+                })
+                assertSame(cancellation, assertFails {
+                    if (single) probes.probeOperation(fixture.config, fixture.task, original.operationId)
+                    else probes.probe(fixture.config, listOf(fixture.task))
+                })
+                assertEquals(original, fixture.store.load(fixture.taskDirectory, original.operationId))
+                cancel = false
+                if (single) probes.probeOperation(fixture.config, fixture.task, original.operationId)
+                else assertTrue(probes.probe(fixture.config, listOf(fixture.task)))
+                val updated = fixture.store.load(fixture.taskDirectory, original.operationId)
+                assertEquals(GenbuStageStatus.SUCCESS, updated.genbuStatus.build)
+                assertEquals(null, updated.genbuStatus.failureReason)
+            }
+        }
+    }
+
+    @Test
+    fun `interrupt arriving with a successful result stops before persisting it`() {
+        for (single in listOf(false, true)) {
+            val fixture = fixture()
+            val original = operation("1.0.0.1", "2026-08-25 10:00:00")
+            fixture.store.save(fixture.taskDirectory, original)
+            val probes = GenbuTagProbeService(fixture.store, GenbuTagStatusProvider { _, _ ->
+                Thread.currentThread().interrupt()
+                buildingResult()
+            })
+            try {
+                assertFailsWith<InterruptedException> {
+                    if (single) probes.probeOperation(fixture.config, fixture.task, original.operationId)
+                    else probes.probe(fixture.config, listOf(fixture.task))
+                }
+            } finally {
+                Thread.interrupted()
+            }
+            assertEquals(original, fixture.store.load(fixture.taskDirectory, original.operationId))
+        }
+    }
+
+    @Test
+    fun `an already interrupted probe never invokes the provider or rewrites history`() {
+        val fixture = fixture()
+        val original = operation("1.0.0.1", "2026-08-25 10:00:00")
+        fixture.store.save(fixture.taskDirectory, original)
+        try {
+            Thread.currentThread().interrupt()
+            assertFailsWith<InterruptedException> { fixture.probes.probe(fixture.config, listOf(fixture.task)) }
+            assertFailsWith<InterruptedException> { fixture.probes.probeOperation(fixture.config, fixture.task, original.operationId) }
+        } finally {
+            Thread.interrupted()
+        }
+        assertTrue(fixture.calls.isEmpty())
+        assertEquals(original, fixture.store.load(fixture.taskDirectory, original.operationId))
+    }
 
     @Test
     fun `disabled service never queries Genbu`() {

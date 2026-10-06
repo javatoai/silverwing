@@ -146,21 +146,20 @@ class MeegleRequirementAiContextProviderTest {
     }
 
     @Test
-    fun `rejects a requirement with no readable body before Codex can be called`() {
+    fun `title-only requirement allows an empty body after successful field discovery`() {
         val runner = SequenceRunner(
-            listOf(CommandResult(0, """{"name":"只有标题"}""", "")),
+            listOf(CommandResult(0, """{"name":"只有标题"}""", ""),
+                *Array(4) { CommandResult(0, """{"list":[]}""", "") }),
         )
         val provider = MeegleRequirementAiContextProvider(runner, isWindows = false)
 
-        val error = kotlin.test.assertFailsWith<IllegalStateException> {
-            provider.fetch("https://project.feishu.cn/obt/userstory/detail/123", "project-payment")
-        }
-
-        assertTrue(error.message.orEmpty().contains("正文"))
+        val context = provider.fetch("https://project.feishu.cn/obt/userstory/detail/123", "project-payment")
+        assertEquals("只有标题", context.title)
+        assertEquals("", context.body)
     }
 
     @Test
-    fun `truncates only the readable body to four thousand characters`() {
+    fun `truncates only the readable body to fifty Unicode characters`() {
         val body = "字".repeat(4_001)
         val runner = SequenceRunner(
             listOf(CommandResult(0, """{"name":"长正文需求","description":"$body"}""", "")),
@@ -172,8 +171,18 @@ class MeegleRequirementAiContextProviderTest {
             "project-payment",
         )
 
-        assertEquals(4_000, context.body.codePointCount(0, context.body.length))
+        assertEquals(50, context.body.codePointCount(0, context.body.length))
         assertEquals("长正文需求", context.title)
+    }
+
+    @Test
+    fun `rich text containers omit unknown identifiers and metadata values`() {
+        val runner = SequenceRunner(listOf(CommandResult(0,
+            """{"name":"支付优化","description":{"type":"document","id":"PRIVATE-ID","url":"https://private.invalid/secret","children":[{"text":"可读正文","id":"PRIVATE-CHILD","marks":[{"token":"PRIVATE-TOKEN"}]}]}}""", "")))
+        val context = MeegleRequirementAiContextProvider(runner, isWindows = false)
+            .fetch("https://project.feishu.cn/obt/userstory/detail/123", "project-payment")
+        assertEquals("可读正文", context.body)
+        assertFalse(context.body.contains("PRIVATE"))
     }
 
     @Test

@@ -43,6 +43,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -142,9 +143,11 @@ internal fun SettingsCodexPluginsSection(controller: DesktopApplication) {
     if (adding) PluginSourceEditorDialog(
         extensions = extensions,
         onDismiss = { adding = false },
-        onSave = { source ->
-            extensions.addMarketplace(source)
-            adding = false
+        onSave = { source, onResult ->
+            extensions.addMarketplace(source) { result ->
+                onResult(result)
+                if (result is ExtensionSourceSaveState.Saved) adding = false
+            }
         },
     )
     viewing?.let { source ->
@@ -270,9 +273,11 @@ internal fun SettingsSkillSourcesSection(controller: DesktopApplication) {
     if (adding) SkillSourceEditorDialog(
         extensions = extensions,
         onDismiss = { adding = false },
-        onSave = { source ->
-            extensions.addSkillSource(source)
-            adding = false
+        onSave = { source, onResult ->
+            extensions.addSkillSource(source) { result ->
+                onResult(result)
+                if (result is ExtensionSourceSaveState.Saved) adding = false
+            }
         },
     )
     viewing?.let { source ->
@@ -518,31 +523,38 @@ private fun SettingsEmptyState(message: String) {
 private fun PluginSourceEditorDialog(
     extensions: CodexExtensionsController,
     onDismiss: () -> Unit,
-    onSave: (CodexPluginMarketplaceSource) -> Unit,
+    onSave: (CodexPluginMarketplaceSource, (ExtensionSourceSaveState) -> Unit) -> Boolean,
 ) {
+    val sourceId = remember { UUID.randomUUID().toString() }
     var name by remember { mutableStateOf("") }
     var url by remember { mutableStateOf("") }
     var ref by remember { mutableStateOf("") }
     var branches by remember { mutableStateOf<RemoteBranchLoadState>(RemoteBranchLoadState.Idle) }
     var error by remember { mutableStateOf<String?>(null) }
+    var saveState by remember { mutableStateOf<ExtensionSourceSaveState>(ExtensionSourceSaveState.Idle) }
+    val saving = saveState is ExtensionSourceSaveState.Saving
+    DisposableEffect(extensions) { onDispose { extensions.cancelRemoteBranches() } }
     SourceEditorDialog(
         title = "添加 Codex 插件来源",
         fields = {
-            OutlinedTextField(name, { name = it; error = null }, Modifier.fillMaxWidth(), label = { Text("显示名称") }, singleLine = true)
+            OutlinedTextField(name, { name = it; error = null }, Modifier.fillMaxWidth(), label = { Text("显示名称") }, singleLine = true, enabled = !saving)
             ExtensionRepositoryUrlField(
                 url = url,
                 onUrlChanged = { changed ->
+                    extensions.cancelRemoteBranches()
                     url = changed
                     if (name.isBlank()) name = defaultExtensionSourceName(changed)
                     branches = RemoteBranchLoadState.Idle; ref = ""; error = null
                 },
                 onLoad = { value -> extensions.loadRemoteBranches(value) { branches = it } },
                 placeholder = "http(s)://git.example/team/plugins.git 或 git@gitlab.example:team/plugins.git",
+                enabled = !saving,
             )
             RemoteBranchPicker(
                 ref = ref,
                 state = branches,
                 onSelected = { ref = it; error = null },
+                enabled = !saving,
                 onReload = {
                     if (runCatching { com.snowball.silverwing.core.validateRemoteGitUrl(url.trim()) }.isSuccess) {
                         extensions.loadRemoteBranches(url.trim()) { branches = it }
@@ -555,10 +567,16 @@ private fun PluginSourceEditorDialog(
         },
         error = error,
         onDismiss = onDismiss,
+        saving = saving,
+        onCancelSave = { extensions.cancelSourceSave() },
         onConfirm = {
             runCatching {
-                CodexPluginMarketplaceSource(UUID.randomUUID().toString(), name.trim(), url.trim(), ref.trim().ifBlank { null }, ".")
-            }.onSuccess(onSave).onFailure { error = it.message ?: "插件来源配置不合法" }
+                CodexPluginMarketplaceSource(sourceId, name.trim(), url.trim(), ref.trim().ifBlank { null }, ".")
+            }.onSuccess { source ->
+                extensions.cancelRemoteBranches()
+                if (branches is RemoteBranchLoadState.Loading) branches = RemoteBranchLoadState.Idle
+                onSave(source) { result -> saveState = result; if (result is ExtensionSourceSaveState.Failed) error = result.message }
+            }.onFailure { error = it.message ?: "插件来源配置不合法" }
         },
     )
 }
@@ -567,32 +585,39 @@ private fun PluginSourceEditorDialog(
 private fun SkillSourceEditorDialog(
     extensions: CodexExtensionsController,
     onDismiss: () -> Unit,
-    onSave: (SkillSource) -> Unit,
+    onSave: (SkillSource, (ExtensionSourceSaveState) -> Unit) -> Boolean,
 ) {
+    val sourceId = remember { UUID.randomUUID().toString() }
     var name by remember { mutableStateOf("") }
     var url by remember { mutableStateOf("") }
     var ref by remember { mutableStateOf("") }
     var directory by remember { mutableStateOf("skills") }
     var branches by remember { mutableStateOf<RemoteBranchLoadState>(RemoteBranchLoadState.Idle) }
     var error by remember { mutableStateOf<String?>(null) }
+    var saveState by remember { mutableStateOf<ExtensionSourceSaveState>(ExtensionSourceSaveState.Idle) }
+    val saving = saveState is ExtensionSourceSaveState.Saving
+    DisposableEffect(extensions) { onDispose { extensions.cancelRemoteBranches() } }
     SourceEditorDialog(
         title = "添加 Skill 来源",
         fields = {
-            OutlinedTextField(name, { name = it; error = null }, Modifier.fillMaxWidth(), label = { Text("显示名称") }, singleLine = true)
+            OutlinedTextField(name, { name = it; error = null }, Modifier.fillMaxWidth(), label = { Text("显示名称") }, singleLine = true, enabled = !saving)
             ExtensionRepositoryUrlField(
                 url = url,
                 onUrlChanged = { changed ->
+                    extensions.cancelRemoteBranches()
                     url = changed
                     if (name.isBlank()) name = defaultExtensionSourceName(changed)
                     branches = RemoteBranchLoadState.Idle; ref = ""; error = null
                 },
                 onLoad = { value -> extensions.loadRemoteBranches(value) { branches = it } },
                 placeholder = "http(s)://git.example/team/skills.git 或 git@gitlab.example:team/skills.git",
+                enabled = !saving,
             )
             RemoteBranchPicker(
                 ref = ref,
                 state = branches,
                 onSelected = { ref = it; error = null },
+                enabled = !saving,
                 onReload = {
                     if (runCatching { com.snowball.silverwing.core.validateRemoteGitUrl(url.trim()) }.isSuccess) {
                         extensions.loadRemoteBranches(url.trim()) { branches = it }
@@ -601,14 +626,20 @@ private fun SkillSourceEditorDialog(
                     }
                 },
             )
-            OutlinedTextField(directory, { directory = it; error = null }, Modifier.fillMaxWidth(), label = { Text("Skill 相对目录") }, supportingText = { Text("默认 skills；可自行修改") }, singleLine = true)
+            OutlinedTextField(directory, { directory = it; error = null }, Modifier.fillMaxWidth(), label = { Text("Skill 相对目录") }, supportingText = { Text("默认 skills；可自行修改") }, singleLine = true, enabled = !saving)
         },
         error = error,
         onDismiss = onDismiss,
+        saving = saving,
+        onCancelSave = { extensions.cancelSourceSave() },
         onConfirm = {
             runCatching {
-                SkillSource(UUID.randomUUID().toString(), name.trim(), url.trim(), ref.trim().ifBlank { null }, directory.trim().ifBlank { null })
-            }.onSuccess(onSave).onFailure { error = it.message ?: "Skill 来源配置不合法" }
+                SkillSource(sourceId, name.trim(), url.trim(), ref.trim().ifBlank { null }, directory.trim().ifBlank { null })
+            }.onSuccess { source ->
+                extensions.cancelRemoteBranches()
+                if (branches is RemoteBranchLoadState.Loading) branches = RemoteBranchLoadState.Idle
+                onSave(source) { result -> saveState = result; if (result is ExtensionSourceSaveState.Failed) error = result.message }
+            }.onFailure { error = it.message ?: "Skill 来源配置不合法" }
         },
     )
 }
@@ -619,18 +650,20 @@ private fun ExtensionRepositoryUrlField(
     onUrlChanged: (String) -> Unit,
     onLoad: (String) -> Unit,
     placeholder: String,
+    enabled: Boolean = true,
 ) {
     OutlinedTextField(
         value = url,
         onValueChange = onUrlChanged,
         modifier = Modifier.fillMaxWidth().onFocusChanged { focus ->
-            if (!focus.isFocused && runCatching { com.snowball.silverwing.core.validateRemoteGitUrl(url.trim()) }.isSuccess) {
+            if (enabled && !focus.isFocused && runCatching { com.snowball.silverwing.core.validateRemoteGitUrl(url.trim()) }.isSuccess) {
                 onLoad(url.trim())
             }
         },
         label = { Text("Git 仓库地址") },
         placeholder = { Text(placeholder) },
         singleLine = true,
+        enabled = enabled,
     )
 }
 
@@ -641,19 +674,20 @@ private fun RemoteBranchPicker(
     state: RemoteBranchLoadState,
     onSelected: (String) -> Unit,
     onReload: () -> Unit,
+    enabled: Boolean = true,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val branches = (state as? RemoteBranchLoadState.Loaded)?.branches.orEmpty()
-    androidx.compose.runtime.LaunchedEffect(branches) {
-        if (ref.isBlank()) preferredRemoteGitBranch(branches)?.let(onSelected)
+    androidx.compose.runtime.LaunchedEffect(branches, enabled) {
+        if (enabled && ref.isBlank()) preferredRemoteGitBranch(branches)?.let(onSelected)
     }
-    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it && state is RemoteBranchLoadState.Loaded }) {
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it && enabled && state is RemoteBranchLoadState.Loaded }) {
         OutlinedTextField(
             value = ref,
             onValueChange = onSelected,
             modifier = Modifier.menuAnchor().fillMaxWidth(),
             readOnly = false,
-            enabled = state !is RemoteBranchLoadState.Loading,
+            enabled = enabled && state !is RemoteBranchLoadState.Loading,
             label = { Text("Git ref（可选）") },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
             supportingText = {
@@ -666,7 +700,8 @@ private fun RemoteBranchPicker(
             },
             singleLine = true,
         )
-        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false },
+            containerColor = silverWingMenuContainerColor(), tonalElevation = 0.dp) {
             branches.forEach { branch ->
                 DropdownMenuItem(text = { Text(branch) }, onClick = { onSelected(branch); expanded = false })
             }
@@ -674,7 +709,7 @@ private fun RemoteBranchPicker(
     }
     OutlinedButton(
         onClick = onReload,
-        enabled = state !is RemoteBranchLoadState.Loading,
+        enabled = enabled && state !is RemoteBranchLoadState.Loading,
     ) {
         Icon(Icons.Outlined.Refresh, null, Modifier.size(18.dp))
         Spacer(Modifier.width(5.dp))
@@ -689,9 +724,11 @@ private fun SourceEditorDialog(
     error: String?,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
+    saving: Boolean = false,
+    onCancelSave: () -> Unit = {},
 ) {
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!saving) onDismiss() },
         title = { Text(title) },
         text = {
             Column(Modifier.widthIn(min = 480.dp, max = 720.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -699,8 +736,8 @@ private fun SourceEditorDialog(
                 error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
             }
         },
-        confirmButton = { TextButton(onClick = onConfirm) { Text("保存并加载") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+        confirmButton = { TextButton(onClick = onConfirm, enabled = !saving) { Text(if (saving) "正在保存…" else "保存并加载") } },
+        dismissButton = { TextButton(onClick = if (saving) onCancelSave else onDismiss) { Text(if (saving) "取消保存" else "取消") } },
     )
 }
 
@@ -723,13 +760,18 @@ private fun PluginCatalogDialog(
     var preview by remember(source.id, selected?.name) { mutableStateOf<PluginPreviewState>(PluginPreviewState.Empty) }
     var selectedSkill by remember(source.id, selected?.name) { mutableStateOf<String?>(null) }
     var skillPreview by remember(source.id, selected?.name, selectedSkill) { mutableStateOf<SkillPreviewState>(SkillPreviewState.Empty) }
+    DisposableEffect(source.id, extensions) {
+        onDispose { extensions.cancelPluginPreview(); extensions.cancelPluginSkillPreview() }
+    }
     LaunchedEffect(source.id, selected?.name) {
         selectedSkill = null
+        extensions.cancelPluginPreview()
         selected?.let { plugin -> extensions.previewPlugin(source, plugin) { preview = it } }
     }
     LaunchedEffect(source.id, selected?.name, selectedSkill) {
         val plugin = selected
         val skill = selectedSkill
+        extensions.cancelPluginSkillPreview()
         if (plugin != null && skill != null) extensions.previewPluginSkill(source, plugin, skill) { skillPreview = it }
     }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -790,7 +832,9 @@ private fun PluginCatalogDialog(
                                     when (val current = skillPreview) {
                                         SkillPreviewState.Empty -> Text("请选择一个内置 Skill", color = MaterialTheme.colorScheme.onSurfaceVariant)
                                         SkillPreviewState.Loading -> LinearProgressIndicator(Modifier.fillMaxWidth())
-                                        is SkillPreviewState.Failed -> Text(current.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                                        is SkillPreviewState.Failed -> ExtensionPreviewFailure(current.message) {
+                                            selectedSkill?.let { skill -> extensions.previewPluginSkill(source, plugin, skill) { skillPreview = it } }
+                                        }
                                         is SkillPreviewState.Loaded -> Box(Modifier.weight(1f).fillMaxWidth()) {
                                             val sourcePath = remember(source.id, selected?.name, selectedSkill, current.content) {
                                                 selected?.let { plugin ->
@@ -815,7 +859,9 @@ private fun PluginCatalogDialog(
                                     when (val current = preview) {
                                         PluginPreviewState.Empty -> Text("请选择一个插件", color = MaterialTheme.colorScheme.onSurfaceVariant)
                                         PluginPreviewState.Loading -> LinearProgressIndicator(Modifier.fillMaxWidth())
-                                        is PluginPreviewState.Failed -> Text(current.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                                        is PluginPreviewState.Failed -> ExtensionPreviewFailure(current.message) {
+                                            extensions.previewPlugin(source, plugin) { preview = it }
+                                        }
                                         is PluginPreviewState.Loaded -> PluginOverview(current.content, Modifier.weight(1f).fillMaxWidth(), onSkillSelected = { selectedSkill = it })
                                     }
                                 }
@@ -828,6 +874,14 @@ private fun PluginCatalogDialog(
                 }
             }
         }
+    }
+}
+
+@Composable
+internal fun ExtensionPreviewFailure(message: String, onRetry: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        OutlinedButton(onClick = onRetry) { Text("重新读取") }
     }
 }
 
@@ -873,7 +927,9 @@ private fun SkillCatalogDialog(
 ) {
     var selected by remember(source.id, skills) { mutableStateOf(skills.firstOrNull()) }
     var preview by remember(source.id, selected?.name) { mutableStateOf<SkillPreviewState>(SkillPreviewState.Empty) }
+    DisposableEffect(source.id, extensions) { onDispose { extensions.cancelSkillPreview() } }
     LaunchedEffect(source.id, selected?.name) {
+        extensions.cancelSkillPreview()
         selected?.let { skill -> extensions.previewSkill(source, skill) { preview = it } }
     }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -928,7 +984,9 @@ private fun SkillCatalogDialog(
                                 when (val current = preview) {
                                     SkillPreviewState.Empty -> Text("请选择一个 Skill", color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     SkillPreviewState.Loading -> LinearProgressIndicator(Modifier.fillMaxWidth())
-                                    is SkillPreviewState.Failed -> Text(current.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                                    is SkillPreviewState.Failed -> ExtensionPreviewFailure(current.message) {
+                                        extensions.previewSkill(source, skill) { preview = it }
+                                    }
                                     is SkillPreviewState.Loaded -> {
                                         val sourcePath = remember(source.id, selected?.name, current.content) {
                                             selected?.let { skill -> runCatching { extensions.previewSkillPath(source, skill) }.getOrNull() }

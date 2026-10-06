@@ -70,6 +70,7 @@ import androidx.compose.material3.SecondaryScrollableTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -81,6 +82,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -200,23 +203,11 @@ internal fun SettingsScreen(controller: DesktopApplication) {
         mutableStateOf(controller.config.showWorkspacePathActionGroup)
     }
     val taskAreaCopyIconPresentation = taskAreaCopyIconPresentationFor(controller.config)
-    var showTaskAreaBranchCopyIcons by remember(
-        controller.config.showTaskAreaCopyIcons,
-        controller.config.showTaskAreaBranchCopyIcons,
-    ) {
-        mutableStateOf(taskAreaCopyIconPresentation.showBranchNameCopyIcons)
-    }
     var showTaskAreaRequirementCopyIcons by remember(
         controller.config.showTaskAreaCopyIcons,
         controller.config.showTaskAreaRequirementCopyIcons,
     ) {
         mutableStateOf(taskAreaCopyIconPresentation.showRequirementCopyIcons)
-    }
-    var showTaskAreaProjectNameCopyIcons by remember(
-        controller.config.showTaskAreaCopyIcons,
-        controller.config.showTaskAreaProjectNameCopyIcons,
-    ) {
-        mutableStateOf(taskAreaCopyIconPresentation.showProjectNameCopyIcons)
     }
     var terminal by remember(controller.config.terminalExecutable) { mutableStateOf(controller.config.terminalExecutable.orEmpty()) }
     var blockedGitBranchInput by remember { mutableStateOf("") }
@@ -366,40 +357,32 @@ internal fun SettingsScreen(controller: DesktopApplication) {
         taskPath: Boolean = showTaskDetailPathActionGroup,
         workspaceGit: Boolean = showWorkspaceGitActionGroup,
         workspacePath: Boolean = showWorkspacePathActionGroup,
-        branchCopyIcons: Boolean = showTaskAreaBranchCopyIcons,
         requirementCopyIcons: Boolean = showTaskAreaRequirementCopyIcons,
-        projectNameCopyIcons: Boolean = showTaskAreaProjectNameCopyIcons,
     ) {
         val previousTaskGit = showTaskDetailGitActionGroup
         val previousTaskPath = showTaskDetailPathActionGroup
         val previousWorkspaceGit = showWorkspaceGitActionGroup
         val previousWorkspacePath = showWorkspacePathActionGroup
-        val previousBranchCopyIcons = showTaskAreaBranchCopyIcons
         val previousRequirementCopyIcons = showTaskAreaRequirementCopyIcons
-        val previousProjectNameCopyIcons = showTaskAreaProjectNameCopyIcons
         showTaskDetailGitActionGroup = taskGit
         showTaskDetailPathActionGroup = taskPath
         showWorkspaceGitActionGroup = workspaceGit
         showWorkspacePathActionGroup = workspacePath
-        showTaskAreaBranchCopyIcons = branchCopyIcons
         showTaskAreaRequirementCopyIcons = requirementCopyIcons
-        showTaskAreaProjectNameCopyIcons = projectNameCopyIcons
         controller.updateTaskAreaToolGroupVisibility(
             taskGit,
             taskPath,
             workspaceGit,
             workspacePath,
-            branchCopyIcons,
+            controller.config.showTaskAreaBranchCopyIcons,
             requirementCopyIcons,
-            projectNameCopyIcons,
+            controller.config.showTaskAreaProjectNameCopyIcons,
         ) {
             showTaskDetailGitActionGroup = previousTaskGit
             showTaskDetailPathActionGroup = previousTaskPath
             showWorkspaceGitActionGroup = previousWorkspaceGit
             showWorkspacePathActionGroup = previousWorkspacePath
-            showTaskAreaBranchCopyIcons = previousBranchCopyIcons
             showTaskAreaRequirementCopyIcons = previousRequirementCopyIcons
-            showTaskAreaProjectNameCopyIcons = previousProjectNameCopyIcons
         }
     }
     fun saveMeegleProjects() {
@@ -670,12 +653,8 @@ internal fun SettingsScreen(controller: DesktopApplication) {
                     onShowWorkspaceGitActionGroupChange = { saveTaskAreaToolGroupVisibility(workspaceGit = it) },
                     showWorkspacePathActionGroup = showWorkspacePathActionGroup,
                     onShowWorkspacePathActionGroupChange = { saveTaskAreaToolGroupVisibility(workspacePath = it) },
-                    showTaskAreaBranchCopyIcons = showTaskAreaBranchCopyIcons,
-                    onShowTaskAreaBranchCopyIconsChange = { saveTaskAreaToolGroupVisibility(branchCopyIcons = it) },
                     showTaskAreaRequirementCopyIcons = showTaskAreaRequirementCopyIcons,
                     onShowTaskAreaRequirementCopyIconsChange = { saveTaskAreaToolGroupVisibility(requirementCopyIcons = it) },
-                    showTaskAreaProjectNameCopyIcons = showTaskAreaProjectNameCopyIcons,
-                    onShowTaskAreaProjectNameCopyIconsChange = { saveTaskAreaToolGroupVisibility(projectNameCopyIcons = it) },
                     saving = saving("task-area"),
                 )
             }
@@ -721,6 +700,9 @@ internal fun SettingsScreen(controller: DesktopApplication) {
             }
             if (selectedPageKey == "codex-plugins") item {
                 SettingsCodexPluginsSection(controller)
+            }
+            if (selectedPageKey == "codex-mcp") item {
+                CodexMcpManagementSection(controller)
             }
             if (selectedPageKey == "skill-sources") item {
                 SettingsSkillSourcesSection(controller)
@@ -1388,6 +1370,14 @@ private fun SettingsBasicSection(
     saving: Boolean,
 ) {
     SettingsCard("外观") {
+        TaskAreaToolGroupSwitchRow(
+            title = "折叠工作空间导航",
+            description = "仅保留最左侧导航图标，为右侧内容腾出更多空间。更改立即生效并自动记住。",
+            checked = controller.workspaceNavigationCollapsed,
+            onCheckedChange = controller::setWorkspaceNavigationCollapsed,
+            enabled = true,
+        )
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         AutoSaveStatus(controller, "basic")
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("界面主题", style = MaterialTheme.typography.titleSmall)
@@ -1407,7 +1397,7 @@ private fun SettingsBasicSection(
 }
 
 @Composable
-private fun SettingsTagSection(
+internal fun SettingsTagSection(
     controller: DesktopApplication,
     maxGroupsInput: String,
     onMaxGroupsInputChange: (String) -> Unit,
@@ -1437,6 +1427,13 @@ private fun SettingsTagSection(
                 enabled = !controller.busy && !saving,
             )
         }
+        TaskAreaToolGroupSwitchRow(
+            title = "允许在任务详情修改测试目标分支",
+            description = "开启后，服务卡片显示“更多 → 设置测试目标分支”；修改仅影响当前任务对应模块。",
+            checked = controller.config.allowTaskTagTargetEditing,
+            onCheckedChange = { controller.setAllowTaskTagTargetEditing(it) },
+            enabled = controller.config.tagEnabled && !controller.busy && !saving,
+        )
         OutlinedTextField(
             value = maxGroupsInput,
             onValueChange = { value ->
@@ -1821,11 +1818,11 @@ private fun SettingsPathsSection(
             }
             TaskManifestIssues(controller)
         }
-        SettingsCard("需求资料目录设置") {
+        SettingsCard("任务资料目录设置") {
             AutoSaveStatus(controller, "requirement-materials-root")
             AutoSaveStatus(controller, "requirement-materials-subdirectory")
             PathField(
-                "需求资料根目录",
+                "任务资料根目录",
                 requirementMaterialsRoot,
                 onRequirementMaterialsRootChange,
                 !controller.pathPickerBusy && !controller.busy && !materialsSaving,
@@ -1854,21 +1851,21 @@ private fun SettingsPathsSection(
                         }
                     }
                 },
-                label = { Text("需求资料子目录") },
+                label = { Text("任务资料子目录") },
                 placeholder = { Text("例如：研发") },
                 supportingText = { Text("可留空；非空时只能填写一个安全的 Windows 目录名，保存时会自动去除首尾空格。") },
                 singleLine = true,
                 enabled = !controller.busy && !materialsSaving,
             )
             Text(
-                if (controller.config.requirementMaterialsConfigured) "需求资料目录功能已配置" else "根路径和子目录名均填写后才会启用需求资料目录功能",
+                if (controller.config.requirementMaterialsConfigured) "任务资料目录功能已配置" else "根路径和子目录名均填写后才会启用任务资料目录功能",
                 color = if (controller.config.requirementMaterialsConfigured) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall,
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             TaskAreaToolGroupSwitchRow(
                 title = "默认展开二级目录文件夹",
-                description = "打开需求资料目录时自动展开前两级文件夹；默认关闭。",
+                description = "打开任务资料目录时自动展开前两级文件夹；默认关闭。",
                 checked = expandRequirementMaterialsSecondLevelFolders,
                 onCheckedChange = onExpandRequirementMaterialsSecondLevelFoldersChange,
                 enabled = true,
@@ -2466,12 +2463,12 @@ private fun SettingsBranchNamingSection(
                         onSaveDefaultBranchPrefix()
                     }
                 },
-                label = { Text("默认分支名前缀") },
-                placeholder = { Text("例如 feature/zhangsan_{num}_") },
+                label = { Text("默认分支名规则") },
+                placeholder = { Text("例如 feature/{num}_{ai}") },
                 supportingText = {
                     Text(
                         branchPrefixInputError
-                            ?: "对所有项目组生效；{num} 会从需求链接或文本的最后一段数字解析，创建页仍可修改。",
+                            ?: "{num} 是需求编号，{ai} 是 AI 英文描述；没有 {ai} 时不会追加描述，创建页仍可修改。",
                     )
                 },
                 isError = branchPrefixInputError != null,
@@ -2535,7 +2532,7 @@ private fun SettingsTaskCreationSection(
                 Column(Modifier.weight(1f)) {
                     Text("开启 AI 生成分支名和文件夹名", style = MaterialTheme.typography.titleSmall)
                     Text(
-                        "选中需求后，仅将标题和正文发送给本机 Codex CLI，自动补全尚未手动修改的文件夹名和分支名。",
+                        "仅发送需求标题和正文前 50 个字符；优先复用本地缓存，补全未手动修改的名称。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -2547,54 +2544,17 @@ private fun SettingsTaskCreationSection(
                     enabled = !controller.busy && !saving,
                 )
             }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            CliCommandPanel(
-                controller = controller,
-                command = codexCommand,
-                source = codexSourceLabel(codexSource),
-                version = controller.codexCliVersion,
-                phase = codexPhase,
-                failure = controller.codexCliPathError,
-                configuredPath = controller.config.codexExecutablePath.orEmpty(),
-                discoveredPath = codexDiscoveredExecutablePath(codexCommand, codexSource),
-                pathLabel = "Codex CLI 可执行文件路径",
-                pathPlaceholder = if (System.getProperty("os.name").startsWith("Windows", true))
-                    "例如 C:\\Users\\你\\AppData\\Local\\OpenAI\\Codex\\bin\\<版本>\\codex.exe"
-                else "例如 /usr/local/bin/codex",
-                saving = saving,
-                pathSaveFailed = controller.settingsSaveState("task-creation") == SettingsSaveState.FAILED,
-                onPathChange = {},
-                onSavePath = { raw -> controller.updateCodexExecutablePath(raw) },
-                onChoosePath = { initial ->
-                    controller.chooseApplication(initial) { selected -> controller.updateCodexExecutablePath(selected) }
-                },
-                onRefresh = controller::detectCodexCliPath,
-            )
-            OutlinedTextField(
-                value = aiRequirementNamingModel,
-                onValueChange = onAiRequirementNamingModelChange,
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("AI 命名模型") },
-                placeholder = { Text(RequirementAiNamingModel.DEFAULT) },
-                supportingText = {
-                    Text(
-                        modelInputError
-                            ?: "用于生成任务文件夹名和分支名；默认 ${RequirementAiNamingModel.DEFAULT}。",
-                    )
-                },
-                isError = modelInputError != null,
-                singleLine = true,
-                enabled = !controller.busy && !saving,
-            )
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                Button(
-                    onClick = onSaveAiRequirementNamingModel,
-                    enabled = !controller.busy && !saving && modelInputError == null &&
-                        aiRequirementNamingModel != controller.config.aiRequirementNamingModel,
-                ) {
-                    Text("保存模型")
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("拉取需求列表后自动预热命名", style = MaterialTheme.typography.titleSmall)
+                    Text("提前准备本次拉到的全部需求，不受搜索和筛选影响。", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+                Switch(checked = controller.config.aiRequirementNamingPrewarmEnabled,
+                    onCheckedChange = { controller.setAiRequirementNamingPrewarmEnabled(it) },
+                    enabled = controller.config.aiRequirementNamingEnabled && !controller.busy && !saving)
             }
+            NamingPreparationControls(controller.namingCoordinator)
         }
     }
 }
@@ -2624,7 +2584,7 @@ internal fun commandProxyTargetPresentations(): List<CommandProxyTargetPresentat
     CommandProxyTargetPresentation(
         CommandProxyTarget.MEEGLE,
         "Meegle CLI",
-        "需求、项目、登录状态与需求资料查询。",
+        "需求、项目、登录状态与任务资料查询。",
     ),
     CommandProxyTargetPresentation(
         CommandProxyTarget.LARK,
@@ -2850,12 +2810,8 @@ private fun SettingsTaskAreaSection(
     onShowWorkspaceGitActionGroupChange: (Boolean) -> Unit,
     showWorkspacePathActionGroup: Boolean,
     onShowWorkspacePathActionGroupChange: (Boolean) -> Unit,
-    showTaskAreaBranchCopyIcons: Boolean,
-    onShowTaskAreaBranchCopyIconsChange: (Boolean) -> Unit,
     showTaskAreaRequirementCopyIcons: Boolean,
     onShowTaskAreaRequirementCopyIconsChange: (Boolean) -> Unit,
-    showTaskAreaProjectNameCopyIcons: Boolean,
-    onShowTaskAreaProjectNameCopyIconsChange: (Boolean) -> Unit,
     saving: Boolean,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -2894,28 +2850,15 @@ private fun SettingsTaskAreaSection(
                 enabled = !controller.busy && !saving,
             )
         }
-        SettingsCard("复制图标") {
-            TaskAreaToolGroupSwitchRow(
-                title = "分支名复制",
-                description = "显示 Worktree 卡片中分支名旁的复制图标。",
-                checked = showTaskAreaBranchCopyIcons,
-                onCheckedChange = onShowTaskAreaBranchCopyIconsChange,
-                enabled = !controller.busy && !saving,
-            )
+        SettingsCard("信息复制") {
+            Text("点击工作区卡片中的项目名或分支名即可复制。",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             TaskAreaToolGroupSwitchRow(
                 title = "需求链接和需求编号复制",
                 description = "显示需求链接与需求编号旁的复制图标。",
                 checked = showTaskAreaRequirementCopyIcons,
                 onCheckedChange = onShowTaskAreaRequirementCopyIconsChange,
-                enabled = !controller.busy && !saving,
-            )
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            TaskAreaToolGroupSwitchRow(
-                title = "项目名复制",
-                description = "显示 Worktree 卡片项目名旁的复制图标，不会复制模块名。",
-                checked = showTaskAreaProjectNameCopyIcons,
-                onCheckedChange = onShowTaskAreaProjectNameCopyIconsChange,
                 enabled = !controller.busy && !saving,
             )
         }
@@ -2947,6 +2890,7 @@ private fun TaskAreaToolGroupSwitchRow(
             checked = checked,
             onCheckedChange = onCheckedChange,
             enabled = enabled,
+            modifier = Modifier.semantics { contentDescription = title },
         )
     }
 }
@@ -3805,7 +3749,7 @@ private fun settingsCardIcon(title: String): ImageVector {
         "外观" -> Icons.Outlined.Palette
         "Tag设置" -> Icons.Outlined.Sell
         "任务路径设置" -> Icons.Outlined.Folder
-        "需求资料目录设置" -> Icons.Outlined.Folder
+        "任务资料目录设置" -> Icons.Outlined.Folder
         "配置目录" -> Icons.Outlined.Description
         "项目组" -> Icons.Outlined.Group
         "全局与组说明" -> Icons.AutoMirrored.Outlined.Article

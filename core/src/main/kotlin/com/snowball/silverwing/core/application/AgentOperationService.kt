@@ -128,8 +128,8 @@ class AgentOperationService(
         val materialsSubdirectory = config.requirementMaterialsSubdirectory
         val missing = buildList {
             if (taskRoot.isNullOrBlank()) add("任务根目录")
-            if (materialsRoot.isNullOrBlank()) add("需求资料根目录")
-            if (materialsSubdirectory.isNullOrBlank()) add("需求资料子目录")
+            if (materialsRoot.isNullOrBlank()) add("任务资料根目录")
+            if (materialsSubdirectory.isNullOrBlank()) add("任务资料子目录")
         }
         return AgentInspection(
             taskRoot = taskRoot,

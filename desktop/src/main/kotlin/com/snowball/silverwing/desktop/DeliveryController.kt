@@ -18,12 +18,14 @@ import com.snowball.silverwing.core.selectionKey
 import java.nio.file.Path
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -60,6 +62,7 @@ class DeliveryController internal constructor(
     private var historyItems by mutableStateOf(loadHistory())
     private var history by mutableStateOf(historyItems.flatMap(::operationsIn))
     private var genbuProbeJob: Job? = null
+    private var genbuRefreshJob: Job? = null
     private var genbuProbeRefreshing by mutableStateOf(false)
     private var workspaceChecks by mutableStateOf<Map<String, TagWorkspaceCheck>>(emptyMap())
     private var activeTagTargets by mutableStateOf<Set<ActiveTagTarget>>(emptySet())
@@ -71,6 +74,7 @@ class DeliveryController internal constructor(
     fun isTagBuildActive(operation: TagOperation): Boolean = operation.activeTarget() in activeTagTargets
 
     fun canBuild(task: TaskManifest, workspace: ServiceWorkspace): Boolean {
+        if (task.lifecycleStatus != com.snowball.silverwing.core.TaskLifecycleStatus.ACTIVE) return false
         val group = session.config.groups.firstOrNull { it.id == task.groupId } ?: return false
         if (!session.config.tagEnabled || !group.tagEnabled || workspace.health !in setOf(WorkspaceHealth.READY, WorkspaceHealth.READY_WITH_WARNINGS)) return false
         if (!workspace.tagEnabled) return false
@@ -123,6 +127,7 @@ class DeliveryController internal constructor(
         return operations.run(
             "正在检测 ${operation.serviceName} 工作区…",
             "工作区检测完成",
+            cancellable = true,
             block = {
                 adapter.inspectWorkspace(
                     DeliveryTarget(session.config, taskDirectory(task), "${operation.groupServiceId}:${operation.moduleId}"),
@@ -225,21 +230,25 @@ class DeliveryController internal constructor(
         block: () -> T,
         onSuccess: (T) -> Unit,
     ): Boolean {
-        activeTagTargets = activeTagTargets + targets
+        // A rejected duplicate does not own the marker of the already-running build.
+        val newlyActiveTargets = targets - activeTagTargets
+        activeTagTargets = activeTagTargets + newlyActiveTargets
+        val finished = { activeTagTargets = activeTagTargets - newlyActiveTargets }
         val started = operations.run(
             activeMessage = activeMessage,
             successMessage = successMessage,
             block = block,
-            onFailure = { activeTagTargets = activeTagTargets - targets },
+            onFailure = { finished() },
+            onCancelled = finished,
             onSuccess = { value ->
                 try {
                     onSuccess(value)
                 } finally {
-                    activeTagTargets = activeTagTargets - targets
+                    finished()
                 }
             },
         )
-        if (!started) activeTagTargets = activeTagTargets - targets
+        if (!started) finished()
         return started
     }
 
@@ -278,33 +287,57 @@ class DeliveryController internal constructor(
             genbuProbeJob = null
             return
         }
+        if (!scope.isActive) return
         if (genbuProbeJob?.isActive == true) return
-        genbuProbeJob = scope.launch {
+        val job = scope.launch(start = CoroutineStart.LAZY) {
             while (isActive) {
                 runGenbuProbe(force = false)
                 delay(GENBU_PROBE_INTERVAL_MILLIS)
             }
         }
+        genbuProbeJob = job
+        job.invokeOnCompletion { if (genbuProbeJob === job) genbuProbeJob = null }
+        job.start()
     }
 
     fun refreshGenbuTagProbes(): Boolean {
-        if (genbuProbeRefreshing) return false
-        scope.launch {
-            genbuProbeRefreshing = true
+        if (!scope.isActive || genbuProbeRefreshing) return false
+        genbuProbeRefreshing = true
+        val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 runGenbuProbe(force = true)
             } finally {
+                if (genbuRefreshJob === coroutineContext[Job]) {
+                    genbuRefreshJob = null
+                    genbuProbeRefreshing = false
+                }
+            }
+        }
+        genbuRefreshJob = job
+        job.invokeOnCompletion {
+            if (genbuRefreshJob === job) {
+                genbuRefreshJob = null
                 genbuProbeRefreshing = false
             }
         }
+        job.start()
         return true
     }
 
     private suspend fun runGenbuProbe(force: Boolean) {
         val changed = genbuProbeMutex.withLock {
-            runCatching {
-                withContext(ioDispatcher) { genbuTagProbes.probe(session.config, session.tasks, force) }
-            }.getOrDefault(false)
+            val config = session.config
+            val tasks = session.tasks
+            try {
+                runInterruptible(ioDispatcher) { genbuTagProbes.probe(config, tasks, force) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (interrupted: InterruptedException) {
+                throw CancellationException("Genbu 探测已取消", interrupted)
+            } catch (error: Throwable) {
+                runCatching { onError(error) }
+                false
+            }
         }
         if (changed) reloadHistory()
     }

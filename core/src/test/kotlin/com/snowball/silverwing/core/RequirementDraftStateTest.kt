@@ -35,15 +35,15 @@ class RequirementDraftStateTest {
         val link = "https://project.feishu.cn/obt/userstory/detail/2"
         val suggested = RequirementAiNamingSuggestion("支付超时优化", "payment_timeout")
         val applied = RequirementDraftState()
-            .changeRequirement(link, "feature/{num}_")
-            .applyAiNaming(link, suggested, "feature/{num}_")
+            .changeRequirement(link, "feature/{num}_{ai}")
+            .applyAiNaming(link, suggested, "feature/{num}_{ai}")
 
         assertEquals("支付超时优化", applied.taskName)
         assertEquals("feature/2_payment_timeout", applied.branch)
-        assertEquals("bug/2/payment_timeout", applied.changeGroup("bug/{num}/").branch)
+        assertEquals("bug/2/payment_timeout", applied.changeGroup("bug/{num}/{ai}").branch)
 
         val manual = applied.editName("人工名称").editBranch("feature/manual")
-            .applyAiNaming(link, RequirementAiNamingSuggestion("新名称", "new_name"), "feature/{num}_")
+            .applyAiNaming(link, RequirementAiNamingSuggestion("新名称", "new_name"), "feature/{num}_{ai}")
         assertEquals("人工名称", manual.taskName)
         assertEquals("feature/manual", manual.branch)
     }

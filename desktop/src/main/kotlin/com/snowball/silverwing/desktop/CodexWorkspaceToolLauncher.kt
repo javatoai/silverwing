@@ -55,6 +55,11 @@ class CodexWorkspaceToolLauncher(
         uriOpener.open(URI.create("codex://threads/new?path=$encoded"))
     }
 
+    fun openThread(threadId: String) {
+        val id = java.util.UUID.fromString(threadId)
+        uriOpener.open(URI.create("codex://threads/$id"))
+    }
+
     companion object {
         const val ID = "codex"
     }

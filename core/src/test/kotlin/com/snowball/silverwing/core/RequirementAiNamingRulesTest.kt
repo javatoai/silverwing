@@ -14,7 +14,7 @@ class RequirementAiNamingRulesTest {
 
         RequirementAiNamingRules.requireValid(suggestion)
 
-        assertEquals("feature/123_payment_timeout", RequirementAiNamingRules.composeBranch("feature/123_", suggestion.branchSuffix))
+        assertEquals("feature/123_payment_timeout", RequirementAiNamingRules.composeBranch("feature/123_{ai}", suggestion.branchSuffix))
     }
 
     @Test

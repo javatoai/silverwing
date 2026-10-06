@@ -1,6 +1,10 @@
 package com.snowball.silverwing.desktop
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -13,6 +17,57 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class OperationRunnerTest {
+    @Test fun `inline failure releases busy state and records the error without global feedback`() = runTest {
+        val recorded = mutableListOf<Throwable>()
+        val inline = mutableListOf<Throwable>()
+        val coordinator = OperationCoordinator(onError = recorded::add)
+        val runner = OperationRunner(coordinator, this, StandardTestDispatcher(testScheduler))
+        assertTrue(runner.run("保存中", "已保存", block = { error("远程不可用") },
+            onFailure = inline::add, showErrorFeedback = false))
+        testScheduler.advanceUntilIdle()
+        assertFalse(coordinator.busy)
+        assertEquals(null, coordinator.errorMessage)
+        assertEquals(null, coordinator.statusMessage)
+        assertEquals(listOf("远程不可用"), inline.map { it.message })
+        assertEquals(inline, recorded)
+    }
+
+    @Test fun `a broken inline failure callback still reports diagnostics and releases busy state`() = runTest {
+        val coordinator = OperationCoordinator()
+        val runner = OperationRunner(coordinator, this, StandardTestDispatcher(testScheduler))
+        assertTrue(runner.run("保存中", "已保存", block = { error("执行失败") },
+            onFailure = { error("行内反馈失败") }, showErrorFeedback = false))
+        testScheduler.advanceUntilIdle()
+        assertFalse(coordinator.busy)
+        assertTrue(coordinator.errorMessage.orEmpty().contains("行内反馈失败"))
+    }
+
+    @Test fun `immediate completion cannot leave a finished job as the active cancellation target`() = runBlocking {
+        val coordinator = OperationCoordinator()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val runner = OperationRunner(coordinator, scope, Dispatchers.Unconfined)
+        try {
+            assertTrue(runner.run("立即完成", "完成", block = { 1 }))
+            assertFalse(coordinator.busy)
+            assertFalse(runner.cancel())
+            var cancelled = false
+            assertTrue(runner.run("立即取消", "不应完成", cancellable = true, block = {
+                scope.cancel(); 1
+            }, onCancelled = { cancelled = true }))
+            assertFalse(coordinator.busy)
+            assertTrue(cancelled)
+        } finally { scope.cancel() }
+    }
+
+    @Test fun `cancellation callback failures cannot leave the operation busy`() = runTest {
+        val coordinator = OperationCoordinator()
+        val runner = OperationRunner(coordinator, this, StandardTestDispatcher(testScheduler))
+        assertTrue(runner.run("准备执行", "不应完成", cancellable = true, block = { 1 }, onCancelled = { error("取消回调失败") }))
+        assertTrue(runner.cancel())
+        testScheduler.advanceUntilIdle()
+        assertFalse(coordinator.busy)
+        assertEquals("取消回调失败", coordinator.errorMessage)
+    }
     @Test
     fun `failure details include cause and suppressed errors`() {
         val cause = IllegalStateException("git stderr")

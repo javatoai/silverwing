@@ -20,6 +20,7 @@ import androidx.compose.material.icons.outlined.Commit
 import androidx.compose.material.icons.outlined.Publish
 import androidx.compose.material.icons.outlined.Workspaces
 import androidx.compose.material3.Button
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -34,7 +35,11 @@ import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -86,12 +91,15 @@ internal fun ActionIconButton(
     loading: Boolean = false,
     content: @Composable () -> Unit,
 ) {
+    val tooltipState = rememberTooltipState()
     TooltipBox(
         positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
-        tooltip = { PlainTooltip { Text(label) } },
-        state = rememberTooltipState(),
+        // Remove dismissed content immediately: a fading popup can cover the next desktop action.
+        tooltip = { if (tooltipState.isVisible) PlainTooltip { Text(label) } },
+        state = tooltipState,
+        focusable = false,
     ) {
-        IconButton(onClick = onClick, modifier = modifier, enabled = enabled && !loading) {
+        IconButton(onClick = { tooltipState.dismiss(); onClick() }, modifier = modifier.semantics { contentDescription = label }, enabled = enabled && !loading) {
             if (loading) {
                 CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
             } else {
@@ -159,6 +167,7 @@ internal fun GitActionIconGroup(
     onCommit: () -> Unit,
     onCommitAndPush: () -> Unit,
     onPush: () -> Unit,
+    trailingActions: @Composable () -> Unit = {},
 ) {
     IconActionGroup {
         ActionIconButton("提交 $scopeLabel", onCommit, Modifier.size(34.dp), enabled, loading) {
@@ -170,6 +179,7 @@ internal fun GitActionIconGroup(
         ActionIconButton("推送 $scopeLabel", onPush, Modifier.size(34.dp), enabled, loading) {
             Icon(Icons.Outlined.CloudUpload, "推送", Modifier.size(18.dp))
         }
+        trailingActions()
     }
 }
 
@@ -202,40 +212,52 @@ private fun statusLabel(status: String): String = when (status) {
     else -> status
 }
 
-private enum class RequirementStatusCategory { PLANNING, DEVELOPMENT, TESTING, DONE, PAUSED, UNKNOWN }
+internal enum class RequirementStatusCategory { REVIEW, PLANNING, DEVELOPMENT, TESTING, DONE, PAUSED, UNKNOWN }
 
-private fun requirementStatusCategory(status: String): RequirementStatusCategory {
+/** 先识别仍在处理的阶段及否定词，避免“未完成”或“开发完成，待测试”被标为完成。 */
+internal fun requirementStatusCategory(status: String): RequirementStatusCategory {
     val normalized = status.trim().lowercase()
-    fun matches(vararg values: String) = values.any { it.lowercase() in normalized }
+    fun matches(vararg values: String) = values.any { it in normalized }
     return when {
-        matches("已完成", "已验收", "已发布", "已关闭", "done", "closed", "resolved", "完成") -> RequirementStatusCategory.DONE
         matches("已取消", "取消", "暂停", "挂起", "拒绝", "不做", "终止") -> RequirementStatusCategory.PAUSED
+        matches("评审", "待确认") -> RequirementStatusCategory.REVIEW
         matches("提测", "待测试", "测试中", "验收中", "待验收") -> RequirementStatusCategory.TESTING
-        matches("开发中", "研发中", "进行中", "实现中", "编码中") -> RequirementStatusCategory.DEVELOPMENT
+        matches("开发中", "研发中", "进行中", "实现中", "编码中") || normalized in setOf("开发", "研发") -> RequirementStatusCategory.DEVELOPMENT
         matches("待排期", "排期中", "规划中", "待开始", "未开始", "待开发") -> RequirementStatusCategory.PLANNING
+        matches("未完成", "未验收", "未发布", "未关闭", "not done", "not completed", "not resolved", "unresolved", "incomplete", "unfinished", "undone") -> RequirementStatusCategory.UNKNOWN
+        matches("已完成", "已验收", "已发布", "已关闭") || normalized.endsWith("完成") ||
+            Regex("\\b(done|closed|resolved|completed)\\b").containsMatchIn(normalized) -> RequirementStatusCategory.DONE
         else -> RequirementStatusCategory.UNKNOWN
     }
 }
 
-@Composable
-internal fun RequirementStatusPill(status: String) {
-    val color = when (requirementStatusCategory(status)) {
-        RequirementStatusCategory.PLANNING -> MaterialTheme.colorScheme.primary
-        RequirementStatusCategory.DEVELOPMENT -> MaterialTheme.colorScheme.tertiary
-        RequirementStatusCategory.TESTING -> WarningAmber
-        RequirementStatusCategory.DONE -> SuccessGreen
-        RequirementStatusCategory.PAUSED, RequirementStatusCategory.UNKNOWN -> MaterialTheme.colorScheme.onSurfaceVariant
+/** 小字号状态文字使用随主题调整的深浅色，浅色背景下不用低对比度的亮橙、亮绿。 */
+internal fun ColorScheme.requirementStatusColor(status: String): Color {
+    val dark = surface.luminance() < 0.5f
+    return when (requirementStatusCategory(status)) {
+        RequirementStatusCategory.PLANNING -> if (dark) primary else BrandBlueDark
+        RequirementStatusCategory.DEVELOPMENT -> if (dark) tertiary else Color(0xFF5D469F)
+        RequirementStatusCategory.REVIEW, RequirementStatusCategory.TESTING -> if (dark) Color(0xFFFBBF24) else Color(0xFF92400E)
+        RequirementStatusCategory.DONE -> if (dark) Color(0xFF4ADE80) else Color(0xFF166534)
+        RequirementStatusCategory.PAUSED, RequirementStatusCategory.UNKNOWN -> onSurfaceVariant
     }
-    Surface(color = color.copy(alpha = 0.12f), shape = RoundedCornerShape(50), border = BorderStroke(1.dp, color.copy(alpha = 0.18f))) {
-        Text(
-            status,
-            Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-            color = color,
-            style = MaterialTheme.typography.labelSmall,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            softWrap = false,
-        )
+}
+
+internal fun ColorScheme.requirementFailureColor(): Color =
+    if (surface.luminance() < 0.5f) error else Color(0xFFB91C1C)
+
+@Composable
+internal fun RequirementStatusPill(status: String) = ColoredRequirementPill(status, MaterialTheme.colorScheme.requirementStatusColor(status))
+
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun ColoredRequirementPill(text: String, color: Color) {
+    TooltipBox(positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
+        tooltip = { PlainTooltip { Text(text) } }, state = rememberTooltipState()) {
+        Surface(color = color.copy(alpha = 0.12f), shape = RoundedCornerShape(50), border = BorderStroke(1.dp, color.copy(alpha = 0.18f))) {
+            Text(text, Modifier.padding(horizontal = 8.dp, vertical = 3.dp), color = color,
+                style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false)
+        }
     }
 }
 
@@ -244,10 +266,8 @@ internal fun RequirementStatePill(state: RequirementUiState) {
     when (state) {
         RequirementUiState.NotLoaded -> NeutralRequirementPill("未读取")
         RequirementUiState.Loading -> NeutralRequirementPill("读取中")
-        RequirementUiState.Failed -> NeutralRequirementPill("读取失败")
-        is RequirementUiState.Loaded -> state.metadata.status
-            ?.takeIf(String::isNotBlank)
-            ?.let { RequirementStatusPill(it) }
+        RequirementUiState.Failed -> ColoredRequirementPill("读取失败", MaterialTheme.colorScheme.requirementFailureColor())
+        is RequirementUiState.Loaded -> state.metadata.status?.takeIf(String::isNotBlank)?.let { RequirementStatusPill(it) }
             ?: NeutralRequirementPill("未读取")
     }
 }
@@ -255,20 +275,10 @@ internal fun RequirementStatePill(state: RequirementUiState) {
 @Composable
 private fun NeutralRequirementPill(text: String) {
     val color = MaterialTheme.colorScheme.onSurfaceVariant
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = RoundedCornerShape(50),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-    ) {
-        Text(
-            text,
-            Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-            color = color,
-            style = MaterialTheme.typography.labelSmall,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            softWrap = false,
-        )
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(50),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+        Text(text, Modifier.padding(horizontal = 8.dp, vertical = 3.dp), color = color,
+            style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false)
     }
 }
 

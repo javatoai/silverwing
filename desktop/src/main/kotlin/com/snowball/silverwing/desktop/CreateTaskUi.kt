@@ -83,6 +83,9 @@ internal fun taskInformationLayout(): TaskInformationLayout = TaskInformationLay
 
 internal fun taskNameSupportingMessage(error: String?): String? = error
 
+internal fun canRequestDraftAiNaming(selectedLink: String?, draft: RequirementDraftState, enabled: Boolean): Boolean =
+    enabled && selectedLink != null && selectedLink == draft.requirementLink
+
 /** 显示短暂的本机 Codex 工作状态，不与表单字段争夺视觉层级。 */
 @Composable
 private fun AiNamingStatusRow(message: String, loading: Boolean = false) {
@@ -155,7 +158,7 @@ internal fun CreateTaskDialog(
     var aiSelectedRequirementLink by remember { mutableStateOf(initialRequirement?.url) }
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
     var selectedToolIds by remember { mutableStateOf(initialDefaultToolIds) }
-    var rightTab by remember { mutableStateOf("notes") }
+    var rightTab by remember { mutableStateOf("preview") }
     var requirementMenuExpanded by remember { mutableStateOf(false) }
     var requirementSearch by remember { mutableStateOf("") }
     var serviceSearch by remember(groupId) { mutableStateOf("") }
@@ -177,12 +180,13 @@ internal fun CreateTaskDialog(
         draft = updated
         if (branchChanged) retargetSelectedServiceBranches(updated.branch)
     }
-    fun requestAiNaming(link: String) {
+    fun requestAiNaming(link: String, force: Boolean = false) {
         val branchPrefix = controller.config.defaultBranchPrefix
         controller.requestRequirementAiNaming(
             link = link,
             branchPrefix = branchPrefix,
             enabled = controller.config.aiRequirementNamingEnabled,
+            force = force,
         ) { suggestion ->
             // applyAiNaming 会再次核对当前需求及两个手工编辑标记，迟到结果不会覆盖用户修改
             // 或另一个已选需求。
@@ -401,7 +405,11 @@ internal fun CreateTaskDialog(
                             }
                         }
                         when (val aiNamingState = controller.requirementAiNamingState) {
-                            RequirementAiNamingUiState.Idle -> Unit
+                            RequirementAiNamingUiState.Idle -> {
+                                if (canRequestDraftAiNaming(aiSelectedRequirementLink, draft, controller.config.aiRequirementNamingEnabled)) {
+                                    TextButton(onClick = { requestAiNaming(requireNotNull(aiSelectedRequirementLink)) }) { Text("生成名称") }
+                                }
+                            }
                             RequirementAiNamingUiState.LoadingContext -> AiNamingStatusRow(
                                 message = "正在读取需求正文…",
                                 loading = true,
@@ -419,14 +427,14 @@ internal fun CreateTaskDialog(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
                                 Text(
-                                    "已生成文件夹名和分支名",
+                                    if (aiNamingState.cached) "已使用本地命名缓存" else "已生成文件夹名和分支名",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.weight(1f),
                                 )
                                 val selectedLink = aiSelectedRequirementLink
                                 if (controller.config.aiRequirementNamingEnabled && selectedLink == draft.requirementLink) {
-                                    TextButton(onClick = { requestAiNaming(selectedLink) }) { Text("重新生成") }
+                                    TextButton(onClick = { requestAiNaming(selectedLink, force = true) }) { Text("重新生成") }
                                 }
                             }
                             is RequirementAiNamingUiState.Failed -> Row(
@@ -441,7 +449,7 @@ internal fun CreateTaskDialog(
                                 )
                                 val selectedLink = aiSelectedRequirementLink
                                 if (controller.config.aiRequirementNamingEnabled && selectedLink == draft.requirementLink) {
-                                    TextButton(onClick = { requestAiNaming(selectedLink) }) { Text("重新生成") }
+                                    TextButton(onClick = { requestAiNaming(selectedLink, force = true) }) { Text("重新生成") }
                                 }
                             }
                         }
@@ -462,7 +470,7 @@ internal fun CreateTaskDialog(
                             RequirementMaterialsPreviewState.Loading -> Row(verticalAlignment = Alignment.CenterVertically) {
                                 CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                                 Spacer(Modifier.width(8.dp))
-                                Text("正在预检需求资料目录…", style = MaterialTheme.typography.bodySmall)
+                                Text("正在预检任务资料目录…", style = MaterialTheme.typography.bodySmall)
                             }
                             is RequirementMaterialsPreviewState.Ready -> {
                                 val status = if (state.status == RequirementMaterialsResult.Ready.Status.REUSED) {
@@ -471,14 +479,14 @@ internal fun CreateTaskDialog(
                                     "预计新建"
                                 }
                                 Column(verticalArrangement = Arrangement.spacedBy(informationLayout.materialsLineSpacingDp.dp)) {
-                                    Text("需求资料目录：$status", style = MaterialTheme.typography.bodySmall)
+                                    Text("任务资料目录：$status", style = MaterialTheme.typography.bodySmall)
                                     SelectionContainer {
                                         Text(state.path, style = MaterialTheme.typography.bodySmall)
                                     }
                                 }
                             }
                             is RequirementMaterialsPreviewState.Failed -> Text(
-                                "需求资料目录预检失败（不影响创建）：${state.reason}",
+                                "任务资料目录预检失败（不影响创建）：${state.reason}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.error,
                             )
@@ -654,9 +662,9 @@ internal fun CreateTaskDialog(
                     }
                     Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            FilterChip(rightTab == "notes", { rightTab = "notes" }, label = { Text("任务人工说明") })
-                            Spacer(Modifier.width(8.dp))
                             FilterChip(rightTab == "preview", { rightTab = "preview" }, label = { Text("Agent 文件预览") })
+                            Spacer(Modifier.width(8.dp))
+                            FilterChip(rightTab == "notes", { rightTab = "notes" }, label = { Text("任务人工说明") })
                             Spacer(Modifier.weight(1f))
                             if (rightTab == "preview") MetaPill("实时更新")
                         }
@@ -754,7 +762,7 @@ internal fun CreateTaskDialog(
                         Text(
                             when {
                                 selected.isEmpty() -> "请选择至少一个服务"
-                                unresolvedBranch -> "分支中仍有未解析的 {num}"
+                                unresolvedBranch -> "分支规则尚未完成：请解析编号、等待 AI，或手动填写完整分支名"
                                 else -> "将创建 ${selected.size} 个服务入口"
                             },
                             Modifier.weight(1f),
@@ -765,6 +773,7 @@ internal fun CreateTaskDialog(
                         Spacer(Modifier.width(8.dp))
                         Button(
                             onClick = {
+                                controller.cancelRequirementAiNaming()
                                 val submission = CreateTaskSubmissionSnapshot(
                                     request = CreateGroupedTaskRequest(
                                         folderName = draft.taskName,

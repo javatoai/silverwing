@@ -13,6 +13,15 @@ import com.snowball.silverwing.core.CodexPluginMarketplaceSource
 import com.snowball.silverwing.core.ExternalSkillCatalogItem
 import com.snowball.silverwing.core.SkillSource
 import java.nio.file.Path
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
+
+internal sealed interface ExtensionSourceSaveState {
+    data object Idle : ExtensionSourceSaveState
+    data object Saving : ExtensionSourceSaveState
+    data object Saved : ExtensionSourceSaveState
+    data class Failed(val message: String) : ExtensionSourceSaveState
+}
 
 internal data class CodexExtensionsUiState(
     val snapshot: CodexExtensionsSnapshot,
@@ -48,6 +57,10 @@ internal class CodexExtensionsController(
     private val operations: OperationRunner,
     private val applyConfig: (AppConfig) -> Unit,
 ) {
+    private enum class ReadKind { BRANCHES, PLUGIN, PLUGIN_SKILL, SKILL }
+    private var readSerial = 0L
+    private val readRequests = mutableMapOf<ReadKind, Long>()
+    private val readJobs = mutableMapOf<ReadKind, Job>()
     var state by mutableStateOf(CodexExtensionsUiState(cachedSnapshot()))
         private set
 
@@ -56,18 +69,18 @@ internal class CodexExtensionsController(
     }
 
     fun loadRemoteBranches(repositoryUrl: String, onResult: (RemoteBranchLoadState) -> Unit): Boolean {
-        onResult(RemoteBranchLoadState.Loading)
-        return operations.run(
-            activeMessage = "正在读取远程分支…",
-            successMessage = "远程分支已加载",
-            cancellable = true,
+        return read(ReadKind.BRANCHES,
+            onLoading = { onResult(RemoteBranchLoadState.Loading) },
             block = { extensions.loadRemoteBranches(repositoryUrl) },
             onSuccess = { onResult(RemoteBranchLoadState.Loaded(it)) },
             onFailure = { error -> onResult(RemoteBranchLoadState.Failed(error.message ?: "远程分支读取失败")) },
+            onCancelled = { onResult(RemoteBranchLoadState.Failed("远程分支读取已取消，可重新读取")) },
         )
     }
 
-    fun addMarketplace(source: CodexPluginMarketplaceSource): Boolean = operations.run(
+    fun addMarketplace(source: CodexPluginMarketplaceSource, onResult: (ExtensionSourceSaveState) -> Unit = {}): Boolean {
+        onResult(ExtensionSourceSaveState.Saving)
+        return operations.run(
         activeMessage = "正在添加 Codex 插件来源…",
         successMessage = "插件来源已保存",
         cancellable = true,
@@ -75,9 +88,12 @@ internal class CodexExtensionsController(
         onSuccess = { config ->
             applyConfig(config)
             refreshCached()
+            onResult(ExtensionSourceSaveState.Saved)
         },
-        onFailure = { refreshCached() },
+        onFailure = { error -> sourceSaveEnded(onResult, error) { config -> config.codexPluginMarketplaceSources.any { it.id == source.id } } },
+        onCancelled = { sourceSaveEnded(onResult, null) { config -> config.codexPluginMarketplaceSources.any { it.id == source.id } } },
     )
+    }
 
     fun refreshMarketplace(source: CodexPluginMarketplaceSource): Boolean = operations.run(
         activeMessage = "正在刷新 Codex 插件来源…",
@@ -85,7 +101,8 @@ internal class CodexExtensionsController(
         cancellable = true,
         block = { extensions.refreshMarketplace(source) },
         onSuccess = { refreshCached() },
-        onFailure = { refreshCached() },
+        onFailure = ::refreshAfterFailure,
+        onCancelled = ::refreshCached,
     )
 
     fun removeMarketplace(source: CodexPluginMarketplaceSource): Boolean = operations.run(
@@ -97,7 +114,8 @@ internal class CodexExtensionsController(
             applyConfig(it)
             refreshCached()
         },
-        onFailure = { refreshCached() },
+        onFailure = ::refreshAfterFailure,
+        onCancelled = { applyConfig(extensions.configurationSnapshot()); refreshCached() },
     )
 
     fun pluginOwnership(sourceId: String, plugin: CodexPluginCatalogItem): CodexExtensionOwnership =
@@ -109,7 +127,8 @@ internal class CodexExtensionsController(
         cancellable = true,
         block = { extensions.installPlugin(source, plugin.name, takeOver) },
         onSuccess = { refreshCached() },
-        onFailure = { refreshCached() },
+        onFailure = ::refreshAfterFailure,
+        onCancelled = ::refreshCached,
     )
 
     fun uninstallPlugin(source: CodexPluginMarketplaceSource, plugin: CodexPluginCatalogItem): Boolean = operations.run(
@@ -118,37 +137,36 @@ internal class CodexExtensionsController(
         cancellable = true,
         block = { extensions.uninstallPlugin(source, plugin.name) },
         onSuccess = { refreshCached() },
-        onFailure = { refreshCached() },
+        onFailure = ::refreshAfterFailure,
+        onCancelled = ::refreshCached,
     )
 
     fun previewPlugin(source: CodexPluginMarketplaceSource, plugin: CodexPluginCatalogItem, onResult: (PluginPreviewState) -> Unit): Boolean {
-        onResult(PluginPreviewState.Loading)
-        return operations.run(
-            activeMessage = "正在读取 ${plugin.name}…",
-            successMessage = "插件概览已加载",
-            cancellable = true,
+        return read(ReadKind.PLUGIN,
+            onLoading = { onResult(PluginPreviewState.Loading) },
             block = { extensions.previewPlugin(source, plugin.name) },
             onSuccess = { onResult(PluginPreviewState.Loaded(it)) },
             onFailure = { error -> onResult(PluginPreviewState.Failed(error.message ?: "插件概览读取失败")) },
+            onCancelled = { onResult(PluginPreviewState.Failed("插件概览读取已取消，可重试")) },
         )
     }
 
     fun previewPluginSkill(source: CodexPluginMarketplaceSource, plugin: CodexPluginCatalogItem, skillName: String, onResult: (SkillPreviewState) -> Unit): Boolean {
-        onResult(SkillPreviewState.Loading)
-        return operations.run(
-            activeMessage = "正在读取 $skillName…",
-            successMessage = "内置 Skill 文档已加载",
-            cancellable = true,
+        return read(ReadKind.PLUGIN_SKILL,
+            onLoading = { onResult(SkillPreviewState.Loading) },
             block = { extensions.previewPluginSkill(source, plugin.name, skillName) },
             onSuccess = { onResult(SkillPreviewState.Loaded(it)) },
             onFailure = { error -> onResult(SkillPreviewState.Failed(error.message ?: "内置 Skill 文档读取失败")) },
+            onCancelled = { onResult(SkillPreviewState.Failed("内置 Skill 文档读取已取消，可重试")) },
         )
     }
 
     fun previewPluginSkillPath(source: CodexPluginMarketplaceSource, plugin: CodexPluginCatalogItem, skillName: String): Path =
         extensions.previewPluginSkillPath(source, plugin.name, skillName)
 
-    fun addSkillSource(source: SkillSource): Boolean = operations.run(
+    fun addSkillSource(source: SkillSource, onResult: (ExtensionSourceSaveState) -> Unit = {}): Boolean {
+        onResult(ExtensionSourceSaveState.Saving)
+        return operations.run(
         activeMessage = "正在添加 Skill 来源…",
         successMessage = "Skill 来源已保存",
         cancellable = true,
@@ -156,9 +174,12 @@ internal class CodexExtensionsController(
         onSuccess = { config ->
             applyConfig(config)
             refreshCached()
+            onResult(ExtensionSourceSaveState.Saved)
         },
-        onFailure = { refreshCached() },
+        onFailure = { error -> sourceSaveEnded(onResult, error) { config -> config.skillSources.any { it.id == source.id } } },
+        onCancelled = { sourceSaveEnded(onResult, null) { config -> config.skillSources.any { it.id == source.id } } },
     )
+    }
 
     fun refreshSkillSource(source: SkillSource): Boolean = operations.run(
         activeMessage = "正在刷新 Skill 来源…",
@@ -166,7 +187,8 @@ internal class CodexExtensionsController(
         cancellable = true,
         block = { extensions.refreshSkillSource(source) },
         onSuccess = { refreshCached() },
-        onFailure = { refreshCached() },
+        onFailure = ::refreshAfterFailure,
+        onCancelled = ::refreshCached,
     )
 
     fun removeSkillSource(source: SkillSource): Boolean = operations.run(
@@ -178,21 +200,20 @@ internal class CodexExtensionsController(
             applyConfig(it)
             refreshCached()
         },
-        onFailure = { refreshCached() },
+        onFailure = ::refreshAfterFailure,
+        onCancelled = { applyConfig(extensions.configurationSnapshot()); refreshCached() },
     )
 
     fun skillOwnership(sourceId: String, skill: ExternalSkillCatalogItem): CodexExtensionOwnership =
         extensions.skillOwnership(sourceId, skill.name)
 
     fun previewSkill(source: SkillSource, skill: ExternalSkillCatalogItem, onResult: (SkillPreviewState) -> Unit): Boolean {
-        onResult(SkillPreviewState.Loading)
-        return operations.run(
-            activeMessage = "正在读取 ${skill.name}…",
-            successMessage = "Skill 文档已加载",
-            cancellable = true,
+        return read(ReadKind.SKILL,
+            onLoading = { onResult(SkillPreviewState.Loading) },
             block = { extensions.previewSkill(source, skill.name) },
             onSuccess = { onResult(SkillPreviewState.Loaded(it)) },
             onFailure = { error -> onResult(SkillPreviewState.Failed(error.message ?: "Skill 文档读取失败")) },
+            onCancelled = { onResult(SkillPreviewState.Failed("Skill 文档读取已取消，可重试")) },
         )
     }
 
@@ -205,7 +226,8 @@ internal class CodexExtensionsController(
         cancellable = true,
         block = { extensions.installSkill(source, skill.name, takeOver) },
         onSuccess = { refreshCached() },
-        onFailure = { refreshCached() },
+        onFailure = ::refreshAfterFailure,
+        onCancelled = ::refreshCached,
     )
 
     fun updateSkill(source: SkillSource, skill: ExternalSkillCatalogItem): Boolean = operations.run(
@@ -214,7 +236,8 @@ internal class CodexExtensionsController(
         cancellable = true,
         block = { extensions.installSkill(source, skill.name, takeOver = false) },
         onSuccess = { refreshCached() },
-        onFailure = { refreshCached() },
+        onFailure = ::refreshAfterFailure,
+        onCancelled = ::refreshCached,
     )
 
     fun uninstallSkill(source: SkillSource, skill: ExternalSkillCatalogItem): Boolean = operations.run(
@@ -223,8 +246,61 @@ internal class CodexExtensionsController(
         cancellable = true,
         block = { extensions.uninstallSkill(source, skill.name) },
         onSuccess = { refreshCached() },
-        onFailure = { refreshCached() },
+        onFailure = ::refreshAfterFailure,
+        onCancelled = ::refreshCached,
     )
 
     private fun cachedSnapshot(): CodexExtensionsSnapshot = extensions.snapshot()
+
+    fun cancelRemoteBranches() = cancelRead(ReadKind.BRANCHES)
+    fun cancelPluginPreview() = cancelRead(ReadKind.PLUGIN)
+    fun cancelPluginSkillPreview() = cancelRead(ReadKind.PLUGIN_SKILL)
+    fun cancelSkillPreview() = cancelRead(ReadKind.SKILL)
+    fun cancelSourceSave(): Boolean = operations.cancel()
+
+    private fun cancelRead(kind: ReadKind) {
+        readRequests[kind] = ++readSerial
+        readJobs.remove(kind)?.cancel()
+    }
+
+    private fun <T> read(kind: ReadKind, onLoading: () -> Unit, block: () -> T,
+        onSuccess: (T) -> Unit, onFailure: (Throwable) -> Unit, onCancelled: () -> Unit): Boolean {
+        cancelRead(kind)
+        val request = readRequests.getValue(kind)
+        onLoading()
+        var delivered = false
+        val job = operations.read(block,
+            onSuccess = { delivered = true; if (readRequests[kind] == request) onSuccess(it) },
+            onFailure = { delivered = true; if (readRequests[kind] == request) onFailure(it) },
+            onCancelled = { delivered = true; if (readRequests[kind] == request) onCancelled() })
+        readJobs[kind] = job
+        job.invokeOnCompletion { cause ->
+            if (!delivered && cause is CancellationException && readRequests[kind] == request) { delivered = true; onCancelled() }
+            if (readJobs[kind] === job) readJobs.remove(kind)
+        }
+        val started = job.start()
+        return started
+    }
+
+    private fun refreshAfterFailure(error: Throwable) {
+        // Rejection runs synchronously while the accepted operation may hold the service lock.
+        if (error !is OperationBusyException) refreshCached()
+    }
+
+    private fun sourceSaveEnded(onResult: (ExtensionSourceSaveState) -> Unit, error: Throwable?, contains: (AppConfig) -> Boolean) {
+        if (error is OperationBusyException) {
+            onResult(ExtensionSourceSaveState.Failed(error.message.orEmpty()))
+            return
+        }
+        val config = try {
+            extensions.configurationSnapshot().also { applyConfig(it); refreshCached() }
+        } catch (recoveryError: Throwable) {
+            onResult(ExtensionSourceSaveState.Failed("无法确认来源保存状态：${recoveryError.message.orEmpty().ifBlank { "读取配置失败" }}；输入已保留"))
+            throw recoveryError
+        }
+        if (contains(config)) onResult(ExtensionSourceSaveState.Saved)
+        else onResult(ExtensionSourceSaveState.Failed(error?.message.orEmpty().ifBlank {
+            if (error == null) "保存已取消，输入已保留" else "来源保存失败，输入已保留"
+        }))
+    }
 }

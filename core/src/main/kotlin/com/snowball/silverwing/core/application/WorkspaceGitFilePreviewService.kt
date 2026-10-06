@@ -20,8 +20,10 @@ enum class WorkspaceFileLanguage {
     JSON,
     YAML,
     SQL,
+    PYTHON,
     SHELL,
     POWERSHELL,
+    BATCH,
     MARKDOWN,
     PLAIN_TEXT,
     ;
@@ -41,8 +43,10 @@ enum class WorkspaceFileLanguage {
                 normalized.endsWith(".json") -> JSON
                 normalized.endsWith(".yaml") || normalized.endsWith(".yml") -> YAML
                 normalized.endsWith(".sql") -> SQL
-                normalized.endsWith(".ps1") || normalized.endsWith(".psm1") -> POWERSHELL
-                normalized.endsWith(".sh") || normalized.endsWith(".bash") || normalized.endsWith(".zsh") || normalized.endsWith(".bat") || normalized.endsWith(".cmd") -> SHELL
+                normalized.endsWith(".py") || normalized.endsWith(".pyw") || normalized.endsWith(".pyi") -> PYTHON
+                normalized.endsWith(".ps1") || normalized.endsWith(".psm1") || normalized.endsWith(".psd1") -> POWERSHELL
+                normalized.endsWith(".bat") || normalized.endsWith(".cmd") -> BATCH
+                normalized.endsWith(".sh") || normalized.endsWith(".bash") || normalized.endsWith(".zsh") -> SHELL
                 normalized.endsWith(".md") || normalized.endsWith(".markdown") -> MARKDOWN
                 else -> PLAIN_TEXT
             }

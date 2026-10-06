@@ -41,11 +41,17 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.snowball.silverwing.core.RemoteBranchRef
 import com.snowball.silverwing.core.RemoteBranchSearch
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.util.Base64
 import java.util.prefs.Preferences
+
+internal fun branchPickerRemote(value: String, remote: String? = null): String =
+    remote?.takeIf(String::isNotBlank)
+        // 草稿分支未填写完整时仍保留所选远程，避免误回退到 origin。
+        ?: value.trim().substringBefore('/', "").takeIf { it.isNotBlank() && it != "." && it != ".." }
+        ?: "origin"
 
 /** Shared editable branch chooser. All Git I/O remains in [DesktopApplication]. */
 @Composable
@@ -57,13 +63,18 @@ internal fun RemoteBranchPicker(
     controller: DesktopApplication,
     modifier: Modifier = Modifier,
     remote: String? = null,
+    enabled: Boolean = true,
+    isError: Boolean = false,
+    supportingText: String? = null,
+    fieldModifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var highlightedIndex by remember { mutableStateOf(0) }
     val searchFocusRequester = remember { FocusRequester() }
-    val effectiveRemote = remote?.takeIf(String::isNotBlank)
-        ?: runCatching { RemoteBranchRef.parse(value.trim()).remote }.getOrDefault("origin")
+    var menuRemote by remember(repositoryId) { mutableStateOf(branchPickerRemote(value, remote)) }
+    val repositoryRoot = controller.config.repositories.firstOrNull { it.id == repositoryId }?.rootPath
+    val effectiveRemote = remote ?: if (expanded) menuRemote else branchPickerRemote(value)
     val state = controller.remoteBranchState(repositoryId, effectiveRemote)
     val availableBranches = remoteBranchOptions(state)
     val recentBranches = remember(repositoryId, effectiveRemote, expanded) {
@@ -73,10 +84,11 @@ internal fun RemoteBranchPicker(
         mergeRecentBranches(recentBranches, availableBranches),
         query,
     )
-    LaunchedEffect(expanded) {
+    LaunchedEffect(expanded, repositoryId, repositoryRoot, effectiveRemote) {
         if (expanded) {
+            controller.loadRemoteBranches(repositoryId, effectiveRemote)
+            query = ""
             highlightedIndex = 0
-            searchFocusRequester.requestFocus()
         }
     }
     LaunchedEffect(query, availableBranches) {
@@ -92,7 +104,7 @@ internal fun RemoteBranchPicker(
         closeMenu()
     }
     val openMenu = {
-        controller.loadRemoteBranches(repositoryId, effectiveRemote)
+        menuRemote = branchPickerRemote(value, remote)
         query = ""
         expanded = true
     }
@@ -100,12 +112,15 @@ internal fun RemoteBranchPicker(
         OutlinedTextField(
             value,
             onValueChange,
-            Modifier.fillMaxWidth().onFocusChanged { focus -> if (focus.isFocused && !expanded) openMenu() },
+            fieldModifier.fillMaxWidth(),
             label = { Text(label) },
+            enabled = enabled,
+            isError = isError,
+            supportingText = supportingText?.let { message -> { Text(message) } },
             singleLine = true,
             colors = branchPickerFieldColors(),
             trailingIcon = {
-                ActionIconButton("搜索并选择远程分支", openMenu) {
+                ActionIconButton("搜索并选择远程分支", openMenu, enabled = enabled) {
                     Icon(Icons.Outlined.KeyboardArrowDown, "选择远程分支")
                 }
             },
@@ -114,6 +129,10 @@ internal fun RemoteBranchPicker(
             expanded = expanded,
             onDismissRequest = closeMenu,
         ) {
+            LaunchedEffect(effectiveRemote) { searchFocusRequester.requestFocus() }
+            if (remote == null) RemoteNamePicker(menuRemote, repositoryId, controller,
+                { selected -> menuRemote = selected }, Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                enabled = enabled, label = "远程仓库")
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -146,7 +165,7 @@ internal fun RemoteBranchPicker(
                                 else -> false
                             }
                         },
-                    label = { Text("搜索远程分支") },
+                    label = { Text("搜索 $effectiveRemote 的分支") },
                     singleLine = true,
                     colors = branchPickerFieldColors(),
                 )
@@ -212,12 +231,22 @@ internal fun mergeRecentBranches(recent: List<String>, available: List<String>):
     (recent.filter { it in available } + available).distinct()
 
 internal object RecentBranchHistory {
-    private const val MAX_ENTRIES = 5
-    private const val SEPARATOR = '\u001F'
-    private val preferences = Preferences.userRoot().node("com/snowball/silverwing/recent-branches")
+    private val store by lazy {
+        RecentBranchStore(Preferences.userRoot().node("com/snowball/silverwing/recent-branches"))
+    }
 
-    fun list(repositoryId: String, remote: String): List<String> = preferences
-        .get(key(repositoryId, remote), "")
+    // 最近记录只是辅助信息；系统偏好不可写时不能阻止选择分支。
+    fun list(repositoryId: String, remote: String): List<String> =
+        runCatching { store.list(repositoryId, remote) }.getOrDefault(emptyList())
+
+    fun record(repositoryId: String, remote: String, branch: String) {
+        runCatching { store.record(repositoryId, remote, branch) }
+    }
+}
+
+internal class RecentBranchStore(private val preferences: Preferences) {
+    fun list(repositoryId: String, remote: String): List<String> = (preferences.get(key(repositoryId, remote), null)
+        ?: legacyKey(repositoryId, remote)?.let { preferences.get(it, null) }.orEmpty())
         .split(SEPARATOR)
         .filter(String::isNotBlank)
         .take(MAX_ENTRIES)
@@ -225,14 +254,30 @@ internal object RecentBranchHistory {
     fun record(repositoryId: String, remote: String, branch: String) {
         val normalized = branch.trim()
         if (normalized.isEmpty()) return
+        var remaining = Preferences.MAX_VALUE_LENGTH
+        var accepted = 0
+        val entries = (listOf(normalized) + list(repositoryId, remote)).distinct().filter { entry ->
+            val length = entry.length + if (accepted == 0) 0 else 1
+            if (accepted >= MAX_ENTRIES || length > remaining) false else { remaining -= length; accepted++; true }
+        }
         preferences.put(
             key(repositoryId, remote),
-            (listOf(normalized) + list(repositoryId, remote)).distinct().take(MAX_ENTRIES).joinToString(SEPARATOR.toString()),
+            entries.joinToString(SEPARATOR.toString()),
         )
     }
 
-    private fun key(repositoryId: String, remote: String): String = Base64.getUrlEncoder().withoutPadding()
+    private fun key(repositoryId: String, remote: String): String = "v2-" + MessageDigest.getInstance("SHA-256")
+        .digest("${repositoryId.length}:$repositoryId$remote".toByteArray(StandardCharsets.UTF_8))
+        .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+
+    private fun legacyKey(repositoryId: String, remote: String): String? = Base64.getUrlEncoder().withoutPadding()
         .encodeToString("$repositoryId|$remote".toByteArray(StandardCharsets.UTF_8))
+        .takeIf { it.length <= Preferences.MAX_KEY_LENGTH }
+
+    private companion object {
+        const val MAX_ENTRIES = 5
+        const val SEPARATOR = '\u001F'
+    }
 }
 
 internal fun remoteBranchOptions(state: RemoteBranchesState): List<String> = when (state) {
@@ -256,10 +301,13 @@ internal fun RemoteNamePicker(
     controller: DesktopApplication,
     onSelected: (String) -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    label: String? = null,
 ) {
     var expanded by remember(repositoryId) { mutableStateOf(false) }
+    val repositoryRoot = controller.config.repositories.firstOrNull { it.id == repositoryId }?.rootPath
     val state = controller.repositoryRemotesState(repositoryId)
-    LaunchedEffect(repositoryId) {
+    LaunchedEffect(repositoryId, repositoryRoot) {
         controller.loadRepositoryRemotes(repositoryId)
     }
     if (!shouldShowRemoteNamePicker(value, state)) return
@@ -270,8 +318,9 @@ internal fun RemoteNamePicker(
                 controller.loadRepositoryRemotes(repositoryId)
             },
             modifier = Modifier.fillMaxWidth().height(56.dp),
+            enabled = enabled,
         ) {
-            Text(value, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(label?.let { "$it：$value" } ?: value, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             Icon(Icons.Outlined.KeyboardArrowDown, null, Modifier.size(17.dp))
         }
         SilverWingDropdownMenu(expanded, onDismissRequest = { expanded = false }) {

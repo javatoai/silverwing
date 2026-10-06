@@ -15,7 +15,7 @@ class NavigationLayoutTest {
 
     @Test
     fun `each navigation presentation has a stable sidebar width`() {
-        assertEquals(184f, sidebarWidthFor(NavigationLayout.EXPANDED))
+        assertEquals(128f, sidebarWidthFor(NavigationLayout.EXPANDED))
         assertEquals(72f, sidebarWidthFor(NavigationLayout.COMPACT))
     }
 
@@ -31,14 +31,18 @@ class NavigationLayoutTest {
     }
 
     @Test
-    fun `Skills remains visible between Tag builds and settings`() {
-        val withTag = visibleNavigationItemsFor(showTagNavigation = true)
-        val skillsIndex = withTag.indexOf(NavigationItem.SKILLS)
+    fun `repositories Skills and settings follow the task navigation group`() {
+        val expected = listOf(
+            NavigationItem.TASKS,
+            NavigationItem.REQUIREMENTS,
+            NavigationItem.TAG,
+            NavigationItem.SERVICES,
+            NavigationItem.SKILLS,
+            NavigationItem.SETTINGS,
+        )
 
-        assertEquals(NavigationItem.TAG, withTag[skillsIndex - 1])
-        assertEquals(NavigationItem.SETTINGS, withTag[skillsIndex + 1])
-        assertTrue(NavigationItem.SKILLS in visibleNavigationItemsFor(showTagNavigation = false))
-        assertFalse(NavigationItem.TAG in visibleNavigationItemsFor(showTagNavigation = false))
+        assertEquals(expected, visibleNavigationItemsFor(showTagNavigation = true))
+        assertEquals(expected - NavigationItem.TAG, visibleNavigationItemsFor(showTagNavigation = false))
     }
 
     @Test

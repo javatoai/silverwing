@@ -23,10 +23,10 @@ agents/task-templates.json
 | `layout.json` | 组顺序、名称与组级 Tag 开关 |
 | `workspace.json` | 任务根目录、仓库与全局默认分支前缀 |
 | `services.json` | 组内服务、模块、Bootstrap 与模块专属快捷命令 |
-| `tag.json` | 全局 Tag 开关与历史保留组数 |
+| `tag.json` | 全局 Tag 开关、任务测试目标分支修改开关与历史保留组数 |
 | `tools.json` | 终端、开发工具、全局默认打开工具与临时选择开关 |
 | `git.json` | Git 可执行程序与受保护分支 |
-| `integrations.json` | Meegle、Lark、Genbu、需求资料目录、AI 需求命名开关、Codex 插件市场和外部 Skill 来源定义 |
+| `integrations.json` | Meegle、Lark、Genbu、任务资料目录、AI 需求命名开关、Codex 插件市场和外部 Skill 来源定义 |
 | `appearance.json` | 主题与界面显示偏好 |
 
 业务层仍读取和保存完整 `AppConfig`；保存时只原子替换实际发生变化的分片。每次写入前会将完整分片集归档为 `~/silverwing/backups/silverwing-config-<timestamp>.zip`，最多保留最近 10 份。导出、导入和恢复也统一使用包含全部八个分片的 `silverwing-config-<timestamp>.zip`。
@@ -37,7 +37,9 @@ Codex 插件市场的本机注册信息、最近成功的插件目录缓存、�
 
 `tagEnabled` 是全局 Tag 开关，默认值为 `true`。关闭后，桌面端会隐藏 Tag 导航、工作区构建入口、组和模块中的 Tag 配置，以及 Tag Skill 入口；Tag 设置本身仍保留，方便重新开启。核心用例和 `silverwing tag` CLI 也会拒绝新的 Tag 操作。
 
-`tagHistoryMaxGroups` 控制本地 Tag 构建历史最多保留的组数，默认值为 `20`，允许范围为 `1`–`1000`。单次批量构建产生的记录属于同一组；超过上限时，silverwing 按组的最近更新时间从旧到新清理整组记录，只删除任务目录中的 Tag 操作记录和历史汇总，不删除 Git Tag、代码或任务。应用启动读取历史、任务列表变化、Tag 构建完成或保存该设置后都会执行清理。
+`allowTaskTagTargetEditing` 控制是否允许在任务详情修改测试目标分支，默认值为 `false`，已有配置未填写时也默认关闭。在“设置 → Git → Tag 设置”中开启后，采用合并模式的服务卡片会显示“更多 → 设置测试目标分支…”；关闭后隐藏该入口和对应的“更多”按钮，已保存的测试目标分支继续用于构建。
+
+`tagHistoryMaxGroups` 控制本地 Tag 构建历史最多保留的组数，默认值为 `3`，允许范围为 `1`–`1000`。单次批量构建产生的记录属于同一组；超过上限时，silverwing 按组的最近更新时间从旧到新清理整组记录，只删除任务目录中的 Tag 操作记录和历史汇总，不删除 Git Tag、代码或任务。应用启动读取历史、任务列表变化、Tag 构建完成或保存该设置后都会执行清理。
 
 ## 任务根目录迁移
 
@@ -50,7 +52,7 @@ Codex 插件市场的本机注册信息、最近成功的插件目录缓存、�
 - silverwing 校验 HEAD、分支、仓库身份以及暂存、未暂存和未跟踪文件状态，更新清单路径并重新生成 `AGENTS.md` 系统区。
 - 全部任务成功后才原子更新 `taskRoot` 并清理旧目录。清理失败时新目录仍生效，界面会列出待清理路径；迁移日志位于 `~/silverwing/migrations/task-root.json`，下次启动会继续清理或回滚。
 
-需求资料目录由 `requirementMaterialsRoot` 独立管理，不随任务根目录迁移。
+任务资料目录由 `requirementMaterialsRoot` 独立管理，不随任务根目录迁移。
 
 工作区策略属于模块而不是服务。同一服务的 `modules` 可以同时包含 Worktree 与独立克隆模块：
 
@@ -93,15 +95,15 @@ Codex 插件市场的本机注册信息、最近成功的插件目录缓存、�
 
 `genbuExecutablePath` 为 `null` 时，应用通过 `where.exe genbu.exe`（Windows）或平台 shell 自动探测，并会将首次成功识别到的绝对路径自动写回配置。填写已存在、可执行的绝对路径后，该路径只在自动探测未找到 Genbu 时作为兜底使用；自动识别到的命令始终优先。
 
-## 需求资料目录
+## 任务资料目录
 
-设置页的“需求资料目录设置”包含两个由用户自行填写的字段：`requirementMaterialsRoot` 是保存根路径，保存时会转换为绝对规范路径并创建目录；`requirementMaterialsSubdirectory` 是每个需求目录下的单层子目录名，保存时会去除首尾空格。子目录名不得包含 Windows 路径分隔符、非法字符、`.`/`..`、结尾点或空格，也不能使用 `CON`、`PRN`、`AUX`、`NUL`、`COM1`–`COM9`、`LPT1`–`LPT9` 等保留名。
+设置页的“任务资料目录设置”包含两个由用户自行填写的字段：`requirementMaterialsRoot` 是保存根路径，保存时会转换为绝对规范路径并创建目录；`requirementMaterialsSubdirectory` 是每个需求目录下的单层子目录名，保存时会去除首尾空格。子目录名不得包含 Windows 路径分隔符、非法字符、`.`/`..`、结尾点或空格，也不能使用 `CON`、`PRN`、`AUX`、`NUL`、`COM1`–`COM9`、`LPT1`–`LPT9` 等保留名。
 
-两个字段任意一个为空时，需求资料目录功能均视为未配置，不会隐式使用默认路径或默认子目录；创建任务表单、`AGENTS.md` 预览和实际创建过程也不会展示、查询或记录资料目录失败。配置有效且创建任务时填写需求编号或飞书需求链接后，创建页会先进行无写入的路径预检，显示完整预计路径以及“预计新建”或“将复用”；真正创建任务时仍会重新校验并创建或复用需求资料目录。
+两个字段任意一个为空时，任务资料目录功能均视为未配置，不会隐式使用默认路径或默认子目录；创建任务表单、`AGENTS.md` 预览和实际创建过程也不会展示、查询或记录资料目录失败。配置有效且创建任务时填写需求编号或飞书需求链接后，创建页会先进行无写入的路径预检，显示完整预计路径以及“预计新建”或“将复用”；真正创建任务时仍会重新校验并创建或复用任务资料目录。
 
-## 需求资料根与 Agent 过程文档
+## 任务资料根与 Agent 过程文档
 
-`requirementMaterialsRoot` 是唯一的需求资料根目录，`requirementMaterialsSubdirectory` 是每个需求目录下的资料子目录（例如“研发”）。两个字段都必须由用户填写；任意一个为空、路径不合法或子目录名不安全时，需求资料功能均视为未配置，不会创建隐式默认目录。
+`requirementMaterialsRoot` 是唯一的任务资料根目录，`requirementMaterialsSubdirectory` 是每个需求目录下的资料子目录（例如“研发”）。两个字段都必须由用户填写；任意一个为空、路径不合法或子目录名不安全时，任务资料功能均视为未配置，不会创建隐式默认目录。
 
 配置有效且创建任务时填写需求编号或飞书需求链接后，桌面端会创建或复用：
 
@@ -109,9 +111,9 @@ Codex 插件市场的本机注册信息、最近成功的插件目录缓存、�
 <requirementMaterialsRoot>/<Sprint>/<需求编号>-<任务文件夹名>/<requirementMaterialsSubdirectory>
 ```
 
-桌面端普通任务只创建上述资料目录，不创建过程文档。`silverwing agent plan/apply` 复用同一需求资料目录，并在其 `write_root`（上式最后的资料子目录）内补写 `.silverwing-requirement.json`、`00-需求总览.md` 等过程文档；Sprint 层的 `.silverwing-iteration.json`、`00-迭代任务总览.md` 保留在资料根下。需求目录名始终使用任务文件夹名，Agent 请求中的需求标题仅作为 Markdown 标题。
+桌面端普通任务只创建上述资料目录，不创建过程文档。`silverwing agent plan/apply` 复用同一任务资料目录，并在其 `write_root`（上式最后的资料子目录）内补写 `.silverwing-requirement.json`、`00-需求总览.md` 等过程文档；Sprint 层的 `.silverwing-iteration.json`、`00-迭代任务总览.md` 保留在资料根下。需求目录名始终使用任务文件夹名，Agent 请求中的需求标题仅作为 Markdown 标题。
 
-已存在且唯一的需求目录会复用；如果递归查找到多个 `<需求编号>` 或 `<需求编号>-*` 目录，操作会明确失败，不自动选择。发现已有过程文档 manifest 时会校验需求身份，身份不一致则停止写入。silverwing 不移动、删除或自动迁移历史资料目录，任务交接文件位于任务目录的 `.workspace/HANDOFF.md`。
+已存在且唯一的需求目录会复用；如果递归查找到多个 `<需求编号>` 或 `<需求编号>-*` 目录，操作会明确失败，不自动选择。发现已有过程文档 manifest 时会校验需求身份，身份不一致则停止写入。silverwing 不移动、删除或自动迁移历史任务资料目录，任务交接文件位于任务目录的 `.workspace/HANDOFF.md`。
 
 配置分片严格使用 `schema: 6`，应用配置版本为 `6.0.0`；任务清单仍使用 `2.0.0`。silverwing 不读取、迁移或改写旧 schema 配置。需要保存或转移当前 silverwing 配置时，请在设置页导出完整 ZIP，再在目标环境验证后导入。
 

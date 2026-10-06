@@ -116,7 +116,7 @@ class RequirementDocumentationService(
             existingContext?.let { context ->
                 val historical = findHistorical(root, identity, subdirectory)
                 require(historical.size <= 1) {
-                    "本地需求资料目录发现多个历史目录，无法安全复用：${historical.joinToString { it.context.writeRoot.toString() }}"
+                    "本地任务资料目录发现多个历史目录，无法安全复用：${historical.joinToString { it.context.writeRoot.toString() }}"
                 }
                 historical.singleOrNull()?.let { return@withMaterialsLock planFromExisting(it) }
 
@@ -168,7 +168,7 @@ class RequirementDocumentationService(
         val expectedContext = materials.validatePlannedDirectory(
             root = root,
             requirementDirectory = Path.of(plan.documentationDirectory).parent
-                ?: throw IllegalArgumentException("计划中的需求资料写入目录缺少需求目录"),
+                ?: throw IllegalArgumentException("计划中的任务资料写入目录缺少需求目录"),
             writeRoot = Path.of(plan.documentationDirectory),
             iterationDirectory = Path.of(plan.iterationDirectory),
             id = plan.identity.workItemId,
@@ -191,7 +191,7 @@ class RequirementDocumentationService(
             )
             val current = findHistorical(root, plan.identity, subdirectory)
             require(current.size <= 1) {
-                "本地需求资料目录发现多个历史目录，无法安全复用：${current.joinToString { it.context.requirementDirectory.toString() }}"
+                "本地任务资料目录发现多个历史目录，无法安全复用：${current.joinToString { it.context.requirementDirectory.toString() }}"
             }
             current.singleOrNull()?.let { existing ->
                 return@withMaterialsLock materialization(existing, created = false)

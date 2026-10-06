@@ -35,7 +35,7 @@ class RequirementDocumentationFileStore(
 
     fun readRequirement(path: Path): RequirementDocumentationManifest = runCatching {
         manifestJson.decodeFromString<RequirementDocumentationManifest>(read(path))
-    }.getOrElse { throw IllegalStateException("需求资料 manifest 损坏：$path", it) }
+    }.getOrElse { throw IllegalStateException("任务资料 manifest 损坏：$path", it) }
 
     /** Legacy desktop manifests may contain only the requirement identity. */
     fun readRequirementIdentity(path: Path): RequirementIdentity = runCatching {
@@ -47,7 +47,7 @@ class RequirementDocumentationFileStore(
             kind = identity.stringValue("kind"),
             workItemId = identity.stringValue("workItemId"),
         )
-    }.getOrElse { throw IllegalStateException("需求资料 manifest 身份损坏：$path", it) }
+    }.getOrElse { throw IllegalStateException("任务资料 manifest 身份损坏：$path", it) }
 
     fun readIteration(path: Path): IterationDocumentationManifest = runCatching {
         manifestJson.decodeFromString<IterationDocumentationManifest>(read(path))
@@ -60,7 +60,7 @@ class RequirementDocumentationFileStore(
             .filter(String::isNotBlank)
             .mapIndexed { indexNumber, line ->
                 runCatching { indexJson.decodeFromString<RequirementDocumentationIndexEntry>(line) }
-                    .getOrElse { throw IllegalStateException("需求资料索引第 ${indexNumber + 1} 行损坏", it) }
+                    .getOrElse { throw IllegalStateException("任务资料索引第 ${indexNumber + 1} 行损坏", it) }
             }
             .toList()
     }

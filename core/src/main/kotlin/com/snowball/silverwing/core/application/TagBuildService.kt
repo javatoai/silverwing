@@ -307,7 +307,8 @@ class TagBuildService(
         existingOperation: TagOperation? = null,
     ): TagOperation {
         val manifest = manifests.load(taskDirectory)
-        val target = TagPolicy.resolve(config, manifest, repositoryId)
+        val target = existingOperation?.let { TagPolicy.resolveHistorical(config, manifest, it) }
+            ?: TagPolicy.resolve(config, manifest, repositoryId)
         val workspace = target.workspace
         val service = target
         val validated = workspaceLifecycle.validateForMutation(config, taskDirectory, manifest, workspace)
@@ -482,7 +483,7 @@ class TagBuildService(
             "只有${TagOperationState.PARTIAL.userFacingLabel()}的测试Tag操作可以恢复"
         }
         val manifest = manifests.load(taskDirectory)
-        val target = TagPolicy.resolve(config, manifest, "${operation.groupServiceId}:${operation.moduleId}")
+        val target = TagPolicy.resolveHistorical(config, manifest, operation)
         val service = target
         val workspace = target.workspace
         val validated = workspaceLifecycle.validateForMutation(config, taskDirectory, manifest, workspace)

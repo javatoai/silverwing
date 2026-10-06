@@ -2,7 +2,7 @@ package com.snowball.silverwing.core
 
 import java.net.URI
 
-/** Resolves the only supported branch placeholder without making any network request. */
+/** 编号在本机解析；AI 占位符留给经过校验的命名结果替换。 */
 object BranchPrefixResolver {
     private const val NUM_PLACEHOLDER = "{num}"
     private val digits = Regex("\\d+")
@@ -13,7 +13,7 @@ object BranchPrefixResolver {
         return prefix.replace(NUM_PLACEHOLDER, number)
     }
 
-    fun containsUnresolvedPlaceholder(branch: String): Boolean = NUM_PLACEHOLDER in branch
+    fun containsUnresolvedPlaceholder(branch: String): Boolean = NUM_PLACEHOLDER in branch || "{ai}" in branch
 
     fun extractNumber(requirement: String): String? {
         FeishuWorkItemLink.parse(requirement)?.let { return it.workItemId }

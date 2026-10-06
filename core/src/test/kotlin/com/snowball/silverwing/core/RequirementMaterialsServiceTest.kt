@@ -272,7 +272,7 @@ class RequirementMaterialsServiceTest {
 
         val result = service(runner).ensure("123", "task", root.toString(), "研发", projects())
 
-        assertEquals("需求未关联可用的 Sprint，已停止创建需求资料目录", (result as RequirementMaterialsResult.Failed).reason)
+        assertEquals("需求未关联可用的 Sprint，已停止创建任务资料目录", (result as RequirementMaterialsResult.Failed).reason)
     }
 
     @Test
@@ -319,7 +319,7 @@ class RequirementMaterialsServiceTest {
 
         val result = service(runner).ensure("123", "task", root.toString(), "研发", projects())
 
-        assertEquals("需求关联多个 Sprint 且均不在进行中，已停止创建需求资料目录", (result as RequirementMaterialsResult.Failed).reason)
+        assertEquals("需求关联多个 Sprint 且均不在进行中，已停止创建任务资料目录", (result as RequirementMaterialsResult.Failed).reason)
     }
 
     @Test

@@ -66,6 +66,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
@@ -234,10 +235,13 @@ class SettingsController internal constructor(
     private val openLarkAuthorizationPage: (String) -> Result<Unit> = { Result.success(Unit) },
 ) {
     private val remoteBranchJobs = mutableMapOf<String, Job>()
+    private val repositoryRemoteJobs = mutableMapOf<String, Job>()
+    private var remoteRepositoryRoots by mutableStateOf<Map<String, String>>(emptyMap())
     private var remoteBranches by mutableStateOf<Map<String, RemoteBranchesState>>(emptyMap())
     private var repositoryRemotes by mutableStateOf<Map<String, RepositoryRemotesState>>(emptyMap())
     private var repositoryAddResult by mutableStateOf<BatchRepositoryAddResult?>(null)
     private var pathPickerBusy by mutableStateOf(false)
+    private var pathPickerJob: Job? = null
     private var meegleProjects by mutableStateOf<MeegleProjectCatalogState>(MeegleProjectCatalogState.Idle)
     private var meegleProjectJob: Job? = null
     private var meegleCli by mutableStateOf<MeegleCliState>(MeegleCliState.Idle)
@@ -404,7 +408,12 @@ class SettingsController internal constructor(
     fun gitCommandResolution(): Pair<String, GitCommandSource> =
         gitExecutable.current() to gitExecutable.source()
 
-    fun genbuCommandResolution(): Pair<String, GenbuCommandSource> = genbuCommand
+    fun genbuCommandResolution(): Pair<String, GenbuCommandSource> {
+        val configured = session.config.genbuExecutablePath?.takeIf(String::isNotBlank)
+        if (configured == null) return genbuCommand
+        val source = if (session.config.genbuExecutableAutoDetected) GenbuCommandSource.PROBED else GenbuCommandSource.CONFIGURED
+        return configured to source
+    }
 
     /** Lightweight window-focus refresh: detects once, persists a first-time result, writes no audit. */
     fun refreshGenbuCommandResolution() {
@@ -492,6 +501,7 @@ class SettingsController internal constructor(
                 onFailure = { GenbuSettingsState.Failed(it.message ?: "检测 Genbu 失败") },
             )
             genbu = resolved
+            if (resolved is GenbuSettingsState.Loaded) genbuCommand = resolved.command to resolved.source
         }
     }
 
@@ -544,6 +554,14 @@ class SettingsController internal constructor(
         saveKey = "tag",
         runner = settingsOperations,
     ) { it.copy(tagEnabled = enabled) }
+
+    fun setAllowTaskTagTargetEditing(enabled: Boolean, onFailure: (Throwable) -> Unit = {}): Boolean = mutate(
+        "正在更新任务测试目标分支修改开关…",
+        "任务测试目标分支修改开关已更新",
+        onFailure = onFailure,
+        saveKey = "tag",
+        runner = settingsOperations,
+    ) { it.copy(allowTaskTagTargetEditing = enabled) }
 
     fun updateTagHistoryMaxGroups(value: Int, onFailure: (Throwable) -> Unit = {}): Boolean = mutate(
         "正在保存Tag历史设置…",
@@ -627,8 +645,8 @@ class SettingsController internal constructor(
 
     /** Saves and normalizes the optional requirement-materials root independently. */
     fun updateRequirementMaterialsRoot(value: String, onFailure: (Throwable) -> Unit = {}): Boolean = settingsOperations.run(
-        "正在保存需求资料根目录…",
-        "需求资料根目录已保存",
+        "正在保存任务资料根目录…",
+        "任务资料根目录已保存",
         block = {
             val normalized = value.trim().takeIf(String::isNotEmpty)?.let {
                 val path = Path.of(it).toAbsolutePath().normalize()
@@ -643,8 +661,8 @@ class SettingsController internal constructor(
 
     /** Saves the optional single-segment child directory independently. */
     fun updateRequirementMaterialsSubdirectory(value: String, onFailure: (Throwable) -> Unit = {}): Boolean = mutate(
-        "正在保存需求资料子目录…",
-        "需求资料子目录已保存",
+        "正在保存任务资料子目录…",
+        "任务资料子目录已保存",
         onFailure,
         "requirement-materials-subdirectory",
         settingsOperations,
@@ -811,6 +829,10 @@ class SettingsController internal constructor(
         saveKey = "task-creation",
         runner = settingsOperations,
     ) { it.copy(aiRequirementNamingEnabled = enabled) }
+
+    fun setAiRequirementNamingPrewarmEnabled(enabled: Boolean): Boolean = mutate(
+        "正在保存命名预热设置…", "命名预热设置已保存", saveKey = "task-creation", runner = settingsOperations,
+    ) { it.copy(aiRequirementNamingPrewarmEnabled = enabled) }
 
     fun setAiRequirementNamingModel(model: String, onFailure: (Throwable) -> Unit = {}): Boolean = mutate(
         "正在保存 AI 命名模型…",
@@ -1396,11 +1418,12 @@ class SettingsController internal constructor(
 
     fun loadRemoteBranches(repositoryId: String, remote: String = "origin", force: Boolean = false) {
         val key = "$repositoryId|$remote"
+        val repository = session.config.repositories.firstOrNull { it.id == repositoryId }
+            ?: return showError(IllegalArgumentException("找不到仓库：$repositoryId"))
+        prepareRemoteRepository(repositoryId, repository.rootPath)
         val current = remoteBranches[key]
         if (!force && current is RemoteBranchesState.Loading) return
         if (!force && current is RemoteBranchesState.Loaded && !RemoteBranchCachePolicy.isExpired(current.loadedAtNanos)) return
-        val repository = session.config.repositories.firstOrNull { it.id == repositoryId }
-            ?: return showError(IllegalArgumentException("找不到仓库：$repositoryId"))
         val staleBranches = when (current) {
             is RemoteBranchesState.Loaded -> current.branches
             is RemoteBranchesState.Failed -> current.staleBranches
@@ -1413,11 +1436,11 @@ class SettingsController internal constructor(
             val currentJob = currentCoroutineContext()[Job]
             try {
                 val branches = runInterruptible(ioDispatcher) { branchCatalog.list(Path.of(repository.rootPath), remote) }
-                if (remoteBranchJobs[key] === currentJob) {
+                if (remoteBranchJobs[key] === currentJob && isCurrentRemoteRepository(repositoryId, repository.rootPath)) {
                     remoteBranches = remoteBranches + (key to RemoteBranchesState.Loaded(branches))
                 }
             } catch (cancelled: CancellationException) {
-                if (remoteBranchJobs[key] === currentJob) {
+                if (remoteBranchJobs[key] === currentJob && isCurrentRemoteRepository(repositoryId, repository.rootPath)) {
                     remoteBranches = remoteBranches + (key to (
                         staleBranches.takeIf(List<String>::isNotEmpty)?.let(RemoteBranchesState::Loaded)
                             ?: RemoteBranchesState.Idle
@@ -1425,7 +1448,7 @@ class SettingsController internal constructor(
                 }
                 throw cancelled
             } catch (error: Throwable) {
-                if (remoteBranchJobs[key] === currentJob) {
+                if (remoteBranchJobs[key] === currentJob && isCurrentRemoteRepository(repositoryId, repository.rootPath)) {
                     remoteBranches = remoteBranches + (key to RemoteBranchesState.Failed(error.message ?: "远程分支加载失败", staleBranches))
                 }
             } finally {
@@ -1437,22 +1460,55 @@ class SettingsController internal constructor(
     }
 
     fun loadRepositoryRemotes(repositoryId: String, force: Boolean = false) {
-        if (!force && repositoryRemotes[repositoryId] is RepositoryRemotesState.Loading) return
-        if (!force && repositoryRemotes[repositoryId] is RepositoryRemotesState.Loaded) return
         val repository = session.config.repositories.firstOrNull { it.id == repositoryId }
             ?: return showError(IllegalArgumentException("找不到仓库：$repositoryId"))
+        prepareRemoteRepository(repositoryId, repository.rootPath)
+        if (!force && repositoryRemotes[repositoryId] is RepositoryRemotesState.Loading) return
+        if (!force && repositoryRemotes[repositoryId] is RepositoryRemotesState.Loaded) return
+        repositoryRemoteJobs.remove(repositoryId)?.cancel()
         repositoryRemotes = repositoryRemotes + (repositoryId to RepositoryRemotesState.Loading)
-        scope.launch {
-            val result = runCatching { runInterruptible(ioDispatcher) { remoteCatalog.list(Path.of(repository.rootPath)) } }
-            repositoryRemotes = repositoryRemotes + (repositoryId to result.fold(
-                onSuccess = RepositoryRemotesState::Loaded,
-                onFailure = { RepositoryRemotesState.Failed(it.message ?: "Git 远程加载失败") },
-            ))
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            val currentJob = currentCoroutineContext()[Job]
+            fun current() = repositoryRemoteJobs[repositoryId] === currentJob &&
+                isCurrentRemoteRepository(repositoryId, repository.rootPath)
+            try {
+                val remotes = runInterruptible(ioDispatcher) { remoteCatalog.list(Path.of(repository.rootPath)) }
+                if (current()) repositoryRemotes = repositoryRemotes + (repositoryId to RepositoryRemotesState.Loaded(remotes))
+            } catch (cancelled: CancellationException) {
+                if (current()) repositoryRemotes = repositoryRemotes + (repositoryId to RepositoryRemotesState.Idle)
+                throw cancelled
+            } catch (error: Throwable) {
+                if (current()) repositoryRemotes = repositoryRemotes +
+                    (repositoryId to RepositoryRemotesState.Failed(error.message ?: "Git 远程加载失败"))
+            } finally {
+                if (repositoryRemoteJobs[repositoryId] === currentJob) repositoryRemoteJobs.remove(repositoryId)
+            }
         }
+        repositoryRemoteJobs[repositoryId] = job
+        job.start()
     }
 
     fun repositoryRemotesState(repositoryId: String): RepositoryRemotesState =
-        repositoryRemotes[repositoryId] ?: RepositoryRemotesState.Idle
+        if (hasCurrentRemoteRepository(repositoryId)) repositoryRemotes[repositoryId] ?: RepositoryRemotesState.Idle
+        else RepositoryRemotesState.Idle
+
+    /** 仓库 ID 不变、路径改变时，名称与分支必须一起失效；旧请求只能清理自身。 */
+    private fun prepareRemoteRepository(repositoryId: String, rootPath: String) {
+        if (remoteRepositoryRoots[repositoryId] == rootPath) return
+        remoteRepositoryRoots = remoteRepositoryRoots + (repositoryId to rootPath)
+        repositoryRemoteJobs.remove(repositoryId)?.cancel()
+        repositoryRemotes = repositoryRemotes - repositoryId
+        val prefix = "$repositoryId|"
+        remoteBranchJobs.keys.filter { it.startsWith(prefix) }.forEach { remoteBranchJobs.remove(it)?.cancel() }
+        remoteBranches = remoteBranches.filterKeys { !it.startsWith(prefix) }
+    }
+
+    private fun isCurrentRemoteRepository(repositoryId: String, rootPath: String): Boolean =
+        remoteRepositoryRoots[repositoryId] == rootPath &&
+            session.config.repositories.firstOrNull { it.id == repositoryId }?.rootPath == rootPath
+
+    private fun hasCurrentRemoteRepository(repositoryId: String): Boolean =
+        remoteRepositoryRoots[repositoryId]?.let { isCurrentRemoteRepository(repositoryId, it) } == true
 
     fun cancelRemoteBranchLoads() {
         val jobs = remoteBranchJobs.values.toList()
@@ -1468,19 +1524,35 @@ class SettingsController internal constructor(
     }
 
     fun remoteBranchState(repositoryId: String, remote: String): RemoteBranchesState =
-        remoteBranches["$repositoryId|$remote"] ?: RemoteBranchesState.Idle
+        if (hasCurrentRemoteRepository(repositoryId)) remoteBranches["$repositoryId|$remote"] ?: RemoteBranchesState.Idle
+        else RemoteBranchesState.Idle
 
     fun loadMeegleProjects(force: Boolean = false) {
         if (!force && (meegleProjects is MeegleProjectCatalogState.Loading || meegleProjects is MeegleProjectCatalogState.Loaded)) return
-        meegleProjects = MeegleProjectCatalogState.Loading
         if (force) meegleProjectJob?.cancel()
-        meegleProjectJob = scope.launch {
-            val result = withContext(ioDispatcher) { runCatching { meegleProjectCatalog.list() } }
-            meegleProjects = result.fold(
-                onSuccess = { MeegleProjectCatalogState.Loaded(it) },
-                onFailure = { MeegleProjectCatalogState.Failed(it.message ?: "读取 Meegle 项目失败") },
-            )
+        meegleProjects = MeegleProjectCatalogState.Loading
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            val currentJob = currentCoroutineContext()[Job]
+            try {
+                val projects = runInterruptible(ioDispatcher) { meegleProjectCatalog.list() }
+                if (meegleProjectJob === currentJob) meegleProjects = MeegleProjectCatalogState.Loaded(projects)
+            } catch (cancelled: CancellationException) {
+                if (meegleProjectJob === currentJob) meegleProjects = MeegleProjectCatalogState.Idle
+                throw cancelled
+            } catch (failure: Exception) {
+                if (meegleProjectJob === currentJob) meegleProjects = MeegleProjectCatalogState.Failed(failure.message ?: "读取 Meegle 项目失败")
+            } finally {
+                if (meegleProjectJob === currentJob) meegleProjectJob = null
+            }
         }
+        meegleProjectJob = job
+        job.invokeOnCompletion {
+            if (meegleProjectJob === job) {
+                meegleProjectJob = null
+                if (meegleProjects is MeegleProjectCatalogState.Loading) meegleProjects = MeegleProjectCatalogState.Idle
+            }
+        }
+        job.start()
     }
 
     fun cancelMeegleProjectLoad() {
@@ -1512,8 +1584,8 @@ class SettingsController internal constructor(
     )
 
     fun clearRepositoryAddResult() { repositoryAddResult = null }
-    fun updateService(groupId: String, service: GroupServiceConfig, onCompleted: () -> Unit = {}) =
-        mutateWithService("正在保存服务配置…", "服务配置已保存", onCompleted) { groups.updateService(groupId, service) }
+    fun updateService(groupId: String, service: GroupServiceConfig, onFailure: (Throwable) -> Unit = {}, onCompleted: () -> Unit = {}) =
+        mutateWithService("正在保存服务配置…", "服务配置已保存", onCompleted, onFailure) { groups.updateService(groupId, service) }
     fun moveService(groupId: String, serviceId: String, offset: Int) = mutateWithService("正在更新服务顺序…", "服务顺序已更新") { groups.moveService(groupId, serviceId, offset) }
     fun removeService(groupId: String, serviceId: String, onCompleted: () -> Unit = {}) = mutateWithService("正在移除服务…", "服务已移除", onCompleted) {
         require(session.tasks.none { task -> task.groupId == groupId && task.services.any { it.groupServiceId == serviceId } }) {
@@ -1562,11 +1634,28 @@ class SettingsController internal constructor(
 
     private fun <T> choose(pick: suspend () -> T?, complete: (T?) -> Unit) {
         if (pathPickerBusy) return
-        pathPickerBusy = true
-        scope.launch {
-            runCatching { pick() }.onSuccess(complete).onFailure(showError)
-            pathPickerBusy = false
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            try {
+                val selected = pick()
+                currentCoroutineContext().ensureActive()
+                complete(selected)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                showError(failure)
+            } finally {
+                if (pathPickerJob === currentCoroutineContext()[Job]) pathPickerBusy = false
+            }
         }
+        pathPickerJob = job
+        pathPickerBusy = true
+        job.invokeOnCompletion {
+            if (pathPickerJob === job) {
+                pathPickerJob = null
+                pathPickerBusy = false
+            }
+        }
+        job.start()
     }
 }
 

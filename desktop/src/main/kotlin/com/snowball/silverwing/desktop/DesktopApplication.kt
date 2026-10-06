@@ -3,6 +3,8 @@ package com.snowball.silverwing.desktop
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.snowball.silverwing.core.RepositoryRemoteAddressCatalog
+import com.snowball.silverwing.core.GitRepositoryRemoteAddressCatalog
 import com.snowball.silverwing.core.AgentDocumentService
 import com.snowball.silverwing.core.AgentDocumentPreview
 import com.snowball.silverwing.core.AgentConflictResolution
@@ -10,6 +12,7 @@ import com.snowball.silverwing.core.AgentFileChange
 import com.snowball.silverwing.core.AgentFileMonitor
 import com.snowball.silverwing.core.AgentDocumentPropagationService
 import com.snowball.silverwing.core.AgentTaskTemplate
+import com.snowball.silverwing.core.ParticipatedWorkItem
 import com.snowball.silverwing.core.AppConfig
 import com.snowball.silverwing.core.ApplicationPaths
 import com.snowball.silverwing.core.BatchRepositoryAddResult
@@ -63,6 +66,7 @@ import com.snowball.silverwing.core.FeishuWorkItemLink
 import com.snowball.silverwing.core.JsonlEventSink
 import com.snowball.silverwing.core.error
 import com.snowball.silverwing.core.MeegleRequirementLinkSource
+import com.snowball.silverwing.core.ParticipatedWorkItemsSource
 import com.snowball.silverwing.core.MeegleParticipatedWorkItemsSource
 import com.snowball.silverwing.core.RequirementLinkFailureLog
 import com.snowball.silverwing.core.GitRepositoryInspector
@@ -90,6 +94,7 @@ import com.snowball.silverwing.core.RequirementMaterialsDirectory
 import com.snowball.silverwing.core.RequirementMaterialsService
 import com.snowball.silverwing.core.ServiceWorkspace
 import com.snowball.silverwing.core.TagBuildService
+import com.snowball.silverwing.core.GitTaskTagTargetValidator
 import com.snowball.silverwing.core.GitTagDeliveryAdapter
 import com.snowball.silverwing.core.GenbuTagProbeService
 import com.snowball.silverwing.core.ProcessGenbuTagStatusService
@@ -119,6 +124,8 @@ import com.snowball.silverwing.core.WorkspaceGitHistoryService
 import com.snowball.silverwing.core.WorkspaceGitCommit
 import com.snowball.silverwing.core.WorkspaceGitStatusService
 import com.snowball.silverwing.core.WorkspaceGitOperationService
+import com.snowball.silverwing.core.WorkspaceMainBranchMerger
+import com.snowball.silverwing.core.WorkspaceMainBranchMergeService
 import com.snowball.silverwing.core.WorkspaceCommandConfig
 import com.snowball.silverwing.core.WorkspaceCommandService
 import com.snowball.silverwing.core.WorkspaceGitBatchMode
@@ -138,6 +145,8 @@ import com.snowball.silverwing.core.IndependentCloneProvisioner
 import com.snowball.silverwing.core.BootstrapService
 import com.snowball.silverwing.core.WorkspaceModuleRemovalService
 import com.snowball.silverwing.core.toInfo
+import kotlinx.coroutines.Job
+import com.snowball.silverwing.core.TaskLifecycleStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CancellationException
@@ -150,14 +159,14 @@ import kotlinx.coroutines.withContext
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicReference
 
-enum class NavigationItem(val title: String, val subtitle: String) {
-    TASKS("研发任务", "Tasks"),
-    REQUIREMENTS("需求列表", "Requirements"),
-    ARCHIVED("已归档", "Archived"),
-    SERVICES("服务仓库", "Services"),
-    TAG("Tag构建", "Tag Builds"),
-    SKILLS("Skills", "Skills"),
-    SETTINGS("设置", "Settings"),
+enum class NavigationItem(val title: String) {
+    TASKS("任务"),
+    REQUIREMENTS("需求"),
+    ARCHIVED("已归档"),
+    SERVICES("仓库"),
+    TAG("Tag 历史"),
+    SKILLS("Skills"),
+    SETTINGS("设置"),
 }
 
 internal fun tagAnnouncementCopyMessage(metadata: RequirementMetadata?): String {
@@ -366,6 +375,10 @@ class DesktopApplication(
             git = gitClient,
         ),
         bootstrap = bootstrapService,
+        tagTargetValidator = GitTaskTagTargetValidator(
+            git = gitClient,
+            branchValidator = GitBranchReferenceValidator(runner = gitCommandRunner, gitExecutable = gitExecutable),
+        ),
     ),
     private val agentPropagation: AgentDocumentPropagationService =
         AgentDocumentPropagationService(manifests, agentDocuments, operationLock),
@@ -392,7 +405,7 @@ class DesktopApplication(
         metadata = requirementMetadataProvider,
         meegleExecutable = meegleExecutable,
     ),
-    private val participatedWorkItemsSource: MeegleParticipatedWorkItemsSource = MeegleParticipatedWorkItemsSource(
+    private val participatedWorkItemsSource: ParticipatedWorkItemsSource = MeegleParticipatedWorkItemsSource(
         runner = meegleCommandRunner,
         meegleExecutable = meegleExecutable,
     ),
@@ -402,11 +415,15 @@ class DesktopApplication(
     private val gitHistoryService: WorkspaceGitHistoryService = WorkspaceGitHistoryService(GitWorkspaceGitHistoryReader(gitClient)),
     private val workspaceCommandService: WorkspaceCommandService = WorkspaceCommandService(runner = workspaceCommandRunner),
     private val gitOperationService: WorkspaceGitOperationService = WorkspaceGitOperationService(gitClient, repositoryLock),
+    private val mainBranchMerger: WorkspaceMainBranchMerger = WorkspaceMainBranchMergeService(
+        git = gitClient, manifests = manifests, taskLock = operationLock, repositoryLock = repositoryLock,
+    ),
     private val taskBranchCatalog: TaskBranchCatalog = GitTaskBranchCatalog(gitClient),
     private val desktopIntegration: DesktopIntegration = DesktopIntegration(),
     private val nativePathPicker: NativePathPicker = FileKitNativePathPicker(),
     private val remoteBranchCatalog: RemoteBranchCatalog = GitRemoteBranchCatalog(gitClient),
     private val repositoryRemoteCatalog: RepositoryRemoteCatalog = GitRepositoryRemoteCatalog(gitClient),
+    private val repositoryRemoteAddressCatalog: RepositoryRemoteAddressCatalog = GitRepositoryRemoteAddressCatalog(gitClient),
     private val meegleProjectCatalog: MeegleProjectCatalog = CliMeegleProjectCatalog(
         runner = meegleCommandRunner,
         meegleExecutable = meegleExecutable,
@@ -433,8 +450,22 @@ class DesktopApplication(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     /** 测试可替换浏览器入口；生产环境仍使用系统默认浏览器。 */
     private val meegleAuthorizationUrlOpener: ((String) -> Result<Unit>)? = null,
+    private val systemFileOpening: SystemFileOpening = PlatformSystemFileOpening(),
+    internal val systemFileTrash: SystemFileTrash = PlatformSystemFileTrash(),
+    private val codexAiRpcFactory: CodexRpcFactory? = null,
+    private val codexThreadOpener: (String) -> Unit = CodexWorkspaceToolLauncher()::openThread,
 ) : AutoCloseable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    internal val appScope: CoroutineScope get() = scope
+    private val readingStateStore = ReadingStateStore(paths.cache.resolve("reading-state.json"))
+    /** Runtime-only Markdown drafts survive task/page switches and an app restart. */
+    internal val markdownDraftStore = MarkdownDraftStore(paths.cache.resolve("materials-markdown-drafts.json"))
+    internal val taskBrowsingSession = TaskBrowsingSession()
+    private var readingStateLoaded = false
+    private var readingRestoreJob: Job? = null
+    private var readingSaveJob: Job? = null
+    private var pendingReadingSave: Job? = null
+    private val repositoryAddresses by lazy { RepositoryRemoteAddresses(repositoryRemoteAddressCatalog, scope, ioDispatcher) }
     private var startupMigrationWarnings: List<String> = emptyList()
     private val initial = runCatching {
         val loaded = configStore.load()
@@ -492,6 +523,7 @@ class DesktopApplication(
             runner = codexCommandRunner,
             codexExecutable = codexExecutable,
             modelProvider = { sessionStore.config.aiRequirementNamingModel },
+            onReasoningFallback = { scope.launch { showStatus("当前命名模型使用默认推理强度") } },
             proxyEnabled = codexCommandRunner::proxyEnabled,
             redactProxyEndpoint = commandProxyEnvironment::redactConfiguredEndpoint,
         )
@@ -528,6 +560,27 @@ class DesktopApplication(
     private val operationRunner = OperationRunner(operationCoordinator, scope, ioDispatcher)
     private val settingsOperationCoordinator = OperationCoordinator(onError = ::recordError)
     private val settingsOperationRunner = OperationRunner(settingsOperationCoordinator, scope, ioDispatcher)
+    internal val codexAiController by lazy {
+        CodexAiController(
+            service = CodexAiConfigurationService(codexAiRpcFactory ?: SystemCodexRpcFactory(
+                codexExecutable,
+                environment = { commandProxyEnvironment.forTarget(CommandProxyTarget.CODEX).additions },
+                removals = { commandProxyEnvironment.forTarget(CommandProxyTarget.CODEX).removals },
+            )),
+            bindings = CodexTaskBindings(paths.codex.resolve("task-bindings.json")),
+            scope = scope, io = ioDispatcher,
+            authenticate = { cwd, name, login ->
+                val result = codexCommandRunner.run(
+                    listOf(codexExecutable.resolve(), "mcp", if (login) "login" else "logout", name),
+                    workingDirectory = cwd,
+                    timeout = java.time.Duration.ofMinutes(3),
+                    environment = codexExecutable.environment(),
+                )
+                check(result.succeeded) { "MCP 认证未完成，请检查服务是否支持 OAuth 后重试" }
+            },
+            onStatus = ::showStatus,
+        )
+    }
     private val meegleOperationCoordinator = OperationCoordinator(onError = ::recordError)
     private val meegleOperationRunner = OperationRunner(meegleOperationCoordinator, scope, ioDispatcher)
     private val larkOperationCoordinator = OperationCoordinator(onError = ::recordError)
@@ -547,17 +600,47 @@ class DesktopApplication(
             ioDispatcher = ioDispatcher,
         )
     }
-    internal val participatedWorkItemsController by lazy {
+    private val requirementReadCache by lazy {
+        RequirementReadCache(paths.cache.resolve("requirements")).also { cache ->
+            scope.launch(ioDispatcher) { cache.cleanup() }
+        }
+    }
+    private val requirementCacheAccess by lazy {
+        RequirementCacheAccess(requirementReadCache,
+            com.snowball.silverwing.core.MeegleRequirementCacheIdentity(meegleCommandRunner, meegleExecutable)::read)
+    }
+    private val requirementBodyRepository by lazy {
+        RequirementBodyRepository(participatedWorkItemsSource,
+            cacheAccess = requirementCacheAccess.takeIf { participatedWorkItemsSource is MeegleParticipatedWorkItemsSource })
+    }
+    internal val taskRequirementBodyController by lazy { RequirementBodyController(requirementBodyRepository, scope, ioDispatcher) }
+    internal suspend fun loadTaskRequirementBodyForCopy(task: TaskManifest): String? {
+        val item = taskRequirementItem(task, config, requirementController.loadedMetadataFor(task)?.title) ?: return null
+        return requirementBodyRepository.read(item, false, ioDispatcher)
+    }
+    internal val namingCoordinator: RequirementAiNamingCoordinator by lazy { RequirementAiNamingCoordinator(
+        scope, com.snowball.silverwing.core.LocalRequirementAiNamingCache(paths.cache.resolve("requirement-ai-naming.json")) { error -> scope.launch { showStatus("命名缓存暂时不可用：${error.message}") } },
+        requirementAiContextProvider, configuredRequirementAiNamingService, { sessionStore.config.aiRequirementNamingModel }, ioDispatcher, requirementBodyRepository::cached,
+        { item, force -> requirementBodyRepository.read(item, force, ioDispatcher) },
+        { link -> participatedWorkItemsController.state.items.firstOrNull { it.url == link } }) }
+    internal fun prepareRequirementNames(items: List<ParticipatedWorkItem>): Unit = namingCoordinator.prewarm(items, config.aiRequirementNamingEnabled && config.aiRequirementNamingPrewarmEnabled)
+    internal fun retryNamingPreparation() = namingCoordinator.retryFailed()
+    internal val participatedWorkItemsController: ParticipatedWorkItemsController by lazy {
         ParticipatedWorkItemsController(
             source = participatedWorkItemsSource,
             scope = scope,
             ioDispatcher = ioDispatcher,
+            bodyRepository = requirementBodyRepository,
+            onListLoaded = ::prepareRequirementNames,
+            onSelected = { namingCoordinator.prioritize(it) },
+            cacheAccess = requirementCacheAccess.takeIf { participatedWorkItemsSource is MeegleParticipatedWorkItemsSource },
         )
     }
     private val requirementMetadataCoordinator = RequirementMetadataCoordinator(
         provider = requirementMetadataProvider,
         scope = scope,
         ioDispatcher = ioDispatcher,
+        cacheAccess = requirementCacheAccess.takeIf { requirementMetadataProvider is MeegleRequirementMetadataProvider },
     )
     val requirementController = RequirementController(
         session = sessionStore,
@@ -565,6 +648,7 @@ class DesktopApplication(
         coordinator = requirementMetadataCoordinator,
         aiContextProvider = requirementAiContextProvider,
         aiNamingService = configuredRequirementAiNamingService,
+        namingCoordinator = { namingCoordinator },
         branchValidator = requirementAiBranchValidator,
         linkSource = requirementLinkSource,
         failureLog = requirementLinkFailures,
@@ -577,6 +661,7 @@ class DesktopApplication(
         onSettingsRequired = { navigation = NavigationItem.SETTINGS },
         onStatus = ::showStatus,
         onError = ::showError,
+        fileOpening = systemFileOpening,
     )
     val taskController: TaskController by lazy {
         TaskController(
@@ -591,6 +676,7 @@ class DesktopApplication(
             workspaceCommands = workspaceCommandService,
             workspaceTools = workspaceToolLaunchService,
             gitOperations = gitOperationService,
+            mainBranchMerger = mainBranchMerger,
             taskBranchCatalog = taskBranchCatalog,
             operations = operationRunner,
             scope = scope,
@@ -696,6 +782,15 @@ class DesktopApplication(
         }
     var repositories by mutableStateOf(config.repositories.map(RepositoryConfig::toInfo))
         private set
+    internal var workspaceNavigationCollapsed by mutableStateOf(WindowPreferences.load().workspaceNavigationCollapsed)
+        private set
+
+    internal fun setWorkspaceNavigationCollapsed(collapsed: Boolean) {
+        runCatching { WindowPreferences.saveWorkspaceNavigationCollapsed(collapsed) }
+            .onSuccess { workspaceNavigationCollapsed = collapsed }
+            .onFailure(::showError)
+    }
+
     var tasks: List<TaskManifest>
         get() = sessionStore.tasks
         private set(value) { sessionStore.tasks = value }
@@ -892,8 +987,9 @@ class DesktopApplication(
         link: String,
         branchPrefix: String,
         enabled: Boolean,
+        force: Boolean = false,
         onResult: (RequirementAiNamingSuggestion) -> Unit,
-    ) = requirementController.requestDraftAiNaming(link, branchPrefix, enabled, onResult)
+    ) = requirementController.requestDraftAiNaming(link, branchPrefix, enabled, force, onResult)
 
     fun cancelRequirementAiNaming() = requirementController.cancelDraftAiNaming()
 
@@ -968,6 +1064,34 @@ class DesktopApplication(
     fun canBuildTag(task: TaskManifest, workspace: ServiceWorkspace): Boolean = deliveryController.canBuild(task, workspace)
 
     init {
+        // Draft bytes are runtime cache data; load them off the UI thread before the editor asks.
+        scope.launch { withContext(ioDispatcher) { markdownDraftStore.loadFromDisk() } }
+        val beforeRestore = currentReadingSnapshot()
+        val navigationBeforeRestore = sessionStore.navigation
+        readingRestoreJob = scope.launch {
+            val restoredReadingState = withContext(ioDispatcher) { readingStateStore.load() }
+            // A user selection made while the cache was being read wins over startup restoration.
+            if (currentReadingSnapshot() == beforeRestore && sessionStore.navigation == navigationBeforeRestore) {
+                taskBrowsingSession.restore(restoredReadingState)
+                restoredReadingState.lastTaskPath?.let { path ->
+                    tasks.firstOrNull { runCatching { taskDirectory(it).toAbsolutePath().normalize().toString() == path }.getOrDefault(false) }?.let { task ->
+                        sessionStore.navigation = if (task.lifecycleStatus == TaskLifecycleStatus.ARCHIVED) NavigationItem.ARCHIVED else NavigationItem.TASKS
+                        sessionStore.selectedTask = task
+                    }
+                }
+            }
+            readingStateLoaded = true
+            readingSaveJob = scope.launch {
+                androidx.compose.runtime.snapshotFlow { currentReadingSnapshot() }.collect { snapshot ->
+                    val revision = readingStateStore.reserveSaveRevision()
+                    pendingReadingSave?.cancel()
+                    pendingReadingSave = scope.launch {
+                        kotlinx.coroutines.delay(600)
+                        withContext(ioDispatcher) { runCatching { readingStateStore.save(snapshot, revision) } }
+                    }
+                }
+            }
+        }
         requirementLinkFailures.cleanup()
         // Register authoritative global/group files without invoking Git or a
         // remote integration. Subsequent external writes can then propagate
@@ -991,13 +1115,23 @@ class DesktopApplication(
      * The only repository validation entry point. Startup deliberately does not
      * call this method, so opening the app never runs Git or Meegle commands.
      */
-    fun refresh() = taskController.refresh()
+    fun refresh() {
+        repositoryAddresses.refresh()
+        taskController.refresh()
+    }
+
+    internal fun repositoryAddressState(id: String, path: String) = repositoryAddresses.state(id, path)
+    internal fun repositoryAddressFailure(id: String, path: String) = repositoryAddresses.failure(id, path)
+    internal fun loadRepositoryAddresses(id: String, path: String, force: Boolean = false) = repositoryAddresses.load(id, path, force)
+    internal fun refreshRepositoryAddresses() = repositoryAddresses.refresh()
 
     fun selectTask(task: TaskManifest) = taskController.select(task)
 
     fun setTheme(theme: ThemePreference) = settingsController.setTheme(theme)
     fun setGlobalTagEnabled(enabled: Boolean, onFailure: (Throwable) -> Unit = {}) =
         settingsController.setGlobalTagEnabled(enabled, onFailure)
+    fun setAllowTaskTagTargetEditing(enabled: Boolean, onFailure: (Throwable) -> Unit = {}) =
+        settingsController.setAllowTaskTagTargetEditing(enabled, onFailure)
     fun updateTagHistoryMaxGroups(value: Int, onFailure: (Throwable) -> Unit = {}) =
         settingsController.updateTagHistoryMaxGroups(value, onFailure)
     fun updateTaskRoot(value: String, onFailure: (Throwable) -> Unit = {}) = settingsController.updateTaskRoot(value, onFailure)
@@ -1077,6 +1211,8 @@ class DesktopApplication(
         if (!enabled) requirementController.cancelDraftAiNaming()
         return settingsController.setAiRequirementNamingEnabled(enabled, onFailure)
     }
+    fun setAiRequirementNamingPrewarmEnabled(enabled: Boolean) = settingsController.setAiRequirementNamingPrewarmEnabled(enabled)
+
     fun setAiRequirementNamingModel(model: String, onFailure: (Throwable) -> Unit = {}): Boolean =
         settingsController.setAiRequirementNamingModel(model, onFailure)
     fun chooseDirectory(initialPath: String? = null, onSelected: (String) -> Unit) = settingsController.chooseDirectory(initialPath, onSelected)
@@ -1125,7 +1261,7 @@ class DesktopApplication(
         settingsController.addRepositories(groupId, selectedDirectories, onCompleted)
     fun clearRepositoryAddResult() = settingsController.clearRepositoryAddResult()
     fun updateService(groupId: String, service: GroupServiceConfig, onCompleted: () -> Unit = {}) =
-        settingsController.updateService(groupId, service, onCompleted)
+        settingsController.updateService(groupId, service, onCompleted = onCompleted)
     fun moveService(groupId: String, serviceId: String, offset: Int) = settingsController.moveService(groupId, serviceId, offset)
     fun removeService(groupId: String, serviceId: String, onCompleted: () -> Unit = {}) =
         settingsController.removeService(groupId, serviceId, onCompleted)
@@ -1209,6 +1345,21 @@ class DesktopApplication(
     )
 
     fun retryWorkspaceTool(task: TaskManifest, toolId: String) = taskController.retryWorkspaceTool(task, toolId)
+    internal fun openTaskInCodex(task: TaskManifest, forceNew: Boolean = false) {
+        scope.launch {
+            try {
+                val path = Path.of(taskPath(task))
+                check(java.nio.file.Files.isDirectory(path)) { "任务目录不存在" }
+                val id = if (forceNew) null else codexAiController.boundThread(path)
+                if (id == null) retryWorkspaceTool(task, CodexWorkspaceToolLauncher.ID)
+                else {
+                    runInterruptible(ioDispatcher) { codexThreadOpener(id) }
+                    showStatus("已请求 Codex 打开关联会话")
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { showError(error) }
+        }
+    }
 
     fun readTaskNotes(task: TaskManifest): String = agentInstructionsController.readTaskNotes(task)
     suspend fun readTaskNotesAsync(task: TaskManifest): String = agentInstructionsController.readTaskNotesAsync(task)
@@ -1386,15 +1537,15 @@ class DesktopApplication(
     fun branchServices(task: TaskManifest, includeRequirementLink: Boolean): String =
         TaskBranchInfoFormatter.formatServices(task, includeRequirementLink)
 
-    fun openWorkData(task: TaskManifest, type: com.snowball.silverwing.core.DevelopmentToolType = config.defaultDevelopmentTool) =
-        desktopActions.openWorkData(taskDirectory(task), type)
-
     fun configuredDevelopmentTools(): List<com.snowball.silverwing.core.DevelopmentToolType> = config.developmentTools.map { it.type }
 
     fun defaultCommitMessage(task: TaskManifest, workspace: ServiceWorkspace) = taskController.defaultCommitMessage(task, workspace)
     fun commitWorkspace(task: TaskManifest, workspace: ServiceWorkspace, message: String, pushAfter: Boolean = false, expectedFingerprint: String? = null) =
         taskController.commit(task, workspace, message, pushAfter, expectedFingerprint)
     fun pushWorkspace(task: TaskManifest, workspace: ServiceWorkspace) = taskController.push(task, workspace)
+    internal fun mergeWorkspaceMainBranch(task: TaskManifest, workspace: ServiceWorkspace) = taskController.mainBranchMerge.merge(task, workspace)
+    internal fun workspaceMainBranchMergeState(task: TaskManifest, workspace: ServiceWorkspace) = taskController.mainBranchMerge.stateFor(task, workspace)
+    internal fun dismissWorkspaceMainBranchMerge(task: TaskManifest, workspace: ServiceWorkspace) = taskController.mainBranchMerge.dismiss(task, workspace)
     fun physicalWorkspaces(task: TaskManifest) = taskController.physicalWorkspaces(task)
     fun workspaceKey(workspace: ServiceWorkspace) = taskController.workspaceKey(workspace)
     fun batchGit(
@@ -1406,6 +1557,8 @@ class DesktopApplication(
         onCompleted: (WorkspaceGitBatchResult) -> Unit,
     ) = taskController.batchGit(task, mode, selectedWorkspaceKeys, commitMessages, expectedFingerprints, onCompleted)
     fun loadBatchGitPreviews(task: TaskManifest) = taskController.loadBatchGitPreviews(task)
+
+    fun cancelBatchGitPreviews() = taskController.cancelBatchGitPreviews()
     suspend fun previewWorkspaceFile(worktreePath: String, change: WorkspaceGitFileChange): WorkspaceGitFilePreview =
         taskController.previewWorkspaceFile(worktreePath, change)
 
@@ -1530,6 +1683,12 @@ class DesktopApplication(
 
     fun reveal(path: String) = desktopActions.reveal(Path.of(path))
     fun openDirectory(path: String) = desktopActions.openDirectory(Path.of(path))
+    internal fun openAiConfigurationFile(file: Path) {
+        scope.launch {
+            if (java.nio.file.Files.isRegularFile(file, java.nio.file.LinkOption.NOFOLLOW_LINKS)) desktopActions.openFile(file)
+            else showError(IllegalArgumentException("文件不存在或是符号链接，请刷新后重试"))
+        }
+    }
 
     fun revealGlobalAgents() = agentInstructionsController.revealGlobal()
     fun revealGroupAgents(groupId: String) = agentInstructionsController.revealGroup(groupId)
@@ -1566,7 +1725,21 @@ class DesktopApplication(
         recentErrors = errorLogReader.latest()
     }
 
+    private fun currentReadingSnapshot() = taskBrowsingSession.snapshot(selectedTask?.let { task ->
+        runCatching { taskDirectory(task).toAbsolutePath().normalize().toString() }.getOrNull() })
+
     override fun close() {
+        readingRestoreJob?.cancel()
+        readingSaveJob?.cancel()
+        pendingReadingSave?.cancel()
+        // Persist the final snapshot before process exit; reject any older write still in flight.
+        if (readingStateLoaded) {
+            val revision = readingStateStore.reserveSaveRevision()
+            runCatching { readingStateStore.save(currentReadingSnapshot(), revision) }
+        }
+        markdownDraftStore.close()
+        systemFileTrash.close()
+        desktopActions.close()
         requirementController.close()
         agentMonitor.close()
         scope.cancel()
@@ -1634,7 +1807,8 @@ class DesktopApplication(
         val requirementConfigurationChanged = config.meegleProjects != updated.meegleProjects ||
             config.requirementMaterialsRoot != updated.requirementMaterialsRoot ||
             config.requirementMaterialsSubdirectory != updated.requirementMaterialsSubdirectory
-        val aiNamingConfigurationChanged = config.aiRequirementNamingEnabled != updated.aiRequirementNamingEnabled ||
+        val aiNamingConfigurationChanged = config.aiRequirementNamingPrewarmEnabled != updated.aiRequirementNamingPrewarmEnabled ||
+            config.aiRequirementNamingEnabled != updated.aiRequirementNamingEnabled ||
             config.aiRequirementNamingModel != updated.aiRequirementNamingModel
         val tagConfigurationChanged = config.tagEnabled != updated.tagEnabled ||
             config.tagHistoryMaxGroups != updated.tagHistoryMaxGroups
@@ -1648,7 +1822,10 @@ class DesktopApplication(
         repositories = updated.repositories.map(RepositoryConfig::toInfo)
         if (terminalConfigurationChanged) detectTerminalInBackground()
         if (requirementConfigurationChanged) requirementController.onConfigurationChanged()
-        if (aiNamingConfigurationChanged) requirementController.cancelDraftAiNaming()
+        if (aiNamingConfigurationChanged) {
+            requirementController.cancelDraftAiNaming()
+            prepareRequirementNames(participatedWorkItemsController.state.items)
+        }
         updated.groups.forEach { group ->
             runCatching {
                 agentDocuments.ensureGroupFile(group.id)
@@ -1700,7 +1877,7 @@ class DesktopApplication(
         }
     }
 
-    private fun showStatus(message: String) {
+    internal fun showStatus(message: String) {
         operationCoordinator.statusMessage = message
         operationCoordinator.errorMessage = null
     }

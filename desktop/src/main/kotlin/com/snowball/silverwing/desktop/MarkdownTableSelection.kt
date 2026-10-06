@@ -7,8 +7,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
-import com.mikepenz.markdown.compose.elements.MarkdownTableBasicText
 import com.mikepenz.markdown.compose.LocalMarkdownColors
 import com.mikepenz.markdown.model.MarkdownColors
 import org.intellij.markdown.ast.ASTNode
@@ -24,22 +22,31 @@ internal fun parsePreviewMarkdownTable(source: String): PreviewMarkdownTable? {
     val header = splitMarkdownTableRow(lines[0])
     val separators = splitMarkdownTableRow(lines[1])
     if (header.isEmpty() || separators.size != header.size || separators.any { !it.matches(Regex(":?-{3,}:?")) }) return null
-    return PreviewMarkdownTable(listOf(header) + lines.drop(2).map(::splitMarkdownTableRow), separators)
+    return PreviewMarkdownTable(listOf(header) + lines.drop(2).map { line ->
+        val row = splitMarkdownTableRow(line)
+        // GFM uses the header's column count; ignore extra cells and pad missing ones.
+        List(header.size) { row.getOrNull(it).orEmpty() }
+    }, separators)
 }
 
 private fun splitMarkdownTableRow(line: String): List<String> {
-    val trimmed = line.trim().removePrefix("|").removeSuffix("|")
+    var trimmed = line.trim().removePrefix("|")
+    if (trimmed.endsWith('|')) {
+        val escapes = trimmed.dropLast(1).takeLastWhile { it == '\\' }.length
+        if (escapes % 2 == 0) trimmed = trimmed.dropLast(1)
+    }
     val cells = mutableListOf<String>()
     val current = StringBuilder()
     var escaped = false
     for (char in trimmed) {
         when {
-            escaped -> { current.append(char); escaped = false }
+            escaped -> { if (char != '|') current.append('\\'); current.append(char); escaped = false }
             char == '\\' -> escaped = true
             char == '|' -> { cells += current.toString().trim(); current.clear() }
             else -> current.append(char)
         }
     }
+    if (escaped) current.append('\\')
     cells += current.toString().trim()
     return cells
 }
@@ -78,15 +85,13 @@ internal fun SelectableMarkdownTable(
         cellContent = { row, column, selected ->
             cells.getOrNull(row)?.getOrNull(column)?.let { cell ->
                 CompositionLocalProvider(LocalMarkdownColors provides if (selected) selectedColors else colors) {
-                    MarkdownTableBasicText(
-                        content = markdownContent,
-                        cell = cell,
-                        style = if (row == 0) style.copy(fontWeight = FontWeight.Bold) else style,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    val cellStyle = if (row == 0) style.copy(fontWeight = FontWeight.Bold) else style
+                    // Keep the renderer's links, inline images and code styles. Full cell text
+                    // must be visible so a find result never points into an ellipsis.
+                    SearchableMarkdownText(markdownContent, cell, cellStyle)
                 }
-            }
+            } ?: SearchableText(table.rows.getOrNull(row)?.getOrNull(column).orEmpty(), style = style,
+                sourceOrder = node.startOffset.toLong() + row * table.alignment.size + column)
         },
         onCopy = { firstRow, lastRow, firstColumn, lastColumn ->
             onCopy(markdownTableFragment(table, firstRow, lastRow, firstColumn, lastColumn))

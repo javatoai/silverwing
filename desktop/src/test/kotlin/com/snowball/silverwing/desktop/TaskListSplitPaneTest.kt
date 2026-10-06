@@ -27,7 +27,8 @@ class TaskListSplitPaneTest {
 
     @Test
     fun `task list width never becomes narrower than the minimum`() {
-        assertEquals(200f, resolveTaskListPaneWidth(preferredWidthDp = 180f, availableWidthDp = 1_200f))
+        assertEquals(160f, resolveTaskListPaneWidth(preferredWidthDp = 120f, availableWidthDp = 1_200f))
+        assertEquals(180f, resolveTaskListPaneWidth(preferredWidthDp = 180f, availableWidthDp = 1_200f))
     }
 
     @Test
@@ -44,9 +45,4 @@ class TaskListSplitPaneTest {
         )
     }
 
-    @Test
-    fun `create task entry is available only for active tasks`() {
-        assertEquals(true, taskCreateEntryVisible(archived = false))
-        assertEquals(false, taskCreateEntryVisible(archived = true))
-    }
 }

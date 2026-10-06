@@ -115,7 +115,7 @@ class RequirementMaterialsService(
             }.getOrElse { error ->
                 RequirementMaterialsResult.Failed(
                     validation.request.parsed.id,
-                    "需求资料目录预检失败：${error.message ?: error::class.simpleName}",
+                    "任务资料目录预检失败：${error.message ?: error::class.simpleName}",
                 )
             }
         }
@@ -133,7 +133,7 @@ class RequirementMaterialsService(
                 val validated = validation.request
                 val planned = FileLocking.withExclusiveLock(
                     validated.root.resolve(LOCK_FILE),
-                    "需求资料目录正在被另一个 silverwing 操作修改：${validated.root}",
+                    "任务资料目录正在被另一个 silverwing 操作修改：${validated.root}",
                 ) {
                     resolveValidated(validated).let { result ->
                         if (result is RequirementMaterialsResult.Ready) {
@@ -149,7 +149,7 @@ class RequirementMaterialsService(
             } catch (error: Exception) {
                 RequirementMaterialsResult.Failed(
                     validation.request.parsed.id,
-                    "需求资料目录创建失败：${error.message ?: error::class.simpleName}",
+                    "任务资料目录创建失败：${error.message ?: error::class.simpleName}",
                 )
             }
         }
@@ -194,7 +194,7 @@ class RequirementMaterialsService(
         } catch (error: Exception) {
             RequestValidation.Invalid(
                 requirementId,
-                "需求资料目录创建失败：${error.message ?: error::class.simpleName}",
+                "任务资料目录创建失败：${error.message ?: error::class.simpleName}",
             )
         }
     }
@@ -217,7 +217,7 @@ class RequirementMaterialsService(
                 id = requirementId,
                 subdirectory = request.subdirectory,
                 requirementInput = request.requirementInput,
-            ) ?: error("需求资料目录复用判定丢失")
+            ) ?: error("任务资料目录复用判定丢失")
             return RequirementMaterialsResult.Ready(
                 requirementId = requirementId,
                 requirementPath = context.requirementDirectory,
@@ -271,24 +271,24 @@ class RequirementMaterialsService(
 
     /** Validates the configured root for both desktop and Agent material flows. */
     fun requireMaterialsRoot(raw: String?): Path = validateRoot(raw)
-        ?: throw IllegalStateException("尚未配置需求资料根目录；请在 silverwing 设置 > 路径设置中配置")
+        ?: throw IllegalStateException("尚未配置任务资料根目录；请在 silverwing 设置 > 路径设置中配置")
 
     /** Validates the configured write-root child for both desktop and Agent flows. */
     fun requireMaterialsSubdirectory(raw: String?): String = validateSegment(raw, "资料子目录名", 100)
-        ?: throw IllegalStateException("尚未配置需求资料子目录；请在 silverwing 设置 > 路径设置中配置")
+        ?: throw IllegalStateException("尚未配置任务资料子目录；请在 silverwing 设置 > 路径设置中配置")
 
     /** Applies the single path-boundary rule owned by the materials service. */
     fun requirePathInsideMaterialsRoot(path: Path, root: Path, label: String): Path {
         val normalizedRoot = root.toAbsolutePath().normalize()
         val normalized = path.toAbsolutePath().normalize()
-        require(normalized.startsWith(normalizedRoot)) { "$label 超出配置的需求资料根目录：$path" }
+        require(normalized.startsWith(normalizedRoot)) { "$label 超出配置的任务资料根目录：$path" }
         return normalized
     }
 
     /** Creates only missing directories beneath an already validated root. */
     fun ensureMaterialsDirectory(root: Path, path: Path): Path = ensureDirectory(
         root.toAbsolutePath().normalize(),
-        requirePathInsideMaterialsRoot(path, root, "需求资料目录"),
+        requirePathInsideMaterialsRoot(path, root, "任务资料目录"),
     )
 
     private data class ParsedRequirement(val id: String, val simpleName: String?, val kind: String?)
@@ -564,24 +564,24 @@ class RequirementMaterialsService(
         val normalizedRoot = root.toAbsolutePath().normalize()
         val path = manifestPath.toAbsolutePath().normalize()
         require(path.fileName?.toString() == REQUIREMENT_MANIFEST) {
-            "需求资料 manifest 文件名不正确：$manifestPath"
+            "任务资料 manifest 文件名不正确：$manifestPath"
         }
-        require(path.startsWith(normalizedRoot)) { "需求资料 manifest 超出资料根目录：$manifestPath" }
-        val parent = path.parent ?: throw IllegalArgumentException("需求资料 manifest 缺少父目录：$manifestPath")
+        require(path.startsWith(normalizedRoot)) { "任务资料 manifest 超出资料根目录：$manifestPath" }
+        val parent = path.parent ?: throw IllegalArgumentException("任务资料 manifest 缺少父目录：$manifestPath")
         val requirementDirectory = if (parent.fileName?.toString() == subdirectory) {
-            parent.parent ?: throw IllegalArgumentException("需求资料 manifest 缺少需求目录：$manifestPath")
+            parent.parent ?: throw IllegalArgumentException("任务资料 manifest 缺少需求目录：$manifestPath")
         } else {
             generateSequence(parent) { it.parent }
                 .firstOrNull { candidate ->
                     val name = candidate.fileName?.toString().orEmpty()
                     name.equals(id, ignoreCase = true) || name.startsWith("$id-", ignoreCase = true)
                 }
-                ?: throw IllegalArgumentException("需求资料 manifest 必须位于需求资料写入目录：$manifestPath")
+                ?: throw IllegalArgumentException("任务资料 manifest 必须位于任务资料写入目录：$manifestPath")
         }
         val context = existingDirectoryContext(normalizedRoot, requirementDirectory, id, subdirectory, readSprint)
         if (parent == requirementDirectory) return null
         require(parent == context.writeRoot) {
-            "需求资料 manifest 必须位于需求资料写入目录：$manifestPath"
+            "任务资料 manifest 必须位于任务资料写入目录：$manifestPath"
         }
         return context
     }
@@ -598,10 +598,10 @@ class RequirementMaterialsService(
     ): RequirementMaterialsDirectoryContext {
         val normalizedRoot = root.toAbsolutePath().normalize()
         val normalizedRequirement = requirePathInsideMaterialsRoot(requirementDirectory, normalizedRoot, "需求目录")
-        val normalizedWriteRoot = requirePathInsideMaterialsRoot(writeRoot, normalizedRoot, "需求资料写入目录")
+        val normalizedWriteRoot = requirePathInsideMaterialsRoot(writeRoot, normalizedRoot, "任务资料写入目录")
         val normalizedIteration = requirePathInsideMaterialsRoot(iterationDirectory, normalizedRoot, "迭代目录")
         require(normalizedWriteRoot == normalizedRequirement.resolve(subdirectory)) {
-            "需求资料写入目录必须是需求目录的当前资料子目录"
+            "任务资料写入目录必须是需求目录的当前资料子目录"
         }
         require(normalizedRequirement.parent == normalizedIteration && normalizedIteration.parent == normalizedRoot) {
             "需求目录必须直接位于资料根目录的 Sprint 子目录"
@@ -626,7 +626,7 @@ class RequirementMaterialsService(
      * one in progress.
      */
     fun resolveMaterialsSprint(sprints: List<RequirementSprint>): RequirementSprintSnapshot {
-        require(sprints.isNotEmpty()) { "需求未关联可用的 Sprint，已停止创建需求资料目录" }
+        require(sprints.isNotEmpty()) { "需求未关联可用的 Sprint，已停止创建任务资料目录" }
         val sprint = if (sprints.size == 1) {
             sprints.single()
         } else {
@@ -635,8 +635,8 @@ class RequirementMaterialsService(
             }
             require(active.size == 1) {
                 when (active.size) {
-                    0 -> "需求关联多个 Sprint 且均不在进行中，已停止创建需求资料目录"
-                    else -> "需求关联多个进行中 Sprint，已停止创建需求资料目录：${active.joinToString { it.label }}"
+                    0 -> "需求关联多个 Sprint 且均不在进行中，已停止创建任务资料目录"
+                    else -> "需求关联多个进行中 Sprint，已停止创建任务资料目录：${active.joinToString { it.label }}"
                 }
             }
             active.single()
@@ -654,7 +654,7 @@ class RequirementMaterialsService(
         val directoryName = validateSegment("$id-$safeFolder", "需求目录名", 140)
             ?: throw IllegalArgumentException("需求目录名不能为空")
         return normalizedRoot.resolve(safeSprint).resolve(directoryName)
-            .normalize().also { require(it.startsWith(normalizedRoot)) { "需求资料目录超出资料根目录" } }
+            .normalize().also { require(it.startsWith(normalizedRoot)) { "任务资料目录超出资料根目录" } }
     }
 
     /**
@@ -666,7 +666,7 @@ class RequirementMaterialsService(
         val normalized = root.toAbsolutePath().normalize()
         return FileLocking.withExclusiveLock(
             normalized.resolve(LOCK_FILE),
-            "需求资料目录正在被另一个 silverwing 操作修改：$normalized",
+            "任务资料目录正在被另一个 silverwing 操作修改：$normalized",
             block,
         )
     }
@@ -696,14 +696,14 @@ class RequirementMaterialsService(
                 val identity = documentationFiles.readRequirementIdentity(path)
                 val id = identity.workItemId
                 require(id == parsed.id) {
-                    "需求资料目录中的 manifest 与当前需求编号不一致，已停止写入：$path"
+                    "任务资料目录中的 manifest 与当前需求编号不一致，已停止写入：$path"
                 }
                 parsed.simpleName?.let { space ->
                     require(identity.space.equals(space, ignoreCase = true)) {
-                        "需求资料目录中的 manifest 与当前需求空间不一致，已停止写入：$path"
+                        "任务资料目录中的 manifest 与当前需求空间不一致，已停止写入：$path"
                     }
                     require(identity.kind.equals(parsed.kind, ignoreCase = true)) {
-                        "需求资料目录中的 manifest 与当前需求类型不一致，已停止写入：$path"
+                        "任务资料目录中的 manifest 与当前需求类型不一致，已停止写入：$path"
                     }
                 }
             }
@@ -724,9 +724,9 @@ class RequirementMaterialsService(
             "需求目录不能是链接或重解析点：$normalizedRequirement"
         }
         val iterationDirectory = normalizedRequirement.parent
-            ?: throw IllegalStateException("需求资料目录缺少 Sprint 目录：$normalizedRequirement")
+            ?: throw IllegalStateException("任务资料目录缺少 Sprint 目录：$normalizedRequirement")
         require(iterationDirectory.parent?.toAbsolutePath()?.normalize() == normalizedRoot) {
-            "需求资料目录必须位于资料根目录的 Sprint 子目录：$normalizedRequirement"
+            "任务资料目录必须位于资料根目录的 Sprint 子目录：$normalizedRequirement"
         }
         val directoryName = normalizedRequirement.fileName?.toString().orEmpty()
         require(directoryName.equals(id, ignoreCase = true) || directoryName.startsWith("$id-", ignoreCase = true)) {
@@ -735,7 +735,7 @@ class RequirementMaterialsService(
         val sprint = readSprint(iterationDirectory.resolve(ITERATION_MANIFEST))
             ?: RequirementSprintSnapshot("", iterationDirectory.fileName?.toString().orEmpty())
         validateSegment(sprint.label, "Sprint 名称", 120)
-        val writeRoot = requirePathInsideMaterialsRoot(normalizedRequirement.resolve(subdirectory), normalizedRoot, "需求资料写入目录")
+        val writeRoot = requirePathInsideMaterialsRoot(normalizedRequirement.resolve(subdirectory), normalizedRoot, "任务资料写入目录")
         return RequirementMaterialsDirectoryContext(normalizedRequirement, writeRoot, iterationDirectory, sprint)
     }
 

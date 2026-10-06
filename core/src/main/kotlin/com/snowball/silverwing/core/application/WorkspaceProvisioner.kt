@@ -192,17 +192,16 @@ class WorkspaceBranchReuseInspector(
     ): BranchReuseConflict? {
         require(branch.isNotBlank()) { "Worktree 模块目标分支不能为空：${module.name}" }
         val masterRemote = service.effectiveMasterRemote(module)
+        // 任务分支只读取其主分支来源；Tag 目标远程的访问留到构建 Tag 时检查。
         git.fetch(repositoryPath, masterRemote)
-        val featureRemotes = branchReuseRemotes(service, module)
-        featureRemotes.filter { it != masterRemote }.forEach { git.fetch(repositoryPath, it) }
         val localSha = git.run(repositoryPath, "rev-parse", "--verify", "refs/heads/$branch", check = false)
             .takeIf(CommandResult::succeeded)?.stdout?.trim()?.ifBlank { null }
         val localExists = localSha != null
-        val remoteRefs = featureRemotes.mapNotNull { remote ->
-            val name = "$remote/$branch"
-            git.run(repositoryPath, "rev-parse", "--verify", "refs/remotes/$name", check = false)
-                .takeIf(CommandResult::succeeded)?.stdout?.trim()?.ifBlank { null }?.let { name to it }
-        }
+        val remoteRef = "$masterRemote/$branch"
+        val remoteRefs = listOfNotNull(
+            git.run(repositoryPath, "rev-parse", "--verify", "refs/remotes/$remoteRef", check = false)
+                .takeIf(CommandResult::succeeded)?.stdout?.trim()?.ifBlank { null }?.let { remoteRef to it },
+        )
         if (!localExists && remoteRefs.isEmpty()) return null
         val occupied = if (localExists) git.worktrees(repositoryPath).filter { it.branch == branch } else emptyList()
         return BranchReuseConflict(
@@ -268,21 +267,20 @@ class StandardWorktreeProvisioner(
                 require(target.parent == request.taskDirectory.toAbsolutePath().normalize()) { "Worktree 必须位于任务目录的直接子级" }
                 val masterBranch = request.service.effectiveMasterBranch(module)
                 val masterRemote = request.service.effectiveMasterRemote(module)
+                // Tag 配置不参与分支拉取，其他远程不可用时仍可从所选来源创建任务。
                 git.fetch(repositoryPath, masterRemote)
                 val baseBranch = TaskBranchNaming.normalizeBaseRef(masterBranch)
                 val remoteBaseRef = "$masterRemote/$baseBranch"
                 require(git.refExists(repositoryPath, "refs/remotes/$remoteBaseRef")) { "远程主分支不存在：$remoteBaseRef" }
                 require(git.run(repositoryPath, "check-ref-format", "--branch", branch, check = false).succeeded) { "分支名不合法：$branch" }
-                val featureRemotes = branchReuseRemotes(request.service, module)
-                featureRemotes.filter { it != masterRemote }.forEach { git.fetch(repositoryPath, it) }
                 val localSha = git.run(repositoryPath, "rev-parse", "--verify", "refs/heads/$branch", check = false)
                     .takeIf(CommandResult::succeeded)?.stdout?.trim()?.ifBlank { null }
                 val localExists = localSha != null
-                val remoteBranches = featureRemotes.mapNotNull { remote ->
-                    val name = "$remote/$branch"
-                    git.run(repositoryPath, "rev-parse", "--verify", "refs/remotes/$name", check = false)
-                        .takeIf(CommandResult::succeeded)?.stdout?.trim()?.ifBlank { null }?.let { name to it }
-                }
+                val remoteRef = "$masterRemote/$branch"
+                val remoteBranches = listOfNotNull(
+                    git.run(repositoryPath, "rev-parse", "--verify", "refs/remotes/$remoteRef", check = false)
+                        .takeIf(CommandResult::succeeded)?.stdout?.trim()?.ifBlank { null }?.let { remoteRef to it },
+                )
                 val matching = if (localExists) git.worktrees(repositoryPath).filter { it.branch == branch && it.path != target } else emptyList()
                 val key = BranchReuseKey(
                     request.repository.id,
@@ -359,13 +357,6 @@ class StandardWorktreeProvisioner(
         }
     }
 }
-
-private fun branchReuseRemotes(service: GroupServiceConfig, module: ServiceModuleConfig): List<String> = buildList {
-    add(service.effectiveMasterRemote(module))
-    if (module.tagEnabled && module.tagMode == TagBuildMode.MERGE_TO_TARGET_BRANCH) {
-        add(RemoteBranchRef.parse(requireNotNull(service.effectiveTagTargetRef(module))).remote)
-    }
-}.distinct()
 
 class IndependentCloneProvisioner(
     private val git: GitClient = GitClient(),

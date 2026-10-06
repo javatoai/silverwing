@@ -31,7 +31,7 @@ class CodexRequirementAiNamingServiceTest {
 
         assertEquals(RequirementAiNamingSuggestion("支付超时优化", "payment_timeout"), suggestion)
         assertEquals("codex-test", runner.command.first())
-        assertEquals("gpt-5.6-luna", runner.command[runner.command.indexOf("--model") + 1])
+        assertEquals("gpt-6-luna", runner.command[runner.command.indexOf("--model") + 1])
         assertTrue(runner.command.indexOf("--model") < runner.command.indexOf("exec"))
         assertTrue(runner.command.indexOf("--ask-for-approval") < runner.command.indexOf("exec"))
         assertEquals("never", runner.command[runner.command.indexOf("--ask-for-approval") + 1])
@@ -74,6 +74,49 @@ class CodexRequirementAiNamingServiceTest {
         assertFailsWith<IllegalArgumentException> {
             service.suggest(RequirementAiContext("标题", "正文"))
         }
+    }
+
+    @Test
+    fun `queued request model takes precedence over subsequently changed settings`() {
+        val runner = RecordingInputRunner()
+        val service = CodexRequirementAiNamingService(
+            paths = ApplicationPaths(temporary.resolve("captured-model-home")), runner = runner,
+            codexExecutable = CodexExecutable { "codex-test" }, modelProvider = { "new-model" },
+        )
+        service.suggestWithModel(RequirementAiContext("标题", "正文"), emptySet(), "captured-model")
+        assertEquals("captured-model", runner.command[runner.command.indexOf("--model") + 1])
+    }
+
+    @Test
+    fun `rejects numeric JSON branch suffix despite a successful process`() {
+        val service = CodexRequirementAiNamingService(
+            paths = ApplicationPaths(temporary.resolve("numeric-output-home")),
+            runner = RecordingInputRunner("""{"folderName":"支付优化","branchSuffix":123}"""),
+            codexExecutable = CodexExecutable { "codex-test" },
+        )
+        assertFailsWith<IllegalArgumentException> { service.suggest(RequirementAiContext("标题", "正文")) }
+    }
+
+    @Test
+    fun `unsupported low reasoning falls back once and keeps configured model`() {
+        val commands = mutableListOf<List<String>>()
+        var notices = 0
+        val runner = object : CommandRunner {
+            override fun run(command: List<String>, workingDirectory: Path?, timeout: Duration, environment: Map<String, String>) = error("standard input required")
+            override fun runWithInput(command: List<String>, input: String, workingDirectory: Path?, timeout: Duration, environment: Map<String, String>): CommandResult {
+                commands += command.toList()
+                if ("-c" in command) return CommandResult(1, "", "reasoning effort low is not supported")
+                Files.writeString(Path.of(command[command.indexOf("--output-last-message") + 1]), """{"folderName":"支付优化","branchSuffix":"payment_update"}""")
+                return CommandResult(0, "", "")
+            }
+        }
+        val service = CodexRequirementAiNamingService(ApplicationPaths(temporary.resolve("fallback")), runner,
+            codexExecutable = CodexExecutable { "codex-test" }, onReasoningFallback = { notices++ })
+        repeat(2) { service.suggest(RequirementAiContext("支付优化", "")) }
+        assertEquals(4, commands.size)
+        assertEquals(1, notices)
+        commands.forEach { assertEquals("gpt-6-luna", it[it.indexOf("--model") + 1]) }
+        assertFalse("-c" in commands[1]); assertFalse("-c" in commands[3])
     }
 
     private class RecordingInputRunner(

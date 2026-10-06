@@ -62,7 +62,6 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -227,7 +226,7 @@ private fun AgentWorkspaceApp(controller: DesktopApplication) {
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         BoxWithConstraints(Modifier.fillMaxSize().padding(padding)) {
-            val navigationLayout = navigationLayoutFor(maxWidth.value)
+            val navigationLayout = navigationLayoutFor(maxWidth.value, controller.workspaceNavigationCollapsed)
             Row(Modifier.fillMaxSize()) {
                 Sidebar(controller, navigationLayout) { controller.navigation = it }
                 Column(Modifier.weight(1f).fillMaxHeight()) {
@@ -236,12 +235,12 @@ private fun AgentWorkspaceApp(controller: DesktopApplication) {
                             .padding(top = navigationContentTopPaddingFor(controller.navigation).dp),
                     ) {
                         when (controller.navigation) {
-                            NavigationItem.TASKS -> TasksScreen(controller, archived = false) { showCreate = true }
+                            NavigationItem.TASKS -> TasksScreen(controller, archived = false)
                             NavigationItem.REQUIREMENTS -> ParticipatedWorkItemsScreen(controller) { item ->
                                 createTaskRequirement = CreateTaskRequirement(item.title, item.url)
                                 showCreate = true
                             }
-                            NavigationItem.ARCHIVED -> TasksScreen(controller, archived = true) { showCreate = true }
+                            NavigationItem.ARCHIVED -> TasksScreen(controller, archived = true)
                             NavigationItem.SERVICES -> ServicesScreen(controller)
                             NavigationItem.TAG -> TagScreen(controller)
                             NavigationItem.SKILLS -> LocalSkillsScreen(controller)
@@ -341,11 +340,11 @@ private fun AgentWorkspaceApp(controller: DesktopApplication) {
 
 /**
  * The complete task view needs room for a task index and a readable detail pane.
- * Below this width, an icon rail gives that content back 136dp without hiding a
+ * Below this width, an icon rail gives that content back 56dp without hiding a
  * destination or requiring a separate navigation mode.
  */
 internal const val COMPACT_NAVIGATION_MAX_WIDTH_DP = 1_180f
-internal const val EXPANDED_SIDEBAR_WIDTH_DP = 184f
+internal const val EXPANDED_SIDEBAR_WIDTH_DP = 128f
 internal const val COMPACT_SIDEBAR_WIDTH_DP = 72f
 internal const val MAIN_CONTENT_START_PADDING_DP = 8f
 internal const val MAIN_CONTENT_END_PADDING_DP = 28f
@@ -356,8 +355,8 @@ internal enum class NavigationLayout {
     COMPACT,
 }
 
-internal fun navigationLayoutFor(availableWidthDp: Float): NavigationLayout =
-    if (availableWidthDp < COMPACT_NAVIGATION_MAX_WIDTH_DP) NavigationLayout.COMPACT else NavigationLayout.EXPANDED
+internal fun navigationLayoutFor(availableWidthDp: Float, collapsed: Boolean = false): NavigationLayout =
+    if (collapsed || availableWidthDp < COMPACT_NAVIGATION_MAX_WIDTH_DP) NavigationLayout.COMPACT else NavigationLayout.EXPANDED
 
 /** Non-task pages retain a small breathing space after their large page title is removed. */
 internal fun navigationContentTopPaddingFor(item: NavigationItem): Float =
@@ -390,7 +389,7 @@ internal fun requirementsNavigationBadge(days: java.math.BigDecimal?): Navigatio
 }
 
 @Composable
-private fun Sidebar(
+internal fun Sidebar(
     controller: DesktopApplication,
     layout: NavigationLayout,
     onSelected: (NavigationItem) -> Unit,
@@ -412,26 +411,27 @@ private fun ExpandedSidebar(controller: DesktopApplication, onSelected: (Navigat
         color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp),
     ) {
-        Column(Modifier.padding(horizontal = 10.dp, vertical = 16.dp)) {
+        Column(Modifier.fillMaxHeight().padding(horizontal = 6.dp, vertical = 16.dp)) {
             Text(
                 "工作空间",
-                Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                Modifier.padding(horizontal = 6.dp, vertical = 5.dp),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             visibleNavigationItems(controller).forEach { item ->
+                if (item == NavigationItem.SERVICES) Spacer(Modifier.weight(1f))
                 val selectedItem = sidebarNavigationSelection(controller.navigation) == item
                 Surface(
                     Modifier.fillMaxWidth().clickable(onClickLabel = item.title) { onSelected(item) },
                     color = if (selectedItem) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
                     shape = RoundedCornerShape(13.dp),
                 ) {
-                    Row(Modifier.padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.heightIn(min = 44.dp).padding(horizontal = 5.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                         if (selectedItem) {
-                            Surface(Modifier.width(3.dp).height(24.dp), color = MaterialTheme.colorScheme.primary, shape = RoundedCornerShape(3.dp)) {}
-                            Spacer(Modifier.width(7.dp))
+                            Surface(Modifier.width(1.dp).height(24.dp), color = MaterialTheme.colorScheme.primary, shape = RoundedCornerShape(3.dp)) {}
+                            Spacer(Modifier.width(5.dp))
                         } else {
-                            Spacer(Modifier.width(10.dp))
+                            Spacer(Modifier.width(6.dp))
                         }
                         Icon(
                             navigationIcon(item),
@@ -439,10 +439,11 @@ private fun ExpandedSidebar(controller: DesktopApplication, onSelected: (Navigat
                             Modifier.size(20.dp),
                             tint = if (selectedItem) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        Spacer(Modifier.width(9.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(item.title, fontWeight = if (selectedItem) FontWeight.SemiBold else FontWeight.Normal)
-                            Text(item.subtitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.width(6.dp))
+                        Box(Modifier.weight(1f)) {
+                            TooltipText(item.title, Modifier.fillMaxWidth(), MaterialTheme.typography.bodyMedium.copy(
+                                fontWeight = if (selectedItem) FontWeight.SemiBold else FontWeight.Normal),
+                                color = if (selectedItem) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface)
                         }
                         navigationBadge(controller, item)?.let { badge ->
                             TooltipBox(
@@ -451,12 +452,12 @@ private fun ExpandedSidebar(controller: DesktopApplication, onSelected: (Navigat
                                 state = rememberTooltipState(),
                             ) {
                                 Surface(
-                                    modifier = Modifier.semantics { contentDescription = badge.description },
+                                    modifier = Modifier.widthIn(max = 40.dp).semantics { contentDescription = badge.description },
                                     color = if (selectedItem) MaterialTheme.colorScheme.surface.copy(alpha = 0.75f) else MaterialTheme.colorScheme.surfaceVariant,
                                     shape = RoundedCornerShape(20.dp),
                                 ) {
-                                    Text(badge.label, Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
-                                        style = MaterialTheme.typography.labelSmall, maxLines = 1, softWrap = false)
+                                    Text(badge.label, Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                                        style = MaterialTheme.typography.labelSmall, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                                 }
                             }
                         }
@@ -483,6 +484,7 @@ private fun CompactSidebar(controller: DesktopApplication, onSelected: (Navigati
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             visibleNavigationItems(controller).forEach { item ->
+                if (item == NavigationItem.SERVICES) Spacer(Modifier.weight(1f))
                 CompactNavigationItem(
                     item = item,
                     badge = navigationBadge(controller, item),
@@ -506,8 +508,6 @@ private fun CompactNavigationItem(
     val countLabel = badge?.compactLabel
     val accessibilityLabel = buildString {
         append(item.title)
-        append("，")
-        append(item.subtitle)
         badge?.let { append("，${it.description}") }
     }
     TooltipBox(
@@ -554,8 +554,15 @@ private fun visibleNavigationItems(controller: DesktopApplication): List<Navigat
     visibleNavigationItemsFor(controller.showsTagNavigation)
 
 internal fun visibleNavigationItemsFor(showTagNavigation: Boolean): List<NavigationItem> =
-    NavigationItem.entries.filter { item ->
-        item != NavigationItem.ARCHIVED && (item != NavigationItem.TAG || showTagNavigation)
+    listOf(
+        NavigationItem.TASKS,
+        NavigationItem.REQUIREMENTS,
+        NavigationItem.TAG,
+        NavigationItem.SERVICES,
+        NavigationItem.SKILLS,
+        NavigationItem.SETTINGS,
+    ).filter { item ->
+        item != NavigationItem.TAG || showTagNavigation
     }
 
 internal fun sidebarNavigationSelection(current: NavigationItem): NavigationItem =

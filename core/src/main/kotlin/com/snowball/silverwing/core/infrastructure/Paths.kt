@@ -12,6 +12,8 @@ data class ApplicationPaths(
     val diagnostics: Path = home.resolve("diagnostics")
     val locks: Path = home.resolve("locks")
     val temp: Path = home.resolve("temp")
+    /** 可重建的运行时缓存不能写入严格校验的配置分片目录。 */
+    val cache: Path = home.resolve("cache")
     /** Local-only Codex extension caches, source checkouts, ownership records, and recoverable backups. */
     val codex: Path = home.resolve("codex")
     val agents: Path = home.resolve("agents")

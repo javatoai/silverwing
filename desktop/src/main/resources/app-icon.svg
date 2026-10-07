@@ -2,7 +2,7 @@
      viewBox="0 0 1024 1024" role="img" aria-labelledby="title description">
   <title id="title">Silverwing</title>
   <desc id="description">A silver wing with sweeping feathers on a transparent background.</desc>
-  <g fill="#6A6C6B" transform="translate(-387.2 -164.8) scale(3.2)">
+  <g fill="#6A6C6B" transform="translate(512 512) scale(4.1) translate(-280.5 -211.5)">
     <path id="wing" d="M386 106
       C379 143 361 166 330 177
       C300 188 262 194 235 200

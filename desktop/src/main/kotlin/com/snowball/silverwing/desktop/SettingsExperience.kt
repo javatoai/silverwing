@@ -20,6 +20,9 @@ internal fun toggledDefaultWorkspaceToolIds(current: List<String>, toolId: Strin
 internal const val SILVERWING_OPEN_SOURCE_REPOSITORY_URL =
     "https://gitlab.snowballtech.com/common/silverwing"
 
+internal const val SILVERWING_UPDATE_DOCUMENT_URL =
+    "https://snowballtech.feishu.cn/wiki/GtDBw8F7Ti8rbLksnF7csNFgn4c"
+
 internal fun settingsNavigationCategories(): List<SettingsNavigationCategory> = listOf(
     SettingsNavigationCategory("basic", "基础", listOf(SettingsNavigationPage("basic", "外观"))),
     SettingsNavigationCategory(
@@ -79,6 +82,7 @@ internal fun settingsNavigationCategories(): List<SettingsNavigationCategory> = 
         listOf(
             SettingsNavigationPage("logs", "诊断与日志"),
             SettingsNavigationPage("about", "关于"),
+            SettingsNavigationPage("updates", "更新"),
         ),
     ),
 )
@@ -99,7 +103,7 @@ internal fun normalizeSettingsCategory(savedValue: String, supportedKeys: Set<St
         "skill-sources" -> "skill-sources"
         "network-proxy", "proxy" -> "proxy"
         "git", "branch-naming", "tag" -> "git"
-        "logs", "about", "system" -> "system"
+        "logs", "about", "updates", "system" -> "system"
         else -> "basic"
     }
     return category.takeIf(supportedKeys::contains) ?: "basic"

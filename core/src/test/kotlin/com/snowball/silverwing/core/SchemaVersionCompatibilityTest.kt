@@ -7,8 +7,8 @@ import kotlin.test.assertTrue
 
 class SchemaVersionCompatibilityTest {
     @Test
-    fun `product version is 2_1_4 while persisted aggregate schemas remain 6_0_0 and 2_0_0`() {
-        assertEquals("2.1.4", CURRENT_PRODUCT_VERSION)
+    fun `product version is 2_1_5 while persisted aggregate schemas remain 6_0_0 and 2_0_0`() {
+        assertEquals("2.1.5", CURRENT_PRODUCT_VERSION)
         assertEquals("6.0.0", CURRENT_APP_CONFIG_SCHEMA_VERSION)
         assertEquals("2.0.0", CURRENT_TASK_MANIFEST_SCHEMA_VERSION)
     }

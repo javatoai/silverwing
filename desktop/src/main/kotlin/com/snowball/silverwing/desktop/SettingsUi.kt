@@ -750,6 +750,9 @@ internal fun SettingsScreen(controller: DesktopApplication) {
             if (selectedPageKey == "about") item {
                 SettingsAboutSection(controller)
             }
+            if (selectedPageKey == "updates") item {
+                SettingsUpdateSection(controller)
+            }
             }
             }
         }
@@ -3384,6 +3387,35 @@ private fun SettingsAboutSection(controller: DesktopApplication) {
                 Icon(Icons.Outlined.ContentCopy, null, Modifier.size(17.dp))
                 Spacer(Modifier.width(5.dp))
                 Text("复制地址")
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsUpdateSection(controller: DesktopApplication) {
+    SettingsCard("获取新版") {
+        Text("当前版本 $CURRENT_PRODUCT_VERSION", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "最新安装包和更新说明发布在飞书更新文档中。打开文档，选择适合你系统的安装包，并按照文档说明更新。",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Button(onClick = { controller.openUrl(SILVERWING_UPDATE_DOCUMENT_URL) }) {
+                Icon(Icons.AutoMirrored.Outlined.OpenInNew, null, Modifier.size(17.dp))
+                Spacer(Modifier.width(5.dp))
+                Text("打开更新文档")
+            }
+            OutlinedButton(onClick = {
+                controller.copyText(SILVERWING_UPDATE_DOCUMENT_URL, "更新文档链接已复制")
+            }) {
+                Icon(Icons.Outlined.ContentCopy, null, Modifier.size(17.dp))
+                Spacer(Modifier.width(5.dp))
+                Text("复制链接")
             }
         }
     }

@@ -31,6 +31,11 @@ class SettingsExperienceTest {
         )
         assertEquals(listOf("git", "branch-naming", "tag"), byKey.getValue("git").pages.map(SettingsNavigationPage::key))
         assertEquals(
+            listOf("诊断与日志", "关于", "更新"),
+            byKey.getValue("system").pages.map(SettingsNavigationPage::label),
+        )
+        assertEquals(listOf("logs", "about", "updates"), byKey.getValue("system").pages.map(SettingsNavigationPage::key))
+        assertEquals(
             listOf("Meegle CLI", "Lark CLI", "Genbu CLI", "silverwing CLI"),
             byKey.getValue("commands").pages.map(SettingsNavigationPage::label),
         )
@@ -66,7 +71,12 @@ class SettingsExperienceTest {
         assertEquals("git", normalizeSettingsCategory("git", byKey.keys))
         assertEquals("development", normalizeSettingsCategory("development", byKey.keys))
         assertEquals("system", normalizeSettingsCategory("logs", byKey.keys))
+        assertEquals("system", normalizeSettingsCategory("updates", byKey.keys))
         assertEquals("https://gitlab.snowballtech.com/common/silverwing", SILVERWING_OPEN_SOURCE_REPOSITORY_URL)
+        assertEquals(
+            "https://snowballtech.feishu.cn/wiki/GtDBw8F7Ti8rbLksnF7csNFgn4c",
+            SILVERWING_UPDATE_DOCUMENT_URL,
+        )
     }
 
     @Test

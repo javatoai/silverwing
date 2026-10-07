@@ -77,8 +77,8 @@ internal data class TaskInformationLayout(
 )
 
 internal fun taskInformationLayout(): TaskInformationLayout = TaskInformationLayout(
-    formItemSpacingDp = 11,
-    materialsLineSpacingDp = 2,
+    formItemSpacingDp = 12,
+    materialsLineSpacingDp = 4,
 )
 
 internal fun taskNameSupportingMessage(error: String?): String? = error
@@ -89,16 +89,63 @@ internal fun canRequestDraftAiNaming(selectedLink: String?, draft: RequirementDr
 /** 显示短暂的本机 Codex 工作状态，不与表单字段争夺视觉层级。 */
 @Composable
 private fun AiNamingStatusRow(message: String, loading: Boolean = false) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         if (loading) {
             CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
             Spacer(Modifier.width(8.dp))
         }
         Text(
             message,
+            modifier = Modifier.weight(1f),
             style = MaterialTheme.typography.bodySmall,
             color = if (loading) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
         )
+    }
+}
+
+/** 与表单同宽的系统信息；可选择复制，但没有可编辑输入的光标或操作。 */
+@Composable
+private fun TaskInformationReadOnlyValue(
+    label: String,
+    value: String,
+    lineSpacingDp: Int,
+    status: String? = null,
+    loading: Boolean = false,
+    isError: Boolean = false,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp),
+        shape = MaterialTheme.shapes.extraSmall,
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(
+            1.dp,
+            if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outlineVariant,
+        ),
+    ) {
+        Column(
+            Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(lineSpacingDp.dp),
+        ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    label,
+                    Modifier.weight(1f),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (loading) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                status?.let {
+                    Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            SelectionContainer {
+                Text(
+                    value,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        }
     }
 }
 
@@ -321,81 +368,90 @@ internal fun CreateTaskDialog(
                         verticalArrangement = Arrangement.spacedBy(informationLayout.formItemSpacingDp.dp),
                     ) {
                         SectionHeader("任务信息")
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                            OutlinedTextField(
-                                draft.requirementLink,
-                                {
-                                    // 手工输入链接只是普通表单编辑，不能触发 AI；同时使上一个候选需求的
-                                    // 请求失效，避免迟到结果写入当前草稿。
-                                    aiSelectedRequirementLink = null
-                                    controller.cancelRequirementAiNaming()
-                                    updateDraft(draft.changeRequirement(it, controller.config.defaultBranchPrefix))
-                                },
-                                Modifier.weight(1f),
-                                label = { Text("需求编号或飞书需求链接（可选）") },
-                                supportingText = {
-                                    when {
-                                        draft.requirementTitle != null -> Text(draft.requirementTitle!!)
-                                        draft.metadataLoading -> Text("正在读取需求标题…")
-                                        draft.metadataHint != null -> Text(draft.metadataHint!!)
-                                    }
-                                },
-                                singleLine = true,
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Box {
-                                OutlinedButton(
-                                    onClick = { requirementMenuExpanded = true },
-                                    enabled = controller.requirementController.candidates.isNotEmpty(),
-                                    modifier = Modifier.padding(top = 8.dp),
-                                ) { Text("选择需求") }
-                                SilverWingDropdownMenu(
-                                    expanded = requirementMenuExpanded,
-                                    onDismissRequest = { requirementMenuExpanded = false },
-                                    modifier = Modifier.widthIn(min = 520.dp, max = 680.dp),
-                                ) {
-                                    OutlinedTextField(
-                                        requirementSearch,
-                                        { requirementSearch = it },
-                                        Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-                                        label = { Text("搜索需求标题或链接") },
-                                        singleLine = true,
-                                    )
-                                    val matchingLinks = controller.requirementController.candidates.filter {
-                                        requirementSearch.isBlank() ||
-                                            it.title.contains(requirementSearch, true) ||
-                                            it.url.contains(requirementSearch, true)
-                                    }
-                                    Column(
-                                        Modifier.fillMaxWidth().heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
+                        OutlinedTextField(
+                            draft.requirementLink,
+                            {
+                                // 手工输入链接只是普通表单编辑，不能触发 AI；同时使上一个候选需求的
+                                // 请求失效，避免迟到结果写入当前草稿。
+                                aiSelectedRequirementLink = null
+                                controller.cancelRequirementAiNaming()
+                                updateDraft(draft.changeRequirement(it, controller.config.defaultBranchPrefix))
+                            },
+                            Modifier.fillMaxWidth(),
+                            label = { Text("需求编号或链接（可选）") },
+                            singleLine = true,
+                            trailingIcon = {
+                                Box {
+                                    TextButton(
+                                        onClick = { requirementMenuExpanded = true },
+                                        enabled = controller.requirementController.candidates.isNotEmpty(),
+                                    ) { Text("选择需求") }
+                                    SilverWingDropdownMenu(
+                                        expanded = requirementMenuExpanded,
+                                        onDismissRequest = { requirementMenuExpanded = false },
+                                        modifier = Modifier.widthIn(min = 320.dp, max = 680.dp),
                                     ) {
-                                        matchingLinks.forEach { candidate ->
-                                            DropdownMenuItem(
-                                                text = {
-                                                    Column {
-                                                        Text(candidate.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                                        Text(
-                                                            candidate.url,
-                                                            maxLines = 1,
-                                                            overflow = TextOverflow.Ellipsis,
-                                                            style = MaterialTheme.typography.labelSmall,
-                                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                        )
-                                                    }
-                                                },
-                                                onClick = {
-                                                    updateDraft(draft.changeRequirement(candidate.url, controller.config.defaultBranchPrefix, candidate.title))
-                                                    aiSelectedRequirementLink = candidate.url
-                                                    if (controller.config.aiRequirementNamingEnabled) {
-                                                        requestAiNaming(candidate.url)
-                                                    }
-                                                    requirementMenuExpanded = false
-                                                },
-                                            )
+                                        OutlinedTextField(
+                                            requirementSearch,
+                                            { requirementSearch = it },
+                                            Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                                            label = { Text("搜索需求标题或链接") },
+                                            singleLine = true,
+                                        )
+                                        val matchingLinks = controller.requirementController.candidates.filter {
+                                            requirementSearch.isBlank() ||
+                                                it.title.contains(requirementSearch, true) ||
+                                                it.url.contains(requirementSearch, true)
+                                        }
+                                        Column(
+                                            Modifier.fillMaxWidth().heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
+                                        ) {
+                                            matchingLinks.forEach { candidate ->
+                                                DropdownMenuItem(
+                                                    text = {
+                                                        Column {
+                                                            Text(candidate.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                            Text(
+                                                                candidate.url,
+                                                                maxLines = 1,
+                                                                overflow = TextOverflow.Ellipsis,
+                                                                style = MaterialTheme.typography.labelSmall,
+                                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                            )
+                                                        }
+                                                    },
+                                                    onClick = {
+                                                        updateDraft(draft.changeRequirement(candidate.url, controller.config.defaultBranchPrefix, candidate.title))
+                                                        aiSelectedRequirementLink = candidate.url
+                                                        if (controller.config.aiRequirementNamingEnabled) {
+                                                            requestAiNaming(candidate.url)
+                                                        }
+                                                        requirementMenuExpanded = false
+                                                    },
+                                                )
+                                            }
                                         }
                                     }
                                 }
-                            }
+                            },
+                        )
+                        when {
+                            draft.requirementTitle != null -> TaskInformationReadOnlyValue(
+                                label = "需求名称",
+                                value = draft.requirementTitle!!,
+                                lineSpacingDp = informationLayout.materialsLineSpacingDp,
+                            )
+                            draft.metadataLoading -> TaskInformationReadOnlyValue(
+                                label = "需求名称",
+                                value = "正在读取需求标题…",
+                                lineSpacingDp = informationLayout.materialsLineSpacingDp,
+                                loading = true,
+                            )
+                            draft.metadataHint != null -> TaskInformationReadOnlyValue(
+                                label = "需求名称",
+                                value = draft.metadataHint!!,
+                                lineSpacingDp = informationLayout.materialsLineSpacingDp,
+                            )
                         }
                         if (controller.requirementController.candidatesLoading) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -404,6 +460,30 @@ internal fun CreateTaskDialog(
                                 Text("正在拉取飞书需求链接", style = MaterialTheme.typography.bodySmall)
                             }
                         }
+                        OutlinedTextField(
+                            value = draft.taskName,
+                            onValueChange = { updateDraft(draft.editName(it)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("文件夹名称") },
+                            placeholder = { Text("例如：PAY-1024 支付订单优化") },
+                            isError = taskNameError != null,
+                            supportingText = taskNameSupportingMessage(taskNameError)?.let { message ->
+                                { Text(message) }
+                            },
+                            singleLine = true,
+                        )
+                        OutlinedTextField(
+                            value = draft.branch,
+                            onValueChange = { updateDraft(draft.editBranch(it)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("任务分支") },
+                            placeholder = { Text("例如：feature/PAY-1024") },
+                            supportingText = if (unresolvedBranch) {
+                                { Text("需求编号或链接未解析出编号，请补充输入或手工修改分支") }
+                            } else null,
+                            colors = branchPickerFieldColors(),
+                            singleLine = true,
+                        )
                         when (val aiNamingState = controller.requirementAiNamingState) {
                             RequirementAiNamingUiState.Idle -> {
                                 if (canRequestDraftAiNaming(aiSelectedRequirementLink, draft, controller.config.aiRequirementNamingEnabled)) {
@@ -423,13 +503,14 @@ internal fun CreateTaskDialog(
                                 loading = true,
                             )
                             is RequirementAiNamingUiState.Ready -> Row(
+                                modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
                                 Text(
                                     if (aiNamingState.cached) "已使用本地命名缓存" else "已生成文件夹名和分支名",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.weight(1f),
                                 )
                                 val selectedLink = aiSelectedRequirementLink
@@ -438,6 +519,7 @@ internal fun CreateTaskDialog(
                                 }
                             }
                             is RequirementAiNamingUiState.Failed -> Row(
+                                modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
@@ -453,56 +535,34 @@ internal fun CreateTaskDialog(
                                 }
                             }
                         }
-                        OutlinedTextField(
-                            value = draft.taskName,
-                            onValueChange = { updateDraft(draft.editName(it)) },
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text("文件夹名称") },
-                            placeholder = { Text("例如：PAY-1024 支付订单优化") },
-                            isError = taskNameError != null,
-                            supportingText = taskNameSupportingMessage(taskNameError)?.let { message ->
-                                { Text(message) }
-                            },
-                            singleLine = true,
-                        )
                         when (val state = materialsPreview) {
                             RequirementMaterialsPreviewState.Hidden -> Unit
-                            RequirementMaterialsPreviewState.Loading -> Row(verticalAlignment = Alignment.CenterVertically) {
-                                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                                Spacer(Modifier.width(8.dp))
-                                Text("正在预检任务资料目录…", style = MaterialTheme.typography.bodySmall)
-                            }
+                            RequirementMaterialsPreviewState.Loading -> TaskInformationReadOnlyValue(
+                                label = "任务资料目录",
+                                value = "正在预检任务资料目录…",
+                                lineSpacingDp = informationLayout.materialsLineSpacingDp,
+                                loading = true,
+                            )
                             is RequirementMaterialsPreviewState.Ready -> {
                                 val status = if (state.status == RequirementMaterialsResult.Ready.Status.REUSED) {
                                     "将复用"
                                 } else {
                                     "预计新建"
                                 }
-                                Column(verticalArrangement = Arrangement.spacedBy(informationLayout.materialsLineSpacingDp.dp)) {
-                                    Text("任务资料目录：$status", style = MaterialTheme.typography.bodySmall)
-                                    SelectionContainer {
-                                        Text(state.path, style = MaterialTheme.typography.bodySmall)
-                                    }
-                                }
+                                TaskInformationReadOnlyValue(
+                                    label = "任务资料目录",
+                                    value = state.path,
+                                    lineSpacingDp = informationLayout.materialsLineSpacingDp,
+                                    status = status,
+                                )
                             }
-                            is RequirementMaterialsPreviewState.Failed -> Text(
-                                "任务资料目录预检失败（不影响创建）：${state.reason}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
+                            is RequirementMaterialsPreviewState.Failed -> TaskInformationReadOnlyValue(
+                                label = "任务资料目录",
+                                value = "预检失败（不影响创建）：${state.reason}",
+                                lineSpacingDp = informationLayout.materialsLineSpacingDp,
+                                isError = true,
                             )
                         }
-                        OutlinedTextField(
-                            value = draft.branch,
-                            onValueChange = { updateDraft(draft.editBranch(it)) },
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text("任务分支") },
-                            placeholder = { Text("例如：feature/PAY-1024") },
-                            supportingText = if (unresolvedBranch) {
-                                { Text("需求编号或链接未解析出编号，请补充输入或手工修改分支") }
-                            } else null,
-                            colors = branchPickerFieldColors(),
-                            singleLine = true,
-                        )
                         if (controller.config.groups.size > 1) {
                             Spacer(Modifier.height(2.dp))
                             SectionHeader("所属组（创建后不可迁移）")

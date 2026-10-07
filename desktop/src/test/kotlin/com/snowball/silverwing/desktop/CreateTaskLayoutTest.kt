@@ -12,8 +12,8 @@ class CreateTaskLayoutTest {
     fun `materials directory lines use compact spacing inside the task form`() {
         val layout = taskInformationLayout()
 
-        assertEquals(11, layout.formItemSpacingDp)
-        assertEquals(2, layout.materialsLineSpacingDp)
+        assertEquals(12, layout.formItemSpacingDp)
+        assertEquals(4, layout.materialsLineSpacingDp)
         assertTrue(layout.materialsLineSpacingDp < layout.formItemSpacingDp)
     }
 

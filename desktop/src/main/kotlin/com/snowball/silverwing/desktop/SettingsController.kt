@@ -233,6 +233,8 @@ class SettingsController internal constructor(
     /** 将浏览器打开动作留在桌面层，便于测试且不让设置控制器依赖 AWT。 */
     private val openMeegleAuthorizationPage: (String) -> Result<Unit> = { Result.success(Unit) },
     private val openLarkAuthorizationPage: (String) -> Result<Unit> = { Result.success(Unit) },
+    private val onMeegleIdentityCheck: () -> Unit = {},
+    private val onMeegleLoggedOut: () -> Unit = {},
 ) {
     private val remoteBranchJobs = mutableMapOf<String, Job>()
     private val repositoryRemoteJobs = mutableMapOf<String, Job>()
@@ -879,6 +881,10 @@ class SettingsController internal constructor(
                     onSuccess = { MeegleCliState.Ready(it) },
                     onFailure = { MeegleCliState.Failed(it.message ?: "检查 Meegle CLI 状态失败") },
                 )
+                result.getOrNull()?.let {
+                    if (it.authenticated) onMeegleIdentityCheck()
+                    else if (it.installed && it.authenticationError == null) onMeegleLoggedOut()
+                }
                 if (result.getOrNull()?.authenticated == true) {
                     clearMeegleDeviceCodeLogin()
                     loadMeegleProjects(force = true)
@@ -1172,6 +1178,7 @@ class SettingsController internal constructor(
     }
 
     private fun markMeegleLoggedOut() {
+        onMeegleLoggedOut()
         val previous = (meegleCli as? MeegleCliState.Ready)?.status
         meegleCli = MeegleCliState.Ready(
             previous?.copy(
@@ -1285,6 +1292,7 @@ class SettingsController internal constructor(
                                 invalidateMeegleStatusRefresh()
                                 clearMeegleDeviceCodeLogin(cancelPolling = false)
                                 meegleCli = MeegleCliState.Ready(status)
+                                onMeegleIdentityCheck()
                                 loadMeegleProjects(force = true)
                                 showStatus("Meegle 登录成功")
                                 return@launch

@@ -142,7 +142,7 @@ internal fun ParticipatedWorkItemsScreen(
     val projects = controller.config.meegleProjects
     val defaultProjectKey = controller.config.meegleDefaultSprintProjectKey
     val catalog = controller.participatedWorkItemsController
-    LaunchedEffect(projects, defaultProjectKey) {
+    LaunchedEffect(projects, defaultProjectKey, catalog.identityRevision) {
         catalog.load(projects, defaultSprintProjectKey = defaultProjectKey)
     }
 
@@ -289,6 +289,7 @@ private fun RequirementsListSection(
             }
         }
         if (controller.config.aiRequirementNamingEnabled) NamingPreparationControls(controller.namingCoordinator)
+        RequirementDocumentPreparationControls(controller.requirementDocumentPreparation)
         if (state.loading) {
             androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
         }
@@ -421,6 +422,10 @@ private fun RequirementsDetailPane(
                 ) {
                     Text(item.title, style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.weight(1f))
+                    ActionIconButton("刷新需求详情", { catalog.select(item, forceBody = true) }, Modifier.size(28.dp),
+                        enabled = catalog.bodyState !is ParticipatedWorkItemBodyState.Loading) {
+                        Icon(Icons.Outlined.Refresh, "刷新需求详情", Modifier.size(16.dp))
+                    }
                     // Optical centering on the title's first line: the button is taller than the line box.
                     PrimaryAddIconButton(
                         "基于该需求创建研发任务",

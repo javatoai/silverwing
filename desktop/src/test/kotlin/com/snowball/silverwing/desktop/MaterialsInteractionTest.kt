@@ -20,9 +20,9 @@ class MaterialsInteractionTest {
 
     @Test fun `task sidebar cannot be collapsed by saved width or a narrow window`() {
         for (available in listOf(220f, 580f, 700f, 1200f)) {
-            assertEquals(200f, resolveTaskListPaneWidth(0f, available))
-            assertEquals(200f, resolveTaskListPaneWidth(-500f, available))
-            assertTrue(resolveTaskListPaneWidth(800f, available) >= 200f)
+            assertEquals(160f, resolveTaskListPaneWidth(0f, available))
+            assertEquals(160f, resolveTaskListPaneWidth(-500f, available))
+            assertTrue(resolveTaskListPaneWidth(800f, available) >= 160f)
         }
     }
 

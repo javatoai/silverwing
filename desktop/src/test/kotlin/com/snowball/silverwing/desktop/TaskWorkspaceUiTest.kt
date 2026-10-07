@@ -59,12 +59,16 @@ class TaskWorkspaceUiTest {
                         Box(Modifier.weight(1f)) { TasksScreen(app, app.navigation == NavigationItem.ARCHIVED) }
                     } } }
                 }.use { scene ->
-                    scene.await { scene.editable() != null && linked.all { app.requirementController.stateFor(it) !is RequirementUiState.Loading && app.requirementController.stateFor(it) !is RequirementUiState.NotLoaded } }
-                    assertEquals(4, scene.nodes().count { it.config.getOrNull(SemanticsProperties.Role) == Role.Tab })
+                    scene.await { scene.labelOrNull("查看 Markdown 源码") != null && linked.all { app.requirementController.stateFor(it) !is RequirementUiState.Loading && app.requirementController.stateFor(it) !is RequirementUiState.NotLoaded } }
+                    val workspaceTabs = scene.nodes().filter { node ->
+                        node.config.getOrNull(SemanticsProperties.Role) == Role.Tab &&
+                            node.config.getOrNull(SemanticsProperties.Text)?.any { text -> TaskContentView.entries.any { it.label == text.text } } == true
+                    }
+                    assertEquals(4, workspaceTabs.size)
                     scene.await { scene.text("需求说明")!!.boundsInRoot.right <= width - 8 }
                     if (width == 580) {
                         scene.await { scene.text("任务详情")!!.boundsInRoot.left >= scene.label("拖动调整任务列表宽度").boundsInRoot.right }
-                        assertTrue(scene.nodes().filter { it.config.getOrNull(SemanticsProperties.Role) == Role.Tab }.all {
+                        assertTrue(workspaceTabs.all {
                             it.boundsInRoot.left >= scene.label("拖动调整任务列表宽度").boundsInRoot.right && it.boundsInRoot.right <= width - 8
                         }, "All four tabs must remain fully visible in a compact workspace")
                     }
@@ -336,7 +340,7 @@ class TaskWorkspaceUiTest {
                     scene.await { scene.labelOrNull("查看 Markdown 预览") != null }
                     assertEquals(position, reading.scrollPositions["source-vertical"])
                     assertEquals(listOf("1", "2"), calls)
-                    scene.click(scene.label("刷新需求正文"))
+                    scene.click(scene.label("刷新需求详情"))
                     scene.await { synchronized(calls) { calls.count { it == "1" } == 2 } }
                 }
             }
@@ -354,7 +358,10 @@ class TaskWorkspaceUiTest {
             ImageComposeScene(1200, 640, coroutineContext = Dispatchers.Unconfined) {
                 SilverWingTheme(ThemePreference.LIGHT) { Surface { TasksScreen(app, false) } }
             }.use { scene ->
-                scene.await { scene.editable() != null && scene.text("正在读取需求说明…") == null }
+                scene.await { scene.text("编辑") != null && scene.text("正在读取需求说明…") == null }
+                assertNull(scene.editable(), "Task rules open in reading mode")
+                scene.click(scene.text("编辑")!!)
+                scene.await { scene.editable() != null }
                 assertTrue(scene.editable()!!.config[SemanticsActions.SetText].action!!.invoke(androidx.compose.ui.text.AnnotatedString("手动填写的说明草稿")))
                 scene.await { scene.editableText() == "手动填写的说明草稿" }
                 scene.screenshot("light-notes-1200")
@@ -367,7 +374,9 @@ class TaskWorkspaceUiTest {
                 scene.click(scene.text("需求说明")!!)
                 scene.await { scene.editableText() == "手动填写的说明草稿" }
                 app.selectTask(b)
-                scene.await { scene.editable() != null && scene.text("正在读取需求说明…") == null && scene.editableText() == "" }
+                scene.await { scene.text("编辑") != null && scene.text("正在读取需求说明…") == null && scene.editable() == null }
+                scene.click(scene.text("编辑")!!)
+                scene.await { scene.editableText() == "" }
                 app.selectTask(a)
                 scene.await { scene.editableText() == "手动填写的说明草稿" }
                 Files.createDirectories(notesFile.parent)

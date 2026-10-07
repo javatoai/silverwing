@@ -27,6 +27,8 @@ class WindowPreferencesTest {
         assertEquals("basic", WindowPreferences.Snapshot().settingsSection)
         assertEquals(null, WindowPreferences.Snapshot().taskListPaneWidth)
         assertFalse(WindowPreferences.Snapshot().expandRequirementMaterialsSecondLevelFolders)
+        assertTrue(WindowPreferences.Snapshot().workspaceNavigationCollapsed)
+        assertTrue(WindowPreferences.snapshotFor().workspaceNavigationCollapsed)
     }
 
     @Test
@@ -50,9 +52,11 @@ class WindowPreferencesTest {
             height = 720,
             maximized = false,
             layoutVersion = WindowPreferences.CURRENT_LAYOUT_VERSION,
+            workspaceNavigationCollapsed = false,
         )
 
         assertFalse(restored.maximized)
+        assertFalse(restored.workspaceNavigationCollapsed)
         assertEquals(1200, restored.width)
         assertEquals(720, restored.height)
     }

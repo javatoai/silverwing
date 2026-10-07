@@ -1,6 +1,9 @@
 package com.snowball.silverwing.desktop
 
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -36,11 +39,14 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.foundation.clickable
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.key
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -49,6 +55,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalUriHandler
@@ -121,6 +128,19 @@ internal data class MarkdownPreviewFile(
     val fileName: String get() = path.substringAfterLast('/')
 }
 
+/** Caller-owned lightweight state for a set of independent Markdown documents. */
+internal class MarkdownFilesReadingState(initialPath: String) {
+    var selectedPath by mutableStateOf(initialPath)
+    private val readings = mutableMapOf<String, MaterialsReadingState>()
+
+    fun readingFor(path: String): MaterialsReadingState = readings.getOrPut(path) { MaterialsReadingState() }
+    fun reconcile(files: List<MarkdownPreviewFile>, initialPath: String) {
+        val paths = files.map { it.path }.toSet()
+        readings.keys.retainAll(paths)
+        if (selectedPath !in paths) selectedPath = selectMarkdownPreviewFile(files, initialPath)?.path.orEmpty()
+    }
+}
+
 internal enum class MarkdownPreviewMode {
     RENDERED,
     SOURCE,
@@ -168,6 +188,8 @@ internal fun markdownPreviewRenderInput(content: String, sourcePath: Path? = nul
     markdownWithRelativeImagePaths(content, sourcePath, allowedRoot).replace("\r\n", "\n").replace('\r', '\n')
 
 /** Reusable, stateless Markdown content renderer. */
+internal val LocalMarkdownRemoteImages = staticCompositionLocalOf { true }
+
 @Composable
 internal fun MarkdownDocumentPreview(
     content: String,
@@ -255,11 +277,14 @@ internal fun MarkdownDocumentPreview(
     onCopyFile: ((Path) -> Unit)? = null,
     onCopyCode: ((String) -> Unit)? = null,
     onImageClick: ((Painter) -> Unit)? = null,
+    fileCopyLabel: String = "复制文件引用",
+    fileCopyEnabled: Boolean = true,
+    sourceContent: String = content,
 ) {
     if (LocalDocumentFind.current == null) {
         val find = remember(documentKey) { DocumentFindState() }
         DocumentFindScope(find, modifier) { MarkdownDocumentPreview(content, Modifier.fillMaxSize(), documentKey,
-            onCopySource, sourcePath, onCopyPath, onCopyFile, onCopyCode, onImageClick) }
+            onCopySource, sourcePath, onCopyPath, onCopyFile, onCopyCode, onImageClick, fileCopyLabel, fileCopyEnabled, sourceContent) }
         return
     }
     val localMode = remember(documentKey) { mutableStateOf(initialMarkdownPreviewMode()) }
@@ -281,11 +306,13 @@ internal fun MarkdownDocumentPreview(
                 onCopyFile = onCopyFile,
                 copyEnabled = content.isNotEmpty(),
                 outlineState = outline,
+                fileCopyLabel = fileCopyLabel,
+                fileCopyEnabled = fileCopyEnabled,
             )
         }
         LocalDocumentFind.current?.let { DocumentFindBar(it) }
         MarkdownDocumentPreview(
-            content = content,
+            content = if (modeState.value == MarkdownPreviewMode.SOURCE) sourceContent else content,
             mode = modeState.value,
             modifier = Modifier.weight(1f).fillMaxWidth(),
             onCopyCode = onCopyCode,
@@ -332,6 +359,8 @@ internal fun MarkdownPreviewToolbarActions(
     modifier: Modifier = Modifier,
     fileTypeLabel: String = "Markdown",
     outlineState: MarkdownOutlineState? = null,
+    fileCopyLabel: String = "复制文件引用",
+    fileCopyEnabled: Boolean = true,
 ) {
     Row(
         modifier,
@@ -373,9 +402,9 @@ internal fun MarkdownPreviewToolbarActions(
                         },
                     )
                     DropdownMenuItem(
-                        text = { Text(if (existingFile != null) "复制文件引用" else "复制文件引用（无本地文件）") },
+                        text = { Text(if (existingFile != null) fileCopyLabel else "$fileCopyLabel（无本地文件）") },
                         leadingIcon = { Icon(Icons.Outlined.Description, null) },
-                        enabled = existingFile != null && onCopyFile != null,
+                        enabled = existingFile != null && onCopyFile != null && fileCopyEnabled,
                         onClick = {
                             expanded = false
                             existingFile?.let { onCopyFile?.invoke(it) }
@@ -425,11 +454,19 @@ internal fun DocumentPreviewFileHeader(
  * and falls back to the first file only if the selected path is no longer present.
  */
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 internal fun MarkdownFileTabsPreview(
     files: List<MarkdownPreviewFile>,
     modifier: Modifier = Modifier,
     initialPath: String = files.firstOrNull()?.path.orEmpty(),
     onCopySource: (MarkdownPreviewFile) -> Unit,
+    state: MarkdownFilesReadingState? = null,
+    emptyContentMessage: String? = null,
+    fileContent: (@Composable (MarkdownPreviewFile, Modifier) -> Unit)? = null,
+    sourcePathForFile: (MarkdownPreviewFile) -> Path? = { null },
+    onCopyPath: ((Path) -> Unit)? = null,
+    onCopyFile: ((Path) -> Unit)? = null,
+    fileCopyLabel: String = "复制文件引用",
 ) {
     if (files.isEmpty()) {
         Box(modifier, contentAlignment = Alignment.Center) {
@@ -438,23 +475,37 @@ internal fun MarkdownFileTabsPreview(
         return
     }
 
-    var selectedPath by remember(initialPath) { mutableStateOf(selectMarkdownPreviewFile(files, initialPath)!!.path) }
+    var localSelectedPath by remember(initialPath) { mutableStateOf(selectMarkdownPreviewFile(files, initialPath)!!.path) }
+    val selectedPath = state?.selectedPath ?: localSelectedPath
     val filePaths = files.map(MarkdownPreviewFile::path)
-    LaunchedEffect(filePaths) {
-        selectedPath = selectMarkdownPreviewFile(files, selectedPath)!!.path
+    LaunchedEffect(filePaths, state, initialPath) {
+        if (state != null) state.reconcile(files, initialPath)
+        else localSelectedPath = selectMarkdownPreviewFile(files, localSelectedPath)!!.path
     }
-    val selectedFile = selectMarkdownPreviewFile(files, selectedPath)!!
+    val selectedFile = files.firstOrNull { it.path == selectedPath } ?: selectMarkdownPreviewFile(files, initialPath)!!
     val selectedIndex = files.indexOf(selectedFile)
-    var mode by remember(selectedFile.path) { mutableStateOf(initialMarkdownPreviewMode()) }
+    var localMode by remember(selectedFile.path) { mutableStateOf(initialMarkdownPreviewMode()) }
+    val reading = state?.readingFor(selectedFile.path)
+    val mode = reading?.mode?.value ?: localMode
     val outline = rememberMarkdownOutlineState(selectedFile.content, selectedFile.path)
+    var tabsWidth by remember { mutableIntStateOf(0) }
 
     Column(modifier) {
         if (files.size > 1) {
-            PrimaryScrollableTabRow(selectedTabIndex = selectedIndex, edgePadding = 14.dp) {
+            PrimaryScrollableTabRow(selectedTabIndex = selectedIndex, edgePadding = 14.dp,
+                modifier = Modifier.onSizeChanged { tabsWidth = it.width }) {
                 files.forEachIndexed { index, file ->
+                    val bring = remember(file.path) { BringIntoViewRequester() }
+                    LaunchedEffect(selectedIndex, tabsWidth) {
+                        if (index == selectedIndex && tabsWidth > 0) {
+                            withFrameNanos { }
+                            bring.bringIntoView()
+                        }
+                    }
                     Tab(
                         selected = index == selectedIndex,
-                        onClick = { selectedPath = file.path },
+                        modifier = Modifier.bringIntoViewRequester(bring),
+                        onClick = { if (state != null) state.selectedPath = file.path else localSelectedPath = file.path },
                         text = { Text(file.fileName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     )
                 }
@@ -465,20 +516,34 @@ internal fun MarkdownFileTabsPreview(
             relativePath = selectedFile.path,
             modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp),
         ) {
-            MarkdownPreviewToolbarActions(
+            if (fileContent == null) MarkdownPreviewToolbarActions(
                 mode = mode,
-                onModeChange = { mode = it },
+                onModeChange = { if (reading != null) reading.mode.value = it else localMode = it },
                 onCopySource = { onCopySource(selectedFile) },
+                sourcePath = sourcePathForFile(selectedFile),
+                onCopyPath = onCopyPath,
+                onCopyFile = onCopyFile,
+                fileCopyLabel = fileCopyLabel,
                 copyEnabled = selectedFile.content.isNotEmpty(),
                 outlineState = outline,
             )
         }
-        MarkdownDocumentPreview(
-            content = selectedFile.content,
-            mode = mode,
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            outlineState = outline,
-        )
+        key(state, selectedFile.path) {
+            CompositionLocalProvider(LocalMaterialsReadingState provides (reading ?: LocalMaterialsReadingState.current)) {
+                if (fileContent != null) {
+                    fileContent(selectedFile, Modifier.weight(1f).fillMaxWidth())
+                } else if (selectedFile.content.isBlank() && emptyContentMessage != null) {
+                    Box(Modifier.weight(1f).fillMaxWidth().padding(18.dp)) {
+                        Text(emptyContentMessage, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                } else MarkdownDocumentPreview(
+                    content = selectedFile.content,
+                    mode = mode,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    outlineState = outline,
+                )
+            }
+        }
     }
 }
 
@@ -495,9 +560,11 @@ private fun MarkdownRenderedContent(
     outlineState: MarkdownOutlineState?,
 ) {
     val imageClick by rememberUpdatedState(onImageClick)
+    val remoteImages by rememberUpdatedState(LocalMarkdownRemoteImages.current)
     val zoomableImages = remember {
         object : ImageTransformer by Coil3ImageTransformerImpl {
             @Composable override fun transform(link: String): ImageData? {
+                if (!remoteImages && runCatching { URI(link).scheme?.lowercase() in setOf("http", "https") }.getOrDefault(false)) return null
                 val data = Coil3ImageTransformerImpl.transform(link) ?: return null
                 return if (imageClick == null || !data.painter.intrinsicSize.width.isFinite() || data.painter.intrinsicSize.width <= 0f) data else data.copy(modifier = data.modifier
                     .pointerHoverIcon(PointerIcon.Hand).clickable(onClickLabel = "放大图片") { imageClick?.invoke(data.painter) })

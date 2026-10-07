@@ -37,6 +37,12 @@ class SettingsGenbuCommandResolutionTest {
             DesktopApplication(paths = paths, configStore = store, ioDispatcher = dispatcher,
                 genbuExecutablePath = configured,
                 genbuExecutable = ConfiguredGenbuExecutable(configured::get, runner, bundledDirectories = { emptyList() }),
+                // This fixture records Genbu commands only; startup Meegle checks are unrelated.
+                participatedWorkItemsSource = object : ParticipatedWorkItemsSource {
+                    override suspend fun load(projects: List<MeegleProjectConfig>, sprintKey: String?,
+                        defaultSprintProjectKey: String?): ParticipatedWorkItemsResult = error("Unexpected requirement list read")
+                    override fun loadBody(item: ParticipatedWorkItem): String? = error("Unexpected requirement body read")
+                },
                 processCommandRunner = runner,
                 developmentToolStartupDetection = DevelopmentToolStartupDetection { DevelopmentToolAutoDetectionResult(it, emptySet()) }).use { app ->
                 assertEquals(old to GenbuCommandSource.CONFIGURED, app.genbuCommandResolution())

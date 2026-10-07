@@ -2,6 +2,7 @@ package com.snowball.silverwing.desktop
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.setValue
 import com.snowball.silverwing.core.MeegleProjectConfig
 import com.snowball.silverwing.core.ParticipatedSprint
@@ -64,12 +65,15 @@ internal class ParticipatedWorkItemsController(
     private val onSelected: (ParticipatedWorkItem) -> Unit = {},
     private val cacheAccess: RequirementCacheAccess? = null,
     private val clock: Clock = Clock.systemUTC(),
+    private val onLoadStarted: () -> Unit = {},
+    private val onDocumentsRequested: (List<ParticipatedWorkItem>, Boolean) -> Unit = { _, _ -> },
+    commentsRepository: RequirementCommentsRepository? = null,
 ) {
     var state by mutableStateOf(ParticipatedWorkItemsUiState())
         private set
     var selectedKey by mutableStateOf<String?>(null)
         private set
-    internal val bodyReader = RequirementBodyController(bodyRepository, scope, ioDispatcher)
+    internal val bodyReader = RequirementBodyController(bodyRepository, scope, ioDispatcher, commentsRepository)
     val bodyState get() = bodyReader.bodyState
     val bodyImageStates get() = bodyReader.bodyImageStates
 
@@ -79,6 +83,16 @@ internal class ParticipatedWorkItemsController(
     private var listJob: Job? = null
     private var loadedIdentity: String? = null
     private var listFetchedAt: Long? = null
+    var identityRevision by mutableLongStateOf(0L)
+        private set
+
+    fun invalidateIdentity() {
+        listGeneration++; listJob?.cancel(); clearSelection()
+        loadedIdentity = null; listFetchedAt = null
+        state = ParticipatedWorkItemsUiState()
+        projectKeys = null; defaultProjectKey = null
+        identityRevision++
+    }
 
     fun load(
         projects: List<MeegleProjectConfig>,
@@ -95,6 +109,7 @@ internal class ParticipatedWorkItemsController(
         if (!force && sameSelection && sameDefaultProject &&
             (state.loading || (cacheAccess == null && state.initialized && state.error == null &&
                 listFetchedAt?.let { RequirementReadCache.fresh(it, clock.millis()) } == true))) return
+        onLoadStarted()
         projectKeys = signature
         defaultProjectKey = defaultSprintProjectKey
         val generation = ++listGeneration
@@ -111,7 +126,9 @@ internal class ParticipatedWorkItemsController(
         )
         val job = scope.launch(start = CoroutineStart.LAZY) {
             val result = try {
-                val identity = if (cacheAccess == null) "session" else cacheAccess.identity(ioDispatcher)
+                val identity = if (cacheAccess == null) "session" else if (force) cacheAccess.recheck(ioDispatcher, strict = true)
+                    else cacheAccess.identity(ioDispatcher)
+                cacheAccess?.ensureNotLoggedOut()
                 coroutineContext.ensureActive()
                 if (generation != listGeneration) return@launch
                 if (identity == null || identity != loadedIdentity) {
@@ -153,6 +170,9 @@ internal class ParticipatedWorkItemsController(
                 return@launch
             }
             val hasIncompleteResult = result.failures.isNotEmpty()
+            // Session-only sources historically invalidate their transient bodies on a successful query change.
+            // Persistent documents keep their identity-bound Markdown across iterations.
+            if (!bodyRepository.persistent && !hasIncompleteResult && (force || !sameSelection)) bodyRepository.clearCache()
             val items = if (hasIncompleteResult && retainedItems.isNotEmpty()) retainedItems else result.items
             state = ParticipatedWorkItemsUiState(
                 items = items,
@@ -169,6 +189,7 @@ internal class ParticipatedWorkItemsController(
             val next = items.firstOrNull { it.key == selectedKey } ?: items.firstOrNull()
             if (next == null) clearSelection()
             else select(next, forceBody = !hasIncompleteResult && force)
+            onDocumentsRequested(result.items, force)
             onListLoaded(result.items)
         }
         listJob = job
@@ -191,7 +212,11 @@ internal class ParticipatedWorkItemsController(
         val projectsKey = Json.encodeToString(ListSerializer(MeegleProjectConfig.serializer()), projects)
         fun key(sprint: String?) = requirementReadKey("participated-list-all-pages-v1", identity.orEmpty(), projectsKey, sprint, defaultProject)
         val cache = cacheAccess?.cache?.takeIf { identity != null }
-        if (!force) cache?.read(key(sprintKey), ParticipatedWorkItemsResult.serializer())?.let { return it }
+        if (!force) cache?.read(key(sprintKey), ParticipatedWorkItemsResult.serializer())?.let {
+            cacheAccess?.verifySession(identity)
+            return it
+        }
+        if (!force) cacheAccess?.verify(identity, ioDispatcher)
         val result = source.load(projects, sprintKey, defaultProject)
         cacheAccess?.verify(identity, ioDispatcher)
         kotlinx.coroutines.currentCoroutineContext().ensureActive()

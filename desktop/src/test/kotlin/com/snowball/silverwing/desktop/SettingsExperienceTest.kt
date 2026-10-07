@@ -18,7 +18,7 @@ class SettingsExperienceTest {
         val byKey = categories.associateBy(SettingsNavigationCategory::key)
 
         assertEquals(
-            listOf("基础", "存储", "研发配置", "研发任务", "Codex", "CLI", "Skill 安装", "代理", "Git", "系统与诊断"),
+            listOf("基础", "存储", "研发配置", "任务", "AGENTS.md", "Codex", "CLI", "Skill 安装", "代理", "Git", "系统与诊断"),
             categories.map(SettingsNavigationCategory::label),
         )
         assertEquals(
@@ -35,9 +35,10 @@ class SettingsExperienceTest {
             byKey.getValue("commands").pages.map(SettingsNavigationPage::label),
         )
         assertEquals(
-            listOf("任务创建区", "任务详情区", "任务协作说明"),
+            listOf("任务创建区", "任务详情区"),
             byKey.getValue("tasks").pages.map(SettingsNavigationPage::label),
         )
+        assertEquals(SettingsNavigationPage("agents", "AGENTS.md"), byKey.getValue("agents").pages.single())
         assertEquals(listOf("Codex 插件", "MCP 管理"), byKey.getValue("codex").pages.map(SettingsNavigationPage::label))
         assertEquals("Skill 安装", byKey.getValue("skill-sources").pages.single().label)
         assertEquals("task-creation", byKey.getValue("tasks").pages.first().key)
@@ -50,10 +51,14 @@ class SettingsExperienceTest {
         assertTrue(byKey.getValue("storage").showsTabs())
         assertTrue(byKey.getValue("development").showsTabs())
         assertTrue(byKey.getValue("tasks").showsTabs())
+        assertFalse(byKey.getValue("agents").showsTabs())
         assertTrue(byKey.getValue("commands").showsTabs())
         assertTrue(byKey.getValue("system").showsTabs())
         assertEquals("tasks", normalizeSettingsCategory("task-creation", byKey.keys))
         assertEquals("tasks", normalizeSettingsCategory("codex-task-creation", byKey.keys))
+        assertEquals("tasks", normalizeSettingsCategory("task-area", byKey.keys))
+        assertEquals("tasks", normalizeSettingsCategory("tasks", byKey.keys))
+        assertEquals("agents", normalizeSettingsCategory("agents", byKey.keys))
         assertEquals("codex", normalizeSettingsCategory("codex-plugins", byKey.keys))
         assertEquals("commands", normalizeSettingsCategory("lark", byKey.keys))
         assertEquals("git", normalizeSettingsCategory("branch-naming", byKey.keys))

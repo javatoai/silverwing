@@ -1,10 +1,9 @@
 package com.snowball.silverwing.desktop
 
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.runInterruptible
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import com.snowball.silverwing.core.MeegleRequirementIdentityResult
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Required
 import kotlinx.serialization.Serializable
@@ -26,6 +25,7 @@ internal data class RequirementCachedValue<T>(val value: T, val fetchedAt: Long)
 /** Rebuildable files under ApplicationPaths.cache, separate from the strict configuration schema. */
 internal class RequirementReadCache(directory: Path, private val clock: Clock = Clock.systemUTC()) {
     private val directory = directory.toAbsolutePath().normalize()
+    internal val documentDirectory: Path get() = directory.resolve("requirement-documents")
     private val guard = guards.computeIfAbsent(this.directory) { Any() }
     private var lastCleanup: Long? = null
 
@@ -55,6 +55,9 @@ internal class RequirementReadCache(directory: Path, private val clock: Clock = 
         }
         Unit
     }
+
+    /** Only a caller with the exact identity key can retire a migrated legacy body. */
+    fun remove(key: String) = synchronized(guard) { Files.deleteIfExists(file(key)); Unit }
 
     /** First use and at most hourly thereafter; every individual read still checks its exact expiry. */
     fun cleanup() = synchronized(guard) { lastCleanup = null; cleanupIfDue() }
@@ -100,31 +103,95 @@ internal class RequirementReadCache(directory: Path, private val clock: Clock = 
     }
 }
 
-/** Identity checks run off the UI thread. If identity cannot be proven, read live without a cache. */
-internal class RequirementCacheAccess(val cache: RequirementReadCache, private val readIdentity: () -> String?) {
-    private val identityMutex = Mutex()
-    private val identityGuard = Any()
-    private var identityRevision = 0L
-    private var latestIdentity: String? = null
+internal data class RequirementIdentitySnapshot(val identity: String?, val revision: Long, val confirmed: Boolean)
 
-    suspend fun identity(dispatcher: CoroutineDispatcher): String? {
-        val startedAtRevision = synchronized(identityGuard) { identityRevision }
-        return identityMutex.withLock {
-            // Concurrent readers may share the check already running when they started, but a later
-            // read always checks again. No time window can hide an external CLI account switch.
-            synchronized(identityGuard) {
-                if (startedAtRevision != identityRevision) return@withLock latestIdentity
-            }
-            val identity = try { runInterruptible(dispatcher) { readIdentity() } }
-            catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { null }
-            synchronized(identityGuard) { latestIdentity = identity; identityRevision++ }
-            identity
+/** A confirmed session identity is enough for local reads; remote writes require a fresh check. */
+internal class RequirementCacheAccess(
+    val cache: RequirementReadCache,
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob()),
+    private val probe: (() -> MeegleRequirementIdentityResult)? = null,
+    private val contextStamp: (() -> Any?)? = null,
+    private val readIdentity: () -> String?,
+) {
+    private val identityGuard = Any()
+    private var session = RequirementIdentitySnapshot(null, 0L, false)
+    private var stamp: Any? = contextStamp?.invoke()
+    private data class Probe(val revision: Long, val result: Deferred<MeegleRequirementIdentityResult>)
+    private var running: Probe? = null
+    private val identityChanges = MutableSharedFlow<RequirementIdentitySnapshot>(extraBufferCapacity = 32)
+    val changes = identityChanges.asSharedFlow()
+    val snapshot: RequirementIdentitySnapshot get() = synchronized(identityGuard) { session }
+
+    /** Explicit logout/configuration changes invalidate even a verification still in flight. */
+    fun invalidate(loggedOut: Boolean = false) = synchronized(identityGuard) {
+        session = RequirementIdentitySnapshot(null, session.revision + 1, loggedOut)
+        running?.result?.cancel()
+        running = null
+        identityChanges.tryEmit(session)
+    }
+
+    private fun checkContext() {
+        val next = contextStamp?.invoke() ?: return
+        synchronized(identityGuard) {
+            if (next != stamp) { stamp = next; invalidate() }
         }
     }
 
+    suspend fun identity(dispatcher: CoroutineDispatcher): String? {
+        checkContext()
+        snapshot.takeIf { it.confirmed }?.let { return it.identity }
+        recheck(dispatcher)
+        return snapshot.identity
+    }
+
+    /** All simultaneous consumers share a probe owned by the application, not its first reader. */
+    suspend fun recheck(dispatcher: CoroutineDispatcher, strict: Boolean = false): String? {
+        checkContext()
+        val pending = synchronized(identityGuard) {
+            running?.takeIf { it.revision == session.revision && !it.result.isCompleted } ?: run {
+                val revision = session.revision
+                val result = scope.async(dispatcher, start = CoroutineStart.LAZY) {
+                    val checked = try { runInterruptible(dispatcher) {
+                        probe?.invoke() ?: readIdentity()?.let(MeegleRequirementIdentityResult::Authenticated)
+                            ?: MeegleRequirementIdentityResult.Unavailable
+                    } } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { MeegleRequirementIdentityResult.Unavailable }
+                    synchronized(identityGuard) {
+                        if (session.revision == revision && checked != MeegleRequirementIdentityResult.Unavailable) {
+                            val identity = (checked as? MeegleRequirementIdentityResult.Authenticated)?.identity
+                            val changed = session.confirmed && session.identity != identity
+                            session = RequirementIdentitySnapshot(identity, session.revision + if (changed) 1 else 0, true)
+                            if (changed) identityChanges.tryEmit(session)
+                        }
+                    }
+                    checked
+                }
+                Probe(revision, result).also { running = it }
+            }
+        }
+        pending.result.start()
+        val checked = pending.result.await()
+        synchronized(identityGuard) { if (running === pending) running = null }
+        if (strict && checked == MeegleRequirementIdentityResult.Unavailable)
+            throw IllegalStateException("无法确认当前 Meegle 账户，请重试；本地需求已保留")
+        return snapshot.identity
+    }
+
+    fun verifySession(expectedIdentity: String?, expectedRevision: Long? = null) {
+        checkContext()
+        val current = snapshot
+        if (expectedIdentity != current.identity || (expectedRevision != null && expectedRevision != current.revision))
+            throw RequirementIdentityChangedException()
+    }
+
+    fun ensureNotLoggedOut() {
+        if (snapshot.confirmed && snapshot.identity == null)
+            throw IllegalStateException("Meegle 已退出登录，请重新登录后读取需求")
+    }
+
     suspend fun verify(expectedIdentity: String?, dispatcher: CoroutineDispatcher) {
-        if (expectedIdentity != null && identity(dispatcher) != expectedIdentity) throw RequirementIdentityChangedException()
+        if (expectedIdentity != null && recheck(dispatcher, strict = true) != expectedIdentity)
+            throw RequirementIdentityChangedException()
     }
 }
 

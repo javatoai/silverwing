@@ -467,7 +467,7 @@ internal fun SettingsScreen(controller: DesktopApplication) {
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Surface(
-                Modifier.width(250.dp).fillMaxHeight(),
+                Modifier.width(160.dp).fillMaxHeight(),
                 shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.38f),
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
@@ -1372,7 +1372,7 @@ private fun SettingsBasicSection(
     SettingsCard("外观") {
         TaskAreaToolGroupSwitchRow(
             title = "折叠工作空间导航",
-            description = "仅保留最左侧导航图标，为右侧内容腾出更多空间。更改立即生效并自动记住。",
+            description = "默认开启，仅保留最左侧导航图标，为右侧内容腾出更多空间。更改立即生效并自动记住。",
             checked = controller.workspaceNavigationCollapsed,
             onCheckedChange = controller::setWorkspaceNavigationCollapsed,
             enabled = true,

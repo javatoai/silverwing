@@ -5,6 +5,8 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.*
+import com.snowball.silverwing.core.AgentDocumentService
+import com.snowball.silverwing.core.HandoffDocumentWriter
 
 internal enum class TaskContentView(val label: String) {
     DETAIL("任务详情"), MATERIALS("任务资料"), REQUIREMENT("需求详情"), NOTES("需求说明")
@@ -24,12 +26,22 @@ internal class TaskBrowsingSession(
     private val materialsRecency = linkedSetOf<Pair<String, String?>>()
     private val requirementsRecency = linkedSetOf<Pair<String, String>>()
     private val taskIndexes = mutableMapOf<Boolean, TaskIndexBrowsingState>()
+    private val notes = linkedMapOf<String, TaskNotesBrowsingState>()
 
     private fun validPreferredWidth(value: Float): Float =
         (value.takeIf(Float::isFinite) ?: DEFAULT_TASK_LIST_PANE_WIDTH_DP).coerceAtLeast(MIN_TASK_LIST_PANE_WIDTH_DP)
 
     fun taskIndexFor(archived: Boolean): TaskIndexBrowsingState =
         taskIndexes.getOrPut(archived) { TaskIndexBrowsingState() }
+
+    /** Session-only positions and controls; generated Markdown and drafts are not cached here. */
+    fun notesFor(taskPath: String): TaskNotesBrowsingState {
+        val key = normalizedReadingPath(taskPath)
+        val state = notes.remove(key) ?: TaskNotesBrowsingState()
+        notes[key] = state
+        while (notes.size > MAX_READING_TASKS) notes.remove(notes.keys.first())
+        return state
+    }
 
     fun materialsFor(taskPath: String, root: String?): MaterialsBrowserState {
         val taskKey = normalizedReadingPath(taskPath)
@@ -67,6 +79,7 @@ internal class TaskBrowsingSession(
     fun restore(saved: ReadingSnapshot) {
         val bounded = saved.bounded()
         materials.clear(); requirements.clear(); materialsRecency.clear(); requirementsRecency.clear()
+        // Notes are session-only: a late startup snapshot must not replace live reading state.
         view = TaskContentView.entries.firstOrNull { it.name == bounded.view } ?: TaskContentView.DETAIL
         bounded.materials.forEach { record ->
             materialsFor(record.taskPath, record.root).apply {
@@ -88,6 +101,22 @@ internal class TaskBrowsingSession(
 internal class TaskIndexBrowsingState {
     val expandedGroups = mutableStateMapOf<String, Boolean>()
     val position = MaterialsReadingState()
+}
+
+internal enum class TaskNotesPageMode { READ, EDIT }
+
+internal val TASK_NOTES_PREVIEW_PATH = "${HandoffDocumentWriter.DIRECTORY_NAME}/${AgentDocumentService.TASK_AGENT_DIRECTORY_NAME}/${AgentDocumentService.TASK_RULES_FILE_NAME}"
+
+internal class TaskNotesBrowsingState {
+    var mode by mutableStateOf(TaskNotesPageMode.READ)
+    val files = MarkdownFilesReadingState(TASK_NOTES_PREVIEW_PATH)
+    val editorPosition = MaterialsReadingState()
+
+    fun readDraft() {
+        files.selectedPath = TASK_NOTES_PREVIEW_PATH
+        files.readingFor(TASK_NOTES_PREVIEW_PATH).mode.value = MarkdownPreviewMode.RENDERED
+        mode = TaskNotesPageMode.READ
+    }
 }
 
 internal class MaterialsBrowserState {

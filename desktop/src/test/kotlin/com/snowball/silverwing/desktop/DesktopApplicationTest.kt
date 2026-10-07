@@ -344,13 +344,14 @@ class DesktopApplicationTest {
             assertEquals(detected.toString(), store.load().meegleExecutablePath)
             assertEquals(detected.toString(), controller.config.meegleExecutablePath)
             assertEquals(MeegleCommandSource.CONFIGURED, controller.meegleCommandResolution().second)
-            assertEquals(1, runner.calls)
+            // Startup account confirmation probes once before the explicit status check.
+            assertEquals(2, runner.calls)
             assertEquals(1, cli.statusCalls)
 
             controller.refreshMeegleStatus(force = true)
             advanceUntilIdle()
 
-            assertEquals(1, runner.calls)
+            assertEquals(2, runner.calls)
             assertEquals(2, cli.statusCalls)
         } finally {
             controller.close()
@@ -700,7 +701,8 @@ class DesktopApplicationTest {
             assertIs<MeegleCliState.Failed>(controller.meegleCliState)
             assertEquals(null, controller.config.meegleExecutablePath)
             assertEquals(original, Files.readString(paths.config))
-            assertEquals(1, runner.calls)
+            // Both startup confirmation and the failed explicit status check probe the path.
+            assertEquals(2, runner.calls)
             assertEquals(0, cli.statusCalls)
         } finally {
             controller.close()

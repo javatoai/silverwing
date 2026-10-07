@@ -38,9 +38,9 @@ internal fun TaskRequirementPage(controller: DesktopApplication, task: TaskManif
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(item?.title ?: metadata?.title ?: task.folderName, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-                if (item != null) ActionIconButton("刷新需求正文", { reader.select(item, force = true) }, Modifier.size(32.dp),
+                if (item != null) ActionIconButton("刷新需求详情", { reader.select(item, force = true) }, Modifier.size(32.dp),
                     enabled = reader.bodyState !is ParticipatedWorkItemBodyState.Loading) {
-                    Icon(Icons.Outlined.Refresh, "刷新需求正文", Modifier.size(18.dp))
+                    Icon(Icons.Outlined.Refresh, "刷新需求详情", Modifier.size(18.dp))
                 }
             }
             if (task.requirementLink.isNotBlank()) TooltipText(task.requirementLink, Modifier.fillMaxWidth(),
@@ -66,17 +66,55 @@ internal fun RequirementBodyContent(
     reader: RequirementBodyController,
     item: ParticipatedWorkItem,
     modifier: Modifier = Modifier,
+    onCopyDocument: (CachedRequirementDocument) -> Unit = { controller.copyRequirementDocument(item) },
+    onCopyDocumentPath: (java.nio.file.Path) -> Unit = { controller.copyText(it.toString(), "需求文件路径已复制") },
+) {
+    val comments = reader.commentsReader
+    if (comments == null) {
+        RequirementBodyDocumentContent(controller, reader, item, modifier, onCopyDocument, onCopyDocumentPath)
+        return
+    }
+    var showingComments by remember(item.key) { mutableStateOf(false) }
+    val localBodyPosition = remember(item.key) { MaterialsReadingState() }
+    val bodyPosition = LocalMaterialsReadingState.current ?: localBodyPosition
+    val commentsPosition = remember(item.key) { MaterialsReadingState() }
+    Column(modifier) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = !showingComments, onClick = { showingComments = false }, label = { Text("正文") })
+            FilterChip(selected = showingComments, onClick = { showingComments = true }, label = {
+                Text(comments.document?.let { "评论（${it.data.comments.size}）" } ?: "评论")
+            })
+        }
+        if (showingComments) CompositionLocalProvider(LocalMaterialsReadingState provides commentsPosition) {
+            RequirementCommentsContent(comments, item, Modifier.weight(1f).fillMaxWidth(),
+                onCopySource = { controller.copyText(it, "评论已复制") },
+                onCopyPath = { controller.copyText(it.toString(), "评论缓存路径已复制") },
+                onCopyFile = controller::copyFile)
+        } else CompositionLocalProvider(LocalMaterialsReadingState provides bodyPosition) {
+            RequirementBodyDocumentContent(controller, reader, item, Modifier.weight(1f).fillMaxWidth(), onCopyDocument, onCopyDocumentPath)
+        }
+    }
+}
+
+@Composable
+private fun RequirementBodyDocumentContent(
+    controller: DesktopApplication,
+    reader: RequirementBodyController,
+    item: ParticipatedWorkItem,
+    modifier: Modifier = Modifier,
+    onCopyDocument: (CachedRequirementDocument) -> Unit = { controller.copyRequirementDocument(item) },
+    onCopyDocumentPath: (java.nio.file.Path) -> Unit = { controller.copyText(it.toString(), "需求文件路径已复制") },
 ) {
     // Refreshing the same work item replaces its body and images; close a painter
     // from the previous body rather than leaving it over the loading/failed page.
-    var viewingImage by remember(item.key, reader.bodyState) { mutableStateOf<androidx.compose.ui.graphics.painter.Painter?>(null) }
+    var viewingImage by remember(item.key, reader.bodyState, reader.document?.images) { mutableStateOf<androidx.compose.ui.graphics.painter.Painter?>(null) }
     viewingImage?.let { RequirementImageViewer(it) { viewingImage = null } }
     when (val body = reader.bodyState) {
         is ParticipatedWorkItemBodyState.Ready -> if (body.itemKey == item.key) {
-            if (body.content.isBlank()) Box(modifier, contentAlignment = Alignment.Center) {
-                Text("该工作项没有可读取的正文", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            } else {
-                val images = reader.bodyImageStates.mapNotNull { (url, state) ->
+            run {
+                val document = reader.document
+                val images = document?.images.orEmpty() + reader.bodyImageStates.mapNotNull { (url, state) ->
                     (state as? ParticipatedWorkItemImageState.Loaded)?.let { url to it.path }
                 }.toMap()
                 val pending = reader.bodyImageStates.count { it.value is ParticipatedWorkItemImageState.Loading }
@@ -85,14 +123,25 @@ internal fun RequirementBodyContent(
                 BoxWithConstraints(modifier) {
                     val failureHeight = minOf(160.dp, maxHeight * 0.4f)
                     Column(Modifier.fillMaxSize()) {
+                        if (reader.refreshing) LinearProgressIndicator(Modifier.fillMaxWidth())
+                        reader.cacheError?.let { message ->
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text(message, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                                TextButton(onClick = { reader.retryCaching(item) }) { Text("重试缓存") }
+                            }
+                        }
+                        if (body.content.isBlank()) Text("该工作项没有可读取的正文", Modifier.padding(14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
                         if (pending > 0) Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                            Text("正在加载 $pending 张图片", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("正在缓存 $pending 张图片，完成后可复制文件", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         if (failures.isNotEmpty()) Column(
                             Modifier.fillMaxWidth().heightIn(max = failureHeight).verticalScroll(failureScroll),
                         ) {
+                            val missing = document?.let { it.imageUrls.count { url -> url !in it.images } } ?: failures.size
+                            if (missing > 0) Text("缺少 $missing 张本地图片，暂不可复制需求文件", Modifier.padding(horizontal = 14.dp),
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             failures.forEach { (url, value) ->
                                 val state = value as ParticipatedWorkItemImageState.Failed
                                 Row(
@@ -103,9 +152,17 @@ internal fun RequirementBodyContent(
                                 }
                             }
                         }
-                        MarkdownDocumentPreview(markdownWithLocalImagePaths(body.content, images), Modifier.weight(1f).fillMaxWidth(),
+                        CompositionLocalProvider(LocalMarkdownRemoteImages provides false) {
+                        MarkdownDocumentPreview(requirementReplaceImageDestinations(body.content, images.mapValues { it.value.toUri().toASCIIString() }), Modifier.weight(1f).fillMaxWidth(),
                             documentKey = item.key, onCopySource = { controller.copyText(body.content, "Markdown 源码已复制") },
+                            sourcePath = document?.markdownPath,
+                            onCopyPath = onCopyDocumentPath,
+                            onCopyFile = { document?.let(onCopyDocument) },
+                            fileCopyLabel = "复制需求文件（含图片）",
+                            fileCopyEnabled = document?.complete == true && pending == 0 && reader.cacheError == null && !reader.refreshing,
+                            sourceContent = body.content,
                             onCopyCode = { controller.copyText(it, "代码已复制") }, onImageClick = { viewingImage = it })
+                        }
                     }
                 }
             }

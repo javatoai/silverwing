@@ -38,7 +38,7 @@ class RequirementBodyPersistentCacheTest {
         assertEquals(ParticipatedWorkItemBodyState.Ready(item.key, "# 内容"), catalog.bodyState)
     }
 
-    @Test fun `same selected item observes expiry even when its previous body is ready`() = runTest {
+    @Test fun `Markdown survives the JSON expiry and is replaced only by explicit refresh`() = runTest {
         var reads = 0
         val source = object : Source() { override fun loadBody(item: ParticipatedWorkItem) = "body-${++reads}" }
         val dispatcher = StandardTestDispatcher(testScheduler)
@@ -49,6 +49,9 @@ class RequirementBodyPersistentCacheTest {
         assertEquals(1, reads)
         clock.advance(Duration.ofMillis(1))
         reader.select(item); runCurrent()
+        assertEquals(1, reads)
+        assertEquals("body-1", assertIs<ParticipatedWorkItemBodyState.Ready>(reader.bodyState).content)
+        reader.select(item, true); runCurrent()
         assertEquals(2, reads)
         assertEquals("body-2", assertIs<ParticipatedWorkItemBodyState.Ready>(reader.bodyState).content)
     }
@@ -64,7 +67,8 @@ class RequirementBodyPersistentCacheTest {
         reader.select(item); runCurrent()
         fail = true
         reader.select(item, true); runCurrent()
-        assertEquals("refresh failed", assertIs<ParticipatedWorkItemBodyState.Failed>(reader.bodyState).message)
+        assertEquals("old", assertIs<ParticipatedWorkItemBodyState.Ready>(reader.bodyState).content)
+        assertContains(reader.cacheError!!, "refresh failed")
         assertEquals("old", RequirementBodyRepository(source, cacheAccess = access(), clock = clock).read(item, false, dispatcher))
         assertEquals(2, reads)
         fail = false; content = ""
@@ -77,7 +81,8 @@ class RequirementBodyPersistentCacheTest {
     @Test fun `account project type id and link isolate bodies while unknown identity cannot hit or save`() = runTest {
         var reads = 0
         val source = object : Source() { override fun loadBody(item: ParticipatedWorkItem) = "${account}-${++reads}" }
-        val repository = RequirementBodyRepository(source, cacheAccess = access(), clock = clock)
+        val access = access()
+        val repository = RequirementBodyRepository(source, cacheAccess = access, clock = clock)
         val dispatcher = StandardTestDispatcher(testScheduler)
         val original = repository.read(item, false, dispatcher)
         for (other in listOf(item.copy(projectKey = "other"), item.copy(type = "bug"), item.copy(id = "2"),
@@ -85,13 +90,17 @@ class RequirementBodyPersistentCacheTest {
             assertNotEquals(original, repository.read(other, false, dispatcher))
         }
         account = "host/tenant/user-b"
+        access.recheck(dispatcher)
         assertNotEquals(original, repository.read(item, false, dispatcher))
         account = "host/other-tenant/user-a"
+        access.recheck(dispatcher)
         assertNotEquals(original, repository.read(item, false, dispatcher))
         account = null
+        access.invalidate()
         val unknown = repository.read(item, false, dispatcher)
         assertNotEquals(unknown, repository.read(item, false, dispatcher))
         account = "host/tenant/user-a"
+        access.recheck(dispatcher)
         assertEquals(original, repository.read(item, false, dispatcher))
         assertEquals(9, reads)
     }

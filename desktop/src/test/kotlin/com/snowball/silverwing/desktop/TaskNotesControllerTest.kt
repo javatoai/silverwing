@@ -115,7 +115,7 @@ class TaskNotesControllerTest {
             }
             fixture.session.config = fixture.session.config.copy(taskRoot = root.resolve("new-tasks").toString(), repositories = listOf(repository("new")))
             testScheduler.advanceUntilIdle()
-            val scope = preview.await().files.first { it.relativePath.endsWith(AgentDocumentService.WORKTREE_SCOPE_FILE_NAME) }.content
+            val scope = preview.await().files.first { it.relativePath.endsWith(AgentDocumentService.TASK_CONTEXT_FILE_NAME) }.content
             assertTrue(oldRepository.rootPath in scope)
             assertFalse(repository("new").rootPath in scope)
         }
@@ -137,7 +137,7 @@ class TaskNotesControllerTest {
             assertEquals("saved A", Files.readString(fixture.notesPath(task)))
             assertEquals("new root untouched", Files.readString(fixture.documents.taskNotesFile(newRoot.resolve(task.taskDirectoryName), task)))
             assertFalse(draft.dirty)
-            val scope = Files.readString(fixture.taskRoot.resolve(task.taskDirectoryName).resolve(".workspace/agent/${AgentDocumentService.WORKTREE_SCOPE_FILE_NAME}"))
+            val scope = Files.readString(fixture.taskRoot.resolve(task.taskDirectoryName).resolve(".workspace/agent/${AgentDocumentService.TASK_CONTEXT_FILE_NAME}"))
             assertTrue(oldRepository.rootPath in scope)
             assertFalse(repository("new").rootPath in scope)
         }
@@ -187,7 +187,7 @@ class TaskNotesControllerTest {
             assertEquals("local conflict notes", Files.readString(fixture.notesPath(task)))
             assertEquals("new root untouched", Files.readString(fixture.documents.taskNotesFile(newRoot.resolve(task.taskDirectoryName), task)))
             assertNull(fixture.controller.state.conflict)
-            val scope = Files.readString(fixture.taskRoot.resolve(task.taskDirectoryName).resolve(".workspace/agent/${AgentDocumentService.WORKTREE_SCOPE_FILE_NAME}"))
+            val scope = Files.readString(fixture.taskRoot.resolve(task.taskDirectoryName).resolve(".workspace/agent/${AgentDocumentService.TASK_CONTEXT_FILE_NAME}"))
             assertTrue(oldRepository.rootPath in scope)
         }
     }

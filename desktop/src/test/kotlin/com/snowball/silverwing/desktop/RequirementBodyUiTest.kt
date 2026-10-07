@@ -3,6 +3,7 @@
 package com.snowball.silverwing.desktop
 
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.snapshots.Snapshot
@@ -28,6 +29,67 @@ class RequirementBodyUiTest {
     private val io = StandardTestDispatcher()
     @BeforeEach fun useControlledUiDispatcher() { Dispatchers.setMain(io) }
     @AfterEach fun restoreUiDispatcher() { Dispatchers.resetMain() }
+
+    @Test fun `cached requirement copy menu includes image folder and stays disabled until images finish in all layouts`() {
+        val item = ParticipatedWorkItem("project", "OBT", "userstory", "需求", "711849", "支付优化", "https://project.feishu.cn/obt/userstory/detail/711849")
+        val url = "https://example.com/image.png"
+        for (dark in listOf(false, true)) for (width in listOf(320, 900)) {
+            val cacheRoot = Files.createTempDirectory(root, "缓存 中文-")
+            val image = cacheRoot.resolve("下载.image").also { Files.write(it, java.util.Base64.getDecoder().decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l1sAAAAASUVORK5CYII=")) }
+            var fail = true; var reads = 0
+            val source = object : ParticipatedWorkItemsSource {
+                override suspend fun load(projects: List<MeegleProjectConfig>, sprintKey: String?, defaultSprintProjectKey: String?) = ParticipatedWorkItemsResult(emptyList())
+                override fun loadBody(item: ParticipatedWorkItem): String { reads++; return "# 完整需求正文\n\n| 一 | 二 |\n|---|---|\n| 三 | 四 |\n\n![图]($url)" }
+                override fun downloadBodyImage(item: ParticipatedWorkItem, fileUrl: String, retry: Boolean): Path { if (fail) error("图片网络失败"); return image }
+            }
+            val repository = RequirementBodyRepository(source,
+                cacheAccess = RequirementCacheAccess(RequirementReadCache(cacheRoot.resolve("old"))) { "account" },
+                documentStore = RequirementDocumentStore(cacheRoot.resolve("docs")))
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            val reader = RequirementBodyController(repository, scope, io)
+            val position = MaterialsReadingState().apply { mode.value = MarkdownPreviewMode.SOURCE }
+            val paths = mutableListOf<Path>(); val payloads = mutableListOf<List<Path>>()
+            try {
+                app(source).use { app ->
+                    reader.select(item); io.scheduler.runCurrent()
+                    ImageComposeScene(width, 400, coroutineContext = Dispatchers.Unconfined) {
+                        SilverWingTheme(if (dark) ThemePreference.DARK else ThemePreference.LIGHT) {
+                            Surface { CompositionLocalProvider(LocalMaterialsReadingState provides position) {
+                                Column(Modifier.fillMaxSize()) {
+                                    RequirementDocumentPreparationStatus(RequirementDocumentPreparationState(3, 2, 1), {})
+                                    RequirementBodyContent(app, reader, item, Modifier.weight(1f),
+                                        onCopyDocument = { payloads.add(it.copyPaths()) }, onCopyDocumentPath = { paths.add(it) })
+                                }
+                            } }
+                        }
+                    }.use { scene ->
+                        scene.await { scene.text("缺少 1 张本地图片，暂不可复制需求文件") != null }
+                        assertNotNull(scene.text("全文缓存 2/3"))
+                        scene.clickLabel("复制…")
+                        scene.await { scene.text("复制需求文件（含图片）") != null }
+                        assertNotNull(scene.text("复制需求文件（含图片）")!!.config.getOrNull(SemanticsProperties.Disabled))
+                        assertNull(scene.text("复制Markdown源码")!!.config.getOrNull(SemanticsProperties.Disabled))
+                        scene.clickText("复制文件路径")
+                        assertEquals(listOf(reader.document!!.markdownPath), paths)
+                        fail = false; scene.clickText("重试")
+                        scene.await { reader.document?.complete == true && scene.text("缺少 1 张本地图片，暂不可复制需求文件") == null }
+                        assertEquals(1, reads)
+                        scene.clickLabel("复制…")
+                        scene.await { scene.text("复制需求文件（含图片）") != null }
+                        assertNull(scene.text("复制需求文件（含图片）")!!.config.getOrNull(SemanticsProperties.Disabled))
+                        scene.clickText("复制需求文件（含图片）")
+                        val document = reader.document!!
+                        assertEquals(listOf(document.markdownPath, document.assetsDirectory), payloads.single())
+                        assertTrue(scene.nodes().filter { it.boundsInRoot.width > 0 }.all { it.boundsInRoot.right <= width + 1f })
+                        val output = Path.of("build/reports/requirement-document/${if (dark) "dark" else "light"}-$width.png")
+                        Files.createDirectories(output.parent)
+                        scene.render(System.nanoTime()).use { rendered -> rendered.encodeToData()!!.use { Files.write(output, it.bytes) } }
+                    }
+                }
+            } finally { reader.clear(); scope.cancel() }
+        }
+    }
 
     @Test fun `many image failures scroll separately preserve readable body and retry only one image`() {
         val item = ParticipatedWorkItem("project", "OBT", "userstory", "需求", "1", "正文", "https://project.feishu.cn/obt/userstory/detail/1")
@@ -108,6 +170,15 @@ class RequirementBodyUiTest {
     private fun ImageComposeScene.nodes(): List<SemanticsNode> {
         fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
         return semanticsOwners.flatMap { walk(it.rootSemanticsNode) }
+    }
+    private fun ImageComposeScene.text(value: String) = nodes().firstOrNull { it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == value } == true }
+    private fun ImageComposeScene.clickText(value: String) {
+        val target = nodes().first { it.config.getOrNull(SemanticsActions.OnClick) != null && it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == value } == true }
+        assertTrue(target.config[SemanticsActions.OnClick].action!!())
+    }
+    private fun ImageComposeScene.clickLabel(value: String) {
+        val target = nodes().first { it.config.getOrNull(SemanticsActions.OnClick) != null && it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains(value) == true }
+        assertTrue(target.config[SemanticsActions.OnClick].action!!())
     }
     private fun ImageComposeScene.body() = nodes().firstOrNull {
         it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text.contains("正文仍可读") } == true

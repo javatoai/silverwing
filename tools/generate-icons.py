@@ -1,4 +1,4 @@
-"""Generate rounded SilverWing app icons from the canonical brand artwork."""
+"""Generate rounded Silverwing app icons from the PNG export of app-icon.svg."""
 
 from __future__ import annotations
 

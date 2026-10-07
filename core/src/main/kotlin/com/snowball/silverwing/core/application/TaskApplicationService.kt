@@ -361,8 +361,6 @@ class TaskApplicationService(
         val agentDirectory = silverwingDirectory.resolve(AgentDocumentService.TASK_AGENT_DIRECTORY_NAME)
         listOf(
             AgentDocumentService.TASK_CONTEXT_FILE_NAME,
-            AgentDocumentService.WORKTREE_SCOPE_FILE_NAME,
-            AgentDocumentService.RULE_SOURCES_FILE_NAME,
             AgentDocumentService.TASK_RULES_FILE_NAME,
         ).forEach { fileName -> Files.deleteIfExists(agentDirectory.resolve(fileName)) }
         Files.deleteIfExists(agentDirectory)

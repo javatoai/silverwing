@@ -44,10 +44,12 @@ class MeegleRequirementCacheIdentityTest {
         val runner = Runner("""{"authenticated":false,"host":"project.feishu.cn"}""", """{"user_key":"old-user"}""")
         val identity = MeegleRequirementCacheIdentity(runner, MeegleExecutable { "meegle" })
         assertNull(identity.read())
-        assertEquals(2, runner.commands.size)
+        assertEquals(MeegleRequirementIdentityResult.LoggedOut, identity.check())
+        assertEquals(4, runner.commands.size)
         runner.auth = """{"authenticated":true,"host":"project.feishu.cn"}"""
         runner.user = """{"name":"No stable identity"}"""
         assertNull(identity.read())
+        assertEquals(MeegleRequirementIdentityResult.Unavailable, identity.check())
     }
 
     @Test fun `unavailable or malformed profile disables caching without sharing a default profile`() {

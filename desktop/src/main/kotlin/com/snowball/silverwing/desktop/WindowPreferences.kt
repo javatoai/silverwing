@@ -31,7 +31,7 @@ internal object WindowPreferences {
         val taskListPaneCollapsed: Boolean = false,
         val materialsDirectoryPaneWidth: Int? = null,
         val expandRequirementMaterialsSecondLevelFolders: Boolean = false,
-        val workspaceNavigationCollapsed: Boolean = false,
+        val workspaceNavigationCollapsed: Boolean = true,
     )
 
     fun load(preferences: Preferences = this.preferences): Snapshot = snapshotFor(
@@ -47,7 +47,7 @@ internal object WindowPreferences {
             EXPAND_REQUIREMENT_MATERIALS_SECOND_LEVEL_FOLDERS_KEY,
             false,
         ),
-        workspaceNavigationCollapsed = preferences.getBoolean(WORKSPACE_NAVIGATION_COLLAPSED_KEY, false),
+        workspaceNavigationCollapsed = preferences.getBoolean(WORKSPACE_NAVIGATION_COLLAPSED_KEY, true),
     )
 
     fun saveWindow(width: Int, height: Int, maximized: Boolean) {
@@ -121,7 +121,7 @@ internal object WindowPreferences {
         taskListPaneCollapsed: Boolean = false,
         materialsDirectoryPaneWidth: Int? = null,
         expandRequirementMaterialsSecondLevelFolders: Boolean = false,
-        workspaceNavigationCollapsed: Boolean = false,
+        workspaceNavigationCollapsed: Boolean = true,
     ): Snapshot = Snapshot(
         width = width,
         height = height,

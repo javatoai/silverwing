@@ -132,10 +132,10 @@ class TaskRootMigrationServiceTest {
         assertTrue(Files.isSameFile(migratedWorktree, GitClient().topLevel(migratedWorktree)))
         assertEquals("feature/migrate", GitClient().currentBranch(migratedWorktree))
         assertTrue(GitClient().worktrees(repositoryPath).any { Files.isSameFile(it.path, migratedWorktree) })
-        assertTrue(Files.readString(migratedTask.resolve("AGENTS.md")).contains(".workspace/agent/WORKTREE-SCOPE.md"))
+        assertTrue(Files.readString(migratedTask.resolve("AGENTS.md")).contains(".workspace/agent/TASK-CONTEXT.md"))
         assertTrue(
             Files.readString(
-                documents.taskAgentDirectory(migratedTask).resolve(AgentDocumentService.WORKTREE_SCOPE_FILE_NAME),
+                documents.taskAgentDirectory(migratedTask).resolve(AgentDocumentService.TASK_CONTEXT_FILE_NAME),
             ).contains(migratedWorktree.toString()),
         )
         assertEquals(targetRoot.toAbsolutePath().normalize().toString(), configStore.load().taskRoot)
@@ -422,7 +422,7 @@ class TaskRootMigrationServiceTest {
         assertTrue(Files.readString(fixture.sourceTask.resolve("AGENTS.md")).contains(".workspace/agent/TASK-RULES.md"))
         assertTrue(
             Files.readString(
-                documents.taskAgentDirectory(fixture.sourceTask).resolve(AgentDocumentService.WORKTREE_SCOPE_FILE_NAME),
+                documents.taskAgentDirectory(fixture.sourceTask).resolve(AgentDocumentService.TASK_CONTEXT_FILE_NAME),
             ).contains(fixture.workspace.toString()),
         )
         assertTrue(

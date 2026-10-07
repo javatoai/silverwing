@@ -40,13 +40,13 @@ internal fun settingsNavigationCategories(): List<SettingsNavigationCategory> = 
     ),
     SettingsNavigationCategory(
         "tasks",
-        "研发任务",
+        "任务",
         listOf(
             SettingsNavigationPage("task-creation", "任务创建区"),
             SettingsNavigationPage("task-area", "任务详情区"),
-            SettingsNavigationPage("agents", "任务协作说明"),
         ),
     ),
+    SettingsNavigationCategory("agents", "AGENTS.md", listOf(SettingsNavigationPage("agents", "AGENTS.md"))),
     SettingsNavigationCategory(
         "codex",
         "Codex",
@@ -92,7 +92,8 @@ internal fun normalizeSettingsCategory(savedValue: String, supportedKeys: Set<St
         "basic", "overview", "branches", "skills" -> "basic"
         "paths", "config-backup", "storage" -> "storage"
         "groups", "tools", "development" -> "development"
-        "task-creation", "codex-task-creation", "task-area", "agents", "tasks" -> "tasks"
+        "task-creation", "codex-task-creation", "task-area", "tasks" -> "tasks"
+        "agents" -> "agents"
         "codex-plugins", "codex-mcp", "codex" -> "codex"
         "feishu", "lark", "genbu", "cli", "advanced", "commands" -> "commands"
         "skill-sources" -> "skill-sources"

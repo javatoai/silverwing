@@ -230,6 +230,9 @@ interface ParticipatedWorkItemsSource {
     ): ParticipatedWorkItemsResult
     fun loadBody(item: ParticipatedWorkItem): String?
 
+    val supportsComments: Boolean get() = false
+    fun loadComments(item: ParticipatedWorkItem): RequirementComments = RequirementComments(emptyList())
+
     /** Downloads a Meegle rich-text image into the temporary image cache when supported. */
     fun downloadBodyImage(item: ParticipatedWorkItem, fileUrl: String, retry: Boolean = false): Path? = null
 }
@@ -356,6 +359,10 @@ class MeegleParticipatedWorkItemsSource(
 
     override fun loadBody(item: ParticipatedWorkItem): String? =
         bodyReader.fetchFullBody(item.url, item.projectKey)
+
+    override val supportsComments: Boolean get() = true
+    override fun loadComments(item: ParticipatedWorkItem): RequirementComments =
+        MeegleRequirementCommentsProvider(runner, meegleExecutable).read(item)
 
     override fun downloadBodyImage(item: ParticipatedWorkItem, fileUrl: String, retry: Boolean): Path {
         require(isMeegleRichTextImageUrl(fileUrl)) { "不是受支持的飞书项目图片链接" }

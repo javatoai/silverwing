@@ -16,8 +16,9 @@ class RequirementMetadataPersistentCacheTest {
     private val clock = RequirementCacheTestClock()
     private var account: String? = "host/tenant/user"
     private val link = "https://project.feishu.cn/obt/userstory/detail/1"
-    private fun TestScope.coordinator(provider: RequirementMetadataProvider) = RequirementMetadataCoordinator(provider, backgroundScope,
-        StandardTestDispatcher(testScheduler), clock, cacheAccess = RequirementCacheAccess(RequirementReadCache(root, clock)) { account })
+    private fun TestScope.coordinator(provider: RequirementMetadataProvider,
+        access: RequirementCacheAccess = RequirementCacheAccess(RequirementReadCache(root, clock)) { account }) =
+        RequirementMetadataCoordinator(provider, backgroundScope, StandardTestDispatcher(testScheduler), clock, cacheAccess = access)
 
     @Test fun `restart reuses metadata and memory hit cannot extend the persisted deadline`() = runTest {
         var reads = 0
@@ -51,15 +52,18 @@ class RequirementMetadataPersistentCacheTest {
     @Test fun `metadata keys include account project and link and unverified identities are not cached`() = runTest {
         var reads = 0
         val provider = RequirementMetadataProvider { RequirementMetadata("${++reads}", null) }
-        val coordinator = coordinator(provider)
+        val access = RequirementCacheAccess(RequirementReadCache(root, clock)) { account }
+        val coordinator = coordinator(provider, access)
         coordinator.fetch(link, "project")
         coordinator.fetch(link + "?from=task", "project")
         assertEquals(1, reads, "Equivalent links share persistent metadata")
         coordinator.fetch(link, "another-project")
         coordinator.fetch(link.replace("/1", "/2"), "project")
         account = "another-account"
+        access.recheck(StandardTestDispatcher(testScheduler))
         coordinator.fetch(link, "project")
         account = null
+        access.invalidate()
         coordinator.fetch(link, "project"); coordinator.fetch(link, "project")
         assertEquals(6, reads)
     }

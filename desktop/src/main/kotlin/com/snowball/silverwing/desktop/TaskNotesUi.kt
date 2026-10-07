@@ -1,202 +1,221 @@
 package com.snowball.silverwing.desktop
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Save
-import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
-import com.snowball.silverwing.core.AgentTaskTemplate
 import com.snowball.silverwing.core.AgentDocumentPreview
+import com.snowball.silverwing.core.AgentTaskTemplate
+import com.snowball.silverwing.core.RepositoryConfig
 import com.snowball.silverwing.core.TaskManifest
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import java.nio.file.Path
 
-/** 编辑器沿用 Agent 文件监控器的草稿，切换页面不会触发保存或丢失输入。 */
+/** Drafts belong to the existing monitor; the session only retains reading controls and positions. */
 @Composable
 internal fun TaskNotesPage(controller: DesktopApplication, task: TaskManifest, modifier: Modifier = Modifier) {
     val taskKey = controller.taskPath(task)
+    val taskDirectory = remember(taskKey) { Path.of(taskKey).toAbsolutePath().normalize() }
+    val browsing = remember(taskKey) { controller.taskBrowsingSession.notesFor(taskKey) }
     val drafts = controller.agentInstructionsController
     val draft = remember(taskKey) { drafts.notesDraftFor(task) }
-    val notes = draft.notes
-    var notesLoadAttempt by remember(taskKey) { mutableStateOf(0) }
     val templates = controller.agentTaskTemplates
-    val selectedTemplateId = selectedTemplateIdForNotes(notes, templates)
+    val selectedTemplateId = selectedTemplateIdForNotes(draft.notes, templates)
+    var refreshAttempt by remember(taskKey) { mutableIntStateOf(0) }
     var pendingTemplate by remember(taskKey) { mutableStateOf<Pair<AgentTaskTemplate, Long>?>(null) }
-    var agentsPreview by remember(taskKey) { mutableStateOf<AgentDocumentPreview?>(null) }
-    var agentsPreviewLoading by remember(taskKey) { mutableStateOf(false) }
-    var agentsPreviewError by remember(taskKey) { mutableStateOf<String?>(null) }
-    var agentsPreviewRequest by remember(taskKey) { mutableStateOf<TaskNotesPreviewRequest?>(null) }
-    var agentsPreviewGeneration by remember(taskKey) { mutableStateOf(0L) }
-    val notesReady = draft.ready
-    LaunchedEffect(taskKey, task.updatedAt, controller.agentRevision, notesLoadAttempt) {
+    var saving by remember(taskKey) { mutableStateOf(false) }
+    val rulesSelected = browsing.files.selectedPath == TASK_NOTES_PREVIEW_PATH
+    val editingRules = rulesSelected && browsing.mode == TaskNotesPageMode.EDIT
+
+    LaunchedEffect(taskKey, task.updatedAt, controller.agentRevision, refreshAttempt) {
         drafts.loadTaskNotesDraftAsync(task)
     }
-    LaunchedEffect(taskKey, task, agentsPreviewRequest, draft.contentRevision) {
-        val request = agentsPreviewRequest ?: return@LaunchedEffect
-        val generation = ++agentsPreviewGeneration
-        if (request.task != task || request.contentRevision != draft.contentRevision) {
-            agentsPreviewLoading = false
-            agentsPreview = null
-            agentsPreviewError = null
-            return@LaunchedEffect
-        }
-        agentsPreviewLoading = true
-        agentsPreviewError = null
-        agentsPreview = null
-        try {
-            val result = controller.previewTaskAgentsAsync(task, request.notes)
-            if (generation == agentsPreviewGeneration && draft.contentRevision == request.contentRevision) agentsPreview = result
-        } catch (cancelled: kotlinx.coroutines.CancellationException) {
-            throw cancelled
-        } catch (error: Throwable) {
-            if (generation == agentsPreviewGeneration) {
-                agentsPreviewError = error.message ?: error::class.simpleName ?: "无法生成 Agent 文件预览"
-                controller.showError(error)
-            }
-        } finally {
-            if (generation == agentsPreviewGeneration) agentsPreviewLoading = false
-        }
-    }
-    LaunchedEffect(controller.agentRevision, draft.contentRevision) {
+    LaunchedEffect(controller.busy) { if (!controller.busy) saving = false }
+    LaunchedEffect(controller.agentRevision, draft.contentRevision, editingRules) {
         pendingTemplate = pendingTemplate?.takeIf { pending ->
-            pending.second == draft.contentRevision && templates.any { it.id == pending.first.id && it.content == pending.first.content }
+            editingRules && pending.second == draft.contentRevision &&
+                templates.any { it.id == pending.first.id && it.content == pending.first.content }
         }
-        if (agentsPreviewRequest?.contentRevision != draft.contentRevision) agentsPreview = null
     }
-    fun applyTemplate(notesResult: TemplateFillResult.Applied) {
-        controller.markTaskNotesEdited(task, notesResult.notes)
+
+    // Keep the generated document set mounted while editing, without regenerating it for each keystroke.
+    var editorPreviewDraft by remember(taskKey, refreshAttempt) { mutableStateOf<TaskNotesPreviewDraft?>(null) }
+    val currentDraft = TaskNotesPreviewDraft(draft.notes, draft.contentRevision)
+    val previewDraft = if (browsing.mode == TaskNotesPageMode.EDIT) editorPreviewDraft ?: currentDraft else currentDraft
+    SideEffect {
+        if (draft.ready && !draft.loading && (browsing.mode == TaskNotesPageMode.READ || editorPreviewDraft == null))
+            editorPreviewDraft = currentDraft
     }
-    Column(modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        SectionHeader("需求说明")
-        if (templates.isNotEmpty()) {
-            Text(
-                "从模板填充（单选）",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+    val request = if (draft.ready && !draft.loading && draft.error == null)
+        TaskNotesPreviewRequest(task, previewDraft.notes, previewDraft.contentRevision, controller.config.repositories,
+            controller.agentRevision, refreshAttempt) else null
+    val currentRequest by rememberUpdatedState(request)
+    // Reset synchronously when the task or inputs change; an old document cannot flash under new tabs.
+    var previewState by remember(taskKey, request) {
+        mutableStateOf<TaskNotesPreviewState>(if (request == null) TaskNotesPreviewState.Idle else TaskNotesPreviewState.Loading)
+    }
+    LaunchedEffect(taskKey, request) {
+        val captured = request ?: return@LaunchedEffect
+        try {
+            val result = controller.previewTaskAgentsAsync(captured.task, captured.notes)
+            currentCoroutineContext().ensureActive()
+            if (currentRequest == captured)
+                previewState = TaskNotesPreviewState.Loaded(result)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            if (currentRequest == captured)
+                previewState = TaskNotesPreviewState.Failed(failure.message ?: "无法生成文件预览")
+        }
+    }
+
+    val controls: @Composable () -> Unit = {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp),
+            itemVerticalAlignment = Alignment.CenterVertically) {
+            if (rulesSelected) {
+                FilterChip(selected = browsing.mode == TaskNotesPageMode.READ,
+                    onClick = { if (browsing.mode != TaskNotesPageMode.READ) browsing.readDraft() },
+                    enabled = !controller.busy, label = { Text("阅读") })
+                FilterChip(selected = browsing.mode == TaskNotesPageMode.EDIT,
+                    onClick = { browsing.mode = TaskNotesPageMode.EDIT },
+                    enabled = !controller.busy && draft.ready, label = { Text("编辑") })
+            }
+            ActionIconButton("刷新需求说明", { refreshAttempt++ }, Modifier.size(32.dp),
+                enabled = !controller.busy, loading = draft.loading || previewState is TaskNotesPreviewState.Loading) {
+                Icon(Icons.Outlined.Refresh, null, Modifier.size(18.dp))
+            }
+            if (rulesSelected) Button(onClick = { saving = controller.saveTaskNotes(task, draft.notes) },
+                enabled = !controller.busy && draft.ready) {
+                if (saving && controller.busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                else Icon(Icons.Outlined.Save, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp)); Text(if (saving && controller.busy) "正在保存…" else "保存")
+            }
+        }
+    }
+    val editor: @Composable (MarkdownPreviewFile, Modifier) -> Unit = { _, editorModifier ->
+        CompositionLocalProvider(LocalMaterialsReadingState provides browsing.editorPosition) {
+            Column(editorModifier.verticalScroll(rememberMaterialsScrollState("task-notes-editor")),
+                verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (templates.isNotEmpty()) {
+                    Text("从模板填充（单选）", style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                        templates.forEach { template ->
+                            FilterChip(selected = selectedTemplateId == template.id,
+                                onClick = {
+                                    val currentNotes = draft.notes
+                                    val selected = templates.firstOrNull { it.id == selectedTemplateIdForNotes(currentNotes, templates) }
+                                    when (val result = resolveTemplateToggle(currentNotes, selected, template)) {
+                                        is TemplateFillResult.Applied -> controller.markTaskNotesEdited(task, result.notes)
+                                        is TemplateFillResult.NeedsConfirmation -> pendingTemplate = result.target to draft.contentRevision
+                                    }
+                                }, enabled = !controller.busy && draft.ready, label = { Text(template.name) })
+                        }
+                    }
+                }
+                OutlinedTextField(draft.notes, { controller.markTaskNotesEdited(task, it) },
+                    Modifier.fillMaxWidth(), minLines = 8, maxLines = Int.MAX_VALUE,
+                    readOnly = controller.busy || !draft.ready, label = { Text("需求说明") })
+            }
+        }
+    }
+    Column(modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        draft.error?.let { error ->
+            TaskNotesFailureRow("读取失败：$error", !controller.busy) { refreshAttempt++ }
+        }
+        when (val preview = previewState) {
+            is TaskNotesPreviewState.Loaded -> MarkdownFileTabsPreview(
+                files = preview.document.files.map {
+                    MarkdownPreviewFile(it.relativePath, if (it.relativePath == TASK_NOTES_PREVIEW_PATH) draft.notes else it.content)
+                },
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                initialPath = TASK_NOTES_PREVIEW_PATH,
+                state = browsing.files,
+                emptyContentMessage = "尚未填写需求说明，切换到“编辑”可以开始填写。",
+                onCopySource = { controller.copyText(markdownPreviewSourceCopyPayload(it), "Markdown 源码已复制") },
+                sourcePathForFile = { file ->
+                    taskDirectory.resolve(file.path).normalize().takeIf { it.startsWith(taskDirectory) }
+                },
+                onCopyPath = { controller.copyText(it.toString(), "文件路径已复制") },
+                onCopyFile = controller::copyFile,
+                fileCopyLabel = if (rulesSelected && draft.dirty) "复制已保存文件" else "复制文件",
+                fileContent = if (editingRules) editor else null,
             )
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                templates.forEach { template ->
-                    FilterChip(
-                        selected = selectedTemplateId == template.id,
-                        onClick = {
-                            val currentNotes = draft.notes
-                            val selected = templates.firstOrNull { it.id == selectedTemplateIdForNotes(currentNotes, templates) }
-                            when (val result = resolveTemplateToggle(currentNotes, selected, template)) {
-                                is TemplateFillResult.Applied -> applyTemplate(result)
-                                is TemplateFillResult.NeedsConfirmation -> pendingTemplate = result.target to draft.contentRevision
-                            }
-                        },
-                        enabled = !controller.busy && notesReady,
-                        label = { Text(template.name) },
-                    )
+            is TaskNotesPreviewState.Failed -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopStart) {
+                TaskNotesFailureRow("预览失败：${preview.message}", !controller.busy) { refreshAttempt++ }
+            }
+            TaskNotesPreviewState.Idle, TaskNotesPreviewState.Loading -> Box(Modifier.weight(1f).fillMaxWidth(),
+                contentAlignment = Alignment.Center) {
+                if (draft.error == null) Column(horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                    Text("正在读取需求说明…", color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
-        OutlinedTextField(notes, {
-            controller.markTaskNotesEdited(task, it)
-        }, Modifier.fillMaxWidth(), minLines = 4, maxLines = 6, readOnly = controller.busy || !notesReady, label = { Text("需求说明") })
-        if (draft.loading || !draft.ready && draft.error == null) {
-            Text("正在读取需求说明…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        draft.error?.let { error ->
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("读取失败：$error", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                TextButton(onClick = { notesLoadAttempt++ }, enabled = !controller.busy) { Text("重试") }
-            }
-        }
-        agentsPreviewError?.let { error ->
-            Text("预览失败：$error", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-        }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            OutlinedButton(
-                onClick = { agentsPreviewRequest = TaskNotesPreviewRequest(draft.notes, draft.contentRevision, (agentsPreviewRequest?.sequence ?: 0) + 1, task) },
-                enabled = !controller.busy && notesReady && !agentsPreviewLoading,
-            ) {
-                if (agentsPreviewLoading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                else Icon(Icons.Outlined.Visibility, null, Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp)); Text("预览")
-            }
-            Spacer(Modifier.width(8.dp))
-            Button(onClick = { controller.saveTaskNotes(task, draft.notes) }, enabled = !controller.busy && notesReady) {
-                Icon(Icons.Outlined.Save, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("保存")
+        if (rulesSelected) {
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val status: @Composable () -> Unit = {
+                    Text(if (saving && controller.busy) "正在保存…" else if (draft.dirty) "未保存" else "已保存",
+                        style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (maxWidth < 460.dp) Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    status()
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) { controls() }
+                } else Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.weight(1f)) { status() }
+                    controls()
+                }
             }
         }
     }
+
     pendingTemplate?.let { pending ->
         val template = pending.first
-        ConfirmDialog(
-            title = "替换需求说明？",
+        ConfirmDialog(title = "替换需求说明？",
             message = "当前说明已被手动修改，应用模板“${template.name}”将替换现有内容。",
-            confirmLabel = "替换说明",
-            enabled = !controller.busy && notesReady,
+            confirmLabel = "替换说明", enabled = !controller.busy && draft.ready,
             onDismiss = { pendingTemplate = null },
             onConfirm = {
-                if (pending.second == draft.contentRevision && templates.any { it.id == template.id && it.content == template.content }) {
-                    applyTemplate(TemplateFillResult.Applied(template.content, template.id))
-                }
+                if (pending.second == draft.contentRevision && templates.any { it.id == template.id && it.content == template.content })
+                    controller.markTaskNotesEdited(task, template.content)
                 pendingTemplate = null
-            },
-        )
-    }
-    agentsPreview?.let { preview ->
-        TaskAgentsPreviewDialog(
-            preview = preview,
-            onCopySource = { file -> controller.copyText(markdownPreviewSourceCopyPayload(file), "Markdown 源码已复制") },
-            onDismiss = { agentsPreview = null },
-        )
+            })
     }
 }
 
-private data class TaskNotesPreviewRequest(val notes: String, val contentRevision: Long, val sequence: Int, val task: TaskManifest)
+private data class TaskNotesPreviewDraft(val notes: String, val contentRevision: Long)
 
 @Composable
-private fun TaskAgentsPreviewDialog(
-    preview: AgentDocumentPreview,
-    onCopySource: (MarkdownPreviewFile) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val window = LocalWindowInfo.current.containerSize
-    val density = LocalDensity.current
-    val width = with(density) { window.width.toDp() }.minus(32.dp).coerceAtLeast(1.dp).coerceAtMost(860.dp)
-    val height = with(density) { window.height.toDp() }.minus(32.dp).coerceAtLeast(1.dp).coerceAtMost(640.dp)
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(
-            Modifier.width(width).height(height),
-            shape = RoundedCornerShape(22.dp),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        ) {
-            Column(Modifier.fillMaxSize()) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Agent 文件预览", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-                }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                Surface(
-                    Modifier.weight(1f).fillMaxWidth().padding(18.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    MarkdownFileTabsPreview(
-                        files = preview.files.map { MarkdownPreviewFile(it.relativePath, it.content) },
-                        modifier = Modifier.fillMaxSize(),
-                        initialPath = preview.rootFile.relativePath,
-                        onCopySource = onCopySource,
-                    )
-                }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 14.dp), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onDismiss) { Text("关闭") }
-                }
-            }
-        }
+private fun TaskNotesFailureRow(message: String, retryEnabled: Boolean, onRetry: () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(message, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        TextButton(onClick = onRetry, enabled = retryEnabled) { Text("重试") }
     }
+}
+
+private data class TaskNotesPreviewRequest(
+    val task: TaskManifest,
+    val notes: String,
+    val contentRevision: Long,
+    val repositories: List<RepositoryConfig>,
+    val agentRevision: Long,
+    val refreshAttempt: Int,
+)
+
+private sealed interface TaskNotesPreviewState {
+    data object Idle : TaskNotesPreviewState
+    data object Loading : TaskNotesPreviewState
+    data class Loaded(val document: AgentDocumentPreview) : TaskNotesPreviewState
+    data class Failed(val message: String) : TaskNotesPreviewState
 }

@@ -147,14 +147,12 @@ class AgentDocumentService(
     ): Path {
         taskDirectory.createDirectories()
         val root = taskDirectory.resolve(AgentsMdWriter.FILE_NAME)
-        if (restoreRootRouter && !root.exists()) writeAtomically(root, renderReferencedRootRouter())
+        if (restoreRootRouter && !root.exists()) writeAtomically(root, renderReferencedRootRouter(manifest))
 
         ensureGlobalFile()
         ensureGroupFile(manifest.groupId)
         val agentDirectory = taskAgentDirectory(taskDirectory)
-        writeIfChanged(agentDirectory.resolve(TASK_CONTEXT_FILE_NAME), renderTaskContext(manifest))
-        writeIfChanged(agentDirectory.resolve(WORKTREE_SCOPE_FILE_NAME), renderWorktreeScope(manifest, repositories))
-        writeIfChanged(agentDirectory.resolve(RULE_SOURCES_FILE_NAME), renderRuleSources(manifest))
+        writeIfChanged(agentDirectory.resolve(TASK_CONTEXT_FILE_NAME), renderTaskContext(manifest, repositories))
 
         val rules = agentDirectory.resolve(TASK_RULES_FILE_NAME)
         when {
@@ -173,33 +171,29 @@ class AgentDocumentService(
         taskNotes: String,
     ): AgentDocumentPreview = AgentDocumentPreview(
         listOf(
-            AgentDocumentPreviewFile(AgentsMdWriter.FILE_NAME, renderReferencedRootRouter()),
-            AgentDocumentPreviewFile(relativeTaskAgentPath(TASK_CONTEXT_FILE_NAME), renderTaskContext(manifest)),
-            AgentDocumentPreviewFile(relativeTaskAgentPath(WORKTREE_SCOPE_FILE_NAME), renderWorktreeScope(manifest, repositories)),
-            AgentDocumentPreviewFile(relativeTaskAgentPath(RULE_SOURCES_FILE_NAME), renderRuleSources(manifest)),
+            AgentDocumentPreviewFile(AgentsMdWriter.FILE_NAME, renderReferencedRootRouter(manifest)),
+            AgentDocumentPreviewFile(relativeTaskAgentPath(TASK_CONTEXT_FILE_NAME), renderTaskContext(manifest, repositories)),
             AgentDocumentPreviewFile(relativeTaskAgentPath(TASK_RULES_FILE_NAME), taskNotes.trimEnd()),
         ),
     )
 
-    private fun renderReferencedRootRouter(): String = """
+    private fun renderReferencedRootRouter(manifest: TaskManifest): String = """
         # 任务说明
 
         > 本文件是稳定的系统路由。不要在这里写任务专属要求；请编辑 `${relativeTaskAgentPath(TASK_RULES_FILE_NAME)}`。
 
-        在分析、修改代码或执行 Git 写操作前，必须阅读以下文件：
+        在分析、修改代码或执行 Git 写操作前，必须阅读以下文件，以及下方列出的共享规则：
 
-        1. `${relativeTaskAgentPath(TASK_CONTEXT_FILE_NAME)}`：需求链接、资料目录、任务交接与系统元数据。
-        2. `${relativeTaskAgentPath(WORKTREE_SCOPE_FILE_NAME)}`：允许修改的 Worktree 与仅可阅读的本地仓库。
-        3. `${relativeTaskAgentPath(RULE_SOURCES_FILE_NAME)}`：全局和组规则的实际位置；继续阅读其中列出的规则文件。
-        4. `${relativeTaskAgentPath(TASK_RULES_FILE_NAME)}`：本任务专属规则。
+        1. `${relativeTaskAgentPath(TASK_CONTEXT_FILE_NAME)}`：需求链接、资料目录、任务交接、系统元数据，以及 Worktree 修改范围。
+        2. `${relativeTaskAgentPath(TASK_RULES_FILE_NAME)}`：本任务专属规则。
 
-        只允许修改 `WORKTREE-SCOPE.md` 标明可改动的 Worktree。规则冲突时按：任务专属规则 > 组规则 > 全局规则。
-    """.trimIndent() + "\n"
+        只允许修改 `TASK-CONTEXT.md` 中“Worktree 范围”标明可改动的 Worktree。
+    """.trimIndent() + "\n\n" + renderRuleSources(manifest)
 
-    private fun renderTaskContext(manifest: TaskManifest): String = buildString {
+    private fun renderTaskContext(manifest: TaskManifest, repositories: List<RepositoryInfo>): String = buildString {
         appendLine("# 任务上下文")
         appendLine()
-        appendLine("> 本文件由系统生成，会随需求和任务上下文更新。")
+        appendLine("> 本文件由系统生成，会随需求、任务上下文、服务和 Worktree 变动更新。")
         appendLine()
         append(AgentsMdWriter.renderTaskContext(manifest).trimEnd())
         appendLine()
@@ -209,34 +203,26 @@ class AgentDocumentService(
         appendLine("- 任务清单是只读元数据；不要手动改写。")
         appendLine("- `${HandoffDocumentWriter.DIRECTORY_NAME}/${HandoffDocumentWriter.FILE_NAME}` 存在时，是 Agent CLI 任务的交接记录。")
         appendLine()
-    }
-
-    private fun renderWorktreeScope(
-        manifest: TaskManifest,
-        repositories: List<RepositoryInfo>,
-    ): String = buildString {
-        appendLine("# Worktree 范围")
+        appendLine("## Worktree 范围")
         appendLine()
-        appendLine("> 本文件由系统生成，会随服务和 Worktree 变动更新。")
-        appendLine()
-        append(AgentsMdWriter.renderWorktreeScope(manifest, repositories).trimEnd())
+        append(AgentsMdWriter.renderWorktreeScope(manifest, repositories).replace(Regex("(?m)^## "), "### ").trimEnd())
         appendLine()
     }
 
     private fun renderRuleSources(manifest: TaskManifest): String = buildString {
-        appendLine("# 共享规则来源")
+        appendLine("## 共享规则来源")
         appendLine()
         appendLine("> 先阅读以下共享规则文件，再结合任务专属规则执行。")
         appendLine()
-        appendLine("## 全局规则")
+        appendLine("### 全局规则")
         appendLine()
         appendLine("`${paths.globalAgents.toAbsolutePath().normalize()}`")
         appendLine()
-        appendLine("## 组规则")
+        appendLine("### 组规则")
         appendLine()
         appendLine("`${paths.groupAgents(manifest.groupId).toAbsolutePath().normalize()}`")
         appendLine()
-        appendLine("## 规则优先级")
+        appendLine("### 规则优先级")
         appendLine()
         appendLine("发生冲突时按：任务专属规则 > 组规则 > 全局规则。")
         appendLine()
@@ -284,8 +270,6 @@ class AgentDocumentService(
     companion object {
         const val TASK_AGENT_DIRECTORY_NAME = "agent"
         const val TASK_CONTEXT_FILE_NAME = "TASK-CONTEXT.md"
-        const val WORKTREE_SCOPE_FILE_NAME = "WORKTREE-SCOPE.md"
-        const val RULE_SOURCES_FILE_NAME = "RULE-SOURCES.md"
         const val TASK_RULES_FILE_NAME = "TASK-RULES.md"
     }
 }

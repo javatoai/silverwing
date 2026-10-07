@@ -97,7 +97,7 @@ class RequirementReadCacheTest {
         assertEquals(1, files().size)
     }
 
-    @Test fun `concurrent readers share only the active identity probe and the next read checks again`() = runBlocking {
+    @Test fun `concurrent and later local readers share the confirmed session identity`() = runBlocking {
         val started = CompletableDeferred<Unit>()
         val release = CountDownLatch(1)
         val calls = AtomicInteger()
@@ -114,6 +114,8 @@ class RequirementReadCacheTest {
             (followers + first).forEach { assertEquals("account", it.await()) }
             assertEquals(1, calls.get())
             assertEquals("account", access.identity(Dispatchers.IO))
+            assertEquals(1, calls.get())
+            assertEquals("account", access.recheck(Dispatchers.IO))
             assertEquals(2, calls.get())
         } finally { release.countDown(); first.cancel() }
     }

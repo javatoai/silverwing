@@ -114,7 +114,9 @@ internal class RequirementMetadataCoordinator(
 
     suspend fun fetch(link: String, projectKey: String?, force: Boolean = false): RequirementFetchResult {
         currentCoroutineContext().ensureActive()
-        val identity = if (cacheAccess == null) "session" else cacheAccess.identity(ioDispatcher)
+        val identity = if (cacheAccess == null) "session" else if (force) cacheAccess.recheck(ioDispatcher, strict = true)
+            else cacheAccess.identity(ioDispatcher)
+        cacheAccess?.ensureNotLoggedOut()
         currentCoroutineContext().ensureActive()
         val key = RequirementRequestKey(projectKey, link.trim(), identity)
         val request = synchronized(requestLock) {
@@ -141,9 +143,11 @@ internal class RequirementMetadataCoordinator(
                 try {
                     val saved = if (!force && key.account != null) cacheAccess?.cache?.read(key.persistentKey, RequirementMetadata.serializer()) else null
                     if (saved != null) {
+                        cacheAccess?.verifySession(key.account)
                         fetchedAt = saved.fetchedAt
                         RequirementFetchResult.Success(saved.value)
                     } else {
+                        if (!force) cacheAccess?.verify(key.account, ioDispatcher)
                         val metadata = runInterruptible { provider.fetch(key.link, key.projectKey) }
                         cacheAccess?.verify(key.account, ioDispatcher)
                         fetchedAt = clock.millis()
@@ -298,6 +302,7 @@ class RequirementController internal constructor(
             currentCoroutineContext().ensureActive()
             RequirementFetchResult.Cancelled
         }
+        catch (_: Exception) { RequirementFetchResult.Failure }
 
     /**
      * Generates folder/branch suggestions only after the caller explicitly selected a candidate.

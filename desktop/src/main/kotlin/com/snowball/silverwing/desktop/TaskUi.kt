@@ -116,9 +116,6 @@ internal fun TaskDetail(
     var showAddServices by remember(task.folderName) { mutableStateOf(false) }
     var showBatchTag by remember(task.folderName) { mutableStateOf(false) }
     var showBranchInfo by remember(task.folderName) { mutableStateOf(false) }
-    var showAiConfiguration by remember(task) { mutableStateOf(false) }
-    var showAiContextCopy by remember(task) { mutableStateOf(false) }
-    var showCodexAssociation by remember(task) { mutableStateOf(false) }
     var requirementMaterialsMenuExpanded by remember(task.folderName, task.requirementMaterials.status) { mutableStateOf(false) }
     var batchGitMode by remember(task.folderName) { mutableStateOf<WorkspaceGitBatchMode?>(null) }
     var lastBatchGitMode by remember(task.folderName) { mutableStateOf(WorkspaceGitBatchMode.PUSH) }
@@ -233,12 +230,6 @@ internal fun TaskDetail(
                         ) {
                             DropdownMenuItem(text = { Text("在 Codex 中打开") }, enabled = !controller.busy,
                                 onClick = { requirementMaterialsMenuExpanded = false; controller.openTaskInCodex(task) })
-                            DropdownMenuItem(text = { Text("关联 Codex 会话") }, enabled = !controller.busy,
-                                onClick = { requirementMaterialsMenuExpanded = false; showCodexAssociation = true })
-                            DropdownMenuItem(text = { Text("AI 配置") },
-                                onClick = { requirementMaterialsMenuExpanded = false; showAiConfiguration = true })
-                            DropdownMenuItem(text = { Text("复制 AI 上下文…") },
-                                onClick = { requirementMaterialsMenuExpanded = false; showAiContextCopy = true })
                             HorizontalDivider()
                             when (task.requirementMaterials.status) {
                                 RequirementMaterialsStatus.READY -> {
@@ -383,14 +374,6 @@ internal fun TaskDetail(
         controller.clearDeleteRisk(task)
         confirmDelete = false
     }
-    if (showAiConfiguration) TaskAiConfigurationDialog(controller, task) { showAiConfiguration = false }
-    if (showAiContextCopy) AiContextCopyDialog(task, onDismiss = { showAiContextCopy = false },
-        requirementTitle = controller.requirementController.loadedMetadataFor(task)?.title,
-        materialsRoot = requirementMaterialsPath,
-        currentBranches = task.services.mapNotNull { workspace -> controller.gitHealth(workspace)?.actualBranch?.let { workspace.worktreePath to it } }.toMap(),
-        loadRequirementBody = { controller.loadTaskRequirementBodyForCopy(task) },
-        onCopied = { controller.showStatus("AI 上下文已复制") })
-    if (showCodexAssociation) CodexTaskAssociationDialog(controller, task) { showCodexAssociation = false }
     if (showAddServices) AddTaskServicesDialog(controller, task, onDismiss = { showAddServices = false }) { ids, reuseKeys, selections ->
         controller.addServices(task, ids, reuseKeys, selections) { showAddServices = false }
     }

@@ -13,7 +13,7 @@ class MarkdownPreviewTest {
     @Test
     fun `selecting Markdown file honors the requested path and falls back to the first file`() {
         val root = MarkdownPreviewFile("AGENTS.md", "router")
-        val scope = MarkdownPreviewFile(".workspace/agent/WORKTREE-SCOPE.md", "scope")
+        val scope = MarkdownPreviewFile(".workspace/agent/TASK-CONTEXT.md", "scope")
         val files = listOf(root, scope)
 
         assertEquals(scope, selectMarkdownPreviewFile(files, scope.path))

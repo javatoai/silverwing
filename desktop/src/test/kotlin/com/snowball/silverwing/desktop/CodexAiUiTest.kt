@@ -93,7 +93,7 @@ class CodexAiUiTest {
             }
         }
     }
-    @Test fun `task more menu exposes Codex and AI files can be read on both themes and widths`() {
+    @Test fun `task menu omits removed AI actions and shared AI files remain readable on both themes and widths`() {
         val task=TaskManifest(folderName="支付渠道优化",taskDirectoryName="支付渠道优化",featureBranch="payment",createdAt="now",updatedAt="now",services=emptyList())
         val taskDirectory=Files.createDirectories(root.resolve("tasks/支付渠道优化"));Files.createDirectory(taskDirectory.resolve(".git"));Files.writeString(taskDirectory.resolve("AGENTS.md"),"# 当前任务说明\n\n支付渠道优化")
         for(dark in listOf(false,true))for(width in listOf(600,1100)) app().use {app->
@@ -103,8 +103,13 @@ class CodexAiUiTest {
             }.use {scene->
                 scene.await {scene.nodes().any {it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("更多操作")==true}}
                 scene.click(scene.nodes().first {it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("更多操作")==true})
-                scene.await {scene.text("AI 配置")!=null}
-                assertNotNull(scene.text("在 Codex 中打开"));assertNotNull(scene.text("关联 Codex 会话"));scene.click(scene.text("AI 配置")!!)
+                scene.await {scene.text("在 Codex 中打开")!=null}
+                assertNull(scene.text("关联 Codex 会话"));assertNull(scene.text("AI 配置"));assertNull(scene.text("复制 AI 上下文…"))
+                scene.screenshot("${if(dark)"dark" else "light"}-task-menu-$width")
+            }
+            ImageComposeScene(width,850,coroutineContext=Dispatchers.Unconfined) {
+                SilverWingTheme(if(dark)ThemePreference.DARK else ThemePreference.LIGHT){Surface {TaskAiConfigurationDialog(app,task,{})}}
+            }.use {scene->
                 scene.await {scene.text("fixture-docs")!=null};scene.screenshot("${if(dark)"dark" else "light"}-task-ai-$width")
                 scene.click(scene.text("Skills")!!);scene.await {scene.text("团队 Skill")!=null};scene.screenshot("${if(dark)"dark" else "light"}-task-skills-$width")
                 scene.click(scene.text("说明文件")!!);scene.await {scene.text("AGENTS.md")!=null && scene.text("当前任务")!=null}

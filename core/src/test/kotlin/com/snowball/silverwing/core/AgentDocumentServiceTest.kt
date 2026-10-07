@@ -37,7 +37,8 @@ class AgentDocumentServiceTest {
         val rules = service.taskNotesFile(taskDirectory, manifest)
         assertTrue(root.startsWith("# 任务说明"))
         assertFalse(root.contains("<!--"))
-        assertFalse(root.contains("silverwing", ignoreCase = true))
+        assertFalse(root.contains("RULE-SOURCES.md"))
+        assertFalse(root.contains("WORKTREE-SCOPE.md"))
         assertEquals("任务第一次说明", Files.readString(rules))
         assertFalse(Files.exists(taskDirectory.resolve(".silverwing")))
     }
@@ -75,7 +76,10 @@ class AgentDocumentServiceTest {
         val agentDirectory = service.taskAgentDirectory(taskDirectory)
         assertTrue(stableRoot.startsWith("# 任务说明"))
         assertFalse(stableRoot.contains("<!--"))
-        assertFalse(stableRoot.contains("silverwing", ignoreCase = true))
+        assertTrue(stableRoot.contains(paths.globalAgents.toAbsolutePath().normalize().toString()))
+        assertTrue(stableRoot.contains(paths.groupAgents("growth").toAbsolutePath().normalize().toString()))
+        assertFalse(stableRoot.contains("全局约定"))
+        assertFalse(stableRoot.contains("增长组约定"))
         assertTrue(stableRoot.contains("TASK-CONTEXT.md"))
         assertFalse(stableRoot.contains(initial.requirementLink))
         assertFalse(stableRoot.contains("第一版任务规则"))
@@ -83,8 +87,12 @@ class AgentDocumentServiceTest {
         val context = Files.readString(agentDirectory.resolve(AgentDocumentService.TASK_CONTEXT_FILE_NAME))
         assertTrue(context.contains("HANDOFF.md"))
         assertFalse(context.contains("silverwing", ignoreCase = true))
-        assertTrue(Files.readString(agentDirectory.resolve(AgentDocumentService.WORKTREE_SCOPE_FILE_NAME)).contains(workspace.worktreePath))
-        assertTrue(Files.readString(agentDirectory.resolve(AgentDocumentService.RULE_SOURCES_FILE_NAME)).contains(paths.globalAgents.toAbsolutePath().normalize().toString()))
+        assertTrue(context.contains("## Worktree 范围"))
+        assertTrue(context.contains("### 本任务可改动的 Worktree"))
+        assertTrue(context.contains(workspace.worktreePath))
+        assertTrue(context.contains("禁止直接修改或提交"))
+        assertFalse(Files.exists(agentDirectory.resolve("WORKTREE-SCOPE.md")))
+        assertFalse(Files.exists(agentDirectory.resolve("RULE-SOURCES.md")))
         assertEquals("第一版任务规则", Files.readString(agentDirectory.resolve(AgentDocumentService.TASK_RULES_FILE_NAME)))
 
         service.saveGlobal("更新后的全局约定")
@@ -121,8 +129,6 @@ class AgentDocumentServiceTest {
             listOf(
                 "AGENTS.md",
                 "$agentPath/${AgentDocumentService.TASK_CONTEXT_FILE_NAME}",
-                "$agentPath/${AgentDocumentService.WORKTREE_SCOPE_FILE_NAME}",
-                "$agentPath/${AgentDocumentService.RULE_SOURCES_FILE_NAME}",
                 "$agentPath/${AgentDocumentService.TASK_RULES_FILE_NAME}",
             ),
             preview.files.map(AgentDocumentPreviewFile::relativePath),
@@ -130,9 +136,11 @@ class AgentDocumentServiceTest {
         assertEquals("AGENTS.md", preview.rootFile.relativePath)
         assertTrue(preview.rootFile.content.startsWith("# 任务说明"))
         assertFalse(preview.rootFile.content.contains("<!--"))
-        assertFalse(preview.rootFile.content.contains("silverwing", ignoreCase = true))
+        assertTrue(preview.rootFile.content.contains("## 共享规则来源"))
+        assertTrue(preview.rootFile.content.contains("任务专属规则 > 组规则 > 全局规则"))
         assertFalse(preview.rootFile.content.contains("# 任务上下文"))
         assertTrue(preview.files[1].content.contains("# 任务上下文"))
+        assertTrue(preview.files[1].content.contains("## Worktree 范围"))
         assertTrue(preview.files.last().content.contains("任务规则"))
     }
 
@@ -146,9 +154,36 @@ class AgentDocumentServiceTest {
             "任务规则",
         )
 
-        assertEquals(5, preview.files.size)
+        assertEquals(3, preview.files.size)
         assertEquals("AGENTS.md", preview.rootFile.relativePath)
         assertEquals("任务规则", preview.files.last().content)
+    }
+
+    @Test
+    fun `three document preview matches generated files and shared rules are referenced without copying their text`() {
+        val paths = ApplicationPaths(temporary.resolve("three-file-home"))
+        val service = AgentDocumentService(paths)
+        service.saveGlobal("global private instructions")
+        service.saveGroup(DEFAULT_GROUP_ID, "group private instructions")
+        val taskDirectory = temporary.resolve("three-file-task")
+        val task = manifest()
+        val notes = "# 手工说明\n\n保留内容。"
+        service.createTaskDocument(taskDirectory, task, emptyList(), notes)
+        val preview = service.renderPreview(taskDirectory, task, emptyList(), notes)
+
+        assertEquals(3, preview.files.size)
+        preview.files.forEach { file -> assertEquals(file.content, Files.readString(taskDirectory.resolve(file.relativePath))) }
+        Files.list(service.taskAgentDirectory(taskDirectory)).use { files ->
+            assertEquals(setOf("TASK-CONTEXT.md", "TASK-RULES.md"), files.map { it.fileName.toString() }.toList().toSet())
+        }
+        assertTrue(paths.globalAgents.toAbsolutePath().normalize().toString() in preview.rootFile.content)
+        assertTrue(paths.groupAgents(DEFAULT_GROUP_ID).toAbsolutePath().normalize().toString() in preview.rootFile.content)
+        assertFalse("global private instructions" in preview.rootFile.content)
+        assertFalse("group private instructions" in preview.rootFile.content)
+        assertFalse("WORKTREE-SCOPE.md" in preview.rootFile.content)
+        assertFalse("RULE-SOURCES.md" in preview.rootFile.content)
+        service.refreshTaskDocument(taskDirectory, task, emptyList())
+        assertEquals(notes, Files.readString(service.taskNotesFile(taskDirectory, task)))
     }
 
     @Test

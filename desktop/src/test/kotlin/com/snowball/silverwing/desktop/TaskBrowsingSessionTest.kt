@@ -3,6 +3,37 @@ package com.snowball.silverwing.desktop
 import kotlin.test.*
 
 class TaskBrowsingSessionTest {
+    @Test fun `notes keep per task modes positions and no document content in persisted snapshots`() {
+        val session = TaskBrowsingSession()
+        val a = session.notesFor("C:/tasks/A")
+        assertEquals(TaskNotesPageMode.READ, a.mode)
+        assertEquals(TASK_NOTES_PREVIEW_PATH, a.files.selectedPath)
+        a.mode = TaskNotesPageMode.EDIT
+        a.files.readingFor(TASK_NOTES_PREVIEW_PATH).scrollPositions["markdown-rendered"] = 420
+        val b = session.notesFor("C:/tasks/B")
+        assertEquals(TaskNotesPageMode.READ, b.mode)
+        assertSame(a, session.notesFor("C:/tasks/A"))
+        assertEquals(TaskNotesPageMode.EDIT, a.mode)
+        session.restore(ReadingSnapshot())
+        assertSame(a, session.notesFor("C:/tasks/A"), "Startup restores only persisted readers, not live notes state")
+        assertEquals(TaskNotesPageMode.EDIT, a.mode)
+        a.files.readingFor(TASK_NOTES_PREVIEW_PATH).mode.value = MarkdownPreviewMode.SOURCE
+        a.readDraft()
+        assertEquals(MarkdownPreviewMode.RENDERED, a.files.readingFor(TASK_NOTES_PREVIEW_PATH).mode.value)
+        assertEquals(420, a.files.readingFor(TASK_NOTES_PREVIEW_PATH).scrollPositions["markdown-rendered"])
+        assertTrue(session.snapshot().materials.isEmpty())
+        assertTrue(session.snapshot().requirements.isEmpty())
+    }
+
+    @Test fun `notes session evicts the least recently visited task`() {
+        val session = TaskBrowsingSession()
+        val oldest = session.notesFor("C:/tasks/oldest")
+        repeat(MAX_READING_TASKS - 1) { session.notesFor("C:/tasks/$it") }
+        val recent = session.notesFor("C:/tasks/0")
+        session.notesFor("C:/tasks/new")
+        assertSame(recent, session.notesFor("C:/tasks/0"))
+        assertNotSame(oldest, session.notesFor("C:/tasks/oldest"))
+    }
     @Test fun `switching tasks preserves their own selected file and resets changed roots`() {
         val session = TaskBrowsingSession(240f)
         session.view = TaskContentView.MATERIALS

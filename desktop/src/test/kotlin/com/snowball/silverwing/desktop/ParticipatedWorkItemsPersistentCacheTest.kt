@@ -29,8 +29,9 @@ class ParticipatedWorkItemsPersistentCacheTest {
         }
         override fun loadBody(item: ParticipatedWorkItem) = item.title
     }
-    private fun TestScope.controller(source: Source) = ParticipatedWorkItemsController(source, backgroundScope, StandardTestDispatcher(testScheduler),
-        cacheAccess = RequirementCacheAccess(RequirementReadCache(root, clock)) { identity }, clock = clock)
+    private fun TestScope.controller(source: Source,
+        access: RequirementCacheAccess = RequirementCacheAccess(RequirementReadCache(root, clock)) { identity }) =
+        ParticipatedWorkItemsController(source, backgroundScope, StandardTestDispatcher(testScheduler), cacheAccess = access, clock = clock)
 
     @Test fun `restart restores full list and exact estimates and expiry is based on original fetch`() = runTest {
         val source = Source { _, _, _ -> result() }
@@ -95,13 +96,15 @@ class ParticipatedWorkItemsPersistentCacheTest {
     @Test fun `account switch and unknown account never retain another accounts items on a failed refresh`() = runTest {
         var fail = false
         val source = Source { _, _, _ -> if (fail) ParticipatedWorkItemsResult(emptyList(), listOf("not allowed")) else result() }
-        val controller = controller(source)
+        val access = RequirementCacheAccess(RequirementReadCache(root, clock)) { identity }
+        val controller = controller(source, access)
         controller.load(projects); runCurrent()
         fail = true; identity = "another-account"
         controller.load(projects, force = true); runCurrent()
         assertTrue(controller.state.items.isEmpty())
         assertNotNull(controller.state.error)
         identity = null
+        access.invalidate()
         controller.load(projects); runCurrent()
         controller.load(projects); runCurrent()
         assertEquals(4, source.calls)

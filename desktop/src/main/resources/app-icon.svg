@@ -1,15 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-  <defs>
-    <linearGradient id="brand" x1="128" y1="96" x2="896" y2="928" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#3B82F6"/>
-      <stop offset="1" stop-color="#1D4ED8"/>
-    </linearGradient>
-  </defs>
-  <rect x="64" y="64" width="896" height="896" rx="232" fill="url(#brand)"/>
-  <path d="M360 294v168c0 34 28 62 62 62h180c34 0 62 28 62 62v132"
-        fill="none" stroke="white" stroke-width="72" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M360 524v194" fill="none" stroke="white" stroke-width="72" stroke-linecap="round"/>
-  <circle cx="360" cy="272" r="82" fill="white"/>
-  <circle cx="360" cy="752" r="82" fill="white"/>
-  <circle cx="664" cy="752" r="82" fill="white"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024"
+     viewBox="0 0 1024 1024" role="img" aria-labelledby="title description">
+  <title id="title">Silverwing</title>
+  <desc id="description">A silver wing with sweeping feathers on a transparent background.</desc>
+  <g fill="#6A6C6B" transform="translate(-387.2 -164.8) scale(3.2)">
+    <path id="wing" d="M386 106
+      C379 143 361 166 330 177
+      C300 188 262 194 235 200
+      C207 206 191 215 191 224
+      C191 232 210 237 227 244
+      C247 252 268 258 271 273
+      C273 281 270 290 264 298
+      C279 280 285 261 270 246
+      C291 250 313 245 327 236
+      C318 269 289 300 238 317
+      C253 300 260 282 248 270
+      C238 260 215 254 198 245
+      C181 238 172 230 176 216
+      C184 186 230 169 287 156
+      C330 145 364 129 386 106Z"/>
+    <path id="middle-feather" d="M366 171
+      C358 204 342 225 313 234
+      C286 242 248 235 207 222
+      C227 214 254 209 283 204
+      C322 198 348 186 366 171Z"/>
+  </g>
 </svg>

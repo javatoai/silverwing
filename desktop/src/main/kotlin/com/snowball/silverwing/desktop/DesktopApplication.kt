@@ -157,6 +157,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import java.nio.file.Path
+import java.nio.file.Files
+import kotlinx.coroutines.CoroutineStart
 import java.util.concurrent.atomic.AtomicReference
 
 enum class NavigationItem(val title: String) {
@@ -606,14 +608,40 @@ class DesktopApplication(
         }
     }
     private val requirementCacheAccess by lazy {
-        RequirementCacheAccess(requirementReadCache,
-            com.snowball.silverwing.core.MeegleRequirementCacheIdentity(meegleCommandRunner, meegleExecutable)::read)
+        val identity = com.snowball.silverwing.core.MeegleRequirementCacheIdentity(meegleCommandRunner, meegleExecutable)
+        RequirementCacheAccess(requirementReadCache, scope = scope, probe = identity::check,
+            contextStamp = {
+                // Detect external profile edits using file metadata, without reading credentials or running commands.
+                val profile = Path.of(System.getProperty("user.home"), ".meegle", "config.json")
+                meegleExecutablePath.get() to runCatching {
+                    Files.getLastModifiedTime(profile).toMillis() to Files.size(profile)
+                }.getOrNull()
+            }, readIdentity = identity::read)
     }
     private val requirementBodyRepository by lazy {
         RequirementBodyRepository(participatedWorkItemsSource,
-            cacheAccess = requirementCacheAccess.takeIf { participatedWorkItemsSource is MeegleParticipatedWorkItemsSource })
+            cacheAccess = requirementCacheAccess.takeIf { participatedWorkItemsSource is MeegleParticipatedWorkItemsSource },
+            documentStore = RequirementDocumentStore(paths.cache.resolve("requirement-documents")), requestScope = scope)
     }
-    internal val taskRequirementBodyController by lazy { RequirementBodyController(requirementBodyRepository, scope, ioDispatcher) }
+    internal val requirementDocumentPreparation by lazy { RequirementDocumentPreparation(requirementBodyRepository, scope, ioDispatcher) }
+    private val requirementCommentsRepository by lazy {
+        if (participatedWorkItemsSource.supportsComments) RequirementCommentsRepository(participatedWorkItemsSource,
+            RequirementCommentsStore(paths.cache.resolve("requirement-comments")), scope,
+            access = requirementCacheAccess.takeIf { participatedWorkItemsSource is MeegleParticipatedWorkItemsSource })
+        else null
+    }
+    internal fun copyRequirementDocument(item: ParticipatedWorkItem) {
+        scope.launch {
+            try {
+                val document = requirementBodyRepository.readDocument(item, false, ioDispatcher).document
+                    ?: error("需求文件尚未缓存，请重试缓存")
+                check(document.complete) { "${document.imageUrls.count { it !in document.images }} 张图片尚未缓存，请先重试图片" }
+                copyFiles(document.copyPaths())
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { showStatus("复制需求文件失败：${error.message}") }
+        }
+    }
+    internal val taskRequirementBodyController by lazy { RequirementBodyController(requirementBodyRepository, scope, ioDispatcher, requirementCommentsRepository) }
     internal suspend fun loadTaskRequirementBodyForCopy(task: TaskManifest): String? {
         val item = taskRequirementItem(task, config, requirementController.loadedMetadataFor(task)?.title) ?: return null
         return requirementBodyRepository.read(item, false, ioDispatcher)
@@ -631,8 +659,11 @@ class DesktopApplication(
             scope = scope,
             ioDispatcher = ioDispatcher,
             bodyRepository = requirementBodyRepository,
+            commentsRepository = requirementCommentsRepository,
             onListLoaded = ::prepareRequirementNames,
-            onSelected = { namingCoordinator.prioritize(it) },
+            onSelected = { namingCoordinator.prioritize(it); requirementDocumentPreparation.prioritize(it) },
+            onLoadStarted = { requirementDocumentPreparation.cancel() },
+            onDocumentsRequested = { items, force -> requirementDocumentPreparation.start(items, force) },
             cacheAccess = requirementCacheAccess.takeIf { participatedWorkItemsSource is MeegleParticipatedWorkItemsSource },
         )
     }
@@ -732,6 +763,11 @@ class DesktopApplication(
                 meegleAuthorizationUrlOpener?.invoke(url)
                     ?: runCatching { desktopIntegration.openUrl(url) }
             },
+            onMeegleIdentityCheck = ::recheckRequirementIdentity,
+            onMeegleLoggedOut = {
+                if (requirementCacheAccess.snapshot.identity != null || !requirementCacheAccess.snapshot.confirmed)
+                    requirementCacheAccess.invalidate(loggedOut = true)
+            },
         )
     }
     val agentInstructionsController: AgentInstructionsController by lazy {
@@ -768,7 +804,11 @@ class DesktopApplication(
     var config: AppConfig
         get() = sessionStore.config
         private set(value) {
-            meegleExecutablePath.set(value.meegleExecutablePath)
+            val oldMeeglePath = meegleExecutablePath.getAndSet(value.meegleExecutablePath)
+            if (oldMeeglePath != value.meegleExecutablePath && participatedWorkItemsSource is MeegleParticipatedWorkItemsSource) {
+                requirementCacheAccess.invalidate()
+                recheckRequirementIdentity()
+            }
             larkExecutablePath.set(value.larkExecutablePath)
             codexExecutablePath.set(value.codexExecutablePath)
             gitExecutablePath.set(value.gitExecutablePath)
@@ -1064,6 +1104,19 @@ class DesktopApplication(
     fun canBuildTag(task: TaskManifest, workspace: ServiceWorkspace): Boolean = deliveryController.canBuild(task, workspace)
 
     init {
+        if (participatedWorkItemsSource is MeegleParticipatedWorkItemsSource) {
+            scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                requirementCacheAccess.changes.collect {
+                    requirementBodyRepository.clearCache(cancelPending = true)
+                    requirementCommentsRepository?.invalidateIdentity()
+                    requirementDocumentPreparation.cancel()
+                    requirementMetadataCoordinator.clear()
+                    requirementController.refreshAll()
+                    participatedWorkItemsController.invalidateIdentity()
+                }
+            }
+            recheckRequirementIdentity()
+        }
         // Draft bytes are runtime cache data; load them off the UI thread before the editor asks.
         scope.launch { withContext(ioDispatcher) { markdownDraftStore.loadFromDisk() } }
         val beforeRestore = currentReadingSnapshot()
@@ -1702,9 +1755,14 @@ class DesktopApplication(
 
     /** Called from Window.onFocusEvent as the inexpensive external-file fallback. */
     fun onWindowFocused() {
+        recheckRequirementIdentity()
         agentInstructionsController.onWindowFocused()
         refreshConfigFileSnapshot()
         refreshGenbuCommandResolution()
+    }
+    private fun recheckRequirementIdentity() {
+        if (participatedWorkItemsSource is MeegleParticipatedWorkItemsSource)
+            scope.launch { requirementCacheAccess.recheck(ioDispatcher) }
     }
     fun resolveAgentConflict(resolution: AgentConflictResolution) = agentInstructionsController.resolveConflict(resolution)
     fun dismissMessages() {

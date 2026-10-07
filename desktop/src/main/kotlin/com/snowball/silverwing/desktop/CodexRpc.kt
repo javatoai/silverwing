@@ -1,6 +1,7 @@
 package com.snowball.silverwing.desktop
 
 import com.snowball.silverwing.core.CodexExecutable
+import com.snowball.silverwing.core.CURRENT_PRODUCT_VERSION
 import kotlinx.serialization.json.*
 import java.nio.file.Path
 import java.time.Duration
@@ -40,7 +41,7 @@ internal class SystemCodexRpcFactory(
         return ProcessCodexRpc(builder.start()).also {
             try {
                 it.request("initialize", buildJsonObject {
-                    put("clientInfo", buildJsonObject { put("name", "silverwing"); put("version", "2.1.3") })
+                    put("clientInfo", buildJsonObject { put("name", "silverwing"); put("version", CURRENT_PRODUCT_VERSION) })
                     put("capabilities", buildJsonObject { put("experimentalApi", true) })
                 })
                 it.notify("initialized")

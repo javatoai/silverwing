@@ -47,7 +47,7 @@ DMG 产物位于 `desktop/build/compose/binaries/main/dmg/`。不要在 Windows 
 
 `Release packages` 工作流在推送 `v*` 标签时运行，并创建对应正式 GitHub Release。
 
-工作流先在 Windows 与 macOS 运行测试和桌面编译，再分别构建 Windows portable ZIP、EXE、MSI 与 macOS DMG，最后上传并发布 GitHub Release。
+工作流先在 Windows 与 macOS 校验版本并编译桌面，再分别构建 Windows portable ZIP、EXE、MSI 与 macOS DMG，最后上传并发布 GitHub Release。远程发布使用 `SILVERWING_RELEASE_SKIP_TESTS=true`，不在打包任务中重复执行测试；本地打包脚本默认仍执行完整测试，发布前应完成本地验证。
 
 ### 飞书知识库同步
 

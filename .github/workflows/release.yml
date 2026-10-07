@@ -180,6 +180,7 @@ jobs:
 
       - name: Build macOS distributables
         env:
+          SILVERWING_RELEASE_SKIP_TESTS: "true"
           SILVERWING_RELEASE_SKIP_UNSTABLE_GIT_TESTS: "true"
         run: |
           # These files may be checked out with CRLF from a Windows workspace.

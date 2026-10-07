@@ -379,6 +379,13 @@ internal fun CreateTaskDialog(
                             },
                             Modifier.fillMaxWidth(),
                             label = { Text("需求编号或链接（可选）") },
+                            supportingText = {
+                                when {
+                                    draft.requirementTitle != null -> Text(draft.requirementTitle!!)
+                                    draft.metadataLoading -> Text("正在读取需求标题…")
+                                    draft.metadataHint != null -> Text(draft.metadataHint!!)
+                                }
+                            },
                             singleLine = true,
                             trailingIcon = {
                                 Box {
@@ -435,24 +442,6 @@ internal fun CreateTaskDialog(
                                 }
                             },
                         )
-                        when {
-                            draft.requirementTitle != null -> TaskInformationReadOnlyValue(
-                                label = "需求名称",
-                                value = draft.requirementTitle!!,
-                                lineSpacingDp = informationLayout.materialsLineSpacingDp,
-                            )
-                            draft.metadataLoading -> TaskInformationReadOnlyValue(
-                                label = "需求名称",
-                                value = "正在读取需求标题…",
-                                lineSpacingDp = informationLayout.materialsLineSpacingDp,
-                                loading = true,
-                            )
-                            draft.metadataHint != null -> TaskInformationReadOnlyValue(
-                                label = "需求名称",
-                                value = draft.metadataHint!!,
-                                lineSpacingDp = informationLayout.materialsLineSpacingDp,
-                            )
-                        }
                         if (controller.requirementController.candidatesLoading) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)

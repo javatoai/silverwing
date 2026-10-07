@@ -49,19 +49,9 @@ DMG 产物位于 `desktop/build/compose/binaries/main/dmg/`。不要在 Windows 
 
 工作流先在 Windows 与 macOS 校验版本并编译桌面，再分别构建 Windows portable ZIP、EXE、MSI 与 macOS DMG，最后上传并发布 GitHub Release。远程发布使用 `SILVERWING_RELEASE_SKIP_TESTS=true`，不在打包任务中重复执行测试；本地打包脚本默认仍执行完整测试，发布前应完成本地验证。
 
-### 飞书知识库同步
+### 飞书更新文档
 
-GitHub Release 发布成功后，工作流会在指定知识库根页面下创建对应 Tag 的子文档，写入 GitHub 自动 Release Notes，并将全部 Release 附件以文件卡片形式附在文档末尾。
-
-首次配置需要在 GitHub 仓库的 `Settings → Secrets and variables → Actions → Repository secrets` 中设置：
-
-- `FEISHU_RELEASE_APP_ID`：飞书企业自建应用 App ID；
-- `FEISHU_RELEASE_APP_SECRET`：该应用的 App Secret；
-- `FEISHU_RELEASE_PARENT_NODE_TOKEN`：目标知识库根页面的 Wiki node token。
-
-应用还必须拥有知识库读取、在目标节点下创建/编辑 Docx、以及上传文档附件的权限，并被授予目标根页面的编辑权限。同步使用固定版本的官方 Lark CLI，可自动分片上传大于 20 MB 的安装包。
-
-同一 Tag 重跑时会复用同名子文档，完整刷新自动生成的正文和附件卡片；知识库中出现多个同名 Tag 子文档时，工作流会失败而不会猜测覆盖目标。飞书同步失败会使 GitHub Actions 失败，但不会撤销已经发布的 GitHub Release。
+发布工作流只负责 GitHub Release，不自动同步飞书 Wiki。发布后由维护者手动将安装包和更新说明上传到[飞书更新文档](https://snowballtech.feishu.cn/wiki/GtDBw8F7Ti8rbLksnF7csNFgn4c)。用户可通过设置“系统与诊断 → 更新”打开该文档并下载新版。
 
 ## 发布检查清单
 
@@ -72,4 +62,4 @@ GitHub Release 发布成功后，工作流会在指定知识库根页面下创�
 5. 确认工作区不含未跟踪的用户配置、日志或凭据；
 6. 将 `master` 与新 `vX.Y.Z` 标签推送到 GitLab `origin` 和 GitHub `github`；
 7. 下载 Release 附件并完成一次启动冒烟测试；
-8. 确认 Actions Summary 中的飞书发布页与附件清单。
+8. 按需手动上传安装包和更新说明到飞书更新文档。

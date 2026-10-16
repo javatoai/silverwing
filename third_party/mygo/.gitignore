@@ -1,0 +1,8 @@
+node_modules
+dist/
+.mygo/
+/mygo
+/cmd/mygo/mygo
+packages/cli/npm/*/bin/
+.DS_Store
+mygo.ts

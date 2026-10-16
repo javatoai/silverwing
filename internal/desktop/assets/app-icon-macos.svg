@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024"
+     viewBox="0 0 1024 1024" role="img" aria-labelledby="title description">
+  <title id="title">Silverwing</title>
+  <desc id="description">The original silver wing on a cool white macOS icon tile.</desc>
+  <rect x="96" y="96" width="832" height="832" rx="184"
+        fill="#F4F7FB" stroke="#B6C2D4" stroke-width="8"/>
+  <g fill="#6A6C6B" transform="translate(512 512) scale(3) translate(-280.5 -211.5)">
+    <path id="wing" d="M386 106
+      C379 143 361 166 330 177
+      C300 188 262 194 235 200
+      C207 206 191 215 191 224
+      C191 232 210 237 227 244
+      C247 252 268 258 271 273
+      C273 281 270 290 264 298
+      C279 280 285 261 270 246
+      C291 250 313 245 327 236
+      C318 269 289 300 238 317
+      C253 300 260 282 248 270
+      C238 260 215 254 198 245
+      C181 238 172 230 176 216
+      C184 186 230 169 287 156
+      C330 145 364 129 386 106Z"/>
+    <path id="middle-feather" d="M366 171
+      C358 204 342 225 313 234
+      C286 242 248 235 207 222
+      C227 214 254 209 283 204
+      C322 198 348 186 366 171Z"/>
+  </g>
+</svg>

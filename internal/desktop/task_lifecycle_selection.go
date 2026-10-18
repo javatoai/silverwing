@@ -84,8 +84,10 @@ func (s *app) applyTaskLifecycleSnapshotSelection(action application.Action, _ a
 		}
 		s.syncMarkdownEditor()
 		s.dismissWorkspaceHistory()
-		s.page = "tasks"
-		s.selectTaskIndex(index)
+		if s.selectTaskIndex(index) {
+			s.page = "tasks"
+			s.revealTaskInIndex(item)
+		}
 		return true
 	}
 	s.lastError = "任务已恢复，但刷新后的任务列表中未找到已恢复的任务；请刷新后重试。"

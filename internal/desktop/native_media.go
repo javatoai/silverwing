@@ -19,11 +19,12 @@ import (
 )
 
 type nativeMediaState struct {
-	mu     sync.Mutex
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
-	closed bool
+	mu               sync.Mutex
+	ctx              context.Context
+	cancel           context.CancelFunc
+	wg               sync.WaitGroup
+	closed           bool
+	renderGeneration uint64
 
 	path string
 	kind string
@@ -349,14 +350,10 @@ func (s *app) renderImageControls(c *ui.Context, p palette, m *nativeMediaState)
 	ui.Box(c).Width(1).Height(20).Background(p.line)
 	if action(c, "image-fit", "expand", "适合窗口", p, m.fit) {
 		m.fit = true
-		m.bitmap = nil
-		m.wantedRenderKey = ""
 	}
 	if action(c, "image-actual", "image", "原始大小", p, !m.fit && m.zoom == 100) {
 		m.fit = false
 		m.zoom = 100
-		m.bitmap = nil
-		m.wantedRenderKey = ""
 	}
 	if miniButton(c, p, "image-zoom-out", "minus", "缩小", false).Clicked() {
 		if m.fit {
@@ -364,8 +361,6 @@ func (s *app) renderImageControls(c *ui.Context, p palette, m *nativeMediaState)
 			m.zoom = 100
 		}
 		m.zoom = maxInt(m.zoom-10, 10)
-		m.bitmap = nil
-		m.wantedRenderKey = ""
 	}
 	if miniButton(c, p, "image-zoom-in", "plus", "放大", false).Clicked() {
 		if m.fit {
@@ -373,8 +368,6 @@ func (s *app) renderImageControls(c *ui.Context, p palette, m *nativeMediaState)
 			m.zoom = 100
 		}
 		m.zoom = minInt(m.zoom+10, 400)
-		m.bitmap = nil
-		m.wantedRenderKey = ""
 	}
 	zoom := m.zoom
 	if m.fit {
@@ -423,8 +416,10 @@ func (s *app) renderNativeMedia(c *ui.Context, p palette, viewport ui.Rect) {
 		s.renderContinuousPDF(c, p, m, width, height)
 		return
 	}
+	// Reconcile the current zoom and viewport even when a bitmap is present.
+	// Display zooms at or above 100% can reuse the original-resolution bitmap.
+	s.requestNativeMediaRender(m, width, height)
 	if m.bitmap == nil || m.bitmapKey != m.wantedRenderKey {
-		s.requestNativeMediaRender(m, width, height)
 		ui.Column(c).FillWidth().Height(220).Center().Gap(9).Children(func() {
 			label(c, "正在生成页面图像…", 13, p.muted)
 			if m.kind == "pdf" {
@@ -458,38 +453,38 @@ func (s *app) renderImageCanvas(c *ui.Context, p palette, m *nativeMediaState, w
 		return
 	}
 	ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).HandleInput(func(event ui.InputEvent) bool {
-		if event.Kind == ui.InputScroll && event.Mods&ui.Cmd != 0 {
-			m.fit = false
-			if event.DY > 0 {
-				m.zoom = minInt(m.zoom+10, 400)
-			} else if event.DY < 0 {
-				m.zoom = maxInt(m.zoom-10, 10)
-			}
-			m.bitmap = nil
-			m.wantedRenderKey = ""
-			return true
-		}
-		if event.Kind == ui.InputKeyDown && event.Mods&ui.Cmd != 0 {
-			switch event.Key {
-			case ui.KeyMinus:
-				m.fit = false
-				m.zoom = maxInt(m.zoom-10, 10)
-			case ui.KeyEqual:
-				m.fit = false
-				m.zoom = minInt(m.zoom+10, 400)
-			case ui.Key0:
-				m.fit = true
-			}
-			m.bitmap = nil
-			m.wantedRenderKey = ""
-			return true
-		}
-		return false
+		return handleNativeImageCanvasInput(m, event)
 	}).Children(func() {
 		ui.Box(c).Width(maxFloat32(displayW, width)).Height(maxFloat32(displayH, height)).Center().Children(func() {
 			ui.Image(c, m.bitmap).Width(displayW).Height(displayH)
 		})
 	})
+}
+
+func handleNativeImageCanvasInput(m *nativeMediaState, event ui.InputEvent) bool {
+	if event.Kind == ui.InputScroll && event.Mods&ui.Cmd != 0 {
+		m.fit = false
+		if event.DY > 0 {
+			m.zoom = minInt(m.zoom+10, 400)
+		} else if event.DY < 0 {
+			m.zoom = maxInt(m.zoom-10, 10)
+		}
+		return true
+	}
+	if event.Kind == ui.InputKeyDown && event.Mods&ui.Cmd != 0 {
+		switch event.Key {
+		case ui.KeyMinus:
+			m.fit = false
+			m.zoom = maxInt(m.zoom-10, 10)
+		case ui.KeyEqual:
+			m.fit = false
+			m.zoom = minInt(m.zoom+10, 400)
+		case ui.Key0:
+			m.fit = true
+		}
+		return true
+	}
+	return false
 }
 
 func (s *app) requestPDFTextIndex(m *nativeMediaState) {
@@ -715,30 +710,40 @@ func (s *app) drawPDFSearchHighlights(painter *ui.Painter, rect ui.Rect, m *nati
 }
 
 func (s *app) requestNativeMediaRender(m *nativeMediaState, viewportWidth, viewportHeight float32) {
-	if m == nil || m.openLoading || m.previewError != "" {
+	if m == nil || m.kind != "image" || m.openLoading || m.previewError != "" {
 		return
 	}
-	width := int(maxFloat32(viewportWidth-56, 320))
-	zoom := m.zoom
-	if m.fit {
-		zoom = s.fitImageZoom(m)
-	}
-	if zoom < 100 {
-		width = int(float32(m.imageInfo.Width) * float32(zoom) / 100)
-	} else {
-		width = 0
-	}
-	if width < 1 {
-		width = 1
-	}
+	m.viewerWidth, m.viewerHeight = viewportWidth, viewportHeight
+	width := s.nativeImageRenderWidth(m)
 	key := fmt.Sprintf("%s:%d", m.kind, width)
-	if m.wantedRenderKey == key || m.bitmapKey == key {
-		return
-	}
-	m.wantedRenderKey = key
-	m.renderLoading = true
 	m.mu.Lock()
 	if m.closed {
+		m.mu.Unlock()
+		return
+	}
+	if m.bitmap != nil && m.bitmapKey == key {
+		// Returning to a cached width also invalidates an in-flight render for
+		// another width, including a result already queued on the UI thread.
+		if m.renderLoading {
+			m.renderGeneration++
+		}
+		if m.renderCancel != nil {
+			m.renderCancel()
+			m.renderCancel = nil
+		}
+		m.wantedRenderKey = key
+		m.renderLoading = false
+		m.mu.Unlock()
+		return
+	}
+	if m.wantedRenderKey == key && m.renderLoading {
+		m.mu.Unlock()
+		return
+	}
+	// A first frame can be built before NewWindow returns. Do not leave a
+	// request marked as loading when its result cannot be posted to a window.
+	window := s.win
+	if window == nil || window.IsDestroyed() {
 		m.mu.Unlock()
 		return
 	}
@@ -747,6 +752,10 @@ func (s *app) requestNativeMediaRender(m *nativeMediaState, viewportWidth, viewp
 	}
 	ctx, cancel := context.WithCancel(m.ctx)
 	m.renderCancel = cancel
+	m.renderGeneration++
+	generation := m.renderGeneration
+	m.wantedRenderKey = key
+	m.renderLoading = true
 	m.wg.Add(1)
 	imageDoc := m.image
 	m.mu.Unlock()
@@ -763,22 +772,46 @@ func (s *app) requestNativeMediaRender(m *nativeMediaState, viewportWidth, viewp
 		if err == nil {
 			bitmap, err = ui.DecodeBitmap(rendered.PNG)
 		}
+		cancelled := ctx.Err() != nil
+		cancel()
 		s.updateNativeMedia(m, func() {
-			if m.wantedRenderKey != key {
+			if s.win != window {
 				return
 			}
-			m.renderLoading = false
-			if err != nil {
-				if ctx.Err() == nil {
-					m.previewError = err.Error()
-				}
-				return
-			}
-			m.bitmap = bitmap
-			m.bitmapKey = key
+			s.applyNativeImageRender(m, generation, key, bitmap, err, cancelled)
 		})
 	}()
-	_ = viewportHeight
+}
+
+func (s *app) nativeImageRenderWidth(m *nativeMediaState) int {
+	zoom := m.zoom
+	if m.fit {
+		zoom = s.fitImageZoom(m)
+	}
+	if zoom >= 100 {
+		// RenderPNG uses zero for the original image. Clamp only downscales.
+		return 0
+	}
+	return maxInt(1, int(float32(m.imageInfo.Width)*float32(zoom)/100))
+}
+
+// applyNativeImageRender runs on the UI thread. The generation, not only the
+// width key, identifies a request when zoom changes away and back again.
+func (s *app) applyNativeImageRender(m *nativeMediaState, generation uint64, key string, bitmap *ui.Bitmap, err error, cancelled bool) {
+	if m == nil || s.nativeMedia != m || m.closed || m.renderGeneration != generation || m.wantedRenderKey != key {
+		return
+	}
+	m.renderLoading = false
+	m.renderCancel = nil
+	if cancelled || key != fmt.Sprintf("%s:%d", m.kind, s.nativeImageRenderWidth(m)) {
+		return
+	}
+	if err != nil {
+		m.previewError = err.Error()
+		return
+	}
+	m.bitmap = bitmap
+	m.bitmapKey = key
 }
 
 func (s *app) fitImageZoom(m *nativeMediaState) int {

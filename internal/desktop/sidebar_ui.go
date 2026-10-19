@@ -67,17 +67,16 @@ func (s *app) sidebar(c *ui.Context, p palette, compact bool) {
 			})
 			if b.Clicked() {
 				s.markReadingInteraction()
+				if n.page == "tasks" && (s.page == "archive" || s.currentTask().archived) {
+					s.switchTaskIndexCategory(false)
+					continue
+				}
 				if s.tab == 3 {
 					s.deactivateInstructionEditor()
 				}
 				s.page = n.page
 				if n.page == "requirements" {
 					s.lastResult = ""
-				}
-				if n.page == "tasks" {
-					if len(s.activeTasks(false)) > 0 && s.currentTask().archived {
-						s.selected = s.activeTasks(false)[0]
-					}
 				}
 			}
 		}

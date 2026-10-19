@@ -74,12 +74,21 @@ func (s *app) settingsProxy(c *ui.Context, p palette) {
 		})
 		useAuth := s.configString("commandProxyUsername") != "" || s.configString("commandProxyPassword") != ""
 		authentication := s.localSettingBool("proxy-auth-enabled", useAuth)
+		passwordVisible := s.localSettingBool("proxy-password-visible", false)
 		settingsSwitchRow(c, p, "proxy-auth-enabled", "代理认证", "需要账号密码时启用。", authentication)
 		if *authentication {
 			ui.Row(c).Gap(8).Children(func() {
 				ui.TextInput(c.Key("proxy-username"), username).Grow(1).Height(36).Placeholder("账号")
-				ui.TextInput(c.Key("proxy-password"), password).Grow(1).Height(36).Placeholder("密码")
+				input := ui.TextInput(c.Key("proxy-password"), password).Grow(1).Height(36).Placeholder("密码").Label("代理密码")
+				if !*passwordVisible {
+					input.Password()
+				}
+				if action(c, "proxy-password-visibility", "eye", map[bool]string{true: "隐藏密码", false: "显示密码"}[*passwordVisible], p, false) {
+					*passwordVisible = !*passwordVisible
+				}
 			})
+		} else {
+			*passwordVisible = false
 		}
 		label(c, "代理目标", 12, p.text).FontWeight(500)
 		for _, target := range []struct{ id, title, description string }{
@@ -98,6 +107,7 @@ func (s *app) settingsProxy(c *ui.Context, p palette) {
 			if action(c, "proxy-clear", "close", "清除代理", p, false) {
 				*protocol, *host, *port, *noProxy, *username, *password = "http", "", "80", "", "", ""
 				*authentication = false
+				*passwordVisible = false
 				for _, target := range []string{"CODEX", "GIT", "WORKSPACE_COMMAND", "MEEGLE", "LARK", "GENBU"} {
 					*s.settingsBoolInput("proxy-target:"+target, false) = false
 				}

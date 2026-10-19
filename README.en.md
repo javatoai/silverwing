@@ -32,6 +32,7 @@ One feature often spans several services. Silverwing brings their workspaces int
 ## Features
 
 - **Task workspaces:** organize multiple repositories and modules under one task, using Git Worktrees or independent clones.
+- **Task navigation:** search by task name, requirement ID, project group or branch, pin frequent tasks, and return to recently opened tasks.
 - **Git review:** inspect committed changes against the configured mainline, local uncommitted files or a commit range, with a changed-file tree and side-by-side diffs.
 - **Agent context:** combine global, group and task instructions into generated `AGENTS.md` context, and open the right workspace in Codex, Cursor or your IDE.
 - **Task materials:** browse local files and read Markdown, PDF, images, tables and diagrams; find text, inspect source and follow document links.
@@ -89,6 +90,13 @@ The macOS app is ad-hoc signed and is **not Developer ID signed or notarized**. 
 The current task-creation entry is in **Requirements (需求)** and uses a connected Meegle project. After connecting Meegle in Settings, select a requirement and choose **Create task from requirement (基于需求创建任务)**. Review the task name, branch and selected services, then create the task and open its workspace in your IDE or agent.
 
 Genbu and Lark are optional. You can prepare repositories and use the local developer tools before configuring them or Meegle. Silverwing opens your chosen coding tools; it does not run multiple agent sessions automatically.
+
+### Find and switch tasks
+
+- Use **Search tasks (搜索任务)** above the task list. Search is case-insensitive, requires every space-separated keyword to match, and also includes previously loaded requirement titles and associated services.
+- Use the pin on a task row to pin or unpin it. **All (全部)** places pinned tasks at the top without duplicate rows; pinning does not switch the current task.
+- **Recently visited (最近访问)** shows the current category's entries from the 20 most recently opened tasks, in visit order. Active and archived tasks retain separate search and view choices for the session. Pins and visit history survive restarts.
+- Press `Esc` in search to clear the query, use arrow keys to focus a task, and press `Enter` to open it. Task rows also support `Home`, `End` and Space. Creating or restoring a task reveals and scrolls to it automatically.
 
 ## Integrations
 

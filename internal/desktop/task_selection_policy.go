@@ -20,8 +20,10 @@ func (s *app) applyTaskSnapshotSelection(action application.Action, result appli
 		if item.id != id {
 			continue
 		}
-		s.page = "tasks"
-		s.selectTaskIndex(index)
+		if s.selectTaskIndex(index) {
+			s.page = "tasks"
+			s.revealTaskInIndex(item)
+		}
 		return true
 	}
 	s.page = "tasks"

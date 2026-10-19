@@ -8,6 +8,11 @@ func compactState(c *ui.Context, text string, p palette) {
 	if text == "" {
 		text = "未标记"
 	}
+	bg, fg := statusBadgeColors(text, p)
+	ui.Box(c).Shrink(0).Padding(2, 7).Radius(20).Border(1, p.line).Background(bg).Children(func() { label(c, text, 11, fg).NoWrap() })
+}
+
+func statusBadgeColors(text string, p palette) (ui.Color, ui.Color) {
 	bg, fg := p.soft, p.muted
 	switch statusColorCategory(text) {
 	case "planning":
@@ -21,7 +26,7 @@ func compactState(c *ui.Context, text string, p palette) {
 	case "failed":
 		fg = p.danger
 	}
-	ui.Box(c).Shrink(0).Padding(2, 7).Radius(20).Border(1, p.line).Background(bg).Children(func() { label(c, text, 11, fg).NoWrap() })
+	return bg, fg
 }
 
 func summaryTextButton(c *ui.Context, key, text string, color ui.Color, disabled bool) bool {

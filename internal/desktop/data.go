@@ -56,7 +56,7 @@ type app struct {
 	workspaceReviewFocusReturn *workspaceReviewFocusReturn
 
 	page                              string
-	taskSearch                        string
+	taskNavigation                    *taskNavigationState
 	taskIndexes                       map[bool]*taskIndexBrowsingState
 	taskListFocused                   bool
 	dark                              bool

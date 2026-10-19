@@ -11,6 +11,12 @@ type taskIndexBrowsingState struct {
 	collapsedGroups map[string]bool
 	scroll          ui.ScrollState
 	detailScrolls   map[string]*ui.ScrollState
+	search          string
+	recentOnly      bool
+	searchInput     ui.Handle
+	rowHandles      map[string]*ui.Handle
+	revealTaskKey   string
+	visibleRows     []int
 }
 
 func (s *app) taskIndexBrowsingFor(archived bool) *taskIndexBrowsingState {

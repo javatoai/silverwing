@@ -26,6 +26,15 @@ and creates a portable application directory and ZIP:
 .\scripts\build-windows.ps1 -PortableOnly
 ```
 
+Windows packaging links the existing Silverwing PNG logo into the GUI executable
+at 16, 24, 32, 48, 64, 128 and 256 pixels. A temporary `.syso` resource object is
+created for the main package and removed after the build, including on failure.
+The Go linker preserves the executable's build metadata. Explorer, shortcuts and
+native windows can use the icon without an external icon file. The same staged
+executable enters the portable ZIP, Setup EXE and MSI. Reusable payloads must
+already contain a loadable application icon; an older payload without it is
+rejected with a request to rebuild from source. Supplied payloads are not modified.
+
 The full packaging script additionally creates a per-user Setup EXE and MSI;
 it requires NSIS 3.13 and WiX Toolset 3.14.1. The script accepts portable tool
 paths so a local build does not need to install either tool system-wide:

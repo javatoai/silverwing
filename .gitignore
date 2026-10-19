@@ -2,6 +2,7 @@
 /captures/
 /.dev-home/
 /tmp/
+/cmd/silverwing/silverwing_icon_windows_amd64.syso
 *.exe
 *.log
 

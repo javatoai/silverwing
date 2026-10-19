@@ -9,6 +9,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'nsis-payload-manifest.ps1')
 . (Join-Path $PSScriptRoot 'windows-runtime.ps1')
+. (Join-Path $PSScriptRoot 'windows-icon.ps1')
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 if ($env:OS -ne 'Windows_NT') {
     throw 'This script packages the Windows x64 native application and must run on Windows.'
@@ -185,11 +186,20 @@ try {
     $env:GOOS = 'windows'
     $env:GOARCH = 'amd64'
     $env:CGO_ENABLED = '0'
+    $iconObject = Join-Path $repoRoot 'cmd/silverwing/silverwing_icon_windows_amd64.syso'
+    $iconObjectCreated = $false
     try {
+        if (Get-ChildItem -LiteralPath (Join-Path $repoRoot 'cmd/silverwing') -Filter '*.syso') {
+            throw 'The main package already contains Windows resources; refusing to overwrite or combine them.'
+        }
+        New-SilverwingWindowsIconResource -OutputPath $iconObject `
+            -IconPath (Join-Path $repoRoot 'internal/desktop/assets/app-icon.png')
+        $iconObjectCreated = $true
         Invoke-Go @('build', '-trimpath', '-tags', 'mygo_noinspector', '-ldflags', "$commonLdflags -H=windowsgui", '-o', (Join-Path $stage 'silverwing.exe'), './cmd/silverwing')
     }
     finally {
         $env:GOOS, $env:GOARCH, $env:CGO_ENABLED = $oldGOOS, $oldGOARCH, $oldCGO
+        if ($iconObjectCreated) { Remove-Item -LiteralPath $iconObject -Force }
     }
 
     $mmdrZip = Get-PinnedAsset 'mmdr-x86_64-pc-windows-msvc.zip' `
@@ -253,6 +263,8 @@ The app bundle contains no WebView runtime or JVM. Windows system graphics/runti
 
     # Ship the product license alongside the GUI in every package.
     Copy-Item -LiteralPath (Join-Path $repoRoot 'LICENSE') -Destination (Join-Path $stage 'LICENSE') -Force
+
+    Assert-SilverwingWindowsIcon -ExecutablePath (Join-Path $stage 'silverwing.exe')
 
     # Reused GUI payloads may predate the renderer's app-local runtime. Enrich
     # both packaging paths before ZIP, NSIS manifest and MSI harvesting.

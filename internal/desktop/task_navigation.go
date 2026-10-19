@@ -124,12 +124,6 @@ func (s *app) switchTaskIndexCategory(archived bool) {
 	if archived {
 		s.page = "archive"
 	}
-	if index >= 0 {
-		target := s.tasks[index]
-		state := s.taskIndexBrowsingFor(archived)
-		state.collapsedGroups[target.groupID] = false
-		state.revealTaskKey = taskNavigationKey(target)
-	}
 }
 
 func (s *app) taskGroupName(t task) string {

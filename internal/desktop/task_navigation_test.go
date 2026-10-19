@@ -211,6 +211,40 @@ func TestTaskNavigationCategoryFiltersAreIndependent(t *testing.T) {
 	}
 }
 
+func TestTaskNavigationCategorySwitchPreservesScroll(t *testing.T) {
+	s := taskNavigationFixture()
+	for index := 0; index < 20; index++ {
+		for _, archived := range []bool{false, true} {
+			s.tasks = append(s.tasks, task{
+				id: fmt.Sprintf("scroll-%t-%d", archived, index), title: fmt.Sprintf("Scroll task %t %d", archived, index),
+				createdAt: "2026-03-01", groupID: "backend", archived: archived,
+			})
+		}
+	}
+	tester := taskNavigationTester(s, 240, 400)
+	tester.Scroll(100, 220, 0, 600)
+	active := s.taskIndexBrowsingFor(false)
+	activeY := active.scroll.Y
+	if activeY <= 0 {
+		t.Fatal("active fixture did not scroll")
+	}
+	navigationClick(t, tester, "查看归档")
+	tester.Scroll(100, 220, 0, 350)
+	archived := s.taskIndexBrowsingFor(true)
+	archivedY := archived.scroll.Y
+	if archivedY <= 0 {
+		t.Fatal("archive fixture did not scroll")
+	}
+	navigationClick(t, tester, "查看归档")
+	if active.scroll.Y != activeY {
+		t.Fatalf("returning to active tasks moved the saved scroll: got %v, want %v", active.scroll.Y, activeY)
+	}
+	navigationClick(t, tester, "查看归档")
+	if archived.scroll.Y != archivedY {
+		t.Fatalf("returning to archived tasks moved the saved scroll: got %v, want %v", archived.scroll.Y, archivedY)
+	}
+}
+
 func TestTaskNavigationRejectedSelectionKeepsRouteAndDraft(t *testing.T) {
 	for _, route := range []string{"row", "archive", "sidebar", "task.create", "task.restore"} {
 		t.Run(route, func(t *testing.T) {

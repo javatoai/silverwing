@@ -1,33 +1,42 @@
 package desktop
 
-import "silverwing-go/internal/application"
+import (
+	"slices"
+
+	"silverwing-go/internal/application"
+)
 
 // Keep the snapshot's category and stable task identity ahead of its list
 // index. This is also used before replacing the UI state so cleanup still
 // belongs to the old task when two tasks occupy the same index.
-func taskLifecycleSelectedIndex(tasks []task, selected int, selectedID string, archived bool) int {
-	if len(tasks) == 0 {
-		return -1
+func (s *app) taskLifecycleSnapshotIndex(tasks []task) int {
+	previous := s.currentTask()
+	archived := s.page == "archive"
+	indices := make(map[string]int, len(tasks))
+	for index, item := range tasks {
+		if item.archived == archived {
+			indices[taskNavigationKey(item)] = index
+		}
 	}
-	if selectedID != "" {
-		selected = -1
-		for index, item := range tasks {
-			if item.id == selectedID {
-				selected = index
-				break
+	if previous.id != "" {
+		if index, exists := indices[taskNavigationKey(previous)]; exists {
+			return index
+		}
+		rows := s.taskIndexRows(archived)
+		position := slices.Index(rows, s.selected)
+		for _, index := range rows[position+1:] {
+			if next, exists := indices[taskNavigationKey(s.tasks[index])]; exists {
+				return next
+			}
+		}
+		for position--; position >= 0; position-- {
+			if next, exists := indices[taskNavigationKey(s.tasks[rows[position]])]; exists {
+				return next
 			}
 		}
 	}
-	if selected < 0 || selected >= len(tasks) {
-		selected = 0
-	}
-	if tasks[selected].archived == archived {
-		return selected
-	}
-	for index, item := range tasks {
-		if item.archived == archived {
-			return index
-		}
+	if rows := s.taskIndexRowsFor(tasks, archived); len(rows) > 0 {
+		return rows[0]
 	}
 	return -1
 }
@@ -71,22 +80,14 @@ func (s *app) finishTaskLifecycleSelection() {
 	s.requestWorkspaceGitStatus(false)
 }
 
-// Restore is selected only from the refreshed task list. Before that snapshot
-// arrives, keep the currently visible task unchanged rather than relabeling
-// another task's editor and request state with the restored task's identity.
+// Restoration refreshes the current category without opening the restored task.
 func (s *app) applyTaskLifecycleSnapshotSelection(action application.Action, _ application.ActionResult) bool {
 	if action.Kind != "task.restore" {
 		return false
 	}
-	for index, item := range s.tasks {
+	for _, item := range s.tasks {
 		if item.id != action.TaskID || item.archived {
 			continue
-		}
-		s.syncMarkdownEditor()
-		s.dismissWorkspaceHistory()
-		if s.selectTaskIndex(index) {
-			s.page = "tasks"
-			s.revealTaskInIndex(item)
 		}
 		return true
 	}

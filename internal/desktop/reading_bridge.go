@@ -30,6 +30,8 @@ type desktopReadingSession struct {
 	userInteracted         bool
 	startupIdentity        readingUIIdentity
 	lastObserved           []byte
+	observation            readingObservation
+	dirty                  bool
 	restoredMaterials      map[string]bool
 	scrollStates           map[string]readingScrollBinding
 	pendingMaterials       bool
@@ -94,6 +96,7 @@ func (s *app) initializeReadingSession(home string, restoreLastTask bool) {
 				return
 			}
 			session.cache = value
+			session.dirty = true
 			session.loaded = true
 			session.lastObserved, _ = json.Marshal(value)
 			if err != nil {
@@ -195,9 +198,20 @@ func (s *app) observeReadingSession() {
 		}
 		return
 	}
+	if session.store != nil {
+		if err := session.store.LastError(); err != nil {
+			s.lastError = "保存阅读状态失败：" + err.Error()
+		}
+	}
+	inputs := s.readingObservationInputs()
+	if !session.dirty && session.observation.unchanged(inputs, s.documentTabs, session.scrollStates) {
+		return
+	}
 	value := s.captureReadingSnapshot(session)
 	session.cache = value
 	if session.store == nil {
+		session.dirty = false
+		session.observation.remember(inputs, s.documentTabs, session.scrollStates)
 		return
 	}
 	encoded, err := json.Marshal(value)
@@ -206,16 +220,15 @@ func (s *app) observeReadingSession() {
 		return
 	}
 	if !bytes.Equal(encoded, session.lastObserved) {
-		session.lastObserved = append(session.lastObserved[:0], encoded...)
 		if err := session.store.ScheduleSave(value); err != nil {
 			s.lastError = "保存阅读状态失败：" + err.Error()
-		} else {
-			s.scheduleReadingErrorCheck(session)
+			return
 		}
+		session.lastObserved = append(session.lastObserved[:0], encoded...)
+		s.scheduleReadingErrorCheck(session)
 	}
-	if err := session.store.LastError(); err != nil {
-		s.lastError = "保存阅读状态失败：" + err.Error()
-	}
+	session.dirty = false
+	session.observation.remember(inputs, s.documentTabs, session.scrollStates)
 }
 
 func (s *app) captureReadingSnapshot(session *desktopReadingSession) ReadingSnapshot {
@@ -746,7 +759,10 @@ func (s *app) currentReadingPosition(create bool) (ReadingPositionSnapshot, func
 		if position == nil {
 			return ReadingPositionSnapshot{}, nil
 		}
-		return *position, func(value ReadingPositionSnapshot) { *position = value }
+		return *position, func(value ReadingPositionSnapshot) {
+			*position = value
+			session.dirty = true
+		}
 	}
 	material := readingMaterialsFor(session, current.path, current.materialsPath, create)
 	if material == nil {
@@ -763,8 +779,14 @@ func (s *app) currentReadingPosition(create bool) (ReadingPositionSnapshot, func
 	if !exists || position.Mode == "" {
 		position = DefaultReadingPositionSnapshot()
 	}
-	material.SetFileReading(relative, position)
-	return position, func(value ReadingPositionSnapshot) { material.SetFileReading(relative, value) }
+	if create {
+		material.SetFileReading(relative, position)
+		session.dirty = true
+	}
+	return position, func(value ReadingPositionSnapshot) {
+		material.SetFileReading(relative, value)
+		session.dirty = true
+	}
 }
 
 func (s *app) currentReadingMaterials(create bool) *MaterialsSnapshot {
@@ -775,6 +797,9 @@ func (s *app) currentReadingMaterials(create bool) *MaterialsSnapshot {
 	current := s.currentTask()
 	if current.path == "" {
 		return nil
+	}
+	if create {
+		session.dirty = true
 	}
 	return readingMaterialsFor(session, current.path, current.materialsPath, create)
 }
@@ -872,22 +897,28 @@ func readingMaterialsFor(session *desktopReadingSession, taskPath, root string, 
 	}
 	taskKey, rootKey := normalizedReadingPath(taskPath), normalizedReadingRoot(root)
 	index := -1
-	for i := range session.cache.Materials {
-		if normalizedReadingPath(session.cache.Materials[i].TaskPath) != taskKey {
+	// Bounded snapshots and captures keep the active task at the end. Prefer
+	// recent records, and reuse canonical keys before normalizing legacy input.
+	for i := len(session.cache.Materials) - 1; i >= 0; i-- {
+		candidate := &session.cache.Materials[i]
+		if candidate.TaskPath != taskKey && normalizedReadingPath(candidate.TaskPath) != taskKey {
 			continue
 		}
-		if normalizedReadingRoot(readingRootValue(session.cache.Materials[i].Root)) == rootKey {
+		candidateRoot := readingRootValue(candidate.Root)
+		if candidateRoot == rootKey || normalizedReadingRoot(candidateRoot) == rootKey {
 			index = i
 			break
 		}
 	}
 	if index >= 0 {
-		if index != len(session.cache.Materials)-1 {
+		if create && index != len(session.cache.Materials)-1 {
 			record := session.cache.Materials[index]
 			session.cache.Materials = append(session.cache.Materials[:index], session.cache.Materials[index+1:]...)
 			session.cache.Materials = append(session.cache.Materials, record)
+			session.dirty = true
+			index = len(session.cache.Materials) - 1
 		}
-		return &session.cache.Materials[len(session.cache.Materials)-1]
+		return &session.cache.Materials[index]
 	}
 	if !create {
 		return nil
@@ -907,6 +938,7 @@ func readingMaterialsFor(session *desktopReadingSession, taskPath, root string, 
 		record.Root = &rootKey
 	}
 	session.cache.Materials = append(session.cache.Materials, record)
+	session.dirty = true
 	return &session.cache.Materials[len(session.cache.Materials)-1]
 }
 
@@ -915,9 +947,9 @@ func readingRequirementFor(session *desktopReadingSession, taskPath, link string
 		return nil
 	}
 	taskKey := normalizedReadingPath(taskPath)
-	for i := range session.cache.Requirements {
+	for i := len(session.cache.Requirements) - 1; i >= 0; i-- {
 		record := &session.cache.Requirements[i]
-		if normalizedReadingPath(record.TaskPath) == taskKey && record.Link == link {
+		if record.Link == link && (record.TaskPath == taskKey || normalizedReadingPath(record.TaskPath) == taskKey) {
 			return &record.Reading
 		}
 	}
@@ -926,6 +958,7 @@ func readingRequirementFor(session *desktopReadingSession, taskPath, link string
 	}
 	position := DefaultReadingPositionSnapshot()
 	session.cache.Requirements = append(session.cache.Requirements, RequirementReadingSnapshot{TaskPath: taskKey, Link: link, Reading: position})
+	session.dirty = true
 	return &session.cache.Requirements[len(session.cache.Requirements)-1].Reading
 }
 
@@ -935,14 +968,20 @@ func readingPositionForBinding(session *desktopReadingSession, binding readingSc
 		if position == nil {
 			return ReadingPositionSnapshot{}, nil
 		}
-		return *position, func(value ReadingPositionSnapshot) { *position = value }
+		return *position, func(value ReadingPositionSnapshot) {
+			*position = value
+			session.dirty = true
+		}
 	}
 	material := readingMaterialsFor(session, binding.taskPath, binding.root, create)
 	if material == nil {
 		return ReadingPositionSnapshot{}, nil
 	}
 	if binding.id == "directory" {
-		return material.DirectoryPosition, func(value ReadingPositionSnapshot) { material.DirectoryPosition = value }
+		return material.DirectoryPosition, func(value ReadingPositionSnapshot) {
+			material.DirectoryPosition = value
+			session.dirty = true
+		}
 	}
 	if binding.document == "" {
 		return ReadingPositionSnapshot{}, nil
@@ -954,8 +993,14 @@ func readingPositionForBinding(session *desktopReadingSession, binding readingSc
 	if !exists || position.Mode == "" {
 		position = DefaultReadingPositionSnapshot()
 	}
-	material.SetFileReading(binding.document, position)
-	return position, func(value ReadingPositionSnapshot) { material.SetFileReading(binding.document, value) }
+	if create {
+		material.SetFileReading(binding.document, position)
+		session.dirty = true
+	}
+	return position, func(value ReadingPositionSnapshot) {
+		material.SetFileReading(binding.document, value)
+		session.dirty = true
+	}
 }
 
 func readingScrollBindingKey(binding readingScrollBinding) string {

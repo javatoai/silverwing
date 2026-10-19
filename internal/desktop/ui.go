@@ -74,6 +74,7 @@ func (s *app) view(c *ui.Context) {
 	s.observeSettingsConfigRecovery()
 	s.observeTagGenbuAutoProbe()
 	s.observeRequirementContentJobs()
+	s.observeRequirementRefreshJobs()
 	s.observeWorkspaceHistoryJobs()
 	s.syncDeveloperToolJobVisibility()
 	s.observeWorkspaceCommandJobIdentity()

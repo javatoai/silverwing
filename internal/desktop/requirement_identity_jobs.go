@@ -23,13 +23,13 @@ func (s *app) observeRequirementIdentityJobs() {
 	// A normal re-entry reads the account-bound persistent list again, allowing
 	// its source-compatible TTL to be enforced by the backend. Bootstrap that
 	// same deduplicated read once for the sidebar, without requiring page entry.
-	if (entered || !s.requirementsRequested) && !s.loading && len(s.configArray("meegleProjects")) > 0 {
+	if (entered || !s.requirementsRequested) && !s.loading && len(s.readConfigArray("meegleProjects")) > 0 {
 		s.requestRequirements("", false)
 	}
 }
 
 func (s *app) onRequirementWindowFocused() {
-	if s.loading || len(s.configArray("meegleProjects")) == 0 {
+	if s.loading || len(s.readConfigArray("meegleProjects")) == 0 {
 		return
 	}
 	if _, ok := s.backend.(application.RequirementIdentityBackend); !ok {

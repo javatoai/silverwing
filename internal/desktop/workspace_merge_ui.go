@@ -1,7 +1,6 @@
 package desktop
 
 import (
-	"encoding/json"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -217,8 +216,8 @@ func (s *app) workspaceMainBranchWithConfig(config domain.AppConfig, t task, w a
 }
 
 func (s *app) workspaceMergeConfig() (domain.AppConfig, bool) {
-	var config domain.AppConfig
-	if strings.TrimSpace(s.configJSON) == "" || json.Unmarshal([]byte(s.configJSON), &config) != nil {
+	config, err := s.readCurrentAppConfig()
+	if err != nil {
 		return domain.AppConfig{}, false
 	}
 	return config, true

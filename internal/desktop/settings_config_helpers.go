@@ -10,12 +10,19 @@ import (
 )
 
 func (s *app) settingsConfigMap() (map[string]any, error) {
+	return decodeSettingsConfig(s.configJSON)
+}
+
+func decodeSettingsConfig(source string) (map[string]any, error) {
 	config := make(map[string]any)
-	if strings.TrimSpace(s.configJSON) == "" {
+	if strings.TrimSpace(source) == "" {
 		return nil, fmt.Errorf("当前配置尚未加载")
 	}
-	if err := json.Unmarshal([]byte(s.configJSON), &config); err != nil {
+	if err := json.Unmarshal([]byte(source), &config); err != nil {
 		return nil, fmt.Errorf("读取当前配置失败：%w", err)
+	}
+	if config == nil {
+		return nil, fmt.Errorf("读取当前配置失败：需要 JSON 对象")
 	}
 	return config, nil
 }
@@ -187,7 +194,7 @@ func (s *app) removeConfigGroup(groupID string) {
 }
 
 func (s *app) configString(key string) string {
-	config, err := s.settingsConfigMap()
+	config, err := s.readSettingsConfig()
 	if err != nil {
 		return ""
 	}
@@ -195,7 +202,7 @@ func (s *app) configString(key string) string {
 }
 
 func (s *app) configBool(key string, fallback bool) bool {
-	config, err := s.settingsConfigMap()
+	config, err := s.readSettingsConfig()
 	if err != nil {
 		return fallback
 	}
@@ -207,7 +214,7 @@ func (s *app) configBool(key string, fallback bool) bool {
 }
 
 func (s *app) configInt(key string, fallback int) int {
-	config, err := s.settingsConfigMap()
+	config, err := s.readSettingsConfig()
 	if err != nil {
 		return fallback
 	}
@@ -222,16 +229,11 @@ func (s *app) configInt(key string, fallback int) int {
 }
 
 func (s *app) configArray(key string) []any {
-	config, err := s.settingsConfigMap()
-	if err != nil {
-		return nil
-	}
-	values, _ := config[key].([]any)
-	return values
+	return cloneConfigArray(s.readConfigArray(key))
 }
 
 func (s *app) configNestedBool(objectKey, fieldKey string, fallback bool) bool {
-	config, err := s.settingsConfigMap()
+	config, err := s.readSettingsConfig()
 	if err != nil {
 		return fallback
 	}

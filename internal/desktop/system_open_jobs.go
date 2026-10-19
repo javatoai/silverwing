@@ -22,15 +22,18 @@ type systemOpenScope struct {
 }
 
 type systemOpenJob struct {
-	action  application.Action
-	key     string
-	scope   systemOpenScope
-	owner   *systemOpenJobs
-	backend application.Backend
-	window  *mygo.Window
-	ctx     context.Context
-	cancel  context.CancelFunc
-	done    chan struct{}
+	action    application.Action
+	key       string
+	scope     systemOpenScope
+	taskScope *taskMenuScope
+	update    func(func())
+	current   func() bool
+	owner     *systemOpenJobs
+	backend   application.Backend
+	window    *mygo.Window
+	ctx       context.Context
+	cancel    context.CancelFunc
+	done      chan struct{}
 }
 
 // opening stays occupied until its backend and queued response have finished,
@@ -106,6 +109,12 @@ func systemOpenSourcePath(action application.Action) string {
 }
 
 func (s *app) systemOpenCurrentScope(action application.Action) (systemOpenScope, error) {
+	return s.systemOpenScopeFor(action, nil)
+}
+
+// A task-menu directory request may target an unselected task. Other system
+// opens retain their selected-task contract and cannot opt in via a payload.
+func (s *app) systemOpenScopeFor(action application.Action, taskScope *taskMenuScope) (systemOpenScope, error) {
 	scope := systemOpenScope{home: s.snapshot.Home, sourcePath: systemOpenSourcePath(action)}
 	if scope.sourcePath == "" && action.Kind != "system.logs" {
 		return scope, errors.New("路径不能为空")
@@ -121,10 +130,20 @@ func (s *app) systemOpenCurrentScope(action application.Action) (systemOpenScope
 		}
 	}
 	if action.TaskID == "" {
+		if taskScope != nil {
+			return scope, errors.New("任务资料打开缺少目标任务。")
+		}
 		return scope, nil
 	}
 	task := s.taskByID(action.TaskID)
-	if task.id == "" || s.currentTask().id != task.id {
+	if taskScope != nil {
+		actual, valid := s.taskMenuScopeFor(task)
+		directory, _ := action.Payload["desktopSystemOpenDirectory"].(bool)
+		if !valid || actual != *taskScope || action.Kind != "system.open" || !directory || !task.materialsReady() ||
+			scope.sourcePath != task.materialsPath || action.ServiceID != "" || action.ModuleID != "" {
+			return scope, errors.New("任务资料目录或应用上下文已变化，请重新打开任务菜单。")
+		}
+	} else if task.id == "" || s.currentTask().id != task.id {
 		return scope, errors.New("系统打开的任务已变化，请重新选择后重试。")
 	}
 	scope.taskID, scope.taskPath, scope.createdAt, scope.materialsRoot = task.id, task.path, task.createdAt, task.materialsPath
@@ -152,10 +171,28 @@ func cloneSystemOpenAction(action application.Action) application.Action {
 }
 
 func (s *app) beginSystemOpenJob(action application.Action) (*systemOpenJob, error) {
+	return s.beginScopedSystemOpenJob(action, nil)
+}
+
+func (s *app) beginScopedSystemOpenJob(action application.Action, taskScope *taskMenuScope) (*systemOpenJob, error) {
 	if !independentSystemOpenAction(action.Kind) {
 		return nil, errors.New("这不是系统打开或定位请求。")
 	}
-	scope, err := s.systemOpenCurrentScope(action)
+	var update func(func())
+	var contextCurrent func() bool
+	if taskScope != nil {
+		owned := *taskScope
+		window := s.win
+		action = taskMenuContextAction(action, owned)
+		update = taskContextUpdater(window, s.taskContextUpdate)
+		if update == nil {
+			return nil, errTaskContextChanged
+		}
+		contextCurrent = func() bool {
+			return (window == nil || !window.IsDestroyed()) && s.taskMenuScopeCurrent(owned)
+		}
+	}
+	scope, err := s.systemOpenScopeFor(action, taskScope)
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +210,12 @@ func (s *app) beginSystemOpenJob(action application.Action) (*systemOpenJob, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	request := &systemOpenJob{action: cloneSystemOpenAction(action), key: key, scope: scope,
-		owner: jobs, backend: s.backend, window: s.win, ctx: ctx, cancel: cancel, done: make(chan struct{})}
+		owner: jobs, backend: s.backend, window: s.win, ctx: ctx, cancel: cancel, done: make(chan struct{}),
+		update: update, current: contextCurrent}
+	if taskScope != nil {
+		owned := *taskScope
+		request.taskScope = &owned
+	}
 	if previous := jobs.current[key]; previous != nil {
 		previous.cancel()
 	}
@@ -189,6 +231,10 @@ func (s *app) beginSystemOpenJob(action application.Action) (*systemOpenJob, err
 // This route runs before busy/backendGate and never requests a Snapshot.
 // Document wrappers retain their application-layer materials path validation.
 func (s *app) dispatchIndependentSystemOpen(action application.Action) bool {
+	return s.dispatchScopedSystemOpen(action, nil)
+}
+
+func (s *app) dispatchScopedSystemOpen(action application.Action, taskScope *taskMenuScope) bool {
 	if !independentSystemOpenAction(action.Kind) {
 		return false
 	}
@@ -196,7 +242,7 @@ func (s *app) dispatchIndependentSystemOpen(action application.Action) bool {
 		s.ensureSystemOpenJobs().error = "系统打开后端或窗口不可用，请重试。"
 		return true
 	}
-	request, err := s.beginSystemOpenJob(action)
+	request, err := s.beginScopedSystemOpenJob(action, taskScope)
 	if err != nil {
 		s.ensureSystemOpenJobs().error = err.Error()
 		if s.win != nil {
@@ -219,6 +265,12 @@ func executeSystemOpenJob(request *systemOpenJob) (application.ActionResult, err
 	}
 	if err := request.ctx.Err(); err != nil {
 		return application.ActionResult{}, err
+	}
+	if request.taskScope != nil {
+		if err := waitForTaskMenuScope(request.ctx, request.update, request.current,
+			func() bool { return request.window != nil && request.window.IsDestroyed() }); err != nil {
+			return application.ActionResult{}, err
+		}
 	}
 	result, err := request.backend.Dispatch(request.ctx, request.action)
 	if request.ctx.Err() != nil {
@@ -261,7 +313,7 @@ func (s *app) systemOpenJobRelevant(request *systemOpenJob) bool {
 	if closed || current != request {
 		return false
 	}
-	scope, err := s.systemOpenCurrentScope(request.action)
+	scope, err := s.systemOpenScopeFor(request.action, request.taskScope)
 	return err == nil && scope == request.scope
 }
 

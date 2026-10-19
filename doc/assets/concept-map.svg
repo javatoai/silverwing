@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 860" role="img" aria-labelledby="title desc">
+  <title id="title">Silverwing 项目组、需求任务与工作区关系</title>
+  <desc id="desc">结构示意图：项目组关联本机已有仓库和服务模块配置；当前通过 Meegle 需求建立任务；任务包含多个隔离的 Git 工作区以及任务资料和 Agent 说明。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto"><path d="M1 1 L10 6 L1 11 Z" fill="#547A9D"/></marker>
+    <marker id="arrow-cyan" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto"><path d="M1 1 L10 6 L1 11 Z" fill="#138A9B"/></marker>
+  </defs>
+  <rect width="1400" height="860" fill="#F4F8FC"/>
+  <text x="70" y="76" fill="#173858" font-size="38" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">Silverwing 任务与上下文关系</text>
+  <text x="70" y="118" fill="#526B82" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">项目配置描述“在哪里工作”；任务把需求、代码工作区与资料放在一起。</text>
+  <rect x="1024" y="48" width="306" height="48" rx="24" fill="#E7EEF6"/>
+  <text x="1177" y="80" text-anchor="middle" fill="#486580" font-size="22" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">结构示意 · 非界面截图</text>
+
+  <rect x="60" y="220" width="300" height="190" rx="20" fill="#FFFFFF" stroke="#8DAECC" stroke-width="2"/>
+  <rect x="60" y="220" width="300" height="12" rx="6" fill="#3375B8"/>
+  <circle cx="96" cy="273" r="18" fill="#E6F0FB"/>
+  <text x="96" y="281" text-anchor="middle" fill="#2765A5" font-size="23" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">1</text>
+  <text x="128" y="281" fill="#173858" font-size="28" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">项目组</text>
+  <text x="86" y="326" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">组织相关服务与仓库</text>
+  <text x="86" y="365" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">来源为已有本地仓库</text>
+
+  <path d="M368 315 H431" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="440" y="220" width="390" height="190" rx="20" fill="#FFFFFF" stroke="#8DAECC" stroke-width="2"/>
+  <rect x="440" y="220" width="390" height="12" rx="6" fill="#3375B8"/>
+  <circle cx="478" cy="273" r="18" fill="#E6F0FB"/>
+  <text x="478" y="281" text-anchor="middle" fill="#2765A5" font-size="23" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">2</text>
+  <text x="510" y="281" fill="#173858" font-size="28" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">仓库与服务模块配置</text>
+  <text x="466" y="326" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">记录仓库路径、服务与模块</text>
+  <text x="466" y="365" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">配置主分支与隔离方式</text>
+
+  <path d="M838 315 H901" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="910" y="220" width="430" height="190" rx="20" fill="#FFFFFF" stroke="#E2B65C" stroke-width="2"/>
+  <rect x="910" y="220" width="430" height="12" rx="6" fill="#D99A27"/>
+  <circle cx="948" cy="273" r="18" fill="#FFF3D9"/>
+  <text x="948" y="281" text-anchor="middle" fill="#9A6812" font-size="23" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">3</text>
+  <text x="980" y="281" fill="#173858" font-size="28" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">需求任务</text>
+  <text x="936" y="326" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">当前从 Meegle 需求创建任务</text>
+  <text x="936" y="365" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">任务记录需求与选中的服务范围</text>
+  <rect x="1020" y="151" width="300" height="48" rx="24" fill="#FFF3D9" stroke="#E2B65C"/>
+  <text x="1170" y="182" text-anchor="middle" fill="#805914" font-size="22" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">Meegle 需求入口</text>
+  <path d="M1170 199 V211" fill="none" stroke="#D99A27" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <path d="M1125 411 V467 H876 V510" fill="none" stroke="#138A9B" stroke-width="3" marker-end="url(#arrow-cyan)"/>
+  <path d="M1125 467 H1215 V510" fill="none" stroke="#138A9B" stroke-width="3" marker-end="url(#arrow-cyan)"/>
+  <text x="1125" y="458" text-anchor="middle" fill="#147A88" font-size="22" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">任务上下文</text>
+
+  <rect x="700" y="520" width="350" height="210" rx="20" fill="#F1FAFB" stroke="#79BFC6" stroke-width="2"/>
+  <rect x="700" y="520" width="350" height="12" rx="6" fill="#138A9B"/>
+  <text x="730" y="576" fill="#145E6A" font-size="28" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">多个 Git 工作区</text>
+  <text x="730" y="622" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">每个仓库按任务隔离</text>
+  <text x="730" y="661" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">可用 Worktree 或独立 Clone</text>
+  <text x="730" y="700" fill="#147A88" font-size="22" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">源仓库保留在原位置</text>
+
+  <rect x="1070" y="520" width="300" height="210" rx="20" fill="#F1FAFB" stroke="#79BFC6" stroke-width="2"/>
+  <rect x="1070" y="520" width="300" height="12" rx="6" fill="#138A9B"/>
+  <text x="1100" y="576" fill="#145E6A" font-size="28" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">资料与任务说明</text>
+  <text x="1100" y="622" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">生成 AGENTS.md</text>
+  <text x="1100" y="661" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">提供工作区上下文</text>
+
+  <rect x="60" y="785" width="1280" height="48" rx="16" fill="#E8EFF6"/>
+  <text x="86" y="817" fill="#405D77" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">仓库配置指向现有本机源仓库；实际编码发生在任务创建的隔离工作区。</text>
+</svg>

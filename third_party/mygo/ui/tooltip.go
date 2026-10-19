@@ -82,7 +82,10 @@ func tooltipBase(c *context, anchor *node, fn func(tip *node)) (*node, bool) {
 		if tip.attach == 0 {
 			tip.AttachTo(anchor, AnchorTop, AnchorBottom)
 		}
-		if tip.OverlayShortcut(0, KeyEscape) {
+		// An item tooltip belongs to its open menu. Let the menu popover
+		// receive Escape so a single key closes both surfaces.
+		menuItem := anchor.role == RoleMenuItem || anchor.role == RoleMenuItemCheckBox || anchor.role == RoleMenuItemRadio
+		if (!menuItem || rt.menu.popup == nil) && tip.OverlayShortcut(0, KeyEscape) {
 			rt.tips.dismissed = anchor.id
 		}
 	})

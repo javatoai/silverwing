@@ -228,7 +228,7 @@ func (s *app) repositoryDetails(repositoryID string) (name, path string) {
 }
 
 func (s *app) serviceEnabled(groupID, serviceID string) bool {
-	config, err := s.settingsConfigMap()
+	config, err := s.readSettingsConfig()
 	if err != nil {
 		return true
 	}
@@ -327,7 +327,7 @@ func (s *app) serviceEditorFields(serviceID string, service application.Service)
 		{key: "bootstrapCopyRules", label: "初始化复制规则（JSON 数组）", multiline: true, value: "[]"},
 		{key: "bootstrapCommands", label: "初始化命令（JSON 数组）", multiline: true, value: "[]"},
 	}
-	config, err := s.settingsConfigMap()
+	config, err := s.readSettingsConfig()
 	if err != nil {
 		return fields
 	}
@@ -381,7 +381,7 @@ func (s *app) moduleConfigurationFields(groupID, serviceID string, module applic
 	tagEnabled := fmt.Sprint(module.TagEnabled)
 	tagMode, tagTargetRef, tagMessagePrefix := "MERGE_TO_TARGET_BRANCH", module.TagTargetRef, "Tag"
 	customCommands := "[]"
-	if config, err := s.settingsConfigMap(); err == nil {
+	if config, err := s.readSettingsConfig(); err == nil {
 		if service := findServiceConfig(config, serviceID, groupID); service != nil {
 			if modules, ok := service["modules"].([]any); ok {
 				for _, raw := range modules {

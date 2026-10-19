@@ -205,6 +205,8 @@ func workspaceMergeBatchRunningFixture(t *testing.T) (*app, *workspaceMergeBatch
 		page: "tasks", tab: 0, selected: 0, tasks: []task{taskState}, workspaceMergeBatch: state,
 		busy: true, operation: "批量合并主分支", operationKind: action.Kind, cancelOperation: cancel,
 	}
+	state.scope, _ = appState.taskActionScopeFor(taskState)
+	state.configJSON = appState.configJSON
 	return appState, state, action, operationCtx
 }
 
@@ -221,6 +223,8 @@ func workspaceMergeBatchStaleCompletionFixture(t *testing.T) (*app, *workspaceMe
 	}
 	taskState := task{id: state.TaskID, path: state.TaskPath, createdAt: state.TaskCreatedAt, groupID: state.TaskGroupID, branch: state.TaskFeatureBranch, workspaces: []application.Workspace{item}}
 	appState := &app{page: "tasks", tab: 0, selected: 0, tasks: []task{taskState}, workspaceMergeBatch: state}
+	state.scope, _ = appState.taskActionScopeFor(taskState)
+	state.configJSON = appState.configJSON
 	action := application.Action{Kind: "workspace.merge-batch", TaskID: state.TaskID, Path: state.TaskPath, Payload: map[string]any{"batchToken": state.Token}}
 	result := application.ActionResult{Data: workspace.WorkspaceMainBranchMergeBatchResult{Items: []workspace.WorkspaceMainBranchMergeResult{{
 		WorkspacePath: item.Path, ServiceName: item.Record.ServiceName, ModuleName: item.Record.ModuleName,
@@ -277,6 +281,8 @@ func TestWorkspaceMergeBatchDialogLayoutCapture(t *testing.T) {
 				workspaces: []application.Workspace{items[0].Workspace, items[1].Workspace, items[2].Workspace},
 			}
 			appState := &app{page: "tasks", tab: 0, selected: 0, tasks: []task{currentTask}, workspaceMergeBatch: state}
+			state.scope, _ = appState.taskActionScopeFor(currentTask)
+			state.configJSON = appState.configJSON
 			if scene.loading {
 				appState.busy = true
 				appState.operationKind = "workspace.merge-batch"

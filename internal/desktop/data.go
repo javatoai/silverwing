@@ -57,6 +57,8 @@ type app struct {
 
 	page                              string
 	taskNavigation                    *taskNavigationState
+	taskContextScope                  *taskMenuScope
+	taskContextUpdate                 func(func()) // Headless scheduler seam; production captures Window.Update.
 	taskIndexes                       map[bool]*taskIndexBrowsingState
 	taskListFocused                   bool
 	dark                              bool
@@ -66,6 +68,7 @@ type app struct {
 	source                            bool
 	json                              string
 	configJSON                        string
+	configReads                       desktopConfigReadCache
 	autoSync                          bool
 	notifications                     bool
 	tasks                             []task
@@ -125,6 +128,7 @@ type app struct {
 	requirementReaders                map[string]*requirementReaderState
 	requirementReaderGeneration       uint64
 	requirementContentJobs            *requirementContentJobState
+	requirementRefreshJobs            *requirementRefreshState
 	materialsFileManagement           *materialsFileManagementState
 	materialsFileJobs                 *materialsFileJobState
 	materialsLiveRefreshLifecycle     *materialsLiveRefreshLifecycle
@@ -183,6 +187,7 @@ type app struct {
 	requirementsRequested             bool
 	requirementsLoading               bool
 	requirementsLoaded                bool
+	requirementsFetchedAt             int64
 	requirementsLoadError             string
 	requirementsFailures              []string
 	requirementsCompletedQueries      int
@@ -293,7 +298,7 @@ func (s *app) applySnapshot(snapshot application.Snapshot) {
 		s.loadNavigationPreference(snapshot.Home)
 	}
 	nextTasks := projectTasks(snapshot)
-	nextIndex := taskLifecycleSelectedIndex(nextTasks, s.selected, previousTask.id, s.page == "archive")
+	nextIndex := s.taskLifecycleSnapshotIndex(nextTasks)
 	selectionChanged := s.prepareTaskLifecycleSelection(previousTask, taskLifecycleSelectionAt(nextTasks, nextIndex))
 	s.snapshot = snapshot
 	s.tasks, s.selected = nextTasks, nextIndex

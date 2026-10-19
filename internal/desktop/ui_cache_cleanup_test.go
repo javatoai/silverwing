@@ -61,7 +61,8 @@ func TestRequirementShortContentUsesAvailableReaderWidth(t *testing.T) {
 			ui.Column(c).Fill().Children(func() { s.renderRequirementReadonlyMarkdownReader(c, setTheme(c, false), reader) })
 		}, width, 760)
 		card, found := tester.Find("评论正文 测试成员")
-		if !found || card.W < float32(width-64) || card.X+card.W > float32(width) {
+		outer, outerFound := tester.Find("评论卡片 id:comment")
+		if !found || !outerFound || outer.W < float32(width-64) || card.W < outer.W-36 || card.X+card.W > float32(width) {
 			t.Fatalf("short content collapsed the reading width at %d: %#v", width, card)
 		}
 		s.closeRequirementReaders()

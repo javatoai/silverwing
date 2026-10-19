@@ -490,6 +490,7 @@ func (rt *engine) runFrame() {
 			break
 		}
 	}
+	buildChanged := rt.consumed
 	if rt.stats != nil {
 		rt.stats.passes = rt.pass + 1
 	}
@@ -536,6 +537,12 @@ func (rt *engine) runFrame() {
 	}
 	rt.announcements = rt.announcements[:0]
 	rt.next()
+	// The build budget bounds a single frame, not delivery of state changes.
+	// If its final pass still changed earlier content, continue in a new
+	// build, including when next selected a paint-only animation frame.
+	if buildChanged {
+		rt.changed()
+	}
 	rt.armTimer()
 	rt.showMenu()
 	rt.c.finish()
@@ -648,6 +655,10 @@ func (rt *engine) endPass() {
 	}
 	rt.clickLater = rt.clickLater[:0]
 	rt.menu.chosen = 0
+	if deliver := rt.menu.choiceAfterPass; deliver != nil {
+		rt.menu.choiceAfterPass = nil
+		deliver()
+	}
 	rt.delivered = rt.delivered[:0]
 	rt.downs = rt.downs[:0]
 	// The next pass may not ask again, as when the view cleared what asked.

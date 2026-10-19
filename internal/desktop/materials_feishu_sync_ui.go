@@ -1,7 +1,6 @@
 package desktop
 
 import (
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -335,8 +334,8 @@ func (s *app) materialsFeishuSyncStartPayload(t task) (map[string]any, error) {
 const materialsFeishuUnsavedDraftMessage = "请先保存任务资料中的 Markdown 修改，再同步飞书"
 
 func (s *app) materialsFeishuSyncTarget() (string, error) {
-	var config domain.AppConfig
-	if strings.TrimSpace(s.configJSON) == "" || json.Unmarshal([]byte(s.configJSON), &config) != nil {
+	config, err := s.readCurrentAppConfig()
+	if err != nil {
 		return "", fmt.Errorf("无法读取当前飞书资料同步配置")
 	}
 	target := ""
@@ -372,8 +371,8 @@ func (s *app) materialsFeishuCommentAvailable(t task) bool {
 	if link.ProjectKey != nil && strings.TrimSpace(*link.ProjectKey) != "" {
 		return true
 	}
-	var config domain.AppConfig
-	if json.Unmarshal([]byte(s.configJSON), &config) != nil {
+	config, err := s.readCurrentAppConfig()
+	if err != nil {
 		return false
 	}
 	for _, project := range config.MeegleProjects {

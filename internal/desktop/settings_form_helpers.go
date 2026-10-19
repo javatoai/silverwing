@@ -120,7 +120,7 @@ func (s *app) settingsNestedSwitch(c *ui.Context, p palette, objectKey, fieldKey
 }
 
 func (s *app) settingsGroupSwitch(c *ui.Context, p palette, groupID, fieldKey, key, title, description string, fallback bool) {
-	config, err := s.settingsConfigMap()
+	config, err := s.readSettingsConfig()
 	if err != nil {
 		s.lastError = err.Error()
 		return

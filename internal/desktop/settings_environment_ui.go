@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/url"
 	"path/filepath"
-	"silverwing-go/internal/domain"
 	"strings"
 )
 
@@ -267,48 +266,6 @@ func (s *app) settingsLogs(c *ui.Context, p palette) {
 				})
 			}
 		}
-	})
-}
-
-func (s *app) settingsAbout(c *ui.Context, p palette) {
-	settingsCard(c, p, "关于 SilverWing", "", func() {
-		label(c, "SilverWing", 20, p.text).FontWeight(600)
-		label(c, "MyGO 原生桌面", 12, p.muted)
-		ui.Divider(c)
-		const repositoryURL = "https://github.com/javatoai/silverwing"
-		ui.Column(c).Gap(6).Children(func() {
-			label(c, "GitHub", 12, p.text).FontWeight(500)
-			label(c, repositoryURL, 10, p.muted).SingleLine().Selectable()
-			ui.Row(c).FillWidth().Gap(8).Wrap().Label("GitHub 仓库操作").Children(func() {
-				if action(c, "about-open-GitHub", "launch", "打开仓库", p, false) {
-					mygo.Shell.OpenExternal(repositoryURL)
-				}
-				if action(c, "about-copy-GitHub", "copy", "复制地址", p, false) {
-					s.copyTextToClipboard(c.Services(), repositoryURL, "GitHub 仓库地址已复制")
-				}
-				if action(c, "about-releases", "launch", "版本发布", p, false) {
-					mygo.Shell.OpenExternal("https://github.com/javatoai/silverwing/releases")
-				}
-			})
-		})
-		ui.Divider(c)
-		settingsPathValue(c, p, "版本", domain.CurrentProductVersion)
-		settingsPathValue(c, p, "工作空间", s.snapshot.Home)
-	})
-}
-
-func (s *app) settingsUpdates(c *ui.Context, p palette) {
-	settingsCard(c, p, "获取新版", "应用内不执行自动升级。请前往 GitHub Releases 下载适合当前系统的安装包。", func() {
-		url := "https://github.com/javatoai/silverwing/releases"
-		settingsPathValue(c, p, "更新页面", url)
-		ui.Row(c).Gap(8).Children(func() {
-			if action(c, "updates-open", "launch", "打开更新页面", p, true) {
-				mygo.Shell.OpenExternal(url)
-			}
-			if action(c, "updates-copy", "copy", "复制链接", p, false) {
-				s.copyTextToClipboard(c.Services(), url, "更新链接已复制")
-			}
-		})
 	})
 }
 

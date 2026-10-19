@@ -14,7 +14,7 @@ import (
 	"silverwing-go/internal/workspace"
 )
 
-func TestTaskMoreMenuPrefersRight(t *testing.T) {
+func TestTaskDetailsOmitMoreMenu(t *testing.T) {
 	for _, test := range []struct {
 		width, offset int
 		dark          bool
@@ -30,39 +30,10 @@ func TestTaskMoreMenuPrefersRight(t *testing.T) {
 				})
 				s.endOverflowMenuFrame()
 			}, test.width, 780)
-			trigger, found := tester.Find("任务更多操作")
-			if !found {
-				t.Fatal("task toolbar's real more entry missing")
-			}
-			if err := tester.Click("任务更多操作"); err != nil {
-				t.Fatal(err)
-			}
-			first, firstFound := tester.Find("在 Codex 中打开")
-			if !firstFound || first.X < 4 || first.X+first.W > float32(test.width-4) || first.Y < trigger.Y+trigger.H || !tester.Focused("在 Codex 中打开") {
-				t.Fatalf("native menu placement/focus unsafe: trigger=%+v first=%+v", trigger, first)
-			}
-			if test.width == 1100 && math.Abs(float64(first.X-trigger.X-6)) > 1 {
-				t.Fatalf("task menu did not align to the trigger's left edge: trigger=%+v first=%+v", trigger, first)
-			}
-			if test.offset == 750 && first.X >= trigger.X {
-				t.Fatal("right edge did not allow native safe fallback")
-			}
-			captureReleaseNotice(t, tester, fmt.Sprintf("task-more-%d-offset-%d-dark-%t", test.width, test.offset, test.dark))
-			tester.Key(0, ui.KeyDown)
-			if !tester.Focused("Codex 配置") {
-				t.Fatal("menu arrow navigation changed")
-			}
-			tester.Key(0, ui.KeyEscape)
-			if tester.HasText("在 Codex 中打开") || !tester.Focused("任务更多操作") {
-				t.Fatal("Escape did not dismiss and restore focus")
-			}
-			tester.Key(0, ui.KeyDown)
-			if !tester.HasText("在 Codex 中打开") {
-				t.Fatal("task menu's keyboard opening changed")
-			}
-			tester.ClickAt(float32(test.width-5), 775)
-			if tester.HasText("在 Codex 中打开") {
-				t.Fatal("native light dismissal changed")
+			for _, removed := range []string{"任务更多操作", "在 Codex 中打开", "Codex 配置", "Codex 会话关联", "归档任务", "恢复任务", "恢复归档", "删除任务"} {
+				if tester.HasText(removed) {
+					t.Fatalf("task detail toolbar still contains %q", removed)
+				}
 			}
 		})
 	}

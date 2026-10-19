@@ -121,6 +121,11 @@ func (s *Service) readRequirementComments(ctx context.Context, config domain.App
 				FetchedAt: saved.FetchedAt, Source: "CACHE", CachePath: cachePath}), nil
 		}
 	}
+	generation, err := s.beginRequirementRead(key, force)
+	if err != nil {
+		return nil, err
+	}
+	defer s.finishRequirementRead(key, generation)
 	data, fetchErr := s.fetchRequirementComments(ctx, config, item)
 	if process.IsCleanupFailure(fetchErr) {
 		return nil, fetchErr
@@ -146,8 +151,20 @@ func (s *Service) readRequirementComments(ctx context.Context, config domain.App
 	if err := s.verifyRequirementIdentitySession(ctx, config, identity, session.generation); err != nil {
 		return nil, err
 	}
-	cachePath, writeErr := s.writeRequirementCommentsCache(key, data, fetchedAt)
+	if boolValue(payload, "fullRefresh") {
+		if err := s.verifyRequirementRefresh(ctx, config, identity); err != nil {
+			return nil, err
+		}
+	}
+	writeErr := s.commitRequirementRead(ctx, config, key, generation, func() error {
+		var err error
+		cachePath, err = s.writeRequirementCommentsCache(key, data, fetchedAt)
+		return err
+	})
 	if writeErr != nil {
+		if errors.Is(writeErr, errRequirementReadSuperseded) || ctx.Err() != nil {
+			return nil, writeErr
+		}
 		cacheError = "评论缓存失败：" + writeErr.Error()
 	} else {
 		cacheError = ""

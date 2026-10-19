@@ -199,7 +199,14 @@ func (rt *engine) buildThemedMenu(c *context) {
 	if !open {
 		mr.popup = nil
 		if choice != 0 {
-			rt.menuChosen(p.shown, choice)
+			// Deliver after endPass clears this frame's input, so the next
+			// build pass can report the choice to the owning control.
+			shown, scope, chosen := p.shown, p.scope, choice
+			mr.choiceAfterPass = func() {
+				if !rt.closing && rt.menu.scope == scope {
+					rt.menuChosen(shown, chosen)
+				}
+			}
 			rt.consumed = true
 		}
 	}

@@ -32,6 +32,7 @@ func (s *app) saveRequirementListSnapshot(identity requirementListIdentity, spri
 		estimate = requirementsEstimateTotal(s.requirements)
 	}
 	state.snapshots[key] = requirementListViewSnapshot{
+		fetchedAt: s.requirementsFetchedAt,
 		items:     append([]application.Requirement(nil), s.requirements...),
 		selected:  s.selectedRequirementKey,
 		sprints:   append([]requirementSprint(nil), s.requirementsSprints...),
@@ -56,6 +57,7 @@ func (s *app) activateRequirementSprint(sprintKey string) {
 		s.saveRequirementListSnapshot(identity, s.requirementsSelectedSprintKey)
 	}
 	if cached, ok := state.snapshots[requirementListSnapshotKey{identity: identity, sprint: sprintKey}]; ok {
+		s.requirementsFetchedAt = cached.fetchedAt
 		s.requirements = append([]application.Requirement(nil), cached.items...)
 		s.requirementsSprints = append([]requirementSprint(nil), cached.sprints...)
 		s.requirementsFailures = append([]string(nil), cached.failures...)
@@ -64,6 +66,7 @@ func (s *app) activateRequirementSprint(sprintKey string) {
 		s.requirementsLoaded = cached.loaded
 		s.restoreRequirementListSelection(cached.selected)
 	} else {
+		s.requirementsFetchedAt = 0
 		s.requirements = nil
 		s.selectedRequirement, s.selectedRequirementKey = 0, ""
 		s.requirementsLoaded = false
@@ -316,7 +319,9 @@ func (s *app) applyRequirementListResult(request *requirementListJob, result app
 		s.requirements = retainedItems
 	} else {
 		s.requirements = items
+		s.requirementsFetchedAt = dataInt64(data, "fetchedAt")
 	}
+	s.overlayRefreshedRequirements(s.requirements, resolvedSprintKey, s.requirementsFetchedAt)
 	s.restoreRequirementListSelection(selectedKey)
 	s.startRequirementNamingPreparation(items)
 	// A list refresh should only fill missing document/image cache entries; the

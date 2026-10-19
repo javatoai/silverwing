@@ -13,6 +13,7 @@ import (
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/process"
 	"silverwing-go/internal/storage"
+	"silverwing-go/internal/taskscope"
 )
 
 type CreateTaskRequest struct {
@@ -374,11 +375,7 @@ func (s *TaskApplicationService) createLocked(ctx context.Context, config domain
 // preparation and persists the new result without touching Git workspaces.
 func (s *TaskApplicationService) RetryRequirementMaterials(ctx context.Context, config domain.AppConfig, taskPath string) (domain.TaskManifest, error) {
 	var updated domain.TaskManifest
-	err := s.Locks.WithTask(taskPath, func() error {
-		manifest, err := s.Manifests.Load(taskPath)
-		if err != nil {
-			return err
-		}
+	err := s.withTaskManifestMutation(ctx, config, taskPath, func(ctx context.Context, manifest domain.TaskManifest) error {
 		if strings.TrimSpace(manifest.RequirementLink) == "" {
 			return fmt.Errorf("任务未填写需求编号或飞书需求链接")
 		}
@@ -409,6 +406,24 @@ func (s *TaskApplicationService) resolveRequirementMaterials(ctx context.Context
 		return domain.RequirementMaterialsDirectory{}, nil, fmt.Errorf("任务资料准备服务未配置")
 	}
 	return s.RequirementMaterials(ctx, config, input, folder)
+}
+
+// withTaskManifestMutation loads and validates the manifest only after the
+// task lock is held, then keeps that lock through the operation callback.
+func (s *TaskApplicationService) withTaskManifestMutation(ctx context.Context, config domain.AppConfig, taskPath string, mutate func(context.Context, domain.TaskManifest) error) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return s.Locks.WithTask(taskPath, func() error {
+		manifest, err := s.Manifests.Load(taskPath)
+		if err != nil {
+			return err
+		}
+		if err := taskscope.Validate(ctx, config, taskPath, manifest); err != nil {
+			return err
+		}
+		return mutate(ctx, manifest)
+	})
 }
 
 func resolveRequirementMaterials(ctx context.Context, config domain.AppConfig, input, folder string, preparation *documents.PreparationService) (domain.RequirementMaterialsDirectory, *string, error) {
@@ -615,13 +630,9 @@ func hasProvisionRollbackFailure(err error) bool {
 
 // Archive only changes task navigation classification. The legacy boolean is
 // accepted for callers of the earlier Go facade, but never removes checkouts.
-func (s *TaskApplicationService) Archive(_ context.Context, config domain.AppConfig, taskPath string, _ bool) (domain.TaskManifest, error) {
+func (s *TaskApplicationService) Archive(ctx context.Context, config domain.AppConfig, taskPath string, _ bool) (domain.TaskManifest, error) {
 	var result domain.TaskManifest
-	err := s.Locks.WithTask(taskPath, func() error {
-		manifest, err := s.Manifests.Load(taskPath)
-		if err != nil {
-			return err
-		}
+	err := s.withTaskManifestMutation(ctx, config, taskPath, func(_ context.Context, manifest domain.TaskManifest) error {
 		if manifest.LifecycleStatus == domain.TaskArchived {
 			return fmt.Errorf("任务已经归档")
 		}
@@ -640,13 +651,9 @@ func (s *TaskApplicationService) Archive(_ context.Context, config domain.AppCon
 	return result, err
 }
 
-func (s *TaskApplicationService) Restore(_ context.Context, config domain.AppConfig, taskPath string) (domain.TaskManifest, error) {
+func (s *TaskApplicationService) Restore(ctx context.Context, config domain.AppConfig, taskPath string) (domain.TaskManifest, error) {
 	var result domain.TaskManifest
-	err := s.Locks.WithTask(taskPath, func() error {
-		manifest, err := s.Manifests.Load(taskPath)
-		if err != nil {
-			return err
-		}
+	err := s.withTaskManifestMutation(ctx, config, taskPath, func(_ context.Context, manifest domain.TaskManifest) error {
 		if manifest.LifecycleStatus != domain.TaskArchived {
 			return fmt.Errorf("只有已归档任务可以恢复")
 		}
@@ -666,11 +673,7 @@ func (s *TaskApplicationService) Restore(_ context.Context, config domain.AppCon
 }
 
 func (s *TaskApplicationService) Delete(ctx context.Context, config domain.AppConfig, taskPath string, forceDiscard bool) error {
-	return s.Locks.WithTask(taskPath, func() error {
-		manifest, err := s.Manifests.Load(taskPath)
-		if err != nil {
-			return err
-		}
+	return s.withTaskManifestMutation(ctx, config, taskPath, func(ctx context.Context, manifest domain.TaskManifest) error {
 		risks, err := s.Lifecycle.InspectDeleteRisks(ctx, config, taskPath, manifest)
 		if err != nil {
 			return err

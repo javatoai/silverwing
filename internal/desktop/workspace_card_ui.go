@@ -72,15 +72,6 @@ func (s *app) workspaceCard(c *ui.Context, p palette, t task, w application.Work
 				if projectCopy.Clicked() {
 					s.copyTextToClipboard(c.Services(), workspaceCardClipboardValue(workspaceCardCopyProjectName, title, w.Path, branch), "已复制项目名")
 				}
-				pathButton := workspaceCardCopyButton(c, key+"-copy-workspace-path", "复制工作区路径", "点击复制完整工作区路径\n"+w.Path, strings.TrimSpace(w.Path) == "")
-				pathColor := p.muted
-				if pathButton.Hovered() {
-					pathColor = p.blue
-				}
-				pathButton.Children(func() { label(c, w.Path, 11, pathColor).SingleLine() })
-				if pathButton.Clicked() {
-					s.copyTextToClipboard(c.Services(), workspaceCardClipboardValue(workspaceCardCopyPath, title, w.Path, branch), "已复制工作区路径")
-				}
 				branchCopy := workspaceCardCopyButton(c, key+"-copy-branch", "复制分支名", "点击复制分支名\n"+branchText, strings.TrimSpace(branch) == "")
 				branchColor := p.muted
 				if branchCopy.Hovered() {

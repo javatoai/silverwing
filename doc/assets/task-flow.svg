@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 850" role="img" aria-labelledby="title desc">
+  <title id="title">Silverwing 从准备到归档的任务流程</title>
+  <desc id="desc">流程示意图：准备仓库、Git 和 Meegle，选择需求，预览分支服务和隔离方式，创建工作区，打开 IDE 或 Codex，审阅并验证，可选执行 Tag 交付，最后归档并保留文件。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto"><path d="M1 1 L10 6 L1 11 Z" fill="#547A9D"/></marker>
+  </defs>
+  <rect width="1400" height="850" fill="#F4F8FC"/>
+  <text x="70" y="76" fill="#173858" font-size="38" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">一个任务从准备到归档</text>
+  <text x="70" y="118" fill="#526B82" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">每一步都能核对输入和结果；代码修改、检查与交付由你决定。</text>
+  <rect x="1024" y="48" width="306" height="48" rx="24" fill="#E7EEF6"/>
+  <text x="1177" y="80" text-anchor="middle" fill="#486580" font-size="22" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">流程示意 · 非界面截图</text>
+
+  <rect x="74" y="205" width="292" height="170" rx="20" fill="#FFFFFF" stroke="#8DAECC" stroke-width="2"/>
+  <rect x="74" y="205" width="292" height="12" rx="6" fill="#3375B8"/>
+  <circle cx="112" cy="260" r="21" fill="#E6F0FB"/><text x="112" y="268" text-anchor="middle" fill="#2765A5" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">1</text>
+  <text x="148" y="268" fill="#173858" font-size="26" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">准备环境</text>
+  <text x="100" y="316" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">添加仓库，配置 Git</text>
+  <text x="100" y="350" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">接入 Meegle 需求</text>
+  <path d="M370 290 H386" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="394" y="205" width="292" height="170" rx="20" fill="#FFFFFF" stroke="#8DAECC" stroke-width="2"/>
+  <rect x="394" y="205" width="292" height="12" rx="6" fill="#3375B8"/>
+  <circle cx="432" cy="260" r="21" fill="#E6F0FB"/><text x="432" y="268" text-anchor="middle" fill="#2765A5" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">2</text>
+  <text x="468" y="268" fill="#173858" font-size="26" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">选择需求</text>
+  <text x="420" y="316" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">从已选 Meegle 项目中</text>
+  <text x="420" y="350" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">打开需求并创建任务</text>
+  <path d="M690 290 H706" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="714" y="205" width="292" height="170" rx="20" fill="#FFFFFF" stroke="#8DAECC" stroke-width="2"/>
+  <rect x="714" y="205" width="292" height="12" rx="6" fill="#3375B8"/>
+  <circle cx="752" cy="260" r="21" fill="#E6F0FB"/><text x="752" y="268" text-anchor="middle" fill="#2765A5" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">3</text>
+  <text x="788" y="268" fill="#173858" font-size="26" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">预览范围</text>
+  <text x="740" y="316" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">核对服务、分支与路径</text>
+  <text x="740" y="350" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">确认 Worktree 或 Clone</text>
+  <path d="M1010 290 H1026" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="1034" y="205" width="292" height="170" rx="20" fill="#F1FAFB" stroke="#79BFC6" stroke-width="2"/>
+  <rect x="1034" y="205" width="292" height="12" rx="6" fill="#138A9B"/>
+  <circle cx="1072" cy="260" r="21" fill="#DDF3F4"/><text x="1072" y="268" text-anchor="middle" fill="#147A88" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">4</text>
+  <text x="1108" y="268" fill="#173858" font-size="26" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">创建工作区</text>
+  <text x="1060" y="316" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">Silverwing 按所选范围</text>
+  <text x="1060" y="350" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">准备各仓库任务目录</text>
+
+  <path d="M1180 377 V450" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="1034" y="465" width="292" height="170" rx="20" fill="#FFFFFF" stroke="#8DAECC" stroke-width="2"/>
+  <rect x="1034" y="465" width="292" height="12" rx="6" fill="#3375B8"/>
+  <circle cx="1072" cy="520" r="21" fill="#E6F0FB"/><text x="1072" y="528" text-anchor="middle" fill="#2765A5" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">5</text>
+  <text x="1108" y="528" fill="#173858" font-size="26" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">打开开发工具</text>
+  <text x="1060" y="576" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">显式打开 IDE 或 Codex</text>
+  <text x="1060" y="610" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">工具需在本机单独安装</text>
+  <path d="M1030 550 H1010" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="714" y="465" width="292" height="170" rx="20" fill="#FFFFFF" stroke="#8DAECC" stroke-width="2"/>
+  <rect x="714" y="465" width="292" height="12" rx="6" fill="#3375B8"/>
+  <circle cx="752" cy="520" r="21" fill="#E6F0FB"/><text x="752" y="528" text-anchor="middle" fill="#2765A5" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">6</text>
+  <text x="788" y="528" fill="#173858" font-size="26" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">审阅与验证</text>
+  <text x="740" y="576" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">检查 Git 差异与本地结果</text>
+  <text x="740" y="610" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">按项目要求运行验证</text>
+  <path d="M710 550 H690" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="394" y="465" width="292" height="170" rx="20" fill="#FFF9EA" stroke="#E2B65C" stroke-width="2"/>
+  <rect x="394" y="465" width="292" height="12" rx="6" fill="#D99A27"/>
+  <circle cx="432" cy="520" r="21" fill="#FFF0CA"/><text x="432" y="528" text-anchor="middle" fill="#9A6812" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">7</text>
+  <text x="468" y="528" fill="#173858" font-size="26" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">可选 Tag 交付</text>
+  <text x="420" y="576" fill="#5E5138" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">核对目标后显式执行</text>
+  <text x="420" y="610" fill="#5E5138" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">查看执行状态与结果</text>
+  <path d="M390 550 H370" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="74" y="465" width="292" height="170" rx="20" fill="#F1FAFB" stroke="#79BFC6" stroke-width="2"/>
+  <rect x="74" y="465" width="292" height="12" rx="6" fill="#138A9B"/>
+  <circle cx="112" cy="520" r="21" fill="#DDF3F4"/><text x="112" y="528" text-anchor="middle" fill="#147A88" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">8</text>
+  <text x="148" y="528" fill="#173858" font-size="26" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">归档任务</text>
+  <text x="100" y="576" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">归档保留工作区文件</text>
+  <text x="100" y="610" fill="#147A88" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">之后可从归档列表恢复</text>
+
+  <rect x="74" y="690" width="1252" height="92" rx="18" fill="#E8EFF6"/>
+  <text x="106" y="730" fill="#405D77" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">Silverwing 提供工具打开和显式交付入口；不会自动运行多个 Agent，也不负责服务部署。</text>
+  <text x="106" y="762" fill="#526B82" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">是否同步资料、执行 Tag 或归档，均由你根据项目流程选择。</text>
+</svg>

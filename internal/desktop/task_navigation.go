@@ -159,12 +159,16 @@ func (s *app) taskMatchesSearch(t task, terms []string) bool {
 // Return filtered task indices without mutating snapshot order or selection.
 // Recent view has strict visit order; all/search views put pins first.
 func (s *app) taskIndexRows(archived bool) []int {
+	return s.taskIndexRowsFor(s.tasks, archived)
+}
+
+func (s *app) taskIndexRowsFor(tasks []task, archived bool) []int {
 	state := s.taskIndexBrowsingFor(archived)
 	preferences := s.taskNavigationFor().value
 	terms := strings.Fields(strings.ToLower(state.search))
-	rows := make([]int, 0, len(s.tasks))
-	byKey := make(map[string]int, len(s.tasks))
-	for index, t := range s.tasks {
+	rows := make([]int, 0, len(tasks))
+	byKey := make(map[string]int, len(tasks))
+	for index, t := range tasks {
 		if t.archived == archived && s.taskMatchesSearch(t, terms) {
 			rows = append(rows, index)
 			byKey[taskNavigationKey(t)] = index
@@ -183,7 +187,7 @@ func (s *app) taskIndexRows(archived bool) []int {
 	}
 	if !state.recentOnly {
 		for _, index := range rows {
-			if _, ok := byKey[taskNavigationKey(s.tasks[index])]; ok {
+			if _, ok := byKey[taskNavigationKey(tasks[index])]; ok {
 				ordered = append(ordered, index)
 			}
 		}
@@ -191,69 +195,10 @@ func (s *app) taskIndexRows(archived bool) []int {
 	return ordered
 }
 
-// Explicit create/restore navigation should reveal the selected result even if
-// the user started the action from a filtered or collapsed task index.
+// Explicit creation reveals its result even from a filtered task index.
 func (s *app) revealTaskInIndex(t task) {
 	state := s.taskIndexBrowsingFor(t.archived)
 	state.search, state.recentOnly = "", false
-	state.collapsedGroups[t.groupID] = false
 	state.scroll.X, state.scroll.Y = 0, 0
 	state.revealTaskKey = taskNavigationKey(t)
-}
-
-type taskIndexSection struct {
-	groupID string
-	title   string
-	rows    []int
-}
-
-func (s *app) taskIndexSections(archived bool, rows []int) []taskIndexSection {
-	state := s.taskIndexBrowsingFor(archived)
-	if state.recentOnly || strings.TrimSpace(state.search) != "" {
-		return []taskIndexSection{{rows: rows}}
-	}
-	pinned, remaining := make([]int, 0), make([]int, 0)
-	for _, index := range rows {
-		if s.taskIsPinned(s.tasks[index]) {
-			pinned = append(pinned, index)
-		} else {
-			remaining = append(remaining, index)
-		}
-	}
-	sections := make([]taskIndexSection, 0, len(s.snapshot.Groups)+2)
-	if len(pinned) > 0 {
-		sections = append(sections, taskIndexSection{title: "置顶", rows: pinned})
-	}
-	if len(s.snapshot.Groups) <= 1 {
-		title := ""
-		if len(pinned) > 0 {
-			title = "其他任务"
-		}
-		if len(remaining) > 0 {
-			sections = append(sections, taskIndexSection{title: title, rows: remaining})
-		}
-		return sections
-	}
-	grouped := make(map[string][]int)
-	for _, index := range remaining {
-		id := s.tasks[index].groupID
-		grouped[id] = append(grouped[id], index)
-	}
-	for _, group := range s.snapshot.Groups {
-		if members := grouped[group.ID]; len(members) > 0 {
-			sections = append(sections, taskIndexSection{groupID: group.ID, title: firstNonEmpty(group.Name, group.ID), rows: members})
-		}
-		delete(grouped, group.ID)
-	}
-	// Tasks can outlive a project-group configuration. Keep them discoverable.
-	orphans := make([]int, 0)
-	for _, index := range remaining {
-		if _, ok := grouped[s.tasks[index].groupID]; ok {
-			orphans = append(orphans, index)
-		}
-	}
-	if len(orphans) > 0 {
-		sections = append(sections, taskIndexSection{title: "其他任务", rows: orphans})
-	}
-	return sections
 }

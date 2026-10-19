@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 780" role="img" aria-labelledby="title desc">
+  <title id="title">通过 Meegle 需求创建 Silverwing 任务</title>
+  <desc id="desc">流程示意图：配置 Meegle CLI 路径，检测 CLI 与当前登录身份，选择团队空间和项目，浏览需求，再基于选定需求创建任务。CLI、账号和凭据由用户维护。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto"><path d="M1 1 L10 6 L1 11 Z" fill="#547A9D"/></marker>
+  </defs>
+  <rect width="1400" height="780" fill="#F4F8FC"/>
+  <text x="70" y="76" fill="#173858" font-size="38" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">从 Meegle 需求进入任务工作区</text>
+  <text x="70" y="118" fill="#526B82" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">需求列表提供任务入口；创建前仍由你确认项目、需求和任务范围。</text>
+  <rect x="1024" y="48" width="306" height="48" rx="24" fill="#E7EEF6"/>
+  <text x="1177" y="80" text-anchor="middle" fill="#486580" font-size="22" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">流程示意 · 非界面截图</text>
+
+  <rect x="60" y="220" width="235" height="230" rx="20" fill="#FFFFFF" stroke="#8DAECC" stroke-width="2"/>
+  <rect x="60" y="220" width="235" height="12" rx="6" fill="#3375B8"/>
+  <circle cx="94" cy="270" r="20" fill="#E6F0FB"/>
+  <text x="94" y="278" text-anchor="middle" fill="#2765A5" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">1</text>
+  <text x="83" y="323" fill="#173858" font-size="25" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">配置 CLI 路径</text>
+  <text x="83" y="367" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">指定本机 Meegle</text>
+  <text x="83" y="401" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">命令行工具位置</text>
+
+  <path d="M301 335 H326" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="335" y="220" width="235" height="230" rx="20" fill="#FFFFFF" stroke="#8DAECC" stroke-width="2"/>
+  <rect x="335" y="220" width="235" height="12" rx="6" fill="#3375B8"/>
+  <circle cx="369" cy="270" r="20" fill="#E6F0FB"/>
+  <text x="369" y="278" text-anchor="middle" fill="#2765A5" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">2</text>
+  <text x="358" y="323" fill="#173858" font-size="25" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">检测与身份</text>
+  <text x="358" y="367" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">验证 CLI 可用性，</text>
+  <text x="358" y="401" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">核对当前登录状态</text>
+
+  <path d="M576 335 H601" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="610" y="220" width="235" height="230" rx="20" fill="#FFFFFF" stroke="#8DAECC" stroke-width="2"/>
+  <rect x="610" y="220" width="235" height="12" rx="6" fill="#3375B8"/>
+  <circle cx="644" cy="270" r="20" fill="#E6F0FB"/>
+  <text x="644" y="278" text-anchor="middle" fill="#2765A5" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">3</text>
+  <text x="633" y="323" fill="#173858" font-size="25" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">选择项目范围</text>
+  <text x="633" y="367" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">选择团队空间，</text>
+  <text x="633" y="401" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">再选择目标 Sprint</text>
+
+  <path d="M851 335 H876" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="885" y="220" width="235" height="230" rx="20" fill="#FFFFFF" stroke="#8DAECC" stroke-width="2"/>
+  <rect x="885" y="220" width="235" height="12" rx="6" fill="#3375B8"/>
+  <circle cx="919" cy="270" r="20" fill="#E6F0FB"/>
+  <text x="919" y="278" text-anchor="middle" fill="#2765A5" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">4</text>
+  <text x="908" y="323" fill="#173858" font-size="25" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">浏览需求</text>
+  <text x="908" y="367" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">检查需求标题、</text>
+  <text x="908" y="401" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">编号与关联信息</text>
+
+  <path d="M1126 335 H1151" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="1160" y="220" width="235" height="230" rx="20" fill="#FFF9EA" stroke="#E2B65C" stroke-width="2"/>
+  <rect x="1160" y="220" width="235" height="12" rx="6" fill="#D99A27"/>
+  <circle cx="1194" cy="270" r="20" fill="#FFF0CA"/>
+  <text x="1194" y="278" text-anchor="middle" fill="#9A6812" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">5</text>
+  <text x="1183" y="323" fill="#173858" font-size="25" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">基于需求建任务</text>
+  <text x="1183" y="367" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">选定需求后，进入</text>
+  <text x="1183" y="401" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">任务创建与核对</text>
+
+  <rect x="80" y="525" width="1240" height="165" rx="22" fill="#FFF9EA" stroke="#E2B65C" stroke-width="2"/>
+  <text x="116" y="574" fill="#805914" font-size="27" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">CLI 与账号由使用者维护</text>
+  <text x="116" y="619" fill="#5E5138" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">Meegle 通过外部 CLI 进程接入；Silverwing 使用已配置的工具和登录身份。</text>
+  <text x="116" y="657" fill="#5E5138" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">安装、登录、账号权限与凭据请按团队流程管理，本文不包含命令或密钥。</text>
+</svg>

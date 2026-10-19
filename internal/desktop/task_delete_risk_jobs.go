@@ -42,12 +42,13 @@ func (s *app) ensureTaskDeleteRiskJobs() *taskDeleteRiskJobState {
 }
 
 func (s *app) taskDeleteRiskCurrentScope(dialog *taskDeleteDialogState) (taskDeleteRiskScope, bool) {
-	if dialog == nil || !dialog.Open || dialog.Submitting || s.currentTask().id != dialog.TaskID ||
+	if dialog == nil || !dialog.Open || dialog.Submitting ||
+		taskNavigationKey(s.currentTask()) != dialog.SelectionKey || s.currentTask().path != dialog.SelectionPath ||
 		(dialog.Page != "" && dialog.Page != s.page) {
 		return taskDeleteRiskScope{}, false
 	}
 	task := s.taskByID(dialog.TaskID)
-	if task.id == "" || task.path != dialog.TaskPath || task.createdAt != dialog.TaskCreatedAt {
+	if task.id == "" || task.path != dialog.TaskPath || task.createdAt != dialog.TaskCreatedAt || task.archived != dialog.TaskArchived {
 		return taskDeleteRiskScope{}, false
 	}
 	return taskDeleteRiskScope{

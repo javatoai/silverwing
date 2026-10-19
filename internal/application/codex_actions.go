@@ -14,8 +14,15 @@ import (
 )
 
 func (a *App) openCodex(ctx context.Context, action Action) (ActionResult, error) {
-	manifest, taskPath, err := a.task(action)
+	config, err := a.Config.Load()
 	if err != nil {
+		return ActionResult{}, err
+	}
+	manifest, taskPath, err := a.taskInConfig(action, config)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	if err := a.validateDesktopTaskContext(action, config, manifest, taskPath); err != nil {
 		return ActionResult{}, err
 	}
 	forceNew := false

@@ -646,6 +646,8 @@ func (s *Service) readRequirementMetadataCache(key string) (*requirementMetadata
 }
 
 func (s *Service) writeRequirementMetadataCache(key string, data RequirementMetadataReadResult, fetchedAt int64) (string, error) {
+	requirementCacheMu.Lock()
+	defer requirementCacheMu.Unlock()
 	if fetchedAt <= 0 {
 		return "", errors.New("需求元数据缓存缺少有效读取时间")
 	}
@@ -657,6 +659,8 @@ func (s *Service) writeRequirementMetadataCache(key string, data RequirementMeta
 	}
 	data.Stale = false
 	data.RefreshError = ""
+	data.CacheError = ""
+	data.EstimateError = ""
 	envelope := requirementMetadataEnvelope{Version: requirementMetadataCacheVersion, Key: requirementCacheDigest(key), FetchedAt: fetchedAt, Data: data}
 	encoded, err := marshalRequirementJSON(envelope)
 	if err != nil {

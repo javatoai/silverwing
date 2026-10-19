@@ -10,19 +10,43 @@ type requirementListIdentity struct {
 }
 
 func (s *app) currentRequirementListIdentity() requirementListIdentity {
+	return requirementListIdentity{
+		home: s.snapshot.Home, executable: strings.TrimSpace(s.configString("meegleExecutablePath")),
+		projects: s.requirementProjectsIdentity(), defaultProject: strings.TrimSpace(s.configString("meegleDefaultSprintProjectKey")),
+		account: s.currentRequirementAccountIdentity(),
+	}
+}
+
+func (s *app) requirementProjectsIdentity() string {
+	identity, _ := s.configReads.requirementProjects.read(s.configJSON, func(string) (string, error) {
+		return s.encodeRequirementProjectsIdentity(), nil
+	})
+	return identity
+}
+
+func (s *app) encodeRequirementProjectsIdentity() string {
 	type projectIdentity struct {
 		Key        string `json:"projectKey"`
 		SimpleName string `json:"simpleName"`
 	}
 	projects := make([]projectIdentity, 0)
-	for _, project := range mapsFromArray(s.configArray("meegleProjects")) {
+	for _, raw := range s.readConfigArray("meegleProjects") {
+		project, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
 		projects = append(projects, projectIdentity{
 			Key:        strings.TrimSpace(mapString(project, "project_key")),
 			SimpleName: strings.TrimSpace(mapString(project, "simple_name")),
 		})
 	}
 	projectBytes, _ := json.Marshal(projects)
-	defaultProject := strings.TrimSpace(s.configString("meegleDefaultSprintProjectKey"))
+	return string(projectBytes)
+}
+
+// Account fields can be replaced or changed in place independently of config.
+// Keep this projection live so async jobs cannot accept a previous account.
+func (s *app) currentRequirementAccountIdentity() string {
 	status := s.settingsCLIStatus["meegle"]
 	accountFields := map[string]any{}
 	for _, key := range []string{
@@ -38,10 +62,7 @@ func (s *app) currentRequirementListIdentity() requirementListIdentity {
 	if state := s.requirementIdentityJobs; state != nil && state.confirmed {
 		account += "\x00" + state.state + "\x00" + state.identity
 	}
-	return requirementListIdentity{
-		home: s.snapshot.Home, executable: strings.TrimSpace(s.configString("meegleExecutablePath")),
-		projects: string(projectBytes), defaultProject: defaultProject, account: account,
-	}
+	return account
 }
 
 func (s *app) observeRequirementListIdentity() {
@@ -84,6 +105,7 @@ func (s *app) clearRequirementListView() {
 	}
 	s.cancelRequirementDocumentPreparation()
 	s.requirements = nil
+	s.requirementsFetchedAt = 0
 	s.selectedRequirement, s.selectedRequirementKey = 0, ""
 	s.requirementsRequested, s.requirementsLoading, s.requirementsLoaded = false, false, false
 	s.requirementsLoadError = ""

@@ -16,9 +16,8 @@ func (s *app) requirementDetails(c *ui.Context, p palette) {
 			label(c, title, 14, p.text).FontWeight(400).Grow(1).MinWidth(0).Wrap().Tooltip(title)
 			if t.requirementURL != "" {
 				s.renderRequirementReaderActions(c, p, reader, func(menu *overflowMenuBuilder) {
-					metadata := s.taskRequirementMetadataFor(t)
-					if menu.Item("refresh-requirement", "刷新需求、正文和评论").Icon("refresh").Disabled(metadata.Status == requirementMetadataLoading || requirementReaderLoading(reader)).Chosen() {
-						s.refreshRequirementReader(reader, func() { s.requestTaskRequirementMetadata(t, true) })
+					if menu.Item("refresh-requirement", s.requirementRefreshLabel(t.requirementURL)).Icon("refresh").Disabled(s.requirementRefreshing(t.requirementURL)).Chosen() {
+						s.startRequirementRefresh(t.requirementURL)
 					}
 				})
 			}

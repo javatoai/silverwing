@@ -155,6 +155,9 @@ func (s *Service) listRequirements(ctx context.Context, config domain.AppConfig,
 			return nil, cacheErr
 		}
 		if hit {
+			if typed, ok := cached.(participatedResult); ok {
+				return s.overlayRequirementList(s.requirementOverlayIdentity(keys.Identity), typed), nil
+			}
 			return cached, nil
 		}
 	}
@@ -180,6 +183,9 @@ func (s *Service) listRequirements(ctx context.Context, config domain.AppConfig,
 		if typed, ok := result.(participatedResult); ok && requirementListResultCacheable(typed) {
 			s.persistParticipatedListCache(keys, typed, force)
 		}
+	}
+	if typed, ok := result.(participatedResult); ok {
+		return s.overlayRequirementList(s.requirementOverlayIdentity(keys.Identity), typed), nil
 	}
 	return result, nil
 }
@@ -922,7 +928,7 @@ func (s *Service) readRequirement(ctx context.Context, config domain.AppConfig, 
 	}
 	key := requirementCacheKey("body", identity, item)
 	return s.requirementDocumentCoordinator().read(ctx, key, force, func(shared context.Context, request *requirementBodyRequest) (RequirementReadResult, error) {
-		return s.fetchRequirementDocument(shared, config, item, identity, session.generation, key, request)
+		return s.fetchRequirementDocument(shared, config, item, identity, session.generation, key, request, boolValue(payload, "fullRefresh"))
 	})
 }
 

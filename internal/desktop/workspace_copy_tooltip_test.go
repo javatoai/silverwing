@@ -68,7 +68,6 @@ func (f *workspaceCopyTooltipFixture) tester(width int, dark bool, top float32, 
 func workspaceCopyTooltipTargets(f *workspaceCopyTooltipFixture) []struct{ action, tooltip, value, feedback string } {
 	return []struct{ action, tooltip, value, feedback string }{
 		{"复制项目名", "点击复制项目名\n" + f.w.Name, f.w.Name, "已复制项目名"},
-		{"复制工作区路径", "点击复制完整工作区路径\n" + f.w.Path, f.w.Path, "已复制工作区路径"},
 		{"复制分支名", "点击复制分支名\n" + f.w.Branch, f.w.Branch, "已复制分支名"},
 	}
 }

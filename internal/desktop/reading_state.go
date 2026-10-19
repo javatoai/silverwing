@@ -640,7 +640,9 @@ func (s *ReadingStateStore) ScheduleSave(value ReadingSnapshot) error {
 	if s.timer != nil {
 		s.timer.Stop()
 	}
-	snapshot := value
+	// The caller keeps editing its live maps, tabs and reading positions.
+	// Own a bounded deep snapshot before handing it to the delayed writer.
+	snapshot := value.Bounded()
 	s.timer = time.AfterFunc(readingSaveDebounce, func() {
 		s.mu.Lock()
 		if revision == s.revision {

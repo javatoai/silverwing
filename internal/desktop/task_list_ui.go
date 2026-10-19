@@ -12,36 +12,14 @@ func (s *app) taskIndex(c *ui.Context, p palette) {
 	archived := s.page == "archive"
 	state := s.taskIndexBrowsingFor(archived)
 	rows := s.taskIndexRows(archived)
-	sections := s.taskIndexSections(archived, rows)
-	state.visibleRows = state.visibleRows[:0]
-	for _, section := range sections {
-		if section.groupID == "" || !state.collapsedGroups[section.groupID] {
-			state.visibleRows = append(state.visibleRows, section.rows...)
-		}
-	}
+	state.visibleRows = append(state.visibleRows[:0], rows...)
 	s.prepareTaskIndexHandles(state, archived)
 	ui.Column(c).Fill().MinWidth(0).Background(p.soft).Children(func() {
 		s.taskIndexToolbar(c, p, state)
 		ui.Divider(c)
 		ui.Scroll(c.Key("task-index-" + s.page)).TrackScroll(&state.scroll).Grow(1).MinHeight(0).Padding(8).Gap(4).Children(func() {
-			for _, section := range sections {
-				if section.groupID != "" {
-					s.taskIndexGroupHeader(c, p, state, section.groupID, section.title, len(section.rows))
-					if state.collapsedGroups[section.groupID] {
-						continue
-					}
-				} else if section.title != "" {
-					ui.Row(c).FillWidth().Height(27).Padding(0, 8).Gap(5).AlignItems(ui.Center).Children(func() {
-						if section.title == "置顶" {
-							icon(c, "pin", 13, p.blue)
-						}
-						label(c, section.title, 11, p.muted).Grow(1).SingleLine()
-						label(c, fmt.Sprint(len(section.rows)), 10, p.muted)
-					})
-				}
-				for _, index := range section.rows {
-					s.taskIndexTask(c, p, state, index)
-				}
+			for _, index := range rows {
+				s.taskIndexTask(c, p, state, index)
 			}
 			if len(rows) == 0 {
 				message := "还没有研发任务\n请在需求列表中创建任务。"
@@ -190,32 +168,11 @@ func (s *app) focusTaskIndexRow(c *ui.Context, state *taskIndexBrowsingState, po
 	s.markReadingInteraction()
 }
 
-func (s *app) taskIndexGroupHeader(c *ui.Context, p palette, state *taskIndexBrowsingState, groupID, name string, count int) {
-	button := ui.ButtonBase(c.Key("task-group-"+groupID)).Row().FillWidth().Height(31).Padding(5, 8).Gap(7).Radius(7).Label(name)
-	if button.Hovered() {
-		button.Background(p.side)
-	}
-	button.Children(func() {
-		marker := "▾"
-		if state.collapsedGroups[groupID] {
-			marker = "›"
-		}
-		label(c, marker, 13, p.muted).Width(12)
-		label(c, name, 12, p.text).FontWeight(600).Grow(1).SingleLine()
-		label(c, fmt.Sprint(count), 10, p.muted)
-	})
-	if button.Clicked() {
-		state.collapsedGroups[groupID] = !state.collapsedGroups[groupID]
-		s.markReadingInteraction()
-	}
-}
-
 func (s *app) taskIndexTask(c *ui.Context, p palette, state *taskIndexBrowsingState, i int) {
 	t := s.tasks[i]
 	key := taskNavigationKey(t)
-	pinned := s.taskIsPinned(t)
 	selected := s.selected == i
-	row := ui.Row(c.Key("task-row-" + key)).FillWidth().MinWidth(0).Height(52).Radius(8).AlignItems(ui.Center)
+	row := ui.Row(c.Key("task-row-" + key)).FillWidth().MinWidth(0).Height(40).Radius(8).AlignItems(ui.Center)
 	if selected {
 		row.Background(p.selected)
 	} else if row.Hovered() {
@@ -227,18 +184,22 @@ func (s *app) taskIndexTask(c *ui.Context, p palette, state *taskIndexBrowsingSt
 		}
 		button := ui.ButtonBase(c.Key("task-"+t.id)).Bind(state.rowHandles[key]).Grow(1).MinWidth(0).
 			FillHeight().Padding(5, 8).Radius(7).Label(t.title).Tooltip(t.title)
+		pinned := s.taskIsPinned(t)
+		if pinned {
+			button.Description("已置顶")
+		}
 		button.Children(func() {
-			ui.Column(c).FillWidth().MinWidth(0).Gap(2).Children(func() {
+			ui.Row(c).FillWidth().MinWidth(0).Gap(8).AlignItems(ui.Center).Children(func() {
+				if pinned {
+					ui.Icon(c, icons["pin"]).Width(16).Height(16).Shrink(0).TextColor(p.blue).
+						Role(ui.RoleImage).Label("已置顶：" + t.title).Tooltip("已置顶")
+				}
 				weight := 400
 				if selected {
 					weight = 600
 				}
-				label(c, t.title, 14, p.text).FontWeight(weight).FillWidth().SingleLine()
-				ui.Row(c).FillWidth().MinWidth(0).Gap(5).AlignItems(ui.Center).Children(func() {
-					context := firstNonEmpty(s.taskGroupName(t), t.requirementID)
-					label(c, context, 10, p.muted).Grow(1).MinWidth(0).SingleLine().Tooltip(context)
-					taskIndexStatus(c, s.taskRequirementStatus(t), p)
-				})
+				label(c, t.title, 14, p.text).FontWeight(weight).Grow(1).MinWidth(48).SingleLine()
+				taskIndexStatus(c, s.taskRequirementStatus(t), p)
 			})
 		})
 		if state.revealTaskKey == key {
@@ -262,21 +223,8 @@ func (s *app) taskIndexTask(c *ui.Context, p palette, state *taskIndexBrowsingSt
 		if button.Clicked() {
 			s.openTaskIndex(i)
 		}
-		pinLabel, pinColor := "置顶任务："+t.title, p.muted
-		if pinned {
-			pinLabel, pinColor = "取消置顶："+t.title, p.blue
-		}
-		pin := ui.ButtonBase(c.Key("task-pin-"+key)).Width(28).Height(30).Shrink(0).Margin(0, 3).
-			Center().Radius(6).Label(pinLabel).Tooltip(pinLabel).Disabled(t.id == "")
-		if pin.Hovered() {
-			pin.Background(p.surface)
-		}
-		pin.Children(func() { icon(c, "pin", 15, pinColor) })
-		if pin.Clicked() {
-			s.markReadingInteraction()
-			s.setTaskPinned(t, !pinned)
-		}
 	})
+	row.ContextMenu(func(menu *ui.Menu) { s.taskContextMenu(c.Services(), t, menu) })
 }
 
 func taskIndexStatus(c *ui.Context, text string, p palette) {

@@ -457,29 +457,16 @@ func (s *app) renderRequirementContent(c *ui.Context, p palette, taskID, link st
 	if state.entered != reader {
 		state.entered = reader
 	}
-	if reader.body == nil && !reader.bodyLoading && reader.bodyError == "" {
+	if reader.body == nil && !reader.bodyLoading && reader.bodyError == "" && !s.requirementRefreshing(link) {
 		s.requestRequirementContent(reader, false, false)
 	}
-	if reader.comments == nil && !reader.commentsLoading && reader.commentsError == "" {
+	if reader.comments == nil && !reader.commentsLoading && reader.commentsError == "" && !s.requirementRefreshing(link) {
 		s.requestRequirementContent(reader, true, false)
 	}
 	ui.Column(c.Key("requirement-content-" + requirementReaderKey(taskID, link))).FillWidth().Grow(1).MinHeight(0).Gap(8).Children(func() {
 		s.renderRequirementReaderNotice(c, p, reader)
 		s.renderRequirementReadonlyMarkdownReader(c, p, reader)
 	})
-}
-
-// refreshRequirementReader keeps the entry-specific metadata refresh together
-// with the independent body and comment cache refreshes.
-func (s *app) refreshRequirementReader(reader *requirementReaderState, refreshMetadata func()) {
-	if requirementReaderLoading(reader) {
-		return
-	}
-	if refreshMetadata != nil {
-		refreshMetadata()
-	}
-	s.requestRequirementContent(reader, false, true)
-	s.requestRequirementContent(reader, true, true)
 }
 
 func requirementReaderLoading(reader *requirementReaderState) bool {

@@ -53,14 +53,24 @@ type RequirementCommentResource struct {
 }
 
 type RequirementMetadata struct {
-	ID           string                         `json:"id"`
-	ProjectKey   string                         `json:"projectKey"`
-	Type         string                         `json:"type"`
-	Title        *string                        `json:"title"`
-	Status       *string                        `json:"status"`
-	Participants domain.RequirementParticipants `json:"participants"`
-	Stale        bool                           `json:"stale"`
-	RefreshError string                         `json:"refreshError,omitempty"`
+	ID              string                               `json:"id"`
+	ProjectKey      string                               `json:"projectKey"`
+	Type            string                               `json:"type"`
+	Title           *string                              `json:"title"`
+	Status          *string                              `json:"status"`
+	Participants    domain.RequirementParticipants       `json:"participants"`
+	Stale           bool                                 `json:"stale"`
+	RefreshError    string                               `json:"refreshError,omitempty"`
+	CacheError      string                               `json:"cacheError,omitempty"`
+	EstimateError   string                               `json:"estimateError,omitempty"`
+	FetchedAt       int64                                `json:"fetchedAt,omitempty"`
+	WorkItem        *domain.ParticipatedWorkItem         `json:"workItem,omitempty"`
+	SprintEstimates map[string]RequirementSprintEstimate `json:"sprintEstimates,omitempty"`
+}
+
+type RequirementSprintEstimate struct {
+	Days      *string `json:"days"`
+	FetchedAt int64   `json:"fetchedAt"`
 }
 
 func requirementViewData(data any) any {
@@ -85,8 +95,13 @@ func requirementViewData(data any) any {
 		return RequirementComments{Comments: source.Comments, Warnings: source.Warnings, FetchedAt: source.FetchedAt,
 			Source: source.Source, Stale: source.Stale, RefreshError: source.RefreshError, CacheError: source.CacheError, CachePath: source.CachePath, CommentResources: resources}
 	case integrations.RequirementMetadataReadResult:
+		estimates := make(map[string]RequirementSprintEstimate, len(source.SprintEstimates))
+		for key, value := range source.SprintEstimates {
+			estimates[key] = RequirementSprintEstimate{Days: value.Days, FetchedAt: value.FetchedAt}
+		}
 		return RequirementMetadata{ID: source.ID, ProjectKey: source.ProjectKey, Type: source.Type, Title: source.Title,
-			Status: source.Status, Participants: source.Participants, Stale: source.Stale, RefreshError: source.RefreshError}
+			Status: source.Status, Participants: source.Participants, Stale: source.Stale, RefreshError: source.RefreshError,
+			CacheError: source.CacheError, EstimateError: source.EstimateError, FetchedAt: source.FetchedAt, WorkItem: source.WorkItem, SprintEstimates: estimates}
 	case integrations.RequirementResource:
 		return RequirementResource{URL: source.URL, Path: source.Path, Error: source.Error}
 	case integrations.RequirementCommentResource:

@@ -9,11 +9,38 @@ import (
 	"strings"
 	"time"
 
+	"github.com/egoist/mygo"
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/documents"
 )
 
 func (s *app) dispatch(action application.Action) {
+	s.dispatchTaskContextAction(action, nil)
+}
+
+// Task-menu actions carry a private, transient context in the action payload so
+// the backend can revalidate it without making that task the visible selection.
+func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMenuScope) {
+	var scopeUpdate func(func())
+	var scopeWindow *mygo.Window
+	if scope != nil {
+		scopedKind := action.Kind == "codex.run" || action.Kind == "task.materials-retry" ||
+			action.Kind == "task.archive" || action.Kind == "task.restore" || action.Kind == "task.delete"
+		if !scopedKind || action.TaskID != scope.taskID || !s.taskMenuScopeCurrent(*scope) {
+			s.lastError = "任务或配置已变化，请重新打开任务菜单。"
+			return
+		}
+		owned := *scope
+		scope = &owned
+		action = taskMenuContextAction(action, owned)
+		window := s.win
+		scopeWindow = window
+		scopeUpdate = taskContextUpdater(window, s.taskContextUpdate)
+		if scopeUpdate == nil {
+			s.lastError = errTaskContextChanged.Error()
+			return
+		}
+	}
 	if s.dispatchTagJobAction(action) {
 		return
 	}
@@ -133,8 +160,18 @@ func (s *app) dispatch(action application.Action) {
 		if err == nil {
 			err = watchBarrier.wait(ctx)
 		}
+		backendAcquired := false
 		if err == nil {
 			err = s.acquireBackend(ctx)
+			backendAcquired = err == nil
+		}
+		if err == nil && scope != nil {
+			err = waitForTaskMenuScope(ctx, scopeUpdate, func() bool {
+				if scopeWindow != nil && scopeWindow.IsDestroyed() {
+					return false
+				}
+				return s.taskMenuScopeCurrent(*scope)
+			}, func() bool { return scopeWindow != nil && scopeWindow.IsDestroyed() })
 		}
 		var result application.ActionResult
 		var refreshed application.Snapshot
@@ -166,6 +203,8 @@ func (s *app) dispatch(action application.Action) {
 					stopRefresh()
 				}
 			}
+		}
+		if backendAcquired {
 			s.releaseBackend()
 		}
 		if s.win == nil || s.win.IsDestroyed() {
@@ -197,6 +236,16 @@ func (s *app) dispatch(action application.Action) {
 			s.operationKind = ""
 			s.operationCancelling = false
 			s.cancelOperation = nil
+			if scope != nil && !s.taskMenuScopeCurrent(*scope) {
+				lifecycleOwnResult := backendDispatched && refreshErr == nil &&
+					s.taskLifecycleResultBelongsToContext(action, *scope, refreshed)
+				if !lifecycleOwnResult && action.Kind == "task.delete" {
+					s.closeStaleTaskDeleteSubmission(action)
+				}
+				if !lifecycleOwnResult {
+					return // A late task result cannot replace another context's UI.
+				}
+			}
 			s.settingsConfigMutationFinished(action)
 			if s.finishSettingsLogsAction(action, result, err) {
 				return

@@ -10,6 +10,7 @@ import (
 	"math"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -95,8 +96,8 @@ func (s *app) workspaceCommandsFor(t task, w application.Workspace) []domain.Wor
 	if !workspaceCommandHealthy(w) {
 		return nil
 	}
-	var config domain.AppConfig
-	if strings.TrimSpace(s.configJSON) == "" || json.Unmarshal([]byte(s.configJSON), &config) != nil {
+	config, err := s.readCurrentAppConfig()
+	if err != nil {
 		return nil
 	}
 	for _, group := range config.Groups {
@@ -114,6 +115,7 @@ func (s *app) workspaceCommandsFor(t task, w application.Workspace) []domain.Wor
 				commands := make([]domain.WorkspaceCommandConfig, 0, len(module.CustomCommands))
 				for _, command := range module.CustomCommands {
 					if command.Enabled {
+						command.Arguments = slices.Clone(command.Arguments)
 						commands = append(commands, command)
 					}
 				}

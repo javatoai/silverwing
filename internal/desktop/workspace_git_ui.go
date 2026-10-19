@@ -711,7 +711,7 @@ func workspaceGitWritesBlocked(s *app, item application.Workspace) bool {
 	if branch == "" {
 		return false
 	}
-	for _, value := range s.configArray("blockedGitWriteBranches") {
+	for _, value := range s.readConfigArray("blockedGitWriteBranches") {
 		if configured, ok := value.(string); ok && strings.EqualFold(strings.TrimSpace(configured), branch) {
 			return true
 		}

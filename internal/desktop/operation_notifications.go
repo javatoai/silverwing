@@ -31,6 +31,7 @@ func (s *app) renderOperationNotifications(c *ui.Context) {
 		}
 	}
 	s.operationNotifications.progress(c, "operation-progress", progress, s.operationKind, action, cancel)
+	s.renderRequirementRefreshProgressNotification(c)
 	s.operationNotifications.present(c, "operation", &s.lastMessage, &s.lastError)
 	if state := s.pageLocalRead; state != nil {
 		empty := ""
@@ -46,6 +47,20 @@ func (s *app) renderOperationNotifications(c *ui.Context) {
 	if jobs := s.systemOpenJobs; jobs != nil {
 		s.operationNotifications.present(c, "system-open", &jobs.message, &jobs.error)
 	}
+}
+
+func (s *app) renderRequirementRefreshProgressNotification(c *ui.Context) {
+	title := ""
+	if jobs := s.requirementRefreshJobs; jobs != nil {
+		identity := s.currentRequirementListIdentity()
+		for _, job := range jobs.current {
+			if job.ctx.Err() == nil && job.identity == identity {
+				title = "刷新中"
+				break
+			}
+		}
+	}
+	s.operationNotifications.progress(c, "requirement-refresh-progress", title, "", "", nil)
 }
 
 func operationProgressTitle(kind, title string) string {

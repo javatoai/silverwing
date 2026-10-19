@@ -83,13 +83,8 @@ func TestTaskNavigationSearchAndOrdering(t *testing.T) {
 		t.Fatalf("archive recent order: %v", got)
 	}
 	state.recentOnly = false
-	sections := s.taskIndexSections(false, s.taskIndexRows(false))
-	var displayed []int
-	for _, section := range sections {
-		displayed = append(displayed, section.rows...)
-	}
-	if !slices.Equal(displayed, []int{2, 0, 1, 4}) || sections[0].title != "置顶" || sections[len(sections)-1].title != "其他任务" {
-		t.Fatalf("pins must be unique and tasks without a configured group must remain visible: %+v", sections)
+	if displayed := s.taskIndexRows(false); !slices.Equal(displayed, []int{2, 0, 1, 4}) {
+		t.Fatalf("pins must be unique and tasks without a configured group must remain visible: %v", displayed)
 	}
 }
 
@@ -98,9 +93,9 @@ func TestTaskNavigationControlsPreserveCurrentDraft(t *testing.T) {
 	s.documentPath, s.documentContent, s.documentDirty = "draft.md", "尚未保存的修改", true
 	s.documentDrafts["draft.md"], s.documentDirtyMap["draft.md"] = s.documentContent, true
 	tester := taskNavigationTester(s, 240, 600)
-	navigationClick(t, tester, "置顶任务：修复超时")
+	navigationChooseTaskMenu(t, tester, "修复超时", "置顶任务")
 	if !s.taskIsPinned(s.tasks[2]) {
-		t.Fatal("pin button did not pin the task")
+		t.Fatal("context menu did not pin the task")
 	}
 	navigationClick(t, tester, "搜索任务")
 	tester.Type("不会匹配")
@@ -125,7 +120,7 @@ func TestTaskNavigationControlsPreserveCurrentDraft(t *testing.T) {
 	if s.selected != 2 || !slices.Equal(s.taskNavigationFor().value.Recent, []string{taskNavigationKey(s.tasks[2])}) {
 		t.Fatal("Enter did not explicitly open and record the focused task")
 	}
-	navigationClick(t, tester, "取消置顶：修复超时")
+	navigationChooseTaskMenu(t, tester, "修复超时", "取消置顶")
 	if s.taskIsPinned(s.tasks[2]) || s.selected != 2 || len(s.taskNavigationFor().value.Recent) != 1 {
 		t.Fatal("unpinning changed the current task or history")
 	}
@@ -168,16 +163,15 @@ func TestTaskNavigationRecentKeyboardKeepsVisitOrderUntilActivation(t *testing.T
 	}
 }
 
-func TestTaskNavigationKeyboardSkipsCollapsedGroups(t *testing.T) {
+func TestTaskNavigationKeyboardUsesFlatOrder(t *testing.T) {
 	s := taskNavigationFixture()
 	s.setTaskPinned(s.tasks[2], true)
-	s.taskIndexBrowsingFor(false).collapsedGroups["backend"] = true
 	tester := taskNavigationTester(s, 240, 450)
 	navigationClick(t, tester, "搜索任务")
-	for _, title := range []string{"修复超时", "界面体验", "历史项目任务"} {
+	for _, title := range []string{"修复超时", "支付 API 联调", "界面体验", "历史项目任务"} {
 		tester.Key(0, ui.KeyDown)
 		if !tester.Focused(title) {
-			t.Fatalf("keyboard order must match pinned, expanded groups and orphan rows: expected %q", title)
+			t.Fatalf("keyboard order must match the flat list with pins first: expected %q", title)
 		}
 	}
 	tester.Key(0, ui.KeyHome)
@@ -246,16 +240,16 @@ func TestTaskNavigationCategorySwitchPreservesScroll(t *testing.T) {
 }
 
 func TestTaskNavigationRejectedSelectionKeepsRouteAndDraft(t *testing.T) {
-	for _, route := range []string{"row", "archive", "sidebar", "task.create", "task.restore"} {
+	for _, route := range []string{"row", "archive", "sidebar", "task.create"} {
 		t.Run(route, func(t *testing.T) {
 			s := taskNavigationFixture()
-			if route == "sidebar" || route == "task.restore" {
+			if route == "sidebar" {
 				s.page, s.selected = "archive", 3
 			}
 			page, selected := s.page, s.selected
 			active := s.taskIndexBrowsingFor(false)
 			if route != "row" {
-				active.search, active.recentOnly, active.collapsedGroups["client"] = "api", true, true
+				active.search, active.recentOnly = "api", true
 			}
 			search, recent := active.search, active.recentOnly
 			s.documentPath, s.documentContent, s.documentDirty = "draft.md", "尚未提交的输入", true
@@ -279,8 +273,6 @@ func TestTaskNavigationRejectedSelectionKeepsRouteAndDraft(t *testing.T) {
 				}
 			case "task.create":
 				s.applyTaskSnapshotSelection(application.Action{Kind: route}, application.ActionResult{Data: map[string]any{"taskDirectoryName": "task-ui"}})
-			case "task.restore":
-				s.applyTaskLifecycleSnapshotSelection(application.Action{Kind: route, TaskID: "task-ui"}, application.ActionResult{})
 			}
 			if s.page != page || s.selected != selected || active.search != search || active.recentOnly != recent || active.revealTaskKey != "" || !s.documentDirty || s.documentContent != "尚未提交的输入" || s.documentDrafts["draft.md"] != s.documentContent || s.markdown == nil || !s.markdown.doc.Composing() || s.lastError != editor.ErrComposing.Error() || len(s.taskNavigationFor().value.Recent) != 0 {
 				t.Fatalf("refused navigation changed the page, selection, filter, draft or history: page=%s selected=%d search=%q recent=%t error=%q", s.page, s.selected, active.search, active.recentOnly, s.lastError)
@@ -306,6 +298,10 @@ func TestTaskNavigationPreferencesFollowTaskIdentity(t *testing.T) {
 	restarted.tasks[0].groupID = "new-group"
 	if !restarted.taskIsPinned(restarted.tasks[0]) || !reflect.DeepEqual(restarted.taskNavigationFor().value.Recent, s.taskNavigationFor().value.Recent) {
 		t.Fatal("restart, archive or task-root relocation lost personal navigation")
+	}
+	restarted.page = "archive"
+	if !taskNavigationTester(restarted, 240, 520).HasText("已置顶：" + restarted.tasks[0].title) {
+		t.Fatal("restored archived pin has no visible status icon")
 	}
 	restarted.tasks[0].createdAt = "2026-02-01"
 	if restarted.taskIsPinned(restarted.tasks[0]) {
@@ -341,8 +337,8 @@ func TestTaskNavigationPreferenceFailureDoesNotBlockOpening(t *testing.T) {
 	}
 }
 
-func TestTaskNavigationLifecycleRevealsTargetOnce(t *testing.T) {
-	for _, kind := range []string{"task.create", "task.restore"} {
+func TestTaskNavigationCreationRevealsTargetOnce(t *testing.T) {
+	for _, kind := range []string{"task.create"} {
 		t.Run(kind, func(t *testing.T) {
 			s := taskNavigationFixture()
 			for index := 0; index < 18; index++ {
@@ -350,21 +346,17 @@ func TestTaskNavigationLifecycleRevealsTargetOnce(t *testing.T) {
 			}
 			target := s.tasks[len(s.tasks)-1]
 			active, archived := s.taskIndexBrowsingFor(false), s.taskIndexBrowsingFor(true)
-			active.search, active.recentOnly, active.collapsedGroups["client"] = "不存在", true, true
+			active.search, active.recentOnly = "不存在", true
 			archived.search, archived.recentOnly = "归档查询", true
 			tester := taskNavigationTester(s, 240, 400)
 			action := application.Action{Kind: kind, TaskID: target.id}
-			if kind == "task.create" {
-				s.applyTaskSnapshotSelection(action, application.ActionResult{Data: map[string]any{"taskDirectoryName": target.id}})
-			} else {
-				s.applyTaskLifecycleSnapshotSelection(action, application.ActionResult{})
-			}
+			s.applyTaskSnapshotSelection(action, application.ActionResult{Data: map[string]any{"taskDirectoryName": target.id}})
 			tester.Frame()
 			bounds, found := tester.Find(target.title)
 			if !found || bounds.Y < 80 || bounds.Y+bounds.H > 352 || active.scroll.Y <= 0 || active.revealTaskKey != "" {
-				t.Fatalf("new/restored task was not scrolled into view exactly once: bounds=%+v found=%t scroll=%+v reveal=%q", bounds, found, active.scroll, active.revealTaskKey)
+				t.Fatalf("new task was not scrolled into view exactly once: bounds=%+v found=%t scroll=%+v reveal=%q", bounds, found, active.scroll, active.revealTaskKey)
 			}
-			if s.currentTask().id != target.id || active.search != "" || active.recentOnly || active.collapsedGroups["client"] || archived.search != "归档查询" || !archived.recentOnly || len(s.taskNavigationFor().value.Recent) != 0 {
+			if s.currentTask().id != target.id || active.search != "" || active.recentOnly || archived.search != "归档查询" || !archived.recentOnly || len(s.taskNavigationFor().value.Recent) != 0 {
 				t.Fatal("lifecycle reveal failed to isolate filters or created a fake visit")
 			}
 			tester.Scroll(100, 220, 0, 2000)
@@ -387,16 +379,20 @@ func TestTaskNavigationNarrowLayout(t *testing.T) {
 				s.tasks[0].status = "等待研发负责人和业务测试人员联合确认"
 				s.setTaskPinned(s.tasks[0], true)
 				tester := taskNavigationTester(s, width, 520)
-				for _, label := range []string{"搜索任务", "全部", "最近访问", "取消置顶：" + s.tasks[0].title, "查看归档"} {
+				for _, label := range []string{"搜索任务", "全部", "最近访问", s.tasks[0].title, "查看归档"} {
 					bounds, found := tester.Find(label)
 					if !found || bounds.X < 0 || bounds.X+bounds.W > float32(width) || bounds.W < 20 || bounds.H < 20 {
 						t.Fatalf("control %q is clipped or too small: %+v found=%t", label, bounds, found)
 					}
 				}
 				status, found := tester.Find(s.tasks[0].status)
-				pin, pinFound := tester.Find("取消置顶：" + s.tasks[0].title)
-				if !found || !pinFound || status.X+status.W > pin.X {
-					t.Fatalf("long requirement status overlaps the pin control: status=%+v pin=%+v", status, pin)
+				if !found || status.X < 0 || status.X+status.W > float32(width)-8 {
+					t.Fatalf("long requirement status exceeds the task row: status=%+v", status)
+				}
+				row, _ := tester.Find(s.tasks[0].title)
+				centerOffset := status.Y + status.H/2 - (row.Y + row.H/2)
+				if centerOffset < -1 || centerOffset > 1 {
+					t.Fatalf("task name and status must share a line: row=%+v status=%+v", row, status)
 				}
 				captureReleaseNotice(t, tester, fmt.Sprintf("task-navigation-%d-dark-%t", width, dark))
 			})

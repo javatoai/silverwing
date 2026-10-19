@@ -40,6 +40,8 @@ type requirementMetadata struct {
 	Participants domain.RequirementParticipants `json:"participants"`
 	Stale        bool                           `json:"stale"`
 	RefreshError string                         `json:"refreshError,omitempty"`
+	CacheError   string                         `json:"cacheError,omitempty"`
+	WorkItem     *domain.ParticipatedWorkItem   `json:"workItem,omitempty"`
 }
 
 type taskRequirementMetadataState struct {
@@ -64,7 +66,7 @@ func requirementTypeGroupLabel(item application.Requirement) string {
 	}
 }
 func (s *app) requestRequirements(sprintKey string, refresh bool) {
-	if len(s.configArray("meegleProjects")) == 0 {
+	if len(s.readConfigArray("meegleProjects")) == 0 {
 		return
 	}
 	if sprintKey == "" {
@@ -100,6 +102,7 @@ func (s *app) applyRequirementsResult(result application.ActionResult) {
 		return
 	}
 	s.requirements = items
+	s.requirementsFetchedAt = dataInt64(data, "fetchedAt")
 	s.requirementsLoaded = true
 	s.requirementsLoading = false
 	s.requirementsLoadError = ""
@@ -111,6 +114,7 @@ func (s *app) applyRequirementsResult(result application.ActionResult) {
 		s.requirementsLoadError = "读取 Sprint 列表格式失败：" + err.Error()
 	}
 	s.requirementsSelectedSprintKey = dataString(data, "selectedSprintKey")
+	s.overlayRefreshedRequirements(s.requirements, s.requirementsSelectedSprintKey, s.requirementsFetchedAt)
 	if selected, ok := s.selectedRequirementByKey(s.selectedRequirementKey); ok {
 		s.selectedRequirement = selected
 	} else if len(s.requirements) > 0 {
@@ -188,6 +192,9 @@ func (s *app) ensureTaskRequirementMetadata() {
 
 func (s *app) requestTaskRequirementMetadata(item task, force bool) {
 	url := item.requirementURL
+	if s.requirementRefreshing(url) {
+		return
+	}
 	if item.id == "" {
 		return
 	}
@@ -395,12 +402,19 @@ func (s *app) renderTaskRequirementParticipants(c *ui.Context, p palette, item t
 	if strings.TrimSpace(item.requirementURL) == "" {
 		return
 	}
-	participants := s.taskRequirementMetadataFor(item).Metadata.Participants
-	values := make([]string, 0, 2)
+	metadata := s.taskRequirementMetadataFor(item).Metadata
+	participants := metadata.Participants
+	var developers []domain.RequirementPerson
+	if metadata.WorkItem != nil {
+		developers = metadata.WorkItem.Developers
+		participants.QCOwners, participants.ProductManagers = metadata.WorkItem.QCOwners, metadata.WorkItem.ProductManagers
+	}
+	values := make([]string, 0, 3)
 	for _, role := range []struct {
 		label  string
 		people []domain.RequirementPerson
 	}{
+		{"研发", developers},
 		{"测试", participants.QCOwners},
 		{"产品", participants.ProductManagers},
 	} {
@@ -462,7 +476,7 @@ func (s *app) renderRequirementMetadataSummary(c *ui.Context, p palette, item ap
 
 func (s *app) replicaRequirements(c *ui.Context, p palette) {
 	s.observeRequirementListIdentity()
-	if !s.loading && !s.requirementsRequested && len(s.configArray("meegleProjects")) > 0 {
+	if !s.loading && !s.requirementsRequested && len(s.readConfigArray("meegleProjects")) > 0 {
 		s.requestRequirements("", false)
 	}
 	width, _ := c.Size()
@@ -485,7 +499,7 @@ func (s *app) replicaRequirements(c *ui.Context, p palette) {
 		return
 	}
 	ui.Column(c).Grow(1).MinWidth(0).MinHeight(0).Padding(8).Background(p.bg).Children(func() {
-		if len(s.configArray("meegleProjects")) == 0 {
+		if len(s.readConfigArray("meegleProjects")) == 0 {
 			ui.Column(c).Grow(1).Center().Gap(10).Padding(24).Background(p.surface).Border(1, p.line).Radius(16).Children(func() {
 				icon(c, "requirements", 24, p.muted)
 				label(c, "尚未配置 Meegle 项目", 15, p.text).FontWeight(600)
@@ -714,6 +728,17 @@ func (s *app) requirementListItem(c *ui.Context, p palette, item application.Req
 	}
 	selected := index >= 0 && index == s.selectedRequirement
 	button := ui.ButtonBase(c.Key("requirement-"+requirementKey(item))).Column().FillWidth().Padding(8, 9).Gap(3).Radius(9).Border(1, p.line).Label(item.Title)
+	scope := s.currentRequirementListIdentity()
+	button.ContextMenu(func(menu *ui.Menu) {
+		name := "刷新"
+		running := s.requirementRefreshing(item.URL)
+		if running {
+			name = "刷新中…"
+		}
+		if menu.Item(name).Icon(icons["refresh"]).Disabled(running || s.backend == nil || scope != s.currentRequirementListIdentity()).Chosen() {
+			s.startRequirementRefresh(item.URL)
+		}
+	})
 	if selected {
 		button.Background(p.selected).Border(1, p.blue)
 	} else {
@@ -757,12 +782,12 @@ func (s *app) requirementDetail(c *ui.Context, p palette, item application.Requi
 	ui.Column(c).Grow(1).MinWidth(0).MinHeight(0).Gap(10).Padding(16).Background(p.surface).Border(1, p.line).Radius(14).Children(func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Start).Children(func() {
 			label(c, item.Title, 14, p.text).FontWeight(400).Grow(1).Wrap()
-			if iconButton(c, "create-task-from-requirement", "plus", "基于需求创建任务", p).Clicked() {
+			if primaryIconButton(c, "create-task-from-requirement", "plus", "基于需求创建任务", p).Clicked() {
 				s.openTaskCreateForm("基于需求创建任务", item.Title, item.URL)
 			}
 			s.renderRequirementReaderActions(c, p, reader, func(menu *overflowMenuBuilder) {
-				if menu.Item("refresh", "刷新需求、正文和评论").Icon("refresh").Disabled(s.requirementsLoading || requirementReaderLoading(reader)).Chosen() {
-					s.refreshRequirementReader(reader, func() { s.requestRequirements(s.requirementsSelectedSprintKey, true) })
+				if menu.Item("refresh", s.requirementRefreshLabel(item.URL)).Icon("refresh").Disabled(s.requirementRefreshing(item.URL)).Chosen() {
+					s.startRequirementRefresh(item.URL)
 				}
 			})
 		})

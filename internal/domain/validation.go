@@ -16,10 +16,11 @@ import (
 const MaxDirectoryNameLength = 80
 
 var (
-	semverPattern     = regexp.MustCompile("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")
-	sourceIDPattern   = regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-	gitRefPattern     = regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9._/@-]*$")
-	moduleNamePattern = regexp.MustCompile("^[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*$")
+	semverPattern            = regexp.MustCompile("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")
+	sourceIDPattern          = regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+	gitRefPattern            = regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9._/@-]*$")
+	moduleNamePattern        = regexp.MustCompile("^[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*$")
+	materialsWikiPathPattern = regexp.MustCompile("^/wiki/[A-Za-z0-9]+/?$")
 )
 
 func ValidateSchemaVersion(actual, expected string) bool {
@@ -120,7 +121,7 @@ func ValidateMaterialsFeishuTarget(raw string) (*string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("请输入有效的飞书知识库地址")
 	}
-	if u.Scheme != "https" || u.Host == "" || u.User != nil || !regexp.MustCompile("^/wiki/[A-Za-z0-9]+/?$").MatchString(u.Path) {
+	if u.Scheme != "https" || u.Host == "" || u.User != nil || !materialsWikiPathPattern.MatchString(u.Path) {
 		return nil, fmt.Errorf("飞书同步目标需要 HTTPS 知识库 /wiki/ 地址")
 	}
 	host := strings.ToLower(u.Hostname())

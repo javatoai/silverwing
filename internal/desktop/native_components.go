@@ -44,6 +44,22 @@ func iconButton(c *ui.Context, key, image, name string, p palette) ui.Element {
 	return b
 }
 
+func primaryIconButton(c *ui.Context, key, image, name string, p palette) ui.Element {
+	b := ui.ButtonBase(c.Key(key)).Width(34).Height(34).Radius(20).Center().Label(name).Tooltip(name)
+	background := ui.Hex("#356AE6")
+	if b.Hovered() {
+		background = ui.Hex("#285CD3")
+	}
+	if b.Pressed() {
+		background = ui.Hex("#2454C6")
+	}
+	if b.Focused() {
+		b.Border(2, p.text)
+	}
+	b.Background(background).Children(func() { icon(c, image, 18, ui.Hex("#FFFFFF")) })
+	return b
+}
+
 func iconButtonDisabled(c *ui.Context, key, image, name string, p palette, disabled bool) ui.Element {
 	return iconButtonRunning(c, key, image, name, p, disabled, false)
 }

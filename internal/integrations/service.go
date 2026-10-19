@@ -36,6 +36,7 @@ type Service struct {
 	identityRequests          map[string]*requirementIdentityRequest
 	naming                    *requirementNamingCoordinator
 	requirementDocuments      *requirementDocumentCoordinator
+	requirementReads          requirementReadOrder
 	active                    map[string]context.CancelFunc
 	lastSync                  any
 }

@@ -286,6 +286,7 @@ type menuState struct {
 	themed               bool
 	scope                string
 	popup                *menuPopup
+	choiceAfterPass      func()
 }
 
 // shownMenu is a context menu built for the element id. commands are the
@@ -487,7 +488,10 @@ func (rt *engine) showMenu() {
 	rt.menu.pending = nil
 	if rt.menu.themed {
 		rt.menu.popup = newMenuPopup(p, rt.menu.scope)
-		rt.requestFrame()
+		// showMenu runs inside runFrame, where requestFrame deliberately
+		// ignores requests. Promote any paint-only animation to a full
+		// build as well, so the next frame actually contains the popup.
+		rt.changed()
 		return
 	}
 	rt.host.popupMenu(p.menu, p.x, p.y, func(id int) { rt.menuChosen(p, id) })
@@ -519,7 +523,9 @@ func (rt *engine) menuChosen(p *shownMenu, id int) {
 		mr := &rt.menu
 		mr.chosen, mr.chosenButton, mr.choice, mr.label, mr.chosenText = p.id, p.button, id, p.labels[id-1], p.text
 	}
-	rt.requestFrame()
+	// A native host may deliver the choice synchronously inside showMenu,
+	// after the frame's build passes. Preserve it for a full new build.
+	rt.changed()
 }
 
 // editItem is an item of a text's editing menu: a separator without a

@@ -187,61 +187,6 @@ func (s *app) taskDetails(c *ui.Context, p palette) {
 					s.requestWorkspaceGitStatus(true)
 				}
 			})
-			iconGroup(c, p, func() {
-				s.overflowMenuOwnedAt(c, p, "task-more", "task-more-"+t.id, "任务更多操作", false, ui.AnchorBottomLeft, ui.AnchorTopLeft, func(m *overflowMenuBuilder) {
-					if m.Item("codex-open", "在 Codex 中打开").Icon("launch").Chosen() {
-						s.act("codex.run", t.id, "", "", t.path, "", nil)
-					}
-					if m.Item("codex-config", "Codex 配置").Icon("settings").Chosen() {
-						s.openCodexAI(t.path, "MCP")
-					}
-					if m.Item("codex-sessions", "Codex 会话关联").Icon("tasks").Chosen() {
-						s.openCodexAI(t.path, "会话")
-					}
-					m.Separator()
-					if m.Item("merge-main-batch", "批量合并主分支").Icon("branch").Disabled(s.busy || t.archived || !s.taskHasMainBranchMergeBatch(t)).Chosen() {
-						s.openWorkspaceMergeBatch(t)
-					}
-					if t.materialsReady() {
-						m.Separator()
-						if m.Item("materials-open", "打开任务资料目录").Icon("folder").Chosen() {
-							s.act("system.open", t.id, "", "", t.materialsPath, "", map[string]any{"desktopSystemOpenDirectory": true})
-						}
-						if m.Item("materials-copy-path", "复制任务资料路径").Icon("copy").Chosen() {
-							s.copyTextToClipboard(c.Services(), t.materialsPath, "已复制任务资料路径")
-						}
-					} else if t.requirementURL != "" {
-						configured := strings.TrimSpace(s.configString("requirementMaterialsRoot")) != "" && strings.TrimSpace(s.configString("requirementMaterialsSubdirectory")) != ""
-						if !configured {
-							m.Separator()
-							if m.Item("materials-configure", "配置任务资料").Icon("settings").Chosen() {
-								s.page, s.settingsTab, s.settingsPage, s.settingsLoaded = "settings", "存储", "paths", ""
-							}
-						} else {
-							label := "关联任务资料"
-							if t.materialsFailed() {
-								label = "重试关联任务资料"
-							}
-							m.Separator()
-							if m.Item("materials-retry", label).Icon("refresh").Chosen() {
-								s.act("task.materials-retry", t.id, "", "", "", "", nil)
-							}
-						}
-					}
-					m.Separator()
-					if t.archived {
-						if m.Item("restore", "恢复任务").Icon("archive").Chosen() {
-							s.act("task.restore", t.id, "", "", "", "", nil)
-						}
-					} else if m.Item("archive", "归档任务").Icon("archive").Chosen() {
-						s.openTaskArchiveDialog(t)
-					}
-					m.Separator()
-					if m.Item("delete", "删除任务").Icon("delete").Disabled(s.busy).Dangerous().Chosen() {
-						s.openTaskDeleteDialog(t)
-					}
-				})
-			})
 		})
 		for i, workspace := range t.workspaces {
 			s.workspaceCard(c, p, t, workspace, i)
@@ -282,22 +227,28 @@ func taskHasPhysicalWorkspace(t task) bool {
 }
 
 func (s *app) taskAddableServices(t task) []application.Service {
-	if t.archived {
+	if t.archived || t.groupID == "" {
 		return nil
 	}
 	used := taskUsedServiceIDs(t)
 	services := make([]application.Service, 0)
-	group, err := s.taskAppendGroup(t)
+	config, err := s.readSnapshotAppConfig()
 	if err == nil {
-		for _, configured := range group.Services {
-			if !configured.Enabled || used[configured.ID] {
+		for _, group := range config.Groups {
+			if group.ID != t.groupID {
 				continue
 			}
-			service := application.Service{ID: configured.ID, Name: configured.DisplayName, RepositoryID: configured.RepositoryID, GroupID: group.ID}
-			for _, module := range configured.Modules {
-				service.Modules = append(service.Modules, application.Module{ID: module.ID, Name: module.Name, MasterBranch: configured.EffectiveMasterBranch(module), Strategy: string(module.Strategy)})
+			for _, configured := range group.Services {
+				if !configured.Enabled || used[configured.ID] {
+					continue
+				}
+				service := application.Service{ID: configured.ID, Name: configured.DisplayName, RepositoryID: configured.RepositoryID, GroupID: group.ID}
+				for _, module := range configured.Modules {
+					service.Modules = append(service.Modules, application.Module{ID: module.ID, Name: module.Name, MasterBranch: configured.EffectiveMasterBranch(module), Strategy: string(module.Strategy)})
+				}
+				services = append(services, service)
 			}
-			services = append(services, service)
+			break
 		}
 	}
 	return services

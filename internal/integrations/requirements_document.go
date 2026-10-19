@@ -162,7 +162,7 @@ func acquireRequirementDocumentPermit(ctx context.Context, slots chan struct{}) 
 }
 
 func (s *Service) fetchRequirementDocument(ctx context.Context, config domain.AppConfig, item domain.ParticipatedWorkItem,
-	identity string, identityGeneration uint64, key string, request *requirementBodyRequest) (RequirementReadResult, error) {
+	identity string, identityGeneration uint64, key string, request *requirementBodyRequest, fullRefresh bool) (RequirementReadResult, error) {
 	var saved *requirementDocument
 	cacheError := ""
 	if identity != "" {
@@ -215,7 +215,19 @@ func (s *Service) fetchRequirementDocument(ctx context.Context, config domain.Ap
 	if err := s.verifyRequirementIdentitySession(ctx, config, identity, identityGeneration); err != nil {
 		return RequirementReadResult{}, err
 	}
-	document, err := c.commitBody(key, request, func() (*requirementDocument, error) { return s.writeRequirementDocument(key, item, body, fetchedAt) })
+	if fullRefresh {
+		if err := s.verifyRequirementRefresh(ctx, config, identity); err != nil {
+			return RequirementReadResult{}, err
+		}
+	}
+	document, err := c.commitBody(key, request, func() (*requirementDocument, error) {
+		if fullRefresh {
+			if err := s.verifyRequirementReadConfig(config); err != nil {
+				return nil, err
+			}
+		}
+		return s.writeRequirementDocument(key, item, body, fetchedAt)
+	})
 	if errors.Is(err, errRequirementBodySuperseded) {
 		return RequirementReadResult{}, nil
 	}

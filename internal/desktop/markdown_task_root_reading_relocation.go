@@ -180,6 +180,7 @@ func (s *app) applyMarkdownTaskRootReadingRelocation(state *markdownTaskRootRead
 	}
 	session.store.CancelPending()
 	session.cache, session.startupIdentity = state.cache, state.startup
+	session.dirty = true
 	session.scrollStates, session.restoredMaterials = state.scrolls, state.restored
 	session.pendingTaskPath, session.pendingRoot = state.pendingTask, state.pendingRoot
 	session.pendingMaterialsUIKey, session.pendingMaterialsUIPath, session.pendingMaterialsUITabs = state.pendingKey, state.pendingPath, state.pendingTabs

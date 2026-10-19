@@ -34,6 +34,7 @@ type participatedListCacheKeys struct {
 }
 
 func (s *Service) loadParticipatedList(ctx context.Context, key string, force bool, load func(context.Context) (any, error)) (any, bool, error) {
+	startedAt := requirementUnixMillis()
 	if !force {
 		cached, _, cacheErr := s.readRequirementListCache(key)
 		if cacheErr == nil && cached != nil {
@@ -48,7 +49,7 @@ func (s *Service) loadParticipatedList(ctx context.Context, key string, force bo
 		return nil, false, err
 	}
 	if typed, ok := result.(participatedResult); ok {
-		typed.FetchedAt = requirementUnixMillis()
+		typed.FetchedAt = startedAt
 		return typed, false, nil
 	}
 	return result, false, nil

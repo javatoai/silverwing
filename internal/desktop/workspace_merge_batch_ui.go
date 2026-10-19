@@ -3,6 +3,7 @@ package desktop
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 
@@ -21,6 +22,8 @@ type workspaceMergeBatchItemState struct {
 }
 
 type workspaceMergeBatchUIState struct {
+	scope                           taskActionScope
+	configJSON                      string
 	TaskID, TaskPath, TaskCreatedAt string
 	TaskGroupID, TaskFeatureBranch  string
 	Token                           uint64
@@ -47,19 +50,48 @@ func (s *app) openWorkspaceMergeBatch(t task) {
 		TaskID: t.id, TaskPath: t.path, TaskCreatedAt: t.createdAt, TaskGroupID: t.groupID, TaskFeatureBranch: t.branch, Open: true,
 		Items: make([]workspaceMergeBatchItemState, 0, len(t.workspaces)),
 	}
+	state.scope, _ = s.taskActionScopeFor(t)
+	state.configJSON = s.configJSON
 	for _, item := range t.workspaces {
 		source, reason := s.workspaceMergeBatchEligibility(t, item)
 		state.Items = append(state.Items, workspaceMergeBatchItemState{
-			Workspace: item, SourceRef: source, DisabledReason: reason, Selected: reason == "",
+			Workspace: workspaceMergeBatchSnapshot(item), SourceRef: source, DisabledReason: reason, Selected: reason == "",
 		})
 	}
 	s.workspaceMergeBatch = state
 }
 
+// Confirmation owns its nested data; an in-place task update must not rewrite
+// what was confirmed or make a stale async result appear current.
+func workspaceMergeBatchSnapshot(item application.Workspace) application.Workspace {
+	clone := func(value *string) *string {
+		if value == nil {
+			return nil
+		}
+		owned := *value
+		return &owned
+	}
+	item.Warnings = slices.Clone(item.Warnings)
+	item.Record.Warnings = slices.Clone(item.Record.Warnings)
+	item.Record.OriginURL = clone(item.Record.OriginURL)
+	item.Record.BaseRef = clone(item.Record.BaseRef)
+	item.Record.TargetBranch = clone(item.Record.TargetBranch)
+	item.Record.TagTargetRef = clone(item.Record.TagTargetRef)
+	return item
+}
+
 func (s *app) workspaceMergeBatchTaskMatches(t task) bool {
-	current := s.currentTask()
-	return t.id != "" && current.id == t.id && current.groupID == t.groupID && current.branch == t.branch &&
-		(s.page == "tasks" || s.page == "archive") && s.tab == 0 && workspaceMergeTaskIdentityMatches(current, t)
+	current := s.taskByID(t.id)
+	return t.id != "" && current.id == t.id && !current.archived && current.groupID == t.groupID && current.branch == t.branch &&
+		(s.page == "tasks" || s.page == "archive") && workspaceMergeTaskIdentityMatches(current, t)
+}
+
+func (s *app) workspaceMergeBatchContextCurrent(state *workspaceMergeBatchUIState) bool {
+	if state == nil || !s.workspaceMergeBatchTaskMatches(workspaceMergeBatchTaskFromState(state)) {
+		return false
+	}
+	scope, valid := s.taskActionScopeFor(workspaceMergeBatchTaskFromState(state))
+	return valid && scope == state.scope && s.configJSON == state.configJSON
 }
 
 func (s *app) workspaceMergeBatchEligibility(t task, item application.Workspace) (string, string) {
@@ -116,7 +148,7 @@ func (s *app) renderWorkspaceMergeBatchDialog(c *ui.Context, p palette) {
 	if state == nil {
 		return
 	}
-	if !s.workspaceMergeBatchTaskMatches(workspaceMergeBatchTaskFromState(state)) {
+	if !s.workspaceMergeBatchContextCurrent(state) {
 		s.workspaceMergeBatch = nil
 		return
 	}
@@ -143,6 +175,8 @@ func (s *app) renderWorkspaceMergeBatchDialog(c *ui.Context, p palette) {
 
 func (s *app) renderWorkspaceMergeBatchDialogContent(c *ui.Context, p palette, state *workspaceMergeBatchUIState) {
 	label(c, "批量合并主分支", 17, p.text).FontWeight(600).Shrink(0)
+	target := s.taskByID(state.TaskID)
+	label(c, firstNonEmpty(target.title, state.TaskID), 13, p.muted).Shrink(0).FillWidth().SingleLine().Tooltip(target.title)
 	if state.Results != nil {
 		s.renderWorkspaceMergeBatchResults(c, p, state)
 		return
@@ -208,7 +242,7 @@ func (s *app) renderWorkspaceMergeBatchDialogContent(c *ui.Context, p palette, s
 
 func (s *app) workspaceMergeBatchOwnsActiveOperation(state *workspaceMergeBatchUIState) bool {
 	return state != nil && state == s.workspaceMergeBatch && state.Loading && s.busy &&
-		s.operationKind == "workspace.merge-batch" && s.workspaceMergeBatchTaskMatches(workspaceMergeBatchTaskFromState(state))
+		s.operationKind == "workspace.merge-batch" && s.workspaceMergeBatchContextCurrent(state)
 }
 
 func (s *app) workspaceMergeBatchCanRequestCancellation(state *workspaceMergeBatchUIState) bool {
@@ -326,10 +360,14 @@ func workspaceMergeBatchCopyText(result workspace.WorkspaceMainBranchMergeResult
 }
 
 func (s *app) submitWorkspaceMergeBatch(state *workspaceMergeBatchUIState) {
-	if state == nil || state.Loading || s.busy || !s.workspaceMergeBatchTaskMatches(workspaceMergeBatchTaskFromState(state)) {
+	if state == nil || state != s.workspaceMergeBatch || state.Loading || s.busy {
 		return
 	}
-	t := s.currentTask()
+	if !s.workspaceMergeBatchStateCurrent(state) {
+		s.retireStaleWorkspaceMergeBatch(state)
+		return
+	}
+	t := s.taskByID(state.TaskID)
 	keys := make([]string, 0, len(state.Items))
 	for index := range state.Items {
 		item := &state.Items[index]
@@ -416,7 +454,7 @@ func (s *app) retireStaleWorkspaceMergeBatch(state *workspaceMergeBatchUIState) 
 	}
 	state.Loading = false
 	state.Results = nil
-	if s.workspaceMergeBatchTaskMatches(task{id: state.TaskID, path: state.TaskPath, createdAt: state.TaskCreatedAt, groupID: state.TaskGroupID, branch: state.TaskFeatureBranch}) {
+	if s.workspaceMergeBatchContextCurrent(state) {
 		state.Open = true
 		state.Error = "工作区信息已变化，本次合并结果已忽略。请关闭弹框后重新打开。"
 		return
@@ -432,10 +470,10 @@ func (s *app) reconcileWorkspaceMergeBatchAfterSnapshot() {
 }
 
 func (s *app) workspaceMergeBatchStateCurrent(state *workspaceMergeBatchUIState) bool {
-	if state == nil || !s.workspaceMergeBatchTaskMatches(workspaceMergeBatchTaskFromState(state)) {
+	if !s.workspaceMergeBatchContextCurrent(state) {
 		return false
 	}
-	current := s.currentTask()
+	current := s.taskByID(state.TaskID)
 	for _, expected := range state.Items {
 		if !expected.Selected {
 			continue

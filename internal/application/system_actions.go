@@ -48,6 +48,9 @@ func (a *App) systemAction(ctx context.Context, action Action) (ActionResult, er
 		return runSystemFileOpening(ctx, action.Kind, path, nativeSystemFileOpening{})
 	}
 	if action.Kind == "system.open" {
+		if err := a.validateTaskContextFromCurrentSource(action); err != nil {
+			return ActionResult{}, err
+		}
 		link, err := systemOpenLink(path)
 		if err != nil {
 			return ActionResult{}, err

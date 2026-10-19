@@ -42,6 +42,7 @@ type requirementListSnapshotKey struct {
 }
 
 type requirementListViewSnapshot struct {
+	fetchedAt int64
 	items     []application.Requirement
 	selected  string
 	sprints   []requirementSprint

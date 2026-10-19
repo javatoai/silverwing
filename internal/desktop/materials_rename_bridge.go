@@ -223,6 +223,7 @@ func (s *app) remapMaterialsReading(taskPath, root, previous, replacement string
 		if normalizedReadingPath(record.TaskPath) != normalizedReadingPath(taskPath) || normalizedReadingRoot(readingRootValue(record.Root)) != normalizedReadingRoot(root) {
 			continue
 		}
+		session.dirty = true
 		remap := func(path string) string { return remapMaterialsRelativePath(path, previous, replacement) }
 		if record.SelectedPath != nil {
 			value := remap(*record.SelectedPath)

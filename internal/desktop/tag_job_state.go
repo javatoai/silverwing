@@ -59,7 +59,7 @@ func (s *app) tagJobScope() application.TagJobScope {
 	}
 	return application.TagJobScope{Home: s.snapshot.Home, TaskRoot: s.configString("taskRoot"),
 		TaskID: t.id, TaskPath: t.path, TaskCreatedAt: t.createdAt,
-		ConfigIdentity: application.TagJobConfigIdentity(s.snapshot.ConfigJSON), AccountIdentity: account}
+		ConfigIdentity: s.tagConfigurationIdentity(), AccountIdentity: account}
 }
 
 func (s *app) ensureTagDesktopJobs() *tagDesktopJobs {

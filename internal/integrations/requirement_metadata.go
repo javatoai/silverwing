@@ -14,14 +14,19 @@ import (
 )
 
 type RequirementMetadataReadResult struct {
-	ID           string                         `json:"id"`
-	ProjectKey   string                         `json:"projectKey"`
-	Type         string                         `json:"type"`
-	Title        *string                        `json:"title"`
-	Status       *string                        `json:"status"`
-	Participants domain.RequirementParticipants `json:"participants"`
-	Stale        bool                           `json:"stale"`
-	RefreshError string                         `json:"refreshError,omitempty"`
+	ID              string                               `json:"id"`
+	ProjectKey      string                               `json:"projectKey"`
+	Type            string                               `json:"type"`
+	Title           *string                              `json:"title"`
+	Status          *string                              `json:"status"`
+	Participants    domain.RequirementParticipants       `json:"participants"`
+	Stale           bool                                 `json:"stale"`
+	RefreshError    string                               `json:"refreshError,omitempty"`
+	CacheError      string                               `json:"cacheError,omitempty"`
+	EstimateError   string                               `json:"estimateError,omitempty"`
+	FetchedAt       int64                                `json:"fetchedAt,omitempty"`
+	WorkItem        *domain.ParticipatedWorkItem         `json:"workItem,omitempty"`
+	SprintEstimates map[string]RequirementSprintEstimate `json:"sprintEstimates,omitempty"`
 }
 
 type requirementMetadataResult = RequirementMetadataReadResult
@@ -101,9 +106,16 @@ func (s *Service) requirementMetadata(ctx context.Context, config domain.AppConf
 			if err := s.verifyRequirementIdentitySession(ctx, config, session.raw, session.generation); err != nil {
 				return nil, err
 			}
+			saved.Data.FetchedAt = saved.FetchedAt
 			return saved.Data, nil
 		}
 	}
+	generation, err := s.beginRequirementRead(key, force)
+	if err != nil {
+		return nil, err
+	}
+	defer s.finishRequirementRead(key, generation)
+	startedAt := requirementUnixMillis()
 	result, fetchErr := s.fetchRequirementMetadata(ctx, config, projectKey, kind, id)
 	if process.IsCleanupFailure(fetchErr) {
 		return nil, fetchErr
@@ -123,12 +135,48 @@ func (s *Service) requirementMetadata(ctx context.Context, config domain.AppConf
 		return saved.Data, nil
 	}
 	if session.raw == "" {
+		result.CacheError = "无法确认当前账户，需求元数据尚未持久缓存"
 		return result, nil
+	}
+	result.FetchedAt = startedAt
+	if sprintKey := stringValue(payload, "sprintKey"); force && boolValue(payload, "fullRefresh") && sprintKey != "" {
+		days, estimateErr := s.refreshRequirementEstimate(ctx, config, item, sprintKey)
+		if estimateErr != nil {
+			result.EstimateError = estimateErr.Error()
+		} else {
+			result.SprintEstimates = map[string]RequirementSprintEstimate{sprintKey: {Days: days, FetchedAt: startedAt}}
+		}
+	}
+	if boolValue(payload, "fullRefresh") {
+		if err := s.verifyRequirementRefresh(ctx, config, session.raw); err != nil {
+			return nil, err
+		}
 	}
 	if err := s.verifyRequirementIdentitySession(ctx, config, session.raw, session.generation); err != nil {
 		return nil, err
 	}
-	_, _ = s.writeRequirementMetadataCache(key, result, requirementUnixMillis())
+	writeErr := s.commitRequirementRead(ctx, config, key, generation, func() error {
+		// A refresh in another Sprint may have saved its estimate while this
+		// request ran. Merge scoped values without replacing unrelated Sprints.
+		if previous, _, readErr := s.readRequirementMetadataCache(key); readErr == nil && previous != nil {
+			if result.SprintEstimates == nil {
+				result.SprintEstimates = make(map[string]RequirementSprintEstimate)
+			}
+			for sprint, value := range previous.Data.SprintEstimates {
+				if own, exists := result.SprintEstimates[sprint]; !exists || own.FetchedAt < value.FetchedAt {
+					result.SprintEstimates[sprint] = value
+				}
+			}
+		}
+		_, err := s.writeRequirementMetadataCache(key, result, startedAt)
+		return err
+	})
+	if writeErr != nil {
+		if errors.Is(writeErr, errRequirementReadSuperseded) || ctx.Err() != nil {
+			return nil, writeErr
+		}
+		result.CacheError = "需求元数据缓存失败：" + writeErr.Error()
+	}
 	return result, nil
 }
 
@@ -165,6 +213,7 @@ func (s *Service) fetchRequirementMetadata(ctx context.Context, config domain.Ap
 	}
 	return RequirementMetadataReadResult{
 		ID: id, ProjectKey: projectKey, Type: kind, Title: title, Status: status, Participants: participants,
+		WorkItem: metadataWorkItem(projectKey, kind, id, title, status, attributes["role_members"]),
 	}, nil
 }
 

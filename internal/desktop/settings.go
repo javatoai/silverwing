@@ -6,25 +6,26 @@ import (
 
 type settingsSection struct {
 	name  string
+	group int
 	pages []settingsPage
 }
 
 type settingsPage struct{ key, label string }
 
 var settingsSections = []settingsSection{
-	{"基础", []settingsPage{{"basic", "外观"}}},
-	{"工具", []settingsPage{{"tool-visibility", "研发工具"}}},
-	{"存储", []settingsPage{{"paths", "目录"}, {"config-backup", "配置与备份"}}},
-	{"开发工具", []settingsPage{{"dev-tools", "开发工具"}}},
-	{"任务", []settingsPage{{"task-creation", "任务创建区"}, {"task-area", "任务详情区"}}},
-	{"AGENTS.md", []settingsPage{{"agents", "全局与组说明"}, {"instruction-templates", "任务说明模板"}}},
-	{"Codex", []settingsPage{{"codex-plugins", "Codex 插件"}, {"codex-mcp", "MCP 管理"}}},
-	{"CLI", []settingsPage{{"cli-meegle", "Meegle CLI"}, {"cli-lark", "Lark CLI"}, {"cli-genbu", "Genbu CLI"}}},
-	{"skill", []settingsPage{{"skill-local", "本机 Skill"}, {"skill-sources", "安装 Skill"}}},
-	{"代理", []settingsPage{{"proxy", "网络代理"}}},
-	{"Git", []settingsPage{{"git", "Git 配置"}, {"branch-naming", "分支名设置"}, {"tag", "Tag 设置"}}},
-	{"日志", []settingsPage{{"logs", "日志"}}},
-	{"系统", []settingsPage{{"about", "关于"}, {"updates", "更新"}}},
+	{"基础", 0, []settingsPage{{"basic", "外观"}}},
+	{"快捷工具", 0, []settingsPage{{"tool-visibility", "研发工具"}}},
+	{"存储", 0, []settingsPage{{"paths", "目录"}, {"config-backup", "配置与备份"}}},
+	{"开发工具", 1, []settingsPage{{"dev-tools", "开发工具"}}},
+	{"任务", 1, []settingsPage{{"task-creation", "任务创建区"}, {"task-area", "任务详情区"}}},
+	{"Git", 1, []settingsPage{{"git", "Git 配置"}, {"branch-naming", "分支名设置"}, {"tag", "Tag 设置"}}},
+	{"AGENTS.md", 2, []settingsPage{{"agents", "全局与组说明"}, {"instruction-templates", "任务说明模板"}}},
+	{"Codex", 2, []settingsPage{{"codex-plugins", "Codex 插件"}, {"codex-mcp", "MCP 管理"}}},
+	{"skill", 2, []settingsPage{{"skill-local", "本机 Skill"}, {"skill-sources", "安装 Skill"}}},
+	{"CLI", 2, []settingsPage{{"cli-meegle", "Meegle CLI"}, {"cli-lark", "Lark CLI"}, {"cli-genbu", "Genbu CLI"}}},
+	{"代理", 2, []settingsPage{{"proxy", "网络代理"}}},
+	{"日志", 3, []settingsPage{{"logs", "日志"}}},
+	{"系统", 3, []settingsPage{{"about", "关于"}, {"updates", "更新"}, {"app-data", "应用数据目录"}}},
 }
 
 func (s *app) settingsScreen(c *ui.Context, p palette) {
@@ -36,30 +37,7 @@ func (s *app) settingsScreen(c *ui.Context, p palette) {
 	}
 	s.currentSettingsSection()
 	ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Padding(16, 28, 28, 8).Gap(16).Children(func() {
-		ui.Scroll(c).Width(160).Shrink(0).Padding(10).Gap(4).Background(p.soft).Border(1, p.line).Radius(16).Children(func() {
-			for _, item := range settingsSections {
-				button := ui.ButtonBase(c.Key("settings-section-"+item.name)).Height(43).FillWidth().Padding(0, 14).Justify(ui.Start).Radius(10).Label(item.name)
-				fg := p.text
-				weight := 400
-				if s.settingsTab == item.name {
-					button.Background(p.selected)
-					weight = 600
-					if s.dark {
-						fg = ui.Hex("#DBEAFE")
-					} else {
-						fg = ui.Hex("#173B86")
-					}
-				}
-				button.Children(func() { label(c, item.name, 15, fg).FontWeight(weight).LineHeight(23.0 / 15).NoWrap() })
-				if button.Clicked() && s.settingsTab != item.name {
-					s.deactivateInstructionEditor()
-					s.settingsTab = item.name
-					s.settingsPage = item.pages[0].key
-					s.settingsOutput = ""
-					s.settingsLoaded = ""
-				}
-			}
-		})
+		s.renderSettingsSidebar(c, p)
 		ui.Column(c).Grow(1).MinWidth(0).MinHeight(0).Gap(12).Children(func() {
 			section := s.currentSettingsSection()
 			if len(section.pages) > 1 {
@@ -94,6 +72,38 @@ func (s *app) settingsScreen(c *ui.Context, p palette) {
 	s.settingsImportDialog(c, p)
 	s.settingsSkillPreviewDialog(c, p)
 	s.settingsLarkAuthDialog(c, p)
+}
+
+func (state *app) renderSettingsSidebar(context *ui.Context, theme palette) {
+	ui.Scroll(context).Width(160).Shrink(0).Padding(10).Gap(4).Background(theme.soft).Border(1, theme.line).Radius(16).Children(func() {
+		previousGroup := settingsSections[0].group
+		for index, item := range settingsSections {
+			if index > 0 && item.group != previousGroup {
+				ui.Divider(context).Height(1).Margin(4, 14).Label("设置分组分隔线")
+			}
+			previousGroup = item.group
+			button := ui.ButtonBase(context.Key("settings-section-"+item.name)).Height(43).FillWidth().Padding(0, 14).Justify(ui.Start).Radius(10).Label(item.name)
+			foreground := theme.text
+			weight := 400
+			if state.settingsTab == item.name {
+				button.Background(theme.selected)
+				weight = 600
+				if state.dark {
+					foreground = ui.Hex("#DBEAFE")
+				} else {
+					foreground = ui.Hex("#173B86")
+				}
+			}
+			button.Children(func() { label(context, item.name, 15, foreground).FontWeight(weight).LineHeight(23.0 / 15).NoWrap() })
+			if button.Clicked() && state.settingsTab != item.name {
+				state.deactivateInstructionEditor()
+				state.settingsTab = item.name
+				state.settingsPage = item.pages[0].key
+				state.settingsOutput = ""
+				state.settingsLoaded = ""
+			}
+		}
+	})
 }
 
 func (s *app) settingsTabButton(c *ui.Context, p palette, key, name string) {
@@ -171,6 +181,8 @@ func (s *app) settingsPageContent(c *ui.Context, p palette) {
 		s.settingsAbout(c, p)
 	case "updates":
 		s.settingsUpdates(c, p)
+	case "app-data":
+		s.settingsAppData(c, p)
 	}
 }
 

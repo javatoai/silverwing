@@ -14,7 +14,12 @@ func (s *app) settleMaterialsBeforeRootAction(ctx context.Context, action applic
 		return plan, nil
 	}
 	window := s.win
-	if window == nil || window.IsDestroyed() {
+	if window != nil && window.IsDestroyed() {
+		barrier.Abandon()
+		return nil, errors.New("资料窗口已关闭，目录变更已停止")
+	}
+	update := taskContextUpdater(window, s.taskContextUpdate)
+	if update == nil {
 		barrier.Abandon()
 		return nil, errors.New("资料窗口已关闭，目录变更已停止")
 	}
@@ -23,8 +28,8 @@ func (s *app) settleMaterialsBeforeRootAction(ctx context.Context, action applic
 		err  error
 	}
 	ack := make(chan outcome, 1)
-	window.Update(func() {
-		if window.IsDestroyed() {
+	update(func() {
+		if window != nil && window.IsDestroyed() {
 			barrier.Abandon()
 			ack <- outcome{err: errors.New("资料窗口已关闭，目录变更已停止")}
 			return

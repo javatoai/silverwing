@@ -263,8 +263,8 @@ func (s *app) renderRequirementReaderActions(c *ui.Context, p palette, reader *r
 			return
 		}
 		menu.Separator()
-		if menu.Item("refresh-reader", "刷新正文和评论").Icon("refresh").Disabled(requirementReaderLoading(reader)).Chosen() {
-			s.refreshRequirementReader(reader, nil)
+		if menu.Item("refresh-reader", s.requirementRefreshLabel(reader.url)).Icon("refresh").Disabled(s.requirementRefreshing(reader.url)).Chosen() {
+			s.startRequirementRefresh(reader.url)
 		}
 	}
 }
@@ -424,61 +424,61 @@ func (s *app) renderRequirementMarkdownSection(c *ui.Context, p palette, reader 
 	s.renderMarkdownPreview(c, p, state)
 }
 
-func (s *app) renderRequirementCommentList(c *ui.Context, p palette, reader *requirementReaderState) {
+func (state *app) renderRequirementCommentList(context *ui.Context, theme palette, reader *requirementReaderState) {
 	if reader == nil || reader.comments == nil || len(reader.comments.Comments) == 0 {
-		label(c, "暂无评论。", 13, p.muted)
+		label(context, "暂无评论。", 13, theme.muted)
 		return
 	}
 	byID := make(map[string]domain.RequirementComment, len(reader.comments.Comments))
 	for _, comment := range reader.comments.Comments {
 		byID[comment.ID] = comment
 	}
-	for index, comment := range reader.comments.Comments {
-		if index > 0 {
-			ui.Divider(c).Padding(9, 0)
-		}
-		key := requirementCommentStateKey(comment, index)
-		state := reader.commentMarkdown[key]
-		if state == nil || state.closed || state.doc == nil {
-			continue
-		}
-		indent := float32(0)
-		var parentLabel string
-		if comment.ParentID != nil {
-			indent = 14
-			parentLabel = "回复 " + firstNonEmpty(byID[*comment.ParentID].AuthorName, *comment.ParentID)
-		}
-		ui.Column(c.Key(requirementReaderControlKey(reader)+"-comment-"+key)).FillWidth().MinWidth(0).Gap(8).Padding(0, 0, 0, indent).Children(func() {
-			ui.Row(c).FillWidth().MinWidth(0).Gap(8).AlignItems(ui.Center).Children(func() {
-				label(c, firstNonEmpty(comment.AuthorName, comment.AuthorKey, "未知用户"), 12, p.text).FontWeight(600).SingleLine().Tooltip(firstNonEmpty(comment.AuthorName, comment.AuthorKey, "未知用户"))
-				label(c, firstNonEmpty(comment.CreatedAt, "时间未知"), 11, p.muted).SingleLine()
-				if parentLabel != "" {
-					ui.Spacer(c)
-					label(c, parentLabel, 10, p.muted).SingleLine().Tooltip(parentLabel)
-				}
-			})
-			ui.Column(c).FillWidth().MinWidth(0).Label("评论正文 " + firstNonEmpty(comment.AuthorName, comment.AuthorKey, "未知用户")).Gap(3).Children(func() {
-				s.renderMarkdownPreview(c, p, state)
-			})
-			for _, resource := range reader.comments.CommentResources {
-				if resource.CommentID != comment.ID || resource.Path != "" {
-					continue
-				}
-				resourceKey := commentResourceKey(resource)
-				failure := firstNonEmpty(reader.commentResourceErrors[resourceKey], resource.Error)
-				if failure == "" {
-					continue
-				}
-				ui.Row(c).FillWidth().MinWidth(0).Gap(6).AlignItems(ui.Center).Children(func() {
-					label(c, "图片加载失败", 11, p.amber).Grow(1).MinWidth(0).SingleLine().Tooltip(failure)
-					disabled := reader.commentsLoading || reader.commentResourceLoading != ""
-					if iconButtonDisabled(c, requirementReaderControlKey(reader)+"-retry-comment-image-"+resourceKey, "refresh", "重试评论图片", p, disabled).Clicked() {
-						s.requestRequirementCommentResource(reader, resource, true)
+	ui.Column(context).FillWidth().MinWidth(0).Gap(12).Children(func() {
+		for index, comment := range reader.comments.Comments {
+			key := requirementCommentStateKey(comment, index)
+			markdownState := reader.commentMarkdown[key]
+			if markdownState == nil || markdownState.closed || markdownState.doc == nil {
+				continue
+			}
+			var parentLabel string
+			if comment.ParentID != nil {
+				parentLabel = "回复 " + firstNonEmpty(byID[*comment.ParentID].AuthorName, *comment.ParentID)
+			}
+			authorName := firstNonEmpty(comment.AuthorName, comment.AuthorKey, "未知用户")
+			ui.Column(context.Key(requirementReaderControlKey(reader)+"-comment-"+key)).FillWidth().MinWidth(0).Gap(12).Padding(16).Background(theme.soft).Border(1, theme.line).Radius(12).Label("评论卡片 " + key).Children(func() {
+				ui.Column(context).FillWidth().MinWidth(0).Label("评论元信息 " + key).Gap(6).Children(func() {
+					ui.Row(context).FillWidth().MinWidth(0).Wrap().Gap(8).Justify(ui.SpaceBetween).AlignItems(ui.Start).Children(func() {
+						label(context, authorName, 13, theme.text).FontWeight(600).MinWidth(0).Wrap()
+						label(context, firstNonEmpty(comment.CreatedAt, "时间未知"), 11, theme.muted).MinWidth(0).Wrap()
+					})
+					if parentLabel != "" {
+						label(context, parentLabel, 11, theme.muted).FillWidth().MinWidth(0).Wrap()
 					}
 				})
-			}
-		})
-	}
+				ui.Divider(context).FillWidth().Height(1).Background(theme.line).Margin(0, 0, 4, 0).Label("评论头部分隔线 " + key)
+				ui.Column(context).FillWidth().MinWidth(0).Label("评论正文 " + authorName).Gap(3).Children(func() {
+					state.renderMarkdownPreview(context, theme, markdownState)
+				})
+				for _, resource := range reader.comments.CommentResources {
+					if resource.CommentID != comment.ID || resource.Path != "" {
+						continue
+					}
+					resourceKey := commentResourceKey(resource)
+					failure := firstNonEmpty(reader.commentResourceErrors[resourceKey], resource.Error)
+					if failure == "" {
+						continue
+					}
+					ui.Row(context).FillWidth().MinWidth(0).Gap(6).AlignItems(ui.Center).Children(func() {
+						label(context, "图片加载失败", 11, theme.amber).Grow(1).MinWidth(0).SingleLine().Tooltip(failure)
+						disabled := reader.commentsLoading || reader.commentResourceLoading != ""
+						if iconButtonDisabled(context, requirementReaderControlKey(reader)+"-retry-comment-image-"+resourceKey, "refresh", "重试评论图片", theme, disabled).Clicked() {
+							state.requestRequirementCommentResource(reader, resource, true)
+						}
+					})
+				}
+			})
+		}
+	})
 }
 
 func (s *app) renderRequirementSectionStatus(c *ui.Context, p palette, reader *requirementReaderState, section string) {

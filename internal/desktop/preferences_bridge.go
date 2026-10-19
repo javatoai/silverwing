@@ -51,7 +51,7 @@ func (s *app) restoreDesktopPreferences(home string) {
 
 func settingsPreferenceKey(name string) string {
 	keys := map[string]string{
-		"基础": "basic", "工具": "developer-tools", "存储": "storage", "研发配置": "development", "开发工具": "development",
+		"基础": "basic", "快捷工具": "developer-tools", "工具": "developer-tools", "存储": "storage", "研发配置": "development", "开发工具": "development",
 		"任务": "tasks", "AGENTS.md": "agents", "Codex": "codex", "CLI": "commands",
 		"skill": "skill-sources", "代理": "proxy", "Git": "git", "日志": "logs", "系统": "system",
 	}
@@ -65,13 +65,13 @@ func settingsPreferenceName(key string) string {
 	// Source also migrates older leaf-page preferences to their category.
 	switch key {
 	case "developer-tools":
-		return "工具"
+		return "快捷工具"
 	case "paths", "config-backup", "storage":
 		return "存储"
 	case "groups", "development":
 		return "开发工具"
 	case "tools":
-		return "工具"
+		return "快捷工具"
 	case "task-creation", "codex-task-creation", "task-area", "tasks":
 		return "任务"
 	case "agents", "instruction-templates":
@@ -88,7 +88,7 @@ func settingsPreferenceName(key string) string {
 		return "Git"
 	case "logs":
 		return "日志"
-	case "about", "updates", "system":
+	case "about", "updates", "app-data", "system":
 		return "系统"
 	default:
 		return "基础"

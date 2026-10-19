@@ -98,6 +98,13 @@ func (a *App) workspaceActionWithProgress(ctx context.Context, action Action, on
 	if err != nil {
 		return ActionResult{}, err
 	}
+	switch action.Kind {
+	case "task.materials-retry", "task.archive", "task.restore", "task.delete":
+		if err := a.validateDesktopTaskContext(action, config, manifest, path); err != nil {
+			return ActionResult{}, err
+		}
+		ctx = a.desktopTaskMutationContext(ctx, action)
+	}
 	if result, handled, appendErr := taskWorkspaceAppendAction(ctx, action, config, service, path); handled {
 		return result, appendErr
 	}

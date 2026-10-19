@@ -68,7 +68,7 @@ One feature often spans several services. Silverwing brings their workspaces int
 
 ### Download
 
-The first public release is being prepared. Future packages will be available from [GitHub Releases](https://github.com/javatoai/silverwing/releases). For now, follow the [source build instructions](docs/RELEASE.md). The build scripts support these packages:
+Download published packages from [GitHub Releases](https://github.com/javatoai/silverwing/releases), or follow the [source build instructions](docs/RELEASE.md) to build locally. These packages are supported:
 
 | Platform | Package |
 | --- | --- |
@@ -94,9 +94,10 @@ Genbu and Lark are optional. You can prepare repositories and use the local deve
 ### Find and switch tasks
 
 - Use **Search tasks (搜索任务)** above the task list. Search is case-insensitive, requires every space-separated keyword to match, and also includes previously loaded requirement titles and associated services.
-- Use the pin on a task row to pin or unpin it. **All (全部)** places pinned tasks at the top without duplicate rows; pinning does not switch the current task.
+- Right-click a task to pin or unpin it; pinned tasks show a persistent accent-colored pin before their names. **All (全部)** shows a flat list across project groups, with pinned tasks first and no duplicate rows. Opening the context menu or pinning does not switch the current task.
+- The task context menu brings together Open in Codex, batch main-branch merge, materials actions, archive, restore and delete. The detail toolbar no longer has a More button. Actions use the context target; restoring a task keeps the archived list and its filters open.
 - **Recently visited (最近访问)** shows the current category's entries from the 20 most recently opened tasks, in visit order. Active and archived tasks retain separate search and view choices for the session. Pins and visit history survive restarts.
-- Press `Esc` in search to clear the query, use arrow keys to focus a task, and press `Enter` to open it. Task rows also support `Home`, `End` and Space. Creating or restoring a task reveals and scrolls to it automatically.
+- Press `Esc` in search to clear the query, use arrow keys to focus a task, and press `Enter` to open it. Task rows also support `Home`, `End` and Space. Creating a task reveals and scrolls to it automatically.
 
 ## Integrations
 
@@ -114,6 +115,7 @@ Silverwing manages code workspaces and their context. Each project still owns it
 
 | Document | Language | Contents |
 | --- | --- | --- |
+| [User and developer knowledge base](doc/Index.md) | 中文 | Setup, workflows, integrations, architecture and development |
 | [Architecture](docs/ARCHITECTURE.md) | 中文 | Native UI, application packages, storage and integration boundaries |
 | [Native media](docs/NATIVE-MEDIA.md) | English | PDF and diagram resources, rendering and platform constraints |
 

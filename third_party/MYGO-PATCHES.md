@@ -1,5 +1,38 @@
 # MyGO local native patches
 
+## Keyboard menu Escape and item tooltips
+
+`ui/tooltip.go` lets an open menu own Escape for its item tooltips. A tooltip
+opened by keyboard focus otherwise registered a later overlay shortcut and
+consumed the first Escape, leaving the menu open. The keyboard-menu regression
+covers Shift+F10, a single Escape, and restoring the owner's focus; standalone
+tooltips retain their dismissal behavior. Compare/remove on an upstream upgrade.
+
+## Themed context-menu choice delivery
+
+`ui/menu_popup.go` defers a themed popup's chosen item until `runtime.endPass`
+has consumed the current build pass's input. Delivering it inline
+allowed `endPass` to clear the choice before the owning control could receive
+it. The deferred delivery checks the original menu scope and closed-window
+state. Task-menu UI regression tests exercise the real themed popup, including
+mouse activation and bounded layout. Compare/remove on an upstream upgrade.
+
+Themed popup activation and synchronous native-menu choices use the engine's
+full-build invalidation. `showMenu` runs inside `runFrame`, where the ordinary
+`requestFrame` ignores requests; requesting a host frame alone can also leave
+it painting the previous tree during a drawing animation. Regressions exercise
+native surface frames, repeated open/Escape and an inline host choice.
+
+## In-frame state updates
+
+`ui/toast.go` marks a build pass changed when a toast is added after its custom
+viewport was built, and skips invalidation when closing an absent toast. If
+the final permitted build pass still changes earlier content, `runtime.go`
+requests a full new build after animation scheduling. The per-frame pass budget
+remains bounded; settled controls do not keep requesting idle frames. Tests
+cover late toast additions, changes spanning the pass budget and no-op closes.
+Compare/remove these scheduling fixes on an upstream upgrade.
+
 ## Shared TextEditor source and layout hooks
 
 Silverwing's functional `TextEditor` wrapper reuses `ui/editor.State` and its

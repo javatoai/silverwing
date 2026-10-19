@@ -13,6 +13,8 @@ import (
 
 type taskDeleteDialogState struct {
 	TaskID, TaskPath, TaskCreatedAt, FolderName string
+	SelectionKey, SelectionPath                 string
+	TaskArchived                                bool
 	Page                                        string
 	RequestID                                   uint64
 	Risks                                       []domain.DeleteRisk
@@ -25,7 +27,7 @@ type taskDeleteDialogState struct {
 var taskDeleteRequestSequence atomic.Uint64
 
 func (s *app) openTaskDeleteDialog(t task) {
-	if strings.TrimSpace(t.id) == "" {
+	if _, valid := s.taskActionScopeFor(t); !valid || s.busy || strings.TrimSpace(t.id) == "" {
 		return
 	}
 	s.lastError = ""
@@ -34,6 +36,7 @@ func (s *app) openTaskDeleteDialog(t task) {
 	s.taskDeleteDialog = &taskDeleteDialogState{
 		TaskID: t.id, TaskPath: t.path, TaskCreatedAt: t.createdAt,
 		FolderName: firstNonEmpty(t.title, t.id), Page: s.page, Open: true,
+		SelectionKey: taskNavigationKey(s.currentTask()), SelectionPath: s.currentTask().path, TaskArchived: t.archived,
 	}
 	s.requestTaskDeleteRisks()
 }
@@ -70,6 +73,15 @@ func (s *app) closeTaskDeleteDialog() {
 	if s.win != nil {
 		s.win.Invalidate()
 	}
+}
+
+// closeStaleTaskDeleteSubmission belongs to the action's request ID, so an old
+// context result cannot leave its dialog submitting or close a newer dialog.
+func (s *app) closeStaleTaskDeleteSubmission(action application.Action) {
+	if !s.taskDeleteStateMatches(action) {
+		return
+	}
+	s.closeTaskDeleteDialog()
 }
 
 func (s *app) taskDeleteStateMatches(action application.Action) bool {
@@ -214,10 +226,18 @@ func (s *app) confirmTaskDelete() {
 		return
 	}
 	state := s.taskDeleteDialog
+	scope, valid := s.taskMenuScopeFor(s.taskByID(state.TaskID))
+	if !valid || scope.taskPath != state.TaskPath || scope.taskCreatedAt != state.TaskCreatedAt ||
+		scope.page != state.Page || scope.archived != state.TaskArchived {
+		state.Error = errTaskContextChanged.Error()
+		state.Loading = false
+		state.Submitting = false
+		return
+	}
 	state.Loading = true
 	state.Submitting = true
 	state.Error = ""
-	s.dispatch(action)
+	s.dispatchTaskContextAction(action, &scope)
 }
 
 func (s *app) renderTaskDeleteDialog(c *ui.Context, p palette) {

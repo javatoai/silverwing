@@ -122,6 +122,11 @@ func (c *context) AddToast(t Toast) string {
 	// Nothing else tells screen readers: the focus stays.
 	c.Announce(t.Title)
 	c.Announce(t.Description)
+	// A custom viewport may have been built before the application added
+	// this toast. Rebuild it rather than wait for an unrelated input event.
+	if rt.inFrame && rt.toastFrame == rt.frame && rt.toastPass == rt.pass {
+		rt.consumed = true
+	}
 	rt.requestFrame()
 	return t.ID
 }
@@ -138,6 +143,9 @@ func (c *context) CloseToast(id string) {
 		} else if ts.OnClose != nil {
 			closed = append(closed, ts.OnClose)
 		}
+	}
+	if len(kept) == len(rt.toasts) {
+		return
 	}
 	clear(rt.toasts[len(kept):])
 	rt.toasts = kept

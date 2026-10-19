@@ -3,7 +3,7 @@ package desktop
 type sidebarNavigationItem struct{ page, name, image string }
 
 func (s *app) showsTagNavigation() bool {
-	return s.configBool("tagEnabled", true) && len(s.configArray("groups")) > 0
+	return s.configBool("tagEnabled", true) && len(s.readConfigArray("groups")) > 0
 }
 
 func (s *app) sidebarNavigationItems() []sidebarNavigationItem {
@@ -33,7 +33,7 @@ func (s *app) reconcileSidebarNavigation() {
 	}
 	if s.page == "tools" && len(s.visibleDeveloperToolTabs()) == 0 {
 		s.page = "settings"
-		s.settingsTab = "工具"
+		s.settingsTab = "快捷工具"
 		s.settingsPage = "tool-visibility"
 		s.settingsLoaded = ""
 	}

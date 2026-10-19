@@ -253,6 +253,9 @@ func Run(backend application.Backend, opts Options) error {
 	}
 	stopDocumentPreparationCleanup()
 	requirementCleanup, stopRequirementCleanup := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := s.closeRequirementRefreshJobs(requirementCleanup); runErr == nil && err != nil {
+		runErr = fmt.Errorf("退出前单项需求刷新清理未完成：%w", err)
+	}
 	if err := s.closeRequirementContentJobs(requirementCleanup); runErr == nil && err != nil {
 		runErr = fmt.Errorf("退出前需求读取清理未完成：%w", err)
 	}

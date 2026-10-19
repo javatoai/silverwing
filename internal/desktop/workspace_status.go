@@ -45,7 +45,7 @@ type workspaceGitStatusRequest struct {
 func (s *app) workspaceGitStatusScope() workspaceGitStatusScope {
 	return workspaceGitStatusScope{
 		home: s.snapshot.Home, taskRoot: s.configString("taskRoot"), executable: s.configString("gitExecutablePath"),
-		account: s.currentRequirementListIdentity().account,
+		account: s.currentRequirementAccountIdentity(),
 	}
 }
 

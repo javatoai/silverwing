@@ -162,39 +162,33 @@ func (s *app) workspaceHealthLine(c *ui.Context, p palette, t task, w applicatio
 	if s.workspaceGitStatusBusy() {
 		health, ok = domain.WorkspaceGitHealth{State: domain.WorkspaceGitChecking}, true
 	}
-	ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).FillWidth().MinWidth(0).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 		if ok {
 			switch health.State {
 			case domain.WorkspaceGitChecking:
 				label(c, "检查中", 11, p.muted)
 			case domain.WorkspaceGitReady:
-				dirty, dirtyColor := "本地未提交 0", p.muted
+				dirty := "本地未提交 0"
 				if health.DirtyFileCount > 0 {
 					dirty = fmt.Sprintf("本地未提交 %d", health.DirtyFileCount)
-					dirtyColor = p.amber
 				}
-				dirtyButton := ui.ButtonBase(c.Key(key+"-dirty-summary")).Padding(0, 2).Label(dirty).Tooltip("查看暂存、未暂存和未跟踪文件的本地改动").FocusRing(true).Disabled(s.busy)
+				dirtyPalette := p
+				if health.DirtyFileCount > 0 && !s.busy {
+					dirtyPalette.surface, dirtyPalette.text = p.amberBg, p.amber
+				}
+				dirtyButton := workspaceHealthActionButton(c, key+"-dirty-summary", dirty, "查看暂存、未暂存和未跟踪文件的本地改动", dirtyPalette, s.busy)
 				dirtyFocus := ui.Local(dirtyButton, key+"-dirty-review-focus", func() ui.Handle { return ui.Handle{} })
 				dirtyButton.Bind(dirtyFocus)
-				dirtyButton.Children(func() { label(c, dirty, 11, dirtyColor).SingleLine() })
 				if dirtyButton.Clicked() {
 					s.openWorkspaceDirtyFiles(t, w, health, dirtyFocus)
 				}
-				label(c, "·", 11, p.muted)
-				push := "检查失败"
-				switch health.PushState {
-				case domain.LocalPushPushed:
-					push = "已推送"
-				case domain.LocalPushAhead:
-					push = fmt.Sprintf("%d 个提交未推送", health.UnpushedCommitCount)
-				case domain.LocalPushRemoteBranchMissing:
-					push = "未发现远程分支"
-				case domain.LocalPushNoUpstream:
-					push = "未关联远程"
-				case domain.LocalPushFailed:
-					push = "检查失败"
+				historyButton := workspaceHealthActionButton(c, key+"-history", "提交历史", "查看当前分支相对主分支新增的提交", p, s.busy)
+				historyFocus := ui.Local(historyButton, key+"-history-focus", func() ui.Handle { return ui.Handle{} })
+				historyButton.Bind(historyFocus)
+				if historyButton.Clicked() {
+					s.openWorkspaceHistory(t, w, historyFocus)
 				}
-				label(c, push, 11, p.muted).SingleLine()
+				workspaceHealthPushStatus(c, key+"-push-status", workspacePushStatusText(health), p)
 			case domain.WorkspaceGitMissing, domain.WorkspaceGitFailed:
 				message := workspaceHealthIssueLabel(health.Issue)
 				if health.Issue == domain.WorkspaceGitIssueBranchMismatch {
@@ -213,27 +207,48 @@ func (s *app) workspaceHealthLine(c *ui.Context, p palette, t task, w applicatio
 				label(c, message, 11, p.amber).Wrap()
 			}
 		}
-		if ok {
-			label(c, "·", 11, p.muted)
-		}
-		diffButton := ui.ButtonBase(c.Key(key+"-overall-diff")).Padding(0, 2).Label("整体差异").Tooltip("查看当前分支相对主分支的全部已提交改动").FocusRing(true).Disabled(s.busy)
-		diffFocus := ui.Local(diffButton, key+"-overall-diff-focus", func() ui.Handle { return ui.Handle{} })
-		diffButton.Bind(diffFocus)
-		diffButton.Children(func() { label(c, "整体差异", 11, p.blue).SingleLine() })
-		if diffButton.Clicked() {
-			s.openWorkspaceReview(t, w, workspaceReviewMainline, nil, diffFocus)
-		}
-		if ok && health.State == domain.WorkspaceGitReady {
-			label(c, "·", 11, p.muted)
-			historyButton := ui.ButtonBase(c.Key(key+"-history")).Padding(0, 2).Label("提交历史").Tooltip("查看当前分支相对主分支新增的提交").FocusRing(true).Disabled(s.busy)
-			historyFocus := ui.Local(historyButton, key+"-history-focus", func() ui.Handle { return ui.Handle{} })
-			historyButton.Bind(historyFocus)
-			historyButton.Children(func() { label(c, "提交历史", 11, p.blue).SingleLine() })
-			if historyButton.Clicked() {
-				s.openWorkspaceHistory(t, w, historyFocus)
-			}
-		}
 	})
+}
+
+func workspaceHealthActionButton(c *ui.Context, key, text, tooltip string, p palette, disabled bool) ui.Element {
+	button := ui.ButtonBase(c.Key(key)).MinWidth(0).MaxWidthPercent(100).Height(28).Padding(0, 8).
+		Border(1, p.line).Radius(8).Label(text).Tooltip(tooltip).FocusRing(true).Disabled(disabled)
+	background, foreground := p.surface, p.text
+	if disabled {
+		foreground = p.muted
+	} else if button.Pressed() {
+		background = p.selected
+	} else if button.Hovered() {
+		background = p.soft
+	}
+	button.Background(background).TextColor(foreground).Children(func() {
+		label(c, text, 11, foreground).MinWidth(0).Wrap()
+	})
+	return button
+}
+
+func workspaceHealthPushStatus(c *ui.Context, key, text string, p palette) {
+	ui.Row(c.Key(key)).MinWidth(0).MaxWidthPercent(100).Height(28).Padding(0, 8).Label(text).
+		Border(1, p.line).Radius(8).Background(p.surface).AlignItems(ui.Center).Children(func() {
+		label(c, text, 11, p.text).MinWidth(0).Wrap()
+	})
+}
+
+func workspacePushStatusText(health domain.WorkspaceGitHealth) string {
+	switch health.PushState {
+	case domain.LocalPushPushed:
+		return "已推送"
+	case domain.LocalPushAhead:
+		return fmt.Sprintf("%d 个提交未推送", health.UnpushedCommitCount)
+	case domain.LocalPushRemoteBranchMissing:
+		return "未发现远程分支"
+	case domain.LocalPushNoUpstream:
+		return "未关联远程"
+	case domain.LocalPushFailed:
+		return "检查失败"
+	default:
+		return "检查失败"
+	}
 }
 
 func workspaceHealthIssueLabel(issue domain.WorkspaceGitIssue) string {

@@ -337,6 +337,7 @@ func (s *app) updateRequirementReaderComments(reader *requirementReaderState, co
 		} else if state.doc == nil || state.doc.Source() != body || state.closed || !sameMarkdownTrustedImages(state.trustedImages, images) {
 			updateReadonlyMarkdownState(state, body, images)
 		}
+		state.commentReading = true
 		state.path = comments.CachePath
 	}
 	for key, state := range reader.commentMarkdown {

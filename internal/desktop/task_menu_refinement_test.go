@@ -210,11 +210,10 @@ func TestPinnedTaskStatusIcon(t *testing.T) {
 		if bounds, ok := tester.Find(name); !ok || bounds.W != 16 || bounds.H != 16 {
 			t.Fatalf("missing fixed-size pinned status: %+v, %v", bounds, ok)
 		}
-		s.taskNavigationFor().value.Recent = []string{taskNavigationKey(s.tasks[index])}
-		s.taskIndexBrowsingFor(archived).recentOnly = true
+		s.taskNavigationFor().value.Recent = []string{taskNavigationKey(s.tasks[0])}
 		tester.Frame()
 		if !tester.HasText(name) {
-			t.Fatal("recent view lost the pinned status")
+			t.Fatal("legacy recent data hid the pinned task or its status")
 		}
 		navigationChooseTaskMenu(t, tester, s.tasks[index].title, "取消置顶")
 		if tester.HasText(name) {

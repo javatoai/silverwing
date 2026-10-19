@@ -125,6 +125,9 @@ func (s *app) applyRequirementsResult(result application.ActionResult) {
 		s.selectedRequirementKey = ""
 	}
 	if previousKey != s.selectedRequirementKey {
+		if s.page == "requirements" {
+			s.dismissMarkdownBitmapViewer()
+		}
 		s.lastResult = ""
 	}
 }
@@ -763,8 +766,12 @@ func (s *app) requirementListItem(c *ui.Context, p palette, item application.Req
 		label(c, secondary, 10, p.muted).FillWidth().SingleLine().Tooltip(secondary)
 	})
 	if button.Clicked() && index >= 0 {
+		nextKey := requirementKey(item)
+		if nextKey != s.selectedRequirementKey {
+			s.dismissMarkdownBitmapViewer()
+		}
 		s.selectedRequirement = index
-		s.selectedRequirementKey = requirementKey(item)
+		s.selectedRequirementKey = nextKey
 		if state := s.ensureRequirementListJobs(); state.current != nil && state.current.sprintKey == s.requirementsSelectedSprintKey {
 			state.current.selectedKey = s.selectedRequirementKey
 		}

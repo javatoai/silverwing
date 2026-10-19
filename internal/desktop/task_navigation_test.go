@@ -73,18 +73,12 @@ func TestTaskNavigationSearchAndOrdering(t *testing.T) {
 		})
 	}
 	state.search = ""
-	s.taskNavigationFor().value.Recent = []string{taskNavigationKey(s.tasks[2]), taskNavigationKey(s.tasks[3]), "removed-task", taskNavigationKey(s.tasks[0])}
-	state.recentOnly = true
-	s.taskIndexBrowsingFor(true).recentOnly = true
-	if got := s.taskIndexRows(false); !slices.Equal(got, []int{2, 0}) {
-		t.Fatalf("active recent order: %v", got)
-	}
-	if got := s.taskIndexRows(true); !slices.Equal(got, []int{3}) {
-		t.Fatalf("archive recent order: %v", got)
-	}
-	state.recentOnly = false
+	s.taskNavigationFor().value.Recent = []string{taskNavigationKey(s.tasks[1]), taskNavigationKey(s.tasks[2]), taskNavigationKey(s.tasks[0])}
 	if displayed := s.taskIndexRows(false); !slices.Equal(displayed, []int{2, 0, 1, 4}) {
-		t.Fatalf("pins must be unique and tasks without a configured group must remain visible: %v", displayed)
+		t.Fatalf("legacy recent data must not change pin-first order or hide tasks: %v", displayed)
+	}
+	if displayed := s.taskIndexRows(true); !slices.Equal(displayed, []int{3}) {
+		t.Fatalf("archive list must show all matching tasks: %v", displayed)
 	}
 }
 
@@ -102,64 +96,66 @@ func TestTaskNavigationControlsPreserveCurrentDraft(t *testing.T) {
 	if !tester.HasText("没有匹配的任务") {
 		t.Fatal("search did not show the empty result state")
 	}
-	navigationClick(t, tester, "最近访问")
 	navigationClick(t, tester, "清除任务搜索")
-	if !tester.HasText("暂无最近访问的任务") {
-		t.Fatal("pinning and filtering must not count as opening a task")
-	}
-	navigationClick(t, tester, "全部")
 	navigationClick(t, tester, "搜索任务")
 	tester.Key(0, ui.KeyDown)
 	if !tester.Focused("修复超时") {
 		t.Fatal("search Down did not focus the first visible pinned task")
 	}
-	if s.selected != 0 || s.documentPath != "draft.md" || s.documentContent != "尚未保存的修改" || !s.documentDirty || s.documentDrafts["draft.md"] != s.documentContent || !s.documentDirtyMap["draft.md"] || len(s.taskNavigationFor().value.Recent) != 0 {
-		t.Fatal("navigation controls changed the current task, draft, or visit history")
+	legacyRecent := []string{taskNavigationKey(s.tasks[1])}
+	s.taskNavigationFor().value.Recent = slices.Clone(legacyRecent)
+	if s.selected != 0 || s.documentPath != "draft.md" || s.documentContent != "尚未保存的修改" || !s.documentDirty || s.documentDrafts["draft.md"] != s.documentContent || !s.documentDirtyMap["draft.md"] || !slices.Equal(s.taskNavigationFor().value.Recent, legacyRecent) {
+		t.Fatal("navigation controls changed the current task, draft, or legacy navigation data")
 	}
 	tester.Key(0, ui.KeyEnter)
-	if s.selected != 2 || !slices.Equal(s.taskNavigationFor().value.Recent, []string{taskNavigationKey(s.tasks[2])}) {
-		t.Fatal("Enter did not explicitly open and record the focused task")
+	if s.selected != 2 || !slices.Equal(s.taskNavigationFor().value.Recent, legacyRecent) {
+		t.Fatal("Enter did not open the focused task or changed legacy recent data")
 	}
+	row, found := tester.Find("修复超时")
+	if !found {
+		t.Fatal("selected pinned task is missing")
+	}
+	tester.Move(row.X+row.W/2, row.Y+row.H/2)
 	navigationChooseTaskMenu(t, tester, "修复超时", "取消置顶")
-	if s.taskIsPinned(s.tasks[2]) || s.selected != 2 || len(s.taskNavigationFor().value.Recent) != 1 {
-		t.Fatal("unpinning changed the current task or history")
+	if s.taskIsPinned(s.tasks[2]) || s.selected != 2 || !slices.Equal(s.taskNavigationFor().value.Recent, legacyRecent) {
+		t.Fatal("unpinning changed the current task or legacy navigation data")
 	}
 	navigationClick(t, tester, "搜索任务")
 	tester.Type("REQ-42")
 	tester.Key(0, ui.KeyEnter)
-	if s.selected != 0 || !tester.Focused("支付 API 联调") || !slices.Equal(s.taskNavigationFor().value.Recent, []string{taskNavigationKey(s.tasks[0]), taskNavigationKey(s.tasks[2])}) {
-		t.Fatal("Enter in search did not open and focus its first matching task")
+	if s.selected != 0 || !tester.Focused("支付 API 联调") || !slices.Equal(s.taskNavigationFor().value.Recent, legacyRecent) {
+		t.Fatal("Enter in search did not open and focus its first matching task without changing legacy data")
 	}
 }
 
-func TestTaskNavigationRecentKeyboardKeepsVisitOrderUntilActivation(t *testing.T) {
+func TestTaskNavigationKeyboardUsesPinFirstOrderUntilActivation(t *testing.T) {
 	s := taskNavigationFixture()
-	for _, index := range []int{0, 1, 2} {
-		s.openTaskIndex(index)
-	}
-	s.taskIndexBrowsingFor(false).recentOnly = true
+	s.setTaskPinned(s.tasks[0], true)
+	s.setTaskPinned(s.tasks[2], true)
+	legacyRecent := []string{taskNavigationKey(s.tasks[1]), taskNavigationKey(s.tasks[0]), taskNavigationKey(s.tasks[2])}
+	s.taskNavigationFor().value.Recent = slices.Clone(legacyRecent)
 	tester := taskNavigationTester(s, 240, 450)
 	navigationClick(t, tester, "搜索任务")
-	for _, title := range []string{"修复超时", "界面体验", "支付 API 联调"} {
+	for _, title := range []string{"修复超时", "支付 API 联调", "界面体验"} {
 		tester.Key(0, ui.KeyDown)
 		if !tester.Focused(title) {
 			t.Fatalf("Down should focus %q", title)
 		}
-		if s.selected != 2 || !slices.Equal(s.taskIndexRows(false), []int{2, 1, 0}) {
-			t.Fatal("moving focus reordered recent tasks before activation")
+		if s.selected != 0 || !slices.Equal(s.taskIndexRows(false), []int{2, 0, 1, 4}) || !slices.Equal(s.taskNavigationFor().value.Recent, legacyRecent) {
+			t.Fatal("moving focus changed selection, pin order, or legacy recent data")
 		}
 	}
 	tester.Key(0, ui.KeySpace)
-	if s.selected != 0 || !tester.Focused("支付 API 联调") || !slices.Equal(s.taskIndexRows(false), []int{0, 2, 1}) {
-		t.Fatal("Space must open the task and retain focus after moving it to the top")
+	if s.selected != 1 || !tester.Focused("界面体验") || !slices.Equal(s.taskIndexRows(false), []int{2, 0, 1, 4}) || !slices.Equal(s.taskNavigationFor().value.Recent, legacyRecent) {
+		t.Fatal("Space must open the task, retain focus, and preserve the stable pin-first order")
 	}
 	tester.Key(0, ui.KeyEnd)
-	if !tester.Focused("界面体验") || s.selected != 0 {
+	if !tester.Focused("历史项目任务") || s.selected != 1 {
 		t.Fatal("End must focus the last displayed task without selecting it")
 	}
 	tester.Key(0, ui.KeyEnter)
-	if s.selected != 1 || !slices.Equal(s.taskIndexRows(false), []int{1, 0, 2}) {
-		t.Fatal("Enter did not update recent order")
+	if s.selected != 4 || !slices.Equal(s.taskIndexRows(false), []int{2, 0, 1, 4}) || !slices.Equal(s.taskNavigationFor().value.Recent, legacyRecent) {
+		t.Fatal("Enter changed the pin-first order or legacy recent data")
 	}
 }
 
@@ -192,11 +188,10 @@ func TestTaskNavigationCategoryFiltersAreIndependent(t *testing.T) {
 	}
 	navigationClick(t, tester, "搜索任务")
 	tester.Type("归档")
-	navigationClick(t, tester, "最近访问")
 	navigationClick(t, tester, "查看归档")
 	active, archived := s.taskIndexBrowsingFor(false), s.taskIndexBrowsingFor(true)
-	if s.page != "tasks" || active.search != "api" || active.recentOnly || archived.search != "归档" || !archived.recentOnly || len(s.taskNavigationFor().value.Recent) != 0 {
-		t.Fatal("category switches mixed filters or created a fake visit")
+	if s.page != "tasks" || active.search != "api" || archived.search != "归档" || len(s.taskNavigationFor().value.Recent) != 0 {
+		t.Fatal("category switches mixed filters or changed legacy navigation data")
 	}
 	navigationClick(t, tester, "搜索任务")
 	tester.Key(0, ui.KeyEscape)
@@ -249,9 +244,9 @@ func TestTaskNavigationRejectedSelectionKeepsRouteAndDraft(t *testing.T) {
 			page, selected := s.page, s.selected
 			active := s.taskIndexBrowsingFor(false)
 			if route != "row" {
-				active.search, active.recentOnly = "api", true
+				active.search = "api"
 			}
-			search, recent := active.search, active.recentOnly
+			search := active.search
 			s.documentPath, s.documentContent, s.documentDirty = "draft.md", "尚未提交的输入", true
 			s.documentDrafts["draft.md"], s.documentDirtyMap["draft.md"] = s.documentContent, true
 			s.markdown = &markdownEditorState{path: "draft.md", doc: editor.NewDocument(s.documentContent, "navigation-composition")}
@@ -274,8 +269,8 @@ func TestTaskNavigationRejectedSelectionKeepsRouteAndDraft(t *testing.T) {
 			case "task.create":
 				s.applyTaskSnapshotSelection(application.Action{Kind: route}, application.ActionResult{Data: map[string]any{"taskDirectoryName": "task-ui"}})
 			}
-			if s.page != page || s.selected != selected || active.search != search || active.recentOnly != recent || active.revealTaskKey != "" || !s.documentDirty || s.documentContent != "尚未提交的输入" || s.documentDrafts["draft.md"] != s.documentContent || s.markdown == nil || !s.markdown.doc.Composing() || s.lastError != editor.ErrComposing.Error() || len(s.taskNavigationFor().value.Recent) != 0 {
-				t.Fatalf("refused navigation changed the page, selection, filter, draft or history: page=%s selected=%d search=%q recent=%t error=%q", s.page, s.selected, active.search, active.recentOnly, s.lastError)
+			if s.page != page || s.selected != selected || active.search != search || active.revealTaskKey != "" || !s.documentDirty || s.documentContent != "尚未提交的输入" || s.documentDrafts["draft.md"] != s.documentContent || s.markdown == nil || !s.markdown.doc.Composing() || s.lastError != editor.ErrComposing.Error() || len(s.taskNavigationFor().value.Recent) != 0 {
+				t.Fatalf("refused navigation changed the page, selection, filter, draft or legacy history: page=%s selected=%d search=%q error=%q", s.page, s.selected, active.search, s.lastError)
 			}
 		})
 	}
@@ -285,6 +280,9 @@ func TestTaskNavigationPreferencesFollowTaskIdentity(t *testing.T) {
 	s := taskNavigationFixture()
 	s.desktopPreferences.enabled = true
 	s.snapshot.Home = t.TempDir()
+	if _, err := s.taskNavigationFor().store.Visit(taskNavigationKey(s.tasks[4])); err != nil {
+		t.Fatal(err)
+	}
 	s.setTaskPinned(s.tasks[0], true)
 	s.openTaskIndex(1)
 	if s.taskNavigationFor().error != "" {
@@ -296,8 +294,8 @@ func TestTaskNavigationPreferencesFollowTaskIdentity(t *testing.T) {
 	restarted.tasks[0].path = filepath.Join(t.TempDir(), "relocated-task")
 	restarted.tasks[0].archived = true
 	restarted.tasks[0].groupID = "new-group"
-	if !restarted.taskIsPinned(restarted.tasks[0]) || !reflect.DeepEqual(restarted.taskNavigationFor().value.Recent, s.taskNavigationFor().value.Recent) {
-		t.Fatal("restart, archive or task-root relocation lost personal navigation")
+	if !restarted.taskIsPinned(restarted.tasks[0]) || !reflect.DeepEqual(restarted.taskNavigationFor().value.Recent, []string{taskNavigationKey(s.tasks[4])}) {
+		t.Fatal("restart, archive, relocation or opening a task changed pins or legacy recent data")
 	}
 	restarted.page = "archive"
 	if !taskNavigationTester(restarted, 240, 520).HasText("已置顶：" + restarted.tasks[0].title) {
@@ -324,8 +322,8 @@ func TestTaskNavigationPreferenceFailureDoesNotBlockOpening(t *testing.T) {
 	}
 	s.openTaskIndex(2)
 	s.setTaskPinned(s.tasks[0], true)
-	if s.selected != 2 || len(s.taskNavigationFor().value.Recent) != 1 || s.taskNavigationFor().error == "" || s.taskIsPinned(s.tasks[0]) {
-		t.Fatal("preference failure blocked opening, lost the session visit or reported an unsaved pin as saved")
+	if s.selected != 2 || len(s.taskNavigationFor().value.Recent) != 0 || s.taskNavigationFor().error == "" || s.taskIsPinned(s.tasks[0]) {
+		t.Fatal("preference failure blocked opening or reported an unsaved pin as saved")
 	}
 	stored, err := os.ReadFile(path)
 	if err != nil || string(stored) != string(content) {
@@ -346,8 +344,8 @@ func TestTaskNavigationCreationRevealsTargetOnce(t *testing.T) {
 			}
 			target := s.tasks[len(s.tasks)-1]
 			active, archived := s.taskIndexBrowsingFor(false), s.taskIndexBrowsingFor(true)
-			active.search, active.recentOnly = "不存在", true
-			archived.search, archived.recentOnly = "归档查询", true
+			active.search = "不存在"
+			archived.search = "归档查询"
 			tester := taskNavigationTester(s, 240, 400)
 			action := application.Action{Kind: kind, TaskID: target.id}
 			s.applyTaskSnapshotSelection(action, application.ActionResult{Data: map[string]any{"taskDirectoryName": target.id}})
@@ -356,7 +354,7 @@ func TestTaskNavigationCreationRevealsTargetOnce(t *testing.T) {
 			if !found || bounds.Y < 80 || bounds.Y+bounds.H > 352 || active.scroll.Y <= 0 || active.revealTaskKey != "" {
 				t.Fatalf("new task was not scrolled into view exactly once: bounds=%+v found=%t scroll=%+v reveal=%q", bounds, found, active.scroll, active.revealTaskKey)
 			}
-			if s.currentTask().id != target.id || active.search != "" || active.recentOnly || archived.search != "归档查询" || !archived.recentOnly || len(s.taskNavigationFor().value.Recent) != 0 {
+			if s.currentTask().id != target.id || active.search != "" || archived.search != "归档查询" || len(s.taskNavigationFor().value.Recent) != 0 {
 				t.Fatal("lifecycle reveal failed to isolate filters or created a fake visit")
 			}
 			tester.Scroll(100, 220, 0, 2000)
@@ -379,11 +377,14 @@ func TestTaskNavigationNarrowLayout(t *testing.T) {
 				s.tasks[0].status = "等待研发负责人和业务测试人员联合确认"
 				s.setTaskPinned(s.tasks[0], true)
 				tester := taskNavigationTester(s, width, 520)
-				for _, label := range []string{"搜索任务", "全部", "最近访问", s.tasks[0].title, "查看归档"} {
+				for _, label := range []string{"搜索任务", s.tasks[0].title, "查看归档"} {
 					bounds, found := tester.Find(label)
 					if !found || bounds.X < 0 || bounds.X+bounds.W > float32(width) || bounds.W < 20 || bounds.H < 20 {
 						t.Fatalf("control %q is clipped or too small: %+v found=%t", label, bounds, found)
 					}
+				}
+				if tester.HasText("全部") || tester.HasText("最近访问") {
+					t.Fatal("removed task list mode controls are still visible")
 				}
 				status, found := tester.Find(s.tasks[0].status)
 				if !found || status.X < 0 || status.X+status.W > float32(width)-8 {

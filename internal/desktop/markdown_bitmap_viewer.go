@@ -1,6 +1,9 @@
 package desktop
 
 import (
+	"context"
+
+	"silverwing-go/internal/editor"
 	"silverwing-go/internal/media"
 
 	"github.com/egoist/mygo/ui"
@@ -8,10 +11,20 @@ import (
 
 type markdownBitmapViewerState struct {
 	owner        *markdownEditorState
+	document     *editor.Document
+	reader       *requirementReaderState
+	readerKey    string
+	readerEpoch  uint64
+	taskID       string
+	itemKey      string
 	source       string
+	sourcePath   string
 	page         string
 	settingsPage string
 	tab          int
+	generation   uint64
+	requestCtx   context.Context
+	cancel       context.CancelFunc
 	media        *nativeMediaState
 }
 
@@ -25,14 +38,20 @@ func (s *app) openMarkdownBitmapViewer(owner *markdownEditorState, bitmap *ui.Bi
 	if width <= 0 || height <= 0 {
 		return
 	}
-	s.markdownBitmapViewer = &markdownBitmapViewerState{
-		owner: owner, source: owner.doc.Source(), page: s.page,
+	viewer := &markdownBitmapViewerState{
+		owner: owner, document: owner.doc, source: owner.doc.Source(), page: s.page,
 		settingsPage: s.settingsPage, tab: s.tab,
 		media: &nativeMediaState{
 			kind: "image", imageExpanded: true, imageExpandedBitmap: bitmap,
 			imageInfo: media.ImageInfo{Width: width, Height: height}, imageZoom: 1,
 		},
 	}
+	if !s.bindMarkdownBitmapViewerOwner(viewer, owner) {
+		return
+	}
+	s.dismissMarkdownBitmapViewer()
+	s.markdownBitmapViewer = viewer
+	owner.closeBitmapViewer = func() { s.closeMarkdownBitmapViewerForOwner(owner) }
 }
 
 func (s *app) renderMarkdownBitmapViewer(c *ui.Context, p palette) {
@@ -40,13 +59,55 @@ func (s *app) renderMarkdownBitmapViewer(c *ui.Context, p palette) {
 	if viewer == nil {
 		return
 	}
-	if viewer.owner.closed || viewer.owner.doc == nil || viewer.owner.doc.Source() != viewer.source ||
-		s.page != viewer.page || s.settingsPage != viewer.settingsPage || s.tab != viewer.tab {
-		s.markdownBitmapViewer = nil
+	if viewer.owner == nil || viewer.owner.closed || viewer.owner.doc == nil || viewer.owner.doc.Source() != viewer.source ||
+		viewer.owner.doc != viewer.document || s.page != viewer.page || s.settingsPage != viewer.settingsPage || s.tab != viewer.tab ||
+		viewer.owner.commentReading && !s.markdownBitmapViewerCommentContextCurrent(viewer) {
+		s.dismissMarkdownBitmapViewer()
 		return
 	}
 	s.renderNativeImageViewer(c, p, viewer.media)
 	if !viewer.media.imageExpanded {
-		s.markdownBitmapViewer = nil
+		s.dismissMarkdownBitmapViewer()
+	}
+}
+
+func (s *app) dismissMarkdownBitmapViewer() {
+	if s == nil || s.markdownBitmapViewer == nil {
+		return
+	}
+	viewer := s.markdownBitmapViewer
+	s.markdownBitmapViewer = nil
+	if viewer.owner != nil {
+		viewer.owner.closeBitmapViewer = nil
+	}
+	closeMarkdownBitmapViewer(viewer)
+}
+
+func (s *app) closeMarkdownBitmapViewerForOwner(owner *markdownEditorState) {
+	if s != nil && s.markdownBitmapViewer != nil && s.markdownBitmapViewer.owner == owner {
+		s.dismissMarkdownBitmapViewer()
+	}
+}
+
+func closeMarkdownBitmapViewer(viewer *markdownBitmapViewerState) {
+	if viewer == nil {
+		return
+	}
+	viewer.generation++
+	if viewer.cancel != nil {
+		viewer.cancel()
+		viewer.cancel = nil
+	} else if viewer.media != nil && viewer.media.imageExpandedCancel != nil {
+		viewer.media.imageExpandedCancel()
+	}
+	viewer.requestCtx = nil
+	if viewer.media != nil {
+		viewer.media.imageExpanded = false
+		viewer.media.imageExpandedLoading = false
+		viewer.media.imageExpandedBitmap = nil
+		viewer.media.imageExpandedError = ""
+		viewer.media.imageExpandedCancel = nil
+		viewer.media.imageDragging = false
+		viewer.media.imageOffsetX, viewer.media.imageOffsetY = 0, 0
 	}
 }

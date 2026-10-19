@@ -291,12 +291,14 @@ func TestTaskRestorationKeepsArchiveBrowsingState(t *testing.T) {
 	s := taskNavigationFixture()
 	s.page, s.selected = "archive", 3
 	state := s.taskIndexBrowsingFor(true)
-	state.search, state.recentOnly, state.scroll.Y = "归档", true, 120
+	state.search, state.scroll.Y = "归档", 120
+	s.taskNavigationFor().value.Recent = []string{taskNavigationKey(s.tasks[3])}
+	legacyRecent := slices.Clone(s.taskNavigationFor().value.Recent)
 	s.tasks[3].archived = false
 	s.selected = -1
 	s.applyTaskLifecycleSnapshotSelection(application.Action{Kind: "task.restore", TaskID: s.tasks[3].id}, application.ActionResult{})
-	if s.page != "archive" || s.selected != -1 || state.search != "归档" || !state.recentOnly || state.scroll.Y != 120 ||
-		state.revealTaskKey != "" || len(s.taskNavigationFor().value.Recent) != 0 {
+	if s.page != "archive" || s.selected != -1 || state.search != "归档" || state.scroll.Y != 120 ||
+		state.revealTaskKey != "" || !slices.Equal(s.taskNavigationFor().value.Recent, legacyRecent) {
 		t.Fatal("restoration opened the restored task or reset archive browsing")
 	}
 }
@@ -384,7 +386,7 @@ func TestTaskLifecycleSnapshotPreservesUnrelatedDraftAndArchiveRoute(t *testing.
 }
 
 func TestTaskLifecycleSelectionUsesFilteredNeighbors(t *testing.T) {
-	for _, mode := range []string{"next", "previous", "empty", "non-current", "recent"} {
+	for _, mode := range []string{"next", "previous", "empty", "non-current", "pinned"} {
 		t.Run(mode, func(t *testing.T) {
 			s := taskNavigationFixture()
 			s.selected = 1
@@ -402,9 +404,9 @@ func TestTaskLifecycleSelectionUsesFilteredNeighbors(t *testing.T) {
 			case "non-current":
 				s.selected = 0
 				want = 0
-			case "recent":
-				s.taskIndexBrowsingFor(false).recentOnly = true
-				s.taskNavigationFor().value.Recent = []string{taskNavigationKey(s.tasks[1]), taskNavigationKey(s.tasks[4]), taskNavigationKey(s.tasks[0])}
+			case "pinned":
+				s.setTaskPinned(s.tasks[4], true)
+				s.setTaskPinned(s.tasks[1], true)
 				want = 4
 			}
 			if got := s.taskLifecycleSnapshotIndex(next); got != want {

@@ -68,7 +68,7 @@ func (s *app) activateRequirementSprint(sprintKey string) {
 	} else {
 		s.requirementsFetchedAt = 0
 		s.requirements = nil
-		s.selectedRequirement, s.selectedRequirementKey = 0, ""
+		s.clearRequirementListSelection()
 		s.requirementsLoaded = false
 		s.requirementsFailures = nil
 		s.requirementsCompletedQueries = 0
@@ -150,7 +150,7 @@ func (s *app) startRequirementListJob(sprintKey string, refresh bool) {
 
 	if !sameSprint {
 		s.requirements = nil
-		s.selectedRequirement, s.selectedRequirementKey = 0, ""
+		s.clearRequirementListSelection()
 		s.lastResult = ""
 		s.requirementsFocusedDetail = false
 	}
@@ -250,7 +250,7 @@ func (s *app) applyRequirementListFailure(request *requirementListJob, err error
 		s.restoreRequirementListSelection(request.selectedKey)
 	} else {
 		s.requirements = nil
-		s.selectedRequirement, s.selectedRequirementKey = 0, ""
+		s.clearRequirementListSelection()
 	}
 	s.requirementsLoading, s.requirementsLoaded = false, true
 	s.requirementsLoadError = "读取需求列表失败"
@@ -346,8 +346,18 @@ func (s *app) restoreRequirementListSelection(previousKey string) {
 		s.selectedRequirement, s.selectedRequirementKey = 0, ""
 	}
 	if previous != s.selectedRequirementKey {
+		if s.page == "requirements" {
+			s.dismissMarkdownBitmapViewer()
+		}
 		s.lastResult = ""
 	}
+}
+
+func (s *app) clearRequirementListSelection() {
+	if s.page == "requirements" && s.selectedRequirementKey != "" {
+		s.dismissMarkdownBitmapViewer()
+	}
+	s.selectedRequirement, s.selectedRequirementKey = 0, ""
 }
 
 func (s *app) completeRequirementListWorker(state *requirementListJobState, request *requirementListJob) {

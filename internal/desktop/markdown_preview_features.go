@@ -55,6 +55,11 @@ func closeMarkdownPreviewState(state *markdownEditorState) {
 }
 
 func closeMarkdownPreviewAssets(state *markdownEditorState) {
+	if state.closeBitmapViewer != nil {
+		closeViewer := state.closeBitmapViewer
+		state.closeBitmapViewer = nil
+		closeViewer()
+	}
 	for _, diagram := range state.diagrams {
 		if diagram.cancel != nil {
 			diagram.cancel()
@@ -154,7 +159,11 @@ func (s *app) renderMarkdownImage(c *ui.Context, p palette, state *markdownEdito
 			width = int(maxWidth)
 		}
 		ui.Column(c).Shrink(0).Gap(3).Children(func() {
-			ui.Image(c.Key(markdownEditorControlKey(state, fmt.Sprintf("markdown-image-preview-%d-%d", part.ID, node.Range.Start))), image.bitmap).Width(float32(width)).MaxWidthPercent(100).AspectRatio(float32(width)/float32(height)).Fit(ui.Contain).Label("Markdown 图片：" + alt).OnClick(func() {
+			ui.Image(c.Key(markdownEditorControlKey(state, fmt.Sprintf("markdown-image-preview-%d-%d", part.ID, node.Range.Start))), image.bitmap).Width(float32(width)).MaxWidthPercent(100).AspectRatio(float32(width) / float32(height)).Fit(ui.Contain).Label("Markdown 图片：" + alt).OnClick(func() {
+				if state.commentReading && image.sourcePath != "" {
+					s.openMarkdownLocalImageViewer(state, image.sourcePath)
+					return
+				}
 				s.openMarkdownBitmapViewer(state, image.bitmap)
 			})
 			if alt != "图片" {
@@ -232,6 +241,9 @@ func (s *app) ensureMarkdownImage(state *markdownEditorState, part editor.Part, 
 			return image, nil
 		}
 		absolutePath = validatedPath
+		if state.commentReading {
+			image.sourcePath = validatedPath
+		}
 	} else {
 		var err error
 		absolutePath, remote, err = s.resolveTaskMarkdownImage(state, link)

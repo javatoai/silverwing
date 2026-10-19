@@ -78,35 +78,14 @@ func (s *app) setTaskPinned(t task, pinned bool) {
 	state.value.Pinned = taskNavigationMoveFirst(state.value.Pinned, key, pinned)
 }
 
-// Only explicit row activation counts as a visit. Snapshot refreshes, startup
-// restoration, list filters and lifecycle-driven selections use selectTaskIndex.
+// Opening a row selects the task without changing persisted navigation data.
 func (s *app) openTaskIndex(index int) {
 	if index < 0 || index >= len(s.tasks) {
 		return
 	}
-	target := s.tasks[index]
 	if !s.selectTaskIndex(index) {
 		// Capturing an unsaved editor can reject the switch.
 		return
-	}
-	key := taskNavigationKey(target)
-	if key == "" {
-		return
-	}
-	state := s.taskNavigationFor()
-	if state.store != nil {
-		value, err := state.store.Visit(key)
-		if err == nil {
-			state.value, state.error = value, ""
-			return
-		}
-		state.error = "最近访问未保存：" + err.Error()
-	}
-	// A preference failure must not prevent opening the task. Retain this
-	// session's visit while clearly reporting that it was not saved to disk.
-	state.value.Recent = taskNavigationMoveFirst(state.value.Recent, key, true)
-	if len(state.value.Recent) > taskNavigationRecent {
-		state.value.Recent = state.value.Recent[:taskNavigationRecent]
 	}
 }
 
@@ -157,7 +136,7 @@ func (s *app) taskMatchesSearch(t task, terms []string) bool {
 }
 
 // Return filtered task indices without mutating snapshot order or selection.
-// Recent view has strict visit order; all/search views put pins first.
+// Pinned tasks precede the remaining rows in the snapshot's stable order.
 func (s *app) taskIndexRows(archived bool) []int {
 	return s.taskIndexRowsFor(s.tasks, archived)
 }
@@ -175,21 +154,15 @@ func (s *app) taskIndexRowsFor(tasks []task, archived bool) []int {
 		}
 	}
 	ordered := make([]int, 0, len(rows))
-	keys := preferences.Pinned
-	if state.recentOnly {
-		keys = preferences.Recent
-	}
-	for _, key := range keys {
+	for _, key := range preferences.Pinned {
 		if index, ok := byKey[key]; ok {
 			ordered = append(ordered, index)
 			delete(byKey, key)
 		}
 	}
-	if !state.recentOnly {
-		for _, index := range rows {
-			if _, ok := byKey[taskNavigationKey(tasks[index])]; ok {
-				ordered = append(ordered, index)
-			}
+	for _, index := range rows {
+		if _, ok := byKey[taskNavigationKey(tasks[index])]; ok {
+			ordered = append(ordered, index)
 		}
 	}
 	return ordered
@@ -198,7 +171,7 @@ func (s *app) taskIndexRowsFor(tasks []task, archived bool) []int {
 // Explicit creation reveals its result even from a filtered task index.
 func (s *app) revealTaskInIndex(t task) {
 	state := s.taskIndexBrowsingFor(t.archived)
-	state.search, state.recentOnly = "", false
+	state.search = ""
 	state.scroll.X, state.scroll.Y = 0, 0
 	state.revealTaskKey = taskNavigationKey(t)
 }

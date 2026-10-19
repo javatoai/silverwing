@@ -25,6 +25,8 @@ type markdownEditorState struct {
 	onNavigateLocalLink    func(relativePath, fragment string)
 	doc                    *editor.Document
 	readOnly               bool
+	commentReading         bool
+	closeBitmapViewer      func()
 	detached               bool
 	closed                 bool
 	remoteImages           bool
@@ -67,11 +69,12 @@ type markdownDiagramState struct {
 }
 
 type markdownInlineImageState struct {
-	key     string
-	bitmap  *ui.Bitmap
-	error   string
-	loading bool
-	cancel  context.CancelFunc
+	key        string
+	sourcePath string
+	bitmap     *ui.Bitmap
+	error      string
+	loading    bool
+	cancel     context.CancelFunc
 }
 
 func (s *app) ensureMarkdownEditor() *markdownEditorState {

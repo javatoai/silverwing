@@ -106,7 +106,7 @@ func (s *app) clearRequirementListView() {
 	s.cancelRequirementDocumentPreparation()
 	s.requirements = nil
 	s.requirementsFetchedAt = 0
-	s.selectedRequirement, s.selectedRequirementKey = 0, ""
+	s.clearRequirementListSelection()
 	s.requirementsRequested, s.requirementsLoading, s.requirementsLoaded = false, false, false
 	s.requirementsLoadError = ""
 	s.requirementsFailures = nil

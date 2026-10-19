@@ -11,7 +11,6 @@ type taskIndexBrowsingState struct {
 	scroll        ui.ScrollState
 	detailScrolls map[string]*ui.ScrollState
 	search        string
-	recentOnly    bool
 	searchInput   ui.Handle
 	rowHandles    map[string]*ui.Handle
 	revealTaskKey string

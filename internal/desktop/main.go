@@ -292,6 +292,7 @@ func Run(backend application.Backend, opts Options) error {
 		s.cancelOperation()
 	}
 	s.cancelTaskRequirementReads()
+	s.dismissMarkdownBitmapViewer()
 	s.closeRequirementReaders()
 	if s.settingsExtensionRequests != nil {
 		closeMarkdownPreviewState(s.settingsExtensionRequests.previewMarkdown)

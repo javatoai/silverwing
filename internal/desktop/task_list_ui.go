@@ -26,18 +26,11 @@ func (s *app) taskIndex(c *ui.Context, p palette) {
 				switch {
 				case strings.TrimSpace(state.search) != "":
 					message = "没有匹配的任务\n试试其他关键词，或清除搜索。"
-				case state.recentOnly:
-					message = "暂无最近访问的任务\n打开任务后会显示在这里。"
 				case archived:
 					message = "还没有已归档任务。"
 				}
 				ui.Column(c).FillWidth().Padding(24, 12).Gap(8).Center().Children(func() {
 					label(c, message, 12, p.muted).FillWidth().Wrap()
-					if state.recentOnly && summaryTextButton(c, "task-index-show-all", "查看全部任务", p.blue, false) {
-						state.recentOnly = false
-						state.scroll.Y = 0
-						s.markReadingInteraction()
-					}
 				})
 			}
 		})
@@ -91,32 +84,6 @@ func (s *app) taskIndexToolbar(c *ui.Context, p palette, state *taskIndexBrowsin
 				clear.Children(func() { icon(c, "close", 15, p.muted) })
 				if clear.Clicked() {
 					s.clearTaskIndexSearch(c, state)
-				}
-			}
-		})
-		ui.Row(c).FillWidth().MinWidth(0).Gap(4).Children(func() {
-			for _, option := range []struct {
-				recent bool
-				label  string
-			}{{false, "全部"}, {true, "最近访问"}} {
-				active := state.recentOnly == option.recent
-				button := ui.ButtonBase(c.Key("task-index-mode-" + option.label)).Grow(1).MinWidth(0).Height(28).
-					Center().Radius(6).Label(option.label)
-				color := p.muted
-				if active {
-					button.Background(p.selected)
-					color = p.blue
-				} else if button.Hovered() {
-					button.Background(p.side)
-				}
-				if option.recent {
-					button.Tooltip("按打开顺序显示最近 20 个任务中的当前分类")
-				}
-				button.Children(func() { label(c, option.label, 12, color).SingleLine() })
-				if button.Clicked() && !active {
-					state.recentOnly = option.recent
-					state.scroll.X, state.scroll.Y = 0, 0
-					s.markReadingInteraction()
 				}
 			}
 		})
@@ -207,7 +174,7 @@ func (s *app) taskIndexTask(c *ui.Context, p palette, state *taskIndexBrowsingSt
 			state.revealTaskKey = ""
 		}
 		// Direction keys move focus only; Enter/Space use the button's normal
-		// activation. This keeps recent-order navigation stable until opening.
+		// activation without changing the list's stable pin-first order.
 		button.OnShortcut(0, ui.KeyUp, func() {
 			position := slices.Index(state.visibleRows, i)
 			if position == 0 {
@@ -288,6 +255,7 @@ func (s *app) selectTaskIndex(i int) bool {
 	s.cancelWorkspaceGitStatus()
 	s.cancelWorkspaceGitFlow()
 	s.cancelMaterialsSearch()
+	s.dismissMarkdownBitmapViewer()
 	s.selected = i
 	s.taskListFocused = false
 	s.closeNativeMedia()

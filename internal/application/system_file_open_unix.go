@@ -9,6 +9,7 @@ import (
 	"io"
 	"os/exec"
 	"runtime"
+	"silverwing-go/internal/executable"
 	"time"
 )
 
@@ -24,7 +25,7 @@ func (nativeSystemFileOpening) open(ctx context.Context, path string) (systemFil
 	defer cancel()
 	command := "xdg-open"
 	if runtime.GOOS == "darwin" {
-		command = "open"
+		command = executable.SystemCommand("open")
 	}
 	cmd := exec.CommandContext(openContext, command, path)
 	cmd.Stdout = io.Discard

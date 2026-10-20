@@ -17,7 +17,8 @@ func (s *app) applyTaskSnapshotSelection(action application.Action, result appli
 		return true
 	}
 	for index, item := range s.tasks {
-		if item.id != id {
+		createdAt := mapString(mapData(result.Data), "createdAt")
+		if item.id != id || createdAt != "" && item.createdAt != createdAt {
 			continue
 		}
 		if s.selectTaskIndex(index) {

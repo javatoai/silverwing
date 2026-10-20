@@ -10,7 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"silverwing-go/internal/commandruntime"
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/executable"
 	"silverwing-go/internal/process"
 	"silverwing-go/internal/storage"
 )
@@ -157,6 +159,9 @@ func (s *PreparationService) Ensure(ctx context.Context, config domain.AppConfig
 		return domain.RequirementMaterialsDirectory{Status: domain.MaterialsReady, WriteRoot: &writeRoot}, nil
 	}
 	project, err := s.resolveRequirementProject(ctx, config, id, link)
+	if ctx.Err() != nil {
+		return domain.RequirementMaterialsDirectory{}, ctx.Err()
+	}
 	if err != nil {
 		return fail(err.Error())
 	}
@@ -203,36 +208,28 @@ func (s *PreparationService) resolveRequirementProject(ctx context.Context, conf
 		}
 		return nil, nil
 	}
-	executable := "meegle"
-	if isWindowsHost() {
-		executable = "meegle.cmd"
-	}
-	if config.MeegleExecutablePath != nil && strings.TrimSpace(*config.MeegleExecutablePath) != "" {
-		executable = strings.TrimSpace(*config.MeegleExecutablePath)
-	}
 	timeout := 20 * time.Second
 	var matches []domain.MeegleProjectConfig
 	for _, project := range candidates {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		result, err := s.runner.Run(ctx, process.Spec{Executable: executable, Arguments: []string{
-			"workitem", "get", "--project-key", project.ProjectKey, "--work-item-id", id, "--format", "json",
-		}, Timeout: timeout})
+		result, err := s.runMeegle(ctx, config, []string{"workitem", "get", "--project-key", project.ProjectKey, "--work-item-id", id, "--format", "json"}, timeout)
 		if err != nil {
-			return nil, fmt.Errorf("Meegle CLI 执行失败：%s", strings.TrimSpace(err.Error()))
+			return nil, err
 		}
 		if !result.Successful() {
 			message := strings.TrimSpace(result.Stderr)
 			if message == "" {
 				message = strings.TrimSpace(result.Stdout)
 			}
-			if strings.Contains(strings.ToLower(message), "not found") || strings.Contains(strings.ToLower(message), "not exist") || strings.Contains(message, "不存在") || strings.Contains(message, "404") {
+			if missingRequirement(message) {
 				continue
 			}
-			if len(message) > 300 {
-				message = message[:300]
+			if runes := []rune(message); len(runes) > 300 {
+				message = string(runes[:300])
 			}
+			message = commandruntime.Redact(config, message)
 			return nil, fmt.Errorf("Meegle CLI 执行失败：%s", message)
 		}
 		var raw any
@@ -511,22 +508,11 @@ func (s *PreparationService) fetchRequirementTitle(ctx context.Context, config d
 	if s.runner == nil {
 		return ""
 	}
-	executable := "meegle"
-	if isWindowsHost() {
-		executable = "meegle.cmd"
-	}
-	if config.MeegleExecutablePath != nil && strings.TrimSpace(*config.MeegleExecutablePath) != "" {
-		executable = strings.TrimSpace(*config.MeegleExecutablePath)
-	}
 	link := domain.ParseFeishuWorkItemLink(requirementLink)
 	if link == nil {
 		return ""
 	}
-	result, err := s.runner.Run(ctx, process.Spec{
-		Executable: executable,
-		Arguments:  []string{"workitem", "get", "--project-key", projectKey, "--work-item-id", link.WorkItemID, "--format", "json"},
-		Timeout:    8 * time.Second,
-	})
+	result, err := s.runMeegle(ctx, config, []string{"workitem", "get", "--project-key", projectKey, "--work-item-id", link.WorkItemID, "--format", "json"}, 8*time.Second)
 	if err != nil || !result.Successful() {
 		return ""
 	}
@@ -576,4 +562,35 @@ func jsonPrimitiveText(raw json.RawMessage) string {
 	default:
 		return ""
 	}
+}
+
+// Both project verification and optional title lookup share the desktop CLI
+// runtime. A reused directory deliberately requires neither remote lookup.
+func (s *PreparationService) runMeegle(ctx context.Context, config domain.AppConfig, args []string, timeout time.Duration) (process.Result, error) {
+	configured := ""
+	if config.MeegleExecutablePath != nil {
+		configured = strings.TrimSpace(*config.MeegleExecutablePath)
+	}
+	spec, err := commandruntime.Prepare(ctx, s.runner, &config, domain.ProxyTargetMeegle, executable.ToolMeegle, configured)
+	if err != nil {
+		return process.Result{}, err
+	}
+	spec.Arguments, spec.Timeout = args, timeout
+	result, err := s.runner.Run(ctx, spec)
+	if ctx.Err() != nil {
+		return result, ctx.Err()
+	}
+	if err != nil {
+		return result, fmt.Errorf("Meegle CLI 执行失败：%s", commandruntime.Redact(config, err.Error()))
+	}
+	return result, nil
+}
+
+func missingRequirement(message string) bool {
+	lower := strings.ToLower(message)
+	if strings.Contains(lower, "node") || strings.Contains(lower, "env:") || strings.Contains(lower, "command not found") || strings.Contains(lower, "no such file") {
+		return false
+	}
+	explicitItem := strings.Contains(lower, "workitem") || strings.Contains(lower, "work item") || strings.Contains(lower, "work-item") || strings.Contains(message, "需求") || strings.Contains(message, "工作项")
+	return strings.Contains(lower, "404") || explicitItem && (strings.Contains(lower, "not found") || strings.Contains(lower, "not exist") || strings.Contains(message, "不存在"))
 }

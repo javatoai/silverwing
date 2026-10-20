@@ -25,19 +25,43 @@ func init() {
 		}
 	}
 	if output == "" {
+		if slices.Contains(os.Args, "workitem") {
+			os.WriteFile(os.Getenv("SILVERWING_NAMING_FIXTURE_REMOTE_MARKER"), []byte("unexpected remote read"), 0600)
+			os.Exit(73)
+		}
+		if slices.Contains(os.Args, "mcp") {
+			if os.Getenv("SILVERWING_NAMING_FIXTURE_MCP_FAIL") == "1" {
+				os.Exit(74)
+			}
+			io.WriteString(os.Stdout, `[{"name":"node_repl","enabled":true},{"name":"fixture.mcp-name","enabled":true}]`)
+			os.Exit(0)
+		}
 		return
 	}
-	io.Copy(io.Discard, os.Stdin)
+	prompt, _ := io.ReadAll(os.Stdin)
 	env := map[string]string{}
 	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy"} {
 		env[key] = os.Getenv(key)
 	}
 	data, _ := json.Marshal(struct {
-		Args []string
-		Env  map[string]string
-	}{os.Args[1:], env})
+		Args  []string
+		Env   map[string]string
+		Stdin string
+	}{os.Args[1:], env, string(prompt)})
 	if os.WriteFile(os.Getenv("SILVERWING_NAMING_FIXTURE_CAPTURE"), data, 0600) != nil {
 		os.Exit(81)
+	}
+	if log := os.Getenv("SILVERWING_NAMING_FIXTURE_RUN_LOG"); log != "" {
+		f, e := os.OpenFile(log, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+		if e != nil {
+			os.Exit(83)
+		}
+		f.Write(append(data, '\n'))
+		f.Close()
+	}
+	if os.Getenv("SILVERWING_NAMING_FIXTURE_UNSUPPORTED_REASONING") == "1" && slices.Contains(os.Args, `model_reasoning_effort="low"`) {
+		io.WriteString(os.Stderr, "reasoning unsupported")
+		os.Exit(75)
 	}
 	if os.WriteFile(output, []byte(`{"folderName":"命名示例","branchSuffix":"naming_fixture"}`), 0600) != nil {
 		os.Exit(82)

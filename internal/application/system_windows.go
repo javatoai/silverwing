@@ -3,12 +3,12 @@
 package application
 
 import (
+	"context"
 	"fmt"
 	"runtime"
 	"syscall"
 
 	"silverwing-go/internal/domain"
-	"silverwing-go/internal/process"
 )
 
 var shellExecute = syscall.NewLazyDLL("shell32.dll").NewProc("ShellExecuteW")
@@ -35,25 +35,28 @@ func openNative(path string, reveal bool) error {
 	}
 	return nil
 }
-func launchTerminal(resolution SystemTerminalResolution, directory string) error {
+func launchTerminal(ctx context.Context, resolution SystemTerminalResolution, directory string) error {
 	plan, err := PlanSystemTerminalLaunch(runtime.GOOS, resolution, directory)
 	if err != nil {
 		return err
 	}
-	return startWindowsLaunchPlan(plan, true)
+	return startWindowsLaunchPlan(ctx, plan, true)
 }
-func launchSystemTerminalPlan(plan SystemLaunchPlan) error {
-	return startWindowsLaunchPlan(plan, true)
+func launchSystemTerminalPlan(ctx context.Context, plan SystemLaunchPlan) error {
+	return startWindowsLaunchPlan(ctx, plan, true)
 }
-func launchTool(toolType domain.DevelopmentToolType, executable, path string) error {
+func launchTool(ctx context.Context, toolType domain.DevelopmentToolType, executable, path string) error {
 	plan, err := PlanSystemToolLaunch(runtime.GOOS, toolType, executable, path)
 	if err != nil {
 		return err
 	}
-	return startWindowsLaunchPlan(plan, false)
+	return startWindowsLaunchPlan(ctx, plan, false)
 }
-func startWindowsLaunchPlan(plan SystemLaunchPlan, terminal bool) error {
-	cmd := process.NewDetachedCommand(plan.Executable, plan.Arguments...)
+func startWindowsLaunchPlan(ctx context.Context, plan SystemLaunchPlan, terminal bool) error {
+	cmd, err := detachedToolCommand(ctx, plan.Executable, plan.Arguments)
+	if err != nil {
+		return err
+	}
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
@@ -68,8 +71,11 @@ func startWindowsLaunchPlan(plan SystemLaunchPlan, terminal bool) error {
 	go cmd.Wait()
 	return nil
 }
-func launchToolArguments(executable string, arguments ...string) error {
-	cmd := process.NewDetachedCommand(executable, arguments...)
+func launchToolArguments(ctx context.Context, executable string, arguments ...string) error {
+	cmd, err := detachedToolCommand(ctx, executable, arguments)
+	if err != nil {
+		return err
+	}
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}

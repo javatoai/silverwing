@@ -153,14 +153,14 @@ func (s *Service) generateRequirementNaming(ctx context.Context, config domain.A
 	// Naming and document preparation consume the same body cache and refresh
 	// route. A cached body therefore does not require another work-item fetch.
 	content, err := s.readRequirement(ctx, config, map[string]any{"url": item.URL, "projectKey": item.ProjectKey,
-		"projectName": item.ProjectName, "type": item.Type, "id": item.ID, "title": item.Title, "force": force})
+		"projectName": item.ProjectName, "type": item.Type, "id": item.ID, "title": item.Title, "force": false})
 	if err != nil {
 		return domain.RequirementAiNamingSuggestion{}, err
 	}
 	data := content.(RequirementReadResult)
-	title := item.Title
+	title := data.Title
 	if title == "" {
-		title = data.Title
+		title = item.Title
 	}
 	if title == "" {
 		return domain.RequirementAiNamingSuggestion{}, errors.New("需求缺少标题")
@@ -178,7 +178,7 @@ func (s *Service) generateRequirementNaming(ctx context.Context, config domain.A
 	}
 	current, loadErr := s.config.Load()
 	if ctx.Err() == nil && loadErr == nil && s.requirementNamingContext(current, "") == s.requirementNamingContext(config, "") {
-		// Fresh suggestions, including forced/collision retries, replace the old
+		// Fresh suggestions, including explicit regeneration, replace the old
 		// cache entry just as the source's shared coordinator does.
 		s.writeRequirementAINamingCache(identity, model, suggestion)
 	}

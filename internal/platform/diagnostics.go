@@ -36,7 +36,7 @@ func (s *Service) gitVersion(ctx context.Context) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	command := s.gitExecutable(cfg)
+	command := s.gitExecutable(ctx, cfg)
 	result, err := s.runTool(ctx, cfg, domain.ProxyTargetGit, command, []string{"--version"}, "", 10*time.Second)
 	if err != nil {
 		return map[string]any{"command": command, "success": false, "error": redactProxy(cfg, err.Error())}, nil
@@ -271,7 +271,7 @@ func (s *Service) diagnosticSystemSummary(ctx context.Context, cfg domain.AppCon
 	var out strings.Builder
 	fmt.Fprintf(&out, "silverwing config schema: %s\n", domain.CurrentAppConfigSchemaVersion)
 	fmt.Fprintf(&out, "OS: %s %s %s\n", runtime.GOOS, runtime.GOARCH, runtime.Version())
-	if result, err := s.runTool(ctx, cfg, domain.ProxyTargetGit, s.gitExecutable(cfg), []string{"--version"}, "", 10*time.Second); err == nil {
+	if result, err := s.runTool(ctx, cfg, domain.ProxyTargetGit, s.gitExecutable(ctx, cfg), []string{"--version"}, "", 10*time.Second); err == nil {
 		fmt.Fprintf(&out, "Git: %s\n", firstNonBlank(result.Stdout, result.Stderr))
 	} else if process.IsCleanupFailure(err) || ctx.Err() != nil {
 		return "", err
@@ -318,7 +318,7 @@ func (s *Service) diagnosticRepositorySummary(ctx context.Context, cfg domain.Ap
 	for _, repository := range cfg.Repositories {
 		fmt.Fprintf(&out, "[%s] %s\n", repository.ID, repository.Name)
 		fmt.Fprintf(&out, "root=%s\n", redactHome(repository.RootPath))
-		result, err := s.runTool(ctx, cfg, domain.ProxyTargetGit, s.gitExecutable(cfg), []string{"--no-optional-locks", "-C", repository.RootPath, "worktree", "list", "--porcelain"}, "", 10*time.Second)
+		result, err := s.runTool(ctx, cfg, domain.ProxyTargetGit, s.gitExecutable(ctx, cfg), []string{"--no-optional-locks", "-C", repository.RootPath, "worktree", "list", "--porcelain"}, "", 10*time.Second)
 		if process.IsCleanupFailure(err) || ctx.Err() != nil {
 			if err != nil {
 				return "", err

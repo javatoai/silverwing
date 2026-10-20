@@ -155,7 +155,7 @@ func (l platformCodexWorkspaceLauncher) Descriptor() workspace.TaskWorkspaceTool
 	return workspace.TaskWorkspaceToolDescriptor{ID: "codex", DisplayName: "Codex", Description: "为任务目录新建 Codex 会话"}
 }
 
-func (l platformCodexWorkspaceLauncher) Availability() workspace.TaskWorkspaceToolAvailability {
+func (l platformCodexWorkspaceLauncher) Availability(ctx context.Context) workspace.TaskWorkspaceToolAvailability {
 	return workspace.TaskWorkspaceToolAvailability{Available: l.service != nil}
 }
 

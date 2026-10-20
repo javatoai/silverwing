@@ -135,6 +135,9 @@ func (s *TaskApplicationService) InspectCreateBranchReuseWithProgress(ctx contex
 		if err != nil {
 			return err
 		}
+		if err := requireAvailableTaskDirectory(filepath.Join(root, folder)); err != nil {
+			return err
+		}
 		groupID := request.GroupID
 		if groupID == "" {
 			groupID = domain.DefaultGroupID
@@ -187,6 +190,9 @@ func (s *TaskApplicationService) CreateTaskWithProgress(ctx context.Context, con
 		if checkErr != nil {
 			return checkErr
 		}
+		if checkErr = requireAvailableTaskDirectory(filepath.Join(root, folderName)); checkErr != nil {
+			return checkErr
+		}
 		feature = strings.TrimSpace(request.FeatureBranch)
 		if checkErr = s.validateFeatureBranch(feature); checkErr != nil {
 			return checkErr
@@ -236,9 +242,7 @@ func (s *TaskApplicationService) createLocked(ctx context.Context, config domain
 		if parent, err := filepath.Abs(filepath.Dir(taskPath)); err != nil || !samePath(parent, mustAbs(taskRootPath)) {
 			return fmt.Errorf("任务目录必须是任务根目录的直接子目录")
 		}
-		if _, err := os.Lstat(taskPath); err == nil {
-			return fmt.Errorf("任务目录已存在，请换一个任务名称：%s", taskPath)
-		} else if !os.IsNotExist(err) {
+		if err := requireAvailableTaskDirectory(taskPath); err != nil {
 			return err
 		}
 		return nil
@@ -346,6 +350,7 @@ func (s *TaskApplicationService) createLocked(ctx context.Context, config domain
 	manifest.GroupID = group.ID
 	manifest.AgentContext = request.AgentContext
 	manifest.AgentDocumentLayout = domain.AgentDocumentReferencedV2
+	manifest = domain.NormalizeTaskManifest(manifest)
 	saving := TaskCreationProgress{Phase: TaskCreationPhaseSavingManifest, ServiceName: "任务"}
 	if err := runTaskCreationProgress(onProgress, saving, "正在保存任务清单", "任务清单已保存", func() error {
 		return s.Manifests.Save(taskPath, manifest)
@@ -1312,6 +1317,15 @@ func removeGeneratedTaskDocuments(taskPath string) error {
 			}
 			return err
 		}
+	}
+	return nil
+}
+
+func requireAvailableTaskDirectory(path string) error {
+	if _, err := os.Lstat(path); err == nil {
+		return fmt.Errorf("本地目录已存在，请修改文件夹名：%s", path)
+	} else if !os.IsNotExist(err) {
+		return err
 	}
 	return nil
 }

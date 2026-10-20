@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/storage"
 )
 
 func tagHistoryAction(kind string) bool {
@@ -33,17 +34,11 @@ func (a *App) tagHistoryAction(ctx context.Context, action Action) (ActionResult
 	}
 	service := a.delivery(config)
 	if action.Kind == "tag.history" {
-		if _, err := service.EnforceHistoryRetention(ctx, config, scope); err != nil {
-			return ActionResult{}, err
-		}
-		items, err := a.readTagHistoryRecords(ctx, config, scope)
+		items, err := a.readRetainedTagHistoryRecords(ctx, config, scope)
 		return ActionResult{Message: "Tag 历史已读取", Data: items}, err
 	}
 	if action.Kind == "tag.history.refresh" {
-		if _, err := service.EnforceHistoryRetention(ctx, config, scope); err != nil {
-			return ActionResult{}, err
-		}
-		items, err := a.readTagHistoryRecords(ctx, config, scope)
+		items, err := a.readRetainedTagHistoryRecords(ctx, config, scope)
 		if err != nil {
 			return ActionResult{}, err
 		}
@@ -93,6 +88,16 @@ func (a *App) tagHistoryAction(ctx context.Context, action Action) (ActionResult
 type TagHistoryRefreshResult struct {
 	Records     []TagRecord `json:"records"`
 	StatusError string      `json:"statusError,omitempty"`
+}
+
+// Both dispatch ports share retention before streaming or returning history.
+// An active build owns the task lease; keep its progress readable and retry
+// retention from the page's polling coordinator after that lease is released.
+func (a *App) readRetainedTagHistoryRecords(ctx context.Context, config domain.AppConfig, tasks []domain.TaskManifest) ([]TagRecord, error) {
+	if _, err := a.delivery(config).EnforceHistoryRetention(ctx, config, tasks); err != nil && !errors.Is(err, storage.ErrLockBusy) {
+		return nil, err
+	}
+	return a.readTagHistoryRecords(ctx, config, tasks)
 }
 
 func (a *App) readTagHistoryRecords(ctx context.Context, config domain.AppConfig, tasks []domain.TaskManifest) ([]TagRecord, error) {

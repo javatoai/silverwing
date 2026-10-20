@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"silverwing-go/internal/executable"
 	"strings"
 )
 
@@ -22,7 +23,7 @@ func (unixTrashBackend) moveToTrash(ctx context.Context, path string) error {
 	var command *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
-		command = exec.CommandContext(ctx, "osascript", "-e", `on run argv
+		command = exec.CommandContext(ctx, executable.SystemCommand("osascript"), "-e", `on run argv
 tell application "Finder" to delete POSIX file (item 1 of argv)
 end run`, absolute)
 	case "linux", "freebsd", "openbsd", "netbsd", "dragonfly", "illumos", "solaris", "aix", "android", "ios":

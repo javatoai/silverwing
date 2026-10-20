@@ -7,9 +7,9 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"time"
 
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/executable"
 	"silverwing-go/internal/process"
 )
 
@@ -262,24 +262,17 @@ func toolboxToolCandidates(toolType domain.DevelopmentToolType) []string {
 	return candidates
 }
 
+var developmentDiscoveryRunner = process.NewRunner()
+
 func probeDevelopmentToolOnPath(ctx context.Context, toolType domain.DevelopmentToolType) string {
+	resolver := executable.NewResolver(developmentDiscoveryRunner)
 	for _, name := range pathToolCommandNames(toolType) {
-		var executable string
-		var args []string
-		if runtime.GOOS == "windows" {
-			executable, args = "where.exe", []string{name}
-		} else {
-			executable, args = "/bin/zsh", []string{"-lc", "command -v " + name}
+		path, _, err := resolver.PrepareCommand(ctx, name)
+		if err != nil {
+			return ""
 		}
-		result, err := process.NewRunner().Run(ctx, process.Spec{Executable: executable, Arguments: args, Timeout: 3 * time.Second})
-		if err != nil || result.ExitCode != 0 {
-			continue
-		}
-		for _, line := range strings.Split(result.Stdout, "\n") {
-			line = strings.Trim(strings.TrimSpace(line), "\"")
-			if filepath.IsAbs(line) && applicationExists(line) {
-				return filepath.Clean(line)
-			}
+		if filepath.IsAbs(path) && applicationExists(path) {
+			return filepath.Clean(path)
 		}
 	}
 	return ""

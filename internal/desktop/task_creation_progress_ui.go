@@ -334,16 +334,6 @@ func (s *app) renderTaskCreationProgress(c *ui.Context, p palette, progress *tas
 	if progress == nil {
 		return
 	}
-	completed, total := taskCreationPreparedCount(progress)
-	countLabel := "已准备"
-	if progress.mode == "preflight" {
-		completed, total = taskCreationCheckedCount(progress)
-		countLabel = "已检查"
-	}
-	countText := fmt.Sprintf("%s %d / %d", countLabel, completed, total)
-	if progress.cancelling || s.busy && s.operationKind == "task.create" && s.operationCancelling {
-		countText += " · 中断中"
-	}
 	_, windowHeight := c.Size()
 	progressHeight := min(float32(280), max(float32(210), windowHeight*0.32))
 	ui.Column(c.Key("task-create-progress")).FillWidth().Height(progressHeight).Shrink(0).MinWidth(0).
@@ -354,7 +344,6 @@ func (s *app) renderTaskCreationProgress(c *ui.Context, p palette, progress *tas
 				title = "预检进度"
 			}
 			label(c, title, 12, p.text).FontWeight(600).Grow(1)
-			label(c, countText, 10, p.muted).Shrink(0).SingleLine()
 		})
 		phaseText := taskCreationProgressPhaseText(progress.phase)
 		phaseColor := p.blue
@@ -409,16 +398,10 @@ func (s *app) renderTaskCreationProgress(c *ui.Context, p palette, progress *tas
 						servicePrepared++
 					}
 				}
-				serviceStatus, serviceColor := taskCreationProgressServiceStatus(service, progress, p)
-				serviceCountLabel := "已准备"
-				if progress.mode == "preflight" {
-					serviceCountLabel = "已检查"
-				}
 				ui.Column(c.Key("task-create-progress-service-"+service.id)).FillWidth().Padding(6, 7).Gap(2).Background(p.surface).Border(1, p.line).Radius(7).Label("服务进度：" + service.name).Children(func() {
 					ui.Row(c.Key("task-create-progress-service-header-" + service.id)).FillWidth().MinWidth(0).Height(20).Gap(6).AlignItems(ui.Center).Children(func() {
 						label(c, service.name, 10, p.text).Grow(1).MinWidth(0).SingleLine().Tooltip(service.name)
-						label(c, fmt.Sprintf("%d / %d %s", servicePrepared, len(service.modules), serviceCountLabel), 9, p.muted).Shrink(0).SingleLine()
-						label(c, serviceStatus, 9, serviceColor).Shrink(0).SingleLine().Tooltip(service.message)
+						label(c, fmt.Sprintf("%d/%d", servicePrepared, len(service.modules)), 9, p.muted).Shrink(0).SingleLine()
 					})
 					for _, module := range service.modules {
 						name := module.name
@@ -442,111 +425,6 @@ func (s *app) renderTaskCreationProgress(c *ui.Context, p palette, progress *tas
 			}
 		})
 	})
-}
-
-func taskCreationPreparedCount(progress *taskCreationProgressState) (prepared, total int) {
-	if progress == nil {
-		return 0, 0
-	}
-	for _, service := range progress.services {
-		for _, module := range service.modules {
-			total++
-			if module.prepared {
-				prepared++
-			}
-		}
-	}
-	return prepared, total
-}
-
-func taskCreationCheckedCount(progress *taskCreationProgressState) (checked, total int) {
-	if progress == nil {
-		return 0, 0
-	}
-	for _, service := range progress.services {
-		for _, module := range service.modules {
-			total++
-			if module.checked {
-				checked++
-			}
-		}
-	}
-	return checked, total
-}
-
-func taskCreationProgressServiceStatus(service *taskCreationProgressService, progress *taskCreationProgressState, p palette) (string, ui.Color) {
-	if service == nil {
-		return "等待开始", p.muted
-	}
-	if progress != nil && progress.mode == "preflight" {
-		if progress.interrupted && service.status == workspace.TaskCreationProgressStarted {
-			return "已中断", p.muted
-		}
-		switch service.status {
-		case workspace.TaskCreationProgressStarted:
-			return taskCreationProgressPhaseShort(service.phase), p.blue
-		case workspace.TaskCreationProgressFailed:
-			return "失败", p.amber
-		case workspace.TaskCreationProgressCompleted:
-			return "已检查", p.green
-		default:
-			return "等待开始", p.muted
-		}
-	}
-
-	total, prepared, failed, cleanupFailed, rollingBack, rolledBack := 0, 0, false, false, false, 0
-	activePhase := workspace.TaskCreationProgressPhase("")
-	for _, module := range service.modules {
-		total++
-		if module.prepared {
-			prepared++
-		}
-		cleanupFailed = cleanupFailed || module.cleanupFail
-		failed = failed || module.status == workspace.TaskCreationProgressFailed
-		if module.phase == workspace.TaskCreationPhaseRollback && module.status == workspace.TaskCreationProgressStarted {
-			rollingBack = true
-		}
-		if module.rolledBack {
-			rolledBack++
-		}
-		if activePhase == "" && module.status == workspace.TaskCreationProgressStarted && module.phase != workspace.TaskCreationPhaseRollback {
-			activePhase = module.phase
-		}
-	}
-	if cleanupFailed {
-		return "清理需检查", p.amber
-	}
-	if rollingBack {
-		return "回滚中", p.blue
-	}
-	if failed || service.status == workspace.TaskCreationProgressFailed {
-		return "失败", p.amber
-	}
-	if total > 0 && prepared == total {
-		return "已准备", p.green
-	}
-	if activePhase != "" {
-		return taskCreationProgressPhaseShort(activePhase), p.blue
-	}
-	if service.status == workspace.TaskCreationProgressStarted {
-		if progress != nil && progress.interrupted {
-			return "已中断", p.muted
-		}
-		return taskCreationProgressPhaseShort(service.phase), p.blue
-	}
-	if rolledBack > 0 {
-		if rolledBack == total {
-			return "已回滚", p.muted
-		}
-		return "部分回滚", p.muted
-	}
-	if service.status == workspace.TaskCreationProgressCompleted {
-		return "检查完成", p.muted
-	}
-	if prepared > 0 {
-		return "部分准备", p.muted
-	}
-	return "等待开始", p.muted
 }
 
 func taskCreationProgressHasCleanupFailure(progress *taskCreationProgressState) bool {

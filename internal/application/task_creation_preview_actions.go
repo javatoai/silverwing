@@ -63,7 +63,7 @@ func taskCreationPreviewAction(ctx context.Context, action Action, config domain
 				if err := ctx.Err(); err != nil {
 					return ActionResult{}, true, err
 				}
-				availability := service.WorkspaceTools.Availability(descriptor.ID)
+				availability := service.WorkspaceTools.Availability(ctx, descriptor.ID)
 				options = append(options, taskCreationWorkspaceToolOption{
 					ID: descriptor.ID, DisplayName: descriptor.DisplayName,
 					Description: descriptor.Description, Available: availability.Available,

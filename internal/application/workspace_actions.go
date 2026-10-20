@@ -76,23 +76,10 @@ func (a *App) workspaceActionWithProgress(ctx context.Context, action Action, on
 			}
 		}
 		manifest, err := service.CreateTaskWithProgress(ctx, config, req, onTaskProgress)
-		if err == nil && config.TaskRoot != nil && hasSelectedWorkspaceTools(toolIDs) {
-			launching := workspace.TaskCreationProgress{Phase: workspace.TaskCreationPhaseLaunchingTools}
-			emitTaskCreationProgress(onTaskProgress, launching, workspace.TaskCreationProgressStarted, "正在打开所选工作区工具")
-			manifest, err = service.LaunchWorkspaceTools(ctx, filepath.Join(*config.TaskRoot, manifest.TaskDirectoryName), manifest, toolIDs)
-			if err != nil {
-				emitTaskCreationProgress(onTaskProgress, launching, workspace.TaskCreationProgressFailed, err.Error())
-			} else if failure := workspaceToolLaunchFailure(manifest, toolIDs); failure != "" {
-				emitTaskCreationProgress(onTaskProgress, launching, workspace.TaskCreationProgressFailed, failure)
-			} else {
-				emitTaskCreationProgress(onTaskProgress, launching, workspace.TaskCreationProgressCompleted, "所选工作区工具已打开")
-			}
+		if err != nil {
+			return ActionResult{}, err
 		}
-		if err == nil {
-			completed := workspace.TaskCreationProgress{Phase: workspace.TaskCreationPhaseCompleted}
-			emitTaskCreationProgress(onTaskProgress, completed, workspace.TaskCreationProgressCompleted, "任务创建完成")
-		}
-		return ActionResult{Message: "任务已创建", Data: domain.NormalizeTaskManifest(manifest)}, err
+		return finishCreatedTask(ctx, service, filepath.Join(*config.TaskRoot, manifest.TaskDirectoryName), manifest, toolIDs, onTaskProgress), nil
 	}
 	manifest, path, err := a.taskInConfig(action, config)
 	if err != nil {

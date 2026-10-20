@@ -126,11 +126,14 @@ func (s *Service) recordRequirementIdentityProbeContext(probe uint64, contextKey
 }
 
 func (s *Service) requirementIdentityContext(config domain.AppConfig) string {
+	return s.requirementIdentityContextWithContext(context.Background(), config)
+}
+func (s *Service) requirementIdentityContextWithContext(ctx context.Context, config domain.AppConfig) string {
 	home := filepath.Clean(s.paths.Home)
 	if absolute, err := filepath.Abs(home); err == nil {
 		home = absolute
 	}
-	cli := s.commandPath(config, domain.ProxyTargetMeegle)
+	cli := s.commandPath(ctx, config, domain.ProxyTargetMeegle)
 	if absolute, err := filepath.Abs(cli); err == nil && cli != "" {
 		cli = absolute
 	}
@@ -166,7 +169,10 @@ func (s *Service) requirementIdentityFor(ctx context.Context, config domain.AppC
 	if closed {
 		return requirementIdentitySession{}, false, errors.New("需求身份读取服务正在关闭")
 	}
-	contextKey := s.requirementIdentityContext(config)
+	contextKey := s.requirementIdentityContextWithContext(ctx, config)
+	if err := ctx.Err(); err != nil {
+		return requirementIdentitySession{}, false, err
+	}
 	s.identityStateMu.Lock()
 	if s.identityClosed {
 		s.identityStateMu.Unlock()
@@ -378,7 +384,10 @@ func (s *Service) verifyRequirementIdentitySession(ctx context.Context, config d
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	contextKey := s.requirementIdentityContext(config)
+	contextKey := s.requirementIdentityContextWithContext(ctx, config)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.identityStateMu.Lock()
 	session, found := s.identitySessions[contextKey]
 	if !found && s.identityConfirmed && s.identityContext == contextKey {

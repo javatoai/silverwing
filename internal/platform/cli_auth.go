@@ -80,7 +80,7 @@ func (s *Service) startCLIAuth(ctx context.Context, payload map[string]any) (any
 			host = "project.feishu.cn"
 		}
 		args := []string{"auth", "login", "--device-code", "--phase", "init", "--host", host, "--format", "json"}
-		result, runErr := s.runToolWithEnv(ctx, cfg, target, command, args, "", 30*time.Second, cliEnvironment(tool, command))
+		result, runErr := s.runToolWithEnv(ctx, cfg, target, command, args, "", 30*time.Second, cliEnvironmentWithRunner(ctx, s.runner, tool, command))
 		if runErr != nil {
 			return nil, wrapCommandDisplayError(fmt.Sprintf("生成 Meegle 登录验证码失败：%s", redactProxy(cfg, safeCLIAuthError(runErr.Error(), nil))), runErr)
 		}
@@ -242,7 +242,7 @@ func (s *Service) pollCLIAuth(ctx context.Context, payload map[string]any) (any,
 				nextState = "AUTHORIZATION_PENDING"
 			} else {
 				args := []string{"auth", "login", "--device-code", "--phase", "poll", "--device-code-value", snapshot.deviceCode, "--client-id", snapshot.clientID, "--host", snapshot.host, "--once", "--format", "json"}
-				result, runErr := s.runToolWithEnv(pollCtx, cfg, target, command, args, "", 20*time.Second, cliEnvironment("meegle", command))
+				result, runErr := s.runToolWithEnv(pollCtx, cfg, target, command, args, "", 20*time.Second, cliEnvironmentWithRunner(pollCtx, s.runner, "meegle", command))
 				if runErr != nil {
 					pollErr = runErr
 					nextState = "AUTHORIZATION_PENDING"
@@ -434,7 +434,7 @@ func (s *Service) logoutCLIAuth(ctx context.Context, payload map[string]any) (an
 		return nil, err
 	}
 	if tool == "meegle" {
-		if _, err := s.runToolWithEnv(ctx, cfg, target, command, []string{"auth", "logout"}, "", 10*time.Second, cliEnvironment(tool, command)); err != nil {
+		if _, err := s.runToolWithEnv(ctx, cfg, target, command, []string{"auth", "logout"}, "", 10*time.Second, cliEnvironmentWithRunner(ctx, s.runner, tool, command)); err != nil {
 			return nil, wrapCommandDisplayError(fmt.Sprintf("退出 Meegle 登录失败：%s", safeCLIAuthError(redactProxy(cfg, err.Error()), nil)), err)
 		}
 	} else {
@@ -698,7 +698,7 @@ var regexpURLs = regexp.MustCompile(`https?://\S+`)
 
 func (s *Service) runLarkJSONCommand(ctx context.Context, cfg domain.AppConfig, command string, args []string, timeout time.Duration) (process.Result, error) {
 	withJSON := append(append([]string(nil), args...), "--json")
-	environment := cliEnvironment("lark", command)
+	environment := cliEnvironmentWithRunner(ctx, s.runner, "lark", command)
 	result, err := s.runToolWithEnv(ctx, cfg, domain.ProxyTargetLark, command, withJSON, "", timeout, environment)
 	if err == nil || process.IsCleanupFailure(err) || !larkJSONFlagUnsupported(err.Error()) {
 		return result, err

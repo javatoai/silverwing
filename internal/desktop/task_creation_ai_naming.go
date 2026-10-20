@@ -3,16 +3,10 @@ package desktop
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
-	"slices"
 	"strings"
 
 	"silverwing-go/internal/application"
-	"silverwing-go/internal/domain"
 )
-
-const taskCreationAINamingMaxAttempts = 3
 
 // taskCreationAINamingState owns an AI naming request independently from the
 // desktop's global action and cancellation state.
@@ -40,8 +34,6 @@ type taskCreationAINamingRequest struct {
 	profile    requirementIdentityContext
 	account    string
 	accountSet bool
-	taskRoot   string
-	attempt    int
 	generation uint64
 	ctx        context.Context
 	cancel     context.CancelFunc
@@ -115,16 +107,11 @@ func (s *app) requestTaskCreationAINamingJob(force bool) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	taskRoot := ""
-	if form.config.TaskRoot != nil {
-		taskRoot = *form.config.TaskRoot
-	}
 	request := &taskCreationAINamingRequest{
 		form: form, token: form.token, home: s.snapshot.Home, link: link,
 		config:   taskCreationRequirementsConfigFingerprint(s.snapshot.ConfigJSON, form.config),
 		identity: s.currentRequirementListIdentity(), profile: s.currentRequirementIdentityContext(),
 		account: account, accountSet: accountSet, generation: state.generation,
-		taskRoot: taskRoot, attempt: 1,
 		ctx: ctx, cancel: cancel, action: action,
 	}
 	state.request = request
@@ -132,31 +119,7 @@ func (s *app) requestTaskCreationAINamingJob(force bool) {
 	form.aiError = ""
 	backend, win := s.backend, s.win
 	go func() {
-		// Each retry returns to the window thread before dispatch. Form replacement
-		// and identity retirement must stop retries as well as reject their results.
-		result, err := runTaskCreationAINamingRequest(backend, request, func(attempt int) bool {
-			if ctx.Err() != nil || win.IsDestroyed() {
-				cancel()
-				return false
-			}
-			checked := make(chan bool, 1)
-			win.Update(func() {
-				current := s.taskCreationAINamingRequestRelevant(request)
-				if current {
-					request.attempt = attempt
-				}
-				checked <- current
-			})
-			select {
-			case current := <-checked:
-				if !current {
-					cancel()
-				}
-				return current
-			case <-ctx.Done():
-				return false
-			}
-		})
+		result, err := runTaskCreationAINamingRequest(backend, request)
 		if ctx.Err() != nil {
 			err = errors.Join(ctx.Err(), err)
 		}
@@ -177,76 +140,27 @@ func (s *app) requestTaskCreationAINamingJob(force bool) {
 	}()
 }
 
-// The window confirms ownership between attempts; all remote reads and local
-// existence checks stay on the request worker. Only occupied suggestions retry.
-func runTaskCreationAINamingRequest(backend application.Backend, request *taskCreationAINamingRequest, current func(int) bool) (application.ActionResult, error) {
+// A valid suggestion is returned even when its folder is occupied. Directory
+// validation belongs to the form and must never cause another AI request.
+func runTaskCreationAINamingRequest(backend application.Backend, request *taskCreationAINamingRequest) (application.ActionResult, error) {
 	ctx := request.ctx
-	account, confirmed := request.account, request.accountSet
-	force, _ := request.action.Payload["force"].(bool)
-	forbidden := []string{}
-	for attempt := 1; attempt <= taskCreationAINamingMaxAttempts; attempt++ {
-		if err := ctx.Err(); err != nil {
-			return application.ActionResult{}, err
-		}
-		if attempt > 1 && !current(attempt) {
-			return application.ActionResult{}, context.Canceled
-		}
-		nextAccount, nextConfirmed, err := taskCreationRequirementIdentityBeforeRead(ctx, backend, account, confirmed)
-		if err != nil {
-			return application.ActionResult{}, err
-		}
-		account, confirmed = nextAccount, nextConfirmed
-		if err := ctx.Err(); err != nil {
-			return application.ActionResult{}, err
-		}
-		action := request.action
-		action.Payload = taskCreationActionPayload(request.action.Payload, request.token)
-		action.Payload["force"] = force || attempt > 1
-		// Every service call owns its history snapshot, including the empty first
-		// one. Later collisions cannot mutate an earlier request's payload.
-		action.Payload["forbiddenFolderNames"] = append([]string{}, forbidden...)
-		if confirmed {
-			action.Payload["expectedIdentity"] = account
-		}
-		result, err := backend.Dispatch(ctx, action)
-		if err == nil && confirmed {
-			err = taskCreationRequirementIdentityAfterRead(ctx, backend, account)
-		}
-		if ctx.Err() != nil {
-			return application.ActionResult{}, errors.Join(ctx.Err(), err)
-		}
-		if err != nil {
-			return application.ActionResult{}, err
-		}
-		suggestion, decodeErr := decodeTaskCreationResult[domain.RequirementAiNamingSuggestion](result.Data)
-		if decodeErr != nil {
-			// Preserve the form's existing format-error and validation messages.
-			return result, nil
-		}
-		validated, validationErr := domain.ValidateRequirementAiNamingSuggestion(suggestion)
-		if validationErr != nil {
-			return result, nil
-		}
-		occupied := taskCreationAINamingFolderExists(request.taskRoot, validated.FolderName)
-		if err := ctx.Err(); err != nil {
-			return application.ActionResult{}, err
-		}
-		if !occupied {
-			return result, nil
-		}
-		if !slices.Contains(forbidden, validated.FolderName) {
-			forbidden = append(forbidden, validated.FolderName)
-		}
+	account, confirmed, err := taskCreationRequirementIdentityBeforeRead(ctx, backend, request.account, request.accountSet)
+	if err != nil {
+		return application.ActionResult{}, err
 	}
-	return application.ActionResult{}, errors.New("AI 生成的文件夹名已存在，请手工修改或重新生成")
-}
-
-func taskCreationAINamingFolderExists(root, folder string) bool {
-	if strings.TrimSpace(root) == "" {
-		return false
+	action := request.action
+	action.Payload = taskCreationActionPayload(action.Payload, request.token)
+	if confirmed {
+		action.Payload["expectedIdentity"] = account
 	}
-	_, err := os.Stat(filepath.Join(root, folder))
-	return err == nil
+	result, err := backend.Dispatch(ctx, action)
+	if err == nil && confirmed {
+		err = taskCreationRequirementIdentityAfterRead(ctx, backend, account)
+	}
+	if ctx.Err() != nil {
+		return application.ActionResult{}, errors.Join(ctx.Err(), err)
+	}
+	return result, err
 }
 
 func (s *app) finishTaskCreationAINaming(request *taskCreationAINamingRequest, result application.ActionResult, requestErr error) {

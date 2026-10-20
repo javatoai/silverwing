@@ -739,7 +739,7 @@ func (s *Service) requirementCacheIdentity(ctx context.Context, config domain.Ap
 	if userKey == "" {
 		return "", false, errors.New("Meegle 用户身份不可识别")
 	}
-	identityFields := []string{"meegle", s.commandPath(config, domain.ProxyTargetMeegle), profileName, host, userKey}
+	identityFields := []string{"meegle", s.commandPath(ctx, config, domain.ProxyTargetMeegle), profileName, host, userKey}
 	for _, name := range []string{"tenant_key", "tenant_id", "enterprise_id"} {
 		field := text(auth[name])
 		if field == "" {

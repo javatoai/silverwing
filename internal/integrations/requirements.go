@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"silverwing-go/internal/commandruntime"
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/executable"
 	"silverwing-go/internal/process"
@@ -749,6 +750,8 @@ func truncateRunes(value string, limit int) string {
 }
 
 func (s *Service) suggestRequirementName(ctx context.Context, config domain.AppConfig, data requirementAIContext, forbidden []string, model string) (any, error) {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
 	if err := os.MkdirAll(s.paths.Temp, 0o700); err != nil {
 		return nil, err
 	}
@@ -764,26 +767,27 @@ func (s *Service) suggestRequirementName(ctx context.Context, config domain.AppC
 		return nil, err
 	}
 	prompt := buildNamingPrompt(data, forbidden)
-	args := []string{"-c", `model_reasoning_effort="low"`, "--model", model, "--ask-for-approval", "never", "exec", "-", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "--output-schema", schemaPath, "--output-last-message", outputPath, "--cd", directory}
-	resolver := executable.NewResolver(s.runner)
 	configured := ""
 	if config.CodexExecutablePath != nil {
 		configured = *config.CodexExecutablePath
 	}
-	resolution := resolver.Resolve(ctx, executable.ToolCodex, configured)
-	command := resolution.Command
-	env, remove := s.childEnvironment(config, domain.ProxyTargetCodex)
-	for name, value := range resolver.Environment(ctx, executable.ToolCodex, command) {
-		if env == nil {
-			env = map[string]string{}
-		}
-		env[name] = value
+	spec, err := commandruntime.Prepare(ctx, s.runner, &config, domain.ProxyTargetCodex, executable.ToolCodex, configured)
+	if err != nil {
+		return nil, err
 	}
-	result, err := s.runner.Run(ctx, process.Spec{Executable: command, Arguments: args, Directory: directory, Env: env, RemoveEnv: remove, Stdin: []byte(prompt), Timeout: 60 * time.Second})
+	spec.Directory = directory
+	isolation, err := s.prepareNamingIsolation(ctx, config, spec)
+	if err != nil {
+		return nil, err
+	}
+	spec.Arguments = namingExecutionArguments(isolation, model, schemaPath, outputPath, directory, true)
+	spec.Stdin, spec.Timeout = []byte(prompt), 60*time.Second
+	spec.MaxStdoutBytes, spec.MaxStderrBytes, spec.KillOnOutputLimit = 1024*1024, 256*1024, true
+	result, err := s.runner.Run(ctx, spec)
 	if err == nil && !result.Successful() && strings.Contains(strings.ToLower(result.Stderr+result.Stdout), "reasoning") && (strings.Contains(strings.ToLower(result.Stderr+result.Stdout), "unsupported") || strings.Contains(strings.ToLower(result.Stderr+result.Stdout), "not supported") || strings.Contains(strings.ToLower(result.Stderr+result.Stdout), "invalid value")) {
 		_ = os.Remove(outputPath)
-		fallback := []string{"--model", model, "--ask-for-approval", "never", "exec", "-", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "--output-schema", schemaPath, "--output-last-message", outputPath, "--cd", directory}
-		result, err = s.runner.Run(ctx, process.Spec{Executable: command, Arguments: fallback, Directory: directory, Env: env, RemoveEnv: remove, Stdin: []byte(prompt), Timeout: 60 * time.Second})
+		spec.Arguments = namingExecutionArguments(isolation, model, schemaPath, outputPath, directory, false)
+		result, err = s.runner.Run(ctx, spec)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("Codex CLI 生成命名失败：%s", s.safeDiagnostic(config, err.Error()))

@@ -38,7 +38,7 @@ func (a *App) systemAction(ctx context.Context, action Action) (ActionResult, er
 		if err := ctx.Err(); err != nil {
 			return ActionResult{}, err
 		}
-		return ActionResult{Message: "开发工具已打开", Path: target}, launchToolArguments(plan.Executable, plan.Arguments...)
+		return ActionResult{Message: "开发工具已打开", Path: target}, launchToolArguments(ctx, plan.Executable, plan.Arguments...)
 	}
 	path := actionPath(action)
 	if path == "" {
@@ -86,7 +86,7 @@ func (a *App) systemAction(ctx context.Context, action Action) (ActionResult, er
 		if err != nil {
 			return ActionResult{}, err
 		}
-		return ActionResult{Message: "终端已打开", Path: path}, launchTerminal(resolution, path)
+		return ActionResult{Message: "终端已打开", Path: path}, launchTerminal(ctx, resolution, path)
 	case "system.ide":
 		config, err := a.Config.Load()
 		if err != nil {
@@ -104,7 +104,7 @@ func (a *App) systemAction(ctx context.Context, action Action) (ActionResult, er
 				if _, err := os.Stat(configured.Path); err != nil {
 					return ActionResult{}, fmt.Errorf("开发工具路径不存在：%s", configured.Path)
 				}
-				return ActionResult{Message: "开发工具已打开", Path: path}, launchTool(configured.Type, configured.Path, path)
+				return ActionResult{Message: "开发工具已打开", Path: path}, launchTool(ctx, configured.Type, configured.Path, path)
 			}
 		}
 		return ActionResult{}, errors.New("开发工具尚未配置")

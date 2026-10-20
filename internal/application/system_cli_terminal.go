@@ -77,5 +77,5 @@ func (a *App) systemCLITerminal(ctx context.Context, action Action) (ActionResul
 	if err := ctx.Err(); err != nil {
 		return ActionResult{}, err
 	}
-	return ActionResult{Message: "CLI 终端已打开", Path: actionPath(action)}, launchSystemTerminalPlan(plan)
+	return ActionResult{Message: "CLI 终端已打开", Path: actionPath(action)}, launchSystemTerminalPlan(ctx, plan)
 }

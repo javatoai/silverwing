@@ -479,7 +479,7 @@ func (s *WorkspaceGitDiffService) run(ctx context.Context, root string, isolated
 	}
 	args := []string{"--no-optional-locks", "-c", "core.longpaths=true", "-c", "core.splitIndex=false", "-c", "core.fsmonitor=false", "-c", "index.sparse=false", "-C", root}
 	args = append(args, arguments...)
-	result, err := s.Git.Runner.Run(ctx, process.Spec{
+	result, err := s.Git.runProcess(ctx, process.Spec{
 		Executable: s.Git.Executable, Arguments: args, Directory: root,
 		Env: env, RemoveEnv: removals, Timeout: compareTimeout,
 		MaxStdoutBytes: maxOutput, MaxStderrBytes: 1024 * 1024, KillOnOutputLimit: true,
@@ -519,7 +519,7 @@ func (s *WorkspaceGitDiffService) runInState(ctx context.Context, state *compare
 	removals = append(removals, state.indexRemove...)
 	args := []string{"--no-optional-locks", "-c", "core.longpaths=true", "-c", "core.splitIndex=false", "-c", "core.fsmonitor=false", "-c", "index.sparse=false", "-C", state.root}
 	args = append(args, arguments...)
-	result, err := s.Git.Runner.Run(ctx, process.Spec{
+	result, err := s.Git.runProcess(ctx, process.Spec{
 		Executable: s.Git.Executable, Arguments: args, Directory: state.root,
 		Env: env, RemoveEnv: removals, Stdin: stdin, Timeout: compareTimeout,
 		MaxStdoutBytes: maxOutput, MaxStderrBytes: 1024 * 1024, KillOnOutputLimit: true,

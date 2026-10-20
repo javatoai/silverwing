@@ -100,15 +100,22 @@ func (s *Service) HistoryItems(ctx context.Context, config domain.AppConfig, tas
 }
 
 func (s *Service) EnforceHistoryRetention(ctx context.Context, config domain.AppConfig, tasks []domain.TaskManifest) (int, error) {
-	items, err := s.HistoryItems(ctx, config, tasks)
-	if err != nil {
+	if _, err := HistoryRetentionOperationIDs(nil, config.TagHistoryMaxGroups); err != nil {
 		return 0, err
 	}
-	selected, err := HistoryRetentionOperationIDs(items, config.TagHistoryMaxGroups)
-	if err != nil || len(selected) == 0 {
-		return 0, err
-	}
-	return s.DeleteHistory(ctx, config, tasks, selected)
+	return s.mutateHistory(ctx, config, tasks, func(directory string) (int, error) {
+		// Each task owns its allowance. Plan and remove under the same task
+		// lease, so a batch cannot gain a child between selection and deletion.
+		operations, err := s.store.list(directory)
+		if err != nil {
+			return 0, err
+		}
+		selected, err := HistoryRetentionOperationIDs(GroupTagHistory(operations), config.TagHistoryMaxGroups)
+		if err != nil {
+			return 0, err
+		}
+		return s.store.deleteSelected(historyContext(ctx), directory, selected)
+	})
 }
 
 func (s *Service) DeleteHistory(ctx context.Context, config domain.AppConfig, tasks []domain.TaskManifest, operationIDs []string) (int, error) {
@@ -159,6 +166,18 @@ func (s *Service) mutateHistory(ctx context.Context, config domain.AppConfig, ta
 			continue
 		}
 		err = s.locks.WithTask(directory, func() error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if task.CreatedAt != "" {
+				current, err := s.manifests.Load(directory)
+				if err != nil {
+					return err
+				}
+				if current.TaskDirectoryName != task.TaskDirectoryName || current.CreatedAt != task.CreatedAt {
+					return errors.New("Tag历史所属任务已重新创建，请刷新后重试")
+				}
+			}
 			count, inner := mutate(directory)
 			deleted += count
 			return inner

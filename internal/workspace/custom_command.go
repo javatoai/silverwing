@@ -5,13 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
+	"silverwing-go/internal/commandruntime"
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/executable"
 	"silverwing-go/internal/process"
 )
 
@@ -54,15 +55,19 @@ func (s *WorkspaceCommandService) Execute(ctx context.Context, config domain.App
 	if err != nil {
 		return domain.CommandResult{}, err
 	}
-	executable, err := s.resolveWorkspaceExecutable(root, command.Executable)
+	executable, err := s.resolveWorkspaceExecutableContext(ctx, root, command.Executable)
 	if err != nil {
 		return domain.CommandResult{}, err
 	}
-	env, remove := workspaceCommandProxyEnvironment(config)
+	spec, err := commandruntime.Prepare(ctx, s.Runner, &config, domain.ProxyTargetWorkspaceCommand, "", executable)
+	if err != nil {
+		return domain.CommandResult{}, err
+	}
 	timeout := time.Duration(command.TimeoutSeconds) * time.Second
 	commandCtx, cancel := context.WithTimeoutCause(ctx, timeout, errWorkspaceCommandTimeout)
 	defer cancel()
-	result, runErr := s.Runner.Run(commandCtx, process.Spec{Executable: executable, Arguments: command.Arguments, Directory: working, Env: env, RemoveEnv: remove, Timeout: timeout, OnOutput: onOutput})
+	spec.Arguments, spec.Directory, spec.Timeout, spec.OnOutput = command.Arguments, working, timeout, onOutput
+	result, runErr := s.Runner.Run(commandCtx, spec)
 	return workspaceCommandResult(commandCtx, command.TimeoutSeconds, result, runErr)
 }
 
@@ -128,6 +133,9 @@ func commandWorkingDirectory(root, raw string) (string, error) {
 }
 
 func (s *WorkspaceCommandService) resolveWorkspaceExecutable(root, raw string) (string, error) {
+	return s.resolveWorkspaceExecutableContext(context.Background(), root, raw)
+}
+func (s *WorkspaceCommandService) resolveWorkspaceExecutableContext(ctx context.Context, root, raw string) (string, error) {
 	exe := strings.TrimSpace(raw)
 	if exe == "" {
 		return "", fmt.Errorf("快捷命令可执行程序不能为空")
@@ -151,7 +159,11 @@ func (s *WorkspaceCommandService) resolveWorkspaceExecutable(root, raw string) (
 		}
 		return resolved, nil
 	}
-	if resolved, err := exec.LookPath(exe); err == nil {
+	resolved, _, err := executable.NewResolver(s.Runner).PrepareCommand(ctx, exe)
+	if err != nil {
+		return "", err
+	}
+	if filepath.IsAbs(resolved) {
 		return resolved, nil
 	}
 	candidates := []string{exe}

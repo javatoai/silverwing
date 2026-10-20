@@ -43,6 +43,7 @@ func (s *app) startTaskCreationRead(kind string, payload map[string]any) {
 }
 
 func (s *app) cancelTaskCreationReads(state *taskCreationState, preflightOnly bool) {
+	cancelTaskCreationDirectoryCheck(state)
 	s.cancelTaskCreationPreflight(state)
 	if state == nil || state.readRequest == nil {
 		return

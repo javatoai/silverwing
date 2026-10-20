@@ -7,8 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"silverwing-go/internal/commandruntime"
 	"silverwing-go/internal/domain"
-	"silverwing-go/internal/process"
+	"silverwing-go/internal/executable"
 )
 
 // loadExtensionBranches mirrors the source editor's read-only git ls-remote
@@ -22,12 +23,13 @@ func (s *Service) loadExtensionBranches(ctx context.Context, payload map[string]
 	if err := domain.ValidateRemoteGitURL(repositoryURL); err != nil {
 		return nil, err
 	}
-	command := s.gitExecutable(cfg)
-	result, err := s.runner.Run(ctx, process.Spec{
-		Executable: command,
-		Arguments:  []string{"ls-remote", "--heads", repositoryURL},
-		Timeout:    time.Minute,
-	})
+	command := s.gitExecutable(ctx, cfg)
+	spec, err := commandruntime.Prepare(ctx, s.runner, &cfg, domain.ProxyTargetGit, executable.ToolGit, command)
+	if err != nil {
+		return nil, err
+	}
+	spec.Arguments, spec.Timeout = []string{"ls-remote", "--heads", repositoryURL}, time.Minute
+	result, err := s.runner.Run(ctx, spec)
 	if err != nil {
 		return nil, err
 	}

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"silverwing-go/internal/executable"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -299,7 +300,7 @@ func openCodexURI(deepLink string) error {
 	case "windows":
 		command = process.NewDetachedCommand("rundll32", "url.dll,FileProtocolHandler", deepLink)
 	case "darwin":
-		command = process.NewDetachedCommand("open", deepLink)
+		command = process.NewDetachedCommand(executable.SystemCommand("open"), deepLink)
 	default:
 		command = process.NewDetachedCommand("xdg-open", deepLink)
 	}

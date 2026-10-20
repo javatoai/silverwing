@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"silverwing-go/internal/domain"
 	"silverwing-go/internal/process"
 )
 
@@ -49,7 +50,7 @@ func (s *Service) gitEnvironment(ctx context.Context) (any, error) {
 		GlobalKeyConfig:         []gitConfigValue{},
 		Errors:                  []string{},
 	}
-	versionResult, versionErr := s.runner.Run(ctx, process.Spec{Executable: executable, Arguments: []string{"--version"}, Timeout: 10 * time.Second})
+	versionResult, versionErr := s.runTool(ctx, cfg, domain.ProxyTargetGit, executable, []string{"--version"}, "", 10*time.Second)
 	if process.IsCleanupFailure(versionErr) {
 		return nil, versionErr
 	}
@@ -58,7 +59,7 @@ func (s *Service) gitEnvironment(ctx context.Context) (any, error) {
 	} else if version := firstNonBlank(strings.TrimSpace(versionResult.Stdout), strings.TrimSpace(versionResult.Stderr)); version != "" {
 		snapshot.GitVersion = &version
 	}
-	configResult, configErr := s.runner.Run(ctx, process.Spec{Executable: executable, Arguments: []string{"config", "--global", "--show-origin", "--list"}, Timeout: 10 * time.Second})
+	configResult, configErr := s.runTool(ctx, cfg, domain.ProxyTargetGit, executable, []string{"config", "--global", "--show-origin", "--list"}, "", 10*time.Second)
 	if process.IsCleanupFailure(configErr) {
 		return nil, configErr
 	}

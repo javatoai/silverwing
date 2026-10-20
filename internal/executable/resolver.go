@@ -4,6 +4,7 @@ package executable
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -45,11 +46,14 @@ type Runner interface {
 }
 
 type Resolver struct {
-	runner          Runner
-	mu              sync.Mutex
-	cache           map[string]Resolution
-	loginPath       string
-	loginPathLoaded bool
+	runner           Runner
+	mu               sync.Mutex
+	cache            map[string]Resolution
+	cacheEpoch       map[string]uint64
+	loginPath        string
+	loginPathLoaded  bool
+	loginPathLoading chan struct{}
+	loginPathEpoch   uint64
 }
 
 type resolverIdentity struct {
@@ -88,6 +92,7 @@ func NewResolver(runner Runner) *Resolver {
 func (r *Resolver) Resolve(ctx context.Context, tool Tool, configured string) Resolution {
 	key := resolutionCacheKey(tool, configured)
 	r.mu.Lock()
+	epoch := r.cacheEpoch[key]
 	if cached, ok := r.cache[key]; ok {
 		r.mu.Unlock()
 		return cached
@@ -96,7 +101,9 @@ func (r *Resolver) Resolve(ctx context.Context, tool Tool, configured string) Re
 	resolution := r.resolve(ctx, tool, configured)
 	if ctx.Err() == nil {
 		r.mu.Lock()
-		r.cache[key] = resolution
+		if epoch == r.cacheEpoch[key] {
+			r.cache[key] = resolution
+		}
 		r.mu.Unlock()
 	}
 	return resolution
@@ -107,9 +114,12 @@ func (r *Resolver) ResolveFresh(ctx context.Context, tool Tool, configured strin
 	key := resolutionCacheKey(tool, configured)
 	r.mu.Lock()
 	delete(r.cache, key)
-	if tool == ToolCodex || tool == ToolMeegle || tool == ToolLark {
-		r.loginPath, r.loginPathLoaded = "", false
+	if r.cacheEpoch == nil {
+		r.cacheEpoch = map[string]uint64{}
 	}
+	r.cacheEpoch[key]++
+	r.loginPathEpoch++
+	r.loginPath, r.loginPathLoaded = "", false
 	r.mu.Unlock()
 	return r.Resolve(ctx, tool, configured)
 }
@@ -144,19 +154,28 @@ func (r *Resolver) resolve(ctx context.Context, tool Tool, configured string) Re
 	return Resolution{Command: fallback(tool, runtime.GOOS), Source: SourcePathFallback}
 }
 
-// Environment supplies the login-shell PATH required by GUI-launched macOS
-// apps when the discovered command is a Node-based CLI.
+// Environment prepares only the child's environment. Login-shell state is
+// never installed in the desktop process, and operation-specific overrides
+// (such as an isolated Git index) remain the caller's responsibility.
 func (r *Resolver) Environment(ctx context.Context, tool Tool, command string) map[string]string {
-	if runtime.GOOS != "darwin" || (tool != ToolCodex && tool != ToolMeegle && tool != ToolLark) {
-		return nil
+	result := map[string]string{}
+	if tool == ToolLark {
+		result["LARKSUITE_CLI_NO_UPDATE_NOTIFIER"] = "1"
+		result["LARKSUITE_CLI_NO_SKILLS_NOTIFIER"] = "1"
 	}
-	loginPath := r.macLoginShellPath(ctx)
+	if runtime.GOOS == "darwin" {
+		result["PATH"] = mergedPath(command, r.macLoginShellPath(ctx), os.Getenv("PATH"))
+	}
+	return result
+}
+
+func mergedPath(command, loginPath, inherited string) string {
 	var entries []string
 	if filepath.IsAbs(command) {
 		entries = append(entries, filepath.Dir(command))
 	}
 	entries = append(entries, filepath.SplitList(loginPath)...)
-	entries = append(entries, filepath.SplitList(os.Getenv("PATH"))...)
+	entries = append(entries, filepath.SplitList(inherited)...)
 	seen := map[string]bool{}
 	merged := make([]string, 0, len(entries))
 	for _, entry := range entries {
@@ -167,45 +186,131 @@ func (r *Resolver) Environment(ctx context.Context, tool Tool, command string) m
 		seen[entry] = true
 		merged = append(merged, entry)
 	}
-	if len(merged) == 0 {
-		return nil
+	return strings.Join(merged, string(os.PathListSeparator))
+}
+
+// Prepare also resolves bare commands against the effective child PATH.
+// exec.Command resolves before Cmd.Env is assigned, so setting PATH alone
+// cannot fix a GUI application's command-not-found error.
+func (r *Resolver) Prepare(ctx context.Context, tool Tool, configured string) (Resolution, map[string]string, error) {
+	if err := ctx.Err(); err != nil {
+		return Resolution{}, nil, err
 	}
-	return map[string]string{"PATH": strings.Join(merged, string(os.PathListSeparator))}
+	resolution := r.Resolve(ctx, tool, configured)
+	command, env, err := r.prepareCommand(ctx, tool, resolution.Command)
+	resolution.Command = command
+	return resolution, env, err
+}
+
+func (r *Resolver) PrepareCommand(ctx context.Context, command string) (string, map[string]string, error) {
+	return r.prepareCommand(ctx, "", command)
+}
+
+func (r *Resolver) prepareCommand(ctx context.Context, tool Tool, command string) (string, map[string]string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", nil, err
+	}
+	env := r.Environment(ctx, tool, command)
+	if err := ctx.Err(); err != nil {
+		return "", nil, err
+	}
+	if !strings.ContainsAny(command, `/\\`) {
+		if searchPath, ok := env["PATH"]; ok {
+			if resolved := executableOnPath(command, searchPath); resolved != "" {
+				command = resolved
+			}
+		} else if resolved, err := exec.LookPath(command); err == nil {
+			command = resolved
+		}
+	}
+	return command, env, nil
+}
+
+func executableOnPath(command, searchPath string) string {
+	for _, directory := range filepath.SplitList(searchPath) {
+		// An empty/relative PATH entry must not implicitly execute a file from
+		// an arbitrary repository or the desktop process's working directory.
+		if !filepath.IsAbs(directory) {
+			continue
+		}
+		candidate := filepath.Join(directory, command)
+		if isExecutableFile(candidate, runtime.GOOS) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+// SystemCommand avoids user PATH discovery for macOS's fixed system tools.
+func SystemCommand(name string) string {
+	if runtime.GOOS != "darwin" {
+		return name
+	}
+	switch name {
+	case "open", "osascript", "pbpaste", "pbcopy", "sips":
+		return "/usr/bin/" + name
+	case "ps":
+		return "/bin/ps"
+	case "lsof":
+		return "/usr/sbin/lsof"
+	}
+	return name
 }
 
 func (r *Resolver) macLoginShellPath(ctx context.Context) string {
-	r.mu.Lock()
-	if r.loginPathLoaded {
-		path := r.loginPath
-		r.mu.Unlock()
-		return path
-	}
-	r.mu.Unlock()
-	result, err := r.runner.Run(ctx, process.Spec{
-		Executable: "/bin/zsh",
-		Arguments:  []string{"-lc", `printf '%s\n' "$PATH"`},
-		Timeout:    3 * time.Second,
-	})
-	path := ""
-	if err == nil && result.ExitCode == 0 {
-		lines := strings.Split(strings.TrimSpace(result.Stdout), "\n")
-		if len(lines) > 0 {
-			path = strings.TrimSpace(lines[len(lines)-1])
+	for {
+		r.mu.Lock()
+		if r.loginPathLoaded {
+			path := r.loginPath
+			r.mu.Unlock()
+			return path
 		}
-	}
-	if ctx.Err() != nil {
+		if loading := r.loginPathLoading; loading != nil {
+			r.mu.Unlock()
+			select {
+			case <-loading:
+				continue
+			case <-ctx.Done():
+				return ""
+			}
+		}
+		r.loginPathLoading = make(chan struct{})
+		epoch := r.loginPathEpoch
+		r.mu.Unlock()
+		result, err := r.runner.Run(ctx, process.Spec{
+			Executable: "/bin/zsh",
+			Arguments:  []string{"-lc", `printf '%s\n' "$PATH"`},
+			Timeout:    3 * time.Second,
+		})
+		path := ""
+		if err == nil && result.ExitCode == 0 {
+			lines := strings.Split(strings.TrimSpace(result.Stdout), "\n")
+			if len(lines) > 0 {
+				path = strings.TrimSpace(lines[len(lines)-1])
+			}
+		}
+		r.mu.Lock()
+		if epoch == r.loginPathEpoch && ctx.Err() == nil && err == nil && result.ExitCode == 0 && path != "" {
+			r.loginPath, r.loginPathLoaded = path, true
+		}
+		close(r.loginPathLoading)
+		r.loginPathLoading = nil
+		r.mu.Unlock()
+		if ctx.Err() != nil {
+			return ""
+		}
 		return path
 	}
-	r.mu.Lock()
-	if !r.loginPathLoaded {
-		r.loginPath, r.loginPathLoaded = path, true
-	}
-	path = r.loginPath
-	r.mu.Unlock()
-	return path
 }
 
 func (r *Resolver) probe(ctx context.Context, tool Tool) string {
+	if runtime.GOOS == "darwin" {
+		name := string(tool)
+		if tool == ToolLark {
+			name = "lark-cli"
+		}
+		return executableOnPath(name, mergedPath("", r.macLoginShellPath(ctx), os.Getenv("PATH")))
+	}
 	commands := probeCommands(tool, runtime.GOOS)
 	for _, command := range commands {
 		if len(command) == 0 {

@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"silverwing-go/internal/executable"
 	"strings"
 )
 
@@ -122,7 +123,7 @@ func readXClipboard(ctx context.Context, executable string) (ClipboardPayload, e
 }
 
 func readMacClipboard(ctx context.Context) (ClipboardPayload, error) {
-	if executable, err := exec.LookPath("osascript"); err == nil {
+	if executable, err := exec.LookPath(executable.SystemCommand("osascript")); err == nil {
 		// Finder exposes copied files as file URLs to AppleScript. Text copied from
 		// an editor will fail this coercion and proceeds to the image fallback.
 		data, readErr := commandClipboardOutput(ctx, executable, "-e", "the clipboard as «class furl»")
@@ -133,7 +134,7 @@ func readMacClipboard(ctx context.Context) (ClipboardPayload, error) {
 			}
 		}
 	}
-	if executable, err := exec.LookPath("pbpaste"); err == nil {
+	if executable, err := exec.LookPath(executable.SystemCommand("pbpaste")); err == nil {
 		data, readErr := commandClipboardOutput(ctx, executable, "-Prefer", "png")
 		if readErr == nil && validPNG(data) {
 			return ClipboardPayload{ImagePNG: data}, nil
@@ -146,7 +147,7 @@ func readMacClipboard(ctx context.Context) (ClipboardPayload, error) {
 }
 
 func copyMacClipboardFiles(ctx context.Context, paths []string) error {
-	executable, err := exec.LookPath("osascript")
+	executable, err := exec.LookPath(executable.SystemCommand("osascript"))
 	if err != nil {
 		return errors.New("macOS 文件剪贴板需要 osascript")
 	}
@@ -169,11 +170,11 @@ end run`}
 }
 
 func readMacImagePNG(ctx context.Context) ([]byte, error) {
-	osascript, err := exec.LookPath("osascript")
+	osascript, err := exec.LookPath(executable.SystemCommand("osascript"))
 	if err != nil {
 		return nil, err
 	}
-	sips, err := exec.LookPath("sips")
+	sips, err := exec.LookPath(executable.SystemCommand("sips"))
 	if err != nil {
 		return nil, err
 	}

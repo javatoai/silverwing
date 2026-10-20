@@ -5,13 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"silverwing-go/internal/commandruntime"
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/executable"
 	"silverwing-go/internal/process"
 )
 
@@ -81,11 +82,7 @@ func NewGitClient(runner *process.Runner, executable string) *GitClient {
 		runner = process.NewRunner()
 	}
 	if strings.TrimSpace(executable) == "" {
-		if resolved, err := exec.LookPath("git"); err == nil {
-			executable = resolved
-		} else {
-			executable = "git"
-		}
+		executable = "git"
 	}
 	return &GitClient{Runner: runner, Executable: executable}
 }
@@ -109,6 +106,18 @@ func (g *GitClient) processSpec(args []string, directory string, timeout time.Du
 	}
 }
 
+func (g *GitClient) runProcess(ctx context.Context, spec process.Spec) (process.Result, error) {
+	prepared, err := commandruntime.Prepare(ctx, g.Runner, nil, "", executable.ToolGit, spec.Executable)
+	if err != nil {
+		return process.Result{}, err
+	}
+	for name, value := range spec.Env {
+		prepared.Env[name] = value
+	}
+	spec.Executable, spec.Env = prepared.Executable, prepared.Env
+	return g.Runner.Run(ctx, spec)
+}
+
 func (g *GitClient) Run(repository string, arguments ...string) (process.Result, error) {
 	return g.RunContext(context.Background(), repository, 10*time.Minute, true, false, arguments...)
 }
@@ -126,7 +135,7 @@ func (g *GitClient) RunContext(ctx context.Context, repository string, timeout t
 	}
 	args = append(args, "-c", "core.longpaths=true", "-C", repository)
 	args = append(args, arguments...)
-	result, err := g.Runner.Run(ctx, g.processSpec(args, repository, timeout))
+	result, err := g.runProcess(ctx, g.processSpec(args, repository, timeout))
 	if err != nil {
 		return result, &GitException{Message: commandFailureMessage(arguments, readOnly), Result: result, Cause: err}
 	}
@@ -151,7 +160,7 @@ func (g *GitClient) RunGlobalContext(ctx context.Context, timeout time.Duration,
 	}
 	args = append(args, "-c", "core.longpaths=true")
 	args = append(args, arguments...)
-	result, err := g.Runner.Run(ctx, g.processSpec(args, "", timeout))
+	result, err := g.runProcess(ctx, g.processSpec(args, "", timeout))
 	if err != nil {
 		return result, &GitException{Message: commandFailureMessage(arguments, readOnly), Result: result, Cause: err}
 	}
@@ -245,7 +254,7 @@ func (g *GitClient) CloneRepository(ctx context.Context, originURL, target, bran
 	if err := ensureParent(target); err != nil {
 		return err
 	}
-	result, err := g.Runner.Run(ctx, g.processSpec([]string{"-c", "core.longpaths=true", "clone", "--branch", branch, originURL, target}, "", 10*time.Minute))
+	result, err := g.runProcess(ctx, g.processSpec([]string{"-c", "core.longpaths=true", "clone", "--branch", branch, originURL, target}, "", 10*time.Minute))
 	if err != nil {
 		return &GitException{Message: "Git 克隆失败：" + originURL + "#" + branch, Result: result, Cause: err}
 	}
@@ -259,7 +268,7 @@ func (g *GitClient) Version(ctx context.Context) (process.Result, error) {
 	if g == nil {
 		g = NewGitClient(nil, "")
 	}
-	return g.Runner.Run(ctx, g.processSpec([]string{"--version"}, "", 10*time.Second))
+	return g.runProcess(ctx, g.processSpec([]string{"--version"}, "", 10*time.Second))
 }
 
 func gitConfigValue(value *string) string {

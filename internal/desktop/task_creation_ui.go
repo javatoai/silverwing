@@ -83,6 +83,7 @@ type taskCreationState struct {
 	inlineError               string
 	aiError                   string
 	aiPending                 bool
+	directoryCheck            taskCreationDirectoryState
 	aiNaming                  *taskCreationAINamingState
 	aiEligible                bool
 	lastName                  string
@@ -895,6 +896,9 @@ func (s *app) taskCreationValidationFailure() (string, *taskCreationValidationTa
 	if err := domain.DirectoryNameValidationError(state.draft.TaskName); err != nil {
 		return err.Error(), &taskCreationValidationTarget{field: "taskName"}
 	}
+	if state.directoryCheck.signature == s.taskCreationDirectorySignature() && state.directoryCheck.message != "" {
+		return state.directoryCheck.message, &taskCreationValidationTarget{field: "taskName"}
+	}
 	if strings.TrimSpace(state.draft.Branch) == "" {
 		return "请填写任务分支。", &taskCreationValidationTarget{field: "taskBranch"}
 	}
@@ -992,6 +996,9 @@ func (s *app) beginTaskCreationPreflight() bool {
 		return true
 	}
 	if state.pendingPreflight {
+		return true
+	}
+	if s.startTaskCreationDirectoryCheck(true) {
 		return true
 	}
 	if message, target := s.taskCreationValidationFailure(); message != "" {
@@ -1415,6 +1422,10 @@ func (s *app) taskCreationActionResult(action application.Action, result applica
 		s.form = actionForm{}
 		s.taskCreation = nil
 		s.lastMessage = result.Message
+		s.taskCreationWarning = ""
+		if strings.TrimSpace(result.Text) != "" {
+			s.taskCreationWarning = "任务已创建。\n" + result.Text
+		}
 		s.lastError = ""
 		return true
 	}
@@ -1539,6 +1550,7 @@ func (s *app) renderTaskCreationDialog(c *ui.Context, p palette) bool {
 		return false
 	}
 	s.syncTaskCreationDraft()
+	s.startTaskCreationDirectoryCheck(false)
 	s.ensureTaskCreationAINamingScope()
 	inputsLocked := state.phase == "preview" || state.phase == "creating"
 	open := s.dialogOpen
@@ -1576,11 +1588,10 @@ func (s *app) renderTaskCreationDialog(c *ui.Context, p palette) bool {
 								state.taskFieldFocus = ""
 							}
 							if state.aiPending {
-								text := "正在获取命名建议…"
-								if naming := state.aiNaming; naming != nil && naming.request != nil {
-									text = fmt.Sprintf("正在获取命名建议（第 %d 次）…", naming.request.attempt)
-								}
-								label(c, text, 11, p.muted).FillWidth().Wrap()
+								label(c, "正在获取命名建议…", 11, p.muted).FillWidth().Wrap()
+							}
+							if state.directoryCheck.message != "" && state.directoryCheck.signature == s.taskCreationDirectorySignature() {
+								label(c, state.directoryCheck.message, 11, p.amber).FillWidth().Wrap()
 							}
 							if state.aiError != "" {
 								label(c, state.aiError, 11, p.amber).FillWidth().Wrap()

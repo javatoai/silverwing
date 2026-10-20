@@ -17,12 +17,13 @@ type tagPollTestCall struct {
 	release chan struct{}
 }
 type tagPollTestBackend struct {
-	mu             sync.Mutex
-	records        []application.TagRecord
-	calls          chan tagPollTestCall
-	historyReads   int
-	historyRelease chan struct{}
-	historyEmitted chan struct{}
+	mu                 sync.Mutex
+	records            []application.TagRecord
+	calls              chan tagPollTestCall
+	historyReads       int
+	historyRelease     chan struct{}
+	historyEmitted     chan struct{}
+	historyEmittedOnce sync.Once
 }
 
 type tagDesktopAndProbeTestBackend struct {
@@ -52,7 +53,7 @@ func (b *tagPollTestBackend) DispatchTagProbe(ctx context.Context, action applic
 			emit(record)
 		}
 		if b.historyEmitted != nil {
-			close(b.historyEmitted)
+			b.historyEmittedOnce.Do(func() { close(b.historyEmitted) })
 		}
 		if b.historyRelease != nil {
 			select {
@@ -432,9 +433,17 @@ func TestTagGenbuPollingLocalReadCannotEraseFinishedJob(t *testing.T) {
 	if s.snapshot.TagHistory[0].State != "SUCCESS" {
 		t.Fatal("late local history callback regressed a completed phase")
 	}
+	// The first read is still buffered with old data. A completion-triggered
+	// follow-up read must see the final records that the real backend persisted.
+	probe.mu.Lock()
+	probe.records = nil
+	for _, item := range final.Items {
+		probe.records = append(probe.records, *item.Record)
+	}
+	probe.mu.Unlock()
 	close(probe.historyRelease)
 	w.until(t, func() bool { return s.tagGenbuAutoProbe.current.request == nil })
 	if len(s.snapshot.TagHistory) != 2 || s.snapshot.TagHistory[0].State != "SUCCESS" || s.snapshot.TagHistory[1].Tag != "finished-two" {
-		t.Fatal("late local history erased a finished job")
+		t.Fatalf("late local history erased a finished job: records=%+v readSequence=%d view=%+v", s.snapshot.TagHistory, s.tagGenbuAutoProbe.current.generation, s.currentTagJobView().snapshot)
 	}
 }

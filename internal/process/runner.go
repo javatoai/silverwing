@@ -57,13 +57,15 @@ func NewRunner() *Runner { return &Runner{} }
 // NewDetachedCommand preserves platform command handling for user-opened tools
 // whose lifetime is independent of one operation or the application window.
 func NewDetachedCommand(executable string, arguments ...string) *exec.Cmd {
+	return NewDetachedCommandWithEnvironment(executable, arguments, nil, nil)
+}
+
+func NewDetachedCommandWithEnvironment(executable string, arguments []string, env map[string]string, remove []string) *exec.Cmd {
 	cmd := platformCommand(context.Background(), executable, arguments)
 	// Batch commands carry their arguments in private child environment variables.
 	// Detached commands do not have a Spec.Env override, so start with the current
 	// environment and overlay those variables without changing the parent process.
-	if cmd.Env != nil {
-		cmd.Env = mergeEnvironment(os.Environ(), cmd.Env)
-	}
+	cmd.Env = mergeEnvironment(environment(env, remove), cmd.Env)
 	return cmd
 }
 

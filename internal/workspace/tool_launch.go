@@ -32,7 +32,7 @@ type TaskWorkspaceContext struct {
 
 type TaskWorkspaceToolLauncher interface {
 	Descriptor() TaskWorkspaceToolDescriptor
-	Availability() TaskWorkspaceToolAvailability
+	Availability(context.Context) TaskWorkspaceToolAvailability
 	Open(context.Context, TaskWorkspaceContext) error
 }
 
@@ -86,7 +86,7 @@ func (s *WorkspaceToolLaunchService) Descriptors() []TaskWorkspaceToolDescriptor
 	return out
 }
 
-func (s *WorkspaceToolLaunchService) Availability(toolID string) TaskWorkspaceToolAvailability {
+func (s *WorkspaceToolLaunchService) Availability(ctx context.Context, toolID string) TaskWorkspaceToolAvailability {
 	if s.Registry == nil {
 		return TaskWorkspaceToolAvailability{Reason: "当前版本未注册工具：" + toolID}
 	}
@@ -94,7 +94,7 @@ func (s *WorkspaceToolLaunchService) Availability(toolID string) TaskWorkspaceTo
 	if launcher == nil {
 		return TaskWorkspaceToolAvailability{Reason: "当前版本未注册工具：" + toolID}
 	}
-	return launcher.Availability()
+	return launcher.Availability(ctx)
 }
 
 func (s *WorkspaceToolLaunchService) Launch(ctx context.Context, taskPath string, manifest domain.TaskManifest, toolIDs []string) (domain.TaskManifest, error) {
@@ -105,7 +105,11 @@ func (s *WorkspaceToolLaunchService) Launch(ctx context.Context, taskPath string
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	var updated domain.TaskManifest
+	if err := ctx.Err(); err != nil {
+		return domain.NormalizeTaskManifest(manifest), err
+	}
+	// A failed launch must not erase the already-created task from its caller.
+	updated := domain.NormalizeTaskManifest(manifest)
 	err := s.Locks.WithTask(taskPath, func() error {
 		current, err := s.Manifests.Load(taskPath)
 		if err != nil {
@@ -114,6 +118,10 @@ func (s *WorkspaceToolLaunchService) Launch(ctx context.Context, taskPath string
 		if !sameTaskManifest(current, manifest) {
 			return fmt.Errorf("任务清单已发生变化，请重新尝试启动")
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		updated = current
 		pending := current
 		now := s.now()
 		for _, id := range selected {
@@ -131,13 +139,20 @@ func (s *WorkspaceToolLaunchService) Launch(ctx context.Context, taskPath string
 				launcher = s.Registry.Launchers[id]
 			}
 			switch {
+			case ctx.Err() != nil:
+				status.Message = ptr(ctx.Err().Error())
 			case launcher == nil:
 				status.Message = ptr("当前版本未注册工具：" + id)
 			default:
-				availability := launcher.Availability()
-				if !availability.Available {
+				availability := launcher.Availability(ctx)
+				if ctx.Err() != nil {
+					status.Message = ptr(ctx.Err().Error())
+				} else if !availability.Available {
 					status.Message = ptr(availability.Reason)
 				} else {
+					if err := s.requireCurrentManifest(taskPath, updated); err != nil {
+						return err
+					}
 					ctxData := TaskWorkspaceContext{TaskName: current.FolderName, TaskDirectory: mustAbs(taskPath), AgentsFile: filepath.Join(mustAbs(taskPath), "AGENTS.md"), Workspaces: append([]domain.ServiceWorkspace(nil), current.Services...)}
 					if runErr := launcher.Open(ctx, ctxData); runErr != nil {
 						status.Message = ptr(runErr.Error())
@@ -145,6 +160,9 @@ func (s *WorkspaceToolLaunchService) Launch(ctx context.Context, taskPath string
 						status.Status = domain.WorkspaceToolOpened
 					}
 				}
+			}
+			if err := s.requireCurrentManifest(taskPath, updated); err != nil {
+				return err
 			}
 			updated = replaceWorkspaceToolLaunch(updated, status)
 			updated.UpdatedAt = status.UpdatedAt
@@ -155,6 +173,17 @@ func (s *WorkspaceToolLaunchService) Launch(ctx context.Context, taskPath string
 		return nil
 	})
 	return updated, err
+}
+
+func (s *WorkspaceToolLaunchService) requireCurrentManifest(path string, expected domain.TaskManifest) error {
+	current, err := s.Manifests.Load(path)
+	if err != nil {
+		return err
+	}
+	if !sameTaskManifest(current, expected) {
+		return fmt.Errorf("任务清单已发生变化，请重新尝试启动")
+	}
+	return nil
 }
 
 func (s *WorkspaceToolLaunchService) Retry(ctx context.Context, taskPath string, manifest domain.TaskManifest, toolID string) (domain.TaskManifest, error) {
@@ -195,4 +224,6 @@ func uniqueStringsNonEmpty(values []string) []string {
 	}
 	return out
 }
-func sameTaskManifest(left, right domain.TaskManifest) bool { return reflect.DeepEqual(left, right) }
+func sameTaskManifest(left, right domain.TaskManifest) bool {
+	return reflect.DeepEqual(domain.NormalizeTaskManifest(left), domain.NormalizeTaskManifest(right))
+}

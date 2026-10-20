@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"silverwing-go/internal/commandruntime"
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/process"
 )
@@ -102,13 +103,12 @@ func (s *BootstrapService) Initialize(ctx context.Context, sourceRepository, wor
 			warnings = append(warnings, name+"："+err.Error())
 			continue
 		}
-		result, runErr := s.Runner.Run(ctx, process.Spec{
-			Executable: resolveBootstrapExecutable(command.Executable),
-			Arguments:  command.Arguments,
-			Directory:  workdir,
-			Timeout:    time.Duration(command.TimeoutSeconds) * time.Second,
-			OnOutput:   onOutput,
-		})
+		spec, runErr := commandruntime.Prepare(ctx, s.Runner, nil, "", "", resolveBootstrapExecutable(command.Executable))
+		var result process.Result
+		if runErr == nil {
+			spec.Arguments, spec.Directory, spec.Timeout, spec.OnOutput = command.Arguments, workdir, time.Duration(command.TimeoutSeconds)*time.Second, onOutput
+			result, runErr = s.Runner.Run(ctx, spec)
+		}
 		if err := ctx.Err(); err != nil {
 			return BootstrapResult{Steps: steps, Warnings: warnings}, err
 		}

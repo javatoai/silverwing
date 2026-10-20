@@ -249,6 +249,7 @@ type app struct {
 	workspaceAddServiceID  string
 	workspaceAddModuleID   string
 	lastResult             string
+	taskCreationWarning    string
 	lastMessage            string
 	lastError              string
 	operationNotifications operationNotificationState

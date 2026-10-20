@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"silverwing-go/internal/commandruntime"
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/executable"
 	"silverwing-go/internal/process"
@@ -39,8 +39,8 @@ type cliRunFailure struct {
 func (e *cliRunFailure) Error() string { return e.message }
 func (e *cliRunFailure) Unwrap() error { return e.cause }
 
-func (s *Service) commandPath(config domain.AppConfig, target domain.CommandProxyTarget) string {
-	command, _, err := s.resolveCommand(context.Background(), config, target)
+func (s *Service) commandPath(ctx context.Context, config domain.AppConfig, target domain.CommandProxyTarget) string {
+	command, _, err := s.resolveCommand(ctx, config, target)
 	if err != nil {
 		return ""
 	}
@@ -71,64 +71,20 @@ func (s *Service) resolveCommand(ctx context.Context, config domain.AppConfig, t
 }
 
 func (s *Service) childEnvironment(config domain.AppConfig, target domain.CommandProxyTarget) (map[string]string, []string) {
-	removals := []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"}
-	enabled := config.CommandProxyURL != nil && strings.TrimSpace(*config.CommandProxyURL) != ""
-	if enabled {
-		found := false
-		for _, current := range config.CommandProxyTargets {
-			found = found || current == target
-		}
-		enabled = found
-	}
-	if !enabled {
-		return nil, removals
-	}
-	endpoint := strings.TrimSpace(*config.CommandProxyURL)
-	parsed, err := url.Parse(endpoint)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return nil, removals
-	}
-	if config.CommandProxyUsername != nil && *config.CommandProxyUsername != "" {
-		password := ""
-		if config.CommandProxyPassword != nil {
-			password = *config.CommandProxyPassword
-		}
-		parsed.User = url.UserPassword(*config.CommandProxyUsername, password)
-	}
-	endpoint = parsed.String()
-	values := map[string]string{
-		"HTTP_PROXY": endpoint, "HTTPS_PROXY": endpoint, "ALL_PROXY": endpoint,
-		"http_proxy": endpoint, "https_proxy": endpoint, "all_proxy": endpoint,
-	}
-	if config.CommandProxyNoProxy != nil && strings.TrimSpace(*config.CommandProxyNoProxy) != "" {
-		values["NO_PROXY"] = *config.CommandProxyNoProxy
-		values["no_proxy"] = *config.CommandProxyNoProxy
-	}
-	return values, removals
+	return commandruntime.ProxyEnvironment(config, target)
 }
 
 func (s *Service) runCLI(ctx context.Context, config domain.AppConfig, target domain.CommandProxyTarget, args []string, stdin []byte, timeout time.Duration, operation string, workingDirectory string) (process.Result, error) {
-	executablePath, resolver, err := s.resolveCommand(ctx, config, target)
+	command, _, err := s.resolveCommand(ctx, config, target)
 	if err != nil {
 		return process.Result{}, err
 	}
-	env, remove := s.childEnvironment(config, target)
-	extraEnvironment := resolver.Environment(ctx, executable.Tool(targetToolName(target)), executablePath)
-	if len(extraEnvironment) > 0 && env == nil {
-		env = map[string]string{}
+	spec, err := commandruntime.Prepare(ctx, s.runner, &config, target, executable.Tool(targetToolName(target)), command)
+	if err != nil {
+		return process.Result{}, err
 	}
-	for name, value := range extraEnvironment {
-		env[name] = value
-	}
-	result, err := s.runner.Run(ctx, process.Spec{
-		Executable: executablePath,
-		Arguments:  args,
-		Directory:  workingDirectory,
-		Env:        env,
-		RemoveEnv:  remove,
-		Stdin:      stdin,
-		Timeout:    timeout,
-	})
+	spec.Arguments, spec.Directory, spec.Stdin, spec.Timeout = args, workingDirectory, stdin, timeout
+	result, err := s.runner.Run(ctx, spec)
 	if err != nil {
 		return result, &cliRunFailure{message: fmt.Sprintf("%s：%s", operation, s.safeDiagnostic(config, err.Error())), cause: err}
 	}
@@ -166,17 +122,7 @@ func (s *Service) runLark(ctx context.Context, config domain.AppConfig, args []s
 }
 
 func (s *Service) safeDiagnostic(config domain.AppConfig, message string) string {
-	for _, secret := range []*string{config.CommandProxyPassword, config.CommandProxyUsername, config.CommandProxyURL} {
-		if secret != nil && *secret != "" {
-			message = strings.ReplaceAll(message, *secret, "[已隐藏]")
-		}
-	}
-	if config.CommandProxyURL != nil {
-		if parsed, err := url.Parse(*config.CommandProxyURL); err == nil && parsed.Host != "" {
-			message = strings.ReplaceAll(message, parsed.Host, "[代理地址已隐藏]")
-		}
-	}
-	return message
+	return commandruntime.Redact(config, message)
 }
 
 func (s *Service) runJSON(ctx context.Context, config domain.AppConfig, target domain.CommandProxyTarget, args []string, timeout time.Duration, operation string) (any, process.Result, error) {

@@ -3,21 +3,22 @@
 package application
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"runtime"
+	"silverwing-go/internal/executable"
 
 	"silverwing-go/internal/domain"
-	"silverwing-go/internal/process"
 )
 
 func openNative(path string, reveal bool) error {
 	var cmd *exec.Cmd
 	if runtime.GOOS == "darwin" {
 		if reveal {
-			cmd = exec.Command("open", "-R", path)
+			cmd = exec.Command(executable.SystemCommand("open"), "-R", path)
 		} else {
-			cmd = exec.Command("open", path)
+			cmd = exec.Command(executable.SystemCommand("open"), path)
 		}
 	} else {
 		if reveal {
@@ -35,33 +36,39 @@ func openNative(path string, reveal bool) error {
 	go cmd.Wait()
 	return nil
 }
-func launchTerminal(resolution SystemTerminalResolution, directory string) error {
+func launchTerminal(ctx context.Context, resolution SystemTerminalResolution, directory string) error {
 	plan, err := PlanSystemTerminalLaunch(runtime.GOOS, resolution, directory)
 	if err != nil {
 		return err
 	}
-	return startUnixLaunchPlan(plan)
+	return startUnixLaunchPlan(ctx, plan)
 }
-func launchSystemTerminalPlan(plan SystemLaunchPlan) error {
-	return startUnixLaunchPlan(plan)
+func launchSystemTerminalPlan(ctx context.Context, plan SystemLaunchPlan) error {
+	return startUnixLaunchPlan(ctx, plan)
 }
-func launchTool(toolType domain.DevelopmentToolType, executable, path string) error {
+func launchTool(ctx context.Context, toolType domain.DevelopmentToolType, executable, path string) error {
 	plan, err := PlanSystemToolLaunch(runtime.GOOS, toolType, executable, path)
 	if err != nil {
 		return err
 	}
-	return startUnixLaunchPlan(plan)
+	return startUnixLaunchPlan(ctx, plan)
 }
-func startUnixLaunchPlan(plan SystemLaunchPlan) error {
-	cmd := process.NewDetachedCommand(plan.Executable, plan.Arguments...)
+func startUnixLaunchPlan(ctx context.Context, plan SystemLaunchPlan) error {
+	cmd, err := detachedToolCommand(ctx, plan.Executable, plan.Arguments)
+	if err != nil {
+		return err
+	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
 	go cmd.Wait()
 	return nil
 }
-func launchToolArguments(executable string, arguments ...string) error {
-	cmd := process.NewDetachedCommand(executable, arguments...)
+func launchToolArguments(ctx context.Context, executable string, arguments ...string) error {
+	cmd, err := detachedToolCommand(ctx, executable, arguments)
+	if err != nil {
+		return err
+	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}

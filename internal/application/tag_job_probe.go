@@ -42,7 +42,12 @@ func (a *App) DispatchTagProbe(ctx context.Context, action Action, onRecord func
 	if err != nil {
 		return ActionResult{}, err
 	}
-	items, err := a.readTagHistoryRecords(ctx, config, tasks)
+	var items []TagRecord
+	if action.Kind == "tag.history" || action.Kind == "tag.history.refresh" {
+		items, err = a.readRetainedTagHistoryRecords(ctx, config, tasks)
+	} else {
+		items, err = a.readTagHistoryRecords(ctx, config, tasks)
+	}
 	if err != nil {
 		return ActionResult{}, err
 	}

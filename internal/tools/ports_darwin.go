@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"silverwing-go/internal/executable"
 	"sort"
 	"strconv"
 	"strings"
@@ -115,7 +116,7 @@ func queryUnix(ctx context.Context, port int) ([]PortProcess, error) {
 		}
 		selector := "-i" + protocol + ":" + strconv.Itoa(port)
 		result, err := process.NewRunner().Run(ctx, process.Spec{
-			Executable: "lsof",
+			Executable: executable.SystemCommand("lsof"),
 			Arguments:  []string{"-nP", "-F", "pcnftT", selector},
 			Timeout:    20 * time.Second,
 		})
@@ -287,7 +288,7 @@ func cString(value []byte) string {
 
 func darwinProcessCommandAndUser(ctx context.Context, pid int) (string, string) {
 	result, err := process.NewRunner().Run(ctx, process.Spec{
-		Executable: "ps",
+		Executable: executable.SystemCommand("ps"),
 		Arguments:  []string{"-p", strconv.Itoa(pid), "-o", "user=", "-o", "command="},
 		Timeout:    5 * time.Second,
 	})

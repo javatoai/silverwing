@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"silverwing-go/internal/commandruntime"
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/executable"
 	"silverwing-go/internal/process"
@@ -1635,10 +1636,14 @@ func (s *Service) queryGenbu(ctx context.Context, config domain.AppConfig, servi
 	if config.GenbuExecutablePath != nil {
 		configured = *config.GenbuExecutablePath
 	}
-	resolution := executable.NewResolver(s.runner).Resolve(ctx, executable.ToolGenbu, configured)
-	result, err := s.runner.Run(ctx, process.Spec{Executable: resolution.Command, Arguments: []string{"query-tag", "--json", service, tag}, Timeout: 20 * time.Second})
+	spec, err := commandruntime.Prepare(ctx, s.runner, &config, domain.ProxyTargetGenbu, executable.ToolGenbu, configured)
 	if err != nil {
 		return genbuTagQueryResult{}, err
+	}
+	spec.Arguments, spec.Timeout = []string{"query-tag", "--json", service, tag}, 20*time.Second
+	result, err := s.runner.Run(ctx, spec)
+	if err != nil {
+		return genbuTagQueryResult{}, fmt.Errorf("Genbu CLI 执行失败：%s", commandruntime.Redact(config, err.Error()))
 	}
 	if result.ExitCode != 0 {
 		detail := strings.TrimSpace(result.Stderr)
@@ -1651,7 +1656,7 @@ func (s *Service) queryGenbu(ctx context.Context, config domain.AppConfig, servi
 		if detail == "" {
 			detail = fmt.Sprintf("genbu query-tag 执行失败（退出码 %d）", result.ExitCode)
 		}
-		return genbuTagQueryResult{}, errors.New(detail)
+		return genbuTagQueryResult{}, errors.New(commandruntime.Redact(config, detail))
 	}
 	var parsed genbuTagQueryJSON
 	if err := json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &parsed); err != nil {

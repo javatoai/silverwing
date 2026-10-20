@@ -40,16 +40,17 @@ type tagGenbuAutoProbeState struct {
 }
 
 type tagGenbuAutoProbeSession struct {
-	generation     uint64
-	identity       string
-	ctx            context.Context
-	cancel         context.CancelFunc
-	done           chan struct{}
-	request        *tagGenbuAutoProbeRequest            // UI-thread-owned
-	historyRefresh bool                                 // UI-thread-owned; consumed when the request starts
-	probes         map[string]*tagGenbuAutoProbeRequest // repository lanes, UI-thread-owned
-	lastProbe      map[string]time.Time
-	forceRecords   map[string]bool
+	generation       uint64
+	identity         string
+	ctx              context.Context
+	cancel           context.CancelFunc
+	done             chan struct{}
+	request          *tagGenbuAutoProbeRequest            // UI-thread-owned
+	historyRefresh   bool                                 // UI-thread-owned; consumed when the request starts
+	retentionPending bool                                 // Retry on timer, never on every frame.
+	probes           map[string]*tagGenbuAutoProbeRequest // repository lanes, UI-thread-owned
+	lastProbe        map[string]time.Time
+	forceRecords     map[string]bool
 }
 
 type tagGenbuAutoProbeRequest struct {
@@ -114,7 +115,7 @@ func (s *app) observeTagGenbuAutoProbeWindow(win tagGenbuAutoProbeWindow) {
 		}
 	}
 	state := s.ensureTagGenbuAutoProbeState()
-	scope := tagHistoryMenuKey(s.ensureTagHistoryView(), "visible")
+	scope := identity // Includes saved retention settings as well as task identity.
 	if state.visibleScope != scope {
 		state.visibleScope, state.refreshPending = scope, true
 		if state.forceIdentity != identity {
@@ -226,6 +227,11 @@ func (s *app) queueTagGenbuAutoProbe(session *tagGenbuAutoProbeSession, win tagG
 			s.taskTagGenbuIdentity() != session.identity || session.request != nil {
 			return
 		}
+		if session.retentionPending {
+			if view := s.currentTagJobView(); view == nil || !view.snapshot.Busy {
+				session.historyRefresh = true
+			}
+		}
 		s.startTagGenbuAutoProbeRequest(session, win)
 	})
 }
@@ -247,6 +253,7 @@ func (s *app) startTagGenbuAutoProbeRequest(session *tagGenbuAutoProbeSession, w
 		"tagJobAccountIdentity": s.tagJobScope().AccountIdentity,
 	}}
 	session.historyRefresh = false
+	session.retentionPending = false // A real read error waits for explicit retry.
 	s.ensureTaskTagHistoryView(t).Error = ""
 	*s.input(tagGenbuTaskErrorKey(t.id), "") = ""
 	request := &tagGenbuAutoProbeRequest{session: session, identity: session.identity, action: action, ctx: ctx, cancel: cancel, done: make(chan struct{})}
@@ -319,6 +326,7 @@ func (s *app) runTagGenbuAutoProbeRequest(backend application.Backend, win tagGe
 			if view := s.currentTagJobView(); view != nil && (view.snapshot.ID != request.jobID || view.snapshot.Sequence > request.jobSequence) {
 				s.upsertTagJobRecords(view.snapshot)
 			}
+			request.session.retentionPending = len(filterTagHistory(s.taskTagHistoryRecords(request.action.TaskID), "", false)) > s.configInt("tagHistoryMaxGroups", 3)
 			if s.tagGenbuAutoProbe.forcePending {
 				for _, record := range s.taskTagHistoryRecords(request.action.TaskID) {
 					request.session.forceRecords[record.ID] = true

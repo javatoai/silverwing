@@ -33,6 +33,8 @@ func (s *app) renderOperationNotifications(c *ui.Context) {
 	s.operationNotifications.progress(c, "operation-progress", progress, s.operationKind, action, cancel)
 	s.renderRequirementRefreshProgressNotification(c)
 	s.operationNotifications.present(c, "operation", &s.lastMessage, &s.lastError)
+	emptyWarningError := ""
+	s.operationNotifications.presentWithKind(c, "task-create-warning", &s.taskCreationWarning, &emptyWarningError, "warning")
 	if state := s.pageLocalRead; state != nil {
 		empty := ""
 		entry := state.entry
@@ -233,15 +235,21 @@ func (s *app) presentSettingsOutputNotification(c *ui.Context) {
 }
 
 func (s *operationNotificationState) present(c *ui.Context, scope string, message, failure *string, retry ...func()) {
+	s.presentWithKind(c, scope, message, failure, "success", retry...)
+}
+func (s *operationNotificationState) presentWithKind(c *ui.Context, scope string, message, failure *string, messageKind string, retry ...func()) {
 	if s.shown == nil {
 		s.shown = make(map[string]string)
 	}
 	id := "silverwing-notification-" + scope
-	text, kind, source := *message, "success", message
+	text, kind, source := *message, messageKind, message
 	if readCompleteNotification(text) {
 		text = ""
 	}
 	timeout := 4 * time.Second
+	if messageKind == "warning" {
+		timeout = -1
+	}
 	if *failure != "" {
 		text, kind, source = *failure, "error", failure
 		timeout = -1 // Errors remain available until dismissed.
@@ -272,6 +280,9 @@ func (s *operationNotificationState) present(c *ui.Context, scope string, messag
 			s.shown[scope] = ""
 		}
 	}}
+	if kind == "warning" {
+		toast.ContentMaxHeight = 360
+	}
 	if scope == "operation" && kind == "success" && isTagReleaseNoticeCopiedMessage(text) {
 		toast.ContentMaxHeight = 360
 	}

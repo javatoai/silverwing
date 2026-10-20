@@ -156,9 +156,15 @@ func (s *app) acceptTagJobSnapshot(view *tagDesktopJobView, scope application.Ta
 			}
 		}
 	}
+	completed := view.snapshot.Busy && !snapshot.Busy
 	view.snapshot = snapshot
 	if s.tagJobScope() == scope {
 		s.upsertTagJobRecords(snapshot)
+		if completed {
+			// The task lease has been released. Read history again so a newly
+			// completed batch also observes the configured retention allowance.
+			s.ensureTagGenbuAutoProbeState().refreshPending = true
+		}
 		for _, item := range snapshot.Items {
 			if item.Kind != "tag.workspace-check" || !item.Done {
 				continue

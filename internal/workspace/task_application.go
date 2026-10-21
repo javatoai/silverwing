@@ -31,21 +31,24 @@ type CreateTaskRequest struct {
 }
 
 type AddWorkspaceRequest struct {
-	ServiceID    string                   `json:"serviceId"`
-	ModuleID     string                   `json:"moduleId"`
-	ModuleName   string                   `json:"moduleName"`
-	Strategy     domain.WorkspaceStrategy `json:"strategy"`
-	BaseRef      string                   `json:"baseRef"`
-	BaseRemote   string                   `json:"baseRemote"`
-	Branch       string                   `json:"branch"`
-	TargetBranch string                   `json:"targetBranch"`
-	Source       domain.TaskModuleSource  `json:"source"`
-
-	ServiceIDs               []string               `json:"serviceIds"`
-	ConfirmedBranchReuseKeys []BranchReuseKey       `json:"confirmedBranchReuseKeys"`
-	BaseOverrides            []ModuleBaseOverride   `json:"baseOverrides"`
-	ServiceSelections        []TaskServiceSelection `json:"serviceSelections"`
-	Modules                  []TaskModuleSelection  `json:"modules"`
+	ServiceID                string                   `json:"serviceId"`
+	ModuleID                 string                   `json:"moduleId"`
+	ModuleName               string                   `json:"moduleName"`
+	Strategy                 domain.WorkspaceStrategy `json:"strategy"`
+	BaseRef                  string                   `json:"baseRef"`
+	BaseRemote               string                   `json:"baseRemote"`
+	Branch                   string                   `json:"branch"`
+	TargetBranch             string                   `json:"targetBranch"`
+	Source                   domain.TaskModuleSource  `json:"source"`
+	TagEnabled               bool                     `json:"tagEnabled"`
+	TagMode                  domain.TagBuildMode      `json:"tagMode"`
+	TagTargetRef             string                   `json:"tagTargetRef"`
+	TagMessagePrefix         string                   `json:"tagMessagePrefix"`
+	ServiceIDs               []string                 `json:"serviceIds"`
+	ConfirmedBranchReuseKeys []BranchReuseKey         `json:"confirmedBranchReuseKeys"`
+	BaseOverrides            []ModuleBaseOverride     `json:"baseOverrides"`
+	ServiceSelections        []TaskServiceSelection   `json:"serviceSelections"`
+	Modules                  []TaskModuleSelection    `json:"modules"`
 }
 
 // RequirementMaterialsResolver is injected by the application layer so task
@@ -878,7 +881,7 @@ func (s *TaskApplicationService) rollbackWorkspacesWithProgress(ctx context.Cont
 				}
 			}
 		}
-		service.Modules = []domain.ServiceModuleConfig{{ID: ws.ModuleID, Name: ws.ModuleName, Strategy: ws.Strategy, MasterBranch: ws.BaseRef}}
+		service.Modules = []domain.ServiceModuleConfig{{ID: ws.ModuleID, Name: ws.ModuleName, Strategy: ws.Strategy, MasterBranch: ws.BaseRef, TagEnabled: ws.TagEnabled, TagMode: ws.TagMode, TagTargetRef: ws.TagTargetRef, TagMessagePrefix: ws.TagMessagePrefix}}
 		request := WorkspaceProvisionRequest{TaskDirectory: taskPath, Repository: repository, Service: service, RequestedFeatureBranch: ws.Branch, ModuleBranches: map[string]string{ws.ModuleID: targetBranchValue(ws)}, ModuleSources: map[string]domain.TaskModuleSource{ws.ModuleID: ws.ModuleSource}}
 		if err := s.Provisioning.RollbackWithProgress(ctx, request, []domain.ServiceWorkspace{ws}, onProgress); err != nil {
 			failures = append(failures, err)
@@ -992,14 +995,20 @@ func resolveTaskSelections(group domain.GroupConfig, legacyServiceIDs []string, 
 			if selectedModule.Strategy != domain.WorkspaceStandardWorktree && selectedModule.Strategy != domain.WorkspaceIndependentClone {
 				return nil, fmt.Errorf("工作区策略不合法：%s", selectedModule.Strategy)
 			}
-			module := domain.ServiceModuleConfig{ID: selectedModule.ID, Name: selectedModule.Name, MasterBranch: ptr(selectedModule.BaseRef), Strategy: selectedModule.Strategy, CustomCommands: []domain.WorkspaceCommandConfig{}}
+			module := domain.ServiceModuleConfig{ID: selectedModule.ID, Name: selectedModule.Name, MasterBranch: ptr(selectedModule.BaseRef), Strategy: selectedModule.Strategy, TagEnabled: selectedModule.TagEnabled && selectedModule.Source != domain.TaskModuleTemporary, TagMode: selectedModule.TagMode, TagMessagePrefix: selectedModule.TagMessagePrefix, CustomCommands: []domain.WorkspaceCommandConfig{}}
 			if selectedModule.BaseRemote != "" {
 				ref, _ := ParseRemoteBranchRef(selectedModule.BaseRef)
 				if ref.Remote != selectedModule.BaseRemote {
 					return nil, fmt.Errorf("主分支远程与分支引用不一致：%s", selectedModule.BaseRef)
 				}
 			}
-
+			if selectedModule.TagTargetRef != "" {
+				if _, err := ParseRemoteBranchRef(selectedModule.TagTargetRef); err != nil {
+					return nil, err
+				}
+				module.TagTargetRef = ptr(selectedModule.TagTargetRef)
+			}
+			module.TagTargetRef = service.EffectiveTagTargetRef(module)
 			modules = append(modules, module)
 			branch := strings.TrimSpace(selectedModule.TargetBranch)
 			if selectedModule.Strategy == domain.WorkspaceStandardWorktree && branch == "" {
@@ -1035,7 +1044,7 @@ func resolveTaskSelections(group domain.GroupConfig, legacyServiceIDs []string, 
 }
 
 func configuredModuleSelection(service domain.GroupServiceConfig, module domain.ServiceModuleConfig, baseRef, target string) TaskModuleSelection {
-	return TaskModuleSelection{ID: module.ID, Name: module.Name, Strategy: module.Strategy, BaseRef: baseRef, BaseRemote: service.EffectiveMasterRemote(module), TargetBranch: target, Source: domain.TaskModuleConfigured}
+	return TaskModuleSelection{ID: module.ID, Name: module.Name, Strategy: module.Strategy, BaseRef: baseRef, BaseRemote: service.EffectiveMasterRemote(module), TargetBranch: target, Source: domain.TaskModuleConfigured, TagEnabled: module.TagEnabled, TagMode: module.TagMode, TagTargetRef: stringValue(module.TagTargetRef), TagMessagePrefix: module.TagMessagePrefix}
 }
 
 func selectionsForAdd(group domain.GroupConfig, request AddWorkspaceRequest, feature string) ([]effectiveTaskService, error) {
@@ -1082,7 +1091,7 @@ func selectionsForAdd(group domain.GroupConfig, request AddWorkspaceRequest, fea
 			branch = request.Branch
 		}
 		moduleID := request.ModuleID
-		module := TaskModuleSelection{ID: moduleID, Name: moduleName, Strategy: strategy, BaseRef: base, BaseRemote: request.BaseRemote, TargetBranch: branch, Source: request.Source}
+		module := TaskModuleSelection{ID: moduleID, Name: moduleName, Strategy: strategy, BaseRef: base, BaseRemote: request.BaseRemote, TargetBranch: branch, Source: request.Source, TagEnabled: request.TagEnabled, TagMode: request.TagMode, TagTargetRef: request.TagTargetRef, TagMessagePrefix: request.TagMessagePrefix}
 		selections = []TaskServiceSelection{{ServiceID: request.ServiceID, Modules: []TaskModuleSelection{module}}}
 	}
 	return resolveTaskSelections(group, request.ServiceIDs, selections, request.BaseOverrides, "")

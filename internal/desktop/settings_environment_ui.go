@@ -93,7 +93,7 @@ func (s *app) settingsProxy(c *ui.Context, p palette) {
 		for _, target := range []struct{ id, title, description string }{
 			{"CODEX", "Codex CLI", "AI 命名与 Codex 扩展。"}, {"GIT", "Git", "仓库和远程分支操作。"},
 			{"WORKSPACE_COMMAND", "服务快捷命令", "Maven、Gradle 等初始化命令。"}, {"MEEGLE", "Meegle CLI", "需求、项目与登录状态。"},
-			{"LARK", "Lark CLI", "Lark 授权与登录状态。"},
+			{"LARK", "Lark CLI", "Lark 授权与登录状态。"}, {"GENBU", "Genbu CLI", "Tag 构建与发布状态。"},
 		} {
 			selected := containsString(stringArray(s.configArray("commandProxyTargets")), target.id)
 			value := s.settingsBoolInput("proxy-target:"+target.id, selected)
@@ -107,25 +107,18 @@ func (s *app) settingsProxy(c *ui.Context, p palette) {
 				*protocol, *host, *port, *noProxy, *username, *password = "http", "", "80", "", "", ""
 				*authentication = false
 				*passwordVisible = false
-				for _, target := range []string{"CODEX", "GIT", "WORKSPACE_COMMAND", "MEEGLE", "LARK"} {
+				for _, target := range []string{"CODEX", "GIT", "WORKSPACE_COMMAND", "MEEGLE", "LARK", "GENBU"} {
 					*s.settingsBoolInput("proxy-target:"+target, false) = false
 				}
 			}
 		})
-		targetIDs := []string{"CODEX", "GIT", "WORKSPACE_COMMAND", "MEEGLE", "LARK"}
-		configuredTargets := stringArray(s.configArray("commandProxyTargets"))
-		hiddenTargets := make([]string, 0, len(configuredTargets))
-		for _, target := range configuredTargets {
-			if !containsString(targetIDs, target) && !containsString(hiddenTargets, target) {
-				hiddenTargets = append(hiddenTargets, target)
-			}
-		}
+		targetIDs := []string{"CODEX", "GIT", "WORKSPACE_COMMAND", "MEEGLE", "LARK", "GENBU"}
 		targetInputs := make([]*bool, 0, len(targetIDs))
 		for _, target := range targetIDs {
-			targetInputs = append(targetInputs, s.settingsBoolInput("proxy-target:"+target, containsString(configuredTargets, target)))
+			targetInputs = append(targetInputs, s.settingsBoolInput("proxy-target:"+target, containsString(stringArray(s.configArray("commandProxyTargets")), target)))
 		}
 		s.observeSettingsProxyAutosave(func() settingsProxyDraft {
-			targets := append([]string(nil), hiddenTargets...)
+			targets := []string{}
 			for index, input := range targetInputs {
 				if *input {
 					targets = append(targets, targetIDs[index])
@@ -176,7 +169,7 @@ func (s *app) settingsGit(c *ui.Context, p palette) {
 		s.settingsCLICommandActions(c, p, "git", resolved)
 	})
 	settingsCard(c, p, "分支写保护", "匹配实际分支完整名称，忽略大小写。", func() {
-		settingsMuted(c, p, "启用后会禁用受保护分支上的 Commit、Push、Commit & Push。")
+		settingsMuted(c, p, "启用后会禁用受保护分支上的 Commit、Push、Commit & Push，以及需要写入分支的测试 Tag 流程。")
 		branches := stringArray(s.configArray("blockedGitWriteBranches"))
 		for index, branch := range branches {
 			current := branch
@@ -210,6 +203,27 @@ func (s *app) settingsBranchNaming(c *ui.Context, p palette) {
 				return
 			}
 			s.saveConfigField("defaultBranchPrefix", value)
+		})
+	})
+}
+
+func (s *app) settingsTag(c *ui.Context, p palette) {
+	settingsCard(c, p, "Tag 设置", "全局开关会影响 Tag 导航、构建入口与其他 Tag 配置。", func() {
+		s.settingsSwitch(c, p, "tagEnabled", "全局 Tag 开关", "启用后显示 Tag 页面、构建入口与 Tag 配置。", false)
+		s.settingsSwitch(c, p, "allowTaskTagTargetEditing", "允许在任务详情修改测试目标分支", "修改只影响当前任务对应模块。", false)
+		maxGroups := s.input("setting:tagHistoryMaxGroups", fmt.Sprint(s.configInt("tagHistoryMaxGroups", 3)))
+		ui.Column(c).Gap(4).Children(func() {
+			label(c, "每任务最多保留 Tag 组", 11, p.text)
+			ui.TextInput(c.Key("tag-history-max-groups"), maxGroups).Width(180).Height(36).Placeholder("1 到 1000")
+			settingsMuted(c, p, "按最近更新时间保留，超过后清理最旧的整组记录。范围：1–1000。")
+		})
+		s.autosaveSettingsInput("settings:tagHistoryMaxGroups", maxGroups, func(value string) {
+			count, err := parseBoundedInt(value, 1, 1000)
+			if err != nil {
+				s.lastError = "Tag 组保留数量必须在 1 到 1000 之间。"
+				return
+			}
+			s.saveConfigField("tagHistoryMaxGroups", count)
 		})
 	})
 }

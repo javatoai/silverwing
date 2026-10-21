@@ -61,13 +61,18 @@ func (s *app) taskWorkspaceDetail(c *ui.Context, p palette) {
 						s.deactivateInstructionEditor()
 					}
 					s.tab = i
-
+					if i == taskTagTab {
+						s.requestTagHistoryRefresh()
+					}
 					if i == 1 {
 						s.loadDocuments()
 					}
 				}
 			}
-
+			if s.tab == taskTagTab && s.currentTask().id != "" {
+				ui.Spacer(c)
+				s.renderTagHistoryPageMenu(c, p, s.currentTask())
+			}
 		})
 		ui.Divider(c)
 		if s.currentTask().id == "" {
@@ -79,7 +84,8 @@ func (s *app) taskWorkspaceDetail(c *ui.Context, p palette) {
 			s.materials(c, p)
 		case 3:
 			s.renderTaskNotes(c, p)
-
+		case taskTagTab:
+			s.renderTaskTagHistory(c, p, s.currentTask())
 		case 0:
 			ui.Column(c).Grow(1).MinHeight(0).Background(p.surface).Border(1, p.line).Radius(18).Children(func() {
 				ui.Scroll(c).Grow(1).MinHeight(0).TrackScroll(s.taskWorkspaceDetailScroll(s.currentTask())).Padding(18).Children(func() { s.taskDetails(c, p) })
@@ -147,7 +153,13 @@ func (s *app) taskDetails(c *ui.Context, p palette) {
 					}
 				})
 			}
-
+			if s.taskCanBuildAnyTag(t) {
+				iconGroup(c, p, func() {
+					if iconButton(c, "batch-tag", "tag", "批量构建 Tag", p).Clicked() {
+						s.openTagBuildBatch(t)
+					}
+				})
+			}
 			if s.configBool("showTaskDetailGitActionGroup", false) && taskHasPhysicalWorkspace(t) {
 				iconGroup(c, p, func() {
 					for _, a := range []struct{ icon, name, mode string }{{"commit", "提交全部工作区", workspaceGitModeCommit}, {"push", "推送全部工作区", workspaceGitModePush}, {"cloud", "提交并推送全部工作区", workspaceGitModeCommitAndPush}} {
@@ -240,6 +252,22 @@ func (s *app) taskAddableServices(t task) []application.Service {
 		}
 	}
 	return services
+}
+
+func (s *app) taskCanBuildAnyTag(t task) bool {
+	if t.archived {
+		return false
+	}
+	for _, workspace := range t.workspaces {
+		if s.workspaceCanBuildTag(t, workspace) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *app) workspaceCanBuildTag(t task, workspace application.Workspace) bool {
+	return s.tagWorkspaceCanBuild(t, workspace)
 }
 
 func (s *app) hasGroup(groupID string) bool {

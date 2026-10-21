@@ -421,7 +421,9 @@ func (s *app) renderWorkspaceReviewCommitOption(c *ui.Context, p palette, state 
 
 func (s *app) renderWorkspaceReviewFileList(c *ui.Context, p palette, state *workspaceHistoryState, key string) {
 	state.PrefetchFrameVisible = state.PrefetchFrameVisible[:0]
-	defer func() { s.updateWorkspaceReviewPrefetch(state, state.PrefetchFrameVisible) }()
+	if state.FileSelected == nil {
+		defer func() { s.updateWorkspaceReviewPrefetch(state, state.PrefetchFrameVisible) }()
+	}
 	if state.LeftCollapsed {
 		ui.Column(c).FillWidth().MinHeight(0).AlignItems(ui.Center).Padding(3).Children(func() {
 			if iconButton(c, key+"-expand-left", "arrow", "展开文件列表", p).Clicked() {
@@ -565,7 +567,11 @@ func (s *app) renderWorkspaceReviewFileRow(c *ui.Context, p palette, state *work
 		label(c, display, 10, color).Grow(1).MinWidth(0).SingleLine().Tooltip(tooltip)
 	})
 	if button.Clicked() && !selected {
-		s.selectWorkspaceReviewFile(state, file)
+		if state.FileSelected != nil {
+			state.FileSelected(file)
+		} else {
+			s.selectWorkspaceReviewFile(state, file)
+		}
 	}
 }
 

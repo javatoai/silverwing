@@ -45,12 +45,14 @@
 
   <rect x="60" y="650" width="1280" height="150" rx="22" fill="#FFF9EA" stroke="#E2B65C" stroke-width="2"/>
   <text x="95" y="696" fill="#805914" font-size="27" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">按需安装与配置的本机工具</text>
-  <rect x="120" y="718" width="260" height="56" rx="15" fill="#FFFFFF" stroke="#E2B65C"/>
-  <text x="250" y="754" text-anchor="middle" fill="#76561B" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">Git</text>
-  <rect x="420" y="718" width="260" height="56" rx="15" fill="#FFFFFF" stroke="#E2B65C"/>
-  <text x="550" y="754" text-anchor="middle" fill="#76561B" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">IDE / Codex</text>
-  <rect x="720" y="718" width="260" height="56" rx="15" fill="#FFFFFF" stroke="#E2B65C"/>
-  <text x="850" y="754" text-anchor="middle" fill="#76561B" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">Meegle CLI</text>
-  <rect x="1020" y="718" width="260" height="56" rx="15" fill="#FFFFFF" stroke="#E2B65C"/>
-  <text x="1150" y="754" text-anchor="middle" fill="#76561B" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">飞书 CLI（可选）</text>
+  <rect x="95" y="718" width="180" height="56" rx="15" fill="#FFFFFF" stroke="#E2B65C"/>
+  <text x="185" y="754" text-anchor="middle" fill="#76561B" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">Git</text>
+  <rect x="295" y="718" width="235" height="56" rx="15" fill="#FFFFFF" stroke="#E2B65C"/>
+  <text x="412" y="754" text-anchor="middle" fill="#76561B" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">IDE / Codex</text>
+  <rect x="550" y="718" width="220" height="56" rx="15" fill="#FFFFFF" stroke="#E2B65C"/>
+  <text x="660" y="754" text-anchor="middle" fill="#76561B" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">Meegle CLI</text>
+  <rect x="790" y="718" width="270" height="56" rx="15" fill="#FFFFFF" stroke="#E2B65C"/>
+  <text x="925" y="754" text-anchor="middle" fill="#76561B" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">飞书 CLI（可选）</text>
+  <rect x="1080" y="718" width="220" height="56" rx="15" fill="#FFFFFF" stroke="#E2B65C"/>
+  <text x="1190" y="754" text-anchor="middle" fill="#76561B" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">Genbu（可选）</text>
 </svg>

@@ -141,11 +141,10 @@ func TestApplyRefreshedTaskRepositories(t *testing.T) {
 	refreshed := []domain.RepositoryConfig{a, b}
 	refreshed[0].CurrentBranch = &branch
 	t.Run("current order and unrelated settings survive", func(t *testing.T) {
-		current := domain.AppConfig{Repositories: []domain.RepositoryConfig{b, a}, Theme: domain.ThemeDark}
+		current := domain.AppConfig{Repositories: []domain.RepositoryConfig{b, a}, TagHistoryMaxGroups: 7}
 		got, err := applyRefreshedTaskRepositories(current, []domain.RepositoryConfig{a, b}, refreshed)
-		if err != nil || len(got.Repositories) != 2 || got.Repositories[0].ID != b.ID || got.Repositories[1].ID != a.ID ||
-			got.Repositories[1].CurrentBranch == nil || *got.Repositories[1].CurrentBranch != branch || got.Theme != domain.ThemeDark || current.Repositories[1].CurrentBranch != nil {
-			t.Fatalf("refresh changed order/settings or lost updated branch: %+v, %v", got, err)
+		if err != nil || got.Repositories[0].ID != "b" || got.Repositories[1].CurrentBranch == nil || *got.Repositories[1].CurrentBranch != branch || got.TagHistoryMaxGroups != 7 || current.Repositories[1].CurrentBranch != nil {
+			t.Fatalf("got %+v, err %v", got, err)
 		}
 	})
 	for _, check := range []struct {

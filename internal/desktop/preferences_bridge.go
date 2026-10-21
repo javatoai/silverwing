@@ -78,7 +78,7 @@ func settingsPreferenceName(key string) string {
 		return "AGENTS.md"
 	case "codex-plugins", "codex-mcp", "codex":
 		return "Codex"
-	case "feishu", "lark", "cli", "advanced", "commands":
+	case "feishu", "lark", "genbu", "cli", "advanced", "commands":
 		return "CLI"
 	case "skill-sources":
 		return "skill"

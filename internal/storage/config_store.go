@@ -24,7 +24,7 @@ const backupPrefix = "silverwing-config-"
 const shardStagePrefix = ".silverwing-shard-"
 
 var shardNames = []string{
-	"layout.json", "workspace.json", "services.json",
+	"layout.json", "workspace.json", "services.json", "tag.json",
 	"tools.json", "git.json", "integrations.json", "appearance.json",
 }
 
@@ -597,7 +597,7 @@ func decodeShardsContext(ctx context.Context, files map[string][]byte) (decodedC
 		return err
 	}
 	var layout layoutShard
-	if err := decode(files["layout.json"], &layout, layoutShard{Schema: configShardSchema, Groups: []groupLayoutShard{{ID: domain.DefaultGroupID, Name: domain.DefaultGroupName}}}, "layout.json"); err != nil {
+	if err := decode(files["layout.json"], &layout, layoutShard{Schema: configShardSchema, Groups: []groupLayoutShard{{ID: domain.DefaultGroupID, Name: domain.DefaultGroupName, TagEnabled: true}}}, "layout.json"); err != nil {
 		return decodedConfig{}, err
 	}
 	var workspace workspaceShard
@@ -608,7 +608,10 @@ func decodeShardsContext(ctx context.Context, files map[string][]byte) (decodedC
 	if err := decode(files["services.json"], &services, servicesShard{Schema: configShardSchema, Groups: []groupServicesShard{{GroupID: domain.DefaultGroupID, Services: []domain.GroupServiceConfig{}}}}, "services.json"); err != nil {
 		return decodedConfig{}, err
 	}
-
+	var tag tagShard
+	if err := decode(files["tag.json"], &tag, tagShard{Schema: configShardSchema, TagEnabled: true, TagHistoryMaxGroups: domain.DefaultTagHistoryMaxGroups}, "tag.json"); err != nil {
+		return decodedConfig{}, err
+	}
 	var tools toolsShard
 	if err := decode(files["tools.json"], &tools, toolsShard{Schema: configShardSchema, DevelopmentTools: []domain.DevelopmentToolConfig{}, DefaultDevelopmentTool: domain.DevelopmentToolIntelliJIdea, DefaultWorkspaceToolIDs: []string{}}, "tools.json", "defaultWorkspaceToolIds"); err != nil {
 		return decodedConfig{}, err
@@ -656,7 +659,7 @@ func decodeShardsContext(ctx context.Context, files map[string][]byte) (decodedC
 		if !ok {
 			return decodedConfig{}, fmt.Errorf("layout.json 与 services.json 的组 ID 不一致")
 		}
-		groups = append(groups, domain.GroupConfig{ID: group.ID, Name: group.Name, Services: svc.Services})
+		groups = append(groups, domain.GroupConfig{ID: group.ID, Name: group.Name, TagEnabled: group.TagEnabled, Services: svc.Services})
 	}
 	if len(layoutIDs) != len(seenGroup) {
 		return decodedConfig{}, fmt.Errorf("layout.json 与 services.json 的组 ID 不一致")
@@ -667,7 +670,9 @@ func decodeShardsContext(ctx context.Context, files map[string][]byte) (decodedC
 	config.DefaultBranchPrefix = workspace.DefaultBranchPrefix
 	config.Repositories = workspace.Repositories
 	config.Groups = groups
-
+	config.TagEnabled = tag.TagEnabled
+	config.TagHistoryMaxGroups = tag.TagHistoryMaxGroups
+	config.AllowTaskTagTargetEditing = tag.AllowTaskTagTargetEditing
 	config.TerminalExecutable = tools.TerminalExecutable
 	config.DevelopmentTools = tools.DevelopmentTools
 	config.DefaultDevelopmentTool = tools.DefaultDevelopmentTool
@@ -684,7 +689,8 @@ func decodeShardsContext(ctx context.Context, files map[string][]byte) (decodedC
 	config.CommandProxyUsername = integrations.CommandProxyUsername
 	config.CommandProxyPassword = integrations.CommandProxyPassword
 	config.CommandProxyTargets = integrations.CommandProxyTargets
-
+	config.GenbuExecutablePath = integrations.GenbuExecutablePath
+	config.GenbuExecutableAutoDetected = integrations.GenbuExecutableAutoDetected
 	config.LarkExecutablePath = integrations.LarkExecutablePath
 	config.RequirementMaterialsRoot = integrations.RequirementMaterialsRoot
 	config.RequirementMaterialsSubdirectory = integrations.RequirementMaterialsSubdirectory
@@ -714,7 +720,7 @@ func decodeShardsContext(ctx context.Context, files map[string][]byte) (decodedC
 	if validationErr != nil {
 		return decodedConfig{}, fmt.Errorf("配置校验失败: %w", validationErr)
 	}
-	shards := configShards{Layout: layout, Workspace: workspace, Services: services, Tools: tools, Git: git, Integrations: integrations, Appearance: appearance}
+	shards := configShards{Layout: layout, Workspace: workspace, Services: services, Tag: tag, Tools: tools, Git: git, Integrations: integrations, Appearance: appearance}
 	return decodedConfig{Config: config, Shards: shards, Files: files}, nil
 }
 
@@ -752,17 +758,17 @@ func decodeConfigShard(data []byte, target any, defaults any, name string, requi
 func shardsFor(config domain.AppConfig) configShards {
 	groups, serviceGroups := []groupLayoutShard{}, []groupServicesShard{}
 	for _, g := range config.Groups {
-		groups = append(groups, groupLayoutShard{ID: g.ID, Name: g.Name})
+		groups = append(groups, groupLayoutShard{ID: g.ID, Name: g.Name, TagEnabled: g.TagEnabled})
 		serviceGroups = append(serviceGroups, groupServicesShard{GroupID: g.ID, Services: g.Services})
 	}
 	return configShards{
-		Layout:    layoutShard{Schema: configShardSchema, Groups: groups},
-		Workspace: workspaceShard{Schema: configShardSchema, TaskRoot: config.TaskRoot, DefaultBranchPrefix: config.DefaultBranchPrefix, Repositories: config.Repositories},
-		Services:  servicesShard{Schema: configShardSchema, Groups: serviceGroups},
-
+		Layout:       layoutShard{Schema: configShardSchema, Groups: groups},
+		Workspace:    workspaceShard{Schema: configShardSchema, TaskRoot: config.TaskRoot, DefaultBranchPrefix: config.DefaultBranchPrefix, Repositories: config.Repositories},
+		Services:     servicesShard{Schema: configShardSchema, Groups: serviceGroups},
+		Tag:          tagShard{Schema: configShardSchema, TagEnabled: config.TagEnabled, TagHistoryMaxGroups: config.TagHistoryMaxGroups, AllowTaskTagTargetEditing: config.AllowTaskTagTargetEditing},
 		Tools:        toolsShard{Schema: configShardSchema, TerminalExecutable: config.TerminalExecutable, DevelopmentTools: config.DevelopmentTools, DefaultDevelopmentTool: config.DefaultDevelopmentTool, AllowTemporaryDevelopmentToolSelection: config.AllowTemporaryDevelopmentToolSelection, DefaultWorkspaceToolIDs: config.DefaultWorkspaceToolIDs},
 		Git:          gitShard{Schema: configShardSchema, BlockedGitWriteBranches: config.BlockedGitWriteBranches, GitExecutablePath: config.GitExecutablePath},
-		Integrations: integrationsShard{Schema: configShardSchema, AIRequirementNamingEnabled: config.AIRequirementNamingEnabled, AIRequirementNamingPrewarmEnabled: config.AIRequirementNamingPrewarmEnabled, AIRequirementNamingModel: config.AIRequirementNamingModel, MeegleProjects: config.MeegleProjects, MeegleDefaultSprintProjectKey: config.MeegleDefaultSprintProjectKey, MeegleExecutablePath: config.MeegleExecutablePath, CodexExecutablePath: config.CodexExecutablePath, CommandProxyURL: config.CommandProxyURL, CommandProxyNoProxy: config.CommandProxyNoProxy, CommandProxyUsername: config.CommandProxyUsername, CommandProxyPassword: config.CommandProxyPassword, CommandProxyTargets: config.CommandProxyTargets, LarkExecutablePath: config.LarkExecutablePath, RequirementMaterialsRoot: config.RequirementMaterialsRoot, RequirementMaterialsSubdirectory: config.RequirementMaterialsSubdirectory, RequirementMaterialsFeishuTarget: config.RequirementMaterialsFeishuTarget, CodexPluginMarketplaceSources: config.CodexPluginMarketplaceSources, SkillSources: config.SkillSources},
+		Integrations: integrationsShard{Schema: configShardSchema, AIRequirementNamingEnabled: config.AIRequirementNamingEnabled, AIRequirementNamingPrewarmEnabled: config.AIRequirementNamingPrewarmEnabled, AIRequirementNamingModel: config.AIRequirementNamingModel, MeegleProjects: config.MeegleProjects, MeegleDefaultSprintProjectKey: config.MeegleDefaultSprintProjectKey, MeegleExecutablePath: config.MeegleExecutablePath, CodexExecutablePath: config.CodexExecutablePath, CommandProxyURL: config.CommandProxyURL, CommandProxyNoProxy: config.CommandProxyNoProxy, CommandProxyUsername: config.CommandProxyUsername, CommandProxyPassword: config.CommandProxyPassword, CommandProxyTargets: config.CommandProxyTargets, GenbuExecutablePath: config.GenbuExecutablePath, GenbuExecutableAutoDetected: config.GenbuExecutableAutoDetected, LarkExecutablePath: config.LarkExecutablePath, RequirementMaterialsRoot: config.RequirementMaterialsRoot, RequirementMaterialsSubdirectory: config.RequirementMaterialsSubdirectory, RequirementMaterialsFeishuTarget: config.RequirementMaterialsFeishuTarget, CodexPluginMarketplaceSources: config.CodexPluginMarketplaceSources, SkillSources: config.SkillSources},
 		Appearance:   appearanceShard{Schema: configShardSchema, Theme: config.Theme, ToolVisibility: config.ToolVisibility, ShowTaskDetailGitActionGroup: config.ShowTaskDetailGitActionGroup, ShowTaskDetailPathActionGroup: config.ShowTaskDetailPathActionGroup, ShowWorkspaceGitActionGroup: config.ShowWorkspaceGitActionGroup, ShowWorkspacePathActionGroup: config.ShowWorkspacePathActionGroup, ShowTaskAreaCopyIcons: config.ShowTaskAreaCopyIcons, ShowTaskAreaBranchCopyIcons: config.ShowTaskAreaBranchCopyIcons, ShowTaskAreaRequirementCopyIcons: config.ShowTaskAreaRequirementCopyIcons, ShowTaskAreaProjectNameCopyIcons: config.ShowTaskAreaProjectNameCopyIcons},
 	}
 }
@@ -777,6 +783,9 @@ func changedShardNames(current, target configShards) []string {
 	}
 	if !reflect.DeepEqual(current.Services, target.Services) {
 		names = append(names, "services.json")
+	}
+	if !reflect.DeepEqual(current.Tag, target.Tag) {
+		names = append(names, "tag.json")
 	}
 	if !reflect.DeepEqual(current.Tools, target.Tools) {
 		names = append(names, "tools.json")
@@ -1035,14 +1044,11 @@ func readArchiveContext(ctx context.Context, filename string) (decodedConfig, er
 		if entry.FileInfo().IsDir() {
 			return decodedConfig{}, fmt.Errorf("配置 ZIP 不允许目录条目：%s", name)
 		}
+		if !entry.Mode().IsRegular() {
+			return decodedConfig{}, fmt.Errorf("配置 ZIP 只能包含普通文件：%s", name)
+		}
 		if !allowed[name] {
 			return decodedConfig{}, fmt.Errorf("配置 ZIP 包含未知条目：%s", name)
-		}
-		if !entry.Mode().IsRegular() {
-			return decodedConfig{}, fmt.Errorf("配置 ZIP 只能包含普通文件：%s", name)
-		}
-		if !entry.Mode().IsRegular() {
-			return decodedConfig{}, fmt.Errorf("配置 ZIP 只能包含普通文件：%s", name)
 		}
 		if _, exists := files[name]; exists {
 			return decodedConfig{}, fmt.Errorf("配置 ZIP 包含重复条目：%s", name)
@@ -1084,7 +1090,8 @@ func encodeShard(name string, shards configShards) ([]byte, error) {
 		value = shards.Workspace
 	case "services.json":
 		value = shards.Services
-
+	case "tag.json":
+		value = shards.Tag
 	case "tools.json":
 		value = shards.Tools
 	case "git.json":
@@ -1139,10 +1146,10 @@ type decodedConfig struct {
 	Files  map[string][]byte
 }
 type configShards struct {
-	Layout    layoutShard
-	Workspace workspaceShard
-	Services  servicesShard
-
+	Layout       layoutShard
+	Workspace    workspaceShard
+	Services     servicesShard
+	Tag          tagShard
 	Tools        toolsShard
 	Git          gitShard
 	Integrations integrationsShard
@@ -1153,8 +1160,9 @@ type layoutShard struct {
 	Groups []groupLayoutShard "json:\"groups\""
 }
 type groupLayoutShard struct {
-	ID   string "json:\"id\""
-	Name string "json:\"name\""
+	ID         string "json:\"id\""
+	Name       string "json:\"name\""
+	TagEnabled bool   "json:\"tagEnabled\""
 }
 type workspaceShard struct {
 	Schema              int                       "json:\"schema\""
@@ -1170,7 +1178,12 @@ type groupServicesShard struct {
 	GroupID  string                      "json:\"groupId\""
 	Services []domain.GroupServiceConfig "json:\"services\""
 }
-
+type tagShard struct {
+	Schema                    int  "json:\"schema\""
+	TagEnabled                bool "json:\"tagEnabled\""
+	TagHistoryMaxGroups       int  "json:\"tagHistoryMaxGroups\""
+	AllowTaskTagTargetEditing bool "json:\"allowTaskTagTargetEditing\""
+}
 type toolsShard struct {
 	Schema                                 int                            "json:\"schema\""
 	TerminalExecutable                     *string                        "json:\"terminalExecutable\""
@@ -1185,26 +1198,27 @@ type gitShard struct {
 	GitExecutablePath       *string  "json:\"gitExecutablePath\""
 }
 type integrationsShard struct {
-	Schema                            int                          "json:\"schema\""
-	AIRequirementNamingEnabled        bool                         "json:\"aiRequirementNamingEnabled\""
-	AIRequirementNamingPrewarmEnabled bool                         "json:\"aiRequirementNamingPrewarmEnabled\""
-	AIRequirementNamingModel          string                       "json:\"aiRequirementNamingModel\""
-	MeegleProjects                    []domain.MeegleProjectConfig "json:\"meegleProjects\""
-	MeegleDefaultSprintProjectKey     *string                      "json:\"meegleDefaultSprintProjectKey\""
-	MeegleExecutablePath              *string                      "json:\"meegleExecutablePath\""
-	CodexExecutablePath               *string                      "json:\"codexExecutablePath\""
-	CommandProxyURL                   *string                      "json:\"commandProxyUrl\""
-	CommandProxyNoProxy               *string                      "json:\"commandProxyNoProxy\""
-	CommandProxyUsername              *string                      "json:\"commandProxyUsername\""
-	CommandProxyPassword              *string                      "json:\"commandProxyPassword\""
-	CommandProxyTargets               []domain.CommandProxyTarget  "json:\"commandProxyTargets\""
-
-	LarkExecutablePath               *string                               "json:\"larkExecutablePath\""
-	RequirementMaterialsRoot         *string                               "json:\"requirementMaterialsRoot\""
-	RequirementMaterialsSubdirectory *string                               "json:\"requirementMaterialsSubdirectory\""
-	RequirementMaterialsFeishuTarget *string                               "json:\"requirementMaterialsFeishuTarget\""
-	CodexPluginMarketplaceSources    []domain.CodexPluginMarketplaceSource "json:\"codexPluginMarketplaceSources\""
-	SkillSources                     []domain.SkillSource                  "json:\"skillSources\""
+	Schema                            int                                   "json:\"schema\""
+	AIRequirementNamingEnabled        bool                                  "json:\"aiRequirementNamingEnabled\""
+	AIRequirementNamingPrewarmEnabled bool                                  "json:\"aiRequirementNamingPrewarmEnabled\""
+	AIRequirementNamingModel          string                                "json:\"aiRequirementNamingModel\""
+	MeegleProjects                    []domain.MeegleProjectConfig          "json:\"meegleProjects\""
+	MeegleDefaultSprintProjectKey     *string                               "json:\"meegleDefaultSprintProjectKey\""
+	MeegleExecutablePath              *string                               "json:\"meegleExecutablePath\""
+	CodexExecutablePath               *string                               "json:\"codexExecutablePath\""
+	CommandProxyURL                   *string                               "json:\"commandProxyUrl\""
+	CommandProxyNoProxy               *string                               "json:\"commandProxyNoProxy\""
+	CommandProxyUsername              *string                               "json:\"commandProxyUsername\""
+	CommandProxyPassword              *string                               "json:\"commandProxyPassword\""
+	CommandProxyTargets               []domain.CommandProxyTarget           "json:\"commandProxyTargets\""
+	GenbuExecutablePath               *string                               "json:\"genbuExecutablePath\""
+	GenbuExecutableAutoDetected       bool                                  "json:\"genbuExecutableAutoDetected\""
+	LarkExecutablePath                *string                               "json:\"larkExecutablePath\""
+	RequirementMaterialsRoot          *string                               "json:\"requirementMaterialsRoot\""
+	RequirementMaterialsSubdirectory  *string                               "json:\"requirementMaterialsSubdirectory\""
+	RequirementMaterialsFeishuTarget  *string                               "json:\"requirementMaterialsFeishuTarget\""
+	CodexPluginMarketplaceSources     []domain.CodexPluginMarketplaceSource "json:\"codexPluginMarketplaceSources\""
+	SkillSources                      []domain.SkillSource                  "json:\"skillSources\""
 }
 type appearanceShard struct {
 	Schema                           int                           "json:\"schema\""

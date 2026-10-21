@@ -14,7 +14,7 @@ Silverwing 是基于 Go 与 MyGO 的原生桌面工作台。桌面界面在进�
 | `internal/documents` | 资料路径边界、文件管理、读取、保存与草稿 |
 | `internal/editor` | Markdown 原文模型、查找、撤销及自动保存状态机 |
 | `internal/media` | PDFium、图片与媒体资源 |
-| `internal/delivery` | Agent 任务操作与本地操作记录 |
+| `internal/delivery` | Tag 交付、执行历史与可选 Genbu 状态 |
 | `internal/integrations` | Meegle、飞书资料与需求缓存 |
 | `internal/platform` | 系统动作、Skills、Codex 与开发工具适配 |
 | `internal/executable` | 外部 CLI 路径、版本、环境与来源解析 |
@@ -44,7 +44,7 @@ Markdown 使用 MyGO 自带的 `markdown.View` 与 `DefaultCodeBlock` 只读阅�
 
 ## 外部集成
 
-Meegle 和飞书通过外部 CLI 及用户配置接入，不在源码中内置团队地址或凭据。需求与资料请求核对已确认的账号、profile 和资源身份，旧请求结果不能回写新的上下文。资料同步和系统文件操作通过各自的显式动作执行。
+Meegle、飞书和 Genbu 通过外部 CLI 及用户配置接入，不在源码中内置团队地址或凭据。需求与资料请求核对已确认的账号、profile 和资源身份，旧请求结果不能回写新的上下文。资料同步、Tag 交付和系统文件操作通过各自的显式动作执行。
 
 本地研发工具可独立使用。服务进程、数据库、凭据和测试环境由用户项目管理。
 

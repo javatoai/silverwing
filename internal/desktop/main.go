@@ -40,19 +40,8 @@ func Run(backend application.Backend, opts Options) error {
 	if opts.Page == "" {
 		opts.Page = "tasks"
 	}
-	if opts.Page == "tags" || opts.Page == "production" {
-		// Older internal builds exposed Tag and production-release pages. The
-		// public build keeps their task navigation recoverable by returning to
-		// the normal task details page.
-		opts.Page, opts.Tab = "tasks", 0
-	}
 	if !validPage(opts.Page) {
 		return fmt.Errorf("invalid page %q", opts.Page)
-	}
-	if opts.Tab == 4 {
-		// Older app versions used tab 4 for the internal Tag page. Return those
-		// saved or command-line navigation requests to the public task details.
-		opts.Tab = 0
 	}
 	if opts.Tab < 0 || opts.Tab >= len(tabs) {
 		return fmt.Errorf("task tab must be between 0 and %d", len(tabs)-1)
@@ -124,6 +113,7 @@ func Run(backend application.Backend, opts Options) error {
 			s.initializeReadingSession(opts.Home, opts.RestoreSession)
 		}
 		s.win.OnClosed(func() {
+			s.stopProductionJobs()
 			s.cancelConfirmationDialog()
 			s.stopSettingsAutosave()
 			s.stopPageLocalRead()
@@ -159,6 +149,11 @@ func Run(backend application.Backend, opts Options) error {
 		}
 	})
 	runErr := mygo.App.Run()
+	productionCleanup, stopProductionCleanup := context.WithTimeout(context.Background(), 30*time.Second)
+	if err := s.closeProductionJobs(productionCleanup); runErr == nil && err != nil {
+		runErr = fmt.Errorf("退出前生产发布收尾未完成：%w", err)
+	}
+	stopProductionCleanup()
 	pageReadCleanup, stopPageReadCleanup := context.WithTimeout(context.Background(), 10*time.Second)
 	if err := s.closePageLocalRead(pageReadCleanup); runErr == nil && err != nil {
 		runErr = fmt.Errorf("退出前本机配置读取清理未完成：%w", err)
@@ -189,6 +184,16 @@ func Run(backend application.Backend, opts Options) error {
 		runErr = fmt.Errorf("退出前系统打开与定位清理未完成：%w", err)
 	}
 	stopSystemOpenCleanup()
+	tagGenbuCleanup, stopTagGenbuCleanup := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := s.closeTagGenbuAutoProbe(tagGenbuCleanup); runErr == nil && err != nil {
+		runErr = fmt.Errorf("退出前 Tag 自动 Genbu 探测清理未完成：%w", err)
+	}
+	stopTagGenbuCleanup()
+	tagJobsCleanup, stopTagJobsCleanup := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := s.closeTagDesktopJobs(tagJobsCleanup); runErr == nil && err != nil {
+		runErr = fmt.Errorf("退出前 Tag 后台任务收尾未完成：%w", err)
+	}
+	stopTagJobsCleanup()
 	preflightCleanup, stopPreflightCleanup := context.WithTimeout(context.Background(), 10*time.Second)
 	if err := s.closeTaskCreationPreflights(preflightCleanup); runErr == nil && err != nil {
 		runErr = fmt.Errorf("退出前任务分支预检清理未完成：%w", err)
@@ -335,7 +340,7 @@ func (s *app) loadInitialSnapshot() {
 
 func validPage(page string) bool {
 	switch page {
-	case "tasks", "materials", "repositories", "services", "tools", "settings", "requirements", "skills", "archive":
+	case "tasks", "materials", "repositories", "services", "tools", "settings", "requirements", "skills", "archive", "production":
 		return true
 	default:
 		return false

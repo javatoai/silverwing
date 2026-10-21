@@ -41,7 +41,7 @@ func renderConfigurationFixture(tb testing.TB) *app {
 }
 
 func TestRenderConfigurationReadsAvoidRepeatedDecodeAndCopies(t *testing.T) {
-	for _, page := range []string{"services", "materials", "requirements"} {
+	for _, page := range []string{"services", "materials", "requirements", "navigation"} {
 		t.Run(page, func(t *testing.T) {
 			s := renderConfigurationFixture(t)
 			read := func() {
@@ -53,6 +53,8 @@ func TestRenderConfigurationReadsAvoidRepeatedDecodeAndCopies(t *testing.T) {
 					_ = s.materialsFeishuCommentAvailable(s.tasks[0])
 				case "requirements":
 					_ = s.currentRequirementListIdentity()
+				case "navigation":
+					_ = s.showsTagNavigation()
 				}
 			}
 			read()
@@ -94,7 +96,7 @@ func TestRenderConfigurationReadsTrackSourceAndLiveIdentity(t *testing.T) {
 	valid := s.configJSON
 	for _, source := range []string{"", "invalid", "null"} {
 		s.configJSON = source
-		if s.materialsFeishuCommentAvailable(s.tasks[0]) || s.currentRequirementListIdentity().projects != "[]" {
+		if s.showsTagNavigation() || s.materialsFeishuCommentAvailable(s.tasks[0]) || s.currentRequirementListIdentity().projects != "[]" {
 			t.Fatalf("invalid configuration exposed earlier values: %q", source)
 		}
 		if target, err := s.materialsFeishuSyncTarget(); err == nil || target != "" {
@@ -102,13 +104,13 @@ func TestRenderConfigurationReadsTrackSourceAndLiveIdentity(t *testing.T) {
 		}
 	}
 	s.configJSON = valid
-	if target, err := s.materialsFeishuSyncTarget(); err != nil || !strings.HasSuffix(target, "/Target2") {
+	if target, err := s.materialsFeishuSyncTarget(); err != nil || !strings.HasSuffix(target, "/Target2") || !s.showsTagNavigation() {
 		t.Fatal("render configuration reads did not recover after a corrected source")
 	}
 }
 
 func BenchmarkDesktopPageConfigurationReads(b *testing.B) {
-	for _, page := range []string{"services", "materials", "requirements"} {
+	for _, page := range []string{"services", "materials", "requirements", "navigation"} {
 		b.Run(page, func(b *testing.B) {
 			s := renderConfigurationFixture(b)
 			b.ReportAllocs()
@@ -122,6 +124,8 @@ func BenchmarkDesktopPageConfigurationReads(b *testing.B) {
 					_ = s.materialsFeishuCommentAvailable(s.tasks[0])
 				case "requirements":
 					_ = s.currentRequirementListIdentity()
+				case "navigation":
+					_ = s.showsTagNavigation()
 				}
 			}
 		})

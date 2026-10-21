@@ -464,7 +464,7 @@ func (s *app) renderSystemOpenStatus(c *ui.Context, p palette) {
 	terminal := jobs.current["terminal"]
 	ide := jobs.current["ide"]
 	cliTerminals := make([]*systemOpenJob, 0, 5)
-	for _, tool := range []string{"git", "codex", "meegle", "lark"} {
+	for _, tool := range []string{"git", "codex", "genbu", "meegle", "lark"} {
 		cliTerminals = append(cliTerminals, jobs.current["cli-terminal:"+tool])
 	}
 	jobs.mu.Unlock()

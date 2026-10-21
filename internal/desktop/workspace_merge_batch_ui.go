@@ -76,7 +76,7 @@ func workspaceMergeBatchSnapshot(item application.Workspace) application.Workspa
 	item.Record.OriginURL = clone(item.Record.OriginURL)
 	item.Record.BaseRef = clone(item.Record.BaseRef)
 	item.Record.TargetBranch = clone(item.Record.TargetBranch)
-
+	item.Record.TagTargetRef = clone(item.Record.TagTargetRef)
 	return item
 }
 

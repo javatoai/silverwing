@@ -180,7 +180,7 @@ func (f *mergeBatchGitFixture) addWorktree(moduleID, branch string) (domain.Serv
 		Warnings: []string{}, GroupServiceID: "service-" + moduleID, ModuleID: moduleID, ModuleName: moduleID,
 		Strategy: domain.WorkspaceStandardWorktree, ModuleSource: domain.TaskModuleConfigured,
 		OriginURL: mergeBatchPointer(f.remote), BaseRef: mergeBatchPointer("origin/main"), TargetBranch: mergeBatchPointer(branch),
-		PushRemote: "origin",
+		TagMode: domain.TagBuildMergeToTargetBranch, TagMessagePrefix: "Tag", PushRemote: "origin",
 	}, nil
 }
 
@@ -206,7 +206,7 @@ func (f *mergeBatchGitFixture) addIndependentClone(moduleID, branch, baseRef str
 		Warnings: []string{}, GroupServiceID: "service-" + moduleID, ModuleID: moduleID, ModuleName: moduleID,
 		Strategy: domain.WorkspaceIndependentClone, ModuleSource: domain.TaskModuleTemporary,
 		OriginURL: mergeBatchPointer(f.remote), BaseRef: mergeBatchPointer(baseRef), TargetBranch: mergeBatchPointer(branch),
-		PushRemote: "origin",
+		TagMode: domain.TagBuildMergeToTargetBranch, TagMessagePrefix: "Tag", PushRemote: "origin",
 	}, nil
 }
 

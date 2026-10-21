@@ -75,6 +75,9 @@ func (s *app) sidebar(c *ui.Context, p palette, compact bool) {
 					s.deactivateInstructionEditor()
 				}
 				s.page = n.page
+				if n.page == "production" {
+					s.enterProductionPage()
+				}
 				if n.page == "requirements" {
 					s.lastResult = ""
 				}

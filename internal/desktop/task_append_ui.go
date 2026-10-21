@@ -219,7 +219,7 @@ func (s *app) addTaskAppendTemporaryModule(serviceID string, strategy domain.Wor
 	name := fmt.Sprintf("%s-%d", namePrefix, len(state.moduleOrder[serviceID])+1)
 	module := domain.ServiceModuleConfig{ID: newDesktopEditorID(idPrefix), Name: name, Strategy: strategy}
 	draft := newTaskCreationModuleDraft(service, module, state.taskBranch)
-	draft.Source = domain.TaskModuleTemporary
+	draft.Source, draft.TagEnabled, draft.TagTargetRef = domain.TaskModuleTemporary, false, ""
 	state.moduleData[serviceID][draft.ID] = draft
 	state.moduleOrder[serviceID] = append(state.moduleOrder[serviceID], draft.ID)
 	s.retargetTaskAppendModules(state, serviceID)
@@ -295,7 +295,7 @@ func (s *app) replaceTaskAppendModuleWithTemporary(state *taskAppendUIState, str
 	}
 	module := domain.ServiceModuleConfig{ID: newDesktopEditorID(prefix), Name: name, Strategy: strategy}
 	draft := newTaskCreationModuleDraft(service, module, state.taskBranch)
-	draft.Source = domain.TaskModuleTemporary
+	draft.Source, draft.TagEnabled, draft.TagTargetRef = domain.TaskModuleTemporary, false, ""
 	draft.TargetBranch = state.taskBranch + "-" + name
 	draft.LastTargetBranch = draft.TargetBranch
 	state.moduleData[state.serviceID] = map[string]*taskCreationModuleDraft{draft.ID: draft}
@@ -437,6 +437,8 @@ func (s *app) taskAppendModuleSelections(state *taskAppendUIState, serviceID str
 			ID: draft.ID, Name: strings.TrimSpace(draft.Name), Strategy: draft.Strategy,
 			BaseRef: strings.TrimSpace(draft.BaseRef), BaseRemote: strings.TrimSpace(draft.BaseRemote),
 			TargetBranch: strings.TrimSpace(draft.TargetBranch), Source: draft.Source,
+			TagEnabled: draft.TagEnabled, TagMode: draft.TagMode, TagTargetRef: strings.TrimSpace(draft.TagTargetRef),
+			TagMessagePrefix: draft.TagMessagePrefix,
 		})
 	}
 	return selections, nil

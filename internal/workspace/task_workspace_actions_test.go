@@ -32,7 +32,7 @@ func TestRerunWorkspaceBootstrapRejectsManifestPathOutsideTask(t *testing.T) {
 	app.Bootstrap.Runner = recorder
 	manifest := domain.DefaultTaskManifest()
 	manifest.FolderName, manifest.TaskDirectoryName, manifest.GroupID = "task", "task", "group"
-	manifest.Services = []domain.ServiceWorkspace{{GroupServiceID: "service", ModuleID: "module", WorktreePath: outside, RepositoryPath: outside, Strategy: domain.WorkspaceStandardWorktree, Health: domain.WorkspaceReady, DevelopmentTool: domain.DevelopmentToolIntelliJIdea, ModuleSource: domain.TaskModuleConfigured}}
+	manifest.Services = []domain.ServiceWorkspace{{GroupServiceID: "service", ModuleID: "module", WorktreePath: outside, RepositoryPath: outside, Strategy: domain.WorkspaceStandardWorktree, Health: domain.WorkspaceReady, DevelopmentTool: domain.DevelopmentToolIntelliJIdea, ModuleSource: domain.TaskModuleConfigured, TagMode: domain.TagBuildMergeToTargetBranch}}
 	if err := app.Manifests.Save(task, manifest); err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestRerunWorkspaceBootstrapUsesValidatedRepository(t *testing.T) {
 	app.Bootstrap.Runner = recorder
 	manifest := domain.DefaultTaskManifest()
 	manifest.FolderName, manifest.TaskDirectoryName, manifest.GroupID = "task", "task", "group"
-	manifest.Services = []domain.ServiceWorkspace{{RepositoryID: "repo", GroupServiceID: "service", ModuleID: "module", Branch: "feature", WorktreePath: worktree, RepositoryPath: forgedSource, Strategy: domain.WorkspaceStandardWorktree, Health: domain.WorkspaceReady, DevelopmentTool: domain.DevelopmentToolIntelliJIdea, ModuleSource: domain.TaskModuleConfigured}}
+	manifest.Services = []domain.ServiceWorkspace{{RepositoryID: "repo", GroupServiceID: "service", ModuleID: "module", Branch: "feature", WorktreePath: worktree, RepositoryPath: forgedSource, Strategy: domain.WorkspaceStandardWorktree, Health: domain.WorkspaceReady, DevelopmentTool: domain.DevelopmentToolIntelliJIdea, ModuleSource: domain.TaskModuleConfigured, TagMode: domain.TagBuildMergeToTargetBranch}}
 	if err := app.Manifests.Save(task, manifest); err != nil {
 		t.Fatal(err)
 	}

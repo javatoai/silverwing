@@ -41,7 +41,9 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 			return
 		}
 	}
-
+	if s.dispatchTagJobAction(action) {
+		return
+	}
 	if s.dispatchIndependentSystemOpen(action) {
 		return
 	}
@@ -277,7 +279,12 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 					}
 					return
 				}
-
+				if s.applyTagHistoryMutationFailure(action, result, err) {
+					return
+				}
+				if s.applyTagHistoryRefreshFailure(action, err) {
+					return
+				}
 				if (action.Kind == "codex.run" || action.Kind == "task.delete") && refreshErr == nil && refreshed.ConfigJSON != "" {
 					// A failed launcher persists its FAILED tool state; task deletion
 					// may finish removal while reporting retained backup cleanup errors.
@@ -307,7 +314,16 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 				if s.taskAppendActionError(action, err) {
 					return
 				}
-
+				if s.applyTagWorkspaceCheckFailure(action, err) {
+					return
+				}
+				if s.applyTagTargetFailure(action, err) {
+					return
+				}
+				if tagStatusAction(action.Kind) {
+					s.applyTagStatusFailure(action, err)
+					return
+				}
 				if workspaceDedicatedResult(action.Kind) || workspaceRepairAction(action.Kind) {
 					s.applyWorkspaceCommandFailure(action, err)
 					s.applyWorkspaceMergeFailure(action, err)
@@ -357,11 +373,11 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 			}
 			// Reading the current materials is part of opening the page. Source
 			// keeps successful reads quiet and only reports their failures.
-			if action.Kind != "document.list" && action.Kind != "document.read" && action.Kind != "instructions.read" && action.Kind != "workspace.status" && !workspaceDedicatedResult(action.Kind) && !workspaceRepairAction(action.Kind) {
+			if action.Kind != "document.list" && action.Kind != "document.read" && action.Kind != "instructions.read" && action.Kind != "workspace.status" && action.Kind != "tag.workspace-check" && !workspaceDedicatedResult(action.Kind) && !workspaceRepairAction(action.Kind) && !tagStatusAction(action.Kind) {
 				s.lastMessage = result.Message
 			}
 			if s.actionResultRelevant(action) {
-				if !(s.page == "settings" && settingsActionHasDedicatedResult(action.Kind)) && action.Kind != "config.view" && action.Kind != "workspace.status" && !workspaceDedicatedResult(action.Kind) && !workspaceRepairAction(action.Kind) && !strings.HasPrefix(action.Kind, "instructions.") && action.Kind != "workspace.bootstrap-clear" && action.Kind != "workspace.bootstrap-rerun" && !requirementContentAction(action.Kind) && action.Kind != "meegle.projects" {
+				if !(s.page == "settings" && settingsActionHasDedicatedResult(action.Kind)) && action.Kind != "config.view" && action.Kind != "workspace.status" && action.Kind != "tag.workspace-check" && !workspaceDedicatedResult(action.Kind) && !workspaceRepairAction(action.Kind) && !strings.HasPrefix(action.Kind, "instructions.") && !tagStatusAction(action.Kind) && !tagHistoryDedicatedResult(action.Kind) && action.Kind != "workspace.bootstrap-clear" && action.Kind != "workspace.bootstrap-rerun" && !requirementContentAction(action.Kind) && action.Kind != "meegle.projects" {
 					s.lastResult = resultText(result)
 				}
 				s.applyActionResult(action, result)
@@ -420,7 +436,9 @@ func (s *app) applyActionResult(action application.Action, result application.Ac
 	if s.applyRequirementActionResult(action, result) {
 		return
 	}
-
+	if s.applyDeliveryActionResult(action, result) {
+		return
+	}
 	if s.applyInstructionActionResult(action, result) {
 		return
 	}
@@ -441,6 +459,9 @@ func settingsActionHasDedicatedResult(kind string) bool {
 }
 
 func (s *app) actionResultRelevant(action application.Action) bool {
+	if tagHistoryDedicatedResult(action.Kind) {
+		return s.tagHistoryResultRelevant(action)
+	}
 	if settingsExtensionRead(action) {
 		return s.settingsExtensionActionRelevant(action)
 	}
@@ -562,7 +583,7 @@ func reloadsSnapshot(kind string) bool {
 		"config.restore-backup", "migration.apply", "migration.recover",
 		"workspace.fetch", "workspace.commit", "workspace.commit-push", "workspace.push", "workspace.batch", "workspace.merge", "workspace.merge-batch", "workspace.repair", "workspace.remove", "workspace.add", "workspace.bootstrap-clear", "workspace.bootstrap-rerun",
 		"instructions.save", "requirements.refresh", "requirements.comment", "materials.sync", "task.materials-retry",
-		"skills.refresh", "skills.install", "skills.remove",
+		"tag.build", "tag.retry", "tag.target.update", "tag.history.delete", "tag.history.clear", "skills.refresh", "skills.install", "skills.remove",
 		"development-tools/snapshot", "development-tools/detect":
 		return true
 	default:
@@ -580,7 +601,7 @@ func actionLabel(kind string) string {
 		"document.list": "读取资料目录", "document.read": "读取文档", "document.save": "保存文档", "document.mkdir": "创建目录", "document.create": "新建文档", "document.rename": "重命名文档", "document.trash": "移至回收站", "document.copy": "复制文档", "document.open": "打开文档", "document.reveal": "显示文档位置",
 		"instructions.read": "读取任务说明", "instructions.save": "保存任务说明", "requirements.refresh": "刷新需求", "requirements.list": "读取需求列表", "requirements.read": "读取需求详情", "requirements.comments": "读取需求评论", "requirements.comment": "发表评论", "materials.sync": "同步需求资料",
 		"task.services-add-preview": "预检新增服务", "task.modules-add-preview": "预检新增模块", "task.services-add": "添加服务", "task.modules-add": "添加模块", "task.services-retry": "重试失败服务", "task.tools-retry": "重试工作区工具",
-
+		"tag.build": "构建 Tag", "tag.target.update": "保存测试目标分支", "tag.status": "查询 Tag 状态", "tag.genbu.refresh": "刷新 Genbu 状态", "tag.history": "读取 Tag 历史", "tag.history.refresh": "刷新 Tag 历史和 Genbu", "tag.history.delete": "删除所选Tag历史", "tag.history.clear": "清空Tag历史", "tag.retry": "重试 Tag 操作", "tag.workspace-check": "检查工作区",
 		"skills.refresh": "刷新 Skills", "skills.install": "安装 Skill", "skills.remove": "移除 Skill", "codex.extensions": "读取 Codex 扩展", "codex.run": "在 Codex 中打开",
 		"codex.extensions/snapshot": "读取 Codex 扩展",
 		"tool.json":                 "处理 JSON", "tool.time": "转换时间", "tool.diff": "比较文本", "tool.ports": "查询端口", "tool.port-stop": "结束端口进程",
@@ -590,6 +611,10 @@ func actionLabel(kind string) string {
 		return label
 	}
 	return kind
+}
+
+func tagStatusAction(kind string) bool {
+	return kind == "tag.status" || kind == "tag.genbu.refresh"
 }
 
 func resultText(result application.ActionResult) string {

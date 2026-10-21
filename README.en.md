@@ -15,6 +15,13 @@
   <a href="README.md">简体中文</a>
 </p>
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme-banner-dark.png">
+    <img src="docs/assets/readme-banner-light.png" width="1280" alt="Silverwing product overview: task workspaces and side-by-side Git review">
+  </picture>
+</p>
+
 <p align="center">Silverwing is a small multi-repository development workspace written in Go, with a native desktop UI built on <a href="https://github.com/egoist/mygo">MyGO</a>. It does not depend on a WebView, Electron or a JVM.<br>
 Packaged downloads are about 18 MB. Keep tasks, repositories, branches and materials organized, with built-in Git review and everyday developer tools.</p>
 
@@ -31,7 +38,7 @@ One feature often spans several services. Silverwing brings their workspaces int
 - **Task materials:** browse local files and read Markdown, PDF, images, tables and diagrams; find text, inspect source and follow document links.
 - **Skills and Codex configuration:** browse local Skills, manage Git-based Skill sources and Codex plugins, and inspect MCP configuration.
 - **Developer tools:** format and fold JSON, convert dates and timestamps, compare text side by side, and optionally inspect local port usage.
-- **Connected workflows:** bring in Meegle requirements and comments, and sync selected materials to Lark.
+- **Connected workflows:** bring in Meegle requirements and comments, sync selected materials to Lark, and track task Tag delivery with optional Genbu status.
 - **Local workspace management:** keep configuration and task records on disk, switch between light and dark themes, and archive tasks while retaining their workspaces.
 
 ## Tour
@@ -82,7 +89,7 @@ The macOS app is ad-hoc signed and is **not Developer ID signed or notarized**. 
 
 The current task-creation entry is in **Requirements (需求)** and uses a connected Meegle project. After connecting Meegle in Settings, select a requirement and choose **Create task from requirement (基于需求创建任务)**. Review the task name, branch and selected services, then create the task and open its workspace in your IDE or agent.
 
-Lark synchronization is optional. You can prepare repositories and use the local developer tools before connecting Meegle or Lark. Silverwing opens your chosen coding tools; it does not run multiple agent sessions automatically.
+Genbu and Lark are optional. You can prepare repositories and use the local developer tools before configuring them or Meegle. Silverwing opens your chosen coding tools; it does not run multiple agent sessions automatically.
 
 ### Find and switch tasks
 
@@ -100,6 +107,7 @@ Lark synchronization is optional. You can prepare repositories and use the local
 | Codex / Cursor | Open task workspaces with the corresponding agent context | Install and configure the tools you use |
 | Meegle / Lark Project | Requirement lists, task creation, requirement details and comments | Connect the Meegle CLI and a project account |
 | Lark | Explicit synchronization of task materials to a configured Wiki destination | Configure Lark CLI access and a destination |
+| Genbu | Build and UAT status for configured task Tags | Configure the team-specific Genbu integration |
 
 Silverwing manages code workspaces and their context. Each project still owns its service processes, databases, containers, credentials and test environments.
 
@@ -109,7 +117,6 @@ Silverwing manages code workspaces and their context. Each project still owns it
 | --- | --- | --- |
 | [User and developer knowledge base](doc/Index.md) | 中文 | Setup, workflows, integrations, architecture and development |
 | [Architecture](docs/ARCHITECTURE.md) | 中文 | Native UI, application packages, storage and integration boundaries |
-| [Branch policy](docs/BRANCHES.md) | 中文 | Public and SNB feature boundaries and synchronization rules |
 | [Native media](docs/NATIVE-MEDIA.md) | English | PDF and diagram resources, rendering and platform constraints |
 
 ## License

@@ -17,7 +17,7 @@ func (s *app) view(c *ui.Context) {
 	s.observeTaskCreationPreflight()
 	s.observeRequirementIdentityJobs()
 	s.observeRequirementNamingPreparation()
-
+	s.observeTagJobs()
 	if !s.localSkillsViewActive() || s.pageLocalReadReady() {
 		s.observeSkillsBrowserNavigation()
 	}
@@ -31,6 +31,8 @@ func (s *app) view(c *ui.Context) {
 		s.sidebar(c, p, w < 1180 || s.navigationCollapsed)
 		ui.Column(c).Grow(1).MinWidth(0).Children(func() {
 			switch s.page {
+			case "production":
+				s.renderProductionPage(c, p)
 			case "tasks", "archive", "materials":
 				s.taskWorkspace(c, p)
 			case "requirements":
@@ -61,7 +63,10 @@ func (s *app) view(c *ui.Context) {
 	s.renderWorkspaceGitDialogs(c, p)
 	s.renderWorkspaceMergeBatchDialog(c, p)
 	s.renderWorkspaceHistoryDialog(c, p)
-
+	s.renderTagBuildDialog(c, p)
+	s.renderTagTargetDialog(c, p)
+	s.renderProductionBaselineDialog(c, p)
+	s.renderProductionDiffDialog(c, p)
 	s.renderTaskBranchInfoDialog(c, p)
 	if workspaceCommandDialogVisible(s.page, s.tab) {
 		s.renderWorkspaceCommandDialog(c, p)
@@ -71,7 +76,7 @@ func (s *app) view(c *ui.Context) {
 	s.renderMarkdownBitmapViewer(c, p)
 	s.observeSettingsExtensionRequests()
 	s.observeSettingsConfigRecovery()
-
+	s.observeTagGenbuAutoProbe()
 	s.observeRequirementContentJobs()
 	s.observeRequirementRefreshJobs()
 	s.observeWorkspaceHistoryJobs()

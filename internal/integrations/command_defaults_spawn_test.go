@@ -6,11 +6,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
-	"testing"
-
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/storage"
+	"slices"
+	"testing"
 )
 
 // The already-built test executable acts only as a private fake Codex child.
@@ -126,7 +125,7 @@ func TestNamingSpawnUsesDefaultOrExplicitModelAndCodexProxy(t *testing.T) {
 			if got.Env["NO_PROXY"] != "" || got.Env["no_proxy"] != "" {
 				t.Fatal("unexpected proxy exceptions")
 			}
-			for _, target := range []domain.CommandProxyTarget{domain.ProxyTargetGit, domain.ProxyTargetWorkspaceCommand, domain.ProxyTargetMeegle, domain.ProxyTargetLark} {
+			for _, target := range []domain.CommandProxyTarget{domain.ProxyTargetGit, domain.ProxyTargetWorkspaceCommand, domain.ProxyTargetMeegle, domain.ProxyTargetLark, domain.ProxyTargetGenbu} {
 				env, remove := service.childEnvironment(c, target)
 				if len(env) != 0 || !slices.Contains(remove, "HTTP_PROXY") {
 					t.Fatalf("unselected target %s inherited proxy", target)

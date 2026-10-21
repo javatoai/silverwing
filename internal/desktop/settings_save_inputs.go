@@ -89,12 +89,15 @@ func settingsConfigInputValues(config map[string]any) (map[string]any, map[strin
 	}
 	booleans["local:proxy-auth-enabled"] = mapString(config, "commandProxyUsername") != "" && mapString(config, "commandProxyPassword") != ""
 	targets := stringArray(mustArray(config["commandProxyTargets"]))
-	for _, target := range []string{"CODEX", "GIT", "WORKSPACE_COMMAND", "MEEGLE", "LARK"} {
+	for _, target := range []string{"CODEX", "GIT", "WORKSPACE_COMMAND", "MEEGLE", "LARK", "GENBU"} {
 		booleans["proxy-target:"+target] = containsString(targets, target)
 	}
 	visibility, _ := config["toolVisibility"].(map[string]any)
 	for key, value := range visibility {
 		booleans["tool-visibility-"+key] = value
+	}
+	for _, group := range mapsFromArray(mustArray(config["groups"])) {
+		booleans["group-tag-"+mapString(group, "id")] = group["tagEnabled"]
 	}
 	for index, project := range mapsFromArray(mustArray(config["meegleProjects"])) {
 		text[fmt.Sprintf("setting:meegle-project-key:%d", index)] = project["project_key"]

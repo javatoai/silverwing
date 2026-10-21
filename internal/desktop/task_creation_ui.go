@@ -18,17 +18,19 @@ import (
 )
 
 type taskCreationModuleDraft struct {
-	ID, Name                    string
-	LastName                    string
-	Strategy                    domain.WorkspaceStrategy
-	BaseRemote, BaseRef         string
-	repositoryPicker            taskRepositoryPickerState
-	TargetBranch                string
-	TargetEdited                bool
-	LastBaseRemote, LastBaseRef string
-	LastTargetBranch            string
-
-	Source domain.TaskModuleSource
+	ID, Name                       string
+	LastName                       string
+	Strategy                       domain.WorkspaceStrategy
+	BaseRemote, BaseRef            string
+	repositoryPicker               taskRepositoryPickerState
+	TargetBranch                   string
+	TargetEdited                   bool
+	LastBaseRemote, LastBaseRef    string
+	LastTargetBranch               string
+	TagEnabled                     bool
+	TagMode                        domain.TagBuildMode
+	TagTargetRef, TagMessagePrefix string
+	Source                         domain.TaskModuleSource
 }
 
 type taskCreationPreview struct {
@@ -366,12 +368,20 @@ func newTaskCreationModuleDraft(service domain.GroupServiceConfig, module domain
 	if strategy == "" {
 		strategy = domain.WorkspaceStandardWorktree
 	}
+	tagMode := module.TagMode
+	if tagMode == "" {
+		tagMode = domain.TagBuildMergeToTargetBranch
+	}
+	messagePrefix := module.TagMessagePrefix
+	if messagePrefix == "" {
+		messagePrefix = "Tag"
+	}
 	draft := &taskCreationModuleDraft{
 		ID: module.ID, Name: module.Name, Strategy: strategy,
 		BaseRemote: service.EffectiveMasterRemote(module), BaseRef: service.EffectiveMasterBranch(module),
 		TargetBranch: taskCreationTargetBranch(feature, service, module),
-
-		Source: domain.TaskModuleConfigured,
+		TagEnabled:   module.TagEnabled, TagMode: tagMode, TagTargetRef: taskCreationOptionalString(service.EffectiveTagTargetRef(module)),
+		TagMessagePrefix: messagePrefix, Source: domain.TaskModuleConfigured,
 	}
 	draft.LastName = draft.Name
 	draft.LastBaseRemote, draft.LastBaseRef, draft.LastTargetBranch = draft.BaseRemote, draft.BaseRef, draft.TargetBranch
@@ -441,7 +451,8 @@ func (s *app) addTaskCreationModule(serviceID string, strategy domain.WorkspaceS
 	module := domain.ServiceModuleConfig{ID: id, Name: name, Strategy: strategy}
 	draft := newTaskCreationModuleDraft(*service, module, state.draft.Branch)
 	draft.Source = domain.TaskModuleTemporary
-
+	draft.TagEnabled = false
+	draft.TagTargetRef = ""
 	state.moduleData[serviceID][id] = draft
 	state.modules[serviceID][id] = true
 	state.moduleOrder[serviceID] = append(state.moduleOrder[serviceID], id)
@@ -788,6 +799,8 @@ func (s *app) taskCreationPayload() (map[string]any, error) {
 				ID: draft.ID, Name: draft.Name, Strategy: draft.Strategy,
 				BaseRef: strings.TrimSpace(draft.BaseRef), BaseRemote: strings.TrimSpace(draft.BaseRemote),
 				TargetBranch: strings.TrimSpace(draft.TargetBranch), Source: draft.Source,
+				TagEnabled: draft.TagEnabled, TagMode: draft.TagMode, TagTargetRef: strings.TrimSpace(draft.TagTargetRef),
+				TagMessagePrefix: draft.TagMessagePrefix,
 			})
 		}
 		if len(modules) > 0 {

@@ -55,117 +55,122 @@ type app struct {
 	overflowMenus              *overflowMenuState
 	workspaceReviewFocusReturn *workspaceReviewFocusReturn
 
-	page                             string
-	taskNavigation                   *taskNavigationState
-	taskContextScope                 *taskMenuScope
-	taskContextUpdate                func(func()) // Headless scheduler seam; production captures Window.Update.
-	taskIndexes                      map[bool]*taskIndexBrowsingState
-	taskListFocused                  bool
-	dark                             bool
-	selected                         int
-	tab                              int
-	file                             int
-	source                           bool
-	json                             string
-	configJSON                       string
-	configReads                      desktopConfigReadCache
-	autoSync                         bool
-	notifications                    bool
-	tasks                            []task
-	listWidth                        float32
-	notes                            [3]string
-	notePaths                        [3]string
-	noteHashes                       [3]string
-	noteTab                          int
-	noteEditing                      bool
-	navigationCollapsed              bool
-	settingsTab                      string
-	settingsPage                     string
-	settingsLoaded                   string
-	settingsOutput                   string
-	confirmationDialog               *confirmationDialogState
-	settingsConfigOpen               bool
-	settingsConfigText               string
-	settingsConfigPath               string
-	settingsBackups                  []map[string]any
-	settingsConfigRecovery           *settingsConfigRecoveryState
-	settingsTemplates                []map[string]any
-	settingsTemplatesLoaded          bool
-	settingsMarketplaces             []map[string]any
-	settingsAgentScope               string
-	settingsAgentGroupID             string
-	settingsAgentContent             string
-	settingsAgentPath                string
-	settingsAgentLoaded              bool
-	settingsAgentContext             string
-	settingsSkillsCatalog            string
-	settingsExtensions               []map[string]any
-	settingsMCPServers               []map[string]any
-	settingsMCPPath                  string
-	settingsMCPWarnings              []string
-	settingsMCPTaskScope             bool
-	settingsSkillSources             []map[string]any
-	settingsLocalSkills              []map[string]any
-	settingsSkillRoot                string
-	settingsSkillPreviewOpen         bool
-	settingsSkillPreviewName         string
-	settingsSkillPreviewText         string
-	settingsSkillFiles               []map[string]any
-	settingsSkillFilesDirectory      string
-	settingsSkillFilesTruncated      bool
-	settingsBranchChoices            []string
-	settingsExtensionRequests        *settingsExtensionRequestState
-	settingsLogEntries               []map[string]any
-	settingsMCPConnections           map[string]any
-	settingsMCPConnectionError       string
-	settingsGitEnvironment           map[string]any
-	settingsDevelopmentToolsSnapshot map[string]any
-	startupDevelopmentTools          *startupDevelopmentToolsState
-	settingsCLIStatus                map[string]map[string]any
-	cliJobs                          *cliJobState
-	codexAI                          *codexAIState
-	meegleProjectCatalog             *meegleProjectCatalogState
-	requirementReaders               map[string]*requirementReaderState
-	requirementReaderGeneration      uint64
-	requirementContentJobs           *requirementContentJobState
-	requirementRefreshJobs           *requirementRefreshState
-	materialsFileManagement          *materialsFileManagementState
-	materialsFileJobs                *materialsFileJobState
-	materialsLiveRefreshLifecycle    *materialsLiveRefreshLifecycle
-	skillsBrowser                    *skillsBrowserState
-	settingsCLISessions              map[string]map[string]any
-	settingsLarkDomains              map[string]bool
-	settingsLarkLoginDialog          bool
-	settingsAuthPollTimers           map[string]*time.Timer
-	settingsTerminalResolution       map[string]any
-	settingsGroupID                  string
-	settingsPickerBusy               bool
-	settingsBoolInputs               map[string]*bool
-	migrationPlan                    any
-	migrationPreview                 string
-	migrationReady                   bool
-	taskRootTargetFocused            bool
-	toolTab                          string
-	tools                            *toolPageState
-	toolJobs                         *developerToolJobsState
-	repositoryTab                    string
-	workspaceGit                     *workspaceGitState
-	workspaceRemoval                 *workspaceRemovalState
-	workspaceRepair                  *workspaceRepairState
-	workspaceHistory                 *workspaceHistoryState
-	workspaceReviewSessions          map[string]*workspaceReviewSession
-	workspaceHistoryJobs             *workspaceHistoryJobState
-	workspaceMerge                   *workspaceMergeUIState
-	workspaceMergeBatch              *workspaceMergeBatchUIState
-	workspaceCommand                 *workspaceCommandUIState
-	workspaceCommandJobs             *workspaceCommandJobsState
-	materialsFeishuSyncJobs          *materialsFeishuSyncJobsState
-	requirementListJobs              *requirementListJobState
-	requirementIdentityJobs          *requirementIdentityJobState
-	requirementNaming                *requirementNamingPreparationState
-	requirementDocumentPreparation   *requirementDocumentPreparationState
-	taskBranchInfo                   *taskBranchInfoState
-
+	page                              string
+	taskNavigation                    *taskNavigationState
+	taskContextScope                  *taskMenuScope
+	taskContextUpdate                 func(func()) // Headless scheduler seam; production captures Window.Update.
+	taskIndexes                       map[bool]*taskIndexBrowsingState
+	taskListFocused                   bool
+	dark                              bool
+	selected                          int
+	tab                               int
+	file                              int
+	source                            bool
+	json                              string
+	configJSON                        string
+	configReads                       desktopConfigReadCache
+	autoSync                          bool
+	notifications                     bool
+	tasks                             []task
+	listWidth                         float32
+	notes                             [3]string
+	notePaths                         [3]string
+	noteHashes                        [3]string
+	noteTab                           int
+	noteEditing                       bool
+	navigationCollapsed               bool
+	settingsTab                       string
+	settingsPage                      string
+	settingsLoaded                    string
+	settingsOutput                    string
+	confirmationDialog                *confirmationDialogState
+	settingsConfigOpen                bool
+	settingsConfigText                string
+	settingsConfigPath                string
+	settingsBackups                   []map[string]any
+	settingsConfigRecovery            *settingsConfigRecoveryState
+	settingsTemplates                 []map[string]any
+	settingsTemplatesLoaded           bool
+	settingsMarketplaces              []map[string]any
+	settingsAgentScope                string
+	settingsAgentGroupID              string
+	settingsAgentContent              string
+	settingsAgentPath                 string
+	settingsAgentLoaded               bool
+	settingsAgentContext              string
+	settingsSkillsCatalog             string
+	settingsExtensions                []map[string]any
+	settingsMCPServers                []map[string]any
+	settingsMCPPath                   string
+	settingsMCPWarnings               []string
+	settingsMCPTaskScope              bool
+	settingsSkillSources              []map[string]any
+	settingsLocalSkills               []map[string]any
+	settingsSkillRoot                 string
+	settingsSkillPreviewOpen          bool
+	settingsSkillPreviewName          string
+	settingsSkillPreviewText          string
+	settingsSkillFiles                []map[string]any
+	settingsSkillFilesDirectory       string
+	settingsSkillFilesTruncated       bool
+	settingsBranchChoices             []string
+	settingsExtensionRequests         *settingsExtensionRequestState
+	settingsLogEntries                []map[string]any
+	settingsMCPConnections            map[string]any
+	settingsMCPConnectionError        string
+	settingsGitEnvironment            map[string]any
+	settingsDevelopmentToolsSnapshot  map[string]any
+	startupDevelopmentTools           *startupDevelopmentToolsState
+	settingsCLIStatus                 map[string]map[string]any
+	cliJobs                           *cliJobState
+	codexAI                           *codexAIState
+	meegleProjectCatalog              *meegleProjectCatalogState
+	requirementReaders                map[string]*requirementReaderState
+	requirementReaderGeneration       uint64
+	requirementContentJobs            *requirementContentJobState
+	requirementRefreshJobs            *requirementRefreshState
+	materialsFileManagement           *materialsFileManagementState
+	materialsFileJobs                 *materialsFileJobState
+	materialsLiveRefreshLifecycle     *materialsLiveRefreshLifecycle
+	skillsBrowser                     *skillsBrowserState
+	settingsCLISessions               map[string]map[string]any
+	settingsLarkDomains               map[string]bool
+	settingsLarkLoginDialog           bool
+	settingsAuthPollTimers            map[string]*time.Timer
+	settingsTerminalResolution        map[string]any
+	settingsGroupID                   string
+	settingsPickerBusy                bool
+	settingsBoolInputs                map[string]*bool
+	migrationPlan                     any
+	migrationPreview                  string
+	migrationReady                    bool
+	taskRootTargetFocused             bool
+	toolTab                           string
+	tools                             *toolPageState
+	toolJobs                          *developerToolJobsState
+	repositoryTab                     string
+	workspaceGit                      *workspaceGitState
+	workspaceRemoval                  *workspaceRemovalState
+	workspaceRepair                   *workspaceRepairState
+	workspaceHistory                  *workspaceHistoryState
+	workspaceReviewSessions           map[string]*workspaceReviewSession
+	workspaceHistoryJobs              *workspaceHistoryJobState
+	workspaceMerge                    *workspaceMergeUIState
+	workspaceMergeBatch               *workspaceMergeBatchUIState
+	workspaceCommand                  *workspaceCommandUIState
+	workspaceCommandJobs              *workspaceCommandJobsState
+	materialsFeishuSyncJobs           *materialsFeishuSyncJobsState
+	requirementListJobs               *requirementListJobState
+	requirementIdentityJobs           *requirementIdentityJobState
+	requirementNaming                 *requirementNamingPreparationState
+	requirementDocumentPreparation    *requirementDocumentPreparationState
+	taskBranchInfo                    *taskBranchInfoState
+	tagGenbuAutoProbe                 *tagGenbuAutoProbeState
+	tagJobs                           *tagDesktopJobs
+	production                        *productionUIState
+	tagHistory                        *tagHistoryViewState
+	tagBuild                          *tagBuildViewState
+	tagTarget                         *tagTargetViewState
 	serviceGroupID                    string
 	serviceReorderMode                bool
 	repositoryBatchOpen               bool
@@ -263,7 +268,9 @@ type app struct {
 	form                   actionForm
 }
 
-var tabs = []string{"任务详情", "任务资料", "需求详情", "需求说明"}
+const taskTagTab = 4
+
+var tabs = []string{"任务详情", "任务资料", "需求详情", "需求说明", "Tag"}
 
 func newApp(backend application.Backend, opts Options) *app {
 	s := &app{
@@ -313,7 +320,10 @@ func (s *app) applySnapshot(snapshot application.Snapshot) {
 	}
 	s.restoreReadingSessionOnSnapshot()
 	s.observePendingTaskRootMigration(snapshot)
-
+	s.restoreActiveTagJobRecords()
+	if s.page == "production" && (s.production == nil || s.production.loadedHome != snapshot.Home || s.production.configScope != productionConfigScope(s.configJSON)) {
+		s.enterProductionPage()
+	}
 }
 
 const desktopPreferencesFile = "desktop-preferences.json"

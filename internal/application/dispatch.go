@@ -121,8 +121,11 @@ func (a *App) Dispatch(ctx context.Context, action Action) (ActionResult, error)
 	if strings.HasPrefix(action.Kind, "skills.") || strings.HasPrefix(action.Kind, "codex.extensions") || strings.HasPrefix(action.Kind, "codex.ai/") || strings.HasPrefix(action.Kind, "cli.") || strings.HasPrefix(action.Kind, "logs.") || strings.HasPrefix(action.Kind, "git.environment") || strings.HasPrefix(action.Kind, "development-tools/") || action.Kind == "terminal.resolve" || action.Kind == "diagnostics.export" || action.Kind == "proxy.test" || action.Kind == "git.version" || action.Kind == "update.check" {
 		return a.platformAction(ctx, action)
 	}
-	if strings.HasPrefix(action.Kind, "agent.") {
+	if strings.HasPrefix(action.Kind, "tag.") || strings.HasPrefix(action.Kind, "agent.") {
 		return a.deliveryAction(ctx, action)
+	}
+	if strings.HasPrefix(action.Kind, "production.") {
+		return a.productionAction(ctx, action)
 	}
 	if strings.HasPrefix(action.Kind, "system.") {
 		return a.systemAction(ctx, action)
@@ -200,8 +203,8 @@ func (a *App) serviceConfig(action Action) (ActionResult, error) {
 			if raw := textPayload(action, "strategy"); raw != "" {
 				strategy = domain.WorkspaceStrategy(raw)
 			}
-			module := domain.ServiceModuleConfig{ID: "default", Name: "default", Strategy: strategy, CustomCommands: []domain.WorkspaceCommandConfig{}}
-			service := domain.GroupServiceConfig{ID: id, Enabled: true, DisplayName: textPayload(action, "name"), RepositoryID: textPayload(action, "repositoryId"), MasterBranch: masterBranch, DevelopmentTool: c.DefaultDevelopmentTool, Modules: []domain.ServiceModuleConfig{module}, Bootstrap: domain.BootstrapConfig{CopyRules: []domain.BootstrapCopyRule{}, Commands: []domain.BootstrapCommand{}}}
+			module := domain.ServiceModuleConfig{ID: "default", Name: "default", Strategy: strategy, TagEnabled: true, TagMode: domain.TagBuildMergeToTargetBranch, TagMessagePrefix: "Tag", CustomCommands: []domain.WorkspaceCommandConfig{}}
+			service := domain.GroupServiceConfig{ID: id, Enabled: true, DisplayName: textPayload(action, "name"), GenbuServiceName: textPayload(action, "name"), RepositoryID: textPayload(action, "repositoryId"), MasterBranch: masterBranch, TestTagBaselineRef: "origin/release/test", DevelopmentTool: c.DefaultDevelopmentTool, Modules: []domain.ServiceModuleConfig{module}, Bootstrap: domain.BootstrapConfig{CopyRules: []domain.BootstrapCopyRule{}, Commands: []domain.BootstrapCommand{}}}
 			if index >= 0 {
 				service = c.Groups[gi].Services[index]
 				if name := textPayload(action, "name"); name != "" {
@@ -214,7 +217,9 @@ func (a *App) serviceConfig(action Action) (ActionResult, error) {
 					service.RepositoryID = repo
 				}
 			}
-
+			if _, ok := action.Payload["testTagBaselineRef"]; ok {
+				service.TestTagBaselineRef = textPayload(action, "testTagBaselineRef")
+			}
 			if raw, ok := action.Payload["service"]; ok {
 				data, e := json.Marshal(raw)
 				if e != nil {

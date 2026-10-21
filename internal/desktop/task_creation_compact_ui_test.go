@@ -23,7 +23,7 @@ func taskCreationCompactFixture(t *testing.T, width int, dark bool, count int) (
 	config.DefaultBranchPrefix = "feature/{num}"
 	tasks, materials := filepath.Join(root, "tasks"), filepath.Join(root, "materials")
 	config.TaskRoot, config.RequirementMaterialsRoot = &tasks, &materials
-	modules := []domain.ServiceModuleConfig{{ID: "api", Name: "API", Strategy: domain.WorkspaceStandardWorktree, CustomCommands: []domain.WorkspaceCommandConfig{}}, {ID: "worker", Name: "Worker", Strategy: domain.WorkspaceIndependentClone, CustomCommands: []domain.WorkspaceCommandConfig{}}}
+	modules := []domain.ServiceModuleConfig{{ID: "api", Name: "API", Strategy: domain.WorkspaceStandardWorktree, TagMode: domain.TagBuildMergeToTargetBranch, CustomCommands: []domain.WorkspaceCommandConfig{}}, {ID: "worker", Name: "Worker", Strategy: domain.WorkspaceIndependentClone, TagMode: domain.TagBuildCurrentBranch, CustomCommands: []domain.WorkspaceCommandConfig{}}}
 	config.Groups = []domain.GroupConfig{{ID: "group", Name: "项目组", Services: []domain.GroupServiceConfig{{ID: "service", RepositoryID: "repo", DisplayName: "fixture-service", Enabled: true, DevelopmentTool: domain.DevelopmentToolIntelliJIdea, MasterBranch: "origin/main", Bootstrap: domain.BootstrapConfig{Commands: []domain.BootstrapCommand{}, CopyRules: []domain.BootstrapCopyRule{}}, Modules: modules[:count]}}}}
 	raw, err := json.Marshal(config)
 	if err != nil {

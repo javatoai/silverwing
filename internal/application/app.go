@@ -32,6 +32,8 @@ type App struct {
 	diffSessions                *workspace.WorkspaceGitDiffSessionManager
 	startupMigrationDiagnostics []string
 	startupTaskRootError        *storage.DefaultTaskRootInitializationError
+	tagJobsMu                   sync.Mutex
+	tagJobs                     *tagJobManager
 }
 
 func New(home string) (*App, error) {
@@ -72,7 +74,7 @@ func (a *App) Snapshot(ctx context.Context) (Snapshot, error) {
 	}
 	config, err := a.Config.Load()
 	if err != nil {
-		s := Snapshot{Home: a.Paths.Home, Error: err.Error(), Tasks: []Task{}, Repositories: []Repository{}, Services: []Service{}, Skills: []Skill{}}
+		s := Snapshot{Home: a.Paths.Home, Error: err.Error(), Tasks: []Task{}, Repositories: []Repository{}, Services: []Service{}, Skills: []Skill{}, TagHistory: []TagRecord{}}
 		a.appendStartupMigrationDiagnostics(&s)
 		return s, nil
 	}
@@ -80,7 +82,7 @@ func (a *App) Snapshot(ctx context.Context) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	s := Snapshot{Home: a.Paths.Home, Theme: string(config.Theme), ConfigJSON: string(encoded), Tasks: []Task{}, Repositories: []Repository{}, Services: []Service{}, Groups: []Group{}, Skills: []Skill{}}
+	s := Snapshot{Home: a.Paths.Home, Theme: string(config.Theme), ConfigJSON: string(encoded), Tasks: []Task{}, Repositories: []Repository{}, Services: []Service{}, Groups: []Group{}, Skills: []Skill{}, TagHistory: []TagRecord{}}
 	s.TaskRootMigrationPending, err = a.TaskRootMigrationPending(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -112,7 +114,7 @@ func (a *App) Snapshot(ctx context.Context) (Snapshot, error) {
 			g.ServiceIDs = append(g.ServiceIDs, service.ID)
 			v := Service{ID: service.ID, Name: service.DisplayName, RepositoryID: service.RepositoryID, MasterBranch: service.MasterBranch, GroupID: group.ID, Modules: []Module{}}
 			for _, module := range service.Modules {
-				v.Modules = append(v.Modules, Module{ID: module.ID, Name: module.Name, MasterBranch: value(module.MasterBranch), Strategy: string(module.Strategy)})
+				v.Modules = append(v.Modules, Module{ID: module.ID, Name: module.Name, MasterBranch: value(module.MasterBranch), Strategy: string(module.Strategy), TagTargetRef: value(module.TagTargetRef), TagEnabled: module.TagEnabled})
 			}
 			if len(service.Modules) > 0 {
 				v.Strategy = string(service.Modules[0].Strategy)
@@ -141,6 +143,9 @@ func (a *App) Snapshot(ctx context.Context) (Snapshot, error) {
 		for _, path := range issuePaths {
 			appendSnapshotError(&s, path+"："+issues[path])
 		}
+		delivery := a.delivery(config)
+		// Snapshot only reads Tag history. Retention runs when the owning task
+		// explicitly reads its Tag history, so refreshing task A never trims B.
 		for _, entry := range scan.Current {
 			m := entry.Manifest
 			t := Task{ID: filepath.Base(entry.Path), Title: m.FolderName, Project: groupNames[m.GroupID], Status: "进行中", Updated: m.UpdatedAt, CreatedAt: m.CreatedAt, Branch: m.FeatureBranch, Path: entry.Path, MaterialsPath: value(m.RequirementMaterials.WriteRoot), RequirementURL: m.RequirementLink, GroupID: m.GroupID, Archived: m.LifecycleStatus == domain.TaskArchived, Services: []string{}, Workspaces: []Workspace{}}
@@ -156,9 +161,15 @@ func (a *App) Snapshot(ctx context.Context) (Snapshot, error) {
 				t.Workspaces = append(t.Workspaces, Workspace{ID: w.GroupServiceID + ":" + w.ModuleID, ServiceID: w.GroupServiceID, ModuleID: w.ModuleID, Name: w.ServiceName, Path: w.WorktreePath, Branch: w.Branch, PushRemote: w.PushRemote, BaseRef: value(w.BaseRef), Strategy: string(w.Strategy), State: string(w.Health), Warnings: append([]string{}, w.Warnings...), Record: w})
 			}
 			s.Tasks = append(s.Tasks, t)
+			reports, historyErr := delivery.History(ctx, t.ID)
+			if historyErr == nil {
+				s.TagHistory = append(s.TagHistory, tagRecords(t.ID, reports)...)
+			} else {
+				appendSnapshotError(&s, historyErr.Error())
+			}
 		}
 		sort.SliceStable(s.Tasks, func(i, j int) bool { return s.Tasks[i].Updated > s.Tasks[j].Updated })
-
+		sortTagHistoryRecords(s.TagHistory)
 	}
 	return s, nil
 }

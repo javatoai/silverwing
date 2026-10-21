@@ -242,6 +242,12 @@ func (s *app) serviceEnabled(groupID, serviceID string) bool {
 	return true
 }
 
+func (s *app) groupTagEnabled(groupID string) bool {
+	// Group-level Tag controls were removed. Keep this compatibility predicate
+	// only as an existence guard; a saved legacy false must not disable Tag.
+	return s.hasGroup(groupID)
+}
+
 func (s *app) moveService(groupID, serviceID string, delta int) {
 	config, err := s.settingsConfigMap()
 	if err != nil {
@@ -292,7 +298,10 @@ func serviceAddFields(groupID string) []formField {
 		{key: "repositoryId", label: "仓库", value: ""},
 		{key: "masterBranch", label: "主分支", value: "origin/master"},
 		{key: "enabled", label: "服务状态", value: "true", options: []string{"true", "false"}},
+		{key: "genbuServiceName", label: "Genbu 服务名"},
+		{key: "genbuProbeEnabled", label: "Genbu 探测", value: "false", options: []string{"false", "true"}},
 		{key: "developmentTool", label: "默认开发工具", value: "INTELLIJ_IDEA", options: developmentToolOptions()},
+		{key: "testTagBaselineRef", label: "测试 Tag 基线", value: "origin/release/test"},
 		{key: "strategy", label: "默认模块工作区策略", value: "STANDARD_WORKTREE", options: []string{"STANDARD_WORKTREE", "INDEPENDENT_CLONE"}},
 		{key: "commitMessageTemplate", label: "提交说明模板", multiline: true},
 		{key: "bootstrapCopyRules", label: "初始化复制规则（JSON 数组）", multiline: true, value: "[]"},
@@ -309,7 +318,10 @@ func (s *app) serviceEditorFields(serviceID string, service application.Service)
 		{key: "name", label: "服务名称", value: service.Name},
 		{key: "repositoryId", label: "仓库", value: service.RepositoryID},
 		{key: "enabled", label: "服务状态", value: "true", options: []string{"true", "false"}},
+		{key: "genbuServiceName", label: "Genbu 服务名"},
+		{key: "genbuProbeEnabled", label: "Genbu 探测", value: "false", options: []string{"false", "true"}},
 		{key: "masterBranch", label: "主分支", value: service.MasterBranch},
+		{key: "testTagBaselineRef", label: "测试 Tag 基线"},
 		{key: "developmentTool", label: "默认开发工具", value: "INTELLIJ_IDEA", options: developmentToolOptions()},
 		{key: "commitMessageTemplate", label: "提交说明模板", multiline: true},
 		{key: "bootstrapCopyRules", label: "初始化复制规则（JSON 数组）", multiline: true, value: "[]"},
@@ -324,7 +336,9 @@ func (s *app) serviceEditorFields(serviceID string, service application.Service)
 		return fields
 	}
 	setFormValue(fields, "enabled", jsonBoolString(item["enabled"], "true"))
-	setFormValue(fields, "masterBranch", firstNonEmpty(mapString(item, "masterBranch"), service.MasterBranch))
+	setFormValue(fields, "genbuServiceName", mapString(item, "genbuServiceName"))
+	setFormValue(fields, "genbuProbeEnabled", jsonBoolString(item["genbuProbeEnabled"], "false"))
+	setFormValue(fields, "testTagBaselineRef", mapString(item, "testTagBaselineRef"))
 	setFormValue(fields, "developmentTool", firstNonEmpty(mapString(item, "developmentTool"), "INTELLIJ_IDEA"))
 	setFormValue(fields, "commitMessageTemplate", mapString(item, "commitMessageTemplate"))
 	bootstrap := mapData(item["bootstrap"])
@@ -364,6 +378,8 @@ func (s *app) moduleConfigurationFields(groupID, serviceID string, module applic
 	name := module.Name
 	masterBranch := module.MasterBranch
 	strategy := module.Strategy
+	tagEnabled := fmt.Sprint(module.TagEnabled)
+	tagMode, tagTargetRef, tagMessagePrefix := "MERGE_TO_TARGET_BRANCH", module.TagTargetRef, "Tag"
 	customCommands := "[]"
 	if config, err := s.readSettingsConfig(); err == nil {
 		if service := findServiceConfig(config, serviceID, groupID); service != nil {
@@ -376,6 +392,12 @@ func (s *app) moduleConfigurationFields(groupID, serviceID string, module applic
 					name = firstNonEmpty(mapString(candidate, "name"), name)
 					masterBranch = mapString(candidate, "masterBranch")
 					strategy = firstNonEmpty(mapString(candidate, "strategy"), strategy)
+					tagMode = firstNonEmpty(mapString(candidate, "tagMode"), tagMode)
+					tagTargetRef = mapString(candidate, "tagTargetRef")
+					tagMessagePrefix = firstNonEmpty(mapString(candidate, "tagMessagePrefix"), tagMessagePrefix)
+					if value, ok := candidate["tagEnabled"].(bool); ok {
+						tagEnabled = fmt.Sprint(value)
+					}
 					customCommands = jsonStringOrDefault(candidate["customCommands"], "[]")
 					break
 				}
@@ -387,6 +409,10 @@ func (s *app) moduleConfigurationFields(groupID, serviceID string, module applic
 		{key: "name", label: "模块名称", value: name},
 		{key: "masterBranch", label: "主分支（留空则继承）", value: masterBranch},
 		{key: "strategy", label: "工作区策略", value: strategy, options: []string{"STANDARD_WORKTREE", "INDEPENDENT_CLONE"}},
+		{key: "tagEnabled", label: "Tag", value: tagEnabled, options: []string{"true", "false"}},
+		{key: "tagMode", label: "Tag 模式", value: tagMode, options: []string{"MERGE_TO_TARGET_BRANCH", "CURRENT_BRANCH"}},
+		{key: "tagTargetRef", label: "Tag 目标分支（留空则继承）", value: tagTargetRef},
+		{key: "tagMessagePrefix", label: "Tag 消息前缀", value: tagMessagePrefix},
 		{key: "customCommands", label: "快捷命令配置（JSON 数组）", value: customCommands, multiline: true},
 	}
 }

@@ -15,6 +15,13 @@
   <a href="README.en.md">English</a>
 </p>
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme-banner-dark.png">
+    <img src="docs/assets/readme-banner-light.png" width="1280" alt="Silverwing 产品主图：任务工作台与左右 Git 差异审阅">
+  </picture>
+</p>
+
 <p align="center">Silverwing 是一款小巧的多仓库研发工作台，使用 Go 编写，基于 <a href="https://github.com/egoist/mygo">MyGO</a> 构建原生桌面界面，不依赖 WebView、Electron 或 JVM。<br>
 安装包约 18 MB，将任务、仓库、分支和资料组织在一起，内置 Git 审阅与常用研发工具。</p>
 
@@ -31,7 +38,7 @@
 - **任务资料**：浏览本地文件，阅读 Markdown、PDF、图片、表格和图表，支持查找、源码查看与文档链接。
 - **Skills 与 Codex 配置**：浏览本机 Skills，管理 Git 来源的 Skill、Codex 插件，并查看 MCP 配置。
 - **研发工具**：JSON 格式化与折叠、日期和时间戳转换、左右文本对比，以及可选的本机端口占用查询。
-- **集成工作流**：接入 Meegle 需求和评论，显式同步选定资料到飞书。
+- **集成工作流**：接入 Meegle 需求和评论，显式同步选定资料到飞书，查看任务 Tag 交付记录与可选的 Genbu 状态。
 - **本地工作区管理**：配置与任务记录保存在本机，支持浅色／深色主题，归档任务时保留工作区。
 
 ## 界面导览
@@ -82,7 +89,7 @@ macOS 应用使用 ad-hoc 签名，**尚未进行 Developer ID 签名或 Apple �
 
 当前的任务创建入口位于“需求”页，需要连接 Meegle 项目。在设置中接入 Meegle 后，选中需求并点击“基于需求创建任务”，核对任务名称、分支和服务范围，创建后即可在 IDE 或 Agent 中打开对应工作区。
 
-飞书资料同步是可选能力。接入 Meegle 或飞书之前，可以先配置仓库并使用本地研发工具。Silverwing 提供编程工具的打开入口，不会自动运行多个 Agent 会话。
+Genbu 和飞书资料同步均为可选能力。接入它们或 Meegle 之前，可以先配置仓库并使用本地研发工具。Silverwing 提供编程工具的打开入口，不会自动运行多个 Agent 会话。
 
 ### 查找和切换任务
 
@@ -100,6 +107,7 @@ macOS 应用使用 ad-hoc 签名，**尚未进行 Developer ID 签名或 Apple �
 | Codex／Cursor | 携带相应 Agent 上下文打开任务工作区 | 安装并配置需要使用的工具 |
 | Meegle／飞书项目 | 需求列表、任务创建、需求详情与评论 | 接入 Meegle CLI 和项目账号 |
 | 飞书 | 将任务资料显式同步到配置的知识库位置 | 配置 Lark CLI 权限与目标目录 |
+| Genbu | 查看已配置任务 Tag 的构建和 UAT 状态 | 配置团队使用的 Genbu 集成 |
 
 Silverwing 管理代码工作区及其上下文。服务进程、数据库、容器、凭据和测试环境仍由各项目自行管理。
 
@@ -109,7 +117,6 @@ Silverwing 管理代码工作区及其上下文。服务进程、数据库、容
 | --- | --- | --- |
 | [使用与开发知识库](doc/Index.md) | 中文 | 入门配置、日常操作、集成、架构与开发维护 |
 | [架构说明](docs/ARCHITECTURE.md) | 中文 | 原生界面、业务包、存储与集成边界 |
-| [分支说明](docs/BRANCHES.md) | 中文 | 公共版与 SNB 内部版的功能边界和同步规则 |
 | [原生媒体](docs/NATIVE-MEDIA.md) | English | PDF 和图表资源、渲染方式与平台限制 |
 
 ## 开源协议

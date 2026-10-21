@@ -414,6 +414,20 @@ func workspaceDiffSideLabels(state *workspaceHistoryState, comparison *workspace
 			newTitle += "（文件已删除）"
 		}
 	}
+	if state != nil {
+		if state.DiffBaseLabel != "" {
+			oldTitle = state.DiffBaseLabel
+			if comparison != nil && comparison.OldContent == nil {
+				oldTitle += "（文件不存在）"
+			}
+		}
+		if state.DiffTargetLabel != "" {
+			newTitle = state.DiffTargetLabel
+			if comparison != nil && comparison.NewContent == nil {
+				newTitle += "（文件已删除）"
+			}
+		}
+	}
 	return oldTitle, newTitle
 }
 

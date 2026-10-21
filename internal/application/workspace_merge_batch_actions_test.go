@@ -32,7 +32,7 @@ func TestDispatchWorkspaceMergeBatchUsesSelectionKeysAndReturnsBatchData(t *test
 			ServiceName: "service-a", DevelopmentTool: domain.DevelopmentToolVisualStudioCode, RepositoryPath: filepath.Join(paths.Home, "repo-a"),
 			WorktreePath: filepath.Join(paths.Tasks, "batch-merge-test", "service-a"),
 			Branch:       targetBranch, Health: domain.WorkspaceCreating, Strategy: domain.WorkspaceStandardWorktree,
-			Warnings: []string{}, ModuleSource: domain.TaskModuleConfigured, PushRemote: "origin",
+			Warnings: []string{}, ModuleSource: domain.TaskModuleConfigured, TagMode: domain.TagBuildMergeToTargetBranch, TagMessagePrefix: "Tag", PushRemote: "origin",
 			BaseRef: &baseRef, TargetBranch: &targetBranch,
 		},
 		{
@@ -40,7 +40,7 @@ func TestDispatchWorkspaceMergeBatchUsesSelectionKeysAndReturnsBatchData(t *test
 			ServiceName: "service-b", DevelopmentTool: domain.DevelopmentToolVisualStudioCode, RepositoryPath: filepath.Join(paths.Home, "repo-b"),
 			WorktreePath: filepath.Join(paths.Tasks, "batch-merge-test", "service-b"),
 			Branch:       targetBranch, Health: domain.WorkspaceCreating, Strategy: domain.WorkspaceStandardWorktree,
-			Warnings: []string{}, ModuleSource: domain.TaskModuleConfigured, PushRemote: "origin",
+			Warnings: []string{}, ModuleSource: domain.TaskModuleConfigured, TagMode: domain.TagBuildMergeToTargetBranch, TagMessagePrefix: "Tag", PushRemote: "origin",
 			BaseRef: &baseRef, TargetBranch: &targetBranch,
 		},
 	}
@@ -106,8 +106,8 @@ func TestDispatchWorkspaceMergeBatchRejectsReplacedRecordBeforeGit(t *testing.T)
 		ServiceName: "service", DevelopmentTool: domain.DevelopmentToolVisualStudioCode,
 		RepositoryPath: filepath.Join(paths.Home, "repo"), WorktreePath: filepath.Join(paths.Tasks, "same-path"),
 		Branch: targetBranch, Health: domain.WorkspaceReady, Strategy: domain.WorkspaceStandardWorktree,
-		Warnings: []string{}, ModuleSource: domain.TaskModuleConfigured,
-		PushRemote: "origin", BaseRef: &baseRef, TargetBranch: &targetBranch,
+		Warnings: []string{}, ModuleSource: domain.TaskModuleConfigured, TagMode: domain.TagBuildMergeToTargetBranch,
+		TagMessagePrefix: "Tag", PushRemote: "origin", BaseRef: &baseRef, TargetBranch: &targetBranch,
 	}
 	manifest := domain.DefaultTaskManifest()
 	manifest.TaskDirectoryName, manifest.CreatedAt, manifest.GroupID, manifest.FeatureBranch = "same-path", "old-created", "group", targetBranch
@@ -159,7 +159,7 @@ func TestDispatchWorkspaceMergeBatchRejectsTaskReplacementAtSamePath(t *testing.
 		ServiceName: "service", DevelopmentTool: domain.DevelopmentToolVisualStudioCode,
 		RepositoryPath: filepath.Join(paths.Home, "repo"), WorktreePath: filepath.Join(paths.Tasks, "same-path"), Branch: targetBranch,
 		Health: domain.WorkspaceCreating, Strategy: domain.WorkspaceStandardWorktree, ModuleSource: domain.TaskModuleConfigured,
-		Warnings: []string{}, PushRemote: "origin",
+		Warnings: []string{}, TagMode: domain.TagBuildMergeToTargetBranch, TagMessagePrefix: "Tag", PushRemote: "origin",
 		BaseRef: &baseRef, TargetBranch: &targetBranch,
 	}
 	manifest := domain.DefaultTaskManifest()

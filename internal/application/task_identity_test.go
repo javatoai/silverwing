@@ -60,7 +60,7 @@ func TestWorkspaceDiffPrefetchRejectsChangedPathBeforeGit(t *testing.T) {
 		t.Fatal(err)
 	}
 	manifest := taskIdentityFixture(t, app, paths.Tasks, "task", "task")
-	manifest.Services = []domain.ServiceWorkspace{{GroupServiceID: "service", ModuleID: "module", RepositoryID: "repo", ServiceName: "service", RepositoryPath: paths.Home, WorktreePath: filepath.Join(paths.Tasks, "task", "current"), Branch: "feature/test", Strategy: domain.WorkspaceStandardWorktree, DevelopmentTool: domain.DevelopmentToolVisualStudioCode, Health: domain.WorkspaceReady, ModuleSource: domain.TaskModuleConfigured}}
+	manifest.Services = []domain.ServiceWorkspace{{GroupServiceID: "service", ModuleID: "module", RepositoryID: "repo", ServiceName: "service", RepositoryPath: paths.Home, WorktreePath: filepath.Join(paths.Tasks, "task", "current"), Branch: "feature/test", Strategy: domain.WorkspaceStandardWorktree, DevelopmentTool: domain.DevelopmentToolVisualStudioCode, Health: domain.WorkspaceReady, ModuleSource: domain.TaskModuleConfigured, TagMode: domain.TagBuildCurrentBranch}}
 	if err := app.Manifests.Save(filepath.Join(paths.Tasks, "task"), manifest); err != nil {
 		t.Fatal(err)
 	}

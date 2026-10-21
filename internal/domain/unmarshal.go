@@ -30,9 +30,13 @@ func (v *WorkspaceStrategy) UnmarshalJSON(data []byte) error {
 	*v = WorkspaceStrategy(x)
 	return e
 }
-
+func (v *TagBuildMode) UnmarshalJSON(data []byte) error {
+	x, e := decodeEnum(data, "MERGE_TO_TARGET_BRANCH", "CURRENT_BRANCH")
+	*v = TagBuildMode(x)
+	return e
+}
 func (v *CommandProxyTarget) UnmarshalJSON(data []byte) error {
-	x, e := decodeEnum(data, "CODEX", "GIT", "WORKSPACE_COMMAND", "MEEGLE", "LARK")
+	x, e := decodeEnum(data, "CODEX", "GIT", "WORKSPACE_COMMAND", "MEEGLE", "LARK", "GENBU")
 	*v = CommandProxyTarget(x)
 	return e
 }
@@ -64,6 +68,16 @@ func (v *AgentDocumentLayout) UnmarshalJSON(data []byte) error {
 func (v *WorkspaceToolLaunchStatus) UnmarshalJSON(data []byte) error {
 	x, e := decodeEnum(data, "PENDING", "OPENED", "FAILED")
 	*v = WorkspaceToolLaunchStatus(x)
+	return e
+}
+func (v *TagOperationState) UnmarshalJSON(data []byte) error {
+	x, e := decodeEnum(data, "CREATED", "PREFLIGHT_PASSED", "SOURCE_BRANCH_PUSHED", "TARGET_BRANCH_PUSHED", "LOCAL_TAG_CREATED", "TAG_PUSHED", "SUCCESS", "CONFLICT", "FAILED", "PARTIAL")
+	*v = TagOperationState(x)
+	return e
+}
+func (v *GenbuStageStatus) UnmarshalJSON(data []byte) error {
+	x, e := decodeEnum(data, "INITIAL", "BUILDING", "SUCCESS", "FAILED", "UNKNOWN")
+	*v = GenbuStageStatus(x)
 	return e
 }
 
@@ -133,22 +147,29 @@ func (v *RepositoryConfig) UnmarshalJSON(data []byte) error {
 }
 func (v *ServiceModuleConfig) UnmarshalJSON(data []byte) error {
 	type plain ServiceModuleConfig
-	x, e := decodeWithDefaults(data, plain{Name: "default", Strategy: WorkspaceStandardWorktree, CustomCommands: []WorkspaceCommandConfig{}}, "id", "masterBranch")
+	x, e := decodeWithDefaults(data, plain{Name: "default", Strategy: WorkspaceStandardWorktree, TagEnabled: true, TagMode: TagBuildMergeToTargetBranch, TagMessagePrefix: "Tag", CustomCommands: []WorkspaceCommandConfig{}}, "id", "masterBranch")
 	*v = ServiceModuleConfig(x)
 	return e
 }
 func (v *GroupServiceConfig) UnmarshalJSON(data []byte) error {
 	type plain GroupServiceConfig
-	x, e := decodeWithDefaults(data, plain{Enabled: true, DevelopmentTool: DevelopmentToolIntelliJIdea, Modules: []ServiceModuleConfig{{ID: "default", Name: "default", Strategy: WorkspaceStandardWorktree, CustomCommands: []WorkspaceCommandConfig{}}}, Bootstrap: BootstrapConfig{CopyRules: []BootstrapCopyRule{}, Commands: []BootstrapCommand{}}, CommitMessageTemplate: ""}, "id", "repositoryId", "displayName", "masterBranch")
+	x, e := decodeWithDefaults(data, plain{Enabled: true, DevelopmentTool: DevelopmentToolIntelliJIdea, Modules: []ServiceModuleConfig{{ID: "default", Name: "default", Strategy: WorkspaceStandardWorktree, TagEnabled: true, TagMode: TagBuildMergeToTargetBranch, TagMessagePrefix: "Tag", CustomCommands: []WorkspaceCommandConfig{}}}, Bootstrap: BootstrapConfig{CopyRules: []BootstrapCopyRule{}, Commands: []BootstrapCommand{}}, CommitMessageTemplate: ""}, "id", "repositoryId", "displayName", "masterBranch", "testTagBaselineRef")
 	if e != nil {
 		return e
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["genbuServiceName"]; !ok {
+		x.GenbuServiceName = x.DisplayName
 	}
 	*v = GroupServiceConfig(x)
 	return nil
 }
 func (v *GroupConfig) UnmarshalJSON(data []byte) error {
 	type plain GroupConfig
-	x, e := decodeWithDefaults(data, plain{Services: []GroupServiceConfig{}}, "id", "name")
+	x, e := decodeWithDefaults(data, plain{TagEnabled: true, Services: []GroupServiceConfig{}}, "id", "name")
 	*v = GroupConfig(x)
 	return e
 }
@@ -179,7 +200,7 @@ func (v *RequirementMaterialsDirectory) UnmarshalJSON(data []byte) error {
 }
 func (v *ServiceWorkspace) UnmarshalJSON(data []byte) error {
 	type plain ServiceWorkspace
-	x, e := decodeWithDefaults(data, plain{Health: WorkspaceCreating, Warnings: []string{}, ModuleID: "default", Strategy: WorkspaceStandardWorktree, ModuleSource: TaskModuleConfigured, PushRemote: "origin"}, "repositoryId", "serviceName", "repositoryPath", "worktreePath", "developmentTool", "branch")
+	x, e := decodeWithDefaults(data, plain{Health: WorkspaceCreating, Warnings: []string{}, ModuleID: "default", Strategy: WorkspaceStandardWorktree, ModuleSource: TaskModuleConfigured, TagMode: TagBuildMergeToTargetBranch, TagMessagePrefix: "Tag", PushRemote: "origin"}, "repositoryId", "serviceName", "repositoryPath", "worktreePath", "developmentTool", "branch")
 	if e != nil {
 		return e
 	}
@@ -221,7 +242,40 @@ func (v *WorkspaceToolLaunch) UnmarshalJSON(data []byte) error {
 	*v = WorkspaceToolLaunch(x)
 	return e
 }
-
+func (v *TagOperation) UnmarshalJSON(data []byte) error {
+	type plain TagOperation
+	x, e := decodeWithDefaults(data, plain{TagMode: TagBuildMergeToTargetBranch, ConflictFiles: []string{}, ModuleID: "default", GenbuStatus: GenbuTagProbeStatus{Build: GenbuUnknown, UAT: GenbuUnknown, Production: GenbuUnknown}}, "operationId", "folderName", "serviceName", "repositoryId", "sourceBranch", "remote", "state", "createdAt", "updatedAt")
+	if e != nil {
+		return e
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["groupServiceId"]; !ok {
+		x.GroupServiceID = x.RepositoryID
+	}
+	*v = TagOperation(x)
+	return nil
+}
+func (v *GenbuTagProbeStatus) UnmarshalJSON(data []byte) error {
+	type plain GenbuTagProbeStatus
+	x, e := decodeWithDefaults(data, plain{Build: GenbuUnknown, UAT: GenbuUnknown, Production: GenbuUnknown})
+	*v = GenbuTagProbeStatus(x)
+	return e
+}
+func (v *TagBuildHistoryEntry) UnmarshalJSON(data []byte) error {
+	type plain TagBuildHistoryEntry
+	x, e := decodeWithDefaults(data, plain{TagMode: TagBuildMergeToTargetBranch}, "operationId", "timestamp", "folderName", "serviceName", "sourceBranch", "state")
+	*v = TagBuildHistoryEntry(x)
+	return e
+}
+func (v *TagHistoryItem) UnmarshalJSON(data []byte) error {
+	type plain TagHistoryItem
+	x, e := decodeWithDefaults(data, plain{}, "groupId", "folderName", "createdAt", "updatedAt", "operations")
+	*v = TagHistoryItem(x)
+	return e
+}
 func (v *AgentTaskTemplate) UnmarshalJSON(data []byte) error {
 	type plain AgentTaskTemplate
 	// The user-editable template library uses ignoreUnknownKeys in Source,

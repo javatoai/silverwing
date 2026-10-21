@@ -107,9 +107,15 @@ func (s *TaskApplicationService) PreviewAgentInstructions(
 			baseRef := selected.BaseRef
 			module := domain.ServiceModuleConfig{
 				ID: selected.ID, Name: selected.Name, MasterBranch: previewStringPointer(baseRef),
-				Strategy: selected.Strategy,
-
-				CustomCommands: []domain.WorkspaceCommandConfig{},
+				Strategy: selected.Strategy, TagEnabled: selected.TagEnabled && source == domain.TaskModuleConfigured,
+				TagMode: selected.TagMode, TagTargetRef: previewNullableStringPointer(selected.TagTargetRef),
+				TagMessagePrefix: selected.TagMessagePrefix, CustomCommands: []domain.WorkspaceCommandConfig{},
+			}
+			if module.TagMode == "" {
+				module.TagMode = domain.TagBuildMergeToTargetBranch
+			}
+			if module.TagMessagePrefix == "" {
+				module.TagMessagePrefix = "Tag"
 			}
 
 			targetBranch := strings.TrimSpace(selected.TargetBranch)
@@ -139,7 +145,8 @@ func (s *TaskApplicationService) PreviewAgentInstructions(
 				ModuleID: module.ID, ModuleName: domain.ModuleDisplayName(module.Name, service.DisplayName, baseRef, len(service.Modules)),
 				Strategy: module.Strategy, ModuleSource: source, OriginURL: repository.OriginURL,
 				BaseRef: previewStringPointer(baseRef), TargetBranch: previewNullableStringPointer(targetBranch),
-
+				TagEnabled: module.TagEnabled, TagMode: module.TagMode,
+				TagTargetRef: service.EffectiveTagTargetRef(module), TagMessagePrefix: module.TagMessagePrefix,
 				PushRemote: "origin",
 			})
 		}

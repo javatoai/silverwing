@@ -172,7 +172,9 @@ func configImportChanges(before, after domain.AppConfig) []string {
 	add(before.AIRequirementNamingEnabled != after.AIRequirementNamingEnabled, fmt.Sprintf("AI 需求命名：%s → %s", state(before.AIRequirementNamingEnabled), state(after.AIRequirementNamingEnabled)))
 	add(before.AIRequirementNamingPrewarmEnabled != after.AIRequirementNamingPrewarmEnabled, "AI 命名自动预热设置将更新")
 	add(before.AIRequirementNamingModel != after.AIRequirementNamingModel, fmt.Sprintf("AI 命名模型：%s → %s", before.AIRequirementNamingModel, after.AIRequirementNamingModel))
-
+	add(before.TagEnabled != after.TagEnabled, fmt.Sprintf("全局测试Tag：%s → %s", state(before.TagEnabled), state(after.TagEnabled)))
+	add(before.TagHistoryMaxGroups != after.TagHistoryMaxGroups, fmt.Sprintf("Tag历史保留组数：%d → %d", before.TagHistoryMaxGroups, after.TagHistoryMaxGroups))
+	add(before.AllowTaskTagTargetEditing != after.AllowTaskTagTargetEditing, fmt.Sprintf("任务测试目标分支修改：%s → %s", state(before.AllowTaskTagTargetEditing), state(after.AllowTaskTagTargetEditing)))
 	add(len(changes) == 0 && !reflect.DeepEqual(before, after), "配置内容存在其他变化")
 	return changes
 }

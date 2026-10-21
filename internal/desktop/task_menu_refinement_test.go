@@ -230,7 +230,7 @@ func TestWorkspaceCardOmitsPathRowAndKeepsOptionalCopy(t *testing.T) {
 			t.Fatalf("workspace path row is still visible: %q", text)
 		}
 	}
-	f.s.configJSON = `{"showWorkspacePathActionGroup":true}`
+	f.s.configJSON = `{"tagEnabled":false,"showWorkspacePathActionGroup":true}`
 	tester.Frame()
 	if err := tester.Click("复制工作区路径"); err != nil {
 		t.Fatal(err)
@@ -269,7 +269,7 @@ func TestTaskMenuRefinementVisuals(t *testing.T) {
 						t.Fatalf("removed toolbar or path row remains: %q", removed)
 					}
 				}
-				captureDesktopTestFrame(t, tester, fmt.Sprintf("task-layout-%d-dark-%t", width, dark))
+				captureReleaseNotice(t, tester, fmt.Sprintf("task-layout-%d-dark-%t", width, dark))
 				if err := tester.RightClick(s.tasks[1].title); err != nil {
 					t.Fatal(err)
 				}
@@ -279,7 +279,7 @@ func TestTaskMenuRefinementVisuals(t *testing.T) {
 						t.Fatalf("context menu is clipped: %s %+v", label, bounds)
 					}
 				}
-				captureDesktopTestFrame(t, tester, fmt.Sprintf("task-layout-menu-%d-dark-%t", width, dark))
+				captureReleaseNotice(t, tester, fmt.Sprintf("task-layout-menu-%d-dark-%t", width, dark))
 				tester.Key(0, ui.KeyEscape)
 				if tester.HasText("在 Codex 中打开") || s.selected != 1 {
 					t.Fatal("Escape failed to dismiss the task menu")

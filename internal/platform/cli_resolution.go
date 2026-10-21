@@ -22,16 +22,20 @@ func (s *Service) resolveCLIExecutableWithSource(ctx context.Context, cfg domain
 
 func (s *Service) resolveCLIExecutableWithSourceForce(ctx context.Context, cfg domain.AppConfig, tool string, force bool) (domain.AppConfig, executable.Resolution, domain.CommandProxyTarget, error) {
 	tool = strings.ToLower(strings.TrimSpace(tool))
-	target, ok := cliProxyTarget(tool)
-	if !ok {
-		return cfg, executable.Resolution{}, "", fmt.Errorf("不支持的 CLI：%s", tool)
-	}
 	configured := ""
 	if path := cliConfiguredPath(cfg, tool); path != nil {
 		configured = strings.TrimSpace(*path)
 	}
+	target, ok := cliProxyTarget(tool)
+	if !ok {
+		return cfg, executable.Resolution{}, "", fmt.Errorf("不支持的 CLI：%s", tool)
+	}
 	if configured != "" {
-		return cfg, executable.Resolution{Command: configured, Source: executable.SourceConfigured}, target, nil
+		source := executable.SourceConfigured
+		if tool == "genbu" && cfg.GenbuExecutableAutoDetected {
+			source = executable.SourceProbed
+		}
+		return cfg, executable.Resolution{Command: configured, Source: source}, target, nil
 	}
 	resolver := executable.NewResolver(s.runner)
 	var resolution executable.Resolution
@@ -90,6 +94,9 @@ func setCLIConfiguredPath(config *domain.AppConfig, tool, path string) {
 		config.LarkExecutablePath = &path
 	case "codex":
 		config.CodexExecutablePath = &path
+	case "genbu":
+		config.GenbuExecutablePath = &path
+		config.GenbuExecutableAutoDetected = true
 	}
 }
 
@@ -103,6 +110,8 @@ func cliConfiguredPath(cfg domain.AppConfig, tool string) *string {
 		return cfg.LarkExecutablePath
 	case "codex":
 		return cfg.CodexExecutablePath
+	case "genbu":
+		return cfg.GenbuExecutablePath
 	default:
 		return nil
 	}
@@ -116,6 +125,8 @@ func cliProxyTarget(tool string) (domain.CommandProxyTarget, bool) {
 		return domain.ProxyTargetMeegle, true
 	case "lark":
 		return domain.ProxyTargetLark, true
+	case "genbu":
+		return domain.ProxyTargetGenbu, true
 	case "codex":
 		return domain.ProxyTargetCodex, true
 	default:
@@ -138,6 +149,8 @@ func cliEnvironmentWithRunner(ctx context.Context, runner executable.Runner, too
 		resolvedTool = executable.ToolCodex
 	case "git":
 		resolvedTool = executable.ToolGit
+	case "genbu":
+		resolvedTool = executable.ToolGenbu
 	case "lark":
 		resolvedTool = executable.ToolLark
 	case "meegle":

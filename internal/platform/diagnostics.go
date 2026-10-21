@@ -376,7 +376,7 @@ func sanitizedConfig(cfg domain.AppConfig) (map[string]any, error) {
 			}
 		}
 	}
-	for _, key := range []string{"terminalExecutable", "meegleExecutablePath", "codexExecutablePath", "larkExecutablePath", "gitExecutablePath"} {
+	for _, key := range []string{"terminalExecutable", "meegleExecutablePath", "codexExecutablePath", "larkExecutablePath", "gitExecutablePath", "genbuExecutablePath"} {
 		if value, ok := result[key].(string); ok && value != "" {
 			result[key] = "<configured>"
 		}

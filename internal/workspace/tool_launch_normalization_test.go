@@ -57,7 +57,7 @@ func launchNormalizationFixture(t *testing.T) (*WorkspaceToolLaunchService, stri
 	manifest.FolderName, manifest.TaskDirectoryName = "task", "task"
 	manifest.CreatedAt, manifest.UpdatedAt = "2026-10-20T00:00:00Z", "2026-10-20T00:00:00Z"
 	for _, id := range []string{"data-center", "operation-app", "operation-center"} {
-		manifest.Services = append(manifest.Services, domain.ServiceWorkspace{RepositoryID: id, ServiceName: id, RepositoryPath: root, WorktreePath: filepath.Join(root, id), DevelopmentTool: domain.DevelopmentToolIntelliJIdea, Health: domain.WorkspaceReady, Strategy: domain.WorkspaceStandardWorktree, ModuleSource: domain.TaskModuleConfigured})
+		manifest.Services = append(manifest.Services, domain.ServiceWorkspace{RepositoryID: id, ServiceName: id, RepositoryPath: root, WorktreePath: filepath.Join(root, id), DevelopmentTool: domain.DevelopmentToolIntelliJIdea, Health: domain.WorkspaceReady, Strategy: domain.WorkspaceStandardWorktree, ModuleSource: domain.TaskModuleConfigured, TagMode: domain.TagBuildMergeToTargetBranch})
 	}
 	store := storage.NewManifestStore()
 	if err := store.Save(root, manifest); err != nil {

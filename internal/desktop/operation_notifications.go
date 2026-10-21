@@ -32,6 +32,7 @@ func (s *app) renderOperationNotifications(c *ui.Context) {
 	}
 	s.operationNotifications.progress(c, "operation-progress", progress, s.operationKind, action, cancel)
 	s.renderRequirementRefreshProgressNotification(c)
+	s.renderProductionProgressNotifications(c)
 	if state := s.workspaceGit; state != nil && s.workspaceGitObservationCurrent(state.observation) {
 		empty := ""
 		s.operationNotifications.present(c, "workspace-git-refresh", &empty, &state.failure)
@@ -288,6 +289,9 @@ func (s *operationNotificationState) presentWithKind(c *ui.Context, scope string
 		}
 	}}
 	if kind == "warning" {
+		toast.ContentMaxHeight = 360
+	}
+	if scope == "operation" && kind == "success" && isTagReleaseNoticeCopiedMessage(text) {
 		toast.ContentMaxHeight = 360
 	}
 	c.AddToast(toast)

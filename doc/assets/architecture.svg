@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 940" role="img" aria-labelledby="title desc">
   <title id="title">Silverwing Go 与 MyGO 技术架构</title>
-  <desc id="desc">架构示意图：MyGO 桌面界面在同一进程中通过 Snapshot 和 Dispatch 调用 application，再连接 domain 及工作区、资料、编辑器、媒体、任务操作和集成模块。storage 管理 home 配置和任务 manifest；executable 与 process 适配外部 Git、Codex、Meegle 和飞书 CLI。主路径不经过 HTTP、JVM 或 WebView。</desc>
+  <desc id="desc">架构示意图：MyGO 桌面界面在同一进程中通过 Snapshot 和 Dispatch 调用 application，再连接 domain 及工作区、资料、编辑器、媒体、交付和集成模块。storage 管理 home 配置和任务 manifest；executable 与 process 适配外部 Git、Codex、Meegle、飞书和 Genbu CLI。主路径不经过 HTTP、JVM 或 WebView。</desc>
   <defs>
     <marker id="arrow" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto"><path d="M1 1 L10 6 L1 11 Z" fill="#547A9D"/></marker>
     <marker id="arrow-cyan" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto"><path d="M1 1 L10 6 L1 11 Z" fill="#138A9B"/></marker>
@@ -65,8 +65,8 @@
 
   <rect x="798" y="345" width="178" height="145" rx="18" fill="#F1FAFB" stroke="#79BFC6" stroke-width="2"/>
   <text x="887" y="394" text-anchor="middle" fill="#145E6A" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">delivery</text>
-  <text x="887" y="435" text-anchor="middle" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">Agent 任务操作</text>
-  <text x="887" y="468" text-anchor="middle" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">本地操作记录</text>
+  <text x="887" y="435" text-anchor="middle" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">Tag 交付</text>
+  <text x="887" y="468" text-anchor="middle" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">执行记录与状态</text>
 
   <rect x="985" y="345" width="178" height="145" rx="18" fill="#F1FAFB" stroke="#79BFC6" stroke-width="2"/>
   <text x="1074" y="394" text-anchor="middle" fill="#145E6A" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">integrations</text>
@@ -96,14 +96,16 @@
   <path d="M990 701 V725 H700 V738" fill="none" stroke="#D99A27" stroke-width="3" marker-end="url(#arrow)"/>
   <text x="700" y="718" text-anchor="middle" fill="#805914" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">按需调用外部工具</text>
 
-  <rect x="80" y="748" width="280" height="64" rx="18" fill="#FFFFFF" stroke="#E2B65C" stroke-width="2"/>
-  <text x="220" y="790" text-anchor="middle" fill="#76561B" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">Git</text>
-  <rect x="395" y="748" width="280" height="64" rx="18" fill="#FFFFFF" stroke="#E2B65C" stroke-width="2"/>
-  <text x="535" y="790" text-anchor="middle" fill="#76561B" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">Codex / IDE</text>
-  <rect x="710" y="748" width="280" height="64" rx="18" fill="#FFFFFF" stroke="#E2B65C" stroke-width="2"/>
-  <text x="850" y="790" text-anchor="middle" fill="#76561B" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">Meegle</text>
-  <rect x="1025" y="748" width="280" height="64" rx="18" fill="#FFFFFF" stroke="#E2B65C" stroke-width="2"/>
-  <text x="1165" y="790" text-anchor="middle" fill="#76561B" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">飞书</text>
+  <rect x="70" y="748" width="220" height="64" rx="18" fill="#FFFFFF" stroke="#E2B65C" stroke-width="2"/>
+  <text x="180" y="790" text-anchor="middle" fill="#76561B" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">Git</text>
+  <rect x="320" y="748" width="220" height="64" rx="18" fill="#FFFFFF" stroke="#E2B65C" stroke-width="2"/>
+  <text x="430" y="790" text-anchor="middle" fill="#76561B" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">Codex / IDE</text>
+  <rect x="570" y="748" width="220" height="64" rx="18" fill="#FFFFFF" stroke="#E2B65C" stroke-width="2"/>
+  <text x="680" y="790" text-anchor="middle" fill="#76561B" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">Meegle</text>
+  <rect x="820" y="748" width="220" height="64" rx="18" fill="#FFFFFF" stroke="#E2B65C" stroke-width="2"/>
+  <text x="930" y="790" text-anchor="middle" fill="#76561B" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">飞书</text>
+  <rect x="1070" y="748" width="220" height="64" rx="18" fill="#FFFFFF" stroke="#E2B65C" stroke-width="2"/>
+  <text x="1180" y="790" text-anchor="middle" fill="#76561B" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">Genbu</text>
 
   <rect x="60" y="840" width="1280" height="66" rx="18" fill="#E8EFF6"/>
   <text x="91" y="882" fill="#405D77" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">本地功能不依赖 HTTP、JVM 或 WebView；主界面和业务层在同一进程中工作。</text>

@@ -102,6 +102,37 @@ func TestConfigurationReadCopiesProtectSavedValues(t *testing.T) {
 	}
 }
 
+func TestTagConfigurationIdentityKeepsScopeFresh(t *testing.T) {
+	s := configurationReadFixture()
+	first := s.tagJobScope()
+	s.tasks[0].path, s.tasks[0].createdAt = "changed-path", "new-incarnation"
+	s.snapshot.Home = "changed-home"
+	s.configJSON = `{"taskRoot":"D:/new-root"}`
+	changed := s.tagJobScope()
+	if changed.ConfigIdentity != first.ConfigIdentity || changed.TaskPath != "changed-path" ||
+		changed.TaskCreatedAt != "new-incarnation" || changed.Home != "changed-home" || changed.TaskRoot != "D:/new-root" {
+		t.Fatal("configuration identity caching retained task or application scope")
+	}
+	s.snapshot.ConfigJSON = `{"one":1,"two":2}`
+	identity := s.tagJobScope().ConfigIdentity
+	s.snapshot.ConfigJSON = ` { "two": 2, "one": 1 } `
+	if s.tagJobScope().ConfigIdentity != identity {
+		t.Fatal("equivalent JSON changed the canonical configuration identity")
+	}
+	s.snapshot.ConfigJSON = `{"one":2,"two":2}`
+	if s.tagJobScope().ConfigIdentity == identity {
+		t.Fatal("changed configuration retained its earlier identity")
+	}
+	s.snapshot.ConfigJSON = "invalid"
+	if s.tagJobScope().ConfigIdentity != "" {
+		t.Fatal("invalid configuration retained its earlier identity")
+	}
+	s.snapshot.ConfigJSON = `{"one":1,"two":2}`
+	if s.tagJobScope().ConfigIdentity != identity {
+		t.Fatal("configuration identity did not recover after an invalid source")
+	}
+}
+
 func TestConfigurationReadsAvoidRepeatedFullDecode(t *testing.T) {
 	s := configurationReadFixture()
 	read := func() {
@@ -110,6 +141,7 @@ func TestConfigurationReadsAvoidRepeatedFullDecode(t *testing.T) {
 		_ = s.configInt("count", 0)
 		_ = s.configNestedBool("nested", "flag", false)
 		_ = s.configArray("items")
+		_ = s.tagJobScope()
 	}
 	read()
 	if allocations := testing.AllocsPerRun(20, read); allocations > 32 {
@@ -123,7 +155,7 @@ func TestTypedConfigurationReadsKeepSourcesAndDraftsIndependent(t *testing.T) {
 	config.Groups = []domain.GroupConfig{{ID: "backend", Services: []domain.GroupServiceConfig{{
 		ID: "service", DisplayName: "original service", Enabled: true, DevelopmentTool: domain.DevelopmentToolIntelliJIdea,
 		Bootstrap: domain.BootstrapConfig{CopyRules: []domain.BootstrapCopyRule{}, Commands: []domain.BootstrapCommand{}},
-		Modules: []domain.ServiceModuleConfig{{ID: "module", Strategy: domain.WorkspaceStandardWorktree, CustomCommands: []domain.WorkspaceCommandConfig{{
+		Modules: []domain.ServiceModuleConfig{{ID: "module", Strategy: domain.WorkspaceStandardWorktree, TagMode: domain.TagBuildMergeToTargetBranch, CustomCommands: []domain.WorkspaceCommandConfig{{
 			ID: "command", Enabled: true, Arguments: []string{"saved"},
 		}}}},
 	}}}}
@@ -198,6 +230,7 @@ func BenchmarkDesktopConfigurationReads(b *testing.B) {
 		_ = s.configInt("count", 0)
 		_ = s.configNestedBool("nested", "flag", false)
 		_ = s.configArray("items")
+		_ = s.tagJobScope()
 	}
 	b.ReportMetric(float64(len(s.configJSON)), "config-bytes")
 	b.ReportAllocs()

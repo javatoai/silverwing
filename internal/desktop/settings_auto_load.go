@@ -186,7 +186,7 @@ func (s *app) ensureSettingsPageData() {
 	case "codex-mcp":
 		s.requestSettingsCLIStatus("codex", false)
 		s.act("codex.extensions/mcp/status", "", "", "", "", "", s.settingsMCPPayload(nil))
-	case "cli-meegle", "cli-lark":
+	case "cli-meegle", "cli-lark", "cli-genbu":
 		s.requestSettingsCLIStatus(strings.TrimPrefix(s.settingsPage, "cli-"), false)
 	case "task-creation":
 		s.requestSettingsCLIStatus("codex", false)

@@ -45,21 +45,31 @@ func (a *App) moduleConfig(action Action) (ActionResult, error) {
 				if strings.TrimSpace(moduleID) == "" {
 					return c, errors.New("模块 ID 不能为空")
 				}
-				module := domain.ServiceModuleConfig{ID: moduleID, Name: "default", Strategy: domain.WorkspaceStandardWorktree, CustomCommands: []domain.WorkspaceCommandConfig{}}
+				module := domain.ServiceModuleConfig{ID: moduleID, Name: "default", Strategy: domain.WorkspaceStandardWorktree, TagEnabled: true, TagMode: domain.TagBuildMergeToTargetBranch, TagMessagePrefix: "Tag", CustomCommands: []domain.WorkspaceCommandConfig{}}
 				if index >= 0 {
 					module = service.Modules[index]
 				}
 				if _, ok := action.Payload["masterBranch"]; ok {
 					module.MasterBranch = optional(textPayload(action, "masterBranch"))
 				}
-
+				if _, ok := action.Payload["tagTargetRef"]; ok {
+					module.TagTargetRef = optional(textPayload(action, "tagTargetRef"))
+				}
 				if name := textPayload(action, "name"); name != "" {
 					module.Name = name
 				}
 				if strategy := textPayload(action, "strategy"); strategy != "" {
 					module.Strategy = domain.WorkspaceStrategy(strategy)
 				}
-
+				if mode := textPayload(action, "tagMode"); mode != "" {
+					module.TagMode = domain.TagBuildMode(mode)
+				}
+				if _, ok := action.Payload["tagMessagePrefix"]; ok {
+					module.TagMessagePrefix = textPayload(action, "tagMessagePrefix")
+				}
+				if _, ok := action.Payload["tagEnabled"]; ok {
+					module.TagEnabled = boolPayload(action, "tagEnabled")
+				}
 				if raw, ok := action.Payload["module"]; ok {
 					data, e := json.Marshal(raw)
 					if e != nil {

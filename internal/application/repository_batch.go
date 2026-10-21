@@ -192,20 +192,22 @@ func standardRepositoryService(repository domain.RepositoryConfig, developmentTo
 		defaultBranch = *repository.DefaultRemoteBranch
 	}
 	return domain.GroupServiceConfig{
-		ID:           "service-" + strings.TrimPrefix(repository.ID, "repo-"),
-		RepositoryID: repository.ID,
-		DisplayName:  repository.Name,
-		Enabled:      true,
-
-		MasterBranch: "origin/" + defaultBranch,
-
-		DevelopmentTool: developmentTool,
+		ID:                 "service-" + strings.TrimPrefix(repository.ID, "repo-"),
+		RepositoryID:       repository.ID,
+		DisplayName:        repository.Name,
+		Enabled:            true,
+		GenbuServiceName:   repository.Name,
+		MasterBranch:       "origin/" + defaultBranch,
+		TestTagBaselineRef: "origin/release/test",
+		DevelopmentTool:    developmentTool,
 		Modules: []domain.ServiceModuleConfig{{
-			ID:       "default",
-			Name:     "default",
-			Strategy: domain.WorkspaceStandardWorktree,
-
-			CustomCommands: []domain.WorkspaceCommandConfig{},
+			ID:               "default",
+			Name:             "default",
+			Strategy:         domain.WorkspaceStandardWorktree,
+			TagEnabled:       true,
+			TagMode:          domain.TagBuildMergeToTargetBranch,
+			TagMessagePrefix: "Tag",
+			CustomCommands:   []domain.WorkspaceCommandConfig{},
 		}},
 		Bootstrap: domain.BootstrapConfig{
 			CopyRules: []domain.BootstrapCopyRule{},

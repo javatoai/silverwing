@@ -39,13 +39,17 @@ type BranchReuseConflict struct {
 }
 
 type TaskModuleSelection struct {
-	ID           string                   `json:"id"`
-	Name         string                   `json:"name"`
-	Strategy     domain.WorkspaceStrategy `json:"strategy"`
-	BaseRef      string                   `json:"baseRef"`
-	BaseRemote   string                   `json:"baseRemote"`
-	TargetBranch string                   `json:"targetBranch"`
-	Source       domain.TaskModuleSource  `json:"source"`
+	ID               string                   `json:"id"`
+	Name             string                   `json:"name"`
+	Strategy         domain.WorkspaceStrategy `json:"strategy"`
+	BaseRef          string                   `json:"baseRef"`
+	BaseRemote       string                   `json:"baseRemote"`
+	TargetBranch     string                   `json:"targetBranch"`
+	Source           domain.TaskModuleSource  `json:"source"`
+	TagEnabled       bool                     `json:"tagEnabled"`
+	TagMode          domain.TagBuildMode      `json:"tagMode"`
+	TagTargetRef     string                   `json:"tagTargetRef"`
+	TagMessagePrefix string                   `json:"tagMessagePrefix"`
 }
 
 type TaskServiceSelection struct {
@@ -254,7 +258,15 @@ func moduleMasterRemote(service domain.GroupServiceConfig, module domain.Service
 	}
 	return ref.Remote, nil
 }
-
+func moduleEffectiveTagTarget(service domain.GroupServiceConfig, module domain.ServiceModuleConfig) string {
+	if !module.TagEnabled || module.TagMode != domain.TagBuildMergeToTargetBranch {
+		return ""
+	}
+	if module.TagTargetRef != nil && strings.TrimSpace(*module.TagTargetRef) != "" {
+		return *module.TagTargetRef
+	}
+	return service.TestTagBaselineRef
+}
 func moduleEffectiveName(module domain.ServiceModuleConfig) string {
 	name := strings.TrimSpace(module.Name)
 	if name == "" {
@@ -757,7 +769,7 @@ func (p *StandardWorktreeProvisioner) provisionLocked(ctx context.Context, reque
 			names, _ := resolveModuleDisplayNames(request)
 			moduleName = names[module.ID]
 		}
-		workspace := domain.ServiceWorkspace{RepositoryID: request.Repository.ID, ServiceName: request.Service.DisplayName, RepositoryPath: request.Repository.RootPath, WorktreePath: target, DevelopmentTool: request.Service.DevelopmentTool, Branch: branch, Health: domain.WorkspaceReady, GroupServiceID: request.Service.ID, ModuleID: module.ID, ModuleName: moduleName, Strategy: domain.WorkspaceStandardWorktree, ModuleSource: source, OriginURL: request.Repository.OriginURL, BaseRef: ptr(remoteBaseRef), TargetBranch: ptr(branch), BranchCreatedByTask: !localExists, ForceWorktreeAttach: forceAttach, PushRemote: base.Remote}
+		workspace := domain.ServiceWorkspace{RepositoryID: request.Repository.ID, ServiceName: request.Service.DisplayName, RepositoryPath: request.Repository.RootPath, WorktreePath: target, DevelopmentTool: request.Service.DevelopmentTool, Branch: branch, Health: domain.WorkspaceReady, GroupServiceID: request.Service.ID, ModuleID: module.ID, ModuleName: moduleName, Strategy: domain.WorkspaceStandardWorktree, ModuleSource: source, OriginURL: request.Repository.OriginURL, BaseRef: ptr(remoteBaseRef), TargetBranch: ptr(branch), TagEnabled: module.TagEnabled, TagMode: module.TagMode, TagTargetRef: optionalPtr(moduleEffectiveTagTarget(request.Service, module)), TagMessagePrefix: module.TagMessagePrefix, BranchCreatedByTask: !localExists, ForceWorktreeAttach: forceAttach, PushRemote: base.Remote}
 		created = append(created, workspace)
 		var initialized BootstrapResult
 		initializing := taskCreationProgressForModule(request.Service, module, TaskCreationPhaseInitializingWorkspace)
@@ -1048,7 +1060,7 @@ func (p *IndependentCloneProvisioner) ProvisionWithProgress(ctx context.Context,
 		if branch == "" {
 			branch = base.Branch
 		}
-		ws := domain.ServiceWorkspace{RepositoryID: request.Repository.ID, ServiceName: request.Service.DisplayName, RepositoryPath: target, WorktreePath: target, DevelopmentTool: request.Service.DevelopmentTool, Branch: branch, Health: domain.WorkspaceReady, GroupServiceID: request.Service.ID, ModuleID: module.ID, ModuleName: moduleName, Strategy: domain.WorkspaceIndependentClone, ModuleSource: source, OriginURL: ptr(sourceURL), BaseRef: ptr(baseValue), TargetBranch: optionalPtr(targetBranch), PushRemote: "origin"}
+		ws := domain.ServiceWorkspace{RepositoryID: request.Repository.ID, ServiceName: request.Service.DisplayName, RepositoryPath: target, WorktreePath: target, DevelopmentTool: request.Service.DevelopmentTool, Branch: branch, Health: domain.WorkspaceReady, GroupServiceID: request.Service.ID, ModuleID: module.ID, ModuleName: moduleName, Strategy: domain.WorkspaceIndependentClone, ModuleSource: source, OriginURL: ptr(sourceURL), BaseRef: ptr(baseValue), TargetBranch: optionalPtr(targetBranch), TagEnabled: module.TagEnabled, TagMode: module.TagMode, TagTargetRef: optionalPtr(moduleEffectiveTagTarget(request.Service, module)), TagMessagePrefix: module.TagMessagePrefix, PushRemote: "origin"}
 		created = append(created, ws)
 		initializing := taskCreationProgressForModule(request.Service, module, TaskCreationPhaseInitializingWorkspace)
 		emitTaskCreationProgress(onProgress, TaskCreationProgress{Phase: initializing.Phase, Status: TaskCreationProgressStarted, ServiceID: initializing.ServiceID, ServiceName: initializing.ServiceName, ModuleID: initializing.ModuleID, ModuleName: initializing.ModuleName, Message: "正在初始化工作区"})

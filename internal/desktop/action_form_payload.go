@@ -95,10 +95,15 @@ func (s *app) submitForm() {
 			s.lastError = "模块 ID 和名称不能为空。"
 			return
 		}
+		tagEnabled, err := parseFormBool(payload, "tagEnabled", true)
+		if err != nil {
+			s.lastError = err.Error()
+			return
+		}
 		payload["serviceId"] = serviceID
 		payload["groupId"] = s.serviceFormGroupID(payload)
 		payload["moduleId"] = moduleID
-
+		payload["tagEnabled"] = tagEnabled
 		if err := s.moduleFormPayload(serviceID, moduleID, payload); err != nil {
 			s.lastError = err.Error()
 			return
@@ -182,7 +187,9 @@ func (s *app) taskSelectionPayload(branch string) (string, []string, []any) {
 			modules = append(modules, map[string]any{
 				"id": module.ID, "name": module.Name, "strategy": strategy,
 				"baseRef": baseRef, "baseRemote": "origin", "targetBranch": branch,
-				"source": "CONFIGURED",
+				"source": "CONFIGURED", "tagEnabled": module.TagEnabled,
+				"tagMode": "MERGE_TO_TARGET_BRANCH", "tagTargetRef": module.TagTargetRef,
+				"tagMessagePrefix": "Tag",
 			})
 		}
 		if len(modules) == 0 {
@@ -216,6 +223,10 @@ func (s *app) serviceFormPayload(form actionForm, payload map[string]any) (strin
 		if err != nil {
 			return "", err
 		}
+		genbuProbeEnabled, err := parseFormBool(payload, "genbuProbeEnabled", false)
+		if err != nil {
+			return "", err
+		}
 		copyRules, err := parseJSONArrayField(payload, "bootstrapCopyRules")
 		if err != nil {
 			return "", err
@@ -228,14 +239,22 @@ func (s *app) serviceFormPayload(form actionForm, payload map[string]any) (strin
 		if err != nil {
 			return "", err
 		}
+		genbuServiceName := payloadString(payload, "genbuServiceName")
+		if genbuServiceName == "" {
+			genbuServiceName = name
+		}
+		baseline := payloadString(payload, "testTagBaselineRef")
+		if baseline == "" {
+			baseline = "origin/release/test"
+		}
 		payload["service"] = map[string]any{
 			"id": serviceID, "repositoryId": repositoryID, "displayName": name,
-			"enabled":         enabled,
-			"masterBranch":    masterBranch,
+			"enabled": enabled, "genbuProbeEnabled": genbuProbeEnabled, "genbuServiceName": genbuServiceName,
+			"masterBranch": masterBranch, "testTagBaselineRef": baseline,
 			"developmentTool": firstNonEmpty(payloadString(payload, "developmentTool"), "INTELLIJ_IDEA"), "modules": []any{map[string]any{
 				"id": "default", "name": "default", "strategy": strategy,
-
-				"customCommands": customCommands,
+				"tagEnabled": true, "tagMode": "MERGE_TO_TARGET_BRANCH",
+				"tagMessagePrefix": "Tag", "customCommands": customCommands,
 			}},
 			"bootstrap":             map[string]any{"copyRules": copyRules, "commands": bootstrapCommands},
 			"commitMessageTemplate": payloadString(payload, "commitMessageTemplate"),
@@ -261,12 +280,18 @@ func (s *app) serviceFormPayload(form actionForm, payload map[string]any) (strin
 		service["repositoryId"] = repositoryID
 	}
 	service["masterBranch"] = masterBranch
-
+	service["testTagBaselineRef"] = payloadString(payload, "testTagBaselineRef")
+	service["genbuServiceName"] = payloadString(payload, "genbuServiceName")
 	enabled, err := parseFormBool(payload, "enabled", true)
 	if err != nil {
 		return "", err
 	}
+	genbuProbeEnabled, err := parseFormBool(payload, "genbuProbeEnabled", false)
+	if err != nil {
+		return "", err
+	}
 	service["enabled"] = enabled
+	service["genbuProbeEnabled"] = genbuProbeEnabled
 	service["developmentTool"] = payloadString(payload, "developmentTool")
 	service["commitMessageTemplate"] = payloadString(payload, "commitMessageTemplate")
 	copyRules, err := parseJSONArrayField(payload, "bootstrapCopyRules")
@@ -344,12 +369,24 @@ func (s *app) moduleFormPayload(serviceID, moduleID string, payload map[string]a
 	module["id"] = moduleID
 	module["name"] = payloadString(payload, "name")
 	module["strategy"] = payloadString(payload, "strategy")
+	module["tagMode"] = payloadString(payload, "tagMode")
+	module["tagMessagePrefix"] = payloadString(payload, "tagMessagePrefix")
+	tagEnabled, err := parseFormBool(payload, "tagEnabled", true)
+	if err != nil {
+		return err
+	}
+	module["tagEnabled"] = tagEnabled
 	masterBranch := payloadString(payload, "masterBranch")
-
+	tagTargetRef := payloadString(payload, "tagTargetRef")
 	if masterBranch == "" {
 		module["masterBranch"] = nil
 	} else {
 		module["masterBranch"] = masterBranch
+	}
+	if tagTargetRef == "" {
+		module["tagTargetRef"] = nil
+	} else {
+		module["tagTargetRef"] = tagTargetRef
 	}
 	customCommands, err := parseJSONArrayField(payload, "customCommands")
 	if err != nil {

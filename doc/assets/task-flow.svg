@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 850" role="img" aria-labelledby="title desc">
   <title id="title">Silverwing 从准备到归档的任务流程</title>
-  <desc id="desc">流程示意图：准备仓库、Git 和 Meegle，选择需求，预览分支服务和隔离方式，创建工作区，打开 IDE 或 Codex，审阅并验证，按需提交并推送代码，最后归档并保留文件。</desc>
+  <desc id="desc">流程示意图：准备仓库、Git 和 Meegle，选择需求，预览分支服务和隔离方式，创建工作区，打开 IDE 或 Codex，审阅并验证，可选执行 Tag 交付，最后归档并保留文件。</desc>
   <defs>
     <marker id="arrow" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto"><path d="M1 1 L10 6 L1 11 Z" fill="#547A9D"/></marker>
   </defs>
@@ -62,9 +62,9 @@
   <rect x="394" y="465" width="292" height="170" rx="20" fill="#FFF9EA" stroke="#E2B65C" stroke-width="2"/>
   <rect x="394" y="465" width="292" height="12" rx="6" fill="#D99A27"/>
   <circle cx="432" cy="520" r="21" fill="#FFF0CA"/><text x="432" y="528" text-anchor="middle" fill="#9A6812" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">7</text>
-  <text x="468" y="528" fill="#173858" font-size="26" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">提交与推送</text>
-  <text x="420" y="576" fill="#5E5138" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">根据项目要求提交代码</text>
-  <text x="420" y="610" fill="#5E5138" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">确认后推送到远端</text>
+  <text x="468" y="528" fill="#173858" font-size="26" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">可选 Tag 交付</text>
+  <text x="420" y="576" fill="#5E5138" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">核对目标后显式执行</text>
+  <text x="420" y="610" fill="#5E5138" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">查看执行状态与结果</text>
   <path d="M390 550 H370" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
 
   <rect x="74" y="465" width="292" height="170" rx="20" fill="#F1FAFB" stroke="#79BFC6" stroke-width="2"/>
@@ -75,6 +75,6 @@
   <text x="100" y="610" fill="#147A88" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">之后可从归档列表恢复</text>
 
   <rect x="74" y="690" width="1252" height="92" rx="18" fill="#E8EFF6"/>
-  <text x="106" y="730" fill="#405D77" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">Silverwing 提供显式 Git 操作入口；不会自动运行多个 Agent，也不负责服务部署。</text>
-  <text x="106" y="762" fill="#526B82" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">是否同步资料、提交、推送或归档，均由你根据项目流程选择。</text>
+  <text x="106" y="730" fill="#405D77" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">Silverwing 提供工具打开和显式交付入口；不会自动运行多个 Agent，也不负责服务部署。</text>
+  <text x="106" y="762" fill="#526B82" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">是否同步资料、执行 Tag 或归档，均由你根据项目流程选择。</text>
 </svg>

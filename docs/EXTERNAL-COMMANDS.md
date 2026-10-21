@@ -23,6 +23,9 @@
 | 工作区 Git、clone、Git 版本 | 每次执行在共享准备后叠加 Git 代理环境 | 原有 Git 超时、取消、只读锁设置与清理 |
 | Git 差异读取 | 共享命令及 PATH；保留独立索引和原有 GIT_* 移除策略 | 原有输出上限、超时与取消 |
 | platform 的扩展仓库、ls-remote、Git 环境及诊断 | 共享 GIT 环境，补齐分支查询代理遗漏 | 原有超时，调用方上下文 |
+| Genbu Tag 查询与轮询 | 共享 GENBU 命令和目标代理；保留原查询协议 | 20 秒，调用方上下文，错误脱敏 |
+| 生产发布的线上版本和构建状态 | Genbu `query-service-pods --json prod <service>` 与 `query-tag --json <service> <tag>`；共享 GENBU 环境，运行版本与流水线状态分开处理 | 每次 20 秒；后台执行，切页继续，退出取消并等待清理 |
+| 生产发布 Git 编排 | 共享 GIT 环境及仓库锁；独立 fetch 引用空间、隔离 worktree、普通快进保护的 push 和 annotated Tag | 单命令 2 分钟；Tag 对象准备 30 秒；阶段先落盘，失败后核实远端再恢复 |
 | 工作区快捷命令 | 工作区路径约束后共享命令准备；按 WORKSPACE_COMMAND 代理目标 | 用户配置超时、流式输出、取消与清理 |
 | Bootstrap | 共享命令及 PATH；保留相对工作目录约束、代理继承和警告语义 | 每条命令原超时，调用方上下文 |
 | Cursor 检测和启动 | 共享 PATH 查找；保留 Windows 注册表发现；检测可取消 | 启动后独立运行，不随创建操作结束而终止 |

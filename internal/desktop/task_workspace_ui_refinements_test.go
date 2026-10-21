@@ -62,7 +62,7 @@ func appendServiceToggleFixture(t *testing.T, width int, dark bool) (*app, *ui.T
 	root := t.TempDir()
 	config := domain.DefaultAppConfig()
 	for _, id := range []string{"existing", "alpha", "beta"} {
-		service := domain.GroupServiceConfig{ID: id, RepositoryID: "repo-" + id, DisplayName: map[string]string{"existing": "已有服务", "alpha": "合成服务甲", "beta": "合成服务乙"}[id], Enabled: true, DevelopmentTool: domain.DevelopmentToolIntelliJIdea, MasterBranch: "origin/main", Bootstrap: domain.BootstrapConfig{Commands: []domain.BootstrapCommand{}, CopyRules: []domain.BootstrapCopyRule{}}, Modules: []domain.ServiceModuleConfig{{ID: "api", Name: "API", Strategy: domain.WorkspaceStandardWorktree, CustomCommands: []domain.WorkspaceCommandConfig{}}}}
+		service := domain.GroupServiceConfig{ID: id, RepositoryID: "repo-" + id, DisplayName: map[string]string{"existing": "已有服务", "alpha": "合成服务甲", "beta": "合成服务乙"}[id], Enabled: true, DevelopmentTool: domain.DevelopmentToolIntelliJIdea, MasterBranch: "origin/main", Bootstrap: domain.BootstrapConfig{Commands: []domain.BootstrapCommand{}, CopyRules: []domain.BootstrapCopyRule{}}, Modules: []domain.ServiceModuleConfig{{ID: "api", Name: "API", Strategy: domain.WorkspaceStandardWorktree, TagMode: domain.TagBuildMergeToTargetBranch, CustomCommands: []domain.WorkspaceCommandConfig{}}}}
 		if len(config.Groups) == 0 {
 			config.Groups = []domain.GroupConfig{{ID: "synthetic-group", Name: "合成项目组"}}
 		}
@@ -143,7 +143,7 @@ func TestTaskAppendServiceRowTogglesOnce(t *testing.T) {
 				if !state.selectedServices["beta"] || state.activeServiceID != "beta" {
 					t.Fatal("another row did not select and activate")
 				}
-				captureDesktopTestFrame(t, tester, fmt.Sprintf("append-selected-%d-dark-%t", width, dark))
+				captureReleaseNotice(t, tester, fmt.Sprintf("append-selected-%d-dark-%t", width, dark))
 				if err := tester.Click("合成服务乙"); err != nil {
 					t.Fatal(err)
 				}
@@ -170,7 +170,7 @@ func TestTaskAppendServiceRowTogglesOnce(t *testing.T) {
 				if _, _, err := s.taskAppendRequest(); err == nil || !reflect.DeepEqual(before, s.tasks) {
 					t.Fatal("empty selection produced a payload or changed real task services")
 				}
-				captureDesktopTestFrame(t, tester, fmt.Sprintf("append-empty-%d-dark-%t", width, dark))
+				captureReleaseNotice(t, tester, fmt.Sprintf("append-empty-%d-dark-%t", width, dark))
 			})
 		}
 	}

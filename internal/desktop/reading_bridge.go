@@ -1096,7 +1096,8 @@ func readingViewForTab(tab int) string {
 		return "REQUIREMENT"
 	case 3:
 		return "NOTES"
-
+	case taskTagTab:
+		return "TAG"
 	default:
 		return "DETAIL"
 	}
@@ -1113,7 +1114,7 @@ func readingTabForView(view string) (int, bool) {
 	case "NOTES":
 		return 3, true
 	case "TAG":
-		return 0, true
+		return taskTagTab, true
 	default:
 		return 0, false
 	}

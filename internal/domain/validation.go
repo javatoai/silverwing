@@ -289,7 +289,9 @@ func (c AppConfig) Validate() error {
 			return err
 		}
 	}
-
+	if c.TagHistoryMaxGroups < 1 || c.TagHistoryMaxGroups > MaxTagHistoryGroups {
+		return fmt.Errorf("Tag组保留数量必须在 1 到 %d 之间", MaxTagHistoryGroups)
+	}
 	tools := map[DevelopmentToolType]bool{}
 	for _, t := range c.DevelopmentTools {
 		if strings.TrimSpace(t.Path) == "" || tools[t.Type] {
@@ -416,7 +418,11 @@ func (s ServiceModuleConfig) Validate() error {
 			return e
 		}
 	}
-
+	if s.TagTargetRef != nil {
+		if _, e := ParseRemoteBranchRef(*s.TagTargetRef); e != nil {
+			return e
+		}
+	}
 	ids := map[string]bool{}
 	for _, c := range s.CustomCommands {
 		if c.ID == "" || c.Name == "" || c.IconKey == "" || c.Executable == "" || c.TimeoutSeconds <= 0 {
@@ -437,11 +443,15 @@ func (s GroupServiceConfig) Validate() error {
 	if !safeDirectoryIdentifier(s.ID) {
 		return fmt.Errorf("组内服务 ID 必须是安全且稳定的目录片段")
 	}
-
+	if s.GenbuProbeEnabled && s.GenbuServiceName == "" {
+		return fmt.Errorf("启用 Genbu 探测时必须配置 Genbu 服务名")
+	}
 	if _, e := ParseRemoteBranchRef(s.MasterBranch); e != nil {
 		return e
 	}
-
+	if _, e := ParseRemoteBranchRef(s.TestTagBaselineRef); e != nil {
+		return e
+	}
 	if len(s.Modules) == 0 {
 		return fmt.Errorf("服务至少需要一个工作区模块")
 	}
@@ -483,7 +493,11 @@ func (m TaskManifest) Validate() error {
 		if s.RepositoryID == "" || s.ServiceName == "" || s.RepositoryPath == "" || s.WorktreePath == "" || s.Branch == "" {
 			return fmt.Errorf("任务工作区缺少必填字段")
 		}
-
+		if s.TagTargetRef != nil {
+			if _, err := ParseRemoteBranchRef(*s.TagTargetRef); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -526,7 +540,9 @@ func (c AppConfig) GroupService(groupID, serviceID string) (GroupServiceConfig, 
 func (c AppConfig) RequirementMaterialsConfigured() bool {
 	return c.RequirementMaterialsRoot != nil && *c.RequirementMaterialsRoot != "" && c.RequirementMaterialsSubdirectory != nil && *c.RequirementMaterialsSubdirectory != ""
 }
-
+func (c AppConfig) TagNavigationVisible() bool {
+	return c.TagEnabled && len(c.Groups) > 0
+}
 func (s CodexPluginMarketplaceSource) RequiresRootMarketplaceMigration() bool {
 	return s.MarketplaceDirectory != "."
 }
@@ -927,7 +943,7 @@ func stringValue(v *string) string {
 }
 func validProxyTarget(v CommandProxyTarget) bool {
 	switch v {
-	case ProxyTargetCodex, ProxyTargetGit, ProxyTargetWorkspaceCommand, ProxyTargetMeegle, ProxyTargetLark:
+	case ProxyTargetCodex, ProxyTargetGit, ProxyTargetWorkspaceCommand, ProxyTargetMeegle, ProxyTargetLark, ProxyTargetGenbu:
 		return true
 	}
 	return false

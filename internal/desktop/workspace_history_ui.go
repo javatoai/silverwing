@@ -51,33 +51,36 @@ type workspaceHistoryState struct {
 	DiffRendererStates              map[string]*workspaceDiffRendererState
 	SplitRatio                      float32
 	Files                           []workspace.CompareChange
-	FilesLoading, HistoryLoading    bool
-	PreviewLoading                  bool
-	CommitsLoaded                   bool
-	ReviewGeneration                uint64
-	CommitSelectionGeneration       uint64
-	CommitDebounce                  *time.Timer
-	InitialChange                   *domain.WorkspaceGitFileChange
-	LeftWidth                       float32
-	LeftCollapsed                   bool
-	LeftDragging                    bool
-	PreviewMode                     workspace.WorkspaceFilePreviewMode
-	ChangedLinesOnly                bool
-	DiffHunkIndex                   int
-	DiffHunkSelected                bool
-	NativeDiff                      *diffNativeViewState
-	NativeDiffIdentity              *workspaceDiffIdentity
-	DiffRows                        *workspaceDiffRowsView
-	ContentPreview                  nativeCodePreviewState
-	Commits                         []domain.WorkspaceGitCommit
-	Preview                         *workspace.WorkspaceGitFilePreview
-	PreviewStartedAt                time.Time
-	PreviewFirstFrame               bool
-	Prefetch                        *workspaceReviewPrefetchJob
-	PrefetchKey                     string
-	PrefetchVisible                 []workspace.CompareChange
-	PrefetchFrameVisible            []workspace.CompareChange
-	PrefetchViewport                ui.Rect
+	// Read-only consumers can supply a file reader without adopting task state.
+	FileSelected                                     func(workspace.CompareChange)
+	DiffBaseLabel, DiffTargetLabel, FileContentLabel string
+	FilesLoading, HistoryLoading                     bool
+	PreviewLoading                                   bool
+	CommitsLoaded                                    bool
+	ReviewGeneration                                 uint64
+	CommitSelectionGeneration                        uint64
+	CommitDebounce                                   *time.Timer
+	InitialChange                                    *domain.WorkspaceGitFileChange
+	LeftWidth                                        float32
+	LeftCollapsed                                    bool
+	LeftDragging                                     bool
+	PreviewMode                                      workspace.WorkspaceFilePreviewMode
+	ChangedLinesOnly                                 bool
+	DiffHunkIndex                                    int
+	DiffHunkSelected                                 bool
+	NativeDiff                                       *diffNativeViewState
+	NativeDiffIdentity                               *workspaceDiffIdentity
+	DiffRows                                         *workspaceDiffRowsView
+	ContentPreview                                   nativeCodePreviewState
+	Commits                                          []domain.WorkspaceGitCommit
+	Preview                                          *workspace.WorkspaceGitFilePreview
+	PreviewStartedAt                                 time.Time
+	PreviewFirstFrame                                bool
+	Prefetch                                         *workspaceReviewPrefetchJob
+	PrefetchKey                                      string
+	PrefetchVisible                                  []workspace.CompareChange
+	PrefetchFrameVisible                             []workspace.CompareChange
+	PrefetchViewport                                 ui.Rect
 }
 
 const (
@@ -805,6 +808,12 @@ func (s *app) renderWorkspaceFilePreview(c *ui.Context, p palette, state *worksp
 					contentLabel = "主分支基线"
 				case workspace.PreviewOriginSelectedCommits:
 					contentLabel = "选中提交内容"
+				}
+				if state.FileContentLabel != "" {
+					contentLabel = state.FileContentLabel
+					if preview.Content.Origin == workspace.PreviewOriginBaseline && state.DiffBaseLabel != "" {
+						contentLabel = state.DiffBaseLabel + "内容"
+					}
 				}
 				if workspaceHistoryChoice(c, "workspace-preview-content", contentLabel, state.PreviewMode == workspace.PreviewContent, p).Clicked() {
 					state.PreviewMode = workspace.PreviewContent

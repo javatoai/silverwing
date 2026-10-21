@@ -365,6 +365,15 @@ func (g *GitClient) Fetch(repository, remote string) error {
 	return err
 }
 
+func (g *GitClient) FetchTags(repository, remote string) error {
+	if remote == "" {
+		remote = "origin"
+	}
+	_, err := g.RunContext(context.Background(), repository, 5*time.Minute, true, false,
+		"fetch", "--tags", "--prune", "--prune-tags", "--force", remote)
+	return err
+}
+
 func (g *GitClient) AddWorktree(repository, target, branch, baseRef string, trackingRemote ...string) error {
 	remote := "origin"
 	if len(trackingRemote) > 0 && strings.TrimSpace(trackingRemote[0]) != "" {

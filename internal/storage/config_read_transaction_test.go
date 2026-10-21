@@ -20,7 +20,7 @@ func TestConfigReadersWaitForWholeShardTransaction(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			config.Groups = append(config.Groups, domain.GroupConfig{ID: "second", Name: "second", Services: []domain.GroupServiceConfig{}})
+			config.Groups = append(config.Groups, domain.GroupConfig{ID: "second", Name: "second", TagEnabled: true, Services: []domain.GroupServiceConfig{}})
 			release, err := store.acquireMutationLock()
 			if err != nil {
 				t.Fatal(err)

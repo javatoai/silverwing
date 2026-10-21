@@ -175,7 +175,7 @@ func (s *TaskApplicationService) RetryFailedServices(ctx context.Context, config
 				if base == "" {
 					return rollback(fmt.Errorf("失败模块缺少主分支快照：%s", ws.ModuleName), false)
 				}
-				service.Modules = append(service.Modules, domain.ServiceModuleConfig{ID: ws.ModuleID, Name: ws.ModuleName, Strategy: ws.Strategy, MasterBranch: &base})
+				service.Modules = append(service.Modules, domain.ServiceModuleConfig{ID: ws.ModuleID, Name: ws.ModuleName, Strategy: ws.Strategy, MasterBranch: &base, TagEnabled: ws.TagEnabled, TagMode: ws.TagMode, TagTargetRef: ws.TagTargetRef, TagMessagePrefix: ws.TagMessagePrefix})
 				branches[ws.ModuleID] = targetBranchValue(ws)
 				sources[ws.ModuleID] = ws.ModuleSource
 			}
@@ -316,6 +316,99 @@ func (s *TaskApplicationService) RerunWorkspaceBootstrap(ctx context.Context, co
 			return err
 		}
 		if _, err := s.Documents.WriteTaskDocument(taskPath, updated, config); err != nil {
+			return err
+		}
+		result = updated
+		return nil
+	})
+	return result, err
+}
+
+func (s *TaskApplicationService) UpdateTagTarget(config domain.AppConfig, taskPath, groupServiceID, moduleID string, expectedTargetRef *string, targetRef string) (domain.TaskManifest, error) {
+	var result domain.TaskManifest
+	err := s.Locks.WithTask(taskPath, func() error {
+		manifest, err := s.Manifests.Load(taskPath)
+		if err != nil {
+			return err
+		}
+		if manifest.LifecycleStatus != domain.TaskActive {
+			return fmt.Errorf("归档任务不能修改测试目标分支")
+		}
+		var index = -1
+		for i := range manifest.Services {
+			if manifest.Services[i].GroupServiceID == groupServiceID && manifest.Services[i].ModuleID == moduleID {
+				if index >= 0 {
+					return fmt.Errorf("测试Tag目标不唯一，请选择具体模块")
+				}
+				index = i
+			}
+		}
+		if index < 0 {
+			return fmt.Errorf("任务中不存在测试Tag目标：%s:%s", groupServiceID, moduleID)
+		}
+		ws := manifest.Services[index]
+		if !config.TagEnabled || !ws.TagEnabled {
+			return fmt.Errorf("当前工作区未启用测试Tag")
+		}
+		if _, err := config.Group(manifest.GroupID); err != nil {
+			return err
+		}
+		if ws.TagMode != domain.TagBuildMergeToTargetBranch {
+			return fmt.Errorf("当前分支模式不支持设置测试目标分支")
+		}
+		if !equalOptionalString(ws.TagTargetRef, expectedTargetRef) {
+			return fmt.Errorf("测试目标分支已被其他操作修改，请关闭后重新打开设置")
+		}
+		target, err := domain.ParseRemoteBranchRef(targetRef)
+		if err != nil {
+			return err
+		}
+		if strings.HasPrefix(target.Remote, "-") {
+			return fmt.Errorf("测试目标远程名称不能以 - 开头：%s", target.Remote)
+		}
+		validated, err := s.Lifecycle.ValidateForMutation(config, taskPath, manifest, ws)
+		if err != nil {
+			return err
+		}
+		if !s.BranchValidator.IsValid(target.Branch) {
+			return fmt.Errorf("测试目标分支格式不合法：%s", target.Branch)
+		}
+		remotes, err := s.Git.RemoteNames(validated.Repository)
+		if err != nil {
+			return err
+		}
+		foundRemote := false
+		for _, remote := range remotes {
+			if remote == target.Remote {
+				foundRemote = true
+				break
+			}
+		}
+		if !foundRemote {
+			return fmt.Errorf("仓库中不存在远程：%s", target.Remote)
+		}
+		ref := "refs/heads/" + target.Branch
+		listing, err := s.Git.RunContext(context.Background(), validated.Repository, 20*time.Second, false, true, "ls-remote", "--heads", target.Remote, ref)
+		if err != nil {
+			return err
+		}
+		foundBranch := false
+		for _, line := range strings.Split(strings.TrimSpace(listing.Stdout), "\n") {
+			parts := strings.SplitN(line, "\t", 2)
+			if len(parts) == 2 && strings.TrimSpace(parts[1]) == ref {
+				foundBranch = true
+				break
+			}
+		}
+		if !foundBranch {
+			return fmt.Errorf("远程分支不存在：%s", target.String())
+		}
+		updated := manifest
+		updated.UpdatedAt = s.now().UTC().Format("2006-01-02T15:04:05.999999999Z07:00")
+		updated.Services = append([]domain.ServiceWorkspace(nil), manifest.Services...)
+		value := target.String()
+		updated.Services[index].TagTargetRef = &value
+		if err := s.Manifests.Save(taskPath, updated); err != nil {
 			return err
 		}
 		result = updated

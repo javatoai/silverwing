@@ -7,6 +7,8 @@ const (
 	CurrentTaskManifestSchemaVersion = "2.0.0"
 	DefaultGroupID                   = "default"
 	DefaultGroupName                 = "默认组"
+	DefaultTagHistoryMaxGroups       = 3
+	MaxTagHistoryGroups              = 1000
 )
 
 type DevelopmentToolType string
@@ -35,6 +37,13 @@ const (
 	WorkspaceIndependentClone WorkspaceStrategy = "INDEPENDENT_CLONE"
 )
 
+type TagBuildMode string
+
+const (
+	TagBuildMergeToTargetBranch TagBuildMode = "MERGE_TO_TARGET_BRANCH"
+	TagBuildCurrentBranch       TagBuildMode = "CURRENT_BRANCH"
+)
+
 type CommandProxyTarget string
 
 const (
@@ -43,6 +52,7 @@ const (
 	ProxyTargetWorkspaceCommand CommandProxyTarget = "WORKSPACE_COMMAND"
 	ProxyTargetMeegle           CommandProxyTarget = "MEEGLE"
 	ProxyTargetLark             CommandProxyTarget = "LARK"
+	ProxyTargetGenbu            CommandProxyTarget = "GENBU"
 )
 
 // NormalizeCommandProxyTargets applies the persisted Set semantics while
@@ -140,31 +150,35 @@ type RepositoryConfig struct {
 	DefaultRemoteBranch *string `json:"defaultRemoteBranch"`
 }
 type ServiceModuleConfig struct {
-	ID           string            `json:"id"`
-	Name         string            `json:"name"`
-	MasterBranch *string           `json:"masterBranch"`
-	Strategy     WorkspaceStrategy `json:"strategy"`
-
-	CustomCommands []WorkspaceCommandConfig `json:"customCommands"`
+	ID               string                   `json:"id"`
+	Name             string                   `json:"name"`
+	MasterBranch     *string                  `json:"masterBranch"`
+	Strategy         WorkspaceStrategy        `json:"strategy"`
+	TagEnabled       bool                     `json:"tagEnabled"`
+	TagMode          TagBuildMode             `json:"tagMode"`
+	TagTargetRef     *string                  `json:"tagTargetRef"`
+	TagMessagePrefix string                   `json:"tagMessagePrefix"`
+	CustomCommands   []WorkspaceCommandConfig `json:"customCommands"`
 }
 type GroupServiceConfig struct {
-	ID           string `json:"id"`
-	RepositoryID string `json:"repositoryId"`
-	DisplayName  string `json:"displayName"`
-	Enabled      bool   `json:"enabled"`
-
-	MasterBranch string `json:"masterBranch"`
-
+	ID                    string                `json:"id"`
+	RepositoryID          string                `json:"repositoryId"`
+	DisplayName           string                `json:"displayName"`
+	Enabled               bool                  `json:"enabled"`
+	GenbuProbeEnabled     bool                  `json:"genbuProbeEnabled"`
+	GenbuServiceName      string                `json:"genbuServiceName"`
+	MasterBranch          string                `json:"masterBranch"`
+	TestTagBaselineRef    string                `json:"testTagBaselineRef"`
 	DevelopmentTool       DevelopmentToolType   `json:"developmentTool"`
 	Modules               []ServiceModuleConfig `json:"modules"`
 	Bootstrap             BootstrapConfig       `json:"bootstrap"`
 	CommitMessageTemplate string                `json:"commitMessageTemplate"`
 }
 type GroupConfig struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-
-	Services []GroupServiceConfig `json:"services"`
+	ID         string               `json:"id"`
+	Name       string               `json:"name"`
+	TagEnabled bool                 `json:"tagEnabled"`
+	Services   []GroupServiceConfig `json:"services"`
 }
 type ToolVisibilitySettings struct {
 	JSON     bool `json:"json"`
@@ -173,48 +187,51 @@ type ToolVisibilitySettings struct {
 	KillPort bool `json:"killPort"`
 }
 type AppConfig struct {
-	SchemaVersion       string                 `json:"schemaVersion"`
-	TaskRoot            *string                `json:"taskRoot"`
-	DefaultBranchPrefix string                 `json:"defaultBranchPrefix"`
-	Repositories        []RepositoryConfig     `json:"repositories"`
-	Groups              []GroupConfig          `json:"groups"`
-	Theme               ThemePreference        `json:"theme"`
-	ToolVisibility      ToolVisibilitySettings `json:"toolVisibility"`
-
-	TerminalExecutable                     *string                 `json:"terminalExecutable"`
-	DevelopmentTools                       []DevelopmentToolConfig `json:"developmentTools"`
-	DefaultDevelopmentTool                 DevelopmentToolType     `json:"defaultDevelopmentTool"`
-	AllowTemporaryDevelopmentToolSelection bool                    `json:"allowTemporaryDevelopmentToolSelection"`
-	DefaultWorkspaceToolIDs                []string                `json:"defaultWorkspaceToolIds"`
-	ShowTaskDetailGitActionGroup           bool                    `json:"showTaskDetailGitActionGroup"`
-	ShowTaskDetailPathActionGroup          bool                    `json:"showTaskDetailPathActionGroup"`
-	ShowWorkspaceGitActionGroup            bool                    `json:"showWorkspaceGitActionGroup"`
-	ShowWorkspacePathActionGroup           bool                    `json:"showWorkspacePathActionGroup"`
-	ShowTaskAreaCopyIcons                  bool                    `json:"showTaskAreaCopyIcons"`
-	ShowTaskAreaBranchCopyIcons            bool                    `json:"showTaskAreaBranchCopyIcons"`
-	ShowTaskAreaRequirementCopyIcons       bool                    `json:"showTaskAreaRequirementCopyIcons"`
-	ShowTaskAreaProjectNameCopyIcons       bool                    `json:"showTaskAreaProjectNameCopyIcons"`
-	BlockedGitWriteBranches                []string                `json:"blockedGitWriteBranches"`
-	MeegleProjects                         []MeegleProjectConfig   `json:"meegleProjects"`
-	MeegleDefaultSprintProjectKey          *string                 `json:"meegleDefaultSprintProjectKey"`
-	MeegleExecutablePath                   *string                 `json:"meegleExecutablePath"`
-	CodexExecutablePath                    *string                 `json:"codexExecutablePath"`
-	CommandProxyURL                        *string                 `json:"commandProxyUrl"`
-	CommandProxyNoProxy                    *string                 `json:"commandProxyNoProxy"`
-	CommandProxyUsername                   *string                 `json:"commandProxyUsername"`
-	CommandProxyPassword                   *string                 `json:"commandProxyPassword"`
-	CommandProxyTargets                    []CommandProxyTarget    `json:"commandProxyTargets"`
-	GitExecutablePath                      *string                 `json:"gitExecutablePath"`
-
-	LarkExecutablePath                *string                        `json:"larkExecutablePath"`
-	RequirementMaterialsRoot          *string                        `json:"requirementMaterialsRoot"`
-	RequirementMaterialsSubdirectory  *string                        `json:"requirementMaterialsSubdirectory"`
-	RequirementMaterialsFeishuTarget  *string                        `json:"requirementMaterialsFeishuTarget"`
-	CodexPluginMarketplaceSources     []CodexPluginMarketplaceSource `json:"codexPluginMarketplaceSources"`
-	SkillSources                      []SkillSource                  `json:"skillSources"`
-	AIRequirementNamingEnabled        bool                           `json:"aiRequirementNamingEnabled"`
-	AIRequirementNamingPrewarmEnabled bool                           `json:"aiRequirementNamingPrewarmEnabled"`
-	AIRequirementNamingModel          string                         `json:"aiRequirementNamingModel"`
+	SchemaVersion                          string                         `json:"schemaVersion"`
+	TaskRoot                               *string                        `json:"taskRoot"`
+	DefaultBranchPrefix                    string                         `json:"defaultBranchPrefix"`
+	Repositories                           []RepositoryConfig             `json:"repositories"`
+	Groups                                 []GroupConfig                  `json:"groups"`
+	Theme                                  ThemePreference                `json:"theme"`
+	ToolVisibility                         ToolVisibilitySettings         `json:"toolVisibility"`
+	TagEnabled                             bool                           `json:"tagEnabled"`
+	TagHistoryMaxGroups                    int                            `json:"tagHistoryMaxGroups"`
+	AllowTaskTagTargetEditing              bool                           `json:"allowTaskTagTargetEditing"`
+	TerminalExecutable                     *string                        `json:"terminalExecutable"`
+	DevelopmentTools                       []DevelopmentToolConfig        `json:"developmentTools"`
+	DefaultDevelopmentTool                 DevelopmentToolType            `json:"defaultDevelopmentTool"`
+	AllowTemporaryDevelopmentToolSelection bool                           `json:"allowTemporaryDevelopmentToolSelection"`
+	DefaultWorkspaceToolIDs                []string                       `json:"defaultWorkspaceToolIds"`
+	ShowTaskDetailGitActionGroup           bool                           `json:"showTaskDetailGitActionGroup"`
+	ShowTaskDetailPathActionGroup          bool                           `json:"showTaskDetailPathActionGroup"`
+	ShowWorkspaceGitActionGroup            bool                           `json:"showWorkspaceGitActionGroup"`
+	ShowWorkspacePathActionGroup           bool                           `json:"showWorkspacePathActionGroup"`
+	ShowTaskAreaCopyIcons                  bool                           `json:"showTaskAreaCopyIcons"`
+	ShowTaskAreaBranchCopyIcons            bool                           `json:"showTaskAreaBranchCopyIcons"`
+	ShowTaskAreaRequirementCopyIcons       bool                           `json:"showTaskAreaRequirementCopyIcons"`
+	ShowTaskAreaProjectNameCopyIcons       bool                           `json:"showTaskAreaProjectNameCopyIcons"`
+	BlockedGitWriteBranches                []string                       `json:"blockedGitWriteBranches"`
+	MeegleProjects                         []MeegleProjectConfig          `json:"meegleProjects"`
+	MeegleDefaultSprintProjectKey          *string                        `json:"meegleDefaultSprintProjectKey"`
+	MeegleExecutablePath                   *string                        `json:"meegleExecutablePath"`
+	CodexExecutablePath                    *string                        `json:"codexExecutablePath"`
+	CommandProxyURL                        *string                        `json:"commandProxyUrl"`
+	CommandProxyNoProxy                    *string                        `json:"commandProxyNoProxy"`
+	CommandProxyUsername                   *string                        `json:"commandProxyUsername"`
+	CommandProxyPassword                   *string                        `json:"commandProxyPassword"`
+	CommandProxyTargets                    []CommandProxyTarget           `json:"commandProxyTargets"`
+	GitExecutablePath                      *string                        `json:"gitExecutablePath"`
+	GenbuExecutablePath                    *string                        `json:"genbuExecutablePath"`
+	GenbuExecutableAutoDetected            bool                           `json:"genbuExecutableAutoDetected"`
+	LarkExecutablePath                     *string                        `json:"larkExecutablePath"`
+	RequirementMaterialsRoot               *string                        `json:"requirementMaterialsRoot"`
+	RequirementMaterialsSubdirectory       *string                        `json:"requirementMaterialsSubdirectory"`
+	RequirementMaterialsFeishuTarget       *string                        `json:"requirementMaterialsFeishuTarget"`
+	CodexPluginMarketplaceSources          []CodexPluginMarketplaceSource `json:"codexPluginMarketplaceSources"`
+	SkillSources                           []SkillSource                  `json:"skillSources"`
+	AIRequirementNamingEnabled             bool                           `json:"aiRequirementNamingEnabled"`
+	AIRequirementNamingPrewarmEnabled      bool                           `json:"aiRequirementNamingPrewarmEnabled"`
+	AIRequirementNamingModel               string                         `json:"aiRequirementNamingModel"`
 }
 
 type RepositoryInfo struct {
@@ -263,26 +280,29 @@ const (
 )
 
 type ServiceWorkspace struct {
-	RepositoryID    string              `json:"repositoryId"`
-	ServiceName     string              `json:"serviceName"`
-	RepositoryPath  string              `json:"repositoryPath"`
-	WorktreePath    string              `json:"worktreePath"`
-	DevelopmentTool DevelopmentToolType `json:"developmentTool"`
-	Branch          string              `json:"branch"`
-	Health          WorkspaceHealth     `json:"health"`
-	Warnings        []string            `json:"warnings"`
-	GroupServiceID  string              `json:"groupServiceId"`
-	ModuleID        string              `json:"moduleId"`
-	ModuleName      string              `json:"moduleName"`
-	Strategy        WorkspaceStrategy   `json:"strategy"`
-	ModuleSource    TaskModuleSource    `json:"moduleSource"`
-	OriginURL       *string             `json:"originUrl"`
-	BaseRef         *string             `json:"baseRef"`
-	TargetBranch    *string             `json:"targetBranch"`
-
-	BranchCreatedByTask bool   `json:"branchCreatedByTask"`
-	ForceWorktreeAttach bool   `json:"forceWorktreeAttach"`
-	PushRemote          string `json:"pushRemote"`
+	RepositoryID        string              `json:"repositoryId"`
+	ServiceName         string              `json:"serviceName"`
+	RepositoryPath      string              `json:"repositoryPath"`
+	WorktreePath        string              `json:"worktreePath"`
+	DevelopmentTool     DevelopmentToolType `json:"developmentTool"`
+	Branch              string              `json:"branch"`
+	Health              WorkspaceHealth     `json:"health"`
+	Warnings            []string            `json:"warnings"`
+	GroupServiceID      string              `json:"groupServiceId"`
+	ModuleID            string              `json:"moduleId"`
+	ModuleName          string              `json:"moduleName"`
+	Strategy            WorkspaceStrategy   `json:"strategy"`
+	ModuleSource        TaskModuleSource    `json:"moduleSource"`
+	OriginURL           *string             `json:"originUrl"`
+	BaseRef             *string             `json:"baseRef"`
+	TargetBranch        *string             `json:"targetBranch"`
+	TagEnabled          bool                `json:"tagEnabled"`
+	TagMode             TagBuildMode        `json:"tagMode"`
+	TagTargetRef        *string             `json:"tagTargetRef"`
+	TagMessagePrefix    string              `json:"tagMessagePrefix"`
+	BranchCreatedByTask bool                `json:"branchCreatedByTask"`
+	ForceWorktreeAttach bool                `json:"forceWorktreeAttach"`
+	PushRemote          string              `json:"pushRemote"`
 }
 type AgentDocumentLayout string
 
@@ -327,7 +347,86 @@ type WorkspaceToolLaunch struct {
 	UpdatedAt string                    `json:"updatedAt"`
 	Message   *string                   `json:"message"`
 }
+type TagOperationState string
 
+const (
+	TagOperationCreated            TagOperationState = "CREATED"
+	TagOperationPreflightPassed    TagOperationState = "PREFLIGHT_PASSED"
+	TagOperationSourceBranchPushed TagOperationState = "SOURCE_BRANCH_PUSHED"
+	TagOperationTargetBranchPushed TagOperationState = "TARGET_BRANCH_PUSHED"
+	TagOperationLocalTagCreated    TagOperationState = "LOCAL_TAG_CREATED"
+	TagOperationTagPushed          TagOperationState = "TAG_PUSHED"
+	TagOperationSuccess            TagOperationState = "SUCCESS"
+	TagOperationConflict           TagOperationState = "CONFLICT"
+	TagOperationFailed             TagOperationState = "FAILED"
+	TagOperationPartial            TagOperationState = "PARTIAL"
+)
+
+type TagOperation struct {
+	OperationID    string              `json:"operationId"`
+	FolderName     string              `json:"folderName"`
+	ServiceName    string              `json:"serviceName"`
+	RepositoryID   string              `json:"repositoryId"`
+	SourceBranch   string              `json:"sourceBranch"`
+	TargetBranch   *string             `json:"targetBranch"`
+	Remote         string              `json:"remote"`
+	TagMode        TagBuildMode        `json:"tagMode"`
+	State          TagOperationState   `json:"state"`
+	CreatedAt      string              `json:"createdAt"`
+	UpdatedAt      string              `json:"updatedAt"`
+	SourceSHA      *string             `json:"sourceSha"`
+	TargetSHA      *string             `json:"targetSha"`
+	Tag            *string             `json:"tag"`
+	Message        *string             `json:"message"`
+	ConflictFiles  []string            `json:"conflictFiles"`
+	GroupServiceID string              `json:"groupServiceId"`
+	ModuleID       string              `json:"moduleId"`
+	GenbuStatus    GenbuTagProbeStatus `json:"genbuStatus"`
+	BatchID        *string             `json:"batchId"`
+}
+type GenbuStageStatus string
+
+const (
+	GenbuInitial  GenbuStageStatus = "INITIAL"
+	GenbuBuilding GenbuStageStatus = "BUILDING"
+	GenbuSuccess  GenbuStageStatus = "SUCCESS"
+	GenbuFailed   GenbuStageStatus = "FAILED"
+	GenbuUnknown  GenbuStageStatus = "UNKNOWN"
+)
+
+type GenbuTagProbeStatus struct {
+	Build                         GenbuStageStatus `json:"build"`
+	UAT                           GenbuStageStatus `json:"uat"`
+	Production                    GenbuStageStatus `json:"production"`
+	NotFound                      bool             `json:"notFound"`
+	BuiltCompletedAt              *string          `json:"builtCompletedAt"`
+	ReleasedCompletedAt           *string          `json:"releasedCompletedAt"`
+	ProductionReleasedCompletedAt *string          `json:"productionReleasedCompletedAt"`
+	CheckedAt                     *string          `json:"checkedAt"`
+	FailureReason                 *string          `json:"failureReason"`
+	StoppedByNewerRelease         bool             `json:"stoppedByNewerRelease"`
+}
+type TagBuildHistoryEntry struct {
+	OperationID  string            `json:"operationId"`
+	Timestamp    string            `json:"timestamp"`
+	FolderName   string            `json:"folderName"`
+	ServiceName  string            `json:"serviceName"`
+	SourceBranch string            `json:"sourceBranch"`
+	TargetBranch *string           `json:"targetBranch"`
+	TagMode      TagBuildMode      `json:"tagMode"`
+	Tag          *string           `json:"tag"`
+	State        TagOperationState `json:"state"`
+	Message      *string           `json:"message"`
+	BatchID      *string           `json:"batchId"`
+}
+type TagHistoryItem struct {
+	GroupID    string         `json:"groupId"`
+	BatchID    *string        `json:"batchId"`
+	FolderName string         `json:"folderName"`
+	CreatedAt  string         `json:"createdAt"`
+	UpdatedAt  string         `json:"updatedAt"`
+	Operations []TagOperation `json:"operations"`
+}
 type AgentTaskTemplate struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
@@ -369,7 +468,7 @@ func DefaultCommandProxyTargets(endpoint *string) []CommandProxyTarget {
 
 func DefaultAppConfig() AppConfig {
 	endpoint := DefaultCommandProxyURL
-	return AppConfig{SchemaVersion: CurrentAppConfigSchemaVersion, DefaultBranchPrefix: "", Repositories: []RepositoryConfig{}, Groups: []GroupConfig{{ID: DefaultGroupID, Name: DefaultGroupName, Services: []GroupServiceConfig{}}}, Theme: ThemeSystem, ToolVisibility: ToolVisibilitySettings{JSON: true, DateTime: true, TextDiff: true, KillPort: false}, DevelopmentTools: []DevelopmentToolConfig{}, DefaultDevelopmentTool: DevelopmentToolIntelliJIdea, DefaultWorkspaceToolIDs: []string{}, BlockedGitWriteBranches: []string{"master", "main"}, MeegleProjects: []MeegleProjectConfig{}, CommandProxyURL: &endpoint, CommandProxyTargets: DefaultCommandProxyTargets(&endpoint), CodexPluginMarketplaceSources: []CodexPluginMarketplaceSource{}, SkillSources: []SkillSource{}, AIRequirementNamingEnabled: true, AIRequirementNamingPrewarmEnabled: true, AIRequirementNamingModel: DefaultAIRequirementNamingModel}
+	return AppConfig{SchemaVersion: CurrentAppConfigSchemaVersion, DefaultBranchPrefix: "", Repositories: []RepositoryConfig{}, Groups: []GroupConfig{{ID: DefaultGroupID, Name: DefaultGroupName, TagEnabled: true, Services: []GroupServiceConfig{}}}, Theme: ThemeSystem, ToolVisibility: ToolVisibilitySettings{JSON: true, DateTime: true, TextDiff: true, KillPort: false}, TagEnabled: true, TagHistoryMaxGroups: DefaultTagHistoryMaxGroups, DevelopmentTools: []DevelopmentToolConfig{}, DefaultDevelopmentTool: DevelopmentToolIntelliJIdea, DefaultWorkspaceToolIDs: []string{}, BlockedGitWriteBranches: []string{"master", "main"}, MeegleProjects: []MeegleProjectConfig{}, CommandProxyURL: &endpoint, CommandProxyTargets: DefaultCommandProxyTargets(&endpoint), CodexPluginMarketplaceSources: []CodexPluginMarketplaceSource{}, SkillSources: []SkillSource{}, AIRequirementNamingEnabled: true, AIRequirementNamingPrewarmEnabled: true, AIRequirementNamingModel: DefaultAIRequirementNamingModel}
 }
 
 const DefaultAIRequirementNamingModel = "gpt-6-luna"
@@ -416,4 +515,19 @@ func (s GroupServiceConfig) ResolvedModule(module ServiceModuleConfig) ServiceMo
 	branch := s.EffectiveMasterBranch(module)
 	module.MasterBranch = &branch
 	return module
+}
+
+func (s GroupServiceConfig) EffectiveTagTargetRef(module ServiceModuleConfig) *string {
+	if !module.TagEnabled || module.TagMode != TagBuildMergeToTargetBranch {
+		return nil
+	}
+	if module.TagTargetRef != nil {
+		value := *module.TagTargetRef
+		return &value
+	}
+	if s.TestTagBaselineRef == "" {
+		return nil
+	}
+	value := s.TestTagBaselineRef
+	return &value
 }

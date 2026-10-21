@@ -13,10 +13,19 @@ type confirmationDialogButton struct {
 	primary bool
 }
 
+type confirmationDialogField struct {
+	Label, Value string
+}
+
 type confirmationDialogState struct {
 	Title        string
 	Message      string
 	Detail       string
+	Summary      []confirmationDialogField
+	Notices      []string
+	FoldDetail   bool
+	DetailOpen   bool
+	Current      func() bool
 	Buttons      []confirmationDialogButton
 	DefaultIndex int
 	CancelIndex  int
@@ -70,7 +79,7 @@ func (s *app) renderConfirmationDialog(c *ui.Context, p palette) {
 	if state == nil {
 		return
 	}
-	if state.OwnerKey != s.confirmationOwnerKey() {
+	if state.OwnerKey != s.confirmationOwnerKey() || state.Current != nil && !state.Current() {
 		s.finishConfirmationDialog(state, state.CancelIndex)
 		return
 	}
@@ -82,9 +91,29 @@ func (s *app) renderConfirmationDialog(c *ui.Context, p palette) {
 		panel.Children(func() {
 			label(c, state.Title, 18, p.text).FontWeight(600).Wrap().Shrink(0)
 			ui.Scroll(c).FillWidth().MaxHeight(max(1, maxHeight-180)).MinHeight(0).Children(func() {
-				ui.Column(c).Gap(10).Children(func() {
-					label(c, state.Message, 13, p.text).Wrap()
-					if state.Detail != "" {
+				ui.Column(c).FillWidth().MinWidth(0).Gap(10).Children(func() {
+					if state.Message != "" {
+						label(c, state.Message, 13, p.text).Wrap()
+					}
+					for _, field := range state.Summary {
+						ui.Row(c).FillWidth().MinWidth(0).Gap(10).AlignItems(ui.Start).Children(func() {
+							label(c, field.Label, 12, p.muted).Width(48).Shrink(0)
+							label(c, field.Value, 12, p.text).Grow(1).MinWidth(0).Wrap().Selectable()
+						})
+					}
+					for _, notice := range state.Notices {
+						label(c, notice, 12, p.text).Wrap()
+					}
+					if state.Detail != "" && state.FoldDetail {
+						details := ui.CollapsibleBase(c.Key("confirmation-details"), &state.DetailOpen)
+						details.Trigger.AlignSelf(ui.Start).Height(28).Padding(0, 4).Gap(6).AlignItems(ui.Center).Label("详细信息").Children(func() {
+							icon(c, map[bool]string{true: "chevron", false: "chevron-right"}[state.DetailOpen], 13, p.muted)
+							label(c, "详细信息", 12, p.text).NoWrap()
+						})
+						details.Panel(func() {
+							label(c, state.Detail, 11, p.muted).FillWidth().MinWidth(0).Wrap().Selectable()
+						}).FillWidth().MinWidth(0).Padding(10).Radius(8).Background(p.soft)
+					} else if state.Detail != "" {
 						ui.Box(c).FillWidth().Padding(10).Radius(8).Background(p.soft).Children(func() {
 							label(c, state.Detail, 11, p.muted).Wrap().Selectable()
 						})
@@ -141,6 +170,9 @@ func confirmationDialogButtonUI(c *ui.Context, key string, button confirmationDi
 func (s *app) finishConfirmationDialog(state *confirmationDialogState, index int) {
 	if s == nil || state == nil || s.confirmationDialog != state {
 		return
+	}
+	if index != state.CancelIndex && state.Current != nil && !state.Current() {
+		index = state.CancelIndex
 	}
 	state.Open = false
 	result := state.Result

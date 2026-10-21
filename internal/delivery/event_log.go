@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"silverwing-go/internal/domain"
 )
 
 type applicationEvent struct {
@@ -53,5 +55,37 @@ func (s *Service) recordApplicationEvent(level, name, message string, metadata m
 			err = closeErr
 		}
 		return err
+	})
+}
+
+func (s *Service) recordTagHistory(ctx context.Context, taskDirectory string, operation domain.TagOperation) error {
+	if err := s.store.appendHistory(ctx, taskDirectory, operation); err != nil {
+		return err
+	}
+	metadata := map[string]string{
+		"operationId": operation.OperationID,
+		"folderName":  operation.FolderName,
+		"service":     operation.ServiceName,
+		"state":       string(operation.State),
+		"tag":         value(operation.Tag),
+	}
+	if operation.State == domain.TagOperationSuccess {
+		s.recordApplicationEvent("INFO", "tag.build.completed", "Tag构建成功", metadata)
+	} else {
+		message := value(operation.Message)
+		if message == "" {
+			message = "Tag构建未成功"
+		}
+		s.recordApplicationEvent("ERROR", "tag.build.completed", message, metadata)
+	}
+	return nil
+}
+
+func (s *Service) recordTagBuildStarted(operation domain.TagOperation) {
+	s.recordApplicationEvent("INFO", "tag.build.started", "开始Tag构建", map[string]string{
+		"operationId": operation.OperationID,
+		"folderName":  operation.FolderName,
+		"service":     operation.ServiceName,
+		"batchId":     value(operation.BatchID),
 	})
 }

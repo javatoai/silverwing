@@ -34,7 +34,7 @@ func newWorkspaceCopyTooltipFixture(t *testing.T, long bool) *workspaceCopyToolt
 		Record: domain.ServiceWorkspace{ServiceName: name, ModuleName: name}}
 	taskItem := task{id: "copy-task", groupID: "default", workspaces: []application.Workspace{w}}
 	s := newApp(nil, Options{CapturePath: "isolated-workspace-copy-tooltip"})
-	s.loading, s.tasks, s.configJSON = false, []task{taskItem}, `{}`
+	s.loading, s.tasks, s.configJSON = false, []task{taskItem}, `{"tagEnabled":false}`
 	s.workspaceGit = &workspaceGitState{health: map[string]domain.WorkspaceGitHealth{
 		workspaceHealthPathKey(path): {State: domain.WorkspaceGitReady, ActualBranch: &branch, PushState: domain.LocalPushPushed},
 	}}

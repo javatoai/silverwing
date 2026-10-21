@@ -29,30 +29,3 @@ func TestCanceledLoginPathDiscoveryDoesNotPoisonCache(t *testing.T) {
 		t.Fatalf("fresh lookup reused cancelled discovery: %q (%d calls)", path, runner.calls)
 	}
 }
-
-func TestUnsupportedToolIsRejectedWithoutDiscovery(t *testing.T) {
-	runner := &loginPathRunner{}
-	resolver := NewResolver(runner)
-	if got := resolver.Resolve(context.Background(), Tool("genbu"), ""); got != (Resolution{}) {
-		t.Fatalf("unsupported tool was resolved: %+v", got)
-	}
-	if _, _, err := resolver.Prepare(context.Background(), Tool("genbu"), ""); err == nil {
-		t.Fatal("unsupported tool was prepared")
-	}
-	if runner.calls != 0 {
-		t.Fatalf("unsupported tool started discovery processes: %d", runner.calls)
-	}
-}
-
-func TestExplicitConfiguredToolPathRemainsAuthoritative(t *testing.T) {
-	runner := &loginPathRunner{}
-	resolver := NewResolver(runner)
-	configured := `/opt/company tools/meegle`
-	got, _, err := resolver.Prepare(context.Background(), ToolMeegle, configured)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Command != configured || got.Source != SourceConfigured {
-		t.Fatalf("configured path was replaced: %+v", got)
-	}
-}

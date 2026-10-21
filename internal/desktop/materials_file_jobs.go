@@ -79,7 +79,7 @@ func (s *app) materialsFileScopeMatches(scope materialsFileJobScope) bool {
 	return valid && materialsFileScopeKey(current) == materialsFileScopeKey(scope)
 }
 
-// This feature's mutation occupies its controls. Ordinary Git work retains
+// This feature's mutation occupies its controls. Ordinary Git/Tag work retains
 // its own global operation ownership while materials requests proceed.
 func (s *app) materialsFileJobsActive() bool {
 	state := s.materialsFileJobs

@@ -298,7 +298,16 @@ func (s *app) workspaceActions(c *ui.Context, p palette, t task, w application.W
 				}
 			})
 		}
-
+		if s.workspaceCanBuildTag(t, w) {
+			iconGroup(c, p, func() {
+				if iconButtonDisabled(c, key+"-tag", "tag", workspaceTagActionLabel(w), p, s.tagWorkspaceBusy(t, w)).Clicked() {
+					s.beginWorkspaceTagBuild(t, w)
+				}
+				if s.workspaceTagTargetEnabled(t, w) && iconButtonDisabled(c, key+"-tag-target", "branch", "设置测试目标分支", p, s.busy).Clicked() {
+					s.beginTagTargetEdit(t, w)
+				}
+			})
+		}
 		iconGroup(c, p, func() {
 			if showAddModule && iconButtonDisabled(c, key+"-add-module", "plus", "添加模块", p, s.busy || t.archived).Clicked() {
 				s.openTaskAppendModules(t, w.ServiceID)

@@ -21,7 +21,7 @@ func main() {
 	dark := flag.Bool("dark", false, "start with the dark theme")
 	width := flag.Int("width", 0, "initial window width; zero restores the saved size")
 	height := flag.Int("height", 0, "initial window height; zero restores the saved size")
-	tab := flag.Int("tab", 0, "initial task tab: 0 detail, 1 materials, 2 requirement, 3 notes")
+	tab := flag.Int("tab", 0, "initial task tab: 0 detail, 1 materials, 2 requirement, 3 notes, 4 Tag")
 	capture := flag.String("capture", "", "write a PNG capture of the native window")
 	captureOnly := flag.Bool("capture-only", false, "exit after writing the requested capture")
 	flag.Parse()

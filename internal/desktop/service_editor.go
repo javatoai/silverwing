@@ -29,7 +29,7 @@ type serviceEditorState struct {
 	initialModules, initialCopies        []string
 	initialCommands                      []string
 	expandedModules                      map[string]bool
-	expandedCommands                     map[string]bool
+	expandedTags, expandedCommands       map[string]bool
 	error                                string
 	saving                               bool
 	remotes, branches                    []string
@@ -54,10 +54,10 @@ type serviceEditorState struct {
 }
 
 type serviceModuleDraft struct {
-	raw                              map[string]any
-	id, name, strategy, masterBranch string
-
-	commands []workspaceCommandDraft
+	raw                                     map[string]any
+	id, name, strategy, masterBranch        string
+	tagMode, tagTargetRef, tagMessagePrefix string
+	commands                                []workspaceCommandDraft
 }
 
 type workspaceCommandDraft struct {
@@ -77,7 +77,7 @@ type bootstrapCommandDraft struct {
 }
 
 var serviceEditorSections = []struct{ id, title string }{
-	{"basic", "基本信息"}, {"tools", "开发工具"}, {"git", "Git"},
+	{"basic", "基本信息"}, {"tools", "开发工具"}, {"git", "Git"}, {"genbu", "Genbu"},
 	{"modules", "工作区模块"}, {"copies", "复制规则"}, {"commands", "初始化命令"},
 }
 
@@ -86,7 +86,7 @@ func (s *app) openServiceEditor(groupID, serviceID, section string) {
 	s.clearServiceEditorInputs()
 	state := &serviceEditorState{session: fmt.Sprintf("%x", time.Now().UTC().UnixNano()), section: section, groupID: groupID, serviceID: serviceID,
 		initialText: make(map[string]string), initialBools: make(map[string]bool), expandedModules: make(map[string]bool),
-		expandedCommands: make(map[string]bool), copiesMode: "form", commandsMode: "form"}
+		expandedTags: make(map[string]bool), expandedCommands: make(map[string]bool), copiesMode: "form", commandsMode: "form"}
 	state.branchChoices = make(map[string][]string)
 	state.branchChoicesLoaded = make(map[string]bool)
 	state.branchChoicesFailed = make(map[string]bool)
@@ -95,10 +95,10 @@ func (s *app) openServiceEditor(groupID, serviceID, section string) {
 	}
 	state.service = map[string]any{
 		"id": serviceID, "repositoryId": "", "displayName": "", "enabled": true,
-		"masterBranch":    "origin/master",
-		"developmentTool": "INTELLIJ_IDEA",
-		"modules": []any{map[string]any{"id": "default", "name": "default", "strategy": "STANDARD_WORKTREE",
-			"customCommands": []any{}}},
+		"genbuProbeEnabled": false, "genbuServiceName": "", "masterBranch": "origin/master",
+		"testTagBaselineRef": "origin/release/test", "developmentTool": "INTELLIJ_IDEA",
+		"modules": []any{map[string]any{"id": "default", "name": "default", "strategy": "STANDARD_WORKTREE", "tagEnabled": true,
+			"tagMode": "MERGE_TO_TARGET_BRANCH", "tagMessagePrefix": "Tag", "customCommands": []any{}}},
 		"bootstrap": map[string]any{"copyRules": []any{}, "commands": []any{}}, "commitMessageTemplate": "",
 	}
 	if serviceID != "" {
@@ -207,7 +207,9 @@ func serviceModuleDrafts(value any) []serviceModuleDraft {
 			continue
 		}
 		config := cloneConfigMap(raw)
-
+		if _, exists := config["tagEnabled"]; !exists {
+			config["tagEnabled"] = true
+		}
 		commands := make([]workspaceCommandDraft, 0)
 		for _, command := range mapsFromData(raw["customCommands"]) {
 			commands = append(commands, workspaceCommandFromMap(command))
@@ -215,16 +217,16 @@ func serviceModuleDrafts(value any) []serviceModuleDraft {
 		drafts = append(drafts, serviceModuleDraft{
 			raw: config, id: id, name: firstNonEmpty(mapString(raw, "name"), "default"),
 			strategy:     firstNonEmpty(mapString(raw, "strategy"), "STANDARD_WORKTREE"),
-			masterBranch: mapString(raw, "masterBranch"),
-			commands:     commands,
+			masterBranch: mapString(raw, "masterBranch"), tagMode: firstNonEmpty(mapString(raw, "tagMode"), "MERGE_TO_TARGET_BRANCH"),
+			tagTargetRef: mapString(raw, "tagTargetRef"), tagMessagePrefix: firstNonEmpty(mapString(raw, "tagMessagePrefix"), "Tag"), commands: commands,
 		})
 	}
 	return drafts
 }
 
 func newServiceModuleDraft(id, name, strategy string) serviceModuleDraft {
-	return serviceModuleDraft{raw: map[string]any{}, id: id, name: name, strategy: strategy,
-		commands: []workspaceCommandDraft{}}
+	return serviceModuleDraft{raw: map[string]any{"tagEnabled": strategy == "STANDARD_WORKTREE"}, id: id, name: name, strategy: strategy,
+		tagMode: "MERGE_TO_TARGET_BRANCH", tagMessagePrefix: "Tag", commands: []workspaceCommandDraft{}}
 }
 
 func workspaceCommandFromMap(raw map[string]any) workspaceCommandDraft {
@@ -594,7 +596,8 @@ func (s *app) renderServiceEditorSectionContent(c *ui.Context, p palette, state 
 		s.renderServiceEditorTools(c, p, state)
 	case "git":
 		s.renderServiceEditorGit(c, p, state)
-
+	case "genbu":
+		s.renderServiceEditorGenbu(c, p, state)
 	case "modules":
 		s.renderServiceEditorModules(c, p, state)
 	case "copies":
@@ -723,7 +726,7 @@ func (s *app) renderServiceEditorGit(c *ui.Context, p palette, state *serviceEdi
 	label(c, "仓库远程地址", 11, p.muted)
 	s.renderServiceRemoteAddresses(c, p, state)
 	s.serviceEditorBranchField(c, p, state, "masterBranch", "主分支", mapString(state.service, "masterBranch"), "git-master")
-
+	s.serviceEditorBranchField(c, p, state, "testTagBaselineRef", "测试 Tag 默认目标", mapString(state.service, "testTagBaselineRef"), "git-test-tag")
 	s.serviceEditorField(c, p, "commitMessageTemplate", "提交信息模板", mapString(state.service, "commitMessageTemplate"), false)
 }
 
@@ -827,6 +830,14 @@ func gitRemoteBrowserURL(raw string) string {
 	return ""
 }
 
+func (s *app) renderServiceEditorGenbu(c *ui.Context, p palette, state *serviceEditorState) {
+	sectionHeading(c, p, "tag", "Genbu", "只读取此服务的 Tag 构建与发布状态")
+	s.serviceEditorSwitch(c, p, "genbuProbeEnabled", "启用 Genbu 探测", mapBool(state.service, "genbuProbeEnabled", false))
+	if *s.serviceEditorBool("genbuProbeEnabled", mapBool(state.service, "genbuProbeEnabled", false)) {
+		s.serviceEditorField(c, p, "genbuServiceName", "Genbu 服务名", firstNonEmpty(mapString(state.service, "genbuServiceName"), mapString(state.service, "displayName")), false)
+	}
+}
+
 func (s *app) renderServiceEditorModules(c *ui.Context, p palette, state *serviceEditorState) {
 	sectionHeading(c, p, "code", "工作区模块", "模块保存到服务配置。删除和新增只在点击保存后生效。")
 	for index := range state.modules {
@@ -864,6 +875,7 @@ func (s *app) renderServiceModuleCard(c *ui.Context, p palette, state *serviceEd
 			if len(state.modules) > 1 && action(c, "service-editor-module-remove-"+module.id, "delete", "删除模块", p, false) {
 				state.modules = removeServiceModule(state.modules, module.id)
 				delete(state.expandedModules, module.id)
+				delete(state.expandedTags, module.id)
 				delete(state.expandedCommands, module.id)
 			}
 		})
@@ -886,6 +898,42 @@ func (s *app) renderServiceModuleCard(c *ui.Context, p palette, state *serviceEd
 			s.serviceEditorBranchField(c, p, state, "module:"+module.id+":masterBranch", "模块主分支", module.masterBranch, "module-branch-"+module.id)
 		} else {
 			label(c, "当前继承："+*s.serviceEditorText("masterBranch", mapString(state.service, "masterBranch")), 10, p.muted)
+		}
+		if s.configBool("tagEnabled", false) {
+			tagEnabledInitial := mapBool(module.raw, "tagEnabled", module.strategy == "STANDARD_WORKTREE")
+			if action(c, "service-editor-tag-toggle-"+module.id, "tag", fmt.Sprintf("测试 Tag · %s %s", map[bool]string{true: "已启用", false: "已关闭"}[*s.serviceEditorBool("module:"+module.id+":tagEnabled", tagEnabledInitial)], map[bool]string{true: "▴", false: "▾"}[state.expandedTags[module.id]]), p, false) {
+				state.expandedTags[module.id] = !state.expandedTags[module.id]
+			}
+			if state.expandedTags[module.id] {
+				s.serviceEditorSwitch(c, p, "module:"+module.id+":tagEnabled", "启用测试 Tag", tagEnabledInitial)
+				tagEnabled := s.serviceEditorBool("module:"+module.id+":tagEnabled", tagEnabledInitial)
+				if *tagEnabled {
+					ui.Column(c).Gap(6).Children(func() {
+						label(c, "Tag 模式", 11, p.muted)
+						ui.Row(c).FillWidth().Wrap().Gap(6).Children(func() {
+							for _, mode := range []string{"MERGE_TO_TARGET_BRANCH", "CURRENT_BRANCH"} {
+								value := mode
+								title := map[string]string{"MERGE_TO_TARGET_BRANCH": "合并到目标分支后构建", "CURRENT_BRANCH": "当前分支直接构建"}[value]
+								s.settingsChoice(c, p, "service-editor-tag-mode-"+module.id+"-"+value, title, *s.serviceEditorModuleText(module, "tagMode", module.tagMode) == value, func() { *s.serviceEditorModuleText(module, "tagMode", module.tagMode) = value })
+							}
+						})
+					})
+					currentMode := *s.serviceEditorModuleText(module, "tagMode", module.tagMode)
+					if currentMode == "MERGE_TO_TARGET_BRANCH" {
+						inheritTarget := s.serviceEditorBool("module:"+module.id+":inherit-tag-target", module.tagTargetRef == "")
+						ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+							label(c, "继承服务 Tag 目标", 11, p.text).Grow(1)
+							ui.Switch(c.Key("service-editor-inherit-tag-"+module.id), inheritTarget)
+						})
+						if *inheritTarget {
+							label(c, "当前继承："+*s.serviceEditorText("testTagBaselineRef", mapString(state.service, "testTagBaselineRef")), 10, p.muted)
+						} else {
+							s.serviceEditorBranchField(c, p, state, "module:"+module.id+":tagTargetRef", "Tag 目标分支", module.tagTargetRef, "module-tag-"+module.id)
+						}
+					}
+					s.serviceEditorModuleField(c, p, module, "tagMessagePrefix", "Tag 信息前缀", module.tagMessagePrefix, false)
+				}
+			}
 		}
 		ui.Divider(c)
 		if action(c, "service-editor-command-toggle-"+module.id, "terminal", fmt.Sprintf("快捷命令 · %d %s", len(module.commands), map[bool]string{true: "▴", false: "▾"}[state.expandedCommands[module.id]]), p, false) {
@@ -1575,18 +1623,26 @@ func (s *app) buildServiceEditorConfig() (map[string]any, error) {
 	repositoryID := strings.TrimSpace(*s.serviceEditorText("repositoryId", mapString(state.service, "repositoryId")))
 	name := strings.TrimSpace(*s.serviceEditorText("name", mapString(state.service, "displayName")))
 	masterBranch := strings.TrimSpace(*s.serviceEditorText("masterBranch", mapString(state.service, "masterBranch")))
-
+	testTagBaselineRef := strings.TrimSpace(*s.serviceEditorText("testTagBaselineRef", mapString(state.service, "testTagBaselineRef")))
 	if serviceID == "" || groupID == "" || repositoryID == "" || name == "" {
 		return nil, fmt.Errorf("项目组、服务 ID、名称和仓库均不能为空")
 	}
 	if masterBranch == "" || !validRemoteBranch(masterBranch) {
 		return nil, fmt.Errorf("主分支必须是 remote/branch 格式")
 	}
+	if testTagBaselineRef == "" || !validRemoteBranch(testTagBaselineRef) {
+		return nil, fmt.Errorf("测试 Tag 默认目标必须是 remote/branch 格式")
+	}
 	service["id"], service["repositoryId"], service["displayName"] = serviceID, repositoryID, name
-	service["masterBranch"] = masterBranch
+	service["masterBranch"], service["testTagBaselineRef"] = masterBranch, testTagBaselineRef
 	service["enabled"] = *s.serviceEditorBool("enabled", mapBool(state.service, "enabled", true))
 	service["developmentTool"] = firstNonEmpty(*s.serviceEditorText("developmentTool", mapString(state.service, "developmentTool")), "INTELLIJ_IDEA")
-
+	service["genbuProbeEnabled"] = *s.serviceEditorBool("genbuProbeEnabled", mapBool(state.service, "genbuProbeEnabled", false))
+	genbuName := strings.TrimSpace(*s.serviceEditorText("genbuServiceName", firstNonEmpty(mapString(state.service, "genbuServiceName"), name)))
+	if *s.serviceEditorBool("genbuProbeEnabled", mapBool(state.service, "genbuProbeEnabled", false)) && genbuName == "" {
+		return nil, fmt.Errorf("启用 Genbu 探测时必须填写 Genbu 服务名")
+	}
+	service["genbuServiceName"] = genbuName
 	service["commitMessageTemplate"] = *s.serviceEditorText("commitMessageTemplate", mapString(state.service, "commitMessageTemplate"))
 	modules := make([]any, 0, len(state.modules))
 	if len(state.modules) == 0 {
@@ -1639,6 +1695,22 @@ func (s *app) buildServiceEditorConfig() (map[string]any, error) {
 				return nil, fmt.Errorf("模块 %s 主分支必须是 remote/branch 格式", name)
 			}
 			module["masterBranch"] = branch
+		}
+		tagEnabled := *s.serviceEditorBool("module:"+id+":tagEnabled", mapBool(draft.raw, "tagEnabled", strategy == "STANDARD_WORKTREE"))
+		tagMode := *s.serviceEditorModuleText(valueModule(state.modules, id), "tagMode", draft.tagMode)
+		if tagMode != "MERGE_TO_TARGET_BRANCH" && tagMode != "CURRENT_BRANCH" {
+			return nil, fmt.Errorf("模块 %s 的 Tag 模式无效", name)
+		}
+		module["tagEnabled"], module["tagMode"] = tagEnabled, tagMode
+		module["tagMessagePrefix"] = strings.TrimSpace(*s.serviceEditorModuleText(valueModule(state.modules, id), "tagMessagePrefix", draft.tagMessagePrefix))
+		if tagMode == "CURRENT_BRANCH" || *s.serviceEditorBool("module:"+id+":inherit-tag-target", draft.tagTargetRef == "") {
+			module["tagTargetRef"] = nil
+		} else {
+			branch := strings.TrimSpace(*s.serviceEditorText("module:"+id+":tagTargetRef", draft.tagTargetRef))
+			if !validRemoteBranch(branch) {
+				return nil, fmt.Errorf("模块 %s Tag 目标必须是 remote/branch 格式", name)
+			}
+			module["tagTargetRef"] = branch
 		}
 		commands := make([]any, 0, len(draft.commands))
 		for _, command := range draft.commands {

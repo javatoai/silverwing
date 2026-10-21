@@ -26,8 +26,8 @@ type Snapshot struct {
 	Services     []Service
 	Groups       []Group
 	Skills       []Skill
-
-	ConfigJSON string
+	TagHistory   []TagRecord
+	ConfigJSON   string
 	// Nil means the recovery state could not be read; it is not absence.
 	TaskRootMigrationPending *bool
 	Theme                    string
@@ -56,14 +56,45 @@ type Service struct {
 	Modules                                                 []Module
 }
 type Module struct {
-	ID, Name, MasterBranch, Strategy string
+	ID, Name, MasterBranch, Strategy, TagTargetRef string
+	TagEnabled                                     bool
 }
 type Group struct {
 	ID, Name   string
 	ServiceIDs []string
 }
 type Skill struct{ Name, Description, Path, Source string }
+type TagRecord struct {
+	ID              string                     `json:"id"`
+	TaskID          string                     `json:"taskId"`
+	FolderName      string                     `json:"folderName"`
+	ServiceID       string                     `json:"serviceId"`
+	ServiceName     string                     `json:"serviceName"`
+	ModuleID        string                     `json:"moduleId"`
+	BatchID         string                     `json:"batchId"`
+	CreatedAt       string                     `json:"createdAt"`
+	SourceBranch    string                     `json:"sourceBranch"`
+	TargetBranch    string                     `json:"targetBranch"`
+	Remote          string                     `json:"remote"`
+	Tag             string                     `json:"tag"`
+	State           string                     `json:"state"`
+	RetryKind       string                     `json:"retryKind"`
+	Updated         string                     `json:"updated"`
+	Detail          string                     `json:"detail"`
+	ConflictSummary string                     `json:"conflictSummary"`
+	ConflictFiles   []string                   `json:"conflictFiles"`
+	Guidance        string                     `json:"guidance"`
+	GenbuStatus     domain.GenbuTagProbeStatus `json:"genbuStatus"`
+}
 
+type TagHistoryMutationResult struct {
+	Deleted int         `json:"deleted"`
+	Records []TagRecord `json:"records"`
+}
+type TagWorkspaceCheck struct {
+	Clean   bool     `json:"clean"`
+	Changes []string `json:"changes"`
+}
 type Document struct {
 	Path     string     `json:"path"`
 	Name     string     `json:"name"`
@@ -114,6 +145,8 @@ type ActionResult struct {
 // document.trash, document.copy, document.open, document.reveal,
 // instructions.read, instructions.save, requirements.refresh, requirements.list,
 // requirements.read, requirements.comments, requirements.comment, materials.sync,
+// tag.build, tag.status, tag.history, tag.genbu.refresh, tag.retry, tag.workspace-check,
 // skills.refresh, skills.install, skills.remove, codex.extensions, codex.run,
 // tool.json, tool.time, tool.diff, tool.ports, tool.port-stop,
 // system.open, system.reveal, system.logs, system.terminal, system.ide, diagnostics.export.
+// production.* actions manage service-scoped release batches independently of task Tag history.

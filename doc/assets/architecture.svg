@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 940" role="img" aria-labelledby="title desc">
+  <title id="title">Silverwing Go 与 MyGO 技术架构</title>
+  <desc id="desc">架构示意图：MyGO 桌面界面在同一进程中通过 Snapshot 和 Dispatch 调用 application，再连接 domain 及工作区、资料、编辑器、媒体、任务操作和集成模块。storage 管理 home 配置和任务 manifest；executable 与 process 适配外部 Git、Codex、Meegle 和飞书 CLI。主路径不经过 HTTP、JVM 或 WebView。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto"><path d="M1 1 L10 6 L1 11 Z" fill="#547A9D"/></marker>
+    <marker id="arrow-cyan" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto"><path d="M1 1 L10 6 L1 11 Z" fill="#138A9B"/></marker>
+  </defs>
+  <rect width="1400" height="940" fill="#F4F8FC"/>
+  <text x="70" y="76" fill="#173858" font-size="38" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">Silverwing 技术架构与职责边界</text>
+  <text x="70" y="118" fill="#526B82" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">原生桌面主路径在单一进程中完成；团队工具通过本机外部 CLI 接入。</text>
+  <rect x="1024" y="48" width="306" height="48" rx="24" fill="#E7EEF6"/>
+  <text x="1177" y="80" text-anchor="middle" fill="#486580" font-size="22" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">结构示意 · 非界面截图</text>
+
+  <rect x="60" y="160" width="355" height="135" rx="20" fill="#FFFFFF" stroke="#8DAECC" stroke-width="2"/>
+  <rect x="60" y="160" width="355" height="12" rx="6" fill="#3375B8"/>
+  <text x="92" y="212" fill="#173858" font-size="27" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">MyGO UI / desktop</text>
+  <text x="92" y="252" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">窗口、输入与界面状态</text>
+  <text x="92" y="282" fill="#526B82" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">原生桌面绘制</text>
+
+  <path d="M423 226 H516" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="525" y="160" width="355" height="135" rx="20" fill="#FFFFFF" stroke="#8DAECC" stroke-width="2"/>
+  <rect x="525" y="160" width="355" height="12" rx="6" fill="#3375B8"/>
+  <text x="557" y="212" fill="#173858" font-size="27" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">application</text>
+  <text x="557" y="252" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">Snapshot 读取界面状态</text>
+  <text x="557" y="282" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">Dispatch 协调用户操作</text>
+
+  <path d="M888 226 H981" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="990" y="160" width="350" height="135" rx="20" fill="#FFFFFF" stroke="#8DAECC" stroke-width="2"/>
+  <rect x="990" y="160" width="350" height="12" rx="6" fill="#3375B8"/>
+  <text x="1022" y="212" fill="#173858" font-size="27" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">domain</text>
+  <text x="1022" y="252" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">持久模型、枚举与业务规则</text>
+  <text x="1022" y="282" fill="#526B82" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">校验跨模块约束</text>
+
+  <path d="M702 296 V321" fill="none" stroke="#547A9D" stroke-width="3"/>
+  <path d="M139 321 H1261" fill="none" stroke="#547A9D" stroke-width="3"/>
+  <path d="M139 321 V337" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+  <path d="M326 321 V337" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+  <path d="M513 321 V337" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+  <path d="M700 321 V337" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+  <path d="M887 321 V337" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+  <path d="M1074 321 V337" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+  <path d="M1261 321 V337" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="50" y="345" width="178" height="145" rx="18" fill="#F1FAFB" stroke="#79BFC6" stroke-width="2"/>
+  <text x="139" y="394" text-anchor="middle" fill="#145E6A" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">workspace</text>
+  <text x="139" y="435" text-anchor="middle" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">仓库与任务</text>
+  <text x="139" y="468" text-anchor="middle" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">工作区生命周期</text>
+
+  <rect x="237" y="345" width="178" height="145" rx="18" fill="#F1FAFB" stroke="#79BFC6" stroke-width="2"/>
+  <text x="326" y="394" text-anchor="middle" fill="#145E6A" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">documents</text>
+  <text x="326" y="435" text-anchor="middle" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">资料路径</text>
+  <text x="326" y="468" text-anchor="middle" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">读取与保存</text>
+
+  <rect x="424" y="345" width="178" height="145" rx="18" fill="#F1FAFB" stroke="#79BFC6" stroke-width="2"/>
+  <text x="513" y="394" text-anchor="middle" fill="#145E6A" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">editor</text>
+  <text x="513" y="435" text-anchor="middle" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">查找、撤销</text>
+  <text x="513" y="468" text-anchor="middle" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">草稿与自动保存</text>
+
+  <rect x="611" y="345" width="178" height="145" rx="18" fill="#F1FAFB" stroke="#79BFC6" stroke-width="2"/>
+  <text x="700" y="394" text-anchor="middle" fill="#145E6A" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">media</text>
+  <text x="700" y="435" text-anchor="middle" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">PDF、图片</text>
+  <text x="700" y="468" text-anchor="middle" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">Mermaid 渲染</text>
+
+  <rect x="798" y="345" width="178" height="145" rx="18" fill="#F1FAFB" stroke="#79BFC6" stroke-width="2"/>
+  <text x="887" y="394" text-anchor="middle" fill="#145E6A" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">delivery</text>
+  <text x="887" y="435" text-anchor="middle" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">Agent 任务操作</text>
+  <text x="887" y="468" text-anchor="middle" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">本地操作记录</text>
+
+  <rect x="985" y="345" width="178" height="145" rx="18" fill="#F1FAFB" stroke="#79BFC6" stroke-width="2"/>
+  <text x="1074" y="394" text-anchor="middle" fill="#145E6A" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">integrations</text>
+  <text x="1074" y="435" text-anchor="middle" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">Meegle</text>
+  <text x="1074" y="468" text-anchor="middle" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">飞书资料</text>
+
+  <rect x="1172" y="345" width="178" height="145" rx="18" fill="#F1FAFB" stroke="#79BFC6" stroke-width="2"/>
+  <text x="1261" y="394" text-anchor="middle" fill="#145E6A" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">platform</text>
+  <text x="1261" y="435" text-anchor="middle" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">Codex / Skills</text>
+  <text x="1261" y="468" text-anchor="middle" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">工具 / 系统动作</text>
+
+  <path d="M700 491 V525 H340 V545" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+  <path d="M700 525 H985 V545" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="60" y="555" width="550" height="145" rx="20" fill="#EEF5FC" stroke="#9BB7D1" stroke-width="2"/>
+  <rect x="60" y="555" width="550" height="12" rx="6" fill="#3375B8"/>
+  <text x="92" y="609" fill="#285F95" font-size="27" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">storage · 本地文件</text>
+  <text x="92" y="650" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">用户 home 配置分片、恢复日志与任务 manifest</text>
+  <text x="92" y="682" fill="#526B82" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">锁定写入并通过原子替换保护数据</text>
+
+  <rect x="640" y="555" width="700" height="145" rx="20" fill="#FFF9EA" stroke="#E2B65C" stroke-width="2"/>
+  <rect x="640" y="555" width="700" height="12" rx="6" fill="#D99A27"/>
+  <text x="672" y="609" fill="#805914" font-size="27" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">executable + process · 外部进程适配</text>
+  <text x="672" y="650" fill="#5E5138" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">解析工具路径、来源与环境；支持超时、取消和清理子进程</text>
+  <text x="672" y="682" fill="#5E5138" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">具体 CLI、账号和团队凭据由用户环境提供</text>
+
+  <path d="M990 701 V725 H700 V738" fill="none" stroke="#D99A27" stroke-width="3" marker-end="url(#arrow)"/>
+  <text x="700" y="718" text-anchor="middle" fill="#805914" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">按需调用外部工具</text>
+
+  <rect x="80" y="748" width="280" height="64" rx="18" fill="#FFFFFF" stroke="#E2B65C" stroke-width="2"/>
+  <text x="220" y="790" text-anchor="middle" fill="#76561B" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">Git</text>
+  <rect x="395" y="748" width="280" height="64" rx="18" fill="#FFFFFF" stroke="#E2B65C" stroke-width="2"/>
+  <text x="535" y="790" text-anchor="middle" fill="#76561B" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">Codex / IDE</text>
+  <rect x="710" y="748" width="280" height="64" rx="18" fill="#FFFFFF" stroke="#E2B65C" stroke-width="2"/>
+  <text x="850" y="790" text-anchor="middle" fill="#76561B" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">Meegle</text>
+  <rect x="1025" y="748" width="280" height="64" rx="18" fill="#FFFFFF" stroke="#E2B65C" stroke-width="2"/>
+  <text x="1165" y="790" text-anchor="middle" fill="#76561B" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">飞书</text>
+
+  <rect x="60" y="840" width="1280" height="66" rx="18" fill="#E8EFF6"/>
+  <text x="91" y="882" fill="#405D77" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">本地功能不依赖 HTTP、JVM 或 WebView；主界面和业务层在同一进程中工作。</text>
+</svg>

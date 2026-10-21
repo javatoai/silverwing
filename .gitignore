@@ -1,0 +1,21 @@
+/build/
+/captures/
+/.dev-home/
+/tmp/
+/cmd/silverwing/silverwing_icon_windows_amd64.syso
+*.exe
+*.log
+
+# Local environment and generated test output
+/.env
+/.env.*
+!/.env.example
+!/.env.sample
+!/.env.template
+/*.test
+/coverage.out
+
+# Python build and test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/

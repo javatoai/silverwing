@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 840" role="img" aria-labelledby="title desc">
+  <title id="title">Silverwing 故障排查流程</title>
+  <desc id="desc">流程示意图：先确认应用版本和生效目录，再分类问题，查看日志并做最小验证，按问题点处理并复核。配置、外部工具、任务工作区和媒体问题分别检查；保存现有文件与备份，避免破坏性修复。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto"><path d="M1 1 L10 6 L1 11 Z" fill="#547A9D"/></marker>
+  </defs>
+  <rect width="1400" height="840" fill="#F4F8FC"/>
+  <text x="70" y="76" fill="#173858" font-size="38" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">排障先确认范围，再做最小验证</text>
+  <text x="70" y="118" fill="#526B82" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">记录看到的现象和结果，让每次处理都能复核、回退和继续定位。</text>
+  <rect x="1024" y="48" width="306" height="48" rx="24" fill="#E7EEF6"/>
+  <text x="1177" y="80" text-anchor="middle" fill="#486580" font-size="22" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">流程示意 · 非界面截图</text>
+
+  <rect x="44" y="190" width="244" height="165" rx="20" fill="#FFFFFF" stroke="#8DAECC" stroke-width="2"/>
+  <rect x="44" y="190" width="244" height="12" rx="6" fill="#3375B8"/>
+  <circle cx="80" cy="243" r="20" fill="#E6F0FB"/><text x="80" y="251" text-anchor="middle" fill="#2765A5" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">1</text>
+  <text x="114" y="251" fill="#173858" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">确认版本</text>
+  <text x="70" y="298" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">记录应用版本、</text>
+  <text x="70" y="332" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">启动方式和时间</text>
+  <path d="M293 273 H308" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="316" y="190" width="260" height="165" rx="20" fill="#FFFFFF" stroke="#8DAECC" stroke-width="2"/>
+  <rect x="316" y="190" width="260" height="12" rx="6" fill="#3375B8"/>
+  <circle cx="352" cy="243" r="20" fill="#E6F0FB"/><text x="352" y="251" text-anchor="middle" fill="#2765A5" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">2</text>
+  <text x="386" y="251" fill="#173858" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">确认生效目录</text>
+  <text x="342" y="298" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">检查 home、任务根</text>
+  <text x="342" y="332" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">和资料根路径</text>
+  <path d="M581 273 H596" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="604" y="190" width="260" height="165" rx="20" fill="#FFFFFF" stroke="#8DAECC" stroke-width="2"/>
+  <rect x="604" y="190" width="260" height="12" rx="6" fill="#3375B8"/>
+  <circle cx="640" cy="243" r="20" fill="#E6F0FB"/><text x="640" y="251" text-anchor="middle" fill="#2765A5" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">3</text>
+  <text x="674" y="251" fill="#173858" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">分类问题</text>
+  <text x="630" y="298" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">配置、工具、工作区</text>
+  <text x="630" y="332" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">或媒体功能</text>
+  <path d="M869 273 H884" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="892" y="190" width="244" height="165" rx="20" fill="#FFFFFF" stroke="#8DAECC" stroke-width="2"/>
+  <rect x="892" y="190" width="244" height="12" rx="6" fill="#3375B8"/>
+  <circle cx="928" cy="243" r="20" fill="#E6F0FB"/><text x="928" y="251" text-anchor="middle" fill="#2765A5" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">4</text>
+  <text x="962" y="251" fill="#173858" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">最小验证</text>
+  <text x="918" y="298" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">保留报错上下文，</text>
+  <text x="918" y="332" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">一次只验证一个点</text>
+  <path d="M1141 273 H1156" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="1164" y="190" width="192" height="165" rx="20" fill="#F1FAFB" stroke="#79BFC6" stroke-width="2"/>
+  <rect x="1164" y="190" width="192" height="12" rx="6" fill="#138A9B"/>
+  <circle cx="1199" cy="243" r="20" fill="#DDF3F4"/><text x="1199" y="251" text-anchor="middle" fill="#147A88" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">5</text>
+  <text x="1232" y="251" fill="#173858" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">定向处理</text>
+  <text x="1190" y="298" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">只调整已定位</text>
+  <text x="1190" y="332" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">的问题点</text>
+
+  <text x="70" y="430" fill="#173858" font-size="27" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">按现象检查对应区域</text>
+  <rect x="70" y="455" width="290" height="135" rx="18" fill="#EEF5FC" stroke="#9BB7D1" stroke-width="2"/>
+  <text x="98" y="500" fill="#285F95" font-size="25" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">配置问题</text>
+  <text x="98" y="545" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">核对 home 与配置文件</text>
+  <text x="98" y="576" fill="#526B82" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">保留原文件并先备份</text>
+
+  <rect x="390" y="455" width="290" height="135" rx="18" fill="#EEF5FC" stroke="#9BB7D1" stroke-width="2"/>
+  <text x="418" y="500" fill="#285F95" font-size="25" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">外部工具</text>
+  <text x="418" y="545" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">核对路径与登录状态</text>
+  <text x="418" y="576" fill="#526B82" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">按需单独运行工具核对</text>
+
+  <rect x="710" y="455" width="290" height="135" rx="18" fill="#F1FAFB" stroke="#79BFC6" stroke-width="2"/>
+  <text x="738" y="500" fill="#145E6A" font-size="25" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">任务工作区</text>
+  <text x="738" y="545" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">核对目录、状态和分支</text>
+  <text x="738" y="576" fill="#526B82" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">先保留未提交文件</text>
+
+  <rect x="1030" y="455" width="290" height="135" rx="18" fill="#F1FAFB" stroke="#79BFC6" stroke-width="2"/>
+  <text x="1058" y="500" fill="#145E6A" font-size="25" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">媒体预览</text>
+  <text x="1058" y="545" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">核对文件类型与资源</text>
+  <text x="1058" y="576" fill="#526B82" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">尝试打开一个最小样例</text>
+
+  <rect x="70" y="635" width="1250" height="125" rx="20" fill="#FFF9EA" stroke="#E2B65C" stroke-width="2"/>
+  <text x="105" y="682" fill="#805914" font-size="26" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">复核处理结果</text>
+  <text x="105" y="724" fill="#5E5138" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">复现原操作，确认结果符合预期；记录版本、目录、步骤和仍未解决的现象。</text>
+  <text x="105" y="755" fill="#805914" font-size="22" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">保留现有文件与备份；不删除配置，也不强制修复 Git。</text>
+</svg>

@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 900" role="img" aria-labelledby="title desc">
+  <title id="title">Silverwing 任务目录、工作区与资料根模型</title>
+  <desc id="desc">结构示意图：任务根包含任务 manifest 配置和多个服务工作区；任务资料根可单独配置；Worktree 与 Clone 的 Git 元数据关系不同；归档保留工作区文件，永久删除清理任务目录与工作区，资料按所在位置处理。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto"><path d="M1 1 L10 6 L1 11 Z" fill="#547A9D"/></marker>
+  </defs>
+  <rect width="1400" height="900" fill="#F4F8FC"/>
+  <text x="70" y="76" fill="#173858" font-size="38" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">任务根如何组织多个仓库</text>
+  <text x="70" y="118" fill="#526B82" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">一个任务目录承载任务记录和代码工作区；资料根可以设置为另一处位置。</text>
+  <rect x="1024" y="48" width="306" height="48" rx="24" fill="#E7EEF6"/>
+  <text x="1177" y="80" text-anchor="middle" fill="#486580" font-size="22" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">结构示意 · 非界面截图</text>
+
+  <rect x="60" y="175" width="870" height="415" rx="24" fill="#FFFFFF" stroke="#8DAECC" stroke-width="2"/>
+  <rect x="60" y="175" width="870" height="14" rx="7" fill="#3375B8"/>
+  <text x="94" y="235" fill="#173858" font-size="29" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">任务根 / &lt;任务文件夹&gt;/</text>
+  <text x="94" y="273" fill="#526B82" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">默认位于 ~/tasks；也可在设置中选择并管理迁移</text>
+
+  <rect x="94" y="305" width="230" height="240" rx="18" fill="#EEF5FC" stroke="#9BB7D1" stroke-width="2"/>
+  <text x="119" y="351" fill="#285F95" font-size="25" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">任务 manifest</text>
+  <text x="119" y="397" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">需求与任务信息</text>
+  <text x="119" y="433" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">服务、分支与策略</text>
+  <text x="119" y="469" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">工作区状态记录</text>
+  <text x="119" y="515" fill="#526B82" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">由 Silverwing 管理</text>
+
+  <path d="M334 425 H352" fill="none" stroke="#547A9D" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="362" y="305" width="245" height="240" rx="18" fill="#F1FAFB" stroke="#79BFC6" stroke-width="2"/>
+  <rect x="362" y="305" width="245" height="10" rx="5" fill="#138A9B"/>
+  <text x="387" y="356" fill="#145E6A" font-size="25" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">order-service</text>
+  <text x="387" y="403" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">服务 / 模块工作区</text>
+  <text x="387" y="442" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">独立任务路径</text>
+  <rect x="387" y="476" width="192" height="44" rx="22" fill="#DDF3F4"/>
+  <text x="483" y="506" text-anchor="middle" fill="#147A88" font-size="22" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">Worktree 或 Clone</text>
+
+  <rect x="625" y="305" width="270" height="240" rx="18" fill="#F1FAFB" stroke="#79BFC6" stroke-width="2"/>
+  <rect x="625" y="305" width="270" height="10" rx="5" fill="#138A9B"/>
+  <text x="650" y="356" fill="#145E6A" font-size="25" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">payment-service</text>
+  <text x="650" y="403" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">另一个服务 / 模块</text>
+  <text x="650" y="442" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">与其他任务并列隔离</text>
+  <rect x="650" y="476" width="220" height="44" rx="22" fill="#DDF3F4"/>
+  <text x="760" y="506" text-anchor="middle" fill="#147A88" font-size="22" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">Worktree 或 Clone</text>
+
+  <rect x="975" y="175" width="365" height="415" rx="24" fill="#FFFFFF" stroke="#79BFC6" stroke-width="2"/>
+  <rect x="975" y="175" width="365" height="14" rx="7" fill="#138A9B"/>
+  <text x="1010" y="235" fill="#145E6A" font-size="28" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">独立配置的资料根</text>
+  <text x="1010" y="282" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">存放需求附件、参考文件</text>
+  <text x="1010" y="321" fill="#38536C" font-size="23" font-family="Segoe UI, Microsoft YaHei, sans-serif">和任务说明等资料。</text>
+  <rect x="1010" y="360" width="295" height="150" rx="18" fill="#F1FAFB"/>
+  <text x="1035" y="407" fill="#145E6A" font-size="23" font-weight="600" font-family="Segoe UI, Microsoft YaHei, sans-serif">例：团队资料目录</text>
+  <text x="1035" y="447" fill="#526B82" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">可与代码任务目录分开</text>
+  <text x="1035" y="483" fill="#526B82" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">本机路径由用户配置</text>
+
+  <rect x="60" y="625" width="400" height="145" rx="20" fill="#EEF5FC" stroke="#9BB7D1" stroke-width="2"/>
+  <text x="90" y="672" fill="#285F95" font-size="25" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">Worktree</text>
+  <text x="90" y="715" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">共享源仓库对象库与分支引用</text>
+  <text x="90" y="749" fill="#526B82" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">工作树在任务目录中单独检出</text>
+
+  <rect x="480" y="625" width="400" height="145" rx="20" fill="#EEF5FC" stroke="#9BB7D1" stroke-width="2"/>
+  <text x="510" y="672" fill="#285F95" font-size="25" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">独立 Clone</text>
+  <text x="510" y="715" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">工作目录拥有独立 Git 元数据</text>
+  <text x="510" y="749" fill="#526B82" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">与源仓库分开管理提交引用</text>
+
+  <rect x="900" y="625" width="440" height="145" rx="20" fill="#FFF9EA" stroke="#E2B65C" stroke-width="2"/>
+  <text x="930" y="672" fill="#805914" font-size="25" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">归档与删除</text>
+  <text x="930" y="715" fill="#5E5138" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">永久删除清理任务目录与工作区</text>
+  <text x="930" y="749" fill="#5E5138" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">任务内资料随目录；外置资料根不清理</text>
+
+  <rect x="60" y="795" width="1280" height="80" rx="16" fill="#E8EFF6"/>
+  <text x="86" y="831" fill="#405D77" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">归档保留工作区文件；永久删除会清理任务目录和工作区。</text>
+  <text x="86" y="862" fill="#526B82" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">资料根位于任务目录外时，不随任务目录删除。</text>
+</svg>

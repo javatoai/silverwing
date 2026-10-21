@@ -53,6 +53,36 @@ func TestGitCompareSessionUsesFixedSnapshotAndValidatesIdentity(t *testing.T) {
 	}
 }
 
+func TestGitCompareSessionRootCommitUsesEmptyTree(t *testing.T) {
+	repo := newCompareTestRepo(t)
+	writeCompareFile(t, repo.path, "root.txt", "root\n")
+	commitCompare(t, repo.path, "root")
+	root := gitCompareOutput(t, repo.path, "rev-parse", "HEAD")
+	gitCompare(t, repo.path, "branch", "-m", "feature")
+	service, ws := repo.serviceWorkspace("feature")
+	manager := NewWorkspaceGitDiffSessionManager()
+	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+	request := CompareRequest{Mode: CompareCommits, StartCommit: root, EndCommit: root}
+	before := snapshotCompareRepository(t, repo.path)
+	files, err := service.FilesSessionContext(context.Background(), manager, "task", "config", ws, request, WorkspaceMainBranch{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files.SessionID == "" || files.BaseCommit != "" || files.TargetCommit != root {
+		t.Fatalf("root session = %+v; want a valid session, empty base and root target", files)
+	}
+	assertComparePaths(t, files.Files, "root.txt")
+	request.ExpectedBaseCommit, request.ExpectedTargetCommit = files.BaseCommit, files.TargetCommit
+	preview, err := service.PreviewSessionContext(context.Background(), manager, files.SessionID, "task", "config", ws, request, files.Files[0], WorkspaceMainBranch{})
+	if err != nil || preview.Content == nil || preview.Content.Text != "root\n" {
+		t.Fatalf("root session preview = %+v, %v; want the added root file", preview, err)
+	}
+	manager.Retire(files.SessionID)
+	if after := snapshotCompareRepository(t, repo.path); after != before {
+		t.Fatal("root session review changed source files, index, refs, or object database")
+	}
+}
+
 func TestGitCompareSessionCacheIsBoundedAndSkipsOversize(t *testing.T) {
 	session := &compareSession{cache: map[string]*comparePreviewCacheEntry{}, cacheLRU: list.New()}
 	for index := 0; index < comparePreviewCacheFiles+1; index++ {

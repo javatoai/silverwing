@@ -2,6 +2,7 @@ package desktop
 
 import (
 	"testing"
+	"time"
 
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/domain"
@@ -41,20 +42,66 @@ func TestWorkspaceReviewSameSnapshotRefreshRetainsPreviewAndConfiguredBaseline(t
 		TaskID: "task", Path: `C:\synthetic\repo`, Mode: "review", Open: true,
 		CompareMode: workspaceReviewUncommitted, BaselineRef: "origin/main",
 		BaseCommit: "base", TargetCommit: "worktree:head:tree", FilesLoading: true,
-		Files: []workspace.CompareChange{change}, SelectedPath: change.Path,
+		DiffSessionID: "previous-session",
+		Files:         []workspace.CompareChange{change}, SelectedPath: change.Path,
 		SelectedKind: domain.WorkspaceGitModified, Preview: preview,
 	}
-	s := &app{workspaceHistory: state}
+	backend := &workspaceDiffSessionReleaseBackend{actions: make(chan application.Action, 1)}
+	s := &app{workspaceHistory: state, backend: backend}
 	action := application.Action{Kind: "workspace.diff-files", TaskID: state.TaskID, Path: state.Path,
 		Payload: map[string]any{"compare": workspaceReviewComparePayload(state)}}
 	s.applyWorkspaceHistoryResult(action, application.ActionResult{Data: workspace.CompareFilesResult{
-		Files: []workspace.CompareChange{change}, BaselineRef: "HEAD", BaseCommit: state.BaseCommit, TargetCommit: state.TargetCommit,
+		SessionID: "refreshed-session",
+		Files:     []workspace.CompareChange{change}, BaselineRef: "HEAD", BaseCommit: state.BaseCommit, TargetCommit: state.TargetCommit,
 	}})
+	if state.Error != "" || state.DiffSessionID != "refreshed-session" {
+		t.Fatalf("refresh did not adopt the new session: session=%q, error=%q", state.DiffSessionID, state.Error)
+	}
 	if state.Preview != preview || state.PreviewLoading || state.FilesLoading || state.SelectedPath != change.Path {
 		t.Fatal("same-snapshot refresh discarded or reloaded the current preview")
 	}
 	if state.BaselineRef != "origin/main" || state.ResultBaselineRef != "HEAD" {
-		t.Fatal("result label overwrote the configured history baseline")
+		t.Fatalf("configured baseline=%q, result label=%q; want origin/main and HEAD", state.BaselineRef, state.ResultBaselineRef)
+	}
+	select {
+	case action := <-backend.actions:
+		if action.Kind != workspace.CompareSessionCloseAction || action.Payload["sessionId"] != "previous-session" {
+			t.Fatalf("unexpected session cleanup: %+v", action)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("refresh did not release the previous session")
+	}
+}
+
+func TestWorkspaceReviewFilesWithoutSessionAreRejected(t *testing.T) {
+	for _, testCase := range []struct{ name, sessionID string }{
+		{name: "empty"},
+		{name: "whitespace", sessionID: " \t "},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			preview := &workspace.WorkspaceGitFilePreview{Content: &workspace.WorkspaceFilePreviewContent{Text: "original\n"}}
+			state := &workspaceHistoryState{
+				TaskID: "task", Path: `C:\synthetic\repo`, Mode: "review", Open: true,
+				CompareMode: workspaceReviewUncommitted, BaselineRef: "origin/main", ResultBaselineRef: "previous-result",
+				DiffSessionID: "previous-session", BaseCommit: "base", TargetCommit: "target", FilesLoading: true,
+				Files: []workspace.CompareChange{{Path: "kept.go", Kind: "MODIFIED"}}, SelectedPath: "kept.go",
+				SelectedKind: domain.WorkspaceGitModified, Preview: preview,
+			}
+			s := &app{workspaceHistory: state}
+			action := application.Action{Kind: "workspace.diff-files", TaskID: state.TaskID, Path: state.Path,
+				Payload: map[string]any{"compare": workspaceReviewComparePayload(state)}}
+			s.applyWorkspaceHistoryResult(action, application.ActionResult{Data: workspace.CompareFilesResult{
+				SessionID: testCase.sessionID, Files: []workspace.CompareChange{{Path: "new.go", Kind: "ADDED"}},
+				BaselineRef: "HEAD", BaseCommit: "new-base", TargetCommit: "new-target",
+			}})
+			if state.Error == "" || state.FilesLoading || state.DiffSessionID != "" || workspaceReviewSnapshotsReady(state) {
+				t.Fatalf("sessionless result was not rejected: session=%q, error=%q, loading=%v", state.DiffSessionID, state.Error, state.FilesLoading)
+			}
+			if state.BaselineRef != "origin/main" || state.ResultBaselineRef != "previous-result" || state.BaseCommit != "base" || state.TargetCommit != "target" ||
+				len(state.Files) != 1 || state.Files[0].Path != "kept.go" || state.SelectedPath != "kept.go" || state.Preview != preview {
+				t.Fatal("sessionless result replaced the previous comparison")
+			}
+		})
 	}
 }
 

@@ -69,11 +69,12 @@ func TestWorkspaceReviewCommitRangeIncludesRootAndMergeSideParents(t *testing.T)
 
 func TestWorkspaceReviewRootCommitSnapshotAllowsEmptyBase(t *testing.T) {
 	state := &workspaceHistoryState{
-		CompareMode:  workspaceReviewCommits,
-		CommitHashes: []string{"root"},
-		StartCommit:  "root",
-		EndCommit:    "root",
-		TargetCommit: "root-sha",
+		CompareMode:   workspaceReviewCommits,
+		CommitHashes:  []string{"root"},
+		StartCommit:   "root",
+		EndCommit:     "root",
+		TargetCommit:  "root-sha",
+		DiffSessionID: "root-session",
 	}
 	if !workspaceReviewSnapshotsReady(state) {
 		t.Fatal("root commit with an empty-tree base should have a ready snapshot")
@@ -88,5 +89,12 @@ func TestWorkspaceReviewRootCommitSnapshotAllowsEmptyBase(t *testing.T) {
 	}}
 	if !workspaceComparePayloadMatches(state, payload) {
 		t.Fatal("root preview must accept and preserve the empty base snapshot identity")
+	}
+	for _, sessionID := range []string{"", " \t "} {
+		withoutSession := *state
+		withoutSession.DiffSessionID = sessionID
+		if workspaceReviewSnapshotsReady(&withoutSession) {
+			t.Fatal("root preview accepted a missing session")
+		}
 	}
 }

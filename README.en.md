@@ -9,6 +9,7 @@
 
 <p align="center">
   <a href="https://github.com/javatoai/silverwing/releases"><strong>Download</strong></a> &nbsp;·&nbsp;
+  <a href="#product-demo">Product demo</a> &nbsp;·&nbsp;
   <a href="#tour">Tour</a> &nbsp;·&nbsp;
   <a href="#get-started">Get started</a> &nbsp;·&nbsp;
   <a href="#license">License</a> &nbsp;·&nbsp;
@@ -21,6 +22,14 @@ Packaged downloads are about 18 MB. Keep tasks, repositories, branches and mater
 One feature often spans several services. Silverwing brings their workspaces into one task, so you can move between code, requirements, documents and your coding tools without losing the context.
 
 > Silverwing is under active development. Some features and platform behavior still need further validation.
+
+## Product demo
+
+A 36-second walkthrough of the public edition: create a task from a requirement, automatically prepare workspaces with Git Worktrees, then explore Git review, task materials and coding-tool entry points.
+
+https://github.com/user-attachments/assets/0dc9e9ab-3cf0-44c7-a856-1599a7670a30
+
+Click to play, pause, seek or watch fullscreen; use the player's sound control to enable music. The video uses a light-theme Windows UI, example data, and Chinese UI text and captions. Task creation currently requires a connected Meegle project. [Open the video directly](https://github.com/user-attachments/assets/0dc9e9ab-3cf0-44c7-a856-1599a7670a30).
 
 ## Features
 

@@ -9,6 +9,7 @@
 
 <p align="center">
   <a href="https://github.com/javatoai/silverwing/releases"><strong>下载</strong></a> &nbsp;·&nbsp;
+  <a href="#产品演示">产品演示</a> &nbsp;·&nbsp;
   <a href="#界面导览">界面导览</a> &nbsp;·&nbsp;
   <a href="#快速开始">快速开始</a> &nbsp;·&nbsp;
   <a href="#开源协议">开源协议</a> &nbsp;·&nbsp;
@@ -21,6 +22,14 @@
 一个需求经常需要同时修改多个服务。Silverwing 将这些服务的工作区组织为一个任务，让你在代码、需求、资料和编程工具之间切换时，始终保留完整上下文。
 
 > Silverwing 正在持续开发中，部分功能和平台行为仍需进一步验证。
+
+## 产品演示
+
+36 秒了解公开版：从需求创建任务，使用 Git Worktree 自动准备工作区，再到 Git 审阅、任务资料和编程工具入口。
+
+https://github.com/user-attachments/assets/0dc9e9ab-3cf0-44c7-a856-1599a7670a30
+
+点击播放，可暂停、拖动进度或全屏观看；配乐可通过播放器的声音按钮开启。视频使用 Windows 浅色界面与示例数据，当前任务创建需要连接 Meegle。[直接打开视频](https://github.com/user-attachments/assets/0dc9e9ab-3cf0-44c7-a856-1599a7670a30)。
 
 ## 功能
 

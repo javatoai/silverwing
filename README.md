@@ -25,9 +25,9 @@
 
 ## 产品演示
 
-36 秒了解公开版：从需求创建任务，使用 Git Worktree 自动准备工作区，再到 Git 审阅、任务资料和编程工具入口。
+36 秒了解公开版：从需求创建任务，使用 Git Worktree 自动准备工作区，再到 Git 审阅、任务资料，以及一键在 Codex 中打开项目。
 
-https://github.com/user-attachments/assets/01fa4279-2839-40a4-a571-f36536008faf
+https://github.com/user-attachments/assets/ee910d3b-e298-4061-9c59-fb2aa8b4c6f7
 
 含中文旁白与配乐。点击播放，可暂停、拖动进度或全屏观看；播放器默认静音，请点击声音按钮开启。视频使用 Windows 浅色界面与示例数据，当前任务创建需要连接 Meegle。[打开演示页面](https://github.com/javatoai/silverwing/blob/master/README.md#产品演示)。
 

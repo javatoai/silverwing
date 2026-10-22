@@ -27,9 +27,9 @@ One feature often spans several services. Silverwing brings their workspaces int
 
 A 36-second walkthrough of the public edition: create a task from a requirement, automatically prepare workspaces with Git Worktrees, then explore Git review, task materials and coding-tool entry points.
 
-https://github.com/user-attachments/assets/0dc9e9ab-3cf0-44c7-a856-1599a7670a30
+https://github.com/user-attachments/assets/01fa4279-2839-40a4-a571-f36536008faf
 
-Click to play, pause, seek or watch fullscreen; use the player's sound control to enable music. The video uses a light-theme Windows UI, example data, and Chinese UI text and captions. Task creation currently requires a connected Meegle project. [Open the demo page](https://github.com/javatoai/silverwing/blob/master/README.en.md#product-demo).
+Includes Mandarin narration and background music. Click to play, pause, seek or watch fullscreen; the player is muted by default, so use its sound control to enable audio. The video uses a light-theme Windows UI, example data, and Chinese UI text and captions. Task creation currently requires a connected Meegle project. [Open the demo page](https://github.com/javatoai/silverwing/blob/master/README.en.md#product-demo).
 
 ## Features
 

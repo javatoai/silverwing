@@ -27,9 +27,9 @@
 
 36 秒了解公开版：从需求创建任务，使用 Git Worktree 自动准备工作区，再到 Git 审阅、任务资料和编程工具入口。
 
-https://github.com/user-attachments/assets/0dc9e9ab-3cf0-44c7-a856-1599a7670a30
+https://github.com/user-attachments/assets/01fa4279-2839-40a4-a571-f36536008faf
 
-点击播放，可暂停、拖动进度或全屏观看；配乐可通过播放器的声音按钮开启。视频使用 Windows 浅色界面与示例数据，当前任务创建需要连接 Meegle。[打开演示页面](https://github.com/javatoai/silverwing/blob/master/README.md#产品演示)。
+含中文旁白与配乐。点击播放，可暂停、拖动进度或全屏观看；播放器默认静音，请点击声音按钮开启。视频使用 Windows 浅色界面与示例数据，当前任务创建需要连接 Meegle。[打开演示页面](https://github.com/javatoai/silverwing/blob/master/README.md#产品演示)。
 
 ## 功能
 

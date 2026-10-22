@@ -29,7 +29,7 @@ A 36-second walkthrough of the public edition: create a task from a requirement,
 
 https://github.com/user-attachments/assets/0dc9e9ab-3cf0-44c7-a856-1599a7670a30
 
-Click to play, pause, seek or watch fullscreen; use the player's sound control to enable music. The video uses a light-theme Windows UI, example data, and Chinese UI text and captions. Task creation currently requires a connected Meegle project. [Open the video directly](https://github.com/user-attachments/assets/0dc9e9ab-3cf0-44c7-a856-1599a7670a30).
+Click to play, pause, seek or watch fullscreen; use the player's sound control to enable music. The video uses a light-theme Windows UI, example data, and Chinese UI text and captions. Task creation currently requires a connected Meegle project. [Open the demo page](https://github.com/javatoai/silverwing/blob/master/README.en.md#product-demo).
 
 ## Features
 

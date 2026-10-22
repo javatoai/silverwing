@@ -29,7 +29,7 @@
 
 https://github.com/user-attachments/assets/0dc9e9ab-3cf0-44c7-a856-1599a7670a30
 
-点击播放，可暂停、拖动进度或全屏观看；配乐可通过播放器的声音按钮开启。视频使用 Windows 浅色界面与示例数据，当前任务创建需要连接 Meegle。[直接打开视频](https://github.com/user-attachments/assets/0dc9e9ab-3cf0-44c7-a856-1599a7670a30)。
+点击播放，可暂停、拖动进度或全屏观看；配乐可通过播放器的声音按钮开启。视频使用 Windows 浅色界面与示例数据，当前任务创建需要连接 Meegle。[打开演示页面](https://github.com/javatoai/silverwing/blob/master/README.md#产品演示)。
 
 ## 功能
 

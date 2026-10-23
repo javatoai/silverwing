@@ -2,7 +2,7 @@ package domain
 
 // Persisted schema versions are deliberately independent of the product version.
 const (
-	CurrentProductVersion            = "0.0.5"
+	CurrentProductVersion            = "0.0.6"
 	CurrentAppConfigSchemaVersion    = "6.0.0"
 	CurrentTaskManifestSchemaVersion = "2.0.0"
 	DefaultGroupID                   = "default"
@@ -186,6 +186,12 @@ type ToolVisibilitySettings struct {
 	TextDiff bool `json:"textDiff"`
 	KillPort bool `json:"killPort"`
 }
+type SidebarVisibilitySettings struct {
+	Requirements bool `json:"requirements"`
+	Tools        bool `json:"tools"`
+	Production   bool `json:"production"`
+	Services     bool `json:"services"`
+}
 type AppConfig struct {
 	SchemaVersion                          string                         `json:"schemaVersion"`
 	TaskRoot                               *string                        `json:"taskRoot"`
@@ -194,6 +200,7 @@ type AppConfig struct {
 	Groups                                 []GroupConfig                  `json:"groups"`
 	Theme                                  ThemePreference                `json:"theme"`
 	ToolVisibility                         ToolVisibilitySettings         `json:"toolVisibility"`
+	SidebarVisibility                      SidebarVisibilitySettings      `json:"sidebarVisibility"`
 	TagEnabled                             bool                           `json:"tagEnabled"`
 	TagHistoryMaxGroups                    int                            `json:"tagHistoryMaxGroups"`
 	AllowTaskTagTargetEditing              bool                           `json:"allowTaskTagTargetEditing"`
@@ -468,7 +475,7 @@ func DefaultCommandProxyTargets(endpoint *string) []CommandProxyTarget {
 
 func DefaultAppConfig() AppConfig {
 	endpoint := DefaultCommandProxyURL
-	return AppConfig{SchemaVersion: CurrentAppConfigSchemaVersion, DefaultBranchPrefix: "", Repositories: []RepositoryConfig{}, Groups: []GroupConfig{{ID: DefaultGroupID, Name: DefaultGroupName, TagEnabled: true, Services: []GroupServiceConfig{}}}, Theme: ThemeSystem, ToolVisibility: ToolVisibilitySettings{JSON: true, DateTime: true, TextDiff: true, KillPort: false}, TagEnabled: true, TagHistoryMaxGroups: DefaultTagHistoryMaxGroups, DevelopmentTools: []DevelopmentToolConfig{}, DefaultDevelopmentTool: DevelopmentToolIntelliJIdea, DefaultWorkspaceToolIDs: []string{}, BlockedGitWriteBranches: []string{"master", "main"}, MeegleProjects: []MeegleProjectConfig{}, CommandProxyURL: &endpoint, CommandProxyTargets: DefaultCommandProxyTargets(&endpoint), CodexPluginMarketplaceSources: []CodexPluginMarketplaceSource{}, SkillSources: []SkillSource{}, AIRequirementNamingEnabled: true, AIRequirementNamingPrewarmEnabled: true, AIRequirementNamingModel: DefaultAIRequirementNamingModel}
+	return AppConfig{SchemaVersion: CurrentAppConfigSchemaVersion, DefaultBranchPrefix: "", Repositories: []RepositoryConfig{}, Groups: []GroupConfig{{ID: DefaultGroupID, Name: DefaultGroupName, TagEnabled: true, Services: []GroupServiceConfig{}}}, Theme: ThemeSystem, ToolVisibility: ToolVisibilitySettings{JSON: true, DateTime: true, TextDiff: true, KillPort: false}, SidebarVisibility: SidebarVisibilitySettings{Requirements: true, Tools: true, Production: true, Services: true}, TagEnabled: true, TagHistoryMaxGroups: DefaultTagHistoryMaxGroups, DevelopmentTools: []DevelopmentToolConfig{}, DefaultDevelopmentTool: DevelopmentToolIntelliJIdea, DefaultWorkspaceToolIDs: []string{}, BlockedGitWriteBranches: []string{"master", "main"}, MeegleProjects: []MeegleProjectConfig{}, CommandProxyURL: &endpoint, CommandProxyTargets: DefaultCommandProxyTargets(&endpoint), CodexPluginMarketplaceSources: []CodexPluginMarketplaceSource{}, SkillSources: []SkillSource{}, AIRequirementNamingEnabled: true, AIRequirementNamingPrewarmEnabled: true, AIRequirementNamingModel: DefaultAIRequirementNamingModel}
 }
 
 const DefaultAIRequirementNamingModel = "gpt-6-luna"

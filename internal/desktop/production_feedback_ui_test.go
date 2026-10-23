@@ -35,7 +35,7 @@ func TestProductionBaselineDiffReflectsIncomingFileChanges(t *testing.T) {
 			s, v, _ := productionFixture(t)
 			v.Preview.ProductionSHA = strings.Repeat("f", 40)
 			v.Preview.ProductionInMain = false
-			want, enabled := "无差异", true
+			want, enabled := "无差异", false
 			switch state {
 			case "unknown":
 				v.Preview = nil
@@ -51,7 +51,7 @@ func TestProductionBaselineDiffReflectsIncomingFileChanges(t *testing.T) {
 			case "remote-only":
 				v.Preview.Diff = "\n\n远端 release 相对本地批次的文件变化：\n other.go | 2 ++"
 			case "changed", "changed-and-remote":
-				want = "查看差异"
+				want, enabled = "查看差异", true
 				v.Preview.Diff = " example.go | 1 +\n 1 file changed, 1 insertion(+)"
 				if state == "changed-and-remote" {
 					v.Preview.Diff += "\n\n远端 release 相对本地批次的文件变化：\n other.go | 2 ++"
@@ -97,8 +97,10 @@ func TestProductionInitializationFeedbackIsConciseAndColored(t *testing.T) {
 					if changes {
 						productionAssertTextColor(t, tester, "查看差异", p.amber)
 					} else {
-						productionAssertTextColor(t, tester, "无需合并", p.green)
-						productionAssertTextColor(t, tester, "无差异", p.text)
+						productionAssertTextColor(t, tester, "生产 Tag → 主分支状态", p.green)
+						if _, found := tester.Find("无差异"); !found {
+							t.Fatal("missing disabled no-diff state")
+						}
 					}
 					captureProductionSummary(t, tester, fmt.Sprintf("feedback-%d-dark-%t-changes-%t", width, dark, changes))
 				})
@@ -146,5 +148,8 @@ func TestProductionBaselineDiffLabelUpdatesWithoutReplacingTarget(t *testing.T) 
 	d := s.production.diffDialog
 	if d == nil || d.SourceSHA != strings.Repeat("f", 40) || d.TargetSHA != strings.Repeat("a", 40) || s.notes[0] != "unsaved draft" || v.Busy {
 		t.Fatal("updated comparison used an old target or disturbed the draft")
+	}
+	if !tester.HasText("源："+d.SourceRef) || !tester.HasText("目标："+d.TargetRef) || tester.HasText(d.SourceSHA) || tester.HasText(d.TargetSHA) {
+		t.Fatal("diff refs are missing or display commit identities by default")
 	}
 }

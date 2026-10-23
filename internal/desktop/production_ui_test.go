@@ -140,7 +140,6 @@ func TestProductionGitConfirmationsIdentifyRepository(t *testing.T) {
 		{"create", func() { s.confirmProductionCreate(v) }},
 		{"feature", func() { s.confirmProductionFeature(v, p, v.Branch) }},
 		{"sync", func() { s.confirmProductionSync(v, p) }},
-		{"tag", func() { s.confirmProductionTag(v, b) }},
 		{"pending", func() { s.confirmProductionPending(v, b, p) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -252,8 +251,11 @@ func TestProductionLayoutThemesAndWidths(t *testing.T) {
 						t.Fatalf("missing production controls: %s", control)
 					}
 					for _, name := range []string{"搜索生产发布服务", control, "构建 Tag"} {
+						// Independent cards may put the last action below the initial
+						// viewport. Verify it after the same scroll available to users.
+						productionRevealControl(t, tester, name)
 						rect, ok := tester.Find(name)
-						if !ok || rect.W <= 0 || rect.X < 0 || rect.X+rect.W > float32(width)+1 {
+						if !ok || rect.W <= 0 || rect.H <= 0 || rect.X < 0 || rect.X+rect.W > float32(width)+1 || rect.Y+rect.H > 900 {
 							t.Fatalf("%s overflow: %+v", name, rect)
 						}
 					}

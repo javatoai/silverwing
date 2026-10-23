@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -34,22 +35,33 @@ func captureProductionSummary(t *testing.T, tester *ui.Tester, name string) {
 func TestProductionCheckEntryBelongsToContent(t *testing.T) {
 	for _, width := range []int{960, 1440} {
 		for _, dark := range []bool{false, true} {
-			for _, state := range []string{"first", "initial", "completed", "ended"} {
+			for _, state := range []string{"first", "initial", "busy", "error", "completed", "ended"} {
 				t.Run(fmt.Sprintf("%d-%t-%s", width, dark, state), func(t *testing.T) {
 					s, v, b := productionFixture(t)
-					anchor := "1. 对比生产 Tag 与主分支差异"
+					anchor := "生产 Tag → 主分支"
 					switch state {
-					case "first", "initial":
+					case "first", "initial", "busy", "error":
 						s.production.batches, v.BatchID = nil, ""
 						if state == "first" {
 							v.Preview = nil
+						} else if state == "busy" {
+							v.Busy, v.ActiveStep = true, 1
+							v.Steps = map[int]productionStepView{1: {State: "running"}}
+						} else if state == "error" {
+							v.ActiveStep, v.Error = 3, "版本已被占用，请修改版本号。"
 						}
 					case "ended":
 						b.Ended = true
 						s.production.batches[0] = b
 						anchor = "正在查看已结束批次：" + b.ReleaseBranch
 					}
-					tester := productionIterationTester(s, width, dark)
+					tester := ui.NewTester(func(c *ui.Context) {
+						p := setTheme(c, dark)
+						ui.Row(c).Fill().Background(p.bg).AlignItems(ui.Stretch).Children(func() {
+							s.sidebar(c, p, true)
+							s.renderProductionPage(c, p)
+						})
+					}, width, 900)
 					check, found := tester.Find("重新检查")
 					section, ok := tester.Find(anchor)
 					if !found || !ok || check.Y < section.Y+section.H || check.W > 180 || check.H != 34 {
@@ -64,6 +76,23 @@ func TestProductionCheckEntryBelongsToContent(t *testing.T) {
 						if !ok || diff.Y != check.Y || diff.X <= check.X+check.W {
 							t.Errorf("check/diff are not compact siblings: check=%+v diff=%+v", check, diff)
 						}
+						if v.Preview != nil {
+							baseline, present := tester.Find("生产基线摘要")
+							tag, hasTag := tester.Find(v.Preview.ProductionTag)
+							main, hasMain := tester.Find("origin/master")
+							if !present || baseline.W > 600 || !hasTag || !hasMain || tag.X != main.X || tag.Y >= main.Y {
+								t.Errorf("baseline values are not compact and aligned: baseline=%+v tag=%+v main=%+v", baseline, tag, main)
+							}
+							if tester.HasText("master 已包含生产 Tag " + v.Preview.ProductionTag + "。") {
+								t.Error("included relation still repeats the heading in body copy")
+							}
+						}
+						if tester.HasText("自动计算分支名，可修改版本部分；确认后仅创建并推送该分支。") {
+							t.Error("obsolete release instructions are still visible")
+						}
+						if state == "error" && !tester.HasText(v.Error) {
+							t.Error("compact layout hid the validation error")
+						}
 					}
 					captureProductionSummary(t, tester, fmt.Sprintf("summary-%d-dark-%t-%s", width, dark, state))
 				})
@@ -72,11 +101,11 @@ func TestProductionCheckEntryBelongsToContent(t *testing.T) {
 	}
 }
 
-func TestProductionIncludedRelationsReplaceMergeButtons(t *testing.T) {
+func TestProductionIncludedRelationsDisableMergeButtons(t *testing.T) {
 	for _, initial := range []bool{false, true} {
 		for _, busy := range []bool{false, true} {
 			t.Run(fmt.Sprintf("initial-%t-busy-%t", initial, busy), func(t *testing.T) {
-				s, v, _ := productionFixture(t)
+				s, v, _, backend, _ := productionRequestFixture(t)
 				v.Preview.ProductionInMain, v.Preview.MainInRelease, v.Busy = true, true, busy
 				if initial {
 					s.production.batches, v.BatchID = nil, ""
@@ -87,13 +116,45 @@ func TestProductionIncludedRelationsReplaceMergeButtons(t *testing.T) {
 						t.Errorf("already-included relation retained button %q", button)
 					}
 				}
-				if !tester.HasText("无需合并") {
-					t.Fatal("missing clear noninteractive inclusion explanation")
+				if s.productionInitializationStepStatus(v, s.productionBatch(v), 2).Text != "已完成" || !productionExactText(tester, "无需合并") {
+					t.Fatal("missing completed status or disabled no-merge action")
+				}
+				generation := v.Generation
+				if err := tester.Click("无需合并"); err != nil {
+					t.Fatal(err)
+				}
+				if s.confirmationDialog != nil || v.Generation != generation {
+					t.Fatal("disabled no-merge action triggered a confirmation or request")
+				}
+				select {
+				case action := <-backend.calls:
+					t.Fatalf("disabled no-merge action dispatched %s", action.Kind)
+				default:
 				}
 				for i := 0; i < 20; i++ {
 					tester.Key(0, ui.KeyTab)
-					if tester.Focused("无需合并") {
-						t.Fatal("inclusion status entered keyboard focus")
+					if tester.Focused("生产 Tag → 主分支状态") || tester.Focused("无需合并") {
+						t.Fatal("inclusion status or disabled no-merge action entered keyboard focus")
+					}
+				}
+				if initial && !busy {
+					// Finish the keyboard probe before testing pointer hover. A focused
+					// tooltip can otherwise win when both events share a clock tick.
+					tester.ClickAt(1, 1)
+					status, found := tester.Find("生产 Tag → 主分支状态")
+					if !found {
+						t.Fatal("missing inclusion status")
+					}
+					tester.Move(status.X+status.W/2, status.Y+status.H/2)
+					time.Sleep(650 * time.Millisecond)
+					tester.Frame()
+					if !tester.HasText("master 已包含生产 Tag " + v.Preview.ProductionTag + "。") {
+						t.Fatal("inclusion relation was lost from the status tooltip")
+					}
+					captureProductionSummary(t, tester, "inclusion-tooltip")
+					tester.Key(0, ui.KeyEscape)
+					if tester.HasText("master 已包含生产 Tag " + v.Preview.ProductionTag + "。") {
+						t.Fatal("Esc did not dismiss the inclusion tooltip")
 					}
 				}
 			})
@@ -114,12 +175,12 @@ func TestProductionCreateConfirmationHasCollapsedTechnicalDetail(t *testing.T) {
 					t.Fatal("confirmation lost full identity or safe default")
 				}
 				tester := productionIterationTester(s, width, dark)
-				for _, visible := range []string{v.Preview.Target.ServiceName, v.Preview.Target.Repository, "origin/master · " + shortProductionSHA(v.Preview.MainSHA), "origin/release/2.3.44", "详细信息"} {
+				for _, visible := range []string{v.Preview.Target.ServiceName, v.Preview.Target.Repository, "origin/master", "origin/release/2.3.44", "详细信息"} {
 					if !tester.HasText(visible) {
 						t.Errorf("missing default summary %q", visible)
 					}
 				}
-				for _, hidden := range []string{v.Preview.MainSHA, "仓库标识：", "项目组：", "synthetic technical commit details"} {
+				for _, hidden := range []string{v.Preview.MainSHA, shortProductionSHA(v.Preview.MainSHA), "确认创建并推送新分支？", "仓库标识：", "项目组：", "synthetic technical commit details"} {
 					if tester.HasText(hidden) {
 						t.Errorf("technical detail visible by default: %q", hidden)
 					}
@@ -131,7 +192,7 @@ func TestProductionCreateConfirmationHasCollapsedTechnicalDetail(t *testing.T) {
 				if !tester.HasText(v.Preview.MainSHA) || !tester.HasText("synthetic technical commit details") {
 					t.Fatal("expanded detail lost full original content")
 				}
-				for _, button := range []string{"继续", "取消"} {
+				for _, button := range []string{"创建并推送", "取消"} {
 					r, ok := tester.Find(button)
 					if !ok || r.Y < 0 || r.Y+r.H > 900 {
 						t.Fatalf("details displaced footer button %s: %+v", button, r)
@@ -177,7 +238,7 @@ func TestProductionUnknownRelationsDoNotClaimIncluded(t *testing.T) {
 				v.Busy = true
 			}
 			tester := productionIterationTester(s, 960, false)
-			if tester.HasText("无需合并") {
+			if s.productionInitializationStepStatus(v, s.productionBatch(v), 2).Text == "已完成" {
 				t.Fatal("unknown relation was shown as included")
 			}
 			if _, ok := tester.Find("合并生产 Tag 到 master"); !ok {

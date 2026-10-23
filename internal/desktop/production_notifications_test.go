@@ -210,7 +210,7 @@ func TestProductionProgressToastLeavesPageGeometryAndFocusUnchanged(t *testing.T
 				if err := tester.Click("release 分支名"); err != nil {
 					t.Fatal(err)
 				}
-				anchors := []string{"重新检查", "无差异", "2. 合并生产 Tag 到主分支", "3. 创建 release 分支", "release 分支名", "创建 release"}
+				anchors := []string{"重新检查", "无差异", "生产 Tag → 主分支", "创建 release 分支", "release 分支名", "创建 release"}
 				rects := make(map[string]ui.Rect)
 				for _, anchor := range anchors {
 					var ok bool

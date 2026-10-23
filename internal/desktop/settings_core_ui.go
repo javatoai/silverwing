@@ -14,6 +14,16 @@ func (s *app) settingsBasic(c *ui.Context, p palette) {
 		settingsAppearanceDivider(c)
 		s.settingsAppearanceThemeRow(c, p)
 	})
+	settingsCard(c, p, "侧边栏展示", "任务和设置始终显示。隐藏入口不会关闭对应功能。", func() {
+		for index, item := range []struct{ key, title string }{
+			{"requirements", "需求"}, {"tools", "研发工具"}, {"production", "生产发布"}, {"services", "服务"},
+		} {
+			if index > 0 {
+				settingsAppearanceDivider(c)
+			}
+			s.settingsAppearanceNestedSwitchRow(c, p, "sidebarVisibility", item.key, "sidebar-visibility-"+item.key, item.title, "", true)
+		}
+	})
 }
 
 func (s *app) settingsToolVisibility(c *ui.Context, p palette) {

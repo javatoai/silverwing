@@ -7,6 +7,7 @@ import (
 )
 
 func (s *app) sidebar(c *ui.Context, p palette, compact bool) {
+	defer s.observeProductionBuildNavigation()
 	width := float32(128)
 	if compact {
 		width = 72
@@ -15,11 +16,15 @@ func (s *app) sidebar(c *ui.Context, p palette, compact bool) {
 		if !compact {
 			label(c, "工作空间", 11, p.muted).Padding(5, 6)
 		}
-		groupStart := "services"
-		if len(s.visibleDeveloperToolTabs()) > 0 {
-			groupStart = "tools"
+		items := s.sidebarNavigationItems()
+		groupStart := "settings"
+		for _, item := range items {
+			if item.page != "tasks" && item.page != "requirements" {
+				groupStart = item.page
+				break
+			}
 		}
-		for _, n := range s.sidebarNavigationItems() {
+		for _, n := range items {
 			if n.page == groupStart {
 				ui.Spacer(c)
 			}

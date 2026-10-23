@@ -202,11 +202,12 @@ func (s *app) renderProductionDiffDialog(c *ui.Context, p palette) {
 			if !d.Open {
 				return
 			}
-			label(c, "源："+d.SourceRef+" · "+d.SourceSHA, 11, p.muted).FillWidth().MinWidth(0).SingleLine().Tooltip(d.SourceRef + "\n" + d.SourceSHA)
-			label(c, "目标："+d.TargetRef+" · "+d.TargetSHA, 11, p.muted).FillWidth().MinWidth(0).SingleLine().Tooltip(d.TargetRef + "\n" + d.TargetSHA)
+			sourceTooltip := d.SourceRef + "\n" + d.SourceSHA
 			if d.Incoming {
-				label(c, "代码展示合并基点到源提交的待合入变更；提交记录中 < 为目标独有，> 为源独有。", 11, p.muted).Wrap()
+				sourceTooltip += "\n文件差异按合并基点计算待合入变更。"
 			}
+			label(c, "源："+d.SourceRef, 11, p.muted).FillWidth().MinWidth(0).SingleLine().Tooltip(sourceTooltip)
+			label(c, "目标："+d.TargetRef, 11, p.muted).FillWidth().MinWidth(0).SingleLine().Tooltip(d.TargetRef + "\n" + d.TargetSHA)
 			ui.Row(c).FillWidth().Gap(6).Children(func() {
 				workspaceReviewModeButton(c, "production-diff-files", "文件差异", d.Tab != "commits", p, func() { d.Tab = "files" })
 				workspaceReviewModeButton(c, "production-diff-commits", "提交记录", d.Tab == "commits", p, func() { d.Tab = "commits" })
@@ -224,7 +225,14 @@ func (s *app) renderProductionDiffDialog(c *ui.Context, p palette) {
 			}
 			ui.Divider(c)
 			if d.Tab == "commits" {
+				if d.Incoming {
+					label(c, "< 目标独有 · > 来源独有", 11, p.muted).Wrap()
+				}
 				ui.Scroll(c.Key("production-diff-log")).Grow(1).FillWidth().MinHeight(0).Children(func() { label(c, firstNonEmpty(d.Commits, "没有独有提交。"), 12, p.text).Wrap().Selectable() })
+				return
+			}
+			if !r.FilesLoading && r.Error == "" && r.TargetCommit != "" && len(r.Files) == 0 {
+				label(c, "无差异", 12, p.muted)
 				return
 			}
 			ui.Row(c).Grow(1).FillWidth().MinHeight(0).MinWidth(0).Gap(10).AlignItems(ui.Stretch).Children(func() {

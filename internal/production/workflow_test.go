@@ -380,8 +380,8 @@ func TestProductionEveryTagRefreshesAndMergesRuntimeBaseline(t *testing.T) {
 	}
 	f.run(f.remote, "cat-file", "-e", "refs/heads/master:master-only.txt")
 	unchanged := f.sync(b)
-	if unchanged.TagPlan != nil || len(unchanged.Tags) != 2 {
-		t.Fatal("unchanged release produced another Tag")
+	if unchanged.TagPlan == nil || unchanged.TagPlan.Tag != "2.3.44.2" || len(unchanged.Tags) != 2 {
+		t.Fatal("unchanged release must prepare the next Tag without publishing it")
 	}
 }
 
@@ -727,7 +727,7 @@ func TestProductionResumeVerifiesAmbiguousSuccessfulPush(t *testing.T) {
 	}
 }
 
-func TestProductionSingleActiveBatchAndNoFeatureNoTag(t *testing.T) {
+func TestProductionSingleActiveBatchAndFirstTagWithoutFeature(t *testing.T) {
 	f := newFixture(t)
 	b := f.create()
 	p, err := f.s.Inspect(context.Background(), f.selection, "")
@@ -738,8 +738,8 @@ func TestProductionSingleActiveBatchAndNoFeatureNoTag(t *testing.T) {
 		t.Fatal("second active batch allowed")
 	}
 	b = f.sync(b)
-	if b.TagPlan != nil {
-		t.Fatal("Tag allowed before any feature")
+	if b.TagPlan == nil || b.TagPlan.Tag != "2.3.44" || len(b.Tags) != 0 {
+		t.Fatal("first Tag should be prepared without a feature, but still await confirmation")
 	}
 	if _, err := f.s.End(context.Background(), b.ID); err != nil {
 		t.Fatal(err)
@@ -875,9 +875,7 @@ func TestProductionMainConflictAndReleaseSyncConflictKeepTheirStages(t *testing.
 
 func TestProductionInterruptedTagPushAndWriteFailureAreIdempotent(t *testing.T) {
 	f := newFixture(t)
-	b := f.create()
-	sha := f.feature("feature/one", "one.txt", "one\n", f.base)
-	b = f.sync(f.merge(b, "feature/one", sha))
+	b := f.sync(f.create())
 	f.s.Store.writeAtomic = func(string, []byte, os.FileMode) error { return errors.New("synthetic disk write failure") }
 	if _, err := f.s.Publish(context.Background(), b.ID, b.TagPlan.Token); err == nil {
 		t.Fatal("cache failure ignored")
@@ -912,8 +910,8 @@ func TestProductionInterruptedTagPushAndWriteFailureAreIdempotent(t *testing.T) 
 		t.Fatalf("failed build status %v", err)
 	}
 	done = f.sync(done)
-	if done.TagPlan != nil {
-		t.Fatal("failed build generated a new unchanged Tag")
+	if done.TagPlan == nil || done.TagPlan.Tag != "2.3.44.1" || len(done.Tags) != 1 {
+		t.Fatal("explicit check should prepare, but not publish, the next unchanged Tag")
 	}
 	f.g.status = domain.GenbuSuccess
 	done, err = f.s.RefreshBuild(context.Background(), b.ID)

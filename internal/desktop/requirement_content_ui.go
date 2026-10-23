@@ -305,6 +305,7 @@ func (s *app) updateRequirementReaderBody(reader *requirementReaderState, body a
 		reader.bodyMarkdown.path = body.MarkdownPath
 		updateReadonlyMarkdownState(reader.bodyMarkdown, body.Body, images)
 	}
+	reader.bodyMarkdown.richTextReading = true
 }
 
 func (s *app) updateRequirementReaderComments(reader *requirementReaderState, comments application.RequirementComments) {
@@ -338,6 +339,7 @@ func (s *app) updateRequirementReaderComments(reader *requirementReaderState, co
 			updateReadonlyMarkdownState(state, body, images)
 		}
 		state.commentReading = true
+		state.richTextReading = true
 		state.path = comments.CachePath
 	}
 	for key, state := range reader.commentMarkdown {

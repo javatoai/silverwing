@@ -21,18 +21,20 @@ func ProjectReading(source string) ReadingProjection {
 	return projectReading(source, false)
 }
 
-func ProjectCommentReading(source string) ReadingProjection {
+// ProjectRichTextReading adapts imported body/comment formatting to the native
+// Markdown theme. Only AST-recognized span wrappers are omitted from the view.
+func ProjectRichTextReading(source string) ReadingProjection {
 	return projectReading(source, true)
 }
 
-func projectReading(source string, commentHTML bool) ReadingProjection {
+func projectReading(source string, richTextHTML bool) ReadingProjection {
 	normalized, offsets := normalizeLines(source)
 	normalizedBytes := []byte(normalized)
 	root := markdownParser.Parse(text.NewReader(normalizedBytes))
 	mapper := sourceMapper{original: source, offsets: offsets}
 	ranges := map[SourceRange]bool{}
-	if commentHTML {
-		for _, span := range commentHTMLSpanRanges(normalizedBytes) {
+	if richTextHTML {
+		for _, span := range htmlSpanRanges(normalizedBytes) {
 			a, b := mapper.rawRange(span.Start, span.End)
 			ranges[SourceRange{a, b}] = true
 		}
@@ -89,13 +91,13 @@ func projectReading(source string, commentHTML bool) ReadingProjection {
 	return ReadingProjection{Source: output.String(), Removed: removed, LinkPreviews: links}
 }
 
-func commentHTMLSpanRanges(source []byte) []SourceRange {
+func htmlSpanRanges(source []byte) []SourceRange {
 	var ranges []SourceRange
-	collectCommentHTMLSpanRanges(source, 0, &ranges)
+	collectHTMLSpanRanges(source, 0, &ranges)
 	return ranges
 }
 
-func collectCommentHTMLSpanRanges(source []byte, base int, ranges *[]SourceRange) {
+func collectHTMLSpanRanges(source []byte, base int, ranges *[]SourceRange) {
 	root := markdownParser.Parse(text.NewReader(source))
 	_ = gast.Walk(root, func(node gast.Node, entering bool) (gast.WalkStatus, error) {
 		if !entering {
@@ -111,13 +113,13 @@ func collectCommentHTMLSpanRanges(source []byte, base int, ranges *[]SourceRange
 				}
 			}
 		case *gast.HTMLBlock:
-			collectCommentHTMLBlockSpanRanges(value, source, base, ranges)
+			collectHTMLBlockSpanRanges(value, source, base, ranges)
 		}
 		return gast.WalkContinue, nil
 	})
 }
 
-func collectCommentHTMLBlockSpanRanges(block *gast.HTMLBlock, source []byte, base int, ranges *[]SourceRange) {
+func collectHTMLBlockSpanRanges(block *gast.HTMLBlock, source []byte, base int, ranges *[]SourceRange) {
 	lines := block.Lines()
 	if lines == nil || lines.Len() == 0 {
 		return
@@ -159,7 +161,7 @@ func collectCommentHTMLBlockSpanRanges(block *gast.HTMLBlock, source []byte, bas
 		}
 	}
 	if removedLeadingSpans && cutEnd <= lastLine.Stop {
-		collectCommentHTMLSpanRanges(source[cutEnd:lastLine.Stop], base+cutEnd, ranges)
+		collectHTMLSpanRanges(source[cutEnd:lastLine.Stop], base+cutEnd, ranges)
 	}
 }
 

@@ -1,7 +1,6 @@
 package desktop
 
 import (
-	"fmt"
 	"slices"
 	"strings"
 
@@ -63,7 +62,7 @@ func productionIntentStep(b *production.Batch) int {
 }
 
 func productionActionStep(kind, follow string, b *production.Batch) int {
-	if follow == "build-preview" || follow == "build-confirm" {
+	if follow == "build-preview" || follow == "build-publish" {
 		return 6
 	}
 	switch kind {
@@ -93,7 +92,7 @@ func productionActionStep(kind, follow string, b *production.Batch) int {
 		return 4
 	case "production.open-ide":
 		return productionIntentStep(b)
-	case "production.resume", "production.rebase-pending", "production.pending-preview":
+	case "production.resume", "production.rebase-pending", "production.pending-preview", "production.abort-merge":
 		return productionIntentStep(b)
 	}
 	return 0
@@ -149,23 +148,6 @@ func productionStep(v *productionView, b *production.Batch, step int) production
 	return result
 }
 
-func productionStepHeading(c *ui.Context, p palette, v *productionView, b *production.Batch, step int, title string) {
-	state := productionStep(v, b, step)
-	text := map[string]string{"pending": "待执行", "running": "进行中…", "complete": "已完成", "skipped": "无需合并", "failed": "已暂停", "prepared": "待确认"}[state.State]
-	color := p.muted
-	if state.State == "complete" || state.State == "skipped" {
-		color = p.green
-	} else if state.State == "running" || state.State == "prepared" {
-		color = p.blue
-	} else if state.State == "failed" {
-		color = p.amber
-	}
-	ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
-		label(c, fmt.Sprintf("%d. %s", step, title), 14, p.text).FontWeight(600).Wrap()
-		label(c, text, 11, color).NoWrap()
-	})
-}
-
 func productionChoiceLabel(choice productionServiceChoice, grouped bool) string {
 	if grouped {
 		return choice.GroupName + " · " + choice.Name
@@ -182,45 +164,63 @@ func productionHasMultipleGroups(choices []productionServiceChoice) bool {
 }
 
 func (s *app) renderProductionInitialization(c *ui.Context, p palette, v *productionView, b *production.Batch) {
-	productionStepHeading(c, p, v, b, 1, "对比生产 Tag 与主分支差异")
-	if v.Preview != nil {
-		s.renderProductionBaseline(c, p, v)
-	} else {
-		label(c, "检查线上运行版本及远端 Git Tag，再核对与主分支的差异。", 12, p.muted).Wrap()
+	pending := productionIntentStep(b)
+	productionCard(c, p, "production-initialization-baseline", "生产 Tag → 主分支", s.productionBaselineStatus(v, b), func() {
+		if v.Preview != nil {
+			s.renderProductionBaseline(c, p, v)
+		} else {
+			label(c, "检查线上运行版本及远端 Git Tag，再核对与主分支的差异。", 12, p.muted).Wrap()
+		}
+		feedbackStep := 1
+		if v.ActiveStep == 2 || pending == 2 && v.ActiveStep != 1 {
+			feedbackStep = 2
+		}
+		s.renderProductionSectionFeedback(c, p, s.productionSection(v, b, feedbackStep))
+		if pending == 2 {
+			s.renderProductionRecoveryDetails(c, p, v, *b)
+		}
+	}, func() {
+		s.renderProductionCheckButtons(c, p, v)
+		if pending == 2 {
+			s.renderProductionRecoveryActions(c, p, v, *b)
+		} else if pending != 3 || productionMainIncluded(v.Preview) {
+			s.renderProductionMainMerge(c, p, v, b, "initial")
+		}
+	})
+
+	var releaseActions func()
+	if pending == 3 {
+		releaseActions = func() { s.renderProductionRecoveryActions(c, p, v, *b) }
+	} else if b == nil || b.InitialSHA == "" {
+		releaseActions = func() {
+			if productionButton(c, "production-create", "创建 release", p, true, v.Busy || b != nil && b.Intent != nil || !productionMainIncluded(v.Preview)) {
+				v.ActiveStep = 3
+				s.confirmProductionCreate(v)
+			}
+		}
 	}
-	s.renderProductionCheckActions(c, p, v)
-	s.renderProductionSectionFeedback(c, p, s.productionSection(v, b, 1))
-	productionStepHeading(c, p, v, b, 2, "合并生产 Tag 到主分支")
-	s.renderProductionMainMerge(c, p, v, b, "initial")
-	s.renderProductionSectionFeedback(c, p, s.productionSection(v, b, 2))
-	if productionIntentStep(b) == 2 {
-		s.renderProductionRecovery(c, p, v, *b)
-	}
-	productionStepHeading(c, p, v, b, 3, "创建 release 分支")
-	if b == nil || b.InitialSHA == "" {
-		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+	productionCard(c, p, "production-initialization-release", "创建 release 分支", s.productionInitializationStepStatus(v, b, 3), func() {
+		if b == nil || b.InitialSHA == "" {
 			branchInput := &v.Version
 			if b != nil && b.Intent != nil && b.Intent.Step == "release-create" {
 				value := b.ReleaseBranch
 				branchInput = &value
 			}
-			ui.TextInput(c.Key("production-version"), branchInput).Grow(1).MinWidth(0).Height(36).Placeholder("release/2.3.44").Label("release 分支名").ReadOnly(v.Busy || b != nil && b.Intent != nil)
-			if productionButton(c, "production-create", "创建 release", p, true, v.Busy || b != nil && b.Intent != nil || !productionMainIncluded(v.Preview)) {
-				v.ActiveStep = 3
-				s.confirmProductionCreate(v)
+			ui.TextInput(c.Key("production-version"), branchInput).Width(480).MaxWidthPercent(100).MinWidth(0).Height(36).Placeholder("release/2.3.44").Label("release 分支名").Tooltip("可修改版本部分").ReadOnly(v.Busy || b != nil && b.Intent != nil)
+			if pending == 3 {
+				s.renderProductionRecoveryDetails(c, p, v, *b)
 			}
-		})
-		label(c, "自动计算分支名，可修改版本部分；确认后仅创建并推送该分支。", 12, p.muted).Wrap()
-		if productionIntentStep(b) == 3 {
-			s.renderProductionRecovery(c, p, v, *b)
+		} else {
+			label(c, b.ReleaseBranch, 13, p.text).FillWidth().MinWidth(0).Wrap().Selectable().Tooltip(b.ReleaseBranch).Label("production-release-result值")
 		}
-	} else {
-		label(c, b.ReleaseBranch, 12, p.muted).Wrap()
-	}
-	s.renderProductionSectionFeedback(c, p, s.productionSection(v, b, 3))
+		s.renderProductionSectionFeedback(c, p, s.productionSection(v, b, 3))
+	}, releaseActions)
 }
 
 func (s *app) renderProductionMainMerge(c *ui.Context, p palette, v *productionView, b *production.Batch, key string) {
+	if b != nil && productionHasConflict(*b) && productionIntentStep(b) == 2 {
+		return
+	}
 	main := "主分支"
 	if v.Preview != nil {
 		main = v.Preview.Target.MainBranch
@@ -230,7 +230,7 @@ func (s *app) renderProductionMainMerge(c *ui.Context, p palette, v *productionV
 	contained := productionMainIncluded(v.Preview)
 	text := "合并生产 Tag 到 " + main
 	if contained {
-		label(c, main+" 已包含生产 Tag "+v.Preview.ProductionTag+"。", 12, p.text).Wrap()
+		productionButton(c, "production-main-"+key, "无需合并", p, false, true)
 		return
 	}
 	if productionButton(c, "production-main-"+key, text, p, true, v.Busy || v.Preview == nil || v.Preview.ProductionSHA == "" || v.Preview.MainSHA == "" || b != nil && b.Intent != nil) {
@@ -240,24 +240,30 @@ func (s *app) renderProductionMainMerge(c *ui.Context, p palette, v *productionV
 }
 
 func (s *app) renderProductionCheckActions(c *ui.Context, p palette, v *productionView) {
+	ui.Row(c).FillWidth().Gap(8).Wrap().Children(func() { s.renderProductionCheckButtons(c, p, v) })
+}
+
+func (s *app) renderProductionCheckButtons(c *ui.Context, p palette, v *productionView) {
 	known := v.Preview != nil && v.Preview.ProductionSHA != "" && v.Preview.MainSHA != ""
+	if v.ActiveStep == 1 && s.productionSection(v, s.productionBatch(v), 1).State == "failed" {
+		known = false
+	}
+	changed := known && productionBaselineHasChanges(v.Preview)
 	diffText, diffPalette := "查看差异", p
 	if known {
 		diffText = "无差异"
-		if productionBaselineHasChanges(v.Preview) {
+		if changed {
 			diffText = "查看差异"
 			diffPalette.surface, diffPalette.text = p.amberBg, p.amber
 		}
 	}
-	ui.Row(c).FillWidth().Gap(8).Wrap().Children(func() {
-		if productionButton(c, "production-inspect", "重新检查", p, false, v.Busy) {
-			s.productionInspect("")
-		}
-		if productionButton(c, "production-diff-toggle", diffText, diffPalette, false, !known) {
-			preview := v.Preview
-			s.openProductionDiff(v, "生产 Tag → 主分支", preview.ProductionTag, preview.Target.Remote+"/"+preview.Target.MainBranch, preview.ProductionSHA, preview.MainSHA, true)
-		}
-	})
+	if productionButton(c, "production-inspect", "重新检查", p, false, v.Busy) {
+		s.productionInspect("")
+	}
+	if productionButton(c, "production-diff-toggle", diffText, diffPalette, false, !changed) {
+		preview := v.Preview
+		s.openProductionDiff(v, "生产 Tag → 主分支", preview.ProductionTag, preview.Target.Remote+"/"+preview.Target.MainBranch, preview.ProductionSHA, preview.MainSHA, true)
+	}
 }
 
 func productionBaselineHasChanges(preview *production.Preview) bool {

@@ -16,7 +16,7 @@ func (s *app) confirmProductionDelete(v *productionView, b production.Batch) {
 	}
 	previous := s.confirmationDialog
 	s.confirmProduction(v, b.Target, productionConfirmationContent{
-		Title: "删除批次", Message: "确认删除这个已结束批次的本地记录？",
+		Title:  "删除批次",
 		Source: firstNonEmpty(b.ReleaseBranch, "初始化批次"), Destination: "删除本地记录",
 		Detail:  productionTargetDetail(b.Target) + "\n批次 ID：" + b.ID + "\n创建时间：" + b.CreatedAt + "\n更新时间：" + b.UpdatedAt,
 		Notices: []string{"仅删除本地批次记录，保留工作区及其中的修改、远端分支和 Tag。"},
@@ -86,7 +86,7 @@ func (s *app) forgetProductionBatch(state *productionUIState, id string) {
 			}
 		}
 		view.selectProductionBatch(nextID)
-		view.Version, view.SuggestedBranch, view.OpenedConflict = nextVersion, "", ""
+		view.Version, view.SuggestedBranch = nextVersion, ""
 	}
 	choices := state.choices[:0]
 	for _, choice := range state.choices {

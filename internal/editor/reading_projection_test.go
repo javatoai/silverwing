@@ -37,7 +37,7 @@ func TestReadingProjectionKeepsCodeAndUnknownAnnotations(t *testing.T) {
 	}
 }
 
-func TestCommentReadingProjectionStripsOnlyASTSpanTokens(t *testing.T) {
+func TestRichTextReadingProjectionStripsOnlyASTSpanTokens(t *testing.T) {
 	const openOuter = `<span style="background-color: rgb(255, 255, 255)">`
 	const openInner = `<span style='font-size: 14px; color: #000000'>`
 	const source = "前置\r\n\r\n1. 中文 " + openOuter + openInner + "needle内容</span></span> ![截图](https://example.test/image.png)\r\n\r\n" +
@@ -47,7 +47,7 @@ func TestCommentReadingProjectionStripsOnlyASTSpanTokens(t *testing.T) {
 		"[需求文档](https://project.feishu.cn/wiki/example)<!-- linkPreview -->\r\n"
 
 	doc := NewDocument(source, "comment-reading-projection")
-	got := ProjectCommentReading(doc.Source())
+	got := ProjectRichTextReading(doc.Source())
 	want := strings.Replace(source, openOuter, "", 1)
 	want = strings.Replace(want, openInner, "", 1)
 	want = strings.Replace(want, "</span>", "", 2)
@@ -84,7 +84,7 @@ func TestCommentReadingProjectionStripsOnlyASTSpanTokens(t *testing.T) {
 	}
 }
 
-func TestCommentReadingProjectionRecognizesOnlySpanTags(t *testing.T) {
+func TestRichTextReadingProjectionRecognizesOnlySpanTags(t *testing.T) {
 	for _, token := range []string{`<span>`, `</span>`, `<SPAN class="x > y">`, "<span\nstyle=\"color: red\">", `<span/>`} {
 		if !isHTMLSpanToken([]byte(token)) {
 			t.Errorf("valid span token was not recognized: %q", token)
@@ -97,10 +97,10 @@ func TestCommentReadingProjectionRecognizesOnlySpanTags(t *testing.T) {
 	}
 }
 
-func TestCommentReadingProjectionMultilineSpanAttributes(t *testing.T) {
+func TestRichTextReadingProjectionMultilineSpanAttributes(t *testing.T) {
 	for _, token := range []string{"<span\nstyle=\"color: red\">", "<span title=\"中文\n属性\">"} {
 		source := "文字 " + token + "正文</span>"
-		projection := ProjectCommentReading(source)
+		projection := ProjectRichTextReading(source)
 		if projection.Source != "文字 正文" {
 			t.Errorf("multiline span projection=%q", projection.Source)
 		}
@@ -112,7 +112,7 @@ func TestCommentReadingProjectionMultilineSpanAttributes(t *testing.T) {
 	}
 }
 
-func TestCommentReadingProjectionReparsesSpanHTMLBlocksSafely(t *testing.T) {
+func TestRichTextReadingProjectionReparsesSpanHTMLBlocksSafely(t *testing.T) {
 	const outer = `<span class="outer">`
 	const inner = `<span style='color: red'>`
 	const image = `![截图](https://example.test/image.png)`
@@ -122,7 +122,7 @@ func TestCommentReadingProjectionReparsesSpanHTMLBlocksSafely(t *testing.T) {
 		"<div>\r\n<span>不支持的 HTML 回退</span>\r\n</div>\r\n"
 
 	doc := NewDocument(source, "comment-reading-html-block")
-	got := ProjectCommentReading(doc.Source())
+	got := ProjectRichTextReading(doc.Source())
 	want := strings.Replace(source, outer, "", 1)
 	want = strings.Replace(want, inner, "", 1)
 	want = strings.Replace(want, "\r\n</span>\r\n```html", "\r\n\r\n```html", 1)

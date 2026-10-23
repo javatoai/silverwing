@@ -84,6 +84,9 @@ func (s *Service) MergeProduction(ctx context.Context, id string, preview Previe
 		return s.initialize(ctx, preview, "", true, "")
 	}
 	return s.withBatch(ctx, id, func(b *Batch, c domain.AppConfig) error {
+		if err := mergeAbortPending(b); err != nil {
+			return err
+		}
 		reconfirm := b.Intent != nil && b.Intent.Step == "main" && (b.Intent.Kind == "main" || b.Intent.Kind == "sync" || b.Intent.Kind == "create")
 		if b.Intent != nil && !reconfirm {
 			return errors.New("请先继续当前未完成操作")

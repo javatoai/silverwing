@@ -77,6 +77,10 @@ func (s *app) productionSection(v *productionView, b *production.Batch, step int
 		// The heading already communicates success; keep activity and errors below.
 		result.Message = ""
 	}
+	if state.State == "skipped" && result.Message == "已包含，无需合并" {
+		// The card's completed state and inclusion tooltip replace this echo.
+		result.Message = ""
+	}
 	if v.Busy && v.ActiveStep == step {
 		result.Activity = productionActivity(v.ActiveAction, v.RefreshAfter)
 		if state.State == "running" {
@@ -90,6 +94,14 @@ func (s *app) productionSection(v *productionView, b *production.Batch, step int
 	if !v.Busy && v.Error != "" && v.ActiveStep == step && result.Message == "" {
 		result.State, result.Message = "failed", v.Error
 	}
+	if b != nil && productionHasConflict(*b) && productionIntentStep(b) == step {
+		switch result.Message {
+		case "合并发生冲突，请在 IDE 中处理并提交", "请在 IDE 中解决冲突并完成 merge commit，再校验并继续":
+			// The recovery panel names both refs once. Preserve other errors,
+			// including failed aborts, IDE launches and changed repositories.
+			result.Message = ""
+		}
+	}
 	return result
 }
 
@@ -98,23 +110,22 @@ func (s *app) productionReleaseModel(v *productionView, b *production.Batch) pro
 	if v.ActiveStep == 5 || productionIntentStep(b) == 5 {
 		m.Build = s.productionSection(v, b, 5)
 	}
-	// A previous display snapshot cannot decide that the remote still has no
-	// changes. The action always reads again; only the backend may prepare a Tag.
-	m.CanBuild = b.InitialSHA != "" && len(b.Branches) > 0
+	// Builds do not require feature history or a changed commit. The action
+	// always reads again; unresolved operations still block Tag preparation.
+	m.CanBuild = b.InitialSHA != "" && !b.Ended && b.Intent == nil && !v.Busy
 	m.ShowSync = v.BuildChecked && v.Preview != nil && (!productionMainIncluded(v.Preview) || !productionReleaseIncluded(v.Preview))
 	if !m.Ready {
-		m.BuildReason = "构建时自动检查线上版本和提交，通过后确认推送 Tag。"
-		if len(b.Branches) == 0 {
-			m.BuildReason = "请先合并至少一个有新增提交的分支。"
+		m.BuildReason = "构建时自动检查线上版本和提交，通过后推送 Tag。"
+		if v.Busy && v.ActiveAction == "production.abort-merge" {
+			m.BuildReason = "请等待当前合并撤回完成。"
+		} else if b.Phase == "ABORTING" && b.Intent != nil {
+			m.BuildReason = "请先完成当前合并的撤回核对。"
+		} else if productionHasConflict(*b) {
+			m.BuildReason = "请先解决或撤回当前合并。"
 		} else if b.Intent != nil {
 			m.BuildReason = "请先完成当前未结束的操作。"
 		} else if m.ShowSync {
 			m.BuildReason = "请完成下方需要的同步，再点击构建 Tag。"
-		} else if v.BuildChecked && b.ReleaseSHA == b.LastTagCommit() {
-			m.BuildReason = "没有新增提交，无需构建；可继续合并分支。"
-			if m.Build.State == "complete" {
-				m.Build.Message = ""
-			}
 		}
 	}
 	return m
@@ -129,6 +140,8 @@ func productionActivity(kind, refreshAfter string) string {
 		return "正在检查所选分支的提交…"
 	case "production.merge":
 		return "正在合并分支并推送…"
+	case "production.abort-merge":
+		return "正在撤回本次合并…"
 	case "production.merge-main":
 		return "正在同步生产 Tag 到主分支…"
 	case "production.merge-release":
@@ -202,7 +215,6 @@ func (v *productionView) invalidateProductionBranchResult(p *production.Preview)
 func (v *productionView) selectProductionBatch(id string) {
 	v.BatchID, v.Preview, v.Steps = id, nil, nil
 	v.Error, v.Message, v.Branch = "", "", ""
-	v.BranchHistoryExpanded, v.TagHistoryExpanded = false, false
 	v.PreparationInvalid = true
 	v.BuildChecked = false
 	v.ActiveStep, v.ActiveAction, v.RefreshAfter = 0, "", ""

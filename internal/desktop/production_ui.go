@@ -25,10 +25,12 @@ func productionPhase(phase string) string {
 		return "同步 release"
 	case "CONFLICT":
 		return "等待解决冲突"
+	case "ABORTING":
+		return "等待完成撤回"
 	case "PAUSED":
 		return "已暂停"
 	case "TAG_READY":
-		return "等待构建确认"
+		return "准备就绪"
 	case "PUSH_TAG":
 		return "推送 Tag"
 	case "ENDED":
@@ -125,6 +127,7 @@ func (s *app) renderProductionPage(c *ui.Context, p palette) {
 						})
 						if b.Clicked() {
 							state.selected = key
+							s.observeProductionBuildNavigation()
 							if !service.Historical && state.views[key].Preview == nil && !state.views[key].Busy {
 								s.productionInspect("")
 							}
@@ -147,13 +150,14 @@ func (s *app) renderProductionDetail(c *ui.Context, p palette) {
 		return
 	}
 	b := s.productionBatch(v)
+	s.productionDisclosures(v, b)
 	for _, choice := range s.production.choices {
 		if choice.GroupID == v.Selection.GroupID && choice.ID == v.Selection.ServiceID && choice.Historical {
 			label(c, "原服务已停用或移除。可查看历史、保留工作区或结束批次；继续发布前请恢复并核对服务配置。", 12, p.amber).Wrap()
 			break
 		}
 	}
-	ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).FillWidth().MinWidth(0).Padding(0, 16).Gap(10).AlignItems(ui.Center).Children(func() {
 		name := "选择服务后检查生产基线"
 		for _, choice := range s.production.choices {
 			if choice.ID == v.Selection.ServiceID && choice.GroupID == v.Selection.GroupID {
@@ -170,6 +174,11 @@ func (s *app) renderProductionDetail(c *ui.Context, p palette) {
 		miniButton(c, p, "production-more", "more", "更多生产发布操作", false).Disabled(v.Busy).Menu(func(menu *ui.Menu) {
 			if menu.Item("手动确认生产 Tag").Disabled(v.Busy).Chosen() {
 				s.openProductionBaseline(v)
+			}
+			if b != nil && len(b.RetainedWorktrees) > 0 {
+				if menu.Item(fmt.Sprintf("保留的工作区 · %d 个", len(b.RetainedWorktrees))).Chosen() {
+					s.openProductionWorktrees(v, *b)
+				}
 			}
 			if b != nil && !b.Ended {
 				menu.Separator()
@@ -190,6 +199,9 @@ func (s *app) renderProductionDetail(c *ui.Context, p palette) {
 	}
 	if b == nil || !b.Ended {
 		s.renderProductionInitialization(c, p, v, b)
+		if b == nil || b.InitialSHA == "" {
+			s.renderProductionWaitingRelease(c, p, v, b)
+		}
 	}
 	if b == nil || b.Ended {
 		if b != nil {
@@ -208,23 +220,14 @@ func (s *app) renderProductionDetail(c *ui.Context, p palette) {
 	} else {
 		s.renderProductionActive(c, p, v, *b)
 	}
-	if b != nil && len(b.RetainedWorktrees) > 0 {
-		label(c, "保留的工作区", 13, p.text).FontWeight(600)
-		for _, path := range b.RetainedWorktrees {
-			label(c, path, 11, p.muted).Wrap().Selectable()
-		}
-	}
 	s.renderProductionHistory(c, p, v)
 }
 
 func (s *app) renderProductionBaseline(c *ui.Context, p palette, v *productionView) {
 	preview := v.Preview
-	ui.Column(c).FillWidth().Gap(7).Padding(12, 14).Background(p.soft).Radius(12).Children(func() {
-		ui.Row(c).FillWidth().Gap(10).Children(func() {
-			label(c, "线上生产 Tag", 12, p.muted)
-			label(c, firstNonEmpty(preview.ProductionTag, "待确认"), 13, p.text).Grow(1).SingleLine()
-		})
-		label(c, "主分支  "+preview.Target.Remote+"/"+preview.Target.MainBranch+" · "+shortProductionSHA(preview.MainSHA), 12, p.muted).Wrap()
+	ui.Column(c).FillWidth().MaxWidth(600).MinWidth(0).AlignSelf(ui.Start).Gap(8).Label("生产基线摘要").Children(func() {
+		productionInfoRow(c, p, "production-baseline-tag", "线上生产 Tag", firstNonEmpty(preview.ProductionTag, "待确认"), "")
+		productionInfoRow(c, p, "production-baseline-main", "主分支", preview.Target.Remote+"/"+preview.Target.MainBranch, preview.MainSHA)
 		if len(preview.ProductionCandidates) > 1 {
 			label(c, "线上存在多个版本："+strings.Join(preview.ProductionCandidates, "、"), 12, p.amber).Wrap()
 		}
@@ -242,59 +245,98 @@ func (s *app) renderProductionActive(c *ui.Context, p palette, v *productionView
 		return
 	}
 	pending := productionIntentStep(&b)
-	blocked := v.Busy || b.Intent != nil || b.InitialSHA == ""
+	blocked := v.Busy || b.Intent != nil
 	m := s.productionReleaseModel(v, &b)
-	productionZone(c, p, "合并分支", func() {
-		s.renderProductionFeaturePicker(c, p, v, b, blocked)
-		s.renderProductionSectionFeedback(c, p, s.productionSection(v, &b, 4))
-		if pending == 4 {
-			s.renderProductionRecovery(c, p, v, b)
-		}
-		if b.Intent == nil && v.Preview != nil && v.Preview.ReleaseSHA != "" && v.Preview.ReleaseSHA != b.ReleaseSHA {
-			label(c, "远端 release 有批次之外的新提交，请核对差异。", 12, p.amber).Wrap()
-			if productionButton(c, "production-adopt", "查看并采纳远端", p, false, v.Busy) {
+	conflict := productionHasConflict(b)
+	remoteChanged := b.Intent == nil && v.Preview != nil && v.Preview.ReleaseSHA != "" && v.Preview.ReleaseSHA != b.ReleaseSHA
+	var mergeActions func()
+	if pending == 4 {
+		mergeActions = func() { s.renderProductionRecoveryActions(c, p, v, b) }
+	} else if !conflict {
+		mergeActions = func() {
+			if remoteChanged && productionButton(c, "production-adopt", "查看并采纳远端", p, false, v.Busy) {
 				s.confirmProductionAdopt(v, b)
 			}
+			s.renderProductionFeatureActions(c, p, v, b, blocked)
 		}
-		if len(b.Branches) > 0 {
-			productionDisclosure(c, p, "production-merged-history", fmt.Sprintf("合并记录 · %d 次", len(b.Branches)), &v.BranchHistoryExpanded, func() {
-				ui.Scroll(c.Key("production-feature-history-" + b.ID)).FillWidth().MaxHeight(110).Gap(4).Children(func() {
-					for i := len(b.Branches) - 1; i >= 0; i-- {
-						branch := b.Branches[i]
-						label(c, branch.Branch+" · "+shortProductionSHA(branch.SourceSHA), 11, p.muted).SingleLine().Tooltip(branch.Branch + "\n" + branch.SourceSHA)
-					}
-				})
-			})
+	}
+	productionCard(c, p, "production-merge-card", "合并分支", s.productionMergeStatus(v, &b), func() {
+		if !conflict {
+			s.renderProductionFeaturePicker(c, p, v, &b, blocked)
+		} else if pending != 4 {
+			label(c, "请先处理当前合并冲突。", 12, p.muted).Wrap()
 		}
-	})
-	productionZone(c, p, "构建生产 Tag", func() {
+		s.renderProductionSectionFeedback(c, p, s.productionSection(v, &b, 4))
+		if pending == 4 {
+			s.renderProductionRecoveryDetails(c, p, v, b)
+		}
+		if remoteChanged {
+			label(c, "远端 release 有批次之外的新提交，请核对差异。", 12, p.amber).Wrap()
+		}
+		s.renderProductionMergedBranches(c, p, b)
+	}, mergeActions)
+	productionCard(c, p, "production-build-card", "构建生产 Tag", s.productionBuildStatus(v, &b, m), func() {
 		if m.Ready {
-			label(c, b.TagPlan.Tag+" · "+shortProductionSHA(b.TagPlan.Commit), 13, p.blue).FontWeight(550).Wrap()
-		} else {
+			label(c, b.TagPlan.Tag, 13, p.blue).FontWeight(550).Wrap().Tooltip(b.TagPlan.Commit)
+		} else if !m.CanBuild || m.ShowSync {
 			label(c, m.BuildReason, 12, p.muted).Wrap()
 		}
-		ui.Row(c).FillWidth().Gap(8).Wrap().Children(func() {
-			if productionButton(c, "production-publish", "构建 Tag", p, true, blocked || !m.CanBuild) {
-				s.productionInspect("build-preview")
-			}
-			if m.Ready && productionButton(c, "production-tag-diff", "查看本次构建差异", p, false, false) {
-				s.openProductionDiff(v, "本次构建差异", b.ReleaseBranch, firstNonEmpty(lastProductionTagName(b), "release 初始提交"), b.TagPlan.Commit, b.LastTagCommit(), false)
-			}
-		})
 		s.renderProductionSectionFeedback(c, p, m.Build)
-		if m.ShowSync {
+		if m.ShowSync && !conflict {
 			s.renderProductionRelations(c, p, v, b, blocked)
 		}
 		if pending == 5 || pending == 6 {
-			s.renderProductionRecovery(c, p, v, b)
+			s.renderProductionRecoveryDetails(c, p, v, b)
 		}
-		s.renderProductionRecentTag(c, p, v, b)
+		s.renderProductionTagRecords(c, p, v, b)
+	}, func() {
+		if pending == 5 || pending == 6 {
+			s.renderProductionRecoveryActions(c, p, v, b)
+			s.renderProductionBuildRefresh(c, p, v, b)
+			return
+		}
+		if m.Ready {
+			diffLabel := "查看本次构建差异"
+			if strings.TrimSpace(b.TagPlan.Diff) == "" {
+				diffLabel = "无差异"
+			}
+			if productionButton(c, "production-tag-diff", diffLabel, p, false, false) {
+				s.openProductionDiff(v, "本次构建差异", b.ReleaseBranch, firstNonEmpty(lastProductionTagName(b), "release 初始提交"), b.TagPlan.Commit, b.LastTagCommit(), false)
+			}
+		}
+		s.renderProductionBuildRefresh(c, p, v, b)
+		if productionButton(c, "production-publish", "构建 Tag", p, true, blocked || !m.CanBuild) {
+			s.productionInspect("build-preview")
+		}
 	})
 }
 
-func (s *app) renderProductionFeaturePicker(c *ui.Context, p palette, v *productionView, b production.Batch, disabled bool) {
-	label(c, "选择要合并的远端分支", 12, p.text)
-	label(c, "合入到："+b.ReleaseBranch, 12, p.muted).Wrap().Tooltip(b.Target.Remote + "/" + b.ReleaseBranch)
+// A service without a created release still shows the full workflow. These
+// controls have no operation callbacks and never fabricate a batch identity.
+func (s *app) renderProductionWaitingRelease(c *ui.Context, p palette, v *productionView, b *production.Batch) {
+	waiting := productionCardStatus{Text: "待创建 release", State: "pending"}
+	productionCard(c, p, "production-merge-card", "合并分支", waiting, func() {
+		if b != nil && productionHasConflict(*b) {
+			label(c, "请先处理当前合并冲突。", 12, p.muted).Wrap()
+		} else {
+			s.renderProductionFeaturePicker(c, p, v, b, true)
+		}
+	}, func() {
+		productionButton(c, "production-feature-diff", "查看差异", p, false, true)
+		productionButton(c, "production-merge", "合并到 release", p, true, true)
+	})
+	productionCard(c, p, "production-build-card", "构建生产 Tag", waiting, nil, func() {
+		productionButton(c, "production-publish", "构建 Tag", p, true, true)
+	})
+}
+
+func (s *app) renderProductionFeaturePicker(c *ui.Context, p palette, v *productionView, b *production.Batch, disabled bool) {
+	releaseBranch, mainBranch := "", ""
+	if b != nil && b.InitialSHA != "" {
+		releaseBranch, mainBranch = b.ReleaseBranch, b.Target.MainBranch
+	} else {
+		disabled = true
+	}
 	ui.Row(c).FillWidth().Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 		previous := v.Branch
 		combo := ui.ComboboxBase(c.Key("production-feature"), &v.Branch)
@@ -317,7 +359,7 @@ func (s *app) renderProductionFeaturePicker(c *ui.Context, p palette, v *product
 					return
 				}
 				for _, branch := range v.Preview.Branches {
-					if branch == b.ReleaseBranch || branch == b.Target.MainBranch {
+					if branch == releaseBranch || branch == mainBranch {
 						continue
 					}
 					if combo.Filtering() && !strings.Contains(strings.ToLower(branch), strings.ToLower(v.Branch)) {
@@ -337,46 +379,76 @@ func (s *app) renderProductionFeaturePicker(c *ui.Context, p palette, v *product
 		if previous != v.Branch {
 			v.productionBranchChanged()
 		}
-		ui.Row(c).Gap(8).Children(func() {
-			if productionButton(c, "production-feature-diff", "查看差异", p, false, disabled || strings.TrimSpace(v.Branch) == "") {
-				s.productionRequestFor(v, application.Action{Kind: "production.feature-preview", Payload: map[string]any{"batchId": b.ID, "branch": v.Branch}}, "feature-diff")
-			}
-			if productionButton(c, "production-merge", "合并到 release", p, true, disabled || strings.TrimSpace(v.Branch) == "") {
-				s.productionRequestFor(v, application.Action{Kind: "production.feature-preview", Payload: map[string]any{"batchId": b.ID, "branch": v.Branch}}, "feature-preview")
-			}
-		})
 	})
 }
 
-func (s *app) renderProductionRecovery(c *ui.Context, p palette, v *productionView, b production.Batch) {
-	ui.Column(c).FillWidth().Gap(6).Children(func() {
-		if merge := b.Intent.Merge; merge != nil {
-			label(c, "目标 "+b.Target.Remote+"/"+merge.TargetBranch+" · 源提交 "+shortProductionSHA(merge.SourceSHA), 12, p.muted).Wrap()
-			if len(merge.Conflicts) > 0 {
-				ui.Scroll(c).FillWidth().MaxHeight(64).Children(func() {
-					label(c, strings.Join(merge.Conflicts, "\n"), 12, p.danger).Wrap().Selectable()
-				})
-			}
-			label(c, merge.Worktree, 11, p.muted).Wrap().Selectable()
+// The saved successful merges are the authority. Selecting, previewing or
+// failing to merge a branch never adds a record here. The full history remains
+// intact; only the display is deduplicated, latest successful occurrence first.
+func productionMergedBranchNames(branches []production.MergedBranch) []string {
+	var names []string
+	seen := map[string]bool{}
+	for i := len(branches) - 1; i >= 0; i-- {
+		name := branches[i].Branch
+		if name != "" && !seen[name] {
+			names = append(names, name)
+			seen[name] = true
 		}
-		ui.Row(c).FillWidth().Gap(8).Wrap().Children(func() {
-			if b.Intent.Merge != nil && productionButton(c, "production-open-ide", "打开 IDE", p, false, v.Busy) {
-				s.productionRequestFor(v, application.Action{Kind: "production.open-ide", Payload: map[string]any{"batchId": b.ID}}, "")
-			}
-			if productionButton(c, "production-resume", "校验并继续", p, true, v.Busy) {
-				s.confirmProductionResume(v, b)
-			}
-			if b.Intent.Merge != nil && productionButton(c, "production-pending-preview", "核对远端变化", p, false, v.Busy) {
-				s.productionRequestFor(v, application.Action{Kind: "production.pending-preview", Payload: map[string]any{"batchId": b.ID}}, "pending-preview")
-			}
-			if b.Intent.Kind == "tag" && productionButton(c, "production-reprepare-tag", "重新检查编号与基线", p, false, v.Busy) {
-				s.confirmProductionReprepare(v, b)
-			}
-			if b.Intent.Step == "main" && v.Preview != nil && productionButton(c, "production-reconfirm-main", "重新确认生产基线并合并主分支", p, false, v.Busy) {
-				s.confirmProductionMain(v)
-			}
-		})
+	}
+	return names
+}
+
+func (s *app) renderProductionMergedBranches(c *ui.Context, p palette, b production.Batch) {
+	names := productionMergedBranchNames(b.Branches)
+	if len(names) == 0 {
+		return
+	}
+	ui.Column(c.Key("production-merged-branches-" + b.ID)).FillWidth().MinWidth(0).Gap(6).Label("已合并分支记录").Children(func() {
+		for _, name := range names {
+			label(c, "已合并："+name, 12, p.text).FillWidth().MinWidth(0).Wrap().Selectable().Tooltip(name)
+		}
 	})
+}
+
+func (s *app) renderProductionFeatureActions(c *ui.Context, p palette, v *productionView, b production.Batch, disabled bool) {
+	if productionButton(c, "production-feature-diff", "查看差异", p, false, disabled || strings.TrimSpace(v.Branch) == "") {
+		s.productionRequestFor(v, application.Action{Kind: "production.feature-preview", Payload: map[string]any{"batchId": b.ID, "branch": v.Branch}}, "feature-diff")
+	}
+	if productionButton(c, "production-merge", "合并到 release", p, true, disabled || strings.TrimSpace(v.Branch) == "") {
+		s.productionRequestFor(v, application.Action{Kind: "production.feature-preview", Payload: map[string]any{"batchId": b.ID, "branch": v.Branch}}, "feature-preview")
+	}
+}
+
+func (s *app) renderProductionRecoveryDetails(c *ui.Context, p palette, v *productionView, b production.Batch) {
+	if merge := b.Intent.Merge; merge != nil {
+		if productionHasConflict(b) {
+			s.renderProductionConflict(c, p, v, b)
+		} else {
+			productionInfoRow(c, p, "production-recovery-target", "目标", b.Target.Remote+"/"+merge.TargetBranch, "源提交："+merge.SourceSHA+"\n原目标："+merge.BeforeSHA)
+			productionInfoRow(c, p, "production-recovery-worktree", "隔离工作区", merge.Worktree, "")
+		}
+	}
+}
+
+func (s *app) renderProductionRecoveryActions(c *ui.Context, p palette, v *productionView, b production.Batch) {
+	if b.Intent.Merge != nil && productionButton(c, "production-open-ide", "打开 IDE", p, false, v.Busy) {
+		s.productionRequestFor(v, application.Action{Kind: "production.open-ide", Payload: map[string]any{"batchId": b.ID}}, "")
+	}
+	if productionButton(c, "production-resume", "校验并继续", p, !productionHasConflict(b), v.Busy || b.Phase == "ABORTING") {
+		s.confirmProductionResume(v, b)
+	}
+	if b.Intent.Merge != nil && productionButton(c, "production-pending-preview", "核对远端变化", p, false, v.Busy || b.Phase == "ABORTING") {
+		s.productionRequestFor(v, application.Action{Kind: "production.pending-preview", Payload: map[string]any{"batchId": b.ID}}, "pending-preview")
+	}
+	if productionCanAbort(b) && productionButton(c, "production-abort-merge", "撤回合并", p, false, v.Busy) {
+		s.confirmProductionAbort(v, b)
+	}
+	if b.Intent.Kind == "tag" && productionButton(c, "production-reprepare-tag", "重新检查编号与基线", p, false, v.Busy) {
+		s.confirmProductionReprepare(v, b)
+	}
+	if b.Intent.Step == "main" && v.Preview != nil && productionButton(c, "production-reconfirm-main", "重新确认生产基线并合并主分支", p, false, v.Busy || b.Phase == "ABORTING") {
+		s.confirmProductionMain(v)
+	}
 }
 
 func (s *app) renderProductionPendingHistory(c *ui.Context, p palette, v *productionView, b production.Batch) {
@@ -411,29 +483,9 @@ func (s *app) renderProductionBatchHistory(c *ui.Context, p palette, b productio
 	if len(b.Tags) == 0 {
 		return
 	}
-	v := s.productionView()
-	ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-		label(c, "生产 Tag", 14, p.text).FontWeight(600).Grow(1)
-		if productionButton(c, "production-refresh-build", "刷新构建状态", p, false, v == nil || v.Busy) {
-			s.productionRequestFor(v, application.Action{Kind: "production.refresh-build", Payload: map[string]any{"batchId": b.ID}}, "")
-		}
-	})
-	for i := len(b.Tags) - 1; i >= 0; i-- {
-		tag := b.Tags[i]
-		ui.Column(c).FillWidth().Gap(5).Padding(10, 0).Children(func() {
-			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-				label(c, tag.Name, 14, p.blue).FontWeight(600)
-				label(c, shortProductionSHA(tag.Commit), 11, p.muted).Grow(1).SingleLine()
-				compactState(c, "构建 "+productionStage(tag.Status.Build), p)
-			})
-			if tag.Status.FailureReason != nil {
-				label(c, *tag.Status.FailureReason, 11, p.amber).Wrap()
-			}
-			if tag.Status.Build == domain.GenbuFailed {
-				label(c, "请到平台重新编译此 Tag；没有新增提交时不会生成新 Tag。", 11, p.muted).Wrap()
-			}
-		})
-	}
+	productionCard(c, p, "production-ended-tags", "生产 Tag 记录", productionCardStatus{Text: "已结束", State: "pending"}, func() {
+		s.renderProductionTagRecords(c, p, s.productionView(), b)
+	}, func() { s.renderProductionBuildRefresh(c, p, s.productionView(), b) })
 }
 
 func productionTargetDetail(t production.Target) string {
@@ -453,8 +505,8 @@ func (s *app) confirmProductionCreate(v *productionView) {
 	}
 	detail := productionTargetDetail(p.Target) + fmt.Sprintf("\n生产 Tag：%s (%s)\n主分支提交：%s\n新分支：release/%s\n主分支已有提交会全部保留。\n\n%s\n%s", p.ProductionTag, p.ProductionSHA, p.MainSHA, version, p.Commits, p.Diff)
 	s.confirmProduction(v, p.Target, productionConfirmationContent{
-		Title: "创建 release 分支", Message: "确认创建并推送新分支？", Detail: detail,
-		Source: productionCommitLabel(p.Target.Remote+"/"+p.Target.MainBranch, p.MainSHA), Destination: p.Target.Remote + "/release/" + version,
+		Title: "创建 release 分支", ConfirmLabel: "创建并推送", Detail: detail,
+		Source: p.Target.Remote + "/" + p.Target.MainBranch, Destination: p.Target.Remote + "/release/" + version,
 		Notices: []string{"本次仅创建并推送新分支。"},
 	}, func() {
 		s.productionRequestFor(v, application.Action{Kind: "production.create", Payload: map[string]any{"batchId": id, "preview": p, "version": version, "confirmed": true}}, "")
@@ -469,8 +521,8 @@ func (s *app) confirmProductionFeature(v *productionView, p production.Preview, 
 	id, source, target := b.ID, p.BranchHeads[branch], p.ReleaseSHA
 	detail := productionTargetDetail(b.Target) + fmt.Sprintf("\n%s/%s → %s\n源提交：%s\n目标提交：%s\n\n%s\n%s", b.Target.Remote, branch, b.ReleaseBranch, source, target, p.Commits, p.Diff)
 	s.confirmProduction(v, b.Target, productionConfirmationContent{
-		Title: "合并功能分支", Message: "确认合并功能分支？", Detail: detail,
-		Source: productionCommitLabel(b.Target.Remote+"/"+branch, source), Destination: productionCommitLabel(b.Target.Remote+"/"+b.ReleaseBranch, target),
+		Title: "合并功能分支", ConfirmLabel: "合并并推送", Detail: detail,
+		Source: b.Target.Remote + "/" + branch, Destination: b.Target.Remote + "/" + b.ReleaseBranch,
 		Notices: []string{"保留 merge commit，合并成功后推送 release。"},
 	}, func() {
 		s.productionRequestFor(v, application.Action{Kind: "production.merge", Payload: map[string]any{"batchId": id, "branch": branch, "sourceSha": source, "releaseSha": target, "confirmed": true}}, "")
@@ -490,26 +542,27 @@ func (s *app) confirmProductionSync(v *productionView, p production.Preview) {
 		notices = append(notices, "未完成的旧工作区将保留；使用本次确认的基线重新同步。")
 	}
 	s.confirmProduction(v, b.Target, productionConfirmationContent{
-		Title: "合并主分支到 release", Message: "确认合并主分支？", Detail: detail, Notices: notices,
-		Source: productionCommitLabel(b.Target.Remote+"/"+b.Target.MainBranch, p.MainSHA), Destination: productionCommitLabel(b.Target.Remote+"/"+b.ReleaseBranch, p.ReleaseSHA),
+		Title: "合并主分支到 release", ConfirmLabel: "合并并推送", Detail: detail, Notices: notices,
+		Source: b.Target.Remote + "/" + b.Target.MainBranch, Destination: b.Target.Remote + "/" + b.ReleaseBranch,
 	}, func() {
 		s.productionRequestFor(v, application.Action{Kind: "production.merge-release", Payload: map[string]any{"batchId": id, "preview": p, "confirmed": true}}, "")
 	})
 }
 
-func (s *app) confirmProductionTag(v *productionView, b production.Batch) {
-	if !productionTagPlanCurrent(v, &b) {
+// Only a foreground build's fresh preparation reaches this continuation.
+// Refreshing, restoring a saved plan, and background probes never publish.
+func (s *app) publishProductionTag(v *productionView, b production.Batch) {
+	if !s.productionDisplayedBatchCurrent(v, b) || v.Busy || b.Ended || b.Intent != nil || !productionTagPlanCurrent(v, &b) {
 		return
 	}
 	plan := *b.TagPlan
-	detail := productionTargetDetail(b.Target) + fmt.Sprintf("\nrelease：%s\n最终提交：%s\n生产 Tag：%s\n\n%s\n%s", b.ReleaseBranch, plan.Commit, plan.Tag, plan.Commits, plan.Diff)
-	s.confirmProduction(v, b.Target, productionConfirmationContent{
-		Title: "构建生产 Tag", Message: "确认创建并推送生产 Tag？", Detail: detail,
-		Source: productionCommitLabel(b.Target.Remote+"/"+b.ReleaseBranch, plan.Commit), Destination: "Tag " + plan.Tag,
-		Notices: []string{"同名 Tag 不覆盖；推送后跟踪构建结果。"},
-	}, func() {
-		s.productionRequestFor(v, application.Action{Kind: "production.publish", Payload: map[string]any{"batchId": b.ID, "token": plan.Token, "confirmed": true}}, "")
-	})
+	current := s.productionBatch(v)
+	if current.Ended || current.Intent != nil || current.InitialSHA == "" || current.TagPlan == nil || plan.Token == "" ||
+		plan.Preview.Target != b.Target || plan.Commit != b.ReleaseSHA || plan.Commit != current.ReleaseSHA ||
+		current.TagPlan.Token != plan.Token || current.TagPlan.Tag != plan.Tag || !productionTagPlanCurrent(v, current) {
+		return
+	}
+	s.productionRequestFor(v, application.Action{Kind: "production.publish", Payload: map[string]any{"batchId": b.ID, "token": plan.Token, "confirmed": true}}, "")
 }
 
 func (s *app) confirmProductionPending(v *productionView, b production.Batch, p production.Preview) {
@@ -519,8 +572,8 @@ func (s *app) confirmProductionPending(v *productionView, b production.Batch, p 
 	id, sha := b.ID, p.MainSHA
 	detail := productionTargetDetail(b.Target) + fmt.Sprintf("\n目标：%s/%s\n原目标：%s\n当前远端：%s\n原工作区会保留。\n\n%s\n%s", b.Target.Remote, b.Intent.Merge.TargetBranch, b.Intent.Merge.BeforeSHA, sha, p.Commits, p.Diff)
 	s.confirmProduction(v, b.Target, productionConfirmationContent{
-		Title: "核对远端并继续", Message: "确认采纳远端新增提交，并继续已确认的合并？", Detail: detail,
-		Source: productionCommitLabel(b.Target.Remote+"/"+b.Intent.Merge.TargetBranch, sha), Destination: productionCommitLabel("当前合并 · "+b.Intent.Merge.TargetBranch, b.Intent.Merge.BeforeSHA),
+		Title: "核对远端并继续", Detail: detail,
+		Source: b.Target.Remote + "/" + b.Intent.Merge.TargetBranch, Destination: "当前合并 · " + b.Intent.Merge.TargetBranch,
 		Notices: []string{"保留原工作区，仅继续已确认的合并。"},
 	}, func() {
 		s.productionRequestFor(v, application.Action{Kind: "production.rebase-pending", Payload: map[string]any{"batchId": id, "remoteSha": sha, "confirmed": true}}, "")
@@ -546,8 +599,8 @@ func (s *app) confirmProductionMain(v *productionView) {
 		notices = append(notices, "保留原合并工作区，只执行本次生产 Tag 到主分支的合并。")
 	}
 	s.confirmProduction(v, p.Target, productionConfirmationContent{
-		Title: "合并生产 Tag 到 " + p.Target.MainBranch, Message: "确认合并并推送主分支？", Detail: detail, Notices: notices,
-		Source: productionCommitLabel("Tag "+p.ProductionTag, p.ProductionSHA), Destination: productionCommitLabel(p.Target.Remote+"/"+p.Target.MainBranch, p.MainSHA),
+		Title: "合并生产 Tag 到 " + p.Target.MainBranch, ConfirmLabel: "合并并推送", Detail: detail, Notices: notices,
+		Source: "Tag " + p.ProductionTag, Destination: p.Target.Remote + "/" + p.Target.MainBranch,
 	}, func() {
 		s.productionRequestFor(v, application.Action{Kind: "production.merge-main", Payload: map[string]any{"batchId": id, "preview": p, "confirmed": true}}, "")
 	})

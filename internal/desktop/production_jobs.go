@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"silverwing-go/internal/application"
@@ -28,13 +29,11 @@ type productionView struct {
 	SuggestedBranch                         string
 	Error, Message                          string
 	Busy                                    bool
-	OpenedConflict                          string
 	Generation                              uint64
 	ActiveStep                              int
 	Steps                                   map[int]productionStepView
 	PreparationInvalid                      bool
-	HistoryExpanded, BranchHistoryExpanded  bool
-	TagHistoryExpanded                      bool
+	HistoryExpanded                         bool
 	BuildChecked                            bool
 	ActiveAction, RefreshAfter              string
 	request                                 *productionWorker
@@ -42,9 +41,13 @@ type productionView struct {
 
 type productionWorker struct {
 	cancel         context.CancelFunc
+	canceled       atomic.Bool
 	done           chan struct{}
 	identity       productionResultIdentity
 	silentProgress bool
+	// UI-thread only: navigation revokes the next automatic build request,
+	// without canceling this request or discarding its eventual result.
+	buildContinuation bool
 }
 
 type productionServiceChoice struct {
@@ -115,6 +118,8 @@ type productionUIState struct {
 	timers               map[string]*time.Timer
 	baselineDialog       *productionBaselineDialog
 	diffDialog           *productionDiffDialog
+	worktreesDialog      *productionWorktreesDialog
+	disclosures          productionDetailDisclosures
 	scopeJSON, scopeMemo string
 }
 
@@ -150,6 +155,20 @@ func (s *app) ensureProduction() *productionUIState {
 func (s *app) productionView() *productionView {
 	state := s.ensureProduction()
 	return state.views[state.selected]
+}
+
+func (s *app) observeProductionBuildNavigation() {
+	state := s.production
+	if state == nil {
+		return
+	}
+	visible := state.views[state.selected]
+	for _, view := range state.views {
+		if view != nil && view.request != nil && view.request.buildContinuation && (s.page != "production" || view != visible) {
+			view.request.buildContinuation = false
+			view.PreparationInvalid = true
+		}
+	}
 }
 
 func (s *app) enterProductionPage() {
@@ -304,7 +323,11 @@ func (s *app) startProductionRequest(v *productionView, action application.Actio
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	worker := &productionWorker{cancel: cancel, done: make(chan struct{})}
+	worker := &productionWorker{done: make(chan struct{}), buildContinuation: follow == "build-preview" || follow == "build-publish"}
+	worker.cancel = func() {
+		worker.canceled.Store(true)
+		cancel()
+	}
 	state.workers[worker] = struct{}{}
 	state.mu.Unlock()
 	v.Busy, v.Error, v.Message = true, "", ""
@@ -331,6 +354,11 @@ func (s *app) startProductionRequest(v *productionView, action application.Actio
 	}
 	if action.Kind == "production.merge" {
 		v.BuildChecked = false
+	}
+	if action.Kind == "production.abort-merge" {
+		v.PreparationInvalid, v.BuildChecked = true, false
+		delete(v.Steps, 5)
+		delete(v.Steps, 6)
 	}
 	if follow == "build-preview" {
 		v.BuildChecked = true
@@ -380,7 +408,7 @@ func (s *app) startProductionRequest(v *productionView, action application.Actio
 				return
 			}
 			step := progress.Step
-			if step == 5 && (follow == "build-preview" || follow == "build-confirm") {
+			if step == 5 && (follow == "build-preview" || follow == "build-publish") {
 				step = 6
 			}
 			if step == 1 && v.ActiveStep != 1 {
@@ -420,6 +448,12 @@ func (s *app) startProductionRequest(v *productionView, action application.Actio
 			if closed {
 				return
 			}
+			s.observeProductionBuildNavigation()
+			if err == nil && (follow == "build-preview" || follow == "build-publish") && worker.canceled.Load() {
+				// The read may have completed just before Cancel. Its queued
+				// result must not authorize the next build request.
+				err = context.Canceled
+			}
 			if action.Kind == "production.delete" && err == nil && s.production == state && s.snapshot.Home == home && state.loadedHome == home {
 				if v.Generation == generation {
 					v.Busy, v.request = false, nil
@@ -437,6 +471,15 @@ func (s *app) startProductionRequest(v *productionView, action application.Actio
 			if s.snapshot.Home != home {
 				return
 			}
+			if action.Kind == "production.abort-merge" {
+				// An abort completes one exact merge, never a newer pending merge
+				// that a refreshed snapshot or another view has since installed.
+				if s.production != state || s.currentProductionScope() != scope || v.Selection != selection ||
+					v.BatchID != selectedBatch || v.ManualTag != manual || v.Branch != branch || !s.productionAbortResultCurrent(v, action, report.Batch) {
+					window.Invalidate()
+					return
+				}
+			}
 			if report.Batch != nil && state.deletedBatches[report.Batch.ID] {
 				window.Invalidate()
 				return
@@ -446,7 +489,20 @@ func (s *app) startProductionRequest(v *productionView, action application.Actio
 				state.addHistoricalChoices(s.snapshot)
 			} else {
 				if report.Batch != nil {
-					state.mergeBatch(*report.Batch)
+					incoming := *report.Batch
+					if err != nil {
+						// A returned batch can contain a merge appended before Save
+						// failed. Only successful results or a subsequent list read
+						// confirm new history; retain previously confirmed records.
+						incoming.Branches = nil
+						for _, existing := range state.batches {
+							if existing.ID == incoming.ID {
+								incoming.Branches = existing.Branches
+								break
+							}
+						}
+					}
+					state.mergeBatch(incoming)
 					if (action.Kind == "production.create" || action.Kind == "production.merge-main" && selectedBatch == "") && v.BatchID == selectedBatch {
 						v.BatchID = report.Batch.ID
 					}
@@ -475,6 +531,12 @@ func (s *app) startProductionRequest(v *productionView, action application.Actio
 				}
 			} else {
 				v.Message = result.Message
+				if action.Kind == "production.abort-merge" && report.Batch != nil && report.Batch.Intent == nil {
+					delete(v.Steps, v.ActiveStep)
+					delete(v.Steps, 5)
+					delete(v.Steps, 6)
+					s.lastMessage = result.Message
+				}
 				if step := v.ActiveStep; step != 0 && v.Steps[step].State == "running" {
 					// Final results supply the durable status; a busy observation
 					// alone must never leave a step running or imply success.
@@ -519,31 +581,27 @@ func (s *app) startProductionRequest(v *productionView, action application.Actio
 			if report.Batch != nil {
 				b := report.Batch
 				if b.TagPlan != nil && v.BatchID == b.ID && v.ManualTag == manual && v.Branch == branch && err == nil &&
-					(action.Kind == "production.sync" || action.Kind == "production.resume" || action.Kind == "production.rebase-pending") {
+					(action.Kind == "production.sync" || action.Kind == "production.resume" || action.Kind == "production.rebase-pending") &&
+					(follow != "build-publish" || worker.buildContinuation) {
 					v.PreparationInvalid = false
-				}
-				if b.Phase == "CONFLICT" && b.Intent != nil && b.Intent.Merge != nil && v.OpenedConflict != b.Intent.Merge.Worktree {
-					v.OpenedConflict = b.Intent.Merge.Worktree
-					s.productionRequestFor(v, application.Action{Kind: "production.open-ide", Payload: map[string]any{"batchId": b.ID}}, "")
-					return
 				}
 				if err == nil {
 					s.scheduleProductionProbe(v, *b, window)
 				}
 			}
-			if err == nil && (follow == "sync-preview" || follow == "check-preview" || follow == "build-preview") && report.Preview != nil && v.ManualTag == manual {
+			if err == nil && (follow == "sync-preview" || follow == "check-preview" || follow == "build-preview" && worker.buildContinuation) && report.Preview != nil && v.ManualTag == manual {
 				next := ""
 				if follow == "build-preview" {
-					next = "build-confirm"
+					next = "build-publish"
 				}
 				s.productionRequestFor(v, application.Action{Kind: "production.sync", Payload: map[string]any{"batchId": v.BatchID, "preview": *report.Preview}}, next)
 			}
 			visible := s.page == "production" && s.productionView() == v
 			if err == nil && visible {
 				switch follow {
-				case "build-confirm":
-					if report.Batch != nil && report.Batch.Intent == nil && productionTagPlanCurrent(v, report.Batch) {
-						s.confirmProductionTag(v, *report.Batch)
+				case "build-publish":
+					if worker.buildContinuation && report.Batch != nil && report.Batch.Intent == nil && productionTagPlanCurrent(v, report.Batch) {
+						s.publishProductionTag(v, *report.Batch)
 					}
 				case "enter":
 					if v == s.productionView() && v.Selection.ServiceID != "" {

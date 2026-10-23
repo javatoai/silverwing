@@ -100,8 +100,8 @@ func TestProductionRepeatedMergesAndBuildCyclesInvalidateOldPreparation(t *testi
 		t.Fatalf("cycle ended or lost records: %+v", b)
 	}
 	unchanged := f.sync(b)
-	if unchanged.TagPlan != nil {
-		t.Fatal("repeated sync created Tag without new commits")
+	if unchanged.TagPlan == nil || unchanged.TagPlan.Tag != "2.3.44.1" || len(unchanged.Tags) != 1 {
+		t.Fatal("repeated sync must prepare the next Tag without publishing it")
 	}
 	one = f.feature("feature/one", "one.txt", "one again\n", one)
 	b = f.merge(b, "feature/one", one)

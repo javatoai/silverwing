@@ -361,6 +361,12 @@ func (s *Service) executeMQL(ctx context.Context, config domain.AppConfig, proje
 		return nil, errors.New("Meegle MQL 返回不是 JSON")
 	}
 	root := object(rootAny)
+	if meegleResponseFailed(root) {
+		return nil, errors.New("Meegle MQL 返回错误响应")
+	}
+	if emptyMQLResult(root) {
+		return map[string]any{"data": map[string]any{"1": []any{}}}, nil
+	}
 	descriptor := firstDescriptor(root)
 	if text(root["session_id"]) == "" && descriptor == nil {
 		return root, nil
@@ -380,6 +386,9 @@ func (s *Service) executeMQL(ctx context.Context, config domain.AppConfig, proje
 	seenIDs := map[string]bool{}
 	page := int64(1)
 	for {
+		if meegleResponseFailed(root) {
+			return nil, errors.New("Meegle MQL 返回错误响应")
+		}
 		if current := text(root["session_id"]); current != "" && current != session {
 			return nil, errors.New("Meegle MQL 分页会话发生变化")
 		}
@@ -424,6 +433,36 @@ func (s *Service) executeMQL(ctx context.Context, config domain.AppConfig, proje
 		}
 		root = object(rootAny)
 	}
+}
+
+// Meegle omits the count descriptor for a successful query with no groups.
+// Only accept its explicit empty shape on the initial response; missing data,
+// errors and incomplete later pages must still fail the normal validation.
+func emptyMQLResult(root map[string]any) bool {
+	data, dataOK := root["data"].(map[string]any)
+	list, listPresent := root["list"]
+	if !dataOK || len(data) != 0 || !listPresent || root["search_status_info"] != nil || meegleResponseFailed(root) {
+		return false
+	}
+	if list == nil {
+		return true
+	}
+	items, ok := list.([]any)
+	return ok && len(items) == 0
+}
+
+func meegleResponseFailed(root map[string]any) bool {
+	if root["error"] != nil || root["ok"] == false || root["success"] == false {
+		return true
+	}
+	for _, key := range []string{"code", "err_code", "error_code"} {
+		if raw, exists := root[key]; exists {
+			if code, valid := integer(raw); !valid || code != 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func firstDescriptor(root map[string]any) any {
@@ -534,9 +573,8 @@ func (s *Service) readPages(ctx context.Context, config domain.AppConfig, args [
 			return nil, fmt.Errorf("%s JSON 解析失败", operation)
 		}
 		root := object(value)
-		list, ok := root["list"].([]any)
-		if !ok {
-			return nil, fmt.Errorf("%s 未返回完整列表", operation)
+		if meegleResponseFailed(root) {
+			return nil, fmt.Errorf("%s 返回错误响应", operation)
 		}
 		pagination := object(root["pagination"])
 		pageNumber, ok := integer(pagination["page_num"])
@@ -546,6 +584,15 @@ func (s *Service) readPages(ctx context.Context, config domain.AppConfig, args [
 		hasMore, ok := boolean(pagination["has_more"])
 		if !ok {
 			return nil, fmt.Errorf("%s 分页状态无效", operation)
+		}
+		list, ok := root["list"].([]any)
+		if !ok {
+			raw, present := root["list"]
+			total, validTotal := integer(pagination["total"])
+			if !present || raw != nil || page != 1 || !validTotal || total != 0 || hasMore || meegleResponseFailed(root) {
+				return nil, fmt.Errorf("%s 未返回完整列表", operation)
+			}
+			list = []any{}
 		}
 		for _, item := range list {
 			row := object(item)
@@ -996,31 +1043,28 @@ func (s *Service) requirementBody(ctx context.Context, config domain.AppConfig, 
 	if workType == "" {
 		workType = kind
 	}
-	for _, query := range []string{"需求描述", "描述", "内容", "详情"} {
+	seenFields := map[string]bool{}
+	for _, query := range []string{"需求描述", "描述", "内容", "详情", "Description", "Content", "Detail"} {
 		fields, err := s.readPages(ctx, config, []string{"workitem", "meta-fields", "--project-key", projectKey, "--work-item-type", workType, "--page-num", "1", "--field-query", query}, 20*time.Second, "查询需求正文配置")
 		if err != nil {
 			return "", err
 		}
-		var field map[string]any
 		for _, f := range fields {
-			if oneOfEqual(text(f["field_name"]), "需求描述", "描述", "需求内容", "内容", "详情", "Description", "Content", "Detail") {
-				field = f
-				break
+			if !oneOfEqual(text(f["field_name"]), "需求描述", "描述", "需求内容", "内容", "详情", "Description", "Content", "Detail") {
+				continue
 			}
-		}
-		if field == nil {
-			continue
-		}
-		key := text(field["field_key"])
-		if key == "" {
-			continue
-		}
-		detail, err := s.readWorkItemWithField(ctx, config, projectKey, id, key)
-		if err != nil {
-			return "", err
-		}
-		if body := bodyFromFieldKey(detail, key); body != "" {
-			return body, nil
+			key := text(f["field_key"])
+			if key == "" || seenFields[key] {
+				continue
+			}
+			seenFields[key] = true
+			detail, err := s.readWorkItemWithField(ctx, config, projectKey, id, key)
+			if err != nil {
+				return "", err
+			}
+			if body := bodyFromFieldKey(detail, key); body != "" {
+				return body, nil
+			}
 		}
 	}
 	return "", nil

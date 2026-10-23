@@ -7,10 +7,13 @@ func (s *app) showsTagNavigation() bool {
 }
 
 func (s *app) sidebarNavigationItems() []sidebarNavigationItem {
-	all := []sidebarNavigationItem{{"tasks", "任务", "tasks"}, {"requirements", "需求", "requirements"}, {"production", "生产发布", "branch"}, {"tools", "研发工具", "tools"}, {"services", "服务", "repo"}, {"settings", "设置", "settings"}}
+	all := []sidebarNavigationItem{{"tasks", "任务", "tasks"}, {"requirements", "需求", "requirements"}, {"tools", "研发工具", "tools"}, {"production", "生产发布", "branch"}, {"services", "服务", "repo"}, {"settings", "设置", "settings"}}
 	items := make([]sidebarNavigationItem, 0, len(all))
 	showTools := len(s.visibleDeveloperToolTabs()) > 0
 	for _, item := range all {
+		if item.page != "tasks" && item.page != "settings" && !s.configNestedBool("sidebarVisibility", item.page, true) {
+			continue
+		}
 		if item.page == "production" && !s.configBool("tagEnabled", true) {
 			continue
 		}

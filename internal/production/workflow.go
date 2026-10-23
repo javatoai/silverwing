@@ -184,6 +184,9 @@ func (s *Service) CheckForTag(ctx context.Context, id string, preview Preview) (
 
 func (s *Service) Resume(ctx context.Context, id string) (Batch, error) {
 	return s.withBatch(ctx, id, func(b *Batch, c domain.AppConfig) error {
+		if err := mergeAbortPending(b); err != nil {
+			return err
+		}
 		if b.Intent == nil {
 			return errors.New("没有待恢复的操作，请重新检查后操作")
 		}
@@ -271,6 +274,9 @@ func (s *Service) ConflictWorkspace(ctx context.Context, id string) (string, str
 }
 
 func (s *Service) advance(ctx context.Context, b *Batch, c domain.AppConfig) error {
+	if err := mergeAbortPending(b); err != nil {
+		return err
+	}
 	for b.Intent != nil {
 		if _, err := s.validate(ctx, b.Target); err != nil {
 			return err

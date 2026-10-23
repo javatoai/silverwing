@@ -74,7 +74,7 @@ func TestProductionInitializationExposesSeparateMergeAndCreate(t *testing.T) {
 	v.Preview.Diff = " example.go | 1 +\n 1 file changed, 1 insertion(+)"
 	s.win = &mygo.Window{}
 	tester := productionIterationTester(s, 960, false)
-	for _, name := range []string{"合并生产 Tag 到 master", "release 分支名", "创建 release", "查看差异"} {
+	for _, name := range []string{"合并生产 Tag 到 master", "release 分支名", "查看差异"} {
 		if _, ok := tester.Find(name); !ok {
 			t.Fatalf("missing explicit operation %s", name)
 		}

@@ -14,24 +14,24 @@ import (
 // The application owns source, resource trust and reader state. MyGO owns the
 // complete ordinary Markdown view, including lists, tables and highlighted code.
 type frameworkMarkdownState struct {
-	original       string
-	commentReading bool
-	projection     editor.ReadingProjection
-	document       *parser.Document
-	blocks         []documentFindBlock
-	options        markdown.Options
+	original        string
+	richTextReading bool
+	projection      editor.ReadingProjection
+	document        *parser.Document
+	blocks          []documentFindBlock
+	options         markdown.Options
 }
 
 func ensureFrameworkMarkdown(state *markdownEditorState) *frameworkMarkdownState {
 	source := state.doc.Source()
-	if state.frameworkMarkdown != nil && state.frameworkMarkdown.original == source && state.frameworkMarkdown.commentReading == state.commentReading {
+	if state.frameworkMarkdown != nil && state.frameworkMarkdown.original == source && state.frameworkMarkdown.richTextReading == state.richTextReading {
 		return state.frameworkMarkdown
 	}
 	projection := editor.ProjectReading(source)
-	if state.commentReading {
-		projection = editor.ProjectCommentReading(source)
+	if state.richTextReading {
+		projection = editor.ProjectRichTextReading(source)
 	}
-	native := &frameworkMarkdownState{original: source, commentReading: state.commentReading, projection: projection}
+	native := &frameworkMarkdownState{original: source, richTextReading: state.richTextReading, projection: projection}
 	native.document = parser.Parse(native.projection.Source)
 	native.blocks = frameworkMarkdownBlocks(native.document)
 	state.frameworkMarkdown = native

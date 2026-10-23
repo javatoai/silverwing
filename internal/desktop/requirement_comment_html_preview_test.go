@@ -37,7 +37,7 @@ func TestRequirementCommentHTMLProjectionKeepsVisibleTextFindAndCopy(t *testing.
 		!strings.Contains(native.projection.Source, "![截图]("+imageURL+")") || !strings.Contains(native.projection.Source, "`<span>代码标签</span>`") {
 		t.Fatalf("comment projection did not preserve only readable content: %q", native.projection.Source)
 	}
-	if native.commentReading != commentState.commentReading || native.original != source || commentState.doc.Source() != source {
+	if !native.richTextReading || native.original != source || commentState.doc.Source() != source {
 		t.Fatal("comment projection changed the original comment source")
 	}
 
@@ -122,9 +122,9 @@ func TestRequirementCommentHTMLProjectionKeepsVisibleTextFindAndCopy(t *testing.
 	}
 
 	state := newReadonlyMarkdownState("projection-cache-mode", source, nil)
-	state.commentReading = true
+	state.richTextReading = true
 	commentProjection := ensureFrameworkMarkdown(state)
-	state.commentReading = false
+	state.richTextReading = false
 	ordinaryProjection := ensureFrameworkMarkdown(state)
 	if commentProjection == ordinaryProjection || strings.Contains(commentProjection.projection.Source, "style=") ||
 		!strings.Contains(ordinaryProjection.projection.Source, "style=") {

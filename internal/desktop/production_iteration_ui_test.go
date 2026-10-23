@@ -2,6 +2,7 @@ package desktop
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"image/png"
 	"os"
@@ -14,7 +15,6 @@ import (
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/production"
 
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -25,6 +25,7 @@ func productionIterationTester(s *app, width int, dark bool) *ui.Tester {
 		ui.Row(c).Fill().Background(p.bg).AlignItems(ui.Stretch).Children(func() { s.renderProductionPage(c, p) })
 		s.renderProductionBaselineDialog(c, p)
 		s.renderProductionDiffDialog(c, p)
+		s.renderProductionWorktreesDialog(c, p)
 		s.renderConfirmationDialog(c, p)
 		ui.ThemedMenus(c, s.popupMenuScope())
 	}, width, 900)
@@ -117,8 +118,8 @@ func TestProductionBaselineApplyAndAutomaticUseInspectWithoutWriting(t *testing.
 	}
 }
 
-func TestProductionRepeatedControlsRemainAfterTagsAndCanceledConfirmation(t *testing.T) {
-	s, v, b := productionFixture(t)
+func TestProductionRepeatedControlsRemainAfterTagsAndFailedBuild(t *testing.T) {
+	s, v, b, backend, window := productionRequestFixture(t)
 	b.Tags = []production.Tag{{Name: "2.3.44", Commit: b.ReleaseSHA, Status: domain.GenbuTagProbeStatus{Build: domain.GenbuBuilding}}}
 	s.production.batches[0] = b
 	for i := 0; i < 3; i++ {
@@ -132,19 +133,20 @@ func TestProductionRepeatedControlsRemainAfterTagsAndCanceledConfirmation(t *tes
 		b.ReleaseSHA = v.Preview.ReleaseSHA
 		b.TagPlan = &production.TagPlan{Token: fmt.Sprint(i), Tag: fmt.Sprintf("2.3.44.%d", i+1), Commit: b.ReleaseSHA, MainSHA: v.Preview.MainSHA, Preview: *v.Preview}
 		s.production.batches[0] = b
-		s.win = &mygo.Window{}
-		s.confirmProductionTag(v, b)
-		if s.confirmationDialog == nil {
-			t.Fatal("valid preparation cannot be confirmed")
-		}
-		s.cancelConfirmationDialog()
-		if b.Ended || !productionTagPlanCurrent(v, &b) {
-			t.Fatal("cancel ended batch or destroyed valid preparation")
-		}
 		v.PreparationInvalid = true
-		s.confirmProductionTag(v, b)
-		if s.confirmationDialog != nil {
-			t.Fatal("stale preparation opened write confirmation")
+		s.publishProductionTag(v, b)
+		if s.confirmationDialog != nil || len(backend.calls) != 0 || v.Busy {
+			t.Fatal("stale preparation opened a dialog or started publishing")
+		}
+		v.PreparationInvalid = false
+		s.publishProductionTag(v, b)
+		if call := productionTestCall(t, backend); call.Kind != "production.publish" || call.Payload["token"] != b.TagPlan.Token || s.confirmationDialog != nil {
+			t.Fatalf("valid fresh preparation did not publish directly: %+v", call)
+		}
+		backend.replies <- productionTestAnswer{err: errors.New("synthetic push failure")}
+		productionTestUpdate(t, window)
+		if s.productionBatch(v).Ended || !v.PreparationInvalid || v.Busy {
+			t.Fatal("failure ended the batch or retained a valid preparation")
 		}
 		b.TagPlan = nil
 		v.PreparationInvalid = false
@@ -254,24 +256,34 @@ func TestProductionIterationEvidenceStates(t *testing.T) {
 	}
 }
 
-func TestProductionManyMergesDoNotDisplaceRepeatedActions(t *testing.T) {
+func TestProductionManyMergesRemainFlatAndActionsReachable(t *testing.T) {
 	for _, width := range []int{960, 1440} {
 		for _, dark := range []bool{false, true} {
 			s, v, b := productionFixture(t)
 			b.TagPlan = &production.TagPlan{Tag: "2.3.44.1", Commit: b.ReleaseSHA, MainSHA: v.Preview.MainSHA, Preview: *v.Preview}
 			s.production.batches[0] = b
-			baseline := productionIterationTester(s, width, dark)
 			b.Branches = nil
 			for i := 0; i < 120; i++ {
 				b.Branches = append(b.Branches, production.MergedBranch{Branch: fmt.Sprintf("feature/iteration-%03d", i), SourceSHA: strings.Repeat("d", 40)})
 			}
 			s.production.batches[0] = b
 			tester := productionIterationTester(s, width, dark)
+			tester.SetSize(width, 5000)
+			if !tester.HasText("已合并：feature/iteration-119") || !tester.HasText("已合并：feature/iteration-000") || tester.HasText("合并记录 ·") {
+				t.Fatal("successful merge history is still collapsed or truncated")
+			}
 			for _, control := range []string{"合并到 release", "构建 Tag"} {
 				rect, ok := tester.Find(control)
-				previous, exists := baseline.Find(control)
-				if !ok || !exists || rect.Y != previous.Y || rect.X+rect.W > float32(width) {
+				if !ok || rect.X+rect.W > float32(width) {
 					t.Fatalf("history displaced %s: %+v", control, rect)
+				}
+			}
+			tester.SetSize(width, 900)
+			tester.Scroll(float32(width-140), 500, 0, 6000)
+			for _, control := range []string{"合并到 release", "构建 Tag"} {
+				rect, ok := tester.Find(control)
+				if !ok || rect.Y < 0 || rect.Y+rect.H > 900 {
+					t.Fatalf("history made an action unreachable by scrolling: %s %+v", control, rect)
 				}
 			}
 			if directory := os.Getenv("SILVERWING_PRODUCTION_EVIDENCE_DIR"); directory != "" {

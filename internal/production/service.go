@@ -391,7 +391,7 @@ func (s *Service) withRecord(ctx context.Context, id string, allowEnded bool, op
 		e = operation(&b, c)
 		if e != nil && b.Intent != nil {
 			b.Message = commandruntime.Redact(c, e.Error())
-			if !b.Ended && b.Phase != "CONFLICT" {
+			if !b.Ended && b.Phase != "CONFLICT" && b.Phase != abortingMerge {
 				b.Phase = "PAUSED"
 			}
 			if writeErr := s.save(&b); writeErr != nil {

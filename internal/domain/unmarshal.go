@@ -179,6 +179,12 @@ func (v *ToolVisibilitySettings) UnmarshalJSON(data []byte) error {
 	*v = ToolVisibilitySettings(x)
 	return e
 }
+func (v *SidebarVisibilitySettings) UnmarshalJSON(data []byte) error {
+	type plain SidebarVisibilitySettings
+	x, e := decodeWithDefaults(data, plain{Requirements: true, Tools: true, Production: true, Services: true})
+	*v = SidebarVisibilitySettings(x)
+	return e
+}
 func (v *AppConfig) UnmarshalJSON(data []byte) error {
 	type plain AppConfig
 	x, e := decodeWithDefaults(data, plain(DefaultAppConfig()))

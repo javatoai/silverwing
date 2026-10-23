@@ -18,7 +18,7 @@ func TestProductionActionsRequireConfirmationAndKeepTaskTagHistorySeparate(t *te
 	if !ok || len(report.Batches) != 0 {
 		t.Fatalf("unexpected independent history: %#v", result.Data)
 	}
-	for _, kind := range []string{"production.create", "production.merge", "production.merge-main", "production.merge-release", "production.publish", "production.resume", "production.end", "production.delete", "production.accept-remote", "production.rebase-pending", "production.reprepare-tag"} {
+	for _, kind := range []string{"production.create", "production.merge", "production.merge-main", "production.merge-release", "production.publish", "production.resume", "production.abort-merge", "production.end", "production.delete", "production.accept-remote", "production.rebase-pending", "production.reprepare-tag"} {
 		_, err := a.Dispatch(context.Background(), Action{Kind: kind})
 		if err == nil || !strings.Contains(err.Error(), "确认") {
 			t.Fatalf("%s bypassed confirmation: %v", kind, err)

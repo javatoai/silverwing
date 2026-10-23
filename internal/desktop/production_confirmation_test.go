@@ -42,8 +42,6 @@ func productionConfirmationFixture(t *testing.T, kind string) (*app, *production
 		s.confirmProductionFeature(v, *v.Preview, v.Branch)
 	case "sync":
 		s.confirmProductionSync(v, *v.Preview)
-	case "tag":
-		s.confirmProductionTag(v, b)
 	case "pending":
 		s.confirmProductionPending(v, b, *v.Preview)
 	case "resume":
@@ -65,14 +63,34 @@ func productionConfirmationFixture(t *testing.T, kind string) (*app, *production
 
 func TestProductionAllConfirmationsUseSummaryAndKeepOriginalPayload(t *testing.T) {
 	for kind, actionKind := range map[string]string{
-		"create": "production.create", "main": "production.merge-main", "feature": "production.merge", "sync": "production.merge-release", "tag": "production.publish",
+		"create": "production.create", "main": "production.merge-main", "feature": "production.merge", "sync": "production.merge-release",
 		"pending": "production.rebase-pending", "resume": "production.resume", "reprepare": "production.reprepare-tag", "adopt": "production.accept-remote", "end": "production.end",
 	} {
 		t.Run(kind, func(t *testing.T) {
 			s, v, b := productionConfirmationFixture(t, kind)
 			d := s.confirmationDialog
+			confirmLabel := "继续"
+			switch kind {
+			case "create":
+				confirmLabel = "创建并推送"
+			case "main", "feature", "sync":
+				confirmLabel = "合并并推送"
+			}
 			if !d.FoldDetail || d.DetailOpen || d.DefaultIndex != d.CancelIndex || len(d.Notices) == 0 {
 				t.Fatal("missing collapsed details, visible notice, or safe default")
+			}
+			if d.Message != "" {
+				t.Fatal("production confirmation repeats its title as explanatory copy")
+			}
+			for _, field := range d.Summary {
+				if field.Label != "来源" && field.Label != "目标" {
+					continue
+				}
+				for _, sha := range []string{v.Preview.MainSHA, v.Preview.ProductionSHA, b.ReleaseSHA, v.Preview.BranchHeads[v.Branch]} {
+					if strings.Contains(field.Value, shortProductionSHA(sha)) {
+						t.Fatalf("ref summary includes commit identity: %+v", field)
+					}
+				}
 			}
 			for _, value := range []string{b.Target.ServiceName, b.Target.Repository, b.Target.Remote} {
 				found := false
@@ -116,7 +134,9 @@ func TestProductionAllConfirmationsUseSummaryAndKeepOriginalPayload(t *testing.T
 					t.Error(err)
 				}
 			})
-			s.finishConfirmationDialog(d, 0)
+			if err := tester.Click(confirmLabel); err != nil {
+				t.Fatal(err)
+			}
 			select {
 			case action := <-backend.calls:
 				if action.Kind != actionKind || action.Payload["batchId"] != b.ID || action.Payload["confirmed"] != true {
@@ -130,8 +150,8 @@ func TestProductionAllConfirmationsUseSummaryAndKeepOriginalPayload(t *testing.T
 						t.Fatalf("%s received a short or late SHA %q", key, sha)
 					}
 				}
-				if kind == "create" && action.Payload["version"] != "2.3.44" || kind == "tag" && action.Payload["token"] != "confirmed-token" {
-					t.Fatal("version or prepared token changed")
+				if kind == "create" && action.Payload["version"] != "2.3.44" {
+					t.Fatal("version changed")
 				}
 			case <-time.After(time.Second):
 				t.Fatal("missing confirmed request")

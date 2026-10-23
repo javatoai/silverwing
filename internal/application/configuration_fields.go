@@ -68,8 +68,8 @@ func mergeConfigurationFields(current domain.AppConfig, update ConfigFieldsUpdat
 		switch key {
 		case "schemaVersion", "genbuExecutableAutoDetected":
 			return current, fmt.Errorf("此设置字段不能直接更新：%s", key)
-		case "toolVisibility":
-			return current, errors.New("工具显示设置需要按具体开关更新")
+		case "toolVisibility", "sidebarVisibility":
+			return current, errors.New("显示设置需要按具体开关更新")
 		}
 		if _, overlap := update.ObjectFields[key]; overlap {
 			return current, fmt.Errorf("设置字段不能同时整体与局部更新：%s", key)
@@ -77,7 +77,7 @@ func mergeConfigurationFields(current domain.AppConfig, update ConfigFieldsUpdat
 		fields[key] = raw
 	}
 	for objectKey, changes := range update.ObjectFields {
-		if objectKey != "toolVisibility" {
+		if objectKey != "toolVisibility" && objectKey != "sidebarVisibility" {
 			return current, fmt.Errorf("不支持局部更新的设置对象：%s", objectKey)
 		}
 		if len(changes) == 0 {

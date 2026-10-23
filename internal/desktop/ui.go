@@ -5,6 +5,7 @@ import (
 )
 
 func (s *app) view(c *ui.Context) {
+	defer s.observeProductionBuildNavigation()
 	s.observeMaterialTextInput()
 	defer s.observeMaterialTextInput()
 	s.beginOverflowMenuFrame()
@@ -67,6 +68,7 @@ func (s *app) view(c *ui.Context) {
 	s.renderTagTargetDialog(c, p)
 	s.renderProductionBaselineDialog(c, p)
 	s.renderProductionDiffDialog(c, p)
+	s.renderProductionWorktreesDialog(c, p)
 	s.renderTaskBranchInfoDialog(c, p)
 	if workspaceCommandDialogVisible(s.page, s.tab) {
 		s.renderWorkspaceCommandDialog(c, p)

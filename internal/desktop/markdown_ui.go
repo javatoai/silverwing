@@ -26,6 +26,7 @@ type markdownEditorState struct {
 	doc                    *editor.Document
 	readOnly               bool
 	commentReading         bool
+	richTextReading        bool // Strip imported HTML span wrappers without changing image ownership.
 	closeBitmapViewer      func()
 	detached               bool
 	closed                 bool

@@ -20,11 +20,11 @@ func TestProductionActionsKeepContentWidth(t *testing.T) {
 			for _, state := range []string{"initial", "prepared", "diff-error"} {
 				t.Run(fmt.Sprintf("%d-dark-%t-%s", width, dark, state), func(t *testing.T) {
 					s, v, b := productionFixture(t)
-					controls := []string{"查看差异", "合并生产 Tag 到 master", "创建 release"}
+					controls := []string{"无差异", "创建 release"}
 					switch state {
 					case "initial":
 						s.production.batches = nil
-						v.BatchID, v.Preview.ProductionInMain = "", false
+						v.BatchID, v.Preview.ProductionInMain = "", true
 						v.Preview.ProductionSHA = strings.Repeat("f", 40)
 						v.Preview.Diff = " example.go | 1 +\n 1 file changed, 1 insertion(+)"
 					case "prepared":
@@ -47,6 +47,29 @@ func TestProductionActionsKeepContentWidth(t *testing.T) {
 						if !ok || r.W < 40 || r.W > 250 || r.H != 34 || r.X < 0 || r.X+r.W > float32(width) || r.Y < 0 || r.Y+r.H > height {
 							t.Errorf("action %q must be content-sized and visible, got %+v (found %t)", text, r, ok)
 						}
+					}
+					if state == "initial" {
+						field, found := tester.Find("release 分支名")
+						create, hasCreate := tester.Find("创建 release")
+						if !found || !hasCreate || field.W > 480 || field.W < 200 || create.Y < field.Y+field.H+8 {
+							t.Errorf("release action must sit below its bounded field: field=%+v create=%+v", field, create)
+						}
+						if err := tester.Click("release 分支名"); err != nil {
+							t.Fatal(err)
+						}
+						tester.Key(ui.Cmd, ui.KeyA)
+						tester.Type("release/2.3.90")
+						tester.SetSize(800, 900)
+						field, _ = tester.Find("release 分支名")
+						create, _ = tester.Find("创建 release")
+						if create.Y < field.Y+field.H+8 || create.X+create.W != field.X+field.W || field.X+field.W > 800 {
+							t.Errorf("narrow create action must align with the card right edge: field=%+v create=%+v", field, create)
+						}
+						if v.Version != "release/2.3.90" || !tester.Focused("release 分支名") {
+							t.Error("responsive layout lost the edited branch or input focus")
+						}
+						captureProductionSummary(t, tester, fmt.Sprintf("release-field-narrow-dark-%t", dark))
+						tester.SetSize(width, 900)
 					}
 					if dir := os.Getenv("SILVERWING_PRODUCTION_EVIDENCE_DIR"); dir != "" {
 						if err := os.MkdirAll(dir, 0700); err != nil {
@@ -90,7 +113,7 @@ func TestProductionCompactMainMergeKeyboardKeepsConfirmation(t *testing.T) {
 	}
 	v.Preview.ProductionInMain = true
 	tester.Frame()
-	if _, found := tester.Find(merge); found || !tester.HasText("无需合并") {
+	if _, found := tester.Find(merge); found || s.productionInitializationStepStatus(v, nil, 2).Text != "已完成" {
 		t.Fatal("already-contained merge must be a clear noninteractive status")
 	}
 	if s.confirmationDialog != nil && s.confirmationDialog.Open {

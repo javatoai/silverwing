@@ -117,6 +117,18 @@ func (a *App) productionAction(ctx context.Context, action Action) (ActionResult
 			return ActionResult{}, errors.New("请确认校验并继续生产发布操作")
 		}
 		batch, err = s.Resume(ctx, id)
+	case "production.abort-merge":
+		if !confirmed {
+			return ActionResult{}, errors.New("请先确认放弃修改并撤回合并")
+		}
+		var request struct {
+			Target production.Target `json:"target"`
+			Merge  production.Merge  `json:"merge"`
+		}
+		if err = decodePayload(action.Payload, &request); err != nil {
+			return ActionResult{}, err
+		}
+		batch, err = s.AbortMerge(ctx, id, request.Target, request.Merge)
 	case "production.refresh-build":
 		batch, err = s.RefreshBuild(ctx, id)
 	case "production.reconcile-ended":

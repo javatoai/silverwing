@@ -153,6 +153,9 @@ func (s *Service) PendingPreview(ctx context.Context, id string) (Batch, Preview
 // It preserves the former worktree rather than resetting a user's resolution.
 func (s *Service) RebasePending(ctx context.Context, id, expected string) (Batch, error) {
 	return s.withBatch(ctx, id, func(b *Batch, c domain.AppConfig) error {
+		if err := mergeAbortPending(b); err != nil {
+			return err
+		}
 		if b.Intent == nil || b.Intent.Merge == nil {
 			return errors.New("没有待恢复的合并")
 		}

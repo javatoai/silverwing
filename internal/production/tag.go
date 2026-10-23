@@ -12,10 +12,8 @@ import (
 )
 
 func (s *Service) prepareTag(ctx context.Context, b *Batch, preview Preview) error {
-	if len(b.Branches) == 0 || b.ReleaseSHA == b.LastTagCommit() {
-		b.TagPlan, b.Intent, b.Phase, b.Message = nil, nil, "READY", "release 没有新增提交，不生成新 Tag；构建失败请到平台重新编译"
-		return s.save(b)
-	}
+	// A new numbered Tag may intentionally reuse the release commit. Only a
+	// fresh baseline check and explicit confirmation authorize its publication.
 	refs, err := s.remoteRefs(ctx, b.Target)
 	if err != nil {
 		return err
@@ -77,9 +75,6 @@ func (s *Service) Publish(ctx context.Context, id, token string) (Batch, error) 
 		}
 		if next != p.Tag {
 			return errors.New("Tag 编号已被占用或发生变化，请重新检查并确认")
-		}
-		if p.Commit == b.LastTagCommit() || len(b.Branches) == 0 {
-			return errors.New("release 没有新增提交，不能生成新 Tag")
 		}
 		object, err := s.makeTag(ctx, c, b, p)
 		if err != nil {

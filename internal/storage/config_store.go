@@ -630,7 +630,7 @@ func decodeShardsContext(ctx context.Context, files map[string][]byte) (decodedC
 		integrations.CommandProxyTargets = domain.DefaultCommandProxyTargets(integrations.CommandProxyURL)
 	}
 	var appearance appearanceShard
-	if err := decode(files["appearance.json"], &appearance, appearanceShard{Schema: configShardSchema, Theme: domain.ThemeSystem, ToolVisibility: domain.ToolVisibilitySettings{JSON: true, DateTime: true, TextDiff: true}}, "appearance.json"); err != nil {
+	if err := decode(files["appearance.json"], &appearance, shardsFor(domain.DefaultAppConfig()).Appearance, "appearance.json"); err != nil {
 		return decodedConfig{}, err
 	}
 	servicesByGroup := map[string]domain.GroupServiceConfig{}
@@ -702,6 +702,7 @@ func decodeShardsContext(ctx context.Context, files map[string][]byte) (decodedC
 	config.AIRequirementNamingModel = integrations.AIRequirementNamingModel
 	config.Theme = appearance.Theme
 	config.ToolVisibility = appearance.ToolVisibility
+	config.SidebarVisibility = appearance.SidebarVisibility
 	config.ShowTaskDetailGitActionGroup = appearance.ShowTaskDetailGitActionGroup
 	config.ShowTaskDetailPathActionGroup = appearance.ShowTaskDetailPathActionGroup
 	config.ShowWorkspaceGitActionGroup = appearance.ShowWorkspaceGitActionGroup
@@ -769,7 +770,7 @@ func shardsFor(config domain.AppConfig) configShards {
 		Tools:        toolsShard{Schema: configShardSchema, TerminalExecutable: config.TerminalExecutable, DevelopmentTools: config.DevelopmentTools, DefaultDevelopmentTool: config.DefaultDevelopmentTool, AllowTemporaryDevelopmentToolSelection: config.AllowTemporaryDevelopmentToolSelection, DefaultWorkspaceToolIDs: config.DefaultWorkspaceToolIDs},
 		Git:          gitShard{Schema: configShardSchema, BlockedGitWriteBranches: config.BlockedGitWriteBranches, GitExecutablePath: config.GitExecutablePath},
 		Integrations: integrationsShard{Schema: configShardSchema, AIRequirementNamingEnabled: config.AIRequirementNamingEnabled, AIRequirementNamingPrewarmEnabled: config.AIRequirementNamingPrewarmEnabled, AIRequirementNamingModel: config.AIRequirementNamingModel, MeegleProjects: config.MeegleProjects, MeegleDefaultSprintProjectKey: config.MeegleDefaultSprintProjectKey, MeegleExecutablePath: config.MeegleExecutablePath, CodexExecutablePath: config.CodexExecutablePath, CommandProxyURL: config.CommandProxyURL, CommandProxyNoProxy: config.CommandProxyNoProxy, CommandProxyUsername: config.CommandProxyUsername, CommandProxyPassword: config.CommandProxyPassword, CommandProxyTargets: config.CommandProxyTargets, GenbuExecutablePath: config.GenbuExecutablePath, GenbuExecutableAutoDetected: config.GenbuExecutableAutoDetected, LarkExecutablePath: config.LarkExecutablePath, RequirementMaterialsRoot: config.RequirementMaterialsRoot, RequirementMaterialsSubdirectory: config.RequirementMaterialsSubdirectory, RequirementMaterialsFeishuTarget: config.RequirementMaterialsFeishuTarget, CodexPluginMarketplaceSources: config.CodexPluginMarketplaceSources, SkillSources: config.SkillSources},
-		Appearance:   appearanceShard{Schema: configShardSchema, Theme: config.Theme, ToolVisibility: config.ToolVisibility, ShowTaskDetailGitActionGroup: config.ShowTaskDetailGitActionGroup, ShowTaskDetailPathActionGroup: config.ShowTaskDetailPathActionGroup, ShowWorkspaceGitActionGroup: config.ShowWorkspaceGitActionGroup, ShowWorkspacePathActionGroup: config.ShowWorkspacePathActionGroup, ShowTaskAreaCopyIcons: config.ShowTaskAreaCopyIcons, ShowTaskAreaBranchCopyIcons: config.ShowTaskAreaBranchCopyIcons, ShowTaskAreaRequirementCopyIcons: config.ShowTaskAreaRequirementCopyIcons, ShowTaskAreaProjectNameCopyIcons: config.ShowTaskAreaProjectNameCopyIcons},
+		Appearance:   appearanceShard{Schema: configShardSchema, Theme: config.Theme, ToolVisibility: config.ToolVisibility, SidebarVisibility: config.SidebarVisibility, ShowTaskDetailGitActionGroup: config.ShowTaskDetailGitActionGroup, ShowTaskDetailPathActionGroup: config.ShowTaskDetailPathActionGroup, ShowWorkspaceGitActionGroup: config.ShowWorkspaceGitActionGroup, ShowWorkspacePathActionGroup: config.ShowWorkspacePathActionGroup, ShowTaskAreaCopyIcons: config.ShowTaskAreaCopyIcons, ShowTaskAreaBranchCopyIcons: config.ShowTaskAreaBranchCopyIcons, ShowTaskAreaRequirementCopyIcons: config.ShowTaskAreaRequirementCopyIcons, ShowTaskAreaProjectNameCopyIcons: config.ShowTaskAreaProjectNameCopyIcons},
 	}
 }
 
@@ -1221,15 +1222,16 @@ type integrationsShard struct {
 	SkillSources                      []domain.SkillSource                  "json:\"skillSources\""
 }
 type appearanceShard struct {
-	Schema                           int                           "json:\"schema\""
-	Theme                            domain.ThemePreference        "json:\"theme\""
-	ToolVisibility                   domain.ToolVisibilitySettings "json:\"toolVisibility\""
-	ShowTaskDetailGitActionGroup     bool                          "json:\"showTaskDetailGitActionGroup\""
-	ShowTaskDetailPathActionGroup    bool                          "json:\"showTaskDetailPathActionGroup\""
-	ShowWorkspaceGitActionGroup      bool                          "json:\"showWorkspaceGitActionGroup\""
-	ShowWorkspacePathActionGroup     bool                          "json:\"showWorkspacePathActionGroup\""
-	ShowTaskAreaCopyIcons            bool                          "json:\"showTaskAreaCopyIcons\""
-	ShowTaskAreaBranchCopyIcons      bool                          "json:\"showTaskAreaBranchCopyIcons\""
-	ShowTaskAreaRequirementCopyIcons bool                          "json:\"showTaskAreaRequirementCopyIcons\""
-	ShowTaskAreaProjectNameCopyIcons bool                          "json:\"showTaskAreaProjectNameCopyIcons\""
+	Schema                           int                              "json:\"schema\""
+	Theme                            domain.ThemePreference           "json:\"theme\""
+	ToolVisibility                   domain.ToolVisibilitySettings    "json:\"toolVisibility\""
+	SidebarVisibility                domain.SidebarVisibilitySettings "json:\"sidebarVisibility\""
+	ShowTaskDetailGitActionGroup     bool                             "json:\"showTaskDetailGitActionGroup\""
+	ShowTaskDetailPathActionGroup    bool                             "json:\"showTaskDetailPathActionGroup\""
+	ShowWorkspaceGitActionGroup      bool                             "json:\"showWorkspaceGitActionGroup\""
+	ShowWorkspacePathActionGroup     bool                             "json:\"showWorkspacePathActionGroup\""
+	ShowTaskAreaCopyIcons            bool                             "json:\"showTaskAreaCopyIcons\""
+	ShowTaskAreaBranchCopyIcons      bool                             "json:\"showTaskAreaBranchCopyIcons\""
+	ShowTaskAreaRequirementCopyIcons bool                             "json:\"showTaskAreaRequirementCopyIcons\""
+	ShowTaskAreaProjectNameCopyIcons bool                             "json:\"showTaskAreaProjectNameCopyIcons\""
 }

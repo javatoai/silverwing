@@ -59,12 +59,15 @@ func TestProductionHierarchyHasDirectBuildAndPermanentInitialization(t *testing.
 			t.Run(fmt.Sprintf("%d-%t", width, dark), func(t *testing.T) {
 				s, _, b := productionFixture(t)
 				tester := productionIterationTester(s, width, dark)
-				for _, label := range []string{"合并分支", "构建生产 Tag", "选择要合并的远端分支", "合入到：" + b.ReleaseBranch} {
+				for _, label := range []string{"合并分支", "构建生产 Tag", b.ReleaseBranch} {
 					if !tester.HasText(label) {
 						t.Errorf("missing clear zone/field: %s", label)
 					}
 				}
-				for _, result := range []string{"1. 对比生产 Tag 与主分支差异", "2. 合并生产 Tag 到主分支", "3. 创建 release 分支", "重新检查"} {
+				if productionExactText(tester, "release 分支") || tester.HasText("选择要合并的远端分支") {
+					t.Error("redundant release label or branch picker instructions are still visible")
+				}
+				for _, result := range []string{"生产 Tag → 主分支", "创建 release 分支", "重新检查"} {
 					if !tester.HasText(result) {
 						t.Errorf("initialization result must remain visible: %s", result)
 					}
@@ -164,12 +167,12 @@ func TestProductionIncludedBranchAndFollowupCheckShowOneLocalResult(t *testing.T
 					count++
 				}
 			}
-			if count != 1 || tester.HasText("处理中…") || tester.HasText("正在检查线上版本及远端提交…") {
+			if count != 0 || s.productionMergeStatus(v, &b).Text != "已完成" || tester.HasText("处理中…") || tester.HasText("正在检查线上版本及远端提交…") {
 				t.Fatalf("duplicated or vague status: count=%d", count)
 			}
 			merge, _ := tester.Find("合并分支")
 			check, _ := tester.Find("构建生产 Tag")
-			result, _ := tester.Find(message)
+			result, _ := tester.Find("合并分支状态")
 			if result.Y < merge.Y || result.Y > check.Y {
 				t.Fatal("branch result escaped its own zone")
 			}
@@ -243,6 +246,9 @@ func TestProductionResultIdentityAndHistorySwitchRejectStaleFeedback(t *testing.
 			if shown != (change == "none") {
 				t.Fatalf("stale local result accepted: %t", shown)
 			}
+			if completed := s.productionMergeStatus(v, &b).Text == "已完成"; completed != (change == "none") {
+				t.Fatalf("completion survived an identity or commit change: %t", completed)
+			}
 		})
 	}
 }
@@ -279,6 +285,8 @@ func TestProductionHistoryExcludesCurrentAndEndBatchUsesMoreConfirmation(t *test
 		t.Fatal("past batch not accessible")
 	}
 	v.Steps = map[int]productionStepView{4: {State: "skipped", Message: "old selection result"}}
+	// Render the injected feedback before locating the shifted history action.
+	tester.Frame()
 	productionRevealControl(t, tester, "查看")
 	if err := tester.Click("查看"); err != nil {
 		t.Fatal(err)
@@ -331,14 +339,19 @@ func TestProductionLateFeaturePreviewCannotConfirmAnotherContext(t *testing.T) {
 	}
 }
 
-func TestProductionDirectBuildChecksFreshDataAndWaitsForConfirmation(t *testing.T) {
-	for _, scenario := range []string{"ready", "needs-sync", "needs-sync-after-tag", "no-changes", "read-failure", "page", "config", "batch"} {
+func TestProductionDirectBuildChecksFreshDataAndPublishesWithoutConfirmation(t *testing.T) {
+	for _, scenario := range []string{"ready", "first-tag", "needs-sync", "needs-sync-after-tag", "no-changes", "read-failure", "prepare-failure", "publish-failure", "page", "service", "config", "home", "batch", "generation", "manual", "branch", "ended", "pending", "replaced-plan"} {
 		t.Run(scenario, func(t *testing.T) {
 			s, v, b, backend, window := productionRequestFixture(t)
+			s.notes[0] = "unsaved draft"
+			if scenario == "first-tag" {
+				b.Branches, b.ReleaseSHA = nil, b.InitialSHA
+				v.Preview.ReleaseSHA = b.ReleaseSHA
+			}
 			if scenario == "needs-sync-after-tag" || scenario == "no-changes" {
 				b.Tags = []production.Tag{{Name: "2.3.44", Commit: b.ReleaseSHA, Status: domain.GenbuTagProbeStatus{Build: domain.GenbuSuccess}}}
-				s.production.batches[0] = b
 			}
+			s.production.batches[0] = b
 			tester := productionIterationTester(s, 960, false)
 			productionRevealControl(t, tester, "构建 Tag")
 			if err := tester.Click("构建 Tag"); err != nil {
@@ -346,6 +359,10 @@ func TestProductionDirectBuildChecksFreshDataAndWaitsForConfirmation(t *testing.
 			}
 			if call := productionTestCall(t, backend); call.Kind != "production.inspect" || call.Payload["confirmed"] != nil {
 				t.Fatalf("build must start with a fresh read: %+v", call)
+			}
+			generation := v.Generation
+			if err := tester.Click("构建 Tag"); err != nil || v.Generation != generation || len(backend.calls) != 0 {
+				t.Fatal("duplicate build click started another request")
 			}
 			p := *v.Preview
 			p.MainInRelease = scenario != "needs-sync" && scenario != "needs-sync-after-tag"
@@ -360,48 +377,99 @@ func TestProductionDirectBuildChecksFreshDataAndWaitsForConfirmation(t *testing.
 			backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &b, Preview: &p}}}
 			productionTestUpdate(t, window)
 			if call := productionTestCall(t, backend); call.Kind != "production.sync" || call.Payload["confirmed"] != nil {
-				t.Fatalf("automatic step must only prepare, not merge/push: %+v", call)
+				t.Fatalf("preparation must not merge or push: %+v", call)
 			}
 			if v.ActiveStep != 6 || !v.Busy {
 				t.Fatal("automatic check lost its build-region ownership")
 			}
+			b.TagPlan = &production.TagPlan{Token: "fresh-check", Tag: "2.3.44", Commit: b.ReleaseSHA, MainSHA: p.MainSHA, Preview: p}
+			if scenario == "no-changes" {
+				b.TagPlan.Tag = "2.3.44.1"
+			}
 			switch scenario {
-			case "needs-sync", "needs-sync-after-tag":
-				backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &b}}, err: errors.New("branches require synchronization")}
 			case "page":
 				s.page = "tasks"
+			case "service":
+				s.production.selected = "another-service"
 			case "config":
 				s.configJSON = `{"tagEnabled":false}`
+			case "home":
+				s.snapshot.Home += "-other"
 			case "batch":
 				v.selectProductionBatch("another")
+			case "generation":
+				v.Generation++
+			case "manual":
+				v.ManualTag = "other"
+			case "branch":
+				v.Branch = "feature/other"
+			case "ended":
+				b.Ended = true
+			case "pending":
+				b.Intent = &production.Intent{Kind: "tag", Step: "tag-push"}
+			case "replaced-plan":
+				newer := b
+				plan := *b.TagPlan
+				plan.Token = "replacement-token"
+				newer.TagPlan = &plan
+				newer.UpdatedAt = time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano)
+				s.production.batches[0] = newer
 			}
-			if scenario != "needs-sync" && scenario != "needs-sync-after-tag" {
-				if scenario != "no-changes" {
-					b.TagPlan = &production.TagPlan{Token: "fresh-check", Tag: "2.3.44", Commit: b.ReleaseSHA, MainSHA: p.MainSHA, Preview: p}
-				}
+			if scenario == "needs-sync" || scenario == "needs-sync-after-tag" || scenario == "prepare-failure" {
+				b.TagPlan = nil
+				backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &b}}, err: errors.New("preparation failed or branches require synchronization")}
+			} else {
 				backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &b}}}
 			}
-			s.win = &mygo.Window{}
 			productionTestUpdate(t, window)
-			if (s.confirmationDialog != nil) != (scenario == "ready") || len(backend.calls) != 0 {
-				t.Fatal("unexpected confirmation or automatic remote write")
+			if s.confirmationDialog != nil {
+				t.Fatal("build opened a confirmation dialog")
 			}
-			if scenario == "needs-sync" || scenario == "needs-sync-after-tag" {
-				tester.Frame()
-				if !tester.HasText("合并主分支到 release") || tester.HasText("检查构建条件") || tester.HasText("构建前检查") {
-					t.Fatal("needed synchronization must stay local to build, without a separate check section")
+			ready := scenario == "ready" || scenario == "first-tag" || scenario == "no-changes" || scenario == "publish-failure"
+			if !ready {
+				if len(backend.calls) != 0 {
+					t.Fatal("failed, stale or blocked preparation continued into a write")
 				}
-			}
-			if scenario == "ready" {
-				s.cancelConfirmationDialog()
-				s.win = nil
-				s.productionInspect("build-preview")
-				if call := productionTestCall(t, backend); call.Kind != "production.inspect" {
-					t.Fatal("a repeated build reused the previous check")
+				if scenario == "needs-sync" || scenario == "needs-sync-after-tag" {
+					tester.Frame()
+					if !tester.HasText("合并主分支到 release") || tester.HasText("检查构建条件") || tester.HasText("构建前检查") {
+						t.Fatal("synchronization must remain an explicit build-region action")
+					}
 				}
-				backend.replies <- productionTestAnswer{err: errors.New("finish repeated read")}
-				productionTestUpdate(t, window)
+				return
 			}
+			call := productionTestCall(t, backend)
+			if call.Kind != "production.publish" || call.Payload["batchId"] != b.ID || call.Payload["token"] != b.TagPlan.Token || call.Payload["confirmed"] != true {
+				t.Fatalf("direct build lost its prepared token or batch identity: %+v", call)
+			}
+			if !v.Busy || v.ActiveStep != 6 {
+				t.Fatal("publishing left the foreground build gate")
+			}
+			if scenario == "publish-failure" {
+				backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &b}}, err: errors.New("synthetic push failed")}
+			} else {
+				b.Tags = append(append([]production.Tag(nil), b.Tags...), production.Tag{Name: b.TagPlan.Tag, Commit: b.TagPlan.Commit, PushedAt: time.Now().UTC().Format(time.RFC3339Nano), Status: domain.GenbuTagProbeStatus{Build: domain.GenbuSuccess}})
+				b.TagPlan, b.Phase = nil, "READY"
+				backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &b}}}
+			}
+			productionTestUpdate(t, window)
+			if v.Busy || len(backend.calls) != 0 || s.confirmationDialog != nil || s.notes[0] != "unsaved draft" {
+				t.Fatal("build did not stop after one result or changed the task draft")
+			}
+			if scenario == "publish-failure" && (!v.PreparationInvalid || v.Error == "") {
+				t.Fatal("push failure did not invalidate preparation or expose its error")
+			}
+			// A second click must obtain another fresh check, never replay the token.
+			tester.Frame()
+			productionRevealControl(t, tester, "构建 Tag")
+			if err := tester.Click("构建 Tag"); err != nil {
+				t.Fatal(err)
+			}
+			if call := productionTestCall(t, backend); call.Kind != "production.inspect" {
+				t.Fatalf("repeated build reused the previous preparation: %+v", call)
+			}
+			backend.replies <- productionTestAnswer{err: errors.New("finish repeated read")}
+			productionTestUpdate(t, window)
 		})
 	}
 }
@@ -410,7 +478,7 @@ func TestProductionAutomaticCheckProgressStaysInBuildRegion(t *testing.T) {
 	s, v, b, base, window := productionRequestFixture(t)
 	backend := &productionProgressBackend{productionTestBackend: base, contexts: make(chan context.Context, 1)}
 	s.backend = backend
-	s.productionRequestFor(v, application.Action{Kind: "production.sync", Payload: map[string]any{"batchId": b.ID}}, "build-confirm")
+	s.productionRequestFor(v, application.Action{Kind: "production.sync", Payload: map[string]any{"batchId": b.ID}}, "build-publish")
 	ctx := <-backend.contexts
 	productionTestCall(t, base)
 	production.EmitProgress(ctx, production.Progress{Selection: v.Selection, BatchID: b.ID, Step: 5, State: "running", Message: "checking latest baseline"})
@@ -422,14 +490,14 @@ func TestProductionAutomaticCheckProgressStaysInBuildRegion(t *testing.T) {
 	productionTestUpdate(t, window)
 }
 
-func TestProductionBuildProbeWaitsUntilConfirmationCloses(t *testing.T) {
+func TestProductionBuildProbeWaitsUntilOtherConfirmationCloses(t *testing.T) {
 	s, v, b, backend, window := productionRequestFixture(t)
 	v.Preview.MainInRelease = true
 	b.TagPlan = &production.TagPlan{Token: "prepared", Tag: "2.3.44.1", Commit: b.ReleaseSHA, MainSHA: v.Preview.MainSHA, Preview: *v.Preview}
 	b.Tags = []production.Tag{{Name: "2.3.44", PushedAt: time.Now().UTC().Format(time.RFC3339Nano), Status: domain.GenbuTagProbeStatus{Build: domain.GenbuBuilding}}}
 	s.production.batches[0] = b
 	s.win = &mygo.Window{}
-	s.confirmProductionTag(v, b)
+	s.confirmProductionEnd(v, b)
 	if s.confirmationDialog == nil {
 		t.Fatal("missing write confirmation")
 	}
@@ -483,14 +551,11 @@ func TestProductionHierarchyEvidenceStates(t *testing.T) {
 							t.Fatal(err)
 						}
 					} else if state == "history" {
-						if !tester.HasText("最近 Tag  2.3.44.2") || tester.HasText("2.3.44.1 ·") {
-							t.Fatal("latest Tag hidden or history expanded by default")
-						}
-						if err := tester.Click("之前的 Tag · 2 个"); err != nil {
-							t.Fatal(err)
+						if !productionExactText(tester, "示例服务：2.3.44") || !productionExactText(tester, "示例服务：2.3.44.1") || !productionExactText(tester, "示例服务：2.3.44.2") || tester.HasText("历史 Tag") {
+							t.Fatal("Tag history is not flat and fully visible")
 						}
 						tester.SetPreferences(ui.Preferences{ReduceMotion: true, TextScale: 1})
-						for _, status := range []string{"构建 成功", "构建 失败", "构建 构建中"} {
+						for _, status := range []string{"构建成功", "构建失败", "构建中"} {
 							if !tester.HasText(status) {
 								t.Fatalf("independent Tag result missing: %s", status)
 							}

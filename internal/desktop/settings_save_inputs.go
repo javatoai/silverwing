@@ -96,6 +96,10 @@ func settingsConfigInputValues(config map[string]any) (map[string]any, map[strin
 	for key, value := range visibility {
 		booleans["tool-visibility-"+key] = value
 	}
+	sidebar, _ := config["sidebarVisibility"].(map[string]any)
+	for key, value := range sidebar {
+		booleans["sidebar-visibility-"+key] = value
+	}
 	for _, group := range mapsFromArray(mustArray(config["groups"])) {
 		booleans["group-tag-"+mapString(group, "id")] = group["tagEnabled"]
 	}

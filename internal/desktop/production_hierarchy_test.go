@@ -244,7 +244,7 @@ func TestProductionResultIdentityAndHistorySwitchRejectStaleFeedback(t *testing.
 	}
 }
 
-func TestProductionHistoryExcludesCurrentAndEndBatchUsesMoreConfirmation(t *testing.T) {
+func TestProductionHistoryMenuAndEndBatchUsesMoreConfirmation(t *testing.T) {
 	s, v, b := productionFixture(t)
 	old := b
 	old.ID, old.Version, old.ReleaseBranch, old.Ended, old.Phase = "previous", "2.3.42", "release/2.3.42", true, "ENDED"
@@ -267,8 +267,10 @@ func TestProductionHistoryExcludesCurrentAndEndBatchUsesMoreConfirmation(t *test
 	if s.confirmationDialog != nil || s.productionBatch(v).Ended {
 		t.Fatal("canceling confirmation ended batch")
 	}
-	productionRevealControl(t, tester, "历史批次 · 1 个")
-	if err := tester.Click("历史批次 · 1 个"); err != nil {
+	if err := tester.Click("更多生产发布操作"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tester.Click("查看历史批次"); err != nil {
 		t.Fatal(err)
 	}
 	tester.SetPreferences(ui.Preferences{ReduceMotion: true, TextScale: 1})

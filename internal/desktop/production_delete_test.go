@@ -185,7 +185,7 @@ func TestProductionDeleteResultPreservesOtherStateAndRejectsOldReports(t *testin
 			if scenario == "service" && s.productionView().BatchID != other.ID {
 				t.Fatal("deletion changed another service's selected batch")
 			}
-			if scenario == "active-remains" || scenario == "history-remains" || scenario == "batch" {
+			if scenario == "active-remains" || scenario == "batch" {
 				if v.BatchID != other.ID {
 					t.Fatal("remaining/current batch was not retained")
 				}

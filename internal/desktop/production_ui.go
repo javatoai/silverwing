@@ -171,7 +171,21 @@ func (s *app) renderProductionDetail(c *ui.Context, p palette) {
 			compactState(c, productionPhase(b.Phase), p)
 		}
 		ui.Box(c).Grow(1)
+		if b != nil && b.Ended {
+			text := "返回发布操作"
+			if s.productionCurrentBatch(v) != nil {
+				text = "返回当前批次"
+			}
+			if productionButton(c, "production-history-return", text, p, false, v.Busy) {
+				s.returnFromProductionHistory(v)
+				return
+			}
+		}
 		miniButton(c, p, "production-more", "more", "更多生产发布操作", false).Disabled(v.Busy).Menu(func(menu *ui.Menu) {
+			if menu.Item("查看历史批次").Disabled(v.Busy).Chosen() {
+				s.openProductionHistory(v)
+			}
+			menu.Separator()
 			if menu.Item("手动确认生产 Tag").Disabled(v.Busy).Chosen() {
 				s.openProductionBaseline(v)
 			}
@@ -212,15 +226,9 @@ func (s *app) renderProductionDetail(c *ui.Context, p palette) {
 			s.renderProductionBatchHistory(c, p, *b)
 			s.renderProductionSectionFeedback(c, p, s.productionSection(v, b, 6))
 		}
-		if b != nil && productionButton(c, "production-new", "新建批次", p, true, v.Busy) {
-			v.selectProductionBatch("")
-			v.Version = ""
-			s.productionInspect("")
-		}
 	} else {
 		s.renderProductionActive(c, p, v, *b)
 	}
-	s.renderProductionHistory(c, p, v)
 }
 
 func (s *app) renderProductionBaseline(c *ui.Context, p palette, v *productionView) {
@@ -321,6 +329,7 @@ func (s *app) renderProductionWaitingRelease(c *ui.Context, p palette, v *produc
 		} else {
 			s.renderProductionFeaturePicker(c, p, v, b, true)
 		}
+		s.renderProductionMergedBranches(c, p, production.Batch{})
 	}, func() {
 		productionButton(c, "production-feature-diff", "查看差异", p, false, true)
 		productionButton(c, "production-merge", "合并到 release", p, true, true)
@@ -401,6 +410,7 @@ func productionMergedBranchNames(branches []production.MergedBranch) []string {
 func (s *app) renderProductionMergedBranches(c *ui.Context, p palette, b production.Batch) {
 	names := productionMergedBranchNames(b.Branches)
 	if len(names) == 0 {
+		label(c, "暂无已合并分支", 12, p.muted).Wrap()
 		return
 	}
 	ui.Column(c.Key("production-merged-branches-" + b.ID)).FillWidth().MinWidth(0).Gap(6).Label("已合并分支记录").Children(func() {
@@ -480,6 +490,9 @@ func (s *app) renderProductionPendingHistory(c *ui.Context, p palette, v *produc
 }
 
 func (s *app) renderProductionBatchHistory(c *ui.Context, p palette, b production.Batch) {
+	productionCard(c, p, "production-ended-merges", "已合并分支", productionCardStatus{Text: "已结束", State: "pending"}, func() {
+		s.renderProductionMergedBranches(c, p, b)
+	}, nil)
 	if len(b.Tags) == 0 {
 		return
 	}

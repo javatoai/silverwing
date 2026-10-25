@@ -26,6 +26,7 @@ func productionIterationTester(s *app, width int, dark bool) *ui.Tester {
 		s.renderProductionBaselineDialog(c, p)
 		s.renderProductionDiffDialog(c, p)
 		s.renderProductionWorktreesDialog(c, p)
+		s.renderProductionHistoryDialog(c, p)
 		s.renderConfirmationDialog(c, p)
 		ui.ThemedMenus(c, s.popupMenuScope())
 	}, width, 900)

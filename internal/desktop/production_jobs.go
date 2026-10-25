@@ -33,7 +33,7 @@ type productionView struct {
 	ActiveStep                              int
 	Steps                                   map[int]productionStepView
 	PreparationInvalid                      bool
-	HistoryExpanded                         bool
+	historyReturn                           *productionHistoryReturn
 	BuildChecked                            bool
 	ActiveAction                            string
 	request                                 *productionWorker
@@ -119,6 +119,7 @@ type productionUIState struct {
 	baselineDialog       *productionBaselineDialog
 	diffDialog           *productionDiffDialog
 	worktreesDialog      *productionWorktreesDialog
+	historyDialog        *productionHistoryDialog
 	disclosures          productionDetailDisclosures
 	scopeJSON, scopeMemo string
 }
@@ -313,12 +314,21 @@ func (s *app) productionRequest(action application.Action, follow string) {
 }
 
 func (s *app) productionRequestView(v *productionView, action application.Action, follow string) {
+	s.productionRequestViewFromHistory(v, action, follow, nil)
+}
+
+// History reads and row deletion share the normal worker lifetime and busy gate,
+// but never replace the current operation's feedback or run a follow-up action.
+func (s *app) productionRequestViewFromHistory(v *productionView, action application.Action, follow string, history *productionHistoryDialog) {
 	state := s.ensureProduction()
 	if v == nil || v.Busy || s.backend == nil {
 		return
 	}
+	if history != nil && !s.productionHistoryRequestCurrent(history, action) {
+		return
+	}
 	if action.Payload != nil && action.Payload["confirmed"] == true {
-		if id, exists := action.Payload["batchId"]; exists && id != v.BatchID {
+		if id, exists := action.Payload["batchId"]; exists && id != v.BatchID && history == nil {
 			v.Error = "批次已切换，请重新确认。"
 			return
 		}
@@ -343,39 +353,42 @@ func (s *app) productionRequestView(v *productionView, action application.Action
 	}
 	state.workers[worker] = struct{}{}
 	state.mu.Unlock()
-	v.Busy, v.Error, v.Message = true, "", ""
-	v.ActiveAction = action.Kind
+	v.Busy = true
 	v.Generation++
 	generation := v.Generation
-	v.ActiveStep = productionActionStep(action.Kind, follow, s.productionBatch(v))
-	if v.ActiveStep == 5 {
-		v.BuildChecked = true
-	}
-	if v.Steps == nil {
-		v.Steps = map[int]productionStepView{}
-	}
-	if v.ActiveStep != 0 {
-		v.Steps[v.ActiveStep] = productionStepView{State: "running"}
-	}
-	if action.Kind == "production.merge" || action.Kind == "production.sync" || action.Kind == "production.prepare-tag" || action.Kind == "production.merge-main" || action.Kind == "production.merge-release" {
-		delete(v.Steps, 5)
-		delete(v.Steps, 6)
-	}
-	if action.Kind == "production.merge" {
-		v.BuildChecked = false
-	}
-	if action.Kind == "production.abort-merge" {
-		v.PreparationInvalid, v.BuildChecked = true, false
-		delete(v.Steps, 5)
-		delete(v.Steps, 6)
-	}
-	if follow == "build-preview" || action.Kind == "production.prepare-tag" {
-		v.BuildChecked = true
-		delete(v.Steps, 5)
-		delete(v.Steps, 6)
-	}
-	if action.Kind == "production.prepare-tag" || action.Kind == "production.inspect" && (follow == "sync-preview" || follow == "check-preview" || follow == "build-preview") {
-		v.PreparationInvalid = true
+	if history == nil {
+		v.Error, v.Message = "", ""
+		v.ActiveAction = action.Kind
+		v.ActiveStep = productionActionStep(action.Kind, follow, s.productionBatch(v))
+		if v.ActiveStep == 5 {
+			v.BuildChecked = true
+		}
+		if v.Steps == nil {
+			v.Steps = map[int]productionStepView{}
+		}
+		if v.ActiveStep != 0 {
+			v.Steps[v.ActiveStep] = productionStepView{State: "running"}
+		}
+		if action.Kind == "production.merge" || action.Kind == "production.sync" || action.Kind == "production.prepare-tag" || action.Kind == "production.merge-main" || action.Kind == "production.merge-release" {
+			delete(v.Steps, 5)
+			delete(v.Steps, 6)
+		}
+		if action.Kind == "production.merge" {
+			v.BuildChecked = false
+		}
+		if action.Kind == "production.abort-merge" {
+			v.PreparationInvalid, v.BuildChecked = true, false
+			delete(v.Steps, 5)
+			delete(v.Steps, 6)
+		}
+		if follow == "build-preview" || action.Kind == "production.prepare-tag" {
+			v.BuildChecked = true
+			delete(v.Steps, 5)
+			delete(v.Steps, 6)
+		}
+		if action.Kind == "production.prepare-tag" || action.Kind == "production.inspect" && (follow == "sync-preview" || follow == "check-preview" || follow == "build-preview") {
+			v.PreparationInvalid = true
+		}
 	}
 	home, scope, manual, branch := s.snapshot.Home, s.currentProductionScope(), v.ManualTag, v.Branch
 	selectedBatch := v.BatchID
@@ -391,15 +404,15 @@ func (s *app) productionRequestView(v *productionView, action application.Action
 			identity.SourceSHA, identity.TargetSHA = preview.MainSHA, preview.ReleaseSHA
 		}
 	}
-	worker.identity, worker.silentProgress = identity, follow == "background-probe"
+	worker.identity, worker.silentProgress = identity, follow == "background-probe" || history != nil
 	v.request = worker
-	if step := v.ActiveStep; step != 0 {
+	if step := v.ActiveStep; step != 0 && history == nil {
 		observed := v.Steps[step]
 		observed.Identity = &identity
 		v.Steps[step] = observed
 	}
 	ctx = production.WithProgress(ctx, func(progress production.Progress) {
-		if window.IsDestroyed() {
+		if window.IsDestroyed() || history != nil {
 			return
 		}
 		window.Update(func() {
@@ -455,17 +468,30 @@ func (s *app) productionRequestView(v *productionView, action application.Action
 			if closed {
 				return
 			}
+			if history != nil {
+				s.finishProductionHistoryRequest(history, action, worker, generation, report, result, err)
+				window.Invalidate()
+				return
+			}
 			s.observeProductionBuildNavigation()
 			if err == nil && (follow == "build-preview" || follow == "build-publish") && worker.canceled.Load() {
 				// The read may have completed just before Cancel. Its queued
 				// result must not authorize the next build request.
 				err = context.Canceled
 			}
-			if action.Kind == "production.delete" && err == nil && s.production == state && s.snapshot.Home == home && state.loadedHome == home {
+			if action.Kind == "production.delete" && err == nil && s.production == state && s.snapshot.Home == home && state.loadedHome == home && s.currentProductionScope() == scope {
 				if v.Generation == generation {
 					v.Busy, v.request = false, nil
 				}
-				s.forgetProductionBatch(state, selectedBatch)
+				if !state.productionDeleteRecordUnchanged(action) {
+					if v.Generation == generation {
+						v.Error = "批次记录已变化，请重新读取后核对。"
+					}
+					window.Invalidate()
+					return
+				}
+				deletedID, _ := action.Payload["batchId"].(string)
+				s.forgetProductionBatch(state, deletedID)
 				s.lastMessage = result.Message
 				window.Invalidate()
 				return

@@ -1,8 +1,6 @@
 package desktop
 
 import (
-	"fmt"
-
 	"silverwing-go/internal/production"
 
 	"github.com/egoist/mygo/ui"
@@ -69,28 +67,4 @@ func (s *app) renderProductionRelations(c *ui.Context, p palette, v *productionV
 			})
 		})
 	}
-}
-
-func (s *app) renderProductionHistory(c *ui.Context, p palette, v *productionView) {
-	var history []production.Batch
-	for _, b := range s.production.batches {
-		if b.Target.Selection == v.Selection && b.ID != v.BatchID {
-			history = append(history, b)
-		}
-	}
-	if len(history) == 0 {
-		return
-	}
-	ui.Box(c).FillWidth().Height(1).Background(p.line)
-	productionDisclosure(c, p, "production-batch-history", fmt.Sprintf("历史批次 · %d 个", len(history)), &v.HistoryExpanded, func() {
-		for _, batch := range history {
-			ui.Row(c).FillWidth().MinWidth(0).Gap(12).AlignItems(ui.Center).Children(func() {
-				label(c, firstNonEmpty(batch.ReleaseBranch, "初始化 · 等待创建 release"), 12, p.text).Grow(1).MinWidth(0).Wrap().Tooltip(batch.ReleaseBranch)
-				label(c, productionPhase(batch.Phase), 12, p.muted).Width(96).Shrink(0).NoWrap()
-				if productionButton(c, "production-history-"+batch.ID, "查看", p, false, v.Busy) {
-					v.selectProductionBatch(batch.ID)
-				}
-			})
-		}
-	})
 }

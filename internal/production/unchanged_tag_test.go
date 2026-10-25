@@ -28,8 +28,8 @@ func TestProductionTagsAllowUnmergedAndUnchangedRelease(t *testing.T) {
 		token := b.TagPlan.Token
 		calls = f.g.calls
 		b = f.publish(b)
-		if f.g.calls <= calls || b.ReleaseSHA != head || b.TagPlan != nil || b.Intent != nil || b.Ended || len(b.Tags) != n+1 {
-			t.Fatalf("publishing changed the batch or skipped final validation: %+v", b)
+		if f.g.calls != calls || b.ReleaseSHA != head || b.TagPlan != nil || b.Intent != nil || b.Ended || len(b.Tags) != n+1 {
+			t.Fatalf("publishing changed the batch or repeated its observation: %+v", b)
 		}
 		if got := f.run(f.remote, "rev-parse", "refs/tags/"+name+"^{commit}"); got != head {
 			t.Fatalf("Tag points to %s, want %s", got, head)
@@ -71,14 +71,19 @@ func TestProductionUnchangedTagRejectsNumberRaceAndRechecks(t *testing.T) {
 	if got := f.run(f.remote, "rev-parse", "refs/tags/2.3.44.1"); got != object {
 		t.Fatal("occupied Tag was overwritten")
 	}
+	var err error
+	b, err = f.s.ReprepareUnpushedTag(context.Background(), b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	b = f.sync(b)
 	if b.TagPlan == nil || b.TagPlan.Tag != "2.3.44.2" || b.TagPlan.Token == token {
 		t.Fatal("fresh check did not require a new numbered confirmation")
 	}
-	// Even a same-commit Tag must reject a failed live production query.
+	// A new preparation must reject a failed live production query.
 	f.g.versionErr = context.DeadlineExceeded
-	if _, err := f.s.Publish(context.Background(), b.ID, b.TagPlan.Token); err == nil {
-		t.Fatal("same-commit Tag bypassed the fresh production check")
+	if _, _, err := f.s.PrepareTag(context.Background(), b.ID, b.TagPlan.Preview); err == nil {
+		t.Fatal("same-commit preparation bypassed the fresh production check")
 	}
 	refs, err := f.s.remoteRefs(context.Background(), b.Target)
 	if err != nil || refs["refs/tags/2.3.44.2"] != "" {

@@ -35,7 +35,7 @@ type productionView struct {
 	PreparationInvalid                      bool
 	HistoryExpanded                         bool
 	BuildChecked                            bool
-	ActiveAction, RefreshAfter              string
+	ActiveAction                            string
 	request                                 *productionWorker
 }
 
@@ -251,6 +251,23 @@ func (s *app) productionInspect(follow string) {
 	if v == nil {
 		return
 	}
+	if follow == "build-preview" {
+		b := s.productionBatch(v)
+		if b == nil || b.Ended {
+			return
+		}
+		expected := production.Preview{Target: b.Target}
+		if v.Preview != nil {
+			expected = *v.Preview
+		}
+		if v.ManualTag != "" && (!expected.Manual || expected.ProductionTag != v.ManualTag) {
+			v.Error = "生产基线输入已变化，请重新检查。"
+			return
+		}
+		s.productionRequest(application.Action{Kind: "production.prepare-tag", ServiceID: v.Selection.ServiceID,
+			Payload: map[string]any{"batchId": b.ID, "preview": expected}}, "build-publish")
+		return
+	}
 	payload := map[string]any{"groupId": v.Selection.GroupID, "productionTag": v.ManualTag}
 	if b := s.productionBatch(v); b != nil && !b.Ended {
 		payload["batchId"] = b.ID
@@ -296,10 +313,6 @@ func (s *app) productionRequest(action application.Action, follow string) {
 }
 
 func (s *app) productionRequestView(v *productionView, action application.Action, follow string) {
-	s.startProductionRequest(v, action, follow, 0, "")
-}
-
-func (s *app) startProductionRequest(v *productionView, action application.Action, follow string, originStep int, refreshAfter string) {
 	state := s.ensureProduction()
 	if v == nil || v.Busy || s.backend == nil {
 		return
@@ -331,24 +344,20 @@ func (s *app) startProductionRequest(v *productionView, action application.Actio
 	state.workers[worker] = struct{}{}
 	state.mu.Unlock()
 	v.Busy, v.Error, v.Message = true, "", ""
-	v.ActiveAction, v.RefreshAfter = action.Kind, refreshAfter
+	v.ActiveAction = action.Kind
 	v.Generation++
 	generation := v.Generation
 	v.ActiveStep = productionActionStep(action.Kind, follow, s.productionBatch(v))
-	if originStep != 0 {
-		v.ActiveStep = originStep
-	}
 	if v.ActiveStep == 5 {
 		v.BuildChecked = true
 	}
 	if v.Steps == nil {
 		v.Steps = map[int]productionStepView{}
 	}
-	priorResult := v.Steps[v.ActiveStep]
-	if v.ActiveStep != 0 && refreshAfter == "" {
+	if v.ActiveStep != 0 {
 		v.Steps[v.ActiveStep] = productionStepView{State: "running"}
 	}
-	if action.Kind == "production.merge" || action.Kind == "production.sync" || action.Kind == "production.merge-main" || action.Kind == "production.merge-release" {
+	if action.Kind == "production.merge" || action.Kind == "production.sync" || action.Kind == "production.prepare-tag" || action.Kind == "production.merge-main" || action.Kind == "production.merge-release" {
 		delete(v.Steps, 5)
 		delete(v.Steps, 6)
 	}
@@ -360,23 +369,21 @@ func (s *app) startProductionRequest(v *productionView, action application.Actio
 		delete(v.Steps, 5)
 		delete(v.Steps, 6)
 	}
-	if follow == "build-preview" {
+	if follow == "build-preview" || action.Kind == "production.prepare-tag" {
 		v.BuildChecked = true
 		delete(v.Steps, 5)
 		delete(v.Steps, 6)
 	}
-	if action.Kind == "production.inspect" && (follow == "sync-preview" || follow == "check-preview" || follow == "build-preview") {
+	if action.Kind == "production.prepare-tag" || action.Kind == "production.inspect" && (follow == "sync-preview" || follow == "check-preview" || follow == "build-preview") {
 		v.PreparationInvalid = true
 	}
 	home, scope, manual, branch := s.snapshot.Home, s.currentProductionScope(), v.ManualTag, v.Branch
 	selectedBatch := v.BatchID
 	selection := v.Selection
+	completedAction := productionCompletedAction(action.Kind, s.productionBatch(v))
 	identity := productionResultIdentity{Selection: selection, BatchID: selectedBatch, Branch: branch, Generation: generation, Home: home, ConfigScope: scope, ManualTag: manual}
 	if source, ok := action.Payload["sourceSha"].(string); ok {
 		identity.SourceSHA = source
-	}
-	if refreshAfter != "" && priorResult.Identity != nil {
-		identity.SourceSHA, identity.TargetSHA = priorResult.Identity.SourceSHA, priorResult.Identity.TargetSHA
 	}
 	if preview, ok := action.Payload["preview"].(production.Preview); ok {
 		identity.SourceSHA, identity.TargetSHA = preview.ProductionSHA, preview.MainSHA
@@ -386,7 +393,7 @@ func (s *app) startProductionRequest(v *productionView, action application.Actio
 	}
 	worker.identity, worker.silentProgress = identity, follow == "background-probe"
 	v.request = worker
-	if step := v.ActiveStep; step != 0 && refreshAfter == "" {
+	if step := v.ActiveStep; step != 0 {
 		observed := v.Steps[step]
 		observed.Identity = &identity
 		v.Steps[step] = observed
@@ -523,14 +530,13 @@ func (s *app) startProductionRequest(v *productionView, action application.Actio
 					v.PreparationInvalid = true
 				}
 				if v.ActiveStep != 0 && v.Steps != nil {
-					status, message := "failed", v.Error
-					if refreshAfter != "" {
-						status, message = "warning", productionRefreshWarning(refreshAfter)+"："+v.Error
-					}
-					v.Steps[v.ActiveStep] = productionStepView{State: status, Message: message}
+					v.Steps[v.ActiveStep] = productionStepView{State: "failed", Message: v.Error}
 				}
 			} else {
 				v.Message = result.Message
+				if report.Batch != nil && report.Batch.Intent == nil {
+					applyProductionWritePreview(v, *report.Batch, completedAction)
+				}
 				if action.Kind == "production.abort-merge" && report.Batch != nil && report.Batch.Intent == nil {
 					delete(v.Steps, v.ActiveStep)
 					delete(v.Steps, 5)
@@ -541,7 +547,7 @@ func (s *app) startProductionRequest(v *productionView, action application.Actio
 					// Final results supply the durable status; a busy observation
 					// alone must never leave a step running or imply success.
 					delete(v.Steps, step)
-					if report.Batch != nil && report.Batch.Intent == nil && productionFollowupWrite(action.Kind) {
+					if report.Batch != nil && report.Batch.Intent == nil && productionBranchWrite(action.Kind) {
 						v.Steps[step] = productionStepView{State: "complete", Message: report.Batch.Message}
 					}
 				}
@@ -564,9 +570,13 @@ func (s *app) startProductionRequest(v *productionView, action application.Actio
 				}
 			}
 			if report.Preview != nil && action.Kind != "production.feature-preview" && action.Kind != "production.pending-preview" && v.ManualTag == manual {
-				if err == nil {
+				if err == nil || action.Kind == "production.prepare-tag" {
 					v.invalidateProductionBranchResult(report.Preview)
-					v.Preview = report.Preview
+					preview := *report.Preview
+					if action.Kind == "production.prepare-tag" && v.Preview != nil {
+						preview.Tags = productionTagDisplayOrder(v.Preview.Tags, preview.Tags)
+					}
+					v.Preview = &preview
 					v.updateSuggestedBranch(report.Preview.SuggestedVersion)
 				}
 				if b := s.productionBatch(v); b != nil && b.TagPlan != nil && !productionTagPlanCurrent(v, b) {
@@ -581,7 +591,7 @@ func (s *app) startProductionRequest(v *productionView, action application.Actio
 			if report.Batch != nil {
 				b := report.Batch
 				if b.TagPlan != nil && v.BatchID == b.ID && v.ManualTag == manual && v.Branch == branch && err == nil &&
-					(action.Kind == "production.sync" || action.Kind == "production.resume" || action.Kind == "production.rebase-pending") &&
+					(action.Kind == "production.prepare-tag" || action.Kind == "production.sync" || action.Kind == "production.resume" || action.Kind == "production.rebase-pending") &&
 					(follow != "build-publish" || worker.buildContinuation) {
 					v.PreparationInvalid = false
 				}
@@ -622,10 +632,6 @@ func (s *app) startProductionRequest(v *productionView, action application.Actio
 						s.openProductionDiff(v, "feature → release", branch, b.ReleaseBranch, p.BranchHeads[branch], p.ReleaseSHA, true)
 					}
 				}
-			}
-			if err == nil && report.Batch != nil && report.Batch.Intent == nil && v.BatchID == report.Batch.ID && productionFollowupWrite(action.Kind) {
-				b := report.Batch
-				s.startProductionRequest(v, application.Action{Kind: "production.inspect", Payload: map[string]any{"batchId": b.ID, "productionTag": v.ManualTag}}, "", v.ActiveStep, action.Kind)
 			}
 			window.Invalidate()
 		})

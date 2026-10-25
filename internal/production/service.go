@@ -15,6 +15,7 @@ import (
 
 	"silverwing-go/internal/commandruntime"
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/executable"
 	"silverwing-go/internal/process"
 	"silverwing-go/internal/storage"
 	"silverwing-go/internal/workspace"
@@ -51,6 +52,32 @@ func digest(value any) string {
 func (s *Service) run(ctx context.Context, repository string, args ...string) (string, error) {
 	r, err := s.Git.RunContext(ctx, repository, 2*time.Minute, true, false, args...)
 	return strings.TrimSpace(r.Stdout), err
+}
+
+func (s *Service) gitInput(ctx context.Context, t Target, input string, args ...string) (string, error) {
+	c, err := s.Config.Load()
+	if err != nil {
+		return "", err
+	}
+	command := ""
+	if c.GitExecutablePath != nil {
+		command = *c.GitExecutablePath
+	}
+	spec, err := commandruntime.Prepare(ctx, s.Runner, &c, domain.ProxyTargetGit, executable.ToolGit, command)
+	if err != nil {
+		return "", err
+	}
+	spec.Arguments = append([]string{"-c", "core.longpaths=true", "-C", t.Repository}, args...)
+	spec.RemoveEnv = append(spec.RemoveEnv, gitScopeEnvironment...)
+	spec.Stdin, spec.Timeout = []byte(input), time.Minute
+	r, err := s.Runner.Run(ctx, spec)
+	if err != nil {
+		return "", err
+	}
+	if err := r.RequireSuccess(); err != nil {
+		return "", err
+	}
+	return r.Stdout, nil
 }
 
 func (s *Service) resolve(ctx context.Context, selection Selection) (Target, domain.AppConfig, error) {
@@ -182,8 +209,9 @@ func (s *Service) validate(ctx context.Context, expected Target) (domain.AppConf
 
 type references map[string]string
 
-func (s *Service) remoteRefs(ctx context.Context, t Target) (references, error) {
-	out, err := s.run(ctx, t.Repository, "ls-remote", "--heads", "--tags", t.Remote)
+func (s *Service) remoteRefs(ctx context.Context, t Target, patterns ...string) (references, error) {
+	args := append([]string{"ls-remote", "--heads", "--tags", t.Remote}, patterns...)
+	out, err := s.run(ctx, t.Repository, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -211,13 +239,6 @@ func tagNames(refs references) []string {
 
 func namespace(t Target) string {
 	return "refs/silverwing/production/" + digest([]string{t.CommonDirectory, t.Remote})[:24]
-}
-
-// Fetch only our own namespace. User branches and local Tag refs are untouched.
-func (s *Service) fetch(ctx context.Context, t Target) error {
-	_, err := s.run(ctx, t.Repository, "fetch", "--prune", "--no-tags", t.Remote,
-		"+refs/heads/*:"+namespace(t)+"/heads/*", "+refs/tags/*:"+namespace(t)+"/tags/*")
-	return err
 }
 
 func (s *Service) commit(ctx context.Context, t Target, ref string) (string, error) {
@@ -250,11 +271,14 @@ func (s *Service) Inspect(ctx context.Context, selection Selection, manual strin
 }
 
 func (s *Service) inspect(ctx context.Context, t Target, c domain.AppConfig, manual string) (Preview, error) {
+	return s.observe(ctx, t, c, manual, "", true)
+}
+
+// A write preparation needs one observation, not the display-only build status
+// and baseline diff. All consumers of that preparation reuse these same refs.
+func (s *Service) observe(ctx context.Context, t Target, c domain.AppConfig, manual, release string, details bool) (Preview, error) {
 	p := Preview{Target: t, ObservedAt: timestamp(), Manual: strings.TrimSpace(manual) != "", ProductionTag: strings.TrimSpace(manual), ProductionStatus: unknownStatus()}
 	EmitProgress(ctx, Progress{Selection: t.Selection, Step: 1, State: "running", Message: "读取线上版本及远端引用"})
-	if err := s.fetch(ctx, t); err != nil {
-		return p, err
-	}
 	refs, err := s.remoteRefs(ctx, t)
 	if err != nil {
 		return p, err
@@ -263,13 +287,7 @@ func (s *Service) inspect(ctx context.Context, t Target, c domain.AppConfig, man
 	if p.MainSHA == "" {
 		return p, errors.New("服务主分支在远端不存在")
 	}
-	p.Tags, err = s.tagsByCreation(ctx, t, refs)
-	if err != nil {
-		if ctx.Err() != nil {
-			return p, ctx.Err()
-		}
-		p.Warning = "Tag 创建时间读取失败，暂按名称排序：" + commandruntime.Redact(c, err.Error())
-	}
+	p.Tags = tagNames(refs)
 	p.BranchHeads = map[string]string{}
 	p.SuggestedVersion, _ = SuggestedVersion(p.Tags)
 	for ref, sha := range refs {
@@ -280,6 +298,7 @@ func (s *Service) inspect(ctx context.Context, t Target, c domain.AppConfig, man
 		}
 	}
 	sort.Strings(p.Branches)
+	p.ReleaseSHA = p.BranchHeads[release]
 	p.ProductionCandidates, err = s.Genbu.Versions(ctx, c, t.GenbuService)
 	p.RuntimeAvailable = err == nil
 	if ctx.Err() != nil {
@@ -287,14 +306,10 @@ func (s *Service) inspect(ctx context.Context, t Target, c domain.AppConfig, man
 	}
 	if err != nil {
 		p.Warning = strings.TrimSpace(p.Warning + "\n" + commandruntime.Redact(c, err.Error()))
+		p.ProductionCandidates = nil
 	}
 	if p.ProductionTag == "" && len(p.ProductionCandidates) == 1 {
 		p.ProductionTag = p.ProductionCandidates[0]
-	}
-	if p.ProductionTag == "" {
-		p.Warning = strings.TrimSpace(p.Warning + "\n无法唯一确定线上生产版本，请选择或填写生产 Tag 后重新检查。")
-		EmitProgress(ctx, Progress{Selection: t.Selection, Step: 1, State: "pending", Message: "请从“更多 → 手动确认生产 Tag”确认基线"})
-		return p, nil
 	}
 	if len(p.ProductionCandidates) == 1 && p.Manual && p.ProductionTag != p.ProductionCandidates[0] {
 		return p, errors.New("填写的生产 Tag 与当前唯一运行版本不一致，请重新确认")
@@ -302,10 +317,41 @@ func (s *Service) inspect(ctx context.Context, t Target, c domain.AppConfig, man
 	if p.Manual && len(p.ProductionCandidates) != 1 {
 		p.Warning = strings.TrimSpace(p.Warning + "\n使用人工指定的生产基线，请核对线上版本和所选 Git Tag。")
 	}
-	if refs["refs/tags/"+p.ProductionTag] == "" {
+	if p.ProductionTag != "" && refs["refs/tags/"+p.ProductionTag] == "" {
 		return p, errors.New("生产 Tag 在所选远端不存在")
 	}
-	p.ProductionSHA, err = s.commit(ctx, t, namespace(t)+"/tags/"+p.ProductionTag)
+	required := []string{"refs/heads/" + t.MainBranch}
+	if p.ReleaseSHA != "" {
+		required = append(required, "refs/heads/"+release)
+	}
+	if details {
+		for _, tag := range p.Tags {
+			required = append(required, "refs/tags/"+tag)
+		}
+	} else if p.ProductionTag != "" {
+		required = append(required, "refs/tags/"+p.ProductionTag)
+	}
+	if err = s.fetchMissing(ctx, t, refs, required...); err != nil {
+		return p, err
+	}
+	if details {
+		err = s.retainTagSnapshot(ctx, t, refs)
+		if err == nil {
+			p.Tags, err = s.tagsByCreation(ctx, t, refs)
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				return p, ctx.Err()
+			}
+			p.Warning = strings.TrimSpace(p.Warning + "\nTag 创建时间读取失败，暂按名称排序：" + commandruntime.Redact(c, err.Error()))
+		}
+	}
+	if p.ProductionTag == "" {
+		p.Warning = strings.TrimSpace(p.Warning + "\n无法唯一确定线上生产版本，请选择或填写生产 Tag 后重新检查。")
+		EmitProgress(ctx, Progress{Selection: t.Selection, Step: 1, State: "pending", Message: "请从“更多 → 手动确认生产 Tag”确认基线"})
+		return p, nil
+	}
+	p.ProductionSHA, err = s.commit(ctx, t, refs["refs/tags/"+p.ProductionTag])
 	if err != nil {
 		return p, err
 	}
@@ -318,6 +364,19 @@ func (s *Service) inspect(ctx context.Context, t Target, c domain.AppConfig, man
 	}
 	if _, err = s.commit(ctx, t, p.MainSHA); err != nil {
 		return p, errors.New("主分支在读取期间发生变化，请重新检查")
+	}
+	p.ProductionInMain, err = s.ancestor(ctx, t, p.ProductionSHA, p.MainSHA)
+	if err != nil {
+		return p, err
+	}
+	if p.ReleaseSHA != "" {
+		p.MainInRelease, err = s.ancestor(ctx, t, p.MainSHA, p.ReleaseSHA)
+		if err != nil {
+			return p, err
+		}
+	}
+	if !details {
+		return p, nil
 	}
 	p.ProductionStatus, err = s.Genbu.Status(ctx, c, t.GenbuService, p.ProductionTag)
 	p.ProductionStatus = normalizeStatus(p.ProductionStatus)
@@ -342,10 +401,6 @@ func (s *Service) inspect(ctx context.Context, t Target, c domain.AppConfig, man
 		mainOnly = "无"
 	}
 	p.Commits = "生产 Tag 尚未合入主分支的提交（最多 50 条）：\n" + productionOnly + "\n\n主分支已有提交，全部保留（最多 50 条）：\n" + mainOnly
-	p.ProductionInMain, err = s.ancestor(ctx, t, p.ProductionSHA, p.MainSHA)
-	if err != nil {
-		return p, err
-	}
 	p.Diff, err = s.run(ctx, t.Repository, "diff", "--stat", p.MainSHA+"..."+p.ProductionSHA, "--")
 	if err == nil {
 		EmitProgress(ctx, Progress{Selection: t.Selection, Step: 1, State: "complete", Message: "生产 Tag 与主分支差异已就绪"})
@@ -354,6 +409,14 @@ func (s *Service) inspect(ctx context.Context, t Target, c domain.AppConfig, man
 }
 
 func (s *Service) save(b *Batch) error { return s.Store.Save(b) }
+
+func (s *Service) savePushed(b *Batch) error {
+	if err := s.save(b); err != nil {
+		b.Message = "已推送，本地记录保存失败：" + err.Error()
+		return fmt.Errorf("已推送，本地记录保存失败：%w", err)
+	}
+	return nil
+}
 
 // A manual choice is valid for the observation the user confirmed, including
 // an unavailable runtime query. A changed mixed version set needs confirmation

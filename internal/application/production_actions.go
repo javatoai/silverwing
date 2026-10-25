@@ -67,7 +67,23 @@ func (a *App) productionAction(ctx context.Context, action Action) (ActionResult
 		if e != nil {
 			return ActionResult{}, e
 		}
-		if e = json.Unmarshal(data, &preview); e != nil {
+		if action.Kind == "production.prepare-tag" {
+			// Build preparation needs the confirmation scope and manual baseline,
+			// never display-only status enums from an older or partial preview.
+			var baseline struct {
+				Target               production.Target `json:"target"`
+				Manual               bool              `json:"manual"`
+				ProductionTag        string            `json:"productionTag"`
+				ProductionSHA        string            `json:"productionSha"`
+				ProductionCandidates []string          `json:"productionCandidates"`
+				RuntimeAvailable     bool              `json:"runtimeAvailable"`
+			}
+			if e = json.Unmarshal(data, &baseline); e != nil {
+				return ActionResult{}, e
+			}
+			preview = production.Preview{Target: baseline.Target, Manual: baseline.Manual, ProductionTag: baseline.ProductionTag,
+				ProductionSHA: baseline.ProductionSHA, ProductionCandidates: baseline.ProductionCandidates, RuntimeAvailable: baseline.RuntimeAvailable}
+		} else if e = json.Unmarshal(data, &preview); e != nil {
 			return ActionResult{}, e
 		}
 	}
@@ -88,6 +104,11 @@ func (a *App) productionAction(ctx context.Context, action Action) (ActionResult
 		report.Preview = &preview
 	case "production.sync":
 		batch, err = s.CheckForTag(ctx, id, preview)
+	case "production.prepare-tag":
+		batch, preview, err = s.PrepareTag(ctx, id, preview)
+		if preview.Target.ServiceID != "" {
+			report.Preview = &preview
+		}
 	case "production.create", "production.merge-main", "production.merge-release", "production.merge", "production.publish", "production.end", "production.accept-remote", "production.rebase-pending", "production.reprepare-tag":
 		if !confirmed {
 			return ActionResult{}, errors.New("请先确认生产发布目标和提交范围")

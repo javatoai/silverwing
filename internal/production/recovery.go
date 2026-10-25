@@ -17,7 +17,7 @@ func (s *Service) checkResumedBaseline(ctx context.Context, b *Batch, c domain.A
 	if i.Preview.Manual {
 		manual = i.Preview.ProductionTag
 	}
-	fresh, err := s.inspect(ctx, b.Target, c, manual)
+	fresh, err := s.observe(ctx, b.Target, c, manual, b.ReleaseBranch, false)
 	if err != nil {
 		return err
 	}
@@ -41,12 +41,20 @@ func (s *Service) ReconcileEnded(ctx context.Context, id string) (Batch, error) 
 		if i == nil || i.ResultConfirmed {
 			return nil
 		}
-		if err := s.fetch(ctx, b.Target); err != nil {
-			return err
+		ref := "refs/heads/" + b.ReleaseBranch
+		if i.Kind == "tag" {
+			ref = "refs/tags/" + i.Tag
+		} else if i.Merge != nil {
+			ref = "refs/heads/" + i.Merge.TargetBranch
 		}
-		refs, err := s.remoteRefs(ctx, b.Target)
+		refs, err := s.remoteRefs(ctx, b.Target, ref)
 		if err != nil {
 			return err
+		}
+		if refs[ref] != "" {
+			if err := s.fetchMissing(ctx, b.Target, refs, ref); err != nil {
+				return err
+			}
 		}
 		if i.Kind == "tag" {
 			if i.Tag == "" || i.TagObject == "" || i.TagCommit == "" {
@@ -127,17 +135,18 @@ func (s *Service) PendingPreview(ctx context.Context, id string) (Batch, Preview
 		if b.Intent == nil || b.Intent.Merge == nil {
 			return errors.New("没有待核对的合并现场")
 		}
-		if err := s.fetch(ctx, b.Target); err != nil {
-			return err
-		}
-		refs, err := s.remoteRefs(ctx, b.Target)
+		m := b.Intent.Merge
+		ref := "refs/heads/" + m.TargetBranch
+		refs, err := s.remoteRefs(ctx, b.Target, ref)
 		if err != nil {
 			return err
 		}
-		m := b.Intent.Merge
 		actual := refs["refs/heads/"+m.TargetBranch]
 		if actual == "" {
 			return errors.New("远端目标分支已删除")
+		}
+		if err = s.fetchMissing(ctx, b.Target, refs, ref); err != nil {
+			return err
 		}
 		p = Preview{Target: b.Target, MainSHA: actual, ObservedAt: timestamp(), ProductionStatus: unknownStatus()}
 		p.Commits, err = s.run(ctx, b.Target.Repository, "log", "--oneline", "--max-count=80", m.BeforeSHA+".."+actual)
@@ -162,17 +171,18 @@ func (s *Service) RebasePending(ctx context.Context, id, expected string) (Batch
 		if err := s.checkResumedBaseline(ctx, b, c); err != nil {
 			return err
 		}
-		if err := s.fetch(ctx, b.Target); err != nil {
-			return err
-		}
-		refs, err := s.remoteRefs(ctx, b.Target)
+		m := b.Intent.Merge
+		ref := "refs/heads/" + m.TargetBranch
+		refs, err := s.remoteRefs(ctx, b.Target, ref)
 		if err != nil {
 			return err
 		}
-		m := b.Intent.Merge
 		actual := refs["refs/heads/"+m.TargetBranch]
 		if expected == "" || actual != expected {
 			return errors.New("远端再次变化，请重新核对")
+		}
+		if err = s.fetchMissing(ctx, b.Target, refs, ref); err != nil {
+			return err
 		}
 		ok, err := s.ancestor(ctx, b.Target, m.BeforeSHA, actual)
 		if err != nil {
@@ -199,7 +209,7 @@ func (s *Service) RebasePending(ctx context.Context, id, expected string) (Batch
 		if err = s.save(b); err != nil {
 			return err
 		}
-		return s.advance(ctx, b, c)
+		return s.advance(ctx, b, c, true)
 	})
 }
 
@@ -208,7 +218,7 @@ func (s *Service) ReprepareUnpushedTag(ctx context.Context, id string) (Batch, e
 		if b.Intent == nil || b.Intent.Kind != "tag" {
 			return errors.New("没有待重新准备的 Tag 推送")
 		}
-		refs, err := s.remoteRefs(ctx, b.Target)
+		refs, err := s.remoteRefs(ctx, b.Target, "refs/tags/"+b.Intent.Tag)
 		if err != nil {
 			return err
 		}

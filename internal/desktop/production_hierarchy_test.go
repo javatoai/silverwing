@@ -125,27 +125,18 @@ func TestProductionContainedFeatureSkipsConfirmationAndCanCheckNewCommit(t *test
 	}
 }
 
-func TestProductionMergeFollowupReadKeepsOriginAndFailureDoesNotUndoSuccess(t *testing.T) {
+func TestProductionMergeCompletesWithoutFollowupRead(t *testing.T) {
 	s, v, b, backend, window := productionRequestFixture(t)
 	s.productionRequestFor(v, application.Action{Kind: "production.merge", Payload: map[string]any{"batchId": b.ID, "branch": v.Branch, "sourceSha": strings.Repeat("d", 40), "releaseSha": b.ReleaseSHA, "confirmed": true}}, "")
 	productionTestCall(t, backend)
 	b.ReleaseSHA, b.Message = strings.Repeat("f", 40), "合并完成"
 	backend.replies <- productionTestAnswer{result: application.ActionResult{Message: b.Message, Data: production.Report{Batch: &b}}}
 	productionTestUpdate(t, window)
-	if call := productionTestCall(t, backend); call.Kind != "production.inspect" {
-		t.Fatalf("follow-up was not read-only: %+v", call)
+	if v.Busy || len(backend.calls) != 0 || v.ActiveStep != 4 || v.Steps[4].State != "complete" {
+		t.Fatalf("successful merge started another read or stayed busy: %+v", v.Steps[4])
 	}
-	if !v.Busy || v.ActiveStep != 4 {
-		t.Fatalf("merge's follow-up read moved into another zone: busy=%t step=%d", v.Busy, v.ActiveStep)
-	}
-	backend.replies <- productionTestAnswer{err: errors.New("synthetic refresh unavailable")}
-	productionTestUpdate(t, window)
-	if v.Busy || !strings.Contains(v.Steps[4].Message, "合并已完成，状态刷新失败") || s.productionBatch(v).ReleaseSHA != b.ReleaseSHA {
-		t.Fatalf("successful write was reported as failed: %+v", v.Steps[4])
-	}
-	tester := productionIterationTester(s, 960, false)
-	if !tester.HasText("合并已完成，状态刷新失败") {
-		t.Fatal("missing local recovery warning")
+	if s.productionBatch(v).ReleaseSHA != b.ReleaseSHA || v.Preview.ReleaseSHA != b.ReleaseSHA || v.Preview.BranchHeads[b.ReleaseBranch] != b.ReleaseSHA {
+		t.Fatal("pushed SHA was not applied to the batch and preview")
 	}
 }
 
@@ -357,7 +348,7 @@ func TestProductionDirectBuildChecksFreshDataAndPublishesWithoutConfirmation(t *
 			if err := tester.Click("构建 Tag"); err != nil {
 				t.Fatal(err)
 			}
-			if call := productionTestCall(t, backend); call.Kind != "production.inspect" || call.Payload["confirmed"] != nil {
+			if call := productionTestCall(t, backend); call.Kind != "production.prepare-tag" || call.Payload["confirmed"] != nil {
 				t.Fatalf("build must start with a fresh read: %+v", call)
 			}
 			generation := v.Generation
@@ -373,11 +364,6 @@ func TestProductionDirectBuildChecksFreshDataAndPublishesWithoutConfirmation(t *
 					t.Fatal("failed read continued into preparation or publishing")
 				}
 				return
-			}
-			backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &b, Preview: &p}}}
-			productionTestUpdate(t, window)
-			if call := productionTestCall(t, backend); call.Kind != "production.sync" || call.Payload["confirmed"] != nil {
-				t.Fatalf("preparation must not merge or push: %+v", call)
 			}
 			if v.ActiveStep != 6 || !v.Busy {
 				t.Fatal("automatic check lost its build-region ownership")
@@ -417,9 +403,9 @@ func TestProductionDirectBuildChecksFreshDataAndPublishesWithoutConfirmation(t *
 			}
 			if scenario == "needs-sync" || scenario == "needs-sync-after-tag" || scenario == "prepare-failure" {
 				b.TagPlan = nil
-				backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &b}}, err: errors.New("preparation failed or branches require synchronization")}
+				backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &b, Preview: &p}}, err: errors.New("preparation failed or branches require synchronization")}
 			} else {
-				backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &b}}}
+				backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &b, Preview: &p}}}
 			}
 			productionTestUpdate(t, window)
 			if s.confirmationDialog != nil {
@@ -450,7 +436,7 @@ func TestProductionDirectBuildChecksFreshDataAndPublishesWithoutConfirmation(t *
 			} else {
 				b.Tags = append(append([]production.Tag(nil), b.Tags...), production.Tag{Name: b.TagPlan.Tag, Commit: b.TagPlan.Commit, PushedAt: time.Now().UTC().Format(time.RFC3339Nano), Status: domain.GenbuTagProbeStatus{Build: domain.GenbuSuccess}})
 				b.TagPlan, b.Phase = nil, "READY"
-				backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &b}}}
+				backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &b, Preview: &p}}}
 			}
 			productionTestUpdate(t, window)
 			if v.Busy || len(backend.calls) != 0 || s.confirmationDialog != nil || s.notes[0] != "unsaved draft" {
@@ -465,7 +451,7 @@ func TestProductionDirectBuildChecksFreshDataAndPublishesWithoutConfirmation(t *
 			if err := tester.Click("构建 Tag"); err != nil {
 				t.Fatal(err)
 			}
-			if call := productionTestCall(t, backend); call.Kind != "production.inspect" {
+			if call := productionTestCall(t, backend); call.Kind != "production.prepare-tag" {
 				t.Fatalf("repeated build reused the previous preparation: %+v", call)
 			}
 			backend.replies <- productionTestAnswer{err: errors.New("finish repeated read")}

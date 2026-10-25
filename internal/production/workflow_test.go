@@ -23,10 +23,14 @@ type fakeGenbu struct {
 	status      domain.GenbuStageStatus
 	statusCalls int
 	onStatus    func()
+	onVersions  func()
 }
 
 func (g *fakeGenbu) Versions(context.Context, domain.AppConfig, string) ([]string, error) {
 	g.calls++
+	if g.onVersions != nil {
+		g.onVersions()
+	}
 	return append([]string{}, g.versions...), g.versionErr
 }
 func (g *fakeGenbu) Status(context.Context, domain.AppConfig, string, string) (domain.GenbuTagProbeStatus, error) {
@@ -184,8 +188,8 @@ func TestProductionChangedMixedRuntimeInvalidatesManualConfirmation(t *testing.T
 		t.Fatal(err)
 	}
 	f.g.versions = []string{"2.3.43", "2.3.40"}
-	if _, err := f.s.Publish(context.Background(), b.ID, b.TagPlan.Token); err == nil {
-		t.Fatal("changed mixed runtime bypassed final Tag gate")
+	if _, _, err := f.s.PrepareTag(context.Background(), b.ID, b.TagPlan.Preview); err == nil {
+		t.Fatal("changed mixed runtime bypassed preparation")
 	}
 	if refs, err := f.s.remoteRefs(context.Background(), b.Target); err != nil || refs["refs/tags/2.3.44"] != "" {
 		t.Fatal("stale mixed runtime pushed Tag")
@@ -416,7 +420,7 @@ func TestProductionConflictSurvivesRestartAndRequiresCommittedResolution(t *test
 	}
 }
 
-func TestProductionRejectsLateProductionAndConfigChanges(t *testing.T) {
+func TestProductionPreparationRejectsProductionAndConfigChanges(t *testing.T) {
 	f := newFixture(t)
 	b := f.create()
 	sha := f.feature("feature/one", "one.txt", "one\n", f.base)
@@ -425,8 +429,8 @@ func TestProductionRejectsLateProductionAndConfigChanges(t *testing.T) {
 	f.run(f.seed, "tag", "2.3.43.1", fix)
 	f.run(f.seed, "push", "origin", "2.3.43.1")
 	f.g.versions = []string{"2.3.43.1"}
-	if _, err := f.s.Publish(context.Background(), b.ID, b.TagPlan.Token); err == nil {
-		t.Fatal("late production deployment bypassed mandatory gate")
+	if _, _, err := f.s.PrepareTag(context.Background(), b.ID, b.TagPlan.Preview); err == nil {
+		t.Fatal("new production deployment bypassed preparation")
 	}
 	c, err := f.s.Config.Load()
 	if err != nil {

@@ -230,7 +230,7 @@ func TestProductionBuildCheckRejectsConfigChangedDuringRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.g.onStatus = func() {
+	f.g.onVersions = func() {
 		c, e := f.s.Config.Load()
 		if e != nil {
 			t.Fatal(e)

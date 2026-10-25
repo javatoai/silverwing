@@ -13,48 +13,39 @@ import (
 )
 
 func TestProductionCanceledBuildReadCannotPublishQueuedSuccess(t *testing.T) {
-	for _, stage := range []string{"inspect", "prepare"} {
-		t.Run(stage, func(t *testing.T) {
-			s, v, b, backend, window := productionRequestFixture(t)
-			p := *v.Preview
-			p.MainInRelease = true
-			s.productionInspect("build-preview")
-			productionTestCall(t, backend)
-			if stage == "prepare" {
-				backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &b, Preview: &p}}}
-				productionTestUpdate(t, window)
-				if call := productionTestCall(t, backend); call.Kind != "production.sync" {
-					t.Fatalf("wrong preparation: %+v", call)
-				}
-				b.TagPlan = &production.TagPlan{Token: "canceled-plan", Tag: "2.3.44", Commit: b.ReleaseSHA, MainSHA: p.MainSHA, Preview: p}
-			}
-			worker := v.request
-			backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &b, Preview: &p}}}
-			// Cancel after the backend succeeded but before its queued UI update.
-			// Worker cleanup also cancels its context, so only explicit cancellation
-			// may prevent a successful foreground build from continuing.
-			select {
-			case apply := <-window.updates:
-				worker.cancel()
-				apply()
-			case <-time.After(time.Second):
-				t.Fatal("missing queued build result")
-			}
-			if v.Busy || v.Error == "" || s.confirmationDialog != nil || len(backend.calls) != 0 || v.ActiveAction == "production.publish" {
-				t.Fatal("canceled queued success continued the build")
-			}
-			s.productionInspect("build-preview")
-			if call := productionTestCall(t, backend); call.Kind != "production.inspect" {
-				t.Fatal("a retry replayed the canceled preparation")
-			}
-			backend.replies <- productionTestAnswer{err: errors.New("finish retry")}
-			productionTestUpdate(t, window)
-		})
-	}
+	t.Run("prepare", func(t *testing.T) {
+		s, v, b, backend, window := productionRequestFixture(t)
+		p := *v.Preview
+		p.MainInRelease = true
+		s.productionInspect("build-preview")
+		productionTestCall(t, backend)
+		b.TagPlan = &production.TagPlan{Token: "canceled-plan", Tag: "2.3.44", Commit: b.ReleaseSHA, MainSHA: p.MainSHA, Preview: p}
+		worker := v.request
+		backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &b, Preview: &p}}}
+		// Cancel after the backend succeeded but before its queued UI update.
+		// Worker cleanup also cancels its context, so only explicit cancellation
+		// may prevent a successful foreground build from continuing.
+		select {
+		case apply := <-window.updates:
+			worker.cancel()
+			apply()
+		case <-time.After(time.Second):
+			t.Fatal("missing queued build result")
+		}
+		if v.Busy || v.Error == "" || s.confirmationDialog != nil || len(backend.calls) != 0 || v.ActiveAction == "production.publish" {
+			t.Fatal("canceled queued success continued the build")
+		}
+		s.productionInspect("build-preview")
+		if call := productionTestCall(t, backend); call.Kind != "production.prepare-tag" {
+			t.Fatal("a retry replayed the canceled preparation")
+		}
+		backend.replies <- productionTestAnswer{err: errors.New("finish retry")}
+		productionTestUpdate(t, window)
+	})
 }
 
 func TestProductionSavedTagPlanAndRefreshNeverPublishAutomatically(t *testing.T) {
-	for _, action := range []string{"production.inspect", "production.sync", "production.refresh-build", "production.list"} {
+	for _, action := range []string{"production.inspect", "production.prepare-tag", "production.sync", "production.refresh-build", "production.list"} {
 		t.Run(action, func(t *testing.T) {
 			s, v, b, backend, window := productionRequestFixture(t)
 			v.Preview.MainInRelease = true

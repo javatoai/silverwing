@@ -66,7 +66,10 @@ func (s *Service) initialize(ctx context.Context, preview Preview, version strin
 			b = Batch{}
 			return err
 		}
-		if err = s.advance(ctx, &b, c); err != nil {
+		if err = s.advance(ctx, &b, c, false); err != nil {
+			if b.Intent == nil {
+				return err
+			}
 			b.Message = commandruntime.Redact(c, err.Error())
 			if b.Phase != "CONFLICT" {
 				b.Phase = "PAUSED"
@@ -120,7 +123,7 @@ func (s *Service) MergeProduction(ctx context.Context, id string, preview Previe
 		if err = s.save(b); err != nil {
 			return err
 		}
-		return s.advance(ctx, b, c)
+		return s.advance(ctx, b, c, false)
 	})
 }
 
@@ -156,7 +159,7 @@ func (s *Service) MergeMainToRelease(ctx context.Context, id string, preview Pre
 		if err = s.save(b); err != nil {
 			return err
 		}
-		return s.advance(ctx, b, c)
+		return s.advance(ctx, b, c, false)
 	})
 }
 

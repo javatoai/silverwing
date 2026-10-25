@@ -113,17 +113,8 @@ func (h *productionBuildNavigationHarness) startBuild(t *testing.T) {
 	t.Helper()
 	h.click(t, "构建 Tag")
 	call := productionTestCall(t, h.backend)
-	if call.Kind != "production.inspect" || call.ServiceID != h.v.Selection.ServiceID || call.Payload["batchId"] != h.batch.ID || call.Payload["token"] != nil || call.Payload["confirmed"] != nil {
+	if call.Kind != "production.prepare-tag" || call.ServiceID != h.v.Selection.ServiceID || call.Payload["batchId"] != h.batch.ID || call.Payload["token"] != nil || call.Payload["confirmed"] != nil {
 		t.Fatalf("a build click must start a fresh read of the original target: %+v", call)
-	}
-}
-
-func (h *productionBuildNavigationHarness) beginPrepare(t *testing.T) {
-	t.Helper()
-	h.backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &h.batch, Preview: &h.preview}}}
-	productionTestUpdate(t, h.window)
-	if call := productionTestCall(t, h.backend); call.Kind != "production.sync" || call.Payload["confirmed"] != nil {
-		t.Fatalf("fresh inspection must only prepare the Tag: %+v", call)
 	}
 }
 
@@ -134,7 +125,7 @@ func (h *productionBuildNavigationHarness) setPlan(token string) {
 func (h *productionBuildNavigationHarness) dispatchPublish(t *testing.T, token string) {
 	t.Helper()
 	h.setPlan(token)
-	h.backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &h.batch}}}
+	h.backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &h.batch, Preview: &h.preview}}}
 	productionTestUpdate(t, h.window)
 	call := productionTestCall(t, h.backend)
 	if call.Kind != "production.publish" || call.Payload["batchId"] != h.batch.ID || call.Payload["token"] != token || call.Payload["confirmed"] != true || h.s.confirmationDialog != nil {
@@ -148,7 +139,7 @@ func (h *productionBuildNavigationHarness) finishPublish(t *testing.T) {
 	h.batch.Tags = append(h.batch.Tags, production.Tag{Name: plan.Tag, Commit: plan.Commit, Status: domain.GenbuTagProbeStatus{Build: domain.GenbuSuccess}})
 	h.batch.TagPlan = nil
 	h.batch.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	h.backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &h.batch}}}
+	h.backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &h.batch, Preview: &h.preview}}}
 	productionTestUpdate(t, h.window)
 	h.tester.Frame()
 	saved, other := h.s.productionBatch(h.v), h.s.productionBatch(h.other)
@@ -173,37 +164,31 @@ func (h *productionBuildNavigationHarness) queuedResult(t *testing.T) func() {
 }
 
 func TestProductionBuildNavigationPermanentlyRevokesContinuation(t *testing.T) {
-	for _, stage := range []string{"inspect", "prepare"} {
-		for _, route := range []string{"service", "page"} {
-			for _, navigation := range []string{"away", "round-trip", "queued-round-trip"} {
-				t.Run(stage+"/"+route+"/"+navigation, func(t *testing.T) {
-					h := newProductionBuildNavigationHarness(t)
+	for _, route := range []string{"service", "page"} {
+		for _, navigation := range []string{"away", "round-trip", "queued-round-trip"} {
+			t.Run("prepare"+"/"+route+"/"+navigation, func(t *testing.T) {
+				h := newProductionBuildNavigationHarness(t)
+				h.startBuild(t)
+				h.setPlan("old-navigation-token")
+				generation := h.v.Generation
+				var apply func()
+				if navigation == "queued-round-trip" {
+					apply = h.queuedResult(t)
+				}
+				h.navigate(t, route, navigation != "away")
+				if apply == nil {
+					apply = h.queuedResult(t)
+				}
+				apply()
+				if h.v.Busy || h.v.request != nil || h.v.Generation != generation || !h.v.PreparationInvalid || len(h.backend.calls) != 0 || h.s.confirmationDialog != nil {
+					t.Fatal("navigation left a busy request or continued an old build without a new click")
+				}
+				if navigation != "away" {
 					h.startBuild(t)
-					if stage == "prepare" {
-						h.beginPrepare(t)
-						h.setPlan("old-navigation-token")
-					}
-					generation := h.v.Generation
-					var apply func()
-					if navigation == "queued-round-trip" {
-						apply = h.queuedResult(t)
-					}
-					h.navigate(t, route, navigation != "away")
-					if apply == nil {
-						apply = h.queuedResult(t)
-					}
-					apply()
-					if h.v.Busy || h.v.request != nil || h.v.Generation != generation || !h.v.PreparationInvalid || len(h.backend.calls) != 0 || h.s.confirmationDialog != nil {
-						t.Fatal("navigation left a busy request or continued an old build without a new click")
-					}
-					if navigation != "away" {
-						h.startBuild(t)
-						h.beginPrepare(t)
-						h.dispatchPublish(t, "new-click-token")
-						h.finishPublish(t)
-					}
-				})
-			}
+					h.dispatchPublish(t, "new-click-token")
+					h.finishPublish(t)
+				}
+			})
 		}
 	}
 }
@@ -213,18 +198,13 @@ func TestProductionBuildSameTargetAndDuplicateClicksKeepContinuation(t *testing.
 		t.Run(target, func(t *testing.T) {
 			h := newProductionBuildNavigationHarness(t)
 			h.startBuild(t)
-			for _, stage := range []string{"inspect", "prepare"} {
-				worker, generation := h.v.request, h.v.Generation
-				h.click(t, "构建 Tag")
-				if target != "no-navigation" {
-					h.click(t, target)
-				}
-				if !h.v.Busy || h.v.request != worker || h.v.Generation != generation || len(h.backend.calls) != 0 {
-					t.Fatal("duplicate or current-target click replaced the running build")
-				}
-				if stage == "inspect" {
-					h.beginPrepare(t)
-				}
+			worker, generation := h.v.request, h.v.Generation
+			h.click(t, "构建 Tag")
+			if target != "no-navigation" {
+				h.click(t, target)
+			}
+			if !h.v.Busy || h.v.request != worker || h.v.Generation != generation || len(h.backend.calls) != 0 {
+				t.Fatal("duplicate or current-target click replaced the running build")
 			}
 			h.dispatchPublish(t, "same-target-token")
 			h.finishPublish(t)
@@ -242,7 +222,6 @@ func TestProductionDispatchedPublishSurvivesNavigation(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				h := newProductionBuildNavigationHarness(t)
 				h.startBuild(t)
-				h.beginPrepare(t)
 				h.dispatchPublish(t, "already-dispatched-token")
 				worker, generation := h.v.request, h.v.Generation
 				h.navigate(t, route, roundTrip)
@@ -256,26 +235,21 @@ func TestProductionDispatchedPublishSurvivesNavigation(t *testing.T) {
 }
 
 func TestProductionBuildCancelButtonStopsQueuedContinuation(t *testing.T) {
-	for _, stage := range []string{"inspect", "prepare"} {
-		t.Run(stage, func(t *testing.T) {
-			h := newProductionBuildNavigationHarness(t)
-			h.startBuild(t)
-			if stage == "prepare" {
-				h.beginPrepare(t)
-				h.setPlan("queued-canceled-token")
-			}
-			worker := h.v.request
-			apply := h.queuedResult(t)
-			// Use the native toast action, after success was queued and before
-			// applying it, rather than invoking a saved cancellation closure.
-			h.click(t, "取消")
-			if !worker.canceled.Load() {
-				t.Fatal("native cancel button did not cancel the current request")
-			}
-			apply()
-			if h.v.Busy || h.v.request != nil || h.v.Error == "" || len(h.backend.calls) != 0 || h.s.confirmationDialog != nil {
-				t.Fatal("canceled queued success continued into another build request")
-			}
-		})
-	}
+	t.Run("prepare", func(t *testing.T) {
+		h := newProductionBuildNavigationHarness(t)
+		h.startBuild(t)
+		h.setPlan("queued-canceled-token")
+		worker := h.v.request
+		apply := h.queuedResult(t)
+		// Use the native toast action, after success was queued and before
+		// applying it, rather than invoking a saved cancellation closure.
+		h.click(t, "取消")
+		if !worker.canceled.Load() {
+			t.Fatal("native cancel button did not cancel the current request")
+		}
+		apply()
+		if h.v.Busy || h.v.request != nil || h.v.Error == "" || len(h.backend.calls) != 0 || h.s.confirmationDialog != nil {
+			t.Fatal("canceled queued success continued into another build request")
+		}
+	})
 }

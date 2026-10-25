@@ -20,7 +20,7 @@ func (s *Service) checkPreview(ctx context.Context, p Preview, release string) (
 	if p.Manual {
 		manual = p.ProductionTag
 	}
-	fresh, err := s.inspect(ctx, p.Target, c, manual)
+	fresh, err := s.observe(ctx, p.Target, c, manual, release, false)
 	if err != nil {
 		return fresh, c, err
 	}
@@ -42,15 +42,9 @@ func (s *Service) InspectBatch(ctx context.Context, id, manual string) (Batch, P
 	var p Preview
 	b, err := s.withBatch(ctx, id, func(b *Batch, c domain.AppConfig) error {
 		var e error
-		p, e = s.inspect(ctx, b.Target, c, manual)
+		p, e = s.observe(ctx, b.Target, c, manual, b.ReleaseBranch, true)
 		if e == nil {
 			p.ReleaseSHA = p.BranchHeads[b.ReleaseBranch]
-			if p.ReleaseSHA != "" {
-				p.MainInRelease, e = s.ancestor(ctx, b.Target, p.MainSHA, p.ReleaseSHA)
-				if e != nil {
-					return e
-				}
-			}
 			if p.ReleaseSHA != "" && b.ReleaseSHA != "" && p.ReleaseSHA != b.ReleaseSHA {
 				var diff, commits string
 				diff, e = s.run(ctx, b.Target.Repository, "diff", "--stat", b.ReleaseSHA, p.ReleaseSHA, "--")
@@ -71,16 +65,16 @@ func (s *Service) InspectBatch(ctx context.Context, id, manual string) (Batch, P
 func (s *Service) FeaturePreview(ctx context.Context, id, branch string) (Batch, Preview, error) {
 	var p Preview
 	b, err := s.withBatch(ctx, id, func(b *Batch, _ domain.AppConfig) error {
-		if err := s.fetch(ctx, b.Target); err != nil {
-			return err
-		}
-		refs, err := s.remoteRefs(ctx, b.Target)
+		refs, err := s.remoteRefs(ctx, b.Target, "refs/heads/"+branch, "refs/heads/"+b.ReleaseBranch)
 		if err != nil {
 			return err
 		}
 		source, target := refs["refs/heads/"+branch], refs["refs/heads/"+b.ReleaseBranch]
 		if branch == "" || source == "" || target == "" {
 			return errors.New("源分支或 release 不存在")
+		}
+		if err = s.fetchMissing(ctx, b.Target, refs, "refs/heads/"+branch, "refs/heads/"+b.ReleaseBranch); err != nil {
+			return err
 		}
 		p = Preview{Target: b.Target, ReleaseSHA: target, BranchHeads: map[string]string{branch: source}, ObservedAt: timestamp(), ProductionStatus: unknownStatus()}
 		p.Commits, err = s.run(ctx, b.Target.Repository, "log", "--oneline", "--max-count=80", target+".."+source)
@@ -101,10 +95,7 @@ func (s *Service) MergeFeature(ctx context.Context, id, branch, sourceSHA, relea
 		if branch == b.Target.MainBranch || branch == b.ReleaseBranch || branch == "" || sourceSHA == "" {
 			return errors.New("请选择一个有效的远端功能分支")
 		}
-		if err := s.fetch(ctx, b.Target); err != nil {
-			return err
-		}
-		refs, err := s.remoteRefs(ctx, b.Target)
+		refs, err := s.remoteRefs(ctx, b.Target, "refs/heads/"+branch, "refs/heads/"+b.ReleaseBranch)
 		if err != nil {
 			return err
 		}
@@ -116,6 +107,9 @@ func (s *Service) MergeFeature(ctx context.Context, id, branch, sourceSHA, relea
 		}
 		if b.ReleaseSHA != releaseSHA {
 			return errors.New("release 有批次之外的提交，请先核对并采纳远端状态")
+		}
+		if err = s.fetchMissing(ctx, b.Target, refs, "refs/heads/"+branch, "refs/heads/"+b.ReleaseBranch); err != nil {
+			return err
 		}
 		contained, err := s.ancestor(ctx, b.Target, sourceSHA, releaseSHA)
 		if err != nil {
@@ -137,48 +131,24 @@ func (s *Service) MergeFeature(ctx context.Context, id, branch, sourceSHA, relea
 		if err = s.save(b); err != nil {
 			return err
 		}
-		return s.advance(ctx, b, c)
+		return s.advance(ctx, b, c, false)
 	})
 }
 
 // CheckForTag is a read-only Git check. Missing merges require their own buttons.
 func (s *Service) CheckForTag(ctx context.Context, id string, preview Preview) (Batch, error) {
 	return s.withBatch(ctx, id, func(b *Batch, _ domain.AppConfig) error {
-		if b.Intent != nil {
-			return errors.New("请先继续当前未完成操作")
-		}
 		if preview.Target != b.Target || b.InitialSHA == "" {
 			return errors.New("请先创建并核对当前 release")
 		}
-		// Starting another check retires the previous confirmation even if this
-		// check fails. It can never leave an old build token usable by accident.
-		b.TagPlan = nil
-		b.Phase, b.Message = "READY", "上次构建确认已失效，请完成本轮检查"
-		if err := s.save(b); err != nil {
+		if err := s.beginTagCheck(b); err != nil {
 			return err
 		}
 		p, _, err := s.checkPreview(ctx, preview, b.ReleaseBranch)
 		if err != nil {
 			return err
 		}
-		if p.ReleaseSHA == "" || p.ReleaseSHA != b.ReleaseSHA {
-			return errors.New("release 已变化，请先核对并采纳远端状态")
-		}
-		for _, pair := range [][2]string{{p.ProductionSHA, p.MainSHA}, {p.MainSHA, p.ReleaseSHA}} {
-			ok, e := s.ancestor(ctx, b.Target, pair[0], pair[1])
-			if e != nil {
-				return e
-			}
-			if !ok {
-				return errors.New("构建前检查未通过，请分别点击合并生产 Tag 到主分支、合并主分支到 release")
-			}
-		}
-		b.MainSHA, b.ProductionTag, b.ProductionSHA = p.MainSHA, p.ProductionTag, p.ProductionSHA
-		if err = s.prepareTag(ctx, b, p); err != nil {
-			return err
-		}
-		batchProgress(ctx, b, 5, "complete", b.Message)
-		return nil
+		return s.prepareCheckedTag(ctx, b, p)
 	})
 }
 
@@ -193,7 +163,7 @@ func (s *Service) Resume(ctx context.Context, id string) (Batch, error) {
 		if err := s.checkResumedBaseline(ctx, b, c); err != nil {
 			return err
 		}
-		return s.advance(ctx, b, c)
+		return s.advance(ctx, b, c, true)
 	})
 }
 
@@ -204,16 +174,17 @@ func (s *Service) AcceptRemote(ctx context.Context, id, expectedSHA string) (Bat
 		if b.Intent != nil {
 			return errors.New("请先完成当前操作；远端变化时可以结束批次并保留工作区")
 		}
-		if err := s.fetch(ctx, b.Target); err != nil {
-			return err
-		}
-		refs, err := s.remoteRefs(ctx, b.Target)
+		ref := "refs/heads/" + b.ReleaseBranch
+		refs, err := s.remoteRefs(ctx, b.Target, ref)
 		if err != nil {
 			return err
 		}
 		actual := refs["refs/heads/"+b.ReleaseBranch]
 		if actual == "" || actual != expectedSHA {
 			return errors.New("远端再次变化，请重新检查")
+		}
+		if err = s.fetchMissing(ctx, b.Target, refs, ref); err != nil {
+			return err
 		}
 		ok, err := s.ancestor(ctx, b.Target, b.ReleaseSHA, actual)
 		if err != nil {
@@ -273,7 +244,7 @@ func (s *Service) ConflictWorkspace(ctx context.Context, id string) (string, str
 	return path, tool, err
 }
 
-func (s *Service) advance(ctx context.Context, b *Batch, c domain.AppConfig) error {
+func (s *Service) advance(ctx context.Context, b *Batch, c domain.AppConfig, recovering bool) error {
 	if err := mergeAbortPending(b); err != nil {
 		return err
 	}
@@ -293,7 +264,7 @@ func (s *Service) advance(ctx context.Context, b *Batch, c domain.AppConfig) err
 			if err := s.ensureMerge(b, b.Target.MainBranch, i.Preview.ProductionSHA, i.Preview.MainSHA, false); err != nil {
 				return err
 			}
-			sha, err := s.mergeAndPush(ctx, b)
+			sha, err := s.mergeAndPush(ctx, b, recovering)
 			if err != nil {
 				return err
 			}
@@ -306,7 +277,12 @@ func (s *Service) advance(ctx context.Context, b *Batch, c domain.AppConfig) err
 			if sha == i.Preview.MainSHA {
 				state, b.Message = "skipped", "主分支已包含生产 Tag，无需合并"
 			}
-			if err = s.save(b); err != nil {
+			if sha != i.Preview.MainSHA {
+				err = s.savePushed(b)
+			} else {
+				err = s.save(b)
+			}
+			if err != nil {
 				return err
 			}
 			batchProgress(ctx, b, step, state, b.Message)
@@ -314,31 +290,32 @@ func (s *Service) advance(ctx context.Context, b *Batch, c domain.AppConfig) err
 		case "release-create":
 			b.Phase, b.Message = "CREATE_RELEASE", "正在创建并推送 release 分支"
 			batchProgress(ctx, b, 3, "running", b.Message)
-			refs, err := s.remoteRefs(ctx, b.Target)
-			if err != nil {
-				return err
-			}
-			if refs["refs/heads/"+b.Target.MainBranch] != b.MainSHA {
-				return errors.New("主分支已变化，暂停创建 release")
+			refs := references{}
+			if recovering {
+				var err error
+				refs, err = s.remoteRefs(ctx, b.Target, "refs/heads/"+b.Target.MainBranch, "refs/heads/"+b.ReleaseBranch)
+				if err != nil {
+					return err
+				}
+				if refs["refs/heads/"+b.Target.MainBranch] != b.MainSHA {
+					return errors.New("主分支已变化，暂停创建 release")
+				}
 			}
 			actual := refs["refs/heads/"+b.ReleaseBranch]
 			if actual != "" && actual != b.MainSHA {
 				return errors.New("release 已被其他操作创建，已暂停")
 			}
 			if actual == "" {
-				if _, err = s.validate(ctx, b.Target); err != nil {
+				if _, err := s.validate(ctx, b.Target); err != nil {
 					return err
 				}
-				if err = s.pushBranch(ctx, b.Target, b.ReleaseBranch, "", b.MainSHA); err != nil {
+				if err := s.pushBranch(ctx, b.Target, b.ReleaseBranch, "", b.MainSHA); err != nil {
 					return err
 				}
-			}
-			if err = s.expectHead(ctx, b.Target, b.ReleaseBranch, b.MainSHA); err != nil {
-				return err
 			}
 			b.InitialSHA, b.ReleaseSHA = b.MainSHA, b.MainSHA
 			b.Intent, b.Phase, b.Message = nil, "READY", "release 已就绪，请逐个合并功能分支"
-			if err = s.save(b); err != nil {
+			if err := s.savePushed(b); err != nil {
 				return err
 			}
 			batchProgress(ctx, b, 3, "complete", "release 分支已创建并确认推送")
@@ -356,7 +333,7 @@ func (s *Service) advance(ctx context.Context, b *Batch, c domain.AppConfig) err
 			if err := s.ensureMerge(b, b.ReleaseBranch, source, before, noFF); err != nil {
 				return err
 			}
-			sha, err := s.mergeAndPush(ctx, b)
+			sha, err := s.mergeAndPush(ctx, b, recovering)
 			if err != nil {
 				return err
 			}
@@ -369,7 +346,12 @@ func (s *Service) advance(ctx context.Context, b *Batch, c domain.AppConfig) err
 					b.Message = "该分支目标提交已包含，无需重复合并"
 				}
 				b.Intent, b.Phase = nil, "READY"
-				if err = s.save(b); err != nil {
+				if sha != before {
+					err = s.savePushed(b)
+				} else {
+					err = s.save(b)
+				}
+				if err != nil {
 					return err
 				}
 				state := "complete"
@@ -384,7 +366,12 @@ func (s *Service) advance(ctx context.Context, b *Batch, c domain.AppConfig) err
 			if sha == before {
 				state, b.Message = "skipped", "release 已包含主分支，无需合并"
 			}
-			if err = s.save(b); err != nil {
+			if sha != before {
+				err = s.savePushed(b)
+			} else {
+				err = s.save(b)
+			}
+			if err != nil {
 				return err
 			}
 			batchProgress(ctx, b, 5, state, b.Message)
@@ -392,10 +379,20 @@ func (s *Service) advance(ctx context.Context, b *Batch, c domain.AppConfig) err
 		case "prepare-tag":
 			// Legacy records may already have completed their merge. Resuming
 			// this stage only prepares a read-only confirmation, never a Tag.
-			preview := i.Preview
 			b.Intent = nil
-			return s.prepareTag(ctx, b, preview)
+			manual := ""
+			if i.Preview.Manual {
+				manual = i.Preview.ProductionTag
+			}
+			preview, err := s.observe(ctx, b.Target, c, manual, b.ReleaseBranch, false)
+			if err != nil {
+				return err
+			}
+			return s.prepareCheckedTag(ctx, b, preview)
 		case "tag-push":
+			if recovering {
+				return s.resumeTag(ctx, b, c)
+			}
 			return s.pushTag(ctx, b)
 		default:
 			return errors.New("生产发布阶段无效，已停止")

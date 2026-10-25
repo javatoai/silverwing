@@ -82,7 +82,7 @@ func (s *app) productionSection(v *productionView, b *production.Batch, step int
 		result.Message = ""
 	}
 	if v.Busy && v.ActiveStep == step {
-		result.Activity = productionActivity(v.ActiveAction, v.RefreshAfter)
+		result.Activity = productionActivity(v.ActiveAction)
 		if state.State == "running" {
 			// A single, precise activity line replaces generic and progress echoes.
 			result.Message = ""
@@ -131,10 +131,7 @@ func (s *app) productionReleaseModel(v *productionView, b *production.Batch) pro
 	return m
 }
 
-func productionActivity(kind, refreshAfter string) string {
-	if refreshAfter != "" {
-		return "正在刷新本次操作后的状态…"
-	}
+func productionActivity(kind string) string {
 	switch kind {
 	case "production.feature-preview":
 		return "正在检查所选分支的提交…"
@@ -150,6 +147,8 @@ func productionActivity(kind, refreshAfter string) string {
 		return "正在创建并推送 release…"
 	case "production.publish":
 		return "正在创建并推送生产 Tag…"
+	case "production.prepare-tag":
+		return "正在读取远端版本并准备生产 Tag…"
 	case "production.refresh-build":
 		return "正在读取 Tag 构建状态…"
 	case "production.list":
@@ -171,14 +170,7 @@ func productionActivity(kind, refreshAfter string) string {
 	}
 }
 
-func productionRefreshWarning(kind string) string {
-	if kind == "production.create" {
-		return "release 已创建，状态刷新失败"
-	}
-	return "合并已完成，状态刷新失败"
-}
-
-func productionFollowupWrite(kind string) bool {
+func productionBranchWrite(kind string) bool {
 	switch kind {
 	case "production.create", "production.merge-main", "production.merge-release", "production.merge", "production.resume", "production.rebase-pending":
 		return true
@@ -217,5 +209,5 @@ func (v *productionView) selectProductionBatch(id string) {
 	v.Error, v.Message, v.Branch = "", "", ""
 	v.PreparationInvalid = true
 	v.BuildChecked = false
-	v.ActiveStep, v.ActiveAction, v.RefreshAfter = 0, "", ""
+	v.ActiveStep, v.ActiveAction = 0, ""
 }

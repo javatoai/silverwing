@@ -75,6 +75,9 @@ func (a *App) Snapshot(ctx context.Context) (Snapshot, error) {
 	}
 	config, err := a.Config.Load()
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return Snapshot{}, ctxErr
+		}
 		s := Snapshot{Home: a.Paths.Home, Error: err.Error(), Tasks: []Task{}, Repositories: []Repository{}, Services: []Service{}, Skills: []Skill{}, TagHistory: []TagRecord{}}
 		a.appendStartupMigrationDiagnostics(&s)
 		return s, nil
@@ -91,6 +94,9 @@ func (a *App) Snapshot(ctx context.Context) (Snapshot, error) {
 		}
 		appendSnapshotError(&s, "读取任务根迁移恢复状态失败："+err.Error())
 	}
+	if err := ctx.Err(); err != nil {
+		return Snapshot{}, err
+	}
 	a.appendStartupMigrationDiagnostics(&s)
 	if a.startupTaskRootError != nil && config.TaskRoot == nil {
 		appendSnapshotError(&s, a.startupTaskRootError.Error())
@@ -103,6 +109,9 @@ func (a *App) Snapshot(ctx context.Context) (Snapshot, error) {
 		}
 	} else {
 		appendSnapshotError(&s, skillErr.Error())
+	}
+	if err := ctx.Err(); err != nil {
+		return Snapshot{}, err
 	}
 	for _, repository := range config.Repositories {
 		s.Repositories = append(s.Repositories, Repository{ID: repository.ID, Name: repository.Name, RootPath: repository.RootPath, OriginURL: value(repository.OriginURL), CurrentBranch: value(repository.CurrentBranch), DefaultBranch: value(repository.DefaultRemoteBranch)})
@@ -125,9 +134,15 @@ func (a *App) Snapshot(ctx context.Context) (Snapshot, error) {
 		s.Groups = append(s.Groups, g)
 	}
 	if config.TaskRoot != nil {
+		if err := ctx.Err(); err != nil {
+			return Snapshot{}, err
+		}
 		scan, scanErr := a.Manifests.Scan(*config.TaskRoot)
 		if scanErr != nil {
 			appendSnapshotError(&s, scanErr.Error())
+		}
+		if err := ctx.Err(); err != nil {
+			return Snapshot{}, err
 		}
 		issues := map[string]string{}
 		for path, reason := range scan.Failures {
@@ -148,6 +163,9 @@ func (a *App) Snapshot(ctx context.Context) (Snapshot, error) {
 		// Snapshot only reads Tag history. Retention runs when the owning task
 		// explicitly reads its Tag history, so refreshing task A never trims B.
 		for _, entry := range scan.Current {
+			if err := ctx.Err(); err != nil {
+				return Snapshot{}, err
+			}
 			m := entry.Manifest
 			t := Task{ID: filepath.Base(entry.Path), Title: m.FolderName, Project: groupNames[m.GroupID], Status: "进行中", Updated: m.UpdatedAt, CreatedAt: m.CreatedAt, Branch: m.FeatureBranch, Path: entry.Path, MaterialsPath: value(m.RequirementMaterials.WriteRoot), RequirementURL: m.RequirementLink, GroupID: m.GroupID, Archived: m.LifecycleStatus == domain.TaskArchived, Services: []string{}, Workspaces: []Workspace{}}
 			t.MaterialsPath = visibleMaterialsRoot(t.MaterialsPath)
@@ -172,11 +190,20 @@ func (a *App) Snapshot(ctx context.Context) (Snapshot, error) {
 			if historyErr == nil {
 				s.TagHistory = append(s.TagHistory, tagRecords(t.ID, reports)...)
 			} else {
+				if err := ctx.Err(); err != nil {
+					return Snapshot{}, err
+				}
 				appendSnapshotError(&s, historyErr.Error())
+			}
+			if err := ctx.Err(); err != nil {
+				return Snapshot{}, err
 			}
 		}
 		sort.SliceStable(s.Tasks, func(i, j int) bool { return s.Tasks[i].Updated > s.Tasks[j].Updated })
 		sortTagHistoryRecords(s.TagHistory)
+	}
+	if err := ctx.Err(); err != nil {
+		return Snapshot{}, err
 	}
 	return s, nil
 }

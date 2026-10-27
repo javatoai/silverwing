@@ -292,16 +292,8 @@ func (s *TaskApplicationService) createLocked(ctx context.Context, config domain
 		}
 		emitTaskCreationProgress(onProgress, completed)
 	}
-	preparingDirectory := TaskCreationProgress{Phase: TaskCreationPhasePreparingWorktree, ServiceName: "任务"}
-	if err := runTaskCreationProgress(onProgress, preparingDirectory, "正在创建任务目录", "任务目录已创建", func() error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		return os.Mkdir(taskPath, 0o755)
-	}); err != nil {
-		return domain.TaskManifest{}, err
-	}
 	workspaces := []domain.ServiceWorkspace{}
+	var ownedTaskDirectory os.FileInfo
 	rollback := func(primary error) error {
 		rollbackEvent := TaskCreationProgress{Phase: TaskCreationPhaseRollback, ServiceName: "任务"}
 		emitTaskCreationProgress(onProgress, TaskCreationProgress{Phase: rollbackEvent.Phase, Status: TaskCreationProgressStarted, Message: "正在回滚本次创建并清理任务目录"})
@@ -317,35 +309,72 @@ func (s *TaskApplicationService) createLocked(ctx context.Context, config domain
 			event.Message = message
 			emitTaskCreationProgress(onProgress, event)
 		}
+		if cleanupErr := verifyOwnedTaskDirectory(taskPath, ownedTaskDirectory); cleanupErr != nil {
+			finishRollback(cleanupErr)
+			return fmt.Errorf("任务目录身份已变化，跳过工作区回滚以保护新目录；已保留现场：%s: %w", taskPath, errors.Join(primary, cleanupErr))
+		}
 		if len(workspaces) > 0 {
 			if cleanupErr := s.rollbackWorkspacesWithProgress(ctx, config, group.ID, taskPath, workspaces, onProgress); cleanupErr != nil {
 				finishRollback(cleanupErr)
 				return fmt.Errorf("任务创建失败且自动回滚未完成；为避免 Git 元数据损坏，已保留目录供人工检查：%s: %w", taskPath, errors.Join(primary, cleanupErr))
 			}
 		}
-		if cleanErr := removeGeneratedTaskDocuments(taskPath); cleanErr != nil {
+		if cleanErr := removeGeneratedTaskDocuments(taskPath, ownedTaskDirectory); cleanErr != nil {
 			finishRollback(cleanErr)
 			return fmt.Errorf("任务创建失败，清理生成文档失败，已保留现场：%s: %w", taskPath, errors.Join(primary, cleanErr))
 		}
-		entries, readErr := os.ReadDir(taskPath)
-		if readErr == nil && len(entries) == 0 {
-			if removeErr := os.Remove(taskPath); removeErr != nil {
-				finishRollback(removeErr)
-				return primary
-			}
-			finishRollback(nil)
-		} else if readErr != nil {
-			finishRollback(readErr)
-			return errors.Join(primary, readErr)
-		} else {
-			cleanupErr := fmt.Errorf("任务目录中仍有未能安全归属的内容")
+		if removeErr := removeEmptyOwnedTaskDirectory(taskPath, ownedTaskDirectory); removeErr != nil {
+			cleanupErr := removeErr
 			finishRollback(cleanupErr)
-			return fmt.Errorf("任务创建失败且目录中仍有未能安全归属的内容；已保留现场供人工检查：%s: %w", taskPath, primary)
+			return fmt.Errorf("任务创建失败且任务目录未能安全清理；已保留现场供人工检查：%s: %w", taskPath, errors.Join(primary, cleanupErr))
 		}
+		finishRollback(nil)
 		return primary
+	}
+	preparingDirectory := TaskCreationProgress{Phase: TaskCreationPhasePreparingWorktree, ServiceName: "任务"}
+	if err := runTaskCreationProgress(onProgress, preparingDirectory, "正在创建任务目录", "任务目录已创建", func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := os.Mkdir(taskPath, 0o755); err != nil {
+			return err
+		}
+		info, err := os.Lstat(taskPath)
+		if err != nil {
+			return fmt.Errorf("无法确认新建任务目录身份，已保留现场：%w", err)
+		}
+		// On Windows FileInfo may lazily resolve its file ID. Pin it before
+		// invoking progress callbacks so a later path replacement cannot change
+		// the identity represented by this snapshot.
+		if !os.SameFile(info, info) {
+			return fmt.Errorf("无法确认新建任务目录身份，已保留现场：%s", taskPath)
+		}
+		reparse, err := bootstrapPathIsReparsePoint(taskPath, info)
+		if err != nil {
+			return fmt.Errorf("无法确认新建任务目录类型：%w", err)
+		}
+		if !info.IsDir() || reparse {
+			return fmt.Errorf("新建任务目录不是安全的普通目录：%s", taskPath)
+		}
+		ownedTaskDirectory = info
+		return nil
+	}); err != nil {
+		if ownedTaskDirectory == nil {
+			return domain.TaskManifest{}, err
+		}
+		return domain.TaskManifest{}, rollback(err)
+	}
+	if err := ctx.Err(); err != nil {
+		return domain.TaskManifest{}, rollback(err)
+	}
+	if err := verifyOwnedTaskDirectory(taskPath, ownedTaskDirectory); err != nil {
+		return domain.TaskManifest{}, rollback(err)
 	}
 
 	for _, effective := range selections {
+		if err := ctx.Err(); err != nil {
+			return domain.TaskManifest{}, rollback(err)
+		}
 		repository, ok := repositoryByID(config, effective.Service.RepositoryID)
 		if !ok {
 			return domain.TaskManifest{}, rollback(fmt.Errorf("服务 %s 的仓库配置不存在", effective.Service.DisplayName))
@@ -359,6 +388,12 @@ func (s *TaskApplicationService) createLocked(ctx context.Context, config domain
 			return domain.TaskManifest{}, rollback(err)
 		}
 		workspaces = append(workspaces, created...)
+		if err := ctx.Err(); err != nil {
+			return domain.TaskManifest{}, rollback(err)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return domain.TaskManifest{}, rollback(err)
 	}
 	now := createdTime.UTC().Format(time.RFC3339Nano)
 	manifest := domain.DefaultTaskManifest()
@@ -380,24 +415,55 @@ func (s *TaskApplicationService) createLocked(ctx context.Context, config domain
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if err := verifyOwnedTaskDirectory(taskPath, ownedTaskDirectory); err != nil {
+			return err
+		}
 		return s.Manifests.Save(taskPath, manifest)
 	}); err != nil {
 		return domain.TaskManifest{}, rollback(err)
 	}
+	if err := ctx.Err(); err != nil {
+		return domain.TaskManifest{}, rollback(err)
+	}
+	if err := verifyOwnedTaskDirectory(taskPath, ownedTaskDirectory); err != nil {
+		return domain.TaskManifest{}, rollback(err)
+	}
 	writing := TaskCreationProgress{Phase: TaskCreationPhaseWritingDocuments, ServiceName: "任务资料"}
 	if err := runTaskCreationProgress(onProgress, writing, "正在写入任务资料", "任务资料已写入", func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := verifyOwnedTaskDirectory(taskPath, ownedTaskDirectory); err != nil {
+			return err
+		}
 		if _, err := s.Documents.writeTaskDocuments(taskPath, manifest, repositoryInfos(config), &request.TaskNotes, true); err != nil {
-			_ = os.Remove(filepath.Join(taskPath, storage.TaskManifestFileName))
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := verifyOwnedTaskDirectory(taskPath, ownedTaskDirectory); err != nil {
 			return err
 		}
 		if request.AgentHandoffMarkdown != nil {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := verifyOwnedTaskDirectory(taskPath, ownedTaskDirectory); err != nil {
+				return err
+			}
 			if _, err := s.Documents.WriteHandoff(taskPath, *request.AgentHandoffMarkdown); err != nil {
-				_ = os.Remove(filepath.Join(taskPath, storage.TaskManifestFileName))
 				return err
 			}
 		}
 		return nil
 	}); err != nil {
+		return domain.TaskManifest{}, rollback(err)
+	}
+	if err := ctx.Err(); err != nil {
+		return domain.TaskManifest{}, rollback(err)
+	}
+	if err := verifyOwnedTaskDirectory(taskPath, ownedTaskDirectory); err != nil {
 		return domain.TaskManifest{}, rollback(err)
 	}
 	return manifest, nil
@@ -1331,27 +1397,6 @@ func targetBranchValue(ws domain.ServiceWorkspace) string {
 		return *ws.TargetBranch
 	}
 	return ws.Branch
-}
-
-func removeGeneratedTaskDocuments(taskPath string) error {
-	paths := []string{
-		filepath.Join(taskPath, storage.TaskManifestFileName),
-		filepath.Join(taskPath, AgentRouterFileName),
-		filepath.Join(taskPath, AgentWorkspaceDir, AgentDirectoryName, AgentContextFileName),
-		filepath.Join(taskPath, AgentWorkspaceDir, AgentDirectoryName, AgentRulesFileName),
-		filepath.Join(taskPath, AgentWorkspaceDir, AgentDirectoryName),
-		filepath.Join(taskPath, AgentWorkspaceDir, HandoffFileName),
-		filepath.Join(taskPath, AgentWorkspaceDir),
-	}
-	for _, path := range paths {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
-				return fmt.Errorf("生成目录中仍有非生成文件：%s", path)
-			}
-			return err
-		}
-	}
-	return nil
 }
 
 func requireAvailableTaskDirectory(path string) error {

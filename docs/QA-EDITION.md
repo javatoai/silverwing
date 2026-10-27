@@ -1,6 +1,6 @@
 # silverwing-qa
 
-测试人员专用分支：`release/snb-qa`。基线：`release/snb` 的 `23fa44b0c647`。
+测试人员专用分支：`release/snb-qa`。基线：`release/snb-dev` 的 `23fa44b0c647`。
 
 保留需求与评论、任务与归档、资料及 Git 同步、Codex、Skills、插件、MCP、说明模板及全部本地实用工具（包括端口查询与结束进程）。任务内容只有资料、需求详情和需求说明三个页签，默认资料。
 

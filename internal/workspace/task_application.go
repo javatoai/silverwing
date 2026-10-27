@@ -146,6 +146,11 @@ func (s *TaskApplicationService) CreateTaskWithProgress(ctx context.Context, con
 			if statErr != nil {
 				return fmt.Errorf("检查新建任务目录 %s：%w", path, statErr)
 			}
+			// Pin the Windows file ID before any caller progress callback can
+			// rename this directory and create a replacement at the same path.
+			if !os.SameFile(ownedDirectory, ownedDirectory) {
+				return fmt.Errorf("无法确认新建任务目录身份，已保留现场：%s", path)
+			}
 			committed := false
 			defer func() {
 				if !committed {

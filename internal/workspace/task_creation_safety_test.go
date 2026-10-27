@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/storage"
 )
 
 func TestCreateTaskResolverFailurePreservesResolverOwnedTaskPath(t *testing.T) {
@@ -153,6 +154,107 @@ func TestCreateTaskSavingCancellationRollsBackWithoutPublishing(t *testing.T) {
 	}
 	if _, err := os.Lstat(taskPath); !os.IsNotExist(err) {
 		t.Fatalf("pure generated task directory was not rolled back: %v", err)
+	}
+}
+
+func TestCreateTaskRollbackDoesNotTouchReplacementTaskDirectory(t *testing.T) {
+	service, _, _, config := newTaskCreationLockTestServices(t)
+	taskPath := filepath.Join(*config.TaskRoot, "replaced")
+	movedOriginal := filepath.Join(*config.TaskRoot, "original-directory")
+	newSentinel := filepath.Join(taskPath, "new-owner.txt")
+	newManifest := filepath.Join(taskPath, storage.TaskManifestFileName)
+	manifestBytes := []byte("replacement owner's reserved manifest")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var callbackErr error
+	_, err := service.CreateTaskWithProgress(ctx, config, CreateTaskRequest{FolderName: "replaced"}, func(event TaskCreationProgress) {
+		if callbackErr != nil || event.Phase != TaskCreationPhaseSavingManifest || event.Status != TaskCreationProgressStarted {
+			return
+		}
+		if callbackErr = os.Rename(taskPath, movedOriginal); callbackErr != nil {
+			return
+		}
+		if callbackErr = os.Mkdir(taskPath, 0755); callbackErr != nil {
+			return
+		}
+		callbackErr = os.WriteFile(newSentinel, []byte("new owner"), 0600)
+		if callbackErr == nil {
+			callbackErr = os.WriteFile(newManifest, manifestBytes, 0600)
+		}
+		if callbackErr == nil {
+			cancel()
+		}
+	})
+	if callbackErr != nil {
+		t.Fatal(callbackErr)
+	}
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "任务目录已被替换") {
+		t.Fatalf("replacement was not reported while preserving cancellation: %v", err)
+	}
+	for _, file := range []struct {
+		path string
+		want string
+	}{{newSentinel, "new owner"}, {newManifest, string(manifestBytes)}} {
+		data, readErr := os.ReadFile(file.path)
+		if readErr != nil || string(data) != file.want {
+			t.Errorf("rollback changed replacement file %s: %q %v", file.path, data, readErr)
+		}
+	}
+	if _, statErr := os.Stat(movedOriginal); statErr != nil {
+		t.Fatalf("original directory unexpectedly disappeared: %v", statErr)
+	}
+}
+
+func TestCreateTaskSupportsTaskRootJunctionAndRollback(t *testing.T) {
+	service, _, _, config := newTaskCreationLockTestServices(t)
+	base := t.TempDir()
+	targetRoot := filepath.Join(base, "real-task-root")
+	linkedRoot := filepath.Join(base, "linked-task-root")
+	if err := os.MkdirAll(targetRoot, 0755); err != nil {
+		t.Fatal(err)
+	}
+	rootSentinel := filepath.Join(targetRoot, "keep-existing-root-file.txt")
+	if err := os.WriteFile(rootSentinel, []byte("preserve linked root data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		output, err := exec.Command("cmd.exe", "/d", "/c", "mklink", "/J", linkedRoot, targetRoot).CombinedOutput()
+		if err != nil {
+			t.Skipf("create TaskRoot junction: %v: %s", err, output)
+		}
+	} else if err := os.Symlink(targetRoot, linkedRoot); err != nil {
+		t.Skipf("create TaskRoot symlink: %v", err)
+	}
+	config.TaskRoot = &linkedRoot
+
+	if _, err := service.CreateTask(context.Background(), config, CreateTaskRequest{FolderName: "linked-root-success"}); err != nil {
+		t.Fatalf("CreateTask under linked TaskRoot: %v", err)
+	}
+	if _, err := service.Manifests.Load(filepath.Join(linkedRoot, "linked-root-success")); err != nil {
+		t.Fatalf("task under linked TaskRoot was not created: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	taskPath := filepath.Join(linkedRoot, "linked-root-cancel")
+	cancellationCallbackReached := false
+	_, err := service.CreateTaskWithProgress(ctx, config, CreateTaskRequest{FolderName: "linked-root-cancel"}, func(event TaskCreationProgress) {
+		if event.Phase == TaskCreationPhaseSavingManifest && event.Status == TaskCreationProgressStarted {
+			cancellationCallbackReached = true
+			cancel()
+		}
+	})
+	if !cancellationCallbackReached {
+		t.Fatal("task creation did not reach the manifest-saving cancellation callback")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled CreateTask under linked TaskRoot error = %v, want context cancellation", err)
+	}
+	if _, err := os.Lstat(taskPath); !os.IsNotExist(err) {
+		t.Fatalf("canceled task under linked TaskRoot was not safely removed: %v", err)
+	}
+	if content, err := os.ReadFile(rootSentinel); err != nil || string(content) != "preserve linked root data" {
+		t.Fatalf("canceled task cleanup changed unrelated linked-root data: %q %v", content, err)
 	}
 }
 

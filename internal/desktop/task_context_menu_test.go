@@ -5,12 +5,11 @@ import (
 	"fmt"
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"silverwing-go/internal/application"
-	"silverwing-go/internal/domain"
+
 	"silverwing-go/internal/editor"
 )
 
@@ -39,7 +38,7 @@ func TestTaskContextMenuKeepsSelectionAndDraft(t *testing.T) {
 	if err := tester.RightClick("界面体验"); err != nil {
 		t.Fatal(err)
 	}
-	if got := tester.Menu(); !slices.Equal(got, []string{"在 Codex 中打开", "-", "批量合并主分支", "-", "配置任务资料", "-", "置顶任务", "-", "归档任务", "-", "删除任务"}) {
+	if got := tester.Menu(); !slices.Equal(got, []string{"在 Codex 中打开", "-", "配置任务资料", "-", "置顶任务", "-", "归档任务", "-", "删除任务"}) {
 		t.Fatalf("active menu: %v", got)
 	}
 	if err := tester.ChooseMenuItem("置顶任务"); err != nil {
@@ -72,35 +71,6 @@ func TestTaskContextMenuKeepsSelectionAndDraft(t *testing.T) {
 	tester.RightClickAt(row.X+row.W-2, row.Y+row.H/2)
 	if err := tester.ChooseMenuItem("取消置顶"); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestTaskContextMenuArchiveAndDeleteTarget(t *testing.T) {
-	s := taskNavigationFixture()
-	s.win = &mygo.Window{}
-	tester := taskNavigationTester(s, 240, 500)
-	navigationChooseTaskMenu(t, tester, "界面体验", "归档任务")
-	if s.selected != 0 || s.confirmationDialog == nil {
-		t.Fatal("archiving another row did not open its confirmation independently")
-	}
-	// Cancel the confirmation; opening deletion must likewise use the clicked row.
-	s.cancelConfirmationDialog()
-	navigationChooseTaskMenu(t, tester, "界面体验", "删除任务")
-	if s.taskDeleteDialog == nil || s.taskDeleteDialog.TaskID != s.tasks[1].id || s.selected != 0 {
-		t.Fatal("delete dialog targeted the current task instead of the context row")
-	}
-	s.observeTaskDeleteRiskJobs()
-	if s.taskDeleteDialog == nil {
-		t.Fatal("non-current task delete dialog was dismissed")
-	}
-	s.closeTaskDeleteDialog()
-	s.page, s.selected = "archive", 3
-	tester.Frame()
-	if err := tester.RightClick("已归档任务"); err != nil {
-		t.Fatal(err)
-	}
-	if got := tester.Menu(); !slices.Equal(got, []string{"在 Codex 中打开", "-", "批量合并主分支", "-", "置顶任务", "-", "恢复归档", "-", "删除任务"}) {
-		t.Fatalf("archive menu: %v", got)
 	}
 }
 
@@ -186,107 +156,6 @@ func TestTaskArchiveConfirmationUsesCapturedTarget(t *testing.T) {
 	}
 }
 
-func TestTaskDeleteRiskScopeForNonCurrentTarget(t *testing.T) {
-	s := taskNavigationFixture()
-	s.openTaskDeleteDialog(s.tasks[1])
-	dialog := s.taskDeleteDialog
-	if dialog == nil {
-		t.Fatal("missing delete dialog")
-	}
-	dialog.Error, dialog.Loading = "", false
-	action := application.Action{Kind: "task.delete-risks", TaskID: dialog.TaskID, Path: dialog.TaskPath,
-		Payload: map[string]any{"taskDeleteRequestID": fmt.Sprint(dialog.RequestID)}}
-	job, err := s.beginTaskDeleteRiskJob(action)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { job.cancel(); s.completeTaskDeleteRiskJob(job) })
-	s.finishTaskDeleteRiskJob(job, application.ActionResult{Data: []domain.DeleteRisk{}}, nil)
-	dialog.ExternalWindowsClosed = true
-	confirmation, ok := s.taskDeleteConfirmationAction()
-	if !ok || confirmation.TaskID != s.tasks[1].id || s.selected != 0 {
-		t.Fatal("successful inspection did not enable deletion of the context target")
-	}
-	s.configJSON = `{"taskRoot":"changed"}`
-	s.observeTaskDeleteRiskJobs()
-	if dialog.RiskScope != nil || dialog.Error == "" {
-		t.Fatal("changed application context did not invalidate the completed inspection")
-	}
-	if _, ok := s.taskDeleteConfirmationAction(); ok {
-		t.Fatal("stale inspection allowed confirmation")
-	}
-	s.selected = 2
-	s.observeTaskDeleteRiskJobs()
-	if s.taskDeleteDialog != nil {
-		t.Fatal("explicit task navigation did not dismiss deletion")
-	}
-}
-
-func TestStaleDeleteSubmissionClosesOnlyItsOwnDialog(t *testing.T) {
-	s := taskNavigationFixture()
-	target := s.tasks[1]
-	s.documentContent, s.documentDirty = "保留当前草稿", true
-	s.documentDrafts["draft.md"], s.documentDirtyMap["draft.md"] = s.documentContent, true
-	s.openTaskDeleteDialog(target)
-	old := s.taskDeleteDialog
-	old.Submitting, old.Loading = true, true
-	staleAction := application.Action{Kind: "task.delete", TaskID: old.TaskID, Path: old.TaskPath,
-		Payload: map[string]any{"taskDeleteRequestID": fmt.Sprint(old.RequestID)}}
-	s.closeStaleTaskDeleteSubmission(staleAction)
-	if s.taskDeleteDialog != nil {
-		t.Fatal("stale submission left its old dialog in submitting state")
-	}
-
-	s.openTaskDeleteDialog(target)
-	newer := s.taskDeleteDialog
-	newer.Submitting, newer.Loading = true, true
-	s.closeStaleTaskDeleteSubmission(staleAction)
-	if s.taskDeleteDialog != newer || !newer.Submitting || !newer.Loading {
-		t.Fatal("stale submission closed or reset a newer delete dialog")
-	}
-	if s.documentContent != "保留当前草稿" || !s.documentDirty || s.documentDrafts["draft.md"] != s.documentContent {
-		t.Fatal("stale delete cleanup changed the current draft")
-	}
-}
-
-func TestDeleteConfirmationDispatchesScopedActionAfterRiskApproval(t *testing.T) {
-	s, backend := taskMenuFixture(t)
-	target := s.tasks[1]
-	s.openTaskDeleteDialog(target)
-	dialog := s.taskDeleteDialog
-	if dialog == nil {
-		t.Fatal("missing delete dialog")
-	}
-	dialog.Error, dialog.Loading = "", false
-	riskAction := application.Action{Kind: "task.delete-risks", TaskID: dialog.TaskID, Path: dialog.TaskPath,
-		Payload: map[string]any{"taskDeleteRequestID": fmt.Sprint(dialog.RequestID)}}
-	job, err := s.beginTaskDeleteRiskJob(riskAction)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { s.completeTaskDeleteRiskJob(job) })
-	s.finishTaskDeleteRiskJob(job, application.ActionResult{Data: []domain.DeleteRisk{}}, nil)
-	dialog.ExternalWindowsClosed = true
-	s.confirmTaskDelete()
-
-	select {
-	case action := <-backend.calls:
-		if action.Kind != "task.delete" || action.TaskID != target.id || action.Path != target.path ||
-			payloadString(action.Payload, "taskDeleteCreatedAt") != target.createdAt {
-			t.Fatalf("delete confirmation lost its target identity: %+v", action)
-		}
-		if _, ok := action.Payload[applicationTaskContextPayloadKey].(map[string]any); !ok {
-			t.Fatal("approved delete did not carry the private application/task scope")
-		}
-		forceDiscard, ok := action.Payload["forceDiscard"].(bool)
-		if !ok || forceDiscard || payloadString(action.Payload, "taskDeleteRequestID") == "" {
-			t.Fatal("delete confirmation lost its risk/force-discard authorization fields")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("approved delete was not dispatched")
-	}
-}
-
 func TestTaskRestorationKeepsArchiveBrowsingState(t *testing.T) {
 	s := taskNavigationFixture()
 	s.page, s.selected = "archive", 3
@@ -312,47 +181,6 @@ func TestSettleMaterialsBeforeRootActionUsesHeadlessSchedulerSeam(t *testing.T) 
 	barrier := &materialsFileJobBarrier{owner: s.ensureMaterialsFileJobs()}
 	if _, err := s.settleMaterialsBeforeRootAction(context.Background(), application.Action{Kind: "task.delete"}, barrier, nil); err != nil {
 		t.Fatalf("headless scheduler did not settle the materials barrier: %v", err)
-	}
-}
-
-func TestTaskDeleteLateRiskResultCannotEnableConfirmation(t *testing.T) {
-	for _, change := range []string{"created", "path", "archived", "removed", "home", "root", "page", "selection"} {
-		t.Run(change, func(t *testing.T) {
-			s := taskNavigationFixture()
-			s.openTaskDeleteDialog(s.tasks[1])
-			dialog := s.taskDeleteDialog
-			dialog.Error = ""
-			job, err := s.beginTaskDeleteRiskJob(application.Action{Kind: "task.delete-risks", TaskID: dialog.TaskID, Path: dialog.TaskPath,
-				Payload: map[string]any{"taskDeleteRequestID": fmt.Sprint(dialog.RequestID)}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { job.cancel(); s.completeTaskDeleteRiskJob(job) })
-			switch change {
-			case "created":
-				s.tasks[1].createdAt = "replacement"
-			case "path":
-				s.tasks[1].path = "moved"
-			case "archived":
-				s.tasks[1].archived = true
-			case "removed":
-				s.tasks = append(s.tasks[:1], s.tasks[2:]...)
-			case "home":
-				s.snapshot.Home = "other-home"
-			case "root":
-				s.configJSON = `{"taskRoot":"other-root"}`
-			case "page":
-				s.page = "archive"
-			case "selection":
-				s.selected = 2
-			}
-			s.observeTaskDeleteRiskJobs()
-			s.finishTaskDeleteRiskJob(job, application.ActionResult{Data: []domain.DeleteRisk{}}, nil)
-			dialog.ExternalWindowsClosed = true
-			if _, allowed := s.taskDeleteConfirmationAction(); allowed {
-				t.Fatal("late delete inspection enabled a stale confirmation")
-			}
-		})
 	}
 }
 

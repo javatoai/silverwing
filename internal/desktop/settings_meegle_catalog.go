@@ -117,7 +117,7 @@ func (s *app) clearMeegleSessionViews() {
 }
 
 func (s *app) clearMeegleIdentityBoundViews() {
-	s.invalidateWorkspaceGitDisplayCache()
+
 	s.invalidateRequirementRefreshJobs()
 	s.invalidateTaskRequirementIdentityMetadata()
 	s.invalidateRequirementListIdentity()

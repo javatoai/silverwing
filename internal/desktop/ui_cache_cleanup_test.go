@@ -87,25 +87,3 @@ func TestRequirementFindToolbarStaysCompact(t *testing.T) {
 		s.closeRequirementReaders()
 	}
 }
-
-func TestRepositoryRowHasQuietDirectRemovalEntry(t *testing.T) {
-	s := &app{page: "repositories", inputs: make(map[string]*string), configJSON: `{"groups":[{"id":"g","name":"国内组","services":[{"id":"s","displayName":"api-service","enabled":true}]}]}`,
-		snapshot: application.Snapshot{Groups: []application.Group{{ID: "g", Name: "国内组"}}, Services: []application.Service{{ID: "s", GroupID: "g", Name: "api-service", RepositoryID: "repo", MasterBranch: "origin/main", Modules: []application.Module{{ID: "m"}}}}, Repositories: []application.Repository{{ID: "repo", RootPath: `C:\synthetic\repo`}}}}
-	tester := ui.NewTester(func(c *ui.Context) {
-		ui.Column(c).Fill().Padding(12).Children(func() { s.serviceList(c, setTheme(c, false)) })
-	}, 1200, 800)
-	if tester.HasText("主分支 · main") {
-		t.Fatal("repository row still repeats mainline config")
-	}
-	if _, found := tester.Find("仓库操作"); found {
-		t.Fatal("one-item row overflow remains")
-	}
-	if err := tester.Click("从当前组移除仓库 api-service"); err != nil {
-		t.Fatal(err)
-	}
-	// A Tester has no OS window: the existing confirmation guard cannot open
-	// its dialog, so the click must not dispatch the destructive action.
-	if s.busy {
-		t.Fatal("removal proceeded without a confirmation window")
-	}
-}

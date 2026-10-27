@@ -16,11 +16,10 @@ import (
 )
 
 type ConfigImportPreview struct {
-	Path                    string   `json:"path"`
-	ChangedFields           []string `json:"changedFields"`
-	Changes                 []string `json:"changes"`
-	InvalidDevelopmentTools []string `json:"invalidDevelopmentTools"`
-	Fingerprint             string   `json:"fingerprint"`
+	Path          string   `json:"path"`
+	ChangedFields []string `json:"changedFields"`
+	Changes       []string `json:"changes"`
+	Fingerprint   string   `json:"fingerprint"`
 }
 
 func (a *App) configurationAction(ctx context.Context, action Action) (ActionResult, error) {
@@ -78,21 +77,14 @@ func (a *App) configurationActionWithProgress(ctx context.Context, action Action
 		if pathErr != nil {
 			return ActionResult{}, pathErr
 		}
-		preview := ConfigImportPreview{Path: filepath.Clean(path), ChangedFields: []string{}, Changes: []string{}, InvalidDevelopmentTools: []string{}}
+		preview := ConfigImportPreview{Path: filepath.Clean(path), ChangedFields: []string{}, Changes: []string{}}
 		if err != nil {
 			preview.Changes = []string{"当前配置已损坏；确认后将先归档完整分片，再以导入配置替换"}
 		} else {
 			preview.ChangedFields = changedConfigFields(current, config)
 			preview.Changes = configImportChanges(current, config)
 		}
-		for _, tool := range config.DevelopmentTools {
-			if err := ctx.Err(); err != nil {
-				return ActionResult{}, err
-			}
-			if _, e := os.Stat(tool.Path); e != nil {
-				preview.InvalidDevelopmentTools = append(preview.InvalidDevelopmentTools, string(tool.Type))
-			}
-		}
+
 		fingerprint, err := storage.ConfigurationArchiveFingerprintContext(ctx, path)
 		if err != nil {
 			return ActionResult{}, err
@@ -164,16 +156,12 @@ func configImportChanges(before, after domain.AppConfig) []string {
 	add(value(before.RequirementMaterialsRoot) != value(after.RequirementMaterialsRoot), fmt.Sprintf("任务资料根路径：%s → %s", value(before.RequirementMaterialsRoot), value(after.RequirementMaterialsRoot)))
 	add(value(before.RequirementMaterialsSubdirectory) != value(after.RequirementMaterialsSubdirectory), fmt.Sprintf("任务资料子目录：%s → %s", value(before.RequirementMaterialsSubdirectory), value(after.RequirementMaterialsSubdirectory)))
 	add(len(before.Groups) != len(after.Groups), fmt.Sprintf("任务组：%d → %d", len(before.Groups), len(after.Groups)))
-	add(len(before.Repositories) != len(after.Repositories), fmt.Sprintf("仓库：%d → %d", len(before.Repositories), len(after.Repositories)))
-	add(!reflect.DeepEqual(before.DevelopmentTools, after.DevelopmentTools), "开发工具配置将更新")
-	add(before.ToolVisibility != after.ToolVisibility, "研发工具显示设置将更新")
+	add(before.ToolVisibility != after.ToolVisibility, "实用工具显示设置将更新")
 	add(!reflect.DeepEqual(before.MeegleProjects, after.MeegleProjects), fmt.Sprintf("飞书项目：%d → %d", len(before.MeegleProjects), len(after.MeegleProjects)))
 	add(before.AIRequirementNamingEnabled != after.AIRequirementNamingEnabled, fmt.Sprintf("AI 需求命名：%s → %s", state(before.AIRequirementNamingEnabled), state(after.AIRequirementNamingEnabled)))
 	add(before.AIRequirementNamingPrewarmEnabled != after.AIRequirementNamingPrewarmEnabled, "AI 命名自动预热设置将更新")
 	add(before.AIRequirementNamingModel != after.AIRequirementNamingModel, fmt.Sprintf("AI 命名模型：%s → %s", before.AIRequirementNamingModel, after.AIRequirementNamingModel))
-	add(before.TagEnabled != after.TagEnabled, fmt.Sprintf("全局测试Tag：%s → %s", state(before.TagEnabled), state(after.TagEnabled)))
-	add(before.TagHistoryMaxGroups != after.TagHistoryMaxGroups, fmt.Sprintf("Tag历史保留组数：%d → %d", before.TagHistoryMaxGroups, after.TagHistoryMaxGroups))
-	add(before.AllowTaskTagTargetEditing != after.AllowTaskTagTargetEditing, fmt.Sprintf("任务测试目标分支修改：%s → %s", state(before.AllowTaskTagTargetEditing), state(after.AllowTaskTagTargetEditing)))
+
 	add(len(changes) == 0 && !reflect.DeepEqual(before, after), "配置内容存在其他变化")
 	return changes
 }

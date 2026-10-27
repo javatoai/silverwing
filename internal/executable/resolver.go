@@ -23,13 +23,12 @@ type Tool string
 const (
 	ToolCodex  Tool = "codex"
 	ToolGit    Tool = "git"
-	ToolGenbu  Tool = "genbu"
 	ToolMeegle Tool = "meegle"
 )
 
 func supportedTool(tool Tool) bool {
 	switch tool {
-	case ToolCodex, ToolGit, ToolMeegle, ToolGenbu:
+	case ToolCodex, ToolGit, ToolMeegle:
 		return true
 	default:
 		return false
@@ -148,11 +147,7 @@ func (r *Resolver) resolve(ctx context.Context, tool Tool, configured string) Re
 		return Resolution{}
 	}
 	configured = strings.TrimSpace(configured)
-	if tool == ToolGenbu {
-		if isExecutableFile(configured, runtime.GOOS) && filepath.IsAbs(configured) {
-			return Resolution{Command: filepath.Clean(configured), Source: SourceConfigured}
-		}
-	} else if configured != "" {
+	if configured != "" {
 		return Resolution{Command: configured, Source: SourceConfigured}
 	}
 
@@ -161,11 +156,7 @@ func (r *Resolver) resolve(ctx context.Context, tool Tool, configured string) Re
 			return Resolution{Command: desktop, Source: SourceDesktopApp}
 		}
 	}
-	if tool == ToolGenbu {
-		if bundled := r.bundledGenbu(); bundled != "" {
-			return Resolution{Command: bundled, Source: SourceProbed}
-		}
-	}
+
 	if command := r.probe(ctx, tool); command != "" {
 		return Resolution{Command: command, Source: SourceProbed}
 	}
@@ -349,9 +340,7 @@ func (r *Resolver) probe(ctx context.Context, tool Tool) string {
 			if !isAbsoluteProbeResult(line, runtime.GOOS) {
 				continue
 			}
-			if tool == ToolGenbu && !isExecutableFile(line, runtime.GOOS) {
-				continue
-			}
+
 			return line
 		}
 	}
@@ -365,8 +354,6 @@ func probeCommands(tool Tool, goos string) [][]string {
 			return [][]string{{"where.exe", "codex.exe"}, {"where.exe", "codex.cmd"}}
 		case ToolGit:
 			return [][]string{{"where.exe", "git.exe"}}
-		case ToolGenbu:
-			return [][]string{{"where.exe", "genbu.exe"}}
 		case ToolMeegle:
 			return [][]string{{"where.exe", "meegle.cmd"}}
 		}
@@ -435,44 +422,6 @@ func (r *Resolver) desktopCodex() string {
 	return valid[0]
 }
 
-func (r *Resolver) bundledGenbu() string {
-	name := "genbu"
-	if runtime.GOOS == "windows" {
-		name = "genbu.exe"
-	}
-	var directories []string
-	if executable, err := os.Executable(); err == nil {
-		directories = append(directories, filepath.Dir(executable))
-	}
-	if working, err := os.Getwd(); err == nil {
-		directories = append(directories, working)
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		directories = append(directories, filepath.Join(home, "Downloads"))
-	}
-	if runtime.GOOS == "windows" {
-		for drive := 'A'; drive <= 'Z'; drive++ {
-			root := string(drive) + `:\`
-			if info, err := os.Stat(root); err == nil && info.IsDir() {
-				directories = append(directories, filepath.Join(root, "Downloads"))
-			}
-		}
-	}
-	seen := map[string]bool{}
-	for _, directory := range directories {
-		directory = filepath.Clean(directory)
-		if directory == "." || seen[strings.ToLower(directory)] {
-			continue
-		}
-		seen[strings.ToLower(directory)] = true
-		candidate := filepath.Join(directory, name)
-		if isExecutableFile(candidate, runtime.GOOS) {
-			return candidate
-		}
-	}
-	return ""
-}
-
 func environmentValue(name string) string {
 	for _, entry := range os.Environ() {
 		key, value, found := strings.Cut(entry, "=")
@@ -497,11 +446,6 @@ func fallback(tool Tool, goos string) string {
 		return "codex"
 	case ToolGit:
 		return "git"
-	case ToolGenbu:
-		if goos == "windows" {
-			return "genbu.exe"
-		}
-		return "genbu"
 	case ToolMeegle:
 		if goos == "windows" {
 			return "meegle.cmd"

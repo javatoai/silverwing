@@ -54,9 +54,9 @@ func (s *app) restoreDesktopPreferences(home string) {
 
 func settingsPreferenceKey(name string) string {
 	keys := map[string]string{
-		"基础": "basic", "快捷工具": "developer-tools", "工具": "developer-tools", "存储": "storage", "研发配置": "development", "开发工具": "development",
+		"基础": "basic", "快捷工具": "developer-tools", "工具": "developer-tools", "存储": "storage", "项目组": "groups",
 		"任务": "tasks", "AGENTS.md": "agents", "Codex": "codex", "CLI": "commands",
-		"skill": "skill-sources", "代理": "proxy", "Git": "git", "日志": "logs", "系统": "system",
+		"skill": "skill-sources", "代理": "proxy", "日志": "logs", "系统": "system",
 	}
 	if key, ok := keys[name]; ok {
 		return key
@@ -71,24 +71,22 @@ func settingsPreferenceName(key string) string {
 		return "快捷工具"
 	case "paths", "config-backup", "storage":
 		return "存储"
-	case "groups", "development":
-		return "开发工具"
+	case "groups":
+		return "项目组"
 	case "tools":
 		return "快捷工具"
-	case "task-creation", "codex-task-creation", "task-area", "tasks":
+	case "task-creation", "codex-task-creation", "tasks":
 		return "任务"
 	case "agents", "instruction-templates":
 		return "AGENTS.md"
 	case "codex-plugins", "codex-mcp", "codex":
 		return "Codex"
-	case "feishu", "lark", "genbu", "cli", "advanced", "commands":
+	case "cli", "commands":
 		return "CLI"
 	case "skill-sources":
 		return "skill"
 	case "network-proxy", "proxy":
 		return "代理"
-	case "git", "branch-naming", "tag":
-		return "Git"
 	case "logs":
 		return "日志"
 	case "about", "updates", "app-data", "system":

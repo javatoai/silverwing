@@ -29,7 +29,6 @@ type TaskWorkspaceContext struct {
 	TaskName      string
 	TaskDirectory string
 	AgentsFile    string
-	Workspaces    []domain.ServiceWorkspace
 }
 
 type TaskWorkspaceToolLauncher interface {
@@ -169,7 +168,7 @@ func (s *WorkspaceToolLaunchService) Launch(ctx context.Context, taskPath string
 					if err := s.requireCurrentManifest(taskPath, updated); err != nil {
 						return err
 					}
-					ctxData := TaskWorkspaceContext{TaskName: current.FolderName, TaskDirectory: mustAbs(taskPath), AgentsFile: filepath.Join(mustAbs(taskPath), "AGENTS.md"), Workspaces: append([]domain.ServiceWorkspace(nil), current.Services...)}
+					ctxData := TaskWorkspaceContext{TaskName: current.FolderName, TaskDirectory: mustAbs(taskPath), AgentsFile: filepath.Join(mustAbs(taskPath), "AGENTS.md")}
 					if runErr := launcher.Open(ctx, ctxData); runErr != nil {
 						status.Message = ptr(runErr.Error())
 					} else {

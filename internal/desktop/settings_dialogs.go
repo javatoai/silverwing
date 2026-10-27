@@ -295,7 +295,7 @@ func (s *app) settingsActionForm(form actionForm, payload map[string]any) bool {
 		groups = append(groups, map[string]any{"id": groupID, "name": name, "services": []any{}})
 		config["groups"] = groups
 		s.dialogOpen = false
-		s.saveCreatedRepositoryGroup(config, groupID)
+		s.saveCreatedTaskGroup(config, groupID)
 		return true
 	case "settings.group.rename":
 		name := payloadString(payload, "name")

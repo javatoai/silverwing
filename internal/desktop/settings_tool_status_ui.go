@@ -21,21 +21,3 @@ func settingsToolAvailability(status map[string]any, p palette) (string, ui.Colo
 	}
 	return "不可用", p.amber
 }
-
-func developmentToolStatusLabel(status map[string]any, p palette) (string, ui.Color) {
-	exists, checked := status["exists"].(bool)
-	if !checked {
-		return "未检查", p.muted
-	}
-	configured, _ := status["configured"].(bool)
-	if configured {
-		if exists {
-			return "已配置", p.green
-		}
-		return "路径不存在", p.amber
-	}
-	if exists {
-		return "自动检测可用", p.green
-	}
-	return "未检测到", p.amber
-}

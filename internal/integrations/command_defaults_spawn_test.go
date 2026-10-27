@@ -63,7 +63,7 @@ func init() {
 		io.WriteString(os.Stderr, "reasoning unsupported")
 		os.Exit(75)
 	}
-	if os.WriteFile(output, []byte(`{"folderName":"命名示例","branchSuffix":"naming_fixture"}`), 0600) != nil {
+	if os.WriteFile(output, []byte(`{"folderName":"命名示例"}`), 0600) != nil {
 		os.Exit(82)
 	}
 	os.Exit(0)
@@ -125,7 +125,7 @@ func TestNamingSpawnUsesDefaultOrExplicitModelAndCodexProxy(t *testing.T) {
 			if got.Env["NO_PROXY"] != "" || got.Env["no_proxy"] != "" {
 				t.Fatal("unexpected proxy exceptions")
 			}
-			for _, target := range []domain.CommandProxyTarget{domain.ProxyTargetGit, domain.ProxyTargetWorkspaceCommand, domain.ProxyTargetMeegle, domain.ProxyTargetGenbu} {
+			for _, target := range []domain.CommandProxyTarget{domain.ProxyTargetGit, domain.ProxyTargetMeegle} {
 				env, remove := service.childEnvironment(c, target)
 				if len(env) != 0 || !slices.Contains(remove, "HTTP_PROXY") {
 					t.Fatalf("unselected target %s inherited proxy", target)

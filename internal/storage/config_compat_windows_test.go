@@ -30,7 +30,7 @@ func TestConfigCompatibilityWindowsFailedSaveRollsBackUnknownFields(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			config.DefaultBranchPrefix = "changed/"
+
 			config.Theme = domain.ThemeDark
 			archive := filepath.Join(t.TempDir(), "replacement.zip")
 			if operation == "import" {

@@ -27,7 +27,7 @@ type desktopTaskContext struct {
 	Home, TaskRoot, Page            string
 	Archived                        bool
 	ConfigFingerprint               string
-	GroupID, Branch                 string
+	GroupID                         string
 	MaterialsPath, MaterialsStatus  string
 	MaterialsFingerprint            string
 }
@@ -87,7 +87,7 @@ func (a *App) validateDesktopTaskContext(action Action, config domain.AppConfig,
 		config.TaskRoot == nil || !sameTaskContextPath(expected.TaskRoot, *config.TaskRoot) ||
 		taskContextConfigFingerprint(string(encoded)) != expected.ConfigFingerprint ||
 		manifest.TaskDirectoryName != expected.TaskID || manifest.CreatedAt != expected.TaskCreatedAt ||
-		manifest.GroupID != expected.GroupID || manifest.FeatureBranch != expected.Branch ||
+		manifest.GroupID != expected.GroupID ||
 		materialsPath != expected.MaterialsPath ||
 		!sameTaskContextText(projectedTaskMaterialsStatus(materialsManifest), expected.MaterialsStatus) ||
 		taskMaterialsFingerprint(materialsManifest) != expected.MaterialsFingerprint ||
@@ -103,7 +103,7 @@ func (a *App) validateDesktopTaskContext(action Action, config domain.AppConfig,
 		}
 	case "task.tools-launch":
 		var ids []string
-		if decodeField(action, "toolIds", &ids) != nil || len(ids) != 1 || ids[0] != "cursor" ||
+		if decodeField(action, "toolIds", &ids) != nil || len(ids) != 1 || ids[0] != "codex" ||
 			!slices.Contains(config.DefaultWorkspaceToolIDs, ids[0]) || action.ServiceID != "" || action.ModuleID != "" ||
 			action.Path == "" || !sameTaskContextPath(action.Path, taskPath) {
 			return errDesktopTaskContextChanged

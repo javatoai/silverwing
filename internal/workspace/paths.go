@@ -35,3 +35,5 @@ func samePath(a, b string) bool {
 	}
 	return left == right
 }
+
+func ptr(value string) *string { return &value }

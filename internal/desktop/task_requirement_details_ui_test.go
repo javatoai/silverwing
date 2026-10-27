@@ -79,10 +79,6 @@ func TestTaskRequirementRolesMoveToRequirementDetails(t *testing.T) {
 				if err := header.Click("复制需求链接"); err != nil || header.Clipboard() != item.requirementURL {
 					t.Fatalf("task header lost complete URL copy: err=%v clipboard=%q", err, header.Clipboard())
 				}
-				taskView := ui.NewTester(func(c *ui.Context) {
-					ui.Column(c).Fill().Padding(16).Children(func() { s.taskDetails(c, setTheme(c, dark)) })
-				}, width, 720)
-				captureDesktopTestFrame(t, taskView, fmt.Sprintf("task-detail-requirement-%d-dark-%t", width, dark))
 				reader := s.requirementReader(item.id, item.requirementURL)
 				s.updateRequirementReaderBody(reader, application.RequirementContent{Body: "## 需求正文\n\n需求真实名称与角色在此集中展示。", Complete: true})
 				s.updateRequirementReaderComments(reader, application.RequirementComments{Comments: []domain.RequirementComment{{ID: "comment", AuthorName: "需求讨论成员", CreatedAt: "2026-10-16 10:00", Content: "原有正文和评论阅读继续保留。"}}})

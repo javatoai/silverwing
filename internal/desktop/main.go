@@ -43,8 +43,8 @@ func Run(backend application.Backend, opts Options) error {
 	if !validPage(opts.Page) {
 		return fmt.Errorf("invalid page %q", opts.Page)
 	}
-	if opts.Tab < 0 || opts.Tab >= len(tabs) {
-		return fmt.Errorf("task tab must be between 0 and %d", len(tabs)-1)
+	if opts.Tab < 0 || opts.Tab > len(tabs) {
+		return fmt.Errorf("task tab must be between 0 and %d", len(tabs))
 	}
 	if opts.CaptureOnly && opts.CapturePath == "" {
 		return fmt.Errorf("capture-only requires a capture path")
@@ -90,7 +90,7 @@ func Run(backend application.Backend, opts Options) error {
 	captureFrame := &captureFrameState{}
 	mygo.App.WhenReady(func() {
 		s.win = mygo.NewWindow(mygo.WindowOptions{
-			Title:     "Silverwing",
+			Title:     "silverwing-qa",
 			Width:     opts.Width,
 			Height:    opts.Height,
 			Maximized: opts.CapturePath == "" && !explicitWindowSize && s.desktopPreferences.store != nil && s.desktopPreferences.value.Maximized,
@@ -115,14 +115,10 @@ func Run(backend application.Backend, opts Options) error {
 		}
 		s.win.OnClosed(func() {
 			s.stopMaterialsGitSync()
-			s.stopTaskOpenTools()
-			s.stopProductionJobs()
 			s.cancelConfirmationDialog()
 			s.stopSettingsAutosave()
 			s.stopPageLocalRead()
-			s.stopStartupDevelopmentTools()
 			s.abandonPendingTaskRootMigration()
-			s.stopServiceRepositoryChoices()
 			s.stopMaterialsFileJobs()
 			s.stopSystemOpenJobs()
 			s.closeTaskCreationRequirements()
@@ -157,26 +153,11 @@ func Run(backend application.Backend, opts Options) error {
 		runErr = fmt.Errorf("退出前资料 Git 同步收尾未完成：%w", err)
 	}
 	stopGitCleanup()
-	productionCleanup, stopProductionCleanup := context.WithTimeout(context.Background(), 30*time.Second)
-	if err := s.closeProductionJobs(productionCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前生产发布收尾未完成：%w", err)
-	}
-	stopProductionCleanup()
 	pageReadCleanup, stopPageReadCleanup := context.WithTimeout(context.Background(), 10*time.Second)
 	if err := s.closePageLocalRead(pageReadCleanup); runErr == nil && err != nil {
 		runErr = fmt.Errorf("退出前本机配置读取清理未完成：%w", err)
 	}
 	stopPageReadCleanup()
-	startupToolsCleanup, stopStartupToolsCleanup := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := s.closeStartupDevelopmentTools(startupToolsCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前开发工具探测清理未完成：%w", err)
-	}
-	stopStartupToolsCleanup()
-	serviceReadsCleanup, stopServiceReadsCleanup := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := s.closeServiceRepositoryChoices(serviceReadsCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前服务仓库读取清理未完成：%w", err)
-	}
-	stopServiceReadsCleanup()
 	materialsFileCleanup, stopMaterialsFileCleanup := context.WithTimeout(context.Background(), 10*time.Second)
 	if err := s.closeMaterialsFileJobs(materialsFileCleanup); runErr == nil && err != nil {
 		runErr = fmt.Errorf("退出前资料文件操作清理未完成：%w", err)
@@ -192,21 +173,6 @@ func Run(backend application.Backend, opts Options) error {
 		runErr = fmt.Errorf("退出前系统打开与定位清理未完成：%w", err)
 	}
 	stopSystemOpenCleanup()
-	tagGenbuCleanup, stopTagGenbuCleanup := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := s.closeTagGenbuAutoProbe(tagGenbuCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前 Tag 自动 Genbu 探测清理未完成：%w", err)
-	}
-	stopTagGenbuCleanup()
-	tagJobsCleanup, stopTagJobsCleanup := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := s.closeTagDesktopJobs(tagJobsCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前 Tag 后台任务收尾未完成：%w", err)
-	}
-	stopTagJobsCleanup()
-	preflightCleanup, stopPreflightCleanup := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := s.closeTaskCreationPreflights(preflightCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前任务分支预检清理未完成：%w", err)
-	}
-	stopPreflightCleanup()
 	skillsCleanup, stopSkillsCleanup := context.WithTimeout(context.Background(), 30*time.Second)
 	skillsCleanupErr := s.closeSkillsBrowserReads(skillsCleanup)
 	stopSkillsCleanup()
@@ -241,11 +207,6 @@ func Run(backend application.Backend, opts Options) error {
 		runErr = fmt.Errorf("退出前需求列表清理未完成：%w", err)
 	}
 	stopRequirementListCleanup()
-	commandCleanup, stopCommandCleanup := context.WithTimeout(context.Background(), 30*time.Second)
-	if err := s.closeWorkspaceCommandJobs(commandCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前工作区命令清理未完成：%w", err)
-	}
-	stopCommandCleanup()
 	cliCleanup, stopCLICleanup := context.WithTimeout(context.Background(), 10*time.Second)
 	if err := s.closeCLIJobs(cliCleanup); runErr == nil && err != nil {
 		runErr = fmt.Errorf("退出前 CLI 进程清理未完成：%w", err)
@@ -274,26 +235,9 @@ func Run(backend application.Backend, opts Options) error {
 		runErr = fmt.Errorf("退出前需求读取清理未完成：%w", err)
 	}
 	stopRequirementCleanup()
-	historyCleanup, stopHistoryCleanup := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := s.closeWorkspaceHistoryJobs(historyCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前工作区预览清理未完成：%w", err)
-	}
-	stopHistoryCleanup()
-	if closer, ok := s.backend.(interface{ CloseWorkspaceDiffSessions(context.Context) error }); ok {
-		diffCleanup, stopDiffCleanup := context.WithTimeout(context.Background(), 10*time.Second)
-		if err := closer.CloseWorkspaceDiffSessions(diffCleanup); runErr == nil && err != nil {
-			runErr = fmt.Errorf("退出前 Git 差异快照清理未完成：%w", err)
-		}
-		stopDiffCleanup()
-	}
-	deleteRiskCleanup, stopDeleteRiskCleanup := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := s.closeTaskDeleteRiskJobs(deleteRiskCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前任务删除风险读取清理未完成：%w", err)
-	}
-	stopDeleteRiskCleanup()
 	toolCleanup, stopToolCleanup := context.WithTimeout(context.Background(), 30*time.Second)
 	if err := s.closeDeveloperToolJobs(toolCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前研发工具请求清理未完成：%w", err)
+		runErr = fmt.Errorf("退出前实用工具请求清理未完成：%w", err)
 	}
 	stopToolCleanup()
 	if err := s.closeReadingSession(); runErr == nil && err != nil {
@@ -314,7 +258,7 @@ func Run(backend application.Backend, opts Options) error {
 	if s.skillsBrowser != nil {
 		closeMarkdownPreviewState(s.skillsBrowser.markdown)
 	}
-	s.cancelWorkspaceGitStatus()
+
 	s.cancelMaterialsSearch()
 	for tool := range s.settingsAuthPollTimers {
 		s.stopCLIAuthPoll(tool)
@@ -342,13 +286,13 @@ func (s *app) loadInitialSnapshot() {
 			return
 		}
 		s.applySnapshot(snapshot)
-		s.startStartupDevelopmentTools()
+
 	})
 }
 
 func validPage(page string) bool {
 	switch page {
-	case "tasks", "materials", "repositories", "services", "tools", "settings", "requirements", "skills", "archive", "production":
+	case "tasks", "materials", "tools", "settings", "requirements", "skills", "archive":
 		return true
 	default:
 		return false
@@ -425,9 +369,7 @@ func (s *app) captureReady() bool {
 	}
 	if s.page == "tasks" || s.page == "archive" {
 		task := s.currentTask()
-		if s.tab == 0 && task.id != "" && !s.workspaceGitCaptureReady() {
-			return false
-		}
+
 		if task.id != "" && domain.ParseFeishuWorkItemLink(task.requirementURL) != nil {
 			metadata := s.taskRequirementMetadataFor(task)
 			if metadata.Status == requirementMetadataNotLoaded {

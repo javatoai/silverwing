@@ -17,7 +17,7 @@ func (s *app) renderDeveloperTools(c *ui.Context) {
 	ui.Column(c).Grow(1).MinWidth(0).MinHeight(0).Padding(16, 0, 0, 0).Gap(0).Children(func() {
 		if len(tabs) == 0 {
 			ui.Column(c).Grow(1).MinWidth(0).Padding(24).Children(func() {
-				label(c, "所有研发工具均已关闭。可在“设置 → 快捷工具”中重新开启。", 13, p.muted).Wrap()
+				label(c, "所有实用工具均已关闭。可在“设置 → 快捷工具”中重新开启。", 13, p.muted).Wrap()
 			})
 			return
 		}

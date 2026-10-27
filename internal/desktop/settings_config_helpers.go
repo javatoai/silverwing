@@ -269,8 +269,6 @@ func (s *app) settingsConfigNestedUpdate(objectKey, fieldKey string, value any) 
 	s.updateConfigObjectField(objectKey, fieldKey, value)
 }
 
-func (s *app) settingsDevelopmentToolPath(key string) string { return s.developmentToolPath(key) }
-
 func (s *app) settingsSyncBool(key string, value bool) { s.saveConfigField(key, value) }
 
 func (s *app) settingsRefreshAction(kind string, payload map[string]any) {

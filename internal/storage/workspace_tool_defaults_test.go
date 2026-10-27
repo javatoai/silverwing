@@ -2,6 +2,7 @@ package storage
 
 import (
 	"path/filepath"
+	"silverwing-go/internal/domain"
 	"slices"
 	"testing"
 )
@@ -12,10 +13,10 @@ func TestWorkspaceToolDefaultsPreserveExplicitChoices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(config.DefaultWorkspaceToolIDs, []string{"codex", "cursor"}) {
+	if !slices.Equal(config.DefaultWorkspaceToolIDs, []string{"codex"}) {
 		t.Fatal(config.DefaultWorkspaceToolIDs)
 	}
-	for _, ids := range [][]string{{"codex"}, {"cursor"}, {}} {
+	for _, ids := range [][]string{{"codex"}, {}} {
 		config.DefaultWorkspaceToolIDs = ids
 		if err := store.Save(config); err != nil {
 			t.Fatal(err)
@@ -29,7 +30,12 @@ func TestWorkspaceToolDefaultsPreserveExplicitChoices(t *testing.T) {
 			t.Fatal(err)
 		}
 		target := NewConfigStore(NewPaths(t.TempDir()))
-		if _, err := target.Load(); err != nil {
+		targetConfig, err := target.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		targetConfig.Theme = domain.ThemeDark
+		if err := target.Save(targetConfig); err != nil {
 			t.Fatal(err)
 		}
 		imported, err := target.ImportFrom(export)
@@ -41,7 +47,7 @@ func TestWorkspaceToolDefaultsPreserveExplicitChoices(t *testing.T) {
 			t.Fatalf("backup: %v", err)
 		}
 		restored, err := target.Restore(backups[0].Path)
-		if err != nil || !slices.Equal(restored.DefaultWorkspaceToolIDs, []string{"codex", "cursor"}) {
+		if err != nil || !slices.Equal(restored.DefaultWorkspaceToolIDs, []string{"codex"}) {
 			t.Fatalf("restore lost old defaults: %v %v", restored.DefaultWorkspaceToolIDs, err)
 		}
 	}

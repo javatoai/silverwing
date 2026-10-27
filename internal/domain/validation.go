@@ -16,10 +16,9 @@ import (
 const MaxDirectoryNameLength = 80
 
 var (
-	semverPattern     = regexp.MustCompile("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")
-	sourceIDPattern   = regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-	gitRefPattern     = regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9._/@-]*$")
-	moduleNamePattern = regexp.MustCompile("^[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*$")
+	semverPattern   = regexp.MustCompile("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")
+	sourceIDPattern = regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+	gitRefPattern   = regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9._/@-]*$")
 )
 
 func ValidateSchemaVersion(actual, expected string) bool {
@@ -176,17 +175,22 @@ func NormalizeCommandProxyNoProxy(raw *string) (*string, error) {
 }
 
 func (c AppConfig) Validate() error {
+	if c.Edition != "qa" {
+		return fmt.Errorf("配置不是 silverwing-qa 格式，请使用 QA 版配置或备份")
+	}
 	if c.SchemaVersion != CurrentAppConfigSchemaVersion {
 		return fmt.Errorf("配置 schema 不受支持：%s", c.SchemaVersion)
 	}
-	if c.AIRequirementNamingModel == "" || strings.TrimSpace(c.AIRequirementNamingModel) != c.AIRequirementNamingModel || strings.IndexFunc(c.AIRequirementNamingModel, unicode.IsSpace) >= 0 {
+	if strings.TrimSpace(c.AIRequirementNamingModel) == "" || strings.IndexFunc(c.AIRequirementNamingModel, unicode.IsSpace) >= 0 {
 		return fmt.Errorf("AI 命名模型不合法")
 	}
-	if strings.IndexFunc(c.DefaultBranchPrefix, unicode.IsSpace) >= 0 {
-		return fmt.Errorf("默认分支名前缀不能包含空白字符")
-	}
-	if err := uniqueNonblank(c.DefaultWorkspaceToolIDs, "默认工作区工具"); err != nil {
+	if err := uniqueNonblank(c.DefaultWorkspaceToolIDs, "任务打开工具"); err != nil {
 		return err
+	}
+	for _, id := range c.DefaultWorkspaceToolIDs {
+		if id != "codex" {
+			return fmt.Errorf("QA 版仅支持 Codex 任务工具")
+		}
 	}
 	proxy, err := NormalizeCommandProxyURL(c.CommandProxyURL)
 	if err != nil {
@@ -214,32 +218,22 @@ func (c AppConfig) Validate() error {
 		}
 	}
 	if len(c.Groups) == 0 {
-		return fmt.Errorf("至少需要一个组")
+		return fmt.Errorf("至少保留一个项目组")
 	}
-	if err := unique(groupIDs(c.Groups), "组 ID"); err != nil {
-		return err
-	}
+	ids := []string{}
 	groupNames := make([]string, 0, len(c.Groups))
-	for _, group := range c.Groups {
-		groupNames = append(groupNames, strings.TrimSpace(group.Name))
+	for _, g := range c.Groups {
+		if err := g.Validate(); err != nil {
+			return err
+		}
+		ids = append(ids, g.ID)
+		groupNames = append(groupNames, strings.TrimSpace(g.Name))
 	}
-	if err := uniqueLower(groupNames, "组名"); err != nil {
+	if err := uniqueNonblank(ids, "项目组 ID"); err != nil {
 		return err
 	}
-	if err := unique(repositoryIDs(c.Repositories), "仓库 ID"); err != nil {
+	if err := uniqueLower(groupNames, "项目组名称"); err != nil {
 		return err
-	}
-	commonDirs, repoIDs := map[string]bool{}, map[string]bool{}
-	for _, r := range c.Repositories {
-		if strings.TrimSpace(r.ID) == "" || strings.TrimSpace(r.Name) == "" || strings.TrimSpace(r.RootPath) == "" || strings.TrimSpace(r.GitCommonDirectory) == "" {
-			return fmt.Errorf("仓库 ID、名称和路径不能为空")
-		}
-		k := strings.ToLower(r.GitCommonDirectory)
-		if commonDirs[k] {
-			return fmt.Errorf("同一 Git common directory 只能配置一次")
-		}
-		commonDirs[k] = true
-		repoIDs[r.ID] = true
 	}
 	if err := unique(projectKeys(c.MeegleProjects), "Meegle 空间 Key"); err != nil {
 		return err
@@ -249,65 +243,35 @@ func (c AppConfig) Validate() error {
 			return err
 		}
 	}
-	if err := uniqueLower(marketplaceIDs(c.CodexPluginMarketplaceSources), "Codex 插件来源 ID"); err != nil {
-		return err
-	}
-	if err := uniqueLower(marketplaceKeys(c.CodexPluginMarketplaceSources), "Codex 插件来源"); err != nil {
-		return err
-	}
-	for _, s := range c.CodexPluginMarketplaceSources {
-		if err := s.Validate(); err != nil {
+	sourceIDs := []string{}
+	for _, source := range c.SkillSources {
+		if err := source.Validate(); err != nil {
 			return err
 		}
+		sourceIDs = append(sourceIDs, source.ID)
 	}
-	if err := uniqueLower(skillIDs(c.SkillSources), "Skill 来源 ID"); err != nil {
+	if err := uniqueLower(sourceIDs, "Skill 来源 ID"); err != nil {
 		return err
 	}
 	if err := uniqueLower(skillKeys(c.SkillSources), "Skill 来源"); err != nil {
 		return err
 	}
-	for _, s := range c.SkillSources {
-		if err := s.Validate(); err != nil {
+	marketplaceIDs := []string{}
+	for _, source := range c.CodexPluginMarketplaceSources {
+		if err := source.Validate(); err != nil {
 			return err
 		}
+		marketplaceIDs = append(marketplaceIDs, source.ID)
 	}
-	if c.TagHistoryMaxGroups < 1 || c.TagHistoryMaxGroups > MaxTagHistoryGroups {
-		return fmt.Errorf("Tag组保留数量必须在 1 到 %d 之间", MaxTagHistoryGroups)
+	if err := uniqueLower(marketplaceIDs, "Codex 插件来源 ID"); err != nil {
+		return err
 	}
-	tools := map[DevelopmentToolType]bool{}
-	for _, t := range c.DevelopmentTools {
-		if strings.TrimSpace(t.Path) == "" || tools[t.Type] {
-			return fmt.Errorf("开发工具路径不能为空或开发工具重复")
-		}
-		tools[t.Type] = true
+	if err := uniqueLower(marketplaceKeys(c.CodexPluginMarketplaceSources), "Codex 插件来源"); err != nil {
+		return err
 	}
-	branches := map[string]bool{}
-	for _, b := range c.BlockedGitWriteBranches {
-		if strings.TrimSpace(b) == "" || strings.TrimSpace(b) != b {
-			return fmt.Errorf("Git 写保护分支不能包含空值或首尾空格")
-		}
-		k := strings.ToLower(b)
-		if branches[k] {
-			return fmt.Errorf("Git 写保护分支不能重复（忽略大小写）")
-		}
-		branches[k] = true
-	}
-	for _, g := range c.Groups {
-		if err := g.Validate(); err != nil {
-			return err
-		}
-		for _, s := range g.Services {
-			if !repoIDs[s.RepositoryID] {
-				return fmt.Errorf("服务 %s 引用了不存在的仓库：%s", s.DisplayName, s.RepositoryID)
-			}
-			if err := s.Validate(); err != nil {
-				return err
-			}
-		}
-	}
-	for _, t := range c.CommandProxyTargets {
-		if !validProxyTarget(t) {
-			return fmt.Errorf("命令代理目标不合法：%s", t)
+	for _, target := range c.CommandProxyTargets {
+		if target != ProxyTargetCodex && target != ProxyTargetGit && target != ProxyTargetMeegle {
+			return fmt.Errorf("QA 版命令代理目标不合法：%s", target)
 		}
 	}
 	return nil
@@ -339,12 +303,6 @@ func (c *AppConfig) NormalizeAndValidate() error {
 	return c.Validate()
 }
 
-func (r RepositoryConfig) Validate() error {
-	if r.ID == "" || r.Name == "" || r.RootPath == "" || r.GitCommonDirectory == "" {
-		return fmt.Errorf("仓库 ID、名称、根目录和 git-common-dir 不能为空")
-	}
-	return nil
-}
 func (p MeegleProjectConfig) Validate() error {
 	pattern := regexp.MustCompile("^[A-Za-z0-9_-]+$")
 	if !pattern.MatchString(p.ProjectKey) || !pattern.MatchString(p.SimpleName) {
@@ -385,95 +343,28 @@ func (s SkillSource) Validate() error {
 	}
 	return nil
 }
-func (s ServiceModuleConfig) Validate() error {
-	if s.ID == "" {
-		return fmt.Errorf("模块 ID 不能为空")
-	}
-	if s.MasterBranch != nil {
-		if _, e := ParseRemoteBranchRef(*s.MasterBranch); e != nil {
-			return e
-		}
-	}
-	if s.TagTargetRef != nil {
-		if _, e := ParseRemoteBranchRef(*s.TagTargetRef); e != nil {
-			return e
-		}
-	}
-	ids := map[string]bool{}
-	for _, c := range s.CustomCommands {
-		if c.ID == "" || c.Name == "" || c.IconKey == "" || c.Executable == "" || c.TimeoutSeconds <= 0 {
-			return fmt.Errorf("快捷命令配置不合法")
-		}
-		k := strings.ToLower(c.ID)
-		if ids[k] {
-			return fmt.Errorf("同一模块内快捷命令 ID 不能重复（忽略大小写）")
-		}
-		ids[k] = true
-	}
-	return nil
-}
-func (s GroupServiceConfig) Validate() error {
-	if s.ID == "" || s.RepositoryID == "" || s.DisplayName == "" {
-		return fmt.Errorf("组内服务 ID、仓库 ID 和服务名称不能为空")
-	}
-	if !safeDirectoryIdentifier(s.ID) {
-		return fmt.Errorf("组内服务 ID 必须是安全且稳定的目录片段")
-	}
-	if s.GenbuProbeEnabled && s.GenbuServiceName == "" {
-		return fmt.Errorf("启用 Genbu 探测时必须配置 Genbu 服务名")
-	}
-	if _, e := ParseRemoteBranchRef(s.MasterBranch); e != nil {
-		return e
-	}
-	if _, e := ParseRemoteBranchRef(s.TestTagBaselineRef); e != nil {
-		return e
-	}
-	if len(s.Modules) == 0 {
-		return fmt.Errorf("服务至少需要一个工作区模块")
-	}
-	if err := uniqueLower(moduleIDs(s.Modules), "同一服务内模块 ID"); err != nil {
-		return err
-	}
-	if _, err := StandardWorktreeModuleNames(s.Modules); err != nil {
-		return err
-	}
-	for _, m := range s.Modules {
-		if err := m.Validate(); err != nil {
-			return err
-		}
-	}
-	return nil
-}
+
 func (g GroupConfig) Validate() error {
 	if g.ID == "" || strings.TrimSpace(g.Name) == "" || !safeDirectoryIdentifier(g.ID) {
-		return fmt.Errorf("组 ID 或名称不合法")
+		return fmt.Errorf("项目组 ID 或名称不合法")
 	}
-	if err := unique(serviceRepositoryIDs(g.Services), "同一仓库在一个组内只能出现一次"); err != nil {
-		return err
-	}
-	return unique(serviceIDs(g.Services), "同一组内服务 ID")
+	return nil
 }
 func (m TaskManifest) Validate() error {
-	if !ValidateSchemaVersion(m.SchemaVersion, CurrentTaskManifestSchemaVersion) {
-		return fmt.Errorf("任务 JSON 版本不受支持：%s，当前版本为 %s", m.SchemaVersion, CurrentTaskManifestSchemaVersion)
+	if m.Edition != "qa" {
+		return fmt.Errorf("任务不是 silverwing-qa 格式")
 	}
-	if m.FolderName == "" || m.TaskDirectoryName == "" || m.FeatureBranch == "" || m.CreatedAt == "" || m.UpdatedAt == "" {
+	if !ValidateSchemaVersion(m.SchemaVersion, CurrentTaskManifestSchemaVersion) {
+		return fmt.Errorf("任务 JSON 版本不受支持：%s", m.SchemaVersion)
+	}
+	if m.FolderName == "" || m.TaskDirectoryName == "" || m.CreatedAt == "" || m.UpdatedAt == "" {
 		return fmt.Errorf("任务清单缺少必填字段")
 	}
-	if m.AgentContext != nil {
-		if err := m.AgentContext.Validate(); err != nil {
-			return err
-		}
+	if !safeDirectoryIdentifier(m.TaskDirectoryName) {
+		return fmt.Errorf("任务目录名不安全")
 	}
-	for _, s := range m.Services {
-		if s.RepositoryID == "" || s.ServiceName == "" || s.RepositoryPath == "" || s.WorktreePath == "" || s.Branch == "" {
-			return fmt.Errorf("任务工作区缺少必填字段")
-		}
-		if s.TagTargetRef != nil {
-			if _, err := ParseRemoteBranchRef(*s.TagTargetRef); err != nil {
-				return err
-			}
-		}
+	if m.AgentContext != nil {
+		return m.AgentContext.Validate()
 	}
 	return nil
 }
@@ -501,53 +392,15 @@ func (c AppConfig) Group(groupID string) (GroupConfig, error) {
 	}
 	return GroupConfig{}, fmt.Errorf("找不到组：%s", groupID)
 }
-func (c AppConfig) GroupService(groupID, serviceID string) (GroupServiceConfig, error) {
-	g, err := c.Group(groupID)
-	if err != nil {
-		return GroupServiceConfig{}, err
-	}
-	for _, s := range g.Services {
-		if s.ID == serviceID {
-			return s, nil
-		}
-	}
-	return GroupServiceConfig{}, fmt.Errorf("组中找不到服务：%s", serviceID)
-}
+
 func (c AppConfig) RequirementMaterialsConfigured() bool {
 	return c.RequirementMaterialsRoot != nil && *c.RequirementMaterialsRoot != "" && c.RequirementMaterialsSubdirectory != nil && *c.RequirementMaterialsSubdirectory != ""
 }
-func (c AppConfig) TagNavigationVisible() bool {
-	return c.TagEnabled && len(c.Groups) > 0
-}
+
 func (s CodexPluginMarketplaceSource) RequiresRootMarketplaceMigration() bool {
 	return s.MarketplaceDirectory != "."
 }
-func (s ServiceWorkspace) SelectionKey() string { return s.GroupServiceID + ":" + s.ModuleID }
-func (m TaskManifest) Health() WorkspaceHealth  { return AggregateWorkspaceHealth(m.Services) }
-func AggregateWorkspaceHealth(workspaces []ServiceWorkspace) WorkspaceHealth {
-	for _, w := range workspaces {
-		if w.Health == WorkspaceFailed {
-			return WorkspaceFailed
-		}
-	}
-	for _, w := range workspaces {
-		if w.Health == WorkspaceCreating {
-			return WorkspaceCreating
-		}
-	}
-	for _, w := range workspaces {
-		if w.Health == WorkspaceReadyWithWarnings {
-			return WorkspaceReadyWithWarnings
-		}
-	}
-	return WorkspaceReady
-}
-func (r RepositoryConfig) ToInfo() RepositoryInfo {
-	return RepositoryInfo{ID: r.ID, Name: r.Name, RootPath: r.RootPath, GitCommonDirectory: r.GitCommonDirectory, RemoteURL: r.OriginURL, CurrentBranch: r.CurrentBranch}
-}
-func (r RepositoryInfo) ToConfig() RepositoryConfig {
-	return RepositoryConfig{ID: r.ID, Name: r.Name, RootPath: r.RootPath, GitCommonDirectory: r.GitCommonDirectory, OriginURL: r.RemoteURL, CurrentBranch: r.CurrentBranch}
-}
+
 func (c CommandResult) Succeeded() bool { return c.ExitCode == 0 }
 
 func ParseRemoteBranchRef(value string) (RemoteBranchRef, error) {
@@ -692,108 +545,6 @@ func prefixTaskDirectoryUTF16(value string, limit int) string {
 	}
 	return prefix.String()
 }
-func StandardWorktreeModuleNames(modules []ServiceModuleConfig) (map[string]string, error) {
-	if len(modules) == 0 {
-		return nil, fmt.Errorf("至少需要一个模块")
-	}
-	names, seen, dirs := map[string]string{}, map[string]bool{}, map[string]bool{}
-	for _, m := range modules {
-		name := strings.TrimSpace(m.Name)
-		if name == "" {
-			name = "default"
-		}
-		if !moduleNamePattern.MatchString(name) {
-			return nil, fmt.Errorf("模块 %s 名称不合法：%s", m.ID, name)
-		}
-		names[m.ID] = name
-		if len(modules) > 1 {
-			k := strings.ToLower(name)
-			if seen[k] {
-				return nil, fmt.Errorf("多模块名称不能重复（忽略大小写）")
-			}
-			seen[k] = true
-			d := strings.ToLower(strings.ReplaceAll(name, "/", "-"))
-			if dirs[d] {
-				return nil, fmt.Errorf("模块名称转换为目录后不能重复")
-			}
-			dirs[d] = true
-		}
-	}
-	return names, nil
-}
-func TaskBranchNames(requested string, modules []ServiceModuleConfig, explicit map[string]string) (map[string]string, error) {
-	for id := range explicit {
-		found := false
-		for _, m := range modules {
-			if m.ID == id {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return nil, fmt.Errorf("任务分支覆盖引用了不存在的模块")
-		}
-	}
-	if trimTaskNamingWhitespace(requested) == "" {
-		return nil, fmt.Errorf("任务分支不能为空")
-	}
-	if len(modules) == 0 {
-		return nil, fmt.Errorf("至少需要一个模块")
-	}
-	ids := make([]string, 0, len(modules))
-	for _, module := range modules {
-		ids = append(ids, module.ID)
-	}
-	if err := unique(ids, "模块 ID"); err != nil {
-		return nil, err
-	}
-	names, err := StandardWorktreeModuleNames(modules)
-	if err != nil {
-		return nil, err
-	}
-	out := map[string]string{}
-	for _, m := range modules {
-		b := requested
-		if len(modules) > 1 {
-			b += "-" + names[m.ID]
-		}
-		if value, ok := explicit[m.ID]; ok {
-			b = strings.TrimSpace(value)
-			if b == "" {
-				return nil, fmt.Errorf("模块任务分支不能为空")
-			}
-		}
-		out[m.ID] = b
-	}
-	branches := make([]string, 0, len(out))
-	for _, b := range out {
-		branches = append(branches, b)
-	}
-	if err := RequireNoBranchConflicts(branches); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-func RequireNoBranchConflicts(branches []string) error {
-	lowered := map[string]string{}
-	for _, b := range branches {
-		k := strings.ToLower(b)
-		if prev, ok := lowered[k]; ok {
-			return fmt.Errorf("同一仓库的模块目标分支不能重复：%s 与 %s", prev, b)
-		}
-		lowered[k] = b
-	}
-	for b := range lowered {
-		for i, r := range b {
-			if r == '/' {
-				if p, ok := lowered[b[:i]]; ok {
-					return fmt.Errorf("同一仓库的模块目标分支不能互为父子路径：%s 与 %s", p, lowered[b])
-				}
-			}
-		}
-	}
-	return nil
-}
 
 func unique(values []string, label string) error {
 	seen := map[string]bool{}
@@ -836,13 +587,7 @@ func groupIDs(v []GroupConfig) []string {
 	}
 	return r
 }
-func repositoryIDs(v []RepositoryConfig) []string {
-	r := []string{}
-	for _, x := range v {
-		r = append(r, x.ID)
-	}
-	return r
-}
+
 func projectKeys(v []MeegleProjectConfig) []string {
 	r := []string{}
 	for _, x := range v {
@@ -890,27 +635,7 @@ func extensionKey(repo string, ref *string, location string) string {
 	}
 	return repo + "\x00" + v + "\x00" + location
 }
-func moduleIDs(v []ServiceModuleConfig) []string {
-	r := []string{}
-	for _, x := range v {
-		r = append(r, x.ID)
-	}
-	return r
-}
-func serviceIDs(v []GroupServiceConfig) []string {
-	r := []string{}
-	for _, x := range v {
-		r = append(r, x.ID)
-	}
-	return r
-}
-func serviceRepositoryIDs(v []GroupServiceConfig) []string {
-	r := []string{}
-	for _, x := range v {
-		r = append(r, x.RepositoryID)
-	}
-	return r
-}
+
 func stringValue(v *string) string {
 	if v == nil {
 		return ""
@@ -918,9 +643,5 @@ func stringValue(v *string) string {
 	return *v
 }
 func validProxyTarget(v CommandProxyTarget) bool {
-	switch v {
-	case ProxyTargetCodex, ProxyTargetGit, ProxyTargetWorkspaceCommand, ProxyTargetMeegle, ProxyTargetGenbu:
-		return true
-	}
-	return false
+	return v == ProxyTargetCodex || v == ProxyTargetGit || v == ProxyTargetMeegle
 }

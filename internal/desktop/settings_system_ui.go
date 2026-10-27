@@ -6,12 +6,13 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"silverwing-go/internal/buildinfo"
 	"silverwing-go/internal/domain"
 )
 
 const (
 	silverwingRepositoryURL = "https://github.com/javatoai/silverwing"
-	silverwingReleasesURL   = "https://github.com/javatoai/silverwing/releases"
+	silverwingReleasesURL   = "https://github.com/javatoai/silverwing/releases?q=qa-v&expanded=true"
 )
 
 type settingsSystemActionStyle uint8
@@ -72,7 +73,7 @@ func (state *app) settingsAbout(context *ui.Context, theme palette) {
 				ui.Image(context.Key("about-silverwing-logo"), logo).Width(48).Height(48).Shrink(0).Fit(ui.Contain).Label("SilverWing 应用图标")
 			}
 			ui.Column(context).Grow(1).MinWidth(0).Gap(4).Children(func() {
-				label(context, "SilverWing", 20, theme.text).FontWeight(600).Wrap()
+				label(context, buildinfo.ProductName, 20, theme.text).FontWeight(600).Wrap()
 				label(context, "MyGO 原生桌面", 12, theme.muted).Wrap()
 			})
 			ui.Box(context).Shrink(0).Padding(6, 10).Background(theme.soft).Radius(8).Label("当前版本 " + domain.CurrentProductVersion).Children(func() {

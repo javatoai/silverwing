@@ -35,20 +35,8 @@ func (a *App) openCodex(ctx context.Context, action Action) (ActionResult, error
 		}
 	}
 	path := taskPath
-	if !forceNew && (action.ServiceID != "" || action.ModuleID != "") {
-		found := false
-		for _, workspace := range manifest.Services {
-			if workspace.GroupServiceID != action.ServiceID || action.ModuleID != "" && workspace.ModuleID != action.ModuleID {
-				continue
-			}
-			if found {
-				return ActionResult{}, errors.New("请选择具体任务模块")
-			}
-			found, path = true, workspace.WorktreePath
-		}
-		if !found {
-			return ActionResult{}, errors.New("当前任务没有所选工作区")
-		}
+	if action.ServiceID != "" || action.ModuleID != "" {
+		return ActionResult{}, errors.New("QA 版不支持代码工作区")
 	}
 	path, err = filepath.Abs(path)
 	if err != nil {

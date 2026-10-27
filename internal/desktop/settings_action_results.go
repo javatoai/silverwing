@@ -43,10 +43,6 @@ func (s *app) applySettingsActionResult(action application.Action, result applic
 			s.settingsConfigText = resultText(result)
 		}
 		s.settingsConfigOpen = true
-	case "config.save", "config.fields.save":
-		if s.page == "settings" && s.settingsPage == "dev-tools" {
-			s.act("development-tools/snapshot", "", "", "", "", "", nil)
-		}
 	case "config.import-preview":
 		s.applySettingsConfigPreview(result.Data)
 	case "config.export":
@@ -103,15 +99,7 @@ func (s *app) applySettingsActionResult(action application.Action, result applic
 	case "codex.ai/mcp/authenticate":
 		s.settingsOutput = result.Message
 		s.act("codex.extensions/mcp/status", "", "", "", "", "", s.settingsMCPPayload(nil))
-	case "git.environment", "git.environment/snapshot":
-		s.settingsGitEnvironment = mapData(result.Data)
 		s.settingsOutput = ""
-	case "development-tools/snapshot", "development-tools/detect":
-		s.settingsDevelopmentToolsSnapshot = mapData(result.Data)
-		s.settingsTerminalResolution = mapData(dataValue(result.Data, "terminalResolution"))
-		s.settingsOutput = ""
-	case "development-tools/paths/existing":
-		s.settingsOutput = strings.Join(mapsString(dataValue(result.Data, "existingTypes")), "\n")
 	case "terminal.resolve":
 		s.settingsTerminalResolution = mapData(result.Data)
 		s.settingsOutput = ""
@@ -131,7 +119,7 @@ func (s *app) applySettingsActionResult(action application.Action, result applic
 				s.settingsCLIStatus = make(map[string]map[string]any)
 			}
 			s.settingsCLIStatus[tool] = status
-			s.refreshWorkspaceGitDisplayContext()
+
 		}
 		s.settingsOutput = result.Message
 		s.act("cli.status", "", "", "", "", "", map[string]any{"tool": tool})
@@ -202,7 +190,7 @@ func (s *app) applySettingsActionResult(action application.Action, result applic
 				s.settingsCLIStatus = make(map[string]map[string]any)
 			}
 			s.settingsCLIStatus[tool] = mapData(result.Data)
-			s.refreshWorkspaceGitDisplayContext()
+
 		}
 		if action.Kind == "logs.list" {
 			s.settingsLogEntries = mapsFromData(dataValue(result.Data, "entries"))

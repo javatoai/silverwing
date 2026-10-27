@@ -186,17 +186,12 @@ func (s *app) ensureSettingsPageData() {
 	case "codex-mcp":
 		s.requestSettingsCLIStatus("codex", false)
 		s.act("codex.extensions/mcp/status", "", "", "", "", "", s.settingsMCPPayload(nil))
-	case "cli-meegle", "cli-genbu":
-		s.requestSettingsCLIStatus(strings.TrimPrefix(s.settingsPage, "cli-"), false)
+	case "cli-meegle":
+		s.requestSettingsCLIStatus("meegle", false)
 	case "task-creation":
 		s.requestSettingsCLIStatus("codex", false)
 	case "skill-sources":
 		s.act("skills.sources/catalog", "", "", "", "", "", nil)
-	case "git":
-		s.requestSettingsCLIStatus("git", false)
-		s.act("git.environment", "", "", "", "", "", nil)
-	case "dev-tools":
-		s.act("development-tools/snapshot", "", "", "", "", "", nil)
 	case "logs":
 		s.act("logs.list", "", "", "", "", "", map[string]any{"filter": "recent"})
 	}

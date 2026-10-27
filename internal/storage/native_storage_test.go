@@ -56,13 +56,14 @@ func TestNativeConfigSaveImportExportBackupRestoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source.DefaultBranchPrefix = "source/"
+
+	source.AIRequirementNamingModel = "source/"
 	source.Theme = domain.ThemeDark
 	if err := sourceStore.Save(source); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := sourceStore.Load()
-	if err != nil || loaded.DefaultBranchPrefix != source.DefaultBranchPrefix || loaded.Theme != source.Theme {
+	if err != nil || loaded.AIRequirementNamingModel != source.AIRequirementNamingModel || loaded.Theme != source.Theme {
 		t.Fatalf("saved config did not round trip: %+v %v", loaded, err)
 	}
 	exportPath := filepath.Join(sourcePaths.Home, "native-export.zip")
@@ -75,13 +76,14 @@ func TestNativeConfigSaveImportExportBackupRestoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	target.DefaultBranchPrefix = "target/"
+
+	target.AIRequirementNamingModel = "target/"
 	target.Theme = domain.ThemeLight
 	if err := targetStore.Save(target); err != nil {
 		t.Fatal(err)
 	}
 	imported, err := targetStore.ImportFrom(exportPath)
-	if err != nil || imported.DefaultBranchPrefix != "source/" || imported.Theme != domain.ThemeDark {
+	if err != nil || imported.AIRequirementNamingModel != "source/" || imported.Theme != domain.ThemeDark {
 		t.Fatalf("import did not replace native values: %+v %v", imported, err)
 	}
 	backups, err := targetStore.Backups()
@@ -89,7 +91,7 @@ func TestNativeConfigSaveImportExportBackupRestoreRoundTrip(t *testing.T) {
 		t.Fatalf("import backup missing: %+v %v", backups, err)
 	}
 	restored, err := targetStore.Restore(backups[0].Path)
-	if err != nil || restored.DefaultBranchPrefix != "target/" || restored.Theme != domain.ThemeLight {
+	if err != nil || restored.AIRequirementNamingModel != "target/" || restored.Theme != domain.ThemeLight {
 		t.Fatalf("backup did not restore prior config: %+v %v", restored, err)
 	}
 }
@@ -100,14 +102,14 @@ func TestNativeManifestRoundTripRejectsUnknownField(t *testing.T) {
 	manifest := domain.DefaultTaskManifest()
 	manifest.FolderName = "folder"
 	manifest.TaskDirectoryName = "folder"
-	manifest.FeatureBranch = "feature/native"
+
 	manifest.CreatedAt = "2026-10-21T00:00:00Z"
 	manifest.UpdatedAt = manifest.CreatedAt
 	if err := store.Save(dir, manifest); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := store.Load(dir)
-	if err != nil || loaded.FeatureBranch != manifest.FeatureBranch || loaded.FolderName != manifest.FolderName {
+	if err != nil || loaded.FolderName != manifest.FolderName {
 		t.Fatalf("manifest did not round trip: %+v %v", loaded, err)
 	}
 

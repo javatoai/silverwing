@@ -15,7 +15,7 @@ func TestSidebarVisibilityConfigurationDefaultsAndRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	all := domain.SidebarVisibilitySettings{Requirements: true, Tools: true, Production: true, Services: true}
+	all := domain.SidebarVisibilitySettings{Requirements: true, Tools: true}
 	if config.SidebarVisibility != all {
 		t.Fatalf("new configuration hid existing navigation: %+v", config.SidebarVisibility)
 	}
@@ -34,7 +34,7 @@ func TestSidebarVisibilityConfigurationDefaultsAndRoundTrip(t *testing.T) {
 		want domain.SidebarVisibilitySettings
 	}{
 		{"old config", nil, all},
-		{"partial config", json.RawMessage(`{"requirements":false}`), domain.SidebarVisibilitySettings{Tools: true, Production: true, Services: true}},
+		{"partial config", json.RawMessage(`{"requirements":false}`), domain.SidebarVisibilitySettings{Tools: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			delete(fields, "sidebarVisibility")

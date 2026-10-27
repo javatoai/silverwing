@@ -25,7 +25,7 @@ func (r *environmentRunner) Run(ctx context.Context, spec process.Spec) (process
 func TestPrepareSharesToolDefaultsAndTargetProxy(t *testing.T) {
 	config := domain.DefaultAppConfig()
 	runner := &environmentRunner{}
-	for _, tool := range []executable.Tool{executable.ToolMeegle, executable.ToolCodex, executable.ToolGit, executable.ToolGenbu} {
+	for _, tool := range []executable.Tool{executable.ToolMeegle, executable.ToolCodex, executable.ToolGit} {
 		target := domain.CommandProxyTarget(strings.ToUpper(string(tool)))
 		spec, err := Prepare(context.Background(), runner, &config, target, tool, "/fixture/command")
 		if err != nil {
@@ -61,8 +61,8 @@ func TestProxyCredentialsAndNoProxyRemainScopedAndRedacted(t *testing.T) {
 	c := domain.DefaultAppConfig()
 	endpoint, user, password, noProxy := "http://proxy.invalid:8080", "fixture-user", "fixture-secret", "localhost,127.0.0.1"
 	c.CommandProxyURL, c.CommandProxyUsername, c.CommandProxyPassword, c.CommandProxyNoProxy = &endpoint, &user, &password, &noProxy
-	c.CommandProxyTargets = []domain.CommandProxyTarget{domain.ProxyTargetGenbu}
-	env, _ := ProxyEnvironment(c, domain.ProxyTargetGenbu)
+	c.CommandProxyTargets = []domain.CommandProxyTarget{domain.ProxyTargetGit}
+	env, _ := ProxyEnvironment(c, domain.ProxyTargetGit)
 	if !strings.Contains(env["HTTP_PROXY"], "fixture-user:fixture-secret@") || env["NO_PROXY"] != noProxy {
 		t.Fatalf("proxy options lost: %+v", env)
 	}
@@ -74,6 +74,6 @@ func TestProxyCredentialsAndNoProxyRemainScopedAndRedacted(t *testing.T) {
 	}
 	other, _ := ProxyEnvironment(c, domain.ProxyTargetMeegle)
 	if len(other) != 0 {
-		t.Fatal("Genbu proxy applied to Meegle")
+		t.Fatal("Git proxy applied to Meegle")
 	}
 }

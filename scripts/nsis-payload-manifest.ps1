@@ -12,7 +12,7 @@ function New-NSISUninstallManifest([string]$Stage, [string]$Destination) {
         $escaped = $relative.Replace('$', '$$')
         if ($entry.PSIsContainer) { $directories.Add($escaped) } else { $files.Add($escaped) }
     }
-    if ($files.Count -eq 0 -or -not (Test-Path -LiteralPath (Join-Path $root 'silverwing.exe') -PathType Leaf)) { throw 'Native payload is incomplete.' }
+    if ($files.Count -eq 0 -or -not (Test-Path -LiteralPath (Join-Path $root 'silverwing-qa.exe') -PathType Leaf)) { throw 'Native payload is incomplete.' }
     $lines = [Collections.Generic.List[string]]::new()
     $lines.Add('; Generated from this package payload. Never enumerate or recursively remove an installation at runtime.')
     foreach ($relative in ($files | Sort-Object)) {

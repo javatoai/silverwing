@@ -536,21 +536,16 @@ func (s *app) selectTaskCreationRequirementCandidate(candidate taskCreationRequi
 	if form == nil || form.requirements == nil || form.requirements.closed {
 		return
 	}
-	oldBranch := form.draft.Branch
 	s.cancelTaskCreationRequirementMetadata(form.requirements)
 	title := candidate.Title
-	form.draft = form.draft.ChangeRequirement(candidate.URL, form.config.DefaultBranchPrefix, &title)
+	form.draft = form.draft.ChangeRequirement(candidate.URL, "", &title)
 	form.lastLink = form.draft.RequirementLink
-	form.lastBranch = form.draft.Branch
 	form.lastName = form.draft.TaskName
 	form.requirements.query, form.requirements.inputLink = candidate.URL, candidate.URL
 	form.requirements.inputIsQuery = false
 	form.requirements.selectedTitle = candidate.Title
 	form.aiEligible = true
 	form.aiError = ""
-	if oldBranch != form.draft.Branch {
-		s.retargetUntouchedTaskCreationModules(form.draft.Branch)
-	}
 	s.invalidateTaskCreationPreview("需求候选已变化，请重新预检。")
 	if form.config.AIRequirementNamingEnabled {
 		s.requestTaskCreationAINaming(false)

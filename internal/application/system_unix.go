@@ -8,8 +8,6 @@ import (
 	"os/exec"
 	"runtime"
 	"silverwing-go/internal/executable"
-
-	"silverwing-go/internal/domain"
 )
 
 func openNative(path string, reveal bool) error {
@@ -46,26 +44,9 @@ func launchTerminal(ctx context.Context, resolution SystemTerminalResolution, di
 func launchSystemTerminalPlan(ctx context.Context, plan SystemLaunchPlan) error {
 	return startUnixLaunchPlan(ctx, plan)
 }
-func launchTool(ctx context.Context, toolType domain.DevelopmentToolType, executable, path string) error {
-	plan, err := PlanSystemToolLaunch(runtime.GOOS, toolType, executable, path)
-	if err != nil {
-		return err
-	}
-	return startUnixLaunchPlan(ctx, plan)
-}
+
 func startUnixLaunchPlan(ctx context.Context, plan SystemLaunchPlan) error {
 	cmd, err := detachedToolCommand(ctx, plan.Executable, plan.Arguments)
-	if err != nil {
-		return err
-	}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	go cmd.Wait()
-	return nil
-}
-func launchToolArguments(ctx context.Context, executable string, arguments ...string) error {
-	cmd, err := detachedToolCommand(ctx, executable, arguments)
 	if err != nil {
 		return err
 	}

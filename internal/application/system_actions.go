@@ -6,10 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
-	"strings"
 
-	"silverwing-go/internal/domain"
+	"strings"
 )
 
 func (a *App) systemAction(ctx context.Context, action Action) (ActionResult, error) {
@@ -26,20 +24,7 @@ func (a *App) systemAction(ctx context.Context, action Action) (ActionResult, er
 	if action.Kind == "system.cli-terminal" {
 		return a.systemCLITerminal(ctx, action)
 	}
-	if action.Kind == "system.ide-test" {
-		config, err := a.Config.Load()
-		if err != nil {
-			return ActionResult{}, err
-		}
-		plan, target, err := planSystemDevelopmentToolTest(config, action)
-		if err != nil {
-			return ActionResult{}, err
-		}
-		if err := ctx.Err(); err != nil {
-			return ActionResult{}, err
-		}
-		return ActionResult{Message: "开发工具已打开", Path: target}, launchToolArguments(ctx, plan.Executable, plan.Arguments...)
-	}
+
 	path := actionPath(action)
 	if path == "" {
 		return ActionResult{}, errors.New("路径不能为空")
@@ -87,27 +72,6 @@ func (a *App) systemAction(ctx context.Context, action Action) (ActionResult, er
 			return ActionResult{}, err
 		}
 		return ActionResult{Message: "终端已打开", Path: path}, launchTerminal(ctx, resolution, path)
-	case "system.ide":
-		config, err := a.Config.Load()
-		if err != nil {
-			return ActionResult{}, err
-		}
-		if !info.IsDir() {
-			return ActionResult{}, fmt.Errorf("项目目录不存在：%s", path)
-		}
-		tool := textPayload(action, "tool")
-		if tool == "" {
-			tool = string(config.DefaultDevelopmentTool)
-		}
-		for _, configured := range config.DevelopmentTools {
-			if strings.EqualFold(string(configured.Type), tool) {
-				if _, err := os.Stat(configured.Path); err != nil {
-					return ActionResult{}, fmt.Errorf("开发工具路径不存在：%s", configured.Path)
-				}
-				return ActionResult{Message: "开发工具已打开", Path: path}, launchTool(ctx, configured.Type, configured.Path, path)
-			}
-		}
-		return ActionResult{}, errors.New("开发工具尚未配置")
 	}
 	return ActionResult{}, errors.New("不支持的系统操作")
 }
@@ -126,29 +90,4 @@ func (a *App) prepareLogDirectory(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return a.Paths.Logs, nil
-}
-
-// The settings test uses the current path draft without saving it, and opens
-// the configured task root just like Source DesktopApplication.testDevelopmentTool.
-func planSystemDevelopmentToolTest(config domain.AppConfig, action Action) (SystemLaunchPlan, string, error) {
-	target := value(config.TaskRoot)
-	if info, err := os.Stat(target); target == "" || err != nil || !info.IsDir() {
-		return SystemLaunchPlan{}, "", errors.New("请先配置有效的任务根目录，再测试打开开发工具")
-	}
-	if action.Path != "" && filepath.Clean(action.Path) != filepath.Clean(target) {
-		return SystemLaunchPlan{}, "", errors.New("任务根目录已变化，请重新测试打开开发工具")
-	}
-	tool := domain.DevelopmentToolType(textPayload(action, "tool"))
-	switch tool {
-	case domain.DevelopmentToolIntelliJIdea, domain.DevelopmentToolWebStorm, domain.DevelopmentToolPyCharm,
-		domain.DevelopmentToolVisualStudioCode, domain.DevelopmentToolAndroidStudio, domain.DevelopmentToolDevEcoStudio:
-	default:
-		return SystemLaunchPlan{}, "", errors.New("请选择开发工具")
-	}
-	configuredPath := textPayload(action, "configuredPath")
-	if _, err := os.Stat(configuredPath); err != nil {
-		return SystemLaunchPlan{}, "", fmt.Errorf("开发工具路径不存在：%s", configuredPath)
-	}
-	plan, err := PlanSystemToolLaunch(runtime.GOOS, tool, configuredPath, target)
-	return plan, target, err
 }

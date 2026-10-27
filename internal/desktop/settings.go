@@ -14,21 +14,21 @@ type settingsPage struct{ key, label string }
 
 var settingsSections = []settingsSection{
 	{"基础", 0, []settingsPage{{"basic", "外观"}}},
-	{"快捷工具", 0, []settingsPage{{"tool-visibility", "研发工具"}}},
-	{"存储", 0, []settingsPage{{"paths", "目录"}, {"config-backup", "配置与备份"}}},
-	{"开发工具", 1, []settingsPage{{"dev-tools", "开发工具"}}},
-	{"任务", 1, []settingsPage{{"task-creation", "任务创建区"}, {"task-area", "任务详情区"}}},
-	{"Git", 1, []settingsPage{{"git", "Git 配置"}, {"branch-naming", "分支名设置"}, {"tag", "Tag 设置"}}},
+	{"快捷工具", 0, []settingsPage{{"tool-visibility", "实用工具"}}},
+	{"存储", 0, []settingsPage{{"paths", "任务与资料"}, {"config-backup", "配置与备份"}}},
+	{"项目组", 1, []settingsPage{{"groups", "项目组"}}},
+	{"任务", 1, []settingsPage{{"task-creation", "AI 与任务创建"}}},
 	{"AGENTS.md", 2, []settingsPage{{"agents", "全局与组说明"}, {"instruction-templates", "任务说明模板"}}},
 	{"Codex", 2, []settingsPage{{"codex-plugins", "Codex 插件"}, {"codex-mcp", "MCP 管理"}}},
 	{"skill", 2, []settingsPage{{"skill-local", "本机 Skill"}, {"skill-sources", "安装 Skill"}}},
-	{"CLI", 2, []settingsPage{{"cli-meegle", "Meegle CLI"}, {"cli-genbu", "Genbu CLI"}}},
+	{"CLI", 2, []settingsPage{{"cli-meegle", "Meegle CLI"}}},
 	{"代理", 2, []settingsPage{{"proxy", "网络代理"}}},
 	{"日志", 3, []settingsPage{{"logs", "日志"}}},
 	{"系统", 3, []settingsPage{{"about", "关于"}, {"updates", "更新"}, {"app-data", "应用数据目录"}}},
 }
 
 func (s *app) settingsScreen(c *ui.Context, p palette) {
+	s.reconcileQASettingsNavigation()
 	if s.loading {
 		ui.Column(c).Grow(1).MinHeight(0).Padding(24, 28).Background(p.bg).Children(func() {
 			label(c, "正在读取配置…", 13, p.muted)
@@ -144,16 +144,14 @@ func (s *app) settingsPageContent(c *ui.Context, p palette) {
 		s.settingsBasic(c, p)
 	case "tool-visibility":
 		s.settingsToolVisibility(c, p)
+	case "groups":
+		s.settingsGroups(c, p)
 	case "paths":
 		s.settingsPaths(c, p)
 	case "config-backup":
 		s.settingsConfigBackup(c, p)
-	case "dev-tools":
-		s.settingsDevelopmentTools(c, p)
 	case "task-creation":
 		s.settingsTaskCreation(c, p)
-	case "task-area":
-		s.settingsTaskArea(c, p)
 	case "agents":
 		s.settingsAgents(c, p)
 	case "instruction-templates":
@@ -162,18 +160,12 @@ func (s *app) settingsPageContent(c *ui.Context, p palette) {
 		s.settingsCodexPlugins(c, p)
 	case "codex-mcp":
 		s.settingsCodexMCP(c, p)
-	case "cli-meegle", "cli-genbu":
+	case "cli-meegle":
 		s.settingsCLI(c, p)
 	case "skill-sources":
 		s.settingsSkills(c, p)
 	case "proxy":
 		s.settingsProxy(c, p)
-	case "git":
-		s.settingsGit(c, p)
-	case "branch-naming":
-		s.settingsBranchNaming(c, p)
-	case "tag":
-		s.settingsTag(c, p)
 	case "logs":
 		s.settingsLogs(c, p)
 	case "about":

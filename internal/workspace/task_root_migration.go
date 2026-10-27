@@ -26,17 +26,16 @@ const (
 )
 
 type TaskRootMigrationPreview struct {
-	SourceRoot     string                           `json:"sourceRoot"`
-	TargetRoot     string                           `json:"targetRoot"`
-	Mode           TaskRootMigrationMode            `json:"mode"`
-	TaskCount      int                              `json:"taskCount"`
-	WorkspaceCount int                              `json:"workspaceCount"`
-	TotalBytes     int64                            `json:"totalBytes"`
-	Blockers       []string                         `json:"blockers"`
-	CanMigrate     bool                             `json:"canMigrate"`
-	Roots          TaskRootMigrationRootsChange     `json:"roots"`
-	PathMappings   []TaskRootMigrationPathMapping   `json:"pathMappings"`
-	Materials      []TaskRootMigrationTaskMaterials `json:"materials"`
+	SourceRoot   string                           `json:"sourceRoot"`
+	TargetRoot   string                           `json:"targetRoot"`
+	Mode         TaskRootMigrationMode            `json:"mode"`
+	TaskCount    int                              `json:"taskCount"`
+	TotalBytes   int64                            `json:"totalBytes"`
+	Blockers     []string                         `json:"blockers"`
+	CanMigrate   bool                             `json:"canMigrate"`
+	Roots        TaskRootMigrationRootsChange     `json:"roots"`
+	PathMappings []TaskRootMigrationPathMapping   `json:"pathMappings"`
+	Materials    []TaskRootMigrationTaskMaterials `json:"materials"`
 }
 
 type TaskRootMigrationPhase string
@@ -69,7 +68,6 @@ type TaskRootMigrationService struct {
 	Manifests   *storage.ManifestStore
 	Documents   *AgentDocumentService
 	Drafts      *documents.Service
-	Git         *GitClient
 	Locks       *OperationLocks
 	Now         func() time.Time
 }
@@ -83,16 +81,14 @@ func NewTaskRootMigrationService(paths storage.Paths, configStore *storage.Confi
 	if configStore == nil {
 		configStore = storage.NewConfigStore(paths)
 	}
-	if git == nil {
-		git = NewGitClient(nil, "")
-	}
+
 	if docs == nil {
 		docs = NewAgentDocumentService(paths, manifests)
 	}
 	if locks == nil {
 		locks = NewOperationLocks(paths.Locks)
 	}
-	return &TaskRootMigrationService{Paths: paths, ConfigStore: configStore, Manifests: manifests, Documents: docs, Drafts: documents.NewService(paths.Cache), Git: git, Locks: locks, Now: time.Now}
+	return &TaskRootMigrationService{Paths: paths, ConfigStore: configStore, Manifests: manifests, Documents: docs, Drafts: documents.NewService(paths.Cache), Locks: locks, Now: time.Now}
 }
 
 func (s *TaskRootMigrationService) Preview(config domain.AppConfig, requestedTarget string) (TaskRootMigrationPreview, error) {
@@ -172,9 +168,7 @@ func (s *TaskRootMigrationService) migrateLocked(ctx context.Context, config dom
 	journal := migrationJournal{ID: id, Version: 2, SourceRoot: plan.Preview.SourceRoot, TargetRoot: plan.Preview.TargetRoot, Mode: plan.Preview.Mode, Phase: "PREPARED", ConfigRoots: &roots, RepositoryLocks: append([]string(nil), plan.RepositoryLocks...), Tasks: make([]migrationJournalTask, 0, len(plan.Tasks))}
 	for _, task := range plan.Tasks {
 		jt := migrationJournalTask{SourceDirectory: task.Source, TargetDirectory: task.Target, OriginalManifest: cloneMigrationManifest(task.Manifest)}
-		for i, ws := range task.Workspaces {
-			jt.Workspaces = append(jt.Workspaces, migrationJournalWorkspace{Strategy: ws.Strategy, RepositoryPath: ws.RepositoryPath, RepositoryID: ws.RepositoryID, GroupServiceID: ws.GroupServiceID, ModuleID: ws.ModuleID, RelativePath: filepath.ToSlash(task.Relative[i])})
-		}
+
 		journal.Tasks = append(journal.Tasks, jt)
 	}
 	if err := s.writeJournal(journal); err != nil {
@@ -362,54 +356,13 @@ func (s *TaskRootMigrationService) buildMigrationPlan(config domain.AppConfig, r
 		if fileExists(targetTask) {
 			add("目标任务目录已存在：" + targetTask)
 		}
-		task := migrationTask{Source: taskSource, Target: targetTask, Manifest: manifest, Workspaces: []domain.ServiceWorkspace{}, Relative: []string{}}
-		valid := true
-		for _, ws := range manifest.Services {
-			worktree := mustAbs(ws.WorktreePath)
-			rel, e := filepath.Rel(taskSource, worktree)
-			if e != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-				add("工作区不在任务目录内：" + worktree)
-				valid = false
-				continue
-			}
-			if info, e := os.Stat(worktree); e != nil || !info.IsDir() {
-				add("工作区不存在：" + worktree)
-				valid = false
-				continue
-			}
-			if ws.Strategy == domain.WorkspaceIndependentClone {
-				if e := requireOwnedClone(worktree, cloneOwnership(taskSource, ws.RepositoryID, ws.GroupServiceID, ws.ModuleID)); e != nil {
-					add(e.Error())
-					valid = false
-					continue
-				}
-			}
-			if ws.Strategy == domain.WorkspaceStandardWorktree {
-				repository, ok := repositoryByID(config, ws.RepositoryID)
-				if !ok {
-					add("工作区对应仓库配置不存在：" + ws.RepositoryID)
-					valid = false
-					continue
-				}
-				plan.RepositoryLocks = append(plan.RepositoryLocks, repository.GitCommonDirectory)
-			} else if common, e := s.Git.CommonDirectory(worktree); e == nil {
-				plan.RepositoryLocks = append(plan.RepositoryLocks, common)
-			} else {
-				add("无法读取独立克隆 Git 身份：" + worktree + "：" + e.Error())
-				valid = false
-				continue
-			}
-			task.Workspaces = append(task.Workspaces, ws)
-			task.Relative = append(task.Relative, rel)
-		}
-		if !valid || len(task.Workspaces) != len(manifest.Services) {
-			continue
-		}
+		task := migrationTask{Source: taskSource, Target: targetTask, Manifest: manifest, Relative: []string{}}
+
 		plan.Tasks = append(plan.Tasks, task)
 	}
 	preview.TaskCount = len(plan.Tasks)
 	for _, t := range plan.Tasks {
-		preview.WorkspaceCount += len(t.Workspaces)
+
 		size, e := directoryBytes(t.Source)
 		if e != nil {
 			add("无法计算任务目录大小：" + t.Source + "：" + e.Error())
@@ -447,14 +400,7 @@ func (s *TaskRootMigrationService) transferAndVerifyTask(config domain.AppConfig
 	if err != nil {
 		return err
 	}
-	snapshots := make([]workspaceMigrationSnapshot, len(task.Workspaces))
-	for i, ws := range task.Workspaces {
-		snap, err := s.snapshotWorkspace(ws, ws.WorktreePath)
-		if err != nil {
-			return err
-		}
-		snapshots[i] = snap
-	}
+
 	if mode == TaskRootSameFileStore {
 		if err := os.WriteFile(filepath.Join(task.Source, taskRootMigrationMarker), []byte(id), 0o600); err != nil {
 			return err
@@ -476,83 +422,14 @@ func (s *TaskRootMigrationService) transferAndVerifyTask(config domain.AppConfig
 		return fmt.Errorf("DIRECT_SWITCH 模式不应包含任务目录")
 	}
 	updated.UpdatedAt = domain.FormatSilverWingTime(s.now())
-	for i, ws := range task.Workspaces {
-		newPath := filepath.Join(task.Target, task.Relative[i])
-		if ws.Strategy == domain.WorkspaceIndependentClone {
-			oldOwner := cloneOwnership(task.Source, ws.RepositoryID, ws.GroupServiceID, ws.ModuleID)
-			newOwner := cloneOwnership(task.Target, ws.RepositoryID, ws.GroupServiceID, ws.ModuleID)
-			if err := changeCloneOwner(newPath, oldOwner, newOwner); err != nil {
-				return err
-			}
-		}
-		if ws.Strategy == domain.WorkspaceStandardWorktree {
-			if err := s.Git.RepairWorktree(ws.RepositoryPath, newPath); err != nil {
-				return err
-			}
-		}
-	}
+
 	if err := s.Manifests.Save(task.Target, updated); err != nil {
 		return err
 	}
 	if _, err := s.Documents.WriteTaskDocument(task.Target, updated, config); err != nil {
 		return err
 	}
-	for i, ws := range task.Workspaces {
-		if err := s.verifyWorkspace(ws, filepath.Join(task.Target, task.Relative[i]), snapshots[i]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
 
-func (s *TaskRootMigrationService) snapshotWorkspace(ws domain.ServiceWorkspace, path string) (workspaceMigrationSnapshot, error) {
-	head, err := s.Git.Resolve(path, "HEAD")
-	if err != nil {
-		return workspaceMigrationSnapshot{}, err
-	}
-	branch, err := s.Git.CurrentBranch(path)
-	if err != nil {
-		return workspaceMigrationSnapshot{}, err
-	}
-	status, err := s.Git.Run(path, "status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all")
-	if err != nil {
-		return workspaceMigrationSnapshot{}, err
-	}
-	common, err := s.Git.CommonDirectory(path)
-	if err != nil {
-		return workspaceMigrationSnapshot{}, err
-	}
-	remote, err := s.Git.RemoteURL(path, "origin")
-	if err != nil {
-		return workspaceMigrationSnapshot{}, err
-	}
-	return workspaceMigrationSnapshot{Head: head, Branch: branch, Status: status.Stdout, CommonDirectory: common, RemoteURL: remote, Strategy: ws.Strategy}, nil
-}
-
-func (s *TaskRootMigrationService) verifyWorkspace(ws domain.ServiceWorkspace, path string, want workspaceMigrationSnapshot) error {
-	top, err := s.Git.TopLevel(path)
-	if err != nil || !samePath(top, path) {
-		return fmt.Errorf("迁移后的路径不是 Git 顶层目录：%s", path)
-	}
-	got, err := s.snapshotWorkspace(ws, path)
-	if err != nil {
-		return err
-	}
-	if got.Head != want.Head {
-		return fmt.Errorf("迁移后 HEAD 发生变化：%s", path)
-	}
-	if got.Branch != want.Branch {
-		return fmt.Errorf("迁移后分支发生变化：%s", path)
-	}
-	if got.Status != want.Status {
-		return fmt.Errorf("迁移后工作区文件状态发生变化：%s", path)
-	}
-	if ws.Strategy == domain.WorkspaceStandardWorktree && !samePath(got.CommonDirectory, want.CommonDirectory) {
-		return fmt.Errorf("迁移后 Worktree 仓库身份发生变化：%s", path)
-	}
-	if ws.Strategy == domain.WorkspaceIndependentClone && got.RemoteURL != want.RemoteURL {
-		return fmt.Errorf("迁移后独立克隆 origin 发生变化：%s", path)
-	}
 	return nil
 }
 
@@ -622,12 +499,8 @@ type migrationPlan struct {
 type migrationTask struct {
 	Source, Target string
 	Manifest       domain.TaskManifest
-	Workspaces     []domain.ServiceWorkspace
-	Relative       []string
-}
-type workspaceMigrationSnapshot struct {
-	Head, Branch, Status, CommonDirectory, RemoteURL string
-	Strategy                                         domain.WorkspaceStrategy
+
+	Relative []string
 }
 
 func requireMigrationOwnedTarget(target, id string) error {
@@ -637,20 +510,7 @@ func requireMigrationOwnedTarget(target, id string) error {
 	}
 	return nil
 }
-func changeCloneOwner(target, expected, next string) error {
-	marker := cloneMarker(target)
-	data, err := os.ReadFile(marker)
-	if err != nil {
-		return err
-	}
-	if string(data) != expected {
-		if string(data) == next {
-			return nil
-		}
-		return fmt.Errorf("独立克隆所有权标记与迁移记录不符：%s", target)
-	}
-	return writeAtomicDocument(marker, next)
-}
+
 func copyTree(source, target, skipName string) error {
 	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {

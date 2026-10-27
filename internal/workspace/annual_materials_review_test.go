@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"silverwing-go/internal/domain"
 )
 
 func TestAnnualGitMergeHistoryRejectsTransientForbiddenTrees(t *testing.T) {
@@ -408,41 +406,5 @@ func TestMaterialsCatalogMissingCreateFailurePreservesConcurrentFileAndAllowsRet
 				t.Fatal("creation left its staged document behind", staged, globErr)
 			}
 		})
-	}
-}
-
-func TestAnnualAgentRequiredContextFailureStillRollsBackModuleRemoval(t *testing.T) {
-	documents, manifest, config, task, _ := annualAgentFixture(t)
-	taskRoot := filepath.Dir(task)
-	config.TaskRoot = &taskRoot
-	service := NewTaskApplicationService(documents.Manifests, NewGitClient(nil, "git-must-not-run"), documents.Paths)
-	missing := filepath.Join(task, "missing-clone")
-	manifest.Services = []domain.ServiceWorkspace{{RepositoryID: "repo", GroupServiceID: "service", ModuleID: "module", WorktreePath: missing, RepositoryPath: missing, Branch: "feature/task", Strategy: domain.WorkspaceIndependentClone, Health: domain.WorkspaceReady, ModuleSource: domain.TaskModuleConfigured, DevelopmentTool: domain.DevelopmentToolIntelliJIdea, TagMode: domain.TagBuildMergeToTargetBranch}}
-	if err := service.Manifests.Save(task, manifest); err != nil {
-		t.Fatal(err)
-	}
-	if err := service.Documents.WriteTaskNotes(task, "keep rules"); err != nil {
-		t.Fatal(err)
-	}
-	contextPath := filepath.Join(task, AgentWorkspaceDir, AgentDirectoryName, AgentContextFileName)
-	if err := os.Remove(contextPath); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(contextPath, 0700); err != nil {
-		t.Fatal(err)
-	}
-	preview, err := service.ModuleRemoval.Inspect(config, task, missing)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := service.ModuleRemoval.Remove(context.Background(), config, task, preview, WorkspaceModuleRemovalConfirmation{Fingerprint: preview.Fingerprint}); err == nil {
-		t.Fatal("required TASK-CONTEXT I/O failure became an optional catalogue warning")
-	}
-	saved, err := service.Manifests.Load(task)
-	if err != nil || len(saved.Services) != 1 || service.Documents.MaterialsDirectoryWarnings() != nil {
-		t.Fatal("required document failure lost the old rollback/error contract", saved, err)
-	}
-	if notes, err := service.Documents.ReadTaskNotes(task); err != nil || notes != "keep rules" {
-		t.Fatal("failed removal changed user rules", notes, err)
 	}
 }

@@ -38,7 +38,7 @@ func (b *quietNamingFake) Dispatch(ctx context.Context, a application.Action) (a
 	if b.fail {
 		return application.ActionResult{}, errors.New("fixture background failure")
 	}
-	return application.ActionResult{Data: domain.RequirementAiNamingSuggestion{FolderName: "静默命名", BranchSuffix: "quiet_naming"}}, nil
+	return application.ActionResult{Data: domain.RequirementAiNamingSuggestion{FolderName: "静默命名"}}, nil
 }
 func TestRequirementNamingPreparationStaysSilentAndDoesNotRestartOnRender(t *testing.T) {
 	for _, fail := range []bool{false, true} {

@@ -16,7 +16,7 @@ type scopedOpenTool struct {
 }
 
 func (*scopedOpenTool) Descriptor() workspace.TaskWorkspaceToolDescriptor {
-	return workspace.TaskWorkspaceToolDescriptor{ID: "cursor", DisplayName: "Cursor"}
+	return workspace.TaskWorkspaceToolDescriptor{ID: "codex", DisplayName: "Codex"}
 }
 func (l *scopedOpenTool) Availability(context.Context) workspace.TaskWorkspaceToolAvailability {
 	if l.available != nil {
@@ -48,7 +48,7 @@ func TestTaskOpenToolsScopeRecheckedBeforeLaunch(t *testing.T) {
 			}
 			action := taskContextActionForTest(t, app, config, manifest, path, "task.tools-launch")
 			action.Path = path
-			action.Payload["toolIds"] = []string{"cursor"}
+			action.Payload["toolIds"] = []string{"codex"}
 			validation := app.validateDesktopTaskContext(action, config, manifest, path)
 			if mode == "disabled-before" {
 				if !errors.Is(validation, errDesktopTaskContextChanged) {
@@ -89,9 +89,9 @@ func TestTaskOpenToolsScopeRecheckedBeforeLaunch(t *testing.T) {
 				cancel()
 				ctx = canceled
 			}
-			updated, err := service.LaunchWorkspaceTools(ctx, path, manifest, []string{"cursor"})
+			_, err = service.LaunchWorkspaceTools(ctx, path, manifest, []string{"codex"})
 			if mode == "active" || mode == "archived" {
-				if err != nil || launcher.calls != 1 || launcher.directory != path || len(updated.Services) != 0 {
+				if err != nil || launcher.calls != 1 || launcher.directory != path {
 					t.Fatalf("launch: %v %d %q", err, launcher.calls, launcher.directory)
 				}
 			} else if err == nil || launcher.calls != 0 {

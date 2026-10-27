@@ -70,7 +70,7 @@ func cliAuthLinkRemaining(session map[string]any) string {
 // the configured executable. Command actions live in the card's menu.
 func (s *app) settingsCLICommandActions(c *ui.Context, p palette, tool, command string) {
 	switch tool {
-	case "git", "codex", "genbu", "meegle":
+	case "git", "codex", "meegle":
 	default:
 		return
 	}
@@ -273,8 +273,6 @@ func (s *app) cliSettingsTarget() (tool, title, pathKey string) {
 	switch s.settingsPage {
 	case "cli-meegle":
 		return "meegle", "Meegle CLI", "meegleExecutablePath"
-	case "cli-genbu":
-		return "genbu", "Genbu CLI", "genbuExecutablePath"
 	default:
 		return "", "", ""
 	}

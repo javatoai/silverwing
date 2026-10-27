@@ -57,14 +57,6 @@ func (s *Service) Execute(ctx context.Context, kind string, payload map[string]a
 		return s.executeCLI(ctx, kind, payload)
 	case "cli.auth.start", "cli.auth.session", "cli.auth.poll", "cli.auth.cancel", "cli.auth.logout":
 		return s.executeCLIAuth(ctx, kind, payload)
-	case "git.environment", "git.environment/snapshot":
-		return s.gitEnvironment(ctx)
-	case "development-tools/snapshot":
-		return s.developmentToolsSnapshot(ctx, true)
-	case "development-tools/detect":
-		return s.developmentToolsSnapshot(ctx, true)
-	case "development-tools/paths/existing":
-		return s.existingDevelopmentToolPaths(payload)
 	case "terminal.resolve":
 		return s.resolveTerminal(payload)
 	case "proxy.test":
@@ -80,7 +72,7 @@ func (s *Service) Execute(ctx context.Context, kind string, payload map[string]a
 	case "update.check":
 		return map[string]any{
 			"currentVersion": domain.CurrentProductVersion,
-			"releasesUrl":    "https://github.com/javatoai/silverwing/releases",
+			"releasesUrl":    "https://github.com/javatoai/silverwing/releases?q=qa-v&expanded=true",
 			"automatic":      false,
 		}, nil
 	default:

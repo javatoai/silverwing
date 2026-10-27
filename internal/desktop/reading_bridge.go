@@ -1099,25 +1099,19 @@ func readingViewForTab(tab int) string {
 		return "REQUIREMENT"
 	case 3:
 		return "NOTES"
-	case taskTagTab:
-		return "TAG"
 	default:
-		return "DETAIL"
+		return "MATERIALS"
 	}
 }
 
 func readingTabForView(view string) (int, bool) {
 	switch view {
-	case "DETAIL":
-		return 0, true
 	case "MATERIALS":
 		return 1, true
 	case "REQUIREMENT":
 		return 2, true
 	case "NOTES":
 		return 3, true
-	case "TAG":
-		return taskTagTab, true
 	default:
 		return 0, false
 	}

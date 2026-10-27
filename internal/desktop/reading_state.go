@@ -312,7 +312,7 @@ type ReadingSnapshot struct {
 }
 
 func EmptyReadingSnapshot() ReadingSnapshot {
-	return ReadingSnapshot{Schema: 1, View: "DETAIL", Materials: []MaterialsSnapshot{}, Requirements: []RequirementReadingSnapshot{}}
+	return ReadingSnapshot{Schema: 1, View: "MATERIALS", Materials: []MaterialsSnapshot{}, Requirements: []RequirementReadingSnapshot{}}
 }
 
 func (s *ReadingSnapshot) UnmarshalJSON(data []byte) error {
@@ -339,7 +339,7 @@ func (s ReadingSnapshot) Bounded() ReadingSnapshot {
 		s.LastTaskPath = ""
 	}
 	if !validTaskContentView(s.View) {
-		s.View = "DETAIL"
+		s.View = "MATERIALS"
 	}
 	activeKey := ""
 	if s.LastTaskPath != "" {
@@ -867,7 +867,7 @@ func hasWindowsDrivePrefix(value string) bool {
 
 func validTaskContentView(value string) bool {
 	switch value {
-	case "DETAIL", "MATERIALS", "REQUIREMENT", "NOTES", "TAG":
+	case "MATERIALS", "REQUIREMENT", "NOTES":
 		return true
 	default:
 		return false

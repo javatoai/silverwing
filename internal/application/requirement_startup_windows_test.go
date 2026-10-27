@@ -36,7 +36,8 @@ throw 'unexpected command'
 		t.Fatal(err)
 	}
 	manifest := domain.DefaultTaskManifest()
-	manifest.FolderName, manifest.TaskDirectoryName, manifest.FeatureBranch = "task", "task", "feature/test"
+	manifest.TaskDirectoryName, manifest.FolderName = "task", "task"
+
 	manifest.CreatedAt, manifest.UpdatedAt = "2026-10-15", "2026-10-15"
 	manifest.RequirementLink = "https://project.feishu.cn/fixture/technical/detail/101"
 	if err := storage.NewManifestStore().Save(filepath.Join(paths.Tasks, "task"), manifest); err != nil {

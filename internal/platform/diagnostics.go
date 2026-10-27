@@ -315,25 +315,7 @@ func (s *Service) diagnosticCommand(ctx context.Context, cfg domain.AppConfig, t
 
 func (s *Service) diagnosticRepositorySummary(ctx context.Context, cfg domain.AppConfig) (string, error) {
 	var out strings.Builder
-	for _, repository := range cfg.Repositories {
-		fmt.Fprintf(&out, "[%s] %s\n", repository.ID, repository.Name)
-		fmt.Fprintf(&out, "root=%s\n", redactHome(repository.RootPath))
-		result, err := s.runTool(ctx, cfg, domain.ProxyTargetGit, s.gitExecutable(ctx, cfg), []string{"--no-optional-locks", "-C", repository.RootPath, "worktree", "list", "--porcelain"}, "", 10*time.Second)
-		if process.IsCleanupFailure(err) || ctx.Err() != nil {
-			if err != nil {
-				return "", err
-			}
-			return "", ctx.Err()
-		}
-		if err != nil {
-			fmt.Fprintf(&out, "worktree-error=%s\n", sanitizeDiagnosticText(redactProxy(cfg, err.Error())))
-		} else {
-			for _, record := range parseWorktreeList(result.Stdout) {
-				fmt.Fprintf(&out, "worktree=%s branch=%s locked=%t detached=%t\n", redactHome(record["path"]), record["branch"], record["locked"] == "true", record["detached"] == "true")
-			}
-		}
-		out.WriteByte('\n')
-	}
+
 	return out.String(), nil
 }
 
@@ -365,18 +347,7 @@ func sanitizedConfig(cfg domain.AppConfig) (map[string]any, error) {
 			}
 		}
 	}
-	if tools, ok := result["developmentTools"].([]any); ok {
-		for _, item := range tools {
-			if tool, ok := item.(map[string]any); ok {
-				if typ, ok := tool["type"].(string); ok {
-					tool["path"] = "<configured:" + typ + ">"
-				} else {
-					tool["path"] = "<configured>"
-				}
-			}
-		}
-	}
-	for _, key := range []string{"terminalExecutable", "meegleExecutablePath", "codexExecutablePath", "gitExecutablePath", "genbuExecutablePath"} {
+	for _, key := range []string{"terminalExecutable", "meegleExecutablePath", "codexExecutablePath", "gitExecutablePath"} {
 		if value, ok := result[key].(string); ok && value != "" {
 			result[key] = "<configured>"
 		}
@@ -470,33 +441,4 @@ func fileSize(path string) int64 {
 		return 0
 	}
 	return info.Size()
-}
-func parseWorktreeList(output string) []map[string]string {
-	result := []map[string]string{}
-	current := map[string]string{}
-	flush := func() {
-		if current["path"] != "" {
-			copy := map[string]string{}
-			for k, v := range current {
-				copy[k] = v
-			}
-			result = append(result, copy)
-		}
-		current = map[string]string{}
-	}
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			flush()
-			continue
-		}
-		key, value, ok := strings.Cut(line, " ")
-		if !ok {
-			current[key] = "true"
-		} else {
-			current[key] = strings.TrimSpace(value)
-		}
-	}
-	flush()
-	return result
 }

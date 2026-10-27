@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"silverwing-go/internal/application"
-	"silverwing-go/internal/workspace"
 )
 
 func TestTaskMaterialsOpenScopesPreserveSelectionAndRejectStaleResults(t *testing.T) {
@@ -122,7 +121,7 @@ func taskMenuSnapshotForTest(s *app) application.Snapshot {
 	snapshot := application.Snapshot{Home: s.snapshot.Home, ConfigJSON: s.configJSON, Groups: s.snapshot.Groups}
 	for _, item := range s.tasks {
 		snapshot.Tasks = append(snapshot.Tasks, application.Task{
-			ID: item.id, Title: item.title, Path: item.path, CreatedAt: item.createdAt, Branch: item.branch,
+			ID: item.id, Title: item.title, Path: item.path, CreatedAt: item.createdAt,
 			MaterialsPath: item.materialsPath, RequirementURL: item.requirementURL, RequirementID: item.requirementID,
 			MaterialsStatus: item.materialsStatus, MaterialsFailureReason: item.materialsFailureReason,
 			GroupID: item.groupID, Archived: item.archived,
@@ -196,54 +195,4 @@ func TestScopedMaterialsOpenRechecksBeforeBackendDispatch(t *testing.T) {
 	default:
 	}
 	s.completeSystemOpenJob(request)
-}
-
-func TestContextBatchScopeAndWorkspaceSnapshotProtection(t *testing.T) {
-	for _, change := range []string{"selection", "home", "root", "config", "created", "path", "removed", "archived", "workspace", "base-ref"} {
-		t.Run(change, func(t *testing.T) {
-			s, _ := taskMenuFixture(t)
-			s.openWorkspaceMergeBatch(s.tasks[1])
-			state := s.workspaceMergeBatch
-			if state == nil || !s.workspaceMergeBatchStateCurrent(state) {
-				t.Fatal("non-current task did not open a valid batch")
-			}
-			switch change {
-			case "selection":
-				s.selected, s.tab = 2, 3
-			case "home":
-				s.snapshot.Home += "-changed"
-			case "root":
-				s.configJSON = `{"taskRoot":"D:/changed"}`
-			case "config":
-				s.configJSON = `{}`
-			case "created":
-				s.tasks[1].createdAt += "-replacement"
-			case "path":
-				s.tasks[1].path += "-changed"
-			case "removed":
-				s.tasks = append(s.tasks[:1], s.tasks[2:]...)
-			case "archived":
-				s.tasks[1].archived = true
-			case "workspace":
-				s.tasks[1].workspaces[0].Record.Branch = "feature/changed"
-			case "base-ref":
-				*s.tasks[1].workspaces[0].Record.BaseRef = "origin/changed"
-			}
-			valid := change == "selection"
-			if s.workspaceMergeBatchStateCurrent(state) != valid {
-				t.Fatal("batch followed selection or retained a changed confirmation snapshot")
-			}
-			state.Loading, state.Token = true, 19
-			action := application.Action{Kind: "workspace.merge-batch", TaskID: state.TaskID, Path: state.TaskPath,
-				Payload: map[string]any{"batchToken": state.Token}}
-			confirmed := state.Items[0].Workspace
-			s.applyWorkspaceMergeBatchResult(action, application.ActionResult{Data: workspace.WorkspaceMainBranchMergeBatchResult{
-				Items: []workspace.WorkspaceMainBranchMergeResult{{WorkspacePath: confirmed.Path, ServiceName: confirmed.Record.ServiceName,
-					ModuleName: confirmed.Record.ModuleName, TargetBranch: confirmed.Record.Branch, SourceRef: state.Items[0].SourceRef}},
-			}})
-			if (state.Results != nil) != valid {
-				t.Fatal("a completion followed current selection or retained a stale merge result")
-			}
-		})
-	}
 }

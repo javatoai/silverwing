@@ -40,10 +40,6 @@ func knownConfigJSON(data []byte, t reflect.Type) ([]byte, error) {
 		// These storage-owned shapes have no domain defaulting unmarshaler.
 		defaults := map[string]json.RawMessage{}
 		switch t {
-		case reflect.TypeOf(groupLayoutShard{}):
-			defaults["tagEnabled"] = json.RawMessage(`true`)
-		case reflect.TypeOf(groupServicesShard{}):
-			defaults["services"] = json.RawMessage(`[]`)
 		case reflect.TypeOf(domain.MaterialsGitSyncSettings{}):
 			raw, _ := json.Marshal(domain.DefaultMaterialsGitSyncSettings())
 			_ = json.Unmarshal(raw, &defaults)
@@ -245,15 +241,8 @@ func matchConfigRows(before, after []json.RawMessage, t reflect.Type, path strin
 
 func configRowIdentity(t reflect.Type) string {
 	switch t {
-	case reflect.TypeOf(groupLayoutShard{}), reflect.TypeOf(domain.RepositoryConfig{}),
-		reflect.TypeOf(domain.GroupServiceConfig{}), reflect.TypeOf(domain.ServiceModuleConfig{}),
-		reflect.TypeOf(domain.WorkspaceCommandConfig{}), reflect.TypeOf(domain.SkillSource{}),
-		reflect.TypeOf(domain.CodexPluginMarketplaceSource{}):
+	case reflect.TypeOf(groupLayoutShard{}), reflect.TypeOf(domain.SkillSource{}), reflect.TypeOf(domain.CodexPluginMarketplaceSource{}):
 		return "id"
-	case reflect.TypeOf(groupServicesShard{}):
-		return "groupId"
-	case reflect.TypeOf(domain.DevelopmentToolConfig{}):
-		return "type"
 	case reflect.TypeOf(domain.MeegleProjectConfig{}):
 		return "project_key"
 	}

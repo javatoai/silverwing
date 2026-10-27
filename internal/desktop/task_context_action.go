@@ -22,7 +22,7 @@ func taskMenuContextAction(action application.Action, scope taskMenuScope) appli
 	payload[applicationTaskContextPayloadKey] = map[string]any{
 		"taskId": scope.taskID, "taskPath": scope.taskPath, "taskCreatedAt": scope.taskCreatedAt,
 		"home": scope.home, "taskRoot": scope.taskRoot, "page": scope.page, "archived": scope.archived,
-		"configFingerprint": taskContextConfigFingerprint(scope.configJSON), "groupId": scope.groupID, "branch": scope.branch,
+		"configFingerprint": taskContextConfigFingerprint(scope.configJSON), "groupId": scope.groupID,
 		"materialsPath": scope.materialsPath, "materialsStatus": scope.materialsStatus,
 		"materialsFingerprint": taskContextMaterialsFingerprint(scope.requirementURL, scope.requirementID,
 			scope.materialsPath, scope.materialsStatus, scope.materialsFailureReason),
@@ -94,7 +94,7 @@ func (s *app) taskLifecycleResultBelongsToContext(action application.Action, exp
 			continue
 		}
 		if action.Kind == "task.delete" || refreshed.path != expected.taskPath || refreshed.createdAt != expected.taskCreatedAt ||
-			refreshed.groupID != expected.groupID || refreshed.branch != expected.branch ||
+			refreshed.groupID != expected.groupID ||
 			taskContextMaterialsFingerprint(refreshed.requirementURL, refreshed.requirementID, refreshed.materialsPath,
 				refreshed.materialsStatus, refreshed.materialsFailureReason) != taskContextMaterialsFingerprint(expected.requirementURL,
 				expected.requirementID, expected.materialsPath, expected.materialsStatus, expected.materialsFailureReason) ||

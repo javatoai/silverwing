@@ -2,7 +2,6 @@ package desktop
 
 import (
 	"github.com/egoist/mygo/ui"
-	"strings"
 )
 
 func (s *app) settingsConfigPathRow(c *ui.Context, p palette, key, title, placeholder string, directory bool) {
@@ -224,33 +223,4 @@ func (s *app) settingsConfigSwitchInput(key string, current bool) (*bool, bool) 
 
 func (s *app) localSettingBool(key string, initial bool) *bool {
 	return s.settingsBoolInput("local:"+key, initial)
-}
-
-func (s *app) developmentToolPath(kind string) string {
-	for _, item := range mapsFromArray(s.configArray("developmentTools")) {
-		if strings.EqualFold(mapString(item, "type"), kind) {
-			return mapString(item, "path")
-		}
-	}
-	return ""
-}
-
-func (s *app) saveDevelopmentToolPath(kind, value string) {
-	items := mapsFromArray(s.configArray("developmentTools"))
-	found := false
-	for _, item := range items {
-		if strings.EqualFold(mapString(item, "type"), kind) {
-			found = true
-			if strings.TrimSpace(value) == "" {
-				items = removeMapValue(items, item)
-			} else {
-				item["path"] = strings.TrimSpace(value)
-			}
-			break
-		}
-	}
-	if !found && strings.TrimSpace(value) != "" {
-		items = append(items, map[string]any{"type": kind, "path": strings.TrimSpace(value)})
-	}
-	s.saveConfigField("developmentTools", items)
 }

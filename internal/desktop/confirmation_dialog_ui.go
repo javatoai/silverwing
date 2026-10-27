@@ -70,7 +70,6 @@ func (s *app) confirmationOwnerKey() string {
 		s.settingsPage,
 		s.settingsTab,
 		s.settingsGroupID,
-		fmt.Sprintf("%p", s.serviceEditor),
 	}, "\x00")
 }
 

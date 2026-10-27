@@ -1,13 +1,11 @@
 package desktop
 
 import (
-	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 
 	"silverwing-go/internal/application"
-	"silverwing-go/internal/domain"
 )
 
 func TestConfigReadCacheInvalidationAndErrorIsolation(t *testing.T) {
@@ -102,37 +100,6 @@ func TestConfigurationReadCopiesProtectSavedValues(t *testing.T) {
 	}
 }
 
-func TestTagConfigurationIdentityKeepsScopeFresh(t *testing.T) {
-	s := configurationReadFixture()
-	first := s.tagJobScope()
-	s.tasks[0].path, s.tasks[0].createdAt = "changed-path", "new-incarnation"
-	s.snapshot.Home = "changed-home"
-	s.configJSON = `{"taskRoot":"D:/new-root"}`
-	changed := s.tagJobScope()
-	if changed.ConfigIdentity != first.ConfigIdentity || changed.TaskPath != "changed-path" ||
-		changed.TaskCreatedAt != "new-incarnation" || changed.Home != "changed-home" || changed.TaskRoot != "D:/new-root" {
-		t.Fatal("configuration identity caching retained task or application scope")
-	}
-	s.snapshot.ConfigJSON = `{"one":1,"two":2}`
-	identity := s.tagJobScope().ConfigIdentity
-	s.snapshot.ConfigJSON = ` { "two": 2, "one": 1 } `
-	if s.tagJobScope().ConfigIdentity != identity {
-		t.Fatal("equivalent JSON changed the canonical configuration identity")
-	}
-	s.snapshot.ConfigJSON = `{"one":2,"two":2}`
-	if s.tagJobScope().ConfigIdentity == identity {
-		t.Fatal("changed configuration retained its earlier identity")
-	}
-	s.snapshot.ConfigJSON = "invalid"
-	if s.tagJobScope().ConfigIdentity != "" {
-		t.Fatal("invalid configuration retained its earlier identity")
-	}
-	s.snapshot.ConfigJSON = `{"one":1,"two":2}`
-	if s.tagJobScope().ConfigIdentity != identity {
-		t.Fatal("configuration identity did not recover after an invalid source")
-	}
-}
-
 func TestConfigurationReadsAvoidRepeatedFullDecode(t *testing.T) {
 	s := configurationReadFixture()
 	read := func() {
@@ -141,84 +108,10 @@ func TestConfigurationReadsAvoidRepeatedFullDecode(t *testing.T) {
 		_ = s.configInt("count", 0)
 		_ = s.configNestedBool("nested", "flag", false)
 		_ = s.configArray("items")
-		_ = s.tagJobScope()
 	}
 	read()
 	if allocations := testing.AllocsPerRun(20, read); allocations > 32 {
 		t.Fatalf("stable configuration reads allocate %.0f objects; repeated full JSON decoding must be avoided", allocations)
-	}
-}
-
-func TestTypedConfigurationReadsKeepSourcesAndDraftsIndependent(t *testing.T) {
-	s := taskNavigationFixture()
-	config := domain.DefaultAppConfig()
-	config.Groups = []domain.GroupConfig{{ID: "backend", Services: []domain.GroupServiceConfig{{
-		ID: "service", DisplayName: "original service", Enabled: true, DevelopmentTool: domain.DevelopmentToolIntelliJIdea,
-		Bootstrap: domain.BootstrapConfig{CopyRules: []domain.BootstrapCopyRule{}, Commands: []domain.BootstrapCommand{}},
-		Modules: []domain.ServiceModuleConfig{{ID: "module", Strategy: domain.WorkspaceStandardWorktree, TagMode: domain.TagBuildMergeToTargetBranch, CustomCommands: []domain.WorkspaceCommandConfig{{
-			ID: "command", Enabled: true, Arguments: []string{"saved"},
-		}}}},
-	}}}}
-	encode := func() string {
-		encoded, err := json.Marshal(config)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var validated domain.AppConfig
-		if err := json.Unmarshal(encoded, &validated); err != nil {
-			t.Fatalf("invalid configuration fixture: %v", err)
-		}
-		return string(encoded)
-	}
-	s.configJSON = encode()
-	s.snapshot.ConfigJSON = s.configJSON
-	w := application.Workspace{ServiceID: "service", ModuleID: "module", State: "READY"}
-	commands := s.workspaceCommandsFor(s.tasks[0], w)
-	if len(commands) != 1 || commands[0].Arguments[0] != "saved" {
-		t.Fatal("typed configuration did not expose the saved command")
-	}
-	commands[0].Arguments[0] = "unsaved"
-	if s.workspaceCommandsFor(s.tasks[0], w)[0].Arguments[0] != "saved" {
-		t.Fatal("command arguments mutated the typed configuration cache")
-	}
-	group, err := s.taskAppendGroup(s.tasks[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	group.Services[0].DisplayName = "unsaved service"
-	if s.taskAddableServices(s.tasks[0])[0].Name != "original service" {
-		t.Fatal("task append draft mutated the snapshot configuration cache")
-	}
-	read := func() {
-		_ = s.workspaceCommandsFor(s.tasks[0], w)
-		_, _ = s.workspaceMergeConfig()
-		_ = s.taskAddableServices(s.tasks[0])
-	}
-	read()
-	if allocations := testing.AllocsPerRun(20, read); allocations > 32 {
-		t.Fatalf("stable workspace rendering still decodes full typed configurations: %.0f allocations", allocations)
-	}
-	config.Groups[0].Services[0].DisplayName = "changed service"
-	config.Groups[0].Services[0].Modules[0].CustomCommands[0].Arguments[0] = "changed"
-	s.configJSON = encode()
-	if s.workspaceCommandsFor(s.tasks[0], w)[0].Arguments[0] != "changed" || s.taskAddableServices(s.tasks[0])[0].Name != "original service" {
-		t.Fatal("current and snapshot configuration sources were conflated")
-	}
-	s.snapshot.ConfigJSON = s.configJSON
-	if s.taskAddableServices(s.tasks[0])[0].Name != "changed service" {
-		t.Fatal("snapshot configuration change retained an earlier group")
-	}
-	valid := s.configJSON
-	s.configJSON, s.snapshot.ConfigJSON = "invalid", "invalid"
-	if len(s.workspaceCommandsFor(s.tasks[0], w)) != 0 || len(s.taskAddableServices(s.tasks[0])) != 0 {
-		t.Fatal("invalid typed configuration exposed earlier values")
-	}
-	if _, ok := s.workspaceMergeConfig(); ok {
-		t.Fatal("invalid configuration enabled merge actions")
-	}
-	s.configJSON, s.snapshot.ConfigJSON = valid, valid
-	if len(s.workspaceCommandsFor(s.tasks[0], w)) != 1 || len(s.taskAddableServices(s.tasks[0])) != 1 {
-		t.Fatal("typed configuration did not recover after a corrected source")
 	}
 }
 
@@ -230,7 +123,6 @@ func BenchmarkDesktopConfigurationReads(b *testing.B) {
 		_ = s.configInt("count", 0)
 		_ = s.configNestedBool("nested", "flag", false)
 		_ = s.configArray("items")
-		_ = s.tagJobScope()
 	}
 	b.ReportMetric(float64(len(s.configJSON)), "config-bytes")
 	b.ReportAllocs()

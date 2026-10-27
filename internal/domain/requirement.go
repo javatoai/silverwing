@@ -88,63 +88,18 @@ type RequirementDraftState struct {
 	RequirementLink  string  `json:"requirementLink"`
 	TaskName         string  `json:"taskName"`
 	RequirementTitle *string `json:"requirementTitle"`
-	Branch           string  `json:"branch"`
 	NameEdited       bool    `json:"nameEdited"`
-	BranchEdited     bool    `json:"branchEdited"`
-	AIBranchSuffix   *string `json:"aiBranchSuffix"`
-	MetadataLoading  bool    `json:"metadataLoading"`
-	MetadataHint     *string `json:"metadataHint"`
+
+	MetadataLoading bool    `json:"metadataLoading"`
+	MetadataHint    *string `json:"metadataHint"`
 }
 
-func (s RequirementDraftState) ChangeRequirement(value, branchPrefix string, title *string) RequirementDraftState {
-	resolved := ResolveBranchPrefix(branchPrefix, value)
-	branch := s.Branch
-	if !s.BranchEdited {
-		if resolved != nil {
-			branch = *resolved
-		} else {
-			branch = branchPrefix
-		}
-	}
-	var cleanTitle *string
+func (s RequirementDraftState) ChangeRequirement(value, _ string, title *string) RequirementDraftState {
+	var clean *string
 	if title != nil && strings.TrimSpace(*title) != "" {
-		cleanTitle = title
+		clean = title
 	}
-	var hint *string
-	if ContainsUnresolvedBranchPlaceholder(branchPrefix) && resolved == nil {
-		message := "未从需求编号或链接中解析到编号"
-		hint = &message
-	}
-	return RequirementDraftState{RequirementLink: value, TaskName: s.TaskName, RequirementTitle: cleanTitle, Branch: branch,
-		NameEdited: s.NameEdited, BranchEdited: s.BranchEdited, MetadataLoading: ParseFeishuWorkItemLink(value) != nil, MetadataHint: hint}
-}
-
-func (s RequirementDraftState) ChangeGroup(branchPrefix string) RequirementDraftState {
-	branch, hint := s.Branch, s.MetadataHint
-	if !s.BranchEdited {
-		resolved := ResolveBranchPrefix(branchPrefix, s.RequirementLink)
-		if resolved != nil {
-			branch = *resolved
-		} else {
-			branch = branchPrefix
-		}
-		if s.AIBranchSuffix != nil {
-			base := branchPrefix
-			if resolved != nil {
-				base = *resolved
-			}
-			branch = ComposeAIRequirementBranch(base, *s.AIBranchSuffix)
-		}
-		if ContainsUnresolvedBranchPlaceholder(branchPrefix) && resolved == nil {
-			message := "未从需求编号或链接中解析到编号"
-			hint = &message
-		} else {
-			hint = nil
-		}
-	}
-	return RequirementDraftState{RequirementLink: s.RequirementLink, TaskName: s.TaskName, RequirementTitle: s.RequirementTitle,
-		Branch: branch, NameEdited: s.NameEdited, BranchEdited: s.BranchEdited, AIBranchSuffix: s.AIBranchSuffix,
-		MetadataLoading: s.MetadataLoading, MetadataHint: hint}
+	return RequirementDraftState{RequirementLink: value, TaskName: s.TaskName, RequirementTitle: clean, NameEdited: s.NameEdited, MetadataLoading: ParseFeishuWorkItemLink(value) != nil}
 }
 
 func (s RequirementDraftState) EditName(value string) RequirementDraftState {
@@ -152,12 +107,7 @@ func (s RequirementDraftState) EditName(value string) RequirementDraftState {
 	return s
 }
 
-func (s RequirementDraftState) EditBranch(value string) RequirementDraftState {
-	s.Branch, s.BranchEdited, s.AIBranchSuffix = value, true, nil
-	return s
-}
-
-func (s RequirementDraftState) ApplyAINaming(requestedLink string, suggestion RequirementAiNamingSuggestion, branchPrefix string) (RequirementDraftState, error) {
+func (s RequirementDraftState) ApplyAINaming(requestedLink string, suggestion RequirementAiNamingSuggestion, _ string) (RequirementDraftState, error) {
 	if requestedLink != s.RequirementLink {
 		return s, nil
 	}
@@ -165,17 +115,8 @@ func (s RequirementDraftState) ApplyAINaming(requestedLink string, suggestion Re
 	if err != nil {
 		return s, err
 	}
-	resolved := ResolveBranchPrefix(branchPrefix, s.RequirementLink)
-	base := branchPrefix
-	if resolved != nil {
-		base = *resolved
-	}
 	if !s.NameEdited {
 		s.TaskName = validated.FolderName
-	}
-	if !s.BranchEdited {
-		s.Branch = ComposeAIRequirementBranch(base, validated.BranchSuffix)
-		s.AIBranchSuffix = &validated.BranchSuffix
 	}
 	return s, nil
 }

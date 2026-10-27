@@ -15,13 +15,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defaultHome := filepath.Join(userHome, "silverwing")
-	home := flag.String("home", defaultHome, "SilverWing data directory")
-	page := flag.String("page", "tasks", "initial page: tasks, archive, requirements, services, repositories, tools, skills, or settings")
+	defaultHome := filepath.Join(userHome, "silverwing-qa")
+	home := flag.String("home", defaultHome, "silverwing-qa data directory")
+	page := flag.String("page", "tasks", "initial page: tasks, archive, requirements, tools, skills, or settings")
 	dark := flag.Bool("dark", false, "start with the dark theme")
 	width := flag.Int("width", 0, "initial window width; zero restores the saved size")
 	height := flag.Int("height", 0, "initial window height; zero restores the saved size")
-	tab := flag.Int("tab", 0, "initial task tab: 0 detail, 1 materials, 2 requirement, 3 notes, 4 Tag")
+	tab := flag.Int("tab", 1, "initial task tab: 1 materials, 2 requirement, 3 notes")
 	capture := flag.String("capture", "", "write a PNG capture of the native window")
 	captureOnly := flag.Bool("capture-only", false, "exit after writing the requested capture")
 	flag.Parse()

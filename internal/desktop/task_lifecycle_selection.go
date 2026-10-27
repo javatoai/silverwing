@@ -63,13 +63,8 @@ func (s *app) prepareTaskLifecycleSelection(previous, next task) bool {
 	s.syncMarkdownEditor()
 	s.beforeReadingTaskSelection()
 	s.deactivateInstructionEditor()
-	s.dismissWorkspaceHistory()
-	s.clearWorkspaceCommandSelection()
-	s.clearWorkspaceMergeSelection()
-	s.cancelWorkspaceGitStatus()
-	s.cancelWorkspaceGitFlow()
+
 	s.cancelMaterialsSearch()
-	s.closeTaskDeleteDialog()
 	s.resetReadingMaterialsForTaskRestore()
 	return true
 }
@@ -77,7 +72,7 @@ func (s *app) prepareTaskLifecycleSelection(previous, next task) bool {
 // Call only after the new snapshot's task/configuration identities are in place.
 func (s *app) finishTaskLifecycleSelection() {
 	s.afterReadingTaskSelection()
-	s.requestWorkspaceGitStatus(false)
+
 }
 
 // Restoration refreshes the current category without opening the restored task.

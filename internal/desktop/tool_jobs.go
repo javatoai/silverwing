@@ -110,11 +110,11 @@ func (s *app) dispatchDeveloperToolJob(action application.Action) bool {
 	jobs := s.ensureDeveloperToolJobs()
 	tab := developerToolTabForAction(action.Kind)
 	if state == nil || s.page != "tools" || state.activeTab != tab || !s.developerToolTabVisible(tab) {
-		s.applyDeveloperToolJobFailureToState(state, action, errors.New("请先打开对应的研发工具页后重试。"))
+		s.applyDeveloperToolJobFailureToState(state, action, errors.New("请先打开对应的实用工具页后重试。"))
 		return true
 	}
 	if s.backend == nil || (s.win != nil && s.win.IsDestroyed()) {
-		s.applyDeveloperToolJobFailureToState(state, action, errors.New("研发工具后端或窗口不可用。"))
+		s.applyDeveloperToolJobFailureToState(state, action, errors.New("实用工具后端或窗口不可用。"))
 		return true
 	}
 	if action.Kind == "tool.port-stop" {
@@ -145,7 +145,7 @@ func (s *app) dispatchDeveloperToolJob(action application.Action) bool {
 	closed := jobs.closed
 	jobs.mu.Unlock()
 	if closed {
-		s.applyDeveloperToolJobFailureToState(state, action, errors.New("研发工具已进入退出清理阶段。"))
+		s.applyDeveloperToolJobFailureToState(state, action, errors.New("实用工具已进入退出清理阶段。"))
 		return true
 	}
 
@@ -172,7 +172,7 @@ func (s *app) dispatchDeveloperToolJob(action application.Action) bool {
 		jobs.mu.Unlock()
 		cancel()
 		delete(jobs.current, key)
-		s.applyDeveloperToolJobFailureToState(state, action, errors.New("研发工具已进入退出清理阶段。"))
+		s.applyDeveloperToolJobFailureToState(state, action, errors.New("实用工具已进入退出清理阶段。"))
 		return true
 	}
 	jobs.running[request] = struct{}{}
@@ -565,7 +565,7 @@ func (s *app) closeDeveloperToolJobs(ctx context.Context) error {
 		select {
 		case <-request.done:
 		case <-ctx.Done():
-			return fmt.Errorf("等待研发工具请求清理：%w", ctx.Err())
+			return fmt.Errorf("等待实用工具请求清理：%w", ctx.Err())
 		}
 	}
 	return nil

@@ -1,10 +1,11 @@
-name: Native builds and releases
+name: silverwing-qa builds and releases
 
 on:
   push:
-    branches: ['**']
-    tags: ['v*']
+    branches: ['release/snb-qa']
+    tags: ['qa-v*']
   pull_request:
+    branches: [release/snb-qa]
   workflow_dispatch:
 
 permissions:
@@ -44,8 +45,8 @@ jobs:
           version = re.search(r'CurrentProductVersion\s*=\s*"(\d+\.\d+\.\d+)"', source).group(1)
           ref = os.environ['GITHUB_REF']
           release = os.environ['GITHUB_EVENT_NAME'] == 'push' and ref.startswith('refs/tags/')
-          if release and ref != 'refs/tags/v' + version:
-              raise SystemExit(f'Release tag must be v{version}, got {ref}')
+          if release and ref != 'refs/tags/qa-v' + version:
+              raise SystemExit(f'Release tag must be qa-v{version}, got {ref}')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(f'release={str(release).lower()}\n')
           PY
@@ -133,7 +134,7 @@ jobs:
       - name: Upload platform packages
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: silverwing-${{ matrix.platform }}-${{ github.run_number }}-${{ github.run_attempt }}
+          name: silverwing-qa-${{ matrix.platform }}-${{ github.run_number }}-${{ github.run_attempt }}
           path: dist/${{ matrix.platform }}/
           if-no-files-found: error
           compression-level: 0
@@ -155,7 +156,7 @@ jobs:
       - name: Collect this run's successful platform packages
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: silverwing-*-${{ github.run_number }}-${{ github.run_attempt }}
+          pattern: silverwing-qa-*-${{ github.run_number }}-${{ github.run_attempt }}
           path: dist/release
           merge-multiple: true
       - name: Verify all assets, upload draft, then publish

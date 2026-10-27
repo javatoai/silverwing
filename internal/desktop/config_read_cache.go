@@ -3,7 +3,6 @@ package desktop
 import (
 	"encoding/json"
 
-	"silverwing-go/internal/application"
 	"silverwing-go/internal/domain"
 )
 
@@ -70,13 +69,6 @@ func (s *app) readConfigArray(key string) []any {
 	}
 	values, _ := config[key].([]any)
 	return values
-}
-
-func (s *app) tagConfigurationIdentity() string {
-	identity, _ := s.configReads.tagIdentity.read(s.snapshot.ConfigJSON, func(source string) (string, error) {
-		return application.TagJobConfigIdentity(source), nil
-	})
-	return identity
 }
 
 // Array callers also build editable drafts. Copy just the requested subtree,

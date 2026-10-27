@@ -34,7 +34,7 @@ func taskContextScopeFixture(t *testing.T) (*App, domain.AppConfig, domain.TaskM
 	manifest := domain.DefaultTaskManifest()
 	manifest.TaskDirectoryName = "task"
 	manifest.FolderName = "Task"
-	manifest.FeatureBranch = "feature/task"
+
 	manifest.CreatedAt = "2026-10-19T10:00:00Z"
 	manifest.RequirementLink = "https://project.feishu.cn/demo/userstory/detail/123"
 	manifest.RequirementMaterials = domain.RequirementMaterialsDirectory{
@@ -90,7 +90,7 @@ func taskContextActionForTest(t *testing.T, app *App, config domain.AppConfig, m
 		"taskId": manifest.TaskDirectoryName, "taskPath": path, "taskCreatedAt": manifest.CreatedAt,
 		"home": app.Paths.Home, "taskRoot": *config.TaskRoot, "page": page,
 		"archived": archived, "configFingerprint": taskContextConfigFingerprint(string(encoded)),
-		"groupId": manifest.GroupID, "branch": manifest.FeatureBranch,
+		"groupId":       manifest.GroupID,
 		"materialsPath": materialsPath, "materialsStatus": materialsStatus,
 		"materialsFingerprint": taskMaterialsFingerprint(manifest),
 	}

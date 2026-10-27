@@ -83,18 +83,9 @@ type migrationJournal struct {
 	Tasks           []migrationJournalTask        `json:"tasks"`
 }
 type migrationJournalTask struct {
-	SourceDirectory  string                      `json:"sourceDirectory"`
-	TargetDirectory  string                      `json:"targetDirectory"`
-	OriginalManifest domain.TaskManifest         `json:"originalManifest"`
-	Workspaces       []migrationJournalWorkspace `json:"workspaces"`
-}
-type migrationJournalWorkspace struct {
-	Strategy       domain.WorkspaceStrategy `json:"strategy"`
-	RepositoryPath string                   `json:"repositoryPath"`
-	RepositoryID   string                   `json:"repositoryId"`
-	GroupServiceID string                   `json:"groupServiceId"`
-	ModuleID       string                   `json:"moduleId"`
-	RelativePath   string                   `json:"relativePath"`
+	SourceDirectory  string              `json:"sourceDirectory"`
+	TargetDirectory  string              `json:"targetDirectory"`
+	OriginalManifest domain.TaskManifest `json:"originalManifest"`
 }
 
 func validateMigrationJournal(j migrationJournal) error {
@@ -119,12 +110,7 @@ func validateMigrationJournal(j migrationJournal) error {
 		if filepath.Dir(s) != src || filepath.Dir(d) != dst || filepath.Base(s) != t.OriginalManifest.TaskDirectoryName || filepath.Base(d) != t.OriginalManifest.TaskDirectoryName {
 			return fmt.Errorf("任务根目录迁移日志包含越界任务路径")
 		}
-		for _, w := range t.Workspaces {
-			rel := filepath.Clean(filepath.FromSlash(w.RelativePath))
-			if filepath.IsAbs(rel) || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-				return fmt.Errorf("任务根目录迁移日志包含不安全的工作区路径")
-			}
-		}
+
 		if _, err := migrationWorkspaceIdentities(t); err != nil {
 			return err
 		}

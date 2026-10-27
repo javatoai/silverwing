@@ -9,7 +9,6 @@ import (
 )
 
 func (s *app) taskIndex(c *ui.Context, p palette) {
-	s.observeTaskOpenTools()
 	archived := s.page == "archive"
 	state := s.taskIndexBrowsingFor(archived)
 	rows := s.taskIndexRows(archived)
@@ -242,19 +241,18 @@ func (s *app) selectTaskIndex(i int) bool {
 	if i == s.selected && i >= 0 && i < len(s.tasks) {
 		s.markReadingInteraction()
 		s.taskListFocused = false
-		s.requestWorkspaceGitStatus(true)
+
 		return true
 	}
-	s.clearWorkspaceCommandSelection()
+
 	if i != s.selected {
-		s.dismissWorkspaceHistory()
+
 	}
-	s.clearWorkspaceMergeSelection()
+
 	s.markReadingInteraction()
 	s.beforeReadingTaskSelection()
 	s.deactivateInstructionEditor()
-	s.cancelWorkspaceGitStatus()
-	s.cancelWorkspaceGitFlow()
+
 	s.cancelMaterialsSearch()
 	s.dismissMarkdownBitmapViewer()
 	s.selected = i
@@ -272,6 +270,6 @@ func (s *app) selectTaskIndex(i int) bool {
 	s.documentHash = ""
 	s.documentDirty, s.documentEditing = false, false
 	s.afterReadingTaskSelection()
-	s.requestWorkspaceGitStatus(true)
+
 	return true
 }

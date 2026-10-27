@@ -98,9 +98,7 @@ func rebaseMigrationMaterialsRoot(path *string, mappings []TaskRootMigrationPath
 
 func cloneMigrationManifest(original domain.TaskManifest) domain.TaskManifest {
 	copy := original
-	if original.Services != nil {
-		copy.Services = append([]domain.ServiceWorkspace{}, original.Services...)
-	}
+
 	copy.RequirementMaterials.WriteRoot = cloneMigrationPath(original.RequirementMaterials.WriteRoot)
 	if original.AgentContext != nil {
 		context := *original.AgentContext
@@ -125,15 +123,7 @@ func migratedTaskManifest(original domain.TaskManifest, mappings []TaskRootMigra
 			return domain.TaskManifest{}, err
 		}
 	}
-	for i, workspace := range original.Services {
-		updated.Services[i].WorktreePath, _, err = RebaseTaskRootMigrationPath(workspace.WorktreePath, mappings)
-		if err != nil {
-			return domain.TaskManifest{}, err
-		}
-		if workspace.Strategy == domain.WorkspaceIndependentClone {
-			updated.Services[i].RepositoryPath = updated.Services[i].WorktreePath
-		}
-	}
+
 	return updated, nil
 }
 

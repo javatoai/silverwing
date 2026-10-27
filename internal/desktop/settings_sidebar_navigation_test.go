@@ -18,8 +18,8 @@ func settingsSidebarTester(state *app, height int) *ui.Tester {
 }
 
 func TestSettingsSidebarSectionsAndVisualGroups(test *testing.T) {
-	expected := []string{"基础", "快捷工具", "存储", "开发工具", "任务", "Git", "AGENTS.md", "Codex", "skill", "CLI", "代理", "日志", "系统"}
-	expectedGroups := []int{0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3}
+	expected := []string{"基础", "快捷工具", "存储", "项目组", "任务", "AGENTS.md", "Codex", "skill", "CLI", "代理", "日志", "系统"}
+	expectedGroups := []int{0, 0, 0, 1, 1, 2, 2, 2, 2, 2, 3, 3}
 	if len(settingsSections) != len(expected) {
 		test.Fatalf("sidebar has %d categories, want %d", len(settingsSections), len(expected))
 	}
@@ -38,7 +38,7 @@ func TestSettingsSidebarSectionsAndVisualGroups(test *testing.T) {
 	if groupStarts != 3 {
 		test.Fatalf("sidebar has %d visual group boundaries, want 3", groupStarts)
 	}
-	if settingsSections[1].pages[0].key != "tool-visibility" || settingsSections[1].pages[0].label != "研发工具" {
+	if settingsSections[1].pages[0].key != "tool-visibility" || settingsSections[1].pages[0].label != "实用工具" {
 		test.Fatal("renaming the settings category changed its existing page identity")
 	}
 
@@ -55,7 +55,7 @@ func TestSettingsSidebarSectionsAndVisualGroups(test *testing.T) {
 	}
 	line, lineFound := tester.Find("设置分组分隔线")
 	previous, previousFound := tester.Find("存储")
-	following, followingFound := tester.Find("开发工具")
+	following, followingFound := tester.Find("项目组")
 	if !lineFound || !previousFound || !followingFound || line.H != 1 || line.Y-previous.Y-previous.H != 8 || following.Y-line.Y-line.H != 8 || line.X != previous.X+14 {
 		test.Fatalf("first separator must be 1 DIP, aligned with menu text, with 8 DIP breathing room: previous=%+v line=%+v following=%+v", previous, line, following)
 	}
@@ -72,9 +72,8 @@ func TestSettingsSidebarPointerAndKeyboardNavigation(test *testing.T) {
 		{"基础", "basic"},
 		{"快捷工具", "tool-visibility"},
 		{"存储", "paths"},
-		{"开发工具", "dev-tools"},
+		{"项目组", "groups"},
 		{"任务", "task-creation"},
-		{"Git", "git"},
 		{"AGENTS.md", "agents"},
 		{"Codex", "codex-plugins"},
 		{"skill", "skill-local"},
@@ -163,7 +162,7 @@ func TestSettingsPreferenceAliasesAndRestore(test *testing.T) {
 		{"快捷工具", "developer-tools"},
 		{"工具", "developer-tools"},
 		{"存储", "storage"},
-		{"开发工具", "development"},
+		{"项目组", "groups"},
 		{"系统", "system"},
 	} {
 		if key := settingsPreferenceKey(item.name); key != item.key {
@@ -178,7 +177,7 @@ func TestSettingsPreferenceAliasesAndRestore(test *testing.T) {
 		{"developer-tools", "快捷工具", "developer-tools"},
 		{"tools", "快捷工具", "developer-tools"},
 		{"storage", "存储", "storage"},
-		{"development", "开发工具", "development"},
+		{"groups", "项目组", "groups"},
 		{"app-data", "系统", "system"},
 		{"system", "系统", "system"},
 		{"about", "系统", "system"},

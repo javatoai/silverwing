@@ -20,7 +20,8 @@ func TestConfigReadersWaitForWholeShardTransaction(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			config.Groups = append(config.Groups, domain.GroupConfig{ID: "second", Name: "second", TagEnabled: true, Services: []domain.GroupServiceConfig{}})
+			config.Groups = append(config.Groups, domain.GroupConfig{ID: "second", Name: "second"})
+			config.Theme = domain.ThemeDark
 			release, err := store.acquireMutationLock()
 			if err != nil {
 				t.Fatal(err)
@@ -40,7 +41,7 @@ func TestConfigReadersWaitForWholeShardTransaction(t *testing.T) {
 						done <- errors.New(*snapshot.ReadError)
 						return
 					}
-					if snapshot.Content == nil || strings.Count(*snapshot.Content, `"groupId": "second"`) != 1 {
+					if snapshot.Content == nil || strings.Count(*snapshot.Content, `"theme": "DARK"`) != 1 {
 						done <- errors.New("raw snapshot missed committed services group")
 						return
 					}
@@ -54,7 +55,7 @@ func TestConfigReadersWaitForWholeShardTransaction(t *testing.T) {
 				} else {
 					observed, readErr = other.Load()
 				}
-				if readErr == nil && len(observed.Groups) != 2 {
+				if readErr == nil && (len(observed.Groups) != 2 || observed.Theme != domain.ThemeDark) {
 					readErr = errors.New("reader missed committed group")
 				}
 				done <- readErr
@@ -64,7 +65,7 @@ func TestConfigReadersWaitForWholeShardTransaction(t *testing.T) {
 				t.Fatalf("reader escaped the active transaction: %v", err)
 			case <-time.After(40 * time.Millisecond):
 			}
-			if err := store.writeShards(shardsFor(config), []string{"services.json"}); err != nil {
+			if err := store.writeShards(shardsFor(config), []string{"appearance.json"}); err != nil {
 				t.Fatal(err)
 			}
 			release()

@@ -23,7 +23,7 @@ func (s *app) dispatch(action application.Action) {
 func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMenuScope) {
 	if s.materialsGitRunning() {
 		switch action.Kind {
-		case "migration.apply", "migration.recover", "task.delete", "workspace.remove", "config.materials-root.save", "config.task-root.save":
+		case "migration.apply", "migration.recover", "task.delete", "config.materials-root.save", "config.task-root.save":
 			s.lastError = "资料 Git 同步正在执行，请稍后重试"
 			return
 		}
@@ -48,27 +48,21 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 			return
 		}
 	}
-	if s.dispatchTagJobAction(action) {
-		return
-	}
+
 	if s.dispatchIndependentSystemOpen(action) {
 		return
 	}
 	if s.dispatchIndependentSettingsConfigRead(action) {
 		return
 	}
-	if s.dispatchIndependentTaskDeleteRisks(action) {
-		return
-	}
+
 	if s.dispatchIndependentSettingsExtensionRead(action) {
 		return
 	}
 	if s.dispatchSkillsBrowserRead(action) {
 		return
 	}
-	if s.dispatchWorkspaceCommandJob(action) {
-		return
-	}
+
 	if s.dispatchDeveloperToolJob(action) {
 		return
 	}
@@ -78,9 +72,7 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 	if s.dispatchIndependentRequirementContent(action) {
 		return
 	}
-	if s.dispatchIndependentWorkspaceHistory(action) {
-		return
-	}
+
 	if s.dispatchIndependentMaterialsFileAction(action) {
 		return
 	}
@@ -244,7 +236,6 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 				lifecycleOwnResult := backendDispatched && refreshErr == nil &&
 					s.taskLifecycleResultBelongsToContext(action, *scope, refreshed)
 				if !lifecycleOwnResult && action.Kind == "task.delete" {
-					s.closeStaleTaskDeleteSubmission(action)
 				}
 				if !lifecycleOwnResult {
 					return // A late task result cannot replace another context's UI.
@@ -283,12 +274,7 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 					}
 					return
 				}
-				if s.applyTagHistoryMutationFailure(action, result, err) {
-					return
-				}
-				if s.applyTagHistoryRefreshFailure(action, err) {
-					return
-				}
+
 				if (action.Kind == "codex.run" || action.Kind == "task.tools-launch" || action.Kind == "task.delete") && refreshErr == nil && refreshed.ConfigJSON != "" {
 					// A failed launcher persists its FAILED tool state; task deletion
 					// may finish removal while reporting retained backup cleanup errors.
@@ -297,9 +283,7 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 				if action.Kind == "task.delete" && refreshErr != nil {
 					err = fmt.Errorf("%w；刷新任务列表失败：%v", err, refreshErr)
 				}
-				if s.applyTaskDeleteActionFailure(action, err) {
-					return
-				}
+
 				if s.applySettingsExtensionFailure(action, err) {
 					return
 				}
@@ -315,29 +299,7 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 				if s.taskCreationActionError(action, err) {
 					return
 				}
-				if s.taskAppendActionError(action, err) {
-					return
-				}
-				if s.applyTagWorkspaceCheckFailure(action, err) {
-					return
-				}
-				if s.applyTagTargetFailure(action, err) {
-					return
-				}
-				if tagStatusAction(action.Kind) {
-					s.applyTagStatusFailure(action, err)
-					return
-				}
-				if workspaceDedicatedResult(action.Kind) || workspaceRepairAction(action.Kind) {
-					s.applyWorkspaceCommandFailure(action, err)
-					s.applyWorkspaceMergeFailure(action, err)
-					s.applyWorkspaceMergeBatchFailure(action, err)
-					s.applyWorkspaceGitFlowFailure(action, err)
-					s.applyWorkspaceRemovalFailure(action, err)
-					s.applyWorkspaceRepairFailure(action, err)
-					s.applyWorkspaceHistoryFailure(action, err)
-					return
-				}
+
 				if action.Kind == "instructions.read" {
 					s.applyInstructionReadFailure(action, err)
 					return
@@ -346,21 +308,7 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 					return
 				}
 				s.lastError = err.Error()
-				if action.Kind == "service.save" && s.serviceEditor != nil {
-					s.serviceEditor.saving = false
-					s.serviceEditor.error = err.Error()
-				}
-				if action.Kind == "repository.choices" && s.serviceEditor != nil && payloadString(action.Payload, "requestKey") == s.serviceEditor.choicesRequest {
-					s.serviceEditor.choicesLoading = false
-					s.serviceEditor.choicesError = err.Error()
-					if s.serviceEditor.section == "git" && !s.serviceEditor.addressesLoaded {
-						s.requestServiceRepositoryAddresses(false)
-					}
-				}
-				if action.Kind == "repository.addresses" && s.serviceEditor != nil && payloadString(action.Payload, "requestKey") == s.serviceEditor.addressesRequest {
-					s.serviceEditor.addressesLoading = false
-					s.serviceEditor.addressesError = err.Error()
-				}
+
 				if action.Kind == "requirements.list" || action.Kind == "requirements.refresh" {
 					s.requirementsLoading = false
 					s.requirementsLoadError = err.Error()
@@ -377,29 +325,20 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 			}
 			// Reading the current materials is part of opening the page. Source
 			// keeps successful reads quiet and only reports their failures.
-			if action.Kind != "document.list" && action.Kind != "document.read" && action.Kind != "instructions.read" && action.Kind != "workspace.status" && action.Kind != "tag.workspace-check" && !workspaceDedicatedResult(action.Kind) && !workspaceRepairAction(action.Kind) && !tagStatusAction(action.Kind) {
-				s.lastMessage = result.Message
-			}
+
 			if s.actionResultRelevant(action) {
-				if !(s.page == "settings" && settingsActionHasDedicatedResult(action.Kind)) && action.Kind != "config.view" && action.Kind != "workspace.status" && action.Kind != "tag.workspace-check" && !workspaceDedicatedResult(action.Kind) && !workspaceRepairAction(action.Kind) && !strings.HasPrefix(action.Kind, "instructions.") && !tagStatusAction(action.Kind) && !tagHistoryDedicatedResult(action.Kind) && action.Kind != "workspace.bootstrap-clear" && action.Kind != "workspace.bootstrap-rerun" && !requirementContentAction(action.Kind) && action.Kind != "meegle.projects" {
-					s.lastResult = resultText(result)
-				}
+
 				s.applyActionResult(action, result)
 			}
 			if refreshErr != nil {
 				s.lastError = "操作已完成，但刷新数据失败：" + refreshErr.Error()
 			} else if reloadsSnapshot(action.Kind) {
 				s.applySnapshot(refreshed)
-				if action.Kind == "workspace.merge-batch" {
-					s.reconcileWorkspaceMergeBatchAfterSnapshot()
-				}
+
 				s.afterSettingsCLIPathSave(action)
 				s.applyTaskSnapshotSelection(action, result)
 				s.applyTaskLifecycleSnapshotSelection(action, result)
-				s.applyCreatedRepositoryGroupSelection(action)
-				if refreshesWorkspaceHealth(action.Kind) || taskAppendRefreshesWorkspaceHealth(action.Kind) {
-					s.requestWorkspaceGitStatus(true)
-				}
+
 			}
 		})
 	}()
@@ -410,39 +349,28 @@ func (s *app) act(kind string, taskID, serviceID, moduleID, path, text string, p
 }
 
 func (s *app) applyActionResult(action application.Action, result application.ActionResult) {
-	if s.applyTaskDeleteActionResult(action, result) {
-		return
-	}
+
 	if strings.HasPrefix(action.Kind, "skills.") {
 		s.ensureSkillsBrowser().handleResult(action, result)
 	}
 	if s.taskCreationActionResult(action, result) {
 		return
 	}
-	if s.taskAppendActionResult(action, result) {
-		return
-	}
+
 	if strings.HasPrefix(action.Kind, "tool.") {
 		s.ensureToolState().handleResult(action, result)
 	}
 	if s.applyTaskActionResult(action, result) {
 		return
 	}
-	if s.applyWorkspaceActionResult(action, result) {
-		return
-	}
-	if s.applyServiceActionResult(action, result) {
-		return
-	}
+
 	if s.applyMaterialsActionResult(action, result) {
 		return
 	}
 	if s.applyRequirementActionResult(action, result) {
 		return
 	}
-	if s.applyDeliveryActionResult(action, result) {
-		return
-	}
+
 	if s.applyInstructionActionResult(action, result) {
 		return
 	}
@@ -457,15 +385,13 @@ func settingsActionHasDedicatedResult(kind string) bool {
 		strings.HasPrefix(kind, "instructions.templates.") || strings.HasPrefix(kind, "skills.") ||
 		strings.HasPrefix(kind, "codex.extensions/") || kind == "codex.extensions/snapshot" ||
 		strings.HasPrefix(kind, "codex.ai/") ||
-		strings.HasPrefix(kind, "cli.") || strings.HasPrefix(kind, "logs.") || strings.HasPrefix(kind, "development-tools/") ||
-		strings.HasPrefix(kind, "git.environment") || kind == "terminal.resolve" || kind == "diagnostics.export" ||
+		strings.HasPrefix(kind, "cli.") || strings.HasPrefix(kind, "logs.") ||
+		kind == "terminal.resolve" || kind == "diagnostics.export" ||
 		kind == "proxy.test" || kind == "git.version" || kind == "update.check"
 }
 
 func (s *app) actionResultRelevant(action application.Action) bool {
-	if tagHistoryDedicatedResult(action.Kind) {
-		return s.tagHistoryResultRelevant(action)
-	}
+
 	if settingsExtensionRead(action) {
 		return s.settingsExtensionActionRelevant(action)
 	}
@@ -474,8 +400,6 @@ func (s *app) actionResultRelevant(action application.Action) bool {
 		return s.meegleCatalogActionRelevant(action)
 	case "requirements.read", "requirements.comments", "requirements.attachment", "requirements.copy-document", "requirements.copy-comments":
 		return s.requirementReaderForAction(action) != nil
-	case "workspace.command":
-		return s.workspaceCommandActionRelevant(action)
 	case "document.list":
 		return action.TaskID == s.currentTask().id
 	case "document.read":
@@ -588,13 +512,11 @@ func reloadsSnapshot(kind string) bool {
 	switch kind {
 	case "task.create", "task.archive", "task.restore", "task.delete", "task.refresh",
 		"codex.run", "task.tools-launch",
-		"task.services-add", "task.modules-add", "task.services-retry", "task.tools-retry",
-		"repository.add", "repository.remove", "service.add-repositories", "service.save", "service.remove", "service.module-save", "service.module-remove", "config.save", "config.fields.save", "config.materials-root.save", "config.task-root.save", "config.import",
+		"task.tools-retry",
+		"config.save", "config.fields.save", "config.materials-root.save", "config.task-root.save", "config.import",
 		"config.restore-backup", "migration.apply", "migration.recover",
-		"workspace.fetch", "workspace.commit", "workspace.commit-push", "workspace.push", "workspace.batch", "workspace.merge", "workspace.merge-batch", "workspace.repair", "workspace.remove", "workspace.add", "workspace.bootstrap-clear", "workspace.bootstrap-rerun",
 		"instructions.save", "requirements.refresh", "requirements.comment", "task.materials-retry",
-		"tag.build", "tag.retry", "tag.target.update", "tag.history.delete", "tag.history.clear", "skills.refresh", "skills.install", "skills.remove",
-		"development-tools/snapshot", "development-tools/detect":
+		"skills.refresh", "skills.install", "skills.remove":
 		return true
 	default:
 		return false
@@ -603,28 +525,20 @@ func reloadsSnapshot(kind string) bool {
 
 func actionLabel(kind string) string {
 	labels := map[string]string{
-		"task.create": "创建任务", "task.archive": "归档任务", "task.restore": "恢复任务", "task.delete": "删除任务", "task.delete-risks": "检查删除风险", "task.refresh": "刷新任务", "task.materials-retry": "关联任务资料",
-		"repository.add": "添加仓库", "repository.remove": "移除仓库", "service.add-repositories": "添加仓库", "service.save": "保存服务", "service.remove": "移除服务", "service.module-save": "保存模块", "service.module-remove": "移除模块",
+		"task.create": "创建任务", "task.archive": "归档任务", "task.restore": "恢复任务", "task.delete": "删除任务", "task.refresh": "刷新任务", "task.materials-retry": "关联任务资料",
 		"config.save": "保存配置", "config.fields.save": "保存设置", "config.import-preview": "预览配置", "config.import": "导入配置",
-		"config.task-root.save": "切换任务目录", "development-tools/detect": "检测开发工具", "development-tools/snapshot": "读取开发工具配置",
-		"workspace.status": "检查工作区", "workspace.preview": "读取提交预览", "workspace.previews": "读取 Git 变更预览", "workspace.batch": "批量 Git 操作", "workspace.fetch": "获取远程更新", "workspace.commit": "提交更改", "workspace.commit-push": "提交并推送", "workspace.push": "推送更改", "workspace.merge": "合并主分支", "workspace.merge-batch": "批量合并主分支", "workspace.repair-preview": "检查工作区修复方案", "workspace.repair": "修复工作区", "workspace.remove": "移除工作区", "workspace.add": "添加工作区", "workspace.bootstrap-clear": "清除 Bootstrap 警告", "workspace.bootstrap-rerun": "重新执行 Bootstrap", "workspace.command": "运行命令",
-		"document.list": "读取资料目录", "document.read": "读取文档", "document.save": "保存文档", "document.mkdir": "创建目录", "document.create": "新建文档", "document.rename": "重命名文档", "document.trash": "移至回收站", "document.copy": "复制文档", "document.open": "打开文档", "document.reveal": "显示文档位置",
+		"config.task-root.save": "切换任务目录", "document.list": "读取资料目录", "document.read": "读取文档", "document.save": "保存文档", "document.mkdir": "创建目录", "document.create": "新建文档", "document.rename": "重命名文档", "document.trash": "移至回收站", "document.copy": "复制文档", "document.open": "打开文档", "document.reveal": "显示文档位置",
 		"instructions.read": "读取任务说明", "instructions.save": "保存任务说明", "requirements.refresh": "刷新需求", "requirements.list": "读取需求列表", "requirements.read": "读取需求详情", "requirements.comments": "读取需求评论", "requirements.comment": "发表评论",
-		"task.services-add-preview": "预检新增服务", "task.modules-add-preview": "预检新增模块", "task.services-add": "添加服务", "task.modules-add": "添加模块", "task.services-retry": "重试失败服务", "task.tools-retry": "重试工作区工具", "task.tools-launch": "打开任务工具",
-		"tag.build": "构建 Tag", "tag.target.update": "保存测试目标分支", "tag.status": "查询 Tag 状态", "tag.genbu.refresh": "刷新 Genbu 状态", "tag.history": "读取 Tag 历史", "tag.history.refresh": "刷新 Tag 历史和 Genbu", "tag.history.delete": "删除所选Tag历史", "tag.history.clear": "清空Tag历史", "tag.retry": "重试 Tag 操作", "tag.workspace-check": "检查工作区",
+		"task.tools-retry": "重试任务工具", "task.tools-launch": "打开任务工具",
 		"skills.refresh": "刷新 Skills", "skills.install": "安装 Skill", "skills.remove": "移除 Skill", "codex.extensions": "读取 Codex 扩展", "codex.run": "在 Codex 中打开",
 		"codex.extensions/snapshot": "读取 Codex 扩展",
 		"tool.json":                 "处理 JSON", "tool.time": "转换时间", "tool.diff": "比较文本", "tool.ports": "查询端口", "tool.port-stop": "结束端口进程",
-		"system.open": "打开路径", "system.reveal": "显示路径", "system.terminal": "打开终端", "system.ide": "启动开发工具", "diagnostics.export": "导出诊断信息",
+		"system.open": "打开路径", "system.reveal": "显示路径", "system.terminal": "打开终端", "diagnostics.export": "导出诊断信息",
 	}
 	if label := labels[kind]; label != "" {
 		return label
 	}
 	return kind
-}
-
-func tagStatusAction(kind string) bool {
-	return kind == "tag.status" || kind == "tag.genbu.refresh"
 }
 
 func resultText(result application.ActionResult) string {
@@ -751,7 +665,7 @@ func migrationPreviewText(data any) string {
 	if value := dataString(data, "mode"); value != "" {
 		lines = append(lines, "迁移方式："+value)
 	}
-	lines = append(lines, fmt.Sprintf("任务：%d 个 · 工作区：%d 个 · 数据量：%s", dataInt64(data, "taskCount"), dataInt64(data, "workspaceCount"), formatBytes(dataInt64(data, "totalBytes"))))
+	lines = append(lines, fmt.Sprintf("任务：%d 个 · 数据量：%s", dataInt64(data, "taskCount"), formatBytes(dataInt64(data, "totalBytes"))))
 	blockers := mapsString(dataValue(data, "blockers"))
 	if len(blockers) > 0 {
 		lines = append(lines, "暂不可迁移：")
@@ -912,13 +826,12 @@ func (s *app) canCancelOperation() bool {
 // operations that explicitly opt in share the global cancellation control.
 func cancellableOperation(kind string) bool {
 	switch kind {
-	case "task.refresh", "task.create", "task.materials-retry", "task.services-add", "task.modules-add", "task.services-retry",
-		"workspace.repair-preview", "workspace.repair", "workspace.merge-batch", "diagnostics.export",
+	case "task.refresh", "task.create", "task.materials-retry", "diagnostics.export",
 		"codex.extensions/marketplaces/add-source", "codex.extensions/marketplaces/refresh-source", "codex.extensions/marketplaces/remove-source",
 		"codex.extensions/plugin/install", "codex.extensions/plugin/uninstall",
 		"codex.extensions/mcp/status", "codex.extensions/mcp/check", "codex.extensions/mcp/add", "codex.extensions/mcp/edit", "codex.extensions/mcp/set", "codex.extensions/mcp/remove", "codex.ai/mcp/authenticate",
 		"skills.sources/save", "skills.sources/catalog", "skills.sources/remove", "skills.install", "skills.update", "skills.remove",
-		"cli.auth.start", "cli.auth.logout", "repository.add", "service.add-repositories":
+		"cli.auth.start", "cli.auth.logout":
 		return true
 	default:
 		return false

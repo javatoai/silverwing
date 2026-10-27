@@ -16,7 +16,7 @@ func (s *app) settingsBasic(c *ui.Context, p palette) {
 	})
 	settingsHelpCard(c, p, "侧边栏展示", "任务和设置始终显示。隐藏入口不会关闭对应功能。", func() {
 		for index, item := range []struct{ key, title string }{
-			{"requirements", "需求"}, {"tools", "研发工具"}, {"production", "生产发布"}, {"services", "服务"},
+			{"requirements", "需求"}, {"tools", "实用工具"},
 		} {
 			if index > 0 {
 				settingsAppearanceDivider(c)
@@ -27,7 +27,7 @@ func (s *app) settingsBasic(c *ui.Context, p palette) {
 }
 
 func (s *app) settingsToolVisibility(c *ui.Context, p palette) {
-	settingsHelpCard(c, p, "研发工具", "选择显示在主导航中的工具。", func() {
+	settingsHelpCard(c, p, "实用工具", "选择显示在主导航中的工具。", func() {
 		for _, item := range []struct{ key, title, description string }{
 			{"json", "JSON", "格式化、压缩与转义 JSON。"},
 			{"dateTime", "日期时间", "时间戳与日期转换。"},
@@ -43,6 +43,9 @@ func (s *app) settingsToolVisibility(c *ui.Context, p palette) {
 }
 
 func (s *app) settingsPaths(c *ui.Context, p palette) {
+	settingsHelpCard(c, p, "资料与 Skill 的 Git", "仅用于任务资料同步与 Skill 来源。", func() {
+		s.settingsConfigPathRow(c, p, "gitExecutablePath", "Git 可执行文件", "留空时从本机环境查找", false)
+	})
 	settingsHelpCard(c, p, "任务路径设置", "更改目录时选择是否迁移旧任务数据。", func() {
 		path := s.input("setting:taskRootTarget", s.configString("taskRoot"))
 		settingsAppearanceRow(c, p, "任务根目录", "选择迁移旧任务，或保留旧目录并直接切换。", func(stacked bool) {
@@ -55,7 +58,7 @@ func (s *app) settingsPaths(c *ui.Context, p palette) {
 			s.saveMaterialsRoot(value)
 		})
 		settingsAppearanceDivider(c)
-		s.settingsAppearanceTextRow(c, p, "requirementMaterialsSubdirectory", "任务资料子目录", "相对根目录的子目录，例如：研发。", "例如：研发", func(value string) { s.saveConfigField("requirementMaterialsSubdirectory", nullableString(value)) })
+		s.settingsAppearanceTextRow(c, p, "requirementMaterialsSubdirectory", "任务资料子目录", "相对根目录的子目录，例如：测试。", "例如：测试", func(value string) { s.saveConfigField("requirementMaterialsSubdirectory", nullableString(value)) })
 		settingsAppearanceDivider(c)
 		s.settingsMaterialsGitSync(c, p)
 		settingsAppearanceDivider(c)
@@ -133,58 +136,6 @@ func (s *app) moveConfigGroup(groupID string, delta int) {
 	s.saveSettingsConfigMap(config)
 }
 
-func (s *app) settingsDevelopmentTools(c *ui.Context, p palette) {
-	settingsHelpCardWithActions(c, p, "开发工具", "路径留空时由系统自动探测。选择后可直接测试打开。", func() {
-		s.overflowMenu(c, p, "settings-dev-tools-more", "更多开发工具操作", s.busy, func(menu *overflowMenuBuilder) {
-			if menu.Item("detect-missing", "检测缺失工具").Icon("search").Disabled(s.busy).Chosen() {
-				s.act("development-tools/detect", "", "", "", "", "", nil)
-			}
-		})
-	}, func() {
-		for _, tool := range []struct{ kind, name string }{
-			{"INTELLIJ_IDEA", "IntelliJ IDEA"}, {"WEBSTORM", "WebStorm"}, {"PYCHARM", "PyCharm"},
-			{"VISUAL_STUDIO_CODE", "Visual Studio Code"}, {"ANDROID_STUDIO", "Android Studio"}, {"DEVECO_STUDIO", "DevEco Studio"},
-		} {
-			typeKey, title := tool.kind, tool.name
-			toolStatus := findMap(mapsFromData(dataValue(s.settingsDevelopmentToolsSnapshot, "tools")), "type", typeKey)
-			initialPath := firstNonEmpty(mapString(toolStatus, "path"), s.developmentToolPath(typeKey))
-			value := s.input("setting:development-tool:"+typeKey, initialPath)
-			ui.Column(c).FillWidth().Padding(10, 12).Gap(7).Background(p.soft).Radius(9).Children(func() {
-				ui.Row(c).Gap(8).Children(func() {
-					label(c, title, 12, p.text).FontWeight(500).Grow(1)
-					state, color := developmentToolStatusLabel(toolStatus, p)
-					label(c, state, 10, color).SingleLine()
-				})
-				ui.Row(c).Gap(7).Children(func() {
-					ui.TextInput(c.Key("settings-tool-path-"+typeKey), value).Grow(1).FillWidth().Height(36).Placeholder("应用程序路径")
-					if iconButton(c, "settings-tool-pick-"+typeKey, "folder", "手动选择", p).Clicked() {
-						s.pickNativePath("选择"+title, *value, false, nil, func(path string) { *value = path })
-					}
-					s.overflowMenu(c, p, "settings-tool-more-"+typeKey, title+"更多操作", false, func(menu *overflowMenuBuilder) {
-						if menu.Item("test-open", "测试打开").Icon("file").Disabled(s.busy || strings.TrimSpace(*value) == "").Chosen() {
-							s.act("system.ide-test", "", "", "", s.configString("taskRoot"), "", map[string]any{"tool": typeKey, "configuredPath": *value})
-						}
-						if menu.Item("restore-auto", "恢复自动").Icon("refresh").Disabled(strings.TrimSpace(*value) == "").Chosen() {
-							*value = ""
-						}
-					})
-				})
-				s.autosaveSettingsInput("development-tool:"+typeKey, value, func(path string) {
-					s.saveDevelopmentToolPath(typeKey, path)
-				})
-			})
-		}
-		ui.Row(c).Gap(8).Children(func() {
-			label(c, "全局默认开发工具", 12, p.text).Width(140)
-			for _, tool := range []struct{ value, label string }{{"INTELLIJ_IDEA", "IntelliJ IDEA"}, {"WEBSTORM", "WebStorm"}, {"PYCHARM", "PyCharm"}, {"VISUAL_STUDIO_CODE", "VS Code"}, {"ANDROID_STUDIO", "Android Studio"}, {"DEVECO_STUDIO", "DevEco Studio"}} {
-				choice := tool
-				s.settingsChoice(c, p, "default-tool-"+choice.value, choice.label, s.configString("defaultDevelopmentTool") == choice.value, func() { s.saveConfigField("defaultDevelopmentTool", choice.value) })
-			}
-		})
-		s.settingsSwitch(c, p, "allowTemporaryDevelopmentToolSelection", "允许临时选择开发工具", "在任务工作区中临时切换工具，不修改全局默认值。", false)
-	})
-}
-
 func (s *app) settingsTaskCreation(c *ui.Context, p palette) {
 	s.settingsWorkspaceTools(c, p)
 	status := s.settingsCLIStatus["codex"]
@@ -213,7 +164,7 @@ func (s *app) settingsTaskCreation(c *ui.Context, p palette) {
 		s.settingsCLICommandActions(c, p, "codex", command)
 	})
 	settingsHelpCard(c, p, "AI 命名", "仅将需求标题与正文片段交给配置的模型；保留本地编辑能力。", func() {
-		s.settingsSwitch(c, p, "aiRequirementNamingEnabled", "开启 AI 生成分支名和文件夹名", "创建任务时自动补全尚未手动修改的名称。", false)
+		s.settingsSwitch(c, p, "aiRequirementNamingEnabled", "开启 AI 生成任务名称和文件夹名", "创建任务时自动补全尚未手动修改的名称。", false)
 		s.settingsSwitch(c, p, "aiRequirementNamingPrewarmEnabled", "拉取需求列表后自动预热命名", "提前准备本次读取到的需求，不受搜索和筛选影响。", false)
 		s.settingsTextRow(c, p, "aiRequirementNamingModel", "AI 命名模型", "例如 gpt-6-luna", false, func(value string) {
 			if strings.ContainsAny(strings.TrimSpace(value), " \t\r\n") || strings.TrimSpace(value) == "" {
@@ -222,20 +173,6 @@ func (s *app) settingsTaskCreation(c *ui.Context, p palette) {
 			}
 			s.saveConfigField("aiRequirementNamingModel", strings.TrimSpace(value))
 		})
-	})
-}
-
-func (s *app) settingsTaskArea(c *ui.Context, p palette) {
-	settingsHelpCard(c, p, "任务详情工具栏", "选择任务详情中显示的操作组。", func() {
-		s.settingsSwitch(c, p, "showTaskDetailGitActionGroup", "Git 工具组", "显示提交、提交并推送和推送操作。", false)
-		s.settingsSwitch(c, p, "showTaskDetailPathActionGroup", "路径工具组", "显示复制任务路径、终端和打开任务目录操作。", false)
-	})
-	settingsHelpCard(c, p, "工作区卡片工具栏", "选择工作区卡片中显示的操作组。", func() {
-		s.settingsSwitch(c, p, "showWorkspaceGitActionGroup", "Git 工具组", "显示提交、提交并推送和推送操作。", false)
-		s.settingsSwitch(c, p, "showWorkspacePathActionGroup", "路径工具组", "显示终端、打开文件夹和复制路径操作。", false)
-	})
-	settingsHelpCard(c, p, "信息复制", "控制工作区和需求信息旁边的复制图标。\n\n工作区项目名和分支名可以直接点击复制。", func() {
-		s.settingsRequirementCopyIcons(c, p)
 	})
 }
 

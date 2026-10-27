@@ -28,7 +28,7 @@ func (s *app) settingsCLIPathDiscoveryHint(c *ui.Context, p palette, tool string
 // Discovery changes only an absent persisted path. Keep unrelated configuration
 // and any text the user entered while the status worker was reading.
 func (s *app) applySettingsCLIDiscoverySnapshot(tool, previousConfig string, snapshot application.Snapshot) {
-	key := map[string]string{"git": "gitExecutablePath", "codex": "codexExecutablePath", "genbu": "genbuExecutablePath", "meegle": "meegleExecutablePath"}[tool]
+	key := map[string]string{"git": "gitExecutablePath", "codex": "codexExecutablePath", "meegle": "meegleExecutablePath"}[tool]
 	if key == "" || snapshot.Home != s.snapshot.Home || snapshot.ConfigJSON == "" {
 		return
 	}
@@ -47,9 +47,6 @@ func (s *app) applySettingsCLIDiscoverySnapshot(tool, previousConfig string, sna
 		return
 	}
 	current[key] = path
-	if tool == "genbu" {
-		current["genbuExecutableAutoDetected"] = dataBool(detected, "genbuExecutableAutoDetected")
-	}
 	encoded, err := json.MarshalIndent(current, "", "  ")
 	if err != nil {
 		return

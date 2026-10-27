@@ -7,7 +7,6 @@ import (
 )
 
 func (s *app) sidebar(c *ui.Context, p palette, compact bool) {
-	defer s.observeProductionBuildNavigation()
 	width := float32(128)
 	if compact {
 		width = 72
@@ -81,7 +80,7 @@ func (s *app) sidebar(c *ui.Context, p palette, compact bool) {
 				}
 				s.page = n.page
 				if n.page == "production" {
-					s.enterProductionPage()
+
 				}
 				if n.page == "requirements" {
 					s.lastResult = ""
@@ -108,12 +107,6 @@ func (s *app) sidebarBadge(page string, compact bool) (string, bool) {
 		return fmt.Sprint(count), !compact || count > 0
 	case "requirements":
 		return s.requirementsEstimateBadge(), true
-	case "services":
-		count := 0
-		for _, group := range s.snapshot.Groups {
-			count += len(group.ServiceIDs)
-		}
-		return fmt.Sprint(count), !compact || count > 0
 	default:
 		return "", false
 	}

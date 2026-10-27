@@ -18,7 +18,6 @@ type systemOpenScope struct {
 	home, sourcePath                           string
 	taskID, taskPath, createdAt, materialsRoot string
 	workspacePath                              string
-	tool, configuredPath                       string
 }
 
 type systemOpenJob struct {
@@ -52,7 +51,7 @@ type systemOpenJobs struct {
 func independentSystemOpenAction(kind string) bool {
 	switch kind {
 	case "system.open", "system.open-with", "system.reveal", "system.logs", "document.open", "document.reveal",
-		"system.terminal", "system.ide", "system.ide-test", "system.cli-terminal":
+		"system.terminal", "system.cli-terminal":
 		return true
 	}
 	return false
@@ -64,8 +63,6 @@ func systemOpenJobKey(action application.Action) string {
 		return "directory"
 	case "system.terminal":
 		return "terminal"
-	case "system.ide", "system.ide-test":
-		return "ide"
 	case "system.cli-terminal":
 		return "cli-terminal:" + strings.ToLower(payloadString(action.Payload, "tool"))
 	}
@@ -119,16 +116,6 @@ func (s *app) systemOpenScopeFor(action application.Action, taskScope *taskMenuS
 	if scope.sourcePath == "" && action.Kind != "system.logs" {
 		return scope, errors.New("路径不能为空")
 	}
-	if action.Kind == "system.ide-test" {
-		scope.tool = payloadString(action.Payload, "tool")
-		scope.configuredPath, _ = action.Payload["configuredPath"].(string)
-		if scope.sourcePath != s.configString("taskRoot") {
-			return scope, errors.New("任务根目录已变化，请重新测试。")
-		}
-		if draft := s.inputs["setting:development-tool:"+scope.tool]; draft != nil && *draft != scope.configuredPath {
-			return scope, errors.New("开发工具路径已变化，请重新测试。")
-		}
-	}
 	if action.TaskID == "" {
 		if taskScope != nil {
 			return scope, errors.New("任务资料打开缺少目标任务。")
@@ -148,12 +135,7 @@ func (s *app) systemOpenScopeFor(action application.Action, taskScope *taskMenuS
 	}
 	scope.taskID, scope.taskPath, scope.createdAt, scope.materialsRoot = task.id, task.path, task.createdAt, task.materialsPath
 	if action.ServiceID != "" || action.ModuleID != "" {
-		for _, workspace := range task.workspaces {
-			if workspace.ServiceID == action.ServiceID && workspace.ModuleID == action.ModuleID {
-				scope.workspacePath = workspace.Path
-				return scope, nil
-			}
-		}
+
 		return scope, errors.New("系统打开的工作区已变化，请重新选择后重试。")
 	}
 	return scope, nil
@@ -462,13 +444,12 @@ func (s *app) renderSystemOpenStatus(c *ui.Context, p palette) {
 	linking := jobs.current["link"]
 	directory := jobs.current["directory"]
 	terminal := jobs.current["terminal"]
-	ide := jobs.current["ide"]
 	cliTerminals := make([]*systemOpenJob, 0, 5)
-	for _, tool := range []string{"git", "codex", "genbu", "meegle"} {
+	for _, tool := range []string{"git", "codex", "meegle"} {
 		cliTerminals = append(cliTerminals, jobs.current["cli-terminal:"+tool])
 	}
 	jobs.mu.Unlock()
-	requests := append([]*systemOpenJob{opening, revealing, linking, directory, terminal, ide}, cliTerminals...)
+	requests := append([]*systemOpenJob{opening, revealing, linking, directory, terminal}, cliTerminals...)
 	for _, request := range requests {
 		if request == nil {
 			continue
@@ -484,8 +465,6 @@ func (s *app) renderSystemOpenStatus(c *ui.Context, p palette) {
 				text = "正在交给系统打开目录…"
 			case "terminal":
 				text = "正在打开系统终端…"
-			case "ide":
-				text = "正在打开开发工具…"
 			default:
 				if strings.HasPrefix(request.key, "cli-terminal:") {
 					text = "正在系统终端运行 " + payloadString(request.action.Payload, "tool") + "…"

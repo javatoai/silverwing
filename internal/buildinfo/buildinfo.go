@@ -9,7 +9,7 @@ import (
 	"silverwing-go/internal/domain"
 )
 
-const ProductName = "Silverwing"
+const ProductName = "silverwing-qa"
 
 // These variables are overridden by release builds with -ldflags -X.
 var (

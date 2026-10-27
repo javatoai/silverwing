@@ -86,41 +86,20 @@ func (s *TaskRootMigrationService) rollbackMigration(j migrationJournal, config 
 				continue
 			}
 			if fileExists(src) {
-				if err := restoreMigrationCloneOwners(jt, src); err != nil {
-					failures = append(failures, err)
-					continue
-				}
-				repairFailed := false
-				for _, w := range jt.Workspaces {
-					if w.Strategy == domain.WorkspaceStandardWorktree {
-						if err := s.Git.RepairWorktree(w.RepositoryPath, filepath.Join(src, filepath.FromSlash(w.RelativePath))); err != nil {
-							failures = append(failures, err)
-							repairFailed = true
-						}
-					}
-				}
-				if repairFailed {
-					continue
-				}
+
 				if err := removeTree(dst); err != nil {
 					failures = append(failures, err)
 					continue
 				}
 			} else {
-				if err := restoreMigrationCloneOwners(jt, dst); err != nil {
-					failures = append(failures, err)
-					continue
-				}
+
 				if err := os.Rename(dst, src); err != nil {
 					failures = append(failures, err)
 					continue
 				}
 			}
 		}
-		if err := restoreMigrationCloneOwners(jt, src); err != nil {
-			failures = append(failures, err)
-			continue
-		}
+
 		if err := s.Manifests.Save(src, jt.OriginalManifest); err != nil {
 			failures = append(failures, err)
 			continue
@@ -129,18 +108,7 @@ func (s *TaskRootMigrationService) rollbackMigration(j migrationJournal, config 
 			failures = append(failures, err)
 			continue
 		}
-		repairFailed := false
-		for _, w := range jt.Workspaces {
-			if w.Strategy == domain.WorkspaceStandardWorktree {
-				if err := s.Git.RepairWorktree(w.RepositoryPath, filepath.Join(src, filepath.FromSlash(w.RelativePath))); err != nil {
-					failures = append(failures, err)
-					repairFailed = true
-				}
-			}
-		}
-		if repairFailed {
-			continue
-		}
+
 		marker := filepath.Join(src, taskRootMigrationMarker)
 		if data, err := os.ReadFile(marker); err == nil {
 			if string(data) != j.ID {

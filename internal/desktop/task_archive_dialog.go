@@ -31,7 +31,7 @@ func (s *app) openTaskArchiveDialog(t task) {
 	if !ok {
 		return
 	}
-	s.confirmNative("归档任务", "任务将移至已归档，工作区和代码不会被删除。", firstNonEmpty(t.title, t.id), func() {
+	s.confirmNative("归档任务", "任务将移至已归档，任务目录和资料会保留。", firstNonEmpty(t.title, t.id), func() {
 		if action, current := s.taskArchiveConfirmationAction(scope); current {
 			s.dispatchTaskContextAction(action, &scope)
 		}

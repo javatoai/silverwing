@@ -32,9 +32,7 @@ func (s *Service) resolveCLIExecutableWithSourceForce(ctx context.Context, cfg d
 	}
 	if configured != "" {
 		source := executable.SourceConfigured
-		if tool == "genbu" && cfg.GenbuExecutableAutoDetected {
-			source = executable.SourceProbed
-		}
+
 		return cfg, executable.Resolution{Command: configured, Source: source}, target, nil
 	}
 	resolver := executable.NewResolver(s.runner)
@@ -92,9 +90,6 @@ func setCLIConfiguredPath(config *domain.AppConfig, tool, path string) {
 		config.MeegleExecutablePath = &path
 	case "codex":
 		config.CodexExecutablePath = &path
-	case "genbu":
-		config.GenbuExecutablePath = &path
-		config.GenbuExecutableAutoDetected = true
 	}
 }
 
@@ -106,8 +101,6 @@ func cliConfiguredPath(cfg domain.AppConfig, tool string) *string {
 		return cfg.MeegleExecutablePath
 	case "codex":
 		return cfg.CodexExecutablePath
-	case "genbu":
-		return cfg.GenbuExecutablePath
 	default:
 		return nil
 	}
@@ -119,8 +112,6 @@ func cliProxyTarget(tool string) (domain.CommandProxyTarget, bool) {
 		return domain.ProxyTargetGit, true
 	case "meegle":
 		return domain.ProxyTargetMeegle, true
-	case "genbu":
-		return domain.ProxyTargetGenbu, true
 	case "codex":
 		return domain.ProxyTargetCodex, true
 	default:
@@ -143,8 +134,6 @@ func cliEnvironmentWithRunner(ctx context.Context, runner executable.Runner, too
 		resolvedTool = executable.ToolCodex
 	case "git":
 		resolvedTool = executable.ToolGit
-	case "genbu":
-		resolvedTool = executable.ToolGenbu
 	case "meegle":
 		resolvedTool = executable.ToolMeegle
 	default:

@@ -98,7 +98,7 @@ func (s *app) cliJobTool(action application.Action) string {
 }
 
 func (s *app) cliConfiguredPath(tool string) string {
-	key := map[string]string{"meegle": "meegleExecutablePath", "codex": "codexExecutablePath", "git": "gitExecutablePath", "genbu": "genbuExecutablePath"}[tool]
+	key := map[string]string{"meegle": "meegleExecutablePath", "codex": "codexExecutablePath", "git": "gitExecutablePath"}[tool]
 	if key == "" {
 		return ""
 	}
@@ -343,7 +343,7 @@ func (s *app) invalidateCLIConfiguration(snapshot application.Snapshot) {
 	if json.Unmarshal([]byte(snapshot.ConfigJSON), &config) != nil {
 		return
 	}
-	for tool, key := range map[string]string{"meegle": "meegleExecutablePath", "codex": "codexExecutablePath", "git": "gitExecutablePath", "genbu": "genbuExecutablePath"} {
+	for tool, key := range map[string]string{"meegle": "meegleExecutablePath", "codex": "codexExecutablePath", "git": "gitExecutablePath"} {
 		if s.snapshot.Home == snapshot.Home && s.cliConfiguredPath(tool) == strings.TrimSpace(mapString(config, key)) {
 			continue
 		}
@@ -397,7 +397,7 @@ func (s *app) closeCLIJobs(ctx context.Context) error {
 
 func desktopCLIJobSupported(tool string) bool {
 	switch tool {
-	case "meegle", "codex", "git", "genbu":
+	case "meegle", "codex", "git":
 		return true
 	default:
 		return false

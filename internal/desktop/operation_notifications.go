@@ -33,14 +33,7 @@ func (s *app) renderOperationNotifications(c *ui.Context) {
 	s.operationNotifications.progress(c, "operation-progress", progress, s.operationKind, action, cancel)
 	s.renderRequirementRefreshProgressNotification(c)
 	s.renderRequirementListProgressNotification(c)
-	s.renderProductionProgressNotifications(c)
-	if state := s.workspaceGit; state != nil && s.workspaceGitObservationCurrent(state.observation) {
-		empty := ""
-		s.operationNotifications.present(c, "workspace-git-refresh", &empty, &state.failure)
-	} else {
-		empty, failure := "", ""
-		s.operationNotifications.present(c, "workspace-git-refresh", &empty, &failure)
-	}
+
 	s.operationNotifications.present(c, "operation", &s.lastMessage, &s.lastError)
 	emptyWarningError := ""
 	s.operationNotifications.presentWithKind(c, "task-create-warning", &s.taskCreationWarning, &emptyWarningError, "warning")
@@ -76,11 +69,9 @@ func (s *app) renderRequirementRefreshProgressNotification(c *ui.Context) {
 
 func operationProgressTitle(kind, title string) string {
 	switch kind {
-	case "development-tools/detect":
-		return "正在检测开发工具…"
-	case "development-tools/snapshot", "codex.extensions/snapshot", "codex.extensions/mcp/status",
+	case "codex.extensions/snapshot", "codex.extensions/mcp/status",
 		"skills.sources/catalog", "instructions.templates.list", "config.backups", "config.view",
-		"git.environment", "git.environment/snapshot", "logs.list", "logs.read", "terminal.resolve":
+		"logs.list", "logs.read", "terminal.resolve":
 		return "" // Routine local reads update their pages silently.
 	}
 	if title == "" || title == kind {
@@ -144,8 +135,6 @@ func (s *app) renderSystemOpenProgressNotifications(c *ui.Context) {
 			title = "正在打开目录…"
 		case "terminal":
 			title = "正在打开系统终端…"
-		case "ide":
-			title = "正在打开开发工具…"
 		default:
 			if strings.HasPrefix(key, "cli-terminal:") {
 				title = "正在打开 CLI 终端…"
@@ -292,8 +281,6 @@ func (s *operationNotificationState) presentWithKind(c *ui.Context, scope string
 	if kind == "warning" {
 		toast.ContentMaxHeight = 360
 	}
-	if scope == "operation" && kind == "success" && isTagReleaseNoticeCopiedMessage(text) {
-		toast.ContentMaxHeight = 360
-	}
+
 	c.AddToast(toast)
 }

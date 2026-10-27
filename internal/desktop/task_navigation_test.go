@@ -19,7 +19,7 @@ func taskNavigationFixture() *app {
 	s.configJSON = `{"defaultWorkspaceToolIds":["codex"]}`
 	s.snapshot.Groups = []application.Group{{ID: "backend", Name: "服务端"}, {ID: "client", Name: "客户端"}}
 	s.tasks = []task{
-		{id: "task-api", title: "支付 API 联调", createdAt: "2026-01-01", groupID: "backend", requirementID: "REQ-42", branch: "feature/payment", services: []string{"billing"}, status: "进行中"},
+		{id: "task-api", title: "支付 API 联调", createdAt: "2026-01-01", groupID: "backend", requirementID: "REQ-42", status: "进行中"},
 		{id: "task-ui", title: "界面体验", createdAt: "2026-01-02", groupID: "client", requirementID: "UI-7", requirementURL: "https://example.invalid/UI-7", status: "待处理"},
 		{id: "task-timeout", title: "修复超时", createdAt: "2026-01-03", groupID: "backend", requirementID: "BUG-9", status: "进行中"},
 		{id: "task-archived", title: "已归档任务", createdAt: "2026-01-04", groupID: "client", archived: true, status: "已完成"},
@@ -57,7 +57,7 @@ func TestTaskNavigationSearchAndOrdering(t *testing.T) {
 		{"", []int{2, 0, 1, 4}},
 		{"  aPi  reQ-42 ", []int{0}},
 		{"服务端", []int{2, 0}},
-		{"billing payment", []int{0}},
+		{"支付 API", []int{0}},
 		{"结算 页面", []int{1}},
 		{"meta-17", []int{1}},
 		{"已归档", []int{}},

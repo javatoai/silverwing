@@ -31,13 +31,13 @@ func (s *app) taskActionScopeFor(t task) (taskActionScope, bool) {
 // when opening. Keep these transient details out of persisted task identity.
 type taskMenuScope struct {
 	taskActionScope
-	configJSON, groupID, branch, requirementURL, requirementID string
-	materialsPath, materialsStatus, materialsFailureReason     string
+	configJSON, groupID, requirementURL, requirementID     string
+	materialsPath, materialsStatus, materialsFailureReason string
 }
 
 func (s *app) taskMenuScopeFor(t task) (taskMenuScope, bool) {
 	base, valid := s.taskActionScopeFor(t)
-	return taskMenuScope{taskActionScope: base, configJSON: s.configJSON, groupID: t.groupID, branch: t.branch,
+	return taskMenuScope{taskActionScope: base, configJSON: s.configJSON, groupID: t.groupID,
 		requirementURL: t.requirementURL, requirementID: t.requirementID, materialsPath: t.materialsPath,
 		materialsStatus: t.materialsStatus, materialsFailureReason: t.materialsFailureReason}, valid
 }
@@ -56,21 +56,13 @@ func (s *app) taskContextMenu(services ui.Services, t task, menu *ui.Menu) {
 		pinLabel = "取消置顶"
 	}
 	chosen := ""
-	toolCount := 0
-	for _, tool := range []struct{ id, name string }{{"codex", "Codex"}, {"cursor", "Cursor"}} {
+	for _, tool := range []struct{ id, name string }{{"codex", "Codex"}} {
 		if !s.taskOpenToolEnabled(tool.id) {
 			continue
 		}
-		toolCount++
 		if menu.Item("在 " + tool.name + " 中打开").Icon(icons["launch"]).Disabled(!valid || s.busy || s.backend == nil || t.path == "" || !s.taskOpenToolAvailable(tool.id)).Chosen() {
 			chosen = tool.id + "-open"
 		}
-	}
-	if toolCount > 0 {
-		menu.Separator()
-	}
-	if menu.Item("批量合并主分支").Icon(icons["branch"]).Disabled(!valid || s.busy || s.backend == nil || t.archived || !s.taskHasMainBranchMergeBatch(t)).Chosen() {
-		chosen = "merge-main-batch"
 	}
 	if t.materialsReady() {
 		menu.Separator()
@@ -131,10 +123,6 @@ func (s *app) taskContextMenu(services ui.Services, t task, menu *ui.Menu) {
 	switch chosen {
 	case "codex-open":
 		s.dispatchTaskContextAction(application.Action{Kind: "codex.run", TaskID: t.id, Path: t.path}, opened)
-	case "cursor-open":
-		s.dispatchTaskContextAction(application.Action{Kind: "task.tools-launch", TaskID: t.id, Path: t.path, Payload: map[string]any{"toolIds": []string{"cursor"}}}, opened)
-	case "merge-main-batch":
-		s.openWorkspaceMergeBatch(t)
 	case "materials-open":
 		s.dispatchScopedSystemOpen(application.Action{Kind: "system.open", TaskID: t.id, Path: t.materialsPath,
 			Payload: map[string]any{"desktopSystemOpenDirectory": true}}, opened)

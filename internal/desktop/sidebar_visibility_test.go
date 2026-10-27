@@ -17,9 +17,9 @@ func TestSidebarVisibilityCombinationsAndBottomGrouping(t *testing.T) {
 			for _, tools := range []bool{false, true} {
 				for _, compact := range []bool{false, true} {
 					config := domain.DefaultAppConfig()
-					config.TagEnabled = tag
+
 					config.ToolVisibility = domain.ToolVisibilitySettings{JSON: tools}
-					config.SidebarVisibility = domain.SidebarVisibilitySettings{Requirements: mask&1 != 0, Tools: mask&2 != 0, Production: mask&4 != 0, Services: mask&8 != 0}
+					config.SidebarVisibility = domain.SidebarVisibilitySettings{Requirements: mask&1 != 0, Tools: mask&2 != 0}
 					encoded, _ := json.Marshal(config)
 					s := newApp(nil, Options{Page: "requirements", CapturePath: "isolated-sidebar"})
 					s.loading, s.configJSON = false, string(encoded)
@@ -30,12 +30,7 @@ func TestSidebarVisibilityCombinationsAndBottomGrouping(t *testing.T) {
 					if mask&2 != 0 && tools {
 						want = append(want, "tools")
 					}
-					if mask&4 != 0 && tag {
-						want = append(want, "production")
-					}
-					if mask&8 != 0 {
-						want = append(want, "services")
-					}
+
 					want = append(want, "settings")
 					items := s.sidebarNavigationItems()
 					got := []string{}
@@ -83,7 +78,7 @@ func TestSidebarSettingsLayoutAndSaveFailure(t *testing.T) {
 				tester := ui.NewTester(func(c *ui.Context) {
 					ui.Column(c).Fill().Padding(24).Gap(16).Children(func() { s.settingsBasic(c, setTheme(c, dark)) })
 				}, width, 900)
-				for _, name := range []string{"侧边栏展示", "需求", "研发工具", "生产发布", "服务"} {
+				for _, name := range []string{"侧边栏展示", "需求", "实用工具"} {
 					assertSettingsVisibleBounds(t, tester, name, width, 900)
 				}
 				if tester.HasText("任务和设置始终显示") {
@@ -97,7 +92,7 @@ func TestSidebarSettingsLayoutAndSaveFailure(t *testing.T) {
 				}
 				tester.Key(0, ui.KeyEscape)
 				var x float32 = -1
-				for _, name := range []string{"需求", "研发工具", "生产发布", "服务"} {
+				for _, name := range []string{"需求", "实用工具"} {
 					r, _ := tester.Find(name)
 					if x >= 0 && x != r.X {
 						t.Fatal("navigation settings labels are not aligned")

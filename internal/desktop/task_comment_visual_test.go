@@ -26,21 +26,6 @@ func taskCommentOptimizationVisualFixture(t *testing.T) (*app, *requirementReade
 		Metadata: requirementMetadata{Title: &requirementTitle},
 	}
 
-	workspace := application.Workspace{
-		ID: "visual-workspace", ServiceID: "visual-job-manager", ModuleID: "visual-worker",
-		Path: `C:\synthetic\silverwing\job-manager`, Branch: "feature/visual-fixture", State: "READY",
-	}
-	state.tasks[0].workspaces = []application.Workspace{workspace}
-	state.snapshot.Services = []application.Service{{
-		ID: workspace.ServiceID, Name: "job-manager", GroupID: state.tasks[0].groupID, MasterBranch: "main",
-		Modules: []application.Module{{ID: workspace.ModuleID, Name: "worker", MasterBranch: "main"}},
-	}}
-	actualBranch := workspace.Branch
-	state.workspaceGit = &workspaceGitState{health: map[string]domain.WorkspaceGitHealth{
-		workspaceHealthPathKey(workspace.Path): {
-			State: domain.WorkspaceGitReady, DirtyFileCount: 2, PushState: domain.LocalPushPushed, ActualBranch: &actualBranch,
-		},
-	}}
 	state.setTaskPinned(state.tasks[2], true)
 	state.setTaskPinned(state.tasks[1], true)
 
@@ -103,7 +88,7 @@ func TestTaskCommentOptimizationVisualFixtures(t *testing.T) {
 	}
 
 	for _, size := range [][2]int{{960, 760}, {1440, 940}} {
-		for _, tab := range []int{0, 2} {
+		for _, tab := range []int{1, 2} {
 			name := fmt.Sprintf("task-comment-page-%dx%d-tab-%d", size[0], size[1], tab)
 			t.Run(name, func(t *testing.T) {
 				state, _ := taskCommentOptimizationVisualFixture(t)
@@ -123,13 +108,7 @@ func TestTaskCommentOptimizationVisualFixtures(t *testing.T) {
 				if !tester.HasText("搜索任务") || tester.HasText("最近访问") {
 					t.Fatal("task page should show search without the removed recent-visit mode")
 				}
-				if tab == 0 {
-					if !tester.HasText("本地未提交 2") || !tester.HasText("提交历史") || !tester.HasText("已推送") {
-						t.Fatal("synthetic repository health actions are missing from the workspace card")
-					}
-					if tester.HasText("整体差异") {
-						t.Fatal("workspace card still exposes the removed overall-diff entry")
-					}
+				if tab == 1 {
 					list := taskNavigationTester(state, 360, 520)
 					if list.HasText("全部") || list.HasText("最近访问") {
 						t.Fatal("task list still exposes a removed view mode")

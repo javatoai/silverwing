@@ -3,7 +3,7 @@ package workspace
 import (
 	"context"
 	"errors"
-	"path/filepath"
+
 	"strings"
 	"testing"
 
@@ -56,8 +56,8 @@ func launchNormalizationFixture(t *testing.T) (*WorkspaceToolLaunchService, stri
 	manifest := domain.DefaultTaskManifest()
 	manifest.FolderName, manifest.TaskDirectoryName = "task", "task"
 	manifest.CreatedAt, manifest.UpdatedAt = "2026-10-20T00:00:00Z", "2026-10-20T00:00:00Z"
-	for _, id := range []string{"data-center", "operation-app", "operation-center"} {
-		manifest.Services = append(manifest.Services, domain.ServiceWorkspace{RepositoryID: id, ServiceName: id, RepositoryPath: root, WorktreePath: filepath.Join(root, id), DevelopmentTool: domain.DevelopmentToolIntelliJIdea, Health: domain.WorkspaceReady, Strategy: domain.WorkspaceStandardWorktree, ModuleSource: domain.TaskModuleConfigured, TagMode: domain.TagBuildMergeToTargetBranch})
+	{
+
 	}
 	store := storage.NewManifestStore()
 	if err := store.Save(root, manifest); err != nil {
@@ -83,17 +83,17 @@ func TestToolLaunchAcceptsSavedEmptyWarningLists(t *testing.T) {
 }
 
 func TestToolLaunchRejectsRealManifestChanges(t *testing.T) {
-	for _, field := range []string{"branch", "createdAt", "warnings"} {
+	for _, field := range []string{"name", "createdAt", "requirement"} {
 		t.Run(field, func(t *testing.T) {
 			service, root, manifest, launcher := launchNormalizationFixture(t)
 			changed := domain.NormalizeTaskManifest(manifest)
 			switch field {
-			case "branch":
-				changed.FeatureBranch = "changed"
+			case "name":
+				changed.FolderName = "changed"
 			case "createdAt":
 				changed.CreatedAt = "2026-10-21T00:00:00Z"
-			case "warnings":
-				changed.Services[0].Warnings = []string{"new warning"}
+			case "requirement":
+				changed.RequirementLink = "https://example.invalid/changed"
 			}
 			if err := service.Manifests.Save(root, changed); err != nil {
 				t.Fatal(err)

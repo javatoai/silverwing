@@ -66,7 +66,7 @@ func mergeConfigurationFields(current domain.AppConfig, update ConfigFieldsUpdat
 			return current, fmt.Errorf("未知设置字段：%s", key)
 		}
 		switch key {
-		case "schemaVersion", "genbuExecutableAutoDetected":
+		case "schemaVersion", "edition":
 			return current, fmt.Errorf("此设置字段不能直接更新：%s", key)
 		case "toolVisibility", "sidebarVisibility":
 			return current, errors.New("显示设置需要按具体开关更新")
@@ -117,9 +117,7 @@ func mergeConfigurationFields(current domain.AppConfig, update ConfigFieldsUpdat
 	if !sameConfigurationString(current.TaskRoot, next.TaskRoot) {
 		return current, errors.New("任务根目录变更需要先选择迁移或直接切换")
 	}
-	if _, changed := update.Fields["genbuExecutablePath"]; changed {
-		next.GenbuExecutableAutoDetected = current.GenbuExecutableAutoDetected && sameConfigurationString(current.GenbuExecutablePath, next.GenbuExecutablePath)
-	}
+
 	if _, changed := update.Fields["meegleProjects"]; changed {
 		if _, explicitDefault := update.Fields["meegleDefaultSprintProjectKey"]; !explicitDefault {
 			next.MeegleDefaultSprintProjectKey = current.MeegleDefaultSprintProjectKey

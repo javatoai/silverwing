@@ -227,7 +227,6 @@ func settingsConfigPreview(data any) (application.ConfigImportPreview, error) {
 	}
 	preview.ChangedFields = append([]string(nil), preview.ChangedFields...)
 	preview.Changes = append([]string(nil), preview.Changes...)
-	preview.InvalidDevelopmentTools = append([]string(nil), preview.InvalidDevelopmentTools...)
 	return preview, nil
 }
 

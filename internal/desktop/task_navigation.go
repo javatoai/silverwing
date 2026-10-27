@@ -119,8 +119,7 @@ func (s *app) taskMatchesSearch(t task, terms []string) bool {
 		return true
 	}
 	fields := []string{t.id, t.title, t.requirementID, t.requirementTitle, t.requirementURL,
-		t.project, t.groupID, s.taskGroupName(t), t.branch}
-	fields = append(fields, t.services...)
+		t.project, t.groupID, s.taskGroupName(t)}
 	metadata := s.taskRequirementMetadataFor(t).Metadata
 	fields = append(fields, metadata.ID)
 	if metadata.Title != nil {

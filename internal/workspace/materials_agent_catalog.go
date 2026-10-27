@@ -116,7 +116,7 @@ func (s *AgentDocumentService) refreshMaterialsDirectoryFile(taskPath, path stri
 	if missing {
 		content = base
 	}
-	allow := content == base || content == strings.Replace(base, taskScopeRule, legacyTaskScopeRule, 1)
+	allow := content == base
 	if filepath.Base(path) == AgentContextFileName {
 		allow = strings.HasPrefix(content, "# 任务上下文\n\n> 本文件由系统生成")
 	}

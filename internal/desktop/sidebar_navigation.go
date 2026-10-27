@@ -2,48 +2,32 @@ package desktop
 
 type sidebarNavigationItem struct{ page, name, image string }
 
-func (s *app) showsTagNavigation() bool {
-	return s.configBool("tagEnabled", true) && len(s.readConfigArray("groups")) > 0
-}
-
 func (s *app) sidebarNavigationItems() []sidebarNavigationItem {
-	all := []sidebarNavigationItem{{"tasks", "任务", "tasks"}, {"requirements", "需求", "requirements"}, {"tools", "研发工具", "tools"}, {"production", "生产发布", "branch"}, {"services", "服务", "repo"}, {"settings", "设置", "settings"}}
-	items := make([]sidebarNavigationItem, 0, len(all))
-	showTools := len(s.visibleDeveloperToolTabs()) > 0
+	all := []sidebarNavigationItem{{"tasks", "任务", "tasks"}, {"requirements", "需求", "requirements"}, {"tools", "实用工具", "tools"}, {"settings", "设置", "settings"}}
+	items := []sidebarNavigationItem{}
 	for _, item := range all {
 		if item.page != "tasks" && item.page != "settings" && !s.configNestedBool("sidebarVisibility", item.page, true) {
 			continue
 		}
-		if item.page == "production" && !s.configBool("tagEnabled", true) {
-			continue
-		}
-		if item.page == "tools" && !showTools {
+		if item.page == "tools" && len(s.visibleDeveloperToolTabs()) == 0 {
 			continue
 		}
 		items = append(items, item)
 	}
 	return items
 }
-
 func (s *app) reconcileSidebarNavigation() {
-	if s.page == "skills" {
+	switch s.page {
+	case "skills":
 		s.page, s.settingsTab, s.settingsPage = "settings", "skill", "skill-local"
-		s.settingsLoaded = ""
-	}
-	if s.loading {
-		return
-	}
-	if s.page == "production" && !s.configBool("tagEnabled", true) {
+	case "tasks", "archive", "materials", "requirements", "tools", "settings":
+	default:
 		s.page = "tasks"
 	}
-	if s.page == "tags" {
-		s.page = "tasks"
-		s.tab = taskTagTab
+	if s.tab != 1 && s.tab != 2 && s.tab != 3 {
+		s.tab = 1
 	}
 	if s.page == "tools" && len(s.visibleDeveloperToolTabs()) == 0 {
-		s.page = "settings"
-		s.settingsTab = "快捷工具"
-		s.settingsPage = "tool-visibility"
-		s.settingsLoaded = ""
+		s.page, s.settingsTab, s.settingsPage = "settings", "快捷工具", "tool-visibility"
 	}
 }

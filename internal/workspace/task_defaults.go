@@ -20,7 +20,7 @@ func NewTaskCreationDefaultsService(config *storage.ConfigStore) *TaskCreationDe
 
 func (s *TaskCreationDefaultsService) UpdateBranchPrefix(raw string) (domain.AppConfig, error) {
 	return s.Config.Update(func(config domain.AppConfig) (domain.AppConfig, error) {
-		config.DefaultBranchPrefix = strings.TrimSpace(raw)
+
 		return config, nil
 	})
 }

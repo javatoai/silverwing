@@ -11,7 +11,7 @@ import (
 func TestSidebarVisibilityLeafUpdatePreservesOtherSettings(t *testing.T) {
 	store := storage.NewConfigStore(storage.NewPaths(t.TempDir()))
 	config := domain.DefaultAppConfig()
-	config.SidebarVisibility.Services = false
+
 	config.Theme = domain.ThemeDark
 	if err := store.Save(config); err != nil {
 		t.Fatal(err)
@@ -24,7 +24,7 @@ func TestSidebarVisibilityLeafUpdatePreservesOtherSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := store.Load()
-	if err != nil || got.SidebarVisibility.Requirements || got.SidebarVisibility.Services || !got.SidebarVisibility.Tools || !got.SidebarVisibility.Production || got.Theme != domain.ThemeDark || got.ToolVisibility != config.ToolVisibility {
+	if err != nil || got.SidebarVisibility.Requirements || !got.SidebarVisibility.Tools || got.Theme != domain.ThemeDark || got.ToolVisibility != config.ToolVisibility {
 		t.Fatalf("leaf update replaced unrelated preferences: %+v %v", got.SidebarVisibility, err)
 	}
 	for _, changes := range []map[string]json.RawMessage{

@@ -60,14 +60,20 @@ func (s *ManifestStore) Load(taskDir string) (domain.TaskManifest, error) {
 	}
 	var manifest domain.TaskManifest
 	if err := domain.DecodeStrict(data, &manifest,
-		"folderName", "taskDirectoryName", "featureBranch", "createdAt", "updatedAt", "services",
+		"edition", "folderName", "taskDirectoryName", "createdAt", "updatedAt",
 	); err != nil {
 		return domain.TaskManifest{}, fmt.Errorf("读取 %s: %w", path, err)
+	}
+	if manifest.Edition != "qa" {
+		return domain.TaskManifest{}, fmt.Errorf("任务不是 silverwing-qa 格式")
 	}
 	return manifest, nil
 }
 
 func (s *ManifestStore) Save(taskDir string, manifest domain.TaskManifest) error {
+	if manifest.Edition != "qa" {
+		return fmt.Errorf("不能写入非 QA 任务清单")
+	}
 	if !domain.ValidateSchemaVersion(manifest.SchemaVersion, domain.CurrentTaskManifestSchemaVersion) {
 		return fmt.Errorf("不能写入任务 JSON 版本 %s，当前版本为 %s", manifest.SchemaVersion, domain.CurrentTaskManifestSchemaVersion)
 	}
@@ -79,7 +85,7 @@ func (s *ManifestStore) Save(taskDir string, manifest domain.TaskManifest) error
 	}
 	var roundTrip domain.TaskManifest
 	if err := domain.DecodeStrict(data, &roundTrip,
-		"folderName", "taskDirectoryName", "featureBranch", "createdAt", "updatedAt", "services",
+		"edition", "folderName", "taskDirectoryName", "createdAt", "updatedAt",
 	); err != nil {
 		return fmt.Errorf("任务清单无法按当前 schema 读取：%w", err)
 	}

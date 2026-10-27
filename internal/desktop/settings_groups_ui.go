@@ -19,6 +19,7 @@ var settingsGroupGripIcon = func() *ui.SVG {
 }()
 
 func (s *app) settingsGroups(c *ui.Context, p palette) {
+
 	settingsHelpCard(c, p, "", "", func() {
 		if len(s.snapshot.Groups) == 0 {
 			settingsMuted(c, p, "当前配置没有项目组。")
@@ -50,12 +51,12 @@ func (s *app) settingsGroups(c *ui.Context, p palette) {
 						grip.Children(func() { ui.Icon(c, settingsGroupGripIcon).Width(14).Height(14).TextColor(p.muted) })
 					}
 					label(c, groupCopy.Name, 13, p.text).FontWeight(600).Grow(1).SingleLine()
-					label(c, fmt.Sprintf("%d 个服务", len(groupCopy.ServiceIDs)), 10, p.muted).SingleLine()
+					label(c, fmt.Sprintf("%d 个任务", s.qaGroupTaskCount(groupCopy.ID)), 10, p.muted).SingleLine()
 					if iconButton(c, "settings-group-rename-"+groupCopy.ID, "edit", "重命名项目组", p).Clicked() {
 						s.openForm("settings.group.rename", "重命名项目组", "", groupCopy.ID, "", "", formField{key: "name", label: "项目组名称", value: groupCopy.Name})
 					}
-					if len(s.snapshot.Groups) > 1 && len(groupCopy.ServiceIDs) == 0 && iconButton(c, "settings-group-remove-"+groupCopy.ID, "delete", "删除空项目组", p).Clicked() {
-						s.confirmNative("删除项目组", "只允许删除没有服务的项目组。", groupCopy.Name, func() { s.removeConfigGroup(groupCopy.ID) })
+					if len(s.snapshot.Groups) > 1 && s.qaGroupTaskCount(groupCopy.ID) == 0 && iconButton(c, "settings-group-remove-"+groupCopy.ID, "delete", "删除空项目组", p).Clicked() {
+						s.confirmNative("删除项目组", "只允许删除没有任务的项目组。", groupCopy.Name, func() { s.removeConfigGroup(groupCopy.ID) })
 					}
 				})
 				if before || after {
@@ -73,63 +74,6 @@ func (s *app) settingsGroups(c *ui.Context, p palette) {
 				s.openForm("settings.group.add", "新建项目组", "", "", "", "", formField{key: "name", label: "项目组名称"})
 			}
 		})
-	})
-}
-
-// repositoryGroupSidebar moves group management next to repository/service
-// setup, where groups are used to organize services.
-func (s *app) repositoryGroupSidebar(c *ui.Context, p palette, selectedID string) {
-	ui.Scroll(c).Width(220).Shrink(0).Padding(10).Gap(5).Background(p.soft).Border(1, p.line).Radius(14).Children(func() {
-		label(c, "项目组", 11, p.muted).Padding(7, 8)
-		for _, candidate := range s.snapshot.Groups {
-			group := candidate
-			groupKey := s.snapshot.Home + ":" + group.ID
-			services := s.servicesForGroup(group)
-			row := ui.Column(c.Key("repository-group-row-" + groupKey)).FillWidth().Gap(2)
-			after := s.settingsGroupDropTarget(row, group.ID, true)
-			row.Children(func() {
-				header := ui.Row(c.Key("repository-group-header-" + groupKey)).FillWidth().Gap(5).AlignItems(ui.Center)
-				before := s.settingsGroupDropTarget(header, group.ID, false)
-				header.Children(func() {
-					if len(s.snapshot.Groups) > 1 {
-						grip := ui.Box(c.Key("repository-group-drag-" + groupKey)).Width(20).Height(34).Shrink(0).Center().Label("拖动排序 " + group.Name).Tooltip("拖动调整项目组顺序").Disabled(s.busy)
-						if !s.busy {
-							grip.Drag(settingsGroupDrag{Home: s.snapshot.Home, GroupID: group.ID}).Cursor(ui.CursorGrab)
-						}
-						if grip.Hovered() {
-							grip.Background(p.selected).Radius(5)
-						}
-						if grip.Dragging() {
-							grip.Cursor(ui.CursorGrabbing)
-							row.Opacity(0.55)
-						}
-						grip.Children(func() { ui.Icon(c, settingsGroupGripIcon).Width(14).Height(14).TextColor(p.muted) })
-					}
-					button := ui.ButtonBase(c.Key("service-group-"+group.ID)).Grow(1).MinWidth(0).Height(48).Padding(7, 9).Radius(9).Label(group.Name)
-					if group.ID == selectedID {
-						button.Background(p.selected)
-					}
-					button.Children(func() {
-						ui.Column(c).MinWidth(0).Gap(3).Children(func() {
-							label(c, firstNonEmpty(group.Name, group.ID), 12, map[bool]ui.Color{true: p.blue, false: p.text}[group.ID == selectedID]).FontWeight(500).SingleLine()
-							label(c, fmt.Sprintf("%d 个仓库", len(services)), 10, p.muted)
-						})
-					})
-					if button.Clicked() {
-						s.serviceGroupID = group.ID
-						s.serviceReorderMode = false
-					}
-				})
-				if before || after {
-					line := ui.Box(c).Absolute().Left(8).Right(8).Height(2).Background(p.blue).Radius(1)
-					if before {
-						line.Top(0)
-					} else {
-						line.Bottom(0)
-					}
-				}
-			})
-		}
 	})
 }
 

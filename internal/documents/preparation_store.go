@@ -429,7 +429,7 @@ func isWithin(root, path string) bool {
 }
 
 func renderRequirementOverview(manifest RequirementDocumentationManifest) string {
-	return fmt.Sprintf("# %s-%s\n\n- 需求：`%s`\n- 创建时间：%s\n\n## 过程文档\n\n过程文档、研发辅助资料、SQL 与脚本统一写入本需求的资料子目录。代码仓库自身的 README、ADR、API 文档仍留在对应 Worktree。\n",
+	return fmt.Sprintf("# %s-%s\n\n- 需求：`%s`\n- 创建时间：%s\n\n## 过程文档\n\n需求分析、测试用例、验收记录、SQL 与脚本统一写入本需求的资料子目录。\n",
 		manifest.Identity.WorkItemID, manifest.RequirementTitle, manifest.Identity.StableKey(), manifest.CreatedAt)
 }
 

@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"runtime"
 	"syscall"
-
-	"silverwing-go/internal/domain"
 )
 
 var shellExecute = syscall.NewLazyDLL("shell32.dll").NewProc("ShellExecuteW")
@@ -45,13 +43,7 @@ func launchTerminal(ctx context.Context, resolution SystemTerminalResolution, di
 func launchSystemTerminalPlan(ctx context.Context, plan SystemLaunchPlan) error {
 	return startWindowsLaunchPlan(ctx, plan, true)
 }
-func launchTool(ctx context.Context, toolType domain.DevelopmentToolType, executable, path string) error {
-	plan, err := PlanSystemToolLaunch(runtime.GOOS, toolType, executable, path)
-	if err != nil {
-		return err
-	}
-	return startWindowsLaunchPlan(ctx, plan, false)
-}
+
 func startWindowsLaunchPlan(ctx context.Context, plan SystemLaunchPlan, terminal bool) error {
 	cmd, err := detachedToolCommand(ctx, plan.Executable, plan.Arguments)
 	if err != nil {
@@ -65,21 +57,6 @@ func startWindowsLaunchPlan(ctx context.Context, plan SystemLaunchPlan, terminal
 	} else {
 		cmd.SysProcAttr.HideWindow = true
 	}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	go cmd.Wait()
-	return nil
-}
-func launchToolArguments(ctx context.Context, executable string, arguments ...string) error {
-	cmd, err := detachedToolCommand(ctx, executable, arguments)
-	if err != nil {
-		return err
-	}
-	if cmd.SysProcAttr == nil {
-		cmd.SysProcAttr = &syscall.SysProcAttr{}
-	}
-	cmd.SysProcAttr.HideWindow = true
 	if err := cmd.Start(); err != nil {
 		return err
 	}

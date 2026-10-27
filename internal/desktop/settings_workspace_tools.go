@@ -24,7 +24,7 @@ func (s *app) applySettingsWorkspaceTools(action application.Action, result appl
 		err = json.Unmarshal(data, &options)
 	}
 	if err == nil && options == nil {
-		err = errors.New("工作区工具选项未返回有效列表，请重新读取。")
+		err = errors.New("任务工具选项未返回有效列表，请重新读取。")
 	}
 	state.workspaceToolsLoading = false
 	if err != nil {
@@ -32,8 +32,6 @@ func (s *app) applySettingsWorkspaceTools(action application.Action, result appl
 		return
 	}
 	state.workspaceTools, state.workspaceToolsLoaded, state.workspaceToolsError = options, true, ""
-	s.stopTaskOpenTools()
-	s.taskOpenTools = &taskOpenToolsState{home: s.snapshot.Home, config: s.configJSON, options: options, loaded: true}
 }
 
 func (s *app) settingsWorkspaceTools(c *ui.Context, p palette) {
@@ -49,7 +47,7 @@ func (s *app) settingsWorkspaceTools(c *ui.Context, p palette) {
 		} else if state.workspaceToolsError != "" {
 			label(c, state.workspaceToolsError, 11, p.amber).Wrap()
 		} else if state.workspaceToolsLoaded && len(state.workspaceTools) == 0 {
-			settingsMuted(c, p, "当前没有已注册的工作区工具。")
+			settingsMuted(c, p, "当前没有已注册的任务工具。")
 		}
 		configured := stringArray(s.configArray("defaultWorkspaceToolIds"))
 		for _, option := range normalizeTaskCreationWorkspaceTools(state.workspaceTools, configured) {

@@ -1,24 +1,23 @@
 package application
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
+
 	"path/filepath"
 	"reflect"
-	"strings"
+
 	"testing"
 
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/integrations"
 	"silverwing-go/internal/storage"
-	"silverwing-go/internal/workspace"
 )
 
 func taskIdentityFixture(t *testing.T, app *App, root, directory, declared string) domain.TaskManifest {
 	t.Helper()
 	manifest := domain.DefaultTaskManifest()
-	manifest.FolderName, manifest.TaskDirectoryName, manifest.FeatureBranch = directory, declared, "feature/test"
+	manifest.TaskDirectoryName, manifest.FolderName = declared, directory
+
 	manifest.CreatedAt, manifest.UpdatedAt = "2026-10-15", "2026-10-15"
 	if err := app.Manifests.Save(filepath.Join(root, directory), manifest); err != nil {
 		t.Fatal(err)
@@ -48,30 +47,6 @@ func TestTaskIdentityUsesCapturedConfigAndRejectsManifestAliases(t *testing.T) {
 		if _, _, err := app.task(Action{TaskID: id}); err == nil {
 			t.Fatalf("mismatched manifest accepted through %q", id)
 		}
-	}
-}
-
-func TestWorkspaceDiffPrefetchRejectsChangedPathBeforeGit(t *testing.T) {
-	paths := storage.NewPaths(t.TempDir())
-	app := &App{Paths: paths, Config: storage.NewConfigStore(paths), Manifests: storage.NewManifestStore()}
-	config := domain.DefaultAppConfig()
-	config.TaskRoot = &paths.Tasks
-	if err := app.Config.Save(config); err != nil {
-		t.Fatal(err)
-	}
-	manifest := taskIdentityFixture(t, app, paths.Tasks, "task", "task")
-	manifest.Services = []domain.ServiceWorkspace{{GroupServiceID: "service", ModuleID: "module", RepositoryID: "repo", ServiceName: "service", RepositoryPath: paths.Home, WorktreePath: filepath.Join(paths.Tasks, "task", "current"), Branch: "feature/test", Strategy: domain.WorkspaceStandardWorktree, DevelopmentTool: domain.DevelopmentToolVisualStudioCode, Health: domain.WorkspaceReady, ModuleSource: domain.TaskModuleConfigured, TagMode: domain.TagBuildCurrentBranch}}
-	if err := app.Manifests.Save(filepath.Join(paths.Tasks, "task"), manifest); err != nil {
-		t.Fatal(err)
-	}
-	err := app.PrefetchWorkspaceDiff(context.Background(), WorkspaceDiffPrefetchRequest{TaskID: "task", ServiceID: "service", ModuleID: "module", Path: filepath.Join(paths.Home, "stale"), SessionID: "opaque", Compare: workspace.CompareRequest{Mode: workspace.CompareUncommitted}})
-	if err == nil || !strings.Contains(err.Error(), "工作区路径已变化") {
-		t.Fatalf("stale path reached Git/session layer: %v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := (&App{}).PrefetchWorkspaceDiff(ctx, WorkspaceDiffPrefetchRequest{}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled prefetch touched state: %v", err)
 	}
 }
 

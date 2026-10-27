@@ -12,8 +12,6 @@ import (
 	"runtime"
 	"strings"
 	"unicode/utf16"
-
-	"silverwing-go/internal/domain"
 )
 
 // SystemLaunchPlan is the executable and argument vector for a native desktop
@@ -80,42 +78,6 @@ func PlanSystemTerminalLaunch(osName string, resolution SystemTerminalResolution
 	}
 }
 
-// PlanSystemToolLaunch builds the executable/argv selected by Source's
-// DevelopmentToolLaunchCommand. It has no process or filesystem side effects.
-func PlanSystemToolLaunch(osName string, toolType domain.DevelopmentToolType, configuredPath, target string) (SystemLaunchPlan, error) {
-	configuredPath = strings.TrimSpace(configuredPath)
-	if configuredPath == "" {
-		return SystemLaunchPlan{}, errors.New("开发工具路径不能为空")
-	}
-	applicationPath, err := absoluteLaunchPath(osName, configuredPath)
-	if err != nil {
-		return SystemLaunchPlan{}, err
-	}
-	projectPath, err := absoluteLaunchPath(osName, target)
-	if err != nil {
-		return SystemLaunchPlan{}, err
-	}
-	arguments := []string{}
-	if toolType == domain.DevelopmentToolVisualStudioCode {
-		arguments = append(arguments, "--new-window")
-	}
-	arguments = append(arguments, projectPath)
-
-	if isMacOS(osName) && strings.HasSuffix(strings.ToLower(applicationPath), ".app") {
-		if toolType == domain.DevelopmentToolVisualStudioCode {
-			return SystemLaunchPlan{Executable: "open", Arguments: []string{"-n", "-a", applicationPath, "--args", "--new-window", projectPath}}, nil
-		}
-		return SystemLaunchPlan{Executable: "open", Arguments: []string{"-a", applicationPath, projectPath}}, nil
-	}
-	if isWindowsOS(osName) && isWindowsBatch(applicationPath) {
-		return windowsBatchLaunchPlan(applicationPath, arguments), nil
-	}
-	if isWindowsOS(osName) && isJetBrainsTool(toolType) {
-		return windowsJetBrainsLaunchPlan(applicationPath, arguments), nil
-	}
-	return SystemLaunchPlan{Executable: applicationPath, Arguments: arguments}, nil
-}
-
 func absoluteLaunchPath(osName, value string) (string, error) {
 	if value == "" {
 		return "", errors.New("启动路径不能为空")
@@ -155,28 +117,6 @@ func isWindowsAbsolutePath(value string) bool {
 func isWindowsBatch(value string) bool {
 	lower := strings.ToLower(value)
 	return strings.HasSuffix(lower, ".cmd") || strings.HasSuffix(lower, ".bat")
-}
-
-func isJetBrainsTool(toolType domain.DevelopmentToolType) bool {
-	switch toolType {
-	case domain.DevelopmentToolIntelliJIdea, domain.DevelopmentToolWebStorm, domain.DevelopmentToolPyCharm,
-		domain.DevelopmentToolAndroidStudio, domain.DevelopmentToolDevEcoStudio:
-		return true
-	default:
-		return false
-	}
-}
-
-func windowsJetBrainsLaunchPlan(application string, arguments []string) SystemLaunchPlan {
-	quotedArguments := make([]string, len(arguments))
-	for i, argument := range arguments {
-		quotedArguments[i] = windowsArgument(argument)
-	}
-	script := "Start-Process -FilePath " + powerShellLiteral(application) + " -ArgumentList " + powerShellLiteral(strings.Join(quotedArguments, " "))
-	return SystemLaunchPlan{
-		Executable: "powershell.exe",
-		Arguments:  []string{"-NoProfile", "-EncodedCommand", encodePowerShellScript(script)},
-	}
 }
 
 func windowsBatchLaunchPlan(application string, arguments []string) SystemLaunchPlan {

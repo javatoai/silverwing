@@ -21,12 +21,3 @@ func (s *app) taskGroup(id string) application.Group {
 	}
 	return application.Group{}
 }
-
-func (s *app) serviceByID(groupID, id string) (application.Service, bool) {
-	for _, service := range s.snapshot.Services {
-		if service.GroupID == groupID && service.ID == id {
-			return service, true
-		}
-	}
-	return application.Service{}, false
-}

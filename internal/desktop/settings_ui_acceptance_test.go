@@ -67,7 +67,7 @@ func TestSettingsSystemScreensIsolatedLayout(test *testing.T) {
 				if err := tester.Click("关于"); err != nil {
 					test.Fatal(err)
 				}
-				if state.settingsPage != "about" || !tester.HasText("SilverWing") || tester.HasText(state.snapshot.Home) {
+				if state.settingsPage != "about" || !tester.HasText("silverwing-qa") || tester.HasText(state.snapshot.Home) {
 					test.Fatal("about tab was not restored after viewing the application data page")
 				}
 				if len(tester.OpenedURLs()) != 0 {

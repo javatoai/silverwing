@@ -29,7 +29,7 @@ $outputDirectory = Join-Path $buildRoot "windows-amd64/$version-$stamp"
 if (Test-Path -LiteralPath $outputDirectory) { throw "Refusing to overwrite existing output: $outputDirectory" }
 $workRoot = Join-Path $repoRoot ("build/native-packaging/windows-" + [guid]::NewGuid().ToString('N'))
 $cacheRoot = Join-Path $repoRoot 'build/native-cache'
-$stage = Join-Path $workRoot 'silverwing-qa'
+$stage = Join-Path $workRoot 'silverwing-product'
 $resourceRoot = Join-Path $stage 'resources'
 $noticeRoot = Join-Path $workRoot 'notices'
 $null = New-Item -ItemType Directory -Force -Path $stage, $resourceRoot, $cacheRoot, $noticeRoot
@@ -95,7 +95,7 @@ function Add-PerUserRegistryKeyPaths([string]$HarvestFile) {
         $registry = $document.CreateElement('RegistryValue', $namespace)
         $registry.SetAttribute('Id', "reg$componentId")
         $registry.SetAttribute('Root', 'HKCU')
-        $registry.SetAttribute('Key', 'Software\SilverwingQA\Installer\Components')
+        $registry.SetAttribute('Key', 'Software\SilverwingProduct\Installer\Components')
         $registry.SetAttribute('Name', $componentId)
         $registry.SetAttribute('Type', 'integer')
         $registry.SetAttribute('Value', '1')
@@ -107,7 +107,7 @@ function Add-PerUserRegistryKeyPaths([string]$HarvestFile) {
     $directories = $directoryReference.SelectNodes('.//wix:Directory', $namespaces)
     $cleanup = $document.CreateElement('Component', $namespace)
     $cleanup.SetAttribute('Id', 'HarvestFolderCleanup')
-    $cleanup.SetAttribute('Guid', 'DC9374EF-9951-5B14-AB34-99BD19D35615')
+    $cleanup.SetAttribute('Guid', 'FA8703C2-9D9F-5E67-8FEB-2C03F4D70431')
     foreach ($directory in $directories) {
         $folder = $document.CreateElement('RemoveFolder', $namespace)
         $folder.SetAttribute('Id', "RemoveFolder_$($directory.GetAttribute('Id'))")
@@ -118,7 +118,7 @@ function Add-PerUserRegistryKeyPaths([string]$HarvestFile) {
     $folderRegistry = $document.CreateElement('RegistryValue', $namespace)
     $folderRegistry.SetAttribute('Id', 'regHarvestFolderCleanup')
     $folderRegistry.SetAttribute('Root', 'HKCU')
-    $folderRegistry.SetAttribute('Key', 'Software\SilverwingQA\Installer')
+    $folderRegistry.SetAttribute('Key', 'Software\SilverwingProduct\Installer')
     $folderRegistry.SetAttribute('Name', 'harvestedFolders')
     $folderRegistry.SetAttribute('Type', 'integer')
     $folderRegistry.SetAttribute('Value', '1')
@@ -142,9 +142,9 @@ try {
     if ($PayloadDirectory) {
         $payloadSource = (Resolve-Path -LiteralPath $PayloadDirectory).Path
         if (-not (Test-Path -LiteralPath $payloadSource -PathType Container)) { throw "Payload path is not a directory: $payloadSource" }
-        if (Test-Path -LiteralPath (Join-Path $payloadSource 'silverwing-qa-cli.exe')) { throw 'Reusable payload contains the removed Silverwing CLI; provide a GUI-only payload' }
+        if (Test-Path -LiteralPath (Join-Path $payloadSource 'silverwing-product-cli.exe')) { throw 'Reusable payload contains the removed Silverwing CLI; provide a GUI-only payload' }
         foreach ($required in @(
-            'silverwing-qa.exe',
+            'silverwing-product.exe',
             'resources/native/pdfium.dll',
             'resources/native-mermaid/windows-x64/mmdr.exe'
         )) {
@@ -195,7 +195,7 @@ try {
         New-SilverwingWindowsIconResource -OutputPath $iconObject `
             -IconPath (Join-Path $repoRoot 'internal/desktop/assets/app-icon.png')
         $iconObjectCreated = $true
-        Invoke-Go @('build', '-trimpath', '-tags', 'mygo_noinspector', '-ldflags', "$commonLdflags -H=windowsgui", '-o', (Join-Path $stage 'silverwing-qa.exe'), './cmd/silverwing')
+        Invoke-Go @('build', '-trimpath', '-tags', 'mygo_noinspector', '-ldflags', "$commonLdflags -H=windowsgui", '-o', (Join-Path $stage 'silverwing-product.exe'), './cmd/silverwing')
     }
     finally {
         $env:GOOS, $env:GOARCH, $env:CGO_ENABLED = $oldGOOS, $oldGOARCH, $oldCGO
@@ -264,7 +264,7 @@ The app bundle contains no WebView runtime or JVM. Windows system graphics/runti
     # Ship the product license alongside the GUI in every package.
     Copy-Item -LiteralPath (Join-Path $repoRoot 'LICENSE') -Destination (Join-Path $stage 'LICENSE') -Force
 
-    Assert-SilverwingWindowsIcon -ExecutablePath (Join-Path $stage 'silverwing-qa.exe')
+    Assert-SilverwingWindowsIcon -ExecutablePath (Join-Path $stage 'silverwing-product.exe')
 
     # Reused GUI payloads may predate the renderer's app-local runtime. Enrich
     # both packaging paths before ZIP, NSIS manifest and MSI harvesting.
@@ -310,7 +310,7 @@ The app bundle contains no WebView runtime or JVM. Windows system graphics/runti
             if ($toolVersion -notmatch '^3\.14\.1(?:\.|$)') { throw "Expected WiX Toolset 3.14.1 for $tool, got: $toolVersion" }
         }
 
-        $installerExe = Join-Path $workRoot "silverwing-qa-$version-windows-x64-setup.exe"
+        $installerExe = Join-Path $workRoot "silverwing-product-$version-windows-x64-setup.exe"
         $uninstallManifest = Join-Path $workRoot 'uninstall-payload.nsh'
         New-NSISUninstallManifest -Stage $stage -Destination $uninstallManifest
         & $nsisExecutable /INPUTCHARSET UTF8 "/DPRODUCT_VERSION=$version" "/DSTAGING_DIR=$stage" "/DOUTPUT_FILE=$installerExe" "/DUNINSTALL_MANIFEST=$uninstallManifest" (Join-Path $PSScriptRoot 'windows-installer.nsi')
@@ -326,15 +326,15 @@ The app bundle contains no WebView runtime or JVM. Windows system graphics/runti
         if ($LASTEXITCODE -ne 0) { throw 'WiX candle failed to compile windows-installer.wxs.' }
         & (Join-Path $wixBin 'candle.exe') -nologo -arch x64 "-dProductVersion=$version" "-dSourceDir=$stage" -out (Join-Path $wixWork 'SilverwingFiles.wixobj') $harvest
         if ($LASTEXITCODE -ne 0) { throw 'WiX candle failed to compile the harvested files.' }
-        $installerMsi = Join-Path $workRoot "silverwing-qa-$version-windows-x64.msi"
+        $installerMsi = Join-Path $workRoot "silverwing-product-$version-windows-x64.msi"
         & (Join-Path $wixBin 'light.exe') -nologo -out $installerMsi (Join-Path $wixWork 'windows-installer.wixobj') (Join-Path $wixWork 'SilverwingFiles.wixobj')
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $installerMsi)) { throw 'WiX light failed to link the MSI.' }
     }
 
     $null = New-Item -ItemType Directory -Force -Path $outputDirectory
-    Copy-Item -LiteralPath $stage -Destination (Join-Path $outputDirectory 'silverwing-qa') -Recurse
-    $zipPath = Join-Path $outputDirectory "silverwing-qa-$version-windows-x64-portable.zip"
-    Compress-Archive -Path (Join-Path $outputDirectory 'silverwing-qa') -DestinationPath $zipPath -CompressionLevel Optimal
+    Copy-Item -LiteralPath $stage -Destination (Join-Path $outputDirectory 'silverwing-product') -Recurse
+    $zipPath = Join-Path $outputDirectory "silverwing-product-$version-windows-x64-portable.zip"
+    Compress-Archive -Path (Join-Path $outputDirectory 'silverwing-product') -DestinationPath $zipPath -CompressionLevel Optimal
     if (-not $PortableOnly) {
         Copy-Item -LiteralPath $installerExe -Destination $outputDirectory
         Copy-Item -LiteralPath $installerMsi -Destination $outputDirectory

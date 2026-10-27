@@ -274,8 +274,8 @@ func (s *app) renderTaskCreationDialog(c *ui.Context, p palette) bool {
 	ui.DialogBase(c.Key("task-create-dialog"), &open, func(backdrop, panel ui.Element) {
 		backdrop.Background(ui.RGBA(0, 0, 0, 0.32))
 		w, h := c.Size()
-		panel.Width(min(760, w-32)).MaxHeight(h-32).Padding(20).Gap(12).Background(p.surface).Border(1, p.line).Radius(16).Label("创建测试任务").Children(func() {
-			label(c, "创建测试任务", 20, p.text).FontWeight(600)
+		panel.Width(min(760, w-32)).MaxHeight(h-32).Padding(20).Gap(12).Background(p.surface).Border(1, p.line).Radius(16).Label("创建产品任务").Children(func() {
+			label(c, "创建产品任务", 20, p.text).FontWeight(600)
 			ui.Scroll(c).FillWidth().MaxHeight(max(180, h-220)).Gap(12).Disabled(state.phase == "creating").Children(func() {
 				s.renderTaskCreationRequirements(c, p)
 				label(c, "任务名称 / 文件夹名", 12, p.muted)

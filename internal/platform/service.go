@@ -72,7 +72,7 @@ func (s *Service) Execute(ctx context.Context, kind string, payload map[string]a
 	case "update.check":
 		return map[string]any{
 			"currentVersion": domain.CurrentProductVersion,
-			"releasesUrl":    "https://github.com/javatoai/silverwing/releases?q=qa-v&expanded=true",
+			"releasesUrl":    "https://github.com/javatoai/silverwing/releases?q=product-v&expanded=true",
 			"automatic":      false,
 		}, nil
 	default:

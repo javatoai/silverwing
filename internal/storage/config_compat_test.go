@@ -230,8 +230,8 @@ func TestConfigCompatibilityInvalidContentStillRejected(t *testing.T) {
 		{"known type", "integrations.json", `{"schema":6,"meegleExecutablePath":false,"future":true}`},
 		{"known enum", "appearance.json", `{"schema":6,"theme":"FUTURE"}`},
 		{"null boolean", "appearance.json", `{"schema":6,"sidebarVisibility":{"tools":null,"future":true}}`},
-		{"null list", "layout.json", `{"schema":6,"edition":"qa","groups":null}`},
-		{"missing row ID", "layout.json", `{"schema":6,"edition":"qa","groups":[{"name":"r","future":true}]}`},
+		{"null list", "layout.json", `{"schema":6,"edition":"product","groups":null}`},
+		{"missing row ID", "layout.json", `{"schema":6,"edition":"product","groups":[{"name":"r","future":true}]}`},
 		{"nested type", "integrations.json", `{"schema":6,"materialsGitSync":{"branch":false,"future":true}}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {

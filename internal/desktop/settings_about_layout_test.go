@@ -20,7 +20,7 @@ func TestSettingsAboutLayoutAcrossSizesAndThemes(test *testing.T) {
 					state.settingsAbout(context, theme)
 				})
 
-				if !tester.HasText("silverwing-qa") || !tester.HasText("MyGO 原生桌面") || !tester.HasText("当前版本") || !tester.HasText(domain.CurrentProductVersion) {
+				if !tester.HasText("silverwing-product") || !tester.HasText("MyGO 原生桌面") || !tester.HasText("当前版本") || !tester.HasText(domain.CurrentProductVersion) {
 					test.Fatalf("brand, runtime description, or version is missing: %v", tester.Texts())
 				}
 				for _, text := range tester.Texts() {

@@ -13,7 +13,7 @@ import (
 
 func qaTestApp(t *testing.T) *App {
 	t.Helper()
-	home := filepath.Join(t.TempDir(), "qa-profile")
+	home := filepath.Join(t.TempDir(), "product-profile")
 	a, err := New(home)
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +36,7 @@ func TestQATaskLifecycleWithoutGit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Edition != "qa" || value(config.TaskRoot) != filepath.Join(a.Paths.Home, "tasks") || value(config.RequirementMaterialsRoot) != filepath.Join(a.Paths.Home, "materials") {
+	if config.Edition != "product" || value(config.TaskRoot) != filepath.Join(a.Paths.Home, "tasks") || value(config.RequirementMaterialsRoot) != filepath.Join(a.Paths.Home, "materials") {
 		t.Fatalf("QA roots not isolated: %+v", config)
 	}
 	result, err := a.Dispatch(ctx, Action{Kind: "task.create", Payload: map[string]any{"folderName": "需求分析", "taskNotes": "测试范围与验收标准", "workspaceToolIds": []string{}}})
@@ -48,7 +48,7 @@ func TestQATaskLifecycleWithoutGit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifest.Edition != "qa" {
+	if manifest.Edition != "product" {
 		t.Fatal("missing edition")
 	}
 	raw, err := os.ReadFile(filepath.Join(taskPath, storage.TaskManifestFileName))

@@ -30,7 +30,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-payload="$work/silverwing-qa.app"
+payload="$work/silverwing-product.app"
 macos_dir="$payload/Contents/MacOS"
 resource_root="$payload/Contents/Resources"
 notice_root="$work/notices"
@@ -71,9 +71,9 @@ fi
 ldflags="-s -w -X silverwing-go/internal/buildinfo.Version=$version -X silverwing-go/internal/buildinfo.Commit=$commit -X silverwing-go/internal/buildinfo.BuildTime=$build_time"
 (
   cd "$repo_root"
-  GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -tags mygo_noinspector -ldflags "$ldflags" -o "$macos_dir/silverwing-qa" ./cmd/silverwing
+  GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -tags mygo_noinspector -ldflags "$ldflags" -o "$macos_dir/silverwing-product" ./cmd/silverwing
 )
-chmod 755 "$macos_dir/silverwing-qa"
+chmod 755 "$macos_dir/silverwing-product"
 
 mmdr_archive="$(fetch_pinned \
   'mmdr-aarch64-apple-darwin.tar.gz' \
@@ -148,10 +148,10 @@ cat > "$payload/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleExecutable</key><string>silverwing-qa</string>
-  <key>CFBundleIdentifier</key><string>io.github.javatoai.silverwing.qa</string>
-  <key>CFBundleName</key><string>silverwing-qa</string>
-  <key>CFBundleDisplayName</key><string>silverwing-qa</string>
+  <key>CFBundleExecutable</key><string>silverwing-product</string>
+  <key>CFBundleIdentifier</key><string>io.github.javatoai.silverwing.product</string>
+  <key>CFBundleName</key><string>silverwing-product</string>
+  <key>CFBundleDisplayName</key><string>silverwing-product</string>
   <key>CFBundleIconFile</key><string>app-icon.icns</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$version</string>
@@ -166,8 +166,8 @@ codesign --force --deep --sign - "$payload"
 codesign --verify --deep --strict "$payload"
 
 mkdir -p "$out_dir"
-cp -R "$payload" "$out_dir/silverwing-qa.app"
-dmg="$out_dir/silverwing-qa-$version-macos-arm64.dmg"
-hdiutil create -format UDZO -volname "silverwing-qa $version" -srcfolder "$out_dir/silverwing-qa.app" "$dmg"
+cp -R "$payload" "$out_dir/silverwing-product.app"
+dmg="$out_dir/silverwing-product-$version-macos-arm64.dmg"
+hdiutil create -format UDZO -volname "silverwing-product $version" -srcfolder "$out_dir/silverwing-product.app" "$dmg"
 printf 'Native Go package version %s (%s) created at %s\n' "$version" "$commit" "$out_dir"
 ls -lh "$out_dir"

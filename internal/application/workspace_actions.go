@@ -24,11 +24,11 @@ func (a *App) workspaceActionWithProgress(ctx context.Context, action Action, _ 
 	}
 	if action.Kind == "task.create" {
 		if action.ServiceID != "" || action.ModuleID != "" {
-			return ActionResult{}, errors.New("测试任务不接受服务或模块参数")
+			return ActionResult{}, errors.New("产品任务不接受服务或模块参数")
 		}
 		for _, key := range []string{"featureBranch", "branch", "serviceIds", "serviceSelections", "baseOverrides", "confirmedBranchReuseKeys"} {
 			if _, ok := action.Payload[key]; ok {
-				return ActionResult{}, fmt.Errorf("测试任务不接受代码工作区参数：%s", key)
+				return ActionResult{}, fmt.Errorf("产品任务不接受代码工作区参数：%s", key)
 			}
 		}
 		var request workspace.CreateTaskRequest
@@ -51,7 +51,7 @@ func (a *App) workspaceActionWithProgress(ctx context.Context, action Action, _ 
 		}
 		for _, id := range ids {
 			if id != "codex" {
-				return ActionResult{}, errors.New("测试版只支持在 Codex 中打开任务")
+				return ActionResult{}, errors.New("产品版只支持在 Codex 中打开任务")
 			}
 		}
 		manifest, err := service.CreateTaskWithProgress(ctx, config, request, progress)
@@ -88,7 +88,7 @@ func (a *App) workspaceActionWithProgress(ctx context.Context, action Action, _ 
 		}
 		for _, id := range ids {
 			if id != "codex" {
-				return ActionResult{}, errors.New("测试版只支持 Codex")
+				return ActionResult{}, errors.New("产品版只支持 Codex")
 			}
 		}
 		m, e := service.LaunchWorkspaceTools(ctx, path, manifest, ids)
@@ -98,7 +98,7 @@ func (a *App) workspaceActionWithProgress(ctx context.Context, action Action, _ 
 		return ActionResult{Message: "Codex 打开请求已返回", Data: m}, e
 	case "task.tools-retry":
 		if textPayload(action, "toolId") != "codex" {
-			return ActionResult{}, errors.New("测试版只支持 Codex")
+			return ActionResult{}, errors.New("产品版只支持 Codex")
 		}
 		m, e := service.RetryWorkspaceTool(ctx, path, manifest, "codex")
 		if e == nil {
@@ -121,7 +121,7 @@ func (a *App) workspaceActionWithProgress(ctx context.Context, action Action, _ 
 	case "task.delete":
 		return ActionResult{Message: "任务已删除"}, service.Delete(ctx, config, path, false)
 	}
-	return ActionResult{}, fmt.Errorf("测试版不支持任务操作：%s", action.Kind)
+	return ActionResult{}, fmt.Errorf("产品版不支持任务操作：%s", action.Kind)
 }
 func taskCreatedPath(config domain.AppConfig, m domain.TaskManifest) string {
 	return filepath.Join(value(config.TaskRoot), m.TaskDirectoryName)

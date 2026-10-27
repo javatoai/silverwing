@@ -36,7 +36,7 @@ func (a *App) openCodex(ctx context.Context, action Action) (ActionResult, error
 	}
 	path := taskPath
 	if action.ServiceID != "" || action.ModuleID != "" {
-		return ActionResult{}, errors.New("QA 版不支持代码工作区")
+		return ActionResult{}, errors.New("产品版不支持代码工作区")
 	}
 	path, err = filepath.Abs(path)
 	if err != nil {

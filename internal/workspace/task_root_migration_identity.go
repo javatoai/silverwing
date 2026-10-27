@@ -10,8 +10,8 @@ import (
 )
 
 func migrationWorkspaceIdentities(task migrationJournalTask) ([]string, error) {
-	if task.OriginalManifest.Edition != "qa" {
-		return nil, fmt.Errorf("迁移日志不是 QA 格式")
+	if task.OriginalManifest.Edition != "product" {
+		return nil, fmt.Errorf("迁移日志不是产品版格式")
 	}
 	return nil, nil
 }

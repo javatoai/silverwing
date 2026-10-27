@@ -15,8 +15,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defaultHome := filepath.Join(userHome, "silverwing-qa")
-	home := flag.String("home", defaultHome, "silverwing-qa data directory")
+	defaultHome := filepath.Join(userHome, "silverwing-product")
+	home := flag.String("home", defaultHome, "silverwing-product data directory")
 	page := flag.String("page", "tasks", "initial page: tasks, archive, requirements, tools, skills, or settings")
 	dark := flag.Bool("dark", false, "start with the dark theme")
 	width := flag.Int("width", 0, "initial window width; zero restores the saved size")

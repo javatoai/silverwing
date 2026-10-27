@@ -15,11 +15,11 @@ func TestCommandAndNamingDefaultsRespectExplicitSettings(t *testing.T) {
 	}
 	assertDefault(DefaultAppConfig())
 	var missing AppConfig
-	if err := json.Unmarshal([]byte(`{"edition":"qa"}`), &missing); err != nil {
+	if err := json.Unmarshal([]byte(`{"edition":"product"}`), &missing); err != nil {
 		t.Fatal(err)
 	}
 	assertDefault(missing)
-	for _, raw := range []string{`{"edition":"qa","commandProxyUrl":null,"commandProxyTargets":[],"aiRequirementNamingEnabled":false,"aiRequirementNamingPrewarmEnabled":false,"aiRequirementNamingModel":"gpt-5.6-luna"}`, `{"edition":"qa","commandProxyUrl":"","aiRequirementNamingEnabled":false,"aiRequirementNamingPrewarmEnabled":false,"aiRequirementNamingModel":"gpt-5.6-luna"}`, `{"edition":"qa","commandProxyUrl":null,"aiRequirementNamingEnabled":false,"aiRequirementNamingPrewarmEnabled":false,"aiRequirementNamingModel":"gpt-5.6-luna"}`} {
+	for _, raw := range []string{`{"edition":"product","commandProxyUrl":null,"commandProxyTargets":[],"aiRequirementNamingEnabled":false,"aiRequirementNamingPrewarmEnabled":false,"aiRequirementNamingModel":"gpt-5.6-luna"}`, `{"edition":"product","commandProxyUrl":"","aiRequirementNamingEnabled":false,"aiRequirementNamingPrewarmEnabled":false,"aiRequirementNamingModel":"gpt-5.6-luna"}`, `{"edition":"product","commandProxyUrl":null,"aiRequirementNamingEnabled":false,"aiRequirementNamingPrewarmEnabled":false,"aiRequirementNamingModel":"gpt-5.6-luna"}`} {
 		var c AppConfig
 		if err := json.Unmarshal([]byte(raw), &c); err != nil {
 			t.Fatal(err)
@@ -32,20 +32,20 @@ func TestCommandAndNamingDefaultsRespectExplicitSettings(t *testing.T) {
 		}
 	}
 	var custom AppConfig
-	if err := json.Unmarshal([]byte(`{"edition":"qa","commandProxyUrl":"socks5://127.0.0.1:1080","commandProxyTargets":["GIT"],"aiRequirementNamingModel":"my-model"}`), &custom); err != nil {
+	if err := json.Unmarshal([]byte(`{"edition":"product","commandProxyUrl":"socks5://127.0.0.1:1080","commandProxyTargets":["GIT"],"aiRequirementNamingModel":"my-model"}`), &custom); err != nil {
 		t.Fatal(err)
 	}
 	if *custom.CommandProxyURL != "socks5://127.0.0.1:1080" || !reflect.DeepEqual(custom.CommandProxyTargets, []CommandProxyTarget{ProxyTargetGit}) || custom.AIRequirementNamingModel != "my-model" {
 		t.Fatal("custom preference overwritten")
 	}
 	var onlyTargets AppConfig
-	if err := json.Unmarshal([]byte(`{"edition":"qa","commandProxyTargets":[]}`), &onlyTargets); err != nil {
+	if err := json.Unmarshal([]byte(`{"edition":"product","commandProxyTargets":[]}`), &onlyTargets); err != nil {
 		t.Fatal(err)
 	}
 	if len(onlyTargets.CommandProxyTargets) != 0 {
 		t.Fatal("explicit empty targets replaced")
 	}
-	for _, raw := range []string{`{"edition":"qa","commandProxyTargets":null}`, `{"edition":"qa","commandProxyTargets":["OTHER"]}`, `{"edition":"qa","aiRequirementNamingEnabled":"true"}`, `{"edition":"qa","aiRequirementNamingPrewarmEnabled":null}`, `{"edition":"qa","commandProxyUrl":7897}`, `{"edition":"qa","unknown":true}`} {
+	for _, raw := range []string{`{"edition":"product","commandProxyTargets":null}`, `{"edition":"product","commandProxyTargets":["OTHER"]}`, `{"edition":"product","aiRequirementNamingEnabled":"true"}`, `{"edition":"product","aiRequirementNamingPrewarmEnabled":null}`, `{"edition":"product","commandProxyUrl":7897}`, `{"edition":"product","unknown":true}`} {
 		var c AppConfig
 		if json.Unmarshal([]byte(raw), &c) == nil {
 			t.Fatalf("invalid JSON accepted: %s", raw)

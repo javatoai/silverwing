@@ -175,8 +175,8 @@ func NormalizeCommandProxyNoProxy(raw *string) (*string, error) {
 }
 
 func (c AppConfig) Validate() error {
-	if c.Edition != "qa" {
-		return fmt.Errorf("配置不是 silverwing-qa 格式，请使用 QA 版配置或备份")
+	if c.Edition != "product" {
+		return fmt.Errorf("配置不是 silverwing-product 格式，请使用 产品版配置或备份")
 	}
 	if c.SchemaVersion != CurrentAppConfigSchemaVersion {
 		return fmt.Errorf("配置 schema 不受支持：%s", c.SchemaVersion)
@@ -189,7 +189,7 @@ func (c AppConfig) Validate() error {
 	}
 	for _, id := range c.DefaultWorkspaceToolIDs {
 		if id != "codex" {
-			return fmt.Errorf("QA 版仅支持 Codex 任务工具")
+			return fmt.Errorf("产品版仅支持 Codex 任务工具")
 		}
 	}
 	proxy, err := NormalizeCommandProxyURL(c.CommandProxyURL)
@@ -271,7 +271,7 @@ func (c AppConfig) Validate() error {
 	}
 	for _, target := range c.CommandProxyTargets {
 		if target != ProxyTargetCodex && target != ProxyTargetGit && target != ProxyTargetMeegle {
-			return fmt.Errorf("QA 版命令代理目标不合法：%s", target)
+			return fmt.Errorf("产品版命令代理目标不合法：%s", target)
 		}
 	}
 	return nil
@@ -351,8 +351,8 @@ func (g GroupConfig) Validate() error {
 	return nil
 }
 func (m TaskManifest) Validate() error {
-	if m.Edition != "qa" {
-		return fmt.Errorf("任务不是 silverwing-qa 格式")
+	if m.Edition != "product" {
+		return fmt.Errorf("任务不是 silverwing-product 格式")
 	}
 	if !ValidateSchemaVersion(m.SchemaVersion, CurrentTaskManifestSchemaVersion) {
 		return fmt.Errorf("任务 JSON 版本不受支持：%s", m.SchemaVersion)

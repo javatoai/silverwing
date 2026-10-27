@@ -55,7 +55,7 @@ func TestTaskCreationPayloadIncludesOnlyEnabledAndSelectedCodex(t *testing.T) {
 			state := &taskCreationState{
 				config:    domain.AppConfig{DefaultWorkspaceToolIDs: tools},
 				draft:     domain.RequirementDraftState{TaskName: "payload-proof"},
-				groupID:   "qa",
+				groupID:   "product",
 				openCodex: test.checked,
 			}
 			app := &app{taskCreation: state}

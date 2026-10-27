@@ -90,7 +90,7 @@ func Run(backend application.Backend, opts Options) error {
 	captureFrame := &captureFrameState{}
 	mygo.App.WhenReady(func() {
 		s.win = mygo.NewWindow(mygo.WindowOptions{
-			Title:     "silverwing-qa",
+			Title:     "silverwing-product",
 			Width:     opts.Width,
 			Height:    opts.Height,
 			Maximized: opts.CapturePath == "" && !explicitWindowSize && s.desktopPreferences.store != nil && s.desktopPreferences.value.Maximized,

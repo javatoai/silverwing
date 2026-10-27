@@ -57,7 +57,7 @@ func (a *App) Dispatch(ctx context.Context, action Action) (ActionResult, error)
 	if strings.HasPrefix(kind, "task.") || kind == "workspace.tools-options" {
 		return a.workspaceAction(ctx, action, nil)
 	}
-	return ActionResult{}, fmt.Errorf("测试版不支持操作：%s", kind)
+	return ActionResult{}, fmt.Errorf("产品版不支持操作：%s", kind)
 }
 func numberPayload(action Action, key string) (int, error) {
 	v := action.Payload[key]

@@ -79,7 +79,7 @@ func TestQATaskCreationPayloadContainsNoCodeWorkspace(t *testing.T) {
 	config := domain.DefaultAppConfig()
 	raw, _ := json.Marshal(config)
 	s.snapshot.ConfigJSON = string(raw)
-	s.initTaskCreation("创建测试任务", "测试任务", "")
+	s.initTaskCreation("创建产品任务", "测试任务", "")
 	s.taskCreation.openCodex = false
 	payload, err := s.taskCreationPayload()
 	if err != nil {

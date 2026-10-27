@@ -62,7 +62,7 @@ func refreshTestFixture(t *testing.T) (*app, *refreshTestBackend, *refreshTestWi
 	s := newApp(nil, Options{CapturePath: "isolated-requirement-refresh"})
 	s.loading, s.page = false, "requirements"
 	s.snapshot.Home = t.TempDir()
-	s.configJSON = `{"edition":"qa","meegleProjects":[{"project_key":"project-a","simple_name":"space"}]}`
+	s.configJSON = `{"edition":"product","meegleProjects":[{"project_key":"project-a","simple_name":"space"}]}`
 	a, b := "https://project.feishu.cn/space/userstory/detail/101", "https://project.feishu.cn/space/userstory/detail/102"
 	s.requirements = []application.Requirement{{ID: "101", Title: "A", URL: a, ProjectKey: "project-a", WorkItem: domain.ParticipatedWorkItem{ID: "101", ProjectKey: "project-a", Type: "userstory"}}, {ID: "102", Title: "B", URL: b, ProjectKey: "project-a", WorkItem: domain.ParticipatedWorkItem{ID: "102", ProjectKey: "project-a", Type: "userstory"}}}
 	s.selectedRequirement, s.selectedRequirementKey = 0, requirementKey(s.requirements[0])
@@ -201,7 +201,7 @@ func TestRequirementRefreshRejectsConfigurationAndAccountChanges(t *testing.T) {
 			job := s.requirementRefreshJobs.current[requirementRefreshKey(s.requirements[1].URL)]
 			switch change {
 			case "config":
-				s.configJSON = `{"edition":"qa","meegleProjects":[{"project_key":"different","simple_name":"space"}]}`
+				s.configJSON = `{"edition":"product","meegleProjects":[{"project_key":"different","simple_name":"space"}]}`
 			case "account":
 				s.settingsCLIStatus = map[string]map[string]any{"meegle": {"userKey": "different"}}
 			case "home":

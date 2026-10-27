@@ -64,15 +64,15 @@ func (s *ManifestStore) Load(taskDir string) (domain.TaskManifest, error) {
 	); err != nil {
 		return domain.TaskManifest{}, fmt.Errorf("读取 %s: %w", path, err)
 	}
-	if manifest.Edition != "qa" {
-		return domain.TaskManifest{}, fmt.Errorf("任务不是 silverwing-qa 格式")
+	if manifest.Edition != "product" {
+		return domain.TaskManifest{}, fmt.Errorf("任务不是 silverwing-product 格式")
 	}
 	return manifest, nil
 }
 
 func (s *ManifestStore) Save(taskDir string, manifest domain.TaskManifest) error {
-	if manifest.Edition != "qa" {
-		return fmt.Errorf("不能写入非 QA 任务清单")
+	if manifest.Edition != "product" {
+		return fmt.Errorf("不能写入非产品 任务清单")
 	}
 	if !domain.ValidateSchemaVersion(manifest.SchemaVersion, domain.CurrentTaskManifestSchemaVersion) {
 		return fmt.Errorf("不能写入任务 JSON 版本 %s，当前版本为 %s", manifest.SchemaVersion, domain.CurrentTaskManifestSchemaVersion)

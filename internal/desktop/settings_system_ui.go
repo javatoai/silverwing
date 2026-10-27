@@ -12,7 +12,7 @@ import (
 
 const (
 	silverwingRepositoryURL = "https://github.com/javatoai/silverwing"
-	silverwingReleasesURL   = "https://github.com/javatoai/silverwing/releases?q=qa-v&expanded=true"
+	silverwingReleasesURL   = "https://github.com/javatoai/silverwing/releases?q=product-v&expanded=true"
 )
 
 type settingsSystemActionStyle uint8

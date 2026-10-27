@@ -621,8 +621,8 @@ func decodeShardsContext(ctx context.Context, files map[string][]byte) (decodedC
 			return decodedConfig{}, err
 		}
 	}
-	if shards.Layout.Edition != "qa" {
-		return decodedConfig{}, fmt.Errorf("配置不是 silverwing-qa 格式，请使用 QA 版配置或备份")
+	if shards.Layout.Edition != "product" {
+		return decodedConfig{}, fmt.Errorf("配置不是 silverwing-product 格式，请使用 产品版配置或备份")
 	}
 	config := domain.DefaultAppConfig()
 	config.Edition = shards.Layout.Edition
@@ -718,7 +718,7 @@ func shardsFor(config domain.AppConfig) configShards {
 		groups = append(groups, groupLayoutShard{ID: g.ID, Name: g.Name})
 	}
 	return configShards{
-		Layout:       layoutShard{Edition: "qa", Schema: configShardSchema, Groups: groups},
+		Layout:       layoutShard{Edition: "product", Schema: configShardSchema, Groups: groups},
 		Workspace:    workspaceShard{Schema: configShardSchema, TaskRoot: config.TaskRoot},
 		Tools:        toolsShard{Schema: configShardSchema, TerminalExecutable: config.TerminalExecutable, DefaultWorkspaceToolIDs: config.DefaultWorkspaceToolIDs},
 		Git:          gitShard{Schema: configShardSchema, GitExecutablePath: config.GitExecutablePath},

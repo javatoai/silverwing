@@ -12,7 +12,7 @@ $launchFile = Join-Path $receiptRoot 'launch.json'
 if (Test-Path -LiteralPath $launchFile) { throw 'Preserve the existing launch receipt' }
 $userDirectory = [Environment]::GetFolderPath('UserProfile')
 if (-not $userDirectory -or $env:USERPROFILE -ne $userDirectory) { throw 'Interactive startup requires the current user profile' }
-$applicationHome = Join-Path $userDirectory 'silverwing-qa'
+$applicationHome = Join-Path $userDirectory 'silverwing-product'
 if (Test-Path -LiteralPath (Join-Path $applicationHome 'migrations\task-root.json')) { throw 'Resolve the pending task-root migration before interactive startup' }
 if ($PreviousLaunch) {
     $previous = Get-Content -LiteralPath $PreviousLaunch -Raw | ConvertFrom-Json

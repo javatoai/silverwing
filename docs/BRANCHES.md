@@ -2,7 +2,7 @@
 
 | 分支 | 用途 | 应用名 | 发布标签 |
 | --- | --- | --- | --- |
-| `release/snb` | 开发版 | `silverwing` | `vX.Y.Z` |
+| `release/snb-dev` | 研发版 | `silverwing` | `vX.Y.Z` |
 | `release/snb-qa` | 测试版 | `silverwing-qa` | `qa-vX.Y.Z` |
 | `release/snb-product` | 产品版，继承 QA 功能 | `silverwing-product` | `product-vX.Y.Z` |
 

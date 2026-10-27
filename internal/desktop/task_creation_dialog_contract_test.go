@@ -40,11 +40,14 @@ func TestTaskCreationDialogFixedGeometry(t *testing.T) {
 					t.Helper()
 					tester.Frame()
 					actual, _ := tester.Find("创建任务表单")
-					actualFooter, _ := tester.Find("检查并创建任务")
+					actualFooter, foundFooter := tester.Find("检查并创建任务")
+					if !foundFooter {
+						actualFooter, _ = tester.Find("创建任务")
+					}
 					actualHeader, _ := tester.Find(form.title)
 					actualLeft, _ := tester.Find("任务基本信息")
 					actualRight, _ := tester.Find("任务服务与模块")
-					if actual != panel || actualFooter != footer || actualHeader != header || actualLeft != left || actualRight != right {
+					if actual != panel || actualFooter.Y != footer.Y || actualFooter.H != footer.H || actualFooter.X+actualFooter.W != footer.X+footer.W || actualHeader != header || actualLeft != left || actualRight != right {
 						t.Fatalf("content changed panel/footer geometry: panel=%+v footer=%+v header=%+v left=%+v right=%+v", actual, actualFooter, actualHeader, actualLeft, actualRight)
 					}
 				}
@@ -111,6 +114,7 @@ func TestTaskCreationDialogToolCheckboxes(t *testing.T) {
 		t.Fatal("keyboard checkbox changes must permit no selected tools")
 	}
 	form.workspaceTools = append(form.workspaceTools, taskCreationWorkspaceToolOption{ID: "custom", DisplayName: "合成工具", Available: false, Reason: "尚未配置"})
+	form.config.DefaultWorkspaceToolIDs = append(form.config.DefaultWorkspaceToolIDs, "custom")
 	tester.Frame()
 	if err := tester.Click("合成工具"); err != nil {
 		t.Fatal(err)

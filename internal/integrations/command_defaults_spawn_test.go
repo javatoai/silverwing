@@ -125,7 +125,7 @@ func TestNamingSpawnUsesDefaultOrExplicitModelAndCodexProxy(t *testing.T) {
 			if got.Env["NO_PROXY"] != "" || got.Env["no_proxy"] != "" {
 				t.Fatal("unexpected proxy exceptions")
 			}
-			for _, target := range []domain.CommandProxyTarget{domain.ProxyTargetGit, domain.ProxyTargetWorkspaceCommand, domain.ProxyTargetMeegle, domain.ProxyTargetLark, domain.ProxyTargetGenbu} {
+			for _, target := range []domain.CommandProxyTarget{domain.ProxyTargetGit, domain.ProxyTargetWorkspaceCommand, domain.ProxyTargetMeegle, domain.ProxyTargetGenbu} {
 				env, remove := service.childEnvironment(c, target)
 				if len(env) != 0 || !slices.Contains(remove, "HTTP_PROXY") {
 					t.Fatalf("unselected target %s inherited proxy", target)

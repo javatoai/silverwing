@@ -35,7 +35,6 @@ exit $fixture.exitCode
 	service := NewService(storage.NewPaths(filepath.Join(root, "home")), nil, nil)
 	config := domain.DefaultAppConfig()
 	config.MeegleExecutablePath = &cliPath
-	config.LarkExecutablePath = &cliPath
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	setResponse := func(stdout, stderr string, exitCode int) {
@@ -63,31 +62,6 @@ exit $fixture.exitCode
 	status, err := service.meegleStatus(ctx, config)
 	if err != nil || object(status)["authenticated"] != false {
 		t.Fatalf("explicit logout rejected: %v %v", status, err)
-	}
-	gateway := newFeishuGateway(ctx, service, config)
-	setResponse(`{"ok":true,"data":{"items":{},"has_more":false}}`, "", 0)
-	if _, err := gateway.listCommentReplies(domain.FeishuWikiNode{ObjectToken: "fixture", ObjectType: "docx"}, "fixture-comment"); err == nil {
-		t.Fatal("malformed reply list was treated as an empty remote fingerprint")
-	}
-	setResponse(`{"ok":true,"data":{"items":[],"has_more":false}}`, "", 0)
-	if _, err := gateway.listCommentReplies(domain.FeishuWikiNode{ObjectToken: "fixture", ObjectType: "docx"}, "fixture-comment"); err != nil {
-		t.Fatalf("real empty reply list rejected: %v", err)
-	}
-	setResponse("", "config profile not found", 2)
-	if _, err := gateway.GetNode("fixture"); err == nil {
-		t.Fatal("CLI configuration error was treated as a missing remote node")
-	}
-	setResponse(`{"ok":false,"error":{"code":40409,"message":"request 40409 rejected"}}`, "", 0)
-	if _, err := gateway.GetNode("fixture"); err == nil {
-		t.Fatal("a code containing 404 was treated as a missing remote node")
-	}
-	setResponse(`{"ok":false,"error":{"code":404,"message":"fixture node not found"}}`, "", 0)
-	if node, err := gateway.GetNode("fixture"); err != nil || node != nil {
-		t.Fatalf("explicit remote 404 rejected: node=%v err=%v", node, err)
-	}
-	setResponse(`{"ok":false,"error":{"code":131005,"message":"fixture absent resource"}}`, "", 0)
-	if node, err := gateway.GetNode("fixture"); err != nil || node != nil {
-		t.Fatalf("source-compatible missing-node code rejected: node=%v err=%v", node, err)
 	}
 	secret := strings.Repeat("SECRET-PREFIX-", 60)
 	config.CommandProxyPassword = &secret

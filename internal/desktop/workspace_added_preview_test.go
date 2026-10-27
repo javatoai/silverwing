@@ -1,6 +1,8 @@
 package desktop
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
@@ -8,11 +10,22 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"silverwing-go/internal/application"
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/workspace"
 	"strings"
 	"testing"
 )
+
+type addedPreviewBackend struct{ calls []application.Action }
+
+func (*addedPreviewBackend) Snapshot(context.Context) (application.Snapshot, error) {
+	return application.Snapshot{}, errors.New("unexpected snapshot")
+}
+func (b *addedPreviewBackend) Dispatch(_ context.Context, a application.Action) (application.ActionResult, error) {
+	b.calls = append(b.calls, a)
+	return application.ActionResult{}, errors.New("unexpected action")
+}
 
 func addedDiffPreviewFixture(text string) *workspace.WorkspaceGitFilePreview {
 	content := &workspace.WorkspaceFilePreviewContent{Text: text, Origin: workspace.PreviewOriginWorktree}
@@ -40,7 +53,7 @@ func TestWorkspaceAddedPreviewHidesControlsInNativeAndRows(t *testing.T) {
 					preview = addedDiffPreviewFixture(source + strings.Repeat("// long\n", nativeDiffMaxLines+1))
 				}
 				state := &workspaceHistoryState{TaskSessionKey: "fixture", SelectedPath: "new.java", SelectedKind: domain.WorkspaceGitAdded, Preview: preview, PreviewMode: workspace.PreviewContent, ChangedLinesOnly: true, SplitRatio: .37}
-				backend := &headerSyncFake{}
+				backend := &addedPreviewBackend{}
 				s := &app{backend: backend}
 				tt := ui.NewTester(func(c *ui.Context) {
 					p := setTheme(c, dark)
@@ -106,7 +119,7 @@ func TestWorkspaceAddedPreviewSwitchRestoresModifiedReading(t *testing.T) {
 	modified.Comparison.Rows[1].OldLine = &workspace.WorkspaceFileComparisonLine{Kind: workspace.PreviewDeleted, LineNumber: 2, Text: "var value = 1"}
 	added := addedDiffPreviewFixture("package fixture\nvar value = 1\n")
 	state := &workspaceHistoryState{TaskSessionKey: "fixture", SelectedPath: "modified.java", SelectedKind: domain.WorkspaceGitModified, Preview: modified, PreviewMode: workspace.PreviewComparison, SplitRatio: .37}
-	backend := &headerSyncFake{}
+	backend := &addedPreviewBackend{}
 	s := &app{backend: backend}
 	tt := ui.NewTester(func(c *ui.Context) {
 		ui.Column(c).Fill().Children(func() { s.renderWorkspaceFilePreview(c, setTheme(c, false), state, state.Preview) })

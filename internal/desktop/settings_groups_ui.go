@@ -19,7 +19,7 @@ var settingsGroupGripIcon = func() *ui.SVG {
 }()
 
 func (s *app) settingsGroups(c *ui.Context, p palette) {
-	settingsCard(c, p, "", "", func() {
+	settingsHelpCard(c, p, "", "", func() {
 		if len(s.snapshot.Groups) == 0 {
 			settingsMuted(c, p, "当前配置没有项目组。")
 		}

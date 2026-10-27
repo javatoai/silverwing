@@ -17,7 +17,11 @@ func DecodeStrict(data []byte, target any, required ...string) error {
 	if t == nil || t.Kind() != reflect.Pointer {
 		return fmt.Errorf("strict JSON target must be a pointer")
 	}
-	data, err := normalizeCommandProxyTargetsJSON(data, t.Elem())
+	data, err := stripRetiredCloudConfig(data, t.Elem())
+	if err != nil {
+		return err
+	}
+	data, err = normalizeCommandProxyTargetsJSON(data, t.Elem())
 	if err != nil {
 		return err
 	}
@@ -47,6 +51,35 @@ func DecodeStrict(data []byte, target any, required ...string) error {
 		return err
 	}
 	return nil
+}
+
+// Only the two configuration shapes that owned cloud settings accept these
+// retired keys. All other unknown keys still receive strict validation.
+func stripRetiredCloudConfig(data []byte, target reflect.Type) ([]byte, error) {
+	if !bytes.Contains(data, []byte(`"larkExecutablePath"`)) && !bytes.Contains(data, []byte(`"requirementMaterialsFeishuTarget"`)) {
+		return data, nil
+	}
+	if target.Kind() != reflect.Struct {
+		return data, nil
+	}
+	if _, ok := target.FieldByName("MeegleExecutablePath"); !ok {
+		return data, nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return data, err
+	}
+	changed := false
+	for _, key := range []string{"larkExecutablePath", "requirementMaterialsFeishuTarget"} {
+		if _, exists := fields[key]; exists {
+			delete(fields, key)
+			changed = true
+		}
+	}
+	if !changed {
+		return data, nil
+	}
+	return json.Marshal(fields)
 }
 
 // normalizeCommandProxyTargetsJSON mirrors Kotlin's Set serializer for the one

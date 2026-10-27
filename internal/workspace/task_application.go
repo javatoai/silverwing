@@ -124,6 +124,12 @@ func (s *TaskApplicationService) InspectCreateBranchReuse(ctx context.Context, c
 // InspectCreateBranchReuseWithProgress performs the same read-only preflight
 // while reporting its real validation and per-module inspection boundaries.
 func (s *TaskApplicationService) InspectCreateBranchReuseWithProgress(ctx context.Context, config domain.AppConfig, request CreateTaskRequest, onProgress func(TaskCreationProgress)) ([]BranchReuseConflict, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	checking := TaskCreationProgress{Phase: TaskCreationPhaseChecking, ServiceName: "任务"}
 	var conflicts []BranchReuseConflict
 	err := runTaskCreationProgress(onProgress, checking, "正在检查任务信息与远程分支", "任务信息与远程分支检查完成", func() error {
@@ -147,8 +153,10 @@ func (s *TaskApplicationService) InspectCreateBranchReuseWithProgress(ctx contex
 			return err
 		}
 		feature := strings.TrimSpace(request.FeatureBranch)
-		if err := s.validateFeatureBranch(feature); err != nil {
-			return err
+		if len(request.ServiceIDs) > 0 || len(request.ServiceSelections) > 0 {
+			if err := s.validateFeatureBranch(feature); err != nil {
+				return err
+			}
 		}
 		resolved, err := resolveTaskSelections(group, request.ServiceIDs, request.ServiceSelections, request.BaseOverrides, feature)
 		if err != nil {
@@ -173,6 +181,12 @@ func (s *TaskApplicationService) CreateTask(ctx context.Context, config domain.A
 // CreateTaskWithProgress runs the same synchronous create workflow while
 // reporting real operation boundaries to an optional caller-owned observer.
 func (s *TaskApplicationService) CreateTaskWithProgress(ctx context.Context, config domain.AppConfig, request CreateTaskRequest, onProgress func(TaskCreationProgress)) (domain.TaskManifest, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return domain.TaskManifest{}, err
+	}
 	checking := TaskCreationProgress{Phase: TaskCreationPhaseChecking, ServiceName: "任务", Message: "正在检查任务信息与远程分支"}
 	root := ""
 	folderName := ""
@@ -194,8 +208,10 @@ func (s *TaskApplicationService) CreateTaskWithProgress(ctx context.Context, con
 			return checkErr
 		}
 		feature = strings.TrimSpace(request.FeatureBranch)
-		if checkErr = s.validateFeatureBranch(feature); checkErr != nil {
-			return checkErr
+		if len(request.ServiceIDs) > 0 || len(request.ServiceSelections) > 0 {
+			if checkErr = s.validateFeatureBranch(feature); checkErr != nil {
+				return checkErr
+			}
 		}
 		if (request.AgentContext == nil) != (request.AgentHandoffMarkdown == nil) {
 			return fmt.Errorf("Agent 任务上下文与交接文档必须同时提供")
@@ -234,6 +250,11 @@ func (s *TaskApplicationService) CreateTaskWithProgress(ctx context.Context, con
 }
 
 func (s *TaskApplicationService) createLocked(ctx context.Context, config domain.AppConfig, request CreateTaskRequest, group domain.GroupConfig, selections []effectiveTaskService, folderName, feature, taskRootPath, taskPath string, onProgress func(TaskCreationProgress)) (domain.TaskManifest, error) {
+	createdTime := s.now()
+	ctx = documents.WithMaterialsCreationTime(ctx, createdTime)
+	if err := ctx.Err(); err != nil {
+		return domain.TaskManifest{}, err
+	}
 	checking := TaskCreationProgress{Phase: TaskCreationPhaseChecking, ServiceName: "任务"}
 	if err := runTaskCreationProgress(onProgress, checking, "正在检查任务目录", "任务目录检查完成", func() error {
 		if err := os.MkdirAll(taskRootPath, 0o755); err != nil {
@@ -273,6 +294,9 @@ func (s *TaskApplicationService) createLocked(ctx context.Context, config domain
 	}
 	preparingDirectory := TaskCreationProgress{Phase: TaskCreationPhasePreparingWorktree, ServiceName: "任务"}
 	if err := runTaskCreationProgress(onProgress, preparingDirectory, "正在创建任务目录", "任务目录已创建", func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		return os.Mkdir(taskPath, 0o755)
 	}); err != nil {
 		return domain.TaskManifest{}, err
@@ -336,7 +360,7 @@ func (s *TaskApplicationService) createLocked(ctx context.Context, config domain
 		}
 		workspaces = append(workspaces, created...)
 	}
-	now := s.now().UTC().Format(time.RFC3339Nano)
+	now := createdTime.UTC().Format(time.RFC3339Nano)
 	manifest := domain.DefaultTaskManifest()
 	manifest.FolderName = folderName
 	manifest.TaskDirectoryName = folderName
@@ -353,6 +377,9 @@ func (s *TaskApplicationService) createLocked(ctx context.Context, config domain
 	manifest = domain.NormalizeTaskManifest(manifest)
 	saving := TaskCreationProgress{Phase: TaskCreationPhaseSavingManifest, ServiceName: "任务"}
 	if err := runTaskCreationProgress(onProgress, saving, "正在保存任务清单", "任务清单已保存", func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		return s.Manifests.Save(taskPath, manifest)
 	}); err != nil {
 		return domain.TaskManifest{}, rollback(err)
@@ -383,6 +410,9 @@ func (s *TaskApplicationService) RetryRequirementMaterials(ctx context.Context, 
 	err := s.withTaskManifestMutation(ctx, config, taskPath, func(ctx context.Context, manifest domain.TaskManifest) error {
 		if strings.TrimSpace(manifest.RequirementLink) == "" {
 			return fmt.Errorf("任务未填写需求编号或飞书需求链接")
+		}
+		if created, err := domain.ParseSilverWingTime(manifest.CreatedAt); err == nil {
+			ctx = documents.WithMaterialsCreationTime(ctx, created)
 		}
 		directory, requirementID, err := s.resolveRequirementMaterials(ctx, config, manifest.RequirementLink, manifest.FolderName)
 		if err != nil {
@@ -815,8 +845,8 @@ func (s *TaskApplicationService) validateFeatureBranch(branch string) error {
 	if branch == "" || strings.IndexFunc(branch, func(r rune) bool { return r == ' ' || r == '\t' || r == '\r' || r == '\n' }) >= 0 {
 		return fmt.Errorf("任务分支不能为空或包含空格")
 	}
-	if strings.Contains(branch, "{num}") {
-		return fmt.Errorf("任务分支仍包含未解析的 {num}")
+	if domain.ContainsUnresolvedBranchPlaceholder(branch) {
+		return fmt.Errorf("任务分支仍包含未解析的 {num} 或 {ai}")
 	}
 	if s.BranchValidator == nil || !s.BranchValidator.IsValid(branch) {
 		return fmt.Errorf("任务分支不是合法的 Git 分支名：%s", branch)
@@ -916,7 +946,10 @@ type effectiveTaskService struct {
 func resolveTaskSelections(group domain.GroupConfig, legacyServiceIDs []string, selections []TaskServiceSelection, overrides []ModuleBaseOverride, feature string) ([]effectiveTaskService, error) {
 	if len(selections) == 0 {
 		if len(legacyServiceIDs) == 0 {
-			return nil, fmt.Errorf("至少选择一个服务")
+			if len(overrides) != 0 {
+				return nil, fmt.Errorf("未选择服务时不能指定模块覆盖")
+			}
+			return []effectiveTaskService{}, nil
 		}
 		seen := map[string]bool{}
 		for _, o := range overrides {
@@ -1015,7 +1048,7 @@ func resolveTaskSelections(group domain.GroupConfig, legacyServiceIDs []string, 
 				return nil, fmt.Errorf("Worktree 模块目标分支不能为空：%s", selectedModule.Name)
 			}
 			if branch != "" {
-				if strings.IndexFunc(branch, func(r rune) bool { return r == ' ' || r == '\t' || r == '\r' || r == '\n' }) >= 0 || strings.Contains(branch, "{num}") {
+				if strings.IndexFunc(branch, func(r rune) bool { return r == ' ' || r == '\t' || r == '\r' || r == '\n' }) >= 0 || domain.ContainsUnresolvedBranchPlaceholder(branch) {
 					return nil, fmt.Errorf("模块 %s 目标分支不合法：%s", selectedModule.ID, branch)
 				}
 			}

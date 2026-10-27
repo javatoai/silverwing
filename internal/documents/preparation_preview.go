@@ -41,7 +41,7 @@ func (s *PreparationService) Preview(ctx context.Context, config domain.AppConfi
 	if err := validateMaterialsSegment(folder, "需求文件夹名称", 80); err != nil {
 		return fail(err.Error())
 	}
-	requirementDirectory, err := buildRequirementDirectory(root, id, folder)
+	requirementDirectory, err := buildRequirementDirectory(root, id, folder, materialsCreationYear(ctx))
 	if err != nil {
 		return fail(err.Error())
 	}

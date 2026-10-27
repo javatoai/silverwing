@@ -36,10 +36,7 @@ func settingsAppearanceRow(c *ui.Context, p palette, title, description string, 
 }
 
 func settingsAppearanceRowLabel(c *ui.Context, p palette, title, description string) {
-	label(c, title, 12, p.text).FontWeight(600).Wrap()
-	if description != "" {
-		label(c, description, 10, p.muted).LineHeight(1.4).Wrap()
-	}
+	settingsHelpLabel(c, p, title, description, 12, 600)
 }
 
 func settingsAppearanceDivider(c *ui.Context) {

@@ -258,7 +258,7 @@ func (s *app) retargetTaskAppendModules(state *taskAppendUIState, serviceID stri
 			name = draft.ID
 		}
 		if state.mode == "modules" {
-			draft.TargetBranch = state.taskBranch + "-" + name
+			draft.TargetBranch = taskCreationTargetBranchForCount(state.taskBranch, name, draft.ID, 2)
 		} else {
 			draft.TargetBranch = taskCreationTargetBranchForCount(state.taskBranch, name, draft.ID, len(order))
 		}
@@ -274,7 +274,7 @@ func (s *app) selectTaskAppendConfiguredModule(state *taskAppendUIState, module 
 		}
 	}
 	draft := newTaskCreationModuleDraft(service, module, state.taskBranch)
-	draft.TargetBranch = state.taskBranch + "-" + taskCreationModuleName(module)
+	draft.TargetBranch = taskCreationTargetBranchForCount(state.taskBranch, taskCreationModuleName(module), module.ID, 2)
 	draft.LastTargetBranch = draft.TargetBranch
 	state.moduleData[state.serviceID] = map[string]*taskCreationModuleDraft{draft.ID: draft}
 	state.moduleOrder[state.serviceID] = []string{draft.ID}
@@ -296,7 +296,7 @@ func (s *app) replaceTaskAppendModuleWithTemporary(state *taskAppendUIState, str
 	module := domain.ServiceModuleConfig{ID: newDesktopEditorID(prefix), Name: name, Strategy: strategy}
 	draft := newTaskCreationModuleDraft(service, module, state.taskBranch)
 	draft.Source, draft.TagEnabled, draft.TagTargetRef = domain.TaskModuleTemporary, false, ""
-	draft.TargetBranch = state.taskBranch + "-" + name
+	draft.TargetBranch = taskCreationTargetBranchForCount(state.taskBranch, name, draft.ID, 2)
 	draft.LastTargetBranch = draft.TargetBranch
 	state.moduleData[state.serviceID] = map[string]*taskCreationModuleDraft{draft.ID: draft}
 	state.moduleOrder[state.serviceID] = []string{draft.ID}

@@ -605,29 +605,28 @@ func safeFeishuImageUUID(source []byte) bool {
 func isFeishuStreamImageURL(value string) bool {
 	parsed, err := url.Parse(value)
 	const prefix = "/goapi/v5/platform/file/stream/download/"
-	return err == nil && parsed.Scheme == "https" && parsed.Host == "project.feishu.cn" && parsed.User == nil &&
-		strings.HasPrefix(parsed.EscapedPath(), prefix) && len(parsed.EscapedPath()) > len(prefix) &&
-		!strings.Contains(parsed.EscapedPath()[len(prefix):], "/") && parsed.Fragment == ""
+	if err != nil || parsed.Scheme != "https" || parsed.Host != "project.feishu.cn" || parsed.User != nil || parsed.Fragment != "" ||
+		!strings.HasPrefix(parsed.EscapedPath(), prefix) {
+		return false
+	}
+	token, err := url.PathUnescape(strings.TrimPrefix(parsed.EscapedPath(), prefix))
+	return err == nil && token != "" && token != "." && token != ".." && !strings.ContainsAny(token, "/\\\r\n\x00")
 }
 
-// FeishuCommentImageURLs returns only real rendered image nodes with the exact
-// adjacent UUID annotation emitted by Feishu comments. Code and unknown HTML
-// remain original blocks and cannot authorize an authenticated download.
+// FeishuCommentImageURLs returns real rendered images using the recognized
+// Meegle download route. Meegle may remove upload annotations on readback, so
+// they cannot be required. Code and unknown inline HTML remain original blocks
+// and cannot authorize an authenticated download; callers still validate the
+// account, cached comment identity and content generation before downloading.
 func FeishuCommentImageURLs(source string) []string {
 	parts, _ := parseDocument(source)
 	seen := make(map[string]bool)
 	var result []string
 	var visit func(Node)
 	visit = func(node Node) {
-		if node.Kind == "image" && isFeishuStreamImageURL(node.Destination) && node.Range.End >= 0 && node.Range.End <= len(source) {
-			tail := source[node.Range.End:]
-			start := strings.Index(tail, "<!--")
-			if start >= 0 && adjacentSourceWhitespace([]byte(tail), 0, start) {
-				if end := strings.Index(tail[start:], "-->"); end >= 0 && safeFeishuImageUUID([]byte(tail[start:start+end+3])) && !seen[node.Destination] {
-					seen[node.Destination] = true
-					result = append(result, node.Destination)
-				}
-			}
+		if node.Kind == "image" && isFeishuStreamImageURL(node.Destination) && node.Range.Start >= 0 && node.Range.End > node.Range.Start && node.Range.End <= len(source) && !seen[node.Destination] {
+			seen[node.Destination] = true
+			result = append(result, node.Destination)
 		}
 		for _, child := range node.Children {
 			visit(child)

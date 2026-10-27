@@ -164,11 +164,6 @@ func (s *app) persistLocalSwitchChange(key string, old bool, value *bool) {
 				*value = old
 				s.lastError = err.Error()
 			}
-		} else if key == "expand-materials-second-level" {
-			if err := s.persistDesktopLayout(); err != nil {
-				*value = old
-				s.lastError = "保存资料目录偏好失败：" + err.Error()
-			}
 		}
 		if s.win != nil {
 			s.win.Invalidate()
@@ -191,8 +186,7 @@ func settingsConfigSwitchRow(c *ui.Context, p palette, key, title, description s
 func settingsSwitchRowWithControl(c *ui.Context, p palette, title, description string, control func()) {
 	ui.Row(c).FillWidth().Padding(11, 13).Gap(14).AlignItems(ui.Center).Background(p.soft).Radius(9).Children(func() {
 		ui.Column(c).Grow(1).Gap(3).Children(func() {
-			label(c, title, 12, p.text).FontWeight(500)
-			label(c, description, 10, p.muted).LineHeight(1.4)
+			settingsHelpLabel(c, p, title, description, 12, 500)
 		})
 		control()
 	})
@@ -201,8 +195,7 @@ func settingsSwitchRowWithControl(c *ui.Context, p palette, title, description s
 func settingsPlainSwitchRow(c *ui.Context, p palette, key, title, description string, value *bool) {
 	ui.Row(c).FillWidth().MinHeight(48).Gap(16).AlignItems(ui.Center).Children(func() {
 		ui.Column(c).Grow(1).Gap(2).Children(func() {
-			label(c, title, 14, p.text).FontWeight(600).LineHeight(20.0 / 14)
-			label(c, description, 12, p.muted).LineHeight(1.5)
+			settingsHelpLabel(c, p, title, description, 14, 600)
 		})
 		ui.Switch(c.Key("settings-switch-"+key), value).Width(52).Height(32).Radius(16).Label(title)
 	})

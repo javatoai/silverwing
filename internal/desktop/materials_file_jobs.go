@@ -118,6 +118,9 @@ func (s *app) materialsFileMutationRunning() bool {
 }
 
 func (s *app) materialsFilePathBlocked() bool {
+	if s.materialsGitRunning() {
+		return true
+	}
 	if state := s.materialsFileJobs; state != nil {
 		state.mu.Lock()
 		blocked := state.closed || state.barrier != nil
@@ -174,6 +177,13 @@ func (s *app) dispatchIndependentMaterialsFileAction(action application.Action) 
 		return true
 	}
 	action = cloneMaterialsFileJobAction(action)
+	action.Payload["draftTaskPath"] = scope.taskPath
+	action.Payload["draftMaterialsRoot"] = scope.root
+	action.Payload["desktopRenameTaskCreatedAt"] = scope.createdAt
+	action.Payload["materialsHome"] = scope.home
+	if config, ok := s.materialsGitConfig(); ok {
+		action.Payload["materialsConfigScope"] = application.MaterialsGitScope(scope.home, config)
+	}
 	textDelete, deleteErr := s.captureMaterialTextDelete(action)
 	if deleteErr != nil {
 		s.rejectMaterialsFileJob(action, deleteErr)

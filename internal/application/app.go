@@ -21,6 +21,7 @@ import (
 )
 
 type App struct {
+	materialsGitGate            sync.RWMutex
 	Paths                       storage.Paths
 	Config                      *storage.ConfigStore
 	Manifests                   *storage.ManifestStore
@@ -149,9 +150,15 @@ func (a *App) Snapshot(ctx context.Context) (Snapshot, error) {
 		for _, entry := range scan.Current {
 			m := entry.Manifest
 			t := Task{ID: filepath.Base(entry.Path), Title: m.FolderName, Project: groupNames[m.GroupID], Status: "进行中", Updated: m.UpdatedAt, CreatedAt: m.CreatedAt, Branch: m.FeatureBranch, Path: entry.Path, MaterialsPath: value(m.RequirementMaterials.WriteRoot), RequirementURL: m.RequirementLink, GroupID: m.GroupID, Archived: m.LifecycleStatus == domain.TaskArchived, Services: []string{}, Workspaces: []Workspace{}}
+			t.MaterialsPath = visibleMaterialsRoot(t.MaterialsPath)
 			t.RequirementID = value(m.RequirementID)
 			t.MaterialsStatus = string(m.RequirementMaterials.Status)
 			t.MaterialsFailureReason = value(m.RequirementMaterials.FailureReason)
+			if err := validAnnualTaskMaterials(m, config); err != nil {
+				t.MaterialsStatus = string(domain.MaterialsFailed)
+				t.MaterialsFailureReason = err.Error()
+				t.MaterialsPath = ""
+			}
 			t.WorkspaceToolLaunches = append([]domain.WorkspaceToolLaunch{}, m.WorkspaceToolLaunches...)
 			if t.Archived {
 				t.Status = "已归档"
@@ -257,7 +264,14 @@ func (a *App) materialRoot(action Action) (string, error) {
 	if manifest.RequirementMaterials.WriteRoot == nil || *manifest.RequirementMaterials.WriteRoot == "" {
 		return "", errors.New("当前任务尚未配置资料目录")
 	}
-	root := *manifest.RequirementMaterials.WriteRoot
+	config, err := a.Config.Load()
+	if err != nil {
+		return "", err
+	}
+	if err := validAnnualTaskMaterials(manifest, config); err != nil {
+		return "", err
+	}
+	root := visibleMaterialsRoot(*manifest.RequirementMaterials.WriteRoot)
 	if _, err = os.Stat(root); err != nil {
 		return "", err
 	}

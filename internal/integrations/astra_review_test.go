@@ -3,7 +3,7 @@ package integrations
 import (
 	"context"
 	"encoding/json"
-	"errors"
+
 	"strings"
 	"sync"
 	"testing"
@@ -127,25 +127,6 @@ func TestAstraIntegrationsCleanupFailureSurvivesCancellation(t *testing.T) {
 	}
 }
 
-func TestAstraIntegrationsMaterialsFencePreservesCode(t *testing.T) {
-	for _, content := range []string{
-		"````markdown\r\n```\r\n![inside](missing.png)\r\n````\r\n![outside](real.png)\r\n",
-		"~~~~\n~~~\n![inside](missing.png)\n~~~~ with suffix\n![inside](missing.png)\n~~~~\n![outside](real.png)\n",
-		"    ```\n![outside](real.png)\n",
-	} {
-		got, err := materialsMarkdownText(content, func(text string) (string, error) {
-			if strings.Contains(text, "missing.png") {
-				return "", errors.New("code image reached resource resolver")
-			}
-			return strings.ReplaceAll(text, "real.png", "remote.png"), nil
-		})
-		want := strings.ReplaceAll(content, "real.png", "remote.png")
-		if err != nil || got != want {
-			t.Fatalf("fenced or indented code not preserved: got=%q err=%v", got, err)
-		}
-	}
-}
-
 func TestAstraIntegrationsLastSubscriberReportsCleanupFailure(t *testing.T) {
 	for _, kind := range []string{"identity", "body"} {
 		t.Run(kind, func(t *testing.T) {
@@ -189,63 +170,6 @@ func TestAstraIntegrationsLastSubscriberReportsCleanupFailure(t *testing.T) {
 				t.Fatal("last subscriber did not join canceled worker")
 			}
 		})
-	}
-}
-
-type astraUnconfirmedGateway struct {
-	domain.FeishuMaterialsGateway
-	parent   domain.FeishuWikiNode
-	attempts int
-}
-
-func (g *astraUnconfirmedGateway) GetNode(string) (*domain.FeishuWikiNode, error) {
-	return &g.parent, nil
-}
-
-func (g *astraUnconfirmedGateway) Version(domain.FeishuWikiNode, bool) (domain.FeishuRemoteVersion, error) {
-	return domain.FeishuRemoteVersion{Version: "1"}, nil
-}
-
-func (g *astraUnconfirmedGateway) ListChildren(domain.FeishuWikiNode) ([]domain.FeishuWikiNode, error) {
-	return nil, nil
-}
-
-func (g *astraUnconfirmedGateway) CreateDirectory(domain.FeishuWikiNode, string) (domain.FeishuWriteResult, error) {
-	g.attempts++
-	return domain.FeishuWriteResult{}, &materialsUnconfirmedCreationError{message: "fixture ambiguous create"}
-}
-
-func TestAstraIntegrationsGatewayAmbiguousCreateCannotRetry(t *testing.T) {
-	service := NewService(storage.NewPaths(t.TempDir()), nil, nil)
-	parent := domain.FeishuWikiNode{SpaceID: "space", NodeToken: "root", ObjectToken: "root-object", ObjectType: "docx", ParentNodeToken: "target", Title: "Root"}
-	entry := domain.MaterialsSyncEntry{Path: materialsRequirementRoot, Kind: domain.MaterialsSyncDirectory, NodeToken: parent.NodeToken,
-		ObjectToken: parent.ObjectToken, ObjectType: parent.ObjectType, ParentNodeToken: parent.ParentNodeToken, Title: parent.Title,
-		RemoteVersion: domain.FeishuRemoteVersion{Version: "1"}}
-	plan := domain.MaterialsSyncPlan{ScopeID: "fixture-scope", SourceID: "fixture-source", Target: domain.FeishuWikiNode{SpaceID: "space", NodeToken: "target"}}
-	state := remoteMaterialsState{root: parent, value: domain.MaterialsSyncManifest{Namespace: "fixture-namespace"}}
-	journal, err := service.openMaterialsReceiptJournal(plan, state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	coordinator := &materialsWriteCoordinator{plan: plan, ops: materialsResourceOperations{journal: journal, verify: func(localMaterial) error { return nil }}}
-	work := materialsCreateWork{file: localMaterial{path: materialsFilesRoot, kind: domain.MaterialsSyncDirectory}, parent: parent,
-		intent: domain.MaterialsSyncIntent{OperationID: "fixture-operation", Path: materialsFilesRoot, Kind: domain.MaterialsSyncDirectory,
-			Phase: "create", ParentNodeToken: parent.NodeToken, Title: "Materials", TemporaryTitle: "Temporary"}}
-	binding := domain.MaterialsSyncBinding{Entries: map[string]domain.MaterialsSyncEntry{materialsRequirementRoot: entry}}
-	gateway := &astraUnconfirmedGateway{parent: parent}
-	_, err = coordinator.createOne(context.Background(), gateway, newMaterialsSnapshots(gateway), binding, work)
-	if err == nil || gateway.attempts != 1 {
-		t.Fatalf("fixture did not reach an ambiguous create: attempts=%d err=%v", gateway.attempts, err)
-	}
-	journal, err = service.openMaterialsReceiptJournal(plan, state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	coordinator.ops.journal = journal
-	work.resuming = true
-	_, err = coordinator.createOne(context.Background(), gateway, newMaterialsSnapshots(gateway), binding, work)
-	if err == nil || gateway.attempts != 1 {
-		t.Fatalf("invisible ambiguous create was retried after journal reload: attempts=%d err=%v", gateway.attempts, err)
 	}
 }
 

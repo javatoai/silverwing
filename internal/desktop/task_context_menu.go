@@ -56,10 +56,19 @@ func (s *app) taskContextMenu(services ui.Services, t task, menu *ui.Menu) {
 		pinLabel = "取消置顶"
 	}
 	chosen := ""
-	if menu.Item("在 Codex 中打开").Icon(icons["launch"]).Disabled(!valid || s.busy || s.backend == nil || t.path == "").Chosen() {
-		chosen = "codex-open"
+	toolCount := 0
+	for _, tool := range []struct{ id, name string }{{"codex", "Codex"}, {"cursor", "Cursor"}} {
+		if !s.taskOpenToolEnabled(tool.id) {
+			continue
+		}
+		toolCount++
+		if menu.Item("在 " + tool.name + " 中打开").Icon(icons["launch"]).Disabled(!valid || s.busy || s.backend == nil || t.path == "" || !s.taskOpenToolAvailable(tool.id)).Chosen() {
+			chosen = tool.id + "-open"
+		}
 	}
-	menu.Separator()
+	if toolCount > 0 {
+		menu.Separator()
+	}
 	if menu.Item("批量合并主分支").Icon(icons["branch"]).Disabled(!valid || s.busy || s.backend == nil || t.archived || !s.taskHasMainBranchMergeBatch(t)).Chosen() {
 		chosen = "merge-main-batch"
 	}
@@ -122,6 +131,8 @@ func (s *app) taskContextMenu(services ui.Services, t task, menu *ui.Menu) {
 	switch chosen {
 	case "codex-open":
 		s.dispatchTaskContextAction(application.Action{Kind: "codex.run", TaskID: t.id, Path: t.path}, opened)
+	case "cursor-open":
+		s.dispatchTaskContextAction(application.Action{Kind: "task.tools-launch", TaskID: t.id, Path: t.path, Payload: map[string]any{"toolIds": []string{"cursor"}}}, opened)
 	case "merge-main-batch":
 		s.openWorkspaceMergeBatch(t)
 	case "materials-open":

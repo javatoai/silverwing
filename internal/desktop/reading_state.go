@@ -178,6 +178,7 @@ type MaterialsSnapshot struct {
 	SelectedPath          *string                            `json:"selectedPath"`
 	ExpandedDirectories   []string                           `json:"expandedDirectories"`
 	ExpansionInitialized  bool                               `json:"expansionInitialized"`
+	ExpansionRevision     uint64                             `json:"expansionRevision"`
 	DirectoryCollapsed    bool                               `json:"directoryCollapsed"`
 	CompactShowingPreview bool                               `json:"compactShowingPreview"`
 	DirectoryPosition     ReadingPositionSnapshot            `json:"directoryPosition"`
@@ -210,6 +211,7 @@ func (m *MaterialsSnapshot) UnmarshalJSON(data []byte) error {
 		SelectedPath          *string                            `json:"selectedPath"`
 		ExpandedDirectories   []string                           `json:"expandedDirectories"`
 		ExpansionInitialized  bool                               `json:"expansionInitialized"`
+		ExpansionRevision     uint64                             `json:"expansionRevision"`
 		DirectoryCollapsed    bool                               `json:"directoryCollapsed"`
 		CompactShowingPreview bool                               `json:"compactShowingPreview"`
 		DirectoryPosition     ReadingPositionSnapshot            `json:"directoryPosition"`
@@ -234,7 +236,7 @@ func (m *MaterialsSnapshot) UnmarshalJSON(data []byte) error {
 	}
 	*m = MaterialsSnapshot{
 		TaskPath: value.TaskPath, Root: value.Root, SelectedPath: value.SelectedPath,
-		ExpandedDirectories: value.ExpandedDirectories, ExpansionInitialized: value.ExpansionInitialized,
+		ExpandedDirectories: value.ExpandedDirectories, ExpansionInitialized: value.ExpansionInitialized, ExpansionRevision: value.ExpansionRevision,
 		DirectoryCollapsed: value.DirectoryCollapsed, CompactShowingPreview: value.CompactShowingPreview,
 		DirectoryPosition: value.DirectoryPosition, Files: value.Files, DocumentTabs: value.DocumentTabs,
 		SortOrder: value.SortOrder,
@@ -261,6 +263,7 @@ func (m MaterialsSnapshot) MarshalJSON() ([]byte, error) {
 		SelectedPath          *string                       `json:"selectedPath"`
 		ExpandedDirectories   []string                      `json:"expandedDirectories"`
 		ExpansionInitialized  bool                          `json:"expansionInitialized"`
+		ExpansionRevision     uint64                        `json:"expansionRevision"`
 		DirectoryCollapsed    bool                          `json:"directoryCollapsed"`
 		CompactShowingPreview bool                          `json:"compactShowingPreview"`
 		DirectoryPosition     ReadingPositionSnapshot       `json:"directoryPosition"`
@@ -269,7 +272,7 @@ func (m MaterialsSnapshot) MarshalJSON() ([]byte, error) {
 		SortOrder             string                        `json:"sortOrder"`
 	}
 	return json.Marshal(wire{
-		m.TaskPath, m.Root, m.SelectedPath, m.ExpandedDirectories, m.ExpansionInitialized,
+		m.TaskPath, m.Root, m.SelectedPath, m.ExpandedDirectories, m.ExpansionInitialized, m.ExpansionRevision,
 		m.DirectoryCollapsed, m.CompactShowingPreview, m.DirectoryPosition, files, m.DocumentTabs, m.SortOrder,
 	})
 }

@@ -33,7 +33,7 @@ func TestMarkdownReadOnlyIgnoresAndPreservesDraftCache(t *testing.T) {
 			}
 			const cachedSource = "# Existing unsaved draft\n保留这份草稿"
 			if scenario == "populated" {
-				identity, err := documents.NewMarkdownDraftIdentity("task", taskPath, root, path)
+				identity, err := documents.NewMarkdownDraftIdentity("task", taskPath, visibleMaterialsRoot(root), path)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -56,7 +56,7 @@ func TestMarkdownReadOnlyIgnoresAndPreservesDraftCache(t *testing.T) {
 				t.Fatalf("readonly read consulted or restored the draft cache: %#v", content)
 			}
 			action.Text = "blocked mutation"
-			action.Payload = map[string]any{"expectedHash": content.Hash, "overwrite": true, "draftTaskPath": taskPath, "draftMaterialsRoot": root}
+			action.Payload = map[string]any{"expectedHash": content.Hash, "overwrite": true, "draftTaskPath": taskPath, "draftMaterialsRoot": visibleMaterialsRoot(root)}
 			for _, kind := range []string{"document.save", "document.draft", "document.draft-discard"} {
 				action.Kind = kind
 				if _, err := a.documentAction(ctx, action); !errors.Is(err, errMarkdownMaterialReadOnly) {

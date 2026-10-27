@@ -418,23 +418,38 @@ func (s *app) renderSkillsBrowserList(c *ui.Context, p palette, state *skillsBro
 				directory := mapString(skill, "directoryName")
 				name := mapString(skill, "name")
 				selected := directory == state.selectedDirectory
-				button := ui.ButtonBase(c.Key(fmt.Sprintf("skills-browser-skill-%d-%s", index, directory))).Row().FillWidth().MinHeight(54).Padding(8, 9).Gap(8).Radius(7).Label(name)
-				if selected {
-					button.Background(p.selected)
-				} else if button.Hovered() {
-					button.Background(p.soft)
-				}
-				button.Children(func() {
-					icon(c, "skills", 17, p.muted)
-					ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
-						label(c, name, 11, p.text).FontWeight(500).SingleLine()
-						label(c, mapString(skill, "description"), 9, p.muted).SingleLine()
-						label(c, extensionOwnershipLabel(mapString(skill, "ownership")), 8, p.muted).SingleLine()
+				render := func() {
+					button := ui.ButtonBase(c.Key(fmt.Sprintf("skills-browser-skill-%d-%s", index, directory))).Row().FillWidth().MinHeight(54).Padding(8, 9).Gap(8).Radius(7).Label(name)
+					if s.page == "settings" {
+						button.Grow(1).MinWidth(0)
+					}
+					if selected {
+						button.Background(p.selected)
+					} else if button.Hovered() {
+						button.Background(p.soft)
+					}
+					button.Children(func() {
+						icon(c, "skills", 17, p.muted)
+						ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
+							label(c, name, 11, p.text).FontWeight(500).SingleLine()
+							if s.page != "settings" {
+								label(c, mapString(skill, "description"), 9, p.muted).SingleLine()
+							}
+							label(c, extensionOwnershipLabel(mapString(skill, "ownership")), 8, p.muted).SingleLine()
+						})
 					})
-				})
-				if button.Clicked() {
-					s.selectBrowserSkill(skill)
-					state.layout.compactPane = skillsBrowserDirectoryPane
+					if button.Clicked() {
+						s.selectBrowserSkill(skill)
+						state.layout.compactPane = skillsBrowserDirectoryPane
+					}
+					if s.page == "settings" && mapString(skill, "description") != "" {
+						settingsHelp(c, p, name, mapString(skill, "description"))
+					}
+				}
+				if s.page == "settings" {
+					ui.Row(c.Key(fmt.Sprintf("skills-browser-row-%d-%s", index, directory))).FillWidth().MinWidth(0).Gap(4).AlignItems(ui.Center).Children(render)
+				} else {
+					render()
 				}
 			}
 		})

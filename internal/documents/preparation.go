@@ -125,7 +125,7 @@ func (s *PreparationService) Ensure(ctx context.Context, config domain.AppConfig
 	if err := validateMaterialsSegment(folder, "需求文件夹名称", 80); err != nil {
 		return fail(err.Error())
 	}
-	requirementDirectory, err := buildRequirementDirectory(root, id, folder)
+	requirementDirectory, err := buildRequirementDirectory(root, id, folder, materialsCreationYear(ctx))
 	if err != nil {
 		return fail(err.Error())
 	}
@@ -134,6 +134,12 @@ func (s *PreparationService) Ensure(ctx context.Context, config domain.AppConfig
 		return fail("任务资料目录正在被另一个 silverwing 操作修改：" + root)
 	}
 	defer release()
+	// Resolve again while holding the shared lock: another task may have
+	// created this requirement (possibly under a different name) meanwhile.
+	requirementDirectory, err = buildRequirementDirectory(root, id, folder, materialsCreationYear(ctx))
+	if err != nil {
+		return fail(err.Error())
+	}
 	if err := ctx.Err(); err != nil {
 		return domain.RequirementMaterialsDirectory{}, err
 	}
@@ -156,6 +162,11 @@ func (s *PreparationService) Ensure(ctx context.Context, config domain.AppConfig
 		if err := ensureMaterialsDirectory(root, writeRoot); err != nil {
 			return fail("任务资料目录创建失败：" + err.Error())
 		}
+		if scope, ok := AnnualScope(writeRoot); ok {
+			if err := scope.EnsureLocal(); err != nil {
+				return fail(err.Error())
+			}
+		}
 		return domain.RequirementMaterialsDirectory{Status: domain.MaterialsReady, WriteRoot: &writeRoot}, nil
 	}
 	project, err := s.resolveRequirementProject(ctx, config, id, link)
@@ -174,6 +185,19 @@ func (s *PreparationService) Ensure(ctx context.Context, config domain.AppConfig
 	writeRoot := filepath.Join(requirementDirectory, subdirectory)
 	if err := ensureMaterialsDirectory(root, writeRoot); err != nil {
 		return fail("任务资料目录创建失败：" + err.Error())
+	}
+	if scope, ok := AnnualScope(writeRoot); ok {
+		if err := scope.EnsureLocal(); err != nil {
+			return fail(err.Error())
+		}
+	}
+	if link != nil {
+		identity := RequirementIdentity{Space: project.SimpleName, Kind: link.Kind, WorkItemID: id}
+		now := domain.FormatSilverWingTime(time.Now())
+		metadata := RequirementDocumentationManifest{FormatVersion: documentationFormatVersion, Identity: identity, RequirementTitle: folder, DirectoryName: filepath.Base(requirementDirectory), CreatedAt: now, UpdatedAt: now}
+		if err := s.files.write(filepath.Join(writeRoot, requirementManifestName), s.files.encodeRequirement(metadata)); err != nil {
+			return fail(err.Error())
+		}
 	}
 	return domain.RequirementMaterialsDirectory{Status: domain.MaterialsReady, WriteRoot: &writeRoot}, nil
 }
@@ -329,7 +353,7 @@ func (s *PreparationService) Plan(ctx context.Context, config domain.AppConfig, 
 	if err := validateMaterialsSegment(folder, "需求文件夹名称", 80); err != nil {
 		return DocumentationPlan{}, err
 	}
-	if _, err := buildRequirementDirectory(root, identity.WorkItemID, folder); err != nil {
+	if _, err := buildRequirementDirectory(root, identity.WorkItemID, folder, materialsCreationYear(ctx)); err != nil {
 		return DocumentationPlan{}, err
 	}
 	release, err := s.acquireMaterialsLock(root)
@@ -340,7 +364,7 @@ func (s *PreparationService) Plan(ctx context.Context, config domain.AppConfig, 
 	if err := ctx.Err(); err != nil {
 		return DocumentationPlan{}, err
 	}
-	existing, err := resolveExistingRequirementDirectory(root, identity.WorkItemID, folder, subdirectory, identity, s.files)
+	existing, err := resolveExistingRequirementDirectory(root, identity.WorkItemID, folder, subdirectory, identity, s.files, materialsCreationYear(ctx))
 	if err != nil {
 		return DocumentationPlan{}, err
 	}
@@ -371,7 +395,7 @@ func (s *PreparationService) Plan(ctx context.Context, config domain.AppConfig, 
 	if strings.TrimSpace(title) == "" {
 		return DocumentationPlan{}, fmt.Errorf("需求标题不能为空")
 	}
-	requirementDirectory, _ := buildRequirementDirectory(root, identity.WorkItemID, folder)
+	requirementDirectory, _ := buildRequirementDirectory(root, identity.WorkItemID, folder, materialsCreationYear(ctx))
 	return DocumentationPlan{
 		FormatVersion:           documentationFormatVersion,
 		Identity:                identity,
@@ -398,7 +422,7 @@ func (s *PreparationService) Materialize(ctx context.Context, config domain.AppC
 	if err := validateMaterialsSegment(plan.DirectoryFolderName, "需求文件夹名称", 80); err != nil {
 		return Materialization{}, err
 	}
-	expectedRequirement, err := buildRequirementDirectory(root, plan.Identity.WorkItemID, plan.DirectoryFolderName)
+	expectedRequirement, err := buildRequirementDirectory(root, plan.Identity.WorkItemID, plan.DirectoryFolderName, materialsCreationYear(ctx))
 	if err != nil {
 		return Materialization{}, err
 	}
@@ -410,8 +434,9 @@ func (s *PreparationService) Materialize(ctx context.Context, config domain.AppC
 	if err != nil {
 		return Materialization{}, err
 	}
-	if providedRequirement != expectedRequirement {
-		return Materialization{}, fmt.Errorf("需求目录必须符合当前资料目录规则：%s", expectedRequirement)
+	providedScope, annual := AnnualScope(providedWriteRoot)
+	if !annual || providedScope.Base != root || providedScope.Root != providedRequirement || !strings.HasPrefix(filepath.Base(providedRequirement), plan.Identity.WorkItemID+"-") {
+		return Materialization{}, fmt.Errorf("需求目录必须符合年度资料目录规则：%s", expectedRequirement)
 	}
 	if providedWriteRoot != filepath.Join(providedRequirement, subdirectory) {
 		return Materialization{}, fmt.Errorf("任务资料写入目录必须是需求目录的当前资料子目录")
@@ -432,11 +457,11 @@ func (s *PreparationService) Materialize(ctx context.Context, config domain.AppC
 	if parsed == nil {
 		return Materialization{}, fmt.Errorf("需求身份不能生成有效的飞书项目工作项链接")
 	}
-	existing, err := resolveExistingRequirementDirectory(root, plan.Identity.WorkItemID, plan.DirectoryFolderName, subdirectory, plan.Identity, s.files)
+	existing, err := resolveExistingRequirementDirectory(root, plan.Identity.WorkItemID, plan.DirectoryFolderName, subdirectory, plan.Identity, s.files, materialsCreationYear(ctx))
 	if err != nil {
 		return Materialization{}, err
 	}
-	context := requirementDirectoryContext{RequirementDirectory: providedRequirement, WriteRoot: providedWriteRoot}
+	context := requirementDirectoryContext{RequirementDirectory: expectedRequirement, WriteRoot: filepath.Join(expectedRequirement, subdirectory)}
 	if existing != nil {
 		context = *existing
 	}
@@ -474,24 +499,20 @@ func (s *PreparationService) Materialize(ctx context.Context, config domain.AppC
 	if err := ensureMaterialsDirectory(root, context.WriteRoot); err != nil {
 		return Materialization{}, err
 	}
-	manifestPath := filepath.Join(context.WriteRoot, requirementManifestName)
-	if err := s.files.write(manifestPath, s.files.encodeRequirement(manifest)); err != nil {
-		return Materialization{}, err
-	}
-	overviewPath := filepath.Join(context.WriteRoot, requirementOverviewName)
-	if exists, err := s.files.exists(overviewPath); err != nil {
-		return Materialization{}, err
-	} else if !exists {
-		if err := s.files.write(overviewPath, renderRequirementOverview(manifest)); err != nil {
+	if scope, ok := AnnualScope(context.WriteRoot); ok {
+		if err := scope.EnsureLocal(); err != nil {
 			return Materialization{}, err
 		}
 	}
-	if err := s.files.updateIndex(root, context.RequirementDirectory, manifest); err != nil {
+	manifestPath := filepath.Join(context.WriteRoot, requirementManifestName)
+	if err := s.files.write(manifestPath, s.files.encodeRequirement(manifest)); err != nil {
 		return Materialization{}, err
 	}
 	created := !exists
 	actualPlan := plan
 	actualPlan.RequirementTitle = title
+	actualPlan.RequirementDirectory = context.RequirementDirectory
+	actualPlan.DocumentationDirectory = context.WriteRoot
 	actualPlan.ReusedExistingDirectory = !created
 	return Materialization{
 		Plan:                        actualPlan,

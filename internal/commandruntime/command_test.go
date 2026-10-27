@@ -25,7 +25,7 @@ func (r *environmentRunner) Run(ctx context.Context, spec process.Spec) (process
 func TestPrepareSharesToolDefaultsAndTargetProxy(t *testing.T) {
 	config := domain.DefaultAppConfig()
 	runner := &environmentRunner{}
-	for _, tool := range []executable.Tool{executable.ToolMeegle, executable.ToolLark, executable.ToolCodex, executable.ToolGit, executable.ToolGenbu} {
+	for _, tool := range []executable.Tool{executable.ToolMeegle, executable.ToolCodex, executable.ToolGit, executable.ToolGenbu} {
 		target := domain.CommandProxyTarget(strings.ToUpper(string(tool)))
 		spec, err := Prepare(context.Background(), runner, &config, target, tool, "/fixture/command")
 		if err != nil {
@@ -39,9 +39,6 @@ func TestPrepareSharesToolDefaultsAndTargetProxy(t *testing.T) {
 		}
 		if !slices.Contains(spec.RemoveEnv, "HTTP_PROXY") || !slices.Contains(spec.RemoveEnv, "https_proxy") {
 			t.Fatal("inherited proxy was retained")
-		}
-		if tool == executable.ToolLark && (spec.Env["LARKSUITE_CLI_NO_UPDATE_NOTIFIER"] != "1" || spec.Env["LARKSUITE_CLI_NO_SKILLS_NOTIFIER"] != "1") {
-			t.Fatal("Lark notification policy missing")
 		}
 	}
 	spec, err := Prepare(context.Background(), runner, nil, "", "", "/fixture/bootstrap")

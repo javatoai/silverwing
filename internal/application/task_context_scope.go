@@ -8,6 +8,7 @@ import (
 	"errors"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"silverwing-go/internal/domain"
@@ -73,14 +74,23 @@ func (a *App) validateDesktopTaskContext(action Action, config domain.AppConfig,
 	if err != nil {
 		return errDesktopTaskContextChanged
 	}
+	materialsManifest := manifest
+	materialsPath := visibleMaterialsRoot(value(manifest.RequirementMaterials.WriteRoot))
+	if err := validAnnualTaskMaterials(manifest, config); err != nil {
+		materialsPath = ""
+		reason := err.Error()
+		materialsManifest.RequirementMaterials.Status = domain.MaterialsFailed
+		materialsManifest.RequirementMaterials.FailureReason = &reason
+	}
+	materialsManifest.RequirementMaterials.WriteRoot = &materialsPath
 	if expected.TaskID != action.TaskID || expected.Home != a.Paths.Home || !sameTaskContextPath(expected.TaskPath, taskPath) ||
 		config.TaskRoot == nil || !sameTaskContextPath(expected.TaskRoot, *config.TaskRoot) ||
 		taskContextConfigFingerprint(string(encoded)) != expected.ConfigFingerprint ||
 		manifest.TaskDirectoryName != expected.TaskID || manifest.CreatedAt != expected.TaskCreatedAt ||
 		manifest.GroupID != expected.GroupID || manifest.FeatureBranch != expected.Branch ||
-		value(manifest.RequirementMaterials.WriteRoot) != expected.MaterialsPath ||
-		!sameTaskContextText(projectedTaskMaterialsStatus(manifest), expected.MaterialsStatus) ||
-		taskMaterialsFingerprint(manifest) != expected.MaterialsFingerprint ||
+		materialsPath != expected.MaterialsPath ||
+		!sameTaskContextText(projectedTaskMaterialsStatus(materialsManifest), expected.MaterialsStatus) ||
+		taskMaterialsFingerprint(materialsManifest) != expected.MaterialsFingerprint ||
 		(manifest.LifecycleStatus == domain.TaskArchived) != expected.Archived ||
 		(expected.Page == "archive") != expected.Archived || (expected.Page == "materials" && expected.Archived) {
 		return errDesktopTaskContextChanged
@@ -88,7 +98,14 @@ func (a *App) validateDesktopTaskContext(action Action, config domain.AppConfig,
 
 	switch action.Kind {
 	case "codex.run":
-		if action.ServiceID != "" || action.ModuleID != "" || action.Path == "" || !sameTaskContextPath(action.Path, taskPath) {
+		if !slices.Contains(config.DefaultWorkspaceToolIDs, "codex") || action.ServiceID != "" || action.ModuleID != "" || action.Path == "" || !sameTaskContextPath(action.Path, taskPath) {
+			return errDesktopTaskContextChanged
+		}
+	case "task.tools-launch":
+		var ids []string
+		if decodeField(action, "toolIds", &ids) != nil || len(ids) != 1 || ids[0] != "cursor" ||
+			!slices.Contains(config.DefaultWorkspaceToolIDs, ids[0]) || action.ServiceID != "" || action.ModuleID != "" ||
+			action.Path == "" || !sameTaskContextPath(action.Path, taskPath) {
 			return errDesktopTaskContextChanged
 		}
 	case "task.materials-retry":
@@ -161,7 +178,7 @@ func taskMaterialsFingerprint(manifest domain.TaskManifest) string {
 	encoded, _ := json.Marshal([]string{
 		manifest.RequirementLink,
 		value(manifest.RequirementID),
-		value(manifest.RequirementMaterials.WriteRoot),
+		visibleMaterialsRoot(value(manifest.RequirementMaterials.WriteRoot)),
 		projectedTaskMaterialsStatus(manifest),
 		value(manifest.RequirementMaterials.FailureReason),
 	})

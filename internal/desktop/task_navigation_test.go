@@ -16,6 +16,7 @@ import (
 func taskNavigationFixture() *app {
 	s := newApp(nil, Options{CapturePath: "isolated-task-navigation"})
 	s.loading, s.page, s.selected = false, "tasks", 0
+	s.configJSON = `{"defaultWorkspaceToolIds":["codex"]}`
 	s.snapshot.Groups = []application.Group{{ID: "backend", Name: "服务端"}, {ID: "client", Name: "客户端"}}
 	s.tasks = []task{
 		{id: "task-api", title: "支付 API 联调", createdAt: "2026-01-01", groupID: "backend", requirementID: "REQ-42", branch: "feature/payment", services: []string{"billing"}, status: "进行中"},

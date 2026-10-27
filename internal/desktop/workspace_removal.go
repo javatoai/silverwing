@@ -309,6 +309,9 @@ func (s *app) renderWorkspaceRemovalDialog(c *ui.Context, p palette) {
 						message = "工作区目录已缺失，将只清理任务记录。"
 					}
 					label(c, message, 12, p.text).Wrap()
+					if len(s.taskByID(state.TaskID).workspaces) == 1 {
+						label(c, "这是最后一个工作区。移除后任务、需求资料和笔记仍会保留，可随时重新添加服务。", 12, p.muted).Wrap()
+					}
 					ui.Column(c).FillWidth().Padding(10).Gap(4).Background(p.soft).Radius(8).Children(func() {
 						label(c, "路径："+preview.WorkspacePath, 11, p.muted).Wrap().Selectable()
 						label(c, "分支："+preview.Branch, 11, p.muted).Wrap()

@@ -94,8 +94,10 @@ func TestRequirementCommentCardsResponsiveLayoutAndContent(test *testing.T) {
 				shortMetadata, hasShortMetadata := tester.Find("评论元信息 id:short")
 				shortAuthor, hasShortAuthor := tester.Find("测试成员")
 				shortTimestamp, hasShortTimestamp := tester.Find("2026-10-19 12:34:56 +08:00")
-				if !hasShortMetadata || !hasShortAuthor || !hasShortTimestamp || shortAuthor.Y != shortTimestamp.Y || shortTimestamp.X+shortTimestamp.W < shortMetadata.X+shortMetadata.W-1 || shortTimestamp.X+shortTimestamp.W > shortMetadata.X+shortMetadata.W+1 {
-					test.Errorf("short author/time row should remain single-line with the timestamp right-aligned: metadata=%+v author=%+v timestamp=%+v", shortMetadata, shortAuthor, shortTimestamp)
+				shortMenu, hasShortMenu := tester.Find("评论操作 short")
+				centerDelta := shortAuthor.Y + shortAuthor.H/2 - shortTimestamp.Y - shortTimestamp.H/2
+				if !hasShortMetadata || !hasShortAuthor || !hasShortTimestamp || !hasShortMenu || centerDelta < -1 || centerDelta > 1 || shortTimestamp.X+shortTimestamp.W > shortMenu.X || shortMenu.X+shortMenu.W < shortMetadata.X+shortMetadata.W-1 || shortMenu.X+shortMenu.W > shortMetadata.X+shortMetadata.W+1 {
+					test.Errorf("short author/time should align vertically with the action menu at the right edge: metadata=%+v author=%+v timestamp=%+v menu=%+v", shortMetadata, shortAuthor, shortTimestamp, shortMenu)
 				}
 				for _, visibleText := range []string{"短正文", "长链接", "回复正文", "表格内容", "fmt.Println", "长评论末尾", "查看评论附件"} {
 					if !tester.HasText(visibleText) {

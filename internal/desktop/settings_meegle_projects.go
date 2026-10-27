@@ -9,7 +9,7 @@ import (
 )
 
 func (s *app) settingsMeegleProjects(c *ui.Context, p palette) {
-	settingsCard(c, p, "Meegle 项目空间", "配置空间 Key 与短名，用于需求列表查询。", func() {
+	settingsHelpCard(c, p, "Meegle 项目空间", "配置空间 Key 与短名，用于需求列表查询。", func() {
 		projects := mapsFromArray(s.configArray("meegleProjects"))
 		if len(projects) == 0 {
 			settingsMuted(c, p, "尚未配置 Meegle 项目空间。")

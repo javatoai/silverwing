@@ -86,9 +86,16 @@ func TestSidebarSettingsLayoutAndSaveFailure(t *testing.T) {
 				for _, name := range []string{"侧边栏展示", "需求", "研发工具", "生产发布", "服务"} {
 					assertSettingsVisibleBounds(t, tester, name, width, 900)
 				}
-				if !tester.HasText("任务和设置始终显示") {
-					t.Fatal("fixed entries are not explained")
+				if tester.HasText("任务和设置始终显示") {
+					t.Fatal("the sidebar explanation should be in its help tooltip")
 				}
+				for i := 0; i < 16 && !tester.Focused("侧边栏展示说明"); i++ {
+					tester.Key(0, ui.KeyTab)
+				}
+				if !tester.Focused("侧边栏展示说明") || !tester.HasText("任务和设置始终显示") {
+					t.Fatal("fixed entries are not explained by the keyboard-accessible help")
+				}
+				tester.Key(0, ui.KeyEscape)
 				var x float32 = -1
 				for _, name := range []string{"需求", "研发工具", "生产发布", "服务"} {
 					r, _ := tester.Find(name)

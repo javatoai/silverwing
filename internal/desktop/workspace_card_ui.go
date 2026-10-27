@@ -312,7 +312,7 @@ func (s *app) workspaceActions(c *ui.Context, p palette, t task, w application.W
 			if showAddModule && iconButtonDisabled(c, key+"-add-module", "plus", "添加模块", p, s.busy || t.archived).Clicked() {
 				s.openTaskAppendModules(t, w.ServiceID)
 			}
-			if iconButtonDisabled(c, key+"-delete-module", "delete", "删除当前模块", p, len(t.workspaces) <= 1 || s.busy).Clicked() {
+			if iconButtonDisabled(c, key+"-delete-module", "delete", "删除当前模块", p, s.busy).Clicked() {
 				s.beginWorkspaceRemoval(t, w)
 			}
 		})

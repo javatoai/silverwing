@@ -162,9 +162,9 @@ func requirementCommentIdentityValues(value any, keys ...string) []string {
 // A failed write command can have reached Meegle. A single readback confirms
 // the stable marker and exact body; this function never retries the write.
 func requirementCommentReadbackResult(comments []domain.RequirementComment, readErr error, content, marker string,
-	expected domain.MaterialsCommentStatus, previousID *string, writeErr error) domain.MaterialsCommentResult {
-	failed := func(message string, id *string) domain.MaterialsCommentResult {
-		return domain.MaterialsCommentResult{Status: domain.MaterialsCommentFailed, Message: message, CommentID: id}
+	expected domain.RequirementCommentWriteStatus, previousID *string, writeErr error) domain.RequirementCommentWriteResult {
+	failed := func(message string, id *string) domain.RequirementCommentWriteResult {
+		return domain.RequirementCommentWriteResult{Status: domain.RequirementCommentFailed, Message: message, CommentID: id}
 	}
 	if readErr != nil {
 		if writeErr != nil {
@@ -202,5 +202,5 @@ func requirementCommentReadbackResult(comments []domain.RequirementComment, read
 	if writeErr != nil {
 		message = "需求评论已写入并经标记回读确认。"
 	}
-	return domain.MaterialsCommentResult{Status: expected, Message: message, CommentID: &matching.ID}
+	return domain.RequirementCommentWriteResult{Status: expected, Message: message, CommentID: &matching.ID}
 }

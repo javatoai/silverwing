@@ -106,6 +106,14 @@ func mergeConfigurationFields(current domain.AppConfig, update ConfigFieldsUpdat
 	if err := domain.DecodeStrict(encoded, &next); err != nil {
 		return current, err
 	}
+	oldGit, newGit := current.MaterialsGitSettings(), next.MaterialsGitSettings()
+	if oldGit.RepositoryURL != newGit.RepositoryURL || oldGit.Branch != newGit.Branch ||
+		!sameConfigurationString(current.RequirementMaterialsRoot, next.RequirementMaterialsRoot) || !sameConfigurationString(current.RequirementMaterialsSubdirectory, next.RequirementMaterialsSubdirectory) {
+		if next.MaterialsGitSync != nil {
+			newGit.Enabled = false
+			next.MaterialsGitSync = &newGit
+		}
+	}
 	if !sameConfigurationString(current.TaskRoot, next.TaskRoot) {
 		return current, errors.New("任务根目录变更需要先选择迁移或直接切换")
 	}

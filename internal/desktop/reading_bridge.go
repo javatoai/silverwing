@@ -386,7 +386,9 @@ func (s *app) restoreReadingMaterials() bool {
 			s.rememberPendingReadingMaterialsUI(session, key)
 			return true
 		}
-		s.selectDocument(active)
+		// Restoring an active tab must preserve the user's saved folder state.
+		// Explicitly opening or locating a document still reveals its parents.
+		s.selectDocumentWithReveal(active, false)
 		if s.documentPath != active {
 			session.pendingMaterials = true
 			session.pendingTaskPath = normalizedReadingPath(current.path)
@@ -672,7 +674,7 @@ func (s *app) readingExpandedDirectories() map[string]bool {
 
 func (s *app) readingExpansionInitialized() bool {
 	material := s.currentReadingMaterials(false)
-	return material != nil && material.ExpansionInitialized
+	return material != nil && material.ExpansionInitialized && material.ExpansionRevision == s.materialsExpansionRevision()
 }
 
 func (s *app) setReadingDirectoryExpanded(path string, expanded bool) {
@@ -706,6 +708,7 @@ func (s *app) setReadingDirectoryExpanded(path string, expanded bool) {
 func (s *app) markReadingExpansionInitialized() {
 	if material := s.currentReadingMaterials(true); material != nil {
 		material.ExpansionInitialized = true
+		material.ExpansionRevision = s.materialsExpansionRevision()
 		s.observeReadingSession()
 	}
 }

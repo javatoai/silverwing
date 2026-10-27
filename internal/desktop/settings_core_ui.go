@@ -14,7 +14,7 @@ func (s *app) settingsBasic(c *ui.Context, p palette) {
 		settingsAppearanceDivider(c)
 		s.settingsAppearanceThemeRow(c, p)
 	})
-	settingsCard(c, p, "侧边栏展示", "任务和设置始终显示。隐藏入口不会关闭对应功能。", func() {
+	settingsHelpCard(c, p, "侧边栏展示", "任务和设置始终显示。隐藏入口不会关闭对应功能。", func() {
 		for index, item := range []struct{ key, title string }{
 			{"requirements", "需求"}, {"tools", "研发工具"}, {"production", "生产发布"}, {"services", "服务"},
 		} {
@@ -27,7 +27,7 @@ func (s *app) settingsBasic(c *ui.Context, p palette) {
 }
 
 func (s *app) settingsToolVisibility(c *ui.Context, p palette) {
-	settingsCard(c, p, "研发工具", "选择显示在主导航中的工具。", func() {
+	settingsHelpCard(c, p, "研发工具", "选择显示在主导航中的工具。", func() {
 		for _, item := range []struct{ key, title, description string }{
 			{"json", "JSON", "格式化、压缩与转义 JSON。"},
 			{"dateTime", "日期时间", "时间戳与日期转换。"},
@@ -43,13 +43,13 @@ func (s *app) settingsToolVisibility(c *ui.Context, p palette) {
 }
 
 func (s *app) settingsPaths(c *ui.Context, p palette) {
-	settingsCard(c, p, "任务路径设置", "更改目录时选择是否迁移旧任务数据。", func() {
+	settingsHelpCard(c, p, "任务路径设置", "更改目录时选择是否迁移旧任务数据。", func() {
 		path := s.input("setting:taskRootTarget", s.configString("taskRoot"))
 		settingsAppearanceRow(c, p, "任务根目录", "选择迁移旧任务，或保留旧目录并直接切换。", func(stacked bool) {
 			s.taskRootMigrationPathControl(c, p, path, stacked)
 		})
 	})
-	settingsCard(c, p, "任务资料目录设置", "根目录与子目录均配置后才启用任务资料目录。", func() {
+	settingsHelpCard(c, p, "任务资料目录设置", "根目录与子目录均配置后才启用任务资料目录。", func() {
 		root := s.input("setting:requirementMaterialsRoot", s.configString("requirementMaterialsRoot"))
 		s.settingsAppearancePathRow(c, p, "任务资料根目录", "根目录和子目录都配置后，才会启用任务资料目录。", "选择任务资料目录", root, true, func(value string) {
 			s.saveMaterialsRoot(value)
@@ -57,14 +57,14 @@ func (s *app) settingsPaths(c *ui.Context, p palette) {
 		settingsAppearanceDivider(c)
 		s.settingsAppearanceTextRow(c, p, "requirementMaterialsSubdirectory", "任务资料子目录", "相对根目录的子目录，例如：研发。", "例如：研发", func(value string) { s.saveConfigField("requirementMaterialsSubdirectory", nullableString(value)) })
 		settingsAppearanceDivider(c)
-		s.settingsAppearanceTextRow(c, p, "requirementMaterialsFeishuTarget", "飞书同步目标", "用于同步任务资料的飞书知识库地址。", "https://…feishu.cn/wiki/…", func(value string) { s.saveConfigField("requirementMaterialsFeishuTarget", nullableString(value)) })
+		s.settingsMaterialsGitSync(c, p)
 		settingsAppearanceDivider(c)
-		s.settingsAppearanceLocalSwitchRow(c, p, "expand-materials-second-level", "默认展开二级目录文件夹", "打开任务资料目录时自动展开前两级文件夹；默认关闭，更改后自动记住。", s.expandMaterialsSecondLevelRef())
+		s.settingsMaterialsExpansionDepth(c, p)
 	})
 }
 
 func (s *app) settingsConfigBackup(c *ui.Context, p palette) {
-	settingsCard(c, p, "配置与备份", "查看当前生效配置，导入前会先预览变更。", func() {
+	settingsHelpCard(c, p, "配置与备份", "查看当前生效配置，导入前会先预览变更。\n\n更改或导入配置时会自动保留备份。", func() {
 		ui.Row(c).Gap(8).Wrap().Children(func() {
 			if action(c, "settings-config-view", "file", "查看配置", p, false) {
 				s.openSettingsConfig()
@@ -94,7 +94,7 @@ func (s *app) settingsConfigBackup(c *ui.Context, p palette) {
 		} else if state.backupsError != "" {
 			label(c, state.backupsError, 12, p.amber).Wrap()
 		} else if len(s.settingsBackups) == 0 {
-			settingsMuted(c, p, "暂无配置备份。更改或导入配置时会自动保留备份。")
+			settingsMuted(c, p, "暂无配置备份。")
 		} else {
 			s.renderSettingsBackupList(c, p)
 		}
@@ -134,7 +134,7 @@ func (s *app) moveConfigGroup(groupID string, delta int) {
 }
 
 func (s *app) settingsDevelopmentTools(c *ui.Context, p palette) {
-	settingsCardWithActions(c, p, "开发工具", "路径留空时由系统自动探测。选择后可直接测试打开。", func() {
+	settingsHelpCardWithActions(c, p, "开发工具", "路径留空时由系统自动探测。选择后可直接测试打开。", func() {
 		s.overflowMenu(c, p, "settings-dev-tools-more", "更多开发工具操作", s.busy, func(menu *overflowMenuBuilder) {
 			if menu.Item("detect-missing", "检测缺失工具").Icon("search").Disabled(s.busy).Chosen() {
 				s.act("development-tools/detect", "", "", "", "", "", nil)
@@ -186,9 +186,10 @@ func (s *app) settingsDevelopmentTools(c *ui.Context, p palette) {
 }
 
 func (s *app) settingsTaskCreation(c *ui.Context, p palette) {
+	s.settingsWorkspaceTools(c, p)
 	status := s.settingsCLIStatus["codex"]
 	command := firstNonEmpty(mapString(status, "command"), mapString(status, "commandPath"))
-	settingsCardWithActions(c, p, "Codex CLI 状态", "用于任务命名与 Codex 扩展管理。", func() {
+	settingsHelpCardWithActions(c, p, "Codex CLI 状态", "用于任务命名与 Codex 扩展管理。", func() {
 		s.overflowMenu(c, p, "settings-codex-cli-more", "更多 Codex CLI 操作", false, func(menu *overflowMenuBuilder) {
 			if menu.Item("check-status", "检查状态").Icon("refresh").Chosen() {
 				s.act("cli.status", "", "", "", "", "", map[string]any{"tool": "codex"})
@@ -204,14 +205,14 @@ func (s *app) settingsTaskCreation(c *ui.Context, p palette) {
 	}, func() {
 		s.settingsCLIStatusDetails(c, p, "codex")
 	})
-	settingsCard(c, p, "Codex CLI 命令路径", "留空时自动探测，也可以手动选择；更改后自动保存。", func() {
+	settingsHelpCard(c, p, "Codex CLI 命令路径", "留空时自动探测，也可以手动选择；更改后自动保存。", func() {
 		s.settingsConfigPathRow(c, p, "codexExecutablePath", "Codex CLI 可执行文件", "留空时使用 PATH 自动探测", false)
 		if s.cliJobs == nil || s.cliJobs.requests["status:codex"] == nil {
 			s.settingsCLIPathDiscoveryHint(c, p, "codex")
 		}
 		s.settingsCLICommandActions(c, p, "codex", command)
 	})
-	settingsCard(c, p, "AI 命名", "仅将需求标题与正文片段交给配置的模型；保留本地编辑能力。", func() {
+	settingsHelpCard(c, p, "AI 命名", "仅将需求标题与正文片段交给配置的模型；保留本地编辑能力。", func() {
 		s.settingsSwitch(c, p, "aiRequirementNamingEnabled", "开启 AI 生成分支名和文件夹名", "创建任务时自动补全尚未手动修改的名称。", false)
 		s.settingsSwitch(c, p, "aiRequirementNamingPrewarmEnabled", "拉取需求列表后自动预热命名", "提前准备本次读取到的需求，不受搜索和筛选影响。", false)
 		s.settingsTextRow(c, p, "aiRequirementNamingModel", "AI 命名模型", "例如 gpt-6-luna", false, func(value string) {
@@ -225,16 +226,15 @@ func (s *app) settingsTaskCreation(c *ui.Context, p palette) {
 }
 
 func (s *app) settingsTaskArea(c *ui.Context, p palette) {
-	settingsCard(c, p, "任务详情工具栏", "选择任务详情中显示的操作组。", func() {
+	settingsHelpCard(c, p, "任务详情工具栏", "选择任务详情中显示的操作组。", func() {
 		s.settingsSwitch(c, p, "showTaskDetailGitActionGroup", "Git 工具组", "显示提交、提交并推送和推送操作。", false)
 		s.settingsSwitch(c, p, "showTaskDetailPathActionGroup", "路径工具组", "显示复制任务路径、终端和打开任务目录操作。", false)
 	})
-	settingsCard(c, p, "工作区卡片工具栏", "选择工作区卡片中显示的操作组。", func() {
+	settingsHelpCard(c, p, "工作区卡片工具栏", "选择工作区卡片中显示的操作组。", func() {
 		s.settingsSwitch(c, p, "showWorkspaceGitActionGroup", "Git 工具组", "显示提交、提交并推送和推送操作。", false)
 		s.settingsSwitch(c, p, "showWorkspacePathActionGroup", "路径工具组", "显示终端、打开文件夹和复制路径操作。", false)
 	})
-	settingsCard(c, p, "信息复制", "控制工作区和需求信息旁边的复制图标。", func() {
-		settingsMuted(c, p, "工作区项目名和分支名可以直接点击复制。")
+	settingsHelpCard(c, p, "信息复制", "控制工作区和需求信息旁边的复制图标。\n\n工作区项目名和分支名可以直接点击复制。", func() {
 		s.settingsRequirementCopyIcons(c, p)
 	})
 }
@@ -315,7 +315,7 @@ func (s *app) renderSettingsInstructionMenuItems(c *ui.Context, menu *overflowMe
 
 func (s *app) settingsInstructionTemplates(c *ui.Context, p palette) {
 	state := s.ensureTaskNotesUI()
-	settingsCard(c, p, "", "", func() {
+	settingsHelpCard(c, p, "", "", func() {
 		if state.settingsTemplatesLoading {
 			settingsMuted(c, p, "正在读取任务说明模板…")
 		}

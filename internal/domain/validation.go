@@ -16,11 +16,10 @@ import (
 const MaxDirectoryNameLength = 80
 
 var (
-	semverPattern            = regexp.MustCompile("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")
-	sourceIDPattern          = regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-	gitRefPattern            = regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9._/@-]*$")
-	moduleNamePattern        = regexp.MustCompile("^[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*$")
-	materialsWikiPathPattern = regexp.MustCompile("^/wiki/[A-Za-z0-9]+/?$")
+	semverPattern     = regexp.MustCompile("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")
+	sourceIDPattern   = regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+	gitRefPattern     = regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9._/@-]*$")
+	moduleNamePattern = regexp.MustCompile("^[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*$")
 )
 
 func ValidateSchemaVersion(actual, expected string) bool {
@@ -95,6 +94,9 @@ func ValidateRequirementMaterialsSubdirectory(value string) (string, error) {
 	if v == "." || v == ".." {
 		return "", fmt.Errorf("任务资料子目录不能是 . 或 ..")
 	}
+	if strings.EqualFold(v, "temp") || strings.EqualFold(v, ".git") || strings.HasPrefix(strings.ToLower(v), ".silverwing-") {
+		return "", fmt.Errorf("任务资料子目录不能使用 temp 或系统保留目录名")
+	}
 	if strings.ContainsAny(v, "/\\\\") {
 		return "", fmt.Errorf("任务资料子目录只能是单层目录名")
 	}
@@ -110,26 +112,6 @@ func ValidateRequirementMaterialsSubdirectory(value string) (string, error) {
 		return "", fmt.Errorf("任务资料子目录不能使用 Windows 保留名称")
 	}
 	return v, nil
-}
-
-func ValidateMaterialsFeishuTarget(raw string) (*string, error) {
-	v := strings.TrimSpace(raw)
-	if v == "" {
-		return nil, nil
-	}
-	u, err := url.Parse(v)
-	if err != nil {
-		return nil, fmt.Errorf("请输入有效的飞书知识库地址")
-	}
-	if u.Scheme != "https" || u.Host == "" || u.User != nil || !materialsWikiPathPattern.MatchString(u.Path) {
-		return nil, fmt.Errorf("飞书同步目标需要 HTTPS 知识库 /wiki/ 地址")
-	}
-	host := strings.ToLower(u.Hostname())
-	if host != "feishu.cn" && !strings.HasSuffix(host, ".feishu.cn") && host != "larksuite.com" && !strings.HasSuffix(host, ".larksuite.com") {
-		return nil, fmt.Errorf("请输入飞书或 Lark 知识库地址")
-	}
-	canonical := (&url.URL{Scheme: "https", Host: strings.ToLower(u.Host), Path: strings.TrimRight(u.Path, "/")}).String()
-	return &canonical, nil
 }
 
 func NormalizeCommandProxyURL(raw *string) (*string, error) {
@@ -226,8 +208,8 @@ func (c AppConfig) Validate() error {
 			return err
 		}
 	}
-	if c.RequirementMaterialsFeishuTarget != nil {
-		if _, err := ValidateMaterialsFeishuTarget(*c.RequirementMaterialsFeishuTarget); err != nil {
+	if c.MaterialsGitSync != nil {
+		if err := c.MaterialsGitSync.Validate(); err != nil {
 			return err
 		}
 	}
@@ -332,6 +314,7 @@ func (c AppConfig) Validate() error {
 }
 
 func (c *AppConfig) NormalizeAndValidate() error {
+	c.CommandProxyTargets = NormalizeCommandProxyTargets(c.CommandProxyTargets)
 	if c.CommandProxyURL != nil {
 		v, e := NormalizeCommandProxyURL(c.CommandProxyURL)
 		if e != nil {
@@ -352,13 +335,6 @@ func (c *AppConfig) NormalizeAndValidate() error {
 			return e
 		}
 		c.RequirementMaterialsSubdirectory = &v
-	}
-	if c.RequirementMaterialsFeishuTarget != nil {
-		v, e := ValidateMaterialsFeishuTarget(*c.RequirementMaterialsFeishuTarget)
-		if e != nil {
-			return e
-		}
-		c.RequirementMaterialsFeishuTarget = v
 	}
 	return c.Validate()
 }
@@ -943,7 +919,7 @@ func stringValue(v *string) string {
 }
 func validProxyTarget(v CommandProxyTarget) bool {
 	switch v {
-	case ProxyTargetCodex, ProxyTargetGit, ProxyTargetWorkspaceCommand, ProxyTargetMeegle, ProxyTargetLark, ProxyTargetGenbu:
+	case ProxyTargetCodex, ProxyTargetGit, ProxyTargetWorkspaceCommand, ProxyTargetMeegle, ProxyTargetGenbu:
 		return true
 	}
 	return false

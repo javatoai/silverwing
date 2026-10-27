@@ -213,6 +213,12 @@ func (s *app) materialsUnavailable(c *ui.Context, p palette, t task) {
 
 func (s *app) documentTree(c *ui.Context, p palette, width float32) {
 	state := s.ensureMaterialsFileManagementState()
+	directory, _ := s.materialsCurrentDirectory(state)
+	canWriteDirectory := s.materialsWritable(directory, true)
+	canTrashSelection := len(state.selected) > 0
+	for _, entry := range s.materialsFileSelection(state) {
+		canTrashSelection = canTrashSelection && s.materialsWritable(entry.Path, false)
+	}
 	order := s.readingMaterialsSortOrder()
 	documents := sortDocumentsByOrder(s.documents, order)
 	expanded := s.readingExpandedDirectories()
@@ -234,25 +240,25 @@ func (s *app) documentTree(c *ui.Context, p palette, width float32) {
 					s.setReadingMaterialsSortOrder("MODIFIED_DESC")
 				}
 			})
-			s.overflowMenuOwned(c, p, "materials-more", "materials-more-"+s.snapshot.Home+"-"+materialsFeishuSyncTaskKey(s.currentTask()), "更多资料操作", false, func(m *overflowMenuBuilder) {
+			s.overflowMenuOwned(c, p, "materials-more", "materials-more-"+s.snapshot.Home+"-"+s.currentTask().id+"-"+s.currentTask().path, "更多资料操作", false, func(m *overflowMenuBuilder) {
 				if m.Item("quick-open", "快速打开文件 (Ctrl+P)").Icon("search").Chosen() {
 					s.openMaterialsQuickPicker()
 				}
 				if m.Item("search-all", "搜索全部资料 (Ctrl+Shift+F)").Icon("search").Chosen() {
 					s.openMaterialsFullTextSearch()
 				}
-				if m.Item("new-document", "新建文档").Icon("file").Chosen() {
+				if m.Item("new-document", "新建文档").Icon("file").Disabled(!canWriteDirectory).Chosen() {
 					directory, _ := s.materialsCurrentDirectory(state)
 					s.openMaterialsFileNameForm("document.create", "新建文档", directory)
 				}
-				if m.Item("new-folder", "新建文件夹").Icon("folder").Chosen() {
+				if m.Item("new-folder", "新建文件夹").Icon("folder").Disabled(!canWriteDirectory).Chosen() {
 					directory, _ := s.materialsCurrentDirectory(state)
 					s.openMaterialsFileNameForm("document.mkdir", "新建文件夹", directory)
 				}
-				if m.Item("import", "导入文件…").Icon("plus").Chosen() {
+				if m.Item("import", "导入文件…").Icon("plus").Disabled(!canWriteDirectory).Chosen() {
 					s.startMaterialsImportPicker()
 				}
-				if m.Item("paste", "粘贴文件或图片").Icon("copy").Chosen() {
+				if m.Item("paste", "粘贴文件或图片").Icon("copy").Disabled(!canWriteDirectory).Chosen() {
 					s.pasteMaterialsIntoCurrentDirectory()
 				}
 				m.Separator()
@@ -265,10 +271,9 @@ func (s *app) documentTree(c *ui.Context, p palette, width float32) {
 					s.loadDocuments()
 				}
 				m.Separator()
-				s.materialsRootFeishuMenuItems(m, s.currentTask())
 				s.documentMoreMenu(c, m)
 				m.Separator()
-				if m.Item("trash-selection", "移入回收站…").Icon("delete").Disabled(len(state.selected) == 0 || s.materialsFileInputBusy()).Dangerous().Chosen() {
+				if m.Item("trash-selection", "移入回收站…").Icon("delete").Disabled(!canTrashSelection || s.materialsFileInputBusy()).Dangerous().Chosen() {
 					s.requestMaterialsTrashPreview()
 				}
 			})
@@ -293,7 +298,6 @@ func (s *app) documentTree(c *ui.Context, p palette, width float32) {
 			OnInput:         func(input FileTreeInput) { s.materialsTreeInput(state, input) },
 			ContextMenu: func(row FileTreeRow, menu *ui.Menu) {
 				if row.ID == "@root" {
-					s.materialsRootContextMenu(menu, s.currentTask())
 				} else if entry, ok := s.findMaterialsEntry(row.Path, s.documents); ok {
 					s.materialsEntryContextMenu(c, menu, state, entry)
 				}
@@ -364,23 +368,31 @@ func (s *app) initializeMaterialsTreeExpansion() {
 	if !s.documentsLoaded || s.readingExpansionInitialized() {
 		return
 	}
-	if s.expandMaterialsSecondLevel() {
-		var visit func([]application.Document)
-		visit = func(items []application.Document) {
+	material := s.currentReadingMaterials(true)
+	if material == nil {
+		return
+	}
+	expanded := []string{}
+	limit := s.materialsExpansionDepth()
+	if limit > 0 {
+		var visit func([]application.Document, int)
+		visit = func(items []application.Document, depth int) {
 			for _, item := range items {
 				if !isDocumentDirectory(item) {
 					continue
 				}
 				path := s.materialsRelativePath(item.Path)
-				if path != "" && strings.Count(path, "/") < 2 {
-					s.setReadingDirectoryExpanded(path, true)
+				if path != "" {
+					expanded = append(expanded, path)
 				}
-				visit(item.Children)
+				if depth < limit {
+					visit(item.Children, depth+1)
+				}
 			}
 		}
-		visit(s.documents)
+		visit(s.documents, 1)
 	}
-	s.revealMaterialsPath(s.documentPath)
+	material.ExpandedDirectories = expanded
 	s.markReadingExpansionInitialized()
 }
 

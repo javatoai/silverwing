@@ -107,9 +107,8 @@ func (state *app) settingsUpdates(context *ui.Context, theme palette) {
 			label(context, domain.CurrentProductVersion, 14, theme.text).FontWeight(500)
 		})
 		ui.Column(context).FillWidth().MinWidth(0).Gap(8).Children(func() {
-			label(context, "GitHub Releases", 13, theme.text).FontWeight(500)
+			settingsHelpLabel(context, theme, "GitHub Releases", "下载适用于当前系统的安装包，并按安装包说明手动安装。", 13, 500)
 			label(context, silverwingReleasesURL, 11, theme.muted).FillWidth().MinWidth(0).Wrap().Selectable()
-			label(context, "下载适用于当前系统的安装包，并按安装包说明手动安装。", 11, theme.muted).FillWidth().MinWidth(0).Wrap()
 		})
 		ui.Row(context).FillWidth().MinWidth(0).Wrap().Gap(8).Label("更新操作").Children(func() {
 			if settingsSystemAction(context, "updates-open", "launch", "打开更新页面", theme, settingsSystemActionOutline, false) {

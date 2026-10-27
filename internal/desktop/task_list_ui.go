@@ -9,6 +9,7 @@ import (
 )
 
 func (s *app) taskIndex(c *ui.Context, p palette) {
+	s.observeTaskOpenTools()
 	archived := s.page == "archive"
 	state := s.taskIndexBrowsingFor(archived)
 	rows := s.taskIndexRows(archived)

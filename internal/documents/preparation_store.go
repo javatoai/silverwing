@@ -219,7 +219,7 @@ func requireMaterialsRoot(configured *string) (string, error) {
 	}
 	value = filepath.Clean(value)
 	info, err := os.Lstat(value)
-	if err != nil || !info.IsDir() || isUnsafeDirectory(info, value) {
+	if err != nil || !info.IsDir() || isUnsafeDirectory(info, value) || !sameResolvedPath(value) {
 		return "", fmt.Errorf("资料根路径必须是已存在的普通目录")
 	}
 	return value, nil
@@ -230,6 +230,9 @@ func requireMaterialsSubdirectory(configured *string) (string, error) {
 		return "", fmt.Errorf("尚未配置任务资料子目录；请在 silverwing 设置 > 路径设置中配置")
 	}
 	value := strings.TrimSpace(*configured)
+	if strings.EqualFold(value, TemporaryMaterialsDirectory) || strings.EqualFold(value, ".git") || strings.HasPrefix(strings.ToLower(value), ".silverwing-") {
+		return "", fmt.Errorf("资料子目录不能与本地 temp 目录重名")
+	}
 	if err := validateMaterialsSegment(value, "资料子目录名", 100); err != nil {
 		return "", err
 	}
@@ -265,7 +268,7 @@ func validateMaterialsSegment(value, label string, maxLength int) error {
 	return nil
 }
 
-func buildRequirementDirectory(root, id, folder string) (string, error) {
+func buildRequirementDirectory(root, id, folder string, years ...int) (string, error) {
 	if !requirementIDPattern.MatchString(id) {
 		return "", fmt.Errorf("需求编号不合法")
 	}
@@ -276,15 +279,24 @@ func buildRequirementDirectory(root, id, folder string) (string, error) {
 	if err := validateMaterialsSegment(name, "需求目录名", 140); err != nil {
 		return "", err
 	}
-	path := filepath.Clean(filepath.Join(root, name))
+	var path string
+	var err error
+	if len(years) > 0 {
+		path, err = findAnnualRequirementDirectory(root, id, folder, years[0])
+	} else {
+		path, err = annualRequirementDirectory(root, id, folder)
+	}
+	if err != nil {
+		return "", err
+	}
 	if !isWithin(root, path) {
 		return "", fmt.Errorf("任务资料目录超出资料根目录")
 	}
 	return path, nil
 }
 
-func resolveExistingRequirementDirectory(root, id, folder, subdirectory string, identity RequirementIdentity, files *preparationFileStore) (*requirementDirectoryContext, error) {
-	path, err := buildRequirementDirectory(root, id, folder)
+func resolveExistingRequirementDirectory(root, id, folder, subdirectory string, identity RequirementIdentity, files *preparationFileStore, years ...int) (*requirementDirectoryContext, error) {
+	path, err := buildRequirementDirectory(root, id, folder, years...)
 	if err != nil {
 		return nil, err
 	}
@@ -316,6 +328,11 @@ func validateExistingRequirementDirectoryInput(path, subdirectory, requirementID
 		}
 		if isUnsafeDirectory(info, current) {
 			return fmt.Errorf("需求目录包含链接或重解析点，拒绝使用：%s", current)
+		}
+		// Peer directories have their own owners and metadata. Identity checks
+		// apply only to our configured directory, never to downloaded peers.
+		if current != path && entry.IsDir() && filepath.Dir(current) == path && !strings.EqualFold(entry.Name(), subdirectory) {
+			return filepath.SkipDir
 		}
 		if !info.Mode().IsRegular() || filepath.Base(current) != requirementManifestName {
 			return nil

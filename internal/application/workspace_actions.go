@@ -38,13 +38,14 @@ func (a *App) workspaceActionWithOutput(ctx context.Context, action Action, onOu
 	return a.workspaceActionWithProgress(ctx, action, onOutput, nil)
 }
 
-func (a *App) workspaceActionWithProgress(ctx context.Context, action Action, onOutput func(process.StreamEvent), onTaskProgress func(workspace.TaskCreationProgress)) (ActionResult, error) {
+func (a *App) workspaceActionWithProgress(ctx context.Context, action Action, onOutput func(process.StreamEvent), onTaskProgress func(workspace.TaskCreationProgress)) (actionResult ActionResult, actionErr error) {
 	config, err := a.Config.Load()
 	if err != nil {
 		return ActionResult{}, err
 	}
 	git := a.git(config)
 	service := a.taskService(config)
+	defer func() { appendMaterialsCatalogWarnings(&actionResult, service.Documents) }()
 	if result, handled, previewErr := taskCreationPreviewAction(ctx, action, config, service); handled {
 		return result, previewErr
 	}
@@ -86,7 +87,7 @@ func (a *App) workspaceActionWithProgress(ctx context.Context, action Action, on
 		return ActionResult{}, err
 	}
 	switch action.Kind {
-	case "task.materials-retry", "task.archive", "task.restore", "task.delete":
+	case "task.materials-retry", "task.archive", "task.restore", "task.delete", "task.tools-launch":
 		if err := a.validateDesktopTaskContext(action, config, manifest, path); err != nil {
 			return ActionResult{}, err
 		}
@@ -129,6 +130,11 @@ func (a *App) workspaceActionWithProgress(ctx context.Context, action Action, on
 			return ActionResult{}, e
 		}
 		m, e := service.LaunchWorkspaceTools(ctx, path, manifest, ids)
+		if e == nil {
+			if failure := workspaceToolLaunchFailure(m, ids); failure != "" {
+				e = fmt.Errorf("任务工具打开失败：%s", failure)
+			}
+		}
 		return ActionResult{Message: "工作区工具启动已返回", Data: m}, e
 	case "task.materials-retry":
 		m, e := service.RetryRequirementMaterials(ctx, config, path)

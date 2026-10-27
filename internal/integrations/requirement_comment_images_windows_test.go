@@ -16,6 +16,15 @@ import (
 )
 
 func TestRequirementCommentImagesAuthenticatedAttachmentRoute(t *testing.T) {
+	for name, content := range map[string]string{
+		"original UUID annotation": commentImageFixtureContent,
+		"SW unannotated readback":  "# 你好\n\n![](" + commentImageFixtureURL + ")",
+	} {
+		t.Run(name, func(t *testing.T) { testCommentImageAttachmentRoute(t, content) })
+	}
+}
+
+func testCommentImageAttachmentRoute(t *testing.T, content string) {
 	root := t.TempDir()
 	paths := storage.NewPaths(filepath.Join(root, "isolated-home"))
 	control, calls := filepath.Join(root, "fixture.json"), filepath.Join(root, "calls.log")
@@ -49,11 +58,11 @@ func TestRequirementCommentImagesAuthenticatedAttachmentRoute(t *testing.T) {
 	}
 	item := domain.ParticipatedWorkItem{ProjectKey: "project-a", ProjectName: "space", Type: "userstory", ID: "123", URL: "https://project.feishu.cn/space/userstory/detail/123"}
 	key := requirementCacheKey("comments", session.raw, item)
-	if _, err := service.writeRequirementCommentsCache(key, domain.RequirementComments{Comments: []domain.RequirementComment{{ID: "c", Content: commentImageFixtureContent}}}, 1); err != nil {
+	if _, err := service.writeRequirementCommentsCache(key, domain.RequirementComments{Comments: []domain.RequirementComment{{ID: "c", Content: content}}}, 1); err != nil {
 		t.Fatal(err)
 	}
 	payload := map[string]any{"url": item.URL, "projectKey": item.ProjectKey, "projectName": item.ProjectName, "id": item.ID, "type": item.Type,
-		"scope": "comment", "commentID": "c", "commentGeneration": requirementCacheDigest(commentImageFixtureContent), "fileUrl": commentImageFixtureURL, "expectedIdentity": token}
+		"scope": "comment", "commentID": "c", "commentGeneration": requirementCacheDigest(content), "fileUrl": commentImageFixtureURL, "expectedIdentity": token}
 	for attempt := 0; attempt < 2; attempt++ {
 		value, err := service.downloadRequirementAttachment(ctx, config, payload)
 		if err != nil {

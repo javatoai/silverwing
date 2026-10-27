@@ -23,7 +23,7 @@ func configPreviewText(data any) string {
 	case len(changed) > 0:
 		lines = append(lines, "变化字段："+strings.Join(changed, "、"))
 	default:
-		lines = append(lines, "配置内容没有变化。")
+		lines = append(lines, "当前版本可识别的设置没有变化；其他版本的设置字段仍以归档为准。")
 	}
 	if len(invalid) > 0 {
 		names := map[string]string{

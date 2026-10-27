@@ -28,6 +28,9 @@ func (s *app) restoreDesktopPreferences(home string) {
 	state.store = NewDesktopPreferencesStore(filepath.Join(home, desktopPreferencesFile))
 	value, err := state.store.Load()
 	state.value = value
+	if input := s.inputs["setting:materialsExpansionDepth"]; input != nil {
+		*input = fmt.Sprint(value.MaterialsExpansionDepth)
+	}
 	if err != nil {
 		s.lastError = "读取桌面偏好失败：" + err.Error()
 	}
@@ -130,15 +133,18 @@ func (s *app) materialsDirectoryWidthRef() *float32 {
 	return &state.materialsWidth
 }
 
-func (s *app) expandMaterialsSecondLevelRef() *bool {
+func (s *app) materialsExpansionDepth() int {
 	if s.desktopPreferences == nil {
-		s.desktopPreferences = &desktopPreferencesState{materialsWidth: fileTreeWidth}
+		return 2
 	}
-	return &s.desktopPreferences.value.ExpandRequirementMaterialsSecondLevelFolders
+	return s.desktopPreferences.value.MaterialsExpansionDepth
 }
 
-func (s *app) expandMaterialsSecondLevel() bool {
-	return s.desktopPreferences != nil && s.desktopPreferences.value.ExpandRequirementMaterialsSecondLevelFolders
+func (s *app) materialsExpansionRevision() uint64 {
+	if s.desktopPreferences == nil || s.desktopPreferences.value.MaterialsExpansionRevision == 0 {
+		return 1
+	}
+	return s.desktopPreferences.value.MaterialsExpansionRevision
 }
 
 func (s *app) recordDesktopWindowBounds() {
@@ -206,7 +212,8 @@ func (s *app) persistDesktopLayout() error {
 		value.TaskListPaneWidth, value.MaterialsDirectoryPaneWidth = state.value.TaskListPaneWidth, state.value.MaterialsDirectoryPaneWidth
 		value.TaskListPaneCollapsed = state.value.TaskListPaneCollapsed
 		value.SettingsSection = state.value.SettingsSection
-		value.ExpandRequirementMaterialsSecondLevelFolders = state.value.ExpandRequirementMaterialsSecondLevelFolders
+		value.MaterialsExpansionDepth = state.value.MaterialsExpansionDepth
+		value.MaterialsExpansionRevision = state.value.MaterialsExpansionRevision
 	})
 	return err
 }

@@ -53,8 +53,6 @@ func (s *Service) resolveCommand(ctx context.Context, config domain.AppConfig, t
 	switch target {
 	case domain.ProxyTargetMeegle:
 		tool, configured = executable.ToolMeegle, config.MeegleExecutablePath
-	case domain.ProxyTargetLark:
-		tool, configured = executable.ToolLark, config.LarkExecutablePath
 	default:
 		return "", nil, fmt.Errorf("不支持的 CLI 目标：%s", target)
 	}
@@ -106,8 +104,6 @@ func targetToolName(target domain.CommandProxyTarget) string {
 	switch target {
 	case domain.ProxyTargetMeegle:
 		return string(executable.ToolMeegle)
-	case domain.ProxyTargetLark:
-		return string(executable.ToolLark)
 	default:
 		return ""
 	}
@@ -115,10 +111,6 @@ func targetToolName(target domain.CommandProxyTarget) string {
 
 func (s *Service) runMeegle(ctx context.Context, config domain.AppConfig, args []string, timeout time.Duration, operation string) (process.Result, error) {
 	return s.runCLI(ctx, config, domain.ProxyTargetMeegle, args, nil, timeout, operation, "")
-}
-
-func (s *Service) runLark(ctx context.Context, config domain.AppConfig, args []string, input []byte, timeout time.Duration, operation, workingDirectory string) (process.Result, error) {
-	return s.runCLI(ctx, config, domain.ProxyTargetLark, args, input, timeout, operation, workingDirectory)
 }
 
 func (s *Service) safeDiagnostic(config domain.AppConfig, message string) string {

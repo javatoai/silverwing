@@ -20,15 +20,16 @@ const (
 // DesktopPreferences contains display state only. Task identity and content view
 // are stored with the reading cache so they cannot drift into a second source.
 type DesktopPreferences struct {
-	Width                                        int    `json:"width"`
-	Height                                       int    `json:"height"`
-	Maximized                                    bool   `json:"maximized"`
-	SettingsSection                              string `json:"settingsSection"`
-	TaskListPaneWidth                            int    `json:"taskListPaneWidth,omitempty"`
-	TaskListPaneCollapsed                        bool   `json:"taskListPaneCollapsed"`
-	MaterialsDirectoryPaneWidth                  int    `json:"materialsDirectoryPaneWidth,omitempty"`
-	ExpandRequirementMaterialsSecondLevelFolders bool   `json:"expandRequirementMaterialsSecondLevelFolders"`
-	WorkspaceNavigationCollapsed                 bool   `json:"workspaceNavigationCollapsed"`
+	Width                        int    `json:"width"`
+	Height                       int    `json:"height"`
+	Maximized                    bool   `json:"maximized"`
+	SettingsSection              string `json:"settingsSection"`
+	TaskListPaneWidth            int    `json:"taskListPaneWidth,omitempty"`
+	TaskListPaneCollapsed        bool   `json:"taskListPaneCollapsed"`
+	MaterialsDirectoryPaneWidth  int    `json:"materialsDirectoryPaneWidth,omitempty"`
+	MaterialsExpansionDepth      int    `json:"materialsExpansionDepth"`
+	MaterialsExpansionRevision   uint64 `json:"materialsExpansionRevision"`
+	WorkspaceNavigationCollapsed bool   `json:"workspaceNavigationCollapsed"`
 }
 
 // DefaultDesktopPreferences supplies the initial Go desktop layout.
@@ -37,6 +38,7 @@ func DefaultDesktopPreferences() DesktopPreferences {
 		Width: defaultDesktopWidth, Height: defaultDesktopHeight, Maximized: true,
 		SettingsSection:              "basic",
 		WorkspaceNavigationCollapsed: true,
+		MaterialsExpansionDepth:      2, MaterialsExpansionRevision: 1,
 	}
 }
 
@@ -51,8 +53,8 @@ func NewDesktopPreferencesStore(path string) *DesktopPreferencesStore {
 	return &DesktopPreferencesStore{path: path}
 }
 
-// Load returns source-compatible defaults for a missing file. Invalid JSON is
-// reported to the caller so the application can keep running with those defaults.
+// Load supplies and persists the directory-expansion defaults when upgrading an
+// old preference file. Invalid JSON is reported without overwriting the file.
 func (s *DesktopPreferencesStore) Load() (DesktopPreferences, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -92,7 +94,17 @@ func (s *DesktopPreferencesStore) Update(change func(*DesktopPreferences)) (Desk
 }
 
 func (s *DesktopPreferencesStore) loadLocked() (DesktopPreferences, error) {
-	value, _, err := s.readLocked()
+	value, raw, err := s.readLocked()
+	if err == nil {
+		_, hasDepth := raw["materialsExpansionDepth"]
+		_, hasRevision := raw["materialsExpansionRevision"]
+		_, hasRetiredSwitch := raw["expandRequirementMaterialsSecondLevelFolders"]
+		if !hasDepth || !hasRevision || hasRetiredSwitch {
+			if err := s.saveLocked(raw, value); err != nil {
+				return value, fmt.Errorf("save directory expansion defaults: %w", err)
+			}
+		}
+	}
 	return value, err
 }
 
@@ -121,7 +133,16 @@ func (s *DesktopPreferencesStore) readLocked() (DesktopPreferences, map[string]j
 	readInt(raw, "materialsDirectoryPaneWidth", &value.MaterialsDirectoryPaneWidth)
 	readBool(raw, "maximized", &value.Maximized)
 	readBool(raw, "taskListPaneCollapsed", &value.TaskListPaneCollapsed)
-	readBool(raw, "expandRequirementMaterialsSecondLevelFolders", &value.ExpandRequirementMaterialsSecondLevelFolders)
+	readInt(raw, "materialsExpansionDepth", &value.MaterialsExpansionDepth)
+	if rawRevision, exists := raw["materialsExpansionRevision"]; exists {
+		_ = json.Unmarshal(rawRevision, &value.MaterialsExpansionRevision)
+	}
+	if value.MaterialsExpansionDepth < 0 {
+		value.MaterialsExpansionDepth = 2
+	}
+	if value.MaterialsExpansionRevision == 0 {
+		value.MaterialsExpansionRevision = 1
+	}
 	readBool(raw, "workspaceNavigationCollapsed", &value.WorkspaceNavigationCollapsed)
 	readString(raw, "settingsSection", &value.SettingsSection)
 	if value.Width <= 0 {
@@ -143,6 +164,12 @@ func (s *DesktopPreferencesStore) readLocked() (DesktopPreferences, map[string]j
 }
 
 func (s *DesktopPreferencesStore) saveLocked(raw map[string]json.RawMessage, value DesktopPreferences) error {
+	if value.MaterialsExpansionDepth < 0 {
+		return errors.New("目录展开层级不能为负数")
+	}
+	if value.MaterialsExpansionRevision == 0 {
+		value.MaterialsExpansionRevision = 1
+	}
 	if stringsTrimSpace(s.path) == "" {
 		return errors.New("desktop preference path is empty")
 	}
@@ -167,16 +194,18 @@ func (s *DesktopPreferencesStore) saveLocked(raw map[string]json.RawMessage, val
 		}
 	}
 	for key, item := range map[string]any{
-		"maximized":             value.Maximized,
-		"settingsSection":       value.SettingsSection,
-		"taskListPaneCollapsed": value.TaskListPaneCollapsed,
-		"expandRequirementMaterialsSecondLevelFolders": value.ExpandRequirementMaterialsSecondLevelFolders,
-		"workspaceNavigationCollapsed":                 value.WorkspaceNavigationCollapsed,
+		"maximized":                    value.Maximized,
+		"settingsSection":              value.SettingsSection,
+		"taskListPaneCollapsed":        value.TaskListPaneCollapsed,
+		"materialsExpansionDepth":      value.MaterialsExpansionDepth,
+		"materialsExpansionRevision":   value.MaterialsExpansionRevision,
+		"workspaceNavigationCollapsed": value.WorkspaceNavigationCollapsed,
 	} {
 		if err := putPreference(raw, key, item); err != nil {
 			return err
 		}
 	}
+	delete(raw, "expandRequirementMaterialsSecondLevelFolders")
 	if value.TaskListPaneWidth > 0 {
 		if err := putPreference(raw, "taskListPaneWidth", value.TaskListPaneWidth); err != nil {
 			return err

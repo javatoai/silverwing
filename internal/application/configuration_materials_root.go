@@ -22,6 +22,11 @@ func (a *App) saveMaterialsRoot(action Action) (ActionResult, error) {
 		root = &path
 	}
 	_, err := a.Config.Update(func(config domain.AppConfig) (domain.AppConfig, error) {
+		if value(config.RequirementMaterialsRoot) != value(root) && config.MaterialsGitSync != nil {
+			settings := *config.MaterialsGitSync
+			settings.Enabled = false
+			config.MaterialsGitSync = &settings
+		}
 		config.RequirementMaterialsRoot = root
 		return config, nil
 	})

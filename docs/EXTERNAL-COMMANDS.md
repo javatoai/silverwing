@@ -15,7 +15,7 @@
 
 | 入口 | 命令与环境 | 超时、取消与运行方式 |
 |---|---|---|
-| integrations 的 Meegle/Lark 正文、评论、身份、列表及同步 | 共享准备；按 MEEGLE/LARK 代理目标；Lark 关闭更新及技能通知 | 各业务既有超时，调用方上下文，Runner 清理 |
+| integrations 的 Meegle 正文、评论、身份及列表 | 共享准备；按 MEEGLE 代理目标 | 各业务既有超时，调用方上下文，Runner 清理 |
 | documents 的资料项目核对与标题读取 | 共享 Meegle 准备；显式路径和 macOS Node PATH；按 MEEGLE 代理目标 | 核对 20 秒、标题 8 秒；取消不变为资料查询失败 |
 | platform 的 CLI 状态、登录、退出、诊断 | 同一共享环境；诊断不再遗漏 Node PATH | 既有操作超时，调用方上下文 |
 | Codex RPC、扩展和 MCP 管理 | 共享 CODEX 环境，保留独立 HOME 与操作参数 | 既有超时；RPC 交互与子进程清理保持原路径 |

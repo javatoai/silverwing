@@ -252,7 +252,9 @@ func (s *app) materialsCurrentDirectory(state *materialsFileManagementState) (ab
 		}
 	}
 	if relative == "" {
-		return filepath.Clean(task.materialsPath), ""
+		absolute = s.materialsDefaultDirectory()
+		relative = s.materialsRelativePath(absolute)
+		return absolute, relative
 	}
 	absolute = filepath.Clean(filepath.Join(task.materialsPath, filepath.FromSlash(relative)))
 	rel, err := filepath.Rel(task.materialsPath, absolute)
@@ -312,6 +314,12 @@ func (s *app) materialsEntryContextMenu(c *ui.Context, menu *ui.Menu, state *mat
 		return
 	}
 	busy := s.materialsFileInputBusy() || s.backend == nil
+	writable := s.materialsWritable(entry.Path, false)
+	parent := entry.Path
+	if !entry.Directory {
+		parent = filepath.Dir(parent)
+	}
+	directoryWritable := s.materialsWritable(parent, true)
 	systemBusy := s.materialsSystemOpenBusy(state)
 	folder := entry.Directory
 	if folder {
@@ -325,16 +333,15 @@ func (s *app) materialsEntryContextMenu(c *ui.Context, menu *ui.Menu, state *mat
 	} else if menu.Item("打开文档").Icon(icons["file"]).Disabled(busy).Chosen() {
 		s.selectMaterialsPath(entry.Path)
 	}
-	s.materialsFileContextFeishuActions(menu, s.currentTask(), entry)
 	menu.Separator()
-	if menu.Item("新建文档").Icon(icons["file"]).Disabled(busy).Chosen() {
+	if menu.Item("新建文档").Icon(icons["file"]).Disabled(busy || !directoryWritable).Chosen() {
 		directory := entry.Path
 		if !folder {
 			directory = filepath.Dir(directory)
 		}
 		s.openMaterialsFileNameForm("document.create", "新建文档", directory)
 	}
-	if menu.Item("新建文件夹").Icon(icons["folder"]).Disabled(busy).Chosen() {
+	if menu.Item("新建文件夹").Icon(icons["folder"]).Disabled(busy || !directoryWritable).Chosen() {
 		directory := entry.Path
 		if !folder {
 			directory = filepath.Dir(directory)
@@ -342,15 +349,15 @@ func (s *app) materialsEntryContextMenu(c *ui.Context, menu *ui.Menu, state *mat
 		s.openMaterialsFileNameForm("document.mkdir", "新建文件夹", directory)
 	}
 	menu.Separator()
-	if menu.Item("导入文件到此处…").Icon(icons["plus"]).Disabled(busy).Chosen() {
+	if menu.Item("导入文件到此处…").Icon(icons["plus"]).Disabled(busy || !directoryWritable).Chosen() {
 		s.selectMaterialsDirectory(entry)
 		s.startMaterialsImportPicker()
 	}
-	if menu.Item("粘贴到此处").Icon(icons["copy"]).Disabled(busy).Chosen() {
+	if menu.Item("粘贴到此处").Icon(icons["copy"]).Disabled(busy || !directoryWritable).Chosen() {
 		s.selectMaterialsDirectory(entry)
 		s.pasteMaterialsIntoCurrentDirectory()
 	}
-	if menu.Item("重命名…").Icon(icons["edit"]).Disabled(busy).Chosen() {
+	if menu.Item("重命名…").Icon(icons["edit"]).Disabled(busy || !writable).Chosen() {
 		s.openMaterialsRenameForm(entry.Path)
 	}
 	if menu.Item("复制到剪贴板").Icon(icons["copy"]).Disabled(busy).Chosen() {
@@ -359,7 +366,7 @@ func (s *app) materialsEntryContextMenu(c *ui.Context, menu *ui.Menu, state *mat
 	if menu.Item("复制路径").Icon(icons["copy"]).Disabled(busy || state.pathCopyRequest != nil).Chosen() {
 		s.withMaterialsContextSelection(state, entry, func() { s.copyMaterialsSelectionPaths(c.Services()) })
 	}
-	if !folder && menu.Item("复制为新文档…").Icon(icons["copy"]).Disabled(busy).Chosen() {
+	if !folder && menu.Item("复制为新文档…").Icon(icons["copy"]).Disabled(busy || !directoryWritable).Chosen() {
 		s.openMaterialsCopyForm(entry.Path)
 	}
 	if materialsOpenWithAvailable() && !folder && menu.Item("选择应用打开").Icon(icons["launch"]).Disabled(systemBusy).Chosen() {
@@ -380,7 +387,11 @@ func (s *app) materialsEntryContextMenu(c *ui.Context, menu *ui.Menu, state *mat
 	if menu.Item(fmt.Sprintf("复制已选项目 (%d)", selectionCount)).Icon(icons["copy"]).Disabled(busy || selectionCount == 0).Chosen() {
 		s.withMaterialsContextSelection(state, entry, s.copyMaterialsSelectionToClipboard)
 	}
-	if menu.Item("移入回收站…").Icon(icons["delete"]).Disabled(busy || selectionCount == 0).Dangerous().Chosen() {
+	allWritable := true
+	for _, selected := range s.materialsContextSelection(state, entry) {
+		allWritable = allWritable && s.materialsWritable(selected.Path, false)
+	}
+	if menu.Item("移入回收站…").Icon(icons["delete"]).Disabled(busy || selectionCount == 0 || !allWritable).Dangerous().Chosen() {
 		s.withMaterialsContextSelection(state, entry, s.requestMaterialsTrashPreview)
 	}
 }
@@ -395,6 +406,12 @@ func (s *app) selectMaterialsDirectory(entry materialsFileSelectionEntry) {
 
 func (s *app) openMaterialsFileNameForm(kind, title, directory string) {
 	state := s.ensureMaterialsFileManagementState()
+	if filepath.Clean(directory) == filepath.Clean(state.root) {
+		directory = s.materialsDefaultDirectory()
+	}
+	if !s.requireMaterialsWritable(directory, true) {
+		return
+	}
 	if s.materialsFileInputBusy() || s.backend == nil || state.root == "" {
 		if s.backend == nil {
 			s.lastError = "应用后端不可用。"
@@ -412,6 +429,9 @@ func (s *app) openMaterialsFileNameForm(kind, title, directory string) {
 }
 
 func (s *app) openMaterialsRenameForm(path string) {
+	if !s.requireMaterialsWritable(path, false) {
+		return
+	}
 	if path == "" || s.materialsFileInputBusy() || s.backend == nil {
 		return
 	}
@@ -435,6 +455,9 @@ func (s *app) startMaterialsImportPicker() {
 		return
 	}
 	directory, relative := s.materialsCurrentDirectory(state)
+	if !s.requireMaterialsWritable(directory, true) {
+		return
+	}
 	state.pickerBusy = true
 	state.pickerGeneration++
 	generation := state.pickerGeneration
@@ -468,6 +491,12 @@ func (s *app) startMaterialsImportPicker() {
 
 func (s *app) startMaterialsImport(paths []string, kind, relativeDirectory string) {
 	state := s.ensureMaterialsFileManagementState()
+	if relativeDirectory == "" {
+		relativeDirectory = s.materialsRelativePath(s.materialsDefaultDirectory())
+	}
+	if !s.requireMaterialsWritable(filepath.Join(state.root, filepath.FromSlash(relativeDirectory)), true) {
+		return
+	}
 	if s.materialsFileInputBusy() || s.backend == nil || state.root == "" || len(paths) == 0 {
 		if s.backend == nil {
 			s.lastError = "应用后端不可用。"
@@ -542,7 +571,10 @@ func (s *app) copyMaterialsSelectionToClipboard() {
 
 func (s *app) pasteMaterialsIntoCurrentDirectory() {
 	state := s.ensureMaterialsFileManagementState()
-	_, relative := s.materialsCurrentDirectory(state)
+	directory, relative := s.materialsCurrentDirectory(state)
+	if !s.requireMaterialsWritable(directory, true) {
+		return
+	}
 	if s.materialsFileInputBusy() || s.backend == nil {
 		if s.backend == nil {
 			s.lastError = "应用后端不可用。"
@@ -564,6 +596,9 @@ func (s *app) requestMaterialsTrashPreview() {
 	}
 	paths := make([]string, 0, len(entries))
 	for _, entry := range entries {
+		if !s.requireMaterialsWritable(entry.Path, false) {
+			return
+		}
 		paths = append(paths, entry.Path)
 	}
 	state.beginFlow("document.trash-preview")

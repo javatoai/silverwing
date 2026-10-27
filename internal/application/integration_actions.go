@@ -12,6 +12,10 @@ import (
 )
 
 func (a *App) integrationAction(ctx context.Context, action Action) (ActionResult, error) {
+	return a.integrationActionWithRequirementProgress(ctx, action, nil)
+}
+
+func (a *App) integrationActionWithRequirementProgress(ctx context.Context, action Action, progress func(RequirementListProgress)) (ActionResult, error) {
 	payload, err := a.integrationActionPayload(action)
 	if err != nil {
 		return ActionResult{}, err
@@ -22,6 +26,8 @@ func (a *App) integrationAction(ctx context.Context, action Action) (ActionResul
 	var data any
 	if action.Kind == "requirements.candidates" {
 		data, err = a.Integrations.ReadRequirementCandidates(ctx, payload)
+	} else if progress != nil && (action.Kind == "requirements.list" || action.Kind == "requirements.refresh") {
+		data, err = a.Integrations.ReadRequirementListWithProgress(ctx, action.Kind, payload, progress)
 	} else {
 		data, err = a.Integrations.Execute(ctx, action.Kind, payload)
 	}
@@ -85,9 +91,6 @@ func (a *App) integrationAction(ctx context.Context, action Action) (ActionResul
 		if len(query.Failures) > 0 {
 			result.Message = "工作项已读取，部分查询失败；请查看失败说明"
 		}
-	}
-	if strings.HasPrefix(action.Kind, "materials.") {
-		result.Message = "资料操作已返回，请查看同步状态"
 	}
 	return result, nil
 }

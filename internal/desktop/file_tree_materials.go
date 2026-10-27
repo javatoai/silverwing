@@ -16,7 +16,7 @@ func (s *app) materialsTreeRows(documents []application.Document) []FileTreeRow 
 			if !ok {
 				continue
 			}
-			rows = append(rows, FileTreeRow{ID: entry.Key, Name: document.Name, Path: entry.Path, Depth: depth, Directory: entry.Directory})
+			rows = append(rows, FileTreeRow{ID: entry.Key, Name: document.Name, Path: entry.Path, Depth: depth, Directory: entry.Directory, ReadOnly: !s.materialsWritable(entry.Path, true)})
 			visit(document.Children, depth+1)
 		}
 	}

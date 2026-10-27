@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -10,6 +11,7 @@ import (
 
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/storage"
+	"silverwing-go/internal/taskscope"
 )
 
 type TaskWorkspaceToolDescriptor struct {
@@ -118,6 +120,9 @@ func (s *WorkspaceToolLaunchService) Launch(ctx context.Context, taskPath string
 		if !sameTaskManifest(current, manifest) {
 			return fmt.Errorf("任务清单已发生变化，请重新尝试启动")
 		}
+		if err := taskscope.Validate(ctx, domain.AppConfig{}, taskPath, current); err != nil {
+			return err
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -150,6 +155,17 @@ func (s *WorkspaceToolLaunchService) Launch(ctx context.Context, taskPath string
 				} else if !availability.Available {
 					status.Message = ptr(availability.Reason)
 				} else {
+					if err := taskscope.Validate(ctx, domain.AppConfig{}, taskPath, updated); err != nil {
+						// Do not leave a retryable canceled launch looking pending, and
+						// never write this result over a replacement task incarnation.
+						if currentErr := s.requireCurrentManifest(taskPath, updated); currentErr != nil {
+							return errors.Join(err, currentErr)
+						}
+						status.Message = ptr(err.Error())
+						updated = replaceWorkspaceToolLaunch(updated, status)
+						updated.UpdatedAt = status.UpdatedAt
+						return errors.Join(err, s.Manifests.Save(taskPath, updated))
+					}
 					if err := s.requireCurrentManifest(taskPath, updated); err != nil {
 						return err
 					}

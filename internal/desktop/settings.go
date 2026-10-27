@@ -22,7 +22,7 @@ var settingsSections = []settingsSection{
 	{"AGENTS.md", 2, []settingsPage{{"agents", "全局与组说明"}, {"instruction-templates", "任务说明模板"}}},
 	{"Codex", 2, []settingsPage{{"codex-plugins", "Codex 插件"}, {"codex-mcp", "MCP 管理"}}},
 	{"skill", 2, []settingsPage{{"skill-local", "本机 Skill"}, {"skill-sources", "安装 Skill"}}},
-	{"CLI", 2, []settingsPage{{"cli-meegle", "Meegle CLI"}, {"cli-lark", "Lark CLI"}, {"cli-genbu", "Genbu CLI"}}},
+	{"CLI", 2, []settingsPage{{"cli-meegle", "Meegle CLI"}, {"cli-genbu", "Genbu CLI"}}},
 	{"代理", 2, []settingsPage{{"proxy", "网络代理"}}},
 	{"日志", 3, []settingsPage{{"logs", "日志"}}},
 	{"系统", 3, []settingsPage{{"about", "关于"}, {"updates", "更新"}, {"app-data", "应用数据目录"}}},
@@ -71,7 +71,6 @@ func (s *app) settingsScreen(c *ui.Context, p palette) {
 	s.settingsConfigDialog(c, p)
 	s.settingsImportDialog(c, p)
 	s.settingsSkillPreviewDialog(c, p)
-	s.settingsLarkAuthDialog(c, p)
 }
 
 func (state *app) renderSettingsSidebar(context *ui.Context, theme palette) {
@@ -163,7 +162,7 @@ func (s *app) settingsPageContent(c *ui.Context, p palette) {
 		s.settingsCodexPlugins(c, p)
 	case "codex-mcp":
 		s.settingsCodexMCP(c, p)
-	case "cli-meegle", "cli-lark", "cli-genbu":
+	case "cli-meegle", "cli-genbu":
 		s.settingsCLI(c, p)
 	case "skill-sources":
 		s.settingsSkills(c, p)
@@ -191,9 +190,27 @@ func settingsCard(c *ui.Context, p palette, title, description string, children 
 }
 
 func settingsCardWithActions(c *ui.Context, p palette, title, description string, headerActions, children func()) {
+	settingsCardLayout(c, p, title, description, headerActions, children, false)
+}
+
+// Task Codex views also use settingsCard. Opt settings pages in explicitly so
+// their compact help never changes task content or its original descriptions.
+func settingsHelpCard(c *ui.Context, p palette, title, description string, children func()) {
+	settingsHelpCardWithActions(c, p, title, description, nil, children)
+}
+
+func settingsHelpCardWithActions(c *ui.Context, p palette, title, description string, headerActions, children func()) {
+	settingsCardLayout(c, p, title, description, headerActions, children, true)
+}
+
+func settingsCardLayout(c *ui.Context, p palette, title, description string, headerActions, children func(), compactHelp bool) {
 	ui.Column(c).FillWidth().Padding(16).Gap(12).Background(p.surface).Border(1, p.line).Radius(12).Children(func() {
 		hasHeading := title != "" || description != ""
 		heading := func() {
+			if compactHelp {
+				settingsHelpLabel(c, p, title, description, 14, 600)
+				return
+			}
 			if title != "" {
 				label(c, title, 14, p.text).FontWeight(600).Wrap()
 			}

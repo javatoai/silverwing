@@ -13,8 +13,6 @@ func renderConfigurationFixture(tb testing.TB) *app {
 	tb.Helper()
 	s := taskNavigationFixture()
 	config := domain.DefaultAppConfig()
-	target := "https://example.feishu.cn/wiki/Target1"
-	config.RequirementMaterialsFeishuTarget = &target
 	config.Groups[0].ID = "backend"
 	for i := 0; i < 100; i++ {
 		config.Groups[0].Services = append(config.Groups[0].Services, domain.GroupServiceConfig{
@@ -41,16 +39,15 @@ func renderConfigurationFixture(tb testing.TB) *app {
 }
 
 func TestRenderConfigurationReadsAvoidRepeatedDecodeAndCopies(t *testing.T) {
-	for _, page := range []string{"services", "materials", "requirements", "navigation"} {
+	for _, page := range []string{"services", "materials-git", "requirements", "navigation"} {
 		t.Run(page, func(t *testing.T) {
 			s := renderConfigurationFixture(t)
 			read := func() {
 				switch page {
 				case "services":
 					_ = s.serviceEnabled("backend", "service-99")
-				case "materials":
-					_, _ = s.materialsFeishuSyncTarget()
-					_ = s.materialsFeishuCommentAvailable(s.tasks[0])
+				case "materials-git":
+					_, _ = s.materialsGitConfig()
 				case "requirements":
 					_ = s.currentRequirementListIdentity()
 				case "navigation":
@@ -68,20 +65,14 @@ func TestRenderConfigurationReadsAvoidRepeatedDecodeAndCopies(t *testing.T) {
 func TestRenderConfigurationReadsTrackSourceAndLiveIdentity(t *testing.T) {
 	s := renderConfigurationFixture(t)
 	initial := s.currentRequirementListIdentity()
-	if !s.serviceEnabled("backend", "service-0") || s.serviceEnabled("backend", "service-1") || !s.materialsFeishuCommentAvailable(s.tasks[0]) {
+	if !s.serviceEnabled("backend", "service-0") || s.serviceEnabled("backend", "service-1") {
 		t.Fatal("initial read projections are incorrect")
-	}
-	if target, err := s.materialsFeishuSyncTarget(); err != nil || !strings.HasSuffix(target, "/Target1") {
-		t.Fatalf("initial sync target: %q, %v", target, err)
 	}
 	s.configJSON = strings.ReplaceAll(s.configJSON, "space-0", "changed-space")
 	s.configJSON = strings.ReplaceAll(s.configJSON, "/Target1", "/Target2")
 	s.configJSON = strings.Replace(s.configJSON, `"enabled":true`, `"enabled":false`, 1)
-	if s.serviceEnabled("backend", "service-0") || s.materialsFeishuCommentAvailable(s.tasks[0]) || s.currentRequirementListIdentity().projects == initial.projects {
+	if s.serviceEnabled("backend", "service-0") || s.currentRequirementListIdentity().projects == initial.projects {
 		t.Fatal("render projections retained an earlier configuration")
-	}
-	if target, err := s.materialsFeishuSyncTarget(); err != nil || !strings.HasSuffix(target, "/Target2") {
-		t.Fatalf("changed sync target: %q, %v", target, err)
 	}
 	// A mutable account status and application home must remain live even when
 	// no configuration bytes change. Async request scopes depend on these.
@@ -96,21 +87,18 @@ func TestRenderConfigurationReadsTrackSourceAndLiveIdentity(t *testing.T) {
 	valid := s.configJSON
 	for _, source := range []string{"", "invalid", "null"} {
 		s.configJSON = source
-		if s.showsTagNavigation() || s.materialsFeishuCommentAvailable(s.tasks[0]) || s.currentRequirementListIdentity().projects != "[]" {
+		if s.showsTagNavigation() || s.currentRequirementListIdentity().projects != "[]" {
 			t.Fatalf("invalid configuration exposed earlier values: %q", source)
-		}
-		if target, err := s.materialsFeishuSyncTarget(); err == nil || target != "" {
-			t.Fatalf("invalid configuration enabled synchronization: %q", source)
 		}
 	}
 	s.configJSON = valid
-	if target, err := s.materialsFeishuSyncTarget(); err != nil || !strings.HasSuffix(target, "/Target2") || !s.showsTagNavigation() {
-		t.Fatal("render configuration reads did not recover after a corrected source")
+	if !s.showsTagNavigation() {
+		t.Fatal("configuration did not recover")
 	}
 }
 
 func BenchmarkDesktopPageConfigurationReads(b *testing.B) {
-	for _, page := range []string{"services", "materials", "requirements", "navigation"} {
+	for _, page := range []string{"services", "requirements", "navigation"} {
 		b.Run(page, func(b *testing.B) {
 			s := renderConfigurationFixture(b)
 			b.ReportAllocs()
@@ -119,9 +107,6 @@ func BenchmarkDesktopPageConfigurationReads(b *testing.B) {
 				switch page {
 				case "services":
 					_ = s.serviceEnabled("backend", "service-99")
-				case "materials":
-					_, _ = s.materialsFeishuSyncTarget()
-					_ = s.materialsFeishuCommentAvailable(s.tasks[0])
 				case "requirements":
 					_ = s.currentRequirementListIdentity()
 				case "navigation":

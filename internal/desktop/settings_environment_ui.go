@@ -50,7 +50,7 @@ func gitOriginSuffix(entry map[string]any) string {
 }
 
 func (s *app) settingsProxy(c *ui.Context, p palette) {
-	settingsCard(c, p, "命令网络代理", "只对选中的命令生效；例外地址按逗号分隔。", func() {
+	settingsHelpCard(c, p, "命令网络代理", "只对选中的命令生效；例外地址按逗号分隔。", func() {
 		proxy := proxyParts(s.configString("commandProxyUrl"))
 		protocol := s.input("setting:proxy-scheme", proxy[0])
 		host := s.input("setting:proxy-host", proxy[1])
@@ -93,7 +93,7 @@ func (s *app) settingsProxy(c *ui.Context, p palette) {
 		for _, target := range []struct{ id, title, description string }{
 			{"CODEX", "Codex CLI", "AI 命名与 Codex 扩展。"}, {"GIT", "Git", "仓库和远程分支操作。"},
 			{"WORKSPACE_COMMAND", "服务快捷命令", "Maven、Gradle 等初始化命令。"}, {"MEEGLE", "Meegle CLI", "需求、项目与登录状态。"},
-			{"LARK", "Lark CLI", "Lark 授权与登录状态。"}, {"GENBU", "Genbu CLI", "Tag 构建与发布状态。"},
+			{"GENBU", "Genbu CLI", "Tag 构建与发布状态。"},
 		} {
 			selected := containsString(stringArray(s.configArray("commandProxyTargets")), target.id)
 			value := s.settingsBoolInput("proxy-target:"+target.id, selected)
@@ -107,12 +107,12 @@ func (s *app) settingsProxy(c *ui.Context, p palette) {
 				*protocol, *host, *port, *noProxy, *username, *password = "http", "", "80", "", "", ""
 				*authentication = false
 				*passwordVisible = false
-				for _, target := range []string{"CODEX", "GIT", "WORKSPACE_COMMAND", "MEEGLE", "LARK", "GENBU"} {
+				for _, target := range []string{"CODEX", "GIT", "WORKSPACE_COMMAND", "MEEGLE", "GENBU"} {
 					*s.settingsBoolInput("proxy-target:"+target, false) = false
 				}
 			}
 		})
-		targetIDs := []string{"CODEX", "GIT", "WORKSPACE_COMMAND", "MEEGLE", "LARK", "GENBU"}
+		targetIDs := []string{"CODEX", "GIT", "WORKSPACE_COMMAND", "MEEGLE", "GENBU"}
 		targetInputs := make([]*bool, 0, len(targetIDs))
 		for _, target := range targetIDs {
 			targetInputs = append(targetInputs, s.settingsBoolInput("proxy-target:"+target, containsString(stringArray(s.configArray("commandProxyTargets")), target)))
@@ -132,7 +132,7 @@ func (s *app) settingsProxy(c *ui.Context, p palette) {
 
 func (s *app) settingsGit(c *ui.Context, p palette) {
 	resolved := firstNonEmpty(mapString(s.settingsGitEnvironment, "gitExecutable"), mapString(s.settingsCLIStatus["git"], "command"), mapString(s.settingsCLIStatus["git"], "commandPath"))
-	settingsCardWithActions(c, p, "Git 状态", "本机 Git 与全局身份配置。", func() {
+	settingsHelpCardWithActions(c, p, "Git 状态", "本机 Git 与全局身份配置。", func() {
 		s.overflowMenu(c, p, "settings-git-more", "更多 Git 操作", false, func(menu *overflowMenuBuilder) {
 			if menu.Item("refresh", "刷新 Git 状态").Icon("refresh").Disabled(s.busy).Chosen() {
 				s.act("git.environment", "", "", "", "", "", nil)
@@ -161,15 +161,14 @@ func (s *app) settingsGit(c *ui.Context, p palette) {
 			s.renderGitEnvironment(c, p)
 		}
 	})
-	settingsCard(c, p, "Git 命令路径", "留空时使用 PATH 自动探测；更改后自动保存。", func() {
+	settingsHelpCard(c, p, "Git 命令路径", "留空时使用 PATH 自动探测；更改后自动保存。", func() {
 		s.settingsConfigPathRow(c, p, "gitExecutablePath", "Git 可执行文件路径", "留空时使用 PATH 自动探测", false)
 		if s.cliJobs == nil || s.cliJobs.requests["status:git"] == nil {
 			s.settingsCLIPathDiscoveryHint(c, p, "git")
 		}
 		s.settingsCLICommandActions(c, p, "git", resolved)
 	})
-	settingsCard(c, p, "分支写保护", "匹配实际分支完整名称，忽略大小写。", func() {
-		settingsMuted(c, p, "启用后会禁用受保护分支上的 Commit、Push、Commit & Push，以及需要写入分支的测试 Tag 流程。")
+	settingsHelpCard(c, p, "分支写保护", "匹配实际分支完整名称，忽略大小写。\n\n启用后会禁用受保护分支上的 Commit、Push、Commit & Push，以及需要写入分支的测试 Tag 流程。", func() {
 		branches := stringArray(s.configArray("blockedGitWriteBranches"))
 		for index, branch := range branches {
 			current := branch
@@ -195,7 +194,7 @@ func (s *app) settingsGit(c *ui.Context, p palette) {
 }
 
 func (s *app) settingsBranchNaming(c *ui.Context, p palette) {
-	settingsCard(c, p, "分支名设置", "{num} 表示需求编号，{ai} 表示 AI 英文描述；没有 {ai} 时不会追加描述。", func() {
+	settingsHelpCard(c, p, "分支名设置", "{num} 表示需求编号，{ai} 表示 AI 英文描述；没有 {ai} 时不会追加描述。", func() {
 		s.settingsTextRow(c, p, "defaultBranchPrefix", "默认分支名规则", "例如 feature/{num}_{ai}", false, func(value string) {
 			value = strings.TrimSpace(value)
 			if strings.ContainsAny(value, " \t\r\n") {
@@ -208,14 +207,13 @@ func (s *app) settingsBranchNaming(c *ui.Context, p palette) {
 }
 
 func (s *app) settingsTag(c *ui.Context, p palette) {
-	settingsCard(c, p, "Tag 设置", "全局开关会影响 Tag 导航、构建入口与其他 Tag 配置。", func() {
+	settingsHelpCard(c, p, "Tag 设置", "全局开关会影响 Tag 导航、构建入口与其他 Tag 配置。", func() {
 		s.settingsSwitch(c, p, "tagEnabled", "全局 Tag 开关", "启用后显示 Tag 页面、构建入口与 Tag 配置。", false)
 		s.settingsSwitch(c, p, "allowTaskTagTargetEditing", "允许在任务详情修改测试目标分支", "修改只影响当前任务对应模块。", false)
 		maxGroups := s.input("setting:tagHistoryMaxGroups", fmt.Sprint(s.configInt("tagHistoryMaxGroups", 3)))
 		ui.Column(c).Gap(4).Children(func() {
-			label(c, "每任务最多保留 Tag 组", 11, p.text)
+			settingsHelpLabel(c, p, "每任务最多保留 Tag 组", "按最近更新时间保留，超过后清理最旧的整组记录。范围：1–1000。", 11, 400)
 			ui.TextInput(c.Key("tag-history-max-groups"), maxGroups).Width(180).Height(36).Placeholder("1 到 1000")
-			settingsMuted(c, p, "按最近更新时间保留，超过后清理最旧的整组记录。范围：1–1000。")
 		})
 		s.autosaveSettingsInput("settings:tagHistoryMaxGroups", maxGroups, func(value string) {
 			count, err := parseBoundedInt(value, 1, 1000)
@@ -229,7 +227,7 @@ func (s *app) settingsTag(c *ui.Context, p palette) {
 }
 
 func (s *app) settingsLogs(c *ui.Context, p palette) {
-	settingsCard(c, p, "", "", func() {
+	settingsHelpCard(c, p, "", "", func() {
 		ui.Row(c).FillWidth().Wrap().Gap(8).AlignItems(ui.Center).Children(func() {
 			if action(c, "logs-refresh", "refresh", "刷新日志", p, false) {
 				s.act("logs.list", "", "", "", "", "", map[string]any{"filter": "recent"})

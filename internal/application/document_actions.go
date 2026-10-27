@@ -8,13 +8,55 @@ import (
 	"strings"
 
 	"silverwing-go/internal/documents"
+	"silverwing-go/internal/workspace"
 )
 
-func (a *App) documentAction(ctx context.Context, action Action) (ActionResult, error) {
+func (a *App) documentAction(ctx context.Context, action Action) (result ActionResult, resultErr error) {
+	if action.Kind == "document.list" {
+		return a.documentActionLocked(ctx, action)
+	}
+	_, taskPath, err := a.task(action)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	err = workspace.NewOperationLocks(a.Paths.Locks).WithTask(taskPath, func() error {
+		result, resultErr = a.documentActionLocked(ctx, action)
+		return resultErr
+	})
+	return result, err
+}
+
+func (a *App) documentActionLocked(ctx context.Context, action Action) (result ActionResult, resultErr error) {
+	if !a.materialsGitGate.TryRLock() {
+		return ActionResult{}, errors.New("资料 Git 同步正在执行，请稍后重试")
+	}
+	defer a.materialsGitGate.RUnlock()
 	root, err := a.materialRoot(action)
 	if err != nil {
 		return ActionResult{}, err
 	}
+	release, err := a.lockMaterialsGitDocumentMutation(action.Kind, root)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	defer release()
+	if err := a.validateMaterialsActionScope(action, root); err != nil {
+		return ActionResult{}, err
+	}
+	action, err = a.authorizeMaterialsAction(root, action)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	defer func() {
+		if scope, ok, _ := a.documentAnnualScope(root); ok && !scope.Writable(actionPath(action), true) {
+			if content, yes := result.Data.(documents.Content); yes {
+				content.ReadOnly = true
+				content.Draft = nil
+				content.TextDraft = nil
+				result.Data = content
+			}
+		}
+	}()
 	path := actionPath(action)
 	switch action.Kind {
 	case "document.search":
@@ -22,8 +64,21 @@ func (a *App) documentAction(ctx context.Context, action Action) (ActionResult, 
 		result, err := a.Documents.SearchMaterials(ctx, root, query)
 		return ActionResult{Message: "全文搜索已完成", Path: root, Data: result}, err
 	case "document.list":
+		if scope, ok, err := a.documentAnnualScope(root); err != nil {
+			return ActionResult{}, err
+		} else if ok {
+			if err := scope.EnsureLocal(); err != nil {
+				return ActionResult{}, err
+			}
+		}
 		entries, err := a.Documents.List(root)
-		return ActionResult{Message: "资料已刷新", Path: root, Data: entries}, err
+		message := "资料已刷新"
+		if config, configErr := a.Config.Load(); configErr == nil {
+			if catalogErr := a.refreshMaterialsAgentCatalogs(ctx, MaterialsGitScope(a.Paths.Home, config)); catalogErr != nil {
+				message += "；本地说明更新失败（刷新资料可单独重试）：" + catalogErr.Error()
+			}
+		}
+		return ActionResult{Message: message, Path: root, Data: entries}, err
 	case "document.read":
 		if documents.EditableMaterialText(path) {
 			return a.materialTextReadResult(ctx, action, root, path)
@@ -137,6 +192,13 @@ func (a *App) documentAction(ctx context.Context, action Action) (ActionResult, 
 		payload, err := documents.NewClipboardService().Read(ctx)
 		if err != nil {
 			return ActionResult{}, err
+		}
+		if scope, ok, _ := a.documentAnnualScope(root); ok {
+			for _, source := range payload.Files {
+				if !scope.Writable(filepath.Join(documentDirectory(action, root), filepath.Base(source)), false) {
+					return ActionResult{}, materialWriteDenied(source)
+				}
+			}
 		}
 		result, err := a.Documents.PasteClipboard(ctx, root, documentDirectory(action, root), payload)
 		return fileBatchActionResult(root, result), err

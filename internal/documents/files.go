@@ -108,7 +108,10 @@ func list(root, directory string, depth int) ([]Entry, error) {
 	}
 	entries := make([]Entry, 0, len(children))
 	for _, child := range children {
-		if stagingName.MatchString(child.Name()) || strings.EqualFold(child.Name(), ".git") ||
+		if depth == 1 && strings.EqualFold(filepath.Base(directory), "temp") && strings.EqualFold(child.Name(), ".gitignore") {
+			continue
+		}
+		if stagingName.MatchString(child.Name()) || strings.EqualFold(child.Name(), ".git") || strings.HasPrefix(strings.ToLower(child.Name()), ".silverwing-") ||
 			!child.IsDir() && hiddenMaterialsMetadataName(child.Name()) {
 			continue
 		}

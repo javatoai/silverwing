@@ -71,7 +71,7 @@
   <rect x="985" y="345" width="178" height="145" rx="18" fill="#F1FAFB" stroke="#79BFC6" stroke-width="2"/>
   <text x="1074" y="394" text-anchor="middle" fill="#145E6A" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">integrations</text>
   <text x="1074" y="435" text-anchor="middle" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">Meegle</text>
-  <text x="1074" y="468" text-anchor="middle" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">飞书资料</text>
+  <text x="1074" y="468" text-anchor="middle" fill="#38536C" font-size="22" font-family="Segoe UI, Microsoft YaHei, sans-serif">资料 Git 同步</text>
 
   <rect x="1172" y="345" width="178" height="145" rx="18" fill="#F1FAFB" stroke="#79BFC6" stroke-width="2"/>
   <text x="1261" y="394" text-anchor="middle" fill="#145E6A" font-size="24" font-weight="700" font-family="Segoe UI, Microsoft YaHei, sans-serif">platform</text>

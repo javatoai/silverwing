@@ -84,7 +84,7 @@ func (s *ConfigStore) Exists() bool {
 	return true
 }
 
-// LoadForPreview shares strict current-config reading with Load, but an empty
+// LoadForPreview shares compatible settings reading with Load, but an empty
 // home is compared with in-memory defaults and never initialized on disk.
 func (s *ConfigStore) LoadForPreview(ctx context.Context) (domain.AppConfig, error) {
 	release, err := s.acquireReadLock(ctx)
@@ -195,7 +195,7 @@ func (s *ConfigStore) saveUnlocked(config domain.AppConfig) error {
 		return fmt.Errorf("配置序列化结果无法按当前 schema 读取：%w", err)
 	}
 	if !s.hasConfigurationData() {
-		return s.writeShards(target, shardNames)
+		return s.writeShardFiles(encoded, shardNames)
 	}
 	currentFiles, err := s.readShardFiles()
 	if err != nil {
@@ -209,10 +209,25 @@ func (s *ConfigStore) saveUnlocked(config domain.AppConfig) error {
 	if len(changed) == 0 {
 		return nil
 	}
+	// Merge against the latest files while holding the existing mutation lock.
+	// Validate every result before backing up or replacing any shard.
+	for _, name := range changed {
+		value, err := configShardValue(name, target)
+		if err != nil {
+			return err
+		}
+		encoded[name], err = mergeConfigJSON(currentFiles[name], encoded[name], reflect.TypeOf(value), name)
+		if err != nil {
+			return err
+		}
+	}
+	if _, err := decodeShards(encoded); err != nil {
+		return fmt.Errorf("兼容配置合并校验失败：%w", err)
+	}
 	if err := s.createBackup(currentFiles); err != nil {
 		return err
 	}
-	return s.writeShards(target, changed)
+	return s.writeShardFiles(encoded, changed)
 }
 
 // Kotlin configuration DTOs use non-null list properties throughout. Normalize
@@ -396,8 +411,12 @@ func (s *ConfigStore) ImportFrom(source string) (domain.AppConfig, error) {
 }
 
 func (s *ConfigStore) replaceCurrentUnlocked(imported decodedConfig) error {
+	files, err := importedConfigFiles(imported)
+	if err != nil {
+		return err
+	}
 	if !s.hasConfigurationData() {
-		return s.writeShards(imported.Shards, shardNames)
+		return s.writeShardFiles(files, shardNames)
 	}
 	currentFiles, err := s.readShardFiles()
 	if err != nil {
@@ -405,7 +424,10 @@ func (s *ConfigStore) replaceCurrentUnlocked(imported decodedConfig) error {
 	}
 	changed := shardNames
 	if current, decodeErr := decodeShards(currentFiles); decodeErr == nil {
-		changed = changedShardNames(current.Shards, imported.Shards)
+		changed, err = changedImportedShards(current, imported)
+		if err != nil {
+			return err
+		}
 	}
 	if len(changed) == 0 {
 		return nil
@@ -413,7 +435,7 @@ func (s *ConfigStore) replaceCurrentUnlocked(imported decodedConfig) error {
 	if err := s.createBackup(currentFiles); err != nil {
 		return err
 	}
-	return s.writeShards(imported.Shards, changed)
+	return s.writeShardFiles(files, changed)
 }
 
 func (s *ConfigStore) acquireMutationLock() (func(), error) {
@@ -601,7 +623,7 @@ func decodeShardsContext(ctx context.Context, files map[string][]byte) (decodedC
 		return decodedConfig{}, err
 	}
 	var workspace workspaceShard
-	if err := decode(files["workspace.json"], &workspace, workspaceShard{Schema: configShardSchema, Repositories: []domain.RepositoryConfig{}}, "workspace.json", "defaultBranchPrefix"); err != nil {
+	if err := decode(files["workspace.json"], &workspace, workspaceShard{Schema: configShardSchema, Repositories: []domain.RepositoryConfig{}}, "workspace.json"); err != nil {
 		return decodedConfig{}, err
 	}
 	var services servicesShard
@@ -613,7 +635,7 @@ func decodeShardsContext(ctx context.Context, files map[string][]byte) (decodedC
 		return decodedConfig{}, err
 	}
 	var tools toolsShard
-	if err := decode(files["tools.json"], &tools, toolsShard{Schema: configShardSchema, DevelopmentTools: []domain.DevelopmentToolConfig{}, DefaultDevelopmentTool: domain.DevelopmentToolIntelliJIdea, DefaultWorkspaceToolIDs: []string{}}, "tools.json", "defaultWorkspaceToolIds"); err != nil {
+	if err := decode(files["tools.json"], &tools, toolsShard{Schema: configShardSchema, DevelopmentTools: []domain.DevelopmentToolConfig{}, DefaultDevelopmentTool: domain.DevelopmentToolIntelliJIdea, DefaultWorkspaceToolIDs: domain.DefaultAppConfig().DefaultWorkspaceToolIDs}, "tools.json"); err != nil {
 		return decodedConfig{}, err
 	}
 	var git gitShard
@@ -691,10 +713,9 @@ func decodeShardsContext(ctx context.Context, files map[string][]byte) (decodedC
 	config.CommandProxyTargets = integrations.CommandProxyTargets
 	config.GenbuExecutablePath = integrations.GenbuExecutablePath
 	config.GenbuExecutableAutoDetected = integrations.GenbuExecutableAutoDetected
-	config.LarkExecutablePath = integrations.LarkExecutablePath
 	config.RequirementMaterialsRoot = integrations.RequirementMaterialsRoot
 	config.RequirementMaterialsSubdirectory = integrations.RequirementMaterialsSubdirectory
-	config.RequirementMaterialsFeishuTarget = integrations.RequirementMaterialsFeishuTarget
+	config.MaterialsGitSync = integrations.MaterialsGitSync
 	config.CodexPluginMarketplaceSources = integrations.CodexPluginMarketplaceSources
 	config.SkillSources = integrations.SkillSources
 	config.AIRequirementNamingEnabled = integrations.AIRequirementNamingEnabled
@@ -750,7 +771,11 @@ func decodeConfigShard(data []byte, target any, defaults any, name string, requi
 		return fmt.Errorf("%s default type does not match decode target", name)
 	}
 	targetValue.Elem().Set(defaultsValue)
-	if err := domain.DecodeStrict(data, target, required...); err != nil {
+	known, err := knownConfigJSON(data, targetValue.Elem().Type())
+	if err != nil {
+		return fmt.Errorf("读取 %s: %w", name, err)
+	}
+	if err := domain.DecodeStrict(known, target, required...); err != nil {
 		return fmt.Errorf("读取 %s: %w", name, err)
 	}
 	return nil
@@ -769,7 +794,7 @@ func shardsFor(config domain.AppConfig) configShards {
 		Tag:          tagShard{Schema: configShardSchema, TagEnabled: config.TagEnabled, TagHistoryMaxGroups: config.TagHistoryMaxGroups, AllowTaskTagTargetEditing: config.AllowTaskTagTargetEditing},
 		Tools:        toolsShard{Schema: configShardSchema, TerminalExecutable: config.TerminalExecutable, DevelopmentTools: config.DevelopmentTools, DefaultDevelopmentTool: config.DefaultDevelopmentTool, AllowTemporaryDevelopmentToolSelection: config.AllowTemporaryDevelopmentToolSelection, DefaultWorkspaceToolIDs: config.DefaultWorkspaceToolIDs},
 		Git:          gitShard{Schema: configShardSchema, BlockedGitWriteBranches: config.BlockedGitWriteBranches, GitExecutablePath: config.GitExecutablePath},
-		Integrations: integrationsShard{Schema: configShardSchema, AIRequirementNamingEnabled: config.AIRequirementNamingEnabled, AIRequirementNamingPrewarmEnabled: config.AIRequirementNamingPrewarmEnabled, AIRequirementNamingModel: config.AIRequirementNamingModel, MeegleProjects: config.MeegleProjects, MeegleDefaultSprintProjectKey: config.MeegleDefaultSprintProjectKey, MeegleExecutablePath: config.MeegleExecutablePath, CodexExecutablePath: config.CodexExecutablePath, CommandProxyURL: config.CommandProxyURL, CommandProxyNoProxy: config.CommandProxyNoProxy, CommandProxyUsername: config.CommandProxyUsername, CommandProxyPassword: config.CommandProxyPassword, CommandProxyTargets: config.CommandProxyTargets, GenbuExecutablePath: config.GenbuExecutablePath, GenbuExecutableAutoDetected: config.GenbuExecutableAutoDetected, LarkExecutablePath: config.LarkExecutablePath, RequirementMaterialsRoot: config.RequirementMaterialsRoot, RequirementMaterialsSubdirectory: config.RequirementMaterialsSubdirectory, RequirementMaterialsFeishuTarget: config.RequirementMaterialsFeishuTarget, CodexPluginMarketplaceSources: config.CodexPluginMarketplaceSources, SkillSources: config.SkillSources},
+		Integrations: integrationsShard{Schema: configShardSchema, AIRequirementNamingEnabled: config.AIRequirementNamingEnabled, AIRequirementNamingPrewarmEnabled: config.AIRequirementNamingPrewarmEnabled, AIRequirementNamingModel: config.AIRequirementNamingModel, MeegleProjects: config.MeegleProjects, MeegleDefaultSprintProjectKey: config.MeegleDefaultSprintProjectKey, MeegleExecutablePath: config.MeegleExecutablePath, CodexExecutablePath: config.CodexExecutablePath, CommandProxyURL: config.CommandProxyURL, CommandProxyNoProxy: config.CommandProxyNoProxy, CommandProxyUsername: config.CommandProxyUsername, CommandProxyPassword: config.CommandProxyPassword, CommandProxyTargets: config.CommandProxyTargets, GenbuExecutablePath: config.GenbuExecutablePath, GenbuExecutableAutoDetected: config.GenbuExecutableAutoDetected, RequirementMaterialsRoot: config.RequirementMaterialsRoot, RequirementMaterialsSubdirectory: config.RequirementMaterialsSubdirectory, MaterialsGitSync: config.MaterialsGitSync, CodexPluginMarketplaceSources: config.CodexPluginMarketplaceSources, SkillSources: config.SkillSources},
 		Appearance:   appearanceShard{Schema: configShardSchema, Theme: config.Theme, ToolVisibility: config.ToolVisibility, SidebarVisibility: config.SidebarVisibility, ShowTaskDetailGitActionGroup: config.ShowTaskDetailGitActionGroup, ShowTaskDetailPathActionGroup: config.ShowTaskDetailPathActionGroup, ShowWorkspaceGitActionGroup: config.ShowWorkspaceGitActionGroup, ShowWorkspacePathActionGroup: config.ShowWorkspacePathActionGroup, ShowTaskAreaCopyIcons: config.ShowTaskAreaCopyIcons, ShowTaskAreaBranchCopyIcons: config.ShowTaskAreaBranchCopyIcons, ShowTaskAreaRequirementCopyIcons: config.ShowTaskAreaRequirementCopyIcons, ShowTaskAreaProjectNameCopyIcons: config.ShowTaskAreaProjectNameCopyIcons},
 	}
 }
@@ -810,6 +835,20 @@ func equalIntegrationsShard(left, right integrationsShard) bool {
 }
 
 func (s *ConfigStore) writeShards(shards configShards, names []string) error {
+	files := make(map[string][]byte, len(names))
+	for _, name := range names {
+		data, err := encodeShard(name, shards)
+		if err != nil {
+			return err
+		}
+		files[name] = data
+	}
+	return s.writeShardFiles(files, names)
+}
+
+// Typed defaults and compatible updates share the same staging and rollback
+// transaction; callers supply the final bytes, including retained extensions.
+func (s *ConfigStore) writeShardFiles(files map[string][]byte, names []string) error {
 	if err := os.MkdirAll(s.paths.Config, 0o755); err != nil {
 		return err
 	}
@@ -830,10 +869,10 @@ func (s *ConfigStore) writeShards(shards configShards, names []string) error {
 		}
 	}
 	for _, name := range selected {
-		data, err := encodeShard(name, shards)
-		if err != nil {
+		data, ok := files[name]
+		if !ok {
 			cleanup()
-			return err
+			return fmt.Errorf("缺少待保存配置分片：%s", name)
 		}
 		file, err := os.CreateTemp(s.paths.Config, shardStagePrefix+strings.TrimSuffix(name, ".json")+"-*.json.tmp")
 		if err != nil {
@@ -1083,6 +1122,14 @@ func readArchiveContext(ctx context.Context, filename string) (decodedConfig, er
 }
 
 func encodeShard(name string, shards configShards) ([]byte, error) {
+	value, err := configShardValue(name, shards)
+	if err != nil {
+		return nil, err
+	}
+	return json.MarshalIndent(value, "", "  ")
+}
+
+func configShardValue(name string, shards configShards) (any, error) {
 	var value any
 	switch name {
 	case "layout.json":
@@ -1104,7 +1151,7 @@ func encodeShard(name string, shards configShards) ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("未知配置分片：%s", name)
 	}
-	return json.MarshalIndent(value, "", "  ")
+	return value, nil
 }
 
 func safeZipEntry(name string) bool {
@@ -1214,10 +1261,9 @@ type integrationsShard struct {
 	CommandProxyTargets               []domain.CommandProxyTarget           "json:\"commandProxyTargets\""
 	GenbuExecutablePath               *string                               "json:\"genbuExecutablePath\""
 	GenbuExecutableAutoDetected       bool                                  "json:\"genbuExecutableAutoDetected\""
-	LarkExecutablePath                *string                               "json:\"larkExecutablePath\""
 	RequirementMaterialsRoot          *string                               "json:\"requirementMaterialsRoot\""
 	RequirementMaterialsSubdirectory  *string                               "json:\"requirementMaterialsSubdirectory\""
-	RequirementMaterialsFeishuTarget  *string                               "json:\"requirementMaterialsFeishuTarget\""
+	MaterialsGitSync                  *domain.MaterialsGitSyncSettings      `json:"materialsGitSync"`
 	CodexPluginMarketplaceSources     []domain.CodexPluginMarketplaceSource "json:\"codexPluginMarketplaceSources\""
 	SkillSources                      []domain.SkillSource                  "json:\"skillSources\""
 }

@@ -61,39 +61,25 @@ type ParticipatedWorkItem struct {
 
 func (w ParticipatedWorkItem) Key() string { return w.ProjectKey + ":" + w.Type + ":" + w.ID }
 
-type MaterialsServiceBranch struct {
-	ServiceName string
-	Branch      string
-}
-
-type MaterialsCommentContext struct {
-	Item     *ParticipatedWorkItem
-	Services []MaterialsServiceBranch
-}
-
-type MaterialsCommentStatus string
+type RequirementCommentWriteStatus string
 
 const (
-	MaterialsCommentCreated   MaterialsCommentStatus = "CREATED"
-	MaterialsCommentUpdated   MaterialsCommentStatus = "UPDATED"
-	MaterialsCommentUnchanged MaterialsCommentStatus = "UNCHANGED"
-	MaterialsCommentSkipped   MaterialsCommentStatus = "SKIPPED"
-	MaterialsCommentFailed    MaterialsCommentStatus = "FAILED"
-	MaterialsCommentCancelled MaterialsCommentStatus = "CANCELLED"
+	RequirementCommentCreated   RequirementCommentWriteStatus = "CREATED"
+	RequirementCommentUpdated   RequirementCommentWriteStatus = "UPDATED"
+	RequirementCommentUnchanged RequirementCommentWriteStatus = "UNCHANGED"
+	RequirementCommentSkipped   RequirementCommentWriteStatus = "SKIPPED"
+	RequirementCommentFailed    RequirementCommentWriteStatus = "FAILED"
+	RequirementCommentCancelled RequirementCommentWriteStatus = "CANCELLED"
 )
 
-type MaterialsCommentResult struct {
-	Status                  MaterialsCommentStatus
+type RequirementCommentWriteResult struct {
+	Status                  RequirementCommentWriteStatus
 	Message                 string
 	CommentID               *string
 	RequirementDirectoryURL *string
 }
 
-type RequirementMaterialsCommentGateway interface {
-	Upsert(item ParticipatedWorkItem, content, marker string) (MaterialsCommentResult, error)
-}
-
-func MaterialsCommentMarker(item ParticipatedWorkItem) string {
+func RequirementCommentMarker(item ParticipatedWorkItem) string {
 	digest := sha256.Sum256([]byte(item.ProjectKey + "\n" + item.ID))
 	return "[silverwing-materials:" + hex.EncodeToString(digest[:10]) + "]"
 }

@@ -452,8 +452,8 @@ func (s *app) renderImageCanvas(c *ui.Context, p palette, m *nativeMediaState, w
 		label(c, "图片尺寸无效。", 12, p.amber)
 		return
 	}
-	ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).HandleInput(func(event ui.InputEvent) bool {
-		return handleNativeImageCanvasInput(m, event)
+	ui.ScrollBoth(c).FillWidth().Grow(1).MinHeight(0).Focusable().Label("资料图片画布").HandleInput(func(event ui.InputEvent) bool {
+		return s.handleNativeImageCanvasInput(m, event)
 	}).Children(func() {
 		ui.Box(c).Width(maxFloat32(displayW, width)).Height(maxFloat32(displayH, height)).Center().Children(func() {
 			ui.Image(c, m.bitmap).Width(displayW).Height(displayH)
@@ -461,13 +461,21 @@ func (s *app) renderImageCanvas(c *ui.Context, p palette, m *nativeMediaState, w
 	})
 }
 
-func handleNativeImageCanvasInput(m *nativeMediaState, event ui.InputEvent) bool {
-	if event.Kind == ui.InputScroll && event.Mods&ui.Cmd != 0 {
+func (s *app) handleNativeImageCanvasInput(m *nativeMediaState, event ui.InputEvent) bool {
+	if m == nil {
+		return false
+	}
+	if event.Kind == ui.InputScroll && event.DY != 0 && event.Mods&ui.Shift == 0 {
+		// Continue from the displayed fit scale rather than the stale manual
+		// percentage; use the same wheel direction as the expanded viewer.
+		if m.fit {
+			m.zoom = s.fitImageZoom(m)
+		}
 		m.fit = false
-		if event.DY > 0 {
+		if event.DY < 0 {
 			m.zoom = minInt(m.zoom+10, 400)
-		} else if event.DY < 0 {
-			m.zoom = maxInt(m.zoom-10, 10)
+		} else {
+			m.zoom = maxInt(m.zoom-10, minInt(10, s.fitImageZoom(m)))
 		}
 		return true
 	}

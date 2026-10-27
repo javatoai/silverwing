@@ -20,8 +20,7 @@ func (s *app) settingsMeegleDefaultSprintProject(c *ui.Context, p palette, proje
 			}
 		}
 	}
-	label(c, "默认 Sprint 团队空间", 12, p.text).FontWeight(600)
-	label(c, "多个 Sprint 同时进行时，优先选择此空间中唯一进行中的 Sprint；仍有多个时手动选择。", 10, p.muted).LineHeight(1.4)
+	settingsHelpLabel(c, p, "默认 Sprint 团队空间", "多个 Sprint 同时进行时，优先选择此空间中唯一进行中的 Sprint；仍有多个时手动选择。", 12, 600)
 	button := ui.ButtonBase(c.Key("meegle-default-sprint-project-picker")).Row().Height(36).FillWidth().Padding(0, 12).Gap(8).Radius(8).Border(1, p.line).Background(p.surface).Label(selectedLabel)
 	button.Children(func() {
 		label(c, selectedLabel, 11, p.text).Grow(1).SingleLine()
@@ -133,7 +132,7 @@ func (s *app) saveSettingsCLIPath(key, value string) {
 	}
 	normalized := strings.TrimSpace(value)
 	config[key] = nullableString(normalized)
-	tool := map[string]string{"meegleExecutablePath": "meegle", "larkExecutablePath": "lark"}[key]
+	tool := map[string]string{"meegleExecutablePath": "meegle"}[key]
 	if tool != "" {
 		if s.busy {
 			s.lastError = "当前有操作正在执行，请等待完成或取消后重试。"
@@ -162,7 +161,7 @@ func (s *app) afterSettingsCLIPathSave(action application.Action) {
 		return
 	}
 	scope, ok := action.Payload["settingsCLIPathSave"].(settingsCLIPathSaveScope)
-	if !ok || (scope.Tool != "meegle" && scope.Tool != "lark") || scope.Home != s.snapshot.Home || s.settingsPage != "cli-"+scope.Tool {
+	if !ok || scope.Tool != "meegle" || scope.Home != s.snapshot.Home || s.settingsPage != "cli-"+scope.Tool {
 		return
 	}
 	key := scope.Tool + "ExecutablePath"

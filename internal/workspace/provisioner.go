@@ -288,6 +288,9 @@ func moduleDirectoryName(service domain.GroupServiceConfig, module domain.Servic
 	return serviceName + "-" + moduleName, nil
 }
 func defaultTargetBranch(requested string, modules []domain.ServiceModuleConfig, module domain.ServiceModuleConfig) string {
+	if strings.TrimSpace(requested) == "" {
+		return ""
+	}
 	if len(modules) == 1 {
 		return strings.TrimSpace(requested)
 	}

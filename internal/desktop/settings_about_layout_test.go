@@ -109,14 +109,22 @@ func TestSettingsUpdatesLayoutCopyAndKeyboardOrder(test *testing.T) {
 				if openFill != copyFill {
 					test.Fatalf("update actions must share the same neutral background: open=%v copy=%v", openFill, copyFill)
 				}
-				if !tester.HasText("手动安装") {
-					test.Fatal("update instructions must explain manual installation")
+				if tester.HasText("手动安装") {
+					test.Fatal("update instructions should stay in the help tooltip")
 				}
 				captureDesktopTestFrame(test, tester, fmt.Sprintf("updates-%d-dark-%t", width, dark))
 
 				tester.Key(0, ui.KeyTab)
+				if !tester.Focused("GitHub Releases说明") || !tester.HasText("手动安装") {
+					test.Fatal("the update help must explain manual installation on keyboard focus")
+				}
+				tester.Key(0, ui.KeyEscape)
+				if tester.HasText("手动安装") {
+					test.Fatal("Escape did not dismiss the update help")
+				}
+				tester.Key(0, ui.KeyTab)
 				if !tester.Focused("打开更新页面") {
-					test.Fatal("the open updates action must be first in keyboard order")
+					test.Fatal("the open updates action must follow the help in keyboard order")
 				}
 				tester.Key(0, ui.KeyTab)
 				if !tester.Focused("复制链接") {

@@ -21,6 +21,7 @@ type FileTreeRow struct {
 	ID, Name, Path string
 	Depth          int
 	Directory      bool
+	ReadOnly       bool
 }
 
 type FileTreeInputKind uint8
@@ -252,6 +253,9 @@ func fileTreeRow(c *ui.Context, p palette, props FileTreeProps, state *FileTreeS
 		image, tint := fileTreeIcon(row, props.Expanded[row.ID], p)
 		icon(c, image, fileTreeIconSize, tint)
 		name := label(c, row.Name, fileTreeFontSize, fg).SingleLine().Grow(1).MinWidth(0)
+		if row.ReadOnly && row.Depth == 0 {
+			label(c, "只读", 10, p.muted).SingleLine().Tooltip("同事资料：可读取和复制")
+		}
 		if ancestors[row.ID] {
 			name.FontWeight(500)
 		}

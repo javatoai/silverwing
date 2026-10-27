@@ -22,17 +22,31 @@ func TestParseFeishuCommentImageUUID(t *testing.T) {
 			}
 		}
 	}
+	// Meegle strips the adjacent upload annotation when returning SW comments.
+	// The rendered image and its strictly recognized download URL are enough;
+	// HTML metadata is not a file-authorization credential.
+	for _, source := range []string{image, "# 你好\n\n" + image, image + "\n\n" + annotation} {
+		if urls := FeishuCommentImageURLs(source); !reflect.DeepEqual(urls, []string{link}) {
+			t.Errorf("rendered unannotated comment image missing: %q", source)
+		}
+	}
 	for name, source := range map[string]string{
-		"invalid UUID":     image + "<!-- 938E4C1A-D9AE-40CF-870D-short -->",
-		"unknown HTML":     image + "<!-- keep me -->",
-		"blank line":       image + "\n\n" + annotation,
-		"intervening text": image + "text" + annotation,
-		"other host":       "![](https://example.invalid/image.png)" + annotation,
-		"plain URL":        link + annotation,
-		"fenced":           "```md\n" + image + annotation + "\n```",
-		"indented":         "    " + image + annotation,
-		"inline":           "`" + image + annotation + "`",
-		"escaped":          "\\" + image + annotation,
+		"invalid UUID":      image + "<!-- 938E4C1A-D9AE-40CF-870D-short -->",
+		"unknown HTML":      image + "<!-- keep me -->",
+		"intervening text":  image + "text" + annotation,
+		"other host":        "![](https://example.invalid/image.png)" + annotation,
+		"HTTP":              "![](http://project.feishu.cn/goapi/v5/platform/file/stream/download/token)",
+		"other route":       "![](https://project.feishu.cn/private/token)",
+		"userinfo":          "![](https://user:pass@project.feishu.cn/goapi/v5/platform/file/stream/download/token)",
+		"extra path":        "![](" + link + "/more)",
+		"encoded slash":     "![](" + link + "%2fmore)",
+		"encoded backslash": "![](" + link + "%5cmore)",
+		"fragment":          "![](" + link + "#fragment)",
+		"plain URL":         link + annotation,
+		"fenced":            "```md\n" + image + annotation + "\n```",
+		"indented":          "    " + image + annotation,
+		"inline":            "`" + image + annotation + "`",
+		"escaped":           "\\" + image + annotation,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if urls := FeishuCommentImageURLs(source); len(urls) != 0 {

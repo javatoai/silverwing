@@ -115,7 +115,7 @@ func (a *App) Dispatch(ctx context.Context, action Action) (ActionResult, error)
 	if strings.HasPrefix(action.Kind, "instructions.") {
 		return a.instructionAction(ctx, action)
 	}
-	if strings.HasPrefix(action.Kind, "requirements.") || strings.HasPrefix(action.Kind, "materials.") || strings.HasPrefix(action.Kind, "meegle.") {
+	if strings.HasPrefix(action.Kind, "requirements.") || strings.HasPrefix(action.Kind, "meegle.") {
 		return a.integrationAction(ctx, action)
 	}
 	if strings.HasPrefix(action.Kind, "skills.") || strings.HasPrefix(action.Kind, "codex.extensions") || strings.HasPrefix(action.Kind, "codex.ai/") || strings.HasPrefix(action.Kind, "cli.") || strings.HasPrefix(action.Kind, "logs.") || strings.HasPrefix(action.Kind, "git.environment") || strings.HasPrefix(action.Kind, "development-tools/") || action.Kind == "terminal.resolve" || action.Kind == "diagnostics.export" || action.Kind == "proxy.test" || action.Kind == "git.version" || action.Kind == "update.check" {

@@ -67,6 +67,8 @@ func (s *app) renderDetectedMaterialsText(c *ui.Context, p palette) *nativeCodeP
 	fresh := owner.view == nil || owner.identity != identity || owner.source != s.documentContent
 	view := owner.bind(identity, filepath.Base(s.documentPath), s.documentContent)
 	language := workspace.WorkspaceFileLanguageFromPath(s.documentPath)
+	find := s.ensureDocumentFindState()
+	find.preparePreview(s.documentPath, s.documentKind, s.documentContent)
 	verticalID, horizontalID := "text", "code-horizontal"
 	fontSize := textEditorFontSize
 	markdownSource := documentKindForPath(s.documentPath) == "markdown"
@@ -92,7 +94,9 @@ func (s *app) renderDetectedMaterialsText(c *ui.Context, p palette) *nativeCodeP
 		if !markdownSource {
 			view.Buffer.SetLanguage(workspaceFilePreviewLanguage(s.documentPath, language))
 		}
-		view.NoFolding = true
+		// Folding belongs to this preview's native view, never to its source
+		// buffer or autosave state. Other source previews keep their layout.
+		view.NoFolding = language != workspace.FileLanguageJSON || !find.jsonValid
 		view.TabSize = 4
 	}
 	view.SoftWrap = !markdownSource && documentKindForPath(s.documentPath) != "unsupported" &&
@@ -106,7 +110,6 @@ func (s *app) renderDetectedMaterialsText(c *ui.Context, p palette) *nativeCodeP
 	if fresh || position != *tracked {
 		view.SetScrollPosition(position)
 	}
-	find := s.ensureDocumentFindState()
 	find.nativePreview = owner
 	if markdownSource {
 		state := s.ensureMarkdownEditor()

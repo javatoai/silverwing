@@ -25,6 +25,7 @@ func (a *App) openCodex(ctx context.Context, action Action) (ActionResult, error
 	if err := a.validateDesktopTaskContext(action, config, manifest, taskPath); err != nil {
 		return ActionResult{}, err
 	}
+	ctx = a.desktopTaskMutationContext(ctx, action)
 	forceNew := false
 	if raw, exists := action.Payload["forceNew"]; exists {
 		var ok bool
@@ -94,6 +95,9 @@ func (a *App) openCodex(ctx context.Context, action Action) (ActionResult, error
 		}
 		if boundThreadID == nil {
 			return a.retryCodexWorkspaceTool(ctx, path, manifest, false, true)
+		}
+		if err := a.validateTaskContextFromCurrentSource(action); err != nil {
+			return ActionResult{}, err
 		}
 		data, err := a.Platform.Execute(ctx, "codex.ai/open", map[string]any{
 			"workspacePath": path,

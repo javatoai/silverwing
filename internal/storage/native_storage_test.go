@@ -11,13 +11,13 @@ import (
 	"silverwing-go/internal/domain"
 )
 
-func TestNativeConfigRejectsUnknownFieldsAndInvalidProxyTargets(t *testing.T) {
+func TestNativeConfigRejectsInvalidKnownFields(t *testing.T) {
 	for _, test := range []struct {
 		name  string
 		field string
 		value json.RawMessage
 	}{
-		{name: "unknown field", field: "codexExecutablePat", value: json.RawMessage(`"C:/codex"`)},
+		{name: "invalid path type", field: "codexExecutablePath", value: json.RawMessage(`false`)},
 		{name: "invalid proxy target", field: "commandProxyTargets", value: json.RawMessage(`["CODEXX"]`)},
 	} {
 		t.Run(test.name, func(t *testing.T) {

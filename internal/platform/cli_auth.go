@@ -15,10 +15,6 @@ import (
 	"silverwing-go/internal/process"
 )
 
-var larkBusinessDomains = []string{
-	"application", "approval", "apps", "attendance", "base", "calendar", "contact", "docs", "drive", "event", "im", "mail", "markdown", "mindnotes", "minutes", "note", "okr", "sheets", "slides", "task", "vc", "wiki",
-}
-
 type cliAuthSession struct {
 	SessionID              string         `json:"sessionId"`
 	Tool                   string         `json:"tool"`
@@ -28,7 +24,6 @@ type cliAuthSession struct {
 	ExpiresInSeconds       int64          `json:"expiresInSeconds"`
 	ExpiresAtEpochMillis   int64          `json:"expiresAtEpochMillis"`
 	PollingIntervalSeconds int64          `json:"pollingIntervalSeconds"`
-	Domains                []string       `json:"domains,omitempty"`
 	Polling                bool           `json:"polling"`
 	Error                  string         `json:"error,omitempty"`
 	Status                 map[string]any `json:"status,omitempty"`
@@ -60,8 +55,8 @@ func (s *Service) executeCLIAuth(ctx context.Context, kind string, payload map[s
 
 func (s *Service) startCLIAuth(ctx context.Context, payload map[string]any) (any, error) {
 	tool := strings.ToLower(payloadString(payload, "tool"))
-	if tool != "meegle" && tool != "lark" {
-		return nil, fmt.Errorf("只支持 Meegle 或 Lark 设备码登录")
+	if tool != "meegle" {
+		return nil, fmt.Errorf("只支持 Meegle 设备码登录")
 	}
 	cfg, err := s.loadConfig()
 	if err != nil {
@@ -106,37 +101,6 @@ func (s *Service) startCLIAuth(ctx context.Context, payload map[string]any) (any
 		session.clientID = response.ClientID
 		session.host = host
 		session.verifyURL = response.VerificationURI
-	} else {
-		domains, domainErr := validateLarkDomains(payload)
-		if domainErr != nil {
-			return nil, domainErr
-		}
-		args := []string{"auth", "login"}
-		for _, item := range domains {
-			args = append(args, "--domain", item)
-		}
-		args = append(args, "--no-wait")
-		result, runErr := s.runLarkJSONCommand(ctx, cfg, command, args, 30*time.Second)
-		if runErr != nil {
-			return nil, wrapCommandDisplayError(fmt.Sprintf("生成 Lark 登录授权链接失败：%s", redactProxy(cfg, safeCLIAuthError(runErr.Error(), nil))), runErr)
-		}
-		data, parseErr := successfulLarkPayload(result.Stdout, "Lark 登录授权")
-		if parseErr != nil {
-			return nil, parseErr
-		}
-		var response larkDeviceCodeInit
-		if err := json.Unmarshal(data, &response); err != nil {
-			return nil, fmt.Errorf("Lark 登录授权返回格式无法识别")
-		}
-		if response.VerificationURL == "" || response.DeviceCode == "" || response.ExpiresInSeconds <= 0 {
-			return nil, fmt.Errorf("Lark 登录授权响应不完整")
-		}
-		session.AuthorizationURL = response.VerificationURL
-		session.ExpiresInSeconds = response.ExpiresInSeconds
-		session.PollingIntervalSeconds = 1
-		session.Domains = domains
-		session.deviceCode = response.DeviceCode
-		session.verifyURL = response.VerificationURL
 	}
 	if session.AuthorizationURL == "" {
 		return nil, fmt.Errorf("CLI 登录响应缺少授权链接")
@@ -277,42 +241,6 @@ func (s *Service) pollCLIAuth(ctx context.Context, payload map[string]any) (any,
 				}
 			}
 		}
-	} else {
-		cfg, err := s.loadConfig()
-		var command string
-		if err == nil {
-			cfg, command, _, err = s.resolveCLIExecutable(pollCtx, cfg, "lark")
-		}
-		if err != nil {
-			pollErr = err
-			nextState = "FAILED"
-		} else {
-			timeout := time.Duration(snapshot.ExpiresInSeconds) * time.Second
-			if timeout < time.Second {
-				timeout = time.Second
-			}
-			if timeout > 10*time.Minute {
-				timeout = 10 * time.Minute
-			}
-			result, runErr := s.runLarkJSONCommand(pollCtx, cfg, command, []string{"auth", "login", "--device-code", snapshot.deviceCode}, timeout)
-			if runErr != nil {
-				pollErr = runErr
-				nextState = "FAILED"
-			} else if parseErr := ensureLarkNoErrorEnvelope(result.Stdout, "确认 Lark 登录授权"); parseErr != nil {
-				pollErr = parseErr
-				nextState = "FAILED"
-			} else {
-				status, pollErr = s.currentCLIStatus(pollCtx, "lark")
-				if pollErr == nil && statusBool(status, "authenticated") {
-					nextState = "AUTHENTICATED"
-				} else {
-					if pollErr == nil {
-						pollErr = fmt.Errorf("授权已完成，但未能确认 Lark 登录状态，请重新检测")
-					}
-					nextState = "FAILED"
-				}
-			}
-		}
 	}
 	cancel()
 	if pollErr != nil {
@@ -406,8 +334,8 @@ func (s *Service) cancelCLIAuth(payload map[string]any) (any, error) {
 
 func (s *Service) logoutCLIAuth(ctx context.Context, payload map[string]any) (any, error) {
 	tool := strings.ToLower(payloadString(payload, "tool"))
-	if tool != "meegle" && tool != "lark" {
-		return nil, fmt.Errorf("只支持退出 Meegle 或 Lark 登录")
+	if tool != "meegle" {
+		return nil, fmt.Errorf("只支持退出 Meegle 登录")
 	}
 	s.authMu.Lock()
 	for _, session := range s.authSessions {
@@ -436,14 +364,6 @@ func (s *Service) logoutCLIAuth(ctx context.Context, payload map[string]any) (an
 	if tool == "meegle" {
 		if _, err := s.runToolWithEnv(ctx, cfg, target, command, []string{"auth", "logout"}, "", 10*time.Second, cliEnvironmentWithRunner(ctx, s.runner, tool, command)); err != nil {
 			return nil, wrapCommandDisplayError(fmt.Sprintf("退出 Meegle 登录失败：%s", safeCLIAuthError(redactProxy(cfg, err.Error()), nil)), err)
-		}
-	} else {
-		result, runErr := s.runLarkJSONCommand(ctx, cfg, command, []string{"auth", "logout"}, 15*time.Second)
-		if runErr != nil {
-			return nil, wrapCommandDisplayError(fmt.Sprintf("退出 Lark 登录失败：%s", safeCLIAuthError(redactProxy(cfg, runErr.Error()), nil)), runErr)
-		}
-		if err := ensureLarkNoErrorEnvelope(result.Stdout, "退出 Lark 登录"); err != nil {
-			return nil, err
 		}
 	}
 	status, err := s.currentCLIStatus(ctx, tool)
@@ -501,7 +421,6 @@ func publicAuthSession(session *cliAuthSession) map[string]any {
 		"expiresInSeconds":       copy.ExpiresInSeconds,
 		"expiresAtEpochMillis":   copy.ExpiresAtEpochMillis,
 		"pollingIntervalSeconds": copy.PollingIntervalSeconds,
-		"domains":                copy.Domains,
 		"polling":                copy.Polling,
 		"error":                  copy.Error,
 		"status":                 copy.Status,
@@ -523,37 +442,6 @@ func latestAuthSessionID(sessions map[string]*cliAuthSession, tool string) strin
 	return latestID
 }
 
-func validateLarkDomains(payload map[string]any) ([]string, error) {
-	var selected []string
-	if raw, ok := payload["domains"]; ok {
-		encoded, err := json.Marshal(raw)
-		if err != nil || json.Unmarshal(encoded, &selected) != nil {
-			return nil, fmt.Errorf("解析 Lark 业务域失败")
-		}
-	}
-	allowed := make(map[string]bool, len(larkBusinessDomains))
-	for _, item := range larkBusinessDomains {
-		allowed[item] = true
-	}
-	seen := map[string]bool{}
-	result := make([]string, 0, len(selected))
-	for _, item := range selected {
-		item = strings.TrimSpace(item)
-		if item == "" || seen[item] {
-			continue
-		}
-		if !allowed[item] {
-			return nil, fmt.Errorf("包含不支持的 Lark 业务域：%s", item)
-		}
-		seen[item] = true
-		result = append(result, item)
-	}
-	if len(result) == 0 {
-		return nil, fmt.Errorf("至少选择一个 Lark 业务域")
-	}
-	return result, nil
-}
-
 type meegleDeviceCodeInit struct {
 	DeviceCode              string `json:"device_code"`
 	ClientID                string `json:"client_id"`
@@ -566,12 +454,6 @@ type meegleDeviceCodeInit struct {
 
 type meegleDeviceCodePoll struct {
 	Status string `json:"status"`
-}
-
-type larkDeviceCodeInit struct {
-	VerificationURL  string `json:"verification_url"`
-	DeviceCode       string `json:"device_code"`
-	ExpiresInSeconds int64  `json:"expires_in"`
 }
 
 func newAuthSessionID() (string, error) {
@@ -599,7 +481,7 @@ func safeCLIAuthError(message string, session *cliAuthSession) string {
 			message = strings.ReplaceAll(message, session.verifyURL, "[授权链接已隐藏]")
 		}
 	}
-	message = larkSafeError(message)
+	message = safeAuthDiagnostic(message)
 	message = strings.TrimSpace(strings.SplitN(message, "\n", 2)[0])
 	if len(message) > 240 {
 		message = message[:240]
@@ -610,7 +492,7 @@ func safeCLIAuthError(message string, session *cliAuthSession) string {
 	return message
 }
 
-func larkSafeError(message string) string {
+func safeAuthDiagnostic(message string) string {
 	message = regexpSecretFields.ReplaceAllString(message, "$1=[已隐藏]")
 	message = regexpURLs.ReplaceAllString(message, "[链接已隐藏]")
 	return message
@@ -628,85 +510,5 @@ func redactProxyForTool(s *Service, tool, message string) string {
 }
 
 // Auth control commands can succeed with top-level fields and no data payload.
-func successfulLarkEnvelope(output, operation string) (map[string]json.RawMessage, error) {
-	trimmed := strings.TrimSpace(output)
-	if trimmed == "" {
-		return nil, fmt.Errorf("%s返回为空", operation)
-	}
-	var root map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(trimmed), &root); err != nil {
-		return nil, fmt.Errorf("%s返回格式无法识别", operation)
-	}
-	var okValue *bool
-	if raw, exists := root["ok"]; exists {
-		var ok bool
-		if json.Unmarshal(raw, &ok) == nil {
-			okValue = &ok
-		}
-	}
-	if okValue != nil && !*okValue {
-		var message string
-		var detail struct {
-			Message string `json:"message"`
-			Hint    string `json:"hint"`
-			Type    string `json:"type"`
-		}
-		if raw := root["error"]; len(raw) > 0 {
-			_ = json.Unmarshal(raw, &detail)
-			if detail.Message == "" {
-				_ = json.Unmarshal(raw, &message)
-			}
-		}
-		if message == "" {
-			message = firstNonBlank(detail.Message, detail.Hint, detail.Type)
-		}
-		if message == "" {
-			_ = json.Unmarshal(root["message"], &message)
-		}
-		return nil, fmt.Errorf("%s失败：%s", operation, safeCLIAuthError(message, nil))
-	}
-	return root, nil
-}
-
-func successfulLarkPayload(output, operation string) ([]byte, error) {
-	root, err := successfulLarkEnvelope(output, operation)
-	if err != nil {
-		return nil, err
-	}
-	var ok bool
-	if json.Unmarshal(root["ok"], &ok) == nil && ok {
-		data := root["data"]
-		if len(data) == 0 || string(data) == "null" {
-			return nil, fmt.Errorf("%s成功响应缺少 data 对象", operation)
-		}
-		return data, nil
-	}
-	return []byte(strings.TrimSpace(output)), nil
-}
-
-func ensureLarkNoErrorEnvelope(output, operation string) error {
-	trimmed := strings.TrimSpace(output)
-	if !strings.HasPrefix(trimmed, "{") {
-		return nil
-	}
-	_, err := successfulLarkEnvelope(trimmed, operation)
-	return err
-}
-
 var regexpSecretFields = regexp.MustCompile(`(?i)(device[_-]?code|access[_-]?token|refresh[_-]?token)\s*[:=]\s*\S+`)
 var regexpURLs = regexp.MustCompile(`https?://\S+`)
-
-func (s *Service) runLarkJSONCommand(ctx context.Context, cfg domain.AppConfig, command string, args []string, timeout time.Duration) (process.Result, error) {
-	withJSON := append(append([]string(nil), args...), "--json")
-	environment := cliEnvironmentWithRunner(ctx, s.runner, "lark", command)
-	result, err := s.runToolWithEnv(ctx, cfg, domain.ProxyTargetLark, command, withJSON, "", timeout, environment)
-	if err == nil || process.IsCleanupFailure(err) || !larkJSONFlagUnsupported(err.Error()) {
-		return result, err
-	}
-	return s.runToolWithEnv(ctx, cfg, domain.ProxyTargetLark, command, args, "", timeout, environment)
-}
-
-func larkJSONFlagUnsupported(message string) bool {
-	lower := strings.ToLower(message)
-	return strings.Contains(lower, "--json") && (strings.Contains(lower, "unknown flag") || strings.Contains(lower, "unknown option"))
-}

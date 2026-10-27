@@ -92,6 +92,9 @@ func (s *app) handleDocumentClose(event *mygo.CloseEvent) {
 }
 
 func (s *app) captureDocumentCloseInput() error {
+	if err := s.commentComposerCloseError(); err != nil {
+		return err
+	}
 	for _, state := range s.materialTextEditors {
 		if err := s.captureMaterialTextState(state); err != nil {
 			return err
@@ -99,9 +102,6 @@ func (s *app) captureDocumentCloseInput() error {
 	}
 	if err := s.captureMarkdownEditorInput(s.markdown); err != nil {
 		return err
-	}
-	if s.materialsFeishuSyncActive() {
-		return errors.New("飞书资料同步尚未结束，请终止上传并等待清理完成后再关闭应用")
 	}
 	if s.documentCloseOperationBusy() {
 		return errors.New("操作正在执行，完成前不能关闭应用")
@@ -151,7 +151,7 @@ func (s *app) captureDocumentCloseInput() error {
 // This map is window-thread owned; status reads and device-code polling do not
 // block closing and are cancelled by closeCLIJobs after the window exits.
 func (s *app) documentCloseOperationBusy() bool {
-	if s.busy || s.materialsFeishuSyncActive() || s.materialsFileMutationRunning() {
+	if s.busy || s.materialsFileMutationRunning() {
 		return true
 	}
 	if s.cliJobs != nil {

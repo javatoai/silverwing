@@ -47,6 +47,10 @@ type actionForm struct {
 }
 
 type app struct {
+	commentComposers           *requirementCommentComposers
+	materialsGit               *materialsGitDesktopState
+	materialsGitBranches       *materialsGitBranchesState
+	materialsGitCapture        bool
 	win                        *mygo.Window
 	backend                    application.Backend
 	systemOpenJobs             *systemOpenJobs
@@ -58,6 +62,7 @@ type app struct {
 	page                              string
 	taskNavigation                    *taskNavigationState
 	taskContextScope                  *taskMenuScope
+	taskOpenTools                     *taskOpenToolsState
 	taskContextUpdate                 func(func()) // Headless scheduler seam; production captures Window.Update.
 	taskIndexes                       map[bool]*taskIndexBrowsingState
 	taskListFocused                   bool
@@ -134,8 +139,6 @@ type app struct {
 	materialsLiveRefreshLifecycle     *materialsLiveRefreshLifecycle
 	skillsBrowser                     *skillsBrowserState
 	settingsCLISessions               map[string]map[string]any
-	settingsLarkDomains               map[string]bool
-	settingsLarkLoginDialog           bool
 	settingsAuthPollTimers            map[string]*time.Timer
 	settingsTerminalResolution        map[string]any
 	settingsGroupID                   string
@@ -159,8 +162,8 @@ type app struct {
 	workspaceMergeBatch               *workspaceMergeBatchUIState
 	workspaceCommand                  *workspaceCommandUIState
 	workspaceCommandJobs              *workspaceCommandJobsState
-	materialsFeishuSyncJobs           *materialsFeishuSyncJobsState
 	requirementListJobs               *requirementListJobState
+	requirementListProgress           *requirementListProgressState
 	requirementIdentityJobs           *requirementIdentityJobState
 	requirementNaming                 *requirementNamingPreparationState
 	requirementDocumentPreparation    *requirementDocumentPreparationState

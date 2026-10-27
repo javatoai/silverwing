@@ -163,25 +163,94 @@ func TestNativeImageCanvasZoomKeepsBitmap(t *testing.T) {
 	}, 1000, 700)
 	// Tester.Scroll does not forward modifiers. Exercise the same input
 	// handler directly, then let the real canvas reconcile its render state.
-	handleNativeImageCanvasInput(m, ui.InputEvent{Kind: ui.InputScroll, Mods: ui.Cmd, DY: 1})
+	s.handleNativeImageCanvasInput(m, ui.InputEvent{Kind: ui.InputScroll, Mods: ui.Cmd, DY: -1})
 	tester.Frame()
 	if m.zoom != 110 {
 		t.Fatalf("modified wheel zoom = %d, want 110", m.zoom)
 	}
-	handleNativeImageCanvasInput(m, ui.InputEvent{Kind: ui.InputKeyDown, Mods: ui.Cmd, Key: ui.KeyEqual})
+	s.handleNativeImageCanvasInput(m, ui.InputEvent{Kind: ui.InputKeyDown, Mods: ui.Cmd, Key: ui.KeyEqual})
 	tester.Frame()
 	if m.zoom != 120 {
 		t.Fatalf("keyboard zoom = %d, want 120", m.zoom)
 	}
-	handleNativeImageCanvasInput(m, ui.InputEvent{Kind: ui.InputKeyDown, Mods: ui.Cmd, Key: ui.KeyMinus})
+	s.handleNativeImageCanvasInput(m, ui.InputEvent{Kind: ui.InputKeyDown, Mods: ui.Cmd, Key: ui.KeyMinus})
 	tester.Frame()
 	if m.zoom != 110 {
 		t.Fatalf("keyboard zoom out = %d, want 110", m.zoom)
 	}
-	handleNativeImageCanvasInput(m, ui.InputEvent{Kind: ui.InputKeyDown, Mods: ui.Cmd, Key: ui.Key0})
+	s.handleNativeImageCanvasInput(m, ui.InputEvent{Kind: ui.InputKeyDown, Mods: ui.Cmd, Key: ui.Key0})
 	tester.Frame()
 	if !m.fit || m.bitmap != bitmap || m.bitmapKey != "image:0" || m.wantedRenderKey != "image:0" || m.renderLoading || tester.HasText("正在生成页面图像") {
 		t.Fatal("canvas zoom or fit discarded the image or left the preview loading")
+	}
+}
+
+func TestNativeImageInlineWheelWithoutModifier(t *testing.T) {
+	for _, width := range []int{960, 1440} {
+		for _, dark := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%d-dark-%t", width, dark), func(t *testing.T) {
+				bitmap := ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 16, 8)))
+				m := &nativeMediaState{kind: "image", zoom: 100, imageInfo: media.ImageInfo{Width: 1600, Height: 900}, bitmap: bitmap}
+				s := &app{nativeMedia: m}
+				tester := ui.NewTester(func(c *ui.Context) {
+					p := setTheme(c, dark)
+					ui.Row(c).Fill().Children(func() {
+						ui.Scroll(c).Width(220).FillHeight().Label("测试资料树").Children(func() {
+							for i := 0; i < 60; i++ {
+								label(c, fmt.Sprintf("资料 %d", i), 13, p.text)
+							}
+						})
+						ui.Column(c).Grow(1).MinWidth(0).FillHeight().Label("测试资料图片区域").Children(func() {
+							m.viewerWidth, m.viewerHeight = float32(width-220), 656
+							ui.Row(c).FillWidth().Height(44).Children(func() { s.renderImageControls(c, p, m) })
+							s.renderImageCanvas(c, p, m, m.viewerWidth, m.viewerHeight)
+						})
+					})
+				}, width, 700)
+				canvas, _ := tester.Find("测试资料图片区域")
+				x, y := canvas.X+canvas.W/2, canvas.Y+120
+				tester.Scroll(x, y, 0, -120)
+				if m.zoom != 110 {
+					t.Fatalf("unmodified wheel did not zoom in: %d", m.zoom)
+				}
+				tester.Scroll(x, y, 0, 120)
+				if m.zoom != 100 {
+					t.Fatalf("wheel down did not zoom out: %d", m.zoom)
+				}
+				m.fit = true
+				tester.Frame()
+				fitted := s.fitImageZoom(m)
+				tester.Scroll(x, y, 0, -120)
+				if m.fit || m.zoom != fitted+10 {
+					t.Fatalf("wheel jumped from fit %d to %d", fitted, m.zoom)
+				}
+				zoom := m.zoom
+				tree, _ := tester.Find("测试资料树")
+				tester.Scroll(tree.X+50, tree.Y+100, 0, 120)
+				if m.zoom != zoom {
+					t.Fatal("scrolling the file tree zoomed the image")
+				}
+				m.fit = true
+				tester.Frame()
+				tester.Scroll(x, y, 120, 0)
+				if !m.fit || m.zoom != zoom {
+					t.Fatal("horizontal-only scrolling changed zoom")
+				}
+				m.fit = false
+				m.zoom = 400
+				tester.Frame()
+				tester.Scroll(x, y, 0, -120)
+				if m.zoom != 400 {
+					t.Fatal("zoom exceeded maximum")
+				}
+				m.zoom = 10
+				tester.Frame()
+				tester.Scroll(x, y, 0, 120)
+				if m.zoom != 10 || m.bitmap != bitmap {
+					t.Fatal("minimum zoom or bitmap changed")
+				}
+			})
+		}
 	}
 }
 

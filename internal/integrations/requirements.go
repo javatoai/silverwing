@@ -322,9 +322,9 @@ func (s *Service) writeRequirementComment(ctx context.Context, config domain.App
 	}
 	marker := stringValue(payload, "marker")
 	if marker == "" {
-		marker = domain.MaterialsCommentMarker(item)
+		marker = domain.RequirementCommentMarker(item)
 	}
-	if marker != domain.MaterialsCommentMarker(item) || !strings.HasSuffix(content, "\n\n"+marker) || strings.Count(content, marker) != 1 {
+	if marker != domain.RequirementCommentMarker(item) || !strings.HasSuffix(content, "\n\n"+marker) || strings.Count(content, marker) != 1 {
 		return nil, errors.New("需求评论必须以当前需求的稳定标记结尾")
 	}
 	release, err := s.acquireRequirementCommentLock(ctx, item)
@@ -334,7 +334,7 @@ func (s *Service) writeRequirementComment(ctx context.Context, config domain.App
 	// An uncertain CLI process may still write the comment. Retain both locks
 	// until process exit, using the same ownership guard as materials writes.
 	defer func() {
-		finishMaterialsScopeLock("requirement-comment:"+requirementCommentLockIdentity(item), release, operationErr)
+		finishRequirementCommentLock("requirement-comment:"+requirementCommentLockIdentity(item), release, operationErr)
 	}()
 	if err := s.verifyRequirementCommentTarget(ctx, config, item); err != nil {
 		return nil, err
@@ -349,20 +349,20 @@ func (s *Service) writeRequirementComment(ctx context.Context, config domain.App
 			continue
 		}
 		if existing != nil {
-			return domain.MaterialsCommentResult{Status: domain.MaterialsCommentFailed, Message: "需求中存在多条相同 SilverWing 标记的评论，未修改任何评论。"}, nil
+			return domain.RequirementCommentWriteResult{Status: domain.RequirementCommentFailed, Message: "需求中存在多条相同 SilverWing 标记的评论，未修改任何评论。"}, nil
 		}
 		existing = &comments.Comments[i]
 	}
 	if existing != nil && markerLineCount(existing.Content, marker) != 1 {
-		return domain.MaterialsCommentResult{Status: domain.MaterialsCommentFailed, Message: "目标评论中的 SilverWing 标记重复，未修改任何评论。", CommentID: &existing.ID}, nil
+		return domain.RequirementCommentWriteResult{Status: domain.RequirementCommentFailed, Message: "目标评论中的 SilverWing 标记重复，未修改任何评论。", CommentID: &existing.ID}, nil
 	}
 	if existing != nil && existing.Content == content {
-		return domain.MaterialsCommentResult{Status: domain.MaterialsCommentUnchanged, Message: "需求评论内容未变化。", CommentID: &existing.ID}, nil
+		return domain.RequirementCommentWriteResult{Status: domain.RequirementCommentUnchanged, Message: "需求评论内容未变化。", CommentID: &existing.ID}, nil
 	}
-	action, expected := "create", domain.MaterialsCommentCreated
+	action, expected := "create", domain.RequirementCommentCreated
 	var commentID *string
 	if existing != nil {
-		action, expected, commentID = "update", domain.MaterialsCommentUpdated, &existing.ID
+		action, expected, commentID = "update", domain.RequirementCommentUpdated, &existing.ID
 	}
 	paramsPath, cleanup, err := s.writeJSONArgument(map[string]string{"content": content})
 	if err != nil {
@@ -383,10 +383,10 @@ func (s *Service) writeRequirementComment(ctx context.Context, config domain.App
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return domain.MaterialsCommentResult{Status: domain.MaterialsCommentFailed, Message: "需求评论 dry-run 失败：" + err.Error(), CommentID: commentID}, nil
+		return domain.RequirementCommentWriteResult{Status: domain.RequirementCommentFailed, Message: "需求评论 dry-run 失败：" + err.Error(), CommentID: commentID}, nil
 	}
 	if err := validateCommentDryRun(dryRun.Stdout, item, content, action, commentID); err != nil {
-		return domain.MaterialsCommentResult{Status: domain.MaterialsCommentFailed, Message: "需求评论 dry-run 校验失败：" + err.Error(), CommentID: commentID}, nil
+		return domain.RequirementCommentWriteResult{Status: domain.RequirementCommentFailed, Message: "需求评论 dry-run 校验失败：" + err.Error(), CommentID: commentID}, nil
 	}
 	if !boolValue(payload, "confirmed") {
 		return map[string]any{"status": "READY", "message": "dry-run 已通过；确认后才会写入需求评论。", "action": action, "commentId": commentID}, nil
@@ -518,6 +518,10 @@ func (s *Service) downloadRequirementAttachment(ctx context.Context, config doma
 }
 
 func (s *Service) downloadMeegleAttachment(ctx context.Context, config domain.AppConfig, item domain.ParticipatedWorkItem, fileURL string) ([]byte, error) {
+	return s.downloadMeegleAttachmentLimit(ctx, config, item, fileURL, 32<<20)
+}
+
+func (s *Service) downloadMeegleAttachmentLimit(ctx context.Context, config domain.AppConfig, item domain.ParticipatedWorkItem, fileURL string, limit int64) ([]byte, error) {
 	if err := ensureRequirementDirectory(filepath.Dir(s.paths.Temp), s.paths.Temp); err != nil {
 		return nil, err
 	}
@@ -542,7 +546,7 @@ func (s *Service) downloadMeegleAttachment(ctx context.Context, config domain.Ap
 		return nil, err
 	}
 	info, err := os.Lstat(output)
-	if err != nil || !info.Mode().IsRegular() || requirementCacheReparsePoint(output, info) || info.Size() == 0 || info.Size() > 32<<20 {
+	if err != nil || !info.Mode().IsRegular() || requirementCacheReparsePoint(output, info) || info.Size() == 0 || info.Size() > limit {
 		return nil, errors.New("Meegle CLI 未生成有效的图片文件")
 	}
 	return os.ReadFile(output)

@@ -133,12 +133,16 @@ func (s *Service) meegleProjects(ctx context.Context, config domain.AppConfig) (
 }
 
 func (s *Service) listRequirements(ctx context.Context, config domain.AppConfig, payload map[string]any, force bool) (any, error) {
+	return s.listRequirementsWithProgress(ctx, config, payload, force, nil)
+}
+
+func (s *Service) listRequirementsWithProgress(ctx context.Context, config domain.AppConfig, payload map[string]any, force bool, progress *requirementListReporter) (any, error) {
 	expected, provided, err := expectedRequirementIdentity(payload)
 	if err != nil {
 		return nil, err
 	}
 	if !provided {
-		return s.listRequirementsQuery(ctx, config, payload)
+		return s.listRequirementsQueryWithProgress(ctx, config, payload, progress)
 	}
 	keys, err := participatedListCacheKeysFor(config, expected, payload)
 	if err != nil {
@@ -170,7 +174,7 @@ func (s *Service) listRequirements(ctx context.Context, config domain.AppConfig,
 		},
 		func(ctx context.Context) (any, error) {
 			value, hit, loadErr := s.loadParticipatedList(ctx, requestedKey, force, func(ctx context.Context) (any, error) {
-				return s.listRequirementsQuery(ctx, config, payload)
+				return s.listRequirementsQueryWithProgress(ctx, config, payload, progress)
 			})
 			cacheHit = hit
 			return value, loadErr
@@ -191,19 +195,26 @@ func (s *Service) listRequirements(ctx context.Context, config domain.AppConfig,
 }
 
 func (s *Service) listRequirementsQuery(ctx context.Context, config domain.AppConfig, payload map[string]any) (any, error) {
+	return s.listRequirementsQueryWithProgress(ctx, config, payload, nil)
+}
+
+func (s *Service) listRequirementsQueryWithProgress(ctx context.Context, config domain.AppConfig, payload map[string]any, progress *requirementListReporter) (any, error) {
 	projects := append([]domain.MeegleProjectConfig(nil), config.MeegleProjects...)
 	if len(projects) == 0 {
 		return participatedResult{Items: []domain.ParticipatedWorkItem{}, Failures: []string{}}, nil
 	}
+	progress.update("account", "running", "正在核对 Meegle 账号…", 0, 0)
 	statusValue, statusErr := s.meegleStatus(ctx, config)
 	status := object(statusValue)
 	if statusErr != nil {
 		if process.IsCleanupFailure(statusErr) {
 			return nil, statusErr
 		}
+		progress.update("account", "failed", statusErr.Error(), 0, 0)
 		return participatedResult{Items: []domain.ParticipatedWorkItem{}, Failures: []string{statusErr.Error()}}, nil
 	}
 	if installed, _ := status["installed"].(bool); !installed {
+		progress.update("account", "failed", "Meegle CLI 未安装或无法启动", 0, 0)
 		return participatedResult{Items: []domain.ParticipatedWorkItem{}, Failures: []string{"Meegle CLI 未安装或无法启动，请在设置中检查命令路径"}}, nil
 	}
 	if authenticated, _ := status["authenticated"].(bool); !authenticated {
@@ -211,8 +222,10 @@ func (s *Service) listRequirementsQuery(ctx context.Context, config domain.AppCo
 		if msg := text(status["authenticationError"]); msg != "" {
 			reason = "Meegle CLI 登录状态检查失败：" + msg
 		}
+		progress.update("account", "failed", reason, 0, 0)
 		return participatedResult{Items: []domain.ParticipatedWorkItem{}, Failures: []string{reason}}, nil
 	}
+	progress.update("account", "done", "账号核对完成", 0, 0)
 	// Project-key duplicates are removed before the sprint catalog is read.
 	unique := make([]domain.MeegleProjectConfig, 0, len(projects))
 	seenProjects := map[string]bool{}
@@ -226,7 +239,8 @@ func (s *Service) listRequirementsQuery(ctx context.Context, config domain.AppCo
 	sprints := make([]sprintItem, 0)
 	failures := make([]string, 0)
 	completedSprints := 0
-	for _, project := range unique {
+	for index, project := range unique {
+		progress.update("sprints", "running", "正在读取 "+project.SimpleName+" 的 Sprint…", index, len(unique))
 		items, err := s.querySprints(ctx, config, project)
 		if err != nil {
 			if process.IsCleanupFailure(err) {
@@ -238,6 +252,11 @@ func (s *Service) listRequirementsQuery(ctx context.Context, config domain.AppCo
 		sprints = append(sprints, items...)
 		completedSprints++
 	}
+	sprintStatus, sprintMessage := "done", "Sprint 读取完成"
+	if len(failures) > 0 {
+		sprintStatus, sprintMessage = "failed", strings.Join(failures, "；")
+	}
+	progress.update("sprints", sprintStatus, sprintMessage, len(unique), len(unique))
 	sort.SliceStable(sprints, func(i, j int) bool { return sprints[i].Status != "进行中" && sprints[j].Status == "进行中" })
 	var sprintCatalog []sprintItem
 	if len(sprints) > 0 || completedSprints > 0 {
@@ -286,7 +305,7 @@ func (s *Service) listRequirementsQuery(ctx context.Context, config domain.AppCo
 	if !ok {
 		return nil, errors.New("Sprint 所属 Meegle 项目配置已变化")
 	}
-	items, queryFailures, completed, err := s.queryParticipatedItems(ctx, config, project, *selected)
+	items, queryFailures, completed, err := s.queryParticipatedItemsWithProgress(ctx, config, project, *selected, progress)
 	if err != nil {
 		return nil, err
 	}
@@ -614,6 +633,11 @@ func (s *Service) readPages(ctx context.Context, config domain.AppConfig, args [
 }
 
 func (s *Service) queryParticipatedItems(ctx context.Context, config domain.AppConfig, project domain.MeegleProjectConfig, sprint sprintItem) ([]domain.ParticipatedWorkItem, []string, int, error) {
+	return s.queryParticipatedItemsWithProgress(ctx, config, project, sprint, nil)
+}
+
+func (s *Service) queryParticipatedItemsWithProgress(ctx context.Context, config domain.AppConfig, project domain.MeegleProjectConfig, sprint sprintItem, progress *requirementListReporter) ([]domain.ParticipatedWorkItem, []string, int, error) {
+	progress.update("items", "running", "正在读取当前用户和 Sprint 时间范围…", 0, len(workItemTypes))
 	userValue, err := s.runMeegle(ctx, config, []string{"user", "me", "--format", "json"}, 20*time.Second, "读取当前 Meegle 用户")
 	if process.IsCleanupFailure(err) {
 		return nil, nil, 0, err
@@ -643,6 +667,7 @@ func (s *Service) queryParticipatedItems(ctx context.Context, config domain.AppC
 	failures := []string{}
 	completed := 0
 	for i, typ := range workItemTypes {
+		progress.emit(RequirementListProgress{Phase: "items", Status: "running", WorkItemType: typ.Path, Label: typ.Label, Message: "正在查询" + typ.Label + "…", Completed: i, Total: len(workItemTypes)})
 		items, err := s.queryWorkItemType(ctx, config, project, sprint, typ)
 		typeResult[i] = items
 		if err != nil {
@@ -651,13 +676,22 @@ func (s *Service) queryParticipatedItems(ctx context.Context, config domain.AppC
 			}
 			incompleteTypes[i] = true
 			failures = append(failures, project.SimpleName+" · "+typ.Label+"："+err.Error())
+			progress.emit(RequirementListProgress{Phase: "items", Status: "failed", WorkItemType: typ.Path, Label: typ.Label, Message: err.Error(), Completed: i + 1, Total: len(workItemTypes)})
 			continue
 		}
 		completed++
+		progress.emit(RequirementListProgress{Phase: "items", Status: "done", WorkItemType: typ.Path, Label: typ.Label, Message: fmt.Sprintf("查询完成，%d 条", len(items)), Completed: i + 1, Total: len(workItemTypes)})
 	}
+	itemsStatus, itemsMessage := "done", "工作项查询完成"
+	if len(failures) > 0 {
+		itemsStatus, itemsMessage = "failed", fmt.Sprintf("%d 类查询未完成", len(failures))
+	}
+	progress.update("items", itemsStatus, itemsMessage, len(workItemTypes), len(workItemTypes))
 	all := aggregateParticipatedTypeResults(typeResult)
 	// Schedule enrichment is optional metadata, but incomplete reads remain visible per item.
+	completedEstimates := 0
 	for i := range all {
+		progress.update("estimates", "running", fmt.Sprintf("正在读取第 %d 条工作项的个人估分…", i+1), completedEstimates, len(all))
 		if userErr != nil {
 			all[i].MetadataWarnings = append(all[i].MetadataWarnings, "个人估分："+shortError(userErr))
 			continue
@@ -685,7 +719,20 @@ func (s *Service) queryParticipatedItems(ctx context.Context, config domain.AppC
 		}
 		formatted := value.String()
 		all[i].MySprintEstimateDays = &formatted
+		completedEstimates++
 	}
+	estimateStatus, estimateMessage := "done", "个人估分读取完成"
+	if completedEstimates < len(all) {
+		estimateStatus = "failed"
+		estimateMessage = fmt.Sprintf("个人估分有 %d 条未完成", len(all)-completedEstimates)
+		for _, item := range all {
+			if item.MySprintEstimateDays == nil && len(item.MetadataWarnings) > 0 {
+				estimateMessage += "：" + item.MetadataWarnings[len(item.MetadataWarnings)-1]
+				break
+			}
+		}
+	}
+	progress.update("estimates", estimateStatus, estimateMessage, completedEstimates, len(all))
 	return all, failures, completed, nil
 }
 

@@ -81,6 +81,7 @@ func (s *app) observeRequirementListIdentity() {
 // Called by account/session invalidation paths even when their visible status
 // fields have not changed yet. The next list request must get a new generation.
 func (s *app) invalidateRequirementListIdentity() {
+	s.requirementListProgress = nil
 	state := s.ensureRequirementListJobs()
 	s.retireRequirementListRequest(state)
 	state.generation++

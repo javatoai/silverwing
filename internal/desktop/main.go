@@ -58,6 +58,7 @@ func Run(backend application.Backend, opts Options) error {
 	}
 	explicitWindowSize := opts.Width != 0 || opts.Height != 0
 	s := newApp(backend, opts)
+	s.materialsGitCapture = opts.CapturePath != ""
 	if opts.CapturePath != "" {
 		s.readingSession = newMemoryReadingSession(opts.Home)
 	}
@@ -113,6 +114,8 @@ func Run(backend application.Backend, opts Options) error {
 			s.initializeReadingSession(opts.Home, opts.RestoreSession)
 		}
 		s.win.OnClosed(func() {
+			s.stopMaterialsGitSync()
+			s.stopTaskOpenTools()
 			s.stopProductionJobs()
 			s.cancelConfirmationDialog()
 			s.stopSettingsAutosave()
@@ -149,6 +152,11 @@ func Run(backend application.Backend, opts Options) error {
 		}
 	})
 	runErr := mygo.App.Run()
+	gitCleanup, stopGitCleanup := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := s.closeMaterialsGitSync(gitCleanup); runErr == nil && err != nil {
+		runErr = fmt.Errorf("退出前资料 Git 同步收尾未完成：%w", err)
+	}
+	stopGitCleanup()
 	productionCleanup, stopProductionCleanup := context.WithTimeout(context.Background(), 30*time.Second)
 	if err := s.closeProductionJobs(productionCleanup); runErr == nil && err != nil {
 		runErr = fmt.Errorf("退出前生产发布收尾未完成：%w", err)
@@ -218,11 +226,11 @@ func Run(backend application.Backend, opts Options) error {
 		runErr = fmt.Errorf("退出前配置读取清理未完成：%w", err)
 	}
 	stopConfigReadsCleanup()
-	materialsSyncCleanup, stopMaterialsSyncCleanup := context.WithTimeout(context.Background(), 30*time.Second)
-	if err := s.closeMaterialsFeishuSyncJobs(materialsSyncCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前飞书资料同步清理未完成：%w", err)
+	commentCleanup, stopCommentCleanup := context.WithTimeout(context.Background(), 30*time.Second)
+	if err := s.closeRequirementCommentComposers(commentCleanup); runErr == nil && err != nil {
+		runErr = err
 	}
-	stopMaterialsSyncCleanup()
+	stopCommentCleanup()
 	requirementIdentityCleanup, stopRequirementIdentityCleanup := context.WithTimeout(context.Background(), 30*time.Second)
 	if err := s.closeRequirementIdentityJobs(requirementIdentityCleanup); runErr == nil && err != nil {
 		runErr = fmt.Errorf("退出前需求身份清理未完成：%w", err)

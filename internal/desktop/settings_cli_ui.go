@@ -5,7 +5,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"silverwing-go/internal/application"
-	"silverwing-go/internal/domain"
+
 	"strings"
 	"time"
 )
@@ -15,15 +15,15 @@ func (s *app) settingsCLI(c *ui.Context, p palette) {
 	if tool == "" {
 		return
 	}
-	settingsCardWithActions(c, p, title+" 状态", "", func() {
+	settingsHelpCardWithActions(c, p, title+" 状态", "", func() {
 		s.settingsCLIToolsMenu(c, p, tool, title)
 	}, func() {
 		s.settingsCLIStatusDetails(c, p, tool)
-		if tool == "meegle" || tool == "lark" {
+		if tool == "meegle" {
 			s.settingsCLIAuth(c, p, tool)
 		}
 	})
-	settingsCard(c, p, title+" 命令路径", "留空时自动探测，也可以手动选择；更改后自动保存。", func() {
+	settingsHelpCard(c, p, title+" 命令路径", "留空时自动探测，也可以手动选择；更改后自动保存。", func() {
 		s.settingsConfigPathRow(c, p, pathKey, title+" 可执行文件", "留空时自动探测", false)
 		if s.cliJobs == nil || s.cliJobs.requests["status:"+tool] == nil {
 			s.settingsCLIPathDiscoveryHint(c, p, tool)
@@ -44,32 +44,14 @@ func (s *app) settingsCLIStatusDetails(c *ui.Context, p palette, tool string) {
 	if version := strings.TrimSpace(mapString(status, "version")); version != "" && tool != "git" {
 		settingsToolStatusRow(c, p, "版本", version, p.text)
 	}
-	if source := mapString(status, "source"); source != "" && tool != "lark" {
+	if source := mapString(status, "source"); source != "" {
 		settingsToolStatusRow(c, p, "来源", cliStatusSourceLabel(source), p.text)
-	}
-	if tool == "lark" {
-		if expiry := mapString(status, "expiresAt"); expiry != "" {
-			settingsToolStatusRow(c, p, "凭据有效期", larkCredentialExpiryLabel(expiry), p.text)
-		}
-		if remaining := cliAuthLinkRemaining(s.settingsCLISessions[tool]); remaining != "" {
-			settingsToolStatusRow(c, p, "授权链接剩余", remaining, p.muted)
-		}
-		if tokenStatus := mapString(status, "tokenStatus"); tokenStatus != "" {
-			settingsToolStatusRow(c, p, "凭据状态", larkTokenStatusLabel(tokenStatus), p.text)
-		}
 	}
 	if message := mapString(status, "error"); message != "" {
 		settingsToolStatusRow(c, p, "检测错误", message, p.amber)
 	} else if strings.HasPrefix(s.settingsOutput, "CLI 状态读取失败：") {
 		settingsToolStatusRow(c, p, "检测错误", strings.TrimPrefix(s.settingsOutput, "CLI 状态读取失败："), p.amber)
 	}
-}
-
-func larkCredentialExpiryLabel(value string) string {
-	if parsed, err := domain.ParseSilverWingTime(strings.TrimSpace(value)); err == nil && !parsed.IsZero() {
-		return parsed.In(time.FixedZone("UTC+08:00", 8*60*60)).Format("2006-01-02 15:04:05")
-	}
-	return value
 }
 
 func cliAuthLinkRemaining(session map[string]any) string {
@@ -88,7 +70,7 @@ func cliAuthLinkRemaining(session map[string]any) string {
 // the configured executable. Command actions live in the card's menu.
 func (s *app) settingsCLICommandActions(c *ui.Context, p palette, tool, command string) {
 	switch tool {
-	case "git", "codex", "genbu", "meegle", "lark":
+	case "git", "codex", "genbu", "meegle":
 	default:
 		return
 	}
@@ -103,10 +85,6 @@ func cliStatusSourceLabel(source string) string {
 		return label
 	}
 	return "未确认"
-}
-
-var larkBusinessDomains = []string{
-	"application", "approval", "apps", "attendance", "base", "calendar", "contact", "docs", "drive", "event", "im", "mail", "markdown", "mindnotes", "minutes", "note", "okr", "sheets", "slides", "task", "vc", "wiki",
 }
 
 func (s *app) settingsCLIAuth(c *ui.Context, p palette, tool string) {
@@ -158,21 +136,13 @@ func (s *app) settingsCLIAuth(c *ui.Context, p palette, tool string) {
 		settingsToolStatusRow(c, p, "登录检查", errorText, p.amber)
 	}
 	if authState != "AUTHENTICATED" && authState != "NOT_INSTALLED" {
-		if tool == "lark" {
-			if action(c, "cli-auth-start-"+tool, "launch", "登录 Lark CLI", p, true) {
-				s.settingsLarkDomains = make(map[string]bool)
-				for _, domain := range larkBusinessDomains {
-					*s.settingsBoolInput("lark-auth-domain:"+domain, false) = false
-				}
-				s.settingsLarkLoginDialog = true
-			}
-		} else if action(c, "cli-auth-start-"+tool, "launch", "登录 Meegle CLI", p, true) {
+		if action(c, "cli-auth-start-"+tool, "launch", "登录 Meegle CLI", p, true) {
 			s.act("cli.auth.start", "", "", "", "", "", map[string]any{"tool": "meegle", "host": "project.feishu.cn"})
 		}
 	}
 	if session := s.settingsCLISessions[tool]; len(session) > 0 {
 		state := mapString(session, "state")
-		if tool != "lark" {
+		if tool == "meegle" {
 			label(c, "设备码状态："+cliAuthStateLabel(state), 10, cliAuthStateColor(state, p))
 		}
 		if userCode := mapString(session, "userCode"); userCode != "" {
@@ -191,7 +161,7 @@ func (s *app) settingsCLIAuth(c *ui.Context, p palette, tool string) {
 				}
 			})
 		}
-		if tool != "lark" {
+		if tool == "meegle" {
 			if remaining := cliAuthLinkRemaining(session); remaining != "" {
 				label(c, "授权链接剩余 "+remaining, 10, p.muted)
 			}
@@ -211,51 +181,6 @@ func (s *app) settingsCLIAuth(c *ui.Context, p palette, tool string) {
 			})
 		}
 	}
-}
-
-func (s *app) settingsLarkAuthDialog(c *ui.Context, p palette) {
-	if !s.settingsLarkLoginDialog {
-		return
-	}
-	ui.DialogBase(c.Key("lark-auth-domains-dialog"), &s.settingsLarkLoginDialog, func(backdrop, panel ui.Element) {
-		backdrop.Background(ui.RGBA(0, 0, 0, 0.34))
-		w, h := c.Size()
-		panel.Width(min(560, w-24)).MaxHeight(min(700, h-24)).Padding(20).Gap(12).Background(p.surface).Border(1, p.line).Radius(16)
-		panel.Children(func() {
-			ui.Column(c).FillWidth().MinWidth(0).Shrink(0).Gap(4).Children(func() {
-				label(c, "选择 Lark 业务域", 17, p.text).FontWeight(600).Wrap()
-				label(c, "只申请所选业务域所需权限。至少选择一项；每次登录都需要重新选择。", 11, p.muted).Wrap().LineHeight(1.45)
-			})
-			ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).MaxHeight(480).Gap(2).Padding(8).Background(p.soft).Radius(8).Children(func() {
-				for _, domain := range larkBusinessDomains {
-					value := s.settingsBoolInput("lark-auth-domain:"+domain, false)
-					row := ui.Checkbox(c.Key("lark-auth-domain-"+domain), value, domain).FillWidth().MinWidth(0).
-						MinHeight(38).Padding(8).Gap(10).AlignItems(ui.Center).Radius(6).Label("选择 Lark 业务域 " + domain)
-					if *value {
-						row.Background(p.selected)
-					} else if row.Hovered() {
-						row.Background(p.surface)
-					}
-				}
-			})
-			selected := make([]string, 0, len(larkBusinessDomains))
-			for _, domain := range larkBusinessDomains {
-				if *s.settingsBoolInput("lark-auth-domain:"+domain, false) {
-					selected = append(selected, domain)
-				}
-			}
-			ui.Row(c).FillWidth().Shrink(0).Gap(8).Wrap().AlignItems(ui.Center).Justify(ui.End).Children(func() {
-				label(c, fmt.Sprintf("已选 %d / %d 项", len(selected), len(larkBusinessDomains)), 11, p.muted).Grow(1).MinWidth(0).Wrap()
-				if action(c, "lark-auth-domain-cancel", "close", "取消", p, false) {
-					s.settingsLarkLoginDialog = false
-				}
-				if toolButtonWithEnabled(c, "lark-auth-domain-start", "继续授权", p, true, len(selected) > 0) {
-					s.settingsLarkLoginDialog = false
-					s.act("cli.auth.start", "", "", "", "", "", map[string]any{"tool": "lark", "domains": selected})
-				}
-			})
-		})
-	})
 }
 
 func (s *app) applyCLIAuthResult(action application.Action, result application.ActionResult) {
@@ -344,25 +269,10 @@ func cliIdentitySuffix(status map[string]any) string {
 	return map[bool]string{true: " · " + firstNonEmpty(mapString(status, "brand"), mapString(status, "host")), false: ""}[firstNonEmpty(mapString(status, "brand"), mapString(status, "host")) != ""]
 }
 
-func larkTokenStatusLabel(status string) string {
-	switch strings.ToLower(status) {
-	case "valid":
-		return "有效"
-	case "needs_refresh":
-		return "等待自动刷新"
-	case "expired":
-		return "已过期"
-	default:
-		return "状态未知"
-	}
-}
-
 func (s *app) cliSettingsTarget() (tool, title, pathKey string) {
 	switch s.settingsPage {
 	case "cli-meegle":
 		return "meegle", "Meegle CLI", "meegleExecutablePath"
-	case "cli-lark":
-		return "lark", "Lark CLI", "larkExecutablePath"
 	case "cli-genbu":
 		return "genbu", "Genbu CLI", "genbuExecutablePath"
 	default:

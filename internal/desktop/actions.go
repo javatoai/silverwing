@@ -21,10 +21,17 @@ func (s *app) dispatch(action application.Action) {
 // Task-menu actions carry a private, transient context in the action payload so
 // the backend can revalidate it without making that task the visible selection.
 func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMenuScope) {
+	if s.materialsGitRunning() {
+		switch action.Kind {
+		case "migration.apply", "migration.recover", "task.delete", "workspace.remove", "config.materials-root.save", "config.task-root.save":
+			s.lastError = "资料 Git 同步正在执行，请稍后重试"
+			return
+		}
+	}
 	var scopeUpdate func(func())
 	var scopeWindow *mygo.Window
 	if scope != nil {
-		scopedKind := action.Kind == "codex.run" || action.Kind == "task.materials-retry" ||
+		scopedKind := action.Kind == "codex.run" || action.Kind == "task.tools-launch" || action.Kind == "task.materials-retry" ||
 			action.Kind == "task.archive" || action.Kind == "task.restore" || action.Kind == "task.delete"
 		if !scopedKind || action.TaskID != scope.taskID || !s.taskMenuScopeCurrent(*scope) {
 			s.lastError = "任务或配置已变化，请重新打开任务菜单。"
@@ -57,9 +64,6 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 		return
 	}
 	if s.dispatchSkillsBrowserRead(action) {
-		return
-	}
-	if s.dispatchMaterialsFeishuSyncJob(action) {
 		return
 	}
 	if s.dispatchWorkspaceCommandJob(action) {
@@ -190,7 +194,7 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 				backendDispatched = true
 				result, err = s.backend.Dispatch(ctx, action)
 			}
-			if (err == nil && reloadsSnapshot(action.Kind)) || action.Kind == "codex.run" || action.Kind == "task.delete" || settingsExtensionSourceSaveAction(action.Kind) || (migrationLease != nil && backendDispatched) {
+			if (err == nil && reloadsSnapshot(action.Kind)) || action.Kind == "codex.run" || action.Kind == "task.tools-launch" || action.Kind == "task.delete" || settingsExtensionSourceSaveAction(action.Kind) || (migrationLease != nil && backendDispatched) {
 				refreshContext := ctx
 				var stopRefresh context.CancelFunc
 				if err != nil && (settingsExtensionSourceSaveAction(action.Kind) || migrationLease != nil) {
@@ -285,7 +289,7 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 				if s.applyTagHistoryRefreshFailure(action, err) {
 					return
 				}
-				if (action.Kind == "codex.run" || action.Kind == "task.delete") && refreshErr == nil && refreshed.ConfigJSON != "" {
+				if (action.Kind == "codex.run" || action.Kind == "task.tools-launch" || action.Kind == "task.delete") && refreshErr == nil && refreshed.ConfigJSON != "" {
 					// A failed launcher persists its FAILED tool state; task deletion
 					// may finish removal while reporting retained backup cleanup errors.
 					s.applySnapshot(refreshed)
@@ -520,6 +524,10 @@ func firstDocument(items []application.Document) string {
 }
 
 func (s *app) selectDocument(path string) {
+	s.selectDocumentWithReveal(path, true)
+}
+
+func (s *app) selectDocumentWithReveal(path string, reveal bool) {
 	s.documentLinkFragment = ""
 	path = normalizeActionPath(path)
 	if path == "" || path == s.documentPath || s.materialsFileReadBlocked() {
@@ -540,7 +548,9 @@ func (s *app) selectDocument(path string) {
 	s.closeNativeMedia()
 	s.closeMarkdownEditor()
 	s.documentPath = path
-	s.revealMaterialsPath(path)
+	if reveal {
+		s.revealMaterialsPath(path)
+	}
 	s.documentKind = documentKindForPath(path)
 	s.documentReadOnly = markdownReadingOnly && s.documentKind == "markdown"
 	s.documentHash = ""
@@ -577,12 +587,12 @@ func (s *app) loadDocuments() {
 func reloadsSnapshot(kind string) bool {
 	switch kind {
 	case "task.create", "task.archive", "task.restore", "task.delete", "task.refresh",
-		"codex.run",
+		"codex.run", "task.tools-launch",
 		"task.services-add", "task.modules-add", "task.services-retry", "task.tools-retry",
 		"repository.add", "repository.remove", "service.add-repositories", "service.save", "service.remove", "service.module-save", "service.module-remove", "config.save", "config.fields.save", "config.materials-root.save", "config.task-root.save", "config.import",
 		"config.restore-backup", "migration.apply", "migration.recover",
 		"workspace.fetch", "workspace.commit", "workspace.commit-push", "workspace.push", "workspace.batch", "workspace.merge", "workspace.merge-batch", "workspace.repair", "workspace.remove", "workspace.add", "workspace.bootstrap-clear", "workspace.bootstrap-rerun",
-		"instructions.save", "requirements.refresh", "requirements.comment", "materials.sync", "task.materials-retry",
+		"instructions.save", "requirements.refresh", "requirements.comment", "task.materials-retry",
 		"tag.build", "tag.retry", "tag.target.update", "tag.history.delete", "tag.history.clear", "skills.refresh", "skills.install", "skills.remove",
 		"development-tools/snapshot", "development-tools/detect":
 		return true
@@ -599,8 +609,8 @@ func actionLabel(kind string) string {
 		"config.task-root.save": "切换任务目录", "development-tools/detect": "检测开发工具", "development-tools/snapshot": "读取开发工具配置",
 		"workspace.status": "检查工作区", "workspace.preview": "读取提交预览", "workspace.previews": "读取 Git 变更预览", "workspace.batch": "批量 Git 操作", "workspace.fetch": "获取远程更新", "workspace.commit": "提交更改", "workspace.commit-push": "提交并推送", "workspace.push": "推送更改", "workspace.merge": "合并主分支", "workspace.merge-batch": "批量合并主分支", "workspace.repair-preview": "检查工作区修复方案", "workspace.repair": "修复工作区", "workspace.remove": "移除工作区", "workspace.add": "添加工作区", "workspace.bootstrap-clear": "清除 Bootstrap 警告", "workspace.bootstrap-rerun": "重新执行 Bootstrap", "workspace.command": "运行命令",
 		"document.list": "读取资料目录", "document.read": "读取文档", "document.save": "保存文档", "document.mkdir": "创建目录", "document.create": "新建文档", "document.rename": "重命名文档", "document.trash": "移至回收站", "document.copy": "复制文档", "document.open": "打开文档", "document.reveal": "显示文档位置",
-		"instructions.read": "读取任务说明", "instructions.save": "保存任务说明", "requirements.refresh": "刷新需求", "requirements.list": "读取需求列表", "requirements.read": "读取需求详情", "requirements.comments": "读取需求评论", "requirements.comment": "发表评论", "materials.sync": "同步需求资料",
-		"task.services-add-preview": "预检新增服务", "task.modules-add-preview": "预检新增模块", "task.services-add": "添加服务", "task.modules-add": "添加模块", "task.services-retry": "重试失败服务", "task.tools-retry": "重试工作区工具",
+		"instructions.read": "读取任务说明", "instructions.save": "保存任务说明", "requirements.refresh": "刷新需求", "requirements.list": "读取需求列表", "requirements.read": "读取需求详情", "requirements.comments": "读取需求评论", "requirements.comment": "发表评论",
+		"task.services-add-preview": "预检新增服务", "task.modules-add-preview": "预检新增模块", "task.services-add": "添加服务", "task.modules-add": "添加模块", "task.services-retry": "重试失败服务", "task.tools-retry": "重试工作区工具", "task.tools-launch": "打开任务工具",
 		"tag.build": "构建 Tag", "tag.target.update": "保存测试目标分支", "tag.status": "查询 Tag 状态", "tag.genbu.refresh": "刷新 Genbu 状态", "tag.history": "读取 Tag 历史", "tag.history.refresh": "刷新 Tag 历史和 Genbu", "tag.history.delete": "删除所选Tag历史", "tag.history.clear": "清空Tag历史", "tag.retry": "重试 Tag 操作", "tag.workspace-check": "检查工作区",
 		"skills.refresh": "刷新 Skills", "skills.install": "安装 Skill", "skills.remove": "移除 Skill", "codex.extensions": "读取 Codex 扩展", "codex.run": "在 Codex 中打开",
 		"codex.extensions/snapshot": "读取 Codex 扩展",

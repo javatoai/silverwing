@@ -13,7 +13,7 @@ import (
 	"silverwing-go/internal/workspace"
 )
 
-func (a *App) instructionAction(ctx context.Context, action Action) (ActionResult, error) {
+func (a *App) instructionAction(ctx context.Context, action Action) (actionResult ActionResult, actionErr error) {
 	if boolPayload(action, "localTaskRules") && (action.Kind == "instructions.read" || action.Kind == "instructions.save") {
 		return a.localTaskRulesAction(ctx, action)
 	}
@@ -95,6 +95,7 @@ func (a *App) instructionAction(ctx context.Context, action Action) (ActionResul
 			}
 			if strings.EqualFold(path, docs.TaskNotesPath(taskPath, manifest)) {
 				service := workspace.NewTaskApplicationService(a.Manifests, a.git(config), a.Paths)
+				defer func() { appendMaterialsCatalogWarnings(&actionResult, service.Documents) }()
 				if e = service.SaveTaskNotes(config, taskPath, actionText(action)); e != nil {
 					return ActionResult{}, e
 				}

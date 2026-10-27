@@ -51,6 +51,7 @@ func (s *app) activateRequirementSprint(sprintKey string) {
 	if sprintKey == s.requirementsSelectedSprintKey {
 		return
 	}
+	s.requirementListProgress = nil
 	state := s.ensureRequirementListJobs()
 	identity := s.currentRequirementListIdentity()
 	if state.hasIdentity && state.identity == identity {
@@ -91,6 +92,7 @@ func (s *app) startRequirementListJob(sprintKey string, refresh bool) {
 	if s.backend == nil || s.win == nil || s.win.IsDestroyed() {
 		s.requirementsLoading = false
 		s.requirementsLoadError = "需求列表后端或窗口不可用，请重试。"
+		s.failRequirementListProgress(s.requirementListProgress, []string{s.requirementsLoadError})
 		return
 	}
 	state := s.ensureRequirementListJobs()
@@ -100,6 +102,7 @@ func (s *app) startRequirementListJob(sprintKey string, refresh bool) {
 	if closed {
 		s.requirementsLoading = false
 		s.requirementsLoadError = "需求列表读取已关闭。"
+		s.failRequirementListProgress(s.requirementListProgress, []string{s.requirementsLoadError})
 		return
 	}
 	identity := s.currentRequirementListIdentity()
@@ -144,6 +147,7 @@ func (s *app) startRequirementListJob(sprintKey string, refresh bool) {
 		request.identityContext, request.hasIdentityContext = identityState.context, true
 	}
 	state.current = request
+	s.bindRequirementListProgress(request)
 	state.mu.Lock()
 	state.running[request] = struct{}{}
 	state.mu.Unlock()
@@ -190,7 +194,13 @@ func executeRequirementListJob(backend application.Backend, request *requirement
 	if err := request.ctx.Err(); err != nil {
 		return application.ActionResult{}, err
 	}
-	result, err := backend.Dispatch(request.ctx, request.action)
+	var result application.ActionResult
+	var err error
+	if progressBackend, ok := backend.(application.RequirementListProgressBackend); ok && request.onProgress != nil {
+		result, err = progressBackend.DispatchRequirementList(request.ctx, request.action, request.onProgress)
+	} else {
+		result, err = backend.Dispatch(request.ctx, request.action)
+	}
 	if request.ctx.Err() != nil {
 		err = errors.Join(request.ctx.Err(), err)
 	}
@@ -239,9 +249,19 @@ func (s *app) finishRequirementListJob(request *requirementListJob, result appli
 			return
 		}
 		s.applyRequirementListFailure(request, err)
+		s.finishRequirementListProgress(request)
 		return
 	}
+	p := request.progress
+	progressCurrent := s.requirementListProgressCurrent(p) && p.request == request
+	if progressCurrent {
+		p.steps["apply"] = application.RequirementListProgress{Phase: "apply", Status: "running", Message: "正在更新列表…"}
+	}
 	s.applyRequirementListResult(request, result)
+	if progressCurrent && s.requirementListProgress == p {
+		p.viewSprintKey = s.requirementsSelectedSprintKey
+	}
+	s.finishRequirementListProgress(request)
 }
 
 func (s *app) applyRequirementListFailure(request *requirementListJob, err error) {

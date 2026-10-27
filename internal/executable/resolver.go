@@ -24,13 +24,12 @@ const (
 	ToolCodex  Tool = "codex"
 	ToolGit    Tool = "git"
 	ToolGenbu  Tool = "genbu"
-	ToolLark   Tool = "lark"
 	ToolMeegle Tool = "meegle"
 )
 
 func supportedTool(tool Tool) bool {
 	switch tool {
-	case ToolCodex, ToolGit, ToolLark, ToolMeegle, ToolGenbu:
+	case ToolCodex, ToolGit, ToolMeegle, ToolGenbu:
 		return true
 	default:
 		return false
@@ -181,10 +180,6 @@ func (r *Resolver) Environment(ctx context.Context, tool Tool, command string) m
 		return nil
 	}
 	result := map[string]string{}
-	if tool == ToolLark {
-		result["LARKSUITE_CLI_NO_UPDATE_NOTIFIER"] = "1"
-		result["LARKSUITE_CLI_NO_SKILLS_NOTIFIER"] = "1"
-	}
 	if runtime.GOOS == "darwin" {
 		result["PATH"] = mergedPath(command, r.macLoginShellPath(ctx), os.Getenv("PATH"))
 	}
@@ -334,9 +329,6 @@ func (r *Resolver) probe(ctx context.Context, tool Tool) string {
 	}
 	if runtime.GOOS == "darwin" {
 		name := string(tool)
-		if tool == ToolLark {
-			name = "lark-cli"
-		}
 		return executableOnPath(name, mergedPath("", r.macLoginShellPath(ctx), os.Getenv("PATH")))
 	}
 	commands := probeCommands(tool, runtime.GOOS)
@@ -375,17 +367,12 @@ func probeCommands(tool Tool, goos string) [][]string {
 			return [][]string{{"where.exe", "git.exe"}}
 		case ToolGenbu:
 			return [][]string{{"where.exe", "genbu.exe"}}
-		case ToolLark:
-			return [][]string{{"where.exe", "lark-cli.cmd"}}
 		case ToolMeegle:
 			return [][]string{{"where.exe", "meegle.cmd"}}
 		}
 		return nil
 	}
 	name := string(tool)
-	if tool == ToolLark {
-		name = "lark-cli"
-	}
 	if goos == "darwin" {
 		return [][]string{{"/bin/zsh", "-lc", "command -v " + name}}
 	}
@@ -515,11 +502,6 @@ func fallback(tool Tool, goos string) string {
 			return "genbu.exe"
 		}
 		return "genbu"
-	case ToolLark:
-		if goos == "windows" {
-			return "lark-cli.cmd"
-		}
-		return "lark-cli"
 	case ToolMeegle:
 		if goos == "windows" {
 			return "meegle.cmd"

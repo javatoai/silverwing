@@ -16,6 +16,7 @@ type requirementIdentityContext struct {
 type requirementIdentityListRequest struct {
 	sprintKey string
 	refresh   bool
+	progress  *requirementListProgressState
 }
 
 type requirementIdentityJob struct {

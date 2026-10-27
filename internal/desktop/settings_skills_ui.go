@@ -9,7 +9,7 @@ import (
 )
 
 func (s *app) settingsSkills(c *ui.Context, p palette) {
-	settingsCardWithActions(c, p, "Skill 来源", "读取 Git 来源目录后，可预览并安装 Skill。", func() {
+	settingsHelpCardWithActions(c, p, "Skill 来源", "读取 Git 来源目录后，可预览并安装 Skill。\n\n可添加包含 SKILL.md 的 Git 仓库。", func() {
 		s.overflowMenu(c, p, "skill-sources-more", "更多 Skill 来源操作", false, func(m *overflowMenuBuilder) {
 			if m.Item("refresh-all", "重新读取所有来源").Icon("refresh").Chosen() {
 				s.act("skills.sources/catalog", "", "", "", "", "", nil)
@@ -17,7 +17,7 @@ func (s *app) settingsSkills(c *ui.Context, p palette) {
 		})
 	}, func() {
 		if len(s.settingsSkillSources) == 0 {
-			settingsMuted(c, p, "还没有 Skill 来源，或尚未读取来源状态。可添加包含 SKILL.md 的 Git 仓库。")
+			settingsMuted(c, p, "还没有 Skill 来源，或尚未读取来源状态。")
 		}
 		for _, wrapper := range s.settingsSkillSources {
 			source := mapData(wrapper["source"])
@@ -28,7 +28,7 @@ func (s *app) settingsSkills(c *ui.Context, p palette) {
 			ui.Column(c).FillWidth().Padding(12).Gap(8).Background(p.soft).Radius(10).Children(func() {
 				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 					ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
-						label(c, name, 12, p.text).FontWeight(600)
+						settingsHelpLabel(c, p, name, "刷新来源后显示可用 Skill。", 12, 600)
 						label(c, mapString(source, "repositoryUrl"), 10, p.muted).SingleLine()
 						roots := stringArray(mustArray(dataValue(status, "discoveredRoots")))
 						if len(roots) > 0 {
@@ -51,7 +51,7 @@ func (s *app) settingsSkills(c *ui.Context, p palette) {
 					})
 				})
 				if len(skills) == 0 {
-					settingsMuted(c, p, "刷新来源后显示可用 Skill。")
+					settingsMuted(c, p, "暂无 Skill。")
 				}
 				for _, skill := range skills {
 					skillName := mapString(skill, "name")
@@ -59,8 +59,7 @@ func (s *app) settingsSkills(c *ui.Context, p palette) {
 					key := sourceID + ":" + skillName
 					ui.Row(c).Padding(8, 10).Gap(8).AlignItems(ui.Center).Background(p.surface).Radius(8).Children(func() {
 						ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
-							label(c, skillName, 11, p.text).FontWeight(500)
-							label(c, mapString(skill, "description"), 10, p.muted).LineHeight(1.35).Wrap()
+							settingsHelpLabel(c, p, skillName, mapString(skill, "description"), 11, 500)
 							label(c, extensionOwnershipLabel(ownership), 10, p.muted)
 						})
 						if action(c, "skill-preview-"+key, "file", "预览", p, false) {

@@ -227,9 +227,30 @@ func normalizeTaskCreationWorkspaceTools(items []taskCreationWorkspaceToolOption
 			continue
 		}
 		seen[id] = true
-		result = append(result, taskCreationWorkspaceToolOption{ID: id, DisplayName: id, Reason: "当前版本未返回此工具的注册和可用状态"})
+		result = append(result, taskCreationWorkspaceToolOption{ID: id, DisplayName: workspaceToolDisplayName(id), Reason: "当前版本未返回此工具的注册和可用状态"})
 	}
 	return result
+}
+
+func workspaceToolDisplayName(id string) string {
+	switch id {
+	case "codex":
+		return "Codex"
+	case "cursor":
+		return "Cursor"
+	default:
+		return id
+	}
+}
+
+func (state *taskCreationState) enabledWorkspaceTools() []taskCreationWorkspaceToolOption {
+	tools := make([]taskCreationWorkspaceToolOption, 0, len(state.workspaceTools))
+	for _, option := range state.workspaceTools {
+		if containsString(state.config.DefaultWorkspaceToolIDs, option.ID) {
+			tools = append(tools, option)
+		}
+	}
+	return tools
 }
 
 func firstTaskAgentPreviewFile(files []workspace.AgentDocumentPreviewFile) string {
@@ -899,17 +920,22 @@ func (s *app) taskCreationValidationFailure() (string, *taskCreationValidationTa
 	if state.directoryCheck.signature == s.taskCreationDirectorySignature() && state.directoryCheck.message != "" {
 		return state.directoryCheck.message, &taskCreationValidationTarget{field: "taskName"}
 	}
-	if strings.TrimSpace(state.draft.Branch) == "" {
+	if taskCreationHasSelectedServices(state) && strings.TrimSpace(state.draft.Branch) == "" {
 		return "请填写任务分支。", &taskCreationValidationTarget{field: "taskBranch"}
 	}
-	if domain.ContainsUnresolvedBranchPlaceholder(state.draft.Branch) {
+	if taskCreationHasSelectedServices(state) && domain.ContainsUnresolvedBranchPlaceholder(state.draft.Branch) {
 		return "任务分支仍包含未解析的 {num} 或 {ai}，请修改需求编号/链接或手工调整分支。", &taskCreationValidationTarget{field: "taskBranch"}
 	}
 	group := s.taskCreationGroup()
 	if group == nil {
 		return "请选择项目组。", &taskCreationValidationTarget{field: "service"}
 	}
-	selectedServices := 0
+	for id, selected := range state.services {
+		service := s.taskCreationService(id)
+		if selected && (service == nil || !service.Enabled) {
+			return "已选服务已不可用，请重新选择。", &taskCreationValidationTarget{field: "service"}
+		}
+	}
 	for _, service := range group.Services {
 		if !service.Enabled || !state.services[service.ID] {
 			continue
@@ -938,16 +964,22 @@ func (s *app) taskCreationValidationFailure() (string, *taskCreationValidationTa
 				return "Worktree 模块目标分支不能为空：" + firstNonEmpty(draft.Name, draft.ID), &taskCreationValidationTarget{serviceID: service.ID, moduleID: moduleID, field: "targetBranch"}
 			}
 		}
-		if selectedModules > 0 {
-			selectedServices++
-		} else {
+		if selectedModules == 0 {
 			return "已选服务至少需要一个模块：" + service.DisplayName, &taskCreationValidationTarget{serviceID: service.ID, field: "module"}
 		}
 	}
-	if selectedServices == 0 {
-		return "请选择至少一个服务和模块。", &taskCreationValidationTarget{field: "service"}
-	}
 	return "", nil
+}
+
+func taskCreationHasSelectedServices(state *taskCreationState) bool {
+	if state != nil {
+		for _, selected := range state.services {
+			if selected {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *app) focusTaskCreationValidationTarget(target *taskCreationValidationTarget) {
@@ -1103,7 +1135,7 @@ func (s *app) taskCreationSelectedToolIDs() []string {
 		return []string{}
 	}
 	ids := make([]string, 0, len(state.selectedToolIDs))
-	for _, option := range state.workspaceTools {
+	for _, option := range state.enabledWorkspaceTools() {
 		if option.Available && state.selectedToolIDs[option.ID] {
 			ids = append(ids, option.ID)
 		}
@@ -1651,9 +1683,13 @@ func (s *app) renderTaskCreationDialog(c *ui.Context, p palette) bool {
 					label(c, "请在分支复用确认框中完成检查。", 11, p.muted).Shrink(0)
 					return
 				}
-				button := ui.ButtonBase(c.Key("task-create-preflight")).Height(34).Padding(0, 16).Radius(18).Label("检查并创建任务").Disabled(s.busy || state.pendingPreflight || state.phase == "preview" || state.phase == "creating")
+				createLabel := "创建任务"
+				if taskCreationHasSelectedServices(state) {
+					createLabel = "检查并创建任务"
+				}
+				button := ui.ButtonBase(c.Key("task-create-preflight")).Height(34).Padding(0, 16).Radius(18).Label(createLabel).Disabled(s.busy || state.pendingPreflight || state.phase == "preview" || state.phase == "creating")
 				button.Background(p.blue)
-				button.Children(func() { label(c, "检查并创建任务", 12, ui.Hex("#FFFFFF")) })
+				button.Children(func() { label(c, createLabel, 12, ui.Hex("#FFFFFF")) })
 				if button.Clicked() {
 					s.beginTaskCreationPreflight()
 				}
@@ -1825,13 +1861,14 @@ func (s *app) renderTaskCreationNotesAndPreview(c *ui.Context, p palette) {
 
 func (s *app) renderTaskCreationWorkspaceTools(c *ui.Context, p palette) {
 	state := s.taskCreation
-	if state == nil {
+	if state == nil || len(state.config.DefaultWorkspaceToolIDs) == 0 {
 		return
 	}
+	tools := state.enabledWorkspaceTools()
 	ui.Column(c).FillWidth().Gap(6).Children(func() {
 		label(c, "创建后打开工作区工具", 11, p.muted).SingleLine()
 		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Wrap().Children(func() {
-			for _, option := range state.workspaceTools {
+			for _, option := range tools {
 				selected := state.selectedToolIDs[option.ID]
 				name := option.DisplayName
 				if !option.Available {
@@ -1848,7 +1885,7 @@ func (s *app) renderTaskCreationWorkspaceTools(c *ui.Context, p palette) {
 		} else if state.toolsError != "" {
 			label(c, state.toolsError, 10, p.amber)
 		}
-		if len(state.workspaceTools) == 0 {
+		if len(tools) == 0 {
 			label(c, "当前没有已注册的工作区工具。", 10, p.muted)
 		}
 	})
@@ -1982,7 +2019,7 @@ func (s *app) renderTaskCreationServiceList(c *ui.Context, p palette, group *dom
 				if strings.TrimSpace(state.serviceSearch) != "" {
 					emptyPanel(c, p, "没有匹配的服务", "可按名称、仓库路径或 ID 搜索。")
 				} else {
-					emptyPanel(c, p, "没有可选服务", "先在“仓库与服务”中配置服务及模块。")
+					emptyPanel(c, p, "没有可选服务", "可直接创建任务，之后再添加服务。")
 				}
 			}
 		})

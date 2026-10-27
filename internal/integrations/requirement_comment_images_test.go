@@ -71,6 +71,30 @@ func TestRequirementCommentImagesSidecarAndCacheHit(t *testing.T) {
 	}
 }
 
+func TestRequirementCommentImagesUnannotatedReadback(t *testing.T) {
+	service := &Service{paths: storage.NewPaths(t.TempDir())}
+	const content = "# 你好\n\n![](" + commentImageFixtureURL + ")"
+	comments := domain.RequirementComments{Comments: []domain.RequirementComment{{ID: "posted", Content: content}}}
+	if _, err := service.writeRequirementCommentsCache("readback", comments, 1); err != nil {
+		t.Fatal(err)
+	}
+	result := service.requirementCommentsResult("readback", RequirementCommentsReadResult{Comments: comments.Comments})
+	if len(result.CommentResources) != 1 {
+		t.Fatalf("real readback omitted unannotated image: %d resources", len(result.CommentResources))
+	}
+	resource := result.CommentResources[0]
+	if resource.CommentID != "posted" || resource.Generation != requirementCacheDigest(content) || resource.URL != commentImageFixtureURL {
+		t.Fatal("image mapping lost the posted comment identity")
+	}
+	if _, err := service.saveCommentImageResource(context.Background(), "readback", resource.CommentID, resource.Generation, resource.URL, []byte{137, 80, 78, 71, 13, 10, 26, 10, 1}, ""); err != nil {
+		t.Fatal(err)
+	}
+	result = service.requirementCommentsResult("readback", RequirementCommentsReadResult{Comments: comments.Comments})
+	if len(result.CommentResources) != 1 || result.CommentResources[0].Path == "" || result.CommentResources[0].Error != "" || result.Comments[0].Content != content {
+		t.Fatal("downloaded image did not become a trusted local mapping")
+	}
+}
+
 func TestRequirementCommentImagesRefreshCancellationAndUnsafeIndex(t *testing.T) {
 	service := &Service{paths: storage.NewPaths(t.TempDir())}
 	key := "isolated-comment-key"

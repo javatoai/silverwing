@@ -13,6 +13,7 @@ type markdownBitmapViewerState struct {
 	owner        *markdownEditorState
 	document     *editor.Document
 	reader       *requirementReaderState
+	composer     *requirementCommentComposer
 	readerKey    string
 	readerEpoch  uint64
 	taskID       string
@@ -55,6 +56,19 @@ func (s *app) openMarkdownBitmapViewer(owner *markdownEditorState, bitmap *ui.Bi
 }
 
 func (s *app) renderMarkdownBitmapViewer(c *ui.Context, p palette) {
+	if viewer := s.markdownBitmapViewer; viewer != nil && viewer.composer != nil {
+		return // Its owner dialog is drawn later; render this viewer above it.
+	}
+	s.renderMarkdownBitmapViewerLayer(c, p)
+}
+
+func (s *app) renderCommentDraftBitmapViewer(c *ui.Context, p palette) {
+	if viewer := s.markdownBitmapViewer; viewer != nil && viewer.composer != nil {
+		s.renderMarkdownBitmapViewerLayer(c, p)
+	}
+}
+
+func (s *app) renderMarkdownBitmapViewerLayer(c *ui.Context, p palette) {
 	viewer := s.markdownBitmapViewer
 	if viewer == nil {
 		return
@@ -68,6 +82,7 @@ func (s *app) renderMarkdownBitmapViewer(c *ui.Context, p palette) {
 	s.renderNativeImageViewer(c, p, viewer.media)
 	if !viewer.media.imageExpanded {
 		s.dismissMarkdownBitmapViewer()
+		c.Invalidate()
 	}
 }
 
@@ -76,6 +91,9 @@ func (s *app) dismissMarkdownBitmapViewer() {
 		return
 	}
 	viewer := s.markdownBitmapViewer
+	if viewer.composer != nil && s.commentComposerImageCurrent(viewer) {
+		viewer.composer.restoreImageFocus = true
+	}
 	s.markdownBitmapViewer = nil
 	if viewer.owner != nil {
 		viewer.owner.closeBitmapViewer = nil

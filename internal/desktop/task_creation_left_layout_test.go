@@ -100,6 +100,7 @@ func TestTaskCreationLeftTitleAndTools(t *testing.T) {
 		t.Fatal("tool deselection or URL preservation failed")
 	}
 	form.workspaceTools = append(form.workspaceTools, taskCreationWorkspaceToolOption{ID: "custom", DisplayName: "自定义工具", Available: false, Reason: "示例工具未安装"})
+	form.config.DefaultWorkspaceToolIDs = append(form.config.DefaultWorkspaceToolIDs, "custom")
 	tester.Frame()
 	if err := tester.Click("自定义工具"); err != nil {
 		t.Fatal(err)

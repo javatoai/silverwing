@@ -72,6 +72,11 @@ func (s *app) requestRequirements(sprintKey string, refresh bool) {
 	if sprintKey == "" {
 		sprintKey = s.requirementsSelectedSprintKey
 	}
+	// Re-entering the page must not replace a manual refresh's pending identity
+	// intent or restart its already-running list query.
+	if p := s.requirementListProgress; s.requirementListProgressCurrent(p) && p.running && s.requirementsLoading && p.sprintKey == sprintKey {
+		return
+	}
 	if s.queueRequirementListIdentity(sprintKey, refresh) {
 		s.activateRequirementSprint(sprintKey)
 		return
@@ -648,7 +653,7 @@ func (s *app) requirementFailurePanel(c *ui.Context, p palette, failures []strin
 				label(c, fmt.Sprintf("已完成 %d 项查询", s.requirementsCompletedQueries), 11, p.muted)
 			}
 			if !s.requirementsLoading && iconButton(c, "requirements-retry-failures", "refresh", "重试需求查询", p).Clicked() {
-				s.requestRequirements(s.requirementsSelectedSprintKey, true)
+				s.refreshRequirementListWithProgress(s.requirementsSelectedSprintKey)
 			}
 		})
 		for _, failure := range failures {
@@ -684,8 +689,14 @@ func (s *app) requirementList(c *ui.Context, p palette, focused bool) {
 					}
 				}
 			})
-			if iconButtonDisabled(c, "refresh-requirements", "refresh", "刷新当前 Sprint", p, s.requirementsLoading || s.requirementsSelectedSprintKey == "").Clicked() {
-				s.requestRequirements(s.requirementsSelectedSprintKey, true)
+			refreshLabel := "刷新当前 Sprint"
+			progress := s.requirementListProgress
+			viewProgress := s.requirementListProgressCurrent(progress) && progress.running
+			if viewProgress {
+				refreshLabel = "查看刷新进度"
+			}
+			if iconButtonDisabled(c, "refresh-requirements", "refresh", refreshLabel, p, (s.requirementsLoading && !viewProgress) || s.requirementsSelectedSprintKey == "").Clicked() {
+				s.refreshRequirementListWithProgress(s.requirementsSelectedSprintKey)
 			}
 		})
 		if s.requirementsLoadError != "" {

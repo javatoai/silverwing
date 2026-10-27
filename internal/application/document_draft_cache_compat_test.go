@@ -36,7 +36,7 @@ func TestMarkdownDraftCacheLegacyEmptyReadOnlyPreservesCache(t *testing.T) {
 		t.Fatalf("Markdown was not the readonly disk source: %#v", content)
 	}
 	action.Text = "must never replace the disk or the legacy cache"
-	action.Payload = map[string]any{"expectedHash": content.Hash, "hasUtf8Bom": true, "newline": "\r\n", "draftTaskPath": taskPath, "draftMaterialsRoot": root}
+	action.Payload = map[string]any{"expectedHash": content.Hash, "hasUtf8Bom": true, "newline": "\r\n", "draftTaskPath": taskPath, "draftMaterialsRoot": visibleMaterialsRoot(root)}
 	for _, kind := range []string{"document.save", "document.draft", "document.draft-discard"} {
 		action.Kind = kind
 		action.Payload["overwrite"] = true

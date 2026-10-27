@@ -90,8 +90,6 @@ func setCLIConfiguredPath(config *domain.AppConfig, tool, path string) {
 		config.GitExecutablePath = &path
 	case "meegle":
 		config.MeegleExecutablePath = &path
-	case "lark":
-		config.LarkExecutablePath = &path
 	case "codex":
 		config.CodexExecutablePath = &path
 	case "genbu":
@@ -106,8 +104,6 @@ func cliConfiguredPath(cfg domain.AppConfig, tool string) *string {
 		return cfg.GitExecutablePath
 	case "meegle":
 		return cfg.MeegleExecutablePath
-	case "lark":
-		return cfg.LarkExecutablePath
 	case "codex":
 		return cfg.CodexExecutablePath
 	case "genbu":
@@ -123,8 +119,6 @@ func cliProxyTarget(tool string) (domain.CommandProxyTarget, bool) {
 		return domain.ProxyTargetGit, true
 	case "meegle":
 		return domain.ProxyTargetMeegle, true
-	case "lark":
-		return domain.ProxyTargetLark, true
 	case "genbu":
 		return domain.ProxyTargetGenbu, true
 	case "codex":
@@ -151,20 +145,11 @@ func cliEnvironmentWithRunner(ctx context.Context, runner executable.Runner, too
 		resolvedTool = executable.ToolGit
 	case "genbu":
 		resolvedTool = executable.ToolGenbu
-	case "lark":
-		resolvedTool = executable.ToolLark
 	case "meegle":
 		resolvedTool = executable.ToolMeegle
 	default:
 		return nil
 	}
 	environment := executable.NewResolver(runner).Environment(ctx, resolvedTool, command)
-	if tool == "lark" {
-		if environment == nil {
-			environment = map[string]string{}
-		}
-		environment["LARKSUITE_CLI_NO_UPDATE_NOTIFIER"] = "1"
-		environment["LARKSUITE_CLI_NO_SKILLS_NOTIFIER"] = "1"
-	}
 	return environment
 }

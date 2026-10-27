@@ -46,7 +46,9 @@ func taskMenuFixture(t *testing.T) (*app, *taskMenuBackend) {
 	s.backend = b
 	root := t.TempDir()
 	s.snapshot.Home = root
-	config, err := json.Marshal(domain.DefaultAppConfig())
+	defaults := domain.DefaultAppConfig()
+	defaults.DefaultWorkspaceToolIDs = []string{"codex"}
+	config, err := json.Marshal(defaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +77,7 @@ func TestTaskMenuMigratesActionsAndKeepsTarget(t *testing.T) {
 			s, backend := taskMenuFixture(t)
 			if strings.Contains(action, "关联任务资料") || action == "配置任务资料" {
 				s.tasks[1].materialsPath, s.tasks[1].materialsStatus = "", ""
-				s.configJSON = `{"requirementMaterialsRoot":"D:/materials","requirementMaterialsSubdirectory":"docs"}`
+				s.configJSON = `{"requirementMaterialsRoot":"D:/materials","requirementMaterialsSubdirectory":"docs","defaultWorkspaceToolIds":["codex"]}`
 				if action == "重试关联任务资料" {
 					s.tasks[1].materialsStatus = "FAILED"
 				}
@@ -151,7 +153,7 @@ func TestTaskMenuOrderAndMaterialsVariants(t *testing.T) {
 				s.tasks[index].requirementURL = "https://project.feishu.cn/demo/userstory/detail/123"
 				materials = []string{"配置任务资料"}
 				if mode != "missing-config" {
-					s.configJSON = `{"requirementMaterialsRoot":"D:/materials","requirementMaterialsSubdirectory":"docs"}`
+					s.configJSON = `{"requirementMaterialsRoot":"D:/materials","requirementMaterialsSubdirectory":"docs","defaultWorkspaceToolIds":["codex"]}`
 					materials = []string{"关联任务资料"}
 					if mode == "failed" {
 						s.tasks[index].materialsStatus = "FAILED"

@@ -141,6 +141,13 @@ func (s *app) bindMarkdownBitmapViewerOwner(viewer *markdownBitmapViewerState, o
 	if !owner.commentReading {
 		return true
 	}
+	if isCommentDraftMarkdownOwner(owner) {
+		if s.commentComposers == nil {
+			return false
+		}
+		viewer.composer = s.commentComposers.active
+		return s.commentComposerImageCurrent(viewer)
+	}
 	reader, readerKey, epoch, taskID, itemKey, ok := s.activeMarkdownCommentReader(owner)
 	if !ok {
 		return !isRequirementCommentMarkdownOwner(owner)
@@ -170,6 +177,9 @@ func requirementReaderForCommentMarkdownOwner(s *app, owner *markdownEditorState
 func (s *app) markdownBitmapViewerCommentContextCurrent(viewer *markdownBitmapViewerState) bool {
 	if viewer == nil || viewer.owner == nil || !viewer.owner.commentReading {
 		return viewer != nil && viewer.owner != nil
+	}
+	if viewer.composer != nil || isCommentDraftMarkdownOwner(viewer.owner) {
+		return s.commentComposerImageCurrent(viewer)
 	}
 	reader := viewer.reader
 	if reader == nil {

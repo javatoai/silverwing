@@ -51,7 +51,6 @@ const (
 	ProxyTargetGit              CommandProxyTarget = "GIT"
 	ProxyTargetWorkspaceCommand CommandProxyTarget = "WORKSPACE_COMMAND"
 	ProxyTargetMeegle           CommandProxyTarget = "MEEGLE"
-	ProxyTargetLark             CommandProxyTarget = "LARK"
 	ProxyTargetGenbu            CommandProxyTarget = "GENBU"
 )
 
@@ -61,6 +60,11 @@ func NormalizeCommandProxyTargets(values []CommandProxyTarget) []CommandProxyTar
 	seen := make(map[CommandProxyTarget]struct{}, len(values))
 	out := make([]CommandProxyTarget, 0, len(values))
 	for _, value := range values {
+		// Lark cloud-document synchronization has been retired. Ignore the old
+		// routing entry while loading otherwise valid configurations.
+		if value == CommandProxyTarget("LARK") {
+			continue
+		}
 		if _, exists := seen[value]; exists {
 			continue
 		}
@@ -230,10 +234,9 @@ type AppConfig struct {
 	GitExecutablePath                      *string                        `json:"gitExecutablePath"`
 	GenbuExecutablePath                    *string                        `json:"genbuExecutablePath"`
 	GenbuExecutableAutoDetected            bool                           `json:"genbuExecutableAutoDetected"`
-	LarkExecutablePath                     *string                        `json:"larkExecutablePath"`
 	RequirementMaterialsRoot               *string                        `json:"requirementMaterialsRoot"`
 	RequirementMaterialsSubdirectory       *string                        `json:"requirementMaterialsSubdirectory"`
-	RequirementMaterialsFeishuTarget       *string                        `json:"requirementMaterialsFeishuTarget"`
+	MaterialsGitSync                       *MaterialsGitSyncSettings      `json:"materialsGitSync"`
 	CodexPluginMarketplaceSources          []CodexPluginMarketplaceSource `json:"codexPluginMarketplaceSources"`
 	SkillSources                           []SkillSource                  `json:"skillSources"`
 	AIRequirementNamingEnabled             bool                           `json:"aiRequirementNamingEnabled"`
@@ -475,7 +478,7 @@ func DefaultCommandProxyTargets(endpoint *string) []CommandProxyTarget {
 
 func DefaultAppConfig() AppConfig {
 	endpoint := DefaultCommandProxyURL
-	return AppConfig{SchemaVersion: CurrentAppConfigSchemaVersion, DefaultBranchPrefix: "", Repositories: []RepositoryConfig{}, Groups: []GroupConfig{{ID: DefaultGroupID, Name: DefaultGroupName, TagEnabled: true, Services: []GroupServiceConfig{}}}, Theme: ThemeSystem, ToolVisibility: ToolVisibilitySettings{JSON: true, DateTime: true, TextDiff: true, KillPort: false}, SidebarVisibility: SidebarVisibilitySettings{Requirements: true, Tools: true, Production: true, Services: true}, TagEnabled: true, TagHistoryMaxGroups: DefaultTagHistoryMaxGroups, DevelopmentTools: []DevelopmentToolConfig{}, DefaultDevelopmentTool: DevelopmentToolIntelliJIdea, DefaultWorkspaceToolIDs: []string{}, BlockedGitWriteBranches: []string{"master", "main"}, MeegleProjects: []MeegleProjectConfig{}, CommandProxyURL: &endpoint, CommandProxyTargets: DefaultCommandProxyTargets(&endpoint), CodexPluginMarketplaceSources: []CodexPluginMarketplaceSource{}, SkillSources: []SkillSource{}, AIRequirementNamingEnabled: true, AIRequirementNamingPrewarmEnabled: true, AIRequirementNamingModel: DefaultAIRequirementNamingModel}
+	return AppConfig{SchemaVersion: CurrentAppConfigSchemaVersion, DefaultBranchPrefix: "", Repositories: []RepositoryConfig{}, Groups: []GroupConfig{{ID: DefaultGroupID, Name: DefaultGroupName, TagEnabled: true, Services: []GroupServiceConfig{}}}, Theme: ThemeSystem, ToolVisibility: ToolVisibilitySettings{JSON: true, DateTime: true, TextDiff: true, KillPort: false}, SidebarVisibility: SidebarVisibilitySettings{Requirements: true, Tools: true, Production: true, Services: true}, TagEnabled: true, TagHistoryMaxGroups: DefaultTagHistoryMaxGroups, DevelopmentTools: []DevelopmentToolConfig{}, DefaultDevelopmentTool: DevelopmentToolIntelliJIdea, DefaultWorkspaceToolIDs: []string{"codex", "cursor"}, BlockedGitWriteBranches: []string{"master", "main"}, MeegleProjects: []MeegleProjectConfig{}, CommandProxyURL: &endpoint, CommandProxyTargets: DefaultCommandProxyTargets(&endpoint), CodexPluginMarketplaceSources: []CodexPluginMarketplaceSource{}, SkillSources: []SkillSource{}, AIRequirementNamingEnabled: true, AIRequirementNamingPrewarmEnabled: true, AIRequirementNamingModel: DefaultAIRequirementNamingModel}
 }
 
 const DefaultAIRequirementNamingModel = "gpt-6-luna"

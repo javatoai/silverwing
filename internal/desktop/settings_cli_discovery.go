@@ -21,13 +21,14 @@ func (s *app) settingsCLIPathDiscoveryHint(c *ui.Context, p palette, tool string
 		label(c, "未检测到可用命令，请手动填写可执行文件路径，修改后自动保存。", 10, p.amber).Wrap()
 		return
 	}
-	label(c, "未配置时自动检测；也可手动填写可执行文件路径。", 10, p.muted).Wrap()
+	// The card's help already explains automatic detection and manual paths.
+	// Keep only the actionable detection failure inline.
 }
 
 // Discovery changes only an absent persisted path. Keep unrelated configuration
 // and any text the user entered while the status worker was reading.
 func (s *app) applySettingsCLIDiscoverySnapshot(tool, previousConfig string, snapshot application.Snapshot) {
-	key := map[string]string{"git": "gitExecutablePath", "codex": "codexExecutablePath", "genbu": "genbuExecutablePath", "meegle": "meegleExecutablePath", "lark": "larkExecutablePath"}[tool]
+	key := map[string]string{"git": "gitExecutablePath", "codex": "codexExecutablePath", "genbu": "genbuExecutablePath", "meegle": "meegleExecutablePath"}[tool]
 	if key == "" || snapshot.Home != s.snapshot.Home || snapshot.ConfigJSON == "" {
 		return
 	}

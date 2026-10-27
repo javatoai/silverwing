@@ -15,7 +15,7 @@ import (
 // refreshTasks is the explicit Source refresh: validate catalog repositories,
 // update their metadata, then regenerate task Agent documents before reloading.
 // Ordinary Snapshot reads do not perform this work.
-func (a *App) refreshTasks(ctx context.Context) (ActionResult, error) {
+func (a *App) refreshTasks(ctx context.Context) (actionResult ActionResult, actionErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -45,6 +45,7 @@ func (a *App) refreshTasks(ctx context.Context) (ActionResult, error) {
 			return ActionResult{}, err
 		}
 		service := a.taskService(refreshed)
+		defer func() { appendMaterialsCatalogWarnings(&actionResult, service.Documents) }()
 		for _, entry := range scan.Current {
 			if err := ctx.Err(); err != nil {
 				return ActionResult{}, err

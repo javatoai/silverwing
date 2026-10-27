@@ -1,5 +1,5 @@
 // Package integrations connects Silverwing's typed application API to the
-// configured Meegle and Lark CLIs. It does not perform remote work at startup.
+// configured Meegle CLI. It does not perform remote work at startup.
 package integrations
 
 import (
@@ -37,8 +37,6 @@ type Service struct {
 	naming                    *requirementNamingCoordinator
 	requirementDocuments      *requirementDocumentCoordinator
 	requirementReads          requirementReadOrder
-	active                    map[string]context.CancelFunc
-	lastSync                  any
 }
 
 func NewService(paths storage.Paths, config *storage.ConfigStore, runner *process.Runner) *Service {
@@ -50,8 +48,7 @@ func NewService(paths storage.Paths, config *storage.ConfigStore, runner *proces
 	}
 	return &Service{
 		paths: paths, config: config, runner: runner,
-		prep:   documents.NewPreparationService(paths, runner),
-		active: map[string]context.CancelFunc{},
+		prep: documents.NewPreparationService(paths, runner),
 	}
 }
 
@@ -82,30 +79,18 @@ func (s *Service) Execute(ctx context.Context, kind string, payload map[string]a
 		return s.readRequirementComments(ctx, config, payload)
 	case "requirements.comment":
 		return s.writeRequirementComment(ctx, config, payload)
+	case "requirements.comment-draft":
+		return s.requirementCommentDraft(ctx, config, payload)
+	case "requirements.comments/create":
+		return s.PublishRequirementComment(ctx, payload, nil)
+	case "requirements.comments/update":
+		return s.UpdateRequirementComment(ctx, payload, nil)
+	case "requirements.comments/check":
+		return s.checkRequirementCommentPublish(ctx, config, payload)
 	case "requirements.attachment":
 		return s.downloadRequirementAttachment(ctx, config, payload)
 	case "requirements.ai-name":
 		return s.requirementAINaming(ctx, config, payload)
-	case "materials.ensure":
-		return s.ensureMaterials(ctx, config, payload)
-	case "materials.resolve-directory":
-		return s.resolveMaterialsDirectory(ctx, config, payload)
-	case "materials.resolve-entry":
-		return s.resolveMaterialsEntry(ctx, config, payload)
-	case "materials.plan":
-		return s.planMaterials(ctx, config, payload)
-	case "materials.confirm":
-		return s.confirmMaterials(ctx, config, payload)
-	case "materials.sync":
-		return s.syncMaterials(ctx, config, payload)
-	case "materials.status":
-		return s.materialsStatus(payload)
-	case "materials.cancel":
-		return s.cancelMaterials(payload)
-	case "materials.recover":
-		return s.recoverMaterials(ctx, config, payload)
-	case "materials.comment":
-		return s.commentMaterials(ctx, config, payload)
 	default:
 		return nil, fmt.Errorf("未知 integration action：%s", kind)
 	}

@@ -14,7 +14,7 @@ func (s *app) settingsCLIToolsMenu(c *ui.Context, p palette, tool, title string)
 		status := s.settingsCLIStatus[tool]
 		command := firstNonEmpty(mapString(status, "command"), mapString(status, "commandPath"))
 		s.settingsCLICommandMenuItems(c, menu, tool, command)
-		if (tool == "meegle" || tool == "lark") && (dataBool(status, "authenticated") || mapString(status, "authenticationState") == "AUTHENTICATED") {
+		if (tool == "meegle") && (dataBool(status, "authenticated") || mapString(status, "authenticationState") == "AUTHENTICATED") {
 			pending := false
 			if s.cliJobs != nil {
 				request := s.cliJobs.requests["auth:"+tool]

@@ -37,7 +37,7 @@ func (s *TaskApplicationService) PreviewAgentInstructions(
 		directoryName = "任务名称"
 	}
 	featureBranch := strings.TrimSpace(request.FeatureBranch)
-	if featureBranch == "" {
+	if featureBranch == "" && (len(request.ServiceIDs) > 0 || len(request.ServiceSelections) > 0) {
 		featureBranch = "feature/example"
 	}
 
@@ -57,6 +57,7 @@ func (s *TaskApplicationService) PreviewAgentInstructions(
 	for _, selection := range request.ServiceSelections {
 		// Kotlin's associateBy keeps the last selection for a duplicate key.
 		selectionsByService[selection.ServiceID] = selection
+		selectedServices[selection.ServiceID] = true
 	}
 	repositories := make(map[string]domain.RepositoryConfig, len(config.Repositories))
 	for _, repository := range config.Repositories {

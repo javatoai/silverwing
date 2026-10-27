@@ -16,16 +16,19 @@ import (
 func TestTaskBranchInfoCopyOptions(t *testing.T) {
 	fixture := task{requirementURL: " https://fixture.invalid/requirement ", workspaces: []application.Workspace{{Name: "api", Branch: "feature/api"}, {Name: "job", Branch: "feature/job"}}}
 	options := taskBranchInfoCopyOptions(fixture)
-	wantKeys := []string{"services", "branches", "services-link", "branches-link"}
-	for index, want := range []string{"api\njob", "api：feature/api\njob：feature/job", "需求链接：https://fixture.invalid/requirement\n\napi\njob", "需求链接：https://fixture.invalid/requirement\n\napi：feature/api\njob：feature/job"} {
-		if options[index].Key != wantKeys[index] || options[index].Text != want || options[index].Disabled {
+	wantKeys := []string{"services", "branches"}
+	if len(options) != len(wantKeys) {
+		t.Fatalf("removed link cards remain: %+v", options)
+	}
+	for index, want := range []string{"api\njob", "api：feature/api\njob：feature/job"} {
+		if options[index].Key != wantKeys[index] || options[index].Text != want {
 			t.Fatalf("option %d: %+v", index, options[index])
 		}
 	}
 	fixture.requirementURL = "  "
 	options = taskBranchInfoCopyOptions(fixture)
-	if options[0].Disabled || options[1].Disabled || !options[2].Disabled || !options[3].Disabled {
-		t.Fatalf("blank link availability: %+v", options)
+	if len(options) != 2 || options[0].Text != "api\njob" || options[1].Text != "api：feature/api\njob：feature/job" {
+		t.Fatalf("blank link changed the remaining cards: %+v", options)
 	}
 }
 
@@ -45,7 +48,7 @@ func TestTaskBranchInfoMatrixPreviewAndCopy(t *testing.T) {
 				if err := tester.Click("打开分支信息"); err != nil {
 					t.Fatal(err)
 				}
-				var cells [4]ui.Rect
+				var cells [2]ui.Rect
 				options := taskBranchInfoCopyOptions(fixture)
 				for index, option := range options {
 					cell, found := tester.Find("分支信息区域 · " + option.Key)
@@ -65,13 +68,13 @@ func TestTaskBranchInfoMatrixPreviewAndCopy(t *testing.T) {
 						t.Fatalf("%s copy changed/truncated the shown content", option.Key)
 					}
 				}
-				for index, cell := range cells {
-					if math.Abs(float64(cell.W-cells[0].W)) > .5 || math.Abs(float64(cell.H-cells[0].H)) > .5 || index < 2 && math.Abs(float64(cell.Y-cells[0].Y)) > .5 || index >= 2 && math.Abs(float64(cell.Y-cells[2].Y)) > .5 {
-						t.Fatalf("matrix must use equal columns and rows: %+v", cells)
+				for _, cell := range cells {
+					if math.Abs(float64(cell.W-cells[0].W)) > .5 || math.Abs(float64(cell.H-cells[0].H)) > .5 || math.Abs(float64(cell.Y-cells[0].Y)) > .5 {
+						t.Fatalf("cards must use equal columns in one row: %+v", cells)
 					}
 				}
-				if cells[1].X <= cells[0].X+cells[0].W || cells[2].Y <= cells[0].Y+cells[0].H || cells[3].X != cells[1].X || tester.HasText("复制内容") {
-					t.Fatalf("four combinations are not arranged as 2×2: %+v", cells)
+				if cells[1].X <= cells[0].X+cells[0].W || tester.HasText("服务名称 · 含需求链接") || tester.HasText("服务与分支 · 含需求链接") || tester.HasText("复制内容") {
+					t.Fatalf("remaining cards are not arranged in one row, or removed cards remain: %+v", cells)
 				}
 				if directory := os.Getenv("SILVERWING_TAG_EVIDENCE_DIR"); directory != "" {
 					file, err := os.Create(filepath.Join(directory, fmt.Sprintf("branch-info-%d-dark-%t.png", width, dark)))
@@ -103,9 +106,6 @@ func TestTaskBranchInfoMatrixEmptyData(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := option.Text
-			if option.Disabled {
-				want = "unchanged"
-			}
 			if tester.Clipboard() != want || strings.Contains(option.Text, "未命名") || strings.Contains(option.Text, "unknown") {
 				t.Fatal("missing URL/branch/services changed the existing copy contract")
 			}

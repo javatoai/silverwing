@@ -163,7 +163,6 @@ func configImportChanges(before, after domain.AppConfig) []string {
 	add(value(before.TaskRoot) != value(after.TaskRoot), fmt.Sprintf("任务路径：%s → %s", value(before.TaskRoot), value(after.TaskRoot)))
 	add(value(before.RequirementMaterialsRoot) != value(after.RequirementMaterialsRoot), fmt.Sprintf("任务资料根路径：%s → %s", value(before.RequirementMaterialsRoot), value(after.RequirementMaterialsRoot)))
 	add(value(before.RequirementMaterialsSubdirectory) != value(after.RequirementMaterialsSubdirectory), fmt.Sprintf("任务资料子目录：%s → %s", value(before.RequirementMaterialsSubdirectory), value(after.RequirementMaterialsSubdirectory)))
-	add(value(before.RequirementMaterialsFeishuTarget) != value(after.RequirementMaterialsFeishuTarget), fmt.Sprintf("飞书同步目标：%s → %s", value(before.RequirementMaterialsFeishuTarget), value(after.RequirementMaterialsFeishuTarget)))
 	add(len(before.Groups) != len(after.Groups), fmt.Sprintf("任务组：%d → %d", len(before.Groups), len(after.Groups)))
 	add(len(before.Repositories) != len(after.Repositories), fmt.Sprintf("仓库：%d → %d", len(before.Repositories), len(after.Repositories)))
 	add(!reflect.DeepEqual(before.DevelopmentTools, after.DevelopmentTools), "开发工具配置将更新")

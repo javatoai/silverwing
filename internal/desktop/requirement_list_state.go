@@ -20,6 +20,8 @@ type requirementListJob struct {
 	selectedKey        string
 	sprintKey          string
 	sameSprint         bool
+	progress           *requirementListProgressState
+	onProgress         func(application.RequirementListProgress)
 }
 
 // Window-thread-owned fields track the current request and identity. Only the

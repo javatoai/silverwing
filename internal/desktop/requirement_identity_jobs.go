@@ -71,6 +71,9 @@ func (s *app) queueRequirementListIdentity(sprintKey string, refresh bool) bool 
 	s.retireRequirementListRequest(list)
 	list.generation++
 	state.pending = &requirementIdentityListRequest{sprintKey: sprintKey, refresh: refresh}
+	if p := s.requirementListProgress; refresh && s.requirementListProgressCurrent(p) && p.running {
+		state.pending.progress = p
+	}
 	s.requirementsRequested, s.requirementsLoading = true, true
 	s.requirementsLoadError = ""
 	s.startRequirementIdentityProbe(state)
@@ -85,6 +88,9 @@ func (s *app) startRequirementIdentityProbe(state *requirementIdentityJobState) 
 	if !ok || s.win == nil || s.win.IsDestroyed() {
 		s.requirementsLoading = false
 		s.requirementsLoadError = "需求身份读取后端或窗口不可用，请重试。"
+		if state.pending != nil {
+			s.failRequirementListProgress(state.pending.progress, []string{s.requirementsLoadError})
+		}
 		return
 	}
 	state.mu.Lock()
@@ -92,6 +98,9 @@ func (s *app) startRequirementIdentityProbe(state *requirementIdentityJobState) 
 	state.mu.Unlock()
 	if closed {
 		s.requirementsLoading = false
+		if state.pending != nil {
+			s.failRequirementListProgress(state.pending.progress, []string{"需求身份读取已关闭。"})
+		}
 		return
 	}
 	state.generation++
@@ -165,6 +174,7 @@ func (s *app) finishRequirementIdentityProbe(state *requirementIdentityJobState,
 	if result.State != application.RequirementIdentityAuthenticated && result.State != application.RequirementIdentityLoggedOut && pending.refresh {
 		s.requirementsRequested, s.requirementsLoading, s.requirementsLoaded = true, false, true
 		s.requirementsLoadError = "无法确认当前 Meegle 账户，请重试；本地需求已保留。"
+		s.failRequirementListProgress(pending.progress, []string{s.requirementsLoadError})
 		return
 	}
 	if state.confirmed && state.state == application.RequirementIdentityLoggedOut {

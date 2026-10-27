@@ -9,7 +9,7 @@ import (
 )
 
 func (s *app) settingsCodexPlugins(c *ui.Context, p palette) {
-	settingsCard(c, p, "", "", func() {
+	settingsHelpCard(c, p, "", "", func() {
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 			if action(c, "codex-marketplace-add", "plus", "添加来源", p, false) {
 				s.openForm("codex.extensions/marketplaces/add-source", "添加 Codex Marketplace", "", "", "", "", formField{key: "name", label: "显示名称"}, formField{key: "repositoryUrl", label: "Git 仓库地址"}, formField{key: "ref", label: "分支或标签（可留空）"})
@@ -23,7 +23,7 @@ func (s *app) settingsCodexPlugins(c *ui.Context, p palette) {
 		})
 		sources := s.settingsMarketplaces
 		if len(sources) == 0 {
-			settingsMuted(c, p, "还没有插件来源。仓库中需包含 Codex Marketplace 清单。")
+			settingsHelpLabel(c, p, "还没有插件来源。", "仓库中需包含 Codex Marketplace 清单。", 11, 400)
 		}
 		for _, wrapper := range sources {
 			source := mapData(wrapper["source"])
@@ -34,7 +34,6 @@ func (s *app) settingsCodexPlugins(c *ui.Context, p palette) {
 			ui.Column(c).FillWidth().Padding(12).Gap(8).Background(p.soft).Radius(10).Children(func() {
 				ui.Row(c).Gap(8).Children(func() {
 					ui.Column(c).Grow(1).Gap(3).Children(func() {
-						label(c, name, 12, p.text).FontWeight(600)
 						statusSummary, statusColor := "目录未读取", p.muted
 						if mapString(status, "error") != "" {
 							statusSummary, statusColor = "目录读取失败", p.amber
@@ -44,8 +43,9 @@ func (s *app) settingsCodexPlugins(c *ui.Context, p palette) {
 								statusSummary = marketplaceName + " · " + fmt.Sprintf("%d 个插件", len(plugins))
 							}
 						}
-						label(c, statusSummary, 10, statusColor).Wrap()
+						settingsHelpLabel(c, p, name, settingsHelpText(statusSummary, "刷新来源后显示插件目录。"), 12, 600)
 						if errText := mapString(status, "error"); errText != "" {
+							label(c, statusSummary, 10, statusColor).Wrap()
 							label(c, "读取失败："+errText, 10, p.amber).LineHeight(1.4).Wrap()
 						}
 						label(c, mapString(source, "repositoryUrl"), 10, p.muted).SingleLine()
@@ -63,7 +63,7 @@ func (s *app) settingsCodexPlugins(c *ui.Context, p palette) {
 					})
 				})
 				if len(plugins) == 0 {
-					settingsMuted(c, p, "刷新来源后显示插件目录。")
+					settingsMuted(c, p, "暂无插件。")
 				}
 				for pluginIndex, plugin := range plugins {
 					pluginName := mapString(plugin, "name")
@@ -72,9 +72,8 @@ func (s *app) settingsCodexPlugins(c *ui.Context, p palette) {
 					managed := ownership == "MANAGED"
 					ui.Row(c).Padding(8, 10).Gap(8).Background(p.surface).Radius(8).Children(func() {
 						ui.Column(c).Grow(1).Gap(3).Children(func() {
-							label(c, pluginName, 11, p.text).FontWeight(500)
+							settingsHelpLabel(c, p, pluginName, mapString(plugin, "description"), 11, 500)
 							label(c, extensionOwnershipLabel(ownership), 10, p.muted)
-							label(c, mapString(plugin, "description"), 10, p.muted).LineHeight(1.35)
 						})
 						if action(c, fmt.Sprintf("codex-plugin-preview-%s-%d", sourceID, pluginIndex), "file", "预览", p, false) {
 							s.act("codex.extensions/plugin/preview", "", "", "", "", "", map[string]any{"sourceId": sourceID, "name": pluginName})
@@ -129,7 +128,7 @@ func (s *app) settingsCodexMCP(c *ui.Context, p palette) {
 		task := s.currentTask()
 		scopeKey += "\x00" + strings.Join([]string{task.id, task.createdAt, task.path}, "\x00")
 	}
-	settingsCard(c, p, "", "", func() {
+	settingsHelpCard(c, p, "", "", func() {
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Disabled(pending).Children(func() {
 			for _, scope := range []struct {
 				task  bool

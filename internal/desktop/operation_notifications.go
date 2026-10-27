@@ -32,6 +32,7 @@ func (s *app) renderOperationNotifications(c *ui.Context) {
 	}
 	s.operationNotifications.progress(c, "operation-progress", progress, s.operationKind, action, cancel)
 	s.renderRequirementRefreshProgressNotification(c)
+	s.renderRequirementListProgressNotification(c)
 	s.renderProductionProgressNotifications(c)
 	if state := s.workspaceGit; state != nil && s.workspaceGitObservationCurrent(state.observation) {
 		empty := ""

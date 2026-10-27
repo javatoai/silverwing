@@ -159,13 +159,31 @@ func (s *app) renderMarkdownImage(c *ui.Context, p palette, state *markdownEdito
 			width = int(maxWidth)
 		}
 		ui.Column(c).Shrink(0).Gap(3).Children(func() {
-			ui.Image(c.Key(markdownEditorControlKey(state, fmt.Sprintf("markdown-image-preview-%d-%d", part.ID, node.Range.Start))), image.bitmap).Width(float32(width)).MaxWidthPercent(100).AspectRatio(float32(width) / float32(height)).Fit(ui.Contain).Label("Markdown 图片：" + alt).OnClick(func() {
+			previewKey := markdownEditorControlKey(state, fmt.Sprintf("markdown-image-preview-%d-%d", part.ID, node.Range.Start))
+			open := func() {
+				if isCommentDraftMarkdownOwner(state) && s.commentComposers != nil && s.commentComposers.active != nil && s.commentComposers.active.markdown == state {
+					s.commentComposers.active.imageFocusKey = previewKey
+				}
 				if state.commentReading && image.sourcePath != "" {
 					s.openMarkdownLocalImageViewer(state, image.sourcePath)
 					return
 				}
 				s.openMarkdownBitmapViewer(state, image.bitmap)
-			})
+			}
+			preview := ui.Image(c.Key(previewKey), image.bitmap).Width(float32(width)).MaxWidthPercent(100).AspectRatio(float32(width) / float32(height)).Fit(ui.Contain).Label("Markdown 图片：" + alt).OnClick(open)
+			if isCommentDraftMarkdownOwner(state) {
+				preview.Focusable().OnShortcut(0, ui.KeyEnter, open)
+				if s.commentComposers != nil && s.commentComposers.active != nil {
+					composer := s.commentComposers.active
+					if composer.markdown == state && composer.restoreImageFocus && composer.imageFocusKey == previewKey && s.markdownBitmapViewer == nil && s.confirmationDialog == nil {
+						preview.Focus()
+						composer.restoreImageFocus = false
+					}
+				}
+				if preview.Focused() {
+					preview.Border(2, p.blue)
+				}
+			}
 			if alt != "图片" {
 				label(c, alt, 10, p.muted).Wrap()
 			}

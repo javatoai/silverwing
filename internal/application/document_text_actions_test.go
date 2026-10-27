@@ -17,18 +17,23 @@ func materialTextApplicationFixture(t *testing.T) (*App, string, string) {
 	t.Helper()
 	paths := storage.NewPaths(t.TempDir())
 	paths.Tasks = filepath.Join(paths.Home, "isolated-tasks")
-	materials := filepath.Join(paths.Home, "isolated-materials")
+	materialsBase := filepath.Join(paths.Home, "isolated-materials")
+	materials := filepath.Join(materialsBase, "2026", "123-text", "owned")
 	if err := os.MkdirAll(materials, 0700); err != nil {
 		t.Fatal(err)
 	}
 	a := &App{Paths: paths, Config: storage.NewConfigStore(paths), Manifests: storage.NewManifestStore(), Documents: documents.NewService(paths.Cache)}
 	config := domain.DefaultAppConfig()
 	config.TaskRoot = &paths.Tasks
+	config.RequirementMaterialsRoot = &materialsBase
+	subdirectory := "owned"
+	config.RequirementMaterialsSubdirectory = &subdirectory
 	if err := a.Config.Save(config); err != nil {
 		t.Fatal(err)
 	}
 	manifest := taskIdentityFixture(t, a, paths.Tasks, "task", "task")
 	manifest.RequirementMaterials.WriteRoot = &materials
+	manifest.RequirementMaterials.Status = domain.MaterialsReady
 	if err := a.Manifests.Save(filepath.Join(paths.Tasks, "task"), manifest); err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +61,7 @@ func TestMaterialTextApplicationReadDraftSaveAndIdentity(t *testing.T) {
 			}
 			action.Kind = "document.draft"
 			action.Text = strings.Replace(content.Text, "1", "2", 1)
-			action.Payload = map[string]any{"expectedHash": content.Hash, "hasUtf8Bom": true, "draftTaskPath": taskPath, "draftMaterialsRoot": root}
+			action.Payload = map[string]any{"expectedHash": content.Hash, "hasUtf8Bom": true, "draftTaskPath": taskPath, "draftMaterialsRoot": visibleMaterialsRoot(root)}
 			if _, err := a.documentAction(ctx, action); err != nil {
 				t.Fatal(err)
 			}

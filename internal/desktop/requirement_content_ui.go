@@ -26,6 +26,7 @@ type requirementReaderState struct {
 	contextMenu            func(*ui.Context, *ui.Menu)
 	bodyLoading            bool
 	commentsLoading        bool
+	commentsDirty          bool
 	bodyError              string
 	commentsError          string
 	showingComments        bool
@@ -156,8 +157,11 @@ func (s *app) requestRequirementContent(reader *requirementReaderState, comments
 	if reader == nil {
 		return
 	}
-	if !force && (comments && reader.comments != nil || !comments && reader.body != nil && !reader.refreshAssetIndex) {
+	if !force && (comments && reader.comments != nil && !reader.commentsDirty || !comments && reader.body != nil && !reader.refreshAssetIndex) {
 		return
+	}
+	if comments && reader.commentsDirty {
+		force = true
 	}
 	s.startRequirementContentRead(reader, comments, force)
 }
@@ -312,6 +316,7 @@ func (s *app) updateRequirementReaderComments(reader *requirementReaderState, co
 	s.retireRequirementCommentImages(reader)
 	comments.CommentResources = append([]application.RequirementCommentResource(nil), comments.CommentResources...)
 	reader.comments, reader.commentsLoading, reader.commentsError = &comments, false, comments.RefreshError
+	reader.commentsDirty = comments.RefreshError != ""
 	content := requirementCommentsMarkdown(comments.Comments)
 	if reader.commentsMarkdown == nil {
 		reader.commentsMarkdown = newReadonlyMarkdownState("comments:"+requirementReaderKey(reader.taskID, reader.url), content, nil)
@@ -463,7 +468,7 @@ func (s *app) renderRequirementContent(c *ui.Context, p palette, taskID, link st
 	if reader.body == nil && !reader.bodyLoading && reader.bodyError == "" && !s.requirementRefreshing(link) {
 		s.requestRequirementContent(reader, false, false)
 	}
-	if reader.comments == nil && !reader.commentsLoading && reader.commentsError == "" && !s.requirementRefreshing(link) {
+	if (reader.comments == nil || reader.commentsDirty) && !reader.commentsLoading && reader.commentsError == "" && !s.requirementRefreshing(link) {
 		s.requestRequirementContent(reader, true, false)
 	}
 	ui.Column(c.Key("requirement-content-" + requirementReaderKey(taskID, link))).FillWidth().Grow(1).MinHeight(0).Gap(8).Children(func() {

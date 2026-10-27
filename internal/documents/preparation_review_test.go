@@ -2,9 +2,11 @@ package documents
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/process"
@@ -34,7 +36,7 @@ func TestEnsureMaterialsMatchesNumericRequirementIDExactly(t *testing.T) {
 			if err != nil || result.Status != domain.MaterialsReady || result.WriteRoot == nil {
 				t.Fatalf("numeric requirement was not matched: result=%#v err=%v", result, err)
 			}
-			if *result.WriteRoot != filepath.Join(root, fixture.id+"-fixture", subdir) {
+			if *result.WriteRoot != filepath.Join(root, fmt.Sprint(time.Now().Year()), fixture.id+"-fixture", subdir) {
 				t.Fatalf("wrong requirement directory: %q", *result.WriteRoot)
 			}
 			if info, err := os.Stat(*result.WriteRoot); err != nil || !info.IsDir() {

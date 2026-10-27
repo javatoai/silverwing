@@ -101,9 +101,6 @@ func (s *WorkspaceModuleRemovalService) Remove(_ context.Context, config domain.
 		if err := s.requireTaskDirectory(config, taskPath, manifest); err != nil {
 			return err
 		}
-		if len(manifest.Services) <= 1 {
-			return fmt.Errorf("不能删除任务的最后一个工作区，请使用删除任务流程")
-		}
 		ws, ok := physicalWorkspace(manifest, preview.WorkspacePath)
 		if !ok {
 			return fmt.Errorf("任务中不存在指定模块：%s", preview.WorkspacePath)

@@ -349,7 +349,7 @@ func (s *app) renderRequirementReadonlyMarkdownReader(c *ui.Context, p palette, 
 			if showBody {
 				s.renderRequirementMarkdownSection(c, p, reader, "body")
 			}
-			showComments := reader.comments != nil || reader.commentsError != ""
+			showComments := reader.comments != nil || reader.commentsError != "" || domain.ParseFeishuWorkItemLink(reader.url) != nil
 			if showComments {
 				ui.Column(c).FillWidth().Padding(28, 0, 14, 0).Gap(12).Label("评论分区").Children(func() {
 					ui.Divider(c)
@@ -358,6 +358,10 @@ func (s *app) renderRequirementReadonlyMarkdownReader(c *ui.Context, p palette, 
 						label(c, "评论", scaleMarkdownSize(15, controller.zoom), p.text).FontWeight(600)
 						if reader.comments != nil {
 							label(c, fmt.Sprint(len(reader.comments.Comments)), scaleMarkdownSize(12, controller.zoom), p.muted)
+						}
+						ui.Spacer(c).Grow(1)
+						if requirementProgressButton(c, p, "add-requirement-comment-"+reader.url, "添加评论", false).Clicked() {
+							s.openRequirementCommentComposer(reader)
 						}
 					})
 				})
@@ -447,9 +451,19 @@ func (state *app) renderRequirementCommentList(context *ui.Context, theme palett
 			authorName := firstNonEmpty(comment.AuthorName, comment.AuthorKey, "未知用户")
 			ui.Column(context.Key(requirementReaderControlKey(reader)+"-comment-"+key)).FillWidth().MinWidth(0).Gap(12).Padding(16).Background(theme.soft).Border(1, theme.line).Radius(12).Label("评论卡片 " + key).Children(func() {
 				ui.Column(context).FillWidth().MinWidth(0).Label("评论元信息 " + key).Gap(6).Children(func() {
-					ui.Row(context).FillWidth().MinWidth(0).Wrap().Gap(8).Justify(ui.SpaceBetween).AlignItems(ui.Start).Children(func() {
+					ui.Row(context).FillWidth().MinWidth(0).Wrap().Gap(8).Justify(ui.SpaceBetween).AlignItems(ui.Center).Children(func() {
 						label(context, authorName, 13, theme.text).FontWeight(600).MinWidth(0).Wrap()
-						label(context, firstNonEmpty(comment.CreatedAt, "时间未知"), 11, theme.muted).MinWidth(0).Wrap()
+						ui.Row(context).MinWidth(0).Gap(8).AlignItems(ui.Center).Children(func() {
+							label(context, firstNonEmpty(comment.CreatedAt, "时间未知"), 11, theme.muted).MinWidth(0).Wrap()
+							if strings.TrimSpace(comment.ID) != "" {
+								menuKey := requirementReaderControlKey(reader) + "-comment-more-" + key
+								state.overflowMenu(context, theme, menuKey, "评论操作 "+comment.ID, state.backend == nil, func(menu *overflowMenuBuilder) {
+									if menu.Item("edit", "编辑").Icon("edit").Chosen() {
+										state.openRequirementCommentEditor(reader, comment.ID)
+									}
+								})
+							}
+						})
 					})
 					if parentLabel != "" {
 						label(context, parentLabel, 11, theme.muted).FillWidth().MinWidth(0).Wrap()

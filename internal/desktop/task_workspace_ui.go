@@ -139,55 +139,65 @@ func (s *app) taskDetails(c *ui.Context, p palette) {
 	ui.Column(c).FillWidth().Gap(16).Children(func() {
 		s.taskHeader(c, p)
 		failedServiceIDs := s.taskFailedServiceIDs(t)
-		ui.Row(c).Gap(8).Children(func() {
-			if s.configBool("showTaskDetailPathActionGroup", false) {
-				iconGroup(c, p, func() {
-					if iconButton(c, "task-copy-path", "copy", "复制任务路径", p).Clicked() {
-						s.copyTaskWorkspacePath(c.Services())
-					}
-					if iconButton(c, "task-terminal", "terminal", "在任务目录打开终端", p).Clicked() {
-						s.act("system.terminal", t.id, "", "", t.path, "", nil)
-					}
-					if iconButton(c, "task-folder", "folder", "打开任务目录", p).Clicked() {
-						s.act("system.open", t.id, "", "", t.path, "", map[string]any{"desktopSystemOpenDirectory": true})
-					}
-				})
-			}
-			if s.taskCanBuildAnyTag(t) {
-				iconGroup(c, p, func() {
-					if iconButton(c, "batch-tag", "tag", "批量构建 Tag", p).Clicked() {
-						s.openTagBuildBatch(t)
-					}
-				})
-			}
-			if s.configBool("showTaskDetailGitActionGroup", false) && taskHasPhysicalWorkspace(t) {
-				iconGroup(c, p, func() {
-					for _, a := range []struct{ icon, name, mode string }{{"commit", "提交全部工作区", workspaceGitModeCommit}, {"push", "推送全部工作区", workspaceGitModePush}, {"cloud", "提交并推送全部工作区", workspaceGitModeCommitAndPush}} {
-						if iconButtonDisabled(c, "task-git-"+a.icon, a.icon, a.name, p, s.busy).Clicked() {
-							s.openWorkspaceGitBatch(t, a.mode, nil)
+		showWorkspaceTools := len(t.workspaces) > 0 || len(s.taskAddableServices(t)) > 0 || len(failedServiceIDs) > 0 && !t.archived
+		if showWorkspaceTools || s.configBool("showTaskDetailPathActionGroup", false) || s.taskCanBuildAnyTag(t) {
+			ui.Row(c).Gap(8).Children(func() {
+				if s.configBool("showTaskDetailPathActionGroup", false) {
+					iconGroup(c, p, func() {
+						if iconButton(c, "task-copy-path", "copy", "复制任务路径", p).Clicked() {
+							s.copyTaskWorkspacePath(c.Services())
 						}
-					}
-				})
-			}
-			iconGroup(c, p, func() {
-				if len(s.taskAddableServices(t)) > 0 {
-					if iconButton(c, "add-service", "plus", "为任务添加服务", p).Clicked() {
-						s.openTaskAppendServices(t)
-					}
+						if iconButton(c, "task-terminal", "terminal", "在任务目录打开终端", p).Clicked() {
+							s.act("system.terminal", t.id, "", "", t.path, "", nil)
+						}
+						if iconButton(c, "task-folder", "folder", "打开任务目录", p).Clicked() {
+							s.act("system.open", t.id, "", "", t.path, "", map[string]any{"desktopSystemOpenDirectory": true})
+						}
+					})
 				}
-				if len(failedServiceIDs) > 0 && !t.archived {
-					if iconButtonDisabled(c, "retry-failed-services", "refresh", "重试全部失败服务", p, s.busy || t.archived).Clicked() {
-						s.retryFailedTaskServices(t, nil)
-					}
+				if s.taskCanBuildAnyTag(t) {
+					iconGroup(c, p, func() {
+						if iconButton(c, "batch-tag", "tag", "批量构建 Tag", p).Clicked() {
+							s.openTagBuildBatch(t)
+						}
+					})
 				}
-				if iconButton(c, "task-branches", "branch", "查看分支信息", p).Clicked() {
-					s.openTaskBranchInfo(t)
+				if s.configBool("showTaskDetailGitActionGroup", false) && taskHasPhysicalWorkspace(t) {
+					iconGroup(c, p, func() {
+						for _, a := range []struct{ icon, name, mode string }{{"commit", "提交全部工作区", workspaceGitModeCommit}, {"push", "推送全部工作区", workspaceGitModePush}, {"cloud", "提交并推送全部工作区", workspaceGitModeCommitAndPush}} {
+							if iconButtonDisabled(c, "task-git-"+a.icon, a.icon, a.name, p, s.busy).Clicked() {
+								s.openWorkspaceGitBatch(t, a.mode, nil)
+							}
+						}
+					})
 				}
-				if workspaceGitRefreshButton(c, p, s.workspaceGitStatusBusy()).Clicked() {
-					s.requestWorkspaceGitStatus(true)
+				if showWorkspaceTools {
+					iconGroup(c, p, func() {
+						if len(s.taskAddableServices(t)) > 0 {
+							if iconButton(c, "add-service", "plus", "为任务添加服务", p).Clicked() {
+								s.openTaskAppendServices(t)
+							}
+						}
+						if len(failedServiceIDs) > 0 && !t.archived {
+							if iconButtonDisabled(c, "retry-failed-services", "refresh", "重试全部失败服务", p, s.busy || t.archived).Clicked() {
+								s.retryFailedTaskServices(t, nil)
+							}
+						}
+						if len(t.workspaces) > 0 {
+							if iconButton(c, "task-branches", "branch", "查看分支信息", p).Clicked() {
+								s.openTaskBranchInfo(t)
+							}
+							if workspaceGitRefreshButton(c, p, s.workspaceGitStatusBusy()).Clicked() {
+								s.requestWorkspaceGitStatus(true)
+							}
+						}
+					})
 				}
 			})
-		})
+		}
+		if len(t.workspaces) == 0 {
+			emptyPanel(c, p, "暂未关联服务", "可先处理需求、资料和笔记，需要修改代码时再添加服务。")
+		}
 		for i, workspace := range t.workspaces {
 			s.workspaceCard(c, p, t, workspace, i)
 		}

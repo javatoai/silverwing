@@ -7,8 +7,10 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"unicode"
 
+	"silverwing-go/internal/documents"
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/storage"
 )
@@ -20,6 +22,8 @@ const (
 	AgentContextFileName = "TASK-CONTEXT.md"
 	AgentRulesFileName   = "TASK-RULES.md"
 	HandoffFileName      = "HANDOFF.md"
+	legacyTaskScopeRule  = "只允许修改 `TASK-CONTEXT.md` 中“Worktree 范围”标明可改动的 Worktree。"
+	taskScopeRule        = "修改范围以 `TASK-CONTEXT.md` 中的任务范围说明为准；未关联服务时可在任务目录处理分析和文档。"
 )
 
 type AgentDocumentPreviewFile struct {
@@ -34,8 +38,10 @@ type AgentDocumentPreview struct {
 // AgentDocumentService writes referenced task files for every manifest.
 // INLINE_V1 is persisted historical metadata, not a file-generation mode.
 type AgentDocumentService struct {
-	Paths     storage.Paths
-	Manifests *storage.ManifestStore
+	Paths             storage.Paths
+	Manifests         *storage.ManifestStore
+	catalogWarningsMu sync.Mutex
+	catalogWarnings   []error
 }
 
 func NewAgentDocumentService(paths storage.Paths, manifests *storage.ManifestStore) *AgentDocumentService {
@@ -183,9 +189,24 @@ func (s *AgentDocumentService) RenderPreview(taskPath string, manifest domain.Ta
 }
 
 func (s *AgentDocumentService) RenderPreviewChecked(taskPath string, manifest domain.TaskManifest, config domain.AppConfig, taskNotes string) (AgentDocumentPreview, error) {
+	block, err := materialsCatalog(manifest, true)
+	if err != nil {
+		return AgentDocumentPreview{}, err
+	}
+	context := renderTaskContext(manifest, repositoryInfos(config), s.Paths)
+	if block != "" {
+		context, err = replaceMaterialsCatalog(context, block, true)
+		if err != nil {
+			return AgentDocumentPreview{}, err
+		}
+	}
+	root := renderBaseRouter(manifest, s.Paths)
+	if block != "" {
+		root += "\n" + block
+	}
 	return AgentDocumentPreview{Files: []AgentDocumentPreviewFile{
-		{RelativePath: AgentRouterFileName, Content: renderRootRouter(manifest, s.Paths)},
-		{RelativePath: filepath.ToSlash(filepath.Join(AgentWorkspaceDir, AgentDirectoryName, AgentContextFileName)), Content: renderTaskContext(manifest, repositoryInfos(config), s.Paths)},
+		{RelativePath: AgentRouterFileName, Content: root},
+		{RelativePath: filepath.ToSlash(filepath.Join(AgentWorkspaceDir, AgentDirectoryName, AgentContextFileName)), Content: context},
 		{RelativePath: filepath.ToSlash(filepath.Join(AgentWorkspaceDir, AgentDirectoryName, AgentRulesFileName)), Content: trimTaskNotesEnd(taskNotes)},
 	}}, nil
 }
@@ -208,6 +229,15 @@ func (s *AgentDocumentService) writeTaskDocuments(taskPath string, manifest doma
 			return "", err
 		}
 	}
+	// Upgrade only the exact old generated router. Custom/user-edited AGENTS.md
+	// stays intact, including when the final workspace is removed.
+	router := renderRootRouter(manifest, s.Paths)
+	legacyRouter := strings.Replace(router, taskScopeRule, legacyTaskScopeRule, 1)
+	if content, err := os.ReadFile(root); err == nil && string(content) == legacyRouter {
+		if err := writeAtomicDocument(root, router); err != nil {
+			return "", err
+		}
+	}
 	if _, err := s.EnsureGlobalFile(); err != nil {
 		return "", err
 	}
@@ -217,6 +247,11 @@ func (s *AgentDocumentService) writeTaskDocuments(taskPath string, manifest doma
 	agentDir := filepath.Join(taskPath, AgentWorkspaceDir, AgentDirectoryName)
 	if err := writeIfChanged(filepath.Join(agentDir, AgentContextFileName), renderTaskContext(manifest, repositories, s.Paths)); err != nil {
 		return "", err
+	}
+	if err := s.RefreshMaterialsDirectories(taskPath, manifest, domain.AppConfig{}, nil); err != nil {
+		s.catalogWarningsMu.Lock()
+		s.catalogWarnings = append(s.catalogWarnings, err)
+		s.catalogWarningsMu.Unlock()
 	}
 	rules := filepath.Join(agentDir, AgentRulesFileName)
 	if taskNotes != nil {
@@ -233,7 +268,7 @@ func (s *AgentDocumentService) writeTaskDocuments(taskPath string, manifest doma
 	return root, nil
 }
 
-func renderRootRouter(manifest domain.TaskManifest, paths storage.Paths) string {
+func renderBaseRouter(manifest domain.TaskManifest, paths storage.Paths) string {
 	groupPath, err := paths.GroupAgents(manifest.GroupID)
 	if err != nil {
 		groupPath = "<无效组 ID>"
@@ -246,7 +281,7 @@ func renderRootRouter(manifest domain.TaskManifest, paths storage.Paths) string 
 	b.WriteString("在分析、修改代码或执行 Git 写操作前，必须阅读以下文件，以及下方列出的共享规则：\n\n")
 	b.WriteString("1. `.workspace/agent/TASK-CONTEXT.md`：需求链接、资料目录、任务交接、系统元数据，以及 Worktree 修改范围。\n")
 	b.WriteString("2. `.workspace/agent/TASK-RULES.md`：本任务专属规则。\n\n")
-	b.WriteString("只允许修改 `TASK-CONTEXT.md` 中“Worktree 范围”标明可改动的 Worktree。\n\n")
+	b.WriteString(taskScopeRule + "\n\n")
 	b.WriteString("## 共享规则来源\n\n> 先阅读以下共享规则文件，再结合任务专属规则执行。\n\n")
 	b.WriteString("### 全局规则\n\n`" + globalPath + "`\n\n")
 	b.WriteString("### 组规则\n\n`" + groupPath + "`\n\n")
@@ -261,6 +296,13 @@ func renderTaskContext(manifest domain.TaskManifest, repositories []domain.Repos
 	b.WriteString("## 系统元数据\n\n- 任务清单是只读元数据；不要手动改写。\n")
 	b.WriteString("- `.workspace/HANDOFF.md` 存在时，是 Agent CLI 任务的交接记录。\n\n")
 	b.WriteString(renderWorktreeScope(manifest, repositories))
+	block, err := materialsCatalog(manifest, false)
+	if err != nil {
+		block, _ = materialsCatalog(manifest, true)
+	}
+	if block != "" {
+		b.WriteString("\n" + block)
+	}
 	return b.String()
 }
 
@@ -283,6 +325,11 @@ func renderTaskFacts(manifest domain.TaskManifest) string {
 		b.WriteString("若该文件缺失、损坏、过期或与当前工作区状态矛盾，停止执行会产生副作用的操作，先向用户报告差异。\n\n")
 	}
 	materials := manifest.RequirementMaterials
+	if materials.Status == domain.MaterialsReady && materials.WriteRoot != nil {
+		if _, ok := documents.AnnualScope(*materials.WriteRoot); ok {
+			return b.String()
+		}
+	}
 	if materials.Status != domain.MaterialsNotRequested {
 		b.WriteString("## 任务资料目录\n\n")
 		switch materials.Status {
@@ -353,7 +400,12 @@ func renderWorktreeScope(manifest domain.TaskManifest, allRepositories []domain.
 			b.WriteString("| " + escapeTableCell(repo.Name) + " | `" + escapeTableCell(repo.RootPath) + "` |\n")
 		}
 	}
-	b.WriteString("\n## Agent 使用提示\n\n- 只允许修改上方“本任务可改动的 Worktree”中的路径；不要修改主 checkout 或其他本地服务。\n- 需要额外服务时，请先让用户在任务中添加服务。\n\n")
+	b.WriteString("\n## Agent 使用提示\n\n")
+	if len(workspaces) == 0 {
+		b.WriteString("- 本任务未关联服务，可在任务目录中的分析和文档中开展工作；不要修改任务清单、生成的 Agent 说明或其他系统管理文件。\n- 不要修改主 checkout 或其他本地服务；需要代码工作区时，先在任务中添加服务。\n\n")
+	} else {
+		b.WriteString("- 产品源代码只允许修改上方“本任务可改动的 Worktree”中的路径；不要修改主 checkout 或其他本地服务。资料按本文件的资料目录清单处理。\n- 需要额外服务时，请先让用户在任务中添加服务。\n\n")
+	}
 	return b.String()
 }
 

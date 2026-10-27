@@ -161,7 +161,7 @@ func (s *Service) SearchMaterials(ctx context.Context, root, query string) (Sear
 		}
 		name := entry.Name()
 		if entry.IsDir() {
-			if strings.EqualFold(name, ".git") || stagingName.MatchString(name) {
+			if strings.EqualFold(name, ".git") || strings.HasPrefix(strings.ToLower(name), ".silverwing-") || stagingName.MatchString(name) {
 				return filepath.SkipDir
 			}
 			info, err := os.Lstat(path)
@@ -174,7 +174,7 @@ func (s *Service) SearchMaterials(ctx context.Context, root, query string) (Sear
 			}
 			return nil
 		}
-		if stagingName.MatchString(name) {
+		if stagingName.MatchString(name) || strings.HasPrefix(strings.ToLower(name), ".silverwing-") {
 			return nil
 		}
 		info, err := os.Lstat(path)

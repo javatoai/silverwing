@@ -108,7 +108,8 @@ func (s *TaskApplicationService) CreateTaskWithProgress(ctx context.Context, con
 			manifest = domain.DefaultTaskManifest()
 			manifest.FolderName, manifest.TaskDirectoryName, manifest.GroupID = request.FolderName, name, groupID
 			manifest.RequirementLink = strings.TrimSpace(request.RequirementLink)
-			manifest.CreatedAt = domain.FormatSilverWingTime(s.now())
+			createdTime := s.now()
+			manifest.CreatedAt = domain.FormatSilverWingTime(createdTime)
 			manifest.UpdatedAt = manifest.CreatedAt
 			manifest.AgentContext = request.AgentContext
 			emitTaskCreationProgress(progress, TaskCreationProgress{Phase: TaskCreationPhasePreparingMaterials, Status: TaskCreationProgressStarted, Message: "正在关联任务资料"})
@@ -116,7 +117,7 @@ func (s *TaskApplicationService) CreateTaskWithProgress(ctx context.Context, con
 				return err
 			}
 			if manifest.RequirementLink != "" {
-				materials, id, resolveErr := s.resolveRequirementMaterials(ctx, config, manifest.RequirementLink, request.FolderName)
+				materials, id, resolveErr := s.resolveRequirementMaterials(documents.WithMaterialsCreationTime(ctx, createdTime), config, manifest.RequirementLink, request.FolderName)
 				if resolveErr != nil {
 					if ctxErr := ctx.Err(); ctxErr != nil {
 						return errors.Join(resolveErr, ctxErr)
@@ -336,11 +337,29 @@ func (s *TaskApplicationService) Restore(ctx context.Context, config domain.AppC
 }
 
 func (s *TaskApplicationService) Delete(ctx context.Context, config domain.AppConfig, path string, _ bool) error {
-	return s.withTaskManifestMutation(ctx, config, path, func(ctx context.Context, _ domain.TaskManifest) error {
+	return s.withTaskManifestMutation(ctx, config, path, func(ctx context.Context, manifest domain.TaskManifest) error {
+		root, err := taskRoot(config)
+		if err != nil {
+			return err
+		}
+		rootInfo, err := os.Stat(root)
+		if err != nil {
+			return fmt.Errorf("检查任务根目录：%w", err)
+		}
+		if !rootInfo.IsDir() {
+			return fmt.Errorf("任务根目录不是目录：%s", root)
+		}
+		target, err := filepath.Abs(filepath.Clean(path))
+		if err != nil {
+			return err
+		}
+		if samePath(target, root) || !samePath(filepath.Dir(target), root) || filepath.Base(target) != manifest.TaskDirectoryName {
+			return fmt.Errorf("任务目录与配置或任务清单不匹配：%s", target)
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		return os.RemoveAll(path)
+		return os.RemoveAll(target)
 	})
 }
 

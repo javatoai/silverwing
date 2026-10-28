@@ -13,12 +13,13 @@ import (
 func (a *App) workspaceAction(ctx context.Context, action Action, output func(process.StreamEvent)) (ActionResult, error) {
 	return a.workspaceActionWithProgress(ctx, action, output, nil)
 }
-func (a *App) workspaceActionWithProgress(ctx context.Context, action Action, _ func(process.StreamEvent), progress func(workspace.TaskCreationProgress)) (ActionResult, error) {
+func (a *App) workspaceActionWithProgress(ctx context.Context, action Action, _ func(process.StreamEvent), progress func(workspace.TaskCreationProgress)) (actionResult ActionResult, actionErr error) {
 	config, err := a.Config.Load()
 	if err != nil {
 		return ActionResult{}, err
 	}
 	service := a.taskService(config)
+	defer func() { appendMaterialsCatalogWarnings(&actionResult, service.Documents) }()
 	if result, handled, e := taskCreationPreviewAction(ctx, action, config, service); handled {
 		return result, e
 	}
@@ -111,12 +112,10 @@ func (a *App) workspaceActionWithProgress(ctx context.Context, action Action, _ 
 	case "task.archive":
 		m, e := service.Archive(ctx, config, path, false)
 		result := ActionResult{Message: "任务已归档", Data: m}
-		appendMaterialsCatalogWarnings(&result, service.Documents)
 		return result, e
 	case "task.restore":
 		m, e := service.Restore(ctx, config, path)
 		result := ActionResult{Message: "任务已恢复", Data: m}
-		appendMaterialsCatalogWarnings(&result, service.Documents)
 		return result, e
 	case "task.delete":
 		return ActionResult{Message: "任务已删除"}, service.Delete(ctx, config, path, false)

@@ -123,6 +123,7 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 		}
 		return
 	}
+	feedbackHome, feedbackTask := s.snapshot.Home, s.currentTask()
 	ctx, cancel := context.WithCancel(context.Background())
 	watchBarrier := s.pauseMaterialsLiveRefresh(action)
 	fileBarrier := s.pauseMaterialsFileJobs(action)
@@ -323,11 +324,8 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 				}
 				return
 			}
-			// Reading the current materials is part of opening the page. Source
-			// keeps successful reads quiet and only reports their failures.
-
 			if s.actionResultRelevant(action) {
-
+				s.applyActionResultFeedback(action, result, feedbackHome, feedbackTask)
 				s.applyActionResult(action, result)
 			}
 			if refreshErr != nil {
@@ -378,6 +376,27 @@ func (s *app) applyActionResult(action application.Action, result application.Ac
 		return
 	}
 
+}
+
+// Successful operation feedback belongs to the home and selected task that
+// started it. Feature handlers still own read caches and save status.
+func (s *app) applyActionResultFeedback(action application.Action, result application.ActionResult, home string, selected task) {
+	current := s.currentTask()
+	if s.snapshot.Home != home || current.id != selected.id || current.path != selected.path || current.createdAt != selected.createdAt || !s.actionResultRelevant(action) {
+		return
+	}
+	switch action.Kind {
+	case "document.list", "document.read", "instructions.read", "instructions.templates.list":
+		return
+	case "instructions.save":
+		if dataBool(action.Payload, "localTaskRules") {
+			return
+		}
+	}
+	if state := s.settingsAutosave; state != nil && state.active != nil && state.active.kind == action.Kind {
+		return
+	}
+	s.lastMessage = result.Message
 }
 
 func settingsActionHasDedicatedResult(kind string) bool {

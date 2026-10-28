@@ -302,6 +302,16 @@ func renderTaskFacts(manifest domain.TaskManifest) string {
 	if manifest.RequirementMaterials.Status == domain.MaterialsReady && manifest.RequirementMaterials.WriteRoot != nil {
 		fmt.Fprintf(&b, "- 资料目录：%s\n", *manifest.RequirementMaterials.WriteRoot)
 	}
+	if manifest.AgentContext != nil {
+		handoffPath := manifest.AgentContext.HandoffRelativePath
+		if handoffPath == "" {
+			handoffPath = filepath.ToSlash(filepath.Join(AgentWorkspaceDir, HandoffFileName))
+		}
+		b.WriteString("\n## 任务交接\n\n")
+		b.WriteString("在阅读、修改或执行任何任务操作前，先阅读 `" + handoffPath + "`。\n")
+		b.WriteString("将其作为本任务的目标、范围、已验证事实、风险与下一步的权威交接记录。\n")
+		b.WriteString("若该文件缺失、损坏、过期或与当前任务状态矛盾，停止执行会产生副作用的操作，先向用户报告差异。\n")
+	}
 	return b.String()
 }
 

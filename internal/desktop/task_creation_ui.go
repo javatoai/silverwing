@@ -316,17 +316,7 @@ func (s *app) renderTaskCreationDialog(c *ui.Context, p palette) bool {
 					for _, template := range state.templates {
 						t := template
 						if action(c, "task-create-template-"+t.ID, "document", t.Name, p, state.selectedTemplate == t.ID) {
-							apply := func() {
-								if s.taskCreation == state {
-									state.notes = t.Content
-									state.selectedTemplate = t.ID
-								}
-							}
-							if strings.TrimSpace(state.notes) != "" && state.selectedTemplate != t.ID {
-								s.confirmNative("使用说明模板", "当前说明内容将被替换。", t.Name, apply)
-							} else {
-								apply()
-							}
+							s.toggleTaskCreationTemplate(t)
 						}
 					}
 				})
@@ -359,6 +349,58 @@ func (s *app) renderTaskCreationDialog(c *ui.Context, p palette) bool {
 	}
 	return true
 }
+func taskCreationSelectedTemplateID(notes string, templates []domain.AgentTaskTemplate) string {
+	selected := ""
+	for _, template := range templates {
+		if template.Content != notes {
+			continue
+		}
+		if selected != "" {
+			return ""
+		}
+		selected = template.ID
+	}
+	return selected
+}
+
+func (s *app) toggleTaskCreationTemplate(template domain.AgentTaskTemplate) {
+	state := s.taskCreation
+	if state == nil || state.phase != "editing" {
+		return
+	}
+	selectedID := state.selectedTemplate
+	if selectedID == "" {
+		selectedID = taskCreationSelectedTemplateID(state.notes, state.templates)
+	}
+	if selectedID == template.ID {
+		if state.notes == template.Content {
+			state.notes = ""
+		}
+		state.selectedTemplate, state.pendingTemplate = "", ""
+		return
+	}
+	apply := func() {
+		state.notes = template.Content
+		state.selectedTemplate, state.pendingTemplate = template.ID, ""
+	}
+	if strings.TrimSpace(state.notes) == "" {
+		apply()
+		return
+	}
+	for _, selected := range state.templates {
+		if selected.ID == selectedID && selected.Content == state.notes {
+			apply()
+			return
+		}
+	}
+	notes, selection := state.notes, state.selectedTemplate
+	s.confirmNative("使用说明模板", "当前说明内容将被替换。", template.Name, func() {
+		if s.taskCreation == state && state.phase == "editing" && state.notes == notes && state.selectedTemplate == selection {
+			apply()
+		}
+	})
+}
+
 func (s *app) taskCreationProgressUpdates(ctx context.Context, action application.Action) func(workspace.TaskCreationProgress) {
 	state := s.taskCreation
 	if state == nil || payloadString(action.Payload, "taskCreateToken") != state.token {

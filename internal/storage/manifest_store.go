@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"unicode/utf8"
 
 	"silverwing-go/internal/domain"
@@ -49,6 +51,10 @@ func (s *ManifestStore) Load(taskDir string) (domain.TaskManifest, error) {
 	if err != nil {
 		return domain.TaskManifest{}, err
 	}
+	return decodeManifest(path, data)
+}
+
+func decodeManifest(path string, data []byte) (domain.TaskManifest, error) {
 	if !utf8.Valid(data) {
 		return domain.TaskManifest{}, fmt.Errorf("读取 %s：任务 JSON 不是有效的 UTF-8", path)
 	}
@@ -69,6 +75,108 @@ func (s *ManifestStore) Load(taskDir string) (domain.TaskManifest, error) {
 		return domain.TaskManifest{}, fmt.Errorf("%s", productprofile.ManifestEditionError())
 	}
 	return manifest, nil
+}
+
+// LoadTask reads one first-level task without enumerating or decoding its
+// neighbours. OpenRoot pins each directory while the manifest is read; named
+// paths are checked again before returning so a replaced root/task is stale.
+// The configured root itself may be an alias, but task/manifest links are not.
+func (s *ManifestStore) LoadTask(taskRoot, taskID string) (ManifestEntry, error) {
+	if taskID == "" || taskID == "." || taskID == ".." || strings.ContainsAny(taskID, "/\\\x00") || filepath.VolumeName(taskID) != "" {
+		return ManifestEntry{}, errors.New("任务标识必须是任务根目录第一层的目录名")
+	}
+	root, err := os.OpenRoot(taskRoot)
+	if err != nil {
+		return ManifestEntry{}, err
+	}
+	defer root.Close()
+	rootInfo, err := root.Stat(".")
+	if err != nil {
+		return ManifestEntry{}, err
+	}
+	if !pinManifestIdentity(rootInfo) {
+		return ManifestEntry{}, errors.New("无法确认任务根目录身份")
+	}
+	taskInfo, err := root.Lstat(taskID)
+	if err != nil {
+		return ManifestEntry{}, err
+	}
+	if !taskInfo.IsDir() || manifestPathReparse(taskInfo) || !pinManifestIdentity(taskInfo) {
+		return ManifestEntry{}, errors.New("任务目录不是安全的普通目录")
+	}
+	actualName, err := manifestTaskDirectoryName(filepath.Join(taskRoot, taskID))
+	if err != nil {
+		return ManifestEntry{}, err
+	}
+	// Windows permits case, short-name and trailing-dot aliases. The old Scan
+	// contract matched the directory's actual name exactly; retain that boundary
+	// while allowing aliases in the configured root and its ancestors.
+	if actualName != taskID {
+		return ManifestEntry{}, errors.New("任务标识与实际目录名不一致，请刷新后重试")
+	}
+	task, err := root.OpenRoot(taskID)
+	if err != nil {
+		return ManifestEntry{}, err
+	}
+	defer task.Close()
+	openedTask, err := task.Stat(".")
+	if err != nil || !os.SameFile(taskInfo, openedTask) {
+		return ManifestEntry{}, errors.New("任务目录身份已变化，请刷新后重试")
+	}
+	manifestInfo, err := task.Lstat(TaskManifestFileName)
+	if err != nil {
+		return ManifestEntry{}, err
+	}
+	if !manifestInfo.Mode().IsRegular() || manifestPathReparse(manifestInfo) || !pinManifestIdentity(manifestInfo) {
+		return ManifestEntry{}, errors.New("任务清单不是安全的普通文件")
+	}
+	file, err := task.Open(TaskManifestFileName)
+	if err != nil {
+		return ManifestEntry{}, err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(manifestInfo, opened) {
+		return ManifestEntry{}, errors.New("任务清单身份已变化，请刷新后重试")
+	}
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return ManifestEntry{}, err
+	}
+	path := filepath.Join(taskRoot, taskID)
+	manifest, err := decodeManifest(filepath.Join(path, TaskManifestFileName), data)
+	if err != nil {
+		return ManifestEntry{}, err
+	}
+	if manifest.TaskDirectoryName != taskID {
+		return ManifestEntry{}, errors.New("任务清单的目录标识与实际路径不一致，请修复后重试")
+	}
+	guard := manifestLookupGuard{taskRoot, taskID, root, task, rootInfo, taskInfo, manifestInfo}
+	if !guard.unchanged() {
+		return ManifestEntry{}, errors.New("任务根目录或清单身份已变化，请刷新后重试")
+	}
+	return ManifestEntry{Path: path, Manifest: manifest}, nil
+}
+
+func pinManifestIdentity(info os.FileInfo) bool { return info != nil && os.SameFile(info, info) }
+
+// The named paths must still identify the directories and file pinned for this
+// read. Keeping this check together also covers replacement through a configured
+// root alias without rejecting aliases themselves.
+type manifestLookupGuard struct {
+	taskRoot, taskID                 string
+	root, task                       *os.Root
+	rootInfo, taskInfo, manifestInfo os.FileInfo
+}
+
+func (g manifestLookupGuard) unchanged() bool {
+	currentRoot, rootErr := os.Stat(g.taskRoot)
+	currentTask, taskErr := g.root.Lstat(g.taskID)
+	currentManifest, manifestErr := g.task.Lstat(TaskManifestFileName)
+	return rootErr == nil && taskErr == nil && manifestErr == nil && os.SameFile(g.rootInfo, currentRoot) &&
+		!manifestPathReparse(currentTask) && os.SameFile(g.taskInfo, currentTask) &&
+		!manifestPathReparse(currentManifest) && os.SameFile(g.manifestInfo, currentManifest) &&
+		currentManifest.Size() == g.manifestInfo.Size() && currentManifest.ModTime().Equal(g.manifestInfo.ModTime())
 }
 
 func (s *ManifestStore) Save(taskDir string, manifest domain.TaskManifest) error {

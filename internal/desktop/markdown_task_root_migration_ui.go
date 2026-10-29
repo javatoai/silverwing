@@ -160,8 +160,10 @@ func (s *app) buildMarkdownTaskRootMigrationUI(plan *markdownTaskRootMigrationPl
 
 func (s *app) applyMarkdownTaskRootMigrationUI(plan *markdownTaskRootMigrationPlan, state *markdownTaskRootMigrationUI) {
 	oldPath := s.materialsUnit.state.documentPath
-	s.taskUnit.state.tasks, s.snapshot.Tasks = state.tasks, state.snapshotTasks
-	s.materialsUnit.state.documents, s.materialsUnit.state.documentPath, s.materialsUnit.state.documentTabs = state.documents, state.path, state.tabs
+	s.taskUnit.replaceTasks(state.tasks, s.taskUnit.state.selected)
+	s.snapshot.Tasks = state.snapshotTasks
+	s.materialsUnit.replaceDocuments(state.documents)
+	s.materialsUnit.state.documentPath, s.materialsUnit.state.documentTabs = state.path, state.tabs
 	s.materialsUnit.state.documentDrafts, s.materialsUnit.state.documentDirtyMap = state.drafts, state.dirty
 	s.taskUnit.state.notePaths = state.notePaths
 	if s.materialsUnit.state.markdown != nil {

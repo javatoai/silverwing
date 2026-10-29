@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -858,28 +857,9 @@ func (s *app) restoreReadingScrollPointers() {
 }
 
 func (s *app) currentReadingMaterialsSortDocuments() {
-	modified := s.readingMaterialsSortOrder() == "MODIFIED_DESC"
-	var sortLevel func([]application.Document)
-	sortLevel = func(items []application.Document) {
-		for index := range items {
-			sortLevel(items[index].Children)
-		}
-		sort.SliceStable(items, func(i, j int) bool {
-			left, right := items[i], items[j]
-			leftDirectory, rightDirectory := isDocumentDirectory(left), isDocumentDirectory(right)
-			if leftDirectory != rightDirectory {
-				return leftDirectory
-			}
-			if modified && left.Modified != right.Modified {
-				return left.Modified > right.Modified
-			}
-			if strings.EqualFold(left.Name, right.Name) {
-				return left.Path < right.Path
-			}
-			return strings.ToLower(left.Name) < strings.ToLower(right.Name)
-		})
-	}
-	sortLevel(s.materialsUnit.state.documents)
+	// Reading order is a value projection. Sorting the published snapshot in
+	// place would also change quick-open's raw DFS order and bypass generation.
+	s.materialsDocumentProjection().treeRows(s.readingMaterialsSortOrder())
 }
 
 func readingMaterialsFor(session *desktopReadingSession, taskPath, root string, create bool) *MaterialsSnapshot {

@@ -60,6 +60,7 @@ type FileTreeProps struct {
 	Key             string
 	Root            FileTreeRow
 	Rows            []FileTreeRow
+	Prepared        *FileTreeProjection
 	Expanded        map[string]bool
 	Selected        map[string]bool
 	Opened          string
@@ -75,6 +76,16 @@ type FileTreeProps struct {
 	RootActionWidth float32
 	RowActions      func(FileTreeRow)
 	RowActionWidth  float32
+}
+
+// FileTreeProjection is one immutable, internally consistent preparation of
+// visible rows and opened ancestry. A nil Prepared preserves the legacy host
+// path (including Skills); materials prepares this once per input revision.
+type FileTreeProjection struct {
+	rows            []FileTreeRow
+	expanded        map[string]bool
+	opened          string
+	openedAncestors map[string]bool
 }
 
 // FileTree is the shared native sidebar for materials and local Skills. It
@@ -96,8 +107,15 @@ func FileTree(c *ui.Context, p palette, props FileTreeProps) ui.Element {
 		state.hoverID, state.hoverSince = "", time.Time{}
 		state.scrollY = scroll.Y
 	}
-	rows := fileTreeVisibleRows(props.Rows, props.Expanded)
-	ancestors := fileTreeOpenedAncestors(props.Rows, props.Opened)
+	var rows []FileTreeRow
+	var ancestors map[string]bool
+	if prepared := props.Prepared; prepared != nil {
+		rows, ancestors = prepared.rows, prepared.openedAncestors
+		props.Expanded, props.Opened = prepared.expanded, prepared.opened
+	} else {
+		rows = fileTreeVisibleRows(props.Rows, props.Expanded)
+		ancestors = fileTreeOpenedAncestors(props.Rows, props.Opened)
+	}
 	container := ui.Column(c.Key(props.Key)).FillWidth().Grow(1).MinHeight(0).MinWidth(0).Background(p.side).Font("system-ui")
 	showRootActions := container.Hovered() || container.FocusWithin()
 	container.Children(func() {

@@ -693,6 +693,7 @@ func (s *Service) verifyRequirementIdentity(ctx context.Context, config domain.A
 	if !requirementIdentityMatches(session.raw, expected) {
 		return &RequirementIdentityChangedError{State: requirementIdentityAuthenticated, Identity: session.token}
 	}
+	s.publishRequirementReadIdentity(ctx, session)
 	return nil
 }
 

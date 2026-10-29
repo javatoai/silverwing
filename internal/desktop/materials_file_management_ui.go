@@ -85,7 +85,9 @@ func (s *app) ensureMaterialsFileManagementState() *materialsFileManagementState
 }
 
 func (s *app) materialsDocumentProjection() materialsDocumentProjection {
-	return materialsDocumentProjection{root: s.taskUnit.currentTask().materialsPath, documents: s.materialsUnit.state.documents}
+	current := s.taskUnit.currentTask()
+	key := materialsDocumentProjectionKey{generation: s.materialsUnit.state.documentsGeneration, taskID: current.id, taskPath: current.path, createdAt: current.createdAt, root: current.materialsPath}
+	return s.materialsUnit.state.documentsProjection.project(key, s.materialsUnit.state.documents)
 }
 
 func (s *app) resetMaterialsFileSelection(state *materialsFileManagementState) {
@@ -149,7 +151,7 @@ func (s *app) revealMaterialsPath(path string) {
 func (s *app) selectMaterialsPath(path string) {
 	state := s.ensureMaterialsFileManagementState()
 	path = filepath.Clean(path)
-	entry, ok := s.findMaterialsEntry(path, s.materialsUnit.state.documents)
+	entry, ok := s.materialsDocumentProjection().find(path)
 	if !ok {
 		return
 	}
@@ -241,12 +243,13 @@ func (s *app) materialsEntryContextMenu(c *ui.Context, menu *ui.Menu, state *mat
 		s.act("document.reveal", s.taskUnit.currentTask().id, "", "", entry.Path, "", nil)
 	}
 	menu.Separator()
-	selectionCount := len(s.materialsContextSelection(state, entry))
+	contextSelection := s.materialsContextSelection(state, entry)
+	selectionCount := len(contextSelection)
 	if menu.Item(fmt.Sprintf("复制已选项目 (%d)", selectionCount)).Icon(icons["copy"]).Disabled(busy || selectionCount == 0).Chosen() {
 		s.withMaterialsContextSelection(state, entry, s.copyMaterialsSelectionToClipboard)
 	}
 	allWritable := true
-	for _, selected := range s.materialsContextSelection(state, entry) {
+	for _, selected := range contextSelection {
 		allWritable = allWritable && s.materialsWritable(selected.Path, false)
 	}
 	if menu.Item("移入回收站…").Icon(icons["delete"]).Disabled(busy || selectionCount == 0 || !allWritable).Dangerous().Chosen() {
@@ -642,7 +645,7 @@ func (s *app) reconcileMaterialsDocuments(entries []application.Document) {
 	state := s.materialsUnit.state.materialsFileManagement
 	current := s.taskUnit.currentTask()
 	stateBelongsToTask := state != nil && state.taskID == current.id && normalizedReadingRoot(state.root) == normalizedReadingRoot(current.materialsPath)
-	projection := materialsDocumentProjection{root: current.materialsPath, documents: entries}
+	projection := s.materialsDocumentProjection()
 	var available map[string]materialsFileSelectionEntry
 	if stateBelongsToTask {
 		available = state.materialsSelection.reconcile(projection)

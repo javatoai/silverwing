@@ -83,6 +83,17 @@ bytes and report clipboard failure. A nil callback retains upstream behavior;
 false preserves the clipboard and clears the copied indicator. It does not
 replace the native code-block renderer. Compare/remove on an upstream upgrade.
 
+## Markdown code chunk source offsets
+
+`ui/markdown/code.go` computes code-chunk UTF-8 offsets in one forward pass
+when highlighted lines change, then keeps them beside the cached spans. Stable
+builds no longer rescan every preceding line for every 32-line chunk. The
+offsets still count the LF separating chunks, preserving `TransformText` and
+`OnText` find, reveal and selection coordinates for Unicode and normalized
+CRLF input. Regression tests cover chunk boundaries, streaming growth/shrink
+and the hooks; the isolated 32,768-line benchmark measures offset calculation.
+Compare/remove this patch when an upstream release provides equivalent offsets.
+
 ## Optional bounded toast content
 
 `ui/toast.go` adds opt-in `Toast.ContentMaxHeight` (DIPs). Zero preserves the

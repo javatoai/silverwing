@@ -476,7 +476,16 @@ func (s *MaterialsGitSyncService) syncLocked(ctx context.Context, scope Material
 }
 
 func (s *MaterialsGitSyncService) remoteBranch(ctx context.Context, scope MaterialsGitScope) (string, bool, error) {
-	result, err := s.run(ctx, scope, true, "ls-remote", "--", scope.URL)
+	if err := ctx.Err(); err != nil {
+		return "", false, err
+	}
+	if s.Check != nil {
+		if err := s.Check(); err != nil {
+			return "", false, err
+		}
+	}
+	result, err := s.Git.runReadBudget(ctx, scope.Root, 2*time.Minute, 4096,
+		"ls-remote", "--heads", "--", scope.URL, "refs/heads/"+scope.Branch)
 	if err != nil {
 		return "", false, err
 	}

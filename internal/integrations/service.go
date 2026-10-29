@@ -61,10 +61,11 @@ func NewServiceWithRequirementProvider(paths storage.Paths, config *storage.Conf
 
 // Execute is the JSON-shaped boundary used by the desktop bridge. Each action
 // returns source-compatible lower-camel DTOs; command failures stay errors.
-func (s *Service) Execute(ctx context.Context, kind string, payload map[string]any) (any, error) {
+func (s *Service) Execute(ctx context.Context, kind string, payload map[string]any) (data any, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	defer func() { finishRequirementReadOperation(ctx, data, err) }()
 	config, err := s.config.Load()
 	if err != nil {
 		return nil, err

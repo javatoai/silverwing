@@ -269,9 +269,7 @@ func TestCommentEditorExistingImageTopLayerZoomAndEscape(t *testing.T) {
 					s.renderCommentDraftBitmapViewer(c, p)
 					s.renderConfirmationDialog(c, p)
 				}, width, 900)
-				for _, entry := range state.markdown.inlineImages {
-					entry.loading, entry.error, entry.bitmap = false, "", bitmap
-				}
+				seedMarkdownReadyImages(t, s, state.markdown, bitmap)
 				tester.Frame()
 				if !tester.HasText("图片前文") || !tester.HasText("图片后文") {
 					t.Fatal("image positions lost in preview")

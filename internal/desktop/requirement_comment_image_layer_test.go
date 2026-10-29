@@ -38,9 +38,7 @@ func TestCommentDraftImageTopLayerAndEscape(t *testing.T) {
 					s.renderCommentDraftBitmapViewer(c, p)
 					s.renderConfirmationDialog(c, p)
 				}, width, 900)
-				for _, entry := range state.markdown.inlineImages {
-					entry.loading, entry.error, entry.bitmap = false, "", bitmap
-				}
+				seedMarkdownReadyImages(t, s, state.markdown, bitmap)
 				tester.Frame()
 				if err := tester.Click("Markdown 图片：截图.png"); err != nil {
 					t.Fatal(err)

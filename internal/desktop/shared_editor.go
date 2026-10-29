@@ -2,8 +2,6 @@ package desktop
 
 import (
 	"sort"
-	"strings"
-	"unicode"
 
 	"silverwing-go/internal/tools"
 
@@ -20,32 +18,14 @@ type jsonEditorSnapshot struct {
 	selectionEnd   int
 }
 
-type jsonEditorFold struct {
-	pointer string
-	start   int // original rune offset, inclusive
-	end     int // original rune offset, exclusive
-}
-
-type jsonTextProjection struct {
-	text       string
-	viewToText []int // one original rune offset for every projected boundary
-	folds      []jsonEditorFold
-}
-
-type jsonEditorMatch struct {
-	start int
-	end   int
-}
-
 func initializeJSONEditor(state *toolPageState) {
 	state.jsonEditor = jsonToolState{
-		viewSource:     state.jsonSource,
 		sourceSnapshot: state.jsonSource,
-		projection:     identityProjection(state.jsonSource),
 		folded:         make(map[string]bool),
 		history:        []jsonEditorSnapshot{{text: state.jsonSource}},
 		historyReady:   true,
 	}
+	state.syncJSONProjection()
 }
 
 func (state *toolPageState) syncJSONEditor() {
@@ -56,21 +36,41 @@ func (state *toolPageState) syncJSONEditor() {
 	}
 	if e.sourceSnapshot != state.jsonSource {
 		e.sourceSnapshot = state.jsonSource
-		e.folded = make(map[string]bool)
-		e.projection = identityProjection(state.jsonSource)
-		e.viewSource = state.jsonSource
+		e.clearFolds()
+		state.syncJSONProjection()
 		e.record(state.jsonSource, e.lastSelection.selectionStart, e.lastSelection.selectionEnd)
 		e.setPendingSelection(e.lastSelection.selectionStart, e.lastSelection.selectionEnd)
+	}
+	state.syncJSONProjection()
+}
+
+func (e *jsonToolState) clearFolds() {
+	e.folded = make(map[string]bool)
+	e.foldRevision++
+}
+
+func (state *toolPageState) syncJSONProjection() {
+	e := &state.jsonEditor
+	if e.sourceIndex == nil || e.sourceIndex.source != state.jsonSource {
+		if e.nativeIndex != nil && e.nativeIndex.source == state.jsonSource {
+			e.sourceIndex = e.nativeIndex
+		} else {
+			e.sourceIndex = newJSONTextIndex(state.jsonSource)
+		}
+	}
+	key := jsonProjectionKey{source: state.jsonSource, parseRevision: state.jsonParseRevision, foldRevision: e.foldRevision, valid: state.jsonValid}
+	if e.projectionReady && e.projectionKey == key {
+		e.viewSource = e.projection.text
+		return
 	}
 	nodes := []tools.JSONSourceNode(nil)
 	if state.jsonValid {
 		nodes = state.jsonDoc.Nodes
 	}
-	expected := makeJSONTextProjection(state.jsonSource, nodes, e.folded)
-	if expected.text != e.projection.text || e.viewSource != expected.text {
-		e.projection = expected
-		e.viewSource = expected.text
-	}
+	e.projection = makeIndexedJSONTextProjection(e.sourceIndex, nodes, e.folded)
+	e.projectionKey, e.projectionReady = key, true
+	e.projectionRevision++
+	e.viewSource = e.projection.text
 }
 
 func (e *jsonToolState) record(text string, selectionStart, selectionEnd int) {
@@ -101,15 +101,15 @@ func (e *jsonToolState) record(text string, selectionStart, selectionEnd int) {
 }
 
 func (e *jsonToolState) setPendingSelection(start, end int) {
-	e.selectionStart = bounded(start, 0, utf8RuneCount(e.viewSource))
-	e.selectionEnd = bounded(end, 0, utf8RuneCount(e.viewSource))
+	e.selectionStart = bounded(start, 0, e.projection.index.runeCount())
+	e.selectionEnd = bounded(end, 0, e.projection.index.runeCount())
 	e.pendingSelection = true
 	e.pendingFocus = true
 }
 
 func (e *jsonToolState) setPendingSelectionWithoutFocus(start, end int) {
-	e.selectionStart = bounded(start, 0, utf8RuneCount(e.viewSource))
-	e.selectionEnd = bounded(end, 0, utf8RuneCount(e.viewSource))
+	e.selectionStart = bounded(start, 0, e.projection.index.runeCount())
+	e.selectionEnd = bounded(end, 0, e.projection.index.runeCount())
 	e.pendingSelection = true
 	e.pendingFocus = false
 }
@@ -162,9 +162,8 @@ func (s *app) commitJSONEditorSourceEdit(state *toolPageState, next string, sour
 	e := &state.jsonEditor
 	state.jsonSource = next
 	e.sourceSnapshot = next
-	e.folded = make(map[string]bool) // Source expands folds when the text changes.
-	e.projection = identityProjection(next)
-	e.viewSource = next
+	e.clearFolds() // Source expands folds when the text changes.
+	state.syncJSONProjection()
 	e.lastSelection = jsonEditorSnapshot{text: next, selectionStart: sourceSelectionStart, selectionEnd: sourceSelectionEnd}
 	e.record(next, sourceSelectionStart, sourceSelectionEnd)
 	e.setPendingSelection(sourceSelectionStart, sourceSelectionEnd)
@@ -179,11 +178,10 @@ func (state *toolPageState) commitProgrammaticJSONSource(source string) {
 	}
 	state.jsonSource = source
 	e.sourceSnapshot = source
-	e.folded = make(map[string]bool)
-	e.projection = identityProjection(source)
-	e.viewSource = source
-	selectionStart = bounded(selectionStart, 0, utf8RuneCount(source))
-	selectionEnd = bounded(selectionEnd, 0, utf8RuneCount(source))
+	e.clearFolds()
+	state.syncJSONProjection()
+	selectionStart = bounded(selectionStart, 0, e.sourceIndex.runeCount())
+	selectionEnd = bounded(selectionEnd, 0, e.sourceIndex.runeCount())
 	e.lastSelection = jsonEditorSnapshot{text: source, selectionStart: selectionStart, selectionEnd: selectionEnd}
 	e.setPendingSelection(selectionStart, selectionEnd)
 }
@@ -207,9 +205,8 @@ func (s *app) moveJSONEditorHistory(state *toolPageState, redo bool) {
 	snapshot := e.history[e.historyIndex]
 	state.jsonSource = snapshot.text
 	e.sourceSnapshot = snapshot.text
-	e.folded = make(map[string]bool)
-	e.projection = identityProjection(snapshot.text)
-	e.viewSource = snapshot.text
+	e.clearFolds()
+	state.syncJSONProjection()
 	e.lastSelection = snapshot
 	e.setPendingSelection(snapshot.selectionStart, snapshot.selectionEnd)
 	s.queueJSONValidation()
@@ -233,38 +230,23 @@ func (s *app) handleJSONEditorHistoryInput(state *toolPageState, event ui.InputE
 	return true
 }
 
-func eligibleJSONFold(node tools.JSONSourceNode) bool {
-	return node.IsContainer && node.EndLine > node.StartLine
-}
-
 func jsonFoldNodesByVisibleLine(state *toolPageState) map[int]tools.JSONSourceNode {
+	state.syncJSONProjection()
 	e := &state.jsonEditor
-	if e.foldCache != nil && e.foldCacheSource == state.jsonSource && e.foldCacheView == e.projection.text &&
-		e.foldCacheRevision == state.jsonRevision && e.foldCacheValid == state.jsonValid {
+	if e.foldCache != nil && e.foldCacheProjection == e.projectionRevision {
 		return e.foldCache
 	}
 	result := make(map[int]tools.JSONSourceNode)
 	if !state.jsonValid {
-		e.foldCache, e.foldCacheSource, e.foldCacheView = result, state.jsonSource, e.projection.text
-		e.foldCacheRevision, e.foldCacheValid = state.jsonRevision, false
+		e.foldCache, e.foldCacheProjection = result, e.projectionRevision
 		return result
 	}
-	viewRunes := []rune(state.jsonEditor.projection.text)
-	lineAt := make([]int, len(viewRunes)+1)
-	line := 0
-	for i, r := range viewRunes {
-		lineAt[i] = line
-		if r == '\n' {
-			line++
-		}
-	}
-	lineAt[len(viewRunes)] = line
 	for _, node := range state.jsonDoc.Nodes {
 		if !eligibleJSONFold(node) {
 			continue
 		}
-		start := utf16OffsetToRune(state.jsonSource, node.StartOffset)
-		end := utf16OffsetToRune(state.jsonSource, node.EndOffset)
+		start := e.sourceIndex.runeAtUTF16(node.StartOffset)
+		end := e.sourceIndex.runeAtUTF16(node.EndOffset)
 		hidden := false
 		foldIndex := sort.Search(len(state.jsonEditor.projection.folds), func(i int) bool {
 			return state.jsonEditor.projection.folds[i].start > start
@@ -277,19 +259,17 @@ func jsonFoldNodesByVisibleLine(state *toolPageState) map[int]tools.JSONSourceNo
 			continue
 		}
 		viewStart := projectedOffset(state.jsonEditor.projection, start)
-		viewStart = bounded(viewStart, 0, len(viewRunes))
-		visibleLine := lineAt[viewStart]
+		visibleLine := e.projection.index.lineAtRune(viewStart)
 		if existing, ok := result[visibleLine]; ok {
-			existingStart := utf16OffsetToRune(state.jsonSource, existing.StartOffset)
-			existingEnd := utf16OffsetToRune(state.jsonSource, existing.EndOffset)
+			existingStart := e.sourceIndex.runeAtUTF16(existing.StartOffset)
+			existingEnd := e.sourceIndex.runeAtUTF16(existing.EndOffset)
 			if existingEnd-existingStart <= end-start {
 				continue
 			}
 		}
 		result[visibleLine] = node
 	}
-	e.foldCache, e.foldCacheSource, e.foldCacheView = result, state.jsonSource, e.projection.text
-	e.foldCacheRevision, e.foldCacheValid = state.jsonRevision, true
+	e.foldCache, e.foldCacheProjection = result, e.projectionRevision
 	return result
 }
 
@@ -304,12 +284,13 @@ func (s *app) toggleJSONFold(state *toolPageState, pointer string) {
 	} else {
 		e.folded[pointer] = true
 	}
-	e.projection = makeJSONTextProjection(state.jsonSource, state.jsonDoc.Nodes, e.folded)
-	e.viewSource = e.projection.text
+	e.foldRevision++
+	state.syncJSONProjection()
 	e.setPendingSourceSelection(e.lastSelection.selectionStart, e.lastSelection.selectionEnd)
 }
 
 func (s *app) foldJSONAtCaret(state *toolPageState) {
+	state.syncJSONProjection()
 	caret := state.jsonEditor.lastSelection.selectionStart
 	var chosen tools.JSONSourceNode
 	chosenSpan := int(^uint(0) >> 1)
@@ -317,8 +298,8 @@ func (s *app) foldJSONAtCaret(state *toolPageState) {
 		if !eligibleJSONFold(node) {
 			continue
 		}
-		start := utf16OffsetToRune(state.jsonSource, node.StartOffset)
-		end := utf16OffsetToRune(state.jsonSource, node.EndOffset)
+		start := state.jsonEditor.sourceIndex.runeAtUTF16(node.StartOffset)
+		end := state.jsonEditor.sourceIndex.runeAtUTF16(node.EndOffset)
 		if caret < start || caret > end {
 			continue
 		}
@@ -340,13 +321,13 @@ func (s *app) expandAllJSONFolds(state *toolPageState) {
 	if len(state.jsonEditor.folded) == 0 {
 		return
 	}
-	state.jsonEditor.folded = make(map[string]bool)
-	state.jsonEditor.projection = identityProjection(state.jsonSource)
-	state.jsonEditor.viewSource = state.jsonSource
+	state.jsonEditor.clearFolds()
+	state.syncJSONProjection()
 	state.jsonEditor.setPendingSourceSelection(state.jsonEditor.lastSelection.selectionStart, state.jsonEditor.lastSelection.selectionEnd)
 }
 
 func revealJSONProjectionRange(state *toolPageState, start, end int) {
+	state.syncJSONProjection()
 	e := &state.jsonEditor
 	changed := false
 	for pointer := range e.folded {
@@ -356,88 +337,17 @@ func revealJSONProjectionRange(state *toolPageState, start, end int) {
 			changed = true
 			continue
 		}
-		nodeStart := utf16OffsetToRune(state.jsonSource, node.StartOffset)
-		nodeEnd := utf16OffsetToRune(state.jsonSource, node.EndOffset)
+		nodeStart := e.sourceIndex.runeAtUTF16(node.StartOffset)
+		nodeEnd := e.sourceIndex.runeAtUTF16(node.EndOffset)
 		if start < nodeEnd && end >= nodeStart {
 			delete(e.folded, pointer)
 			changed = true
 		}
 	}
 	if changed {
-		e.projection = makeJSONTextProjection(state.jsonSource, state.jsonDoc.Nodes, e.folded)
-		e.viewSource = e.projection.text
+		e.foldRevision++
+		state.syncJSONProjection()
 	}
-}
-
-func identityProjection(source string) jsonTextProjection {
-	runes := []rune(source)
-	var out strings.Builder
-	positions := make([]int, 1, len(runes)+1)
-	for i, r := range runes {
-		if r == '\r' && (i+1 == len(runes) || runes[i+1] != '\n') {
-			out.WriteRune('\n')
-		} else {
-			out.WriteRune(r)
-		}
-		positions = append(positions, i+1)
-	}
-	return jsonTextProjection{text: out.String(), viewToText: positions}
-}
-
-func makeJSONTextProjection(source string, nodes []tools.JSONSourceNode, folded map[string]bool) jsonTextProjection {
-	if len(folded) == 0 || source == "" || len(nodes) == 0 {
-		return identityProjection(source)
-	}
-	runes := []rune(source)
-	folds := make([]jsonEditorFold, 0, len(folded))
-	for _, node := range nodes {
-		if !folded[node.Pointer] || !node.IsContainer || node.EndLine <= node.StartLine {
-			continue
-		}
-		start := utf16OffsetToRune(source, node.StartOffset)
-		end := utf16OffsetToRune(source, node.EndOffset)
-		if start < 0 || end > len(runes) || start >= end {
-			continue
-		}
-		folds = append(folds, jsonEditorFold{pointer: node.Pointer, start: start, end: end})
-	}
-	sort.Slice(folds, func(i, j int) bool {
-		if folds[i].start != folds[j].start {
-			return folds[i].start < folds[j].start
-		}
-		return folds[i].end > folds[j].end
-	})
-
-	var out strings.Builder
-	positions := make([]int, 1, len(runes)+1)
-	positions[0] = 0
-	kept := make([]jsonEditorFold, 0, len(folds))
-	appendText := func(start, end int) {
-		for i := start; i < end; i++ {
-			if runes[i] == '\r' && (i+1 == len(runes) || runes[i+1] != '\n') {
-				out.WriteRune('\n')
-			} else {
-				out.WriteRune(runes[i])
-			}
-			positions = append(positions, i+1)
-		}
-	}
-	cursor := 0
-	for _, fold := range folds {
-		if fold.start < cursor {
-			continue // an already folded ancestor hides this node
-		}
-		appendText(cursor, fold.start)
-		positions[len(positions)-1] = fold.start
-		// Keep a small visible placeholder while mapping its edges back to the
-		// full original range. Editing across the placeholder replaces that node.
-		out.WriteString(" … ")
-		positions = append(positions, fold.start, fold.end, fold.end)
-		kept = append(kept, fold)
-		cursor = fold.end
-	}
-	appendText(cursor, len(runes))
-	return jsonTextProjection{text: out.String(), viewToText: positions, folds: kept}
 }
 
 func jsonSourceLineCount(source string) int {
@@ -454,23 +364,6 @@ func jsonSourceLineCount(source string) int {
 		}
 	}
 	return lines
-}
-
-func projectedOffset(projection jsonTextProjection, original int) int {
-	if len(projection.viewToText) == 0 {
-		return 0
-	}
-	original = max(0, original)
-	return sort.Search(len(projection.viewToText), func(i int) bool {
-		return projection.viewToText[i] >= original
-	})
-}
-
-func originalOffset(projection jsonTextProjection, view int) int {
-	if len(projection.viewToText) == 0 {
-		return 0
-	}
-	return projection.viewToText[bounded(view, 0, len(projection.viewToText)-1)]
 }
 
 func projectionEdit(oldProjection jsonTextProjection, edited string) (start, end int, inserted string, prefix, oldEnd, newEnd int) {
@@ -513,35 +406,6 @@ func replaceRuneRange(source string, start, end int, replacement string) string 
 	start = bounded(start, 0, len(runes))
 	end = bounded(end, start, len(runes))
 	return string(runes[:start]) + replacement + string(runes[end:])
-}
-
-func jsonEditorMatches(source, query string) []jsonEditorMatch {
-	queryRunes := []rune(strings.ToLower(query))
-	if len(queryRunes) == 0 {
-		return nil
-	}
-	runes := []rune(source)
-	lower := make([]rune, len(runes))
-	for i, r := range runes {
-		lower[i] = unicode.ToLower(r)
-	}
-	matches := make([]jsonEditorMatch, 0)
-	for i := 0; i+len(queryRunes) <= len(lower); {
-		matched := true
-		for j, r := range queryRunes {
-			if lower[i+j] != unicode.ToLower(r) {
-				matched = false
-				break
-			}
-		}
-		if matched {
-			matches = append(matches, jsonEditorMatch{start: i, end: i + len(queryRunes)})
-			i += len(queryRunes)
-		} else {
-			i++
-		}
-	}
-	return matches
 }
 
 func jsonEditorIconButton(c *ui.Context, key, name, glyph string, p palette, enabled, active bool) bool {

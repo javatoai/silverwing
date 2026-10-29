@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"silverwing-go/internal/application"
+	"silverwing-go/internal/asyncjob"
 	"silverwing-go/internal/editor"
 	"sync"
 	"time"
@@ -21,6 +22,9 @@ type materialsState struct {
 	materialsLiveRefreshLifecycle *materialsLiveRefreshLifecycle
 	pendingTaskRootMigration      *markdownTaskRootMigrationLease
 	documents                     []application.Document
+	documentsGeneration           uint64
+	documentsProjection           materialsDocumentProjectionCache
+	documentsTree                 materialsTreePresentation
 	documentContent               string
 	documentPath                  string
 	documentLinkFragment          string
@@ -40,6 +44,7 @@ type materialsState struct {
 	documentSaveMu                sync.Mutex
 	documentSaveRefs              map[string]documentSaveRef
 	markdown                      *markdownEditorState
+	markdownPreviewJobs           *asyncjob.Group
 	nativeMedia                   *nativeMediaState
 	markdownBitmapViewer          *markdownBitmapViewerState
 	documentSearch                string
@@ -54,6 +59,7 @@ type materialsState struct {
 }
 
 func (s *materialsController) stopFeature() {
+	s.stopMarkdownPreviewJobs()
 	s.stopMaterialsGitSync()
 	s.abandonPendingTaskRootMigration()
 	s.stopMaterialsFileJobs()
@@ -67,6 +73,7 @@ func (s *materialsController) drainFeature() error {
 		featureCleanupStep{"退出前资料 Git 同步收尾未完成", 10 * time.Second, s.closeMaterialsGitSync},
 		featureCleanupStep{"退出前资料文件操作清理未完成", 10 * time.Second, s.closeMaterialsFileJobs},
 		featureCleanupStep{"退出前资料目录监听清理未完成", 10 * time.Second, s.joinMaterialsLiveRefresh},
+		featureCleanupStep{"退出前 Markdown 媒体清理未完成", 10 * time.Second, s.closeMarkdownPreviewJobs},
 	)
 }
 
@@ -134,7 +141,7 @@ func (s *materialsController) resetTaskPresentation(transition TaskTransition, v
 // Reset only the selected task's presentation. Autosave drafts, save leases,
 // canceled workers, and pending root migrations keep their independent owners.
 func (s *materialsController) resetPresentedMaterials() {
-	s.state.documents = nil
+	s.replaceDocuments(nil)
 	s.state.documentsLoaded = false
 	s.state.documentsRequested = false
 	s.state.documentTabs = nil
@@ -144,4 +151,14 @@ func (s *materialsController) resetPresentedMaterials() {
 	s.state.documentPath, s.state.documentContent = "", ""
 	s.state.documentHash = ""
 	s.state.documentDirty, s.state.documentEditing = false, false
+}
+
+// Published snapshots remain owned by the controller. A producer must publish
+// again after changing an element or Children, even when it reuses the slice.
+// The generation, rather than a slice address, identifies all derived values.
+func (s *materialsController) replaceDocuments(items []application.Document) {
+	s.state.documents = items
+	s.state.documentsGeneration++
+	s.state.documentsProjection = materialsDocumentProjectionCache{}
+	s.state.documentsTree = materialsTreePresentation{}
 }

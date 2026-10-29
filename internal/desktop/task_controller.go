@@ -4,29 +4,40 @@ import (
 	"context"
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/workspace"
+	"slices"
 )
 
 // taskController owns this feature's state. Its zero value is usable in headless tests.
 type taskController struct{ state taskState }
 
 type taskState struct {
-	taskNavigation        *taskNavigationState
-	taskContextScope      *taskMenuScope
-	taskContextUpdate     func(func())
-	taskIndexes           map[bool]*taskIndexBrowsingState
-	taskListFocused       bool
-	selected              int
-	tasks                 []task
-	notes                 [3]string
-	notePaths             [3]string
-	noteHashes            [3]string
-	noteTab               int
-	noteEditing           bool
-	taskRootTargetFocused bool
-	taskGroupID           string
-	taskCreation          *taskCreationState
-	taskNotesUI           *taskNotesUIState
-	taskCreationWarning   string
+	taskGroups             []application.Group
+	groupsRevision         uint64
+	tasksRevision          uint64
+	taskCatalog            *taskIndexCatalog
+	taskSearch             taskIndexSearchProjection
+	metadataRevision       uint64
+	metadataValues         map[string]taskIndexMetadataValue
+	metadataDiscovery      taskMetadataDiscoveryKey
+	metadataDiscoveryValid bool
+	metadataDiscoveryRetry map[string]task
+	taskNavigation         *taskNavigationState
+	taskContextScope       *taskMenuScope
+	taskContextUpdate      func(func())
+	taskIndexes            map[bool]*taskIndexBrowsingState
+	taskListFocused        bool
+	selected               int
+	tasks                  []task
+	notes                  [3]string
+	notePaths              [3]string
+	noteHashes             [3]string
+	noteTab                int
+	noteEditing            bool
+	taskRootTargetFocused  bool
+	taskGroupID            string
+	taskCreation           *taskCreationState
+	taskNotesUI            *taskNotesUIState
+	taskCreationWarning    string
 }
 
 func (s *taskController) stopFeature() {
@@ -106,20 +117,31 @@ func (s *taskController) currentTask() task {
 }
 
 func (s *taskController) activeTasks(archived bool) []int {
-	indices := make([]int, 0, len(s.state.tasks))
-	for index, item := range s.state.tasks {
-		if item.archived == archived {
-			indices = append(indices, index)
-		}
+	category := 0
+	if archived {
+		category = 1
 	}
-	return indices
+	return s.taskCatalog().categories[category]
 }
 
 func (s *taskController) replaceTasks(tasks []task, selected int) {
+	// Publish after list/search/identity changes, including same-slice updates.
+	// Tool launch status does not affect these presentation inputs.
 	s.state.tasks, s.state.selected = tasks, selected
+	s.invalidateTaskIndex()
 }
 
 // Session restore changes selection without recording a new user interaction.
 func (s *taskController) restoreSelection(index int) {
 	s.state.selected = index
+}
+
+// Group labels belong to task search, independently of developer service data.
+// Keep detached values so later mutation and republication invalidates search.
+func (s *taskController) publishTaskGroups(groups []application.Group) {
+	if slices.Equal(s.state.taskGroups, groups) {
+		return
+	}
+	s.state.taskGroups = slices.Clone(groups)
+	s.state.groupsRevision++
 }

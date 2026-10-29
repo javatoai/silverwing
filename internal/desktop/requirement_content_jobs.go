@@ -33,6 +33,9 @@ type requirementContentJobState struct {
 
 func requirementContentRequestKind(action application.Action) string {
 	if action.Kind == "requirements.attachment" && payloadString(action.Payload, "scope") == "comment" {
+		if key := payloadString(action.Payload, "commentImageToken"); key != "" && key == commentActionResourceKey(action) {
+			return commentImageRequestKind(key)
+		}
 		return "requirements.attachment:comment"
 	}
 	return action.Kind
@@ -67,7 +70,11 @@ func (s *app) beginRequirementContentJob(action application.Action) (*requiremen
 	if previous := state.requests[key]; previous != nil {
 		previous.cancel()
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	parent := context.Background()
+	if action.Kind == "requirements.attachment" && payloadString(action.Payload, "scope") == "comment" && payloadString(action.Payload, "commentImageToken") != "" && reader.commentImageBatch != nil {
+		parent = reader.commentImageBatch.ctx
+	}
+	ctx, cancel := context.WithCancel(parent)
 	request := &requirementContentJob{key: key, home: s.snapshot.Home,
 		executable: s.configString("meegleExecutablePath"), reader: reader,
 		identity: s.currentRequirementListIdentity(),
@@ -187,7 +194,7 @@ func (s *requirementController) cancelRequirementContentJob(request *requirement
 			reader.commentsLoading = false
 		case "requirements.attachment":
 			if payloadString(request.action.Payload, "scope") == "comment" {
-				reader.commentResourceLoading = ""
+				finishRequirementCommentImage(reader, commentActionResourceKey(request.action))
 			} else {
 				reader.resourceLoading = ""
 			}
@@ -227,6 +234,7 @@ func (s *app) observeRequirementContentJobs() {
 		return
 	}
 	if state.entered != nil && requirementReaderKey(state.entered.taskID, state.entered.url) != state.visible {
+		s.retireRequirementCommentImages(state.entered)
 		state.entered = nil
 	}
 	for _, request := range state.requests {

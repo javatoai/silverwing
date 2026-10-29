@@ -42,6 +42,7 @@ type actionForm struct {
 }
 
 type app struct {
+	mermaidInitializer     *mermaidInitializer
 	taskUnit               taskController
 	materialsUnit          materialsController
 	requirementUnit        requirementController
@@ -128,6 +129,7 @@ func (s *app) applySnapshot(snapshot application.Snapshot) {
 	nextIndex := s.taskLifecycleSnapshotIndex(nextTasks)
 	selectionChanged := s.prepareTaskLifecycleSelection(previousTask, taskLifecycleSelectionAt(nextTasks, nextIndex))
 	s.snapshot = snapshot
+	s.taskUnit.publishTaskGroups(snapshot.Groups)
 	s.taskUnit.replaceTasks(nextTasks, nextIndex)
 	if snapshot.Error != "" {
 		s.lastError = snapshot.Error

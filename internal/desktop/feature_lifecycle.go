@@ -87,6 +87,9 @@ func (s *app) closeDesktopFeatures(runErr error) error {
 			}
 			return s.materialsUnit.finishFeature(s)
 		},
+		func() error {
+			return runFeatureCleanup(featureCleanupStep{"退出前 Mermaid 初始化清理未完成", 10 * time.Second, s.mermaidInitializer.close})
+		},
 	}
 	for _, close := range closers {
 		if err := close(); runErr == nil && err != nil {

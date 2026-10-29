@@ -160,6 +160,23 @@ func (s *app) ensureTaskRequirementMetadata() {
 	if s.loading || len(s.taskUnit.state.tasks) == 0 {
 		return
 	}
+	key := taskMetadataDiscoveryKey{tasks: s.taskUnit.state.tasksRevision, metadata: s.taskUnit.state.metadataRevision, config: s.settingsUnit.state.configJSON}
+	if s.taskUnit.state.metadataDiscoveryValid && s.taskUnit.state.metadataDiscovery == key {
+		// A force-refresh can temporarily own a missing metadata read. Poll
+		// only those deferred identities, rather than rescan the task catalog.
+		for id, item := range s.taskUnit.state.metadataDiscoveryRetry {
+			if !s.requirementRefreshing(item.requirementURL) {
+				delete(s.taskUnit.state.metadataDiscoveryRetry, id)
+				s.requestTaskRequirementMetadata(item, false)
+			}
+		}
+		return
+	}
+	s.taskUnit.state.metadataDiscoveryRetry = make(map[string]task)
+	defer func() {
+		s.taskUnit.state.metadataDiscovery = taskMetadataDiscoveryKey{tasks: s.taskUnit.state.tasksRevision, metadata: s.taskUnit.state.metadataRevision, config: s.settingsUnit.state.configJSON}
+		s.taskUnit.state.metadataDiscoveryValid = true
+	}()
 	known := make(map[string]string, len(s.taskUnit.state.tasks))
 	for _, item := range s.taskUnit.state.tasks {
 		if domain.ParseFeishuWorkItemLink(item.requirementURL) == nil {
@@ -170,13 +187,16 @@ func (s *app) ensureTaskRequirementMetadata() {
 					s.requirementUnit.state.taskRequirementMetadataGeneration[item.id]++
 				}
 			}
-			delete(s.requirementUnit.state.taskRequirementMetadata, item.id)
+			s.deleteTaskRequirementMetadata(item.id)
 			continue
 		}
 		known[item.id] = item.requirementURL
 		state, exists := s.requirementUnit.state.taskRequirementMetadata[item.id]
 		if !exists || state.URL != item.requirementURL {
 			s.requestTaskRequirementMetadata(item, false)
+			if s.requirementRefreshing(item.requirementURL) {
+				s.taskUnit.state.metadataDiscoveryRetry[item.id] = item
+			}
 		}
 	}
 	for taskID, state := range s.requirementUnit.state.taskRequirementMetadata {
@@ -185,7 +205,7 @@ func (s *app) ensureTaskRequirementMetadata() {
 				cancel()
 				delete(s.requirementUnit.state.taskRequirementMetadataCancels, taskID)
 			}
-			delete(s.requirementUnit.state.taskRequirementMetadata, taskID)
+			s.deleteTaskRequirementMetadata(taskID)
 			continue
 		}
 		if state.URL != known[taskID] {
@@ -193,7 +213,7 @@ func (s *app) ensureTaskRequirementMetadata() {
 				cancel()
 				delete(s.requirementUnit.state.taskRequirementMetadataCancels, taskID)
 			}
-			delete(s.requirementUnit.state.taskRequirementMetadata, taskID)
+			s.deleteTaskRequirementMetadata(taskID)
 		}
 	}
 }
@@ -220,7 +240,7 @@ func (s *app) requestTaskRequirementMetadata(item task, force bool) {
 		if s.requirementUnit.state.taskRequirementMetadata == nil {
 			s.requirementUnit.state.taskRequirementMetadata = make(map[string]taskRequirementMetadataState)
 		}
-		s.requirementUnit.state.taskRequirementMetadata[item.id] = taskRequirementMetadataState{URL: url, Status: requirementMetadataNotLoaded}
+		s.setTaskRequirementMetadata(item.id, taskRequirementMetadataState{URL: url, Status: requirementMetadataNotLoaded})
 		if (cancel != nil || changed) && s.win != nil {
 			s.win.Invalidate()
 		}
@@ -251,7 +271,7 @@ func (s *app) requestTaskRequirementMetadata(item task, force bool) {
 	s.requirementUnit.state.taskRequirementMetadataCancels[item.id] = cancel
 	retained := requirementMetadataForRefresh(previous, exists && previous.URL == url)
 	retained.URL, retained.Status, retained.Error = url, requirementMetadataLoading, ""
-	s.requirementUnit.state.taskRequirementMetadata[item.id] = retained
+	s.setTaskRequirementMetadata(item.id, retained)
 	s.win.Invalidate()
 	payload := s.bindRequirementAccount(map[string]any{"force": force})
 
@@ -272,24 +292,24 @@ func (s *app) requestTaskRequirementMetadata(item task, force bool) {
 			}
 			delete(s.requirementUnit.state.taskRequirementMetadataCancels, item.id)
 			if !s.hasTaskRequirementURL(item.id, url) {
-				delete(s.requirementUnit.state.taskRequirementMetadata, item.id)
+				s.deleteTaskRequirementMetadata(item.id)
 				return
 			}
 			if ctx.Err() != nil {
 				if requirementMetadataHasValues(retained.Metadata) {
 					retained.URL, retained.Status = url, requirementMetadataLoaded
-					s.requirementUnit.state.taskRequirementMetadata[item.id] = retained
+					s.setTaskRequirementMetadata(item.id, retained)
 				} else {
-					s.requirementUnit.state.taskRequirementMetadata[item.id] = taskRequirementMetadataState{URL: url, Status: requirementMetadataNotLoaded}
+					s.setTaskRequirementMetadata(item.id, taskRequirementMetadataState{URL: url, Status: requirementMetadataNotLoaded})
 				}
 				return
 			}
 			if err != nil {
 				if requirementMetadataHasValues(retained.Metadata) {
 					retained.URL, retained.Status, retained.Error = url, requirementMetadataLoaded, err.Error()
-					s.requirementUnit.state.taskRequirementMetadata[item.id] = retained
+					s.setTaskRequirementMetadata(item.id, retained)
 				} else {
-					s.requirementUnit.state.taskRequirementMetadata[item.id] = taskRequirementMetadataState{URL: url, Status: requirementMetadataFailed, Error: err.Error()}
+					s.setTaskRequirementMetadata(item.id, taskRequirementMetadataState{URL: url, Status: requirementMetadataFailed, Error: err.Error()})
 				}
 				return
 			}
@@ -302,13 +322,13 @@ func (s *app) requestTaskRequirementMetadata(item task, force bool) {
 				failure := "需求元数据格式无效：" + marshalErr.Error()
 				if requirementMetadataHasValues(retained.Metadata) {
 					retained.URL, retained.Status, retained.Error = url, requirementMetadataLoaded, failure
-					s.requirementUnit.state.taskRequirementMetadata[item.id] = retained
+					s.setTaskRequirementMetadata(item.id, retained)
 				} else {
-					s.requirementUnit.state.taskRequirementMetadata[item.id] = taskRequirementMetadataState{URL: url, Status: requirementMetadataFailed, Error: failure}
+					s.setTaskRequirementMetadata(item.id, taskRequirementMetadataState{URL: url, Status: requirementMetadataFailed, Error: failure})
 				}
 				return
 			}
-			s.requirementUnit.state.taskRequirementMetadata[item.id] = taskRequirementMetadataState{URL: url, Status: requirementMetadataLoaded, Metadata: metadata, Error: metadata.RefreshError}
+			s.setTaskRequirementMetadata(item.id, taskRequirementMetadataState{URL: url, Status: requirementMetadataLoaded, Metadata: metadata, Error: metadata.RefreshError})
 		})
 	}()
 }
@@ -343,7 +363,7 @@ func (s *app) cancelTaskRequirementMetadata(taskID string) {
 	}
 	s.requirementUnit.state.taskRequirementMetadataGeneration[taskID]++
 	if state, ok := s.requirementUnit.state.taskRequirementMetadata[taskID]; ok {
-		s.requirementUnit.state.taskRequirementMetadata[taskID] = taskRequirementMetadataState{URL: state.URL, Status: requirementMetadataNotLoaded}
+		s.setTaskRequirementMetadata(taskID, taskRequirementMetadataState{URL: state.URL, Status: requirementMetadataNotLoaded})
 	}
 	if s.win != nil {
 		s.win.Invalidate()

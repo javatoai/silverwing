@@ -22,7 +22,7 @@ func (s *app) applyMaterialsActionResult(action application.Action, result appli
 			s.lastError = "读取资料列表格式失败：" + err.Error()
 			return true
 		}
-		s.materialsUnit.state.documents = entries
+		s.materialsUnit.replaceDocuments(entries)
 		s.reconcileMaterialsDocuments(entries)
 		state := s.materialsUnit.state.materialsFileManagement
 		pendingSelection := state != nil && (state.pendingSelectPath != "" || state.pendingSelectDir != "")

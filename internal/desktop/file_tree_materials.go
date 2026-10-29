@@ -5,16 +5,84 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"silverwing-go/internal/application"
+	"silverwing-go/internal/documents"
 )
 
-func (s *app) materialsTreeRows(projection materialsDocumentProjection, order string) []FileTreeRow {
-	projected := projection.treeRows(order)
-	rows := make([]FileTreeRow, 0, len(projected))
-	for _, row := range projected {
-		entry := row.entry
-		rows = append(rows, FileTreeRow{ID: entry.Key, Name: row.name, Path: entry.Path, Depth: row.depth, Directory: entry.Directory, ReadOnly: !s.materialsWritable(entry.Path, true)})
+type materialsTreePermissionKey struct {
+	permissions                 application.MaterialsPermissions
+	legacy                      documents.MaterialsScope
+	legacyScope, legacyReadOnly bool
+}
+
+func (key materialsTreePermissionKey) writable(path string) bool {
+	if key.permissions.Kind != "" {
+		return key.permissions.Writable(path, true)
 	}
-	return rows
+	if key.legacyScope {
+		return key.legacy.Writable(path, true)
+	}
+	return !key.legacyReadOnly
+}
+
+func (s *app) materialsTreePermissions() materialsTreePermissionKey {
+	key := materialsTreePermissionKey{permissions: s.taskUnit.currentTask().materials}
+	if key.permissions.Kind != "" {
+		return key
+	}
+	key.legacy, key.legacyScope = s.legacyMaterialsScope()
+	if !key.legacyScope {
+		root := s.taskUnit.currentTask().materialsPath
+		scope, ok := documents.AnnualScope(filepath.Join(root, "__scope__"))
+		key.legacyReadOnly = ok && scope.Root == filepath.Clean(root)
+	}
+	return key
+}
+
+type materialsTreePresentation struct {
+	index           *materialsDocumentIndex
+	order           int
+	permissions     materialsTreePermissionKey
+	rows            []FileTreeRow
+	visibleRevision uint64
+	prepared        *FileTreeProjection
+}
+
+func (v *materialsTreePresentation) prepare(index *materialsDocumentIndex, order string, permissions materialsTreePermissionKey, expanded map[string]bool, opened string) *FileTreeProjection {
+	ordered := index.orderedRows(order)
+	if v.index != index || v.order != materialsDocumentOrderIndex(order) || v.permissions != permissions {
+		*v = materialsTreePresentation{index: index, order: materialsDocumentOrderIndex(order), permissions: permissions}
+		v.rows = make([]FileTreeRow, 0, len(ordered.rows))
+		for _, row := range ordered.rows {
+			entry := row.entry
+			v.rows = append(v.rows, FileTreeRow{ID: entry.Key, Name: row.name, Path: entry.Path, Depth: row.depth, Directory: entry.Directory, ReadOnly: !permissions.writable(entry.Path)})
+		}
+	}
+	ordered.treeVisibility.project(ordered.rows, expanded, true)
+	visibility := &ordered.treeVisibility
+	if v.prepared != nil && v.visibleRevision == visibility.revision && v.prepared.opened == opened {
+		return v.prepared
+	}
+	prepared := &FileTreeProjection{opened: opened, expanded: make(map[string]bool), openedAncestors: make(map[string]bool)}
+	if v.prepared != nil && v.visibleRevision == visibility.revision {
+		// Opening another file changes ancestry, not visible row ownership.
+		prepared.rows, prepared.expanded = v.prepared.rows, v.prepared.expanded
+	} else {
+		prepared.rows = make([]FileTreeRow, 0, len(visibility.indices))
+		for _, position := range visibility.indices {
+			row := v.rows[position]
+			prepared.rows = append(prepared.rows, row)
+			if row.Directory {
+				prepared.expanded[row.ID] = expanded[ordered.rows[position].entry.Relative]
+			}
+		}
+	}
+	if position, found := ordered.positions[opened]; found {
+		for parent := ordered.rows[position].parent; parent >= 0; parent = ordered.rows[parent].parent {
+			prepared.openedAncestors[ordered.rows[parent].entry.Key] = true
+		}
+	}
+	v.visibleRevision, v.prepared = visibility.revision, prepared
+	return prepared
 }
 
 func (s *app) materialsTreeInput(state *materialsFileManagementState, input FileTreeInput) {

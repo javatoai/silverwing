@@ -113,14 +113,13 @@ func (s *app) remapMaterialsFileSelectionAfterRename(task task, operation docume
 			anchor = entry.Key
 		}
 	}
-	state.selected, state.anchor = selected, anchor
+	state.materialsSelection.replace(selected, anchor)
 	state.previewPath = remapMaterialsAbsolutePath(state.previewPath, oldPath, newPath)
 	if operation.IsDirectory {
 		// Source selects the renamed directory immediately and retains that
 		// intent across the subsequent tree reconciliation.
 		entry := materialsFileSelectionEntry{Key: materialsFileEntryKey(operation.RelativePath, true), Path: newPath, Relative: operation.RelativePath, Directory: true}
-		state.selected = map[string]materialsFileSelectionEntry{entry.Key: entry}
-		state.anchor = entry.Key
+		state.materialsSelection.selectOnly(entry)
 		state.pendingSelectDir = operation.RelativePath
 	}
 }

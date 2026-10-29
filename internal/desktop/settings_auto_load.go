@@ -64,9 +64,11 @@ func (s *app) observePageLocalRead() {
 	state.attempted = key
 	state.mu.Unlock()
 	backend, win := s.backend, s.win
+	page := s.page
 	go func() {
 		defer close(job.done)
-		snapshot, err := backend.Snapshot(ctx)
+		read, err := readPageSnapshot(ctx, backend, page, job.home, job.config)
+		snapshot := read.snapshot
 		if win.IsDestroyed() {
 			return
 		}
@@ -99,7 +101,7 @@ func (s *app) observePageLocalRead() {
 			// A newer save already supplied current configuration. Do not let
 			// an older navigation read replace it or its task projection.
 			if s.settingsUnit.state.configJSON == job.config && snapshot.Home == job.home {
-				s.applySnapshot(snapshot)
+				s.applySnapshot(read.merge(s.snapshot))
 			}
 			state.ready = job.key
 		})

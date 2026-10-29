@@ -56,6 +56,15 @@ func (s *Service) executeMCP(ctx context.Context, action string, payload map[str
 		}
 		cwd = abs
 	}
+	if action == "status" || action == "check" {
+		return s.withCodexRPCSession(ctx, cfg, cwd, nil, 30*time.Second+100*time.Minute, true, func(sessionContext context.Context) (any, error) {
+			return s.executeMCPWithConfig(sessionContext, cfg, cwd, action, payload)
+		})
+	}
+	return s.executeMCPWithConfig(ctx, cfg, cwd, action, payload)
+}
+
+func (s *Service) executeMCPWithConfig(ctx context.Context, cfg domain.AppConfig, cwd, action string, payload map[string]any) (any, error) {
 	snapshot, err := s.readCodexConfig(ctx, cfg, cwd)
 	if err != nil {
 		return nil, err
@@ -531,28 +540,17 @@ func (s *Service) writeProjectMCPConfig(ctx context.Context, cfg domain.AppConfi
 }
 
 func discoverPluginMCPs(userFile string, response map[string]any) ([]mcpServer, []string) {
+	return discoverPluginMCPsWithReader(userFile, response, readBounded)
+}
+
+func discoverPluginMCPsWithReader(userFile string, response map[string]any, read func(string, int64) ([]byte, error)) ([]mcpServer, []string) {
 	config, _ := nestedMap(response, "config", "plugins")
 	if len(config) == 0 {
 		return nil, nil
 	}
 	home := filepath.Dir(userFile)
 	cache := filepath.Join(home, "plugins", "cache")
-	manifests := []string{}
-	_ = filepath.WalkDir(cache, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if entry.IsDir() && path != cache {
-			relative, relErr := filepath.Rel(cache, path)
-			if relErr == nil && strings.Count(filepath.ToSlash(relative), "/") > 6 {
-				return filepath.SkipDir
-			}
-		}
-		if !entry.IsDir() && entry.Name() == "plugin.json" && filepath.Base(filepath.Dir(path)) == ".codex-plugin" && isRegular(path) && len(manifests) < 500 {
-			manifests = append(manifests, path)
-		}
-		return nil
-	})
+	manifests := indexPluginMCPManifests(cache, read)
 	servers := []mcpServer{}
 	warnings := []string{}
 	for id, rawSettings := range config {
@@ -564,39 +562,12 @@ func discoverPluginMCPs(userFile string, response map[string]any) ([]mcpServer, 
 		if index := strings.IndexByte(id, '@'); index >= 0 {
 			name, source = id[:index], id[index+1:]
 		}
-		var selected string
-		var selectedManifest map[string]any
-		var selectedMTime time.Time
-		for _, path := range manifests {
-			rel, err := filepath.Rel(cache, path)
-			if err != nil {
-				continue
-			}
-			if source != "" && !strings.EqualFold(strings.Split(rel, string(os.PathSeparator))[0], source) {
-				continue
-			}
-			data, err := readBounded(path, maxPluginBytes)
-			if err != nil {
-				continue
-			}
-			var manifest map[string]any
-			if json.Unmarshal(data, &manifest) != nil || firstString(manifest, "name") != name {
-				continue
-			}
-			info, _ := os.Stat(path)
-			mtime := time.Time{}
-			if info != nil {
-				mtime = info.ModTime()
-			}
-			if selected == "" || mtime.After(selectedMTime) {
-				selected, selectedManifest, selectedMTime = path, manifest, mtime
-			}
-		}
-		if selected == "" {
+		selected, found := manifests[pluginMCPManifestKey{name: name, source: pluginMCPSourceKey(source)}]
+		if !found {
 			continue
 		}
-		packageRoot := filepath.Dir(filepath.Dir(selected))
-		mcpDeclaration := selectedManifest["mcpServers"]
+		packageRoot := filepath.Dir(filepath.Dir(selected.path))
+		mcpDeclaration := selected.manifest["mcpServers"]
 		var entries map[string]any
 		if declared, ok := mcpDeclaration.(map[string]any); ok {
 			entries = declared

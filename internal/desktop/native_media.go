@@ -63,7 +63,7 @@ type nativeMediaState struct {
 	pdfPages                  ui.ListState
 	pdfPageScroll             ui.ScrollState
 	pdfPageBitmaps            map[int]pdfPageBitmap
-	pdfPageRenders            map[string]context.CancelFunc
+	pdfRenders                *pdfRenderQueue
 	pdfPageErrors             map[int]string
 	pdfRestoreIndex           int
 	pdfRestoreOffset          int
@@ -215,9 +215,7 @@ func (s *materialsController) closeNativeMedia() {
 	if m.cancel != nil {
 		m.cancel()
 	}
-	for _, cancel := range m.pdfPageRenders {
-		cancel()
-	}
+	m.pdfRenders.close()
 	if m.imageExpandedCancel != nil {
 		m.imageExpandedCancel()
 		m.imageExpandedCancel = nil
@@ -509,9 +507,17 @@ func (s *app) requestPDFTextIndex(m *nativeMediaState) {
 	m.wg.Add(1)
 	pdfDoc, ctx := m.pdf, m.ctx
 	m.mu.Unlock()
+	first, last := m.pdfPages.Visible()
+	if last < first {
+		first, last = m.page, m.page
+	}
+	visible := make([]int, 0, maxInt(0, last-first+1))
+	for page := first; page <= last; page++ {
+		visible = append(visible, page)
+	}
 	go func() {
 		defer m.wg.Done()
-		index, err := pdfDoc.TextIndex(ctx)
+		index, err := pdfDoc.TextIndexPrioritized(ctx, visible)
 		s.updateNativeMedia(m, func() {
 			m.textLoading = false
 			if err != nil {
@@ -769,16 +775,16 @@ func (s *app) requestNativeMediaRender(m *nativeMediaState, viewportWidth, viewp
 	m.mu.Unlock()
 	go func() {
 		defer m.wg.Done()
-		var rendered media.RenderedPage
+		var rendered media.RenderedRGBA
 		var err error
 		if imageDoc != nil {
-			rendered, err = imageDoc.RenderPNG(ctx, width)
+			rendered, err = imageDoc.RenderRGBA(ctx, width)
 		} else {
 			err = fmt.Errorf("媒体文档未打开")
 		}
 		var bitmap *ui.Bitmap
 		if err == nil {
-			bitmap, err = ui.DecodeBitmap(rendered.PNG)
+			bitmap = ui.NewBitmap(rendered.RGBA)
 		}
 		cancelled := ctx.Err() != nil
 		cancel()

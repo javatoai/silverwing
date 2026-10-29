@@ -55,14 +55,14 @@ func (l *markdownTaskRootMigrationLease) retainForTaskRootRecovery() error {
 		return errors.New("Markdown 任务迁移保存租约已释放")
 	}
 	s := l.app
-	if s == nil || l.plan == nil || s.pendingTaskRootMigration != nil && s.pendingTaskRootMigration != l {
+	if s == nil || l.plan == nil || s.materialsUnit.state.pendingTaskRootMigration != nil && s.materialsUnit.state.pendingTaskRootMigration != l {
 		l.closed = true
 		if l.engine != nil {
 			l.engine.FailClosed(markdownTaskRootRecoveryPause)
 		}
 		return errors.New("无法保留 Markdown 任务目录恢复租约")
 	}
-	if s.pendingTaskRootMigration == l {
+	if s.materialsUnit.state.pendingTaskRootMigration == l {
 		return nil
 	}
 	if l.plan.autosave != nil {
@@ -74,7 +74,7 @@ func (l *markdownTaskRootMigrationLease) retainForTaskRootRecovery() error {
 			}
 		}
 	}
-	s.pendingTaskRootMigration = l
+	s.materialsUnit.state.pendingTaskRootMigration = l
 	return nil
 }
 
@@ -82,27 +82,27 @@ func (l *markdownTaskRootMigrationLease) retainForTaskRootRecovery() error {
 // filesystem/manifests in the backend; this only releases the retained save
 // lease after the original complete identity and checkpoint absence are proven.
 func (s *app) observePendingTaskRootMigration(snapshot application.Snapshot) {
-	l := s.pendingTaskRootMigration
+	l := s.materialsUnit.state.pendingTaskRootMigration
 	if l == nil || !markdownTaskRootOriginalState(l.plan, snapshot, nil) {
 		return
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.closed {
-		s.pendingTaskRootMigration = nil
+		s.materialsUnit.state.pendingTaskRootMigration = nil
 		return
 	}
-	s.documentSaveMu.Lock()
+	s.materialsUnit.state.documentSaveMu.Lock()
 	for _, captured := range l.plan.entries {
-		current, exists := s.documentSaveRefs[captured.oldKey]
+		current, exists := s.materialsUnit.state.documentSaveRefs[captured.oldKey]
 		if !exists || !sameMarkdownMigrationRefOwner(current, captured.before) {
-			s.documentSaveMu.Unlock()
+			s.materialsUnit.state.documentSaveMu.Unlock()
 			return
 		}
 	}
-	s.documentSaveMu.Unlock()
+	s.materialsUnit.state.documentSaveMu.Unlock()
 	l.closed = true
-	s.pendingTaskRootMigration = nil
+	s.materialsUnit.state.pendingTaskRootMigration = nil
 	if l.engine != nil {
 		// Keep our pause error through Release so recovery itself does not
 		// implicitly save restored dirty content before the next edit/retry.
@@ -122,9 +122,9 @@ func (s *app) observePendingTaskRootMigration(snapshot application.Snapshot) {
 
 // OnClosed uses only the engine-owned lease. It never resumes an unconfirmed
 // source identity or changes editor source/draft/reading maps during shutdown.
-func (s *app) abandonPendingTaskRootMigration() {
-	l := s.pendingTaskRootMigration
-	s.pendingTaskRootMigration = nil
+func (s *materialsController) abandonPendingTaskRootMigration() {
+	l := s.state.pendingTaskRootMigration
+	s.state.pendingTaskRootMigration = nil
 	if l != nil {
 		l.Abandon(true)
 	}

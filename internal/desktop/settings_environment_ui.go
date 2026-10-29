@@ -105,11 +105,11 @@ func (s *app) settingsLogs(c *ui.Context, p palette) {
 				if menu.Item("refresh-status", "刷新本地状态").Icon("refresh").Chosen() {
 					s.act("task.refresh", "", "", "", "", "", nil)
 				}
-				if menu.Item("copy-latest", "复制最新错误").Icon("copy").Disabled(len(s.settingsLogEntries) == 0).Chosen() {
-					s.copyTextToClipboard(c.Services(), formatLogEntry(s.settingsLogEntries[0]), "最新错误已复制")
+				if menu.Item("copy-latest", "复制最新错误").Icon("copy").Disabled(len(s.settingsUnit.state.settingsLogEntries) == 0).Chosen() {
+					s.copyTextToClipboard(c.Services(), formatLogEntry(s.settingsUnit.state.settingsLogEntries[0]), "最新错误已复制")
 				}
-				if menu.Item("copy-all", "复制全部错误").Icon("copy").Disabled(len(s.settingsLogEntries) == 0).Chosen() {
-					s.copyTextToClipboard(c.Services(), formatLogEntries(s.settingsLogEntries), "错误日志已复制")
+				if menu.Item("copy-all", "复制全部错误").Icon("copy").Disabled(len(s.settingsUnit.state.settingsLogEntries) == 0).Chosen() {
+					s.copyTextToClipboard(c.Services(), formatLogEntries(s.settingsUnit.state.settingsLogEntries), "错误日志已复制")
 				}
 				if menu.Item("export", "导出诊断信息").Icon("save").Chosen() {
 					s.chooseSavePath("导出诊断信息", filepath.Join(s.snapshot.Home, "silverwing-diagnostics.zip"), []mygo.FileFilter{{Name: "压缩文件", Extensions: []string{"zip"}}}, func(path string) {
@@ -118,10 +118,10 @@ func (s *app) settingsLogs(c *ui.Context, p palette) {
 				}
 			})
 		})
-		if len(s.settingsLogEntries) == 0 {
+		if len(s.settingsUnit.state.settingsLogEntries) == 0 {
 			settingsMuted(c, p, "暂无错误记录。")
 		} else {
-			for index, entry := range s.settingsLogEntries {
+			for index, entry := range s.settingsUnit.state.settingsLogEntries {
 				ui.Column(c.Key(fmt.Sprintf("log-entry-%d", index))).FillWidth().Padding(10, 12).Gap(4).Background(p.soft).Radius(8).Children(func() {
 					label(c, firstNonEmpty(mapString(entry, "timestamp"), "未知时间")+" · "+mapString(entry, "event"), 10, p.muted).SingleLine()
 					label(c, mapString(entry, "message"), 11, p.text).LineHeight(1.45).Selectable()

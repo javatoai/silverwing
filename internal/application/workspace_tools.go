@@ -9,7 +9,9 @@ import (
 
 	"strings"
 
+	"silverwing-go/internal/documents"
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/requirementprovider"
 
 	"silverwing-go/internal/workspace"
 )
@@ -35,8 +37,14 @@ func (codexWorkspaceLauncher) Open(ctx context.Context, task workspace.TaskWorks
 }
 
 func (a *App) taskService(config domain.AppConfig) *workspace.TaskApplicationService {
-	service := workspace.NewTaskApplicationService(a.Manifests, a.git(config), a.Paths)
+	dependencies := workspace.ComposeTaskApplicationDependencies(a.Manifests, a.git(config), a.Paths, a.materialsPreparation())
+	service := workspace.NewTaskApplicationServiceWithDependencies(dependencies)
 	registry, _ := workspace.NewTaskWorkspaceToolRegistry([]workspace.TaskWorkspaceToolLauncher{codexWorkspaceLauncher{}})
 	service.WorkspaceTools.Registry = registry
 	return service
+}
+
+// materialsPreparation is the application composition root for the materials source.
+func (a *App) materialsPreparation() *documents.PreparationService {
+	return documents.NewPreparationService(a.Paths, requirementprovider.NewMeegle(a.Runner))
 }

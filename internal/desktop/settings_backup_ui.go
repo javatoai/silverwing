@@ -32,9 +32,9 @@ func (s *app) renderSettingsBackupList(c *ui.Context, p palette) {
 		state.backupSelected = map[string]bool{}
 	}
 	locked := s.busy || state.backupDeleteLoading || state.backupsLoading
-	all := len(s.settingsBackups) > 0
+	all := len(s.settingsUnit.state.settingsBackups) > 0
 	selected := 0
-	for _, backup := range s.settingsBackups {
+	for _, backup := range s.settingsUnit.state.settingsBackups {
 		id := mapString(backup, "id")
 		if id == "" || !state.backupSelected[id] {
 			all = false
@@ -42,14 +42,14 @@ func (s *app) renderSettingsBackupList(c *ui.Context, p palette) {
 			selected++
 		}
 	}
-	if len(s.settingsBackups) > 0 {
+	if len(s.settingsUnit.state.settingsBackups) > 0 {
 		ui.Row(c).FillWidth().Height(34).Gap(8).AlignItems(ui.Center).Children(func() {
 			check := ui.Checkbox(c.Key("settings-backup-select-all"), &all, "全选").Shrink(0).Disabled(locked)
-			if selected > 0 && selected < len(s.settingsBackups) {
+			if selected > 0 && selected < len(s.settingsUnit.state.settingsBackups) {
 				check.Mixed()
 			}
 			check.OnChange(func() {
-				for _, backup := range s.settingsBackups {
+				for _, backup := range s.settingsUnit.state.settingsBackups {
 					if id := mapString(backup, "id"); id != "" {
 						if all {
 							state.backupSelected[id] = true
@@ -75,7 +75,7 @@ func (s *app) renderSettingsBackupList(c *ui.Context, p palette) {
 			}
 		})
 	}
-	for _, backup := range s.settingsBackups {
+	for _, backup := range s.settingsUnit.state.settingsBackups {
 		id, path := mapString(backup, "id"), mapString(backup, "path")
 		name := filepath.Base(path)
 		checked := state.backupSelected[id]

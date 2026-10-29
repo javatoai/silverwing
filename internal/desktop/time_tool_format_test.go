@@ -13,7 +13,10 @@ func TestTimeToolNumericCopyRoundTripAndFriendlyError(t *testing.T) {
 	state := newToolPageState("")
 	t.Cleanup(state.cancelWork)
 	state.activeTab, state.timeZone, state.timeUnit = "日期时间", "Asia/Shanghai", "AUTO"
-	s := &app{page: "tools", tools: state}
+	s := &app{
+		toolsUnit: toolsController{state: toolsState{tools: state}},
+		page:      "tools",
+	}
 	tester := ui.NewTester(func(c *ui.Context) {
 		ui.Column(c).Fill().Padding(12).Children(func() { s.renderTimeTool(c, setTheme(c, false), state) })
 	}, 980, 720)

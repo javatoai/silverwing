@@ -40,13 +40,17 @@ jobs:
         shell: bash
         run: |
           python3 - <<'PY'
-          import os, pathlib, re
+          import os, pathlib, re, sys
+          sys.path.insert(0, 'scripts')
+          from product_profile import read_profile
+          profile = read_profile(pathlib.Path('.'))
           source = pathlib.Path('internal/domain/models.go').read_text(encoding='utf-8')
           version = re.search(r'CurrentProductVersion\s*=\s*"(\d+\.\d+\.\d+)"', source).group(1)
           ref = os.environ['GITHUB_REF']
           release = os.environ['GITHUB_EVENT_NAME'] == 'push' and ref.startswith('refs/tags/')
-          if release and ref != 'refs/tags/qa-v' + version:
-              raise SystemExit(f'Release tag must be qa-v{version}, got {ref}')
+          expected_tag = profile['ReleaseTagPrefix'] + version
+          if release and ref != 'refs/tags/' + expected_tag:
+              raise SystemExit(f'Release tag must be {expected_tag}, got {ref}')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(f'release={str(release).lower()}\n')
           PY
@@ -79,6 +83,9 @@ jobs:
           cache-dependency-path: |
             go.sum
             third_party/mygo/go.sum
+
+      - name: Check architecture dependency directions
+        run: go test ./internal/architecture
 
       - name: Install pinned NSIS for release installers
         if: matrix.platform == 'windows-x64' && needs.version.outputs.release == 'true'

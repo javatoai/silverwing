@@ -20,11 +20,11 @@ type materialsLiveRefreshBarrier struct {
 	workers []*materialsLiveRefreshState
 }
 
-func (s *app) ensureMaterialsLiveRefreshLifecycle() *materialsLiveRefreshLifecycle {
-	if s.materialsLiveRefreshLifecycle == nil {
-		s.materialsLiveRefreshLifecycle = &materialsLiveRefreshLifecycle{}
+func (s *materialsController) ensureMaterialsLiveRefreshLifecycle() *materialsLiveRefreshLifecycle {
+	if s.state.materialsLiveRefreshLifecycle == nil {
+		s.state.materialsLiveRefreshLifecycle = &materialsLiveRefreshLifecycle{}
 	}
-	return s.materialsLiveRefreshLifecycle
+	return s.state.materialsLiveRefreshLifecycle
 }
 
 func materialsLiveRefreshFinished(live *materialsLiveRefreshState) bool {
@@ -54,7 +54,7 @@ func (owner *materialsLiveRefreshLifecycle) remember(live *materialsLiveRefreshS
 	}
 }
 
-func (s *app) retireMaterialsLiveRefresh(live *materialsLiveRefreshState) {
+func (s *materialsController) retireMaterialsLiveRefresh(live *materialsLiveRefreshState) {
 	if live == nil {
 		return
 	}
@@ -80,8 +80,8 @@ func (s *app) pauseMaterialsLiveRefresh(action application.Action) *materialsLiv
 	if !materialsMutationNeedsWatchBarrier(action) {
 		return nil
 	}
-	owner := s.ensureMaterialsLiveRefreshLifecycle()
-	s.closeMaterialsLiveRefresh()
+	owner := s.materialsUnit.ensureMaterialsLiveRefreshLifecycle()
+	s.materialsUnit.closeMaterialsLiveRefresh()
 	owner.remember(nil)
 	barrier := &materialsLiveRefreshBarrier{owner: owner, workers: append([]*materialsLiveRefreshState(nil), owner.workers...)}
 	owner.barrier = barrier
@@ -127,7 +127,7 @@ func (s *app) resumeMaterialsLiveRefresh(barrier *materialsLiveRefreshBarrier) {
 
 // App.Run has ended, so no further UI callbacks can create new workers. Native
 // watcher shutdown depends only on cancellation and done, not Window.Update.
-func (s *app) joinMaterialsLiveRefresh(ctx context.Context) error {
+func (s *materialsController) joinMaterialsLiveRefresh(ctx context.Context) error {
 	owner := s.ensureMaterialsLiveRefreshLifecycle()
 	owner.closed = true
 	s.closeMaterialsLiveRefresh()

@@ -9,10 +9,10 @@ import (
 )
 
 func (s *app) renderRequirementCommentComposer(c *ui.Context, p palette) {
-	if s.commentComposers == nil {
+	if s.requirementUnit.state.commentComposers == nil {
 		return
 	}
-	state := s.commentComposers.active
+	state := s.requirementUnit.state.commentComposers.active
 	if !s.commentComposerCurrent(state) || !state.open {
 		return
 	}

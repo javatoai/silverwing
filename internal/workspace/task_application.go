@@ -31,33 +31,17 @@ type CreateTaskRequest struct {
 	AgentHandoffMarkdown *string                  `json:"agentHandoffMarkdown,omitempty"`
 }
 type TaskApplicationService struct {
-	Manifests            *storage.ManifestStore
+	Manifests            TaskManifestRepository
 	Paths                storage.Paths
 	Locks                *OperationLocks
 	Documents            *AgentDocumentService
 	RootMigration        *TaskRootMigrationService
 	Defaults             *TaskCreationDefaultsService
 	WorkspaceTools       *WorkspaceToolLaunchService
+	MaterialsPreparation *documents.PreparationService
 	RequirementMaterials RequirementMaterialsResolver
 	Now                  func() time.Time
 	OnOutput             func(process.StreamEvent)
-}
-
-func NewTaskApplicationService(manifests *storage.ManifestStore, _ *GitClient, paths storage.Paths) *TaskApplicationService {
-	if manifests == nil {
-		manifests = storage.NewManifestStore()
-	}
-	locks := NewOperationLocks(paths.Locks)
-	docs := NewAgentDocumentService(paths, manifests)
-	service := &TaskApplicationService{Manifests: manifests, Paths: paths, Locks: locks, Documents: docs, Now: time.Now}
-	service.RootMigration = NewTaskRootMigrationService(paths, nil, manifests, docs, nil, locks)
-	service.Defaults = NewTaskCreationDefaultsService(storage.NewConfigStore(paths))
-	service.WorkspaceTools = NewWorkspaceToolLaunchService(nil, manifests, locks)
-	preparation := documents.NewPreparationService(paths, process.NewRunner())
-	service.RequirementMaterials = func(ctx context.Context, config domain.AppConfig, input, folder string) (domain.RequirementMaterialsDirectory, *string, error) {
-		return resolveRequirementMaterials(ctx, config, input, folder, preparation)
-	}
-	return service
 }
 
 func (s *TaskApplicationService) ListTasks(taskRoot string) ([]storage.ManifestEntry, error) {

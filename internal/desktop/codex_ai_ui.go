@@ -10,7 +10,7 @@ import (
 )
 
 func (s *app) renderCodexAI(c *ui.Context, p palette) {
-	state := s.codexAI
+	state := s.toolsUnit.state.codexAI
 	if state == nil {
 		return
 	}

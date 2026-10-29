@@ -96,9 +96,9 @@ func (s *app) reconcileSettingsExtensionSourceSave(action application.Action, sn
 		return false
 	}
 	if action.Kind == "skills.sources/save" {
-		s.settingsSkillSources = reconcileSettingsExtensionSourceRows(s.settingsSkillSources, sources, sourceID, operationErr.Error())
+		s.settingsUnit.state.settingsSkillSources = reconcileSettingsExtensionSourceRows(s.settingsUnit.state.settingsSkillSources, sources, sourceID, operationErr.Error())
 	} else {
-		s.settingsMarketplaces = reconcileSettingsExtensionSourceRows(s.settingsMarketplaces, sources, sourceID, operationErr.Error())
+		s.settingsUnit.state.settingsMarketplaces = reconcileSettingsExtensionSourceRows(s.settingsUnit.state.settingsMarketplaces, sources, sourceID, operationErr.Error())
 	}
 	if s.settingsExtensionSourceFormMatches(action) {
 		s.dialogOpen = false

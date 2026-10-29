@@ -16,8 +16,8 @@ import (
 func materialsExpansionFixture(t *testing.T) *app {
 	s := readingObservationFixture(t)
 	s.desktopPreferences = &desktopPreferencesState{enabled: true, value: DefaultDesktopPreferences(), store: NewDesktopPreferencesStore(filepath.Join(t.TempDir(), "prefs.json"))}
-	root := s.currentTask().materialsPath
-	s.documents = []application.Document{{Name: "one", Path: filepath.Join(root, "one"), Kind: "directory", Children: []application.Document{{Name: "two", Path: filepath.Join(root, "one", "two"), Kind: "directory", Children: []application.Document{{Name: "three", Path: filepath.Join(root, "one", "two", "three"), Kind: "directory"}}}}}}
+	root := s.taskUnit.currentTask().materialsPath
+	s.materialsUnit.state.documents = []application.Document{{Name: "one", Path: filepath.Join(root, "one"), Kind: "directory", Children: []application.Document{{Name: "two", Path: filepath.Join(root, "one", "two"), Kind: "directory", Children: []application.Document{{Name: "three", Path: filepath.Join(root, "one", "two", "three"), Kind: "directory"}}}}}}
 	return s
 }
 
@@ -52,13 +52,13 @@ func TestMaterialsExpansionChangeResetsAndManualStateSurvivesRefresh(t *testing.
 	if s.readingExpandedDirectories()["one"] {
 		t.Fatal("refresh replaced manual collapse")
 	}
-	path, content, dirty := s.documentPath, s.documentContent, s.documentDirty
+	path, content, dirty := s.materialsUnit.state.documentPath, s.materialsUnit.state.documentContent, s.materialsUnit.state.documentDirty
 	s.saveMaterialsExpansionDepth("3")
 	material := s.currentReadingMaterials(false)
 	if !slices.Equal(material.ExpandedDirectories, []string{"one", "one/two", "one/two/three"}) || material.ExpansionRevision != 2 {
 		t.Fatalf("%+v", material)
 	}
-	if s.documentPath != path || s.documentContent != content || s.documentDirty != dirty {
+	if s.materialsUnit.state.documentPath != path || s.materialsUnit.state.documentContent != content || s.materialsUnit.state.documentDirty != dirty {
 		t.Fatal("expansion changed the document")
 	}
 	s.saveMaterialsExpansionDepth("0")
@@ -103,18 +103,18 @@ func TestMaterialsExpansionInvalidInputAndSaveFailureRetainState(t *testing.T) {
 func TestMaterialsExpansionChangedSettingAppliesToOtherTaskOnReturn(t *testing.T) {
 	s := materialsExpansionFixture(t)
 	s.initializeMaterialsTreeExpansion()
-	first := s.documents
-	s.selected = 1
-	s.tasks[1].materialsPath = filepath.Join(s.tasks[1].path, "materials")
-	other := []application.Document{{Name: "other", Kind: "directory", Path: filepath.Join(s.tasks[1].materialsPath, "other")}}
-	s.documents = other
+	first := s.materialsUnit.state.documents
+	s.taskUnit.state.selected = 1
+	s.taskUnit.state.tasks[1].materialsPath = filepath.Join(s.taskUnit.state.tasks[1].path, "materials")
+	other := []application.Document{{Name: "other", Kind: "directory", Path: filepath.Join(s.taskUnit.state.tasks[1].materialsPath, "other")}}
+	s.materialsUnit.state.documents = other
 	s.initializeMaterialsTreeExpansion()
 	s.setReadingDirectoryExpanded("other", false)
-	s.selected = 0
-	s.documents = first
+	s.taskUnit.state.selected = 0
+	s.materialsUnit.state.documents = first
 	s.saveMaterialsExpansionDepth("1")
-	s.selected = 1
-	s.documents = other
+	s.taskUnit.state.selected = 1
+	s.materialsUnit.state.documents = other
 	s.initializeMaterialsTreeExpansion()
 	if !s.readingExpandedDirectories()["other"] {
 		t.Fatal("previous task expansion revision was retained")
@@ -131,15 +131,15 @@ func TestMaterialsSettingsRefinementLayout(t *testing.T) {
 		for _, dark := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%d-dark-%t", width, dark), func(t *testing.T) {
 				s, _, _ := materialsGitDesktopFixture(t)
-				s.materialsGitCapture = true
+				s.materialsUnit.state.materialsGitCapture = true
 				s.desktopPreferences = &desktopPreferencesState{value: DefaultDesktopPreferences()}
 				cfg, _ := s.materialsGitConfig()
 				cfg.MaterialsGitSync.Branch = "docs/" + strings.Repeat("long-branch-", 5) + "team"
 				data, _ := json.Marshal(cfg)
-				s.configJSON = string(data)
+				s.settingsUnit.state.configJSON = string(data)
 				scope := application.MaterialsGitScope(s.snapshot.Home, cfg)
-				s.materialsGit.scope = scope
-				s.materialsGitBranches = &materialsGitBranchesState{scope: scope, loaded: true, branches: []string{cfg.MaterialsGitSync.Branch, "master"}}
+				s.materialsUnit.state.materialsGit.scope = scope
+				s.materialsUnit.state.materialsGitBranches = &materialsGitBranchesState{scope: scope, loaded: true, branches: []string{cfg.MaterialsGitSync.Branch, "master"}}
 				tt := ui.NewTester(func(c *ui.Context) {
 					p := setTheme(c, dark)
 					ui.Scroll(c).Fill().Padding(24).Gap(14).Background(p.bg).Children(func() { s.settingsPaths(c, p) })

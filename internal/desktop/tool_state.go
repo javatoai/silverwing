@@ -139,10 +139,10 @@ func newToolPageState(source string) *toolPageState {
 }
 
 func (s *app) ensureToolState() *toolPageState {
-	if s.tools == nil {
-		s.tools = newToolPageState(s.json)
+	if s.toolsUnit.state.tools == nil {
+		s.toolsUnit.state.tools = newToolPageState(s.toolsUnit.state.json)
 	}
-	return s.tools
+	return s.toolsUnit.state.tools
 }
 
 func (s *app) queueJSONValidation() {
@@ -180,7 +180,7 @@ func (s *app) queueJSONValidation() {
 			return
 		}
 		s.win.Update(func() {
-			if s.tools != state || state.jsonRevision != revision || state.jsonSource != source || ctx.Err() != nil {
+			if s.toolsUnit.state.tools != state || state.jsonRevision != revision || state.jsonSource != source || ctx.Err() != nil {
 				return
 			}
 			if err != nil {
@@ -230,7 +230,7 @@ func (s *app) queueTimeConversion() {
 			return
 		}
 		s.win.Update(func() {
-			if s.tools != state || state.timeRevision != revision || state.timeInput != source || state.timeZone != zone || ctx.Err() != nil {
+			if s.toolsUnit.state.tools != state || state.timeRevision != revision || state.timeInput != source || state.timeZone != zone || ctx.Err() != nil {
 				return
 			}
 			state.timePending = false
@@ -280,7 +280,7 @@ func (s *app) queueDiff() {
 			return
 		}
 		s.win.Update(func() {
-			if s.tools != state || state.diffRevision != revision || state.diffLeft != left || state.diffRight != right || ctx.Err() != nil {
+			if s.toolsUnit.state.tools != state || state.diffRevision != revision || state.diffLeft != left || state.diffRight != right || ctx.Err() != nil {
 				return
 			}
 			state.diffPending = false
@@ -445,33 +445,20 @@ func (s *toolPageState) cancelWork() {
 }
 
 func actionData[T any](data any) (T, bool) {
-	if value, ok := data.(T); ok {
-		return value, true
-	}
-	var value T
 	if data == nil {
-		return value, false
+		var zero T
+		return zero, false
 	}
-	raw, err := json.Marshal(data)
-	if err != nil || json.Unmarshal(raw, &value) != nil {
-		return value, false
-	}
-	return value, true
+	value, err := application.ResultData[T](application.ActionResult{Data: data})
+	return value, err == nil
 }
 
 func actionDataSlice[T any](data any) ([]T, error) {
-	if values, ok := data.([]T); ok {
-		return values, nil
-	}
 	if data == nil {
 		return []T{}, nil
 	}
-	raw, err := json.Marshal(data)
+	values, err := application.ResultData[[]T](application.ActionResult{Data: data})
 	if err != nil {
-		return nil, err
-	}
-	var values []T
-	if err := json.Unmarshal(raw, &values); err != nil {
 		return nil, err
 	}
 	if values == nil {

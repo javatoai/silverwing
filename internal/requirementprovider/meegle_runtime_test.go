@@ -1,10 +1,11 @@
-package documents
+package requirementprovider
 
 import (
 	"context"
 	"strings"
 	"testing"
 
+	"silverwing-go/internal/documents"
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/process"
 	"silverwing-go/internal/storage"
@@ -36,13 +37,15 @@ func TestMaterialsNewDirectoryAndTitleShareConfiguredRuntime(t *testing.T) {
 	c.CommandProxyURL = &proxy
 	c.CommandProxyTargets = []domain.CommandProxyTarget{domain.ProxyTargetMeegle}
 	runner := &materialsRuntimeRunner{}
-	service := NewPreparationService(storage.NewPaths(t.TempDir()), runner)
+	provider := NewMeegle(runner)
+	service := documents.NewPreparationService(storage.NewPaths(t.TempDir()), provider)
 	result, err := service.Ensure(context.Background(), c, "https://project.feishu.cn/obt/bug/detail/123456", "新目录")
 	if err != nil || result.Status != domain.MaterialsReady || result.WriteRoot == nil {
 		t.Fatalf("fresh materials failed: %+v %v", result, err)
 	}
-	if title := service.fetchRequirementTitle(context.Background(), c, "https://project.feishu.cn/obt/bug/detail/123456", "project"); title != "最新需求标题" {
-		t.Fatal(title)
+	identity := documents.RequirementIdentity{Space: "obt", Kind: "bug", WorkItemID: "123456"}
+	if title, err := provider.Title(context.Background(), c, documents.RequirementReference{WorkItemID: identity.WorkItemID, Identity: &identity}); err != nil || title != "最新需求标题" {
+		t.Fatal(title, err)
 	}
 	if len(runner.specs) != 2 {
 		t.Fatalf("expected both remote boundaries, got %d", len(runner.specs))
@@ -68,7 +71,7 @@ func TestMaterialsRuntimeFailurePreservesCause(t *testing.T) {
 			c.RequirementMaterialsSubdirectory = &subdir
 			c.MeegleProjects = []domain.MeegleProjectConfig{{ProjectKey: "project", SimpleName: "obt"}}
 			r := &materialsRuntimeRunner{failure: failure}
-			service := NewPreparationService(storage.NewPaths(t.TempDir()), r)
+			service := documents.NewPreparationService(storage.NewPaths(t.TempDir()), NewMeegle(r))
 			result, err := service.Ensure(context.Background(), c, "https://project.feishu.cn/obt/bug/detail/123456", "失败目录")
 			if err != nil || result.Status != domain.MaterialsFailed || result.FailureReason == nil || !strings.Contains(*result.FailureReason, failure) {
 				t.Fatalf("lost startup/auth failure: %+v %v", result, err)

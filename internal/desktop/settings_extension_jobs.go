@@ -33,7 +33,7 @@ type settingsExtensionJobs struct {
 }
 
 func (s *app) settingsExtensionCurrentScope() settingsExtensionReadScope {
-	return settingsExtensionReadScope{home: s.snapshot.Home, config: s.configJSON, page: s.page, settingsPage: s.settingsPage}
+	return settingsExtensionReadScope{home: s.snapshot.Home, config: s.settingsUnit.state.configJSON, page: s.page, settingsPage: s.settingsUnit.state.settingsPage}
 }
 
 func (s *app) beginSettingsExtensionRead(action application.Action) (*settingsExtensionReadJob, error) {
@@ -66,7 +66,7 @@ func (s *app) beginSettingsExtensionRead(action application.Action) (*settingsEx
 }
 
 func (s *app) settingsExtensionReadRelevant(request *settingsExtensionReadJob) bool {
-	state := s.settingsExtensionRequests
+	state := s.settingsUnit.state.settingsExtensionRequests
 	if request == nil || state == nil || state.jobs != request.owner || request.owner.current[request.key] != request ||
 		request.ctx.Err() != nil || request.scope != s.settingsExtensionCurrentScope() || !s.settingsExtensionActionRelevant(request.action) {
 		return false
@@ -174,8 +174,8 @@ func (s *app) completeSettingsExtensionRead(request *settingsExtensionReadJob) {
 	jobs.mu.Unlock()
 }
 
-func (s *app) closeSettingsExtensionReads(ctx context.Context) error {
-	state := s.settingsExtensionRequests
+func (s *settingsController) closeSettingsExtensionReads(ctx context.Context) error {
+	state := s.state.settingsExtensionRequests
 	if state == nil || state.jobs == nil {
 		return nil
 	}

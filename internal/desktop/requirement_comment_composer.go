@@ -58,8 +58,8 @@ func (s *app) commentComposerConfig() string {
 
 func (s *app) commentComposerNavigation() string {
 	key := ""
-	if s.requirementContentJobs != nil {
-		key = s.requirementContentJobs.visible
+	if s.requirementUnit.state.requirementContentJobs != nil {
+		key = s.requirementUnit.state.requirementContentJobs.visible
 	}
 	return s.page + "\x00" + key
 }
@@ -68,15 +68,15 @@ func (s *app) commentComposerCurrent(state *requirementCommentComposer) bool {
 	if state == nil || state.home != s.snapshot.Home || state.config != s.commentComposerConfig() || state.profile != s.currentRequirementIdentityContext() {
 		return false
 	}
-	if identity := s.requirementIdentityJobs; state.account != "" && identity != nil && identity.confirmed && (identity.identity != state.account || identity.state != application.RequirementIdentityAuthenticated) {
+	if identity := s.requirementUnit.state.requirementIdentityJobs; state.account != "" && identity != nil && identity.confirmed && (identity.identity != state.account || identity.state != application.RequirementIdentityAuthenticated) {
 		return false
 	}
 	return true
 }
 
 func (s *app) commentComposerUpdate(fn func()) {
-	if s.commentComposers != nil && s.commentComposers.update != nil {
-		s.commentComposers.update(fn)
+	if s.requirementUnit.state.commentComposers != nil && s.requirementUnit.state.commentComposers.update != nil {
+		s.requirementUnit.state.commentComposers.update(fn)
 		return
 	}
 	if s.win != nil && !s.win.IsDestroyed() {
@@ -99,17 +99,17 @@ func (s *app) openRequirementCommentTarget(reader *requirementReaderState, comme
 	if reader == nil || domain.ParseFeishuWorkItemLink(reader.url) == nil || s.backend == nil {
 		return
 	}
-	if s.commentComposers == nil {
-		s.commentComposers = &requirementCommentComposers{}
+	if s.requirementUnit.state.commentComposers == nil {
+		s.requirementUnit.state.commentComposers = &requirementCommentComposers{}
 	}
-	for _, state := range s.commentComposers.all {
+	for _, state := range s.requirementUnit.state.commentComposers.all {
 		if state.editCommentID == commentID && sameRequirementReaderLink(state.url, reader.url) && s.commentComposerCurrent(state) {
-			if old := s.commentComposers.active; old != nil {
+			if old := s.requirementUnit.state.commentComposers.active; old != nil {
 				old.open = false
 			}
 			state.open = true
 			state.navigation = s.commentComposerNavigation()
-			s.commentComposers.active = state
+			s.requirementUnit.state.commentComposers.active = state
 			if (!state.loaded || commentID != "" && !state.dirty) && !state.running {
 				s.startCommentComposerJob(state, "load", nil)
 			}
@@ -122,14 +122,14 @@ func (s *app) openRequirementCommentTarget(reader *requirementReaderState, comme
 	} else if reader.body != nil {
 		state.draft.Item = domain.ParticipatedWorkItem{URL: reader.url, Title: reader.body.Title}
 	}
-	if id := s.requirementIdentityJobs; id != nil && id.confirmed {
+	if id := s.requirementUnit.state.requirementIdentityJobs; id != nil && id.confirmed {
 		state.account = id.identity
 	}
-	if old := s.commentComposers.active; old != nil {
+	if old := s.requirementUnit.state.commentComposers.active; old != nil {
 		old.open = false
 	}
-	s.commentComposers.all = append(s.commentComposers.all, state)
-	s.commentComposers.active = state
+	s.requirementUnit.state.commentComposers.all = append(s.requirementUnit.state.commentComposers.all, state)
+	s.requirementUnit.state.commentComposers.active = state
 	s.startCommentComposerJob(state, "load", nil)
 }
 
@@ -313,10 +313,10 @@ func commentComposerDraftMatches(state *requirementCommentComposer, draft domain
 }
 
 func (s *app) observeRequirementCommentComposers() {
-	if s.commentComposers == nil {
+	if s.requirementUnit.state.commentComposers == nil {
 		return
 	}
-	for _, state := range s.commentComposers.all {
+	for _, state := range s.requirementUnit.state.commentComposers.all {
 		if !s.commentComposerCurrent(state) {
 			state.open = false
 			if state.cancel != nil {
@@ -336,7 +336,7 @@ func (s *app) observeRequirementCommentComposers() {
 			s.startCommentComposerJob(state, "paste", map[string]any{"imagePNG": data})
 		}
 	}
-	if viewer := s.markdownBitmapViewer; viewer != nil && viewer.composer != nil && !s.commentComposerImageCurrent(viewer) {
+	if viewer := s.materialsUnit.state.markdownBitmapViewer; viewer != nil && viewer.composer != nil && !s.commentComposerImageCurrent(viewer) {
 		s.dismissMarkdownBitmapViewer()
 	}
 }
@@ -346,11 +346,11 @@ func isCommentDraftMarkdownOwner(owner *markdownEditorState) bool {
 }
 
 func (s *app) commentComposerImageCurrent(viewer *markdownBitmapViewerState) bool {
-	if viewer == nil || viewer.composer == nil || s.commentComposers == nil {
+	if viewer == nil || viewer.composer == nil || s.requirementUnit.state.commentComposers == nil {
 		return false
 	}
 	state := viewer.composer
-	return s.commentComposers.active == state && state.open && state.preview && state.markdown == viewer.owner &&
+	return s.requirementUnit.state.commentComposers.active == state && state.open && state.preview && state.markdown == viewer.owner &&
 		s.commentComposerCurrent(state) && state.navigation == s.commentComposerNavigation()
 }
 
@@ -401,7 +401,7 @@ func (s *app) queueCommentThumbnails(state *requirementCommentComposer) {
 }
 
 func (s *app) refreshPublishedRequirementComments(link string) {
-	for _, reader := range s.requirementReaders {
+	for _, reader := range s.requirementUnit.state.requirementReaders {
 		if !sameRequirementReaderLink(reader.url, link) {
 			continue
 		}
@@ -511,10 +511,10 @@ func (s *app) confirmCommentDraftChange(state *requirementCommentComposer, retry
 }
 
 func (s *app) commentComposerCloseError() error {
-	if s.commentComposers == nil {
+	if s.requirementUnit.state.commentComposers == nil {
 		return nil
 	}
-	for _, state := range s.commentComposers.all {
+	for _, state := range s.requirementUnit.state.commentComposers.all {
 		if state.running || state.clipboardReading || len(state.pendingScreenshot) > 0 {
 			return fmt.Errorf("评论草稿或发布操作正在执行，请完成后再关闭；可先收起弹窗")
 		}
@@ -553,16 +553,16 @@ func (s *app) confirmReloadCommentEdit(state *requirementCommentComposer) {
 	}
 }
 
-func (s *app) closeRequirementCommentComposers(ctx context.Context) error {
-	if s.commentComposers == nil {
+func (s *requirementController) closeRequirementCommentComposers(ctx context.Context) error {
+	if s.state.commentComposers == nil {
 		return nil
 	}
-	for _, state := range s.commentComposers.all {
+	for _, state := range s.state.commentComposers.all {
 		if state.cancel != nil {
 			state.cancel()
 		}
 	}
-	for _, state := range s.commentComposers.all {
+	for _, state := range s.state.commentComposers.all {
 		if state.done != nil {
 			select {
 			case <-state.done:

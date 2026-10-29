@@ -12,9 +12,14 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from product_profile import read_profile
+
 spec = importlib.util.spec_from_file_location('publish_release', Path(__file__).with_name('publish-release.py'))
 release = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release)
+
+
+SOURCE_ROOT = Path(__file__).resolve().parent.parent
 
 
 class PublishReleaseChecks(unittest.TestCase):
@@ -22,15 +27,21 @@ class PublishReleaseChecks(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        self.profile = read_profile(SOURCE_ROOT)
+        self.executable = self.profile['ExecutableName']
+        self.tag = self.profile['ReleaseTagPrefix'] + '2.1.8'
+        profile_source = self.root / 'internal/productprofile/current.go'
+        profile_source.parent.mkdir(parents=True)
+        profile_source.write_bytes((SOURCE_ROOT / 'internal/productprofile/current.go').read_bytes())
         self.assets = self.root / 'dist'
         self.assets.mkdir()
         model = self.root / 'internal/domain/models.go'
         model.parent.mkdir(parents=True)
         model.write_text('const CurrentProductVersion = "2.1.8"\n')
         for suffix in ['windows-x64-portable.zip', 'windows-x64-setup.exe', 'windows-x64.msi', 'macos-arm64.dmg']:
-            (self.assets / ('silverwing-qa-2.1.8-' + suffix)).write_bytes(('synthetic ' + suffix).encode())
+            (self.assets / (self.executable + '-2.1.8-' + suffix)).write_bytes(('synthetic ' + suffix).encode())
         self.sha = 'a' * 40
-        self.env = {'GITHUB_REPOSITORY': 'javatoai/silverwing', 'GITHUB_REF': 'refs/tags/qa-v2.1.8',
+        self.env = {'GITHUB_REPOSITORY': 'javatoai/silverwing', 'GITHUB_REF': 'refs/tags/' + self.tag,
                     'GITHUB_SHA': self.sha, 'GITHUB_EVENT_NAME': 'push'}
         self.calls = []
         self.created = False
@@ -39,9 +50,9 @@ class PublishReleaseChecks(unittest.TestCase):
         self.read_error = 0
         self.read_id_error = 0
         self.create_id = 123
-        self.create_tag = 'qa-v2.1.8'
+        self.create_tag = self.tag
         self.read_id = 123
-        self.read_tag = 'qa-v2.1.8'
+        self.read_tag = self.tag
         self.existing_published = False
         self.bad_digest = False
         self.moved_tag = False
@@ -57,14 +68,14 @@ class PublishReleaseChecks(unittest.TestCase):
             payload = json.loads(Path(args[args.index('--input') + 1]).read_text())
             if method == 'POST':
                 self.assertEqual(endpoint, 'repos/javatoai/silverwing/releases')
-                self.assertEqual(payload['tag_name'], 'qa-v2.1.8')
+                self.assertEqual(payload['tag_name'], self.tag)
                 self.assertEqual(payload['target_commitish'], self.sha)
                 self.assertTrue(payload['draft'])
                 self.created = True
                 return json.dumps({'id': self.create_id, 'draft': True, 'tag_name': self.create_tag})
             self.assertEqual(method, 'PATCH')
             self.assertEqual(endpoint, 'repos/javatoai/silverwing/releases/123')
-            self.assertEqual(payload, {'draft': False, 'make_latest': 'false'})
+            self.assertEqual(payload, {'draft': False, 'make_latest': str(self.profile['ReleaseMakeLatest']).lower()})
             self.published = True
             return '{}'
         if args[0] == 'api' and '/commits/' in args[1]:
@@ -73,7 +84,7 @@ class PublishReleaseChecks(unittest.TestCase):
             self.assertIn('--slurp', args)
             if self.read_error:
                 raise subprocess.CalledProcessError(1, ['gh', *args], stderr=f'gh: error (HTTP {self.read_error})')
-            existing = [{'id': 999, 'tag_name': 'qa-v2.1.8', 'draft': not self.existing_published}] if self.exists else []
+            existing = [{'id': 999, 'tag_name': self.tag, 'draft': not self.existing_published}] if self.exists else []
             return json.dumps([[{'id': 1, 'tag_name': 'v0.0.1', 'draft': False}], existing])
         if args[0] == 'api' and '/releases/tags/' in args[1]:
             # The real tag endpoint cannot read an unpublished draft.
@@ -89,7 +100,7 @@ class PublishReleaseChecks(unittest.TestCase):
                 assets[0]['digest'] = 'sha256:' + '0' * 64
             return json.dumps({'id': self.read_id, 'draft': not self.published, 'tag_name': self.read_tag,
                                'target_commitish': 'master', 'assets': assets,
-                               'html_url': 'https://example.invalid/releases/v2.1.8'})
+                               'html_url': f'https://example.invalid/releases/{self.tag}'})
         if args[:2] == ('release', 'upload'):
             self.assertTrue(self.created)
             self.assertNotIn('--clobber', args)
@@ -114,7 +125,7 @@ class PublishReleaseChecks(unittest.TestCase):
 
     def test_pr_branch_manual_wrong_tag_and_wrong_repository_never_write(self):
         for key, value in [('GITHUB_EVENT_NAME', 'pull_request'), ('GITHUB_EVENT_NAME', 'workflow_dispatch'),
-                           ('GITHUB_REF', 'refs/heads/master'), ('GITHUB_REF', 'refs/tags/qa-v2.1.9'),
+                           ('GITHUB_REF', 'refs/heads/master'), ('GITHUB_REF', 'refs/tags/' + self.profile['ReleaseTagPrefix'] + '2.1.9'),
                            ('GITHUB_REPOSITORY', 'other/silverwing')]:
             with self.subTest(key=key, value=value):
                 original = self.env[key]
@@ -124,8 +135,25 @@ class PublishReleaseChecks(unittest.TestCase):
                 self.env[key] = original
         self.assertEqual(self.calls, [])
 
+    def test_foreign_channel_tags_never_write(self):
+        for prefix in ['v', 'qa-v', 'product-v']:
+            if prefix == self.profile['ReleaseTagPrefix']:
+                continue
+            with self.subTest(prefix=prefix), self.assertRaises(RuntimeError):
+                self.env['GITHUB_REF'] = 'refs/tags/' + prefix + '2.1.8'
+                self.run_publish()
+        self.assertEqual(self.calls, [])
+
+    def test_foreign_channel_package_never_writes(self):
+        package = self.assets / (self.executable + '-2.1.8-windows-x64.msi')
+        foreign = 'silverwing-qa' if self.executable != 'silverwing-qa' else 'silverwing-product'
+        package.rename(self.assets / (foreign + '-2.1.8-windows-x64.msi'))
+        with self.assertRaises(RuntimeError):
+            self.run_publish()
+        self.assertEqual(self.calls, [])
+
     def test_missing_empty_or_extra_package_never_writes(self):
-        package = self.assets / 'silverwing-qa-2.1.8-windows-x64.msi'
+        package = self.assets / (self.executable + '-2.1.8-windows-x64.msi')
         original = package.read_bytes()
         package.unlink()
         with self.assertRaises(RuntimeError):

@@ -36,9 +36,11 @@ func TestTaskRequirementDetailTitleSources(t *testing.T) {
 			if test.metadataTitle != "" {
 				state.Metadata.Title = &test.metadataTitle
 			}
-			s := &app{taskRequirementMetadata: map[string]taskRequirementMetadataState{item.id: state}}
+			s := &app{
+				requirementUnit: requirementController{state: requirementState{taskRequirementMetadata: map[string]taskRequirementMetadataState{item.id: state}}},
+			}
 			if test.listTitle != "" || test.workItemTitle != "" {
-				s.requirements = []application.Requirement{{Title: test.listTitle, URL: firstNonEmpty(test.listURL, link),
+				s.requirementUnit.state.requirements = []application.Requirement{{Title: test.listTitle, URL: firstNonEmpty(test.listURL, link),
 					WorkItem: domain.ParticipatedWorkItem{ID: "1001", Title: test.workItemTitle}}}
 			}
 			if test.noLink {
@@ -57,13 +59,13 @@ func TestTaskRequirementRolesMoveToRequirementDetails(t *testing.T) {
 		for _, dark := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%d-dark-%t", width, dark), func(t *testing.T) {
 				s := taskRequirementTitleFixture(&fullTitle)
-				s.configJSON, s.inputs = "{}", map[string]*string{}
-				item := s.currentTask()
-				state := s.taskRequirementMetadata[item.id]
+				s.settingsUnit.state.configJSON, s.inputs = "{}", map[string]*string{}
+				item := s.taskUnit.currentTask()
+				state := s.requirementUnit.state.taskRequirementMetadata[item.id]
 				state.Metadata.Participants = domain.RequirementParticipants{
 					QCOwners: []domain.RequirementPerson{{Name: "测试同事"}}, ProductManagers: []domain.RequirementPerson{{Name: "产品同事"}},
 				}
-				s.taskRequirementMetadata[item.id] = state
+				s.requirementUnit.state.taskRequirementMetadata[item.id] = state
 				header := ui.NewTester(func(c *ui.Context) { s.taskHeader(c, setTheme(c, dark)) }, width, 220)
 				for _, removed := range []string{"复制需求编号", "测试同事", "产品同事"} {
 					if header.HasText(removed) {
@@ -82,7 +84,7 @@ func TestTaskRequirementRolesMoveToRequirementDetails(t *testing.T) {
 				reader := s.requirementReader(item.id, item.requirementURL)
 				s.updateRequirementReaderBody(reader, application.RequirementContent{Body: "## 需求正文\n\n需求真实名称与角色在此集中展示。", Complete: true})
 				s.updateRequirementReaderComments(reader, application.RequirementComments{Comments: []domain.RequirementComment{{ID: "comment", AuthorName: "需求讨论成员", CreatedAt: "2026-10-16 10:00", Content: "原有正文和评论阅读继续保留。"}}})
-				t.Cleanup(s.closeRequirementReaders)
+				t.Cleanup(s.requirementUnit.closeRequirementReaders)
 				detail := ui.NewTester(func(c *ui.Context) { s.requirementDetails(c, setTheme(c, dark)) }, width, 720)
 				if !detail.HasText(strings.TrimSpace(fullTitle)) || detail.HasText(item.title) || detail.HasText(item.requirementTitle) {
 					t.Fatal("requirement detail did not use the real metadata title")
@@ -110,11 +112,11 @@ func TestTaskRequirementRolesMoveToRequirementDetails(t *testing.T) {
 func TestTaskRequirementParticipantsRejectDifferentURL(t *testing.T) {
 	fullTitle := "真实需求名"
 	s := taskRequirementTitleFixture(&fullTitle)
-	item := s.currentTask()
-	state := s.taskRequirementMetadata[item.id]
+	item := s.taskUnit.currentTask()
+	state := s.requirementUnit.state.taskRequirementMetadata[item.id]
 	state.URL += "/other"
 	state.Metadata.Participants.QCOwners = []domain.RequirementPerson{{Name: "其他需求的测试"}}
-	s.taskRequirementMetadata[item.id] = state
+	s.requirementUnit.state.taskRequirementMetadata[item.id] = state
 	tester := ui.NewTester(func(c *ui.Context) {
 		s.renderTaskRequirementParticipants(c, setTheme(c, false), item)
 	}, 600, 200)

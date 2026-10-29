@@ -34,9 +34,13 @@ var materialsYearPattern = regexp.MustCompile(`^[1-9][0-9]{3}$`)
 var materialsRequirementPattern = regexp.MustCompile(`^[0-9]+-.+$`)
 
 // Derived from the existing write root; sibling directories are read-only.
-type AnnualMaterialsScope struct{ Base, Root, Owned, Temporary string }
+type MaterialsScope struct{ Base, Root, Owned, Temporary string }
 
-func (s AnnualMaterialsScope) Readable(path string) bool {
+// AnnualMaterialsScope retains the existing API while supported materials use
+// one permission model.
+type AnnualMaterialsScope = MaterialsScope
+
+func (s MaterialsScope) Readable(path string) bool {
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(s.Root, filepath.FromSlash(path))
 	}
@@ -63,7 +67,7 @@ func AnnualScope(owned string) (AnnualMaterialsScope, bool) {
 	}
 	return AnnualMaterialsScope{Base: filepath.Dir(year), Root: root, Owned: owned, Temporary: filepath.Join(root, TemporaryMaterialsDirectory)}, true
 }
-func (s AnnualMaterialsScope) Writable(path string, allowRoot bool) bool {
+func (s MaterialsScope) Writable(path string, allowRoot bool) bool {
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(s.Root, filepath.FromSlash(path))
 	}
@@ -87,7 +91,7 @@ func (s AnnualMaterialsScope) Writable(path string, allowRoot bool) bool {
 }
 
 // Caller holds the existing materials lock. No Git query or initialization.
-func (s AnnualMaterialsScope) EnsureLocal() error {
+func (s MaterialsScope) EnsureLocal() error {
 	for _, path := range []string{s.Owned, s.Temporary} {
 		if err := ensureMaterialsDirectory(s.Base, path); err != nil {
 			return err
@@ -162,7 +166,7 @@ func annualRequirementDirectory(root, id, folder string) (string, error) {
 	return findAnnualRequirementDirectory(root, id, folder, time.Now().Year())
 }
 
-func (s AnnualMaterialsScope) DirectoryInstructions(planned bool) (string, error) {
+func (s MaterialsScope) DirectoryInstructions(planned bool) (string, error) {
 	for _, path := range []string{s.Base, filepath.Dir(s.Root), s.Root} {
 		info, err := os.Lstat(path)
 		if os.IsNotExist(err) && planned {

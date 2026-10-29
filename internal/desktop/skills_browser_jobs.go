@@ -40,7 +40,7 @@ func (s *app) observeSkillsBrowserNavigation() {
 }
 
 func (s *app) leaveLocalSkillsView() {
-	state := s.skillsBrowser
+	state := s.settingsUnit.state.skillsBrowser
 	if state == nil || (!state.pageActive && state.pendingCatalog == "" && state.pendingFiles == "" && state.pendingPreview == "") {
 		return
 	}
@@ -60,7 +60,7 @@ func (s *app) leaveLocalSkillsView() {
 }
 
 func (s *app) cancelSkillsBrowserRead(kind string) {
-	if state := s.skillsBrowser; state != nil && state.jobs != nil {
+	if state := s.settingsUnit.state.skillsBrowser; state != nil && state.jobs != nil {
 		if request := state.jobs.current[kind]; request != nil {
 			request.cancel()
 			delete(state.jobs.current, kind)
@@ -170,8 +170,8 @@ func (s *app) dispatchSkillsBrowserRead(action application.Action) bool {
 	return true
 }
 
-func (s *app) closeSkillsBrowserReads(ctx context.Context) error {
-	state := s.skillsBrowser
+func (s *settingsController) closeSkillsBrowserReads(ctx context.Context) error {
+	state := s.state.skillsBrowser
 	if state == nil || state.jobs == nil {
 		return nil
 	}

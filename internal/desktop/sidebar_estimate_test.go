@@ -30,9 +30,13 @@ func (b *estimateBadgeBackend) Dispatch(_ context.Context, action application.Ac
 func estimateBadgeApp(t *testing.T) *app {
 	t.Helper()
 	t.Setenv("USERPROFILE", t.TempDir())
-	s := &app{page: "tasks", configJSON: `{"meegleExecutablePath":"fixture-meegle","meegleProjects":[{"project_key":"p","simple_name":"fixture"}],"aiRequirementNamingPrewarmEnabled":false}`,
-		snapshot: application.Snapshot{Home: t.TempDir()}, requirementIdentityJobs: &requirementIdentityJobState{confirmed: true, state: application.RequirementIdentityAuthenticated, identity: "fixture-account-a"}}
-	s.requirementIdentityJobs.context, s.requirementIdentityJobs.hasContext = s.currentRequirementIdentityContext(), true
+	s := &app{
+		requirementUnit: requirementController{state: requirementState{requirementIdentityJobs: &requirementIdentityJobState{confirmed: true, state: application.RequirementIdentityAuthenticated, identity: "fixture-account-a"}}},
+		settingsUnit:    settingsController{state: settingsState{configJSON: `{"meegleExecutablePath":"fixture-meegle","meegleProjects":[{"project_key":"p","simple_name":"fixture"}],"aiRequirementNamingPrewarmEnabled":false}`}},
+		page:            "tasks",
+		snapshot:        application.Snapshot{Home: t.TempDir()},
+	}
+	s.requirementUnit.state.requirementIdentityJobs.context, s.requirementUnit.state.requirementIdentityJobs.hasContext = s.currentRequirementIdentityContext(), true
 	s.observeRequirementListIdentity()
 	t.Cleanup(func() {
 		_ = s.closeRequirementNamingPreparation(context.Background())
@@ -55,10 +59,10 @@ func estimateBadgeRequest(s *app, sprint string) *requirementListJob {
 	state.generation++
 	ctx, cancel := context.WithCancel(context.Background())
 	request := &requirementListJob{generation: state.generation, identity: s.currentRequirementListIdentity(), ctx: ctx, cancel: cancel,
-		sprintKey: sprint, sameSprint: sprint == s.requirementsSelectedSprintKey, items: append([]application.Requirement(nil), s.requirements...), selectedKey: s.selectedRequirementKey,
-		action: application.Action{Kind: "requirements.list", Payload: map[string]any{"expectedIdentity": s.requirementIdentityJobs.identity}}}
+		sprintKey: sprint, sameSprint: sprint == s.requirementUnit.state.requirementsSelectedSprintKey, items: append([]application.Requirement(nil), s.requirementUnit.state.requirements...), selectedKey: s.requirementUnit.state.selectedRequirementKey,
+		action: application.Action{Kind: "requirements.list", Payload: map[string]any{"expectedIdentity": s.requirementUnit.state.requirementIdentityJobs.identity}}}
 	state.identity, state.hasIdentity, state.current = request.identity, true, request
-	s.requirementsRequested, s.requirementsLoading = true, true
+	s.requirementUnit.state.requirementsRequested, s.requirementUnit.state.requirementsLoading = true, true
 	return request
 }
 
@@ -76,16 +80,16 @@ func TestRequirementEstimateBadgeBootstrapsOutsideRequirements(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s := estimateBadgeApp(t)
 			s.backend = &estimateBadgeBackend{cached: cached}
-			s.requirementIdentityJobs.confirmed = false
+			s.requirementUnit.state.requirementIdentityJobs.confirmed = false
 			s.observeRequirementIdentityJobs()
-			pending := s.requirementIdentityJobs.pending
-			if !s.requirementsRequested || pending == nil || pending.refresh || s.page != "tasks" {
+			pending := s.requirementUnit.state.requirementIdentityJobs.pending
+			if !s.requirementUnit.state.requirementsRequested || pending == nil || pending.refresh || s.page != "tasks" {
 				t.Fatal("startup did not queue the cache-aware list read without entering requirements")
 			}
 			// Finish the account/list boundaries in-process. No real window, CLI,
 			// network or user's persistent profile is used by this fixture.
-			s.requirementIdentityJobs.confirmed = true
-			s.requirementIdentityJobs.pending = nil
+			s.requirementUnit.state.requirementIdentityJobs.confirmed = true
+			s.requirementUnit.state.requirementIdentityJobs.pending = nil
 			s.observeRequirementListIdentity()
 			request := estimateBadgeRequest(s, "")
 			result, err := executeRequirementListJob(s.backend, request)
@@ -96,7 +100,7 @@ func TestRequirementEstimateBadgeBootstrapsOutsideRequirements(t *testing.T) {
 			for _, page := range []string{"settings", "tasks", "services", "tasks"} {
 				s.page = page
 				s.observeRequirementIdentityJobs()
-				if s.requirementIdentityJobs.pending != nil || s.requirementListJobs.current != nil || s.requirementsEstimateBadge() != "1.25" {
+				if s.requirementUnit.state.requirementIdentityJobs.pending != nil || s.requirementUnit.state.requirementListJobs.current != nil || s.requirementsEstimateBadge() != "1.25" {
 					t.Fatal("ordinary navigation repeated the list request or lost its estimate")
 				}
 			}
@@ -112,7 +116,7 @@ func TestRequirementEstimateBadgePreservesCompleteValue(t *testing.T) {
 		t.Fatalf("refresh blinked the confirmed value: %s", got)
 	}
 	s.finishRequirementListJob(refresh, application.ActionResult{}, errors.New("fixture unavailable"))
-	if s.requirementsEstimateBadge() != "2.75" || !strings.Contains(s.requirementsLoadError, "fixture unavailable") {
+	if s.requirementsEstimateBadge() != "2.75" || !strings.Contains(s.requirementUnit.state.requirementsLoadError, "fixture unavailable") {
 		t.Fatal("failed refresh lost the valid estimate or its existing error")
 	}
 	partial := estimateBadgeResult("p:1", "999")
@@ -141,9 +145,9 @@ func TestRequirementEstimateBadgeScopeAndLateResults(t *testing.T) {
 			late := estimateBadgeRequest(s, "p:1")
 			switch scope {
 			case "account":
-				s.requirementIdentityJobs.identity = "fixture-account-b"
+				s.requirementUnit.state.requirementIdentityJobs.identity = "fixture-account-b"
 			case "project":
-				s.configJSON = strings.ReplaceAll(s.configJSON, `"p"`, `"other-project"`)
+				s.settingsUnit.state.configJSON = strings.ReplaceAll(s.settingsUnit.state.configJSON, `"p"`, `"other-project"`)
 			case "sprint":
 				s.activateRequirementSprint("p:2")
 				estimateBadgeRequest(s, "p:2")
@@ -165,7 +169,7 @@ func TestRequirementEstimateBadgeScopeAndLateResults(t *testing.T) {
 	s.activateRequirementSprint("p:2")
 	estimateBadgeComplete(s, "p:2", "8")
 	s.activateRequirementSprint("p:1")
-	s.requirementsLoading = true
+	s.requirementUnit.state.requirementsLoading = true
 	if s.requirementsEstimateBadge() != "2.5" {
 		t.Fatal("returning to a cached Sprint lost its scoped confirmed estimate")
 	}

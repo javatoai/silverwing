@@ -18,7 +18,7 @@ func TestTaskListDensityKeepsRowsCompactAcrossLayouts(test *testing.T) {
 					if archived {
 						state.page = "archive"
 					}
-					state.tasks = []task{
+					state.taskUnit.state.tasks = []task{
 						{id: "density-active-short", title: "支付对账任务", createdAt: "2026-10-01", status: "待测试"},
 						{id: "density-active-long", title: "跨区域支付链路异常定位与清算数据一致性验证", createdAt: "2026-10-02", status: "技术设计中"},
 						{id: "density-active-finished", title: "月末结算核对", createdAt: "2026-10-03", status: "已验收"},
@@ -33,10 +33,10 @@ func TestTaskListDensityKeepsRowsCompactAcrossLayouts(test *testing.T) {
 					selectedIndex := 1
 					if archived {
 						selectedIndex = 3
-						state.setTaskPinned(state.tasks[selectedIndex], true)
+						state.setTaskPinned(state.taskUnit.state.tasks[selectedIndex], true)
 					}
-					state.selected = selectedIndex
-					state.setTaskPinned(state.tasks[0], true)
+					state.taskUnit.state.selected = selectedIndex
+					state.setTaskPinned(state.taskUnit.state.tasks[0], true)
 
 					tester := taskNavigationTester(state, width, 520)
 					rowIndexes := state.taskIndexRows(archived)
@@ -45,7 +45,7 @@ func TestTaskListDensityKeepsRowsCompactAcrossLayouts(test *testing.T) {
 					}
 					var rowBounds []ui.Rect
 					for _, taskIndex := range rowIndexes {
-						item := state.tasks[taskIndex]
+						item := state.taskUnit.state.tasks[taskIndex]
 						row, found := tester.Find(item.title)
 						if !found {
 							test.Fatalf("task row %q missing at width %d", item.title, width)
@@ -82,13 +82,13 @@ func TestTaskListDensityKeepsRowsCompactAcrossLayouts(test *testing.T) {
 							test.Errorf("selected and unselected archived rows should have equal height: first=%+v second=%+v", rowBounds[0], rowBounds[1])
 						}
 					} else {
-						selectedRow, selectedFound := tester.Find(state.tasks[state.selected].title)
-						unselectedRow, unselectedFound := tester.Find(state.tasks[2].title)
+						selectedRow, selectedFound := tester.Find(state.taskUnit.state.tasks[state.taskUnit.state.selected].title)
+						unselectedRow, unselectedFound := tester.Find(state.taskUnit.state.tasks[2].title)
 						if !selectedFound || !unselectedFound || selectedRow.H != unselectedRow.H {
 							test.Errorf("selected and unselected rows should have equal height: selected=%+v unselected=%+v", selectedRow, unselectedRow)
 						}
-						if !tester.HasText(state.tasks[1].title) {
-							test.Errorf("long task title %q is missing from the compact row", state.tasks[1].title)
+						if !tester.HasText(state.taskUnit.state.tasks[1].title) {
+							test.Errorf("long task title %q is missing from the compact row", state.taskUnit.state.tasks[1].title)
 						}
 						saveFrameworkReadingFixture(test, tester, fmt.Sprintf("task-density-%d-dark-%t", width, dark))
 					}

@@ -62,14 +62,14 @@ func refreshTestFixture(t *testing.T) (*app, *refreshTestBackend, *refreshTestWi
 	s := newApp(nil, Options{CapturePath: "isolated-requirement-refresh"})
 	s.loading, s.page = false, "requirements"
 	s.snapshot.Home = t.TempDir()
-	s.configJSON = `{"edition":"qa","meegleProjects":[{"project_key":"project-a","simple_name":"space"}]}`
+	s.settingsUnit.state.configJSON = `{"edition":"qa","meegleProjects":[{"project_key":"project-a","simple_name":"space"}]}`
 	a, b := "https://project.feishu.cn/space/userstory/detail/101", "https://project.feishu.cn/space/userstory/detail/102"
-	s.requirements = []application.Requirement{{ID: "101", Title: "A", URL: a, ProjectKey: "project-a", WorkItem: domain.ParticipatedWorkItem{ID: "101", ProjectKey: "project-a", Type: "userstory"}}, {ID: "102", Title: "B", URL: b, ProjectKey: "project-a", WorkItem: domain.ParticipatedWorkItem{ID: "102", ProjectKey: "project-a", Type: "userstory"}}}
-	s.selectedRequirement, s.selectedRequirementKey = 0, requirementKey(s.requirements[0])
-	s.requirementsSelectedSprintKey = "project-a:900"
-	s.tasks = []task{{id: "task-a", requirementURL: a}, {id: "task-b", requirementURL: b}, {id: "task-b2", requirementURL: b + "?source=task"}}
-	s.selected = 0
-	s.documentContent, s.documentDirty = "unsaved draft", true
+	s.requirementUnit.state.requirements = []application.Requirement{{ID: "101", Title: "A", URL: a, ProjectKey: "project-a", WorkItem: domain.ParticipatedWorkItem{ID: "101", ProjectKey: "project-a", Type: "userstory"}}, {ID: "102", Title: "B", URL: b, ProjectKey: "project-a", WorkItem: domain.ParticipatedWorkItem{ID: "102", ProjectKey: "project-a", Type: "userstory"}}}
+	s.requirementUnit.state.selectedRequirement, s.requirementUnit.state.selectedRequirementKey = 0, requirementKey(s.requirementUnit.state.requirements[0])
+	s.requirementUnit.state.requirementsSelectedSprintKey = "project-a:900"
+	s.taskUnit.state.tasks = []task{{id: "task-a", requirementURL: a}, {id: "task-b", requirementURL: b}, {id: "task-b2", requirementURL: b + "?source=task"}}
+	s.taskUnit.state.selected = 0
+	s.materialsUnit.state.documentContent, s.materialsUnit.state.documentDirty = "unsaved draft", true
 	bk := &refreshTestBackend{calls: make(chan application.Action, 20), gate: make(chan struct{})}
 	w := &refreshTestWindow{updates: make(chan func(), 5)}
 	s.backend = bk
@@ -80,7 +80,7 @@ func refreshTestFixture(t *testing.T) (*app, *refreshTestBackend, *refreshTestWi
 		if err := s.closeRequirementRefreshJobs(ctx); err != nil {
 			t.Error(err)
 		}
-		s.closeRequirementReaders()
+		s.requirementUnit.closeRequirementReaders()
 	})
 	return s, bk, w
 }
@@ -102,12 +102,12 @@ func finishRefreshTest(t *testing.T, w *refreshTestWindow, job *requirementRefre
 func TestRequirementRefreshContextMenuCoalescesAndSurvivesPageSwitch(t *testing.T) {
 	s, b, w := refreshTestFixture(t)
 	for _, taskID := range []string{"", "task-b", "task-b2"} {
-		r := s.requirementReader(taskID, s.requirements[1].URL)
+		r := s.requirementReader(taskID, s.requirementUnit.state.requirements[1].URL)
 		s.updateRequirementReaderBody(r, application.RequirementContent{Body: "old body", Generation: "old"})
 	}
 	tester := ui.NewTester(func(c *ui.Context) {
 		ui.Column(c).Fill().Children(func() {
-			for _, item := range s.requirements {
+			for _, item := range s.requirementUnit.state.requirements {
 				s.requirementListItem(c, setTheme(c, false), item, false)
 			}
 		})
@@ -121,7 +121,7 @@ func TestRequirementRefreshContextMenuCoalescesAndSurvivesPageSwitch(t *testing.
 	if err := tester.ChooseMenuItem("刷新"); err != nil {
 		t.Fatal(err)
 	}
-	job := s.requirementRefreshJobs.current[requirementRefreshKey(s.requirements[1].URL)]
+	job := s.requirementUnit.state.requirementRefreshJobs.current[requirementRefreshKey(s.requirementUnit.state.requirements[1].URL)]
 	if job == nil {
 		t.Fatal("no refresh job")
 	}
@@ -135,7 +135,7 @@ func TestRequirementRefreshContextMenuCoalescesAndSurvivesPageSwitch(t *testing.
 		t.Fatal("running refresh was enabled")
 	}
 	tester.Key(0, ui.KeyEscape)
-	s.startRequirementRefresh(s.requirements[1].URL + "?duplicate=true")
+	s.startRequirementRefresh(s.requirementUnit.state.requirements[1].URL + "?duplicate=true")
 	s.page = "tasks"
 	s.observeRequirementRefreshJobs()
 	s.observeRequirementContentJobs()
@@ -149,27 +149,27 @@ func TestRequirementRefreshContextMenuCoalescesAndSurvivesPageSwitch(t *testing.
 	}
 	for len(b.calls) > 0 {
 		a := <-b.calls
-		if a.TaskID != "" || payloadString(a.Payload, "url") != s.requirements[1].URL || a.Payload["force"] != true {
+		if a.TaskID != "" || payloadString(a.Payload, "url") != s.requirementUnit.state.requirements[1].URL || a.Payload["force"] != true {
 			t.Fatalf("wrong refresh target: %+v", a)
 		}
 	}
-	if s.selected != 0 || s.selectedRequirement != 0 || s.selectedRequirementKey != requirementKey(s.requirements[0]) || s.requirementsSelectedSprintKey != "project-a:900" || s.documentContent != "unsaved draft" || !s.documentDirty {
+	if s.taskUnit.state.selected != 0 || s.requirementUnit.state.selectedRequirement != 0 || s.requirementUnit.state.selectedRequirementKey != requirementKey(s.requirementUnit.state.requirements[0]) || s.requirementUnit.state.requirementsSelectedSprintKey != "project-a:900" || s.materialsUnit.state.documentContent != "unsaved draft" || !s.materialsUnit.state.documentDirty {
 		t.Fatal("refresh changed navigation/draft")
 	}
-	if s.requirements[1].Title != "updated B" || s.requirements[1].Status != "Done" || s.lastError != "" || s.lastMessage == "" {
-		t.Fatalf("refresh not applied: %+v %s", s.requirements[1], s.lastError)
+	if s.requirementUnit.state.requirements[1].Title != "updated B" || s.requirementUnit.state.requirements[1].Status != "Done" || s.lastError != "" || s.lastMessage == "" {
+		t.Fatalf("refresh not applied: %+v %s", s.requirementUnit.state.requirements[1], s.lastError)
 	}
-	for _, r := range s.requirementReaders {
+	for _, r := range s.requirementUnit.state.requirementReaders {
 		if r.body.Body != "new body" || r.comments.Comments[0].Content != "new comment" {
 			t.Fatal("linked reader not updated")
 		}
 	}
 	for _, id := range []string{"task-b", "task-b2"} {
-		if got := s.taskRequirementMetadata[id]; got.Metadata.Title == nil || *got.Metadata.Title != "updated B" || len(got.Metadata.Participants.QCOwners) != 1 {
+		if got := s.requirementUnit.state.taskRequirementMetadata[id]; got.Metadata.Title == nil || *got.Metadata.Title != "updated B" || len(got.Metadata.Participants.QCOwners) != 1 {
 			t.Fatalf("linked task metadata stale: %+v", got)
 		}
 	}
-	old := []application.Requirement{{Title: "old B", URL: s.requirements[1].URL}}
+	old := []application.Requirement{{Title: "old B", URL: s.requirementUnit.state.requirements[1].URL}}
 	s.overlayRefreshedRequirements(old, "project-a:900", 100)
 	if old[0].Title != "updated B" || *old[0].WorkItem.MySprintEstimateDays != "5" {
 		t.Fatal("late list overwrote single-item refresh")
@@ -179,16 +179,16 @@ func TestRequirementRefreshContextMenuCoalescesAndSurvivesPageSwitch(t *testing.
 func TestRequirementRefreshPartialFailureRetainsValidValues(t *testing.T) {
 	s, b, w := refreshTestFixture(t)
 	b.metadataError, b.commentsError = true, true
-	url := s.requirements[1].URL
+	url := s.requirementUnit.state.requirements[1].URL
 	title := "old metadata"
-	s.taskRequirementMetadata = map[string]taskRequirementMetadataState{"task-b": {URL: url, Status: requirementMetadataLoaded, Metadata: requirementMetadata{Title: &title}}}
+	s.requirementUnit.state.taskRequirementMetadata = map[string]taskRequirementMetadataState{"task-b": {URL: url, Status: requirementMetadataLoaded, Metadata: requirementMetadata{Title: &title}}}
 	r := s.requirementReader("task-b", url)
 	s.updateRequirementReaderComments(r, application.RequirementComments{Comments: []domain.RequirementComment{{ID: "old", Content: "old comment"}}})
 	s.startRequirementRefresh(url)
-	job := s.requirementRefreshJobs.current[requirementRefreshKey(url)]
+	job := s.requirementUnit.state.requirementRefreshJobs.current[requirementRefreshKey(url)]
 	close(b.gate)
 	finishRefreshTest(t, w, job)
-	if s.requirements[1].Title != "B" || *s.taskRequirementMetadata["task-b"].Metadata.Title != title || r.comments.Comments[0].Content != "old comment" || r.body.Body != "new body" || s.lastError == "" || s.lastMessage != "" {
+	if s.requirementUnit.state.requirements[1].Title != "B" || *s.requirementUnit.state.taskRequirementMetadata["task-b"].Metadata.Title != title || r.comments.Comments[0].Content != "old comment" || r.body.Body != "new body" || s.lastError == "" || s.lastMessage != "" {
 		t.Fatal("partial failure discarded valid data or claimed full success")
 	}
 }
@@ -197,13 +197,13 @@ func TestRequirementRefreshRejectsConfigurationAndAccountChanges(t *testing.T) {
 	for _, change := range []string{"config", "account", "home"} {
 		t.Run(change, func(t *testing.T) {
 			s, b, w := refreshTestFixture(t)
-			s.startRequirementRefresh(s.requirements[1].URL)
-			job := s.requirementRefreshJobs.current[requirementRefreshKey(s.requirements[1].URL)]
+			s.startRequirementRefresh(s.requirementUnit.state.requirements[1].URL)
+			job := s.requirementUnit.state.requirementRefreshJobs.current[requirementRefreshKey(s.requirementUnit.state.requirements[1].URL)]
 			switch change {
 			case "config":
-				s.configJSON = `{"edition":"qa","meegleProjects":[{"project_key":"different","simple_name":"space"}]}`
+				s.settingsUnit.state.configJSON = `{"edition":"qa","meegleProjects":[{"project_key":"different","simple_name":"space"}]}`
 			case "account":
-				s.settingsCLIStatus = map[string]map[string]any{"meegle": {"userKey": "different"}}
+				s.settingsUnit.state.settingsCLIStatus = map[string]map[string]any{"meegle": {"userKey": "different"}}
 			case "home":
 				s.snapshot.Home = "different-home"
 			}
@@ -219,7 +219,7 @@ func TestRequirementRefreshRejectsConfigurationAndAccountChanges(t *testing.T) {
 				update()
 			default:
 			}
-			if s.requirements[1].Title != "B" || s.lastMessage != "" {
+			if s.requirementUnit.state.requirements[1].Title != "B" || s.lastMessage != "" {
 				t.Fatal("stale result applied")
 			}
 		})
@@ -230,36 +230,36 @@ func TestRequirementRefreshSprintSnapshotsKeepSelectionAndIsolateEstimate(t *tes
 	s, b, w := refreshTestFixture(t)
 	list := s.ensureRequirementListJobs()
 	list.identity, list.hasIdentity = s.currentRequirementListIdentity(), true
-	s.requirementsLoaded, s.requirementsFetchedAt = true, 100
-	s.selectedRequirement, s.selectedRequirementKey = 1, requirementKey(s.requirements[1])
+	s.requirementUnit.state.requirementsLoaded, s.requirementUnit.state.requirementsFetchedAt = true, 100
+	s.requirementUnit.state.selectedRequirement, s.requirementUnit.state.selectedRequirementKey = 1, requirementKey(s.requirementUnit.state.requirements[1])
 	s.saveRequirementListSnapshot(list.identity, "project-a:900")
-	other := append([]application.Requirement(nil), s.requirements...)
+	other := append([]application.Requirement(nil), s.requirementUnit.state.requirements...)
 	other[1].WorkItem.MySprintEstimateDays = refreshTestString("9")
 	list.snapshots[requirementListSnapshotKey{identity: list.identity, sprint: "project-a:901"}] = requirementListViewSnapshot{items: other, selected: requirementKey(other[0]), loaded: true, fetchedAt: 100}
-	s.startRequirementRefresh(s.requirements[1].URL)
-	job := s.requirementRefreshJobs.current[requirementRefreshKey(s.requirements[1].URL)]
+	s.startRequirementRefresh(s.requirementUnit.state.requirements[1].URL)
+	job := s.requirementUnit.state.requirementRefreshJobs.current[requirementRefreshKey(s.requirementUnit.state.requirements[1].URL)]
 	s.activateRequirementSprint("project-a:901")
 	close(b.gate)
 	finishRefreshTest(t, w, job)
-	if s.requirementsSelectedSprintKey != "project-a:901" || s.selectedRequirement != 0 || *s.requirements[1].WorkItem.MySprintEstimateDays != "9" || s.requirements[1].Title != "updated B" {
+	if s.requirementUnit.state.requirementsSelectedSprintKey != "project-a:901" || s.requirementUnit.state.selectedRequirement != 0 || *s.requirementUnit.state.requirements[1].WorkItem.MySprintEstimateDays != "9" || s.requirementUnit.state.requirements[1].Title != "updated B" {
 		t.Fatal("refresh changed current Sprint or leaked estimate")
 	}
 	s.activateRequirementSprint("project-a:900")
-	if s.selectedRequirement != 1 || s.selectedRequirementKey != requirementKey(s.requirements[1]) || *s.requirements[1].WorkItem.MySprintEstimateDays != "5" || s.requirements[1].Title != "updated B" {
+	if s.requirementUnit.state.selectedRequirement != 1 || s.requirementUnit.state.selectedRequirementKey != requirementKey(s.requirementUnit.state.requirements[1]) || *s.requirementUnit.state.requirements[1].WorkItem.MySprintEstimateDays != "5" || s.requirementUnit.state.requirements[1].Title != "updated B" {
 		t.Fatal("returning to Sprint lost selection or refreshed data")
 	}
 }
 
 func TestRequirementRefreshOlderMetadataCannotReplaceNewerList(t *testing.T) {
 	s, b, w := refreshTestFixture(t)
-	s.startRequirementRefresh(s.requirements[1].URL)
-	job := s.requirementRefreshJobs.current[requirementRefreshKey(s.requirements[1].URL)]
+	s.startRequirementRefresh(s.requirementUnit.state.requirements[1].URL)
+	job := s.requirementUnit.state.requirementRefreshJobs.current[requirementRefreshKey(s.requirementUnit.state.requirements[1].URL)]
 	// A list started later and completed while the single refresh read comments.
-	s.requirementsFetchedAt = 300
-	s.requirements[1].Title = "newer list title"
+	s.requirementUnit.state.requirementsFetchedAt = 300
+	s.requirementUnit.state.requirements[1].Title = "newer list title"
 	close(b.gate)
 	finishRefreshTest(t, w, job)
-	if s.requirements[1].Title != "newer list title" {
+	if s.requirementUnit.state.requirements[1].Title != "newer list title" {
 		t.Fatal("older single-item metadata replaced newer list")
 	}
 }
@@ -268,8 +268,8 @@ func TestRequirementRefreshQueuedCompletionChecksRelevantConfig(t *testing.T) {
 	for _, change := range []string{"proxy", "theme"} {
 		t.Run(change, func(t *testing.T) {
 			s, b, w := refreshTestFixture(t)
-			s.startRequirementRefresh(s.requirements[1].URL)
-			job := s.requirementRefreshJobs.current[requirementRefreshKey(s.requirements[1].URL)]
+			s.startRequirementRefresh(s.requirementUnit.state.requirements[1].URL)
+			job := s.requirementUnit.state.requirementRefreshJobs.current[requirementRefreshKey(s.requirementUnit.state.requirements[1].URL)]
 			close(b.gate)
 			var update func()
 			select {
@@ -281,17 +281,17 @@ func TestRequirementRefreshQueuedCompletionChecksRelevantConfig(t *testing.T) {
 			if change == "theme" {
 				field = `,"theme":"DARK"}`
 			}
-			s.configJSON = strings.TrimSuffix(s.configJSON, "}") + field
+			s.settingsUnit.state.configJSON = strings.TrimSuffix(s.settingsUnit.state.configJSON, "}") + field
 			update()
 			select {
 			case <-job.done:
 			case <-time.After(time.Second):
 				t.Fatal("worker not joined")
 			}
-			if change == "proxy" && s.requirements[1].Title != "B" {
+			if change == "proxy" && s.requirementUnit.state.requirements[1].Title != "B" {
 				t.Fatal("queued result ignored relevant config change")
 			}
-			if change == "theme" && s.requirements[1].Title != "updated B" {
+			if change == "theme" && s.requirementUnit.state.requirements[1].Title != "updated B" {
 				t.Fatal("unrelated theme change discarded valid refresh")
 			}
 		})

@@ -31,38 +31,38 @@ func (s *app) prepareDocumentFind() {
 	if s.materialsTextEditingVisible() {
 		return
 	}
-	if s.documentEditing && s.documentPath != "" && documentKindForPath(s.documentPath) == "markdown" {
+	if s.materialsUnit.state.documentEditing && s.materialsUnit.state.documentPath != "" && documentKindForPath(s.materialsUnit.state.documentPath) == "markdown" {
 		s.ensureMarkdownEditor()
 	}
 	f := s.ensureDocumentFindState()
-	f.preparePreview(s.documentPath, s.documentKind, s.documentContent)
+	f.preparePreview(s.materialsUnit.state.documentPath, s.materialsUnit.state.documentKind, s.materialsUnit.state.documentContent)
 	if s.materialsTextPreviewVisible() {
 		return
 	}
 	f.nativePreview = nil
-	t := s.currentTask()
-	identity := strings.Join([]string{t.id, normalizedReadingPath(t.path), normalizedReadingRoot(t.materialsPath), normalizedReadingPath(s.documentPath), s.documentKind, s.readingMode(), fmt.Sprint(s.documentEditing)}, "\x00")
+	t := s.taskUnit.currentTask()
+	identity := strings.Join([]string{t.id, normalizedReadingPath(t.path), normalizedReadingRoot(t.materialsPath), normalizedReadingPath(s.materialsUnit.state.documentPath), s.materialsUnit.state.documentKind, s.readingMode(), fmt.Sprint(s.materialsUnit.state.documentEditing)}, "\x00")
 	if s.preparePDFDocumentFind(f, identity) {
 		return
 	}
 	blocks := s.documentFindBlocks(f, identity)
-	f.set(identity, s.documentSearch, blocks)
+	f.set(identity, s.materialsUnit.state.documentSearch, blocks)
 }
 
 func (s *app) documentFindBlocks(cache *documentFindState, identity string) []documentFindBlock {
-	if s.documentPath == "" || s.documentContent == "" {
-		cache.preparePreview(s.documentPath, s.documentKind, s.documentContent)
+	if s.materialsUnit.state.documentPath == "" || s.materialsUnit.state.documentContent == "" {
+		cache.preparePreview(s.materialsUnit.state.documentPath, s.materialsUnit.state.documentKind, s.materialsUnit.state.documentContent)
 		return nil
 	}
-	cache.preparePreview(s.documentPath, s.documentKind, s.documentContent)
-	ext := strings.ToLower(filepath.Ext(s.documentPath))
+	cache.preparePreview(s.materialsUnit.state.documentPath, s.materialsUnit.state.documentKind, s.materialsUnit.state.documentContent)
+	ext := strings.ToLower(filepath.Ext(s.materialsUnit.state.documentPath))
 	key := "document-content"
 	switch {
 	case ext == ".json":
-		return []documentFindBlock{{key: key, text: s.documentContent, lineSize: 20}}
+		return []documentFindBlock{{key: key, text: s.materialsUnit.state.documentContent, lineSize: 20}}
 	case ext == ".csv":
 		if cache.csvErr != "" {
-			return []documentFindBlock{{key: key, text: s.documentContent, lineSize: 20}}
+			return []documentFindBlock{{key: key, text: s.materialsUnit.state.documentContent, lineSize: 20}}
 		}
 		blocks := make([]documentFindBlock, 0)
 		for rowIndex, row := range cache.csvRows {
@@ -71,13 +71,13 @@ func (s *app) documentFindBlocks(cache *documentFindState, identity string) []do
 			}
 		}
 		return blocks
-	case documentKindForPath(s.documentPath) == "markdown" && s.documentEditing && !s.documentReadOnly && s.markdownEditorIsCurrent(s.markdown):
-		return markdownEditorFindBlocks(s.markdown)
-	case documentKindForPath(s.documentPath) == "markdown" && (!s.documentEditing || s.documentReadOnly) && s.readingMode() == "RENDERED":
+	case documentKindForPath(s.materialsUnit.state.documentPath) == "markdown" && s.materialsUnit.state.documentEditing && !s.materialsUnit.state.documentReadOnly && s.markdownEditorIsCurrent(s.materialsUnit.state.markdown):
+		return markdownEditorFindBlocks(s.materialsUnit.state.markdown)
+	case documentKindForPath(s.materialsUnit.state.documentPath) == "markdown" && (!s.materialsUnit.state.documentEditing || s.materialsUnit.state.documentReadOnly) && s.readingMode() == "RENDERED":
 		state := s.ensureMarkdownEditor()
 		return frameworkMarkdownFindBlocks(state)
 	default:
-		return []documentFindBlock{{key: key, text: s.documentContent, lineSize: 20}}
+		return []documentFindBlock{{key: key, text: s.materialsUnit.state.documentContent, lineSize: 20}}
 	}
 }
 
@@ -101,7 +101,7 @@ func (s *app) renderDocumentFindBar(c *ui.Context, p palette) {
 		return
 	}
 	f := s.ensureDocumentFindState()
-	if !s.documentFindOpen {
+	if !s.materialsUnit.state.documentFindOpen {
 		return
 	}
 	pdf := s.currentPDFDocumentFind()
@@ -110,13 +110,13 @@ func (s *app) renderDocumentFindBar(c *ui.Context, p palette) {
 		count, status = len(pdf.searchResults), pdfDocumentFindStatus(pdf)
 	}
 	ui.Row(c).Height(38).Shrink(0).Padding(0, 12).Gap(7).Background(p.soft).AlignItems(ui.Center).Children(func() {
-		input := ui.TextInput(c.Key("document-find-input"), &s.documentSearch).Grow(1).MinWidth(90).MaxWidth(250).Height(30).Placeholder("查找正文").Label("查找正文").Bind(&f.focus)
+		input := ui.TextInput(c.Key("document-find-input"), &s.materialsUnit.state.documentSearch).Grow(1).MinWidth(90).MaxWidth(250).Height(30).Placeholder("查找正文").Label("查找正文").Bind(&f.focus)
 		input.OnChange(func() {
 			if pdf != nil {
-				s.changePDFDocumentFindQuery(pdf, s.documentSearch)
+				s.changePDFDocumentFindQuery(pdf, s.materialsUnit.state.documentSearch)
 				return
 			}
-			f.set(f.identity, s.documentSearch, f.blocks)
+			f.set(f.identity, s.materialsUnit.state.documentSearch, f.blocks)
 		})
 		input.OnSubmit(func() { s.moveDocumentFind(1) })
 		input.OnShortcut(0, ui.KeyEscape, func() { s.closeDocumentFind() })
@@ -218,8 +218,8 @@ func (s *app) renderCSVPreview(c *ui.Context, p palette, source string) {
 		return
 	}
 	ui.ScrollHorizontal(c).TrackScroll(s.readingScrollState("csv-horizontal")).FillWidth().Children(func() {
-		cacheIdentity := fmt.Sprintf("%s\x00%s\x00%d\x00%d", s.documentPath, source, len(rows), len(rows[0]))
-		root := ui.Column(c).Key("csv-grid-" + filepath.Clean(s.documentPath))
+		cacheIdentity := fmt.Sprintf("%s\x00%s\x00%d\x00%d", s.materialsUnit.state.documentPath, source, len(rows), len(rows[0]))
+		root := ui.Column(c).Key("csv-grid-" + filepath.Clean(s.materialsUnit.state.documentPath))
 		selection := ui.Local(root, "selection", func() csvSelectionState {
 			return csvSelectionState{anchorRow: -1, anchorColumn: -1, extentRow: -1, extentColumn: -1}
 		})

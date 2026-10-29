@@ -14,15 +14,15 @@ var sidebarEstimateDecimal = regexp.MustCompile(`^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.
 // account, project configuration and Sprint. Incomplete new scopes stay unknown.
 func (s *app) requirementsEstimateBadge() string {
 	identity := s.currentRequirementListIdentity()
-	state := s.requirementListJobs
-	if s.requirementsSelectedSprintKey == "" || state != nil && (!state.hasIdentity || state.identity != identity) {
+	state := s.requirementUnit.state.requirementListJobs
+	if s.requirementUnit.state.requirementsSelectedSprintKey == "" || state != nil && (!state.hasIdentity || state.identity != identity) {
 		return "—"
 	}
 	if s.hasCompleteRequirementsEstimate() {
-		return requirementsEstimateTotal(s.requirements)
+		return requirementsEstimateTotal(s.requirementUnit.state.requirements)
 	}
 	if state != nil {
-		if cached, ok := state.snapshots[requirementListSnapshotKey{identity: identity, sprint: s.requirementsSelectedSprintKey}]; ok && cached.estimate != "" {
+		if cached, ok := state.snapshots[requirementListSnapshotKey{identity: identity, sprint: s.requirementUnit.state.requirementsSelectedSprintKey}]; ok && cached.estimate != "" {
 			return cached.estimate
 		}
 	}
@@ -30,7 +30,7 @@ func (s *app) requirementsEstimateBadge() string {
 }
 
 func (s *app) hasCompleteRequirementsEstimate() bool {
-	return s.requirementsLoaded && !s.requirementsLoading && s.requirementsLoadError == "" && len(s.requirementsFailures) == 0 && s.requirementsSelectedSprintKey != ""
+	return s.requirementUnit.state.requirementsLoaded && !s.requirementUnit.state.requirementsLoading && s.requirementUnit.state.requirementsLoadError == "" && len(s.requirementUnit.state.requirementsFailures) == 0 && s.requirementUnit.state.requirementsSelectedSprintKey != ""
 }
 
 // Rational arithmetic preserves the source decimal exactly; missing estimates

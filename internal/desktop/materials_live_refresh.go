@@ -26,11 +26,11 @@ type materialsLiveRefreshState struct {
 }
 
 func (s *app) observeMaterialsLiveRefresh() {
-	if owner := s.materialsLiveRefreshLifecycle; owner != nil && (owner.closed || owner.barrier != nil) {
+	if owner := s.materialsUnit.state.materialsLiveRefreshLifecycle; owner != nil && (owner.closed || owner.barrier != nil) {
 		return
 	}
-	if !s.materialsBrowserVisible() || !s.currentTask().materialsReady() || s.backend == nil {
-		s.closeMaterialsLiveRefresh()
+	if !s.materialsBrowserVisible() || !s.taskUnit.currentTask().materialsReady() || s.backend == nil {
+		s.materialsUnit.closeMaterialsLiveRefresh()
 		return
 	}
 	state := s.ensureMaterialsFileManagementState()
@@ -39,20 +39,20 @@ func (s *app) observeMaterialsLiveRefresh() {
 		ctx, cancel := context.WithCancel(context.Background())
 		live = &materialsLiveRefreshState{ctx: ctx, cancel: cancel, done: make(chan struct{}), ready: make(chan struct{}), wake: make(chan struct{}, 1)}
 		state.liveRefresh = live
-		s.ensureMaterialsLiveRefreshLifecycle().remember(live)
+		s.materialsUnit.ensureMaterialsLiveRefreshLifecycle().remember(live)
 		root := state.root
 		win := s.win
 		go live.run(root, func() {
 			if win != nil && !win.IsDestroyed() {
 				win.Update(func() {
-					if live.ctx.Err() == nil && s.materialsFileManagement == state && state.liveRefresh == live {
+					if live.ctx.Err() == nil && s.materialsUnit.state.materialsFileManagement == state && state.liveRefresh == live {
 						s.observeMaterialsLiveRefresh()
 					}
 				})
 			}
 		})
 	}
-	relative := s.materialsRelativePath(s.documentPath)
+	relative := s.materialsRelativePath(s.materialsUnit.state.documentPath)
 	live.mu.Lock()
 	live.selected = filepath.ToSlash(relative)
 	if s.materialsFileReadBlocked() || s.loading || !live.pending {
@@ -63,17 +63,17 @@ func (s *app) observeMaterialsLiveRefresh() {
 	live.catalog, live.touched, live.pending = false, false, false
 	live.mu.Unlock()
 	if catalog {
-		s.documentsLoaded, s.documentsRequested = false, false
+		s.materialsUnit.state.documentsLoaded, s.materialsUnit.state.documentsRequested = false, false
 	}
-	if touched && s.documentPath != "" {
+	if touched && s.materialsUnit.state.documentPath != "" {
 		s.rereadSelectedMaterial(false)
 	} else if catalog {
 		s.loadDocuments()
 	}
 }
 
-func (s *app) closeMaterialsLiveRefresh() {
-	if state := s.materialsFileManagement; state != nil && state.liveRefresh != nil {
+func (s *materialsController) closeMaterialsLiveRefresh() {
+	if state := s.state.materialsFileManagement; state != nil && state.liveRefresh != nil {
 		s.retireMaterialsLiveRefresh(state.liveRefresh)
 		state.liveRefresh = nil
 	}

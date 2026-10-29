@@ -8,7 +8,7 @@ import (
 )
 
 func (s *app) renderTaskCreationRequirements(c *ui.Context, p palette) {
-	form := s.taskCreation
+	form := s.taskUnit.state.taskCreation
 	state := s.ensureTaskCreationRequirements()
 	if form == nil || state == nil || state.closed {
 		return

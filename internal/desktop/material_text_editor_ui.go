@@ -10,7 +10,7 @@ import (
 
 func (s *app) materialsTextEditingVisible() bool {
 	state := s.currentMaterialTextEditor()
-	return state != nil && state.editing && documents.EditableMaterialText(state.path) && !s.documentReadOnly && !s.materialsSearchSourcePreviewActive()
+	return state != nil && state.editing && documents.EditableMaterialText(state.path) && !s.materialsUnit.state.documentReadOnly && !s.materialsSearchSourcePreviewActive()
 }
 
 func (s *app) renderMaterialsTextEditor(c *ui.Context, p palette) {
@@ -18,7 +18,7 @@ func (s *app) renderMaterialsTextEditor(c *ui.Context, p palette) {
 	if state == nil || state.view == nil {
 		return
 	}
-	s.materialTextActive = state
+	s.materialsUnit.state.materialTextActive = state
 	_ = s.captureMaterialTextState(state)
 	state.view.Label = filepath.Base(state.path)
 	state.view.ReadOnly = s.materialsFileReadBlocked() || state.discarding
@@ -50,17 +50,17 @@ func (s *app) toggleMaterialsTextEditing() {
 		return
 	}
 	state.editing = !state.editing
-	s.documentEditing = state.editing
+	s.materialsUnit.state.documentEditing = state.editing
 }
 
 // Keep one fixed header slot; successful/ordinary autosaves are silent.
 func (s *app) renderMaterialsTextEditorHeader(c *ui.Context, p palette) {
 	state := s.currentMaterialTextEditor()
-	if state == nil || s.documentReadOnly {
+	if state == nil || s.materialsUnit.state.documentReadOnly {
 		return
 	}
 	_ = s.captureMaterialTextState(state)
-	status := s.markdownAutosave.Status(state.key)
+	status := s.materialsUnit.state.markdownAutosave.Status(state.key)
 	ui.Row(c.Key("material-text-editor-header")).Height(32).Shrink(0).Padding(0, 12).Gap(7).AlignItems(ui.Center).Children(func() {
 		message := ""
 		switch {

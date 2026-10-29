@@ -7,22 +7,22 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"silverwing-go/internal/workspace"
+	"silverwing-go/internal/filelanguage"
 
 	codeeditor "github.com/egoist/mygo/ui/editor"
 )
 
 // workspaceFilePreviewLanguage adds only the languages missing from MyGO's
 // workspace preview mapping. The editor, buffer and source remain MyGO's.
-func workspaceFilePreviewLanguage(filename string, language workspace.WorkspaceFileLanguage) *codeeditor.Language {
+func workspaceFilePreviewLanguage(filename string, language filelanguage.Language) *codeeditor.Language {
 	switch language {
-	case workspace.FileLanguageGradle:
+	case filelanguage.Gradle:
 		return workspacePreviewGradleLanguage
-	case workspace.FileLanguageProperties:
+	case filelanguage.Properties:
 		return workspacePreviewPropertiesLanguage
-	case workspace.FileLanguagePowerShell:
+	case filelanguage.PowerShell:
 		return workspacePreviewPowerShellLanguage
-	case workspace.FileLanguageBatch:
+	case filelanguage.Batch:
 		return workspacePreviewBatchLanguage
 	}
 	if native := codeeditor.LanguageFor(filename); native != nil {
@@ -31,29 +31,29 @@ func workspaceFilePreviewLanguage(filename string, language workspace.WorkspaceF
 	// The typed result can still identify a language when a preview label has
 	// no filename extension. Known filenames always retain the SDK mapping.
 	switch language {
-	case workspace.FileLanguageJava:
+	case filelanguage.Java:
 		return codeeditor.LanguageNamed("Java")
-	case workspace.FileLanguageKotlin:
+	case filelanguage.Kotlin:
 		return codeeditor.LanguageNamed("Kotlin")
-	case workspace.FileLanguageHTML:
+	case filelanguage.HTML:
 		return codeeditor.LanguageNamed("HTML")
-	case workspace.FileLanguageCSS:
+	case filelanguage.CSS:
 		return codeeditor.LanguageNamed("CSS")
-	case workspace.FileLanguageJavaScript:
+	case filelanguage.JavaScript:
 		return codeeditor.LanguageNamed("JavaScript")
-	case workspace.FileLanguageTypeScript:
+	case filelanguage.TypeScript:
 		return codeeditor.LanguageNamed("TypeScript")
-	case workspace.FileLanguageJSON:
+	case filelanguage.JSON:
 		return codeeditor.LanguageNamed("JSON")
-	case workspace.FileLanguageYAML:
+	case filelanguage.YAML:
 		return codeeditor.LanguageNamed("YAML")
-	case workspace.FileLanguageSQL:
+	case filelanguage.SQL:
 		return codeeditor.LanguageNamed("SQL")
-	case workspace.FileLanguagePython:
+	case filelanguage.Python:
 		return codeeditor.LanguageNamed("Python")
-	case workspace.FileLanguageShell:
+	case filelanguage.Shell:
 		return codeeditor.LanguageNamed("Shell")
-	case workspace.FileLanguageMarkdown:
+	case filelanguage.Markdown:
 		return codeeditor.LanguageNamed("Markdown")
 	default:
 		return nil

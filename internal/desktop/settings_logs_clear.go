@@ -9,7 +9,7 @@ import (
 )
 
 func (s *app) settingsLogsActionCurrent(action application.Action) bool {
-	return s.page == "settings" && s.settingsPage == "logs" && s.snapshot.Home != "" && payloadString(action.Payload, "expectedHome") == s.snapshot.Home
+	return s.page == "settings" && s.settingsUnit.state.settingsPage == "logs" && s.snapshot.Home != "" && payloadString(action.Payload, "expectedHome") == s.snapshot.Home
 }
 
 func (s *app) settingsLogsClearButton(c *ui.Context, p palette) {
@@ -18,7 +18,7 @@ func (s *app) settingsLogsClearButton(c *ui.Context, p palette) {
 		text = "正在清空…"
 	}
 	button := ui.ButtonBase(c.Key("logs-clear-all")).Row().Height(34).Padding(0, 9).Gap(5).Radius(7).AlignItems(ui.Center).
-		Label(text).Disabled(s.busy || s.settingsPickerBusy || s.snapshot.Home == "")
+		Label(text).Disabled(s.busy || s.settingsUnit.state.settingsPickerBusy || s.snapshot.Home == "")
 	if button.Hovered() {
 		button.Background(p.soft)
 	}

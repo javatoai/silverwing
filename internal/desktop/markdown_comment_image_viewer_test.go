@@ -56,7 +56,7 @@ func TestMarkdownImageClickSelectsOriginalOnlyForComments(t *testing.T) {
 			if err := tester.Click("Markdown 图片：本地示例"); err != nil {
 				t.Fatal(err)
 			}
-			viewer := state.markdownBitmapViewer
+			viewer := state.materialsUnit.state.markdownBitmapViewer
 			if viewer == nil || viewer.owner != owner {
 				t.Fatal("image click did not attach the viewer to its Markdown owner")
 			}
@@ -70,13 +70,13 @@ func TestMarkdownImageClickSelectsOriginalOnlyForComments(t *testing.T) {
 			ctx, _ := beginMarkdownLocalImageViewerRequest(viewer)
 			viewer.media.imageExpandedBitmap = bitmap
 			updateReadonlyMarkdownState(owner, source+"\n\n评论更新", map[string]string{target: path})
-			if state.markdownBitmapViewer != nil || ctx.Err() == nil || viewer.media.imageExpandedBitmap != nil {
+			if state.materialsUnit.state.markdownBitmapViewer != nil || ctx.Err() == nil || viewer.media.imageExpandedBitmap != nil {
 				t.Fatal("updating the comment did not immediately cancel loading and release the expanded bitmap")
 			}
 			state.openMarkdownBitmapViewer(owner, bitmap)
-			viewer = state.markdownBitmapViewer
+			viewer = state.materialsUnit.state.markdownBitmapViewer
 			closeMarkdownPreviewState(owner)
-			if state.markdownBitmapViewer != nil || viewer.media.imageExpandedBitmap != nil {
+			if state.materialsUnit.state.markdownBitmapViewer != nil || viewer.media.imageExpandedBitmap != nil {
 				t.Fatal("closing the reader retained its expanded bitmap")
 			}
 		})
@@ -178,7 +178,11 @@ func TestMarkdownLocalImageViewerRetryAndLateResultGuard(t *testing.T) {
 		page: "tasks", settingsPage: "", tab: 2,
 		media: &nativeMediaState{kind: "image", imageExpanded: true},
 	}
-	state := &app{markdownBitmapViewer: viewer, page: "tasks", tab: 2}
+	state := &app{
+		materialsUnit: materialsController{state: materialsState{markdownBitmapViewer: viewer}},
+		page:          "tasks",
+		tab:           2,
+	}
 	firstCtx, firstGeneration := beginMarkdownLocalImageViewerRequest(viewer)
 	viewer.media.imageExpandedLoading = false
 	viewer.media.imageExpandedError = "暂时无法读取"
@@ -224,15 +228,19 @@ func TestMarkdownLocalImageViewerRejectsReplacedAndClosedOwners(t *testing.T) {
 		page: "tasks", tab: 1, generation: 7, requestCtx: ctx,
 		media: &nativeMediaState{kind: "image", imageExpanded: true},
 	}
-	state := &app{markdownBitmapViewer: viewer, page: "tasks", tab: 1}
+	state := &app{
+		materialsUnit: materialsController{state: materialsState{markdownBitmapViewer: viewer}},
+		page:          "tasks",
+		tab:           1,
+	}
 	if !markdownLocalImageViewerResultCurrent(state, viewer, 7) {
 		t.Fatal("valid current viewer result was rejected")
 	}
-	state.markdownBitmapViewer = &markdownBitmapViewerState{}
+	state.materialsUnit.state.markdownBitmapViewer = &markdownBitmapViewerState{}
 	if markdownLocalImageViewerResultCurrent(state, viewer, 7) {
 		t.Fatal("result for a replaced viewer was accepted")
 	}
-	state.markdownBitmapViewer = viewer
+	state.materialsUnit.state.markdownBitmapViewer = viewer
 	owner.closed = true
 	if markdownLocalImageViewerResultCurrent(state, viewer, 7) {
 		t.Fatal("result for a closed owner was accepted")

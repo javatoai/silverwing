@@ -68,14 +68,14 @@ func requirementRefreshKey(url string) string {
 }
 
 func (s *app) ensureRequirementRefreshJobs() *requirementRefreshState {
-	if s.requirementRefreshJobs == nil {
-		s.requirementRefreshJobs = &requirementRefreshState{current: make(map[string]*requirementRefreshJob), metadata: make(map[string]application.RequirementMetadata), running: make(map[*requirementRefreshJob]struct{})}
+	if s.requirementUnit.state.requirementRefreshJobs == nil {
+		s.requirementUnit.state.requirementRefreshJobs = &requirementRefreshState{current: make(map[string]*requirementRefreshJob), metadata: make(map[string]application.RequirementMetadata), running: make(map[*requirementRefreshJob]struct{})}
 	}
-	return s.requirementRefreshJobs
+	return s.requirementUnit.state.requirementRefreshJobs
 }
 
 func (s *app) requirementRefreshing(url string) bool {
-	state := s.requirementRefreshJobs
+	state := s.requirementUnit.state.requirementRefreshJobs
 	if state == nil {
 		return false
 	}
@@ -133,25 +133,25 @@ func (s *app) startRequirementRefresh(url string) {
 		}
 	}
 	sprint := ""
-	if project, _, ok := strings.Cut(s.requirementsSelectedSprintKey, ":"); ok && project != "" && project == projectKey {
-		sprint = s.requirementsSelectedSprintKey
+	if project, _, ok := strings.Cut(s.requirementUnit.state.requirementsSelectedSprintKey, ":"); ok && project != "" && project == projectKey {
+		sprint = s.requirementUnit.state.requirementsSelectedSprintKey
 		payload["sprintKey"] = sprint
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	job := &requirementRefreshJob{key: key, url: url, sprint: sprint, configScope: requirementRefreshConfiguration(s.configJSON), identity: s.currentRequirementListIdentity(), identityContext: s.currentRequirementIdentityContext(), payload: payload, ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	job := &requirementRefreshJob{key: key, url: url, sprint: sprint, configScope: requirementRefreshConfiguration(s.settingsUnit.state.configJSON), identity: s.currentRequirementListIdentity(), identityContext: s.currentRequirementIdentityContext(), payload: payload, ctx: ctx, cancel: cancel, done: make(chan struct{})}
 	state.current[key] = job
 	state.mu.Lock()
 	state.running[job] = struct{}{}
 	state.mu.Unlock()
-	for _, reader := range s.requirementReaders {
+	for _, reader := range s.requirementUnit.state.requirementReaders {
 		if sameRequirementReaderLink(reader.url, url) {
 			s.retireRequirementReaderRequest(reader, "requirements.read")
 			s.retireRequirementReaderRequest(reader, "requirements.comments")
 		}
 	}
-	for _, task := range s.tasks {
+	for _, task := range s.taskUnit.state.tasks {
 		if sameRequirementReaderLink(task.requirementURL, url) {
-			previous, exists := s.taskRequirementMetadata[task.id]
+			previous, exists := s.requirementUnit.state.taskRequirementMetadata[task.id]
 			s.invalidateTaskRequirementMetadataIdentity(task.id)
 			if exists {
 				if previous.Status == requirementMetadataLoading {
@@ -160,7 +160,7 @@ func (s *app) startRequirementRefresh(url string) {
 						previous.Status = requirementMetadataLoaded
 					}
 				}
-				s.taskRequirementMetadata[task.id] = previous
+				s.requirementUnit.state.taskRequirementMetadata[task.id] = previous
 			}
 		}
 	}
@@ -259,12 +259,12 @@ func executeRequirementRefresh(backend application.Backend, job *requirementRefr
 }
 
 func (s *app) finishRequirementRefresh(job *requirementRefreshJob, result requirementRefreshResult) {
-	state := s.requirementRefreshJobs
+	state := s.requirementUnit.state.requirementRefreshJobs
 	if state == nil || state.current[job.key] != job {
 		return
 	}
 	delete(state.current, job.key)
-	if job.ctx.Err() != nil || s.currentRequirementListIdentity() != job.identity || s.currentRequirementIdentityContext() != job.identityContext || requirementRefreshConfiguration(s.configJSON) != job.configScope {
+	if job.ctx.Err() != nil || s.currentRequirementListIdentity() != job.identity || s.currentRequirementIdentityContext() != job.identityContext || requirementRefreshConfiguration(s.settingsUnit.state.configJSON) != job.configScope {
 		return
 	}
 	if result.identityError != nil {
@@ -273,11 +273,11 @@ func (s *app) finishRequirementRefresh(job *requirementRefreshJob, result requir
 	}
 	if result.metadata != nil {
 		state.metadata[job.key] = *result.metadata
-		s.overlayRefreshedRequirements(s.requirements, s.requirementsSelectedSprintKey, s.requirementsFetchedAt)
+		s.overlayRefreshedRequirements(s.requirementUnit.state.requirements, s.requirementUnit.state.requirementsSelectedSprintKey, s.requirementUnit.state.requirementsFetchedAt)
 		// Reconcile copies without dropping their selection or browsing state.
 		// Request start times keep an older single-item result from replacing
 		// a newer whole-list refresh that already completed.
-		if lists := s.requirementListJobs; lists != nil {
+		if lists := s.requirementUnit.state.requirementListJobs; lists != nil {
 			for key, snapshot := range lists.snapshots {
 				if key.identity != job.identity {
 					continue
@@ -290,23 +290,23 @@ func (s *app) finishRequirementRefresh(job *requirementRefreshJob, result requir
 				lists.snapshots[key] = snapshot
 			}
 		}
-		for _, task := range s.tasks {
+		for _, task := range s.taskUnit.state.tasks {
 			if !sameRequirementReaderLink(task.requirementURL, job.url) {
 				continue
 			}
 			s.invalidateTaskRequirementMetadataIdentity(task.id)
-			if s.taskRequirementMetadata == nil {
-				s.taskRequirementMetadata = make(map[string]taskRequirementMetadataState)
+			if s.requirementUnit.state.taskRequirementMetadata == nil {
+				s.requirementUnit.state.taskRequirementMetadata = make(map[string]taskRequirementMetadataState)
 			}
 			metadata := result.metadata
 			participants := metadata.Participants
 			if metadata.WorkItem != nil {
 				participants.QCOwners, participants.ProductManagers = metadata.WorkItem.QCOwners, metadata.WorkItem.ProductManagers
 			}
-			s.taskRequirementMetadata[task.id] = taskRequirementMetadataState{URL: task.requirementURL, Status: requirementMetadataLoaded, Metadata: requirementMetadata{ID: metadata.ID, ProjectKey: metadata.ProjectKey, Type: metadata.Type, Title: metadata.Title, Status: metadata.Status, Participants: participants, WorkItem: metadata.WorkItem}}
+			s.requirementUnit.state.taskRequirementMetadata[task.id] = taskRequirementMetadataState{URL: task.requirementURL, Status: requirementMetadataLoaded, Metadata: requirementMetadata{ID: metadata.ID, ProjectKey: metadata.ProjectKey, Type: metadata.Type, Title: metadata.Title, Status: metadata.Status, Participants: participants, WorkItem: metadata.WorkItem}}
 		}
 	}
-	for _, reader := range s.requirementReaders {
+	for _, reader := range s.requirementUnit.state.requirementReaders {
 		if !sameRequirementReaderLink(reader.url, job.url) {
 			continue
 		}
@@ -329,7 +329,7 @@ func (s *app) finishRequirementRefresh(job *requirementRefreshJob, result requir
 }
 
 func (s *app) overlayRefreshedRequirements(items []application.Requirement, sprint string, fetchedAt int64) {
-	state := s.requirementRefreshJobs
+	state := s.requirementUnit.state.requirementRefreshJobs
 	if state == nil {
 		return
 	}
@@ -367,7 +367,7 @@ func (s *app) overlayRefreshedRequirements(items []application.Requirement, spri
 }
 
 func (s *app) invalidateRequirementRefreshJobs() {
-	state := s.requirementRefreshJobs
+	state := s.requirementUnit.state.requirementRefreshJobs
 	if state == nil {
 		return
 	}
@@ -379,7 +379,7 @@ func (s *app) invalidateRequirementRefreshJobs() {
 }
 
 func (s *app) observeRequirementRefreshJobs() {
-	state := s.requirementRefreshJobs
+	state := s.requirementUnit.state.requirementRefreshJobs
 	if state == nil {
 		return
 	}
@@ -398,7 +398,7 @@ func (s *app) observeRequirementRefreshJobs() {
 }
 
 func (s *app) closeRequirementRefreshJobs(ctx context.Context) error {
-	state := s.requirementRefreshJobs
+	state := s.requirementUnit.state.requirementRefreshJobs
 	if state == nil {
 		return nil
 	}

@@ -22,8 +22,8 @@ func (s *app) view(c *ui.Context) {
 		s.observeSkillsBrowserNavigation()
 	}
 	s.observeMaterialsLiveRefresh()
-	if s.requirementContentJobs != nil {
-		s.requirementContentJobs.visible = ""
+	if s.requirementUnit.state.requirementContentJobs != nil {
+		s.requirementUnit.state.requirementContentJobs.visible = ""
 	}
 	w, _ := c.Size()
 	ui.MenuScope(c, s.popupMenuScope())

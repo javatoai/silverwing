@@ -4,9 +4,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
-	"sort"
 	"strings"
-	"time"
 
 	"silverwing-go/internal/application"
 
@@ -21,7 +19,7 @@ const (
 )
 
 func (s *app) materials(c *ui.Context, p palette) {
-	t := s.currentTask()
+	t := s.taskUnit.currentTask()
 	if t.id == "" {
 		s.emptyTask(c, p)
 		return
@@ -31,19 +29,19 @@ func (s *app) materials(c *ui.Context, p palette) {
 		return
 	}
 	s.observeMaterialsWindowRefresh()
-	s.ensureMaterialsPickerState()
-	c.OnShortcut(ui.Ctrl, ui.KeyP, func() { s.openMaterialsQuickPicker() })
+	s.materialsUnit.ensureMaterialsPickerState()
+	c.OnShortcut(ui.Ctrl, ui.KeyP, func() { s.materialsUnit.openMaterialsQuickPicker() })
 	c.OnShortcut(ui.Ctrl|ui.Shift, ui.KeyF, func() { s.openMaterialsFullTextSearch() })
 	c.OnShortcut(ui.Ctrl, ui.KeyF, func() { s.openDocumentFind(c) })
 	c.OnShortcut(ui.Super, ui.KeyF, func() { s.openDocumentFind(c) })
 	c.OnShortcut(0, ui.KeyF3, func() { s.moveDocumentFind(1) })
 	c.OnShortcut(ui.Shift, ui.KeyF3, func() { s.moveDocumentFind(-1) })
 	c.OnShortcut(ui.Ctrl, ui.KeyW, func() {
-		if s.documentPath != "" {
-			s.closeDocumentTab(s.documentPath)
+		if s.materialsUnit.state.documentPath != "" {
+			s.closeDocumentTab(s.materialsUnit.state.documentPath)
 		}
 	})
-	if !s.documentsLoaded && !s.documentsRequested && !s.materialsFileReadBlocked() {
+	if !s.materialsUnit.state.documentsLoaded && !s.materialsUnit.state.documentsRequested && !s.materialsFileReadBlocked() {
 		s.loadDocuments()
 	}
 	s.prepareDocumentFind()
@@ -58,24 +56,24 @@ func (s *app) materials(c *ui.Context, p palette) {
 		availableWidth, _ = c.Size()
 	}
 	materialsRow.Children(func() {
-		if !s.documentsCollapsed {
+		if !s.materialsUnit.state.documentsCollapsed {
 			s.documentTree(c, p, clampMaterialsDirectoryWidth(s.materialsDirectoryWidth(), availableWidth))
 			s.materialsDirectoryResizeHandle(c, p, availableWidth)
 		}
 		ui.Column(c).Grow(1).MinWidth(0).Background(p.surface).Children(func() {
 			s.documentToolbar(c, p)
-			if s.documentKind == "unsupported" {
+			if s.materialsUnit.state.documentKind == "unsupported" {
 				ui.Column(c).Grow(1).FillWidth().Center().Gap(12).Padding(24).Children(func() {
 					icon(c, "file", 28, p.muted)
-					label(c, filepath.Base(s.documentPath), 14, p.text).FontWeight(600)
+					label(c, filepath.Base(s.materialsUnit.state.documentPath), 14, p.text).FontWeight(600)
 					label(c, "此格式暂不支持预览，请使用系统应用打开。", 13, p.muted)
 					if action(c, "unsupported-open-external", "arrow", "使用系统应用打开", p, false) {
-						s.act("document.open", t.id, "", "", s.documentPath, "", nil)
+						s.act("document.open", t.id, "", "", s.materialsUnit.state.documentPath, "", nil)
 					}
 				})
 				return
 			}
-			if s.documentKind == "pdf" || s.documentKind == "image" {
+			if s.materialsUnit.state.documentKind == "pdf" || s.materialsUnit.state.documentKind == "image" {
 				s.renderNativeMediaControls(c, p)
 				// Media owns its scroll viewport. An outer text Scroll gives its
 				// content an automatic height and leaves the inner List unbounded.
@@ -91,7 +89,7 @@ func (s *app) materials(c *ui.Context, p palette) {
 				return
 			}
 			if s.materialsTextPreviewVisible() {
-				if documentKindForPath(s.documentPath) == "markdown" {
+				if documentKindForPath(s.materialsUnit.state.documentPath) == "markdown" {
 					s.renderMarkdownSourceContent(c, p)
 				} else {
 					s.renderDetectedMaterialsText(c, p)
@@ -100,7 +98,7 @@ func (s *app) materials(c *ui.Context, p palette) {
 			}
 			// Match the source reader's 12dp pane inset plus 18dp vertical / 26dp
 			// horizontal native Markdown reader padding.
-			ext := strings.ToLower(filepath.Ext(s.documentPath))
+			ext := strings.ToLower(filepath.Ext(s.materialsUnit.state.documentPath))
 			markdown := ext == ".md" || ext == ".markdown"
 			scrollID := "text"
 			if markdown {
@@ -131,19 +129,19 @@ func (s *app) materials(c *ui.Context, p palette) {
 			}
 			s.applyDocumentFindNavigation(scrollID)
 			preview.Children(func() {
-				if s.documentPath == "" {
+				if s.materialsUnit.state.documentPath == "" {
 					label(c, "选择一份任务资料，或从工具栏新建文档。", 13, p.muted)
 					return
 				}
-				if s.documentContent == "" && !s.documentReadPending {
+				if s.materialsUnit.state.documentContent == "" && !s.materialsUnit.state.documentReadPending {
 					label(c, "文档内容为空。", 13, p.muted)
 					return
 				}
-				if !markdown && s.documentEditing {
-					ui.TextArea(c.Key("document-editor-"+s.documentPath), &s.documentContent).FillWidth().Height(540).Padding(14).Font("Consolas").FontSize(13).Background(p.surface).Border(1, p.line).Radius(8).OnChange(func() {
-						s.documentDirty = true
-						s.documentDrafts[s.documentPath] = s.documentContent
-						s.documentDirtyMap[s.documentPath] = true
+				if !markdown && s.materialsUnit.state.documentEditing {
+					ui.TextArea(c.Key("document-editor-"+s.materialsUnit.state.documentPath), &s.materialsUnit.state.documentContent).FillWidth().Height(540).Padding(14).Font("Consolas").FontSize(13).Background(p.surface).Border(1, p.line).Radius(8).OnChange(func() {
+						s.materialsUnit.state.documentDirty = true
+						s.materialsUnit.state.documentDrafts[s.materialsUnit.state.documentPath] = s.materialsUnit.state.documentContent
+						s.materialsUnit.state.documentDirtyMap[s.materialsUnit.state.documentPath] = true
 					})
 					return
 				}
@@ -158,7 +156,7 @@ func (s *app) materials(c *ui.Context, p palette) {
 						s.renderMarkdownDocument(c, p)
 					}
 				case ext == ".csv":
-					s.renderCSVPreview(c, p, s.documentContent)
+					s.renderCSVPreview(c, p, s.materialsUnit.state.documentContent)
 				}
 			})
 		})
@@ -204,7 +202,7 @@ func (s *app) materialsUnavailable(c *ui.Context, p palette, t task) {
 		}
 		label(c, message, 12, p.muted)
 		if t.requirementURL != "" && !configured && action(c, "materials-open-settings", "settings", "配置任务资料", p, false) {
-			s.page, s.settingsTab, s.settingsPage, s.settingsLoaded = "settings", "存储", "paths", ""
+			s.page, s.settingsUnit.state.settingsTab, s.settingsUnit.state.settingsPage, s.settingsUnit.state.settingsLoaded = "settings", "存储", "paths", ""
 		} else if t.requirementURL != "" && configured && action(c, "materials-associate", "refresh", map[bool]string{true: "重试关联", false: "关联任务资料"}[t.materialsFailed()], p, true) {
 			s.act("task.materials-retry", t.id, "", "", "", "", nil)
 		}
@@ -220,7 +218,7 @@ func (s *app) documentTree(c *ui.Context, p palette, width float32) {
 		canTrashSelection = canTrashSelection && s.materialsWritable(entry.Path, false)
 	}
 	order := s.readingMaterialsSortOrder()
-	documents := sortDocumentsByOrder(s.documents, order)
+	projection := s.materialsDocumentProjection()
 	expanded := s.readingExpandedDirectories()
 	ui.Column(c).Width(width).Shrink(0).MinHeight(0).Background(p.side).Border(1, p.line).BorderWidth(0, 1, 0, 0).Children(func() {
 		ui.Row(c).Height(34).Shrink(0).Padding(0, 8).Gap(2).AlignItems(ui.Center).Children(func() {
@@ -228,7 +226,7 @@ func (s *app) documentTree(c *ui.Context, p palette, width float32) {
 			if selectedCount := len(s.materialsFileSelection(state)); selectedCount > 0 {
 				label(c, fmt.Sprintf("已选 %d", selectedCount), 11, p.blue).SingleLine().Shrink(1).MinWidth(0)
 			} else {
-				label(c, fmt.Sprintf("(%d)", countDocuments(s.documents)), 11, p.muted)
+				label(c, fmt.Sprintf("(%d)", countDocuments(s.materialsUnit.state.documents)), 11, p.muted)
 			}
 			ui.Spacer(c)
 			sortLabel := map[string]string{"NAME": "按名称排序", "MODIFIED_DESC": "最近修改排序"}[order]
@@ -240,9 +238,9 @@ func (s *app) documentTree(c *ui.Context, p palette, width float32) {
 					s.setReadingMaterialsSortOrder("MODIFIED_DESC")
 				}
 			})
-			s.overflowMenuOwned(c, p, "materials-more", "materials-more-"+s.snapshot.Home+"-"+s.currentTask().id+"-"+s.currentTask().path, "更多资料操作", false, func(m *overflowMenuBuilder) {
+			s.overflowMenuOwned(c, p, "materials-more", "materials-more-"+s.snapshot.Home+"-"+s.taskUnit.currentTask().id+"-"+s.taskUnit.currentTask().path, "更多资料操作", false, func(m *overflowMenuBuilder) {
 				if m.Item("quick-open", "快速打开文件 (Ctrl+P)").Icon("search").Chosen() {
-					s.openMaterialsQuickPicker()
+					s.materialsUnit.openMaterialsQuickPicker()
 				}
 				if m.Item("search-all", "搜索全部资料 (Ctrl+Shift+F)").Icon("search").Chosen() {
 					s.openMaterialsFullTextSearch()
@@ -267,7 +265,7 @@ func (s *app) documentTree(c *ui.Context, p palette, width float32) {
 				}
 				m.Separator()
 				if m.Item("refresh", "刷新资料").Icon("refresh").Chosen() {
-					s.documents, s.documentsLoaded, s.documentsRequested = nil, false, false
+					s.materialsUnit.state.documents, s.materialsUnit.state.documentsLoaded, s.materialsUnit.state.documentsRequested = nil, false, false
 					s.loadDocuments()
 				}
 				m.Separator()
@@ -278,18 +276,18 @@ func (s *app) documentTree(c *ui.Context, p palette, width float32) {
 				}
 			})
 			if miniButton(c, p, "materials-collapse", "chevron-left", "收起文档列表", false).Clicked() {
-				s.documentsCollapsed = true
+				s.materialsUnit.state.documentsCollapsed = true
 			}
 		})
-		rows := s.materialsTreeRows(documents)
+		rows := s.materialsTreeRows(projection, order)
 		treeExpanded, selected := make(map[string]bool), make(map[string]bool)
 		for _, row := range rows {
 			if row.Directory {
-				treeExpanded[row.ID] = expanded[s.materialsRelativePath(row.Path)]
+				treeExpanded[row.ID] = expanded[projection.relativePath(row.Path)]
 			}
 			_, selected[row.ID] = state.selected[row.ID]
 		}
-		opened := materialsFileEntryKey(s.materialsRelativePath(s.documentPath), false)
+		opened := materialsFileEntryKey(projection.relativePath(s.materialsUnit.state.documentPath), false)
 		FileTree(c, p, FileTreeProps{
 			Key: "materials-file-tree", Root: FileTreeRow{ID: "@root", Name: filepath.Base(state.root), Path: state.root, Directory: true},
 			Rows: rows, Expanded: treeExpanded, Selected: selected, Opened: opened, State: &state.tree,
@@ -298,7 +296,7 @@ func (s *app) documentTree(c *ui.Context, p palette, width float32) {
 			OnInput:         func(input FileTreeInput) { s.materialsTreeInput(state, input) },
 			ContextMenu: func(row FileTreeRow, menu *ui.Menu) {
 				if row.ID == "@root" {
-				} else if entry, ok := s.findMaterialsEntry(row.Path, s.documents); ok {
+				} else if entry, ok := projection.find(row.Path); ok {
 					s.materialsEntryContextMenu(c, menu, state, entry)
 				}
 			},
@@ -353,19 +351,11 @@ func clampMaterialsDirectoryWidth(preferredWidth, availableWidth float32) float3
 }
 
 func (s *app) materialsRelativePath(path string) string {
-	root := s.currentTask().materialsPath
-	if root == "" || path == "" {
-		return ""
-	}
-	relative, err := filepath.Rel(root, path)
-	if err != nil || relative == "." || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return ""
-	}
-	return filepath.ToSlash(relative)
+	return s.materialsDocumentProjection().relativePath(path)
 }
 
 func (s *app) initializeMaterialsTreeExpansion() {
-	if !s.documentsLoaded || s.readingExpansionInitialized() {
+	if !s.materialsUnit.state.documentsLoaded || s.readingExpansionInitialized() {
 		return
 	}
 	material := s.currentReadingMaterials(true)
@@ -390,7 +380,7 @@ func (s *app) initializeMaterialsTreeExpansion() {
 				}
 			}
 		}
-		visit(s.documents, 1)
+		visit(s.materialsUnit.state.documents, 1)
 	}
 	material.ExpandedDirectories = expanded
 	s.markReadingExpansionInitialized()
@@ -398,12 +388,12 @@ func (s *app) initializeMaterialsTreeExpansion() {
 
 func (s *app) documentTabsBar(c *ui.Context, p palette) {
 	ui.Row(c).Height(36).Shrink(0).Padding(0, 10).Gap(2).Background(p.soft).Border(1, p.line).BorderWidth(0, 0, 1, 0).AlignItems(ui.Center).Children(func() {
-		if s.documentsCollapsed && miniButton(c, p, "materials-expand", "chevron", "展开文档列表", false).Clicked() {
-			s.documentsCollapsed = false
+		if s.materialsUnit.state.documentsCollapsed && miniButton(c, p, "materials-expand", "chevron", "展开文档列表", false).Clicked() {
+			s.materialsUnit.state.documentsCollapsed = false
 		}
-		for _, path := range s.documentTabs {
+		for _, path := range s.materialsUnit.state.documentTabs {
 			name := filepath.Base(path)
-			selected := path == s.documentPath
+			selected := path == s.materialsUnit.state.documentPath
 			tab := ui.ButtonBase(c.Key("materials-open-tab-"+path)).Row().Height(30).Padding(0, 10).Gap(7).Radius(6).Label(name)
 			if selected {
 				tab.Background(p.selected)
@@ -414,7 +404,7 @@ func (s *app) documentTabsBar(c *ui.Context, p palette) {
 					fg = p.blue
 				}
 				label(c, name, 12, fg).FontWeight(500).NoWrap()
-				if s.documentDirtyMap[path] {
+				if s.materialsUnit.state.documentDirtyMap[path] {
 					ui.Box(c).Width(6).Height(6).Radius(3).Background(p.amber)
 				}
 				if iconButton(c, "close-doc-"+path, "close", "关闭文档标签", p).Clicked() {
@@ -431,16 +421,16 @@ func (s *app) documentTabsBar(c *ui.Context, p palette) {
 
 func (s *app) documentToolbar(c *ui.Context, p palette) {
 	s.renderMaterialsTextEditorHeader(c, p)
-	if s.documentsCollapsed {
+	if s.materialsUnit.state.documentsCollapsed {
 		ui.Row(c).Height(36).Shrink(0).Padding(0, 12).Gap(8).AlignItems(ui.Center).Background(p.soft).Border(1, p.line).BorderWidth(0, 0, 1, 0).Children(func() {
 			if miniButton(c, p, "materials-expand-list", "chevron", "展开文档列表", false).Clicked() {
-				s.documentsCollapsed = false
+				s.materialsUnit.state.documentsCollapsed = false
 			}
 			label(c, "文档列表已收起", 11, p.muted)
 			ui.Spacer(c)
 		})
 	}
-	if state := s.materialsFileManagement; state != nil && state.lastError != "" {
+	if state := s.materialsUnit.state.materialsFileManagement; state != nil && state.lastError != "" {
 		ui.Row(c).Height(30).Shrink(0).Padding(0, 12).Gap(8).AlignItems(ui.Center).Background(p.soft).Children(func() {
 			icon(c, "warning", 13, p.amber)
 			label(c, state.lastError, 11, p.amber).Grow(1).SingleLine().Tooltip(state.lastError)
@@ -453,7 +443,7 @@ func (s *app) documentToolbar(c *ui.Context, p palette) {
 		ui.Row(c).Height(32).Shrink(0).Padding(0, 12).Gap(8).AlignItems(ui.Center).Background(p.soft).Children(func() {
 			label(c, "全文搜索命中 · "+searchHitLocation(hit), 11, p.blue).Grow(1).SingleLine()
 			if action(c, "materials-search-return-preview", "eye", "返回阅读预览", p, false) {
-				s.closeMaterialsSearchSourcePreview()
+				s.materialsUnit.closeMaterialsSearchSourcePreview()
 			}
 		})
 	}
@@ -461,13 +451,13 @@ func (s *app) documentToolbar(c *ui.Context, p palette) {
 }
 
 func (s *app) documentMoreMenu(c *ui.Context, m *overflowMenuBuilder) {
-	if s.documentPath == "" {
+	if s.materialsUnit.state.documentPath == "" {
 		return
 	}
-	ext := strings.ToLower(filepath.Ext(s.documentPath))
+	ext := strings.ToLower(filepath.Ext(s.materialsUnit.state.documentPath))
 	m.Separator()
 	if m.Item("find", "查找当前文档").Icon("search").Chosen() {
-		if s.currentMaterialsTextPreview() == nil && s.documentFindOpen {
+		if s.currentMaterialsTextPreview() == nil && s.materialsUnit.state.documentFindOpen {
 			s.closeDocumentFind()
 		} else {
 			s.openDocumentFind(c)
@@ -482,47 +472,47 @@ func (s *app) documentMoreMenu(c *ui.Context, m *overflowMenuBuilder) {
 			s.setReadingMode(next)
 		}
 	}
-	if s.documentDirty && ext != ".md" && ext != ".markdown" {
+	if s.materialsUnit.state.documentDirty && ext != ".md" && ext != ".markdown" {
 		label := "保存"
 		if m.Item("save", label).Icon("save").Chosen() {
 			if s.currentMaterialTextEditor() != nil {
 				s.flushMaterialTextAutosave()
 			} else {
-				s.act("document.save", s.currentTask().id, "", "", s.documentPath, s.documentContent, map[string]any{"expectedHash": s.documentHash})
+				s.act("document.save", s.taskUnit.currentTask().id, "", "", s.materialsUnit.state.documentPath, s.materialsUnit.state.documentContent, map[string]any{"expectedHash": s.materialsUnit.state.documentHash})
 			}
 		}
 	}
 	if m.Item("reload", "重新读取").Icon("refresh").Chosen() {
 		reload := func() { s.rereadSelectedMaterial(true) }
-		if s.documentDirty {
-			s.confirmNative("放弃本地修改并重新读取？", "当前尚未保存的内容将被丢弃。", filepath.Base(s.documentPath), reload)
+		if s.materialsUnit.state.documentDirty {
+			s.confirmNative("放弃本地修改并重新读取？", "当前尚未保存的内容将被丢弃。", filepath.Base(s.materialsUnit.state.documentPath), reload)
 		} else {
 			reload()
 		}
 	}
 	m.Separator()
 	if m.Item("copy-content", "复制文件原文").Icon("copy").Chosen() {
-		s.copyTextToClipboard(c.Services(), s.documentContent, "已复制文档内容")
+		s.copyTextToClipboard(c.Services(), s.materialsUnit.state.documentContent, "已复制文档内容")
 	}
 	if m.Item("rename", "重命名").Icon("edit").Chosen() {
-		s.openForm("document.rename", "重命名文档", s.currentTask().id, "", "", s.documentPath, formField{key: "name", label: "新文件名", value: filepath.Base(s.documentPath)})
+		s.openForm("document.rename", "重命名文档", s.taskUnit.currentTask().id, "", "", s.materialsUnit.state.documentPath, formField{key: "name", label: "新文件名", value: filepath.Base(s.materialsUnit.state.documentPath)})
 	}
 	if m.Item("duplicate", "复制文档").Icon("copy").Chosen() {
-		s.openForm("document.copy", "复制文档", s.currentTask().id, "", "", s.documentPath, formField{key: "name", label: "副本文件名"})
+		s.openForm("document.copy", "复制文档", s.taskUnit.currentTask().id, "", "", s.materialsUnit.state.documentPath, formField{key: "name", label: "副本文件名"})
 	}
 	m.Separator()
-	if materialsOpenWithAvailable() && m.Item("open-with", "选择应用打开").Icon("launch").Disabled(s.materialsSystemOpenBusy(s.materialsFileManagement)).Chosen() {
-		s.act("system.open-with", s.currentTask().id, "", "", s.documentPath, "", nil)
+	if materialsOpenWithAvailable() && m.Item("open-with", "选择应用打开").Icon("launch").Disabled(s.materialsSystemOpenBusy(s.materialsUnit.state.materialsFileManagement)).Chosen() {
+		s.act("system.open-with", s.taskUnit.currentTask().id, "", "", s.materialsUnit.state.documentPath, "", nil)
 	}
-	if m.Item("open", "打开文档").Icon("launch").Disabled(s.materialsSystemOpenBusy(s.materialsFileManagement)).Chosen() {
-		s.act("document.open", s.currentTask().id, "", "", s.documentPath, "", nil)
+	if m.Item("open", "打开文档").Icon("launch").Disabled(s.materialsSystemOpenBusy(s.materialsUnit.state.materialsFileManagement)).Chosen() {
+		s.act("document.open", s.taskUnit.currentTask().id, "", "", s.materialsUnit.state.documentPath, "", nil)
 	}
-	if m.Item("reveal", "显示位置").Icon("folder").Disabled(s.materialsSystemRevealBusy(s.materialsFileManagement)).Chosen() {
-		s.act("document.reveal", s.currentTask().id, "", "", s.documentPath, "", nil)
+	if m.Item("reveal", "显示位置").Icon("folder").Disabled(s.materialsSystemRevealBusy(s.materialsUnit.state.materialsFileManagement)).Chosen() {
+		s.act("document.reveal", s.taskUnit.currentTask().id, "", "", s.materialsUnit.state.documentPath, "", nil)
 	}
 	m.Separator()
 	if m.Item("trash", "移至回收站").Icon("delete").Dangerous().Chosen() {
-		s.selectMaterialsPath(s.documentPath)
+		s.selectMaterialsPath(s.materialsUnit.state.documentPath)
 		s.requestMaterialsTrashPreview()
 	}
 }
@@ -540,33 +530,33 @@ func miniButton(c *ui.Context, p palette, key, image, accessible string, selecte
 }
 
 func (s *app) closeDocumentTab(path string) {
-	if path == s.documentPath {
+	if path == s.materialsUnit.state.documentPath {
 		if err := s.captureMaterialTextInput(); err != nil {
 			s.lastError = err.Error()
 			return
 		}
 	}
-	for index, opened := range s.documentTabs {
+	for index, opened := range s.materialsUnit.state.documentTabs {
 		if opened == path {
-			s.documentTabs = append(s.documentTabs[:index], s.documentTabs[index+1:]...)
+			s.materialsUnit.state.documentTabs = append(s.materialsUnit.state.documentTabs[:index], s.materialsUnit.state.documentTabs[index+1:]...)
 			break
 		}
 	}
-	if s.documentPath != path {
+	if s.materialsUnit.state.documentPath != path {
 		return
 	}
-	s.closeNativeMedia()
+	s.materialsUnit.closeNativeMedia()
 	s.closeMarkdownEditor()
-	if len(s.documentTabs) == 0 {
-		s.documentPath, s.documentContent, s.documentHash = "", "", ""
-		s.documentKind, s.documentReadOnly = "", false
-		s.documentDirty, s.documentEditing = false, false
+	if len(s.materialsUnit.state.documentTabs) == 0 {
+		s.materialsUnit.state.documentPath, s.materialsUnit.state.documentContent, s.materialsUnit.state.documentHash = "", "", ""
+		s.materialsUnit.state.documentKind, s.materialsUnit.state.documentReadOnly = "", false
+		s.materialsUnit.state.documentDirty, s.materialsUnit.state.documentEditing = false, false
 		return
 	}
-	s.selectDocument(s.documentTabs[len(s.documentTabs)-1])
+	s.selectDocument(s.materialsUnit.state.documentTabs[len(s.materialsUnit.state.documentTabs)-1])
 }
 
-func (s *app) fileText() string { return s.documentContent }
+func (s *app) fileText() string { return s.materialsUnit.state.documentContent }
 
 func countDocuments(items []application.Document) int {
 	count := 0
@@ -575,43 +565,6 @@ func countDocuments(items []application.Document) int {
 		count += countDocuments(item.Children)
 	}
 	return count
-}
-
-func isDocumentDirectory(document application.Document) bool {
-	return document.Kind == "directory" || document.Kind == "dir" || document.Kind == "folder"
-}
-
-func sortDocuments(items []application.Document) {
-	sorted := sortDocumentsByOrder(items, "NAME")
-	copy(items, sorted)
-}
-
-func sortDocumentsByOrder(items []application.Document, order string) []application.Document {
-	sorted := make([]application.Document, len(items))
-	copy(sorted, items)
-	for index := range sorted {
-		sorted[index].Children = sortDocumentsByOrder(sorted[index].Children, order)
-	}
-	sort.SliceStable(sorted, func(i, j int) bool {
-		left, right := sorted[i], sorted[j]
-		leftDirectory, rightDirectory := isDocumentDirectory(left), isDocumentDirectory(right)
-		if leftDirectory != rightDirectory {
-			return leftDirectory
-		}
-		if order == "MODIFIED_DESC" && left.Modified != right.Modified {
-			leftTime, leftErr := time.Parse(time.RFC3339Nano, left.Modified)
-			rightTime, rightErr := time.Parse(time.RFC3339Nano, right.Modified)
-			if leftErr == nil && rightErr == nil && !leftTime.Equal(rightTime) {
-				return leftTime.After(rightTime)
-			}
-			return left.Modified > right.Modified
-		}
-		if strings.EqualFold(left.Name, right.Name) {
-			return left.Path < right.Path
-		}
-		return strings.ToLower(left.Name) < strings.ToLower(right.Name)
-	})
-	return sorted
 }
 
 func renderMarkdown(c *ui.Context, p palette, source string) {

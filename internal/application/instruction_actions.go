@@ -94,7 +94,7 @@ func (a *App) instructionAction(ctx context.Context, action Action) (actionResul
 				return ActionResult{}, e
 			}
 			if strings.EqualFold(path, docs.TaskNotesPath(taskPath, manifest)) {
-				service := workspace.NewTaskApplicationService(a.Manifests, a.git(config), a.Paths)
+				service := a.taskService(config)
 				defer func() { appendMaterialsCatalogWarnings(&actionResult, service.Documents) }()
 				if e = service.SaveTaskNotes(config, taskPath, actionText(action)); e != nil {
 					return ActionResult{}, e

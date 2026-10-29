@@ -19,7 +19,7 @@ func TestRequirementBodyHTMLProjectionPreservesSource(t *testing.T) {
 	const want = "# 测试数据\r\n\r\n订单号：**ORDER-001**\r\n\r\n卡号：CARD-002\r\n"
 	s := &app{page: "requirements"}
 	reader := s.requirementReader("task", "https://project.feishu.cn/test/bug/detail/123")
-	t.Cleanup(s.closeRequirementReaders)
+	t.Cleanup(s.requirementUnit.closeRequirementReaders)
 	s.updateRequirementReaderBody(reader, application.RequirementContent{Body: source})
 	state := reader.bodyMarkdown
 	native := ensureFrameworkMarkdown(state)
@@ -53,7 +53,7 @@ func TestRequirementBodyHTMLSearchRefreshAndResourceIdentity(t *testing.T) {
 	}
 	s := &app{page: "requirements"}
 	reader := s.requirementReader("a", "https://project.feishu.cn/test/story/detail/123")
-	t.Cleanup(s.closeRequirementReaders)
+	t.Cleanup(s.requirementUnit.closeRequirementReaders)
 	body := application.RequirementContent{Body: source, MarkdownPath: path, Generation: "one",
 		Resources: []application.RequirementResource{{URL: imageURL, Path: "synthetic-body.png"}}}
 	s.updateRequirementReaderBody(reader, body)
@@ -154,7 +154,7 @@ func TestRequirementBodyHTMLNativeMarkdownRenderingAndCopy(t *testing.T) {
 			t.Run(fmt.Sprintf("%d-dark-%v", width, dark), func(t *testing.T) {
 				s := &app{page: "requirements", dark: dark}
 				reader := s.requirementReader("task", "https://project.feishu.cn/test/bug/detail/123")
-				t.Cleanup(s.closeRequirementReaders)
+				t.Cleanup(s.requirementUnit.closeRequirementReaders)
 				s.updateRequirementReaderBody(reader, application.RequirementContent{Body: source})
 				state := reader.bodyMarkdown
 				tester := ui.NewTester(func(c *ui.Context) {

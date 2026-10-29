@@ -13,10 +13,12 @@ import (
 func TestReleaseReviewOperationFeedbackRetainsMessages(t *testing.T) {
 	for _, kind := range []string{"task.archive", "task.restore", "task.refresh", "task.materials-retry", "codex.workspace-retry"} {
 		t.Run(kind, func(t *testing.T) {
-			s := &app{tasks: []task{{id: "task", path: "/tasks/task", createdAt: "original"}}}
+			s := &app{
+				taskUnit: taskController{state: taskState{tasks: []task{{id: "task", path: "/tasks/task", createdAt: "original"}}}},
+			}
 			s.snapshot.Home = "/app-home"
 			message := "操作已返回；警告：资料说明未更新，请刷新资料单独重试"
-			s.applyActionResultFeedback(application.Action{Kind: kind, TaskID: "task"}, application.ActionResult{Message: message}, s.snapshot.Home, s.currentTask())
+			s.applyActionResultFeedback(application.Action{Kind: kind, TaskID: "task"}, application.ActionResult{Message: message}, s.snapshot.Home, s.taskUnit.currentTask())
 			if s.lastMessage != message {
 				t.Fatalf("operation feedback = %q, want %q", s.lastMessage, message)
 			}
@@ -34,12 +36,16 @@ func TestReleaseReviewOperationFeedbackKeepsReadsAndAutosavesQuiet(t *testing.T)
 		{Kind: "config.fields.save"},
 	} {
 		t.Run(action.Kind, func(t *testing.T) {
-			s := &app{tasks: []task{{id: "task", path: "/tasks/task", createdAt: "original"}}, documentPath: "/materials/file.txt", lastMessage: "retained feedback"}
+			s := &app{
+				taskUnit:      taskController{state: taskState{tasks: []task{{id: "task", path: "/tasks/task", createdAt: "original"}}}},
+				materialsUnit: materialsController{state: materialsState{documentPath: "/materials/file.txt"}},
+				lastMessage:   "retained feedback",
+			}
 			s.snapshot.Home = "/app-home"
 			if action.Kind == "config.fields.save" {
-				s.settingsAutosave = &settingsAutosaveState{home: s.snapshot.Home, active: &settingsAutosaveAttempt{kind: action.Kind}}
+				s.settingsUnit.state.settingsAutosave = &settingsAutosaveState{home: s.snapshot.Home, active: &settingsAutosaveAttempt{kind: action.Kind}}
 			}
-			s.applyActionResultFeedback(action, application.ActionResult{Message: "background result"}, s.snapshot.Home, s.currentTask())
+			s.applyActionResultFeedback(action, application.ActionResult{Message: "background result"}, s.snapshot.Home, s.taskUnit.currentTask())
 			if s.lastMessage != "retained feedback" {
 				t.Fatalf("quiet action replaced feedback: %q", s.lastMessage)
 			}
@@ -50,19 +56,22 @@ func TestReleaseReviewOperationFeedbackKeepsReadsAndAutosavesQuiet(t *testing.T)
 func TestReleaseReviewOperationFeedbackRejectsStaleContext(t *testing.T) {
 	for _, change := range []string{"home", "selection", "path", "incarnation", "irrelevant result"} {
 		t.Run(change, func(t *testing.T) {
-			s := &app{tasks: []task{{id: "task", path: "/tasks/task", createdAt: "original"}, {id: "other", path: "/tasks/other", createdAt: "other"}}, lastMessage: "current feedback"}
+			s := &app{
+				taskUnit:    taskController{state: taskState{tasks: []task{{id: "task", path: "/tasks/task", createdAt: "original"}, {id: "other", path: "/tasks/other", createdAt: "other"}}}},
+				lastMessage: "current feedback",
+			}
 			s.snapshot.Home = "/app-home"
-			home, selected := s.snapshot.Home, s.currentTask()
+			home, selected := s.snapshot.Home, s.taskUnit.currentTask()
 			action := application.Action{Kind: "task.refresh", TaskID: "task"}
 			switch change {
 			case "home":
 				s.snapshot.Home += "-replacement"
 			case "selection":
-				s.selected = 1
+				s.taskUnit.state.selected = 1
 			case "path":
-				s.tasks[0].path += "-moved"
+				s.taskUnit.state.tasks[0].path += "-moved"
 			case "incarnation":
-				s.tasks[0].createdAt = "replacement"
+				s.taskUnit.state.tasks[0].createdAt = "replacement"
 			case "irrelevant result":
 				action.Kind, action.TaskID = "requirements.refresh", "other"
 			}
@@ -81,11 +90,11 @@ func releaseReviewTemplateFixture(t *testing.T) (*app, *taskCreationState, *ui.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.snapshot.ConfigJSON, s.configJSON = string(raw), string(raw)
+	s.snapshot.ConfigJSON, s.settingsUnit.state.configJSON = string(raw), string(raw)
 	s.initTaskCreation("创建任务", "模板回归", "")
 	s.dialogOpen, s.form.mode = true, "task-create"
 	s.win = &mygo.Window{}
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	state.templates = []domain.AgentTaskTemplate{
 		{ID: "first", Name: "First review template", Content: "original template\r\n"},
 		{ID: "second", Name: "Second review template", Content: "replacement template"},
@@ -164,7 +173,7 @@ func TestReleaseReviewTemplateReplacementRequiresCurrentConfirmation(t *testing.
 		t.Fatal("stale-dialog fixture did not request confirmation")
 	}
 	replacement := &taskCreationState{phase: "editing", notes: "new dialog draft\r\n "}
-	s.taskCreation = replacement
+	s.taskUnit.state.taskCreation = replacement
 	s.finishConfirmationDialog(stale, 0)
 	if state.notes != draft || replacement.notes != "new dialog draft\r\n " {
 		t.Fatal("old confirmation modified an old or replacement task draft")

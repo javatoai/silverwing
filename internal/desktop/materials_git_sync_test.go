@@ -59,10 +59,10 @@ func materialsGitDesktopFixture(t *testing.T) (*app, *materialsGitFakeBackend, c
 	s := newApp(b, Options{})
 	s.loading = false
 	s.snapshot.Home = t.TempDir()
-	s.configJSON = string(data)
-	s.taskContextUpdate = func(update func()) { updates <- update }
-	s.materialsGit = &materialsGitDesktopState{scope: application.MaterialsGitScope(s.snapshot.Home, cfg)}
-	t.Cleanup(func() { s.stopMaterialsGitSync() })
+	s.settingsUnit.state.configJSON = string(data)
+	s.taskUnit.state.taskContextUpdate = func(update func()) { updates <- update }
+	s.materialsUnit.state.materialsGit = &materialsGitDesktopState{scope: application.MaterialsGitScope(s.snapshot.Home, cfg)}
+	t.Cleanup(func() { s.materialsUnit.stopMaterialsGitSync() })
 	return s, b, updates
 }
 func materialsGitNextUpdate(t *testing.T, updates chan func()) {
@@ -90,7 +90,7 @@ func TestMaterialsGitDuplicateManualAndTimerShareOneJob(t *testing.T) {
 	}
 	b.release <- struct{}{}
 	materialsGitNextUpdate(t, updates)
-	if s.materialsGit.running || s.materialsGit.status.LastSuccess == "" {
+	if s.materialsUnit.state.materialsGit.running || s.materialsUnit.state.materialsGit.status.LastSuccess == "" {
 		t.Fatal("did not settle")
 	}
 	if b.count.Load() != 1 {
@@ -99,11 +99,11 @@ func TestMaterialsGitDuplicateManualAndTimerShareOneJob(t *testing.T) {
 }
 func TestMaterialsGitDirtyMaterialsDeferWithoutSaving(t *testing.T) {
 	s, b, _ := materialsGitDesktopFixture(t)
-	s.documentPath = filepath.Join(s.materialsGit.scope.Root, "123-需求", "研发", "note.txt")
-	s.documentContent = "unsaved"
-	s.documentDirty = true
+	s.materialsUnit.state.documentPath = filepath.Join(s.materialsUnit.state.materialsGit.scope.Root, "123-需求", "研发", "note.txt")
+	s.materialsUnit.state.documentContent = "unsaved"
+	s.materialsUnit.state.documentDirty = true
 	s.beginMaterialsGitSync(true)
-	if b.count.Load() != 0 || !s.documentDirty || s.documentContent != "unsaved" {
+	if b.count.Load() != 0 || !s.materialsUnit.state.documentDirty || s.materialsUnit.state.documentContent != "unsaved" {
 		t.Fatal("draft was synced or lost")
 	}
 	if s.lastError == "" {
@@ -113,10 +113,10 @@ func TestMaterialsGitDirtyMaterialsDeferWithoutSaving(t *testing.T) {
 
 func TestMaterialsGitUnsavedSettingsCannotSyncPreviousTarget(t *testing.T) {
 	s, b, _ := materialsGitDesktopFixture(t)
-	*s.input("setting:materialsGitSync:repositoryUrl", s.materialsGit.scope.URL) = "https://example.invalid/new-repo.git"
+	*s.input("setting:materialsGitSync:repositoryUrl", s.materialsUnit.state.materialsGit.scope.URL) = "https://example.invalid/new-repo.git"
 	s.beginMaterialsGitSync(true)
 	s.beginMaterialsGitSync(false)
-	if b.count.Load() != 0 || s.materialsGit.running {
+	if b.count.Load() != 0 || s.materialsUnit.state.materialsGit.running {
 		t.Fatal("unsaved URL started the previous target")
 	}
 }
@@ -126,9 +126,9 @@ func TestMaterialsGitQueuedTimerDoesNotDuplicateManualSync(t *testing.T) {
 	config, _ := s.materialsGitConfig()
 	config.MaterialsGitSync.Enabled = true
 	data, _ := json.Marshal(config)
-	s.configJSON = string(data)
-	s.materialsGit.scope = application.MaterialsGitScope(s.snapshot.Home, config)
-	s.scheduleMaterialsGit(s.materialsGit, 0)
+	s.settingsUnit.state.configJSON = string(data)
+	s.materialsUnit.state.materialsGit.scope = application.MaterialsGitScope(s.snapshot.Home, config)
+	s.scheduleMaterialsGit(s.materialsUnit.state.materialsGit, 0)
 	var queued func()
 	select {
 	case queued = <-updates:
@@ -151,7 +151,7 @@ func TestMaterialsGitQueuedTimerDoesNotDuplicateManualSync(t *testing.T) {
 
 func TestMaterialsGitImportedSettingsPreserveNewerInput(t *testing.T) {
 	s, _, _ := materialsGitDesktopFixture(t)
-	before := s.configJSON
+	before := s.settingsUnit.state.configJSON
 	repositoryURL := s.input("setting:materialsGitSync:repositoryUrl", "https://github.com/example/docs.git")
 	config, _ := s.materialsGitConfig()
 	config.MaterialsGitSync.RepositoryURL = "https://github.com/imported/docs.git"
@@ -180,18 +180,18 @@ func TestMaterialsGitLateResultAndProgressDoNotUpdateNewTarget(t *testing.T) {
 	config, _ := s.materialsGitConfig()
 	config.MaterialsGitSync.Branch = "docs/other"
 	data, _ := json.Marshal(config)
-	s.configJSON = string(data)
+	s.settingsUnit.state.configJSON = string(data)
 	materialsGitNextUpdate(t, updates)
-	if s.materialsGit.phase == "late stage" {
+	if s.materialsUnit.state.materialsGit.phase == "late stage" {
 		t.Fatal("late progress applied")
 	}
 	b.release <- struct{}{}
 	materialsGitNextUpdate(t, updates)
-	if s.lastMessage != "" || s.materialsGit.scope.Branch != "docs/other" {
+	if s.lastMessage != "" || s.materialsUnit.state.materialsGit.scope.Branch != "docs/other" {
 		t.Fatal("late result affected new target")
 	}
 	materialsGitNextUpdate(t, updates) // read-only status for new binding
-	if b.count.Load() != 1 || !s.materialsGit.needsResume {
+	if b.count.Load() != 1 || !s.materialsUnit.state.materialsGit.needsResume {
 		t.Fatal("target change auto-started sync")
 	}
 }
@@ -205,7 +205,7 @@ func TestMaterialsGitCloseCancelsWithoutStartingAnotherJob(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := s.closeMaterialsGitSync(ctx); err != nil {
+	if err := s.materialsUnit.closeMaterialsGitSync(ctx); err != nil {
 		t.Fatal(err)
 	}
 	s.beginMaterialsGitSync(true)
@@ -218,8 +218,8 @@ func TestMaterialsGitSettingsLayout(t *testing.T) {
 		for _, dark := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%d-dark-%t", width, dark), func(t *testing.T) {
 				s, _, _ := materialsGitDesktopFixture(t)
-				s.materialsGit.status.Paused = true
-				s.materialsGit.status.Error = "请使用 Git 工具解决冲突并提交，然后重新检查。"
+				s.materialsUnit.state.materialsGit.status.Paused = true
+				s.materialsUnit.state.materialsGit.status.Error = "请使用 Git 工具解决冲突并提交，然后重新检查。"
 				tester := ui.NewTester(func(c *ui.Context) {
 					p := setTheme(c, dark)
 					ui.Column(c).Fill().Padding(24).Gap(8).Background(p.bg).Children(func() {

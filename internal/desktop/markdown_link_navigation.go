@@ -84,7 +84,7 @@ func (s *app) bindSkillsMarkdownLinkNavigation(state *skillsBrowserState) {
 	markdown.path = source
 	markdown.linkRoot = root
 	markdown.onNavigateLocalLink = func(relativePath, _ string) {
-		if s.skillsBrowser != state || state.markdown != markdown || state.selectedDirectory != directory || filepath.ToSlash(state.selectedPath) != selectedPath {
+		if s.settingsUnit.state.skillsBrowser != state || state.markdown != markdown || state.selectedDirectory != directory || filepath.ToSlash(state.selectedPath) != selectedPath {
 			return
 		}
 		for _, file := range state.files {
@@ -119,18 +119,18 @@ func (s *app) openMarkdownLink(state *markdownEditorState, destination string) {
 		state.onNavigateLocalLink(filepath.ToSlash(relative), target.fragment)
 		return
 	}
-	if state.taskID == "" || state.taskID != s.currentTask().id || s.markdown != state || state.path != s.documentPath || s.busy {
+	if state.taskID == "" || state.taskID != s.taskUnit.currentTask().id || s.materialsUnit.state.markdown != state || state.path != s.materialsUnit.state.documentPath || s.busy {
 		return
 	}
-	task := s.currentTask()
+	task := s.taskUnit.currentTask()
 	target, ok := resolveMarkdownLinkDestination(state.path, task.materialsPath, destination)
 	if !ok || target.path == "" {
 		return
 	}
-	entry, ok := s.findMaterialsEntry(target.path, s.documents)
+	entry, ok := s.findMaterialsEntry(target.path, s.materialsUnit.state.documents)
 	if !ok || entry.Directory {
 		return
 	}
 	s.selectMaterialsPath(entry.Path)
-	s.documentLinkFragment = target.fragment
+	s.materialsUnit.state.documentLinkFragment = target.fragment
 }

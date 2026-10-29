@@ -188,15 +188,15 @@ func (s *app) closeRequirementMarkdownFind(reader *requirementReaderState) {
 // would require a focused descendant, so Ctrl+F and F3 would otherwise stop
 // working when focus is on another control or nowhere in the pane.
 func (s *app) bindVisibleRequirementReaderShortcuts(c *ui.Context) {
-	if s == nil || c == nil || s.requirementContentJobs == nil {
+	if s == nil || c == nil || s.requirementUnit.state.requirementContentJobs == nil {
 		return
 	}
-	key := s.requirementContentJobs.visible
+	key := s.requirementUnit.state.requirementContentJobs.visible
 	if key == "" {
 		return
 	}
-	reader := s.requirementReaders[key]
-	if reader == nil || reader.epoch != s.requirementReaderGeneration {
+	reader := s.requirementUnit.state.requirementReaders[key]
+	if reader == nil || reader.epoch != s.requirementUnit.state.requirementReaderGeneration {
 		return
 	}
 	c.OnShortcut(ui.Ctrl, ui.KeyF, func() { s.openRequirementMarkdownFind(c, reader) })
@@ -241,7 +241,7 @@ func (s *app) renderRequirementReaderActions(c *ui.Context, p palette, reader *r
 	}
 	home := s.snapshot.Home
 	reader.contextMenu = func(c *ui.Context, native *ui.Menu) {
-		if home != s.snapshot.Home || reader.epoch != s.requirementReaderGeneration || s.requirementReaders[requirementReaderKey(reader.taskID, reader.url)] != reader || s.requirementContentJobs != nil && s.requirementContentJobs.visible != requirementReaderKey(reader.taskID, reader.url) {
+		if home != s.snapshot.Home || reader.epoch != s.requirementUnit.state.requirementReaderGeneration || s.requirementUnit.state.requirementReaders[requirementReaderKey(reader.taskID, reader.url)] != reader || s.requirementUnit.state.requirementContentJobs != nil && s.requirementUnit.state.requirementContentJobs.visible != requirementReaderKey(reader.taskID, reader.url) {
 			return
 		}
 		native.Separator()

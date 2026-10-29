@@ -201,14 +201,14 @@ func settingsPlainSwitchRow(c *ui.Context, p palette, key, title, description st
 }
 
 func (s *app) settingsBoolInput(key string, initial bool) *bool {
-	if s.settingsBoolInputs == nil {
-		s.settingsBoolInputs = make(map[string]*bool)
+	if s.settingsUnit.state.settingsBoolInputs == nil {
+		s.settingsUnit.state.settingsBoolInputs = make(map[string]*bool)
 	}
-	if value, ok := s.settingsBoolInputs[key]; ok {
+	if value, ok := s.settingsUnit.state.settingsBoolInputs[key]; ok {
 		return value
 	}
 	value := initial
-	s.settingsBoolInputs[key] = &value
+	s.settingsUnit.state.settingsBoolInputs[key] = &value
 	return &value
 }
 

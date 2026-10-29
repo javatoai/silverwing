@@ -47,17 +47,17 @@ func decodeAppConfig(source string) (domain.AppConfig, error) {
 // Typed projections are read-only too. Keep current settings separate from the
 // backend snapshot; editable task forms continue to decode their own copies.
 func (s *app) readCurrentAppConfig() (domain.AppConfig, error) {
-	return s.configReads.currentApp.read(s.configJSON, decodeAppConfig)
+	return s.settingsUnit.state.configReads.currentApp.read(s.settingsUnit.state.configJSON, decodeAppConfig)
 }
 
 func (s *app) readSnapshotAppConfig() (domain.AppConfig, error) {
-	return s.configReads.snapshotApp.read(s.snapshot.ConfigJSON, decodeAppConfig)
+	return s.settingsUnit.state.configReads.snapshotApp.read(s.snapshot.ConfigJSON, decodeAppConfig)
 }
 
 // The returned map is read-only. Editing continues to use settingsConfigMap,
 // which decodes a separate tree and cannot mutate these saved values.
 func (s *app) readSettingsConfig() (map[string]any, error) {
-	return s.configReads.settings.read(s.configJSON, decodeSettingsConfig)
+	return s.settingsUnit.state.configReads.settings.read(s.settingsUnit.state.configJSON, decodeSettingsConfig)
 }
 
 // Only use this borrowed array for read-only queries. Forms and callers that

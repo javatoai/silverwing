@@ -99,7 +99,7 @@ func (a *App) configurationActionWithProgress(ctx context.Context, action Action
 	if err != nil {
 		return ActionResult{}, err
 	}
-	service := workspace.NewTaskApplicationService(a.Manifests, a.git(config), a.Paths)
+	service := a.taskService(config)
 	service.RootMigration.Drafts = a.Documents
 	path := actionPath(action)
 	if path == "" {

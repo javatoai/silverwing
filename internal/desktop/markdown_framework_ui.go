@@ -77,7 +77,7 @@ func (s *app) renderFrameworkMarkdown(c *ui.Context, p palette, state *markdownE
 		CodeSize: textEditorFontSize / 15, CodeLineHeight: textEditorLineHeight, CodeColors: textEditorTheme(p),
 		CodeBackground: p.soft, CodeBlockBackground: p.soft, CodeBlockBorder: p.line,
 		TableBorder: p.line, TableHeader: p.soft, QuoteBar: p.line, QuoteText: p.muted}
-	if s.markdown == state {
+	if s.materialsUnit.state.markdown == state {
 		s.bindMaterialsReadingContextMenu(state)
 	}
 	o.ContextMenu = state.contextMenu

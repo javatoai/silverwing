@@ -9,6 +9,7 @@ import (
 
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/process"
+	"silverwing-go/internal/productprofile"
 	"silverwing-go/internal/storage"
 )
 
@@ -72,8 +73,8 @@ func (s *Service) Execute(ctx context.Context, kind string, payload map[string]a
 	case "update.check":
 		return map[string]any{
 			"currentVersion": domain.CurrentProductVersion,
-			"releasesUrl":    "https://github.com/javatoai/silverwing/releases?q=qa-v&expanded=true",
-			"automatic":      false,
+			"releasesUrl":    productprofile.ReleasesURL(),
+			"automatic":      productprofile.AutomaticUpdates,
 		}, nil
 	default:
 		return nil, fmt.Errorf("未知平台操作：%s", kind)

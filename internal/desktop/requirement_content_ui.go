@@ -73,24 +73,24 @@ func requirementContentAction(kind string) bool {
 }
 
 func (s *app) requirementReader(taskID, link string) *requirementReaderState {
-	if s.requirementReaders == nil {
-		s.requirementReaders = make(map[string]*requirementReaderState)
+	if s.requirementUnit.state.requirementReaders == nil {
+		s.requirementUnit.state.requirementReaders = make(map[string]*requirementReaderState)
 	}
 	key := requirementReaderKey(taskID, link)
-	if reader := s.requirementReaders[key]; reader != nil {
+	if reader := s.requirementUnit.state.requirementReaders[key]; reader != nil {
 		return reader
 	}
-	reader := &requirementReaderState{taskID: taskID, url: strings.TrimSpace(link), epoch: s.requirementReaderGeneration, resourceErrors: make(map[string]string)}
-	s.requirementReaders[key] = reader
+	reader := &requirementReaderState{taskID: taskID, url: strings.TrimSpace(link), epoch: s.requirementUnit.state.requirementReaderGeneration, resourceErrors: make(map[string]string)}
+	s.requirementUnit.state.requirementReaders[key] = reader
 	return reader
 }
 
-func (s *app) closeRequirementReaders() {
+func (s *requirementController) closeRequirementReaders() {
 	s.cancelRequirementContentReads()
-	if state := s.requirementContentJobs; state != nil {
+	if state := s.state.requirementContentJobs; state != nil {
 		state.entered = nil
 	}
-	for _, reader := range s.requirementReaders {
+	for _, reader := range s.state.requirementReaders {
 		closeMarkdownPreviewState(reader.bodyMarkdown)
 		closeMarkdownPreviewState(reader.commentsMarkdown)
 		closeRequirementCommentMarkdownStates(reader)
@@ -99,13 +99,13 @@ func (s *app) closeRequirementReaders() {
 			reader.sharedReader.findOpen = false
 		}
 	}
-	s.requirementReaders = nil
+	s.state.requirementReaders = nil
 }
 
-func (s *app) requirementReaderForAction(action application.Action) *requirementReaderState {
-	reader := s.requirementReaders[payloadString(action.Payload, "readerKey")]
+func (s *requirementController) requirementReaderForAction(action application.Action) *requirementReaderState {
+	reader := s.state.requirementReaders[payloadString(action.Payload, "readerKey")]
 	kind := requirementContentRequestKind(action)
-	if reader == nil || reader.epoch != s.requirementReaderGeneration || reader.requestIDs[kind] == 0 || fmt.Sprint(reader.requestIDs[kind]) != payloadString(action.Payload, "readerRequestID") {
+	if reader == nil || reader.epoch != s.state.requirementReaderGeneration || reader.requestIDs[kind] == 0 || fmt.Sprint(reader.requestIDs[kind]) != payloadString(action.Payload, "readerRequestID") {
 		return nil
 	}
 	if action.Kind == "requirements.attachment" {
@@ -124,7 +124,7 @@ func (s *app) requirementReaderPayload(reader *requirementReaderState, kind stri
 	if force && (kind == "requirements.read" || kind == "requirements.comments") {
 		// A newer explicit refresh owns this requirement across both entry
 		// points. Retire older subscribers before their replies can publish.
-		for _, other := range s.requirementReaders {
+		for _, other := range s.requirementUnit.state.requirementReaders {
 			if other != reader && sameRequirementReaderLink(other.url, reader.url) {
 				s.retireRequirementReaderRequest(other, kind)
 			}
@@ -147,7 +147,7 @@ func (s *app) requirementReaderPayload(reader *requirementReaderState, kind stri
 func (s *app) bindRequirementAccount(payload map[string]any) map[string]any {
 	// An absent token asks the backend to confirm the account on first use.
 	// A present empty token is invalid and must never represent startup state.
-	if state := s.requirementIdentityJobs; state != nil && state.confirmed && state.state == application.RequirementIdentityAuthenticated && state.identity != "" {
+	if state := s.requirementUnit.state.requirementIdentityJobs; state != nil && state.confirmed && state.state == application.RequirementIdentityAuthenticated && state.identity != "" {
 		payload["expectedIdentity"] = state.identity
 	}
 	return payload
@@ -186,10 +186,10 @@ func (s *app) startRequirementContentRead(reader *requirementReaderState, commen
 		reader.refreshAssetIndex = false
 		if force {
 			reader.resourceErrors = make(map[string]string)
-			if state := s.requirementContentJobs; state != nil {
+			if state := s.requirementUnit.state.requirementContentJobs; state != nil {
 				for _, request := range state.requests {
 					if request.reader == reader && request.action.Kind == "requirements.attachment" {
-						s.cancelRequirementContentJob(request)
+						s.requirementUnit.cancelRequirementContentJob(request)
 					}
 				}
 			}
@@ -214,25 +214,21 @@ func (s *app) requestRequirementResource(reader *requirementReaderState, resourc
 }
 
 func (s *app) applyRequirementContentResult(action application.Action, result application.ActionResult) {
-	reader := s.requirementReaderForAction(action)
+	reader := s.requirementUnit.requirementReaderForAction(action)
 	if reader == nil {
 		return
 	}
-	encoded, err := json.Marshal(result.Data)
-	if err != nil {
-		s.applyRequirementContentFailure(action, fmt.Errorf("需求结果格式无效：%w", err))
-		return
-	}
+
 	switch action.Kind {
 	case "requirements.read":
-		var body application.RequirementContent
-		if err = json.Unmarshal(encoded, &body); err != nil {
+		body, err := application.ResultData[application.RequirementContent](result)
+		if err != nil {
 			s.applyRequirementContentFailure(action, err)
 			return
 		}
 		s.updateRequirementReaderBody(reader, body)
 		if action.Payload["force"] == true && !body.Stale && body.RefreshError == "" && body.CacheError == "" {
-			for _, other := range s.requirementReaders {
+			for _, other := range s.requirementUnit.state.requirementReaders {
 				if other != reader && sameRequirementReaderLink(other.url, reader.url) {
 					s.retireRequirementReaderRequest(other, action.Kind)
 					s.updateRequirementReaderBody(other, body)
@@ -240,14 +236,14 @@ func (s *app) applyRequirementContentResult(action application.Action, result ap
 			}
 		}
 	case "requirements.comments":
-		var comments application.RequirementComments
-		if err = json.Unmarshal(encoded, &comments); err != nil {
+		comments, err := application.ResultData[application.RequirementComments](result)
+		if err != nil {
 			s.applyRequirementContentFailure(action, err)
 			return
 		}
 		s.updateRequirementReaderComments(reader, comments)
 		if action.Payload["force"] == true && !comments.Stale && comments.RefreshError == "" && comments.CacheError == "" {
-			for _, other := range s.requirementReaders {
+			for _, other := range s.requirementUnit.state.requirementReaders {
 				if other != reader && sameRequirementReaderLink(other.url, reader.url) {
 					s.retireRequirementReaderRequest(other, action.Kind)
 					s.updateRequirementReaderComments(other, comments)
@@ -256,11 +252,16 @@ func (s *app) applyRequirementContentResult(action application.Action, result ap
 		}
 	case "requirements.attachment":
 		if payloadString(action.Payload, "scope") == "comment" {
+			encoded, err := json.Marshal(result.Data)
+			if err != nil {
+				s.applyRequirementContentFailure(action, err)
+				return
+			}
 			s.applyRequirementCommentResource(reader, action, encoded)
 			return
 		}
-		var resource application.RequirementResource
-		if err = json.Unmarshal(encoded, &resource); err != nil {
+		resource, err := application.ResultData[application.RequirementResource](result)
+		if err != nil {
 			s.applyRequirementContentFailure(action, err)
 			return
 		}
@@ -394,7 +395,7 @@ func (s *app) applyRequirementContentFailure(action application.Action, err erro
 	if action.Kind != "requirements.read" && action.Kind != "requirements.comments" && action.Kind != "requirements.attachment" {
 		return false
 	}
-	if reader := s.requirementReaderForAction(action); reader != nil {
+	if reader := s.requirementUnit.requirementReaderForAction(action); reader != nil {
 		var changed *application.RequirementIdentityChangedError
 		if errors.As(err, &changed) {
 			s.applyRequirementListIdentityFailure(changed.Snapshot, err)

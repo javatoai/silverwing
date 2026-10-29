@@ -17,14 +17,14 @@ func (s *app) openMarkdownLocalImageViewer(owner *markdownEditorState, sourcePat
 	}
 	viewer := &markdownBitmapViewerState{
 		owner: owner, document: owner.doc, source: owner.doc.Source(), sourcePath: sourcePath,
-		page: s.page, settingsPage: s.settingsPage, tab: s.tab,
+		page: s.page, settingsPage: s.settingsUnit.state.settingsPage, tab: s.tab,
 		media: &nativeMediaState{kind: "image", imageExpanded: true, imageZoom: 1},
 	}
 	if !s.bindMarkdownBitmapViewerOwner(viewer, owner) {
 		return
 	}
 	s.dismissMarkdownBitmapViewer()
-	s.markdownBitmapViewer = viewer
+	s.materialsUnit.state.markdownBitmapViewer = viewer
 	owner.closeBitmapViewer = func() { s.closeMarkdownBitmapViewerForOwner(owner) }
 	s.requestMarkdownLocalImageViewer(viewer)
 }
@@ -86,10 +86,10 @@ func beginMarkdownLocalImageViewerRequest(viewer *markdownBitmapViewerState) (co
 }
 
 func markdownLocalImageViewerAttached(s *app, viewer *markdownBitmapViewerState) bool {
-	return s != nil && viewer != nil && s.markdownBitmapViewer == viewer && viewer.sourcePath != "" &&
+	return s != nil && viewer != nil && s.materialsUnit.state.markdownBitmapViewer == viewer && viewer.sourcePath != "" &&
 		viewer.owner != nil && !viewer.owner.closed && viewer.owner.commentReading && viewer.owner.detached &&
 		viewer.document != nil && viewer.owner.doc == viewer.document && viewer.document.Source() == viewer.source &&
-		s.page == viewer.page && s.settingsPage == viewer.settingsPage && s.tab == viewer.tab &&
+		s.page == viewer.page && s.settingsUnit.state.settingsPage == viewer.settingsPage && s.tab == viewer.tab &&
 		s.markdownBitmapViewerCommentContextCurrent(viewer)
 }
 
@@ -142,10 +142,10 @@ func (s *app) bindMarkdownBitmapViewerOwner(viewer *markdownBitmapViewerState, o
 		return true
 	}
 	if isCommentDraftMarkdownOwner(owner) {
-		if s.commentComposers == nil {
+		if s.requirementUnit.state.commentComposers == nil {
 			return false
 		}
-		viewer.composer = s.commentComposers.active
+		viewer.composer = s.requirementUnit.state.commentComposers.active
 		return s.commentComposerImageCurrent(viewer)
 	}
 	reader, readerKey, epoch, taskID, itemKey, ok := s.activeMarkdownCommentReader(owner)
@@ -164,7 +164,7 @@ func requirementReaderForCommentMarkdownOwner(s *app, owner *markdownEditorState
 	if s == nil || owner == nil {
 		return nil
 	}
-	for _, reader := range s.requirementReaders {
+	for _, reader := range s.requirementUnit.state.requirementReaders {
 		for _, state := range reader.commentMarkdown {
 			if state == owner {
 				return reader
@@ -186,21 +186,21 @@ func (s *app) markdownBitmapViewerCommentContextCurrent(viewer *markdownBitmapVi
 		return !isRequirementCommentMarkdownOwner(viewer.owner)
 	}
 	if reader == nil || viewer.readerKey != requirementReaderKey(reader.taskID, reader.url) ||
-		viewer.readerEpoch != reader.epoch || reader.epoch != s.requirementReaderGeneration ||
-		s.requirementReaders[viewer.readerKey] != reader || !requirementReaderOwnsCommentMarkdown(reader, viewer.owner) {
+		viewer.readerEpoch != reader.epoch || reader.epoch != s.requirementUnit.state.requirementReaderGeneration ||
+		s.requirementUnit.state.requirementReaders[viewer.readerKey] != reader || !requirementReaderOwnsCommentMarkdown(reader, viewer.owner) {
 		return false
 	}
 	switch viewer.page {
 	case "tasks", "archive":
-		current := s.currentTask()
+		current := s.taskUnit.currentTask()
 		return viewer.taskID != "" && current.id == viewer.taskID && reader.taskID == viewer.taskID &&
 			sameRequirementReaderLink(reader.url, current.requirementURL)
 	case "requirements":
-		if viewer.itemKey == "" || s.selectedRequirementKey != viewer.itemKey {
+		if viewer.itemKey == "" || s.requirementUnit.state.selectedRequirementKey != viewer.itemKey {
 			return false
 		}
 		selected, ok := s.selectedRequirementByKey(viewer.itemKey)
-		return ok && reader.taskID == "" && sameRequirementReaderLink(reader.url, s.requirements[selected].URL)
+		return ok && reader.taskID == "" && sameRequirementReaderLink(reader.url, s.requirementUnit.state.requirements[selected].URL)
 	default:
 		return false
 	}
@@ -216,25 +216,25 @@ func (s *app) activeMarkdownCommentReader(owner *markdownEditorState) (*requirem
 		return nil, "", 0, "", "", false
 	}
 	readerKey := requirementReaderKey(reader.taskID, reader.url)
-	if reader.epoch != s.requirementReaderGeneration || s.requirementReaders[readerKey] != reader {
+	if reader.epoch != s.requirementUnit.state.requirementReaderGeneration || s.requirementUnit.state.requirementReaders[readerKey] != reader {
 		return nil, "", 0, "", "", false
 	}
 	switch s.page {
 	case "tasks", "archive":
-		current := s.currentTask()
+		current := s.taskUnit.currentTask()
 		if current.id == "" || current.id != reader.taskID || !sameRequirementReaderLink(reader.url, current.requirementURL) {
 			return nil, "", 0, "", "", false
 		}
 		return reader, readerKey, reader.epoch, current.id, "", true
 	case "requirements":
-		if s.selectedRequirementKey == "" {
+		if s.requirementUnit.state.selectedRequirementKey == "" {
 			return nil, "", 0, "", "", false
 		}
-		selected, ok := s.selectedRequirementByKey(s.selectedRequirementKey)
-		if !ok || reader.taskID != "" || !sameRequirementReaderLink(reader.url, s.requirements[selected].URL) {
+		selected, ok := s.selectedRequirementByKey(s.requirementUnit.state.selectedRequirementKey)
+		if !ok || reader.taskID != "" || !sameRequirementReaderLink(reader.url, s.requirementUnit.state.requirements[selected].URL) {
 			return nil, "", 0, "", "", false
 		}
-		return reader, readerKey, reader.epoch, "", s.selectedRequirementKey, true
+		return reader, readerKey, reader.epoch, "", s.requirementUnit.state.selectedRequirementKey, true
 	default:
 		return nil, "", 0, "", "", false
 	}

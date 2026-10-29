@@ -14,7 +14,7 @@ import (
 // result may migrate its cached reading state, but cannot select a new document
 // in the task currently shown on screen.
 func (s *app) applyMaterialsRenameResult(action application.Action, result application.ActionResult) {
-	task := s.taskByID(action.TaskID)
+	task := s.taskUnit.taskByID(action.TaskID)
 	if expectedPath := payloadString(action.Payload, "desktopRenameTaskPath"); expectedPath != "" {
 		if normalizedReadingPath(expectedPath) != normalizedReadingPath(task.path) ||
 			payloadString(action.Payload, "desktopRenameTaskCreatedAt") != task.createdAt ||
@@ -29,41 +29,41 @@ func (s *app) applyMaterialsRenameResult(action application.Action, result appli
 	previous, replacement := operation.PreviousRelativePath, operation.RelativePath
 	s.remapMaterialTextEditors(task.id, task.path, task.materialsPath, oldPath, newPath)
 	s.remapMaterialsReading(task.path, task.materialsPath, previous, replacement)
-	if s.currentTask().id != action.TaskID {
+	if s.taskUnit.currentTask().id != action.TaskID {
 		return
 	}
 	s.remapMaterialsFileSelectionAfterRename(task, operation, oldPath, newPath)
 	remap := func(path string) string { return remapMaterialsAbsolutePath(path, oldPath, newPath) }
-	s.documentDrafts = remapMaterialsEntries(s.documentDrafts, oldPath, newPath)
-	s.documentDirtyMap = remapMaterialsEntries(s.documentDirtyMap, oldPath, newPath)
-	for index, path := range s.documentTabs {
-		s.documentTabs[index] = remap(path)
+	s.materialsUnit.state.documentDrafts = remapMaterialsEntries(s.materialsUnit.state.documentDrafts, oldPath, newPath)
+	s.materialsUnit.state.documentDirtyMap = remapMaterialsEntries(s.materialsUnit.state.documentDirtyMap, oldPath, newPath)
+	for index, path := range s.materialsUnit.state.documentTabs {
+		s.materialsUnit.state.documentTabs[index] = remap(path)
 	}
-	s.documentTabs = uniqueMaterialsPaths(s.documentTabs)
-	selectedPath := remap(s.documentPath)
-	adapterChanged := selectedPath != s.documentPath && (documentKindForPath(s.documentPath) == "markdown") != (documentKindForPath(selectedPath) == "markdown")
-	renamedMedia := selectedPath != s.documentPath && (s.documentKind == "image" || s.documentKind == "pdf")
-	if selectedPath != s.documentPath {
-		s.closeNativeMedia()
-		s.documentPath = selectedPath
-		s.documentKind = documentKindForPath(selectedPath)
-		if s.markdown != nil {
-			s.markdown.path = remap(s.markdown.path)
-			if s.documentKind != "markdown" {
+	s.materialsUnit.state.documentTabs = uniqueMaterialsPaths(s.materialsUnit.state.documentTabs)
+	selectedPath := remap(s.materialsUnit.state.documentPath)
+	adapterChanged := selectedPath != s.materialsUnit.state.documentPath && (documentKindForPath(s.materialsUnit.state.documentPath) == "markdown") != (documentKindForPath(selectedPath) == "markdown")
+	renamedMedia := selectedPath != s.materialsUnit.state.documentPath && (s.materialsUnit.state.documentKind == "image" || s.materialsUnit.state.documentKind == "pdf")
+	if selectedPath != s.materialsUnit.state.documentPath {
+		s.materialsUnit.closeNativeMedia()
+		s.materialsUnit.state.documentPath = selectedPath
+		s.materialsUnit.state.documentKind = documentKindForPath(selectedPath)
+		if s.materialsUnit.state.markdown != nil {
+			s.materialsUnit.state.markdown.path = remap(s.materialsUnit.state.markdown.path)
+			if s.materialsUnit.state.documentKind != "markdown" {
 				s.syncMarkdownEditor()
 				s.closeMarkdownEditor()
-				s.documentEditing = false
+				s.materialsUnit.state.documentEditing = false
 			}
 		}
 	}
 	if !operation.IsDirectory {
-		if !containsMaterialsPath([]string{s.documentPath}, newPath) {
+		if !containsMaterialsPath([]string{s.materialsUnit.state.documentPath}, newPath) {
 			// Renaming a different tree entry must not display the previously
 			// selected file's bytes under the new filename.
 			s.selectDocument(newPath)
 		}
-		if !containsMaterialsPath(s.documentTabs, newPath) {
-			s.documentTabs = append(s.documentTabs, newPath)
+		if !containsMaterialsPath(s.materialsUnit.state.documentTabs, newPath) {
+			s.materialsUnit.state.documentTabs = append(s.materialsUnit.state.documentTabs, newPath)
 		}
 		for parent := filepath.Dir(newPath); normalizedReadingPath(parent) != normalizedReadingPath(task.materialsPath); parent = filepath.Dir(parent) {
 			if parent == filepath.Dir(parent) {
@@ -74,7 +74,7 @@ func (s *app) applyMaterialsRenameResult(action application.Action, result appli
 	} else {
 		s.setReadingDirectoryExpanded(newPath, true)
 	}
-	s.documentsLoaded, s.documentsRequested = false, false
+	s.materialsUnit.state.documentsLoaded, s.materialsUnit.state.documentsRequested = false, false
 	if s.readingSession != nil {
 		s.readingSession.userInteracted = true
 	}
@@ -84,21 +84,21 @@ func (s *app) applyMaterialsRenameResult(action application.Action, result appli
 		s.rereadSelectedMaterial(false)
 	}
 	if adapterChanged {
-		for key, state := range s.materialTextEditors {
+		for key, state := range s.materialsUnit.state.materialTextEditors {
 			if normalizeIdentityPath(state.path) == normalizeIdentityPath(selectedPath) {
 				state.closed = true
-				delete(s.materialTextEditors, key)
+				delete(s.materialsUnit.state.materialTextEditors, key)
 			}
 		}
 		s.closeMarkdownEditor()
-		s.documentEditing = false
-		s.documentReadPending = true
+		s.materialsUnit.state.documentEditing = false
+		s.materialsUnit.state.documentReadPending = true
 		s.act("document.read", task.id, "", "", selectedPath, "", nil)
 	}
 }
 
 func (s *app) remapMaterialsFileSelectionAfterRename(task task, operation documents.FileOperationResult, oldPath, newPath string) {
-	state := s.materialsFileManagement
+	state := s.materialsUnit.state.materialsFileManagement
 	if state == nil || state.taskID != task.id || normalizedReadingRoot(state.root) != normalizedReadingRoot(task.materialsPath) {
 		return
 	}

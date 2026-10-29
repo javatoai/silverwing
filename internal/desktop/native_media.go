@@ -123,19 +123,19 @@ func (m *nativeMediaState) task(run func(context.Context)) bool {
 
 func (s *app) openNativeMedia(path, kind string) {
 	if path == "" {
-		s.nativeMedia = &nativeMediaState{path: s.documentPath, kind: kind, previewError: "后端未返回经过校验的文件路径，无法打开媒体预览。"}
+		s.materialsUnit.state.nativeMedia = &nativeMediaState{path: s.materialsUnit.state.documentPath, kind: kind, previewError: "后端未返回经过校验的文件路径，无法打开媒体预览。"}
 		return
 	}
 	// Every accepted document.read is a new disk snapshot, including an
 	// explicit reread or window-activation refresh of the same path.
-	s.closeNativeMedia()
+	s.materialsUnit.closeNativeMedia()
 	ctx, cancel := context.WithCancel(context.Background())
 	zoom := 100
 	if kind == "pdf" {
 		zoom = s.readingZoom()
 	}
 	m := &nativeMediaState{ctx: ctx, cancel: cancel, path: path, kind: kind, zoom: zoom, fit: true, openLoading: true, pageInput: "1"}
-	s.nativeMedia = m
+	s.materialsUnit.state.nativeMedia = m
 	m.task(func(ctx context.Context) {
 		var (
 			pdfDoc   *media.PDFDocument
@@ -200,9 +200,9 @@ func nativePDFiumPath() string {
 	return filepath.Join(resources, "native", name)
 }
 
-func (s *app) closeNativeMedia() {
-	m := s.nativeMedia
-	s.nativeMedia = nil
+func (s *materialsController) closeNativeMedia() {
+	m := s.state.nativeMedia
+	s.state.nativeMedia = nil
 	if m == nil {
 		return
 	}
@@ -251,7 +251,7 @@ func (s *app) updateNativeMedia(m *nativeMediaState, update func()) bool {
 		return false
 	}
 	win.Update(func() {
-		if s.nativeMedia != m || m.closed {
+		if s.materialsUnit.state.nativeMedia != m || m.closed {
 			return
 		}
 		update()
@@ -260,7 +260,7 @@ func (s *app) updateNativeMedia(m *nativeMediaState, update func()) bool {
 }
 
 func (s *app) renderNativeMediaControls(c *ui.Context, p palette) {
-	m := s.nativeMedia
+	m := s.materialsUnit.state.nativeMedia
 	if m == nil {
 		ui.Row(c).Height(38).Padding(0, 14).Children(func() {
 			label(c, "正在准备本地预览…", 12, p.muted)
@@ -382,7 +382,7 @@ func (s *app) renderImageControls(c *ui.Context, p palette, m *nativeMediaState)
 }
 
 func (s *app) renderNativeMedia(c *ui.Context, p palette, viewport ui.Rect) {
-	m := s.nativeMedia
+	m := s.materialsUnit.state.nativeMedia
 	if m == nil {
 		label(c, "正在准备本地预览…", 13, p.muted)
 		return
@@ -392,7 +392,7 @@ func (s *app) renderNativeMedia(c *ui.Context, p palette, viewport ui.Rect) {
 			label(c, "无法预览此文件", 14, p.amber).FontWeight(600)
 			label(c, m.previewError, 12, p.text).Wrap()
 			if action(c, "media-open-external", "arrow", "使用系统阅读器打开", p, false) {
-				s.act("document.open", s.currentTask().id, "", "", s.documentPath, "", nil)
+				s.act("document.open", s.taskUnit.currentTask().id, "", "", s.materialsUnit.state.documentPath, "", nil)
 			}
 		})
 		return
@@ -806,7 +806,7 @@ func (s *app) nativeImageRenderWidth(m *nativeMediaState) int {
 // applyNativeImageRender runs on the UI thread. The generation, not only the
 // width key, identifies a request when zoom changes away and back again.
 func (s *app) applyNativeImageRender(m *nativeMediaState, generation uint64, key string, bitmap *ui.Bitmap, err error, cancelled bool) {
-	if m == nil || s.nativeMedia != m || m.closed || m.renderGeneration != generation || m.wantedRenderKey != key {
+	if m == nil || s.materialsUnit.state.nativeMedia != m || m.closed || m.renderGeneration != generation || m.wantedRenderKey != key {
 		return
 	}
 	m.renderLoading = false
@@ -851,7 +851,7 @@ func (s *app) imageDocuments() []string {
 			walk(item.Children)
 		}
 	}
-	walk(s.documents)
+	walk(s.materialsUnit.state.documents)
 	return paths
 }
 

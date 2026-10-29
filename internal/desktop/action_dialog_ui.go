@@ -64,7 +64,7 @@ func (s *app) actionDialog(c *ui.Context, p palette) {
 						}
 						if field.key == "ref" {
 							ui.Row(c).FillWidth().Gap(5).Wrap().Children(func() {
-								for i, branch := range s.settingsBranchChoices {
+								for i, branch := range s.settingsUnit.state.settingsBranchChoices {
 									if action(c, fmt.Sprintf("source-branch-%d", i), "branch", branch, p, *value == branch) {
 										*value = branch
 									}

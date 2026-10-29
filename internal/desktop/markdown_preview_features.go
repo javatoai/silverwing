@@ -161,8 +161,8 @@ func (s *app) renderMarkdownImage(c *ui.Context, p palette, state *markdownEdito
 		ui.Column(c).Shrink(0).Gap(3).Children(func() {
 			previewKey := markdownEditorControlKey(state, fmt.Sprintf("markdown-image-preview-%d-%d", part.ID, node.Range.Start))
 			open := func() {
-				if isCommentDraftMarkdownOwner(state) && s.commentComposers != nil && s.commentComposers.active != nil && s.commentComposers.active.markdown == state {
-					s.commentComposers.active.imageFocusKey = previewKey
+				if isCommentDraftMarkdownOwner(state) && s.requirementUnit.state.commentComposers != nil && s.requirementUnit.state.commentComposers.active != nil && s.requirementUnit.state.commentComposers.active.markdown == state {
+					s.requirementUnit.state.commentComposers.active.imageFocusKey = previewKey
 				}
 				if state.commentReading && image.sourcePath != "" {
 					s.openMarkdownLocalImageViewer(state, image.sourcePath)
@@ -173,9 +173,9 @@ func (s *app) renderMarkdownImage(c *ui.Context, p palette, state *markdownEdito
 			preview := ui.Image(c.Key(previewKey), image.bitmap).Width(float32(width)).MaxWidthPercent(100).AspectRatio(float32(width) / float32(height)).Fit(ui.Contain).Label("Markdown 图片：" + alt).OnClick(open)
 			if isCommentDraftMarkdownOwner(state) {
 				preview.Focusable().OnShortcut(0, ui.KeyEnter, open)
-				if s.commentComposers != nil && s.commentComposers.active != nil {
-					composer := s.commentComposers.active
-					if composer.markdown == state && composer.restoreImageFocus && composer.imageFocusKey == previewKey && s.markdownBitmapViewer == nil && s.confirmationDialog == nil {
+				if s.requirementUnit.state.commentComposers != nil && s.requirementUnit.state.commentComposers.active != nil {
+					composer := s.requirementUnit.state.commentComposers.active
+					if composer.markdown == state && composer.restoreImageFocus && composer.imageFocusKey == previewKey && s.materialsUnit.state.markdownBitmapViewer == nil && s.confirmationDialog == nil {
 						preview.Focus()
 						composer.restoreImageFocus = false
 					}
@@ -223,8 +223,8 @@ func (s *app) ensureMarkdownImage(state *markdownEditorState, part editor.Part, 
 		cacheKey += "\x00" + state.linkRoot
 	} else if state.detached {
 		cacheKey += "\x00" + strings.TrimSpace(state.trustedImages[link])
-	} else if state.taskID == s.currentTask().id {
-		cacheKey += "\x00" + strings.TrimSpace(s.currentTask().materialsPath)
+	} else if state.taskID == s.taskUnit.currentTask().id {
+		cacheKey += "\x00" + strings.TrimSpace(s.taskUnit.currentTask().materialsPath)
 	}
 	image := state.inlineImages[nodeKey]
 	if image != nil && image.key == cacheKey {
@@ -290,7 +290,7 @@ func (s *app) ensureMarkdownImage(state *markdownEditorState, part editor.Part, 
 					if !s.markdownEditorIsCurrent(state) {
 						return
 					}
-				} else if s.markdown != state || state.taskID != s.currentTask().id || state.path != s.documentPath {
+				} else if s.materialsUnit.state.markdown != state || state.taskID != s.taskUnit.currentTask().id || state.path != s.materialsUnit.state.documentPath {
 					return
 				}
 			}
@@ -318,7 +318,7 @@ func (s *app) ensureMarkdownImage(state *markdownEditorState, part editor.Part, 
 }
 
 func (s *app) resolveTaskMarkdownImage(state *markdownEditorState, link string) (string, bool, error) {
-	task := s.currentTask()
+	task := s.taskUnit.currentTask()
 	rootPath, rootLabel := task.materialsPath, "资料"
 	if state.binding != nil {
 		if !s.markdownEditorIsCurrent(state) || state.path == "" {
@@ -333,7 +333,7 @@ func (s *app) resolveTaskMarkdownImage(state *markdownEditorState, link string) 
 			rootPath = filepath.Dir(state.path)
 		}
 		rootLabel = "说明"
-	} else if state.taskID == "" || state.taskID != task.id || state.path == "" || state.path != s.documentPath {
+	} else if state.taskID == "" || state.taskID != task.id || state.path == "" || state.path != s.materialsUnit.state.documentPath {
 		return "", false, fmt.Errorf("当前资料已切换，无法读取此图片")
 	}
 	parsed, err := url.Parse(strings.ReplaceAll(link, " ", "%20"))

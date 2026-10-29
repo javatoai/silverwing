@@ -254,7 +254,7 @@ func codexAIMCPServerKey(server codexAIMCPServer) string {
 }
 
 func (s *app) setCodexAIMCPEnabled(server codexAIMCPServer, enabled bool) {
-	state := s.codexAI
+	state := s.toolsUnit.state.codexAI
 	if state == nil || !s.codexAIIdentityCurrent(state) || state.mcpSnapshot == nil || codexAIMCPBusy(state) {
 		return
 	}
@@ -264,7 +264,7 @@ func (s *app) setCodexAIMCPEnabled(server codexAIMCPServer, enabled bool) {
 }
 
 func (s *app) authenticateCodexAIMCP(server codexAIMCPServer, login bool) {
-	state := s.codexAI
+	state := s.toolsUnit.state.codexAI
 	if state == nil || !s.codexAIIdentityCurrent(state) || codexAIMCPBusy(state) {
 		return
 	}
@@ -450,7 +450,7 @@ func codexAIMCPTextArea(c *ui.Context, p palette, key, title string, value *stri
 }
 
 func (s *app) saveCodexAIMCPForm(form *codexAIMCPForm) {
-	state := s.codexAI
+	state := s.toolsUnit.state.codexAI
 	if form == nil || state == nil || state.mcpSnapshot == nil || form.Saving || codexAIMCPBusy(state) || !s.codexAIIdentityCurrent(state) {
 		return
 	}
@@ -568,7 +568,7 @@ func (s *app) renderCodexAIMCPDeleteDialog(c *ui.Context, p palette, state *code
 }
 
 func (s *app) removeCodexAIMCP(server codexAIMCPServer) {
-	state := s.codexAI
+	state := s.toolsUnit.state.codexAI
 	if state == nil || codexAIMCPBusy(state) || !s.codexAIIdentityCurrent(state) || !codexAIMCPEditable(server) {
 		return
 	}

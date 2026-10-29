@@ -16,7 +16,7 @@ type taskActionScope struct {
 }
 
 func (s *app) taskActionScopeFor(t task) (taskActionScope, bool) {
-	current := s.taskByID(t.id)
+	current := s.taskUnit.taskByID(t.id)
 	if t.id == "" || current.id == "" || current.path != t.path ||
 		current.createdAt != t.createdAt || current.archived != t.archived {
 		return taskActionScope{}, false
@@ -37,13 +37,13 @@ type taskMenuScope struct {
 
 func (s *app) taskMenuScopeFor(t task) (taskMenuScope, bool) {
 	base, valid := s.taskActionScopeFor(t)
-	return taskMenuScope{taskActionScope: base, configJSON: s.configJSON, groupID: t.groupID,
+	return taskMenuScope{taskActionScope: base, configJSON: s.settingsUnit.state.configJSON, groupID: t.groupID,
 		requirementURL: t.requirementURL, requirementID: t.requirementID, materialsPath: t.materialsPath,
 		materialsStatus: t.materialsStatus, materialsFailureReason: t.materialsFailureReason}, valid
 }
 
 func (s *app) taskMenuScopeCurrent(expected taskMenuScope) bool {
-	actual, valid := s.taskMenuScopeFor(s.taskByID(expected.taskID))
+	actual, valid := s.taskMenuScopeFor(s.taskUnit.taskByID(expected.taskID))
 	return valid && actual == expected
 }
 
@@ -108,14 +108,14 @@ func (s *app) taskContextMenu(services ui.Services, t task, menu *ui.Menu) {
 	if chosen == "" {
 		// ContextMenu builds once when opening, then again for the chosen item.
 		// Keep the opening scope so a late choice cannot act in another home.
-		s.taskContextScope = nil
+		s.taskUnit.state.taskContextScope = nil
 		if valid {
-			s.taskContextScope = &scope
+			s.taskUnit.state.taskContextScope = &scope
 		}
 		return
 	}
-	opened := s.taskContextScope
-	s.taskContextScope = nil
+	opened := s.taskUnit.state.taskContextScope
+	s.taskUnit.state.taskContextScope = nil
 	if !valid || opened == nil || *opened != scope {
 		return
 	}
@@ -129,7 +129,7 @@ func (s *app) taskContextMenu(services ui.Services, t task, menu *ui.Menu) {
 	case "materials-copy-path":
 		s.copyTextToClipboard(services, t.materialsPath, "已复制任务资料路径")
 	case "materials-configure":
-		s.page, s.settingsTab, s.settingsPage, s.settingsLoaded = "settings", "存储", "paths", ""
+		s.page, s.settingsUnit.state.settingsTab, s.settingsUnit.state.settingsPage, s.settingsUnit.state.settingsLoaded = "settings", "存储", "paths", ""
 	case "materials-retry":
 		s.dispatchTaskContextAction(application.Action{Kind: "task.materials-retry", TaskID: t.id}, opened)
 	case "pin":

@@ -25,7 +25,10 @@ func diffToolbarFixture(t *testing.T, width int, dark bool) (*app, *toolPageStat
 	}
 	state.diffResult, state.diffHasData = result, true
 	t.Cleanup(state.cancelWork)
-	s := &app{page: "tools", tools: state}
+	s := &app{
+		toolsUnit: toolsController{state: toolsState{tools: state}},
+		page:      "tools",
+	}
 	tester := ui.NewTester(func(c *ui.Context) {
 		p := setTheme(c, dark)
 		ui.Column(c).Fill().Padding(12).Background(p.bg).Children(func() { s.renderDiffTool(c, p, state) })

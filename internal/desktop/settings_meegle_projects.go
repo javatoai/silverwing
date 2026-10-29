@@ -47,7 +47,7 @@ func (s *app) settingsMeegleProjects(c *ui.Context, p palette) {
 				AlignItems(ui.Center).Border(1, p.line).Label("添加项目空间").Disabled(s.busy)
 			button.Children(func() { icon(c, "plus", 15, p.text); label(c, "添加项目空间", 12, p.text) })
 			if button.Clicked() {
-				if state := s.meegleProjectCatalog; state != nil && state.pickerOpen {
+				if state := s.settingsUnit.state.meegleProjectCatalog; state != nil && state.pickerOpen {
 					s.closeMeegleProjectPicker()
 				} else {
 					s.openMeegleProjectPicker()

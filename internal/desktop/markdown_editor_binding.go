@@ -39,7 +39,7 @@ func (s *app) markdownEditorIsCurrent(state *markdownEditorState) bool {
 	if state.binding != nil {
 		return state.binding.isCurrent != nil && state.binding.isCurrent()
 	}
-	return s.markdown == state && s.documentPath == state.path
+	return s.materialsUnit.state.markdown == state && s.materialsUnit.state.documentPath == state.path
 }
 
 func (s *app) commitMarkdownEditorSource(state *markdownEditorState, source string) {
@@ -63,11 +63,11 @@ func (s *app) ensureInstructionMarkdownEditor(key, kind string, tab int, source 
 	}
 	state := uiState.markdownEditors[key]
 	if state == nil {
-		taskID, path := "", s.settingsAgentPath
+		taskID, path := "", s.settingsUnit.state.settingsAgentPath
 		if kind == "task" {
-			taskID = s.currentTask().id
-			if tab >= 0 && tab < len(s.notePaths) {
-				path = s.notePaths[tab]
+			taskID = s.taskUnit.currentTask().id
+			if tab >= 0 && tab < len(s.taskUnit.state.notePaths) {
+				path = s.taskUnit.state.notePaths[tab]
 			}
 		}
 		state = &markdownEditorState{
@@ -80,22 +80,22 @@ func (s *app) ensureInstructionMarkdownEditor(key, kind string, tab int, source 
 		uiState.markdownEditors[key] = state
 		state.binding = &markdownEditorBinding{id: key}
 		state.binding.isCurrent = func() bool {
-			current := s.taskNotesUI
+			current := s.taskUnit.state.taskNotesUI
 			if current == nil || current.activeKey != key || current.activeMarkdown != state || current.markdownEditors[key] != state {
 				return false
 			}
 			switch kind {
 			case "task":
-				if tab < 0 || tab >= len(s.notePaths) {
+				if tab < 0 || tab >= len(s.taskUnit.state.notePaths) {
 					return false
 				}
 				return current.activeKind == "task" && current.activeTab == tab && current.taskID == taskID &&
-					s.currentTask().id == taskID && s.noteTab == tab && (markdownReadingOnly || s.noteEditing) &&
-					s.instructionAutosaveKey("task", taskID, "", s.notePaths[tab]) == key
+					s.taskUnit.currentTask().id == taskID && s.taskUnit.state.noteTab == tab && (markdownReadingOnly || s.taskUnit.state.noteEditing) &&
+					s.instructionAutosaveKey("task", taskID, "", s.taskUnit.state.notePaths[tab]) == key
 			case "settings":
 				scope, groupID := s.settingsInstructionScope()
-				return current.activeKind == "settings" && s.settingsPage == "agents" && s.settingsAgentLoaded &&
-					s.instructionAutosaveKey(scope, "", groupID, s.settingsAgentPath) == key
+				return current.activeKind == "settings" && s.settingsUnit.state.settingsPage == "agents" && s.settingsUnit.state.settingsAgentLoaded &&
+					s.instructionAutosaveKey(scope, "", groupID, s.settingsUnit.state.settingsAgentPath) == key
 			default:
 				return false
 			}
@@ -104,17 +104,17 @@ func (s *app) ensureInstructionMarkdownEditor(key, kind string, tab int, source 
 			if !state.binding.isCurrent() {
 				return
 			}
-			current := s.taskNotesUI
+			current := s.taskUnit.state.taskNotesUI
 			if current.activeContent == value {
 				return
 			}
 			if kind == "task" {
-				if current.taskID != taskID || current.activeTab != tab || s.currentTask().id != taskID || tab < 0 || tab >= len(s.notes) {
+				if current.taskID != taskID || current.activeTab != tab || s.taskUnit.currentTask().id != taskID || tab < 0 || tab >= len(s.taskUnit.state.notes) {
 					return
 				}
-				s.notes[tab] = value
+				s.taskUnit.state.notes[tab] = value
 			} else if kind == "settings" {
-				s.settingsAgentContent = value
+				s.settingsUnit.state.settingsAgentContent = value
 			} else {
 				return
 			}
@@ -125,7 +125,7 @@ func (s *app) ensureInstructionMarkdownEditor(key, kind string, tab int, source 
 			if !state.binding.isCurrent() {
 				return
 			}
-			s.taskNotesUI.activeComposing = composing
+			s.taskUnit.state.taskNotesUI.activeComposing = composing
 			s.setInstructionComposing(key, composing)
 		}
 		state.binding.save = func() {
@@ -217,10 +217,10 @@ func suspendInstructionMarkdownPreviews(state *markdownEditorState) {
 }
 
 func (s *app) discardInstructionMarkdownEditorsForTask(taskID string) {
-	if taskID == "" || s.taskNotesUI == nil {
+	if taskID == "" || s.taskUnit.state.taskNotesUI == nil {
 		return
 	}
-	for key, state := range s.taskNotesUI.markdownEditors {
+	for key, state := range s.taskUnit.state.taskNotesUI.markdownEditors {
 		if state == nil || state.taskID != taskID {
 			continue
 		}
@@ -228,21 +228,21 @@ func (s *app) discardInstructionMarkdownEditorsForTask(taskID string) {
 		s.clearMarkdownComposition(state)
 		closeMarkdownPreviewAssets(state)
 		state.closed = true
-		delete(s.taskNotesUI.markdownEditors, key)
+		delete(s.taskUnit.state.taskNotesUI.markdownEditors, key)
 	}
 }
 
 func (s *app) activeMarkdownEditorForDialog() *markdownEditorState {
-	if notes := s.taskNotesUI; notes != nil && notes.activeMarkdown != nil &&
+	if notes := s.taskUnit.state.taskNotesUI; notes != nil && notes.activeMarkdown != nil &&
 		s.markdownEditorIsCurrent(notes.activeMarkdown) {
 		if notes.activeMarkdown.richLink != nil {
 			return notes.activeMarkdown
 		}
 	}
-	if s.markdown != nil && s.markdownEditorIsCurrent(s.markdown) {
-		return s.markdown
+	if s.materialsUnit.state.markdown != nil && s.markdownEditorIsCurrent(s.materialsUnit.state.markdown) {
+		return s.materialsUnit.state.markdown
 	}
-	if notes := s.taskNotesUI; notes != nil && notes.activeMarkdown != nil &&
+	if notes := s.taskUnit.state.taskNotesUI; notes != nil && notes.activeMarkdown != nil &&
 		s.markdownEditorIsCurrent(notes.activeMarkdown) {
 		return notes.activeMarkdown
 	}

@@ -27,7 +27,7 @@ func (d *taskLocalNoteDraft) text() string { return d.view.Buffer.OriginalText()
 func (d *taskLocalNoteDraft) dirty() bool  { return d.loaded && d.text() != d.baseline }
 
 func (s *app) ensureTaskLocalNote() *taskLocalNoteDraft {
-	item := s.currentTask()
+	item := s.taskUnit.currentTask()
 	if item.id == "" || item.path == "" {
 		return nil
 	}
@@ -50,8 +50,8 @@ func (s *app) taskLocalNoteCurrent(d *taskLocalNoteDraft) bool {
 	if d == nil {
 		return false
 	}
-	t := s.currentTask()
-	return t.id == d.taskID && t.path == d.taskPath && t.createdAt == d.createdAt && s.taskNotesUI != nil && s.taskNotesUI.localDrafts[d.key] == d
+	t := s.taskUnit.currentTask()
+	return t.id == d.taskID && t.path == d.taskPath && t.createdAt == d.createdAt && s.taskUnit.state.taskNotesUI != nil && s.taskUnit.state.taskNotesUI.localDrafts[d.key] == d
 }
 
 func (s *app) taskLocalNoteAction(d *taskLocalNoteDraft, kind string, acceptDisk bool) application.Action {
@@ -91,10 +91,10 @@ func (s *app) saveTaskLocalNote(d *taskLocalNoteDraft) {
 }
 
 func (s *app) taskLocalNoteForAction(action application.Action) *taskLocalNoteDraft {
-	if s.taskNotesUI == nil {
+	if s.taskUnit.state.taskNotesUI == nil {
 		return nil
 	}
-	d := s.taskNotesUI.localDrafts[payloadString(action.Payload, "taskNoteKey")]
+	d := s.taskUnit.state.taskNotesUI.localDrafts[payloadString(action.Payload, "taskNoteKey")]
 	if d == nil || d.taskID != action.TaskID || d.taskPath != payloadString(action.Payload, "taskPath") || d.createdAt != payloadString(action.Payload, "taskCreatedAt") {
 		return nil
 	}
@@ -172,8 +172,8 @@ func (s *app) reloadTaskLocalNote(d *taskLocalNoteDraft) {
 }
 
 func (s *app) taskLocalNotesCloseError() error {
-	if s.taskNotesUI != nil {
-		for _, d := range s.taskNotesUI.localDrafts {
+	if s.taskUnit.state.taskNotesUI != nil {
+		for _, d := range s.taskUnit.state.taskNotesUI.localDrafts {
 			if d.dirty() || d.saving {
 				return errors.New("需求说明仍有未保存的修改，请先保存后再关闭；各任务的草稿已保留")
 			}
@@ -187,7 +187,7 @@ func (s *app) renderTaskLocalNote(c *ui.Context, p palette) {
 	if d == nil {
 		return
 	}
-	s.noteTab = taskRulesNoteTab
+	s.taskUnit.state.noteTab = taskRulesNoteTab
 	state := s.ensureTaskNotesUI()
 	if state.localActiveKey != d.key {
 		state.localActiveKey = d.key

@@ -76,7 +76,7 @@ func TestMaterialsGitBranchReadsCoalesceAndDoNotSync(t *testing.T) {
 	call = nextMaterialsBranchCall(t, b)
 	call.reply <- materialsBranchReply{err: errors.New("authentication failed")}
 	materialsGitNextUpdate(t, updates)
-	if s.materialsGitBranchReady("master") || s.materialsGitBranches.err == "" {
+	if s.materialsGitBranchReady("master") || s.materialsUnit.state.materialsGitBranches.err == "" {
 		t.Fatal("failed read used old branches")
 	}
 	if b.materialsGitFakeBackend.count.Load() != 0 {
@@ -89,22 +89,22 @@ func TestMaterialsGitLateBranchResultCannotReplaceNewScope(t *testing.T) {
 	s.loadMaterialsGitBranches(false)
 	old := nextMaterialsBranchCall(t, b)
 	var cfg domain.AppConfig
-	_ = json.Unmarshal([]byte(s.configJSON), &cfg)
+	_ = json.Unmarshal([]byte(s.settingsUnit.state.configJSON), &cfg)
 	cfg.MaterialsGitSync.RepositoryURL = "https://github.com/other/docs.git"
 	cfg.MaterialsGitSync.Branch = "docs/current"
 	data, _ := json.Marshal(cfg)
-	s.configJSON = string(data)
+	s.settingsUnit.state.configJSON = string(data)
 	s.loadMaterialsGitBranches(false)
 	current := nextMaterialsBranchCall(t, b)
 	current.reply <- materialsBranchReply{branches: []string{"docs/current"}}
 	materialsGitNextUpdate(t, updates)
 	old.reply <- materialsBranchReply{branches: []string{"master"}}
 	materialsGitNextUpdate(t, updates)
-	if !slices.Equal(s.materialsGitBranches.branches, []string{"docs/current"}) || !s.materialsGitBranchReady("docs/current") {
+	if !slices.Equal(s.materialsUnit.state.materialsGitBranches.branches, []string{"docs/current"}) || !s.materialsGitBranchReady("docs/current") {
 		t.Fatal("late branches overwrote new selection")
 	}
 	var saved domain.AppConfig
-	_ = json.Unmarshal([]byte(s.configJSON), &saved)
+	_ = json.Unmarshal([]byte(s.settingsUnit.state.configJSON), &saved)
 	if saved.MaterialsGitSettings().Branch != "docs/current" || b.materialsGitFakeBackend.count.Load() != 0 {
 		t.Fatal("query changed saved branch or launched sync")
 	}
@@ -113,9 +113,9 @@ func TestMaterialsGitLateBranchResultCannotReplaceNewScope(t *testing.T) {
 func TestMaterialsGitEmptyAndMissingBranchUI(t *testing.T) {
 	for _, branches := range [][]string{{}, {"docs/another"}} {
 		s, _, _ := materialsBranchesFixture(t)
-		s.materialsGitCapture = true
+		s.materialsUnit.state.materialsGitCapture = true
 		cfg, _ := s.materialsGitConfig()
-		s.materialsGitBranches = &materialsGitBranchesState{scope: application.MaterialsGitScope(s.snapshot.Home, cfg), loaded: true, branches: branches}
+		s.materialsUnit.state.materialsGitBranches = &materialsGitBranchesState{scope: application.MaterialsGitScope(s.snapshot.Home, cfg), loaded: true, branches: branches}
 		tt := ui.NewTester(func(c *ui.Context) { s.settingsMaterialsGitSync(c, setTheme(c, false)) }, 960, 800)
 		want := "请先在远程仓库创建分支"
 		if len(branches) > 0 {
@@ -132,10 +132,10 @@ func TestMaterialsGitEmptyAndMissingBranchUI(t *testing.T) {
 
 func TestMaterialsGitDropdownSaveFailureRetainsSavedBranch(t *testing.T) {
 	s, _, _ := materialsBranchesFixture(t)
-	s.materialsGitCapture = true
+	s.materialsUnit.state.materialsGitCapture = true
 	s.backend = nil // The existing save action reports an unavailable backend.
 	cfg, _ := s.materialsGitConfig()
-	s.materialsGitBranches = &materialsGitBranchesState{scope: application.MaterialsGitScope(s.snapshot.Home, cfg), loaded: true, branches: []string{"docs/team", "master"}}
+	s.materialsUnit.state.materialsGitBranches = &materialsGitBranchesState{scope: application.MaterialsGitScope(s.snapshot.Home, cfg), loaded: true, branches: []string{"docs/team", "master"}}
 	tt := ui.NewTester(func(c *ui.Context) { s.settingsMaterialsGitSync(c, setTheme(c, false)) }, 960, 800)
 	if err := tt.Click("选择同步分支"); err != nil {
 		t.Fatal(err)
@@ -162,7 +162,7 @@ func TestMaterialsGitBranchReadHomeAndEnvironmentInvalidation(t *testing.T) {
 				cfg, _ := s.materialsGitConfig()
 				cfg.GitExecutablePath = ptrForMaterialsBranchTest("other-git.exe")
 				data, _ := json.Marshal(cfg)
-				s.configJSON = string(data)
+				s.settingsUnit.state.configJSON = string(data)
 			}
 			s.loadMaterialsGitBranches(false)
 			current := nextMaterialsBranchCall(t, b)
@@ -170,7 +170,7 @@ func TestMaterialsGitBranchReadHomeAndEnvironmentInvalidation(t *testing.T) {
 			materialsGitNextUpdate(t, updates)
 			old.reply <- materialsBranchReply{branches: []string{"old/branch"}}
 			materialsGitNextUpdate(t, updates)
-			if !s.materialsGitBranchReady("master") || slices.Contains(s.materialsGitBranches.branches, "old/branch") {
+			if !s.materialsGitBranchReady("master") || slices.Contains(s.materialsUnit.state.materialsGitBranches.branches, "old/branch") {
 				t.Fatal("stale scope result applied")
 			}
 		})

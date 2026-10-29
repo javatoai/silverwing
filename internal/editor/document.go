@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf16"
+
+	"silverwing-go/internal/markdowntext"
 )
 
 var ErrComposing = errors.New("中文输入尚未提交，当前操作已暂停")
@@ -398,8 +400,8 @@ func (d *Document) formatList(index int, request FormatRequest) error {
 	ordered := request.Command == FormatOrderedList
 	allTarget := true
 	for _, line := range lines {
-		match := listRE.FindStringSubmatch(line.text)
-		if match == nil || (ordered && (len(match[2]) == 1 || match[2][0] < '0' || match[2][0] > '9')) || (!ordered && len(match[2]) != 1) {
+		match, matched := markdowntext.ParseListMarker(line.text)
+		if !matched || (ordered && (len(match.Marker) == 1 || match.Marker[0] < '0' || match.Marker[0] > '9')) || (!ordered && len(match.Marker) != 1) {
 			allTarget = false
 			break
 		}
@@ -410,14 +412,14 @@ func (d *Document) formatList(index int, request FormatRequest) error {
 		text := line.text
 		ending := part.Source[start+line.contentEnd : start+line.end]
 		if allTarget {
-			if match := listRE.FindStringSubmatch(text); match != nil {
-				text = match[1] + strings.TrimLeft(text[len(match[1])+len(match[2]):], " \t")
+			if match, matched := markdowntext.ParseListMarker(text); matched {
+				text = match.Indent + strings.TrimLeft(text[len(match.Indent)+len(match.Marker):], " \t")
 			}
 		} else if strings.TrimSpace(text) != "" {
-			match := listRE.FindStringSubmatch(text)
+			match, matched := markdowntext.ParseListMarker(text)
 			indent, content := "", text
-			if match != nil {
-				indent, content = match[1], text[len(match[1])+len(match[2]):]
+			if matched {
+				indent, content = match.Indent, text[len(match.Indent)+len(match.Marker):]
 				content = strings.TrimLeft(content, " \t")
 			}
 			if ordered {
@@ -439,11 +441,11 @@ func (d *Document) SetTaskChecked(partID uint64, taskIndex int, checked bool) er
 		return fmt.Errorf("Markdown 块不存在：%d", partID)
 	}
 	part := d.parts[index]
-	matches := taskRE.FindAllStringSubmatchIndex(part.Source, -1)
+	matches := markdowntext.TaskCheckboxRanges(part.Source)
 	if taskIndex < 0 || taskIndex >= len(matches) {
 		return errors.New("任务复选框不存在")
 	}
-	checkAt := matches[taskIndex][6]
+	checkAt := matches[taskIndex].Start
 	value := " "
 	if checked {
 		value = "x"
@@ -701,7 +703,7 @@ func recalculateRanges(parts []Part) []Part {
 	for i := range parts {
 		oldStart := parts[i].Range.Start
 		delta := offset - oldStart
-		parts[i].Range = SourceRange{offset, offset + len(parts[i].Source)}
+		parts[i].Range = SourceRange{Start: offset, End: offset + len(parts[i].Source)}
 		parts[i].Nodes = shiftNodes(parts[i].Nodes, delta)
 		offset += len(parts[i].Source)
 	}
@@ -727,7 +729,7 @@ func shiftNodes(nodes []Node, delta int) []Node {
 
 func reparsePart(source string, offset int, kind PartKind) []Node {
 	if kind == PartMetadata {
-		return []Node{{Kind: "metadata", Range: SourceRange{offset, offset + len(source)}, Text: source}}
+		return []Node{{Kind: "metadata", Range: SourceRange{Start: offset, End: offset + len(source)}, Text: source}}
 	}
 	parts, _ := parseDocument(source)
 	var nodes []Node
@@ -735,7 +737,7 @@ func reparsePart(source string, offset int, kind PartKind) []Node {
 		nodes = append(nodes, shiftNodes(part.Nodes, offset)...)
 	}
 	if len(nodes) == 0 && source != "" {
-		nodes = []Node{{Kind: string(kind), Range: SourceRange{offset, offset + len(source)}, Text: source}}
+		nodes = []Node{{Kind: string(kind), Range: SourceRange{Start: offset, End: offset + len(source)}, Text: source}}
 	}
 	return nodes
 }
@@ -777,12 +779,4 @@ func lineBounds(source string, start, end int) (int, int) {
 	return lineStart, end + lineEnd + 1
 }
 
-func detectNewline(source string) string {
-	if strings.Contains(source, "\r\n") {
-		return "\r\n"
-	}
-	if strings.Contains(source, "\r") && !strings.Contains(source, "\n") {
-		return "\r"
-	}
-	return "\n"
-}
+func detectNewline(source string) string { return markdowntext.DetectNewline(source) }

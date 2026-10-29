@@ -61,7 +61,7 @@ func jsonNodeCopyMatches(state *toolPageState, request *jsonNodeCopyRequest) boo
 }
 
 func (s *app) copyJSONEditorNode(state *toolPageState, command string, request *jsonNodeCopyRequest) {
-	if s.tools != state || !jsonNodeCopyMatches(state, request) {
+	if s.toolsUnit.state.tools != state || !jsonNodeCopyMatches(state, request) {
 		return
 	}
 	switch command {

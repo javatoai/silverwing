@@ -22,10 +22,15 @@ func commentComposerFixture(t *testing.T) (*app, *taskOpenToolsProbeBackend, cha
 	t.Helper()
 	updates := make(chan func(), 64)
 	b := &taskOpenToolsProbeBackend{calls: make(chan *taskOpenToolsProbeCall, 32)}
-	s := &app{backend: b, configJSON: `{}`, snapshot: application.Snapshot{Home: t.TempDir()}, page: "requirements"}
-	s.commentComposers = &requirementCommentComposers{update: func(f func()) { updates <- f }}
+	s := &app{
+		settingsUnit: settingsController{state: settingsState{configJSON: `{}`}},
+		backend:      b,
+		snapshot:     application.Snapshot{Home: t.TempDir()},
+		page:         "requirements",
+	}
+	s.requirementUnit.state.commentComposers = &requirementCommentComposers{update: func(f func()) { updates <- f }}
 	s.openRequirementCommentComposer(&requirementReaderState{url: "https://project.feishu.cn/fixture/userstory/detail/101"})
-	state := s.commentComposers.active
+	state := s.requirementUnit.state.commentComposers.active
 	call := nextCommentComposerCall(t, b)
 	if call.action.Kind != "requirements.comment-draft" || call.action.Payload["operation"] != "load" {
 		t.Fatal(call.action)
@@ -34,7 +39,7 @@ func commentComposerFixture(t *testing.T) (*app, *taskOpenToolsProbeBackend, cha
 	call.reply <- taskOpenToolsProbeReply{result: application.ActionResult{Data: draft}}
 	nextTaskOpenToolsUpdate(t, updates)()
 	t.Cleanup(func() {
-		for _, c := range s.commentComposers.all {
+		for _, c := range s.requirementUnit.state.commentComposers.all {
 			if c.cancel != nil {
 				c.cancel()
 			}
@@ -57,7 +62,7 @@ func nextCommentComposerCall(t *testing.T, b *taskOpenToolsProbeBackend) *taskOp
 func TestCommentComposerSharedDraftAutosaveAndSaveFailure(t *testing.T) {
 	s, b, updates, state := commentComposerFixture(t)
 	s.openRequirementCommentComposer(&requirementReaderState{taskID: "different-entry", url: state.url})
-	if s.commentComposers.active != state || b.count.Load() != 1 {
+	if s.requirementUnit.state.commentComposers.active != state || b.count.Load() != 1 {
 		t.Fatal("second entry did not share the draft")
 	}
 	state.body = "first"
@@ -102,13 +107,13 @@ func TestCommentComposerPublishMinimizeSwitchAndLateResults(t *testing.T) {
 			case "minimize":
 				state.open = false
 			case "requirement":
-				s.requirementContentJobs = &requirementContentJobState{visible: "another requirement"}
+				s.requirementUnit.state.requirementContentJobs = &requirementContentJobState{visible: "another requirement"}
 			case "account":
-				s.requirementIdentityJobs = &requirementIdentityJobState{confirmed: true, identity: "account-2", state: application.RequirementIdentityAuthenticated}
+				s.requirementUnit.state.requirementIdentityJobs = &requirementIdentityJobState{confirmed: true, identity: "account-2", state: application.RequirementIdentityAuthenticated}
 			case "home":
 				s.snapshot.Home += "-changed"
 			case "config":
-				s.configJSON = `{"meegleExecutablePath":"other-cli"}`
+				s.settingsUnit.state.configJSON = `{"meegleExecutablePath":"other-cli"}`
 			}
 			s.observeRequirementCommentComposers()
 			cancelled := change == "account" || change == "home" || change == "config"
@@ -275,7 +280,9 @@ func TestCommentComposerNativeDialogLayoutAndKeyboard(t *testing.T) {
 
 func TestCommentReaderAlwaysOffersAdd(t *testing.T) {
 	for _, failure := range []bool{false, true} {
-		s := &app{configJSON: `{}`}
+		s := &app{
+			settingsUnit: settingsController{state: settingsState{configJSON: `{}`}},
+		}
 		r := &requirementReaderState{url: "https://project.feishu.cn/fixture/userstory/detail/101"}
 		if failure {
 			r.commentsError = "读取失败"
@@ -327,7 +334,7 @@ func TestCommentRefreshTouchesOnlyMatchingComments(t *testing.T) {
 	s, _, _, state := commentComposerFixture(t)
 	matching := &requirementReaderState{url: state.url, body: &application.RequirementContent{Body: "正文不变"}, comments: &application.RequirementComments{}}
 	other := &requirementReaderState{url: "https://project.feishu.cn/fixture/userstory/detail/102", comments: &application.RequirementComments{}}
-	s.requirementReaders = map[string]*requirementReaderState{"same": matching, "other": other}
+	s.requirementUnit.state.requirementReaders = map[string]*requirementReaderState{"same": matching, "other": other}
 	s.refreshPublishedRequirementComments(state.url)
 	if !matching.commentsDirty || other.commentsDirty || matching.body.Body != "正文不变" {
 		t.Fatal("comment refresh changed other content")

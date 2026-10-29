@@ -20,11 +20,11 @@ func TestTaskCreationCodexOptionFollowsEnabledToolPreference(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			s.snapshot.ConfigJSON, s.configJSON = string(raw), string(raw)
+			s.snapshot.ConfigJSON, s.settingsUnit.state.configJSON = string(raw), string(raw)
 			s.initTaskCreation("创建任务", "测试任务", "")
 			s.dialogOpen, s.form.mode = true, "task-create"
-			if s.taskCreation.openCodex != enabled {
-				t.Fatalf("default Codex selection = %t, want %t", s.taskCreation.openCodex, enabled)
+			if s.taskUnit.state.taskCreation.openCodex != enabled {
+				t.Fatalf("default Codex selection = %t, want %t", s.taskUnit.state.taskCreation.openCodex, enabled)
 			}
 			tester := ui.NewTester(func(c *ui.Context) {
 				s.renderTaskCreationDialog(c, setTheme(c, false))
@@ -58,7 +58,9 @@ func TestTaskCreationPayloadIncludesOnlyEnabledAndSelectedCodex(t *testing.T) {
 				groupID:   "qa",
 				openCodex: test.checked,
 			}
-			app := &app{taskCreation: state}
+			app := &app{
+				taskUnit: taskController{state: taskState{taskCreation: state}},
+			}
 			payload, err := app.taskCreationPayload()
 			if err != nil {
 				t.Fatal(err)

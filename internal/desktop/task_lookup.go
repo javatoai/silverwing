@@ -4,8 +4,8 @@ import (
 	"silverwing-go/internal/application"
 )
 
-func (s *app) taskByID(id string) task {
-	for _, item := range s.tasks {
+func (s *taskController) taskByID(id string) task {
+	for _, item := range s.state.tasks {
 		if item.id == id {
 			return item
 		}

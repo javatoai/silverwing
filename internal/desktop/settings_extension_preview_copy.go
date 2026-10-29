@@ -3,7 +3,7 @@ package desktop
 import "silverwing-go/internal/application"
 
 func (s *app) settingsExtensionPreviewFileAction() (application.Action, bool) {
-	state := s.settingsExtensionRequests
+	state := s.settingsUnit.state.settingsExtensionRequests
 	if state == nil || state.previewLoading || state.previewError != "" || state.previewPath == "" {
 		return application.Action{}, false
 	}

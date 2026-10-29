@@ -21,23 +21,23 @@ type materialTextEditorState struct {
 }
 
 func (s *app) currentMaterialTextEditor() *materialTextEditorState {
-	if !documents.EditableMaterialText(s.documentPath) {
+	if !documents.EditableMaterialText(s.materialsUnit.state.documentPath) {
 		return nil
 	}
-	key := s.documentAutosaveKeyForTask(s.currentTask().id, s.documentPath)
-	state := s.materialTextEditors[key]
-	if state == nil || state.closed || state.taskID != s.currentTask().id || normalizeIdentityPath(state.path) != normalizeIdentityPath(s.documentPath) {
+	key := s.documentAutosaveKeyForTask(s.taskUnit.currentTask().id, s.materialsUnit.state.documentPath)
+	state := s.materialsUnit.state.materialTextEditors[key]
+	if state == nil || state.closed || state.taskID != s.taskUnit.currentTask().id || normalizeIdentityPath(state.path) != normalizeIdentityPath(s.materialsUnit.state.documentPath) {
 		return nil
 	}
 	return state
 }
 
 func (s *app) materialTextBindingCurrent(state *materialTextEditorState) bool {
-	return state != nil && !state.closed && s.materialTextEditors[state.key] == state && s.currentMaterialTextEditor() == state
+	return state != nil && !state.closed && s.materialsUnit.state.materialTextEditors[state.key] == state && s.currentMaterialTextEditor() == state
 }
 
 func (s *app) seedMaterialTextEditor(taskID, path string, content documents.Content) {
-	if !documents.EditableMaterialText(path) || content.ReadOnly || s.markdownAutosave == nil {
+	if !documents.EditableMaterialText(path) || content.ReadOnly || s.materialsUnit.state.markdownAutosave == nil {
 		return
 	}
 	taskPath, root, ok := s.markdownTaskPaths(taskID)
@@ -48,17 +48,17 @@ func (s *app) seedMaterialTextEditor(taskID, path string, content documents.Cont
 	if key == "" {
 		return
 	}
-	previous, hadPrevious := s.documentSaveRef(key)
-	s.markdownAutosave.Seed(key, content.Text)
-	status := s.markdownAutosave.Status(key)
+	previous, hadPrevious := s.materialsUnit.documentSaveRef(key)
+	s.materialsUnit.state.markdownAutosave.Seed(key, content.Text)
+	status := s.materialsUnit.state.markdownAutosave.Status(key)
 	draft := content.TextDraft
 	restored := !status.Dirty && draft != nil && markdownDraftMatches(draft.Identity, taskID, taskPath, root, path)
 	if restored {
-		s.markdownAutosave.RestoreDraft(key, draft.Content)
+		s.materialsUnit.state.markdownAutosave.RestoreDraft(key, draft.Content)
 	}
-	s.markdownAutosave.SetCacheError(key, content.DraftError)
-	source, _ := s.markdownAutosave.Content(key)
-	status = s.markdownAutosave.Status(key)
+	s.materialsUnit.state.markdownAutosave.SetCacheError(key, content.DraftError)
+	source, _ := s.materialsUnit.state.markdownAutosave.Content(key)
+	status = s.materialsUnit.state.markdownAutosave.Status(key)
 	ref := documentSaveRef{taskID: taskID, taskPath: taskPath, materialsRoot: root, relativePath: relativeDocumentPath(root, path), path: path, kind: "material-text", hash: content.Hash, hasUTF8BOM: content.HasUTF8BOM, newline: content.Newline}
 	if status.Dirty {
 		if restored {
@@ -67,29 +67,29 @@ func (s *app) seedMaterialTextEditor(taskID, path string, content documents.Cont
 			ref.hash, ref.overwrite, ref.hasUTF8BOM, ref.newline = previous.hash, previous.overwrite, previous.hasUTF8BOM, previous.newline
 		}
 		if ref.hash == "" || ref.hash != content.Hash {
-			s.markdownAutosave.MarkConflict(key, source, "文件已被外部修改，请接受外部版本或明确覆盖")
+			s.materialsUnit.state.markdownAutosave.MarkConflict(key, source, "文件已被外部修改，请接受外部版本或明确覆盖")
 		}
 	}
-	if s.materialTextEditors == nil {
-		s.materialTextEditors = make(map[string]*materialTextEditorState)
+	if s.materialsUnit.state.materialTextEditors == nil {
+		s.materialsUnit.state.materialTextEditors = make(map[string]*materialTextEditorState)
 	}
-	state := s.materialTextEditors[key]
+	state := s.materialsUnit.state.materialTextEditors[key]
 	if state == nil {
-		if len(s.materialTextEditors) >= documents.MaxMarkdownDraftRecords {
-			for oldKey, old := range s.materialTextEditors {
-				if old != s.materialTextActive && !s.markdownAutosave.Status(oldKey).Dirty {
+		if len(s.materialsUnit.state.materialTextEditors) >= documents.MaxMarkdownDraftRecords {
+			for oldKey, old := range s.materialsUnit.state.materialTextEditors {
+				if old != s.materialsUnit.state.materialTextActive && !s.materialsUnit.state.markdownAutosave.Status(oldKey).Dirty {
 					old.closed = true
-					delete(s.materialTextEditors, oldKey)
+					delete(s.materialsUnit.state.materialTextEditors, oldKey)
 					break
 				}
 			}
 		}
-		if len(s.materialTextEditors) >= documents.MaxMarkdownDraftRecords {
+		if len(s.materialsUnit.state.materialTextEditors) >= documents.MaxMarkdownDraftRecords {
 			s.lastError = "打开的文本草稿已达到 100 条上限，请先保存或丢弃部分草稿"
 			return
 		}
 		state = &materialTextEditorState{key: key, taskID: taskID, path: path, editing: documents.Kind(path) == "text"}
-		s.materialTextEditors[key] = state
+		s.materialsUnit.state.materialTextEditors[key] = state
 	}
 	state.closed, state.diskSource, state.restored = false, content.Text, state.restored || restored
 	if state.view == nil || state.source != source && !status.Dirty && !state.view.Composing() {
@@ -100,7 +100,7 @@ func (s *app) seedMaterialTextEditor(taskID, path string, content documents.Cont
 	}
 	state.view.OnCompositionChanged = func(composing bool) {
 		if s.materialTextBindingCurrent(state) {
-			s.markdownAutosave.SetComposing(state.key, composing)
+			s.materialsUnit.state.markdownAutosave.SetComposing(state.key, composing)
 		}
 	}
 	limit := documents.MaxMaterialsText
@@ -114,26 +114,26 @@ func (s *app) seedMaterialTextEditor(taskID, path string, content documents.Cont
 		}
 	}
 	ref.textOwner = state
-	s.documentSaveMu.Lock()
-	s.documentSaveRefs[key] = ref
-	s.documentSaveMu.Unlock()
-	if s.currentTask().id == taskID && normalizeIdentityPath(s.documentPath) == normalizeIdentityPath(path) {
-		s.documentContent, s.documentHash, s.documentDirty, s.documentEditing = source, ref.hash, s.markdownAutosave.Status(key).Dirty, state.editing
+	s.materialsUnit.state.documentSaveMu.Lock()
+	s.materialsUnit.state.documentSaveRefs[key] = ref
+	s.materialsUnit.state.documentSaveMu.Unlock()
+	if s.taskUnit.currentTask().id == taskID && normalizeIdentityPath(s.materialsUnit.state.documentPath) == normalizeIdentityPath(path) {
+		s.materialsUnit.state.documentContent, s.materialsUnit.state.documentHash, s.materialsUnit.state.documentDirty, s.materialsUnit.state.documentEditing = source, ref.hash, s.materialsUnit.state.markdownAutosave.Status(key).Dirty, state.editing
 	}
 }
 
 // Pull only changed buffers. A 3 MiB document must not be copied each frame.
 func (s *app) captureMaterialTextState(state *materialTextEditorState) error {
-	if state == nil || state.closed || s.materialTextEditors[state.key] != state || state.view == nil || state.view.Buffer == nil || s.markdownAutosave == nil {
+	if state == nil || state.closed || s.materialsUnit.state.materialTextEditors[state.key] != state || state.view == nil || state.view.Buffer == nil || s.materialsUnit.state.markdownAutosave == nil {
 		return nil
 	}
-	if _, exists := s.documentSaveRef(state.key); !exists {
+	if _, exists := s.materialsUnit.documentSaveRef(state.key); !exists {
 		return nil
 	}
-	s.markdownAutosave.SetComposing(state.key, state.view.Composing())
+	s.materialsUnit.state.markdownAutosave.SetComposing(state.key, state.view.Composing())
 	if version := state.view.Buffer.Version(); version != state.version {
 		source := state.view.Buffer.OriginalText()
-		ref, _ := s.documentSaveRef(state.key)
+		ref, _ := s.materialsUnit.documentSaveRef(state.key)
 		bytes := len(source)
 		if ref.hasUTF8BOM {
 			bytes += 3
@@ -143,18 +143,18 @@ func (s *app) captureMaterialTextState(state *materialTextEditorState) error {
 		state.inputError = ""
 		if bytes > documents.MaxMaterialsText {
 			state.inputError = "资料文本不能超过 3 MiB（含 BOM）"
-			s.markdownAutosave.Pause(state.key, state.inputError)
+			s.materialsUnit.state.markdownAutosave.Pause(state.key, state.inputError)
 			return errors.New(state.inputError)
 		}
 		state.restored = false
-		s.markdownAutosave.Edit(state.key, source)
-		if previousInputError != "" && s.markdownAutosave.Status(state.key).Error == previousInputError {
-			s.markdownAutosave.Retry(state.key)
+		s.materialsUnit.state.markdownAutosave.Edit(state.key, source)
+		if previousInputError != "" && s.materialsUnit.state.markdownAutosave.Status(state.key).Error == previousInputError {
+			s.materialsUnit.state.markdownAutosave.Retry(state.key)
 		}
 		if s.materialTextBindingCurrent(state) {
-			s.documentContent, s.documentDirty = source, s.markdownAutosave.Status(state.key).Dirty
-			if s.documentDirty {
-				s.documentDrafts[state.path], s.documentDirtyMap[state.path] = source, true
+			s.materialsUnit.state.documentContent, s.materialsUnit.state.documentDirty = source, s.materialsUnit.state.markdownAutosave.Status(state.key).Dirty
+			if s.materialsUnit.state.documentDirty {
+				s.materialsUnit.state.documentDrafts[state.path], s.materialsUnit.state.documentDirtyMap[state.path] = source, true
 			}
 		}
 	}
@@ -169,31 +169,31 @@ func (s *app) captureMaterialTextInput() error {
 }
 
 func (s *app) observeMaterialTextInput() {
-	if state := s.materialTextActive; state != nil {
+	if state := s.materialsUnit.state.materialTextActive; state != nil {
 		_ = s.captureMaterialTextState(state)
 	}
 }
 
 func (s *app) materialTextSaved(key string, ref documentSaveRef, status editor.SaveState) {
-	state := s.materialTextEditors[key]
+	state := s.materialsUnit.state.materialTextEditors[key]
 	if state == nil || state.closed {
 		return
 	}
 	if !status.Dirty {
 		state.diskSource, state.restored = state.source, false
 	}
-	if !status.Dirty && ref.taskID == s.currentTask().id {
-		delete(s.documentDrafts, ref.path)
-		delete(s.documentDirtyMap, ref.path)
+	if !status.Dirty && ref.taskID == s.taskUnit.currentTask().id {
+		delete(s.materialsUnit.state.documentDrafts, ref.path)
+		delete(s.materialsUnit.state.documentDirtyMap, ref.path)
 	}
 	if s.materialTextBindingCurrent(state) {
-		s.documentHash, s.documentDirty = ref.hash, status.Dirty
+		s.materialsUnit.state.documentHash, s.materialsUnit.state.documentDirty = ref.hash, status.Dirty
 	}
 }
 
 func (s *app) remapMaterialTextEditors(taskID, taskPath, root, previous, replacement string) {
-	for key, state := range s.materialTextEditors {
-		_, exists := s.documentSaveRef(key)
+	for key, state := range s.materialsUnit.state.materialTextEditors {
+		_, exists := s.materialsUnit.documentSaveRef(key)
 		if state.taskID != taskID {
 			continue
 		}
@@ -207,22 +207,22 @@ func (s *app) remapMaterialTextEditors(taskID, taskPath, root, previous, replace
 		}
 		// The rename lease has already transferred the autosave/ref identity.
 		if !exists {
-			if _, moved := s.documentSaveRef(newKey); !moved {
+			if _, moved := s.materialsUnit.documentSaveRef(newKey); !moved {
 				state.closed = true
-				delete(s.materialTextEditors, key)
+				delete(s.materialsUnit.state.materialTextEditors, key)
 				continue
 			}
 		}
-		if old := s.materialTextEditors[newKey]; old != nil && old != state {
+		if old := s.materialsUnit.state.materialTextEditors[newKey]; old != nil && old != state {
 			old.closed = true
 		}
-		delete(s.materialTextEditors, key)
+		delete(s.materialsUnit.state.materialTextEditors, key)
 		state.key, state.path = newKey, next
 		if state.view != nil {
 			state.view.Label = filepath.Base(next)
 			state.view.Buffer.SetLanguage(textEditorLanguage(next))
 			state.view.ReadOnly = !documents.EditableMaterialText(next)
 		}
-		s.materialTextEditors[newKey] = state
+		s.materialsUnit.state.materialTextEditors[newKey] = state
 	}
 }

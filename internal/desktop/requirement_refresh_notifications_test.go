@@ -17,7 +17,7 @@ func TestRequirementRefreshNotificationShowsImmediatelyAndEndsWithJob(t *testing
 			var shown []ui.Toast
 			tester := ui.NewTester(func(c *ui.Context) {
 				ui.Column(c).Fill().Children(func() {
-					for _, item := range s.requirements {
+					for _, item := range s.requirementUnit.state.requirements {
 						s.requirementListItem(c, setTheme(c, false), item, false)
 					}
 				})
@@ -33,15 +33,15 @@ func TestRequirementRefreshNotificationShowsImmediatelyAndEndsWithJob(t *testing
 			if err := tester.ChooseMenuItem("刷新"); err != nil {
 				t.Fatal(err)
 			}
-			url := s.requirements[1].URL
-			job := s.requirementRefreshJobs.current[requirementRefreshKey(url)]
+			url := s.requirementUnit.state.requirements[1].URL
+			job := s.requirementUnit.state.requirementRefreshJobs.current[requirementRefreshKey(url)]
 			if len(shown) != 1 || shown[0].Title != "刷新中" || shown[0].Timeout != -1 {
 				t.Fatalf("right-click refresh did not show persistent progress immediately: %+v", shown)
 			}
 			s.startRequirementRefresh(url)
 			s.page = "tasks"
 			tester.Frame()
-			if len(shown) != 1 || shown[0].Title != "刷新中" || s.selectedRequirement != 0 || s.documentContent != "unsaved draft" {
+			if len(shown) != 1 || shown[0].Title != "刷新中" || s.requirementUnit.state.selectedRequirement != 0 || s.materialsUnit.state.documentContent != "unsaved draft" {
 				t.Fatal("coalescing/page switch duplicated progress or changed navigation/draft")
 			}
 			if outcome == "cancelled" {
@@ -68,8 +68,8 @@ func TestRequirementRefreshNotificationShowsImmediatelyAndEndsWithJob(t *testing
 
 func TestRequirementRefreshNotificationStaysUntilAllTargetsFinish(t *testing.T) {
 	s, backend, window := refreshTestFixture(t)
-	s.startRequirementRefresh(s.requirements[0].URL)
-	s.startRequirementRefresh(s.requirements[1].URL)
+	s.startRequirementRefresh(s.requirementUnit.state.requirements[0].URL)
+	s.startRequirementRefresh(s.requirementUnit.state.requirements[1].URL)
 	var shown []ui.Toast
 	tester := ui.NewTester(func(c *ui.Context) {
 		s.renderRequirementRefreshProgressNotification(c)
@@ -102,7 +102,7 @@ func TestRequirementRefreshNotificationVisibleInBothThemes(t *testing.T) {
 			tester := ui.NewTester(func(c *ui.Context) {
 				p := setTheme(c, dark)
 				ui.Column(c).Fill().Padding(12).Gap(8).Background(p.bg).Children(func() {
-					for _, item := range s.requirements {
+					for _, item := range s.requirementUnit.state.requirements {
 						s.requirementListItem(c, p, item, false)
 					}
 				})

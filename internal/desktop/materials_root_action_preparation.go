@@ -18,7 +18,7 @@ func (s *app) settleMaterialsBeforeRootAction(ctx context.Context, action applic
 		barrier.Abandon()
 		return nil, errors.New("资料窗口已关闭，目录变更已停止")
 	}
-	update := taskContextUpdater(window, s.taskContextUpdate)
+	update := taskContextUpdater(window, s.taskUnit.state.taskContextUpdate)
 	if update == nil {
 		barrier.Abandon()
 		return nil, errors.New("资料窗口已关闭，目录变更已停止")

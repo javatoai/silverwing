@@ -25,7 +25,7 @@ type pageLocalReadState struct {
 func (s *app) localPageReadKey() string {
 	key := s.snapshot.Home + "\x00" + s.page
 	if s.page == "settings" {
-		key += "\x00" + s.settingsTab + "/" + s.settingsPage
+		key += "\x00" + s.settingsUnit.state.settingsTab + "/" + s.settingsUnit.state.settingsPage
 	}
 	return key
 }
@@ -34,10 +34,10 @@ func (s *app) observePageLocalRead() {
 	if s.loading || s.backend == nil || s.win == nil || s.win.IsDestroyed() {
 		return
 	}
-	if s.pageLocalRead == nil {
-		s.pageLocalRead = &pageLocalReadState{}
+	if s.settingsUnit.state.pageLocalRead == nil {
+		s.settingsUnit.state.pageLocalRead = &pageLocalReadState{}
 	}
-	state := s.pageLocalRead
+	state := s.settingsUnit.state.pageLocalRead
 	key := s.localPageReadKey()
 	state.mu.Lock()
 	if state.closed {
@@ -47,7 +47,7 @@ func (s *app) observePageLocalRead() {
 	if state.entry != key {
 		state.entry, state.attempted, state.ready = key, "", ""
 		state.failure = ""
-		s.settingsLoaded = ""
+		s.settingsUnit.state.settingsLoaded = ""
 		if state.job != nil {
 			state.job.cancel()
 		}
@@ -57,7 +57,7 @@ func (s *app) observePageLocalRead() {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	job := &pageLocalReadJob{key: key, home: s.snapshot.Home, config: s.configJSON, cancel: cancel, done: make(chan struct{})}
+	job := &pageLocalReadJob{key: key, home: s.snapshot.Home, config: s.settingsUnit.state.configJSON, cancel: cancel, done: make(chan struct{})}
 	state.job = job
 	// Mark this entry attempted even on failure; explicit refresh and re-entry
 	// remain available, without a failed read restarting on every frame.
@@ -82,7 +82,7 @@ func (s *app) observePageLocalRead() {
 			}
 			if err != nil {
 				state.failure = "读取本机配置失败：" + err.Error()
-				if s.configJSON != "" {
+				if s.settingsUnit.state.configJSON != "" {
 					state.ready = job.key
 				}
 				return
@@ -91,14 +91,14 @@ func (s *app) observePageLocalRead() {
 				if snapshot.Error != "" {
 					state.failure = snapshot.Error
 				}
-				if s.configJSON != "" {
+				if s.settingsUnit.state.configJSON != "" {
 					state.ready = job.key
 				}
 				return
 			}
 			// A newer save already supplied current configuration. Do not let
 			// an older navigation read replace it or its task projection.
-			if s.configJSON == job.config && snapshot.Home == job.home {
+			if s.settingsUnit.state.configJSON == job.config && snapshot.Home == job.home {
 				s.applySnapshot(snapshot)
 			}
 			state.ready = job.key
@@ -107,14 +107,14 @@ func (s *app) observePageLocalRead() {
 }
 
 func (s *app) retryPageLocalRead() {
-	if state := s.pageLocalRead; state != nil {
+	if state := s.settingsUnit.state.pageLocalRead; state != nil {
 		state.attempted, state.ready, state.failure = "", "", ""
-		s.settingsLoaded = ""
+		s.settingsUnit.state.settingsLoaded = ""
 	}
 }
 
 func (s *app) pageLocalReadReady() bool {
-	state := s.pageLocalRead
+	state := s.settingsUnit.state.pageLocalRead
 	if state == nil {
 		return true
 	}
@@ -124,7 +124,7 @@ func (s *app) pageLocalReadReady() bool {
 }
 
 func (s *app) pageLocalReadPending() bool {
-	state := s.pageLocalRead
+	state := s.settingsUnit.state.pageLocalRead
 	if state == nil {
 		return false
 	}
@@ -133,8 +133,8 @@ func (s *app) pageLocalReadPending() bool {
 	return state.job != nil || state.attempted != s.localPageReadKey()
 }
 
-func (s *app) stopPageLocalRead() {
-	if state := s.pageLocalRead; state != nil {
+func (s *settingsController) stopPageLocalRead() {
+	if state := s.state.pageLocalRead; state != nil {
 		state.mu.Lock()
 		state.closed = true
 		if state.job != nil {
@@ -144,9 +144,9 @@ func (s *app) stopPageLocalRead() {
 	}
 }
 
-func (s *app) closePageLocalRead(ctx context.Context) error {
+func (s *settingsController) closePageLocalRead(ctx context.Context) error {
 	s.stopPageLocalRead()
-	state := s.pageLocalRead
+	state := s.state.pageLocalRead
 	if state == nil {
 		return nil
 	}
@@ -168,12 +168,12 @@ func (s *app) ensureSettingsPageData() {
 	if s.busy || !s.pageLocalReadReady() {
 		return
 	}
-	key := s.snapshot.Home + "\x00" + s.settingsTab + "/" + s.settingsPage
-	if s.settingsLoaded == key {
+	key := s.snapshot.Home + "\x00" + s.settingsUnit.state.settingsTab + "/" + s.settingsUnit.state.settingsPage
+	if s.settingsUnit.state.settingsLoaded == key {
 		return
 	}
-	s.settingsLoaded, s.settingsOutput = key, ""
-	switch s.settingsPage {
+	s.settingsUnit.state.settingsLoaded, s.settingsUnit.state.settingsOutput = key, ""
+	switch s.settingsUnit.state.settingsPage {
 	case "config-backup":
 		s.act("config.backups", "", "", "", "", "", nil)
 	case "agents":

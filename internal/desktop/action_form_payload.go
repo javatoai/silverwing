@@ -55,7 +55,7 @@ func (s *app) submitForm() {
 	}
 
 	if form.kind == "config.import-preview" {
-		s.importPath = path
+		s.materialsUnit.state.importPath = path
 	}
 
 	if s.settingsActionForm(form, payload) {

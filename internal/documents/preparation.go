@@ -2,18 +2,13 @@ package documents
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
-	"silverwing-go/internal/commandruntime"
 	"silverwing-go/internal/domain"
-	"silverwing-go/internal/executable"
-	"silverwing-go/internal/process"
 	"silverwing-go/internal/storage"
 )
 
@@ -80,21 +75,28 @@ type Materialization struct {
 	CreatedRequirementDirectory bool                    `json:"createdRequirementDirectory"`
 }
 
-type PreparationCommandRunner interface {
-	Run(context.Context, process.Spec) (process.Result, error)
-}
-
 type PreparationService struct {
-	paths  storage.Paths
-	runner PreparationCommandRunner
-	files  *preparationFileStore
+	paths    storage.Paths
+	provider RequirementProvider
+	files    *preparationFileStore
 }
 
-func NewPreparationService(paths storage.Paths, runner PreparationCommandRunner) *PreparationService {
-	if runner == nil {
-		runner = process.NewRunner()
+func NewPreparationService(paths storage.Paths, provider RequirementProvider) *PreparationService {
+	return &PreparationService{paths: paths, provider: provider, files: &preparationFileStore{}}
+}
+
+func (s *PreparationService) resolveRequirement(ctx context.Context, config domain.AppConfig, id string, link *domain.FeishuWorkItemLink) (RequirementIdentity, error) {
+	if s.provider == nil {
+		return RequirementIdentity{}, fmt.Errorf("任务资料来源服务未配置")
 	}
-	return &PreparationService{paths: paths, runner: runner, files: &preparationFileStore{}}
+	identity, err := s.provider.Resolve(ctx, config, requirementReference(id, link))
+	if err != nil {
+		return RequirementIdentity{}, err
+	}
+	if identity.WorkItemID != id || link != nil && (!strings.EqualFold(identity.Space, link.Space) || !strings.EqualFold(identity.Kind, link.Kind)) {
+		return RequirementIdentity{}, fmt.Errorf("需求来源返回的身份与当前需求不一致")
+	}
+	return identity, nil
 }
 
 // Ensure provisions only the configured requirement write directory. It does
@@ -169,18 +171,12 @@ func (s *PreparationService) Ensure(ctx context.Context, config domain.AppConfig
 		}
 		return domain.RequirementMaterialsDirectory{Status: domain.MaterialsReady, WriteRoot: &writeRoot}, nil
 	}
-	project, err := s.resolveRequirementProject(ctx, config, id, link)
+	identity, err := s.resolveRequirement(ctx, config, id, link)
 	if ctx.Err() != nil {
 		return domain.RequirementMaterialsDirectory{}, ctx.Err()
 	}
 	if err != nil {
 		return fail(err.Error())
-	}
-	if project == nil {
-		if len(config.MeegleProjects) == 0 {
-			return fail("未配置 Meegle 项目")
-		}
-		return fail("未能唯一匹配需求所属的 Meegle 项目")
 	}
 	writeRoot := filepath.Join(requirementDirectory, subdirectory)
 	if err := ensureMaterialsDirectory(root, writeRoot); err != nil {
@@ -192,7 +188,6 @@ func (s *PreparationService) Ensure(ctx context.Context, config domain.AppConfig
 		}
 	}
 	if link != nil {
-		identity := RequirementIdentity{Space: project.SimpleName, Kind: link.Kind, WorkItemID: id}
 		now := domain.FormatSilverWingTime(time.Now())
 		metadata := RequirementDocumentationManifest{FormatVersion: documentationFormatVersion, Identity: identity, RequirementTitle: folder, DirectoryName: filepath.Base(requirementDirectory), CreatedAt: now, UpdatedAt: now}
 		if err := s.files.write(filepath.Join(writeRoot, requirementManifestName), s.files.encodeRequirement(metadata)); err != nil {
@@ -217,114 +212,6 @@ func parseMaterialsInput(value string) (string, *domain.FeishuWorkItemLink, erro
 		return "", nil, fmt.Errorf("需求输入必须是数字需求编号或 Meegle 详情链接")
 	}
 	return link.WorkItemID, link, nil
-}
-
-func (s *PreparationService) resolveRequirementProject(ctx context.Context, config domain.AppConfig, id string, link *domain.FeishuWorkItemLink) (*domain.MeegleProjectConfig, error) {
-	candidates := make([]domain.MeegleProjectConfig, 0, len(config.MeegleProjects))
-	for _, project := range config.MeegleProjects {
-		if link == nil || strings.EqualFold(project.SimpleName, link.Space) {
-			candidates = append(candidates, project)
-		}
-	}
-	if len(candidates) == 0 {
-		if link != nil {
-			return nil, fmt.Errorf("需求链接所属的飞书项目未配置：%s", link.Space)
-		}
-		return nil, nil
-	}
-	timeout := 20 * time.Second
-	var matches []domain.MeegleProjectConfig
-	for _, project := range candidates {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		result, err := s.runMeegle(ctx, config, []string{"workitem", "get", "--project-key", project.ProjectKey, "--work-item-id", id, "--format", "json"}, timeout)
-		if err != nil {
-			return nil, err
-		}
-		if !result.Successful() {
-			message := strings.TrimSpace(result.Stderr)
-			if message == "" {
-				message = strings.TrimSpace(result.Stdout)
-			}
-			if missingRequirement(message) {
-				continue
-			}
-			if runes := []rune(message); len(runes) > 300 {
-				message = string(runes[:300])
-			}
-			message = commandruntime.Redact(config, message)
-			return nil, fmt.Errorf("Meegle CLI 执行失败：%s", message)
-		}
-		var raw any
-		decoder := json.NewDecoder(strings.NewReader(result.Stdout))
-		decoder.UseNumber()
-		if err := decoder.Decode(&raw); err != nil {
-			return nil, fmt.Errorf("Meegle CLI 返回不是可解析的 JSON")
-		}
-		if err := decoder.Decode(new(any)); err != io.EOF {
-			return nil, fmt.Errorf("Meegle CLI 返回不是可解析的 JSON")
-		}
-		if containsWorkItemID(raw, id) {
-			matches = append(matches, project)
-		}
-	}
-	if len(matches) > 1 {
-		return nil, fmt.Errorf("同一需求编号匹配到多个 Meegle 项目")
-	}
-	if len(matches) == 1 {
-		return &matches[0], nil
-	}
-	return nil, nil
-}
-
-func containsWorkItemID(value any, id string) bool {
-	switch current := value.(type) {
-	case map[string]any:
-		for key, child := range current {
-			normalized := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(key, "_", ""), " ", ""))
-			if normalized == "itemid" || normalized == "workitemid" {
-				if materialsTypedText(child) == id {
-					return true
-				}
-			}
-			if containsWorkItemID(child, id) {
-				return true
-			}
-		}
-	case []any:
-		for _, child := range current {
-			if containsWorkItemID(child, id) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func materialsTypedText(value any) string {
-	switch current := value.(type) {
-	case string:
-		return strings.TrimSpace(current)
-	case json.Number:
-		return current.String()
-	case float64:
-		return strings.TrimSpace(fmt.Sprint(current))
-	case bool:
-		return fmt.Sprint(current)
-	case map[string]any:
-		for _, key := range []string{"long_value", "string_value", "text_value", "bool_value", "label"} {
-			if child, ok := current[key]; ok {
-				if result := materialsTypedText(child); result != "" {
-					return result
-				}
-			}
-		}
-		if values, ok := current["key_label_value_list"].([]any); ok && len(values) > 0 {
-			return materialsTypedText(values[0])
-		}
-	}
-	return ""
 }
 
 // Plan resolves a local documentation target without creating the requirement directory.
@@ -383,11 +270,13 @@ func (s *PreparationService) Plan(ctx context.Context, config domain.AppConfig, 
 	} else if existing != nil {
 		title = folder
 	} else {
-		projectKey, err := resolveMeegleProjectKey(config, *link)
+		if s.provider == nil {
+			return DocumentationPlan{}, fmt.Errorf("任务资料来源服务未配置")
+		}
+		title, err = s.provider.Title(ctx, config, requirementReference(link.WorkItemID, link))
 		if err != nil {
 			return DocumentationPlan{}, err
 		}
-		title = s.fetchRequirementTitle(ctx, config, requirementLink, projectKey)
 		if title == "" {
 			return DocumentationPlan{}, fmt.Errorf("需要提供需求中文简写，或确保本地 Meegle 能读取需求标题")
 		}
@@ -523,95 +412,4 @@ func (s *PreparationService) Materialize(ctx context.Context, config domain.AppC
 
 func (s *PreparationService) acquireMaterialsLock(root string) (func(), error) {
 	return storage.AcquireLock(filepath.Join(root, requirementMaterialsLock))
-}
-
-func (s *PreparationService) fetchRequirementTitle(ctx context.Context, config domain.AppConfig, requirementLink, projectKey string) string {
-	if s.runner == nil {
-		return ""
-	}
-	link := domain.ParseFeishuWorkItemLink(requirementLink)
-	if link == nil {
-		return ""
-	}
-	result, err := s.runMeegle(ctx, config, []string{"workitem", "get", "--project-key", projectKey, "--work-item-id", link.WorkItemID, "--format", "json"}, 8*time.Second)
-	if err != nil || !result.Successful() {
-		return ""
-	}
-	var root map[string]json.RawMessage
-	if json.Unmarshal([]byte(result.Stdout), &root) != nil {
-		return ""
-	}
-	var attributes map[string]json.RawMessage
-	_ = json.Unmarshal(root["work_item_attribute"], &attributes)
-	for _, candidate := range []json.RawMessage{root["name"], root["work_item_name"], attributes["name"], attributes["work_item_name"]} {
-		if title := jsonPrimitiveText(candidate); title != "" {
-			return title
-		}
-	}
-	return ""
-}
-
-func resolveMeegleProjectKey(config domain.AppConfig, link domain.FeishuWorkItemLink) (string, error) {
-	for _, project := range config.MeegleProjects {
-		if strings.EqualFold(project.SimpleName, link.Space) {
-			return project.ProjectKey, nil
-		}
-	}
-	if link.ProjectKey != nil {
-		return *link.ProjectKey, nil
-	}
-	return "", fmt.Errorf("需求空间 %s 未配置 Meegle project key", link.Space)
-}
-
-func jsonPrimitiveText(raw json.RawMessage) string {
-	if len(raw) == 0 || string(raw) == "null" {
-		return ""
-	}
-	var value string
-	if json.Unmarshal(raw, &value) == nil {
-		return strings.TrimSpace(value)
-	}
-	var primitive any
-	if json.Unmarshal(raw, &primitive) != nil {
-		return ""
-	}
-	switch value := primitive.(type) {
-	case float64:
-		return strings.TrimSpace(fmt.Sprint(value))
-	case bool:
-		return strings.TrimSpace(fmt.Sprint(value))
-	default:
-		return ""
-	}
-}
-
-// Both project verification and optional title lookup share the desktop CLI
-// runtime. A reused directory deliberately requires neither remote lookup.
-func (s *PreparationService) runMeegle(ctx context.Context, config domain.AppConfig, args []string, timeout time.Duration) (process.Result, error) {
-	configured := ""
-	if config.MeegleExecutablePath != nil {
-		configured = strings.TrimSpace(*config.MeegleExecutablePath)
-	}
-	spec, err := commandruntime.Prepare(ctx, s.runner, &config, domain.ProxyTargetMeegle, executable.ToolMeegle, configured)
-	if err != nil {
-		return process.Result{}, err
-	}
-	spec.Arguments, spec.Timeout = args, timeout
-	result, err := s.runner.Run(ctx, spec)
-	if ctx.Err() != nil {
-		return result, ctx.Err()
-	}
-	if err != nil {
-		return result, fmt.Errorf("Meegle CLI 执行失败：%s", commandruntime.Redact(config, err.Error()))
-	}
-	return result, nil
-}
-
-func missingRequirement(message string) bool {
-	lower := strings.ToLower(message)
-	if strings.Contains(lower, "node") || strings.Contains(lower, "env:") || strings.Contains(lower, "command not found") || strings.Contains(lower, "no such file") {
-		return false
-	}
-	explicitItem := strings.Contains(lower, "workitem") || strings.Contains(lower, "work item") || strings.Contains(lower, "work-item") || strings.Contains(message, "需求") || strings.Contains(message, "工作项")
-	return strings.Contains(lower, "404") || explicitItem && (strings.Contains(lower, "not found") || strings.Contains(lower, "not exist") || strings.Contains(message, "不存在"))
 }

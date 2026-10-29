@@ -9,14 +9,14 @@ import (
 )
 
 func (s *app) ensureMeegleProjectCatalogState() *meegleProjectCatalogState {
-	if s.meegleProjectCatalog == nil {
-		s.meegleProjectCatalog = &meegleProjectCatalogState{}
+	if s.settingsUnit.state.meegleProjectCatalog == nil {
+		s.settingsUnit.state.meegleProjectCatalog = &meegleProjectCatalogState{}
 	}
-	return s.meegleProjectCatalog
+	return s.settingsUnit.state.meegleProjectCatalog
 }
 
 func (s *app) currentMeegleProjectCatalogIdentity() (string, bool) {
-	status := s.settingsCLIStatus["meegle"]
+	status := s.settingsUnit.state.settingsCLIStatus["meegle"]
 	authenticated := dataBool(status, "authenticated") || mapString(status, "authenticationState") == "AUTHENTICATED"
 	if !authenticated {
 		return "", false
@@ -58,7 +58,7 @@ func (s *app) resetMeegleProjectCatalog(state *meegleProjectCatalogState) {
 }
 
 func (s *app) clearMeegleProjectCatalogCache() {
-	state := s.meegleProjectCatalog
+	state := s.settingsUnit.state.meegleProjectCatalog
 	if state == nil {
 		return
 	}
@@ -69,7 +69,7 @@ func (s *app) clearMeegleProjectCatalogCache() {
 }
 
 func (s *app) closeMeegleProjectPicker() {
-	state := s.meegleProjectCatalog
+	state := s.settingsUnit.state.meegleProjectCatalog
 	if state == nil {
 		return
 	}
@@ -109,11 +109,11 @@ func (s *app) syncMeegleProjectCatalogContext(state *meegleProjectCatalogState) 
 }
 
 func (s *app) cancelMeegleProjectCatalogRead() {
-	if state := s.meegleProjectCatalog; state != nil && state.loading {
+	if state := s.settingsUnit.state.meegleProjectCatalog; state != nil && state.loading {
 		state.generation++
 		state.loading = false
 	}
-	if jobs := s.cliJobs; jobs != nil {
+	if jobs := s.toolsUnit.state.cliJobs; jobs != nil {
 		if request := jobs.requests["meegle.projects"]; request != nil {
 			request.cancel()
 			delete(jobs.requests, "meegle.projects")
@@ -278,7 +278,7 @@ func (s *app) finishMeegleProjectPickerSave(action application.Action, result ap
 	if action.Kind != "config.fields.save" || strings.TrimSpace(payloadString(action.Payload, "meegleProjectPickerSaveToken")) == "" {
 		return false
 	}
-	state := s.meegleProjectCatalog
+	state := s.settingsUnit.state.meegleProjectCatalog
 	pendingMatches := state != nil && state.pickerPendingSave != 0 && payloadString(action.Payload, "meegleProjectPickerSaveToken") == fmt.Sprint(state.pickerPendingSave)
 	if pendingMatches {
 		state.pickerPendingSave = 0
@@ -339,7 +339,7 @@ func (s *app) syncMeegleProjectPickerCommittedConfig(action application.Action) 
 		return false
 	}
 
-	previousConfig := s.configJSON
+	previousConfig := s.settingsUnit.state.configJSON
 	if strings.TrimSpace(previousConfig) == "" {
 		previousConfig = s.snapshot.ConfigJSON
 	}
@@ -365,8 +365,8 @@ func (s *app) syncMeegleProjectPickerCommittedConfig(action application.Action) 
 		return false
 	}
 
-	s.configJSON = string(nextJSON)
-	s.snapshot.ConfigJSON = s.configJSON
-	s.syncSettingsConfigInputs(string(beforeJSON), s.configJSON)
+	s.settingsUnit.state.configJSON = string(nextJSON)
+	s.snapshot.ConfigJSON = s.settingsUnit.state.configJSON
+	s.syncSettingsConfigInputs(string(beforeJSON), s.settingsUnit.state.configJSON)
 	return true
 }

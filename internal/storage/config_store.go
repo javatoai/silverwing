@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/productprofile"
 )
 
 const configShardSchema = 6
@@ -120,8 +121,7 @@ func (s *ConfigStore) Load() (domain.AppConfig, error) {
 		return domain.AppConfig{}, &DefaultTaskRootInitializationError{TaskRoot: taskRoot, Cause: err}
 	}
 	config.TaskRoot = &taskRoot
-	materialsRoot := filepath.Join(s.paths.Home, "materials")
-	config.RequirementMaterialsRoot = &materialsRoot
+	config.RequirementMaterialsRoot = defaultProfileMaterialsRoot(s.paths.Home)
 	if err := s.writeShards(shardsFor(config), shardNames); err != nil {
 		return domain.AppConfig{}, err
 	}
@@ -168,8 +168,7 @@ func (s *ConfigStore) loadUnlocked() (domain.AppConfig, error) {
 			return domain.AppConfig{}, &DefaultTaskRootInitializationError{TaskRoot: taskRoot, Cause: err}
 		}
 		config.TaskRoot = &taskRoot
-		materialsRoot := filepath.Join(s.paths.Home, "materials")
-		config.RequirementMaterialsRoot = &materialsRoot
+		config.RequirementMaterialsRoot = defaultProfileMaterialsRoot(s.paths.Home)
 		if err := s.writeShards(shardsFor(config), shardNames); err != nil {
 			return domain.AppConfig{}, err
 		}
@@ -621,8 +620,8 @@ func decodeShardsContext(ctx context.Context, files map[string][]byte) (decodedC
 			return decodedConfig{}, err
 		}
 	}
-	if shards.Layout.Edition != "qa" {
-		return decodedConfig{}, fmt.Errorf("配置不是 silverwing-qa 格式，请使用 QA 版配置或备份")
+	if !productprofile.AcceptsEdition(shards.Layout.Edition) {
+		return decodedConfig{}, fmt.Errorf("%s", productprofile.ConfigurationEditionError())
 	}
 	config := domain.DefaultAppConfig()
 	config.Edition = shards.Layout.Edition
@@ -718,7 +717,7 @@ func shardsFor(config domain.AppConfig) configShards {
 		groups = append(groups, groupLayoutShard{ID: g.ID, Name: g.Name})
 	}
 	return configShards{
-		Layout:       layoutShard{Edition: "qa", Schema: configShardSchema, Groups: groups},
+		Layout:       layoutShard{Edition: productprofile.Edition, Schema: configShardSchema, Groups: groups},
 		Workspace:    workspaceShard{Schema: configShardSchema, TaskRoot: config.TaskRoot},
 		Tools:        toolsShard{Schema: configShardSchema, TerminalExecutable: config.TerminalExecutable, DefaultWorkspaceToolIDs: config.DefaultWorkspaceToolIDs},
 		Git:          gitShard{Schema: configShardSchema, GitExecutablePath: config.GitExecutablePath},

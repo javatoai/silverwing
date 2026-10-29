@@ -15,10 +15,14 @@ import (
 func taskLocalNoteFixture(t *testing.T) (*app, *taskLocalNoteDraft) {
 	t.Helper()
 	root := t.TempDir()
-	s := &app{page: "tasks", tab: 3, tasks: []task{{id: "task-a", path: filepath.Join(root, "task-a"), createdAt: "created-a"}, {id: "task-b", path: filepath.Join(root, "task-b"), createdAt: "created-b"}}}
+	s := &app{
+		taskUnit: taskController{state: taskState{tasks: []task{{id: "task-a", path: filepath.Join(root, "task-a"), createdAt: "created-a"}, {id: "task-b", path: filepath.Join(root, "task-b"), createdAt: "created-b"}}}},
+		page:     "tasks",
+		tab:      3,
+	}
 	s.snapshot.Home = filepath.Join(root, "home")
 	d := s.ensureTaskLocalNote()
-	s.taskNotesUI.localActiveKey = d.key
+	s.taskUnit.state.taskNotesUI.localActiveKey = d.key
 	d.refreshPending = false
 	return s, d
 }
@@ -129,7 +133,7 @@ func TestTaskLocalNoteSaveAndTaskSwitchIsolation(t *testing.T) {
 	}
 	a.view.Buffer.Set("保存开始后继续编辑的 A 草稿")
 	s.deactivateInstructionEditor()
-	s.selected = 1
+	s.taskUnit.state.selected = 1
 	b := s.ensureTaskLocalNote()
 	loadTaskLocalNote(s, b, "B原文", true)
 	s.applyInstructionSaveResult(save, taskLocalNoteResult(a, save.Text, true))
@@ -139,7 +143,7 @@ func TestTaskLocalNoteSaveAndTaskSwitchIsolation(t *testing.T) {
 	if s.documentCloseReady() == nil {
 		t.Fatal("unsaved inactive-task draft did not block close")
 	}
-	s.selected = 0
+	s.taskUnit.state.selected = 0
 	if s.ensureTaskLocalNote() != a {
 		t.Fatal("returning to a task discarded its retained native buffer")
 	}

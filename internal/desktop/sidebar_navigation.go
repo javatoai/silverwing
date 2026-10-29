@@ -19,7 +19,7 @@ func (s *app) sidebarNavigationItems() []sidebarNavigationItem {
 func (s *app) reconcileSidebarNavigation() {
 	switch s.page {
 	case "skills":
-		s.page, s.settingsTab, s.settingsPage = "settings", "skill", "skill-local"
+		s.page, s.settingsUnit.state.settingsTab, s.settingsUnit.state.settingsPage = "settings", "skill", "skill-local"
 	case "tasks", "archive", "materials", "requirements", "tools", "settings":
 	default:
 		s.page = "tasks"
@@ -28,6 +28,6 @@ func (s *app) reconcileSidebarNavigation() {
 		s.tab = 1
 	}
 	if s.page == "tools" && len(s.visibleDeveloperToolTabs()) == 0 {
-		s.page, s.settingsTab, s.settingsPage = "settings", "快捷工具", "tool-visibility"
+		s.page, s.settingsUnit.state.settingsTab, s.settingsUnit.state.settingsPage = "settings", "快捷工具", "tool-visibility"
 	}
 }

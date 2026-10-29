@@ -35,7 +35,7 @@ func TestConfigReadCacheInvalidationAndErrorIsolation(t *testing.T) {
 		t.Fatalf("unchanged sources, including failures, were decoded %d times", loads)
 	}
 	s := configurationReadFixture()
-	s.configJSON = "null"
+	s.settingsUnit.state.configJSON = "null"
 	s.saveConfigField("taskRoot", "D:/new")
 	if s.lastError == "" {
 		t.Fatal("a non-object configuration was accepted for editing")
@@ -44,9 +44,9 @@ func TestConfigReadCacheInvalidationAndErrorIsolation(t *testing.T) {
 
 func configurationReadFixture() *app {
 	s := taskNavigationFixture()
-	s.configJSON = `{"taskRoot":"D:/tasks","enabled":true,"count":7,"nested":{"flag":true},"items":[{"name":"original","nested":[{"value":"saved"}]}],"services":[` +
+	s.settingsUnit.state.configJSON = `{"taskRoot":"D:/tasks","enabled":true,"count":7,"nested":{"flag":true},"items":[{"name":"original","nested":[{"value":"saved"}]}],"services":[` +
 		strings.TrimSuffix(strings.Repeat(`{"id":"service","modules":[{"id":"module","enabled":true}]},`, 200), ",") + `]}`
-	s.snapshot.ConfigJSON = s.configJSON
+	s.snapshot.ConfigJSON = s.settingsUnit.state.configJSON
 	return s
 }
 
@@ -56,13 +56,13 @@ func TestConfigurationReadsRefreshAfterSourceChanges(t *testing.T) {
 		s.configInt("count", 0) != 7 || !s.configNestedBool("nested", "flag", false) || len(s.configArray("items")) != 1 {
 		t.Fatal("initial configuration reads failed")
 	}
-	s.configJSON = `{"taskRoot":"D:/changed","enabled":false,"count":9,"nested":{"flag":false},"items":[]}`
+	s.settingsUnit.state.configJSON = `{"taskRoot":"D:/changed","enabled":false,"count":9,"nested":{"flag":false},"items":[]}`
 	if s.configString("taskRoot") != "D:/changed" || s.configBool("enabled", true) ||
 		s.configInt("count", 0) != 9 || s.configNestedBool("nested", "flag", true) || len(s.configArray("items")) != 0 {
 		t.Fatal("configuration reads retained an earlier source")
 	}
 	for _, source := range []string{"", "{invalid", "null"} {
-		s.configJSON = source
+		s.settingsUnit.state.configJSON = source
 		if s.configString("taskRoot") != "" || !s.configBool("enabled", true) || s.configInt("count", 11) != 11 ||
 			!s.configNestedBool("nested", "flag", true) || s.configArray("items") != nil {
 			t.Fatalf("invalid or empty source exposed an earlier configuration: %q", source)
@@ -124,6 +124,6 @@ func BenchmarkDesktopConfigurationReads(b *testing.B) {
 		_ = s.configNestedBool("nested", "flag", false)
 		_ = s.configArray("items")
 	}
-	b.ReportMetric(float64(len(s.configJSON)), "config-bytes")
+	b.ReportMetric(float64(len(s.settingsUnit.state.configJSON)), "config-bytes")
 	b.ReportAllocs()
 }

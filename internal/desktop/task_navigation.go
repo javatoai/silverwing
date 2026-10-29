@@ -39,8 +39,8 @@ func (s *app) taskNavigationFor() *taskNavigationState {
 			home = filepath.Clean(absolute)
 		}
 	}
-	if s.taskNavigation != nil && s.taskNavigation.home == home {
-		return s.taskNavigation
+	if s.taskUnit.state.taskNavigation != nil && s.taskUnit.state.taskNavigation.home == home {
+		return s.taskUnit.state.taskNavigation
 	}
 	state := &taskNavigationState{home: home}
 	if home != "" {
@@ -52,7 +52,7 @@ func (s *app) taskNavigationFor() *taskNavigationState {
 			state.value = value
 		}
 	}
-	s.taskNavigation = state
+	s.taskUnit.state.taskNavigation = state
 	return state
 }
 
@@ -80,7 +80,7 @@ func (s *app) setTaskPinned(t task, pinned bool) {
 
 // Opening a row selects the task without changing persisted navigation data.
 func (s *app) openTaskIndex(index int) {
-	if index < 0 || index >= len(s.tasks) {
+	if index < 0 || index >= len(s.taskUnit.state.tasks) {
 		return
 	}
 	if !s.selectTaskIndex(index) {
@@ -137,7 +137,7 @@ func (s *app) taskMatchesSearch(t task, terms []string) bool {
 // Return filtered task indices without mutating snapshot order or selection.
 // Pinned tasks precede the remaining rows in the snapshot's stable order.
 func (s *app) taskIndexRows(archived bool) []int {
-	return s.taskIndexRowsFor(s.tasks, archived)
+	return s.taskIndexRowsFor(s.taskUnit.state.tasks, archived)
 }
 
 func (s *app) taskIndexRowsFor(tasks []task, archived bool) []int {

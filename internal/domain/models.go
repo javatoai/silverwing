@@ -1,5 +1,7 @@
 package domain
 
+import "silverwing-go/internal/productprofile"
+
 // Persisted schema versions are deliberately independent of the product version.
 const (
 	CurrentProductVersion            = "0.0.7"
@@ -232,11 +234,11 @@ func DefaultCommandProxyTargets(endpoint *string) []CommandProxyTarget {
 
 func DefaultAppConfig() AppConfig {
 	endpoint := DefaultCommandProxyURL
-	return AppConfig{Edition: "qa", SchemaVersion: CurrentAppConfigSchemaVersion, Groups: []GroupConfig{{ID: DefaultGroupID, Name: DefaultGroupName}}, Theme: ThemeSystem, ToolVisibility: ToolVisibilitySettings{JSON: true, DateTime: true, TextDiff: true, KillPort: true}, SidebarVisibility: SidebarVisibilitySettings{Requirements: true, Tools: true}, DefaultWorkspaceToolIDs: []string{"codex"}, MeegleProjects: []MeegleProjectConfig{}, CommandProxyURL: &endpoint, CommandProxyTargets: DefaultCommandProxyTargets(&endpoint), CodexPluginMarketplaceSources: []CodexPluginMarketplaceSource{}, SkillSources: []SkillSource{}, AIRequirementNamingEnabled: true, AIRequirementNamingPrewarmEnabled: true, AIRequirementNamingModel: DefaultAIRequirementNamingModel}
+	return AppConfig{Edition: productprofile.Edition, SchemaVersion: CurrentAppConfigSchemaVersion, Groups: []GroupConfig{{ID: DefaultGroupID, Name: DefaultGroupName}}, Theme: ThemeSystem, ToolVisibility: ToolVisibilitySettings{JSON: true, DateTime: true, TextDiff: true, KillPort: true}, SidebarVisibility: SidebarVisibilitySettings{Requirements: true, Tools: true}, DefaultWorkspaceToolIDs: []string{"codex"}, MeegleProjects: []MeegleProjectConfig{}, CommandProxyURL: &endpoint, CommandProxyTargets: DefaultCommandProxyTargets(&endpoint), CodexPluginMarketplaceSources: []CodexPluginMarketplaceSource{}, SkillSources: []SkillSource{}, AIRequirementNamingEnabled: true, AIRequirementNamingPrewarmEnabled: true, AIRequirementNamingModel: DefaultAIRequirementNamingModel}
 }
 
 const DefaultAIRequirementNamingModel = "gpt-6-luna"
 
 func DefaultTaskManifest() TaskManifest {
-	return TaskManifest{Edition: "qa", SchemaVersion: CurrentTaskManifestSchemaVersion, RequirementLink: "", RequirementMaterials: RequirementMaterialsDirectory{Status: MaterialsNotRequested}, LifecycleStatus: TaskActive, GroupID: DefaultGroupID, WorkspaceToolLaunches: []WorkspaceToolLaunch{}, AgentDocumentLayout: AgentDocumentReferencedV2}
+	return TaskManifest{Edition: productprofile.Edition, SchemaVersion: CurrentTaskManifestSchemaVersion, RequirementLink: "", RequirementMaterials: RequirementMaterialsDirectory{Status: MaterialsNotRequested}, LifecycleStatus: TaskActive, GroupID: DefaultGroupID, WorkspaceToolLaunches: []WorkspaceToolLaunch{}, AgentDocumentLayout: AgentDocumentReferencedV2}
 }

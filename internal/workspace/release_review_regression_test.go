@@ -14,6 +14,7 @@ import (
 	"silverwing-go/internal/documents"
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/process"
+	"silverwing-go/internal/requirementprovider"
 	"silverwing-go/internal/storage"
 )
 
@@ -247,7 +248,7 @@ func TestReleaseReviewMaterialsUseCapturedYearInitiallyAndOnRetry(t *testing.T) 
 			materialsRoot, subdirectory := t.TempDir(), "materials"
 			config.RequirementMaterialsRoot, config.RequirementMaterialsSubdirectory = &materialsRoot, &subdirectory
 			runner := &releaseReviewOfflinePreparationRunner{}
-			preparation := documents.NewPreparationService(paths, runner)
+			preparation := documents.NewPreparationService(paths, requirementprovider.NewMeegle(runner))
 			var plans []documents.DocumentationPlan
 			service.RequirementMaterials = func(ctx context.Context, cfg domain.AppConfig, link, folder string) (domain.RequirementMaterialsDirectory, *string, error) {
 				plan, err := preparation.Plan(ctx, cfg, link, "年度资料需求", folder)

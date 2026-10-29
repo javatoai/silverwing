@@ -38,7 +38,7 @@ func (s *app) taskIndex(c *ui.Context, p palette) {
 		b := ui.ButtonBase(c.Key("archive-link")).Height(48).Row().Gap(6).Center().Label("查看归档")
 		b.Children(func() {
 			icon(c, "archive", 18, p.blue)
-			text := fmt.Sprintf("查看归档 (%d)", len(s.activeTasks(true)))
+			text := fmt.Sprintf("查看归档 (%d)", len(s.taskUnit.activeTasks(true)))
 			if archived {
 				text = "返回研发任务"
 			}
@@ -70,7 +70,7 @@ func (s *app) taskIndexToolbar(c *ui.Context, p palette, state *taskIndexBrowsin
 				if len(state.visibleRows) > 0 {
 					index := state.visibleRows[0]
 					s.openTaskIndex(index)
-					if handle := state.rowHandles[taskNavigationKey(s.tasks[index])]; handle != nil {
+					if handle := state.rowHandles[taskNavigationKey(s.taskUnit.state.tasks[index])]; handle != nil {
 						handle.Focus(c)
 					}
 				}
@@ -105,7 +105,7 @@ func (s *app) prepareTaskIndexHandles(state *taskIndexBrowsingState, archived bo
 		state.rowHandles = make(map[string]*ui.Handle)
 	}
 	valid := make(map[string]bool)
-	for _, t := range s.tasks {
+	for _, t := range s.taskUnit.state.tasks {
 		if t.archived != archived {
 			continue
 		}
@@ -127,7 +127,7 @@ func (s *app) focusTaskIndexRow(c *ui.Context, state *taskIndexBrowsingState, po
 	if position < 0 || position >= len(state.visibleRows) {
 		return
 	}
-	key := taskNavigationKey(s.tasks[state.visibleRows[position]])
+	key := taskNavigationKey(s.taskUnit.state.tasks[state.visibleRows[position]])
 	if handle := state.rowHandles[key]; handle != nil {
 		handle.Focus(c)
 		state.revealTaskKey = key
@@ -136,9 +136,9 @@ func (s *app) focusTaskIndexRow(c *ui.Context, state *taskIndexBrowsingState, po
 }
 
 func (s *app) taskIndexTask(c *ui.Context, p palette, state *taskIndexBrowsingState, i int) {
-	t := s.tasks[i]
+	t := s.taskUnit.state.tasks[i]
 	key := taskNavigationKey(t)
-	selected := s.selected == i
+	selected := s.taskUnit.state.selected == i
 	row := ui.Row(c.Key("task-row-" + key)).FillWidth().MinWidth(0).Height(40).Radius(8).AlignItems(ui.Center)
 	if selected {
 		row.Background(p.selected)
@@ -226,50 +226,20 @@ func (s *app) taskRequirementStatus(t task) string {
 }
 
 func (s *app) selectTaskIndex(i int) bool {
-	if i != s.selected {
-		if err := s.captureMaterialTextInput(); err != nil {
-			s.lastError = err.Error()
-			return false
-		}
-	}
-	if i != s.selected {
-		if err := s.captureMarkdownEditorInput(s.markdown); err != nil {
-			s.lastError = err.Error()
-			return false
-		}
-	}
-	if i == s.selected && i >= 0 && i < len(s.tasks) {
+	transition := newTaskTransition(s.taskUnit.currentTask(), taskLifecycleSelectionAt(s.taskUnit.state.tasks, i), taskTransitionUser, i != s.taskUnit.state.selected)
+	if !transition.indexChanged && i >= 0 && i < len(s.taskUnit.state.tasks) {
 		s.markReadingInteraction()
-		s.taskListFocused = false
-
+		s.taskUnit.selectIndex(i)
+		s.refreshWorkspaceTaskSelection(true)
 		return true
 	}
-
-	if i != s.selected {
-
+	if err := s.prepareFeatureTaskSelection(transition); err != nil {
+		s.lastError = err.Error()
+		return false
 	}
-
-	s.markReadingInteraction()
-	s.beforeReadingTaskSelection()
-	s.deactivateInstructionEditor()
-
-	s.cancelMaterialsSearch()
-	s.dismissMarkdownBitmapViewer()
-	s.selected = i
-	s.taskListFocused = false
-	s.closeNativeMedia()
-	s.closeMarkdownEditor()
-	s.documents = nil
-	s.documentsLoaded = false
-	s.documentsRequested = false
-	s.documentTabs = nil
-	s.documentReadPending = false
-	s.documentDrafts = make(map[string]string)
-	s.documentDirtyMap = make(map[string]bool)
-	s.documentPath, s.documentContent = "", ""
-	s.documentHash = ""
-	s.documentDirty, s.documentEditing = false, false
+	s.taskUnit.selectIndex(i)
+	s.materialsUnit.resetTaskPresentation(transition, s)
 	s.afterReadingTaskSelection()
-
+	s.refreshWorkspaceTaskSelection(true)
 	return true
 }

@@ -9,6 +9,8 @@ import re
 import subprocess
 import sys
 
+from product_profile import read_profile
+
 
 def gh(*args):
     return subprocess.run(
@@ -29,18 +31,21 @@ def publish(asset_directory):
     match = re.search(r'CurrentProductVersion\s*=\s*"(\d+\.\d+\.\d+)"', source)
     require(match, 'Could not read CurrentProductVersion.')
     version = match.group(1)
-    tag = 'qa-v' + version
-    require(repo == 'javatoai/silverwing', 'Release repository does not match Silverwing.')
+    profile = read_profile(Path.cwd())
+    executable = profile['ExecutableName']
+    product_name = profile['Name']
+    tag = profile['ReleaseTagPrefix'] + version
+    require(repo == profile['ReleaseRepository'], 'Release repository does not match Silverwing.')
     require(os.environ['GITHUB_EVENT_NAME'] == 'push' and ref == 'refs/tags/' + tag,
             'Only a pushed tag matching CurrentProductVersion can publish a release.')
     require(re.fullmatch(r'[0-9a-f]{40}', sha), 'Invalid source commit.')
 
     directory = Path(asset_directory).resolve()
     names = sorted([
-        f'silverwing-qa-{version}-windows-x64-portable.zip',
-        f'silverwing-qa-{version}-windows-x64-setup.exe',
-        f'silverwing-qa-{version}-windows-x64.msi',
-        f'silverwing-qa-{version}-macos-arm64.dmg',
+        f'{executable}-{version}-windows-x64-portable.zip',
+        f'{executable}-{version}-windows-x64-setup.exe',
+        f'{executable}-{version}-windows-x64.msi',
+        f'{executable}-{version}-macos-arm64.dmg',
     ])
     require(sorted(path.name for path in directory.iterdir()) == names,
             'Expected exactly the four versioned Windows/macOS release packages.')
@@ -66,7 +71,7 @@ def publish(asset_directory):
     checksums.write_text(''.join(f'{expected[name][1]}  {name}\n' for name in names), encoding='ascii')
     expected[checksums.name] = (checksums.stat().st_size, hashlib.sha256(checksums.read_bytes()).hexdigest())
     notes = (
-        f'silverwing-qa {tag} · native Go / MyGO\n\n'
+        f'{product_name} {tag} · native Go / MyGO\n\n'
         '- Windows x64: portable ZIP, Setup EXE, MSI.\n'
         '- macOS Apple silicon (arm64): DMG, ad-hoc signed; not notarized.\n'
         '- SHA256SUMS.txt covers the four packages. No account or user configuration is bundled.\n\n'
@@ -74,7 +79,7 @@ def publish(asset_directory):
     assets = [str(directory / name) for name in sorted(expected)]
     payload = directory.parent / 'release-draft.json'
     payload.write_text(json.dumps({'tag_name': tag, 'target_commitish': sha,
-                                  'name': f'silverwing-qa {tag}', 'body': notes,
+                                  'name': f'{product_name} {tag}', 'body': notes,
                                   'draft': True, 'prerelease': False,
                                   'generate_release_notes': True}), encoding='utf-8')
     created = json.loads(gh('api', '--method', 'POST', endpoint, '--input', str(payload)))
@@ -100,7 +105,7 @@ def publish(asset_directory):
     require(json.loads(gh('api', f'repos/{repo}/commits/{tag}'))['sha'] == sha,
             'Remote tag changed during upload; leaving the release as a draft.')
     publish_payload = directory.parent / 'release-publish.json'
-    publish_payload.write_text(json.dumps({'draft': False, 'make_latest': 'false'}), encoding='utf-8')
+    publish_payload.write_text(json.dumps({'draft': False, 'make_latest': str(profile['ReleaseMakeLatest']).lower()}), encoding='utf-8')
     gh('api', '--method', 'PATCH', endpoint, '--input', str(publish_payload))
     result = json.loads(gh('api', endpoint))
     require(result['id'] == release_id and not result['draft'] and result['tag_name'] == tag,

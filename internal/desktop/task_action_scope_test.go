@@ -13,7 +13,7 @@ func TestTaskMaterialsOpenScopesPreserveSelectionAndRejectStaleResults(t *testin
 	for _, change := range []string{"selection", "materials", "created", "removed", "home", "root", "page", "status"} {
 		t.Run(change, func(t *testing.T) {
 			s, _ := taskMenuFixture(t)
-			target := s.tasks[1]
+			target := s.taskUnit.state.tasks[1]
 			scope, _ := s.taskMenuScopeFor(target)
 			action := application.Action{Kind: "system.open", TaskID: target.id, Path: target.materialsPath,
 				Payload: map[string]any{"desktopSystemOpenDirectory": true}}
@@ -29,21 +29,21 @@ func TestTaskMaterialsOpenScopesPreserveSelectionAndRejectStaleResults(t *testin
 			scope.taskID = "changed-local-copy"
 			switch change {
 			case "selection":
-				s.selected, s.tab = 2, 3
+				s.taskUnit.state.selected, s.tab = 2, 3
 			case "materials":
-				s.tasks[1].materialsPath += "-changed"
+				s.taskUnit.state.tasks[1].materialsPath += "-changed"
 			case "created":
-				s.tasks[1].createdAt += "-replacement"
+				s.taskUnit.state.tasks[1].createdAt += "-replacement"
 			case "removed":
-				s.tasks = append(s.tasks[:1], s.tasks[2:]...)
+				s.taskUnit.state.tasks = append(s.taskUnit.state.tasks[:1], s.taskUnit.state.tasks[2:]...)
 			case "home":
 				s.snapshot.Home += "-changed"
 			case "root":
-				s.configJSON = `{"taskRoot":"D:/changed"}`
+				s.settingsUnit.state.configJSON = `{"taskRoot":"D:/changed"}`
 			case "page":
 				s.page = "settings"
 			case "status":
-				s.tasks[1].materialsStatus = "FAILED"
+				s.taskUnit.state.tasks[1].materialsStatus = "FAILED"
 			}
 			valid := change == "selection"
 			if s.systemOpenJobRelevant(request) != valid {
@@ -60,7 +60,7 @@ func TestTaskMaterialsOpenScopesPreserveSelectionAndRejectStaleResults(t *testin
 func TestTaskMaterialsScopeCannotOpenOtherResources(t *testing.T) {
 	for _, kind := range []string{"system.terminal", "system.ide", "document.open", "system.open"} {
 		s, _ := taskMenuFixture(t)
-		target := s.tasks[1]
+		target := s.taskUnit.state.tasks[1]
 		scope, _ := s.taskMenuScopeFor(target)
 		action := application.Action{Kind: kind, TaskID: target.id, Path: target.path,
 			Payload: map[string]any{"desktopSystemOpenDirectory": true}}
@@ -75,13 +75,13 @@ func TestTaskContextActionsRecheckAfterBackendQueueWait(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			s, backend := taskMenuFixture(t)
 			if kind == "task.restore" {
-				s.tasks[1].archived = true
+				s.taskUnit.state.tasks[1].archived = true
 				s.page = "archive"
 			}
-			target := s.tasks[1]
+			target := s.taskUnit.state.tasks[1]
 			scope, _ := s.taskMenuScopeFor(target)
 			updates := make(chan func(), 1)
-			s.taskContextUpdate = func(update func()) { updates <- update }
+			s.taskUnit.state.taskContextUpdate = func(update func()) { updates <- update }
 			s.backendGate <- struct{}{}
 			action := application.Action{Kind: kind, TaskID: target.id}
 			switch kind {
@@ -101,7 +101,7 @@ func TestTaskContextActionsRecheckAfterBackendQueueWait(t *testing.T) {
 			}
 			// The replacement is visible to the UI projection after the backend
 			// slot opens but before its queued scope check runs.
-			s.tasks[1].createdAt += "-replacement"
+			s.taskUnit.state.tasks[1].createdAt += "-replacement"
 			update()
 			select {
 			case got := <-backend.calls:
@@ -119,8 +119,8 @@ func TestTaskContextActionsRecheckAfterBackendQueueWait(t *testing.T) {
 }
 
 func taskMenuSnapshotForTest(s *app) application.Snapshot {
-	snapshot := application.Snapshot{Home: s.snapshot.Home, ConfigJSON: s.configJSON, Groups: s.snapshot.Groups}
-	for _, item := range s.tasks {
+	snapshot := application.Snapshot{Home: s.snapshot.Home, ConfigJSON: s.settingsUnit.state.configJSON, Groups: s.snapshot.Groups}
+	for _, item := range s.taskUnit.state.tasks {
 		snapshot.Tasks = append(snapshot.Tasks, application.Task{
 			ID: item.id, Title: item.title, Path: item.path, CreatedAt: item.createdAt, Branch: item.branch,
 			MaterialsPath: item.materialsPath, RequirementURL: item.requirementURL, RequirementID: item.requirementID,
@@ -136,21 +136,21 @@ func TestLifecycleResultCanReconcileOnlyItsOwnTransition(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			s, _ := taskMenuFixture(t)
 			if kind == "task.restore" {
-				s.tasks[1].archived = true
+				s.taskUnit.state.tasks[1].archived = true
 				s.page = "archive"
 			}
-			target := s.tasks[1]
+			target := s.taskUnit.state.tasks[1]
 			scope, valid := s.taskMenuScopeFor(target)
 			if !valid {
 				t.Fatal("could not capture lifecycle scope")
 			}
 			action := application.Action{Kind: kind, TaskID: target.id, Path: target.path}
 			if kind == "task.archive" {
-				s.tasks[1].archived = true
+				s.taskUnit.state.tasks[1].archived = true
 			} else if kind == "task.restore" {
-				s.tasks[1].archived = false
+				s.taskUnit.state.tasks[1].archived = false
 			} else {
-				s.tasks = append(s.tasks[:1], s.tasks[2:]...)
+				s.taskUnit.state.tasks = append(s.taskUnit.state.tasks[:1], s.taskUnit.state.tasks[2:]...)
 			}
 			snapshot := taskMenuSnapshotForTest(s)
 			if !s.taskLifecycleResultBelongsToContext(action, scope, snapshot) {
@@ -178,7 +178,7 @@ func TestLifecycleResultCanReconcileOnlyItsOwnTransition(t *testing.T) {
 
 func TestScopedMaterialsOpenRechecksBeforeBackendDispatch(t *testing.T) {
 	s, backend := taskMenuFixture(t)
-	target := s.tasks[1]
+	target := s.taskUnit.state.tasks[1]
 	scope, _ := s.taskMenuScopeFor(target)
 	action := application.Action{Kind: "system.open", TaskID: target.id, Path: target.materialsPath,
 		Payload: map[string]any{"desktopSystemOpenDirectory": true}}
@@ -186,7 +186,7 @@ func TestScopedMaterialsOpenRechecksBeforeBackendDispatch(t *testing.T) {
 	if err != nil || request == nil {
 		t.Fatalf("could not create scoped materials job: %v", err)
 	}
-	s.tasks[1].createdAt += "-replacement"
+	s.taskUnit.state.tasks[1].createdAt += "-replacement"
 	if _, err := executeSystemOpenJob(request); !errors.Is(err, errTaskContextChanged) {
 		t.Fatalf("stale materials directory reached backend: %v", err)
 	}
@@ -202,32 +202,32 @@ func TestContextBatchScopeAndWorkspaceSnapshotProtection(t *testing.T) {
 	for _, change := range []string{"selection", "home", "root", "config", "created", "path", "removed", "archived", "workspace", "base-ref"} {
 		t.Run(change, func(t *testing.T) {
 			s, _ := taskMenuFixture(t)
-			s.openWorkspaceMergeBatch(s.tasks[1])
-			state := s.workspaceMergeBatch
+			s.openWorkspaceMergeBatch(s.taskUnit.state.tasks[1])
+			state := s.workspaceUnit.state.workspaceMergeBatch
 			if state == nil || !s.workspaceMergeBatchStateCurrent(state) {
 				t.Fatal("non-current task did not open a valid batch")
 			}
 			switch change {
 			case "selection":
-				s.selected, s.tab = 2, 3
+				s.taskUnit.state.selected, s.tab = 2, 3
 			case "home":
 				s.snapshot.Home += "-changed"
 			case "root":
-				s.configJSON = `{"taskRoot":"D:/changed"}`
+				s.settingsUnit.state.configJSON = `{"taskRoot":"D:/changed"}`
 			case "config":
-				s.configJSON = `{}`
+				s.settingsUnit.state.configJSON = `{}`
 			case "created":
-				s.tasks[1].createdAt += "-replacement"
+				s.taskUnit.state.tasks[1].createdAt += "-replacement"
 			case "path":
-				s.tasks[1].path += "-changed"
+				s.taskUnit.state.tasks[1].path += "-changed"
 			case "removed":
-				s.tasks = append(s.tasks[:1], s.tasks[2:]...)
+				s.taskUnit.state.tasks = append(s.taskUnit.state.tasks[:1], s.taskUnit.state.tasks[2:]...)
 			case "archived":
-				s.tasks[1].archived = true
+				s.taskUnit.state.tasks[1].archived = true
 			case "workspace":
-				s.tasks[1].workspaces[0].Record.Branch = "feature/changed"
+				s.taskUnit.state.tasks[1].workspaces[0].Record.Branch = "feature/changed"
 			case "base-ref":
-				*s.tasks[1].workspaces[0].Record.BaseRef = "origin/changed"
+				*s.taskUnit.state.tasks[1].workspaces[0].Record.BaseRef = "origin/changed"
 			}
 			valid := change == "selection"
 			if s.workspaceMergeBatchStateCurrent(state) != valid {

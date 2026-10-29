@@ -7,17 +7,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
-	"time"
 
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/domain"
-	"silverwing-go/internal/editor"
 
 	"github.com/egoist/mygo"
 )
 
 type task struct {
+	materials                                   application.MaterialsPermissions
 	id, title, project, status, updated, branch string
 	createdAt                                   string
 	requirementURL, requirementTitle, groupID   string
@@ -44,222 +42,39 @@ type actionForm struct {
 	mode                                           string
 	text                                           string
 	fields                                         []formField
+	taskScope                                      *taskMenuScope
 }
 
 type app struct {
-	commentComposers           *requirementCommentComposers
-	materialsGit               *materialsGitDesktopState
-	materialsGitBranches       *materialsGitBranchesState
-	materialsGitCapture        bool
-	win                        *mygo.Window
-	backend                    application.Backend
-	systemOpenJobs             *systemOpenJobs
-	desktopPreferences         *desktopPreferencesState
-	readingSession             *desktopReadingSession
-	overflowMenus              *overflowMenuState
-	workspaceReviewFocusReturn *workspaceReviewFocusReturn
-
-	page                              string
-	taskNavigation                    *taskNavigationState
-	taskContextScope                  *taskMenuScope
-	taskOpenTools                     *taskOpenToolsState
-	taskContextUpdate                 func(func()) // Headless scheduler seam; production captures Window.Update.
-	taskIndexes                       map[bool]*taskIndexBrowsingState
-	taskListFocused                   bool
-	dark                              bool
-	selected                          int
-	tab                               int
-	file                              int
-	source                            bool
-	json                              string
-	configJSON                        string
-	configReads                       desktopConfigReadCache
-	autoSync                          bool
-	notifications                     bool
-	tasks                             []task
-	listWidth                         float32
-	notes                             [3]string
-	notePaths                         [3]string
-	noteHashes                        [3]string
-	noteTab                           int
-	noteEditing                       bool
-	navigationCollapsed               bool
-	settingsTab                       string
-	settingsPage                      string
-	settingsLoaded                    string
-	settingsOutput                    string
-	confirmationDialog                *confirmationDialogState
-	settingsConfigOpen                bool
-	settingsConfigText                string
-	settingsConfigPath                string
-	settingsBackups                   []map[string]any
-	settingsConfigRecovery            *settingsConfigRecoveryState
-	settingsTemplates                 []map[string]any
-	settingsTemplatesLoaded           bool
-	settingsMarketplaces              []map[string]any
-	settingsAgentScope                string
-	settingsAgentGroupID              string
-	settingsAgentContent              string
-	settingsAgentPath                 string
-	settingsAgentLoaded               bool
-	settingsAgentContext              string
-	settingsSkillsCatalog             string
-	settingsExtensions                []map[string]any
-	settingsMCPServers                []map[string]any
-	settingsMCPPath                   string
-	settingsMCPWarnings               []string
-	settingsMCPTaskScope              bool
-	settingsSkillSources              []map[string]any
-	settingsLocalSkills               []map[string]any
-	settingsSkillRoot                 string
-	settingsSkillPreviewOpen          bool
-	settingsSkillPreviewName          string
-	settingsSkillPreviewText          string
-	settingsSkillFiles                []map[string]any
-	settingsSkillFilesDirectory       string
-	settingsSkillFilesTruncated       bool
-	settingsBranchChoices             []string
-	settingsExtensionRequests         *settingsExtensionRequestState
-	settingsLogEntries                []map[string]any
-	settingsMCPConnections            map[string]any
-	settingsMCPConnectionError        string
-	settingsGitEnvironment            map[string]any
-	settingsDevelopmentToolsSnapshot  map[string]any
-	startupDevelopmentTools           *startupDevelopmentToolsState
-	settingsCLIStatus                 map[string]map[string]any
-	cliJobs                           *cliJobState
-	codexAI                           *codexAIState
-	meegleProjectCatalog              *meegleProjectCatalogState
-	requirementReaders                map[string]*requirementReaderState
-	requirementReaderGeneration       uint64
-	requirementContentJobs            *requirementContentJobState
-	requirementRefreshJobs            *requirementRefreshState
-	materialsFileManagement           *materialsFileManagementState
-	materialsFileJobs                 *materialsFileJobState
-	materialsLiveRefreshLifecycle     *materialsLiveRefreshLifecycle
-	skillsBrowser                     *skillsBrowserState
-	settingsCLISessions               map[string]map[string]any
-	settingsAuthPollTimers            map[string]*time.Timer
-	settingsTerminalResolution        map[string]any
-	settingsGroupID                   string
-	settingsPickerBusy                bool
-	settingsBoolInputs                map[string]*bool
-	migrationPlan                     any
-	migrationPreview                  string
-	migrationReady                    bool
-	taskRootTargetFocused             bool
-	toolTab                           string
-	tools                             *toolPageState
-	toolJobs                          *developerToolJobsState
-	repositoryTab                     string
-	workspaceGit                      *workspaceGitState
-	workspaceRemoval                  *workspaceRemovalState
-	workspaceRepair                   *workspaceRepairState
-	workspaceHistory                  *workspaceHistoryState
-	workspaceReviewSessions           map[string]*workspaceReviewSession
-	workspaceHistoryJobs              *workspaceHistoryJobState
-	workspaceMerge                    *workspaceMergeUIState
-	workspaceMergeBatch               *workspaceMergeBatchUIState
-	workspaceCommand                  *workspaceCommandUIState
-	workspaceCommandJobs              *workspaceCommandJobsState
-	requirementListJobs               *requirementListJobState
-	requirementListProgress           *requirementListProgressState
-	requirementIdentityJobs           *requirementIdentityJobState
-	requirementNaming                 *requirementNamingPreparationState
-	requirementDocumentPreparation    *requirementDocumentPreparationState
-	taskBranchInfo                    *taskBranchInfoState
-	tagGenbuAutoProbe                 *tagGenbuAutoProbeState
-	tagJobs                           *tagDesktopJobs
-	production                        *productionUIState
-	tagHistory                        *tagHistoryViewState
-	tagBuild                          *tagBuildViewState
-	tagTarget                         *tagTargetViewState
-	serviceGroupID                    string
-	serviceReorderMode                bool
-	repositoryBatchOpen               bool
-	repositoryBatchGroupID            string
-	repositoryBatchPaths              []string
-	repositoryBatchPickerBusy         bool
-	repositoryBatchGeneration         uint64
-	repositoryBatchResultOpen         bool
-	repositoryBatchResult             application.RepositoryBatchResult
-	serviceEditor                     *serviceEditorState
-	serviceRepositoryChoices          *serviceRepositoryChoiceJobs
-	pendingTaskRootMigration          *markdownTaskRootMigrationLease
-	selectedRequirement               int
-	selectedRequirementKey            string
-	requirementsRequested             bool
-	requirementsLoading               bool
-	requirementsLoaded                bool
-	requirementsFetchedAt             int64
-	requirementsLoadError             string
-	requirementsFailures              []string
-	requirementsCompletedQueries      int
-	requirementsSprints               []requirementSprint
-	requirementsSelectedSprintKey     string
-	requirementsFocusedDetail         bool
-	taskRequirementMetadata           map[string]taskRequirementMetadataState
-	taskRequirementMetadataCancels    map[string]context.CancelFunc
-	taskRequirementMetadataGeneration map[string]uint64
-	inputs                            map[string]*string
-	toolEnabled                       [4]bool
-	requirementWidth                  float32
-
+	mermaidInitializer     *mermaidInitializer
+	taskUnit               taskController
+	materialsUnit          materialsController
+	requirementUnit        requirementController
+	settingsUnit           settingsController
+	toolsUnit              toolsController
+	workspaceUnit          workspaceController
+	releaseUnit            releaseController
+	win                    *mygo.Window
+	backend                application.Backend
+	systemOpenJobs         *systemOpenJobs
+	desktopPreferences     *desktopPreferencesState
+	readingSession         *desktopReadingSession
+	overflowMenus          *overflowMenuState
+	page                   string
+	dark                   bool
+	tab                    int
+	file                   int
+	source                 bool
+	listWidth              float32
+	navigationCollapsed    bool
+	confirmationDialog     *confirmationDialogState
+	inputs                 map[string]*string
 	snapshot               application.Snapshot
-	requirements           []application.Requirement
-	documents              []application.Document
-	documentContent        string
-	documentPath           string
-	documentLinkFragment   string
-	documentKind           string
-	documentReadOnly       bool
-	documentHash           string
-	documentReadPending    bool
-	documentDirty          bool
-	documentEditing        bool
-	documentTabs           []string
-	documentDrafts         map[string]string
-	documentDirtyMap       map[string]bool
-	markdownAutosave       *editor.Autosave
-	materialTextEditors    map[string]*materialTextEditorState
-	materialTextActive     *materialTextEditorState
-	documentClose          *documentCloseState
-	documentSaveMu         sync.Mutex
-	documentSaveRefs       map[string]documentSaveRef
 	backendGate            chan struct{}
-	markdown               *markdownEditorState
-	nativeMedia            *nativeMediaState
-	markdownBitmapViewer   *markdownBitmapViewerState
-	taskDeleteRiskJobs     *taskDeleteRiskJobState
-	documentSearch         string
-	documentFindOpen       bool
-	documentFind           *documentFindState
-	materialsPicker        *materialsPickerState
-	documentsCollapsed     bool
-	documentsRequested     bool
-	documentsLoaded        bool
-	importPreview          bool
-	importPath             string
-	selectedService        string
-	selectedModule         string
-	taskGroupID            string
-	taskServices           map[string]bool
-	taskModules            map[string]map[string]bool
-	taskCreation           *taskCreationState
-	taskCreationPreflights *taskCreationPreflightJobState
-	taskDeleteDialog       *taskDeleteDialogState
-	taskNotesUI            *taskNotesUIState
-	workspaceAppend        *taskAppendUIState
-	workspaceAddServiceID  string
-	workspaceAddModuleID   string
 	lastResult             string
-	taskCreationWarning    string
 	lastMessage            string
 	lastError              string
 	operationNotifications operationNotificationState
-	taskRootChange         *taskRootChangeRequest
-	pageLocalRead          *pageLocalReadState
-	settingsAutosave       *settingsAutosaveState
 	loading                bool
 	busy                   bool
 	operation              string
@@ -277,41 +92,58 @@ var tabs = []string{"任务详情", "任务资料", "需求详情", "需求说�
 
 func newApp(backend application.Backend, opts Options) *app {
 	s := &app{
-		backend: backend, page: opts.Page, dark: opts.Dark, tab: opts.Tab,
-		desktopPreferences: &desktopPreferencesState{enabled: opts.CapturePath == ""},
-		listWidth:          240, requirementWidth: 320, settingsTab: "基础", settingsPage: "basic", settingsAgentScope: "global", toolTab: "JSON",
-		inputs: make(map[string]*string), toolEnabled: [4]bool{true, true, true, true},
-		settingsBoolInputs: make(map[string]*bool),
-		documentDrafts:     make(map[string]string), documentDirtyMap: make(map[string]bool),
-		documentSaveRefs: make(map[string]documentSaveRef), backendGate: make(chan struct{}, 1),
-		taskServices: make(map[string]bool), taskModules: make(map[string]map[string]bool),
-		taskRequirementMetadata: make(map[string]taskRequirementMetadataState), taskRequirementMetadataCancels: make(map[string]context.CancelFunc), taskRequirementMetadataGeneration: make(map[string]uint64),
+		taskUnit: taskController{state: taskState{taskServices: make(map[string]bool),
+			taskModules: make(map[string]map[string]bool)}},
+		materialsUnit: materialsController{state: materialsState{documentDrafts: make(map[string]string),
+			documentDirtyMap: make(map[string]bool),
+			documentSaveRefs: make(map[string]documentSaveRef)}},
+		requirementUnit: requirementController{state: requirementState{requirementWidth: 320,
+			taskRequirementMetadata:           make(map[string]taskRequirementMetadataState),
+			taskRequirementMetadataCancels:    make(map[string]context.CancelFunc),
+			taskRequirementMetadataGeneration: make(map[string]uint64)}},
+		settingsUnit: settingsController{state: settingsState{settingsTab: "基础",
+			settingsPage:       "basic",
+			settingsAgentScope: "global",
+			settingsBoolInputs: make(map[string]*bool)}},
+		toolsUnit: toolsController{state: toolsState{toolTab: "JSON",
+			toolEnabled: [4]bool{true, true, true, true},
+			json:        ""}},
+		backend:             backend,
+		page:                opts.Page,
+		dark:                opts.Dark,
+		tab:                 opts.Tab,
+		desktopPreferences:  &desktopPreferencesState{enabled: opts.CapturePath == ""},
+		listWidth:           240,
+		inputs:              make(map[string]*string),
+		backendGate:         make(chan struct{}, 1),
 		navigationCollapsed: true,
-		json:                "", loading: true,
+		loading:             true,
 	}
 	s.initMarkdownAutosave()
 	return s
 }
 
 func (s *app) applySnapshot(snapshot application.Snapshot) {
-	previousTasks, previousConfigJSON := s.tasks, s.configJSON
-	previousTask := s.currentTask()
+	previousTasks, previousConfigJSON := s.taskUnit.state.tasks, s.settingsUnit.state.configJSON
+	previousTask := s.taskUnit.currentTask()
 	s.invalidateCLIConfiguration(snapshot)
 	if s.desktopPreferences != nil && s.desktopPreferences.enabled {
 		s.restoreDesktopPreferences(snapshot.Home)
 	} else {
 		s.loadNavigationPreference(snapshot.Home)
 	}
-	nextTasks := projectTasks(snapshot)
+	catalog := newDesktopServiceCatalog(snapshot)
+	nextTasks := projectTasksWithCatalog(snapshot, catalog)
 	nextIndex := s.taskLifecycleSnapshotIndex(nextTasks)
 	selectionChanged := s.prepareTaskLifecycleSelection(previousTask, taskLifecycleSelectionAt(nextTasks, nextIndex))
 	s.snapshot = snapshot
-	s.tasks, s.selected = nextTasks, nextIndex
+	s.workspaceUnit.publishServiceCatalog(catalog)
+	s.taskUnit.replaceTasks(nextTasks, nextIndex)
 	if snapshot.Error != "" {
 		s.lastError = snapshot.Error
 	}
-	s.syncSettingsConfigInputs(s.configJSON, snapshot.ConfigJSON)
-	s.configJSON = snapshot.ConfigJSON
+	s.syncSettingsConfigInputs(s.settingsUnit.state.configJSON, snapshot.ConfigJSON)
+	s.settingsUnit.state.configJSON = snapshot.ConfigJSON
 	refreshWorkspaceGit := s.reconcileWorkspaceGitDisplayCache()
 	s.observeServiceRepositoryChoiceScope()
 	s.reconcileTaskRequirementIdentities(previousTasks, previousConfigJSON)
@@ -324,7 +156,7 @@ func (s *app) applySnapshot(snapshot application.Snapshot) {
 	s.restoreReadingSessionOnSnapshot()
 	s.observePendingTaskRootMigration(snapshot)
 	s.restoreActiveTagJobRecords()
-	if s.page == "production" && (s.production == nil || s.production.loadedHome != snapshot.Home || s.production.configScope != productionConfigScope(s.configJSON)) {
+	if s.page == "production" && (s.releaseUnit.state.production == nil || s.releaseUnit.state.production.loadedHome != snapshot.Home || s.releaseUnit.state.production.configScope != productionConfigScope(s.settingsUnit.state.configJSON)) {
 		s.enterProductionPage()
 	}
 }
@@ -391,14 +223,15 @@ func (s *app) saveNavigationPreference() error {
 }
 
 func projectTasks(snapshot application.Snapshot) []task {
-	services := make(map[string]string, len(snapshot.Services))
-	for _, service := range snapshot.Services {
-		services[service.ID] = service.Name
-	}
+	return projectTasksWithCatalog(snapshot, newDesktopServiceCatalog(snapshot))
+}
+
+func projectTasksWithCatalog(snapshot application.Snapshot, catalog *desktopServiceCatalog) []task {
 	projected := make([]task, 0, len(snapshot.Tasks))
 	for _, source := range snapshot.Tasks {
 		v := task{
-			id: source.ID, title: source.Title, project: source.Project, status: source.Status,
+			materials: source.Materials,
+			id:        source.ID, title: source.Title, project: source.Project, status: source.Status,
 			updated: source.Updated, createdAt: source.CreatedAt, branch: source.Branch, requirementURL: source.RequirementURL,
 			requirementTitle: source.RequirementTitle, groupID: source.GroupID, path: source.Path,
 			requirementID: source.RequirementID, materialsStatus: source.MaterialsStatus,
@@ -417,7 +250,9 @@ func projectTasks(snapshot application.Snapshot) []task {
 		for _, workspace := range source.Workspaces {
 			name := workspace.Name
 			if name == "" {
-				name = services[workspace.ServiceID]
+				if service, ok := catalog.service(source.GroupID, workspace.ServiceID); ok {
+					name = service.Name
+				}
 			}
 			if name == "" {
 				name = workspace.ServiceID
@@ -436,7 +271,10 @@ func projectTasks(snapshot application.Snapshot) []task {
 				v.serviceIDs = append(v.serviceIDs, serviceID)
 				seenServiceIDs[serviceID] = true
 			}
-			name := services[serviceID]
+			name := ""
+			if service, ok := catalog.service(source.GroupID, serviceID); ok {
+				name = service.Name
+			}
 			if name == "" {
 				name = serviceID
 			}
@@ -450,13 +288,6 @@ func projectTasks(snapshot application.Snapshot) []task {
 	return projected
 }
 
-func (s *app) currentTask() task {
-	if s.selected < 0 || s.selected >= len(s.tasks) {
-		return task{}
-	}
-	return s.tasks[s.selected]
-}
-
 func (t task) materialsReady() bool {
 	return strings.EqualFold(strings.TrimSpace(t.materialsStatus), "READY") && strings.TrimSpace(t.materialsPath) != ""
 }
@@ -465,18 +296,8 @@ func (t task) materialsFailed() bool {
 	return strings.EqualFold(strings.TrimSpace(t.materialsStatus), "FAILED")
 }
 
-func (s *app) activeTasks(archived bool) []int {
-	indices := make([]int, 0, len(s.tasks))
-	for index, item := range s.tasks {
-		if item.archived == archived {
-			indices = append(indices, index)
-		}
-	}
-	return indices
-}
-
 func (s *app) workspace(taskID, serviceName string) application.Workspace {
-	for _, item := range s.tasks {
+	for _, item := range s.taskUnit.state.tasks {
 		if item.id != taskID {
 			continue
 		}
@@ -540,11 +361,11 @@ func (s *app) openTaskCreateForm(title, requirementTitle, requirementURL string)
 	fields := []formField{{key: "title", label: "任务名称", value: requirementTitle}, {key: "branch", label: "分支名称"}, {key: "requirementURL", label: "需求链接", value: requirementURL}, {key: "taskNotes", label: "任务说明", multiline: true}}
 	s.openForm("task.create", title, "", "", "", "", fields...)
 	s.form.mode = "task-create"
-	s.taskGroupID = ""
-	s.taskServices = make(map[string]bool)
-	s.taskModules = make(map[string]map[string]bool)
+	s.taskUnit.state.taskGroupID = ""
+	s.taskUnit.state.taskServices = make(map[string]bool)
+	s.taskUnit.state.taskModules = make(map[string]map[string]bool)
 	if len(s.snapshot.Groups) > 0 {
-		s.taskGroupID = s.snapshot.Groups[0].ID
+		s.taskUnit.state.taskGroupID = s.snapshot.Groups[0].ID
 	}
 	s.initTaskCreation(title, requirementTitle, requirementURL)
 }
@@ -556,23 +377,15 @@ func (s *app) openWorkspaceAddForm(t task) {
 		formField{key: "strategy", label: "工作区策略", value: "STANDARD_WORKTREE"},
 		formField{key: "branch", label: "任务分支", value: branch})
 	s.form.mode = "workspace-add"
-	s.workspaceAddServiceID = ""
-	s.workspaceAddModuleID = ""
+	s.workspaceUnit.state.workspaceAddServiceID = ""
+	s.workspaceUnit.state.workspaceAddModuleID = ""
 }
 
 func decodeData[T any](data any) ([]T, error) {
 	if data == nil {
 		return nil, nil
 	}
-	raw, err := json.Marshal(data)
-	if err != nil {
-		return nil, err
-	}
-	var values []T
-	if err := json.Unmarshal(raw, &values); err != nil {
-		return nil, err
-	}
-	return values, nil
+	return application.ResultData[[]T](application.ActionResult{Data: data})
 }
 
 func normalizeActionPath(path string) string { return strings.TrimSpace(path) }

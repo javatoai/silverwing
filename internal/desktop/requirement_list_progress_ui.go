@@ -10,7 +10,7 @@ import (
 
 func (s *app) renderRequirementListProgressDialog(c *ui.Context, p palette) {
 	s.observeRequirementListProgress()
-	state := s.requirementListProgress
+	state := s.requirementUnit.state.requirementListProgress
 	if !s.requirementListProgressCurrent(state) || !state.open || s.page != "requirements" {
 		return
 	}
@@ -48,7 +48,7 @@ func (s *app) renderRequirementListProgressDialog(c *ui.Context, p palette) {
 				}
 			})
 			ui.Row(c).FillWidth().Gap(8).Wrap().Justify(ui.End).Shrink(0).Children(func() {
-				if !state.running && len(state.failures) > 0 && requirementProgressButton(c, p, "requirement-list-progress-retry", "重试", s.requirementsLoading).Clicked() {
+				if !state.running && len(state.failures) > 0 && requirementProgressButton(c, p, "requirement-list-progress-retry", "重试", s.requirementUnit.state.requirementsLoading).Clicked() {
 					s.retryRequirementListProgress(state)
 				}
 				text := "关闭"

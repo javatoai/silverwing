@@ -3,7 +3,7 @@ package domain
 import (
 	"strings"
 
-	"silverwing-go/internal/editor"
+	"silverwing-go/internal/markdowntext"
 )
 
 type CommentUpload struct {
@@ -60,7 +60,7 @@ func (d RequirementCommentDraft) Editing() bool { return d.Edit != nil && d.Edit
 func (d RequirementCommentDraft) ActiveImages() []CommentDraftAsset {
 	urls := map[string]bool{}
 	if d.Editing() {
-		for _, n := range editor.CommentImages(d.Content) {
+		for _, n := range markdowntext.CommentImages(d.Content) {
 			urls[n.Destination] = true
 		}
 	}
@@ -119,7 +119,7 @@ func (d RequirementCommentDraft) Markdown(image func(CommentDraftAsset) (string,
 				annotations[a.OriginalURL] = token
 			}
 		}
-		body = editor.RewriteCommentImages(body, replacements, annotations)
+		body = markdowntext.RewriteCommentImages(body, replacements, annotations)
 	}
 	if body := strings.TrimSpace(body); body != "" {
 		parts = append(parts, body)

@@ -15,8 +15,11 @@ func TestTagHistoryRefreshResponse(t *testing.T) {
 		}}
 	}
 	makeState := func() (*app, application.Action) {
-		s := &app{configJSON: `{"taskRoot":"D:\\fixture\\tasks"}`, inputs: map[string]*string{},
-			tasks: []task{{id: "a", path: `D:\fixture\tasks\a`, createdAt: "created-a"}}}
+		s := &app{
+			taskUnit:     taskController{state: taskState{tasks: []task{{id: "a", path: `D:\fixture\tasks\a`, createdAt: "created-a"}}}},
+			settingsUnit: settingsController{state: settingsState{configJSON: `{"taskRoot":"D:\\fixture\\tasks"}`}},
+			inputs:       map[string]*string{},
+		}
 		s.snapshot.Home = `D:\fixture\home`
 		s.snapshot.TagHistory = []application.TagRecord{{ID: "old-a", TaskID: "a"}, {ID: "kept-b", TaskID: "b"}}
 		state := s.ensureTagHistoryView()
@@ -38,7 +41,7 @@ func TestTagHistoryRefreshResponse(t *testing.T) {
 		s, action := makeState()
 		before := append([]application.TagRecord(nil), s.snapshot.TagHistory...)
 		s.applyDeliveryActionResult(action, application.ActionResult{Data: map[string]any{"statusError": "missing records"}})
-		if !reflect.DeepEqual(before, s.snapshot.TagHistory) || s.tagHistory.Error == "" {
+		if !reflect.DeepEqual(before, s.snapshot.TagHistory) || s.releaseUnit.state.tagHistory.Error == "" {
 			t.Fatal("a missing list cleared local history or hid the decoding error")
 		}
 	})
@@ -46,7 +49,7 @@ func TestTagHistoryRefreshResponse(t *testing.T) {
 		s, action := makeState()
 		before := append([]application.TagRecord(nil), s.snapshot.TagHistory...)
 		s.applyDeliveryActionResult(action, application.ActionResult{Data: application.TagHistoryRefreshResult{Records: []application.TagRecord{newRecord("wrong", "b")}}})
-		if !reflect.DeepEqual(before, s.snapshot.TagHistory) || s.tagHistory.Error == "" {
+		if !reflect.DeepEqual(before, s.snapshot.TagHistory) || s.releaseUnit.state.tagHistory.Error == "" {
 			t.Fatal("a response from another task changed local history")
 		}
 	})
@@ -55,7 +58,7 @@ func TestTagHistoryRefreshResponse(t *testing.T) {
 		action.Payload["tagHistoryTaskCreatedAt"] = "older-task"
 		before := append([]application.TagRecord(nil), s.snapshot.TagHistory...)
 		s.applyDeliveryActionResult(action, application.ActionResult{Data: application.TagHistoryRefreshResult{Records: []application.TagRecord{}}})
-		if !reflect.DeepEqual(before, s.snapshot.TagHistory) || s.tagHistory.Error != "" {
+		if !reflect.DeepEqual(before, s.snapshot.TagHistory) || s.releaseUnit.state.tagHistory.Error != "" {
 			t.Fatal("a retired task response changed local history or current errors")
 		}
 	})

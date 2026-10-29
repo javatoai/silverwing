@@ -11,9 +11,9 @@ import (
 )
 
 func (s *app) openSettingsConfig() {
-	s.settingsConfigOpen = false
-	s.settingsConfigText = ""
-	s.settingsConfigPath = ""
+	s.settingsUnit.state.settingsConfigOpen = false
+	s.settingsUnit.state.settingsConfigText = ""
+	s.settingsUnit.state.settingsConfigPath = ""
 	s.act("config.view", "", "", "", "", "", nil)
 }
 
@@ -23,22 +23,22 @@ func (s *app) exportConfig() {
 
 func (s *app) importConfig() {
 	s.pickNativePath("选择要导入的配置", s.snapshot.Home, false, nil, func(path string) {
-		s.importPath = path
+		s.materialsUnit.state.importPath = path
 		s.act("config.import-preview", "", "", "", path, "", nil)
 	})
 }
 
 func (s *app) pickNativePath(title, start string, directory bool, filters []mygo.FileFilter, selected func(string)) {
-	if s.settingsPickerBusy || s.win == nil {
+	if s.settingsUnit.state.settingsPickerBusy || s.win == nil {
 		return
 	}
-	s.settingsPickerBusy = true
+	s.settingsUnit.state.settingsPickerBusy = true
 	win := s.win
 	win.Invalidate()
 	go func() {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: win, Title: title, DefaultPath: start, Directory: directory, Filters: filters})
 		win.Update(func() {
-			s.settingsPickerBusy = false
+			s.settingsUnit.state.settingsPickerBusy = false
 			if err != nil {
 				s.lastError = err.Error()
 				return
@@ -51,16 +51,16 @@ func (s *app) pickNativePath(title, start string, directory bool, filters []mygo
 }
 
 func (s *app) chooseSavePath(title, start string, filters []mygo.FileFilter, selected func(string)) {
-	if s.settingsPickerBusy || s.win == nil {
+	if s.settingsUnit.state.settingsPickerBusy || s.win == nil {
 		return
 	}
-	s.settingsPickerBusy = true
+	s.settingsUnit.state.settingsPickerBusy = true
 	win := s.win
 	win.Invalidate()
 	go func() {
 		path, err := mygo.Dialog.Save(mygo.SaveDialogOptions{Parent: win, Title: title, DefaultPath: start, Filters: filters})
 		win.Update(func() {
-			s.settingsPickerBusy = false
+			s.settingsUnit.state.settingsPickerBusy = false
 			if err != nil {
 				s.lastError = err.Error()
 				return
@@ -84,7 +84,7 @@ func (s *app) confirmNative(title, message, detail string, confirmed func()) {
 }
 
 func (s *app) settingsConfigDialog(c *ui.Context, p palette) {
-	ui.DialogBase(c.Key("settings-config-dialog"), &s.settingsConfigOpen, func(backdrop, panel ui.Element) {
+	ui.DialogBase(c.Key("settings-config-dialog"), &s.settingsUnit.state.settingsConfigOpen, func(backdrop, panel ui.Element) {
 		backdrop.Background(ui.RGBA(0, 0, 0, 0.34))
 		w, h := c.Size()
 		panel.Width(min(900, w-80)).Height(min(760, h-32)).Padding(20).Gap(12).Background(p.surface).Border(1, p.line).Radius(16)
@@ -92,33 +92,33 @@ func (s *app) settingsConfigDialog(c *ui.Context, p palette) {
 			ui.Row(c).Gap(8).Shrink(0).Children(func() {
 				label(c, "应用配置", 17, p.text).FontWeight(600).Grow(1)
 				if iconButton(c, "settings-config-copy", "copy", "复制配置", p).Clicked() {
-					s.copyTextToClipboard(c.Services(), s.settingsConfigText, "已复制配置")
+					s.copyTextToClipboard(c.Services(), s.settingsUnit.state.settingsConfigText, "已复制配置")
 				}
 				if action(c, "settings-config-close", "close", "关闭", p, false) {
-					s.settingsConfigOpen = false
+					s.settingsUnit.state.settingsConfigOpen = false
 				}
 			})
-			if s.settingsConfigPath != "" {
-				label(c, s.settingsConfigPath, 10, p.muted).SingleLine()
+			if s.settingsUnit.state.settingsConfigPath != "" {
+				label(c, s.settingsUnit.state.settingsConfigPath, 10, p.muted).SingleLine()
 			}
 			ui.Scroll(c).Grow(1).MinHeight(0).Padding(12).Background(p.soft).Border(1, p.line).Radius(8).Children(func() {
-				label(c, s.settingsConfigText, 11, p.text).Font("Consolas").LineHeight(1.45).Selectable()
+				label(c, s.settingsUnit.state.settingsConfigText, 11, p.text).Font("Consolas").LineHeight(1.45).Selectable()
 			})
 		})
 	})
 }
 
 func (s *app) settingsImportDialog(c *ui.Context, p palette) {
-	if !s.importPreview {
+	if !s.materialsUnit.state.importPreview {
 		return
 	}
-	ui.DialogBase(c.Key("settings-import-preview"), &s.importPreview, func(backdrop, panel ui.Element) {
+	ui.DialogBase(c.Key("settings-import-preview"), &s.materialsUnit.state.importPreview, func(backdrop, panel ui.Element) {
 		backdrop.Background(ui.RGBA(0, 0, 0, 0.34))
 		w, h := c.Size()
 		panel.Width(min(720, w-80)).Height(min(640, h-32)).Padding(20).Gap(12).Background(p.surface).Border(1, p.line).Radius(16)
 		panel.Children(func() {
 			label(c, "导入配置预览", 17, p.text).FontWeight(600).Shrink(0)
-			label(c, s.importPath, 10, p.muted).SingleLine().Shrink(0)
+			label(c, s.materialsUnit.state.importPath, 10, p.muted).SingleLine().Shrink(0)
 			ui.Scroll(c).Grow(1).MinHeight(0).Padding(12).Background(p.soft).Radius(8).Children(func() {
 				text := s.ensureSettingsConfigRecovery().previewText
 				if text == "" {
@@ -128,7 +128,7 @@ func (s *app) settingsImportDialog(c *ui.Context, p palette) {
 			})
 			ui.Row(c).FillWidth().Gap(8).Shrink(0).Wrap().Justify(ui.End).Children(func() {
 				if action(c, "settings-import-cancel", "close", "取消", p, false) {
-					s.importPreview = false
+					s.materialsUnit.state.importPreview = false
 				}
 				if action(c, "settings-import-apply", "arrow", "确认导入", p, true) {
 					s.confirmSettingsConfigImport()
@@ -139,22 +139,22 @@ func (s *app) settingsImportDialog(c *ui.Context, p palette) {
 }
 
 func (s *app) settingsSkillPreviewDialog(c *ui.Context, p palette) {
-	if !s.settingsSkillPreviewOpen {
+	if !s.settingsUnit.state.settingsSkillPreviewOpen {
 		return
 	}
-	state := s.settingsExtensionRequests
+	state := s.settingsUnit.state.settingsExtensionRequests
 	markdownPreview := state != nil && state.previewMarkdown != nil
-	ui.DialogBase(c.Key("settings-skill-preview"), &s.settingsSkillPreviewOpen, func(backdrop, panel ui.Element) {
+	ui.DialogBase(c.Key("settings-skill-preview"), &s.settingsUnit.state.settingsSkillPreviewOpen, func(backdrop, panel ui.Element) {
 		backdrop.Background(ui.RGBA(0, 0, 0, 0.34))
 		w, h := c.Size()
 		panel.Width(min(900, w-80)).Height(min(760, h-32)).Padding(20).Gap(12).Background(p.surface).Border(1, p.line).Radius(16)
 		panel.Children(func() {
 			ui.Row(c).Gap(8).Children(func() {
-				label(c, firstNonEmpty(s.settingsSkillPreviewName, "Skill 预览"), 16, p.text).FontWeight(600).Grow(1)
+				label(c, firstNonEmpty(s.settingsUnit.state.settingsSkillPreviewName, "Skill 预览"), 16, p.text).FontWeight(600).Grow(1)
 				if markdownPreview {
 					s.renderReadonlyMarkdownReaderActions(c, p, state.previewMarkdown, func(menu *overflowMenuBuilder) {
 						if menu.Item("copy-preview", "复制预览内容").Icon("copy").Chosen() {
-							s.copyTextToClipboard(c.Services(), s.settingsSkillPreviewText, "预览内容已复制")
+							s.copyTextToClipboard(c.Services(), s.settingsUnit.state.settingsSkillPreviewText, "预览内容已复制")
 						}
 						if copyAction, ok := s.settingsExtensionPreviewFileAction(); ok {
 							if menu.Item("copy-preview-path", "复制文件路径").Icon("file").Chosen() {
@@ -167,7 +167,7 @@ func (s *app) settingsSkillPreviewDialog(c *ui.Context, p palette) {
 					})
 				} else {
 					if iconButton(c, "settings-skill-preview-copy", "copy", "复制预览内容", p).Clicked() {
-						s.copyTextToClipboard(c.Services(), s.settingsSkillPreviewText, "预览内容已复制")
+						s.copyTextToClipboard(c.Services(), s.settingsUnit.state.settingsSkillPreviewText, "预览内容已复制")
 					}
 					if copyAction, ok := s.settingsExtensionPreviewFileAction(); ok {
 						if iconButton(c, "settings-skill-preview-copy-path", "file", "复制文件路径", p).Clicked() {
@@ -179,7 +179,7 @@ func (s *app) settingsSkillPreviewDialog(c *ui.Context, p palette) {
 					}
 				}
 				if action(c, "settings-skill-preview-close", "close", "关闭", p, false) {
-					s.settingsSkillPreviewOpen = false
+					s.settingsUnit.state.settingsSkillPreviewOpen = false
 				}
 			})
 			if state != nil && !state.previewLoading && state.previewError == "" && s.settingsExtensionActionRelevant(state.readActions["preview"]) {
@@ -198,7 +198,7 @@ func (s *app) settingsSkillPreviewDialog(c *ui.Context, p palette) {
 				}
 			}
 			ui.Column(c).Grow(1).MinHeight(260).Padding(14).Background(p.soft).Border(1, p.line).Radius(10).Children(func() {
-				state := s.settingsExtensionRequests
+				state := s.settingsUnit.state.settingsExtensionRequests
 				if state != nil && state.previewLoading {
 					label(c, "正在读取预览…", 12, p.muted)
 				} else if state != nil && state.previewError != "" {
@@ -210,11 +210,11 @@ func (s *app) settingsSkillPreviewDialog(c *ui.Context, p palette) {
 					}
 				} else if state != nil && state.previewMarkdown != nil {
 					s.renderReadonlyMarkdownReaderContent(c, p, state.previewMarkdown)
-				} else if s.settingsSkillPreviewText == "" {
+				} else if s.settingsUnit.state.settingsSkillPreviewText == "" {
 					label(c, "没有可显示的预览内容。", 12, p.muted)
 				} else {
 					ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
-						label(c, s.settingsSkillPreviewText, 12, p.text).LineHeight(1.55).Selectable()
+						label(c, s.settingsUnit.state.settingsSkillPreviewText, 12, p.text).LineHeight(1.55).Selectable()
 					})
 				}
 			})
@@ -380,7 +380,7 @@ func (s *app) settingsActionForm(form actionForm, payload map[string]any) bool {
 			if scope == "全局配置" {
 				delete(payload, "cwd")
 			} else if scope == "当前任务" {
-				if taskPath := s.currentTask().path; taskPath != "" {
+				if taskPath := s.taskUnit.currentTask().path; taskPath != "" {
 					payload["cwd"] = taskPath
 				} else {
 					s.lastError = "没有可用的当前任务目录。"

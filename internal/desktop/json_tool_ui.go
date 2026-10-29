@@ -10,7 +10,6 @@ import (
 	"silverwing-go/internal/tools"
 
 	"github.com/egoist/mygo/ui"
-	codeeditor "github.com/egoist/mygo/ui/editor"
 )
 
 func (s *app) renderJSONTool(c *ui.Context, p palette, state *toolPageState) {
@@ -41,7 +40,7 @@ func (s *app) renderJSONTool(c *ui.Context, p palette, state *toolPageState) {
 			state.jsonEditor.findIndex = 0
 			state.jsonEditor.findChanged = true
 		}
-		matches := jsonEditorMatches(state.jsonSource, state.jsonEditor.findQuery)
+		matches := state.jsonEditor.sourceMatches.get(state.jsonSource, state.jsonEditor.findQuery)
 		if len(matches) == 0 {
 			state.jsonEditor.findIndex = 0
 		} else {
@@ -49,7 +48,7 @@ func (s *app) renderJSONTool(c *ui.Context, p palette, state *toolPageState) {
 		}
 		renderEditor := func() {
 			if state.jsonEditor.findChanged {
-				matches = jsonEditorMatches(state.jsonSource, state.jsonEditor.findQuery)
+				matches = state.jsonEditor.sourceMatches.get(state.jsonSource, state.jsonEditor.findQuery)
 				if len(matches) == 0 {
 					state.jsonEditor.findIndex = 0
 				} else if state.jsonEditor.finding {
@@ -61,18 +60,18 @@ func (s *app) renderJSONTool(c *ui.Context, p palette, state *toolPageState) {
 				state.jsonEditor.findChanged = false
 			}
 			if state.jsonErrorLocatePending && !state.jsonValid {
-				start := jsonErrorRuneOffset(state.jsonSource, state.jsonErrorLine, state.jsonErrorColumn)
+				start := state.jsonEditor.sourceIndex.errorRuneOffset(state.jsonErrorLine, state.jsonErrorColumn)
 				revealJSONProjectionRange(state, start, start+1)
-				state.jsonEditor.setPendingSourceSelection(start, min(start+1, utf8RuneCount(state.jsonSource)))
+				state.jsonEditor.setPendingSourceSelection(start, min(start+1, state.jsonEditor.sourceIndex.runeCount()))
 				state.jsonErrorLocatePending = false
 			}
 			ui.Column(c.Key("json-tool-editor")).Grow(1).MinWidth(0).MinHeight(0).Background(p.surface).Border(1, p.line).Radius(12).Clip().Children(func() {
-				lineCount := jsonSourceLineCount(state.jsonSource)
+				lineCount := state.jsonEditor.sourceIndex.lineCount()
 				ui.Row(c).Height(32).Shrink(0).Padding(0, 8).Gap(0).Background(p.soft).Children(func() {
 					label(c, "JSON", 12, p.text).FontWeight(500).Padding(0, 12, 0, 4)
 					width, _ := c.Size()
 					if width >= 560 {
-						label(c, fmt.Sprintf("%d 字符 · %d 行", tools.UTF16Length(state.jsonSource), lineCount), 11, p.muted).FontWeight(500).Margin(0, 12, 0, 0)
+						label(c, fmt.Sprintf("%d 字符 · %d 行", state.jsonEditor.sourceIndex.utf16Length(), lineCount), 11, p.muted).FontWeight(500).Margin(0, 12, 0, 0)
 					}
 					status, color := "", p.muted
 					if state.jsonPending && strings.TrimSpace(state.jsonSource) != "" {
@@ -115,7 +114,7 @@ func (s *app) renderJSONTool(c *ui.Context, p palette, state *toolPageState) {
 					state.jsonEditor.syncNative()
 					gutterWidth := float32(max(72, len(strconv.Itoa(max(1, lineCount)))*9+34))
 					gutter := ui.Box(c.Key("tool-json-gutter")).Width(gutterWidth).FillHeight().Background(p.soft.Mix(p.surface, 0.55))
-					lineNumbers := jsonEditorGutterLines(gutter, state)
+					lineNumbers := jsonEditorGutterLines(state)
 					gutter.Draw(func(painter *ui.Painter, r ui.Rect) {
 						const topPadding = float32(0)
 						top := r.Y + topPadding - state.jsonEditor.scroll.Y
@@ -164,21 +163,9 @@ func (s *app) renderJSONTool(c *ui.Context, p palette, state *toolPageState) {
 							}
 						}
 					})
-					findQuery := ""
-					if state.jsonEditor.finding {
-						findQuery = state.jsonEditor.findQuery
-					}
 					state.jsonEditor.native.OnInput = s.jsonNativeInput(c, state)
 					state.jsonEditor.native.OnLimitExceeded = func() { s.rejectJSONToolInput(state) }
-					state.jsonEditor.native.FindHighlights = nil
-					currentMatch := jsonEditorProjectedFindIndex(state, matches)
-					for index, match := range jsonEditorMatches(state.jsonEditor.projection.text, findQuery) {
-						state.jsonEditor.native.FindHighlights = append(state.jsonEditor.native.FindHighlights, codeeditor.FindHighlight{
-							Start:   textEditorProjectedByteOffset(state.jsonEditor.projection.text, match.start),
-							End:     textEditorProjectedByteOffset(state.jsonEditor.projection.text, match.end),
-							Current: index == currentMatch,
-						})
-					}
+					state.jsonEditor.syncNativeFindHighlights(state, matches)
 					s.bindJSONEditorCommands(c, state)
 					editor := TextEditor(c.Key("tool-json-source"), p, &state.jsonEditor.native).Grow(1).FillWidth().MinHeight(0)
 					if editor.Focused() && !state.jsonEditor.pendingSelection {

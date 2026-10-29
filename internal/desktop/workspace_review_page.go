@@ -23,11 +23,11 @@ type workspaceReviewFocusReturn struct {
 }
 
 func (s *app) workspaceReviewPageVisible() bool {
-	state := s.workspaceHistory
+	state := s.workspaceUnit.state.workspaceHistory
 	if state == nil || state.Mode != "review" || !state.Open || (s.page != "tasks" && s.page != "archive") {
 		return false
 	}
-	t := s.currentTask()
+	t := s.taskUnit.currentTask()
 	if t.id != state.TaskID || t.path == "" || t.path != s.workspaceReviewTaskPath(state.TaskID) || (s.page == "archive") != t.archived {
 		return false
 	}
@@ -50,7 +50,7 @@ func (s *app) workspaceReviewTaskPath(taskID string) string {
 	if taskID == "" {
 		return ""
 	}
-	for _, item := range s.tasks {
+	for _, item := range s.taskUnit.state.tasks {
 		if item.id == taskID {
 			return item.path
 		}
@@ -59,16 +59,16 @@ func (s *app) workspaceReviewTaskPath(taskID string) string {
 }
 
 func (s *app) restoreWorkspaceReviewFocus(c *ui.Context) {
-	pending := s.workspaceReviewFocusReturn
+	pending := s.workspaceUnit.state.workspaceReviewFocusReturn
 	if pending == nil {
 		return
 	}
-	t := s.currentTask()
+	t := s.taskUnit.currentTask()
 	if s.page != pending.Page || t.id != pending.TaskID || t.path != pending.TaskPath || t.createdAt != pending.TaskCreatedAt {
-		s.workspaceReviewFocusReturn = nil
+		s.workspaceUnit.state.workspaceReviewFocusReturn = nil
 		return
 	}
-	if state := s.workspaceHistory; state != nil && state.Open {
+	if state := s.workspaceUnit.state.workspaceHistory; state != nil && state.Open {
 		return
 	}
 	if pending.deferOneFrame {
@@ -76,15 +76,15 @@ func (s *app) restoreWorkspaceReviewFocus(c *ui.Context) {
 		return
 	}
 	pending.Handle.Focus(c)
-	s.workspaceReviewFocusReturn = nil
+	s.workspaceUnit.state.workspaceReviewFocusReturn = nil
 }
 
 func (s *app) renderWorkspaceReviewPage(c *ui.Context, p palette) {
-	state := s.workspaceHistory
+	state := s.workspaceUnit.state.workspaceHistory
 	if !s.workspaceReviewPageVisible() {
 		return
 	}
-	t := s.currentTask()
+	t := s.taskUnit.currentTask()
 	item, exists := workspaceReviewWorkspace(t, state)
 	if !exists {
 		s.dismissWorkspaceHistory()
@@ -185,9 +185,16 @@ func (s *app) renderWorkspaceReviewPage(c *ui.Context, p palette) {
 			ui.Spacer(c)
 		})
 		if state.Error != "" {
-			ui.Box(c).FillWidth().Shrink(0).Padding(8, 10).Radius(8).Background(p.amberBg).Children(func() {
-				label(c, state.Error, 12, p.danger).Wrap()
+			ui.Row(c).FillWidth().Shrink(0).Gap(8).Padding(8, 10).Radius(8).Background(p.amberBg).AlignItems(ui.Center).Children(func() {
+				label(c, state.Error, 12, p.danger).Grow(1).MinWidth(0).Wrap()
+				disabled := state.FilesLoading || state.PreviewLoading || state.CompareMode == workspaceReviewCommits && len(state.CommitHashes) == 0
+				if action(c, key+"-comparison-retry", "refresh", "重试差异", p, disabled) {
+					s.retryWorkspaceReviewComparison(state)
+				}
 			})
+		}
+		if state.CompareMode == workspaceReviewCommits && !state.CommitPickerOpen {
+			s.renderWorkspaceHistoryPageError(c, p, state, key)
 		}
 
 		ui.Row(c).Grow(1).MinWidth(0).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
@@ -247,7 +254,7 @@ func workspaceReviewKey(state *workspaceHistoryState) string {
 }
 
 func (s *app) refreshWorkspaceReview(state *workspaceHistoryState) {
-	if state == nil || state != s.workspaceHistory || !s.workspaceReviewPageVisible() {
+	if state == nil || state != s.workspaceUnit.state.workspaceHistory || !s.workspaceReviewPageVisible() {
 		return
 	}
 	s.cancelWorkspaceHistoryRead()
@@ -272,6 +279,26 @@ func workspaceReviewModeButton(c *ui.Context, key, text string, selected bool, p
 	if button.Clicked() {
 		click()
 	}
+}
+
+const workspaceReviewCommitRowHeight float32 = 60
+
+func workspaceReviewCommitPickerHeight(windowHeight float32, count int, summaries, hasError bool) float32 {
+	// Header, Done, two dividers, gaps, padding and borders take 120 DIP.
+	// Reserve the actual collapsed row minimum instead of List's initial
+	// estimate, and cap the body at six rows before it becomes scrollable.
+	body := float32(min(max(count, 0), 6))*(workspaceReviewCommitRowHeight+3) + 3
+	if count == 0 {
+		body = 100
+	}
+	chrome := float32(120)
+	if summaries {
+		chrome += 40 // progressive-loading footer and its gap
+	}
+	if hasError {
+		chrome += workspaceHistoryPageErrorHeight + 8 // bounded diagnostic and its gap
+	}
+	return min(chrome+body, min(float32(510), max(float32(1), windowHeight-24)))
 }
 
 func (s *app) renderWorkspaceReviewCommitPicker(c *ui.Context, p palette, state *workspaceHistoryState, key string) {
@@ -305,13 +332,16 @@ func (s *app) renderWorkspaceReviewCommitPicker(c *ui.Context, p palette, state 
 	width, height := c.Size()
 	maxWidth := max(float32(1), width-20)
 	panelWidth := min(float32(560), maxWidth)
-	maxHeight := max(float32(120), min(float32(510), height-24))
+	panelHeight := workspaceReviewCommitPickerHeight(height, len(state.Commits), state.HistorySummaries, state.HistoryPageError != "")
 	ui.PopoverBase(c, trigger, &state.CommitPickerOpen, func(panel ui.Element) {
-		panel.AttachTo(trigger, ui.AnchorBottomLeft, ui.AnchorTopLeft).Margin(4, 0, 0, 0).
-			Width(panelWidth).MaxWidth(maxWidth).MaxHeight(maxHeight).
-			Padding(10).Background(p.surface).Border(1, p.line).Radius(12).
+		// The trigger is 32 DIP tall. Equal vertical anchors plus that height
+		// preserve below/above placement and let Popover clamp into a short
+		// window when neither side can fit the entire bounded panel.
+		panel.AttachTo(trigger, ui.AnchorTopLeft, ui.AnchorTopLeft).Margin(36, 0, 0, 0).
+			Width(panelWidth).MaxWidth(maxWidth).Height(panelHeight).
+			Padding(10).Background(p.surface).Border(1, p.line).Radius(12).Clip().Label("提交范围选择器").
 			Shadow(0, 6, 20, 0, ui.RGBA(0, 0, 0, 0.18)).Children(func() {
-			ui.Column(c).FillWidth().MaxHeight(maxHeight - 20).MinHeight(0).Gap(8).Children(func() {
+			ui.Column(c).FillWidth().FillHeight().MinHeight(0).Gap(8).Children(func() {
 				ui.Row(c).FillWidth().Height(30).Shrink(0).Gap(8).AlignItems(ui.Center).Children(func() {
 					ui.Column(c).Grow(1).MinWidth(0).Gap(1).Children(func() {
 						label(c, "选择提交范围", 12, p.text).FontWeight(600)
@@ -322,21 +352,26 @@ func (s *app) renderWorkspaceReviewCommitPicker(c *ui.Context, p palette, state 
 					}
 				})
 				ui.Divider(c)
+				s.renderWorkspaceHistoryPageError(c, p, state, key+"-commit-picker")
 				if state.HistoryLoading && len(state.Commits) == 0 {
-					ui.Column(c).Grow(1).FillWidth().Center().MinHeight(100).Children(func() { label(c, "正在读取提交…", 11, p.muted) })
+					ui.Column(c).Grow(1).FillWidth().Center().MinHeight(0).Clip().Children(func() { label(c, "正在读取提交…", 11, p.muted) })
 				} else if len(state.Commits) == 0 {
-					ui.Column(c).Grow(1).FillWidth().Center().MinHeight(100).Padding(12).Children(func() {
-						label(c, "主分支之后没有可选提交。", 11, p.muted).Wrap()
+					ui.Column(c).Grow(1).FillWidth().Center().MinHeight(0).Padding(0, 12).Clip().Children(func() {
+						text := "主分支之后没有可选提交。"
+						if state.HistoryPageError != "" {
+							text = "提交历史未完整读取。"
+						}
+						label(c, text, 11, p.muted).Wrap()
 					})
 				} else {
-					ui.Scroll(c.Key(key + "-commit-picker-list")).Grow(1).MinHeight(0).TrackScroll(&state.CommitPickerScroll).Padding(3).Gap(3).Children(func() {
-						ui.Column(c).Gap(3).FocusGroup(ui.Vertical).Role(ui.RoleMenu).Label("提交范围").Children(func() {
-							for _, commit := range state.Commits {
-								s.renderWorkspaceReviewCommitOption(c, p, state, key, commit)
-							}
-						})
+					state.CommitPickerList.Key = func(index int) any { return state.Commits[index].FullHash }
+					list := ui.List(c.Key(key+"-commit-picker-list"), &state.CommitPickerList, len(state.Commits)).Grow(1).MinHeight(0).TrackScroll(&state.CommitPickerScroll).Padding(3).Gap(3)
+					list.FocusGroup(ui.Vertical).Role(ui.RoleMenu).Label("提交范围列表")
+					list.Rows(func(row ui.ListRow) {
+						s.renderWorkspaceReviewCommitOption(row.Context, p, state, key, state.Commits[row.Index])
 					})
 				}
+				s.renderWorkspaceHistoryMore(c, p, state, key+"-commit-picker")
 				ui.Divider(c)
 				ui.Row(c).FillWidth().Height(34).Shrink(0).Gap(7).AlignItems(ui.Center).Children(func() {
 					ui.Spacer(c)
@@ -361,12 +396,13 @@ func (s *app) renderWorkspaceReviewCommitOption(c *ui.Context, p palette, state 
 	selected := containsString(state.CommitHashes, commit.FullHash)
 	rowKey := key + "-commit-" + commit.FullHash
 	expanded := state.ExpandedCommits[commit.FullHash]
-	message := strings.TrimSpace(commit.Message)
+	message, notice := state.historyCommitText(commit)
+	message = strings.TrimSpace(message)
 	displayMessage := message
 	if !expanded {
 		displayMessage = strings.TrimSpace(strings.SplitN(message, "\n", 2)[0])
 	}
-	rowMinHeight := float32(60)
+	rowMinHeight := workspaceReviewCommitRowHeight
 	if expanded {
 		rowMinHeight = 72
 	}
@@ -397,12 +433,15 @@ func (s *app) renderWorkspaceReviewCommitOption(c *ui.Context, p palette, state 
 				} else {
 					messageLabel.SingleLine()
 				}
+				if notice != "" {
+					label(c, notice, 10, p.amber).Wrap()
+				}
 			})
 		})
 		if button.Clicked() {
 			s.selectWorkspaceReviewCommit(state, commit.FullHash)
 		}
-		if strings.Contains(message, "\n") || len(message) > 96 {
+		if strings.Contains(message, "\n") || len(message) > 96 || state.HistorySummaries {
 			expandText := "展开"
 			if expanded {
 				expandText = "收起"
@@ -414,6 +453,9 @@ func (s *app) renderWorkspaceReviewCommitOption(c *ui.Context, p palette, state 
 			more.Children(func() { label(c, expandText, 9, p.blue).NoWrap() })
 			if more.Clicked() {
 				state.ExpandedCommits[commit.FullHash] = !expanded
+				if !expanded {
+					s.readWorkspaceCommitMessage(state, commit.FullHash)
+				}
 			}
 		}
 	})

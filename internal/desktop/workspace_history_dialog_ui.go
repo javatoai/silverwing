@@ -13,7 +13,7 @@ func (s *app) workspaceCommitHistoryDialogVisible(state *workspaceHistoryState) 
 	if state == nil || state.Mode != "history" || !state.Open || (s.page != "tasks" && s.page != "archive") {
 		return false
 	}
-	t := s.currentTask()
+	t := s.taskUnit.currentTask()
 	if t.id != state.TaskID || t.path != state.TaskPath || t.createdAt != state.TaskCreatedAt || (s.page == "archive") != t.archived {
 		return false
 	}
@@ -23,7 +23,7 @@ func (s *app) workspaceCommitHistoryDialogVisible(state *workspaceHistoryState) 
 
 func (s *app) renderWorkspaceCommitHistoryDialog(c *ui.Context, p palette, state *workspaceHistoryState) {
 	if !s.workspaceCommitHistoryDialogVisible(state) {
-		if state != nil && state == s.workspaceHistory && state.Mode == "history" {
+		if state != nil && state == s.workspaceUnit.state.workspaceHistory && state.Mode == "history" {
 			s.dismissWorkspaceHistory()
 		}
 		return
@@ -42,16 +42,14 @@ func (s *app) renderWorkspaceCommitHistoryDialog(c *ui.Context, p palette, state
 					label(c, "主分支 "+firstNonEmpty(state.BaselineDisplayRef, state.BaselineRef)+" 之后的提交", 11, p.muted).SingleLine().Tooltip(state.BaselineDisplayRef)
 				})
 				if iconButtonRunning(c, "workspace-history-dialog-refresh", "refresh", "重新读取提交历史", p, state.HistoryLoading, state.HistoryLoading).Clicked() {
-					s.cancelWorkspaceHistoryRead()
-					state.Commits = nil
-					state.CommitsLoaded = false
-					s.readWorkspaceCommitHistoryDialog(state)
+					s.readWorkspaceHistoryPage(state, true)
 				}
 				if iconButton(c, "workspace-history-dialog-close", "close", "关闭", p).Clicked() {
 					s.closeWorkspaceCommitHistoryDialog(state)
 				}
 			})
 			ui.Divider(c)
+			s.renderWorkspaceHistoryPageError(c, p, state, "workspace-history-dialog")
 			if state.Error != "" {
 				ui.Box(c).FillWidth().Shrink(0).Padding(9, 11).Radius(8).Background(p.amberBg).Children(func() {
 					label(c, state.Error, 12, p.danger).Wrap().Selectable()
@@ -71,15 +69,19 @@ func (s *app) renderWorkspaceCommitHistoryDialog(c *ui.Context, p palette, state
 			}
 			if len(state.Commits) == 0 {
 				ui.Column(c).Grow(1).FillWidth().Center().Children(func() {
-					label(c, "主分支之后没有提交。", 12, p.muted)
+					text := "主分支之后没有提交。"
+					if state.HistoryPageError != "" {
+						text = "提交历史未完整读取。"
+					}
+					label(c, text, 12, p.muted)
 				})
 				return
 			}
-			ui.Scroll(c.Key("workspace-commit-history-list")).Grow(1).MinHeight(0).Padding(2, 4).Gap(2).Children(func() {
-				for index, commit := range state.Commits {
-					s.renderWorkspaceCommitHistoryRow(c, p, state, index, commit)
-				}
+			state.HistoryList.Key = func(index int) any { return state.Commits[index].FullHash }
+			ui.List(c.Key("workspace-commit-history-list"), &state.HistoryList, len(state.Commits)).Grow(1).MinHeight(0).Padding(2, 4).Gap(2).Rows(func(row ui.ListRow) {
+				s.renderWorkspaceCommitHistoryRow(row.Context, p, state, row.Index, state.Commits[row.Index])
 			})
+			s.renderWorkspaceHistoryMore(c, p, state, "workspace-history-dialog")
 		})
 	})
 	if dialog.Dismissed() || !state.Open {
@@ -92,7 +94,8 @@ func (s *app) renderWorkspaceCommitHistoryRow(c *ui.Context, p palette, state *w
 	if commit.FullHash == "" {
 		key += string(rune(index + 1))
 	}
-	message := strings.TrimSpace(commit.Message)
+	message, notice := state.historyCommitText(commit)
+	message = strings.TrimSpace(message)
 	expanded := state.ExpandedCommits[commit.FullHash]
 	shownMessage, long := workspaceCommitHistoryMessage(message, expanded)
 	ui.Column(c).FillWidth().Shrink(0).Padding(9, 10).Gap(6).Children(func() {
@@ -103,7 +106,10 @@ func (s *app) renderWorkspaceCommitHistoryRow(c *ui.Context, p palette, state *w
 					label(c, workspaceCommitHistoryLocalTime(commit.CommittedAt), 10, p.muted).NoWrap()
 				})
 				label(c, shownMessage, 12, p.text).FillWidth().Wrap().Tooltip(message).Selectable()
-				if long {
+				if notice != "" {
+					label(c, notice, 10, p.amber).Wrap()
+				}
+				if long || state.HistorySummaries {
 					toggleLabel := "展开提交信息"
 					if expanded {
 						toggleLabel = "收起"
@@ -113,6 +119,9 @@ func (s *app) renderWorkspaceCommitHistoryRow(c *ui.Context, p palette, state *w
 							state.ExpandedCommits = make(map[string]bool)
 						}
 						state.ExpandedCommits[commit.FullHash] = !expanded
+						if !expanded {
+							s.readWorkspaceCommitMessage(state, commit.FullHash)
+						}
 					}
 				}
 			})
@@ -145,32 +154,27 @@ func workspaceCommitHistoryLocalTime(value time.Time) string {
 }
 
 func (s *app) readWorkspaceCommitHistoryDialog(state *workspaceHistoryState) {
-	if state == nil || state != s.workspaceHistory || !s.workspaceCommitHistoryDialogVisible(state) {
+	if state == nil || state != s.workspaceUnit.state.workspaceHistory || !s.workspaceCommitHistoryDialogVisible(state) {
 		return
 	}
 	if strings.TrimSpace(state.BaselineRef) == "" {
-		state.Error = "请先在仓库配置中设置此模块的主分支。"
+		state.HistoryPageError = "请先在仓库配置中设置此模块的主分支。"
 		state.Loading, state.HistoryLoading = false, false
 		return
 	}
-	state.Error = ""
-	state.Loading, state.HistoryLoading = true, true
 	state.AllHistory = false
-	s.act("workspace.history", state.TaskID, state.ServiceID, state.ModuleID, state.Path, "", map[string]any{
-		"baselineRef": state.BaselineRef,
-		"allHistory":  false,
-	})
+	s.retryWorkspaceHistoryPage(state)
 }
 
 func (s *app) closeWorkspaceCommitHistoryDialog(state *workspaceHistoryState) {
-	if state == nil || state != s.workspaceHistory || state.Mode != "history" {
+	if state == nil || state != s.workspaceUnit.state.workspaceHistory || state.Mode != "history" {
 		return
 	}
-	t := s.currentTask()
+	t := s.taskUnit.currentTask()
 	hasFocus, focus := state.HasHistoryFocus, state.HistoryFocus
 	s.dismissWorkspaceHistory()
 	if hasFocus {
-		s.workspaceReviewFocusReturn = &workspaceReviewFocusReturn{
+		s.workspaceUnit.state.workspaceReviewFocusReturn = &workspaceReviewFocusReturn{
 			Handle: focus, TaskID: t.id, TaskPath: t.path, TaskCreatedAt: t.createdAt, Page: s.page, deferOneFrame: true,
 		}
 	}
@@ -183,7 +187,7 @@ func (s *app) openWorkspaceCommitDiff(state *workspaceHistoryState, commit domai
 	if !s.workspaceCommitHistoryDialogVisible(state) || strings.TrimSpace(commit.FullHash) == "" {
 		return
 	}
-	t := s.currentTask()
+	t := s.taskUnit.currentTask()
 	item, exists := workspaceReviewWorkspace(t, state)
 	if !exists {
 		return
@@ -194,4 +198,8 @@ func (s *app) openWorkspaceCommitDiff(state *workspaceHistoryState, commit domai
 		focus = &state.HistoryFocus
 	}
 	s.openWorkspaceReviewWithCommits(t, item, workspaceReviewCommits, nil, focus, commits, []string{commit.FullHash})
+	if review := s.workspaceUnit.state.workspaceHistory; review != nil && review.Mode == "review" {
+		review.HistoryHeadSHA, review.HistoryBaselineSHA = state.HistoryHeadSHA, state.HistoryBaselineSHA
+		review.HistoryNextOffset, review.HistoryHasMore, review.HistorySummaries = state.HistoryNextOffset, state.HistoryHasMore, state.HistorySummaries
+	}
 }

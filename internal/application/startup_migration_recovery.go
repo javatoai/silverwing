@@ -2,11 +2,10 @@ package application
 
 import (
 	"silverwing-go/internal/domain"
-	"silverwing-go/internal/workspace"
 )
 
 func (a *App) recoverStartupTaskRootMigration(config domain.AppConfig) []string {
-	service := workspace.NewTaskApplicationService(a.Manifests, a.git(config), a.Paths)
+	service := a.taskService(config)
 	service.RootMigration.Drafts = a.Documents
 	failures, err := service.RecoverInterruptedTaskRootMigration(config)
 

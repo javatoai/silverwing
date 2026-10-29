@@ -91,22 +91,28 @@ type searchCandidate struct {
 // SearchMaterials searches only the current task's materials directory. Paths
 // are revalidated against the task root before each read, and progress is
 // reported by the caller without an HTTP or process boundary.
-func (s *Service) SearchMaterials(ctx context.Context, root, query string) (SearchResult, error) {
+func (s *Service) SearchMaterials(ctx context.Context, root, query string) (result SearchResult, resultErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if utf16Length(query) > maxMaterialsSearchQueryUTF16 {
 		return SearchResult{}, errors.New("搜索文字过长，请缩短到 4096 个字符以内。")
 	}
-	result := SearchResult{Query: query, Hits: []SearchHit{}, Failures: []SearchFailure{}}
+	result = SearchResult{Query: query, Hits: []SearchHit{}, Failures: []SearchFailure{}}
 	onProgress, _ := ctx.Value(materialsSearchProgressKey{}).(func(MaterialsSearchProgress))
 	if query == "" {
 		return result, nil
 	}
-	validatedRoot, err := validatedMaterialsRoot(root)
+	scope, err := newMaterialsOperationScope(root)
 	if err != nil {
 		return SearchResult{}, err
 	}
+	defer func() {
+		if !scope.finish(&resultErr) {
+			result = SearchResult{}
+		}
+	}()
+	validatedRoot := scope.root
 	rootInfo, err := os.Lstat(validatedRoot)
 	if err != nil {
 		return SearchResult{}, err
@@ -218,6 +224,9 @@ func (s *Service) SearchMaterials(ctx context.Context, root, query string) (Sear
 	}
 
 	for _, candidate := range candidates {
+		if err := scope.revalidate(); err != nil {
+			return SearchResult{}, err
+		}
 		if err := ctx.Err(); err != nil {
 			return SearchResult{}, err
 		}

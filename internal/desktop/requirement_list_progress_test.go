@@ -15,9 +15,9 @@ import (
 func requirementProgressFixture(t *testing.T) (*app, *requirementListProgressState, *requirementListJob) {
 	t.Helper()
 	s := estimateBadgeApp(t)
-	s.page, s.requirementsSelectedSprintKey = "requirements", "p:1"
-	s.requirementsSprints = []requirementSprint{{ProjectKey: "p", ID: "1", Title: "Sprint 示例", Status: "进行中"}}
-	s.documentContent, s.documentDirty = "未保存的资料草稿", true
+	s.page, s.requirementUnit.state.requirementsSelectedSprintKey = "requirements", "p:1"
+	s.requirementUnit.state.requirementsSprints = []requirementSprint{{ProjectKey: "p", ID: "1", Title: "Sprint 示例", Status: "进行中"}}
+	s.materialsUnit.state.documentContent, s.materialsUnit.state.documentDirty = "未保存的资料草稿", true
 	p := s.newRequirementListProgress("p:1")
 	request := estimateBadgeRequest(s, "p:1")
 	request.action.Kind = "requirements.refresh"
@@ -32,11 +32,11 @@ func requirementProgressFixture(t *testing.T) (*app, *requirementListProgressSta
 func TestRequirementListProgressReopensAndSurvivesNavigation(t *testing.T) {
 	s, p, request := requirementProgressFixture(t)
 	p.open = false
-	generation := s.requirementListJobs.generation
+	generation := s.requirementUnit.state.requirementListJobs.generation
 	for range 3 {
 		s.refreshRequirementListWithProgress("p:1")
 	}
-	if !p.open || s.requirementListProgress != p || s.requirementListJobs.current != request || s.requirementListJobs.generation != generation {
+	if !p.open || s.requirementUnit.state.requirementListProgress != p || s.requirementUnit.state.requirementListJobs.current != request || s.requirementUnit.state.requirementListJobs.generation != generation {
 		t.Fatal("reopening progress restarted a list read")
 	}
 	s.page = "tasks"
@@ -46,11 +46,11 @@ func TestRequirementListProgressReopensAndSurvivesNavigation(t *testing.T) {
 	}
 	s.page = "requirements"
 	s.requestRequirements("p:1", false)
-	if s.requirementListJobs.current != request || s.requirementListJobs.generation != generation {
+	if s.requirementUnit.state.requirementListJobs.current != request || s.requirementUnit.state.requirementListJobs.generation != generation {
 		t.Fatal("page re-entry replaced the manual refresh")
 	}
 	s.refreshRequirementListWithProgress("p:1")
-	if !p.open || !s.documentDirty || s.documentContent != "未保存的资料草稿" {
+	if !p.open || !s.materialsUnit.state.documentDirty || s.materialsUnit.state.documentContent != "未保存的资料草稿" {
 		t.Fatal("reopening lost the progress or the unrelated draft")
 	}
 }
@@ -109,13 +109,13 @@ func TestRequirementListProgressEventsAndLateScopes(t *testing.T) {
 			case "home":
 				s.snapshot.Home += "-other"
 			case "project":
-				s.configJSON = strings.ReplaceAll(s.configJSON, `"p"`, `"other-project"`)
+				s.settingsUnit.state.configJSON = strings.ReplaceAll(s.settingsUnit.state.configJSON, `"p"`, `"other-project"`)
 			case "sprint":
 				s.activateRequirementSprint("p:2")
 			case "account":
-				s.requirementIdentityJobs.identity = "different-account"
+				s.requirementUnit.state.requirementIdentityJobs.identity = "different-account"
 			case "profile":
-				s.requirementIdentityJobs.context.profileModified++
+				s.requirementUnit.state.requirementIdentityJobs.context.profileModified++
 			case "new-request":
 				s.newRequirementListProgress("p:1")
 			}
@@ -126,7 +126,7 @@ func TestRequirementListProgressEventsAndLateScopes(t *testing.T) {
 				t.Fatal("a late result updated the old progress session")
 			}
 			s.observeRequirementListProgress()
-			if change != "new-request" && s.requirementListProgress != nil {
+			if change != "new-request" && s.requirementUnit.state.requirementListProgress != nil {
 				t.Fatal("changed scope left its old dialog available")
 			}
 		})
@@ -138,7 +138,7 @@ func TestRequirementListProgressCompletionAndFailures(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			s, p, request := requirementProgressFixture(t)
 			old := application.Requirement{ID: "old", Title: "保留的需求"}
-			s.requirements, request.items = []application.Requirement{old}, []application.Requirement{old}
+			s.requirementUnit.state.requirements, request.items = []application.Requirement{old}, []application.Requirement{old}
 			result := estimateBadgeResult("p:1", "2")
 			var err error
 			switch mode {
@@ -163,10 +163,10 @@ func TestRequirementListProgressCompletionAndFailures(t *testing.T) {
 				if mode == "empty" && p.message != "刷新完成，暂无工作项" {
 					t.Fatal("empty response was not a successful refresh")
 				}
-			} else if len(p.failures) == 0 || p.notificationError == "" || p.message != "" || p.open != (mode != "hidden-error") || s.requirements[0].ID != "old" {
+			} else if len(p.failures) == 0 || p.notificationError == "" || p.message != "" || p.open != (mode != "hidden-error") || s.requirementUnit.state.requirements[0].ID != "old" {
 				t.Fatal("failure lost the error, previous list, or hidden state")
 			}
-			if !s.documentDirty || s.documentContent != "未保存的资料草稿" {
+			if !s.materialsUnit.state.documentDirty || s.materialsUnit.state.documentContent != "未保存的资料草稿" {
 				t.Fatal("list refresh changed the document draft")
 			}
 		})
@@ -175,38 +175,38 @@ func TestRequirementListProgressCompletionAndFailures(t *testing.T) {
 
 func TestRequirementListProgressIdentityProbeFailureAndAutomaticReads(t *testing.T) {
 	s := estimateBadgeApp(t)
-	s.page, s.requirementsSelectedSprintKey = "requirements", "p:1"
+	s.page, s.requirementUnit.state.requirementsSelectedSprintKey = "requirements", "p:1"
 	p := s.newRequirementListProgress("p:1")
-	state := s.requirementIdentityJobs
+	state := s.requirementUnit.state.requirementIdentityJobs
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	request := &requirementIdentityJob{generation: state.generation, context: state.context, ctx: ctx, cancel: cancel}
 	state.current = request
 	state.pending = &requirementIdentityListRequest{sprintKey: "p:1", refresh: true, progress: p}
 	s.finishRequirementIdentityProbe(state, request, application.RequirementIdentitySnapshot{}, errors.New("offline"))
-	if p.running || !p.open || len(p.failures) != 1 || s.requirementsLoading {
+	if p.running || !p.open || len(p.failures) != 1 || s.requirementUnit.state.requirementsLoading {
 		t.Fatal("identity failure left the manual progress pending")
 	}
 	automatic := estimateBadgeApp(t)
-	automatic.page, automatic.requirementsSelectedSprintKey = "requirements", "p:1"
+	automatic.page, automatic.requirementUnit.state.requirementsSelectedSprintKey = "requirements", "p:1"
 	autoRequest := estimateBadgeRequest(automatic, "p:1")
 	defer autoRequest.cancel()
 	automatic.bindRequirementListProgress(autoRequest)
-	if automatic.requirementListProgress != nil || autoRequest.onProgress != nil {
+	if automatic.requirementUnit.state.requirementListProgress != nil || autoRequest.onProgress != nil {
 		t.Fatal("automatic read created a progress dialog")
 	}
 }
 
 func TestRequirementListProgressRejectsStaleRetryTarget(t *testing.T) {
 	s := estimateBadgeApp(t)
-	s.page, s.requirementsSelectedSprintKey = "requirements", "p:2"
+	s.page, s.requirementUnit.state.requirementsSelectedSprintKey = "requirements", "p:2"
 	s.refreshRequirementListWithProgress("p:1")
-	if s.requirementListProgress != nil || s.requirementsLoading {
+	if s.requirementUnit.state.requirementListProgress != nil || s.requirementUnit.state.requirementsLoading {
 		t.Fatal("stale retry started another Sprint")
 	}
-	s.configJSON = `{"meegleProjects":[]}`
+	s.settingsUnit.state.configJSON = `{"meegleProjects":[]}`
 	s.refreshRequirementListWithProgress("p:2")
-	if s.requirementListProgress != nil || s.requirementsLoading {
+	if s.requirementUnit.state.requirementListProgress != nil || s.requirementUnit.state.requirementsLoading {
 		t.Fatal("removed project left a stalled progress session")
 	}
 }
@@ -225,7 +225,7 @@ func TestRequirementListProgressDialogLayoutsAndDismissal(t *testing.T) {
 					s.applyRequirementListProgress(request, application.RequirementListProgress{Sequence: 5, Phase: "items", Status: "running", WorkItemType: "bug", Label: "缺陷", Completed: 2, Total: 4})
 					if failed {
 						s.failRequirementListProgress(p, []string{strings.Repeat("缺陷查询超时，请重试。", 30)})
-						s.requirementsLoading = false
+						s.requirementUnit.state.requirementsLoading = false
 					}
 					tester := ui.NewTester(func(c *ui.Context) {
 						ui.Column(c).Fill().Background(setTheme(c, dark).bg)
@@ -270,7 +270,7 @@ func TestRequirementListProgressDialogLayoutsAndDismissal(t *testing.T) {
 						if err := tester.Click("重试"); err != nil {
 							t.Fatal(err)
 						}
-						if next := s.requirementListProgress; next == p || next == nil || next.sprintKey != "p:1" {
+						if next := s.requirementUnit.state.requirementListProgress; next == p || next == nil || next.sprintKey != "p:1" {
 							t.Fatal("retry did not start a fresh session for the same Sprint")
 						}
 					}

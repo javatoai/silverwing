@@ -25,7 +25,11 @@ func checkJSONSourceCommands(ctx context.Context) (result jsonSourceCommandsResu
 	const source = "{\r\n  \"label\": \"中文😀\",\r\n  \"nested\": {\r\n    \"items\": [\r\n      \"hidden🪴\",\r\n      \"second\"\r\n    ]\r\n  },\r\n  \"tail\": true\r\n}\r\n"
 	state := newToolPageState(source)
 	defer state.cancelWork()
-	s := &app{page: "tools", tools: state, configJSON: "{\"toolVisibility\":{\"json\":true,\"dateTime\":false,\"textDiff\":false,\"killPort\":false}}"}
+	s := &app{
+		settingsUnit: settingsController{state: settingsState{configJSON: "{\"toolVisibility\":{\"json\":true,\"dateTime\":false,\"textDiff\":false,\"killPort\":false}}"}},
+		toolsUnit:    toolsController{state: toolsState{tools: state}},
+		page:         "tools",
+	}
 	tester := ui.NewTester(func(c *ui.Context) {
 		ui.Column(c).Fill().Children(func() { s.renderDeveloperTools(c) })
 	}, 1100, 800)

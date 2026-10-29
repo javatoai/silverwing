@@ -44,13 +44,13 @@ type WorkspaceMainBranchMergeResult struct {
 
 type WorkspaceMainBranchMergeService struct {
 	Git           *GitClient
-	Manifests     *storage.ManifestStore
+	Manifests     TaskManifestReader
 	Locks         *OperationLocks
 	Lifecycle     *WorkspaceLifecycle
 	GitOperations *WorkspaceGitOperationService
 }
 
-func NewWorkspaceMainBranchMergeService(git *GitClient, manifests *storage.ManifestStore, locks *OperationLocks, lifecycle *WorkspaceLifecycle) *WorkspaceMainBranchMergeService {
+func NewWorkspaceMainBranchMergeService(git *GitClient, manifests TaskManifestReader, locks *OperationLocks, lifecycle *WorkspaceLifecycle) *WorkspaceMainBranchMergeService {
 	if git == nil {
 		git = NewGitClient(nil, "")
 	}

@@ -127,8 +127,8 @@ type productionUIState struct {
 // Rendering compares strings; decoding configuration is only needed when it changes.
 func (s *app) currentProductionScope() string {
 	state := s.ensureProduction()
-	if state.scopeJSON != s.configJSON || state.scopeMemo == "" {
-		state.scopeJSON, state.scopeMemo = s.configJSON, productionConfigScope(s.configJSON)
+	if state.scopeJSON != s.settingsUnit.state.configJSON || state.scopeMemo == "" {
+		state.scopeJSON, state.scopeMemo = s.settingsUnit.state.configJSON, productionConfigScope(s.settingsUnit.state.configJSON)
 	}
 	return state.scopeMemo
 }
@@ -147,10 +147,10 @@ func productionConfigScope(configJSON string) string {
 }
 
 func (s *app) ensureProduction() *productionUIState {
-	if s.production == nil {
-		s.production = &productionUIState{views: map[string]*productionView{}, workers: map[*productionWorker]struct{}{}, timers: map[string]*time.Timer{}}
+	if s.releaseUnit.state.production == nil {
+		s.releaseUnit.state.production = &productionUIState{views: map[string]*productionView{}, workers: map[*productionWorker]struct{}{}, timers: map[string]*time.Timer{}}
 	}
-	return s.production
+	return s.releaseUnit.state.production
 }
 
 func (s *app) productionView() *productionView {
@@ -159,7 +159,7 @@ func (s *app) productionView() *productionView {
 }
 
 func (s *app) observeProductionBuildNavigation() {
-	state := s.production
+	state := s.releaseUnit.state.production
 	if state == nil {
 		return
 	}
@@ -186,7 +186,7 @@ func (s *app) enterProductionPage() {
 		state.views, state.batches, state.selected = map[string]*productionView{}, nil, ""
 		state.deletedBatches = nil
 	}
-	if state.configScope != productionConfigScope(s.configJSON) {
+	if state.configScope != productionConfigScope(s.settingsUnit.state.configJSON) {
 		for _, view := range state.views {
 			view.Preview = nil
 			view.Steps = nil
@@ -194,9 +194,9 @@ func (s *app) enterProductionPage() {
 			view.BuildChecked = false
 		}
 	}
-	state.configScope = productionConfigScope(s.configJSON)
+	state.configScope = productionConfigScope(s.settingsUnit.state.configJSON)
 	var c domain.AppConfig
-	_ = json.Unmarshal([]byte(s.configJSON), &c)
+	_ = json.Unmarshal([]byte(s.settingsUnit.state.configJSON), &c)
 	state.choices = nil
 	enabled := map[string]bool{}
 	for _, group := range c.Groups {
@@ -228,17 +228,17 @@ func (s *app) enterProductionPage() {
 }
 
 func (s *app) productionBatch(v *productionView) *production.Batch {
-	if v == nil || s.production == nil {
+	if v == nil || s.releaseUnit.state.production == nil {
 		return nil
 	}
-	for i := range s.production.batches {
-		b := &s.production.batches[i]
+	for i := range s.releaseUnit.state.production.batches {
+		b := &s.releaseUnit.state.production.batches[i]
 		if b.ID == v.BatchID {
 			return b
 		}
 	}
-	for i := range s.production.batches {
-		b := &s.production.batches[i]
+	for i := range s.releaseUnit.state.production.batches {
+		b := &s.releaseUnit.state.production.batches[i]
 		if b.Target.Selection == v.Selection && !b.Ended {
 			v.BatchID = b.ID
 			return b
@@ -479,7 +479,7 @@ func (s *app) productionRequestViewFromHistory(v *productionView, action applica
 				// result must not authorize the next build request.
 				err = context.Canceled
 			}
-			if action.Kind == "production.delete" && err == nil && s.production == state && s.snapshot.Home == home && state.loadedHome == home && s.currentProductionScope() == scope {
+			if action.Kind == "production.delete" && err == nil && s.releaseUnit.state.production == state && s.snapshot.Home == home && state.loadedHome == home && s.currentProductionScope() == scope {
 				if v.Generation == generation {
 					v.Busy, v.request = false, nil
 				}
@@ -507,7 +507,7 @@ func (s *app) productionRequestViewFromHistory(v *productionView, action applica
 			if action.Kind == "production.abort-merge" {
 				// An abort completes one exact merge, never a newer pending merge
 				// that a refreshed snapshot or another view has since installed.
-				if s.production != state || s.currentProductionScope() != scope || v.Selection != selection ||
+				if s.releaseUnit.state.production != state || s.currentProductionScope() != scope || v.Selection != selection ||
 					v.BatchID != selectedBatch || v.ManualTag != manual || v.Branch != branch || !s.productionAbortResultCurrent(v, action, report.Batch) {
 					window.Invalidate()
 					return
@@ -720,8 +720,8 @@ func (s *app) scheduleProductionProbe(v *productionView, b production.Batch, win
 	})
 }
 
-func (s *app) stopProductionJobs() {
-	state := s.production
+func (s *releaseController) stopProductionJobs() {
+	state := s.state.production
 	if state == nil {
 		return
 	}
@@ -736,12 +736,12 @@ func (s *app) stopProductionJobs() {
 	}
 }
 
-func (s *app) closeProductionJobs(ctx context.Context) error {
+func (s *releaseController) closeProductionJobs(ctx context.Context) error {
 	s.stopProductionJobs()
-	if s.production == nil {
+	if s.state.production == nil {
 		return nil
 	}
-	state := s.production
+	state := s.state.production
 	state.mu.Lock()
 	var done []chan struct{}
 	for worker := range state.workers {

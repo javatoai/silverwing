@@ -18,7 +18,7 @@ func TestTaskCreationDialogFixedGeometry(t *testing.T) {
 		for _, dark := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%dx%d-dark-%t", size[0], size[1], dark), func(t *testing.T) {
 				s, tester := taskCreationLeftFixture(t, size[0], dark)
-				form := s.taskCreation
+				form := s.taskUnit.state.taskCreation
 				for i := 0; i < 24; i++ {
 					service := form.config.Groups[0].Services[0]
 					service.ID, service.DisplayName = fmt.Sprintf("synthetic-%02d", i), fmt.Sprintf("合成服务 %02d", i)
@@ -91,7 +91,7 @@ func TestTaskCreationDialogFixedGeometry(t *testing.T) {
 
 func TestTaskCreationDialogToolCheckboxes(t *testing.T) {
 	s, tester := taskCreationLeftFixture(t, 960, false)
-	form := s.taskCreation
+	form := s.taskUnit.state.taskCreation
 	heading, _ := tester.Find("创建后打开工作区工具")
 	codex, _ := tester.Find("Codex")
 	cursor, _ := tester.Find("Cursor")
@@ -136,7 +136,7 @@ func TestTaskCreationDialogDismissesDirectly(t *testing.T) {
 	for _, way := range []string{"cancel", "close", "backdrop", "escape"} {
 		t.Run(way, func(t *testing.T) {
 			s, tester := taskCreationLeftFixture(t, 960, false)
-			old := s.taskCreation
+			old := s.taskUnit.state.taskCreation
 			readCtx, readCancel := context.WithCancel(context.Background())
 			old.readRequest = &taskCreationReadRequest{kind: "workspace.tools-options", cancel: readCancel}
 			preCtx, preCancel := context.WithCancel(context.Background())
@@ -161,12 +161,12 @@ func TestTaskCreationDialogDismissesDirectly(t *testing.T) {
 			case "escape":
 				tester.Key(0, ui.KeyEscape)
 			}
-			if s.taskCreation != nil || s.dialogOpen || s.form.mode != "" || tester.HasText("放弃创建任务") || readCtx.Err() == nil || preCtx.Err() == nil || aiCtx.Err() == nil || candidateCtx.Err() == nil || old.previewScheduleTimer != nil {
+			if s.taskUnit.state.taskCreation != nil || s.dialogOpen || s.form.mode != "" || tester.HasText("放弃创建任务") || readCtx.Err() == nil || preCtx.Err() == nil || aiCtx.Err() == nil || candidateCtx.Err() == nil || old.previewScheduleTimer != nil {
 				t.Fatal("closing must discard directly and retire only the old form's work")
 			}
 			s.dialogOpen, s.form.mode = true, "task-create"
 			s.initTaskCreation("新建合成任务", "全新需求标题", "https://example.invalid/new-requirement")
-			fresh := s.taskCreation
+			fresh := s.taskUnit.state.taskCreation
 			s.lastMessage = "new-form-feedback"
 			for _, kind := range []string{"task.create", "task.create-preview", "workspace.tools-options", "requirements.ai-name"} {
 				action := application.Action{Kind: kind, Payload: map[string]any{"taskCreateToken": old.token}}
@@ -175,7 +175,7 @@ func TestTaskCreationDialogDismissesDirectly(t *testing.T) {
 			}
 			s.finishTaskCreationPreflight(request, application.ActionResult{}, nil)
 			tester.Frame()
-			if s.taskCreation != fresh || fresh.token == old.token || fresh.draft.TaskName != "全新需求标题" || s.lastMessage != "new-form-feedback" || !s.dialogOpen || tester.HasText("放弃创建任务") {
+			if s.taskUnit.state.taskCreation != fresh || fresh.token == old.token || fresh.draft.TaskName != "全新需求标题" || s.lastMessage != "new-form-feedback" || !s.dialogOpen || tester.HasText("放弃创建任务") {
 				t.Fatal("retired callbacks reopened or polluted the new form")
 			}
 		})
@@ -184,7 +184,7 @@ func TestTaskCreationDialogDismissesDirectly(t *testing.T) {
 
 func TestTaskCreationDialogClosePreservesOtherLifecycles(t *testing.T) {
 	s, tester := taskCreationLeftFixture(t, 960, false)
-	form := s.taskCreation
+	form := s.taskUnit.state.taskCreation
 	form.preview = &taskCreationPreview{signature: s.taskCreationSignature()}
 	form.phase = "creating"
 	form.progressGeneration++
@@ -196,14 +196,14 @@ func TestTaskCreationDialogClosePreservesOtherLifecycles(t *testing.T) {
 	tester.Frame()
 	tester.Key(0, ui.KeyEscape)
 	tester.Frame()
-	if s.taskCreation != form || !s.dialogOpen || !s.busy || s.operationKind != "task.create" || operationCtx.Err() != nil || !tester.HasText("中断创建") {
+	if s.taskUnit.state.taskCreation != form || !s.dialogOpen || !s.busy || s.operationKind != "task.create" || operationCtx.Err() != nil || !tester.HasText("中断创建") {
 		t.Fatal("Escape must keep the busy creation form open and expose its explicit interrupt action")
 	}
 	if err := tester.Click("中断创建"); err != nil {
 		t.Fatal(err)
 	}
 	tester.Frame()
-	if s.taskCreation != form || !s.dialogOpen || !s.busy || !s.operationCancelling || operationCtx.Err() == nil {
+	if s.taskUnit.state.taskCreation != form || !s.dialogOpen || !s.busy || !s.operationCancelling || operationCtx.Err() == nil {
 		t.Fatal("interrupt must cancel the operation while keeping the form open until its result arrives")
 	}
 	documentApp, draft := taskLocalNoteFixture(t)
@@ -212,7 +212,7 @@ func TestTaskCreationDialogClosePreservesOtherLifecycles(t *testing.T) {
 	if documentApp.documentCloseReady() == nil {
 		t.Fatal("fixture must begin with the existing document close gate")
 	}
-	documentApp.taskCreation = &taskCreationState{token: "temporary-form", phase: "editing"}
+	documentApp.taskUnit.state.taskCreation = &taskCreationState{token: "temporary-form", phase: "editing"}
 	documentApp.dialogOpen, documentApp.form.mode = true, "task-create"
 	documentApp.requestTaskCreationDismiss()
 	if documentApp.documentCloseReady() == nil || draft.text() != "未保存的本地说明" || !draft.dirty() {

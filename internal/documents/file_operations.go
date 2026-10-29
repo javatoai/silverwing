@@ -179,27 +179,58 @@ func (s *Service) ImportDroppedPaths(ctx context.Context, root, directory string
 	return s.PasteClipboard(ctx, root, directory, ClipboardPayload{Files: paths})
 }
 
-func (s *Service) executeFileOperation(ctx context.Context, root string, operation FileOperationRequest, replace *FileOperationConflict) (FileOperationResult, error) {
+func (s *Service) executeFileOperation(ctx context.Context, root string, operation FileOperationRequest, replace *FileOperationConflict) (result FileOperationResult, resultErr error) {
 	if err := ctx.Err(); err != nil {
 		return FileOperationResult{}, err
 	}
 	if err := validateName(operation.Name); err != nil {
 		return FileOperationResult{}, err
 	}
-	rootPath, err := validatedMaterialsRoot(root)
+	scope, err := newMaterialsOperationScope(root)
 	if err != nil {
 		return FileOperationResult{}, err
 	}
-	parent, err := resolveMaterialsDirectory(rootPath, operation.Directory)
+	publicOperation := operation
+	defer func() {
+		if !scope.finish(&resultErr) {
+			result = FileOperationResult{}
+			return
+		}
+		if result.Conflict != nil {
+			result.Conflict.Request = publicOperation
+		}
+	}()
+	rootPath := scope.root
+	parent, err := scope.resolve(operation.Directory, false, true, true)
 	if err != nil {
 		return FileOperationResult{}, err
 	}
-	destination := filepath.Join(parent, operation.Name)
+	if info, err := os.Lstat(parent); err != nil {
+		return FileOperationResult{}, err
+	} else if !info.IsDir() {
+		return FileOperationResult{}, fmt.Errorf("目标不是文件夹：%s", operation.Directory)
+	}
+	operation.Directory = relativeMaterials(rootPath, parent)
+	destination, err := scope.resolve(filepath.Join(scope.public(parent), operation.Name), true, true, false)
+	if err != nil {
+		return FileOperationResult{}, err
+	}
+	if operation.Kind == FileOperationRename {
+		source, err := scope.resolve(operation.RelativePath, false, true, false)
+		if err != nil {
+			return FileOperationResult{}, err
+		}
+		operation.RelativePath = relativeMaterials(rootPath, source)
+	}
 	var source string
 	var sourceInfo os.FileInfo
 	switch operation.Kind {
 	case FileOperationCreateDirectory, FileOperationCreateFile:
 	case FileOperationImport:
+		operation.SourcePath, err = scope.importSource(operation.SourcePath)
+		if err != nil {
+			return FileOperationResult{}, err
+		}
 		source, sourceInfo, err = validateImportSource(operation.SourcePath)
 		if err != nil {
 			return FileOperationResult{}, err
@@ -242,10 +273,10 @@ func (s *Service) executeFileOperation(ctx context.Context, root string, operati
 		if filepath.Base(source) == operation.Name {
 			return completedFileOperation(rootPath, source, operation, sourceInfo.IsDir()), nil
 		}
-		if err := revalidateMaterialsDestination(rootPath, operation.Directory, parent); err != nil {
+		if err := scope.revalidateDestination(rootPath, operation.Directory, parent); err != nil {
 			return FileOperationResult{}, err
 		}
-		if err := renameCaseOnly(ctx, rootPath, parent, source, destination, fileIdentity(source, sourceInfo)); err != nil {
+		if err := renameCaseOnlyInScope(ctx, rootPath, parent, source, destination, fileIdentity(source, sourceInfo), scope); err != nil {
 			return FileOperationResult{}, err
 		}
 		return completedFileOperation(rootPath, destination, operation, sourceInfo.IsDir()), nil
@@ -277,7 +308,7 @@ func (s *Service) executeFileOperation(ctx context.Context, root string, operati
 		return FileOperationResult{}, errors.New("同名文件在确认期间已被移走，请重新导入")
 	}
 
-	if err := revalidateMaterialsDestination(rootPath, operation.Directory, parent); err != nil {
+	if err := scope.revalidateDestination(rootPath, operation.Directory, parent); err != nil {
 		return FileOperationResult{}, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -286,7 +317,7 @@ func (s *Service) executeFileOperation(ctx context.Context, root string, operati
 	isDirectory := operation.Kind == FileOperationCreateDirectory ||
 		((operation.Kind == FileOperationImport || operation.Kind == FileOperationRename) && sourceInfo.IsDir())
 	if expected != nil {
-		if err := replaceMaterialsFile(ctx, rootPath, parent, destination, operation, source, *expected); err != nil {
+		if err := replaceMaterialsFile(ctx, rootPath, parent, destination, operation, source, *expected, scope); err != nil {
 			return FileOperationResult{}, err
 		}
 	} else {
@@ -299,7 +330,7 @@ func (s *Service) executeFileOperation(ctx context.Context, root string, operati
 				return FileOperationResult{}, err
 			}
 		case FileOperationCreateFile:
-			if err := writeNewFileStaged(ctx, rootPath, operation.Directory, parent, destination, operation.Content, 0o644); err != nil {
+			if err := writeNewFileStaged(ctx, rootPath, operation.Directory, parent, destination, operation.Content, 0o644, scope); err != nil {
 				if os.IsExist(err) {
 					return FileOperationResult{Status: FileOperationConflicted, Conflict: &FileOperationConflict{Request: operation, SuggestedName: availableMaterialsName(parent, operation.Name), CanReplace: true, ExistingIdentity: identityForPath(destination)}}, nil
 				}
@@ -307,20 +338,20 @@ func (s *Service) executeFileOperation(ctx context.Context, root string, operati
 			}
 		case FileOperationImport:
 			if sourceInfo.IsDir() {
-				if err := copyDirectoryStaged(ctx, rootPath, parent, source, destination, sourceInfo); err != nil {
+				if err := copyDirectoryStaged(ctx, rootPath, parent, source, destination, sourceInfo, scope); err != nil {
 					if os.IsExist(err) {
 						return FileOperationResult{Status: FileOperationConflicted, Conflict: &FileOperationConflict{Request: operation, SuggestedName: availableMaterialsName(parent, operation.Name)}}, nil
 					}
 					return FileOperationResult{}, err
 				}
-			} else if err := copyFileStaged(ctx, rootPath, operation.Directory, parent, source, destination, sourceInfo.Mode().Perm()); err != nil {
+			} else if err := copyFileStaged(ctx, rootPath, operation.Directory, parent, source, destination, sourceInfo.Mode().Perm(), scope); err != nil {
 				if os.IsExist(err) {
 					return FileOperationResult{Status: FileOperationConflicted, Conflict: &FileOperationConflict{Request: operation, SuggestedName: availableMaterialsName(parent, operation.Name), CanReplace: true, ExistingIdentity: identityForPath(destination)}}, nil
 				}
 				return FileOperationResult{}, err
 			}
 		case FileOperationRename:
-			if err := renameWithRecheck(rootPath, parent, source, destination, fileIdentity(source, sourceInfo)); err != nil {
+			if err := renameWithRecheck(rootPath, parent, source, destination, fileIdentity(source, sourceInfo), scope); err != nil {
 				if os.IsExist(err) {
 					return FileOperationResult{Status: FileOperationConflicted, Conflict: &FileOperationConflict{Request: operation, SuggestedName: availableMaterialsName(parent, operation.Name)}}, nil
 				}
@@ -343,8 +374,8 @@ func completedFileOperation(root string, path string, operation FileOperationReq
 	return result
 }
 
-func replaceMaterialsFile(ctx context.Context, root, parent, destination string, operation FileOperationRequest, source string, expected FileIdentity) error {
-	if err := revalidateMaterialsDestination(root, relativeMaterials(root, parent), parent); err != nil {
+func replaceMaterialsFile(ctx context.Context, root, parent, destination string, operation FileOperationRequest, source string, expected FileIdentity, scope *materialsOperationScope) error {
+	if err := scope.revalidateDestination(root, relativeMaterials(root, parent), parent); err != nil {
 		return err
 	}
 	staging, err := stagingPath(parent, "import", ".tmp")
@@ -361,7 +392,7 @@ func replaceMaterialsFile(ctx context.Context, root, parent, destination string,
 		return err
 	}
 	created = true
-	if err := revalidateMaterialsDestination(root, relativeMaterials(root, parent), parent); err != nil {
+	if err := scope.revalidateDestination(root, relativeMaterials(root, parent), parent); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -401,8 +432,8 @@ func createStagedContent(ctx context.Context, root, parent string, operation Fil
 	}
 }
 
-func writeNewFileStaged(ctx context.Context, root, directory, parent, destination string, data []byte, mode os.FileMode) error {
-	if err := revalidateMaterialsDestination(root, directory, parent); err != nil {
+func writeNewFileStaged(ctx context.Context, root, directory, parent, destination string, data []byte, mode os.FileMode, scope *materialsOperationScope) error {
+	if err := scope.revalidateDestination(root, directory, parent); err != nil {
 		return err
 	}
 	staging, err := stagingPath(parent, "import", ".tmp")
@@ -413,7 +444,7 @@ func writeNewFileStaged(ctx context.Context, root, directory, parent, destinatio
 		return err
 	}
 	defer os.Remove(staging)
-	if err := revalidateMaterialsDestination(root, directory, parent); err != nil {
+	if err := scope.revalidateDestination(root, directory, parent); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -425,8 +456,8 @@ func writeNewFileStaged(ctx context.Context, root, directory, parent, destinatio
 	return renameNoReplace(staging, destination)
 }
 
-func copyFileStaged(ctx context.Context, root, directory, parent, source, destination string, mode os.FileMode) error {
-	if err := revalidateMaterialsDestination(root, directory, parent); err != nil {
+func copyFileStaged(ctx context.Context, root, directory, parent, source, destination string, mode os.FileMode, scope *materialsOperationScope) error {
+	if err := scope.revalidateDestination(root, directory, parent); err != nil {
 		return err
 	}
 	staging, err := stagingPath(parent, "import", ".tmp")
@@ -437,7 +468,7 @@ func copyFileStaged(ctx context.Context, root, directory, parent, source, destin
 		return err
 	}
 	defer os.Remove(staging)
-	if err := revalidateMaterialsDestination(root, directory, parent); err != nil {
+	if err := scope.revalidateDestination(root, directory, parent); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -449,8 +480,8 @@ func copyFileStaged(ctx context.Context, root, directory, parent, source, destin
 	return renameNoReplace(staging, destination)
 }
 
-func copyDirectoryStaged(ctx context.Context, root, parent, source, destination string, sourceInfo os.FileInfo) error {
-	if err := revalidateMaterialsDestination(root, relativeMaterials(root, parent), parent); err != nil {
+func copyDirectoryStaged(ctx context.Context, root, parent, source, destination string, sourceInfo os.FileInfo, scope *materialsOperationScope) error {
+	if err := scope.revalidateDestination(root, relativeMaterials(root, parent), parent); err != nil {
 		return err
 	}
 	staging, err := stagingPath(parent, "paste", "")
@@ -504,7 +535,7 @@ func copyDirectoryStaged(ctx context.Context, root, parent, source, destination 
 			}
 		}
 	}
-	if err := revalidateMaterialsDestination(root, relativeMaterials(root, parent), parent); err != nil {
+	if err := scope.revalidateDestination(root, relativeMaterials(root, parent), parent); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -521,8 +552,8 @@ type directoryCopy struct {
 	identity       *FileIdentity
 }
 
-func renameWithRecheck(root, parent, source, destination string, expected *FileIdentity) error {
-	if err := revalidateMaterialsDestination(root, relativeMaterials(root, parent), parent); err != nil {
+func renameWithRecheck(root, parent, source, destination string, expected *FileIdentity, scope *materialsOperationScope) error {
+	if err := scope.revalidateDestination(root, relativeMaterials(root, parent), parent); err != nil {
 		return err
 	}
 	current, err := os.Lstat(source)
@@ -536,11 +567,15 @@ func renameWithRecheck(root, parent, source, destination string, expected *FileI
 }
 
 func renameCaseOnly(ctx context.Context, root, parent, source, destination string, expected *FileIdentity) error {
+	return renameCaseOnlyInScope(ctx, root, parent, source, destination, expected, nil)
+}
+
+func renameCaseOnlyInScope(ctx context.Context, root, parent, source, destination string, expected *FileIdentity, scope *materialsOperationScope) error {
 	staging, err := stagingPath(parent, "rename", "")
 	if err != nil {
 		return err
 	}
-	if err := revalidateMaterialsDestination(root, relativeMaterials(root, parent), parent); err != nil {
+	if err := scope.revalidateDestination(root, relativeMaterials(root, parent), parent); err != nil {
 		return err
 	}
 	current, err := os.Lstat(source)
@@ -563,7 +598,7 @@ func renameCaseOnly(ctx context.Context, root, parent, source, destination strin
 		}
 		return err
 	}
-	err = revalidateMaterialsDestination(root, relativeMaterials(root, parent), parent)
+	err = scope.revalidateDestination(root, relativeMaterials(root, parent), parent)
 	if err == nil {
 		err = renameNoReplace(staging, destination)
 	}

@@ -93,7 +93,7 @@ func (s *app) settingsConfigBackup(c *ui.Context, p palette) {
 			settingsMuted(c, p, "正在读取配置备份…")
 		} else if state.backupsError != "" {
 			label(c, state.backupsError, 12, p.amber).Wrap()
-		} else if len(s.settingsBackups) == 0 {
+		} else if len(s.settingsUnit.state.settingsBackups) == 0 {
 			settingsMuted(c, p, "暂无配置备份。")
 		} else {
 			s.renderSettingsBackupList(c, p)
@@ -146,7 +146,7 @@ func (s *app) settingsDevelopmentTools(c *ui.Context, p palette) {
 			{"VISUAL_STUDIO_CODE", "Visual Studio Code"}, {"ANDROID_STUDIO", "Android Studio"}, {"DEVECO_STUDIO", "DevEco Studio"},
 		} {
 			typeKey, title := tool.kind, tool.name
-			toolStatus := findMap(mapsFromData(dataValue(s.settingsDevelopmentToolsSnapshot, "tools")), "type", typeKey)
+			toolStatus := findMap(mapsFromData(dataValue(s.settingsUnit.state.settingsDevelopmentToolsSnapshot, "tools")), "type", typeKey)
 			initialPath := firstNonEmpty(mapString(toolStatus, "path"), s.developmentToolPath(typeKey))
 			value := s.input("setting:development-tool:"+typeKey, initialPath)
 			ui.Column(c).FillWidth().Padding(10, 12).Gap(7).Background(p.soft).Radius(9).Children(func() {
@@ -187,7 +187,7 @@ func (s *app) settingsDevelopmentTools(c *ui.Context, p palette) {
 
 func (s *app) settingsTaskCreation(c *ui.Context, p palette) {
 	s.settingsWorkspaceTools(c, p)
-	status := s.settingsCLIStatus["codex"]
+	status := s.settingsUnit.state.settingsCLIStatus["codex"]
 	command := firstNonEmpty(mapString(status, "command"), mapString(status, "commandPath"))
 	settingsHelpCardWithActions(c, p, "Codex CLI 状态", "用于任务命名与 Codex 扩展管理。", func() {
 		s.overflowMenu(c, p, "settings-codex-cli-more", "更多 Codex CLI 操作", false, func(menu *overflowMenuBuilder) {
@@ -207,7 +207,7 @@ func (s *app) settingsTaskCreation(c *ui.Context, p palette) {
 	})
 	settingsHelpCard(c, p, "Codex CLI 命令路径", "留空时自动探测，也可以手动选择；更改后自动保存。", func() {
 		s.settingsConfigPathRow(c, p, "codexExecutablePath", "Codex CLI 可执行文件", "留空时使用 PATH 自动探测", false)
-		if s.cliJobs == nil || s.cliJobs.requests["status:codex"] == nil {
+		if s.toolsUnit.state.cliJobs == nil || s.toolsUnit.state.cliJobs.requests["status:codex"] == nil {
 			s.settingsCLIPathDiscoveryHint(c, p, "codex")
 		}
 		s.settingsCLICommandActions(c, p, "codex", command)
@@ -245,23 +245,23 @@ func (s *app) settingsAgents(c *ui.Context, p palette) {
 		s.requestSettingsInstructionRead(state.settingsReadAcceptDisk)
 	}
 	var markdown *markdownEditorState
-	if s.settingsAgentLoaded {
+	if s.settingsUnit.state.settingsAgentLoaded {
 		scope, groupID := s.settingsInstructionScope()
-		key := s.instructionAutosaveKey(scope, "", groupID, s.settingsAgentPath)
-		markdown = s.ensureInstructionMarkdownEditor(key, "settings", 0, s.settingsAgentContent)
+		key := s.instructionAutosaveKey(scope, "", groupID, s.settingsUnit.state.settingsAgentPath)
+		markdown = s.ensureInstructionMarkdownEditor(key, "settings", 0, s.settingsUnit.state.settingsAgentContent)
 	}
 	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Padding(16).Gap(8).Background(p.surface).Border(1, p.line).Radius(12).Children(func() {
 		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Wrap().Shrink(0).Children(func() {
-			s.settingsChoice(c, p, "agents-scope-global", "全局", s.settingsAgentScope == "global", func() {
+			s.settingsChoice(c, p, "agents-scope-global", "全局", s.settingsUnit.state.settingsAgentScope == "global", func() {
 				s.deactivateInstructionEditor()
-				s.settingsAgentScope, s.settingsAgentGroupID = "global", ""
+				s.settingsUnit.state.settingsAgentScope, s.settingsUnit.state.settingsAgentGroupID = "global", ""
 				s.loadSettingsAgentInstructions()
 			})
 			for _, group := range s.snapshot.Groups {
 				item := group
-				s.settingsChoice(c, p, "agents-scope-"+item.ID, item.Name, s.settingsAgentScope == item.ID, func() {
+				s.settingsChoice(c, p, "agents-scope-"+item.ID, item.Name, s.settingsUnit.state.settingsAgentScope == item.ID, func() {
 					s.deactivateInstructionEditor()
-					s.settingsAgentScope, s.settingsAgentGroupID = item.ID, item.ID
+					s.settingsUnit.state.settingsAgentScope, s.settingsUnit.state.settingsAgentGroupID = item.ID, item.ID
 					s.loadSettingsAgentInstructions()
 				})
 			}
@@ -271,12 +271,12 @@ func (s *app) settingsAgents(c *ui.Context, p palette) {
 					s.renderSettingsInstructionMenuItems(c, menu)
 				})
 			} else {
-				s.overflowMenu(c, p, "settings-agents-more-"+s.snapshot.Home+":"+s.settingsAgentContext, "更多文档操作", false, func(menu *overflowMenuBuilder) {
+				s.overflowMenu(c, p, "settings-agents-more-"+s.snapshot.Home+":"+s.settingsUnit.state.settingsAgentContext, "更多文档操作", false, func(menu *overflowMenuBuilder) {
 					s.renderSettingsInstructionMenuItems(c, menu)
 				})
 			}
 		})
-		if !s.settingsAgentLoaded {
+		if !s.settingsUnit.state.settingsAgentLoaded {
 			if state.settingsReadError != "" {
 				ui.Row(c).Padding(10).Background(p.amberBg).Radius(8).Children(func() {
 					label(c, state.settingsReadError, 11, p.amber).Wrap()
@@ -290,8 +290,8 @@ func (s *app) settingsAgents(c *ui.Context, p palette) {
 			}
 		} else {
 			scope, groupID := s.settingsInstructionScope()
-			key := s.instructionAutosaveKey(scope, "", groupID, s.settingsAgentPath)
-			s.renderInstructionTextArea(c, p, key, "settings", 0, &s.settingsAgentContent, 0)
+			key := s.instructionAutosaveKey(scope, "", groupID, s.settingsUnit.state.settingsAgentPath)
+			s.renderInstructionTextArea(c, p, key, "settings", 0, &s.settingsUnit.state.settingsAgentContent, 0)
 		}
 	})
 }
@@ -301,11 +301,11 @@ func (s *app) renderSettingsInstructionMenuItems(c *ui.Context, menu *overflowMe
 	if menu.Item("reload", "重新读取").Icon("refresh").Disabled(s.busy || state.settingsRequestPending || state.settingsReadDeferred).Chosen() {
 		s.requestSettingsInstructionRead(false)
 	}
-	if menu.Item("reveal", "显示文件位置").Icon("folder").Disabled(s.settingsAgentPath == "" || s.systemRevealBusy()).Chosen() {
-		s.act("system.reveal", "", "", "", s.settingsAgentPath, "", nil)
+	if menu.Item("reveal", "显示文件位置").Icon("folder").Disabled(s.settingsUnit.state.settingsAgentPath == "" || s.systemRevealBusy()).Chosen() {
+		s.act("system.reveal", "", "", "", s.settingsUnit.state.settingsAgentPath, "", nil)
 	}
-	if menu.Item("copy", "复制说明").Icon("copy").Disabled(!s.settingsAgentLoaded).Chosen() {
-		s.copyTextToClipboard(c.Services(), s.settingsAgentContent, "已复制说明")
+	if menu.Item("copy", "复制说明").Icon("copy").Disabled(!s.settingsUnit.state.settingsAgentLoaded).Chosen() {
+		s.copyTextToClipboard(c.Services(), s.settingsUnit.state.settingsAgentContent, "已复制说明")
 	}
 	if state.settingsReadError != "" {
 		menu.Separator()
@@ -327,12 +327,12 @@ func (s *app) settingsInstructionTemplates(c *ui.Context, p palette) {
 				}
 			})
 		}
-		if len(s.settingsTemplates) == 0 && state.settingsTemplatesError == "" {
+		if len(s.settingsUnit.state.settingsTemplates) == 0 && state.settingsTemplatesError == "" {
 			if !state.settingsTemplatesLoading {
 				settingsMuted(c, p, "还没有任务说明模板。")
 			}
 		}
-		for index, template := range s.settingsTemplates {
+		for index, template := range s.settingsUnit.state.settingsTemplates {
 			id, name, content := mapString(template, "id"), mapString(template, "name"), mapString(template, "content")
 			if name == "" {
 				name = id
@@ -361,7 +361,7 @@ func (s *app) settingsInstructionTemplates(c *ui.Context, p palette) {
 func (s *app) loadSettingsAgentInstructions() {
 	s.deactivateInstructionEditor()
 	scope, groupID := s.settingsInstructionScope()
-	s.settingsAgentContext = scope + ":" + groupID
-	s.settingsAgentLoaded = false
+	s.settingsUnit.state.settingsAgentContext = scope + ":" + groupID
+	s.settingsUnit.state.settingsAgentLoaded = false
 	s.requestSettingsInstructionRead(false)
 }

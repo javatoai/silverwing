@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"silverwing-go/internal/documents"
 )
 
 func TestCreateTaskRollbackDoesNotFollowWorkspaceJunction(t *testing.T) {
@@ -27,20 +29,33 @@ func TestCreateTaskRollbackDoesNotFollowWorkspaceJunction(t *testing.T) {
 		t.Fatal(err)
 	}
 	var callbackErr error
+	var fixtureErr error
 	_, err := service.CreateTaskWithProgress(ctx, config, CreateTaskRequest{FolderName: "junction-task"}, func(event TaskCreationProgress) {
 		if callbackErr != nil || event.Phase != TaskCreationPhaseSavingManifest || event.Status != TaskCreationProgressCompleted {
 			return
 		}
 		junction := filepath.Join(taskPath, AgentWorkspaceDir)
+		// Standalone creation now prepares local materials before saving the
+		// manifest. Remove only those verified generated entries, then replace
+		// the empty workspace directory with the malicious junction fixture.
+		if callbackErr = documents.CleanupLocalTaskMaterials(taskPath); callbackErr != nil {
+			return
+		}
+		if callbackErr = os.Remove(junction); callbackErr != nil {
+			return
+		}
 		output, commandErr := exec.Command("cmd.exe", "/d", "/c", "mklink", "/J", junction, external).CombinedOutput()
 		if commandErr != nil {
-			callbackErr = errors.New(string(output) + ": " + commandErr.Error())
+			fixtureErr = errors.New(string(output) + ": " + commandErr.Error())
 			return
 		}
 		cancel()
 	})
 	if callbackErr != nil {
-		t.Skipf("junction fixture unavailable: %v", callbackErr)
+		t.Fatal(callbackErr)
+	}
+	if fixtureErr != nil {
+		t.Skipf("junction fixture unavailable: %v", fixtureErr)
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected canceled task creation with retained junction: %v", err)

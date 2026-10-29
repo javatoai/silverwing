@@ -34,7 +34,7 @@ func (s *app) renderCodexAIOperation(c *ui.Context, p palette, state *codexAISta
 }
 
 func (s *app) cancelCodexAIOperation(state *codexAIState, key string) {
-	if state == nil || s.codexAI != state || !s.codexAIIdentityCurrent(state) || state.requests[key] == nil {
+	if state == nil || s.toolsUnit.state.codexAI != state || !s.codexAIIdentityCurrent(state) || state.requests[key] == nil {
 		return
 	}
 	request := state.requests[key]

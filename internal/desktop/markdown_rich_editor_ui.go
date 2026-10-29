@@ -159,7 +159,7 @@ func (s *app) renderMarkdownRichEditor(c *ui.Context, p palette, state *markdown
 }
 
 func (s *app) handleMarkdownEditorZoomInput(state *markdownEditorState, event ui.InputEvent) bool {
-	if !s.documentEditing || state != s.markdown || !s.markdownEditorIsCurrent(state) || state.sourceMode {
+	if !s.materialsUnit.state.documentEditing || state != s.materialsUnit.state.markdown || !s.markdownEditorIsCurrent(state) || state.sourceMode {
 		return false
 	}
 	return s.handleMarkdownZoomInput(event)

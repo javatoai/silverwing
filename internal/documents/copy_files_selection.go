@@ -12,12 +12,22 @@ import (
 
 // ResolveCopyFiles validates each selected materials item without inspecting
 // directory contents, then removes children covered by selected directories.
-func (s *Service) ResolveCopyFiles(ctx context.Context, root string, values []string) ([]string, error) {
-	root, err := filepath.Abs(root)
+func (s *Service) ResolveCopyFiles(ctx context.Context, root string, values []string) (selected []string, resultErr error) {
+	scope, err := newMaterialsOperationScope(root)
 	if err != nil {
 		return nil, err
 	}
-	paths, err := s.ResolveCopyPaths(ctx, root, values)
+	defer scope.finishPaths(&selected, &resultErr)
+	root = scope.root
+	physical := make([]string, 0, len(values))
+	for _, value := range values {
+		path, err := scope.resolve(value, false, false, false)
+		if err != nil {
+			return nil, err
+		}
+		physical = append(physical, path)
+	}
+	paths, err := s.ResolveCopyPaths(ctx, root, physical)
 	if err != nil {
 		return nil, err
 	}

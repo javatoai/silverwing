@@ -34,7 +34,7 @@ func developerToolPrimaryActionEnabled(page, activeTab, requestedTab string, too
 }
 
 func (s *app) toolPrimaryActionEnabled(state *toolPageState, tab string) bool {
-	if s == nil || state == nil || s.tools != state {
+	if s == nil || state == nil || s.toolsUnit.state.tools != state {
 		return false
 	}
 	route, ok := developerToolPrimaryActionForTab(tab)
@@ -54,7 +54,7 @@ func (s *app) toolPrimaryActionEnabled(state *toolPageState, tab string) bool {
 }
 
 func (s *app) developerToolPrimaryActionInScope(state *toolPageState, tab string) bool {
-	if s == nil || state == nil || s.tools != state || s.page != "tools" || state.activeTab != tab || !s.developerToolTabVisible(tab) {
+	if s == nil || state == nil || s.toolsUnit.state.tools != state || s.page != "tools" || state.activeTab != tab || !s.developerToolTabVisible(tab) {
 		return false
 	}
 	_, ok := developerToolPrimaryActionForTab(tab)

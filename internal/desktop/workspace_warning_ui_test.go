@@ -37,10 +37,10 @@ func workspaceWarningFixture(t *testing.T, warnings []string) (*app, *workspaceW
 	taskItem := task{id: "task-example", title: "Example task", path: filepath.Join(root, "task"), createdAt: "synthetic-created", workspaces: []application.Workspace{w}}
 	backend := &workspaceWarningBackend{actions: make(chan application.Action, 8)}
 	s := newApp(backend, Options{CapturePath: "isolated-workspace-warning"})
-	s.page, s.loading, s.tasks, s.win = "tasks", false, []task{taskItem}, &mygo.Window{}
+	s.page, s.loading, s.taskUnit.state.tasks, s.win = "tasks", false, []task{taskItem}, &mygo.Window{}
 	s.snapshot.Home = filepath.Join(root, "home")
-	s.configJSON = `{}`
-	s.workspaceGit = &workspaceGitState{health: map[string]domain.WorkspaceGitHealth{
+	s.settingsUnit.state.configJSON = `{}`
+	s.workspaceUnit.state.workspaceGit = &workspaceGitState{health: map[string]domain.WorkspaceGitHealth{
 		workspaceHealthPathKey(w.Path): {State: domain.WorkspaceGitReady, PushState: domain.LocalPushPushed},
 	}}
 	return s, backend, taskItem, w

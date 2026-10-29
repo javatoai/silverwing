@@ -1,58 +1,58 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Product Id="*"
-           Name="Silverwing Go"
+           Name="$(var.ProfileWindowsInstallName)"
            Language="2052"
            Codepage="936"
            Version="$(var.ProductVersion)"
            Manufacturer="Silverwing Contributors"
-           UpgradeCode="3C7E4D7A-80A2-4C79-B7E9-7AA9C4B5B331">
+           UpgradeCode="$(var.ProfileWindowsUpgradeCode)">
     <Package InstallerVersion="500" Platform="x64" Compressed="yes" InstallScope="perUser" Description="Silverwing native desktop application" />
-    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer Silverwing Go version is already installed." />
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer $(var.ProfileWindowsInstallName) version is already installed." />
     <Property Id="NSIS_INSTALLED">
-      <RegistrySearch Id="FindSetupInstallation" Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\Uninstall\SilverwingGo" Name="UninstallString" Type="raw" Win64="yes" />
+      <RegistrySearch Id="FindSetupInstallation" Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\Uninstall\$(var.ProfileWindowsRegistryNamespace)" Name="UninstallString" Type="raw" Win64="yes" />
     </Property>
-    <Condition Message="请先卸载 Setup 版本的 Silverwing Go，再使用 MSI 安装。">Installed OR NOT NSIS_INSTALLED</Condition>
+    <Condition Message="请先卸载 Setup 版本的 $(var.ProfileWindowsInstallName)，再使用 MSI 安装。">Installed OR NOT NSIS_INSTALLED</Condition>
     <MediaTemplate EmbedCab="yes" />
 
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="LocalAppDataFolder">
         <Directory Id="ProgramsFolder" Name="Programs">
-          <Directory Id="INSTALLFOLDER" Name="Silverwing Go" />
+          <Directory Id="INSTALLFOLDER" Name="$(var.ProfileWindowsInstallName)" />
         </Directory>
       </Directory>
       <Directory Id="ProgramMenuFolder">
-        <Directory Id="ApplicationProgramsFolder" Name="Silverwing Go" />
+        <Directory Id="ApplicationProgramsFolder" Name="$(var.ProfileWindowsInstallName)" />
       </Directory>
       <Directory Id="DesktopFolder" />
     </Directory>
 
     <DirectoryRef Id="ApplicationProgramsFolder">
-      <Component Id="StartMenuShortcuts" Guid="A13F6D2A-93EC-4E25-9A26-E4D18B94E6F1">
-        <Shortcut Id="SilverwingShortcut" Name="Silverwing Go" Target="[INSTALLFOLDER]silverwing.exe" WorkingDirectory="INSTALLFOLDER" />
+      <Component Id="StartMenuShortcuts" Guid="$(var.ProfileWindowsStartMenuGUID)">
+        <Shortcut Id="SilverwingShortcut" Name="$(var.ProfileWindowsInstallName)" Target="[INSTALLFOLDER]$(var.ProfileExecutableName).exe" WorkingDirectory="INSTALLFOLDER" />
         <RemoveFolder Id="RemoveProgramMenuFolder" On="uninstall" />
-        <RegistryValue Root="HKCU" Key="Software\SilverwingGo\Installer" Name="installed" Type="integer" Value="1" KeyPath="yes" />
+        <RegistryValue Root="HKCU" Key="Software\$(var.ProfileWindowsRegistryNamespace)\Installer" Name="installed" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </DirectoryRef>
 
     <DirectoryRef Id="DesktopFolder">
-      <Component Id="DesktopShortcut" Guid="B22B289F-8100-4AF4-A76D-89CE2B8491B6">
-        <Shortcut Id="SilverwingDesktopShortcut" Name="Silverwing Go" Target="[INSTALLFOLDER]silverwing.exe" WorkingDirectory="INSTALLFOLDER" />
-        <RegistryValue Root="HKCU" Key="Software\SilverwingGo\Installer" Name="desktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+      <Component Id="DesktopShortcut" Guid="$(var.ProfileWindowsDesktopGUID)">
+        <Shortcut Id="SilverwingDesktopShortcut" Name="$(var.ProfileWindowsInstallName)" Target="[INSTALLFOLDER]$(var.ProfileExecutableName).exe" WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\$(var.ProfileWindowsRegistryNamespace)\Installer" Name="desktopShortcut" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </DirectoryRef>
 
     <DirectoryRef Id="INSTALLFOLDER">
-      <Component Id="InstallFolderCleanup" Guid="EBA1EBFA-65F9-4418-95F5-AF7EBAF8C3F7">
+      <Component Id="InstallFolderCleanup" Guid="$(var.ProfileWindowsInstallFolderGUID)">
         <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
-        <RegistryValue Root="HKCU" Key="Software\SilverwingGo\Installer" Name="installFolder" Type="integer" Value="1" KeyPath="yes" />
+        <RegistryValue Root="HKCU" Key="Software\$(var.ProfileWindowsRegistryNamespace)\Installer" Name="installFolder" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </DirectoryRef>
 
     <DirectoryRef Id="ProgramsFolder">
-      <Component Id="ProgramsFolderCleanup" Guid="EBA5AA0B-09E4-4A12-8EBA-A1490EAFAB31">
+      <Component Id="ProgramsFolderCleanup" Guid="$(var.ProfileWindowsProgramsFolderGUID)">
         <RemoveFolder Id="RemoveProgramsFolder" On="uninstall" />
-        <RegistryValue Root="HKCU" Key="Software\SilverwingGo\Installer" Name="programsFolder" Type="integer" Value="1" KeyPath="yes" />
+        <RegistryValue Root="HKCU" Key="Software\$(var.ProfileWindowsRegistryNamespace)\Installer" Name="programsFolder" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </DirectoryRef>
 

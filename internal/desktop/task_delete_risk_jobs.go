@@ -35,30 +35,30 @@ type taskDeleteRiskJobState struct {
 }
 
 func (s *app) ensureTaskDeleteRiskJobs() *taskDeleteRiskJobState {
-	if s.taskDeleteRiskJobs == nil {
-		s.taskDeleteRiskJobs = &taskDeleteRiskJobState{running: make(map[*taskDeleteRiskJob]struct{})}
+	if s.taskUnit.state.taskDeleteRiskJobs == nil {
+		s.taskUnit.state.taskDeleteRiskJobs = &taskDeleteRiskJobState{running: make(map[*taskDeleteRiskJob]struct{})}
 	}
-	return s.taskDeleteRiskJobs
+	return s.taskUnit.state.taskDeleteRiskJobs
 }
 
 func (s *app) taskDeleteRiskCurrentScope(dialog *taskDeleteDialogState) (taskDeleteRiskScope, bool) {
 	if dialog == nil || !dialog.Open || dialog.Submitting ||
-		taskNavigationKey(s.currentTask()) != dialog.SelectionKey || s.currentTask().path != dialog.SelectionPath ||
+		taskNavigationKey(s.taskUnit.currentTask()) != dialog.SelectionKey || s.taskUnit.currentTask().path != dialog.SelectionPath ||
 		(dialog.Page != "" && dialog.Page != s.page) {
 		return taskDeleteRiskScope{}, false
 	}
-	task := s.taskByID(dialog.TaskID)
+	task := s.taskUnit.taskByID(dialog.TaskID)
 	if task.id == "" || task.path != dialog.TaskPath || task.createdAt != dialog.TaskCreatedAt || task.archived != dialog.TaskArchived {
 		return taskDeleteRiskScope{}, false
 	}
 	return taskDeleteRiskScope{
 		taskID: task.id, taskPath: task.path, taskCreatedAt: task.createdAt,
-		home: s.snapshot.Home, taskRoot: s.configString("taskRoot"), config: s.configJSON, page: s.page,
+		home: s.snapshot.Home, taskRoot: s.configString("taskRoot"), config: s.settingsUnit.state.configJSON, page: s.page,
 	}, true
 }
 
 func (s *app) beginTaskDeleteRiskJob(action application.Action) (*taskDeleteRiskJob, error) {
-	dialog := s.taskDeleteDialog
+	dialog := s.taskUnit.state.taskDeleteDialog
 	if action.Kind != "task.delete-risks" || !s.taskDeleteStateMatches(action) {
 		return nil, errors.New("删除检查请求已变化，请重新检查。")
 	}
@@ -97,9 +97,9 @@ func (s *app) beginTaskDeleteRiskJob(action application.Action) (*taskDeleteRisk
 }
 
 func (s *app) taskDeleteRiskJobRelevant(request *taskDeleteRiskJob) bool {
-	state := s.taskDeleteRiskJobs
+	state := s.taskUnit.state.taskDeleteRiskJobs
 	if request == nil || state == nil || state.current != request || state.generation != request.generation ||
-		request.ctx.Err() != nil || s.taskDeleteDialog != request.dialog || !s.taskDeleteStateMatches(request.action) {
+		request.ctx.Err() != nil || s.taskUnit.state.taskDeleteDialog != request.dialog || !s.taskDeleteStateMatches(request.action) {
 		return false
 	}
 	state.mu.Lock()
@@ -168,8 +168,8 @@ func (s *app) finishTaskDeleteRiskJob(request *taskDeleteRiskJob, result applica
 	}
 	defer request.cancel()
 	if !s.taskDeleteRiskJobRelevant(request) {
-		if state := s.taskDeleteRiskJobs; state != nil && state.current == request {
-			if s.taskDeleteDialog != request.dialog {
+		if state := s.taskUnit.state.taskDeleteRiskJobs; state != nil && state.current == request {
+			if s.taskUnit.state.taskDeleteDialog != request.dialog {
 				s.cancelTaskDeleteRiskRead()
 			} else {
 				s.observeTaskDeleteRiskJobs()
@@ -177,7 +177,7 @@ func (s *app) finishTaskDeleteRiskJob(request *taskDeleteRiskJob, result applica
 		}
 		return
 	}
-	s.taskDeleteRiskJobs.current = nil
+	s.taskUnit.state.taskDeleteRiskJobs.current = nil
 	if err != nil {
 		s.applyTaskDeleteRiskFailure(request.action, err)
 	} else {
@@ -186,7 +186,7 @@ func (s *app) finishTaskDeleteRiskJob(request *taskDeleteRiskJob, result applica
 }
 
 func (s *app) completeTaskDeleteRiskJob(request *taskDeleteRiskJob) {
-	state := s.taskDeleteRiskJobs
+	state := s.taskUnit.state.taskDeleteRiskJobs
 	if state == nil || request == nil {
 		return
 	}
@@ -199,7 +199,7 @@ func (s *app) completeTaskDeleteRiskJob(request *taskDeleteRiskJob) {
 }
 
 func (s *app) cancelTaskDeleteRiskRead() {
-	if state := s.taskDeleteRiskJobs; state != nil && state.current != nil {
+	if state := s.taskUnit.state.taskDeleteRiskJobs; state != nil && state.current != nil {
 		request := state.current
 		state.current = nil
 		request.cancel()
@@ -208,7 +208,7 @@ func (s *app) cancelTaskDeleteRiskRead() {
 
 func (s *app) invalidateTaskDeleteRiskRead() {
 	s.cancelTaskDeleteRiskRead()
-	if dialog := s.taskDeleteDialog; dialog != nil && !dialog.Submitting {
+	if dialog := s.taskUnit.state.taskDeleteDialog; dialog != nil && !dialog.Submitting {
 		dialog.RequestID = taskDeleteRequestSequence.Add(1)
 		dialog.RiskScope = nil
 		dialog.Loading = false
@@ -221,7 +221,7 @@ func (s *app) invalidateTaskDeleteRiskRead() {
 // are canceled on navigation/task changes, and successful old inspections are
 // invalidated when their home/configuration changes before confirmation.
 func (s *app) observeTaskDeleteRiskJobs() {
-	dialog := s.taskDeleteDialog
+	dialog := s.taskUnit.state.taskDeleteDialog
 	if dialog == nil || !dialog.Open {
 		s.cancelTaskDeleteRiskRead()
 		return
@@ -229,7 +229,7 @@ func (s *app) observeTaskDeleteRiskJobs() {
 	if dialog.Submitting {
 		return
 	}
-	if state := s.taskDeleteRiskJobs; state != nil && state.current != nil && state.current.dialog != dialog {
+	if state := s.taskUnit.state.taskDeleteRiskJobs; state != nil && state.current != nil && state.current.dialog != dialog {
 		s.cancelTaskDeleteRiskRead()
 	}
 	current, ok := s.taskDeleteRiskCurrentScope(dialog)
@@ -241,13 +241,13 @@ func (s *app) observeTaskDeleteRiskJobs() {
 		s.invalidateTaskDeleteRiskRead()
 		return
 	}
-	if state := s.taskDeleteRiskJobs; state != nil && state.current != nil && !s.taskDeleteRiskJobRelevant(state.current) {
+	if state := s.taskUnit.state.taskDeleteRiskJobs; state != nil && state.current != nil && !s.taskDeleteRiskJobRelevant(state.current) {
 		s.invalidateTaskDeleteRiskRead()
 	}
 }
 
-func (s *app) closeTaskDeleteRiskJobs(ctx context.Context) error {
-	state := s.taskDeleteRiskJobs
+func (s *taskController) closeTaskDeleteRiskJobs(ctx context.Context) error {
+	state := s.state.taskDeleteRiskJobs
 	if state == nil {
 		return nil
 	}

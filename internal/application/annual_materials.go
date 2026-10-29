@@ -13,10 +13,7 @@ import (
 )
 
 func visibleMaterialsRoot(owned string) string {
-	if scope, ok := documents.AnnualScope(owned); ok {
-		return scope.Root
-	}
-	return owned
+	return documents.DescribeMaterials(owned).ReadRoot
 }
 
 func annualMaterialsScope(root, subdirectory string) (documents.AnnualMaterialsScope, bool) {
@@ -28,6 +25,13 @@ func (a *App) documentAnnualScope(root string) (documents.AnnualMaterialsScope, 
 	config, err := a.Config.Load()
 	if err != nil {
 		return documents.AnnualMaterialsScope{}, false, err
+	}
+	if scope, ok := documents.LocalScope(filepath.Join(root, documents.LocalMaterialsSubdirectory)); ok {
+		rel, err := filepath.Rel(value(config.TaskRoot), scope.Base)
+		if config.TaskRoot == nil || err != nil || rel == "." || filepath.Dir(rel) != "." || rel == ".." || filepath.IsAbs(rel) {
+			return scope, false, errors.New("本地资料所属任务目录已变化，请重新打开任务")
+		}
+		return scope, true, nil
 	}
 	scope, ok := annualMaterialsScope(root, value(config.RequirementMaterialsSubdirectory))
 	if ok && !sameTaskContextPath(scope.Base, value(config.RequirementMaterialsRoot)) {
@@ -184,6 +188,15 @@ func (a *App) authorizeMaterialsAction(root string, action Action) (Action, erro
 func validAnnualTaskMaterials(manifest domain.TaskManifest, config domain.AppConfig) error {
 	owned := value(manifest.RequirementMaterials.WriteRoot)
 	if owned == "" {
+		return nil
+	}
+	if scope, ok := documents.LocalScope(owned); ok {
+		if config.TaskRoot == nil || manifest.TaskDirectoryName == "" || !sameTaskContextPath(scope.Base, filepath.Join(*config.TaskRoot, manifest.TaskDirectoryName)) {
+			return errors.New("本地资料目录与当前任务身份不一致")
+		}
+		if _, err := scope.DirectoryInstructions(false); err != nil {
+			return fmt.Errorf("本地任务资料不可用，可重试准备资料：%w", err)
+		}
 		return nil
 	}
 	scope, ok := documents.AnnualScope(owned)

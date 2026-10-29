@@ -28,7 +28,7 @@ func TestProductionInformationColumnsAndStatusAlignment(t *testing.T) {
 				s, v, b := productionFixture(t)
 				b = productionConflictBatch(b, "feature")
 				b.Intent.SourceBranch = "feature/" + strings.Repeat("long-branch-name-", 10)
-				s.production.batches[0] = b
+				s.releaseUnit.state.production.batches[0] = b
 				tester := productionCardsTester(s, width, dark)
 				baseline := productionAlignmentRect(t, tester, "production-baseline-main值")
 				for _, key := range []string{"production-baseline-tag", "production-baseline-main", "production-conflict-来源", "production-conflict-目标"} {
@@ -53,7 +53,7 @@ func TestProductionInformationColumnsAndStatusAlignment(t *testing.T) {
 				}
 				captureProductionSummary(t, tester, fmt.Sprintf("alignment-conflict-%d-dark-%t", width, dark))
 				b.Intent, b.Phase = nil, "READY"
-				s.production.batches[0] = b
+				s.releaseUnit.state.production.batches[0] = b
 				tester.Frame()
 				picker := productionAlignmentRect(t, tester, "待合并的单个远端分支")
 				card := productionAlignmentRect(t, tester, "合并分支卡片")
@@ -77,7 +77,7 @@ func TestProductionSyncAndRecordActionsStayAligned(t *testing.T) {
 				}
 				b.Target.ServiceName = "service-" + strings.Repeat("long-name-", 8)
 				v.Preview.Target = b.Target
-				s.production.batches[0] = b
+				s.releaseUnit.state.production.batches[0] = b
 				tester := productionCardsTester(s, width, dark)
 				tester.SetSize(width, 1800)
 				tester.SetPreferences(ui.Preferences{ReduceMotion: true, TextScale: 1})
@@ -107,7 +107,7 @@ func TestProductionSyncAndRecordActionsStayAligned(t *testing.T) {
 				captureProductionSummary(t, tester, fmt.Sprintf("alignment-records-%d-dark-%t", width, dark))
 				b.Target.ServiceName = "data-sync-service"
 				v.Preview.Target = b.Target
-				s.production.batches[0] = b
+				s.releaseUnit.state.production.batches[0] = b
 				tester.Frame()
 				if width >= 960 {
 					var previous ui.Rect

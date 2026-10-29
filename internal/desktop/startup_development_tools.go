@@ -19,12 +19,12 @@ type startupDevelopmentToolsState struct {
 // Startup discovery owns one worker and does not occupy an ordinary operation
 // or its backend gate. The existing detector persists only missing tool types.
 func (s *app) startStartupDevelopmentTools() {
-	if s.startupDevelopmentTools != nil || s.backend == nil || s.win == nil || s.win.IsDestroyed() || strings.TrimSpace(s.snapshot.ConfigJSON) == "" {
+	if s.toolsUnit.state.startupDevelopmentTools != nil || s.backend == nil || s.win == nil || s.win.IsDestroyed() || strings.TrimSpace(s.snapshot.ConfigJSON) == "" {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	state := &startupDevelopmentToolsState{cancel: cancel, done: make(chan struct{})}
-	s.startupDevelopmentTools = state
+	s.toolsUnit.state.startupDevelopmentTools = state
 	backend, win, home := s.backend, s.win, s.snapshot.Home
 	go func() {
 		// Completion never depends on a window callback: shutdown can cancel
@@ -56,7 +56,7 @@ func (s *app) applyStartupDevelopmentToolsResult(result application.ActionResult
 		return
 	}
 	var config domain.AppConfig
-	if domain.DecodeStrict([]byte(s.configJSON), &config) != nil {
+	if domain.DecodeStrict([]byte(s.settingsUnit.state.configJSON), &config) != nil {
 		return
 	}
 	added := make(map[domain.DevelopmentToolType]bool, len(detected.AddedTypes))
@@ -83,21 +83,21 @@ func (s *app) applyStartupDevelopmentToolsResult(result application.ActionResult
 		return
 	}
 	next := string(encoded)
-	s.syncSettingsConfigInputs(s.configJSON, next)
-	s.configJSON, s.snapshot.ConfigJSON = next, next
+	s.syncSettingsConfigInputs(s.settingsUnit.state.configJSON, next)
+	s.settingsUnit.state.configJSON, s.snapshot.ConfigJSON = next, next
 }
 
 // stopStartupDevelopmentTools is safe on the native close callback: it cancels
 // without waiting for a backend that may still be completing local cleanup.
-func (s *app) stopStartupDevelopmentTools() {
-	if state := s.startupDevelopmentTools; state != nil {
+func (s *toolsController) stopStartupDevelopmentTools() {
+	if state := s.state.startupDevelopmentTools; state != nil {
 		state.closed.Store(true)
 		state.cancel()
 	}
 }
 
-func (s *app) closeStartupDevelopmentTools(ctx context.Context) error {
-	state := s.startupDevelopmentTools
+func (s *toolsController) closeStartupDevelopmentTools(ctx context.Context) error {
+	state := s.state.startupDevelopmentTools
 	if state == nil {
 		return nil
 	}

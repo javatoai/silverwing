@@ -9,6 +9,7 @@ import (
 
 	"silverwing-go/internal/delivery"
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/storage"
 )
 
 type tagProbeFlight struct {
@@ -42,21 +43,43 @@ func (a *App) DispatchTagProbe(ctx context.Context, action Action, onRecord func
 	if err != nil {
 		return ActionResult{}, err
 	}
-	var items []TagRecord
-	if action.Kind == "tag.history" || action.Kind == "tag.history.refresh" {
-		items, err = a.readRetainedTagHistoryRecords(ctx, config, tasks)
-	} else {
-		items, err = a.readTagHistoryRecords(ctx, config, tasks)
-	}
-	if err != nil {
-		return ActionResult{}, err
-	}
 	ids := historyOperationIDs(action.Payload["operationIds"])
 	if action.Kind == "tag.status" {
 		ids = []string{textPayload(action, "operationId")}
 		if ids[0] == "" {
 			return ActionResult{}, errors.New("缺少Tag操作记录ID")
 		}
+	}
+	var items []TagRecord
+	if action.Kind == "tag.history" {
+		items, err = a.readRetainedTagHistoryRecords(ctx, config, tasks)
+	} else {
+		service := a.delivery(config)
+		if action.Kind == "tag.history.refresh" {
+			if _, err = service.EnforceHistoryRetention(ctx, config, tasks); err != nil && !errors.Is(err, storage.ErrLockBusy) {
+				return ActionResult{}, err
+			}
+		}
+		var snapshot *delivery.TagProbeSnapshot
+		snapshot, err = readTagProbeRound(ctx, tagProbeRoundScope(a.Paths.Home, textPayload(action, "tagJobAccountIdentity"), config, tasks), func(readCtx context.Context) (*delivery.TagProbeSnapshot, error) {
+			return service.ReadTagProbeSnapshot(readCtx, config, tasks)
+		})
+		if err == nil {
+			ctx = delivery.WithTagProbeSnapshot(ctx, snapshot)
+			var records []delivery.TagProbeHistoryRecord
+			if action.Kind == "tag.status" {
+				records = snapshot.RecordsForIDs(ids)
+			} else {
+				records = snapshot.Records()
+			}
+			for _, record := range records {
+				items = append(items, tagRecord(record.TaskID, record.Report))
+			}
+			sortTagHistoryRecords(items)
+		}
+	}
+	if err != nil {
+		return ActionResult{}, err
 	}
 	wanted := map[string]bool{}
 	for _, id := range ids {
@@ -128,7 +151,7 @@ func (a *App) DispatchTagProbe(ctx context.Context, action Action, onRecord func
 		var pending = make(chan outcome, len(byLane))
 		for lane, records := range byLane {
 			go func(lane string, records []TagRecord) {
-				result, failure := a.runTagProbeLane(ctx, config, tasks, lane, records, force, func(record TagRecord) {
+				result, failure := a.runTagProbeLane(ctx, config, tasks, lane, textPayload(action, "tagJobAccountIdentity"), records, force, func(record TagRecord) {
 					select {
 					case updates <- outcome{records: []TagRecord{record}}:
 					case <-ctx.Done():
@@ -166,7 +189,17 @@ func (a *App) DispatchTagProbe(ctx context.Context, action Action, onRecord func
 			emit(record)
 		}
 	}
-	final, readErr := a.readTagHistoryRecords(context.WithoutCancel(ctx), config, tasks)
+	var final []TagRecord
+	var readErr error
+	if action.Kind == "tag.status" {
+		var records []delivery.TagProbeHistoryRecord
+		records, readErr = a.delivery(config).ReadTagProbeRecords(context.WithoutCancel(ctx), config, tasks, ids)
+		for _, record := range records {
+			final = append(final, tagRecord(record.TaskID, record.Report))
+		}
+	} else {
+		final, readErr = a.readTagHistoryRecords(context.WithoutCancel(ctx), config, tasks)
+	}
 	statusErr = errors.Join(statusErr, readErr)
 	if action.Kind == "tag.history.refresh" {
 		refresh := TagHistoryRefreshResult{Records: final}
@@ -181,7 +214,7 @@ func (a *App) DispatchTagProbe(ctx context.Context, action Action, onRecord func
 				return ActionResult{Data: item}, statusErr
 			}
 		}
-		return ActionResult{}, errors.New("Tag状态记录已移除")
+		return ActionResult{}, errors.Join(errors.New("Tag状态记录已移除或所属任务已变化"), statusErr)
 	}
 	return ActionResult{Data: final}, statusErr
 }
@@ -212,7 +245,7 @@ func tagProbeLane(config domain.AppConfig, tasks []domain.TaskManifest, record T
 	return "task:" + record.TaskID
 }
 
-func (a *App) runTagProbeLane(ctx context.Context, config domain.AppConfig, tasks []domain.TaskManifest, lane string, records []TagRecord, force bool, onRecord func(TagRecord)) ([]TagRecord, error) {
+func (a *App) runTagProbeLane(ctx context.Context, config domain.AppConfig, tasks []domain.TaskManifest, lane, account string, records []TagRecord, force bool, onRecord func(TagRecord)) ([]TagRecord, error) {
 	m := a.tagJobManager()
 	ids := make([]string, len(records))
 	for i, record := range records {
@@ -220,11 +253,12 @@ func (a *App) runTagProbeLane(ctx context.Context, config domain.AppConfig, task
 	}
 	sort.Strings(ids)
 	identityBytes, _ := json.Marshal(struct {
-		Config string
-		Force  bool
-		Task   string
-		IDs    []string
-	}{configTagIdentity(config), force, records[0].TaskID, ids})
+		Config  string
+		Account string
+		Force   bool
+		Tasks   []domain.TaskManifest
+		IDs     []string
+	}{configTagIdentity(config), account, force, tasks, ids})
 	identity := string(identityBytes)
 	for {
 		m.mu.Lock()

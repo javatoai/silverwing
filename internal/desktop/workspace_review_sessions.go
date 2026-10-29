@@ -46,13 +46,13 @@ func workspaceReviewTaskKey(task task, item application.Workspace) string {
 func (s *app) ensureWorkspaceReviewSession(task task, item application.Workspace) (*workspaceReviewSession, string, string) {
 	repositoryKey := workspaceReviewRepositoryKey(s.snapshot.Home, item.Path)
 	taskKey := workspaceReviewTaskKey(task, item)
-	if s.workspaceReviewSessions == nil {
-		s.workspaceReviewSessions = make(map[string]*workspaceReviewSession)
+	if s.workspaceUnit.state.workspaceReviewSessions == nil {
+		s.workspaceUnit.state.workspaceReviewSessions = make(map[string]*workspaceReviewSession)
 	}
-	session := s.workspaceReviewSessions[repositoryKey]
+	session := s.workspaceUnit.state.workspaceReviewSessions[repositoryKey]
 	if session == nil {
 		session = &workspaceReviewSession{SplitRatio: 0.5}
-		s.workspaceReviewSessions[repositoryKey] = session
+		s.workspaceUnit.state.workspaceReviewSessions[repositoryKey] = session
 	}
 	if session.SplitRatio <= 0 {
 		session.SplitRatio = 0.5
@@ -97,10 +97,10 @@ func (s *app) saveWorkspaceReviewSelection(state *workspaceHistoryState) {
 	if state.FilesLoading && state.SelectedPath == "" {
 		return
 	}
-	if s.workspaceReviewSessions == nil {
+	if s.workspaceUnit.state.workspaceReviewSessions == nil {
 		return
 	}
-	session := s.workspaceReviewSessions[state.RepositorySessionKey]
+	session := s.workspaceUnit.state.workspaceReviewSessions[state.RepositorySessionKey]
 	if session == nil {
 		return
 	}
@@ -159,10 +159,10 @@ func (s *app) saveWorkspaceReviewSession(state *workspaceHistoryState) {
 	if state == nil || state.Mode != "review" || state.RepositorySessionKey == "" {
 		return
 	}
-	if s.workspaceReviewSessions == nil {
+	if s.workspaceUnit.state.workspaceReviewSessions == nil {
 		return
 	}
-	session := s.workspaceReviewSessions[state.RepositorySessionKey]
+	session := s.workspaceUnit.state.workspaceReviewSessions[state.RepositorySessionKey]
 	if session == nil {
 		return
 	}

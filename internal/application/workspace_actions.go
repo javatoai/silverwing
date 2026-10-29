@@ -39,6 +39,9 @@ func (a *App) workspaceActionWithOutput(ctx context.Context, action Action, onOu
 }
 
 func (a *App) workspaceActionWithProgress(ctx context.Context, action Action, onOutput func(process.StreamEvent), onTaskProgress func(workspace.TaskCreationProgress)) (actionResult ActionResult, actionErr error) {
+	if result, handled, err := a.dispatchTypedTaskAction(ctx, action, onTaskProgress); handled {
+		return result, err
+	}
 	config, err := a.Config.Load()
 	if err != nil {
 		return ActionResult{}, err
@@ -49,49 +52,9 @@ func (a *App) workspaceActionWithProgress(ctx context.Context, action Action, on
 	if result, handled, previewErr := taskCreationPreviewAction(ctx, action, config, service); handled {
 		return result, previewErr
 	}
-	if action.Kind == "task.create" || action.Kind == "task.create-preview" {
-		var req workspace.CreateTaskRequest
-		if err = decodePayload(action.Payload, &req); err != nil {
-			return ActionResult{}, err
-		}
-		if req.FolderName == "" {
-			req.FolderName = textPayload(action, "title")
-		}
-		if req.FeatureBranch == "" {
-			req.FeatureBranch = textPayload(action, "branch")
-		}
-		if req.RequirementLink == "" {
-			req.RequirementLink = textPayload(action, "requirementURL")
-		}
-		if req.GroupID == "" {
-			req.GroupID = domain.DefaultGroupID
-		}
-		if action.Kind == "task.create-preview" {
-			data, err := service.InspectCreateBranchReuseWithProgress(ctx, config, req, onTaskProgress)
-			return ActionResult{Message: "任务创建预检已完成", Data: data}, err
-		}
-		toolIDs := config.DefaultWorkspaceToolIDs
-		if action.Payload["workspaceToolIds"] != nil {
-			if e := decodeField(action, "workspaceToolIds", &toolIDs); e != nil {
-				return ActionResult{}, e
-			}
-		}
-		manifest, err := service.CreateTaskWithProgress(ctx, config, req, onTaskProgress)
-		if err != nil {
-			return ActionResult{}, err
-		}
-		return finishCreatedTask(ctx, service, filepath.Join(*config.TaskRoot, manifest.TaskDirectoryName), manifest, toolIDs, onTaskProgress), nil
-	}
 	manifest, path, err := a.taskInConfig(action, config)
 	if err != nil {
 		return ActionResult{}, err
-	}
-	switch action.Kind {
-	case "task.materials-retry", "task.archive", "task.restore", "task.delete", "task.tools-launch":
-		if err := a.validateDesktopTaskContext(action, config, manifest, path); err != nil {
-			return ActionResult{}, err
-		}
-		ctx = a.desktopTaskMutationContext(ctx, action)
 	}
 	if result, handled, appendErr := taskWorkspaceAppendAction(ctx, action, config, service, path); handled {
 		return result, appendErr
@@ -121,32 +84,6 @@ func (a *App) workspaceActionWithProgress(ctx context.Context, action Action, on
 		return result, err
 	}
 	switch action.Kind {
-	case "task.tools-retry":
-		m, e := service.RetryWorkspaceTool(ctx, path, manifest, textPayload(action, "toolId"))
-		return ActionResult{Message: "工作区工具重试已返回", Data: m}, e
-	case "task.tools-launch":
-		var ids []string
-		if e := decodeField(action, "toolIds", &ids); e != nil {
-			return ActionResult{}, e
-		}
-		m, e := service.LaunchWorkspaceTools(ctx, path, manifest, ids)
-		if e == nil {
-			if failure := workspaceToolLaunchFailure(m, ids); failure != "" {
-				e = fmt.Errorf("任务工具打开失败：%s", failure)
-			}
-		}
-		return ActionResult{Message: "工作区工具启动已返回", Data: m}, e
-	case "task.materials-retry":
-		m, e := service.RetryRequirementMaterials(ctx, config, path)
-		return ActionResult{Message: "资料目录操作已返回，请查看状态", Data: m}, e
-	case "task.archive":
-		m, e := service.Archive(ctx, config, path, boolPayload(action, "cleanup"))
-		return ActionResult{Message: "任务已归档", Data: m}, e
-	case "task.restore":
-		m, e := service.Restore(ctx, config, path)
-		return ActionResult{Message: "任务已恢复", Data: m}, e
-	case "task.delete":
-		return ActionResult{Message: "任务已删除"}, service.Delete(ctx, config, path, boolPayload(action, "forceDiscard"))
 	case "workspace.add":
 		var req workspace.AddWorkspaceRequest
 		if err = decodePayload(action.Payload, &req); err != nil {

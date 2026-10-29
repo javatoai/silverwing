@@ -2,7 +2,7 @@
 
 `internal/media` provides local image and PDF preview without a WebView or JVM.
 Images are decoded and resized in Go. PDFs are rendered through the PDFium C
-API using `purego`; the UI receives PNG bytes and owns display, zoom, pan, page
+API using `purego`; the UI receives independently owned RGBA pixels and owns display, zoom, pan, page
 navigation, selection, and overlays.
 
 ## API
@@ -11,13 +11,16 @@ navigation, selection, and overlays.
 doc, err := media.OpenPDF(ctx, absolutePath, media.Options{})
 info := doc.Info() // page dimensions, page count, internal outline
 page, err := doc.RenderPagePNG(ctx, pageIndex, requestedWidthPx)
+pixels, err := doc.RenderPageRGBA(ctx, pageIndex, requestedWidthPx) // in-process UI
 index, err := doc.TextIndex(ctx) // text plus normalized glyph rectangles
+index, err = doc.TextIndexPrioritized(ctx, visiblePageIndices)
 doc.ClearCache()
 err = doc.Close()
 
 image, err := media.OpenImage(ctx, absolutePath, media.Options{})
 imageInfo := image.Info()
 preview, err := image.RenderPNG(ctx, requestedWidthPx)
+pixels, err = image.RenderRGBA(ctx, requestedWidthPx)
 image.Close()
 ```
 
@@ -35,13 +38,14 @@ content. It does not walk directories or decide which files are visible.
 | PDF rendered page | requested width up to 8,192 px; 4,096 px maximum edge; 4,000,000 pixels |
 | Image encoded bytes | 32 MiB |
 | Decoded image pixels | 20,000,000 |
-| Encoded PNG LRU cache | 32 MiB |
+| Combined PNG and RGBA LRU caches | 32 MiB, divided equally between formats |
 
 `CacheBytes: 0` selects the default cache; a negative cache size is invalid.
-`ClearCache` drops all cached PNGs. Returned PNG slices are copies, so callers
-may hand them to the UI without sharing mutable cache storage. Memory used by
-the original decoded image, an active render, and PNGs retained by the caller
-is outside the PNG-cache budget. Call `Close` when a preview is dismissed or
+`ClearCache` drops both caches. Returned PNG slices and RGBA pixels are owned
+copies; neither aliases mutable cache storage or freed PDFium buffers. The UI
+uses RGBA directly to avoid PNG compression and decompression. Memory used by
+the original decoded image, an active render, and images retained by callers
+is outside the cache budget. Call `Close` when a preview is dismissed or
 its file changes.
 
 ### PDF display and text
@@ -59,6 +63,13 @@ its file changes.
   offsets into that page's `Text`; rectangles are normalized to the displayed
   page, with origin at the top left and coordinates in `[0, 1]`. The UI can
   use these for find highlights and text selection/copy overlays.
+- Text extraction closes page handles and releases document/PDFium execution
+  rights between pages. `TextIndexPrioritized` visits visible pages first and
+  still returns a complete index. Visible page renders can run between index
+  pages; cancellation never leaves a native page handle open.
+- The desktop maintains one bounded render queue per document, replaces pending
+  widths for the same page and removes offscreen requests. Results still pass
+  document, generation and current-width checks before reaching the UI.
 - `OutlineEntry` contains only internal page destinations. The backend does
   not execute PDF actions, URLs, or scripts. Scanned pages have no searchable
   text unless the PDF contains an OCR text layer. Unusual font encodings and

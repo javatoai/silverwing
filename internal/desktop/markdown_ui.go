@@ -4,13 +4,10 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"silverwing-go/internal/editor"
 
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -32,7 +29,11 @@ type markdownEditorState struct {
 	closed                 bool
 	remoteImages           bool
 	trustedImages          map[string]string
+	localPreviewFiles      localPreviewFileResolver
 	inlineImages           map[string]*markdownInlineImageState
+	imagePool              *nativeImagePool
+	imagePoolOwned         bool
+	imageScope             markdownImageScope
 	imageRenderSeen        map[string]bool
 	readonlyReader         *readonlyMarkdownReaderState
 	composingOwner         string
@@ -75,32 +76,33 @@ type markdownInlineImageState struct {
 	bitmap     *ui.Bitmap
 	error      string
 	loading    bool
+	waiting    bool
 	cancel     context.CancelFunc
 }
 
 func (s *app) ensureMarkdownEditor() *markdownEditorState {
-	taskID := s.currentTask().id
-	if s.markdown != nil && s.markdown.taskID == taskID && s.markdown.path == s.documentPath && s.markdown.doc != nil {
-		s.markdown.readOnly = markdownReadingOnly || s.documentReadOnly
-		s.configureMarkdownSourceLimit(s.markdown)
-		if s.markdown.doc.Source() != s.documentContent {
-			s.markdown.doc.SyncExternal(s.documentContent)
+	taskID := s.taskUnit.currentTask().id
+	if s.materialsUnit.state.markdown != nil && s.materialsUnit.state.markdown.taskID == taskID && s.materialsUnit.state.markdown.path == s.materialsUnit.state.documentPath && s.materialsUnit.state.markdown.doc != nil {
+		s.materialsUnit.state.markdown.readOnly = markdownReadingOnly || s.materialsUnit.state.documentReadOnly
+		s.configureMarkdownSourceLimit(s.materialsUnit.state.markdown)
+		if s.materialsUnit.state.markdown.doc.Source() != s.materialsUnit.state.documentContent {
+			s.materialsUnit.state.markdown.doc.SyncExternal(s.materialsUnit.state.documentContent)
 		}
-		return s.markdown
+		return s.materialsUnit.state.markdown
 	}
 	s.closeMarkdownEditor()
-	s.markdown = &markdownEditorState{
-		taskID: taskID, path: s.documentPath, doc: editor.NewDocument(s.documentContent, taskID+"\x00"+s.documentPath),
+	s.materialsUnit.state.markdown = &markdownEditorState{
+		taskID: taskID, path: s.materialsUnit.state.documentPath, doc: editor.NewDocument(s.materialsUnit.state.documentContent, taskID+"\x00"+s.materialsUnit.state.documentPath),
 		zoom:     s.markdownZoom(),
-		readOnly: markdownReadingOnly || s.documentReadOnly, remoteImages: true, diagrams: make(map[uint64]*markdownDiagramState), inlineImages: make(map[string]*markdownInlineImageState),
+		readOnly: markdownReadingOnly || s.materialsUnit.state.documentReadOnly, remoteImages: true, diagrams: make(map[uint64]*markdownDiagramState), inlineImages: make(map[string]*markdownInlineImageState),
 	}
-	s.configureMarkdownSourceLimit(s.markdown)
-	return s.markdown
+	s.configureMarkdownSourceLimit(s.materialsUnit.state.markdown)
+	return s.materialsUnit.state.markdown
 }
 
 func (s *app) configureMarkdownSourceLimit(state *markdownEditorState) {
 	limit := editor.MaxDocumentBytes
-	if ref, ok := s.documentSaveRef(s.documentAutosaveKey(state.path)); ok && ref.hasUTF8BOM {
+	if ref, ok := s.materialsUnit.documentSaveRef(s.documentAutosaveKey(state.path)); ok && ref.hasUTF8BOM {
 		limit -= 3
 	}
 	state.doc.SetMaxSourceBytes(limit)
@@ -110,42 +112,42 @@ func (s *app) syncMarkdownDocument(path, source string) {
 	if documentKindForPath(path) != "markdown" {
 		return
 	}
-	if s.markdown == nil || s.markdown.taskID != s.currentTask().id || s.markdown.path != path || s.markdown.doc == nil {
+	if s.materialsUnit.state.markdown == nil || s.materialsUnit.state.markdown.taskID != s.taskUnit.currentTask().id || s.materialsUnit.state.markdown.path != path || s.materialsUnit.state.markdown.doc == nil {
 		s.ensureMarkdownEditor()
 	}
-	if s.markdown.doc.Source() != source {
-		s.markdown.doc.SyncExternal(source)
+	if s.materialsUnit.state.markdown.doc.Source() != source {
+		s.materialsUnit.state.markdown.doc.SyncExternal(source)
 	}
 }
 
 func (s *app) syncMarkdownEditor() {
-	if s.markdown == nil || s.markdown.doc == nil || s.markdown.path != s.documentPath {
+	if s.materialsUnit.state.markdown == nil || s.materialsUnit.state.markdown.doc == nil || s.materialsUnit.state.markdown.path != s.materialsUnit.state.documentPath {
 		return
 	}
-	s.commitMarkdownEditorSource(s.markdown, s.markdown.doc.Source())
+	s.commitMarkdownEditorSource(s.materialsUnit.state.markdown, s.materialsUnit.state.markdown.doc.Source())
 }
 
 func (s *app) closeMarkdownEditor() {
-	if s.markdown == nil {
+	if s.materialsUnit.state.markdown == nil {
 		return
 	}
-	s.clearMarkdownComposition(s.markdown)
-	closeMarkdownPreviewState(s.markdown)
-	s.markdown = nil
+	s.clearMarkdownComposition(s.materialsUnit.state.markdown)
+	closeMarkdownPreviewState(s.materialsUnit.state.markdown)
+	s.materialsUnit.state.markdown = nil
 }
 
 func (s *app) commitMarkdownSource(source string) {
-	if s.markdown != nil && (s.markdown.readOnly || s.markdown.detached) {
+	if s.materialsUnit.state.markdown != nil && (s.materialsUnit.state.markdown.readOnly || s.materialsUnit.state.markdown.detached) {
 		return
 	}
-	if source == s.documentContent {
+	if source == s.materialsUnit.state.documentContent {
 		return
 	}
-	s.documentContent = source
-	s.documentDirty = true
-	s.documentDrafts[s.documentPath] = source
-	s.documentDirtyMap[s.documentPath] = true
-	s.editMarkdownAutosave(s.documentPath, source)
+	s.materialsUnit.state.documentContent = source
+	s.materialsUnit.state.documentDirty = true
+	s.materialsUnit.state.documentDrafts[s.materialsUnit.state.documentPath] = source
+	s.materialsUnit.state.documentDirtyMap[s.materialsUnit.state.documentPath] = true
+	s.editMarkdownAutosave(s.materialsUnit.state.documentPath, source)
 }
 
 func (s *app) applyMarkdownEdit(state *markdownEditorState, edit func(*editor.Document) error) {
@@ -170,8 +172,7 @@ func (s *app) renderMarkdownPreview(c *ui.Context, p palette, state *markdownEdi
 		label(c, "Markdown 预览暂不可用。", 13, p.muted)
 		return
 	}
-	parts := state.doc.Parts()
-	if len(parts) == 0 {
+	if state.doc.PartCount() == 0 {
 		s.pruneMarkdownImagePreviews(state, nil)
 		label(c, "文档内容为空。", 13, p.muted)
 		return
@@ -217,7 +218,7 @@ func (s *app) renderMarkdownEditor(c *ui.Context, p palette, state *markdownEdit
 		s.renderMarkdownPreview(c, p, state)
 		return
 	}
-	if state == s.markdown {
+	if state == s.materialsUnit.state.markdown {
 		state.zoom = s.markdownZoom()
 	} else {
 		state.zoom = clampMarkdownZoom(state.zoom)
@@ -725,7 +726,7 @@ func (s *app) markdownFindStateFor(state *markdownEditorState) *documentFindStat
 		}
 		return &reader.find
 	}
-	if !s.documentFindOpen || s.markdown != state {
+	if !s.materialsUnit.state.documentFindOpen || s.materialsUnit.state.markdown != state {
 		return nil
 	}
 	return s.ensureDocumentFindState()
@@ -1088,9 +1089,6 @@ func (s *app) renderMarkdownMermaid(c *ui.Context, p palette, state *markdownEdi
 }
 
 func (s *app) renderMermaidDiagram(state *markdownEditorState, partID uint64, source, key string, diagram *markdownDiagramState) {
-	if state.renderer == nil && state.rendererError == "" {
-		state.renderer, state.rendererError = loadMermaidRenderer()
-	}
 	if state.rendererError != "" {
 		diagram.key, diagram.source, diagram.error = key, source, state.rendererError
 		return
@@ -1098,13 +1096,52 @@ func (s *app) renderMermaidDiagram(state *markdownEditorState, partID uint64, so
 	if diagram.cancel != nil {
 		diagram.cancel()
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	lease, leaseErr := s.beginMarkdownPreviewJob()
+	if leaseErr != nil {
+		diagram.key, diagram.loading = key, false
+		return
+	}
+	ctx, cancel := context.WithCancel(lease.Context())
 	dark := s.dark
 	diagram.cancel, diagram.key, diagram.source, diagram.dark, diagram.loading = cancel, key, source, dark, true
 	diagram.error = ""
 	renderer := state.renderer
+	owner := s.mermaidInitializerFor()
 	win := s.win
+	post := func(apply func()) {
+		if win == nil || win.IsDestroyed() {
+			cancel()
+			lease.Cancel()
+			return
+		}
+		win.Update(func() {
+			defer cancel()
+			defer lease.Cancel()
+			if s.win != win || s.markdownPreviewJobsClosed() {
+				return
+			}
+			apply()
+		})
+	}
 	go func() {
+		defer lease.Complete(nil)
+		if renderer == nil {
+			var message string
+			renderer, message = owner.load(ctx)
+			if message != "" {
+				post(func() {
+					if markdownMermaidResultRelevant(state, s.materialsUnit.state.markdown, diagram, partID, key, ctx, s.materialsUnit.state.documentPath) {
+						diagram.loading, diagram.error = false, message
+					}
+				})
+				return
+			}
+		}
+		if ctx.Err() != nil {
+			cancel()
+			lease.Cancel()
+			return
+		}
 		result := renderer.RenderDebounced(ctx, source, dark)
 		var bitmap *ui.Bitmap
 		var err error
@@ -1113,11 +1150,8 @@ func (s *app) renderMermaidDiagram(state *markdownEditorState, partID uint64, so
 		} else if result.Error != "" {
 			err = fmt.Errorf("%s", result.Error)
 		}
-		if win == nil || win.IsDestroyed() {
-			return
-		}
-		win.Update(func() {
-			if !markdownMermaidResultRelevant(state, s.markdown, diagram, partID, key, ctx, s.documentPath) {
+		post(func() {
+			if !markdownMermaidResultRelevant(state, s.materialsUnit.state.markdown, diagram, partID, key, ctx, s.materialsUnit.state.documentPath) {
 				return
 			}
 			diagram.loading = false
@@ -1146,32 +1180,6 @@ func markdownMermaidResultRelevant(state, currentState *markdownEditorState, dia
 		return false
 	}
 	return state.diagrams[partID] == diagram && diagram.key == key && ctx.Err() == nil
-}
-
-func loadMermaidRenderer() (*editor.MermaidRenderer, string) {
-	platform, err := editor.NativeMermaidPlatform()
-	if err != nil {
-		return nil, err.Error()
-	}
-	resources, err := mygo.App.Path(mygo.PathResources)
-	if err != nil {
-		return nil, err.Error()
-	}
-	path := filepath.Join(resources, "native-mermaid", platform.Key, platform.ExecutableName)
-	resource, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Sprintf("缺少离线 Mermaid 渲染器：%s", path)
-	}
-	defer resource.Close()
-	cache, err := mygo.App.Path(mygo.PathCache)
-	if err != nil {
-		return nil, err.Error()
-	}
-	executable, err := editor.InstallMermaidExecutable(resource, cache, platform)
-	if err != nil {
-		return nil, err.Error()
-	}
-	return editor.NewMermaidRenderer(executable, nil), ""
 }
 
 func minFloat32(a, b float32) float32 {

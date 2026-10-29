@@ -91,12 +91,19 @@ func Kind(path string) string {
 	}
 }
 
-func (s *Service) List(root string) ([]Entry, error) {
-	root, err := validatedMaterialsRoot(root)
+func (s *Service) List(root string) (entries []Entry, resultErr error) {
+	scope, err := newMaterialsOperationScope(root)
 	if err != nil {
 		return nil, err
 	}
-	return list(root, root, 0)
+	defer func() {
+		if !scope.finish(&resultErr) {
+			entries = nil
+			return
+		}
+		scope.projectEntries(entries)
+	}()
+	return list(scope.root, scope.root, 0)
 }
 func list(root, directory string, depth int) ([]Entry, error) {
 	if depth > 64 {
@@ -169,12 +176,14 @@ func (s *Service) ReadMaterialsPreview(root, path string) (Content, error) {
 	return content, err
 }
 
-func (s *Service) read(root, path string, maxBytes int64, decoder func([]byte) (string, error), detectUnknownText bool) (Content, error) {
-	root, err := validatedMaterialsRoot(root)
+func (s *Service) read(root, path string, maxBytes int64, decoder func([]byte) (string, error), detectUnknownText bool) (content Content, resultErr error) {
+	scope, err := newMaterialsOperationScope(root)
 	if err != nil {
 		return Content{}, err
 	}
-	path, err = safePath(root, path, false)
+	defer scope.finishContent(&content, &resultErr)
+	root = scope.root
+	path, err = scope.resolve(path, false, false, false)
 	if err != nil {
 		return Content{}, err
 	}
@@ -189,7 +198,7 @@ func (s *Service) read(root, path string, maxBytes int64, decoder func([]byte) (
 		return Content{}, errors.New("只能读取普通文件")
 	}
 	kind := Kind(path)
-	content := Content{Path: path, Kind: kind, Size: info.Size(), Modified: info.ModTime().Format(time.RFC3339Nano)}
+	content = Content{Path: path, Kind: kind, Size: info.Size(), Modified: info.ModTime().Format(time.RFC3339Nano)}
 	unknown := kind == "unsupported" && detectUnknownText
 	if kind == "image" || kind == "pdf" || kind == "unsupported" && !unknown {
 		content.ReadOnly = true
@@ -255,12 +264,14 @@ func readTextPreview(reader io.Reader, maxBytes int64) ([]byte, error) {
 	return data, nil
 }
 
-func (s *Service) Save(root, path, text, expectedHash string, overwrite bool) (Content, error) {
-	root, err := validatedMaterialsRoot(root)
+func (s *Service) Save(root, path, text, expectedHash string, overwrite bool) (content Content, resultErr error) {
+	scope, err := newMaterialsOperationScope(root)
 	if err != nil {
 		return Content{}, err
 	}
-	path, err = safePath(root, path, false)
+	defer scope.finishContent(&content, &resultErr)
+	root = scope.root
+	path, err = scope.resolve(path, false, true, false)
 	if err != nil {
 		return Content{}, err
 	}
@@ -273,9 +284,9 @@ func (s *Service) Save(root, path, text, expectedHash string, overwrite bool) (C
 		if overwrite {
 			expectedHash = current.Hash
 		}
-		snapshot, err := s.SaveMaterialText(context.Background(), root, path, text, expectedHash, current.HasUTF8BOM)
+		snapshot, err := s.saveMaterialText(context.Background(), root, path, text, expectedHash, current.HasUTF8BOM, scope)
 		if err == nil {
-			_ = os.Remove(s.draftPath(path))
+			_ = os.Remove(s.draftPath(scope.public(path)))
 		}
 		return Content{Path: snapshot.Path, Kind: kind, Text: snapshot.Text, Hash: snapshot.Hash, Size: snapshot.Size, Modified: snapshot.Modified, HasUTF8BOM: snapshot.HasUTF8BOM, Newline: snapshot.Newline}, err
 	}
@@ -290,29 +301,31 @@ func (s *Service) Save(root, path, text, expectedHash string, overwrite bool) (C
 	}
 	if kind == "markdown" {
 		if !overwrite {
-			_, err = s.SaveMarkdown(context.Background(), root, relativeMaterials(root, path), text, expectedHash)
+			_, err = s.saveMarkdown(context.Background(), root, relativeMaterials(root, path), text, expectedHash, scope)
 		} else {
 			current, snapErr := s.MarkdownSnapshot(root, relativeMaterials(root, path))
 			if snapErr != nil {
 				return Content{}, snapErr
 			}
-			_, err = s.SaveMarkdown(context.Background(), root, relativeMaterials(root, path), text, current.Hash)
+			_, err = s.saveMarkdown(context.Background(), root, relativeMaterials(root, path), text, current.Hash, scope)
 		}
 		if err != nil {
 			return Content{}, err
 		}
-		_ = os.Remove(s.draftPath(path))
+		_ = os.Remove(s.draftPath(scope.public(path)))
 		return s.ReadMaterialsPreview(root, path)
 	}
 	return Content{}, errors.New("该文件类型不支持文本编辑")
 }
 
-func (s *Service) Create(root, path string, data []byte, directory bool) (string, error) {
-	root, err := validatedMaterialsRoot(root)
+func (s *Service) Create(root, path string, data []byte, directory bool) (resultPath string, resultErr error) {
+	scope, err := newMaterialsOperationScope(root)
 	if err != nil {
 		return "", err
 	}
-	path, err = safePath(root, path, true)
+	defer scope.finishPath(&resultPath, &resultErr)
+	root = scope.root
+	path, err = scope.resolve(path, true, true, false)
 	if err != nil {
 		return "", err
 	}
@@ -321,6 +334,16 @@ func (s *Service) Create(root, path string, data []byte, directory bool) (string
 	}
 	if err = validateName(filepath.Base(path)); err != nil {
 		return "", err
+	}
+	if err = scope.revalidate(); err != nil {
+		return "", err
+	}
+	if scope.local != nil && !directory {
+		parent := filepath.Dir(path)
+		if err := writeNewFileStaged(context.Background(), root, relativeMaterials(root, parent), parent, path, data, 0o644, scope); err != nil {
+			return "", err
+		}
+		return path, nil
 	}
 	if directory {
 		err = os.Mkdir(path, 0o755)
@@ -344,12 +367,14 @@ func (s *Service) Create(root, path string, data []byte, directory bool) (string
 	return path, nil
 }
 
-func (s *Service) Rename(root, path, newName string) (string, error) {
-	root, err := validatedMaterialsRoot(root)
+func (s *Service) Rename(root, path, newName string) (resultPath string, resultErr error) {
+	scope, err := newMaterialsOperationScope(root)
 	if err != nil {
 		return "", err
 	}
-	path, err = safePath(root, path, false)
+	defer scope.finishPath(&resultPath, &resultErr)
+	root = scope.root
+	path, err = scope.resolve(path, false, true, false)
 	if err != nil {
 		return "", err
 	}
@@ -359,7 +384,7 @@ func (s *Service) Rename(root, path, newName string) (string, error) {
 	if path == filepath.Clean(root) {
 		return "", errors.New("不能重命名资料根目录")
 	}
-	target, err := safePath(root, filepath.Join(filepath.Dir(path), newName), true)
+	target, err := scope.resolve(filepath.Join(scope.public(filepath.Dir(path)), newName), true, true, false)
 	if err != nil {
 		return "", err
 	}
@@ -368,22 +393,42 @@ func (s *Service) Rename(root, path, newName string) (string, error) {
 	} else if !os.IsNotExist(e) {
 		return "", e
 	}
+	if err = scope.revalidate(); err != nil {
+		return "", err
+	}
+	if scope.local != nil {
+		info, err := os.Lstat(path)
+		if err != nil {
+			return "", err
+		}
+		if info.IsDir() {
+			if err := validateMaterialsTree(root, path, false); err != nil {
+				return "", err
+			}
+		}
+		if err := renameWithRecheck(root, filepath.Dir(path), path, target, fileIdentity(path, info), scope); err != nil {
+			return "", err
+		}
+		return target, nil
+	}
 	if err = os.Rename(path, target); err != nil {
 		return "", err
 	}
 	return target, nil
 }
 
-func (s *Service) Copy(root, source, destination string) (string, error) {
-	root, err := validatedMaterialsRoot(root)
+func (s *Service) Copy(root, source, destination string) (resultPath string, resultErr error) {
+	scope, err := newMaterialsOperationScope(root)
 	if err != nil {
 		return "", err
 	}
-	source, err = safePath(root, source, false)
+	defer scope.finishPath(&resultPath, &resultErr)
+	root = scope.root
+	source, err = scope.resolve(source, false, false, false)
 	if err != nil {
 		return "", err
 	}
-	destination, err = safePath(root, destination, true)
+	destination, err = scope.resolve(destination, true, true, false)
 	if err != nil {
 		return "", err
 	}
@@ -391,13 +436,28 @@ func (s *Service) Copy(root, source, destination string) (string, error) {
 	if rel == "." || rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", errors.New("不能复制到自身或其子目录")
 	}
+	if err = scope.revalidate(); err != nil {
+		return "", err
+	}
+	if scope.local != nil {
+		if err := scope.copyNew(source, destination); err != nil {
+			return "", err
+		}
+		return destination, nil
+	}
 	if err = copyNew(source, destination); err != nil {
 		return "", err
 	}
 	return destination, nil
 }
-func (s *Service) Import(root, source, destination string) (string, error) {
-	root, err := validatedMaterialsRoot(root)
+func (s *Service) Import(root, source, destination string) (resultPath string, resultErr error) {
+	scope, err := newMaterialsOperationScope(root)
+	if err != nil {
+		return "", err
+	}
+	defer scope.finishPath(&resultPath, &resultErr)
+	root = scope.root
+	source, err = scope.importSource(source)
 	if err != nil {
 		return "", err
 	}
@@ -405,9 +465,18 @@ func (s *Service) Import(root, source, destination string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	destination, err = safePath(root, destination, true)
+	destination, err = scope.resolve(destination, true, true, false)
 	if err != nil {
 		return "", err
+	}
+	if err = scope.revalidate(); err != nil {
+		return "", err
+	}
+	if scope.local != nil {
+		if err := scope.copyNew(source, destination); err != nil {
+			return "", err
+		}
+		return destination, nil
 	}
 	if err = copyNew(source, destination); err != nil {
 		return "", err

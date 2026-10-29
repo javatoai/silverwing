@@ -17,7 +17,9 @@ func TestWorkspaceReviewNewRangeHidesOldCodeBeforeDebounce(t *testing.T) {
 		Files:        []workspace.CompareChange{{Path: "old.go", Kind: "MODIFIED"}},
 		SelectedPath: "old.go", Preview: &workspace.WorkspaceGitFilePreview{},
 	}
-	s := &app{workspaceHistory: state}
+	s := &app{
+		workspaceUnit: workspaceController{state: workspaceState{workspaceHistory: state}},
+	}
 	s.selectWorkspaceReviewCommit(state, "c")
 	t.Cleanup(func() { s.cancelWorkspaceReviewDebounce(state) })
 	if state.Preview != nil || len(state.Files) != 0 || state.SelectedPath != "" || !state.FilesLoading {
@@ -47,7 +49,10 @@ func TestWorkspaceReviewSameSnapshotRefreshRetainsPreviewAndConfiguredBaseline(t
 		SelectedKind: domain.WorkspaceGitModified, Preview: preview,
 	}
 	backend := &workspaceDiffSessionReleaseBackend{actions: make(chan application.Action, 1)}
-	s := &app{workspaceHistory: state, backend: backend}
+	s := &app{
+		workspaceUnit: workspaceController{state: workspaceState{workspaceHistory: state}},
+		backend:       backend,
+	}
 	action := application.Action{Kind: "workspace.diff-files", TaskID: state.TaskID, Path: state.Path,
 		Payload: map[string]any{"compare": workspaceReviewComparePayload(state)}}
 	s.applyWorkspaceHistoryResult(action, application.ActionResult{Data: workspace.CompareFilesResult{
@@ -87,7 +92,9 @@ func TestWorkspaceReviewFilesWithoutSessionAreRejected(t *testing.T) {
 				Files: []workspace.CompareChange{{Path: "kept.go", Kind: "MODIFIED"}}, SelectedPath: "kept.go",
 				SelectedKind: domain.WorkspaceGitModified, Preview: preview,
 			}
-			s := &app{workspaceHistory: state}
+			s := &app{
+				workspaceUnit: workspaceController{state: workspaceState{workspaceHistory: state}},
+			}
 			action := application.Action{Kind: "workspace.diff-files", TaskID: state.TaskID, Path: state.Path,
 				Payload: map[string]any{"compare": workspaceReviewComparePayload(state)}}
 			s.applyWorkspaceHistoryResult(action, application.ActionResult{Data: workspace.CompareFilesResult{
@@ -144,16 +151,21 @@ func TestWorkspaceReviewPageRejectsRecreatedTaskAndOtherHome(t *testing.T) {
 	taskItem := task{id: "same-id", path: `C:\synthetic\task`, createdAt: "first", workspaces: []application.Workspace{item}}
 	state := &workspaceHistoryState{TaskID: taskItem.id, TaskPath: taskItem.path, TaskCreatedAt: taskItem.createdAt,
 		ServiceID: item.ServiceID, ModuleID: item.ModuleID, Path: item.Path, Mode: "review", Open: true}
-	s := &app{page: "tasks", tasks: []task{taskItem}, workspaceHistory: state, snapshot: application.Snapshot{Home: `C:\synthetic\home`}}
+	s := &app{
+		taskUnit:      taskController{state: taskState{tasks: []task{taskItem}}},
+		workspaceUnit: workspaceController{state: workspaceState{workspaceHistory: state}},
+		page:          "tasks",
+		snapshot:      application.Snapshot{Home: `C:\synthetic\home`},
+	}
 	state.RepositorySessionKey = workspaceReviewRepositoryKey(s.snapshot.Home, item.Path)
 	if !s.workspaceReviewPageVisible() {
 		t.Fatal("current review is not visible")
 	}
-	s.tasks[0].createdAt = "recreated"
+	s.taskUnit.state.tasks[0].createdAt = "recreated"
 	if s.workspaceReviewPageVisible() {
 		t.Fatal("review from a previous task incarnation remained visible")
 	}
-	s.tasks[0].createdAt = "first"
+	s.taskUnit.state.tasks[0].createdAt = "first"
 	s.snapshot.Home = `C:\synthetic\other-home`
 	if s.workspaceReviewPageVisible() {
 		t.Fatal("review from another application home remained visible")
@@ -185,7 +197,9 @@ func TestWorkspaceReviewLeavingReleasesRenderedSource(t *testing.T) {
 		t.Run(leave, func(t *testing.T) {
 			state := reviewRendererTestState(false)
 			state.Mode, state.Open = "review", true
-			s := &app{workspaceHistory: state}
+			s := &app{
+				workspaceUnit: workspaceController{state: workspaceState{workspaceHistory: state}},
+			}
 			if s.workspaceNativeDiffView(state, state.Preview.Comparison) == nil {
 				t.Fatal("fixture has no native source buffers")
 			}

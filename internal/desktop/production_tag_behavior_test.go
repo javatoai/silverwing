@@ -51,7 +51,7 @@ func TestProductionSavedTagPlanAndRefreshNeverPublishAutomatically(t *testing.T)
 			v.Preview.MainInRelease = true
 			b.TagPlan = &production.TagPlan{Token: "saved-plan", Tag: "2.3.44", Commit: b.ReleaseSHA, MainSHA: v.Preview.MainSHA, Preview: *v.Preview}
 			b.Phase = "TAG_READY"
-			s.production.batches[0] = b
+			s.releaseUnit.state.production.batches[0] = b
 			tester := productionIterationTester(s, 960, false)
 			tester.Frame()
 			if tester.HasText("等待构建确认") || !tester.HasText("准备就绪") {
@@ -111,14 +111,14 @@ func TestProductionUnchangedTagDiffUsesEmptyState(t *testing.T) {
 				b.Branches, b.ReleaseSHA = nil, b.InitialSHA
 				v.Preview.ReleaseSHA = b.ReleaseSHA
 				b.TagPlan = &production.TagPlan{Token: "empty-diff", Tag: "2.3.44", Commit: b.ReleaseSHA, MainSHA: v.Preview.MainSHA, Preview: *v.Preview}
-				s.production.batches[0] = b
+				s.releaseUnit.state.production.batches[0] = b
 				tester := productionIterationTester(s, width, dark)
 				if !tester.HasText("无差异") || tester.HasText("请先合并至少一个有新增提交的分支。") || tester.HasText("没有新增提交，无需构建；可继续合并分支。") {
 					t.Fatal("new Tag flow still displays the old prerequisite")
 				}
 				captureProductionSummary(t, tester, fmt.Sprintf("unchanged-tag-%d-dark-%t", width, dark))
 				s.openProductionDiff(v, "本次构建差异", b.ReleaseBranch, "release 初始提交", b.ReleaseSHA, b.InitialSHA, false)
-				d := s.production.diffDialog
+				d := s.releaseUnit.state.production.diffDialog
 				d.Review.TargetCommit, d.Review.BaseCommit = b.ReleaseSHA, b.InitialSHA
 				tester.Frame()
 				if !tester.HasText("无差异") || tester.HasText("选择文件查看变更") {

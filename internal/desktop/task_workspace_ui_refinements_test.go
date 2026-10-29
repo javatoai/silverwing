@@ -20,7 +20,11 @@ func TestTaskDetailsOmitMoreMenu(t *testing.T) {
 		dark          bool
 	}{{1100, 12, false}, {1100, 12, true}, {360, 4, false}, {360, 4, true}, {1000, 750, false}} {
 		t.Run(fmt.Sprintf("width-%d-offset-%d-dark-%t", test.width, test.offset, test.dark), func(t *testing.T) {
-			s := &app{configJSON: "{}", inputs: map[string]*string{}, tasks: []task{{id: "synthetic-task", title: "合成任务", path: filepath.Join(t.TempDir(), "task")}}}
+			s := &app{
+				taskUnit:     taskController{state: taskState{tasks: []task{{id: "synthetic-task", title: "合成任务", path: filepath.Join(t.TempDir(), "task")}}}},
+				settingsUnit: settingsController{state: settingsState{configJSON: "{}"}},
+				inputs:       map[string]*string{},
+			}
 			tester := ui.NewTester(func(c *ui.Context) {
 				p := setTheme(c, test.dark)
 				s.beginOverflowMenuFrame()
@@ -72,10 +76,14 @@ func appendServiceToggleFixture(t *testing.T, width int, dark bool) (*app, *ui.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &app{inputs: map[string]*string{}, configJSON: string(raw), tasks: []task{{id: "task", title: "合成任务", groupID: config.Groups[0].ID, path: filepath.Join(root, "task"), branch: "feature/synthetic", updated: "fixed-version", serviceIDs: []string{"existing"}}}}
+	s := &app{
+		taskUnit:     taskController{state: taskState{tasks: []task{{id: "task", title: "合成任务", groupID: config.Groups[0].ID, path: filepath.Join(root, "task"), branch: "feature/synthetic", updated: "fixed-version", serviceIDs: []string{"existing"}}}}},
+		settingsUnit: settingsController{state: settingsState{configJSON: string(raw)}},
+		inputs:       map[string]*string{},
+	}
 	s.snapshot.ConfigJSON, s.snapshot.Home = string(raw), filepath.Join(root, "home")
-	s.openTaskAppendServices(s.currentTask())
-	state := s.workspaceAppend
+	s.openTaskAppendServices(s.taskUnit.currentTask())
+	state := s.workspaceUnit.state.workspaceAppend
 	if state == nil {
 		t.Fatal(s.lastError)
 	}
@@ -103,8 +111,8 @@ func TestTaskAppendServiceRowTogglesOnce(t *testing.T) {
 		for _, dark := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%d-dark-%t", width, dark), func(t *testing.T) {
 				s, tester := appendServiceToggleFixture(t, width, dark)
-				before := append([]task(nil), s.tasks...)
-				state := s.workspaceAppend
+				before := append([]task(nil), s.taskUnit.state.tasks...)
+				state := s.workspaceUnit.state.workspaceAppend
 				if _, exists := tester.Find("已有服务"); exists {
 					t.Fatal("existing task service appeared in add-only candidates")
 				}
@@ -167,7 +175,7 @@ func TestTaskAppendServiceRowTogglesOnce(t *testing.T) {
 				if state.pending || state.inlineError != "" {
 					t.Fatal("empty-selection footer must be disabled, not dispatch a preview")
 				}
-				if _, _, err := s.taskAppendRequest(); err == nil || !reflect.DeepEqual(before, s.tasks) {
+				if _, _, err := s.taskAppendRequest(); err == nil || !reflect.DeepEqual(before, s.taskUnit.state.tasks) {
 					t.Fatal("empty selection produced a payload or changed real task services")
 				}
 				captureReleaseNotice(t, tester, fmt.Sprintf("append-empty-%d-dark-%t", width, dark))
@@ -178,7 +186,7 @@ func TestTaskAppendServiceRowTogglesOnce(t *testing.T) {
 
 func TestTaskAppendServiceRowSearchAndBusy(t *testing.T) {
 	s, tester := appendServiceToggleFixture(t, 960, false)
-	state := s.workspaceAppend
+	state := s.workspaceUnit.state.workspaceAppend
 	if err := tester.Click("合成服务甲"); err != nil {
 		t.Fatal(err)
 	}

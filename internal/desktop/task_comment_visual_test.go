@@ -14,14 +14,14 @@ import (
 func taskCommentOptimizationVisualFixture(t *testing.T) (*app, *requirementReaderState) {
 	t.Helper()
 	state := taskNavigationFixture()
-	state.loading, state.page, state.selected = false, "tasks", 0
+	state.loading, state.page, state.taskUnit.state.selected = false, "tasks", 0
 	state.snapshot.Home = t.TempDir()
-	state.configJSON = `{"meegleProjects":[{"project_key":"visual-fixture","simple_name":"本地示例"}]}`
+	state.settingsUnit.state.configJSON = `{"meegleProjects":[{"project_key":"visual-fixture","simple_name":"本地示例"}]}`
 	requirementURL := "https://project.feishu.cn/visual-fixture/technical/detail/9900001"
 	requirementTitle := "示例资源加载（虚构测试）"
-	state.tasks[0].requirementURL = requirementURL
-	state.tasks[0].requirementTitle = requirementTitle
-	state.taskRequirementMetadata[state.tasks[0].id] = taskRequirementMetadataState{
+	state.taskUnit.state.tasks[0].requirementURL = requirementURL
+	state.taskUnit.state.tasks[0].requirementTitle = requirementTitle
+	state.requirementUnit.state.taskRequirementMetadata[state.taskUnit.state.tasks[0].id] = taskRequirementMetadataState{
 		URL: requirementURL, Status: requirementMetadataLoaded,
 		Metadata: requirementMetadata{Title: &requirementTitle},
 	}
@@ -30,21 +30,21 @@ func taskCommentOptimizationVisualFixture(t *testing.T) (*app, *requirementReade
 		ID: "visual-workspace", ServiceID: "visual-job-manager", ModuleID: "visual-worker",
 		Path: `C:\synthetic\silverwing\job-manager`, Branch: "feature/visual-fixture", State: "READY",
 	}
-	state.tasks[0].workspaces = []application.Workspace{workspace}
+	state.taskUnit.state.tasks[0].workspaces = []application.Workspace{workspace}
 	state.snapshot.Services = []application.Service{{
-		ID: workspace.ServiceID, Name: "job-manager", GroupID: state.tasks[0].groupID, MasterBranch: "main",
+		ID: workspace.ServiceID, Name: "job-manager", GroupID: state.taskUnit.state.tasks[0].groupID, MasterBranch: "main",
 		Modules: []application.Module{{ID: workspace.ModuleID, Name: "worker", MasterBranch: "main"}},
 	}}
 	actualBranch := workspace.Branch
-	state.workspaceGit = &workspaceGitState{health: map[string]domain.WorkspaceGitHealth{
+	state.workspaceUnit.state.workspaceGit = &workspaceGitState{health: map[string]domain.WorkspaceGitHealth{
 		workspaceHealthPathKey(workspace.Path): {
 			State: domain.WorkspaceGitReady, DirtyFileCount: 2, PushState: domain.LocalPushPushed, ActualBranch: &actualBranch,
 		},
 	}}
-	state.setTaskPinned(state.tasks[2], true)
-	state.setTaskPinned(state.tasks[1], true)
+	state.setTaskPinned(state.taskUnit.state.tasks[2], true)
+	state.setTaskPinned(state.taskUnit.state.tasks[1], true)
 
-	reader := state.requirementReader(state.tasks[0].id, requirementURL)
+	reader := state.requirementReader(state.taskUnit.state.tasks[0].id, requirementURL)
 	state.updateRequirementReaderBody(reader, application.RequirementContent{
 		Body: "## 需求正文\n\n使用本地虚构数据检查评论阅读和任务页面布局。", Complete: true,
 	})
@@ -61,7 +61,7 @@ func taskCommentOptimizationVisualFixture(t *testing.T) (*app, *requirementReade
 		},
 		{ID: "comment-attachment", AuthorName: "演示用户丙", CreatedAt: "2025-04-01 09:40:00", AttachmentURL: &attachmentURL},
 	}})
-	t.Cleanup(state.closeRequirementReaders)
+	t.Cleanup(state.requirementUnit.closeRequirementReaders)
 	return state, reader
 }
 

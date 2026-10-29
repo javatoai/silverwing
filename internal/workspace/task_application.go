@@ -57,7 +57,7 @@ type AddWorkspaceRequest struct {
 type RequirementMaterialsResolver func(ctx context.Context, config domain.AppConfig, requirementInput, folderName string) (domain.RequirementMaterialsDirectory, *string, error)
 
 type TaskApplicationService struct {
-	Manifests            *storage.ManifestStore
+	Manifests            TaskManifestRepository
 	Git                  *GitClient
 	Paths                storage.Paths
 	Locks                *OperationLocks
@@ -73,41 +73,10 @@ type TaskApplicationService struct {
 	Defaults             *TaskCreationDefaultsService
 	Commands             *WorkspaceCommandService
 	WorkspaceTools       *WorkspaceToolLaunchService
+	MaterialsPreparation *documents.PreparationService
 	RequirementMaterials RequirementMaterialsResolver
 	Now                  func() time.Time
 	OnOutput             func(process.StreamEvent)
-}
-
-func NewTaskApplicationService(manifests *storage.ManifestStore, git *GitClient, paths storage.Paths) *TaskApplicationService {
-	if git == nil {
-		git = NewGitClient(nil, "")
-	}
-	if manifests == nil {
-		manifests = storage.NewManifestStore()
-	}
-	locks := NewOperationLocks(paths.Locks)
-	bootstrap := NewBootstrapService(git.Runner, git)
-	service := &TaskApplicationService{
-		Manifests: manifests, Git: git, Paths: paths, Locks: locks,
-		Provisioning:    NewWorkspaceProvisioningService(git, bootstrap, locks),
-		Bootstrap:       bootstrap,
-		BranchReuse:     NewWorkspaceBranchReuseInspector(git, locks),
-		BranchValidator: NewBranchReferenceValidator(git),
-		Documents:       NewAgentDocumentService(paths, manifests),
-		Lifecycle:       NewWorkspaceLifecycle(manifests, git, locks),
-		Now:             time.Now,
-	}
-	service.Repair = NewWorkspaceRepairService(manifests, service.Documents, locks, git, bootstrap)
-	service.ModuleRemoval = NewWorkspaceModuleRemovalService(manifests, service.Documents, locks, git)
-	service.RootMigration = NewTaskRootMigrationService(paths, nil, manifests, service.Documents, git, locks)
-	service.Defaults = NewTaskCreationDefaultsService(storage.NewConfigStore(paths))
-	service.Commands = NewWorkspaceCommandService(git.Runner)
-	service.WorkspaceTools = NewWorkspaceToolLaunchService(nil, manifests, locks)
-	preparation := documents.NewPreparationService(paths, git.Runner)
-	service.RequirementMaterials = func(ctx context.Context, config domain.AppConfig, input, folder string) (domain.RequirementMaterialsDirectory, *string, error) {
-		return resolveRequirementMaterials(ctx, config, input, folder, preparation)
-	}
-	return service
 }
 
 func (s *TaskApplicationService) ListTasks(taskRoot string) ([]storage.ManifestEntry, error) {
@@ -294,6 +263,7 @@ func (s *TaskApplicationService) createLocked(ctx context.Context, config domain
 	}
 	workspaces := []domain.ServiceWorkspace{}
 	var ownedTaskDirectory os.FileInfo
+	localMaterials := strings.TrimSpace(request.RequirementLink) == ""
 	rollback := func(primary error) error {
 		rollbackEvent := TaskCreationProgress{Phase: TaskCreationPhaseRollback, ServiceName: "任务"}
 		emitTaskCreationProgress(onProgress, TaskCreationProgress{Phase: rollbackEvent.Phase, Status: TaskCreationProgressStarted, Message: "正在回滚本次创建并清理任务目录"})
@@ -317,6 +287,12 @@ func (s *TaskApplicationService) createLocked(ctx context.Context, config domain
 			if cleanupErr := s.rollbackWorkspacesWithProgress(ctx, config, group.ID, taskPath, workspaces, onProgress); cleanupErr != nil {
 				finishRollback(cleanupErr)
 				return fmt.Errorf("任务创建失败且自动回滚未完成；为避免 Git 元数据损坏，已保留目录供人工检查：%s: %w", taskPath, errors.Join(primary, cleanupErr))
+			}
+		}
+		if localMaterials {
+			if cleanErr := documents.CleanupLocalTaskMaterials(taskPath); cleanErr != nil {
+				finishRollback(cleanErr)
+				return errors.Join(primary, cleanErr)
 			}
 		}
 		if cleanErr := removeGeneratedTaskDocuments(taskPath, ownedTaskDirectory); cleanErr != nil {
@@ -394,6 +370,20 @@ func (s *TaskApplicationService) createLocked(ctx context.Context, config domain
 	}
 	if err := ctx.Err(); err != nil {
 		return domain.TaskManifest{}, rollback(err)
+	}
+	if localMaterials {
+		if err := runTaskCreationProgress(onProgress, TaskCreationProgress{Phase: TaskCreationPhasePreparingMaterials}, "正在准备本地任务资料", "本地任务资料已准备", func() error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			scope, err := documents.PrepareLocalTaskMaterials(taskPath)
+			if err == nil {
+				materialsDirectory = domain.RequirementMaterialsDirectory{Status: domain.MaterialsReady, WriteRoot: &scope.Owned}
+			}
+			return err
+		}); err != nil {
+			return domain.TaskManifest{}, rollback(err)
+		}
 	}
 	now := createdTime.UTC().Format(time.RFC3339Nano)
 	manifest := domain.DefaultTaskManifest()
@@ -474,13 +464,22 @@ func (s *TaskApplicationService) createLocked(ctx context.Context, config domain
 func (s *TaskApplicationService) RetryRequirementMaterials(ctx context.Context, config domain.AppConfig, taskPath string) (domain.TaskManifest, error) {
 	var updated domain.TaskManifest
 	err := s.withTaskManifestMutation(ctx, config, taskPath, func(ctx context.Context, manifest domain.TaskManifest) error {
-		if strings.TrimSpace(manifest.RequirementLink) == "" {
-			return fmt.Errorf("任务未填写需求编号或飞书需求链接")
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		if created, err := domain.ParseSilverWingTime(manifest.CreatedAt); err == nil {
 			ctx = documents.WithMaterialsCreationTime(ctx, created)
 		}
-		directory, requirementID, err := s.resolveRequirementMaterials(ctx, config, manifest.RequirementLink, manifest.FolderName)
+		_, local := documents.LocalScope(stringValue(manifest.RequirementMaterials.WriteRoot))
+		directory, requirementID := manifest.RequirementMaterials, manifest.RequirementID
+		var err error
+		if local || strings.TrimSpace(manifest.RequirementLink) == "" {
+			var scope documents.AnnualMaterialsScope
+			scope, err = documents.PrepareLocalTaskMaterials(taskPath)
+			directory = domain.RequirementMaterialsDirectory{Status: domain.MaterialsReady, WriteRoot: &scope.Owned}
+		} else {
+			directory, requirementID, err = s.resolveRequirementMaterials(ctx, config, manifest.RequirementLink, manifest.FolderName)
+		}
 		if err != nil {
 			return err
 		}

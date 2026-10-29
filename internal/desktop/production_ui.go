@@ -93,7 +93,7 @@ func productionButton(c *ui.Context, key, text string, p palette, primary, disab
 }
 
 func (s *app) renderProductionPage(c *ui.Context, p palette) {
-	state := s.production
+	state := s.releaseUnit.state.production
 	if state == nil {
 		label(c, "正在载入生产发布…", 14, p.muted).Padding(24)
 		return
@@ -151,7 +151,7 @@ func (s *app) renderProductionDetail(c *ui.Context, p palette) {
 	}
 	b := s.productionBatch(v)
 	s.productionDisclosures(v, b)
-	for _, choice := range s.production.choices {
+	for _, choice := range s.releaseUnit.state.production.choices {
 		if choice.GroupID == v.Selection.GroupID && choice.ID == v.Selection.ServiceID && choice.Historical {
 			label(c, "原服务已停用或移除。可查看历史、保留工作区或结束批次；继续发布前请恢复并核对服务配置。", 12, p.amber).Wrap()
 			break
@@ -159,7 +159,7 @@ func (s *app) renderProductionDetail(c *ui.Context, p palette) {
 	}
 	ui.Row(c).FillWidth().MinWidth(0).Padding(0, 16).Gap(10).AlignItems(ui.Center).Children(func() {
 		name := "选择服务后检查生产基线"
-		for _, choice := range s.production.choices {
+		for _, choice := range s.releaseUnit.state.production.choices {
 			if choice.ID == v.Selection.ServiceID && choice.GroupID == v.Selection.GroupID {
 				name = choice.Name
 				break

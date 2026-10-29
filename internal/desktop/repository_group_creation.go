@@ -38,7 +38,7 @@ func (s *app) applyCreatedRepositoryGroupSelection(action application.Action) {
 	}
 	for _, group := range s.snapshot.Groups {
 		if group.ID == id {
-			s.serviceGroupID = id
+			s.workspaceUnit.state.serviceGroupID = id
 			return
 		}
 	}

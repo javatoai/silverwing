@@ -152,7 +152,7 @@ func (s *app) runTaskRepositoryChoicesRead(ctx context.Context, action applicati
 func (s *app) taskRepositoryChoiceDraft(owner, token, taskID, serviceID, moduleID string) (*taskCreationModuleDraft, string, bool) {
 	switch owner {
 	case taskRepositoryChoicesCreateOwner:
-		state := s.taskCreation
+		state := s.taskUnit.state.taskCreation
 		if state == nil || state.token != token || !s.dialogOpen || s.form.mode != "task-create" || state.phase != "editing" || !state.services[serviceID] {
 			return nil, "", false
 		}
@@ -163,12 +163,12 @@ func (s *app) taskRepositoryChoiceDraft(owner, token, taskID, serviceID, moduleI
 		draft := state.moduleData[serviceID][moduleID]
 		return draft, service.RepositoryID, draft != nil
 	case taskRepositoryChoicesAppendOwner:
-		state := s.workspaceAppend
+		state := s.workspaceUnit.state.workspaceAppend
 		if state == nil || state.token != token || !state.open || state.pending || state.taskID != taskID {
 			return nil, "", false
 		}
-		task := s.taskByID(taskID)
-		if task.id == "" || task.archived || task.updated != state.taskUpdated || task.path != state.taskPath || task.branch != state.taskBranch || s.currentTask().id != taskID {
+		task := s.taskUnit.taskByID(taskID)
+		if task.id == "" || task.archived || task.updated != state.taskUpdated || task.path != state.taskPath || task.branch != state.taskBranch || s.taskUnit.currentTask().id != taskID {
 			return nil, "", false
 		}
 		service, ok := state.services[serviceID]
@@ -388,7 +388,7 @@ func sameTaskRepositoryPath(left, right string) bool {
 }
 
 func (s *app) repositoryRootPath(repositoryID string) string {
-	_, root := s.repositoryDetails(repositoryID)
+	_, root := s.currentRepositoryDetails(repositoryID)
 	return root
 }
 

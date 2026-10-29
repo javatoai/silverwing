@@ -47,20 +47,20 @@ func (s *app) bindWorkspaceGitObservation(t task, scope workspaceGitStatusScope)
 	}
 	state.health = make(map[string]domain.WorkspaceGitHealth)
 	state.failure = ""
-	state.displayCache.reconcile(s.tasks, scope)
+	state.displayCache.reconcile(s.taskUnit.state.tasks, scope)
 	observation := state.displayCache.bind(t, key, scope)
 	state.observation = observation
 	return observation
 }
 
 func (s *app) workspaceGitObservationCurrent(observation *workspaceGitObservation) bool {
-	t := s.currentTask()
+	t := s.taskUnit.currentTask()
 	return observation != nil && observation.id == t.id && observation.path == t.path && observation.created == t.createdAt &&
 		observation.group == t.groupID && observation.scope == s.workspaceGitStatusScope()
 }
 
 func (s *app) workspaceDisplayHealth(w application.Workspace) (domain.WorkspaceGitHealth, bool) {
-	state := s.workspaceGit
+	state := s.workspaceUnit.state.workspaceGit
 	if state == nil {
 		return domain.WorkspaceGitHealth{}, false
 	}
@@ -80,7 +80,7 @@ func (s *app) workspaceDisplayHealth(w application.Workspace) (domain.WorkspaceG
 }
 
 func (s *app) commitWorkspaceGitStatuses(t task, statuses map[string]domain.WorkspaceGitHealth) {
-	if workspaceHealthTaskKey(t) != workspaceHealthTaskKey(s.currentTask()) {
+	if workspaceHealthTaskKey(t) != workspaceHealthTaskKey(s.taskUnit.currentTask()) {
 		return
 	}
 	state := s.ensureWorkspaceGitState()

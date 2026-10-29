@@ -52,9 +52,9 @@ type tagJobProgress struct {
 }
 
 func (s *app) tagJobScope() application.TagJobScope {
-	t := s.currentTask()
+	t := s.taskUnit.currentTask()
 	account := ""
-	if identity := s.requirementIdentityJobs; identity != nil && identity.confirmed {
+	if identity := s.requirementUnit.state.requirementIdentityJobs; identity != nil && identity.confirmed {
 		account = identity.identity
 	}
 	return application.TagJobScope{Home: s.snapshot.Home, TaskRoot: s.configString("taskRoot"),
@@ -63,10 +63,10 @@ func (s *app) tagJobScope() application.TagJobScope {
 }
 
 func (s *app) ensureTagDesktopJobs() *tagDesktopJobs {
-	if s.tagJobs == nil {
-		s.tagJobs = &tagDesktopJobs{views: make(map[application.TagJobScope]*tagDesktopJobView), workers: make(map[*tagDesktopJobWorker]struct{})}
+	if s.releaseUnit.state.tagJobs == nil {
+		s.releaseUnit.state.tagJobs = &tagDesktopJobs{views: make(map[application.TagJobScope]*tagDesktopJobView), workers: make(map[*tagDesktopJobWorker]struct{})}
 	}
-	return s.tagJobs
+	return s.releaseUnit.state.tagJobs
 }
 
 func (s *app) tagJobView(scope application.TagJobScope) *tagDesktopJobView {
@@ -78,10 +78,10 @@ func (s *app) tagJobView(scope application.TagJobScope) *tagDesktopJobView {
 }
 
 func (s *app) currentTagJobView() *tagDesktopJobView {
-	if s == nil || s.tagJobs == nil {
+	if s == nil || s.releaseUnit.state.tagJobs == nil {
 		return nil
 	}
-	return s.tagJobs.views[s.tagJobScope()]
+	return s.releaseUnit.state.tagJobs.views[s.tagJobScope()]
 }
 
 // Job records own local execution state. Preserve independently newer Genbu
@@ -199,7 +199,7 @@ func (s *app) tagRecordJobItem(record application.TagRecord) (application.TagJob
 
 func (s *app) tagWorkspaceBusy(t task, workspace application.Workspace) bool {
 	view := s.currentTagJobView()
-	if view == nil || t.id != s.currentTask().id {
+	if view == nil || t.id != s.taskUnit.currentTask().id {
 		return false
 	}
 	for _, item := range view.snapshot.Items {
@@ -249,7 +249,7 @@ func tagJobSelectionKeys(payload map[string]any) []string {
 }
 
 func (s *app) tagRecordBusy(record application.TagRecord) bool {
-	t := s.taskByID(record.TaskID)
+	t := s.taskUnit.taskByID(record.TaskID)
 	for _, workspace := range t.workspaces {
 		if workspace.ServiceID == record.ServiceID && workspace.ModuleID == record.ModuleID {
 			return s.tagWorkspaceBusy(t, workspace)

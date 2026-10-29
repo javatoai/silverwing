@@ -18,8 +18,8 @@ func TestMarkdownMaterialReaderHasNoEditingModeAndPreservesDrafts(t *testing.T) 
 	s, backend, files := materialTextEditorFixture(t, map[string]string{"reading.md": source})
 	s.readingSession = newMemoryReadingSession(s.snapshot.Home)
 	content := files["reading.md"]
-	s.documents = []application.Document{{Path: content.Path, Name: filepath.Base(content.Path), Kind: "markdown"}}
-	s.documentPath, s.documentReadPending = content.Path, true
+	s.materialsUnit.state.documents = []application.Document{{Path: content.Path, Name: filepath.Base(content.Path), Kind: "markdown"}}
+	s.materialsUnit.state.documentPath, s.materialsUnit.state.documentReadPending = content.Path, true
 	identity, err := documents.NewMarkdownDraftIdentity("task", backend.taskPath, backend.root, content.Path)
 	if err != nil {
 		t.Fatal(err)
@@ -36,10 +36,10 @@ func TestMarkdownMaterialReaderHasNoEditingModeAndPreservesDrafts(t *testing.T) 
 	// A stale writable payload and recovered draft cannot reactivate editing.
 	content.ReadOnly = false
 	content.Draft, content.DraftError = &originalDraft, "old draft error must not enter reading"
-	s.documentDrafts[content.Path] = "old in-memory draft"
+	s.materialsUnit.state.documentDrafts[content.Path] = "old in-memory draft"
 	s.applyMaterialsActionResult(application.Action{Kind: "document.read", TaskID: "task", Path: content.Path},
 		application.ActionResult{Path: content.Path, Text: content.Text, Data: content})
-	if s.documentEditing || !s.documentReadOnly || s.documentContent != source {
+	if s.materialsUnit.state.documentEditing || !s.materialsUnit.state.documentReadOnly || s.materialsUnit.state.documentContent != source {
 		t.Fatal("Markdown did not bind the disk source as read-only")
 	}
 	tester := ui.NewTester(func(c *ui.Context) {
@@ -48,7 +48,7 @@ func TestMarkdownMaterialReaderHasNoEditingModeAndPreservesDrafts(t *testing.T) 
 		ui.Column(c).Fill().Children(func() { s.materials(c, p) })
 		s.endOverflowMenuFrame()
 	}, 1100, 900)
-	state := s.markdown
+	state := s.materialsUnit.state.markdown
 	if state == nil || !state.readOnly || state.frameworkMarkdown == nil || state.frameworkMarkdown.original != source ||
 		state.frameworkMarkdown.options.CodeBlock != nil || !tester.HasText("Code, go") {
 		t.Fatal("Markdown did not use the native reader and default code block")
@@ -91,7 +91,7 @@ func TestMarkdownMaterialReaderHasNoEditingModeAndPreservesDrafts(t *testing.T) 
 	if failures := flushMaterialTextTest(t, s); len(failures) != 0 {
 		t.Fatal(failures)
 	}
-	if state.doc.Source() != source || s.markdownAutosave.Status(s.documentAutosaveKey(content.Path)).Dirty {
+	if state.doc.Source() != source || s.materialsUnit.state.markdownAutosave.Status(s.documentAutosaveKey(content.Path)).Dirty {
 		t.Fatal("a stale mutation changed the readonly document")
 	}
 	if disk, err := os.ReadFile(content.Path); err != nil || string(disk) != source {
@@ -107,13 +107,13 @@ func TestMarkdownMaterialReaderKeepsPlainTextEditors(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s, _, files := materialTextEditorFixture(t, map[string]string{name: "original\r\n"})
 			content := files[name]
-			s.documentPath, s.documentReadPending = content.Path, true
+			s.materialsUnit.state.documentPath, s.materialsUnit.state.documentReadPending = content.Path, true
 			s.applyMaterialsActionResult(application.Action{Kind: "document.read", TaskID: "task", Path: content.Path},
 				application.ActionResult{Path: content.Path, Text: content.Text, Data: content})
-			if s.documentReadOnly || s.currentMaterialTextEditor() == nil || s.documentContent != content.Text {
+			if s.materialsUnit.state.documentReadOnly || s.currentMaterialTextEditor() == nil || s.materialsUnit.state.documentContent != content.Text {
 				t.Fatal("Markdown readonly policy changed ordinary text binding")
 			}
-			if name != "config.json" && name != "table.csv" && !s.documentEditing {
+			if name != "config.json" && name != "table.csv" && !s.materialsUnit.state.documentEditing {
 				t.Fatal("ordinary source no longer opens for editing")
 			}
 		})
@@ -123,17 +123,17 @@ func TestMarkdownMaterialReaderKeepsPlainTextEditors(t *testing.T) {
 func TestMarkdownMaterialReaderIgnoresPendingEditAndSaveResults(t *testing.T) {
 	s, _, files := materialTextEditorFixture(t, map[string]string{"new.md": "# New document\n"})
 	content := files["new.md"]
-	s.documentPath, s.documentReadPending = content.Path, true
-	s.materialsFileManagement = &materialsFileManagementState{taskID: "task", pendingEditPath: content.Path}
+	s.materialsUnit.state.documentPath, s.materialsUnit.state.documentReadPending = content.Path, true
+	s.materialsUnit.state.materialsFileManagement = &materialsFileManagementState{taskID: "task", pendingEditPath: content.Path}
 	s.applyMaterialsActionResult(application.Action{Kind: "document.read", TaskID: "task", Path: content.Path},
 		application.ActionResult{Path: content.Path, Text: content.Text, Data: content})
-	if s.documentEditing || !s.documentReadOnly || s.materialsFileManagement.pendingEditPath != "" {
+	if s.materialsUnit.state.documentEditing || !s.materialsUnit.state.documentReadOnly || s.materialsUnit.state.materialsFileManagement.pendingEditPath != "" {
 		t.Fatal("an old pending edit activated Markdown editing")
 	}
-	s.documentDrafts[content.Path] = "preserved in-memory draft"
+	s.materialsUnit.state.documentDrafts[content.Path] = "preserved in-memory draft"
 	s.applyMaterialsActionResult(application.Action{Kind: "document.save", TaskID: "task", Path: content.Path, Text: "stale save"},
 		application.ActionResult{Path: content.Path, Data: documents.Content{Hash: "stale hash"}})
-	if s.documentHash != content.Hash || s.documentContent != content.Text || s.documentDrafts[content.Path] != "preserved in-memory draft" {
+	if s.materialsUnit.state.documentHash != content.Hash || s.materialsUnit.state.documentContent != content.Text || s.materialsUnit.state.documentDrafts[content.Path] != "preserved in-memory draft" {
 		t.Fatal("a stale save result changed the reader or discarded a draft")
 	}
 }

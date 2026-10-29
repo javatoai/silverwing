@@ -206,7 +206,7 @@ func TestTagGenbuPollingSlowRepositoryAndCAS(t *testing.T) {
 		t.Fatal("polling is not per record")
 	}
 	close(fast.release)
-	session := s.tagGenbuAutoProbe.current
+	session := s.releaseUnit.state.tagGenbuAutoProbe.current
 	w.until(t, func() bool { return session.probes["fast:module"] == nil })
 	if s.snapshot.TagHistory[1].GenbuStatus.Build != domain.GenbuBuilding || session.probes["slow:module"] == nil {
 		t.Fatalf("fast result not applied while slow in flight: error=%q action=%+v records=%+v lanes=%v", s.tagGenbuError("fast"), fast.action, s.snapshot.TagHistory, session.probes)
@@ -241,7 +241,7 @@ func TestTagGenbuPollingSlowRepositoryAndCAS(t *testing.T) {
 	if s.snapshot.TagHistory[0].GenbuStatus.Build != domain.GenbuUnknown {
 		t.Fatal("stale Tag query overwrote replacement")
 	}
-	s.selected = 1
+	s.taskUnit.state.selected = 1
 	s.observeTagGenbuAutoProbeWindow(w)
 	if again.ctx.Err() == nil {
 		t.Fatal("task switch retained old probe subscription")
@@ -316,12 +316,12 @@ func TestTagGenbuPollingRestoreBeforeLocalHistory(t *testing.T) {
 	probe.mu.Lock()
 	reads := probe.historyReads
 	probe.mu.Unlock()
-	if reads != 0 || s.tagGenbuAutoProbe != nil && s.tagGenbuAutoProbe.current != nil {
+	if reads != 0 || s.releaseUnit.state.tagGenbuAutoProbe != nil && s.releaseUnit.state.tagGenbuAutoProbe.current != nil {
 		t.Fatal("local history started before job restoration")
 	}
-	w.until(t, func() bool { return s.tagJobs.current.loaded })
+	w.until(t, func() bool { return s.releaseUnit.state.tagJobs.current.loaded })
 	s.observeTagGenbuAutoProbeWindow(w)
-	w.until(t, func() bool { return s.tagGenbuAutoProbe.current.request == nil })
+	w.until(t, func() bool { return s.releaseUnit.state.tagGenbuAutoProbe.current.request == nil })
 	if len(s.taskTagHistoryRecords("task-a")) != 2 || s.tagBatchProgress("batch-a").Running != 2 {
 		t.Fatal("partial persisted history erased a queued item")
 	}
@@ -330,7 +330,7 @@ func TestTagGenbuPollingRestoreBeforeLocalHistory(t *testing.T) {
 func TestTagGenbuPollingManualRefreshCoalesces(t *testing.T) {
 	s, _, w := tagDesktopTestApp()
 	s.tab = taskTagTab
-	s.requirementIdentityJobs = &requirementIdentityJobState{confirmed: true, identity: "synthetic-account"}
+	s.requirementUnit.state.requirementIdentityJobs = &requirementIdentityJobState{confirmed: true, identity: "synthetic-account"}
 	record := application.TagRecord{ID: "finished", TaskID: "task-a", ServiceID: "service", ModuleID: "module", Tag: "tag-finished", State: "SUCCESS", GenbuStatus: domain.GenbuTagProbeStatus{Build: domain.GenbuFailed, UAT: domain.GenbuUnknown, Production: domain.GenbuUnknown}}
 	backend := &tagPollTestBackend{records: []application.TagRecord{record}, calls: make(chan tagPollTestCall, 4)}
 	s.backend = backend
@@ -343,7 +343,7 @@ func TestTagGenbuPollingManualRefreshCoalesces(t *testing.T) {
 		w.drain()
 	}()
 	s.observeTagGenbuAutoProbeWindow(w)
-	w.until(t, func() bool { return s.tagGenbuAutoProbe.current.request == nil })
+	w.until(t, func() bool { return s.releaseUnit.state.tagGenbuAutoProbe.current.request == nil })
 	select {
 	case <-backend.calls:
 		t.Fatal("terminal state auto-probed")
@@ -372,7 +372,7 @@ func TestTagGenbuPollingManualRefreshCoalesces(t *testing.T) {
 		t.Fatalf("20 clicks created %d local refreshes", reads-1)
 	}
 	for i := 0; i < 20; i++ {
-		s.queueTagGenbuAutoProbe(s.tagGenbuAutoProbe.current, w)
+		s.queueTagGenbuAutoProbe(s.releaseUnit.state.tagGenbuAutoProbe.current, w)
 	}
 	w.drain()
 	select {
@@ -381,9 +381,9 @@ func TestTagGenbuPollingManualRefreshCoalesces(t *testing.T) {
 	default:
 	}
 	s.requestTagHistoryRefresh()
-	s.selected = 1
+	s.taskUnit.state.selected = 1
 	s.observeTagGenbuAutoProbeWindow(w)
-	if s.tagGenbuAutoProbe.forcePending {
+	if s.releaseUnit.state.tagGenbuAutoProbe.forcePending {
 		t.Fatal("old task's pending forced refresh leaked to the next task")
 	}
 }
@@ -408,7 +408,7 @@ func TestTagGenbuPollingLocalReadCannotEraseFinishedJob(t *testing.T) {
 		w.drain()
 	}()
 	s.observeTagJobsWindow(w)
-	w.until(t, func() bool { return s.tagJobs.current.loaded })
+	w.until(t, func() bool { return s.releaseUnit.state.tagJobs.current.loaded })
 	s.observeTagGenbuAutoProbeWindow(w)
 	w.until(t, func() bool { probe.mu.Lock(); defer probe.mu.Unlock(); return probe.historyReads == 1 })
 	final := tagDesktopTestSnapshot(scope)
@@ -442,8 +442,8 @@ func TestTagGenbuPollingLocalReadCannotEraseFinishedJob(t *testing.T) {
 	}
 	probe.mu.Unlock()
 	close(probe.historyRelease)
-	w.until(t, func() bool { return s.tagGenbuAutoProbe.current.request == nil })
+	w.until(t, func() bool { return s.releaseUnit.state.tagGenbuAutoProbe.current.request == nil })
 	if len(s.snapshot.TagHistory) != 2 || s.snapshot.TagHistory[0].State != "SUCCESS" || s.snapshot.TagHistory[1].Tag != "finished-two" {
-		t.Fatalf("late local history erased a finished job: records=%+v readSequence=%d view=%+v", s.snapshot.TagHistory, s.tagGenbuAutoProbe.current.generation, s.currentTagJobView().snapshot)
+		t.Fatalf("late local history erased a finished job: records=%+v readSequence=%d view=%+v", s.snapshot.TagHistory, s.releaseUnit.state.tagGenbuAutoProbe.current.generation, s.currentTagJobView().snapshot)
 	}
 }

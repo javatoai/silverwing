@@ -3,6 +3,7 @@ package desktop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -20,6 +21,7 @@ type productionDiffDialog struct {
 	Incoming                                          bool
 	View                                              *productionView
 	Target                                            production.Target
+	Preview                                           *production.Preview
 	Review                                            workspaceHistoryState
 	Commits                                           string
 	Tab                                               string
@@ -34,7 +36,7 @@ func (s *app) openProductionDiff(v *productionView, title, sourceRef, targetRef,
 	state := s.ensureProduction()
 	s.closeProductionDiff()
 	d := &productionDiffDialog{Open: true, Title: title, SourceRef: sourceRef, TargetRef: targetRef, SourceSHA: sourceSHA, TargetSHA: targetSHA, Incoming: incoming,
-		Home: s.snapshot.Home, Scope: productionConfigScope(s.configJSON), BatchID: v.BatchID, ManualTag: v.ManualTag, View: v, Target: v.Preview.Target}
+		Home: s.snapshot.Home, Scope: productionConfigScope(s.settingsUnit.state.configJSON), BatchID: v.BatchID, ManualTag: v.ManualTag, View: v, Target: v.Preview.Target, Preview: v.Preview}
 	d.Review = workspaceHistoryState{Open: true, Mode: "production", FileView: "tree", LeftWidth: 250, TaskSessionKey: fmt.Sprintf("production-diff-%p", d), CompareMode: workspaceReviewMainline}
 	d.Review.DiffBaseLabel, d.Review.DiffTargetLabel, d.Review.FileContentLabel = targetRef, "源提交 · "+sourceRef, "源提交内容"
 	if incoming {
@@ -46,23 +48,25 @@ func (s *app) openProductionDiff(v *productionView, title, sourceRef, targetRef,
 }
 
 func (s *app) productionDiffCurrent(d *productionDiffDialog) bool {
-	return d != nil && d.Open && s.production != nil && s.production.diffDialog == d && s.page == "production" &&
-		s.productionView() == d.View && s.snapshot.Home == d.Home && productionConfigScope(s.configJSON) == d.Scope &&
-		d.View.BatchID == d.BatchID && d.View.ManualTag == d.ManualTag && d.View.Preview != nil && d.View.Preview.Target == d.Target
+	return d != nil && d.Open && d.View != nil && s.releaseUnit.state.production != nil && s.releaseUnit.state.production.diffDialog == d && s.page == "production" &&
+		s.productionView() == d.View && s.snapshot.Home == d.Home && productionConfigScope(s.settingsUnit.state.configJSON) == d.Scope &&
+		d.View.BatchID == d.BatchID && d.View.ManualTag == d.ManualTag && d.View.Preview != nil && d.View.Preview == d.Preview && d.View.Preview.Target == d.Target
 }
 
 func (s *app) closeProductionDiff() {
-	if s.production == nil || s.production.diffDialog == nil {
+	if s.releaseUnit.state.production == nil || s.releaseUnit.state.production.diffDialog == nil {
 		return
 	}
-	d := s.production.diffDialog
+	d := s.releaseUnit.state.production.diffDialog
 	d.Open = false
 	if d.cancel != nil {
 		d.cancel()
 	}
+	s.releaseWorkspaceGitDiffSession(d.Review.DiffSessionID)
+	d.Review.DiffSessionID = ""
 	d.Review.resetWorkspaceDiffView()
 	d.Review.Preview, d.Review.FileSelected = nil, nil
-	s.production.diffDialog = nil
+	s.releaseUnit.state.production.diffDialog = nil
 }
 
 func (s *app) selectProductionDiffFile(d *productionDiffDialog, file workspace.CompareChange) {
@@ -83,7 +87,7 @@ func (s *app) requestProductionDiff(d *productionDiffDialog, file *workspace.Com
 	if !s.productionDiffCurrent(d) || s.backend == nil {
 		return
 	}
-	state := s.production
+	state := s.releaseUnit.state.production
 	window := state.window
 	if s.win != nil {
 		window = s.win
@@ -100,10 +104,11 @@ func (s *app) requestProductionDiff(d *productionDiffDialog, file *workspace.Com
 	generation := d.Generation
 	d.Review.Error = ""
 	d.Review.FilesLoading, d.Review.PreviewLoading = file == nil, file != nil
-	action := application.Action{Kind: "production.diff-files", Payload: map[string]any{"target": d.Target, "sourceSha": d.SourceSHA, "targetSha": d.TargetSHA, "incoming": d.Incoming}}
+	action := application.Action{Kind: "production.diff-files", Payload: map[string]any{"target": d.Target, "sourceSha": d.SourceSHA, "targetSha": d.TargetSHA, "incoming": d.Incoming, "retainSession": true}}
 	if file != nil {
 		action.Kind, action.Path = "production.diff-preview", file.Path
 		action.Payload["oldPath"], action.Payload["fileKind"] = file.OldPath, file.Kind
+		action.Payload["sessionId"] = d.Review.DiffSessionID
 	}
 	worker := &productionWorker{cancel: cancel, done: make(chan struct{})}
 	state.mu.Lock()
@@ -125,18 +130,23 @@ func (s *app) requestProductionDiff(d *productionDiffDialog, file *workspace.Com
 		}()
 		result, err := backend.Dispatch(ctx, action)
 		var data production.DiffResult
-		if err == nil {
+		if result.Data != nil {
 			if direct, ok := result.Data.(production.DiffResult); ok {
 				data = direct
 			} else {
 				var raw []byte
-				raw, err = json.Marshal(result.Data)
-				if err == nil {
-					err = json.Unmarshal(raw, &data)
+				var decodeErr error
+				raw, decodeErr = json.Marshal(result.Data)
+				if decodeErr == nil {
+					decodeErr = json.Unmarshal(raw, &data)
 				}
+				err = errors.Join(err, decodeErr)
 			}
 		}
 		if window.IsDestroyed() {
+			if file == nil {
+				s.releaseWorkspaceGitDiffSession(data.Files.SessionID)
+			}
 			return
 		}
 		window.Update(func() {
@@ -144,21 +154,35 @@ func (s *app) requestProductionDiff(d *productionDiffDialog, file *workspace.Com
 			closed := state.closed
 			state.mu.Unlock()
 			if closed || !s.productionDiffCurrent(d) || d.Generation != generation {
+				if file == nil {
+					s.releaseWorkspaceGitDiffSession(data.Files.SessionID)
+				}
 				return
 			}
 			r := &d.Review
 			r.FilesLoading, r.PreviewLoading = false, false
 			if err != nil {
+				if file == nil {
+					s.releaseWorkspaceGitDiffSession(data.Files.SessionID)
+				}
 				r.Error = err.Error()
 				window.Invalidate()
 				return
 			}
 			if data.Files.TargetCommit != d.SourceSHA || data.Files.BaseCommit == "" || !d.Incoming && data.Files.BaseCommit != d.TargetSHA {
+				if file == nil {
+					s.releaseWorkspaceGitDiffSession(data.Files.SessionID)
+				}
 				r.Error = "差异返回的提交与当前目标不匹配，请重新打开。"
 				window.Invalidate()
 				return
 			}
 			if file == nil {
+				previous := r.DiffSessionID
+				r.DiffSessionID = data.Files.SessionID
+				if previous != r.DiffSessionID {
+					s.releaseWorkspaceGitDiffSession(previous)
+				}
 				r.Files, r.BaseCommit, r.TargetCommit = data.Files.Files, data.Files.BaseCommit, data.Files.TargetCommit
 				d.Commits = data.Commits
 				if len(r.Files) > 0 {
@@ -178,10 +202,10 @@ func (s *app) requestProductionDiff(d *productionDiffDialog, file *workspace.Com
 }
 
 func (s *app) renderProductionDiffDialog(c *ui.Context, p palette) {
-	if s.production == nil || s.production.diffDialog == nil {
+	if s.releaseUnit.state.production == nil || s.releaseUnit.state.production.diffDialog == nil {
 		return
 	}
-	d := s.production.diffDialog
+	d := s.releaseUnit.state.production.diffDialog
 	if !s.productionDiffCurrent(d) {
 		s.closeProductionDiff()
 		return

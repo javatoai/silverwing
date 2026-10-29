@@ -120,6 +120,7 @@ func (s *ConfigStore) Load() (domain.AppConfig, error) {
 		return domain.AppConfig{}, &DefaultTaskRootInitializationError{TaskRoot: taskRoot, Cause: err}
 	}
 	config.TaskRoot = &taskRoot
+	config.RequirementMaterialsRoot = defaultProfileMaterialsRoot(s.paths.Home)
 	if err := s.writeShards(shardsFor(config), shardNames); err != nil {
 		return domain.AppConfig{}, err
 	}
@@ -166,6 +167,7 @@ func (s *ConfigStore) loadUnlocked() (domain.AppConfig, error) {
 			return domain.AppConfig{}, &DefaultTaskRootInitializationError{TaskRoot: taskRoot, Cause: err}
 		}
 		config.TaskRoot = &taskRoot
+		config.RequirementMaterialsRoot = defaultProfileMaterialsRoot(s.paths.Home)
 		if err := s.writeShards(shardsFor(config), shardNames); err != nil {
 			return domain.AppConfig{}, err
 		}

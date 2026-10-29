@@ -123,7 +123,7 @@ func (s *app) workspaceWarning(c *ui.Context, p palette, t task, w application.W
 			label(c, detail, 11, p.text).FillWidth().MinWidth(0).Wrap().Selectable().Tooltip(detail)
 		})
 		ui.Row(c).Width(72).Height(34).Shrink(0).Gap(4).AlignItems(ui.Center).Label("工作区提醒操作").Children(func() {
-			if iconButtonDisabled(c, key+"-bootstrap-rerun", "refresh", "重新执行 Bootstrap", p, s.busy || s.settingsPickerBusy).Clicked() {
+			if iconButtonDisabled(c, key+"-bootstrap-rerun", "refresh", "重新执行 Bootstrap", p, s.busy || s.settingsUnit.state.settingsPickerBusy).Clicked() {
 				s.confirmNative(
 					"重新执行 Bootstrap",
 					"将按当前服务配置对该工作区重新执行 Bootstrap 复制规则与命令；已有文件按规则覆盖，命令会重复执行一次。禁止覆盖的规则会因目标已存在而报警告。",

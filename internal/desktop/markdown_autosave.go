@@ -35,8 +35,8 @@ type documentSaveRef struct {
 }
 
 func (s *app) initMarkdownAutosave() {
-	s.markdownAutosave = editor.NewAutosave(func(ctx context.Context, key string, snapshot editor.SaveSnapshot) error {
-		ref, ok := s.documentSaveRef(key)
+	s.materialsUnit.state.markdownAutosave = editor.NewAutosave(func(ctx context.Context, key string, snapshot editor.SaveSnapshot) error {
+		ref, ok := s.materialsUnit.documentSaveRef(key)
 		if !ok {
 			return errors.New("找不到当前 Markdown 文件的保存上下文，请重新读取文件后重试")
 		}
@@ -87,61 +87,61 @@ func (s *app) initMarkdownAutosave() {
 			s.invalidateInstructionEditor()
 			return errors.New("保存请求已返回，但后端没有提供新版本标识；请重新读取文件确认")
 		}
-		s.documentSaveMu.Lock()
-		current, exists := s.documentSaveRefs[key]
+		s.materialsUnit.state.documentSaveMu.Lock()
+		current, exists := s.materialsUnit.state.documentSaveRefs[key]
 		if !exists || current.path != ref.path || current.taskPath != ref.taskPath || current.materialsRoot != ref.materialsRoot || current.hash != ref.hash || current.textOwner != ref.textOwner {
-			s.documentSaveMu.Unlock()
+			s.materialsUnit.state.documentSaveMu.Unlock()
 			return nil
 		}
 		ref.hash, ref.overwrite = hash, false
-		s.documentSaveRefs[key] = ref
-		s.documentSaveMu.Unlock()
-		s.markdownAutosave.SetCacheError(key, dataString(result.Data, "draftError"))
+		s.materialsUnit.state.documentSaveRefs[key] = ref
+		s.materialsUnit.state.documentSaveMu.Unlock()
+		s.materialsUnit.state.markdownAutosave.SetCacheError(key, dataString(result.Data, "draftError"))
 		return nil
 	}, nil)
-	s.markdownAutosave.SetDraftWriter(func(ctx context.Context, key, content string) error {
+	s.materialsUnit.state.markdownAutosave.SetDraftWriter(func(ctx context.Context, key, content string) error {
 		return s.writeMarkdownDraft(ctx, key, content, false)
 	}, func(ctx context.Context, key string) error {
 		return s.writeMarkdownDraft(ctx, key, "", true)
 	})
-	s.markdownAutosave.SetOnSaved(func(key string, _ editor.SaveSnapshot) {
+	s.materialsUnit.state.markdownAutosave.SetOnSaved(func(key string, _ editor.SaveSnapshot) {
 		win := s.win
 		if win == nil || win.IsDestroyed() {
 			return
 		}
 		win.Update(func() {
-			ref, ok := s.documentSaveRef(key)
+			ref, ok := s.materialsUnit.documentSaveRef(key)
 			if !ok {
 				return
 			}
-			state := s.markdownAutosave.Status(key)
+			state := s.materialsUnit.state.markdownAutosave.Status(key)
 			if ref.kind == "material-text" {
 				s.materialTextSaved(key, ref, state)
 				win.Invalidate()
 				return
 			}
 			if ref.kind == "instruction" {
-				if ref.taskID != "" && ref.taskID == s.currentTask().id {
-					for index, path := range s.notePaths {
+				if ref.taskID != "" && ref.taskID == s.taskUnit.currentTask().id {
+					for index, path := range s.taskUnit.state.notePaths {
 						if sameInstructionPath(path, ref.path) {
-							s.noteHashes[index] = ref.hash
+							s.taskUnit.state.noteHashes[index] = ref.hash
 						}
 					}
 				}
 				win.Invalidate()
 				return
 			}
-			if ref.taskID != s.currentTask().id || ref.path != s.documentPath {
+			if ref.taskID != s.taskUnit.currentTask().id || ref.path != s.materialsUnit.state.documentPath {
 				return
 			}
-			s.documentHash = ref.hash
-			s.documentDirty = state.Dirty
-			s.documentDirtyMap[ref.path] = state.Dirty
+			s.materialsUnit.state.documentHash = ref.hash
+			s.materialsUnit.state.documentDirty = state.Dirty
+			s.materialsUnit.state.documentDirtyMap[ref.path] = state.Dirty
 			if state.Dirty {
-				s.documentDrafts[ref.path] = s.documentContent
+				s.materialsUnit.state.documentDrafts[ref.path] = s.materialsUnit.state.documentContent
 			} else {
-				delete(s.documentDrafts, ref.path)
-				delete(s.documentDirtyMap, ref.path)
+				delete(s.materialsUnit.state.documentDrafts, ref.path)
+				delete(s.materialsUnit.state.documentDirtyMap, ref.path)
 				s.lastMessage = "Markdown 已自动保存"
 			}
 			if state.Error != "" {
@@ -171,7 +171,7 @@ func (s *app) releaseBackend() {
 }
 
 func (s *app) documentAutosaveKey(path string) string {
-	return s.documentAutosaveKeyForTask(s.currentTask().id, path)
+	return s.documentAutosaveKeyForTask(s.taskUnit.currentTask().id, path)
 }
 
 // documentAutosaveKeyForTask mirrors the source MarkdownDraftIdentity:
@@ -206,7 +206,7 @@ func (s *app) documentAutosaveKeyForIdentity(taskID, taskPath, materialsRoot, pa
 }
 
 func (s *app) markdownTaskPaths(taskID string) (taskPath, materialsRoot string, ok bool) {
-	for _, item := range s.tasks {
+	for _, item := range s.taskUnit.state.tasks {
 		if item.id == taskID {
 			return item.path, item.materialsPath, item.path != "" && item.materialsPath != ""
 		}
@@ -292,10 +292,10 @@ type markdownAutosaveRenameEntry struct {
 // source path, plus destination identities that must be quiesced before the
 // source-compatible rename overwrites them.
 func (s *app) captureMarkdownAutosaveRename(taskID, materialsRoot, previousAbsolute, proposedAbsolute string) (*markdownAutosaveRenamePlan, error) {
-	if err := s.captureMarkdownEditorInput(s.markdown); err != nil {
+	if err := s.captureMarkdownEditorInput(s.materialsUnit.state.markdown); err != nil {
 		return nil, err
 	}
-	for _, state := range s.materialTextEditors {
+	for _, state := range s.materialsUnit.state.materialTextEditors {
 		if state.taskID != taskID {
 			continue
 		}
@@ -306,7 +306,7 @@ func (s *app) captureMarkdownAutosaveRename(taskID, materialsRoot, previousAbsol
 			return nil, err
 		}
 		newPath := remapMaterialsAbsolutePath(state.path, previousAbsolute, proposedAbsolute)
-		if !documents.EditableMaterialText(newPath) && s.markdownAutosave != nil && s.markdownAutosave.Status(state.key).Dirty {
+		if !documents.EditableMaterialText(newPath) && s.materialsUnit.state.markdownAutosave != nil && s.materialsUnit.state.markdownAutosave.Status(state.key).Dirty {
 			return nil, errors.New("该文件仍有文本草稿，请先保存或丢弃草稿，再改为只读资料格式")
 		}
 	}
@@ -354,16 +354,16 @@ func (s *app) captureMarkdownAutosaveRename(taskID, materialsRoot, previousAbsol
 	}
 
 	plan := &markdownAutosaveRenamePlan{
-		autosave: s.markdownAutosave, taskID: taskID, taskPath: taskPath,
+		autosave: s.materialsUnit.state.markdownAutosave, taskID: taskID, taskPath: taskPath,
 		materialsRoot: taskRoot, previous: previous, proposed: proposed,
 		moves: make(map[string]string),
 	}
-	s.documentSaveMu.Lock()
-	refs := make(map[string]documentSaveRef, len(s.documentSaveRefs))
-	for key, ref := range s.documentSaveRefs {
+	s.materialsUnit.state.documentSaveMu.Lock()
+	refs := make(map[string]documentSaveRef, len(s.materialsUnit.state.documentSaveRefs))
+	for key, ref := range s.materialsUnit.state.documentSaveRefs {
 		refs[key] = ref
 	}
-	s.documentSaveMu.Unlock()
+	s.materialsUnit.state.documentSaveMu.Unlock()
 
 	keySet := make(map[string]bool)
 	for key, ref := range refs {
@@ -384,7 +384,7 @@ func (s *app) captureMarkdownAutosaveRename(taskID, materialsRoot, previousAbsol
 		if relative != "." {
 			newPath = filepath.Join(proposed, relative)
 		}
-		if s.markdownAutosave != nil && s.markdownAutosave.Status(key).Dirty && (documentKindForPath(oldPath) == "markdown") != (documentKindForPath(newPath) == "markdown") {
+		if s.materialsUnit.state.markdownAutosave != nil && s.materialsUnit.state.markdownAutosave.Status(key).Dirty && (documentKindForPath(oldPath) == "markdown") != (documentKindForPath(newPath) == "markdown") {
 			return nil, errors.New("该文件仍有草稿，请先保存或丢弃草稿，再更改资料格式")
 		}
 		if _, ok := pathRelativeToRoot(taskRoot, newPath); !ok {
@@ -478,14 +478,14 @@ func (l *markdownAutosaveRenameLease) complete(success bool, actualAbsolute, cac
 
 	updates := make([]markdownAutosaveRenameEntry, len(plan.sourceEntries))
 	copy(updates, plan.sourceEntries)
-	s.documentSaveMu.Lock()
+	s.materialsUnit.state.documentSaveMu.Lock()
 	for i := range updates {
-		current, exists := s.documentSaveRefs[updates[i].oldKey]
+		current, exists := s.materialsUnit.state.documentSaveRefs[updates[i].oldKey]
 		if exists {
 			if current.taskID != plan.taskID || normalizeIdentityPath(current.taskPath) != normalizeIdentityPath(plan.taskPath) ||
 				normalizeIdentityPath(current.materialsRoot) != normalizeIdentityPath(plan.materialsRoot) ||
 				normalizeIdentityPath(current.path) != normalizeIdentityPath(updates[i].oldPath) {
-				s.documentSaveMu.Unlock()
+				s.materialsUnit.state.documentSaveMu.Unlock()
 				l.closed = true
 				l.failClosed("文件已重命名，但 Markdown 草稿身份发生变化；请重新打开文件确认内容")
 				return errors.New("Markdown 草稿身份在重命名期间发生变化")
@@ -498,7 +498,7 @@ func (l *markdownAutosaveRenameLease) complete(success bool, actualAbsolute, cac
 			updates[i].ref.readOnly = true
 		}
 	}
-	s.documentSaveMu.Unlock()
+	s.materialsUnit.state.documentSaveMu.Unlock()
 
 	if l.engineLease != nil {
 		if err := l.engineLease.Move(plan.moves); err != nil {
@@ -508,14 +508,14 @@ func (l *markdownAutosaveRenameLease) complete(success bool, actualAbsolute, cac
 		}
 	}
 
-	s.documentSaveMu.Lock()
+	s.materialsUnit.state.documentSaveMu.Lock()
 	for _, key := range plan.lockKeys {
-		delete(s.documentSaveRefs, key)
+		delete(s.materialsUnit.state.documentSaveRefs, key)
 	}
 	for _, entry := range updates {
-		s.documentSaveRefs[entry.newKey] = entry.ref
+		s.materialsUnit.state.documentSaveRefs[entry.newKey] = entry.ref
 	}
-	s.documentSaveMu.Unlock()
+	s.materialsUnit.state.documentSaveMu.Unlock()
 
 	l.closed = true
 	if l.engineLease != nil {
@@ -556,10 +556,10 @@ func (l *markdownAutosaveRenameLease) failClosed(message string) {
 	}
 }
 
-func (s *app) documentSaveRef(key string) (documentSaveRef, bool) {
-	s.documentSaveMu.Lock()
-	defer s.documentSaveMu.Unlock()
-	ref, ok := s.documentSaveRefs[key]
+func (s *materialsController) documentSaveRef(key string) (documentSaveRef, bool) {
+	s.state.documentSaveMu.Lock()
+	defer s.state.documentSaveMu.Unlock()
+	ref, ok := s.state.documentSaveRefs[key]
 	return ref, ok
 }
 
@@ -568,7 +568,7 @@ func (s *app) seedMarkdownAutosave(taskID, path, diskContent, localContent, hash
 }
 
 func (s *app) seedMarkdownAutosaveDraft(taskID, path, diskContent, localContent, hash string, draft *documents.MarkdownDraft, draftError string, snapshots ...documents.Content) {
-	if s.markdownAutosave == nil || documentKindForPath(path) != "markdown" {
+	if s.materialsUnit.state.markdownAutosave == nil || documentKindForPath(path) != "markdown" {
 		return
 	}
 	taskPath, root, ok := s.markdownTaskPaths(taskID)
@@ -583,31 +583,31 @@ func (s *app) seedMarkdownAutosaveDraft(taskID, path, diskContent, localContent,
 	if len(snapshots) > 0 {
 		hasBOM, newline = snapshots[0].HasUTF8BOM, snapshots[0].Newline
 	}
-	if taskID == s.currentTask().id && normalizeIdentityPath(path) == normalizeIdentityPath(s.documentPath) && s.documentReadOnly {
-		s.markdownAutosave.Seed(key, diskContent)
-		s.documentSaveMu.Lock()
-		s.documentSaveRefs[key] = documentSaveRef{taskID: taskID, taskPath: taskPath, materialsRoot: root,
+	if taskID == s.taskUnit.currentTask().id && normalizeIdentityPath(path) == normalizeIdentityPath(s.materialsUnit.state.documentPath) && s.materialsUnit.state.documentReadOnly {
+		s.materialsUnit.state.markdownAutosave.Seed(key, diskContent)
+		s.materialsUnit.state.documentSaveMu.Lock()
+		s.materialsUnit.state.documentSaveRefs[key] = documentSaveRef{taskID: taskID, taskPath: taskPath, materialsRoot: root,
 			relativePath: relativeDocumentPath(root, path), path: path, hash: hash, readOnly: true, hasUTF8BOM: hasBOM, newline: newline}
-		s.documentSaveMu.Unlock()
-		if taskID == s.currentTask().id && normalizeIdentityPath(path) == normalizeIdentityPath(s.documentPath) {
-			s.documentContent, s.documentHash, s.documentDirty = diskContent, hash, false
-			delete(s.documentDrafts, path)
-			delete(s.documentDirtyMap, path)
+		s.materialsUnit.state.documentSaveMu.Unlock()
+		if taskID == s.taskUnit.currentTask().id && normalizeIdentityPath(path) == normalizeIdentityPath(s.materialsUnit.state.documentPath) {
+			s.materialsUnit.state.documentContent, s.materialsUnit.state.documentHash, s.materialsUnit.state.documentDirty = diskContent, hash, false
+			delete(s.materialsUnit.state.documentDrafts, path)
+			delete(s.materialsUnit.state.documentDirtyMap, path)
 		}
 		return
 	}
-	previous, hadPrevious := s.documentSaveRef(key)
+	previous, hadPrevious := s.materialsUnit.documentSaveRef(key)
 	// documentDrafts is keyed by path for legacy UI bookkeeping. It cannot
 	// establish task ownership, so do not import it into a new task identity.
 	_ = localContent
-	s.markdownAutosave.Seed(key, diskContent)
-	restored := !s.markdownAutosave.Status(key).Dirty && draft != nil && markdownDraftMatches(draft.Identity, taskID, taskPath, root, path)
+	s.materialsUnit.state.markdownAutosave.Seed(key, diskContent)
+	restored := !s.materialsUnit.state.markdownAutosave.Status(key).Dirty && draft != nil && markdownDraftMatches(draft.Identity, taskID, taskPath, root, path)
 	if restored {
-		s.markdownAutosave.RestoreDraft(key, draft.Content)
+		s.materialsUnit.state.markdownAutosave.RestoreDraft(key, draft.Content)
 	}
-	s.markdownAutosave.SetCacheError(key, draftError)
-	content, _ := s.markdownAutosave.Content(key)
-	status := s.markdownAutosave.Status(key)
+	s.materialsUnit.state.markdownAutosave.SetCacheError(key, draftError)
+	content, _ := s.materialsUnit.state.markdownAutosave.Content(key)
+	status := s.materialsUnit.state.markdownAutosave.Status(key)
 	ref := documentSaveRef{taskID: taskID, taskPath: taskPath, materialsRoot: root,
 		relativePath: relativeDocumentPath(root, path), path: path, hasUTF8BOM: hasBOM, newline: newline}
 	if status.Dirty {
@@ -617,43 +617,43 @@ func (s *app) seedMarkdownAutosaveDraft(taskID, path, diskContent, localContent,
 				ref.hasUTF8BOM, ref.newline = draft.HasUTF8BOM, draft.Newline
 			}
 			if hash != draft.BaselineHash {
-				s.markdownAutosave.MarkConflict(key, content, "恢复的草稿对应文件已被外部修改，请接受外部版本或明确覆盖")
-				status = s.markdownAutosave.Status(key)
+				s.materialsUnit.state.markdownAutosave.MarkConflict(key, content, "恢复的草稿对应文件已被外部修改，请接受外部版本或明确覆盖")
+				status = s.materialsUnit.state.markdownAutosave.Status(key)
 			}
 		} else if hadPrevious {
 			ref.hash, ref.overwrite = previous.hash, previous.overwrite
 			ref.hasUTF8BOM, ref.newline = previous.hasUTF8BOM, previous.newline
 			switch {
 			case hash != "" && previous.hash != "" && hash != previous.hash:
-				s.markdownAutosave.MarkConflict(key, content, "文件已被外部修改，请接受外部版本或明确覆盖")
-				status = s.markdownAutosave.Status(key)
+				s.materialsUnit.state.markdownAutosave.MarkConflict(key, content, "文件已被外部修改，请接受外部版本或明确覆盖")
+				status = s.materialsUnit.state.markdownAutosave.Status(key)
 			case hash != "" && previous.hash == "":
-				s.markdownAutosave.MarkConflict(key, content, "草稿没有可验证的原始版本，请重新读取或明确覆盖")
-				status = s.markdownAutosave.Status(key)
+				s.materialsUnit.state.markdownAutosave.MarkConflict(key, content, "草稿没有可验证的原始版本，请重新读取或明确覆盖")
+				status = s.materialsUnit.state.markdownAutosave.Status(key)
 			}
 		} else {
 			ref.hash = hash
 			if hash != "" {
-				s.markdownAutosave.MarkConflict(key, content, "草稿没有可验证的原始版本，请重新读取或明确覆盖")
-				status = s.markdownAutosave.Status(key)
+				s.materialsUnit.state.markdownAutosave.MarkConflict(key, content, "草稿没有可验证的原始版本，请重新读取或明确覆盖")
+				status = s.materialsUnit.state.markdownAutosave.Status(key)
 			}
 		}
 	} else {
 		ref.hash = hash
 	}
-	s.documentSaveMu.Lock()
-	s.documentSaveRefs[key] = ref
-	s.documentSaveMu.Unlock()
-	if taskID == s.currentTask().id && normalizeIdentityPath(path) == normalizeIdentityPath(s.documentPath) {
-		s.documentContent = content
-		s.documentHash = ref.hash
-		s.documentDirty = status.Dirty
+	s.materialsUnit.state.documentSaveMu.Lock()
+	s.materialsUnit.state.documentSaveRefs[key] = ref
+	s.materialsUnit.state.documentSaveMu.Unlock()
+	if taskID == s.taskUnit.currentTask().id && normalizeIdentityPath(path) == normalizeIdentityPath(s.materialsUnit.state.documentPath) {
+		s.materialsUnit.state.documentContent = content
+		s.materialsUnit.state.documentHash = ref.hash
+		s.materialsUnit.state.documentDirty = status.Dirty
 		if status.Dirty {
-			s.documentDrafts[path] = content
-			s.documentDirtyMap[path] = true
+			s.materialsUnit.state.documentDrafts[path] = content
+			s.materialsUnit.state.documentDirtyMap[path] = true
 		} else {
-			delete(s.documentDrafts, path)
-			delete(s.documentDirtyMap, path)
+			delete(s.materialsUnit.state.documentDrafts, path)
+			delete(s.materialsUnit.state.documentDirtyMap, path)
 		}
 	}
 }
@@ -684,7 +684,7 @@ func instructionIdentity(action application.Action, path string) (scope, taskID,
 // instructions.read result. An existing dirty draft remains authoritative;
 // a changed disk hash marks it conflicted instead of silently replacing it.
 func (s *app) seedInstructionAutosave(action application.Action, result application.ActionResult) (string, string, bool) {
-	if s.markdownAutosave == nil {
+	if s.materialsUnit.state.markdownAutosave == nil {
 		return "", result.Text, markdownReadingOnly || dataBool(result.Data, "readOnly")
 	}
 	path := result.Path
@@ -699,26 +699,26 @@ func (s *app) seedInstructionAutosave(action application.Action, result applicat
 	readOnly := markdownReadingOnly || dataBool(result.Data, "readOnly")
 	newHash := dataString(result.Data, "hash")
 	if markdownReadingOnly {
-		s.markdownAutosave.Seed(key, result.Text)
+		s.materialsUnit.state.markdownAutosave.Seed(key, result.Text)
 		ref := documentSaveRef{taskID: taskID, path: path, hash: newHash, kind: "instruction", readOnly: true}
 		if scope != "task" {
 			ref.scope, ref.groupID = scope, groupID
 		}
-		s.documentSaveMu.Lock()
-		s.documentSaveRefs[key] = ref
-		s.documentSaveMu.Unlock()
+		s.materialsUnit.state.documentSaveMu.Lock()
+		s.materialsUnit.state.documentSaveRefs[key] = ref
+		s.materialsUnit.state.documentSaveMu.Unlock()
 		return key, result.Text, true
 	}
 	acceptDisk := dataBool(action.Payload, "acceptDisk")
-	previous, hadPrevious := s.documentSaveRef(key)
+	previous, hadPrevious := s.materialsUnit.documentSaveRef(key)
 
 	if acceptDisk {
-		s.markdownAutosave.AcceptDisk(key, result.Text, true)
+		s.materialsUnit.state.markdownAutosave.AcceptDisk(key, result.Text, true)
 	} else {
-		s.markdownAutosave.Seed(key, result.Text)
+		s.materialsUnit.state.markdownAutosave.Seed(key, result.Text)
 	}
-	content, _ := s.markdownAutosave.Content(key)
-	status := s.markdownAutosave.Status(key)
+	content, _ := s.materialsUnit.state.markdownAutosave.Content(key)
+	status := s.materialsUnit.state.markdownAutosave.Status(key)
 	ref := documentSaveRef{taskID: taskID, path: path, kind: "instruction", scope: "", groupID: "", readOnly: readOnly}
 	if scope != "task" {
 		ref.scope, ref.groupID = scope, groupID
@@ -727,19 +727,19 @@ func (s *app) seedInstructionAutosave(action application.Action, result applicat
 		ref.hash = previous.hash
 		ref.overwrite = previous.overwrite
 		if newHash != "" && (previous.hash == "" || newHash != previous.hash) {
-			s.markdownAutosave.MarkConflict(key, content, "文件已被外部修改，请接受外部版本或明确覆盖")
+			s.materialsUnit.state.markdownAutosave.MarkConflict(key, content, "文件已被外部修改，请接受外部版本或明确覆盖")
 		}
 	} else {
 		ref.hash = newHash
 	}
-	s.documentSaveMu.Lock()
-	s.documentSaveRefs[key] = ref
-	s.documentSaveMu.Unlock()
+	s.materialsUnit.state.documentSaveMu.Lock()
+	s.materialsUnit.state.documentSaveRefs[key] = ref
+	s.materialsUnit.state.documentSaveMu.Unlock()
 	return key, content, readOnly
 }
 
 func (s *app) instructionSaveRef(key string) (documentSaveRef, bool) {
-	ref, ok := s.documentSaveRef(key)
+	ref, ok := s.materialsUnit.documentSaveRef(key)
 	return ref, ok && ref.kind == "instruction"
 }
 
@@ -747,8 +747,8 @@ func (s *app) editInstructionAutosave(key, content string) {
 	if markdownReadingOnly {
 		return
 	}
-	if ref, ok := s.instructionSaveRef(key); ok && !ref.readOnly && s.markdownAutosave != nil {
-		s.markdownAutosave.Edit(key, content)
+	if ref, ok := s.instructionSaveRef(key); ok && !ref.readOnly && s.materialsUnit.state.markdownAutosave != nil {
+		s.materialsUnit.state.markdownAutosave.Edit(key, content)
 	}
 }
 
@@ -756,18 +756,18 @@ func (s *app) setInstructionComposing(key string, composing bool) {
 	if markdownReadingOnly {
 		return
 	}
-	if ref, ok := s.instructionSaveRef(key); ok && !ref.readOnly && s.markdownAutosave != nil {
-		s.markdownAutosave.SetComposing(key, composing)
+	if ref, ok := s.instructionSaveRef(key); ok && !ref.readOnly && s.materialsUnit.state.markdownAutosave != nil {
+		s.materialsUnit.state.markdownAutosave.SetComposing(key, composing)
 	}
 }
 
 func (s *app) setMarkdownComposing(taskID, path string, composing bool) {
-	if s.markdownAutosave == nil {
+	if s.materialsUnit.state.markdownAutosave == nil {
 		return
 	}
 	key := s.documentAutosaveKeyForTask(taskID, path)
-	if ref, exists := s.documentSaveRef(key); key != "" && exists && !ref.readOnly && ref.kind != "instruction" && ref.kind != "material-text" {
-		s.markdownAutosave.SetComposing(key, composing)
+	if ref, exists := s.materialsUnit.documentSaveRef(key); key != "" && exists && !ref.readOnly && ref.kind != "instruction" && ref.kind != "material-text" {
+		s.materialsUnit.state.markdownAutosave.SetComposing(key, composing)
 	}
 }
 
@@ -828,57 +828,57 @@ func (s *app) invalidateInstructionEditor() {
 }
 
 func (s *app) editMarkdownAutosave(path, content string) {
-	if s.documentReadOnly || s.markdownAutosave == nil || documentKindForPath(path) != "markdown" {
+	if s.materialsUnit.state.documentReadOnly || s.materialsUnit.state.markdownAutosave == nil || documentKindForPath(path) != "markdown" {
 		return
 	}
-	taskID := s.currentTask().id
+	taskID := s.taskUnit.currentTask().id
 	_, _, taskOK := s.markdownTaskPaths(taskID)
 	key := s.documentAutosaveKeyForTask(taskID, path)
 	if !taskOK || key == "" {
 		return
 	}
-	s.documentSaveMu.Lock()
-	ref, exists := s.documentSaveRefs[key]
-	s.documentSaveMu.Unlock()
+	s.materialsUnit.state.documentSaveMu.Lock()
+	ref, exists := s.materialsUnit.state.documentSaveRefs[key]
+	s.materialsUnit.state.documentSaveMu.Unlock()
 	if !exists || ref.readOnly || markdownReadingOnly || ref.kind == "instruction" || ref.kind == "material-text" {
 		return
 	}
-	s.markdownAutosave.Edit(key, content)
+	s.materialsUnit.state.markdownAutosave.Edit(key, content)
 }
 
 func (s *app) markdownSaveState() (string, editor.SaveState) {
-	if s.documentReadOnly || s.markdownAutosave == nil || s.documentPath == "" || documentKindForPath(s.documentPath) != "markdown" {
+	if s.materialsUnit.state.documentReadOnly || s.materialsUnit.state.markdownAutosave == nil || s.materialsUnit.state.documentPath == "" || documentKindForPath(s.materialsUnit.state.documentPath) != "markdown" {
 		return "", editor.SaveState{}
 	}
-	key := s.documentAutosaveKeyForTask(s.currentTask().id, s.documentPath)
-	return key, s.markdownAutosave.Status(key)
+	key := s.documentAutosaveKeyForTask(s.taskUnit.currentTask().id, s.materialsUnit.state.documentPath)
+	return key, s.materialsUnit.state.markdownAutosave.Status(key)
 }
 
 func (s *app) flushMarkdownAutosave(key string) {
-	ref, exists := s.documentSaveRef(key)
-	if s.markdownAutosave == nil || key == "" || !exists || ref.readOnly || markdownReadingOnly && ref.kind != "material-text" {
+	ref, exists := s.materialsUnit.documentSaveRef(key)
+	if s.materialsUnit.state.markdownAutosave == nil || key == "" || !exists || ref.readOnly || markdownReadingOnly && ref.kind != "material-text" {
 		return
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		failures := s.markdownAutosave.Flush(ctx)
+		failures := s.materialsUnit.state.markdownAutosave.Flush(ctx)
 		win := s.win
 		if win == nil || win.IsDestroyed() {
 			return
 		}
 		win.Update(func() {
 			for _, failure := range failures {
-				ref, ok := s.documentSaveRef(failure.Path)
+				ref, ok := s.materialsUnit.documentSaveRef(failure.Path)
 				if ok && ref.kind == "instruction" {
-					state := s.markdownAutosave.Status(failure.Path)
+					state := s.materialsUnit.state.markdownAutosave.Status(failure.Path)
 					if state.Conflict || state.Error != "" || state.Dirty {
 						s.lastError = failure.Message
 						win.Invalidate()
 					}
 					continue
 				}
-				if ok && ref.path == s.documentPath {
+				if ok && ref.path == s.materialsUnit.state.documentPath {
 					s.lastError = failure.Message
 					break
 				}
@@ -888,25 +888,25 @@ func (s *app) flushMarkdownAutosave(key string) {
 }
 
 func (s *app) retryMarkdownAutosave(key string) {
-	ref, exists := s.documentSaveRef(key)
-	if exists && !ref.readOnly && !(markdownReadingOnly && ref.kind != "material-text") && s.markdownAutosave != nil && s.markdownAutosave.Retry(key) {
+	ref, exists := s.materialsUnit.documentSaveRef(key)
+	if exists && !ref.readOnly && !(markdownReadingOnly && ref.kind != "material-text") && s.materialsUnit.state.markdownAutosave != nil && s.materialsUnit.state.markdownAutosave.Retry(key) {
 		s.lastError = ""
 	}
 }
 
 func (s *app) overwriteMarkdownAfterConflict(key string) {
-	if s.markdownAutosave == nil {
+	if s.materialsUnit.state.markdownAutosave == nil {
 		return
 	}
-	s.documentSaveMu.Lock()
-	ref, ok := s.documentSaveRefs[key]
+	s.materialsUnit.state.documentSaveMu.Lock()
+	ref, ok := s.materialsUnit.state.documentSaveRefs[key]
 	if ok && !ref.readOnly && !(markdownReadingOnly && ref.kind != "material-text") {
 		ref.overwrite = true
-		s.documentSaveRefs[key] = ref
+		s.materialsUnit.state.documentSaveRefs[key] = ref
 	}
-	s.documentSaveMu.Unlock()
+	s.materialsUnit.state.documentSaveMu.Unlock()
 	if ok && !ref.readOnly && !(markdownReadingOnly && ref.kind != "material-text") {
-		s.markdownAutosave.ResumeAfterConflict(key)
+		s.materialsUnit.state.markdownAutosave.ResumeAfterConflict(key)
 	}
 }
 
@@ -920,19 +920,19 @@ func isDocumentConflictError(err error) bool {
 }
 
 func (s *app) discardMarkdownAndReload() {
-	if s.documentReadOnly {
+	if s.materialsUnit.state.documentReadOnly {
 		s.rereadSelectedMaterial(false)
 		return
 	}
 	key, state := s.markdownSaveState()
-	if key == "" || s.markdownAutosave == nil {
+	if key == "" || s.materialsUnit.state.markdownAutosave == nil {
 		return
 	}
 	if state.Composing {
 		s.lastError = "中文输入尚未结束，请提交输入后再丢弃草稿"
 		return
 	}
-	ref, ok := s.documentSaveRef(key)
+	ref, ok := s.materialsUnit.documentSaveRef(key)
 	if !ok {
 		s.lastError = "找不到当前草稿的文档身份"
 		return
@@ -940,12 +940,12 @@ func (s *app) discardMarkdownAndReload() {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		lease, err := s.markdownAutosave.Quiesce(ctx, []string{key})
-		if err == nil && s.markdownAutosave.Status(key).Revision != state.Revision {
+		lease, err := s.materialsUnit.state.markdownAutosave.Quiesce(ctx, []string{key})
+		if err == nil && s.materialsUnit.state.markdownAutosave.Status(key).Revision != state.Revision {
 			err = errors.New("草稿已经产生新的编辑，请再次确认丢弃")
 		}
 		if err == nil {
-			err = s.markdownAutosave.DiscardDraft(ctx, key)
+			err = s.materialsUnit.state.markdownAutosave.DiscardDraft(ctx, key)
 		}
 		win := s.win
 		if win == nil || win.IsDestroyed() {
@@ -958,7 +958,7 @@ func (s *app) discardMarkdownAndReload() {
 			if lease != nil {
 				defer lease.Release()
 			}
-			if err == nil && s.markdownAutosave.Status(key).Revision != state.Revision {
+			if err == nil && s.materialsUnit.state.markdownAutosave.Status(key).Revision != state.Revision {
 				err = errors.New("草稿已经产生新的编辑，最新原文已保留")
 			}
 			if err != nil {
@@ -966,15 +966,15 @@ func (s *app) discardMarkdownAndReload() {
 				win.Invalidate()
 				return
 			}
-			s.markdownAutosave.AcceptDisk(key, "", true)
-			if s.currentTask().id != ref.taskID || s.documentAutosaveKey(s.documentPath) != key {
+			s.materialsUnit.state.markdownAutosave.AcceptDisk(key, "", true)
+			if s.taskUnit.currentTask().id != ref.taskID || s.documentAutosaveKey(s.materialsUnit.state.documentPath) != key {
 				return
 			}
-			delete(s.documentDrafts, ref.path)
-			delete(s.documentDirtyMap, ref.path)
+			delete(s.materialsUnit.state.documentDrafts, ref.path)
+			delete(s.materialsUnit.state.documentDirtyMap, ref.path)
 			s.closeMarkdownEditor()
-			s.documentDirty, s.documentEditing = false, false
-			s.documentContent, s.lastError = "", ""
+			s.materialsUnit.state.documentDirty, s.materialsUnit.state.documentEditing = false, false
+			s.materialsUnit.state.documentContent, s.lastError = "", ""
 			s.act("document.read", ref.taskID, "", "", ref.path, "", nil)
 		})
 	}()

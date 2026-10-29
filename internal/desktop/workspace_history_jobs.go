@@ -19,6 +19,7 @@ type workspaceHistoryJob struct {
 	home, gitExecutable, workspaceIdentity string
 	branchConfigIdentity                   string
 	branchConfigTracked                    bool
+	purpose                                workspaceHistoryPurpose
 	generation                             uint64
 	pageGeneration                         uint64
 	ctx                                    context.Context
@@ -26,14 +27,39 @@ type workspaceHistoryJob struct {
 	done                                   chan struct{}
 }
 
+type workspaceHistoryPurpose uint8
+
+const (
+	workspaceHistoryComparison workspaceHistoryPurpose = iota
+	workspaceHistoryPage
+	workspaceHistoryMessage
+)
+
 type workspaceHistoryJobState struct {
-	current         *workspaceHistoryJob // owned by the window thread
-	generation      uint64
+	current         map[workspaceHistoryPurpose]*workspaceHistoryJob // owned by the window thread
+	generations     map[workspaceHistoryPurpose]uint64
 	pageGeneration  uint64
 	mu              sync.Mutex
 	running         map[*workspaceHistoryJob]struct{}
 	closed          bool
 	prefetchRunning map[*workspaceReviewPrefetchJob]struct{}
+}
+
+func workspaceHistoryActionPurpose(action application.Action) workspaceHistoryPurpose {
+	if action.Kind == "workspace.history" {
+		if stringPayloadValue(action.Payload["messageSha"]) != "" {
+			return workspaceHistoryMessage
+		}
+		return workspaceHistoryPage
+	}
+	return workspaceHistoryComparison
+}
+
+func (state *workspaceHistoryJobState) currentFor(action application.Action) *workspaceHistoryJob {
+	if state == nil {
+		return nil
+	}
+	return state.current[workspaceHistoryActionPurpose(action)]
 }
 
 func independentWorkspaceHistoryAction(kind string) bool {
@@ -42,12 +68,17 @@ func independentWorkspaceHistoryAction(kind string) bool {
 }
 
 func (s *app) ensureWorkspaceHistoryJobs() *workspaceHistoryJobState {
-	if s.workspaceHistoryJobs == nil {
-		s.workspaceHistoryJobs = &workspaceHistoryJobState{running: make(map[*workspaceHistoryJob]struct{})}
-	} else if s.workspaceHistoryJobs.running == nil {
-		s.workspaceHistoryJobs.running = make(map[*workspaceHistoryJob]struct{})
+	if s.workspaceUnit.state.workspaceHistoryJobs == nil {
+		s.workspaceUnit.state.workspaceHistoryJobs = &workspaceHistoryJobState{running: make(map[*workspaceHistoryJob]struct{})}
+	} else if s.workspaceUnit.state.workspaceHistoryJobs.running == nil {
+		s.workspaceUnit.state.workspaceHistoryJobs.running = make(map[*workspaceHistoryJob]struct{})
 	}
-	return s.workspaceHistoryJobs
+	state := s.workspaceUnit.state.workspaceHistoryJobs
+	if state.current == nil {
+		state.current = make(map[workspaceHistoryPurpose]*workspaceHistoryJob)
+		state.generations = make(map[workspaceHistoryPurpose]uint64)
+	}
+	return state
 }
 
 func cloneWorkspaceHistoryAction(action application.Action) application.Action {
@@ -70,13 +101,13 @@ func cloneWorkspaceHistoryAction(action application.Action) application.Action {
 }
 
 func (s *app) beginWorkspaceHistoryJob(action application.Action) (*workspaceHistoryJob, error) {
-	dialog := s.workspaceHistory
+	dialog := s.workspaceUnit.state.workspaceHistory
 	if !independentWorkspaceHistoryAction(action.Kind) || dialog == nil || !dialog.Open || !dialog.matches(action) {
 		return nil, errors.New("工作区读取身份已变化，请重新打开后重试。")
 	}
-	task := s.taskByID(action.TaskID)
+	task := s.taskUnit.taskByID(action.TaskID)
 	item, exists := workspaceHistoryTaskWorkspace(task, action)
-	if task.id == "" || s.currentTask().id != action.TaskID || !exists {
+	if task.id == "" || s.taskUnit.currentTask().id != action.TaskID || !exists {
 		return nil, errors.New("任务或工作区已切换，请重新打开后重试。")
 	}
 	state := s.ensureWorkspaceHistoryJobs()
@@ -86,35 +117,36 @@ func (s *app) beginWorkspaceHistoryJob(action application.Action) (*workspaceHis
 	if closed {
 		return nil, errors.New("工作区读取已关闭。")
 	}
-	if previous := state.current; previous != nil {
+	purpose := workspaceHistoryActionPurpose(action)
+	if previous := state.current[purpose]; previous != nil {
 		previous.cancel()
-		state.current = nil
+		delete(state.current, purpose)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	state.generation++
+	state.generations[purpose]++
 	request := &workspaceHistoryJob{
 		action: cloneWorkspaceHistoryAction(action), dialog: dialog,
 		taskPath: task.path, taskCreatedAt: task.createdAt,
 		home: s.snapshot.Home, gitExecutable: s.configString("gitExecutablePath"),
 		workspaceIdentity: workspaceHistoryWorkspaceIdentity(item),
-		generation:        state.generation, ctx: ctx, cancel: cancel, done: make(chan struct{}),
+		purpose:           purpose, generation: state.generations[purpose], ctx: ctx, cancel: cancel, done: make(chan struct{}),
 	}
 	if dialog.Mode == "review" {
-		request.branchConfigIdentity = s.configJSON
+		request.branchConfigIdentity = s.settingsUnit.state.configJSON
 		request.branchConfigTracked = true
 		request.pageGeneration = dialog.ReviewGeneration
 	} else if workspaceHistoryTracksCurrentBranchConfig(action) {
 		// The history baseline always comes from the current module/service
 		// configuration. A task's historical BaseRef does not define this read.
-		request.branchConfigIdentity = s.configJSON
+		request.branchConfigIdentity = s.settingsUnit.state.configJSON
 		request.branchConfigTracked = true
 	}
-	state.current = request
+	state.current[purpose] = request
 	state.mu.Lock()
 	if state.closed {
 		state.mu.Unlock()
 		cancel()
-		state.current = nil
+		delete(state.current, purpose)
 		return nil, errors.New("工作区读取已关闭。")
 	}
 	state.running[request] = struct{}{}
@@ -141,10 +173,10 @@ func workspaceHistoryWorkspaceIdentity(item application.Workspace) string {
 }
 
 func (s *app) workspaceHistoryJobRelevant(request *workspaceHistoryJob) bool {
-	state := s.workspaceHistoryJobs
-	if state == nil || request == nil || state.current != request || state.generation != request.generation || request.ctx.Err() != nil ||
-		s.workspaceHistory != request.dialog || request.dialog == nil || !request.dialog.Open ||
-		!request.dialog.matches(request.action) || s.currentTask().id != request.action.TaskID {
+	state := s.workspaceUnit.state.workspaceHistoryJobs
+	if state == nil || request == nil || state.current[request.purpose] != request || state.generations[request.purpose] != request.generation || request.ctx.Err() != nil ||
+		s.workspaceUnit.state.workspaceHistory != request.dialog || request.dialog == nil || !request.dialog.Open ||
+		!request.dialog.matches(request.action) || s.taskUnit.currentTask().id != request.action.TaskID {
 		return false
 	}
 	if request.dialog.Mode == "review" && (request.dialog.ReviewGeneration != request.pageGeneration || !s.workspaceReviewPageVisible()) {
@@ -159,12 +191,12 @@ func (s *app) workspaceHistoryJobRelevant(request *workspaceHistoryJob) bool {
 	if closed {
 		return false
 	}
-	task := s.taskByID(request.action.TaskID)
+	task := s.taskUnit.taskByID(request.action.TaskID)
 	item, exists := workspaceHistoryTaskWorkspace(task, request.action)
 	return task.id != "" && task.path == request.taskPath && task.createdAt == request.taskCreatedAt &&
 		s.snapshot.Home == request.home && s.configString("gitExecutablePath") == request.gitExecutable && exists &&
 		workspaceHistoryWorkspaceIdentity(item) == request.workspaceIdentity &&
-		(!request.branchConfigTracked || s.configJSON == request.branchConfigIdentity)
+		(!request.branchConfigTracked || s.settingsUnit.state.configJSON == request.branchConfigIdentity)
 }
 
 func workspaceHistoryAllScope(action application.Action) bool {
@@ -247,7 +279,7 @@ func (s *app) finishWorkspaceHistoryJob(request *workspaceHistoryJob, result app
 		}
 		return
 	}
-	s.workspaceHistoryJobs.current = nil
+	delete(s.workspaceUnit.state.workspaceHistoryJobs.current, request.purpose)
 	if err != nil {
 		if request.action.Kind == "workspace.diff-files" {
 			s.releaseWorkspaceDiffSessionResult(result)
@@ -262,7 +294,7 @@ func (s *app) completeWorkspaceHistoryJob(request *workspaceHistoryJob) {
 	if request == nil {
 		return
 	}
-	state := s.workspaceHistoryJobs
+	state := s.workspaceUnit.state.workspaceHistoryJobs
 	if state == nil {
 		return
 	}
@@ -275,18 +307,37 @@ func (s *app) completeWorkspaceHistoryJob(request *workspaceHistoryJob) {
 }
 
 func (s *app) cancelWorkspaceHistoryRead() {
-	state := s.workspaceHistoryJobs
-	if state == nil || state.current == nil {
+	state := s.workspaceUnit.state.workspaceHistoryJobs
+	if state == nil {
 		return
 	}
-	request := state.current
-	state.current = nil
+	for purpose := range state.current {
+		s.cancelWorkspaceHistoryPurpose(purpose)
+	}
+}
+
+// History pages and expanded messages are independent of the selected diff.
+// Only replacing the same purpose, invalidating the snapshot, or closing the
+// view cancels its owner; all owners still share the shutdown join registry.
+func (s *app) cancelWorkspaceHistoryPurpose(purpose workspaceHistoryPurpose) {
+	state := s.workspaceUnit.state.workspaceHistoryJobs
+	if state == nil || state.current[purpose] == nil {
+		return
+	}
+	request := state.current[purpose]
+	delete(state.current, purpose)
 	request.cancel()
-	if s.workspaceHistory == request.dialog {
+	if s.workspaceUnit.state.workspaceHistory == request.dialog {
 		switch request.action.Kind {
 		case "workspace.history":
-			request.dialog.Loading = false
-			request.dialog.HistoryLoading = false
+			if purpose == workspaceHistoryMessage {
+				if request.dialog.HistoryMessageSHA == stringPayloadValue(request.action.Payload["messageSha"]) {
+					request.dialog.HistoryMessageSHA = ""
+				}
+			} else {
+				request.dialog.Loading = false
+				request.dialog.HistoryLoading = false
+			}
 		case "workspace.file-preview":
 			request.dialog.Loading = false
 		case "workspace.diff-files":
@@ -331,7 +382,7 @@ func (s *app) releaseWorkspaceGitDiffSession(id string) {
 
 func (s *app) observeWorkspaceHistoryJobs() {
 	s.observeWorkspaceReviewPrefetch()
-	if review := s.workspaceHistory; review != nil && review.Mode == "review" && review.Open && !s.workspaceReviewPageVisible() {
+	if review := s.workspaceUnit.state.workspaceHistory; review != nil && review.Mode == "review" && review.Open && !s.workspaceReviewPageVisible() {
 		s.saveWorkspaceReviewSession(review)
 		s.releaseWorkspaceReviewDiffSession(review)
 		s.cancelWorkspaceReviewDebounce(review)
@@ -339,18 +390,19 @@ func (s *app) observeWorkspaceHistoryJobs() {
 		review.releaseWorkspaceReviewRenderData()
 		review.ReviewGeneration++
 	}
-	state := s.workspaceHistoryJobs
-	if state == nil || state.current == nil {
+	state := s.workspaceUnit.state.workspaceHistoryJobs
+	if state == nil {
 		return
 	}
-	request := state.current
-	if s.workspaceHistory != request.dialog || !request.dialog.Open || !s.workspaceHistoryJobRelevant(request) {
-		s.cancelWorkspaceHistoryRead()
+	for purpose, request := range state.current {
+		if !s.workspaceHistoryJobRelevant(request) {
+			s.cancelWorkspaceHistoryPurpose(purpose)
+		}
 	}
 }
 
-func (s *app) closeWorkspaceHistoryJobs(ctx context.Context) error {
-	state := s.workspaceHistoryJobs
+func (s *workspaceController) closeWorkspaceHistoryJobs(ctx context.Context) error {
+	state := s.state.workspaceHistoryJobs
 	if state == nil {
 		return nil
 	}
@@ -361,9 +413,9 @@ func (s *app) closeWorkspaceHistoryJobs(ctx context.Context) error {
 		request.cancel()
 		prefetchRunning = append(prefetchRunning, request)
 	}
-	if state.current != nil {
-		state.current.cancel()
-		state.current = nil
+	for purpose, request := range state.current {
+		request.cancel()
+		delete(state.current, purpose)
 	}
 	running := make([]*workspaceHistoryJob, 0, len(state.running))
 	for request := range state.running {

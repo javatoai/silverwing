@@ -16,7 +16,7 @@ type taskActionScope struct {
 }
 
 func (s *app) taskActionScopeFor(t task) (taskActionScope, bool) {
-	current := s.taskByID(t.id)
+	current := s.taskUnit.taskByID(t.id)
 	if t.id == "" || current.id == "" || current.path != t.path ||
 		current.createdAt != t.createdAt || current.archived != t.archived {
 		return taskActionScope{}, false
@@ -37,13 +37,13 @@ type taskMenuScope struct {
 
 func (s *app) taskMenuScopeFor(t task) (taskMenuScope, bool) {
 	base, valid := s.taskActionScopeFor(t)
-	return taskMenuScope{taskActionScope: base, configJSON: s.configJSON, groupID: t.groupID, branch: t.branch,
+	return taskMenuScope{taskActionScope: base, configJSON: s.settingsUnit.state.configJSON, groupID: t.groupID, branch: t.branch,
 		requirementURL: t.requirementURL, requirementID: t.requirementID, materialsPath: t.materialsPath,
 		materialsStatus: t.materialsStatus, materialsFailureReason: t.materialsFailureReason}, valid
 }
 
 func (s *app) taskMenuScopeCurrent(expected taskMenuScope) bool {
-	actual, valid := s.taskMenuScopeFor(s.taskByID(expected.taskID))
+	actual, valid := s.taskMenuScopeFor(s.taskUnit.taskByID(expected.taskID))
 	return valid && actual == expected
 }
 
@@ -69,6 +69,9 @@ func (s *app) taskContextMenu(services ui.Services, t task, menu *ui.Menu) {
 	if toolCount > 0 {
 		menu.Separator()
 	}
+	if t.requirementURL == "" && menu.Item("关联需求").Icon(icons["file"]).Disabled(!valid || s.busy || s.backend == nil).Chosen() {
+		chosen = "requirement-link"
+	}
 	if menu.Item("批量合并主分支").Icon(icons["branch"]).Disabled(!valid || s.busy || s.backend == nil || t.archived || !s.taskHasMainBranchMergeBatch(t)).Chosen() {
 		chosen = "merge-main-batch"
 	}
@@ -80,7 +83,12 @@ func (s *app) taskContextMenu(services ui.Services, t task, menu *ui.Menu) {
 		if menu.Item("复制任务资料路径").Icon(icons["copy"]).Disabled(!valid).Chosen() {
 			chosen = "materials-copy-path"
 		}
-	} else if t.requirementURL != "" {
+	} else if t.requirementURL == "" {
+		menu.Separator()
+		if menu.Item("准备本地任务资料").Icon(icons["folder"]).Disabled(!valid || s.busy || s.backend == nil).Chosen() {
+			chosen = "materials-retry"
+		}
+	} else {
 		menu.Separator()
 		configured := strings.TrimSpace(s.configString("requirementMaterialsRoot")) != "" && strings.TrimSpace(s.configString("requirementMaterialsSubdirectory")) != ""
 		if !configured {
@@ -116,19 +124,21 @@ func (s *app) taskContextMenu(services ui.Services, t task, menu *ui.Menu) {
 	if chosen == "" {
 		// ContextMenu builds once when opening, then again for the chosen item.
 		// Keep the opening scope so a late choice cannot act in another home.
-		s.taskContextScope = nil
+		s.taskUnit.state.taskContextScope = nil
 		if valid {
-			s.taskContextScope = &scope
+			s.taskUnit.state.taskContextScope = &scope
 		}
 		return
 	}
-	opened := s.taskContextScope
-	s.taskContextScope = nil
+	opened := s.taskUnit.state.taskContextScope
+	s.taskUnit.state.taskContextScope = nil
 	if !valid || opened == nil || *opened != scope {
 		return
 	}
 	s.markReadingInteraction()
 	switch chosen {
+	case "requirement-link":
+		s.openTaskRequirementForm(t)
 	case "codex-open":
 		s.dispatchTaskContextAction(application.Action{Kind: "codex.run", TaskID: t.id, Path: t.path}, opened)
 	case "cursor-open":
@@ -141,7 +151,7 @@ func (s *app) taskContextMenu(services ui.Services, t task, menu *ui.Menu) {
 	case "materials-copy-path":
 		s.copyTextToClipboard(services, t.materialsPath, "已复制任务资料路径")
 	case "materials-configure":
-		s.page, s.settingsTab, s.settingsPage, s.settingsLoaded = "settings", "存储", "paths", ""
+		s.page, s.settingsUnit.state.settingsTab, s.settingsUnit.state.settingsPage, s.settingsUnit.state.settingsLoaded = "settings", "存储", "paths", ""
 	case "materials-retry":
 		s.dispatchTaskContextAction(application.Action{Kind: "task.materials-retry", TaskID: t.id}, opened)
 	case "pin":

@@ -11,8 +11,8 @@ type productionHistoryReturn struct {
 }
 
 func (s *app) productionCurrentBatch(v *productionView) *production.Batch {
-	for i := range s.production.batches {
-		b := &s.production.batches[i]
+	for i := range s.releaseUnit.state.production.batches {
+		b := &s.releaseUnit.state.production.batches[i]
 		if !b.Ended && b.Target.Selection == v.Selection {
 			return b
 		}
@@ -26,7 +26,7 @@ func (s *app) viewProductionHistory(d *productionHistoryDialog, b production.Bat
 	}
 	v := d.View
 	// Resolve the clicked row again rather than navigating a stale row snapshot.
-	for _, current := range s.production.batches {
+	for _, current := range s.releaseUnit.state.production.batches {
 		if current.ID == b.ID && current.Ended && current.Target == b.Target {
 			if v.BatchID == b.ID {
 				return

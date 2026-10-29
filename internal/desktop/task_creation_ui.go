@@ -17,28 +17,13 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-type taskCreationModuleDraft struct {
-	ID, Name                       string
-	LastName                       string
-	Strategy                       domain.WorkspaceStrategy
-	BaseRemote, BaseRef            string
-	repositoryPicker               taskRepositoryPickerState
-	TargetBranch                   string
-	TargetEdited                   bool
-	LastBaseRemote, LastBaseRef    string
-	LastTargetBranch               string
-	TagEnabled                     bool
-	TagMode                        domain.TagBuildMode
-	TagTargetRef, TagMessagePrefix string
-	Source                         domain.TaskModuleSource
-}
-
 type taskCreationPreview struct {
-	signature        string
-	payload          map[string]any
-	workspaceToolIDs []string
-	conflicts        []workspace.BranchReuseConflict
-	sharedAck        bool
+	configurationIdentity, home string
+	signature                   string
+	payload                     map[string]any
+	workspaceToolIDs            []string
+	conflicts                   []workspace.BranchReuseConflict
+	sharedAck                   bool
 }
 
 type taskCreationWorkspaceToolOption struct {
@@ -53,6 +38,9 @@ type taskCreationState struct {
 	token             string
 	title             string
 	config            domain.AppConfig
+	configRevision    uint64
+	observerConfig    taskCreationObserverConfig
+	renderingInputs   bool
 	draft             domain.RequirementDraftState
 	notes             string
 	groupID           string
@@ -138,10 +126,10 @@ type taskCreationGroupDraft struct {
 var taskCreationSequence atomic.Uint64
 
 func (s *app) initTaskCreation(title, requirementTitle, requirementURL string) {
-	s.cancelTaskCreationReads(s.taskCreation, false)
+	s.cancelTaskCreationReads(s.taskUnit.state.taskCreation, false)
 	s.closeTaskCreationRequirements()
 	s.closeTaskCreationAINaming()
-	cancelTaskRepositoryChoices(s.taskCreation)
+	cancelTaskRepositoryChoices(s.taskUnit.state.taskCreation)
 	config := domain.DefaultAppConfig()
 	configErr := json.Unmarshal([]byte(s.snapshot.ConfigJSON), &config)
 	if configErr != nil {
@@ -153,8 +141,12 @@ func (s *app) initTaskCreation(title, requirementTitle, requirementURL string) {
 	}
 	draft := domain.RequirementDraftState{TaskName: requirementTitle, Branch: config.DefaultBranchPrefix}
 	draft = draft.ChangeRequirement(requirementURL, config.DefaultBranchPrefix, selectedTitle)
+	if strings.TrimSpace(requirementURL) == "" {
+		draft.Branch = ""
+		draft.MetadataHint = nil
+	}
 	state := &taskCreationState{
-		token: fmt.Sprintf("%d", taskCreationSequence.Add(1)), title: title, config: config, draft: draft,
+		token: fmt.Sprintf("%d", taskCreationSequence.Add(1)), title: title, config: config, configRevision: 1, draft: draft,
 		services: make(map[string]bool), modules: make(map[string]map[string]bool), moduleData: make(map[string]map[string]*taskCreationModuleDraft), moduleOrder: make(map[string][]string),
 		moduleExpanded: make(map[string]map[string]bool), groupDrafts: make(map[string]*taskCreationGroupDraft), phase: "editing", aiEligible: strings.TrimSpace(requirementURL) != "", lastName: draft.TaskName,
 		selectedToolIDs: make(map[string]bool), agentPreviewTab: "preview",
@@ -164,6 +156,9 @@ func (s *app) initTaskCreation(title, requirementTitle, requirementURL string) {
 	if configErr != nil {
 		state.configError = "无法读取当前任务配置：" + configErr.Error()
 	}
+	if strings.TrimSpace(requirementURL) == "" {
+		state.taskFieldFocus = "taskName"
+	}
 	if len(config.Groups) > 0 {
 		state.groupID = config.Groups[0].ID
 		state.groupQuery = firstNonEmpty(config.Groups[0].Name, config.Groups[0].ID)
@@ -172,18 +167,18 @@ func (s *app) initTaskCreation(title, requirementTitle, requirementURL string) {
 		state.groupQuery = firstNonEmpty(s.snapshot.Groups[0].Name, s.snapshot.Groups[0].ID)
 		state.configError = firstNonEmpty(state.configError, "当前配置没有可用项目组。")
 	}
-	s.taskCreation = state
+	s.taskUnit.state.taskCreation = state
 	s.syncTaskCreationLegacySelection()
 	s.loadTaskCreationWorkspaceTools()
 }
 
 func (s *app) loadTaskCreationTemplates() {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return
 	}
-	if s.settingsTemplatesLoaded {
-		state.templates = taskTemplatesFromMaps(s.settingsTemplates)
+	if s.settingsUnit.state.settingsTemplatesLoaded {
+		state.templates = taskTemplatesFromMaps(s.settingsUnit.state.settingsTemplates)
 		s.loadTaskCreationWorkspaceTools()
 		return
 	}
@@ -264,7 +259,7 @@ func firstTaskAgentPreviewFile(files []workspace.AgentDocumentPreviewFile) strin
 }
 
 func (s *app) loadTaskCreationWorkspaceTools() {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil || state.toolsLoading || state.toolsLoaded {
 		return
 	}
@@ -274,7 +269,7 @@ func (s *app) loadTaskCreationWorkspaceTools() {
 }
 
 func (s *app) finishTaskCreationInitialLoads() {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil || state.loadStep != "" || s.busy {
 		return
 	}
@@ -284,7 +279,7 @@ func (s *app) finishTaskCreationInitialLoads() {
 }
 
 func (s *app) continueTaskCreationInitialLoads() {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return
 	}
@@ -296,7 +291,7 @@ func (s *app) continueTaskCreationInitialLoads() {
 }
 
 func (s *app) taskCreationGroup() *domain.GroupConfig {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return nil
 	}
@@ -306,49 +301,6 @@ func (s *app) taskCreationGroup() *domain.GroupConfig {
 		}
 	}
 	return nil
-}
-
-func taskCreationModuleName(module domain.ServiceModuleConfig) string {
-	if name := strings.TrimSpace(module.Name); name != "" {
-		return name
-	}
-	if id := strings.TrimSpace(module.ID); id != "" {
-		return id
-	}
-	return "default"
-}
-
-func taskCreationOptionalString(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
-}
-
-func taskCreationTargetBranch(feature string, service domain.GroupServiceConfig, module domain.ServiceModuleConfig) string {
-	feature = strings.TrimSpace(feature)
-	if feature == "" {
-		return ""
-	}
-	return taskCreationTargetBranchForCount(feature, taskCreationModuleName(module), module.ID, len(service.Modules))
-}
-
-func taskCreationTargetBranchForCount(feature, moduleName, moduleID string, moduleCount int) string {
-	feature = strings.TrimSpace(feature)
-	if feature == "" {
-		return ""
-	}
-	if moduleCount <= 1 {
-		return feature
-	}
-	name := strings.TrimSpace(moduleName)
-	if name == "" {
-		name = strings.TrimSpace(moduleID)
-	}
-	if name == "" {
-		name = "default"
-	}
-	return feature + "-" + name
 }
 
 func duplicateTaskCreationCloneTargets(order []string, drafts map[string]*taskCreationModuleDraft) []string {
@@ -384,31 +336,6 @@ func duplicateTaskCreationCloneTargets(order []string, drafts map[string]*taskCr
 	return duplicates
 }
 
-func newTaskCreationModuleDraft(service domain.GroupServiceConfig, module domain.ServiceModuleConfig, feature string) *taskCreationModuleDraft {
-	strategy := module.Strategy
-	if strategy == "" {
-		strategy = domain.WorkspaceStandardWorktree
-	}
-	tagMode := module.TagMode
-	if tagMode == "" {
-		tagMode = domain.TagBuildMergeToTargetBranch
-	}
-	messagePrefix := module.TagMessagePrefix
-	if messagePrefix == "" {
-		messagePrefix = "Tag"
-	}
-	draft := &taskCreationModuleDraft{
-		ID: module.ID, Name: module.Name, Strategy: strategy,
-		BaseRemote: service.EffectiveMasterRemote(module), BaseRef: service.EffectiveMasterBranch(module),
-		TargetBranch: taskCreationTargetBranch(feature, service, module),
-		TagEnabled:   module.TagEnabled, TagMode: tagMode, TagTargetRef: taskCreationOptionalString(service.EffectiveTagTargetRef(module)),
-		TagMessagePrefix: messagePrefix, Source: domain.TaskModuleConfigured,
-	}
-	draft.LastName = draft.Name
-	draft.LastBaseRemote, draft.LastBaseRef, draft.LastTargetBranch = draft.BaseRemote, draft.BaseRef, draft.TargetBranch
-	return draft
-}
-
 func (s *app) taskCreationService(serviceID string) *domain.GroupServiceConfig {
 	group := s.taskCreationGroup()
 	if group == nil {
@@ -423,7 +350,7 @@ func (s *app) taskCreationService(serviceID string) *domain.GroupServiceConfig {
 }
 
 func (s *app) ensureTaskCreationService(serviceID string) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil || state.services[serviceID] {
 		return
 	}
@@ -454,7 +381,7 @@ func (s *app) ensureTaskCreationService(serviceID string) {
 }
 
 func (s *app) addTaskCreationModule(serviceID string, strategy domain.WorkspaceStrategy) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return
 	}
@@ -486,7 +413,7 @@ func (s *app) addTaskCreationModule(serviceID string, strategy domain.WorkspaceS
 }
 
 func (s *app) removeTaskCreationModule(serviceID, moduleID string) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil || len(state.moduleData[serviceID]) <= 1 {
 		return
 	}
@@ -518,7 +445,7 @@ func (s *app) removeTaskCreationModule(serviceID, moduleID string) {
 }
 
 func (s *app) setTaskCreationServiceSelected(serviceID string, selected bool) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return
 	}
@@ -552,7 +479,7 @@ func (s *app) setTaskCreationServiceSelected(serviceID string, selected bool) {
 }
 
 func (s *app) toggleTaskCreationService(serviceID string) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return
 	}
@@ -560,7 +487,7 @@ func (s *app) toggleTaskCreationService(serviceID string) {
 }
 
 func (s *app) focusTaskCreationService(serviceID string) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return
 	}
@@ -586,7 +513,7 @@ func (s *app) focusTaskCreationService(serviceID string) {
 }
 
 func (s *app) setTaskCreationGroup(groupID string) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil || state.groupID == groupID {
 		return
 	}
@@ -642,27 +569,27 @@ func (s *app) setTaskCreationGroup(groupID string) {
 }
 
 func (s *app) syncTaskCreationLegacySelection() {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return
 	}
-	s.taskGroupID = state.groupID
-	s.taskServices = make(map[string]bool, len(state.services))
-	s.taskModules = make(map[string]map[string]bool, len(state.modules))
+	s.taskUnit.state.taskGroupID = state.groupID
+	s.taskUnit.state.taskServices = make(map[string]bool, len(state.services))
+	s.taskUnit.state.taskModules = make(map[string]map[string]bool, len(state.modules))
 	for serviceID, selected := range state.services {
-		s.taskServices[serviceID] = selected
+		s.taskUnit.state.taskServices[serviceID] = selected
 	}
 	for serviceID, modules := range state.modules {
 		copyModules := make(map[string]bool, len(modules))
 		for moduleID, selected := range modules {
 			copyModules[moduleID] = selected
 		}
-		s.taskModules[serviceID] = copyModules
+		s.taskUnit.state.taskModules[serviceID] = copyModules
 	}
 }
 
 func (s *app) retargetUntouchedTaskCreationModules(feature string) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return
 	}
@@ -672,17 +599,16 @@ func (s *app) retargetUntouchedTaskCreationModules(feature string) {
 }
 
 func (s *app) retargetTaskCreationServiceModules(serviceID, feature string) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return
 	}
 	modules := state.moduleData[serviceID]
 	for _, module := range modules {
-		if module == nil || module.TargetEdited {
+		if module == nil {
 			continue
 		}
-		module.TargetBranch = taskCreationTargetBranchForCount(feature, module.Name, module.ID, len(modules))
-		module.LastTargetBranch = module.TargetBranch
+		module.taskModuleDraftValues = retargetTaskModuleDraftValues(module.taskModuleDraftValues, feature, len(modules))
 	}
 }
 
@@ -690,40 +616,19 @@ func (s *app) syncTaskCreationModuleDraft(serviceID string, draft *taskCreationM
 	if draft == nil {
 		return
 	}
-	nameChanged := draft.Name != draft.LastName
-	baseRefChanged := draft.BaseRef != draft.LastBaseRef
-	baseRemoteChanged := draft.BaseRemote != draft.LastBaseRemote
-	targetBranchChanged := draft.TargetBranch != draft.LastTargetBranch
-	if baseRemoteChanged {
-		remote := strings.TrimSpace(draft.BaseRemote)
-		if remote != "" {
-			if ref, err := domain.ParseRemoteBranchRef(draft.BaseRef); err == nil {
-				draft.BaseRef = remote + "/" + ref.Branch
-			} else if _, after, ok := strings.Cut(strings.TrimSpace(draft.BaseRef), "/"); ok && after != "" {
-				draft.BaseRef = remote + "/" + after
-			}
-		}
-	} else if baseRefChanged {
-		if ref, err := domain.ParseRemoteBranchRef(draft.BaseRef); err == nil {
-			draft.BaseRemote = ref.Remote
-		}
+	values, changes := syncTaskModuleDraftValues(draft.taskModuleDraftValues)
+	draft.taskModuleDraftValues = values
+	if changes.Name {
+		s.retargetTaskCreationServiceModules(serviceID, s.taskUnit.state.taskCreation.draft.Branch)
 	}
-	if targetBranchChanged {
-		draft.TargetEdited = true
-	}
-	draft.LastName = draft.Name
-	if nameChanged {
-		s.retargetTaskCreationServiceModules(serviceID, s.taskCreation.draft.Branch)
-	}
-	draft.LastBaseRemote, draft.LastBaseRef, draft.LastTargetBranch = draft.BaseRemote, draft.BaseRef, draft.TargetBranch
-	if baseRefChanged || baseRemoteChanged || targetBranchChanged || nameChanged {
+	if changes.any() {
 		s.clearTaskCreationFieldError(serviceID, draft.ID, "")
 		s.invalidateTaskCreationPreview("模块基础分支或目标分支已变化，请重新预检。")
 	}
 }
 
 func (s *app) syncTaskCreationDraft() {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return
 	}
@@ -769,7 +674,30 @@ func (s *app) syncTaskCreationDraft() {
 		state.lastBranch = state.draft.Branch
 		s.invalidateTaskCreationPreview("需求链接已变化，请重新预检。")
 	}
-	if state.preview != nil && state.preview.signature != s.taskCreationSignature() {
+	if !state.renderingInputs {
+		s.checkTaskCreationPreviewSignature()
+	}
+}
+
+func (s *app) checkTaskCreationPreviewSignature() {
+	state := s.taskUnit.state.taskCreation
+	if state != nil && state.preflight != nil && !s.taskCreationPreflightScopeRelevant(state.preflight) {
+		s.retireStaleTaskCreationPreflight(state.preflight)
+	}
+	if state != nil && state.preview != nil && state.preview.configurationIdentity != "" {
+		identity, err := s.taskCreationObserverFingerprint(state)
+		if err != nil || identity != state.preview.configurationIdentity || state.preview.home != s.snapshot.Home {
+			if state.preflight != nil {
+				s.retireStaleTaskCreationPreflight(state.preflight)
+			}
+			s.invalidateTaskCreationPreview("任务配置已变化，请重新预检。")
+			return
+		}
+	}
+	if state != nil && state.preview != nil && state.preview.signature != s.taskCreationSignature() {
+		if state.preflight != nil {
+			s.retireStaleTaskCreationPreflight(state.preflight)
+		}
 		state.preview = nil
 		state.phase = "editing"
 		state.inlineError = "任务信息在预检后发生变化，请重新预检。"
@@ -777,7 +705,7 @@ func (s *app) syncTaskCreationDraft() {
 }
 
 func (s *app) invalidateTaskCreationPreview(_ string) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return
 	}
@@ -793,7 +721,7 @@ func (s *app) invalidateTaskCreationPreview(_ string) {
 }
 
 func (s *app) taskCreationPayload() (map[string]any, error) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return nil, fmt.Errorf("任务创建表单已关闭")
 	}
@@ -851,7 +779,7 @@ func (s *app) taskCreationSignature() string {
 }
 
 func (s *app) taskCreationAgentPreviewSignature() string {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	payload, err := s.taskCreationPayload()
 	if state == nil || err != nil {
 		return ""
@@ -866,7 +794,7 @@ func (s *app) taskCreationAgentPreviewSignature() string {
 }
 
 func (s *app) taskCreationMaterialsPreviewSignature() string {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return ""
 	}
@@ -885,7 +813,7 @@ func (s *app) taskCreationMaterialsPreviewSignature() string {
 }
 
 func (s *app) stopTaskCreationPreviewDebounce() {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return
 	}
@@ -907,7 +835,7 @@ func (s *app) taskCreationValidationError() string {
 }
 
 func (s *app) taskCreationValidationFailure() (string, *taskCreationValidationTarget) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return "任务创建表单已关闭。", nil
 	}
@@ -983,7 +911,7 @@ func taskCreationHasSelectedServices(state *taskCreationState) bool {
 }
 
 func (s *app) focusTaskCreationValidationTarget(target *taskCreationValidationTarget) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil || target == nil {
 		return
 	}
@@ -1017,7 +945,7 @@ func (s *app) focusTaskCreationValidationTarget(target *taskCreationValidationTa
 }
 
 func (s *app) beginTaskCreationPreflight() bool {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return false
 	}
@@ -1068,7 +996,9 @@ func cloneTaskCreationWorkspaceToolIDs(ids []string) []string {
 }
 
 func (s *app) snapshotTaskCreationPreview(payload map[string]any) *taskCreationPreview {
+	identity, _ := taskCreationSnapshotConfigFingerprint(s.snapshot, s.taskUnit.state.taskCreation.config)
 	return &taskCreationPreview{
+		configurationIdentity: identity, home: s.snapshot.Home,
 		signature:        s.taskCreationSignature(),
 		payload:          payload,
 		workspaceToolIDs: cloneTaskCreationWorkspaceToolIDs(s.taskCreationSelectedToolIDs()),
@@ -1076,7 +1006,7 @@ func (s *app) snapshotTaskCreationPreview(payload map[string]any) *taskCreationP
 }
 
 func (s *app) resumeTaskCreationPreflightIfPending() bool {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil || !state.pendingPreflight {
 		return false
 	}
@@ -1096,13 +1026,20 @@ func taskCreationActionPayload(payload map[string]any, token string) map[string]
 }
 
 func (s *app) submitTaskCreation(keys []workspace.BranchReuseKey) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil || state.preview == nil {
 		return
 	}
 	if state.preview.signature != s.taskCreationSignature() {
 		s.invalidateTaskCreationPreview("任务信息已变化，请重新预检。")
 		return
+	}
+	if state.preview.configurationIdentity != "" {
+		identity, err := taskCreationSnapshotConfigFingerprint(s.snapshot, state.config)
+		if err != nil || identity != state.preview.configurationIdentity || state.preview.home != s.snapshot.Home {
+			s.invalidateTaskCreationPreview("任务配置已变化，请重新预检。")
+			return
+		}
 	}
 	if s.busy {
 		state.phase = "confirm"
@@ -1130,7 +1067,7 @@ func taskCreationSubmissionPayload(state *taskCreationState, keys []workspace.Br
 }
 
 func (s *app) taskCreationSelectedToolIDs() []string {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return []string{}
 	}
@@ -1144,7 +1081,7 @@ func (s *app) taskCreationSelectedToolIDs() []string {
 }
 
 func (s *app) taskCreationTemplate(id string) *domain.AgentTaskTemplate {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return nil
 	}
@@ -1171,7 +1108,7 @@ func taskCreationSelectedTemplateID(notes string, templates []domain.AgentTaskTe
 }
 
 func (s *app) toggleTaskCreationTemplate(template domain.AgentTaskTemplate) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return
 	}
@@ -1201,7 +1138,7 @@ func (s *app) toggleTaskCreationTemplate(template domain.AgentTaskTemplate) {
 }
 
 func (s *app) confirmTaskCreationTemplateReplacement(confirm bool) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil || state.pendingTemplate == "" {
 		return
 	}
@@ -1214,7 +1151,7 @@ func (s *app) confirmTaskCreationTemplateReplacement(confirm bool) {
 }
 
 func (s *app) refreshTaskCreationAgentPreview() {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil || state.phase != "editing" || state.discardConfirmation || state.agentPreviewBusy || s.busy {
 		return
 	}
@@ -1238,7 +1175,7 @@ func (s *app) refreshTaskCreationAgentPreview() {
 }
 
 func (s *app) refreshTaskCreationMaterialsPreview() {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil || state.phase != "editing" || state.discardConfirmation {
 		return
 	}
@@ -1295,7 +1232,7 @@ func decodeTaskCreationResult[T any](data any) (T, error) {
 
 // taskCreationActionResult is called by the desktop result router before its generic result handling.
 func (s *app) taskCreationActionResult(action application.Action, result application.ActionResult) bool {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil || payloadString(action.Payload, "taskCreateToken") != state.token {
 		return payloadString(action.Payload, "taskCreateToken") != "" && taskCreationOwnedAction(action.Kind)
 	}
@@ -1341,9 +1278,9 @@ func (s *app) taskCreationActionResult(action application.Action, result applica
 	case "instructions.templates.list":
 		state.templatesLoading = false
 		state.templatesError = ""
-		s.settingsTemplates = mapsFromData(result.Data)
-		s.settingsTemplatesLoaded = true
-		state.templates = taskTemplatesFromMaps(s.settingsTemplates)
+		s.settingsUnit.state.settingsTemplates = mapsFromData(result.Data)
+		s.settingsUnit.state.settingsTemplatesLoaded = true
+		state.templates = taskTemplatesFromMaps(s.settingsUnit.state.settingsTemplates)
 		s.continueTaskCreationInitialLoads()
 		return true
 	case "workspace.tools-options":
@@ -1452,11 +1389,11 @@ func (s *app) taskCreationActionResult(action application.Action, result applica
 		s.stopTaskCreationPreviewDebounce()
 		s.dialogOpen = false
 		s.form = actionForm{}
-		s.taskCreation = nil
+		s.taskUnit.state.taskCreation = nil
 		s.lastMessage = result.Message
-		s.taskCreationWarning = ""
+		s.taskUnit.state.taskCreationWarning = ""
 		if strings.TrimSpace(result.Text) != "" {
-			s.taskCreationWarning = "任务已创建。\n" + result.Text
+			s.taskUnit.state.taskCreationWarning = "任务已创建。\n" + result.Text
 		}
 		s.lastError = ""
 		return true
@@ -1466,7 +1403,7 @@ func (s *app) taskCreationActionResult(action application.Action, result applica
 
 // taskCreationActionError is called by the desktop dispatcher before generic error handling.
 func (s *app) taskCreationActionError(action application.Action, cause error) bool {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil || payloadString(action.Payload, "taskCreateToken") != state.token {
 		return payloadString(action.Payload, "taskCreateToken") != "" && taskCreationOwnedAction(action.Kind)
 	}
@@ -1574,13 +1511,17 @@ func taskCreationOwnedAction(kind string) bool {
 
 // renderTaskCreationDialog replaces the generic action dialog for task creation.
 func (s *app) renderTaskCreationDialog(c *ui.Context, p palette) bool {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil || !s.dialogOpen || s.form.mode != "task-create" {
 		s.cancelTaskCreationReads(state, false)
 		s.closeTaskCreationRequirements()
 		s.closeTaskCreationAINaming()
 		return false
 	}
+	// Every input may synchronize dependent fields. Keep those synchronizations
+	// cheap, then validate the complete live form once after all input builders.
+	state.renderingInputs = true
+	defer func() { state.renderingInputs = false }()
 	s.syncTaskCreationDraft()
 	s.startTaskCreationDirectoryCheck(false)
 	s.ensureTaskCreationAINamingScope()
@@ -1657,6 +1598,8 @@ func (s *app) renderTaskCreationDialog(c *ui.Context, p palette) bool {
 					s.renderTaskCreationSelections(c, p)
 				})
 			})
+			s.checkTaskCreationPreviewSignature()
+			inputsLocked = state.phase == "preview" || state.phase == "creating"
 			ui.Row(c).FillWidth().Gap(8).Shrink(0).Wrap().Justify(ui.End).Children(func() {
 				if inputsLocked {
 					canceling := state.phase == "preview" && state.preflight != nil && state.preflight.cancelRequested || state.phase == "creating" && s.operationCancelling
@@ -1717,7 +1660,7 @@ func (s *app) renderTaskCreationDialog(c *ui.Context, p palette) bool {
 }
 
 func (s *app) renderTaskCreationNotesAndPreview(c *ui.Context, p palette) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return
 	}
@@ -1860,7 +1803,7 @@ func (s *app) renderTaskCreationNotesAndPreview(c *ui.Context, p palette) {
 }
 
 func (s *app) renderTaskCreationWorkspaceTools(c *ui.Context, p palette) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil || len(state.config.DefaultWorkspaceToolIDs) == 0 {
 		return
 	}
@@ -1892,7 +1835,7 @@ func (s *app) renderTaskCreationWorkspaceTools(c *ui.Context, p palette) {
 }
 
 func (s *app) renderTaskCreationSelections(c *ui.Context, p palette) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return
 	}
@@ -1905,7 +1848,7 @@ func (s *app) renderTaskCreationSelections(c *ui.Context, p palette) {
 }
 
 func (s *app) renderTaskCreationServiceList(c *ui.Context, p palette, group *domain.GroupConfig) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return
 	}
@@ -2027,7 +1970,7 @@ func (s *app) renderTaskCreationServiceList(c *ui.Context, p palette, group *dom
 }
 
 func (s *app) renderTaskCreationServiceModules(c *ui.Context, p palette, service domain.GroupServiceConfig) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return
 	}
@@ -2046,9 +1989,6 @@ func (s *app) renderTaskCreationServiceModules(c *ui.Context, p palette, service
 		}
 		expanded := s.taskCreationModuleExpanded(serviceID, id)
 		s.renderTaskCreationModule(c.Key("task-create-module-editor-"+serviceID+"-"+id), p, service, draft, expanded)
-		if state.preview != nil && state.preview.signature != s.taskCreationSignature() {
-			s.invalidateTaskCreationPreview("模块配置已变化，请重新预检。")
-		}
 	}
 	ui.Row(c).FillWidth().Padding(8, 0).Children(func() {
 		if action(c, "task-create-module-add-"+serviceID, "plus", "添加临时模块", p, false) {
@@ -2061,7 +2001,7 @@ func (s *app) renderTaskCreationServiceModules(c *ui.Context, p palette, service
 }
 
 func (s *app) taskCreationModuleExpanded(serviceID, moduleID string) bool {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil || moduleID == "" {
 		return false
 	}
@@ -2079,7 +2019,7 @@ func (s *app) taskCreationModuleExpanded(serviceID, moduleID string) bool {
 }
 
 func (s *app) setTaskCreationModuleExpanded(serviceID, moduleID string, expanded bool) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil || moduleID == "" {
 		return
 	}
@@ -2093,7 +2033,7 @@ func (s *app) setTaskCreationModuleExpanded(serviceID, moduleID string, expanded
 }
 
 func (s *app) renderTaskCreationModule(c *ui.Context, p palette, service domain.GroupServiceConfig, draft *taskCreationModuleDraft, expanded bool) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	id := service.ID + ":" + draft.ID
 	s.syncTaskCreationModuleDraft(service.ID, draft)
 	ui.Column(c.Key("task-create-module-section-"+id)).FillWidth().MinWidth(0).Gap(8).Padding(8, 0).
@@ -2189,7 +2129,7 @@ func taskCreationModuleFieldError(state *taskCreationState, serviceID, moduleID,
 }
 
 func (s *app) clearTaskCreationFieldError(serviceID, moduleID, field string) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil || state.validationTarget == nil || state.validationTarget.serviceID != serviceID || state.validationTarget.moduleID != moduleID {
 		return
 	}
@@ -2225,7 +2165,7 @@ func taskServiceDisplayName(s *app, service domain.GroupServiceConfig) string {
 }
 
 func (s *app) focusTaskCreationConflict(conflict workspace.BranchReuseConflict) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return
 	}

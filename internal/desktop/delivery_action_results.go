@@ -26,20 +26,20 @@ func (s *app) applyDeliveryActionResult(action application.Action, result applic
 			err = fmt.Errorf("响应缺少 Tag 历史记录列表")
 		}
 		if err != nil {
-			if s.tagHistory != nil {
-				s.tagHistory.Error = "读取 Tag 刷新结果失败：" + err.Error()
+			if s.releaseUnit.state.tagHistory != nil {
+				s.releaseUnit.state.tagHistory.Error = "读取 Tag 刷新结果失败：" + err.Error()
 			}
 			return true
 		}
 		if !tagHistoryRecordsOwned(action.TaskID, refresh.Records) {
-			if s.tagHistory != nil {
-				s.tagHistory.Error = "Tag 刷新响应包含其它任务的记录，请刷新后检查"
+			if s.releaseUnit.state.tagHistory != nil {
+				s.releaseUnit.state.tagHistory.Error = "Tag 刷新响应包含其它任务的记录，请刷新后检查"
 			}
 			return true
 		}
 		s.applyTagHistoryRecords(action.TaskID, refresh.Records)
-		if s.tagHistory != nil {
-			s.tagHistory.Error = ""
+		if s.releaseUnit.state.tagHistory != nil {
+			s.releaseUnit.state.tagHistory.Error = ""
 		}
 		*s.input(tagGenbuTaskErrorKey(action.TaskID), "") = refresh.StatusError
 	case "tag.workspace-check":
@@ -107,11 +107,11 @@ func (s *app) applyTagHistoryMutationResult(action application.Action, result ap
 		}
 		s.applyTagHistoryRecords(action.TaskID, mutation.Records)
 	}
-	if s.tagHistory != nil {
-		s.tagHistory.DeleteOpen = false
-		s.tagHistory.DeleteIDs = nil
-		s.tagHistory.Selected = map[string]bool{}
-		s.tagHistory.Error = ""
+	if s.releaseUnit.state.tagHistory != nil {
+		s.releaseUnit.state.tagHistory.DeleteOpen = false
+		s.releaseUnit.state.tagHistory.DeleteIDs = nil
+		s.releaseUnit.state.tagHistory.Selected = map[string]bool{}
+		s.releaseUnit.state.tagHistory.Error = ""
 	}
 }
 
@@ -124,8 +124,8 @@ func (s *app) applyTagHistoryMutationFailure(action application.Action, result a
 	}
 	s.applyTagHistoryMutationResult(action, result)
 	s.lastError = fmt.Sprintf("Tag历史操作未完全完成：%v", err)
-	if s.tagHistory != nil {
-		s.tagHistory.Error = s.lastError
+	if s.releaseUnit.state.tagHistory != nil {
+		s.releaseUnit.state.tagHistory.Error = s.lastError
 	}
 	return true
 }
@@ -145,8 +145,8 @@ func (s *app) applyTagHistoryRefreshFailure(action application.Action, err error
 	if !s.tagHistoryResultRelevant(action) {
 		return true
 	}
-	if s.tagHistory != nil {
-		s.tagHistory.Error = fmt.Sprintf("刷新 Tag 历史失败：%v", err)
+	if s.releaseUnit.state.tagHistory != nil {
+		s.releaseUnit.state.tagHistory.Error = fmt.Sprintf("刷新 Tag 历史失败：%v", err)
 	}
 	return true
 }
@@ -159,7 +159,7 @@ func (s *app) tagHistoryResultRelevant(action application.Action) bool {
 		return false
 	}
 	if action.TaskID != "" {
-		t := s.currentTask()
+		t := s.taskUnit.currentTask()
 		if t.id != action.TaskID {
 			return false
 		}

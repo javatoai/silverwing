@@ -116,8 +116,8 @@ func (s *app) repositoryGroupSidebar(c *ui.Context, p palette, selectedID string
 						})
 					})
 					if button.Clicked() {
-						s.serviceGroupID = group.ID
-						s.serviceReorderMode = false
+						s.workspaceUnit.state.serviceGroupID = group.ID
+						s.workspaceUnit.state.serviceReorderMode = false
 					}
 				})
 				if before || after {

@@ -35,6 +35,7 @@ type Snapshot struct {
 }
 
 type Task struct {
+	Materials                                                        MaterialsPermissions
 	ID, Title, Project, Status, Updated, Branch, Path, MaterialsPath string
 	CreatedAt                                                        string
 	RequirementURL, RequirementTitle, GroupID                        string

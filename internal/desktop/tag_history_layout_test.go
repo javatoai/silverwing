@@ -26,7 +26,11 @@ func tagLayoutFixture(t *testing.T) *app {
 		t.Fatal(err)
 	}
 	checked, completed := "2026-10-15 13:48:21", "2026-10-14 17:42:38"
-	s := &app{inputs: map[string]*string{}, configJSON: string(config), tasks: []task{{id: "task-a", title: "示例扩容适配", requirementTitle: "示例扩容适配：完整的需求标题与发版通知", path: filepath.Join(root, "tasks", "task-a"), createdAt: "task-created", requirementURL: "https://example.invalid/requirement/1"}}}
+	s := &app{
+		taskUnit:     taskController{state: taskState{tasks: []task{{id: "task-a", title: "示例扩容适配", requirementTitle: "示例扩容适配：完整的需求标题与发版通知", path: filepath.Join(root, "tasks", "task-a"), createdAt: "task-created", requirementURL: "https://example.invalid/requirement/1"}}}},
+		settingsUnit: settingsController{state: settingsState{configJSON: string(config)}},
+		inputs:       map[string]*string{},
+	}
 	s.snapshot.Home = filepath.Join(root, "home")
 	s.snapshot.TagHistory = []application.TagRecord{
 		{ID: "running", TaskID: "task-a", FolderName: "示例扩容适配", ServiceName: "transit-notification-service", Tag: "1.6.28.beta-4", State: "SUCCESS", CreatedAt: "2026-10-15 13:48:03", Updated: "2026-10-15 13:48:21", SourceBranch: "feature/example.user_1000000008_tns_scaleout", TargetBranch: "release/test", Detail: "transit-notification-service: 1.6.28.beta-4", GenbuStatus: domain.GenbuTagProbeStatus{Build: domain.GenbuBuilding, UAT: domain.GenbuInitial, CheckedAt: &checked}},
@@ -45,9 +49,9 @@ func tagLayoutTester(s *app, width int, dark bool) *ui.Tester {
 			ui.Row(c).FillWidth().Height(51).AlignItems(ui.Center).Children(func() {
 				label(c, "Tag", 14, p.blue)
 				ui.Spacer(c)
-				s.renderTagHistoryPageMenu(c, p, s.currentTask())
+				s.renderTagHistoryPageMenu(c, p, s.taskUnit.currentTask())
 			})
-			s.renderTaskTagHistory(c, p, s.currentTask())
+			s.renderTaskTagHistory(c, p, s.taskUnit.currentTask())
 		})
 	}, width, 780)
 }
@@ -150,19 +154,19 @@ func TestTagHistoryDirectCopyAndManagement(t *testing.T) {
 		t.Fatal(err)
 	}
 	tester.Frame()
-	if !s.tagHistory.Selected["batch"] || tester.HasText("选择记录 ") || tester.HasText("选择批次 other-task") || !tester.HasText("已选 1 批") {
+	if !s.releaseUnit.state.tagHistory.Selected["batch"] || tester.HasText("选择记录 ") || tester.HasText("选择批次 other-task") || !tester.HasText("已选 1 批") {
 		t.Fatal("selection identity/task scope changed")
 	}
 	if err := tester.Click("删除所选"); err != nil {
 		t.Fatal(err)
 	}
-	if !s.tagHistory.DeleteOpen || !reflect.DeepEqual(s.tagHistory.DeleteIDs, []string{"failed", "success"}) || !tester.HasText("删除 1 批 Tag 历史") || !tester.HasText("确认删除") {
+	if !s.releaseUnit.state.tagHistory.DeleteOpen || !reflect.DeepEqual(s.releaseUnit.state.tagHistory.DeleteIDs, []string{"failed", "success"}) || !tester.HasText("删除 1 批 Tag 历史") || !tester.HasText("确认删除") {
 		t.Fatal("selection no longer requires the existing confirmation")
 	}
 	if err := tester.Click("取消"); err != nil {
 		t.Fatal(err)
 	}
-	if !s.tagHistory.Selected["batch"] || len(s.snapshot.TagHistory) != 4 {
+	if !s.releaseUnit.state.tagHistory.Selected["batch"] || len(s.snapshot.TagHistory) != 4 {
 		t.Fatal("cancel changed selection or records")
 	}
 }
@@ -170,17 +174,17 @@ func TestTagHistoryDirectCopyAndManagement(t *testing.T) {
 func TestTagHistoryAnnouncementRequirementTitle(t *testing.T) {
 	s := tagLayoutFixture(t)
 	group := filterTagHistory(s.taskTagHistoryRecords("task-a"), "", false)[1]
-	want := "需求：" + s.tasks[0].requirementTitle + "\n测试Tag已构建完毕，辛苦发版：\n\nandroid-transit-service · 3.11.82.beta-1\nios-transit-service · 3.0.35.beta-8"
+	want := "需求：" + s.taskUnit.state.tasks[0].requirementTitle + "\n测试Tag已构建完毕，辛苦发版：\n\nandroid-transit-service · 3.11.82.beta-1\nios-transit-service · 3.0.35.beta-8"
 	if got := s.tagHistoryAnnouncement(group); got != want || strings.Contains(got, "https://") || strings.Contains(got, `\n`) {
 		t.Fatalf("notification title/newlines changed: %q", got)
 	}
 	loadedTitle := "已加载的完整需求标题，比短任务名更完整"
-	s.taskRequirementMetadata = map[string]taskRequirementMetadataState{"task-a": {URL: s.tasks[0].requirementURL, Status: requirementMetadataLoaded, Metadata: requirementMetadata{Title: &loadedTitle}}}
+	s.requirementUnit.state.taskRequirementMetadata = map[string]taskRequirementMetadataState{"task-a": {URL: s.taskUnit.state.tasks[0].requirementURL, Status: requirementMetadataLoaded, Metadata: requirementMetadata{Title: &loadedTitle}}}
 	if got := s.tagHistoryAnnouncement(group); !strings.HasPrefix(got, "需求："+loadedTitle+"\n") {
 		t.Fatalf("loaded full requirement title ignored: %q", got)
 	}
-	s.tasks[0].requirementURL = "https://example.invalid/changed-identity"
-	s.tasks[0].requirementTitle = ""
+	s.taskUnit.state.tasks[0].requirementURL = "https://example.invalid/changed-identity"
+	s.taskUnit.state.tasks[0].requirementTitle = ""
 	if got := s.tagHistoryAnnouncement(group); !strings.HasPrefix(got, "需求：示例扩容适配\n") {
 		t.Fatalf("missing/wrong-identity metadata did not fall back to the task name: %q", got)
 	}
@@ -262,7 +266,7 @@ func TestTagHistoryGroupSelectionRequestAndStaleConfirmation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(s.tagHistory.Selected) != 2 || !tester.HasText("已选 2 批") {
+	if len(s.releaseUnit.state.tagHistory.Selected) != 2 || !tester.HasText("已选 2 批") {
 		t.Fatal("select-all counted records instead of complete current-task groups")
 	}
 	for _, click := range []string{"全选", "选择批次 batch", "删除所选", "确认删除"} {
@@ -276,7 +280,7 @@ func TestTagHistoryGroupSelectionRequestAndStaleConfirmation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("confirmed whole-batch request did not reach memory backend")
 	}
-	if request.Kind != "tag.history.delete" || request.TaskID != "task-a" || !reflect.DeepEqual(request.Payload["operationIds"], []string{"failed", "success"}) || payloadString(request.Payload, "tagHistoryHome") != s.snapshot.Home || payloadString(request.Payload, "tagHistoryTaskPath") != s.tasks[0].path || payloadString(request.Payload, "tagHistoryTaskCreatedAt") != s.tasks[0].createdAt {
+	if request.Kind != "tag.history.delete" || request.TaskID != "task-a" || !reflect.DeepEqual(request.Payload["operationIds"], []string{"failed", "success"}) || payloadString(request.Payload, "tagHistoryHome") != s.snapshot.Home || payloadString(request.Payload, "tagHistoryTaskPath") != s.taskUnit.state.tasks[0].path || payloadString(request.Payload, "tagHistoryTaskCreatedAt") != s.taskUnit.state.tasks[0].createdAt {
 		t.Fatalf("request lost complete-group or task confirmation identity: %+v", request)
 	}
 	s.cancelOperation()
@@ -284,11 +288,11 @@ func TestTagHistoryGroupSelectionRequestAndStaleConfirmation(t *testing.T) {
 	s.beginTagHistoryDelete(false)
 	s.snapshot.TagHistory = append(s.snapshot.TagHistory, application.TagRecord{ID: "new-member", TaskID: "task-a", BatchID: "batch", State: "SUCCESS"})
 	s.ensureTagHistoryView()
-	if s.tagHistory.DeleteOpen || s.tagHistory.Error == "" {
+	if s.releaseUnit.state.tagHistory.DeleteOpen || s.releaseUnit.state.tagHistory.Error == "" {
 		t.Fatal("changed batch membership kept a stale partial deletion confirmation")
 	}
-	s.tasks = append(s.tasks, task{id: "task-b", path: filepath.Join(t.TempDir(), "task-b"), createdAt: "b-created"})
-	s.selected = 1
+	s.taskUnit.state.tasks = append(s.taskUnit.state.tasks, task{id: "task-b", path: filepath.Join(t.TempDir(), "task-b"), createdAt: "b-created"})
+	s.taskUnit.state.selected = 1
 	stateB := s.ensureTagHistoryView()
 	stateB.Selected["other-task"] = true
 	before := append([]application.TagRecord(nil), s.snapshot.TagHistory...)

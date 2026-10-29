@@ -41,14 +41,14 @@ func (s *app) openTaskBranchInfo(t task) {
 	if t.id == "" {
 		return
 	}
-	s.taskBranchInfo = &taskBranchInfoState{TaskID: t.id, TaskPath: t.path, TaskCreatedAt: t.createdAt, Open: true}
+	s.taskUnit.state.taskBranchInfo = &taskBranchInfoState{TaskID: t.id, TaskPath: t.path, TaskCreatedAt: t.createdAt, Open: true}
 }
 
 func (s *app) renderTaskBranchInfoDialog(c *ui.Context, p palette) {
-	state := s.taskBranchInfo
-	t := s.currentTask()
+	state := s.taskUnit.state.taskBranchInfo
+	t := s.taskUnit.currentTask()
 	if !taskBranchInfoMatches(state, t, s.page, s.tab) {
-		s.taskBranchInfo = nil
+		s.taskUnit.state.taskBranchInfo = nil
 		return
 	}
 	options := taskBranchInfoCopyOptions(t)

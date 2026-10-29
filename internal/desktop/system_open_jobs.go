@@ -135,7 +135,7 @@ func (s *app) systemOpenScopeFor(action application.Action, taskScope *taskMenuS
 		}
 		return scope, nil
 	}
-	task := s.taskByID(action.TaskID)
+	task := s.taskUnit.taskByID(action.TaskID)
 	if taskScope != nil {
 		actual, valid := s.taskMenuScopeFor(task)
 		directory, _ := action.Payload["desktopSystemOpenDirectory"].(bool)
@@ -143,7 +143,7 @@ func (s *app) systemOpenScopeFor(action application.Action, taskScope *taskMenuS
 			scope.sourcePath != task.materialsPath || action.ServiceID != "" || action.ModuleID != "" {
 			return scope, errors.New("任务资料目录或应用上下文已变化，请重新打开任务菜单。")
 		}
-	} else if task.id == "" || s.currentTask().id != task.id {
+	} else if task.id == "" || s.taskUnit.currentTask().id != task.id {
 		return scope, errors.New("系统打开的任务已变化，请重新选择后重试。")
 	}
 	scope.taskID, scope.taskPath, scope.createdAt, scope.materialsRoot = task.id, task.path, task.createdAt, task.materialsPath
@@ -184,7 +184,7 @@ func (s *app) beginScopedSystemOpenJob(action application.Action, taskScope *tas
 		owned := *taskScope
 		window := s.win
 		action = taskMenuContextAction(action, owned)
-		update = taskContextUpdater(window, s.taskContextUpdate)
+		update = taskContextUpdater(window, s.taskUnit.state.taskContextUpdate)
 		if update == nil {
 			return nil, errTaskContextChanged
 		}

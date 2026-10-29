@@ -14,7 +14,9 @@ func (a *App) productionService() (*production.Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	return production.New(a.Paths, a.Config, a.git(c), a.Runner), nil
+	service := production.New(a.Paths, a.Config, a.git(c), a.Runner)
+	service.DiffSessions = a.workspaceGitDiffSessions()
+	return service, nil
 }
 
 func (a *App) productionAction(ctx context.Context, action Action) (ActionResult, error) {
@@ -54,7 +56,11 @@ func (a *App) productionAction(ctx context.Context, action Action) (ActionResult
 		if action.Kind == "production.diff-preview" {
 			change = &workspace.CompareChange{Path: action.Path, OldPath: textPayload(action, "oldPath"), Kind: textPayload(action, "fileKind")}
 		}
-		data, err := s.Difference(ctx, target, textPayload(action, "sourceSha"), textPayload(action, "targetSha"), boolPayload(action, "incoming"), change)
+		if !boolPayload(action, "retainSession") && textPayload(action, "sessionId") == "" {
+			data, err := s.Difference(ctx, target, textPayload(action, "sourceSha"), textPayload(action, "targetSha"), boolPayload(action, "incoming"), change)
+			return ActionResult{Data: data}, err
+		}
+		data, err := s.DifferenceSession(ctx, target, textPayload(action, "sourceSha"), textPayload(action, "targetSha"), boolPayload(action, "incoming"), textPayload(action, "sessionId"), change)
 		return ActionResult{Data: data}, err
 	}
 	var report production.Report
@@ -171,10 +177,12 @@ func (a *App) productionAction(ctx context.Context, action Action) (ActionResult
 		}
 		report.Batch = &batch
 	}
-	var listErr error
-	report.Batches, listErr = s.Store.List()
-	if listErr != nil {
-		err = errors.Join(err, listErr)
+	if action.Kind != "production.refresh-build" {
+		var listErr error
+		report.Batches, listErr = s.Store.List()
+		if listErr != nil {
+			err = errors.Join(err, listErr)
+		}
 	}
 	message := "生产发布已更新"
 	if batch.Message != "" {

@@ -33,7 +33,7 @@ func (s *app) confirmProductionDeleteRecord(v *productionView, b production.Batc
 			if !current() || v.Busy || (history != nil && !s.productionHistoryCurrent(history)) {
 				return false
 			}
-			for _, record := range s.production.batches {
+			for _, record := range s.releaseUnit.state.production.batches {
 				if record.ID == b.ID {
 					currentToken, err := production.BatchRecordToken(record)
 					return record.Ended && err == nil && currentToken == token

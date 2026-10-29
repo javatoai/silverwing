@@ -120,52 +120,59 @@ func TestFileTreeSelectionFadesWhenNativeWindowLosesFocus(t *testing.T) {
 
 func TestMaterialsFileTreeMultiSelectionContextAndPreviewPin(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "materials")
-	s := &app{page: "tasks", tab: 1, documentsLoaded: true, tasks: []task{{id: "tree-task", path: filepath.Dir(root), materialsPath: root, materialsStatus: "READY"}}, documentDrafts: map[string]string{}, documentDirtyMap: map[string]bool{}}
+	s := &app{
+		taskUnit: taskController{state: taskState{tasks: []task{{id: "tree-task", path: filepath.Dir(root), materialsPath: root, materialsStatus: "READY"}}}},
+		materialsUnit: materialsController{state: materialsState{documentsLoaded: true,
+			documentDrafts:   map[string]string{},
+			documentDirtyMap: map[string]bool{}}},
+		page: "tasks",
+		tab:  1,
+	}
 	for _, name := range []string{"a.sql", "b.json", "c.md"} {
-		s.documents = append(s.documents, application.Document{Name: name, Path: filepath.Join(root, name), Kind: "file"})
+		s.materialsUnit.state.documents = append(s.materialsUnit.state.documents, application.Document{Name: name, Path: filepath.Join(root, name), Kind: "file"})
 	}
 	state := s.ensureMaterialsFileManagementState()
-	s.selectMaterialsPath(s.documents[0].Path)
+	s.selectMaterialsPath(s.materialsUnit.state.documents[0].Path)
 	tt := ui.NewTester(func(c *ui.Context) { s.documentTree(c, setTheme(c, false), 248) }, 248, 500)
 	if err := tt.ClickWith(ui.Ctrl, "b.json"); err != nil {
 		t.Fatal(err)
 	}
-	if s.documentPath != s.documents[0].Path || len(state.selected) != 2 {
+	if s.materialsUnit.state.documentPath != s.materialsUnit.state.documents[0].Path || len(state.selected) != 2 {
 		t.Fatal("Ctrl selection opened a document or lost the original selection")
 	}
 	if err := tt.ClickWith(ui.Shift, "c.md"); err != nil {
 		t.Fatal(err)
 	}
-	if s.documentPath != s.documents[0].Path || len(state.selected) != 2 || state.selected["file:b.json"].Path == "" || state.selected["file:c.md"].Path == "" {
+	if s.materialsUnit.state.documentPath != s.materialsUnit.state.documents[0].Path || len(state.selected) != 2 || state.selected["file:b.json"].Path == "" || state.selected["file:c.md"].Path == "" {
 		t.Fatal("Shift selection did not follow the visible anchor range")
 	}
 	selection, anchor := materialsSelectedPaths(state), state.anchor
 	if err := tt.RightClick("a.sql"); err != nil {
 		t.Fatal(err)
 	}
-	if s.documentPath != s.documents[0].Path || state.contextPath != s.documents[0].Path || state.anchor != anchor || !reflect.DeepEqual(selection, materialsSelectedPaths(state)) {
+	if s.materialsUnit.state.documentPath != s.materialsUnit.state.documents[0].Path || state.contextPath != s.materialsUnit.state.documents[0].Path || state.anchor != anchor || !reflect.DeepEqual(selection, materialsSelectedPaths(state)) {
 		t.Fatal("right-clicking an unselected file changed the reading or multi-selection state")
 	}
-	entry, _ := s.findMaterialsEntry(s.documents[0].Path, s.documents)
+	entry, _ := s.findMaterialsEntry(s.materialsUnit.state.documents[0].Path, s.materialsUnit.state.documents)
 	if contextSelection := s.materialsContextSelection(state, entry); len(contextSelection) != 1 || contextSelection[0].Path != entry.Path {
 		t.Fatal("unselected context target inherited another selection's command scope")
 	}
-	entry, _ = s.findMaterialsEntry(s.documents[1].Path, s.documents)
+	entry, _ = s.findMaterialsEntry(s.materialsUnit.state.documents[1].Path, s.materialsUnit.state.documents)
 	if len(s.materialsContextSelection(state, entry)) != 2 {
 		t.Fatal("right-clicking a selected item lost its group")
 	}
 	tt.CloseMenu()
-	s.openMaterialsTreeFile(state, s.documents[1].Path, false)
-	if state.previewPath != s.documents[1].Path {
+	s.openMaterialsTreeFile(state, s.materialsUnit.state.documents[1].Path, false)
+	if state.previewPath != s.materialsUnit.state.documents[1].Path {
 		t.Fatal("single activation did not mark a replaceable preview")
 	}
-	s.openMaterialsTreeFile(state, s.documents[2].Path, false)
-	if slices.Contains(s.documentTabs, s.documents[1].Path) || state.previewPath != s.documents[2].Path {
+	s.openMaterialsTreeFile(state, s.materialsUnit.state.documents[2].Path, false)
+	if slices.Contains(s.materialsUnit.state.documentTabs, s.materialsUnit.state.documents[1].Path) || state.previewPath != s.materialsUnit.state.documents[2].Path {
 		t.Fatal("a new preview did not replace the previous clean preview")
 	}
-	s.openMaterialsTreeFile(state, s.documents[2].Path, true)
-	s.openMaterialsTreeFile(state, s.documents[1].Path, false)
-	if !slices.Contains(s.documentTabs, s.documents[2].Path) {
+	s.openMaterialsTreeFile(state, s.materialsUnit.state.documents[2].Path, true)
+	s.openMaterialsTreeFile(state, s.materialsUnit.state.documents[1].Path, false)
+	if !slices.Contains(s.materialsUnit.state.documentTabs, s.materialsUnit.state.documents[2].Path) {
 		t.Fatal("double activation's pinned tab was replaced")
 	}
 }
@@ -199,7 +206,7 @@ func TestFileTreeKeyboardSelectionAndOpenedAncestors(t *testing.T) {
 func TestSkillsFileTreeUsesSharedRowsAndOnlyCopyCapability(t *testing.T) {
 	s := &app{}
 	state := &skillsBrowserState{selectedDirectory: "fixture", selectedPath: "SKILL.md", expanded: map[string]bool{}, files: []map[string]any{{"relativePath": "SKILL.md", "markdown": true}, {"relativePath": "scripts/run.sql"}, {"relativePath": "assets/unknown.bin"}}}
-	s.skillsBrowser = state
+	s.settingsUnit.state.skillsBrowser = state
 	state.app = s
 	tt := ui.NewTester(func(c *ui.Context) { s.renderSkillsBrowserDirectory(c, setTheme(c, false), state) }, 248, 500)
 	sql, ok := tt.Find("run.sql")

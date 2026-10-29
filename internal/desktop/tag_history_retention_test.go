@@ -12,8 +12,8 @@ import (
 
 func TestTagHistoryRetentionConfigChangeRereadsLocalHistory(t *testing.T) {
 	s, _, w := tagDesktopTestApp()
-	s.configJSON = strings.TrimSuffix(s.configJSON, "}") + `,"tagHistoryMaxGroups":4}`
-	s.snapshot.ConfigJSON = s.configJSON
+	s.settingsUnit.state.configJSON = strings.TrimSuffix(s.settingsUnit.state.configJSON, "}") + `,"tagHistoryMaxGroups":4}`
+	s.snapshot.ConfigJSON = s.settingsUnit.state.configJSON
 	s.tab = taskTagTab
 	b := &tagPollTestBackend{calls: make(chan tagPollTestCall, 2), records: []application.TagRecord{}}
 	s.backend = b
@@ -26,16 +26,16 @@ func TestTagHistoryRetentionConfigChangeRereadsLocalHistory(t *testing.T) {
 		w.drain()
 	}()
 	s.observeTagGenbuAutoProbeWindow(w)
-	w.until(t, func() bool { return s.tagGenbuAutoProbe.current.request == nil })
-	old := s.tagGenbuAutoProbe.current
-	s.configJSON = strings.Replace(s.configJSON, `"tagHistoryMaxGroups":4`, `"tagHistoryMaxGroups":2`, 1)
-	s.snapshot.ConfigJSON = s.configJSON
+	w.until(t, func() bool { return s.releaseUnit.state.tagGenbuAutoProbe.current.request == nil })
+	old := s.releaseUnit.state.tagGenbuAutoProbe.current
+	s.settingsUnit.state.configJSON = strings.Replace(s.settingsUnit.state.configJSON, `"tagHistoryMaxGroups":4`, `"tagHistoryMaxGroups":2`, 1)
+	s.snapshot.ConfigJSON = s.settingsUnit.state.configJSON
 	s.observeTagGenbuAutoProbeWindow(w)
-	w.until(t, func() bool { return s.tagGenbuAutoProbe.current.request == nil })
+	w.until(t, func() bool { return s.releaseUnit.state.tagGenbuAutoProbe.current.request == nil })
 	b.mu.Lock()
 	reads := b.historyReads
 	b.mu.Unlock()
-	if reads != 2 || s.tagGenbuAutoProbe.current == old || old.ctx.Err() == nil {
+	if reads != 2 || s.releaseUnit.state.tagGenbuAutoProbe.current == old || old.ctx.Err() == nil {
 		t.Fatalf("new limit did not reread history under a fresh context: reads=%d", reads)
 	}
 	// Ordinary frames must not keep reading disk once the new limit is applied.
@@ -51,8 +51,8 @@ func TestTagHistoryRetentionConfigChangeRereadsLocalHistory(t *testing.T) {
 
 func TestTagHistoryDeferredRetentionRetriesOnTimer(t *testing.T) {
 	s, _, w := tagDesktopTestApp()
-	s.configJSON = strings.TrimSuffix(s.configJSON, "}") + `,"tagHistoryMaxGroups":1}`
-	s.snapshot.ConfigJSON = s.configJSON
+	s.settingsUnit.state.configJSON = strings.TrimSuffix(s.settingsUnit.state.configJSON, "}") + `,"tagHistoryMaxGroups":1}`
+	s.snapshot.ConfigJSON = s.settingsUnit.state.configJSON
 	s.tab = taskTagTab
 	status := domain.GenbuTagProbeStatus{Build: domain.GenbuUnknown, UAT: domain.GenbuUnknown, Production: domain.GenbuUnknown}
 	old := application.TagRecord{ID: "old", TaskID: "task-a", State: "FAILED", Updated: "2026-10-20 12:00:00", GenbuStatus: status}
@@ -68,8 +68,8 @@ func TestTagHistoryDeferredRetentionRetriesOnTimer(t *testing.T) {
 		w.drain()
 	}()
 	s.observeTagGenbuAutoProbeWindow(w)
-	w.until(t, func() bool { return s.tagGenbuAutoProbe.current.request == nil })
-	session := s.tagGenbuAutoProbe.current
+	w.until(t, func() bool { return s.releaseUnit.state.tagGenbuAutoProbe.current.request == nil })
+	session := s.releaseUnit.state.tagGenbuAutoProbe.current
 	if !session.retentionPending || len(s.taskTagHistoryRecords("task-a")) != 2 {
 		t.Fatal("a deferred prune discarded running progress or lost its retry")
 	}
@@ -97,7 +97,7 @@ func TestTagHistoryDeferredRetentionRetriesOnTimer(t *testing.T) {
 		return b.historyReads > 1 && session.request == nil
 	})
 	if session.retentionPending {
-		t.Fatalf("pruned read still pending: records=%+v config=%d error=%q", s.snapshot.TagHistory, s.configInt("tagHistoryMaxGroups", 3), s.tagHistory.Error)
+		t.Fatalf("pruned read still pending: records=%+v config=%d error=%q", s.snapshot.TagHistory, s.configInt("tagHistoryMaxGroups", 3), s.releaseUnit.state.tagHistory.Error)
 	}
 	if records := s.taskTagHistoryRecords("task-a"); len(records) != 1 || records[0].ID != newer.ID {
 		t.Fatalf("timer did not replace old history after retention: %+v", records)

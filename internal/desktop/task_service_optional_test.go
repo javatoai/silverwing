@@ -17,7 +17,7 @@ func TestServiceOptionalCreationValidationAndLayout(t *testing.T) {
 		for _, dark := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%d-dark-%t", width, dark), func(t *testing.T) {
 				s, tester := taskCreationCompactFixture(t, width, dark, 1)
-				form := s.taskCreation
+				form := s.taskUnit.state.taskCreation
 				s.setTaskCreationServiceSelected("service", false)
 				form.draft.TaskName = "只处理资料"
 				form.draft.Branch = ""
@@ -67,8 +67,8 @@ func configureTaskOpenTools(t *testing.T, s *app, ids []string, cursorAvailable 
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.configJSON = string(raw)
-	s.taskOpenTools = &taskOpenToolsState{home: s.snapshot.Home, config: s.configJSON, loaded: true, options: []taskCreationWorkspaceToolOption{{ID: "codex", DisplayName: "Codex", Available: true}, {ID: "cursor", DisplayName: "Cursor", Available: cursorAvailable}}}
+	s.settingsUnit.state.configJSON = string(raw)
+	s.taskUnit.state.taskOpenTools = &taskOpenToolsState{home: s.snapshot.Home, config: s.settingsUnit.state.configJSON, loaded: true, options: []taskCreationWorkspaceToolOption{{ID: "codex", DisplayName: "Codex", Available: true}, {ID: "cursor", DisplayName: "Cursor", Available: cursorAvailable}}}
 }
 
 func TestTaskOpenToolsMenuFollowsSettings(t *testing.T) {
@@ -76,7 +76,7 @@ func TestTaskOpenToolsMenuFollowsSettings(t *testing.T) {
 		s, b := taskMenuFixture(t)
 		configureTaskOpenTools(t, s, ids, true)
 		tester := taskNavigationTester(s, 340, 620)
-		if err := tester.RightClick(s.tasks[1].title); err != nil {
+		if err := tester.RightClick(s.taskUnit.state.tasks[1].title); err != nil {
 			t.Fatal(err)
 		}
 		menu := tester.Menu()
@@ -104,13 +104,13 @@ func TestTaskOpenToolsCursorUsesContextTask(t *testing.T) {
 	for _, archived := range []bool{false, true} {
 		s, b := taskMenuFixture(t)
 		configureTaskOpenTools(t, s, []string{"codex", "cursor"}, true)
-		s.tasks[1].workspaces = nil
+		s.taskUnit.state.tasks[1].workspaces = nil
 		if archived {
-			s.tasks[1].archived = true
+			s.taskUnit.state.tasks[1].archived = true
 			s.page = "archive"
 		}
-		target := s.tasks[1]
-		selected := s.selected
+		target := s.taskUnit.state.tasks[1]
+		selected := s.taskUnit.state.selected
 		tester := taskNavigationTester(s, 340, 620)
 		navigationChooseTaskMenu(t, tester, target.title, "在 Cursor 中打开")
 		select {
@@ -122,7 +122,7 @@ func TestTaskOpenToolsCursorUsesContextTask(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("Cursor was not dispatched")
 		}
-		if s.selected != selected || !s.documentDirty || s.documentContent != "保留草稿" {
+		if s.taskUnit.state.selected != selected || !s.materialsUnit.state.documentDirty || s.materialsUnit.state.documentContent != "保留草稿" {
 			t.Fatal("opening another task discarded the visible draft")
 		}
 	}
@@ -137,16 +137,16 @@ func TestTaskOpenToolsDisabledBusyAndChangedConfig(t *testing.T) {
 				s.busy = true
 			}
 			tester := taskNavigationTester(s, 340, 620)
-			if err := tester.RightClick(s.tasks[1].title); err != nil {
+			if err := tester.RightClick(s.taskUnit.state.tasks[1].title); err != nil {
 				t.Fatal(err)
 			}
 			switch mode {
 			case "changed-config":
-				s.configJSON = `{"defaultWorkspaceToolIds":[]}`
+				s.settingsUnit.state.configJSON = `{"defaultWorkspaceToolIds":[]}`
 			case "changed-home":
 				s.snapshot.Home += "-other"
 			case "changed-task":
-				s.tasks[1].createdAt += "-replacement"
+				s.taskUnit.state.tasks[1].createdAt += "-replacement"
 			case "cancel":
 				tester.Key(0, ui.KeyEscape)
 			}
@@ -175,10 +175,10 @@ func TestTaskOpenToolsDisabledBusyAndChangedConfig(t *testing.T) {
 func TestTaskOpenToolsSettingsCardAndTemporaryChoices(t *testing.T) {
 	s, _ := taskMenuFixture(t)
 	configureTaskOpenTools(t, s, []string{"codex", "cursor"}, false)
-	s.page, s.settingsPage = "settings", "task-creation"
+	s.page, s.settingsUnit.state.settingsPage = "settings", "task-creation"
 	state := s.ensureSettingsExtensionRequests()
 	state.workspaceToolsScope = s.settingsExtensionCurrentScope()
-	state.workspaceTools, state.workspaceToolsLoaded = s.taskOpenTools.options, true
+	state.workspaceTools, state.workspaceToolsLoaded = s.taskUnit.state.taskOpenTools.options, true
 	tester := ui.NewTester(func(c *ui.Context) {
 		ui.Column(c).Fill().Children(func() { s.settingsWorkspaceTools(c, setTheme(c, false)) })
 	}, 960, 760)
@@ -186,9 +186,9 @@ func TestTaskOpenToolsSettingsCardAndTemporaryChoices(t *testing.T) {
 		t.Fatal("settings card is missing")
 	}
 	create, _ := taskCreationLeftFixture(t, 960, false)
-	before := create.configJSON
-	create.taskCreation.selectedToolIDs = map[string]bool{"codex": false, "cursor": true}
-	if create.configJSON != before {
+	before := create.settingsUnit.state.configJSON
+	create.taskUnit.state.taskCreation.selectedToolIDs = map[string]bool{"codex": false, "cursor": true}
+	if create.settingsUnit.state.configJSON != before {
 		t.Fatal("temporary selection modified global defaults")
 	}
 	if !reloadsSnapshot("task.tools-launch") {
@@ -202,16 +202,16 @@ func TestServiceOptionalDetailAndToolSettingsLayout(t *testing.T) {
 			t.Run(fmt.Sprintf("%d-dark-%t", width, dark), func(t *testing.T) {
 				s, _ := taskMenuFixture(t)
 				configureTaskOpenTools(t, s, []string{"codex", "cursor"}, true)
-				s.tasks[0].workspaces = nil
+				s.taskUnit.state.tasks[0].workspaces = nil
 				detail := ui.NewTester(func(c *ui.Context) { ui.Column(c).Fill().Children(func() { s.taskDetails(c, setTheme(c, dark)) }) }, width, 800)
 				if !detail.HasText("暂未关联服务") || detail.HasText("查看分支信息") {
 					t.Fatal("no-service details expose Git controls")
 				}
 				captureDesktopTestFrame(t, detail, fmt.Sprintf("no-service-detail-%d-dark-%t", width, dark))
-				s.page, s.settingsPage = "settings", "task-creation"
+				s.page, s.settingsUnit.state.settingsPage = "settings", "task-creation"
 				state := s.ensureSettingsExtensionRequests()
 				state.workspaceToolsScope = s.settingsExtensionCurrentScope()
-				state.workspaceTools, state.workspaceToolsLoaded = s.taskOpenTools.options, true
+				state.workspaceTools, state.workspaceToolsLoaded = s.taskUnit.state.taskOpenTools.options, true
 				settings := ui.NewTester(func(c *ui.Context) {
 					ui.Scroll(c).Fill().Padding(20).Gap(16).Children(func() { s.settingsTaskCreation(c, setTheme(c, dark)) })
 				}, width, 800)
@@ -229,7 +229,7 @@ func TestServiceOptionalDetailAndToolSettingsLayout(t *testing.T) {
 					ui.Column(c).Fill().Children(func() { s.taskIndex(c, p) })
 					ui.ThemedMenus(c, "task-tools-layout")
 				}, width, 800)
-				if err := menu.RightClick(s.tasks[1].title); err != nil {
+				if err := menu.RightClick(s.taskUnit.state.tasks[1].title); err != nil {
 					t.Fatal(err)
 				}
 				menu.Frame()

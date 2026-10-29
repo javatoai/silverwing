@@ -29,7 +29,7 @@ func cancelTagTargetBranchChoices(picker *tagTargetBranchPickerState) {
 }
 
 func (s *app) requestTagTargetBranchChoices(state *tagTargetViewState, remote string, force bool) {
-	if s.tagTarget != state || state.Saving || !state.Open || !s.tagTargetIdentityCurrent(state) || s.backend == nil {
+	if s.releaseUnit.state.tagTarget != state || state.Saving || !state.Open || !s.tagTargetIdentityCurrent(state) || s.backend == nil {
 		return
 	}
 	picker := &state.Choices
@@ -57,7 +57,7 @@ func (s *app) requestTagTargetBranchChoices(state *tagTargetViewState, remote st
 }
 
 func (s *app) applyTagTargetBranchChoices(action application.Action, result application.ActionResult, readErr error) {
-	state := s.tagTarget
+	state := s.releaseUnit.state.tagTarget
 	if state == nil || !state.Open || state.Saving || !s.tagTargetIdentityCurrent(state) || action.Kind != "repository.choices" ||
 		action.TaskID != state.TaskID || action.ServiceID != state.Workspace.ServiceID || action.ModuleID != state.Workspace.ModuleID {
 		return

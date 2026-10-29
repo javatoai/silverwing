@@ -23,9 +23,9 @@ type productionHistoryDialog struct {
 }
 
 func (s *app) productionHistoryCurrent(d *productionHistoryDialog) bool {
-	return d != nil && d.Open && s.production == d.State && s.production.historyDialog == d &&
+	return d != nil && d.Open && s.releaseUnit.state.production == d.State && s.releaseUnit.state.production.historyDialog == d &&
 		s.page == "production" && s.productionView() == d.View && d.View.Selection == d.Selection &&
-		s.snapshot.Home == d.Home && s.production.loadedHome == d.Home && s.currentProductionScope() == d.Scope
+		s.snapshot.Home == d.Home && s.releaseUnit.state.production.loadedHome == d.Home && s.currentProductionScope() == d.Scope
 }
 
 func (s *app) openProductionHistory(v *productionView) {
@@ -33,15 +33,15 @@ func (s *app) openProductionHistory(v *productionView) {
 		return
 	}
 	name := v.Selection.ServiceID
-	for _, choice := range s.production.choices {
+	for _, choice := range s.releaseUnit.state.production.choices {
 		if choice.GroupID == v.Selection.GroupID && choice.ID == v.Selection.ServiceID {
 			name = choice.Name
 			break
 		}
 	}
-	d := &productionHistoryDialog{Open: true, View: v, State: s.production, Selection: v.Selection,
+	d := &productionHistoryDialog{Open: true, View: v, State: s.releaseUnit.state.production, Selection: v.Selection,
 		Home: s.snapshot.Home, Scope: s.currentProductionScope(), ServiceName: name, RowErrors: map[string]string{}}
-	s.production.historyDialog = d
+	s.releaseUnit.state.production.historyDialog = d
 	s.readProductionHistory(d)
 }
 
@@ -134,14 +134,14 @@ func (s *app) finishProductionHistoryRequest(d *productionHistoryDialog, action 
 }
 
 func (s *app) renderProductionHistoryDialog(c *ui.Context, p palette) {
-	if s.production == nil || s.production.historyDialog == nil {
+	if s.releaseUnit.state.production == nil || s.releaseUnit.state.production.historyDialog == nil {
 		return
 	}
-	d := s.production.historyDialog
+	d := s.releaseUnit.state.production.historyDialog
 	if !s.productionHistoryCurrent(d) {
 		d.Open = false
-		s.production.historyDialog = nil
-		s.pruneProductionHistoricalChoices(s.production)
+		s.releaseUnit.state.production.historyDialog = nil
+		s.pruneProductionHistoricalChoices(s.releaseUnit.state.production)
 		return
 	}
 	records := s.productionHistoryRecords(d)

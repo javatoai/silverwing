@@ -29,8 +29,8 @@ func (s *app) queueTagAction(action application.Action) bool {
 	if s.win != nil {
 		win = s.win
 	}
-	if win == nil && s.tagJobs != nil {
-		win = s.tagJobs.window
+	if win == nil && s.releaseUnit.state.tagJobs != nil {
+		win = s.releaseUnit.state.tagJobs.window
 	}
 	return s.queueTagActionWindow(action, win)
 }
@@ -77,10 +77,10 @@ func (s *app) queueTagActionWindow(action application.Action, win tagGenbuAutoPr
 		pending.Nonce = fmt.Sprintf("tag-submit-%d", state.nextSubmission)
 	}
 	view.commands = append(view.commands, &tagDesktopJobCommand{action: action, pending: pending})
-	if pending != nil && s.showStartedTagBuild(s.currentTask()) {
-		if s.tagBuild != nil {
-			s.tagBuild.Open = false
-			s.tagBuild = nil
+	if pending != nil && s.showStartedTagBuild(s.taskUnit.currentTask()) {
+		if s.releaseUnit.state.tagBuild != nil {
+			s.releaseUnit.state.tagBuild.Open = false
+			s.releaseUnit.state.tagBuild = nil
 		}
 	}
 	s.startNextTagJobCommand(scope, view, backend, win)
@@ -133,13 +133,13 @@ func (s *app) startNextTagJobCommand(scope application.TagJobScope, view *tagDes
 			} else {
 				newJob := appendID == "" || snapshot.ID != view.snapshot.ID
 				if snapshot.ID != view.snapshot.ID && s.tagJobScope() == scope {
-					s.stopTagJobSubscription()
+					s.releaseUnit.stopTagJobSubscription()
 				}
 				s.acceptTagJobSnapshot(view, scope, snapshot, newJob)
-				if s.tagJobScope() == scope && action.Kind == "tag.build" && s.showStartedTagBuild(s.currentTask()) {
-					if s.tagBuild != nil {
-						s.tagBuild.Open = false
-						s.tagBuild = nil
+				if s.tagJobScope() == scope && action.Kind == "tag.build" && s.showStartedTagBuild(s.taskUnit.currentTask()) {
+					if s.releaseUnit.state.tagBuild != nil {
+						s.releaseUnit.state.tagBuild.Open = false
+						s.releaseUnit.state.tagBuild = nil
 					}
 				}
 			}
@@ -168,7 +168,7 @@ func (s *app) newTagDesktopWorker() *tagDesktopJobWorker {
 
 func (s *app) finishTagDesktopWorker(worker *tagDesktopJobWorker) {
 	worker.cancel()
-	state := s.tagJobs
+	state := s.releaseUnit.state.tagJobs
 	state.mu.Lock()
 	delete(state.workers, worker)
 	close(worker.done)

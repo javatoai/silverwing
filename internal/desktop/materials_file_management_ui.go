@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 
 	"github.com/egoist/mygo"
@@ -15,19 +14,11 @@ import (
 	"silverwing-go/internal/documents"
 )
 
-type materialsFileSelectionEntry struct {
-	Key       string
-	Path      string
-	Relative  string
-	Directory bool
-}
-
 type materialsFileManagementState struct {
 	taskID string
 	root   string
 
-	selected    map[string]materialsFileSelectionEntry
-	anchor      string
+	materialsSelection
 	focused     bool
 	tree        FileTreeState
 	previewPath string
@@ -68,82 +59,49 @@ type materialsFileManagementState struct {
 }
 
 func (s *app) ensureMaterialsFileManagementState() *materialsFileManagementState {
-	if s.materialsFileManagement == nil {
-		s.materialsFileManagement = &materialsFileManagementState{}
+	if s.materialsUnit.state.materialsFileManagement == nil {
+		s.materialsUnit.state.materialsFileManagement = &materialsFileManagementState{}
 	}
-	state := s.materialsFileManagement
-	task := s.currentTask()
+	state := s.materialsUnit.state.materialsFileManagement
+	task := s.taskUnit.currentTask()
 	root := filepath.Clean(strings.TrimSpace(task.materialsPath))
 	if task.id != state.taskID || normalizedReadingRoot(root) != normalizedReadingRoot(state.root) {
 		if state.liveRefresh != nil {
-			s.retireMaterialsLiveRefresh(state.liveRefresh)
+			s.materialsUnit.retireMaterialsLiveRefresh(state.liveRefresh)
 		}
 		if state.pathCopyRequest != nil {
 			state.pathCopyRequest.cancel()
 		}
 		pickerGeneration := state.pickerGeneration + 1
 		*state = materialsFileManagementState{
-			taskID:           task.id,
-			root:             root,
-			selected:         make(map[string]materialsFileSelectionEntry),
-			pickerGeneration: pickerGeneration,
+			taskID:             task.id,
+			root:               root,
+			materialsSelection: materialsSelection{selected: make(map[string]materialsFileSelectionEntry)},
+			pickerGeneration:   pickerGeneration,
 		}
 	}
-	if state.selected == nil {
-		state.selected = make(map[string]materialsFileSelectionEntry)
-	}
+	state.materialsSelection.ensure()
 	return state
 }
 
-func (s *app) resetMaterialsFileSelection(state *materialsFileManagementState) {
-	if state == nil {
-		return
-	}
-	state.selected = make(map[string]materialsFileSelectionEntry)
-	state.anchor = ""
+func (s *app) materialsDocumentProjection() materialsDocumentProjection {
+	current := s.taskUnit.currentTask()
+	key := materialsDocumentProjectionKey{generation: s.materialsUnit.state.documentsGeneration, taskID: current.id, taskPath: current.path, createdAt: current.createdAt, root: current.materialsPath}
+	return s.materialsUnit.state.documentsProjection.project(key, s.materialsUnit.state.documents)
 }
 
-func materialsFileEntryKey(relative string, directory bool) string {
-	prefix := "file:"
-	if directory {
-		prefix = "directory:"
+func (s *app) resetMaterialsFileSelection(state *materialsFileManagementState) {
+	if state != nil {
+		state.materialsSelection.reset()
 	}
-	return prefix + filepath.ToSlash(relative)
 }
 
 func (s *app) materialsEntryForDocument(document application.Document) (materialsFileSelectionEntry, bool) {
-	relative := s.materialsRelativePath(document.Path)
-	if relative == "" {
-		return materialsFileSelectionEntry{}, false
-	}
-	directory := isDocumentDirectory(document)
-	return materialsFileSelectionEntry{
-		Key:       materialsFileEntryKey(relative, directory),
-		Path:      filepath.Clean(document.Path),
-		Relative:  relative,
-		Directory: directory,
-	}, true
+	return s.materialsDocumentProjection().entry(document)
 }
 
 func (s *app) visibleMaterialsEntries() []materialsFileSelectionEntry {
-	order := s.readingMaterialsSortOrder()
-	expanded := s.readingExpandedDirectories()
-	entries := make([]materialsFileSelectionEntry, 0, len(s.documents))
-	var visit func([]application.Document)
-	visit = func(items []application.Document) {
-		for _, document := range sortDocumentsByOrder(items, order) {
-			entry, ok := s.materialsEntryForDocument(document)
-			if !ok {
-				continue
-			}
-			entries = append(entries, entry)
-			if entry.Directory && expanded[entry.Relative] {
-				visit(document.Children)
-			}
-		}
-	}
-	visit(s.documents)
-	return entries
+	return s.materialsDocumentProjection().visibleEntries(s.readingMaterialsSortOrder(), s.readingExpandedDirectories())
 }
 
 func (s *app) selectMaterialsEntry(state *materialsFileManagementState, document application.Document, modifiers ui.Modifiers, contextSelect bool) {
@@ -151,121 +109,32 @@ func (s *app) selectMaterialsEntry(state *materialsFileManagementState, document
 	if state == nil || !ok {
 		return
 	}
-	if state.selected == nil {
-		state.selected = make(map[string]materialsFileSelectionEntry)
-	}
+	state.materialsSelection.ensure()
 	if contextSelect {
 		state.contextPath = entry.Path
 		return
 	}
-	ctrl := modifiers&(ui.Ctrl|ui.Super) != 0
-	shift := modifiers&ui.Shift != 0
-	visible := s.visibleMaterialsEntries()
-	if shift && state.anchor != "" {
-		from, to := -1, -1
-		for index, item := range visible {
-			if item.Key == state.anchor {
-				from = index
-			}
-			if item.Key == entry.Key {
-				to = index
-			}
-		}
-		if from >= 0 && to >= 0 {
-			start, end := min(from, to), max(from, to)
-			if !ctrl {
-				state.selected = make(map[string]materialsFileSelectionEntry)
-			}
-			for _, item := range visible[start : end+1] {
-				state.selected[item.Key] = item
-			}
-		} else if !ctrl {
-			state.selected = map[string]materialsFileSelectionEntry{entry.Key: entry}
-		}
-	} else if ctrl {
-		if _, selected := state.selected[entry.Key]; selected {
-			delete(state.selected, entry.Key)
-		} else {
-			state.selected[entry.Key] = entry
-		}
-	} else {
-		state.selected = map[string]materialsFileSelectionEntry{entry.Key: entry}
-	}
-	if !shift {
-		state.anchor = entry.Key
-	}
+	state.materialsSelection.apply(entry, s.visibleMaterialsEntries(), modifiers&(ui.Ctrl|ui.Super) != 0, modifiers&ui.Shift != 0)
 	state.focused = true
 }
 
 func (s *app) materialsFileSelection(state *materialsFileManagementState) []materialsFileSelectionEntry {
-	if state == nil || len(state.selected) == 0 {
+	if state == nil {
 		return nil
 	}
-	entries := make([]materialsFileSelectionEntry, 0, len(state.selected))
-	for _, entry := range state.selected {
-		entries = append(entries, entry)
-	}
-	sort.Slice(entries, func(i, j int) bool {
-		return strings.ToLower(entries[i].Relative) < strings.ToLower(entries[j].Relative)
-	})
-	selectedDirs := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if entry.Directory {
-			selectedDirs = append(selectedDirs, filepath.Clean(entry.Path))
-		}
-	}
-	filtered := entries[:0]
-	for _, entry := range entries {
-		covered := false
-		for _, parent := range selectedDirs {
-			if normalizedReadingPath(parent) == normalizedReadingPath(entry.Path) {
-				continue
-			}
-			relative, err := filepath.Rel(parent, entry.Path)
-			if err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative) {
-				covered = true
-				break
-			}
-		}
-		if !covered {
-			filtered = append(filtered, entry)
-		}
-	}
-	return filtered
+	return state.materialsSelection.operationEntries()
 }
 
 func (s *app) materialsCurrentDirectory(state *materialsFileManagementState) (absolute, relative string) {
-	task := s.currentTask()
+	task := s.taskUnit.currentTask()
 	if state == nil || task.id == "" || task.id != state.taskID || task.materialsPath == "" {
 		return "", ""
 	}
-	if _, anchorRelative, hasAnchor := strings.Cut(state.anchor, ":"); hasAnchor {
-		anchorPath := filepath.Join(task.materialsPath, filepath.FromSlash(anchorRelative))
-		if anchor, ok := s.findMaterialsEntry(anchorPath, s.documents); ok && anchor.Key == state.anchor {
-			relative = anchor.Relative
-			if !anchor.Directory {
-				relative = filepath.ToSlash(filepath.Dir(filepath.FromSlash(relative)))
-				if relative == "." {
-					relative = ""
-				}
-			}
-		}
-	}
-	if relative == "" {
-		absolute = s.materialsDefaultDirectory()
-		relative = s.materialsRelativePath(absolute)
-		return absolute, relative
-	}
-	absolute = filepath.Clean(filepath.Join(task.materialsPath, filepath.FromSlash(relative)))
-	rel, err := filepath.Rel(task.materialsPath, absolute)
-	if err != nil || rel == ".." || filepath.IsAbs(rel) || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return filepath.Clean(task.materialsPath), ""
-	}
-	return absolute, filepath.ToSlash(rel)
+	return state.materialsSelection.currentDirectory(s.materialsDocumentProjection(), s.materialsDefaultDirectory())
 }
 
 func (s *app) revealMaterialsPath(path string) {
-	if path == "" || s.currentTask().materialsPath == "" {
+	if path == "" || s.taskUnit.currentTask().materialsPath == "" {
 		return
 	}
 	relative := s.materialsRelativePath(filepath.Clean(path))
@@ -282,12 +151,11 @@ func (s *app) revealMaterialsPath(path string) {
 func (s *app) selectMaterialsPath(path string) {
 	state := s.ensureMaterialsFileManagementState()
 	path = filepath.Clean(path)
-	entry, ok := s.findMaterialsEntry(path, s.documents)
+	entry, ok := s.materialsDocumentProjection().find(path)
 	if !ok {
 		return
 	}
-	state.selected = map[string]materialsFileSelectionEntry{entry.Key: entry}
-	state.anchor = entry.Key
+	state.materialsSelection.selectOnly(entry)
 	state.focused = true
 	s.revealMaterialsPath(path)
 	if entry.Directory {
@@ -298,15 +166,7 @@ func (s *app) selectMaterialsPath(path string) {
 }
 
 func (s *app) findMaterialsEntry(path string, items []application.Document) (materialsFileSelectionEntry, bool) {
-	for _, document := range items {
-		if normalizedReadingPath(document.Path) == normalizedReadingPath(path) {
-			return s.materialsEntryForDocument(document)
-		}
-		if entry, ok := s.findMaterialsEntry(path, document.Children); ok {
-			return entry, true
-		}
-	}
-	return materialsFileSelectionEntry{}, false
+	return (materialsDocumentProjection{root: s.taskUnit.currentTask().materialsPath, documents: items}).find(path)
 }
 
 func (s *app) materialsEntryContextMenu(c *ui.Context, menu *ui.Menu, state *materialsFileManagementState, entry materialsFileSelectionEntry) {
@@ -370,25 +230,26 @@ func (s *app) materialsEntryContextMenu(c *ui.Context, menu *ui.Menu, state *mat
 		s.openMaterialsCopyForm(entry.Path)
 	}
 	if materialsOpenWithAvailable() && !folder && menu.Item("选择应用打开").Icon(icons["launch"]).Disabled(systemBusy).Chosen() {
-		s.act("system.open-with", s.currentTask().id, "", "", entry.Path, "", nil)
+		s.act("system.open-with", s.taskUnit.currentTask().id, "", "", entry.Path, "", nil)
 	}
 	openBusy := systemBusy
 	if folder {
 		openBusy = s.materialsSystemRevealBusy(state)
 	}
 	if menu.Item("在系统中打开").Icon(icons["launch"]).Disabled(openBusy).Chosen() {
-		s.act("document.open", s.currentTask().id, "", "", entry.Path, "", map[string]any{"desktopSystemOpenDirectory": folder})
+		s.act("document.open", s.taskUnit.currentTask().id, "", "", entry.Path, "", map[string]any{"desktopSystemOpenDirectory": folder})
 	}
 	if menu.Item("显示位置").Icon(icons["folder"]).Disabled(s.materialsSystemRevealBusy(state)).Chosen() {
-		s.act("document.reveal", s.currentTask().id, "", "", entry.Path, "", nil)
+		s.act("document.reveal", s.taskUnit.currentTask().id, "", "", entry.Path, "", nil)
 	}
 	menu.Separator()
-	selectionCount := len(s.materialsContextSelection(state, entry))
+	contextSelection := s.materialsContextSelection(state, entry)
+	selectionCount := len(contextSelection)
 	if menu.Item(fmt.Sprintf("复制已选项目 (%d)", selectionCount)).Icon(icons["copy"]).Disabled(busy || selectionCount == 0).Chosen() {
 		s.withMaterialsContextSelection(state, entry, s.copyMaterialsSelectionToClipboard)
 	}
 	allWritable := true
-	for _, selected := range s.materialsContextSelection(state, entry) {
+	for _, selected := range contextSelection {
 		allWritable = allWritable && s.materialsWritable(selected.Path, false)
 	}
 	if menu.Item("移入回收站…").Icon(icons["delete"]).Disabled(busy || selectionCount == 0 || !allWritable).Dangerous().Chosen() {
@@ -472,8 +333,8 @@ func (s *app) startMaterialsImportPicker() {
 			return
 		}
 		win.Update(func() {
-			current := s.materialsFileManagement
-			if current != state || state.pickerGeneration != generation || s.currentTask().id != taskID || normalizedReadingRoot(s.currentTask().materialsPath) != normalizedReadingRoot(root) {
+			current := s.materialsUnit.state.materialsFileManagement
+			if current != state || state.pickerGeneration != generation || s.taskUnit.currentTask().id != taskID || normalizedReadingRoot(s.taskUnit.currentTask().materialsPath) != normalizedReadingRoot(root) {
 				return
 			}
 			state.pickerBusy = false
@@ -751,17 +612,17 @@ func (state *materialsFileManagementState) finishFlow(s *app, result application
 }
 
 func (s *app) reloadMaterialsDocuments() {
-	if s.materialsFileReadBlocked() || s.backend == nil || s.currentTask().id == "" {
+	if s.materialsFileReadBlocked() || s.backend == nil || s.taskUnit.currentTask().id == "" {
 		return
 	}
-	s.documentsLoaded = false
-	s.documentsRequested = false
+	s.materialsUnit.state.documentsLoaded = false
+	s.materialsUnit.state.documentsRequested = false
 	s.loadDocuments()
 }
 
 func (s *app) applyPendingMaterialsFileSelection() {
-	state := s.materialsFileManagement
-	if state == nil || s.currentTask().id != state.taskID || normalizedReadingRoot(s.currentTask().materialsPath) != normalizedReadingRoot(state.root) {
+	state := s.materialsUnit.state.materialsFileManagement
+	if state == nil || s.taskUnit.currentTask().id != state.taskID || normalizedReadingRoot(s.taskUnit.currentTask().materialsPath) != normalizedReadingRoot(state.root) {
 		return
 	}
 	if state.pendingSelectDir != "" {
@@ -770,8 +631,7 @@ func (s *app) applyPendingMaterialsFileSelection() {
 		s.setReadingDirectoryExpanded(relative, true)
 		absolute := filepath.Join(state.root, filepath.FromSlash(relative))
 		if entry, ok := s.materialsEntryForDocument(application.Document{Path: absolute, Name: filepath.Base(absolute), Kind: "directory"}); ok {
-			state.selected = map[string]materialsFileSelectionEntry{entry.Key: entry}
-			state.anchor = entry.Key
+			state.materialsSelection.selectOnly(entry)
 		}
 	}
 	if state.pendingSelectPath != "" {
@@ -782,41 +642,21 @@ func (s *app) applyPendingMaterialsFileSelection() {
 }
 
 func (s *app) reconcileMaterialsDocuments(entries []application.Document) {
-	state := s.materialsFileManagement
-	current := s.currentTask()
+	state := s.materialsUnit.state.materialsFileManagement
+	current := s.taskUnit.currentTask()
 	stateBelongsToTask := state != nil && state.taskID == current.id && normalizedReadingRoot(state.root) == normalizedReadingRoot(current.materialsPath)
-	available := make(map[string]materialsFileSelectionEntry)
-	anchorAvailable := false
-	var visit func([]application.Document)
-	visit = func(items []application.Document) {
-		for _, document := range items {
-			if entry, ok := s.materialsEntryForDocument(document); ok {
-				available[normalizedReadingPath(entry.Path)] = entry
-				if stateBelongsToTask && entry.Key == state.anchor {
-					anchorAvailable = true
-				}
-			}
-			visit(document.Children)
-		}
-	}
-	visit(entries)
+	projection := s.materialsDocumentProjection()
+	var available map[string]materialsFileSelectionEntry
 	if stateBelongsToTask {
+		available = state.materialsSelection.reconcile(projection)
 		if _, exists := available[normalizedReadingPath(state.previewPath)]; !exists {
 			state.previewPath = ""
 		}
-		for key, entry := range state.selected {
-			if current, ok := available[normalizedReadingPath(entry.Path)]; !ok || current.Directory != entry.Directory {
-				delete(state.selected, key)
-			} else {
-				state.selected[key] = current
-			}
-		}
-		if !anchorAvailable {
-			state.anchor = ""
-		}
+	} else {
+		available, _ = projection.entryIndex("")
 	}
-	oldPath := s.documentPath
-	oldTabs := append([]string(nil), s.documentTabs...)
+	oldPath := s.materialsUnit.state.documentPath
+	oldTabs := append([]string(nil), s.materialsUnit.state.documentTabs...)
 	filteredTabs := make([]string, 0, len(oldTabs))
 	for _, path := range oldTabs {
 		if _, ok := available[normalizedReadingPath(path)]; ok {
@@ -829,21 +669,21 @@ func (s *app) reconcileMaterialsDocuments(entries []application.Document) {
 		}
 	}
 	if oldPath == "" {
-		s.documentTabs = filteredTabs
+		s.materialsUnit.state.documentTabs = filteredTabs
 		return
 	}
 	if _, ok := available[normalizedReadingPath(oldPath)]; ok {
-		s.documentTabs = filteredTabs
+		s.materialsUnit.state.documentTabs = filteredTabs
 		return
 	}
-	s.closeNativeMedia()
+	s.materialsUnit.closeNativeMedia()
 	s.closeMarkdownEditor()
-	s.documentPath, s.documentContent, s.documentHash = "", "", ""
-	s.documentKind, s.documentReadOnly = "", false
-	s.documentDirty, s.documentEditing, s.documentReadPending = false, false, false
-	delete(s.documentDrafts, oldPath)
-	delete(s.documentDirtyMap, oldPath)
-	s.documentTabs = filteredTabs
+	s.materialsUnit.state.documentPath, s.materialsUnit.state.documentContent, s.materialsUnit.state.documentHash = "", "", ""
+	s.materialsUnit.state.documentKind, s.materialsUnit.state.documentReadOnly = "", false
+	s.materialsUnit.state.documentDirty, s.materialsUnit.state.documentEditing, s.materialsUnit.state.documentReadPending = false, false, false
+	delete(s.materialsUnit.state.documentDrafts, oldPath)
+	delete(s.materialsUnit.state.documentDirtyMap, oldPath)
+	s.materialsUnit.state.documentTabs = filteredTabs
 	if stateBelongsToTask && normalizedReadingPath(state.pendingEditPath) == normalizedReadingPath(oldPath) {
 		state.pendingEditPath = ""
 	}
@@ -882,7 +722,7 @@ func (s *app) reconcileMaterialsDocuments(entries []application.Document) {
 }
 
 func (s *app) applyMaterialsFileReadResult(action application.Action) {
-	state := s.materialsFileManagement
+	state := s.materialsUnit.state.materialsFileManagement
 	if state == nil || action.TaskID != state.taskID || action.Path != state.pendingEditPath {
 		return
 	}
@@ -893,8 +733,8 @@ func (s *app) applyMaterialsFileActionFailure(action application.Action, err err
 	if !isMaterialsFileManagementAction(action.Kind) {
 		return false
 	}
-	state := s.materialsFileManagement
-	if state == nil || action.TaskID != state.taskID || action.TaskID != s.currentTask().id {
+	state := s.materialsUnit.state.materialsFileManagement
+	if state == nil || action.TaskID != state.taskID || action.TaskID != s.taskUnit.currentTask().id {
 		return true
 	}
 	state.flowActionKind = ""
@@ -921,9 +761,9 @@ func isMaterialsFileManagementAction(kind string) bool {
 func (s *app) applyMaterialsFileActionResult(action application.Action, result application.ActionResult) bool {
 	if action.Kind == "document.rename" {
 		operation, err := decodeSingleMaterialsData[documents.FileOperationResult](result.Data)
-		state := s.materialsFileManagement
-		stateMatchesCurrent := state != nil && action.TaskID == s.currentTask().id && action.TaskID == state.taskID &&
-			normalizedReadingRoot(s.currentTask().materialsPath) == normalizedReadingRoot(state.root)
+		state := s.materialsUnit.state.materialsFileManagement
+		stateMatchesCurrent := state != nil && action.TaskID == s.taskUnit.currentTask().id && action.TaskID == state.taskID &&
+			normalizedReadingRoot(s.taskUnit.currentTask().materialsPath) == normalizedReadingRoot(state.root)
 		if err != nil {
 			if stateMatchesCurrent {
 				state.lastError = "重命名结果无法读取：" + err.Error()
@@ -958,8 +798,8 @@ func (s *app) applyMaterialsFileActionResult(action application.Action, result a
 	if !isMaterialsFileManagementAction(action.Kind) {
 		return false
 	}
-	state := s.materialsFileManagement
-	if state == nil || action.TaskID != s.currentTask().id || action.TaskID != state.taskID || normalizedReadingRoot(s.currentTask().materialsPath) != normalizedReadingRoot(state.root) {
+	state := s.materialsUnit.state.materialsFileManagement
+	if state == nil || action.TaskID != s.taskUnit.currentTask().id || action.TaskID != state.taskID || normalizedReadingRoot(s.taskUnit.currentTask().materialsPath) != normalizedReadingRoot(state.root) {
 		return true
 	}
 	state.flowActionKind = ""
@@ -1095,7 +935,7 @@ func decodeSingleMaterialsData[T any](data any) (T, error) {
 }
 
 func (s *app) acceptMaterialsFileOperation(result application.ActionResult, operation documents.FileOperationResult, batch *documents.FileOperationBatchResult) {
-	state := s.materialsFileManagement
+	state := s.materialsUnit.state.materialsFileManagement
 	if state == nil {
 		return
 	}
@@ -1139,7 +979,7 @@ func (s *app) acceptMaterialsFileOperation(result application.ActionResult, oper
 }
 
 func (s *app) renderMaterialsFileManagementDialogs(c *ui.Context, p palette) {
-	state := s.materialsFileManagement
+	state := s.materialsUnit.state.materialsFileManagement
 	if state == nil {
 		return
 	}

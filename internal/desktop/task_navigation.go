@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"path/filepath"
-	"slices"
 	"strings"
 )
 
@@ -12,10 +11,12 @@ import (
 // expiring reading cache. All access to this presentation state is on the UI
 // thread; the store coordinates persisted updates across application instances.
 type taskNavigationState struct {
-	home  string
-	store *taskNavigationStore
-	value taskNavigationPreferences
-	error string
+	home     string
+	store    *taskNavigationStore
+	value    taskNavigationPreferences
+	error    string
+	pinned   map[string]bool
+	revision uint64
 }
 
 // A task retains its identity through archive/restore and task-root relocation.
@@ -39,8 +40,8 @@ func (s *app) taskNavigationFor() *taskNavigationState {
 			home = filepath.Clean(absolute)
 		}
 	}
-	if s.taskNavigation != nil && s.taskNavigation.home == home {
-		return s.taskNavigation
+	if s.taskUnit.state.taskNavigation != nil && s.taskUnit.state.taskNavigation.home == home {
+		return s.taskUnit.state.taskNavigation
 	}
 	state := &taskNavigationState{home: home}
 	if home != "" {
@@ -52,12 +53,21 @@ func (s *app) taskNavigationFor() *taskNavigationState {
 			state.value = value
 		}
 	}
-	s.taskNavigation = state
+	s.taskUnit.state.taskNavigation = state
+	state.publishPins()
 	return state
 }
 
+func (state *taskNavigationState) publishPins() {
+	state.pinned = make(map[string]bool, len(state.value.Pinned))
+	for _, key := range state.value.Pinned {
+		state.pinned[key] = true
+	}
+	state.revision++
+}
+
 func (s *app) taskIsPinned(t task) bool {
-	return slices.Contains(s.taskNavigationFor().value.Pinned, taskNavigationKey(t))
+	return s.taskNavigationFor().pinned[taskNavigationKey(t)]
 }
 
 func (s *app) setTaskPinned(t task, pinned bool) {
@@ -73,14 +83,16 @@ func (s *app) setTaskPinned(t task, pinned bool) {
 			return
 		}
 		state.value, state.error = value, ""
+		state.publishPins()
 		return
 	}
 	state.value.Pinned = taskNavigationMoveFirst(state.value.Pinned, key, pinned)
+	state.publishPins()
 }
 
 // Opening a row selects the task without changing persisted navigation data.
 func (s *app) openTaskIndex(index int) {
-	if index < 0 || index >= len(s.tasks) {
+	if index < 0 || index >= len(s.taskUnit.state.tasks) {
 		return
 	}
 	if !s.selectTaskIndex(index) {
@@ -106,10 +118,8 @@ func (s *app) switchTaskIndexCategory(archived bool) {
 }
 
 func (s *app) taskGroupName(t task) string {
-	for _, group := range s.snapshot.Groups {
-		if group.ID == t.groupID {
-			return firstNonEmpty(group.Name, group.ID)
-		}
+	if group, found := s.serviceCatalog().groups[t.groupID]; found {
+		return firstNonEmpty(group.Name, group.ID)
 	}
 	return firstNonEmpty(t.project, t.groupID)
 }
@@ -118,15 +128,7 @@ func (s *app) taskMatchesSearch(t task, terms []string) bool {
 	if len(terms) == 0 {
 		return true
 	}
-	fields := []string{t.id, t.title, t.requirementID, t.requirementTitle, t.requirementURL,
-		t.project, t.groupID, s.taskGroupName(t), t.branch}
-	fields = append(fields, t.services...)
-	metadata := s.taskRequirementMetadataFor(t).Metadata
-	fields = append(fields, metadata.ID)
-	if metadata.Title != nil {
-		fields = append(fields, *metadata.Title)
-	}
-	haystack := strings.ToLower(strings.Join(fields, "\n"))
+	haystack := s.taskSearchText(t)
 	for _, term := range terms {
 		if !strings.Contains(haystack, term) {
 			return false
@@ -138,34 +140,18 @@ func (s *app) taskMatchesSearch(t task, terms []string) bool {
 // Return filtered task indices without mutating snapshot order or selection.
 // Pinned tasks precede the remaining rows in the snapshot's stable order.
 func (s *app) taskIndexRows(archived bool) []int {
-	return s.taskIndexRowsFor(s.tasks, archived)
+	return s.cachedTaskIndexRows(archived)
 }
 
 func (s *app) taskIndexRowsFor(tasks []task, archived bool) []int {
 	state := s.taskIndexBrowsingFor(archived)
-	preferences := s.taskNavigationFor().value
 	terms := strings.Fields(strings.ToLower(state.search))
-	rows := make([]int, 0, len(tasks))
-	byKey := make(map[string]int, len(tasks))
-	for index, t := range tasks {
-		if t.archived == archived && s.taskMatchesSearch(t, terms) {
-			rows = append(rows, index)
-			byKey[taskNavigationKey(t)] = index
-		}
+	catalog := newTaskIndexCatalog(tasks)
+	category := 0
+	if archived {
+		category = 1
 	}
-	ordered := make([]int, 0, len(rows))
-	for _, key := range preferences.Pinned {
-		if index, ok := byKey[key]; ok {
-			ordered = append(ordered, index)
-			delete(byKey, key)
-		}
-	}
-	for _, index := range rows {
-		if _, ok := byKey[taskNavigationKey(tasks[index])]; ok {
-			ordered = append(ordered, index)
-		}
-	}
-	return ordered
+	return projectTaskIndexOrder(catalog.categories[category], catalog.keys, s.taskNavigationFor().value.Pinned, func(i int) bool { return s.taskMatchesSearch(tasks[i], terms) })
 }
 
 // Explicit creation reveals its result even from a filtered task index.

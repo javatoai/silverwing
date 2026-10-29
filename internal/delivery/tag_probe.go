@@ -17,32 +17,11 @@ func (s *Service) ProbeWithProgress(ctx context.Context, config domain.AppConfig
 	for _, id := range ids {
 		selected[id] = true
 	}
-	byService := map[string][]genbuCandidate{}
-	for _, task := range tasks {
-		group, err := config.Group(task.GroupID)
-		if err != nil {
-			continue
-		}
-		services := map[string]domain.GroupServiceConfig{}
-		for _, service := range group.Services {
-			services[service.ID] = service
-		}
-		directory, err := historyTaskDirectory(config, task)
-		if err != nil {
-			return false, err
-		}
-		operations, err := s.store.list(directory)
-		if err != nil {
-			return false, err
-		}
-		for _, operation := range operations {
-			service, ok := services[operation.GroupServiceID]
-			if !ok || !service.GenbuProbeEnabled || !domain.TagGenbuProbeEligible(operation.State, value(operation.Tag)) {
-				continue
-			}
-			byService[service.GenbuServiceName] = append(byService[service.GenbuServiceName], genbuCandidate{directory, operation, service.GenbuServiceName})
-		}
+	snapshot, err := s.probeSnapshot(ctx, config, tasks)
+	if err != nil {
+		return false, err
 	}
+	byService := snapshot.candidates
 	type result struct {
 		changed bool
 		err     error
@@ -71,7 +50,7 @@ func (s *Service) ProbeWithProgress(ctx context.Context, config domain.AppConfig
 		go func(candidates []genbuCandidate) {
 			changed, err := s.probeCandidates(ctx, config, candidates, force, selected, emit)
 			results <- result{changed, err}
-		}(candidates)
+		}(append([]genbuCandidate(nil), candidates...))
 	}
 	changed := false
 	var failure error

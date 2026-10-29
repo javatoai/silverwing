@@ -153,7 +153,7 @@ func (s *app) beginWorkspaceCommand(t task, w application.Workspace, command dom
 
 	token := newDesktopEditorID("workspace-command")
 	fingerprint := workspaceCommandFingerprint(t, w)
-	s.workspaceCommand = &workspaceCommandUIState{
+	s.workspaceUnit.state.workspaceCommand = &workspaceCommandUIState{
 		Token:                token,
 		Home:                 s.snapshot.Home,
 		TaskID:               t.id,
@@ -201,7 +201,7 @@ func workspaceCommandFingerprint(t task, w application.Workspace) string {
 }
 
 func (s *app) workspaceCommandActionRelevant(action application.Action) bool {
-	state := s.workspaceCommand
+	state := s.workspaceUnit.state.workspaceCommand
 	if state == nil || state.Status != workspaceCommandRunning || !workspaceCommandActionMatchesState(action, state) {
 		return false
 	}
@@ -239,7 +239,7 @@ func (s *app) workspaceCommandIdentityCurrent(state *workspaceCommandUIState) bo
 	if s.snapshot.Home != state.Home {
 		return false
 	}
-	current := s.currentTask()
+	current := s.taskUnit.currentTask()
 	if current.id != state.TaskID || current.createdAt != state.TaskCreatedAt || current.groupID != state.TaskGroupID ||
 		!sameWorkspaceCommandPath(current.path, state.TaskPath) {
 		return false
@@ -255,7 +255,7 @@ func (s *app) workspaceCommandIdentityCurrent(state *workspaceCommandUIState) bo
 }
 
 func (s *app) invalidateWorkspaceCommand(state *workspaceCommandUIState) {
-	if state == nil || s.workspaceCommand != state {
+	if state == nil || s.workspaceUnit.state.workspaceCommand != state {
 		return
 	}
 	if state.Status == workspaceCommandRunning {
@@ -264,7 +264,7 @@ func (s *app) invalidateWorkspaceCommand(state *workspaceCommandUIState) {
 		state.Duration = time.Since(state.StartedAt)
 		s.cancelWorkspaceCommandJob(state.Token)
 	}
-	s.workspaceCommand = nil
+	s.workspaceUnit.state.workspaceCommand = nil
 }
 
 func sameWorkspaceCommandPath(left, right string) bool {
@@ -283,10 +283,10 @@ func (s *app) workspaceCommandStream(action application.Action) func(process.Str
 			return
 		}
 		win.Update(func() {
-			if !s.workspaceCommandActionRelevant(action) || s.workspaceCommand == nil {
+			if !s.workspaceCommandActionRelevant(action) || s.workspaceUnit.state.workspaceCommand == nil {
 				return
 			}
-			state := s.workspaceCommand
+			state := s.workspaceUnit.state.workspaceCommand
 			if state.Status != workspaceCommandRunning {
 				return
 			}
@@ -349,10 +349,10 @@ func workspaceCommandStreamName(stream string) string {
 }
 
 func (s *app) applyWorkspaceCommandResult(action application.Action, result application.ActionResult) {
-	if !s.workspaceCommandActionRelevant(action) || s.workspaceCommand == nil {
+	if !s.workspaceCommandActionRelevant(action) || s.workspaceUnit.state.workspaceCommand == nil {
 		return
 	}
-	state := s.workspaceCommand
+	state := s.workspaceUnit.state.workspaceCommand
 	commandResult, err := workspaceCommandResult(result.Data)
 	if err != nil {
 		state.Status = workspaceCommandFailed
@@ -411,10 +411,10 @@ func firstWorkspaceCommandLine(text string) string {
 }
 
 func (s *app) applyWorkspaceCommandFailure(action application.Action, err error) {
-	if !s.workspaceCommandActionRelevant(action) || s.workspaceCommand == nil {
+	if !s.workspaceCommandActionRelevant(action) || s.workspaceUnit.state.workspaceCommand == nil {
 		return
 	}
-	finishWorkspaceCommandFailure(s.workspaceCommand, err)
+	finishWorkspaceCommandFailure(s.workspaceUnit.state.workspaceCommand, err)
 }
 
 func finishWorkspaceCommandFailure(state *workspaceCommandUIState, err error) {
@@ -437,7 +437,7 @@ func finishWorkspaceCommandFailure(state *workspaceCommandUIState, err error) {
 }
 
 func (s *app) requestWorkspaceCommandStop() {
-	state := s.workspaceCommand
+	state := s.workspaceUnit.state.workspaceCommand
 	if state == nil || state.Status != workspaceCommandRunning || state.StopRequested {
 		return
 	}
@@ -451,7 +451,7 @@ func (s *app) requestWorkspaceCommandStop() {
 }
 
 func (s *app) clearWorkspaceCommandSelection() {
-	state := s.workspaceCommand
+	state := s.workspaceUnit.state.workspaceCommand
 	if state != nil && state.Status == workspaceCommandRunning {
 		state.StopRequested = true
 		state.Status = workspaceCommandCancelled
@@ -460,14 +460,14 @@ func (s *app) clearWorkspaceCommandSelection() {
 	if state != nil {
 		s.cancelWorkspaceCommandJob(state.Token)
 	}
-	s.workspaceCommand = nil
+	s.workspaceUnit.state.workspaceCommand = nil
 	if s.win != nil {
 		s.win.Invalidate()
 	}
 }
 
 func (s *app) renderWorkspaceCommandDialog(c *ui.Context, p palette) {
-	state := s.workspaceCommand
+	state := s.workspaceUnit.state.workspaceCommand
 	if state == nil || !state.Open {
 		return
 	}
@@ -558,8 +558,8 @@ func (s *app) renderWorkspaceCommandDialog(c *ui.Context, p palette) {
 		})
 	})
 	state.Open = running || open
-	if !state.Open && s.workspaceCommand == state {
-		s.workspaceCommand = nil
+	if !state.Open && s.workspaceUnit.state.workspaceCommand == state {
+		s.workspaceUnit.state.workspaceCommand = nil
 	}
 }
 

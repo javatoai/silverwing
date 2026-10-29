@@ -27,8 +27,8 @@ func (s *app) sidebarNavigationItems() []sidebarNavigationItem {
 
 func (s *app) reconcileSidebarNavigation() {
 	if s.page == "skills" {
-		s.page, s.settingsTab, s.settingsPage = "settings", "skill", "skill-local"
-		s.settingsLoaded = ""
+		s.page, s.settingsUnit.state.settingsTab, s.settingsUnit.state.settingsPage = "settings", "skill", "skill-local"
+		s.settingsUnit.state.settingsLoaded = ""
 	}
 	if s.loading {
 		return
@@ -42,8 +42,8 @@ func (s *app) reconcileSidebarNavigation() {
 	}
 	if s.page == "tools" && len(s.visibleDeveloperToolTabs()) == 0 {
 		s.page = "settings"
-		s.settingsTab = "快捷工具"
-		s.settingsPage = "tool-visibility"
-		s.settingsLoaded = ""
+		s.settingsUnit.state.settingsTab = "快捷工具"
+		s.settingsUnit.state.settingsPage = "tool-visibility"
+		s.settingsUnit.state.settingsLoaded = ""
 	}
 }

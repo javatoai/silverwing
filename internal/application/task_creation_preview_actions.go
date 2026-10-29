@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"sort"
 
-	"silverwing-go/internal/documents"
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/workspace"
 )
@@ -97,11 +96,10 @@ func taskCreationPreviewAction(ctx context.Context, action Action, config domain
 		if service == nil {
 			return ActionResult{}, true, errors.New("任务资料预览服务不可用")
 		}
-		var runner documents.PreparationCommandRunner
-		if service.Git != nil {
-			runner = service.Git.Runner
+		preparation := service.MaterialsPreparation
+		if preparation == nil {
+			return ActionResult{}, true, errors.New("任务资料预览服务不可用")
 		}
-		preparation := documents.NewPreparationService(service.Paths, runner)
 		materials, err := preparation.Preview(ctx, config, payload.RequirementLink, payload.FolderName)
 		if err != nil {
 			return ActionResult{}, true, err

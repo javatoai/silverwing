@@ -26,7 +26,7 @@ func (s *app) tagHistoryAnnouncementCopiedMessage(group tagHistoryGroup, text st
 	names := []string{}
 	seen := map[string]bool{}
 	if len(group.Visible) > 0 {
-		for _, item := range s.tasks {
+		for _, item := range s.taskUnit.state.tasks {
 			if item.id != group.Visible[0].TaskID {
 				continue
 			}

@@ -13,7 +13,13 @@ import (
 
 func (a *App) documentAction(ctx context.Context, action Action) (result ActionResult, resultErr error) {
 	if action.Kind == "document.list" {
-		return a.documentActionLocked(ctx, action)
+		manifest, _, err := a.task(action)
+		if err != nil {
+			return ActionResult{}, err
+		}
+		if _, local := documents.LocalScope(value(manifest.RequirementMaterials.WriteRoot)); !local {
+			return a.documentActionLocked(ctx, action)
+		}
 	}
 	_, taskPath, err := a.task(action)
 	if err != nil {
@@ -73,7 +79,11 @@ func (a *App) documentActionLocked(ctx context.Context, action Action) (result A
 		}
 		entries, err := a.Documents.List(root)
 		message := "资料已刷新"
-		if config, configErr := a.Config.Load(); configErr == nil {
+		if _, local := documents.LocalScope(filepath.Join(root, documents.LocalMaterialsSubdirectory)); local {
+			if catalogErr := a.refreshLocalMaterialsCatalog(ctx, action, root); catalogErr != nil {
+				message += "；本地说明更新失败（刷新资料可单独重试）：" + catalogErr.Error()
+			}
+		} else if config, configErr := a.Config.Load(); configErr == nil {
 			if catalogErr := a.refreshMaterialsAgentCatalogs(ctx, MaterialsGitScope(a.Paths.Home, config)); catalogErr != nil {
 				message += "；本地说明更新失败（刷新资料可单独重试）：" + catalogErr.Error()
 			}
@@ -264,6 +274,37 @@ func (a *App) documentActionLocked(ctx context.Context, action Action) (result A
 		return a.systemAction(ctx, Action{Kind: kind, Path: path, Payload: action.Payload})
 	}
 	return ActionResult{}, fmt.Errorf("资料操作 %s 尚未接入", action.Kind)
+}
+
+// The document action already owns this task's lock. Local catalogs do not
+// scan unrelated requirements or acquire the shared Git repository lock.
+func (a *App) refreshLocalMaterialsCatalog(ctx context.Context, action Action, root string) error {
+	manifest, taskPath, err := a.task(action)
+	if err != nil {
+		return err
+	}
+	check := func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		fresh, _, err := a.task(action)
+		if err != nil {
+			return err
+		}
+		if fresh.CreatedAt != manifest.CreatedAt || value(fresh.RequirementMaterials.WriteRoot) != value(manifest.RequirementMaterials.WriteRoot) {
+			return errors.New("任务或本地资料关联已变化")
+		}
+		if err := a.validateMaterialsActionScope(action, root); err != nil {
+			return err
+		}
+		_, err = a.materialRoot(action)
+		return err
+	}
+	config, err := a.Config.Load()
+	if err != nil {
+		return err
+	}
+	return workspace.NewAgentDocumentService(a.Paths, a.Manifests).RefreshMaterialsDirectories(taskPath, manifest, config, check)
 }
 
 func documentEntryName(action Action) string {

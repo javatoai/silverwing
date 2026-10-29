@@ -39,7 +39,7 @@ func TestProductionConflictPromptCopyAndRecoveryLayout(t *testing.T) {
 				t.Run(fmt.Sprintf("%s-%d-dark-%t", stage, width, dark), func(t *testing.T) {
 					s, v, b := productionFixture(t)
 					b = productionConflictBatch(b, stage)
-					s.production.batches[0] = b
+					s.releaseUnit.state.production.batches[0] = b
 					v.ActiveStep = productionIntentStep(&b)
 					v.Branch, v.Error, v.Message = "feature/not-the-conflict", b.Message, b.Message
 					s.win = &mygo.Window{}
@@ -119,7 +119,7 @@ func TestProductionAbortConfirmationRejectsChangedOperation(t *testing.T) {
 		t.Run(change, func(t *testing.T) {
 			s, v, b := productionFixture(t)
 			b = productionConflictBatch(b, "feature")
-			s.production.batches[0] = b
+			s.releaseUnit.state.production.batches[0] = b
 			s.win = &mygo.Window{}
 			s.confirmProductionAbort(v, b)
 			d := s.confirmationDialog
@@ -136,9 +136,9 @@ func TestProductionAbortConfirmationRejectsChangedOperation(t *testing.T) {
 			case "workspace":
 				b.Intent.Merge.Worktree = "another-workspace"
 			case "target":
-				s.production.batches[0].Target.Remote = "other"
+				s.releaseUnit.state.production.batches[0].Target.Remote = "other"
 			case "config":
-				s.configJSON = `{"tagEnabled":false}`
+				s.settingsUnit.state.configJSON = `{"tagEnabled":false}`
 			case "page":
 				s.page = "tasks"
 			case "batch":
@@ -148,7 +148,7 @@ func TestProductionAbortConfirmationRejectsChangedOperation(t *testing.T) {
 			case "busy":
 				v.Busy = true
 			case "ended":
-				s.production.batches[0].Ended = true
+				s.releaseUnit.state.production.batches[0].Ended = true
 			}
 			if d.Current() {
 				t.Fatal("stale operation can still be confirmed")
@@ -160,9 +160,9 @@ func TestProductionAbortConfirmationRejectsChangedOperation(t *testing.T) {
 func TestProductionAbortUsesConfirmedPayloadAndStopsAfterSuccess(t *testing.T) {
 	s, v, b, backend, window := productionRequestFixture(t)
 	b = productionConflictBatch(b, "feature")
-	s.production.batches[0] = b
+	s.releaseUnit.state.production.batches[0] = b
 	s.win = &mygo.Window{}
-	s.notes[0] = "unsaved draft"
+	s.taskUnit.state.notes[0] = "unsaved draft"
 	v.Steps = map[int]productionStepView{4: {State: "failed", Message: b.Message}, 5: {State: "complete"}, 6: {State: "prepared"}}
 	s.confirmProductionAbort(v, b)
 	tester := productionIterationTester(s, 960, false)
@@ -189,7 +189,7 @@ func TestProductionAbortUsesConfirmedPayloadAndStopsAfterSuccess(t *testing.T) {
 	if v.Busy || s.productionBatch(v).Intent != nil || len(v.Steps) != 0 || !v.PreparationInvalid || v.BuildChecked || v.Branch != branch || len(backend.calls) != 0 {
 		t.Fatalf("abort left stale feedback or continued another operation: %+v", v)
 	}
-	if s.notes[0] != "unsaved draft" || s.lastMessage != b.Message {
+	if s.taskUnit.state.notes[0] != "unsaved draft" || s.lastMessage != b.Message {
 		t.Fatal("abort lost draft or completion toast")
 	}
 	tester.Frame()
@@ -202,7 +202,7 @@ func TestProductionAbortRecoveryDoesNotOfferResume(t *testing.T) {
 	s, v, b := productionFixture(t)
 	b = productionConflictBatch(b, "feature")
 	b.Phase, b.Message = "ABORTING", "合并已撤回，保存结果失败；请重试撤回以完成核对"
-	s.production.batches[0] = b
+	s.releaseUnit.state.production.batches[0] = b
 	s.win = &mygo.Window{}
 	tester := productionIterationTester(s, 960, false)
 	if !tester.HasText(b.Message) || !tester.HasText("撤回合并") {
@@ -229,7 +229,7 @@ func TestProductionAbortLateResultCannotClearANewerConflict(t *testing.T) {
 		t.Run(change, func(t *testing.T) {
 			s, v, b, backend, window := productionRequestFixture(t)
 			b = productionConflictBatch(b, "feature")
-			s.production.batches[0] = b
+			s.releaseUnit.state.production.batches[0] = b
 			merge := *b.Intent.Merge
 			s.productionRequestFor(v, application.Action{Kind: "production.abort-merge", Payload: map[string]any{"batchId": b.ID, "target": b.Target, "merge": merge, "confirmed": true}}, "")
 			productionTestCall(t, backend)
@@ -243,12 +243,12 @@ func TestProductionAbortLateResultCannotClearANewerConflict(t *testing.T) {
 			case "home":
 				s.snapshot.Home = "different-home"
 			case "config":
-				s.configJSON = `{"tagEnabled":false}`
+				s.settingsUnit.state.configJSON = `{"tagEnabled":false}`
 			case "new-merge", "late-error":
 				freshIntent, freshMerge := *b.Intent, merge
 				freshMerge.ID = "newer-merge"
 				freshIntent.Merge = &freshMerge
-				s.production.batches[0].Intent = &freshIntent
+				s.releaseUnit.state.production.batches[0].Intent = &freshIntent
 			}
 			completed := b
 			completed.Intent, completed.Phase, completed.Message = nil, "READY", "本次合并已撤回"
@@ -258,7 +258,7 @@ func TestProductionAbortLateResultCannotClearANewerConflict(t *testing.T) {
 				backend.replies <- productionTestAnswer{result: application.ActionResult{Message: completed.Message, Data: production.Report{Batch: &completed}}}
 			}
 			productionTestUpdate(t, window)
-			if s.production.batches[0].Intent == nil || s.lastMessage == completed.Message || v.Error == "obsolete abort failure" || len(backend.calls) != 0 {
+			if s.releaseUnit.state.production.batches[0].Intent == nil || s.lastMessage == completed.Message || v.Error == "obsolete abort failure" || len(backend.calls) != 0 {
 				t.Fatal("late abort rewrote current state or continued work")
 			}
 		})

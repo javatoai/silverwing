@@ -26,13 +26,14 @@ type Git interface {
 }
 
 type Service struct {
-	Paths  storage.Paths
-	Config *storage.ConfigStore
-	Git    Git
-	Genbu  Genbu
-	Runner Runner
-	Store  Store
-	locks  *workspace.OperationLocks
+	Paths        storage.Paths
+	Config       *storage.ConfigStore
+	Git          Git
+	Genbu        Genbu
+	Runner       Runner
+	Store        Store
+	DiffSessions *workspace.WorkspaceGitDiffSessionManager
+	locks        *workspace.OperationLocks
 }
 
 func New(paths storage.Paths, config *storage.ConfigStore, git Git, runner Runner) *Service {

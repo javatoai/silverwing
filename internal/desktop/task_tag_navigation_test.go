@@ -10,7 +10,9 @@ func TestTaskTagNavigationPlacement(t *testing.T) {
 		`{"tagEnabled":true,"groups":[{"tagEnabled":true}]}`,
 		`{"tagEnabled":false,"groups":[{"tagEnabled":false}]}`,
 	} {
-		s := &app{configJSON: config}
+		s := &app{
+			settingsUnit: settingsController{state: settingsState{configJSON: config}},
+		}
 		for _, item := range s.sidebarNavigationItems() {
 			if item.page == "tags" {
 				t.Fatal("Tag remains in the sidebar")

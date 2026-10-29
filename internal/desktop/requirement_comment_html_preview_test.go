@@ -17,7 +17,7 @@ func TestRequirementCommentHTMLProjectionKeepsVisibleTextFindAndCopy(t *testing.
 	const imagePath = "synthetic-local-comment-image.png"
 	appState := &app{page: "requirements"}
 	reader := appState.requirementReader("task", "https://project.feishu.cn/test/story/detail/123")
-	t.Cleanup(appState.closeRequirementReaders)
+	t.Cleanup(appState.requirementUnit.closeRequirementReaders)
 	appState.updateRequirementReaderBody(reader, application.RequirementContent{Body: "需求正文 needle"})
 	comments := []domain.RequirementComment{
 		{ID: "html", AuthorName: "评论作者", Content: source},

@@ -1,12 +1,9 @@
 package desktop
 
 import (
-	"path/filepath"
-	"strings"
-
 	"github.com/egoist/mygo/ui"
 	codeeditor "github.com/egoist/mygo/ui/editor"
-	"silverwing-go/internal/workspace"
+	"silverwing-go/internal/filelanguage"
 )
 
 const textEditorFontSize float32 = 13
@@ -56,18 +53,7 @@ func textEditorBackgroundLanguage(language *codeeditor.Language) *codeeditor.Lan
 // textEditorLanguage keeps ordinary files and Git previews on the same language
 // mapping. Unknown extensions deliberately have no highlighter.
 func textEditorLanguage(filename string) *codeeditor.Language {
-	var language workspace.WorkspaceFileLanguage
-	switch strings.ToLower(filepath.Ext(filename)) {
-	case ".gradle":
-		language = workspace.FileLanguageGradle
-	case ".properties":
-		language = workspace.FileLanguageProperties
-	case ".ps1", ".psm1", ".psd1":
-		language = workspace.FileLanguagePowerShell
-	case ".bat", ".cmd":
-		language = workspace.FileLanguageBatch
-	}
-	return workspaceFilePreviewLanguage(filename, language)
+	return workspaceFilePreviewLanguage(filename, filelanguage.SourceEditorOverride(filename))
 }
 
 // textEditorTheme borrows Mayoi's neutral reading surface and syntax colors.

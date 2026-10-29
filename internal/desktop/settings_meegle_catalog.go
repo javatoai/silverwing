@@ -64,11 +64,11 @@ func (s *app) requestMeegleProjectCatalog(force bool) {
 }
 
 func (s *app) meegleCatalogActionRelevant(action application.Action) bool {
-	if action.Kind != "meegle.projects" || s.meegleProjectCatalog == nil || payloadString(action.Payload, "catalogGeneration") != fmt.Sprint(s.meegleProjectCatalog.generation) {
+	if action.Kind != "meegle.projects" || s.settingsUnit.state.meegleProjectCatalog == nil || payloadString(action.Payload, "catalogGeneration") != fmt.Sprint(s.settingsUnit.state.meegleProjectCatalog.generation) {
 		return false
 	}
 	identity, authenticated := s.currentMeegleProjectCatalogIdentity()
-	return authenticated && s.meegleProjectCatalog.identity == identity
+	return authenticated && s.settingsUnit.state.meegleProjectCatalog.identity == identity
 }
 
 func (s *app) applyMeegleProjectCatalogResult(action application.Action, result application.ActionResult) {
@@ -86,7 +86,7 @@ func (s *app) finishMeegleProjectCatalog(action application.Action, result appli
 	if !s.meegleCatalogActionRelevant(action) {
 		return true
 	}
-	state := s.meegleProjectCatalog
+	state := s.settingsUnit.state.meegleProjectCatalog
 	state.loading = false
 	if failure != nil {
 		var changed *application.RequirementIdentityChangedError
@@ -122,7 +122,7 @@ func (s *app) clearMeegleIdentityBoundViews() {
 	s.invalidateTaskRequirementIdentityMetadata()
 	s.invalidateRequirementListIdentity()
 	s.clearMeegleProjectCatalogCache()
-	s.closeRequirementReaders()
-	s.requirementReaderGeneration++
-	s.requirementsRequested, s.requirementsLoaded = false, false
+	s.requirementUnit.closeRequirementReaders()
+	s.requirementUnit.state.requirementReaderGeneration++
+	s.requirementUnit.state.requirementsRequested, s.requirementUnit.state.requirementsLoaded = false, false
 }

@@ -64,7 +64,7 @@ func TestProductionBaselineDiffReflectsIncomingFileChanges(t *testing.T) {
 			if err := tester.Click(want); err != nil {
 				t.Fatal(err)
 			}
-			d := s.production.diffDialog
+			d := s.releaseUnit.state.production.diffDialog
 			if (d != nil) != enabled {
 				t.Fatal("unknown comparison opened, or known read-only comparison was lost")
 			}
@@ -133,7 +133,7 @@ func TestProductionBaselineFeedbackRetainsActivityAndFailures(t *testing.T) {
 
 func TestProductionBaselineDiffLabelUpdatesWithoutReplacingTarget(t *testing.T) {
 	s, v, _ := productionFixture(t)
-	s.notes[0] = "unsaved draft"
+	s.taskUnit.state.notes[0] = "unsaved draft"
 	tester := productionIterationTester(s, 960, false)
 	if _, ok := tester.Find("无差异"); !ok {
 		t.Fatal("initial incoming comparison should be empty")
@@ -145,8 +145,8 @@ func TestProductionBaselineDiffLabelUpdatesWithoutReplacingTarget(t *testing.T) 
 	if err := tester.Click("查看差异"); err != nil {
 		t.Fatal(err)
 	}
-	d := s.production.diffDialog
-	if d == nil || d.SourceSHA != strings.Repeat("f", 40) || d.TargetSHA != strings.Repeat("a", 40) || s.notes[0] != "unsaved draft" || v.Busy {
+	d := s.releaseUnit.state.production.diffDialog
+	if d == nil || d.SourceSHA != strings.Repeat("f", 40) || d.TargetSHA != strings.Repeat("a", 40) || s.taskUnit.state.notes[0] != "unsaved draft" || v.Busy {
 		t.Fatal("updated comparison used an old target or disturbed the draft")
 	}
 	if !tester.HasText("源："+d.SourceRef) || !tester.HasText("目标："+d.TargetRef) || tester.HasText(d.SourceSHA) || tester.HasText(d.TargetSHA) {

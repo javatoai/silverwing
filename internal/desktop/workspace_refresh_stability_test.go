@@ -19,9 +19,11 @@ import (
 func TestWorkspaceRefreshRetainsStatusControlsWhileLoading(t *testing.T) {
 	item := application.Workspace{ID: "stable", Path: "C:/synthetic/stable", Branch: "feature/stable"}
 	branch := "feature/stable"
-	s := &app{workspaceGit: &workspaceGitState{health: map[string]domain.WorkspaceGitHealth{workspaceHealthPathKey(item.Path): {
-		State: domain.WorkspaceGitReady, ActualBranch: &branch, DirtyFileCount: 3, PushState: domain.LocalPushPushed,
-	}}}}
+	s := &app{
+		workspaceUnit: workspaceController{state: workspaceState{workspaceGit: &workspaceGitState{health: map[string]domain.WorkspaceGitHealth{workspaceHealthPathKey(item.Path): {
+			State: domain.WorkspaceGitReady, ActualBranch: &branch, DirtyFileCount: 3, PushState: domain.LocalPushPushed,
+		}}}}},
+	}
 	tester := ui.NewTester(func(c *ui.Context) {
 		ui.Column(c).Fill().Children(func() { s.workspaceCard(c, setTheme(c, false), task{}, item, 0) })
 	}, 1100, 400)
@@ -29,7 +31,7 @@ func TestWorkspaceRefreshRetainsStatusControlsWhileLoading(t *testing.T) {
 	if !ok {
 		t.Fatal("missing initial status")
 	}
-	s.workspaceGit.loading = true
+	s.workspaceUnit.state.workspaceGit.loading = true
 	tester.Frame()
 	after, ok := tester.Find("本地未提交 3")
 	if !ok || before != after || tester.HasText("检查中") {
@@ -39,7 +41,7 @@ func TestWorkspaceRefreshRetainsStatusControlsWhileLoading(t *testing.T) {
 
 func workspaceRefreshFixture() (*app, map[string]domain.WorkspaceGitHealth) {
 	s := newApp(nil, Options{CapturePath: "isolated-workspace-refresh"})
-	s.loading, s.page, s.configJSON = false, "tasks", `{}`
+	s.loading, s.page, s.settingsUnit.state.configJSON = false, "tasks", `{}`
 	s.snapshot.Home = "C:/synthetic/refresh-home"
 	t := task{id: "refresh-task", title: "示例任务", path: "C:/synthetic/refresh-task", createdAt: "created", groupID: "group"}
 	statuses := make(map[string]domain.WorkspaceGitHealth)
@@ -50,7 +52,7 @@ func workspaceRefreshFixture() (*app, map[string]domain.WorkspaceGitHealth) {
 		t.workspaces = append(t.workspaces, w)
 		statuses[w.Path] = domain.WorkspaceGitHealth{State: domain.WorkspaceGitReady, ActualBranch: &branch, DirtyFileCount: i + 3, PushState: domain.LocalPushPushed}
 	}
-	s.tasks = []task{t}
+	s.taskUnit.state.tasks = []task{t}
 	return s, statuses
 }
 
@@ -59,9 +61,9 @@ func workspaceRefreshTester(s *app, width int, dark bool) *ui.Tester {
 		p := setTheme(c, dark)
 		ui.Column(c).Fill().Background(p.bg).Gap(10).Children(func() {
 			ui.Row(c).FillWidth().Height(34).Children(func() { workspaceGitRefreshButton(c, p, s.workspaceGitStatusBusy()) })
-			ui.Scroll(c.Key("refresh-cards")).Grow(1).MinHeight(0).TrackScroll(s.taskWorkspaceDetailScroll(s.currentTask())).Children(func() {
+			ui.Scroll(c.Key("refresh-cards")).Grow(1).MinHeight(0).TrackScroll(s.taskWorkspaceDetailScroll(s.taskUnit.currentTask())).Children(func() {
 				ui.Column(c).FillWidth().Gap(14).Children(func() {
-					t := s.currentTask()
+					t := s.taskUnit.currentTask()
 					for i, w := range t.workspaces {
 						ui.Column(c).FillWidth().Label("卡片 " + w.ID).Children(func() { s.workspaceCard(c, p, t, w, i) })
 					}
@@ -93,7 +95,7 @@ func TestWorkspaceRefreshLayoutAndPixelsStayStable(t *testing.T) {
 		for _, dark := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%d-dark-%t", width, dark), func(t *testing.T) {
 				s, statuses := workspaceRefreshFixture()
-				s.commitWorkspaceGitStatuses(s.currentTask(), statuses)
+				s.commitWorkspaceGitStatuses(s.taskUnit.currentTask(), statuses)
 				tester := workspaceRefreshTester(s, width, dark)
 				before := image.NewRGBA(tester.Image().Bounds())
 				draw.Draw(before, before.Bounds(), tester.Image(), image.Point{}, draw.Src)
@@ -107,7 +109,7 @@ func TestWorkspaceRefreshLayoutAndPixelsStayStable(t *testing.T) {
 				}
 				prefix := fmt.Sprintf("refresh-%d-dark-%t", width, dark)
 				captureWorkspaceRefresh(t, tester, prefix+"-before")
-				s.workspaceGit.loading = true
+				s.workspaceUnit.state.workspaceGit.loading = true
 				tester.Frame()
 				for text, rect := range rects {
 					if got, ok := tester.Find(text); !ok || got != rect {
@@ -126,8 +128,8 @@ func TestWorkspaceRefreshLayoutAndPixelsStayStable(t *testing.T) {
 					}
 				}
 				captureWorkspaceRefresh(t, tester, prefix+"-loading")
-				s.commitWorkspaceGitStatuses(s.currentTask(), statuses)
-				s.workspaceGit.loading = false
+				s.commitWorkspaceGitStatuses(s.taskUnit.currentTask(), statuses)
+				s.workspaceUnit.state.workspaceGit.loading = false
 				tester.Frame()
 				for text, rect := range rects {
 					if got, ok := tester.Find(text); !ok || got != rect {
@@ -142,14 +144,14 @@ func TestWorkspaceRefreshLayoutAndPixelsStayStable(t *testing.T) {
 
 func TestWorkspaceRefreshFailurePreservesDisplayButUpdatesRawHealth(t *testing.T) {
 	s, statuses := workspaceRefreshFixture()
-	s.commitWorkspaceGitStatuses(s.currentTask(), statuses)
-	w := s.currentTask().workspaces[0]
+	s.commitWorkspaceGitStatuses(s.taskUnit.currentTask(), statuses)
+	w := s.taskUnit.currentTask().workspaces[0]
 	before := workspaceRefreshTester(s, 960, false)
 	rect, _ := before.Find("本地未提交 3")
-	s.failWorkspaceGitStatus(s.currentTask(), errors.New("synthetic read failure"))
+	s.failWorkspaceGitStatus(s.taskUnit.currentTask(), errors.New("synthetic read failure"))
 	shown, ok := s.workspaceDisplayHealth(w)
 	raw, rawOK := s.workspaceHealth(w.Path)
-	if !ok || shown.DirtyFileCount != 3 || !rawOK || raw.State != domain.WorkspaceGitFailed || !strings.Contains(s.workspaceGit.failure, "当前显示上次结果") {
+	if !ok || shown.DirtyFileCount != 3 || !rawOK || raw.State != domain.WorkspaceGitFailed || !strings.Contains(s.workspaceUnit.state.workspaceGit.failure, "当前显示上次结果") {
 		t.Fatalf("failed read corrupted display or hid operational failure: shown=%+v raw=%+v", shown, raw)
 	}
 	before.Frame()
@@ -157,19 +159,19 @@ func TestWorkspaceRefreshFailurePreservesDisplayButUpdatesRawHealth(t *testing.T
 	if got, ok := before.Find("本地未提交 3"); !ok || got != rect {
 		t.Fatal("failure reflowed old result")
 	}
-	if s.workspaceNeedsRepair(s.currentTask(), w) {
+	if s.workspaceNeedsRepair(s.taskUnit.currentTask(), w) {
 		t.Fatal("transient refresh failure manufactured a repair action")
 	}
-	s.commitWorkspaceGitStatuses(s.currentTask(), statuses)
-	if s.workspaceGit.failure != "" {
+	s.commitWorkspaceGitStatuses(s.taskUnit.currentTask(), statuses)
+	if s.workspaceUnit.state.workspaceGit.failure != "" {
 		t.Fatal("successful read retained failure notice")
 	}
 }
 
 func TestWorkspaceRefreshColdReadAndFailureKeepUnknownSlots(t *testing.T) {
 	s, _ := workspaceRefreshFixture()
-	s.bindWorkspaceGitObservation(s.currentTask(), s.workspaceGitStatusScope())
-	s.workspaceGit.loading = true
+	s.bindWorkspaceGitObservation(s.taskUnit.currentTask(), s.workspaceGitStatusScope())
+	s.workspaceUnit.state.workspaceGit.loading = true
 	tester := workspaceRefreshTester(s, 360, true)
 	for _, text := range []string{"本地未提交", "提交历史", "推送状态未知"} {
 		if !tester.HasText(text) {
@@ -181,8 +183,8 @@ func TestWorkspaceRefreshColdReadAndFailureKeepUnknownSlots(t *testing.T) {
 	}
 	captureWorkspaceRefresh(t, tester, "refresh-360-dark-true-cold-loading")
 	rect, _ := tester.Find("本地未提交")
-	s.failWorkspaceGitStatus(s.currentTask(), errors.New("cold failure"))
-	s.workspaceGit.loading = false
+	s.failWorkspaceGitStatus(s.taskUnit.currentTask(), errors.New("cold failure"))
+	s.workspaceUnit.state.workspaceGit.loading = false
 	tester.Frame()
 	if got, ok := tester.Find("本地未提交"); !ok || got != rect {
 		t.Fatal("cold failure replaced placeholder layout")
@@ -192,11 +194,11 @@ func TestWorkspaceRefreshColdReadAndFailureKeepUnknownSlots(t *testing.T) {
 
 func TestWorkspaceRefreshPartialFailureUpdatesTogether(t *testing.T) {
 	s, statuses := workspaceRefreshFixture()
-	s.commitWorkspaceGitStatuses(s.currentTask(), statuses)
-	w0, w1 := s.currentTask().workspaces[0], s.currentTask().workspaces[1]
+	s.commitWorkspaceGitStatuses(s.taskUnit.currentTask(), statuses)
+	w0, w1 := s.taskUnit.currentTask().workspaces[0], s.taskUnit.currentTask().workspaces[1]
 	statuses[w0.Path] = domain.WorkspaceGitHealth{State: domain.WorkspaceGitReady, DirtyFileCount: 18, PushState: domain.LocalPushPushed}
 	delete(statuses, w1.Path)
-	s.commitWorkspaceGitStatuses(s.currentTask(), statuses)
+	s.commitWorkspaceGitStatuses(s.taskUnit.currentTask(), statuses)
 	good, _ := s.workspaceDisplayHealth(w0)
 	retained, _ := s.workspaceDisplayHealth(w1)
 	raw, _ := s.workspaceHealth(w1.Path)
@@ -209,28 +211,28 @@ func TestWorkspaceRefreshDisplayRejectsIdentityAndContextChanges(t *testing.T) {
 	for _, change := range []string{"task", "created", "path", "branch", "module", "home", "account", "root", "git"} {
 		t.Run(change, func(t *testing.T) {
 			s, statuses := workspaceRefreshFixture()
-			s.commitWorkspaceGitStatuses(s.currentTask(), statuses)
+			s.commitWorkspaceGitStatuses(s.taskUnit.currentTask(), statuses)
 			switch change {
 			case "task":
-				s.tasks[0].id = "replacement"
+				s.taskUnit.state.tasks[0].id = "replacement"
 			case "created":
-				s.tasks[0].createdAt = "recreated"
+				s.taskUnit.state.tasks[0].createdAt = "recreated"
 			case "path":
-				s.tasks[0].workspaces[0].Path = "C:/synthetic/replaced"
+				s.taskUnit.state.tasks[0].workspaces[0].Path = "C:/synthetic/replaced"
 			case "branch":
-				s.tasks[0].workspaces[0].Branch = "feature/replaced"
+				s.taskUnit.state.tasks[0].workspaces[0].Branch = "feature/replaced"
 			case "module":
-				s.tasks[0].workspaces[0].ModuleID = "replaced"
+				s.taskUnit.state.tasks[0].workspaces[0].ModuleID = "replaced"
 			case "home":
 				s.snapshot.Home = "C:/synthetic/other-home"
 			case "account":
-				s.settingsCLIStatus = map[string]map[string]any{"meegle": {"accountId": "other"}}
+				s.settingsUnit.state.settingsCLIStatus = map[string]map[string]any{"meegle": {"accountId": "other"}}
 			case "root":
-				s.configJSON = `{"taskRoot":"C:/other-root"}`
+				s.settingsUnit.state.configJSON = `{"taskRoot":"C:/other-root"}`
 			case "git":
-				s.configJSON = `{"gitExecutablePath":"C:/other-git.exe"}`
+				s.settingsUnit.state.configJSON = `{"gitExecutablePath":"C:/other-git.exe"}`
 			}
-			w := s.currentTask().workspaces[0]
+			w := s.taskUnit.currentTask().workspaces[0]
 			if _, ok := s.workspaceDisplayHealth(w); ok {
 				t.Fatal("foreign cached display accepted")
 			}
@@ -243,10 +245,10 @@ func TestWorkspaceRefreshDisplayRejectsIdentityAndContextChanges(t *testing.T) {
 
 func TestWorkspaceRefreshRetainsFocusScrollAndDraftOnResultChange(t *testing.T) {
 	s, statuses := workspaceRefreshFixture()
-	s.commitWorkspaceGitStatuses(s.currentTask(), statuses)
-	s.notes[0] = "unsaved note"
-	s.documentContent = "unsaved document"
-	s.documentDirty = true
+	s.commitWorkspaceGitStatuses(s.taskUnit.currentTask(), statuses)
+	s.taskUnit.state.notes[0] = "unsaved note"
+	s.materialsUnit.state.documentContent = "unsaved document"
+	s.materialsUnit.state.documentDirty = true
 	tester := workspaceRefreshTester(s, 960, false)
 	for i := 0; i < 20 && !tester.Focused("本地未提交 3"); i++ {
 		tester.Key(0, ui.KeyTab)
@@ -254,24 +256,24 @@ func TestWorkspaceRefreshRetainsFocusScrollAndDraftOnResultChange(t *testing.T) 
 	if !tester.Focused("本地未提交 3") {
 		t.Fatal("could not focus stable count control")
 	}
-	scroll := s.taskWorkspaceDetailScroll(s.currentTask())
+	scroll := s.taskWorkspaceDetailScroll(s.taskUnit.currentTask())
 	scroll.Y = 30
 	tester.Frame()
 	oldY := scroll.Y
-	s.workspaceGit.loading = true
+	s.workspaceUnit.state.workspaceGit.loading = true
 	tester.Frame()
 	if !tester.Focused("本地未提交 3") || scroll.Y != oldY {
 		t.Fatal("loading lost focus or reading position")
 	}
-	w := s.currentTask().workspaces[0]
+	w := s.taskUnit.currentTask().workspaces[0]
 	health := statuses[w.Path]
 	branch := "feature/new-actual"
 	health.DirtyFileCount, health.ActualBranch = 18, &branch
 	statuses[w.Path] = health
-	s.commitWorkspaceGitStatuses(s.currentTask(), statuses)
-	s.workspaceGit.loading = false
+	s.commitWorkspaceGitStatuses(s.taskUnit.currentTask(), statuses)
+	s.workspaceUnit.state.workspaceGit.loading = false
 	tester.Frame()
-	if !tester.Focused("本地未提交 18") || scroll.Y != oldY || s.notes[0] != "unsaved note" || s.documentContent != "unsaved document" || !s.documentDirty {
+	if !tester.Focused("本地未提交 18") || scroll.Y != oldY || s.taskUnit.state.notes[0] != "unsaved note" || s.materialsUnit.state.documentContent != "unsaved document" || !s.materialsUnit.state.documentDirty {
 		t.Fatal("result update lost focus, scroll or draft")
 	}
 	if !tester.HasText(branch) {
@@ -281,7 +283,7 @@ func TestWorkspaceRefreshRetainsFocusScrollAndDraftOnResultChange(t *testing.T) 
 
 func TestWorkspaceRefreshQueuedReadsKeepLastCompletedDisplay(t *testing.T) {
 	s, backend, tester := taskSelectionGitFixture(t)
-	s.commitWorkspaceGitStatuses(s.currentTask(), taskSelectionGitResult(s, 3).Data.(map[string]domain.WorkspaceGitHealth))
+	s.commitWorkspaceGitStatuses(s.taskUnit.currentTask(), taskSelectionGitResult(s, 3).Data.(map[string]domain.WorkspaceGitHealth))
 	taskSelectionGitClick(t, tester, "task-a")
 	first := taskSelectionGitWaitRead(t, backend)
 	for i := 0; i < 10; i++ {
@@ -289,7 +291,7 @@ func TestWorkspaceRefreshQueuedReadsKeepLastCompletedDisplay(t *testing.T) {
 	}
 	taskSelectionGitFinish(s, first, taskSelectionGitReply{result: taskSelectionGitResult(s, 99)})
 	second := taskSelectionGitWaitRead(t, backend)
-	w := s.currentTask().workspaces[0]
+	w := s.taskUnit.currentTask().workspaces[0]
 	if shown, ok := s.workspaceDisplayHealth(w); !ok || shown.DirtyFileCount != 3 || !s.workspaceGitStatusBusy() {
 		t.Fatal("superseded result flashed or old display disappeared")
 	}
@@ -301,20 +303,20 @@ func TestWorkspaceRefreshQueuedReadsKeepLastCompletedDisplay(t *testing.T) {
 
 func TestWorkspaceRefreshFailureNotificationIsScopedAndClears(t *testing.T) {
 	s, statuses := workspaceRefreshFixture()
-	s.commitWorkspaceGitStatuses(s.currentTask(), statuses)
-	s.failWorkspaceGitStatus(s.currentTask(), errors.New("synthetic toast failure"))
+	s.commitWorkspaceGitStatuses(s.taskUnit.currentTask(), statuses)
+	s.failWorkspaceGitStatus(s.taskUnit.currentTask(), errors.New("synthetic toast failure"))
 	tester := ui.NewTester(func(c *ui.Context) { setTheme(c, false); s.renderOperationNotifications(c) }, 640, 400)
 	if !strings.Contains(s.operationNotifications.shown["workspace-git-refresh"], "当前显示上次结果") {
 		t.Fatal("refresh failure did not use existing notification channel")
 	}
-	s.commitWorkspaceGitStatuses(s.currentTask(), statuses)
+	s.commitWorkspaceGitStatuses(s.taskUnit.currentTask(), statuses)
 	tester.Frame()
 	if s.operationNotifications.shown["workspace-git-refresh"] != "" {
 		t.Fatal("successful refresh retained failure notification")
 	}
-	s.failWorkspaceGitStatus(s.currentTask(), errors.New("another failure"))
+	s.failWorkspaceGitStatus(s.taskUnit.currentTask(), errors.New("another failure"))
 	tester.Frame()
-	s.settingsCLIStatus = map[string]map[string]any{"meegle": {"accountId": "different"}}
+	s.settingsUnit.state.settingsCLIStatus = map[string]map[string]any{"meegle": {"accountId": "different"}}
 	tester.Frame()
 	if s.operationNotifications.shown["workspace-git-refresh"] != "" {
 		t.Fatal("previous account's failure leaked into new account")

@@ -42,9 +42,10 @@ type codeState struct {
 // codeChunk is chunkLines lines of a code block, laid out as one text, so
 // that a block growing as it streams lays out only its last chunk anew.
 type codeChunk struct {
-	spans []ui.Span
-	n     int // lines
-	ok    bool
+	spans  []ui.Span
+	n      int // lines
+	offset int // UTF-8 byte offset in the block's LF-joined text
+	ok     bool
 }
 
 const chunkLines = 32
@@ -174,11 +175,7 @@ func (b *CodeBlockView) Body(c *ui.Context) ui.Element {
 		col.Children(func() {
 			for k := range cs.chunks {
 				ch := &cs.chunks[k]
-				offset := 0
-				for line := 0; line < k*chunkLines && line < len(cs.lines); line++ {
-					offset += len(cs.lines[line]) + 1
-				}
-				el := st.text(c, b.Index, offset, ch.spans)
+				el := st.text(c, b.Index, ch.offset, ch.spans)
 				if !st.o.WrapCode {
 					el.NoWrap()
 				}
@@ -228,6 +225,7 @@ func (st *viewState) highlight(cs *codeState, i int) {
 		cs.chunks = append(cs.chunks, codeChunk{})
 	}
 	cs.chunks = cs.chunks[:chunks]
+	cs.updateChunkOffsets()
 	for k := k0 / chunkLines; k < chunks; k++ {
 		cs.chunks[k].ok = false
 	}
@@ -268,5 +266,19 @@ func (st *viewState) highlight(cs *codeState, i int) {
 		}
 		ch.n = last - first
 		ch.ok = true
+	}
+}
+
+// Each line contributes once when the code changes. Stable builds reuse these
+// chunk starts together with the highlighted spans. Offsets include the LF
+// between chunks even though it is not part of either chunk's spans.
+func (cs *codeState) updateChunkOffsets() {
+	line, offset := 0, 0
+	for k := range cs.chunks {
+		cs.chunks[k].offset = offset
+		end := min((k+1)*chunkLines, len(cs.lines))
+		for ; line < end; line++ {
+			offset += len(cs.lines[line]) + 1
+		}
 	}
 }

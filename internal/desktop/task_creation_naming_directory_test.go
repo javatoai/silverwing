@@ -26,7 +26,7 @@ func (b *singleNamingBackend) Dispatch(_ context.Context, action application.Act
 
 func TestTaskNamingCollisionReturnsFirstSuggestionWithoutRetry(t *testing.T) {
 	s, _ := taskCreationCompactFixture(t, 960, false, 1)
-	form := s.taskCreation
+	form := s.taskUnit.state.taskCreation
 	form.aiEligible = true
 	root := *form.config.TaskRoot
 	if err := os.MkdirAll(filepath.Join(root, "已存在名"), 0700); err != nil {
@@ -57,7 +57,7 @@ func TestTaskDirectoryCheckRejectsStaleResultsAndPreservesEdits(t *testing.T) {
 	for _, change := range []string{"name", "root", "home", "closed"} {
 		t.Run(change, func(t *testing.T) {
 			s, _ := taskCreationCompactFixture(t, 960, false, 1)
-			form := s.taskCreation
+			form := s.taskUnit.state.taskCreation
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			request := &taskCreationDirectoryCheck{form: form, signature: s.taskCreationDirectorySignature(), ctx: ctx, cancel: cancel, resume: true}
@@ -85,7 +85,7 @@ func TestTaskDirectoryCollisionFeedbackAndCreatedWarning(t *testing.T) {
 	for _, dark := range []bool{false, true} {
 		t.Run(map[bool]string{true: "dark", false: "light"}[dark], func(t *testing.T) {
 			s, tester := taskCreationCompactFixture(t, 960, dark, 1)
-			s.taskCreation.directoryCheck = taskCreationDirectoryState{signature: s.taskCreationDirectorySignature(), message: taskCreationDirectoryOccupied}
+			s.taskUnit.state.taskCreation.directoryCheck = taskCreationDirectoryState{signature: s.taskCreationDirectorySignature(), message: taskCreationDirectoryOccupied}
 			tester.Frame()
 			if !tester.HasText(taskCreationDirectoryOccupied) {
 				t.Fatal("collision warning missing")
@@ -95,9 +95,9 @@ func TestTaskDirectoryCollisionFeedbackAndCreatedWarning(t *testing.T) {
 				t.Fatal(message)
 			}
 			var toasts []ui.Toast
-			action := application.Action{Kind: "task.create", Payload: map[string]any{"taskCreateToken": s.taskCreation.token}}
+			action := application.Action{Kind: "task.create", Payload: map[string]any{"taskCreateToken": s.taskUnit.state.taskCreation.token}}
 			s.taskCreationActionResult(action, application.ActionResult{Message: "任务已创建", Text: "工作区工具未全部打开：fixture"})
-			if s.dialogOpen || s.taskCreation != nil || s.lastError != "" || s.taskCreationWarning == "" {
+			if s.dialogOpen || s.taskUnit.state.taskCreation != nil || s.lastError != "" || s.taskUnit.state.taskCreationWarning == "" {
 				t.Fatal("committed create left a retryable creation form")
 			}
 			ui.NewTester(func(c *ui.Context) {
@@ -106,7 +106,7 @@ func TestTaskDirectoryCollisionFeedbackAndCreatedWarning(t *testing.T) {
 			}, 960, 800)
 			found := false
 			for _, toast := range toasts {
-				if toast.Type == "warning" && toast.Title == s.taskCreationWarning {
+				if toast.Type == "warning" && toast.Title == s.taskUnit.state.taskCreationWarning {
 					if toast.ContentMaxHeight != 360 {
 						t.Fatal("long follow-up warnings must wrap and scroll")
 					}

@@ -23,11 +23,11 @@ func (s *app) observeTaskOpenTools() {
 }
 
 func (s *app) observeTaskOpenToolsAt(now time.Time) {
-	state := s.taskOpenTools
-	if state == nil || state.home != s.snapshot.Home || state.config != s.configJSON {
-		s.stopTaskOpenTools()
-		state = &taskOpenToolsState{home: s.snapshot.Home, config: s.configJSON}
-		s.taskOpenTools = state
+	state := s.taskUnit.state.taskOpenTools
+	if state == nil || state.home != s.snapshot.Home || state.config != s.settingsUnit.state.configJSON {
+		s.taskUnit.stopTaskOpenTools()
+		state = &taskOpenToolsState{home: s.snapshot.Home, config: s.settingsUnit.state.configJSON}
+		s.taskUnit.state.taskOpenTools = state
 	}
 	// The protocol-based Codex launcher needs no executable discovery. Avoid
 	// probing unrelated tools when Cursor's menu entry is not enabled. Successful
@@ -36,7 +36,7 @@ func (s *app) observeTaskOpenToolsAt(now time.Time) {
 		return
 	}
 	window := s.win
-	update := taskContextUpdater(window, s.taskContextUpdate)
+	update := taskContextUpdater(window, s.taskUnit.state.taskContextUpdate)
 	if s.backend == nil || update == nil || window != nil && window.IsDestroyed() {
 		return
 	}
@@ -52,7 +52,7 @@ func (s *app) observeTaskOpenToolsAt(now time.Time) {
 		options, decodeErr := decodeData[taskCreationWorkspaceToolOption](result.Data)
 		success := ctx.Err() == nil && err == nil && decodeErr == nil && options != nil
 		update(func() {
-			if s.taskOpenTools != state || state.home != s.snapshot.Home || state.config != s.configJSON {
+			if s.taskUnit.state.taskOpenTools != state || state.home != s.snapshot.Home || state.config != s.settingsUnit.state.configJSON {
 				return
 			}
 			state.cancel, state.running = nil, false
@@ -66,11 +66,11 @@ func (s *app) observeTaskOpenToolsAt(now time.Time) {
 	}()
 }
 
-func (s *app) stopTaskOpenTools() {
-	if state := s.taskOpenTools; state != nil && state.cancel != nil {
+func (s *taskController) stopTaskOpenTools() {
+	if state := s.state.taskOpenTools; state != nil && state.cancel != nil {
 		state.cancel()
 	}
-	s.taskOpenTools = nil
+	s.state.taskOpenTools = nil
 }
 
 func (s *app) taskOpenToolEnabled(id string) bool {
@@ -78,8 +78,8 @@ func (s *app) taskOpenToolEnabled(id string) bool {
 }
 
 func (s *app) taskOpenToolAvailable(id string) bool {
-	state := s.taskOpenTools
-	if state != nil && state.home == s.snapshot.Home && state.config == s.configJSON && state.loaded {
+	state := s.taskUnit.state.taskOpenTools
+	if state != nil && state.home == s.snapshot.Home && state.config == s.settingsUnit.state.configJSON && state.loaded {
 		for _, option := range state.options {
 			if option.ID == id {
 				return option.Available

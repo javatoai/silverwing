@@ -31,9 +31,9 @@ func settingsLogsClearFixture(t *testing.T) (*app, *settingsLogsClearBackend, ap
 	t.Helper()
 	backend := &settingsLogsClearBackend{actions: make(chan application.Action, 8)}
 	s := newApp(backend, Options{CapturePath: "isolated-test"})
-	s.page, s.settingsPage, s.settingsTab = "settings", "logs", "日志"
+	s.page, s.settingsUnit.state.settingsPage, s.settingsUnit.state.settingsTab = "settings", "logs", "日志"
 	s.snapshot.Home = t.TempDir()
-	s.settingsLogEntries = []map[string]any{{"timestamp": "2026-10-15 19:00:00", "event": "fixture.failure", "message": "Original fixture error"}}
+	s.settingsUnit.state.settingsLogEntries = []map[string]any{{"timestamp": "2026-10-15 19:00:00", "event": "fixture.failure", "message": "Original fixture error"}}
 	action := application.Action{Kind: "logs.clear", Payload: map[string]any{"expectedHome": s.snapshot.Home, "confirmed": true, "settingsLogsAction": true}}
 	return s, backend, action
 }
@@ -51,9 +51,9 @@ func settingsLogsWaitAction(t *testing.T, backend *settingsLogsClearBackend) app
 
 func TestSettingsLogsClearCancelBusyAndScope(t *testing.T) {
 	s, backend, action := settingsLogsClearFixture(t)
-	before := append([]map[string]any(nil), s.settingsLogEntries...)
+	before := append([]map[string]any(nil), s.settingsUnit.state.settingsLogEntries...)
 	s.confirmSettingsLogsClear(action, 1)
-	if !reflect.DeepEqual(before, s.settingsLogEntries) || s.busy {
+	if !reflect.DeepEqual(before, s.settingsUnit.state.settingsLogEntries) || s.busy {
 		t.Fatal("cancel changed log contents")
 	}
 	s.confirmSettingsLogsClear(action, 0)
@@ -71,7 +71,7 @@ func TestSettingsLogsClearCancelBusyAndScope(t *testing.T) {
 	}
 	s.busy = false
 	s.snapshot.Home = t.TempDir()
-	if !s.finishSettingsLogsAction(action, application.ActionResult{Data: platform.ApplicationLogClearResult{Changed: true, ClearedFiles: 2}}, nil) || !reflect.DeepEqual(before, s.settingsLogEntries) {
+	if !s.finishSettingsLogsAction(action, application.ActionResult{Data: platform.ApplicationLogClearResult{Changed: true, ClearedFiles: 2}}, nil) || !reflect.DeepEqual(before, s.settingsUnit.state.settingsLogEntries) {
 		t.Fatal("late clear changed another home")
 	}
 	s.confirmSettingsLogsClear(action, 0)
@@ -84,9 +84,9 @@ func TestSettingsLogsClearCancelBusyAndScope(t *testing.T) {
 
 func TestSettingsLogsClearRefreshesActualEntriesAndPartialFailure(t *testing.T) {
 	s, backend, action := settingsLogsClearFixture(t)
-	before := append([]map[string]any(nil), s.settingsLogEntries...)
+	before := append([]map[string]any(nil), s.settingsUnit.state.settingsLogEntries...)
 	s.finishSettingsLogsAction(action, application.ActionResult{}, errors.New("fixture permission failure"))
-	if !reflect.DeepEqual(before, s.settingsLogEntries) || s.lastError != "fixture permission failure" {
+	if !reflect.DeepEqual(before, s.settingsUnit.state.settingsLogEntries) || s.lastError != "fixture permission failure" {
 		t.Fatal("failed clear lost original content")
 	}
 	s.finishSettingsLogsAction(action, application.ActionResult{Data: platform.ApplicationLogClearResult{FailedFiles: 2, Error: "日志正被占用"}}, nil)
@@ -97,25 +97,25 @@ func TestSettingsLogsClearRefreshesActualEntriesAndPartialFailure(t *testing.T) 
 	}
 	s.finishSettingsLogsAction(action, application.ActionResult{Data: platform.ApplicationLogClearResult{Changed: true, ClearedFiles: 1, FailedFiles: 1, Error: "fixture sync failure"}}, nil)
 	refresh := settingsLogsWaitAction(t, backend)
-	if refresh.Kind != "logs.list" || !reflect.DeepEqual(before, s.settingsLogEntries) {
+	if refresh.Kind != "logs.list" || !reflect.DeepEqual(before, s.settingsUnit.state.settingsLogEntries) {
 		t.Fatal("clear response erased live contents instead of refreshing")
 	}
 	s.busy = false
 	newEntries := []map[string]any{{"event": "fresh", "message": "Written after clear"}}
 	s.finishSettingsLogsAction(refresh, application.ActionResult{Data: newEntries}, nil)
-	if len(s.settingsLogEntries) != 1 || mapString(s.settingsLogEntries[0], "event") != "fresh" || !strings.Contains(s.lastError, "fixture sync failure") {
+	if len(s.settingsUnit.state.settingsLogEntries) != 1 || mapString(s.settingsUnit.state.settingsLogEntries[0], "event") != "fresh" || !strings.Contains(s.lastError, "fixture sync failure") {
 		t.Fatal("fresh logs or partial failure was lost")
 	}
 	s.finishSettingsLogsAction(action, application.ActionResult{Data: platform.ApplicationLogClearResult{ClearedFiles: 0}}, nil)
 	refresh = settingsLogsWaitAction(t, backend)
 	s.busy = false
 	s.finishSettingsLogsAction(refresh, application.ActionResult{Data: []map[string]any{}}, nil)
-	if len(s.settingsLogEntries) != 0 || s.lastMessage != "应用日志已清空。" {
+	if len(s.settingsUnit.state.settingsLogEntries) != 0 || s.lastMessage != "应用日志已清空。" {
 		t.Fatal("successful empty clear did not show actual empty results")
 	}
-	s.settingsPage = "about"
+	s.settingsUnit.state.settingsPage = "about"
 	s.finishSettingsLogsAction(refresh, application.ActionResult{Data: newEntries}, nil)
-	if len(s.settingsLogEntries) != 0 {
+	if len(s.settingsUnit.state.settingsLogEntries) != 0 {
 		t.Fatal("late refresh replaced another page")
 	}
 }
@@ -159,7 +159,7 @@ func TestSettingsLogsClearToolbarLayout(t *testing.T) {
 				default:
 				}
 				s.busy = false
-				s.settingsLogEntries = nil
+				s.settingsUnit.state.settingsLogEntries = nil
 				tester.Frame()
 				if !tester.HasText("暂无错误记录。") {
 					t.Fatal("empty logs did not render")

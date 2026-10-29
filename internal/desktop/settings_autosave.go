@@ -44,11 +44,11 @@ func (s *app) observeSettingsAutosave(key, value string, save func(string), late
 	if save == nil {
 		return
 	}
-	state := s.settingsAutosave
+	state := s.settingsUnit.state.settingsAutosave
 	if state == nil || state.home != s.snapshot.Home {
-		s.stopSettingsAutosave()
+		s.settingsUnit.stopSettingsAutosave()
 		state = &settingsAutosaveState{home: s.snapshot.Home, entries: make(map[string]*settingsAutosaveEntry)}
-		s.settingsAutosave = state
+		s.settingsUnit.state.settingsAutosave = state
 	}
 	entry := state.entries[key]
 	if entry == nil {
@@ -65,13 +65,13 @@ func (s *app) observeSettingsAutosave(key, value string, save func(string), late
 }
 
 func (s *app) cancelSettingsAutosave(key string) {
-	if state := s.settingsAutosave; state != nil {
+	if state := s.settingsUnit.state.settingsAutosave; state != nil {
 		delete(state.entries, key)
 	}
 }
 
 func (s *app) armSettingsAutosave() {
-	state := s.settingsAutosave
+	state := s.settingsUnit.state.settingsAutosave
 	if state == nil || state.closed || state.active != nil || s.busy || s.win == nil || s.win.IsDestroyed() {
 		return
 	}
@@ -92,7 +92,7 @@ func (s *app) armSettingsAutosave() {
 	state.timer = time.AfterFunc(max(time.Until(next), 0), func() {
 		if !window.IsDestroyed() {
 			window.Update(func() {
-				if s.settingsAutosave == state && !state.closed {
+				if s.settingsUnit.state.settingsAutosave == state && !state.closed {
 					s.flushSettingsAutosaves(false)
 				}
 			})
@@ -101,7 +101,7 @@ func (s *app) armSettingsAutosave() {
 }
 
 func (s *app) flushSettingsAutosaves(force bool) {
-	state := s.settingsAutosave
+	state := s.settingsUnit.state.settingsAutosave
 	if state == nil || state.closed || state.home != s.snapshot.Home || state.active != nil || s.busy {
 		return
 	}
@@ -115,7 +115,7 @@ func (s *app) flushSettingsAutosaves(force bool) {
 		if next == nil || !force && !state.closing && time.Now().Before(next.due) {
 			break
 		}
-		attempt := &settingsAutosaveAttempt{entry: next, value: next.value, config: s.configJSON}
+		attempt := &settingsAutosaveAttempt{entry: next, value: next.value, config: s.settingsUnit.state.configJSON}
 		state.active, next.pending, s.lastError = attempt, false, ""
 		next.save(attempt.value)
 		if s.busy {
@@ -133,7 +133,7 @@ func (s *app) flushSettingsAutosaves(force bool) {
 }
 
 func (s *app) finishSettingsAutosaveAction(action application.Action, result application.ActionResult, failure error) {
-	state := s.settingsAutosave
+	state := s.settingsUnit.state.settingsAutosave
 	if state == nil || state.closed {
 		return
 	}
@@ -150,7 +150,7 @@ func (s *app) finishSettingsAutosaveAction(action application.Action, result app
 			// Only the successful save may normalize its unchanged draft. Other
 			// background reads must leave the in-flight input intact.
 			if !attempt.entry.pending && attempt.entry.latest != nil && attempt.entry.latest() == attempt.value {
-				s.syncSettingsConfigInputs(attempt.config, s.configJSON)
+				s.syncSettingsConfigInputs(attempt.config, s.settingsUnit.state.configJSON)
 			}
 			if s.lastMessage == result.Message {
 				s.lastMessage = ""
@@ -168,7 +168,7 @@ func (s *app) finishSettingsAutosaveAction(action application.Action, result app
 }
 
 func (s *app) renderSettingsAutosaveNotification(c *ui.Context) {
-	state := s.settingsAutosave
+	state := s.settingsUnit.state.settingsAutosave
 	if state == nil {
 		return
 	}
@@ -185,7 +185,7 @@ func (s *app) renderSettingsAutosaveNotification(c *ui.Context) {
 }
 
 func (s *app) handleSettingsAutosaveClose(event *mygo.CloseEvent) bool {
-	state := s.settingsAutosave
+	state := s.settingsUnit.state.settingsAutosave
 	if event == nil || state == nil || state.closed {
 		return false
 	}
@@ -227,7 +227,7 @@ func (s *app) handleSettingsAutosaveClose(event *mygo.CloseEvent) bool {
 }
 
 func (s *app) closeAfterSettingsAutosave() {
-	state := s.settingsAutosave
+	state := s.settingsUnit.state.settingsAutosave
 	if state == nil || !state.closing || state.active != nil || s.busy {
 		return
 	}
@@ -242,8 +242,8 @@ func (s *app) closeAfterSettingsAutosave() {
 	}
 }
 
-func (s *app) stopSettingsAutosave() {
-	if state := s.settingsAutosave; state != nil {
+func (s *settingsController) stopSettingsAutosave() {
+	if state := s.state.settingsAutosave; state != nil {
 		state.closed = true
 		if state.timer != nil {
 			state.timer.Stop()
@@ -257,13 +257,13 @@ func (s *app) autosaveSettingsInput(key string, value *string, save func(string)
 		return
 	}
 	s.observeSettingsAutosave(key, *value, save, func() string { return *value })
-	s.settingsAutosave.entries[key].input = value
+	s.settingsUnit.state.settingsAutosave.entries[key].input = value
 }
 
 func settingsAutosaveFieldKey(key string) string { return "setting:" + strings.TrimSpace(key) }
 
 func (s *app) settingsAutosaveDraftPending(key string) bool {
-	state := s.settingsAutosave
+	state := s.settingsUnit.state.settingsAutosave
 	if state == nil || state.entries[key] == nil {
 		return false
 	}
@@ -275,7 +275,7 @@ func (s *app) settingsAutosaveInputPending(input *string) bool {
 	if input == nil {
 		return false
 	}
-	if state := s.settingsAutosave; state != nil {
+	if state := s.settingsUnit.state.settingsAutosave; state != nil {
 		for key, entry := range state.entries {
 			if entry.input == input && s.settingsAutosaveDraftPending(key) {
 				return true
@@ -286,7 +286,7 @@ func (s *app) settingsAutosaveInputPending(input *string) bool {
 }
 
 func (s *app) rebaseSettingsAutosaveInputs() {
-	if state := s.settingsAutosave; state != nil {
+	if state := s.settingsUnit.state.settingsAutosave; state != nil {
 		for _, entry := range state.entries {
 			if !entry.pending && !entry.failed && entry.latest != nil && (state.active == nil || state.active.entry != entry) {
 				entry.value = entry.latest()

@@ -22,7 +22,7 @@ func (s *app) openNativeImageViewer(m *nativeMediaState) {
 }
 
 func (s *app) requestNativeImageViewerBitmap(m *nativeMediaState) {
-	if viewer := s.markdownBitmapViewer; viewer != nil && viewer.media == m && viewer.sourcePath != "" {
+	if viewer := s.materialsUnit.state.markdownBitmapViewer; viewer != nil && viewer.media == m && viewer.sourcePath != "" {
 		s.requestMarkdownLocalImageViewer(viewer)
 		return
 	}
@@ -45,10 +45,10 @@ func (s *app) requestNativeImageViewerBitmap(m *nativeMediaState) {
 	m.mu.Unlock()
 	go func() {
 		defer m.wg.Done()
-		rendered, err := document.RenderPNG(ctx, 0)
+		rendered, err := document.RenderRGBA(ctx, 0)
 		var bitmap *ui.Bitmap
 		if err == nil {
-			bitmap, err = ui.DecodeBitmap(rendered.PNG)
+			bitmap = ui.NewBitmap(rendered.RGBA)
 		}
 		cancelled := ctx.Err() != nil
 		cancel()

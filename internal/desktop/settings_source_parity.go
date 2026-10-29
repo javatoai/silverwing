@@ -76,7 +76,7 @@ func (s *app) saveMeegleProjectSettingsWithPickerToken(projects []map[string]any
 	config, err := s.settingsConfigMap()
 	if err != nil {
 		s.lastError = err.Error()
-		if state := s.meegleProjectCatalog; token != "" && state != nil {
+		if state := s.settingsUnit.state.meegleProjectCatalog; token != "" && state != nil {
 			state.pickerSaveError = "添加项目空间失败：" + err.Error()
 		}
 		return false
@@ -89,7 +89,7 @@ func (s *app) saveMeegleProjectSettingsWithPickerToken(projects []map[string]any
 	}
 	if s.busy {
 		s.lastError = "当前有操作正在执行，请等待完成或取消后重试。"
-		if state := s.meegleProjectCatalog; state != nil {
+		if state := s.settingsUnit.state.meegleProjectCatalog; state != nil {
 			state.pickerSaveError = "添加失败：当前有操作正在执行，请稍后重试。"
 		}
 		return false
@@ -97,7 +97,7 @@ func (s *app) saveMeegleProjectSettingsWithPickerToken(projects []map[string]any
 	baseline, err := s.settingsConfigMap()
 	if err != nil {
 		s.lastError = err.Error()
-		if state := s.meegleProjectCatalog; state != nil {
+		if state := s.settingsUnit.state.meegleProjectCatalog; state != nil {
 			state.pickerSaveError = "添加项目空间失败：" + err.Error()
 		}
 		return false
@@ -105,13 +105,13 @@ func (s *app) saveMeegleProjectSettingsWithPickerToken(projects []map[string]any
 	update, err := settingsConfigFieldsUpdate(baseline, config, []string{"meegleProjects"})
 	if err != nil {
 		s.lastError = "无法编码设置：" + err.Error()
-		if state := s.meegleProjectCatalog; state != nil {
+		if state := s.settingsUnit.state.meegleProjectCatalog; state != nil {
 			state.pickerSaveError = s.lastError
 		}
 		return false
 	}
 	if len(update.Fields)+len(update.ObjectFields) == 0 {
-		if state := s.meegleProjectCatalog; state != nil {
+		if state := s.settingsUnit.state.meegleProjectCatalog; state != nil {
 			state.pickerSaveError = "所选项目空间没有产生可保存的配置变化。"
 		}
 		return false
@@ -161,7 +161,7 @@ func (s *app) afterSettingsCLIPathSave(action application.Action) {
 		return
 	}
 	scope, ok := action.Payload["settingsCLIPathSave"].(settingsCLIPathSaveScope)
-	if !ok || scope.Tool != "meegle" || scope.Home != s.snapshot.Home || s.settingsPage != "cli-"+scope.Tool {
+	if !ok || scope.Tool != "meegle" || scope.Home != s.snapshot.Home || s.settingsUnit.state.settingsPage != "cli-"+scope.Tool {
 		return
 	}
 	key := scope.Tool + "ExecutablePath"

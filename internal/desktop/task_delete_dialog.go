@@ -33,16 +33,16 @@ func (s *app) openTaskDeleteDialog(t task) {
 	s.lastError = ""
 	s.lastResult = ""
 	s.cancelTaskDeleteRiskRead()
-	s.taskDeleteDialog = &taskDeleteDialogState{
+	s.taskUnit.state.taskDeleteDialog = &taskDeleteDialogState{
 		TaskID: t.id, TaskPath: t.path, TaskCreatedAt: t.createdAt,
 		FolderName: firstNonEmpty(t.title, t.id), Page: s.page, Open: true,
-		SelectionKey: taskNavigationKey(s.currentTask()), SelectionPath: s.currentTask().path, TaskArchived: t.archived,
+		SelectionKey: taskNavigationKey(s.taskUnit.currentTask()), SelectionPath: s.taskUnit.currentTask().path, TaskArchived: t.archived,
 	}
 	s.requestTaskDeleteRisks()
 }
 
 func (s *app) requestTaskDeleteRisks() {
-	state := s.taskDeleteDialog
+	state := s.taskUnit.state.taskDeleteDialog
 	if state == nil || !state.Open || state.Submitting {
 		return
 	}
@@ -64,12 +64,12 @@ func (s *app) requestTaskDeleteRisks() {
 
 func (s *app) closeTaskDeleteDialog() {
 	s.cancelTaskDeleteRiskRead()
-	state := s.taskDeleteDialog
+	state := s.taskUnit.state.taskDeleteDialog
 	if state == nil {
 		return
 	}
 	state.Open = false
-	s.taskDeleteDialog = nil
+	s.taskUnit.state.taskDeleteDialog = nil
 	if s.win != nil {
 		s.win.Invalidate()
 	}
@@ -85,7 +85,7 @@ func (s *app) closeStaleTaskDeleteSubmission(action application.Action) {
 }
 
 func (s *app) taskDeleteStateMatches(action application.Action) bool {
-	state := s.taskDeleteDialog
+	state := s.taskUnit.state.taskDeleteDialog
 	if state == nil || action.TaskID != state.TaskID {
 		return false
 	}
@@ -107,7 +107,7 @@ func (s *app) applyTaskDeleteActionResult(action application.Action, result appl
 		return true
 	}
 	if action.Kind == "task.delete" && s.taskDeleteStateMatches(action) {
-		s.taskDeleteDialog = nil
+		s.taskUnit.state.taskDeleteDialog = nil
 		s.lastResult = ""
 		return true
 	}
@@ -124,13 +124,13 @@ func (s *app) applyTaskDeleteActionFailure(action application.Action, cause erro
 	if action.Kind != "task.delete" || !s.taskDeleteStateMatches(action) {
 		return false
 	}
-	state := s.taskDeleteDialog
+	state := s.taskUnit.state.taskDeleteDialog
 	state.Loading = false
 	state.Submitting = false
 	// A cleanup error can arrive after the task itself was removed. The root
 	// dispatcher has already applied the refreshed snapshot in that case.
-	if s.taskByID(state.TaskID).id == "" {
-		s.taskDeleteDialog = nil
+	if s.taskUnit.taskByID(state.TaskID).id == "" {
+		s.taskUnit.state.taskDeleteDialog = nil
 	}
 	return false
 }
@@ -139,7 +139,7 @@ func (s *app) applyTaskDeleteRiskResult(action application.Action, result applic
 	if !s.taskDeleteStateMatches(action) {
 		return
 	}
-	state := s.taskDeleteDialog
+	state := s.taskUnit.state.taskDeleteDialog
 	state.Loading = false
 	state.Error = ""
 	risks, err := decodeData[domain.DeleteRisk](result.Data)
@@ -156,7 +156,7 @@ func (s *app) applyTaskDeleteRiskFailure(action application.Action, cause error)
 	if !s.taskDeleteStateMatches(action) {
 		return
 	}
-	state := s.taskDeleteDialog
+	state := s.taskUnit.state.taskDeleteDialog
 	state.Loading = false
 	state.Risks = nil
 	state.RiskScope = nil
@@ -167,7 +167,7 @@ func (s *app) applyTaskDeleteRiskFailure(action application.Action, cause error)
 }
 
 func (s *app) taskDeleteHasStatusCheckFailure() bool {
-	state := s.taskDeleteDialog
+	state := s.taskUnit.state.taskDeleteDialog
 	if state == nil {
 		return false
 	}
@@ -180,7 +180,7 @@ func (s *app) taskDeleteHasStatusCheckFailure() bool {
 }
 
 func (s *app) taskDeleteNeedsDiscardAck() bool {
-	state := s.taskDeleteDialog
+	state := s.taskUnit.state.taskDeleteDialog
 	if state == nil {
 		return false
 	}
@@ -193,13 +193,13 @@ func (s *app) taskDeleteNeedsDiscardAck() bool {
 }
 
 func (s *app) taskDeleteConfirmationAction() (application.Action, bool) {
-	state := s.taskDeleteDialog
+	state := s.taskUnit.state.taskDeleteDialog
 	if state == nil || !state.Open || state.Loading || state.Submitting || state.Error != "" || s.busy ||
 		!state.ExternalWindowsClosed || s.taskDeleteHasStatusCheckFailure() ||
 		(len(state.Risks) > 0 && !state.DiscardChanges) {
 		return application.Action{}, false
 	}
-	current := s.taskByID(state.TaskID)
+	current := s.taskUnit.taskByID(state.TaskID)
 	if current.id == "" || (state.TaskPath != "" && current.path != state.TaskPath) ||
 		(state.TaskCreatedAt != "" && current.createdAt != state.TaskCreatedAt) {
 		return application.Action{}, false
@@ -225,8 +225,8 @@ func (s *app) confirmTaskDelete() {
 	if !ok {
 		return
 	}
-	state := s.taskDeleteDialog
-	scope, valid := s.taskMenuScopeFor(s.taskByID(state.TaskID))
+	state := s.taskUnit.state.taskDeleteDialog
+	scope, valid := s.taskMenuScopeFor(s.taskUnit.taskByID(state.TaskID))
 	if !valid || scope.taskPath != state.TaskPath || scope.taskCreatedAt != state.TaskCreatedAt ||
 		scope.page != state.Page || scope.archived != state.TaskArchived {
 		state.Error = errTaskContextChanged.Error()
@@ -242,7 +242,7 @@ func (s *app) confirmTaskDelete() {
 
 func (s *app) renderTaskDeleteDialog(c *ui.Context, p palette) {
 	s.observeTaskDeleteRiskJobs()
-	state := s.taskDeleteDialog
+	state := s.taskUnit.state.taskDeleteDialog
 	if state == nil {
 		return
 	}
@@ -259,7 +259,7 @@ func (s *app) renderTaskDeleteDialog(c *ui.Context, p palette) {
 				icon(c, "delete", 18, p.danger)
 				label(c, "删除任务", 17, p.text).FontWeight(600).Grow(1)
 			})
-			label(c, fmt.Sprintf("即将永久删除“%s”的任务目录和所有工作区，远程分支不会被修改。", state.FolderName), 12, p.text).Wrap()
+			label(c, fmt.Sprintf("即将永久删除“%s”的任务目录及其中的本地资料、所有工作区；远程分支和独立的需求资料目录保留。", state.FolderName), 12, p.text).Wrap()
 			ui.Box(c).FillWidth().Padding(10, 12).Radius(9).Background(p.amberBg).Border(1, p.line).Children(func() {
 				label(c, "删除前请确认已关闭：Codex 中关联的项目或任务、IDE 中打开的此任务或工作区窗口，以及文件管理器中打开的任务目录。它们可能占用文件，导致删除失败。silverwing 不会自动关闭这些外部窗口。", 11, p.danger).Wrap()
 			})

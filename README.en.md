@@ -85,9 +85,11 @@ The macOS app is ad-hoc signed and is **not Developer ID signed or notarized**. 
 2. **Choose your tools.** Configure Git and the IDE or coding-agent applications you use. Codex, Cursor and other external tools are installed separately.
 3. **Explore the local tools.** JSON, date/time and text comparison are available without connecting a requirement or deployment service.
 
-### Create a requirement-backed task
+### Create a task
 
-The current task-creation entry is in **Requirements (需求)** and uses a connected Meegle project. After connecting Meegle in Settings, select a requirement and choose **Create task from requirement (基于需求创建任务)**. Review the task name, branch and selected services, then create the task and open its workspace in your IDE or agent.
+For a requirement-backed task, connect Meegle in Settings, select a requirement in **Requirements (需求)**, and choose **Create task from requirement (基于需求创建任务)**. Review the task name, branch and selected services, then create the task and open its workspace in your IDE or agent.
+
+You can also choose **New task (新建任务)** beside task search and enter only a name; both the requirement and services are optional. Materials for an unlinked task stay in its own `.workspace/materials/docs`, with local temporary files in the sibling `temp` directory. They are outside requirement-materials Git sync. Use **Link requirement (关联需求)** in the task context menu or Requirement Details later; linking preserves the materials location, notes and workspaces. Archiving retains local materials; deleting the entire task also deletes materials stored inside it.
 
 Genbu and materials Git sync are optional. You can prepare repositories and use the local developer tools before configuring them or Meegle. Silverwing opens your chosen coding tools; it does not run multiple agent sessions automatically.
 

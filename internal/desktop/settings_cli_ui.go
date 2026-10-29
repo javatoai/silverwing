@@ -25,10 +25,10 @@ func (s *app) settingsCLI(c *ui.Context, p palette) {
 	})
 	settingsHelpCard(c, p, title+" 命令路径", "留空时自动探测，也可以手动选择；更改后自动保存。", func() {
 		s.settingsConfigPathRow(c, p, pathKey, title+" 可执行文件", "留空时自动探测", false)
-		if s.cliJobs == nil || s.cliJobs.requests["status:"+tool] == nil {
+		if s.toolsUnit.state.cliJobs == nil || s.toolsUnit.state.cliJobs.requests["status:"+tool] == nil {
 			s.settingsCLIPathDiscoveryHint(c, p, tool)
 		}
-		status := s.settingsCLIStatus[tool]
+		status := s.settingsUnit.state.settingsCLIStatus[tool]
 		command := firstNonEmpty(mapString(status, "command"), mapString(status, "commandPath"))
 		s.settingsCLICommandActions(c, p, tool, command)
 	})
@@ -38,7 +38,7 @@ func (s *app) settingsCLI(c *ui.Context, p palette) {
 }
 
 func (s *app) settingsCLIStatusDetails(c *ui.Context, p palette, tool string) {
-	status := s.settingsCLIStatus[tool]
+	status := s.settingsUnit.state.settingsCLIStatus[tool]
 	state, color := settingsToolAvailability(status, p)
 	settingsToolStatusRow(c, p, "命令状态", state, color)
 	if version := strings.TrimSpace(mapString(status, "version")); version != "" && tool != "git" {
@@ -49,8 +49,8 @@ func (s *app) settingsCLIStatusDetails(c *ui.Context, p palette, tool string) {
 	}
 	if message := mapString(status, "error"); message != "" {
 		settingsToolStatusRow(c, p, "检测错误", message, p.amber)
-	} else if strings.HasPrefix(s.settingsOutput, "CLI 状态读取失败：") {
-		settingsToolStatusRow(c, p, "检测错误", strings.TrimPrefix(s.settingsOutput, "CLI 状态读取失败："), p.amber)
+	} else if strings.HasPrefix(s.settingsUnit.state.settingsOutput, "CLI 状态读取失败：") {
+		settingsToolStatusRow(c, p, "检测错误", strings.TrimPrefix(s.settingsUnit.state.settingsOutput, "CLI 状态读取失败："), p.amber)
 	}
 }
 
@@ -88,8 +88,8 @@ func cliStatusSourceLabel(source string) string {
 }
 
 func (s *app) settingsCLIAuth(c *ui.Context, p palette, tool string) {
-	if s.cliJobs != nil {
-		if request := s.cliJobs.requests["auth:"+tool]; request != nil && (request.action.Kind == "cli.auth.start" || request.action.Kind == "cli.auth.logout") {
+	if s.toolsUnit.state.cliJobs != nil {
+		if request := s.toolsUnit.state.cliJobs.requests["auth:"+tool]; request != nil && (request.action.Kind == "cli.auth.start" || request.action.Kind == "cli.auth.logout") {
 			message := "正在生成授权链接…"
 			if request.action.Kind == "cli.auth.logout" {
 				message = "正在退出登录…"
@@ -98,12 +98,12 @@ func (s *app) settingsCLIAuth(c *ui.Context, p palette, tool string) {
 			if action(c, "cli-auth-cancel-init-"+tool, "close", "取消", p, false) {
 				request.userCancelled = true
 				request.cancel()
-				s.settingsOutput = "已请求取消登录操作，正在等待进程清理。"
+				s.settingsUnit.state.settingsOutput = "已请求取消登录操作，正在等待进程清理。"
 			}
 			return
 		}
 	}
-	status := s.settingsCLIStatus[tool]
+	status := s.settingsUnit.state.settingsCLIStatus[tool]
 	authState := mapString(status, "authenticationState")
 	if authState == "" || authState == "NOT_CHECKED" {
 		if dataBool(status, "authenticated") {
@@ -140,7 +140,7 @@ func (s *app) settingsCLIAuth(c *ui.Context, p palette, tool string) {
 			s.act("cli.auth.start", "", "", "", "", "", map[string]any{"tool": "meegle", "host": "project.feishu.cn"})
 		}
 	}
-	if session := s.settingsCLISessions[tool]; len(session) > 0 {
+	if session := s.settingsUnit.state.settingsCLISessions[tool]; len(session) > 0 {
 		state := mapString(session, "state")
 		if tool == "meegle" {
 			label(c, "设备码状态："+cliAuthStateLabel(state), 10, cliAuthStateColor(state, p))
@@ -175,7 +175,7 @@ func (s *app) settingsCLIAuth(c *ui.Context, p palette, tool string) {
 					s.act("cli.auth.session", "", "", "", "", "", map[string]any{"tool": tool, "sessionId": mapString(session, "sessionId")})
 				}
 				if action(c, "cli-auth-cancel-"+tool, "close", "取消登录", p, false) {
-					s.stopCLIAuthPoll(tool)
+					s.settingsUnit.stopCLIAuthPoll(tool)
 					s.act("cli.auth.cancel", "", "", "", "", "", map[string]any{"tool": tool, "sessionId": mapString(session, "sessionId")})
 				}
 			})
@@ -189,11 +189,11 @@ func (s *app) applyCLIAuthResult(action application.Action, result application.A
 	if tool == "" {
 		return
 	}
-	if s.settingsCLISessions == nil {
-		s.settingsCLISessions = make(map[string]map[string]any)
+	if s.settingsUnit.state.settingsCLISessions == nil {
+		s.settingsUnit.state.settingsCLISessions = make(map[string]map[string]any)
 	}
-	s.settingsCLISessions[tool] = data
-	s.settingsOutput = result.Message
+	s.settingsUnit.state.settingsCLISessions[tool] = data
+	s.settingsUnit.state.settingsOutput = result.Message
 	if action.Kind == "cli.auth.start" {
 		if url := mapString(data, "authorizationUrl"); url != "" {
 			mygo.Shell.OpenExternal(url)
@@ -203,7 +203,7 @@ func (s *app) applyCLIAuthResult(action application.Action, result application.A
 	if state == "AUTHORIZATION_PENDING" || state == "CONFIRMING" {
 		s.scheduleCLIAuthPoll(tool, data)
 	} else {
-		s.stopCLIAuthPoll(tool)
+		s.settingsUnit.stopCLIAuthPoll(tool)
 	}
 	if state == "AUTHENTICATED" {
 		if tool == "meegle" {
@@ -214,7 +214,7 @@ func (s *app) applyCLIAuthResult(action application.Action, result application.A
 }
 
 func (s *app) scheduleCLIAuthPoll(tool string, session map[string]any) {
-	s.stopCLIAuthPoll(tool)
+	s.settingsUnit.stopCLIAuthPoll(tool)
 	delay := time.Second
 	if tool == "meegle" {
 		seconds := dataInt64(session, "pollingIntervalSeconds")
@@ -227,15 +227,15 @@ func (s *app) scheduleCLIAuthPoll(tool string, session map[string]any) {
 		delay = time.Duration(seconds) * time.Second
 	}
 	sessionID := mapString(session, "sessionId")
-	if s.settingsAuthPollTimers == nil {
-		s.settingsAuthPollTimers = make(map[string]*time.Timer)
+	if s.settingsUnit.state.settingsAuthPollTimers == nil {
+		s.settingsUnit.state.settingsAuthPollTimers = make(map[string]*time.Timer)
 	}
-	s.settingsAuthPollTimers[tool] = time.AfterFunc(delay, func() {
+	s.settingsUnit.state.settingsAuthPollTimers[tool] = time.AfterFunc(delay, func() {
 		if s.win == nil || s.win.IsDestroyed() {
 			return
 		}
 		s.win.Update(func() {
-			current := s.settingsCLISessions[tool]
+			current := s.settingsUnit.state.settingsCLISessions[tool]
 			if mapString(current, "sessionId") != sessionID || (mapString(current, "state") != "AUTHORIZATION_PENDING" && mapString(current, "state") != "CONFIRMING") {
 				return
 			}
@@ -244,10 +244,10 @@ func (s *app) scheduleCLIAuthPoll(tool string, session map[string]any) {
 	})
 }
 
-func (s *app) stopCLIAuthPoll(tool string) {
-	if timer := s.settingsAuthPollTimers[tool]; timer != nil {
+func (s *settingsController) stopCLIAuthPoll(tool string) {
+	if timer := s.state.settingsAuthPollTimers[tool]; timer != nil {
 		timer.Stop()
-		delete(s.settingsAuthPollTimers, tool)
+		delete(s.state.settingsAuthPollTimers, tool)
 	}
 }
 
@@ -270,7 +270,7 @@ func cliIdentitySuffix(status map[string]any) string {
 }
 
 func (s *app) cliSettingsTarget() (tool, title, pathKey string) {
-	switch s.settingsPage {
+	switch s.settingsUnit.state.settingsPage {
 	case "cli-meegle":
 		return "meegle", "Meegle CLI", "meegleExecutablePath"
 	case "cli-genbu":

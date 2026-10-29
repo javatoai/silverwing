@@ -27,7 +27,7 @@ type codexAIRequest struct {
 }
 
 func (s *app) requestCodexAISnapshot() {
-	state := s.codexAI
+	state := s.toolsUnit.state.codexAI
 	if state == nil || !state.Open {
 		return
 	}
@@ -35,12 +35,12 @@ func (s *app) requestCodexAISnapshot() {
 	state.snapshotError = ""
 	s.startCodexAIRequest("snapshot", application.Action{
 		Kind: "codex.ai/snapshot", TaskID: state.identity.taskID,
-		Payload: map[string]any{"cwd": state.identity.cwd, "includeSkills": state.identity.cwd != ""},
+		Payload: map[string]any{"cwd": state.identity.cwd, "includeSkills": state.identity.cwd != "" && state.tab == codexAITabSkills},
 	})
 }
 
 func (s *app) requestCodexAIThreads() {
-	state := s.codexAI
+	state := s.toolsUnit.state.codexAI
 	if state == nil || !state.Open || state.identity.cwd == "" || state.bindLoading {
 		return
 	}
@@ -54,7 +54,7 @@ func (s *app) requestCodexAIThreads() {
 }
 
 func (s *app) requestCodexAIMCPSnapshot() {
-	state := s.codexAI
+	state := s.toolsUnit.state.codexAI
 	if state == nil || !state.Open || !s.codexAIIdentityCurrent(state) || state.mcpStatusLoading || codexAIMCPBusy(state) {
 		return
 	}
@@ -67,7 +67,7 @@ func (s *app) requestCodexAIMCPSnapshot() {
 }
 
 func (s *app) requestCodexAIMCPCheck() {
-	state := s.codexAI
+	state := s.toolsUnit.state.codexAI
 	if state == nil || !state.Open || !s.codexAIIdentityCurrent(state) || state.mcpSnapshot == nil || state.mcpCheckLoading || state.mcpStatusLoading || codexAIMCPBusy(state) {
 		return
 	}
@@ -80,7 +80,7 @@ func (s *app) requestCodexAIMCPCheck() {
 }
 
 func (s *app) requestCodexAINewSession() {
-	state := s.codexAI
+	state := s.toolsUnit.state.codexAI
 	if state == nil || !state.Open || !s.codexAIIdentityCurrent(state) || state.newSessionLoading {
 		return
 	}
@@ -95,7 +95,7 @@ func codexAINewSessionAction(identity codexAIIdentity) application.Action {
 }
 
 func (s *app) bindCodexAISelectedThread() {
-	state := s.codexAI
+	state := s.toolsUnit.state.codexAI
 	if state == nil || !s.codexAIIdentityCurrent(state) || state.bindLoading {
 		return
 	}
@@ -111,7 +111,7 @@ func (s *app) bindCodexAISelectedThread() {
 }
 
 func (s *app) unbindCodexAIThread() {
-	state := s.codexAI
+	state := s.toolsUnit.state.codexAI
 	if state == nil || !s.codexAIIdentityCurrent(state) || state.bindLoading || state.boundThreadID == "" {
 		return
 	}
@@ -146,7 +146,7 @@ func codexAISelectedThread(state *codexAIState) (codexAIThread, bool) {
 }
 
 func (s *app) readCodexAIFile(path string) {
-	state := s.codexAI
+	state := s.toolsUnit.state.codexAI
 	if state == nil || !s.codexAIIdentityCurrent(state) {
 		return
 	}
@@ -170,7 +170,7 @@ func (s *app) readCodexAIFile(path string) {
 }
 
 func (s *app) openCodexAIFileExternally(path string) {
-	state := s.codexAI
+	state := s.toolsUnit.state.codexAI
 	if state == nil || !s.codexAIIdentityCurrent(state) {
 		return
 	}
@@ -209,7 +209,7 @@ func codexAIFileAllowed(snapshot *codexAISnapshot, path string) bool {
 }
 
 func (s *app) startCodexAIRequest(key string, action application.Action) {
-	state := s.codexAI
+	state := s.toolsUnit.state.codexAI
 	if state == nil || !s.codexAIIdentityCurrent(state) {
 		return
 	}
@@ -344,7 +344,7 @@ func cloneCodexAIAction(action application.Action) application.Action {
 }
 
 func (s *app) codexAIRequestRelevant(request *codexAIRequest) bool {
-	state := s.codexAI
+	state := s.toolsUnit.state.codexAI
 	if state == nil || request == nil || state.requests[request.key] != request ||
 		state.generations[request.key] != request.generation || state.identityRevision != request.identityRevision ||
 		state.identity.key() != request.identity.key() || !s.codexAIIdentityCurrent(state) {
@@ -366,13 +366,13 @@ func (s *app) codexAIRequestRelevant(request *codexAIRequest) bool {
 }
 
 func (s *app) finishCodexAIRequest(request *codexAIRequest, result application.ActionResult, err error) {
-	if s.codexAI != nil {
-		s.codexAI.recordCleanupFailure(err)
+	if s.toolsUnit.state.codexAI != nil {
+		s.toolsUnit.state.codexAI.recordCleanupFailure(err)
 	}
 	if !s.codexAIRequestRelevant(request) {
 		return
 	}
-	state := s.codexAI
+	state := s.toolsUnit.state.codexAI
 	delete(state.requests, request.key)
 	cleanupFailure := process.IsCleanupFailure(err)
 	if request.cancelRequested && !cleanupFailure {
@@ -411,6 +411,7 @@ func (s *app) finishCodexAIRequest(request *codexAIRequest, result application.A
 		}
 		state.snapshot = &snapshot
 		state.snapshotLoading, state.snapshotLoaded, state.snapshotError = false, true, ""
+		state.skillsLoaded = codexAIPayloadBool(request.action.Payload, "includeSkills")
 		state.snapshotRevision++
 		if previousFile != "" {
 			if !codexAIFileAllowed(state.snapshot, previousFile) {
@@ -582,7 +583,7 @@ func (s *app) finishCodexAIRequest(request *codexAIRequest, result application.A
 			}
 		}
 		failed := false
-		for _, current := range s.tasks {
+		for _, current := range s.taskUnit.state.tasks {
 			if current.id != request.identity.taskID || normalizeIdentityPath(current.path) != normalizeIdentityPath(request.identity.taskPath) {
 				continue
 			}
@@ -602,21 +603,21 @@ func (s *app) finishCodexAIRequest(request *codexAIRequest, result application.A
 }
 
 func (s *app) refreshCodexAITaskLaunchesFromManifest(identity codexAIIdentity, manifest domain.TaskManifest) {
-	state := s.codexAI
+	state := s.toolsUnit.state.codexAI
 	if state == nil || !s.codexAIIdentityCurrent(state) || state.identity.key() != identity.key() {
 		return
 	}
-	for index := range s.tasks {
-		if s.tasks[index].id == identity.taskID && s.tasks[index].createdAt == identity.taskCreatedAt &&
-			normalizeIdentityPath(s.tasks[index].path) == normalizeIdentityPath(identity.taskPath) {
-			s.tasks[index].workspaceToolLaunches = append(s.tasks[index].workspaceToolLaunches[:0], manifest.WorkspaceToolLaunches...)
+	for index := range s.taskUnit.state.tasks {
+		if s.taskUnit.state.tasks[index].id == identity.taskID && s.taskUnit.state.tasks[index].createdAt == identity.taskCreatedAt &&
+			normalizeIdentityPath(s.taskUnit.state.tasks[index].path) == normalizeIdentityPath(identity.taskPath) {
+			s.taskUnit.state.tasks[index].workspaceToolLaunches = append(s.taskUnit.state.tasks[index].workspaceToolLaunches[:0], manifest.WorkspaceToolLaunches...)
 			return
 		}
 	}
 }
 
 func (s *app) resetCodexAIMCPSwitch(action application.Action) {
-	state := s.codexAI
+	state := s.toolsUnit.state.codexAI
 	if state == nil || state.mcpSnapshot == nil || action.Kind != "codex.extensions/mcp/set" {
 		return
 	}
@@ -632,7 +633,7 @@ func (s *app) resetCodexAIMCPSwitch(action application.Action) {
 }
 
 func (s *app) refreshCodexAITaskWorkspaceLaunches(identity codexAIIdentity, snapshot application.Snapshot) {
-	if s.codexAI == nil || !s.codexAIIdentityCurrent(s.codexAI) || s.codexAI.identity.key() != identity.key() ||
+	if s.toolsUnit.state.codexAI == nil || !s.codexAIIdentityCurrent(s.toolsUnit.state.codexAI) || s.toolsUnit.state.codexAI.identity.key() != identity.key() ||
 		normalizeIdentityPath(snapshot.Home) != normalizeIdentityPath(identity.home) {
 		return
 	}
@@ -641,10 +642,10 @@ func (s *app) refreshCodexAITaskWorkspaceLaunches(identity codexAIIdentity, snap
 			normalizeIdentityPath(refreshed.Path) != normalizeIdentityPath(identity.taskPath) {
 			continue
 		}
-		for index := range s.tasks {
-			if s.tasks[index].id == identity.taskID && s.tasks[index].createdAt == identity.taskCreatedAt &&
-				normalizeIdentityPath(s.tasks[index].path) == normalizeIdentityPath(identity.taskPath) {
-				s.tasks[index].workspaceToolLaunches = append(s.tasks[index].workspaceToolLaunches[:0], refreshed.WorkspaceToolLaunches...)
+		for index := range s.taskUnit.state.tasks {
+			if s.taskUnit.state.tasks[index].id == identity.taskID && s.taskUnit.state.tasks[index].createdAt == identity.taskCreatedAt &&
+				normalizeIdentityPath(s.taskUnit.state.tasks[index].path) == normalizeIdentityPath(identity.taskPath) {
+				s.taskUnit.state.tasks[index].workspaceToolLaunches = append(s.taskUnit.state.tasks[index].workspaceToolLaunches[:0], refreshed.WorkspaceToolLaunches...)
 				return
 			}
 		}
@@ -666,7 +667,7 @@ func decodeCodexAIData(data any, target any) error {
 }
 
 func (s *app) setCodexAIRequestFailure(key string, err error) {
-	state := s.codexAI
+	state := s.toolsUnit.state.codexAI
 	if state == nil {
 		return
 	}
@@ -717,7 +718,7 @@ func (state *codexAIState) cleanupFailure() error {
 }
 
 func (s *app) closeCodexAIJobs(ctx context.Context) error {
-	state := s.codexAI
+	state := s.toolsUnit.state.codexAI
 	if state == nil {
 		return nil
 	}

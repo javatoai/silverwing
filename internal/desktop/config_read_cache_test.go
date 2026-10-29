@@ -37,7 +37,7 @@ func TestConfigReadCacheInvalidationAndErrorIsolation(t *testing.T) {
 		t.Fatalf("unchanged sources, including failures, were decoded %d times", loads)
 	}
 	s := configurationReadFixture()
-	s.configJSON = "null"
+	s.settingsUnit.state.configJSON = "null"
 	s.saveConfigField("taskRoot", "D:/new")
 	if s.lastError == "" {
 		t.Fatal("a non-object configuration was accepted for editing")
@@ -46,9 +46,9 @@ func TestConfigReadCacheInvalidationAndErrorIsolation(t *testing.T) {
 
 func configurationReadFixture() *app {
 	s := taskNavigationFixture()
-	s.configJSON = `{"taskRoot":"D:/tasks","enabled":true,"count":7,"nested":{"flag":true},"items":[{"name":"original","nested":[{"value":"saved"}]}],"services":[` +
+	s.settingsUnit.state.configJSON = `{"taskRoot":"D:/tasks","enabled":true,"count":7,"nested":{"flag":true},"items":[{"name":"original","nested":[{"value":"saved"}]}],"services":[` +
 		strings.TrimSuffix(strings.Repeat(`{"id":"service","modules":[{"id":"module","enabled":true}]},`, 200), ",") + `]}`
-	s.snapshot.ConfigJSON = s.configJSON
+	s.snapshot.ConfigJSON = s.settingsUnit.state.configJSON
 	return s
 }
 
@@ -58,13 +58,13 @@ func TestConfigurationReadsRefreshAfterSourceChanges(t *testing.T) {
 		s.configInt("count", 0) != 7 || !s.configNestedBool("nested", "flag", false) || len(s.configArray("items")) != 1 {
 		t.Fatal("initial configuration reads failed")
 	}
-	s.configJSON = `{"taskRoot":"D:/changed","enabled":false,"count":9,"nested":{"flag":false},"items":[]}`
+	s.settingsUnit.state.configJSON = `{"taskRoot":"D:/changed","enabled":false,"count":9,"nested":{"flag":false},"items":[]}`
 	if s.configString("taskRoot") != "D:/changed" || s.configBool("enabled", true) ||
 		s.configInt("count", 0) != 9 || s.configNestedBool("nested", "flag", true) || len(s.configArray("items")) != 0 {
 		t.Fatal("configuration reads retained an earlier source")
 	}
 	for _, source := range []string{"", "{invalid", "null"} {
-		s.configJSON = source
+		s.settingsUnit.state.configJSON = source
 		if s.configString("taskRoot") != "" || !s.configBool("enabled", true) || s.configInt("count", 11) != 11 ||
 			!s.configNestedBool("nested", "flag", true) || s.configArray("items") != nil {
 			t.Fatalf("invalid or empty source exposed an earlier configuration: %q", source)
@@ -105,9 +105,9 @@ func TestConfigurationReadCopiesProtectSavedValues(t *testing.T) {
 func TestTagConfigurationIdentityKeepsScopeFresh(t *testing.T) {
 	s := configurationReadFixture()
 	first := s.tagJobScope()
-	s.tasks[0].path, s.tasks[0].createdAt = "changed-path", "new-incarnation"
+	s.taskUnit.state.tasks[0].path, s.taskUnit.state.tasks[0].createdAt = "changed-path", "new-incarnation"
 	s.snapshot.Home = "changed-home"
-	s.configJSON = `{"taskRoot":"D:/new-root"}`
+	s.settingsUnit.state.configJSON = `{"taskRoot":"D:/new-root"}`
 	changed := s.tagJobScope()
 	if changed.ConfigIdentity != first.ConfigIdentity || changed.TaskPath != "changed-path" ||
 		changed.TaskCreatedAt != "new-incarnation" || changed.Home != "changed-home" || changed.TaskRoot != "D:/new-root" {
@@ -170,29 +170,29 @@ func TestTypedConfigurationReadsKeepSourcesAndDraftsIndependent(t *testing.T) {
 		}
 		return string(encoded)
 	}
-	s.configJSON = encode()
-	s.snapshot.ConfigJSON = s.configJSON
+	s.settingsUnit.state.configJSON = encode()
+	s.snapshot.ConfigJSON = s.settingsUnit.state.configJSON
 	w := application.Workspace{ServiceID: "service", ModuleID: "module", State: "READY"}
-	commands := s.workspaceCommandsFor(s.tasks[0], w)
+	commands := s.workspaceCommandsFor(s.taskUnit.state.tasks[0], w)
 	if len(commands) != 1 || commands[0].Arguments[0] != "saved" {
 		t.Fatal("typed configuration did not expose the saved command")
 	}
 	commands[0].Arguments[0] = "unsaved"
-	if s.workspaceCommandsFor(s.tasks[0], w)[0].Arguments[0] != "saved" {
+	if s.workspaceCommandsFor(s.taskUnit.state.tasks[0], w)[0].Arguments[0] != "saved" {
 		t.Fatal("command arguments mutated the typed configuration cache")
 	}
-	group, err := s.taskAppendGroup(s.tasks[0])
+	group, err := s.taskAppendGroup(s.taskUnit.state.tasks[0])
 	if err != nil {
 		t.Fatal(err)
 	}
 	group.Services[0].DisplayName = "unsaved service"
-	if s.taskAddableServices(s.tasks[0])[0].Name != "original service" {
+	if s.taskAddableServices(s.taskUnit.state.tasks[0])[0].Name != "original service" {
 		t.Fatal("task append draft mutated the snapshot configuration cache")
 	}
 	read := func() {
-		_ = s.workspaceCommandsFor(s.tasks[0], w)
+		_ = s.workspaceCommandsFor(s.taskUnit.state.tasks[0], w)
 		_, _ = s.workspaceMergeConfig()
-		_ = s.taskAddableServices(s.tasks[0])
+		_ = s.taskAddableServices(s.taskUnit.state.tasks[0])
 	}
 	read()
 	if allocations := testing.AllocsPerRun(20, read); allocations > 32 {
@@ -200,24 +200,24 @@ func TestTypedConfigurationReadsKeepSourcesAndDraftsIndependent(t *testing.T) {
 	}
 	config.Groups[0].Services[0].DisplayName = "changed service"
 	config.Groups[0].Services[0].Modules[0].CustomCommands[0].Arguments[0] = "changed"
-	s.configJSON = encode()
-	if s.workspaceCommandsFor(s.tasks[0], w)[0].Arguments[0] != "changed" || s.taskAddableServices(s.tasks[0])[0].Name != "original service" {
+	s.settingsUnit.state.configJSON = encode()
+	if s.workspaceCommandsFor(s.taskUnit.state.tasks[0], w)[0].Arguments[0] != "changed" || s.taskAddableServices(s.taskUnit.state.tasks[0])[0].Name != "original service" {
 		t.Fatal("current and snapshot configuration sources were conflated")
 	}
-	s.snapshot.ConfigJSON = s.configJSON
-	if s.taskAddableServices(s.tasks[0])[0].Name != "changed service" {
+	s.snapshot.ConfigJSON = s.settingsUnit.state.configJSON
+	if s.taskAddableServices(s.taskUnit.state.tasks[0])[0].Name != "changed service" {
 		t.Fatal("snapshot configuration change retained an earlier group")
 	}
-	valid := s.configJSON
-	s.configJSON, s.snapshot.ConfigJSON = "invalid", "invalid"
-	if len(s.workspaceCommandsFor(s.tasks[0], w)) != 0 || len(s.taskAddableServices(s.tasks[0])) != 0 {
+	valid := s.settingsUnit.state.configJSON
+	s.settingsUnit.state.configJSON, s.snapshot.ConfigJSON = "invalid", "invalid"
+	if len(s.workspaceCommandsFor(s.taskUnit.state.tasks[0], w)) != 0 || len(s.taskAddableServices(s.taskUnit.state.tasks[0])) != 0 {
 		t.Fatal("invalid typed configuration exposed earlier values")
 	}
 	if _, ok := s.workspaceMergeConfig(); ok {
 		t.Fatal("invalid configuration enabled merge actions")
 	}
-	s.configJSON, s.snapshot.ConfigJSON = valid, valid
-	if len(s.workspaceCommandsFor(s.tasks[0], w)) != 1 || len(s.taskAddableServices(s.tasks[0])) != 1 {
+	s.settingsUnit.state.configJSON, s.snapshot.ConfigJSON = valid, valid
+	if len(s.workspaceCommandsFor(s.taskUnit.state.tasks[0], w)) != 1 || len(s.taskAddableServices(s.taskUnit.state.tasks[0])) != 1 {
 		t.Fatal("typed configuration did not recover after a corrected source")
 	}
 }
@@ -232,6 +232,6 @@ func BenchmarkDesktopConfigurationReads(b *testing.B) {
 		_ = s.configArray("items")
 		_ = s.tagJobScope()
 	}
-	b.ReportMetric(float64(len(s.configJSON)), "config-bytes")
+	b.ReportMetric(float64(len(s.settingsUnit.state.configJSON)), "config-bytes")
 	b.ReportAllocs()
 }

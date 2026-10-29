@@ -21,7 +21,7 @@ func (s *app) settingsCodexPlugins(c *ui.Context, p palette) {
 				}
 			})
 		})
-		sources := s.settingsMarketplaces
+		sources := s.settingsUnit.state.settingsMarketplaces
 		if len(sources) == 0 {
 			settingsHelpLabel(c, p, "还没有插件来源。", "仓库中需包含 Codex Marketplace 清单。", 11, 400)
 		}
@@ -123,9 +123,9 @@ func (s *app) settingsCodexPlugins(c *ui.Context, p palette) {
 
 func (s *app) settingsCodexMCP(c *ui.Context, p palette) {
 	pending := s.settingsMCPOperationPending()
-	scopeKey := s.snapshot.Home + "\x00" + fmt.Sprint(s.settingsMCPTaskScope)
-	if s.settingsMCPTaskScope {
-		task := s.currentTask()
+	scopeKey := s.snapshot.Home + "\x00" + fmt.Sprint(s.settingsUnit.state.settingsMCPTaskScope)
+	if s.settingsUnit.state.settingsMCPTaskScope {
+		task := s.taskUnit.currentTask()
 		scopeKey += "\x00" + strings.Join([]string{task.id, task.createdAt, task.path}, "\x00")
 	}
 	settingsHelpCard(c, p, "", "", func() {
@@ -134,22 +134,22 @@ func (s *app) settingsCodexMCP(c *ui.Context, p palette) {
 				task  bool
 				title string
 			}{{false, "全局配置"}, {true, "当前任务"}} {
-				if scope.task && s.currentTask().path == "" {
+				if scope.task && s.taskUnit.currentTask().path == "" {
 					continue
 				}
-				s.settingsChoice(c, p, "mcp-scope-"+scope.title, scope.title, s.settingsMCPTaskScope == scope.task, func() {
-					s.settingsMCPTaskScope = scope.task
-					s.settingsMCPPath = ""
-					s.settingsMCPServers = nil
+				s.settingsChoice(c, p, "mcp-scope-"+scope.title, scope.title, s.settingsUnit.state.settingsMCPTaskScope == scope.task, func() {
+					s.settingsUnit.state.settingsMCPTaskScope = scope.task
+					s.settingsUnit.state.settingsMCPPath = ""
+					s.settingsUnit.state.settingsMCPServers = nil
 					s.act("codex.extensions/mcp/status", "", "", "", "", "", s.settingsMCPPayload(nil))
 				})
 			}
 			if action(c, "codex-mcp-add", "plus", "添加服务", p, true) {
 				scope := "全局配置"
-				if s.settingsMCPTaskScope {
+				if s.settingsUnit.state.settingsMCPTaskScope {
 					scope = "当前任务"
 				}
-				fields := s.mcpFormFields(nil, "", scope, s.currentTask().path != "")
+				fields := s.mcpFormFields(nil, "", scope, s.taskUnit.currentTask().path != "")
 				s.openForm("codex.extensions/mcp/add", "添加 MCP 服务", "", "", "", "", fields...)
 			}
 			ui.Spacer(c)
@@ -162,24 +162,24 @@ func (s *app) settingsCodexMCP(c *ui.Context, p palette) {
 				}
 			})
 		})
-		if s.settingsMCPPath != "" {
-			settingsPathValue(c, p, "当前配置", s.settingsMCPPath)
-		} else if s.settingsMCPTaskScope {
-			settingsPathValue(c, p, "当前任务", s.currentTask().path)
+		if s.settingsUnit.state.settingsMCPPath != "" {
+			settingsPathValue(c, p, "当前配置", s.settingsUnit.state.settingsMCPPath)
+		} else if s.settingsUnit.state.settingsMCPTaskScope {
+			settingsPathValue(c, p, "当前任务", s.taskUnit.currentTask().path)
 		}
-		for _, warning := range s.settingsMCPWarnings {
+		for _, warning := range s.settingsUnit.state.settingsMCPWarnings {
 			label(c, warning, 10, p.amber).LineHeight(1.4)
 		}
-		if s.settingsMCPConnectionError != "" {
-			label(c, s.settingsMCPConnectionError, 10, p.amber).LineHeight(1.4)
+		if s.settingsUnit.state.settingsMCPConnectionError != "" {
+			label(c, s.settingsUnit.state.settingsMCPConnectionError, 10, p.amber).LineHeight(1.4)
 		}
-		if len(s.settingsMCPServers) == 0 {
+		if len(s.settingsUnit.state.settingsMCPServers) == 0 {
 			settingsMuted(c, p, "尚未读取到 MCP 服务。")
 		}
-		for index, server := range s.settingsMCPServers {
+		for index, server := range s.settingsUnit.state.settingsMCPServers {
 			name := firstNonEmpty(mapString(server, "name"), mapString(server, "id"))
 			raw := mapData(server["raw"])
-			connection := mapData(s.settingsMCPConnections[name])
+			connection := mapData(s.settingsUnit.state.settingsMCPConnections[name])
 			connected, hasConnection := connection["success"].(bool)
 			enabled, ok := raw["enabled"].(bool)
 			if !ok {
@@ -266,8 +266,8 @@ func (s *app) settingsMCPPayload(extra map[string]any) map[string]any {
 	for key, value := range extra {
 		payload[key] = value
 	}
-	if s.settingsMCPTaskScope {
-		if taskPath := s.currentTask().path; taskPath != "" {
+	if s.settingsUnit.state.settingsMCPTaskScope {
+		if taskPath := s.taskUnit.currentTask().path; taskPath != "" {
 			payload["cwd"] = taskPath
 		}
 	}

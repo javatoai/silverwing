@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
 	_ "image/gif"
 	_ "image/jpeg"
 	"image/png"
@@ -28,12 +29,13 @@ var supportedImageExtensions = map[string]struct{}{
 // ImageDocument owns one decoded, orientation-corrected still image. Animated
 // formats intentionally preview only their first frame.
 type ImageDocument struct {
-	mu      sync.Mutex
-	closed  bool
-	info    ImageInfo
-	image   image.Image
-	options Options
-	cache   *pngCache
+	mu        sync.Mutex
+	closed    bool
+	info      ImageInfo
+	image     image.Image
+	options   Options
+	cache     *pngCache
+	rgbaCache *rgbaCache
 }
 
 func OpenImage(ctx context.Context, path string, options Options) (*ImageDocument, error) {
@@ -73,7 +75,7 @@ func OpenImage(ctx context.Context, path string, options Options) (*ImageDocumen
 	bounds := decoded.Bounds()
 	return &ImageDocument{
 		info:  ImageInfo{Width: bounds.Dx(), Height: bounds.Dy(), Format: format},
-		image: decoded, options: options, cache: newPNGCache(options.CacheBytes),
+		image: decoded, options: options, cache: newPNGCache(options.CacheBytes / 2), rgbaCache: newRGBACache(options.CacheBytes - options.CacheBytes/2),
 	}, nil
 }
 
@@ -144,6 +146,46 @@ func (d *ImageDocument) ClearCache() {
 		return
 	}
 	d.cache.clear()
+	d.rgbaCache.clear()
+}
+
+// RenderRGBA preserves original orientation and alpha while transferring
+// independent pixels directly to an in-process UI, without a PNG round trip.
+func (d *ImageDocument) RenderRGBA(ctx context.Context, widthPx int) (RenderedRGBA, error) {
+	if d == nil {
+		return RenderedRGBA{}, ErrClosed
+	}
+	if err := contextError(ctx); err != nil {
+		return RenderedRGBA{}, err
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closed || d.image == nil {
+		return RenderedRGBA{}, ErrClosed
+	}
+	if widthPx < 0 {
+		return RenderedRGBA{}, errors.New("图片预览宽度不能为负数")
+	}
+	if widthPx == 0 || widthPx > d.info.Width {
+		widthPx = d.info.Width
+	}
+	width, height := d.outputSize(widthPx)
+	key := fmt.Sprintf("image:%d", width)
+	pixels, ok := d.rgbaCache.get(key)
+	if !ok {
+		pixels = image.NewRGBA(image.Rect(0, 0, width, height))
+		if width == d.info.Width {
+			draw.Draw(pixels, pixels.Bounds(), d.image, d.image.Bounds().Min, draw.Src)
+		} else {
+			xdraw.CatmullRom.Scale(pixels, pixels.Bounds(), d.image, d.image.Bounds(), xdraw.Src, nil)
+		}
+		if err := contextError(ctx); err != nil {
+			return RenderedRGBA{}, err
+		}
+		d.rgbaCache.put(key, pixels)
+	}
+	return RenderedRGBA{PageIndex: -1, PageCount: 1, Width: width, Height: height,
+		AspectRatio: float64(d.info.Width) / float64(d.info.Height), RGBA: pixels}, nil
 }
 
 func (d *ImageDocument) outputSize(widthPx int) (int, int) {
@@ -167,6 +209,7 @@ func (d *ImageDocument) Close() error {
 	d.closed = true
 	d.image = nil
 	d.cache.clear()
+	d.rgbaCache.clear()
 	return nil
 }
 

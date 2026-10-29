@@ -38,14 +38,12 @@ func TestCommentDraftImageTopLayerAndEscape(t *testing.T) {
 					s.renderCommentDraftBitmapViewer(c, p)
 					s.renderConfirmationDialog(c, p)
 				}, width, 900)
-				for _, entry := range state.markdown.inlineImages {
-					entry.loading, entry.error, entry.bitmap = false, "", bitmap
-				}
+				seedMarkdownReadyImages(t, s, state.markdown, bitmap)
 				tester.Frame()
 				if err := tester.Click("Markdown 图片：截图.png"); err != nil {
 					t.Fatal(err)
 				}
-				viewer := s.markdownBitmapViewer
+				viewer := s.materialsUnit.state.markdownBitmapViewer
 				if viewer == nil || viewer.composer != state {
 					t.Fatal("image was not bound to its composer")
 				}
@@ -63,19 +61,19 @@ func TestCommentDraftImageTopLayerAndEscape(t *testing.T) {
 					t.Fatal("confirmation above image did not focus cancel")
 				}
 				tester.Key(0, ui.KeyEscape)
-				if s.confirmationDialog != nil || s.markdownBitmapViewer != viewer || !state.open {
+				if s.confirmationDialog != nil || s.materialsUnit.state.markdownBitmapViewer != viewer || !state.open {
 					t.Fatal("Esc passed through the top confirmation")
 				}
 				tester.Key(0, ui.KeyEscape)
 				tester.Frame()
-				if s.markdownBitmapViewer != nil || !state.open || state.body != "# 你好" || !state.preview {
+				if s.materialsUnit.state.markdownBitmapViewer != nil || !state.open || state.body != "# 你好" || !state.preview {
 					t.Fatal("Esc closed or changed the underlying draft")
 				}
 				if !tester.Focused("Markdown 图片：截图.png") {
 					t.Fatal("focus did not return to the original image")
 				}
 				tester.Key(0, ui.KeyEnter)
-				if s.markdownBitmapViewer == nil {
+				if s.materialsUnit.state.markdownBitmapViewer == nil {
 					t.Fatal("keyboard did not reopen the image")
 				}
 				tester.Key(0, ui.KeyEscape)
@@ -86,7 +84,7 @@ func TestCommentDraftImageTopLayerAndEscape(t *testing.T) {
 					if state.running || backend.count.Load() != 1 || len(state.draft.Images) != 1 {
 						t.Fatal("pointer passed through to composer actions")
 					}
-					if s.markdownBitmapViewer != nil {
+					if s.materialsUnit.state.markdownBitmapViewer != nil {
 						tester.Key(0, ui.KeyEscape)
 					}
 				}
@@ -95,7 +93,7 @@ func TestCommentDraftImageTopLayerAndEscape(t *testing.T) {
 				if err := tester.Click("关闭图片"); err != nil {
 					t.Fatal(err)
 				}
-				if s.markdownBitmapViewer != nil || !state.open {
+				if s.materialsUnit.state.markdownBitmapViewer != nil || !state.open {
 					t.Fatal("close button affected the composer")
 				}
 				tester.Key(0, ui.KeyEscape)
@@ -117,7 +115,7 @@ func TestCommentDraftImageOwnerInvalidation(t *testing.T) {
 			state.markdown.commentReading = true
 			t.Cleanup(func() { closeMarkdownPreviewState(state.markdown) })
 			s.openMarkdownBitmapViewer(state.markdown, ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 20, 20))))
-			viewer := s.markdownBitmapViewer
+			viewer := s.materialsUnit.state.markdownBitmapViewer
 			if viewer == nil {
 				t.Fatal("viewer did not open")
 			}
@@ -129,21 +127,21 @@ func TestCommentDraftImageOwnerInvalidation(t *testing.T) {
 			case "edit":
 				state.preview = false
 			case "active":
-				s.commentComposers.active = &requirementCommentComposer{}
+				s.requirementUnit.state.commentComposers.active = &requirementCommentComposer{}
 			case "navigation":
 				s.page = "tasks"
 			case "home":
 				s.snapshot.Home += "-other"
 			case "config":
-				s.configJSON = `{"meegleExecutablePath":"other"}`
+				s.settingsUnit.state.configJSON = `{"meegleExecutablePath":"other"}`
 			case "account":
 				state.account = "old"
-				s.requirementIdentityJobs = &requirementIdentityJobState{confirmed: true, identity: "other", state: application.RequirementIdentityAuthenticated}
+				s.requirementUnit.state.requirementIdentityJobs = &requirementIdentityJobState{confirmed: true, identity: "other", state: application.RequirementIdentityAuthenticated}
 			case "published":
 				state.open, state.body = false, ""
 			}
 			s.observeRequirementCommentComposers()
-			if s.markdownBitmapViewer != nil || ctx.Err() == nil || markdownLocalImageViewerResultCurrent(s, viewer, generation) || viewer.media.imageExpandedBitmap != nil {
+			if s.materialsUnit.state.markdownBitmapViewer != nil || ctx.Err() == nil || markdownLocalImageViewerResultCurrent(s, viewer, generation) || viewer.media.imageExpandedBitmap != nil {
 				t.Fatal("invalidated draft retained its image or accepted a late bitmap")
 			}
 		})

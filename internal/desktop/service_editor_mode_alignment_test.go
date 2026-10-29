@@ -12,7 +12,9 @@ func TestServiceEditorFormModeLabelCentered(t *testing.T) {
 	for _, dark := range []bool{false, true} {
 		for _, page := range []string{"commands", "copies"} {
 			t.Run(fmt.Sprintf("%s-dark-%t", page, dark), func(t *testing.T) {
-				s := &app{serviceEditor: &serviceEditorState{commandsMode: "form", copiesMode: "form"}}
+				s := &app{
+					workspaceUnit: workspaceController{state: workspaceState{serviceEditor: &serviceEditorState{commandsMode: "form", copiesMode: "form"}}},
+				}
 				tester := ui.NewTester(func(c *ui.Context) {
 					p := setTheme(c, dark)
 					ui.Column(c).Fill().Padding(12).Children(func() { s.renderBootstrapEditorModes(c, p, page) })

@@ -20,8 +20,8 @@ import (
 func releaseNoticeFixture(t *testing.T, id string) (*app, tagHistoryGroup) {
 	t.Helper()
 	s := tagLayoutFixture(t)
-	s.taskRequirementMetadata = map[string]taskRequirementMetadataState{
-		"task-a": {URL: s.tasks[0].requirementURL, Status: requirementMetadataLoaded, Metadata: requirementMetadata{
+	s.requirementUnit.state.taskRequirementMetadata = map[string]taskRequirementMetadataState{
+		"task-a": {URL: s.taskUnit.state.tasks[0].requirementURL, Status: requirementMetadataLoaded, Metadata: requirementMetadata{
 			Participants: domain.RequirementParticipants{QCOwners: []domain.RequirementPerson{{Name: "测试甲"}, {Name: "测试乙"}, {Name: " 测试甲 "}, {Name: ""}}, ProductManagers: []domain.RequirementPerson{{Name: "产品角色不可当测试"}}},
 		}},
 	}
@@ -91,27 +91,27 @@ func TestTagReleaseNoticeRecipientsAreTaskScoped(t *testing.T) {
 	if message != tagReleaseNoticeCopiedPrefix+text+tagReleaseNoticeRecipientSeparator+"测试甲、测试乙" {
 		t.Fatal("feedback changed the actual clipboard bytes or duplicate-name order")
 	}
-	metadata := s.taskRequirementMetadata["task-a"]
+	metadata := s.requirementUnit.state.taskRequirementMetadata["task-a"]
 	metadata.Metadata.Participants.QCOwners = nil
-	s.taskRequirementMetadata["task-a"] = metadata
+	s.requirementUnit.state.taskRequirementMetadata["task-a"] = metadata
 	if !strings.HasSuffix(s.tagHistoryAnnouncementCopiedMessage(group, text), "请发送给：未设置测试负责人") {
 		t.Fatal("missing test owners guessed another role")
 	}
 	email := "qa@example.invalid"
 	metadata.Metadata.Participants.QCOwners = []domain.RequirementPerson{{Email: &email}, {Email: &email}}
-	s.taskRequirementMetadata["task-a"] = metadata
+	s.requirementUnit.state.taskRequirementMetadata["task-a"] = metadata
 	if !strings.HasSuffix(s.tagHistoryAnnouncementCopiedMessage(group, text), "请发送给："+email) {
 		t.Fatal("existing real-person email fallback or deduplication lost")
 	}
 	metadata.URL = "https://example.invalid/another-requirement"
-	s.taskRequirementMetadata["task-a"] = metadata
+	s.requirementUnit.state.taskRequirementMetadata["task-a"] = metadata
 	if !strings.HasSuffix(s.tagHistoryAnnouncementCopiedMessage(group, text), "请发送给：未设置测试负责人") {
 		t.Fatal("metadata from another requirement URL leaked into recipients")
 	}
-	metadata.URL = s.tasks[0].requirementURL
-	s.taskRequirementMetadata["task-a"] = metadata
-	s.tasks = append([]task{{id: "task-b", title: "其它任务", requirementURL: metadata.URL}}, s.tasks...)
-	s.taskRequirementMetadata["task-b"] = taskRequirementMetadataState{URL: metadata.URL, Status: requirementMetadataLoaded, Metadata: requirementMetadata{Participants: domain.RequirementParticipants{QCOwners: []domain.RequirementPerson{{Name: "其它任务测试"}}}}}
+	metadata.URL = s.taskUnit.state.tasks[0].requirementURL
+	s.requirementUnit.state.taskRequirementMetadata["task-a"] = metadata
+	s.taskUnit.state.tasks = append([]task{{id: "task-b", title: "其它任务", requirementURL: metadata.URL}}, s.taskUnit.state.tasks...)
+	s.requirementUnit.state.taskRequirementMetadata["task-b"] = taskRequirementMetadataState{URL: metadata.URL, Status: requirementMetadataLoaded, Metadata: requirementMetadata{Participants: domain.RequirementParticipants{QCOwners: []domain.RequirementPerson{{Name: "其它任务测试"}}}}}
 	if got := s.tagHistoryAnnouncementCopiedMessage(group, text); !strings.HasSuffix(got, "请发送给："+email) || strings.Contains(got, "其它任务测试") {
 		t.Fatal("current task or same-URL task replaced the owning batch's recipients")
 	}

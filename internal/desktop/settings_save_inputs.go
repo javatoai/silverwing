@@ -19,7 +19,7 @@ func (s *app) syncSettingsConfigInputs(previous, next string) {
 	}
 	// Native inputs can change before their next render observes the draft.
 	// Capture those edits before a background refresh updates cached controls.
-	if state := s.settingsAutosave; state != nil && state.home == s.snapshot.Home {
+	if state := s.settingsUnit.state.settingsAutosave; state != nil && state.home == s.snapshot.Home {
 		for key, entry := range state.entries {
 			if entry.latest != nil {
 				if value := entry.latest(); value != entry.value {
@@ -48,7 +48,7 @@ func (s *app) syncSettingsConfigInputs(previous, next string) {
 		}
 		*draft = settingsConfigInputText(afterText[key])
 	}
-	for key, draft := range s.settingsBoolInputs {
+	for key, draft := range s.settingsUnit.state.settingsBoolInputs {
 		if proxyDraft && (strings.HasPrefix(key, "proxy-target:") || key == "local:proxy-auth-enabled") {
 			continue
 		}
@@ -59,7 +59,7 @@ func (s *app) syncSettingsConfigInputs(previous, next string) {
 		*draft = value
 	}
 	if !reflect.DeepEqual(before["showTaskAreaCopyIcons"], after["showTaskAreaCopyIcons"]) || !reflect.DeepEqual(before["showTaskAreaRequirementCopyIcons"], after["showTaskAreaRequirementCopyIcons"]) {
-		if draft := s.settingsBoolInputs["showTaskAreaRequirementCopyIcons"]; draft != nil {
+		if draft := s.settingsUnit.state.settingsBoolInputs["showTaskAreaRequirementCopyIcons"]; draft != nil {
 			legacy, legacyOK := after["showTaskAreaCopyIcons"].(bool)
 			requirement, requirementOK := after["showTaskAreaRequirementCopyIcons"].(bool)
 			*draft = (!legacyOK || legacy) && (!requirementOK || requirement)

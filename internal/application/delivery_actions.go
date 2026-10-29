@@ -10,8 +10,9 @@ import (
 )
 
 func (a *App) delivery(config domain.AppConfig) *delivery.Service {
-	service := delivery.NewService(a.Paths, a.Config, a.Manifests, a.git(config), a.Runner)
-	preparation := documents.NewPreparationService(a.Paths, a.Runner)
+	tasks := a.taskService(config)
+	service := delivery.NewServiceWithTasks(a.Paths, a.Config, a.Manifests, a.git(config), a.Runner, tasks)
+	preparation := tasks.MaterialsPreparation
 	service.SetPreparationAPI(delivery.PreparationAPI{
 		Plan: func(ctx context.Context, config domain.AppConfig, link, title, folder string) (json.RawMessage, error) {
 			plan, err := preparation.Plan(ctx, config, link, title, folder)

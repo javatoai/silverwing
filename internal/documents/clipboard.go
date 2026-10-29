@@ -51,18 +51,20 @@ func (s *ClipboardService) CopyFiles(ctx context.Context, paths []string) error 
 
 // ResolveDeleteItems validates every selected item before a trash operation
 // and removes descendants already covered by a selected parent directory.
-func (s *Service) ResolveDeleteItems(root string, relativePaths []string) ([]string, error) {
-	validatedRoot, err := validatedMaterialsRoot(root)
+func (s *Service) ResolveDeleteItems(root string, relativePaths []string) (selected []string, resultErr error) {
+	scope, err := newMaterialsOperationScope(root)
 	if err != nil {
 		return nil, err
 	}
-	selected := make([]string, 0, len(relativePaths))
+	defer scope.finishPaths(&selected, &resultErr)
+	validatedRoot := scope.root
+	selected = make([]string, 0, len(relativePaths))
 	seen := map[string]bool{}
 	for _, value := range relativePaths {
 		if value == "" {
 			return nil, errors.New("待删除路径不能为空")
 		}
-		path, err := safePath(validatedRoot, value, false)
+		path, err := scope.resolve(value, false, false, false)
 		if err != nil {
 			return nil, err
 		}

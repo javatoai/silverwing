@@ -69,13 +69,13 @@ func (s *app) taskWorkspaceDetail(c *ui.Context, p palette) {
 					}
 				}
 			}
-			if s.tab == taskTagTab && s.currentTask().id != "" {
+			if s.tab == taskTagTab && s.taskUnit.currentTask().id != "" {
 				ui.Spacer(c)
-				s.renderTagHistoryPageMenu(c, p, s.currentTask())
+				s.renderTagHistoryPageMenu(c, p, s.taskUnit.currentTask())
 			}
 		})
 		ui.Divider(c)
-		if s.currentTask().id == "" {
+		if s.taskUnit.currentTask().id == "" {
 			s.emptyTask(c, p)
 			return
 		}
@@ -85,10 +85,10 @@ func (s *app) taskWorkspaceDetail(c *ui.Context, p palette) {
 		case 3:
 			s.renderTaskNotes(c, p)
 		case taskTagTab:
-			s.renderTaskTagHistory(c, p, s.currentTask())
+			s.renderTaskTagHistory(c, p, s.taskUnit.currentTask())
 		case 0:
 			ui.Column(c).Grow(1).MinHeight(0).Background(p.surface).Border(1, p.line).Radius(18).Children(func() {
-				ui.Scroll(c).Grow(1).MinHeight(0).TrackScroll(s.taskWorkspaceDetailScroll(s.currentTask())).Padding(18).Children(func() { s.taskDetails(c, p) })
+				ui.Scroll(c).Grow(1).MinHeight(0).TrackScroll(s.taskWorkspaceDetailScroll(s.taskUnit.currentTask())).Padding(18).Children(func() { s.taskDetails(c, p) })
 			})
 		case 2:
 			s.requirementDetails(c, p)
@@ -114,7 +114,7 @@ func (s *app) emptyTask(c *ui.Context, p palette) {
 }
 
 func (s *app) taskHeader(c *ui.Context, p palette) {
-	t := s.currentTask()
+	t := s.taskUnit.currentTask()
 	ui.Column(c).FillWidth().Gap(6).Padding(2).Children(func() {
 		if t.requirementURL != "" {
 			s.renderTaskRequirementMetadata(c, p, t)
@@ -131,11 +131,11 @@ func (s *app) taskHeader(c *ui.Context, p palette) {
 }
 
 func (s *app) copyTaskWorkspacePath(services ui.Services) {
-	s.copyTextToClipboard(services, s.currentTask().path, "已复制任务路径")
+	s.copyTextToClipboard(services, s.taskUnit.currentTask().path, "已复制任务路径")
 }
 
 func (s *app) taskDetails(c *ui.Context, p palette) {
-	t := s.currentTask()
+	t := s.taskUnit.currentTask()
 	ui.Column(c).FillWidth().Gap(16).Children(func() {
 		s.taskHeader(c, p)
 		failedServiceIDs := s.taskFailedServiceIDs(t)

@@ -23,12 +23,14 @@ func EditableMaterialText(path string) bool {
 
 // MaterialTextSnapshot keeps the exact source bytes separate from preview
 // projections. UTF-16 and detected unknown formats remain read-only previews.
-func (s *Service) MaterialTextSnapshot(root, path string) (MaterialTextSnapshot, error) {
-	root, err := validatedMaterialsRoot(root)
+func (s *Service) MaterialTextSnapshot(root, path string) (snapshot MaterialTextSnapshot, resultErr error) {
+	scope, err := newMaterialsOperationScope(root)
 	if err != nil {
 		return MaterialTextSnapshot{}, err
 	}
-	path, err = safePath(root, path, false)
+	defer scope.finishSnapshot(&snapshot, &resultErr)
+	root = scope.root
+	path, err = scope.resolve(path, false, false, false)
 	if err != nil {
 		return MaterialTextSnapshot{}, err
 	}
@@ -99,7 +101,26 @@ func materialTextBytes(text string, hasBOM bool) []byte {
 
 // SaveMaterialText writes the editor's original source verbatim. In particular,
 // neither syntax highlighting nor JSON/CSV preview output is serialized.
-func (s *Service) SaveMaterialText(ctx context.Context, root, path, text, baselineHash string, hasBOM bool) (MaterialTextSnapshot, error) {
+func (s *Service) SaveMaterialText(ctx context.Context, root, path, text, baselineHash string, hasBOM bool) (snapshot MaterialTextSnapshot, resultErr error) {
+	if err := ctx.Err(); err != nil {
+		return MaterialTextSnapshot{}, err
+	}
+	if _, err := materialTextSnapshotFromBytes(path, nil, materialTextBytes(text, hasBOM)); err != nil {
+		return MaterialTextSnapshot{}, err
+	}
+	scope, err := newMaterialsOperationScope(root)
+	if err != nil {
+		return MaterialTextSnapshot{}, err
+	}
+	defer scope.finishSnapshot(&snapshot, &resultErr)
+	path, err = scope.resolve(path, false, true, false)
+	if err != nil {
+		return MaterialTextSnapshot{}, err
+	}
+	return s.saveMaterialText(ctx, scope.root, path, text, baselineHash, hasBOM, scope)
+}
+
+func (s *Service) saveMaterialText(ctx context.Context, root, path, text, baselineHash string, hasBOM bool, scope *materialsOperationScope) (MaterialTextSnapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return MaterialTextSnapshot{}, err
 	}
@@ -127,7 +148,7 @@ func (s *Service) SaveMaterialText(ctx context.Context, root, path, text, baseli
 		return MaterialTextSnapshot{}, err
 	}
 	parent := filepath.Dir(path)
-	if err = revalidateMaterialsDestination(root, relativeMaterials(root, parent), parent); err != nil {
+	if err = scope.revalidateDestination(root, relativeMaterials(root, parent), parent); err != nil {
 		return MaterialTextSnapshot{}, err
 	}
 	staging, err := stagingPath(parent, "import", ".tmp")
@@ -148,7 +169,7 @@ func (s *Service) SaveMaterialText(ctx context.Context, root, path, text, baseli
 	if latest.Hash != baselineHash {
 		return latest, ErrConflict
 	}
-	if err = revalidateMaterialsDestination(root, relativeMaterials(root, parent), parent); err != nil {
+	if err = scope.revalidateDestination(root, relativeMaterials(root, parent), parent); err != nil {
 		return MaterialTextSnapshot{}, err
 	}
 	if err = ctx.Err(); err != nil {

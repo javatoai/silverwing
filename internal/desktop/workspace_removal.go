@@ -40,7 +40,7 @@ func (s *app) beginWorkspaceRemoval(task task, item application.Workspace) {
 		Home: s.snapshot.Home, TaskPath: task.path, TaskCreatedAt: task.createdAt,
 		RequestID: s.nextWorkspaceRemovalRequestID(), Open: true, Loading: true,
 	}
-	s.workspaceRemoval = state
+	s.workspaceUnit.state.workspaceRemoval = state
 	s.act("workspace.remove-preview", task.id, item.ServiceID, item.ModuleID, item.Path, "", state.actionPayload(nil))
 }
 
@@ -78,12 +78,12 @@ func (s *app) applyWorkspaceRemovalResult(action application.Action, result appl
 	if s.win != nil && s.win.IsDestroyed() {
 		return
 	}
-	state := s.workspaceRemoval
+	state := s.workspaceUnit.state.workspaceRemoval
 	if state == nil || !state.matches(action) {
 		return
 	}
 	if !s.workspaceRemovalIdentityCurrent(state) {
-		s.workspaceRemoval = nil
+		s.workspaceUnit.state.workspaceRemoval = nil
 		return
 	}
 	state.Loading = false
@@ -108,10 +108,10 @@ func (s *app) applyWorkspaceRemovalResult(action application.Action, result appl
 			state.Removing = false
 			state.Error = "移除结果格式错误：" + err.Error()
 			s.lastError = state.Error
-			s.workspaceRemoval = nil
+			s.workspaceUnit.state.workspaceRemoval = nil
 			return
 		}
-		s.workspaceRemoval = nil
+		s.workspaceUnit.state.workspaceRemoval = nil
 		s.lastMessage = strings.TrimSpace(result.Message)
 		if s.lastMessage == "" {
 			s.lastMessage = "模块已删除"
@@ -131,12 +131,12 @@ func (s *app) applyWorkspaceRemovalFailure(action application.Action, err error)
 	if s.win != nil && s.win.IsDestroyed() {
 		return
 	}
-	state := s.workspaceRemoval
+	state := s.workspaceUnit.state.workspaceRemoval
 	if state == nil || !state.matches(action) {
 		return
 	}
 	if !s.workspaceRemovalIdentityCurrent(state) {
-		s.workspaceRemoval = nil
+		s.workspaceUnit.state.workspaceRemoval = nil
 		return
 	}
 	state.Loading = false
@@ -148,7 +148,7 @@ func (s *app) applyWorkspaceRemovalFailure(action application.Action, err error)
 		state.Removing = false
 		s.lastError = err.Error()
 		if !state.Open {
-			s.workspaceRemoval = nil
+			s.workspaceUnit.state.workspaceRemoval = nil
 		}
 	}
 }
@@ -178,7 +178,7 @@ func (state *workspaceRemovalState) payloadMatches(payload map[string]any) bool 
 }
 
 func (s *app) workspaceRemovalTaskMatches(task task, item application.Workspace) bool {
-	current := s.currentTask()
+	current := s.taskUnit.currentTask()
 	if current.id == "" || current.id != task.id || !sameWorkspaceRemovalPath(current.path, task.path) ||
 		current.createdAt != task.createdAt {
 		return false
@@ -206,7 +206,7 @@ func (s *app) workspaceRemovalTaskIdentityCurrent(state *workspaceRemovalState) 
 	if state == nil {
 		return false
 	}
-	current := s.currentTask()
+	current := s.taskUnit.currentTask()
 	if current.id != state.TaskID || !sameWorkspaceRemovalPath(current.path, state.TaskPath) ||
 		current.createdAt != state.TaskCreatedAt || !sameWorkspaceRemovalPath(s.snapshot.Home, state.Home) {
 		return false
@@ -218,7 +218,7 @@ func (s *app) workspaceRemovalWorkspaceCurrent(state *workspaceRemovalState) boo
 	if state == nil {
 		return false
 	}
-	current := s.currentTask()
+	current := s.taskUnit.currentTask()
 	for _, item := range current.workspaces {
 		if item.ServiceID == state.ServiceID && item.ModuleID == state.ModuleID &&
 			sameWorkspaceRemovalPath(item.Path, state.Path) {
@@ -238,7 +238,7 @@ func sameWorkspaceRemovalPath(left, right string) bool {
 }
 
 func (s *app) confirmWorkspaceRemoval() {
-	state := s.workspaceRemoval
+	state := s.workspaceUnit.state.workspaceRemoval
 	if state == nil || !state.Open || state.Preview == nil || state.Loading || state.Removing || s.busy ||
 		!s.workspaceRemovalIdentityCurrent(state) ||
 		(state.Preview.RequiresRiskConfirmation && !state.Acknowledge) {
@@ -262,17 +262,17 @@ func (s *app) confirmWorkspaceRemoval() {
 }
 
 func (s *app) renderWorkspaceRemovalDialog(c *ui.Context, p palette) {
-	state := s.workspaceRemoval
+	state := s.workspaceUnit.state.workspaceRemoval
 	if state == nil {
 		return
 	}
 	if !s.workspaceRemovalIdentityCurrent(state) {
-		s.workspaceRemoval = nil
+		s.workspaceUnit.state.workspaceRemoval = nil
 		return
 	}
 	if !state.Open {
 		if !state.Removing {
-			s.workspaceRemoval = nil
+			s.workspaceUnit.state.workspaceRemoval = nil
 		}
 		return
 	}
@@ -309,7 +309,7 @@ func (s *app) renderWorkspaceRemovalDialog(c *ui.Context, p palette) {
 						message = "工作区目录已缺失，将只清理任务记录。"
 					}
 					label(c, message, 12, p.text).Wrap()
-					if len(s.taskByID(state.TaskID).workspaces) == 1 {
+					if len(s.taskUnit.taskByID(state.TaskID).workspaces) == 1 {
 						label(c, "这是最后一个工作区。移除后任务、需求资料和笔记仍会保留，可随时重新添加服务。", 12, p.muted).Wrap()
 					}
 					ui.Column(c).FillWidth().Padding(10).Gap(4).Background(p.soft).Radius(8).Children(func() {

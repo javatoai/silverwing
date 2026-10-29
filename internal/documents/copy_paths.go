@@ -7,17 +7,18 @@ import (
 
 // ResolveCopyPaths validates the captured selection without collapsing a
 // selected child into its selected parent or walking a directory's contents.
-func (s *Service) ResolveCopyPaths(ctx context.Context, root string, values []string) ([]string, error) {
-	validatedRoot, err := validatedMaterialsRoot(root)
+func (s *Service) ResolveCopyPaths(ctx context.Context, root string, values []string) (paths []string, resultErr error) {
+	scope, err := newMaterialsOperationScope(root)
 	if err != nil {
 		return nil, err
 	}
-	paths := make([]string, 0, len(values))
+	defer scope.finishPaths(&paths, &resultErr)
+	paths = make([]string, 0, len(values))
 	for _, value := range values {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		path, err := safePath(validatedRoot, value, false)
+		path, err := scope.resolve(value, false, false, false)
 		if err != nil {
 			return nil, err
 		}
@@ -25,7 +26,7 @@ func (s *Service) ResolveCopyPaths(ctx context.Context, root string, values []st
 		if err != nil {
 			return nil, err
 		}
-		if err := validateMaterialPath(validatedRoot, path, info); err != nil {
+		if err := validateMaterialPath(scope.root, path, info); err != nil {
 			return nil, err
 		}
 		paths = append(paths, path)

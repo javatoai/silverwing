@@ -18,7 +18,7 @@ import (
 func tagFailureFixture(t *testing.T) *app {
 	t.Helper()
 	s := tagLayoutFixture(t)
-	s.snapshot.ConfigJSON = s.configJSON
+	s.snapshot.ConfigJSON = s.settingsUnit.state.configJSON
 	s.backend = &tagLayoutCaptureBackend{actions: make(chan application.Action, 4)}
 	s.snapshot.TagHistory = []application.TagRecord{
 		{ID: "conflict", TaskID: "task-a", BatchID: "current-batch", ServiceID: "service-a", ModuleID: "module-a", ServiceName: "api-service", State: "CONFLICT", RetryKind: "RETRY_BUILD", Tag: "1.0.beta-1", SourceBranch: "feature/example", TargetBranch: "release/test", CreatedAt: "2026-10-15 12:00:00", Detail: "合并失败：" + strings.Repeat("完整错误包含中文与长分支名称，需要按需阅读。", 10), ConflictSummary: "我在服务 api-service 的 feature/example 分支合并到 origin/release/test 时遇到了冲突，请你解决。", ConflictFiles: []string{"src/示例/Example.kt", strings.Repeat("long-directory/", 12) + "Tail.kt"}, Guidance: "我在服务 api-service 的 feature/example 分支合并到 origin/release/test 时遇到了冲突，请你解决。\n解决冲突后提交并推送 `origin/release/test`，再在桌面端打开任务“支付渠道优化”的 Tag 历史，选择记录4557b63c-440...并点击“重试”。"},
@@ -29,7 +29,7 @@ func tagFailureFixture(t *testing.T) *app {
 		if err := os.MkdirAll(path, 0700); err != nil {
 			t.Fatal(err)
 		}
-		s.tasks[0].workspaces = append(s.tasks[0].workspaces, application.Workspace{ServiceID: record.ServiceID, ModuleID: record.ModuleID, Path: path})
+		s.taskUnit.state.tasks[0].workspaces = append(s.taskUnit.state.tasks[0].workspaces, application.Workspace{ServiceID: record.ServiceID, ModuleID: record.ModuleID, Path: path})
 	}
 	return s
 }
@@ -289,7 +289,7 @@ func TestTagFailureActionsUseScopedIndependentQueue(t *testing.T) {
 			record := s.snapshot.TagHistory[0]
 			scope := s.tagJobScope()
 			view := s.tagJobView(scope)
-			view.snapshot = application.TagJobSnapshot{Scope: scope, ID: "running-job", Busy: true, Items: []application.TagJobItem{{OperationID: record.ID, ServiceID: record.ServiceID, ModuleID: record.ModuleID, WorkspacePath: s.tasks[0].workspaces[0].Path, Busy: true}}}
+			view.snapshot = application.TagJobSnapshot{Scope: scope, ID: "running-job", Busy: true, Items: []application.TagJobItem{{OperationID: record.ID, ServiceID: record.ServiceID, ModuleID: record.ModuleID, WorkspacePath: s.taskUnit.state.tasks[0].workspaces[0].Path, Busy: true}}}
 			tester := tagLayoutTester(s, 1100, false)
 			button := "重试 Tag · "
 			if kind == "tag.workspace-check" {
@@ -303,8 +303,8 @@ func TestTagFailureActionsUseScopedIndependentQueue(t *testing.T) {
 				t.Fatalf("busy repository dispatched an action: %+v", action)
 			default:
 			}
-			otherPath := s.tasks[0].workspaces[1].Path
-			s.tasks[0].workspaces[1].Path = s.tasks[0].workspaces[0].Path
+			otherPath := s.taskUnit.state.tasks[0].workspaces[1].Path
+			s.taskUnit.state.tasks[0].workspaces[1].Path = s.taskUnit.state.tasks[0].workspaces[0].Path
 			tester.Frame()
 			if err := tester.Click(button + "dirty"); err != nil {
 				t.Fatal(err)
@@ -312,7 +312,7 @@ func TestTagFailureActionsUseScopedIndependentQueue(t *testing.T) {
 			if len(view.commands) != 0 {
 				t.Fatal("another record sharing the busy workspace bypassed its gate")
 			}
-			s.tasks[0].workspaces[1].Path = otherPath
+			s.taskUnit.state.tasks[0].workspaces[1].Path = otherPath
 			tester.Frame()
 			if err := tester.Click(button + "dirty"); err != nil {
 				t.Fatal(err)
@@ -323,7 +323,7 @@ func TestTagFailureActionsUseScopedIndependentQueue(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("unrelated global busy/other repository blocked the record action")
 			}
-			if action.Kind != kind || action.TaskID != "task-a" || action.ServiceID != "service-b" || action.ModuleID != "module-b" || action.Path != s.tasks[0].workspaces[1].Path || payloadString(action.Payload, "operationId") != "dirty" || payloadString(action.Payload, "tagHistoryTaskPath") != s.tasks[0].path {
+			if action.Kind != kind || action.TaskID != "task-a" || action.ServiceID != "service-b" || action.ModuleID != "module-b" || action.Path != s.taskUnit.state.tasks[0].workspaces[1].Path || payloadString(action.Payload, "operationId") != "dirty" || payloadString(action.Payload, "tagHistoryTaskPath") != s.taskUnit.state.tasks[0].path {
 				t.Fatalf("record action lost its complete target identity: %+v", action)
 			}
 			if kind == "tag.workspace-check" {

@@ -21,8 +21,8 @@ func productionConfirmationFixture(t *testing.T, kind string) (*app, *production
 	t.Helper()
 	s, v, b := productionFixture(t)
 	s.win = &mygo.Window{}
-	s.tasks = []task{{id: "selected-task", path: "selected-path", createdAt: "selected-created"}}
-	s.notes[0] = "unsaved draft"
+	s.taskUnit.state.tasks = []task{{id: "selected-task", path: "selected-path", createdAt: "selected-created"}}
+	s.taskUnit.state.notes[0] = "unsaved draft"
 	v.Preview.BranchHeads = map[string]string{v.Branch: strings.Repeat("d", 40)}
 	v.Preview.ProductionStatus = domain.GenbuTagProbeStatus{Build: domain.GenbuUnknown, UAT: domain.GenbuUnknown, Production: domain.GenbuSuccess}
 	b.TagPlan = &production.TagPlan{Tag: "2.3.44", Token: "confirmed-token", Commit: b.ReleaseSHA, MainSHA: v.Preview.MainSHA, Preview: *v.Preview}
@@ -32,7 +32,7 @@ func productionConfirmationFixture(t *testing.T, kind string) (*app, *production
 	if kind == "reprepare" {
 		b.Intent = &production.Intent{Kind: "tag", Tag: "2.3.44", TagCommit: b.ReleaseSHA}
 	}
-	s.production.batches[0] = b
+	s.releaseUnit.state.production.batches[0] = b
 	switch kind {
 	case "create":
 		s.confirmProductionCreate(v)
@@ -126,11 +126,11 @@ func TestProductionAllConfirmationsUseSummaryAndKeepOriginalPayload(t *testing.T
 			}
 			backend := &productionTestBackend{calls: make(chan application.Action, 2), replies: make(chan productionTestAnswer, 1)}
 			window := &refreshTestWindow{updates: make(chan func(), 8)}
-			s.backend, s.win, s.production.window = backend, nil, window
+			s.backend, s.win, s.releaseUnit.state.production.window = backend, nil, window
 			t.Cleanup(func() {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 				defer cancel()
-				if err := s.closeProductionJobs(ctx); err != nil {
+				if err := s.releaseUnit.closeProductionJobs(ctx); err != nil {
 					t.Error(err)
 				}
 			})
@@ -163,7 +163,7 @@ func TestProductionAllConfirmationsUseSummaryAndKeepOriginalPayload(t *testing.T
 			case <-time.After(time.Second):
 				t.Fatal("missing completion")
 			}
-			if s.tasks[0].id != "selected-task" || s.notes[0] != "unsaved draft" {
+			if s.taskUnit.state.tasks[0].id != "selected-task" || s.taskUnit.state.notes[0] != "unsaved draft" {
 				t.Fatal("confirmation changed task or draft")
 			}
 		})
@@ -173,15 +173,15 @@ func TestProductionAllConfirmationsUseSummaryAndKeepOriginalPayload(t *testing.T
 func TestProductionContentRecheckOnlyReadsAndKeepsManualBranch(t *testing.T) {
 	s, v, b := productionFixture(t)
 	v.Version = "release/2.3.90"
-	s.tasks = []task{{id: "selected-task"}}
-	s.notes[0] = "unsaved draft"
+	s.taskUnit.state.tasks = []task{{id: "selected-task"}}
+	s.taskUnit.state.notes[0] = "unsaved draft"
 	backend := &productionTestBackend{calls: make(chan application.Action, 2), replies: make(chan productionTestAnswer, 1)}
 	window := &refreshTestWindow{updates: make(chan func(), 8)}
-	s.backend, s.production.window = backend, window
+	s.backend, s.releaseUnit.state.production.window = backend, window
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		if err := s.closeProductionJobs(ctx); err != nil {
+		if err := s.releaseUnit.closeProductionJobs(ctx); err != nil {
 			t.Error(err)
 		}
 	})
@@ -206,7 +206,7 @@ func TestProductionContentRecheckOnlyReadsAndKeepsManualBranch(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("missing check completion")
 	}
-	if v.Version != "release/2.3.90" || s.tasks[0].id != "selected-task" || s.notes[0] != "unsaved draft" {
+	if v.Version != "release/2.3.90" || s.taskUnit.state.tasks[0].id != "selected-task" || s.taskUnit.state.notes[0] != "unsaved draft" {
 		t.Fatal("recheck changed manual branch, task or draft")
 	}
 	select {
@@ -228,7 +228,7 @@ func TestProductionConfirmationRejectsChangedContextAndOldDialogs(t *testing.T) 
 			case "page":
 				s.page = "tasks"
 			case "service":
-				s.production.selected = "other"
+				s.releaseUnit.state.production.selected = "other"
 			case "batch":
 				v.BatchID = "another"
 			case "selection":
@@ -239,7 +239,7 @@ func TestProductionConfirmationRejectsChangedContextAndOldDialogs(t *testing.T) 
 				s.snapshot.Home = "another"
 			case "config", "unrelated-config":
 				var c domain.AppConfig
-				if err := json.Unmarshal([]byte(s.configJSON), &c); err != nil {
+				if err := json.Unmarshal([]byte(s.settingsUnit.state.configJSON), &c); err != nil {
 					t.Fatal(err)
 				}
 				value := "another"
@@ -249,7 +249,7 @@ func TestProductionConfirmationRejectsChangedContextAndOldDialogs(t *testing.T) 
 					c.TaskRoot = &value
 				}
 				data, _ := json.Marshal(c)
-				s.configJSON = string(data)
+				s.settingsUnit.state.configJSON = string(data)
 			case "replaced":
 				s.cancelConfirmationDialog()
 				s.confirmNative("new dialog", "new message", "new detail", nil)
@@ -300,7 +300,7 @@ func TestProductionConfirmationLongPathAndCancelDefaults(t *testing.T) {
 		if s.confirmationDialog.DetailOpen {
 			t.Fatal("new dialog retained previous disclosure state")
 		}
-		s.configJSON = `{"tagEnabled":false}`
+		s.settingsUnit.state.configJSON = `{"tagEnabled":false}`
 		tester.Frame()
 		if s.confirmationDialog != nil {
 			t.Fatal("context change did not dismiss pending confirmation")

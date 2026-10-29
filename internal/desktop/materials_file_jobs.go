@@ -59,14 +59,14 @@ func materialsFileJobMutationAction(kind string) bool {
 }
 
 func (s *app) ensureMaterialsFileJobs() *materialsFileJobState {
-	if s.materialsFileJobs == nil {
-		s.materialsFileJobs = &materialsFileJobState{current: make(map[string]*materialsFileJob), running: make(map[*materialsFileJob]struct{})}
+	if s.materialsUnit.state.materialsFileJobs == nil {
+		s.materialsUnit.state.materialsFileJobs = &materialsFileJobState{current: make(map[string]*materialsFileJob), running: make(map[*materialsFileJob]struct{})}
 	}
-	return s.materialsFileJobs
+	return s.materialsUnit.state.materialsFileJobs
 }
 
 func (s *app) materialsFileScope(taskID string) (materialsFileJobScope, bool) {
-	task := s.taskByID(taskID)
+	task := s.taskUnit.taskByID(taskID)
 	return materialsFileJobScope{home: s.snapshot.Home, taskID: task.id, taskPath: task.path, createdAt: task.createdAt, root: task.materialsPath}, task.id != "" && task.path != "" && task.materialsPath != ""
 }
 
@@ -82,11 +82,11 @@ func (s *app) materialsFileScopeMatches(scope materialsFileJobScope) bool {
 // This feature's mutation occupies its controls. Ordinary Git/Tag work retains
 // its own global operation ownership while materials requests proceed.
 func (s *app) materialsFileJobsActive() bool {
-	state := s.materialsFileJobs
+	state := s.materialsUnit.state.materialsFileJobs
 	if state == nil {
 		return false
 	}
-	scope, valid := s.materialsFileScope(s.currentTask().id)
+	scope, valid := s.materialsFileScope(s.taskUnit.currentTask().id)
 	if !valid {
 		return false
 	}
@@ -98,7 +98,7 @@ func (s *app) materialsFileJobsActive() bool {
 // Closing documents must also account for a previous task's mutation until
 // its backend and queued response have released their ownership.
 func (s *app) materialsFileMutationRunning() bool {
-	state := s.materialsFileJobs
+	state := s.materialsUnit.state.materialsFileJobs
 	if state == nil {
 		return false
 	}
@@ -121,7 +121,7 @@ func (s *app) materialsFilePathBlocked() bool {
 	if s.materialsGitRunning() {
 		return true
 	}
-	if state := s.materialsFileJobs; state != nil {
+	if state := s.materialsUnit.state.materialsFileJobs; state != nil {
 		state.mu.Lock()
 		blocked := state.closed || state.barrier != nil
 		state.mu.Unlock()
@@ -131,7 +131,7 @@ func (s *app) materialsFilePathBlocked() bool {
 	}
 	// Retain the watcher boundary for root migration/recovery, task deletion
 	// and confirmed workspace removal.
-	return s.materialsLiveRefreshLifecycle != nil && s.materialsLiveRefreshLifecycle.barrier != nil
+	return s.materialsUnit.state.materialsLiveRefreshLifecycle != nil && s.materialsUnit.state.materialsLiveRefreshLifecycle.barrier != nil
 }
 
 func (s *app) materialsFileInputBusy() bool {
@@ -382,7 +382,7 @@ func (s *app) finishMaterialsFileJob(state *materialsFileJobState, request *mate
 	// Reuse existing feature result routing. A material result does not
 	// replace the Snapshot owned by a concurrent global operation.
 	s.applyActionResult(request.action, result)
-	if request.action.Kind == "document.rename" && materialsRenameCompleted(result) && s.currentTask().id == request.scope.taskID {
+	if request.action.Kind == "document.rename" && materialsRenameCompleted(result) && s.taskUnit.currentTask().id == request.scope.taskID {
 		s.reloadMaterialsDocuments()
 	}
 }
@@ -393,18 +393,18 @@ func (s *app) restoreMaterialsFileReadRequest(action application.Action, settled
 	}
 	switch action.Kind {
 	case "document.list":
-		s.documentsRequested = false
+		s.materialsUnit.state.documentsRequested = false
 		if settled {
-			s.documentsLoaded = true
+			s.materialsUnit.state.documentsLoaded = true
 		}
 	case "document.read":
-		s.documentReadPending = false
+		s.materialsUnit.state.documentReadPending = false
 	}
 }
 
 func (s *app) rejectMaterialsFileJob(action application.Action, err error) {
 	s.restoreMaterialsFileReadRequest(action, false)
-	if action.TaskID != s.currentTask().id {
+	if action.TaskID != s.taskUnit.currentTask().id {
 		return
 	}
 	if !s.applyMaterialsFileActionFailure(action, err) {
@@ -511,8 +511,8 @@ func (s *app) resumeMaterialsFileJobs(barrier *materialsFileJobBarrier) {
 	s.reportMaterialsFileBarrierError(settlementErr)
 }
 
-func (s *app) stopMaterialsFileJobs() {
-	state := s.materialsFileJobs
+func (s *materialsController) stopMaterialsFileJobs() {
+	state := s.state.materialsFileJobs
 	if state == nil {
 		return
 	}
@@ -525,9 +525,9 @@ func (s *app) stopMaterialsFileJobs() {
 	}
 }
 
-func (s *app) closeMaterialsFileJobs(ctx context.Context) error {
+func (s *materialsController) closeMaterialsFileJobs(ctx context.Context) error {
 	s.stopMaterialsFileJobs()
-	state := s.materialsFileJobs
+	state := s.state.materialsFileJobs
 	if state == nil {
 		return nil
 	}

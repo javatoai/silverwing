@@ -18,7 +18,7 @@ func (s *app) taskArchiveScope(t task) (taskArchiveConfirmationScope, bool) {
 }
 
 func (s *app) taskArchiveConfirmationAction(scope taskArchiveConfirmationScope) (application.Action, bool) {
-	current, ok := s.taskArchiveScope(s.taskByID(scope.taskID))
+	current, ok := s.taskArchiveScope(s.taskUnit.taskByID(scope.taskID))
 	if !ok || current != scope {
 		return application.Action{}, false
 	}

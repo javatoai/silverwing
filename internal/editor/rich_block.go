@@ -10,8 +10,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	gast "github.com/yuin/goldmark/ast"
-	"github.com/yuin/goldmark/text"
+	"silverwing-go/internal/markdowntext"
+
 	"github.com/yuin/goldmark/util"
 )
 
@@ -124,33 +124,9 @@ func NewRichBlock(part Part) (*RichBlock, error) {
 // inline code span); once a source range is already a RICH editor group, the
 // rich editor still renders and edits its complete Markdown source.
 func richSemanticNodes(source string) []Node {
-	normalized, offsets := normalizeLines(source)
-	normalizedBytes := []byte(normalized)
-	root := markdownParser.Parse(text.NewReader(normalizedBytes))
-	mapper := sourceMapper{original: source, offsets: offsets}
-
-	children := make([]gast.Node, 0, root.ChildCount())
-	for child := root.FirstChild(); child != nil; child = child.NextSibling() {
-		start := child.Pos()
-		if start >= 0 && start <= len(normalizedBytes) {
-			children = append(children, child)
-		}
-	}
-
-	nodes := make([]Node, 0, len(children))
-	for index, child := range children {
-		start := child.Pos()
-		end := len(normalizedBytes)
-		for next := index + 1; next < len(children); next++ {
-			nextStart := children[next].Pos()
-			if nextStart >= start && nextStart <= end {
-				end = nextStart
-				break
-			}
-		}
-		startRaw, endRaw := mapper.rawRange(start, end)
-		node := convertBlock(child, normalizedBytes, mapper, SourceRange{Start: startRaw, End: endRaw}, PartRich)
-		nodes = append(nodes, preserveRichLineBreaks(node, source))
+	nodes := markdowntext.SemanticNodes(source)
+	for i := range nodes {
+		nodes[i] = preserveRichLineBreaks(nodes[i], source)
 	}
 	return nodes
 }

@@ -214,7 +214,7 @@ func TestMaterialsReadingContextAndEmptyReader(t *testing.T) {
 	}
 	// The source editor paints its text; its filename label also appears in
 	// the tree, so hide the tree before resolving the editor's public bounds.
-	s.documentsCollapsed = true
+	s.materialsUnit.state.documentsCollapsed = true
 	tt.Frame()
 	source, ok := tt.Find("fixture.md")
 	if !ok || source.W <= 0 || source.H <= 0 {
@@ -230,7 +230,7 @@ func TestMaterialsReadingContextAndEmptyReader(t *testing.T) {
 	if s.readingMode() != "RENDERED" {
 		t.Fatal("materials preview mode route lost")
 	}
-	closeMarkdownPreviewState(s.markdown)
+	closeMarkdownPreviewState(s.materialsUnit.state.markdown)
 	empty := newReadonlyMarkdownState("empty", "", nil)
 	defer closeMarkdownPreviewState(empty)
 	tt = ui.NewTester(func(c *ui.Context) { s.renderReadonlyMarkdownReader(c, setTheme(c, false), empty) }, 420, 300)

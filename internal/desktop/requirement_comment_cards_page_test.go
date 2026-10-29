@@ -19,20 +19,20 @@ func TestRequirementCommentCardsPageLayoutsAndScroll(test *testing.T) {
 					state := newApp(nil, Options{CapturePath: "isolated-comment-cards-page"})
 					state.loading, state.page, state.dark, state.tab = false, page, dark, 2
 					state.snapshot.Home = test.TempDir()
-					state.configJSON = `{"meegleProjects":[{"project_key":"fixture","simple_name":"本地示例"}]}`
+					state.settingsUnit.state.configJSON = `{"meegleProjects":[{"project_key":"fixture","simple_name":"本地示例"}]}`
 					item := application.Requirement{
 						ID: "1001", Title: "需求讨论与验收 · 本地示例", URL: "https://example.invalid/requirements/1001", ProjectKey: "fixture",
 						WorkItem: domain.ParticipatedWorkItem{ID: "1001", ProjectKey: "fixture", Type: "userstory"},
 					}
-					state.requirements, state.requirementsLoaded, state.requirementsRequested = []application.Requirement{item}, true, true
-					state.selectedRequirementKey = requirementKey(item)
-					state.tasks = []task{{id: "comment-card-task", title: "讨论展示优化", requirementTitle: item.Title, requirementURL: item.URL, status: "进行中"}}
+					state.requirementUnit.state.requirements, state.requirementUnit.state.requirementsLoaded, state.requirementUnit.state.requirementsRequested = []application.Requirement{item}, true, true
+					state.requirementUnit.state.selectedRequirementKey = requirementKey(item)
+					state.taskUnit.state.tasks = []task{{id: "comment-card-task", title: "讨论展示优化", requirementTitle: item.Title, requirementURL: item.URL, status: "进行中"}}
 					taskID := ""
 					if page == "tasks" {
-						taskID = state.tasks[0].id
+						taskID = state.taskUnit.state.tasks[0].id
 					}
 					reader := state.requirementReader(taskID, item.URL)
-					test.Cleanup(state.closeRequirementReaders)
+					test.Cleanup(state.requirementUnit.closeRequirementReaders)
 					state.updateRequirementReaderBody(reader, application.RequirementContent{Body: "## 需求正文\n\n保留现有阅读体验，讨论内容按原顺序全部展开。", Complete: true})
 					parentID := "opening"
 					attachmentURL := "https://example.invalid/files/acceptance.pdf"
@@ -99,7 +99,7 @@ func TestRequirementCommentCardsKeyboardFindAcrossDocuments(test *testing.T) {
 			state.snapshot.Home = test.TempDir()
 			const link = "https://example.invalid/requirements/keyboard"
 			reader := state.requirementReader("", link)
-			test.Cleanup(state.closeRequirementReaders)
+			test.Cleanup(state.requirementUnit.closeRequirementReaders)
 			state.updateRequirementReaderBody(reader, application.RequirementContent{Body: "正文 needle", Complete: true})
 			state.updateRequirementReaderComments(reader, application.RequirementComments{Comments: []domain.RequirementComment{
 				{ID: "first", AuthorName: "第一作者", Content: strings.Repeat("第一条评论保持展开。\n\n", 30) + "第一评论 needle"},

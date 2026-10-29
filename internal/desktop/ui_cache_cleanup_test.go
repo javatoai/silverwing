@@ -13,8 +13,12 @@ func TestTaskRequirementURLCopiesFromBothDetails(t *testing.T) {
 	for _, suffix := range []string{"", "?detail=" + strings.Repeat("long", 160)} {
 		t.Run(map[bool]string{true: "long", false: "short"}[suffix != ""], func(t *testing.T) {
 			url := "https://project.feishu.cn/obt/bug/detail/1000000007" + suffix
-			s := &app{page: "tasks", configJSON: `{}`, tasks: []task{{id: "task", path: `C:\synthetic\task`, groupID: "g", requirementID: "1000000007", requirementURL: url}},
-				snapshot: application.Snapshot{Groups: []application.Group{{ID: "g", Name: "无需重复组名"}, {ID: "other", Name: "其它组"}}}}
+			s := &app{
+				taskUnit:     taskController{state: taskState{tasks: []task{{id: "task", path: `C:\synthetic\task`, groupID: "g", requirementID: "1000000007", requirementURL: url}}}},
+				settingsUnit: settingsController{state: settingsState{configJSON: `{}`}},
+				page:         "tasks",
+				snapshot:     application.Snapshot{Groups: []application.Group{{ID: "g", Name: "无需重复组名"}, {ID: "other", Name: "其它组"}}},
+			}
 			tester := ui.NewTester(func(c *ui.Context) {
 				ui.Column(c).Fill().Padding(16).Children(func() { s.taskHeader(c, setTheme(c, false)) })
 			}, 960, 760)
@@ -31,9 +35,9 @@ func TestTaskRequirementURLCopiesFromBothDetails(t *testing.T) {
 			if tester.HasText("无需重复组名") {
 				t.Fatal("task header repeats the group")
 			}
-			reader := s.requirementReader(s.currentTask().id, url)
+			reader := s.requirementReader(s.taskUnit.currentTask().id, url)
 			reader.bodyLoading, reader.commentsLoading = true, true
-			t.Cleanup(s.closeRequirementReaders)
+			t.Cleanup(s.requirementUnit.closeRequirementReaders)
 			detail := ui.NewTester(func(c *ui.Context) {
 				ui.Column(c).Fill().Padding(16).Children(func() { s.requirementDetails(c, setTheme(c, false)) })
 			}, 960, 760)
@@ -65,7 +69,7 @@ func TestRequirementShortContentUsesAvailableReaderWidth(t *testing.T) {
 		if !found || !outerFound || outer.W < float32(width-64) || card.W < outer.W-36 || card.X+card.W > float32(width) {
 			t.Fatalf("short content collapsed the reading width at %d: %#v", width, card)
 		}
-		s.closeRequirementReaders()
+		s.requirementUnit.closeRequirementReaders()
 	}
 }
 
@@ -84,13 +88,17 @@ func TestRequirementFindToolbarStaysCompact(t *testing.T) {
 		if !found || !closeFound || input.H > 32 || input.Y+input.H > 50 || close.X+close.W > float32(width) || close.Y < input.Y-2 || close.Y > input.Y+2 {
 			t.Fatalf("find toolbar expanded or clipped at %d: input=%#v close=%#v", width, input, close)
 		}
-		s.closeRequirementReaders()
+		s.requirementUnit.closeRequirementReaders()
 	}
 }
 
 func TestRepositoryRowHasQuietDirectRemovalEntry(t *testing.T) {
-	s := &app{page: "repositories", inputs: make(map[string]*string), configJSON: `{"groups":[{"id":"g","name":"国内组","services":[{"id":"s","displayName":"api-service","enabled":true}]}]}`,
-		snapshot: application.Snapshot{Groups: []application.Group{{ID: "g", Name: "国内组"}}, Services: []application.Service{{ID: "s", GroupID: "g", Name: "api-service", RepositoryID: "repo", MasterBranch: "origin/main", Modules: []application.Module{{ID: "m"}}}}, Repositories: []application.Repository{{ID: "repo", RootPath: `C:\synthetic\repo`}}}}
+	s := &app{
+		settingsUnit: settingsController{state: settingsState{configJSON: `{"groups":[{"id":"g","name":"国内组","services":[{"id":"s","displayName":"api-service","enabled":true}]}]}`}},
+		page:         "repositories",
+		inputs:       make(map[string]*string),
+		snapshot:     application.Snapshot{Groups: []application.Group{{ID: "g", Name: "国内组"}}, Services: []application.Service{{ID: "s", GroupID: "g", Name: "api-service", RepositoryID: "repo", MasterBranch: "origin/main", Modules: []application.Module{{ID: "m"}}}}, Repositories: []application.Repository{{ID: "repo", RootPath: `C:\synthetic\repo`}}},
+	}
 	tester := ui.NewTester(func(c *ui.Context) {
 		ui.Column(c).Fill().Padding(12).Children(func() { s.serviceList(c, setTheme(c, false)) })
 	}, 1200, 800)

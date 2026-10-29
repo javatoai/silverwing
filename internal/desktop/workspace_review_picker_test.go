@@ -19,7 +19,11 @@ func TestWorkspaceReviewPickerStaysOpenAndRestoresFocus(t *testing.T) {
 			{FullHash: "a", ShortHash: "a", Message: "first"},
 		},
 	}
-	s := &app{page: "tasks", workspaceHistory: state, tasks: []task{{id: "task", path: `C:\synthetic\task`, workspaces: []application.Workspace{item}}}}
+	s := &app{
+		taskUnit:      taskController{state: taskState{tasks: []task{{id: "task", path: `C:\synthetic\task`, workspaces: []application.Workspace{item}}}}},
+		workspaceUnit: workspaceController{state: workspaceState{workspaceHistory: state}},
+		page:          "tasks",
+	}
 	t.Cleanup(func() { s.cancelWorkspaceReviewDebounce(state) })
 	tester := ui.NewTester(func(c *ui.Context) { s.renderWorkspaceReviewPage(c, setTheme(c, false)) }, 1100, 760)
 	click := func(label string) {
@@ -29,7 +33,16 @@ func TestWorkspaceReviewPickerStaysOpenAndRestoresFocus(t *testing.T) {
 		}
 	}
 	click("提交范围：选择提交")
+	for _, label := range []string{"a first", "b middle", "c latest"} {
+		rect, found := tester.Find(label)
+		if !found || rect.W <= 0 || rect.H < workspaceReviewCommitRowHeight {
+			t.Fatalf("first-open commit row is not fully visible/clickable: %s found=%t rect=%+v", label, found, rect)
+		}
+	}
 	click("a first")
+	if state.StartCommit != "a" || state.EndCommit != "a" || len(state.CommitHashes) != 1 || state.CommitHashes[0] != "a" {
+		t.Fatal("first-open A click did not enter the commit selection")
+	}
 	click("c latest")
 	if !state.CommitPickerOpen || state.StartCommit != "a" || state.EndCommit != "c" || len(state.CommitHashes) != 3 {
 		t.Fatalf("picker did not keep preview selection A..C open: %#v", state.CommitHashes)

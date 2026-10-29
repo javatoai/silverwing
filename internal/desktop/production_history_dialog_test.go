@@ -29,9 +29,9 @@ func openProductionHistoryTest(t *testing.T, s *app, v *productionView, backend 
 	if call.Kind != "production.list" || len(call.Payload) != 0 {
 		t.Fatalf("history opened an external action: %+v", call)
 	}
-	backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batches: append([]production.Batch(nil), s.production.batches...)}}}
+	backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batches: append([]production.Batch(nil), s.releaseUnit.state.production.batches...)}}}
 	productionTestUpdate(t, window)
-	return s.production.historyDialog
+	return s.releaseUnit.state.production.historyDialog
 }
 
 func TestProductionHistoryListLocalReadFailureRetryAndScope(t *testing.T) {
@@ -40,7 +40,7 @@ func TestProductionHistoryListLocalReadFailureRetryAndScope(t *testing.T) {
 	newer := productionHistoryRecord(b, "newer", "release/newer", time.Now())
 	other := newer
 	other.ID, other.Target.ServiceID = "other", "other-service"
-	s.production.batches = []production.Batch{older, b, other, newer}
+	s.releaseUnit.state.production.batches = []production.Batch{older, b, other, newer}
 	v.Error, v.Message, v.ActiveStep = "kept error", "kept result", 4
 	v.Steps = map[int]productionStepView{4: {State: "complete", Message: "kept step"}}
 	preview, branch, version := v.Preview, v.Branch, v.Version
@@ -56,7 +56,7 @@ func TestProductionHistoryListLocalReadFailureRetryAndScope(t *testing.T) {
 	productionTestCall(t, backend)
 	backend.replies <- productionTestAnswer{err: errors.New("local history unreadable")}
 	productionTestUpdate(t, window)
-	if d.Error != "local history unreadable" || len(s.production.batches) != 4 || v.Error != "kept error" {
+	if d.Error != "local history unreadable" || len(s.releaseUnit.state.production.batches) != 4 || v.Error != "kept error" {
 		t.Fatal("list read failure destroyed the last valid snapshot or main feedback")
 	}
 	tester := productionIterationTester(s, 960, false)
@@ -81,16 +81,16 @@ func TestProductionHistoryViewReturnPreservesInputsAndInvalidatesPreparation(t *
 			s, v, b := productionFixture(t)
 			old := productionHistoryRecord(b, "old", "release/old", time.Now())
 			other := productionHistoryRecord(b, "other", "release/other", time.Now().Add(-time.Hour))
-			s.production.batches = []production.Batch{old, other}
+			s.releaseUnit.state.production.batches = []production.Batch{old, other}
 			if active {
-				s.production.batches = append(s.production.batches, b)
+				s.releaseUnit.state.production.batches = append(s.releaseUnit.state.production.batches, b)
 			} else {
 				v.BatchID = ""
 			}
 			v.Version, v.Branch, v.BranchQuery, v.SuggestedBranch, v.ManualTag = "release/manually-typed", "feature/typed", "query", "suggestion", "2.3.43"
 			preview := v.Preview
 			s.openProductionHistory(v)
-			d := s.production.historyDialog
+			d := s.releaseUnit.state.production.historyDialog
 			s.viewProductionHistory(d, old)
 			if d.Open || v.BatchID != old.ID || v.Preview != nil || !v.PreparationInvalid {
 				t.Fatal("view did not isolate history")
@@ -104,7 +104,7 @@ func TestProductionHistoryViewReturnPreservesInputsAndInvalidatesPreparation(t *
 				t.Fatal("missing return or ended merge record")
 			}
 			s.openProductionHistory(v)
-			d = s.production.historyDialog
+			d = s.releaseUnit.state.production.historyDialog
 			if len(s.productionHistoryRecords(d)) != 2 {
 				t.Fatal("current historical row was excluded")
 			}
@@ -130,9 +130,9 @@ func TestProductionHistoryRowDeletionKeepsDialogAndExactTarget(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			s, v, b, backend, window := productionRequestFixture(t)
 			old := productionHistoryRecord(b, "history-delete", "release/history", time.Now())
-			s.production.batches = append(s.production.batches, old)
+			s.releaseUnit.state.production.batches = append(s.releaseUnit.state.production.batches, old)
 			if scenario == "current-last" {
-				s.production.batches, v.BatchID = []production.Batch{old}, ""
+				s.releaseUnit.state.production.batches, v.BatchID = []production.Batch{old}, ""
 			}
 			v.Version, v.Branch, v.BranchQuery = "release/manual", "feature/manual", "search"
 			d := openProductionHistoryTest(t, s, v, backend, window)
@@ -163,7 +163,7 @@ func TestProductionHistoryRowDeletionKeepsDialogAndExactTarget(t *testing.T) {
 			}
 			backend.replies <- productionTestAnswer{err: errors.New("save denied")}
 			productionTestUpdate(t, window)
-			if !d.Open || d.RowErrors[old.ID] != "save denied" || s.production.deletedBatches[old.ID] || v.BatchID != ownerID {
+			if !d.Open || d.RowErrors[old.ID] != "save denied" || s.releaseUnit.state.production.deletedBatches[old.ID] || v.BatchID != ownerID {
 				t.Fatal("failed deletion changed record/page")
 			}
 			confirm()
@@ -174,7 +174,7 @@ func TestProductionHistoryRowDeletionKeepsDialogAndExactTarget(t *testing.T) {
 			if scenario == "current-last" {
 				wantID = ""
 			}
-			if !d.Open || !s.production.deletedBatches[old.ID] || len(s.productionHistoryRecords(d)) != 0 || v.BatchID != wantID || v.Version != "release/manual" || v.Branch != "feature/manual" || v.BranchQuery != "search" || len(backend.calls) != 0 || s.lastMessage == "" {
+			if !d.Open || !s.releaseUnit.state.production.deletedBatches[old.ID] || len(s.productionHistoryRecords(d)) != 0 || v.BatchID != wantID || v.Version != "release/manual" || v.Branch != "feature/manual" || v.BranchQuery != "search" || len(backend.calls) != 0 || s.lastMessage == "" {
 				t.Fatal("success failed to retain the dialog/inputs or removed the wrong record")
 			}
 		})
@@ -184,10 +184,10 @@ func TestProductionHistoryRowDeletionKeepsDialogAndExactTarget(t *testing.T) {
 func TestProductionHistoryDeleteNestedEscapeAndNoClickThrough(t *testing.T) {
 	s, v, b := productionFixture(t)
 	old := productionHistoryRecord(b, "old", "release/old", time.Now())
-	s.production.batches = append(s.production.batches, old)
+	s.releaseUnit.state.production.batches = append(s.releaseUnit.state.production.batches, old)
 	s.win = &mygo.Window{}
 	s.openProductionHistory(v)
-	d := s.production.historyDialog
+	d := s.releaseUnit.state.production.historyDialog
 	tester := productionIterationTester(s, 960, false)
 	if err := tester.Click("删除"); err != nil {
 		t.Fatal(err)
@@ -217,11 +217,11 @@ func TestProductionHistoryDeleteConfirmationRejectsStaleRows(t *testing.T) {
 		t.Run(change, func(t *testing.T) {
 			s, v, b, backend, _ := productionRequestFixture(t)
 			old := productionHistoryRecord(b, "old", "release/old", time.Now())
-			s.production.batches = append(s.production.batches, old)
+			s.releaseUnit.state.production.batches = append(s.releaseUnit.state.production.batches, old)
 			// No I/O is needed to create the dialog snapshot in this test.
 			s.backend = nil
 			s.openProductionHistory(v)
-			d := s.production.historyDialog
+			d := s.releaseUnit.state.production.historyDialog
 			s.backend, s.win = backend, &mygo.Window{}
 			s.confirmProductionDeleteRecord(v, old, d)
 			confirmation := s.confirmationDialog
@@ -230,15 +230,15 @@ func TestProductionHistoryDeleteConfirmationRejectsStaleRows(t *testing.T) {
 			}
 			switch change {
 			case "record":
-				s.production.batches[1].Branches = nil // Same timestamps, different full record token.
+				s.releaseUnit.state.production.batches[1].Branches = nil // Same timestamps, different full record token.
 			case "active":
-				s.production.batches[1].Ended = false
+				s.releaseUnit.state.production.batches[1].Ended = false
 			case "home":
 				s.snapshot.Home = "another-home"
 			case "config":
-				s.configJSON = `{"tagEnabled":false}`
+				s.settingsUnit.state.configJSON = `{"tagEnabled":false}`
 			case "service":
-				s.production.selected = "another-service"
+				s.releaseUnit.state.production.selected = "another-service"
 			case "closed":
 				d.Open = false
 			case "busy":
@@ -250,7 +250,7 @@ func TestProductionHistoryDeleteConfirmationRejectsStaleRows(t *testing.T) {
 				t.Fatal("stale row confirmation still current")
 			}
 			s.finishConfirmationDialog(confirmation, 0)
-			if len(backend.calls) != 0 || s.production.deletedBatches[old.ID] {
+			if len(backend.calls) != 0 || s.releaseUnit.state.production.deletedBatches[old.ID] {
 				t.Fatal("stale confirmation executed")
 			}
 		})
@@ -263,7 +263,7 @@ func TestProductionHistoryLateReadAndDeleteDoNotCrossScopes(t *testing.T) {
 			t.Run(kind+"/"+change, func(t *testing.T) {
 				s, v, b, backend, window := productionRequestFixture(t)
 				old := productionHistoryRecord(b, "old", "release/old", time.Now())
-				s.production.batches = append(s.production.batches, old)
+				s.releaseUnit.state.production.batches = append(s.releaseUnit.state.production.batches, old)
 				d := openProductionHistoryTest(t, s, v, backend, window)
 				action := application.Action{Kind: kind}
 				if kind == "production.delete" {
@@ -274,21 +274,21 @@ func TestProductionHistoryLateReadAndDeleteDoNotCrossScopes(t *testing.T) {
 				productionTestCall(t, backend)
 				switch change {
 				case "service":
-					s.production.selected = "new-service"
+					s.releaseUnit.state.production.selected = "new-service"
 				case "home":
 					s.snapshot.Home = "new-home"
 				case "config":
-					s.configJSON = `{"tagEnabled":false}`
+					s.settingsUnit.state.configJSON = `{"tagEnabled":false}`
 				case "generation":
 					v.Generation++
 				case "closed":
 					d.Open = false
 				case "record":
-					s.production.batches[1].Branches = nil
+					s.releaseUnit.state.production.batches[1].Branches = nil
 				}
-				backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batches: append([]production.Batch(nil), s.production.batches...)}}}
+				backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batches: append([]production.Batch(nil), s.releaseUnit.state.production.batches...)}}}
 				productionTestUpdate(t, window)
-				if v.Busy || v.BatchID != b.ID || s.production.deletedBatches[old.ID] || len(s.production.batches) != 2 || len(backend.calls) != 0 {
+				if v.Busy || v.BatchID != b.ID || s.releaseUnit.state.production.deletedBatches[old.ID] || len(s.releaseUnit.state.production.batches) != 2 || len(backend.calls) != 0 {
 					t.Fatal("late response modified a new target or started a successor")
 				}
 			})
@@ -302,18 +302,18 @@ func TestProductionHistoryDialogLayoutsAndMergedEmptyState(t *testing.T) {
 			t.Run(fmt.Sprintf("%d-dark-%t", width, dark), func(t *testing.T) {
 				s, v, b := productionFixture(t)
 				b.Branches = nil
-				s.production.batches[0] = b
+				s.releaseUnit.state.production.batches[0] = b
 				tester := productionIterationTester(s, width, dark)
 				if !tester.HasText("暂无已合并分支") || tester.HasText("历史批次 ·") {
 					t.Fatal("merged empty state missing or old disclosure retained")
 				}
 				for i := 0; i < 18; i++ {
 					old := productionHistoryRecord(b, fmt.Sprint(i), fmt.Sprintf("release/历史分支-%02d-%s", i, strings.Repeat("long-name/", 6)), time.Now().Add(-time.Duration(i)*time.Hour))
-					s.production.batches = append(s.production.batches, old)
+					s.releaseUnit.state.production.batches = append(s.releaseUnit.state.production.batches, old)
 				}
 				s.openProductionHistory(v)
 				tester.Frame()
-				d := s.production.historyDialog
+				d := s.releaseUnit.state.production.historyDialog
 				panel, ok := tester.Find("历史批次弹窗")
 				close, closeOK := tester.Find("关闭")
 				list, listOK := tester.Find("历史批次列表")
@@ -338,7 +338,7 @@ func TestProductionHistoryDialogLayoutsAndMergedEmptyState(t *testing.T) {
 					t.Fatal("nested Esc dismissed list")
 				}
 				d.Open = false
-				v.selectProductionBatch(s.production.batches[1].ID)
+				v.selectProductionBatch(s.releaseUnit.state.production.batches[1].ID)
 				tester.Frame()
 				if !tester.HasText("暂无已合并分支") {
 					t.Fatal("ended detail omitted merge empty state")
@@ -352,7 +352,7 @@ func TestProductionHistoryDialogLayoutsAndMergedEmptyState(t *testing.T) {
 func TestProductionHistoryNarrowRowsAndDisabledCurrentFocus(t *testing.T) {
 	s, v, b := productionFixture(t)
 	old := productionHistoryRecord(b, "old", "release/"+strings.Repeat("很长的名称/", 12), time.Now())
-	s.production.batches = append(s.production.batches, old)
+	s.releaseUnit.state.production.batches = append(s.releaseUnit.state.production.batches, old)
 	v.BatchID = old.ID
 	s.openProductionHistory(v)
 	// Render just this overlay so duplicate branch/status text in the page
@@ -379,8 +379,8 @@ func TestProductionHistoryNarrowRowsAndDisabledCurrentFocus(t *testing.T) {
 func TestProductionHistoryDeleteLastRemovedServiceKeepsEmptyDialogUntilClose(t *testing.T) {
 	s, v, b, backend, window := productionRequestFixture(t)
 	b = productionHistoryRecord(b, b.ID, b.ReleaseBranch, time.Now())
-	s.production.batches = []production.Batch{b}
-	s.production.choices[0].Historical = true
+	s.releaseUnit.state.production.batches = []production.Batch{b}
+	s.releaseUnit.state.production.choices[0].Historical = true
 	d := openProductionHistoryTest(t, s, v, backend, window)
 	token, _ := production.BatchRecordToken(b)
 	s.productionRequestViewFromHistory(v, application.Action{Kind: "production.delete", Payload: map[string]any{"batchId": b.ID, "recordToken": token, "confirmed": true}}, "", d)
@@ -398,7 +398,7 @@ func TestProductionHistoryDeleteLastRemovedServiceKeepsEmptyDialogUntilClose(t *
 		t.Fatal(err)
 	}
 	tester.Frame()
-	if len(s.production.choices) != 0 || s.production.views[productionKey(v.Selection)] != nil {
+	if len(s.releaseUnit.state.production.choices) != 0 || s.releaseUnit.state.production.views[productionKey(v.Selection)] != nil {
 		t.Fatal("removed service survived list dismissal")
 	}
 }

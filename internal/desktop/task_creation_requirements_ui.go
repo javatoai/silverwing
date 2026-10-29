@@ -8,7 +8,7 @@ import (
 )
 
 func (s *app) renderTaskCreationRequirements(c *ui.Context, p palette) {
-	form := s.taskCreation
+	form := s.taskUnit.state.taskCreation
 	state := s.ensureTaskCreationRequirements()
 	if form == nil || state == nil || state.closed {
 		return
@@ -19,7 +19,7 @@ func (s *app) renderTaskCreationRequirements(c *ui.Context, p palette) {
 		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
 			combo = ui.ComboboxBase(c.Key("task-create-requirement"), &state.query)
 			combo.Input.Grow(1).MinWidth(0).FillWidth().Height(36).Padding(0, 30, 0, 9).
-				Placeholder("粘贴需求链接，或搜索标题").Background(p.surface).Border(1, p.line).Radius(8).
+				Placeholder("可留空，或粘贴需求链接 / 搜索标题").Background(p.surface).Border(1, p.line).Radius(8).
 				Label("需求链接或搜索").Tooltip(firstNonEmpty(state.selectedTitle, taskCreationRequirementTitle(form.draft.RequirementTitle), "粘贴完整需求链接或输入标题搜索")).
 				OnChange(s.editTaskCreationRequirementInput)
 			if form.taskFieldFocus == "requirement" {

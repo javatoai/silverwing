@@ -82,8 +82,8 @@ func (s *app) openTaskAppendServices(t task) {
 		return
 	}
 	state.activeServiceID = state.serviceOrder[0]
-	cancelTaskAppendRepositoryChoices(s.workspaceAppend)
-	s.workspaceAppend = state
+	cancelTaskAppendRepositoryChoices(s.workspaceUnit.state.workspaceAppend)
+	s.workspaceUnit.state.workspaceAppend = state
 	s.dialogOpen = false
 	s.form = actionForm{}
 	s.lastError, s.lastMessage = "", ""
@@ -124,8 +124,8 @@ func (s *app) openTaskAppendModules(t task, serviceID string) {
 	} else {
 		s.replaceTaskAppendModuleWithTemporary(state, domain.WorkspaceStandardWorktree)
 	}
-	cancelTaskAppendRepositoryChoices(s.workspaceAppend)
-	s.workspaceAppend = state
+	cancelTaskAppendRepositoryChoices(s.workspaceUnit.state.workspaceAppend)
+	s.workspaceUnit.state.workspaceAppend = state
 	s.dialogOpen = false
 	s.form = actionForm{}
 	s.lastError, s.lastMessage = "", ""
@@ -155,7 +155,7 @@ func taskUsedModuleIDs(t task, serviceID string) map[string]bool {
 }
 
 func (s *app) toggleTaskAppendService(serviceID string) {
-	state := s.workspaceAppend
+	state := s.workspaceUnit.state.workspaceAppend
 	if state == nil || state.mode != "services" || state.pending || s.busy {
 		return
 	}
@@ -200,7 +200,7 @@ func (s *app) initializeTaskAppendServiceModules(state *taskAppendUIState, servi
 }
 
 func (s *app) addTaskAppendTemporaryModule(serviceID string, strategy domain.WorkspaceStrategy) {
-	state := s.workspaceAppend
+	state := s.workspaceUnit.state.workspaceAppend
 	if state == nil || state.mode != "services" || state.pending {
 		return
 	}
@@ -227,7 +227,7 @@ func (s *app) addTaskAppendTemporaryModule(serviceID string, strategy domain.Wor
 }
 
 func (s *app) removeTaskAppendModule(serviceID, moduleID string) {
-	state := s.workspaceAppend
+	state := s.workspaceUnit.state.workspaceAppend
 	if state == nil || state.mode != "services" || state.pending || len(state.moduleOrder[serviceID]) <= 1 {
 		return
 	}
@@ -248,21 +248,16 @@ func (s *app) removeTaskAppendModule(serviceID, moduleID string) {
 
 func (s *app) retargetTaskAppendModules(state *taskAppendUIState, serviceID string) {
 	order := state.moduleOrder[serviceID]
+	count := len(order)
+	if state.mode == "modules" {
+		count = 2
+	}
 	for _, id := range order {
 		draft := state.moduleData[serviceID][id]
-		if draft == nil || draft.TargetEdited {
+		if draft == nil {
 			continue
 		}
-		name := strings.TrimSpace(draft.Name)
-		if name == "" {
-			name = draft.ID
-		}
-		if state.mode == "modules" {
-			draft.TargetBranch = taskCreationTargetBranchForCount(state.taskBranch, name, draft.ID, 2)
-		} else {
-			draft.TargetBranch = taskCreationTargetBranchForCount(state.taskBranch, name, draft.ID, len(order))
-		}
-		draft.LastTargetBranch = draft.TargetBranch
+		draft.taskModuleDraftValues = retargetTaskModuleDraftValues(draft.taskModuleDraftValues, state.taskBranch, count)
 	}
 }
 
@@ -274,8 +269,7 @@ func (s *app) selectTaskAppendConfiguredModule(state *taskAppendUIState, module 
 		}
 	}
 	draft := newTaskCreationModuleDraft(service, module, state.taskBranch)
-	draft.TargetBranch = taskCreationTargetBranchForCount(state.taskBranch, taskCreationModuleName(module), module.ID, 2)
-	draft.LastTargetBranch = draft.TargetBranch
+	draft.taskModuleDraftValues = retargetTaskModuleDraftValues(draft.taskModuleDraftValues, state.taskBranch, 2)
 	state.moduleData[state.serviceID] = map[string]*taskCreationModuleDraft{draft.ID: draft}
 	state.moduleOrder[state.serviceID] = []string{draft.ID}
 	state.moduleDraftID = draft.ID
@@ -296,8 +290,7 @@ func (s *app) replaceTaskAppendModuleWithTemporary(state *taskAppendUIState, str
 	module := domain.ServiceModuleConfig{ID: newDesktopEditorID(prefix), Name: name, Strategy: strategy}
 	draft := newTaskCreationModuleDraft(service, module, state.taskBranch)
 	draft.Source, draft.TagEnabled, draft.TagTargetRef = domain.TaskModuleTemporary, false, ""
-	draft.TargetBranch = taskCreationTargetBranchForCount(state.taskBranch, name, draft.ID, 2)
-	draft.LastTargetBranch = draft.TargetBranch
+	draft.taskModuleDraftValues = retargetTaskModuleDraftValues(draft.taskModuleDraftValues, state.taskBranch, 2)
 	state.moduleData[state.serviceID] = map[string]*taskCreationModuleDraft{draft.ID: draft}
 	state.moduleOrder[state.serviceID] = []string{draft.ID}
 	state.moduleDraftID = draft.ID
@@ -308,39 +301,18 @@ func (s *app) syncTaskAppendModuleDraft(state *taskAppendUIState, serviceID stri
 	if draft == nil {
 		return
 	}
-	nameChanged := draft.Name != draft.LastName
-	baseRefChanged := draft.BaseRef != draft.LastBaseRef
-	baseRemoteChanged := draft.BaseRemote != draft.LastBaseRemote
-	targetChanged := draft.TargetBranch != draft.LastTargetBranch
-	if baseRemoteChanged {
-		remote := strings.TrimSpace(draft.BaseRemote)
-		if remote != "" {
-			if ref, err := domain.ParseRemoteBranchRef(draft.BaseRef); err == nil {
-				draft.BaseRef = remote + "/" + ref.Branch
-			} else if _, after, ok := strings.Cut(strings.TrimSpace(draft.BaseRef), "/"); ok && after != "" {
-				draft.BaseRef = remote + "/" + after
-			}
-		}
-	} else if baseRefChanged {
-		if ref, err := domain.ParseRemoteBranchRef(draft.BaseRef); err == nil {
-			draft.BaseRemote = ref.Remote
-		}
-	}
-	if targetChanged {
-		draft.TargetEdited = true
-	}
-	draft.LastName = draft.Name
-	draft.LastBaseRemote, draft.LastBaseRef, draft.LastTargetBranch = draft.BaseRemote, draft.BaseRef, draft.TargetBranch
-	if nameChanged {
+	values, changes := syncTaskModuleDraftValues(draft.taskModuleDraftValues)
+	draft.taskModuleDraftValues = values
+	if changes.Name {
 		s.retargetTaskAppendModules(state, serviceID)
 	}
-	if nameChanged || baseRefChanged || baseRemoteChanged || targetChanged {
+	if changes.any() {
 		s.invalidateTaskAppendPreview("模块基础分支或目标分支已变化，请重新预检。")
 	}
 }
 
 func (s *app) invalidateTaskAppendPreview(_ string) {
-	state := s.workspaceAppend
+	state := s.workspaceUnit.state.workspaceAppend
 	if state == nil {
 		return
 	}
@@ -353,12 +325,12 @@ func (s *app) invalidateTaskAppendPreview(_ string) {
 }
 
 func (s *app) taskAppendRequest() (map[string]any, string, error) {
-	state := s.workspaceAppend
+	state := s.workspaceUnit.state.workspaceAppend
 	if state == nil {
 		return nil, "", fmt.Errorf("追加工作区表单已关闭")
 	}
-	t := s.taskByID(state.taskID)
-	if t.id == "" || t.archived || t.updated != state.taskUpdated || t.path != state.taskPath || t.branch != state.taskBranch || s.currentTask().id != state.taskID {
+	t := s.taskUnit.taskByID(state.taskID)
+	if t.id == "" || t.archived || t.updated != state.taskUpdated || t.path != state.taskPath || t.branch != state.taskBranch || s.taskUnit.currentTask().id != state.taskID {
 		return nil, "", fmt.Errorf("任务状态已变化，请重新打开添加表单")
 	}
 	base := map[string]any{}
@@ -445,7 +417,7 @@ func (s *app) taskAppendModuleSelections(state *taskAppendUIState, serviceID str
 }
 
 func (s *app) beginTaskAppendPreflight() {
-	state := s.workspaceAppend
+	state := s.workspaceUnit.state.workspaceAppend
 	if state == nil || state.pending || s.busy {
 		return
 	}
@@ -476,7 +448,7 @@ func taskAppendAddAction(mode string) string {
 }
 
 func (s *app) submitTaskAppend(keys []workspace.BranchReuseKey) {
-	state := s.workspaceAppend
+	state := s.workspaceUnit.state.workspaceAppend
 	if state == nil || state.pending || s.busy {
 		return
 	}
@@ -501,7 +473,7 @@ func (s *app) taskAppendActionResult(action application.Action, result applicati
 	if !taskAppendOwnedAction(action.Kind) {
 		return false
 	}
-	state := s.workspaceAppend
+	state := s.workspaceUnit.state.workspaceAppend
 	if state == nil || payloadString(action.Payload, "taskAppendToken") != state.token {
 		return true
 	}
@@ -513,7 +485,7 @@ func (s *app) taskAppendActionResult(action application.Action, result applicati
 	switch action.Kind {
 	case "task.services-add-preview", "task.modules-add-preview":
 		if !state.open {
-			s.workspaceAppend = nil
+			s.workspaceUnit.state.workspaceAppend = nil
 			return true
 		}
 		_, currentSignature, err := s.taskAppendRequest()
@@ -533,11 +505,11 @@ func (s *app) taskAppendActionResult(action application.Action, result applicati
 			s.submitTaskAppend(nil)
 		}
 	case "task.services-add", "task.modules-add":
-		s.workspaceAppend = nil
+		s.workspaceUnit.state.workspaceAppend = nil
 		s.lastError = ""
 		s.lastMessage = firstNonEmpty(result.Message, "工作区已添加。")
 	case "task.services-retry":
-		s.workspaceAppend = nil
+		s.workspaceUnit.state.workspaceAppend = nil
 		s.lastError = ""
 		s.lastMessage = firstNonEmpty(result.Message, "失败服务已重试。")
 	}
@@ -548,7 +520,7 @@ func (s *app) taskAppendActionError(action application.Action, cause error) bool
 	if !taskAppendOwnedAction(action.Kind) {
 		return false
 	}
-	state := s.workspaceAppend
+	state := s.workspaceUnit.state.workspaceAppend
 	if state == nil || payloadString(action.Payload, "taskAppendToken") != state.token {
 		return true
 	}
@@ -563,7 +535,7 @@ func (s *app) taskAppendActionError(action application.Action, cause error) bool
 	}
 	if action.Kind == "task.services-retry" {
 		s.lastError = state.inlineError
-		s.workspaceAppend = nil
+		s.workspaceUnit.state.workspaceAppend = nil
 	}
 	return true
 }
@@ -614,23 +586,23 @@ func (s *app) retryFailedTaskServices(t task, serviceIDs []string) {
 	state.pendingSignature = hex.EncodeToString(digest[:])
 	state.pendingAction, state.pending = "task.services-retry", true
 	payload["taskAppendSignature"] = state.pendingSignature
-	cancelTaskAppendRepositoryChoices(s.workspaceAppend)
-	s.workspaceAppend = state
+	cancelTaskAppendRepositoryChoices(s.workspaceUnit.state.workspaceAppend)
+	s.workspaceUnit.state.workspaceAppend = state
 	s.act("task.services-retry", t.id, "", "", "", "", payload)
 }
 
 func (s *app) renderTaskAppendDialog(c *ui.Context, p palette) bool {
-	state := s.workspaceAppend
+	state := s.workspaceUnit.state.workspaceAppend
 	if state == nil || !state.open {
 		return false
 	}
-	t := s.taskByID(state.taskID)
-	if t.id == "" || t.archived || t.updated != state.taskUpdated || t.path != state.taskPath || t.branch != state.taskBranch || s.currentTask().id != state.taskID {
+	t := s.taskUnit.taskByID(state.taskID)
+	if t.id == "" || t.archived || t.updated != state.taskUpdated || t.path != state.taskPath || t.branch != state.taskBranch || s.taskUnit.currentTask().id != state.taskID {
 		state.open = false
 		state.inlineError = "任务状态已变化，请重新打开添加表单。"
 		if !state.pending {
 			cancelTaskAppendRepositoryChoices(state)
-			s.workspaceAppend = nil
+			s.workspaceUnit.state.workspaceAppend = nil
 			return false
 		}
 	}
@@ -671,9 +643,11 @@ func (s *app) renderTaskAppendDialog(c *ui.Context, p palette) bool {
 					}
 				})
 			})
-			_, signature, signatureErr := s.taskAppendRequest()
-			if !state.pending && state.previewSignature != "" && (signatureErr != nil || signature != state.previewSignature) {
-				s.invalidateTaskAppendPreview("表单内容已变化，请重新预检。")
+			if !state.pending && state.previewSignature != "" {
+				_, signature, signatureErr := s.taskAppendRequest()
+				if signatureErr != nil || signature != state.previewSignature {
+					s.invalidateTaskAppendPreview("表单内容已变化，请重新预检。")
+				}
 			}
 			ui.Row(c).FillWidth().Gap(8).Shrink(0).Wrap().Justify(ui.End).Children(func() {
 				cancel := ui.ButtonBase(c.Key("task-append-cancel")).Height(34).Padding(0, 16).Radius(18).Label("取消").Disabled(state.pending)
@@ -718,7 +692,7 @@ func (s *app) renderTaskAppendDialog(c *ui.Context, p palette) bool {
 	state.open = open
 	if !state.open && !state.pending {
 		cancelTaskAppendRepositoryChoices(state)
-		s.workspaceAppend = nil
+		s.workspaceUnit.state.workspaceAppend = nil
 	}
 	if state.pending && !open {
 		state.open = true
@@ -789,7 +763,7 @@ func taskAppendServiceMatches(service domain.GroupServiceConfig, repositoryPath,
 }
 
 func (s *app) renderTaskAppendModules(c *ui.Context, p palette, state *taskAppendUIState) {
-	used := taskUsedModuleIDs(s.taskByID(state.taskID), state.serviceID)
+	used := taskUsedModuleIDs(s.taskUnit.taskByID(state.taskID), state.serviceID)
 	label(c, "选择未添加的模块", 13, p.text).FontWeight(600)
 	for _, module := range state.moduleOptions {
 		if used[strings.ToLower(module.ID)] {
@@ -854,11 +828,11 @@ func (s *app) renderTaskAppendModuleConfiguration(c *ui.Context, p palette, stat
 		return
 	}
 	s.renderTaskAppendModuleDraft(c, p, state, state.serviceID, draft, false)
-	if draft.Source == domain.TaskModuleConfigured && taskUsedModuleIDs(s.taskByID(state.taskID), state.serviceID)[strings.ToLower(draft.ID)] {
+	if draft.Source == domain.TaskModuleConfigured && taskUsedModuleIDs(s.taskUnit.taskByID(state.taskID), state.serviceID)[strings.ToLower(draft.ID)] {
 		state.inlineError = "所选模块已存在于任务中，请选择其他模块。"
 	}
 	if draft.Strategy == domain.WorkspaceIndependentClone && strings.TrimSpace(draft.TargetBranch) != "" {
-		for _, existing := range s.taskByID(state.taskID).workspaces {
+		for _, existing := range s.taskUnit.taskByID(state.taskID).workspaces {
 			if strings.EqualFold(existing.Strategy, string(domain.WorkspaceIndependentClone)) && strings.EqualFold(existing.Branch, draft.TargetBranch) {
 				label(c, "共享远程分支风险：任务中已有克隆模块使用该目标分支。", 11, p.amber).Wrap()
 				break

@@ -97,7 +97,7 @@ func (s *app) observeTagGenbuAutoProbeWindow(win tagGenbuAutoProbeWindow) {
 	identity := s.taskTagGenbuIdentity()
 	if identity == "" {
 		s.stopTagGenbuAutoProbe()
-		if state := s.tagGenbuAutoProbe; state != nil {
+		if state := s.releaseUnit.state.tagGenbuAutoProbe; state != nil {
 			state.visibleScope, state.refreshPending, state.forcePending, state.forceIdentity = "", false, false, ""
 		}
 		return
@@ -109,7 +109,7 @@ func (s *app) observeTagGenbuAutoProbeWindow(win tagGenbuAutoProbeWindow) {
 	// Restore the current job's complete item set before reading local history,
 	// which may still contain only the first persisted item of an active batch.
 	if _, ok := s.backend.(application.TagJobBackend); ok {
-		if s.tagJobs == nil || s.tagJobs.current == nil || s.tagJobs.current.scope != s.tagJobScope() || !s.tagJobs.current.loaded {
+		if s.releaseUnit.state.tagJobs == nil || s.releaseUnit.state.tagJobs.current == nil || s.releaseUnit.state.tagJobs.current.scope != s.tagJobScope() || !s.releaseUnit.state.tagJobs.current.loaded {
 			s.stopTagGenbuAutoProbe()
 			return
 		}
@@ -135,15 +135,15 @@ func (s *app) observeTagGenbuAutoProbeWindow(win tagGenbuAutoProbeWindow) {
 // Multiple clicks during an in-flight request coalesce into one pending refresh.
 func (s *app) requestTagHistoryRefresh() {
 	s.ensureTagGenbuAutoProbeState().refreshPending = true
-	s.tagGenbuAutoProbe.forcePending = true
-	s.tagGenbuAutoProbe.forceIdentity = s.taskTagGenbuIdentity()
+	s.releaseUnit.state.tagGenbuAutoProbe.forcePending = true
+	s.releaseUnit.state.tagGenbuAutoProbe.forceIdentity = s.taskTagGenbuIdentity()
 }
 
 func (s *app) taskTagGenbuIdentity() string {
 	if s == nil || (s.page != "tasks" && s.page != "archive") || s.tab != taskTagTab {
 		return ""
 	}
-	t := s.currentTask()
+	t := s.taskUnit.currentTask()
 	if t.id == "" {
 		return ""
 	}
@@ -184,18 +184,18 @@ func (s *app) ensureTagGenbuAutoProbe(identity string, win tagGenbuAutoProbeWind
 }
 
 func (s *app) ensureTagGenbuAutoProbeState() *tagGenbuAutoProbeState {
-	if s.tagGenbuAutoProbe == nil {
-		s.tagGenbuAutoProbe = &tagGenbuAutoProbeState{
+	if s.releaseUnit.state.tagGenbuAutoProbe == nil {
+		s.releaseUnit.state.tagGenbuAutoProbe = &tagGenbuAutoProbeState{
 			sessions: make(map[*tagGenbuAutoProbeSession]struct{}),
 			requests: make(map[*tagGenbuAutoProbeRequest]struct{}),
 		}
 	}
-	return s.tagGenbuAutoProbe
+	return s.releaseUnit.state.tagGenbuAutoProbe
 }
 
 func (s *app) runTagGenbuAutoProbe(session *tagGenbuAutoProbeSession, win tagGenbuAutoProbeWindow) {
 	defer func() {
-		state := s.tagGenbuAutoProbe
+		state := s.releaseUnit.state.tagGenbuAutoProbe
 		if state == nil {
 			close(session.done)
 			return
@@ -237,7 +237,7 @@ func (s *app) queueTagGenbuAutoProbe(session *tagGenbuAutoProbeSession, win tagG
 }
 
 func (s *app) startTagGenbuAutoProbeRequest(session *tagGenbuAutoProbeSession, win tagGenbuAutoProbeWindow) {
-	state := s.tagGenbuAutoProbe
+	state := s.releaseUnit.state.tagGenbuAutoProbe
 	if state == nil || session == nil || session.ctx.Err() != nil || session.request != nil {
 		return
 	}
@@ -246,7 +246,7 @@ func (s *app) startTagGenbuAutoProbeRequest(session *tagGenbuAutoProbeSession, w
 		return
 	}
 	ctx, cancel := context.WithCancel(session.ctx)
-	t := s.currentTask()
+	t := s.taskUnit.currentTask()
 	action := application.Action{Kind: "tag.history", TaskID: t.id, Payload: map[string]any{
 		"force": false, "tagHistoryHome": s.snapshot.Home, "tagHistoryTaskRoot": s.configString("taskRoot"),
 		"tagHistoryTaskPath": t.path, "tagHistoryTaskCreatedAt": t.createdAt,
@@ -279,7 +279,7 @@ func (s *app) startTagGenbuAutoProbeRequest(session *tagGenbuAutoProbeSession, w
 func (s *app) runTagGenbuAutoProbeRequest(backend application.Backend, win tagGenbuAutoProbeWindow, request *tagGenbuAutoProbeRequest) {
 	defer func() {
 		request.cancel()
-		state := s.tagGenbuAutoProbe
+		state := s.releaseUnit.state.tagGenbuAutoProbe
 		if state == nil {
 			close(request.done)
 			return
@@ -327,11 +327,11 @@ func (s *app) runTagGenbuAutoProbeRequest(backend application.Backend, win tagGe
 				s.upsertTagJobRecords(view.snapshot)
 			}
 			request.session.retentionPending = len(filterTagHistory(s.taskTagHistoryRecords(request.action.TaskID), "", false)) > s.configInt("tagHistoryMaxGroups", 3)
-			if s.tagGenbuAutoProbe.forcePending {
+			if s.releaseUnit.state.tagGenbuAutoProbe.forcePending {
 				for _, record := range s.taskTagHistoryRecords(request.action.TaskID) {
 					request.session.forceRecords[record.ID] = true
 				}
-				s.tagGenbuAutoProbe.forcePending = false
+				s.releaseUnit.state.tagGenbuAutoProbe.forcePending = false
 			}
 			s.startDueTagGenbuProbes(request.session, win)
 			return
@@ -352,10 +352,10 @@ func (s *app) runTagGenbuAutoProbeRequest(backend application.Backend, win tagGe
 }
 
 func (s *app) tagGenbuAutoProbeSessionRelevant(session *tagGenbuAutoProbeSession) bool {
-	if s == nil || session == nil || session.ctx.Err() != nil || s.tagGenbuAutoProbe == nil || s.tagGenbuAutoProbe.current != session {
+	if s == nil || session == nil || session.ctx.Err() != nil || s.releaseUnit.state.tagGenbuAutoProbe == nil || s.releaseUnit.state.tagGenbuAutoProbe.current != session {
 		return false
 	}
-	state := s.tagGenbuAutoProbe
+	state := s.releaseUnit.state.tagGenbuAutoProbe
 	state.mu.Lock()
 	closed := state.closed
 	state.mu.Unlock()
@@ -368,29 +368,29 @@ func (s *app) tagGenbuAutoProbeRequestRelevant(request *tagGenbuAutoProbeRequest
 		s.loading || s.backend == nil {
 		return false
 	}
-	return s.taskTagGenbuIdentity() == request.identity && s.currentTask().id == request.action.TaskID
+	return s.taskTagGenbuIdentity() == request.identity && s.taskUnit.currentTask().id == request.action.TaskID
 }
 
-func (s *app) stopTagGenbuAutoProbe() {
-	if s == nil || s.tagGenbuAutoProbe == nil || s.tagGenbuAutoProbe.current == nil {
+func (s *releaseController) stopTagGenbuAutoProbe() {
+	if s == nil || s.state.tagGenbuAutoProbe == nil || s.state.tagGenbuAutoProbe.current == nil {
 		return
 	}
-	session := s.tagGenbuAutoProbe.current
-	s.tagGenbuAutoProbe.current = nil
+	session := s.state.tagGenbuAutoProbe.current
+	s.state.tagGenbuAutoProbe.current = nil
 	session.cancel()
 	if session.request != nil {
 		session.request.cancel()
 	}
 }
 
-func (s *app) closeTagGenbuAutoProbe(ctx context.Context) error {
-	if s == nil || s.tagGenbuAutoProbe == nil {
+func (s *releaseController) closeTagGenbuAutoProbe(ctx context.Context) error {
+	if s == nil || s.state.tagGenbuAutoProbe == nil {
 		return nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	state := s.tagGenbuAutoProbe
+	state := s.state.tagGenbuAutoProbe
 	state.mu.Lock()
 	state.closed = true
 	sessions := make([]*tagGenbuAutoProbeSession, 0, len(state.sessions))

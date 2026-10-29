@@ -34,9 +34,13 @@ var materialsYearPattern = regexp.MustCompile(`^[1-9][0-9]{3}$`)
 var materialsRequirementPattern = regexp.MustCompile(`^[0-9]+-.+$`)
 
 // Derived from the existing write root; sibling directories are read-only.
-type AnnualMaterialsScope struct{ Base, Root, Owned, Temporary string }
+type MaterialsScope struct{ Base, Root, Owned, Temporary string }
 
-func (s AnnualMaterialsScope) Readable(path string) bool {
+// AnnualMaterialsScope retains the existing API while all materials kinds use
+// one permission model.
+type AnnualMaterialsScope = MaterialsScope
+
+func (s MaterialsScope) Readable(path string) bool {
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(s.Root, filepath.FromSlash(path))
 	}
@@ -63,7 +67,7 @@ func AnnualScope(owned string) (AnnualMaterialsScope, bool) {
 	}
 	return AnnualMaterialsScope{Base: filepath.Dir(year), Root: root, Owned: owned, Temporary: filepath.Join(root, TemporaryMaterialsDirectory)}, true
 }
-func (s AnnualMaterialsScope) Writable(path string, allowRoot bool) bool {
+func (s MaterialsScope) Writable(path string, allowRoot bool) bool {
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(s.Root, filepath.FromSlash(path))
 	}
@@ -87,7 +91,14 @@ func (s AnnualMaterialsScope) Writable(path string, allowRoot bool) bool {
 }
 
 // Caller holds the existing materials lock. No Git query or initialization.
-func (s AnnualMaterialsScope) EnsureLocal() error {
+func (s MaterialsScope) EnsureLocal() error {
+	if s.local() {
+		canonical, err := s.canonicalLocalScope()
+		if err != nil {
+			return err
+		}
+		s = canonical
+	}
 	for _, path := range []string{s.Owned, s.Temporary} {
 		if err := ensureMaterialsDirectory(s.Base, path); err != nil {
 			return err
@@ -162,8 +173,20 @@ func annualRequirementDirectory(root, id, folder string) (string, error) {
 	return findAnnualRequirementDirectory(root, id, folder, time.Now().Year())
 }
 
-func (s AnnualMaterialsScope) DirectoryInstructions(planned bool) (string, error) {
-	for _, path := range []string{s.Base, filepath.Dir(s.Root), s.Root} {
+func (s MaterialsScope) DirectoryInstructions(planned bool) (string, error) {
+	checked := s
+	if s.local() {
+		// A preview can describe an uncreated task. Existing task roots still
+		// require their real canonical subtree before their files are inspected.
+		if _, err := os.Lstat(s.Base); !(planned && os.IsNotExist(err)) {
+			canonical, err := s.canonicalLocalScope()
+			if err != nil {
+				return "", err
+			}
+			checked = canonical
+		}
+	}
+	for _, path := range []string{checked.Base, filepath.Dir(checked.Root), checked.Root} {
 		info, err := os.Lstat(path)
 		if os.IsNotExist(err) && planned {
 			break
@@ -184,7 +207,11 @@ func (s AnnualMaterialsScope) DirectoryInstructions(planned bool) (string, error
 	if planned {
 		b.WriteString("以下为资料准备目标；仅在准备成功后使用，不能据此宣称目录已经创建。\n\n")
 	}
-	for _, area := range []struct{ path, label string }{{s.Owned, "正式资料目录（可读写，按配置参与 Git 同步）"}, {s.Temporary, "本地临时目录（可读写，禁止提交、推送或通过 Git 覆盖）"}} {
+	ownedLabel := "正式资料目录（可读写，按配置参与 Git 同步）"
+	if s.local() {
+		ownedLabel = "任务资料目录（可读写，仅保存在当前任务内，不参与需求资料 Git 同步）"
+	}
+	for _, area := range []struct{ path, label string }{{s.Owned, ownedLabel}, {s.Temporary, "本地临时目录（可读写，禁止提交、推送或通过 Git 覆盖）"}} {
 		info, err := os.Lstat(area.path)
 		if os.IsNotExist(err) && !planned {
 			fmt.Fprintf(&b, "- 尚未准备的%s：%s（不表示目录已存在）\n", area.label, materialsCodePath(area.path))
@@ -212,7 +239,11 @@ func (s AnnualMaterialsScope) DirectoryInstructions(planned bool) (string, error
 		}
 		fmt.Fprintf(&b, "- 同事资料目录（只读，可浏览和复制，禁止修改及上传本地变化）：%s\n", materialsCodePath(path))
 	}
-	b.WriteString("\n需求分析、设计、测试、验收等正式交付资料写入正式资料目录；过程日志、临时脚本、中间结果和临时导出写入 temp。不得修改忽略规则或强制添加 temp。其他同级文件同样只读。产品源代码仍只写入本任务授权服务工作区。\n")
+	if s.local() {
+		b.WriteString("\n分析、方案和文档写入任务资料目录；过程日志、临时脚本和中间结果写入 temp。关联需求不会自动移动这些文件，也不会将其纳入需求资料 Git 同步。不得修改忽略规则或强制添加 temp。其他同级文件同样只读。产品源代码仍只写入本任务授权服务工作区。\n")
+	} else {
+		b.WriteString("\n需求分析、设计、测试、验收等正式交付资料写入正式资料目录；过程日志、临时脚本、中间结果和临时导出写入 temp。不得修改忽略规则或强制添加 temp。其他同级文件同样只读。产品源代码仍只写入本任务授权服务工作区。\n")
+	}
 	return b.String(), nil
 }
 

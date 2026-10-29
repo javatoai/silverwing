@@ -689,37 +689,31 @@ func (s *Service) queryParticipatedItemsWithProgress(ctx context.Context, config
 	progress.update("items", itemsStatus, itemsMessage, len(workItemTypes), len(workItemTypes))
 	all := aggregateParticipatedTypeResults(typeResult)
 	// Schedule enrichment is optional metadata, but incomplete reads remain visible per item.
-	completedEstimates := 0
-	for i := range all {
-		progress.update("estimates", "running", fmt.Sprintf("正在读取第 %d 条工作项的个人估分…", i+1), completedEstimates, len(all))
+	completedEstimates, estimateErr := enrichRequirementPersonalEstimates(ctx, all, progress, func(readContext context.Context, item domain.ParticipatedWorkItem) (string, error) {
 		if userErr != nil {
-			all[i].MetadataWarnings = append(all[i].MetadataWarnings, "个人估分："+shortError(userErr))
-			continue
+			return "", errors.New("个人估分：" + shortError(userErr))
 		}
 		if dateErr != nil {
-			all[i].MetadataWarnings = append(all[i].MetadataWarnings, "个人估分："+shortError(dateErr))
-			continue
+			return "", errors.New("个人估分：" + shortError(dateErr))
 		}
-		if typeIndex := workItemTypeIndex(all[i].Type); typeIndex >= 0 && incompleteTypes[typeIndex] {
-			all[i].MetadataWarnings = append(all[i].MetadataWarnings, "个人估分：工作项的 Sprint 归属查询不完整")
-			continue
+		if typeIndex := workItemTypeIndex(item.Type); typeIndex >= 0 && incompleteTypes[typeIndex] {
+			return "", errors.New("个人估分：工作项的 Sprint 归属查询不完整")
 		}
-		nodes, err := s.readPages(ctx, config, []string{"workflow", "get-node", "--project-key", all[i].ProjectKey, "--work-item-id", all[i].ID, "--node-id-list", "_all", "--field-key-list", "_all", "--need-sub-task", "true"}, 20*time.Second, "读取工作项排期明细")
+		nodes, err := s.readPages(readContext, config, []string{"workflow", "get-node", "--project-key", item.ProjectKey, "--work-item-id", item.ID, "--node-id-list", "_all", "--field-key-list", "_all", "--need-sub-task", "true"}, 20*time.Second, "读取工作项排期明细")
 		if err != nil {
 			if process.IsCleanupFailure(err) {
-				return nil, nil, 0, err
+				return "", err
 			}
-			all[i].MetadataWarnings = append(all[i].MetadataWarnings, project.SimpleName+" · #"+all[i].ID+" 个人估分："+shortError(err))
-			continue
+			return "", errors.New(project.SimpleName + " · #" + item.ID + " 个人估分：" + shortError(err))
 		}
 		value, err := personalEstimate(nodes, userKey, *dateRange)
 		if err != nil {
-			all[i].MetadataWarnings = append(all[i].MetadataWarnings, project.SimpleName+" · #"+all[i].ID+" 个人估分："+shortError(err))
-			continue
+			return "", errors.New(project.SimpleName + " · #" + item.ID + " 个人估分：" + shortError(err))
 		}
-		formatted := value.String()
-		all[i].MySprintEstimateDays = &formatted
-		completedEstimates++
+		return value.String(), nil
+	})
+	if estimateErr != nil {
+		return nil, nil, 0, estimateErr
 	}
 	estimateStatus, estimateMessage := "done", "个人估分读取完成"
 	if completedEstimates < len(all) {
@@ -999,7 +993,7 @@ func (s *Service) readRequirement(ctx context.Context, config domain.AppConfig, 
 	if err != nil {
 		return nil, err
 	}
-	session, loggedOut, identityErr := s.requirementIdentityFor(ctx, config, expected, force, s.requirementCacheIdentity)
+	session, loggedOut, identityErr := s.requirementIdentityAtReadStart(ctx, config, expected, force)
 	identity := session.raw
 	if process.IsCleanupFailure(identityErr) {
 		return nil, identityErr

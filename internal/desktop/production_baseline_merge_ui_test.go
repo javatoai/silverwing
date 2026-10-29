@@ -30,7 +30,7 @@ func TestProductionNoDiffButtonIsDisabled(t *testing.T) {
 			if err := tester.Click("无差异"); err != nil {
 				t.Fatal(err)
 			}
-			if s.production.diffDialog != nil {
+			if s.releaseUnit.state.production.diffDialog != nil {
 				t.Fatal("no-file-change button opened an empty dialog")
 			}
 			for i := 0; i < 24; i++ {
@@ -84,7 +84,7 @@ func TestProductionUnifiedBaselineStatusUsesCurrentEvidence(t *testing.T) {
 					b.Phase = "ABORTING"
 				}
 			}
-			s.production.batches[0] = b
+			s.releaseUnit.state.production.batches[0] = b
 			status := s.productionBaselineStatus(v, &b)
 			if status.Text != tc.text || status.State != tc.state {
 				t.Fatalf("status=%+v, want %s / %s", status, tc.text, tc.state)
@@ -105,7 +105,7 @@ func TestProductionUnifiedBaselineStatusUsesCurrentEvidence(t *testing.T) {
 				if !tester.HasText(v.Error) || tester.HasText("无差异") {
 					t.Fatal("failed read was disguised as an empty diff")
 				}
-				if err := tester.Click("查看差异"); err != nil || s.production.diffDialog != nil {
+				if err := tester.Click("查看差异"); err != nil || s.releaseUnit.state.production.diffDialog != nil {
 					t.Fatal("failed comparison remained actionable")
 				}
 			}
@@ -134,7 +134,7 @@ func TestProductionMergeHistoryWaitsForSuccessfulSavedReport(t *testing.T) {
 	backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batches: []production.Batch{failed}}}}
 	productionTestUpdate(t, window)
 	tester.Frame()
-	if !tester.HasText("已合并：feature/unsaved") || len(s.production.batches[0].Branches) != 2 {
+	if !tester.HasText("已合并：feature/unsaved") || len(s.releaseUnit.state.production.batches[0].Branches) != 2 {
 		t.Fatal("persisted snapshot did not restore confirmed full history")
 	}
 }
@@ -146,7 +146,7 @@ func TestProductionMergedBranchesAreFlatUniqueAndScoped(t *testing.T) {
 				s, v, b := productionFixture(t)
 				long := "feature/" + strings.Repeat("long-branch-name-", 12)
 				b.Branches = []production.MergedBranch{{Branch: "feature/one"}, {Branch: long}, {Branch: "feature/two"}, {Branch: "feature/one"}}
-				s.production.batches[0] = b
+				s.releaseUnit.state.production.batches[0] = b
 				tester := productionCardsTester(s, width, dark)
 				previous := float32(-1)
 				for _, name := range []string{"feature/one", "feature/two", long} {
@@ -179,13 +179,13 @@ func TestProductionMergedBranchesAreFlatUniqueAndScoped(t *testing.T) {
 				}
 				other := b
 				other.ID, other.ReleaseBranch, other.Branches = "other-batch", "release/other", []production.MergedBranch{{Branch: "feature/other"}}
-				s.production.batches = append(s.production.batches, other)
+				s.releaseUnit.state.production.batches = append(s.releaseUnit.state.production.batches, other)
 				v.selectProductionBatch(other.ID)
 				tester.Frame()
 				if tester.HasText("已合并：feature/one") || !tester.HasText("已合并：feature/other") {
 					t.Fatal("previous batch records leaked after switching")
 				}
-				s.production.selected = "missing-service"
+				s.releaseUnit.state.production.selected = "missing-service"
 				tester.Frame()
 				if tester.HasText("已合并：") {
 					t.Fatal("previous service records leaked after switching")
@@ -200,13 +200,13 @@ func TestProductionBaselineDiffFullPageLoadingErrorAndRetry(t *testing.T) {
 	v.Preview.ProductionSHA, v.Preview.ProductionInMain = strings.Repeat("f", 40), false
 	v.Preview.Diff = " changed.go | 1 +\n 1 file changed, 1 insertion(+)"
 	v.Branch = ""
-	s.notes[0] = "unsaved draft"
+	s.taskUnit.state.notes[0] = "unsaved draft"
 	// Exercise the application view's modal placement, not only the dialog.
 	tester := ui.NewTester(func(c *ui.Context) { s.view(c) }, 1440, 1000)
 	if err := tester.Click("查看差异"); err != nil {
 		t.Fatal(err)
 	}
-	d := s.production.diffDialog
+	d := s.releaseUnit.state.production.diffDialog
 	if d == nil || !d.Review.FilesLoading || !tester.HasText("源：") || !tester.HasText("目标：") {
 		t.Fatal("click gave no immediate visible loading dialog")
 	}
@@ -234,12 +234,12 @@ func TestProductionBaselineDiffFullPageLoadingErrorAndRetry(t *testing.T) {
 		t.Fatal("successful empty read did not settle")
 	}
 	tester.Key(0, ui.KeyEscape)
-	if s.production.diffDialog != nil || s.notes[0] != "unsaved draft" {
+	if s.releaseUnit.state.production.diffDialog != nil || s.taskUnit.state.notes[0] != "unsaved draft" {
 		t.Fatal("closing diff changed the draft or left a modal")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := s.closeProductionJobs(ctx); err != nil {
+	if err := s.releaseUnit.closeProductionJobs(ctx); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -24,7 +24,7 @@ func TestTaskCreationToolsRespectEnabledSettings(t *testing.T) {
 			for _, dark := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s-%d-dark-%t", tc.name, width, dark), func(t *testing.T) {
 					s, tester := taskCreationLeftFixture(t, width, dark)
-					form := s.taskCreation
+					form := s.taskUnit.state.taskCreation
 					form.config.DefaultWorkspaceToolIDs = tc.ids
 					action := application.Action{Kind: "workspace.tools-options", Payload: map[string]any{"taskCreateToken": form.token}}
 					options := []taskCreationWorkspaceToolOption{
@@ -59,12 +59,12 @@ func TestTaskCreationToolsRespectEnabledSettings(t *testing.T) {
 						t.Fatalf("creation selected hidden tools: got=%v want=%v", got, want)
 					}
 					if containsString(want, "codex") {
-						before := s.configJSON
+						before := s.settingsUnit.state.configJSON
 						if err := tester.Click("Codex"); err != nil {
 							t.Fatal(err)
 						}
 						tester.Frame()
-						if form.selectedToolIDs["codex"] || !tester.HasText("Codex") || s.configJSON != before {
+						if form.selectedToolIDs["codex"] || !tester.HasText("Codex") || s.settingsUnit.state.configJSON != before {
 							t.Fatal("temporary deselection changed visibility or global settings")
 						}
 					}

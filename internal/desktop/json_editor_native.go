@@ -48,6 +48,7 @@ func (e *jsonToolState) syncNative() {
 		e.nativeSource = e.projection.text
 	}
 	e.nativeVersion = e.native.Buffer.Version()
+	e.nativeIndex, e.nativeIndexVersion = e.projection.index, e.nativeVersion
 	e.lines.view = &e.native
 	e.native.Label, e.native.Placeholder = "JSON 源码输入", "粘贴或输入 JSON"
 	e.native.LineNumbers = codeeditor.LineNumbersOff
@@ -63,6 +64,7 @@ func (s *app) pullJSONNativeInput(state *toolPageState) {
 		return
 	}
 	e.viewSource = e.native.Buffer.OriginalText()
+	e.indexNativeText(e.viewSource)
 	start, end := e.nativeSelection()
 	if developerToolInputTooLarge(jsonEditorCandidateSource(state, e.viewSource)) {
 		e.nativeSource = e.viewSource
@@ -80,13 +82,53 @@ func (s *app) pullJSONNativeInput(state *toolPageState) {
 }
 
 func (e *jsonToolState) nativeSelection() (int, int) {
+	if e.native.Buffer == nil {
+		return 0, 0
+	}
+	if e.nativeIndex == nil || e.nativeIndexVersion != e.native.Buffer.Version() {
+		e.indexNativeText(e.native.Buffer.OriginalText())
+	}
 	selection := e.native.Selection()
-	source := e.native.Buffer.OriginalText()
-	return textEditorSourceRuneOffset(source, selection.Anchor), textEditorSourceRuneOffset(source, selection.Head)
+	return e.nativeIndex.runeAtLFByte(selection.Anchor), e.nativeIndex.runeAtLFByte(selection.Head)
+}
+
+func (e *jsonToolState) indexNativeText(source string) {
+	if e.nativeIndex == nil || e.nativeIndex.source != source {
+		e.nativeIndex = newJSONTextIndex(source)
+	}
+	e.nativeIndexVersion = e.native.Buffer.Version()
 }
 
 func (e *jsonToolState) selectNative(start, end int) {
-	e.native.Select(textEditorProjectedByteOffset(e.projection.text, start), textEditorProjectedByteOffset(e.projection.text, end))
+	e.native.Select(e.projection.index.lfByteAtRune(start), e.projection.index.lfByteAtRune(end))
+}
+
+func (e *jsonToolState) syncNativeFindHighlights(state *toolPageState, matches []jsonEditorMatch) {
+	if !e.finding {
+		e.native.FindHighlights = nil
+		e.findHighlightsReady = false
+		return
+	}
+	e.projectedMatches.update(e.projection, e.projectionRevision, e.findQuery)
+	if !e.findHighlightsReady || e.findHighlightsRevision != e.projectionRevision || e.findHighlightsQuery != e.findQuery {
+		e.native.FindHighlights = make([]codeeditor.FindHighlight, len(e.projectedMatches.lfBytes))
+		for i, match := range e.projectedMatches.lfBytes {
+			e.native.FindHighlights[i] = codeeditor.FindHighlight{Start: match.start, End: match.end}
+		}
+		e.findHighlightsReady, e.findHighlightsRevision, e.findHighlightsQuery = true, e.projectionRevision, e.findQuery
+		e.findHighlightsCurrent = -1
+	}
+	current := jsonEditorProjectedFindIndex(state, matches)
+	if current == e.findHighlightsCurrent {
+		return
+	}
+	if previous := e.findHighlightsCurrent; previous >= 0 && previous < len(e.native.FindHighlights) {
+		e.native.FindHighlights[previous].Current = false
+	}
+	if current >= 0 && current < len(e.native.FindHighlights) {
+		e.native.FindHighlights[current].Current = true
+	}
+	e.findHighlightsCurrent = current
 }
 
 func textEditorSourceRuneOffset(source string, projectedByte int) int {

@@ -26,11 +26,30 @@ func NewTrashService() *TrashService { return &TrashService{backend: newPlatform
 
 // MoveToTrash prevalidates the whole selection, then moves items one by one.
 // Each outcome is returned independently; permanent deletion is never used.
-func (s *TrashService) MoveToTrash(ctx context.Context, root string, relativePaths []string) ([]TrashItemResult, error) {
+func (s *TrashService) MoveToTrash(ctx context.Context, root string, relativePaths []string) (results []TrashItemResult, resultErr error) {
 	if s == nil || s.backend == nil {
 		return nil, errors.New("系统回收站不可用")
 	}
-	paths, err := (&Service{}).ResolveDeleteItems(root, relativePaths)
+	scope, err := newMaterialsOperationScope(root)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		scope.finish(&resultErr)
+		for i := range results {
+			results[i].Path = scope.public(results[i].Path)
+		}
+	}()
+	physical := make([]string, 0, len(relativePaths))
+	for _, value := range relativePaths {
+		path, err := scope.resolve(value, false, true, false)
+		if err != nil {
+			return nil, err
+		}
+		physical = append(physical, path)
+	}
+	root = scope.root
+	paths, err := (&Service{}).ResolveDeleteItems(root, physical)
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +61,7 @@ func (s *TrashService) MoveToTrash(ctx context.Context, root string, relativePat
 		}
 		identities[path] = fileIdentity(path, info)
 	}
-	results := make([]TrashItemResult, 0, len(paths))
+	results = make([]TrashItemResult, 0, len(paths))
 	for index, path := range paths {
 		if err := ctx.Err(); err != nil {
 			for _, pending := range paths[index:] {
@@ -84,6 +103,10 @@ func (s *TrashService) MoveToTrash(ctx context.Context, root string, relativePat
 				results = append(results, TrashItemResult{Path: path, Error: err.Error()})
 				continue
 			}
+		}
+		if err := scope.revalidate(); err != nil {
+			results = append(results, TrashItemResult{Path: path, Error: err.Error()})
+			continue
 		}
 		if err := s.backend.moveToTrash(ctx, current); err != nil {
 			if errors.Is(err, ErrTrashCancelled) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

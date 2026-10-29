@@ -1,4 +1,4 @@
-package documents
+package requirementprovider
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"silverwing-go/internal/documents"
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/process"
 	"silverwing-go/internal/storage"
@@ -31,7 +32,7 @@ func TestEnsureMaterialsMatchesNumericRequirementIDExactly(t *testing.T) {
 			subdir := "资料"
 			config := domain.AppConfig{RequirementMaterialsRoot: &root, RequirementMaterialsSubdirectory: &subdir,
 				MeegleProjects: []domain.MeegleProjectConfig{{ProjectKey: "project-1", SimpleName: "obt"}}}
-			service := NewPreparationService(storage.Paths{}, preparationReviewRunner{output: `{"work_item_attribute":{"work_item_id":` + fixture.value + `}}`})
+			service := documents.NewPreparationService(storage.Paths{}, NewMeegle(preparationReviewRunner{output: `{"work_item_attribute":{"work_item_id":` + fixture.value + `}}`}))
 			result, err := service.Ensure(context.Background(), config, "https://project.feishu.cn/obt/technical/detail/"+fixture.id, "fixture")
 			if err != nil || result.Status != domain.MaterialsReady || result.WriteRoot == nil {
 				t.Fatalf("numeric requirement was not matched: result=%#v err=%v", result, err)

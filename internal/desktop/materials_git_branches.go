@@ -22,7 +22,7 @@ type materialsGitBranchesState struct {
 }
 
 func (s *app) materialsGitBranchesCurrent() *materialsGitBranchesState {
-	state := s.materialsGitBranches
+	state := s.materialsUnit.state.materialsGitBranches
 	if state == nil || state.closed || !s.materialsGitScopeCurrent(state.scope) {
 		return nil
 	}
@@ -35,8 +35,8 @@ func (s *app) materialsGitBranchReady(branch string) bool {
 }
 
 func (s *app) observeMaterialsGitBranches() {
-	state := s.materialsGitBranches
-	if state != nil && (s.page != "settings" || s.settingsPage != "paths") {
+	state := s.materialsUnit.state.materialsGitBranches
+	if state != nil && (s.page != "settings" || s.settingsUnit.state.settingsPage != "paths") {
 		state.visible = false
 	}
 	if state != nil && !s.materialsGitScopeCurrent(state.scope) && state.cancel != nil {
@@ -46,16 +46,16 @@ func (s *app) observeMaterialsGitBranches() {
 
 func (s *app) loadMaterialsGitBranches(force bool) {
 	config, ok := s.materialsGitConfig()
-	if !ok || s.materialsGitCapture || s.materialsGitSettingsPending(config) {
+	if !ok || s.materialsUnit.state.materialsGitCapture || s.materialsGitSettingsPending(config) {
 		return
 	}
 	backend, ok := s.backend.(application.MaterialsGitBranchesBackend)
-	update := taskContextUpdater(s.win, s.taskContextUpdate)
+	update := taskContextUpdater(s.win, s.taskUnit.state.taskContextUpdate)
 	if !ok || update == nil {
 		return
 	}
 	scope := application.MaterialsGitScope(s.snapshot.Home, config)
-	previous := s.materialsGitBranches
+	previous := s.materialsUnit.state.materialsGitBranches
 	if previous != nil && previous.closed {
 		return
 	}
@@ -82,7 +82,7 @@ func (s *app) loadMaterialsGitBranches(force bool) {
 			}
 		}
 	}
-	s.materialsGitBranches = state
+	s.materialsUnit.state.materialsGitBranches = state
 	if scope.URL == "" {
 		state.loading, state.loadedAt = false, time.Now()
 		return
@@ -106,7 +106,7 @@ func (s *app) loadMaterialsGitBranches(force bool) {
 			return
 		}
 		update(func() {
-			if s.materialsGitBranches != state || state.closed || !s.materialsGitScopeCurrent(scope) {
+			if s.materialsUnit.state.materialsGitBranches != state || state.closed || !s.materialsGitScopeCurrent(scope) {
 				return
 			}
 			state.loading, state.loaded, state.loadedAt = false, true, time.Now()
@@ -122,8 +122,8 @@ func (s *app) loadMaterialsGitBranches(force bool) {
 	}()
 }
 
-func (s *app) stopMaterialsGitBranches() {
-	if state := s.materialsGitBranches; state != nil {
+func (s *materialsController) stopMaterialsGitBranches() {
+	if state := s.state.materialsGitBranches; state != nil {
 		for _, old := range append(state.retired, state) {
 			old.closed = true
 			if old.cancel != nil {
@@ -133,9 +133,9 @@ func (s *app) stopMaterialsGitBranches() {
 	}
 }
 
-func (s *app) closeMaterialsGitBranches(ctx context.Context) error {
+func (s *materialsController) closeMaterialsGitBranches(ctx context.Context) error {
 	s.stopMaterialsGitBranches()
-	if state := s.materialsGitBranches; state != nil {
+	if state := s.state.materialsGitBranches; state != nil {
 		for _, old := range append(state.retired, state) {
 			if old.done == nil {
 				continue

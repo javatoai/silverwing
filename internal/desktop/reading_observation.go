@@ -23,11 +23,11 @@ type readingObservation struct {
 }
 
 func (s *app) readingObservationInputs() readingObservationInputs {
-	current := s.currentTask()
+	current := s.taskUnit.currentTask()
 	return readingObservationInputs{
 		taskPath: current.path, root: current.materialsPath, requirementLink: current.requirementURL,
-		documentPath: s.documentPath, tab: s.tab, documentsLoaded: s.documentsLoaded,
-		documentsRequested: s.documentsRequested, collapsed: s.documentsCollapsed, store: s.readingSession.store,
+		documentPath: s.materialsUnit.state.documentPath, tab: s.tab, documentsLoaded: s.materialsUnit.state.documentsLoaded,
+		documentsRequested: s.materialsUnit.state.documentsRequested, collapsed: s.materialsUnit.state.documentsCollapsed, store: s.readingSession.store,
 	}
 }
 

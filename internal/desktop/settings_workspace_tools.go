@@ -32,8 +32,8 @@ func (s *app) applySettingsWorkspaceTools(action application.Action, result appl
 		return
 	}
 	state.workspaceTools, state.workspaceToolsLoaded, state.workspaceToolsError = options, true, ""
-	s.stopTaskOpenTools()
-	s.taskOpenTools = &taskOpenToolsState{home: s.snapshot.Home, config: s.configJSON, options: options, loaded: true}
+	s.taskUnit.stopTaskOpenTools()
+	s.taskUnit.state.taskOpenTools = &taskOpenToolsState{home: s.snapshot.Home, config: s.settingsUnit.state.configJSON, options: options, loaded: true}
 }
 
 func (s *app) settingsWorkspaceTools(c *ui.Context, p palette) {

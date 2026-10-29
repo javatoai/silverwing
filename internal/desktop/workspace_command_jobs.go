@@ -45,16 +45,16 @@ type workspaceCommandJob struct {
 }
 
 func (s *app) ensureWorkspaceCommandJobs() *workspaceCommandJobsState {
-	if s.workspaceCommandJobs == nil {
-		s.workspaceCommandJobs = &workspaceCommandJobsState{running: make(map[*workspaceCommandJob]struct{})}
-	} else if s.workspaceCommandJobs.running == nil {
-		s.workspaceCommandJobs.running = make(map[*workspaceCommandJob]struct{})
+	if s.workspaceUnit.state.workspaceCommandJobs == nil {
+		s.workspaceUnit.state.workspaceCommandJobs = &workspaceCommandJobsState{running: make(map[*workspaceCommandJob]struct{})}
+	} else if s.workspaceUnit.state.workspaceCommandJobs.running == nil {
+		s.workspaceUnit.state.workspaceCommandJobs.running = make(map[*workspaceCommandJob]struct{})
 	}
-	return s.workspaceCommandJobs
+	return s.workspaceUnit.state.workspaceCommandJobs
 }
 
 func (s *app) workspaceCommandBusy() bool {
-	jobs := s.workspaceCommandJobs
+	jobs := s.workspaceUnit.state.workspaceCommandJobs
 	if jobs == nil {
 		return false
 	}
@@ -85,10 +85,10 @@ func (s *app) dispatchWorkspaceCommandJob(action application.Action) bool {
 }
 
 func (s *app) beginWorkspaceCommandJob(action application.Action) (*workspaceCommandJob, error) {
-	if !s.workspaceCommandActionRelevant(action) || s.workspaceCommand == nil {
+	if !s.workspaceCommandActionRelevant(action) || s.workspaceUnit.state.workspaceCommand == nil {
 		return nil, errors.New("快捷命令执行身份已变化，请重新选择后重试。")
 	}
-	state := s.workspaceCommand
+	state := s.workspaceUnit.state.workspaceCommand
 	if state.Status != workspaceCommandRunning {
 		return nil, errors.New("快捷命令不在可执行状态。")
 	}
@@ -140,9 +140,9 @@ func (s *app) rejectWorkspaceCommandJob(action application.Action, err error) {
 	if err != nil {
 		message = err.Error()
 	}
-	if s.workspaceCommand != nil && payloadString(action.Payload, "commandToken") == s.workspaceCommand.Token {
-		if s.workspaceCommand.Status == workspaceCommandRunning && s.workspaceCommandActionRelevant(action) {
-			state := s.workspaceCommand
+	if s.workspaceUnit.state.workspaceCommand != nil && payloadString(action.Payload, "commandToken") == s.workspaceUnit.state.workspaceCommand.Token {
+		if s.workspaceUnit.state.workspaceCommand.Status == workspaceCommandRunning && s.workspaceCommandActionRelevant(action) {
+			state := s.workspaceUnit.state.workspaceCommand
 			state.Status = workspaceCommandFailed
 			state.StopRequested = false
 			state.Duration = time.Since(state.StartedAt)
@@ -185,10 +185,10 @@ func (s *app) workspaceCommandJobStream(request *workspaceCommandJob) func(proce
 			return
 		}
 		request.window.Update(func() {
-			if !s.workspaceCommandJobRelevant(request) || s.workspaceCommand == nil {
+			if !s.workspaceCommandJobRelevant(request) || s.workspaceUnit.state.workspaceCommand == nil {
 				return
 			}
-			state := s.workspaceCommand
+			state := s.workspaceUnit.state.workspaceCommand
 			if state.Status != workspaceCommandRunning {
 				return
 			}
@@ -229,19 +229,19 @@ func (s *app) workspaceCommandJobRelevant(request *workspaceCommandJob) bool {
 	if request == nil || request.ctx.Err() != nil || request.window == nil || request.window.IsDestroyed() {
 		return false
 	}
-	jobs := s.workspaceCommandJobs
+	jobs := s.workspaceUnit.state.workspaceCommandJobs
 	if jobs == nil || jobs.current != request {
 		return false
 	}
 	jobs.mu.Lock()
 	closed, active := jobs.closed, jobs.active == request
 	jobs.mu.Unlock()
-	if closed || !active || s.snapshot.Home != request.home || s.workspaceCommand == nil ||
-		s.workspaceCommand.Token != payloadString(request.action.Payload, "commandToken") ||
-		s.workspaceCommand.WorkspaceFingerprint != request.workspaceFingerprint {
+	if closed || !active || s.snapshot.Home != request.home || s.workspaceUnit.state.workspaceCommand == nil ||
+		s.workspaceUnit.state.workspaceCommand.Token != payloadString(request.action.Payload, "commandToken") ||
+		s.workspaceUnit.state.workspaceCommand.WorkspaceFingerprint != request.workspaceFingerprint {
 		return false
 	}
-	state := s.workspaceCommand
+	state := s.workspaceUnit.state.workspaceCommand
 	if state.TaskPath != request.taskPath || state.TaskCreatedAt != request.taskCreatedAt || state.TaskGroupID != request.taskGroupID {
 		return false
 	}
@@ -261,7 +261,7 @@ func (s *app) finishWorkspaceCommandJob(request *workspaceCommandJob, result app
 	if !s.workspaceCommandJobRelevant(request) {
 		return
 	}
-	jobs := s.workspaceCommandJobs
+	jobs := s.workspaceUnit.state.workspaceCommandJobs
 	if jobs != nil && jobs.current == request {
 		jobs.current = nil
 	}
@@ -275,10 +275,10 @@ func (s *app) finishWorkspaceCommandJob(request *workspaceCommandJob, result app
 // Cleanup uncertainty survives a canceled context and a retired window, but
 // is retained only once for this command manager. Close returns this diagnosis.
 func (s *app) recordWorkspaceCommandCleanupFailure(err error) {
-	if !process.IsCleanupFailure(err) || s.workspaceCommandJobs == nil {
+	if !process.IsCleanupFailure(err) || s.workspaceUnit.state.workspaceCommandJobs == nil {
 		return
 	}
-	jobs := s.workspaceCommandJobs
+	jobs := s.workspaceUnit.state.workspaceCommandJobs
 	jobs.mu.Lock()
 	defer jobs.mu.Unlock()
 	if jobs.cleanupErr == nil {
@@ -291,13 +291,13 @@ func (s *app) recordWorkspaceCommandCleanupFailure(err error) {
 // starts a backend action. The latest claim and full UI identity must match.
 func (s *app) finishWorkspaceCommandCleanupFailure(request *workspaceCommandJob, err error) {
 	if request == nil || request.window == nil || request.window != s.win || request.window.IsDestroyed() ||
-		s.workspaceCommandJobs == nil {
+		s.workspaceUnit.state.workspaceCommandJobs == nil {
 		return
 	}
-	jobs := s.workspaceCommandJobs
+	jobs := s.workspaceUnit.state.workspaceCommandJobs
 	jobs.mu.Lock()
 	defer jobs.mu.Unlock()
-	state := s.workspaceCommand
+	state := s.workspaceUnit.state.workspaceCommand
 	if jobs.closed || jobs.owner != request || state == nil || s.snapshot.Home != request.home ||
 		(state.Status != workspaceCommandRunning && !(state.Status == workspaceCommandCancelled && state.StopRequested)) ||
 		!sameWorkspaceCommandPath(state.TaskPath, request.taskPath) || state.TaskCreatedAt != request.taskCreatedAt ||
@@ -315,7 +315,7 @@ func (s *app) completeWorkspaceCommandJob(request *workspaceCommandJob) {
 	if request == nil {
 		return
 	}
-	jobs := s.workspaceCommandJobs
+	jobs := s.workspaceUnit.state.workspaceCommandJobs
 	if jobs == nil {
 		request.cancel()
 		return
@@ -335,7 +335,7 @@ func (s *app) completeWorkspaceCommandJob(request *workspaceCommandJob) {
 // cancelWorkspaceCommandJob cancels only the command with this UI token. It
 // deliberately leaves active occupied until the backend and its cleanup exit.
 func (s *app) cancelWorkspaceCommandJob(token string) bool {
-	jobs := s.workspaceCommandJobs
+	jobs := s.workspaceUnit.state.workspaceCommandJobs
 	if jobs == nil || token == "" {
 		return false
 	}
@@ -357,12 +357,12 @@ func (s *app) cancelWorkspaceCommandJob(token string) bool {
 // identity changes. It intentionally does not inspect the current page, so a
 // hidden command dialog continues collecting output while another page is open.
 func (s *app) observeWorkspaceCommandJobIdentity() {
-	jobs := s.workspaceCommandJobs
+	jobs := s.workspaceUnit.state.workspaceCommandJobs
 	if jobs == nil || jobs.current == nil {
 		return
 	}
 	request := jobs.current
-	state := s.workspaceCommand
+	state := s.workspaceUnit.state.workspaceCommand
 	if state == nil || state.Token != payloadString(request.action.Payload, "commandToken") ||
 		!s.workspaceCommandIdentityCurrent(state) {
 		if state != nil && state.Status == workspaceCommandRunning {
@@ -371,12 +371,12 @@ func (s *app) observeWorkspaceCommandJobIdentity() {
 			state.Duration = time.Since(state.StartedAt)
 		}
 		s.cancelWorkspaceCommandJob(payloadString(request.action.Payload, "commandToken"))
-		s.workspaceCommand = nil
+		s.workspaceUnit.state.workspaceCommand = nil
 	}
 }
 
-func (s *app) closeWorkspaceCommandJobs(ctx context.Context) error {
-	jobs := s.workspaceCommandJobs
+func (s *workspaceController) closeWorkspaceCommandJobs(ctx context.Context) error {
+	jobs := s.state.workspaceCommandJobs
 	if jobs == nil {
 		return nil
 	}

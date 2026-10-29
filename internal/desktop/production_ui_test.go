@@ -61,7 +61,7 @@ func productionFixture(t *testing.T) (*app, *productionView, production.Batch) {
 	}
 	s := newApp(nil, Options{Page: "production"})
 	s.loading = false
-	s.configJSON = string(data)
+	s.settingsUnit.state.configJSON = string(data)
 	s.snapshot = application.Snapshot{Home: t.TempDir(), Services: []application.Service{{ID: "service", GroupID: domain.DefaultGroupID, Name: "示例服务", RepositoryID: "repo", MasterBranch: "origin/master"}}, Groups: []application.Group{{ID: domain.DefaultGroupID, Name: "国内组"}}, Repositories: []application.Repository{{ID: "repo", Name: "synthetic-repo", RootPath: "C:/synthetic/repo-one"}}}
 	selection := production.Selection{GroupID: domain.DefaultGroupID, ServiceID: "service"}
 	v := &productionView{Selection: selection, Version: "release/2.3.44", Branch: "feature/synthetic"}
@@ -75,7 +75,7 @@ func productionFixture(t *testing.T) (*app, *productionView, production.Batch) {
 	state.choices = []productionServiceChoice{productionChoice(s.snapshot.Services[0], s.snapshot)}
 	state.batches = []production.Batch{b}
 	state.loadedHome = s.snapshot.Home
-	state.configScope = productionConfigScope(s.configJSON)
+	state.configScope = productionConfigScope(s.settingsUnit.state.configJSON)
 	return s, v, b
 }
 
@@ -84,9 +84,9 @@ func TestProductionSameNameServicesShowAndSearchRepositoryIdentity(t *testing.T)
 	other := application.Service{ID: "service", GroupID: "other", Name: "示例服务", RepositoryID: "repo-two", MasterBranch: "origin/master"}
 	s.snapshot.Groups = append(s.snapshot.Groups, application.Group{ID: "other", Name: "海外组"})
 	s.snapshot.Repositories = append(s.snapshot.Repositories, application.Repository{ID: "repo-two", Name: "synthetic-overseas", RootPath: "C:/synthetic/overseas-repo"})
-	s.production.choices = append(s.production.choices, productionChoice(other, s.snapshot))
+	s.releaseUnit.state.production.choices = append(s.releaseUnit.state.production.choices, productionChoice(other, s.snapshot))
 	selection := production.Selection{GroupID: other.GroupID, ServiceID: other.ID}
-	s.production.views[productionKey(selection)] = &productionView{Selection: selection}
+	s.releaseUnit.state.production.views[productionKey(selection)] = &productionView{Selection: selection}
 	for _, dark := range []bool{false, true} {
 		tester := ui.NewTester(func(c *ui.Context) {
 			p := setTheme(c, dark)
@@ -159,7 +159,7 @@ func TestProductionGitConfirmationsIdentifyRepository(t *testing.T) {
 
 func TestProductionRemovedServiceBatchRemainsSelectableAfterReload(t *testing.T) {
 	s, _, b := productionFixture(t)
-	state := s.production
+	state := s.releaseUnit.state.production
 	state.choices, state.selected, state.views = nil, "__history__", map[string]*productionView{"__history__": {}}
 	state.addHistoricalChoices(application.Snapshot{})
 	v := s.productionView()
@@ -183,7 +183,7 @@ func TestProductionEndedBatchKeepsUnconfirmedTagVisible(t *testing.T) {
 	s, _, b := productionFixture(t)
 	b.Ended, b.Phase = true, "ENDED"
 	b.Intent = &production.Intent{Kind: "tag", Step: "tag-push", Tag: "2.3.44", TagCommit: b.ReleaseSHA, TagObject: strings.Repeat("e", 40)}
-	s.production.batches[0] = b
+	s.releaseUnit.state.production.batches[0] = b
 	for _, dark := range []bool{false, true} {
 		tester := ui.NewTester(func(c *ui.Context) {
 			p := setTheme(c, dark)
@@ -210,7 +210,9 @@ func TestProductionEndedBatchKeepsUnconfirmedTagVisible(t *testing.T) {
 
 func TestProductionNavigationUsesIndependentGlobalTagGate(t *testing.T) {
 	for _, enabled := range []bool{true, false} {
-		s := &app{configJSON: fmt.Sprintf(`{"tagEnabled":%t}`, enabled)}
+		s := &app{
+			settingsUnit: settingsController{state: settingsState{configJSON: fmt.Sprintf(`{"tagEnabled":%t}`, enabled)}},
+		}
 		found := false
 		for _, item := range s.sidebarNavigationItems() {
 			if item.page == "production" {
@@ -235,7 +237,7 @@ func TestProductionLayoutThemesAndWidths(t *testing.T) {
 					if conflict {
 						b.Phase = "CONFLICT"
 						b.Intent = &production.Intent{Kind: "feature", Step: "feature", Merge: &production.Merge{TargetBranch: b.ReleaseBranch, SourceSHA: strings.Repeat("d", 40), Worktree: "C:/synthetic/production-worktrees/batch/merge", Conflicts: []string{"src/long-directory/示例文件.go"}}}
-						s.production.batches[0] = b
+						s.releaseUnit.state.production.batches[0] = b
 					}
 					tester := ui.NewTester(func(c *ui.Context) {
 						p := setTheme(c, dark)
@@ -285,7 +287,7 @@ func TestProductionCreateLayout(t *testing.T) {
 		for _, dark := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%d-dark-%t", width, dark), func(t *testing.T) {
 				s, v, _ := productionFixture(t)
-				s.production.batches = nil
+				s.releaseUnit.state.production.batches = nil
 				v.BatchID = ""
 				tester := ui.NewTester(func(c *ui.Context) {
 					p := setTheme(c, dark)
@@ -322,9 +324,9 @@ func TestProductionBackgroundCompletionPreservesPageTaskDraftAndSelection(t *tes
 	s, v, b := productionFixture(t)
 	backend := &productionTestBackend{calls: make(chan application.Action, 2), replies: make(chan productionTestAnswer, 2)}
 	window := &refreshTestWindow{updates: make(chan func(), 8)}
-	s.backend, s.production.window = backend, window
-	s.tasks = []task{{id: "current", title: "current task"}}
-	s.notes[0] = "unsaved draft"
+	s.backend, s.releaseUnit.state.production.window = backend, window
+	s.taskUnit.state.tasks = []task{{id: "current", title: "current task"}}
+	s.taskUnit.state.notes[0] = "unsaved draft"
 	s.productionRequest(application.Action{Kind: "production.refresh-build", Payload: map[string]any{"batchId": b.ID}}, "")
 	select {
 	case <-backend.calls:
@@ -345,15 +347,15 @@ func TestProductionBackgroundCompletionPreservesPageTaskDraftAndSelection(t *tes
 	case <-time.After(time.Second):
 		t.Fatal("no UI completion")
 	}
-	if s.page != "tasks" || s.currentTask().id != "current" || s.notes[0] != "unsaved draft" || v.BatchID != "another-selected-batch" {
+	if s.page != "tasks" || s.taskUnit.currentTask().id != "current" || s.taskUnit.state.notes[0] != "unsaved draft" || v.BatchID != "another-selected-batch" {
 		t.Fatal("background job changed page/task/draft/batch selection")
 	}
-	if v.Busy || s.production.batches[0].Message != "background result" {
+	if v.Busy || s.releaseUnit.state.production.batches[0].Message != "background result" {
 		t.Fatal("background result not applied")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := s.closeProductionJobs(ctx); err != nil {
+	if err := s.releaseUnit.closeProductionJobs(ctx); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -362,7 +364,7 @@ func TestProductionLateReadAfterInputChangeAndCloseCancellation(t *testing.T) {
 	s, v, _ := productionFixture(t)
 	backend := &productionTestBackend{calls: make(chan application.Action, 2), replies: make(chan productionTestAnswer, 2)}
 	window := &refreshTestWindow{updates: make(chan func(), 8)}
-	s.backend, s.production.window = backend, window
+	s.backend, s.releaseUnit.state.production.window = backend, window
 	v.Preview = nil
 	s.productionInspect("")
 	<-backend.calls
@@ -381,12 +383,12 @@ func TestProductionLateReadAfterInputChangeAndCloseCancellation(t *testing.T) {
 	<-backend.calls
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := s.closeProductionJobs(ctx); err != nil {
+	if err := s.releaseUnit.closeProductionJobs(ctx); err != nil {
 		t.Fatal(err)
 	}
-	s.production.mu.Lock()
-	remaining := len(s.production.workers)
-	s.production.mu.Unlock()
+	s.releaseUnit.state.production.mu.Lock()
+	remaining := len(s.releaseUnit.state.production.workers)
+	s.releaseUnit.state.production.mu.Unlock()
 	if remaining != 0 {
 		t.Fatal("production worker survived close")
 	}

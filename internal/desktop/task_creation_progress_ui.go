@@ -117,7 +117,7 @@ func (s *app) taskCreationProgressUpdates(ctx context.Context, action applicatio
 	if ctx == nil || action.Kind != "task.create" {
 		return nil
 	}
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil || !s.dialogOpen || s.form.mode != "task-create" ||
 		payloadString(action.Payload, "taskCreateToken") != state.token || state.phase != "creating" || state.creationProgress == nil {
 		return nil
@@ -129,7 +129,7 @@ func (s *app) taskCreationProgressUpdates(ctx context.Context, action applicatio
 	request := &taskCreationProgressRequest{
 		ctx: ctx, window: s.win, state: state, progress: progress,
 		token: state.token, generation: state.progressGeneration, groupID: state.groupID,
-		home: s.snapshot.Home, configJSON: s.configJSON, signature: progress.signature, kind: action.Kind,
+		home: s.snapshot.Home, configJSON: s.settingsUnit.state.configJSON, signature: progress.signature, kind: action.Kind,
 	}
 	return s.taskCreationProgressCallback(request)
 }
@@ -146,7 +146,7 @@ func (s *app) taskCreationPreflightProgressUpdates(preflight *taskCreationPrefli
 	request := &taskCreationProgressRequest{
 		ctx: preflight.ctx, window: s.win, state: state, progress: progress,
 		token: preflight.token, generation: state.progressGeneration, groupID: state.groupID,
-		home: preflight.home, configJSON: s.configJSON, signature: preflight.previewSignature,
+		home: preflight.home, configJSON: s.settingsUnit.state.configJSON, signature: preflight.previewSignature,
 		kind: "task.create-preview", preflight: preflight,
 	}
 	return s.taskCreationProgressCallback(request)
@@ -190,12 +190,12 @@ func (s *app) applyTaskCreationProgressEvent(request *taskCreationProgressReques
 	} else if request.ctx.Err() != nil && (event.Phase != workspace.TaskCreationPhaseRollback || !s.operationCancelling) {
 		return
 	}
-	if request.state == nil || s.taskCreation != request.state || !s.dialogOpen || s.form.mode != "task-create" ||
+	if request.state == nil || s.taskUnit.state.taskCreation != request.state || !s.dialogOpen || s.form.mode != "task-create" ||
 		request.kind == "task.create" && (!s.busy || s.operationKind != "task.create" || request.state.phase != "creating") ||
 		request.state.token != request.token || request.state.preview == nil ||
 		request.state.progressGeneration != request.generation || request.state.groupID != request.groupID ||
 		request.state.creationProgress != request.progress || request.progress.generation != request.generation ||
-		s.snapshot.Home != request.home || s.configJSON != request.configJSON ||
+		s.snapshot.Home != request.home || s.settingsUnit.state.configJSON != request.configJSON ||
 		request.state.preview.signature != request.signature || request.state.preview.signature != s.taskCreationSignature() || event.Sequence == 0 || event.Sequence <= request.progress.lastSeq {
 		return
 	}

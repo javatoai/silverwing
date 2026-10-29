@@ -71,7 +71,7 @@ func (s *Service) requirementMetadata(ctx context.Context, config domain.AppConf
 		return nil, err
 	}
 	force := boolValue(payload, "force")
-	session, loggedOut, identityErr := s.requirementIdentityFor(ctx, config, expected, force, s.requirementCacheIdentity)
+	session, loggedOut, identityErr := s.requirementIdentityAtReadStart(ctx, config, expected, force)
 	if process.IsCleanupFailure(identityErr) {
 		return nil, identityErr
 	}

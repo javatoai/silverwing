@@ -21,11 +21,11 @@ func productionRequestFixture(t *testing.T) (*app, *productionView, production.B
 	s, v, b := productionFixture(t)
 	backend := &productionTestBackend{calls: make(chan application.Action, 8), replies: make(chan productionTestAnswer, 8)}
 	window := &refreshTestWindow{updates: make(chan func(), 16)}
-	s.backend, s.production.window = backend, window
+	s.backend, s.releaseUnit.state.production.window = backend, window
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		if err := s.closeProductionJobs(ctx); err != nil {
+		if err := s.releaseUnit.closeProductionJobs(ctx); err != nil {
 			t.Error(err)
 		}
 	})
@@ -147,7 +147,7 @@ func TestProductionIncludedBranchAndFollowupCheckShowOneLocalResult(t *testing.T
 			const message = "已包含，无需合并"
 			v.Message, b.Message = message, message
 			b.Tags = []production.Tag{{Name: "2.3.44", Commit: b.ReleaseSHA, Status: domain.GenbuTagProbeStatus{Build: domain.GenbuBuilding}}}
-			s.production.batches[0] = b
+			s.releaseUnit.state.production.batches[0] = b
 			v.Preview.MainInRelease = true
 			v.Steps = map[int]productionStepView{4: {State: "skipped", Message: message}, 6: {State: "running"}}
 			v.Busy, v.ActiveStep, v.ActiveAction = true, 6, "production.inspect"
@@ -218,7 +218,7 @@ func TestProductionResultIdentityAndHistorySwitchRejectStaleFeedback(t *testing.
 			case "home":
 				s.snapshot.Home = "other"
 			case "config":
-				s.configJSON = `{"tagEnabled":false}`
+				s.settingsUnit.state.configJSON = `{"tagEnabled":false}`
 			case "service":
 				v.Selection.ServiceID = "other"
 			case "generation":
@@ -248,7 +248,7 @@ func TestProductionHistoryMenuAndEndBatchUsesMoreConfirmation(t *testing.T) {
 	s, v, b := productionFixture(t)
 	old := b
 	old.ID, old.Version, old.ReleaseBranch, old.Ended, old.Phase = "previous", "2.3.42", "release/2.3.42", true, "ENDED"
-	s.production.batches = append(s.production.batches, old)
+	s.releaseUnit.state.production.batches = append(s.releaseUnit.state.production.batches, old)
 	tester := productionIterationTester(s, 960, false)
 	if tester.HasText(old.ReleaseBranch) || tester.HasText("结束批次") {
 		t.Fatal("historical content or end action is expanded by default")
@@ -315,7 +315,7 @@ func TestProductionLateFeaturePreviewCannotConfirmAnotherContext(t *testing.T) {
 			case "home":
 				s.snapshot.Home = "other"
 			case "config":
-				s.configJSON = `{"tagEnabled":false}`
+				s.settingsUnit.state.configJSON = `{"tagEnabled":false}`
 			case "generation":
 				v.Generation++
 			case "page":
@@ -336,7 +336,7 @@ func TestProductionDirectBuildChecksFreshDataAndPublishesWithoutConfirmation(t *
 	for _, scenario := range []string{"ready", "first-tag", "needs-sync", "needs-sync-after-tag", "no-changes", "read-failure", "prepare-failure", "publish-failure", "page", "service", "config", "home", "batch", "generation", "manual", "branch", "ended", "pending", "replaced-plan"} {
 		t.Run(scenario, func(t *testing.T) {
 			s, v, b, backend, window := productionRequestFixture(t)
-			s.notes[0] = "unsaved draft"
+			s.taskUnit.state.notes[0] = "unsaved draft"
 			if scenario == "first-tag" {
 				b.Branches, b.ReleaseSHA = nil, b.InitialSHA
 				v.Preview.ReleaseSHA = b.ReleaseSHA
@@ -344,7 +344,7 @@ func TestProductionDirectBuildChecksFreshDataAndPublishesWithoutConfirmation(t *
 			if scenario == "needs-sync-after-tag" || scenario == "no-changes" {
 				b.Tags = []production.Tag{{Name: "2.3.44", Commit: b.ReleaseSHA, Status: domain.GenbuTagProbeStatus{Build: domain.GenbuSuccess}}}
 			}
-			s.production.batches[0] = b
+			s.releaseUnit.state.production.batches[0] = b
 			tester := productionIterationTester(s, 960, false)
 			productionRevealControl(t, tester, "构建 Tag")
 			if err := tester.Click("构建 Tag"); err != nil {
@@ -378,9 +378,9 @@ func TestProductionDirectBuildChecksFreshDataAndPublishesWithoutConfirmation(t *
 			case "page":
 				s.page = "tasks"
 			case "service":
-				s.production.selected = "another-service"
+				s.releaseUnit.state.production.selected = "another-service"
 			case "config":
-				s.configJSON = `{"tagEnabled":false}`
+				s.settingsUnit.state.configJSON = `{"tagEnabled":false}`
 			case "home":
 				s.snapshot.Home += "-other"
 			case "batch":
@@ -401,7 +401,7 @@ func TestProductionDirectBuildChecksFreshDataAndPublishesWithoutConfirmation(t *
 				plan.Token = "replacement-token"
 				newer.TagPlan = &plan
 				newer.UpdatedAt = time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano)
-				s.production.batches[0] = newer
+				s.releaseUnit.state.production.batches[0] = newer
 			}
 			if scenario == "needs-sync" || scenario == "needs-sync-after-tag" || scenario == "prepare-failure" {
 				b.TagPlan = nil
@@ -441,7 +441,7 @@ func TestProductionDirectBuildChecksFreshDataAndPublishesWithoutConfirmation(t *
 				backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &b, Preview: &p}}}
 			}
 			productionTestUpdate(t, window)
-			if v.Busy || len(backend.calls) != 0 || s.confirmationDialog != nil || s.notes[0] != "unsaved draft" {
+			if v.Busy || len(backend.calls) != 0 || s.confirmationDialog != nil || s.taskUnit.state.notes[0] != "unsaved draft" {
 				t.Fatal("build did not stop after one result or changed the task draft")
 			}
 			if scenario == "publish-failure" && (!v.PreparationInvalid || v.Error == "") {
@@ -483,7 +483,7 @@ func TestProductionBuildProbeWaitsUntilOtherConfirmationCloses(t *testing.T) {
 	v.Preview.MainInRelease = true
 	b.TagPlan = &production.TagPlan{Token: "prepared", Tag: "2.3.44.1", Commit: b.ReleaseSHA, MainSHA: v.Preview.MainSHA, Preview: *v.Preview}
 	b.Tags = []production.Tag{{Name: "2.3.44", PushedAt: time.Now().UTC().Format(time.RFC3339Nano), Status: domain.GenbuTagProbeStatus{Build: domain.GenbuBuilding}}}
-	s.production.batches[0] = b
+	s.releaseUnit.state.production.batches[0] = b
 	s.win = &mygo.Window{}
 	s.confirmProductionEnd(v, b)
 	if s.confirmationDialog == nil {
@@ -491,9 +491,9 @@ func TestProductionBuildProbeWaitsUntilOtherConfirmationCloses(t *testing.T) {
 	}
 	s.scheduleProductionProbe(v, b, window)
 	wake := func() {
-		s.production.mu.Lock()
-		s.production.timers[b.ID].Reset(time.Millisecond)
-		s.production.mu.Unlock()
+		s.releaseUnit.state.production.mu.Lock()
+		s.releaseUnit.state.production.timers[b.ID].Reset(time.Millisecond)
+		s.releaseUnit.state.production.mu.Unlock()
 		productionTestUpdate(t, window)
 	}
 	wake()
@@ -531,7 +531,7 @@ func TestProductionHierarchyEvidenceStates(t *testing.T) {
 					case "unknown":
 						v.Preview = nil
 					}
-					s.production.batches[0] = b
+					s.releaseUnit.state.production.batches[0] = b
 					tester := productionIterationTester(s, width, dark)
 					tester.SetSize(width, 1600)
 					if state == "dropdown" {

@@ -3,6 +3,7 @@ package desktop
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"silverwing-go/internal/application"
 )
@@ -41,30 +42,45 @@ func requirementCommentTrustedImages(resources []application.RequirementCommentR
 
 func (s *app) requestRequirementCommentResource(reader *requirementReaderState, resource application.RequirementCommentResource, retry bool) {
 	if s.backend == nil || s.win == nil || s.win.IsDestroyed() || reader == nil || reader.comments == nil ||
-		reader.commentsLoading || resource.CommentID == "" || resource.Generation == "" || reader.commentResourceLoading != "" {
+		reader.commentsLoading || resource.CommentID == "" || resource.Generation == "" {
+		return
+	}
+	current := application.Action{Payload: map[string]any{"commentID": resource.CommentID, "commentGeneration": resource.Generation, "fileUrl": resource.URL}}
+	if !requirementCommentResourceCurrent(reader, current) {
 		return
 	}
 	if reader.commentResourceErrors == nil {
 		reader.commentResourceErrors = make(map[string]string)
 	}
 	key := commentResourceKey(resource)
+	batch := s.ensureRequirementCommentImageBatch(reader)
+	if batch.pending[key] || len(batch.pending) >= requirementCommentImageConcurrency {
+		return
+	}
+	batch.pending[key] = true
 	reader.commentResourceLoading = key
 	delete(reader.commentResourceErrors, key)
 	delete(reader.commentResourceRetries, key)
-	payload := s.requirementReaderPayload(reader, "requirements.attachment:comment", false)
+	payload := s.requirementReaderPayload(reader, commentImageRequestKind(key), false)
+	payload["commentImageToken"] = key
 	payload["scope"], payload["commentID"], payload["commentGeneration"] = "comment", resource.CommentID, resource.Generation
 	payload["fileUrl"], payload["retry"] = resource.URL, retry
 	s.act("requirements.attachment", reader.taskID, "", "", reader.url, "", payload)
 }
 
 func (s *app) queueRequirementCommentImages(reader *requirementReaderState) {
-	if reader == nil || reader.comments == nil || reader.commentsLoading || reader.commentResourceLoading != "" {
+	if reader == nil || reader.comments == nil || reader.commentsLoading {
 		return
+	}
+	if len(reader.comments.CommentResources) != 0 {
+		s.ensureRequirementCommentImageBatch(reader)
 	}
 	for _, resource := range reader.comments.CommentResources {
 		if resource.Path == "" && resource.Error == "" && reader.commentResourceErrors[commentResourceKey(resource)] == "" {
 			s.requestRequirementCommentResource(reader, resource, reader.commentResourceRetries[commentResourceKey(resource)])
-			return
+			if reader.commentImageBatch != nil && len(reader.commentImageBatch.pending) >= requirementCommentImageConcurrency {
+				return
+			}
 		}
 	}
 }
@@ -92,10 +108,30 @@ func (s *app) retryRequirementCommentImages(reader *requirementReaderState) {
 }
 
 func (s *app) retireRequirementCommentImages(reader *requirementReaderState) {
+	s.requirementUnit.retireRequirementCommentImages(reader)
+}
+
+func (s *requirementController) retireRequirementCommentImages(reader *requirementReaderState) {
 	if reader == nil {
 		return
 	}
-	if state := s.requirementContentJobs; state != nil {
+	batch := reader.commentImageBatch
+	reader.commentImageBatch = nil
+	if batch != nil {
+		clear(batch.pending)
+		batch.close()
+	}
+	// A completed decode may already have queued its window callback. Retire
+	// those subscriber contexts too; keep the document and any ready pixels.
+	for _, state := range reader.commentMarkdown {
+		for _, image := range state.inlineImages {
+			if image.cancel != nil {
+				image.cancel()
+				image.cancel = nil
+			}
+		}
+	}
+	if state := s.state.requirementContentJobs; state != nil {
 		for _, request := range state.requests {
 			if request.reader == reader && payloadString(request.action.Payload, "scope") == "comment" {
 				s.cancelRequirementContentJob(request)
@@ -103,6 +139,11 @@ func (s *app) retireRequirementCommentImages(reader *requirementReaderState) {
 		}
 	}
 	delete(reader.requestIDs, "requirements.attachment:comment")
+	for kind := range reader.requestIDs {
+		if strings.HasPrefix(kind, "requirements.attachment:comment:") {
+			delete(reader.requestIDs, kind)
+		}
+	}
 	reader.commentResourceLoading = ""
 	reader.commentResourceErrors = make(map[string]string)
 	reader.commentResourceRetries = nil
@@ -118,7 +159,7 @@ func (s *app) applyRequirementCommentResource(reader *requirementReaderState, ac
 		s.applyRequirementContentFailure(action, fmt.Errorf("评论图片结果身份不匹配"))
 		return
 	}
-	reader.commentResourceLoading = ""
+	finishRequirementCommentImage(reader, commentActionResourceKey(action))
 	for index := range reader.comments.CommentResources {
 		if commentResourceKey(reader.comments.CommentResources[index]) == commentResourceKey(resource) {
 			reader.comments.CommentResources[index] = resource

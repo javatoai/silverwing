@@ -37,17 +37,17 @@ type serviceRepositoryChoiceJobs struct {
 }
 
 func (s *app) serviceRepositoryChoiceScope() serviceRepositoryChoiceScope {
-	state := s.serviceEditor
+	state := s.workspaceUnit.state.serviceEditor
 	if state == nil {
 		return serviceRepositoryChoiceScope{}
 	}
 	repositoryID := strings.TrimSpace(*s.serviceEditorText("repositoryId", mapString(state.service, "repositoryId")))
-	_, root := s.repositoryDetails(repositoryID)
+	_, root := s.currentRepositoryDetails(repositoryID)
 	return serviceRepositoryChoiceScope{s.snapshot.Home, state.session, state.groupID, state.serviceID, repositoryID, root}
 }
 
 func (s *app) serviceRepositoryChoiceReadCurrent(kind, remote string) bool {
-	jobs := s.serviceRepositoryChoices
+	jobs := s.workspaceUnit.state.serviceRepositoryChoices
 	if jobs == nil {
 		return false
 	}
@@ -55,11 +55,11 @@ func (s *app) serviceRepositoryChoiceReadCurrent(kind, remote string) bool {
 	request := jobs.current[kind]
 	closed := jobs.closed
 	jobs.mu.Unlock()
-	return !closed && request != nil && request.remote == remote && request.ctx.Err() == nil && request.editor == s.serviceEditor && request.scope == s.serviceRepositoryChoiceScope()
+	return !closed && request != nil && request.remote == remote && request.ctx.Err() == nil && request.editor == s.workspaceUnit.state.serviceEditor && request.scope == s.serviceRepositoryChoiceScope()
 }
 
 func (s *app) observeServiceRepositoryChoiceScope() {
-	state := s.serviceEditor
+	state := s.workspaceUnit.state.serviceEditor
 	if state == nil || !s.dialogOpen {
 		s.cancelServiceRepositoryChoiceReads()
 		return
@@ -93,9 +93,9 @@ func clearServiceRepositoryChoiceLoading(request *serviceRepositoryChoiceJob) {
 }
 
 func (s *app) cancelServiceRepositoryChoiceSlot(kind string) {
-	jobs := s.serviceRepositoryChoices
-	if kind == "repository.choices" && s.serviceEditor != nil {
-		s.serviceEditor.pendingChoiceRemotes = nil
+	jobs := s.workspaceUnit.state.serviceRepositoryChoices
+	if kind == "repository.choices" && s.workspaceUnit.state.serviceEditor != nil {
+		s.workspaceUnit.state.serviceEditor.pendingChoiceRemotes = nil
 	}
 	if jobs == nil {
 		return
@@ -116,12 +116,12 @@ func (s *app) cancelServiceRepositoryChoiceReads() {
 }
 
 func (s *app) startServiceRepositoryChoiceRead(action application.Action) {
-	if s.serviceRepositoryChoices == nil {
-		s.serviceRepositoryChoices = &serviceRepositoryChoiceJobs{current: make(map[string]*serviceRepositoryChoiceJob), running: make(map[*serviceRepositoryChoiceJob]struct{})}
+	if s.workspaceUnit.state.serviceRepositoryChoices == nil {
+		s.workspaceUnit.state.serviceRepositoryChoices = &serviceRepositoryChoiceJobs{current: make(map[string]*serviceRepositoryChoiceJob), running: make(map[*serviceRepositoryChoiceJob]struct{})}
 	}
-	jobs := s.serviceRepositoryChoices
+	jobs := s.workspaceUnit.state.serviceRepositoryChoices
 	ctx, cancel := context.WithCancel(context.Background())
-	request := &serviceRepositoryChoiceJob{action: action, scope: s.serviceRepositoryChoiceScope(), editor: s.serviceEditor,
+	request := &serviceRepositoryChoiceJob{action: action, scope: s.serviceRepositoryChoiceScope(), editor: s.workspaceUnit.state.serviceEditor,
 		remote: payloadString(action.Payload, "remote"), ctx: ctx, cancel: cancel, done: make(chan struct{})}
 	jobs.mu.Lock()
 	if jobs.closed {
@@ -160,7 +160,7 @@ func (s *app) finishServiceRepositoryChoiceRead(jobs *serviceRepositoryChoiceJob
 		delete(jobs.current, request.action.Kind)
 	}
 	jobs.mu.Unlock()
-	if !current || request.ctx.Err() != nil || request.editor != s.serviceEditor || !s.dialogOpen || request.scope != s.serviceRepositoryChoiceScope() {
+	if !current || request.ctx.Err() != nil || request.editor != s.workspaceUnit.state.serviceEditor || !s.dialogOpen || request.scope != s.serviceRepositoryChoiceScope() {
 		clearServiceRepositoryChoiceLoading(request)
 		return
 	}
@@ -213,7 +213,7 @@ func completeServiceRepositoryChoiceRead(jobs *serviceRepositoryChoiceJobs, requ
 // OnClosed calls stop on the window thread. Close also cancels every retired
 // worker before joining, so a replaced backend cannot escape shutdown cleanup.
 func (s *app) stopServiceRepositoryChoices() []*serviceRepositoryChoiceJob {
-	jobs := s.serviceRepositoryChoices
+	jobs := s.workspaceUnit.state.serviceRepositoryChoices
 	if jobs == nil {
 		return nil
 	}
@@ -244,7 +244,7 @@ func (s *app) closeServiceRepositoryChoices(ctx context.Context) error {
 			return fmt.Errorf("等待服务仓库读取清理：%w", ctx.Err())
 		}
 	}
-	jobs := s.serviceRepositoryChoices
+	jobs := s.workspaceUnit.state.serviceRepositoryChoices
 	if jobs == nil {
 		return nil
 	}

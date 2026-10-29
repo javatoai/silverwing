@@ -29,9 +29,9 @@ func (s *app) cancelWorkspaceReviewPrefetch(state *workspaceHistoryState) {
 
 // updateWorkspaceReviewPrefetch may be called after building the visible file
 // rows. Nil keeps the last visibility hint and fills spare slots with neighbors.
-// It never shares the foreground history worker's single current-job slot.
+// It has its own cancellation owner and shares the foreground shutdown join.
 func (s *app) updateWorkspaceReviewPrefetch(state *workspaceHistoryState, visible []workspace.CompareChange) {
-	if state == nil || state != s.workspaceHistory || !state.Open || state.Mode != "review" {
+	if state == nil || state != s.workspaceUnit.state.workspaceHistory || !state.Open || state.Mode != "review" {
 		return
 	}
 	if visible != nil {
@@ -61,16 +61,16 @@ func (s *app) updateWorkspaceReviewPrefetch(state *workspaceHistoryState, visibl
 	}
 	compare.ExpectedBaseCommit, compare.ExpectedTargetCommit = state.BaseCommit, state.TargetCommit
 	action := application.Action{TaskID: state.TaskID, ServiceID: state.ServiceID, ModuleID: state.ModuleID, Path: state.Path}
-	task := s.taskByID(state.TaskID)
+	task := s.taskUnit.taskByID(state.TaskID)
 	item, exists := workspaceHistoryTaskWorkspace(task, action)
-	if !exists || task.id == "" || s.currentTask().id != task.id {
+	if !exists || task.id == "" || s.taskUnit.currentTask().id != task.id {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	job := &workspaceReviewPrefetchJob{
 		dialog: state, cancel: cancel, done: make(chan struct{}),
 		identity: &workspaceHistoryJob{action: action, dialog: state, taskPath: task.path, taskCreatedAt: task.createdAt, home: s.snapshot.Home,
-			gitExecutable: s.configString("gitExecutablePath"), workspaceIdentity: workspaceHistoryWorkspaceIdentity(item), branchConfigIdentity: s.configJSON, pageGeneration: state.ReviewGeneration, ctx: ctx},
+			gitExecutable: s.configString("gitExecutablePath"), workspaceIdentity: workspaceHistoryWorkspaceIdentity(item), branchConfigIdentity: s.settingsUnit.state.configJSON, pageGeneration: state.ReviewGeneration, ctx: ctx},
 		request: application.WorkspaceDiffPrefetchRequest{TaskID: state.TaskID, ServiceID: state.ServiceID, ModuleID: state.ModuleID, Path: state.Path,
 			SessionID: state.DiffSessionID, Compare: compare, Current: current, Candidates: candidates},
 	}
@@ -133,17 +133,17 @@ func workspaceReviewPrefetchWindow(files []workspace.CompareChange, current work
 }
 
 func (s *app) observeWorkspaceReviewPrefetch() {
-	state := s.workspaceHistory
+	state := s.workspaceUnit.state.workspaceHistory
 	if state == nil || state.Prefetch == nil {
 		return
 	}
 	job := state.Prefetch
 	i := job.identity
-	task := s.taskByID(i.action.TaskID)
+	task := s.taskUnit.taskByID(i.action.TaskID)
 	item, exists := workspaceHistoryTaskWorkspace(task, i.action)
 	if !state.Open || !s.workspaceReviewPageVisible() || state.ReviewGeneration != i.pageGeneration || state.DiffSessionID != job.request.SessionID ||
-		s.currentTask().id != i.action.TaskID || task.path != i.taskPath || task.createdAt != i.taskCreatedAt || s.snapshot.Home != i.home ||
-		s.configString("gitExecutablePath") != i.gitExecutable || s.configJSON != i.branchConfigIdentity || !exists || workspaceHistoryWorkspaceIdentity(item) != i.workspaceIdentity {
+		s.taskUnit.currentTask().id != i.action.TaskID || task.path != i.taskPath || task.createdAt != i.taskCreatedAt || s.snapshot.Home != i.home ||
+		s.configString("gitExecutablePath") != i.gitExecutable || s.settingsUnit.state.configJSON != i.branchConfigIdentity || !exists || workspaceHistoryWorkspaceIdentity(item) != i.workspaceIdentity {
 		s.cancelWorkspaceReviewPrefetch(state)
 	}
 }

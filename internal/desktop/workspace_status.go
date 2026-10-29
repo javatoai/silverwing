@@ -50,14 +50,14 @@ func (s *app) workspaceGitStatusScope() workspaceGitStatusScope {
 	state := s.ensureWorkspaceGitState()
 	account := s.currentRequirementAccountIdentity()
 	cache := &state.scopeCache
-	if cache.valid && cache.config == s.configJSON && cache.home == s.snapshot.Home && cache.account == account {
+	if cache.valid && cache.config == s.settingsUnit.state.configJSON && cache.home == s.snapshot.Home && cache.account == account {
 		return cache.value
 	}
 	value := workspaceGitStatusScope{
 		home: s.snapshot.Home, taskRoot: s.configString("taskRoot"), executable: s.configString("gitExecutablePath"),
 		account: account,
 	}
-	*cache = workspaceGitScopeCache{valid: true, config: s.configJSON, home: s.snapshot.Home, account: account, value: value}
+	*cache = workspaceGitScopeCache{valid: true, config: s.settingsUnit.state.configJSON, home: s.snapshot.Home, account: account, value: value}
 	return value
 }
 
@@ -93,14 +93,14 @@ func workspaceHealthTaskKey(task task) string {
 }
 
 func (s *app) ensureWorkspaceGitState() *workspaceGitState {
-	if s.workspaceGit == nil {
-		s.workspaceGit = &workspaceGitState{health: make(map[string]domain.WorkspaceGitHealth)}
+	if s.workspaceUnit.state.workspaceGit == nil {
+		s.workspaceUnit.state.workspaceGit = &workspaceGitState{health: make(map[string]domain.WorkspaceGitHealth)}
 	}
-	return s.workspaceGit
+	return s.workspaceUnit.state.workspaceGit
 }
 
-func (s *app) cancelWorkspaceGitStatus() {
-	if state := s.workspaceGit; state != nil {
+func (s *workspaceController) cancelWorkspaceGitStatus() {
+	if state := s.state.workspaceGit; state != nil {
 		if state.cancel != nil {
 			state.cancel()
 			state.cancel = nil
@@ -117,7 +117,7 @@ func (s *app) cancelWorkspaceGitStatus() {
 
 func (s *app) requestWorkspaceGitStatus(force bool) {
 	if s.loading {
-		if t := s.currentTask(); t.id != "" {
+		if t := s.taskUnit.currentTask(); t.id != "" {
 			s.bindWorkspaceGitObservation(t, s.workspaceGitStatusScope())
 		}
 		if force {
@@ -128,9 +128,9 @@ func (s *app) requestWorkspaceGitStatus(force bool) {
 	if s.backend == nil || s.win == nil {
 		return
 	}
-	task := s.currentTask()
+	task := s.taskUnit.currentTask()
 	if task.id == "" {
-		s.cancelWorkspaceGitStatus()
+		s.workspaceUnit.cancelWorkspaceGitStatus()
 		return
 	}
 	state := s.ensureWorkspaceGitState()
@@ -148,7 +148,7 @@ func (s *app) requestWorkspaceGitStatus(force bool) {
 		}
 	}
 	if state.scope != scope {
-		s.cancelWorkspaceGitStatus()
+		s.workspaceUnit.cancelWorkspaceGitStatus()
 		state.scope = scope
 		state.health = make(map[string]domain.WorkspaceGitHealth)
 	}
@@ -167,7 +167,7 @@ func (s *app) requestWorkspaceGitStatus(force bool) {
 		state.loading = len(task.workspaces) > 0
 		return
 	}
-	s.cancelWorkspaceGitStatus()
+	s.workspaceUnit.cancelWorkspaceGitStatus()
 	state.taskKey = key
 	if len(task.workspaces) == 0 {
 		return
@@ -201,7 +201,7 @@ func (s *app) requestWorkspaceGitStatus(force bool) {
 }
 
 func (s *app) finishWorkspaceGitStatus(state *workspaceGitState, request *workspaceGitStatusRequest, result application.ActionResult, err error) {
-	if s.workspaceGit != state || state.current != request {
+	if s.workspaceUnit.state.workspaceGit != state || state.current != request {
 		return
 	}
 	state.current, state.cancel, state.loading = nil, nil, false
@@ -211,7 +211,7 @@ func (s *app) finishWorkspaceGitStatus(state *workspaceGitState, request *worksp
 		return
 	}
 	if state.generation != request.generation || state.taskKey != request.key ||
-		s.workspaceGitStatusScope() != request.scope || workspaceHealthTaskKey(s.currentTask()) != request.key {
+		s.workspaceGitStatusScope() != request.scope || workspaceHealthTaskKey(s.taskUnit.currentTask()) != request.key {
 		state.taskKey = ""
 		return
 	}
@@ -223,7 +223,7 @@ func (s *app) finishWorkspaceGitStatus(state *workspaceGitState, request *worksp
 }
 
 func (s *app) applyWorkspaceGitStatus(action application.Action, result application.ActionResult) {
-	if action.TaskID != s.currentTask().id {
+	if action.TaskID != s.taskUnit.currentTask().id {
 		return
 	}
 	var statuses map[string]domain.WorkspaceGitHealth
@@ -235,15 +235,15 @@ func (s *app) applyWorkspaceGitStatus(action application.Action, result applicat
 		if err == nil {
 			err = fmt.Errorf("返回数据为空")
 		}
-		s.failWorkspaceGitStatus(s.currentTask(), fmt.Errorf("读取 Git 状态格式失败：%w", err))
+		s.failWorkspaceGitStatus(s.taskUnit.currentTask(), fmt.Errorf("读取 Git 状态格式失败：%w", err))
 		return
 	}
-	s.commitWorkspaceGitStatuses(s.currentTask(), statuses)
+	s.commitWorkspaceGitStatuses(s.taskUnit.currentTask(), statuses)
 }
 
 func (s *app) queueWorkspaceGitStatusAfterLoad() {
 	state := s.ensureWorkspaceGitState()
-	task := s.currentTask()
+	task := s.taskUnit.currentTask()
 	if task.id == "" {
 		state.afterLoad = false
 		state.queuedKey = ""
@@ -258,7 +258,7 @@ func (s *app) queueWorkspaceGitStatusAfterLoad() {
 }
 
 func (s *app) workspaceGitStatusBusy() bool {
-	state := s.workspaceGit
+	state := s.workspaceUnit.state.workspaceGit
 	return state != nil && (state.loading || state.pending || state.afterLoad)
 }
 
@@ -277,7 +277,7 @@ func (s *app) failWorkspaceGitStatus(task task, err error) {
 }
 
 func (s *app) workspaceHealth(path string) (domain.WorkspaceGitHealth, bool) {
-	state := s.workspaceGit
+	state := s.workspaceUnit.state.workspaceGit
 	if state == nil {
 		return domain.WorkspaceGitHealth{}, false
 	}
@@ -286,7 +286,7 @@ func (s *app) workspaceHealth(path string) (domain.WorkspaceGitHealth, bool) {
 	}
 	if observation := state.observation; observation != nil {
 		pathKey, matching := workspaceHealthPathKey(path), false
-		for _, item := range s.currentTask().workspaces {
+		for _, item := range s.taskUnit.currentTask().workspaces {
 			if workspaceHealthPathKey(item.Path) == pathKey {
 				identity, exists := observation.identities[pathKey]
 				matching = exists && identity == workspaceGitDisplayKey(item)
@@ -306,7 +306,7 @@ func (s *app) workspaceHealth(path string) (domain.WorkspaceGitHealth, bool) {
 
 func (s *app) workspaceGitCaptureReady() bool {
 	s.requestWorkspaceGitStatus(false)
-	return s.workspaceGit == nil || !s.workspaceGit.loading
+	return s.workspaceUnit.state.workspaceGit == nil || !s.workspaceUnit.state.workspaceGit.loading
 }
 
 func workspaceDedicatedResult(kind string) bool {

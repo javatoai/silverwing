@@ -28,7 +28,7 @@ type materialsGitDesktopState struct {
 }
 
 func (s *app) materialsGitConfig() (domain.AppConfig, bool) {
-	if s.snapshot.Home == "" || s.configJSON == "" {
+	if s.snapshot.Home == "" || s.settingsUnit.state.configJSON == "" {
 		return domain.AppConfig{}, false
 	}
 	config, err := s.readCurrentAppConfig()
@@ -41,7 +41,9 @@ func (s *app) materialsGitConfig() (domain.AppConfig, bool) {
 	return config, err == nil
 }
 
-func (s *app) materialsGitRunning() bool { return s.materialsGit != nil && s.materialsGit.running }
+func (s *app) materialsGitRunning() bool {
+	return s.materialsUnit.state.materialsGit != nil && s.materialsUnit.state.materialsGit.running
+}
 
 func (s *app) materialsGitSettingsPending(config domain.AppConfig) bool {
 	settings := config.MaterialsGitSettings()
@@ -65,11 +67,11 @@ func (s *app) materialsGitScopeCurrent(scope workspace.MaterialsGitScope) bool {
 }
 
 func (s *app) observeMaterialsGitSync() {
-	if s.materialsGitCapture {
+	if s.materialsUnit.state.materialsGitCapture {
 		return
 	}
 	config, ok := s.materialsGitConfig()
-	if !ok || s.backend == nil || taskContextUpdater(s.win, s.taskContextUpdate) == nil {
+	if !ok || s.backend == nil || taskContextUpdater(s.win, s.taskUnit.state.taskContextUpdate) == nil {
 		return
 	}
 	backend, ok := s.backend.(application.MaterialsGitBackend)
@@ -77,7 +79,7 @@ func (s *app) observeMaterialsGitSync() {
 		return
 	}
 	scope := application.MaterialsGitScope(s.snapshot.Home, config)
-	state := s.materialsGit
+	state := s.materialsUnit.state.materialsGit
 	if state != nil && state.closed {
 		return
 	}
@@ -117,11 +119,11 @@ func (s *app) observeMaterialsGitSync() {
 		}
 	}
 	state = &materialsGitDesktopState{scope: scope, reading: true, needsResume: changedTarget, intervalMinutes: config.MaterialsGitSettings().IntervalMinutes, retired: retired}
-	s.materialsGit = state
+	s.materialsUnit.state.materialsGit = state
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	state.cancel, state.done = cancel, make(chan struct{})
 	window := s.win
-	update := taskContextUpdater(window, s.taskContextUpdate)
+	update := taskContextUpdater(window, s.taskUnit.state.taskContextUpdate)
 	go func() {
 		defer close(state.done)
 		defer cancel()
@@ -130,7 +132,7 @@ func (s *app) observeMaterialsGitSync() {
 			return
 		}
 		update(func() {
-			if s.materialsGit != state || state.closed || !s.materialsGitScopeCurrent(scope) {
+			if s.materialsUnit.state.materialsGit != state || state.closed || !s.materialsGitScopeCurrent(scope) {
 				return
 			}
 			state.reading, state.status = false, status
@@ -151,14 +153,14 @@ func (s *app) observeMaterialsGitSync() {
 }
 
 func (s *app) scheduleMaterialsGit(state *materialsGitDesktopState, delay time.Duration) {
-	if state.closed || taskContextUpdater(s.win, s.taskContextUpdate) == nil {
+	if state.closed || taskContextUpdater(s.win, s.taskUnit.state.taskContextUpdate) == nil {
 		return
 	}
 	if state.timer != nil {
 		state.timer.Stop()
 	}
 	window := s.win
-	update := taskContextUpdater(window, s.taskContextUpdate)
+	update := taskContextUpdater(window, s.taskUnit.state.taskContextUpdate)
 	state.timerGeneration++
 	timerGeneration := state.timerGeneration
 	state.timer = time.AfterFunc(delay, func() {
@@ -166,7 +168,7 @@ func (s *app) scheduleMaterialsGit(state *materialsGitDesktopState, delay time.D
 			return
 		}
 		update(func() {
-			if s.materialsGit != state || state.closed || state.timerGeneration != timerGeneration || !s.materialsGitScopeCurrent(state.scope) {
+			if s.materialsUnit.state.materialsGit != state || state.closed || state.timerGeneration != timerGeneration || !s.materialsGitScopeCurrent(state.scope) {
 				return
 			}
 			config, ok := s.materialsGitConfig()
@@ -188,27 +190,27 @@ func (s *app) materialsGitHasDraft(root string) bool {
 		rel, err := filepath.Rel(root, path)
 		return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 	}
-	if s.documentDirty && inside(s.documentPath) {
+	if s.materialsUnit.state.documentDirty && inside(s.materialsUnit.state.documentPath) {
 		return true
 	}
-	for path, dirty := range s.documentDirtyMap {
+	for path, dirty := range s.materialsUnit.state.documentDirtyMap {
 		if dirty && inside(path) {
 			return true
 		}
 	}
-	for path := range s.documentDrafts {
+	for path := range s.materialsUnit.state.documentDrafts {
 		if inside(path) {
 			return true
 		}
 	}
-	if s.markdownAutosave != nil {
-		s.documentSaveMu.Lock()
-		defer s.documentSaveMu.Unlock()
-		for key, ref := range s.documentSaveRefs {
+	if s.materialsUnit.state.markdownAutosave != nil {
+		s.materialsUnit.state.documentSaveMu.Lock()
+		defer s.materialsUnit.state.documentSaveMu.Unlock()
+		for key, ref := range s.materialsUnit.state.documentSaveRefs {
 			if !inside(ref.path) {
 				continue
 			}
-			status := s.markdownAutosave.Status(key)
+			status := s.materialsUnit.state.markdownAutosave.Status(key)
 			if status.Dirty || status.Saving || status.Composing || status.Error != "" {
 				return true
 			}
@@ -218,9 +220,9 @@ func (s *app) materialsGitHasDraft(root string) bool {
 }
 
 func (s *app) beginMaterialsGitSync(manual bool) {
-	state := s.materialsGit
+	state := s.materialsUnit.state.materialsGit
 	backend, ok := s.backend.(application.MaterialsGitBackend)
-	if !ok || state == nil || state.closed || state.reading || state.running || !s.materialsGitScopeCurrent(state.scope) || taskContextUpdater(s.win, s.taskContextUpdate) == nil {
+	if !ok || state == nil || state.closed || state.reading || state.running || !s.materialsGitScopeCurrent(state.scope) || taskContextUpdater(s.win, s.taskUnit.state.taskContextUpdate) == nil {
 		return
 	}
 	config, ok := s.materialsGitConfig()
@@ -259,7 +261,7 @@ func (s *app) beginMaterialsGitSync(manual bool) {
 	ctx, cancel := context.WithCancel(context.Background())
 	state.cancel, state.done = cancel, make(chan struct{})
 	window, scope := s.win, state.scope
-	update := taskContextUpdater(window, s.taskContextUpdate)
+	update := taskContextUpdater(window, s.taskUnit.state.taskContextUpdate)
 	go func() {
 		defer close(state.done)
 		defer cancel()
@@ -268,7 +270,7 @@ func (s *app) beginMaterialsGitSync(manual bool) {
 				return
 			}
 			update(func() {
-				if s.materialsGit == state && state.generation == generation && !state.closed && s.materialsGitScopeCurrent(scope) {
+				if s.materialsUnit.state.materialsGit == state && state.generation == generation && !state.closed && s.materialsGitScopeCurrent(scope) {
 					state.phase = phase
 					if window != nil {
 						window.Invalidate()
@@ -281,7 +283,7 @@ func (s *app) beginMaterialsGitSync(manual bool) {
 		}
 		update(func() {
 			state.running = false
-			if s.materialsGit != state || state.closed {
+			if s.materialsUnit.state.materialsGit != state || state.closed {
 				return
 			}
 			if !s.materialsGitScopeCurrent(scope) {
@@ -323,9 +325,9 @@ func (s *app) beginMaterialsGitSync(manual bool) {
 	}()
 }
 
-func (s *app) stopMaterialsGitSync() {
+func (s *materialsController) stopMaterialsGitSync() {
 	s.stopMaterialsGitBranches()
-	if state := s.materialsGit; state != nil {
+	if state := s.state.materialsGit; state != nil {
 		for _, previous := range append(state.retired, state) {
 			previous.closed = true
 			if previous.timer != nil {
@@ -338,9 +340,9 @@ func (s *app) stopMaterialsGitSync() {
 	}
 }
 
-func (s *app) closeMaterialsGitSync(ctx context.Context) error {
+func (s *materialsController) closeMaterialsGitSync(ctx context.Context) error {
 	s.stopMaterialsGitSync()
-	if state := s.materialsGit; state != nil {
+	if state := s.state.materialsGit; state != nil {
 		for _, previous := range append(state.retired, state) {
 			if previous.done == nil {
 				continue

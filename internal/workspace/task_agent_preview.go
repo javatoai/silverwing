@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"silverwing-go/internal/documents"
 	"silverwing-go/internal/domain"
 )
 
@@ -69,6 +70,10 @@ func (s *TaskApplicationService) PreviewAgentInstructions(
 		root = *config.TaskRoot
 	}
 	taskDirectory := filepath.Join(root, directoryName)
+	if strings.TrimSpace(request.RequirementLink) == "" {
+		scope := documents.LocalTaskMaterials(taskDirectory)
+		materials = domain.RequirementMaterialsDirectory{Status: domain.MaterialsReady, WriteRoot: &scope.Owned}
+	}
 	workspaces := make([]domain.ServiceWorkspace, 0)
 	for _, service := range group.Services {
 		if err := ctx.Err(); err != nil {

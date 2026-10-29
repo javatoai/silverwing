@@ -11,7 +11,7 @@ import (
 )
 
 func (s *app) tagGenbuProbeNow() time.Time {
-	if state := s.tagGenbuAutoProbe; state != nil && state.now != nil {
+	if state := s.releaseUnit.state.tagGenbuAutoProbe; state != nil && state.now != nil {
 		return state.now()
 	}
 	return time.Now()
@@ -51,7 +51,7 @@ func tagGenbuProbeRecordKey(record application.TagRecord) string {
 }
 
 func (s *app) tagGenbuProbeRepository(record application.TagRecord) string {
-	t := s.taskByID(record.TaskID)
+	t := s.taskUnit.taskByID(record.TaskID)
 	for _, workspace := range t.workspaces {
 		if workspace.ServiceID == record.ServiceID && workspace.ModuleID == record.ModuleID {
 			return tagWorkspaceRepositoryKey(workspace)
@@ -66,16 +66,17 @@ func (s *app) startDueTagGenbuProbes(session *tagGenbuAutoProbeSession, win tagG
 	if !s.tagGenbuAutoProbeSessionRelevant(session) || session.request != nil {
 		return
 	}
-	state := s.tagGenbuAutoProbe
+	state := s.releaseUnit.state.tagGenbuAutoProbe
 	if state.refreshPending {
 		state.refreshPending = false
 		session.historyRefresh = true
 		s.startTagGenbuAutoProbeRequest(session, win)
 		return
 	}
-	records := s.taskTagHistoryRecords(s.currentTask().id)
+	records := s.taskTagHistoryRecords(s.taskUnit.currentTask().id)
 	sort.SliceStable(records, func(i, j int) bool { return records[i].CreatedAt > records[j].CreatedAt })
 	now := s.tagGenbuProbeNow()
+	var roundCtx context.Context
 	for _, record := range records {
 		if !domain.TagGenbuProbeEligible(domain.TagOperationState(record.State), record.Tag) {
 			delete(session.forceRecords, record.ID)
@@ -91,7 +92,10 @@ func (s *app) startDueTagGenbuProbes(session *tagGenbuAutoProbeSession, win tagG
 		if !force && (interval == 0 || !session.lastProbe[key].IsZero() && now.Sub(session.lastProbe[key]) < interval) {
 			continue
 		}
-		ctx, cancel := context.WithCancel(session.ctx)
+		if roundCtx == nil {
+			roundCtx = application.NewTagProbeRoundContext(session.ctx)
+		}
+		ctx, cancel := context.WithCancel(roundCtx)
 		payload := s.tagHistoryRecordPayload(record)
 		payload["force"] = force
 		payload["tagJobAccountIdentity"] = s.tagJobScope().AccountIdentity

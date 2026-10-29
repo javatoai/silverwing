@@ -28,13 +28,13 @@ type WorkspaceMutationTarget struct {
 // destructive or mutating operation. Worktrees and independent clones have
 // deliberately separate removal paths.
 type WorkspaceLifecycle struct {
-	Manifests *storage.ManifestStore
+	Manifests TaskManifestReader
 	Git       *GitClient
 	Locks     *OperationLocks
 	Bootstrap *BootstrapService
 }
 
-func NewWorkspaceLifecycle(manifests *storage.ManifestStore, git *GitClient, locks *OperationLocks) *WorkspaceLifecycle {
+func NewWorkspaceLifecycle(manifests TaskManifestReader, git *GitClient, locks *OperationLocks) *WorkspaceLifecycle {
 	if manifests == nil {
 		manifests = storage.NewManifestStore()
 	}

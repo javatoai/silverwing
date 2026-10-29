@@ -29,7 +29,7 @@ func (s *app) settleMaterialsFileBarrier(barrier *materialsFileJobBarrier) error
 	if barrier == nil {
 		return nil
 	}
-	if barrier.owner == nil || barrier.owner != s.materialsFileJobs {
+	if barrier.owner == nil || barrier.owner != s.materialsUnit.state.materialsFileJobs {
 		return errors.New("资料文件操作屏障已变化，不能安全切换目录")
 	}
 	for _, request := range barrier.jobs {

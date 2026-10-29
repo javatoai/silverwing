@@ -41,7 +41,20 @@ type tagProcessRunner interface {
 	Run(context.Context, process.Spec) (process.Result, error)
 }
 
+// NewService preserves the legacy concrete task-service defaults.
 func NewService(paths storage.Paths, config *storage.ConfigStore, manifests *storage.ManifestStore, git *workspace.GitClient, runner *process.Runner) *Service {
+	return newService(paths, config, manifests, git, runner, func(manifests *storage.ManifestStore, git *workspace.GitClient) *workspace.TaskApplicationService {
+		return workspace.NewTaskApplicationService(manifests, git, paths)
+	})
+}
+
+// NewServiceWithTasks is the production composition entry point. It uses the
+// supplied task facade without choosing a materials provider or task storage.
+func NewServiceWithTasks(paths storage.Paths, config *storage.ConfigStore, manifests *storage.ManifestStore, git *workspace.GitClient, runner *process.Runner, tasks *workspace.TaskApplicationService) *Service {
+	return newService(paths, config, manifests, git, runner, func(*storage.ManifestStore, *workspace.GitClient) *workspace.TaskApplicationService { return tasks })
+}
+
+func newService(paths storage.Paths, config *storage.ConfigStore, manifests *storage.ManifestStore, git *workspace.GitClient, runner *process.Runner, taskFactory func(*storage.ManifestStore, *workspace.GitClient) *workspace.TaskApplicationService) *Service {
 	if config == nil {
 		config = storage.NewConfigStore(paths)
 	}
@@ -62,7 +75,7 @@ func NewService(paths storage.Paths, config *storage.ConfigStore, manifests *sto
 	}
 	return &Service{
 		paths: paths, config: config, manifests: manifests, git: git, runner: runner,
-		locks: workspace.NewOperationLocks(paths.Locks), tasks: workspace.NewTaskApplicationService(manifests, git, paths),
+		locks: workspace.NewOperationLocks(paths.Locks), tasks: taskFactory(manifests, git),
 	}
 }
 

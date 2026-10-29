@@ -76,7 +76,7 @@ type taskCreationRequirementRequest struct {
 }
 
 func (s *app) ensureTaskCreationRequirements() *taskCreationRequirementsState {
-	form := s.taskCreation
+	form := s.taskUnit.state.taskCreation
 	if form == nil {
 		return nil
 	}
@@ -102,8 +102,8 @@ func (s *app) ensureTaskCreationRequirements() *taskCreationRequirementsState {
 	} else {
 		previous := state.scope
 		if !taskCreationRequirementBaseScopeEqual(previous, next) {
-			s.cancelTaskCreationRequirementCandidates(state)
-			s.cancelTaskCreationRequirementMetadata(state)
+			s.taskUnit.cancelTaskCreationRequirementCandidates(state)
+			s.taskUnit.cancelTaskCreationRequirementMetadata(state)
 			state.candidates = nil
 			state.candidatesLoaded = false
 			state.candidatesError = ""
@@ -113,8 +113,8 @@ func (s *app) ensureTaskCreationRequirements() *taskCreationRequirementsState {
 				s.handleTaskCreationRequirementLinkChange(form, state, next.link)
 			}
 		} else if previous.link != next.link {
-			s.cancelTaskCreationRequirementCandidates(state)
-			s.cancelTaskCreationRequirementMetadata(state)
+			s.taskUnit.cancelTaskCreationRequirementCandidates(state)
+			s.taskUnit.cancelTaskCreationRequirementMetadata(state)
 			state.scope = next
 			s.handleTaskCreationRequirementLinkChange(form, state, next.link)
 		}
@@ -123,7 +123,7 @@ func (s *app) ensureTaskCreationRequirements() *taskCreationRequirementsState {
 	if form.draft.MetadataLoading && domain.ParseFeishuWorkItemLink(form.draft.RequirementLink) != nil && state.metadataRequest == nil {
 		s.startTaskCreationRequirementMetadata(form, state)
 	}
-	if !state.candidatesLoaded && !state.candidatesLoading && len(form.config.MeegleProjects) > 0 {
+	if !state.candidatesLoaded && !state.candidatesLoading && len(form.config.MeegleProjects) > 0 && (form.draft.RequirementLink != "" || state.candidatesOpen) {
 		s.startTaskCreationRequirementCandidates(form, state)
 	}
 	return state
@@ -153,6 +153,11 @@ func taskCreationRequirementsConfigFingerprint(snapshot string, config domain.Ap
 
 func (s *app) handleTaskCreationRequirementLinkChange(form *taskCreationState, state *taskCreationRequirementsState, link string) {
 	if form == nil || state == nil {
+		return
+	}
+	if strings.TrimSpace(link) == "" {
+		form.draft.MetadataHint = nil
+		form.draft.MetadataLoading = false
 		return
 	}
 	if domain.ParseFeishuWorkItemLink(link) == nil {
@@ -231,7 +236,7 @@ func (s *app) startTaskCreationRequirementCandidates(form *taskCreationState, st
 }
 
 func taskCreationExpectedRequirementIdentity(s *app) (string, bool, error) {
-	state := s.requirementIdentityJobs
+	state := s.requirementUnit.state.requirementIdentityJobs
 	if state == nil || !state.confirmed {
 		return "", false, nil
 	}
@@ -484,7 +489,7 @@ func (s *app) taskCreationRequirementRequestRelevant(request *taskCreationRequir
 	if s == nil || request == nil || request.ctx == nil || request.ctx.Err() != nil || s.win == nil || s.win.IsDestroyed() {
 		return false
 	}
-	form := s.taskCreation
+	form := s.taskUnit.state.taskCreation
 	if form == nil || form != request.form || form.requirements == nil || form.requirements.closed || form.token != request.token ||
 		s.snapshot.Home != request.home || form.groupID != request.groupID ||
 		taskCreationRequirementsConfigFingerprint(s.snapshot.ConfigJSON, form.config) != request.config ||
@@ -498,7 +503,7 @@ func (s *app) taskCreationRequirementRequestRelevant(request *taskCreationRequir
 	return form.draft.RequirementLink == request.link && state.candidateRequest == request && state.candidateGeneration == request.generation
 }
 
-func (s *app) cancelTaskCreationRequirementCandidates(state *taskCreationRequirementsState) {
+func (s *taskController) cancelTaskCreationRequirementCandidates(state *taskCreationRequirementsState) {
 	if state == nil {
 		return
 	}
@@ -510,7 +515,7 @@ func (s *app) cancelTaskCreationRequirementCandidates(state *taskCreationRequire
 	state.candidatesLoading = false
 }
 
-func (s *app) cancelTaskCreationRequirementMetadata(state *taskCreationRequirementsState) {
+func (s *taskController) cancelTaskCreationRequirementMetadata(state *taskCreationRequirementsState) {
 	if state == nil {
 		return
 	}
@@ -521,23 +526,23 @@ func (s *app) cancelTaskCreationRequirementMetadata(state *taskCreationRequireme
 	}
 }
 
-func (s *app) closeTaskCreationRequirements() {
-	if s == nil || s.taskCreation == nil || s.taskCreation.requirements == nil {
+func (s *taskController) closeTaskCreationRequirements() {
+	if s == nil || s.state.taskCreation == nil || s.state.taskCreation.requirements == nil {
 		return
 	}
-	state := s.taskCreation.requirements
+	state := s.state.taskCreation.requirements
 	state.closed = true
 	s.cancelTaskCreationRequirementCandidates(state)
 	s.cancelTaskCreationRequirementMetadata(state)
 }
 
 func (s *app) selectTaskCreationRequirementCandidate(candidate taskCreationRequirementCandidate) {
-	form := s.taskCreation
+	form := s.taskUnit.state.taskCreation
 	if form == nil || form.requirements == nil || form.requirements.closed {
 		return
 	}
 	oldBranch := form.draft.Branch
-	s.cancelTaskCreationRequirementMetadata(form.requirements)
+	s.taskUnit.cancelTaskCreationRequirementMetadata(form.requirements)
 	title := candidate.Title
 	form.draft = form.draft.ChangeRequirement(candidate.URL, form.config.DefaultBranchPrefix, &title)
 	form.lastLink = form.draft.RequirementLink
@@ -579,7 +584,7 @@ func taskCreationRequirementInputLink(input string) (string, bool) {
 }
 
 func (s *app) editTaskCreationRequirementInput() {
-	form := s.taskCreation
+	form := s.taskUnit.state.taskCreation
 	if form == nil || form.requirements == nil || form.requirements.closed {
 		return
 	}

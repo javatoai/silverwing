@@ -41,7 +41,9 @@ func TestTaskCreationSelectingServiceDefaultsAllConfiguredModules(t *testing.T) 
 		services: make(map[string]bool), modules: make(map[string]map[string]bool),
 		moduleData: make(map[string]map[string]*taskCreationModuleDraft), moduleOrder: make(map[string][]string),
 	}
-	server := &app{taskCreation: state}
+	server := &app{
+		taskUnit: taskController{state: taskState{taskCreation: state}},
+	}
 	server.ensureTaskCreationService(service.ID)
 	if !state.services[service.ID] || len(state.modules[service.ID]) != len(service.Modules) {
 		t.Fatalf("selecting a service should default all configured modules: %+v", state.modules)
@@ -81,7 +83,9 @@ func TestTaskAppendSelectingServiceDefaultsAllConfiguredModules(t *testing.T) {
 	state := taskAppendNewState(task{}, "services", domain.GroupConfig{})
 	state.serviceOrder = []string{service.ID}
 	state.services[service.ID] = service
-	server := &app{workspaceAppend: state}
+	server := &app{
+		workspaceUnit: workspaceController{state: workspaceState{workspaceAppend: state}},
+	}
 	server.toggleTaskAppendService(service.ID)
 	if !state.selectedServices[service.ID] || state.activeServiceID != service.ID || len(state.moduleData[service.ID]) != len(service.Modules) {
 		t.Fatalf("selecting a service should activate it and default all configured modules: %+v", state)
@@ -100,7 +104,9 @@ func TestTaskAppendPreviewInvalidationReturnsToCheckAction(t *testing.T) {
 		sharedAck:        true,
 		inlineError:      "选择已变化，请重新预检。",
 	}
-	server := &app{workspaceAppend: state}
+	server := &app{
+		workspaceUnit: workspaceController{state: workspaceState{workspaceAppend: state}},
+	}
 	server.invalidateTaskAppendPreview("服务或模块选择已变化，请重新预检。")
 	if state.previewSignature != "" || len(state.conflicts) != 0 || state.sharedAck || state.inlineError != "" {
 		t.Fatalf("invalidation should clear stale preview state and hints: %+v", state)
@@ -109,7 +115,9 @@ func TestTaskAppendPreviewInvalidationReturnsToCheckAction(t *testing.T) {
 
 func TestTaskCreationPreviewInvalidationReturnsToCheckAction(t *testing.T) {
 	state := &taskCreationState{phase: "confirm", preview: &taskCreationPreview{}, inlineError: "内容已变化，请重新预检。"}
-	server := &app{taskCreation: state}
+	server := &app{
+		taskUnit: taskController{state: taskState{taskCreation: state}},
+	}
 	server.invalidateTaskCreationPreview("内容已变化，请重新预检。")
 	if state.phase != "editing" || state.preview != nil || state.inlineError != "" {
 		t.Fatalf("invalidation should return to editing without a persistent hint: %+v", state)

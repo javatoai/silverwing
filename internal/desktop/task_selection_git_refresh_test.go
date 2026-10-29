@@ -57,9 +57,9 @@ func taskSelectionGitFixture(t *testing.T) (*app, *taskSelectionGitBackend, *ui.
 	s := newApp(backend, Options{CapturePath: "isolated-task-selection"})
 	s.win, s.loading, s.page, s.tab = &mygo.Window{}, false, "tasks", 3
 	s.snapshot.Home = filepath.Join(t.TempDir(), "home")
-	s.configJSON = `{}`
+	s.settingsUnit.state.configJSON = `{}`
 	for _, id := range []string{"task-a", "task-b"} {
-		s.tasks = append(s.tasks, task{id: id, title: id, path: filepath.Join(t.TempDir(), id), createdAt: id + "-created",
+		s.taskUnit.state.tasks = append(s.taskUnit.state.tasks, task{id: id, title: id, path: filepath.Join(t.TempDir(), id), createdAt: id + "-created",
 			workspaces: []application.Workspace{{ID: id + "-service", Path: filepath.Join(t.TempDir(), "workspace"), Branch: "feature/example"}}})
 	}
 	tester := ui.NewTester(func(c *ui.Context) {
@@ -84,17 +84,17 @@ func taskSelectionGitWaitRead(t *testing.T, backend *taskSelectionGitBackend) ta
 
 func TestTaskSelectionGitRefreshKeepsCurrentReadingOnRepeatedRowClick(t *testing.T) {
 	s, backend, tester := taskSelectionGitFixture(t)
-	s.documentPath, s.documentContent, s.documentDirty = "fixture.md", "unsaved fixture", true
-	s.documentDrafts["fixture.md"], s.documentDirtyMap["fixture.md"] = "unsaved fixture", true
-	scroll := s.taskWorkspaceDetailScroll(s.currentTask())
+	s.materialsUnit.state.documentPath, s.materialsUnit.state.documentContent, s.materialsUnit.state.documentDirty = "fixture.md", "unsaved fixture", true
+	s.materialsUnit.state.documentDrafts["fixture.md"], s.materialsUnit.state.documentDirtyMap["fixture.md"] = "unsaved fixture", true
+	scroll := s.taskWorkspaceDetailScroll(s.taskUnit.currentTask())
 	if err := tester.Click("task-a"); err != nil {
 		t.Fatal(err)
 	}
 	read := taskSelectionGitWaitRead(t, backend)
-	if read.action.TaskID != "task-a" || s.tab != 3 || s.currentTask().id != "task-a" ||
-		s.documentPath != "fixture.md" || s.documentContent != "unsaved fixture" || !s.documentDirty ||
-		s.documentDrafts["fixture.md"] != "unsaved fixture" || !s.documentDirtyMap["fixture.md"] ||
-		s.taskWorkspaceDetailScroll(s.currentTask()) != scroll {
+	if read.action.TaskID != "task-a" || s.tab != 3 || s.taskUnit.currentTask().id != "task-a" ||
+		s.materialsUnit.state.documentPath != "fixture.md" || s.materialsUnit.state.documentContent != "unsaved fixture" || !s.materialsUnit.state.documentDirty ||
+		s.materialsUnit.state.documentDrafts["fixture.md"] != "unsaved fixture" || !s.materialsUnit.state.documentDirtyMap["fixture.md"] ||
+		s.taskWorkspaceDetailScroll(s.taskUnit.currentTask()) != scroll {
 		t.Fatal("reclicking the selected task reset its tab, reading state or unsaved draft")
 	}
 }
@@ -108,26 +108,26 @@ func taskSelectionGitClick(t *testing.T, tester *ui.Tester, id string) {
 
 func taskSelectionGitResult(s *app, count int) application.ActionResult {
 	return application.ActionResult{Data: map[string]domain.WorkspaceGitHealth{
-		s.currentTask().workspaces[0].Path: {State: domain.WorkspaceGitReady, DirtyFileCount: count, PushState: domain.LocalPushPushed},
+		s.taskUnit.currentTask().workspaces[0].Path: {State: domain.WorkspaceGitReady, DirtyFileCount: count, PushState: domain.LocalPushPushed},
 	}}
 }
 
 // The headless UI does not run a native window loop. Deliver the real worker's
 // reply at the same UI completion boundary that Window.Update uses in the app.
 func taskSelectionGitFinish(s *app, read taskSelectionGitRead, reply taskSelectionGitReply) {
-	state, request := s.workspaceGit, s.workspaceGit.current
+	state, request := s.workspaceUnit.state.workspaceGit, s.workspaceUnit.state.workspaceGit.current
 	read.reply <- reply
 	s.finishWorkspaceGitStatus(state, request, reply.result, reply.err)
 }
 
 func taskSelectionGitAssertHealth(t *testing.T, s *app, count int) {
 	t.Helper()
-	health, ok := s.workspaceHealth(s.currentTask().workspaces[0].Path)
+	health, ok := s.workspaceHealth(s.taskUnit.currentTask().workspaces[0].Path)
 	if !ok || health.State != domain.WorkspaceGitReady || health.DirtyFileCount != count {
 		t.Fatalf("latest source observation not displayed: %+v / %t", health, ok)
 	}
 	card := ui.NewTester(func(c *ui.Context) {
-		current := s.currentTask()
+		current := s.taskUnit.currentTask()
 		ui.Column(c).Fill().Children(func() { s.workspaceCard(c, setTheme(c, s.dark), current, current.workspaces[0], 0) })
 	}, 1200, 500)
 	if !card.HasText(fmt.Sprintf("本地未提交 %d", count)) {
@@ -139,7 +139,7 @@ func TestTaskSelectionGitRefreshReadsAgainAfterCompletedObservation(t *testing.T
 	for _, dark := range []bool{false, true} {
 		for _, width := range []int{340, 960} {
 			s, backend, tester := taskSelectionGitFixture(t)
-			s.dark, s.selected = dark, -1
+			s.dark, s.taskUnit.state.selected = dark, -1
 			tester.SetSize(width, 400)
 			taskSelectionGitClick(t, tester, "task-a")
 			first := taskSelectionGitWaitRead(t, backend)
@@ -147,7 +147,7 @@ func TestTaskSelectionGitRefreshReadsAgainAfterCompletedObservation(t *testing.T
 			taskSelectionGitAssertHealth(t, s, 1)
 			// Ordinary frames retain the observation; a user click must expire it.
 			s.requestWorkspaceGitStatus(false)
-			if s.workspaceGit.current != nil {
+			if s.workspaceUnit.state.workspaceGit.current != nil {
 				t.Fatal("ordinary rendering queried again without a refresh intent")
 			}
 			taskSelectionGitClick(t, tester, "task-a")
@@ -163,11 +163,11 @@ func TestTaskSelectionGitRefreshCoalescesBusyRowClicks(t *testing.T) {
 	s.busy = true // An unrelated feature's busy presentation must not drop reads.
 	taskSelectionGitClick(t, tester, "task-a")
 	first := taskSelectionGitWaitRead(t, backend)
-	request := s.workspaceGit.current
+	request := s.workspaceUnit.state.workspaceGit.current
 	for i := 0; i < 20; i++ {
 		taskSelectionGitClick(t, tester, "task-a")
 	}
-	if s.workspaceGit.current != request || !s.workspaceGit.pending || first.ctx.Err() != nil {
+	if s.workspaceUnit.state.workspaceGit.current != request || !s.workspaceUnit.state.workspaceGit.pending || first.ctx.Err() != nil {
 		t.Fatal("busy clicks should retain one read and one latest refresh intent")
 	}
 	select {
@@ -177,12 +177,12 @@ func TestTaskSelectionGitRefreshCoalescesBusyRowClicks(t *testing.T) {
 	}
 	taskSelectionGitFinish(s, first, taskSelectionGitReply{result: taskSelectionGitResult(s, 1)})
 	second := taskSelectionGitWaitRead(t, backend)
-	if _, ok := s.workspaceGit.health[workspaceHealthPathKey(s.currentTask().workspaces[0].Path)]; ok {
+	if _, ok := s.workspaceUnit.state.workspaceGit.health[workspaceHealthPathKey(s.taskUnit.currentTask().workspaces[0].Path)]; ok {
 		t.Fatal("superseded observation flashed before the pending refresh")
 	}
 	taskSelectionGitFinish(s, second, taskSelectionGitReply{result: taskSelectionGitResult(s, 2)})
 	taskSelectionGitAssertHealth(t, s, 2)
-	if s.workspaceGit.loading || s.workspaceGit.pending || s.workspaceGit.current != nil || !s.busy {
+	if s.workspaceUnit.state.workspaceGit.loading || s.workspaceUnit.state.workspaceGit.pending || s.workspaceUnit.state.workspaceGit.current != nil || !s.busy {
 		t.Fatal("coalesced completion left a request active or changed another feature's busy state")
 	}
 }
@@ -191,15 +191,15 @@ func TestTaskSelectionGitRefreshSwitchRejectsSlowPreviousTask(t *testing.T) {
 	s, backend, tester := taskSelectionGitFixture(t)
 	taskSelectionGitClick(t, tester, "task-a")
 	first := taskSelectionGitWaitRead(t, backend)
-	oldState, oldRequest := s.workspaceGit, s.workspaceGit.current
+	oldState, oldRequest := s.workspaceUnit.state.workspaceGit, s.workspaceUnit.state.workspaceGit.current
 	oldResult := taskSelectionGitResult(s, 99)
 	taskSelectionGitClick(t, tester, "task-b")
-	if first.ctx.Err() == nil || s.currentTask().id != "task-b" || s.tab != 3 {
+	if first.ctx.Err() == nil || s.taskUnit.currentTask().id != "task-b" || s.tab != 3 {
 		t.Fatal("task switch did not cancel the old read while retaining the detail tab")
 	}
 	taskSelectionGitFinish(s, first, taskSelectionGitReply{result: oldResult})
 	second := taskSelectionGitWaitRead(t, backend)
-	if second.action.TaskID != "task-b" || len(s.workspaceGit.health) != 0 {
+	if second.action.TaskID != "task-b" || len(s.workspaceUnit.state.workspaceGit.health) != 0 {
 		t.Fatal("slow task A result entered task B")
 	}
 	taskSelectionGitFinish(s, second, taskSelectionGitReply{result: taskSelectionGitResult(s, 2)})
@@ -213,12 +213,12 @@ func TestTaskSelectionGitRefreshRejectsChangedContext(t *testing.T) {
 		apply func(*app)
 	}{
 		{"home", func(s *app) { s.snapshot.Home = filepath.Join(s.snapshot.Home, "another-home") }},
-		{"task-root", func(s *app) { s.configJSON = `{"taskRoot":"C:/synthetic/another-root"}` }},
-		{"git-executable", func(s *app) { s.configJSON = `{"gitExecutablePath":"C:/synthetic/git.exe"}` }},
+		{"task-root", func(s *app) { s.settingsUnit.state.configJSON = `{"taskRoot":"C:/synthetic/another-root"}` }},
+		{"git-executable", func(s *app) { s.settingsUnit.state.configJSON = `{"gitExecutablePath":"C:/synthetic/git.exe"}` }},
 		{"account", func(s *app) {
-			s.settingsCLIStatus = map[string]map[string]any{"meegle": {"accountId": "synthetic-account-b"}}
+			s.settingsUnit.state.settingsCLIStatus = map[string]map[string]any{"meegle": {"accountId": "synthetic-account-b"}}
 		}},
-		{"task-identity", func(s *app) { s.tasks[s.selected].createdAt = "replacement-created" }},
+		{"task-identity", func(s *app) { s.taskUnit.state.tasks[s.taskUnit.state.selected].createdAt = "replacement-created" }},
 	} {
 		t.Run(change.name, func(t *testing.T) {
 			s, backend, tester := taskSelectionGitFixture(t)
@@ -227,7 +227,7 @@ func TestTaskSelectionGitRefreshRejectsChangedContext(t *testing.T) {
 			oldResult := taskSelectionGitResult(s, 99)
 			change.apply(s)
 			taskSelectionGitFinish(s, first, taskSelectionGitReply{result: oldResult})
-			if len(s.workspaceGit.health) != 0 || s.workspaceGit.taskKey != "" {
+			if len(s.workspaceUnit.state.workspaceGit.health) != 0 || s.workspaceUnit.state.workspaceGit.taskKey != "" {
 				t.Fatal("late observation was accepted in a changed context")
 			}
 			s.requestWorkspaceGitStatus(false)
@@ -243,12 +243,12 @@ func TestTaskSelectionGitRefreshFailureCanRetryFromSameRow(t *testing.T) {
 	taskSelectionGitClick(t, tester, "task-a")
 	first := taskSelectionGitWaitRead(t, backend)
 	taskSelectionGitFinish(s, first, taskSelectionGitReply{err: errors.New("synthetic inspection failure")})
-	health, ok := s.workspaceHealth(s.currentTask().workspaces[0].Path)
+	health, ok := s.workspaceHealth(s.taskUnit.currentTask().workspaces[0].Path)
 	if !ok || health.State != domain.WorkspaceGitFailed || health.Message == nil || *health.Message != "synthetic inspection failure" {
 		t.Fatalf("failed read was not visible: %+v", health)
 	}
 	s.requestWorkspaceGitStatus(false)
-	if s.workspaceGit.current != nil {
+	if s.workspaceUnit.state.workspaceGit.current != nil {
 		t.Fatal("failed read retried on every frame")
 	}
 	taskSelectionGitClick(t, tester, "task-a")
@@ -259,11 +259,11 @@ func TestTaskSelectionGitRefreshFailureCanRetryFromSameRow(t *testing.T) {
 
 func TestTaskSelectionGitRefreshDefersAndKeepsLatestIntentDuringSnapshotLoading(t *testing.T) {
 	s, backend, tester := taskSelectionGitFixture(t)
-	s.selected = -1
+	s.taskUnit.state.selected = -1
 	s.loading = true
 	taskSelectionGitClick(t, tester, "task-a")
-	state := s.workspaceGit
-	if state == nil || !state.afterLoad || state.queuedKey != workspaceHealthTaskKey(s.currentTask()) || !s.workspaceGitStatusBusy() {
+	state := s.workspaceUnit.state.workspaceGit
+	if state == nil || !state.afterLoad || state.queuedKey != workspaceHealthTaskKey(s.taskUnit.currentTask()) || !s.workspaceGitStatusBusy() {
 		t.Fatal("row activation during initial loading was not retained as a deferred intent")
 	}
 	select {
@@ -275,7 +275,7 @@ func TestTaskSelectionGitRefreshDefersAndKeepsLatestIntentDuringSnapshotLoading(
 	// A later row click replaces the queued target; the old selection must not
 	// be read once loading completes.
 	taskSelectionGitClick(t, tester, "task-b")
-	if state.queuedKey != workspaceHealthTaskKey(s.currentTask()) || s.currentTask().id != "task-b" {
+	if state.queuedKey != workspaceHealthTaskKey(s.taskUnit.currentTask()) || s.taskUnit.currentTask().id != "task-b" {
 		t.Fatal("loading-time row activation did not retain the latest task selection")
 	}
 	s.loading = false
@@ -294,11 +294,11 @@ func TestTaskSelectionGitRefreshClickDuringLoadingRunsAfterCurrentRead(t *testin
 	first := taskSelectionGitWaitRead(t, backend)
 	s.loading = true
 	taskSelectionGitClick(t, tester, "task-a")
-	if !s.workspaceGit.afterLoad || s.workspaceGit.current == nil || s.workspaceGit.current.key != workspaceHealthTaskKey(s.currentTask()) {
+	if !s.workspaceUnit.state.workspaceGit.afterLoad || s.workspaceUnit.state.workspaceGit.current == nil || s.workspaceUnit.state.workspaceGit.current.key != workspaceHealthTaskKey(s.taskUnit.currentTask()) {
 		t.Fatal("explicit refresh during snapshot loading was dropped or replaced the in-flight read")
 	}
 	taskSelectionGitFinish(s, first, taskSelectionGitReply{result: taskSelectionGitResult(s, 1)})
-	if s.workspaceGit.current != nil || !s.workspaceGit.afterLoad {
+	if s.workspaceUnit.state.workspaceGit.current != nil || !s.workspaceUnit.state.workspaceGit.afterLoad {
 		t.Fatal("completed read should leave the loading-time refresh queued until snapshot loading ends")
 	}
 	select {
@@ -320,16 +320,16 @@ func TestTaskSelectionGitRefreshDropsRemovedTaskIntentAfterLoading(t *testing.T)
 	s, backend, tester := taskSelectionGitFixture(t)
 	s.loading = true
 	taskSelectionGitClick(t, tester, "task-a")
-	state := s.workspaceGit
+	state := s.workspaceUnit.state.workspaceGit
 	if !state.afterLoad {
 		t.Fatal("test setup did not queue the selected task refresh")
 	}
 	// Emulate a settled snapshot which removed the clicked task and selected
 	// another task that already has a current observation.
-	s.tasks = []task{s.tasks[1]}
-	s.selected = 0
+	s.taskUnit.state.tasks = []task{s.taskUnit.state.tasks[1]}
+	s.taskUnit.state.selected = 0
 	scope := s.workspaceGitStatusScope()
-	key := workspaceHealthTaskKey(s.currentTask())
+	key := workspaceHealthTaskKey(s.taskUnit.currentTask())
 	state.scope, state.taskKey = scope, key
 	s.loading = false
 	s.requestWorkspaceGitStatus(false)
@@ -349,18 +349,18 @@ func TestTaskSelectionGitRefreshQueuedForSameTaskUsesOnlyCurrentScope(t *testing
 		apply func(*app)
 	}{
 		{"account", func(s *app) {
-			s.settingsCLIStatus = map[string]map[string]any{"meegle": {"accountId": "synthetic-account-after-load"}}
+			s.settingsUnit.state.settingsCLIStatus = map[string]map[string]any{"meegle": {"accountId": "synthetic-account-after-load"}}
 		}},
 		{"task-root", func(s *app) {
-			s.configJSON = `{"taskRoot":"C:/synthetic/task-root-after-load"}`
+			s.settingsUnit.state.configJSON = `{"taskRoot":"C:/synthetic/task-root-after-load"}`
 		}},
 	} {
 		t.Run(change.name, func(t *testing.T) {
 			s, backend, tester := taskSelectionGitFixture(t)
 			state := s.ensureWorkspaceGitState()
 			oldScope := s.workspaceGitStatusScope()
-			taskKey := workspaceHealthTaskKey(s.currentTask())
-			path := s.currentTask().workspaces[0].Path
+			taskKey := workspaceHealthTaskKey(s.taskUnit.currentTask())
+			path := s.taskUnit.currentTask().workspaces[0].Path
 			state.scope = oldScope
 			state.taskKey = taskKey
 			state.health[path] = domain.WorkspaceGitHealth{State: domain.WorkspaceGitReady, DirtyFileCount: 99}
@@ -395,7 +395,7 @@ func TestTaskSelectionGitRefreshQueuedForSameTaskUsesOnlyCurrentScope(t *testing
 
 func TestTaskSelectionGitRefreshToolbarShowsBusySpinner(t *testing.T) {
 	s, _, _ := taskSelectionGitFixture(t)
-	s.workspaceGit = &workspaceGitState{loading: true, health: map[string]domain.WorkspaceGitHealth{}}
+	s.workspaceUnit.state.workspaceGit = &workspaceGitState{loading: true, health: map[string]domain.WorkspaceGitHealth{}}
 	tester := ui.NewTester(func(c *ui.Context) {
 		ui.Column(c).Fill().Children(func() { s.taskDetails(c, setTheme(c, false)) })
 	}, 1100, 700)

@@ -146,8 +146,15 @@ func tagDesktopTestApp() (*app, *tagDesktopTestBackend, *tagDesktopTestWindow) {
 	b := newTagDesktopTestBackend()
 	w := newTagDesktopTestWindow()
 	config := `{"taskRoot":"C:/fixture/tasks","tagEnabled":true}`
-	s := &app{backend: b, page: "tasks", tab: 0, inputs: map[string]*string{}, snapshot: application.Snapshot{Home: "C:/fixture/home", ConfigJSON: config}, configJSON: config,
-		tasks: []task{{id: "task-a", path: "C:/fixture/tasks/task-a", createdAt: "2026-10-15T10:00:00Z"}, {id: "task-b", path: "C:/fixture/tasks/task-b", createdAt: "2026-10-15T10:01:00Z"}}}
+	s := &app{
+		taskUnit:     taskController{state: taskState{tasks: []task{{id: "task-a", path: "C:/fixture/tasks/task-a", createdAt: "2026-10-15T10:00:00Z"}, {id: "task-b", path: "C:/fixture/tasks/task-b", createdAt: "2026-10-15T10:01:00Z"}}}},
+		settingsUnit: settingsController{state: settingsState{configJSON: config}},
+		backend:      b,
+		page:         "tasks",
+		tab:          0,
+		inputs:       map[string]*string{},
+		snapshot:     application.Snapshot{Home: "C:/fixture/home", ConfigJSON: config},
+	}
 	s.ensureTagDesktopJobs().window = w
 	return s, b, w
 }
@@ -262,7 +269,7 @@ func TestTagDesktopJobSwitchRevisitAndIdentity(t *testing.T) {
 	s.observeTagJobsWindow(w)
 	w.until(t, func() bool { return len(s.snapshot.TagHistory) == 2 })
 	old := tagDesktopAwaitWatch(t, w, b)
-	s.selected = 1
+	s.taskUnit.state.selected = 1
 	s.observeTagJobsWindow(w)
 	if old.ctx.Err() == nil {
 		t.Fatal("old subscription not detached")
@@ -271,7 +278,7 @@ func TestTagDesktopJobSwitchRevisitAndIdentity(t *testing.T) {
 	late.Sequence = 9
 	late.Items[0].Record.Tag = "late-a"
 	old.emit(late)
-	if s.currentTask().id != "task-b" || len(s.taskTagHistoryRecords("task-b")) != 0 {
+	if s.taskUnit.currentTask().id != "task-b" || len(s.taskTagHistoryRecords("task-b")) != 0 {
 		t.Fatal("late result contaminated other task")
 	}
 	updated := tagDesktopTestSnapshot(scope)
@@ -280,7 +287,7 @@ func TestTagDesktopJobSwitchRevisitAndIdentity(t *testing.T) {
 	b.mu.Lock()
 	b.snapshots[scope] = updated
 	b.mu.Unlock()
-	s.selected = 0
+	s.taskUnit.state.selected = 0
 	s.observeTagJobsWindow(w)
 	w.until(t, func() bool { return s.currentTagJobView() != nil && s.currentTagJobView().snapshot.Sequence == 4 })
 	if s.snapshot.TagHistory[0].Tag != "restored-a" {
@@ -320,11 +327,11 @@ func TestTagDesktopJobRepositoryBusyAndSnapshotValidation(t *testing.T) {
 	defer tagDesktopClose(t, s, w)
 	scope := s.tagJobScope()
 	snapshot := tagDesktopTestSnapshot(scope)
-	s.tasks[0].workspaces = []application.Workspace{{ServiceID: "service-one", ModuleID: "module", Path: "C:/fixture/shared"}, {ServiceID: "service-three", ModuleID: "module", Path: "C:/fixture/shared"}, {ServiceID: "service-free", ModuleID: "module", Path: "C:/fixture/free"}}
+	s.taskUnit.state.tasks[0].workspaces = []application.Workspace{{ServiceID: "service-one", ModuleID: "module", Path: "C:/fixture/shared"}, {ServiceID: "service-three", ModuleID: "module", Path: "C:/fixture/shared"}, {ServiceID: "service-free", ModuleID: "module", Path: "C:/fixture/free"}}
 	snapshot.Items[0].WorkspacePath = "C:/fixture/shared"
 	view := s.tagJobView(scope)
 	s.acceptTagJobSnapshot(view, scope, snapshot, true)
-	if !s.tagWorkspaceBusy(s.tasks[0], s.tasks[0].workspaces[1]) || s.tagWorkspaceBusy(s.tasks[0], s.tasks[0].workspaces[2]) {
+	if !s.tagWorkspaceBusy(s.taskUnit.state.tasks[0], s.taskUnit.state.tasks[0].workspaces[1]) || s.tagWorkspaceBusy(s.taskUnit.state.tasks[0], s.taskUnit.state.tasks[0].workspaces[2]) {
 		t.Fatal("repository busy leaked or was not shared")
 	}
 	bad := tagDesktopTestSnapshot(scope)

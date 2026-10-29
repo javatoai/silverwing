@@ -15,34 +15,46 @@ import (
 )
 
 type jsonToolState struct {
-	viewSource        string
-	sourceSnapshot    string
-	projection        jsonTextProjection
-	folded            map[string]bool
-	finding           bool
-	findQuery         string
-	lastFindQuery     string
-	findIndex         int
-	findChanged       bool
-	lines             jsonNativeLines
-	scroll            ui.ScrollState
-	native            codeeditor.State
-	nativeSource      string
-	nativeVersion     uint64
-	nativeNodeMenu    *jsonNodeCopyRequest
-	foldCache         map[int]tools.JSONSourceNode
-	foldCacheSource   string
-	foldCacheView     string
-	foldCacheRevision uint64
-	foldCacheValid    bool
-	history           []jsonEditorSnapshot
-	historyIndex      int
-	historyReady      bool
-	lastSelection     jsonEditorSnapshot
-	pendingSelection  bool
-	pendingFocus      bool
-	selectionStart    int
-	selectionEnd      int
+	viewSource             string
+	sourceSnapshot         string
+	sourceIndex            *jsonTextIndex
+	projection             jsonTextProjection
+	projectionKey          jsonProjectionKey
+	projectionReady        bool
+	projectionRevision     uint64
+	folded                 map[string]bool
+	foldRevision           uint64
+	finding                bool
+	findQuery              string
+	lastFindQuery          string
+	findIndex              int
+	findChanged            bool
+	lines                  jsonNativeLines
+	scroll                 ui.ScrollState
+	native                 codeeditor.State
+	nativeSource           string
+	nativeVersion          uint64
+	nativeIndex            *jsonTextIndex
+	nativeIndexVersion     uint64
+	nativeNodeMenu         *jsonNodeCopyRequest
+	foldCache              map[int]tools.JSONSourceNode
+	foldCacheProjection    uint64
+	gutterLines            []int
+	gutterLinesProjection  uint64
+	sourceMatches          jsonMatchCache
+	projectedMatches       jsonProjectedMatchCache
+	findHighlightsReady    bool
+	findHighlightsRevision uint64
+	findHighlightsQuery    string
+	findHighlightsCurrent  int
+	history                []jsonEditorSnapshot
+	historyIndex           int
+	historyReady           bool
+	lastSelection          jsonEditorSnapshot
+	pendingSelection       bool
+	pendingFocus           bool
+	selectionStart         int
+	selectionEnd           int
 }
 
 // toolPageState keeps the developer tools independent from the legacy task
@@ -60,6 +72,7 @@ type toolPageState struct {
 	jsonErrorColumn        int
 	jsonEditor             jsonToolState
 	jsonRevision           uint64
+	jsonParseRevision      uint64
 	jsonValidationCancel   context.CancelFunc
 	jsonErrorLocatePending bool
 
@@ -139,10 +152,10 @@ func newToolPageState(source string) *toolPageState {
 }
 
 func (s *app) ensureToolState() *toolPageState {
-	if s.tools == nil {
-		s.tools = newToolPageState(s.json)
+	if s.toolsUnit.state.tools == nil {
+		s.toolsUnit.state.tools = newToolPageState(s.toolsUnit.state.json)
 	}
-	return s.tools
+	return s.toolsUnit.state.tools
 }
 
 func (s *app) queueJSONValidation() {
@@ -155,6 +168,7 @@ func (s *app) queueJSONValidation() {
 	state.jsonRevision++
 	revision, source := state.jsonRevision, state.jsonSource
 	state.jsonDoc = tools.JSONDocument{}
+	state.jsonParseRevision++
 	state.jsonErrorLocatePending = false
 	state.jsonError = ""
 	state.jsonErrorLine, state.jsonErrorColumn = 0, 0
@@ -180,17 +194,19 @@ func (s *app) queueJSONValidation() {
 			return
 		}
 		s.win.Update(func() {
-			if s.tools != state || state.jsonRevision != revision || state.jsonSource != source || ctx.Err() != nil {
+			if s.toolsUnit.state.tools != state || state.jsonRevision != revision || state.jsonSource != source || ctx.Err() != nil {
 				return
 			}
 			if err != nil {
 				state.jsonDoc = tools.JSONDocument{}
+				state.jsonParseRevision++
 				state.jsonValid = false
 				state.jsonPending = false
 				state.setJSONError(err)
 				return
 			}
 			state.jsonDoc = doc
+			state.jsonParseRevision++
 			state.jsonValid = true
 			state.jsonPending = false
 			state.jsonError = ""
@@ -230,7 +246,7 @@ func (s *app) queueTimeConversion() {
 			return
 		}
 		s.win.Update(func() {
-			if s.tools != state || state.timeRevision != revision || state.timeInput != source || state.timeZone != zone || ctx.Err() != nil {
+			if s.toolsUnit.state.tools != state || state.timeRevision != revision || state.timeInput != source || state.timeZone != zone || ctx.Err() != nil {
 				return
 			}
 			state.timePending = false
@@ -280,7 +296,7 @@ func (s *app) queueDiff() {
 			return
 		}
 		s.win.Update(func() {
-			if s.tools != state || state.diffRevision != revision || state.diffLeft != left || state.diffRight != right || ctx.Err() != nil {
+			if s.toolsUnit.state.tools != state || state.diffRevision != revision || state.diffLeft != left || state.diffRight != right || ctx.Err() != nil {
 				return
 			}
 			state.diffPending = false
@@ -395,6 +411,7 @@ func (s *toolPageState) clearPortStopping(item tools.PortProcess, sequence uint6
 }
 
 func (s *toolPageState) validateJSON(source string) {
+	s.jsonParseRevision++
 	if strings.TrimSpace(source) == "" {
 		s.jsonDoc = tools.JSONDocument{}
 		s.jsonPending = false
@@ -445,33 +462,20 @@ func (s *toolPageState) cancelWork() {
 }
 
 func actionData[T any](data any) (T, bool) {
-	if value, ok := data.(T); ok {
-		return value, true
-	}
-	var value T
 	if data == nil {
-		return value, false
+		var zero T
+		return zero, false
 	}
-	raw, err := json.Marshal(data)
-	if err != nil || json.Unmarshal(raw, &value) != nil {
-		return value, false
-	}
-	return value, true
+	value, err := application.ResultData[T](application.ActionResult{Data: data})
+	return value, err == nil
 }
 
 func actionDataSlice[T any](data any) ([]T, error) {
-	if values, ok := data.([]T); ok {
-		return values, nil
-	}
 	if data == nil {
 		return []T{}, nil
 	}
-	raw, err := json.Marshal(data)
+	values, err := application.ResultData[[]T](application.ActionResult{Data: data})
 	if err != nil {
-		return nil, err
-	}
-	var values []T
-	if err := json.Unmarshal(raw, &values); err != nil {
 		return nil, err
 	}
 	if values == nil {

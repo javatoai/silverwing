@@ -67,7 +67,7 @@ func TestProductionTagConfirmationMatchesFreshPreview(t *testing.T) {
 
 func TestProductionInitializationExposesSeparateMergeAndCreate(t *testing.T) {
 	s, v, _ := productionFixture(t)
-	s.production.batches = nil
+	s.releaseUnit.state.production.batches = nil
 	v.BatchID = ""
 	v.Preview.ProductionInMain = false
 	v.Preview.ProductionSHA = strings.Repeat("f", 40)
@@ -100,13 +100,13 @@ func TestProductionDiffReadIsIndependentAndRejectsLateResults(t *testing.T) {
 	for _, change := range []string{"none", "close", "page", "batch", "config", "home", "manual", "service"} {
 		t.Run(change, func(t *testing.T) {
 			s, v, _ := productionFixture(t)
-			s.tasks = []task{{id: "selected-task", title: "kept"}}
-			s.notes[0] = "unsaved draft"
+			s.taskUnit.state.tasks = []task{{id: "selected-task", title: "kept"}}
+			s.taskUnit.state.notes[0] = "unsaved draft"
 			backend := &productionTestBackend{calls: make(chan application.Action, 2), replies: make(chan productionTestAnswer, 2)}
 			window := &refreshTestWindow{updates: make(chan func(), 8)}
-			s.backend, s.production.window = backend, window
+			s.backend, s.releaseUnit.state.production.window = backend, window
 			s.openProductionDiff(v, "生产 Tag → 主分支", "2.3.43", "origin/master", v.Preview.ProductionSHA, v.Preview.MainSHA, true)
-			d := s.production.diffDialog
+			d := s.releaseUnit.state.production.diffDialog
 			action := <-backend.calls
 			if action.Kind != "production.diff-files" || action.TaskID != "" || v.Busy {
 				t.Fatal("diff adopted task/write request state")
@@ -125,7 +125,7 @@ func TestProductionDiffReadIsIndependentAndRejectsLateResults(t *testing.T) {
 				v.BatchID = "another"
 			}
 			if change == "config" {
-				s.configJSON = `{"tagEnabled":false}`
+				s.settingsUnit.state.configJSON = `{"tagEnabled":false}`
 			}
 			if change == "home" {
 				s.snapshot.Home = "changed"
@@ -134,7 +134,7 @@ func TestProductionDiffReadIsIndependentAndRejectsLateResults(t *testing.T) {
 				v.ManualTag = "changed"
 			}
 			if change == "service" {
-				s.production.selected = "other"
+				s.releaseUnit.state.production.selected = "other"
 			}
 			backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.DiffResult{Files: workspace.CompareFilesResult{BaseCommit: sha, TargetCommit: sha}, Commits: "immutable commits"}}}
 			select {
@@ -146,13 +146,13 @@ func TestProductionDiffReadIsIndependentAndRejectsLateResults(t *testing.T) {
 			if (d.Commits == "immutable commits") != (change == "none") {
 				t.Fatal("late difference result entered another context")
 			}
-			if s.tasks[0].id != "selected-task" || s.notes[0] != "unsaved draft" || v.Busy {
+			if s.taskUnit.state.tasks[0].id != "selected-task" || s.taskUnit.state.notes[0] != "unsaved draft" || v.Busy {
 				t.Fatal("diff changed selected task/draft/busy state")
 			}
 			s.closeProductionDiff()
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			if err := s.closeProductionJobs(ctx); err != nil {
+			if err := s.releaseUnit.closeProductionJobs(ctx); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -165,7 +165,7 @@ func TestProductionDiffDialogReusesFileViewerAndEsc(t *testing.T) {
 			t.Run(fmt.Sprintf("%d-%t", width, dark), func(t *testing.T) {
 				s, v, _ := productionFixture(t)
 				s.openProductionDiff(v, "生产 Tag → 主分支", "2.3.43", "origin/master", v.Preview.ProductionSHA, v.Preview.MainSHA, true)
-				d := s.production.diffDialog
+				d := s.releaseUnit.state.production.diffDialog
 				r := &d.Review
 				r.FilesLoading = false
 				r.Files = []workspace.CompareChange{{Path: "src/service.go", Kind: string(domain.WorkspaceGitModified)}}
@@ -210,7 +210,7 @@ func TestProductionDiffDialogReusesFileViewerAndEsc(t *testing.T) {
 					t.Fatal("commit view not displayed")
 				}
 				tester.Key(0, ui.KeyEscape)
-				if s.production.diffDialog != nil {
+				if s.releaseUnit.state.production.diffDialog != nil {
 					t.Fatal("Esc left diff dialog open")
 				}
 			})

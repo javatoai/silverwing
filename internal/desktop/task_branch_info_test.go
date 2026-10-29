@@ -37,11 +37,14 @@ func TestTaskBranchInfoMatrixPreviewAndCopy(t *testing.T) {
 		for _, dark := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%d-dark-%t", width, dark), func(t *testing.T) {
 				fixture := task{id: "task", path: t.TempDir(), createdAt: "created", requirementURL: "https://fixture.invalid/requirement/" + strings.Repeat("long-url/", 30), workspaces: []application.Workspace{{Name: "api", Branch: "feature/" + strings.Repeat("long-branch/", 40)}, {Name: "job", Branch: "feature/job"}}}
-				s := &app{page: "tasks", tasks: []task{fixture}}
+				s := &app{
+					taskUnit: taskController{state: taskState{tasks: []task{fixture}}},
+					page:     "tasks",
+				}
 				tester := ui.NewTester(func(c *ui.Context) {
 					p := setTheme(c, dark)
 					if ui.Button(c, "打开分支信息").Clicked() {
-						s.openTaskBranchInfo(s.currentTask())
+						s.openTaskBranchInfo(s.taskUnit.currentTask())
 					}
 					s.renderTaskBranchInfoDialog(c, p)
 				}, width, 780)
@@ -87,7 +90,7 @@ func TestTaskBranchInfoMatrixPreviewAndCopy(t *testing.T) {
 					}
 				}
 				tester.Key(0, ui.KeyEscape)
-				if s.taskBranchInfo != nil && s.taskBranchInfo.Open || !tester.Focused("打开分支信息") {
+				if s.taskUnit.state.taskBranchInfo != nil && s.taskUnit.state.taskBranchInfo.Open || !tester.Focused("打开分支信息") {
 					t.Fatal("Escape no longer closes and restores the originating focus")
 				}
 			})
@@ -97,7 +100,10 @@ func TestTaskBranchInfoMatrixPreviewAndCopy(t *testing.T) {
 
 func TestTaskBranchInfoMatrixEmptyData(t *testing.T) {
 	for _, fixture := range []task{{id: "empty", path: t.TempDir()}, {id: "empty-branch", path: t.TempDir(), workspaces: []application.Workspace{{Name: "api"}}}} {
-		s := &app{page: "tasks", tasks: []task{fixture}}
+		s := &app{
+			taskUnit: taskController{state: taskState{tasks: []task{fixture}}},
+			page:     "tasks",
+		}
 		s.openTaskBranchInfo(fixture)
 		tester := ui.NewTester(func(c *ui.Context) { s.renderTaskBranchInfoDialog(c, setTheme(c, false)) }, 960, 780)
 		for _, option := range taskBranchInfoCopyOptions(fixture) {
@@ -110,7 +116,7 @@ func TestTaskBranchInfoMatrixEmptyData(t *testing.T) {
 				t.Fatal("missing URL/branch/services changed the existing copy contract")
 			}
 		}
-		if err := tester.Click("关闭"); err != nil || s.taskBranchInfo != nil && s.taskBranchInfo.Open {
+		if err := tester.Click("关闭"); err != nil || s.taskUnit.state.taskBranchInfo != nil && s.taskUnit.state.taskBranchInfo.Open {
 			t.Fatalf("close button failed: %v", err)
 		}
 	}

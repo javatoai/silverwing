@@ -4,6 +4,9 @@ param(
     [string]$PreviousLaunch
 )
 $ErrorActionPreference = 'Stop'
+$projectRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'product-profile.ps1')
+$productProfile = Get-SilverwingProductProfile -RepositoryRoot $projectRoot
 $build = Get-Content -LiteralPath $BuildReceipt -Raw | ConvertFrom-Json
 if (-not $build.sourcesStable -or (Get-FileHash -LiteralPath $build.binary).Hash -ne $build.binarySha256) { throw 'A stable desktop build is required' }
 $receiptRoot = [IO.Path]::GetFullPath($ReceiptDirectory)
@@ -12,7 +15,7 @@ $launchFile = Join-Path $receiptRoot 'launch.json'
 if (Test-Path -LiteralPath $launchFile) { throw 'Preserve the existing launch receipt' }
 $userDirectory = [Environment]::GetFolderPath('UserProfile')
 if (-not $userDirectory -or $env:USERPROFILE -ne $userDirectory) { throw 'Interactive startup requires the current user profile' }
-$applicationHome = Join-Path $userDirectory 'silverwing'
+$applicationHome = Join-Path $userDirectory $productProfile.ExecutableName
 if (Test-Path -LiteralPath (Join-Path $applicationHome 'migrations\task-root.json')) { throw 'Resolve the pending task-root migration before interactive startup' }
 if ($PreviousLaunch) {
     $previous = Get-Content -LiteralPath $PreviousLaunch -Raw | ConvertFrom-Json
@@ -26,7 +29,6 @@ if ($PreviousLaunch) {
 # --home profiles belong only to the separate automated verification scripts.
 # Omit navigation and size overrides so the normal saved session is restored.
 $arguments = @()
-$projectRoot = Split-Path -Parent $PSScriptRoot
 $process = Start-Process -FilePath $build.binary -WorkingDirectory $projectRoot -WindowStyle Normal -RedirectStandardOutput (Join-Path $receiptRoot 'stdout.log') -RedirectStandardError (Join-Path $receiptRoot 'stderr.log') -PassThru
 $idle = $process.WaitForInputIdle(5000)
 $process.Refresh()

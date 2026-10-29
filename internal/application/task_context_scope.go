@@ -97,6 +97,10 @@ func (a *App) validateDesktopTaskContext(action Action, config domain.AppConfig,
 	}
 
 	switch action.Kind {
+	case "task.requirement-link":
+		if action.ServiceID != "" || action.ModuleID != "" || !sameTaskContextPath(action.Path, taskPath) || manifest.RequirementLink != "" {
+			return errDesktopTaskContextChanged
+		}
 	case "codex.run":
 		if !slices.Contains(config.DefaultWorkspaceToolIDs, "codex") || action.ServiceID != "" || action.ModuleID != "" || action.Path == "" || !sameTaskContextPath(action.Path, taskPath) {
 			return errDesktopTaskContextChanged

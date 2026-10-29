@@ -14,7 +14,7 @@ type productionConfirmationContent struct {
 // The summary shows ref names. Full commit identities remain captured in the
 // caller's continuation and the collapsed details.
 func (s *app) confirmProduction(v *productionView, target production.Target, content productionConfirmationContent, confirmed func()) {
-	if v == nil || s.production == nil || s.productionView() != v {
+	if v == nil || s.releaseUnit.state.production == nil || s.productionView() != v {
 		return
 	}
 	if !s.showConfirmationDialog(content.Title, "", content.Detail, []confirmationDialogButton{
@@ -37,16 +37,16 @@ func (s *app) confirmProduction(v *productionView, target production.Target, con
 	dialog.Summary = append(dialog.Summary, confirmationDialogField{Label: "仓库", Value: target.Repository}, confirmationDialogField{Label: "远端", Value: target.Remote})
 	dialog.Notices = append([]string(nil), content.Notices...)
 	dialog.FoldDetail = true
-	home, batch, manual, selection, state := s.snapshot.Home, v.BatchID, v.ManualTag, v.Selection, s.production
-	checkedConfig, scope, configCurrent := s.configJSON, productionConfigScope(s.configJSON), true
+	home, batch, manual, selection, state := s.snapshot.Home, v.BatchID, v.ManualTag, v.Selection, s.releaseUnit.state.production
+	checkedConfig, scope, configCurrent := s.settingsUnit.state.configJSON, productionConfigScope(s.settingsUnit.state.configJSON), true
 	dialog.Current = func() bool {
 		// Configuration parsing happens only when its immutable JSON changes,
 		// never on every frame while the dialog is displayed.
-		if checkedConfig != s.configJSON {
-			checkedConfig = s.configJSON
+		if checkedConfig != s.settingsUnit.state.configJSON {
+			checkedConfig = s.settingsUnit.state.configJSON
 			configCurrent = productionConfigScope(checkedConfig) == scope
 		}
-		return s.production == state && s.page == "production" && state.views[state.selected] == v &&
+		return s.releaseUnit.state.production == state && s.page == "production" && state.views[state.selected] == v &&
 			s.snapshot.Home == home && v.BatchID == batch && v.Selection == selection && v.ManualTag == manual && configCurrent
 	}
 }

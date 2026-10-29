@@ -70,11 +70,11 @@ func (s *app) requestRequirements(sprintKey string, refresh bool) {
 		return
 	}
 	if sprintKey == "" {
-		sprintKey = s.requirementsSelectedSprintKey
+		sprintKey = s.requirementUnit.state.requirementsSelectedSprintKey
 	}
 	// Re-entering the page must not replace a manual refresh's pending identity
 	// intent or restart its already-running list query.
-	if p := s.requirementListProgress; s.requirementListProgressCurrent(p) && p.running && s.requirementsLoading && p.sprintKey == sprintKey {
+	if p := s.requirementUnit.state.requirementListProgress; s.requirementListProgressCurrent(p) && p.running && s.requirementUnit.state.requirementsLoading && p.sprintKey == sprintKey {
 		return
 	}
 	if s.queueRequirementListIdentity(sprintKey, refresh) {
@@ -98,38 +98,38 @@ func (s *app) startRequirementListWithKnownIdentity(sprintKey string, refresh bo
 }
 
 func (s *app) applyRequirementsResult(result application.ActionResult) {
-	previousKey := s.selectedRequirementKey
+	previousKey := s.requirementUnit.state.selectedRequirementKey
 	data := mapData(result.Data)
 	items, err := decodeData[application.Requirement](data["items"])
 	if err != nil {
-		s.requirementsLoading = false
-		s.requirementsLoadError = "读取需求列表格式失败：" + err.Error()
+		s.requirementUnit.state.requirementsLoading = false
+		s.requirementUnit.state.requirementsLoadError = "读取需求列表格式失败：" + err.Error()
 		return
 	}
-	s.requirements = items
-	s.requirementsFetchedAt = dataInt64(data, "fetchedAt")
-	s.requirementsLoaded = true
-	s.requirementsLoading = false
-	s.requirementsLoadError = ""
-	s.requirementsFailures = mapsString(data["failures"])
-	s.requirementsCompletedQueries = int(dataInt64(data, "completedQueries"))
-	s.requirementsSprints, err = decodeData[requirementSprint](data["sprints"])
+	s.requirementUnit.state.requirements = items
+	s.requirementUnit.state.requirementsFetchedAt = dataInt64(data, "fetchedAt")
+	s.requirementUnit.state.requirementsLoaded = true
+	s.requirementUnit.state.requirementsLoading = false
+	s.requirementUnit.state.requirementsLoadError = ""
+	s.requirementUnit.state.requirementsFailures = mapsString(data["failures"])
+	s.requirementUnit.state.requirementsCompletedQueries = int(dataInt64(data, "completedQueries"))
+	s.requirementUnit.state.requirementsSprints, err = decodeData[requirementSprint](data["sprints"])
 	if err != nil {
-		s.requirementsSprints = nil
-		s.requirementsLoadError = "读取 Sprint 列表格式失败：" + err.Error()
+		s.requirementUnit.state.requirementsSprints = nil
+		s.requirementUnit.state.requirementsLoadError = "读取 Sprint 列表格式失败：" + err.Error()
 	}
-	s.requirementsSelectedSprintKey = dataString(data, "selectedSprintKey")
-	s.overlayRefreshedRequirements(s.requirements, s.requirementsSelectedSprintKey, s.requirementsFetchedAt)
-	if selected, ok := s.selectedRequirementByKey(s.selectedRequirementKey); ok {
-		s.selectedRequirement = selected
-	} else if len(s.requirements) > 0 {
-		s.selectedRequirement = 0
-		s.selectedRequirementKey = requirementKey(s.requirements[0])
+	s.requirementUnit.state.requirementsSelectedSprintKey = dataString(data, "selectedSprintKey")
+	s.overlayRefreshedRequirements(s.requirementUnit.state.requirements, s.requirementUnit.state.requirementsSelectedSprintKey, s.requirementUnit.state.requirementsFetchedAt)
+	if selected, ok := s.selectedRequirementByKey(s.requirementUnit.state.selectedRequirementKey); ok {
+		s.requirementUnit.state.selectedRequirement = selected
+	} else if len(s.requirementUnit.state.requirements) > 0 {
+		s.requirementUnit.state.selectedRequirement = 0
+		s.requirementUnit.state.selectedRequirementKey = requirementKey(s.requirementUnit.state.requirements[0])
 	} else {
-		s.selectedRequirement = 0
-		s.selectedRequirementKey = ""
+		s.requirementUnit.state.selectedRequirement = 0
+		s.requirementUnit.state.selectedRequirementKey = ""
 	}
-	if previousKey != s.selectedRequirementKey {
+	if previousKey != s.requirementUnit.state.selectedRequirementKey {
 		if s.page == "requirements" {
 			s.dismissMarkdownBitmapViewer()
 		}
@@ -148,7 +148,7 @@ func (s *app) selectedRequirementByKey(key string) (int, bool) {
 	if key == "" {
 		return 0, false
 	}
-	for index, item := range s.requirements {
+	for index, item := range s.requirementUnit.state.requirements {
 		if requirementKey(item) == key {
 			return index, true
 		}
@@ -157,43 +157,63 @@ func (s *app) selectedRequirementByKey(key string) (int, bool) {
 }
 
 func (s *app) ensureTaskRequirementMetadata() {
-	if s.loading || len(s.tasks) == 0 {
+	if s.loading || len(s.taskUnit.state.tasks) == 0 {
 		return
 	}
-	known := make(map[string]string, len(s.tasks))
-	for _, item := range s.tasks {
+	key := taskMetadataDiscoveryKey{tasks: s.taskUnit.state.tasksRevision, metadata: s.taskUnit.state.metadataRevision, config: s.settingsUnit.state.configJSON}
+	if s.taskUnit.state.metadataDiscoveryValid && s.taskUnit.state.metadataDiscovery == key {
+		// A force-refresh can temporarily own a missing metadata read. Poll
+		// only those deferred identities, rather than rescan the task catalog.
+		for id, item := range s.taskUnit.state.metadataDiscoveryRetry {
+			if !s.requirementRefreshing(item.requirementURL) {
+				delete(s.taskUnit.state.metadataDiscoveryRetry, id)
+				s.requestTaskRequirementMetadata(item, false)
+			}
+		}
+		return
+	}
+	s.taskUnit.state.metadataDiscoveryRetry = make(map[string]task)
+	defer func() {
+		s.taskUnit.state.metadataDiscovery = taskMetadataDiscoveryKey{tasks: s.taskUnit.state.tasksRevision, metadata: s.taskUnit.state.metadataRevision, config: s.settingsUnit.state.configJSON}
+		s.taskUnit.state.metadataDiscoveryValid = true
+	}()
+	known := make(map[string]string, len(s.taskUnit.state.tasks))
+	for _, item := range s.taskUnit.state.tasks {
 		if domain.ParseFeishuWorkItemLink(item.requirementURL) == nil {
-			if cancel := s.taskRequirementMetadataCancels[item.id]; cancel != nil {
+			if cancel := s.requirementUnit.state.taskRequirementMetadataCancels[item.id]; cancel != nil {
 				cancel()
-				delete(s.taskRequirementMetadataCancels, item.id)
-				if s.taskRequirementMetadataGeneration != nil {
-					s.taskRequirementMetadataGeneration[item.id]++
+				delete(s.requirementUnit.state.taskRequirementMetadataCancels, item.id)
+				if s.requirementUnit.state.taskRequirementMetadataGeneration != nil {
+					s.requirementUnit.state.taskRequirementMetadataGeneration[item.id]++
 				}
 			}
-			delete(s.taskRequirementMetadata, item.id)
+			s.deleteTaskRequirementMetadata(item.id)
 			continue
 		}
 		known[item.id] = item.requirementURL
-		state, exists := s.taskRequirementMetadata[item.id]
+		state, exists := s.requirementUnit.state.taskRequirementMetadata[item.id]
 		if !exists || state.URL != item.requirementURL {
 			s.requestTaskRequirementMetadata(item, false)
+			if s.requirementRefreshing(item.requirementURL) {
+				s.taskUnit.state.metadataDiscoveryRetry[item.id] = item
+			}
 		}
 	}
-	for taskID, state := range s.taskRequirementMetadata {
+	for taskID, state := range s.requirementUnit.state.taskRequirementMetadata {
 		if _, exists := known[taskID]; !exists {
-			if cancel := s.taskRequirementMetadataCancels[taskID]; cancel != nil {
+			if cancel := s.requirementUnit.state.taskRequirementMetadataCancels[taskID]; cancel != nil {
 				cancel()
-				delete(s.taskRequirementMetadataCancels, taskID)
+				delete(s.requirementUnit.state.taskRequirementMetadataCancels, taskID)
 			}
-			delete(s.taskRequirementMetadata, taskID)
+			s.deleteTaskRequirementMetadata(taskID)
 			continue
 		}
 		if state.URL != known[taskID] {
-			if cancel := s.taskRequirementMetadataCancels[taskID]; cancel != nil {
+			if cancel := s.requirementUnit.state.taskRequirementMetadataCancels[taskID]; cancel != nil {
 				cancel()
-				delete(s.taskRequirementMetadataCancels, taskID)
+				delete(s.requirementUnit.state.taskRequirementMetadataCancels, taskID)
 			}
-			delete(s.taskRequirementMetadata, taskID)
+			s.deleteTaskRequirementMetadata(taskID)
 		}
 	}
 }
@@ -207,20 +227,20 @@ func (s *app) requestTaskRequirementMetadata(item task, force bool) {
 		return
 	}
 	if domain.ParseFeishuWorkItemLink(url) == nil {
-		cancel := s.taskRequirementMetadataCancels[item.id]
+		cancel := s.requirementUnit.state.taskRequirementMetadataCancels[item.id]
 		if cancel != nil {
 			cancel()
-			delete(s.taskRequirementMetadataCancels, item.id)
+			delete(s.requirementUnit.state.taskRequirementMetadataCancels, item.id)
 		}
-		previous, exists := s.taskRequirementMetadata[item.id]
+		previous, exists := s.requirementUnit.state.taskRequirementMetadata[item.id]
 		changed := !exists || previous.URL != url || previous.Status != requirementMetadataNotLoaded
-		if s.taskRequirementMetadataGeneration != nil && (cancel != nil || changed) {
-			s.taskRequirementMetadataGeneration[item.id]++
+		if s.requirementUnit.state.taskRequirementMetadataGeneration != nil && (cancel != nil || changed) {
+			s.requirementUnit.state.taskRequirementMetadataGeneration[item.id]++
 		}
-		if s.taskRequirementMetadata == nil {
-			s.taskRequirementMetadata = make(map[string]taskRequirementMetadataState)
+		if s.requirementUnit.state.taskRequirementMetadata == nil {
+			s.requirementUnit.state.taskRequirementMetadata = make(map[string]taskRequirementMetadataState)
 		}
-		s.taskRequirementMetadata[item.id] = taskRequirementMetadataState{URL: url, Status: requirementMetadataNotLoaded}
+		s.setTaskRequirementMetadata(item.id, taskRequirementMetadataState{URL: url, Status: requirementMetadataNotLoaded})
 		if (cancel != nil || changed) && s.win != nil {
 			s.win.Invalidate()
 		}
@@ -229,29 +249,29 @@ func (s *app) requestTaskRequirementMetadata(item task, force bool) {
 	if s.backend == nil || s.win == nil {
 		return
 	}
-	if s.taskRequirementMetadata == nil {
-		s.taskRequirementMetadata = make(map[string]taskRequirementMetadataState)
+	if s.requirementUnit.state.taskRequirementMetadata == nil {
+		s.requirementUnit.state.taskRequirementMetadata = make(map[string]taskRequirementMetadataState)
 	}
-	if s.taskRequirementMetadataCancels == nil {
-		s.taskRequirementMetadataCancels = make(map[string]context.CancelFunc)
+	if s.requirementUnit.state.taskRequirementMetadataCancels == nil {
+		s.requirementUnit.state.taskRequirementMetadataCancels = make(map[string]context.CancelFunc)
 	}
-	if s.taskRequirementMetadataGeneration == nil {
-		s.taskRequirementMetadataGeneration = make(map[string]uint64)
+	if s.requirementUnit.state.taskRequirementMetadataGeneration == nil {
+		s.requirementUnit.state.taskRequirementMetadataGeneration = make(map[string]uint64)
 	}
-	previous, exists := s.taskRequirementMetadata[item.id]
+	previous, exists := s.requirementUnit.state.taskRequirementMetadata[item.id]
 	if !force && exists && previous.URL == url && (previous.Status == requirementMetadataLoading || previous.Status == requirementMetadataLoaded) {
 		return
 	}
-	if cancel := s.taskRequirementMetadataCancels[item.id]; cancel != nil {
+	if cancel := s.requirementUnit.state.taskRequirementMetadataCancels[item.id]; cancel != nil {
 		cancel()
 	}
-	generation := s.taskRequirementMetadataGeneration[item.id] + 1
-	s.taskRequirementMetadataGeneration[item.id] = generation
+	generation := s.requirementUnit.state.taskRequirementMetadataGeneration[item.id] + 1
+	s.requirementUnit.state.taskRequirementMetadataGeneration[item.id] = generation
 	ctx, cancel := context.WithCancel(context.Background())
-	s.taskRequirementMetadataCancels[item.id] = cancel
+	s.requirementUnit.state.taskRequirementMetadataCancels[item.id] = cancel
 	retained := requirementMetadataForRefresh(previous, exists && previous.URL == url)
 	retained.URL, retained.Status, retained.Error = url, requirementMetadataLoading, ""
-	s.taskRequirementMetadata[item.id] = retained
+	s.setTaskRequirementMetadata(item.id, retained)
 	s.win.Invalidate()
 	payload := s.bindRequirementAccount(map[string]any{"force": force})
 
@@ -267,29 +287,29 @@ func (s *app) requestTaskRequirementMetadata(item task, force bool) {
 			return
 		}
 		s.win.Update(func() {
-			if s.taskRequirementMetadataGeneration[item.id] != generation {
+			if s.requirementUnit.state.taskRequirementMetadataGeneration[item.id] != generation {
 				return
 			}
-			delete(s.taskRequirementMetadataCancels, item.id)
+			delete(s.requirementUnit.state.taskRequirementMetadataCancels, item.id)
 			if !s.hasTaskRequirementURL(item.id, url) {
-				delete(s.taskRequirementMetadata, item.id)
+				s.deleteTaskRequirementMetadata(item.id)
 				return
 			}
 			if ctx.Err() != nil {
 				if requirementMetadataHasValues(retained.Metadata) {
 					retained.URL, retained.Status = url, requirementMetadataLoaded
-					s.taskRequirementMetadata[item.id] = retained
+					s.setTaskRequirementMetadata(item.id, retained)
 				} else {
-					s.taskRequirementMetadata[item.id] = taskRequirementMetadataState{URL: url, Status: requirementMetadataNotLoaded}
+					s.setTaskRequirementMetadata(item.id, taskRequirementMetadataState{URL: url, Status: requirementMetadataNotLoaded})
 				}
 				return
 			}
 			if err != nil {
 				if requirementMetadataHasValues(retained.Metadata) {
 					retained.URL, retained.Status, retained.Error = url, requirementMetadataLoaded, err.Error()
-					s.taskRequirementMetadata[item.id] = retained
+					s.setTaskRequirementMetadata(item.id, retained)
 				} else {
-					s.taskRequirementMetadata[item.id] = taskRequirementMetadataState{URL: url, Status: requirementMetadataFailed, Error: err.Error()}
+					s.setTaskRequirementMetadata(item.id, taskRequirementMetadataState{URL: url, Status: requirementMetadataFailed, Error: err.Error()})
 				}
 				return
 			}
@@ -302,13 +322,13 @@ func (s *app) requestTaskRequirementMetadata(item task, force bool) {
 				failure := "需求元数据格式无效：" + marshalErr.Error()
 				if requirementMetadataHasValues(retained.Metadata) {
 					retained.URL, retained.Status, retained.Error = url, requirementMetadataLoaded, failure
-					s.taskRequirementMetadata[item.id] = retained
+					s.setTaskRequirementMetadata(item.id, retained)
 				} else {
-					s.taskRequirementMetadata[item.id] = taskRequirementMetadataState{URL: url, Status: requirementMetadataFailed, Error: failure}
+					s.setTaskRequirementMetadata(item.id, taskRequirementMetadataState{URL: url, Status: requirementMetadataFailed, Error: failure})
 				}
 				return
 			}
-			s.taskRequirementMetadata[item.id] = taskRequirementMetadataState{URL: url, Status: requirementMetadataLoaded, Metadata: metadata, Error: metadata.RefreshError}
+			s.setTaskRequirementMetadata(item.id, taskRequirementMetadataState{URL: url, Status: requirementMetadataLoaded, Metadata: metadata, Error: metadata.RefreshError})
 		})
 	}()
 }
@@ -328,7 +348,7 @@ func requirementMetadataHasValues(metadata requirementMetadata) bool {
 }
 
 func (s *app) hasTaskRequirementURL(taskID, url string) bool {
-	for _, item := range s.tasks {
+	for _, item := range s.taskUnit.state.tasks {
 		if item.id == taskID {
 			return strings.TrimSpace(item.requirementURL) == strings.TrimSpace(url)
 		}
@@ -337,28 +357,28 @@ func (s *app) hasTaskRequirementURL(taskID, url string) bool {
 }
 
 func (s *app) cancelTaskRequirementMetadata(taskID string) {
-	if cancel := s.taskRequirementMetadataCancels[taskID]; cancel != nil {
+	if cancel := s.requirementUnit.state.taskRequirementMetadataCancels[taskID]; cancel != nil {
 		cancel()
-		delete(s.taskRequirementMetadataCancels, taskID)
+		delete(s.requirementUnit.state.taskRequirementMetadataCancels, taskID)
 	}
-	s.taskRequirementMetadataGeneration[taskID]++
-	if state, ok := s.taskRequirementMetadata[taskID]; ok {
-		s.taskRequirementMetadata[taskID] = taskRequirementMetadataState{URL: state.URL, Status: requirementMetadataNotLoaded}
+	s.requirementUnit.state.taskRequirementMetadataGeneration[taskID]++
+	if state, ok := s.requirementUnit.state.taskRequirementMetadata[taskID]; ok {
+		s.setTaskRequirementMetadata(taskID, taskRequirementMetadataState{URL: state.URL, Status: requirementMetadataNotLoaded})
 	}
 	if s.win != nil {
 		s.win.Invalidate()
 	}
 }
 
-func (s *app) cancelTaskRequirementReads() {
-	for taskID, cancel := range s.taskRequirementMetadataCancels {
+func (s *requirementController) cancelTaskRequirementReads() {
+	for taskID, cancel := range s.state.taskRequirementMetadataCancels {
 		cancel()
-		delete(s.taskRequirementMetadataCancels, taskID)
+		delete(s.state.taskRequirementMetadataCancels, taskID)
 	}
 }
 
 func (s *app) taskRequirementMetadataFor(item task) taskRequirementMetadataState {
-	state, ok := s.taskRequirementMetadata[item.id]
+	state, ok := s.requirementUnit.state.taskRequirementMetadata[item.id]
 	if !ok || state.URL != item.requirementURL {
 		return taskRequirementMetadataState{URL: item.requirementURL, Status: requirementMetadataNotLoaded}
 	}
@@ -484,7 +504,7 @@ func (s *app) renderRequirementMetadataSummary(c *ui.Context, p palette, item ap
 
 func (s *app) replicaRequirements(c *ui.Context, p palette) {
 	s.observeRequirementListIdentity()
-	if !s.loading && !s.requirementsRequested && len(s.readConfigArray("meegleProjects")) > 0 {
+	if !s.loading && !s.requirementUnit.state.requirementsRequested && len(s.readConfigArray("meegleProjects")) > 0 {
 		s.requestRequirements("", false)
 	}
 	width, _ := c.Size()
@@ -493,16 +513,16 @@ func (s *app) replicaRequirements(c *ui.Context, p palette) {
 		s.renderRequirementLoadingShell(c, p)
 		return
 	}
-	if focused && s.requirementsFocusedDetail && len(s.requirements) > 0 {
-		selected := s.selectedRequirement
-		if selected < 0 || selected >= len(s.requirements) {
+	if focused && s.requirementUnit.state.requirementsFocusedDetail && len(s.requirementUnit.state.requirements) > 0 {
+		selected := s.requirementUnit.state.selectedRequirement
+		if selected < 0 || selected >= len(s.requirementUnit.state.requirements) {
 			selected = 0
 		}
 		ui.Column(c).Grow(1).MinWidth(0).MinHeight(0).Padding(8).Gap(8).Background(p.bg).Children(func() {
 			if iconButton(c, "requirements-back-to-list", "chevron-left", "返回需求列表", p).Clicked() {
-				s.requirementsFocusedDetail = false
+				s.requirementUnit.state.requirementsFocusedDetail = false
 			}
-			s.requirementDetail(c, p, s.requirements[selected])
+			s.requirementDetail(c, p, s.requirementUnit.state.requirements[selected])
 		})
 		return
 	}
@@ -522,20 +542,20 @@ func (s *app) replicaRequirements(c *ui.Context, p palette) {
 			s.requirementList(c, p, true)
 			return
 		}
-		ui.Split(c.Key("requirements-list-detail-split"), &s.requirementWidth, func() {
+		ui.Split(c.Key("requirements-list-detail-split"), &s.requirementUnit.state.requirementWidth, func() {
 			s.requirementList(c, p, false)
 		}, func() {
 			ui.Box(c).Grow(1).MinWidth(0).MinHeight(0).Children(func() {
-				if len(s.requirements) == 0 {
-					if s.requirementsLoading {
+				if len(s.requirementUnit.state.requirements) == 0 {
+					if s.requirementUnit.state.requirementsLoading {
 						s.renderRequirementDetailSkeleton(c, p)
-					} else if !s.requirementsLoaded {
+					} else if !s.requirementUnit.state.requirementsLoaded {
 						ui.Column(c).Grow(1).MinWidth(0).MinHeight(0).Center().Background(p.surface).Border(1, p.line).Radius(14).Children(func() {
 							label(c, "正在读取所选 Sprint…", 13, p.muted)
 						})
 					} else {
 						ui.Column(c).Grow(1).MinWidth(0).MinHeight(0).Center().Background(p.surface).Border(1, p.line).Radius(14).Children(func() {
-							if len(s.requirementsSprints) == 0 && len(s.requirementsFailures) == 0 {
+							if len(s.requirementUnit.state.requirementsSprints) == 0 && len(s.requirementUnit.state.requirementsFailures) == 0 {
 								label(c, "没有进行中或未开始的可选 Sprint", 13, p.muted)
 							} else {
 								label(c, "该 Sprint 中没有我参与的工作项", 13, p.muted)
@@ -543,11 +563,11 @@ func (s *app) replicaRequirements(c *ui.Context, p palette) {
 						})
 					}
 				} else {
-					selected := s.selectedRequirement
-					if selected < 0 || selected >= len(s.requirements) {
+					selected := s.requirementUnit.state.selectedRequirement
+					if selected < 0 || selected >= len(s.requirementUnit.state.requirements) {
 						selected = 0
 					}
-					s.requirementDetail(c, p, s.requirements[selected])
+					s.requirementDetail(c, p, s.requirementUnit.state.requirements[selected])
 				}
 			})
 		}).Fill().MinWidth(0).MinHeight(0)
@@ -559,10 +579,10 @@ func (s *app) renderRequirementLoadingShell(c *ui.Context, p palette) {
 	focused := width < 800
 	ui.Column(c).Grow(1).MinWidth(0).MinHeight(0).Padding(8).Background(p.bg).Children(func() {
 		if focused {
-			if s.requirementsFocusedDetail {
+			if s.requirementUnit.state.requirementsFocusedDetail {
 				ui.Row(c).Height(34).Children(func() {
 					if iconButton(c, "requirements-back-to-list", "chevron-left", "返回需求列表", p).Clicked() {
-						s.requirementsFocusedDetail = false
+						s.requirementUnit.state.requirementsFocusedDetail = false
 					}
 				})
 				s.renderRequirementDetailSkeleton(c, p)
@@ -577,7 +597,7 @@ func (s *app) renderRequirementLoadingShell(c *ui.Context, p palette) {
 			}
 			return
 		}
-		ui.Split(c.Key("requirements-loading-split"), &s.requirementWidth, func() {
+		ui.Split(c.Key("requirements-loading-split"), &s.requirementUnit.state.requirementWidth, func() {
 			ui.Column(c).FillWidth().FillHeight().MinWidth(0).MinHeight(0).Padding(10).Gap(10).Background(p.surface).Border(1, p.line).Radius(14).Children(func() {
 				ui.Row(c).Height(34).Gap(8).Children(func() {
 					ui.Box(c).Grow(1).Height(34).Radius(9).Background(p.soft)
@@ -619,24 +639,24 @@ func (s *app) renderRequirementDetailSkeleton(c *ui.Context, p palette) {
 }
 
 func (s *app) openMeegleSettings() {
-	s.page, s.settingsTab, s.settingsPage, s.settingsLoaded = "settings", "CLI", "cli-meegle", ""
+	s.page, s.settingsUnit.state.settingsTab, s.settingsUnit.state.settingsPage, s.settingsUnit.state.settingsLoaded = "settings", "CLI", "cli-meegle", ""
 }
 
 func (s *app) selectedRequirementSprint() requirementSprint {
-	for _, sprint := range s.requirementsSprints {
-		if sprint.key() == s.requirementsSelectedSprintKey {
+	for _, sprint := range s.requirementUnit.state.requirementsSprints {
+		if sprint.key() == s.requirementUnit.state.requirementsSelectedSprintKey {
 			return sprint
 		}
 	}
-	if len(s.requirementsSprints) > 0 {
-		return s.requirementsSprints[0]
+	if len(s.requirementUnit.state.requirementsSprints) > 0 {
+		return s.requirementUnit.state.requirementsSprints[0]
 	}
 	return requirementSprint{}
 }
 
 func (s *app) requirementSprintLabel(sprint requirementSprint) string {
 	if sprint.ID == "" {
-		if s.requirementsLoading {
+		if s.requirementUnit.state.requirementsLoading {
 			return "正在读取 Sprint…"
 		}
 		return "选择 Sprint"
@@ -649,11 +669,11 @@ func (s *app) requirementFailurePanel(c *ui.Context, p palette, failures []strin
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			icon(c, "warning", 16, p.amber)
 			label(c, "部分需求查询未完成", 12, p.amber).FontWeight(600).Grow(1)
-			if s.requirementsCompletedQueries > 0 {
-				label(c, fmt.Sprintf("已完成 %d 项查询", s.requirementsCompletedQueries), 11, p.muted)
+			if s.requirementUnit.state.requirementsCompletedQueries > 0 {
+				label(c, fmt.Sprintf("已完成 %d 项查询", s.requirementUnit.state.requirementsCompletedQueries), 11, p.muted)
 			}
-			if !s.requirementsLoading && iconButton(c, "requirements-retry-failures", "refresh", "重试需求查询", p).Clicked() {
-				s.refreshRequirementListWithProgress(s.requirementsSelectedSprintKey)
+			if !s.requirementUnit.state.requirementsLoading && iconButton(c, "requirements-retry-failures", "refresh", "重试需求查询", p).Clicked() {
+				s.refreshRequirementListWithProgress(s.requirementUnit.state.requirementsSelectedSprintKey)
 			}
 		})
 		for _, failure := range failures {
@@ -664,7 +684,7 @@ func (s *app) requirementFailurePanel(c *ui.Context, p palette, failures []strin
 		if action(c, "requirements-open-meegle-settings", "settings", "Meegle 设置", p, false) {
 			s.openMeegleSettings()
 		}
-		if requestError && s.requirementsLoadError == "" {
+		if requestError && s.requirementUnit.state.requirementsLoadError == "" {
 			label(c, "查询失败；已有内容已保留。", 11, p.muted)
 		}
 	})
@@ -680,42 +700,42 @@ func (s *app) requirementList(c *ui.Context, p palette, focused bool) {
 				label(c, s.requirementSprintLabel(s.selectedRequirementSprint()), 11, p.text).Grow(1).SingleLine().Tooltip(s.requirementSprintLabel(s.selectedRequirementSprint()))
 				icon(c, "chevron-down", 13, p.muted)
 			})
-			button.Disabled(len(s.requirementsSprints) == 0)
+			button.Disabled(len(s.requirementUnit.state.requirementsSprints) == 0)
 			button.Menu(func(menu *ui.Menu) {
-				for _, option := range s.requirementsSprints {
+				for _, option := range s.requirementUnit.state.requirementsSprints {
 					text := firstNonEmpty(option.Title, option.ID) + " · " + firstNonEmpty(option.ProjectName, option.ProjectKey) + " · " + option.Status
-					if menu.Item(text).Checked(option.key() == s.requirementsSelectedSprintKey).Chosen() {
+					if menu.Item(text).Checked(option.key() == s.requirementUnit.state.requirementsSelectedSprintKey).Chosen() {
 						s.requestRequirements(option.key(), false)
 					}
 				}
 			})
 			refreshLabel := "刷新当前 Sprint"
-			progress := s.requirementListProgress
+			progress := s.requirementUnit.state.requirementListProgress
 			viewProgress := s.requirementListProgressCurrent(progress) && progress.running
 			if viewProgress {
 				refreshLabel = "查看刷新进度"
 			}
-			if iconButtonDisabled(c, "refresh-requirements", "refresh", refreshLabel, p, (s.requirementsLoading && !viewProgress) || s.requirementsSelectedSprintKey == "").Clicked() {
-				s.refreshRequirementListWithProgress(s.requirementsSelectedSprintKey)
+			if iconButtonDisabled(c, "refresh-requirements", "refresh", refreshLabel, p, (s.requirementUnit.state.requirementsLoading && !viewProgress) || s.requirementUnit.state.requirementsSelectedSprintKey == "").Clicked() {
+				s.refreshRequirementListWithProgress(s.requirementUnit.state.requirementsSelectedSprintKey)
 			}
 		})
-		if s.requirementsLoadError != "" {
-			s.requirementFailurePanel(c, p, []string{s.requirementsLoadError}, true)
-		} else if len(s.requirementsFailures) > 0 {
-			s.requirementFailurePanel(c, p, s.requirementsFailures, false)
+		if s.requirementUnit.state.requirementsLoadError != "" {
+			s.requirementFailurePanel(c, p, []string{s.requirementUnit.state.requirementsLoadError}, true)
+		} else if len(s.requirementUnit.state.requirementsFailures) > 0 {
+			s.requirementFailurePanel(c, p, s.requirementUnit.state.requirementsFailures, false)
 		}
-		if s.requirementsSelectedSprintKey == "" && len(s.requirementsSprints) > 0 {
+		if s.requirementUnit.state.requirementsSelectedSprintKey == "" && len(s.requirementUnit.state.requirementsSprints) > 0 {
 			ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
 				label(c, "请选择要查看的 Sprint", 12, p.muted)
 			})
 			return
 		}
-		if len(s.requirements) == 0 {
-			if s.requirementsLoading {
+		if len(s.requirementUnit.state.requirements) == 0 {
+			if s.requirementUnit.state.requirementsLoading {
 				s.renderRequirementListSkeleton(c, p, 5)
 			} else {
 				ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
-					if len(s.requirementsSprints) == 0 && s.requirementsLoadError == "" {
+					if len(s.requirementUnit.state.requirementsSprints) == 0 && s.requirementUnit.state.requirementsLoadError == "" {
 						label(c, "没有进行中或未开始的可选 Sprint", 12, p.muted)
 					} else {
 						label(c, "该 Sprint 中没有我参与的工作项", 12, p.muted)
@@ -725,7 +745,7 @@ func (s *app) requirementList(c *ui.Context, p palette, focused bool) {
 			return
 		}
 		ui.Scroll(c).Grow(1).MinHeight(0).FillWidth().Padding(1).Gap(4).Children(func() {
-			for _, item := range s.requirements {
+			for _, item := range s.requirementUnit.state.requirements {
 				s.requirementListItem(c, p, item, focused)
 			}
 		})
@@ -734,13 +754,13 @@ func (s *app) requirementList(c *ui.Context, p palette, focused bool) {
 
 func (s *app) requirementListItem(c *ui.Context, p palette, item application.Requirement, focused bool) {
 	index := -1
-	for i, candidate := range s.requirements {
+	for i, candidate := range s.requirementUnit.state.requirements {
 		if requirementKey(candidate) == requirementKey(item) {
 			index = i
 			break
 		}
 	}
-	selected := index >= 0 && index == s.selectedRequirement
+	selected := index >= 0 && index == s.requirementUnit.state.selectedRequirement
 	button := ui.ButtonBase(c.Key("requirement-"+requirementKey(item))).Column().FillWidth().Padding(8, 9).Gap(3).Radius(9).Border(1, p.line).Label(item.Title)
 	scope := s.currentRequirementListIdentity()
 	button.ContextMenu(func(menu *ui.Menu) {
@@ -778,19 +798,19 @@ func (s *app) requirementListItem(c *ui.Context, p palette, item application.Req
 	})
 	if button.Clicked() && index >= 0 {
 		nextKey := requirementKey(item)
-		if nextKey != s.selectedRequirementKey {
+		if nextKey != s.requirementUnit.state.selectedRequirementKey {
 			s.dismissMarkdownBitmapViewer()
 		}
-		s.selectedRequirement = index
-		s.selectedRequirementKey = nextKey
-		if state := s.ensureRequirementListJobs(); state.current != nil && state.current.sprintKey == s.requirementsSelectedSprintKey {
-			state.current.selectedKey = s.selectedRequirementKey
+		s.requirementUnit.state.selectedRequirement = index
+		s.requirementUnit.state.selectedRequirementKey = nextKey
+		if state := s.ensureRequirementListJobs(); state.current != nil && state.current.sprintKey == s.requirementUnit.state.requirementsSelectedSprintKey {
+			state.current.selectedKey = s.requirementUnit.state.selectedRequirementKey
 		}
 		s.prioritizeRequirementNamingPreparation(item)
 		s.prioritizeRequirementDocumentPreparation(item)
 		s.lastResult = ""
 		if focused {
-			s.requirementsFocusedDetail = true
+			s.requirementUnit.state.requirementsFocusedDetail = true
 		}
 	}
 }

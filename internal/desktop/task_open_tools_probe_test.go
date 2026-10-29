@@ -47,11 +47,15 @@ func taskOpenToolsProbeFixture(t *testing.T) (*app, *taskOpenToolsProbeBackend, 
 	b := &taskOpenToolsProbeBackend{calls: make(chan *taskOpenToolsProbeCall, 8)}
 	updates := make(chan func(), 8)
 	s := &app{
-		backend: b, configJSON: `{"defaultWorkspaceToolIds":["codex","cursor"]}`,
-		snapshot: application.Snapshot{Home: t.TempDir()}, taskContextUpdate: func(update func()) { updates <- update },
-		selected: 1, documentContent: "保留任务草稿", documentDirty: true,
+		taskUnit: taskController{state: taskState{taskContextUpdate: func(update func()) { updates <- update },
+			selected: 1}},
+		materialsUnit: materialsController{state: materialsState{documentContent: "保留任务草稿",
+			documentDirty: true}},
+		settingsUnit: settingsController{state: settingsState{configJSON: `{"defaultWorkspaceToolIds":["codex","cursor"]}`}},
+		backend:      b,
+		snapshot:     application.Snapshot{Home: t.TempDir()},
 	}
-	t.Cleanup(s.stopTaskOpenTools)
+	t.Cleanup(s.taskUnit.stopTaskOpenTools)
 	return s, b, updates
 }
 
@@ -95,7 +99,7 @@ func TestTaskOpenToolsProbeRecoversWithoutRetryStorm(t *testing.T) {
 			s, b, updates := taskOpenToolsProbeFixture(t)
 			now := time.Now()
 			s.observeTaskOpenToolsAt(now)
-			state := s.taskOpenTools
+			state := s.taskUnit.state.taskOpenTools
 			call := nextTaskOpenToolsProbe(t, b)
 			for range 100 {
 				s.observeTaskOpenToolsAt(now.Add(time.Hour))
@@ -160,7 +164,7 @@ func TestTaskOpenToolsProbeRecoversWithoutRetryStorm(t *testing.T) {
 					t.Fatal("successful recovery did not enable Cursor and cache its result")
 				}
 			}
-			if s.selected != 1 || !s.documentDirty || s.documentContent != "保留任务草稿" || len(b.calls) != 0 {
+			if s.taskUnit.state.selected != 1 || !s.materialsUnit.state.documentDirty || s.materialsUnit.state.documentContent != "保留任务草稿" || len(b.calls) != 0 {
 				t.Fatal("probing changed task/draft state or dispatched an extra action")
 			}
 		})
@@ -173,14 +177,14 @@ func TestTaskOpenToolsProbeRejectsQueuedResultsFromOldScope(t *testing.T) {
 			t.Run(change+"/"+callbackOrder, func(t *testing.T) {
 				s, b, updates := taskOpenToolsProbeFixture(t)
 				s.observeTaskOpenTools()
-				old := s.taskOpenTools
+				old := s.taskUnit.state.taskOpenTools
 				call := nextTaskOpenToolsProbe(t, b)
 				call.reply <- taskOpenToolsProbeReply{result: taskOpenToolsProbeOptions(true)}
 				oldUpdate := nextTaskOpenToolsUpdate(t, updates)
 				if change == "home" {
 					s.snapshot.Home += "-other"
 				} else {
-					s.configJSON = `{"defaultWorkspaceToolIds":["cursor"]}`
+					s.settingsUnit.state.configJSON = `{"defaultWorkspaceToolIds":["cursor"]}`
 				}
 				if callbackOrder == "before-observe" {
 					oldUpdate()
@@ -189,7 +193,7 @@ func TestTaskOpenToolsProbeRejectsQueuedResultsFromOldScope(t *testing.T) {
 					}
 				}
 				s.observeTaskOpenTools()
-				current := s.taskOpenTools
+				current := s.taskUnit.state.taskOpenTools
 				next := nextTaskOpenToolsProbe(t, b)
 				if current == old || current.loaded || !current.running {
 					t.Fatal("scope change did not replace the old discovery request")
@@ -203,7 +207,7 @@ func TestTaskOpenToolsProbeRejectsQueuedResultsFromOldScope(t *testing.T) {
 				next.reply <- taskOpenToolsProbeReply{result: taskOpenToolsProbeOptions(false)}
 				nextTaskOpenToolsUpdate(t, updates)()
 				if !current.loaded || s.taskOpenToolAvailable("cursor") || b.count.Load() != 2 ||
-					s.selected != 1 || !s.documentDirty || s.documentContent != "保留任务草稿" {
+					s.taskUnit.state.selected != 1 || !s.materialsUnit.state.documentDirty || s.materialsUnit.state.documentContent != "保留任务草稿" {
 					t.Fatal("replacement probe did not preserve its own result/task state")
 				}
 			})
@@ -215,14 +219,14 @@ func TestTaskOpenToolsProbeStopCancelsAndRejectsLateCompletion(t *testing.T) {
 	s, b, updates := taskOpenToolsProbeFixture(t)
 	s.observeTaskOpenTools()
 	call := nextTaskOpenToolsProbe(t, b)
-	s.stopTaskOpenTools()
+	s.taskUnit.stopTaskOpenTools()
 	select {
 	case <-call.ctx.Done():
 	case <-time.After(time.Second):
 		t.Fatal("stopping discovery did not cancel its worker")
 	}
 	nextTaskOpenToolsUpdate(t, updates)()
-	if s.taskOpenTools != nil || s.taskOpenToolAvailable("cursor") || b.count.Load() != 1 {
+	if s.taskUnit.state.taskOpenTools != nil || s.taskOpenToolAvailable("cursor") || b.count.Load() != 1 {
 		t.Fatal("stopped discovery accepted a late result")
 	}
 }
@@ -230,11 +234,11 @@ func TestTaskOpenToolsProbeStopCancelsAndRejectsLateCompletion(t *testing.T) {
 func TestTaskOpenToolsProbeSkipsDiscoveryWhenCursorDisabled(t *testing.T) {
 	s, b, _ := taskOpenToolsProbeFixture(t)
 	for _, config := range []string{`{"defaultWorkspaceToolIds":[]}`, `{"defaultWorkspaceToolIds":["codex"]}`} {
-		s.configJSON = config
+		s.settingsUnit.state.configJSON = config
 		for range 10 {
 			s.observeTaskOpenToolsAt(time.Now().Add(time.Hour))
 		}
-		if s.taskOpenTools.running || b.count.Load() != 0 || s.taskOpenToolAvailable("cursor") {
+		if s.taskUnit.state.taskOpenTools.running || b.count.Load() != 0 || s.taskOpenToolAvailable("cursor") {
 			t.Fatal("disabled Cursor caused discovery work")
 		}
 	}

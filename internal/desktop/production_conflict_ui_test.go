@@ -26,7 +26,7 @@ func TestProductionConflictDetailsAndUniformActions(t *testing.T) {
 					b.Intent.Merge.Conflicts = append(b.Intent.Merge.Conflicts, fmt.Sprintf("src/main/java/very/long/service/payment/compensation/%02d_退款冲突处理.java", i))
 				}
 				b.RetainedWorktrees = []string{"C:/synthetic/old workspaces/" + strings.Repeat("a", 96), "C:/synthetic/old workspaces/second"}
-				s.production.batches[0] = b
+				s.releaseUnit.state.production.batches[0] = b
 				s.win = &mygo.Window{}
 				tester := ui.NewTester(func(c *ui.Context) {
 					p := setTheme(c, dark)
@@ -120,7 +120,7 @@ func TestProductionConflictDisclosureIdentityAndRefresh(t *testing.T) {
 		t.Run(change, func(t *testing.T) {
 			s, v, b := productionFixture(t)
 			b = productionConflictBatch(b, "feature")
-			s.production.batches[0] = b
+			s.releaseUnit.state.production.batches[0] = b
 			b.RetainedWorktrees = []string{"C:/synthetic/retained"}
 			d := s.productionDisclosures(v, &b)
 			d.conflictOpen = true
@@ -150,7 +150,7 @@ func TestProductionConflictDisclosureIdentityAndRefresh(t *testing.T) {
 			case "home":
 				s.snapshot.Home += "-other"
 			case "config":
-				s.configJSON = `{"tagEnabled":false}`
+				s.settingsUnit.state.configJSON = `{"tagEnabled":false}`
 			case "completed":
 				b.Intent = nil
 			}
@@ -180,7 +180,7 @@ func TestProductionConflictBuildReasonAndFailureFeedback(t *testing.T) {
 		b.Tags = []production.Tag{{Name: "2.3.44.1", Status: domain.GenbuTagProbeStatus{Build: domain.GenbuBuilding}}}
 		v.ActiveStep = 4
 		v.Steps = map[int]productionStepView{4: {State: "failed", Message: "当前操作失败：需要人工核对"}}
-		s.production.batches[0] = b
+		s.releaseUnit.state.production.batches[0] = b
 		want := "请先解决或撤回当前合并。"
 		if phase == "ABORTING" {
 			want = "请先完成当前合并的撤回核对。"

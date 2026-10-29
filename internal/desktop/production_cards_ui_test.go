@@ -49,7 +49,7 @@ func TestProductionCardsGroupStatusesAndRightAlignedActions(t *testing.T) {
 				s, _, b := productionFixture(t)
 				b.Tags = []production.Tag{{Name: "2.3.44", PushedAt: "2026-10-23T00:00:00Z", Status: domain.GenbuTagProbeStatus{Build: domain.GenbuBuilding}}}
 				b.RetainedWorktrees = []string{"C:/synthetic/retained"}
-				s.production.batches[0] = b
+				s.releaseUnit.state.production.batches[0] = b
 				tester := productionCardsTester(s, width, dark)
 				var previous ui.Rect
 				for _, title := range append(append([]string{}, productionInitializationCardTitles...), "合并分支", "构建生产 Tag") {
@@ -94,7 +94,7 @@ func TestProductionCardsGroupStatusesAndRightAlignedActions(t *testing.T) {
 
 func TestProductionInitializationFooterFollowsOnlyCurrentOperation(t *testing.T) {
 	s, v, _ := productionFixture(t)
-	s.production.batches, v.BatchID = nil, ""
+	s.releaseUnit.state.production.batches, v.BatchID = nil, ""
 	v.Preview.ProductionInMain = false
 	tester := productionCardsTester(s, 960, false)
 	if _, ok := tester.Find("合并生产 Tag 到 master"); !ok {
@@ -129,9 +129,9 @@ func TestProductionUninitializedCardsRemainVisibleAndDisabled(t *testing.T) {
 					if state == "create-pending" {
 						b.InitialSHA, b.ReleaseSHA, b.Phase = "", "", "PAUSED"
 						b.Intent = &production.Intent{Kind: "create", Step: "release-create"}
-						s.production.batches[0] = b
+						s.releaseUnit.state.production.batches[0] = b
 					} else {
-						s.production.batches, v.BatchID = nil, ""
+						s.releaseUnit.state.production.batches, v.BatchID = nil, ""
 						v.Preview.ProductionInMain = false
 						v.Preview.ProductionSHA = strings.Repeat("f", 40)
 						v.Preview.Diff = " example.go | 1 +\n 1 file changed, 1 insertion(+)"
@@ -196,7 +196,7 @@ func TestProductionTagRecordsCopyAndHistoryRemainScoped(t *testing.T) {
 		{Name: "2.3.44", Commit: strings.Repeat("a", 40), Status: domain.GenbuTagProbeStatus{Build: domain.GenbuFailed, FailureReason: &failureReason}},
 		{Name: "2.3.44.1", Commit: strings.Repeat("a", 40), Status: domain.GenbuTagProbeStatus{Build: domain.GenbuBuilding}},
 	}
-	s.production.batches[0] = b
+	s.releaseUnit.state.production.batches[0] = b
 	tester := productionCardsTester(s, 960, false)
 	tester.SetPreferences(ui.Preferences{ReduceMotion: true, TextScale: 1})
 	if tester.HasText("可到平台重新编译此 Tag") || !tester.HasText(failureReason) {
@@ -225,7 +225,7 @@ func TestProductionTagRecordsCopyAndHistoryRemainScoped(t *testing.T) {
 	}
 	v.Busy = false
 	b.Tags = append(b.Tags, production.Tag{Name: "2.3.44.2", Commit: b.Tags[0].Commit})
-	s.production.batches[0] = b
+	s.releaseUnit.state.production.batches[0] = b
 	tester.Frame()
 	if !tester.HasText("示例服务：2.3.44.2") || !tester.HasText("构建状态待查询") {
 		t.Fatal("saved push was hidden until a platform build result")
@@ -235,7 +235,7 @@ func TestProductionTagRecordsCopyAndHistoryRemainScoped(t *testing.T) {
 		t.Fatal("new Tag did not append below existing records")
 	}
 	b.Ended = true
-	s.production.batches[0] = b
+	s.releaseUnit.state.production.batches[0] = b
 	tester.Frame()
 	if err := tester.Click("复制 Tag 记录 2.3.44.2"); err != nil || tester.Clipboard() != "示例服务：2.3.44.2" {
 		t.Fatalf("ended batch lost record copy: %v", err)
@@ -252,7 +252,7 @@ func TestProductionWorktreesMenuDialogAndStaleContext(t *testing.T) {
 			s, v, b := productionFixture(t)
 			path := "C:/synthetic/保留目录/" + strings.Repeat("long-path-", 24)
 			b.RetainedWorktrees = []string{path, "C:/synthetic/second"}
-			s.production.batches[0] = b
+			s.releaseUnit.state.production.batches[0] = b
 			tester := productionCardsTester(s, 960, true)
 			if err := tester.Click("更多生产发布操作"); err != nil {
 				t.Fatal(err)
@@ -260,7 +260,7 @@ func TestProductionWorktreesMenuDialogAndStaleContext(t *testing.T) {
 			if err := tester.Click("保留的工作区 · 2 个"); err != nil {
 				t.Fatal(err)
 			}
-			d := s.production.worktreesDialog
+			d := s.releaseUnit.state.production.worktreesDialog
 			if d == nil || !tester.HasText(path) || tester.HasText("删除工作区") {
 				t.Fatal("missing read-only scoped worktree dialog")
 			}
@@ -276,19 +276,19 @@ func TestProductionWorktreesMenuDialogAndStaleContext(t *testing.T) {
 			case "batch":
 				other := b
 				other.ID, other.Ended = "other", true
-				s.production.batches = append(s.production.batches, other)
+				s.releaseUnit.state.production.batches = append(s.releaseUnit.state.production.batches, other)
 				v.selectProductionBatch(other.ID)
 			case "service":
-				s.production.selected = "other"
+				s.releaseUnit.state.production.selected = "other"
 			case "home":
 				s.snapshot.Home += "-other"
 			case "config":
-				s.configJSON = `{"tagEnabled":false}`
+				s.settingsUnit.state.configJSON = `{"tagEnabled":false}`
 			case "removed":
-				s.production.batches = nil
+				s.releaseUnit.state.production.batches = nil
 			}
 			tester.Frame()
-			if s.production.worktreesDialog != nil {
+			if s.releaseUnit.state.production.worktreesDialog != nil {
 				t.Fatal("dialog remained after cancellation or identity change")
 			}
 		})
@@ -300,7 +300,7 @@ func TestProductionNavigationStaysInBottomGroup(t *testing.T) {
 		for _, enabled := range []bool{false, true} {
 			for _, compact := range []bool{false, true} {
 				s, _, _ := productionFixture(t)
-				s.configJSON = fmt.Sprintf(`{"tagEnabled":%t,"toolVisibility":{"json":%t,"dateTime":%t,"textDiff":%t,"killPort":false}}`, enabled, tools, tools, tools)
+				s.settingsUnit.state.configJSON = fmt.Sprintf(`{"tagEnabled":%t,"toolVisibility":{"json":%t,"dateTime":%t,"textDiff":%t,"killPort":false}}`, enabled, tools, tools, tools)
 				tester := ui.NewTester(func(c *ui.Context) {
 					ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() { s.sidebar(c, setTheme(c, false), compact) })
 				}, 240, 900)
@@ -341,7 +341,7 @@ func TestProductionRecordRefreshKeepsExactBatchAndNoWrite(t *testing.T) {
 				b.Ended, b.Phase = true, "ENDED"
 				cardTitle = "生产 Tag 记录"
 			}
-			s.production.batches[0] = b
+			s.releaseUnit.state.production.batches[0] = b
 			tester := productionCardsTester(s, 1440, false)
 			footer := productionAlignmentRect(t, tester, cardTitle+"操作栏")
 			refresh := productionAlignmentRect(t, tester, "刷新构建状态")
@@ -380,22 +380,22 @@ func TestProductionCardRefreshRejectsStaleContextAndHidesWithoutTags(t *testing.
 		t.Run(change, func(t *testing.T) {
 			s, v, b, backend, _ := productionRequestFixture(t)
 			b.Tags = []production.Tag{{Name: "2.3.44"}}
-			s.production.batches[0] = b
+			s.releaseUnit.state.production.batches[0] = b
 			switch change {
 			case "no-tags":
 				b.Tags = nil
 			case "service":
-				s.production.selected = "other"
+				s.releaseUnit.state.production.selected = "other"
 			case "batch":
 				v.BatchID = "other"
 			case "home":
 				s.snapshot.Home += "-other"
 			case "config":
-				s.configJSON = `{"tagEnabled":false}`
+				s.settingsUnit.state.configJSON = `{"tagEnabled":false}`
 			case "target":
-				s.production.batches[0].Target.Repository = "C:/synthetic/other"
+				s.releaseUnit.state.production.batches[0].Target.Repository = "C:/synthetic/other"
 			case "removed":
-				s.production.batches = nil
+				s.releaseUnit.state.production.batches = nil
 			}
 			tester := ui.NewTester(func(c *ui.Context) { s.renderProductionBuildRefresh(c, setTheme(c, false), v, b) }, 500, 120)
 			if change == "no-tags" {
@@ -454,7 +454,7 @@ func TestProductionInitializationRecoveryStaysInOwningCard(t *testing.T) {
 				b.Intent = &production.Intent{Kind: "create", Step: "release-create"}
 				v.Version = "release/9.9.9"
 			}
-			s.production.batches[0] = b
+			s.releaseUnit.state.production.batches[0] = b
 			tester := productionCardsTester(s, 960, false)
 			title := "生产 Tag → 主分支"
 			if step == 3 {

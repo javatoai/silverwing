@@ -35,11 +35,11 @@ type confirmationDialogState struct {
 }
 
 func (s *app) showConfirmationDialog(title, message, detail string, buttons []confirmationDialogButton, defaultIndex, cancelIndex int, result func(int)) bool {
-	if s == nil || s.settingsPickerBusy || s.win == nil || len(buttons) == 0 ||
+	if s == nil || s.settingsUnit.state.settingsPickerBusy || s.win == nil || len(buttons) == 0 ||
 		defaultIndex < 0 || defaultIndex >= len(buttons) || cancelIndex < 0 || cancelIndex >= len(buttons) {
 		return false
 	}
-	s.settingsPickerBusy = true
+	s.settingsUnit.state.settingsPickerBusy = true
 	s.confirmationDialog = &confirmationDialogState{
 		Title:        title,
 		Message:      message,
@@ -59,18 +59,18 @@ func (s *app) confirmationOwnerKey() string {
 	if s == nil {
 		return ""
 	}
-	t := s.currentTask()
+	t := s.taskUnit.currentTask()
 	return strings.Join([]string{
 		s.page,
 		strconv.Itoa(s.tab),
 		t.id,
 		t.path,
 		t.createdAt,
-		s.documentPath,
-		s.settingsPage,
-		s.settingsTab,
-		s.settingsGroupID,
-		fmt.Sprintf("%p", s.serviceEditor),
+		s.materialsUnit.state.documentPath,
+		s.settingsUnit.state.settingsPage,
+		s.settingsUnit.state.settingsTab,
+		s.settingsUnit.state.settingsGroupID,
+		fmt.Sprintf("%p", s.workspaceUnit.state.serviceEditor),
 	}, "\x00")
 }
 
@@ -177,7 +177,7 @@ func (s *app) finishConfirmationDialog(state *confirmationDialogState, index int
 	state.Open = false
 	result := state.Result
 	s.confirmationDialog = nil
-	s.settingsPickerBusy = false
+	s.settingsUnit.state.settingsPickerBusy = false
 	if result != nil && index >= 0 && index < len(state.Buttons) {
 		result(index)
 	}
@@ -192,5 +192,5 @@ func (s *app) cancelConfirmationDialog() {
 	state := s.confirmationDialog
 	state.Open = false
 	s.confirmationDialog = nil
-	s.settingsPickerBusy = false
+	s.settingsUnit.state.settingsPickerBusy = false
 }

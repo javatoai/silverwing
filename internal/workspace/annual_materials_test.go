@@ -121,8 +121,9 @@ func annualAgentFixture(t *testing.T) (*AgentDocumentService, domain.TaskManifes
 	config.RequirementMaterialsRoot = &scope.Base
 	sub := "文档"
 	config.RequirementMaterialsSubdirectory = &sub
-	service := NewAgentDocumentService(paths, nil)
-	if err := service.Manifests.Save(task, m); err != nil {
+	manifests := storage.NewManifestStore()
+	service := NewAgentDocumentService(paths, manifests)
+	if err := manifests.Save(task, m); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.EnsureTaskDocuments(task, m, config); err != nil {

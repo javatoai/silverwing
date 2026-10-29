@@ -42,7 +42,7 @@ func (s *app) settingsMaterialsGitSync(c *ui.Context, p palette) {
 	settings := config.MaterialsGitSettings()
 	s.loadMaterialsGitBranches(false)
 	value, pending := s.settingsConfigSwitchInput("materials-git-enabled", settings.Enabled)
-	state := s.materialsGit
+	state := s.materialsUnit.state.materialsGit
 	status, statusColor, visibleStatus := s.settingsMaterialsGitStatus(settings.Enabled, p)
 	statusDetails := status
 	if state != nil && s.materialsGitScopeCurrent(state.scope) {
@@ -126,7 +126,7 @@ func (s *app) settingsMaterialsGitStatus(enabled bool, p palette) (string, ui.Co
 	if enabled {
 		text = "等待下次同步"
 	}
-	state := s.materialsGit
+	state := s.materialsUnit.state.materialsGit
 	if state == nil || !s.materialsGitScopeCurrent(state.scope) {
 		return text, color, visible
 	}

@@ -10,11 +10,11 @@ import (
 )
 
 func (s *app) renderTagHistory(c *ui.Context, p palette) {
-	s.renderTaskTagHistory(c, p, s.currentTask())
+	s.renderTaskTagHistory(c, p, s.taskUnit.currentTask())
 }
 
 func (s *app) replicaTags(c *ui.Context, p palette) {
-	s.renderTaskTagHistory(c, p, s.currentTask())
+	s.renderTaskTagHistory(c, p, s.taskUnit.currentTask())
 }
 
 func (s *app) renderTagHistoryPageMenu(c *ui.Context, p palette, t task) {
@@ -57,7 +57,7 @@ func (s *app) renderTaskTagHistory(c *ui.Context, p palette, t task) {
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 				ui.Checkbox(c.Key("tag-history-select-visible"), &allVisibleSelected, "全选").Shrink(0).
 					Disabled(s.busy || len(groups) == 0).OnChange(func() {
-					if s.tagHistory != state {
+					if s.releaseUnit.state.tagHistory != state {
 						return
 					}
 					for _, group := range groups {
@@ -113,7 +113,7 @@ func (s *app) renderTagHistoryGroup(c *ui.Context, p palette, state *tagHistoryV
 				selected := state.Selected[group.Item.GroupID]
 				ui.Checkbox(c.Key("group-select"), &selected, "").Shrink(0).Disabled(s.busy).Label("选择批次 " + group.Item.GroupID).
 					Tooltip(fmt.Sprintf("选择整个批次（%d 条记录）", len(group.Item.Operations))).OnChange(func() {
-					if s.tagHistory == state {
+					if s.releaseUnit.state.tagHistory == state {
 						if selected {
 							state.Selected[group.Item.GroupID] = true
 						} else {
@@ -123,7 +123,7 @@ func (s *app) renderTagHistoryGroup(c *ui.Context, p palette, state *tagHistoryV
 				})
 			}
 			ui.Column(c).Grow(1).Basis(150).MinWidth(0).Gap(2).Children(func() {
-				title := firstNonEmpty(group.Item.FolderName, s.taskByID(state.TaskID).title, "Tag 构建")
+				title := firstNonEmpty(group.Item.FolderName, s.taskUnit.taskByID(state.TaskID).title, "Tag 构建")
 				label(c, title, 12, p.text).FontWeight(600).FillWidth().MinWidth(0).SingleLine().Tooltip(title).Label("Tag 批次名称 · " + group.Item.GroupID)
 				label(c, tagHistoryBuildTimeLabel(group.Item.CreatedAt), 10, p.muted).SingleLine().Tooltip("发起构建时间").Label("Tag 构建时间 · " + group.Item.GroupID)
 			})
@@ -248,7 +248,7 @@ func (s *app) renderTagHistoryRecord(c *ui.Context, p palette, state *tagHistory
 // Match the record itself; repository-level busy only guards duplicate actions.
 func (s *app) tagHistoryRecordCommandQueued(record application.TagRecord) bool {
 	view := s.currentTagJobView()
-	if view == nil || record.TaskID != s.currentTask().id {
+	if view == nil || record.TaskID != s.taskUnit.currentTask().id {
 		return false
 	}
 	for _, command := range view.commands {

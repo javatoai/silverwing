@@ -62,10 +62,10 @@ type documentSyntaxSpan struct {
 }
 
 func (s *app) ensureDocumentFindState() *documentFindState {
-	if s.documentFind == nil {
-		s.documentFind = &documentFindState{}
+	if s.materialsUnit.state.documentFind == nil {
+		s.materialsUnit.state.documentFind = &documentFindState{}
 	}
-	return s.documentFind
+	return s.materialsUnit.state.documentFind
 }
 
 func (f *documentFindState) set(identity, query string, blocks []documentFindBlock) {
@@ -299,7 +299,7 @@ func (f *documentFindState) spans(key, text string, baseOffset int, baseColor ui
 }
 
 func (s *app) openDocumentFind(c *ui.Context) {
-	if s.documentPath == "" {
+	if s.materialsUnit.state.documentPath == "" {
 		return
 	}
 	if view := s.currentMaterialsTextPreview(); view != nil {
@@ -307,7 +307,7 @@ func (s *app) openDocumentFind(c *ui.Context) {
 		return
 	}
 	f := s.ensureDocumentFindState()
-	s.documentFindOpen = true
+	s.materialsUnit.state.documentFindOpen = true
 	f.navigation++
 	f.focus.Focus(c)
 }
@@ -316,10 +316,10 @@ func (s *app) closeDocumentFind() {
 	if pdf := s.currentPDFDocumentFind(); pdf != nil {
 		s.changePDFDocumentFindQuery(pdf, "")
 	}
-	s.documentFindOpen = false
-	s.documentSearch = ""
-	if s.documentFind != nil {
-		s.documentFind.close()
+	s.materialsUnit.state.documentFindOpen = false
+	s.materialsUnit.state.documentSearch = ""
+	if s.materialsUnit.state.documentFind != nil {
+		s.materialsUnit.state.documentFind.close()
 	}
 }
 
@@ -332,7 +332,7 @@ func (s *app) moveDocumentFind(delta int) {
 		view.Run(command)
 		return
 	}
-	if !s.documentFindOpen {
+	if !s.materialsUnit.state.documentFindOpen {
 		return
 	}
 	if pdf := s.currentPDFDocumentFind(); pdf != nil {
@@ -344,8 +344,8 @@ func (s *app) moveDocumentFind(delta int) {
 }
 
 func (s *app) applyDocumentFindNavigation(scrollID string) {
-	f := s.documentFind
-	if !s.documentFindOpen || f == nil || f.lastReveal == f.navigation {
+	f := s.materialsUnit.state.documentFind
+	if !s.materialsUnit.state.documentFindOpen || f == nil || f.lastReveal == f.navigation {
 		return
 	}
 	if offset, ok := f.targetScroll(); ok {

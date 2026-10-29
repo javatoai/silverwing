@@ -16,7 +16,7 @@ func TestSettingsSystemScreensIsolatedLayout(test *testing.T) {
 				root := test.TempDir()
 				state := newApp(nil, Options{Page: "settings", Dark: dark, CapturePath: "isolated-settings-ui"})
 				state.loading = false
-				state.settingsTab, state.settingsPage = "系统", "about"
+				state.settingsUnit.state.settingsTab, state.settingsUnit.state.settingsPage = "系统", "about"
 				state.snapshot.Home = filepath.Join(root, "SilverWing 应用数据")
 				tester := ui.NewTester(func(context *ui.Context) {
 					palette := setTheme(context, dark)
@@ -41,7 +41,7 @@ func TestSettingsSystemScreensIsolatedLayout(test *testing.T) {
 				if err := tester.Click("更新"); err != nil {
 					test.Fatal(err)
 				}
-				if state.settingsPage != "updates" || !tester.HasText("获取新版") || tester.HasText("已是最新版本") {
+				if state.settingsUnit.state.settingsPage != "updates" || !tester.HasText("获取新版") || tester.HasText("已是最新版本") {
 					test.Fatal("update tab did not retain the manual update flow")
 				}
 				assertSettingsVisibleBounds(test, tester, "打开更新页面", size[0], size[1])
@@ -51,7 +51,7 @@ func TestSettingsSystemScreensIsolatedLayout(test *testing.T) {
 				if err := tester.Click("应用数据目录"); err != nil {
 					test.Fatal(err)
 				}
-				if state.settingsPage != "app-data" || !tester.HasText(state.snapshot.Home) {
+				if state.settingsUnit.state.settingsPage != "app-data" || !tester.HasText(state.snapshot.Home) {
 					test.Fatal("application data tab did not show the current Home")
 				}
 				assertSettingsVisibleBounds(test, tester, "打开目录", size[0], size[1])
@@ -67,7 +67,7 @@ func TestSettingsSystemScreensIsolatedLayout(test *testing.T) {
 				if err := tester.Click("关于"); err != nil {
 					test.Fatal(err)
 				}
-				if state.settingsPage != "about" || !tester.HasText("SilverWing") || tester.HasText(state.snapshot.Home) {
+				if state.settingsUnit.state.settingsPage != "about" || !tester.HasText("SilverWing") || tester.HasText(state.snapshot.Home) {
 					test.Fatal("about tab was not restored after viewing the application data page")
 				}
 				if len(tester.OpenedURLs()) != 0 {

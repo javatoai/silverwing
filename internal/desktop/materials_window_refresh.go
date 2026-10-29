@@ -4,7 +4,7 @@ package desktop
 // returning from another application. Pending refreshes are scoped to the
 // same task/root state and survive a currently running action.
 func (s *app) onMaterialsWindowFocused() {
-	if !s.materialsBrowserVisible() || !s.currentTask().materialsReady() {
+	if !s.materialsBrowserVisible() || !s.taskUnit.currentTask().materialsReady() {
 		return
 	}
 	state := s.ensureMaterialsFileManagementState()
@@ -13,7 +13,7 @@ func (s *app) onMaterialsWindowFocused() {
 		failed := live.failed
 		live.mu.Unlock()
 		if failed {
-			s.closeMaterialsLiveRefresh()
+			s.materialsUnit.closeMaterialsLiveRefresh()
 		}
 	}
 	state.windowRefreshPending = true
@@ -33,8 +33,8 @@ func (s *app) observeMaterialsWindowRefresh() {
 		return
 	}
 	state.windowRefreshPending = false
-	s.documentsLoaded, s.documentsRequested = false, false
-	if s.documentPath == "" {
+	s.materialsUnit.state.documentsLoaded, s.materialsUnit.state.documentsRequested = false, false
+	if s.materialsUnit.state.documentPath == "" {
 		s.loadDocuments()
 	} else {
 		// The ordinary read path retains local drafts and checks their original
@@ -44,17 +44,17 @@ func (s *app) observeMaterialsWindowRefresh() {
 }
 
 func (s *app) rereadSelectedMaterial(discardDraft bool) {
-	if s.documentPath == "" || s.materialsFileReadBlocked() || s.backend == nil {
+	if s.materialsUnit.state.documentPath == "" || s.materialsFileReadBlocked() || s.backend == nil {
 		return
 	}
 	if discardDraft {
-		if documentKindForPath(s.documentPath) == "markdown" {
+		if documentKindForPath(s.materialsUnit.state.documentPath) == "markdown" {
 			s.discardMarkdownAndReload()
 			return
 		}
-		s.documentDirty = false
-		delete(s.documentDrafts, s.documentPath)
-		delete(s.documentDirtyMap, s.documentPath)
+		s.materialsUnit.state.documentDirty = false
+		delete(s.materialsUnit.state.documentDrafts, s.materialsUnit.state.documentPath)
+		delete(s.materialsUnit.state.documentDirtyMap, s.materialsUnit.state.documentPath)
 	}
-	s.act("document.read", s.currentTask().id, "", "", s.documentPath, "", nil)
+	s.act("document.read", s.taskUnit.currentTask().id, "", "", s.materialsUnit.state.documentPath, "", nil)
 }

@@ -41,7 +41,7 @@ func (s *app) openMarkdownBitmapViewer(owner *markdownEditorState, bitmap *ui.Bi
 	}
 	viewer := &markdownBitmapViewerState{
 		owner: owner, document: owner.doc, source: owner.doc.Source(), page: s.page,
-		settingsPage: s.settingsPage, tab: s.tab,
+		settingsPage: s.settingsUnit.state.settingsPage, tab: s.tab,
 		media: &nativeMediaState{
 			kind: "image", imageExpanded: true, imageExpandedBitmap: bitmap,
 			imageInfo: media.ImageInfo{Width: width, Height: height}, imageZoom: 1,
@@ -51,30 +51,30 @@ func (s *app) openMarkdownBitmapViewer(owner *markdownEditorState, bitmap *ui.Bi
 		return
 	}
 	s.dismissMarkdownBitmapViewer()
-	s.markdownBitmapViewer = viewer
+	s.materialsUnit.state.markdownBitmapViewer = viewer
 	owner.closeBitmapViewer = func() { s.closeMarkdownBitmapViewerForOwner(owner) }
 }
 
 func (s *app) renderMarkdownBitmapViewer(c *ui.Context, p palette) {
-	if viewer := s.markdownBitmapViewer; viewer != nil && viewer.composer != nil {
+	if viewer := s.materialsUnit.state.markdownBitmapViewer; viewer != nil && viewer.composer != nil {
 		return // Its owner dialog is drawn later; render this viewer above it.
 	}
 	s.renderMarkdownBitmapViewerLayer(c, p)
 }
 
 func (s *app) renderCommentDraftBitmapViewer(c *ui.Context, p palette) {
-	if viewer := s.markdownBitmapViewer; viewer != nil && viewer.composer != nil {
+	if viewer := s.materialsUnit.state.markdownBitmapViewer; viewer != nil && viewer.composer != nil {
 		s.renderMarkdownBitmapViewerLayer(c, p)
 	}
 }
 
 func (s *app) renderMarkdownBitmapViewerLayer(c *ui.Context, p palette) {
-	viewer := s.markdownBitmapViewer
+	viewer := s.materialsUnit.state.markdownBitmapViewer
 	if viewer == nil {
 		return
 	}
 	if viewer.owner == nil || viewer.owner.closed || viewer.owner.doc == nil || viewer.owner.doc.Source() != viewer.source ||
-		viewer.owner.doc != viewer.document || s.page != viewer.page || s.settingsPage != viewer.settingsPage || s.tab != viewer.tab ||
+		viewer.owner.doc != viewer.document || s.page != viewer.page || s.settingsUnit.state.settingsPage != viewer.settingsPage || s.tab != viewer.tab ||
 		viewer.owner.commentReading && !s.markdownBitmapViewerCommentContextCurrent(viewer) {
 		s.dismissMarkdownBitmapViewer()
 		return
@@ -87,14 +87,14 @@ func (s *app) renderMarkdownBitmapViewerLayer(c *ui.Context, p palette) {
 }
 
 func (s *app) dismissMarkdownBitmapViewer() {
-	if s == nil || s.markdownBitmapViewer == nil {
+	if s == nil || s.materialsUnit.state.markdownBitmapViewer == nil {
 		return
 	}
-	viewer := s.markdownBitmapViewer
+	viewer := s.materialsUnit.state.markdownBitmapViewer
 	if viewer.composer != nil && s.commentComposerImageCurrent(viewer) {
 		viewer.composer.restoreImageFocus = true
 	}
-	s.markdownBitmapViewer = nil
+	s.materialsUnit.state.markdownBitmapViewer = nil
 	if viewer.owner != nil {
 		viewer.owner.closeBitmapViewer = nil
 	}
@@ -102,7 +102,7 @@ func (s *app) dismissMarkdownBitmapViewer() {
 }
 
 func (s *app) closeMarkdownBitmapViewerForOwner(owner *markdownEditorState) {
-	if s != nil && s.markdownBitmapViewer != nil && s.markdownBitmapViewer.owner == owner {
+	if s != nil && s.materialsUnit.state.markdownBitmapViewer != nil && s.materialsUnit.state.markdownBitmapViewer.owner == owner {
 		s.dismissMarkdownBitmapViewer()
 	}
 }

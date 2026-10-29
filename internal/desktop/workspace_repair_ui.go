@@ -41,12 +41,12 @@ func (s *app) beginWorkspaceRepair(t task, item application.Workspace) {
 		WorkspaceLabel: firstNonEmpty(item.Record.ModuleName, item.Record.ServiceName),
 		Open:           true,
 	}
-	s.workspaceRepair = state
+	s.workspaceUnit.state.workspaceRepair = state
 	s.requestWorkspaceRepairPreview(state)
 }
 
 func (s *app) requestWorkspaceRepairPreview(state *workspaceRepairState) {
-	if state == nil || s.workspaceRepair != state || state.Loading || s.busy || !s.workspaceRepairIdentityCurrent(state) {
+	if state == nil || s.workspaceUnit.state.workspaceRepair != state || state.Loading || s.busy || !s.workspaceRepairIdentityCurrent(state) {
 		return
 	}
 	state.Preview = nil
@@ -60,7 +60,7 @@ func (s *app) requestWorkspaceRepairPreview(state *workspaceRepairState) {
 }
 
 func (s *app) startWorkspaceRepairRequest(state *workspaceRepairState, kind string, payload map[string]any) {
-	if state == nil || s.workspaceRepair != state || !state.Open || s.busy || !s.workspaceRepairIdentityCurrent(state) {
+	if state == nil || s.workspaceUnit.state.workspaceRepair != state || !state.Open || s.busy || !s.workspaceRepairIdentityCurrent(state) {
 		return
 	}
 	if s.backend == nil {
@@ -85,12 +85,12 @@ func (s *app) startWorkspaceRepairRequest(state *workspaceRepairState, kind stri
 }
 
 func (s *app) applyWorkspaceRepairResult(action application.Action, result application.ActionResult) {
-	state := s.workspaceRepair
+	state := s.workspaceUnit.state.workspaceRepair
 	if state == nil || !state.matches(action) {
 		return
 	}
 	if !state.Open || !s.workspaceRepairIdentityCurrent(state) {
-		s.workspaceRepair = nil
+		s.workspaceUnit.state.workspaceRepair = nil
 		return
 	}
 	state.Loading = false
@@ -130,12 +130,12 @@ func (s *app) applyWorkspaceRepairResult(action application.Action, result appli
 }
 
 func (s *app) applyWorkspaceRepairFailure(action application.Action, err error) {
-	state := s.workspaceRepair
+	state := s.workspaceUnit.state.workspaceRepair
 	if state == nil || !state.matches(action) {
 		return
 	}
 	if !state.Open || !s.workspaceRepairIdentityCurrent(state) {
-		s.workspaceRepair = nil
+		s.workspaceUnit.state.workspaceRepair = nil
 		return
 	}
 	state.Loading = false
@@ -155,7 +155,7 @@ func (s *app) workspaceRepairIdentityCurrent(state *workspaceRepairState) bool {
 	if state == nil {
 		return false
 	}
-	current := s.currentTask()
+	current := s.taskUnit.currentTask()
 	if current.id != state.TaskID || current.path != state.TaskPath || current.createdAt != state.TaskCreatedAt {
 		return false
 	}
@@ -171,7 +171,7 @@ func (s *app) workspaceRepairIdentityCurrent(state *workspaceRepairState) bool {
 }
 
 func (s *app) confirmWorkspaceRepair() {
-	state := s.workspaceRepair
+	state := s.workspaceUnit.state.workspaceRepair
 	if state == nil || state.Preview == nil || !state.Preview.CanRepair || state.Loading || s.busy || state.Error != "" ||
 		(state.Preview.RequiresRemoteReuseConfirmation && !state.ReuseRemoteBranch) ||
 		(state.Preview.RequiresSharedBranchConfirmation && !state.ShareCheckedOutBranch) ||
@@ -189,16 +189,16 @@ func (s *app) confirmWorkspaceRepair() {
 }
 
 func (s *app) dismissWorkspaceRepair() {
-	s.workspaceRepair = nil
+	s.workspaceUnit.state.workspaceRepair = nil
 }
 
 func (s *app) renderWorkspaceRepairDialog(c *ui.Context, p palette) {
-	state := s.workspaceRepair
+	state := s.workspaceUnit.state.workspaceRepair
 	if state == nil {
 		return
 	}
 	if !state.Open || !s.workspaceRepairIdentityCurrent(state) {
-		s.workspaceRepair = nil
+		s.workspaceUnit.state.workspaceRepair = nil
 		return
 	}
 	ui.DialogBase(c.Key("workspace-repair-dialog"), &state.Open, func(backdrop, panel ui.Element) {

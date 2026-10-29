@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/storage"
 )
 
 func TestAnnualGitMergeHistoryRejectsTransientForbiddenTrees(t *testing.T) {
@@ -415,7 +416,7 @@ func TestAnnualAgentRequiredContextFailureStillRollsBackModuleRemoval(t *testing
 	documents, manifest, config, task, _ := annualAgentFixture(t)
 	taskRoot := filepath.Dir(task)
 	config.TaskRoot = &taskRoot
-	service := NewTaskApplicationService(documents.Manifests, NewGitClient(nil, "git-must-not-run"), documents.Paths)
+	service := NewTaskApplicationService(storage.NewManifestStore(), NewGitClient(nil, "git-must-not-run"), documents.Paths)
 	missing := filepath.Join(task, "missing-clone")
 	manifest.Services = []domain.ServiceWorkspace{{RepositoryID: "repo", GroupServiceID: "service", ModuleID: "module", WorktreePath: missing, RepositoryPath: missing, Branch: "feature/task", Strategy: domain.WorkspaceIndependentClone, Health: domain.WorkspaceReady, ModuleSource: domain.TaskModuleConfigured, DevelopmentTool: domain.DevelopmentToolIntelliJIdea, TagMode: domain.TagBuildMergeToTargetBranch}}
 	if err := service.Manifests.Save(task, manifest); err != nil {

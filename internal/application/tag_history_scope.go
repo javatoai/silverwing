@@ -30,34 +30,21 @@ func (a *App) tagHistoryActionScope(config domain.AppConfig, action Action) ([]d
 	if expected, ok := action.Payload["tagHistoryTaskRoot"].(string); ok && expected != value(config.TaskRoot) {
 		return nil, nil, errors.New("Tag历史任务根目录已变化，请刷新后重试")
 	}
-	tasks := []domain.TaskManifest{}
-	scope := []domain.TaskManifest{}
-	if config.TaskRoot != nil && strings.TrimSpace(*config.TaskRoot) != "" {
-		scan, err := a.Manifests.Scan(*config.TaskRoot)
-		if err != nil {
-			return nil, nil, err
-		}
-		for _, entry := range scan.Current {
-			if filepath.Base(entry.Path) != entry.Manifest.TaskDirectoryName {
-				continue
-			}
-			tasks = append(tasks, entry.Manifest)
-			if action.TaskID != entry.Manifest.TaskDirectoryName {
-				continue
-			}
-			if expected, ok := action.Payload["tagHistoryTaskPath"].(string); ok && !sameTagHistoryTaskPath(expected, entry.Path) {
-				return nil, nil, errors.New("Tag历史所属任务目录已变化，请重新确认")
-			}
-			if expected, ok := action.Payload["tagHistoryTaskCreatedAt"].(string); ok && expected != entry.Manifest.CreatedAt {
-				return nil, nil, errors.New("Tag历史所属任务已重新创建，请重新确认")
-			}
-			scope = append(scope, entry.Manifest)
-		}
-	}
-	if len(scope) != 1 {
+	if config.TaskRoot == nil || strings.TrimSpace(*config.TaskRoot) == "" {
 		return nil, nil, fmt.Errorf("找不到唯一研发任务：%s", action.TaskID)
 	}
-	return tasks, scope, nil
+	entry, err := a.Manifests.LoadTask(*config.TaskRoot, action.TaskID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if expected, ok := action.Payload["tagHistoryTaskPath"].(string); ok && !sameTagHistoryTaskPath(expected, entry.Path) {
+		return nil, nil, errors.New("Tag历史所属任务目录已变化，请重新确认")
+	}
+	if expected, ok := action.Payload["tagHistoryTaskCreatedAt"].(string); ok && expected != entry.Manifest.CreatedAt {
+		return nil, nil, errors.New("Tag历史所属任务已重新创建，请重新确认")
+	}
+	scope := []domain.TaskManifest{entry.Manifest}
+	return scope, scope, nil
 }
 
 func sameTagHistoryTaskPath(left, right string) bool {

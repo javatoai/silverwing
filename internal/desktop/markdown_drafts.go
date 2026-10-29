@@ -15,10 +15,10 @@ func markdownDraftPayload(ref documentSaveRef) map[string]any {
 }
 
 func (s *app) writeMarkdownDraft(ctx context.Context, key, content string, discard bool) error {
-	if ref, ok := s.documentSaveRef(key); ok && ref.kind == "material-text" {
+	if ref, ok := s.materialsUnit.documentSaveRef(key); ok && ref.kind == "material-text" {
 		return s.writeMaterialTextDraft(ctx, key, ref, content, discard)
 	}
-	ref, ok := s.documentSaveRef(key)
+	ref, ok := s.materialsUnit.documentSaveRef(key)
 	if !ok {
 		return errors.New("找不到 Markdown 草稿的任务身份，请重新打开文件")
 	}

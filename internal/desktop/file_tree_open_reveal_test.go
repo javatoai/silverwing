@@ -8,9 +8,14 @@ import (
 
 func TestMaterialsFileTreeOpeningRevealsOnlyNewDocument(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "materials")
-	s := &app{page: "tasks", tab: 1, documentsLoaded: true,
-		tasks:          []task{{id: "reveal", path: filepath.Dir(root), materialsPath: root, materialsStatus: "READY"}},
-		documentDrafts: map[string]string{}, documentDirtyMap: map[string]bool{}}
+	s := &app{
+		taskUnit: taskController{state: taskState{tasks: []task{{id: "reveal", path: filepath.Dir(root), materialsPath: root, materialsStatus: "READY"}}}},
+		materialsUnit: materialsController{state: materialsState{documentsLoaded: true,
+			documentDrafts:   map[string]string{},
+			documentDirtyMap: map[string]bool{}}},
+		page: "tasks",
+		tab:  1,
+	}
 	s.readingSession = newMemoryReadingSession(filepath.Join(filepath.Dir(root), "home"))
 	path := filepath.Join(root, "src", "nested", "query.sql")
 	s.selectDocument(path)

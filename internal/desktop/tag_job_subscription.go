@@ -12,19 +12,19 @@ func (s *app) observeTagJobs() {
 	if s.win != nil {
 		win = s.win
 	}
-	if win == nil && s.tagJobs != nil {
-		win = s.tagJobs.window
+	if win == nil && s.releaseUnit.state.tagJobs != nil {
+		win = s.releaseUnit.state.tagJobs.window
 	}
 	s.observeTagJobsWindow(win)
 }
 
 func (s *app) observeTagJobsWindow(win tagGenbuAutoProbeWindow) {
 	backend, ok := s.backend.(application.TagJobBackend)
-	visible := (s.page == "tasks" || s.page == "archive") && s.tab == taskTagTab && s.currentTask().id != ""
+	visible := (s.page == "tasks" || s.page == "archive") && s.tab == taskTagTab && s.taskUnit.currentTask().id != ""
 	state := s.ensureTagDesktopJobs()
 	scope := s.tagJobScope()
 	if !ok || !visible || s.loading || win == nil || win.IsDestroyed() {
-		s.stopTagJobSubscription()
+		s.releaseUnit.stopTagJobSubscription()
 		return
 	}
 	view := s.tagJobView(scope)
@@ -32,7 +32,7 @@ func (s *app) observeTagJobsWindow(win tagGenbuAutoProbeWindow) {
 	if current := state.current; current != nil && current.scope == scope && (current.finished || current.ctx.Err() == nil) {
 		return
 	}
-	s.stopTagJobSubscription()
+	s.releaseUnit.stopTagJobSubscription()
 	if view.commandRunning && view.snapshot.ID == "" {
 		return
 	}
@@ -70,7 +70,7 @@ func (s *app) updateTagJobSubscription(sub *tagDesktopJobSubscription, win tagGe
 	updated := make(chan struct{})
 	win.Update(func() {
 		defer close(updated)
-		if sub.ctx.Err() != nil || win.IsDestroyed() || s.tagJobs.current != sub || s.tagJobScope() != sub.scope ||
+		if sub.ctx.Err() != nil || win.IsDestroyed() || s.releaseUnit.state.tagJobs.current != sub || s.tagJobScope() != sub.scope ||
 			(s.page != "tasks" && s.page != "archive") || s.tab != taskTagTab {
 			return
 		}
@@ -82,16 +82,16 @@ func (s *app) updateTagJobSubscription(sub *tagDesktopJobSubscription, win tagGe
 	}
 }
 
-func (s *app) stopTagJobSubscription() {
-	if s.tagJobs != nil && s.tagJobs.current != nil {
-		s.tagJobs.current.cancel()
-		s.tagJobs.current = nil
+func (s *releaseController) stopTagJobSubscription() {
+	if s.state.tagJobs != nil && s.state.tagJobs.current != nil {
+		s.state.tagJobs.current.cancel()
+		s.state.tagJobs.current = nil
 	}
 }
 
 func (s *app) closeTagDesktopJobs(ctx context.Context) error {
-	if s.tagJobs != nil {
-		state := s.tagJobs
+	if s.releaseUnit.state.tagJobs != nil {
+		state := s.releaseUnit.state.tagJobs
 		state.mu.Lock()
 		state.closed = true
 		workers := make([]*tagDesktopJobWorker, 0, len(state.workers))
@@ -104,7 +104,7 @@ func (s *app) closeTagDesktopJobs(ctx context.Context) error {
 			view.commands = nil
 			view.commandRunning = false
 		}
-		s.stopTagJobSubscription()
+		s.releaseUnit.stopTagJobSubscription()
 		if backend, ok := s.backend.(application.TagJobCloser); ok {
 			if err := backend.CloseTagJobs(ctx); err != nil {
 				return err

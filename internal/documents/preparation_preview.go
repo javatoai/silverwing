@@ -2,6 +2,7 @@ package documents
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -75,18 +76,16 @@ func (s *PreparationService) Preview(ctx context.Context, config domain.AppConfi
 		return domain.RequirementMaterialsDirectory{Status: domain.MaterialsReady, WriteRoot: &writeRoot}, nil
 	}
 
-	project, err := s.resolveRequirementProject(ctx, config, id, link)
+	_, err = s.resolveRequirement(ctx, config, id, link)
 	if cancelErr := ctx.Err(); cancelErr != nil {
 		return domain.RequirementMaterialsDirectory{}, cancelErr
 	}
 	if err != nil {
-		return fail("任务资料目录预检失败：" + err.Error())
-	}
-	if project == nil {
-		if len(config.MeegleProjects) == 0 {
-			return fail("未配置 Meegle 项目")
+		var unmatched *RequirementUnmatchedError
+		if errors.As(err, &unmatched) {
+			return fail(err.Error())
 		}
-		return fail("未能唯一匹配需求所属的 Meegle 项目")
+		return fail("任务资料目录预检失败：" + err.Error())
 	}
 	if err := ctx.Err(); err != nil {
 		return domain.RequirementMaterialsDirectory{}, err

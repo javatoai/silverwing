@@ -19,7 +19,7 @@ const taskCreationLeftError = "AI 命名失败，可继续手工填写：示例�
 func taskCreationLeftFixture(t *testing.T, width int, dark bool) (*app, *ui.Tester) {
 	t.Helper()
 	s, tester := taskCreationCompactFixture(t, width, dark, 1)
-	form := s.taskCreation
+	form := s.taskUnit.state.taskCreation
 	s.selectTaskCreationRequirementCandidate(taskCreationRequirementCandidate{
 		URL: "https://project.feishu.cn/synthetic/userstory/detail/1000000091", Title: taskCreationLeftTitle,
 	})
@@ -43,7 +43,7 @@ func TestTaskCreationLeftLayout(t *testing.T) {
 		for _, dark := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%d-dark-%t", width, dark), func(t *testing.T) {
 				s, tester := taskCreationLeftFixture(t, width, dark)
-				form := s.taskCreation
+				form := s.taskUnit.state.taskCreation
 				form.aiError = taskCreationLeftError
 				tester.Frame()
 				left, _ := tester.Find("任务基本信息")
@@ -85,7 +85,7 @@ func TestTaskCreationLeftLayout(t *testing.T) {
 
 func TestTaskCreationLeftTitleAndTools(t *testing.T) {
 	s, tester := taskCreationLeftFixture(t, 960, false)
-	form := s.taskCreation
+	form := s.taskUnit.state.taskCreation
 	link := form.draft.RequirementLink
 	if err := tester.Click("Codex"); err != nil {
 		t.Fatal(err)
@@ -141,7 +141,7 @@ func TestTaskCreationLeftTitleAndTools(t *testing.T) {
 
 func TestTaskCreationLeftGenerateInteraction(t *testing.T) {
 	s, tester := taskCreationLeftFixture(t, 960, false)
-	form := s.taskCreation
+	form := s.taskUnit.state.taskCreation
 	compactCreationEdit(t, tester, "任务名称", "手工合成名称")
 	compactCreationEdit(t, tester, "任务分支输入", "feature/manual_fixture")
 	generate, _ := tester.Find("生成任务名和分支")

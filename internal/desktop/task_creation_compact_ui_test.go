@@ -29,11 +29,17 @@ func taskCreationCompactFixture(t *testing.T, width int, dark bool, count int) (
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &app{page: "tasks", dialogOpen: true, dark: dark, configJSON: string(raw), inputs: map[string]*string{}}
+	s := &app{
+		settingsUnit: settingsController{state: settingsState{configJSON: string(raw)}},
+		page:         "tasks",
+		dialogOpen:   true,
+		dark:         dark,
+		inputs:       map[string]*string{},
+	}
 	s.snapshot.Home, s.snapshot.ConfigJSON = filepath.Join(root, "home"), string(raw)
 	s.form.mode = "task-create"
 	s.initTaskCreation("基于需求创建任务", "原始名称", "https://project.feishu.cn/obt/userstory/detail/1000000004")
-	form := s.taskCreation
+	form := s.taskUnit.state.taskCreation
 	if form.configError != "" {
 		t.Fatal(form.configError)
 	}
@@ -117,9 +123,9 @@ func TestTaskCreationCompactLayout(t *testing.T) {
 				if oldPicker || tester.HasText("搜索需求标题或链接") || tester.HasText("本次任务的模块设置") || tester.HasText("条需求候选") {
 					t.Fatal("duplicate requirement input or repeated module cards remain")
 				}
-				for _, moduleID := range s.taskCreation.moduleOrder["service"] {
-					if !s.taskCreation.moduleExpanded["service"][moduleID] {
-						t.Fatalf("configured modules should default to expanded in the vertical service flow: module=%q expanded=%v", moduleID, s.taskCreation.moduleExpanded["service"])
+				for _, moduleID := range s.taskUnit.state.taskCreation.moduleOrder["service"] {
+					if !s.taskUnit.state.taskCreation.moduleExpanded["service"][moduleID] {
+						t.Fatalf("configured modules should default to expanded in the vertical service flow: module=%q expanded=%v", moduleID, s.taskUnit.state.taskCreation.moduleExpanded["service"])
 					}
 				}
 				first, firstFound := tester.Find("模块名称 · service:api")
@@ -137,7 +143,7 @@ func TestTaskCreationCompactLayout(t *testing.T) {
 
 func TestTaskCreationCompactRequirementInput(t *testing.T) {
 	s, tester := taskCreationCompactFixture(t, 1100, false, 1)
-	form := s.taskCreation
+	form := s.taskUnit.state.taskCreation
 	compactCreationEdit(t, tester, "任务名称", "手工任务名")
 	compactCreationEdit(t, tester, "任务分支输入", "feature/manual")
 	compactCreationEdit(t, tester, "需求链接或搜索", "支付")
@@ -189,7 +195,7 @@ func TestTaskCreationCompactRequirementInput(t *testing.T) {
 
 func TestTaskCreationCompactModuleDraftAndPayload(t *testing.T) {
 	s, tester := taskCreationCompactFixture(t, 1100, false, 2)
-	form := s.taskCreation
+	form := s.taskUnit.state.taskCreation
 	serviceViewport, _ := tester.Find("任务服务列表")
 	compactCreationEdit(t, tester, "模块名称 · service:api", "API-edited")
 	compactCreationEdit(t, tester, "模块目标分支 · service:api", "feature/custom-api")
@@ -235,7 +241,7 @@ func TestTaskCreationCompactModuleDraftAndPayload(t *testing.T) {
 
 func TestTaskCreationTemporaryModuleDeletionKeepsOneModule(t *testing.T) {
 	s, tester := taskCreationCompactFixture(t, 960, false, 1)
-	form := s.taskCreation
+	form := s.taskUnit.state.taskCreation
 	serviceViewport, _ := tester.Find("任务服务列表")
 	if got := len(form.moduleOrder["service"]); got != 1 {
 		t.Fatalf("fixture must start with one configured module, got %d", got)
@@ -256,7 +262,7 @@ func TestTaskCreationTemporaryModuleDeletionKeepsOneModule(t *testing.T) {
 
 func TestTaskCreationCompactRequirementRetiresLateCandidates(t *testing.T) {
 	s, _ := taskCreationCompactFixture(t, 1100, false, 1)
-	form, state := s.taskCreation, s.taskCreation.requirements
+	form, state := s.taskUnit.state.taskCreation, s.taskUnit.state.taskCreation.requirements
 	for _, scope := range []string{"home", "project", "account"} {
 		ctx, cancel := context.WithCancel(context.Background())
 		request := &taskCreationRequirementRequest{form: form, token: form.token, ctx: ctx, cancel: cancel, home: s.snapshot.Home, groupID: form.groupID, config: taskCreationRequirementsConfigFingerprint(s.snapshot.ConfigJSON, form.config), generation: state.candidateGeneration}

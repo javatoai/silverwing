@@ -16,6 +16,7 @@ import (
 	"silverwing-go/internal/integrations"
 	"silverwing-go/internal/platform"
 	"silverwing-go/internal/process"
+	"silverwing-go/internal/productprofile"
 	"silverwing-go/internal/storage"
 	"silverwing-go/internal/workspace"
 )
@@ -50,7 +51,7 @@ func New(home string) (*App, error) {
 		return nil, fmt.Errorf("无法获取用户家目录：%w", err)
 	}
 	paths := storage.NewPaths(absolute)
-	paths.Tasks = filepath.Join(userHome, "tasks")
+	paths.Tasks = productprofile.DefaultTaskRoot(userHome, absolute)
 	app := &App{Paths: paths, Config: storage.NewConfigStore(paths), Manifests: storage.NewManifestStore(), Runner: process.NewRunner(), Documents: documents.NewService(paths.Cache), diffSessions: workspace.NewWorkspaceGitDiffSessionManager()}
 	app.Integrations = integrations.NewService(paths, app.Config, app.Runner)
 	app.Platform = platform.NewService(paths, app.Config, app.Runner)
@@ -70,6 +71,17 @@ func New(home string) (*App, error) {
 }
 
 func (a *App) Snapshot(ctx context.Context) (Snapshot, error) {
+	return a.SnapshotFor(ctx, SnapshotRequest{Tasks: true, TagHistory: true, Skills: true})
+}
+
+// SnapshotRequest makes each navigation read explicit. A partial snapshot is
+// a projection only; callers merge its selected collections and retain the
+// others. It never authorizes an operation or caches external state.
+type SnapshotRequest struct {
+	Tasks, TagHistory, Skills bool
+}
+
+func (a *App) SnapshotFor(ctx context.Context, request SnapshotRequest) (Snapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return Snapshot{}, err
 	}
@@ -101,14 +113,16 @@ func (a *App) Snapshot(ctx context.Context) (Snapshot, error) {
 	if a.startupTaskRootError != nil && config.TaskRoot == nil {
 		appendSnapshotError(&s, a.startupTaskRootError.Error())
 	}
-	if data, skillErr := a.Platform.Execute(ctx, "skills.catalog", nil); skillErr == nil {
-		if rows, e := localSkillRows(data); e == nil {
-			s.Skills = rows
+	if request.Skills {
+		if data, skillErr := a.Platform.Execute(ctx, "skills.catalog", nil); skillErr == nil {
+			if rows, e := localSkillRows(data); e == nil {
+				s.Skills = rows
+			} else {
+				appendSnapshotError(&s, e.Error())
+			}
 		} else {
-			appendSnapshotError(&s, e.Error())
+			appendSnapshotError(&s, skillErr.Error())
 		}
-	} else {
-		appendSnapshotError(&s, skillErr.Error())
 	}
 	if err := ctx.Err(); err != nil {
 		return Snapshot{}, err
@@ -133,7 +147,7 @@ func (a *App) Snapshot(ctx context.Context) (Snapshot, error) {
 		}
 		s.Groups = append(s.Groups, g)
 	}
-	if config.TaskRoot != nil {
+	if config.TaskRoot != nil && (request.Tasks || request.TagHistory) {
 		if err := ctx.Err(); err != nil {
 			return Snapshot{}, err
 		}
@@ -168,7 +182,8 @@ func (a *App) Snapshot(ctx context.Context) (Snapshot, error) {
 			}
 			m := entry.Manifest
 			t := Task{ID: filepath.Base(entry.Path), Title: m.FolderName, Project: groupNames[m.GroupID], Status: "进行中", Updated: m.UpdatedAt, CreatedAt: m.CreatedAt, Branch: m.FeatureBranch, Path: entry.Path, MaterialsPath: value(m.RequirementMaterials.WriteRoot), RequirementURL: m.RequirementLink, GroupID: m.GroupID, Archived: m.LifecycleStatus == domain.TaskArchived, Services: []string{}, Workspaces: []Workspace{}}
-			t.MaterialsPath = visibleMaterialsRoot(t.MaterialsPath)
+			t.Materials = taskMaterialsPermissions(m, config)
+			t.MaterialsPath = t.Materials.ReadRoot
 			t.RequirementID = value(m.RequirementID)
 			t.MaterialsStatus = string(m.RequirementMaterials.Status)
 			t.MaterialsFailureReason = value(m.RequirementMaterials.FailureReason)
@@ -185,15 +200,19 @@ func (a *App) Snapshot(ctx context.Context) (Snapshot, error) {
 				t.Services = append(t.Services, w.ServiceName)
 				t.Workspaces = append(t.Workspaces, Workspace{ID: w.GroupServiceID + ":" + w.ModuleID, ServiceID: w.GroupServiceID, ModuleID: w.ModuleID, Name: w.ServiceName, Path: w.WorktreePath, Branch: w.Branch, PushRemote: w.PushRemote, BaseRef: value(w.BaseRef), Strategy: string(w.Strategy), State: string(w.Health), Warnings: append([]string{}, w.Warnings...), Record: w})
 			}
-			s.Tasks = append(s.Tasks, t)
-			reports, historyErr := delivery.History(ctx, t.ID)
-			if historyErr == nil {
-				s.TagHistory = append(s.TagHistory, tagRecords(t.ID, reports)...)
-			} else {
-				if err := ctx.Err(); err != nil {
-					return Snapshot{}, err
+			if request.Tasks {
+				s.Tasks = append(s.Tasks, t)
+			}
+			if request.TagHistory {
+				reports, historyErr := delivery.History(ctx, t.ID)
+				if historyErr == nil {
+					s.TagHistory = append(s.TagHistory, tagRecords(t.ID, reports)...)
+				} else {
+					if err := ctx.Err(); err != nil {
+						return Snapshot{}, err
+					}
+					appendSnapshotError(&s, historyErr.Error())
 				}
-				appendSnapshotError(&s, historyErr.Error())
 			}
 			if err := ctx.Err(); err != nil {
 				return Snapshot{}, err
@@ -269,19 +288,14 @@ func (a *App) taskInConfig(action Action, config domain.AppConfig) (domain.TaskM
 	if config.TaskRoot == nil {
 		return domain.TaskManifest{}, "", errors.New("任务根目录未配置")
 	}
-	entries, err := a.Manifests.List(*config.TaskRoot)
+	entry, err := a.Manifests.LoadTask(*config.TaskRoot, action.TaskID)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return domain.TaskManifest{}, "", fmt.Errorf("未找到任务：%s", action.TaskID)
+		}
 		return domain.TaskManifest{}, "", err
 	}
-	for _, entry := range entries {
-		if action.TaskID == filepath.Base(entry.Path) {
-			if entry.Manifest.TaskDirectoryName != action.TaskID {
-				return domain.TaskManifest{}, "", errors.New("任务清单的目录标识与实际路径不一致，请修复后重试")
-			}
-			return entry.Manifest, entry.Path, nil
-		}
-	}
-	return domain.TaskManifest{}, "", fmt.Errorf("未找到任务：%s", action.TaskID)
+	return entry.Manifest, entry.Path, nil
 }
 func (a *App) materialRoot(action Action) (string, error) {
 	manifest, _, err := a.task(action)

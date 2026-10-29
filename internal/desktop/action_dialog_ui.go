@@ -12,7 +12,7 @@ func (s *app) actionDialog(c *ui.Context, p palette) {
 	if s.renderTaskCreationDialog(c, p) {
 		return
 	}
-	if s.serviceEditor != nil {
+	if s.workspaceUnit.state.serviceEditor != nil {
 		s.renderServiceEditorDialog(c, p)
 		return
 	}
@@ -24,6 +24,9 @@ func (s *app) actionDialog(c *ui.Context, p palette) {
 			label(c, s.dialogTitle, 20, p.text).FontWeight(600).Shrink(0)
 			ui.Divider(c).Shrink(0)
 			ui.Scroll(c.Key("action-dialog-body")).FillWidth().Grow(1).MinHeight(0).Gap(18).Children(func() {
+				if s.form.kind == "task.requirement-link" {
+					label(c, s.form.text, 12, p.text).FillWidth().Wrap()
+				}
 				for index := range s.form.fields {
 					field := &s.form.fields[index]
 					if s.inputs["form:"+field.key] == nil {
@@ -88,9 +91,9 @@ func (s *app) actionDialog(c *ui.Context, p palette) {
 							s.act(kind, "", "", "", "", "", map[string]any{"repositoryUrl": *s.input("form:repositoryUrl", "")})
 						}
 					}
-					if field.key == "ref" && len(s.settingsBranchChoices) > 0 {
+					if field.key == "ref" && len(s.settingsUnit.state.settingsBranchChoices) > 0 {
 						ui.Scroll(c).Height(72).FillWidth().Padding(6).Gap(4).Background(p.soft).Radius(8).Children(func() {
-							for index, branch := range s.settingsBranchChoices {
+							for index, branch := range s.settingsUnit.state.settingsBranchChoices {
 								value := s.input("form:ref", "")
 								if action(c, fmt.Sprintf("source-branch-%d", index), "branch", branch, p, *value == branch) {
 									*value = branch
@@ -113,7 +116,11 @@ func (s *app) actionDialog(c *ui.Context, p palette) {
 				if action(c, "action-cancel", "close", "取消", p, false) {
 					s.dialogOpen = false
 				}
-				if action(c, "action-submit", "arrow", "继续", p, true) {
+				submitLabel := "继续"
+				if s.form.kind == "task.requirement-link" {
+					submitLabel = "关联需求"
+				}
+				if action(c, "action-submit", "arrow", submitLabel, p, true) {
 					s.submitForm()
 				}
 			})
@@ -135,19 +142,19 @@ func (s *app) taskCreateSelection(c *ui.Context, p palette) {
 					name = group.ID
 				}
 				button := ui.ButtonBase(c.Key("task-create-group-"+group.ID)).Height(32).Padding(0, 12).Radius(8).Label(name)
-				if s.taskGroupID == group.ID {
+				if s.taskUnit.state.taskGroupID == group.ID {
 					button.Background(p.selected)
 				}
 				button.Children(func() { label(c, name, 12, p.text) })
-				if button.Clicked() && s.taskGroupID != group.ID {
-					s.taskGroupID = group.ID
-					s.taskServices = make(map[string]bool)
-					s.taskModules = make(map[string]map[string]bool)
+				if button.Clicked() && s.taskUnit.state.taskGroupID != group.ID {
+					s.taskUnit.state.taskGroupID = group.ID
+					s.taskUnit.state.taskServices = make(map[string]bool)
+					s.taskUnit.state.taskModules = make(map[string]map[string]bool)
 				}
 			}
 		})
 		ui.Scroll(c).Height(220).FillWidth().Padding(8).Gap(6).Background(p.soft).Radius(10).Children(func() {
-			group := s.taskGroup(s.taskGroupID)
+			group := s.taskGroup(s.taskUnit.state.taskGroupID)
 			if group.ID == "" || len(group.ServiceIDs) == 0 {
 				emptyPanel(c, p, "此项目组没有服务", "先在“仓库与服务”中配置服务及模块。")
 				return
@@ -157,7 +164,7 @@ func (s *app) taskCreateSelection(c *ui.Context, p palette) {
 				if !ok {
 					continue
 				}
-				selected := s.taskServices[id]
+				selected := s.taskUnit.state.taskServices[id]
 				ui.Column(c).FillWidth().Padding(8, 10).Gap(5).Background(p.surface).Border(1, p.line).Radius(8).Children(func() {
 					button := ui.ButtonBase(c.Key("task-create-service-" + id)).FillWidth().Height(30).Label(service.Name)
 					button.Children(func() {
@@ -172,7 +179,7 @@ func (s *app) taskCreateSelection(c *ui.Context, p palette) {
 					}
 					if selected {
 						for _, module := range service.Modules {
-							moduleSelected := s.taskModules[id][module.ID]
+							moduleSelected := s.taskUnit.state.taskModules[id][module.ID]
 							moduleID := module.ID
 							moduleName := module.Name
 							moduleButton := ui.ButtonBase(c.Key("task-create-module-"+id+"-"+moduleID)).Height(28).FillWidth().Padding(0, 26).Label(moduleName)
@@ -225,7 +232,7 @@ func (s *app) serviceConfigurationSelection(c *ui.Context, p palette) {
 }
 
 func (s *app) workspaceAddSelection(c *ui.Context, p palette) {
-	t := s.taskByID(s.form.taskID)
+	t := s.taskUnit.taskByID(s.form.taskID)
 	ui.Column(c).Gap(8).Children(func() {
 		label(c, "选择要添加的服务模块", 12, p.muted)
 		ui.Scroll(c).Height(210).FillWidth().Padding(8).Gap(7).Background(p.soft).Radius(10).Children(func() {
@@ -250,7 +257,7 @@ func (s *app) workspaceAddSelection(c *ui.Context, p palette) {
 						continue
 					}
 					found = true
-					selected := serviceID == s.workspaceAddServiceID
+					selected := serviceID == s.workspaceUnit.state.workspaceAddServiceID
 					ui.Column(c).FillWidth().Padding(8, 10).Gap(5).Background(p.surface).Border(1, p.line).Radius(8).Children(func() {
 						button := ui.ButtonBase(c.Key("workspace-add-service-" + serviceID)).FillWidth().Height(30).Label(service.Name)
 						button.Children(func() {
@@ -269,7 +276,7 @@ func (s *app) workspaceAddSelection(c *ui.Context, p palette) {
 						}
 						if selected {
 							for _, module := range available {
-								moduleSelected := module.ID == s.workspaceAddModuleID
+								moduleSelected := module.ID == s.workspaceUnit.state.workspaceAddModuleID
 								moduleID, moduleName := module.ID, module.Name
 								moduleButton := ui.ButtonBase(c.Key("workspace-add-module-"+serviceID+"-"+moduleID)).FillWidth().Height(28).Padding(0, 26).Label(moduleName)
 								if moduleSelected {

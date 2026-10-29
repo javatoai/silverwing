@@ -7,7 +7,7 @@ import (
 )
 
 func (s *app) renderRequirementNamingPreparation(c *ui.Context, p palette) {
-	state := s.requirementNaming
+	state := s.requirementUnit.state.requirementNaming
 	if state == nil {
 		return
 	}

@@ -28,8 +28,8 @@ func TestProductionProgressToastFollowsRequestLifetime(t *testing.T) {
 	for _, outcome := range []string{"success", "failure", "cancel"} {
 		t.Run(outcome, func(t *testing.T) {
 			s, v, _, base, window := productionRequestFixture(t)
-			s.tasks = []task{{id: "current-task", title: "kept"}}
-			s.notes[0] = "unsaved draft"
+			s.taskUnit.state.tasks = []task{{id: "current-task", title: "kept"}}
+			s.taskUnit.state.notes[0] = "unsaved draft"
 			backend := &productionProgressBackend{productionTestBackend: base, contexts: make(chan context.Context, 1)}
 			s.backend = backend
 			var shown []ui.Toast
@@ -72,7 +72,7 @@ func TestProductionProgressToastFollowsRequestLifetime(t *testing.T) {
 			if len(shown) != 0 || v.Busy || v.request != nil {
 				t.Fatal("finished request left stale progress or a live cancel target")
 			}
-			if s.currentTask().id != "current-task" || s.notes[0] != "unsaved draft" || s.page != "tasks" {
+			if s.taskUnit.currentTask().id != "current-task" || s.taskUnit.state.notes[0] != "unsaved draft" || s.page != "tasks" {
 				t.Fatal("progress/cancellation changed the task, draft or page")
 			}
 			if outcome == "failure" && !strings.Contains(s.productionSection(v, nil, 1).Message, "读取远端失败") {
@@ -129,7 +129,7 @@ func TestProductionProgressToastRejectsStaleContext(t *testing.T) {
 			case "home":
 				s.snapshot.Home = "another-home"
 			case "config":
-				s.configJSON = `{"tagEnabled":false}`
+				s.settingsUnit.state.configJSON = `{"tagEnabled":false}`
 			case "batch":
 				v.BatchID = "another-batch"
 			case "branch":
@@ -141,11 +141,11 @@ func TestProductionProgressToastRejectsStaleContext(t *testing.T) {
 			case "generation":
 				v.Generation++
 			case "view":
-				s.production.views[s.production.selected] = &productionView{Selection: v.Selection}
+				s.releaseUnit.state.production.views[s.releaseUnit.state.production.selected] = &productionView{Selection: v.Selection}
 			case "closed":
-				s.production.mu.Lock()
-				s.production.closed = true
-				s.production.mu.Unlock()
+				s.releaseUnit.state.production.mu.Lock()
+				s.releaseUnit.state.production.closed = true
+				s.releaseUnit.state.production.mu.Unlock()
 			}
 			tester.Frame()
 			if len(shown) != 0 {
@@ -167,7 +167,7 @@ func TestProductionProgressToastKeepsConcurrentServicesSeparate(t *testing.T) {
 	firstContext := <-backend.contexts
 	productionTestCall(t, base)
 	second := &productionView{Selection: production.Selection{GroupID: "other-group", ServiceID: "other-service"}}
-	s.production.views[productionKey(second.Selection)] = second
+	s.releaseUnit.state.production.views[productionKey(second.Selection)] = second
 	s.productionRequestFor(second, application.Action{Kind: "production.inspect", ServiceID: "other-service"}, "")
 	secondContext := <-backend.contexts
 	productionTestCall(t, base)
@@ -198,7 +198,7 @@ func TestProductionProgressToastLeavesPageGeometryAndFocusUnchanged(t *testing.T
 		for _, dark := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%d-dark-%t", width, dark), func(t *testing.T) {
 				s, v, _, base, window := productionRequestFixture(t)
-				s.production.batches, v.BatchID, v.Version = nil, "", "release/2.3.99"
+				s.releaseUnit.state.production.batches, v.BatchID, v.Version = nil, "", "release/2.3.99"
 				backend := &productionProgressBackend{productionTestBackend: base, contexts: make(chan context.Context, 1)}
 				s.backend = backend
 				tester := ui.NewTester(func(c *ui.Context) {
@@ -283,7 +283,7 @@ func TestProductionToastCancelIsKeyboardReachable(t *testing.T) {
 	s, _, _, base, window := productionRequestFixture(t)
 	backend := &productionProgressBackend{productionTestBackend: base, contexts: make(chan context.Context, 1)}
 	s.backend = backend
-	s.notes[0] = "unsaved draft"
+	s.taskUnit.state.notes[0] = "unsaved draft"
 	s.productionInspect("")
 	ctx := <-backend.contexts
 	productionTestCall(t, base)
@@ -299,7 +299,7 @@ func TestProductionToastCancelIsKeyboardReachable(t *testing.T) {
 		t.Fatal("native progress cancellation is not keyboard reachable")
 	}
 	tester.Key(0, ui.KeyEnter)
-	if ctx.Err() == nil || s.notes[0] != "unsaved draft" {
+	if ctx.Err() == nil || s.taskUnit.state.notes[0] != "unsaved draft" {
 		t.Fatal("keyboard cancel did not cancel its request safely")
 	}
 	productionTestUpdate(t, window)

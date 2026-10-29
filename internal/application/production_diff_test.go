@@ -77,6 +77,7 @@ func TestProductionDiffActionsReadOnlyAcrossPayloads(t *testing.T) {
 	run(repo, "push", "origin", "master", "--tags")
 	paths := storage.NewPaths(filepath.Join(root, "app home"))
 	a := &App{Paths: paths, Config: storage.NewConfigStore(paths), Runner: process.NewRunner()}
+	t.Cleanup(func() { _ = a.CloseWorkspaceDiffSessions(context.Background()) })
 	config := domain.DefaultAppConfig()
 	config.TaskRoot = &paths.Tasks
 	config.Repositories = []domain.RepositoryConfig{{ID: "repo", Name: "synthetic", RootPath: repo, GitCommonDirectory: filepath.Join(repo, ".git")}}
@@ -100,7 +101,7 @@ func TestProductionDiffActionsReadOnlyAcrossPayloads(t *testing.T) {
 			for _, incoming := range []bool{false, true} {
 				name := strings.Join([]string{map[bool]string{false: "target", true: "legacy-preview"}[legacy], map[bool]string{false: "typed", true: "json"}[wire], map[bool]string{false: "exact", true: "incoming"}[incoming]}, "/")
 				t.Run(name, func(t *testing.T) {
-					payload := map[string]any{"sourceSha": source, "targetSha": target, "incoming": incoming}
+					payload := map[string]any{"sourceSha": source, "targetSha": target, "incoming": incoming, "retainSession": true}
 					if legacy {
 						payload["preview"] = production.Preview{Target: preview.Target}
 					} else {
@@ -132,14 +133,34 @@ func TestProductionDiffActionsReadOnlyAcrossPayloads(t *testing.T) {
 						t.Fatalf("incorrect immutable comparison: %+v", files)
 					}
 					payload["fileKind"] = string(domain.WorkspaceGitModified)
+					payload["sessionId"] = files.Files.SessionID
+					if files.Files.SessionID == "" {
+						t.Fatal("production diff did not retain an immutable session")
+					}
 					file := dispatch(Action{Kind: "production.diff-preview", Path: "service.go", Payload: payload})
 					if file.Preview == nil || file.Preview.Comparison == nil || file.Preview.Comparison.OldContent == nil || file.Preview.Comparison.NewContent == nil || !strings.Contains(file.Preview.Comparison.OldContent.Text, "Version = 1") || !strings.Contains(file.Preview.Comparison.NewContent.Text, "Version = 2") {
 						t.Fatalf("missing shared file comparison: %+v", file.Preview)
+					}
+					if len(file.Files.Files) != 0 || file.Files.SessionID != files.Files.SessionID {
+						t.Fatal("production preview repeated the file list or changed session identity")
+					}
+					if _, err := a.Dispatch(context.Background(), Action{Kind: workspace.CompareSessionCloseAction, Payload: map[string]any{"sessionId": files.Files.SessionID}}); err != nil {
+						t.Fatal(err)
 					}
 				})
 			}
 		}
 	}
+	t.Run("legacy-one-shot-does-not-retain-session", func(t *testing.T) {
+		result, err := a.Dispatch(context.Background(), Action{Kind: "production.diff-files", Payload: map[string]any{"target": preview.Target, "sourceSha": source, "targetSha": target}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		data := result.Data.(production.DiffResult)
+		if data.Files.SessionID != "" || len(data.Files.Files) != 2 {
+			t.Fatal("legacy read retained an unowned session or lost the full list")
+		}
+	})
 	t.Run("guards", func(t *testing.T) {
 		changed := preview.Target
 		changed.Remote = "another-remote"
@@ -153,6 +174,31 @@ func TestProductionDiffActionsReadOnlyAcrossPayloads(t *testing.T) {
 			if _, err := a.Dispatch(context.Background(), action); err == nil {
 				t.Fatalf("invalid diff scope accepted: %+v", action)
 			}
+		}
+	})
+	t.Run("refresh-build-reads-only-one-batch", func(t *testing.T) {
+		store := production.Store{Directory: filepath.Join(paths.Home, "production-releases")}
+		batch := production.Batch{ID: strings.Repeat("a", 32), Target: preview.Target}
+		if err := store.Save(&batch); err != nil {
+			t.Fatal(err)
+		}
+		corrupt := filepath.Join(store.Directory, strings.Repeat("b", 32)+".json")
+		if err := os.WriteFile(corrupt, []byte("{corrupt-unrelated-batch"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		result, err := a.Dispatch(context.Background(), Action{Kind: "production.refresh-build", Payload: map[string]any{"batchId": batch.ID}})
+		if err != nil {
+			t.Fatalf("single batch refresh scanned unrelated history: %v", err)
+		}
+		report := result.Data.(production.Report)
+		if report.Batch == nil || report.Batch.ID != batch.ID || len(report.Batches) != 0 {
+			t.Fatalf("single-batch refresh shape: %+v", report)
+		}
+		if _, err := a.Dispatch(context.Background(), Action{Kind: "production.list"}); err == nil {
+			t.Fatal("explicit full-list read stopped surfacing corrupt history")
+		}
+		if err := os.RemoveAll(store.Directory); err != nil {
+			t.Fatal(err)
 		}
 	})
 	t.Run("config-changed", func(t *testing.T) {

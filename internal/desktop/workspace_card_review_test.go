@@ -16,9 +16,11 @@ func TestWorkspaceCardReviewEntryOrderAndZeroLocalChanges(t *testing.T) {
 	item := application.Workspace{ID: "workspace", ServiceID: "service", ModuleID: "module", Path: `C:\synthetic\workspace`, Branch: "feature/review"}
 	taskItem := task{id: "task", path: `C:\synthetic\task`, createdAt: "created", groupID: "group", workspaces: []application.Workspace{item}}
 	s := &app{
-		page: "tasks", tasks: []task{taskItem}, configJSON: `{}`,
-		snapshot:     application.Snapshot{Home: `C:\synthetic\home`, Services: []application.Service{{ID: "service", GroupID: "group", Name: "project", MasterBranch: "origin/main", Modules: []application.Module{{ID: "module", Name: "project"}}}}},
-		workspaceGit: &workspaceGitState{health: map[string]domain.WorkspaceGitHealth{workspaceHealthPathKey(item.Path): {State: domain.WorkspaceGitReady, PushState: domain.LocalPushPushed}}},
+		taskUnit:      taskController{state: taskState{tasks: []task{taskItem}}},
+		settingsUnit:  settingsController{state: settingsState{configJSON: `{}`}},
+		workspaceUnit: workspaceController{state: workspaceState{workspaceGit: &workspaceGitState{health: map[string]domain.WorkspaceGitHealth{workspaceHealthPathKey(item.Path): {State: domain.WorkspaceGitReady, PushState: domain.LocalPushPushed}}}}},
+		page:          "tasks",
+		snapshot:      application.Snapshot{Home: `C:\synthetic\home`, Services: []application.Service{{ID: "service", GroupID: "group", Name: "project", MasterBranch: "origin/main", Modules: []application.Module{{ID: "module", Name: "project"}}}}},
 	}
 	tester := ui.NewTester(func(c *ui.Context) {
 		ui.Column(c).Fill().Padding(12).Children(func() { s.workspaceCard(c, setTheme(c, false), taskItem, item, 0) })
@@ -43,15 +45,15 @@ func TestWorkspaceCardReviewEntryOrderAndZeroLocalChanges(t *testing.T) {
 	if err := tester.Click("本地未提交 0"); err != nil {
 		t.Fatal(err)
 	}
-	if s.workspaceHistory == nil || s.workspaceHistory.CompareMode != workspaceReviewUncommitted {
+	if s.workspaceUnit.state.workspaceHistory == nil || s.workspaceUnit.state.workspaceHistory.CompareMode != workspaceReviewUncommitted {
 		t.Fatal("zero local count did not open local-only review")
 	}
-	s.backWorkspaceReview(s.workspaceHistory)
+	s.backWorkspaceReview(s.workspaceUnit.state.workspaceHistory)
 	tester.Frame()
 	if err := tester.Click("提交历史"); err != nil {
 		t.Fatal(err)
 	}
-	if s.workspaceHistory == nil || s.workspaceHistory.Mode != "history" || !s.workspaceHistory.HasHistoryFocus {
+	if s.workspaceUnit.state.workspaceHistory == nil || s.workspaceUnit.state.workspaceHistory.Mode != "history" || !s.workspaceUnit.state.workspaceHistory.HasHistoryFocus {
 		t.Fatal("history entry did not open history or preserve its return focus")
 	}
 	s.dismissWorkspaceHistory()
@@ -61,9 +63,11 @@ func TestWorkspaceCardNonzeroLocalChangesStillOpensReview(t *testing.T) {
 	item := application.Workspace{ID: "workspace", ServiceID: "service", ModuleID: "module", Path: `C:\synthetic\workspace`, Branch: "feature/review"}
 	taskItem := task{id: "task", path: `C:\synthetic\task`, createdAt: "created", groupID: "group", workspaces: []application.Workspace{item}}
 	s := &app{
-		page: "tasks", tasks: []task{taskItem}, configJSON: `{}`,
-		snapshot:     application.Snapshot{Home: `C:\synthetic\home`, Services: []application.Service{{ID: "service", GroupID: "group", Name: "project", MasterBranch: "origin/main", Modules: []application.Module{{ID: "module", Name: "project"}}}}},
-		workspaceGit: &workspaceGitState{health: map[string]domain.WorkspaceGitHealth{workspaceHealthPathKey(item.Path): {State: domain.WorkspaceGitReady, DirtyFileCount: 3, PushState: domain.LocalPushPushed}}},
+		taskUnit:      taskController{state: taskState{tasks: []task{taskItem}}},
+		settingsUnit:  settingsController{state: settingsState{configJSON: `{}`}},
+		workspaceUnit: workspaceController{state: workspaceState{workspaceGit: &workspaceGitState{health: map[string]domain.WorkspaceGitHealth{workspaceHealthPathKey(item.Path): {State: domain.WorkspaceGitReady, DirtyFileCount: 3, PushState: domain.LocalPushPushed}}}}},
+		page:          "tasks",
+		snapshot:      application.Snapshot{Home: `C:\synthetic\home`, Services: []application.Service{{ID: "service", GroupID: "group", Name: "project", MasterBranch: "origin/main", Modules: []application.Module{{ID: "module", Name: "project"}}}}},
 	}
 	tester := ui.NewTester(func(c *ui.Context) {
 		ui.Column(c).Fill().Padding(12).Children(func() { s.workspaceCard(c, setTheme(c, false), taskItem, item, 0) })
@@ -75,7 +79,7 @@ func TestWorkspaceCardNonzeroLocalChangesStillOpensReview(t *testing.T) {
 	if err := tester.Click("本地未提交 3"); err != nil {
 		t.Fatal(err)
 	}
-	if s.workspaceHistory == nil || s.workspaceHistory.CompareMode != workspaceReviewUncommitted {
+	if s.workspaceUnit.state.workspaceHistory == nil || s.workspaceUnit.state.workspaceHistory.CompareMode != workspaceReviewUncommitted {
 		t.Fatal("nonzero local count did not open local-only review")
 	}
 	s.dismissWorkspaceHistory()
@@ -95,7 +99,9 @@ func TestWorkspaceCardPushStatusIsReadOnlyAndOutsideTabOrder(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			item := application.Workspace{Path: `C:\synthetic\workspace`}
-			s := &app{workspaceGit: &workspaceGitState{health: map[string]domain.WorkspaceGitHealth{workspaceHealthPathKey(item.Path): tc.health}}}
+			s := &app{
+				workspaceUnit: workspaceController{state: workspaceState{workspaceGit: &workspaceGitState{health: map[string]domain.WorkspaceGitHealth{workspaceHealthPathKey(item.Path): tc.health}}}},
+			}
 			tester := ui.NewTester(func(c *ui.Context) {
 				ui.Column(c).Fill().Children(func() { s.workspaceHealthLine(c, setTheme(c, false), task{}, item, "readonly") })
 			}, 360, 160)
@@ -106,7 +112,7 @@ func TestWorkspaceCardPushStatusIsReadOnlyAndOutsideTabOrder(t *testing.T) {
 			if err := tester.Click(tc.text); err != nil {
 				t.Fatal(err)
 			}
-			if s.workspaceHistory != nil {
+			if s.workspaceUnit.state.workspaceHistory != nil {
 				t.Fatal("clicking the remote push status triggered an action")
 			}
 			if tester.Cursor() == ui.CursorPointer {
@@ -116,9 +122,11 @@ func TestWorkspaceCardPushStatusIsReadOnlyAndOutsideTabOrder(t *testing.T) {
 	}
 
 	item := application.Workspace{Path: `C:\synthetic\workspace`}
-	s := &app{workspaceGit: &workspaceGitState{health: map[string]domain.WorkspaceGitHealth{workspaceHealthPathKey(item.Path): {
-		State: domain.WorkspaceGitReady, PushState: domain.LocalPushPushed,
-	}}}}
+	s := &app{
+		workspaceUnit: workspaceController{state: workspaceState{workspaceGit: &workspaceGitState{health: map[string]domain.WorkspaceGitHealth{workspaceHealthPathKey(item.Path): {
+			State: domain.WorkspaceGitReady, PushState: domain.LocalPushPushed,
+		}}}}},
+	}
 	tester := ui.NewTester(func(c *ui.Context) {
 		ui.Column(c).Fill().Children(func() { s.workspaceHealthLine(c, setTheme(c, false), task{}, item, "readonly-tab") })
 	}, 360, 160)
@@ -146,9 +154,11 @@ func TestWorkspaceCardActionControlsShareOutlineAndFitWidths(t *testing.T) {
 			}
 			t.Run(fmt.Sprintf("%s-%d", theme, width), func(t *testing.T) {
 				item := application.Workspace{Path: `C:\synthetic\workspace`}
-				s := &app{workspaceGit: &workspaceGitState{health: map[string]domain.WorkspaceGitHealth{workspaceHealthPathKey(item.Path): {
-					State: domain.WorkspaceGitReady, DirtyFileCount: 3, PushState: domain.LocalPushAhead, UnpushedCommitCount: 4,
-				}}}}
+				s := &app{
+					workspaceUnit: workspaceController{state: workspaceState{workspaceGit: &workspaceGitState{health: map[string]domain.WorkspaceGitHealth{workspaceHealthPathKey(item.Path): {
+						State: domain.WorkspaceGitReady, DirtyFileCount: 3, PushState: domain.LocalPushAhead, UnpushedCommitCount: 4,
+					}}}}},
+				}
 				tester := ui.NewTester(func(c *ui.Context) {
 					ui.Column(c).Fill().Children(func() { s.workspaceHealthLine(c, setTheme(c, dark), task{}, item, "styled") })
 				}, width, 160)
@@ -190,9 +200,11 @@ func TestWorkspaceCardActionControlsShareOutlineAndFitWidths(t *testing.T) {
 	}
 
 	item := application.Workspace{Path: `C:\synthetic\workspace`}
-	s := &app{workspaceGit: &workspaceGitState{health: map[string]domain.WorkspaceGitHealth{workspaceHealthPathKey(item.Path): {
-		State: domain.WorkspaceGitReady, DirtyFileCount: 123456789, PushState: domain.LocalPushAhead, UnpushedCommitCount: 123456789,
-	}}}}
+	s := &app{
+		workspaceUnit: workspaceController{state: workspaceState{workspaceGit: &workspaceGitState{health: map[string]domain.WorkspaceGitHealth{workspaceHealthPathKey(item.Path): {
+			State: domain.WorkspaceGitReady, DirtyFileCount: 123456789, PushState: domain.LocalPushAhead, UnpushedCommitCount: 123456789,
+		}}}}},
+	}
 	width := 180
 	tester := ui.NewTester(func(c *ui.Context) {
 		ui.Column(c).Fill().Children(func() { s.workspaceHealthLine(c, setTheme(c, false), task{}, item, "wrapped") })
@@ -219,7 +231,9 @@ func TestWorkspaceCardUnknownHealthDoesNotDisplayZero(t *testing.T) {
 	for _, state := range []domain.WorkspaceGitHealthState{domain.WorkspaceGitChecking, domain.WorkspaceGitFailed} {
 		t.Run(string(state), func(t *testing.T) {
 			item := application.Workspace{Path: `C:\synthetic\workspace`}
-			s := &app{workspaceGit: &workspaceGitState{health: map[string]domain.WorkspaceGitHealth{workspaceHealthPathKey(item.Path): {State: state}}}}
+			s := &app{
+				workspaceUnit: workspaceController{state: workspaceState{workspaceGit: &workspaceGitState{health: map[string]domain.WorkspaceGitHealth{workspaceHealthPathKey(item.Path): {State: state}}}}},
+			}
 			tester := ui.NewTester(func(c *ui.Context) {
 				ui.Column(c).Fill().Children(func() { s.workspaceHealthLine(c, setTheme(c, false), task{}, item, "unknown") })
 			}, 900, 300)
@@ -235,9 +249,11 @@ func TestWorkspaceCardFeedbackIsSharedAndStatusStaysNeutral(t *testing.T) {
 	for _, dark := range []bool{false, true} {
 		t.Run(fmt.Sprintf("dark-%t", dark), func(t *testing.T) {
 			item := application.Workspace{Path: `C:\synthetic\feedback`}
-			state := &app{workspaceGit: &workspaceGitState{health: map[string]domain.WorkspaceGitHealth{workspaceHealthPathKey(item.Path): {
-				State: domain.WorkspaceGitReady, PushState: domain.LocalPushPushed,
-			}}}}
+			state := &app{
+				workspaceUnit: workspaceController{state: workspaceState{workspaceGit: &workspaceGitState{health: map[string]domain.WorkspaceGitHealth{workspaceHealthPathKey(item.Path): {
+					State: domain.WorkspaceGitReady, PushState: domain.LocalPushPushed,
+				}}}}},
+			}
 			tester := ui.NewTester(func(context *ui.Context) {
 				ui.Column(context).Fill().Children(func() { state.workspaceHealthLine(context, setTheme(context, dark), task{}, item, "feedback") })
 			}, 360, 160)
@@ -273,7 +289,7 @@ func TestWorkspaceCardFeedbackIsSharedAndStatusStaysNeutral(t *testing.T) {
 				if err := tester.Click(text); err != nil {
 					t.Fatal(err)
 				}
-				if state.workspaceHistory != nil {
+				if state.workspaceUnit.state.workspaceHistory != nil {
 					t.Fatal("busy workspace control opened a review")
 				}
 			}

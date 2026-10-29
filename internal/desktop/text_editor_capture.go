@@ -6,7 +6,7 @@ import codeeditor "github.com/egoist/mygo/ui/editor"
 // scene. Inspect only the active owners, never cached editors on other pages.
 func (s *app) captureTextEditorsReady() bool {
 	if s.localSkillsViewActive() {
-		state := s.skillsBrowser
+		state := s.settingsUnit.state.skillsBrowser
 		if state == nil {
 			return true
 		}
@@ -15,21 +15,21 @@ func (s *app) captureTextEditorsReady() bool {
 		}
 		return captureMarkdownTextEditorsReady(state.markdown, false)
 	}
-	if s.page == "tools" && s.tools != nil {
-		switch s.tools.activeTab {
+	if s.page == "tools" && s.toolsUnit.state.tools != nil {
+		switch s.toolsUnit.state.tools.activeTab {
 		case "JSON":
-			return captureVisibleTextEditorReady(&s.tools.jsonEditor.native)
+			return captureVisibleTextEditorReady(&s.toolsUnit.state.tools.jsonEditor.native)
 		case "文本对比":
-			return captureVisibleTextEditorReady(&s.tools.diffInputHistory[0].view) &&
-				captureVisibleTextEditorReady(&s.tools.diffInputHistory[1].view)
+			return captureVisibleTextEditorReady(&s.toolsUnit.state.tools.diffInputHistory[0].view) &&
+				captureVisibleTextEditorReady(&s.toolsUnit.state.tools.diffInputHistory[1].view)
 		}
 	}
 	if (s.page == "tasks" || s.page == "archive") && s.tab == 1 {
 		if view := s.currentMaterialsTextPreview(); view != nil && !captureVisibleTextEditorReady(view) {
 			return false
 		}
-		if s.markdown != nil && s.markdown.path == s.documentPath {
-			return captureMarkdownTextEditorsReady(s.markdown, s.documentEditing)
+		if s.materialsUnit.state.markdown != nil && s.materialsUnit.state.markdown.path == s.materialsUnit.state.documentPath {
+			return captureMarkdownTextEditorsReady(s.materialsUnit.state.markdown, s.materialsUnit.state.documentEditing)
 		}
 	}
 	return true

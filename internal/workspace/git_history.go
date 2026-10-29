@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -42,10 +43,13 @@ func (s *WorkspaceGitHistoryService) ReadContext(ctx context.Context, worktreePa
 		}
 		revision = qualified + "..HEAD"
 	}
-	result, err := s.Git.RunContext(ctx, worktreePath, 2*time.Minute, false, true,
+	// Preserve the legacy full-message shape; oversized reads fail explicitly.
+	result, err := s.Git.runReadBudget(ctx, worktreePath, 2*time.Minute, 32*1024*1024,
 		"log", revision, "--format=%H%x00%P%x00%cI%x00%cn%x00%ce%x00%an%x00%ae%x00%B%x00")
 	if err != nil {
-		return nil, err
+		if errors.Is(err, errGitReadOutputLimit) || result.ExitCode <= 0 {
+			return nil, err
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -58,7 +62,7 @@ func (s *WorkspaceGitHistoryService) ReadContext(ctx context.Context, worktreePa
 		(strings.Contains(diagnostic, "ambiguous argument 'head'") && strings.Contains(diagnostic, "unknown revision") && strings.Contains(diagnostic, "or path not in the working tree")) {
 		return []domain.WorkspaceGitCommit{}, nil
 	}
-	return nil, &GitException{Message: "Git 提交历史读取失败", Result: result}
+	return nil, &GitException{Message: "Git 提交历史读取失败", Result: result, Cause: err}
 }
 
 func parseGitHistory(output string) ([]domain.WorkspaceGitCommit, error) {

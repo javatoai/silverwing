@@ -34,7 +34,7 @@ func (s *app) renderOperationNotifications(c *ui.Context) {
 	s.renderRequirementRefreshProgressNotification(c)
 	s.renderRequirementListProgressNotification(c)
 	s.renderProductionProgressNotifications(c)
-	if state := s.workspaceGit; state != nil && s.workspaceGitObservationCurrent(state.observation) {
+	if state := s.workspaceUnit.state.workspaceGit; state != nil && s.workspaceGitObservationCurrent(state.observation) {
 		empty := ""
 		s.operationNotifications.present(c, "workspace-git-refresh", &empty, &state.failure)
 	} else {
@@ -43,8 +43,8 @@ func (s *app) renderOperationNotifications(c *ui.Context) {
 	}
 	s.operationNotifications.present(c, "operation", &s.lastMessage, &s.lastError)
 	emptyWarningError := ""
-	s.operationNotifications.presentWithKind(c, "task-create-warning", &s.taskCreationWarning, &emptyWarningError, "warning")
-	if state := s.pageLocalRead; state != nil {
+	s.operationNotifications.presentWithKind(c, "task-create-warning", &s.taskUnit.state.taskCreationWarning, &emptyWarningError, "warning")
+	if state := s.settingsUnit.state.pageLocalRead; state != nil {
 		empty := ""
 		entry := state.entry
 		s.operationNotifications.present(c, "local-read", &empty, &state.failure, func() {
@@ -62,7 +62,7 @@ func (s *app) renderOperationNotifications(c *ui.Context) {
 
 func (s *app) renderRequirementRefreshProgressNotification(c *ui.Context) {
 	title := ""
-	if jobs := s.requirementRefreshJobs; jobs != nil {
+	if jobs := s.requirementUnit.state.requirementRefreshJobs; jobs != nil {
 		identity := s.currentRequirementListIdentity()
 		for _, job := range jobs.current {
 			if job.ctx.Err() == nil && job.identity == identity {
@@ -212,7 +212,7 @@ func readCompleteNotification(message string) bool {
 
 func (s *app) presentSettingsOutputNotification(c *ui.Context) {
 	const scope, id = "settings-output", "silverwing-notification-settings-output"
-	output := s.settingsOutput
+	output := s.settingsUnit.state.settingsOutput
 	title, kind := settingsOutputNotificationSummary(output)
 	if output == s.lastMessage || output == s.lastError {
 		title = ""
@@ -234,8 +234,8 @@ func (s *app) presentSettingsOutputNotification(c *ui.Context) {
 		timeout = -1
 	}
 	c.AddToast(ui.Toast{ID: id, Title: title, Type: kind, Timeout: timeout, Action: "关闭", OnClose: func() {
-		if s.settingsOutput == output {
-			s.settingsOutput = ""
+		if s.settingsUnit.state.settingsOutput == output {
+			s.settingsUnit.state.settingsOutput = ""
 		}
 		if s.operationNotifications.shown[scope] == key {
 			delete(s.operationNotifications.shown, scope)

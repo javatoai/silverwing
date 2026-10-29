@@ -9,8 +9,8 @@ import (
 
 func TestServiceOptionalKeepsSNBTagHistoryWithoutBuildTargets(t *testing.T) {
 	s, _ := taskMenuFixture(t)
-	s.tasks[0].workspaces = nil
-	task := s.tasks[0]
+	s.taskUnit.state.tasks[0].workspaces = nil
+	task := s.taskUnit.state.tasks[0]
 	if s.taskCanBuildAnyTag(task) {
 		t.Fatal("no-workspace task can build a Tag")
 	}

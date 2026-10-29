@@ -39,7 +39,7 @@ func TestProductionCompactServiceLabelsDoNotChangeWithSearch(t *testing.T) {
 		t.Fatal("single-group row was not distilled")
 	}
 	other := productionServiceChoice{Service: application.Service{ID: "other", GroupID: "other", Name: "国外服务"}, GroupName: "海外组"}
-	s.production.choices = append(s.production.choices, other)
+	s.releaseUnit.state.production.choices = append(s.releaseUnit.state.production.choices, other)
 	*s.input("production-service-query", "") = "国内组"
 	tester = productionIterationTester(s, 960, false)
 	if !tester.HasText("国内组 · 示例服务") || tester.HasText("海外组 · 国外服务") {
@@ -62,7 +62,7 @@ func TestProductionBaselineMoreAndDialogCancelLeaveInputUnchanged(t *testing.T) 
 	if err := tester.Click("手动确认生产 Tag"); err != nil {
 		t.Fatal(err)
 	}
-	d := s.production.baselineDialog
+	d := s.releaseUnit.state.production.baselineDialog
 	if d == nil || !tester.HasText("应用并重新检查") {
 		t.Fatal("no native baseline dialog")
 	}
@@ -72,7 +72,7 @@ func TestProductionBaselineMoreAndDialogCancelLeaveInputUnchanged(t *testing.T) 
 		t.Fatal("Esc applied manual baseline")
 	}
 	s.openProductionBaseline(v)
-	d = s.production.baselineDialog
+	d = s.releaseUnit.state.production.baselineDialog
 	d.Tag = "another"
 	s.page = "tasks"
 	s.applyProductionBaseline(d, false)
@@ -87,10 +87,10 @@ func TestProductionBaselineApplyAndAutomaticUseInspectWithoutWriting(t *testing.
 			s, v, _ := productionFixture(t)
 			backend := &productionTestBackend{calls: make(chan application.Action, 1), replies: make(chan productionTestAnswer, 1)}
 			window := &refreshTestWindow{updates: make(chan func(), 8)}
-			s.backend, s.production.window = backend, window
+			s.backend, s.releaseUnit.state.production.window = backend, window
 			v.ManualTag = "old"
 			s.openProductionBaseline(v)
-			d := s.production.baselineDialog
+			d := s.releaseUnit.state.production.baselineDialog
 			d.Tag = "  2.3.43  "
 			s.applyProductionBaseline(d, automatic)
 			select {
@@ -112,7 +112,7 @@ func TestProductionBaselineApplyAndAutomaticUseInspectWithoutWriting(t *testing.
 			(<-window.updates)()
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			if err := s.closeProductionJobs(ctx); err != nil {
+			if err := s.releaseUnit.closeProductionJobs(ctx); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -122,7 +122,7 @@ func TestProductionBaselineApplyAndAutomaticUseInspectWithoutWriting(t *testing.
 func TestProductionRepeatedControlsRemainAfterTagsAndFailedBuild(t *testing.T) {
 	s, v, b, backend, window := productionRequestFixture(t)
 	b.Tags = []production.Tag{{Name: "2.3.44", Commit: b.ReleaseSHA, Status: domain.GenbuTagProbeStatus{Build: domain.GenbuBuilding}}}
-	s.production.batches[0] = b
+	s.releaseUnit.state.production.batches[0] = b
 	for i := 0; i < 3; i++ {
 		tester := productionIterationTester(s, 960, false)
 		for _, control := range []string{"合并到 release", "构建 Tag"} {
@@ -133,7 +133,7 @@ func TestProductionRepeatedControlsRemainAfterTagsAndFailedBuild(t *testing.T) {
 		v.Preview.ReleaseSHA = strings.Repeat("f", 40)
 		b.ReleaseSHA = v.Preview.ReleaseSHA
 		b.TagPlan = &production.TagPlan{Token: fmt.Sprint(i), Tag: fmt.Sprintf("2.3.44.%d", i+1), Commit: b.ReleaseSHA, MainSHA: v.Preview.MainSHA, Preview: *v.Preview}
-		s.production.batches[0] = b
+		s.releaseUnit.state.production.batches[0] = b
 		v.PreparationInvalid = true
 		s.publishProductionTag(v, b)
 		if s.confirmationDialog != nil || len(backend.calls) != 0 || v.Busy {
@@ -151,7 +151,7 @@ func TestProductionRepeatedControlsRemainAfterTagsAndFailedBuild(t *testing.T) {
 		}
 		b.TagPlan = nil
 		v.PreparationInvalid = false
-		s.production.batches[0] = b
+		s.releaseUnit.state.production.batches[0] = b
 	}
 }
 
@@ -171,7 +171,7 @@ func TestProductionProgressBoundToRequestBatchAndApplicationContext(t *testing.T
 			s, v, b := productionFixture(t)
 			backend := &productionProgressBackend{productionTestBackend: &productionTestBackend{calls: make(chan application.Action, 1), replies: make(chan productionTestAnswer, 1)}, contexts: make(chan context.Context, 1)}
 			window := &refreshTestWindow{updates: make(chan func(), 8)}
-			s.backend, s.production.window = backend, window
+			s.backend, s.releaseUnit.state.production.window = backend, window
 			s.productionInspect("")
 			ctx := <-backend.contexts
 			<-backend.calls
@@ -187,7 +187,7 @@ func TestProductionProgressBoundToRequestBatchAndApplicationContext(t *testing.T
 			case "batch":
 				v.BatchID = "another"
 			case "config":
-				s.configJSON = `{"tagEnabled":false}`
+				s.settingsUnit.state.configJSON = `{"tagEnabled":false}`
 			case "home":
 				s.snapshot.Home = "changed"
 			case "generation":
@@ -208,7 +208,7 @@ func TestProductionProgressBoundToRequestBatchAndApplicationContext(t *testing.T
 			(<-window.updates)()
 			closing, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			if err := s.closeProductionJobs(closing); err != nil {
+			if err := s.releaseUnit.closeProductionJobs(closing); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -227,7 +227,7 @@ func TestProductionIterationEvidenceStates(t *testing.T) {
 					if state == "building" {
 						b.Tags = []production.Tag{{Name: "2.3.44", Commit: b.ReleaseSHA, Status: domain.GenbuTagProbeStatus{Build: domain.GenbuBuilding}}}
 					}
-					s.production.batches[0] = b
+					s.releaseUnit.state.production.batches[0] = b
 					if state == "manual" {
 						s.openProductionBaseline(v)
 					}
@@ -262,12 +262,12 @@ func TestProductionManyMergesRemainFlatAndActionsReachable(t *testing.T) {
 		for _, dark := range []bool{false, true} {
 			s, v, b := productionFixture(t)
 			b.TagPlan = &production.TagPlan{Tag: "2.3.44.1", Commit: b.ReleaseSHA, MainSHA: v.Preview.MainSHA, Preview: *v.Preview}
-			s.production.batches[0] = b
+			s.releaseUnit.state.production.batches[0] = b
 			b.Branches = nil
 			for i := 0; i < 120; i++ {
 				b.Branches = append(b.Branches, production.MergedBranch{Branch: fmt.Sprintf("feature/iteration-%03d", i), SourceSHA: strings.Repeat("d", 40)})
 			}
-			s.production.batches[0] = b
+			s.releaseUnit.state.production.batches[0] = b
 			tester := productionIterationTester(s, width, dark)
 			tester.SetSize(width, 5000)
 			if !tester.HasText("已合并：feature/iteration-119") || !tester.HasText("已合并：feature/iteration-000") || tester.HasText("合并记录 ·") {

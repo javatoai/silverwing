@@ -33,6 +33,9 @@ type requirementContentJobState struct {
 
 func requirementContentRequestKind(action application.Action) string {
 	if action.Kind == "requirements.attachment" && payloadString(action.Payload, "scope") == "comment" {
+		if key := payloadString(action.Payload, "commentImageToken"); key != "" && key == commentActionResourceKey(action) {
+			return commentImageRequestKind(key)
+		}
 		return "requirements.attachment:comment"
 	}
 	return action.Kind
@@ -43,16 +46,16 @@ func independentRequirementContentAction(kind string) bool {
 }
 
 func (s *app) ensureRequirementContentJobs() *requirementContentJobState {
-	if s.requirementContentJobs == nil {
-		s.requirementContentJobs = &requirementContentJobState{
+	if s.requirementUnit.state.requirementContentJobs == nil {
+		s.requirementUnit.state.requirementContentJobs = &requirementContentJobState{
 			requests: make(map[string]*requirementContentJob), running: make(map[*requirementContentJob]struct{}),
 		}
 	}
-	return s.requirementContentJobs
+	return s.requirementUnit.state.requirementContentJobs
 }
 
 func (s *app) beginRequirementContentJob(action application.Action) (*requirementContentJob, error) {
-	reader := s.requirementReaderForAction(action)
+	reader := s.requirementUnit.requirementReaderForAction(action)
 	if reader == nil {
 		return nil, errors.New("需求读取身份已变化，请重试。")
 	}
@@ -67,16 +70,20 @@ func (s *app) beginRequirementContentJob(action application.Action) (*requiremen
 	if previous := state.requests[key]; previous != nil {
 		previous.cancel()
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	parent := context.Background()
+	if action.Kind == "requirements.attachment" && payloadString(action.Payload, "scope") == "comment" && payloadString(action.Payload, "commentImageToken") != "" && reader.commentImageBatch != nil {
+		parent = reader.commentImageBatch.ctx
+	}
+	ctx, cancel := context.WithCancel(parent)
 	request := &requirementContentJob{key: key, home: s.snapshot.Home,
 		executable: s.configString("meegleExecutablePath"), reader: reader,
 		identity: s.currentRequirementListIdentity(),
 		action:   cloneRequirementContentAction(action), ctx: ctx, cancel: cancel, done: make(chan struct{})}
-	if identityState := s.requirementIdentityJobs; identityState != nil && identityState.hasContext {
+	if identityState := s.requirementUnit.state.requirementIdentityJobs; identityState != nil && identityState.hasContext {
 		request.identityContext, request.hasIdentityContext = identityState.context, true
 	}
 	if action.TaskID != "" {
-		task := s.taskByID(action.TaskID)
+		task := s.taskUnit.taskByID(action.TaskID)
 		request.taskPath, request.taskCreatedAt = task.path, task.createdAt
 	}
 	state.requests[key] = request
@@ -96,18 +103,18 @@ func cloneRequirementContentAction(action application.Action) application.Action
 }
 
 func (s *app) requirementContentJobRelevant(request *requirementContentJob) bool {
-	state := s.requirementContentJobs
+	state := s.requirementUnit.state.requirementContentJobs
 	if state == nil || request == nil || state.requests[request.key] != request ||
 		s.snapshot.Home != request.home || s.configString("meegleExecutablePath") != request.executable ||
 		s.currentRequirementListIdentity() != request.identity ||
-		s.requirementReaderForAction(request.action) != request.reader {
+		s.requirementUnit.requirementReaderForAction(request.action) != request.reader {
 		return false
 	}
 	if request.hasIdentityContext && s.currentRequirementIdentityContext() != request.identityContext {
 		return false
 	}
 	if request.action.TaskID != "" {
-		task := s.taskByID(request.action.TaskID)
+		task := s.taskUnit.taskByID(request.action.TaskID)
 		if task.path != request.taskPath || task.createdAt != request.taskCreatedAt || strings.TrimSpace(task.requirementURL) != request.reader.url {
 			return false
 		}
@@ -128,7 +135,7 @@ func (s *app) dispatchIndependentRequirementContent(action application.Action) b
 		s.applyRequirementContentFailure(action, err)
 		return true
 	}
-	backend, win, state := s.backend, s.win, s.requirementContentJobs
+	backend, win, state := s.backend, s.win, s.requirementUnit.state.requirementContentJobs
 	win.Invalidate()
 	go func() {
 		result, err := executeRequirementContentJob(backend, request)
@@ -151,7 +158,7 @@ func executeRequirementContentJob(backend application.Backend, request *requirem
 	if err := request.ctx.Err(); err != nil {
 		return application.ActionResult{}, err
 	}
-	result, err := backend.Dispatch(request.ctx, request.action)
+	result, err := executeRequirementOperation(request.ctx, backend, request.action, nil)
 	if request.ctx.Err() != nil {
 		return application.ActionResult{}, errors.Join(request.ctx.Err(), err)
 	}
@@ -162,7 +169,7 @@ func (s *app) finishRequirementContentJob(request *requirementContentJob, result
 	if !s.requirementContentJobRelevant(request) {
 		return
 	}
-	delete(s.requirementContentJobs.requests, request.key)
+	delete(s.requirementUnit.state.requirementContentJobs.requests, request.key)
 	if err != nil {
 		s.applyRequirementContentFailure(request.action, err)
 	} else {
@@ -170,12 +177,12 @@ func (s *app) finishRequirementContentJob(request *requirementContentJob, result
 	}
 }
 
-func (s *app) cancelRequirementContentJob(request *requirementContentJob) {
+func (s *requirementController) cancelRequirementContentJob(request *requirementContentJob) {
 	if request == nil {
 		return
 	}
 	request.cancel()
-	if state := s.requirementContentJobs; state != nil && state.requests[request.key] == request {
+	if state := s.state.requirementContentJobs; state != nil && state.requests[request.key] == request {
 		delete(state.requests, request.key)
 	}
 	if reader := s.requirementReaderForAction(request.action); reader != nil {
@@ -187,7 +194,7 @@ func (s *app) cancelRequirementContentJob(request *requirementContentJob) {
 			reader.commentsLoading = false
 		case "requirements.attachment":
 			if payloadString(request.action.Payload, "scope") == "comment" {
-				reader.commentResourceLoading = ""
+				finishRequirementCommentImage(reader, commentActionResourceKey(request.action))
 			} else {
 				reader.resourceLoading = ""
 			}
@@ -201,10 +208,10 @@ func (s *app) retireRequirementReaderRequest(reader *requirementReaderState, kin
 	if kind == "requirements.comments" || kind == "requirements.attachment" {
 		s.retireRequirementCommentImages(reader)
 	}
-	if state := s.requirementContentJobs; state != nil {
+	if state := s.requirementUnit.state.requirementContentJobs; state != nil {
 		for _, request := range state.requests {
 			if request.reader == reader && request.action.Kind == kind {
-				s.cancelRequirementContentJob(request)
+				s.requirementUnit.cancelRequirementContentJob(request)
 			}
 		}
 	}
@@ -222,30 +229,31 @@ func (s *app) retireRequirementReaderRequest(reader *requirementReaderState, kin
 // Each frame records the actual visible reader. Leaving it cancels reads even
 // when a backend ignores cancellation; removed requests cannot apply later.
 func (s *app) observeRequirementContentJobs() {
-	state := s.requirementContentJobs
+	state := s.requirementUnit.state.requirementContentJobs
 	if state == nil {
 		return
 	}
 	if state.entered != nil && requirementReaderKey(state.entered.taskID, state.entered.url) != state.visible {
+		s.retireRequirementCommentImages(state.entered)
 		state.entered = nil
 	}
 	for _, request := range state.requests {
 		if requirementReaderKey(request.reader.taskID, request.reader.url) != state.visible || !s.requirementContentJobRelevant(request) {
-			s.cancelRequirementContentJob(request)
+			s.requirementUnit.cancelRequirementContentJob(request)
 		}
 	}
 }
 
-func (s *app) cancelRequirementContentReads() {
-	if state := s.requirementContentJobs; state != nil {
+func (s *requirementController) cancelRequirementContentReads() {
+	if state := s.state.requirementContentJobs; state != nil {
 		for _, request := range state.requests {
 			s.cancelRequirementContentJob(request)
 		}
 	}
 }
 
-func (s *app) closeRequirementContentJobs(ctx context.Context) error {
-	state := s.requirementContentJobs
+func (s *requirementController) closeRequirementContentJobs(ctx context.Context) error {
+	state := s.state.requirementContentJobs
 	if state == nil {
 		return nil
 	}

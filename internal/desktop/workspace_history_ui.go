@@ -2,6 +2,7 @@ package desktop
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -13,6 +14,8 @@ import (
 )
 
 type workspaceHistoryState struct {
+	HistoryPageError                  string // paged reads never own comparison/legacy Error
+	HistoryPageDiagnostic             workspaceHistoryDiagnosticState
 	TaskID, ServiceID, ModuleID, Path string
 	TaskPath, TaskCreatedAt           string
 	RepositorySessionKey              string
@@ -52,35 +55,42 @@ type workspaceHistoryState struct {
 	SplitRatio                      float32
 	Files                           []workspace.CompareChange
 	// Read-only consumers can supply a file reader without adopting task state.
-	FileSelected                                     func(workspace.CompareChange)
-	DiffBaseLabel, DiffTargetLabel, FileContentLabel string
-	FilesLoading, HistoryLoading                     bool
-	PreviewLoading                                   bool
-	CommitsLoaded                                    bool
-	ReviewGeneration                                 uint64
-	CommitSelectionGeneration                        uint64
-	CommitDebounce                                   *time.Timer
-	InitialChange                                    *domain.WorkspaceGitFileChange
-	LeftWidth                                        float32
-	LeftCollapsed                                    bool
-	LeftDragging                                     bool
-	PreviewMode                                      workspace.WorkspaceFilePreviewMode
-	ChangedLinesOnly                                 bool
-	DiffHunkIndex                                    int
-	DiffHunkSelected                                 bool
-	NativeDiff                                       *diffNativeViewState
-	NativeDiffIdentity                               *workspaceDiffIdentity
-	DiffRows                                         *workspaceDiffRowsView
-	ContentPreview                                   nativeCodePreviewState
-	Commits                                          []domain.WorkspaceGitCommit
-	Preview                                          *workspace.WorkspaceGitFilePreview
-	PreviewStartedAt                                 time.Time
-	PreviewFirstFrame                                bool
-	Prefetch                                         *workspaceReviewPrefetchJob
-	PrefetchKey                                      string
-	PrefetchVisible                                  []workspace.CompareChange
-	PrefetchFrameVisible                             []workspace.CompareChange
-	PrefetchViewport                                 ui.Rect
+	FileSelected                                          func(workspace.CompareChange)
+	DiffBaseLabel, DiffTargetLabel, FileContentLabel      string
+	FilesLoading, HistoryLoading                          bool
+	PreviewLoading                                        bool
+	CommitsLoaded                                         bool
+	ReviewGeneration                                      uint64
+	CommitSelectionGeneration                             uint64
+	CommitDebounce                                        *time.Timer
+	InitialChange                                         *domain.WorkspaceGitFileChange
+	LeftWidth                                             float32
+	LeftCollapsed                                         bool
+	LeftDragging                                          bool
+	PreviewMode                                           workspace.WorkspaceFilePreviewMode
+	ChangedLinesOnly                                      bool
+	DiffHunkIndex                                         int
+	DiffHunkSelected                                      bool
+	NativeDiff                                            *diffNativeViewState
+	NativeDiffIdentity                                    *workspaceDiffIdentity
+	DiffRows                                              *workspaceDiffRowsView
+	ContentPreview                                        nativeCodePreviewState
+	Commits                                               []domain.WorkspaceGitCommit
+	HistoryHeadSHA, HistoryBaselineSHA, HistoryMessageSHA string
+	HistoryNextOffset                                     int
+	HistoryHasMore, HistorySummaries                      bool
+	HistoryList, CommitPickerList                         ui.ListState
+	HistoryMessages                                       map[string]workspace.WorkspaceGitCommitMessage
+	HistoryMessageErrors                                  map[string]string
+	HistoryMessageOrder                                   []string
+	Preview                                               *workspace.WorkspaceGitFilePreview
+	PreviewStartedAt                                      time.Time
+	PreviewFirstFrame                                     bool
+	Prefetch                                              *workspaceReviewPrefetchJob
+	PrefetchKey                                           string
+	PrefetchVisible                                       []workspace.CompareChange
+	PrefetchFrameVisible                                  []workspace.CompareChange
+	PrefetchViewport                                      ui.Rect
 }
 
 const (
@@ -103,15 +113,12 @@ func (s *app) openWorkspaceHistory(task task, item application.Workspace, focus 
 		state.HistoryFocus = *focus[0]
 		state.HasHistoryFocus = true
 	}
-	s.workspaceHistory = state
+	s.workspaceUnit.state.workspaceHistory = state
 	if localRef == "" {
-		state.Error = "请先在仓库配置中设置此模块的主分支。"
+		state.HistoryPageError = "请先在仓库配置中设置此模块的主分支。"
 		return
 	}
-	s.act("workspace.history", state.TaskID, state.ServiceID, state.ModuleID, state.Path, "", map[string]any{
-		"baselineRef": localRef,
-		"allHistory":  false,
-	})
+	s.readWorkspaceHistoryPage(state, true)
 }
 
 func (s *app) workspaceHistoryBaseline(task task, item application.Workspace) (displayRef, localRef string) {
@@ -184,9 +191,9 @@ func (s *app) openWorkspaceReviewWithCommits(task task, item application.Workspa
 	if len(state.CommitHashes) == 1 {
 		state.StartCommit, state.EndCommit = state.CommitHashes[0], state.CommitHashes[0]
 	}
-	s.workspaceHistory = state
+	s.workspaceUnit.state.workspaceHistory = state
 	if focus != nil {
-		s.workspaceReviewFocusReturn = &workspaceReviewFocusReturn{
+		s.workspaceUnit.state.workspaceReviewFocusReturn = &workspaceReviewFocusReturn{
 			Handle: *focus, TaskID: task.id, TaskPath: task.path, TaskCreatedAt: task.createdAt, Page: s.page,
 		}
 	}
@@ -207,48 +214,34 @@ func (s *app) cancelWorkspaceReviewDebounce(state *workspaceHistoryState) {
 }
 
 func (s *app) readWorkspaceReviewCommits(state *workspaceHistoryState) {
-	if state == nil || state.Mode != "review" || state.CompareMode != workspaceReviewCommits || s.workspaceHistory != state {
+	if state == nil || state.Mode != "review" || state.CompareMode != workspaceReviewCommits || s.workspaceUnit.state.workspaceHistory != state {
 		return
 	}
 	if strings.TrimSpace(state.BaselineRef) == "" {
 		state.HistoryLoading = false
-		state.Error = "请先在仓库配置中设置此模块的主分支。"
+		state.HistoryPageError = "请先在仓库配置中设置此模块的主分支。"
 		return
 	}
-	state.HistoryLoading = true
-	state.Loading = true
-	state.Error = ""
-	s.act("workspace.history", state.TaskID, state.ServiceID, state.ModuleID, state.Path, "", map[string]any{
-		"baselineRef": state.BaselineRef,
-		"allHistory":  false,
-	})
+	s.readWorkspaceHistoryPage(state, true)
 }
 
 // The compatibility helpers below keep the package's focused manual-proof
 // harnesses compiling while the visible UI now routes to the review page.
 func (s *app) setWorkspaceHistoryScope(state *workspaceHistoryState, all bool) {
-	if state == nil || state.Mode != "history" || s.workspaceHistory != state || !state.Open {
+	if state == nil || state.Mode != "history" || s.workspaceUnit.state.workspaceHistory != state || !state.Open {
 		return
 	}
 	s.cancelWorkspaceHistoryRead()
-	state.AllHistory, state.Loading = all, true
-	state.Error = ""
-	baseline := state.BaselineRef
-	if all {
-		baseline = ""
-	}
-	s.act("workspace.history", state.TaskID, state.ServiceID, state.ModuleID, state.Path, "", map[string]any{
-		"baselineRef": baseline,
-		"allHistory":  all,
-	})
+	state.AllHistory = all
+	s.readWorkspaceHistoryPage(state, true)
 }
 
 func (s *app) selectWorkspaceDirtyFile(change domain.WorkspaceGitFileChange) {
-	state := s.workspaceHistory
+	state := s.workspaceUnit.state.workspaceHistory
 	if state == nil || state.Mode != "dirty-files" || !state.Open {
 		return
 	}
-	s.cancelWorkspaceHistoryRead()
+	s.cancelWorkspaceHistoryPurpose(workspaceHistoryComparison)
 	state.SelectedPath, state.SelectedKind = change.Path, change.Kind
 	state.Loading, state.Error, state.Preview = true, "", nil
 	s.act("workspace.file-preview", state.TaskID, state.ServiceID, state.ModuleID, state.Path, "", map[string]any{
@@ -270,7 +263,7 @@ func workspaceReviewComparePayload(state *workspaceHistoryState) map[string]any 
 }
 
 func (s *app) readWorkspaceReviewFiles(state *workspaceHistoryState) {
-	if state == nil || state.Mode != "review" || state.CompareMode == workspaceReviewCommits && len(state.CommitHashes) == 0 || s.workspaceHistory != state {
+	if state == nil || state.Mode != "review" || state.CompareMode == workspaceReviewCommits && len(state.CommitHashes) == 0 || s.workspaceUnit.state.workspaceHistory != state {
 		return
 	}
 	s.cancelWorkspaceReviewDebounce(state)
@@ -303,14 +296,14 @@ func (s *app) readWorkspaceReviewFiles(state *workspaceHistoryState) {
 }
 
 func (s *app) selectWorkspaceReviewFile(state *workspaceHistoryState, change workspace.CompareChange) {
-	if state == nil || s.workspaceHistory != state || state.Mode != "review" || !state.Open {
+	if state == nil || s.workspaceUnit.state.workspaceHistory != state || state.Mode != "review" || !state.Open {
 		return
 	}
 	if state.SelectedPath == change.Path && state.SelectedOldPath == change.OldPath && string(state.SelectedKind) == change.Kind && state.PreviewLoading {
 		return
 	}
 	s.cancelWorkspaceReviewPrefetch(state)
-	s.cancelWorkspaceHistoryRead()
+	s.cancelWorkspaceHistoryPurpose(workspaceHistoryComparison)
 	s.saveWorkspaceReviewSelection(state)
 	state.SelectedPath, state.SelectedOldPath = change.Path, change.OldPath
 	state.SelectedKind = domain.WorkspaceGitFileChangeKind(change.Kind)
@@ -347,7 +340,7 @@ func workspaceReviewSnapshotsReady(state *workspaceHistoryState) bool {
 }
 
 func (s *app) setWorkspaceReviewMode(state *workspaceHistoryState, mode string) {
-	if state == nil || state != s.workspaceHistory || !state.Open || state.Mode != "review" || state.CompareMode == mode {
+	if state == nil || state != s.workspaceUnit.state.workspaceHistory || !state.Open || state.Mode != "review" || state.CompareMode == mode {
 		return
 	}
 	s.cancelWorkspaceReviewDebounce(state)
@@ -375,7 +368,7 @@ func (s *app) setWorkspaceReviewMode(state *workspaceHistoryState, mode string) 
 }
 
 func (s *app) selectWorkspaceReviewCommit(state *workspaceHistoryState, hash string) {
-	if state == nil || state != s.workspaceHistory || !state.Open || state.CompareMode != workspaceReviewCommits {
+	if state == nil || state != s.workspaceUnit.state.workspaceHistory || !state.Open || state.CompareMode != workspaceReviewCommits {
 		return
 	}
 	start, end, hashes, err := workspaceReviewNextCommitRange(state.Commits, state.StartCommit, state.EndCommit, hash, state.CommitHashes)
@@ -389,7 +382,7 @@ func (s *app) selectWorkspaceReviewCommit(state *workspaceHistoryState, hash str
 	state.CommitSelectionGeneration++
 	generation := state.CommitSelectionGeneration
 	s.cancelWorkspaceReviewDebounce(state)
-	s.cancelWorkspaceHistoryRead()
+	s.cancelWorkspaceHistoryPurpose(workspaceHistoryComparison)
 	state.FilesLoading, state.PreviewLoading = false, false
 	state.Error = ""
 	if len(state.CommitHashes) == 0 {
@@ -407,7 +400,7 @@ func (s *app) selectWorkspaceReviewCommit(state *workspaceHistoryState, hash str
 			return
 		}
 		s.win.Update(func() {
-			if s.workspaceHistory != state || state.ReviewGeneration != s.workspaceHistory.ReviewGeneration ||
+			if s.workspaceUnit.state.workspaceHistory != state || state.ReviewGeneration != s.workspaceUnit.state.workspaceHistory.ReviewGeneration ||
 				!s.workspaceReviewPageVisible() || state.CommitSelectionGeneration != generation ||
 				state.CompareMode != workspaceReviewCommits || len(state.CommitHashes) == 0 {
 				return
@@ -430,14 +423,28 @@ func (s *app) clearWorkspaceReviewResult(state *workspaceHistoryState) {
 	state.Preview = nil
 	state.SelectedPath, state.SelectedOldPath, state.SelectedKind = "", "", ""
 	state.BaseCommit, state.TargetCommit = "", ""
+	state.ResultBaselineRef, state.Notice = "", ""
+	state.PreviewMode, state.ChangedLinesOnly = "", false
+	state.PrefetchVisible, state.PrefetchFrameVisible = nil, nil
+	state.PrefetchViewport = ui.Rect{}
 	state.FilesLoading, state.PreviewLoading = false, false
+	state.Error = ""
 	state.ActiveComparisonKey = workspaceReviewComparisonKey(state)
+}
+
+func (s *app) retryWorkspaceReviewComparison(state *workspaceHistoryState) {
+	if state == nil || state != s.workspaceUnit.state.workspaceHistory || !state.Open || state.Mode != "review" || state.FilesLoading || state.PreviewLoading {
+		return
+	}
+	// Revalidate the selected range and file list before retrying its preview.
+	// This clears only the comparison's error; paged history keeps its owner.
+	s.readWorkspaceReviewFiles(state)
 }
 
 // dismissWorkspaceHistory cancels the visible review and invalidates its session.
 func (s *app) dismissWorkspaceHistory() {
 	s.cancelWorkspaceHistoryRead()
-	state := s.workspaceHistory
+	state := s.workspaceUnit.state.workspaceHistory
 	if state != nil {
 		s.releaseWorkspaceReviewDiffSession(state)
 		if state.Mode == "review" {
@@ -448,15 +455,15 @@ func (s *app) dismissWorkspaceHistory() {
 		state.releaseWorkspaceReviewRenderData()
 		state.ReviewGeneration++
 	}
-	if jobs := s.workspaceHistoryJobs; jobs != nil {
+	if jobs := s.workspaceUnit.state.workspaceHistoryJobs; jobs != nil {
 		jobs.pageGeneration++
 	}
-	s.workspaceHistory = nil
-	s.workspaceReviewFocusReturn = nil
+	s.workspaceUnit.state.workspaceHistory = nil
+	s.workspaceUnit.state.workspaceReviewFocusReturn = nil
 }
 
 func (s *app) backWorkspaceReview(state *workspaceHistoryState) {
-	if state == nil || s.workspaceHistory != state {
+	if state == nil || s.workspaceUnit.state.workspaceHistory != state {
 		return
 	}
 	s.cancelWorkspaceHistoryRead()
@@ -464,12 +471,12 @@ func (s *app) backWorkspaceReview(state *workspaceHistoryState) {
 	s.releaseWorkspaceReviewDiffSession(state)
 	state.Open = false
 	s.saveWorkspaceReviewSession(state)
-	if s.workspaceReviewFocusReturn != nil {
-		s.workspaceReviewFocusReturn.deferOneFrame = true
+	if s.workspaceUnit.state.workspaceReviewFocusReturn != nil {
+		s.workspaceUnit.state.workspaceReviewFocusReturn.deferOneFrame = true
 	}
 	state.releaseWorkspaceReviewRenderData()
 	state.ReviewGeneration++
-	if s.currentTask().id == state.TaskID {
+	if s.taskUnit.currentTask().id == state.TaskID {
 		s.requestWorkspaceGitStatus(true)
 	}
 }
@@ -484,12 +491,33 @@ func (state *workspaceHistoryState) releaseWorkspaceReviewRenderData() {
 // applyWorkspaceHistoryResult applies legacy history metadata and the new
 // selected-comparison file/preview responses to the current review session.
 func (s *app) applyWorkspaceHistoryResult(action application.Action, result application.ActionResult) {
-	state := s.workspaceHistory
+	state := s.workspaceUnit.state.workspaceHistory
 	if state == nil || !state.matches(action) {
 		return
 	}
 	switch action.Kind {
 	case "workspace.history":
+		if workspacePayloadBool(action.Payload, "paged") {
+			if sha := stringPayloadValue(action.Payload["messageSha"]); sha != "" {
+				var message workspace.WorkspaceGitCommitMessage
+				if err := decodeWorkspaceValue(result.Data, &message); err != nil || message.SHA != sha {
+					s.applyWorkspaceHistoryFailure(action, errors.New("提交详情身份或格式错误"))
+					return
+				}
+				state.rememberHistoryMessage(message)
+				state.HistoryMessageSHA = ""
+				return
+			}
+			var page workspace.WorkspaceGitHistoryPage
+			if err := decodeWorkspaceValue(result.Data, &page); err != nil {
+				s.applyWorkspaceHistoryFailure(action, err)
+				return
+			}
+			if err := state.acceptHistoryPage(page); err != nil {
+				s.applyWorkspaceHistoryFailure(action, err)
+			}
+			return
+		}
 		var commits []domain.WorkspaceGitCommit
 		if err := decodeWorkspaceSlice(result.Data, &commits); err != nil {
 			state.HistoryLoading = false
@@ -605,6 +633,7 @@ func (s *app) applyWorkspaceHistoryResult(action application.Action, result appl
 		state.DiffRows = nil
 		state.resetWorkspaceContentPreview()
 		state.PreviewLoading = false
+		state.Error = ""
 		s.saveWorkspaceReviewSelection(state)
 		s.updateWorkspaceReviewPrefetch(state, nil)
 	}
@@ -634,16 +663,37 @@ func workspaceReviewInitialSelection(files []workspace.CompareChange, initial *d
 // applyWorkspaceHistoryFailure leaves the failed request visible and never
 // replaces another page, task, mode or selected file.
 func (s *app) applyWorkspaceHistoryFailure(action application.Action, err error) {
-	state := s.workspaceHistory
+	state := s.workspaceUnit.state.workspaceHistory
 	if state == nil || !state.matches(action) {
 		return
 	}
 	switch action.Kind {
 	case "workspace.history":
+		if errors.Is(err, workspace.ErrWorkspaceGitHistoryChanged) {
+			s.resetWorkspaceHistorySnapshot(state)
+			state.Loading, state.HistoryLoading = false, false
+			if workspacePayloadBool(action.Payload, "paged") {
+				state.HistoryPageError = err.Error()
+			} else {
+				state.Error = err.Error()
+			}
+			return
+		}
+		if sha := stringPayloadValue(action.Payload["messageSha"]); sha != "" {
+			if state.HistoryMessageErrors == nil {
+				state.HistoryMessageErrors = make(map[string]string)
+			}
+			state.HistoryMessageErrors[sha], state.HistoryMessageSHA = err.Error(), ""
+			return
+		}
 		state.Loading = false
 		if state.HistoryLoading {
 			state.HistoryLoading = false
-			state.Error = err.Error()
+			if workspacePayloadBool(action.Payload, "paged") {
+				state.HistoryPageError = err.Error()
+			} else {
+				state.Error = err.Error()
+			}
 		}
 	case "workspace.diff-files":
 		if state.FilesLoading {
@@ -669,6 +719,19 @@ func (state *workspaceHistoryState) matches(action application.Action) bool {
 	switch action.Kind {
 	case "workspace.history":
 		baseline, _ := action.Payload["baselineRef"].(string)
+		if workspacePayloadBool(action.Payload, "paged") {
+			if !workspaceHistoryPageActionMatches(state, action) {
+				return false
+			}
+			if state.Mode == "review" {
+				return state.CompareMode == workspaceReviewCommits && baseline == state.BaselineRef && !workspaceHistoryAllScope(action)
+			}
+			expected := state.BaselineRef
+			if state.AllHistory {
+				expected = ""
+			}
+			return state.Mode == "history" && workspaceHistoryAllScope(action) == state.AllHistory && baseline == expected
+		}
 		if state.Mode == "review" {
 			return state.CompareMode == workspaceReviewCommits && state.HistoryLoading && baseline == state.BaselineRef && !workspacePayloadBool(action.Payload, "allHistory")
 		}
@@ -862,38 +925,39 @@ func (s *app) renderWorkspaceCommitHistory(c *ui.Context, p palette, state *work
 		label(c, "相对服务基线没有新增提交。", 12, p.muted).Wrap()
 		return
 	}
-	ui.Scroll(c).Fill().Gap(8).Children(func() {
-		for _, commit := range state.Commits {
-			ui.Column(c.Key("workspace-legacy-commit-"+commit.FullHash)).FillWidth().Gap(5).Padding(10).Background(p.surface).Border(1, p.line).Radius(9).Children(func() {
-				label(c, commit.FullHash, 11, p.muted).Wrap()
-				label(c, commit.Message, 13, p.text).Wrap()
-				committerName := strings.TrimSpace(commit.CommitterName)
-				if committerName == "" {
-					committerName = "未知提交人"
+	state.HistoryList.Key = func(index int) any { return state.Commits[index].FullHash }
+	ui.List(c, &state.HistoryList, len(state.Commits)).Fill().Gap(8).Rows(func(row ui.ListRow) {
+		c := row.Context
+		commit := state.Commits[row.Index]
+		ui.Column(c.Key("workspace-legacy-commit-"+commit.FullHash)).FillWidth().Gap(5).Padding(10).Background(p.surface).Border(1, p.line).Radius(9).Children(func() {
+			label(c, commit.FullHash, 11, p.muted).Wrap()
+			label(c, commit.Message, 13, p.text).Wrap()
+			committerName := strings.TrimSpace(commit.CommitterName)
+			if committerName == "" {
+				committerName = "未知提交人"
+			}
+			if strings.TrimSpace(commit.CommitterEmail) != "" {
+				label(c, "提交者邮箱："+commit.CommitterEmail, 11, p.muted).Wrap()
+			} else {
+				label(c, committerName, 11, p.muted).Wrap()
+			}
+			authorName, authorEmail := strings.TrimSpace(commit.AuthorName), strings.TrimSpace(commit.AuthorEmail)
+			if authorName == "" {
+				authorName = "未知"
+			}
+			if authorName != strings.TrimSpace(commit.CommitterName) || authorEmail != strings.TrimSpace(commit.CommitterEmail) {
+				author := "作者：" + authorName
+				if authorEmail != "" {
+					author += " <" + authorEmail + ">"
 				}
-				if strings.TrimSpace(commit.CommitterEmail) != "" {
-					label(c, "提交者邮箱："+commit.CommitterEmail, 11, p.muted).Wrap()
-				} else {
-					label(c, committerName, 11, p.muted).Wrap()
+				label(c, author, 11, p.muted).Wrap()
+			}
+			if commit.FullHash != "" {
+				if action(c, "workspace-legacy-commit-copy-"+commit.FullHash, "copy", "复制完整提交 SHA", p, false) {
+					s.copyTextToClipboard(c.Services(), commit.FullHash, "提交 SHA 已复制")
 				}
-				authorName, authorEmail := strings.TrimSpace(commit.AuthorName), strings.TrimSpace(commit.AuthorEmail)
-				if authorName == "" {
-					authorName = "未知"
-				}
-				if authorName != strings.TrimSpace(commit.CommitterName) || authorEmail != strings.TrimSpace(commit.CommitterEmail) {
-					author := "作者：" + authorName
-					if authorEmail != "" {
-						author += " <" + authorEmail + ">"
-					}
-					label(c, author, 11, p.muted).Wrap()
-				}
-				if commit.FullHash != "" {
-					if action(c, "workspace-legacy-commit-copy-"+commit.FullHash, "copy", "复制完整提交 SHA", p, false) {
-						s.copyTextToClipboard(c.Services(), commit.FullHash, "提交 SHA 已复制")
-					}
-				}
-			})
-		}
+			}
+		})
 	})
 }
 
@@ -987,7 +1051,7 @@ func decodeWorkspaceSlice[T any](value any, target *[]T) error {
 // The review page is rendered by taskWorkspace; this global hook owns only the
 // commit-history modal so it cannot render the full review page twice.
 func (s *app) renderWorkspaceHistoryDialog(c *ui.Context, p palette) {
-	state := s.workspaceHistory
+	state := s.workspaceUnit.state.workspaceHistory
 	if state == nil || state.Mode != "history" {
 		return
 	}

@@ -8,15 +8,15 @@ import (
 func (s *app) applyServiceActionResult(action application.Action, result application.ActionResult) bool {
 	switch action.Kind {
 	case "service.save":
-		if s.serviceEditor != nil && s.serviceEditor.saving {
+		if s.workspaceUnit.state.serviceEditor != nil && s.workspaceUnit.state.serviceEditor.saving {
 			s.cancelServiceRepositoryChoiceReads()
-			s.serviceEditor = nil
+			s.workspaceUnit.state.serviceEditor = nil
 			s.dialogOpen = false
 			s.clearServiceEditorInputs()
 		}
 	case "repository.choices":
 		s.applyServiceRepositoryChoices(action, result)
-		if s.serviceEditor != nil && s.serviceEditor.section == "git" && !s.serviceEditor.addressesLoaded {
+		if s.workspaceUnit.state.serviceEditor != nil && s.workspaceUnit.state.serviceEditor.section == "git" && !s.workspaceUnit.state.serviceEditor.addressesLoaded {
 			s.requestServiceRepositoryAddresses(false)
 		}
 	case "repository.addresses":

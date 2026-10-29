@@ -26,10 +26,10 @@ func navigationChooseTaskMenu(t *testing.T, tester *ui.Tester, taskTitle, item s
 
 func TestTaskContextMenuKeepsSelectionAndDraft(t *testing.T) {
 	s := taskNavigationFixture()
-	s.documentPath, s.documentContent, s.documentDirty = "draft.md", "正在输入的草稿", true
-	s.documentDrafts["draft.md"], s.documentDirtyMap["draft.md"] = s.documentContent, true
-	s.markdown = &markdownEditorState{path: "draft.md", doc: editor.NewDocument(s.documentContent, "menu-composition")}
-	s.markdown.doc.SetComposing(true)
+	s.materialsUnit.state.documentPath, s.materialsUnit.state.documentContent, s.materialsUnit.state.documentDirty = "draft.md", "正在输入的草稿", true
+	s.materialsUnit.state.documentDrafts["draft.md"], s.materialsUnit.state.documentDirtyMap["draft.md"] = s.materialsUnit.state.documentContent, true
+	s.materialsUnit.state.markdown = &markdownEditorState{path: "draft.md", doc: editor.NewDocument(s.materialsUnit.state.documentContent, "menu-composition")}
+	s.materialsUnit.state.markdown.doc.SetComposing(true)
 	tester := taskNavigationTester(s, 240, 500)
 	for _, hidden := range []string{"服务端", "客户端", "其他任务", "置顶", "置顶任务：界面体验"} {
 		if tester.HasText(hidden) {
@@ -45,13 +45,13 @@ func TestTaskContextMenuKeepsSelectionAndDraft(t *testing.T) {
 	if err := tester.ChooseMenuItem("置顶任务"); err != nil {
 		t.Fatal(err)
 	}
-	if !s.taskIsPinned(s.tasks[1]) || s.selected != 0 || s.documentContent != "正在输入的草稿" || !s.documentDirty ||
-		s.documentDrafts["draft.md"] != s.documentContent || !s.documentDirtyMap["draft.md"] ||
-		!s.markdown.doc.Composing() || len(s.taskNavigationFor().value.Recent) != 0 {
+	if !s.taskIsPinned(s.taskUnit.state.tasks[1]) || s.taskUnit.state.selected != 0 || s.materialsUnit.state.documentContent != "正在输入的草稿" || !s.materialsUnit.state.documentDirty ||
+		s.materialsUnit.state.documentDrafts["draft.md"] != s.materialsUnit.state.documentContent || !s.materialsUnit.state.documentDirtyMap["draft.md"] ||
+		!s.materialsUnit.state.markdown.doc.Composing() || len(s.taskNavigationFor().value.Recent) != 0 {
 		t.Fatal("context menu changed the open task, composition, draft or visit history")
 	}
 	navigationChooseTaskMenu(t, tester, "界面体验", "取消置顶")
-	if s.taskIsPinned(s.tasks[1]) || s.selected != 0 {
+	if s.taskIsPinned(s.taskUnit.state.tasks[1]) || s.taskUnit.state.selected != 0 {
 		t.Fatal("unpin did not stay on the open task")
 	}
 	// Keyboard menu and the row's far-right area have the same target.
@@ -62,7 +62,7 @@ func TestTaskContextMenuKeepsSelectionAndDraft(t *testing.T) {
 	if err := tester.ChooseMenuItem("置顶任务"); err != nil {
 		t.Fatal(err)
 	}
-	if !s.taskIsPinned(s.tasks[1]) || s.selected != 0 {
+	if !s.taskIsPinned(s.taskUnit.state.tasks[1]) || s.taskUnit.state.selected != 0 {
 		t.Fatal("keyboard menu did not use the focused task")
 	}
 	row, found := tester.Find("界面体验")
@@ -80,26 +80,26 @@ func TestTaskContextMenuArchiveAndDeleteTarget(t *testing.T) {
 	s.win = &mygo.Window{}
 	tester := taskNavigationTester(s, 240, 500)
 	navigationChooseTaskMenu(t, tester, "界面体验", "归档任务")
-	if s.selected != 0 || s.confirmationDialog == nil {
+	if s.taskUnit.state.selected != 0 || s.confirmationDialog == nil {
 		t.Fatal("archiving another row did not open its confirmation independently")
 	}
 	// Cancel the confirmation; opening deletion must likewise use the clicked row.
 	s.cancelConfirmationDialog()
 	navigationChooseTaskMenu(t, tester, "界面体验", "删除任务")
-	if s.taskDeleteDialog == nil || s.taskDeleteDialog.TaskID != s.tasks[1].id || s.selected != 0 {
+	if s.taskUnit.state.taskDeleteDialog == nil || s.taskUnit.state.taskDeleteDialog.TaskID != s.taskUnit.state.tasks[1].id || s.taskUnit.state.selected != 0 {
 		t.Fatal("delete dialog targeted the current task instead of the context row")
 	}
 	s.observeTaskDeleteRiskJobs()
-	if s.taskDeleteDialog == nil {
+	if s.taskUnit.state.taskDeleteDialog == nil {
 		t.Fatal("non-current task delete dialog was dismissed")
 	}
 	s.closeTaskDeleteDialog()
-	s.page, s.selected = "archive", 3
+	s.page, s.taskUnit.state.selected = "archive", 3
 	tester.Frame()
 	if err := tester.RightClick("已归档任务"); err != nil {
 		t.Fatal(err)
 	}
-	if got := tester.Menu(); !slices.Equal(got, []string{"在 Codex 中打开", "-", "批量合并主分支", "-", "置顶任务", "-", "恢复归档", "-", "删除任务"}) {
+	if got := tester.Menu(); !slices.Equal(got, []string{"在 Codex 中打开", "-", "关联需求", "批量合并主分支", "-", "准备本地任务资料", "-", "置顶任务", "-", "恢复归档", "-", "删除任务"}) {
 		t.Fatalf("archive menu: %v", got)
 	}
 }
@@ -114,7 +114,7 @@ func TestTaskContextMenuRejectsChangedHome(t *testing.T) {
 	if err := tester.ChooseMenuItem("置顶任务"); err != nil {
 		t.Fatal(err)
 	}
-	if s.taskIsPinned(s.tasks[1]) {
+	if s.taskIsPinned(s.taskUnit.state.tasks[1]) {
 		t.Fatal("a late menu choice acted in a different application home")
 	}
 }
@@ -130,13 +130,13 @@ func TestTaskContextMenuRejectsChangedTargetAndBusyMutations(t *testing.T) {
 			}
 			switch change {
 			case "created":
-				s.tasks[1].createdAt = "replacement"
+				s.taskUnit.state.tasks[1].createdAt = "replacement"
 			case "path":
-				s.tasks[1].path = "moved"
+				s.taskUnit.state.tasks[1].path = "moved"
 			case "removed":
-				s.tasks = append(s.tasks[:1], s.tasks[2:]...)
+				s.taskUnit.state.tasks = append(s.taskUnit.state.tasks[:1], s.taskUnit.state.tasks[2:]...)
 			case "root":
-				s.configJSON = `{"taskRoot":"moved"}`
+				s.settingsUnit.state.configJSON = `{"taskRoot":"moved"}`
 			case "page":
 				s.page = "archive"
 			case "busy":
@@ -144,7 +144,7 @@ func TestTaskContextMenuRejectsChangedTargetAndBusyMutations(t *testing.T) {
 			}
 			// A disabled or vanished item may be rejected by the framework itself.
 			_ = tester.ChooseMenuItem("归档任务")
-			if s.confirmationDialog != nil || s.selected != 0 || len(s.taskNavigationFor().value.Recent) != 0 {
+			if s.confirmationDialog != nil || s.taskUnit.state.selected != 0 || len(s.taskNavigationFor().value.Recent) != 0 {
 				t.Fatal("stale or busy context action was accepted")
 			}
 		})
@@ -155,26 +155,26 @@ func TestTaskArchiveConfirmationUsesCapturedTarget(t *testing.T) {
 	for _, change := range []string{"none", "recreated", "path", "home", "root", "page", "archived", "removed", "busy"} {
 		t.Run(change, func(t *testing.T) {
 			s := taskNavigationFixture()
-			target := s.tasks[1]
+			target := s.taskUnit.state.tasks[1]
 			scope, ok := s.taskArchiveScope(target)
 			if !ok {
 				t.Fatal("non-current archive target was rejected")
 			}
 			switch change {
 			case "recreated":
-				s.tasks[1].createdAt = "replacement"
+				s.taskUnit.state.tasks[1].createdAt = "replacement"
 			case "path":
-				s.tasks[1].path = "moved"
+				s.taskUnit.state.tasks[1].path = "moved"
 			case "home":
 				s.snapshot.Home = "another-home"
 			case "root":
-				s.configJSON = `{"taskRoot":"another-root"}`
+				s.settingsUnit.state.configJSON = `{"taskRoot":"another-root"}`
 			case "page":
 				s.page = "archive"
 			case "archived":
-				s.tasks[1].archived = true
+				s.taskUnit.state.tasks[1].archived = true
 			case "removed":
-				s.tasks = append(s.tasks[:1], s.tasks[2:]...)
+				s.taskUnit.state.tasks = append(s.taskUnit.state.tasks[:1], s.taskUnit.state.tasks[2:]...)
 			case "busy":
 				s.busy = true
 			}
@@ -188,8 +188,8 @@ func TestTaskArchiveConfirmationUsesCapturedTarget(t *testing.T) {
 
 func TestTaskDeleteRiskScopeForNonCurrentTarget(t *testing.T) {
 	s := taskNavigationFixture()
-	s.openTaskDeleteDialog(s.tasks[1])
-	dialog := s.taskDeleteDialog
+	s.openTaskDeleteDialog(s.taskUnit.state.tasks[1])
+	dialog := s.taskUnit.state.taskDeleteDialog
 	if dialog == nil {
 		t.Fatal("missing delete dialog")
 	}
@@ -204,10 +204,10 @@ func TestTaskDeleteRiskScopeForNonCurrentTarget(t *testing.T) {
 	s.finishTaskDeleteRiskJob(job, application.ActionResult{Data: []domain.DeleteRisk{}}, nil)
 	dialog.ExternalWindowsClosed = true
 	confirmation, ok := s.taskDeleteConfirmationAction()
-	if !ok || confirmation.TaskID != s.tasks[1].id || s.selected != 0 {
+	if !ok || confirmation.TaskID != s.taskUnit.state.tasks[1].id || s.taskUnit.state.selected != 0 {
 		t.Fatal("successful inspection did not enable deletion of the context target")
 	}
-	s.configJSON = `{"taskRoot":"changed"}`
+	s.settingsUnit.state.configJSON = `{"taskRoot":"changed"}`
 	s.observeTaskDeleteRiskJobs()
 	if dialog.RiskScope != nil || dialog.Error == "" {
 		t.Fatal("changed application context did not invalidate the completed inspection")
@@ -215,45 +215,45 @@ func TestTaskDeleteRiskScopeForNonCurrentTarget(t *testing.T) {
 	if _, ok := s.taskDeleteConfirmationAction(); ok {
 		t.Fatal("stale inspection allowed confirmation")
 	}
-	s.selected = 2
+	s.taskUnit.state.selected = 2
 	s.observeTaskDeleteRiskJobs()
-	if s.taskDeleteDialog != nil {
+	if s.taskUnit.state.taskDeleteDialog != nil {
 		t.Fatal("explicit task navigation did not dismiss deletion")
 	}
 }
 
 func TestStaleDeleteSubmissionClosesOnlyItsOwnDialog(t *testing.T) {
 	s := taskNavigationFixture()
-	target := s.tasks[1]
-	s.documentContent, s.documentDirty = "保留当前草稿", true
-	s.documentDrafts["draft.md"], s.documentDirtyMap["draft.md"] = s.documentContent, true
+	target := s.taskUnit.state.tasks[1]
+	s.materialsUnit.state.documentContent, s.materialsUnit.state.documentDirty = "保留当前草稿", true
+	s.materialsUnit.state.documentDrafts["draft.md"], s.materialsUnit.state.documentDirtyMap["draft.md"] = s.materialsUnit.state.documentContent, true
 	s.openTaskDeleteDialog(target)
-	old := s.taskDeleteDialog
+	old := s.taskUnit.state.taskDeleteDialog
 	old.Submitting, old.Loading = true, true
 	staleAction := application.Action{Kind: "task.delete", TaskID: old.TaskID, Path: old.TaskPath,
 		Payload: map[string]any{"taskDeleteRequestID": fmt.Sprint(old.RequestID)}}
 	s.closeStaleTaskDeleteSubmission(staleAction)
-	if s.taskDeleteDialog != nil {
+	if s.taskUnit.state.taskDeleteDialog != nil {
 		t.Fatal("stale submission left its old dialog in submitting state")
 	}
 
 	s.openTaskDeleteDialog(target)
-	newer := s.taskDeleteDialog
+	newer := s.taskUnit.state.taskDeleteDialog
 	newer.Submitting, newer.Loading = true, true
 	s.closeStaleTaskDeleteSubmission(staleAction)
-	if s.taskDeleteDialog != newer || !newer.Submitting || !newer.Loading {
+	if s.taskUnit.state.taskDeleteDialog != newer || !newer.Submitting || !newer.Loading {
 		t.Fatal("stale submission closed or reset a newer delete dialog")
 	}
-	if s.documentContent != "保留当前草稿" || !s.documentDirty || s.documentDrafts["draft.md"] != s.documentContent {
+	if s.materialsUnit.state.documentContent != "保留当前草稿" || !s.materialsUnit.state.documentDirty || s.materialsUnit.state.documentDrafts["draft.md"] != s.materialsUnit.state.documentContent {
 		t.Fatal("stale delete cleanup changed the current draft")
 	}
 }
 
 func TestDeleteConfirmationDispatchesScopedActionAfterRiskApproval(t *testing.T) {
 	s, backend := taskMenuFixture(t)
-	target := s.tasks[1]
+	target := s.taskUnit.state.tasks[1]
 	s.openTaskDeleteDialog(target)
-	dialog := s.taskDeleteDialog
+	dialog := s.taskUnit.state.taskDeleteDialog
 	if dialog == nil {
 		t.Fatal("missing delete dialog")
 	}
@@ -289,15 +289,15 @@ func TestDeleteConfirmationDispatchesScopedActionAfterRiskApproval(t *testing.T)
 
 func TestTaskRestorationKeepsArchiveBrowsingState(t *testing.T) {
 	s := taskNavigationFixture()
-	s.page, s.selected = "archive", 3
+	s.page, s.taskUnit.state.selected = "archive", 3
 	state := s.taskIndexBrowsingFor(true)
 	state.search, state.scroll.Y = "归档", 120
-	s.taskNavigationFor().value.Recent = []string{taskNavigationKey(s.tasks[3])}
+	s.taskNavigationFor().value.Recent = []string{taskNavigationKey(s.taskUnit.state.tasks[3])}
 	legacyRecent := slices.Clone(s.taskNavigationFor().value.Recent)
-	s.tasks[3].archived = false
-	s.selected = -1
-	s.applyTaskLifecycleSnapshotSelection(application.Action{Kind: "task.restore", TaskID: s.tasks[3].id}, application.ActionResult{})
-	if s.page != "archive" || s.selected != -1 || state.search != "归档" || state.scroll.Y != 120 ||
+	s.taskUnit.state.tasks[3].archived = false
+	s.taskUnit.state.selected = -1
+	s.applyTaskLifecycleSnapshotSelection(application.Action{Kind: "task.restore", TaskID: s.taskUnit.state.tasks[3].id}, application.ActionResult{})
+	if s.page != "archive" || s.taskUnit.state.selected != -1 || state.search != "归档" || state.scroll.Y != 120 ||
 		state.revealTaskKey != "" || !slices.Equal(s.taskNavigationFor().value.Recent, legacyRecent) {
 		t.Fatal("restoration opened the restored task or reset archive browsing")
 	}
@@ -308,7 +308,9 @@ func TestSettleMaterialsBeforeRootActionUsesHeadlessSchedulerSeam(t *testing.T) 
 		t.Fatal("root action proceeded without a live window or injected scheduler")
 	}
 
-	s := &app{taskContextUpdate: func(update func()) { update() }}
+	s := &app{
+		taskUnit: taskController{state: taskState{taskContextUpdate: func(update func()) { update() }}},
+	}
 	barrier := &materialsFileJobBarrier{owner: s.ensureMaterialsFileJobs()}
 	if _, err := s.settleMaterialsBeforeRootAction(context.Background(), application.Action{Kind: "task.delete"}, barrier, nil); err != nil {
 		t.Fatalf("headless scheduler did not settle the materials barrier: %v", err)
@@ -319,8 +321,8 @@ func TestTaskDeleteLateRiskResultCannotEnableConfirmation(t *testing.T) {
 	for _, change := range []string{"created", "path", "archived", "removed", "home", "root", "page", "selection"} {
 		t.Run(change, func(t *testing.T) {
 			s := taskNavigationFixture()
-			s.openTaskDeleteDialog(s.tasks[1])
-			dialog := s.taskDeleteDialog
+			s.openTaskDeleteDialog(s.taskUnit.state.tasks[1])
+			dialog := s.taskUnit.state.taskDeleteDialog
 			dialog.Error = ""
 			job, err := s.beginTaskDeleteRiskJob(application.Action{Kind: "task.delete-risks", TaskID: dialog.TaskID, Path: dialog.TaskPath,
 				Payload: map[string]any{"taskDeleteRequestID": fmt.Sprint(dialog.RequestID)}})
@@ -330,21 +332,21 @@ func TestTaskDeleteLateRiskResultCannotEnableConfirmation(t *testing.T) {
 			t.Cleanup(func() { job.cancel(); s.completeTaskDeleteRiskJob(job) })
 			switch change {
 			case "created":
-				s.tasks[1].createdAt = "replacement"
+				s.taskUnit.state.tasks[1].createdAt = "replacement"
 			case "path":
-				s.tasks[1].path = "moved"
+				s.taskUnit.state.tasks[1].path = "moved"
 			case "archived":
-				s.tasks[1].archived = true
+				s.taskUnit.state.tasks[1].archived = true
 			case "removed":
-				s.tasks = append(s.tasks[:1], s.tasks[2:]...)
+				s.taskUnit.state.tasks = append(s.taskUnit.state.tasks[:1], s.taskUnit.state.tasks[2:]...)
 			case "home":
 				s.snapshot.Home = "other-home"
 			case "root":
-				s.configJSON = `{"taskRoot":"other-root"}`
+				s.settingsUnit.state.configJSON = `{"taskRoot":"other-root"}`
 			case "page":
 				s.page = "archive"
 			case "selection":
-				s.selected = 2
+				s.taskUnit.state.selected = 2
 			}
 			s.observeTaskDeleteRiskJobs()
 			s.finishTaskDeleteRiskJob(job, application.ActionResult{Data: []domain.DeleteRisk{}}, nil)
@@ -358,29 +360,29 @@ func TestTaskDeleteLateRiskResultCannotEnableConfirmation(t *testing.T) {
 
 func TestTaskLifecycleSnapshotPreservesUnrelatedDraftAndArchiveRoute(t *testing.T) {
 	s := taskNavigationFixture()
-	s.page, s.selected = "archive", 3
-	s.tasks = append(s.tasks, task{id: "archive-next", title: "已归档的其他任务", createdAt: "next", archived: true})
+	s.page, s.taskUnit.state.selected = "archive", 3
+	s.taskUnit.state.tasks = append(s.taskUnit.state.tasks, task{id: "archive-next", title: "已归档的其他任务", createdAt: "next", archived: true})
 	state := s.taskIndexBrowsingFor(true)
 	state.search, state.scroll.Y = "已归档", 50
-	s.documentPath, s.documentContent, s.documentDirty = "draft.md", "保留草稿", true
-	s.documentDrafts["draft.md"] = s.documentContent
+	s.materialsUnit.state.documentPath, s.materialsUnit.state.documentContent, s.materialsUnit.state.documentDirty = "draft.md", "保留草稿", true
+	s.materialsUnit.state.documentDrafts["draft.md"] = s.materialsUnit.state.documentContent
 	snapshot := application.Snapshot{ConfigJSON: `{}`, Groups: s.snapshot.Groups}
-	for index, item := range s.tasks {
+	for index, item := range s.taskUnit.state.tasks {
 		snapshot.Tasks = append(snapshot.Tasks, application.Task{ID: item.id, Title: item.title, Path: item.path,
-			CreatedAt: item.createdAt, Archived: item.archived && index != len(s.tasks)-1, GroupID: item.groupID})
+			CreatedAt: item.createdAt, Archived: item.archived && index != len(s.taskUnit.state.tasks)-1, GroupID: item.groupID})
 	}
 	// Restore another archived task. The current archived task and draft survive.
 	s.applySnapshot(snapshot)
 	s.applyTaskLifecycleSnapshotSelection(application.Action{Kind: "task.restore", TaskID: "archive-next"}, application.ActionResult{})
-	if s.currentTask().id != "task-archived" || s.page != "archive" || s.documentContent != "保留草稿" ||
-		!s.documentDirty || s.documentDrafts["draft.md"] != s.documentContent || state.search != "已归档" || state.scroll.Y != 50 {
+	if s.taskUnit.currentTask().id != "task-archived" || s.page != "archive" || s.materialsUnit.state.documentContent != "保留草稿" ||
+		!s.materialsUnit.state.documentDirty || s.materialsUnit.state.documentDrafts["draft.md"] != s.materialsUnit.state.documentContent || state.search != "已归档" || state.scroll.Y != 50 {
 		t.Fatal("restoring a different task changed archive selection, browsing or the current draft")
 	}
 	// Restore the last matching archive: remain in the category with empty detail.
 	snapshot.Tasks[3].Archived = false
 	s.applySnapshot(snapshot)
 	s.applyTaskLifecycleSnapshotSelection(application.Action{Kind: "task.restore", TaskID: "task-archived"}, application.ActionResult{})
-	if s.page != "archive" || s.selected != -1 || state.search != "已归档" || state.revealTaskKey != "" {
+	if s.page != "archive" || s.taskUnit.state.selected != -1 || state.search != "已归档" || state.revealTaskKey != "" {
 		t.Fatal("restoring the last archive navigated away or selected a hidden task")
 	}
 }
@@ -389,24 +391,24 @@ func TestTaskLifecycleSelectionUsesFilteredNeighbors(t *testing.T) {
 	for _, mode := range []string{"next", "previous", "empty", "non-current", "pinned"} {
 		t.Run(mode, func(t *testing.T) {
 			s := taskNavigationFixture()
-			s.selected = 1
-			next := slices.Clone(s.tasks)
+			s.taskUnit.state.selected = 1
+			next := slices.Clone(s.taskUnit.state.tasks)
 			next[1].archived = true
 			want := 2
 			switch mode {
 			case "previous":
-				s.selected = 4
+				s.taskUnit.state.selected = 4
 				next = next[:4]
 				want = 2
 			case "empty":
 				s.taskIndexBrowsingFor(false).search = "UI-7"
 				want = -1
 			case "non-current":
-				s.selected = 0
+				s.taskUnit.state.selected = 0
 				want = 0
 			case "pinned":
-				s.setTaskPinned(s.tasks[4], true)
-				s.setTaskPinned(s.tasks[1], true)
+				s.setTaskPinned(s.taskUnit.state.tasks[4], true)
+				s.setTaskPinned(s.taskUnit.state.tasks[1], true)
 				want = 4
 			}
 			if got := s.taskLifecycleSnapshotIndex(next); got != want {
@@ -426,7 +428,7 @@ func TestTaskContextMenuThemedLayout(t *testing.T) {
 					title := "界面体验"
 					lifecycleLabel := "归档任务"
 					if archived {
-						s.page, s.selected = "archive", 3
+						s.page, s.taskUnit.state.selected = "archive", 3
 						title, lifecycleLabel = "已归档任务", "恢复归档"
 					}
 					tester := ui.NewTester(func(c *ui.Context) {
@@ -452,8 +454,8 @@ func TestTaskContextMenuThemedLayout(t *testing.T) {
 					if archived {
 						index = 3
 					}
-					if !s.taskIsPinned(s.tasks[index]) {
-						t.Fatalf("the themed popup did not activate its context target: scope=%+v texts=%q", s.taskContextScope, tester.Texts())
+					if !s.taskIsPinned(s.taskUnit.state.tasks[index]) {
+						t.Fatalf("the themed popup did not activate its context target: scope=%+v texts=%q", s.taskUnit.state.taskContextScope, tester.Texts())
 					}
 				})
 			}

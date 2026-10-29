@@ -10,7 +10,7 @@ import (
 )
 
 func (s *app) renderCodexAI(c *ui.Context, p palette) {
-	state := s.codexAI
+	state := s.toolsUnit.state.codexAI
 	if state == nil {
 		return
 	}
@@ -60,6 +60,9 @@ func (s *app) renderCodexAI(c *ui.Context, p palette) {
 						s.cancelCodexAIRequest(state, "file-read")
 						if tab == codexAITabSessions && !state.threadsLoaded && !state.threadsLoading {
 							s.requestCodexAIThreads()
+						}
+						if tab == codexAITabSkills && !state.skillsLoaded {
+							s.requestCodexAISnapshot()
 						}
 					})
 				}

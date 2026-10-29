@@ -28,17 +28,17 @@ func TestAnnualMaterialsTreePermissionsAndLayouts(t *testing.T) {
 				root := filepath.Join(t.TempDir(), "2026", "123-需求名称较长的年度资料目录")
 				s := newApp(&annualMaterialsUIBackend{}, Options{Page: "tasks", Tab: 1})
 				s.loading = false
-				s.documentsLoaded = true
+				s.materialsUnit.state.documentsLoaded = true
 				s.dark = dark
-				s.tasks = []task{{id: "annual", path: filepath.Join(t.TempDir(), "task"), materialsPath: root, materialsStatus: "READY"}}
+				s.taskUnit.state.tasks = []task{{id: "annual", path: filepath.Join(t.TempDir(), "task"), materialsPath: root, materialsStatus: "READY"}}
 				c := domain.DefaultAppConfig()
 				sub := "我的研发交付资料"
 				c.RequirementMaterialsSubdirectory = &sub
 				encoded, _ := json.Marshal(c)
-				s.configJSON = string(encoded)
+				s.settingsUnit.state.configJSON = string(encoded)
 				for _, name := range []string{sub, "temp", "测试同事的测试用例和验收记录目录"} {
 					dir := filepath.Join(root, name)
-					s.documents = append(s.documents, application.Document{Name: name, Path: dir, Kind: "directory", Children: []application.Document{{Name: "用例.md", Path: filepath.Join(dir, "用例.md"), Kind: "markdown"}}})
+					s.materialsUnit.state.documents = append(s.materialsUnit.state.documents, application.Document{Name: name, Path: dir, Kind: "directory", Children: []application.Document{{Name: "用例.md", Path: filepath.Join(dir, "用例.md"), Kind: "markdown"}}})
 				}
 				state := s.ensureMaterialsFileManagementState()
 				s.setReadingDirectoryExpanded(sub, true)
@@ -68,7 +68,7 @@ func TestAnnualMaterialsTreePermissionsAndLayouts(t *testing.T) {
 				if dir, _ := s.materialsCurrentDirectory(state); dir != filepath.Join(root, sub) {
 					t.Fatal("wrong default", dir)
 				}
-				peer := s.documents[2].Path
+				peer := s.materialsUnit.state.documents[2].Path
 				s.openMaterialsRenameForm(peer)
 				if s.dialogOpen || s.lastError == "" {
 					t.Fatal("peer rename opened a form")

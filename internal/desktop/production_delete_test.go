@@ -20,7 +20,7 @@ func productionEndedDeleteFixture(t *testing.T) (*app, *productionView, producti
 	s, v, b := productionFixture(t)
 	b.Schema, b.Ended, b.Phase = 1, true, "ENDED"
 	b.Intent = &production.Intent{Kind: "feature", Preview: production.Preview{ProductionStatus: domain.GenbuTagProbeStatus{Build: domain.GenbuUnknown, UAT: domain.GenbuUnknown, Production: domain.GenbuUnknown}}, Merge: &production.Merge{Worktree: "C:/synthetic/retained workspace", Conflicts: []string{"unfinished.go"}}}
-	s.production.batches[0] = b
+	s.releaseUnit.state.production.batches[0] = b
 	return s, v, b
 }
 
@@ -30,10 +30,10 @@ func TestProductionDeleteMenuOnlyAppearsForEndedBatches(t *testing.T) {
 			s, v, b := productionEndedDeleteFixture(t)
 			if state == "active" {
 				b.Ended, b.Phase = false, "READY"
-				s.production.batches[0] = b
+				s.releaseUnit.state.production.batches[0] = b
 			}
 			if state == "none" {
-				s.production.batches, v.BatchID = nil, ""
+				s.releaseUnit.state.production.batches, v.BatchID = nil, ""
 			}
 			v.Busy = state == "busy"
 			s.win = &mygo.Window{}
@@ -76,7 +76,7 @@ func TestProductionDeleteConfirmationRejectsChangedContext(t *testing.T) {
 			case "home":
 				s.snapshot.Home = "another-home"
 			case "config":
-				s.configJSON = `{"tagEnabled":false}`
+				s.settingsUnit.state.configJSON = `{"tagEnabled":false}`
 			case "page":
 				s.page = "tasks"
 			case "batch":
@@ -84,11 +84,11 @@ func TestProductionDeleteConfirmationRejectsChangedContext(t *testing.T) {
 			case "selection":
 				v.Selection.ServiceID = "another-service"
 			case "record":
-				s.production.batches[0].UpdatedAt = "newer record"
+				s.releaseUnit.state.production.batches[0].UpdatedAt = "newer record"
 			case "recreated":
-				s.production.batches[0].CreatedAt = "recreated"
+				s.releaseUnit.state.production.batches[0].CreatedAt = "recreated"
 			case "active":
-				s.production.batches[0].Ended = false
+				s.releaseUnit.state.production.batches[0].Ended = false
 			case "busy":
 				v.Busy = true
 			}
@@ -102,7 +102,7 @@ func TestProductionDeleteConfirmationRejectsChangedContext(t *testing.T) {
 func TestProductionDeleteConfirmationCapturesExactLocalRecord(t *testing.T) {
 	s, v, b, backend, window := productionRequestFixture(t)
 	b.Ended, b.Phase = true, "ENDED"
-	s.production.batches[0] = b
+	s.releaseUnit.state.production.batches[0] = b
 	s.win = &mygo.Window{}
 	s.confirmProductionDelete(v, b)
 	d := s.confirmationDialog
@@ -121,7 +121,7 @@ func TestProductionDeleteConfirmationCapturesExactLocalRecord(t *testing.T) {
 	}
 	backend.replies <- productionTestAnswer{err: errors.New("local file is read-only")}
 	productionTestUpdate(t, window)
-	if len(s.production.batches) != 1 || s.production.batches[0].ID != b.ID || s.production.deletedBatches[b.ID] || !strings.Contains(v.Error, "read-only") {
+	if len(s.releaseUnit.state.production.batches) != 1 || s.releaseUnit.state.production.batches[0].ID != b.ID || s.releaseUnit.state.production.deletedBatches[b.ID] || !strings.Contains(v.Error, "read-only") {
 		t.Fatal("failed deletion removed the record or hid its cause")
 	}
 }
@@ -131,35 +131,35 @@ func TestProductionDeleteResultPreservesOtherStateAndRejectsOldReports(t *testin
 		t.Run(scenario, func(t *testing.T) {
 			s, v, b, backend, window := productionRequestFixture(t)
 			b.Ended, b.Phase = true, "ENDED"
-			s.production.batches[0] = b
+			s.releaseUnit.state.production.batches[0] = b
 			other := b
 			other.ID, other.Version, other.ReleaseBranch = strings.Repeat("d", 32), "2.3.45", "release/2.3.45"
 			other.Ended, other.Phase = scenario != "active-remains", "READY"
 			if scenario == "service" {
 				other.Target.ServiceID = "other-service"
 				key := productionKey(other.Target.Selection)
-				s.production.views[key] = &productionView{Selection: other.Target.Selection, BatchID: other.ID}
-				s.production.choices = append(s.production.choices, productionServiceChoice{Service: application.Service{ID: other.Target.ServiceID, GroupID: other.Target.GroupID, Name: "another service"}})
+				s.releaseUnit.state.production.views[key] = &productionView{Selection: other.Target.Selection, BatchID: other.ID}
+				s.releaseUnit.state.production.choices = append(s.releaseUnit.state.production.choices, productionServiceChoice{Service: application.Service{ID: other.Target.ServiceID, GroupID: other.Target.GroupID, Name: "another service"}})
 			}
 			if scenario != "last" && scenario != "page" && scenario != "home" && scenario != "late-generation" {
-				s.production.batches = append(s.production.batches, other)
+				s.releaseUnit.state.production.batches = append(s.releaseUnit.state.production.batches, other)
 			}
-			oldList := append([]production.Batch(nil), s.production.batches...)
-			s.tasks = []task{{id: "current-task", title: "kept"}}
-			s.notes[0] = "unsaved draft"
-			s.production.timers[b.ID] = time.AfterFunc(time.Hour, func() {})
-			s.production.diffDialog = &productionDiffDialog{Open: true, BatchID: b.ID}
+			oldList := append([]production.Batch(nil), s.releaseUnit.state.production.batches...)
+			s.taskUnit.state.tasks = []task{{id: "current-task", title: "kept"}}
+			s.taskUnit.state.notes[0] = "unsaved draft"
+			s.releaseUnit.state.production.timers[b.ID] = time.AfterFunc(time.Hour, func() {})
+			s.releaseUnit.state.production.diffDialog = &productionDiffDialog{Open: true, BatchID: b.ID}
 			token, _ := production.BatchRecordToken(b)
 			s.productionRequestFor(v, application.Action{Kind: "production.delete", Payload: map[string]any{"batchId": b.ID, "recordToken": token, "confirmed": true}}, "")
 			productionTestCall(t, backend)
-			originalSelection := s.production.selected
+			originalSelection := s.releaseUnit.state.production.selected
 			switch scenario {
 			case "page":
 				s.page = "tasks"
 			case "batch":
 				v.selectProductionBatch(other.ID)
 			case "service":
-				s.production.selected = productionKey(other.Target.Selection)
+				s.releaseUnit.state.production.selected = productionKey(other.Target.Selection)
 			case "home":
 				s.snapshot.Home = "another-home"
 			case "late-generation":
@@ -168,18 +168,18 @@ func TestProductionDeleteResultPreservesOtherStateAndRejectsOldReports(t *testin
 			backend.replies <- productionTestAnswer{result: application.ActionResult{Message: "本地批次记录已删除"}}
 			productionTestUpdate(t, window)
 			if scenario == "home" {
-				if s.production.deletedBatches[b.ID] || len(s.production.batches) != len(oldList) {
+				if s.releaseUnit.state.production.deletedBatches[b.ID] || len(s.releaseUnit.state.production.batches) != len(oldList) {
 					t.Fatal("old-home deletion changed the current data scope")
 				}
 				return
 			}
-			if !s.production.deletedBatches[b.ID] || s.production.timers[b.ID] != nil || s.production.diffDialog != nil {
+			if !s.releaseUnit.state.production.deletedBatches[b.ID] || s.releaseUnit.state.production.timers[b.ID] != nil || s.releaseUnit.state.production.diffDialog != nil {
 				t.Fatal("deletion left an old timer/diff or failed to mark the removed record")
 			}
-			if s.currentTask().id != "current-task" || s.notes[0] != "unsaved draft" || len(backend.calls) != 0 {
+			if s.taskUnit.currentTask().id != "current-task" || s.taskUnit.state.notes[0] != "unsaved draft" || len(backend.calls) != 0 {
 				t.Fatal("local deletion changed task state or triggered an external follow-up")
 			}
-			if scenario == "service" && s.production.selected != productionKey(other.Target.Selection) || scenario != "service" && s.production.selected != originalSelection {
+			if scenario == "service" && s.releaseUnit.state.production.selected != productionKey(other.Target.Selection) || scenario != "service" && s.releaseUnit.state.production.selected != originalSelection {
 				t.Fatal("deletion changed the selected service")
 			}
 			if scenario == "service" && s.productionView().BatchID != other.ID {
@@ -192,9 +192,9 @@ func TestProductionDeleteResultPreservesOtherStateAndRejectsOldReports(t *testin
 			} else if v.BatchID != "" {
 				t.Fatal("last deleted batch retained its selection")
 			}
-			s.production.mergeBatch(b)
-			s.production.replaceBatches(oldList)
-			for _, record := range s.production.batches {
+			s.releaseUnit.state.production.mergeBatch(b)
+			s.releaseUnit.state.production.replaceBatches(oldList)
+			for _, record := range s.releaseUnit.state.production.batches {
 				if record.ID == b.ID {
 					t.Fatal("late list/status result restored a deleted batch")
 				}
@@ -229,23 +229,23 @@ func TestProductionDeletePrunesOnlyOrphanHistoricalServices(t *testing.T) {
 	for _, remaining := range []bool{false, true} {
 		t.Run(fmt.Sprint(remaining), func(t *testing.T) {
 			s, v, b := productionEndedDeleteFixture(t)
-			s.production.choices[0].Historical = true
-			originalKey := s.production.selected
+			s.releaseUnit.state.production.choices[0].Historical = true
+			originalKey := s.releaseUnit.state.production.selected
 			otherSelection := production.Selection{GroupID: "another-group", ServiceID: "another-service"}
 			otherKey := productionKey(otherSelection)
-			s.production.choices = append(s.production.choices, productionServiceChoice{Service: application.Service{ID: otherSelection.ServiceID, GroupID: otherSelection.GroupID, Name: "configured service"}})
-			s.production.views[otherKey] = &productionView{Selection: otherSelection}
+			s.releaseUnit.state.production.choices = append(s.releaseUnit.state.production.choices, productionServiceChoice{Service: application.Service{ID: otherSelection.ServiceID, GroupID: otherSelection.GroupID, Name: "configured service"}})
+			s.releaseUnit.state.production.views[otherKey] = &productionView{Selection: otherSelection}
 			if remaining {
 				other := b
 				other.ID = strings.Repeat("f", 32)
-				s.production.batches = append(s.production.batches, other)
+				s.releaseUnit.state.production.batches = append(s.releaseUnit.state.production.batches, other)
 			}
-			s.forgetProductionBatch(s.production, b.ID)
+			s.forgetProductionBatch(s.releaseUnit.state.production, b.ID)
 			if remaining {
-				if len(s.production.choices) != 2 || s.production.selected != originalKey || s.production.views[originalKey] != v {
+				if len(s.releaseUnit.state.production.choices) != 2 || s.releaseUnit.state.production.selected != originalKey || s.releaseUnit.state.production.views[originalKey] != v {
 					t.Fatal("a historical service with another record was removed")
 				}
-			} else if len(s.production.choices) != 1 || s.production.selected != otherKey || s.production.views[originalKey] != nil {
+			} else if len(s.releaseUnit.state.production.choices) != 1 || s.releaseUnit.state.production.selected != otherKey || s.releaseUnit.state.production.views[originalKey] != nil {
 				t.Fatal("orphan historical service was retained or a configured service was removed")
 			}
 		})
@@ -254,14 +254,14 @@ func TestProductionDeletePrunesOnlyOrphanHistoricalServices(t *testing.T) {
 
 func TestProductionDeleteTombstonesAreScopedToTheDataDirectory(t *testing.T) {
 	s, _, b := productionEndedDeleteFixture(t)
-	s.forgetProductionBatch(s.production, b.ID)
+	s.forgetProductionBatch(s.releaseUnit.state.production, b.ID)
 	s.snapshot.Home = t.TempDir()
 	s.enterProductionPage() // No backend is attached; this only changes local state.
-	if len(s.production.deletedBatches) != 0 {
+	if len(s.releaseUnit.state.production.deletedBatches) != 0 {
 		t.Fatal("old data-directory deletions leaked into a new scope")
 	}
-	s.production.mergeBatch(b)
-	if len(s.production.batches) != 1 {
+	s.releaseUnit.state.production.mergeBatch(b)
+	if len(s.releaseUnit.state.production.batches) != 1 {
 		t.Fatal("an independent directory's record was hidden by an old deletion")
 	}
 }

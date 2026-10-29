@@ -21,12 +21,12 @@ func (s *app) openProductionBaseline(v *productionView) {
 		return
 	}
 	s.ensureProduction().baselineDialog = &productionBaselineDialog{Open: true, Tag: v.ManualTag, OriginalTag: v.ManualTag,
-		Home: s.snapshot.Home, Scope: productionConfigScope(s.configJSON), BatchID: v.BatchID, View: v, Preview: v.Preview}
+		Home: s.snapshot.Home, Scope: productionConfigScope(s.settingsUnit.state.configJSON), BatchID: v.BatchID, View: v, Preview: v.Preview}
 }
 
 func (s *app) productionBaselineCurrent(d *productionBaselineDialog) bool {
 	return d != nil && s.page == "production" && s.productionView() == d.View && s.snapshot.Home == d.Home &&
-		productionConfigScope(s.configJSON) == d.Scope && d.View.BatchID == d.BatchID && d.View.Preview == d.Preview && d.View.ManualTag == d.OriginalTag
+		productionConfigScope(s.settingsUnit.state.configJSON) == d.Scope && d.View.BatchID == d.BatchID && d.View.Preview == d.Preview && d.View.ManualTag == d.OriginalTag
 }
 
 func (s *app) applyProductionBaseline(d *productionBaselineDialog, automatic bool) {
@@ -47,12 +47,12 @@ func (s *app) applyProductionBaseline(d *productionBaselineDialog, automatic boo
 }
 
 func (s *app) renderProductionBaselineDialog(c *ui.Context, p palette) {
-	if s.production == nil || s.production.baselineDialog == nil {
+	if s.releaseUnit.state.production == nil || s.releaseUnit.state.production.baselineDialog == nil {
 		return
 	}
-	d := s.production.baselineDialog
+	d := s.releaseUnit.state.production.baselineDialog
 	if !d.Open || !s.productionBaselineCurrent(d) {
-		s.production.baselineDialog = nil
+		s.releaseUnit.state.production.baselineDialog = nil
 		return
 	}
 	dialog := ui.DialogBase(c.Key("production-baseline-dialog"), &d.Open, func(backdrop, panel ui.Element) {

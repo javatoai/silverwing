@@ -16,10 +16,10 @@ func (s *app) settingsSkills(c *ui.Context, p palette) {
 			}
 		})
 	}, func() {
-		if len(s.settingsSkillSources) == 0 {
+		if len(s.settingsUnit.state.settingsSkillSources) == 0 {
 			settingsMuted(c, p, "还没有 Skill 来源，或尚未读取来源状态。")
 		}
-		for _, wrapper := range s.settingsSkillSources {
+		for _, wrapper := range s.settingsUnit.state.settingsSkillSources {
 			source := mapData(wrapper["source"])
 			status := mapData(wrapper["status"])
 			sourceID := mapString(source, "id")
@@ -104,7 +104,7 @@ func (s *app) settingsSkills(c *ui.Context, p palette) {
 }
 
 func (s *app) localSkill(name string) map[string]any {
-	for _, skill := range s.settingsLocalSkills {
+	for _, skill := range s.settingsUnit.state.settingsLocalSkills {
 		if mapString(skill, "name") == name || mapString(skill, "directoryName") == name {
 			return skill
 		}

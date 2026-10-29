@@ -76,25 +76,6 @@ type TaskRootMigrationService struct {
 
 const taskRootMigrationMarker = ".silverwing-task-root-migration"
 
-func NewTaskRootMigrationService(paths storage.Paths, configStore *storage.ConfigStore, manifests *storage.ManifestStore, docs *AgentDocumentService, git *GitClient, locks *OperationLocks) *TaskRootMigrationService {
-	if manifests == nil {
-		manifests = storage.NewManifestStore()
-	}
-	if configStore == nil {
-		configStore = storage.NewConfigStore(paths)
-	}
-	if git == nil {
-		git = NewGitClient(nil, "")
-	}
-	if docs == nil {
-		docs = NewAgentDocumentService(paths, manifests)
-	}
-	if locks == nil {
-		locks = NewOperationLocks(paths.Locks)
-	}
-	return &TaskRootMigrationService{Paths: paths, ConfigStore: configStore, Manifests: manifests, Documents: docs, Drafts: documents.NewService(paths.Cache), Git: git, Locks: locks, Now: time.Now}
-}
-
 func (s *TaskRootMigrationService) Preview(config domain.AppConfig, requestedTarget string) (TaskRootMigrationPreview, error) {
 	plan, err := s.buildMigrationPlan(config, requestedTarget)
 	if err != nil {

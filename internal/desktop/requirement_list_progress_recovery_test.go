@@ -25,30 +25,30 @@ func holdRequirementProgressIdentityProbe(t *testing.T, s *app) *requirementIden
 func TestRequirementListProgressInitialFailurePanelRetry(t *testing.T) {
 	s := estimateBadgeApp(t)
 	s.page, s.backend = "requirements", &estimateBadgeBackend{}
-	s.requirementsRequested, s.requirementsLoadError = true, "读取 Sprint 目录超时"
+	s.requirementUnit.state.requirementsRequested, s.requirementUnit.state.requirementsLoadError = true, "读取 Sprint 目录超时"
 	probe := holdRequirementProgressIdentityProbe(t, s)
 	tester := ui.NewTester(func(c *ui.Context) {
 		ui.Column(c).Fill().Children(func() {
-			s.requirementFailurePanel(c, setTheme(c, false), []string{s.requirementsLoadError}, true)
+			s.requirementFailurePanel(c, setTheme(c, false), []string{s.requirementUnit.state.requirementsLoadError}, true)
 		})
 	}, 640, 360)
 	if err := tester.Click("重试需求查询"); err != nil {
 		t.Fatal(err)
 	}
-	pending := s.requirementIdentityJobs.pending
-	if pending == nil || !pending.refresh || pending.sprintKey != "" || pending.progress != nil || s.requirementListProgress != nil {
+	pending := s.requirementUnit.state.requirementIdentityJobs.pending
+	if pending == nil || !pending.refresh || pending.sprintKey != "" || pending.progress != nil || s.requirementUnit.state.requirementListProgress != nil {
 		t.Fatalf("initial failure did not retry the catalogue without a dialog: %+v", pending)
 	}
-	generation := s.requirementListJobs.generation
+	generation := s.requirementUnit.state.requirementListJobs.generation
 	for range 3 {
 		s.refreshRequirementListWithProgress("")
 	}
-	if s.requirementIdentityJobs.pending != pending || s.requirementIdentityJobs.current != probe ||
-		s.requirementListJobs.generation != generation || s.requirementListJobs.current != nil {
+	if s.requirementUnit.state.requirementIdentityJobs.pending != pending || s.requirementUnit.state.requirementIdentityJobs.current != probe ||
+		s.requirementUnit.state.requirementListJobs.generation != generation || s.requirementUnit.state.requirementListJobs.current != nil {
 		t.Fatal("repeated initial retry duplicated or replaced the pending read")
 	}
 	s.refreshRequirementListWithProgress("p:2")
-	if s.requirementIdentityJobs.pending != pending || s.requirementListProgress != nil {
+	if s.requirementUnit.state.requirementIdentityJobs.pending != pending || s.requirementUnit.state.requirementListProgress != nil {
 		t.Fatal("a stale selected-Sprint refresh changed the initial retry")
 	}
 }
@@ -74,21 +74,21 @@ func TestRequirementListProgressCatalogueFailureRetryEntrances(t *testing.T) {
 			t.Run(failure+"/"+entrance.name, func(t *testing.T) {
 				s, p, request := requirementProgressFixture(t)
 				old := application.Requirement{ID: "old", Title: "上次结果"}
-				s.requirements, request.items = []application.Requirement{old}, []application.Requirement{old}
+				s.requirementUnit.state.requirements, request.items = []application.Requirement{old}, []application.Requirement{old}
 				p.open = entrance.visible
 				s.finishRequirementListJob(request, missingRequirementSprintResult(failure), nil)
 				s.observeRequirementListProgress()
-				if s.requirementListProgress != p || !s.requirementListProgressCurrent(p) || p.running ||
+				if s.requirementUnit.state.requirementListProgress != p || !s.requirementListProgressCurrent(p) || p.running ||
 					p.open != entrance.visible || len(p.failures) == 0 || !strings.Contains(p.notificationError, "未完成") {
 					t.Fatalf("catalogue outcome lost the settled session or visibility: %+v", p)
 				}
-				if p.sprintKey != "p:1" || p.viewSprintKey != "" || s.requirementsSelectedSprintKey != "" ||
-					len(s.requirements) != 0 || s.requirementListJobs.current != nil {
+				if p.sprintKey != "p:1" || p.viewSprintKey != "" || s.requirementUnit.state.requirementsSelectedSprintKey != "" ||
+					len(s.requirementUnit.state.requirements) != 0 || s.requirementUnit.state.requirementListJobs.current != nil {
 					t.Fatal("progress changed the existing missing-Sprint selection/list policy or automatically queried another Sprint")
 				}
 				tester := ui.NewTester(func(c *ui.Context) {
 					ui.Column(c).Fill().Children(func() {
-						s.requirementFailurePanel(c, setTheme(c, false), []string{s.requirementsLoadError}, true)
+						s.requirementFailurePanel(c, setTheme(c, false), []string{s.requirementUnit.state.requirementsLoadError}, true)
 					})
 					s.renderRequirementListProgressDialog(c, setTheme(c, false))
 				}, 800, 640)
@@ -109,20 +109,20 @@ func TestRequirementListProgressCatalogueFailureRetryEntrances(t *testing.T) {
 				if err := tester.Click(entrance.button); err != nil {
 					t.Fatal(err)
 				}
-				pending, next := s.requirementIdentityJobs.pending, s.requirementListProgress
+				pending, next := s.requirementUnit.state.requirementIdentityJobs.pending, s.requirementUnit.state.requirementListProgress
 				if pending == nil || pending.sprintKey != "p:1" || !pending.refresh || pending.progress != next ||
-					next == nil || next == p || next.sprintKey != "p:1" || s.requirementsSelectedSprintKey != "p:1" {
+					next == nil || next == p || next.sprintKey != "p:1" || s.requirementUnit.state.requirementsSelectedSprintKey != "p:1" {
 					t.Fatalf("retry lost the original Sprint intent: pending=%+v progress=%+v", pending, next)
 				}
-				generation := s.requirementListJobs.generation
+				generation := s.requirementUnit.state.requirementListJobs.generation
 				for range 3 {
 					s.refreshRequirementListWithProgress("p:1")
 				}
-				if s.requirementIdentityJobs.pending != pending || s.requirementIdentityJobs.current != probe ||
-					s.requirementListJobs.generation != generation || s.requirementListJobs.current != nil {
+				if s.requirementUnit.state.requirementIdentityJobs.pending != pending || s.requirementUnit.state.requirementIdentityJobs.current != probe ||
+					s.requirementUnit.state.requirementListJobs.generation != generation || s.requirementUnit.state.requirementListJobs.current != nil {
 					t.Fatal("reopening the retried session restarted identity/list work")
 				}
-				if !s.documentDirty || s.documentContent != "未保存的资料草稿" {
+				if !s.materialsUnit.state.documentDirty || s.materialsUnit.state.documentContent != "未保存的资料草稿" {
 					t.Fatal("catalogue failure/retry changed an unrelated draft")
 				}
 			})
@@ -143,15 +143,15 @@ func TestRequirementListProgressResolvedFailureRejectsChangedScope(t *testing.T)
 			case "home":
 				s.snapshot.Home += "-other"
 			case "project":
-				s.configJSON = strings.ReplaceAll(s.configJSON, `"p"`, `"changed-project"`)
+				s.settingsUnit.state.configJSON = strings.ReplaceAll(s.settingsUnit.state.configJSON, `"p"`, `"changed-project"`)
 			case "account":
-				s.requirementIdentityJobs.identity = "other-account"
+				s.requirementUnit.state.requirementIdentityJobs.identity = "other-account"
 			case "profile":
-				s.requirementIdentityJobs.context.profileModified++
+				s.requirementUnit.state.requirementIdentityJobs.context.profileModified++
 			}
 			s.retryRequirementListProgress(p)
 			s.observeRequirementListProgress()
-			if s.requirementIdentityJobs.pending != nil || s.requirementListProgress != nil || p.running {
+			if s.requirementUnit.state.requirementIdentityJobs.pending != nil || s.requirementUnit.state.requirementListProgress != nil || p.running {
 				t.Fatal("an old failure session was resurrected after a user scope change")
 			}
 		})
@@ -160,15 +160,15 @@ func TestRequirementListProgressResolvedFailureRejectsChangedScope(t *testing.T)
 
 func TestRequirementListProgressPendingIdentitySurvivesNavigation(t *testing.T) {
 	s := estimateBadgeApp(t)
-	s.page, s.backend, s.requirementsSelectedSprintKey = "requirements", &estimateBadgeBackend{}, "p:1"
-	s.requirementIdentityJobs.page = "requirements"
+	s.page, s.backend, s.requirementUnit.state.requirementsSelectedSprintKey = "requirements", &estimateBadgeBackend{}, "p:1"
+	s.requirementUnit.state.requirementIdentityJobs.page = "requirements"
 	probe := holdRequirementProgressIdentityProbe(t, s)
 	s.refreshRequirementListWithProgress("p:1")
-	p, pending := s.requirementListProgress, s.requirementIdentityJobs.pending
+	p, pending := s.requirementUnit.state.requirementListProgress, s.requirementUnit.state.requirementIdentityJobs.pending
 	if p == nil || p.request != nil || pending == nil || pending.progress != p || !pending.refresh {
 		t.Fatal("manual list intent was not attached to its pending identity check")
 	}
-	generation := s.requirementListJobs.generation
+	generation := s.requirementUnit.state.requirementListJobs.generation
 	s.page = "tasks"
 	s.observeRequirementIdentityJobs()
 	s.observeRequirementListProgress()
@@ -179,9 +179,9 @@ func TestRequirementListProgressPendingIdentitySurvivesNavigation(t *testing.T) 
 	s.observeRequirementIdentityJobs()
 	s.requestRequirements("", false)
 	s.refreshRequirementListWithProgress("p:1")
-	if !p.open || s.requirementListProgress != p || s.requirementIdentityJobs.pending != pending ||
+	if !p.open || s.requirementUnit.state.requirementListProgress != p || s.requirementUnit.state.requirementIdentityJobs.pending != pending ||
 		!pending.refresh || pending.sprintKey != "p:1" || pending.progress != p ||
-		s.requirementIdentityJobs.current != probe || s.requirementListJobs.generation != generation || s.requirementListJobs.current != nil {
+		s.requirementUnit.state.requirementIdentityJobs.current != probe || s.requirementUnit.state.requirementListJobs.generation != generation || s.requirementUnit.state.requirementListJobs.current != nil {
 		t.Fatal("page re-entry/background read replaced the manual pending identity/list intent")
 	}
 }
@@ -199,9 +199,9 @@ func TestRequirementListProgressIncompleteEstimatesKeepsAppliedList(t *testing.T
 			items[0].WorkItem.MySprintEstimateDays = nil
 			items[0].WorkItem.MetadataWarnings = []string{warning}
 			s.finishRequirementListJob(request, result, nil)
-			if len(s.requirements) != 1 || s.requirements[0].ID != "new" ||
-				s.requirements[0].WorkItem.MySprintEstimateDays != nil || len(s.requirements[0].WorkItem.MetadataWarnings) != 1 ||
-				s.requirementsLoadError != "" || !s.requirementsLoaded {
+			if len(s.requirementUnit.state.requirements) != 1 || s.requirementUnit.state.requirements[0].ID != "new" ||
+				s.requirementUnit.state.requirements[0].WorkItem.MySprintEstimateDays != nil || len(s.requirementUnit.state.requirements[0].WorkItem.MetadataWarnings) != 1 ||
+				s.requirementUnit.state.requirementsLoadError != "" || !s.requirementUnit.state.requirementsLoaded {
 				t.Fatal("optional estimate failure discarded the newly readable list")
 			}
 			if p.running || p.open != visible || p.message != "" || p.notificationError == "" ||

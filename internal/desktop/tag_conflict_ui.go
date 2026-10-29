@@ -51,7 +51,7 @@ func (s *app) saveTagWorkspaceCheckState(state tagWorkspaceCheckState) {
 }
 
 func (s *app) tagConflictWorkspace(record application.TagRecord) (task, application.Workspace, string) {
-	t := s.taskByID(record.TaskID)
+	t := s.taskUnit.taskByID(record.TaskID)
 	if t.id == "" || record.ServiceID == "" || record.ModuleID == "" {
 		return task{}, application.Workspace{}, "未找到此 Tag 记录对应的任务或服务模块，已禁用工作区操作。"
 	}

@@ -1,53 +1,139 @@
 # 架构与职责边界
 
-Silverwing 是基于 Go 与 MyGO 的原生桌面工作台。桌面界面在进程内调用应用层，本地功能不依赖 HTTP 服务、WebView 或 JVM。Git、编程工具和团队集成通过各自的外部 CLI 适配器连接。
+Silverwing 是基于 Go 与 MyGO 的原生桌面工作台。桌面在进程内调用应用层，本地功能不依赖 HTTP 服务、WebView 或 JVM。开发版保留仓库、隔离工作区、任务与交付能力。
 
-## 代码组织
+## 代码与依赖方向
 
 | 包 | 职责 |
 | --- | --- |
 | `cmd/silverwing` | 参数解析、组装应用与桌面入口 |
-| `internal/desktop` | MyGO 视图、输入、窗口状态及异步结果回写 |
-| `internal/application` | 操作边界、工作流协调、DTO 与服务组装 |
-| `internal/domain` | 持久模型、枚举及业务规则 |
-| `internal/workspace` | Git 仓库、隔离工作区与任务生命周期 |
-| `internal/documents` | 资料路径边界、文件管理、读取、保存与草稿 |
-| `internal/editor` | Markdown 原文模型、查找、撤销及自动保存状态机 |
+| `internal/desktop` | MyGO 视图与输入、功能 controller/state、窗口适配和异步结果回写 |
+| `internal/application` | 进程内操作边界、typed 请求与结果、Snapshot、服务组装和兼容 Action 路由 |
+| `internal/domain` | 持久模型、枚举和业务规则；依赖纯文本/值模块，不依赖编辑器、界面或基础设施 |
+| `internal/workspace` / `internal/delivery` | Git 仓库、隔离工作区、任务生命周期、Tag 交付与可选 Genbu 状态 |
+| `internal/documents` | 资料目录与权限、文件操作、准备计划、读写及草稿；消费需求来源接口 |
+| `internal/requirementprovider` | `Meegle` 适配器；执行远端 CLI、解码响应并实现 `documents.RequirementProvider` |
+| `internal/editor` | 编辑器运行时 part ID、查找/撤销、Mermaid 和自动保存状态；保留纯 Markdown API 的兼容包装 |
+| `internal/markdowntext` | Markdown AST、源区间、表格、围栏、阅读投影及评论图片算法；仅使用标准库与 Goldmark |
+| `internal/filelanguage` | 中性的语言枚举、文件名映射和源码编辑覆盖规则 |
+| `internal/asyncjob` | 与业务、窗口无关的作业登记、取消、完成、等待和关闭后回写门禁 |
+| `internal/productprofile` | 本分支固定的名称、edition、默认目录、安装标识和发布渠道 |
 | `internal/media` | PDFium、图片与媒体资源 |
-| `internal/delivery` | Tag 交付、执行历史与可选 Genbu 状态 |
-| `internal/integrations` | Meegle 需求、评论与需求缓存 |
-| `internal/platform` | 系统动作、Skills、Codex 与开发工具适配 |
-| `internal/executable` | 外部 CLI 路径、版本、环境与来源解析 |
-| `internal/process` | 进程执行、超时、取消及子进程清理 |
-| `internal/storage` | 配置分片、锁、原子写入、备份与恢复 |
-| `internal/tools` | JSON、时间、文本对比等独立工具 |
+| `internal/integrations` | 需求列表、内容、评论、身份与缓存；资料准备协议由 requirementprovider 适配 |
+| `internal/platform` / `internal/executable` / `internal/process` | 本机能力、可执行文件发现与外部进程运行 |
+| `internal/storage` | 配置分片、任务清单、锁、原子写入、备份与恢复 |
+| `internal/tools` | JSON、时间、文本对比和端口操作 |
+| `internal/architecture` | 仅用标准库解析源码，检查明确的职责依赖方向 |
 
-## 界面与编辑
+```mermaid
+flowchart TD
+    entry[cmd/silverwing] --> ui[desktop]
+    entry --> app[application]
+    ui --> app
+    app --> model[domain]
+    app --> docs[documents]
+    app --> tasks[workspace]
+    app --> source[requirementprovider]
+    source --> docs
+    docs --> model
+    model --> text[markdowntext]
+    editor[editor] --> text
+    ui --> language[filelanguage]
+```
 
-MyGO 固定为 v0.5.0，使用 `third_party/mygo` 的本地源码。字体回退、输入法、菜单、剪贴板及绘制由框架负责；本地扩展和升级注意事项见 [MYGO-PATCHES.md](../third_party/MYGO-PATCHES.md)。
+## 功能单元与应用边界
 
-任务资料和 Skills 共用 FileTree 的展示与输入组件。构树、排序、权限及文件操作仍属于宿主，选中项、展开目录与当前打开文件分别维护。
+`desktop` 在同一包内按功能持有显式 controller 和私有 state。任务、资料、需求、设置和工具分别由 `taskController`、`materialsController`、`requirementController`、`settingsController`、`toolsController` 管理；controller 不保存 `*app`、窗口、Backend 或通用宿主，只通过窄 view/cleanup ports 协作。功能状态与已拆分的取消、停止、等待清理方法由对应 controller 拥有；仍需窗口能力的方法通过窄 ports 调用。
 
-TXT、SQL 和代码直接使用公共 TextEditor；JSON、CSV 保留默认预览并可切换源码编辑。宿主持有文档身份、草稿和保存状态，组件负责显示与输入，保存回显不重建 Buffer。资料大小上限为含 BOM 的 3 MiB，开发工具为 2 MiB。
+原生窗口、渲染入口、Snapshot 合并、跨功能协调和反馈仍由 `app` 负责，少量视图桥接方法委托 controller。当前边界没有把所有 render 方法移出 `app`，也没有把每个文件变成独立 Go 包。
 
-Markdown 使用 MyGO 自带的 `markdown.View` 与 `DefaultCodeBlock` 只读阅读，保留查找、原文复制、图片权限、链接及 Mermaid 渲染。原文预览使用只读 TextEditor，不提供 Markdown 编辑与保存；普通阅读不加载或改写已有 Markdown 草稿。详见 [TEXT-EDITOR-AND-FILE-TREE.md](TEXT-EDITOR-AND-FILE-TREE.md)。
+| 单元 | 已形成的边界 | 保留的兼容或宿主责任 |
+| --- | --- | --- |
+| Markdown 与语言 | `markdowntext` 提供纯源文本算法；`filelanguage.Language` / `FromPath` / `SourceEditorOverride` 提供中性语法映射 | `editor` 保留运行时状态与原 API 包装，workspace 的旧语言 API 保留 alias / wrapper |
+| 资料与任务组装 | `RequirementProvider.Resolve` / `Title` 注入需求事实；`TaskApplicationDependencies` 和 `NewTaskApplicationServiceWithDependencies` 显式注入任务协作者 | 默认适配器和具体服务的选择集中在 composition；旧构造入口保留兼容 |
+| 应用操作 | `TaskCreator` / `TaskLifecycle` / `TaskMaterials` / `TaskTools`、`DeveloperTools`、`RequirementReader` 提供 typed 消费接口和 `OperationResult[T]` | `Action` / `Dispatch` 保留兼容及动态 CLI、扩展路由；已有入口委托相同业务方法 |
+| 桌面功能 | controller 持有功能 state 与局部生命周期 | app 保留渲染、原生窗口和跨功能协调 |
+| 异步基础 | `asyncjob.Group` / `Lease` 负责登记、关闭、取消和等待，`Post` 只接受窄排队函数 | 已接入 `tool_jobs.go` / `cli_jobs.go`；资料屏障、账号身份与不可取消操作策略仍由调用方处理 |
+| 产品身份 | `productprofile/current.go` 是本分支唯一的固定身份源 | 三个分支仍按原功能边界裁剪，不提供运行时 edition 切换 |
 
-## 状态与持久化
+`DescribeAction(kind)` 的 `ActionDescriptor` 集中表达标签、任务菜单作用域、刷新、反馈、专用结果与取消属性。描述符供呈现和调度使用，不替代业务操作、路径授权或后台身份校验。
 
-配置和任务记录存放在用户的 `silverwing` 数据目录；显式 `--home` 可使用独立目录。首次初始化采用用户任务目录，已保存的自定义根优先。开发验证必须同时隔离 home、任务根与资料根。
+资料树、快速查找、右键目标和复制路径消费独立的文档投影与选择值模型，显式传入根目录、文档、排序和展开状态。树的可见范围、快速查找的原始遍历顺序、文件操作的后代去重及复制路径的完整选择分别保留各自规则。实际文件操作仍在应用与资料层核对任务、目录身份和权限。
 
-配置保存使用锁、分片提交与恢复日志。设置输入由 UI 线程合并并串行保存，回显前保护尚未提交的输入。任务根切换提供迁移、直接切换和取消，只有确认后的业务操作可以改变目录。
+任务创建与追加工作区共用模块草稿的默认值、远程引用同步和目标分支编辑规则；仓库选择器、校验反馈、预检失效及任务身份继续由各入口管理。服务命令表单先采集输入，再通过独立值单元校验并组装配置；模块命令与初始化命令保留各自的目录、默认值和字段合同，JSON 模式仍按原协议解析。
 
-普通文本使用 `materials-text-drafts.json`，650ms 防抖自动保存，组合输入期间暂停落盘。保存验证任务及资料身份、路径、普通文件、符号链接或 junction 和基线摘要，再原子替换文件；失败或冲突保留草稿。原文的 UTF-8 BOM 及混合换行保持不变。
+typed 请求在兼容转换时保留捕获的任务路径、创建时间、配置与资料身份。任务变更仍在原有锁和校验边界内重新核对上下文；界面上可见或 Snapshot 中可写，不等于执行时已经获权。
 
-资料请求捕获任务、目录与文档身份，过期结果不能覆盖新页面。切换、重命名、删除及退出通过现有输入回收与保存租约协调。阅读位置缓存仅包含浏览位置和选区，不作为文件内容或草稿来源。
+## 资料来源与权限
 
-## 外部集成
+`documents.PreparationService` 负责本地计划、身份核对、锁和文件写入，通过 `RequirementProvider` 获取来源身份与标题。Meegle 的命令、超时、参数和 JSON 解码集中在 `internal/requirementprovider/meegle.go`，documents 不构造远端需求命令。
 
-Meegle 和 Genbu 通过外部 CLI 及用户配置接入，不在源码中内置团队地址或凭据。需求与资料请求核对已确认的账号、profile 和资源身份，旧请求结果不能回写新的上下文。资料 Git 同步按用户配置执行；Tag 交付和系统文件操作通过各自的显式动作执行。
+`documents.MaterialsDescriptor` 统一提供 `Kind`、`ReadRoot`、`OwnedRoot`、`TemporaryRoot`、`CanWrite`、`CanSync` 及 `Readable` / `Writable` 判定。`application.MaterialsPermissions` 是该类型的 alias，Snapshot 暴露经过身份核对的瞬态描述，不改变任务清单格式。
 
-本地研发工具可独立使用。服务进程、数据库、凭据和测试环境由用户项目管理。
+开发版同时识别 ANNUAL 和 LOCAL 资料布局；LOCAL 不授予同步能力。NONE 或身份无法确认的描述不授予写入、同步权限。后台文件操作仍重新读取任务、配置和资料 scope，再检查路径、锁与摘要；Snapshot 描述不能作为授权凭据。
 
-## 构建与依赖
+开发版另外持有 workspace / release controller，分别管理工作区和交付状态；QA 与产品版没有这两类业务能力。
 
-Windows 与 macOS 的构建、资源校验和打包方式见 [RELEASE.md](RELEASE.md)，PDF 与图表边界见 [NATIVE-MEDIA.md](NATIVE-MEDIA.md)。打包保留 MyGO、Mermaid、PDFium 和 Go 依赖的许可证与版权声明。
+## 编辑与持久化
+
+MyGO 固定为 v0.5.0，使用 `third_party/mygo` 的本地源码。输入法、字体回退、菜单、剪贴板和绘制由框架负责；本地补丁见 [MYGO-PATCHES.md](../third_party/MYGO-PATCHES.md)。
+
+资料与 Skills 复用 FileTree 的展示与输入组件。普通文本和代码复用 TextEditor；宿主持有文档身份、草稿、权限、保存和冲突状态。成功保存不重建 Buffer。普通资料文本上限为含 BOM 的 3 MiB，开发工具单个输入上限为 2 MiB。
+
+Markdown 使用 MyGO `markdown.View` 与 `DefaultCodeBlock` 只读阅读，原文预览使用只读 TextEditor。普通阅读不加载或改写 Markdown 草稿，不提供 Markdown 编辑与保存；纯算法拆分没有改变该边界。详见 [TEXT-EDITOR-AND-FILE-TREE.md](TEXT-EDITOR-AND-FILE-TREE.md)。
+
+普通文本保留 UTF-8 BOM 和混合换行，使用 `materials-text-drafts.json` 与 650ms 防抖自动保存，组合输入期间暂停落盘。写入前重新验证任务及资料身份、根目录、普通文件、符号链接或 junction 和基线摘要，再原子替换；失败或冲突保留草稿。
+
+配置保存使用锁、分片提交与恢复日志。设置输入由 UI 线程合并并串行保存，回显保护尚未提交的输入。任务根切换提供迁移、直接切换和取消，只有确认后的业务操作改变目录。
+
+资料请求捕获任务、目录与文档身份，过期结果不能覆盖新页面。切换、重命名、删除及退出仍由相应功能的输入回收、保存租约与屏障协调。阅读位置缓存仅用于浏览位置和选区，不作为文件内容或草稿来源。
+
+## 异步生命周期
+
+`asyncjob.Group.Begin(ctx, Options{CancelOnClose: ...})` 返回 `Lease`。lease 提供 Context、Cancel、Done、Complete、Err 和 Wait；Complete 幂等。Group 的 Close 禁止新登记，并取消被标记为可取消的作业，Wait 等待登记作业完成并保留清理错误。
+
+`Group.Post` 不依赖 MyGO，只接受 `func(func()) bool` 排队函数。关闭后拒绝入队，已经排队的回调在执行时再次检查关闭状态。窗口适配器仍负责确认回调、检查视图/任务/账号身份、处理失效窗口以及操作是否允许取消；公共 tracker 不自动替换现有请求或授予执行权限。
+
+当前共享生命周期已接入三版 `desktop/tool_jobs.go` 与 `desktop/cli_jobs.go`：Begin / Complete 取代通用运行登记，Close + Wait 管理退出登记边界与后台清理。工具端口终止保持隐藏、关闭时不取消；CLI 仍先执行后端原子取消变更，再取消并等待轮询。当前请求、token、home/path/账号身份及授权变更的退出约束保留在桌面适配器，资料屏障与保存租约保留原生命周期。
+
+## 性能单元与失效边界
+
+展示缓存由功能 owner 持有，按明确发布版本失效，不参与执行授权。JSON 共享原文坐标索引、投影与搜索结果；资料目录共享不可变 catalog、排序与路径索引；任务和服务列表通过数据版本复用过滤投影，并只构建可见行。相同 slice 内容改变后仍需重新发布，配置索引绑定当前 JSON source，异步需求元数据通过 setter 发布独立值。
+
+`SnapshotFor` 只读取页面需要的集合，原 `Snapshot` 保留完整读取。设置页只在 home/config 相同的情况下合并最新 UI 集合；配置变化时回退完整读取。任务定点读取继续在磁盘上验证目录、清单、schema 与创建身份，展示缓存不替代这些检查。
+
+外部读取复用显式操作的短生命周期会话：Codex 一次操作共用一个 app-server；需求图片批次共享有界字节缓存，但每条评论保留各自的权属、后置身份核验与 sidecar。Tag 同一轮只共享本地候选快照，各仓库的查询、取消和下一轮调度独立。没有跨账号的 URL 全局缓存或隐式写入重放。
+
+PDF 按页让出全文索引执行权，渲染队列只保留当前页面需求；图片通过有界加载池共享不可变结果。进程内预览采用独立 RGBA，PNG API 保持可用。Markdown 预览作业登记到现有 `asyncjob.Group`，关闭先取消再等待实际清理；每个 app 的 Mermaid 初始化 owner 在这些作业之后关闭。媒体预算与不可中断的 native 阶段见 [NATIVE-MEDIA.md](NATIVE-MEDIA.md)。
+
+## 产品身份与数据隔离
+
+`internal/productprofile/current.go` 只保存本分支的字面量身份，`profile.go` 提供默认目录、edition 检查和发布渠道函数。`buildinfo.ProductName` 保留兼容 alias。配置或数据迁移不由 profile 自动执行。
+
+| 分支身份 | 默认 home | 默认任务根 | 默认资料根 | 持久 edition |
+| --- | --- | --- | --- | --- |
+| Silverwing | `~/silverwing` | `~/tasks` | 未配置 | 沿用无 edition 的开发版格式 |
+| silverwing-qa | `~/silverwing-qa` | `<home>/tasks` | `<home>/materials` | 严格校验 `qa` |
+| silverwing-product | `~/silverwing-product` | `<home>/tasks` | `<home>/materials` | 严格校验 `product` |
+
+Go 运行时与安装资源以 `internal/productprofile/current.go` 为固定产品身份的唯一来源：Windows 构建使用 `scripts/product-profile.ps1`，macOS 的 `scripts/build-macos.sh` 使用本机 sed 读取；原生构建不新增 Python 依赖，`scripts/product_profile.py` 用于 CI 标签校验和发布脚本。`CurrentProductVersion` 仍定义在 `internal/domain/models.go`，CI 使用 profile 的发布前缀校验版本标签。现有各版触发范围、安装标识与发布目标保持各自原有边界。
+
+开发版已保存的自定义任务根优先。显式 `--home` 不改变开发版默认 `~/tasks` 的约定；开发验证必须同时隔离 home、任务根与资料根。
+
+## 自动化依赖门禁
+
+```shell
+go test ./internal/architecture
+```
+
+该命令只用标准库读取源码 AST，不启动桌面、不执行外部 CLI，也不递归调用 go test。检查覆盖 `internal` 下全部非 `_test.go` 源文件，包括其他 GOOS 和未启用 build tag 的文件；排除 testdata、vendor、隐藏目录和嵌套模块，因此 Windows 与 macOS 上判定相同。
+
+- domain 不反向依赖 editor、application、desktop 或基础设施；本模块内只消费 domain 和纯模块。
+- markdowntext、filelanguage、asyncjob、productprofile 不依赖业务或框架；markdowntext 单独允许 Goldmark。
+- application 不依赖 desktop 或 MyGO。
+- documents 不依赖具体 requirementprovider、integrations 或远端进程协议。media、storage、本机剪贴板/回收站依赖保持合法；直接字面量远端 CLI 入口另有 AST 检查。
+- 声明公共 TextEditor 与语言映射入口的源码不依赖 workspace，使用 filelanguage；检查不要求三版使用相同文件名。
+
+门禁用独立 fixture 验证违规 import、合法消费者、平台文件、来源适配器和本机命令边界。它不做全程序数据流或运行时授权分析，也不限制文件行数、接口数量和功能规模；业务测试及真实桌面验证仍按变更风险执行。
+
+`.github/workflows/native-build.yml` 在已有 Windows x64 / macOS arm64 构建矩阵的 Go 设置之后运行该门禁。原生构建、打包、上传和发布步骤保持原有流程；打包与许可证要求见 [RELEASE.md](RELEASE.md)，PDF 与图表边界见 [NATIVE-MEDIA.md](NATIVE-MEDIA.md)。

@@ -23,17 +23,17 @@ func TestProductionActionsKeepContentWidth(t *testing.T) {
 					controls := []string{"无差异", "创建 release"}
 					switch state {
 					case "initial":
-						s.production.batches = nil
+						s.releaseUnit.state.production.batches = nil
 						v.BatchID, v.Preview.ProductionInMain = "", true
 						v.Preview.ProductionSHA = strings.Repeat("f", 40)
 						v.Preview.Diff = " example.go | 1 +\n 1 file changed, 1 insertion(+)"
 					case "prepared":
 						b.TagPlan = &production.TagPlan{Tag: "2.3.44", Commit: b.ReleaseSHA, MainSHA: v.Preview.MainSHA, Preview: *v.Preview}
-						s.production.batches[0] = b
+						s.releaseUnit.state.production.batches[0] = b
 						controls = []string{"合并到 release", "构建 Tag"}
 					case "diff-error":
 						s.openProductionDiff(v, "生产 Tag → 主分支", "2.3.43", "origin/master", v.Preview.ProductionSHA, v.Preview.MainSHA, true)
-						s.production.diffDialog.Review.Error = "读取失败，请重试"
+						s.releaseUnit.state.production.diffDialog.Review.Error = "读取失败，请重试"
 						controls = []string{"重试", "关闭"}
 					}
 					tester := productionIterationTester(s, width, dark)
@@ -92,7 +92,7 @@ func TestProductionActionsKeepContentWidth(t *testing.T) {
 
 func TestProductionCompactMainMergeKeyboardKeepsConfirmation(t *testing.T) {
 	s, v, _ := productionFixture(t)
-	s.production.batches = nil
+	s.releaseUnit.state.production.batches = nil
 	v.BatchID, v.Preview.ProductionInMain = "", false
 	s.win = &mygo.Window{}
 	tester := productionIterationTester(s, 960, false)

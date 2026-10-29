@@ -58,7 +58,7 @@ func Run(backend application.Backend, opts Options) error {
 	}
 	explicitWindowSize := opts.Width != 0 || opts.Height != 0
 	s := newApp(backend, opts)
-	s.materialsGitCapture = opts.CapturePath != ""
+	s.materialsUnit.state.materialsGitCapture = opts.CapturePath != ""
 	if opts.CapturePath != "" {
 		s.readingSession = newMemoryReadingSession(opts.Home)
 	}
@@ -90,7 +90,7 @@ func Run(backend application.Backend, opts Options) error {
 	captureFrame := &captureFrameState{}
 	mygo.App.WhenReady(func() {
 		s.win = mygo.NewWindow(mygo.WindowOptions{
-			Title:     "Silverwing",
+			Title:     buildinfo.ProductName,
 			Width:     opts.Width,
 			Height:    opts.Height,
 			Maximized: opts.CapturePath == "" && !explicitWindowSize && s.desktopPreferences.store != nil && s.desktopPreferences.value.Maximized,
@@ -113,24 +113,7 @@ func Run(backend application.Backend, opts Options) error {
 		if opts.CapturePath == "" {
 			s.initializeReadingSession(opts.Home, opts.RestoreSession)
 		}
-		s.win.OnClosed(func() {
-			s.stopMaterialsGitSync()
-			s.stopTaskOpenTools()
-			s.stopProductionJobs()
-			s.cancelConfirmationDialog()
-			s.stopSettingsAutosave()
-			s.stopPageLocalRead()
-			s.stopStartupDevelopmentTools()
-			s.abandonPendingTaskRootMigration()
-			s.stopServiceRepositoryChoices()
-			s.stopMaterialsFileJobs()
-			s.stopSystemOpenJobs()
-			s.closeTaskCreationRequirements()
-			s.closeTaskCreationAINaming()
-			s.closeMaterialsPathCopy()
-			s.closeMaterialsLiveRefresh()
-			s.closeNativeMedia()
-		})
+		s.win.OnClosed(s.stopDesktopFeatures)
 		s.win.OnFocus(func() {
 			s.onMaterialsWindowFocused()
 			s.onRequirementWindowFocused()
@@ -152,182 +135,7 @@ func Run(backend application.Backend, opts Options) error {
 		}
 	})
 	runErr := mygo.App.Run()
-	gitCleanup, stopGitCleanup := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := s.closeMaterialsGitSync(gitCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前资料 Git 同步收尾未完成：%w", err)
-	}
-	stopGitCleanup()
-	productionCleanup, stopProductionCleanup := context.WithTimeout(context.Background(), 30*time.Second)
-	if err := s.closeProductionJobs(productionCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前生产发布收尾未完成：%w", err)
-	}
-	stopProductionCleanup()
-	pageReadCleanup, stopPageReadCleanup := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := s.closePageLocalRead(pageReadCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前本机配置读取清理未完成：%w", err)
-	}
-	stopPageReadCleanup()
-	startupToolsCleanup, stopStartupToolsCleanup := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := s.closeStartupDevelopmentTools(startupToolsCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前开发工具探测清理未完成：%w", err)
-	}
-	stopStartupToolsCleanup()
-	serviceReadsCleanup, stopServiceReadsCleanup := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := s.closeServiceRepositoryChoices(serviceReadsCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前服务仓库读取清理未完成：%w", err)
-	}
-	stopServiceReadsCleanup()
-	materialsFileCleanup, stopMaterialsFileCleanup := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := s.closeMaterialsFileJobs(materialsFileCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前资料文件操作清理未完成：%w", err)
-	}
-	stopMaterialsFileCleanup()
-	materialsWatchCleanup, stopMaterialsWatchCleanup := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := s.joinMaterialsLiveRefresh(materialsWatchCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前资料目录监听清理未完成：%w", err)
-	}
-	stopMaterialsWatchCleanup()
-	systemOpenCleanup, stopSystemOpenCleanup := context.WithTimeout(context.Background(), 30*time.Second)
-	if err := s.closeSystemOpenJobs(systemOpenCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前系统打开与定位清理未完成：%w", err)
-	}
-	stopSystemOpenCleanup()
-	tagGenbuCleanup, stopTagGenbuCleanup := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := s.closeTagGenbuAutoProbe(tagGenbuCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前 Tag 自动 Genbu 探测清理未完成：%w", err)
-	}
-	stopTagGenbuCleanup()
-	tagJobsCleanup, stopTagJobsCleanup := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := s.closeTagDesktopJobs(tagJobsCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前 Tag 后台任务收尾未完成：%w", err)
-	}
-	stopTagJobsCleanup()
-	preflightCleanup, stopPreflightCleanup := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := s.closeTaskCreationPreflights(preflightCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前任务分支预检清理未完成：%w", err)
-	}
-	stopPreflightCleanup()
-	skillsCleanup, stopSkillsCleanup := context.WithTimeout(context.Background(), 30*time.Second)
-	skillsCleanupErr := s.closeSkillsBrowserReads(skillsCleanup)
-	stopSkillsCleanup()
-	if skillsCleanupErr != nil {
-		log.Printf("close Skills reads: %v", skillsCleanupErr)
-		if runErr == nil {
-			runErr = skillsCleanupErr
-		}
-	}
-	extensionsCleanup, stopExtensionsCleanup := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := s.closeSettingsExtensionReads(extensionsCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前设置扩展读取清理未完成：%w", err)
-	}
-	stopExtensionsCleanup()
-	configReadsCleanup, stopConfigReadsCleanup := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := s.closeSettingsConfigReads(configReadsCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前配置读取清理未完成：%w", err)
-	}
-	stopConfigReadsCleanup()
-	commentCleanup, stopCommentCleanup := context.WithTimeout(context.Background(), 30*time.Second)
-	if err := s.closeRequirementCommentComposers(commentCleanup); runErr == nil && err != nil {
-		runErr = err
-	}
-	stopCommentCleanup()
-	requirementIdentityCleanup, stopRequirementIdentityCleanup := context.WithTimeout(context.Background(), 30*time.Second)
-	if err := s.closeRequirementIdentityJobs(requirementIdentityCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前需求身份清理未完成：%w", err)
-	}
-	stopRequirementIdentityCleanup()
-	requirementListCleanup, stopRequirementListCleanup := context.WithTimeout(context.Background(), 30*time.Second)
-	if err := s.closeRequirementListJobs(requirementListCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前需求列表清理未完成：%w", err)
-	}
-	stopRequirementListCleanup()
-	commandCleanup, stopCommandCleanup := context.WithTimeout(context.Background(), 30*time.Second)
-	if err := s.closeWorkspaceCommandJobs(commandCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前工作区命令清理未完成：%w", err)
-	}
-	stopCommandCleanup()
-	cliCleanup, stopCLICleanup := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := s.closeCLIJobs(cliCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前 CLI 进程清理未完成：%w", err)
-	}
-	stopCLICleanup()
-	codexCleanup, stopCodexCleanup := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := s.closeCodexAIJobs(codexCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前 Codex 请求清理未完成：%w", err)
-	}
-	stopCodexCleanup()
-	namingCleanup, stopNamingCleanup := context.WithTimeout(context.Background(), 30*time.Second)
-	if err := s.closeRequirementNamingPreparation(namingCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前需求命名清理未完成：%w", err)
-	}
-	stopNamingCleanup()
-	documentPreparationCleanup, stopDocumentPreparationCleanup := context.WithTimeout(context.Background(), 30*time.Second)
-	if err := s.closeRequirementDocumentPreparation(documentPreparationCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前需求全文缓存清理未完成：%w", err)
-	}
-	stopDocumentPreparationCleanup()
-	requirementCleanup, stopRequirementCleanup := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := s.closeRequirementRefreshJobs(requirementCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前单项需求刷新清理未完成：%w", err)
-	}
-	if err := s.closeRequirementContentJobs(requirementCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前需求读取清理未完成：%w", err)
-	}
-	stopRequirementCleanup()
-	historyCleanup, stopHistoryCleanup := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := s.closeWorkspaceHistoryJobs(historyCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前工作区预览清理未完成：%w", err)
-	}
-	stopHistoryCleanup()
-	if closer, ok := s.backend.(interface{ CloseWorkspaceDiffSessions(context.Context) error }); ok {
-		diffCleanup, stopDiffCleanup := context.WithTimeout(context.Background(), 10*time.Second)
-		if err := closer.CloseWorkspaceDiffSessions(diffCleanup); runErr == nil && err != nil {
-			runErr = fmt.Errorf("退出前 Git 差异快照清理未完成：%w", err)
-		}
-		stopDiffCleanup()
-	}
-	deleteRiskCleanup, stopDeleteRiskCleanup := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := s.closeTaskDeleteRiskJobs(deleteRiskCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前任务删除风险读取清理未完成：%w", err)
-	}
-	stopDeleteRiskCleanup()
-	toolCleanup, stopToolCleanup := context.WithTimeout(context.Background(), 30*time.Second)
-	if err := s.closeDeveloperToolJobs(toolCleanup); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前研发工具请求清理未完成：%w", err)
-	}
-	stopToolCleanup()
-	if err := s.closeReadingSession(); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前保存阅读状态失败：%w", err)
-	}
-	if err := s.closeDesktopPreferences(); runErr == nil && err != nil {
-		runErr = fmt.Errorf("退出前保存桌面偏好失败：%w", err)
-	}
-	if s.cancelOperation != nil {
-		s.cancelOperation()
-	}
-	s.cancelTaskRequirementReads()
-	s.dismissMarkdownBitmapViewer()
-	s.closeRequirementReaders()
-	if s.settingsExtensionRequests != nil {
-		closeMarkdownPreviewState(s.settingsExtensionRequests.previewMarkdown)
-	}
-	if s.skillsBrowser != nil {
-		closeMarkdownPreviewState(s.skillsBrowser.markdown)
-	}
-	s.cancelWorkspaceGitStatus()
-	s.cancelMaterialsSearch()
-	for tool := range s.settingsAuthPollTimers {
-		s.stopCLIAuthPoll(tool)
-	}
-	if s.markdownAutosave != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		failures := s.documentClosePendingFailures(s.markdownAutosave.Close(ctx))
-		cancel()
-		if runErr == nil && len(failures) > 0 {
-			runErr = fmt.Errorf("退出前仍有 %d 个编辑文档未保存：%s", len(failures), failures[0].Message)
-		}
-	}
-	return runErr
+	return s.closeDesktopFeatures(runErr)
 }
 
 func (s *app) loadInitialSnapshot() {
@@ -394,10 +202,10 @@ func captureWindow(s *app, frame *captureFrameState, path string, captureOnly bo
 		time.Sleep(100 * time.Millisecond)
 	}
 	if !ready {
-		task := s.currentTask()
+		task := s.taskUnit.currentTask()
 		log.Printf("capture readiness timed out for %s; page=%s tab=%d loading=%t busy=%t task=%q materialsPath=%q documentsLoaded=%t documentsRequested=%t documentReadPending=%t document=%q kind=%s; no screenshot written",
-			path, s.page, s.tab, s.loading, s.busy, task.id, task.materialsPath, s.documentsLoaded,
-			s.documentsRequested, s.documentReadPending, s.documentPath, s.documentKind)
+			path, s.page, s.tab, s.loading, s.busy, task.id, task.materialsPath, s.materialsUnit.state.documentsLoaded,
+			s.materialsUnit.state.documentsRequested, s.materialsUnit.state.documentReadPending, s.materialsUnit.state.documentPath, s.materialsUnit.state.documentKind)
 		return
 	}
 
@@ -424,7 +232,7 @@ func (s *app) captureReady() bool {
 		return false
 	}
 	if s.page == "tasks" || s.page == "archive" {
-		task := s.currentTask()
+		task := s.taskUnit.currentTask()
 		if s.tab == 0 && task.id != "" && !s.workspaceGitCaptureReady() {
 			return false
 		}
@@ -439,11 +247,11 @@ func (s *app) captureReady() bool {
 			}
 		}
 	}
-	if s.page == "settings" && s.settingsLoaded == "" {
+	if s.page == "settings" && s.settingsUnit.state.settingsLoaded == "" {
 		return false
 	}
 	if s.localSkillsViewActive() {
-		state := s.skillsBrowser
+		state := s.settingsUnit.state.skillsBrowser
 		if state == nil || state.loadingCatalog || (!state.catalogLoaded && state.error == "") {
 			return false
 		}
@@ -457,21 +265,21 @@ func (s *app) captureReady() bool {
 		// In those states materials() renders an actionable empty state instead
 		// of dispatching document.list, so waiting for documentsLoaded would
 		// never settle.
-		task := s.currentTask()
+		task := s.taskUnit.currentTask()
 		if task.id == "" || !task.materialsReady() {
 			return true
 		}
-		if !s.documentsLoaded || s.documentsRequested || s.documentReadPending {
+		if !s.materialsUnit.state.documentsLoaded || s.materialsUnit.state.documentsRequested || s.materialsUnit.state.documentReadPending {
 			return false
 		}
-		if s.documentPath != "" && (s.documentKind == "pdf" || s.documentKind == "image") {
-			mediaState := s.nativeMedia
+		if s.materialsUnit.state.documentPath != "" && (s.materialsUnit.state.documentKind == "pdf" || s.materialsUnit.state.documentKind == "image") {
+			mediaState := s.materialsUnit.state.nativeMedia
 			if mediaState == nil {
 				return false
 			}
 			mediaState.mu.Lock()
 			ready := !mediaState.openLoading && !mediaState.renderLoading && (mediaState.bitmap != nil || mediaState.previewError != "")
-			if s.documentKind == "pdf" {
+			if s.materialsUnit.state.documentKind == "pdf" {
 				visible := max(0, min(mediaState.page, mediaState.pdfInfo.PageCount-1))
 				page := mediaState.pdfPageBitmaps[visible]
 				ready = !mediaState.openLoading && (page.bitmap != nil || mediaState.pdfPageErrors[visible] != "" || mediaState.previewError != "")

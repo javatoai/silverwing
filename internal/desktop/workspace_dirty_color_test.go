@@ -69,7 +69,7 @@ func TestWorkspaceDirtySummaryInteractionColors(test *testing.T) {
 			if err := tester.Click("本地未提交 1"); err != nil {
 				test.Fatal(err)
 			}
-			if state.workspaceHistory != nil {
+			if state.workspaceUnit.state.workspaceHistory != nil {
 				test.Fatal("busy local diff button opened the review")
 			}
 		})
@@ -80,11 +80,14 @@ func TestWorkspaceDirtySummaryRefreshAndReviewFocusReturn(test *testing.T) {
 	item := application.Workspace{ID: "workspace", ServiceID: "service", ModuleID: "module", Path: `C:\synthetic\dirty-refresh`}
 	taskItem := task{id: "task", path: `C:\synthetic\task`, createdAt: "created", groupID: "group", workspaces: []application.Workspace{item}}
 	state := &app{
-		page: "tasks", selected: 0, tasks: []task{taskItem}, configJSON: `{}`,
-		snapshot: application.Snapshot{Home: `C:\synthetic\home`},
-		workspaceGit: &workspaceGitState{health: map[string]domain.WorkspaceGitHealth{workspaceHealthPathKey(item.Path): {
+		taskUnit: taskController{state: taskState{selected: 0,
+			tasks: []task{taskItem}}},
+		settingsUnit: settingsController{state: settingsState{configJSON: `{}`}},
+		workspaceUnit: workspaceController{state: workspaceState{workspaceGit: &workspaceGitState{health: map[string]domain.WorkspaceGitHealth{workspaceHealthPathKey(item.Path): {
 			State: domain.WorkspaceGitReady, DirtyFileCount: 1, PushState: domain.LocalPushPushed,
-		}}},
+		}}}}},
+		page:     "tasks",
+		snapshot: application.Snapshot{Home: `C:\synthetic\home`},
 	}
 	tester := ui.NewTester(func(context *ui.Context) {
 		palette := setTheme(context, false)
@@ -97,20 +100,20 @@ func TestWorkspaceDirtySummaryRefreshAndReviewFocusReturn(test *testing.T) {
 	if err := tester.Click("本地未提交 1"); err != nil {
 		test.Fatal(err)
 	}
-	review := state.workspaceHistory
+	review := state.workspaceUnit.state.workspaceHistory
 	if review == nil || review.CompareMode != workspaceReviewUncommitted {
 		test.Fatal("nonzero local count did not open local-only review")
 	}
 	state.backWorkspaceReview(review)
 	tester.Frame()
 	tester.Frame()
-	if state.workspaceReviewFocusReturn != nil || !tester.Focused("本地未提交 1") {
+	if state.workspaceUnit.state.workspaceReviewFocusReturn != nil || !tester.Focused("本地未提交 1") {
 		test.Fatal("back did not restore focus to the local diff button")
 	}
 
-	health := state.workspaceGit.health[workspaceHealthPathKey(item.Path)]
+	health := state.workspaceUnit.state.workspaceGit.health[workspaceHealthPathKey(item.Path)]
 	health.DirtyFileCount = 0
-	state.workspaceGit.health[workspaceHealthPathKey(item.Path)] = health
+	state.workspaceUnit.state.workspaceGit.health[workspaceHealthPathKey(item.Path)] = health
 	tester.Frame()
 	if tester.HasText("本地未提交 1") {
 		test.Fatal("refresh retained the stale local change count")
@@ -127,7 +130,9 @@ func workspaceDirtyColorApp(counts []int) *app {
 			State: domain.WorkspaceGitReady, DirtyFileCount: count, PushState: domain.LocalPushPushed,
 		}
 	}
-	return &app{workspaceGit: &workspaceGitState{health: health}}
+	return &app{
+		workspaceUnit: workspaceController{state: workspaceState{workspaceGit: &workspaceGitState{health: health}}},
+	}
 }
 
 func workspaceDirtyColorTester(state *app, dark bool, width int, counts []int) *ui.Tester {

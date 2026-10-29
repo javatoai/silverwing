@@ -33,7 +33,7 @@ func TestRequirementCommentCardsResponsiveLayoutAndContent(test *testing.T) {
 			test.Run(fmt.Sprintf("width-%d-dark-%v", width, dark), func(test *testing.T) {
 				appState := &app{dark: dark, page: "requirements"}
 				reader := appState.requirementReader("", "https://project.feishu.cn/test/story/detail/123")
-				test.Cleanup(appState.closeRequirementReaders)
+				test.Cleanup(appState.requirementUnit.closeRequirementReaders)
 				appState.updateRequirementReaderComments(reader, application.RequirementComments{Comments: requirementCommentCardFixture()})
 				tester := ui.NewTester(func(context *ui.Context) {
 					theme := setTheme(context, dark)
@@ -124,7 +124,7 @@ func TestRequirementCommentCardsZoomAndLongMetadata(test *testing.T) {
 			test.Run(fmt.Sprintf("dark-%v-zoom-%0.1f", dark, zoom), func(test *testing.T) {
 				appState := &app{dark: dark, page: "requirements"}
 				reader := appState.requirementReader("", "https://project.feishu.cn/test/story/detail/123")
-				test.Cleanup(appState.closeRequirementReaders)
+				test.Cleanup(appState.requirementUnit.closeRequirementReaders)
 				appState.updateRequirementReaderComments(reader, application.RequirementComments{Comments: requirementCommentCardFixture()})
 				controller := appState.prepareRequirementMarkdownReader(reader)
 				controller.zoom = zoom
@@ -154,7 +154,7 @@ func TestRequirementCommentCardsZoomAndLongMetadata(test *testing.T) {
 func TestRequirementCommentCardsEmptyState(test *testing.T) {
 	appState := &app{page: "requirements"}
 	reader := appState.requirementReader("", "https://project.feishu.cn/test/story/detail/123")
-	test.Cleanup(appState.closeRequirementReaders)
+	test.Cleanup(appState.requirementUnit.closeRequirementReaders)
 	appState.updateRequirementReaderComments(reader, application.RequirementComments{})
 	tester := ui.NewTester(func(context *ui.Context) {
 		theme := setTheme(context, false)
@@ -173,7 +173,7 @@ func TestRequirementCommentCardsEmptyState(test *testing.T) {
 func TestRequirementCommentCardStateReuseAndImageOwnership(test *testing.T) {
 	appState := &app{page: "requirements"}
 	reader := appState.requirementReader("", "https://project.feishu.cn/test/story/detail/123")
-	test.Cleanup(appState.closeRequirementReaders)
+	test.Cleanup(appState.requirementUnit.closeRequirementReaders)
 	cachePath := filepath.Join(test.TempDir(), "comments.md")
 	firstURL := "https://example.test/first.png"
 	secondURL := "https://example.test/second.png"
@@ -233,7 +233,7 @@ func TestRequirementCommentCardsKeepOriginalCopyAndSourceMode(test *testing.T) {
 	const source = "保留 **原文**\r\n\r\n| A | B |\r\n|---|---|\r\n| 一 | 二 |"
 	appState := &app{page: "requirements"}
 	reader := appState.requirementReader("", "https://project.feishu.cn/test/story/detail/123")
-	test.Cleanup(appState.closeRequirementReaders)
+	test.Cleanup(appState.requirementUnit.closeRequirementReaders)
 	appState.updateRequirementReaderComments(reader, application.RequirementComments{
 		Comments:  []domain.RequirementComment{{ID: "source", AuthorName: "源码作者", Content: source}},
 		CachePath: filepath.Join(test.TempDir(), "comments.md"),

@@ -31,17 +31,17 @@ type tagHistoryGroup struct {
 }
 
 func (s *app) ensureTagHistoryView() *tagHistoryViewState {
-	return s.ensureTaskTagHistoryView(s.currentTask())
+	return s.ensureTaskTagHistoryView(s.taskUnit.currentTask())
 }
 
 func (s *app) ensureTaskTagHistoryView(t task) *tagHistoryViewState {
 	root := s.configString("taskRoot")
-	if s.tagHistory == nil || s.tagHistory.Home != s.snapshot.Home || s.tagHistory.TaskRoot != root ||
-		s.tagHistory.TaskID != t.id || s.tagHistory.TaskPath != t.path || s.tagHistory.TaskCreatedAt != t.createdAt {
-		s.tagHistory = &tagHistoryViewState{Home: s.snapshot.Home, TaskRoot: root,
+	if s.releaseUnit.state.tagHistory == nil || s.releaseUnit.state.tagHistory.Home != s.snapshot.Home || s.releaseUnit.state.tagHistory.TaskRoot != root ||
+		s.releaseUnit.state.tagHistory.TaskID != t.id || s.releaseUnit.state.tagHistory.TaskPath != t.path || s.releaseUnit.state.tagHistory.TaskCreatedAt != t.createdAt {
+		s.releaseUnit.state.tagHistory = &tagHistoryViewState{Home: s.snapshot.Home, TaskRoot: root,
 			TaskID: t.id, TaskPath: t.path, TaskCreatedAt: t.createdAt, Selected: map[string]bool{}}
 	}
-	state := s.tagHistory
+	state := s.releaseUnit.state.tagHistory
 	if state.Selected == nil {
 		state.Selected = map[string]bool{}
 	}
@@ -85,10 +85,10 @@ func (s *app) taskTagHistoryRecords(taskID string) []application.TagRecord {
 }
 
 func (s *app) tagHistoryStateCurrent(state *tagHistoryViewState) bool {
-	if state == nil || state.TaskID == "" || s.tagHistory != state || state.Home != s.snapshot.Home || state.TaskRoot != s.configString("taskRoot") {
+	if state == nil || state.TaskID == "" || s.releaseUnit.state.tagHistory != state || state.Home != s.snapshot.Home || state.TaskRoot != s.configString("taskRoot") {
 		return false
 	}
-	t := s.currentTask()
+	t := s.taskUnit.currentTask()
 	return t.id == state.TaskID && t.path == state.TaskPath && t.createdAt == state.TaskCreatedAt
 }
 
@@ -105,7 +105,7 @@ func tagHistoryMenuKey(state *tagHistoryViewState, item string) string {
 }
 
 func (s *app) tagHistoryRecordPayload(record application.TagRecord) map[string]any {
-	t := s.taskByID(record.TaskID)
+	t := s.taskUnit.taskByID(record.TaskID)
 	return map[string]any{"operationId": record.ID, "tagHistoryHome": s.snapshot.Home,
 		"tagHistoryTaskRoot": s.configString("taskRoot"), "tagHistoryTaskPath": t.path, "tagHistoryTaskCreatedAt": t.createdAt}
 }
@@ -206,7 +206,7 @@ func (s *app) tagHistoryAnnouncement(group tagHistoryGroup) string {
 	})
 	title := ""
 	if len(group.Visible) > 0 {
-		for _, item := range s.tasks {
+		for _, item := range s.taskUnit.state.tasks {
 			if item.id == group.Visible[0].TaskID {
 				metadata := s.taskRequirementMetadataFor(item)
 				if metadata.Metadata.Title != nil {

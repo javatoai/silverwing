@@ -19,7 +19,7 @@ type taskCreationReadRequest struct {
 }
 
 func (s *app) startTaskCreationRead(kind string, payload map[string]any) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return
 	}
@@ -59,7 +59,7 @@ func (s *app) cancelTaskCreationReads(state *taskCreationState, preflightOnly bo
 }
 
 func (s *app) finishTaskCreationRead(action application.Action) bool {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil || state.token != payloadString(action.Payload, "taskCreateToken") ||
 		state.readRequest == nil || state.readRequest.kind != action.Kind {
 		return false
@@ -108,11 +108,11 @@ func taskCreationHasDraftChanges(state *taskCreationState) bool {
 }
 
 func (s *app) requestTaskCreationDismiss() {
-	s.discardTaskCreation(s.taskCreation)
+	s.discardTaskCreation(s.taskUnit.state.taskCreation)
 }
 
 func (s *app) discardTaskCreation(state *taskCreationState) {
-	if state == nil || s.taskCreation != state {
+	if state == nil || s.taskUnit.state.taskCreation != state {
 		return
 	}
 	s.cancelTaskCreationReads(state, false)
@@ -120,13 +120,13 @@ func (s *app) discardTaskCreation(state *taskCreationState) {
 	s.closeTaskCreationAINaming()
 	cancelTaskRepositoryChoices(state)
 	s.stopTaskCreationPreviewDebounce()
-	s.taskCreation = nil
+	s.taskUnit.state.taskCreation = nil
 	s.form = actionForm{}
 	s.dialogOpen = false
 }
 
 func (s *app) renderTaskCreationDiscardConfirmation(c *ui.Context, p palette) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil || !state.discardConfirmation {
 		return
 	}

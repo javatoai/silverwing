@@ -9,14 +9,15 @@ import (
 // body/list views. Advance generations even for requests that have already
 // queued their completion and no longer have a visible loading entry.
 func (s *app) invalidateTaskRequirementIdentityMetadata() {
-	ids := make(map[string]struct{}, len(s.taskRequirementMetadata)+len(s.taskRequirementMetadataCancels))
-	for id := range s.taskRequirementMetadata {
+	s.taskUnit.state.metadataDiscoveryValid = false
+	ids := make(map[string]struct{}, len(s.requirementUnit.state.taskRequirementMetadata)+len(s.requirementUnit.state.taskRequirementMetadataCancels))
+	for id := range s.requirementUnit.state.taskRequirementMetadata {
 		ids[id] = struct{}{}
 	}
-	for id := range s.taskRequirementMetadataCancels {
+	for id := range s.requirementUnit.state.taskRequirementMetadataCancels {
 		ids[id] = struct{}{}
 	}
-	for id := range s.taskRequirementMetadataGeneration {
+	for id := range s.requirementUnit.state.taskRequirementMetadataGeneration {
 		ids[id] = struct{}{}
 	}
 	for id := range ids {
@@ -25,15 +26,15 @@ func (s *app) invalidateTaskRequirementIdentityMetadata() {
 }
 
 func (s *app) invalidateTaskRequirementMetadataIdentity(taskID string) {
-	if cancel := s.taskRequirementMetadataCancels[taskID]; cancel != nil {
+	if cancel := s.requirementUnit.state.taskRequirementMetadataCancels[taskID]; cancel != nil {
 		cancel()
 	}
-	delete(s.taskRequirementMetadataCancels, taskID)
-	delete(s.taskRequirementMetadata, taskID)
-	if s.taskRequirementMetadataGeneration == nil {
-		s.taskRequirementMetadataGeneration = make(map[string]uint64)
+	delete(s.requirementUnit.state.taskRequirementMetadataCancels, taskID)
+	s.deleteTaskRequirementMetadata(taskID)
+	if s.requirementUnit.state.taskRequirementMetadataGeneration == nil {
+		s.requirementUnit.state.taskRequirementMetadataGeneration = make(map[string]uint64)
 	}
-	s.taskRequirementMetadataGeneration[taskID]++
+	s.requirementUnit.state.taskRequirementMetadataGeneration[taskID]++
 }
 
 // Called after applying a new task/config snapshot on the window thread.
@@ -42,16 +43,16 @@ func (s *app) invalidateTaskRequirementMetadataIdentity(taskID string) {
 // resets for the three requirement-configuration fields below.
 func (s *app) reconcileTaskRequirementIdentities(previousTasks []task, previousConfigJSON string) {
 	previousProjects, previousMetadata := taskRequirementConfigurationIdentity(previousConfigJSON)
-	projects, metadata := taskRequirementConfigurationIdentity(s.configJSON)
+	projects, metadata := taskRequirementConfigurationIdentity(s.settingsUnit.state.configJSON)
 	if previousMetadata != metadata {
 		s.invalidateTaskRequirementIdentityMetadata()
 	}
 	if previousProjects != projects {
-		s.closeRequirementReaders()
-		s.requirementReaderGeneration++
+		s.requirementUnit.closeRequirementReaders()
+		s.requirementUnit.state.requirementReaderGeneration++
 	}
-	currentTasks := make(map[string]task, len(s.tasks))
-	for _, item := range s.tasks {
+	currentTasks := make(map[string]task, len(s.taskUnit.state.tasks))
+	for _, item := range s.taskUnit.state.tasks {
 		currentTasks[item.id] = item
 	}
 	for _, previous := range previousTasks {
@@ -66,25 +67,29 @@ func (s *app) reconcileTaskRequirementIdentities(previousTasks []task, previousC
 }
 
 func (s *app) closeTaskRequirementIdentityReaders(taskID string) {
-	for key, reader := range s.requirementReaders {
+	for key, reader := range s.requirementUnit.state.requirementReaders {
 		if reader.taskID != taskID {
 			continue
 		}
-		if state := s.requirementContentJobs; state != nil {
+		s.retireRequirementCommentImages(reader)
+		if state := s.requirementUnit.state.requirementContentJobs; state != nil {
 			for _, request := range state.requests {
 				if request.reader == reader {
-					s.cancelRequirementContentJob(request)
+					s.requirementUnit.cancelRequirementContentJob(request)
 				}
 			}
 			if state.visible == key {
 				state.visible = ""
+			}
+			if state.entered == reader {
+				state.entered = nil
 			}
 		}
 		closeMarkdownPreviewState(reader.bodyMarkdown)
 		closeMarkdownPreviewState(reader.commentsMarkdown)
 		closeRequirementCommentMarkdownStates(reader)
 		reader.requestIDs = nil
-		delete(s.requirementReaders, key)
+		delete(s.requirementUnit.state.requirementReaders, key)
 	}
 }
 

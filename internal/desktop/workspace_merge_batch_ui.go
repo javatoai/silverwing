@@ -51,14 +51,14 @@ func (s *app) openWorkspaceMergeBatch(t task) {
 		Items: make([]workspaceMergeBatchItemState, 0, len(t.workspaces)),
 	}
 	state.scope, _ = s.taskActionScopeFor(t)
-	state.configJSON = s.configJSON
+	state.configJSON = s.settingsUnit.state.configJSON
 	for _, item := range t.workspaces {
 		source, reason := s.workspaceMergeBatchEligibility(t, item)
 		state.Items = append(state.Items, workspaceMergeBatchItemState{
 			Workspace: workspaceMergeBatchSnapshot(item), SourceRef: source, DisabledReason: reason, Selected: reason == "",
 		})
 	}
-	s.workspaceMergeBatch = state
+	s.workspaceUnit.state.workspaceMergeBatch = state
 }
 
 // Confirmation owns its nested data; an in-place task update must not rewrite
@@ -81,7 +81,7 @@ func workspaceMergeBatchSnapshot(item application.Workspace) application.Workspa
 }
 
 func (s *app) workspaceMergeBatchTaskMatches(t task) bool {
-	current := s.taskByID(t.id)
+	current := s.taskUnit.taskByID(t.id)
 	return t.id != "" && current.id == t.id && !current.archived && current.groupID == t.groupID && current.branch == t.branch &&
 		(s.page == "tasks" || s.page == "archive") && workspaceMergeTaskIdentityMatches(current, t)
 }
@@ -91,7 +91,7 @@ func (s *app) workspaceMergeBatchContextCurrent(state *workspaceMergeBatchUIStat
 		return false
 	}
 	scope, valid := s.taskActionScopeFor(workspaceMergeBatchTaskFromState(state))
-	return valid && scope == state.scope && s.configJSON == state.configJSON
+	return valid && scope == state.scope && s.settingsUnit.state.configJSON == state.configJSON
 }
 
 func (s *app) workspaceMergeBatchEligibility(t task, item application.Workspace) (string, string) {
@@ -129,7 +129,7 @@ func (s *app) workspaceMergeBatchEligibility(t task, item application.Workspace)
 	if domain.NewGitWritePolicy(config.BlockedGitWriteBranches).IsBlocked(item.Record.Branch) {
 		return main.DisplayRef, "当前功能分支受 Git 写入保护"
 	}
-	if state := s.workspaceMerge; state != nil && state.running {
+	if state := s.workspaceUnit.state.workspaceMerge; state != nil && state.running {
 		return main.DisplayRef, "另一个主分支合并正在执行"
 	}
 	if health, exists := s.workspaceHealth(item.Path); exists {
@@ -144,19 +144,19 @@ func (s *app) workspaceMergeBatchEligibility(t task, item application.Workspace)
 }
 
 func (s *app) renderWorkspaceMergeBatchDialog(c *ui.Context, p palette) {
-	state := s.workspaceMergeBatch
+	state := s.workspaceUnit.state.workspaceMergeBatch
 	if state == nil {
 		return
 	}
 	if !s.workspaceMergeBatchContextCurrent(state) {
-		s.workspaceMergeBatch = nil
+		s.workspaceUnit.state.workspaceMergeBatch = nil
 		return
 	}
 	if state.Loading && !state.Open {
 		state.Open = true
 	}
 	if !state.Open {
-		s.workspaceMergeBatch = nil
+		s.workspaceUnit.state.workspaceMergeBatch = nil
 		return
 	}
 	ui.DialogBase(c.Key("workspace-merge-batch-dialog"), &state.Open, func(backdrop, panel ui.Element) {
@@ -169,13 +169,13 @@ func (s *app) renderWorkspaceMergeBatchDialog(c *ui.Context, p palette) {
 		state.Open = true
 	}
 	if !state.Open && !state.Loading {
-		s.workspaceMergeBatch = nil
+		s.workspaceUnit.state.workspaceMergeBatch = nil
 	}
 }
 
 func (s *app) renderWorkspaceMergeBatchDialogContent(c *ui.Context, p palette, state *workspaceMergeBatchUIState) {
 	label(c, "批量合并主分支", 17, p.text).FontWeight(600).Shrink(0)
-	target := s.taskByID(state.TaskID)
+	target := s.taskUnit.taskByID(state.TaskID)
 	label(c, firstNonEmpty(target.title, state.TaskID), 13, p.muted).Shrink(0).FillWidth().SingleLine().Tooltip(target.title)
 	if state.Results != nil {
 		s.renderWorkspaceMergeBatchResults(c, p, state)
@@ -241,7 +241,7 @@ func (s *app) renderWorkspaceMergeBatchDialogContent(c *ui.Context, p palette, s
 }
 
 func (s *app) workspaceMergeBatchOwnsActiveOperation(state *workspaceMergeBatchUIState) bool {
-	return state != nil && state == s.workspaceMergeBatch && state.Loading && s.busy &&
+	return state != nil && state == s.workspaceUnit.state.workspaceMergeBatch && state.Loading && s.busy &&
 		s.operationKind == "workspace.merge-batch" && s.workspaceMergeBatchContextCurrent(state)
 }
 
@@ -360,14 +360,14 @@ func workspaceMergeBatchCopyText(result workspace.WorkspaceMainBranchMergeResult
 }
 
 func (s *app) submitWorkspaceMergeBatch(state *workspaceMergeBatchUIState) {
-	if state == nil || state != s.workspaceMergeBatch || state.Loading || s.busy {
+	if state == nil || state != s.workspaceUnit.state.workspaceMergeBatch || state.Loading || s.busy {
 		return
 	}
 	if !s.workspaceMergeBatchStateCurrent(state) {
 		s.retireStaleWorkspaceMergeBatch(state)
 		return
 	}
-	t := s.taskByID(state.TaskID)
+	t := s.taskUnit.taskByID(state.TaskID)
 	keys := make([]string, 0, len(state.Items))
 	for index := range state.Items {
 		item := &state.Items[index]
@@ -412,7 +412,7 @@ func (s *app) submitWorkspaceMergeBatch(state *workspaceMergeBatchUIState) {
 }
 
 func (s *app) applyWorkspaceMergeBatchResult(action application.Action, result application.ActionResult) {
-	state := s.workspaceMergeBatch
+	state := s.workspaceUnit.state.workspaceMergeBatch
 	if !workspaceMergeBatchActionMatches(state, action) {
 		return
 	}
@@ -436,7 +436,7 @@ func (s *app) applyWorkspaceMergeBatchResult(action application.Action, result a
 }
 
 func (s *app) applyWorkspaceMergeBatchFailure(action application.Action, err error) {
-	state := s.workspaceMergeBatch
+	state := s.workspaceUnit.state.workspaceMergeBatch
 	if !workspaceMergeBatchActionMatches(state, action) {
 		return
 	}
@@ -449,7 +449,7 @@ func (s *app) applyWorkspaceMergeBatchFailure(action application.Action, err err
 }
 
 func (s *app) retireStaleWorkspaceMergeBatch(state *workspaceMergeBatchUIState) {
-	if state == nil || s.workspaceMergeBatch != state {
+	if state == nil || s.workspaceUnit.state.workspaceMergeBatch != state {
 		return
 	}
 	state.Loading = false
@@ -459,11 +459,11 @@ func (s *app) retireStaleWorkspaceMergeBatch(state *workspaceMergeBatchUIState) 
 		state.Error = "工作区信息已变化，本次合并结果已忽略。请关闭弹框后重新打开。"
 		return
 	}
-	s.workspaceMergeBatch = nil
+	s.workspaceUnit.state.workspaceMergeBatch = nil
 }
 
 func (s *app) reconcileWorkspaceMergeBatchAfterSnapshot() {
-	state := s.workspaceMergeBatch
+	state := s.workspaceUnit.state.workspaceMergeBatch
 	if state != nil && !state.Loading && state.Results != nil && !s.workspaceMergeBatchStateCurrent(state) {
 		s.retireStaleWorkspaceMergeBatch(state)
 	}
@@ -473,7 +473,7 @@ func (s *app) workspaceMergeBatchStateCurrent(state *workspaceMergeBatchUIState)
 	if !s.workspaceMergeBatchContextCurrent(state) {
 		return false
 	}
-	current := s.taskByID(state.TaskID)
+	current := s.taskUnit.taskByID(state.TaskID)
 	for _, expected := range state.Items {
 		if !expected.Selected {
 			continue

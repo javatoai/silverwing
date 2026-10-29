@@ -35,12 +35,14 @@ func (s *Service) WriteMaterialTextDraft(ctx context.Context, draft MaterialText
 	}
 	var sourceErr error
 	err = s.updateMaterialDraftCache(ctx, true, func(cache *markdownDraftCache) bool {
-		root, err := validatedMaterialsRoot(draft.Identity.MaterialsRoot)
+		scope, err := newMaterialsOperationScope(draft.Identity.MaterialsRoot)
 		if err != nil {
 			sourceErr = err
 			return false
 		}
-		path, err := safePath(root, draft.Identity.RelativePath, false)
+		defer scope.close()
+		root := scope.root
+		path, err := scope.resolve(draft.Identity.RelativePath, false, true, false)
 		if err != nil {
 			sourceErr = err
 			return false
@@ -55,6 +57,10 @@ func (s *Service) WriteMaterialTextDraft(ctx context.Context, draft MaterialText
 		}
 		if !info.Mode().IsRegular() {
 			sourceErr = errors.New("只能缓存普通资料文件的文本草稿")
+			return false
+		}
+		if err := scope.revalidate(); err != nil {
+			sourceErr = err
 			return false
 		}
 		key := draft.Identity.key()

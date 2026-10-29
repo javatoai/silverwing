@@ -22,7 +22,7 @@ func TestSidebarVisibilityCombinationsAndBottomGrouping(t *testing.T) {
 					config.SidebarVisibility = domain.SidebarVisibilitySettings{Requirements: mask&1 != 0, Tools: mask&2 != 0, Production: mask&4 != 0, Services: mask&8 != 0}
 					encoded, _ := json.Marshal(config)
 					s := newApp(nil, Options{Page: "requirements", CapturePath: "isolated-sidebar"})
-					s.loading, s.configJSON = false, string(encoded)
+					s.loading, s.settingsUnit.state.configJSON = false, string(encoded)
 					want := []string{"tasks"}
 					if mask&1 != 0 {
 						want = append(want, "requirements")
@@ -79,7 +79,7 @@ func TestSidebarSettingsLayoutAndSaveFailure(t *testing.T) {
 				s := newApp(nil, Options{Page: "settings", CapturePath: "isolated-sidebar-settings"})
 				s.loading, s.dark = false, dark
 				encoded, _ := json.Marshal(domain.DefaultAppConfig())
-				s.configJSON = string(encoded)
+				s.settingsUnit.state.configJSON = string(encoded)
 				tester := ui.NewTester(func(c *ui.Context) {
 					ui.Column(c).Fill().Padding(24).Gap(16).Children(func() { s.settingsBasic(c, setTheme(c, dark)) })
 				}, width, 900)
@@ -129,17 +129,17 @@ func TestSidebarSettingsLayoutAndSaveFailure(t *testing.T) {
 					t.Fatal("failed save changed applied visibility")
 				}
 				tester.Frame()
-				if !*s.settingsBoolInputs["sidebar-visibility-requirements"] {
+				if !*s.settingsUnit.state.settingsBoolInputs["sidebar-visibility-requirements"] {
 					t.Fatal("failed switch did not restore its applied value")
 				}
-				before := s.configJSON
+				before := s.settingsUnit.state.configJSON
 				config := domain.DefaultAppConfig()
 				config.SidebarVisibility.Requirements = false
 				next, _ := json.Marshal(config)
 				s.syncSettingsConfigInputs(before, string(next))
-				s.configJSON = string(next)
+				s.settingsUnit.state.configJSON = string(next)
 				tester.Frame()
-				if *s.settingsBoolInputs["sidebar-visibility-requirements"] {
+				if *s.settingsUnit.state.settingsBoolInputs["sidebar-visibility-requirements"] {
 					t.Fatal("successful configuration update did not refresh switch")
 				}
 			})

@@ -22,7 +22,10 @@ func TestBranchReuseConflictSharedConsumers(t *testing.T) {
 				token: "branch-reuse-test", phase: "confirm",
 				preview: &taskCreationPreview{conflicts: []workspace.BranchReuseConflict{conflict}},
 			}
-			s := &app{inputs: map[string]*string{}, taskCreation: creationState}
+			s := &app{
+				taskUnit: taskController{state: taskState{taskCreation: creationState}},
+				inputs:   map[string]*string{},
+			}
 			appendState := &taskAppendUIState{conflicts: []workspace.BranchReuseConflict{conflict}}
 			tester := ui.NewTester(func(c *ui.Context) {
 				p := setTheme(c, false)

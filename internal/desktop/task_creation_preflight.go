@@ -43,12 +43,12 @@ func (s *app) ensureTaskCreationPreflights() *taskCreationPreflightJobState {
 	if s == nil {
 		return nil
 	}
-	if s.taskCreationPreflights == nil {
-		s.taskCreationPreflights = &taskCreationPreflightJobState{running: make(map[*taskCreationPreflightRequest]struct{})}
-	} else if s.taskCreationPreflights.running == nil {
-		s.taskCreationPreflights.running = make(map[*taskCreationPreflightRequest]struct{})
+	if s.taskUnit.state.taskCreationPreflights == nil {
+		s.taskUnit.state.taskCreationPreflights = &taskCreationPreflightJobState{running: make(map[*taskCreationPreflightRequest]struct{})}
+	} else if s.taskUnit.state.taskCreationPreflights.running == nil {
+		s.taskUnit.state.taskCreationPreflights.running = make(map[*taskCreationPreflightRequest]struct{})
 	}
-	return s.taskCreationPreflights
+	return s.taskUnit.state.taskCreationPreflights
 }
 
 func cloneTaskCreationPreflightAction(action application.Action) application.Action {
@@ -75,17 +75,38 @@ func taskCreationSnapshotConfigFingerprint(snapshot application.Snapshot, config
 	return hex.EncodeToString(digest[:]), nil
 }
 
+// Form configuration is independently decoded at form creation, and not edited
+// by its controls. This observer-only cache follows its explicit publication
+// revision and the immutable snapshot source. Result/submit boundaries below
+// always fingerprint the current live config, including unannounced test edits.
+type taskCreationObserverConfig struct {
+	source      string
+	revision    uint64
+	fingerprint string
+	err         error
+	valid       bool
+}
+
+func (s *app) taskCreationObserverFingerprint(form *taskCreationState) (string, error) {
+	cache := &form.observerConfig
+	if !cache.valid || cache.source != s.snapshot.ConfigJSON || cache.revision != form.configRevision {
+		cache.source, cache.revision, cache.valid = s.snapshot.ConfigJSON, form.configRevision, true
+		cache.fingerprint, cache.err = taskCreationSnapshotConfigFingerprint(s.snapshot, form.config)
+	}
+	return cache.fingerprint, cache.err
+}
+
 // prepareTaskCreationPreflight binds a preview read to the exact form and
 // preview that issued it. It deliberately does not inspect or mutate app-wide
 // busy/cancellation state, so callers may also use it in headless proofs.
 func (s *app) prepareTaskCreationPreflight(action application.Action) (*taskCreationPreflightRequest, error) {
-	if s == nil || s.taskCreation == nil {
+	if s == nil || s.taskUnit.state.taskCreation == nil {
 		return nil, errors.New("任务创建表单已关闭。")
 	}
 	if action.Kind != "task.create-preview" {
 		return nil, errors.New("任务预检请求类型无效。")
 	}
-	form := s.taskCreation
+	form := s.taskUnit.state.taskCreation
 	token := payloadString(action.Payload, "taskCreateToken")
 	if token == "" || token != form.token {
 		return nil, errors.New("任务预检身份已变化，请重新检查。")
@@ -98,6 +119,7 @@ func (s *app) prepareTaskCreationPreflight(action application.Action) (*taskCrea
 	if err != nil {
 		return nil, fmt.Errorf("无法记录任务预检配置身份：%w", err)
 	}
+	form.observerConfig = taskCreationObserverConfig{source: s.snapshot.ConfigJSON, revision: form.configRevision, fingerprint: fingerprint, valid: true}
 
 	jobs := s.ensureTaskCreationPreflights()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -158,13 +180,7 @@ func executeTaskCreationPreflight(backend application.Backend, request *taskCrea
 	if err := request.ctx.Err(); err != nil {
 		return application.ActionResult{}, err
 	}
-	var result application.ActionResult
-	var err error
-	if progressBackend, ok := backend.(application.TaskCreationProgressBackend); ok {
-		result, err = progressBackend.DispatchTaskCreation(request.ctx, request.action, request.progressUpdates)
-	} else {
-		result, err = backend.Dispatch(request.ctx, request.action)
-	}
+	result, err := executeTaskOperation(request.ctx, backend, request.action, request.progressUpdates)
 	if request.ctx.Err() != nil {
 		return application.ActionResult{}, errors.Join(request.ctx.Err(), err)
 	}
@@ -193,27 +209,31 @@ func (s *app) taskCreationPreflightRelevant(request *taskCreationPreflightReques
 }
 
 func (s *app) taskCreationPreflightIdentityRelevant(request *taskCreationPreflightRequest) bool {
+	if !s.taskCreationPreflightScopeRelevant(request) || request.form.preview.signature != s.taskCreationSignature() {
+		return false
+	}
+	fingerprint, err := taskCreationSnapshotConfigFingerprint(s.snapshot, request.form.config)
+	return err == nil && fingerprint == request.snapshotConfigFingerprint
+}
+
+func (s *app) taskCreationPreflightScopeRelevant(request *taskCreationPreflightRequest) bool {
 	if s == nil || request == nil {
 		return false
 	}
-	jobs := s.taskCreationPreflights
+	jobs := s.taskUnit.state.taskCreationPreflights
 	if jobs == nil || request.ctx == nil {
 		return false
 	}
 	jobs.mu.Lock()
 	current, closed := jobs.current, jobs.closed
 	jobs.mu.Unlock()
-	if closed || !s.dialogOpen || s.form.mode != "task-create" || current != request || request.form == nil || s.taskCreation != request.form ||
+	if closed || !s.dialogOpen || s.form.mode != "task-create" || current != request || request.form == nil || s.taskUnit.state.taskCreation != request.form ||
 		request.form.preflight != request || request.form.token != request.token ||
 		payloadString(request.action.Payload, "taskCreateToken") != request.token ||
 		request.form.preview != request.preview || request.preview == nil ||
 		request.preview.signature != request.previewSignature || request.form.phase != "preview" ||
-		request.form.preview.signature != s.taskCreationSignature() || s.snapshot.Home != request.home ||
+		s.snapshot.Home != request.home ||
 		request.form.creationProgress != request.progress || request.form.progressGeneration != request.progressGeneration {
-		return false
-	}
-	fingerprint, err := taskCreationSnapshotConfigFingerprint(s.snapshot, request.form.config)
-	if err != nil || fingerprint != request.snapshotConfigFingerprint {
 		return false
 	}
 	return true
@@ -223,7 +243,7 @@ func (s *app) retireStaleTaskCreationPreflight(request *taskCreationPreflightReq
 	if s == nil || request == nil || request.cancelRequested {
 		return
 	}
-	jobs := s.taskCreationPreflights
+	jobs := s.taskUnit.state.taskCreationPreflights
 	if jobs == nil {
 		return
 	}
@@ -241,7 +261,7 @@ func (s *app) retireStaleTaskCreationPreflight(request *taskCreationPreflightReq
 	jobs.mu.Unlock()
 	request.cancel()
 
-	if stillBound && s.taskCreation == form && form.token == request.token && form.phase == "preview" && form.preview == request.preview {
+	if stillBound && s.taskUnit.state.taskCreation == form && form.token == request.token && form.phase == "preview" && form.preview == request.preview {
 		form.preview = nil
 		form.phase = "editing"
 		form.inlineError = "任务信息或配置已变化，预检已取消，请重新检查。"
@@ -257,7 +277,7 @@ func (s *app) finishTaskCreationPreflight(request *taskCreationPreflightRequest,
 		s.retireStaleTaskCreationPreflight(request)
 		return
 	}
-	jobs := s.taskCreationPreflights
+	jobs := s.taskUnit.state.taskCreationPreflights
 	jobs.mu.Lock()
 	if jobs.current == request {
 		jobs.current = nil
@@ -274,11 +294,11 @@ func (s *app) finishTaskCreationPreflight(request *taskCreationPreflightRequest,
 }
 
 func (s *app) finishCancelledTaskCreationPreflight(request *taskCreationPreflightRequest) {
-	if s == nil || request == nil || request.form == nil || s.taskCreationPreflights == nil {
+	if s == nil || request == nil || request.form == nil || s.taskUnit.state.taskCreationPreflights == nil {
 		return
 	}
 	identityRelevant := s.taskCreationPreflightIdentityRelevant(request)
-	jobs := s.taskCreationPreflights
+	jobs := s.taskUnit.state.taskCreationPreflights
 	jobs.mu.Lock()
 	if jobs.closed {
 		jobs.mu.Unlock()
@@ -295,7 +315,7 @@ func (s *app) finishCancelledTaskCreationPreflight(request *taskCreationPrefligh
 	}
 	jobs.mu.Unlock()
 
-	if !current || !bound || s.taskCreation != form || !s.dialogOpen || s.form.mode != "task-create" || form.token != request.token || form.phase != "preview" || form.preview != request.preview {
+	if !current || !bound || s.taskUnit.state.taskCreation != form || !s.dialogOpen || s.form.mode != "task-create" || form.token != request.token || form.phase != "preview" || form.preview != request.preview {
 		return
 	}
 	if request.progress != nil && form.creationProgress == request.progress && form.progressGeneration == request.progressGeneration {
@@ -317,7 +337,7 @@ func (s *app) completeTaskCreationPreflight(request *taskCreationPreflightReques
 		return
 	}
 	request.cancel()
-	jobs := s.taskCreationPreflights
+	jobs := s.taskUnit.state.taskCreationPreflights
 	if jobs == nil {
 		return
 	}
@@ -336,7 +356,7 @@ func (s *app) cancelTaskCreationPreflight(form *taskCreationState) {
 	request := form.preflight
 	form.preflight = nil
 	request.cancel()
-	if jobs := s.taskCreationPreflights; jobs != nil {
+	if jobs := s.taskUnit.state.taskCreationPreflights; jobs != nil {
 		jobs.mu.Lock()
 		if jobs.current == request {
 			jobs.current = nil
@@ -363,25 +383,31 @@ func (s *app) interruptTaskCreationPreflight(form *taskCreationState) bool {
 }
 
 func (s *app) observeTaskCreationPreflight() {
-	if s == nil || s.taskCreationPreflights == nil {
+	if s == nil || s.taskUnit.state.taskCreationPreflights == nil {
 		return
 	}
-	jobs := s.taskCreationPreflights
+	jobs := s.taskUnit.state.taskCreationPreflights
 	jobs.mu.Lock()
 	request := jobs.current
 	closed := jobs.closed
 	jobs.mu.Unlock()
-	if request == nil || closed || request.cancelRequested || s.taskCreationPreflightRelevant(request) {
+	if request == nil || closed || request.cancelRequested {
 		return
+	}
+	if request.ctx != nil && request.ctx.Err() == nil && s.taskCreationPreflightScopeRelevant(request) {
+		fingerprint, err := s.taskCreationObserverFingerprint(request.form)
+		if err == nil && fingerprint == request.snapshotConfigFingerprint {
+			return
+		}
 	}
 	s.retireStaleTaskCreationPreflight(request)
 }
 
-func (s *app) closeTaskCreationPreflights(ctx context.Context) error {
+func (s *taskController) closeTaskCreationPreflights(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
-	jobs := s.taskCreationPreflights
+	jobs := s.state.taskCreationPreflights
 	if jobs == nil {
 		return nil
 	}

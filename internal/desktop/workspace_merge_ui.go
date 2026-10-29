@@ -55,7 +55,7 @@ func (s *app) workspaceMainBranchMergeEnabled(t task, w application.Workspace) b
 	if domain.NewGitWritePolicy(config.BlockedGitWriteBranches).IsBlocked(w.Record.Branch) {
 		return false
 	}
-	if state := s.workspaceMerge; state != nil && state.running {
+	if state := s.workspaceUnit.state.workspaceMerge; state != nil && state.running {
 		return false
 	}
 	health, exists := s.workspaceHealth(w.Path)
@@ -75,7 +75,7 @@ func (s *app) beginWorkspaceMerge(t task, w application.Workspace) uint64 {
 	if token == 0 {
 		token = workspaceMergeToken.Add(1)
 	}
-	s.workspaceMerge = &workspaceMergeUIState{
+	s.workspaceUnit.state.workspaceMerge = &workspaceMergeUIState{
 		taskID: t.id, taskPath: t.path, taskCreatedAt: t.createdAt,
 		workspace: w.Record, token: token, running: true,
 	}
@@ -84,24 +84,24 @@ func (s *app) beginWorkspaceMerge(t task, w application.Workspace) uint64 {
 }
 
 func (s *app) applyWorkspaceMergeResult(action application.Action, result application.ActionResult) {
-	state := s.workspaceMerge
+	state := s.workspaceUnit.state.workspaceMerge
 	if !workspaceMergeActionMatches(state, action) {
 		return
 	}
 	if !s.workspaceMergeStateIsCurrent(state) {
-		s.workspaceMerge = nil
+		s.workspaceUnit.state.workspaceMerge = nil
 		return
 	}
 	var merged workspace.WorkspaceMainBranchMergeResult
 	if err := decodeWorkspaceValue(result.Data, &merged); err != nil {
-		s.workspaceMerge = nil
+		s.workspaceUnit.state.workspaceMerge = nil
 		s.lastError = "主分支合并结果格式错误：" + err.Error()
 		return
 	}
 	if workspaceHealthPathKey(merged.WorkspacePath) != workspaceHealthPathKey(state.workspace.WorktreePath) ||
 		merged.ServiceName != state.workspace.ServiceName || merged.ModuleName != state.workspace.ModuleName ||
 		merged.TargetBranch != state.workspace.Branch {
-		s.workspaceMerge = nil
+		s.workspaceUnit.state.workspaceMerge = nil
 		s.lastError = "主分支合并结果与发起操作的工作区身份不一致，已丢弃结果"
 		return
 	}
@@ -115,21 +115,21 @@ func (s *app) applyWorkspaceMergeResult(action application.Action, result applic
 // Backend errors and cancellation follow the source controller's onFailure / onCancelled
 // paths: discard the card state instead of synthesizing a FAILED merge result.
 func (s *app) applyWorkspaceMergeFailure(action application.Action, _ error) {
-	state := s.workspaceMerge
+	state := s.workspaceUnit.state.workspaceMerge
 	if workspaceMergeActionMatches(state, action) && s.workspaceMergeStateIsCurrent(state) {
-		s.workspaceMerge = nil
+		s.workspaceUnit.state.workspaceMerge = nil
 	}
 	s.requestWorkspaceGitStatus(true)
 }
 
-func (s *app) clearWorkspaceMergeSelection() {
-	s.workspaceMerge = nil
+func (s *workspaceController) clearWorkspaceMergeSelection() {
+	s.state.workspaceMerge = nil
 }
 
 func (s *app) dismissWorkspaceMergeResult(t task, w application.Workspace) {
 	state := s.workspaceMergeStateFor(t, w)
 	if state != nil && !state.running {
-		s.workspaceMerge = nil
+		s.workspaceUnit.state.workspaceMerge = nil
 	}
 }
 
@@ -224,7 +224,7 @@ func (s *app) workspaceMergeConfig() (domain.AppConfig, bool) {
 }
 
 func (s *app) workspaceMergeSelectionMatches(t task, w application.Workspace) bool {
-	selected := s.currentTask()
+	selected := s.taskUnit.currentTask()
 	if selected.path == "" || !workspaceMergeTaskIdentityMatches(selected, t) {
 		return false
 	}
@@ -237,7 +237,7 @@ func (s *app) workspaceMergeSelectionMatches(t task, w application.Workspace) bo
 }
 
 func (s *app) workspaceMergeStateFor(t task, w application.Workspace) *workspaceMergeUIState {
-	state := s.workspaceMerge
+	state := s.workspaceUnit.state.workspaceMerge
 	if state == nil || state.taskPath != t.path || state.taskCreatedAt != t.createdAt || !reflect.DeepEqual(state.workspace, w.Record) {
 		return nil
 	}
@@ -248,7 +248,7 @@ func (s *app) workspaceMergeStateIsCurrent(state *workspaceMergeUIState) bool {
 	if state == nil {
 		return false
 	}
-	t := s.currentTask()
+	t := s.taskUnit.currentTask()
 	if t.path != state.taskPath || t.createdAt != state.taskCreatedAt || t.id != state.taskID {
 		return false
 	}

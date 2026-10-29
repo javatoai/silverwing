@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -131,7 +130,7 @@ func (s *app) openServiceEditor(groupID, serviceID, section string) {
 	state.initialModules, state.initialCopies, state.initialCommands = moduleIDs(state.modules), copyIDs(state.copies), bootstrapCommandIDs(state.commands)
 	branch := mapString(state.service, "masterBranch")
 	state.activeRemote = branchRemote(branch)
-	s.serviceEditor = state
+	s.workspaceUnit.state.serviceEditor = state
 	s.form = actionForm{kind: "service.save", mode: "service-editor", serviceID: serviceID}
 	s.dialogTitle = "服务配置"
 	s.dialogOpen = true
@@ -150,25 +149,25 @@ func (s *app) clearServiceEditorInputs() {
 			delete(s.inputs, key)
 		}
 	}
-	for key := range s.settingsBoolInputs {
+	for key := range s.settingsUnit.state.settingsBoolInputs {
 		if strings.HasPrefix(key, "service-editor:") {
-			delete(s.settingsBoolInputs, key)
+			delete(s.settingsUnit.state.settingsBoolInputs, key)
 		}
 	}
 }
 
 func (s *app) serviceEditorKey(key string) string {
-	if s.serviceEditor == nil {
+	if s.workspaceUnit.state.serviceEditor == nil {
 		return "service-editor:missing:" + key
 	}
-	return "service-editor:" + s.serviceEditor.session + ":" + key
+	return "service-editor:" + s.workspaceUnit.state.serviceEditor.session + ":" + key
 }
 
 func (s *app) serviceEditorText(key, initial string) *string {
 	storageKey := s.serviceEditorKey(key)
-	if s.serviceEditor != nil {
-		if _, exists := s.serviceEditor.initialText[storageKey]; !exists {
-			s.serviceEditor.initialText[storageKey] = initial
+	if s.workspaceUnit.state.serviceEditor != nil {
+		if _, exists := s.workspaceUnit.state.serviceEditor.initialText[storageKey]; !exists {
+			s.workspaceUnit.state.serviceEditor.initialText[storageKey] = initial
 		}
 	}
 	return s.input(storageKey, initial)
@@ -176,27 +175,12 @@ func (s *app) serviceEditorText(key, initial string) *string {
 
 func (s *app) serviceEditorBool(key string, initial bool) *bool {
 	storageKey := s.serviceEditorKey(key)
-	if s.serviceEditor != nil {
-		if _, exists := s.serviceEditor.initialBools[storageKey]; !exists {
-			s.serviceEditor.initialBools[storageKey] = initial
+	if s.workspaceUnit.state.serviceEditor != nil {
+		if _, exists := s.workspaceUnit.state.serviceEditor.initialBools[storageKey]; !exists {
+			s.workspaceUnit.state.serviceEditor.initialBools[storageKey] = initial
 		}
 	}
 	return s.settingsBoolInput(storageKey, initial)
-}
-
-func cloneConfigMap(source map[string]any) map[string]any {
-	if source == nil {
-		return nil
-	}
-	encoded, err := json.Marshal(source)
-	if err != nil {
-		return nil
-	}
-	var cloned map[string]any
-	if json.Unmarshal(encoded, &cloned) != nil {
-		return nil
-	}
-	return cloned
 }
 
 func serviceModuleDrafts(value any) []serviceModuleDraft {
@@ -327,7 +311,7 @@ func serviceEditorBranchChoiceKey(scope serviceRepositoryChoiceScope, remote str
 }
 
 func (s *app) serviceEditorBranchChoices(remote string) ([]string, bool, bool) {
-	state := s.serviceEditor
+	state := s.workspaceUnit.state.serviceEditor
 	if state == nil {
 		return nil, false, false
 	}
@@ -346,7 +330,7 @@ func (s *app) serviceEditorBranchChoices(remote string) ([]string, bool, bool) {
 
 func (s *app) requestServiceRepositoryChoices(remote string, force bool) {
 	s.observeServiceRepositoryChoiceScope()
-	state := s.serviceEditor
+	state := s.workspaceUnit.state.serviceEditor
 	if state == nil || state.saving || !s.dialogOpen {
 		return
 	}
@@ -376,7 +360,7 @@ func (s *app) requestServiceRepositoryChoices(remote string, force bool) {
 		if s.serviceRepositoryChoiceReadCurrent("repository.choices", remote) {
 			return
 		}
-		if jobs := s.serviceRepositoryChoices; jobs != nil && !force {
+		if jobs := s.workspaceUnit.state.serviceRepositoryChoices; jobs != nil && !force {
 			jobs.mu.Lock()
 			current := jobs.current["repository.choices"]
 			jobs.mu.Unlock()
@@ -410,7 +394,7 @@ func (s *app) requestServiceRepositoryChoices(remote string, force bool) {
 }
 
 func (s *app) applyServiceRepositoryChoices(action application.Action, result application.ActionResult) {
-	state := s.serviceEditor
+	state := s.workspaceUnit.state.serviceEditor
 	if state == nil || payloadString(action.Payload, "requestKey") == "" || payloadString(action.Payload, "requestKey") != state.choicesRequest {
 		return
 	}
@@ -420,7 +404,7 @@ func (s *app) applyServiceRepositoryChoices(action application.Action, result ap
 		return
 	}
 	data := mapData(result.Data)
-	_, currentRoot := s.repositoryDetails(requestedRepo)
+	_, currentRoot := s.currentRepositoryDetails(requestedRepo)
 	if mapString(data, "repositoryId") != requestedRepo || currentRoot == "" || dataString(data, "rootPath") != currentRoot {
 		state.choicesLoading = false
 		state.choicesError = "仓库选择结果已过期，请重新读取远程分支。"
@@ -467,7 +451,7 @@ func queueServiceRepositoryChoiceRemote(state *serviceEditorState, remote string
 }
 
 func (s *app) startNextServiceRepositoryChoice() {
-	state := s.serviceEditor
+	state := s.workspaceUnit.state.serviceEditor
 	if state == nil || !s.dialogOpen || state.saving || len(state.pendingChoiceRemotes) == 0 || (state.section != "git" && state.section != "modules") {
 		return
 	}
@@ -480,7 +464,7 @@ func (s *app) startNextServiceRepositoryChoice() {
 
 func (s *app) renderServiceEditorDialog(c *ui.Context, p palette) {
 	s.observeServiceRepositoryChoiceScope()
-	state := s.serviceEditor
+	state := s.workspaceUnit.state.serviceEditor
 	if state == nil {
 		return
 	}
@@ -557,14 +541,14 @@ func (s *app) renderServiceEditorDialog(c *ui.Context, p palette) {
 }
 
 func (s *app) selectServiceEditorSection(section string) {
-	if s.serviceEditor == nil {
+	if s.workspaceUnit.state.serviceEditor == nil {
 		return
 	}
-	if s.serviceEditor.section != section {
+	if s.workspaceUnit.state.serviceEditor.section != section {
 		s.cancelServiceRepositoryChoiceReads()
 	}
-	s.serviceEditor.section = section
-	if (section == "git" || section == "modules") && !s.serviceEditor.remotesLoaded && s.serviceEditor.choicesError == "" {
+	s.workspaceUnit.state.serviceEditor.section = section
+	if (section == "git" || section == "modules") && !s.workspaceUnit.state.serviceEditor.remotesLoaded && s.workspaceUnit.state.serviceEditor.choicesError == "" {
 		s.requestServiceRepositoryChoices("", false)
 	}
 	if section == "git" {
@@ -611,7 +595,7 @@ func (s *app) renderServiceEditorSectionContent(c *ui.Context, p palette, state 
 }
 
 func (s *app) dismissServiceEditor() {
-	state := s.serviceEditor
+	state := s.workspaceUnit.state.serviceEditor
 	if state == nil {
 		s.dialogOpen = false
 		return
@@ -621,11 +605,11 @@ func (s *app) dismissServiceEditor() {
 	}
 	session := state.session
 	dismiss := func() {
-		if s.serviceEditor != state || state.session != session || state.saving {
+		if s.workspaceUnit.state.serviceEditor != state || state.session != session || state.saving {
 			return
 		}
 		s.cancelServiceRepositoryChoiceReads()
-		s.serviceEditor = nil
+		s.workspaceUnit.state.serviceEditor = nil
 		s.dialogOpen = false
 		s.clearServiceEditorInputs()
 	}
@@ -637,7 +621,7 @@ func (s *app) dismissServiceEditor() {
 }
 
 func (s *app) serviceEditorDirty() bool {
-	state := s.serviceEditor
+	state := s.workspaceUnit.state.serviceEditor
 	if state == nil {
 		return false
 	}
@@ -647,7 +631,7 @@ func (s *app) serviceEditorDirty() bool {
 		}
 	}
 	for key, initial := range state.initialBools {
-		if current := s.settingsBoolInputs[key]; current != nil && *current != initial {
+		if current := s.settingsUnit.state.settingsBoolInputs[key]; current != nil && *current != initial {
 			return true
 		}
 	}
@@ -732,7 +716,7 @@ func (s *app) renderServiceEditorGit(c *ui.Context, p palette, state *serviceEdi
 
 func (s *app) requestServiceRepositoryAddresses(force bool) {
 	s.observeServiceRepositoryChoiceScope()
-	state := s.serviceEditor
+	state := s.workspaceUnit.state.serviceEditor
 	if state == nil || state.saving || !s.dialogOpen || (!force && (state.addressesLoaded || s.serviceRepositoryChoiceReadCurrent("repository.addresses", ""))) {
 		return
 	}
@@ -748,7 +732,7 @@ func (s *app) requestServiceRepositoryAddresses(force bool) {
 }
 
 func (s *app) applyServiceRepositoryAddresses(action application.Action, result application.ActionResult) {
-	state := s.serviceEditor
+	state := s.workspaceUnit.state.serviceEditor
 	if state == nil || payloadString(action.Payload, "requestKey") == "" || payloadString(action.Payload, "requestKey") != state.addressesRequest {
 		return
 	}
@@ -757,7 +741,7 @@ func (s *app) applyServiceRepositoryAddresses(action application.Action, result 
 		state.addressesLoading = false
 		return
 	}
-	_, rootPath := s.repositoryDetails(repositoryID)
+	_, rootPath := s.currentRepositoryDetails(repositoryID)
 	data := mapData(result.Data)
 	if mapString(data, "repositoryId") != repositoryID || rootPath == "" || dataString(data, "rootPath") != rootPath {
 		state.addressesLoading = false
@@ -964,14 +948,14 @@ func (s *app) renderWorkspaceCommand(c *ui.Context, p palette, owner string, com
 			if action(c, "service-editor-command-delete-"+command.id, "delete", "删除快捷命令", p, false) {
 				if strings.HasPrefix(owner, "module:") {
 					moduleID := strings.TrimPrefix(owner, "module:")
-					for index := range s.serviceEditor.modules {
-						if s.serviceEditor.modules[index].id == moduleID {
-							s.serviceEditor.modules[index].commands = removeWorkspaceCommand(s.serviceEditor.modules[index].commands, command.id)
+					for index := range s.workspaceUnit.state.serviceEditor.modules {
+						if s.workspaceUnit.state.serviceEditor.modules[index].id == moduleID {
+							s.workspaceUnit.state.serviceEditor.modules[index].commands = removeWorkspaceCommand(s.workspaceUnit.state.serviceEditor.modules[index].commands, command.id)
 							break
 						}
 					}
 				} else {
-					s.serviceEditor.commands = removeBootstrapCommand(s.serviceEditor.commands, command.id)
+					s.workspaceUnit.state.serviceEditor.commands = removeBootstrapCommand(s.workspaceUnit.state.serviceEditor.commands, command.id)
 				}
 			}
 		})
@@ -1076,7 +1060,7 @@ func (s *app) renderServiceEditorCommands(c *ui.Context, p palette, state *servi
 }
 
 func (s *app) renderBootstrapEditorModes(c *ui.Context, p palette, page string) {
-	state := s.serviceEditor
+	state := s.workspaceUnit.state.serviceEditor
 	if state == nil {
 		return
 	}
@@ -1168,7 +1152,7 @@ func (s *app) bootstrapJSONExample(page string, state *serviceEditorState) strin
 }
 
 func (s *app) setServiceEditorTextBaseline(key, value string) {
-	state := s.serviceEditor
+	state := s.workspaceUnit.state.serviceEditor
 	if state == nil {
 		return
 	}
@@ -1183,9 +1167,9 @@ func (s *app) serviceEditorField(c *ui.Context, p palette, key, title, initial s
 	ui.Column(c).Gap(5).Children(func() {
 		label(c, title, 11, p.muted)
 		if multiline {
-			ui.TextArea(c.Key("service-editor-"+s.serviceEditor.session+"-"+key), value).FillWidth().Height(92).Padding(10).Background(p.surface).Border(1, p.line).Radius(7)
+			ui.TextArea(c.Key("service-editor-"+s.workspaceUnit.state.serviceEditor.session+"-"+key), value).FillWidth().Height(92).Padding(10).Background(p.surface).Border(1, p.line).Radius(7)
 		} else {
-			ui.TextInput(c.Key("service-editor-"+s.serviceEditor.session+"-"+key), value).FillWidth().Height(38).Placeholder(title)
+			ui.TextInput(c.Key("service-editor-"+s.workspaceUnit.state.serviceEditor.session+"-"+key), value).FillWidth().Height(38).Placeholder(title)
 		}
 	})
 }
@@ -1208,7 +1192,7 @@ func (s *app) serviceEditorBranchField(c *ui.Context, p palette, state *serviceE
 	}
 	ui.Column(c).Gap(5).Children(func() {
 		label(c, title, 11, p.muted)
-		combo := ui.ComboboxBase(c.Key("service-editor-branch-"+s.serviceEditor.session+"-"+key), value)
+		combo := ui.ComboboxBase(c.Key("service-editor-branch-"+s.workspaceUnit.state.serviceEditor.session+"-"+key), value)
 		combo.Input.FillWidth().Height(38).Padding(10, 30, 10, 10).Placeholder("remote/branch").Background(p.surface).Border(1, p.line).Radius(7).Label(title)
 		combo.Input.Draw(func(draw *ui.Painter, rect ui.Rect) {
 			var arrow ui.Path
@@ -1295,22 +1279,22 @@ func (s *app) serviceCopyField(c *ui.Context, p palette, rule *copyRuleDraft, fi
 }
 
 func (s *app) pickServiceCopyPath(rule *copyRuleDraft, directory bool) {
-	if s.serviceEditor == nil {
+	if s.workspaceUnit.state.serviceEditor == nil {
 		return
 	}
-	repositoryID := *s.serviceEditorText("repositoryId", mapString(s.serviceEditor.service, "repositoryId"))
-	_, repositoryRoot := s.repositoryDetails(repositoryID)
+	repositoryID := *s.serviceEditorText("repositoryId", mapString(s.workspaceUnit.state.serviceEditor.service, "repositoryId"))
+	_, repositoryRoot := s.currentRepositoryDetails(repositoryID)
 	if repositoryRoot == "" {
-		s.serviceEditor.error = "请先选择有效仓库。"
+		s.workspaceUnit.state.serviceEditor.error = "请先选择有效仓库。"
 		return
 	}
 	s.pickNativePath("选择仓库内文件或目录", repositoryRoot, directory, nil, func(selected string) {
 		relative, err := serviceRepositoryRelativePath(repositoryRoot, selected)
 		if err != nil {
-			s.serviceEditor.error = err.Error()
+			s.workspaceUnit.state.serviceEditor.error = err.Error()
 			return
 		}
-		s.serviceEditor.error = ""
+		s.workspaceUnit.state.serviceEditor.error = ""
 		previous := *s.serviceEditorText("copy:"+rule.id+":source", rule.source)
 		*s.serviceEditorText("copy:"+rule.id+":source", rule.source) = relative
 		target := s.serviceEditorText("copy:"+rule.id+":target", rule.target)
@@ -1406,8 +1390,6 @@ func (s *app) bootstrapCommandConfig(state *serviceEditorState) ([]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		delete(commandMap, "iconKey")
-		delete(commandMap, "id")
 		commands = append(commands, commandMap)
 	}
 	return commands, nil
@@ -1610,7 +1592,7 @@ func configJSONWithoutFields(value map[string]any, omitted ...string) string {
 }
 
 func (s *app) buildServiceEditorConfig() (map[string]any, error) {
-	state := s.serviceEditor
+	state := s.workspaceUnit.state.serviceEditor
 	if state == nil {
 		return nil, fmt.Errorf("服务编辑状态已关闭")
 	}
@@ -1773,84 +1755,38 @@ func validRemoteBranch(value string) bool {
 }
 
 func (s *app) buildWorkspaceCommand(owner string, draft workspaceCommandDraft, module bool) (map[string]any, error) {
-	id := draft.id
-	name := *s.serviceCommandText(owner, &draft, "name", draft.name)
-	executable := *s.serviceCommandText(owner, &draft, "executable", draft.executable)
-	directory := *s.serviceCommandText(owner, &draft, "directory", firstNonEmpty(draft.directory, "."))
-	timeoutText := strings.TrimSpace(*s.serviceCommandText(owner, &draft, "timeout", firstNonEmpty(draft.timeout, "600")))
-	if strings.TrimSpace(name) == "" || strings.TrimSpace(executable) == "" {
-		return nil, fmt.Errorf("命令名称和可执行程序不能为空")
-	}
-	if strings.TrimSpace(directory) == "" {
-		return nil, fmt.Errorf("命令工作目录不能为空")
-	}
+	purpose := serviceCommandForBootstrap
 	if module {
-		if id == "" {
-			return nil, fmt.Errorf("快捷命令 ID 不能为空")
-		}
-		if err := validateRelativeConfigPath(directory, "快捷命令工作目录"); err != nil {
-			return nil, err
-		}
+		purpose = serviceCommandForModule
 	}
-	timeout, err := parsePositiveInt(timeoutText)
+	values := serviceCommandValues{
+		raw: draft.raw, ID: draft.id,
+		Name:        *s.serviceCommandText(owner, &draft, "name", draft.name),
+		Program:     *s.serviceCommandText(owner, &draft, "executable", draft.executable),
+		Directory:   *s.serviceCommandText(owner, &draft, "directory", firstNonEmpty(draft.directory, ".")),
+		TimeoutText: *s.serviceCommandText(owner, &draft, "timeout", firstNonEmpty(draft.timeout, "600")),
+	}
+	// Preserve lazy input/baseline initialization: failed required fields must
+	// not initialize argument, enabled or icon inputs that were not read before.
+	timeout, err := validateServiceCommandValues(values, purpose)
 	if err != nil {
-		return nil, fmt.Errorf("命令“%s”的超时必须是大于 0 的整数", name)
+		return nil, err
 	}
-	argsText := *s.serviceCommandText(owner, &draft, "arguments", draft.arguments)
-	args := nonBlankLines(argsText)
-	command := cloneConfigMap(draft.raw)
-	if command == nil {
-		command = map[string]any{}
-	}
-	command["name"], command["executable"], command["arguments"] = name, executable, args
-	command["workingDirectory"], command["timeoutSeconds"] = directory, timeout
+	values.ArgsText = *s.serviceCommandText(owner, &draft, "arguments", draft.arguments)
 	if module || owner == "bootstrap" {
-		command["enabled"] = *s.serviceEditorBool(owner+":"+id+":enabled", mapBool(draft.raw, "enabled", true))
+		values.Enabled = *s.serviceEditorBool(owner+":"+draft.id+":enabled", mapBool(draft.raw, "enabled", true))
 	}
 	if module {
-		command["id"] = firstNonEmpty(id, newDesktopEditorID("command"))
-		command["iconKey"] = firstNonEmpty(*s.serviceCommandText(owner, &draft, "iconKey", draft.iconKey), "build")
+		// ID allocation belongs to the editor, including its existing fallback
+		// evaluation. The value unit only validates and preserves the chosen ID.
+		values.ID = firstNonEmpty(draft.id, newDesktopEditorID("command"))
+		values.IconKey = *s.serviceCommandText(owner, &draft, "iconKey", draft.iconKey)
 	}
-	return command, nil
-}
-
-func nonBlankLines(text string) []string {
-	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
-	lines := make([]string, 0)
-	for _, line := range strings.Split(text, "\n") {
-		if strings.TrimSpace(line) != "" {
-			lines = append(lines, line)
-		}
-	}
-	return lines
-}
-
-func parsePositiveInt(value string) (int64, error) {
-	parsed, err := strconv.ParseInt(value, 10, 64)
-	if err != nil || parsed <= 0 {
-		return 0, fmt.Errorf("invalid integer")
-	}
-	return parsed, nil
-}
-
-func validateRelativeConfigPath(value, label string) error {
-	pathValue := filepath.FromSlash(value)
-	if filepath.IsAbs(pathValue) {
-		return fmt.Errorf("%s 必须使用仓库内相对路径：%s", label, value)
-	}
-	for _, part := range strings.Split(strings.ReplaceAll(value, "\\", "/"), "/") {
-		if part == ".." {
-			return fmt.Errorf("%s 不能包含 ..：%s", label, value)
-		}
-		if strings.EqualFold(part, ".git") {
-			return fmt.Errorf("%s 不能访问 .git：%s", label, value)
-		}
-	}
-	return nil
+	return serviceCommandConfig(values, purpose, timeout), nil
 }
 
 func (s *app) submitServiceEditor() {
-	state := s.serviceEditor
+	state := s.workspaceUnit.state.serviceEditor
 	if state == nil || s.busy {
 		return
 	}

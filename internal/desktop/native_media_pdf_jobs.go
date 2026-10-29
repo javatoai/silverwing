@@ -26,7 +26,7 @@ func (r *pdfPageRenderRequest) invalidate() {
 }
 
 func (r *pdfPageRenderRequest) accepts(s *app, m *nativeMediaState, window *mygo.Window, pageIndex, widthPx int, cancelled bool) bool {
-	if r == nil || cancelled || r.invalidated.Load() || s == nil || m == nil || m.closed || m.kind != "pdf" || s.nativeMedia != m || s.win != window || window == nil || window.IsDestroyed() || pageIndex < 0 || pageIndex >= m.pdfInfo.PageCount {
+	if r == nil || cancelled || r.invalidated.Load() || s == nil || m == nil || m.closed || m.kind != "pdf" || s.materialsUnit.state.nativeMedia != m || s.win != window || window == nil || window.IsDestroyed() || pageIndex < 0 || pageIndex >= m.pdfInfo.PageCount {
 		return false
 	}
 	currentWidth := maxInt(1, int(math.Round(float64(pdfPageDisplayWidth(m.viewerWidth, m.zoom)))))

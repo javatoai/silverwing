@@ -13,18 +13,18 @@ type materialTextDeletePlan struct {
 }
 
 func (s *app) captureMaterialTextDelete(action application.Action) (*materialTextDeletePlan, error) {
-	if action.Kind != "document.trash" || !dataBool(action.Payload, "confirmed") || s.markdownAutosave == nil {
+	if action.Kind != "document.trash" || !dataBool(action.Payload, "confirmed") || s.materialsUnit.state.markdownAutosave == nil {
 		return nil, nil
 	}
-	if err := s.captureMarkdownEditorInput(s.markdown); err != nil {
+	if err := s.captureMarkdownEditorInput(s.materialsUnit.state.markdown); err != nil {
 		return nil, err
 	}
 	paths, _ := decodeSingleMaterialsData[[]string](action.Payload["paths"])
 	if len(paths) == 0 && action.Path != "" {
 		paths = []string{action.Path}
 	}
-	plan := &materialTextDeletePlan{autosave: s.markdownAutosave, paths: make(map[string]string)}
-	for key, state := range s.materialTextEditors {
+	plan := &materialTextDeletePlan{autosave: s.materialsUnit.state.markdownAutosave, paths: make(map[string]string)}
+	for key, state := range s.materialsUnit.state.materialTextEditors {
 		if state.taskID != action.TaskID {
 			continue
 		}
@@ -40,8 +40,8 @@ func (s *app) captureMaterialTextDelete(action application.Action) (*materialTex
 			break
 		}
 	}
-	s.documentSaveMu.Lock()
-	for key, ref := range s.documentSaveRefs {
+	s.materialsUnit.state.documentSaveMu.Lock()
+	for key, ref := range s.materialsUnit.state.documentSaveRefs {
 		if ref.kind == "instruction" || ref.taskID != action.TaskID || plan.paths[key] != "" {
 			continue
 		}
@@ -53,7 +53,7 @@ func (s *app) captureMaterialTextDelete(action application.Action) (*materialTex
 			}
 		}
 	}
-	s.documentSaveMu.Unlock()
+	s.materialsUnit.state.documentSaveMu.Unlock()
 	if len(plan.keys) == 0 {
 		return nil, nil
 	}
@@ -114,23 +114,23 @@ func (s *app) retireMaterialTextDeleteResult(request *materialsFileJob, result a
 		if !materialTextDeleteContains(paths, path) {
 			continue
 		}
-		state := s.materialTextEditors[key]
+		state := s.materialsUnit.state.materialTextEditors[key]
 		if state != nil && state.path != path {
 			continue
 		}
 		if state != nil {
 			state.closed = true
 		}
-		s.documentSaveMu.Lock()
-		if ref, exists := s.documentSaveRefs[key]; exists && ref.path == path && ref.textOwner == state {
-			delete(s.documentSaveRefs, key)
+		s.materialsUnit.state.documentSaveMu.Lock()
+		if ref, exists := s.materialsUnit.state.documentSaveRefs[key]; exists && ref.path == path && ref.textOwner == state {
+			delete(s.materialsUnit.state.documentSaveRefs, key)
 		}
-		s.documentSaveMu.Unlock()
-		delete(s.materialTextEditors, key)
-		delete(s.documentDrafts, path)
-		delete(s.documentDirtyMap, path)
-		if state != nil && s.materialTextActive == state {
-			s.materialTextActive = nil
+		s.materialsUnit.state.documentSaveMu.Unlock()
+		delete(s.materialsUnit.state.materialTextEditors, key)
+		delete(s.materialsUnit.state.documentDrafts, path)
+		delete(s.materialsUnit.state.documentDirtyMap, path)
+		if state != nil && s.materialsUnit.state.materialTextActive == state {
+			s.materialsUnit.state.materialTextActive = nil
 		}
 	}
 }

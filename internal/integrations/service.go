@@ -12,6 +12,7 @@ import (
 	"silverwing-go/internal/documents"
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/process"
+	"silverwing-go/internal/requirementprovider"
 	"silverwing-go/internal/storage"
 )
 
@@ -40,6 +41,12 @@ type Service struct {
 }
 
 func NewService(paths storage.Paths, config *storage.ConfigStore, runner *process.Runner) *Service {
+	return NewServiceWithRequirementProvider(paths, config, runner, requirementprovider.NewMeegle(runner))
+}
+
+// NewServiceWithRequirementProvider makes local materials preparation use the
+// same explicitly supplied source boundary as other application workflows.
+func NewServiceWithRequirementProvider(paths storage.Paths, config *storage.ConfigStore, runner *process.Runner, provider documents.RequirementProvider) *Service {
 	if config == nil {
 		config = storage.NewConfigStore(paths)
 	}
@@ -48,16 +55,17 @@ func NewService(paths storage.Paths, config *storage.ConfigStore, runner *proces
 	}
 	return &Service{
 		paths: paths, config: config, runner: runner,
-		prep: documents.NewPreparationService(paths, runner),
+		prep: documents.NewPreparationService(paths, provider),
 	}
 }
 
 // Execute is the JSON-shaped boundary used by the desktop bridge. Each action
 // returns source-compatible lower-camel DTOs; command failures stay errors.
-func (s *Service) Execute(ctx context.Context, kind string, payload map[string]any) (any, error) {
+func (s *Service) Execute(ctx context.Context, kind string, payload map[string]any) (data any, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	defer func() { finishRequirementReadOperation(ctx, data, err) }()
 	config, err := s.config.Load()
 	if err != nil {
 		return nil, err

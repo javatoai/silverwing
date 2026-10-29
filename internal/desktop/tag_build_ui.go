@@ -43,7 +43,7 @@ func (s *app) beginWorkspaceTagBuild(t task, w application.Workspace) {
 	if s.tagWorkspaceBusy(t, w) || !s.tagWorkspaceCanBuild(t, w) {
 		return
 	}
-	current := s.currentTask()
+	current := s.taskUnit.currentTask()
 	if current.id != t.id || current.path != t.path || current.createdAt != t.createdAt || !tagBuildWorkspaceCurrent(current, w) {
 		s.lastError = "任务工作区已变化，请刷新后重新构建。"
 		return
@@ -53,7 +53,7 @@ func (s *app) beginWorkspaceTagBuild(t task, w application.Workspace) {
 }
 
 func (s *app) showStartedTagBuild(t task) bool {
-	current := s.currentTask()
+	current := s.taskUnit.currentTask()
 	if current.id != t.id || current.path != t.path || current.createdAt != t.createdAt {
 		return false
 	}
@@ -88,7 +88,7 @@ func (s *app) openTagBuildBatch(t task) {
 	if len(workspaces) == 0 {
 		return
 	}
-	s.tagBuild = &tagBuildViewState{
+	s.releaseUnit.state.tagBuild = &tagBuildViewState{
 		Open: true, TaskID: t.id, TaskPath: t.path, TaskCreatedAt: t.createdAt,
 		Home: s.snapshot.Home, TaskRoot: s.configString("taskRoot"),
 		Workspaces: workspaces, Selected: make(map[string]bool),
@@ -117,7 +117,7 @@ func (s *app) tagBuildIdentityCurrent(state *tagBuildViewState) bool {
 	if state == nil || state.Home != s.snapshot.Home || state.TaskRoot != s.configString("taskRoot") {
 		return false
 	}
-	t := s.currentTask()
+	t := s.taskUnit.currentTask()
 	if t.id != state.TaskID || t.path != state.TaskPath || t.createdAt != state.TaskCreatedAt || t.archived {
 		return false
 	}
@@ -130,7 +130,7 @@ func (s *app) tagBuildIdentityCurrent(state *tagBuildViewState) bool {
 }
 
 func (s *app) submitTagBuildBatch() {
-	state := s.tagBuild
+	state := s.releaseUnit.state.tagBuild
 	if state == nil || !state.Open || s.tagBuildSelectedBusy(state) {
 		return
 	}
@@ -148,16 +148,16 @@ func (s *app) submitTagBuildBatch() {
 	if len(keys) == 0 {
 		return
 	}
-	t := s.currentTask()
+	t := s.taskUnit.currentTask()
 	s.act("tag.build", state.TaskID, "", "", "", "", map[string]any{"selectionKeys": keys, "batch": true})
 	if s.showStartedTagBuild(t) {
 		state.Open = false
-		s.tagBuild = nil
+		s.releaseUnit.state.tagBuild = nil
 	}
 }
 
 func (s *app) renderTagBuildDialog(c *ui.Context, p palette) {
-	state := s.tagBuild
+	state := s.releaseUnit.state.tagBuild
 	if state == nil || !state.Open {
 		return
 	}
@@ -176,7 +176,7 @@ func (s *app) renderTagBuildDialog(c *ui.Context, p palette) {
 				ui.Row(c).Gap(8).Children(func() {
 					if action(c, "tag-build-select-all", "", "全选", p, false) {
 						for _, w := range state.Workspaces {
-							if !s.tagWorkspaceBusy(s.currentTask(), w) {
+							if !s.tagWorkspaceBusy(s.taskUnit.currentTask(), w) {
 								state.Selected[tagBuildWorkspaceKey(w)] = true
 							}
 						}
@@ -195,7 +195,7 @@ func (s *app) renderTagBuildDialog(c *ui.Context, p palette) {
 					// One native checkbox owns the entire row, including its box,
 					// text and padding, so a pointer gesture only toggles once.
 					row := ui.Checkbox(c.Key("tag-build-row-"+key), &selected, "").FillWidth().Padding(8).Gap(10).AlignItems(ui.Center).
-						Background(p.soft).Radius(8).Label("选择构建 " + name).Disabled(s.tagWorkspaceBusy(s.currentTask(), item)).OnChange(func() {
+						Background(p.soft).Radius(8).Label("选择构建 " + name).Disabled(s.tagWorkspaceBusy(s.taskUnit.currentTask(), item)).OnChange(func() {
 						if selected {
 							state.Selected[key] = true
 						} else {
@@ -204,7 +204,7 @@ func (s *app) renderTagBuildDialog(c *ui.Context, p palette) {
 					})
 					if selected {
 						row.Background(p.selected)
-					} else if row.Hovered() && !s.tagWorkspaceBusy(s.currentTask(), item) {
+					} else if row.Hovered() && !s.tagWorkspaceBusy(s.taskUnit.currentTask(), item) {
 						row.Background(p.line)
 					}
 					row.Children(func() {
@@ -230,14 +230,14 @@ func (s *app) renderTagBuildDialog(c *ui.Context, p palette) {
 			})
 		})
 	})
-	if !state.Open && s.tagBuild == state {
-		s.tagBuild = nil
+	if !state.Open && s.releaseUnit.state.tagBuild == state {
+		s.releaseUnit.state.tagBuild = nil
 	}
 }
 
 func (s *app) tagBuildSelectedBusy(state *tagBuildViewState) bool {
 	for _, workspace := range state.Workspaces {
-		if state.Selected[tagBuildWorkspaceKey(workspace)] && s.tagWorkspaceBusy(s.currentTask(), workspace) {
+		if state.Selected[tagBuildWorkspaceKey(workspace)] && s.tagWorkspaceBusy(s.taskUnit.currentTask(), workspace) {
 			return true
 		}
 	}

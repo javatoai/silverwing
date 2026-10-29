@@ -41,7 +41,7 @@ func TestProductionCheckEntryBelongsToContent(t *testing.T) {
 					anchor := "生产 Tag → 主分支"
 					switch state {
 					case "first", "initial", "busy", "error":
-						s.production.batches, v.BatchID = nil, ""
+						s.releaseUnit.state.production.batches, v.BatchID = nil, ""
 						if state == "first" {
 							v.Preview = nil
 						} else if state == "busy" {
@@ -52,7 +52,7 @@ func TestProductionCheckEntryBelongsToContent(t *testing.T) {
 						}
 					case "ended":
 						b.Ended = true
-						s.production.batches[0] = b
+						s.releaseUnit.state.production.batches[0] = b
 						anchor = "正在查看已结束批次：" + b.ReleaseBranch
 					}
 					tester := ui.NewTester(func(c *ui.Context) {
@@ -108,7 +108,7 @@ func TestProductionIncludedRelationsDisableMergeButtons(t *testing.T) {
 				s, v, _, backend, _ := productionRequestFixture(t)
 				v.Preview.ProductionInMain, v.Preview.MainInRelease, v.Busy = true, true, busy
 				if initial {
-					s.production.batches, v.BatchID = nil, ""
+					s.releaseUnit.state.production.batches, v.BatchID = nil, ""
 				}
 				tester := productionIterationTester(s, 960, false)
 				for _, button := range []string{"合并生产 Tag 到 master", "合并主分支到 release"} {

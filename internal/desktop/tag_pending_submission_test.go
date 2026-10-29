@@ -52,12 +52,12 @@ func tagPendingFixture() (*app, *tagPendingBackend, *tagDesktopTestWindow) {
 	b := &tagPendingBackend{tagDesktopTestBackend: base, calls: make(chan tagPendingCall, 16)}
 	s.backend = b
 	s.snapshot.Groups = []application.Group{{ID: "group", Name: "fixture-group"}}
-	for i := range s.tasks {
-		s.tasks[i].groupID = "group"
-		s.tasks[i].title = "fixture-task-" + s.tasks[i].id
+	for i := range s.taskUnit.state.tasks {
+		s.taskUnit.state.tasks[i].groupID = "group"
+		s.taskUnit.state.tasks[i].title = "fixture-task-" + s.taskUnit.state.tasks[i].id
 		for _, module := range []string{"api", "job"} {
 			target := "release/test"
-			s.tasks[i].workspaces = append(s.tasks[i].workspaces, application.Workspace{ServiceID: "service", ModuleID: module, Name: module, Path: s.tasks[i].path + "/" + module, State: "READY", Record: domain.ServiceWorkspace{ServiceName: "fixture-service-" + module, ModuleName: "fixture-service-" + module, Branch: "feature/fixture", TagEnabled: true, TagMode: domain.TagBuildMergeToTargetBranch, TagTargetRef: &target}})
+			s.taskUnit.state.tasks[i].workspaces = append(s.taskUnit.state.tasks[i].workspaces, application.Workspace{ServiceID: "service", ModuleID: module, Name: module, Path: s.taskUnit.state.tasks[i].path + "/" + module, State: "READY", Record: domain.ServiceWorkspace{ServiceName: "fixture-service-" + module, ModuleName: "fixture-service-" + module, Branch: "feature/fixture", TagEnabled: true, TagMode: domain.TagBuildMergeToTargetBranch, TagTargetRef: &target}})
 		}
 	}
 	return s, b, window
@@ -120,15 +120,15 @@ func TestTagPendingSubmissionBlockedStartFirstFrame(t *testing.T) {
 			t.Run(fmt.Sprintf("%d-dark-%t", width, dark), func(t *testing.T) {
 				s, b, w := tagPendingFixture()
 				defer tagDesktopClose(t, s, w)
-				s.openTagBuildBatch(s.currentTask())
-				for _, workspace := range s.tagBuild.Workspaces {
-					s.tagBuild.Selected[tagBuildWorkspaceKey(workspace)] = true
+				s.openTagBuildBatch(s.taskUnit.currentTask())
+				for _, workspace := range s.releaseUnit.state.tagBuild.Workspaces {
+					s.releaseUnit.state.tagBuild.Selected[tagBuildWorkspaceKey(workspace)] = true
 				}
 				tester := ui.NewTester(func(c *ui.Context) {
 					p := setTheme(c, dark)
 					ui.Column(c).Fill().Children(func() {
 						if s.tab == taskTagTab {
-							s.renderTaskTagHistory(c, p, s.currentTask())
+							s.renderTaskTagHistory(c, p, s.taskUnit.currentTask())
 						}
 					})
 					s.renderTagBuildDialog(c, p)
@@ -137,7 +137,7 @@ func TestTagPendingSubmissionBlockedStartFirstFrame(t *testing.T) {
 					t.Fatal(err)
 				}
 				call := awaitTagPendingCall(t, w, b)
-				if s.tab != taskTagTab || s.tagBuild != nil || len(s.snapshot.TagHistory) != 0 {
+				if s.tab != taskTagTab || s.releaseUnit.state.tagBuild != nil || len(s.snapshot.TagHistory) != 0 {
 					t.Fatal("click did not switch immediately, or fake operation records were inserted")
 				}
 				tester.Frame()
@@ -211,7 +211,7 @@ func TestTagPendingSubmissionNonceFailureCancellationAndScope(t *testing.T) {
 	s.queueTagActionWindow(action("task-a", "service:api"), w)
 	old := awaitTagPendingCall(t, w, b)
 	oldScope := s.tagJobScope()
-	s.selected = 1
+	s.taskUnit.state.selected = 1
 	s.queueTagActionWindow(action("task-b", "service:job"), w)
 	current := awaitTagPendingCall(t, w, b)
 	currentView := s.currentTagJobView()
@@ -221,16 +221,16 @@ func TestTagPendingSubmissionNonceFailureCancellationAndScope(t *testing.T) {
 		t.Fatal("task switch leaked/canceled the old captured submission")
 	}
 	old.reply <- tagPendingReply{err: errors.New("fixture late old-scope failure")}
-	w.until(t, func() bool { return len(s.tagJobs.views[oldScope].commands) == 0 })
+	w.until(t, func() bool { return len(s.releaseUnit.state.tagJobs.views[oldScope].commands) == 0 })
 	if len(currentView.commands) != 1 || currentView.commands[0].pending.Nonce != currentNonce || s.ensureTagHistoryView().Error != "" {
 		t.Fatal("old failure erased or contaminated new-scope pending state")
 	}
-	s.selected = 0
+	s.taskUnit.state.selected = 0
 	tester.Frame()
 	if tester.HasText("准备构建") {
 		t.Fatal("returning to old task resurrected a retired pending view")
 	}
-	s.selected = 1
+	s.taskUnit.state.selected = 1
 	current.reply <- tagPendingReply{snapshot: tagPendingSnapshot(current, "task-b-job")}
 	w.until(t, func() bool { return len(currentView.commands) == 0 })
 	for _, record := range s.snapshot.TagHistory {
@@ -283,9 +283,9 @@ func TestTagPendingSubmissionShutdownCancelsPlanning(t *testing.T) {
 		t.Fatal(err)
 	}
 	w.drain()
-	s.tagJobs.mu.Lock()
-	remaining := len(s.tagJobs.workers)
-	s.tagJobs.mu.Unlock()
+	s.releaseUnit.state.tagJobs.mu.Lock()
+	remaining := len(s.releaseUnit.state.tagJobs.workers)
+	s.releaseUnit.state.tagJobs.mu.Unlock()
 	if call.ctx.Err() == nil || remaining != 0 || len(view.commands) != 0 || hasPendingTagSubmission(view) || !b.closed {
 		t.Fatal("shutdown missed a planning-stage worker or left pending state")
 	}
@@ -305,7 +305,7 @@ func TestTagPendingSubmissionLateSuccessStaysInCapturedScope(t *testing.T) {
 	build("task-a", "service:api")
 	old := awaitTagPendingCall(t, w, b)
 	oldView := s.currentTagJobView()
-	s.selected = 1
+	s.taskUnit.state.selected = 1
 	build("task-b", "service:job")
 	current := awaitTagPendingCall(t, w, b)
 	currentView := s.currentTagJobView()
@@ -315,12 +315,12 @@ func TestTagPendingSubmissionLateSuccessStaysInCapturedScope(t *testing.T) {
 	if len(currentView.commands) != 1 || currentView.commands[0].pending.Nonce != nonce || len(s.taskTagHistoryRecords("task-b")) != 0 || old.ctx.Err() == nil {
 		t.Fatal("late success affected new task admission or failed to release its old command lifetime")
 	}
-	s.selected = 0
+	s.taskUnit.state.selected = 0
 	tester := tagLayoutTester(s, 1100, false)
 	if tester.HasText("准备构建") || !tester.HasText("fixture-service-api") || len(s.taskTagHistoryRecords("task-a")) != 1 {
 		t.Fatal("revisit restored a pending ghost instead of the actual accepted job")
 	}
-	s.selected = 1
+	s.taskUnit.state.selected = 1
 	tester.Frame()
 	if !tester.HasText("准备构建") || tester.HasText("fixture-service-api") {
 		t.Fatal("captured-scope history leaked into the new task")

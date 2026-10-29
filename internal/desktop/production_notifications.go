@@ -9,7 +9,7 @@ import (
 )
 
 func (s *app) productionProgressCurrent(state *productionUIState, v *productionView, request *productionWorker) bool {
-	if state == nil || s.production != state || v == nil || request == nil || !v.Busy || v.request != request {
+	if state == nil || s.releaseUnit.state.production != state || v == nil || request == nil || !v.Busy || v.request != request {
 		return false
 	}
 	state.mu.Lock()
@@ -26,7 +26,7 @@ func (s *app) productionProgressCurrent(state *productionUIState, v *productionV
 func (s *app) renderProductionProgressNotifications(c *ui.Context) {
 	const prefix = "production-progress-"
 	active := make(map[string]bool)
-	if state := s.production; state != nil {
+	if state := s.releaseUnit.state.production; state != nil {
 		keys := make([]string, 0, len(state.views))
 		for key, view := range state.views {
 			if view != nil && s.productionProgressCurrent(state, view, view.request) && !view.request.silentProgress {

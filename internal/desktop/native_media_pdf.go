@@ -46,7 +46,6 @@ func (s *app) initializePDFReadingPosition(m *nativeMediaState) {
 	}
 	if m.pdfInfo.PageCount > 0 {
 		m.pdfPageBitmaps = make(map[int]pdfPageBitmap)
-		m.pdfPageRenders = make(map[string]context.CancelFunc)
 		m.pdfPageErrors = make(map[int]string)
 		m.pdfRenderTraceMu.Lock()
 		if m.pdfRenderTraces == nil {
@@ -68,12 +67,6 @@ func (s *app) renderContinuousPDF(c *ui.Context, p palette, m *nativeMediaState,
 		viewportHeight = 700
 	}
 	m.viewerWidth, m.viewerHeight = viewportWidth, viewportHeight
-	// The text layer also drives selection while the search panel is hidden.
-	// A failed extraction waits for an explicit retry instead of starting work
-	// on every frame. The initial NewWindow frame cannot publish results yet.
-	if s.win != nil && !s.win.IsDestroyed() && pdfTextIndexNeedsRead(m) {
-		s.requestPDFTextIndex(m)
-	}
 	pageWidth := pdfPageDisplayWidth(viewportWidth, m.zoom)
 	m.pdfPageBounds = make(map[int]ui.Rect)
 	contentWidth := maxFloat32(viewportWidth, pageWidth+32)
@@ -184,6 +177,13 @@ func (s *app) renderContinuousPDF(c *ui.Context, p palette, m *nativeMediaState,
 		})
 	})
 	first, last = m.pdfPages.Visible()
+	if m.pdfRenders != nil {
+		m.pdfRenders.viewport(first, last, widthPx)
+	}
+	// Queue visible rendering first; page-sized text turns yield to it.
+	if s.win != nil && !s.win.IsDestroyed() && pdfTextIndexNeedsRead(m) {
+		s.requestPDFTextIndex(m)
+	}
 	s.prunePDFPageBitmaps(m, first, last)
 }
 
@@ -201,41 +201,36 @@ func (s *app) requestPDFPageRender(m *nativeMediaState, pageIndex, widthPx int) 
 	if cached, ok := m.pdfPageBitmaps[pageIndex]; ok && cached.key == key && cached.bitmap != nil {
 		return
 	}
-	if _, ok := m.pdfPageRenders[key]; ok {
-		return
-	}
 	m.mu.Lock()
 	if m.closed || m.pdf == nil {
 		m.mu.Unlock()
 		return
 	}
-	if m.pdfPageRenders == nil {
-		m.pdfPageRenders = make(map[string]context.CancelFunc)
+	startWorker := m.pdfRenders == nil
+	if startWorker {
+		m.pdfRenders = newPDFRenderQueue(m.ctx)
+		m.wg.Add(1)
 	}
-	ctx, cancel := context.WithCancel(m.ctx)
-	request := &pdfPageRenderRequest{cancel: cancel}
-	m.pdfPageRenders[key] = request.invalidate
-	m.wg.Add(1)
-	document := m.pdf
+	queue, document := m.pdfRenders, m.pdf
 	m.mu.Unlock()
-
-	go func() {
-		defer m.wg.Done()
+	if startWorker {
+		go func() { defer m.wg.Done(); queue.run() }()
+	}
+	queue.enqueue(pageIndex, widthPx, func(ctx context.Context, request *pdfPageRenderRequest) {
 		recordPDFPageRenderStage(m, key, pageIndex, widthPx, "render-start", nil)
-		rendered, err := document.RenderPagePNG(ctx, pageIndex, widthPx)
+		rendered, err := document.RenderPageRGBA(ctx, pageIndex, widthPx)
 		recordPDFPageRenderStage(m, key, pageIndex, widthPx, "render-return", err)
 		var bitmap *ui.Bitmap
 		if err == nil {
 			recordPDFPageRenderStage(m, key, pageIndex, widthPx, "decode-start", nil)
-			bitmap, err = ui.DecodeBitmap(rendered.PNG)
+			bitmap = ui.NewBitmap(rendered.RGBA)
 			recordPDFPageRenderStage(m, key, pageIndex, widthPx, "decode-return", err)
 		}
 		cancelled := ctx.Err() != nil
-		cancel()
 		recordPDFPageRenderStage(m, key, pageIndex, widthPx, "update-post", err)
 		posted := s.updateNativeMedia(m, func() {
 			recordPDFPageRenderStage(m, key, pageIndex, widthPx, "update-closure-enter", nil)
-			delete(m.pdfPageRenders, key)
+			queue.ack(pageIndex, request)
 			// Cancellation can happen after this result was queued. Recheck the
 			// request, window and current layout before publishing either a
 			// bitmap or an error for the page.
@@ -265,18 +260,17 @@ func (s *app) requestPDFPageRender(m *nativeMediaState, pageIndex, widthPx int) 
 			recordPDFPageRenderStage(m, key, pageIndex, widthPx, "update-applied-bitmap", nil)
 		})
 		if !posted {
+			queue.ack(pageIndex, request)
 			recordPDFPageRenderStage(m, key, pageIndex, widthPx, "update-window-unavailable", nil)
 		}
-	}()
+	})
 }
 
 func (s *app) cancelPDFPageRenders(m *nativeMediaState) {
 	if m == nil {
 		return
 	}
-	for _, cancel := range m.pdfPageRenders {
-		cancel()
-	}
+	m.pdfRenders.invalidateAll()
 }
 
 func (s *app) prunePDFPageBitmaps(m *nativeMediaState, first, last int) {

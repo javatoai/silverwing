@@ -30,7 +30,7 @@ func (s *app) preparePendingTagSubmission(scope application.TagJobScope, action 
 	if action.ServiceID != "" {
 		keys = []string{action.ServiceID + ":" + action.ModuleID}
 	}
-	t := s.currentTask()
+	t := s.taskUnit.currentTask()
 	if all, _ := action.Payload["allServices"].(bool); all && len(keys) == 0 {
 		for _, workspace := range t.workspaces {
 			if workspace.Record.TagEnabled {
@@ -120,12 +120,12 @@ func visiblePendingTagItems(view *tagDesktopJobView, pending *PendingTagSubmissi
 
 func (s *app) renderPendingTagSubmissions(c *ui.Context, p palette) bool {
 	view := s.currentTagJobView()
-	if view == nil || s.tagJobs == nil {
+	if view == nil || s.releaseUnit.state.tagJobs == nil {
 		return false
 	}
-	s.tagJobs.mu.Lock()
-	closed := s.tagJobs.closed
-	s.tagJobs.mu.Unlock()
+	s.releaseUnit.state.tagJobs.mu.Lock()
+	closed := s.releaseUnit.state.tagJobs.closed
+	s.releaseUnit.state.tagJobs.mu.Unlock()
 	if closed {
 		return false
 	}

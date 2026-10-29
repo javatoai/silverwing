@@ -41,12 +41,19 @@ func TestOpenWorkspaceMergeBatchSelectsEligibleModulesAndShowsUnavailableOnes(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskState := task{id: "task", path: `C:\tasks\payment`, createdAt: "created", groupID: "group", branch: target, workspaces: []application.Workspace{ready, withoutTarget}}
-	appState := &app{backend: workspaceMergeBatchTestBackend{}, page: "tasks", tab: 0, selected: 0, tasks: []task{taskState}, configJSON: string(configJSON)}
+	taskFixture := task{id: "task", path: `C:\tasks\payment`, createdAt: "created", groupID: "group", branch: target, workspaces: []application.Workspace{ready, withoutTarget}}
+	appState := &app{
+		taskUnit: taskController{state: taskState{selected: 0,
+			tasks: []task{taskFixture}}},
+		settingsUnit: settingsController{state: settingsState{configJSON: string(configJSON)}},
+		backend:      workspaceMergeBatchTestBackend{},
+		page:         "tasks",
+		tab:          0,
+	}
 
-	appState.openWorkspaceMergeBatch(taskState)
+	appState.openWorkspaceMergeBatch(taskFixture)
 
-	state := appState.workspaceMergeBatch
+	state := appState.workspaceUnit.state.workspaceMergeBatch
 	if state == nil || len(state.Items) != 2 {
 		t.Fatalf("batch dialog should contain every task module: %#v", state)
 	}
@@ -89,9 +96,9 @@ func TestWorkspaceMergeBatchRetiresCompletionWhenTaskWorkspaceChanges(t *testing
 	for _, completion := range []string{"result", "failure", "snapshot"} {
 		t.Run(completion, func(t *testing.T) {
 			appState, state, action, result := workspaceMergeBatchStaleCompletionFixture(t)
-			current := appState.tasks[0].workspaces[0]
+			current := appState.taskUnit.state.tasks[0].workspaces[0]
 			current.Record.Branch = "feature/changed"
-			appState.tasks[0].workspaces[0] = current
+			appState.taskUnit.state.tasks[0].workspaces[0] = current
 
 			switch completion {
 			case "result":
@@ -104,8 +111,8 @@ func TestWorkspaceMergeBatchRetiresCompletionWhenTaskWorkspaceChanges(t *testing
 				appState.reconcileWorkspaceMergeBatchAfterSnapshot()
 			}
 
-			if appState.workspaceMergeBatch != state || state.Loading || !state.Open || state.Results != nil {
-				t.Fatalf("stale completion was not retired into a closable warning state: appState=%#v state=%#v", appState.workspaceMergeBatch, state)
+			if appState.workspaceUnit.state.workspaceMergeBatch != state || state.Loading || !state.Open || state.Results != nil {
+				t.Fatalf("stale completion was not retired into a closable warning state: appState=%#v state=%#v", appState.workspaceUnit.state.workspaceMergeBatch, state)
 			}
 			if !strings.Contains(state.Error, "工作区信息已变化") {
 				t.Fatalf("stale completion did not explain why it was ignored: %q", state.Error)
@@ -161,9 +168,9 @@ func TestWorkspaceMergeBatchCancellationCannotTargetAnotherTaskOrAction(t *testi
 		t.Fatal("batch dialog exposed cancellation for a different action")
 	}
 	appState.operationKind = "workspace.merge-batch"
-	current := appState.tasks[0]
+	current := appState.taskUnit.state.tasks[0]
 	current.branch = "feature/replaced"
-	appState.tasks[0] = current
+	appState.taskUnit.state.tasks[0] = current
 	if appState.workspaceMergeBatchOwnsActiveOperation(state) || appState.workspaceMergeBatchCanRequestCancellation(state) {
 		t.Fatal("batch dialog exposed cancellation after its task identity changed")
 	}
@@ -198,15 +205,22 @@ func workspaceMergeBatchRunningFixture(t *testing.T) (*app, *workspaceMergeBatch
 			{Workspace: workspaceItems[1], SourceRef: "origin/main", Selected: true},
 		},
 	}
-	taskState := task{id: state.TaskID, path: taskPath, createdAt: state.TaskCreatedAt, groupID: state.TaskGroupID, branch: target, workspaces: workspaceItems}
+	taskFixture := task{id: state.TaskID, path: taskPath, createdAt: state.TaskCreatedAt, groupID: state.TaskGroupID, branch: target, workspaces: workspaceItems}
 	operationCtx, cancel := context.WithCancel(context.Background())
 	action := application.Action{Kind: "workspace.merge-batch", TaskID: state.TaskID, Path: state.TaskPath, Payload: map[string]any{"batchToken": state.Token}}
 	appState := &app{
-		page: "tasks", tab: 0, selected: 0, tasks: []task{taskState}, workspaceMergeBatch: state,
-		busy: true, operation: "批量合并主分支", operationKind: action.Kind, cancelOperation: cancel,
+		taskUnit: taskController{state: taskState{selected: 0,
+			tasks: []task{taskFixture}}},
+		workspaceUnit:   workspaceController{state: workspaceState{workspaceMergeBatch: state}},
+		page:            "tasks",
+		tab:             0,
+		busy:            true,
+		operation:       "批量合并主分支",
+		operationKind:   action.Kind,
+		cancelOperation: cancel,
 	}
-	state.scope, _ = appState.taskActionScopeFor(taskState)
-	state.configJSON = appState.configJSON
+	state.scope, _ = appState.taskActionScopeFor(taskFixture)
+	state.configJSON = appState.settingsUnit.state.configJSON
 	return appState, state, action, operationCtx
 }
 
@@ -221,10 +235,16 @@ func workspaceMergeBatchStaleCompletionFixture(t *testing.T) (*app, *workspaceMe
 		TaskID: "task", TaskPath: `C:\tasks\payment`, TaskCreatedAt: "created", TaskGroupID: "group", TaskFeatureBranch: target, Token: 17,
 		Open: true, Loading: true, Items: []workspaceMergeBatchItemState{{Workspace: item, Selected: true}},
 	}
-	taskState := task{id: state.TaskID, path: state.TaskPath, createdAt: state.TaskCreatedAt, groupID: state.TaskGroupID, branch: state.TaskFeatureBranch, workspaces: []application.Workspace{item}}
-	appState := &app{page: "tasks", tab: 0, selected: 0, tasks: []task{taskState}, workspaceMergeBatch: state}
-	state.scope, _ = appState.taskActionScopeFor(taskState)
-	state.configJSON = appState.configJSON
+	taskFixture := task{id: state.TaskID, path: state.TaskPath, createdAt: state.TaskCreatedAt, groupID: state.TaskGroupID, branch: state.TaskFeatureBranch, workspaces: []application.Workspace{item}}
+	appState := &app{
+		taskUnit: taskController{state: taskState{selected: 0,
+			tasks: []task{taskFixture}}},
+		workspaceUnit: workspaceController{state: workspaceState{workspaceMergeBatch: state}},
+		page:          "tasks",
+		tab:           0,
+	}
+	state.scope, _ = appState.taskActionScopeFor(taskFixture)
+	state.configJSON = appState.settingsUnit.state.configJSON
 	action := application.Action{Kind: "workspace.merge-batch", TaskID: state.TaskID, Path: state.TaskPath, Payload: map[string]any{"batchToken": state.Token}}
 	result := application.ActionResult{Data: workspace.WorkspaceMainBranchMergeBatchResult{Items: []workspace.WorkspaceMainBranchMergeResult{{
 		WorkspacePath: item.Path, ServiceName: item.Record.ServiceName, ModuleName: item.Record.ModuleName,
@@ -280,9 +300,15 @@ func TestWorkspaceMergeBatchDialogLayoutCapture(t *testing.T) {
 				groupID: state.TaskGroupID, branch: state.TaskFeatureBranch,
 				workspaces: []application.Workspace{items[0].Workspace, items[1].Workspace, items[2].Workspace},
 			}
-			appState := &app{page: "tasks", tab: 0, selected: 0, tasks: []task{currentTask}, workspaceMergeBatch: state}
+			appState := &app{
+				taskUnit: taskController{state: taskState{selected: 0,
+					tasks: []task{currentTask}}},
+				workspaceUnit: workspaceController{state: workspaceState{workspaceMergeBatch: state}},
+				page:          "tasks",
+				tab:           0,
+			}
 			state.scope, _ = appState.taskActionScopeFor(currentTask)
-			state.configJSON = appState.configJSON
+			state.configJSON = appState.settingsUnit.state.configJSON
 			if scene.loading {
 				appState.busy = true
 				appState.operationKind = "workspace.merge-batch"

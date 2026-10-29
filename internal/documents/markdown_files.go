@@ -22,12 +22,14 @@ type MarkdownFileSnapshot struct {
 
 // MarkdownSnapshot reads a bounded, strict UTF-8 snapshot and records the
 // source byte hash, BOM and dominant newline style for lossless saves.
-func (s *Service) MarkdownSnapshot(root, relativePath string) (MarkdownFileSnapshot, error) {
-	root, err := validatedMaterialsRoot(root)
+func (s *Service) MarkdownSnapshot(root, relativePath string) (snapshot MarkdownFileSnapshot, resultErr error) {
+	scope, err := newMaterialsOperationScope(root)
 	if err != nil {
 		return MarkdownFileSnapshot{}, err
 	}
-	path, err := safePath(root, relativePath, false)
+	defer scope.finishSnapshot(&snapshot, &resultErr)
+	root = scope.root
+	path, err := scope.resolve(relativePath, false, false, false)
 	if err != nil {
 		return MarkdownFileSnapshot{}, err
 	}
@@ -65,7 +67,26 @@ func (s *Service) MarkdownSnapshot(root, relativePath string) (MarkdownFileSnaps
 // SaveMarkdown checks the exact byte baseline twice before replacing the file
 // and retains UTF-8 BOM and LF/CRLF style. A changed baseline is returned with
 // ErrConflict so the editor can show the current external version.
-func (s *Service) SaveMarkdown(ctx context.Context, root, relativePath, content, baselineHash string) (MarkdownFileSnapshot, error) {
+func (s *Service) SaveMarkdown(ctx context.Context, root, relativePath, content, baselineHash string) (snapshot MarkdownFileSnapshot, resultErr error) {
+	if err := ctx.Err(); err != nil {
+		return MarkdownFileSnapshot{}, err
+	}
+	if int64(len([]byte(content))) > MaxEditableMarkdown {
+		return MarkdownFileSnapshot{}, errMaterialsPreviewTooLarge
+	}
+	scope, err := newMaterialsOperationScope(root)
+	if err != nil {
+		return MarkdownFileSnapshot{}, err
+	}
+	defer scope.finishSnapshot(&snapshot, &resultErr)
+	path, err := scope.resolve(relativePath, false, true, false)
+	if err != nil {
+		return MarkdownFileSnapshot{}, err
+	}
+	return s.saveMarkdown(ctx, scope.root, relativeMaterials(scope.root, path), content, baselineHash, scope)
+}
+
+func (s *Service) saveMarkdown(ctx context.Context, root, relativePath, content, baselineHash string, scope *materialsOperationScope) (MarkdownFileSnapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return MarkdownFileSnapshot{}, err
 	}
@@ -100,7 +121,7 @@ func (s *Service) SaveMarkdown(ctx context.Context, root, relativePath, content,
 		return MarkdownFileSnapshot{}, err
 	}
 	parent := filepath.Dir(path)
-	if err := revalidateMaterialsDestination(root, relativeMaterials(root, parent), parent); err != nil {
+	if err := scope.revalidateDestination(root, relativeMaterials(root, parent), parent); err != nil {
 		return MarkdownFileSnapshot{}, err
 	}
 	if err := writeNewFile(ctx, staging, encoded, info.Mode().Perm()); err != nil {
@@ -117,7 +138,7 @@ func (s *Service) SaveMarkdown(ctx context.Context, root, relativePath, content,
 	if latest.Hash != baselineHash {
 		return latest, ErrConflict
 	}
-	if err := revalidateMaterialsDestination(root, relativeMaterials(root, parent), parent); err != nil {
+	if err := scope.revalidateDestination(root, relativeMaterials(root, parent), parent); err != nil {
 		return MarkdownFileSnapshot{}, err
 	}
 	if err := ctx.Err(); err != nil {

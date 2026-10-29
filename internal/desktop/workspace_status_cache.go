@@ -64,25 +64,25 @@ func (cache *workspaceGitDisplayCache) reconcile(tasks []task, scope workspaceGi
 }
 
 func (s *app) reconcileWorkspaceGitDisplayCache() bool {
-	state := s.workspaceGit
+	state := s.workspaceUnit.state.workspaceGit
 	if state == nil {
 		return false
 	}
 	scope := s.workspaceGitStatusScope()
-	state.displayCache.reconcile(s.tasks, scope)
+	state.displayCache.reconcile(s.taskUnit.state.tasks, scope)
 	observation := state.observation
-	if observation == nil || observation.scope == scope && state.displayCache.entries[workspaceHealthTaskKey(s.currentTask())] == observation {
+	if observation == nil || observation.scope == scope && state.displayCache.entries[workspaceHealthTaskKey(s.taskUnit.currentTask())] == observation {
 		return false
 	}
-	s.cancelWorkspaceGitStatus()
+	s.workspaceUnit.cancelWorkspaceGitStatus()
 	state.observation, state.failure = nil, ""
 	state.health = make(map[string]domain.WorkspaceGitHealth)
 	return true
 }
 
 func (s *app) invalidateWorkspaceGitDisplayCache() {
-	if state := s.workspaceGit; state != nil {
-		s.cancelWorkspaceGitStatus()
+	if state := s.workspaceUnit.state.workspaceGit; state != nil {
+		s.workspaceUnit.cancelWorkspaceGitStatus()
 		state.displayCache = workspaceGitDisplayCache{}
 		state.observation, state.failure = nil, ""
 		state.health = make(map[string]domain.WorkspaceGitHealth)

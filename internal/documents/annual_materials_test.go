@@ -40,7 +40,7 @@ func TestAnnualPlanRaceReusesWinnerAndCapturedYear(t *testing.T) {
 	root := t.TempDir()
 	sub := "资料"
 	config := domain.AppConfig{RequirementMaterialsRoot: &root, RequirementMaterialsSubdirectory: &sub}
-	service := NewPreparationService(storage.NewPaths(t.TempDir()), preparationReviewRunner{})
+	service := NewPreparationService(storage.NewPaths(t.TempDir()), nil)
 	ctx := WithMaterialsCreationTime(context.Background(), time.Date(2024, 12, 31, 20, 0, 0, 0, time.Local))
 	link := "https://project.feishu.cn/obt/userstory/detail/123"
 	first, err := service.Plan(ctx, config, link, "需求", "第一个名称")
@@ -119,7 +119,7 @@ func TestAnnualPreviewDoesNotCreateAndEnsureReuses(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := domain.AppConfig{RequirementMaterialsRoot: &root, RequirementMaterialsSubdirectory: &sub}
-	service := NewPreparationService(storage.NewPaths(t.TempDir()), preparationReviewRunner{})
+	service := NewPreparationService(storage.NewPaths(t.TempDir()), nil)
 	link := "https://project.feishu.cn/obt/userstory/detail/123"
 	preview, err := service.Preview(context.Background(), config, link, "新名字")
 	if err != nil || preview.Status != domain.MaterialsReady || *preview.WriteRoot != filepath.Join(existing, sub) {

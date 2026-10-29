@@ -36,7 +36,7 @@ func (s *app) renderTaskCreationBranchReuseDialog(c *ui.Context, p palette, stat
 					ui.Row(c.Key(fmt.Sprintf("task-create-branch-reuse-conflict-%s-%d", token, index))).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 						ui.Column(c).Grow(1).MinWidth(0).Children(func() { renderBranchReuseConflictSummary(c, p, conflict) })
 						if action(c, fmt.Sprintf("task-create-conflict-locate-%s-%d", token, index), "search", "定位配置", p, false) {
-							if s.taskCreation == state && state.phase == "confirm" && state.preview == preview {
+							if s.taskUnit.state.taskCreation == state && state.phase == "confirm" && state.preview == preview {
 								open = false
 								s.returnTaskCreationToEditing(state)
 								s.focusTaskCreationConflict(conflict)
@@ -48,7 +48,7 @@ func (s *app) renderTaskCreationBranchReuseDialog(c *ui.Context, p palette, stat
 			locked, occupied := taskCreationBranchReuseGates(conflicts)
 			if occupied {
 				s.settingsChoice(c, p, "task-create-shared-ack", "我了解已检出的分支会在多个 Worktree 间共享", preview.sharedAck, func() {
-					if s.taskCreation == state && state.phase == "confirm" && state.preview == preview {
+					if s.taskUnit.state.taskCreation == state && state.phase == "confirm" && state.preview == preview {
 						preview.sharedAck = !preview.sharedAck
 					}
 				})
@@ -61,7 +61,7 @@ func (s *app) renderTaskCreationBranchReuseDialog(c *ui.Context, p palette, stat
 				back := ui.ButtonBase(c.Key("task-create-reuse-back-"+token)).Row().Height(34).Padding(0, 16).Radius(18).Label("返回修改").AutoFocus()
 				back.Border(1, p.line).Children(func() { label(c, "返回修改", 12, p.text) })
 				if back.Clicked() {
-					if s.taskCreation == state && state.phase == "confirm" && state.preview == preview {
+					if s.taskUnit.state.taskCreation == state && state.phase == "confirm" && state.preview == preview {
 						open = false
 						s.returnTaskCreationToEditing(state)
 					}
@@ -71,7 +71,7 @@ func (s *app) renderTaskCreationBranchReuseDialog(c *ui.Context, p palette, stat
 				button.Background(p.blue).Disabled(locked || occupied && !preview.sharedAck || s.busy)
 				button.Children(func() { label(c, confirm, 12, ui.Hex("#FFFFFF")) })
 				if button.Clicked() {
-					if s.taskCreation == state && state.phase == "confirm" && state.preview == preview {
+					if s.taskUnit.state.taskCreation == state && state.phase == "confirm" && state.preview == preview {
 						open = false
 						keys := make([]workspace.BranchReuseKey, 0, len(conflicts))
 						for _, conflict := range conflicts {
@@ -83,7 +83,7 @@ func (s *app) renderTaskCreationBranchReuseDialog(c *ui.Context, p palette, stat
 			})
 		})
 	})
-	if dialog.Dismissed() && s.taskCreation == state && state.phase == "confirm" && state.preview == preview {
+	if dialog.Dismissed() && s.taskUnit.state.taskCreation == state && state.phase == "confirm" && state.preview == preview {
 		s.returnTaskCreationToEditing(state)
 	}
 }
@@ -104,7 +104,7 @@ func taskCreationBranchReuseGates(conflicts []workspace.BranchReuseConflict) (lo
 }
 
 func (s *app) returnTaskCreationToEditing(state *taskCreationState) {
-	if state == nil || s.taskCreation != state || state.phase != "confirm" {
+	if state == nil || s.taskUnit.state.taskCreation != state || state.phase != "confirm" {
 		return
 	}
 	state.preview = nil

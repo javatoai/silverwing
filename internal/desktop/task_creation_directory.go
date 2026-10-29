@@ -31,10 +31,10 @@ type taskCreationDirectoryState struct {
 }
 
 func (s *app) taskCreationDirectorySignature() string {
-	if s == nil || s.taskCreation == nil {
+	if s == nil || s.taskUnit.state.taskCreation == nil {
 		return ""
 	}
-	form := s.taskCreation
+	form := s.taskUnit.state.taskCreation
 	if form.config.TaskRoot == nil || strings.TrimSpace(*form.config.TaskRoot) == "" || domain.DirectoryNameValidationError(form.draft.TaskName) != nil {
 		return ""
 	}
@@ -71,7 +71,7 @@ func cancelTaskCreationDirectoryCheck(form *taskCreationState) {
 // A user pressing Check/Create requests a fresh check, including after an
 // existing directory has been removed outside the application.
 func (s *app) startTaskCreationDirectoryCheck(resume bool) bool {
-	form := s.taskCreation
+	form := s.taskUnit.state.taskCreation
 	if form == nil || form.phase != "editing" {
 		return false
 	}
@@ -135,7 +135,7 @@ func (s *app) finishTaskCreationDirectoryCheck(request *taskCreationDirectoryChe
 		return
 	}
 	defer request.cancel()
-	if request.ctx.Err() != nil || s.taskCreation != request.form || !s.dialogOpen || s.form.mode != "task-create" || s.taskCreationDirectorySignature() != request.signature {
+	if request.ctx.Err() != nil || s.taskUnit.state.taskCreation != request.form || !s.dialogOpen || s.form.mode != "task-create" || s.taskCreationDirectorySignature() != request.signature {
 		return
 	}
 	state := &request.form.directoryCheck

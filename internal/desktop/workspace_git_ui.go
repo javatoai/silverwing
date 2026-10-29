@@ -50,7 +50,7 @@ func (s *app) openWorkspaceGitBatch(task task, mode string, initialSelection []s
 	if s.busy || task.id == "" || len(taskPhysicalGitWorkspaces(task)) == 0 {
 		return
 	}
-	s.cancelWorkspaceGitFlow()
+	s.workspaceUnit.cancelWorkspaceGitFlow()
 	flow := &workspaceGitFlowState{
 		TaskID: task.id, TaskKey: workspaceHealthTaskKey(task), Scope: "batch", Mode: mode,
 		Open: true, Selected: make(map[string]bool), Messages: make(map[string]string),
@@ -78,7 +78,7 @@ func (s *app) openWorkspaceGitSingle(task task, item application.Workspace, mode
 	if mode != workspaceGitModeCommit && mode != workspaceGitModeCommitAndPush {
 		return
 	}
-	s.cancelWorkspaceGitFlow()
+	s.workspaceUnit.cancelWorkspaceGitFlow()
 	key := workspaceGitUIKey(item.Path)
 	flow := &workspaceGitFlowState{
 		TaskID: task.id, TaskKey: workspaceHealthTaskKey(task), Scope: "single", Mode: mode,
@@ -90,8 +90,8 @@ func (s *app) openWorkspaceGitSingle(task task, item application.Workspace, mode
 	s.requestWorkspaceGitPreview()
 }
 
-func (s *app) cancelWorkspaceGitFlow() {
-	if state := s.workspaceGit; state != nil && state.flow != nil {
+func (s *workspaceController) cancelWorkspaceGitFlow() {
+	if state := s.state.workspaceGit; state != nil && state.flow != nil {
 		if state.flow.PreviewCancel != nil {
 			state.flow.PreviewCancel()
 			state.flow.PreviewCancel = nil
@@ -145,9 +145,9 @@ func (s *app) requestWorkspaceGitPreview() {
 			return
 		}
 		win.Update(func() {
-			current := s.workspaceGit
+			current := s.workspaceUnit.state.workspaceGit
 			if current == nil || current.flow != flow || flow.PreviewGeneration != generation ||
-				flow.TaskID != s.currentTask().id || flow.TaskKey != taskKey || workspaceHealthTaskKey(s.currentTask()) != taskKey {
+				flow.TaskID != s.taskUnit.currentTask().id || flow.TaskKey != taskKey || workspaceHealthTaskKey(s.taskUnit.currentTask()) != taskKey {
 				return
 			}
 			flow.PreviewCancel = nil
@@ -210,7 +210,7 @@ func (s *app) submitWorkspaceGitFlow() {
 	selectionKeys := make([]string, 0, len(flow.Selected))
 	messages := make(map[string]string)
 	fingerprints := make(map[string]string)
-	for _, item := range taskPhysicalGitWorkspaces(s.currentTask()) {
+	for _, item := range taskPhysicalGitWorkspaces(s.taskUnit.currentTask()) {
 		key := workspaceGitUIKey(item.Path)
 		if !flow.Selected[key] {
 			continue
@@ -280,7 +280,7 @@ func (s *app) applyWorkspaceGitFlowResult(action application.Action, result appl
 			return
 		}
 		s.lastMessage = firstNonEmpty(operation.Message, result.Message, "Git 操作已完成")
-		s.cancelWorkspaceGitFlow()
+		s.workspaceUnit.cancelWorkspaceGitFlow()
 	case "workspace.push":
 		message := result.Message
 		var operation workspace.WorkspaceGitOperationResult
@@ -324,10 +324,10 @@ func workspaceGitFlowMatches(flow *workspaceGitFlowState, action application.Act
 }
 
 func (s *app) currentWorkspaceGitFlow() *workspaceGitFlowState {
-	if s.workspaceGit == nil {
+	if s.workspaceUnit.state.workspaceGit == nil {
 		return nil
 	}
-	return s.workspaceGit.flow
+	return s.workspaceUnit.state.workspaceGit.flow
 }
 
 func (s *app) renderWorkspaceGitDialogs(c *ui.Context, p palette) {
@@ -349,7 +349,7 @@ func (s *app) renderWorkspaceGitDialogs(c *ui.Context, p palette) {
 			})
 		})
 		if !flow.Open && !flow.ResultOpen {
-			s.cancelWorkspaceGitFlow()
+			s.workspaceUnit.cancelWorkspaceGitFlow()
 		}
 	}
 	if flow.ResultOpen {
@@ -360,7 +360,7 @@ func (s *app) renderWorkspaceGitDialogs(c *ui.Context, p palette) {
 			panel.Children(func() { s.renderBatchWorkspaceGitResult(c, p, flow) })
 		})
 		if !flow.ResultOpen {
-			s.cancelWorkspaceGitFlow()
+			s.workspaceUnit.cancelWorkspaceGitFlow()
 		}
 	}
 }
@@ -383,7 +383,7 @@ func (s *app) renderSingleWorkspaceGitDialog(c *ui.Context, p palette, flow *wor
 		}
 		if action(c, "workspace-git-single-cancel", "close", "取消", p, false) {
 			flow.Open = false
-			s.cancelWorkspaceGitFlow()
+			s.workspaceUnit.cancelWorkspaceGitFlow()
 		}
 		canSubmit := flow.PreviewLoaded && !flow.Loading && !s.busy && flow.Error == "" && strings.TrimSpace(message) != "" && hasWorkspaceGitPreview(flow, key)
 		button := ui.ButtonBase(c.Key("workspace-git-single-submit")).Row().Gap(7).Height(34).Padding(0, 16).Radius(20).Label("确认").Tooltip("确认")
@@ -402,7 +402,7 @@ func (s *app) renderBatchWorkspaceGitDialog(c *ui.Context, p palette, flow *work
 	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 		label(c, "确认后仅预检并操作所选物理工作区。", 11, p.muted).Grow(1).Wrap()
 		if action(c, "workspace-git-select-all", "check", "全选", p, false) {
-			for _, item := range taskPhysicalGitWorkspaces(s.currentTask()) {
+			for _, item := range taskPhysicalGitWorkspaces(s.taskUnit.currentTask()) {
 				flow.Selected[workspaceGitUIKey(item.Path)] = true
 			}
 		}
@@ -410,7 +410,7 @@ func (s *app) renderBatchWorkspaceGitDialog(c *ui.Context, p palette, flow *work
 			flow.Selected = make(map[string]bool)
 		}
 	})
-	workspaces := taskPhysicalGitWorkspaces(s.currentTask())
+	workspaces := taskPhysicalGitWorkspaces(s.taskUnit.currentTask())
 	ui.Scroll(c).Grow(1).MinHeight(150).Padding(2).Gap(8).Children(func() {
 		for index, item := range workspaces {
 			key := workspaceGitUIKey(item.Path)
@@ -421,7 +421,7 @@ func (s *app) renderBatchWorkspaceGitDialog(c *ui.Context, p palette, flow *work
 					ui.Checkbox(c.Key(fmt.Sprintf("workspace-git-select-%d", index)), &selected, "").Label("选择工作区 " + item.Name).
 						Disabled(s.busy).OnChange(func() { flow.Selected[key] = selected }).Shrink(0)
 					ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
-						name, module := s.workspaceNames(s.taskByID(flow.TaskID).groupID, item)
+						name, module := s.workspaceNames(s.taskUnit.taskByID(flow.TaskID).groupID, item)
 						if module != "" && module != name {
 							name += " · " + module
 						}
@@ -464,7 +464,7 @@ func (s *app) renderBatchWorkspaceGitDialog(c *ui.Context, p palette, flow *work
 		}
 		if action(c, "workspace-git-batch-cancel", "close", "取消", p, false) {
 			flow.Open = false
-			s.cancelWorkspaceGitFlow()
+			s.workspaceUnit.cancelWorkspaceGitFlow()
 		}
 		canSubmit := s.workspaceGitBatchCanSubmit(flow, workspaces) && !flow.Loading && !s.busy && flow.PreviewLoaded
 		button := ui.ButtonBase(c.Key("workspace-git-batch-submit")).Row().Gap(7).Height(34).Padding(0, 16).Radius(20).Label("确认执行").Tooltip("确认执行").Disabled(!canSubmit)
@@ -535,7 +535,7 @@ func (s *app) renderBatchWorkspaceGitResult(c *ui.Context, p palette, flow *work
 		label(c, "批量 Git 操作结果", 17, p.text).FontWeight(600).Grow(1)
 		if iconButton(c, "workspace-git-result-close", "close", "关闭", p).Clicked() {
 			flow.ResultOpen = false
-			s.cancelWorkspaceGitFlow()
+			s.workspaceUnit.cancelWorkspaceGitFlow()
 		}
 	})
 	if flow.Result == nil || len(flow.Result.Items) == 0 {
@@ -581,7 +581,7 @@ func (s *app) renderBatchWorkspaceGitResult(c *ui.Context, p palette, flow *work
 				for key, value := range flow.Messages {
 					messages[key] = value
 				}
-				task := s.currentTask()
+				task := s.taskUnit.currentTask()
 				s.openWorkspaceGitBatch(task, mode, failed)
 				if retry := s.currentWorkspaceGitFlow(); retry != nil {
 					for key, value := range messages {
@@ -594,7 +594,7 @@ func (s *app) renderBatchWorkspaceGitResult(c *ui.Context, p palette, flow *work
 		}
 		if action(c, "workspace-git-result-dismiss", "close", "关闭", p, true) {
 			flow.ResultOpen = false
-			s.cancelWorkspaceGitFlow()
+			s.workspaceUnit.cancelWorkspaceGitFlow()
 		}
 	})
 }
@@ -729,7 +729,7 @@ func (s *app) defaultWorkspaceCommitMessage(task task, item application.Workspac
 			}
 		}
 	}
-	if json.Unmarshal([]byte(s.configJSON), &config) != nil {
+	if json.Unmarshal([]byte(s.settingsUnit.state.configJSON), &config) != nil {
 		return ""
 	}
 	template := ""

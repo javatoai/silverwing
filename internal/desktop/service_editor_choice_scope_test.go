@@ -12,8 +12,8 @@ func TestServiceBranchChoicesIsolateRepositoryRemoteAndDraft(t *testing.T) {
 	s.snapshot.Home = `C:\synthetic\home`
 	s.snapshot.Repositories = []application.Repository{{ID: "repo", RootPath: `C:\synthetic\repo`}}
 	s.dialogOpen = true
-	s.serviceEditor = &serviceEditorState{session: "session", initialText: make(map[string]string), initialBools: make(map[string]bool), service: map[string]any{"repositoryId": "repo"}}
-	state := s.serviceEditor
+	s.workspaceUnit.state.serviceEditor = &serviceEditorState{session: "session", initialText: make(map[string]string), initialBools: make(map[string]bool), service: map[string]any{"repositoryId": "repo"}}
+	state := s.workspaceUnit.state.serviceEditor
 	scope := s.serviceRepositoryChoiceScope()
 	s.serviceEditorBranchChoices("origin") // Initialize transient maps.
 	state.branchChoices[serviceEditorBranchChoiceKey(scope, "origin")] = []string{"origin/main"}

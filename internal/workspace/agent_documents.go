@@ -35,16 +35,22 @@ type AgentDocumentPreview struct {
 	Files []AgentDocumentPreviewFile `json:"files"`
 }
 
+// TaskManifestReader is the only persistence operation used by generated task
+// documents and their materials catalogues.
+type TaskManifestReader interface {
+	Load(string) (domain.TaskManifest, error)
+}
+
 // AgentDocumentService writes referenced task files for every manifest.
 // INLINE_V1 is persisted historical metadata, not a file-generation mode.
 type AgentDocumentService struct {
 	Paths             storage.Paths
-	Manifests         *storage.ManifestStore
+	Manifests         TaskManifestReader
 	catalogWarningsMu sync.Mutex
 	catalogWarnings   []error
 }
 
-func NewAgentDocumentService(paths storage.Paths, manifests *storage.ManifestStore) *AgentDocumentService {
+func NewAgentDocumentService(paths storage.Paths, manifests TaskManifestReader) *AgentDocumentService {
 	if manifests == nil {
 		manifests = storage.NewManifestStore()
 	}
@@ -326,7 +332,7 @@ func renderTaskFacts(manifest domain.TaskManifest) string {
 	}
 	materials := manifest.RequirementMaterials
 	if materials.Status == domain.MaterialsReady && materials.WriteRoot != nil {
-		if _, ok := documents.AnnualScope(*materials.WriteRoot); ok {
+		if _, ok := documents.TaskMaterialsScope(*materials.WriteRoot); ok {
 			return b.String()
 		}
 	}

@@ -17,7 +17,7 @@ func productionTagRecordText(b production.Batch, tag production.Tag) string {
 
 func (s *app) productionDisplayedBatchCurrent(v *productionView, b production.Batch) bool {
 	if v == nil || s.page != "production" || s.productionView() != v || v.BatchID != b.ID ||
-		s.production.loadedHome != s.snapshot.Home || s.production.configScope != s.currentProductionScope() {
+		s.releaseUnit.state.production.loadedHome != s.snapshot.Home || s.releaseUnit.state.production.configScope != s.currentProductionScope() {
 		return false
 	}
 	current := s.productionBatch(v)

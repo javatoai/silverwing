@@ -11,15 +11,15 @@ import (
 )
 
 func (s *app) renderGitEnvironment(c *ui.Context, p palette) {
-	settingsToolStatusRow(c, p, "Git 版本", firstNonEmpty(mapString(s.settingsGitEnvironment, "gitVersion"), "未读取到"), p.text)
-	settingsToolStatusRow(c, p, "系统用户", firstNonEmpty(mapString(s.settingsGitEnvironment, "systemUser"), "未读取到"), p.text)
-	settingsToolStatusRow(c, p, "全局用户名", gitValueSummary(dataValue(s.settingsGitEnvironment, "globalUserName")), p.text)
-	settingsToolStatusRow(c, p, "全局邮箱", gitValueSummary(dataValue(s.settingsGitEnvironment, "globalUserEmail")), p.text)
-	credentialHelpers := gitConfigSummaries(dataValue(s.settingsGitEnvironment, "globalCredentialHelpers"))
+	settingsToolStatusRow(c, p, "Git 版本", firstNonEmpty(mapString(s.settingsUnit.state.settingsGitEnvironment, "gitVersion"), "未读取到"), p.text)
+	settingsToolStatusRow(c, p, "系统用户", firstNonEmpty(mapString(s.settingsUnit.state.settingsGitEnvironment, "systemUser"), "未读取到"), p.text)
+	settingsToolStatusRow(c, p, "全局用户名", gitValueSummary(dataValue(s.settingsUnit.state.settingsGitEnvironment, "globalUserName")), p.text)
+	settingsToolStatusRow(c, p, "全局邮箱", gitValueSummary(dataValue(s.settingsUnit.state.settingsGitEnvironment, "globalUserEmail")), p.text)
+	credentialHelpers := gitConfigSummaries(dataValue(s.settingsUnit.state.settingsGitEnvironment, "globalCredentialHelpers"))
 	settingsToolStatusRow(c, p, "凭据助手", firstNonEmpty(strings.Join(credentialHelpers, "\n"), "未配置"), p.text)
-	keySettings := gitConfigSummaries(dataValue(s.settingsGitEnvironment, "globalKeyConfig"))
+	keySettings := gitConfigSummaries(dataValue(s.settingsUnit.state.settingsGitEnvironment, "globalKeyConfig"))
 	settingsToolStatusRow(c, p, "关键配置", firstNonEmpty(strings.Join(keySettings, "\n"), "未配置"), p.text)
-	for _, errText := range mapsString(dataValue(s.settingsGitEnvironment, "errors")) {
+	for _, errText := range mapsString(dataValue(s.settingsUnit.state.settingsGitEnvironment, "errors")) {
 		settingsToolStatusRow(c, p, "环境读取错误", errText, p.amber)
 	}
 }
@@ -131,31 +131,31 @@ func (s *app) settingsProxy(c *ui.Context, p palette) {
 }
 
 func (s *app) settingsGit(c *ui.Context, p palette) {
-	resolved := firstNonEmpty(mapString(s.settingsGitEnvironment, "gitExecutable"), mapString(s.settingsCLIStatus["git"], "command"), mapString(s.settingsCLIStatus["git"], "commandPath"))
+	resolved := firstNonEmpty(mapString(s.settingsUnit.state.settingsGitEnvironment, "gitExecutable"), mapString(s.settingsUnit.state.settingsCLIStatus["git"], "command"), mapString(s.settingsUnit.state.settingsCLIStatus["git"], "commandPath"))
 	settingsHelpCardWithActions(c, p, "Git 状态", "本机 Git 与全局身份配置。", func() {
 		s.overflowMenu(c, p, "settings-git-more", "更多 Git 操作", false, func(menu *overflowMenuBuilder) {
 			if menu.Item("refresh", "刷新 Git 状态").Icon("refresh").Disabled(s.busy).Chosen() {
 				s.act("git.environment", "", "", "", "", "", nil)
 			}
 			menu.Separator()
-			if menu.Item("copy-result", "复制结果").Icon("copy").Disabled(mapString(s.settingsGitEnvironment, "copyText") == "").Chosen() {
-				s.copyTextToClipboard(c.Services(), mapString(s.settingsGitEnvironment, "copyText"), "")
+			if menu.Item("copy-result", "复制结果").Icon("copy").Disabled(mapString(s.settingsUnit.state.settingsGitEnvironment, "copyText") == "").Chosen() {
+				s.copyTextToClipboard(c.Services(), mapString(s.settingsUnit.state.settingsGitEnvironment, "copyText"), "")
 			}
 			s.settingsCLICommandMenuItems(c, menu, "git", resolved)
 		})
 	}, func() {
-		gitStatus, gitColor := settingsToolAvailability(s.settingsCLIStatus["git"], p)
-		if _, checked := s.settingsCLIStatus["git"]["installed"].(bool); !checked && strings.TrimSpace(mapString(s.settingsGitEnvironment, "gitVersion")) != "" {
+		gitStatus, gitColor := settingsToolAvailability(s.settingsUnit.state.settingsCLIStatus["git"], p)
+		if _, checked := s.settingsUnit.state.settingsCLIStatus["git"]["installed"].(bool); !checked && strings.TrimSpace(mapString(s.settingsUnit.state.settingsGitEnvironment, "gitVersion")) != "" {
 			gitStatus, gitColor = "可用", p.green
 		}
 		settingsToolStatusRow(c, p, "命令状态", gitStatus, gitColor)
-		if strings.HasPrefix(s.settingsOutput, "CLI 状态读取失败：") {
-			settingsToolStatusRow(c, p, "检测错误", strings.TrimPrefix(s.settingsOutput, "CLI 状态读取失败："), p.amber)
+		if strings.HasPrefix(s.settingsUnit.state.settingsOutput, "CLI 状态读取失败：") {
+			settingsToolStatusRow(c, p, "检测错误", strings.TrimPrefix(s.settingsUnit.state.settingsOutput, "CLI 状态读取失败："), p.amber)
 		}
-		if source := mapString(s.settingsCLIStatus["git"], "source"); source != "" {
+		if source := mapString(s.settingsUnit.state.settingsCLIStatus["git"], "source"); source != "" {
 			settingsToolStatusRow(c, p, "来源", cliStatusSourceLabel(source), p.text)
 		}
-		if len(s.settingsGitEnvironment) == 0 {
+		if len(s.settingsUnit.state.settingsGitEnvironment) == 0 {
 			settingsToolStatusRow(c, p, "Git 环境", "未检查", p.muted)
 		} else {
 			s.renderGitEnvironment(c, p)
@@ -163,7 +163,7 @@ func (s *app) settingsGit(c *ui.Context, p palette) {
 	})
 	settingsHelpCard(c, p, "Git 命令路径", "留空时使用 PATH 自动探测；更改后自动保存。", func() {
 		s.settingsConfigPathRow(c, p, "gitExecutablePath", "Git 可执行文件路径", "留空时使用 PATH 自动探测", false)
-		if s.cliJobs == nil || s.cliJobs.requests["status:git"] == nil {
+		if s.toolsUnit.state.cliJobs == nil || s.toolsUnit.state.cliJobs.requests["status:git"] == nil {
 			s.settingsCLIPathDiscoveryHint(c, p, "git")
 		}
 		s.settingsCLICommandActions(c, p, "git", resolved)
@@ -241,11 +241,11 @@ func (s *app) settingsLogs(c *ui.Context, p palette) {
 				if menu.Item("refresh-status", "刷新本地状态").Icon("refresh").Chosen() {
 					s.act("task.refresh", "", "", "", "", "", nil)
 				}
-				if menu.Item("copy-latest", "复制最新错误").Icon("copy").Disabled(len(s.settingsLogEntries) == 0).Chosen() {
-					s.copyTextToClipboard(c.Services(), formatLogEntry(s.settingsLogEntries[0]), "最新错误已复制")
+				if menu.Item("copy-latest", "复制最新错误").Icon("copy").Disabled(len(s.settingsUnit.state.settingsLogEntries) == 0).Chosen() {
+					s.copyTextToClipboard(c.Services(), formatLogEntry(s.settingsUnit.state.settingsLogEntries[0]), "最新错误已复制")
 				}
-				if menu.Item("copy-all", "复制全部错误").Icon("copy").Disabled(len(s.settingsLogEntries) == 0).Chosen() {
-					s.copyTextToClipboard(c.Services(), formatLogEntries(s.settingsLogEntries), "错误日志已复制")
+				if menu.Item("copy-all", "复制全部错误").Icon("copy").Disabled(len(s.settingsUnit.state.settingsLogEntries) == 0).Chosen() {
+					s.copyTextToClipboard(c.Services(), formatLogEntries(s.settingsUnit.state.settingsLogEntries), "错误日志已复制")
 				}
 				if menu.Item("export", "导出诊断信息").Icon("save").Chosen() {
 					s.chooseSavePath("导出诊断信息", filepath.Join(s.snapshot.Home, "silverwing-diagnostics.zip"), []mygo.FileFilter{{Name: "压缩文件", Extensions: []string{"zip"}}}, func(path string) {
@@ -254,10 +254,10 @@ func (s *app) settingsLogs(c *ui.Context, p palette) {
 				}
 			})
 		})
-		if len(s.settingsLogEntries) == 0 {
+		if len(s.settingsUnit.state.settingsLogEntries) == 0 {
 			settingsMuted(c, p, "暂无错误记录。")
 		} else {
-			for index, entry := range s.settingsLogEntries {
+			for index, entry := range s.settingsUnit.state.settingsLogEntries {
 				ui.Column(c.Key(fmt.Sprintf("log-entry-%d", index))).FillWidth().Padding(10, 12).Gap(4).Background(p.soft).Radius(8).Children(func() {
 					label(c, firstNonEmpty(mapString(entry, "timestamp"), "未知时间")+" · "+mapString(entry, "event"), 10, p.muted).SingleLine()
 					label(c, mapString(entry, "message"), 11, p.text).LineHeight(1.45).Selectable()

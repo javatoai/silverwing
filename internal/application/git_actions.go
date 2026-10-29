@@ -184,7 +184,23 @@ func (a *App) workspaceWorkflow(ctx context.Context, action Action, config domai
 			if e != nil {
 				return result(nil, "", e)
 			}
-			data, e := workspace.NewWorkspaceGitHistoryService(service.Git).ReadContext(ctx, item.WorktreePath, baseline)
+			reader := workspace.NewWorkspaceGitHistoryService(service.Git)
+			if boolPayload(action, "paged") {
+				if baseline != textPayload(action, "baselineRef") {
+					return result(nil, "", workspace.ErrWorkspaceGitHistoryChanged)
+				}
+				var page workspace.WorkspaceGitHistoryPageRequest
+				if e := decodeField(action, "historyPage", &page); e != nil {
+					return result(nil, "", e)
+				}
+				if sha := textPayload(action, "messageSha"); sha != "" {
+					data, e := reader.ReadMessageContext(ctx, item.WorktreePath, baseline, page, sha)
+					return result(data, "提交详情已读取", e)
+				}
+				data, e := reader.ReadPageContext(ctx, item.WorktreePath, baseline, page)
+				return result(data, "提交历史页已读取", e)
+			}
+			data, e := reader.ReadContext(ctx, item.WorktreePath, baseline)
 			return result(data, "提交历史已读取", e)
 		case "workspace.file-preview":
 			var change domain.WorkspaceGitFileChange

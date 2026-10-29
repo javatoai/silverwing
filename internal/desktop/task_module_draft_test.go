@@ -8,9 +8,11 @@ import (
 )
 
 func TestTaskCreationTargetEditKeepsPreflightAcrossStableFrames(t *testing.T) {
-	draft := &taskCreationModuleDraft{ID: "api", Name: "API", LastName: "API", TargetBranch: "feature/default", LastTargetBranch: "feature/default"}
+	draft := &taskCreationModuleDraft{taskModuleDraftValues: taskModuleDraftValues{ID: "api", Name: "API", LastName: "API", TargetBranch: "feature/default", LastTargetBranch: "feature/default"}}
 	state := &taskCreationState{phase: "editing", moduleData: map[string]map[string]*taskCreationModuleDraft{"service": {"api": draft}}}
-	s := &app{taskCreation: state}
+	s := &app{
+		taskUnit: taskController{state: taskState{taskCreation: state}},
+	}
 	draft.TargetBranch = "feature/custom"
 	s.syncTaskCreationModuleDraft("service", draft)
 	preview := &taskCreationPreview{signature: "current", sharedAck: true}
@@ -33,11 +35,13 @@ func TestTaskCreationTargetEditKeepsPreflightAcrossStableFrames(t *testing.T) {
 }
 
 func TestTaskAppendTargetEditKeepsPreflightAcrossStableFrames(t *testing.T) {
-	draft := &taskCreationModuleDraft{ID: "api", Name: "API", LastName: "API", TargetBranch: "feature/default", LastTargetBranch: "feature/default"}
+	draft := &taskCreationModuleDraft{taskModuleDraftValues: taskModuleDraftValues{ID: "api", Name: "API", LastName: "API", TargetBranch: "feature/default", LastTargetBranch: "feature/default"}}
 	state := taskAppendNewState(task{branch: "feature/task"}, "services", domain.GroupConfig{})
 	state.moduleData["service"] = map[string]*taskCreationModuleDraft{"api": draft}
 	state.moduleOrder["service"] = []string{"api"}
-	s := &app{workspaceAppend: state}
+	s := &app{
+		workspaceUnit: workspaceController{state: workspaceState{workspaceAppend: state}},
+	}
 	draft.TargetBranch = "feature/custom"
 	s.syncTaskAppendModuleDraft(state, "service", draft)
 	state.previewSignature, state.sharedAck = "current", true

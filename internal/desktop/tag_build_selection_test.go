@@ -28,16 +28,21 @@ func tagBuildSelectionFixture(t *testing.T, width int, dark bool) (*app, *tagBui
 			Record: domain.ServiceWorkspace{ModuleID: id, ModuleName: id, ServiceName: "fixture-service", Branch: "feature/saved", TagEnabled: true, TagMode: domain.TagBuildCurrentBranch},
 		})
 	}
-	s := &app{page: "tasks", configJSON: string(config), inputs: map[string]*string{}, tasks: []task{{id: "task", path: filepath.Join(root, "tasks", "task"), createdAt: "created", groupID: "group", workspaces: workspaces}}}
+	s := &app{
+		taskUnit:     taskController{state: taskState{tasks: []task{{id: "task", path: filepath.Join(root, "tasks", "task"), createdAt: "created", groupID: "group", workspaces: workspaces}}}},
+		settingsUnit: settingsController{state: settingsState{configJSON: string(config)}},
+		page:         "tasks",
+		inputs:       map[string]*string{},
+	}
 	s.snapshot.Home = filepath.Join(root, "home")
 	s.snapshot.ConfigJSON = string(config)
 	s.snapshot.Groups = []application.Group{{ID: "group", Name: "fixture"}}
-	s.openTagBuildBatch(s.currentTask())
-	if s.tagBuild == nil {
+	s.openTagBuildBatch(s.taskUnit.currentTask())
+	if s.releaseUnit.state.tagBuild == nil {
 		t.Fatal("fixture did not open batch selection")
 	}
 	tester := ui.NewTester(func(c *ui.Context) { s.renderTagBuildDialog(c, setTheme(c, dark)) }, width, 760)
-	return s, s.tagBuild, tester
+	return s, s.releaseUnit.state.tagBuild, tester
 }
 
 func TestTagBuildWholeRowSelection(t *testing.T) {
@@ -115,7 +120,7 @@ func TestTagBuildWholeRowSelection(t *testing.T) {
 					t.Fatalf("selection already wrong before disabling: %v", state.Selected)
 				}
 				scope := s.tagJobScope()
-				s.tagJobView(scope).snapshot = application.TagJobSnapshot{Scope: scope, ID: "fixture-job", Busy: true, Items: []application.TagJobItem{{ServiceID: "service", ModuleID: "api", WorkspacePath: s.currentTask().workspaces[0].Path, Busy: true}}}
+				s.tagJobView(scope).snapshot = application.TagJobSnapshot{Scope: scope, ID: "fixture-job", Busy: true, Items: []application.TagJobItem{{ServiceID: "service", ModuleID: "api", WorkspacePath: s.taskUnit.currentTask().workspaces[0].Path, Busy: true}}}
 				tester.Frame()
 				if err := tester.Click("选择构建 api"); err != nil {
 					t.Fatal(err)
@@ -167,7 +172,7 @@ func TestTagBuildWholeRowSelectionPayload(t *testing.T) {
 	if s.cancelOperation != nil {
 		s.cancelOperation()
 	}
-	if s.tagBuild != nil {
+	if s.releaseUnit.state.tagBuild != nil {
 		t.Fatal("successful dispatch no longer closes the selection dialog")
 	}
 }

@@ -43,10 +43,10 @@ type requirementIdentityJobState struct {
 }
 
 func (s *app) ensureRequirementIdentityJobs() *requirementIdentityJobState {
-	if s.requirementIdentityJobs == nil {
-		s.requirementIdentityJobs = &requirementIdentityJobState{running: make(map[*requirementIdentityJob]struct{})}
+	if s.requirementUnit.state.requirementIdentityJobs == nil {
+		s.requirementUnit.state.requirementIdentityJobs = &requirementIdentityJobState{running: make(map[*requirementIdentityJob]struct{})}
 	}
-	return s.requirementIdentityJobs
+	return s.requirementUnit.state.requirementIdentityJobs
 }
 
 // Like Source's contextStamp, this reads only file metadata, never credentials.
@@ -75,7 +75,7 @@ func (s *app) resetRequirementIdentityContext(state *requirementIdentityJobState
 }
 
 func (s *app) invalidateRequirementIdentityContext() {
-	state := s.requirementIdentityJobs
+	state := s.requirementUnit.state.requirementIdentityJobs
 	if state == nil {
 		return
 	}

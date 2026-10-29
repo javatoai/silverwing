@@ -4,10 +4,10 @@ import (
 	"flag"
 	"log"
 	"os"
-	"path/filepath"
 
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/desktop"
+	"silverwing-go/internal/productprofile"
 )
 
 func main() {
@@ -15,8 +15,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defaultHome := filepath.Join(userHome, "silverwing")
-	home := flag.String("home", defaultHome, "SilverWing data directory")
+	defaultHome := productprofile.DefaultHome(userHome)
+	home := flag.String("home", defaultHome, productprofile.CLIName+" data directory")
 	page := flag.String("page", "tasks", "initial page: tasks, archive, requirements, services, repositories, tools, skills, or settings")
 	dark := flag.Bool("dark", false, "start with the dark theme")
 	width := flag.Int("width", 0, "initial window width; zero restores the saved size")

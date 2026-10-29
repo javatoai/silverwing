@@ -21,7 +21,7 @@ func (s *app) openProductionWorktrees(v *productionView, b production.Batch) {
 		return
 	}
 	b.RetainedWorktrees = slices.Clone(b.RetainedWorktrees)
-	s.production.worktreesDialog = &productionWorktreesDialog{Open: true, View: v, Batch: b, Home: s.snapshot.Home, Scope: s.currentProductionScope()}
+	s.releaseUnit.state.production.worktreesDialog = &productionWorktreesDialog{Open: true, View: v, Batch: b, Home: s.snapshot.Home, Scope: s.currentProductionScope()}
 }
 
 func (s *app) productionWorktreesCurrent(d *productionWorktreesDialog) bool {
@@ -29,12 +29,12 @@ func (s *app) productionWorktreesCurrent(d *productionWorktreesDialog) bool {
 }
 
 func (s *app) renderProductionWorktreesDialog(c *ui.Context, p palette) {
-	if s.production == nil || s.production.worktreesDialog == nil {
+	if s.releaseUnit.state.production == nil || s.releaseUnit.state.production.worktreesDialog == nil {
 		return
 	}
-	d := s.production.worktreesDialog
+	d := s.releaseUnit.state.production.worktreesDialog
 	if !d.Open || !s.productionWorktreesCurrent(d) {
-		s.production.worktreesDialog = nil
+		s.releaseUnit.state.production.worktreesDialog = nil
 		return
 	}
 	dialog := ui.DialogBase(c.Key("production-worktrees-dialog"), &d.Open, func(backdrop, panel ui.Element) {

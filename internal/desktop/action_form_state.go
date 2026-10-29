@@ -22,9 +22,9 @@ func (s *app) availableModules(t task, service application.Service) []applicatio
 }
 
 func (s *app) setWorkspaceAddSelection(serviceID, moduleID string) {
-	s.workspaceAddServiceID = serviceID
-	s.workspaceAddModuleID = moduleID
-	service, ok := s.serviceByID(s.taskByID(s.form.taskID).groupID, serviceID)
+	s.workspaceUnit.state.workspaceAddServiceID = serviceID
+	s.workspaceUnit.state.workspaceAddModuleID = moduleID
+	service, ok := s.serviceByID(s.taskUnit.taskByID(s.form.taskID).groupID, serviceID)
 	if !ok {
 		return
 	}
@@ -57,24 +57,24 @@ func (s *app) setWorkspaceAddSelection(serviceID, moduleID string) {
 }
 
 func (s *app) toggleTaskService(service application.Service) {
-	if s.taskServices[service.ID] {
-		delete(s.taskServices, service.ID)
-		delete(s.taskModules, service.ID)
+	if s.taskUnit.state.taskServices[service.ID] {
+		delete(s.taskUnit.state.taskServices, service.ID)
+		delete(s.taskUnit.state.taskModules, service.ID)
 		return
 	}
-	s.taskServices[service.ID] = true
+	s.taskUnit.state.taskServices[service.ID] = true
 	selected := make(map[string]bool, len(service.Modules))
 	for _, module := range service.Modules {
 		selected[module.ID] = true
 	}
-	s.taskModules[service.ID] = selected
+	s.taskUnit.state.taskModules[service.ID] = selected
 }
 
 func (s *app) toggleTaskModule(serviceID, moduleID string, moduleCount int) {
-	modules := s.taskModules[serviceID]
+	modules := s.taskUnit.state.taskModules[serviceID]
 	if modules == nil {
 		modules = make(map[string]bool)
-		s.taskModules[serviceID] = modules
+		s.taskUnit.state.taskModules[serviceID] = modules
 	}
 	modules[moduleID] = !modules[moduleID]
 	selected := 0
@@ -84,7 +84,7 @@ func (s *app) toggleTaskModule(serviceID, moduleID string, moduleCount int) {
 		}
 	}
 	if selected == 0 || moduleCount == 0 {
-		delete(s.taskServices, serviceID)
-		delete(s.taskModules, serviceID)
+		delete(s.taskUnit.state.taskServices, serviceID)
+		delete(s.taskUnit.state.taskModules, serviceID)
 	}
 }

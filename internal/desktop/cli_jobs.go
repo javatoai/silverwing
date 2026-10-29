@@ -6,10 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"silverwing-go/internal/application"
+	"silverwing-go/internal/asyncjob"
 	"silverwing-go/internal/process"
 )
 
@@ -17,12 +17,10 @@ import (
 // authorization process must not occupy the task/Git operation coordinator.
 // The state map is owned by the UI thread; workers only hold immutable requests.
 type cliJobState struct {
-	next     uint64
-	requests map[string]*cliJobRequest
-	running  map[*cliJobRequest]struct{}
-
-	cleanupMu  sync.Mutex
-	cleanupErr error
+	next          uint64
+	requests      map[string]*cliJobRequest
+	lifecycle     asyncjob.Group
+	authMutations []*cliJobRequest // UI-owned close-blocking business operations
 }
 
 type cliJobRequest struct {
@@ -30,11 +28,13 @@ type cliJobRequest struct {
 	key, tool, path, home, session string
 	page, section, config          string
 	action                         application.Action
+	owner                          *cliJobState
+	lease                          *asyncjob.Lease
 	ctx                            context.Context
 	cancel                         context.CancelFunc
 	// UI-owned intent, independent of the worker's deferred context cleanup.
 	userCancelled bool
-	done          chan struct{}
+	done          <-chan struct{}
 	retiring      *cliJobRequest
 	// Written once by executeCLIJob before done closes; read after <-done.
 	completionErr  error
@@ -62,16 +62,21 @@ func (s *app) dispatchIndependentCLI(action application.Action) bool {
 	if request == nil {
 		return true
 	}
-	backend, win, state := s.backend, s.win, s.cliJobs
+	backend, win := s.backend, s.win
 	win.Invalidate()
 	go func() {
 		result, snapshot, err := executeCLIJob(backend, request)
-		state.recordCleanupFailure(err)
-		close(request.done)
+		request.complete(err)
 		if win.IsDestroyed() {
 			return
 		}
-		win.Update(func() { s.finishCLIJob(request, result, snapshot, err) })
+		request.owner.lifecycle.Post(func(callback func()) bool {
+			if win.IsDestroyed() {
+				return false
+			}
+			win.Update(callback)
+			return true
+		}, func() { s.finishCLIJob(request, result, snapshot, err) })
 	}()
 	return true
 }
@@ -88,7 +93,7 @@ func (s *app) cliJobTool(action application.Action) string {
 		return tool
 	}
 	if session := payloadString(action.Payload, "sessionId"); session != "" {
-		for name, current := range s.settingsCLISessions {
+		for name, current := range s.settingsUnit.state.settingsCLISessions {
 			if mapString(current, "sessionId") == session && desktopCLIJobSupported(name) {
 				return name
 			}
@@ -110,8 +115,8 @@ func (s *app) beginCLIJob(action application.Action) (*cliJobRequest, error) {
 	if tool == "" {
 		return nil, fmt.Errorf("CLI 请求缺少工具或有效登录会话")
 	}
-	if s.cliJobs == nil {
-		s.cliJobs = &cliJobState{requests: make(map[string]*cliJobRequest), running: make(map[*cliJobRequest]struct{})}
+	if s.toolsUnit.state.cliJobs == nil {
+		s.toolsUnit.state.cliJobs = &cliJobState{requests: make(map[string]*cliJobRequest)}
 	}
 	key := "auth:" + tool
 	if action.Kind == "cli.status" {
@@ -121,7 +126,10 @@ func (s *app) beginCLIJob(action application.Action) (*cliJobRequest, error) {
 	} else if action.Kind == "meegle.projects" {
 		key = action.Kind
 	}
-	state := s.cliJobs
+	state := s.toolsUnit.state.cliJobs
+	if state.lifecycle.Closed() {
+		return nil, errors.New("CLI 请求已进入退出清理阶段")
+	}
 	if previous := state.requests["auth:"+tool]; previous != nil && previous.path == s.cliConfiguredPath(tool) && previous.home == s.snapshot.Home && (previous.action.Kind == "cli.auth.start" || previous.action.Kind == "cli.auth.logout") {
 		if previous.action.Kind == action.Kind {
 			return nil, nil
@@ -140,16 +148,19 @@ func (s *app) beginCLIJob(action application.Action) (*cliJobRequest, error) {
 		}
 		action.Payload = payload
 	}
+	lease, err := state.lifecycle.Begin(context.Background(), asyncjob.Options{CancelOnClose: true})
+	if err != nil {
+		return nil, fmt.Errorf("CLI 请求已进入退出清理阶段：%w", err)
+	}
 	state.next++
-	ctx, cancel := context.WithCancel(context.Background())
 	request := &cliJobRequest{id: state.next, key: key, tool: tool, path: s.cliConfiguredPath(tool), home: s.snapshot.Home,
-		session: payloadString(action.Payload, "sessionId"), page: s.page, section: s.settingsPage, config: s.configJSON,
-		action: action, ctx: ctx, cancel: cancel, done: make(chan struct{})}
+		session: payloadString(action.Payload, "sessionId"), page: s.page, section: s.settingsUnit.state.settingsPage, config: s.settingsUnit.state.configJSON,
+		action: action, owner: state, lease: lease, ctx: lease.Context(), cancel: lease.Cancel, done: lease.Done()}
 	if action.Kind == "meegle.projects" {
 		request.meegleContext = s.currentRequirementIdentityContext()
-		if identity := s.requirementIdentityJobs; identity != nil && identity.confirmed && identity.context == request.meegleContext && identity.state == application.RequirementIdentityAuthenticated {
+		if identity := s.requirementUnit.state.requirementIdentityJobs; identity != nil && identity.confirmed && identity.context == request.meegleContext && identity.state == application.RequirementIdentityAuthenticated {
 			request.meegleIdentity = identity.identity
-		} else if catalog := s.meegleProjectCatalog; catalog != nil && catalog.context == request.meegleContext {
+		} else if catalog := s.settingsUnit.state.meegleProjectCatalog; catalog != nil && catalog.context == request.meegleContext {
 			request.meegleIdentity = catalog.verifiedIdentity
 		}
 	}
@@ -163,7 +174,7 @@ func (s *app) beginCLIJob(action application.Action) (*cliJobRequest, error) {
 		}
 	}
 	if action.Kind == "cli.auth.start" || action.Kind == "cli.auth.logout" {
-		s.stopCLIAuthPoll(tool)
+		s.settingsUnit.stopCLIAuthPoll(tool)
 		for pendingKey, pending := range state.requests {
 			if pending.tool == tool && pendingKey != key {
 				pending.cancel()
@@ -178,7 +189,10 @@ func (s *app) beginCLIJob(action application.Action) (*cliJobRequest, error) {
 		}
 	}
 	state.requests[key] = request
-	state.running[request] = struct{}{}
+	if action.Kind == "cli.auth.start" || action.Kind == "cli.auth.logout" {
+		state.authMutationRunning()
+		state.authMutations = append(state.authMutations, request)
+	}
 	return request, nil
 }
 
@@ -226,9 +240,7 @@ func executeCLIJob(backend application.Backend, request *cliJobRequest) (result 
 				err = errors.Join(err, request.retiring.completionErr)
 			}
 		case <-cleanup.Done():
-			if err == nil {
-				err = fmt.Errorf("已请求取消登录，但进程清理尚未完成：%w", cleanup.Err())
-			}
+			err = errors.Join(err, fmt.Errorf("已请求取消登录，但进程清理尚未完成：%w", cleanup.Err()))
 		}
 		stop()
 	}
@@ -241,7 +253,7 @@ func executeCLIJob(backend application.Backend, request *cliJobRequest) (result 
 }
 
 func (s *app) cliJobRelevant(request *cliJobRequest) bool {
-	if request == nil || s.cliJobs == nil || s.cliJobs.requests[request.key] != request {
+	if request == nil || s.toolsUnit.state.cliJobs != request.owner || request.owner.lifecycle.Closed() || request.owner.requests[request.key] != request {
 		return false
 	}
 	if s.snapshot.Home != request.home || s.cliConfiguredPath(request.tool) != request.path {
@@ -250,35 +262,34 @@ func (s *app) cliJobRelevant(request *cliJobRequest) bool {
 	if request.action.Kind == "meegle.projects" && request.meegleContext != s.currentRequirementIdentityContext() {
 		return false
 	}
-	if request.session != "" && mapString(s.settingsCLISessions[request.tool], "sessionId") != request.session {
+	if request.session != "" && mapString(s.settingsUnit.state.settingsCLISessions[request.tool], "sessionId") != request.session {
 		return false
 	}
 	return true
 }
 
 func (s *app) finishCLIJob(request *cliJobRequest, result application.ActionResult, snapshot application.Snapshot, err error) {
-	if s.cliJobs != nil {
-		s.cliJobs.recordCleanupFailure(err)
+	if request == nil {
+		return
 	}
 	relevant := s.cliJobRelevant(request)
-	if s.cliJobs != nil {
-		delete(s.cliJobs.running, request)
-	}
-	if s.cliJobs != nil && s.cliJobs.requests[request.key] == request {
-		delete(s.cliJobs.requests, request.key)
+	request.owner.authMutationRunning()
+	current := request.owner.requests[request.key] == request
+	if current {
+		delete(request.owner.requests, request.key)
 	}
 	if !relevant {
-		if request.action.Kind == "meegle.projects" && s.meegleCatalogActionRelevant(request.action) {
-			s.syncMeegleProjectCatalogContext(s.meegleProjectCatalog)
-			s.meegleProjectCatalog.loading = false
-			s.meegleProjectCatalog.error = "账号配置已变化，请刷新项目目录。"
+		if current && s.toolsUnit.state.cliJobs == request.owner && !request.owner.lifecycle.Closed() && request.action.Kind == "meegle.projects" && s.meegleCatalogActionRelevant(request.action) {
+			s.syncMeegleProjectCatalogContext(s.settingsUnit.state.meegleProjectCatalog)
+			s.settingsUnit.state.meegleProjectCatalog.loading = false
+			s.settingsUnit.state.meegleProjectCatalog.error = "账号配置已变化，请刷新项目目录。"
 		}
 		return
 	}
-	currentSection := s.page == request.page && s.settingsPage == request.section
+	currentSection := s.page == request.page && s.settingsUnit.state.settingsPage == request.section
 	if request.userCancelled && !process.IsCleanupFailure(err) {
 		if currentSection {
-			s.settingsOutput = "登录操作已取消。"
+			s.settingsUnit.state.settingsOutput = "登录操作已取消。"
 		}
 		return
 	}
@@ -294,30 +305,30 @@ func (s *app) finishCLIJob(request *cliJobRequest, result application.ActionResu
 			} else if request.action.Kind == "cli.auth.logout" {
 				operation = "退出登录"
 			}
-			s.settingsOutput = operation + "失败：" + err.Error()
-			s.lastError = s.settingsOutput
+			s.settingsUnit.state.settingsOutput = operation + "失败：" + err.Error()
+			s.lastError = s.settingsUnit.state.settingsOutput
 		}
 		if request.action.Kind == "cli.auth.poll" {
 			if cleanupFailure {
-				s.stopCLIAuthPoll(request.tool)
+				s.settingsUnit.stopCLIAuthPoll(request.tool)
 			} else if !errors.Is(err, context.Canceled) {
-				s.scheduleCLIAuthPoll(request.tool, s.settingsCLISessions[request.tool])
+				s.scheduleCLIAuthPoll(request.tool, s.settingsUnit.state.settingsCLISessions[request.tool])
 			}
 		}
 		return
 	}
-	previousOutput := s.settingsOutput
+	previousOutput := s.settingsUnit.state.settingsOutput
 	if request.action.Kind == "meegle.projects" {
 		if s.meegleCatalogActionRelevant(request.action) {
-			s.meegleProjectCatalog.context = request.meegleContext
-			s.meegleProjectCatalog.verifiedIdentity = request.meegleIdentity
+			s.settingsUnit.state.meegleProjectCatalog.context = request.meegleContext
+			s.settingsUnit.state.meegleProjectCatalog.verifiedIdentity = request.meegleIdentity
 		}
 		s.applyMeegleProjectCatalogResult(request.action, result)
 	} else {
 		s.applySettingsActionResult(request.action, result)
 	}
 	if !currentSection {
-		s.settingsOutput = previousOutput
+		s.settingsUnit.state.settingsOutput = previousOutput
 	}
 	if request.action.Kind == "cli.status" {
 		s.applySettingsCLIDiscoverySnapshot(request.tool, request.config, snapshot)
@@ -325,13 +336,13 @@ func (s *app) finishCLIJob(request *cliJobRequest, result application.ActionResu
 }
 
 func (s *app) invalidateCLIJobs(tool string) {
-	if s.cliJobs == nil {
+	if s.toolsUnit.state.cliJobs == nil {
 		return
 	}
-	for key, request := range s.cliJobs.requests {
+	for key, request := range s.toolsUnit.state.cliJobs.requests {
 		if request.tool == tool {
 			request.cancel()
-			delete(s.cliJobs.requests, key)
+			delete(s.toolsUnit.state.cliJobs.requests, key)
 		}
 	}
 }
@@ -348,51 +359,55 @@ func (s *app) invalidateCLIConfiguration(snapshot application.Snapshot) {
 			continue
 		}
 		s.invalidateCLIJobs(tool)
-		s.stopCLIAuthPoll(tool)
+		s.settingsUnit.stopCLIAuthPoll(tool)
 		if tool == "meegle" {
 			s.clearMeegleSessionViews()
 		}
-		delete(s.settingsCLIStatus, tool)
-		delete(s.settingsCLISessions, tool)
+		delete(s.settingsUnit.state.settingsCLIStatus, tool)
+		delete(s.settingsUnit.state.settingsCLISessions, tool)
 	}
 }
 
-func (state *cliJobState) recordCleanupFailure(err error) {
-	if state == nil || !process.IsCleanupFailure(err) {
-		return
-	}
-	state.cleanupMu.Lock()
-	if state.cleanupErr == nil {
-		state.cleanupErr = err
-	}
-	state.cleanupMu.Unlock()
+func (request *cliJobRequest) complete(err error) {
+	request.lease.Complete(asyncJobCleanupError(err))
 }
 
-func (state *cliJobState) cleanupFailure() error {
-	state.cleanupMu.Lock()
-	defer state.cleanupMu.Unlock()
-	return state.cleanupErr
+// Ordinary action failures are consumed by their feature UI. Process cleanup
+// uncertainty must also survive a destroyed window and be returned by shutdown.
+func asyncJobCleanupError(err error) error {
+	if process.IsCleanupFailure(err) {
+		return err
+	}
+	return nil
+}
+
+// Only login initialization and logout block document/window closing. This
+// business boundary is distinct from the lifecycle group that drains all jobs.
+// The UI owns this slice; workers publish completion through their lease only.
+func (state *cliJobState) authMutationRunning() bool {
+	pending := state.authMutations[:0]
+	for _, request := range state.authMutations {
+		select {
+		case <-request.done:
+		default:
+			pending = append(pending, request)
+		}
+	}
+	clear(state.authMutations[len(pending):])
+	state.authMutations = pending
+	return len(pending) > 0
 }
 
 func (s *app) closeCLIJobs(ctx context.Context) error {
-	state := s.cliJobs
+	state := s.toolsUnit.state.cliJobs
 	if state == nil {
 		return nil
 	}
-	requests := state.running
+	state.lifecycle.Close()
 	state.requests = make(map[string]*cliJobRequest)
-	for request := range requests {
-		request.cancel()
-	}
-	for request := range requests {
-		select {
-		case <-request.done:
-		case <-ctx.Done():
-			return errors.Join(ctx.Err(), state.cleanupFailure())
-		}
-	}
-	state.running = make(map[*cliJobRequest]struct{})
-	return state.cleanupFailure()
+	err := state.lifecycle.Wait(ctx)
+	state.authMutationRunning()
+	return err
 }
 
 func desktopCLIJobSupported(tool string) bool {

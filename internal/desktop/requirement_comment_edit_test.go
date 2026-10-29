@@ -17,7 +17,7 @@ func commentEditorFixture(t *testing.T) (*app, *taskOpenToolsProbeBackend, chan 
 	t.Helper()
 	s, b, updates, creation := commentComposerFixture(t)
 	s.openRequirementCommentEditor(&requirementReaderState{url: creation.url}, "comment-42")
-	state := s.commentComposers.active
+	state := s.requirementUnit.state.commentComposers.active
 	call := nextCommentComposerCall(t, b)
 	if call.action.Kind != "requirements.comment-draft" || call.action.Payload["editCommentID"] != "comment-42" || call.action.Payload["operation"] != "load" {
 		t.Fatal(call.action)
@@ -62,13 +62,13 @@ func TestCommentEditorDraftIsolationUpdateAndLateResults(t *testing.T) {
 			case "minimize":
 				state.open = false
 			case "requirement":
-				s.requirementContentJobs = &requirementContentJobState{visible: "different"}
+				s.requirementUnit.state.requirementContentJobs = &requirementContentJobState{visible: "different"}
 			case "account":
-				s.requirementIdentityJobs = &requirementIdentityJobState{confirmed: true, identity: "another", state: application.RequirementIdentityAuthenticated}
+				s.requirementUnit.state.requirementIdentityJobs = &requirementIdentityJobState{confirmed: true, identity: "another", state: application.RequirementIdentityAuthenticated}
 			case "home":
 				s.snapshot.Home += "-new"
 			case "config":
-				s.configJSON = `{"meegleExecutablePath":"new"}`
+				s.settingsUnit.state.configJSON = `{"meegleExecutablePath":"new"}`
 			}
 			s.observeRequirementCommentComposers()
 			d := state.draft
@@ -269,9 +269,7 @@ func TestCommentEditorExistingImageTopLayerZoomAndEscape(t *testing.T) {
 					s.renderCommentDraftBitmapViewer(c, p)
 					s.renderConfirmationDialog(c, p)
 				}, width, 900)
-				for _, entry := range state.markdown.inlineImages {
-					entry.loading, entry.error, entry.bitmap = false, "", bitmap
-				}
+				seedMarkdownReadyImages(t, s, state.markdown, bitmap)
 				tester.Frame()
 				if !tester.HasText("图片前文") || !tester.HasText("图片后文") {
 					t.Fatal("image positions lost in preview")
@@ -279,7 +277,7 @@ func TestCommentEditorExistingImageTopLayerZoomAndEscape(t *testing.T) {
 				if err := tester.Click("Markdown 图片：原图"); err != nil {
 					t.Fatal(err)
 				}
-				viewer := s.markdownBitmapViewer
+				viewer := s.materialsUnit.state.markdownBitmapViewer
 				if viewer == nil || viewer.composer != state {
 					t.Fatal("image rendered behind edit dialog")
 				}
@@ -302,7 +300,7 @@ func TestCommentEditorExistingImageTopLayerZoomAndEscape(t *testing.T) {
 				if b.count.Load() != 2 || state.running {
 					t.Fatal("image click passed through to update")
 				}
-				if s.markdownBitmapViewer != nil {
+				if s.materialsUnit.state.markdownBitmapViewer != nil {
 					tester.Key(0, ui.KeyEscape)
 				}
 				tester.Frame()

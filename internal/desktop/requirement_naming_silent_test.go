@@ -49,7 +49,16 @@ func TestRequirementNamingPreparationStaysSilentAndDoesNotRestartOnRender(t *tes
 			release := func() { once.Do(func() { close(backend.release) }) }
 			item := application.Requirement{ID: "1001", ProjectKey: "fixture", Project: "fixture", Type: "userstory", Title: "静默需求", URL: "https://project.feishu.cn/fixture/userstory/detail/1001"}
 			config, _ := json.Marshal(domain.DefaultAppConfig())
-			s := &app{page: "requirements", backend: backend, configJSON: string(config), requirements: []application.Requirement{item}, requirementsLoaded: true, requirementsRequested: true, lastError: "manual-visible", lastMessage: "manual-status"}
+			s := &app{
+				requirementUnit: requirementController{state: requirementState{requirements: []application.Requirement{item},
+					requirementsLoaded:    true,
+					requirementsRequested: true}},
+				settingsUnit: settingsController{state: settingsState{configJSON: string(config)}},
+				page:         "requirements",
+				backend:      backend,
+				lastError:    "manual-visible",
+				lastMessage:  "manual-status",
+			}
 			s.snapshot.Home = t.TempDir()
 			t.Cleanup(func() {
 				release()
@@ -89,15 +98,15 @@ func TestRequirementNamingPreparationStaysSilentAndDoesNotRestartOnRender(t *tes
 				tt.Frame()
 				assertQuiet()
 			}
-			if backend.calls.Load() != 1 || s.requirementNaming.queue.snapshot().Total != 1 {
+			if backend.calls.Load() != 1 || s.requirementUnit.state.requirementNaming.queue.snapshot().Total != 1 {
 				t.Fatal("render restarted or duplicated preparation")
 			}
 			release()
 			deadline := time.Now().Add(time.Second)
-			for s.requirementNaming.queue.snapshot().Running && time.Now().Before(deadline) {
+			for s.requirementUnit.state.requirementNaming.queue.snapshot().Running && time.Now().Before(deadline) {
 				time.Sleep(time.Millisecond)
 			}
-			snapshot := s.requirementNaming.queue.snapshot()
+			snapshot := s.requirementUnit.state.requirementNaming.queue.snapshot()
 			if snapshot.Running || (!fail && snapshot.Completed != 1) || (fail && len(snapshot.Failures) != 1) {
 				t.Fatalf("fake outcome %+v", snapshot)
 			}

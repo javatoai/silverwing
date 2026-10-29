@@ -33,8 +33,8 @@ func renderConfigurationFixture(tb testing.TB) *app {
 	if err := json.Unmarshal(encoded, &checked); err != nil {
 		tb.Fatal(err)
 	}
-	s.configJSON, s.snapshot.ConfigJSON = string(encoded), string(encoded)
-	s.tasks[0].requirementURL = "https://project.feishu.cn/space-0/userstory/detail/123"
+	s.settingsUnit.state.configJSON, s.snapshot.ConfigJSON = string(encoded), string(encoded)
+	s.taskUnit.state.tasks[0].requirementURL = "https://project.feishu.cn/space-0/userstory/detail/123"
 	return s
 }
 
@@ -68,30 +68,30 @@ func TestRenderConfigurationReadsTrackSourceAndLiveIdentity(t *testing.T) {
 	if !s.serviceEnabled("backend", "service-0") || s.serviceEnabled("backend", "service-1") {
 		t.Fatal("initial read projections are incorrect")
 	}
-	s.configJSON = strings.ReplaceAll(s.configJSON, "space-0", "changed-space")
-	s.configJSON = strings.ReplaceAll(s.configJSON, "/Target1", "/Target2")
-	s.configJSON = strings.Replace(s.configJSON, `"enabled":true`, `"enabled":false`, 1)
+	s.settingsUnit.state.configJSON = strings.ReplaceAll(s.settingsUnit.state.configJSON, "space-0", "changed-space")
+	s.settingsUnit.state.configJSON = strings.ReplaceAll(s.settingsUnit.state.configJSON, "/Target1", "/Target2")
+	s.settingsUnit.state.configJSON = strings.Replace(s.settingsUnit.state.configJSON, `"enabled":true`, `"enabled":false`, 1)
 	if s.serviceEnabled("backend", "service-0") || s.currentRequirementListIdentity().projects == initial.projects {
 		t.Fatal("render projections retained an earlier configuration")
 	}
 	// A mutable account status and application home must remain live even when
 	// no configuration bytes change. Async request scopes depend on these.
-	s.settingsCLIStatus = map[string]map[string]any{"meegle": {"authenticated": true, "userKey": "first"}}
+	s.settingsUnit.state.settingsCLIStatus = map[string]map[string]any{"meegle": {"authenticated": true, "userKey": "first"}}
 	identity := s.currentRequirementListIdentity()
-	s.settingsCLIStatus["meegle"]["userKey"] = "second"
+	s.settingsUnit.state.settingsCLIStatus["meegle"]["userKey"] = "second"
 	s.snapshot.Home = "changed-home"
 	changed := s.currentRequirementListIdentity()
 	if changed.account == identity.account || changed.home != "changed-home" || changed.projects != identity.projects {
 		t.Fatal("configuration caching retained live application or account state")
 	}
-	valid := s.configJSON
+	valid := s.settingsUnit.state.configJSON
 	for _, source := range []string{"", "invalid", "null"} {
-		s.configJSON = source
+		s.settingsUnit.state.configJSON = source
 		if s.showsTagNavigation() || s.currentRequirementListIdentity().projects != "[]" {
 			t.Fatalf("invalid configuration exposed earlier values: %q", source)
 		}
 	}
-	s.configJSON = valid
+	s.settingsUnit.state.configJSON = valid
 	if !s.showsTagNavigation() {
 		t.Fatal("configuration did not recover")
 	}
@@ -102,7 +102,7 @@ func BenchmarkDesktopPageConfigurationReads(b *testing.B) {
 		b.Run(page, func(b *testing.B) {
 			s := renderConfigurationFixture(b)
 			b.ReportAllocs()
-			b.ReportMetric(float64(len(s.configJSON)), "config-bytes")
+			b.ReportMetric(float64(len(s.settingsUnit.state.configJSON)), "config-bytes")
 			for b.Loop() {
 				switch page {
 				case "services":

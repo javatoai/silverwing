@@ -28,9 +28,9 @@ func newProductionBuildNavigationHarness(t *testing.T) *productionBuildNavigatio
 	t.Helper()
 	s, v, b, backend, window := productionRequestFixture(t)
 	v.Preview.MainInRelease = true
-	s.notes[0] = "unsaved navigation draft"
+	s.taskUnit.state.notes[0] = "unsaved navigation draft"
 	var config domain.AppConfig
-	if err := json.Unmarshal([]byte(s.configJSON), &config); err != nil {
+	if err := json.Unmarshal([]byte(s.settingsUnit.state.configJSON), &config); err != nil {
 		t.Fatal(err)
 	}
 	service := config.Groups[0].Services[0]
@@ -40,8 +40,8 @@ func newProductionBuildNavigationHarness(t *testing.T) *productionBuildNavigatio
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.configJSON = string(encoded)
-	s.production.configScope = productionConfigScope(s.configJSON)
+	s.settingsUnit.state.configJSON = string(encoded)
+	s.releaseUnit.state.production.configScope = productionConfigScope(s.settingsUnit.state.configJSON)
 	choice := application.Service{ID: service.ID, GroupID: v.Selection.GroupID, Name: service.DisplayName, RepositoryID: service.RepositoryID, MasterBranch: "origin/master"}
 	s.snapshot.Services = append(s.snapshot.Services, choice)
 	s.snapshot.Repositories = append(s.snapshot.Repositories, application.Repository{ID: service.RepositoryID, Name: "other-repo", RootPath: "C:/synthetic/other-repo"})
@@ -52,9 +52,9 @@ func newProductionBuildNavigationHarness(t *testing.T) *productionBuildNavigatio
 	otherPreview := *v.Preview
 	otherPreview.Target, otherPreview.ReleaseSHA = otherBatch.Target, otherBatch.ReleaseSHA
 	other := &productionView{Selection: otherBatch.Target.Selection, BatchID: otherBatch.ID, Preview: &otherPreview}
-	s.production.views[productionKey(other.Selection)] = other
-	s.production.choices = append(s.production.choices, productionChoice(choice, s.snapshot))
-	s.production.batches = append(s.production.batches, otherBatch)
+	s.releaseUnit.state.production.views[productionKey(other.Selection)] = other
+	s.releaseUnit.state.production.choices = append(s.releaseUnit.state.production.choices, productionChoice(choice, s.snapshot))
+	s.releaseUnit.state.production.batches = append(s.releaseUnit.state.production.batches, otherBatch)
 	h := &productionBuildNavigationHarness{s: s, v: v, other: other, batch: b, otherBatch: otherBatch, preview: *v.Preview, backend: backend, window: window}
 	// Both navigation controls and the build button are the real production
 	// renderers. Only the unrelated task page body is omitted from this harness.
@@ -146,7 +146,7 @@ func (h *productionBuildNavigationHarness) finishPublish(t *testing.T) {
 	if h.v.Busy || h.v.request != nil || len(h.backend.calls) != 0 || saved == nil || saved.ID != h.batch.ID || saved.Target != h.batch.Target || len(saved.Tags) != 1 || saved.Tags[0].Name != plan.Tag || saved.Tags[0].Commit != plan.Commit {
 		t.Fatal("publication was lost, replayed, or saved to the wrong batch")
 	}
-	if other == nil || other.ID != h.otherBatch.ID || other.Target != h.otherBatch.Target || other.ReleaseSHA != h.otherBatch.ReleaseSHA || len(other.Tags) != 0 || h.other.Busy || h.s.notes[0] != "unsaved navigation draft" {
+	if other == nil || other.ID != h.otherBatch.ID || other.Target != h.otherBatch.Target || other.ReleaseSHA != h.otherBatch.ReleaseSHA || len(other.Tags) != 0 || h.other.Busy || h.s.taskUnit.state.notes[0] != "unsaved navigation draft" {
 		t.Fatal("publication changed another service or the task draft")
 	}
 }
@@ -225,7 +225,7 @@ func TestProductionDispatchedPublishSurvivesNavigation(t *testing.T) {
 				h.dispatchPublish(t, "already-dispatched-token")
 				worker, generation := h.v.request, h.v.Generation
 				h.navigate(t, route, roundTrip)
-				if !h.v.Busy || h.v.request != worker || h.v.Generation != generation || worker.canceled.Load() || !h.s.productionProgressCurrent(h.s.production, h.v, worker) || !h.tester.HasText("取消") {
+				if !h.v.Busy || h.v.request != worker || h.v.Generation != generation || worker.canceled.Load() || !h.s.productionProgressCurrent(h.s.releaseUnit.state.production, h.v, worker) || !h.tester.HasText("取消") {
 					t.Fatal("navigation canceled or detached an already-dispatched publication")
 				}
 				h.finishPublish(t)

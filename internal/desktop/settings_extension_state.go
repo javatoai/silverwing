@@ -47,10 +47,10 @@ type settingsExtensionRequestState struct {
 }
 
 func (s *app) ensureSettingsExtensionRequests() *settingsExtensionRequestState {
-	if s.settingsExtensionRequests == nil {
-		s.settingsExtensionRequests = &settingsExtensionRequestState{}
+	if s.settingsUnit.state.settingsExtensionRequests == nil {
+		s.settingsUnit.state.settingsExtensionRequests = &settingsExtensionRequestState{}
 	}
-	state := s.settingsExtensionRequests
+	state := s.settingsUnit.state.settingsExtensionRequests
 	if state.readActions == nil {
 		state.readActions = make(map[string]application.Action)
 		state.readScopes = make(map[string]settingsExtensionReadScope)
@@ -135,16 +135,16 @@ func (s *app) prepareSettingsExtensionRead(action *application.Action) {
 	case "branches":
 		state.branchToken, state.branchURL, state.branchForm = token, strings.TrimSpace(payloadString(payload, "repositoryUrl")), s.form.kind
 		state.branchLoading, state.branchError = true, ""
-		s.settingsBranchChoices = nil
+		s.settingsUnit.state.settingsBranchChoices = nil
 	case "catalog":
 		state.catalogToken = token
-		s.settingsOutput = ""
+		s.settingsUnit.state.settingsOutput = ""
 	case "files":
 		state.filesToken = token
-		s.settingsSkillFilesDirectory = payloadString(payload, "directoryName")
-		s.settingsSkillFiles, s.settingsSkillFilesTruncated = nil, false
-		s.settingsOutput = ""
-		if preview := state.readActions["preview"]; preview.Kind == "skills.files/preview" && payloadString(preview.Payload, "directoryName") != s.settingsSkillFilesDirectory {
+		s.settingsUnit.state.settingsSkillFilesDirectory = payloadString(payload, "directoryName")
+		s.settingsUnit.state.settingsSkillFiles, s.settingsUnit.state.settingsSkillFilesTruncated = nil, false
+		s.settingsUnit.state.settingsOutput = ""
+		if preview := state.readActions["preview"]; preview.Kind == "skills.files/preview" && payloadString(preview.Payload, "directoryName") != s.settingsUnit.state.settingsSkillFilesDirectory {
 			s.invalidateSettingsExtensionRead("preview", "")
 		}
 	default:
@@ -153,14 +153,14 @@ func (s *app) prepareSettingsExtensionRead(action *application.Action) {
 		state.previewMarkdown = nil
 		state.previewPluginSkills = nil
 		state.previewPath = ""
-		s.settingsSkillPreviewText = ""
-		s.settingsSkillPreviewName = firstNonEmpty(payloadString(payload, "relativePath"), payloadString(payload, "skillName"), payloadString(payload, "name"), "Skill 预览")
-		s.settingsSkillPreviewOpen = true
+		s.settingsUnit.state.settingsSkillPreviewText = ""
+		s.settingsUnit.state.settingsSkillPreviewName = firstNonEmpty(payloadString(payload, "relativePath"), payloadString(payload, "skillName"), payloadString(payload, "name"), "Skill 预览")
+		s.settingsUnit.state.settingsSkillPreviewOpen = true
 	}
 }
 
 func (s *app) settingsExtensionActionRelevant(action application.Action) bool {
-	state := s.settingsExtensionRequests
+	state := s.settingsUnit.state.settingsExtensionRequests
 	if state == nil || !settingsExtensionRead(action) {
 		return false
 	}
@@ -176,14 +176,14 @@ func (s *app) settingsExtensionActionRelevant(action application.Action) bool {
 	case "catalog", "workspace-tools":
 		return true
 	case "files":
-		return s.settingsSkillFilesDirectory == payloadString(action.Payload, "directoryName")
+		return s.settingsUnit.state.settingsSkillFilesDirectory == payloadString(action.Payload, "directoryName")
 	default:
-		return s.settingsSkillPreviewOpen
+		return s.settingsUnit.state.settingsSkillPreviewOpen
 	}
 }
 
 func (s *app) cancelSettingsExtensionRead(token string) {
-	state := s.settingsExtensionRequests
+	state := s.settingsUnit.state.settingsExtensionRequests
 	if state == nil || state.jobs == nil || token == "" {
 		return
 	}
@@ -197,7 +197,7 @@ func (s *app) cancelSettingsExtensionRead(token string) {
 }
 
 func (s *app) invalidateSettingsExtensionRead(key, reason string) {
-	state := s.settingsExtensionRequests
+	state := s.settingsUnit.state.settingsExtensionRequests
 	if state == nil {
 		return
 	}
@@ -210,27 +210,27 @@ func (s *app) invalidateSettingsExtensionRead(key, reason string) {
 		state.workspaceTools = nil
 	case "branches":
 		state.branchToken, state.branchLoading, state.branchError = "", false, reason
-		s.settingsBranchChoices = nil
+		s.settingsUnit.state.settingsBranchChoices = nil
 	case "catalog":
 		state.catalogToken = ""
 	case "files":
 		state.filesToken = ""
-		s.settingsSkillFiles, s.settingsSkillFilesDirectory, s.settingsSkillFilesTruncated = nil, "", false
+		s.settingsUnit.state.settingsSkillFiles, s.settingsUnit.state.settingsSkillFilesDirectory, s.settingsUnit.state.settingsSkillFilesTruncated = nil, "", false
 	default:
 		state.previewToken, state.previewLoading, state.previewError = "", false, reason
 		closeMarkdownPreviewState(state.previewMarkdown)
 		state.previewMarkdown = nil
 		state.previewPluginSkills = nil
 		state.previewPath = ""
-		s.settingsSkillPreviewText = ""
+		s.settingsUnit.state.settingsSkillPreviewText = ""
 		if reason == "" {
-			s.settingsSkillPreviewOpen = false
+			s.settingsUnit.state.settingsSkillPreviewOpen = false
 		}
 	}
 }
 
 func (s *app) observeSettingsExtensionRequests() {
-	state := s.settingsExtensionRequests
+	state := s.settingsUnit.state.settingsExtensionRequests
 	if state == nil {
 		return
 	}
@@ -238,7 +238,7 @@ func (s *app) observeSettingsExtensionRequests() {
 		if settingsExtensionReadToken(state, key) != "" && !s.settingsExtensionActionRelevant(action) {
 			reason := ""
 			previous := state.readScopes[key]
-			if previous.page == s.page && previous.settingsPage == s.settingsPage && (previous.home != s.snapshot.Home || previous.config != s.configJSON) {
+			if previous.page == s.page && previous.settingsPage == s.settingsUnit.state.settingsPage && (previous.home != s.snapshot.Home || previous.config != s.settingsUnit.state.configJSON) {
 				reason = "应用或扩展配置已变化，请重新读取。"
 			}
 			s.invalidateSettingsExtensionRead(key, reason)
@@ -251,7 +251,7 @@ func (s *app) resetSettingsExtensionForm() {
 	s.invalidateSettingsExtensionRead("branches", "")
 	state.branchToken, state.branchURL, state.branchForm = "", "", ""
 	state.branchLoading, state.branchError = false, ""
-	s.settingsBranchChoices = nil
+	s.settingsUnit.state.settingsBranchChoices = nil
 }
 
 func (s *app) applySettingsExtensionFailure(action application.Action, err error) bool {
@@ -266,7 +266,7 @@ func (s *app) applySettingsExtensionFailure(action application.Action, err error
 		case "branches":
 			state.branchLoading, state.branchError = false, err.Error()
 		case "catalog", "files":
-			s.settingsOutput = err.Error()
+			s.settingsUnit.state.settingsOutput = err.Error()
 		default:
 			state.previewLoading, state.previewError = false, err.Error()
 		}
@@ -283,16 +283,16 @@ func (s *app) applySettingsExtensionPreview(action application.Action, result ap
 	closeMarkdownPreviewState(state.previewMarkdown)
 	state.previewMarkdown = nil
 	state.previewPluginSkills = nil
-	s.settingsSkillPreviewName = firstNonEmpty(dataString(result.Data, "name"), payloadString(action.Payload, "relativePath"), payloadString(action.Payload, "skillName"), payloadString(action.Payload, "name"))
-	s.settingsSkillPreviewText = resultText(result)
+	s.settingsUnit.state.settingsSkillPreviewName = firstNonEmpty(dataString(result.Data, "name"), payloadString(action.Payload, "relativePath"), payloadString(action.Payload, "skillName"), payloadString(action.Payload, "name"))
+	s.settingsUnit.state.settingsSkillPreviewText = resultText(result)
 	if data, ok := result.Data.(map[string]any); ok {
 		if text, ok := data["text"].(string); ok {
-			s.settingsSkillPreviewText = text
+			s.settingsUnit.state.settingsSkillPreviewText = text
 		}
 	}
 	state.previewPath = dataString(result.Data, "path")
 	if strings.HasPrefix(action.Kind, "codex.extensions/plugin/") {
-		s.settingsSkillPreviewText = pluginPreviewText(result.Data)
+		s.settingsUnit.state.settingsSkillPreviewText = pluginPreviewText(result.Data)
 	}
 	if action.Kind == "codex.extensions/plugin/preview" {
 		seen := make(map[string]bool)
@@ -305,7 +305,7 @@ func (s *app) applySettingsExtensionPreview(action application.Action, result ap
 		for _, skill := range mapsFromData(dataValue(result.Data, "skills")) {
 			add(mapString(skill, "name"))
 		}
-		for _, marketplace := range s.settingsMarketplaces {
+		for _, marketplace := range s.settingsUnit.state.settingsMarketplaces {
 			if mapString(mapData(marketplace["source"]), "id") != payloadString(action.Payload, "sourceId") {
 				continue
 			}
@@ -318,25 +318,25 @@ func (s *app) applySettingsExtensionPreview(action application.Action, result ap
 			}
 		}
 	}
-	markdown := action.Kind != "skills.files/preview" || strings.HasSuffix(strings.ToLower(s.settingsSkillPreviewName), ".md")
+	markdown := action.Kind != "skills.files/preview" || strings.HasSuffix(strings.ToLower(s.settingsUnit.state.settingsSkillPreviewName), ".md")
 	if markdown {
-		state.previewMarkdown = newReadonlyMarkdownState("extension-preview:"+state.previewToken, s.settingsSkillPreviewText, nil)
+		state.previewMarkdown = newReadonlyMarkdownState("extension-preview:"+state.previewToken, s.settingsUnit.state.settingsSkillPreviewText, nil)
 		switch action.Kind {
 		case "skills.preview", "codex.extensions/plugin/skill-preview":
 			if state.previewPath != "" {
-				bindSkillMarkdownPreviewImages(state.previewMarkdown, state.previewPath, filepath.Dir(state.previewPath))
+				bindSkillMarkdownPreviewImages(state.previewMarkdown, state.previewPath, filepath.Dir(state.previewPath), s.settingsUnit.previewResourceResolver())
 			}
 		case "skills.files/preview":
-			if s.settingsSkillRoot != "" {
-				root := filepath.Join(s.settingsSkillRoot, payloadString(action.Payload, "directoryName"))
-				bindSkillMarkdownPreviewImages(state.previewMarkdown, filepath.Join(root, filepath.FromSlash(payloadString(action.Payload, "relativePath"))), root)
+			if s.settingsUnit.state.settingsSkillRoot != "" {
+				root := filepath.Join(s.settingsUnit.state.settingsSkillRoot, payloadString(action.Payload, "directoryName"))
+				bindSkillMarkdownPreviewImages(state.previewMarkdown, filepath.Join(root, filepath.FromSlash(payloadString(action.Payload, "relativePath"))), root, s.settingsUnit.previewResourceResolver())
 			}
 		}
 	}
 }
 
 func (s *app) settingsExtensionPreviewRetryAction() (application.Action, bool) {
-	state := s.settingsExtensionRequests
+	state := s.settingsUnit.state.settingsExtensionRequests
 	if state == nil || state.previewLoading || state.previewError == "" {
 		return application.Action{}, false
 	}
@@ -345,7 +345,7 @@ func (s *app) settingsExtensionPreviewRetryAction() (application.Action, bool) {
 }
 
 func (s *app) navigateSettingsPluginPreview(skillName string) {
-	state := s.settingsExtensionRequests
+	state := s.settingsUnit.state.settingsExtensionRequests
 	if state == nil || state.previewLoading || state.previewError != "" {
 		return
 	}

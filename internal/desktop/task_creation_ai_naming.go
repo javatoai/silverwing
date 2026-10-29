@@ -44,10 +44,10 @@ type taskCreationAINamingRequest struct {
 // configuration, home directory, or Meegle identity changes. Name and branch
 // edits intentionally do not change this scope: ApplyAINaming preserves them.
 func (s *app) ensureTaskCreationAINamingScope() *taskCreationAINamingState {
-	if s == nil || s.taskCreation == nil {
+	if s == nil || s.taskUnit.state.taskCreation == nil {
 		return nil
 	}
-	form := s.taskCreation
+	form := s.taskUnit.state.taskCreation
 	state := form.aiNaming
 	if state == nil {
 		state = &taskCreationAINamingState{}
@@ -62,7 +62,7 @@ func (s *app) ensureTaskCreationAINamingScope() *taskCreationAINamingState {
 		return state
 	}
 	if state.scope != next {
-		s.cancelTaskCreationAINamingRequest(form, state)
+		s.taskUnit.cancelTaskCreationAINamingRequest(form, state)
 		state.scope = next
 	}
 	return state
@@ -77,7 +77,7 @@ func (s *app) taskCreationAINamingScope(form *taskCreationState) taskCreationAIN
 }
 
 func (s *app) requestTaskCreationAINamingJob(force bool) {
-	form := s.taskCreation
+	form := s.taskUnit.state.taskCreation
 	if form == nil {
 		return
 	}
@@ -90,7 +90,7 @@ func (s *app) requestTaskCreationAINamingJob(force bool) {
 	action := application.Action{Kind: "requirements.ai-name", Payload: map[string]any{
 		"requirementLink": link, "requestLink": link, "taskCreateToken": form.token, "force": force,
 	}}
-	s.cancelTaskCreationAINamingRequest(form, state)
+	s.taskUnit.cancelTaskCreationAINamingRequest(form, state)
 	if s.backend == nil {
 		s.taskCreationActionError(action, errors.New("AI 命名服务不可用。"))
 		return
@@ -165,8 +165,8 @@ func runTaskCreationAINamingRequest(backend application.Backend, request *taskCr
 
 func (s *app) finishTaskCreationAINaming(request *taskCreationAINamingRequest, result application.ActionResult, requestErr error) {
 	if !s.taskCreationAINamingRequestRelevant(request) {
-		if s != nil && request != nil && s.taskCreation == request.form && request.form.aiNaming != nil && request.form.aiNaming.request == request {
-			s.cancelTaskCreationAINamingRequest(request.form, request.form.aiNaming)
+		if s != nil && request != nil && s.taskUnit.state.taskCreation == request.form && request.form.aiNaming != nil && request.form.aiNaming.request == request {
+			s.taskUnit.cancelTaskCreationAINamingRequest(request.form, request.form.aiNaming)
 		}
 		return
 	}
@@ -187,7 +187,7 @@ func (s *app) taskCreationAINamingRequestRelevant(request *taskCreationAINamingR
 	if s == nil || request == nil || request.ctx == nil || request.ctx.Err() != nil || s.win == nil || s.win.IsDestroyed() {
 		return false
 	}
-	form := s.taskCreation
+	form := s.taskUnit.state.taskCreation
 	if form == nil || form != request.form || form.aiNaming == nil || form.aiNaming.closed ||
 		form.token != request.token || s.snapshot.Home != request.home || form.draft.RequirementLink != request.link ||
 		taskCreationRequirementsConfigFingerprint(s.snapshot.ConfigJSON, form.config) != request.config ||
@@ -198,7 +198,7 @@ func (s *app) taskCreationAINamingRequestRelevant(request *taskCreationAINamingR
 	return state.request == request && state.generation == request.generation
 }
 
-func (s *app) cancelTaskCreationAINamingRequest(form *taskCreationState, state *taskCreationAINamingState) {
+func (s *taskController) cancelTaskCreationAINamingRequest(form *taskCreationState, state *taskCreationAINamingState) {
 	if state == nil {
 		if form != nil {
 			form.aiPending = false
@@ -215,19 +215,19 @@ func (s *app) cancelTaskCreationAINamingRequest(form *taskCreationState, state *
 	}
 }
 
-func (s *app) cancelTaskCreationAINaming() {
-	if s == nil || s.taskCreation == nil {
+func (s *taskController) cancelTaskCreationAINaming() {
+	if s == nil || s.state.taskCreation == nil {
 		return
 	}
-	form := s.taskCreation
+	form := s.state.taskCreation
 	s.cancelTaskCreationAINamingRequest(form, form.aiNaming)
 }
 
-func (s *app) closeTaskCreationAINaming() {
-	if s == nil || s.taskCreation == nil {
+func (s *taskController) closeTaskCreationAINaming() {
+	if s == nil || s.state.taskCreation == nil {
 		return
 	}
-	form := s.taskCreation
+	form := s.state.taskCreation
 	state := form.aiNaming
 	if state != nil {
 		state.closed = true

@@ -2,12 +2,10 @@ package application
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
 
-	"silverwing-go/internal/domain"
 	"silverwing-go/internal/integrations"
 )
 
@@ -16,6 +14,29 @@ func (a *App) integrationAction(ctx context.Context, action Action) (ActionResul
 }
 
 func (a *App) integrationActionWithRequirementProgress(ctx context.Context, action Action, progress func(RequirementListProgress)) (ActionResult, error) {
+	switch action.Kind {
+	case "requirements.list", "requirements.refresh":
+		request, err := RequirementListRequestFromAction(action)
+		if err != nil {
+			return ActionResult{}, err
+		}
+		result, err := a.ReadRequirementList(ctx, request, progress)
+		return result.ToActionResult(), err
+	case "requirements.read":
+		request, err := RequirementReadRequestFromAction(action)
+		if err != nil {
+			return ActionResult{}, err
+		}
+		result, err := a.ReadRequirement(ctx, request)
+		return result.ToActionResult(), err
+	case "requirements.comments":
+		request, err := RequirementReadRequestFromAction(action)
+		if err != nil {
+			return ActionResult{}, err
+		}
+		result, err := a.ReadRequirementComments(ctx, request)
+		return result.ToActionResult(), err
+	}
 	payload, err := a.integrationActionPayload(action)
 	if err != nil {
 		return ActionResult{}, err
@@ -26,8 +47,7 @@ func (a *App) integrationActionWithRequirementProgress(ctx context.Context, acti
 	var data any
 	if action.Kind == "requirements.candidates" {
 		data, err = a.Integrations.ReadRequirementCandidates(ctx, payload)
-	} else if progress != nil && (action.Kind == "requirements.list" || action.Kind == "requirements.refresh") {
-		data, err = a.Integrations.ReadRequirementListWithProgress(ctx, action.Kind, payload, progress)
+
 	} else {
 		data, err = a.Integrations.Execute(ctx, action.Kind, payload)
 	}
@@ -61,37 +81,7 @@ func (a *App) integrationActionWithRequirementProgress(ctx context.Context, acti
 			result.Message = "需求候选已读取，部分查询失败；请查看失败说明"
 		}
 	}
-	if action.Kind == "requirements.list" || action.Kind == "requirements.refresh" {
-		encoded, e := json.Marshal(data)
-		if e != nil {
-			return ActionResult{}, e
-		}
-		var query struct {
-			Items    []domain.ParticipatedWorkItem `json:"items"`
-			Failures []string                      `json:"failures"`
-		}
-		if e = json.Unmarshal(encoded, &query); e != nil {
-			return ActionResult{}, e
-		}
-		var object map[string]any
-		if e = json.Unmarshal(encoded, &object); e != nil {
-			return ActionResult{}, e
-		}
-		items := make([]Requirement, 0, len(query.Items))
-		for _, item := range query.Items {
-			participants := []string{}
-			for _, person := range append(append(append([]domain.RequirementPerson{}, item.Developers...), item.QCOwners...), item.ProductManagers...) {
-				participants = append(participants, person.Name)
-			}
-			items = append(items, Requirement{ID: item.ID, Title: item.Title, Project: item.ProjectName, ProjectKey: item.ProjectKey, Type: item.Type, TypeLabel: item.TypeLabel, URL: item.URL, Status: value(item.Status), Participants: participants, WorkItem: item})
-		}
-		object["items"] = items
-		result.Data = object
-		result.Message = "参与的工作项已读取"
-		if len(query.Failures) > 0 {
-			result.Message = "工作项已读取，部分查询失败；请查看失败说明"
-		}
-	}
+
 	return result, nil
 }
 

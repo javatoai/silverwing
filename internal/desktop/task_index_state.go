@@ -18,14 +18,14 @@ type taskIndexBrowsingState struct {
 }
 
 func (s *app) taskIndexBrowsingFor(archived bool) *taskIndexBrowsingState {
-	if s.taskIndexes == nil {
-		s.taskIndexes = make(map[bool]*taskIndexBrowsingState)
+	if s.taskUnit.state.taskIndexes == nil {
+		s.taskUnit.state.taskIndexes = make(map[bool]*taskIndexBrowsingState)
 	}
-	if state := s.taskIndexes[archived]; state != nil {
+	if state := s.taskUnit.state.taskIndexes[archived]; state != nil {
 		return state
 	}
 	state := &taskIndexBrowsingState{}
-	s.taskIndexes[archived] = state
+	s.taskUnit.state.taskIndexes[archived] = state
 	return state
 }
 

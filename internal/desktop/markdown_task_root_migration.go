@@ -89,17 +89,17 @@ func (p *markdownTaskRootMigrationPlan) committedResult(result application.Actio
 }
 
 func (s *app) hasPendingTaskMarkdownMigrationSource() bool {
-	if s.markdown != nil && s.markdown.doc != nil && !s.markdown.closed && (s.documentDirty || s.markdown.doc.Composing()) {
+	if s.materialsUnit.state.markdown != nil && s.materialsUnit.state.markdown.doc != nil && !s.materialsUnit.state.markdown.closed && (s.materialsUnit.state.documentDirty || s.materialsUnit.state.markdown.doc.Composing()) {
 		return true
 	}
-	s.documentSaveMu.Lock()
-	defer s.documentSaveMu.Unlock()
-	for key, ref := range s.documentSaveRefs {
+	s.materialsUnit.state.documentSaveMu.Lock()
+	defer s.materialsUnit.state.documentSaveMu.Unlock()
+	for key, ref := range s.materialsUnit.state.documentSaveRefs {
 		if ref.taskID == "" || ref.kind == "instruction" && ref.scope != "" {
 			continue
 		}
-		if s.markdownAutosave != nil {
-			status := s.markdownAutosave.Status(key)
+		if s.materialsUnit.state.markdownAutosave != nil {
+			status := s.materialsUnit.state.markdownAutosave.Status(key)
 			if status.Dirty || status.Saving || status.Composing {
 				return true
 			}
@@ -112,7 +112,7 @@ func (s *app) hasPendingTaskMarkdownMigrationSource() bool {
 // Unplanned inert callers are retained only when no task source is pending.
 func (s *app) captureMarkdownTaskRootMigration(action application.Action) (*markdownTaskRootMigrationPlan, error) {
 	if action.Kind == "config.task-root.save" {
-		if s.pendingTaskRootMigration != nil || s.hasPendingTaskMarkdownMigrationSource() {
+		if s.materialsUnit.state.pendingTaskRootMigration != nil || s.hasPendingTaskMarkdownMigrationSource() {
 			return nil, errors.New("Markdown 任务目录迁移或保存尚未完成，不能直接切换任务存放目录")
 		}
 		return nil, nil
@@ -120,7 +120,7 @@ func (s *app) captureMarkdownTaskRootMigration(action application.Action) (*mark
 	if action.Kind != "migration.apply" {
 		return nil, nil
 	}
-	if s.pendingTaskRootMigration != nil {
+	if s.materialsUnit.state.pendingTaskRootMigration != nil {
 		return nil, errors.New("任务目录恢复尚未完成，请先完成恢复再迁移任务目录")
 	}
 	if action.Payload["plan"] == nil {
@@ -147,8 +147,8 @@ func (s *app) captureMarkdownTaskRootMigration(action application.Action) (*mark
 	if err := json.Unmarshal(encoded, &preview); err != nil {
 		return nil, err
 	}
-	plan := &markdownTaskRootMigrationPlan{home: s.snapshot.Home, preview: preview, autosave: s.markdownAutosave, moves: map[string]string{}}
-	if matched, err := plan.matchesConfigJSON(s.configJSON, false); err != nil || !matched {
+	plan := &markdownTaskRootMigrationPlan{home: s.snapshot.Home, preview: preview, autosave: s.materialsUnit.state.markdownAutosave, moves: map[string]string{}}
+	if matched, err := plan.matchesConfigJSON(s.settingsUnit.state.configJSON, false); err != nil || !matched {
 		return nil, errors.New("当前任务和资料根目录已变化，请重新预览迁移")
 	}
 	seenSources, seenTargets := map[string]bool{}, map[string]bool{}
@@ -162,7 +162,7 @@ func (s *app) captureMarkdownTaskRootMigration(action application.Action) (*mark
 		}
 		seenSources[source], seenTargets[target] = true, true
 	}
-	for _, item := range s.tasks {
+	for _, item := range s.taskUnit.state.tasks {
 		_, changed, err := workspace.RebaseTaskRootMigrationPath(item.path, preview.PathMappings)
 		if err != nil {
 			return nil, err
@@ -178,12 +178,12 @@ func (s *app) captureMarkdownTaskRootMigration(action application.Action) (*mark
 		return nil, err
 	}
 	s.observeReadingSession()
-	s.documentSaveMu.Lock()
-	refs := make(map[string]documentSaveRef, len(s.documentSaveRefs))
-	for key, ref := range s.documentSaveRefs {
+	s.materialsUnit.state.documentSaveMu.Lock()
+	refs := make(map[string]documentSaveRef, len(s.materialsUnit.state.documentSaveRefs))
+	for key, ref := range s.materialsUnit.state.documentSaveRefs {
 		refs[key] = ref
 	}
-	s.documentSaveMu.Unlock()
+	s.materialsUnit.state.documentSaveMu.Unlock()
 	destinations := map[string]bool{}
 	keys := map[string]bool{}
 	for key, ref := range refs {
@@ -279,13 +279,13 @@ func (s *app) captureMarkdownTaskRootMigration(action application.Action) (*mark
 
 func (s *app) flushMarkdownTaskRootMigrationInputs(plan *markdownTaskRootMigrationPlan) error {
 	for _, owner := range plan.tasks {
-		if owner.id != s.currentTask().id {
+		if owner.id != s.taskUnit.currentTask().id {
 			continue
 		}
-		if err := s.captureMarkdownEditorInput(s.markdown); err != nil {
+		if err := s.captureMarkdownEditorInput(s.materialsUnit.state.markdown); err != nil {
 			return err
 		}
-		if notes := s.taskNotesUI; notes != nil && notes.activeKind == "task" {
+		if notes := s.taskUnit.state.taskNotesUI; notes != nil && notes.activeKind == "task" {
 			if err := s.captureMarkdownEditorInput(notes.activeMarkdown); err != nil {
 				return err
 			}
@@ -355,27 +355,27 @@ func (l *markdownTaskRootMigrationLease) Complete(result application.ActionResul
 	if s == nil || normalizeIdentityPath(s.snapshot.Home) != normalizeIdentityPath(l.plan.home) {
 		return fail(errors.New("任务迁移期间桌面身份已变化"))
 	}
-	if matches, err := l.plan.matchesConfigJSON(s.configJSON, false); err != nil || !matches {
+	if matches, err := l.plan.matchesConfigJSON(s.settingsUnit.state.configJSON, false); err != nil || !matches {
 		return fail(errors.New("任务迁移期间配置身份已变化"))
 	}
 	for _, captured := range l.plan.tasks {
-		current := s.taskByID(captured.id)
+		current := s.taskUnit.taskByID(captured.id)
 		if !sameTaskLifecycleSelection(current, captured) {
 			return fail(errors.New("任务迁移期间任务身份已变化"))
 		}
 	}
 	updates := append([]markdownTaskRootMigrationEntry(nil), l.plan.entries...)
-	s.documentSaveMu.Lock()
+	s.materialsUnit.state.documentSaveMu.Lock()
 	for index := range updates {
-		current, exists := s.documentSaveRefs[updates[index].oldKey]
+		current, exists := s.materialsUnit.state.documentSaveRefs[updates[index].oldKey]
 		if !exists || !sameMarkdownMigrationRefOwner(current, updates[index].before) {
-			s.documentSaveMu.Unlock()
+			s.materialsUnit.state.documentSaveMu.Unlock()
 			return fail(errors.New("任务迁移期间 Markdown 保存身份已变化"))
 		}
 		// A save already running at Capture may have advanced its disk baseline.
 		updates[index].after.hash, updates[index].after.overwrite = current.hash, current.overwrite
 	}
-	s.documentSaveMu.Unlock()
+	s.materialsUnit.state.documentSaveMu.Unlock()
 	uiState, err := s.buildMarkdownTaskRootMigrationUI(l.plan)
 	if err != nil {
 		return fail(err)
@@ -389,14 +389,14 @@ func (l *markdownTaskRootMigrationLease) Complete(result application.ActionResul
 			return fail(err)
 		}
 	}
-	s.documentSaveMu.Lock()
+	s.materialsUnit.state.documentSaveMu.Lock()
 	for _, entry := range updates {
-		delete(s.documentSaveRefs, entry.oldKey)
+		delete(s.materialsUnit.state.documentSaveRefs, entry.oldKey)
 	}
 	for _, entry := range updates {
-		s.documentSaveRefs[entry.newKey] = entry.after
+		s.materialsUnit.state.documentSaveRefs[entry.newKey] = entry.after
 	}
-	s.documentSaveMu.Unlock()
+	s.materialsUnit.state.documentSaveMu.Unlock()
 	s.applyMarkdownTaskRootMigrationUI(l.plan, uiState)
 	if err := s.applyMarkdownTaskRootReadingRelocation(reading); err != nil {
 		return fail(fmt.Errorf("任务目录已迁移，但阅读状态缓存保存失败：%w", err))

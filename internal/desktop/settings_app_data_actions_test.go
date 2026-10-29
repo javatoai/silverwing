@@ -47,7 +47,10 @@ func (backend *settingsSystemBackend) ReadRichClipboard() (application.RichClipb
 func TestSettingsAppDataActionsUseCurrentHome(test *testing.T) {
 	root := test.TempDir()
 	backend := &settingsSystemBackend{actions: make(chan application.Action, 4)}
-	state := &app{backend: backend, configJSON: `{"taskRoot":"D:/tasks","repositoryRoot":"D:/repositories"}`}
+	state := &app{
+		settingsUnit: settingsController{state: settingsState{configJSON: `{"taskRoot":"D:/tasks","repositoryRoot":"D:/repositories"}`}},
+		backend:      backend,
+	}
 	state.snapshot.Home = filepath.Join(root, "SilverWing 应用数据")
 	test.Cleanup(func() {
 		deadline, cancel := context.WithTimeout(context.Background(), time.Second)

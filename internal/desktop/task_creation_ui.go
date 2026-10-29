@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/egoist/mygo/ui"
-	"silverwing-go/internal/application"
-	"silverwing-go/internal/domain"
-	"silverwing-go/internal/workspace"
 	"strings"
 	"sync/atomic"
+
+	"github.com/egoist/mygo/ui"
+
+	"silverwing-go/internal/application"
+	"silverwing-go/internal/domain"
+	"silverwing-go/internal/productprofile"
+	"silverwing-go/internal/workspace"
 )
 
 type taskCreationState struct {
@@ -49,10 +52,10 @@ func (s *app) initTaskCreation(title, requirementTitle, requirementURL string) {
 	if err != nil {
 		state.configError = "无法读取当前配置：" + err.Error()
 	}
-	if s.settingsTemplatesLoaded {
-		state.templates = taskTemplatesFromMaps(s.settingsTemplates)
+	if s.settingsUnit.state.settingsTemplatesLoaded {
+		state.templates = taskTemplatesFromMaps(s.settingsUnit.state.settingsTemplates)
 	}
-	s.taskCreation = state
+	s.taskUnit.state.taskCreation = state
 }
 func taskTemplatesFromMaps(items []map[string]any) []domain.AgentTaskTemplate {
 	result := []domain.AgentTaskTemplate{}
@@ -65,13 +68,13 @@ func taskTemplatesFromMaps(items []map[string]any) []domain.AgentTaskTemplate {
 	return result
 }
 func (s *app) loadTaskCreationTemplates() {
-	if state := s.taskCreation; state != nil && !state.templatesLoading {
+	if state := s.taskUnit.state.taskCreation; state != nil && !state.templatesLoading {
 		state.templatesLoading = true
 		s.act("instructions.templates.list", "", "", "", "", "", map[string]any{"taskCreateToken": state.token})
 	}
 }
 func (s *app) syncTaskCreationDraft() {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return
 	}
@@ -90,13 +93,13 @@ func (s *app) syncTaskCreationDraft() {
 	}
 }
 func (s *app) invalidateTaskCreationPreview(_ string) {
-	if s.taskCreation != nil {
-		s.taskCreation.inlineError = ""
+	if s.taskUnit.state.taskCreation != nil {
+		s.taskUnit.state.taskCreation.inlineError = ""
 	}
 }
 func (s *app) requestTaskCreationAINaming(force bool) { s.requestTaskCreationAINamingJob(force) }
 func (s *app) taskCreationValidationFailure() (string, *taskCreationValidationTarget) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return "任务表单已关闭", nil
 	}
@@ -121,7 +124,7 @@ func (s *app) taskCreationPayload() (map[string]any, error) {
 	if message, _ := s.taskCreationValidationFailure(); message != "" {
 		return nil, fmt.Errorf("%s", message)
 	}
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	ids := []string{}
 	if taskCreationCodexEnabled(state) && state.openCodex {
 		ids = append(ids, "codex")
@@ -136,15 +139,15 @@ func taskCreationCodexEnabled(state *taskCreationState) bool {
 func (s *app) beginTaskCreationPreview() bool {
 	payload, err := s.taskCreationPayload()
 	if err != nil {
-		s.taskCreation.inlineError = err.Error()
+		s.taskUnit.state.taskCreation.inlineError = err.Error()
 		return false
 	}
 	if s.busy {
 		return false
 	}
 	s.cancelTaskCreationAINaming()
-	s.taskCreation.phase = "creating"
-	s.taskCreation.progressMessage = "正在创建任务…"
+	s.taskUnit.state.taskCreation.phase = "creating"
+	s.taskUnit.state.taskCreation.progressMessage = "正在创建任务…"
 	s.act("task.create", "", "", "", "", "", payload)
 	return true
 }
@@ -167,7 +170,7 @@ func decodeTaskCreationResult[T any](data any) (value T, err error) {
 	return
 }
 func (s *app) taskCreationActionResult(action application.Action, result application.ActionResult) bool {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil || payloadString(action.Payload, "taskCreateToken") != state.token {
 		return payloadString(action.Payload, "taskCreateToken") != "" && taskCreationOwnedAction(action.Kind)
 	}
@@ -198,17 +201,17 @@ func (s *app) taskCreationActionResult(action application.Action, result applica
 	case "task.create":
 		s.closeTaskCreationRequirements()
 		s.closeTaskCreationAINaming()
-		s.taskCreation = nil
+		s.taskUnit.state.taskCreation = nil
 		s.dialogOpen = false
 		s.form = actionForm{}
 		s.lastMessage = result.Message
-		s.taskCreationWarning = result.Text
+		s.taskUnit.state.taskCreationWarning = result.Text
 		return true
 	}
 	return false
 }
 func (s *app) taskCreationActionError(action application.Action, cause error) bool {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil || payloadString(action.Payload, "taskCreateToken") != state.token {
 		return payloadString(action.Payload, "taskCreateToken") != "" && taskCreationOwnedAction(action.Kind)
 	}
@@ -229,7 +232,7 @@ func (s *app) taskCreationActionError(action application.Action, cause error) bo
 	return false
 }
 func (s *app) requestTaskCreationDismiss() {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return
 	}
@@ -238,7 +241,7 @@ func (s *app) requestTaskCreationDismiss() {
 	}
 	if strings.TrimSpace(state.notes) != "" {
 		s.confirmNative("关闭创建任务", "未保存的任务说明将丢失。", state.draft.TaskName, func() {
-			if s.taskCreation == state {
+			if s.taskUnit.state.taskCreation == state {
 				s.discardTaskCreation(state)
 			}
 		})
@@ -247,17 +250,17 @@ func (s *app) requestTaskCreationDismiss() {
 	s.discardTaskCreation(state)
 }
 func (s *app) discardTaskCreation(state *taskCreationState) {
-	if s.taskCreation != state {
+	if s.taskUnit.state.taskCreation != state {
 		return
 	}
 	s.closeTaskCreationRequirements()
 	s.closeTaskCreationAINaming()
-	s.taskCreation = nil
+	s.taskUnit.state.taskCreation = nil
 	s.dialogOpen = false
 	s.form = actionForm{}
 }
 func (s *app) renderTaskCreationDialog(c *ui.Context, p palette) bool {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil || !s.dialogOpen || s.form.mode != "task-create" {
 		return false
 	}
@@ -265,7 +268,7 @@ func (s *app) renderTaskCreationDialog(c *ui.Context, p palette) bool {
 	s.ensureTaskCreationAINamingScope()
 	if !state.initialized && s.backend != nil && s.win != nil && !s.win.IsDestroyed() {
 		state.initialized = true
-		if !s.settingsTemplatesLoaded {
+		if !s.settingsUnit.state.settingsTemplatesLoaded {
 			s.loadTaskCreationTemplates()
 		}
 		s.requestTaskCreationAINaming(false)
@@ -274,8 +277,8 @@ func (s *app) renderTaskCreationDialog(c *ui.Context, p palette) bool {
 	ui.DialogBase(c.Key("task-create-dialog"), &open, func(backdrop, panel ui.Element) {
 		backdrop.Background(ui.RGBA(0, 0, 0, 0.32))
 		w, h := c.Size()
-		panel.Width(min(760, w-32)).MaxHeight(h-32).Padding(20).Gap(12).Background(p.surface).Border(1, p.line).Radius(16).Label("创建产品任务").Children(func() {
-			label(c, "创建产品任务", 20, p.text).FontWeight(600)
+		panel.Width(min(760, w-32)).MaxHeight(h-32).Padding(20).Gap(12).Background(p.surface).Border(1, p.line).Radius(16).Label("创建" + productprofile.TaskKindLabel).Children(func() {
+			label(c, "创建"+productprofile.TaskKindLabel, 20, p.text).FontWeight(600)
 			ui.Scroll(c).FillWidth().MaxHeight(max(180, h-220)).Gap(12).Disabled(state.phase == "creating").Children(func() {
 				s.renderTaskCreationRequirements(c, p)
 				label(c, "任务名称 / 文件夹名", 12, p.muted)
@@ -364,7 +367,7 @@ func taskCreationSelectedTemplateID(notes string, templates []domain.AgentTaskTe
 }
 
 func (s *app) toggleTaskCreationTemplate(template domain.AgentTaskTemplate) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil || state.phase != "editing" {
 		return
 	}
@@ -395,14 +398,14 @@ func (s *app) toggleTaskCreationTemplate(template domain.AgentTaskTemplate) {
 	}
 	notes, selection := state.notes, state.selectedTemplate
 	s.confirmNative("使用说明模板", "当前说明内容将被替换。", template.Name, func() {
-		if s.taskCreation == state && state.phase == "editing" && state.notes == notes && state.selectedTemplate == selection {
+		if s.taskUnit.state.taskCreation == state && state.phase == "editing" && state.notes == notes && state.selectedTemplate == selection {
 			apply()
 		}
 	})
 }
 
 func (s *app) taskCreationProgressUpdates(ctx context.Context, action application.Action) func(workspace.TaskCreationProgress) {
-	state := s.taskCreation
+	state := s.taskUnit.state.taskCreation
 	if state == nil || payloadString(action.Payload, "taskCreateToken") != state.token {
 		return nil
 	}
@@ -411,7 +414,7 @@ func (s *app) taskCreationProgressUpdates(ctx context.Context, action applicatio
 			return
 		}
 		s.win.Update(func() {
-			if s.taskCreation == state {
+			if s.taskUnit.state.taskCreation == state {
 				state.progressMessage = event.Message
 			}
 		})

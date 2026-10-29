@@ -20,12 +20,12 @@ func (s *app) applyInstructionActionResult(action application.Action, result app
 		}
 		state.settingsTemplatesLoading = false
 		state.settingsTemplatesError = ""
-		s.settingsTemplates = mapsFromData(result.Data)
-		s.settingsTemplatesLoaded = true
+		s.settingsUnit.state.settingsTemplates = mapsFromData(result.Data)
+		s.settingsUnit.state.settingsTemplatesLoaded = true
 		return true
 	case "instructions.templates.save", "instructions.templates.remove":
-		if s.page == "settings" && s.settingsPage == "instruction-templates" {
-			s.settingsOutput = result.Message
+		if s.page == "settings" && s.settingsUnit.state.settingsPage == "instruction-templates" {
+			s.settingsUnit.state.settingsOutput = result.Message
 			s.requestSettingsInstructionTemplates()
 		}
 		return true
@@ -34,8 +34,8 @@ func (s *app) applyInstructionActionResult(action application.Action, result app
 		if scope := payloadString(action.Payload, "scope"); scope != "" {
 			groupID := payloadString(action.Payload, "groupId")
 			context := scope + ":" + groupID
-			if context == s.settingsAgentContext && s.settingsPage == "agents" {
-				s.settingsOutput = ""
+			if context == s.settingsUnit.state.settingsAgentContext && s.settingsUnit.state.settingsPage == "agents" {
+				s.settingsUnit.state.settingsOutput = ""
 			}
 			return true
 		}

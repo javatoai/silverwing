@@ -15,7 +15,10 @@ func TestDiffToolSplitRatioCanBeAdjustedAndSurvivesResize(t *testing.T) {
 	longLine := strings.Repeat("long-line-", 240)
 	state.diffLeft = strings.Repeat(longLine+"\n", 240)
 	state.diffRight = strings.Repeat(longLine+"\n", 240)
-	s := &app{page: "tools", tools: state}
+	s := &app{
+		toolsUnit: toolsController{state: toolsState{tools: state}},
+		page:      "tools",
+	}
 	tester := ui.NewTester(func(c *ui.Context) {
 		ui.Column(c).Fill().Padding(12).Children(func() {
 			s.renderDiffTool(c, setTheme(c, false), state)

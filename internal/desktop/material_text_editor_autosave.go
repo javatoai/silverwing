@@ -15,7 +15,7 @@ func (s *app) writeMaterialTextDraft(ctx context.Context, key string, ref docume
 		return errors.New("应用后端不可用，文本草稿尚未缓存")
 	}
 	// Never recreate a deleted/renamed identity from a late native callback.
-	current, exists := s.documentSaveRef(key)
+	current, exists := s.materialsUnit.documentSaveRef(key)
 	if !exists || current.path != ref.path || current.taskID != ref.taskID {
 		return editor.ErrDraftUnsupported
 	}
@@ -34,14 +34,14 @@ func (s *app) writeMaterialTextDraft(ctx context.Context, key string, ref docume
 
 func (s *app) flushMaterialTextAutosave() {
 	state := s.currentMaterialTextEditor()
-	if state == nil || s.markdownAutosave == nil {
+	if state == nil || s.materialsUnit.state.markdownAutosave == nil {
 		return
 	}
 	if err := s.captureMaterialTextInput(); err != nil {
 		s.lastError = err.Error()
 		return
 	}
-	engine, key := s.markdownAutosave, state.key
+	engine, key := s.materialsUnit.state.markdownAutosave, state.key
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -66,7 +66,7 @@ func (s *app) flushMaterialTextAutosave() {
 }
 
 func (s *app) retryMaterialTextAutosave(state *materialTextEditorState, overwrite bool) {
-	if !s.materialTextBindingCurrent(state) || s.markdownAutosave == nil {
+	if !s.materialTextBindingCurrent(state) || s.materialsUnit.state.markdownAutosave == nil {
 		return
 	}
 	if err := s.captureMaterialTextInput(); err != nil {
@@ -74,37 +74,37 @@ func (s *app) retryMaterialTextAutosave(state *materialTextEditorState, overwrit
 		return
 	}
 	if overwrite {
-		s.documentSaveMu.Lock()
-		ref, ok := s.documentSaveRefs[state.key]
+		s.materialsUnit.state.documentSaveMu.Lock()
+		ref, ok := s.materialsUnit.state.documentSaveRefs[state.key]
 		if ok {
 			ref.overwrite = true
-			s.documentSaveRefs[state.key] = ref
+			s.materialsUnit.state.documentSaveRefs[state.key] = ref
 		}
-		s.documentSaveMu.Unlock()
+		s.materialsUnit.state.documentSaveMu.Unlock()
 		if !ok {
 			return
 		}
-		s.markdownAutosave.ResumeAfterConflict(state.key)
+		s.materialsUnit.state.markdownAutosave.ResumeAfterConflict(state.key)
 	}
 	state.restored = false
-	if s.markdownAutosave.Retry(state.key) {
+	if s.materialsUnit.state.markdownAutosave.Retry(state.key) {
 		s.lastError = ""
 	}
 }
 
 func (s *app) discardMaterialTextAndReload(state *materialTextEditorState) {
-	if !s.materialTextBindingCurrent(state) || s.markdownAutosave == nil || state.discarding {
+	if !s.materialTextBindingCurrent(state) || s.materialsUnit.state.markdownAutosave == nil || state.discarding {
 		return
 	}
 	if err := s.captureMaterialTextInput(); err != nil {
 		s.lastError = err.Error()
 		return
 	}
-	ref, exists := s.documentSaveRef(state.key)
+	ref, exists := s.materialsUnit.documentSaveRef(state.key)
 	if !exists {
 		return
 	}
-	engine, status, backend, win := s.markdownAutosave, s.markdownAutosave.Status(state.key), s.backend, s.win
+	engine, status, backend, win := s.materialsUnit.state.markdownAutosave, s.materialsUnit.state.markdownAutosave.Status(state.key), s.backend, s.win
 	if backend == nil || win == nil || win.IsDestroyed() {
 		return
 	}
@@ -147,10 +147,10 @@ func (s *app) discardMaterialTextAndReload(state *materialTextEditorState) {
 			}
 			engine.AcceptDisk(state.key, result.Text, true)
 			state.closed = true
-			delete(s.materialTextEditors, state.key)
-			delete(s.documentDrafts, state.path)
-			delete(s.documentDirtyMap, state.path)
-			s.documentDirty = false
+			delete(s.materialsUnit.state.materialTextEditors, state.key)
+			delete(s.materialsUnit.state.documentDrafts, state.path)
+			delete(s.materialsUnit.state.documentDirtyMap, state.path)
+			s.materialsUnit.state.documentDirty = false
 			if content, decodeErr := decodeSingleMaterialsData[documents.Content](result.Data); decodeErr == nil {
 				content.TextDraft = nil
 				result.Data = content
@@ -162,24 +162,24 @@ func (s *app) discardMaterialTextAndReload(state *materialTextEditorState) {
 }
 
 func (s *app) removeMaterialTextEditors(paths []string) {
-	for key, state := range s.materialTextEditors {
+	for key, state := range s.materialsUnit.state.materialTextEditors {
 		for _, removed := range paths {
 			if _, inside := pathRelativeToRoot(removed, state.path); !inside {
 				continue
 			}
 			state.closed = true
-			if s.markdownAutosave != nil {
-				s.markdownAutosave.SetComposing(key, false)
-				s.markdownAutosave.AcceptDisk(key, "", true)
+			if s.materialsUnit.state.markdownAutosave != nil {
+				s.materialsUnit.state.markdownAutosave.SetComposing(key, false)
+				s.materialsUnit.state.markdownAutosave.AcceptDisk(key, "", true)
 			}
-			s.documentSaveMu.Lock()
-			delete(s.documentSaveRefs, key)
-			s.documentSaveMu.Unlock()
-			delete(s.materialTextEditors, key)
-			delete(s.documentDrafts, state.path)
-			delete(s.documentDirtyMap, state.path)
-			if s.materialTextActive == state {
-				s.materialTextActive = nil
+			s.materialsUnit.state.documentSaveMu.Lock()
+			delete(s.materialsUnit.state.documentSaveRefs, key)
+			s.materialsUnit.state.documentSaveMu.Unlock()
+			delete(s.materialsUnit.state.materialTextEditors, key)
+			delete(s.materialsUnit.state.documentDrafts, state.path)
+			delete(s.materialsUnit.state.documentDirtyMap, state.path)
+			if s.materialsUnit.state.materialTextActive == state {
+				s.materialsUnit.state.materialTextActive = nil
 			}
 			break
 		}

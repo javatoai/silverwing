@@ -106,14 +106,24 @@ func materialTextEditorFixture(t *testing.T, files map[string]string) (*app, *ma
 		t.Fatal(err)
 	}
 	backend := &materialTextTestBackend{documents: documents.NewService(filepath.Join(base, "home", "cache")), root: root, taskPath: taskPath}
-	s := &app{page: "tasks", tab: 1, documentsLoaded: true, documentDrafts: map[string]string{}, documentDirtyMap: map[string]bool{}, documentSaveRefs: map[string]documentSaveRef{}, backend: backend, backendGate: make(chan struct{}, 1), tasks: []task{{id: "task", path: taskPath, materialsPath: root, materialsStatus: "READY"}}}
+	s := &app{
+		taskUnit: taskController{state: taskState{tasks: []task{{id: "task", path: taskPath, materialsPath: root, materialsStatus: "READY"}}}},
+		materialsUnit: materialsController{state: materialsState{documentsLoaded: true,
+			documentDrafts:   map[string]string{},
+			documentDirtyMap: map[string]bool{},
+			documentSaveRefs: map[string]documentSaveRef{}}},
+		page:        "tasks",
+		tab:         1,
+		backend:     backend,
+		backendGate: make(chan struct{}, 1),
+	}
 	s.snapshot.Home = filepath.Join(base, "home")
 	s.initMarkdownAutosave()
-	s.markdownAutosave.SetDebounce(time.Hour)
+	s.materialsUnit.state.markdownAutosave.SetDebounce(time.Hour)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		s.markdownAutosave.Close(ctx)
+		s.materialsUnit.state.markdownAutosave.Close(ctx)
 	})
 	contents := make(map[string]documents.Content)
 	for name, source := range files {
@@ -137,10 +147,10 @@ func materialTextEditorFixture(t *testing.T, files map[string]string) (*app, *ma
 }
 
 func bindMaterialTextTest(s *app, content documents.Content) *materialTextEditorState {
-	s.documentPath, s.documentKind, s.documentReadOnly = content.Path, content.Kind, false
+	s.materialsUnit.state.documentPath, s.materialsUnit.state.documentKind, s.materialsUnit.state.documentReadOnly = content.Path, content.Kind, false
 	s.seedMaterialTextEditor("task", content.Path, content)
 	state := s.currentMaterialTextEditor()
-	s.materialTextActive = state
+	s.materialsUnit.state.materialTextActive = state
 	return state
 }
 
@@ -148,7 +158,7 @@ func flushMaterialTextTest(t *testing.T, s *app) []editor.FlushFailure {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	return s.markdownAutosave.Flush(ctx)
+	return s.materialsUnit.state.markdownAutosave.Flush(ctx)
 }
 
 func TestMaterialTextEditorABAIdentitySelectionAndSaveEcho(t *testing.T) {
@@ -169,9 +179,9 @@ func TestMaterialTextEditorABAIdentitySelectionAndSaveEcho(t *testing.T) {
 	if failures := flushMaterialTextTest(t, s); len(failures) > 0 {
 		t.Fatal(failures)
 	}
-	ref, _ := s.documentSaveRef(a.key)
-	s.materialTextSaved(a.key, ref, s.markdownAutosave.Status(a.key))
-	if s.documentDirtyMap[a.path] || s.documentDrafts[a.path] != "" {
+	ref, _ := s.materialsUnit.documentSaveRef(a.key)
+	s.materialTextSaved(a.key, ref, s.materialsUnit.state.markdownAutosave.Status(a.key))
+	if s.materialsUnit.state.documentDirtyMap[a.path] || s.materialsUnit.state.documentDrafts[a.path] != "" {
 		t.Fatal("inactive successful save retained dirty tree/tab state")
 	}
 	saved, _ := os.ReadFile(a.path)
@@ -195,7 +205,7 @@ func TestMaterialTextEditorABAIdentitySelectionAndSaveEcho(t *testing.T) {
 	if err := s.captureMaterialTextState(oldState); err != nil {
 		t.Fatal(err)
 	}
-	if _, exists := s.documentSaveRef(oldState.key); exists || s.materialTextEditors[oldState.key] != nil {
+	if _, exists := s.materialsUnit.documentSaveRef(oldState.key); exists || s.materialsUnit.state.materialTextEditors[oldState.key] != nil {
 		t.Fatal("late callback recreated deleted identity")
 	}
 }
@@ -225,7 +235,7 @@ func TestMaterialTextEditorPreviewModeUsesSameDraftAndNativeInput(t *testing.T) 
 			}
 			tester.Key(ui.Ctrl, ui.KeyA)
 			tester.Type("中文\nnew")
-			if state.view != view || state.view.ReadOnly || !s.documentDirty || !strings.Contains(state.source, "中文") {
+			if state.view != view || state.view.ReadOnly || !s.materialsUnit.state.documentDirty || !strings.Contains(state.source, "中文") {
 				t.Fatalf("native edit not captured: %q", state.source)
 			}
 			if documents.Kind(name) != "text" {
@@ -248,7 +258,7 @@ func TestMaterialTextEditorRecoveryConflictRetryAndCloseCapture(t *testing.T) {
 	identity, _ := documents.NewMarkdownDraftIdentity("task", backend.taskPath, backend.root, content.Path)
 	content.TextDraft = &documents.MaterialTextDraft{Identity: identity, Content: "restored\r\n", BaselineHash: content.Hash, Newline: "\n"}
 	state := bindMaterialTextTest(s, content)
-	if !state.restored || !s.markdownAutosave.Status(state.key).Dirty {
+	if !state.restored || !s.materialsUnit.state.markdownAutosave.Status(state.key).Dirty {
 		t.Fatal("draft not restored")
 	}
 	if data, _ := os.ReadFile(state.path); string(data) != "disk\n" {
@@ -281,7 +291,7 @@ func TestMaterialTextEditorRecoveryConflictRetryAndCloseCapture(t *testing.T) {
 	if err := s.captureMaterialTextInput(); err != nil {
 		t.Fatal(err)
 	}
-	if failures := flushMaterialTextTest(t, s); len(failures) == 0 || !s.markdownAutosave.Status(state.key).Conflict {
+	if failures := flushMaterialTextTest(t, s); len(failures) == 0 || !s.materialsUnit.state.markdownAutosave.Status(state.key).Conflict {
 		t.Fatal("external conflict not paused")
 	}
 	if data, _ := os.ReadFile(state.path); string(data) != "external" {
@@ -292,7 +302,7 @@ func TestMaterialTextEditorRecoveryConflictRetryAndCloseCapture(t *testing.T) {
 		t.Fatal(failures)
 	}
 	state.view.OnCompositionChanged(true)
-	if !s.markdownAutosave.Status(state.key).Composing {
+	if !s.materialsUnit.state.markdownAutosave.Status(state.key).Composing {
 		t.Fatal("composition did not pause immediately")
 	}
 	state.view.OnCompositionChanged(false)
@@ -300,7 +310,7 @@ func TestMaterialTextEditorRecoveryConflictRetryAndCloseCapture(t *testing.T) {
 	if err := s.captureDocumentCloseInput(); err != nil {
 		t.Fatal(err)
 	}
-	if cached, _ := s.markdownAutosave.Content(state.key); cached != state.view.Buffer.OriginalText() {
+	if cached, _ := s.materialsUnit.state.markdownAutosave.Content(state.key); cached != state.view.Buffer.OriginalText() {
 		t.Fatal("close missed final native input")
 	}
 }
@@ -309,10 +319,10 @@ func TestMaterialTextEditorRenameAndDeleteQuiesce(t *testing.T) {
 	s, _, files := materialTextEditorFixture(t, map[string]string{"a.txt": "disk"})
 	state := bindMaterialTextTest(s, files["a.txt"])
 	state.view.Buffer.Edit(codeeditor.Edit{Text: "latest "})
-	if _, err := s.captureMarkdownAutosaveRename("task", s.currentTask().materialsPath, state.path, filepath.Join(filepath.Dir(state.path), "a.md")); err == nil {
+	if _, err := s.captureMarkdownAutosaveRename("task", s.taskUnit.currentTask().materialsPath, state.path, filepath.Join(filepath.Dir(state.path), "a.md")); err == nil {
 		t.Fatal("dirty cross-adapter rename allowed")
 	}
-	if source, _ := s.markdownAutosave.Content(state.key); source != "latest disk" {
+	if source, _ := s.materialsUnit.state.markdownAutosave.Content(state.key); source != "latest disk" {
 		t.Fatal("rename missed last native input")
 	}
 	action := application.Action{Kind: "document.trash", TaskID: "task", Payload: map[string]any{"paths": []string{state.path}, "confirmed": true}}
@@ -330,11 +340,11 @@ func TestMaterialTextEditorRenameAndDeleteQuiesce(t *testing.T) {
 	result := application.ActionResult{Data: []documents.TrashItemResult{{Path: state.path}}}
 	s.retireMaterialTextDeleteResult(request, result)
 	request.finishMaterialTextDeleteLease(result)
-	if _, exists := s.documentSaveRef(state.key); exists || s.materialTextEditors[state.key] != nil || s.markdownAutosave.Status(state.key).Dirty {
+	if _, exists := s.materialsUnit.documentSaveRef(state.key); exists || s.materialsUnit.state.materialTextEditors[state.key] != nil || s.materialsUnit.state.markdownAutosave.Status(state.key).Dirty {
 		t.Fatal("delete left a writable identity")
 	}
 	state.view.OnCompositionChanged(true)
-	if s.markdownAutosave.Status(state.key).Composing {
+	if s.materialsUnit.state.markdownAutosave.Status(state.key).Composing {
 		t.Fatal("deleted IME callback revived entry")
 	}
 }
@@ -355,7 +365,7 @@ func TestMaterialTextEditorBOMLimitAndBlockedSaveKeepsNewInput(t *testing.T) {
 	if err := s.captureMaterialTextInput(); err != nil {
 		t.Fatal(err)
 	}
-	if len(state.source) != documents.MaxMaterialsText-3 || !s.markdownAutosave.Status(state.key).Dirty {
+	if len(state.source) != documents.MaxMaterialsText-3 || !s.materialsUnit.state.markdownAutosave.Status(state.key).Dirty {
 		t.Fatal("legal edit after rejected input remained paused")
 	}
 	backend.mu.Lock()
@@ -367,7 +377,7 @@ func TestMaterialTextEditorBOMLimitAndBlockedSaveKeepsNewInput(t *testing.T) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		flushed <- s.markdownAutosave.Flush(ctx)
+		flushed <- s.materialsUnit.state.markdownAutosave.Flush(ctx)
 	}()
 	select {
 	case <-started:
@@ -384,7 +394,7 @@ func TestMaterialTextEditorBOMLimitAndBlockedSaveKeepsNewInput(t *testing.T) {
 	close(release)
 	select {
 	case <-flushed:
-		status := s.markdownAutosave.Status(state.key)
+		status := s.materialsUnit.state.markdownAutosave.Status(state.key)
 		if status.Error != "" || status.Conflict {
 			t.Fatal(status)
 		}
@@ -405,7 +415,7 @@ func TestMaterialTextEditorBOMLimitAndBlockedSaveKeepsNewInput(t *testing.T) {
 
 func TestMaterialTextEditorAutosaveDebounceCompositionAndDurableDraft(t *testing.T) {
 	s, backend, files := materialTextEditorFixture(t, map[string]string{"a.txt": "disk"})
-	s.markdownAutosave.SetDebounce(650 * time.Millisecond)
+	s.materialsUnit.state.markdownAutosave.SetDebounce(650 * time.Millisecond)
 	state := bindMaterialTextTest(s, files["a.txt"])
 	state.view.Buffer.Edit(codeeditor.Edit{Text: "edited "})
 	if err := s.captureMaterialTextInput(); err != nil {
@@ -427,10 +437,10 @@ func TestMaterialTextEditorAutosaveDebounceCompositionAndDurableDraft(t *testing
 		t.Fatal("save ignored the 650ms debounce")
 	}
 	deadline := time.Now().Add(2 * time.Second)
-	for s.markdownAutosave.Status(state.key).Dirty && time.Now().Before(deadline) {
+	for s.materialsUnit.state.markdownAutosave.Status(state.key).Dirty && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if status := s.markdownAutosave.Status(state.key); status.Dirty || status.Error != "" {
+	if status := s.materialsUnit.state.markdownAutosave.Status(state.key); status.Dirty || status.Error != "" {
 		t.Fatal(status)
 	}
 	if data, _ := os.ReadFile(state.path); string(data) != state.source {
@@ -441,7 +451,7 @@ func TestMaterialTextEditorAutosaveDebounceCompositionAndDurableDraft(t *testing
 func TestMaterialTextMarkdownReadonlyDeleteDoesNotStartSave(t *testing.T) {
 	s, backend, files := materialTextEditorFixture(t, map[string]string{"note.md": "# disk\r\nkeep\n"})
 	content := files["note.md"]
-	s.documentPath, s.documentReadPending = content.Path, true
+	s.materialsUnit.state.documentPath, s.materialsUnit.state.documentReadPending = content.Path, true
 	s.applyMaterialsActionResult(application.Action{Kind: "document.read", TaskID: "task", Path: content.Path},
 		application.ActionResult{Path: content.Path, Text: content.Text, Data: content})
 	key := s.documentAutosaveKey(content.Path)
@@ -478,10 +488,10 @@ func TestMaterialTextMarkdownReadonlyDeleteDoesNotStartSave(t *testing.T) {
 	request.finishMaterialTextDeleteLease(result)
 	s.editMarkdownAutosave(content.Path, "late callback must not recreate")
 	s.setMarkdownComposing("task", content.Path, true)
-	if _, exists := s.documentSaveRef(key); exists {
+	if _, exists := s.materialsUnit.documentSaveRef(key); exists {
 		t.Fatal("late Markdown callback recreated deleted reference")
 	}
-	if status := s.markdownAutosave.Status(key); status.Dirty || status.Composing {
+	if status := s.materialsUnit.state.markdownAutosave.Status(key); status.Dirty || status.Composing {
 		t.Fatal(status)
 	}
 	if _, err := os.Stat(content.Path); !os.IsNotExist(err) {

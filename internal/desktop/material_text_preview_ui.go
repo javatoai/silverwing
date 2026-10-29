@@ -13,34 +13,34 @@ import (
 // All source previews share one native read-only editor and its selection,
 // finder and scroll viewport. Rendered Markdown and valid CSV keep their views.
 func (s *app) materialsTextPreviewVisible() bool {
-	if s.documentPath == "" || s.documentEditing {
+	if s.materialsUnit.state.documentPath == "" || s.materialsUnit.state.documentEditing {
 		return false
 	}
-	switch s.documentKind {
+	switch s.materialsUnit.state.documentKind {
 	case "unsupported", "pdf", "image":
 		return false
 	}
 	if s.materialsSearchSourcePreviewActive() {
 		return true
 	}
-	if documentKindForPath(s.documentPath) == "markdown" {
+	if documentKindForPath(s.materialsUnit.state.documentPath) == "markdown" {
 		return s.readingMode() == "SOURCE"
 	}
-	if strings.EqualFold(filepath.Ext(s.documentPath), ".csv") {
+	if strings.EqualFold(filepath.Ext(s.materialsUnit.state.documentPath), ".csv") {
 		find := s.ensureDocumentFindState()
-		find.preparePreview(s.documentPath, s.documentKind, s.documentContent)
+		find.preparePreview(s.materialsUnit.state.documentPath, s.materialsUnit.state.documentKind, s.materialsUnit.state.documentContent)
 		return find.csvErr != ""
 	}
 	return true
 }
 
 func (s *app) materialsTextPreviewIdentity() string {
-	task := s.currentTask()
+	task := s.taskUnit.currentTask()
 	mode := "text"
-	if documentKindForPath(s.documentPath) == "markdown" {
+	if documentKindForPath(s.materialsUnit.state.documentPath) == "markdown" {
 		mode = s.readingMode()
 	}
-	return strings.Join([]string{s.snapshot.Home, task.id, task.path, task.materialsPath, s.documentPath, mode}, "\x00")
+	return strings.Join([]string{s.snapshot.Home, task.id, task.path, task.materialsPath, s.materialsUnit.state.documentPath, mode}, "\x00")
 }
 
 func (s *app) currentMaterialsTextPreview() *codeeditor.State {
@@ -49,12 +49,12 @@ func (s *app) currentMaterialsTextPreview() *codeeditor.State {
 			return state.view
 		}
 	}
-	find := s.documentFind
+	find := s.materialsUnit.state.documentFind
 	if find == nil || find.nativePreview == nil || !s.materialsTextPreviewVisible() {
 		return nil
 	}
 	owner := find.nativePreview
-	if owner.identity != s.materialsTextPreviewIdentity() || owner.source != s.documentContent {
+	if owner.identity != s.materialsTextPreviewIdentity() || owner.source != s.materialsUnit.state.documentContent {
 		return nil
 	}
 	return owner.view
@@ -64,14 +64,14 @@ func (s *app) renderDetectedMaterialsText(c *ui.Context, p palette) *nativeCodeP
 	host := ui.Column(c.Key("materials-detected-text")).Grow(1).FillWidth().MinWidth(0).MinHeight(0).Padding(12)
 	owner := ui.Local(host, "preview", func() nativeCodePreviewState { return nativeCodePreviewState{} })
 	identity := s.materialsTextPreviewIdentity()
-	fresh := owner.view == nil || owner.identity != identity || owner.source != s.documentContent
-	view := owner.bind(identity, filepath.Base(s.documentPath), s.documentContent)
-	language := workspace.WorkspaceFileLanguageFromPath(s.documentPath)
+	fresh := owner.view == nil || owner.identity != identity || owner.source != s.materialsUnit.state.documentContent
+	view := owner.bind(identity, filepath.Base(s.materialsUnit.state.documentPath), s.materialsUnit.state.documentContent)
+	language := workspace.WorkspaceFileLanguageFromPath(s.materialsUnit.state.documentPath)
 	find := s.ensureDocumentFindState()
-	find.preparePreview(s.documentPath, s.documentKind, s.documentContent)
+	find.preparePreview(s.materialsUnit.state.documentPath, s.materialsUnit.state.documentKind, s.materialsUnit.state.documentContent)
 	verticalID, horizontalID := "text", "code-horizontal"
 	fontSize := textEditorFontSize
-	markdownSource := documentKindForPath(s.documentPath) == "markdown"
+	markdownSource := documentKindForPath(s.materialsUnit.state.documentPath) == "markdown"
 	if markdownSource {
 		verticalID, horizontalID = "source-vertical", "source-horizontal"
 		fontSize *= s.markdownZoom()
@@ -90,16 +90,16 @@ func (s *app) renderDetectedMaterialsText(c *ui.Context, p palette) *nativeCodeP
 		position.X = horizontal.X
 	}
 	if fresh {
-		view.Buffer = codeeditor.NewBufferPreservingLineEndings(s.documentContent)
+		view.Buffer = codeeditor.NewBufferPreservingLineEndings(s.materialsUnit.state.documentContent)
 		if !markdownSource {
-			view.Buffer.SetLanguage(workspaceFilePreviewLanguage(s.documentPath, language))
+			view.Buffer.SetLanguage(workspaceFilePreviewLanguage(s.materialsUnit.state.documentPath, language))
 		}
 		// Folding belongs to this preview's native view, never to its source
 		// buffer or autosave state. Other source previews keep their layout.
 		view.NoFolding = language != workspace.FileLanguageJSON || !find.jsonValid
 		view.TabSize = 4
 	}
-	view.SoftWrap = !markdownSource && documentKindForPath(s.documentPath) != "unsupported" &&
+	view.SoftWrap = !markdownSource && documentKindForPath(s.materialsUnit.state.documentPath) != "unsupported" &&
 		(language == workspace.FileLanguagePlainText || language == workspace.FileLanguageJSON)
 	view.Font = ui.Font{Family: "monospace", Size: fontSize}
 	view.LineHeight = textEditorLineHeight
@@ -118,18 +118,18 @@ func (s *app) renderDetectedMaterialsText(c *ui.Context, p palette) *nativeCodeP
 	} else {
 		view.ContextMenu = nil
 	}
-	if hit, ok := s.materialsSearchSourcePreviewHit(); ok && s.materialsPicker.sourcePreviewReveal {
+	if hit, ok := s.materialsSearchSourcePreviewHit(); ok && s.materialsUnit.state.materialsPicker.sourcePreviewReveal {
 		// Search results use source UTF-16 offsets; only the native caret uses
 		// LF byte offsets. The source-preserving clipboard stays untouched.
-		start := materialsTextPreviewOffset(s.documentContent, hit.Offset)
+		start := materialsTextPreviewOffset(s.materialsUnit.state.documentContent, hit.Offset)
 		view.Select(start, start)
 		view.Find(strings.ReplaceAll(hit.Query, "\r\n", "\n"))
-		s.materialsPicker.sourcePreviewReveal = false
+		s.materialsUnit.state.materialsPicker.sourcePreviewReveal = false
 	}
 	host.Children(func() {
-		switch strings.ToLower(filepath.Ext(s.documentPath)) {
+		switch strings.ToLower(filepath.Ext(s.materialsUnit.state.documentPath)) {
 		case ".json":
-			if !find.jsonValid && s.documentContent != "" {
+			if !find.jsonValid && s.materialsUnit.state.documentContent != "" {
 				label(c, "JSON 解析失败，显示原文。", 12, p.amber).Shrink(0)
 			}
 		case ".csv":
@@ -137,7 +137,7 @@ func (s *app) renderDetectedMaterialsText(c *ui.Context, p palette) *nativeCodeP
 				label(c, "CSV 解析失败，显示原文。", 12, p.amber).Shrink(0)
 			}
 		}
-		renderNativeCodePreview(c, p, owner, identity, filepath.Base(s.documentPath), s.documentContent, "materials-text-code").Grow(1).DrawOver(func(_ *ui.Painter, _ ui.Rect) {
+		renderNativeCodePreview(c, p, owner, identity, filepath.Base(s.materialsUnit.state.documentPath), s.materialsUnit.state.documentContent, "materials-text-code").Grow(1).DrawOver(func(_ *ui.Painter, _ ui.Rect) {
 			position := view.ScrollPosition()
 			*tracked = position
 			if vertical != nil {

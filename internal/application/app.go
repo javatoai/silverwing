@@ -16,6 +16,7 @@ import (
 	"silverwing-go/internal/integrations"
 	"silverwing-go/internal/platform"
 	"silverwing-go/internal/process"
+	"silverwing-go/internal/productprofile"
 	"silverwing-go/internal/storage"
 	"silverwing-go/internal/workspace"
 )
@@ -41,12 +42,12 @@ func New(home string) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, err = os.UserHomeDir()
+	userHome, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("无法获取用户家目录：%w", err)
 	}
 	paths := storage.NewPaths(absolute)
-	paths.Tasks = filepath.Join(absolute, "tasks")
+	paths.Tasks = productprofile.DefaultTaskRoot(userHome, absolute)
 	app := &App{Paths: paths, Config: storage.NewConfigStore(paths), Manifests: storage.NewManifestStore(), Runner: process.NewRunner(), Documents: documents.NewService(paths.Cache)}
 	app.Integrations = integrations.NewService(paths, app.Config, app.Runner)
 	app.Platform = platform.NewService(paths, app.Config, app.Runner)
@@ -143,6 +144,8 @@ func (a *App) Snapshot(ctx context.Context) (Snapshot, error) {
 			}
 			m := entry.Manifest
 			t := Task{ID: filepath.Base(entry.Path), Title: m.FolderName, Project: names[m.GroupID], Status: "进行中", Updated: m.UpdatedAt, CreatedAt: m.CreatedAt, Path: entry.Path, MaterialsPath: visibleMaterialsRoot(value(m.RequirementMaterials.WriteRoot)), RequirementURL: m.RequirementLink, RequirementID: value(m.RequirementID), GroupID: m.GroupID, Archived: m.LifecycleStatus == domain.TaskArchived, MaterialsStatus: string(m.RequirementMaterials.Status), MaterialsFailureReason: value(m.RequirementMaterials.FailureReason), WorkspaceToolLaunches: append([]domain.WorkspaceToolLaunch{}, m.WorkspaceToolLaunches...)}
+			t.Materials = taskMaterialsPermissions(m, config)
+			t.MaterialsPath = t.Materials.ReadRoot
 			if e := validAnnualTaskMaterials(m, config); e != nil {
 				t.MaterialsStatus = string(domain.MaterialsFailed)
 				t.MaterialsFailureReason = e.Error()

@@ -5,9 +5,9 @@ import "fmt"
 // PDF keeps its existing rune-based search model. The common find bar and
 // shortcuts route to that model rather than searching metadata-only content.
 func (s *app) currentPDFDocumentFind() *nativeMediaState {
-	m := s.nativeMedia
-	if m == nil || m.closed || m.kind != "pdf" || s.documentKind != "pdf" ||
-		s.documentPath == "" || normalizedReadingPath(m.path) != normalizedReadingPath(s.documentPath) {
+	m := s.materialsUnit.state.nativeMedia
+	if m == nil || m.closed || m.kind != "pdf" || s.materialsUnit.state.documentKind != "pdf" ||
+		s.materialsUnit.state.documentPath == "" || normalizedReadingPath(m.path) != normalizedReadingPath(s.materialsUnit.state.documentPath) {
 		return nil
 	}
 	return m
@@ -18,9 +18,9 @@ func (s *app) preparePDFDocumentFind(f *documentFindState, identity string) bool
 	if m == nil {
 		return false
 	}
-	f.identity, f.query = identity, s.documentSearch
+	f.identity, f.query = identity, s.materialsUnit.state.documentSearch
 	f.blocks, f.hits, f.truncated = nil, nil, false
-	s.changePDFDocumentFindQuery(m, s.documentSearch)
+	s.changePDFDocumentFindQuery(m, s.materialsUnit.state.documentSearch)
 	return true
 }
 
@@ -28,7 +28,7 @@ func (s *app) changePDFDocumentFindQuery(m *nativeMediaState, query string) {
 	if s.currentPDFDocumentFind() != m || m == nil {
 		return
 	}
-	s.documentSearch = query
+	s.materialsUnit.state.documentSearch = query
 	if m.materialsHit != nil && m.materialsHit.Query != query {
 		m.materialsHit = nil
 	}
@@ -39,8 +39,8 @@ func (s *app) changePDFDocumentFindQuery(m *nativeMediaState, query string) {
 	} else if changed {
 		s.updatePDFSearch(m)
 	}
-	if s.documentFind != nil {
-		s.documentFind.query = query
+	if s.materialsUnit.state.documentFind != nil {
+		s.materialsUnit.state.documentFind.query = query
 	}
 }
 

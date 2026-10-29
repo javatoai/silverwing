@@ -11,13 +11,13 @@ func (s *app) settingsCLIToolsMenu(c *ui.Context, p palette, tool, title string)
 		if menu.Item("refresh", "刷新状态").Icon("refresh").Chosen() {
 			s.requestSettingsCLIStatus(tool, true)
 		}
-		status := s.settingsCLIStatus[tool]
+		status := s.settingsUnit.state.settingsCLIStatus[tool]
 		command := firstNonEmpty(mapString(status, "command"), mapString(status, "commandPath"))
 		s.settingsCLICommandMenuItems(c, menu, tool, command)
 		if (tool == "meegle") && (dataBool(status, "authenticated") || mapString(status, "authenticationState") == "AUTHENTICATED") {
 			pending := false
-			if s.cliJobs != nil {
-				request := s.cliJobs.requests["auth:"+tool]
+			if s.toolsUnit.state.cliJobs != nil {
+				request := s.toolsUnit.state.cliJobs.requests["auth:"+tool]
 				pending = request != nil && (request.action.Kind == "cli.auth.start" || request.action.Kind == "cli.auth.logout")
 			}
 			menu.Separator()

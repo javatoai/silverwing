@@ -32,21 +32,21 @@ func (s *app) currentRequirementNamingPreparationScope() requirementNamingPrepar
 }
 
 func (s *app) ensureRequirementNamingPreparation() *requirementNamingPreparationState {
-	if s.requirementNaming == nil {
+	if s.requirementUnit.state.requirementNaming == nil {
 		state := &requirementNamingPreparationState{}
 		win := s.win
 		state.queue = newRequirementNamingPreparationQueue(func() {
 			if win != nil && !win.IsDestroyed() {
 				win.Update(func() {
-					if s.requirementNaming == state && !win.IsDestroyed() {
+					if s.requirementUnit.state.requirementNaming == state && !win.IsDestroyed() {
 						win.Invalidate()
 					}
 				})
 			}
 		})
-		s.requirementNaming = state
+		s.requirementUnit.state.requirementNaming = state
 	}
-	return s.requirementNaming
+	return s.requirementUnit.state.requirementNaming
 }
 
 func (s *app) startRequirementNamingPreparation(items []application.Requirement) {
@@ -54,7 +54,7 @@ func (s *app) startRequirementNamingPreparation(items []application.Requirement)
 	state.scope, state.initialized = s.currentRequirementNamingPreparationScope(), true
 	backend := s.backend
 	expected := ""
-	if identity := s.requirementIdentityJobs; identity != nil && identity.confirmed && identity.state == application.RequirementIdentityAuthenticated {
+	if identity := s.requirementUnit.state.requirementIdentityJobs; identity != nil && identity.confirmed && identity.state == application.RequirementIdentityAuthenticated {
 		expected = identity.identity
 	}
 	state.queue.start(items, state.scope.enabled && state.scope.prewarm, func(ctx context.Context, item application.Requirement) error {
@@ -63,7 +63,7 @@ func (s *app) startRequirementNamingPreparation(items []application.Requirement)
 }
 
 func (s *app) observeRequirementNamingPreparation() {
-	state := s.requirementNaming
+	state := s.requirementUnit.state.requirementNaming
 	if state == nil || !state.initialized {
 		return
 	}
@@ -72,13 +72,13 @@ func (s *app) observeRequirementNamingPreparation() {
 		return
 	}
 	identitySame := state.scope.identity == next.identity && state.scope.profile == next.profile
-	s.cancelRequirementNamingPreparation()
+	s.requirementUnit.cancelRequirementNamingPreparation()
 	if backend, ok := s.backend.(interface{ CancelRequirementNaming() }); ok {
 		backend.CancelRequirementNaming()
 	}
 	state.scope, state.initialized = next, true
-	if identitySame && s.requirementsLoaded && !s.requirementsLoading {
-		s.startRequirementNamingPreparation(s.requirements)
+	if identitySame && s.requirementUnit.state.requirementsLoaded && !s.requirementUnit.state.requirementsLoading {
+		s.startRequirementNamingPreparation(s.requirementUnit.state.requirements)
 	}
 }
 
@@ -133,13 +133,13 @@ func executeRequirementNamingPreparation(ctx context.Context, backend applicatio
 }
 
 func (s *app) prioritizeRequirementNamingPreparation(item application.Requirement) {
-	if state := s.requirementNaming; state != nil {
+	if state := s.requirementUnit.state.requirementNaming; state != nil {
 		state.queue.prioritize(item)
 	}
 }
 
-func (s *app) cancelRequirementNamingPreparation() {
-	if state := s.requirementNaming; state != nil {
+func (s *requirementController) cancelRequirementNamingPreparation() {
+	if state := s.state.requirementNaming; state != nil {
 		state.queue.cancel()
 		state.failuresOpen = false
 	}
@@ -150,7 +150,7 @@ func (s *app) closeRequirementNamingPreparation(ctx context.Context) error {
 	if backend, ok := s.backend.(interface{ CloseRequirementNaming(context.Context) error }); ok {
 		err = backend.CloseRequirementNaming(ctx)
 	}
-	if state := s.requirementNaming; state != nil {
+	if state := s.requirementUnit.state.requirementNaming; state != nil {
 		err = errors.Join(err, state.queue.close(ctx))
 	}
 	return err

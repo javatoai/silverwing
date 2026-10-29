@@ -71,7 +71,7 @@ func (s *app) sidebar(c *ui.Context, p palette, compact bool) {
 			})
 			if b.Clicked() {
 				s.markReadingInteraction()
-				if n.page == "tasks" && (s.page == "archive" || s.currentTask().archived) {
+				if n.page == "tasks" && (s.page == "archive" || s.taskUnit.currentTask().archived) {
 					s.switchTaskIndexCategory(false)
 					continue
 				}
@@ -103,7 +103,7 @@ func sidebarBadgeDescription(page, badge string) string {
 func (s *app) sidebarBadge(page string, compact bool) (string, bool) {
 	switch page {
 	case "tasks":
-		count := len(s.activeTasks(false))
+		count := len(s.taskUnit.activeTasks(false))
 		return fmt.Sprint(count), !compact || count > 0
 	case "requirements":
 		return s.requirementsEstimateBadge(), true

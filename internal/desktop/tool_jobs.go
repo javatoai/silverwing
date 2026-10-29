@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 
 	"silverwing-go/internal/application"
+	"silverwing-go/internal/asyncjob"
 	"silverwing-go/internal/tools"
 
 	"github.com/egoist/mygo"
@@ -21,9 +21,7 @@ type developerToolJobsState struct {
 	current    map[string]*developerToolJob // UI thread only
 	latest     map[string]uint64            // UI thread only
 	visibleTab string                       // UI thread only
-	mu         sync.Mutex
-	running    map[*developerToolJob]struct{}
-	closed     bool
+	lifecycle  asyncjob.Group
 }
 
 type developerToolJob struct {
@@ -35,9 +33,10 @@ type developerToolJob struct {
 	backend       application.Backend
 	window        *mygo.Window
 	home          string
+	owner         *developerToolJobsState
+	lease         *asyncjob.Lease
 	ctx           context.Context
 	cancel        context.CancelFunc
-	done          chan struct{}
 	preserveHide  bool
 	preserveClose bool
 	jsonNodeCopy  *jsonNodeCopyRequest
@@ -68,24 +67,20 @@ func developerToolTabForAction(kind string) string {
 }
 
 func (s *app) ensureDeveloperToolJobs() *developerToolJobsState {
-	if s.toolJobs == nil {
-		s.toolJobs = &developerToolJobsState{
+	if s.toolsUnit.state.toolJobs == nil {
+		s.toolsUnit.state.toolJobs = &developerToolJobsState{
 			current: make(map[string]*developerToolJob),
 			latest:  make(map[string]uint64),
-			running: make(map[*developerToolJob]struct{}),
 		}
 	} else {
-		if s.toolJobs.current == nil {
-			s.toolJobs.current = make(map[string]*developerToolJob)
+		if s.toolsUnit.state.toolJobs.current == nil {
+			s.toolsUnit.state.toolJobs.current = make(map[string]*developerToolJob)
 		}
-		if s.toolJobs.latest == nil {
-			s.toolJobs.latest = make(map[string]uint64)
-		}
-		if s.toolJobs.running == nil {
-			s.toolJobs.running = make(map[*developerToolJob]struct{})
+		if s.toolsUnit.state.toolJobs.latest == nil {
+			s.toolsUnit.state.toolJobs.latest = make(map[string]uint64)
 		}
 	}
-	return s.toolJobs
+	return s.toolsUnit.state.toolJobs
 }
 
 func cloneDeveloperToolAction(action application.Action) application.Action {
@@ -141,10 +136,7 @@ func (s *app) dispatchDeveloperToolJob(action application.Action) bool {
 		}
 	}
 
-	jobs.mu.Lock()
-	closed := jobs.closed
-	jobs.mu.Unlock()
-	if closed {
+	if jobs.lifecycle.Closed() {
 		s.applyDeveloperToolJobFailureToState(state, action, errors.New("实用工具已进入退出清理阶段。"))
 		return true
 	}
@@ -159,24 +151,19 @@ func (s *app) dispatchDeveloperToolJob(action application.Action) bool {
 		delete(jobs.current, key)
 	}
 	jobs.latest[key]++
-	ctx, cancel := context.WithCancel(context.Background())
 	request := &developerToolJob{
 		key: key, tab: tab, token: jobs.latest[key], action: cloneDeveloperToolAction(action),
 		state: state, backend: s.backend, window: s.win, home: s.snapshot.Home,
-		ctx: ctx, cancel: cancel, done: make(chan struct{}),
 		preserveHide: action.Kind == "tool.port-stop", preserveClose: action.Kind == "tool.port-stop",
 	}
-	jobs.current[key] = request
-	jobs.mu.Lock()
-	if jobs.closed {
-		jobs.mu.Unlock()
-		cancel()
-		delete(jobs.current, key)
+	lease, err := jobs.lifecycle.Begin(context.Background(), asyncjob.Options{CancelOnClose: !request.preserveClose})
+	if err != nil {
 		s.applyDeveloperToolJobFailureToState(state, action, errors.New("实用工具已进入退出清理阶段。"))
 		return true
 	}
-	jobs.running[request] = struct{}{}
-	jobs.mu.Unlock()
+	request.owner, request.lease = jobs, lease
+	request.ctx, request.cancel = lease.Context(), lease.Cancel
+	jobs.current[key] = request
 
 	if action.Kind == "tool.port-stop" {
 		state.portStoppingPID = payloadInt(action.Payload, "pid")
@@ -200,29 +187,43 @@ func payloadInt(payload map[string]any, key string) int {
 }
 
 func (s *app) runDeveloperToolJob(request *developerToolJob) {
-	defer request.cancel()
-	result, err := request.backend.Dispatch(request.ctx, request.action)
+	var cleanupErr error
+	defer func() {
+		request.cancel()
+		request.lease.Complete(cleanupErr)
+	}()
+	result, err := executeToolOperation(request.ctx, request.backend, request.action)
+	cleanupErr = asyncJobCleanupError(err)
 	window := request.window
 	if window == nil || window.IsDestroyed() {
-		s.completeDeveloperToolJob(request)
 		return
 	}
 	updateDone := make(chan struct{})
-	window.Update(func() {
-		defer close(updateDone)
+	if !request.owner.lifecycle.Post(func(callback func()) bool {
+		if window.IsDestroyed() {
+			return false
+		}
+		window.Update(func() {
+			defer close(updateDone)
+			callback()
+		})
+		return true
+	}, func() {
 		s.finishDeveloperToolJob(request, result, err)
 		if !window.IsDestroyed() {
 			window.Invalidate()
 		}
-	})
+	}) {
+		return
+	}
 	// Update posts to the MyGO window thread. A superseded/hidden request may
 	// finish its cleanup as soon as its context is cancelled; its queued callback
 	// is harmless because relevance includes the request pointer and token.
 	select {
 	case <-updateDone:
 	case <-request.ctx.Done():
+	case <-request.owner.lifecycle.Closing():
 	}
-	s.completeDeveloperToolJob(request)
 }
 
 func (s *app) finishDeveloperToolJob(request *developerToolJob, result application.ActionResult, err error) {
@@ -230,7 +231,7 @@ func (s *app) finishDeveloperToolJob(request *developerToolJob, result applicati
 		s.discardDeveloperToolJob(request)
 		return
 	}
-	jobs := s.toolJobs
+	jobs := s.toolsUnit.state.toolJobs
 	delete(jobs.current, request.key)
 	if err != nil {
 		if errors.Is(err, context.Canceled) && request.ctx.Err() != nil {
@@ -249,15 +250,12 @@ func (s *app) finishDeveloperToolJob(request *developerToolJob, result applicati
 }
 
 func (s *app) developerToolJobRelevant(request *developerToolJob) bool {
-	if request == nil || s.toolJobs == nil || request.ctx.Err() != nil ||
-		s.tools != request.state || s.snapshot.Home != request.home ||
-		s.toolJobs.current[request.key] != request || s.toolJobs.latest[request.key] != request.token {
+	if request == nil || s.toolsUnit.state.toolJobs != request.owner || request.ctx.Err() != nil ||
+		s.toolsUnit.state.tools != request.state || s.snapshot.Home != request.home ||
+		request.owner.current[request.key] != request || request.owner.latest[request.key] != request.token {
 		return false
 	}
-	s.toolJobs.mu.Lock()
-	closed := s.toolJobs.closed
-	s.toolJobs.mu.Unlock()
-	if closed {
+	if request.owner.lifecycle.Closed() {
 		return false
 	}
 	if request.action.Kind == "tool.port-stop" {
@@ -269,12 +267,12 @@ func (s *app) developerToolJobRelevant(request *developerToolJob) bool {
 }
 
 func (s *app) discardDeveloperToolJob(request *developerToolJob) {
-	if request == nil || s.toolJobs == nil || s.toolJobs.current[request.key] != request {
+	if request == nil || s.toolsUnit.state.toolJobs == nil || s.toolsUnit.state.toolJobs.current[request.key] != request {
 		return
 	}
-	delete(s.toolJobs.current, request.key)
-	s.toolJobs.latest[request.key]++
-	if s.tools != request.state {
+	delete(s.toolsUnit.state.toolJobs.current, request.key)
+	s.toolsUnit.state.toolJobs.latest[request.key]++
+	if s.toolsUnit.state.tools != request.state {
 		return
 	}
 	switch request.action.Kind {
@@ -385,21 +383,8 @@ func (s *app) applyDeveloperToolJobFailureToState(state *toolPageState, action a
 	}
 }
 
-func (s *app) completeDeveloperToolJob(request *developerToolJob) {
-	if request == nil || s.toolJobs == nil {
-		return
-	}
-	jobs := s.toolJobs
-	jobs.mu.Lock()
-	if _, ok := jobs.running[request]; ok {
-		delete(jobs.running, request)
-		close(request.done)
-	}
-	jobs.mu.Unlock()
-}
-
 func (s *app) cancelDeveloperToolJob(kind string) {
-	jobs := s.toolJobs
+	jobs := s.toolsUnit.state.toolJobs
 	if jobs == nil {
 		return
 	}
@@ -413,15 +398,15 @@ func (s *app) cancelDeveloperToolJob(kind string) {
 }
 
 func (s *app) developerToolJobBusy(kind string) bool {
-	if s.toolJobs == nil {
+	if s.toolsUnit.state.toolJobs == nil {
 		return false
 	}
-	request := s.toolJobs.current[kind]
+	request := s.toolsUnit.state.toolJobs.current[kind]
 	return request != nil && request.ctx.Err() == nil
 }
 
 func (s *app) toolOperationEnabled(state *toolPageState, kind string) bool {
-	if s == nil || state == nil || s.tools != state || s.page != "tools" || state.activeTab != developerToolTabForAction(kind) ||
+	if s == nil || state == nil || s.toolsUnit.state.tools != state || s.page != "tools" || state.activeTab != developerToolTabForAction(kind) ||
 		!s.developerToolTabVisible(state.activeTab) || s.developerToolJobBusy(kind) {
 		return false
 	}
@@ -432,7 +417,7 @@ func (s *app) toolOperationEnabled(state *toolPageState, kind string) bool {
 }
 
 func (s *app) developerToolStatus(tab string) string {
-	if s == nil || s.tools == nil {
+	if s == nil || s.toolsUnit.state.tools == nil {
 		return ""
 	}
 	kind := ""
@@ -444,8 +429,8 @@ func (s *app) developerToolStatus(tab string) string {
 	case "文本对比":
 		kind = "tool.diff"
 	case "端口":
-		if s.tools.portStoppingPID != 0 {
-			return fmt.Sprintf("正在等待 PID %d 的结束结果…", s.tools.portStoppingPID)
+		if s.toolsUnit.state.tools.portStoppingPID != 0 {
+			return fmt.Sprintf("正在等待 PID %d 的结束结果…", s.toolsUnit.state.tools.portStoppingPID)
 		}
 		kind = "tool.ports"
 	}
@@ -454,15 +439,15 @@ func (s *app) developerToolStatus(tab string) string {
 	}
 	switch tab {
 	case "JSON":
-		if s.tools.jsonPending {
+		if s.toolsUnit.state.tools.jsonPending {
 			return "正在校验…"
 		}
 	case "日期时间":
-		if s.tools.timePending {
+		if s.toolsUnit.state.tools.timePending {
 			return "正在转换…"
 		}
 	case "文本对比":
-		if s.tools.diffPending {
+		if s.toolsUnit.state.tools.diffPending {
 			return "正在比较…"
 		}
 	}
@@ -482,27 +467,27 @@ func (s *app) cancelDeveloperToolTab(tab string) {
 	switch tab {
 	case "JSON":
 		s.cancelDeveloperToolJob("tool.json")
-		if s.tools != nil && s.tools.jsonValidationCancel != nil {
-			s.tools.jsonValidationCancel()
-			s.tools.jsonValidationCancel = nil
-			s.tools.jsonPending = false
+		if s.toolsUnit.state.tools != nil && s.toolsUnit.state.tools.jsonValidationCancel != nil {
+			s.toolsUnit.state.tools.jsonValidationCancel()
+			s.toolsUnit.state.tools.jsonValidationCancel = nil
+			s.toolsUnit.state.tools.jsonPending = false
 		}
-		if s.tools != nil {
-			s.tools.jsonPending = false
+		if s.toolsUnit.state.tools != nil {
+			s.toolsUnit.state.tools.jsonPending = false
 		}
 	case "日期时间":
 		s.cancelDeveloperToolJob("tool.time")
-		if s.tools != nil && s.tools.timeCancel != nil {
-			s.tools.timeCancel()
-			s.tools.timeCancel = nil
-			s.tools.timePending = false
+		if s.toolsUnit.state.tools != nil && s.toolsUnit.state.tools.timeCancel != nil {
+			s.toolsUnit.state.tools.timeCancel()
+			s.toolsUnit.state.tools.timeCancel = nil
+			s.toolsUnit.state.tools.timePending = false
 		}
 	case "文本对比":
 		s.cancelDeveloperToolJob("tool.diff")
-		if s.tools != nil && s.tools.diffCancel != nil {
-			s.tools.diffCancel()
-			s.tools.diffCancel = nil
-			s.tools.diffPending = false
+		if s.toolsUnit.state.tools != nil && s.toolsUnit.state.tools.diffCancel != nil {
+			s.toolsUnit.state.tools.diffCancel()
+			s.toolsUnit.state.tools.diffCancel = nil
+			s.toolsUnit.state.tools.diffPending = false
 		}
 	case "端口":
 		s.cancelDeveloperToolJob("tool.ports")
@@ -512,8 +497,8 @@ func (s *app) cancelDeveloperToolTab(tab string) {
 func (s *app) syncDeveloperToolJobVisibility() {
 	jobs := s.ensureDeveloperToolJobs()
 	visible := ""
-	if s.page == "tools" && s.tools != nil && s.tools.activeTab != "" && s.developerToolTabVisible(s.tools.activeTab) {
-		visible = s.tools.activeTab
+	if s.page == "tools" && s.toolsUnit.state.tools != nil && s.toolsUnit.state.tools.activeTab != "" && s.developerToolTabVisible(s.toolsUnit.state.tools.activeTab) {
+		visible = s.toolsUnit.state.tools.activeTab
 	}
 	if jobs.visibleTab == visible {
 		return
@@ -523,50 +508,37 @@ func (s *app) syncDeveloperToolJobVisibility() {
 	if previous != "" {
 		s.cancelDeveloperToolTab(previous)
 	}
-	if s.tools == nil || visible == "" {
+	if s.toolsUnit.state.tools == nil || visible == "" {
 		return
 	}
 	switch visible {
 	case "JSON":
-		if !s.tools.jsonValid && !s.tools.jsonPending && strings.TrimSpace(s.tools.jsonSource) != "" {
+		if !s.toolsUnit.state.tools.jsonValid && !s.toolsUnit.state.tools.jsonPending && strings.TrimSpace(s.toolsUnit.state.tools.jsonSource) != "" {
 			s.queueJSONValidation()
 		}
 	case "日期时间":
-		if strings.TrimSpace(s.tools.timeInput) != "" {
+		if strings.TrimSpace(s.toolsUnit.state.tools.timeInput) != "" {
 			s.queueTimeConversion()
 		}
 	case "文本对比":
-		if s.tools.diffAuto && (s.tools.diffLeft != "" || s.tools.diffRight != "") {
+		if s.toolsUnit.state.tools.diffAuto && (s.toolsUnit.state.tools.diffLeft != "" || s.toolsUnit.state.tools.diffRight != "") {
 			s.queueDiff()
 		}
 	}
 }
 
-func (s *app) closeDeveloperToolJobs(ctx context.Context) error {
-	jobs := s.toolJobs
+func (s *toolsController) closeDeveloperToolJobs(ctx context.Context) error {
+	jobs := s.state.toolJobs
 	if jobs == nil {
 		return nil
 	}
-	jobs.mu.Lock()
-	jobs.closed = true
-	requests := make([]*developerToolJob, 0, len(jobs.running))
-	for request := range jobs.running {
-		if !request.preserveClose {
-			request.cancel()
-		}
-		requests = append(requests, request)
-	}
-	jobs.mu.Unlock()
+	jobs.lifecycle.Close()
 	jobs.current = make(map[string]*developerToolJob)
-	if s.tools != nil {
-		s.tools.cancelWork()
+	if s.state.tools != nil {
+		s.state.tools.cancelWork()
 	}
-	for _, request := range requests {
-		select {
-		case <-request.done:
-		case <-ctx.Done():
-			return fmt.Errorf("等待实用工具请求清理：%w", ctx.Err())
-		}
+	if err := jobs.lifecycle.Wait(ctx); err != nil {
+		return fmt.Errorf("等待实用工具请求清理：%w", err)
 	}
 	return nil
 }

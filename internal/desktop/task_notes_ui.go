@@ -45,10 +45,10 @@ var taskNoteNames = []string{"AGENTS.md", "TASK-CONTEXT.md", "TASK-RULES.md"}
 const taskRulesNoteTab = 2
 
 func (s *app) ensureTaskNotesUI() *taskNotesUIState {
-	if s.taskNotesUI == nil {
-		s.taskNotesUI = &taskNotesUIState{tab: -1, activeTab: -1}
+	if s.taskUnit.state.taskNotesUI == nil {
+		s.taskUnit.state.taskNotesUI = &taskNotesUIState{tab: -1, activeTab: -1}
 	}
-	return s.taskNotesUI
+	return s.taskUnit.state.taskNotesUI
 }
 
 func (s *app) renderTaskNotes(c *ui.Context, p palette) {
@@ -56,11 +56,11 @@ func (s *app) renderTaskNotes(c *ui.Context, p palette) {
 }
 
 func (s *app) renderTaskNoteMenuItems(c *ui.Context, menu *overflowMenuBuilder, selected int) {
-	if selected < 0 || selected >= len(s.notePaths) {
+	if selected < 0 || selected >= len(s.taskUnit.state.notePaths) {
 		return
 	}
 	state := s.ensureTaskNotesUI()
-	path := s.notePaths[selected]
+	path := s.taskUnit.state.notePaths[selected]
 	reloadLabel := "重新读取说明"
 	if state.taskRequestPending {
 		reloadLabel = "正在读取…"
@@ -71,10 +71,10 @@ func (s *app) renderTaskNoteMenuItems(c *ui.Context, menu *overflowMenuBuilder, 
 		s.requestTaskInstructionRead(false)
 	}
 	if menu.Item("reveal", "显示文件位置").Icon("folder").Disabled(path == "" || s.systemRevealBusy()).Chosen() {
-		s.act("system.reveal", s.currentTask().id, "", "", path, "", nil)
+		s.act("system.reveal", s.taskUnit.currentTask().id, "", "", path, "", nil)
 	}
 	if menu.Item("copy", "复制说明").Icon("copy").Disabled(path == "").Chosen() {
-		s.copyTextToClipboard(c.Services(), s.notes[selected], "已复制任务说明")
+		s.copyTextToClipboard(c.Services(), s.taskUnit.state.notes[selected], "已复制任务说明")
 	}
 	menu.Separator()
 	menu.Item("read-only", "只读阅读").Disabled(true).Chosen()
@@ -117,10 +117,10 @@ func (s *app) renderInstructionTextArea(c *ui.Context, p palette, key, kind stri
 }
 
 func (s *app) renderInstructionSaveStatus(c *ui.Context, p palette, key string) {
-	if markdownReadingOnly || s.markdownAutosave == nil {
+	if markdownReadingOnly || s.materialsUnit.state.markdownAutosave == nil {
 		return
 	}
-	status := s.markdownAutosave.Status(key)
+	status := s.materialsUnit.state.markdownAutosave.Status(key)
 	labelText := markdownSaveLabel(status)
 	if labelText == "" {
 		labelText = "已自动保存"
@@ -146,8 +146,8 @@ func (s *app) renderInstructionSaveStatus(c *ui.Context, p palette, key string) 
 
 func (s *app) requestTaskInstructionRead(acceptDisk bool) {
 	state := s.ensureTaskNotesUI()
-	task := s.currentTask()
-	if task.id == "" || s.noteTab < 0 || s.noteTab >= len(taskNoteNames) {
+	task := s.taskUnit.currentTask()
+	if task.id == "" || s.taskUnit.state.noteTab < 0 || s.taskUnit.state.noteTab >= len(taskNoteNames) {
 		return
 	}
 	if s.busy {
@@ -160,11 +160,11 @@ func (s *app) requestTaskInstructionRead(acceptDisk bool) {
 	state.taskRequestGeneration = state.taskGeneration
 	state.taskRequestPending = true
 	state.taskReadError = ""
-	payload := map[string]any{"noteTab": s.noteTab, "instructionGeneration": state.taskRequestGeneration}
+	payload := map[string]any{"noteTab": s.taskUnit.state.noteTab, "instructionGeneration": state.taskRequestGeneration}
 	if acceptDisk {
 		payload["acceptDisk"] = true
 	}
-	s.act("instructions.read", task.id, "", "", taskNoteNames[s.noteTab], "", payload)
+	s.act("instructions.read", task.id, "", "", taskNoteNames[s.taskUnit.state.noteTab], "", payload)
 }
 
 func (s *app) requestSettingsInstructionRead(acceptDisk bool) {
@@ -191,12 +191,12 @@ func (s *app) requestSettingsInstructionRead(acceptDisk bool) {
 }
 
 func (s *app) settingsInstructionScope() (scope, groupID string) {
-	if s.settingsAgentScope == "global" {
+	if s.settingsUnit.state.settingsAgentScope == "global" {
 		return "global", ""
 	}
-	groupID = s.settingsAgentGroupID
+	groupID = s.settingsUnit.state.settingsAgentGroupID
 	if groupID == "" {
-		groupID = s.settingsAgentScope
+		groupID = s.settingsUnit.state.settingsAgentScope
 	}
 	return "group", groupID
 }
@@ -210,9 +210,9 @@ func (s *app) requestInstructionDiskVersion(key string) {
 		s.requestSettingsInstructionRead(true)
 		return
 	}
-	for index, path := range s.notePaths {
+	for index, path := range s.taskUnit.state.notePaths {
 		if sameInstructionPath(path, ref.path) {
-			s.noteTab = index
+			s.taskUnit.state.noteTab = index
 			s.ensureTaskNotesUI().tab = index
 			s.requestTaskInstructionRead(true)
 			return
@@ -234,13 +234,13 @@ func (s *app) applyInstructionReadResult(action application.Action, result appli
 	generation := instructionGeneration(action)
 	if scope == "global" || scope == "group" {
 		contextKey := scope + ":" + payloadString(action.Payload, "groupId")
-		if contextKey != s.settingsAgentContext || s.settingsPage != "agents" ||
+		if contextKey != s.settingsUnit.state.settingsAgentContext || s.settingsUnit.state.settingsPage != "agents" ||
 			(generation != 0 && generation != state.settingsRequestGeneration) {
 			return
 		}
 	} else {
 		index := s.noteIndexForAction(action)
-		if index < 0 || index >= len(s.notes) || taskID == "" || taskID != s.currentTask().id || index != s.noteTab {
+		if index < 0 || index >= len(s.taskUnit.state.notes) || taskID == "" || taskID != s.taskUnit.currentTask().id || index != s.taskUnit.state.noteTab {
 			return
 		}
 		if generation != 0 && generation != state.taskRequestGeneration {
@@ -254,9 +254,9 @@ func (s *app) applyInstructionReadResult(action application.Action, result appli
 		return
 	}
 	if scope == "global" || scope == "group" {
-		s.settingsAgentContent = content
-		s.settingsAgentPath = result.Path
-		s.settingsAgentLoaded = true
+		s.settingsUnit.state.settingsAgentContent = content
+		s.settingsUnit.state.settingsAgentPath = result.Path
+		s.settingsUnit.state.settingsAgentLoaded = true
 		if state.activeKey == key {
 			state.activeContent = content
 		}
@@ -266,8 +266,8 @@ func (s *app) applyInstructionReadResult(action application.Action, result appli
 		return
 	}
 	index := s.noteIndexForAction(action)
-	s.notes[index], s.notePaths[index] = content, result.Path
-	s.noteHashes[index] = dataString(result.Data, "hash")
+	s.taskUnit.state.notes[index], s.taskUnit.state.notePaths[index] = content, result.Path
+	s.taskUnit.state.noteHashes[index] = dataString(result.Data, "hash")
 	if state.activeKey == key {
 		state.activeContent = content
 	}
@@ -276,7 +276,7 @@ func (s *app) applyInstructionReadResult(action application.Action, result appli
 	state.taskReadDeferred = false
 	state.taskReadError = ""
 	if readOnly {
-		s.noteEditing = false
+		s.taskUnit.state.noteEditing = false
 	}
 }
 
@@ -294,16 +294,16 @@ func (s *app) applyInstructionReadFailure(action application.Action, err error) 
 	}
 	if scope == "global" || scope == "group" {
 		contextKey := scope + ":" + payloadString(action.Payload, "groupId")
-		if contextKey == s.settingsAgentContext && s.settingsPage == "agents" && (generation == 0 || generation == state.settingsRequestGeneration) {
+		if contextKey == s.settingsUnit.state.settingsAgentContext && s.settingsUnit.state.settingsPage == "agents" && (generation == 0 || generation == state.settingsRequestGeneration) {
 			state.settingsRequestPending = false
 			state.settingsReadDeferred = false
 			state.settingsReadError = message
-			s.settingsAgentLoaded = false
+			s.settingsUnit.state.settingsAgentLoaded = false
 		}
 		return
 	}
 	index := s.noteIndexForAction(action)
-	if taskID == s.currentTask().id && index == s.noteTab && (generation == 0 || generation == state.taskRequestGeneration) {
+	if taskID == s.taskUnit.currentTask().id && index == s.taskUnit.state.noteTab && (generation == 0 || generation == state.taskRequestGeneration) {
 		state.taskRequestPending = false
 		state.taskReadDeferred = false
 		state.taskReadError = message
@@ -322,27 +322,27 @@ func (s *app) applyInstructionSaveResult(action application.Action, result appli
 		path = action.Path
 	}
 	key := s.instructionAutosaveKey(scope, taskID, groupID, path)
-	s.documentSaveMu.Lock()
-	ref := s.documentSaveRefs[key]
+	s.materialsUnit.state.documentSaveMu.Lock()
+	ref := s.materialsUnit.state.documentSaveRefs[key]
 	if ref.kind == "instruction" {
 		if hash := dataString(result.Data, "hash"); hash != "" {
 			ref.hash, ref.overwrite = hash, false
 		}
 		ref.path = path
-		s.documentSaveRefs[key] = ref
+		s.materialsUnit.state.documentSaveRefs[key] = ref
 	}
-	s.documentSaveMu.Unlock()
-	if scope == "task" && taskID == s.currentTask().id {
-		for index, notePath := range s.notePaths {
+	s.materialsUnit.state.documentSaveMu.Unlock()
+	if scope == "task" && taskID == s.taskUnit.currentTask().id {
+		for index, notePath := range s.taskUnit.state.notePaths {
 			if sameInstructionPath(notePath, path) {
-				s.noteHashes[index] = dataString(result.Data, "hash")
+				s.taskUnit.state.noteHashes[index] = dataString(result.Data, "hash")
 			}
 		}
 	}
 }
 
 func (s *app) deactivateInstructionEditor() {
-	state := s.taskNotesUI
+	state := s.taskUnit.state.taskNotesUI
 	if state == nil {
 		return
 	}
@@ -368,7 +368,7 @@ func (s *app) deactivateInstructionEditor() {
 }
 
 func (s *app) preserveActiveInstructionDraft(key string) {
-	state := s.taskNotesUI
+	state := s.taskUnit.state.taskNotesUI
 	if state == nil || state.activeKey != key {
 		return
 	}
@@ -383,11 +383,11 @@ func (s *app) activeInstructionContent(state *taskNotesUIState) string {
 	}
 	switch state.activeKind {
 	case "task":
-		if state.activeTab >= 0 && state.activeTab < len(s.notes) {
-			return s.notes[state.activeTab]
+		if state.activeTab >= 0 && state.activeTab < len(s.taskUnit.state.notes) {
+			return s.taskUnit.state.notes[state.activeTab]
 		}
 	case "settings":
-		return s.settingsAgentContent
+		return s.settingsUnit.state.settingsAgentContent
 	}
 	return state.activeContent
 }

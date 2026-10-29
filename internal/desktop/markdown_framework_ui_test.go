@@ -128,14 +128,14 @@ func TestMyGOReadingImageTrustAndLightbox(t *testing.T) {
 	if err := tester.Click("Markdown 图片：独立图"); err != nil {
 		t.Fatal(err)
 	}
-	if s.markdownBitmapViewer == nil || s.markdownBitmapViewer.owner != state {
+	if s.materialsUnit.state.markdownBitmapViewer == nil || s.materialsUnit.state.markdownBitmapViewer.owner != state {
 		t.Fatal("image did not use shared lightbox")
 	}
 	if _, ok := tester.Find("图片画布"); !ok {
 		t.Fatal("lightbox canvas missing")
 	}
 	tester.Key(0, ui.KeyEscape)
-	if s.markdownBitmapViewer != nil || state.doc.Source() != source {
+	if s.materialsUnit.state.markdownBitmapViewer != nil || state.doc.Source() != source {
 		t.Fatal("lightbox close lost reader/source")
 	}
 }
@@ -172,7 +172,7 @@ func TestMyGOReadingCommentsBoundaryAndLongDocument(t *testing.T) {
 			t.Run(fmt.Sprintf("%d-dark-%v", width, dark), func(t *testing.T) {
 				s := &app{dark: dark, page: "requirements"}
 				reader := s.requirementReader("", "https://project.feishu.cn/test/story/detail/123")
-				t.Cleanup(s.closeRequirementReaders)
+				t.Cleanup(s.requirementUnit.closeRequirementReaders)
 				s.updateRequirementReaderBody(reader, application.RequirementContent{Body: "正文末尾 needle"})
 				parent := "first"
 				s.updateRequirementReaderComments(reader, application.RequirementComments{Comments: []domain.RequirementComment{

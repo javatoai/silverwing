@@ -26,10 +26,10 @@ func (s *app) handleDocumentClose(event *mygo.CloseEvent) {
 	if event == nil {
 		return
 	}
-	if s.documentClose == nil {
-		s.documentClose = &documentCloseState{}
+	if s.materialsUnit.state.documentClose == nil {
+		s.materialsUnit.state.documentClose = &documentCloseState{}
 	}
-	state := s.documentClose
+	state := s.materialsUnit.state.documentClose
 	if state.allowNext {
 		state.allowNext = false
 		if err := s.documentCloseReady(); err == nil {
@@ -53,7 +53,7 @@ func (s *app) handleDocumentClose(event *mygo.CloseEvent) {
 		return
 	}
 	state.preparing = true
-	window, autosave := s.win, s.markdownAutosave
+	window, autosave := s.win, s.materialsUnit.state.markdownAutosave
 	window.Invalidate()
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -67,11 +67,11 @@ func (s *app) handleDocumentClose(event *mygo.CloseEvent) {
 			return
 		}
 		window.Update(func() {
-			if s.documentClose != state {
+			if s.materialsUnit.state.documentClose != state {
 				return
 			}
 			state.preparing = false
-			if remaining := s.documentClosePendingFailures(failures); len(remaining) > 0 {
+			if remaining := s.materialsUnit.documentClosePendingFailures(failures); len(remaining) > 0 {
 				s.showDocumentCloseError(s.documentCloseFailures(remaining))
 				return
 			}
@@ -95,12 +95,12 @@ func (s *app) captureDocumentCloseInput() error {
 	if err := s.commentComposerCloseError(); err != nil {
 		return err
 	}
-	for _, state := range s.materialTextEditors {
+	for _, state := range s.materialsUnit.state.materialTextEditors {
 		if err := s.captureMaterialTextState(state); err != nil {
 			return err
 		}
 	}
-	if err := s.captureMarkdownEditorInput(s.markdown); err != nil {
+	if err := s.captureMarkdownEditorInput(s.materialsUnit.state.markdown); err != nil {
 		return err
 	}
 	if s.documentCloseOperationBusy() {
@@ -109,7 +109,7 @@ func (s *app) captureDocumentCloseInput() error {
 	if err := s.taskLocalNotesCloseError(); err != nil {
 		return err
 	}
-	if state := s.taskNotesUI; state != nil && state.activeKey != "" {
+	if state := s.taskUnit.state.taskNotesUI; state != nil && state.activeKey != "" {
 		s.preserveActiveInstructionDraft(state.activeKey)
 		if markdown := state.activeMarkdown; markdown != nil && markdown.doc != nil && !markdown.closed {
 			for _, rich := range allMarkdownRichFields(markdown) {
@@ -129,7 +129,7 @@ func (s *app) captureDocumentCloseInput() error {
 			return errors.New("中文输入尚未结束，请提交输入后再关闭；当前草稿已保留")
 		}
 	}
-	if state := s.markdown; state != nil && state.doc != nil && !state.closed && !state.readOnly && !state.detached {
+	if state := s.materialsUnit.state.markdown; state != nil && state.doc != nil && !state.closed && !state.readOnly && !state.detached {
 		for _, rich := range allMarkdownRichFields(state) {
 			if !rich.input.composing && (rich.input.dirty || rich.input.errorText != "") {
 				return errors.New("富文本内容尚未提交，请处理编辑错误后再关闭；当前草稿已保留")
@@ -148,18 +148,14 @@ func (s *app) captureDocumentCloseInput() error {
 
 // Login initialization and logout use independent CLI workers, but the source
 // app still treats them as close-blocking operations until worker cleanup ends.
-// This map is window-thread owned; status reads and device-code polling do not
+// The CLI owner reports its auth mutation boundary; status reads and device-code polling do not
 // block closing and are cancelled by closeCLIJobs after the window exits.
 func (s *app) documentCloseOperationBusy() bool {
 	if s.busy || s.materialsFileMutationRunning() {
 		return true
 	}
-	if s.cliJobs != nil {
-		for request := range s.cliJobs.running {
-			if request != nil && (request.action.Kind == "cli.auth.start" || request.action.Kind == "cli.auth.logout") {
-				return true
-			}
-		}
+	if state := s.toolsUnit.state.cliJobs; state != nil && state.authMutationRunning() {
+		return true
 	}
 	return false
 }
@@ -168,19 +164,19 @@ func (s *app) documentCloseReady() error {
 	if err := s.captureDocumentCloseInput(); err != nil {
 		return err
 	}
-	if s.markdownAutosave != nil {
-		if failures := s.documentClosePendingFailures(s.markdownAutosave.PendingFailures()); len(failures) > 0 {
+	if s.materialsUnit.state.markdownAutosave != nil {
+		if failures := s.materialsUnit.documentClosePendingFailures(s.materialsUnit.state.markdownAutosave.PendingFailures()); len(failures) > 0 {
 			return s.documentCloseFailures(failures)
 		}
 	}
 	return nil
 }
 
-func (s *app) documentClosePendingFailures(failures []editor.FlushFailure) []editor.FlushFailure {
+func (s *materialsController) documentClosePendingFailures(failures []editor.FlushFailure) []editor.FlushFailure {
 	remaining := make([]editor.FlushFailure, 0, len(failures))
 	for _, failure := range failures {
 		ref, ok := s.documentSaveRef(failure.Path)
-		state := s.markdownAutosave.Status(failure.Path)
+		state := s.state.markdownAutosave.Status(failure.Path)
 		if ok && ref.kind != "instruction" && !state.Composing && !state.Saving && state.CacheError == "" && state.DraftSavedRevision >= state.Revision {
 			continue
 		}
@@ -196,7 +192,7 @@ func (s *app) documentCloseFailures(failures []editor.FlushFailure) error {
 	messages := make([]string, 0, len(failures))
 	for _, failure := range failures {
 		name := "文档"
-		if ref, ok := s.documentSaveRef(failure.Path); ok && ref.path != "" {
+		if ref, ok := s.materialsUnit.documentSaveRef(failure.Path); ok && ref.path != "" {
 			name = filepath.Base(ref.path)
 		}
 		messages = append(messages, name+"："+failure.Message)

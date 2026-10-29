@@ -39,13 +39,13 @@ func newMeeglePopoverTestApp(t *testing.T) (*app, *meeglePopoverTestBackend) {
 	t.Helper()
 	backend := &meeglePopoverTestBackend{actions: make(chan application.Action, 8), completed: make(chan struct{}, 8)}
 	s := newApp(backend, Options{CapturePath: "isolated-test"})
-	s.page, s.settingsPage = "settings", "cli-meegle"
+	s.page, s.settingsUnit.state.settingsPage = "settings", "cli-meegle"
 	s.snapshot.Home = t.TempDir()
-	s.configJSON = `{"meegleProjects":[{"project_key":"existing","simple_name":"Existing"}]}`
-	s.snapshot.ConfigJSON = s.configJSON
-	s.settingsCLIStatus = map[string]map[string]any{"meegle": {"installed": true, "authenticated": true, "host": "fixture"}}
+	s.settingsUnit.state.configJSON = `{"meegleProjects":[{"project_key":"existing","simple_name":"Existing"}]}`
+	s.snapshot.ConfigJSON = s.settingsUnit.state.configJSON
+	s.settingsUnit.state.settingsCLIStatus = map[string]map[string]any{"meegle": {"installed": true, "authenticated": true, "host": "fixture"}}
 	identity, _ := s.currentMeegleProjectCatalogIdentity()
-	s.meegleProjectCatalog = &meegleProjectCatalogState{
+	s.settingsUnit.state.meegleProjectCatalog = &meegleProjectCatalogState{
 		loaded: true, identity: identity, context: s.currentRequirementIdentityContext(), verifiedIdentity: "reqid-v1:test-account",
 		projects: []meegleCatalogProject{{Name: "Existing", ProjectKey: "existing", SimpleName: "Existing"}, {Name: "Alpha Project", ProjectKey: "alpha-key", SimpleName: "alpha"}, {Name: "Beta Project", ProjectKey: "beta-key", SimpleName: "beta"}},
 	}
@@ -74,7 +74,7 @@ func TestMeegleProjectPopoverSelectsDirectlyAndRetainsFailures(t *testing.T) {
 	if err := tester.Click("添加项目空间"); err != nil {
 		t.Fatal(err)
 	}
-	if !s.meegleProjectCatalog.pickerOpen || !tester.Focused("搜索 Meegle 项目空间") || tester.HasText("添加 Meegle 项目空间") {
+	if !s.settingsUnit.state.meegleProjectCatalog.pickerOpen || !tester.Focused("搜索 Meegle 项目空间") || tester.HasText("添加 Meegle 项目空间") {
 		t.Fatal("add button did not directly open and focus the searchable popover")
 	}
 	if _, ok := tester.Find("Existing · Existing · existing"); ok {
@@ -86,11 +86,11 @@ func TestMeegleProjectPopoverSelectsDirectlyAndRetainsFailures(t *testing.T) {
 		t.Fatalf("popover is not anchored to the add button: %+v / %+v", anchor, search)
 	}
 	tester.Key(0, ui.KeyDown)
-	if s.meegleProjectCatalog.pickerHighlight != 1 {
+	if s.settingsUnit.state.meegleProjectCatalog.pickerHighlight != 1 {
 		t.Fatal("Down did not move the highlighted candidate")
 	}
 	tester.Key(0, ui.KeyUp)
-	if s.meegleProjectCatalog.pickerHighlight != 0 {
+	if s.settingsUnit.state.meegleProjectCatalog.pickerHighlight != 0 {
 		t.Fatal("Up did not move the highlighted candidate")
 	}
 	if directory := os.Getenv("SILVERWING_LIGHTBOX_EVIDENCE_DIR"); directory != "" {
@@ -113,7 +113,7 @@ func TestMeegleProjectPopoverSelectsDirectlyAndRetainsFailures(t *testing.T) {
 	if action.Kind != "config.fields.save" || payloadString(action.Payload, "meegleProjectPickerSaveProjectKey") != "beta-key" {
 		t.Fatalf("Enter did not directly save selected project: %+v", action)
 	}
-	if s.meegleProjectKeyAlreadyConfigured("beta-key") || s.meegleProjectCatalog.pickerPendingSave == 0 {
+	if s.meegleProjectKeyAlreadyConfigured("beta-key") || s.settingsUnit.state.meegleProjectCatalog.pickerPendingSave == 0 {
 		t.Fatal("UI claimed success before the save completed")
 	}
 	tester.Key(0, ui.KeyEnter)
@@ -125,7 +125,7 @@ func TestMeegleProjectPopoverSelectsDirectlyAndRetainsFailures(t *testing.T) {
 	s.busy = false
 	s.finishMeegleProjectPickerSave(action, application.ActionResult{}, errors.New("isolated failure"), nil)
 	tester.Frame()
-	if !s.meegleProjectCatalog.pickerOpen || !tester.HasText("isolated failure") || s.meegleProjectKeyAlreadyConfigured("beta-key") {
+	if !s.settingsUnit.state.meegleProjectCatalog.pickerOpen || !tester.HasText("isolated failure") || s.meegleProjectKeyAlreadyConfigured("beta-key") {
 		t.Fatal("failed addition did not retain retry state")
 	}
 	tester.Key(0, ui.KeyEnter)
@@ -133,28 +133,28 @@ func TestMeegleProjectPopoverSelectsDirectlyAndRetainsFailures(t *testing.T) {
 	s.busy = false
 	s.finishMeegleProjectPickerSave(action, application.ActionResult{}, nil, nil)
 	tester.Frame()
-	if s.meegleProjectCatalog.pickerOpen || !s.meegleProjectKeyAlreadyConfigured("beta-key") || !tester.Focused("添加项目空间") {
-		t.Fatalf("successful save state: open=%t configured=%t focus=%t error=%q", s.meegleProjectCatalog.pickerOpen, s.meegleProjectKeyAlreadyConfigured("beta-key"), tester.Focused("添加项目空间"), s.meegleProjectCatalog.pickerSaveError)
+	if s.settingsUnit.state.meegleProjectCatalog.pickerOpen || !s.meegleProjectKeyAlreadyConfigured("beta-key") || !tester.Focused("添加项目空间") {
+		t.Fatalf("successful save state: open=%t configured=%t focus=%t error=%q", s.settingsUnit.state.meegleProjectCatalog.pickerOpen, s.meegleProjectKeyAlreadyConfigured("beta-key"), tester.Focused("添加项目空间"), s.settingsUnit.state.meegleProjectCatalog.pickerSaveError)
 	}
 	if err := tester.Click("添加项目空间"); err != nil {
 		t.Fatal(err)
 	}
 	tester.Key(0, ui.KeyEscape)
-	if s.meegleProjectCatalog.pickerOpen || !tester.Focused("添加项目空间") {
+	if s.settingsUnit.state.meegleProjectCatalog.pickerOpen || !tester.Focused("添加项目空间") {
 		t.Fatal("Escape did not close and restore focus")
 	}
 	if err := tester.Click("添加项目空间"); err != nil {
 		t.Fatal(err)
 	}
 	tester.ClickAt(850, 600)
-	if s.meegleProjectCatalog.pickerOpen {
+	if s.settingsUnit.state.meegleProjectCatalog.pickerOpen {
 		t.Fatal("outside click did not close picker")
 	}
 }
 
 func TestMeegleProjectCatalogCloseCancelsReadAndRejectsLateResult(t *testing.T) {
 	s, _ := newMeeglePopoverTestApp(t)
-	state := s.meegleProjectCatalog
+	state := s.settingsUnit.state.meegleProjectCatalog
 	state.pickerOpen, state.loading, state.loaded = true, true, false
 	state.generation = 7
 	action := application.Action{Kind: "meegle.projects", Payload: map[string]any{"catalogGeneration": "7"}}
@@ -163,7 +163,7 @@ func TestMeegleProjectCatalogCloseCancelsReadAndRejectsLateResult(t *testing.T) 
 		t.Fatal(err)
 	}
 	s.closeMeegleProjectPicker()
-	if request.ctx.Err() == nil || state.loading || s.cliJobs.requests["meegle.projects"] != nil {
+	if request.ctx.Err() == nil || state.loading || s.toolsUnit.state.cliJobs.requests["meegle.projects"] != nil {
 		t.Fatal("closing did not cancel the owned directory read")
 	}
 	s.finishMeegleProjectCatalog(action, application.ActionResult{Data: map[string]any{"projects": []meegleCatalogProject{{Name: "late", ProjectKey: "late", SimpleName: "late"}}}}, nil)
@@ -171,7 +171,7 @@ func TestMeegleProjectCatalogCloseCancelsReadAndRejectsLateResult(t *testing.T) 
 		t.Fatal("closed picker accepted a late directory")
 	}
 	state.pickerOpen = true
-	s.settingsPage = "git"
+	s.settingsUnit.state.settingsPage = "git"
 	s.observeMeegleProjectPicker()
 	if state.pickerOpen {
 		t.Fatal("leaving the owning settings page kept picker open")
@@ -182,7 +182,7 @@ func TestMeegleProjectCatalogWorkerUsesConfirmedIdentity(t *testing.T) {
 	for _, reuse := range []bool{false, true} {
 		s, backend := newMeeglePopoverTestApp(t)
 		if !reuse {
-			s.meegleProjectCatalog.verifiedIdentity = ""
+			s.settingsUnit.state.meegleProjectCatalog.verifiedIdentity = ""
 		}
 		request, err := s.beginCLIJob(application.Action{Kind: "meegle.projects", Payload: map[string]any{"catalogGeneration": "1"}})
 		if err != nil {
@@ -202,7 +202,7 @@ func TestMeegleProjectCatalogWorkerUsesConfirmedIdentity(t *testing.T) {
 		if reuse && backend.identityCalls != 0 || !reuse && backend.identityCalls != 1 {
 			t.Fatalf("identity probe reuse=%t calls=%d", reuse, backend.identityCalls)
 		}
-		s.configJSON = strings.TrimSuffix(s.configJSON, "}") + `,"meegleExecutablePath":"different"}`
+		s.settingsUnit.state.configJSON = strings.TrimSuffix(s.settingsUnit.state.configJSON, "}") + `,"meegleExecutablePath":"different"}`
 		if s.cliJobRelevant(request) {
 			t.Fatal("changed executable accepted the previous account's result")
 		}
@@ -211,20 +211,20 @@ func TestMeegleProjectCatalogWorkerUsesConfirmedIdentity(t *testing.T) {
 
 func TestMeegleProjectCatalogAccountChangesDiscardOptions(t *testing.T) {
 	s, _ := newMeeglePopoverTestApp(t)
-	state := s.meegleProjectCatalog
+	state := s.settingsUnit.state.meegleProjectCatalog
 	state.pickerOpen, state.loading, state.generation = true, true, 9
 	action := application.Action{Kind: "meegle.projects", Payload: map[string]any{"catalogGeneration": "9"}}
 	request, err := s.beginCLIJob(action)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.configJSON = strings.TrimSuffix(s.configJSON, "}") + `,"meegleExecutablePath":"changed"}`
+	s.settingsUnit.state.configJSON = strings.TrimSuffix(s.settingsUnit.state.configJSON, "}") + `,"meegleExecutablePath":"changed"}`
 	s.observeMeegleProjectPicker()
 	if state.pickerOpen || state.loading || state.loaded || len(state.projects) != 0 || request.ctx.Err() == nil {
 		t.Fatal("config change did not cancel the read and retire account-bound options")
 	}
 	s, _ = newMeeglePopoverTestApp(t)
-	state = s.meegleProjectCatalog
+	state = s.settingsUnit.state.meegleProjectCatalog
 	state.generation = 9
 	s.finishMeegleProjectCatalog(action, application.ActionResult{}, &application.RequirementIdentityChangedError{Snapshot: application.RequirementIdentitySnapshot{Identity: "reqid-v1:other", State: application.RequirementIdentityAuthenticated}})
 	if state.loaded || len(state.projects) != 0 || state.verifiedIdentity != "" || state.error == "" {
@@ -246,13 +246,13 @@ func TestMeegleProjectPopoverNarrowEmptyAndErrorStates(t *testing.T) {
 	if !tester.HasText("没有匹配的项目。") {
 		t.Fatal("missing no-results state")
 	}
-	s.meegleProjectCatalog.loading = true
+	s.settingsUnit.state.meegleProjectCatalog.loading = true
 	tester.Frame()
 	if !tester.HasText("正在加载项目目录…") {
 		t.Fatal("missing loading state")
 	}
-	s.meegleProjectCatalog.loading = false
-	s.meegleProjectCatalog.error = "fixture directory failure"
+	s.settingsUnit.state.meegleProjectCatalog.loading = false
+	s.settingsUnit.state.meegleProjectCatalog.error = "fixture directory failure"
 	tester.Frame()
 	if !tester.HasText("读取失败：fixture directory failure") {
 		t.Fatal("missing retryable error state")

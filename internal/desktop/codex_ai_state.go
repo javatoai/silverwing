@@ -158,7 +158,7 @@ func codexAITab(tab string) string {
 }
 
 func (s *app) openCodexAI(taskPath, tab string) {
-	current := s.currentTask()
+	current := s.taskUnit.currentTask()
 	if current.id == "" || strings.TrimSpace(current.path) == "" {
 		s.lastError = "请先选择一个有任务目录的任务。"
 		return
@@ -180,14 +180,14 @@ func (s *app) openCodexAI(taskPath, tab string) {
 		home: s.snapshot.Home, taskID: current.id, taskCreatedAt: current.createdAt,
 		taskPath: filepath.Clean(currentPath), cwd: filepath.Clean(requested),
 	}
-	state := s.codexAI
+	state := s.toolsUnit.state.codexAI
 	if state == nil {
 		state = &codexAIState{
 			requests:    make(map[string]*codexAIRequest),
 			generations: make(map[string]uint64), running: make(map[*codexAIRequest]struct{}),
 			mcpScope: "ALL",
 		}
-		s.codexAI = state
+		s.toolsUnit.state.codexAI = state
 		state.identity = identity
 		state.identityRevision = 1
 	} else if state.closed {
@@ -235,7 +235,7 @@ func (s *app) openCodexAI(taskPath, tab string) {
 }
 
 func (s *app) closeCodexAI() {
-	state := s.codexAI
+	state := s.toolsUnit.state.codexAI
 	if state == nil {
 		return
 	}
@@ -270,10 +270,10 @@ func resetCodexAIMCPState(state *codexAIState) {
 }
 
 func (s *app) codexAIIdentityCurrent(state *codexAIState) bool {
-	if state == nil || s.codexAI != state || !state.Open || state.closed {
+	if state == nil || s.toolsUnit.state.codexAI != state || !state.Open || state.closed {
 		return false
 	}
-	current := s.currentTask()
+	current := s.taskUnit.currentTask()
 	if current.id != state.identity.taskID || current.createdAt != state.identity.taskCreatedAt || s.snapshot.Home != state.identity.home {
 		return false
 	}

@@ -57,7 +57,7 @@ func (s *app) settingsScreen(c *ui.Context, p palette) {
 				ui.Box(c).Grow(1).FillWidth().MinWidth(0).MinHeight(0).Children(func() {
 					s.renderSkillsBrowser(c, p)
 				})
-			} else if s.settingsPage == "agents" {
+			} else if s.settingsUnit.state.settingsPage == "agents" {
 				ui.Box(c).Grow(1).FillWidth().MinWidth(0).MinHeight(0).Children(func() {
 					s.settingsAgents(c, p)
 				})
@@ -84,7 +84,7 @@ func (state *app) renderSettingsSidebar(context *ui.Context, theme palette) {
 			button := ui.ButtonBase(context.Key("settings-section-"+item.name)).Height(43).FillWidth().Padding(0, 14).Justify(ui.Start).Radius(10).Label(item.name)
 			foreground := theme.text
 			weight := 400
-			if state.settingsTab == item.name {
+			if state.settingsUnit.state.settingsTab == item.name {
 				button.Background(theme.selected)
 				weight = 600
 				if state.dark {
@@ -94,12 +94,12 @@ func (state *app) renderSettingsSidebar(context *ui.Context, theme palette) {
 				}
 			}
 			button.Children(func() { label(context, item.name, 15, foreground).FontWeight(weight).LineHeight(23.0 / 15).NoWrap() })
-			if button.Clicked() && state.settingsTab != item.name {
+			if button.Clicked() && state.settingsUnit.state.settingsTab != item.name {
 				state.deactivateInstructionEditor()
-				state.settingsTab = item.name
-				state.settingsPage = item.pages[0].key
-				state.settingsOutput = ""
-				state.settingsLoaded = ""
+				state.settingsUnit.state.settingsTab = item.name
+				state.settingsUnit.state.settingsPage = item.pages[0].key
+				state.settingsUnit.state.settingsOutput = ""
+				state.settingsUnit.state.settingsLoaded = ""
 			}
 		}
 	})
@@ -108,38 +108,38 @@ func (state *app) renderSettingsSidebar(context *ui.Context, theme palette) {
 func (s *app) settingsTabButton(c *ui.Context, p palette, key, name string) {
 	button := ui.ButtonBase(c.Key("settings-page-"+key)).Height(34).Padding(0, 13).Radius(8).Label(name)
 	fg := p.muted
-	if s.settingsPage == key {
+	if s.settingsUnit.state.settingsPage == key {
 		button.Background(p.selected)
 		fg = p.blue
 	}
 	button.Children(func() { label(c, name, 12, fg).FontWeight(500) })
-	if button.Clicked() && s.settingsPage != key {
+	if button.Clicked() && s.settingsUnit.state.settingsPage != key {
 		s.deactivateInstructionEditor()
-		s.settingsPage = key
-		s.settingsOutput = ""
-		s.settingsLoaded = ""
+		s.settingsUnit.state.settingsPage = key
+		s.settingsUnit.state.settingsOutput = ""
+		s.settingsUnit.state.settingsLoaded = ""
 	}
 }
 
 func (s *app) currentSettingsSection() settingsSection {
 	for _, section := range settingsSections {
-		if section.name == s.settingsTab {
+		if section.name == s.settingsUnit.state.settingsTab {
 			for _, page := range section.pages {
-				if page.key == s.settingsPage {
+				if page.key == s.settingsUnit.state.settingsPage {
 					return section
 				}
 			}
-			s.settingsPage = section.pages[0].key
-			s.settingsLoaded = ""
+			s.settingsUnit.state.settingsPage = section.pages[0].key
+			s.settingsUnit.state.settingsLoaded = ""
 			return section
 		}
 	}
-	s.settingsTab, s.settingsPage = settingsSections[0].name, settingsSections[0].pages[0].key
+	s.settingsUnit.state.settingsTab, s.settingsUnit.state.settingsPage = settingsSections[0].name, settingsSections[0].pages[0].key
 	return settingsSections[0]
 }
 
 func (s *app) settingsPageContent(c *ui.Context, p palette) {
-	switch s.settingsPage {
+	switch s.settingsUnit.state.settingsPage {
 	case "basic":
 		s.settingsBasic(c, p)
 	case "tool-visibility":

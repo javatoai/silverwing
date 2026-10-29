@@ -90,7 +90,7 @@ func TestMarkdownMermaidCompactActions(t *testing.T) {
 				if err := tester.Click("放大查看"); err != nil {
 					t.Fatal(err)
 				}
-				viewer := s.markdownBitmapViewer
+				viewer := s.materialsUnit.state.markdownBitmapViewer
 				if viewer == nil || viewer.owner != state || viewer.media.imageExpandedBitmap != bitmap || !viewer.media.imageExpanded {
 					t.Fatal("expand did not reuse the shared native image viewer")
 				}
@@ -105,7 +105,7 @@ func TestMarkdownMermaidCompactActions(t *testing.T) {
 func TestRequirementFindCrossesIndependentCommentDocuments(t *testing.T) {
 	s := &app{}
 	reader := s.requirementReader("", "https://project.feishu.cn/test/story/detail/123")
-	t.Cleanup(s.closeRequirementReaders)
+	t.Cleanup(s.requirementUnit.closeRequirementReaders)
 	s.updateRequirementReaderBody(reader, application.RequirementContent{Body: "正文 needle"})
 	s.updateRequirementReaderComments(reader, application.RequirementComments{Comments: []domain.RequirementComment{
 		{ID: "first", Content: "第一个 needle"},
@@ -137,16 +137,19 @@ func TestReadingLateLoadRespectsUserSelection(t *testing.T) {
 	root := t.TempDir()
 	for _, interacted := range []bool{false, true} {
 		t.Run(fmt.Sprint(interacted), func(t *testing.T) {
-			s := &app{page: "tasks", tasks: []task{{id: "first", path: filepath.Join(root, "first")}, {id: "saved", path: filepath.Join(root, "saved")}}}
+			s := &app{
+				taskUnit: taskController{state: taskState{tasks: []task{{id: "first", path: filepath.Join(root, "first")}, {id: "saved", path: filepath.Join(root, "saved")}}}},
+				page:     "tasks",
+			}
 			s.readingSession = &desktopReadingSession{loaded: true, restoreLastTask: true, userInteracted: interacted,
 				startupIdentity: readingUIIdentity{page: "tasks"},
 				cache:           ReadingSnapshot{LastTaskPath: filepath.Join(root, "saved"), View: "MATERIALS"}}
 			s.restoreReadingSessionOnSnapshot()
 			if interacted {
-				if s.selected != 0 || s.tab != 0 {
+				if s.taskUnit.state.selected != 0 || s.tab != 0 {
 					t.Fatal("late cache load replaced a user selection")
 				}
-			} else if s.selected != 1 || s.tab != 1 {
+			} else if s.taskUnit.state.selected != 1 || s.tab != 1 {
 				t.Fatal("empty startup identity prevented restoring the saved task")
 			}
 		})

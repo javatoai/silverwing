@@ -11,7 +11,7 @@ func mapBool(value map[string]any, key string, fallback bool) bool {
 }
 func (s *app) qaGroupTaskCount(id string) int {
 	count := 0
-	for _, t := range s.tasks {
+	for _, t := range s.taskUnit.state.tasks {
 		if t.groupID == id {
 			count++
 		}
@@ -19,7 +19,7 @@ func (s *app) qaGroupTaskCount(id string) int {
 	return count
 }
 func (s *app) saveCreatedTaskGroup(config map[string]any, id string) {
-	s.settingsGroupID = id
+	s.settingsUnit.state.settingsGroupID = id
 	s.saveSettingsConfigMap(config, "groups")
 }
 func normalizeTaskCreationWorkspaceTools(options []taskCreationWorkspaceToolOption, configured []string) []taskCreationWorkspaceToolOption {
@@ -43,15 +43,15 @@ func (s *app) openTaskInCodex(t task) {
 
 func (s *app) reconcileQASettingsNavigation() {
 	for _, section := range settingsSections {
-		if section.name == s.settingsTab {
+		if section.name == s.settingsUnit.state.settingsTab {
 			for _, page := range section.pages {
-				if page.key == s.settingsPage {
+				if page.key == s.settingsUnit.state.settingsPage {
 					return
 				}
 			}
-			s.settingsPage = section.pages[0].key
+			s.settingsUnit.state.settingsPage = section.pages[0].key
 			return
 		}
 	}
-	s.settingsTab, s.settingsPage = settingsSections[0].name, settingsSections[0].pages[0].key
+	s.settingsUnit.state.settingsTab, s.settingsUnit.state.settingsPage = settingsSections[0].name, settingsSections[0].pages[0].key
 }

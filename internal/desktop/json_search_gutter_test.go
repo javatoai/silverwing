@@ -26,7 +26,11 @@ func checkJSONSearchGutter(ctx context.Context) (report jsonSearchGutterResult, 
 	}
 	fixture := func(source string) (*app, *toolPageState, *ui.Tester) {
 		state := newToolPageState(source)
-		s := &app{page: "tools", tools: state, configJSON: `{"toolVisibility":{"json":true,"dateTime":false,"textDiff":false,"killPort":false}}`}
+		s := &app{
+			settingsUnit: settingsController{state: settingsState{configJSON: `{"toolVisibility":{"json":true,"dateTime":false,"textDiff":false,"killPort":false}}`}},
+			toolsUnit:    toolsController{state: toolsState{tools: state}},
+			page:         "tools",
+		}
 		tester := ui.NewTester(func(c *ui.Context) { ui.Column(c).Fill().Children(func() { s.renderDeveloperTools(c) }) }, 1100, 800)
 		return s, state, tester
 	}

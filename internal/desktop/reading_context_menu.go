@@ -4,9 +4,9 @@ import "github.com/egoist/mygo/ui"
 
 // The materials tree keeps its management menu. These are reading actions only.
 func (s *app) bindMaterialsReadingContextMenu(state *markdownEditorState) {
-	home, taskID, path := s.snapshot.Home, s.currentTask().id, s.documentPath
+	home, taskID, path := s.snapshot.Home, s.taskUnit.currentTask().id, s.materialsUnit.state.documentPath
 	state.contextMenu = func(c *ui.Context, menu *ui.Menu) {
-		if home != s.snapshot.Home || taskID != s.currentTask().id || path != s.documentPath || !s.markdownEditorIsCurrent(state) {
+		if home != s.snapshot.Home || taskID != s.taskUnit.currentTask().id || path != s.materialsUnit.state.documentPath || !s.markdownEditorIsCurrent(state) {
 			return
 		}
 		menu.Separator()
@@ -20,7 +20,7 @@ func (s *app) bindMaterialsReadingContextMenu(state *markdownEditorState) {
 		if menu.Item(mode).Chosen() {
 			s.setReadingMode(next)
 		}
-		if menu.Item("重新读取文档").Disabled(s.documentReadPending || s.materialsFileInputBusy()).Chosen() {
+		if menu.Item("重新读取文档").Disabled(s.materialsUnit.state.documentReadPending || s.materialsFileInputBusy()).Chosen() {
 			s.rereadSelectedMaterial(true)
 		}
 	}

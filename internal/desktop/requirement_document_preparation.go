@@ -199,16 +199,7 @@ func requirementPreparationPayload(item application.Requirement, force bool) map
 }
 
 func requirementPreparationContent(data any) (application.RequirementContent, error) {
-	if content, ok := data.(application.RequirementContent); ok {
-		return content, nil
-	}
-	encoded, err := json.Marshal(data)
-	if err != nil {
-		return application.RequirementContent{}, err
-	}
-	var content application.RequirementContent
-	err = json.Unmarshal(encoded, &content)
-	return content, err
+	return application.ResultData[application.RequirementContent](application.ActionResult{Data: data})
 }
 
 // A stale/read/cache failure retries the body. An image-only failure keeps the
@@ -230,7 +221,7 @@ func prepareRequirementDocument(ctx context.Context, backend application.Backend
 			return application.RequirementContent{}, err
 		}
 		payload["force"] = force
-		result, err := backend.Dispatch(ctx, application.Action{Kind: "requirements.read", Path: work.item.URL, Payload: clonePreparationPayload(payload)})
+		result, err := executeRequirementOperation(ctx, backend, application.Action{Kind: "requirements.read", Path: work.item.URL, Payload: clonePreparationPayload(payload)}, nil)
 		if err != nil {
 			return application.RequirementContent{}, err
 		}
@@ -326,52 +317,52 @@ func (s *app) startRequirementDocumentPreparation(items []application.Requiremen
 	if s.backend == nil || s.win == nil || s.win.IsDestroyed() {
 		return
 	}
-	if s.requirementDocumentPreparation == nil {
+	if s.requirementUnit.state.requirementDocumentPreparation == nil {
 		state := &requirementDocumentPreparationState{}
 		window := s.win
 		state.notify = func() {
 			if !window.IsDestroyed() {
 				window.Update(func() {
-					if s.requirementDocumentPreparation == state {
+					if s.requirementUnit.state.requirementDocumentPreparation == state {
 						window.Invalidate()
 					}
 				})
 			}
 		}
-		s.requirementDocumentPreparation = state
+		s.requirementUnit.state.requirementDocumentPreparation = state
 	}
-	state := s.requirementDocumentPreparation
+	state := s.requirementUnit.state.requirementDocumentPreparation
 	state.identity = s.currentRequirementListIdentity()
 	expected := ""
-	if identity := s.requirementIdentityJobs; identity != nil && identity.confirmed {
+	if identity := s.requirementUnit.state.requirementIdentityJobs; identity != nil && identity.confirmed {
 		expected = identity.identity
 	}
 	state.start(s.backend, items, force, requirementDocumentPreparationStart{selectedKey: selectedKey, expectedIdentity: expected})
 }
 
 func (s *app) prioritizeRequirementDocumentPreparation(item application.Requirement) {
-	if state := s.requirementDocumentPreparation; state != nil {
+	if state := s.requirementUnit.state.requirementDocumentPreparation; state != nil {
 		state.mu.Lock()
 		state.priority = requirementKey(item)
 		state.mu.Unlock()
 	}
 }
 
-func (s *app) cancelRequirementDocumentPreparation() {
-	if state := s.requirementDocumentPreparation; state != nil {
+func (s *requirementController) cancelRequirementDocumentPreparation() {
+	if state := s.state.requirementDocumentPreparation; state != nil {
 		state.cancel()
 	}
 }
 
 func (s *app) observeRequirementDocumentPreparation() {
-	if state := s.requirementDocumentPreparation; state != nil && state.identity != s.currentRequirementListIdentity() {
+	if state := s.requirementUnit.state.requirementDocumentPreparation; state != nil && state.identity != s.currentRequirementListIdentity() {
 		state.cancel()
 	}
 }
 
 func (s *app) closeRequirementDocumentPreparation(ctx context.Context) error {
 	var err error
-	if state := s.requirementDocumentPreparation; state != nil {
+	if state := s.requirementUnit.state.requirementDocumentPreparation; state != nil {
 		err = state.close(ctx)
 	}
 	if backend, ok := s.backend.(interface{ CloseRequirementDocuments(context.Context) error }); ok {
@@ -381,7 +372,7 @@ func (s *app) closeRequirementDocumentPreparation(ctx context.Context) error {
 }
 
 func (s *app) renderRequirementDocumentPreparation(c *ui.Context, p palette) {
-	state := s.requirementDocumentPreparation
+	state := s.requirementUnit.state.requirementDocumentPreparation
 	if state == nil {
 		return
 	}

@@ -17,21 +17,21 @@ func TestRequirementRefreshMenuKeyboardAndLayouts(t *testing.T) {
 			t.Run(fmt.Sprintf("dark-%v-width-%d", dark, width), func(t *testing.T) {
 				s, _, _ := refreshTestFixture(t)
 				s.dark = dark
-				s.requirements[0].Title = "较长的需求名称：支付渠道及多节点扩容适配"
-				s.requirements[1].Title = "右键目标：需求状态及角色同步"
-				s.requirements[0].Status = "技术设计中"
-				s.requirements[1].Status = "待测试"
+				s.requirementUnit.state.requirements[0].Title = "较长的需求名称：支付渠道及多节点扩容适配"
+				s.requirementUnit.state.requirements[1].Title = "右键目标：需求状态及角色同步"
+				s.requirementUnit.state.requirements[0].Status = "技术设计中"
+				s.requirementUnit.state.requirements[1].Status = "待测试"
 				tester := ui.NewTester(func(c *ui.Context) {
 					ui.MenuScope(c, "refresh-layout")
 					p := setTheme(c, dark)
 					ui.Column(c).Fill().Padding(8).Gap(5).Background(p.bg).Children(func() {
-						for _, item := range s.requirements {
+						for _, item := range s.requirementUnit.state.requirements {
 							s.requirementListItem(c, p, item, false)
 						}
 					})
 					ui.ThemedMenus(c, "refresh-layout")
 				}, width, 260)
-				for _, item := range s.requirements {
+				for _, item := range s.requirementUnit.state.requirements {
 					r, ok := tester.Find(item.Title)
 					if !ok || r.X < 0 || r.X+r.W > float32(width)+1 || r.H < 35 {
 						t.Fatalf("card overflow at %d: %+v", width, r)
@@ -39,7 +39,7 @@ func TestRequirementRefreshMenuKeyboardAndLayouts(t *testing.T) {
 				}
 				tester.Key(0, ui.KeyTab)
 				tester.Key(0, ui.KeyTab)
-				if !tester.Focused(s.requirements[1].Title) {
+				if !tester.Focused(s.requirementUnit.state.requirements[1].Title) {
 					t.Fatal("requirement card cannot receive keyboard focus")
 				}
 				tester.Key(ui.Shift, ui.KeyF10)
@@ -48,8 +48,8 @@ func TestRequirementRefreshMenuKeyboardAndLayouts(t *testing.T) {
 				}
 				saveRequirementRefreshImage(t, tester, fmt.Sprintf("menu-dark-%v-%d.png", dark, width))
 				tester.Key(0, ui.KeyEscape)
-				if tester.HasText("Menu") || len(s.requirementRefreshJobs.current) != 0 || s.selectedRequirement != 0 || s.documentContent != "unsaved draft" {
-					t.Fatalf("Esc/menu state: menu=%v jobs=%d selected=%d draft=%q", tester.HasText("Menu"), len(s.requirementRefreshJobs.current), s.selectedRequirement, s.documentContent)
+				if tester.HasText("Menu") || len(s.requirementUnit.state.requirementRefreshJobs.current) != 0 || s.requirementUnit.state.selectedRequirement != 0 || s.materialsUnit.state.documentContent != "unsaved draft" {
+					t.Fatalf("Esc/menu state: menu=%v jobs=%d selected=%d draft=%q", tester.HasText("Menu"), len(s.requirementUnit.state.requirementRefreshJobs.current), s.requirementUnit.state.selectedRequirement, s.materialsUnit.state.documentContent)
 				}
 			})
 		}
@@ -61,7 +61,7 @@ func TestRequirementPrimaryCreateButtonStatesAndBehavior(t *testing.T) {
 		t.Run(fmt.Sprint(dark), func(t *testing.T) {
 			s, _, _ := refreshTestFixture(t)
 			s.dark = dark
-			item := s.requirements[0]
+			item := s.requirementUnit.state.requirements[0]
 			r := s.requirementReader("", item.URL)
 			s.updateRequirementReaderBody(r, application.RequirementContent{Body: "正文", Generation: "cached"})
 			s.updateRequirementReaderComments(r, application.RequirementComments{})

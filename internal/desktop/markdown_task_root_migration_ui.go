@@ -59,7 +59,7 @@ func rebaseMarkdownTaskRootDocuments(items []application.Document, mappings []wo
 }
 
 func (s *app) buildMarkdownTaskRootMigrationUI(plan *markdownTaskRootMigrationPlan) (*markdownTaskRootMigrationUI, error) {
-	state := &markdownTaskRootMigrationUI{tasks: append([]task(nil), s.tasks...), snapshotTasks: append([]application.Task(nil), s.snapshot.Tasks...), tabs: append([]string(nil), s.documentTabs...), notePaths: s.notePaths}
+	state := &markdownTaskRootMigrationUI{tasks: append([]task(nil), s.taskUnit.state.tasks...), snapshotTasks: append([]application.Task(nil), s.snapshot.Tasks...), tabs: append([]string(nil), s.materialsUnit.state.documentTabs...), notePaths: s.taskUnit.state.notePaths}
 	mappings := plan.preview.PathMappings
 	rebase := func(path string) (string, error) {
 		value, _, err := workspace.RebaseTaskRootMigrationPath(path, mappings)
@@ -86,11 +86,11 @@ func (s *app) buildMarkdownTaskRootMigrationUI(plan *markdownTaskRootMigrationPl
 			return nil, err
 		}
 	}
-	state.documents, err = rebaseMarkdownTaskRootDocuments(s.documents, mappings)
+	state.documents, err = rebaseMarkdownTaskRootDocuments(s.materialsUnit.state.documents, mappings)
 	if err != nil {
 		return nil, err
 	}
-	state.path, err = rebase(s.documentPath)
+	state.path, err = rebase(s.materialsUnit.state.documentPath)
 	if err != nil {
 		return nil, err
 	}
@@ -100,20 +100,20 @@ func (s *app) buildMarkdownTaskRootMigrationUI(plan *markdownTaskRootMigrationPl
 			return nil, err
 		}
 	}
-	state.drafts, err = rebaseMarkdownTaskRootEntries(s.documentDrafts, mappings)
+	state.drafts, err = rebaseMarkdownTaskRootEntries(s.materialsUnit.state.documentDrafts, mappings)
 	if err != nil {
 		return nil, err
 	}
-	state.dirty, err = rebaseMarkdownTaskRootEntries(s.documentDirtyMap, mappings)
+	state.dirty, err = rebaseMarkdownTaskRootEntries(s.materialsUnit.state.documentDirtyMap, mappings)
 	if err != nil {
 		return nil, err
 	}
-	if s.markdown != nil {
-		state.markdownPath, err = rebase(s.markdown.path)
+	if s.materialsUnit.state.markdown != nil {
+		state.markdownPath, err = rebase(s.materialsUnit.state.markdown.path)
 		if err != nil {
 			return nil, err
 		}
-		state.markdownRoot, err = rebase(s.markdown.linkRoot)
+		state.markdownRoot, err = rebase(s.materialsUnit.state.markdown.linkRoot)
 		if err != nil {
 			return nil, err
 		}
@@ -124,7 +124,7 @@ func (s *app) buildMarkdownTaskRootMigrationUI(plan *markdownTaskRootMigrationPl
 			return nil, err
 		}
 	}
-	if notes := s.taskNotesUI; notes != nil {
+	if notes := s.taskUnit.state.taskNotesUI; notes != nil {
 		for _, entry := range plan.entries {
 			if entry.before.kind != "instruction" {
 				continue
@@ -159,26 +159,26 @@ func (s *app) buildMarkdownTaskRootMigrationUI(plan *markdownTaskRootMigrationPl
 }
 
 func (s *app) applyMarkdownTaskRootMigrationUI(plan *markdownTaskRootMigrationPlan, state *markdownTaskRootMigrationUI) {
-	oldPath := s.documentPath
-	s.tasks, s.snapshot.Tasks = state.tasks, state.snapshotTasks
-	s.documents, s.documentPath, s.documentTabs = state.documents, state.path, state.tabs
-	s.documentDrafts, s.documentDirtyMap = state.drafts, state.dirty
-	s.notePaths = state.notePaths
-	if s.markdown != nil {
-		s.markdown.path, s.markdown.linkRoot = state.markdownPath, state.markdownRoot
+	oldPath := s.materialsUnit.state.documentPath
+	s.taskUnit.state.tasks, s.snapshot.Tasks = state.tasks, state.snapshotTasks
+	s.materialsUnit.state.documents, s.materialsUnit.state.documentPath, s.materialsUnit.state.documentTabs = state.documents, state.path, state.tabs
+	s.materialsUnit.state.documentDrafts, s.materialsUnit.state.documentDirtyMap = state.drafts, state.dirty
+	s.taskUnit.state.notePaths = state.notePaths
+	if s.materialsUnit.state.markdown != nil {
+		s.materialsUnit.state.markdown.path, s.materialsUnit.state.markdown.linkRoot = state.markdownPath, state.markdownRoot
 	}
-	if notes := s.taskNotesUI; notes != nil {
+	if notes := s.taskUnit.state.taskNotesUI; notes != nil {
 		for _, entry := range state.instructions {
 			old := entry.state
 			// The existing constructor regenerates closures over the new key.
 			// Temporarily expose that editor's task/tab only to this constructor;
 			// restore the current selection before leaving the window callback.
-			selected, paths := s.selected, s.notePaths
-			s.selected = entry.taskIndex
-			s.notePaths[entry.tab] = entry.path
+			selected, paths := s.taskUnit.state.selected, s.taskUnit.state.notePaths
+			s.taskUnit.state.selected = entry.taskIndex
+			s.taskUnit.state.notePaths[entry.tab] = entry.path
 			delete(notes.markdownEditors, entry.oldKey)
 			fresh := s.ensureInstructionMarkdownEditor(entry.newKey, "task", entry.tab, old.doc.Source())
-			s.selected, s.notePaths = selected, paths
+			s.taskUnit.state.selected, s.taskUnit.state.notePaths = selected, paths
 			binding := fresh.binding
 			suspendInstructionMarkdownPreviews(old)
 			*fresh = *old
@@ -206,11 +206,11 @@ func (s *app) applyMarkdownTaskRootMigrationUI(plan *markdownTaskRootMigrationPl
 			notes.activeKey = key
 		}
 	}
-	if state.path != oldPath && (s.documentKind == "image" || s.documentKind == "pdf") {
-		s.closeNativeMedia()
-		s.openNativeMedia(state.path, s.documentKind)
+	if state.path != oldPath && (s.materialsUnit.state.documentKind == "image" || s.materialsUnit.state.documentKind == "pdf") {
+		s.materialsUnit.closeNativeMedia()
+		s.openNativeMedia(state.path, s.materialsUnit.state.documentKind)
 	}
-	if files := s.materialsFileManagement; files != nil {
+	if files := s.materialsUnit.state.materialsFileManagement; files != nil {
 		// Watcher ownership is stopped/joined by the dispatch barrier. Let the
 		// existing management-state initializer bind its new task/root.
 		s.ensureMaterialsFileManagementState()

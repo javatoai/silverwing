@@ -18,7 +18,7 @@ func materialJSONFoldFixture(t *testing.T, source string, width int, dark bool) 
 	t.Helper()
 	s, _, files := materialTextEditorFixture(t, map[string]string{"review.json": source})
 	bindMaterialTextTest(s, files["review.json"])
-	s.documentContent = source
+	s.materialsUnit.state.documentContent = source
 	var owner *nativeCodePreviewState
 	tester := ui.NewTester(func(c *ui.Context) {
 		p := setTheme(c, dark)
@@ -100,10 +100,10 @@ func TestMaterialsJSONNativeFoldPointerClipboardAndSearch(t *testing.T) {
 	}
 	tester.Key(0, ui.KeyEscape)
 	tester.Frame()
-	if view.Buffer.OriginalText() != materialJSONFoldSource || view.Buffer.Version() != version || s.documentContent != materialJSONFoldSource || editState.view.Buffer.Version() != editVersion || s.markdownAutosave.Status(editState.key).Dirty {
+	if view.Buffer.OriginalText() != materialJSONFoldSource || view.Buffer.Version() != version || s.materialsUnit.state.documentContent != materialJSONFoldSource || editState.view.Buffer.Version() != editVersion || s.materialsUnit.state.markdownAutosave.Status(editState.key).Dirty {
 		t.Fatal("fold/search changed source or autosave state")
 	}
-	if raw, err := os.ReadFile(s.documentPath); err != nil || string(raw) != materialJSONFoldSource {
+	if raw, err := os.ReadFile(s.materialsUnit.state.documentPath); err != nil || string(raw) != materialJSONFoldSource {
 		t.Fatal("folding wrote the file", err)
 	}
 }
@@ -137,22 +137,22 @@ func TestMaterialsJSONNativeFoldMenuKeyboardAndIdentity(t *testing.T) {
 	}
 	view.Fold(2)
 	tester.Frame()
-	oldPath := s.documentPath
-	s.documentPath = filepath.Join(filepath.Dir(oldPath), "other.json")
+	oldPath := s.materialsUnit.state.documentPath
+	s.materialsUnit.state.documentPath = filepath.Join(filepath.Dir(oldPath), "other.json")
 	tester.Frame()
 	if (*ownerRef).view == view || len((*ownerRef).view.Folded()) != 0 {
 		t.Fatal("new file inherited old folds")
 	}
-	s.documentPath = oldPath
+	s.materialsUnit.state.documentPath = oldPath
 	tester.Frame()
 	if len((*ownerRef).view.Folded()) != 0 {
 		t.Fatal("reopened file did not default to expanded")
 	}
 	(*ownerRef).view.Fold(2)
 	tester.Frame()
-	s.documentContent = strings.Replace(materialJSONFoldSource, "hidden needle", "remote update", 1)
+	s.materialsUnit.state.documentContent = strings.Replace(materialJSONFoldSource, "hidden needle", "remote update", 1)
 	tester.Frame()
-	if len((*ownerRef).view.Folded()) != 0 || (*ownerRef).view.Buffer.OriginalText() != s.documentContent {
+	if len((*ownerRef).view.Folded()) != 0 || (*ownerRef).view.Buffer.OriginalText() != s.materialsUnit.state.documentContent {
 		t.Fatal("source update reused old fold positions")
 	}
 	s.toggleMaterialsTextEditing()
@@ -185,8 +185,8 @@ func TestMaterialsJSONFoldEmptySingleLineInvalidAndOtherSources(t *testing.T) {
 	}
 	s, tester, ownerRef := materialJSONFoldFixture(t, materialJSONFoldSource, 960, false)
 	for _, name := range []string{"review.log", "review.js", "review.txt"} {
-		s.documentPath = filepath.Join(filepath.Dir(s.documentPath), name)
-		s.documentKind = documentKindForPath(name)
+		s.materialsUnit.state.documentPath = filepath.Join(filepath.Dir(s.materialsUnit.state.documentPath), name)
+		s.materialsUnit.state.documentKind = documentKindForPath(name)
 		tester.Frame()
 		if !(*ownerRef).view.NoFolding {
 			t.Fatal("non-JSON preview gained folding", name)

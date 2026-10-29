@@ -1,4 +1,8 @@
+. (Join-Path $PSScriptRoot 'product-profile.ps1')
+
 function New-NSISUninstallManifest([string]$Stage, [string]$Destination) {
+    $productProfile = Get-SilverwingProductProfile -RepositoryRoot (Split-Path -Parent $PSScriptRoot)
+    $expectedExecutable = $productProfile.ExecutableName + '.exe'
     $root = (Resolve-Path -LiteralPath $Stage).Path
     if ((Get-Item -LiteralPath $root -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Payload root must not be a reparse point.' }
     if (Test-Path -LiteralPath $Destination) { throw 'Refusing to overwrite an uninstall manifest.' }
@@ -12,7 +16,7 @@ function New-NSISUninstallManifest([string]$Stage, [string]$Destination) {
         $escaped = $relative.Replace('$', '$$')
         if ($entry.PSIsContainer) { $directories.Add($escaped) } else { $files.Add($escaped) }
     }
-    if ($files.Count -eq 0 -or -not (Test-Path -LiteralPath (Join-Path $root 'silverwing-product.exe') -PathType Leaf)) { throw 'Native payload is incomplete.' }
+    if ($files.Count -eq 0 -or -not (Test-Path -LiteralPath (Join-Path $root $expectedExecutable) -PathType Leaf)) { throw 'Native payload is incomplete.' }
     $lines = [Collections.Generic.List[string]]::new()
     $lines.Add('; Generated from this package payload. Never enumerate or recursively remove an installation at runtime.')
     foreach ($relative in ($files | Sort-Object)) {

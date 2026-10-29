@@ -34,13 +34,19 @@ func TestJSONToolFormatButtonRetainsCommaAndEditorHistory(t *testing.T) {
 				const source = "{\n  \"a\": \"a\",\n}"
 				const want = "{\n    \"a\": \"a\",\n}"
 				backend := &jsonFormatButtonBackend{actions: make(chan application.Action, 1)}
-				s := &app{backend: backend, page: "tools", toolTab: "JSON", json: source, inputs: map[string]*string{}}
+				s := &app{
+					toolsUnit: toolsController{state: toolsState{toolTab: "JSON",
+						json: source}},
+					backend: backend,
+					page:    "tools",
+					inputs:  map[string]*string{},
+				}
 				state := s.ensureToolState()
 				state.activeTab = "JSON"
 				t.Cleanup(func() {
 					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 					defer cancel()
-					if err := s.closeDeveloperToolJobs(ctx); err != nil {
+					if err := s.toolsUnit.closeDeveloperToolJobs(ctx); err != nil {
 						t.Error(err)
 					}
 					state.cancelWork()
@@ -68,7 +74,7 @@ func TestJSONToolFormatButtonRetainsCommaAndEditorHistory(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				s.finishDeveloperToolJob(s.toolJobs.current["tool.json"], result, nil)
+				s.finishDeveloperToolJob(s.toolsUnit.state.toolJobs.current["tool.json"], result, nil)
 				tester.Frame()
 				after, _ := tester.Find("JSON 源码输入")
 				if state.jsonSource != want || !state.jsonValid || before != after ||

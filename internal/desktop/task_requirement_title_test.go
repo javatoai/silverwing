@@ -16,12 +16,12 @@ func taskRequirementTitleTester(s *app, width int, dark, reference bool) *ui.Tes
 		ui.Column(c).Fill().Padding(16).Gap(6).Children(func() {
 			if reference {
 				// The original static title row is the geometry reference.
-				title := strings.TrimSpace(*s.taskRequirementMetadata[s.currentTask().id].Metadata.Title)
+				title := strings.TrimSpace(*s.requirementUnit.state.taskRequirementMetadata[s.taskUnit.currentTask().id].Metadata.Title)
 				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 					label(c, title, 14, p.muted).FontWeight(500).Grow(1).SingleLine()
 				})
 			} else {
-				s.renderTaskRequirementMetadata(c, p, s.currentTask())
+				s.renderTaskRequirementMetadata(c, p, s.taskUnit.currentTask())
 			}
 			label(c, "后续内容", 12, p.text)
 		})
@@ -30,9 +30,12 @@ func taskRequirementTitleTester(s *app, width int, dark, reference bool) *ui.Tes
 
 func taskRequirementTitleFixture(title *string) *app {
 	item := task{id: "fixture-task", title: "任务短名", requirementTitle: "不能代替原需求标题的任务缓存短名", requirementURL: "https://fixture.invalid/requirement/1"}
-	return &app{tasks: []task{item}, taskRequirementMetadata: map[string]taskRequirementMetadataState{
-		item.id: {URL: item.requirementURL, Status: requirementMetadataLoaded, Metadata: requirementMetadata{Title: title}},
-	}}
+	return &app{
+		taskUnit: taskController{state: taskState{tasks: []task{item}}},
+		requirementUnit: requirementController{state: requirementState{taskRequirementMetadata: map[string]taskRequirementMetadataState{
+			item.id: {URL: item.requirementURL, Status: requirementMetadataLoaded, Metadata: requirementMetadata{Title: title}},
+		}}},
+	}
 }
 
 func TestTaskRequirementTitleCopiesCompleteOriginal(t *testing.T) {
@@ -82,9 +85,9 @@ func TestTaskRequirementTitleEmptyAndPlaceholderCannotCopy(t *testing.T) {
 		t.Run(string(status), func(t *testing.T) {
 			blank := "  "
 			s := taskRequirementTitleFixture(&blank)
-			state := s.taskRequirementMetadata["fixture-task"]
+			state := s.requirementUnit.state.taskRequirementMetadata["fixture-task"]
 			state.Status = status
-			s.taskRequirementMetadata["fixture-task"] = state
+			s.requirementUnit.state.taskRequirementMetadata["fixture-task"] = state
 			tester := taskRequirementTitleTester(s, 360, false, false)
 			tester.SetClipboard("unchanged")
 			if _, ok := tester.Find("复制需求名称"); ok {
@@ -99,7 +102,7 @@ func TestTaskRequirementTitleEmptyAndPlaceholderCannotCopy(t *testing.T) {
 	}
 	full := "另一个 URL 的旧标题"
 	s := taskRequirementTitleFixture(&full)
-	s.tasks[0].requirementURL = "https://fixture.invalid/requirement/2"
+	s.taskUnit.state.tasks[0].requirementURL = "https://fixture.invalid/requirement/2"
 	tester := taskRequirementTitleTester(s, 360, false, false)
 	if _, ok := tester.Find("复制需求名称"); ok {
 		t.Fatal("stale metadata for another requirement URL became copyable")

@@ -45,8 +45,8 @@ func (s *app) restoreDesktopPreferences(home string) {
 	name := settingsPreferenceName(value.SettingsSection)
 	for _, section := range settingsSections {
 		if section.name == name {
-			s.settingsTab, s.settingsPage = name, section.pages[0].key
-			s.settingsLoaded = ""
+			s.settingsUnit.state.settingsTab, s.settingsUnit.state.settingsPage = name, section.pages[0].key
+			s.settingsUnit.state.settingsLoaded = ""
 			break
 		}
 	}
@@ -164,7 +164,7 @@ func (s *app) observeDesktopPreferences() {
 	if s.loading || state == nil || !state.enabled || state.store == nil || state.closed {
 		return
 	}
-	section := settingsPreferenceKey(s.settingsTab)
+	section := settingsPreferenceKey(s.settingsUnit.state.settingsTab)
 	listWidth := int(math.Round(float64(s.listWidth)))
 	materialsWidth := int(math.Round(float64(s.materialsDirectoryWidth())))
 	if state.value.SettingsSection == section && state.value.TaskListPaneWidth == listWidth && state.value.MaterialsDirectoryPaneWidth == materialsWidth {
@@ -203,7 +203,7 @@ func (s *app) persistDesktopLayout() error {
 	state.value.WorkspaceNavigationCollapsed = s.navigationCollapsed
 	state.value.TaskListPaneWidth = int(math.Round(float64(s.listWidth)))
 	state.value.MaterialsDirectoryPaneWidth = int(math.Round(float64(s.materialsDirectoryWidth())))
-	state.value.SettingsSection = settingsPreferenceKey(s.settingsTab)
+	state.value.SettingsSection = settingsPreferenceKey(s.settingsUnit.state.settingsTab)
 	_, err := state.store.Update(func(value *DesktopPreferences) {
 		value.Width, value.Height, value.Maximized = state.value.Width, state.value.Height, state.value.Maximized
 		value.WorkspaceNavigationCollapsed = state.value.WorkspaceNavigationCollapsed

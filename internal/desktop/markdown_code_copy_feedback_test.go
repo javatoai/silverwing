@@ -69,14 +69,14 @@ func TestMarkdownCodeCopyFeedbackSharedReaders(t *testing.T) {
 					document = reader.bodyMarkdown
 				}
 				render = func(c *ui.Context, p palette) { s.renderRequirementReadonlyMarkdownReader(c, p, reader) }
-				t.Cleanup(s.closeRequirementReaders)
+				t.Cleanup(s.requirementUnit.closeRequirementReaders)
 			default:
 				document = newReadonlyMarkdownState("synthetic-copy", markdownCopySource, nil)
 				render = func(c *ui.Context, p palette) { s.renderReadonlyMarkdownReader(c, p, document) }
 			}
 			backend := &markdownCopyBackend{}
 			s.backend = backend
-			t.Cleanup(func() { closeMarkdownPreviewState(document); closeMarkdownPreviewState(s.markdown) })
+			t.Cleanup(func() { closeMarkdownPreviewState(document); closeMarkdownPreviewState(s.materialsUnit.state.markdown) })
 			tester := ui.NewTester(func(c *ui.Context) {
 				p := setTheme(c, route == "requirement-comment")
 				ui.Column(c).Fill().Children(func() { render(c, p) })
@@ -84,7 +84,7 @@ func TestMarkdownCodeCopyFeedbackSharedReaders(t *testing.T) {
 			}, 800, 650)
 			tester.SetLocale("zh-Hans")
 			if document == nil {
-				document = s.markdown
+				document = s.materialsUnit.state.markdown
 			}
 			before := document.doc.Source()
 			if err := tester.Click("复制代码"); err != nil {

@@ -7,20 +7,13 @@ import (
 	"silverwing-go/internal/application"
 )
 
-func (s *app) materialsTreeRows(documents []application.Document) []FileTreeRow {
-	rows := make([]FileTreeRow, 0, countDocuments(documents))
-	var visit func([]application.Document, int)
-	visit = func(items []application.Document, depth int) {
-		for _, document := range items {
-			entry, ok := s.materialsEntryForDocument(document)
-			if !ok {
-				continue
-			}
-			rows = append(rows, FileTreeRow{ID: entry.Key, Name: document.Name, Path: entry.Path, Depth: depth, Directory: entry.Directory, ReadOnly: !s.materialsWritable(entry.Path, true)})
-			visit(document.Children, depth+1)
-		}
+func (s *app) materialsTreeRows(projection materialsDocumentProjection, order string) []FileTreeRow {
+	projected := projection.treeRows(order)
+	rows := make([]FileTreeRow, 0, len(projected))
+	for _, row := range projected {
+		entry := row.entry
+		rows = append(rows, FileTreeRow{ID: entry.Key, Name: row.name, Path: entry.Path, Depth: row.depth, Directory: entry.Directory, ReadOnly: !s.materialsWritable(entry.Path, true)})
 	}
-	visit(documents, 0)
 	return rows
 }
 
@@ -69,24 +62,24 @@ func (s *app) materialsTreeInput(state *materialsFileManagementState, input File
 func (s *app) openMaterialsTreeFile(state *materialsFileManagementState, path string, pin bool) {
 	previousPreview := state.previewPath
 	pinned := false
-	for _, tab := range s.documentTabs {
+	for _, tab := range s.materialsUnit.state.documentTabs {
 		if tab == path && tab != previousPreview {
 			pinned = true
 			break
 		}
 	}
 	s.selectDocument(path)
-	if s.documentPath != path {
+	if s.materialsUnit.state.documentPath != path {
 		return
 	}
-	if previousPreview != "" && previousPreview != path && !s.documentDirtyMap[previousPreview] {
-		tabs := s.documentTabs[:0]
-		for _, tab := range s.documentTabs {
+	if previousPreview != "" && previousPreview != path && !s.materialsUnit.state.documentDirtyMap[previousPreview] {
+		tabs := s.materialsUnit.state.documentTabs[:0]
+		for _, tab := range s.materialsUnit.state.documentTabs {
 			if tab != previousPreview {
 				tabs = append(tabs, tab)
 			}
 		}
-		s.documentTabs = tabs
+		s.materialsUnit.state.documentTabs = tabs
 	}
 	state.previewPath = ""
 	if !pin && !pinned {
@@ -95,21 +88,15 @@ func (s *app) openMaterialsTreeFile(state *materialsFileManagementState, path st
 }
 
 func (s *app) materialsContextSelection(state *materialsFileManagementState, entry materialsFileSelectionEntry) []materialsFileSelectionEntry {
-	if _, selected := state.selected[entry.Key]; selected {
-		return s.materialsFileSelection(state)
-	}
-	return []materialsFileSelectionEntry{entry}
+	return state.materialsSelection.contextEntries(entry)
 }
 
 // Context commands capture the clicked item's scope without changing the
 // user's selection or active document merely by opening a menu.
 func (s *app) withMaterialsContextSelection(state *materialsFileManagementState, entry materialsFileSelectionEntry, action func()) {
-	selected, anchor := state.selected, state.anchor
-	if _, contains := selected[entry.Key]; !contains {
-		state.selected = map[string]materialsFileSelectionEntry{entry.Key: entry}
-		state.anchor = entry.Key
-	}
-	defer func() { state.selected, state.anchor = selected, anchor }()
+	previous := state.materialsSelection
+	state.materialsSelection = previous.forContext(entry)
+	defer func() { state.materialsSelection = previous }()
 	action()
 }
 

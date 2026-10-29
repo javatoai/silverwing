@@ -42,7 +42,10 @@ func TestSettingsSidebarSectionsAndVisualGroups(test *testing.T) {
 		test.Fatal("renaming the settings category changed its existing page identity")
 	}
 
-	state := &app{settingsTab: "基础", settingsPage: "basic"}
+	state := &app{
+		settingsUnit: settingsController{state: settingsState{settingsTab: "基础",
+			settingsPage: "basic"}},
+	}
 	tester := settingsSidebarTester(state, 820)
 	dividerCount := 0
 	for _, text := range tester.Texts() {
@@ -82,18 +85,24 @@ func TestSettingsSidebarPointerAndKeyboardNavigation(test *testing.T) {
 		{"日志", "logs"},
 		{"系统", "about"},
 	}
-	state := &app{settingsTab: "基础", settingsPage: "basic"}
+	state := &app{
+		settingsUnit: settingsController{state: settingsState{settingsTab: "基础",
+			settingsPage: "basic"}},
+	}
 	tester := settingsSidebarTester(state, 820)
 	for _, item := range expected {
 		if err := tester.Click(item.name); err != nil {
 			test.Fatal(err)
 		}
-		if state.settingsTab != item.name || state.settingsPage != item.page {
-			test.Fatalf("clicking %q selected %q / %q, want %q / %q", item.name, state.settingsTab, state.settingsPage, item.name, item.page)
+		if state.settingsUnit.state.settingsTab != item.name || state.settingsUnit.state.settingsPage != item.page {
+			test.Fatalf("clicking %q selected %q / %q, want %q / %q", item.name, state.settingsUnit.state.settingsTab, state.settingsUnit.state.settingsPage, item.name, item.page)
 		}
 	}
 
-	state = &app{settingsTab: "基础", settingsPage: "basic"}
+	state = &app{
+		settingsUnit: settingsController{state: settingsState{settingsTab: "基础",
+			settingsPage: "basic"}},
+	}
 	tester = settingsSidebarTester(state, 820)
 	for index, item := range expected {
 		tester.Key(0, ui.KeyTab)
@@ -107,7 +116,10 @@ func TestSettingsSidebarPointerAndKeyboardNavigation(test *testing.T) {
 }
 
 func TestSettingsSidebarScrollsAtShortHeight(test *testing.T) {
-	state := &app{settingsTab: "基础", settingsPage: "basic"}
+	state := &app{
+		settingsUnit: settingsController{state: settingsState{settingsTab: "基础",
+			settingsPage: "basic"}},
+	}
 	tester := settingsSidebarTester(state, 190)
 	last, found := tester.Find("系统")
 	if found && last.H > 0 {
@@ -121,8 +133,8 @@ func TestSettingsSidebarScrollsAtShortHeight(test *testing.T) {
 	if err := tester.Click("系统"); err != nil {
 		test.Fatal(err)
 	}
-	if state.settingsTab != "系统" || state.settingsPage != "about" {
-		test.Fatalf("last category is not reachable after scrolling: tab=%q page=%q", state.settingsTab, state.settingsPage)
+	if state.settingsUnit.state.settingsTab != "系统" || state.settingsUnit.state.settingsPage != "about" {
+		test.Fatalf("last category is not reachable after scrolling: tab=%q page=%q", state.settingsUnit.state.settingsTab, state.settingsUnit.state.settingsPage)
 	}
 }
 
@@ -138,19 +150,25 @@ func TestSettingsSystemPagesAndAppDataRoute(test *testing.T) {
 		}
 	}
 
-	state := &app{settingsTab: "系统", settingsPage: "app-data"}
+	state := &app{
+		settingsUnit: settingsController{state: settingsState{settingsTab: "系统",
+			settingsPage: "app-data"}},
+	}
 	section := state.currentSettingsSection()
-	if state.settingsPage != "app-data" || section.name != "系统" {
-		test.Fatalf("app-data route was not preserved in the system category: page=%q section=%q", state.settingsPage, section.name)
+	if state.settingsUnit.state.settingsPage != "app-data" || section.name != "系统" {
+		test.Fatalf("app-data route was not preserved in the system category: page=%q section=%q", state.settingsUnit.state.settingsPage, section.name)
 	}
 
-	state = &app{settingsTab: "快捷工具", settingsPage: "tool-visibility"}
+	state = &app{
+		settingsUnit: settingsController{state: settingsState{settingsTab: "快捷工具",
+			settingsPage: "tool-visibility"}},
+	}
 	tester := settingsSidebarTester(state, 820)
 	if err := tester.Click("系统"); err != nil {
 		test.Fatal(err)
 	}
-	if state.settingsTab != "系统" || state.settingsPage != "about" {
-		test.Fatalf("selecting the system category must open About first: %q / %q", state.settingsTab, state.settingsPage)
+	if state.settingsUnit.state.settingsTab != "系统" || state.settingsUnit.state.settingsPage != "about" {
+		test.Fatalf("selecting the system category must open About first: %q / %q", state.settingsUnit.state.settingsTab, state.settingsUnit.state.settingsPage)
 	}
 }
 
@@ -200,8 +218,8 @@ func TestSettingsPreferenceAliasesAndRestore(test *testing.T) {
 			}
 			state := &app{desktopPreferences: &desktopPreferencesState{enabled: true}}
 			state.restoreDesktopPreferences(home)
-			if state.settingsTab != "快捷工具" || state.settingsPage != "tool-visibility" {
-				test.Fatalf("restoring %q selected %q / %q", legacyKey, state.settingsTab, state.settingsPage)
+			if state.settingsUnit.state.settingsTab != "快捷工具" || state.settingsUnit.state.settingsPage != "tool-visibility" {
+				test.Fatalf("restoring %q selected %q / %q", legacyKey, state.settingsUnit.state.settingsTab, state.settingsUnit.state.settingsPage)
 			}
 		})
 	}
@@ -209,13 +227,17 @@ func TestSettingsPreferenceAliasesAndRestore(test *testing.T) {
 	home := test.TempDir()
 	state := &app{desktopPreferences: &desktopPreferencesState{enabled: true}}
 	state.restoreDesktopPreferences(home)
-	if state.settingsTab != "基础" || state.settingsPage != "basic" {
-		test.Fatalf("missing preference no longer restores the basic page: %q / %q", state.settingsTab, state.settingsPage)
+	if state.settingsUnit.state.settingsTab != "基础" || state.settingsUnit.state.settingsPage != "basic" {
+		test.Fatalf("missing preference no longer restores the basic page: %q / %q", state.settingsUnit.state.settingsTab, state.settingsUnit.state.settingsPage)
 	}
 
 	home = test.TempDir()
 	store := NewDesktopPreferencesStore(filepath.Join(home, desktopPreferencesFile))
-	state = &app{settingsTab: "系统", settingsPage: "app-data", desktopPreferences: &desktopPreferencesState{enabled: true, store: store}}
+	state = &app{
+		settingsUnit: settingsController{state: settingsState{settingsTab: "系统",
+			settingsPage: "app-data"}},
+		desktopPreferences: &desktopPreferencesState{enabled: true, store: store},
+	}
 	if err := state.persistDesktopLayout(); err != nil {
 		test.Fatal(err)
 	}
@@ -225,19 +247,27 @@ func TestSettingsPreferenceAliasesAndRestore(test *testing.T) {
 	}
 	restored := &app{desktopPreferences: &desktopPreferencesState{enabled: true}}
 	restored.restoreDesktopPreferences(home)
-	if restored.settingsTab != "系统" || restored.settingsPage != "about" {
-		test.Fatalf("restoring the system category must open About without remembering a subpage: %q / %q", restored.settingsTab, restored.settingsPage)
+	if restored.settingsUnit.state.settingsTab != "系统" || restored.settingsUnit.state.settingsPage != "about" {
+		test.Fatalf("restoring the system category must open About without remembering a subpage: %q / %q", restored.settingsUnit.state.settingsTab, restored.settingsUnit.state.settingsPage)
 	}
 }
 
 func TestReconcileSidebarNavigationUsesShortcutToolsCategory(test *testing.T) {
-	state := &app{page: "tools", settingsTab: "基础", settingsPage: "basic", configJSON: `{"toolVisibility":{"json":false,"dateTime":false,"textDiff":false,"killPort":false}}`}
+	state := &app{
+		settingsUnit: settingsController{state: settingsState{settingsTab: "基础",
+			settingsPage: "basic",
+			configJSON:   `{"toolVisibility":{"json":false,"dateTime":false,"textDiff":false,"killPort":false}}`}},
+		page: "tools",
+	}
 	state.reconcileSidebarNavigation()
-	if state.page != "settings" || state.settingsTab != "快捷工具" || state.settingsPage != "tool-visibility" {
-		test.Fatalf("all-disabled tools fallback selected %q / %q / %q", state.page, state.settingsTab, state.settingsPage)
+	if state.page != "settings" || state.settingsUnit.state.settingsTab != "快捷工具" || state.settingsUnit.state.settingsPage != "tool-visibility" {
+		test.Fatalf("all-disabled tools fallback selected %q / %q / %q", state.page, state.settingsUnit.state.settingsTab, state.settingsUnit.state.settingsPage)
 	}
 
-	state = &app{dark: false, configJSON: `{"toolVisibility":{"json":false,"dateTime":false,"textDiff":false,"killPort":false}}`}
+	state = &app{
+		settingsUnit: settingsController{state: settingsState{configJSON: `{"toolVisibility":{"json":false,"dateTime":false,"textDiff":false,"killPort":false}}`}},
+		dark:         false,
+	}
 	tester := ui.NewTester(func(context *ui.Context) { state.renderDeveloperTools(context) }, 640, 400)
 	if !tester.HasText("设置 → 快捷工具") || tester.HasText("设置 → 工具") {
 		test.Fatalf("empty-state guidance is stale: %q", strings.Join(tester.Texts(), " | "))

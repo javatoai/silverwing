@@ -28,7 +28,7 @@ func (s *app) newTaskRootMigrationProgressRequest(ctx context.Context, action ap
 		return nil
 	}
 	progressContext, cancel := context.WithCancel(ctx)
-	return &taskRootMigrationProgressRequest{ctx: progressContext, cancel: cancel, home: s.snapshot.Home, config: s.configJSON, plan: plan}
+	return &taskRootMigrationProgressRequest{ctx: progressContext, cancel: cancel, home: s.snapshot.Home, config: s.settingsUnit.state.configJSON, plan: plan}
 }
 
 func (request *taskRootMigrationProgressRequest) finish() {
@@ -50,7 +50,7 @@ func (s *app) taskRootMigrationProgressUpdates(ctx context.Context, action appli
 
 func (s *app) applyTaskRootMigrationProgress(request *taskRootMigrationProgressRequest, progress workspace.TaskRootMigrationProgress) {
 	if request == nil || request.ctx.Err() != nil || !s.busy || s.operationKind != "migration.apply" ||
-		request.home != s.snapshot.Home || request.config != s.configJSON {
+		request.home != s.snapshot.Home || request.config != s.settingsUnit.state.configJSON {
 		return
 	}
 	current, err := s.taskRootMigrationPlan()
@@ -59,7 +59,7 @@ func (s *app) applyTaskRootMigrationProgress(request *taskRootMigrationProgressR
 	}
 	message := taskRootMigrationProgressText(request.plan, progress)
 	if message != "" {
-		s.migrationPreview = message
+		s.settingsUnit.state.migrationPreview = message
 		s.operation = message
 	}
 }
@@ -95,13 +95,13 @@ func (s *app) taskRootMigrationPathField(c *ui.Context, p palette, value *string
 	var input ui.Element
 	field := func() {
 		if stacked {
-			ui.Column(c).FillWidth().MinWidth(0).Gap(6).Disabled(s.busy || s.settingsPickerBusy).Children(func() {
+			ui.Column(c).FillWidth().MinWidth(0).Gap(6).Disabled(s.busy || s.settingsUnit.state.settingsPickerBusy).Children(func() {
 				input = ui.TextInput(c.Key("settings-path-任务根目录"), value).Grow(1).MinWidth(0).FillWidth().Height(36).Placeholder("选择任务存放目录").Label("任务根目录")
 				ui.Row(c).FillWidth().Justify(ui.End).Children(func() { s.taskRootMigrationBrowse(c, p, value) })
 			})
 			return
 		}
-		ui.Row(c).FillWidth().MinWidth(0).Gap(7).Disabled(s.busy || s.settingsPickerBusy).Children(func() {
+		ui.Row(c).FillWidth().MinWidth(0).Gap(7).Disabled(s.busy || s.settingsUnit.state.settingsPickerBusy).Children(func() {
 			input = ui.TextInput(c.Key("settings-path-任务根目录"), value).Grow(1).MinWidth(0).FillWidth().Height(36).Placeholder("选择任务存放目录").Label("任务根目录")
 			s.taskRootMigrationBrowse(c, p, value)
 		})
@@ -115,13 +115,13 @@ func (s *app) taskRootMigrationPathField(c *ui.Context, p palette, value *string
 		field()
 	}
 	focused := input.Focused()
-	if s.taskRootTargetFocused && !focused && !s.busy && !s.settingsPickerBusy {
+	if s.taskUnit.state.taskRootTargetFocused && !focused && !s.busy && !s.settingsUnit.state.settingsPickerBusy {
 		target := strings.TrimSpace(*value)
 		if target != "" && workspaceHealthPathKey(target) != workspaceHealthPathKey(s.configString("taskRoot")) {
 			s.requestTaskRootChange(target)
 		}
 	}
-	s.taskRootTargetFocused = focused
+	s.taskUnit.state.taskRootTargetFocused = focused
 }
 
 func (s *app) taskRootMigrationBrowse(c *ui.Context, p palette, value *string) {
@@ -139,18 +139,18 @@ func (s *app) previewTaskRootMigrationTarget(target string) {
 		s.lastError = "请选择与当前目录不同的目标目录。"
 		return
 	}
-	if s.busy || s.settingsPickerBusy {
+	if s.busy || s.settingsUnit.state.settingsPickerBusy {
 		return
 	}
-	s.migrationReady, s.migrationPlan = false, nil
+	s.settingsUnit.state.migrationReady, s.settingsUnit.state.migrationPlan = false, nil
 	s.act("migration.preview", "", "", "", target, "", nil)
 }
 
 func (s *app) observeTaskRootMigrationNavigation() {
-	if !s.taskRootTargetFocused || s.page == "settings" && s.settingsPage == "paths" {
+	if !s.taskUnit.state.taskRootTargetFocused || s.page == "settings" && s.settingsUnit.state.settingsPage == "paths" {
 		return
 	}
-	s.taskRootTargetFocused = false
+	s.taskUnit.state.taskRootTargetFocused = false
 	target := strings.TrimSpace(*s.input("setting:taskRootTarget", s.configString("taskRoot")))
 	if target != "" && workspaceHealthPathKey(target) != workspaceHealthPathKey(s.configString("taskRoot")) {
 		s.requestTaskRootChange(target)
@@ -159,10 +159,10 @@ func (s *app) observeTaskRootMigrationNavigation() {
 
 func (s *app) taskRootMigrationPlan() (workspace.TaskRootMigrationPreview, error) {
 	var preview workspace.TaskRootMigrationPreview
-	if s.migrationPlan == nil || !s.migrationReady {
+	if s.settingsUnit.state.migrationPlan == nil || !s.settingsUnit.state.migrationReady {
 		return preview, fmt.Errorf("请先预览任务根目录迁移")
 	}
-	if err := decodeWorkspaceValue(s.migrationPlan, &preview); err != nil {
+	if err := decodeWorkspaceValue(s.settingsUnit.state.migrationPlan, &preview); err != nil {
 		return preview, fmt.Errorf("迁移预览格式错误：%w", err)
 	}
 	if !preview.CanMigrate || len(preview.Blockers) != 0 || strings.TrimSpace(preview.TargetRoot) == "" {
@@ -216,25 +216,25 @@ func (s *app) applyConfirmedTaskRootMigration(confirmed workspace.TaskRootMigrat
 func (s *app) applyTaskRootMigrationPreview(action application.Action, result application.ActionResult) {
 	var preview workspace.TaskRootMigrationPreview
 	if err := decodeWorkspaceValue(result.Data, &preview); err != nil {
-		s.migrationPlan = nil
-		s.migrationReady = false
-		s.migrationPreview = "迁移预览格式错误：" + err.Error()
+		s.settingsUnit.state.migrationPlan = nil
+		s.settingsUnit.state.migrationReady = false
+		s.settingsUnit.state.migrationPreview = "迁移预览格式错误：" + err.Error()
 		return
 	}
 	if workspaceHealthPathKey(action.Path) != workspaceHealthPathKey(preview.TargetRoot) {
-		s.migrationPlan = nil
-		s.migrationReady = false
-		s.migrationPreview = "迁移预览与请求目标不一致，请重新检查。"
+		s.settingsUnit.state.migrationPlan = nil
+		s.settingsUnit.state.migrationReady = false
+		s.settingsUnit.state.migrationPreview = "迁移预览与请求目标不一致，请重新检查。"
 		return
 	}
 	if err := s.taskRootMigrationTargetCurrent(preview); err != nil {
-		s.migrationPlan = nil
-		s.migrationReady = false
-		s.migrationPreview = err.Error()
+		s.settingsUnit.state.migrationPlan = nil
+		s.settingsUnit.state.migrationReady = false
+		s.settingsUnit.state.migrationPreview = err.Error()
 		return
 	}
-	s.migrationPlan = preview
-	s.migrationPreview = migrationPreviewText(preview)
-	s.migrationReady = preview.CanMigrate
-	s.settingsOutput = ""
+	s.settingsUnit.state.migrationPlan = preview
+	s.settingsUnit.state.migrationPreview = migrationPreviewText(preview)
+	s.settingsUnit.state.migrationReady = preview.CanMigrate
+	s.settingsUnit.state.settingsOutput = ""
 }

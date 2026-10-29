@@ -7,11 +7,12 @@ import (
 	"reflect"
 
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/productprofile"
 )
 
 func migrationWorkspaceIdentities(task migrationJournalTask) ([]string, error) {
-	if task.OriginalManifest.Edition != "product" {
-		return nil, fmt.Errorf("迁移日志不是产品版格式")
+	if !productprofile.AcceptsEdition(task.OriginalManifest.Edition) {
+		return nil, fmt.Errorf("%s", productprofile.MigrationEditionError())
 	}
 	return nil, nil
 }

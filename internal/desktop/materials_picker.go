@@ -45,14 +45,14 @@ type materialsPickerState struct {
 	sourcePreviewReveal bool
 }
 
-func (s *app) ensureMaterialsPickerState() *materialsPickerState {
-	if s.materialsPicker == nil {
-		s.materialsPicker = &materialsPickerState{}
+func (s *materialsController) ensureMaterialsPickerState() *materialsPickerState {
+	if s.state.materialsPicker == nil {
+		s.state.materialsPicker = &materialsPickerState{}
 	}
-	return s.materialsPicker
+	return s.state.materialsPicker
 }
 
-func (s *app) openMaterialsQuickPicker() {
+func (s *materialsController) openMaterialsQuickPicker() {
 	state := s.ensureMaterialsPickerState()
 	state.quickQuery = ""
 	state.quickSelected = 0
@@ -60,8 +60,8 @@ func (s *app) openMaterialsQuickPicker() {
 }
 
 func (s *app) openMaterialsFullTextSearch() {
-	state := s.ensureMaterialsPickerState()
-	s.cancelMaterialsSearchRun(state)
+	state := s.materialsUnit.ensureMaterialsPickerState()
+	s.materialsUnit.cancelMaterialsSearchRun(state)
 	state.searchGeneration++
 	state.searchOpen = true
 	state.searchQuery = ""
@@ -72,11 +72,11 @@ func (s *app) openMaterialsFullTextSearch() {
 	state.searchStopped = false
 	state.searchFailures = false
 	state.searchSelected = 0
-	state.searchTaskID = s.currentTask().id
+	state.searchTaskID = s.taskUnit.currentTask().id
 }
 
-func (s *app) cancelMaterialsSearch() {
-	state := s.materialsPicker
+func (s *materialsController) cancelMaterialsSearch() {
+	state := s.state.materialsPicker
 	if state == nil {
 		return
 	}
@@ -94,20 +94,20 @@ func (s *app) cancelMaterialsSearch() {
 }
 
 func (s *app) materialsSearchSourcePreviewActive() bool {
-	state := s.materialsPicker
+	state := s.materialsUnit.state.materialsPicker
 	return state != nil && state.sourcePreviewHit != nil && state.sourcePreviewPath != "" &&
-		filepath.Clean(state.sourcePreviewPath) == filepath.Clean(s.documentPath) && s.documentKind != "pdf"
+		filepath.Clean(state.sourcePreviewPath) == filepath.Clean(s.materialsUnit.state.documentPath) && s.materialsUnit.state.documentKind != "pdf"
 }
 
 func (s *app) materialsSearchSourcePreviewHit() (documents.SearchHit, bool) {
 	if !s.materialsSearchSourcePreviewActive() {
 		return documents.SearchHit{}, false
 	}
-	return *s.materialsPicker.sourcePreviewHit, true
+	return *s.materialsUnit.state.materialsPicker.sourcePreviewHit, true
 }
 
-func (s *app) closeMaterialsSearchSourcePreview() {
-	state := s.materialsPicker
+func (s *materialsController) closeMaterialsSearchSourcePreview() {
+	state := s.state.materialsPicker
 	if state == nil {
 		return
 	}
@@ -116,7 +116,7 @@ func (s *app) closeMaterialsSearchSourcePreview() {
 	state.sourcePreviewReveal = false
 }
 
-func (s *app) cancelMaterialsSearchRun(state *materialsPickerState) {
+func (s *materialsController) cancelMaterialsSearchRun(state *materialsPickerState) {
 	if state.searchDebounce != nil {
 		state.searchDebounce.Stop()
 		state.searchDebounce = nil
@@ -129,19 +129,19 @@ func (s *app) cancelMaterialsSearchRun(state *materialsPickerState) {
 }
 
 func (s *app) closeMaterialsFullTextSearch(stopped bool) {
-	state := s.ensureMaterialsPickerState()
-	s.cancelMaterialsSearchRun(state)
+	state := s.materialsUnit.ensureMaterialsPickerState()
+	s.materialsUnit.cancelMaterialsSearchRun(state)
 	state.searchGeneration++
 	state.searchOpen = false
 	state.searchStopped = stopped
 }
 
 func (s *app) queueMaterialsSearch() {
-	state := s.ensureMaterialsPickerState()
-	s.cancelMaterialsSearchRun(state)
+	state := s.materialsUnit.ensureMaterialsPickerState()
+	s.materialsUnit.cancelMaterialsSearchRun(state)
 	state.searchGeneration++
 	generation := state.searchGeneration
-	state.searchTaskID = s.currentTask().id
+	state.searchTaskID = s.taskUnit.currentTask().id
 	state.searchResult = nil
 	state.searchProgress = documents.MaterialsSearchProgress{}
 	state.searchError = ""
@@ -158,8 +158,8 @@ func (s *app) queueMaterialsSearch() {
 			return
 		}
 		win.Update(func() {
-			current := s.materialsPicker
-			if current != state || state.searchGeneration != generation || !state.searchOpen || s.currentTask().id != taskID {
+			current := s.materialsUnit.state.materialsPicker
+			if current != state || state.searchGeneration != generation || !state.searchOpen || s.taskUnit.currentTask().id != taskID {
 				return
 			}
 			state.searchDebounce = nil
@@ -177,7 +177,7 @@ func (s *app) runMaterialsSearch(ctx context.Context, state *materialsPickerStat
 			return
 		}
 		win.Update(func() {
-			if s.materialsPicker != state || state.searchGeneration != generation || !state.searchOpen || s.currentTask().id != taskID {
+			if s.materialsUnit.state.materialsPicker != state || state.searchGeneration != generation || !state.searchOpen || s.taskUnit.currentTask().id != taskID {
 				return
 			}
 			state.searchProgress = progress
@@ -201,7 +201,7 @@ func (s *app) runMaterialsSearch(ctx context.Context, state *materialsPickerStat
 		return
 	}
 	win.Update(func() {
-		if s.materialsPicker != state || state.searchGeneration != generation || !state.searchOpen || s.currentTask().id != taskID {
+		if s.materialsUnit.state.materialsPicker != state || state.searchGeneration != generation || !state.searchOpen || s.taskUnit.currentTask().id != taskID {
 			return
 		}
 		state.searchCancel = nil
@@ -230,7 +230,7 @@ func (s *app) runMaterialsSearch(ctx context.Context, state *materialsPickerStat
 }
 
 func (s *app) stopMaterialsSearch() {
-	state := s.ensureMaterialsPickerState()
+	state := s.materialsUnit.ensureMaterialsPickerState()
 	if state.searchCancel != nil {
 		state.searchCancel()
 		state.searchCancel = nil
@@ -245,7 +245,7 @@ func (s *app) stopMaterialsSearch() {
 }
 
 func (s *app) materialQuickPickerDialog(c *ui.Context, p palette) {
-	state := s.ensureMaterialsPickerState()
+	state := s.materialsUnit.ensureMaterialsPickerState()
 	dialog := ui.DialogBase(c.Key("materials-quick-picker"), &state.quickOpen, func(backdrop, panel ui.Element) {
 		backdrop.Background(ui.RGBA(0, 0, 0, .34))
 		width, _ := c.Size()
@@ -268,7 +268,7 @@ func (s *app) materialQuickPickerDialog(c *ui.Context, p palette) {
 			ui.Scroll(c).Grow(1).MinHeight(160).MaxHeight(340).Gap(3).Children(func() {
 				if len(matches) == 0 {
 					message := "没有匹配的文件"
-					if !s.documentsLoaded {
+					if !s.materialsUnit.state.documentsLoaded {
 						message = "正在读取任务资料目录…"
 					}
 					label(c, message, 12, p.muted).Padding(8)
@@ -305,49 +305,8 @@ func (s *app) materialQuickPickerDialog(c *ui.Context, p palette) {
 	}
 }
 
-type quickPickerEntry struct {
-	path, name, relative string
-}
-
 func (s *app) materialQuickPickerMatches(query string) []quickPickerEntry {
-	task := s.currentTask()
-	if task.materialsPath == "" {
-		return nil
-	}
-	query = strings.ToLower(strings.TrimSpace(query))
-	matches := make([]quickPickerEntry, 0, 32)
-	var visit func([]application.Document)
-	visit = func(items []application.Document) {
-		if len(matches) >= 200 {
-			return
-		}
-		for _, document := range items {
-			if len(matches) >= 200 {
-				return
-			}
-			if isDocumentDirectory(document) {
-				visit(document.Children)
-				if len(matches) >= 200 {
-					return
-				}
-				continue
-			}
-			relative, err := filepath.Rel(task.materialsPath, document.Path)
-			if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
-				continue
-			}
-			relative = filepath.ToSlash(relative)
-			if query != "" && !strings.Contains(strings.ToLower(relative), query) {
-				continue
-			}
-			matches = append(matches, quickPickerEntry{path: document.Path, name: filepath.Base(document.Path), relative: relative})
-			if len(matches) == 200 {
-				return
-			}
-		}
-	}
-	visit(s.documents)
-	return matches
+	return s.materialsDocumentProjection().quickMatches(query)
 }
 
 func (s *app) moveQuickPickerSelection(state *materialsPickerState, delta int) {
@@ -376,13 +335,13 @@ func (s *app) selectQuickPickerEntry(item quickPickerEntry) {
 	if s.materialsFileReadBlocked() {
 		return
 	}
-	state := s.ensureMaterialsPickerState()
+	state := s.materialsUnit.ensureMaterialsPickerState()
 	state.quickOpen = false
 	s.selectMaterialsPath(item.path)
 }
 
 func (s *app) materialFullTextSearchDialog(c *ui.Context, p palette) {
-	state := s.ensureMaterialsPickerState()
+	state := s.materialsUnit.ensureMaterialsPickerState()
 	dialog := ui.DialogBase(c.Key("materials-full-text-search"), &state.searchOpen, func(backdrop, panel ui.Element) {
 		backdrop.Background(ui.RGBA(0, 0, 0, .34))
 		width, _ := c.Size()
@@ -554,8 +513,8 @@ func (s *app) openSelectedMaterialsSearchHit(state *materialsPickerState) {
 }
 
 func (s *app) selectMaterialsSearchHit(hit documents.SearchHit) {
-	state := s.ensureMaterialsPickerState()
-	task := s.currentTask()
+	state := s.materialsUnit.ensureMaterialsPickerState()
+	task := s.taskUnit.currentTask()
 	if task.id == "" || task.id != state.searchTaskID || task.materialsPath == "" || s.materialsFileReadBlocked() {
 		return
 	}
@@ -572,18 +531,18 @@ func (s *app) selectMaterialsSearchHit(hit documents.SearchHit) {
 		return
 	}
 	// Selection changes documentPath before its asynchronous read succeeds.
-	alreadyLoaded := path == s.documentPath && !s.documentReadPending &&
-		(s.documentContent != "" || s.documentHash != "" || s.documentKind == "pdf" && s.nativeMedia != nil && s.nativeMedia.path == path)
+	alreadyLoaded := path == s.materialsUnit.state.documentPath && !s.materialsUnit.state.documentReadPending &&
+		(s.materialsUnit.state.documentContent != "" || s.materialsUnit.state.documentHash != "" || s.materialsUnit.state.documentKind == "pdf" && s.materialsUnit.state.nativeMedia != nil && s.materialsUnit.state.nativeMedia.path == path)
 	copyHit := hit
 	state.pendingHit = &copyHit
 	state.pendingHitTask = task.id
 	state.pendingHitPath = path
 	s.closeMaterialsFullTextSearch(false)
-	s.documentFindOpen = true
-	s.documentSearch = hit.Query
+	s.materialsUnit.state.documentFindOpen = true
+	s.materialsUnit.state.documentSearch = hit.Query
 	s.selectMaterialsPath(path)
 	if alreadyLoaded {
-		s.applyPendingMaterialsSearchHit(application.Action{Kind: "document.read", TaskID: task.id, Path: path}, application.ActionResult{Path: path, Data: map[string]any{"kind": s.documentKind}})
+		s.applyPendingMaterialsSearchHit(application.Action{Kind: "document.read", TaskID: task.id, Path: path}, application.ActionResult{Path: path, Data: map[string]any{"kind": s.materialsUnit.state.documentKind}})
 		return
 	}
 	s.selectDocument(path)
@@ -592,35 +551,35 @@ func (s *app) selectMaterialsSearchHit(hit documents.SearchHit) {
 // applyPendingMaterialsSearchHit is called after the regular, root-validated
 // document.read result has opened the selected material in the native viewer.
 func (s *app) applyPendingMaterialsSearchHit(action application.Action, result application.ActionResult) {
-	state := s.materialsPicker
+	state := s.materialsUnit.state.materialsPicker
 	if state == nil || state.pendingHit == nil || action.Kind != "document.read" ||
-		action.TaskID != state.pendingHitTask || s.currentTask().id != state.pendingHitTask {
+		action.TaskID != state.pendingHitTask || s.taskUnit.currentTask().id != state.pendingHitTask {
 		return
 	}
 	path := result.Path
 	if path == "" {
 		path = action.Path
 	}
-	if filepath.Clean(path) != filepath.Clean(state.pendingHitPath) || filepath.Clean(s.documentPath) != filepath.Clean(state.pendingHitPath) {
+	if filepath.Clean(path) != filepath.Clean(state.pendingHitPath) || filepath.Clean(s.materialsUnit.state.documentPath) != filepath.Clean(state.pendingHitPath) {
 		return
 	}
 	hit := *state.pendingHit
 	state.pendingHit = nil
 	state.pendingHitTask = ""
 	state.pendingHitPath = ""
-	s.documentSearch = hit.Query
-	s.documentFindOpen = false
-	if s.documentKind != "pdf" || s.nativeMedia == nil || s.nativeMedia.path != path {
+	s.materialsUnit.state.documentSearch = hit.Query
+	s.materialsUnit.state.documentFindOpen = false
+	if s.materialsUnit.state.documentKind != "pdf" || s.materialsUnit.state.nativeMedia == nil || s.materialsUnit.state.nativeMedia.path != path {
 		state.sourcePreviewPath = path
 		state.sourcePreviewHit = &hit
 		state.sourcePreviewReveal = true
-		s.documentEditing = false
+		s.materialsUnit.state.documentEditing = false
 		return
 	}
 	state.sourcePreviewPath = ""
 	state.sourcePreviewHit = nil
 	state.sourcePreviewReveal = false
-	m := s.nativeMedia
+	m := s.materialsUnit.state.nativeMedia
 	m.showPDFText = true
 	m.search = hit.Query
 	if hit.PageIndex != nil {
@@ -710,13 +669,13 @@ func utf16ToRuneStart(value string, offset int) int {
 // active occurrence is selected so MyGO scrolls it into view; TextRanges
 // styles the other occurrences in the file.
 func (s *app) renderMaterialsSearchSourcePreview(c *ui.Context, p palette) bool {
-	state := s.materialsPicker
+	state := s.materialsUnit.state.materialsPicker
 	if state == nil || state.sourcePreviewHit == nil || state.sourcePreviewPath == "" ||
-		filepath.Clean(state.sourcePreviewPath) != filepath.Clean(s.documentPath) || s.documentKind == "pdf" {
+		filepath.Clean(state.sourcePreviewPath) != filepath.Clean(s.materialsUnit.state.documentPath) || s.materialsUnit.state.documentKind == "pdf" {
 		return false
 	}
 	hit := *state.sourcePreviewHit
-	content := s.documentContent
+	content := s.materialsUnit.state.documentContent
 	field := ui.TextArea(c.Key("materials-search-source-"+state.sourcePreviewPath), &content).
 		FillWidth().Height(560).Padding(14).Font("Consolas").FontSize(13).
 		Background(p.surface).Border(1, p.line).Radius(8).ReadOnly(true).

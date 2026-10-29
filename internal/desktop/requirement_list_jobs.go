@@ -10,73 +10,73 @@ import (
 )
 
 func (s *app) ensureRequirementListJobs() *requirementListJobState {
-	if s.requirementListJobs == nil {
-		s.requirementListJobs = &requirementListJobState{
+	if s.requirementUnit.state.requirementListJobs == nil {
+		s.requirementUnit.state.requirementListJobs = &requirementListJobState{
 			running:   make(map[*requirementListJob]struct{}),
 			snapshots: make(map[requirementListSnapshotKey]requirementListViewSnapshot),
 		}
-	} else if s.requirementListJobs.snapshots == nil {
-		s.requirementListJobs.snapshots = make(map[requirementListSnapshotKey]requirementListViewSnapshot)
+	} else if s.requirementUnit.state.requirementListJobs.snapshots == nil {
+		s.requirementUnit.state.requirementListJobs.snapshots = make(map[requirementListSnapshotKey]requirementListViewSnapshot)
 	}
-	return s.requirementListJobs
+	return s.requirementUnit.state.requirementListJobs
 }
 
 func (s *app) saveRequirementListSnapshot(identity requirementListIdentity, sprintKey string) {
-	if !s.requirementsLoaded && len(s.requirements) == 0 {
+	if !s.requirementUnit.state.requirementsLoaded && len(s.requirementUnit.state.requirements) == 0 {
 		return
 	}
 	state := s.ensureRequirementListJobs()
 	key := requirementListSnapshotKey{identity: identity, sprint: sprintKey}
 	estimate := state.snapshots[key].estimate
 	if s.hasCompleteRequirementsEstimate() {
-		estimate = requirementsEstimateTotal(s.requirements)
+		estimate = requirementsEstimateTotal(s.requirementUnit.state.requirements)
 	}
 	state.snapshots[key] = requirementListViewSnapshot{
-		fetchedAt: s.requirementsFetchedAt,
-		items:     append([]application.Requirement(nil), s.requirements...),
-		selected:  s.selectedRequirementKey,
-		sprints:   append([]requirementSprint(nil), s.requirementsSprints...),
-		failures:  append([]string(nil), s.requirementsFailures...),
-		completed: s.requirementsCompletedQueries,
-		loadError: s.requirementsLoadError,
-		loaded:    s.requirementsLoaded,
+		fetchedAt: s.requirementUnit.state.requirementsFetchedAt,
+		items:     append([]application.Requirement(nil), s.requirementUnit.state.requirements...),
+		selected:  s.requirementUnit.state.selectedRequirementKey,
+		sprints:   append([]requirementSprint(nil), s.requirementUnit.state.requirementsSprints...),
+		failures:  append([]string(nil), s.requirementUnit.state.requirementsFailures...),
+		completed: s.requirementUnit.state.requirementsCompletedQueries,
+		loadError: s.requirementUnit.state.requirementsLoadError,
+		loaded:    s.requirementUnit.state.requirementsLoaded,
 		estimate:  estimate,
 	}
 }
 
 func (s *app) activateRequirementSprint(sprintKey string) {
 	if sprintKey == "" {
-		sprintKey = s.requirementsSelectedSprintKey
+		sprintKey = s.requirementUnit.state.requirementsSelectedSprintKey
 	}
-	if sprintKey == s.requirementsSelectedSprintKey {
+	if sprintKey == s.requirementUnit.state.requirementsSelectedSprintKey {
 		return
 	}
-	s.requirementListProgress = nil
+	s.requirementUnit.state.requirementListProgress = nil
 	state := s.ensureRequirementListJobs()
 	identity := s.currentRequirementListIdentity()
 	if state.hasIdentity && state.identity == identity {
-		s.saveRequirementListSnapshot(identity, s.requirementsSelectedSprintKey)
+		s.saveRequirementListSnapshot(identity, s.requirementUnit.state.requirementsSelectedSprintKey)
 	}
 	if cached, ok := state.snapshots[requirementListSnapshotKey{identity: identity, sprint: sprintKey}]; ok {
-		s.requirementsFetchedAt = cached.fetchedAt
-		s.requirements = append([]application.Requirement(nil), cached.items...)
-		s.requirementsSprints = append([]requirementSprint(nil), cached.sprints...)
-		s.requirementsFailures = append([]string(nil), cached.failures...)
-		s.requirementsCompletedQueries = cached.completed
-		s.requirementsLoadError = cached.loadError
-		s.requirementsLoaded = cached.loaded
+		s.requirementUnit.state.requirementsFetchedAt = cached.fetchedAt
+		s.requirementUnit.state.requirements = append([]application.Requirement(nil), cached.items...)
+		s.requirementUnit.state.requirementsSprints = append([]requirementSprint(nil), cached.sprints...)
+		s.requirementUnit.state.requirementsFailures = append([]string(nil), cached.failures...)
+		s.requirementUnit.state.requirementsCompletedQueries = cached.completed
+		s.requirementUnit.state.requirementsLoadError = cached.loadError
+		s.requirementUnit.state.requirementsLoaded = cached.loaded
 		s.restoreRequirementListSelection(cached.selected)
 	} else {
-		s.requirementsFetchedAt = 0
-		s.requirements = nil
+		s.requirementUnit.state.requirementsFetchedAt = 0
+		s.requirementUnit.state.requirements = nil
 		s.clearRequirementListSelection()
-		s.requirementsLoaded = false
-		s.requirementsFailures = nil
-		s.requirementsCompletedQueries = 0
-		s.requirementsLoadError = ""
+		s.requirementUnit.state.requirementsLoaded = false
+		s.requirementUnit.state.requirementsFailures = nil
+		s.requirementUnit.state.requirementsCompletedQueries = 0
+		s.requirementUnit.state.requirementsLoadError = ""
 	}
-	s.requirementsSelectedSprintKey = sprintKey
-	s.requirementsFocusedDetail = false
+	s.requirementUnit.state.requirementsSelectedSprintKey = sprintKey
+	s.requirementUnit.state.requirementsFocusedDetail = false
 	s.lastResult = ""
 }
 
@@ -90,9 +90,9 @@ func (s *app) retireRequirementListRequest(state *requirementListJobState) {
 
 func (s *app) startRequirementListJob(sprintKey string, refresh bool) {
 	if s.backend == nil || s.win == nil || s.win.IsDestroyed() {
-		s.requirementsLoading = false
-		s.requirementsLoadError = "需求列表后端或窗口不可用，请重试。"
-		s.failRequirementListProgress(s.requirementListProgress, []string{s.requirementsLoadError})
+		s.requirementUnit.state.requirementsLoading = false
+		s.requirementUnit.state.requirementsLoadError = "需求列表后端或窗口不可用，请重试。"
+		s.failRequirementListProgress(s.requirementUnit.state.requirementListProgress, []string{s.requirementUnit.state.requirementsLoadError})
 		return
 	}
 	state := s.ensureRequirementListJobs()
@@ -100,9 +100,9 @@ func (s *app) startRequirementListJob(sprintKey string, refresh bool) {
 	closed := state.closed
 	state.mu.Unlock()
 	if closed {
-		s.requirementsLoading = false
-		s.requirementsLoadError = "需求列表读取已关闭。"
-		s.failRequirementListProgress(s.requirementListProgress, []string{s.requirementsLoadError})
+		s.requirementUnit.state.requirementsLoading = false
+		s.requirementUnit.state.requirementsLoadError = "需求列表读取已关闭。"
+		s.failRequirementListProgress(s.requirementUnit.state.requirementListProgress, []string{s.requirementUnit.state.requirementsLoadError})
 		return
 	}
 	identity := s.currentRequirementListIdentity()
@@ -112,7 +112,7 @@ func (s *app) startRequirementListJob(sprintKey string, refresh bool) {
 		s.resetRequirementListForIdentity(state, identity)
 	}
 
-	previousSprint := s.requirementsSelectedSprintKey
+	previousSprint := s.requirementUnit.state.requirementsSelectedSprintKey
 	if sprintKey == "" {
 		sprintKey = previousSprint
 	}
@@ -120,14 +120,14 @@ func (s *app) startRequirementListJob(sprintKey string, refresh bool) {
 	if current := state.current; current != nil && current.identity == identity && current.sprintKey == sprintKey && !refresh {
 		return
 	}
-	items := append([]application.Requirement(nil), s.requirements...)
-	selectedKey := s.selectedRequirementKey
+	items := append([]application.Requirement(nil), s.requirementUnit.state.requirements...)
+	selectedKey := s.requirementUnit.state.selectedRequirementKey
 	s.retireRequirementListRequest(state)
-	s.cancelRequirementDocumentPreparation()
+	s.requirementUnit.cancelRequirementDocumentPreparation()
 	state.generation++
 	ctx, cancel := context.WithCancel(context.Background())
 	payload := map[string]any{}
-	if state := s.requirementIdentityJobs; state != nil && state.confirmed && state.identity != "" {
+	if state := s.requirementUnit.state.requirementIdentityJobs; state != nil && state.confirmed && state.identity != "" {
 		payload["expectedIdentity"] = state.identity
 	}
 	if sprintKey != "" {
@@ -143,7 +143,7 @@ func (s *app) startRequirementListJob(sprintKey string, refresh bool) {
 		ctx:    ctx, cancel: cancel, done: make(chan struct{}),
 		items: items, selectedKey: selectedKey, sprintKey: sprintKey, sameSprint: sameSprint,
 	}
-	if identityState := s.requirementIdentityJobs; identityState != nil && identityState.hasContext {
+	if identityState := s.requirementUnit.state.requirementIdentityJobs; identityState != nil && identityState.hasContext {
 		request.identityContext, request.hasIdentityContext = identityState.context, true
 	}
 	state.current = request
@@ -153,17 +153,17 @@ func (s *app) startRequirementListJob(sprintKey string, refresh bool) {
 	state.mu.Unlock()
 
 	if !sameSprint {
-		s.requirements = nil
+		s.requirementUnit.state.requirements = nil
 		s.clearRequirementListSelection()
 		s.lastResult = ""
-		s.requirementsFocusedDetail = false
+		s.requirementUnit.state.requirementsFocusedDetail = false
 	}
-	s.requirementsSelectedSprintKey = sprintKey
-	s.requirementsRequested = true
-	s.requirementsLoading = true
-	s.requirementsLoadError = ""
-	s.requirementsFailures = nil
-	s.requirementsCompletedQueries = 0
+	s.requirementUnit.state.requirementsSelectedSprintKey = sprintKey
+	s.requirementUnit.state.requirementsRequested = true
+	s.requirementUnit.state.requirementsLoading = true
+	s.requirementUnit.state.requirementsLoadError = ""
+	s.requirementUnit.state.requirementsFailures = nil
+	s.requirementUnit.state.requirementsCompletedQueries = 0
 	backend, win := s.backend, s.win
 	win.Invalidate()
 	go func() {
@@ -194,13 +194,7 @@ func executeRequirementListJob(backend application.Backend, request *requirement
 	if err := request.ctx.Err(); err != nil {
 		return application.ActionResult{}, err
 	}
-	var result application.ActionResult
-	var err error
-	if progressBackend, ok := backend.(application.RequirementListProgressBackend); ok && request.onProgress != nil {
-		result, err = progressBackend.DispatchRequirementList(request.ctx, request.action, request.onProgress)
-	} else {
-		result, err = backend.Dispatch(request.ctx, request.action)
-	}
+	result, err := executeRequirementOperation(request.ctx, backend, request.action, request.onProgress)
 	if request.ctx.Err() != nil {
 		err = errors.Join(request.ctx.Err(), err)
 	}
@@ -208,7 +202,7 @@ func executeRequirementListJob(backend application.Backend, request *requirement
 }
 
 func (s *app) requirementListJobRelevant(request *requirementListJob) bool {
-	state := s.requirementListJobs
+	state := s.requirementUnit.state.requirementListJobs
 	if state == nil || request == nil {
 		return false
 	}
@@ -235,7 +229,7 @@ func (s *app) finishRequirementListJob(request *requirementListJob, result appli
 			return
 		}
 	}
-	state := s.requirementListJobs
+	state := s.requirementUnit.state.requirementListJobs
 	state.current = nil
 	if err != nil {
 		var changed *application.RequirementIdentityChangedError
@@ -244,8 +238,8 @@ func (s *app) finishRequirementListJob(request *requirementListJob, result appli
 			return
 		}
 		if errors.Is(err, context.Canceled) {
-			s.requirementsLoading = false
-			s.requirementsLoaded = false
+			s.requirementUnit.state.requirementsLoading = false
+			s.requirementUnit.state.requirementsLoaded = false
 			return
 		}
 		s.applyRequirementListFailure(request, err)
@@ -258,55 +252,53 @@ func (s *app) finishRequirementListJob(request *requirementListJob, result appli
 		p.steps["apply"] = application.RequirementListProgress{Phase: "apply", Status: "running", Message: "正在更新列表…"}
 	}
 	s.applyRequirementListResult(request, result)
-	if progressCurrent && s.requirementListProgress == p {
-		p.viewSprintKey = s.requirementsSelectedSprintKey
+	if progressCurrent && s.requirementUnit.state.requirementListProgress == p {
+		p.viewSprintKey = s.requirementUnit.state.requirementsSelectedSprintKey
 	}
 	s.finishRequirementListProgress(request)
 }
 
 func (s *app) applyRequirementListFailure(request *requirementListJob, err error) {
 	if request.sameSprint {
-		s.requirements = append([]application.Requirement(nil), request.items...)
+		s.requirementUnit.state.requirements = append([]application.Requirement(nil), request.items...)
 		s.restoreRequirementListSelection(request.selectedKey)
 	} else {
-		s.requirements = nil
+		s.requirementUnit.state.requirements = nil
 		s.clearRequirementListSelection()
 	}
-	s.requirementsLoading, s.requirementsLoaded = false, true
-	s.requirementsLoadError = "读取需求列表失败"
-	if len(s.requirements) > 0 {
-		s.requirementsLoadError += "；已保留上次结果"
+	s.requirementUnit.state.requirementsLoading, s.requirementUnit.state.requirementsLoaded = false, true
+	s.requirementUnit.state.requirementsLoadError = "读取需求列表失败"
+	if len(s.requirementUnit.state.requirements) > 0 {
+		s.requirementUnit.state.requirementsLoadError += "；已保留上次结果"
 	}
-	s.requirementsLoadError += "：" + strings.TrimSpace(err.Error())
-	s.requirementsFailures = []string{strings.TrimSpace(err.Error())}
-	s.requirementsCompletedQueries = 0
-	s.requirementsSelectedSprintKey = request.sprintKey
+	s.requirementUnit.state.requirementsLoadError += "：" + strings.TrimSpace(err.Error())
+	s.requirementUnit.state.requirementsFailures = []string{strings.TrimSpace(err.Error())}
+	s.requirementUnit.state.requirementsCompletedQueries = 0
+	s.requirementUnit.state.requirementsSelectedSprintKey = request.sprintKey
 	s.saveRequirementListSnapshot(request.identity, request.sprintKey)
 }
 
 func (s *app) applyRequirementListResult(request *requirementListJob, result application.ActionResult) {
-	data := mapData(result.Data)
-	items, err := decodeData[application.Requirement](data["items"])
+	data, err := application.ResultData[application.RequirementList](result)
 	if err != nil {
 		s.applyRequirementListFailure(request, fmt.Errorf("读取需求列表格式失败：%w", err))
 		return
 	}
-	failures := mapsString(data["failures"])
-	completed := int(dataInt64(data, "completedQueries"))
-
-	sprints := append([]requirementSprint(nil), s.requirementsSprints...)
-	sprintsPayload, hasSprintCatalog := data["sprints"]
-	if hasSprintCatalog && sprintsPayload != nil {
-		decoded, decodeErr := decodeData[requirementSprint](data["sprints"])
-		if decodeErr != nil {
-			s.applyRequirementListFailure(request, fmt.Errorf("读取 Sprint 列表格式失败：%w", decodeErr))
-			return
+	items, failures, completed := data.Items, data.Failures, data.CompletedQueries
+	sprints := append([]requirementSprint(nil), s.requirementUnit.state.requirementsSprints...)
+	hasSprintCatalog := data.Sprints != nil
+	if hasSprintCatalog {
+		sprints = make([]requirementSprint, 0, len(data.Sprints))
+		for _, sprint := range data.Sprints {
+			sprints = append(sprints, requirementSprint(sprint))
 		}
-		sprints = decoded
 	}
 	resolvedSprintKey := request.sprintKey
-	if hasSprintCatalog && sprintsPayload != nil {
-		resolvedSprintKey = dataString(data, "selectedSprintKey")
+	if hasSprintCatalog {
+		resolvedSprintKey = ""
+		if data.SelectedSprintKey != nil {
+			resolvedSprintKey = *data.SelectedSprintKey
+		}
 	}
 	retain := request.sameSprint && resolvedSprintKey == request.sprintKey
 	retainedItems := []application.Requirement(nil)
@@ -318,54 +310,54 @@ func (s *app) applyRequirementListResult(request *requirementListJob, result app
 		selectedKey = ""
 	}
 
-	s.requirementsSprints = sprints
-	s.requirementsSelectedSprintKey = resolvedSprintKey
-	s.requirementsLoading, s.requirementsLoaded = false, true
-	s.requirementsFailures = failures
-	s.requirementsCompletedQueries = completed
-	s.requirementsLoadError = ""
+	s.requirementUnit.state.requirementsSprints = sprints
+	s.requirementUnit.state.requirementsSelectedSprintKey = resolvedSprintKey
+	s.requirementUnit.state.requirementsLoading, s.requirementUnit.state.requirementsLoaded = false, true
+	s.requirementUnit.state.requirementsFailures = failures
+	s.requirementUnit.state.requirementsCompletedQueries = completed
+	s.requirementUnit.state.requirementsLoadError = ""
 	if completed == 0 && len(failures) > 0 {
-		s.requirements = retainedItems
+		s.requirementUnit.state.requirements = retainedItems
 		s.restoreRequirementListSelection(selectedKey)
-		s.requirementsLoadError = "读取需求列表失败"
+		s.requirementUnit.state.requirementsLoadError = "读取需求列表失败"
 		if len(retainedItems) > 0 {
-			s.requirementsLoadError += "；已保留上次结果"
+			s.requirementUnit.state.requirementsLoadError += "；已保留上次结果"
 		}
-		s.requirementsLoadError += "。" + failures[0]
+		s.requirementUnit.state.requirementsLoadError += "。" + failures[0]
 		s.saveRequirementListSnapshot(request.identity, resolvedSprintKey)
 		return
 	}
 	if len(failures) > 0 && len(retainedItems) > 0 {
-		s.requirements = retainedItems
+		s.requirementUnit.state.requirements = retainedItems
 	} else {
-		s.requirements = items
-		s.requirementsFetchedAt = dataInt64(data, "fetchedAt")
+		s.requirementUnit.state.requirements = items
+		s.requirementUnit.state.requirementsFetchedAt = data.FetchedAt
 	}
-	s.overlayRefreshedRequirements(s.requirements, resolvedSprintKey, s.requirementsFetchedAt)
+	s.overlayRefreshedRequirements(s.requirementUnit.state.requirements, resolvedSprintKey, s.requirementUnit.state.requirementsFetchedAt)
 	s.restoreRequirementListSelection(selectedKey)
 	s.startRequirementNamingPreparation(items)
 	// A list refresh should only fill missing document/image cache entries; the
 	// explicit detail refresh remains responsible for forcing body/comments.
-	s.startRequirementDocumentPreparation(items, false, s.selectedRequirementKey)
+	s.startRequirementDocumentPreparation(items, false, s.requirementUnit.state.selectedRequirementKey)
 	s.saveRequirementListSnapshot(request.identity, resolvedSprintKey)
 }
 
 func (s *app) restoreRequirementListSelection(previousKey string) {
-	previous := s.selectedRequirementKey
+	previous := s.requirementUnit.state.selectedRequirementKey
 	if previousKey != "" {
 		if selected, ok := s.selectedRequirementByKey(previousKey); ok {
-			s.selectedRequirement, s.selectedRequirementKey = selected, previousKey
-		} else if len(s.requirements) > 0 {
-			s.selectedRequirement, s.selectedRequirementKey = 0, requirementKey(s.requirements[0])
+			s.requirementUnit.state.selectedRequirement, s.requirementUnit.state.selectedRequirementKey = selected, previousKey
+		} else if len(s.requirementUnit.state.requirements) > 0 {
+			s.requirementUnit.state.selectedRequirement, s.requirementUnit.state.selectedRequirementKey = 0, requirementKey(s.requirementUnit.state.requirements[0])
 		} else {
-			s.selectedRequirement, s.selectedRequirementKey = 0, ""
+			s.requirementUnit.state.selectedRequirement, s.requirementUnit.state.selectedRequirementKey = 0, ""
 		}
-	} else if len(s.requirements) > 0 {
-		s.selectedRequirement, s.selectedRequirementKey = 0, requirementKey(s.requirements[0])
+	} else if len(s.requirementUnit.state.requirements) > 0 {
+		s.requirementUnit.state.selectedRequirement, s.requirementUnit.state.selectedRequirementKey = 0, requirementKey(s.requirementUnit.state.requirements[0])
 	} else {
-		s.selectedRequirement, s.selectedRequirementKey = 0, ""
+		s.requirementUnit.state.selectedRequirement, s.requirementUnit.state.selectedRequirementKey = 0, ""
 	}
-	if previous != s.selectedRequirementKey {
+	if previous != s.requirementUnit.state.selectedRequirementKey {
 		if s.page == "requirements" {
 			s.dismissMarkdownBitmapViewer()
 		}
@@ -374,10 +366,10 @@ func (s *app) restoreRequirementListSelection(previousKey string) {
 }
 
 func (s *app) clearRequirementListSelection() {
-	if s.page == "requirements" && s.selectedRequirementKey != "" {
+	if s.page == "requirements" && s.requirementUnit.state.selectedRequirementKey != "" {
 		s.dismissMarkdownBitmapViewer()
 	}
-	s.selectedRequirement, s.selectedRequirementKey = 0, ""
+	s.requirementUnit.state.selectedRequirement, s.requirementUnit.state.selectedRequirementKey = 0, ""
 }
 
 func (s *app) completeRequirementListWorker(state *requirementListJobState, request *requirementListJob) {
@@ -387,8 +379,8 @@ func (s *app) completeRequirementListWorker(state *requirementListJobState, requ
 	state.mu.Unlock()
 }
 
-func (s *app) closeRequirementListJobs(ctx context.Context) error {
-	state := s.requirementListJobs
+func (s *requirementController) closeRequirementListJobs(ctx context.Context) error {
+	state := s.state.requirementListJobs
 	if state == nil {
 		return nil
 	}

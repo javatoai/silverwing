@@ -29,7 +29,7 @@ func (s *app) markdownEditorFindState(state *markdownEditorState) *documentFindS
 		}
 		return nil
 	}
-	if s.markdown == state && s.documentFindOpen {
+	if s.materialsUnit.state.markdown == state && s.materialsUnit.state.documentFindOpen {
 		return s.ensureDocumentFindState()
 	}
 	return nil

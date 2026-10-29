@@ -4,7 +4,7 @@ package desktop
 // browser embedded in Settings. Keep its data and Markdown image lifetimes
 // aligned with this route.
 func (s *app) localSkillsViewActive() bool {
-	return s != nil && s.page == "settings" && s.settingsPage == "skill-local"
+	return s != nil && s.page == "settings" && s.settingsUnit.state.settingsPage == "skill-local"
 }
 
 // invalidateLocalSkillsCatalog preserves the current preview while marking it

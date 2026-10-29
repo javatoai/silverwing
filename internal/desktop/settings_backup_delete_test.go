@@ -18,8 +18,15 @@ import (
 
 func settingsBackupDeleteFixture(t *testing.T) *app {
 	t.Helper()
-	s := &app{page: "settings", settingsPage: "config-backup", settingsTab: "存储", selected: -1,
-		inputs: map[string]*string{}, snapshot: application.Snapshot{Home: t.TempDir()}, configJSON: "fixture-config"}
+	s := &app{
+		taskUnit: taskController{state: taskState{selected: -1}},
+		settingsUnit: settingsController{state: settingsState{settingsPage: "config-backup",
+			settingsTab: "存储",
+			configJSON:  "fixture-config"}},
+		page:     "settings",
+		inputs:   map[string]*string{},
+		snapshot: application.Snapshot{Home: t.TempDir()},
+	}
 	s.applySettingsConfigBackups([]storage.Backup{
 		{ID: "a", Path: filepath.Join(s.snapshot.Home, "backups", "silverwing-config-1791790393123.zip")},
 		{ID: "b", Path: filepath.Join(s.snapshot.Home, "backups", "silverwing-config-"+strings.Repeat("very-long-name-", 10)+".zip")},
@@ -47,23 +54,23 @@ func TestSettingsBackupDeleteCompactSelectionLayout(t *testing.T) {
 				if len(s.ensureSettingsConfigRecovery().jobs.current) != 0 {
 					t.Fatal("empty selection dispatched deletion")
 				}
-				name := filepath.Base(mapString(s.settingsBackups[0], "path"))
+				name := filepath.Base(mapString(s.settingsUnit.state.settingsBackups[0], "path"))
 				if err := tester.Click("选择备份 " + name); err != nil {
 					t.Fatal(err)
 				}
-				if !s.settingsConfigRecovery.backupSelected["a"] || !tester.HasText("已选 1 个") {
+				if !s.settingsUnit.state.settingsConfigRecovery.backupSelected["a"] || !tester.HasText("已选 1 个") {
 					t.Fatal("single selection did not update count")
 				}
 				if err := tester.Click("恢复"); err != nil {
 					t.Fatal(err)
 				}
-				if len(s.settingsConfigRecovery.backupSelected) != 1 || len(s.settingsConfigRecovery.jobs.current) != 0 {
+				if len(s.settingsUnit.state.settingsConfigRecovery.backupSelected) != 1 || len(s.settingsUnit.state.settingsConfigRecovery.jobs.current) != 0 {
 					t.Fatal("restore changed selection or dispatched deletion")
 				}
 				if err := tester.Click("全选"); err != nil {
 					t.Fatal(err)
 				}
-				if len(s.settingsConfigRecovery.backupSelected) != 2 || !tester.HasText("已选 2 个") {
+				if len(s.settingsUnit.state.settingsConfigRecovery.backupSelected) != 2 || !tester.HasText("已选 2 个") {
 					t.Fatal("select all did not update count")
 				}
 				check, _ := tester.Find("全选")
@@ -72,7 +79,7 @@ func TestSettingsBackupDeleteCompactSelectionLayout(t *testing.T) {
 				if math.Abs(float64(check.Y-count.Y)) > 8 || math.Abs(float64(remove.Y-check.Y)) > 8 || remove.X+remove.W > float32(width-12) {
 					t.Fatalf("selection toolbar clipped or split: %+v %+v %+v", check, count, remove)
 				}
-				for _, backup := range s.settingsBackups {
+				for _, backup := range s.settingsUnit.state.settingsBackups {
 					name := filepath.Base(mapString(backup, "path"))
 					box, ok := tester.Find(name)
 					if !ok || box.X+box.W > float32(width-70) || box.H > 24 {
@@ -96,7 +103,7 @@ func TestSettingsBackupDeleteCompactSelectionLayout(t *testing.T) {
 				if err := tester.Click("全选"); err != nil {
 					t.Fatal(err)
 				}
-				if len(s.settingsConfigRecovery.backupSelected) != 0 {
+				if len(s.settingsUnit.state.settingsConfigRecovery.backupSelected) != 0 {
 					t.Fatal("clear all retained selected IDs")
 				}
 			})
@@ -106,7 +113,7 @@ func TestSettingsBackupDeleteCompactSelectionLayout(t *testing.T) {
 
 func TestSettingsBackupDeleteImmutablePlanBusyAndLateResults(t *testing.T) {
 	s := settingsBackupDeleteFixture(t)
-	state := s.settingsConfigRecovery
+	state := s.settingsUnit.state.settingsConfigRecovery
 	state.backupSelected = map[string]bool{"a": true}
 	plan, valid := s.settingsSelectedBackupPlan()
 	if !valid || !reflect.DeepEqual(plan.ids, []string{"a"}) {
@@ -117,9 +124,9 @@ func TestSettingsBackupDeleteImmutablePlanBusyAndLateResults(t *testing.T) {
 		t.Fatal("selection snapshot followed live selection")
 	}
 	// A canceled confirmation has no continuation and keeps the current selection.
-	before := append([]map[string]any(nil), s.settingsBackups...)
+	before := append([]map[string]any(nil), s.settingsUnit.state.settingsBackups...)
 	s.finishSettingsBackupDeleteConfirmation(plan, 1)
-	if !reflect.DeepEqual(before, s.settingsBackups) || !state.backupSelected["b"] || len(state.jobs.current) != 0 {
+	if !reflect.DeepEqual(before, s.settingsUnit.state.settingsBackups) || !state.backupSelected["b"] || len(state.jobs.current) != 0 {
 		t.Fatal("unconfirmed delete changed data")
 	}
 	request, err := s.beginSettingsConfigRead(application.Action{Kind: "config.delete-backups", Payload: map[string]any{"confirmed": true, "ids": plan.ids}})
@@ -151,7 +158,7 @@ func TestSettingsBackupDeleteImmutablePlanBusyAndLateResults(t *testing.T) {
 	s.applySettingsConfigBackups([]storage.Backup{{ID: "new", Path: filepath.Join(s.snapshot.Home, "backups", "silverwing-config-new.zip")}})
 	s.finishSettingsConfigRead(request, application.ActionResult{Data: storage.BackupDeleteResult{DeletedIDs: []string{"new"}}}, nil)
 	s.completeSettingsExtensionRead(request)
-	if request.ctx.Err() == nil || len(s.settingsBackups) != 1 || mapString(s.settingsBackups[0], "id") != "new" || state.backupDeleteLoading {
+	if request.ctx.Err() == nil || len(s.settingsUnit.state.settingsBackups) != 1 || mapString(s.settingsUnit.state.settingsBackups[0], "id") != "new" || state.backupDeleteLoading {
 		t.Fatal("late result changed a new context")
 	}
 	old := settingsBackupDeletePlan{scope: plan.scope, ids: []string{"new"}}
@@ -165,7 +172,7 @@ func TestSettingsBackupDeleteConfirmationCancelAndBoundedLayout(t *testing.T) {
 	for _, dark := range []bool{false, true} {
 		t.Run(fmt.Sprintf("dark-%t", dark), func(t *testing.T) {
 			s := settingsBackupDeleteFixture(t)
-			state := s.settingsConfigRecovery
+			state := s.settingsUnit.state.settingsConfigRecovery
 			state.backupSelected = map[string]bool{"a": true, "b": true}
 			plan, ok := s.settingsSelectedBackupPlan()
 			if !ok {
@@ -177,7 +184,7 @@ func TestSettingsBackupDeleteConfirmationCancelAndBoundedLayout(t *testing.T) {
 			s.confirmationDialog = &confirmationDialogState{Title: "删除配置备份", Message: "将永久删除所选的 100 个备份文件，此操作不可撤销。", Detail: strings.Join(plan.names, "\n"),
 				Buttons: []confirmationDialogButton{{label: "删除所选"}, {label: "取消"}}, DefaultIndex: 1, CancelIndex: 1, OwnerKey: s.confirmationOwnerKey(), Open: true,
 				Result: func(index int) { s.finishSettingsBackupDeleteConfirmation(plan, index) }}
-			s.settingsPickerBusy = true
+			s.settingsUnit.state.settingsPickerBusy = true
 			tester := ui.NewTester(func(c *ui.Context) {
 				p := setTheme(c, dark)
 				ui.Column(c).Fill().Background(p.bg)
@@ -188,7 +195,7 @@ func TestSettingsBackupDeleteConfirmationCancelAndBoundedLayout(t *testing.T) {
 				t.Fatalf("cancel is clipped or not focused: %+v", cancel)
 			}
 			tester.Key(0, ui.KeyEscape)
-			if s.confirmationDialog != nil || s.settingsPickerBusy || len(state.backupSelected) != 2 || len(state.jobs.current) != 0 || len(s.settingsBackups) != 2 {
+			if s.confirmationDialog != nil || s.settingsUnit.state.settingsPickerBusy || len(state.backupSelected) != 2 || len(state.jobs.current) != 0 || len(s.settingsUnit.state.settingsBackups) != 2 {
 				t.Fatal("cancel altered selection or data")
 			}
 		})
@@ -197,14 +204,14 @@ func TestSettingsBackupDeleteConfirmationCancelAndBoundedLayout(t *testing.T) {
 
 func TestSettingsBackupDeletePartialFailureAndEmpty(t *testing.T) {
 	s := settingsBackupDeleteFixture(t)
-	state := s.settingsConfigRecovery
+	state := s.settingsUnit.state.settingsConfigRecovery
 	state.backupSelected = map[string]bool{"a": true, "b": true}
-	bPath := mapString(s.settingsBackups[1], "path")
+	bPath := mapString(s.settingsUnit.state.settingsBackups[1], "path")
 	s.applySettingsBackupDelete(application.ActionResult{Data: storage.BackupDeleteResult{
 		DeletedIDs: []string{"a"}, Failures: []storage.BackupDeleteFailure{{ID: "b", Name: filepath.Base(bPath), Reason: "文件正被占用"}},
 		Backups: []storage.Backup{{ID: "replacement-b", Path: bPath}},
 	}}, nil)
-	if len(s.settingsBackups) != 1 || mapString(s.settingsBackups[0], "id") != "b" || !state.backupSelected["b"] || state.backupSelected["a"] || state.backupFailures["b"] == "" {
+	if len(s.settingsUnit.state.settingsBackups) != 1 || mapString(s.settingsUnit.state.settingsBackups[0], "id") != "b" || !state.backupSelected["b"] || state.backupSelected["a"] || state.backupFailures["b"] == "" {
 		t.Fatal("partial failure lost selection, removed wrong row or duplicated replacement")
 	}
 	tester := settingsBackupDeleteTester(s, 480, true)
@@ -213,7 +220,7 @@ func TestSettingsBackupDeletePartialFailureAndEmpty(t *testing.T) {
 	}
 	s.applySettingsBackupDelete(application.ActionResult{Data: storage.BackupDeleteResult{DeletedIDs: []string{"b"}, Backups: []storage.Backup{}}}, nil)
 	tester.Frame()
-	if len(s.settingsBackups) != 0 || len(state.backupSelected) != 0 || !tester.HasText("暂无配置备份") || !tester.Focused("读取备份") {
+	if len(s.settingsUnit.state.settingsBackups) != 0 || len(state.backupSelected) != 0 || !tester.HasText("暂无配置备份") || !tester.Focused("读取备份") {
 		t.Fatal("all deleted did not show empty state")
 	}
 	s.applySettingsBackupDelete(application.ActionResult{}, errors.New("fixture failure"))

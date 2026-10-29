@@ -4,14 +4,11 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strings"
-
-	"silverwing-go/internal/documents"
 )
 
-func bindSkillMarkdownPreviewImages(state *markdownEditorState, sourcePath, root string) {
+func bindSkillMarkdownPreviewImages(state *markdownEditorState, sourcePath, root string, files localPreviewFileResolver) {
 	if state == nil || !state.readOnly || !state.detached || sourcePath == "" || root == "" {
 		return
 	}
@@ -21,6 +18,7 @@ func bindSkillMarkdownPreviewImages(state *markdownEditorState, sourcePath, root
 		return
 	}
 	state.path, state.linkRoot, state.remoteImages = source, allowedRoot, true
+	state.localPreviewFiles = files
 }
 
 func isSkillMarkdownPreview(state *markdownEditorState) bool {
@@ -33,11 +31,11 @@ func (s *app) skillMarkdownPreviewCurrent(state *markdownEditorState) bool {
 		return false
 	}
 	if strings.HasPrefix(state.taskID, "local-skill:") {
-		browser := s.skillsBrowser
+		browser := s.settingsUnit.state.skillsBrowser
 		return s.localSkillsViewActive() && browser != nil && browser.markdown == state &&
 			filepath.Clean(state.path) == filepath.Join(browser.root, browser.selectedDirectory, filepath.FromSlash(browser.selectedPath))
 	}
-	preview := s.settingsExtensionRequests
+	preview := s.settingsUnit.state.settingsExtensionRequests
 	return preview != nil && preview.previewMarkdown == state && s.settingsExtensionActionRelevant(preview.readActions["preview"])
 }
 
@@ -67,15 +65,15 @@ func (s *app) resolveSkillMarkdownImage(state *markdownEditorState, destination 
 	if err != nil {
 		return "", false, fmt.Errorf("Skill 图片路径无效")
 	}
-	// The document feature checks the root, every path component and reparse
-	// aliases before handing a path to the existing bounded native decoder.
-	paths, err := documents.NewService("").ResolveCopyPaths(context.Background(), state.linkRoot, []string{relative})
+	if state.localPreviewFiles == nil {
+		return "", false, fmt.Errorf("Skill 图片读取服务不可用")
+	}
+	path, err = state.localPreviewFiles.ResolveLocalFile(context.Background(), state.linkRoot, relative)
 	if err != nil {
 		return "", false, err
 	}
-	info, err := os.Lstat(paths[0])
-	if err != nil || !info.Mode().IsRegular() {
-		return "", false, fmt.Errorf("Skill 图片必须是目录内的普通文件")
+	if !s.skillMarkdownPreviewCurrent(state) {
+		return "", false, fmt.Errorf("Skill 预览已切换，无法读取此图片")
 	}
-	return paths[0], false, nil
+	return path, false, nil
 }

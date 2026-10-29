@@ -5,7 +5,7 @@ import "silverwing-go/internal/documents"
 // Keep only the latest requested hit. The ordinary text-index completion
 // applies it, so an extraction failure waits for the existing explicit retry.
 func (s *app) requestMaterialsPDFHit(m *nativeMediaState, hit documents.SearchHit) {
-	if m == nil || m.closed || s.nativeMedia != m || m.search != hit.Query {
+	if m == nil || m.closed || s.materialsUnit.state.nativeMedia != m || m.search != hit.Query {
 		return
 	}
 	copyHit := hit

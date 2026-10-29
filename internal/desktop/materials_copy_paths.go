@@ -3,7 +3,6 @@ package desktop
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -16,8 +15,8 @@ type materialsPathCopyRequest struct {
 	root   string
 }
 
-func (s *app) closeMaterialsPathCopy() {
-	if state := s.materialsFileManagement; state != nil && state.pathCopyRequest != nil {
+func (s *materialsController) closeMaterialsPathCopy() {
+	if state := s.state.materialsFileManagement; state != nil && state.pathCopyRequest != nil {
 		state.pathCopyRequest.cancel()
 		state.pathCopyRequest = nil
 	}
@@ -27,16 +26,7 @@ func materialsSelectedPaths(state *materialsFileManagementState) []string {
 	if state == nil {
 		return nil
 	}
-	keys := make([]string, 0, len(state.selected))
-	for key := range state.selected {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	paths := make([]string, 0, len(keys))
-	for _, key := range keys {
-		paths = append(paths, state.selected[key].Path)
-	}
-	return paths
+	return state.materialsSelection.copyPaths()
 }
 
 func (s *app) copyMaterialsSelectionPaths(services ui.Services) {
@@ -58,11 +48,11 @@ func (s *app) copyMaterialsSelectionPaths(services ui.Services) {
 		updated := make(chan struct{})
 		win.Update(func() {
 			defer close(updated)
-			if ctx.Err() != nil || win.IsDestroyed() || s.materialsFileManagement != state || state.pathCopyRequest != request {
+			if ctx.Err() != nil || win.IsDestroyed() || s.materialsUnit.state.materialsFileManagement != state || state.pathCopyRequest != request {
 				return
 			}
 			state.pathCopyRequest = nil
-			task := s.currentTask()
+			task := s.taskUnit.currentTask()
 			if task.id != request.taskID || normalizedReadingRoot(task.materialsPath) != normalizedReadingRoot(request.root) {
 				return
 			}

@@ -62,14 +62,14 @@ type skillTreeNode struct {
 }
 
 func (s *app) ensureSkillsBrowser() *skillsBrowserState {
-	if s.skillsBrowser == nil {
-		s.skillsBrowser = &skillsBrowserState{app: s, expanded: make(map[string]bool)}
+	if s.settingsUnit.state.skillsBrowser == nil {
+		s.settingsUnit.state.skillsBrowser = &skillsBrowserState{app: s, expanded: make(map[string]bool)}
 	}
-	s.skillsBrowser.app = s
-	if s.skillsBrowser.expanded == nil {
-		s.skillsBrowser.expanded = make(map[string]bool)
+	s.settingsUnit.state.skillsBrowser.app = s
+	if s.settingsUnit.state.skillsBrowser.expanded == nil {
+		s.settingsUnit.state.skillsBrowser.expanded = make(map[string]bool)
 	}
-	return s.skillsBrowser
+	return s.settingsUnit.state.skillsBrowser
 }
 
 func (s *app) nextSkillsBrowserRequest(state *skillsBrowserState) string {
@@ -288,7 +288,7 @@ func (state *skillsBrowserState) handleResult(action application.Action, result 
 				updateReadonlyMarkdownState(state.markdown, state.preview, nil)
 			}
 			s.bindSkillsMarkdownLinkNavigation(state)
-			bindSkillMarkdownPreviewImages(state.markdown, state.markdown.path, state.markdown.linkRoot)
+			bindSkillMarkdownPreviewImages(state.markdown, state.markdown.path, state.markdown.linkRoot, s.settingsUnit.previewResourceResolver())
 		} else {
 			state.retireSkillsPreview()
 		}

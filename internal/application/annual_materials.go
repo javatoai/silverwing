@@ -13,10 +13,7 @@ import (
 )
 
 func visibleMaterialsRoot(owned string) string {
-	if scope, ok := documents.AnnualScope(owned); ok {
-		return scope.Root
-	}
-	return owned
+	return documents.DescribeMaterials(owned).ReadRoot
 }
 
 func annualMaterialsScope(root, subdirectory string) (documents.AnnualMaterialsScope, bool) {

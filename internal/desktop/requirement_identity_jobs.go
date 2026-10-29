@@ -23,7 +23,7 @@ func (s *app) observeRequirementIdentityJobs() {
 	// A normal re-entry reads the account-bound persistent list again, allowing
 	// its source-compatible TTL to be enforced by the backend. Bootstrap that
 	// same deduplicated read once for the sidebar, without requiring page entry.
-	if (entered || !s.requirementsRequested) && !s.loading && len(s.readConfigArray("meegleProjects")) > 0 {
+	if (entered || !s.requirementUnit.state.requirementsRequested) && !s.loading && len(s.readConfigArray("meegleProjects")) > 0 {
 		s.requestRequirements("", false)
 	}
 }
@@ -61,8 +61,8 @@ func (s *app) queueRequirementListIdentity(sprintKey string, refresh bool) bool 
 	}
 	if !refresh && state.confirmed && state.current == nil {
 		if state.state == application.RequirementIdentityLoggedOut {
-			s.requirementsRequested, s.requirementsLoading = true, false
-			s.requirementsLoadError = "Meegle 已退出登录，请重新登录后读取需求。"
+			s.requirementUnit.state.requirementsRequested, s.requirementUnit.state.requirementsLoading = true, false
+			s.requirementUnit.state.requirementsLoadError = "Meegle 已退出登录，请重新登录后读取需求。"
 			return true
 		}
 		return false
@@ -71,11 +71,11 @@ func (s *app) queueRequirementListIdentity(sprintKey string, refresh bool) bool 
 	s.retireRequirementListRequest(list)
 	list.generation++
 	state.pending = &requirementIdentityListRequest{sprintKey: sprintKey, refresh: refresh}
-	if p := s.requirementListProgress; refresh && s.requirementListProgressCurrent(p) && p.running {
+	if p := s.requirementUnit.state.requirementListProgress; refresh && s.requirementListProgressCurrent(p) && p.running {
 		state.pending.progress = p
 	}
-	s.requirementsRequested, s.requirementsLoading = true, true
-	s.requirementsLoadError = ""
+	s.requirementUnit.state.requirementsRequested, s.requirementUnit.state.requirementsLoading = true, true
+	s.requirementUnit.state.requirementsLoadError = ""
 	s.startRequirementIdentityProbe(state)
 	return true
 }
@@ -86,10 +86,10 @@ func (s *app) startRequirementIdentityProbe(state *requirementIdentityJobState) 
 	}
 	provider, ok := s.backend.(application.RequirementIdentityBackend)
 	if !ok || s.win == nil || s.win.IsDestroyed() {
-		s.requirementsLoading = false
-		s.requirementsLoadError = "需求身份读取后端或窗口不可用，请重试。"
+		s.requirementUnit.state.requirementsLoading = false
+		s.requirementUnit.state.requirementsLoadError = "需求身份读取后端或窗口不可用，请重试。"
 		if state.pending != nil {
-			s.failRequirementListProgress(state.pending.progress, []string{s.requirementsLoadError})
+			s.failRequirementListProgress(state.pending.progress, []string{s.requirementUnit.state.requirementsLoadError})
 		}
 		return
 	}
@@ -97,7 +97,7 @@ func (s *app) startRequirementIdentityProbe(state *requirementIdentityJobState) 
 	closed := state.closed
 	state.mu.Unlock()
 	if closed {
-		s.requirementsLoading = false
+		s.requirementUnit.state.requirementsLoading = false
 		if state.pending != nil {
 			s.failRequirementListProgress(state.pending.progress, []string{"需求身份读取已关闭。"})
 		}
@@ -166,20 +166,20 @@ func (s *app) finishRequirementIdentityProbe(state *requirementIdentityJobState,
 	// Unavailable non-strict checks preserve the last confirmed snapshot.
 	if pending == nil {
 		if result.State == application.RequirementIdentityLoggedOut {
-			s.requirementsRequested, s.requirementsLoading = true, false
-			s.requirementsLoadError = "Meegle 已退出登录，请重新登录后读取需求。"
+			s.requirementUnit.state.requirementsRequested, s.requirementUnit.state.requirementsLoading = true, false
+			s.requirementUnit.state.requirementsLoadError = "Meegle 已退出登录，请重新登录后读取需求。"
 		}
 		return
 	}
 	if result.State != application.RequirementIdentityAuthenticated && result.State != application.RequirementIdentityLoggedOut && pending.refresh {
-		s.requirementsRequested, s.requirementsLoading, s.requirementsLoaded = true, false, true
-		s.requirementsLoadError = "无法确认当前 Meegle 账户，请重试；本地需求已保留。"
-		s.failRequirementListProgress(pending.progress, []string{s.requirementsLoadError})
+		s.requirementUnit.state.requirementsRequested, s.requirementUnit.state.requirementsLoading, s.requirementUnit.state.requirementsLoaded = true, false, true
+		s.requirementUnit.state.requirementsLoadError = "无法确认当前 Meegle 账户，请重试；本地需求已保留。"
+		s.failRequirementListProgress(pending.progress, []string{s.requirementUnit.state.requirementsLoadError})
 		return
 	}
 	if state.confirmed && state.state == application.RequirementIdentityLoggedOut {
-		s.requirementsRequested, s.requirementsLoading = true, false
-		s.requirementsLoadError = "Meegle 已退出登录，请重新登录后读取需求。"
+		s.requirementUnit.state.requirementsRequested, s.requirementUnit.state.requirementsLoading = true, false
+		s.requirementUnit.state.requirementsLoadError = "Meegle 已退出登录，请重新登录后读取需求。"
 		return
 	}
 	if !state.confirmed {
@@ -201,13 +201,13 @@ func (s *app) applyRequirementListIdentityFailure(snapshot application.Requireme
 	state.confirmed = snapshot.State == application.RequirementIdentityAuthenticated || snapshot.State == application.RequirementIdentityLoggedOut
 	state.identity, state.state = snapshot.Identity, snapshot.State
 	s.clearMeegleIdentityBoundViews()
-	s.requirementsLoadError = err.Error()
-	s.requirementsRequested = snapshot.State != application.RequirementIdentityAuthenticated
-	s.requirementsLoading = false
+	s.requirementUnit.state.requirementsLoadError = err.Error()
+	s.requirementUnit.state.requirementsRequested = snapshot.State != application.RequirementIdentityAuthenticated
+	s.requirementUnit.state.requirementsLoading = false
 }
 
-func (s *app) closeRequirementIdentityJobs(ctx context.Context) error {
-	state := s.requirementIdentityJobs
+func (s *requirementController) closeRequirementIdentityJobs(ctx context.Context) error {
+	state := s.state.requirementIdentityJobs
 	if state == nil {
 		return nil
 	}

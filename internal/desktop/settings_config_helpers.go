@@ -10,7 +10,7 @@ import (
 )
 
 func (s *app) settingsConfigMap() (map[string]any, error) {
-	return decodeSettingsConfig(s.configJSON)
+	return decodeSettingsConfig(s.settingsUnit.state.configJSON)
 }
 
 func decodeSettingsConfig(source string) (map[string]any, error) {

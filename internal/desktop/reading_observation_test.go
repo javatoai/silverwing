@@ -15,12 +15,12 @@ func readingObservationFixture(tb testing.TB) *app {
 	tb.Helper()
 	s := taskNavigationFixture()
 	root := tb.TempDir()
-	s.tasks[0].path = filepath.Join(root, "current")
-	s.tasks[0].materialsPath = filepath.Join(s.tasks[0].path, "materials")
-	s.tasks[1].path = filepath.Join(root, "other")
-	s.tab, s.documentsLoaded = 1, true
-	s.documentPath = filepath.Join(s.tasks[0].materialsPath, "current.md")
-	s.documentTabs = []string{s.documentPath}
+	s.taskUnit.state.tasks[0].path = filepath.Join(root, "current")
+	s.taskUnit.state.tasks[0].materialsPath = filepath.Join(s.taskUnit.state.tasks[0].path, "materials")
+	s.taskUnit.state.tasks[1].path = filepath.Join(root, "other")
+	s.tab, s.materialsUnit.state.documentsLoaded = 1, true
+	s.materialsUnit.state.documentPath = filepath.Join(s.taskUnit.state.tasks[0].materialsPath, "current.md")
+	s.materialsUnit.state.documentTabs = []string{s.materialsUnit.state.documentPath}
 	s.readingSession = newMemoryReadingSession(root)
 	for i := 0; i < 20; i++ {
 		record := DefaultMaterialsSnapshot()
@@ -80,16 +80,16 @@ func TestReadingObservationPersistsUIAndExplicitChanges(t *testing.T) {
 		previous = string(session.lastObserved)
 	}
 	binding := readingScrollBinding{
-		taskPath: normalizedReadingPath(s.tasks[0].path), root: normalizedReadingRoot(s.tasks[0].materialsPath),
+		taskPath: normalizedReadingPath(s.taskUnit.state.tasks[0].path), root: normalizedReadingRoot(s.taskUnit.state.tasks[0].materialsPath),
 		document: "current.md", id: "markdown", state: &ui.ScrollState{Y: 100},
 	}
 	session.scrollStates[readingScrollBindingKey(binding)] = binding
 	check("new scroll binding")
 	binding.state.Y = 250
 	check("native scrolling")
-	s.documentTabs = append(s.documentTabs, filepath.Join(s.tasks[0].materialsPath, "second.md"))
+	s.materialsUnit.state.documentTabs = append(s.materialsUnit.state.documentTabs, filepath.Join(s.taskUnit.state.tasks[0].materialsPath, "second.md"))
 	check("document tabs")
-	s.documentsCollapsed = true
+	s.materialsUnit.state.documentsCollapsed = true
 	check("directory collapse")
 	s.setReadingZoom(125)
 	if string(session.lastObserved) == previous || s.readingZoom() != 125 {
@@ -101,19 +101,19 @@ func TestReadingObservationPersistsUIAndExplicitChanges(t *testing.T) {
 		t.Fatal("directory expansion was not observed")
 	}
 	previous = string(session.lastObserved)
-	s.remapMaterialsReading(s.tasks[0].path, s.tasks[0].materialsPath, "folder", "renamed")
+	s.remapMaterialsReading(s.taskUnit.state.tasks[0].path, s.taskUnit.state.tasks[0].materialsPath, "folder", "renamed")
 	check("renamed reading paths")
 	s.tab = 2
-	s.tasks[0].requirementURL = "https://project.feishu.cn/demo/userstory/detail/123"
+	s.taskUnit.state.tasks[0].requirementURL = "https://project.feishu.cn/demo/userstory/detail/123"
 	check("requirement view")
 	s.setReadingMarkdownZoom(1.2)
 	if s.readingMarkdownZoom() != 1.2 {
 		t.Fatal("requirement reading position was not saved")
 	}
 	previous = string(session.lastObserved)
-	s.selected = 1
+	s.taskUnit.state.selected = 1
 	check("task selection")
-	if session.cache.LastTaskPath != normalizedReadingPath(s.tasks[1].path) {
+	if session.cache.LastTaskPath != normalizedReadingPath(s.taskUnit.state.tasks[1].path) {
 		t.Fatal("reading state retained the earlier task")
 	}
 	var encoded ReadingSnapshot
@@ -144,7 +144,7 @@ func TestReadingObservationRetriesRejectedSave(t *testing.T) {
 	session.store.mu.Lock()
 	session.store.closed = true
 	session.store.mu.Unlock()
-	s.documentsCollapsed = true
+	s.materialsUnit.state.documentsCollapsed = true
 	s.observeReadingSession()
 	if s.lastError == "" || string(session.lastObserved) != previous {
 		t.Fatal("a rejected reading save was acknowledged as persisted")

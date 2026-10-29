@@ -95,10 +95,10 @@ func (s *app) retireRequirementCommentImages(reader *requirementReaderState) {
 	if reader == nil {
 		return
 	}
-	if state := s.requirementContentJobs; state != nil {
+	if state := s.requirementUnit.state.requirementContentJobs; state != nil {
 		for _, request := range state.requests {
 			if request.reader == reader && payloadString(request.action.Payload, "scope") == "comment" {
-				s.cancelRequirementContentJob(request)
+				s.requirementUnit.cancelRequirementContentJob(request)
 			}
 		}
 	}

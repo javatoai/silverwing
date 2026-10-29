@@ -7,10 +7,10 @@ import (
 )
 
 func (s *app) observeMeegleProjectPicker() {
-	if state := s.meegleProjectCatalog; state != nil && state.pickerOpen && (s.page != "settings" || s.settingsPage != "cli-meegle") {
+	if state := s.settingsUnit.state.meegleProjectCatalog; state != nil && state.pickerOpen && (s.page != "settings" || s.settingsUnit.state.settingsPage != "cli-meegle") {
 		s.closeMeegleProjectPicker()
 	}
-	if state := s.meegleProjectCatalog; state != nil && state.pickerOpen &&
+	if state := s.settingsUnit.state.meegleProjectCatalog; state != nil && state.pickerOpen &&
 		(state.context.home != s.snapshot.Home || state.context.executable != strings.TrimSpace(s.cliConfiguredPath("meegle"))) {
 		s.syncMeegleProjectCatalogContext(state)
 		s.closeMeegleProjectPicker()
@@ -18,13 +18,13 @@ func (s *app) observeMeegleProjectPicker() {
 }
 
 func (s *app) onMeegleProjectPickerWindowFocused() {
-	if state := s.meegleProjectCatalog; state != nil && state.pickerOpen && !s.syncMeegleProjectCatalogContext(state) {
+	if state := s.settingsUnit.state.meegleProjectCatalog; state != nil && state.pickerOpen && !s.syncMeegleProjectCatalogContext(state) {
 		s.closeMeegleProjectPicker()
 	}
 }
 
 func (s *app) renderMeegleProjectPicker(c *ui.Context, p palette, anchor ui.Element) {
-	state := s.meegleProjectCatalog
+	state := s.settingsUnit.state.meegleProjectCatalog
 	if state == nil || !state.pickerOpen {
 		return
 	}
@@ -56,7 +56,7 @@ func (s *app) renderMeegleProjectPicker(c *ui.Context, p palette, anchor ui.Elem
 				}
 			})
 			switch {
-			case !dataBool(s.settingsCLIStatus["meegle"], "installed"):
+			case !dataBool(s.settingsUnit.state.settingsCLIStatus["meegle"], "installed"):
 				label(c, "请先配置可用的 Meegle CLI。", 11, p.amber).Wrap()
 			case !authenticated:
 				label(c, "请先登录 Meegle CLI。", 11, p.muted).Wrap()

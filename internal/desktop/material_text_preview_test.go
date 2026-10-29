@@ -28,10 +28,18 @@ func materialsTextPreviewFixture(t *testing.T, name string, data []byte) (*app, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &app{page: "tasks", tab: 1, documentsLoaded: true, documentPath: path, documentKind: documentKindForPath(path), documentReadPending: true,
-		tasks:          []task{{id: "text-task", path: root, materialsPath: root, materialsStatus: "READY"}},
-		documents:      []application.Document{{Path: path, Name: name, Kind: documentKindForPath(path)}},
-		documentDrafts: map[string]string{}, documentDirtyMap: map[string]bool{}}
+	s := &app{
+		taskUnit: taskController{state: taskState{tasks: []task{{id: "text-task", path: root, materialsPath: root, materialsStatus: "READY"}}}},
+		materialsUnit: materialsController{state: materialsState{documentsLoaded: true,
+			documentPath:        path,
+			documentKind:        documentKindForPath(path),
+			documentReadPending: true,
+			documents:           []application.Document{{Path: path, Name: name, Kind: documentKindForPath(path)}},
+			documentDrafts:      map[string]string{},
+			documentDirtyMap:    map[string]bool{}}},
+		page: "tasks",
+		tab:  1,
+	}
 	return s, application.Action{Kind: "document.read", TaskID: "text-task", Path: path}, application.ActionResult{Path: path, Text: content.Text, Data: content}
 }
 
@@ -44,7 +52,7 @@ func TestMaterialsDetectedTextUsesReadonlyNativePreview(t *testing.T) {
 				t.Fatal("current read rejected")
 			}
 			s.applyMaterialsActionResult(action, result)
-			if s.documentKind != "text" || !s.documentReadOnly || s.documentEditing || s.documentContent != source {
+			if s.materialsUnit.state.documentKind != "text" || !s.materialsUnit.state.documentReadOnly || s.materialsUnit.state.documentEditing || s.materialsUnit.state.documentContent != source {
 				t.Fatal("detected text not bound read-only")
 			}
 			tester := ui.NewTester(func(c *ui.Context) {
@@ -59,7 +67,7 @@ func TestMaterialsDetectedTextUsesReadonlyNativePreview(t *testing.T) {
 			if tester.Clipboard() != source {
 				t.Fatalf("native selection copy changed text: %q", tester.Clipboard())
 			}
-			if tester.HasText("此格式暂不支持预览") || s.markdown != nil {
+			if tester.HasText("此格式暂不支持预览") || s.materialsUnit.state.markdown != nil {
 				t.Fatal("log used unsupported or Markdown path")
 			}
 			if err := tester.Click("更多资料操作"); err != nil {
@@ -107,7 +115,7 @@ func TestMaterialsDetectedTextNativeIndentSelectionAndIdentity(t *testing.T) {
 	if view.Font.Family != "monospace" || view.Font.Size != 13 || secondTop-firstTop != 20 {
 		t.Fatalf("readonly source typography differs from TextEditor: font=%+v line step=%v", view.Font, secondTop-firstTop)
 	}
-	if !view.ReadOnly || view.Buffer.OriginalText() != s.documentContent {
+	if !view.ReadOnly || view.Buffer.OriginalText() != s.materialsUnit.state.documentContent {
 		t.Fatal("native text buffer is editable or changed source")
 	}
 	if view.TabSize != 4 || !strings.HasPrefix(view.Buffer.Line(1), "\t中文缩进  ") {
@@ -116,11 +124,11 @@ func TestMaterialsDetectedTextNativeIndentSelectionAndIdentity(t *testing.T) {
 	view.Select(0, len(view.Buffer.String()))
 	tester.Frame()
 	tester.Command("copy")
-	if tester.Clipboard() != s.documentContent {
+	if tester.Clipboard() != s.materialsUnit.state.documentContent {
 		t.Fatal("mixed line ending selection copy changed source")
 	}
 	tester.Type("must not edit")
-	if view.Buffer.OriginalText() != s.documentContent {
+	if view.Buffer.OriginalText() != s.materialsUnit.state.documentContent {
 		t.Fatal("read-only view accepted input")
 	}
 	view.SetScrollPosition(codeeditor.ScrollPosition{Y: 300})
@@ -129,14 +137,14 @@ func TestMaterialsDetectedTextNativeIndentSelectionAndIdentity(t *testing.T) {
 	if saved <= 0 {
 		t.Fatal("native scroll was not recorded")
 	}
-	oldPath, oldSource := s.documentPath, s.documentContent
-	s.documentPath = filepath.Join(filepath.Dir(oldPath), "other.blob")
-	s.documentContent = "new document"
+	oldPath, oldSource := s.materialsUnit.state.documentPath, s.materialsUnit.state.documentContent
+	s.materialsUnit.state.documentPath = filepath.Join(filepath.Dir(oldPath), "other.blob")
+	s.materialsUnit.state.documentContent = "new document"
 	tester.Frame()
 	if owner.view == view || owner.view.Buffer.OriginalText() != "new document" || owner.view.ScrollPosition().Y != 0 {
 		t.Fatal("new document reused old source or scroll")
 	}
-	s.documentPath, s.documentContent = oldPath, oldSource
+	s.materialsUnit.state.documentPath, s.materialsUnit.state.documentContent = oldPath, oldSource
 	tester.Frame()
 	if got := owner.view.ScrollPosition().Y; got < float64(saved)-1 || got > float64(saved)+1 {
 		t.Fatalf("old document scroll not restored: %v want %v", got, saved)
@@ -152,7 +160,7 @@ func TestMaterialsDetectedBinaryKeepsSystemOpenPrompt(t *testing.T) {
 		s.materials(c, p)
 		s.endOverflowMenuFrame()
 	}, 980, 650)
-	if !tester.HasText("使用系统应用打开") || s.documentKind != "unsupported" || s.documentContent != "" {
+	if !tester.HasText("使用系统应用打开") || s.materialsUnit.state.documentKind != "unsupported" || s.materialsUnit.state.documentContent != "" {
 		t.Fatal("binary did not retain explicit system-open prompt")
 	}
 	if len(tester.OpenedURLs()) != 0 {
@@ -167,11 +175,11 @@ func TestMaterialsDetectedTextLateResultsStayScoped(t *testing.T) {
 	old := &materialsFileJob{key: "read", scope: scope, action: oldAction, window: &mygo.Window{}, ctx: ctx, cancel: cancel}
 	newer := &materialsFileJob{key: "read"}
 	state := &materialsFileJobState{current: map[string]*materialsFileJob{"read": newer}}
-	s.documentPath = filepath.Join(scope.root, "new.log")
-	s.documentContent = "new selection"
-	s.documentReadPending = true
+	s.materialsUnit.state.documentPath = filepath.Join(scope.root, "new.log")
+	s.materialsUnit.state.documentContent = "new selection"
+	s.materialsUnit.state.documentReadPending = true
 	s.finishMaterialsFileJob(state, old, result, nil)
-	if s.documentContent != "new selection" || !s.documentReadPending || state.current["read"] != newer || ctx.Err() == nil {
+	if s.materialsUnit.state.documentContent != "new selection" || !s.materialsUnit.state.documentReadPending || state.current["read"] != newer || ctx.Err() == nil {
 		t.Fatal("superseded file read replaced current selection or request")
 	}
 	if s.actionResultRelevant(oldAction) {
@@ -181,10 +189,10 @@ func TestMaterialsDetectedTextLateResultsStayScoped(t *testing.T) {
 	defer cancel2()
 	old = &materialsFileJob{key: "task-read", scope: scope, action: oldAction, window: &mygo.Window{}, ctx: ctx2, cancel: cancel2}
 	state.current[old.key] = old
-	s.tasks = append(s.tasks, task{id: "another-task", path: t.TempDir(), materialsPath: t.TempDir(), materialsStatus: "READY"})
-	s.selected = 1
+	s.taskUnit.state.tasks = append(s.taskUnit.state.tasks, task{id: "another-task", path: t.TempDir(), materialsPath: t.TempDir(), materialsStatus: "READY"})
+	s.taskUnit.state.selected = 1
 	s.finishMaterialsFileJob(state, old, result, nil)
-	if s.documentContent != "new selection" || s.actionResultRelevant(oldAction) {
+	if s.materialsUnit.state.documentContent != "new selection" || s.actionResultRelevant(oldAction) {
 		t.Fatal("late task read entered another task")
 	}
 }

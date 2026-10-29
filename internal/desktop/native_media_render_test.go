@@ -56,7 +56,9 @@ func TestNativeImageRenderDimensions(t *testing.T) {
 			document := nativeImageRenderTestDocument(t, tc.width, tc.height)
 			m := &nativeMediaState{kind: "image", image: document, imageInfo: document.Info(), zoom: tc.zoom, fit: tc.fit,
 				viewerWidth: tc.viewportWidth, viewerHeight: tc.viewportHeight, renderGeneration: 1, renderLoading: true}
-			s := &app{nativeMedia: m}
+			s := &app{
+				materialsUnit: materialsController{state: materialsState{nativeMedia: m}},
+			}
 			width := s.nativeImageRenderWidth(m)
 			if width != tc.requestWidth {
 				t.Fatalf("render width = %d, want %d", width, tc.requestWidth)
@@ -88,7 +90,9 @@ func TestNativeImageZoomControlsReuseOriginal(t *testing.T) {
 	bitmap := ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 16, 8)))
 	m := &nativeMediaState{kind: "image", zoom: 100, imageInfo: media.ImageInfo{Width: 16, Height: 8},
 		bitmap: bitmap, bitmapKey: "image:0", wantedRenderKey: "image:0", viewerWidth: 1000, viewerHeight: 700}
-	s := &app{nativeMedia: m}
+	s := &app{
+		materialsUnit: materialsController{state: materialsState{nativeMedia: m}},
+	}
 	tester := ui.NewTester(func(c *ui.Context) {
 		ui.Row(c).FillWidth().Height(42).Children(func() {
 			s.renderImageControls(c, setTheme(c, false), m)
@@ -137,7 +141,9 @@ func TestNativeImageCachedWidthCancelsOtherRender(t *testing.T) {
 	bitmap := ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 16, 8)))
 	m := &nativeMediaState{kind: "image", zoom: 100, imageInfo: media.ImageInfo{Width: 16, Height: 8},
 		bitmap: bitmap, bitmapKey: "image:0", wantedRenderKey: "image:8", renderLoading: true, renderCancel: cancel, renderGeneration: 2}
-	s := &app{nativeMedia: m}
+	s := &app{
+		materialsUnit: materialsController{state: materialsState{nativeMedia: m}},
+	}
 	s.requestNativeMediaRender(m, 1000, 700)
 	if ctx.Err() == nil || m.renderCancel != nil || m.renderLoading || m.wantedRenderKey != "image:0" || m.renderGeneration == 2 {
 		t.Fatal("returning to the original bitmap did not cancel and invalidate the downscale request")
@@ -155,7 +161,9 @@ func TestNativeImageCanvasZoomKeepsBitmap(t *testing.T) {
 	bitmap := ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 16, 8)))
 	m := &nativeMediaState{kind: "image", zoom: 100, imageInfo: media.ImageInfo{Width: 16, Height: 8},
 		bitmap: bitmap, bitmapKey: "image:0", wantedRenderKey: "image:0"}
-	s := &app{nativeMedia: m}
+	s := &app{
+		materialsUnit: materialsController{state: materialsState{nativeMedia: m}},
+	}
 	tester := ui.NewTester(func(c *ui.Context) {
 		ui.Column(c).Fill().Children(func() {
 			s.renderNativeMedia(c, setTheme(c, false), ui.Rect{W: 1000, H: 700})
@@ -191,7 +199,9 @@ func TestNativeImageInlineWheelWithoutModifier(t *testing.T) {
 			t.Run(fmt.Sprintf("%d-dark-%t", width, dark), func(t *testing.T) {
 				bitmap := ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 16, 8)))
 				m := &nativeMediaState{kind: "image", zoom: 100, imageInfo: media.ImageInfo{Width: 1600, Height: 900}, bitmap: bitmap}
-				s := &app{nativeMedia: m}
+				s := &app{
+					materialsUnit: materialsController{state: materialsState{nativeMedia: m}},
+				}
 				tester := ui.NewTester(func(c *ui.Context) {
 					p := setTheme(c, dark)
 					ui.Row(c).Fill().Children(func() {
@@ -267,14 +277,16 @@ func TestNativeImageRenderCompletionRejectsStaleResults(t *testing.T) {
 		{name: "zoom-before-next-frame", generation: 3, change: func(_ *app, m *nativeMediaState) { m.zoom = 50 }},
 		{name: "cancelled", generation: 3, cancelled: true},
 		{name: "closed-document", generation: 3, loading: true, change: func(_ *app, m *nativeMediaState) { m.closed = true }},
-		{name: "replaced-document", generation: 3, loading: true, change: func(s *app, _ *nativeMediaState) { s.nativeMedia = &nativeMediaState{} }},
+		{name: "replaced-document", generation: 3, loading: true, change: func(s *app, _ *nativeMediaState) { s.materialsUnit.state.nativeMedia = &nativeMediaState{} }},
 	} {
 		for _, failed := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/error-%v", tc.name, failed), func(t *testing.T) {
 				old := ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 8, 4)))
 				m := &nativeMediaState{kind: "image", zoom: 100, imageInfo: media.ImageInfo{Width: 16, Height: 8},
 					bitmap: old, bitmapKey: "image:8", wantedRenderKey: "image:0", renderGeneration: 3, renderLoading: true}
-				s := &app{nativeMedia: m}
+				s := &app{
+					materialsUnit: materialsController{state: materialsState{nativeMedia: m}},
+				}
 				if tc.change != nil {
 					tc.change(s, m)
 				}
@@ -296,7 +308,9 @@ func TestNativeImageRenderCompletionRejectsStaleResults(t *testing.T) {
 func TestNativeImageFitTracksViewport(t *testing.T) {
 	m := &nativeMediaState{kind: "image", fit: true, imageInfo: media.ImageInfo{Width: 1200, Height: 800},
 		viewerWidth: 1264, viewerHeight: 896, renderGeneration: 1, wantedRenderKey: "image:0", renderLoading: true}
-	s := &app{nativeMedia: m}
+	s := &app{
+		materialsUnit: materialsController{state: materialsState{nativeMedia: m}},
+	}
 	if width := s.nativeImageRenderWidth(m); width != 0 {
 		t.Fatalf("initial fit width = %d, want original", width)
 	}
@@ -314,7 +328,9 @@ func TestNativeImageRenderWaitsForWindow(t *testing.T) {
 	// A stale cache key without a bitmap is not a usable resource. Before a
 	// window exists, leave the missing image retryable on the next frame.
 	m := &nativeMediaState{kind: "image", zoom: 100, imageInfo: media.ImageInfo{Width: 16, Height: 8}, bitmapKey: "image:0", wantedRenderKey: "image:0"}
-	s := &app{nativeMedia: m}
+	s := &app{
+		materialsUnit: materialsController{state: materialsState{nativeMedia: m}},
+	}
 	for range 2 {
 		s.requestNativeMediaRender(m, 1000, 700)
 		if m.renderLoading || m.renderCancel != nil || m.renderGeneration != 0 || m.bitmap != nil {

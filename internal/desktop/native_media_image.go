@@ -22,7 +22,7 @@ func (s *app) openNativeImageViewer(m *nativeMediaState) {
 }
 
 func (s *app) requestNativeImageViewerBitmap(m *nativeMediaState) {
-	if viewer := s.markdownBitmapViewer; viewer != nil && viewer.media == m && viewer.sourcePath != "" {
+	if viewer := s.materialsUnit.state.markdownBitmapViewer; viewer != nil && viewer.media == m && viewer.sourcePath != "" {
 		s.requestMarkdownLocalImageViewer(viewer)
 		return
 	}

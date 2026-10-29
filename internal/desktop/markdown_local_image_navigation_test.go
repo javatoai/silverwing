@@ -16,8 +16,8 @@ func TestMarkdownCommentImageViewerClosesOnTaskSelection(t *testing.T) {
 	const urlB = "https://project.feishu.cn/space/userstory/detail/102"
 	s := newApp(nil, Options{CapturePath: "markdown-comment-viewer-task-selection"})
 	s.page, s.tab = "tasks", 3
-	s.tasks = []task{{id: "task-a", requirementURL: urlA}, {id: "task-b", requirementURL: urlB}}
-	s.selected = 0
+	s.taskUnit.state.tasks = []task{{id: "task-a", requirementURL: urlA}, {id: "task-b", requirementURL: urlB}}
+	s.taskUnit.state.selected = 0
 	_, owner := markdownNavigationCommentOwner(t, s, "task-a", urlA)
 	viewer := markdownNavigationCommentViewer(t, s, owner, "cache/comment-a.png")
 
@@ -28,13 +28,13 @@ func TestMarkdownCommentImageViewerClosesOnTaskSelection(t *testing.T) {
 	if !s.selectTaskIndex(1) {
 		t.Fatalf("task selection failed: %s", s.lastError)
 	}
-	if s.currentTask().id != "task-b" || s.tab != currentTab {
+	if s.taskUnit.currentTask().id != "task-b" || s.tab != currentTab {
 		t.Fatal("task selection did not switch task while retaining the detail tab")
 	}
 	if viewer.requestCtx != nil || viewer.media.imageExpandedBitmap != nil || viewer.media.imageExpanded || viewer.media.imageExpandedLoading {
 		t.Fatal("task switch did not cancel the original-image request and clear its bitmap")
 	}
-	if s.markdownBitmapViewer != nil || owner.closeBitmapViewer != nil {
+	if s.materialsUnit.state.markdownBitmapViewer != nil || owner.closeBitmapViewer != nil {
 		t.Fatal("task switch retained the comment image viewer or owner hook")
 	}
 	if markdownLocalImageViewerResultCurrent(s, viewer, viewer.generation) {
@@ -48,8 +48,8 @@ func TestMarkdownCommentImageViewerClosesOnRequirementSelection(t *testing.T) {
 	itemB := application.Requirement{ID: "102", ProjectKey: "space", Type: "userstory", Title: "需求 B", URL: "https://project.feishu.cn/space/userstory/detail/102"}
 	s := newApp(nil, Options{CapturePath: "markdown-comment-viewer-requirement-selection"})
 	s.page = "requirements"
-	s.requirements = []application.Requirement{itemA, itemB}
-	s.selectedRequirement, s.selectedRequirementKey = 0, requirementKey(itemA)
+	s.requirementUnit.state.requirements = []application.Requirement{itemA, itemB}
+	s.requirementUnit.state.selectedRequirement, s.requirementUnit.state.selectedRequirementKey = 0, requirementKey(itemA)
 	_, owner := markdownNavigationCommentOwner(t, s, "", itemA.URL)
 	viewer := markdownNavigationCommentViewer(t, s, owner, "cache/requirement-comment-a.png")
 	if !markdownLocalImageViewerResultCurrent(s, viewer, viewer.generation) {
@@ -60,7 +60,7 @@ func TestMarkdownCommentImageViewerClosesOnRequirementSelection(t *testing.T) {
 	tester := ui.NewTester(func(c *ui.Context) {
 		p := setTheme(c, false)
 		ui.Column(c).Fill().Children(func() {
-			for _, item := range s.requirements {
+			for _, item := range s.requirementUnit.state.requirements {
 				s.requirementListItem(c, p, item, true)
 			}
 		})
@@ -68,13 +68,13 @@ func TestMarkdownCommentImageViewerClosesOnRequirementSelection(t *testing.T) {
 	if err := tester.Click(itemB.Title); err != nil {
 		t.Fatalf("select requirement B: %v", err)
 	}
-	if s.selectedRequirement != 1 || s.selectedRequirementKey != requirementKey(itemB) || s.tab != currentTab {
+	if s.requirementUnit.state.selectedRequirement != 1 || s.requirementUnit.state.selectedRequirementKey != requirementKey(itemB) || s.tab != currentTab {
 		t.Fatal("requirement list selection did not switch from A to B in the same tab")
 	}
 	if viewer.requestCtx != nil || viewer.media.imageExpandedBitmap != nil || viewer.media.imageExpanded || viewer.media.imageExpandedLoading {
 		t.Fatal("requirement switch did not cancel the original-image request and clear its bitmap")
 	}
-	if s.markdownBitmapViewer != nil || owner.closeBitmapViewer != nil {
+	if s.materialsUnit.state.markdownBitmapViewer != nil || owner.closeBitmapViewer != nil {
 		t.Fatal("requirement switch retained the comment image viewer or owner hook")
 	}
 	if markdownLocalImageViewerResultCurrent(s, viewer, viewer.generation) {
@@ -88,16 +88,16 @@ func TestMarkdownCommentImageViewerRejectsSelectedIdentityAndOwnerUpdates(t *tes
 	itemB := application.Requirement{ID: "102", ProjectKey: "space", Type: "userstory", Title: "需求 B", URL: "https://project.feishu.cn/space/userstory/detail/102"}
 	s := newApp(nil, Options{CapturePath: "markdown-comment-viewer-stale-selection"})
 	s.page = "requirements"
-	s.requirements = []application.Requirement{itemA, itemB}
-	s.selectedRequirementKey = requirementKey(itemA)
+	s.requirementUnit.state.requirements = []application.Requirement{itemA, itemB}
+	s.requirementUnit.state.selectedRequirementKey = requirementKey(itemA)
 	_, owner := markdownNavigationCommentOwner(t, s, "", itemA.URL)
 	viewer := markdownNavigationCommentViewer(t, s, owner, "cache/requirement-comment-a.png")
 
-	s.selectedRequirementKey = requirementKey(itemB)
+	s.requirementUnit.state.selectedRequirementKey = requirementKey(itemB)
 	if markdownLocalImageViewerResultCurrent(s, viewer, viewer.generation) {
 		t.Fatal("viewer result was accepted after selected requirement identity changed")
 	}
-	s.selectedRequirementKey = requirementKey(itemA)
+	s.requirementUnit.state.selectedRequirementKey = requirementKey(itemA)
 	s.tab++
 	if markdownLocalImageViewerResultCurrent(s, viewer, viewer.generation) {
 		t.Fatal("viewer result was accepted after tab changed")
@@ -106,7 +106,7 @@ func TestMarkdownCommentImageViewerRejectsSelectedIdentityAndOwnerUpdates(t *tes
 
 	requestContext := viewer.requestCtx
 	updateReadonlyMarkdownState(owner, "更新后的评论", nil)
-	if requestContext == nil || requestContext.Err() == nil || viewer.media.imageExpandedBitmap != nil || viewer.media.imageExpanded || s.markdownBitmapViewer != nil {
+	if requestContext == nil || requestContext.Err() == nil || viewer.media.imageExpandedBitmap != nil || viewer.media.imageExpanded || s.materialsUnit.state.markdownBitmapViewer != nil {
 		t.Fatal("comment document update did not cancel, detach and clear its previous viewer")
 	}
 	if markdownLocalImageViewerResultCurrent(s, viewer, viewer.generation) {
@@ -120,20 +120,20 @@ func TestMarkdownCommentImageViewerClosesWhenRequirementRefreshChangesSelection(
 	itemB := application.Requirement{ID: "102", ProjectKey: "space", Type: "userstory", Title: "需求 B", URL: "https://project.feishu.cn/space/userstory/detail/102"}
 	s := newApp(nil, Options{CapturePath: "markdown-comment-viewer-requirement-refresh"})
 	s.page = "requirements"
-	s.requirements = []application.Requirement{itemA, itemB}
-	s.selectedRequirement, s.selectedRequirementKey = 1, requirementKey(itemB)
+	s.requirementUnit.state.requirements = []application.Requirement{itemA, itemB}
+	s.requirementUnit.state.selectedRequirement, s.requirementUnit.state.selectedRequirementKey = 1, requirementKey(itemB)
 	_, owner := markdownNavigationCommentOwner(t, s, "", itemB.URL)
 	viewer := markdownNavigationCommentViewer(t, s, owner, "cache/requirement-comment-b.png")
 	if !markdownLocalImageViewerResultCurrent(s, viewer, viewer.generation) {
 		t.Fatal("active requirement B comment viewer was rejected before refresh")
 	}
 
-	s.requirements = []application.Requirement{itemA}
+	s.requirementUnit.state.requirements = []application.Requirement{itemA}
 	s.restoreRequirementListSelection(requirementKey(itemB))
-	if s.selectedRequirementKey != requirementKey(itemA) {
+	if s.requirementUnit.state.selectedRequirementKey != requirementKey(itemA) {
 		t.Fatal("requirement list refresh did not select its remaining item")
 	}
-	if viewer.requestCtx != nil || viewer.media.imageExpandedBitmap != nil || viewer.media.imageExpanded || s.markdownBitmapViewer != nil {
+	if viewer.requestCtx != nil || viewer.media.imageExpandedBitmap != nil || viewer.media.imageExpanded || s.materialsUnit.state.markdownBitmapViewer != nil {
 		t.Fatal("requirement refresh did not cancel and clear the previous selection viewer")
 	}
 	if markdownLocalImageViewerResultCurrent(s, viewer, viewer.generation) {
@@ -146,13 +146,13 @@ func markdownNavigationCommentViewer(t *testing.T, s *app, owner *markdownEditor
 	t.Helper()
 	viewer := &markdownBitmapViewerState{
 		owner: owner, document: owner.doc, source: owner.doc.Source(), sourcePath: sourcePath,
-		page: s.page, settingsPage: s.settingsPage, tab: s.tab,
+		page: s.page, settingsPage: s.settingsUnit.state.settingsPage, tab: s.tab,
 		media: &nativeMediaState{kind: "image", imageExpanded: true, imageExpandedBitmap: ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 4, 4)))},
 	}
 	if !s.bindMarkdownBitmapViewerOwner(viewer, owner) {
 		t.Fatal("could not bind viewer to the active requirement reader")
 	}
-	s.markdownBitmapViewer = viewer
+	s.materialsUnit.state.markdownBitmapViewer = viewer
 	owner.closeBitmapViewer = func() { s.closeMarkdownBitmapViewerForOwner(owner) }
 	viewer.generation = 1
 	viewer.requestCtx, viewer.cancel = context.WithCancel(context.Background())

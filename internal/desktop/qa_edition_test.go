@@ -14,7 +14,7 @@ func TestQANavigationCannotRestoreDeveloperPages(t *testing.T) {
 	raw, _ := json.Marshal(config)
 	s := newApp(nil, Options{Page: "tasks", CapturePath: "qa-test"})
 	s.loading = false
-	s.configJSON = string(raw)
+	s.settingsUnit.state.configJSON = string(raw)
 	allowed := map[string]bool{"tasks": true, "requirements": true, "tools": true, "settings": true}
 	for _, item := range s.sidebarNavigationItems() {
 		if !allowed[item.page] {
@@ -43,9 +43,9 @@ func TestQANavigationCannotRestoreDeveloperPages(t *testing.T) {
 			}
 		}
 	}
-	s.settingsTab, s.settingsPage = "开发工具", "dev-tools"
+	s.settingsUnit.state.settingsTab, s.settingsUnit.state.settingsPage = "开发工具", "dev-tools"
 	s.reconcileQASettingsNavigation()
-	if s.settingsPage != "basic" {
+	if s.settingsUnit.state.settingsPage != "basic" {
 		t.Fatal("stale settings did not recover")
 	}
 }
@@ -56,9 +56,9 @@ func TestQATaskContentAtSupportedWidthsAndThemes(t *testing.T) {
 			raw, _ := json.Marshal(config)
 			s := newApp(nil, Options{Page: "tasks", Tab: 1, CapturePath: "qa-test"})
 			s.loading = false
-			s.configJSON = string(raw)
-			s.snapshot.ConfigJSON = s.configJSON
-			s.tasks = []task{{id: "qa-task", title: "测试任务", path: t.TempDir(), createdAt: "2026-10-27T00:00:00Z", groupID: domain.DefaultGroupID, materialsStatus: "NOT_REQUESTED"}}
+			s.settingsUnit.state.configJSON = string(raw)
+			s.snapshot.ConfigJSON = s.settingsUnit.state.configJSON
+			s.taskUnit.state.tasks = []task{{id: "qa-task", title: "测试任务", path: t.TempDir(), createdAt: "2026-10-27T00:00:00Z", groupID: domain.DefaultGroupID, materialsStatus: "NOT_REQUESTED"}}
 			tester := ui.NewTester(func(c *ui.Context) { s.taskWorkspace(c, setTheme(c, dark)) }, width, 820)
 			tester.Frame()
 			for _, name := range []string{"任务资料", "需求详情", "需求说明"} {
@@ -80,7 +80,7 @@ func TestQATaskCreationPayloadContainsNoCodeWorkspace(t *testing.T) {
 	raw, _ := json.Marshal(config)
 	s.snapshot.ConfigJSON = string(raw)
 	s.initTaskCreation("创建产品任务", "测试任务", "")
-	s.taskCreation.openCodex = false
+	s.taskUnit.state.taskCreation.openCodex = false
 	payload, err := s.taskCreationPayload()
 	if err != nil {
 		t.Fatal(err)
@@ -97,7 +97,7 @@ func TestQACreationDialogHasOnlyRetainedFields(t *testing.T) {
 		for _, dark := range []bool{false, true} {
 			s := newApp(nil, Options{CapturePath: "qa-test"})
 			raw, _ := json.Marshal(domain.DefaultAppConfig())
-			s.snapshot.ConfigJSON, s.configJSON = string(raw), string(raw)
+			s.snapshot.ConfigJSON, s.settingsUnit.state.configJSON = string(raw), string(raw)
 			s.initTaskCreation("创建任务", "资料验收", "")
 			s.dialogOpen, s.form.mode = true, "task-create"
 			tester := ui.NewTester(func(c *ui.Context) { s.renderTaskCreationDialog(c, setTheme(c, dark)) }, width, 760)

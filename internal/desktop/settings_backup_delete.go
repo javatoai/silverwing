@@ -20,7 +20,7 @@ type settingsBackupDeletePlan struct {
 func (s *app) reconcileSettingsBackupSelection() {
 	state := s.ensureSettingsConfigRecovery()
 	selected := map[string]bool{}
-	for _, backup := range s.settingsBackups {
+	for _, backup := range s.settingsUnit.state.settingsBackups {
 		id := mapString(backup, "id")
 		if id != "" && state.backupSelected[id] {
 			selected[id] = true
@@ -35,7 +35,7 @@ func (s *app) settingsSelectedBackupPlan() (settingsBackupDeletePlan, bool) {
 	if !s.settingsConfigRecoveryVisible() || state.backupDeleteLoading || state.backupsLoading || s.busy || state.backupsScope != plan.scope {
 		return plan, false
 	}
-	for _, backup := range s.settingsBackups {
+	for _, backup := range s.settingsUnit.state.settingsBackups {
 		if id := mapString(backup, "id"); id != "" && state.backupSelected[id] {
 			plan.ids = append(plan.ids, id)
 			plan.names = append(plan.names, filepath.Base(mapString(backup, "path")))
@@ -68,7 +68,7 @@ func (s *app) confirmSettingsBackupDelete(plan settingsBackupDeletePlan) {
 	// The confirmation owns IDs captured before opening. Never recompute its
 	// selection from the current row order or from a later Select all operation.
 	known := map[string]bool{}
-	for _, backup := range s.settingsBackups {
+	for _, backup := range s.settingsUnit.state.settingsBackups {
 		known[mapString(backup, "id")] = true
 	}
 	for _, id := range plan.ids {
@@ -107,40 +107,40 @@ func (s *app) applySettingsBackupDelete(result application.ActionResult, actionE
 	for _, failure := range deleted.Failures {
 		state.backupFailures[failure.ID] = failure.Reason
 	}
-	for _, backup := range s.settingsBackups {
+	for _, backup := range s.settingsUnit.state.settingsBackups {
 		id := mapString(backup, "id")
 		if !removed[id] && state.backupFailures[id] != "" {
 			failedRows = append(failedRows, backup)
 		}
 	}
 	if actionErr == nil {
-		s.settingsBackups = nil
+		s.settingsUnit.state.settingsBackups = nil
 		failedPaths := map[string]string{}
 		for _, backup := range failedRows {
 			failedPaths[mapString(backup, "path")] = mapString(backup, "id")
 		}
 		for _, backup := range mapsFromData(deleted.Backups) {
 			if failedID := failedPaths[mapString(backup, "path")]; failedID == "" || failedID == mapString(backup, "id") {
-				s.settingsBackups = append(s.settingsBackups, backup)
+				s.settingsUnit.state.settingsBackups = append(s.settingsUnit.state.settingsBackups, backup)
 			}
 		}
 		listed := map[string]bool{}
-		for _, backup := range s.settingsBackups {
+		for _, backup := range s.settingsUnit.state.settingsBackups {
 			listed[mapString(backup, "id")] = true
 		}
 		for _, backup := range failedRows {
 			if !listed[mapString(backup, "id")] {
-				s.settingsBackups = append(s.settingsBackups, backup)
+				s.settingsUnit.state.settingsBackups = append(s.settingsUnit.state.settingsBackups, backup)
 			}
 		}
 	} else {
-		rows := s.settingsBackups[:0]
-		for _, backup := range s.settingsBackups {
+		rows := s.settingsUnit.state.settingsBackups[:0]
+		for _, backup := range s.settingsUnit.state.settingsBackups {
 			if !removed[mapString(backup, "id")] {
 				rows = append(rows, backup)
 			}
 		}
-		s.settingsBackups = rows
+		s.settingsUnit.state.settingsBackups = rows
 	}
 	s.reconcileSettingsBackupSelection()
 	for id := range state.backupFailures {
@@ -153,7 +153,7 @@ func (s *app) applySettingsBackupDelete(result application.ActionResult, actionE
 	} else if len(deleted.Failures) > 0 {
 		state.backupDeleteError = fmt.Sprintf("已删除 %d 个，%d 个未删除；可重试或重新读取。", len(deleted.DeletedIDs), len(deleted.Failures))
 	} else {
-		s.settingsOutput = fmt.Sprintf("已删除 %d 个配置备份。", len(deleted.DeletedIDs))
-		state.backupFocusReload = len(s.settingsBackups) == 0
+		s.settingsUnit.state.settingsOutput = fmt.Sprintf("已删除 %d 个配置备份。", len(deleted.DeletedIDs))
+		state.backupFocusReload = len(s.settingsUnit.state.settingsBackups) == 0
 	}
 }

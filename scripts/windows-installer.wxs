@@ -1,58 +1,58 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Product Id="*"
-           Name="silverwing-product"
+           Name="$(var.ProfileWindowsInstallName)"
            Language="2052"
            Codepage="936"
            Version="$(var.ProductVersion)"
            Manufacturer="Silverwing Contributors"
-           UpgradeCode="F1EB898C-AE8C-55E3-A467-13E320944652">
+           UpgradeCode="$(var.ProfileWindowsUpgradeCode)">
     <Package InstallerVersion="500" Platform="x64" Compressed="yes" InstallScope="perUser" Description="Silverwing native desktop application" />
-    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer silverwing-product version is already installed." />
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer $(var.ProfileWindowsInstallName) version is already installed." />
     <Property Id="NSIS_INSTALLED">
-      <RegistrySearch Id="FindSetupInstallation" Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\Uninstall\SilverwingProduct" Name="UninstallString" Type="raw" Win64="yes" />
+      <RegistrySearch Id="FindSetupInstallation" Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\Uninstall\$(var.ProfileWindowsRegistryNamespace)" Name="UninstallString" Type="raw" Win64="yes" />
     </Property>
-    <Condition Message="请先卸载 Setup 版本的 silverwing-product，再使用 MSI 安装。">Installed OR NOT NSIS_INSTALLED</Condition>
+    <Condition Message="请先卸载 Setup 版本的 $(var.ProfileWindowsInstallName)，再使用 MSI 安装。">Installed OR NOT NSIS_INSTALLED</Condition>
     <MediaTemplate EmbedCab="yes" />
 
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="LocalAppDataFolder">
         <Directory Id="ProgramsFolder" Name="Programs">
-          <Directory Id="INSTALLFOLDER" Name="silverwing-product" />
+          <Directory Id="INSTALLFOLDER" Name="$(var.ProfileWindowsInstallName)" />
         </Directory>
       </Directory>
       <Directory Id="ProgramMenuFolder">
-        <Directory Id="ApplicationProgramsFolder" Name="silverwing-product" />
+        <Directory Id="ApplicationProgramsFolder" Name="$(var.ProfileWindowsInstallName)" />
       </Directory>
       <Directory Id="DesktopFolder" />
     </Directory>
 
     <DirectoryRef Id="ApplicationProgramsFolder">
-      <Component Id="StartMenuShortcuts" Guid="3ED123D0-09B1-5AF1-A086-B35BBF474F1F">
-        <Shortcut Id="SilverwingShortcut" Name="silverwing-product" Target="[INSTALLFOLDER]silverwing-product.exe" WorkingDirectory="INSTALLFOLDER" />
+      <Component Id="StartMenuShortcuts" Guid="$(var.ProfileWindowsStartMenuGUID)">
+        <Shortcut Id="SilverwingShortcut" Name="$(var.ProfileWindowsInstallName)" Target="[INSTALLFOLDER]$(var.ProfileExecutableName).exe" WorkingDirectory="INSTALLFOLDER" />
         <RemoveFolder Id="RemoveProgramMenuFolder" On="uninstall" />
-        <RegistryValue Root="HKCU" Key="Software\SilverwingProduct\Installer" Name="installed" Type="integer" Value="1" KeyPath="yes" />
+        <RegistryValue Root="HKCU" Key="Software\$(var.ProfileWindowsRegistryNamespace)\Installer" Name="installed" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </DirectoryRef>
 
     <DirectoryRef Id="DesktopFolder">
-      <Component Id="DesktopShortcut" Guid="D94FD3A0-23A4-5A91-B8F5-91C8CCFBAF1C">
-        <Shortcut Id="SilverwingDesktopShortcut" Name="silverwing-product" Target="[INSTALLFOLDER]silverwing-product.exe" WorkingDirectory="INSTALLFOLDER" />
-        <RegistryValue Root="HKCU" Key="Software\SilverwingProduct\Installer" Name="desktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+      <Component Id="DesktopShortcut" Guid="$(var.ProfileWindowsDesktopGUID)">
+        <Shortcut Id="SilverwingDesktopShortcut" Name="$(var.ProfileWindowsInstallName)" Target="[INSTALLFOLDER]$(var.ProfileExecutableName).exe" WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\$(var.ProfileWindowsRegistryNamespace)\Installer" Name="desktopShortcut" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </DirectoryRef>
 
     <DirectoryRef Id="INSTALLFOLDER">
-      <Component Id="InstallFolderCleanup" Guid="E28AF0B7-9080-5A5A-8A85-82838B844447">
+      <Component Id="InstallFolderCleanup" Guid="$(var.ProfileWindowsInstallFolderGUID)">
         <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
-        <RegistryValue Root="HKCU" Key="Software\SilverwingProduct\Installer" Name="installFolder" Type="integer" Value="1" KeyPath="yes" />
+        <RegistryValue Root="HKCU" Key="Software\$(var.ProfileWindowsRegistryNamespace)\Installer" Name="installFolder" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </DirectoryRef>
 
     <DirectoryRef Id="ProgramsFolder">
-      <Component Id="ProgramsFolderCleanup" Guid="AABED8B9-4D7B-50EB-A741-02B71D8D8EEC">
+      <Component Id="ProgramsFolderCleanup" Guid="$(var.ProfileWindowsProgramsFolderGUID)">
         <RemoveFolder Id="RemoveProgramsFolder" On="uninstall" />
-        <RegistryValue Root="HKCU" Key="Software\SilverwingProduct\Installer" Name="programsFolder" Type="integer" Value="1" KeyPath="yes" />
+        <RegistryValue Root="HKCU" Key="Software\$(var.ProfileWindowsRegistryNamespace)\Installer" Name="programsFolder" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </DirectoryRef>
 

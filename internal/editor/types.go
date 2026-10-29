@@ -4,53 +4,31 @@
 // for byte (including CRLF line endings).
 package editor
 
-import "time"
+import (
+	"time"
+
+	"silverwing-go/internal/markdowntext"
+)
 
 const MaxDocumentBytes = 3 * 1024 * 1024
 
-type PartKind string
+type PartKind = markdowntext.PartKind
 
 const (
-	PartRich     PartKind = "RICH"
-	PartCode     PartKind = "CODE"
-	PartMermaid  PartKind = "MERMAID"
-	PartTable    PartKind = "TABLE"
-	PartTasks    PartKind = "TASKS"
-	PartImage    PartKind = "IMAGE"
-	PartOriginal PartKind = "ORIGINAL"
-	PartMetadata PartKind = "METADATA"
-	PartDivider  PartKind = "DIVIDER"
+	PartRich     = markdowntext.PartRich
+	PartCode     = markdowntext.PartCode
+	PartMermaid  = markdowntext.PartMermaid
+	PartTable    = markdowntext.PartTable
+	PartTasks    = markdowntext.PartTasks
+	PartImage    = markdowntext.PartImage
+	PartOriginal = markdowntext.PartOriginal
+	PartMetadata = markdowntext.PartMetadata
+	PartDivider  = markdowntext.PartDivider
 )
 
-// SourceRange is half-open [Start, End), measured in UTF-8 bytes.
-type SourceRange struct {
-	Start int `json:"start"`
-	End   int `json:"end"`
-}
-
-// Node is a source-located Markdown AST node. Unknown constructs are emitted
-// as original nodes instead of being normalized or dropped.
-type Node struct {
-	Kind        string            `json:"kind"`
-	Range       SourceRange       `json:"range"`
-	Text        string            `json:"text,omitempty"`
-	Destination string            `json:"destination,omitempty"`
-	Title       string            `json:"title,omitempty"`
-	Language    string            `json:"language,omitempty"`
-	Level       int               `json:"level,omitempty"`
-	Ordered     bool              `json:"ordered,omitempty"`
-	Checked     *bool             `json:"checked,omitempty"`
-	Attributes  map[string]string `json:"attributes,omitempty"`
-	Children    []Node            `json:"children,omitempty"`
-}
-
-type Part struct {
-	ID     uint64      `json:"id"`
-	Kind   PartKind    `json:"kind"`
-	Range  SourceRange `json:"range"`
-	Source string      `json:"source"`
-	Nodes  []Node      `json:"nodes,omitempty"`
-}
+type SourceRange = markdowntext.SourceRange
+type Node = markdowntext.Node
+type Part = markdowntext.Part
 
 type Cursor struct {
 	Part  uint64 `json:"part"`
@@ -101,17 +79,8 @@ type FormatRequest struct {
 	Level   int           `json:"level,omitempty"`
 }
 
-type TableCell struct {
-	Row    int         `json:"row"`
-	Column int         `json:"column"`
-	Range  SourceRange `json:"range"`
-	Text   string      `json:"text"`
-}
-
-type Table struct {
-	Rows      [][]string `json:"rows"`
-	Alignment []string   `json:"alignment"`
-}
+type TableCell = markdowntext.TableCell
+type Table = markdowntext.Table
 
 type SaveSnapshot struct {
 	Revision uint64    `json:"revision"`

@@ -79,14 +79,14 @@ func TestSettingsHelpDoesNotChangeSharedTaskCards(t *testing.T) {
 
 func TestMaterialsSettingsHelpCurrentScopeAndActiveStates(t *testing.T) {
 	s, backend, _ := materialsGitDesktopFixture(t)
-	s.materialsGitCapture = true
+	s.materialsUnit.state.materialsGitCapture = true
 	cfg, _ := s.materialsGitConfig()
 	cfg.MaterialsGitSync.Enabled = true
 	encoded, _ := json.Marshal(cfg)
-	s.configJSON = string(encoded)
-	s.materialsGit.scope = application.MaterialsGitScope(s.snapshot.Home, cfg)
-	s.materialsGit.status.LastSuccess = "2026-10-26T01:14:00Z"
-	s.materialsGitBranches = &materialsGitBranchesState{scope: s.materialsGit.scope, loaded: true, branches: []string{"master"}}
+	s.settingsUnit.state.configJSON = string(encoded)
+	s.materialsUnit.state.materialsGit.scope = application.MaterialsGitScope(s.snapshot.Home, cfg)
+	s.materialsUnit.state.materialsGit.status.LastSuccess = "2026-10-26T01:14:00Z"
+	s.materialsUnit.state.materialsGitBranches = &materialsGitBranchesState{scope: s.materialsUnit.state.materialsGit.scope, loaded: true, branches: []string{"master"}}
 	tt := ui.NewTester(func(c *ui.Context) {
 		p := setTheme(c, false)
 		ui.Column(c).Fill().Padding(24).Gap(10).Children(func() { s.settingsMaterialsGitSync(c, p) })
@@ -99,18 +99,18 @@ func TestMaterialsSettingsHelpCurrentScopeAndActiveStates(t *testing.T) {
 		t.Fatal("sync help does not contain the current idle status")
 	}
 	oldText := "最近成功 " + time.Date(2026, 10, 26, 1, 14, 0, 0, time.UTC).Local().Format("2006-01-02 15:04")
-	s.materialsGit.status.LastSuccess = "2026-10-26T02:15:00Z"
+	s.materialsUnit.state.materialsGit.status.LastSuccess = "2026-10-26T02:15:00Z"
 	tt.Frame()
 	if tt.HasText(oldText) || !tt.HasText("最近成功 "+time.Date(2026, 10, 26, 2, 15, 0, 0, time.UTC).Local().Format("2006-01-02 15:04")) {
 		t.Fatal("the open tooltip retained stale status text")
 	}
 	tt.Key(0, ui.KeyEscape)
-	s.materialsGit.phase = "等待资料保存或文件操作完成"
+	s.materialsUnit.state.materialsGit.phase = "等待资料保存或文件操作完成"
 	tt.Frame()
-	if !tt.HasText(s.materialsGit.phase) {
+	if !tt.HasText(s.materialsUnit.state.materialsGit.phase) {
 		t.Fatal("the deferred-save warning was hidden")
 	}
-	s.materialsGit.running, s.materialsGit.phase = true, "正在合并远程更新"
+	s.materialsUnit.state.materialsGit.running, s.materialsUnit.state.materialsGit.phase = true, "正在合并远程更新"
 	tt.Frame()
 	if !tt.HasText("正在合并远程更新") {
 		t.Fatal("active sync progress was hidden")
@@ -118,17 +118,17 @@ func TestMaterialsSettingsHelpCurrentScopeAndActiveStates(t *testing.T) {
 	if tt.HasText("最近成功") {
 		t.Fatal("the last-success detail escaped its tooltip while syncing")
 	}
-	s.materialsGit.running, s.materialsGit.needsResume = false, true
-	s.materialsGit.phase = ""
-	s.materialsGit.status.Error = "同步失败，请核对仓库身份"
+	s.materialsUnit.state.materialsGit.running, s.materialsUnit.state.materialsGit.needsResume = false, true
+	s.materialsUnit.state.materialsGit.phase = ""
+	s.materialsUnit.state.materialsGit.status.Error = "同步失败，请核对仓库身份"
 	tt.Frame()
-	if !tt.HasText("同步已暂停") || !tt.HasText(s.materialsGit.status.Error) || !tt.HasText("重新检查并恢复") {
+	if !tt.HasText("同步已暂停") || !tt.HasText(s.materialsUnit.state.materialsGit.status.Error) || !tt.HasText("重新检查并恢复") {
 		t.Fatal("the actionable error or its recovery entry was hidden")
 	}
 	if tt.HasText("最近成功") {
 		t.Fatal("the last-success detail escaped its tooltip while paused")
 	}
-	s.materialsGit.reading = true
+	s.materialsUnit.state.materialsGit.reading = true
 	tt.Frame()
 	if !tt.HasText("正在读取同步状态…") {
 		t.Fatal("the loading state was hidden")
@@ -178,19 +178,19 @@ func TestSettingsHelpAllPagesLayout(t *testing.T) {
 						s, backend, _ := materialsGitDesktopFixture(t)
 						s.backend = nil // No CLI, network or filesystem actions in a layout pass.
 						s.dark = dark
-						s.page, s.settingsTab, s.settingsPage = "settings", section.name, page.key
-						s.materialsGitCapture = true
+						s.page, s.settingsUnit.state.settingsTab, s.settingsUnit.state.settingsPage = "settings", section.name, page.key
+						s.materialsUnit.state.materialsGitCapture = true
 						s.desktopPreferences = &desktopPreferencesState{value: DefaultDesktopPreferences()}
-						s.materialsGitBranches = &materialsGitBranchesState{scope: s.materialsGit.scope, loaded: true, branches: []string{"master"}}
+						s.materialsUnit.state.materialsGitBranches = &materialsGitBranchesState{scope: s.materialsUnit.state.materialsGit.scope, loaded: true, branches: []string{"master"}}
 						ext := s.ensureSettingsExtensionRequests()
 						ext.workspaceToolsLoaded, ext.workspaceToolsScope = true, s.settingsExtensionCurrentScope()
 						ext.workspaceTools = []taskCreationWorkspaceToolOption{{ID: "codex", DisplayName: "Codex", Description: "打开对应任务目录", Available: true}}
-						s.skillsBrowser = &skillsBrowserState{app: s, catalogLoaded: true}
+						s.settingsUnit.state.skillsBrowser = &skillsBrowserState{app: s, catalogLoaded: true}
 						tt := ui.NewTester(func(c *ui.Context) {
 							p := setTheme(c, dark)
 							ui.Scroll(c).Fill().Padding(24).Gap(14).Background(p.bg).Children(func() {
 								if page.key == "skill-local" {
-									s.renderSkillsBrowserList(c, p, s.skillsBrowser)
+									s.renderSkillsBrowserList(c, p, s.settingsUnit.state.skillsBrowser)
 								} else {
 									s.settingsPageContent(c, p)
 								}

@@ -15,7 +15,7 @@ func (s *app) requirementForURL(url string) (application.Requirement, bool) {
 	if url == "" {
 		return application.Requirement{}, false
 	}
-	for _, requirement := range s.requirements {
+	for _, requirement := range s.requirementUnit.state.requirements {
 		if strings.TrimSpace(requirement.URL) == url && requirement.WorkItem.ID != "" {
 			return requirement, true
 		}

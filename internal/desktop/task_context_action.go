@@ -57,7 +57,7 @@ func taskContextUpdater(window *mygo.Window, headless func(func())) func(func())
 // and the application configuration still belongs to the captured context.
 func (s *app) taskLifecycleResultBelongsToContext(action application.Action, expected taskMenuScope, snapshot application.Snapshot) bool {
 	if action.TaskID != expected.taskID || action.Path != expected.taskPath ||
-		s.page != expected.page || s.snapshot.Home != expected.home || s.configJSON != expected.configJSON ||
+		s.page != expected.page || s.snapshot.Home != expected.home || s.settingsUnit.state.configJSON != expected.configJSON ||
 		s.configString("taskRoot") != expected.taskRoot || snapshot.Home != expected.home ||
 		taskContextConfigFingerprint(snapshot.ConfigJSON) != taskContextConfigFingerprint(expected.configJSON) {
 		return false
@@ -71,7 +71,7 @@ func (s *app) taskLifecycleResultBelongsToContext(action application.Action, exp
 		return false
 	}
 
-	current := s.taskByID(expected.taskID)
+	current := s.taskUnit.taskByID(expected.taskID)
 	if current.id != "" {
 		actual, valid := s.taskMenuScopeFor(current)
 		if !valid {

@@ -31,9 +31,7 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 	var scopeUpdate func(func())
 	var scopeWindow *mygo.Window
 	if scope != nil {
-		scopedKind := action.Kind == "codex.run" || action.Kind == "task.tools-launch" || action.Kind == "task.materials-retry" ||
-			action.Kind == "task.archive" || action.Kind == "task.restore" || action.Kind == "task.delete"
-		if !scopedKind || action.TaskID != scope.taskID || !s.taskMenuScopeCurrent(*scope) {
+		if !application.DescribeAction(action.Kind).TaskMenuScoped || action.TaskID != scope.taskID || !s.taskMenuScopeCurrent(*scope) {
 			s.lastError = "任务或配置已变化，请重新打开任务菜单。"
 			return
 		}
@@ -42,7 +40,7 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 		action = taskMenuContextAction(action, owned)
 		window := s.win
 		scopeWindow = window
-		scopeUpdate = taskContextUpdater(window, s.taskContextUpdate)
+		scopeUpdate = taskContextUpdater(window, s.taskUnit.state.taskContextUpdate)
 		if scopeUpdate == nil {
 			s.lastError = errTaskContextChanged.Error()
 			return
@@ -98,7 +96,7 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 			s.lastError = err.Error()
 			return
 		}
-		task := s.taskByID(action.TaskID)
+		task := s.taskUnit.taskByID(action.TaskID)
 		var err error
 		renameRoot = task.materialsPath
 		renamePlan, err = s.captureMarkdownAutosaveRename(action.TaskID, renameRoot, action.Path, filepath.Join(filepath.Dir(action.Path), name))
@@ -123,7 +121,7 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 		}
 		return
 	}
-	feedbackHome, feedbackTask := s.snapshot.Home, s.currentTask()
+	feedbackHome, feedbackTask := s.snapshot.Home, s.taskUnit.currentTask()
 	ctx, cancel := context.WithCancel(context.Background())
 	watchBarrier := s.pauseMaterialsLiveRefresh(action)
 	fileBarrier := s.pauseMaterialsFileJobs(action)
@@ -180,14 +178,11 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 			} else if typed, ok := s.backend.(application.TaskRootMigrationDispatcher); ok && action.Kind == "migration.apply" {
 				backendDispatched = true
 				result, err = typed.DispatchTaskRootMigration(ctx, action, migrationProgress)
-			} else if typed, ok := s.backend.(application.TaskCreationProgressBackend); ok && action.Kind == "task.create" {
-				backendDispatched = true
-				result, err = typed.DispatchTaskCreation(ctx, action, taskCreationProgress)
 			} else {
 				backendDispatched = true
-				result, err = s.backend.Dispatch(ctx, action)
+				result, err = executeTaskOperation(ctx, s.backend, action, taskCreationProgress)
 			}
-			if (err == nil && reloadsSnapshot(action.Kind)) || action.Kind == "codex.run" || action.Kind == "task.tools-launch" || action.Kind == "task.delete" || settingsExtensionSourceSaveAction(action.Kind) || (migrationLease != nil && backendDispatched) {
+			if (err == nil && reloadsSnapshot(action.Kind)) || application.DescribeAction(action.Kind).RefreshOnError || (migrationLease != nil && backendDispatched) {
 				refreshContext := ctx
 				var stopRefresh context.CancelFunc
 				if err != nil && (settingsExtensionSourceSaveAction(action.Kind) || migrationLease != nil) {
@@ -311,16 +306,16 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 				s.lastError = err.Error()
 
 				if action.Kind == "requirements.list" || action.Kind == "requirements.refresh" {
-					s.requirementsLoading = false
-					s.requirementsLoadError = err.Error()
+					s.requirementUnit.state.requirementsLoading = false
+					s.requirementUnit.state.requirementsLoadError = err.Error()
 				}
-				if action.Kind == "document.list" && action.TaskID == s.currentTask().id {
+				if action.Kind == "document.list" && action.TaskID == s.taskUnit.currentTask().id {
 					// Treat a failed initial read as settled so a capture cannot wait forever.
-					s.documentsRequested = false
-					s.documentsLoaded = true
+					s.materialsUnit.state.documentsRequested = false
+					s.materialsUnit.state.documentsLoaded = true
 				}
-				if action.Kind == "document.read" && action.TaskID == s.currentTask().id && action.Path == s.documentPath {
-					s.documentReadPending = false
+				if action.Kind == "document.read" && action.TaskID == s.taskUnit.currentTask().id && action.Path == s.materialsUnit.state.documentPath {
+					s.materialsUnit.state.documentReadPending = false
 				}
 				return
 			}
@@ -381,32 +376,27 @@ func (s *app) applyActionResult(action application.Action, result application.Ac
 // Successful operation feedback belongs to the home and selected task that
 // started it. Feature handlers still own read caches and save status.
 func (s *app) applyActionResultFeedback(action application.Action, result application.ActionResult, home string, selected task) {
-	current := s.currentTask()
+	current := s.taskUnit.currentTask()
 	if s.snapshot.Home != home || current.id != selected.id || current.path != selected.path || current.createdAt != selected.createdAt || !s.actionResultRelevant(action) {
 		return
 	}
-	switch action.Kind {
-	case "document.list", "document.read", "instructions.read", "instructions.templates.list":
+	if application.DescribeAction(action.Kind).QuietSuccess {
 		return
+	}
+	switch action.Kind {
 	case "instructions.save":
 		if dataBool(action.Payload, "localTaskRules") {
 			return
 		}
 	}
-	if state := s.settingsAutosave; state != nil && state.active != nil && state.active.kind == action.Kind {
+	if state := s.settingsUnit.state.settingsAutosave; state != nil && state.active != nil && state.active.kind == action.Kind {
 		return
 	}
 	s.lastMessage = result.Message
 }
 
 func settingsActionHasDedicatedResult(kind string) bool {
-	return strings.HasPrefix(kind, "config.") || strings.HasPrefix(kind, "migration.") ||
-		strings.HasPrefix(kind, "instructions.templates.") || strings.HasPrefix(kind, "skills.") ||
-		strings.HasPrefix(kind, "codex.extensions/") || kind == "codex.extensions/snapshot" ||
-		strings.HasPrefix(kind, "codex.ai/") ||
-		strings.HasPrefix(kind, "cli.") || strings.HasPrefix(kind, "logs.") ||
-		kind == "terminal.resolve" || kind == "diagnostics.export" ||
-		kind == "proxy.test" || kind == "git.version" || kind == "update.check"
+	return application.DescribeAction(kind).SettingsDedicatedResult
 }
 
 func (s *app) actionResultRelevant(action application.Action) bool {
@@ -418,11 +408,11 @@ func (s *app) actionResultRelevant(action application.Action) bool {
 	case "meegle.projects":
 		return s.meegleCatalogActionRelevant(action)
 	case "requirements.read", "requirements.comments", "requirements.attachment", "requirements.copy-document", "requirements.copy-comments":
-		return s.requirementReaderForAction(action) != nil
+		return s.requirementUnit.requirementReaderForAction(action) != nil
 	case "document.list":
-		return action.TaskID == s.currentTask().id
+		return action.TaskID == s.taskUnit.currentTask().id
 	case "document.read":
-		return action.TaskID == s.currentTask().id && action.Path == s.documentPath
+		return action.TaskID == s.taskUnit.currentTask().id && action.Path == s.materialsUnit.state.documentPath
 	case "document.save", "document.rename":
 		return true
 	case "instructions.read", "instructions.save":
@@ -431,7 +421,7 @@ func (s *app) actionResultRelevant(action application.Action) bool {
 		return true
 	case "requirements.refresh":
 		if action.TaskID != "" {
-			return action.TaskID == s.currentTask().id
+			return action.TaskID == s.taskUnit.currentTask().id
 		}
 		if action.Path != "" {
 			return action.Path == s.selectedRequirementURL()
@@ -441,17 +431,17 @@ func (s *app) actionResultRelevant(action application.Action) bool {
 }
 
 func (s *app) currentNoteName() string {
-	if s.noteTab < 0 || s.noteTab >= 3 {
+	if s.taskUnit.state.noteTab < 0 || s.taskUnit.state.noteTab >= 3 {
 		return ""
 	}
-	return []string{"AGENTS.md", "TASK-CONTEXT.md", "TASK-RULES.md"}[s.noteTab]
+	return []string{"AGENTS.md", "TASK-CONTEXT.md", "TASK-RULES.md"}[s.taskUnit.state.noteTab]
 }
 
 func (s *app) selectedRequirementURL() string {
-	if s.selectedRequirement < 0 || s.selectedRequirement >= len(s.requirements) {
+	if s.requirementUnit.state.selectedRequirement < 0 || s.requirementUnit.state.selectedRequirement >= len(s.requirementUnit.state.requirements) {
 		return ""
 	}
-	return s.requirements[s.selectedRequirement].URL
+	return s.requirementUnit.state.requirements[s.requirementUnit.state.selectedRequirement].URL
 }
 
 func firstDocument(items []application.Document) string {
@@ -471,93 +461,68 @@ func (s *app) selectDocument(path string) {
 }
 
 func (s *app) selectDocumentWithReveal(path string, reveal bool) {
-	s.documentLinkFragment = ""
+	s.materialsUnit.state.documentLinkFragment = ""
 	path = normalizeActionPath(path)
-	if path == "" || path == s.documentPath || s.materialsFileReadBlocked() {
+	if path == "" || path == s.materialsUnit.state.documentPath || s.materialsFileReadBlocked() {
 		return
 	}
 	if err := s.captureMaterialTextInput(); err != nil {
 		s.lastError = err.Error()
 		return
 	}
-	if err := s.captureMarkdownEditorInput(s.markdown); err != nil {
+	if err := s.captureMarkdownEditorInput(s.materialsUnit.state.markdown); err != nil {
 		s.lastError = err.Error()
 		return
 	}
-	if s.documentDirty && s.documentPath != "" {
-		s.documentDrafts[s.documentPath] = s.documentContent
-		s.documentDirtyMap[s.documentPath] = true
+	if s.materialsUnit.state.documentDirty && s.materialsUnit.state.documentPath != "" {
+		s.materialsUnit.state.documentDrafts[s.materialsUnit.state.documentPath] = s.materialsUnit.state.documentContent
+		s.materialsUnit.state.documentDirtyMap[s.materialsUnit.state.documentPath] = true
 	}
-	s.closeNativeMedia()
+	s.materialsUnit.closeNativeMedia()
 	s.closeMarkdownEditor()
-	s.documentPath = path
+	s.materialsUnit.state.documentPath = path
 	if reveal {
 		s.revealMaterialsPath(path)
 	}
-	s.documentKind = documentKindForPath(path)
-	s.documentReadOnly = markdownReadingOnly && s.documentKind == "markdown"
-	s.documentHash = ""
-	s.documentContent = ""
-	s.documentReadPending = false
-	s.documentDirty = s.documentDirtyMap[path]
-	s.documentEditing = false
+	s.materialsUnit.state.documentKind = documentKindForPath(path)
+	s.materialsUnit.state.documentReadOnly = markdownReadingOnly && s.materialsUnit.state.documentKind == "markdown"
+	s.materialsUnit.state.documentHash = ""
+	s.materialsUnit.state.documentContent = ""
+	s.materialsUnit.state.documentReadPending = false
+	s.materialsUnit.state.documentDirty = s.materialsUnit.state.documentDirtyMap[path]
+	s.materialsUnit.state.documentEditing = false
 	opened := false
-	for _, tab := range s.documentTabs {
+	for _, tab := range s.materialsUnit.state.documentTabs {
 		if tab == path {
 			opened = true
 			break
 		}
 	}
 	if !opened {
-		s.documentTabs = append(s.documentTabs, path)
+		s.materialsUnit.state.documentTabs = append(s.materialsUnit.state.documentTabs, path)
 	}
 	s.restoreMaterialsDraftForOpening(path)
-	s.documentReadPending = true
-	s.act("document.read", s.currentTask().id, "", "", path, "", nil)
+	s.materialsUnit.state.documentReadPending = true
+	s.act("document.read", s.taskUnit.currentTask().id, "", "", path, "", nil)
 }
 
 func (s *app) loadDocuments() {
 	if s.materialsFileReadBlocked() || s.backend == nil {
 		return
 	}
-	task := s.currentTask()
-	if task.id != "" && !s.documentsRequested {
-		s.documentsRequested = true
+	task := s.taskUnit.currentTask()
+	if task.id != "" && !s.materialsUnit.state.documentsRequested {
+		s.materialsUnit.state.documentsRequested = true
 		s.act("document.list", task.id, "", "", task.materialsPath, "", nil)
 	}
 }
 
 func reloadsSnapshot(kind string) bool {
-	switch kind {
-	case "task.create", "task.archive", "task.restore", "task.delete", "task.refresh",
-		"codex.run", "task.tools-launch",
-		"task.tools-retry",
-		"config.save", "config.fields.save", "config.materials-root.save", "config.task-root.save", "config.import",
-		"config.restore-backup", "migration.apply", "migration.recover",
-		"instructions.save", "requirements.refresh", "requirements.comment", "task.materials-retry",
-		"skills.refresh", "skills.install", "skills.remove":
-		return true
-	default:
-		return false
-	}
+	return application.DescribeAction(kind).ReloadSnapshot
 }
 
 func actionLabel(kind string) string {
-	labels := map[string]string{
-		"task.create": "创建任务", "task.archive": "归档任务", "task.restore": "恢复任务", "task.delete": "删除任务", "task.refresh": "刷新任务", "task.materials-retry": "关联任务资料",
-		"config.save": "保存配置", "config.fields.save": "保存设置", "config.import-preview": "预览配置", "config.import": "导入配置",
-		"config.task-root.save": "切换任务目录", "document.list": "读取资料目录", "document.read": "读取文档", "document.save": "保存文档", "document.mkdir": "创建目录", "document.create": "新建文档", "document.rename": "重命名文档", "document.trash": "移至回收站", "document.copy": "复制文档", "document.open": "打开文档", "document.reveal": "显示文档位置",
-		"instructions.read": "读取任务说明", "instructions.save": "保存任务说明", "requirements.refresh": "刷新需求", "requirements.list": "读取需求列表", "requirements.read": "读取需求详情", "requirements.comments": "读取需求评论", "requirements.comment": "发表评论",
-		"task.tools-retry": "重试任务工具", "task.tools-launch": "打开任务工具",
-		"skills.refresh": "刷新 Skills", "skills.install": "安装 Skill", "skills.remove": "移除 Skill", "codex.extensions": "读取 Codex 扩展", "codex.run": "在 Codex 中打开",
-		"codex.extensions/snapshot": "读取 Codex 扩展",
-		"tool.json":                 "处理 JSON", "tool.time": "转换时间", "tool.diff": "比较文本", "tool.ports": "查询端口", "tool.port-stop": "结束端口进程",
-		"system.open": "打开路径", "system.reveal": "显示路径", "system.terminal": "打开终端", "diagnostics.export": "导出诊断信息",
-	}
-	if label := labels[kind]; label != "" {
-		return label
-	}
-	return kind
+	return application.DescribeAction(kind).Label
 }
 
 func resultText(result application.ActionResult) string {
@@ -844,17 +809,7 @@ func (s *app) canCancelOperation() bool {
 // OperationRunner defaults to non-cancellable in the source desktop. Only
 // operations that explicitly opt in share the global cancellation control.
 func cancellableOperation(kind string) bool {
-	switch kind {
-	case "task.refresh", "task.create", "task.materials-retry", "diagnostics.export",
-		"codex.extensions/marketplaces/add-source", "codex.extensions/marketplaces/refresh-source", "codex.extensions/marketplaces/remove-source",
-		"codex.extensions/plugin/install", "codex.extensions/plugin/uninstall",
-		"codex.extensions/mcp/status", "codex.extensions/mcp/check", "codex.extensions/mcp/add", "codex.extensions/mcp/edit", "codex.extensions/mcp/set", "codex.extensions/mcp/remove", "codex.ai/mcp/authenticate",
-		"skills.sources/save", "skills.sources/catalog", "skills.sources/remove", "skills.install", "skills.update", "skills.remove",
-		"cli.auth.start", "cli.auth.logout":
-		return true
-	default:
-		return false
-	}
+	return application.DescribeAction(kind).Cancellable
 }
 
 func (s *app) setTheme(dark bool) {

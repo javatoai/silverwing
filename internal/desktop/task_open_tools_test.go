@@ -54,7 +54,9 @@ func nextTaskOpenToolsUpdate(t *testing.T, updates chan func()) func() {
 }
 
 func TestTaskOpenToolAvailabilityIsCodexOnly(t *testing.T) {
-	s := &app{configJSON: `{"defaultWorkspaceToolIds":["codex"]}`}
+	s := &app{
+		settingsUnit: settingsController{state: settingsState{configJSON: `{"defaultWorkspaceToolIds":["codex"]}`}},
+	}
 	if !s.taskOpenToolEnabled("codex") || !s.taskOpenToolAvailable("codex") {
 		t.Fatal("enabled Codex should remain visible and available without executable discovery")
 	}

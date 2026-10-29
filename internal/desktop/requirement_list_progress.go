@@ -26,7 +26,7 @@ type requirementListProgressState struct {
 }
 
 func (s *app) requirementListProgressCurrent(p *requirementListProgressState) bool {
-	if p == nil || s.requirementListProgress != p || p.viewSprintKey != s.requirementsSelectedSprintKey {
+	if p == nil || s.requirementUnit.state.requirementListProgress != p || p.viewSprintKey != s.requirementUnit.state.requirementsSelectedSprintKey {
 		return false
 	}
 	now := s.currentRequirementListIdentity()
@@ -34,7 +34,7 @@ func (s *app) requirementListProgressCurrent(p *requirementListProgressState) bo
 		p.identity.projects != now.projects || p.identity.defaultProject != now.defaultProject {
 		return false
 	}
-	if identity := s.requirementIdentityJobs; identity != nil {
+	if identity := s.requirementUnit.state.requirementIdentityJobs; identity != nil {
 		if identity.hasContext && identity.context != p.profile {
 			return false
 		}
@@ -46,12 +46,12 @@ func (s *app) requirementListProgressCurrent(p *requirementListProgressState) bo
 }
 
 func (s *app) observeRequirementListProgress() {
-	p := s.requirementListProgress
+	p := s.requirementUnit.state.requirementListProgress
 	if p == nil {
 		return
 	}
 	if !s.requirementListProgressCurrent(p) {
-		s.requirementListProgress = nil
+		s.requirementUnit.state.requirementListProgress = nil
 		return
 	}
 	if s.page != "requirements" {
@@ -68,33 +68,33 @@ func (s *app) newRequirementListProgress(sprintKey string) *requirementListProgr
 			"account": {Phase: "account", Status: "running", Message: "正在核对 Meegle 账号…"},
 		},
 	}
-	if identity := s.requirementIdentityJobs; identity != nil && identity.confirmed {
+	if identity := s.requirementUnit.state.requirementIdentityJobs; identity != nil && identity.confirmed {
 		p.account = identity.identity
 	}
-	s.requirementListProgress = p
+	s.requirementUnit.state.requirementListProgress = p
 	return p
 }
 
 func (s *app) refreshRequirementListWithProgress(sprintKey string) {
 	s.observeRequirementListProgress()
-	if sprintKey != s.requirementsSelectedSprintKey || len(s.readConfigArray("meegleProjects")) == 0 {
+	if sprintKey != s.requirementUnit.state.requirementsSelectedSprintKey || len(s.readConfigArray("meegleProjects")) == 0 {
 		return
 	}
 	// The failure panel also retries the initial account/Sprint catalogue read,
 	// before there is a selected Sprint for a manual progress session.
 	if sprintKey == "" {
-		if p := s.requirementListProgress; s.requirementListProgressCurrent(p) && p.sprintKey != "" && !p.running && len(p.failures) > 0 {
+		if p := s.requirementUnit.state.requirementListProgress; s.requirementListProgressCurrent(p) && p.sprintKey != "" && !p.running && len(p.failures) > 0 {
 			s.retryRequirementListProgress(p)
-		} else if !s.requirementsLoading {
+		} else if !s.requirementUnit.state.requirementsLoading {
 			s.requestRequirements("", true)
 		}
 		return
 	}
-	if p := s.requirementListProgress; p != nil && p.running && p.sprintKey == sprintKey {
+	if p := s.requirementUnit.state.requirementListProgress; p != nil && p.running && p.sprintKey == sprintKey {
 		p.open = true
 		return
 	}
-	if s.requirementsLoading {
+	if s.requirementUnit.state.requirementsLoading {
 		return
 	}
 	s.newRequirementListProgress(sprintKey)
@@ -102,25 +102,25 @@ func (s *app) refreshRequirementListWithProgress(sprintKey string) {
 }
 
 func (s *app) retryRequirementListProgress(p *requirementListProgressState) {
-	if !s.requirementListProgressCurrent(p) || p.running || s.requirementsLoading || len(p.failures) == 0 {
+	if !s.requirementListProgressCurrent(p) || p.running || s.requirementUnit.state.requirementsLoading || len(p.failures) == 0 {
 		return
 	}
 	// Catalogue application keeps its existing selection policy. Only an explicit
 	// retry of this still-current session restores its original request target.
 	// It must never fall back to another Sprint from a partial catalogue.
-	if p.sprintKey != s.requirementsSelectedSprintKey {
+	if p.sprintKey != s.requirementUnit.state.requirementsSelectedSprintKey {
 		s.activateRequirementSprint(p.sprintKey)
 	}
 	s.refreshRequirementListWithProgress(p.sprintKey)
 }
 
 func (s *app) bindRequirementListProgress(request *requirementListJob) {
-	p := s.requirementListProgress
+	p := s.requirementUnit.state.requirementListProgress
 	if !s.requirementListProgressCurrent(p) || !p.running || request.action.Kind != "requirements.refresh" || p.sprintKey != request.sprintKey {
 		return
 	}
 	p.request, p.identity = request, request.identity
-	if identity := s.requirementIdentityJobs; identity != nil && identity.confirmed {
+	if identity := s.requirementUnit.state.requirementIdentityJobs; identity != nil && identity.confirmed {
 		p.account = identity.identity
 	}
 	request.progress = p
@@ -140,7 +140,7 @@ func (s *app) applyRequirementListProgress(request *requirementListJob, event ap
 		return
 	}
 	if s.currentRequirementIdentityContext() != p.profile {
-		s.requirementListProgress = nil
+		s.requirementUnit.state.requirementListProgress = nil
 		return
 	}
 	p.lastSequence = event.Sequence
@@ -178,9 +178,9 @@ func (s *app) finishRequirementListProgress(request *requirementListJob) {
 	if !s.requirementListProgressCurrent(p) || p.request != request || !p.running {
 		return
 	}
-	failures := append([]string(nil), s.requirementsFailures...)
-	if s.requirementsLoadError != "" {
-		failures = []string{s.requirementsLoadError}
+	failures := append([]string(nil), s.requirementUnit.state.requirementsFailures...)
+	if s.requirementUnit.state.requirementsLoadError != "" {
+		failures = []string{s.requirementUnit.state.requirementsLoadError}
 	} else {
 		p.steps["apply"] = application.RequirementListProgress{Phase: "apply", Status: "done"}
 	}
@@ -192,15 +192,15 @@ func (s *app) finishRequirementListProgress(request *requirementListJob) {
 		return
 	}
 	p.running, p.open = false, false
-	p.message = fmt.Sprintf("需求刷新完成，共 %d 条工作项", len(s.requirements))
-	if len(s.requirements) == 0 {
+	p.message = fmt.Sprintf("需求刷新完成，共 %d 条工作项", len(s.requirementUnit.state.requirements))
+	if len(s.requirementUnit.state.requirements) == 0 {
 		p.message = "刷新完成，暂无工作项"
 	}
 }
 
 func (s *app) renderRequirementListProgressNotification(c *ui.Context) {
 	message, failure := "", ""
-	if p := s.requirementListProgress; s.requirementListProgressCurrent(p) {
+	if p := s.requirementUnit.state.requirementListProgress; s.requirementListProgressCurrent(p) {
 		s.operationNotifications.present(c, "requirement-list-result", &p.message, &p.notificationError)
 		return
 	}

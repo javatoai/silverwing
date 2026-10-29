@@ -10,6 +10,7 @@ import (
 
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/platform"
+	"silverwing-go/internal/productprofile"
 	"silverwing-go/internal/workspace"
 )
 
@@ -36,7 +37,7 @@ func (a *App) openCodex(ctx context.Context, action Action) (ActionResult, error
 	}
 	path := taskPath
 	if action.ServiceID != "" || action.ModuleID != "" {
-		return ActionResult{}, errors.New("产品版不支持代码工作区")
+		return ActionResult{}, errors.New(productprofile.ConfigEditionLabel + "不支持代码工作区")
 	}
 	path, err = filepath.Abs(path)
 	if err != nil {

@@ -15,7 +15,11 @@ func TestJSONToolValidationKeepsEditorGeometry(t *testing.T) {
 	for _, width := range []int{960, 360} {
 		for _, dark := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%d-dark-%t", width, dark), func(t *testing.T) {
-				s := &app{page: "tools", toolTab: "JSON", inputs: map[string]*string{}}
+				s := &app{
+					toolsUnit: toolsController{state: toolsState{toolTab: "JSON"}},
+					page:      "tools",
+					inputs:    map[string]*string{},
+				}
 				state := s.ensureToolState()
 				state.jsonSource = "{\n  \"a\": 2\n}"
 				state.validateJSON(state.jsonSource)
@@ -47,7 +51,11 @@ func TestJSONToolValidationKeepsEditorGeometry(t *testing.T) {
 }
 
 func TestJSONToolEditingValidationPreservesSourceCaretAndScroll(t *testing.T) {
-	s := &app{page: "tools", toolTab: "JSON", inputs: map[string]*string{}}
+	s := &app{
+		toolsUnit: toolsController{state: toolsState{toolTab: "JSON"}},
+		page:      "tools",
+		inputs:    map[string]*string{},
+	}
 	state := s.ensureToolState()
 	defer state.cancelWork()
 	source := "{\n \"a\": [\n" + strings.Repeat("    \"中文🪴,}\",\n", 60) + " ],\n}"

@@ -7,9 +7,10 @@ import (
 	"strings"
 
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/productprofile"
 )
 
-const ProductName = "silverwing-product"
+const ProductName = productprofile.Name
 
 // These variables are overridden by release builds with -ldflags -X.
 var (

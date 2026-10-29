@@ -131,13 +131,13 @@ func (s *app) restoreReadingSessionOnSnapshot() {
 		}
 		if session.cache.LastTaskPath != "" {
 			last := normalizedReadingPath(session.cache.LastTaskPath)
-			previousTask := s.currentTask()
-			for index, candidate := range s.tasks {
+			previousTask := s.taskUnit.currentTask()
+			for index, candidate := range s.taskUnit.state.tasks {
 				if candidate.path != "" && normalizedReadingPath(candidate.path) == last {
 					if previousTask.path != "" && normalizedReadingPath(previousTask.path) != last {
 						s.resetReadingMaterialsForTaskRestore()
 					}
-					s.selected = index
+					s.taskUnit.restoreSelection(index)
 					if candidate.archived {
 						s.page = "archive"
 					} else {
@@ -165,7 +165,7 @@ func (s *app) afterReadingTaskSelection() {
 	if session == nil || !session.loaded || session.closed {
 		return
 	}
-	current := s.currentTask()
+	current := s.taskUnit.currentTask()
 	if current.path != "" {
 		delete(session.restoredMaterials, readingMaterialsKey(current.path, current.materialsPath))
 	}
@@ -204,14 +204,14 @@ func (s *app) observeReadingSession() {
 		}
 	}
 	inputs := s.readingObservationInputs()
-	if !session.dirty && session.observation.unchanged(inputs, s.documentTabs, session.scrollStates) {
+	if !session.dirty && session.observation.unchanged(inputs, s.materialsUnit.state.documentTabs, session.scrollStates) {
 		return
 	}
 	value := s.captureReadingSnapshot(session)
 	session.cache = value
 	if session.store == nil {
 		session.dirty = false
-		session.observation.remember(inputs, s.documentTabs, session.scrollStates)
+		session.observation.remember(inputs, s.materialsUnit.state.documentTabs, session.scrollStates)
 		return
 	}
 	encoded, err := json.Marshal(value)
@@ -228,35 +228,35 @@ func (s *app) observeReadingSession() {
 		s.scheduleReadingErrorCheck(session)
 	}
 	session.dirty = false
-	session.observation.remember(inputs, s.documentTabs, session.scrollStates)
+	session.observation.remember(inputs, s.materialsUnit.state.documentTabs, session.scrollStates)
 }
 
 func (s *app) captureReadingSnapshot(session *desktopReadingSession) ReadingSnapshot {
 	view := readingViewForTab(s.tab)
-	current := s.currentTask()
+	current := s.taskUnit.currentTask()
 	lastTaskPath := ""
 	if current.path != "" {
 		lastTaskPath = normalizedReadingPath(current.path)
 	}
 
-	trackMaterials := current.path != "" && (s.tab == 1 || s.documentsLoaded || s.documentsRequested || s.documentPath != "" || len(s.documentTabs) > 0)
+	trackMaterials := current.path != "" && (s.tab == 1 || s.materialsUnit.state.documentsLoaded || s.materialsUnit.state.documentsRequested || s.materialsUnit.state.documentPath != "" || len(s.materialsUnit.state.documentTabs) > 0)
 	if trackMaterials {
 		material := readingMaterialsFor(session, current.path, current.materialsPath, true)
 		if material != nil {
-			if s.documentsLoaded {
+			if s.materialsUnit.state.documentsLoaded {
 				material.DocumentTabs.Initialized = true
 			}
-			hasDocumentUI := s.documentsLoaded || s.documentPath != "" || len(s.documentTabs) > 0
+			hasDocumentUI := s.materialsUnit.state.documentsLoaded || s.materialsUnit.state.documentPath != "" || len(s.materialsUnit.state.documentTabs) > 0
 			if hasDocumentUI {
-				material.DirectoryCollapsed = s.documentsCollapsed
+				material.DirectoryCollapsed = s.materialsUnit.state.documentsCollapsed
 				material.DocumentTabs.Tabs = material.DocumentTabs.Tabs[:0]
-				for _, path := range s.documentTabs {
+				for _, path := range s.materialsUnit.state.documentTabs {
 					if relative, ok := readingRelativePathFromRoot(current.materialsPath, path); ok {
 						material.DocumentTabs.Tabs = append(material.DocumentTabs.Tabs, MaterialsDocumentTab{Path: relative, IsPinned: true})
 					}
 				}
 				material.SelectedPath = nil
-				if relative, ok := readingRelativePathFromRoot(current.materialsPath, s.documentPath); ok {
+				if relative, ok := readingRelativePathFromRoot(current.materialsPath, s.materialsUnit.state.documentPath); ok {
 					material.SelectedPath = &relative
 					active := relative
 					material.DocumentTabs.ActivePath = &active
@@ -304,10 +304,10 @@ func (s *app) captureReadingSnapshot(session *desktopReadingSession) ReadingSnap
 
 func (s *app) restoreReadingMaterials() bool {
 	session := s.readingSession
-	if session == nil || session.closed || !s.documentsLoaded {
+	if session == nil || session.closed || !s.materialsUnit.state.documentsLoaded {
 		return false
 	}
-	current := s.currentTask()
+	current := s.taskUnit.currentTask()
 	if current.path == "" {
 		return false
 	}
@@ -335,18 +335,18 @@ func (s *app) restoreReadingMaterials() bool {
 	// read may see the tabs this method itself installed; preserve those as a
 	// pending restore rather than mistaking them for a user selection.
 	pendingUI := session.pendingMaterialsUIKey == key &&
-		session.pendingMaterialsUIPath == s.documentPath &&
-		equalReadingPaths(session.pendingMaterialsUITabs, s.documentTabs)
-	if (s.documentPath != "" || len(s.documentTabs) > 0 || s.documentDirty) && !pendingUI {
+		session.pendingMaterialsUIPath == s.materialsUnit.state.documentPath &&
+		equalReadingPaths(session.pendingMaterialsUITabs, s.materialsUnit.state.documentTabs)
+	if (s.materialsUnit.state.documentPath != "" || len(s.materialsUnit.state.documentTabs) > 0 || s.materialsUnit.state.documentDirty) && !pendingUI {
 		session.restoredMaterials[key] = true
 		session.pendingMaterials = false
 		s.clearPendingReadingMaterialsUI(session)
 		return true
 	}
 
-	s.documentsCollapsed = material.DirectoryCollapsed
+	s.materialsUnit.state.documentsCollapsed = material.DirectoryCollapsed
 	s.currentReadingMaterialsSortDocuments()
-	documents := flattenReadingDocuments(s.documents)
+	documents := flattenReadingDocuments(s.materialsUnit.state.documents)
 	currentRoot := current.materialsPath
 	currentRootPath := &currentRoot
 	tabs := make([]string, 0, len(material.DocumentTabs.Tabs))
@@ -370,14 +370,14 @@ func (s *app) restoreReadingMaterials() bool {
 		if _, exists := documents[normalizedReadingPath(activeCandidate)]; !exists {
 			active = nextReadingDocumentAfterMissingTab(material.DocumentTabs.Tabs, activeCandidate, currentRootPath, documents)
 			if active == "" {
-				active = firstDocument(s.documents)
+				active = firstDocument(s.materialsUnit.state.documents)
 			}
 		}
 	}
 	if active != "" && !readingContainsPath(tabs, active) {
 		tabs = append(tabs, active)
 	}
-	s.documentTabs = tabs
+	s.materialsUnit.state.documentTabs = tabs
 	if active != "" {
 		if s.busy {
 			session.pendingMaterials = true
@@ -389,7 +389,7 @@ func (s *app) restoreReadingMaterials() bool {
 		// Restoring an active tab must preserve the user's saved folder state.
 		// Explicitly opening or locating a document still reveals its parents.
 		s.selectDocumentWithReveal(active, false)
-		if s.documentPath != active {
+		if s.materialsUnit.state.documentPath != active {
 			session.pendingMaterials = true
 			session.pendingTaskPath = normalizedReadingPath(current.path)
 			session.pendingRoot = normalizedReadingRoot(current.materialsPath)
@@ -405,9 +405,9 @@ func (s *app) restoreReadingMaterials() bool {
 		session.restoredMaterials[key] = true
 		session.pendingMaterials = false
 		s.clearPendingReadingMaterialsUI(session)
-		s.documentPath, s.documentContent, s.documentHash = "", "", ""
-		s.documentKind, s.documentReadOnly = "", false
-		s.documentDirty, s.documentEditing = false, false
+		s.materialsUnit.state.documentPath, s.materialsUnit.state.documentContent, s.materialsUnit.state.documentHash = "", "", ""
+		s.materialsUnit.state.documentKind, s.materialsUnit.state.documentReadOnly = "", false
+		s.materialsUnit.state.documentDirty, s.materialsUnit.state.documentEditing = false, false
 		return true
 	}
 	if len(tabs) > 0 {
@@ -488,13 +488,13 @@ func (s *app) closeReadingSession() error {
 
 func (s *app) completePendingReadingMaterials() {
 	session := s.readingSession
-	if session == nil || !session.loaded || session.closed || !session.pendingMaterials || !s.documentsLoaded {
+	if session == nil || !session.loaded || session.closed || !session.pendingMaterials || !s.materialsUnit.state.documentsLoaded {
 		return
 	}
 	if s.busy {
 		return
 	}
-	current := s.currentTask()
+	current := s.taskUnit.currentTask()
 	if current.path == "" || normalizedReadingPath(current.path) != session.pendingTaskPath || normalizedReadingRoot(current.materialsPath) != session.pendingRoot {
 		session.pendingMaterials = false
 		s.clearPendingReadingMaterialsUI(session)
@@ -504,8 +504,8 @@ func (s *app) completePendingReadingMaterials() {
 		return
 	}
 	session.pendingMaterials = false
-	if s.documentPath == "" {
-		if first := firstDocument(s.documents); first != "" {
+	if s.materialsUnit.state.documentPath == "" {
+		if first := firstDocument(s.materialsUnit.state.documents); first != "" {
 			s.selectDocument(first)
 		}
 	}
@@ -516,8 +516,8 @@ func (s *app) rememberPendingReadingMaterialsUI(session *desktopReadingSession, 
 		return
 	}
 	session.pendingMaterialsUIKey = key
-	session.pendingMaterialsUIPath = s.documentPath
-	session.pendingMaterialsUITabs = append(session.pendingMaterialsUITabs[:0], s.documentTabs...)
+	session.pendingMaterialsUIPath = s.materialsUnit.state.documentPath
+	session.pendingMaterialsUITabs = append(session.pendingMaterialsUITabs[:0], s.materialsUnit.state.documentTabs...)
 }
 
 func (s *app) clearPendingReadingMaterialsUI(session *desktopReadingSession) {
@@ -574,7 +574,7 @@ func (s *app) readingScrollState(id string) *ui.ScrollState {
 	if session == nil || session.closed || strings.TrimSpace(id) == "" {
 		return nil
 	}
-	current := s.currentTask()
+	current := s.taskUnit.currentTask()
 	if current.path == "" {
 		return nil
 	}
@@ -584,7 +584,7 @@ func (s *app) readingScrollState(id string) *ui.ScrollState {
 	if s.tab == 2 && strings.TrimSpace(current.requirementURL) != "" {
 		binding.requirementLink = strings.TrimSpace(current.requirementURL)
 	} else if id != "directory" {
-		binding.document, _ = readingRelativePathFromRoot(current.materialsPath, s.documentPath)
+		binding.document, _ = readingRelativePathFromRoot(current.materialsPath, s.materialsUnit.state.documentPath)
 	}
 	key := readingScrollBindingKey(binding)
 	if found, ok := session.scrollStates[key]; ok {
@@ -753,7 +753,7 @@ func (s *app) currentReadingPosition(create bool) (ReadingPositionSnapshot, func
 	if session == nil || !session.loaded || session.closed {
 		return ReadingPositionSnapshot{}, nil
 	}
-	current := s.currentTask()
+	current := s.taskUnit.currentTask()
 	if current.path == "" {
 		return ReadingPositionSnapshot{}, nil
 	}
@@ -771,7 +771,7 @@ func (s *app) currentReadingPosition(create bool) (ReadingPositionSnapshot, func
 	if material == nil {
 		return ReadingPositionSnapshot{}, nil
 	}
-	relative, ok := readingRelativePath(material.Root, s.documentPath)
+	relative, ok := readingRelativePath(material.Root, s.materialsUnit.state.documentPath)
 	if !ok {
 		return ReadingPositionSnapshot{}, nil
 	}
@@ -797,7 +797,7 @@ func (s *app) currentReadingMaterials(create bool) *MaterialsSnapshot {
 	if session == nil || !session.loaded || session.closed {
 		return nil
 	}
-	current := s.currentTask()
+	current := s.taskUnit.currentTask()
 	if current.path == "" {
 		return nil
 	}
@@ -808,35 +808,23 @@ func (s *app) currentReadingMaterials(create bool) *MaterialsSnapshot {
 }
 
 func (s *app) readingUIIdentity() readingUIIdentity {
-	current := s.currentTask()
+	current := s.taskUnit.currentTask()
 	path := ""
 	if current.path != "" {
 		path = normalizedReadingPath(current.path)
 	}
 	document := ""
-	if s.documentPath != "" {
-		document = normalizedReadingPath(s.documentPath)
+	if s.materialsUnit.state.documentPath != "" {
+		document = normalizedReadingPath(s.materialsUnit.state.documentPath)
 	}
 	return readingUIIdentity{
 		taskPath: path, page: s.page, tab: s.tab,
-		document: document, documentTab: strings.Join(s.documentTabs, "\x00"), dirty: s.documentDirty,
+		document: document, documentTab: strings.Join(s.materialsUnit.state.documentTabs, "\x00"), dirty: s.materialsUnit.state.documentDirty,
 	}
 }
 
 func (s *app) resetReadingMaterialsForTaskRestore() {
-	s.observeMaterialTextInput()
-	s.closeNativeMedia()
-	s.closeMarkdownEditor()
-	s.documents = nil
-	s.documentsLoaded = false
-	s.documentsRequested = false
-	s.documentTabs = nil
-	s.documentReadPending = false
-	s.documentDrafts = make(map[string]string)
-	s.documentDirtyMap = make(map[string]bool)
-	s.documentPath, s.documentContent = "", ""
-	s.documentHash = ""
-	s.documentDirty, s.documentEditing = false, false
+	s.materialsUnit.resetTaskPresentation(TaskTransition{origin: taskTransitionSnapshot}, s)
 }
 
 func readingStartupIdentityMatches(before, after readingUIIdentity) bool {
@@ -891,7 +879,7 @@ func (s *app) currentReadingMaterialsSortDocuments() {
 			return strings.ToLower(left.Name) < strings.ToLower(right.Name)
 		})
 	}
-	sortLevel(s.documents)
+	sortLevel(s.materialsUnit.state.documents)
 }
 
 func readingMaterialsFor(session *desktopReadingSession, taskPath, root string, create bool) *MaterialsSnapshot {

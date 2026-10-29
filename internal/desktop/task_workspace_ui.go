@@ -43,13 +43,13 @@ func (s *app) taskWorkspaceDetail(c *ui.Context, p palette) {
 				}
 			}
 			ui.Spacer(c)
-			t := s.currentTask()
+			t := s.taskUnit.currentTask()
 			if t.id != "" && s.taskOpenToolEnabled("codex") && iconButtonDisabled(c, "qa-task-codex", "launch", "在 Codex 中打开", p, s.busy || s.backend == nil || !s.taskOpenToolAvailable("codex")).Clicked() {
 				s.openTaskInCodex(t)
 			}
 		})
 		ui.Divider(c)
-		if s.currentTask().id == "" {
+		if s.taskUnit.currentTask().id == "" {
 			s.emptyTask(c, p)
 			return
 		}
@@ -82,7 +82,7 @@ func (s *app) emptyTask(c *ui.Context, p palette) {
 }
 
 func (s *app) taskHeader(c *ui.Context, p palette) {
-	t := s.currentTask()
+	t := s.taskUnit.currentTask()
 	ui.Column(c).FillWidth().Gap(6).Padding(2).Children(func() {
 		if t.requirementURL != "" {
 			s.renderTaskRequirementMetadata(c, p, t)
@@ -99,5 +99,5 @@ func (s *app) taskHeader(c *ui.Context, p palette) {
 }
 
 func (s *app) copyTaskWorkspacePath(services ui.Services) {
-	s.copyTextToClipboard(services, s.currentTask().path, "已复制任务路径")
+	s.copyTextToClipboard(services, s.taskUnit.currentTask().path, "已复制任务路径")
 }

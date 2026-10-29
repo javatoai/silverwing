@@ -11,12 +11,19 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 // kqueue directory events describe entry changes, while file vnodes describe
 // writes (including writes which preserve size and mtime). Register both to
 // reproduce Source's recursive ENTRY_CREATE/DELETE/MODIFY observer.
 func watchMaterialsDirectory(ctx context.Context, root string, changed func(string), ready func()) error {
+	return watchMaterialsDirectoryDarwin(ctx, root, changed, ready, captureMaterialsDarwinWatchSnapshot)
+}
+
+type materialsDarwinSnapshotCapture func(context.Context, string) (materialsDarwinWatchSnapshot, error)
+
+func watchMaterialsDirectoryDarwin(ctx context.Context, root string, changed func(string), ready func(), capture materialsDarwinSnapshotCapture) error {
 	var readyOnce sync.Once
 	signalReady := func() { readyOnce.Do(ready) }
 	defer signalReady()
@@ -63,7 +70,7 @@ func watchMaterialsDirectory(ctx context.Context, root string, changed func(stri
 	}()
 	watcher := materialsDarwinWatcher{queue: queue, paths: make(map[string]*materialsDarwinWatch), descriptors: make(map[int]*materialsDarwinWatch)}
 	defer watcher.close()
-	previous, err := captureMaterialsDarwinWatchSnapshot(ctx, root)
+	previous, err := capture(ctx, root)
 	if err != nil {
 		return err
 	}
@@ -72,8 +79,16 @@ func watchMaterialsDirectory(ctx context.Context, root string, changed func(stri
 	}
 	signalReady()
 	events := make([]syscall.Kevent_t, 64)
+	var batch materialsWatchRebuildBatch
+	pendingTouched := make(map[string]struct{})
 	for ctx.Err() == nil {
-		count, err := syscall.Kevent(queue, nil, events, nil)
+		var timeout *syscall.Timespec
+		if deadline, pending := batch.deadline(); pending {
+			remaining := max(time.Until(deadline), 0)
+			value := syscall.NsecToTimespec(remaining.Nanoseconds())
+			timeout = &value
+		}
+		count, err := syscall.Kevent(queue, nil, events, timeout)
 		if errors.Is(err, syscall.EINTR) {
 			continue
 		}
@@ -107,6 +122,10 @@ func watchMaterialsDirectory(ctx context.Context, root string, changed func(stri
 				}
 			}
 		}
+		// Identity is checked before the batching delay. Root/ancestor swaps
+		// invalidate readers and reconcile unsafe descriptors immediately.
+		identityChanged := count > 0 && !materialsDarwinWatchIdentityCurrent(previous.identity)
+		rebuild = rebuild || identityChanged
 		if !rebuild {
 			// Keep the comparison baseline current after file-only events. A
 			// later parent sibling event must not re-emit an earlier file write.
@@ -127,7 +146,22 @@ func watchMaterialsDirectory(ctx context.Context, root string, changed func(stri
 			}
 		}
 		if rebuild {
-			next, err := captureMaterialsDarwinWatchSnapshot(ctx, root)
+			for path := range touched {
+				pendingTouched[path] = struct{}{}
+			}
+			clear(touched)
+			batch.record(time.Now())
+		}
+		if identityChanged || batch.ready(time.Now()) {
+			if identityChanged {
+				changed("")
+			}
+			for path := range pendingTouched {
+				touched[path] = struct{}{}
+			}
+			clear(pendingTouched)
+			batch.reset()
+			next, err := capture(ctx, root)
 			if err != nil {
 				return err
 			}
@@ -163,9 +197,50 @@ func watchMaterialsDirectory(ctx context.Context, root string, changed func(stri
 }
 
 type materialsDarwinWatchSnapshot struct {
-	state   string
-	entries map[string]os.FileInfo
-	anchor  string
+	state    string
+	entries  map[string]os.FileInfo
+	anchor   string
+	identity []materialsDarwinIdentityStamp
+}
+
+type materialsDarwinIdentityStamp struct {
+	path    string
+	info    os.FileInfo
+	failure string
+}
+
+func materialsDarwinIdentityFailure(err error) string {
+	if err == nil {
+		return ""
+	}
+	if os.IsNotExist(err) {
+		return "missing"
+	}
+	return err.Error()
+}
+
+func captureMaterialsDarwinWatchIdentity(root string) []materialsDarwinIdentityStamp {
+	var identity []materialsDarwinIdentityStamp
+	for path := root; ; path = filepath.Dir(path) {
+		info, err := os.Lstat(path)
+		identity = append(identity, materialsDarwinIdentityStamp{path: path, info: info, failure: materialsDarwinIdentityFailure(err)})
+		if path == filepath.Dir(path) {
+			return identity
+		}
+	}
+}
+
+func materialsDarwinWatchIdentityCurrent(identity []materialsDarwinIdentityStamp) bool {
+	for _, expected := range identity {
+		info, err := os.Lstat(expected.path)
+		if materialsDarwinIdentityFailure(err) != expected.failure {
+			return false
+		}
+		if err == nil && (!os.SameFile(expected.info, info) || expected.info.Mode().Type() != info.Mode().Type()) {
+			return false
+		}
+	}
+	return true
 }
 
 type materialsDarwinWatch struct {
@@ -245,7 +320,7 @@ func (w *materialsDarwinWatcher) reconcile(ctx context.Context, snapshot materia
 }
 
 func captureMaterialsDarwinWatchSnapshot(ctx context.Context, root string) (materialsDarwinWatchSnapshot, error) {
-	snapshot := materialsDarwinWatchSnapshot{state: "missing", entries: make(map[string]os.FileInfo)}
+	snapshot := materialsDarwinWatchSnapshot{state: "missing", entries: make(map[string]os.FileInfo), identity: captureMaterialsDarwinWatchIdentity(root)}
 	if materialsDarwinIgnoredPath(root) {
 		snapshot.state = "unsafe"
 		return snapshot, ctx.Err()

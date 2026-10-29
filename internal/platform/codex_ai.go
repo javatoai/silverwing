@@ -68,38 +68,9 @@ func (s *Service) executeCodexAI(ctx context.Context, kind string, payload map[s
 				return nil, err
 			}
 		}
-		snapshot, err := s.readCodexConfig(ctx, cfg, cwd)
-		if err != nil {
-			return nil, err
-		}
-		files := []codexInstructionFile{}
-		if cwd != "" {
-			files = instructionFiles(cwd, filepath.Dir(snapshot["userFile"].(string)), asMap(snapshot["rawConfig"]))
-		}
-		warnings, _ := snapshot["warnings"].([]string)
-		skills := []codexAISkill{}
-		if payloadBool(payload, "includeSkills") && cwd != "" {
-			result, listErr := s.rpcRequest(ctx, cfg, cwd, nil, "skills/list", map[string]any{
-				"cwds": []string{cwd}, "forceReload": true,
-			}, 30*time.Second)
-			if listErr != nil {
-				if process.IsCleanupFailure(listErr) {
-					return nil, listErr
-				}
-				if ctx.Err() != nil {
-					return nil, ctx.Err()
-				}
-				warnings = append(warnings, "Skill 列表暂时无法读取，可刷新重试")
-			} else {
-				var listWarnings []string
-				skills, listWarnings = parseCodexSkills(result)
-				warnings = append(warnings, listWarnings...)
-			}
-		}
-		return map[string]any{
-			"cwd": nullableString(cwd), "userFile": snapshot["userFile"], "layers": snapshot["layers"],
-			"servers": snapshot["servers"], "skills": skills, "files": files, "warnings": warnings,
-		}, nil
+		return s.withCodexRPCSession(ctx, cfg, cwd, nil, time.Minute, true, func(sessionContext context.Context) (any, error) {
+			return s.codexAISnapshot(sessionContext, cfg, cwd, payloadBool(payload, "includeSkills"))
+		})
 	case "codex.ai/threads/list":
 		cwd := payloadString(payload, "cwd")
 		if cwd == "" {
@@ -212,6 +183,41 @@ func (s *Service) executeCodexAI(ctx context.Context, kind string, payload map[s
 	default:
 		return nil, fmt.Errorf("未知 Codex AI 操作：%s", kind)
 	}
+}
+
+func (s *Service) codexAISnapshot(ctx context.Context, cfg domain.AppConfig, cwd string, includeSkills bool) (any, error) {
+	snapshot, err := s.readCodexConfig(ctx, cfg, cwd)
+	if err != nil {
+		return nil, err
+	}
+	files := []codexInstructionFile{}
+	if cwd != "" {
+		files = instructionFiles(cwd, filepath.Dir(snapshot["userFile"].(string)), asMap(snapshot["rawConfig"]))
+	}
+	warnings, _ := snapshot["warnings"].([]string)
+	skills := []codexAISkill{}
+	if includeSkills && cwd != "" {
+		result, listErr := s.rpcRequest(ctx, cfg, cwd, nil, "skills/list", map[string]any{
+			"cwds": []string{cwd}, "forceReload": true,
+		}, 30*time.Second)
+		if listErr != nil {
+			if process.IsCleanupFailure(listErr) {
+				return nil, listErr
+			}
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			warnings = append(warnings, "Skill 列表暂时无法读取，可刷新重试")
+		} else {
+			var listWarnings []string
+			skills, listWarnings = parseCodexSkills(result)
+			warnings = append(warnings, listWarnings...)
+		}
+	}
+	return map[string]any{
+		"cwd": nullableString(cwd), "userFile": snapshot["userFile"], "layers": snapshot["layers"],
+		"servers": snapshot["servers"], "skills": skills, "files": files, "warnings": warnings,
+	}, nil
 }
 
 func (s *Service) openCodexWorkspace(ctx context.Context, payload map[string]any) (any, error) {

@@ -39,6 +39,7 @@ type codexAIState struct {
 	snapshot         *codexAISnapshot
 	snapshotLoading  bool
 	snapshotLoaded   bool
+	skillsLoaded     bool
 	snapshotError    string
 	snapshotRevision uint64
 
@@ -201,6 +202,7 @@ func (s *app) openCodexAI(taskPath, tab string) {
 		state.mcpScope = "ALL"
 		state.snapshot = nil
 		state.snapshotLoaded = false
+		state.skillsLoaded = false
 		state.snapshotLoading = false
 		state.snapshotError = ""
 		state.snapshotRevision = 0

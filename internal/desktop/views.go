@@ -214,7 +214,8 @@ func (s *app) documentTree(c *ui.Context, p palette, width float32) {
 	directory, _ := s.materialsCurrentDirectory(state)
 	canWriteDirectory := s.materialsWritable(directory, true)
 	canTrashSelection := len(state.selected) > 0
-	for _, entry := range s.materialsFileSelection(state) {
+	selection := s.materialsFileSelection(state)
+	for _, entry := range selection {
 		canTrashSelection = canTrashSelection && s.materialsWritable(entry.Path, false)
 	}
 	order := s.readingMaterialsSortOrder()
@@ -223,10 +224,10 @@ func (s *app) documentTree(c *ui.Context, p palette, width float32) {
 	ui.Column(c).Width(width).Shrink(0).MinHeight(0).Background(p.side).Border(1, p.line).BorderWidth(0, 1, 0, 0).Children(func() {
 		ui.Row(c).Height(34).Shrink(0).Padding(0, 8).Gap(2).AlignItems(ui.Center).Children(func() {
 			label(c, "资料", 13, p.text).FontWeight(600)
-			if selectedCount := len(s.materialsFileSelection(state)); selectedCount > 0 {
+			if selectedCount := len(selection); selectedCount > 0 {
 				label(c, fmt.Sprintf("已选 %d", selectedCount), 11, p.blue).SingleLine().Shrink(1).MinWidth(0)
 			} else {
-				label(c, fmt.Sprintf("(%d)", countDocuments(s.materialsUnit.state.documents)), 11, p.muted)
+				label(c, fmt.Sprintf("(%d)", projection.count()), 11, p.muted)
 			}
 			ui.Spacer(c)
 			sortLabel := map[string]string{"NAME": "按名称排序", "MODIFIED_DESC": "最近修改排序"}[order]
@@ -265,7 +266,8 @@ func (s *app) documentTree(c *ui.Context, p palette, width float32) {
 				}
 				m.Separator()
 				if m.Item("refresh", "刷新资料").Icon("refresh").Chosen() {
-					s.materialsUnit.state.documents, s.materialsUnit.state.documentsLoaded, s.materialsUnit.state.documentsRequested = nil, false, false
+					s.materialsUnit.replaceDocuments(nil)
+					s.materialsUnit.state.documentsLoaded, s.materialsUnit.state.documentsRequested = false, false
 					s.loadDocuments()
 				}
 				m.Separator()
@@ -279,18 +281,15 @@ func (s *app) documentTree(c *ui.Context, p palette, width float32) {
 				s.materialsUnit.state.documentsCollapsed = true
 			}
 		})
-		rows := s.materialsTreeRows(projection, order)
-		treeExpanded, selected := make(map[string]bool), make(map[string]bool)
-		for _, row := range rows {
-			if row.Directory {
-				treeExpanded[row.ID] = expanded[projection.relativePath(row.Path)]
-			}
+		opened := materialsFileEntryKey(projection.relativePath(s.materialsUnit.state.documentPath), false)
+		prepared := s.materialsUnit.state.documentsTree.prepare(projection.documentIndex(), order, s.materialsTreePermissions(), expanded, opened)
+		selected := make(map[string]bool, len(prepared.rows))
+		for _, row := range prepared.rows {
 			_, selected[row.ID] = state.selected[row.ID]
 		}
-		opened := materialsFileEntryKey(projection.relativePath(s.materialsUnit.state.documentPath), false)
 		FileTree(c, p, FileTreeProps{
 			Key: "materials-file-tree", Root: FileTreeRow{ID: "@root", Name: filepath.Base(state.root), Path: state.root, Directory: true},
-			Rows: rows, Expanded: treeExpanded, Selected: selected, Opened: opened, State: &state.tree,
+			Prepared: prepared, Selected: selected, State: &state.tree,
 			Scroll: s.readingScrollState("directory"), Empty: "此任务资料目录为空。", AcceptFiles: true,
 			SuppressTooltip: s.dialogOpen || s.overflowMenus != nil && s.overflowMenus.openKey != "",
 			OnInput:         func(input FileTreeInput) { s.materialsTreeInput(state, input) },

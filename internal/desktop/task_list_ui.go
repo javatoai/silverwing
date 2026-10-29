@@ -2,7 +2,6 @@ package desktop
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -12,16 +11,22 @@ func (s *app) taskIndex(c *ui.Context, p palette) {
 	archived := s.page == "archive"
 	state := s.taskIndexBrowsingFor(archived)
 	rows := s.taskIndexRows(archived)
-	state.visibleRows = append(state.visibleRows[:0], rows...)
+	state.visibleRows = rows
 	s.prepareTaskIndexHandles(state, archived)
 	ui.Column(c).Fill().MinWidth(0).Background(p.soft).Children(func() {
 		s.taskIndexToolbar(c, p, state)
 		ui.Divider(c)
-		ui.Scroll(c.Key("task-index-" + s.page)).TrackScroll(&state.scroll).Grow(1).MinHeight(0).Padding(8).Gap(4).Children(func() {
-			for _, index := range rows {
-				s.taskIndexTask(c, p, state, index)
+		if len(rows) > 0 {
+			catalog := s.taskUnit.taskCatalog()
+			state.list.Key = func(position int) any { return catalog.keys[rows[position]] }
+			if position, found := state.projection.keyPositions[state.revealTaskKey]; state.revealTaskKey != "" && found {
+				state.list.ScrollIntoView(position)
 			}
-			if len(rows) == 0 {
+			ui.List(c.Key("task-index-"+s.page), &state.list, len(rows)).TrackScroll(&state.scroll).Grow(1).MinHeight(0).Padding(8).Gap(4).Rows(func(row ui.ListRow) {
+				s.taskIndexTask(row.Context, p, state, rows[row.Index])
+			})
+		} else {
+			ui.Scroll(c.Key("task-index-empty-" + s.page)).Grow(1).MinHeight(0).Padding(8).Children(func() {
 				message := "还没有研发任务\n请在需求列表中创建任务。"
 				switch {
 				case strings.TrimSpace(state.search) != "":
@@ -32,8 +37,8 @@ func (s *app) taskIndex(c *ui.Context, p palette) {
 				ui.Column(c).FillWidth().Padding(24, 12).Gap(8).Center().Children(func() {
 					label(c, message, 12, p.muted).FillWidth().Wrap()
 				})
-			}
-		})
+			})
+		}
 		ui.Divider(c)
 		b := ui.ButtonBase(c.Key("archive-link")).Height(48).Row().Gap(6).Center().Label("查看归档")
 		b.Children(func() {
@@ -70,9 +75,7 @@ func (s *app) taskIndexToolbar(c *ui.Context, p palette, state *taskIndexBrowsin
 				if len(state.visibleRows) > 0 {
 					index := state.visibleRows[0]
 					s.openTaskIndex(index)
-					if handle := state.rowHandles[taskNavigationKey(s.taskUnit.state.tasks[index])]; handle != nil {
-						handle.Focus(c)
-					}
+					s.focusTaskIndexRow(c, state, 0)
 				}
 			})
 			if state.search != "" {
@@ -101,19 +104,18 @@ func (s *app) clearTaskIndexSearch(c *ui.Context, state *taskIndexBrowsingState)
 }
 
 func (s *app) prepareTaskIndexHandles(state *taskIndexBrowsingState, archived bool) {
+	catalog := s.taskUnit.taskCatalog()
 	if state.rowHandles == nil {
 		state.rowHandles = make(map[string]*ui.Handle)
 	}
+	if state.handlesValid && state.handlesRevision == s.taskUnit.state.tasksRevision {
+		return
+	}
+	state.handlesValid, state.handlesRevision = true, s.taskUnit.state.tasksRevision
 	valid := make(map[string]bool)
-	for _, t := range s.taskUnit.state.tasks {
-		if t.archived != archived {
-			continue
-		}
-		key := taskNavigationKey(t)
+	for _, index := range s.taskUnit.activeTasks(archived) {
+		key := catalog.keys[index]
 		valid[key] = true
-		if state.rowHandles[key] == nil {
-			state.rowHandles[key] = &ui.Handle{}
-		}
 	}
 	for key, handle := range state.rowHandles {
 		if !valid[key] {
@@ -121,23 +123,34 @@ func (s *app) prepareTaskIndexHandles(state *taskIndexBrowsingState, archived bo
 			delete(state.rowHandles, key)
 		}
 	}
+	if !valid[state.pendingFocusKey] {
+		state.pendingFocusKey = ""
+	}
+	if !valid[state.revealTaskKey] {
+		state.revealTaskKey = ""
+	}
 }
 
 func (s *app) focusTaskIndexRow(c *ui.Context, state *taskIndexBrowsingState, position int) {
 	if position < 0 || position >= len(state.visibleRows) {
 		return
 	}
-	key := taskNavigationKey(s.taskUnit.state.tasks[state.visibleRows[position]])
-	if handle := state.rowHandles[key]; handle != nil {
-		handle.Focus(c)
-		state.revealTaskKey = key
+	key := s.taskUnit.taskCatalog().keys[state.visibleRows[position]]
+	if state.rowHandles[key] == nil {
+		state.rowHandles[key] = &ui.Handle{}
 	}
+	state.rowHandles[key].Focus(c)
+	state.revealTaskKey, state.pendingFocusKey = key, key
+	state.list.ScrollIntoView(position)
 	s.markReadingInteraction()
 }
 
 func (s *app) taskIndexTask(c *ui.Context, p palette, state *taskIndexBrowsingState, i int) {
 	t := s.taskUnit.state.tasks[i]
-	key := taskNavigationKey(t)
+	key := s.taskUnit.taskCatalog().keys[i]
+	if state.rowHandles[key] == nil {
+		state.rowHandles[key] = &ui.Handle{}
+	}
 	selected := s.taskUnit.state.selected == i
 	row := ui.Row(c.Key("task-row-" + key)).FillWidth().MinWidth(0).Height(40).Radius(8).AlignItems(ui.Center)
 	if selected {
@@ -149,9 +162,9 @@ func (s *app) taskIndexTask(c *ui.Context, p palette, state *taskIndexBrowsingSt
 		if selected {
 			ui.Box(c).Width(1).FillHeight().Background(p.blue)
 		}
-		button := ui.ButtonBase(c.Key("task-"+t.id)).Bind(state.rowHandles[key]).Grow(1).MinWidth(0).
+		button := ui.ButtonBase(c.Key("task-"+key)).Bind(state.rowHandles[key]).Grow(1).MinWidth(0).
 			FillHeight().Padding(5, 8).Radius(7).Label(t.title).Tooltip(t.title)
-		pinned := s.taskIsPinned(t)
+		pinned := s.taskNavigationFor().pinned[key]
 		if pinned {
 			button.Description("已置顶")
 		}
@@ -173,17 +186,21 @@ func (s *app) taskIndexTask(c *ui.Context, p palette, state *taskIndexBrowsingSt
 			button.ScrollIntoView()
 			state.revealTaskKey = ""
 		}
+		if state.pendingFocusKey == key {
+			button.Focus()
+			state.pendingFocusKey = ""
+		}
 		// Direction keys move focus only; Enter/Space use the button's normal
 		// activation without changing the list's stable pin-first order.
 		button.OnShortcut(0, ui.KeyUp, func() {
-			position := slices.Index(state.visibleRows, i)
+			position := state.projection.positions[i]
 			if position == 0 {
 				state.searchInput.Focus(c)
 			} else {
 				s.focusTaskIndexRow(c, state, position-1)
 			}
 		})
-		button.OnShortcut(0, ui.KeyDown, func() { s.focusTaskIndexRow(c, state, slices.Index(state.visibleRows, i)+1) })
+		button.OnShortcut(0, ui.KeyDown, func() { s.focusTaskIndexRow(c, state, state.projection.positions[i]+1) })
 		button.OnShortcut(0, ui.KeyHome, func() { s.focusTaskIndexRow(c, state, 0) })
 		button.OnShortcut(0, ui.KeyEnd, func() { s.focusTaskIndexRow(c, state, len(state.visibleRows)-1) })
 		button.OnShortcut(0, ui.KeyEscape, func() { state.searchInput.Focus(c) })

@@ -5,10 +5,18 @@ import (
 )
 
 func (s *taskController) taskByID(id string) task {
-	for _, item := range s.state.tasks {
-		if item.id == id {
-			return item
-		}
+	index, found := s.taskCatalog().byID[id]
+	if !found {
+		return task{}
+	}
+	if index < 0 || index >= len(s.state.tasks) || s.state.tasks[index].id != id {
+		// A legacy same-length reorder can preserve the structure stamp. Never
+		// return its former candidate as another task; refresh dependent rows too.
+		s.invalidateTaskIndex()
+		index, found = s.taskCatalog().byID[id]
+	}
+	if found {
+		return s.state.tasks[index]
 	}
 	return task{}
 }

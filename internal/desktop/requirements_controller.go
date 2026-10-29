@@ -14,6 +14,7 @@ type requirementState struct {
 	requirementReaders                map[string]*requirementReaderState
 	requirementReaderGeneration       uint64
 	requirementContentJobs            *requirementContentJobState
+	commentImageBatches               *requirementCommentImageBatches
 	requirementRefreshJobs            *requirementRefreshState
 	requirementListJobs               *requirementListJobState
 	requirementListProgress           *requirementListProgressState
@@ -56,6 +57,7 @@ func (s *requirementController) drainFeature(ports requirementShutdownPorts) err
 		featureCleanupStep{"退出前需求全文缓存清理未完成", 30 * time.Second, ports.closeDocuments},
 		featureCleanupStep{"退出前单项需求刷新清理未完成", 10 * time.Second, ports.closeRefresh},
 		featureCleanupStep{"退出前需求读取清理未完成", 10 * time.Second, s.closeRequirementContentJobs},
+		featureCleanupStep{"退出前需求图片清理未完成", 10 * time.Second, s.closeRequirementCommentImageBatches},
 	)
 	s.cancelTaskRequirementReads()
 	s.closeRequirementReaders()

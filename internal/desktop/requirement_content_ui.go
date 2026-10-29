@@ -35,6 +35,7 @@ type requirementReaderState struct {
 	commentResourceLoading string
 	commentResourceErrors  map[string]string
 	commentResourceRetries map[string]bool
+	commentImageBatch      *requirementCommentImageBatch
 	refreshAssetIndex      bool
 	bodyScroll             ui.ScrollState
 	commentsScroll         ui.ScrollState
@@ -91,6 +92,7 @@ func (s *requirementController) closeRequirementReaders() {
 		state.entered = nil
 	}
 	for _, reader := range s.state.requirementReaders {
+		s.retireRequirementCommentImages(reader)
 		closeMarkdownPreviewState(reader.bodyMarkdown)
 		closeMarkdownPreviewState(reader.commentsMarkdown)
 		closeRequirementCommentMarkdownStates(reader)
@@ -354,6 +356,9 @@ func (s *app) updateRequirementReaderComments(reader *requirementReaderState, co
 			delete(reader.commentMarkdown, key)
 		}
 	}
+	if len(comments.CommentResources) > 0 {
+		s.ensureRequirementCommentImageBatch(reader)
+	}
 }
 
 func closeRequirementCommentMarkdownStates(reader *requirementReaderState) {
@@ -412,7 +417,7 @@ func (s *app) applyRequirementContentFailure(action application.Action, err erro
 					reader.commentResourceErrors = make(map[string]string)
 				}
 				reader.commentResourceErrors[commentActionResourceKey(action)] = err.Error()
-				reader.commentResourceLoading = ""
+				finishRequirementCommentImage(reader, commentActionResourceKey(action))
 			} else {
 				reader.resourceErrors[payloadString(action.Payload, "fileUrl")] = err.Error()
 				reader.resourceLoading = ""
@@ -464,6 +469,7 @@ func (s *app) renderRequirementContent(c *ui.Context, p palette, taskID, link st
 	state := s.ensureRequirementContentJobs()
 	state.visible = requirementReaderKey(taskID, reader.url)
 	if state.entered != reader {
+		s.retireRequirementCommentImages(state.entered)
 		state.entered = reader
 	}
 	if reader.body == nil && !reader.bodyLoading && reader.bodyError == "" && !s.requirementRefreshing(link) {

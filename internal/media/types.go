@@ -17,7 +17,8 @@ var (
 	ErrUnsupportedType = errors.New("该文件类型不支持预览")
 )
 
-// Options bounds input, decoded pixels, PDF page count, and cached PNG data.
+// Options bounds input, decoded pixels, PDF page count, and cached image data.
+// CacheBytes is shared equally by PNG bytes and independently owned RGBA pixels.
 // Zero fields select the documented defaults. PDFiumPath overrides runtime
 // discovery for the native PDFium library.
 type Options struct {

@@ -94,6 +94,16 @@ Markdown 使用 MyGO `markdown.View` 与 `DefaultCodeBlock` 只读阅读，原�
 
 当前共享生命周期已接入三版 `desktop/tool_jobs.go` 与 `desktop/cli_jobs.go`：Begin / Complete 取代通用运行登记，Close + Wait 管理退出登记边界与后台清理。工具端口终止保持隐藏、关闭时不取消；CLI 仍先执行后端原子取消变更，再取消并等待轮询。当前请求、token、home/path/账号身份及授权变更的退出约束保留在桌面适配器，资料屏障与保存租约保留原生命周期。
 
+## 性能单元与失效边界
+
+展示缓存由功能 owner 持有，按明确发布版本失效，不参与执行授权。JSON 共享原文坐标索引、投影与搜索结果；资料目录共享不可变 catalog、排序与路径索引；任务列表通过数据版本复用过滤投影，并只构建可见行。相同 slice 内容改变后仍需重新发布，任务搜索的项目组标签通过独立版本发布，异步需求元数据通过 setter 发布独立值。
+
+`SnapshotFor` 只读取页面需要的任务和 Skills 集合，原 `Snapshot` 保留完整读取。设置页只在 home/config 相同的情况下合并最新 UI 集合；配置变化时回退完整读取。任务定点读取继续在磁盘上验证目录、清单、schema 与创建身份，展示缓存不替代这些检查。
+
+外部读取复用显式操作的短生命周期会话：Codex 一次操作共用一个 app-server；需求图片批次共享有界字节缓存，但每条评论保留各自的权属、后置身份核验与 sidecar。没有跨账号的 URL 全局缓存或隐式写入重放。
+
+PDF 按页让出全文索引执行权，渲染队列只保留当前页面需求；图片通过有界加载池共享不可变结果。进程内预览采用独立 RGBA，PNG API 保持可用。Markdown 预览作业登记到现有 `asyncjob.Group`，关闭先取消再等待实际清理；每个 app 的 Mermaid 初始化 owner 在这些作业之后关闭。媒体预算与不可中断的 native 阶段见 [NATIVE-MEDIA.md](NATIVE-MEDIA.md)。
+
 ## 产品身份与数据隔离
 
 `internal/productprofile/current.go` 只保存本分支的字面量身份，`profile.go` 提供默认目录、edition 检查和发布渠道函数。`buildinfo.ProductName` 保留兼容 alias。配置或数据迁移不由 profile 自动执行。

@@ -11,13 +11,11 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"silverwing-go/internal/media"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/egoist/mygo/ui/markdown/parser"
 )
 
 func TestMarkdownImageClickSelectsOriginalOnlyForComments(t *testing.T) {
@@ -28,26 +26,13 @@ func TestMarkdownImageClickSelectsOriginalOnlyForComments(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "中文 原图.png")
 			owner := newReadonlyMarkdownState("synthetic-comment", source, map[string]string{target: path})
 			owner.commentReading = comment
-			t.Cleanup(func() { closeMarkdownPreviewState(owner) })
-			bitmap := ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 240, 100)))
-			native := ensureFrameworkMarkdown(owner)
-			for index := 1; index < native.document.Len(); index++ {
-				for _, node := range native.document.Inlines(index) {
-					if node.Kind != parser.Image {
-						continue
-					}
-					part := native.partAt(owner, node.Start)
-					start, end := native.projection.OriginalOffset(node.Start), native.projection.OriginalOffset(node.End)
-					key := fmt.Sprintf("%d:%d:%d", part.ID, start, end)
-					owner.inlineImages[key] = &markdownInlineImageState{
-						key: strings.Join([]string{owner.taskID, owner.path, target, path}, "\x00"), bitmap: bitmap,
-					}
-					if comment {
-						owner.inlineImages[key].sourcePath = path
-					}
-				}
-			}
 			state := &app{page: "tasks", tab: 2}
+			t.Cleanup(func() {
+				closeMarkdownPreviewState(owner)
+				drainMarkdownPreviewTestJobs(t, state)
+			})
+			bitmap := ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 240, 100)))
+			seedMarkdownReadyImages(t, state, owner, bitmap)
 			tester := ui.NewTester(func(context *ui.Context) {
 				theme := setTheme(context, false)
 				state.renderMarkdownPreview(context, theme, owner)

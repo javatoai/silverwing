@@ -1,42 +1,24 @@
 package desktop
 
-import "github.com/egoist/mygo/ui"
+import "sort"
 
-type jsonEditorGutterCache struct {
-	source, view string
-	lines        []int
-}
-
-func jsonEditorGutterLines(field ui.Element, state *toolPageState) []int {
-	cache := ui.Local(field, "json-original-line-numbers", func() jsonEditorGutterCache { return jsonEditorGutterCache{} })
-	if cache.lines == nil || cache.source != state.jsonSource || cache.view != state.jsonEditor.projection.text {
-		cache.source, cache.view = state.jsonSource, state.jsonEditor.projection.text
-		cache.lines = jsonEditorSourceLineNumbers(state.jsonSource, state.jsonEditor.projection)
+func jsonEditorGutterLines(state *toolPageState) []int {
+	e := &state.jsonEditor
+	if e.gutterLines == nil || e.gutterLinesProjection != e.projectionRevision {
+		e.gutterLines = indexedJSONSourceLineNumbers(e.sourceIndex, e.projection)
+		e.gutterLinesProjection = e.projectionRevision
 	}
-	return cache.lines
+	return e.gutterLines
 }
 
 func jsonEditorSourceLineNumbers(source string, projection jsonTextProjection) []int {
-	sourceRunes, viewRunes := []rune(source), []rune(projection.text)
-	cursor, line := 0, 1
-	lineAt := func(offset int) int {
-		for cursor < offset && cursor < len(sourceRunes) {
-			if sourceRunes[cursor] == '\r' || sourceRunes[cursor] == '\n' && (cursor == 0 || sourceRunes[cursor-1] != '\r') {
-				line++
-			}
-			cursor++
-		}
-		return line
-	}
-	lines := []int{lineAt(originalOffset(projection, 0))}
-	for i := 0; i < len(viewRunes); i++ {
-		if viewRunes[i] != '\r' && viewRunes[i] != '\n' {
-			continue
-		}
-		if viewRunes[i] == '\r' && i+1 < len(viewRunes) && viewRunes[i+1] == '\n' {
-			i++
-		}
-		lines = append(lines, lineAt(originalOffset(projection, i+1)))
+	return indexedJSONSourceLineNumbers(newJSONTextIndex(source), projection)
+}
+
+func indexedJSONSourceLineNumbers(source *jsonTextIndex, projection jsonTextProjection) []int {
+	lines := make([]int, len(projection.index.lineStarts))
+	for i, start := range projection.index.lineStarts {
+		lines[i] = source.lineAtRune(originalOffset(projection, int(start))) + 1
 	}
 	return lines
 }
@@ -49,10 +31,11 @@ func jsonEditorProjectedFindIndex(state *toolPageState, matches []jsonEditorMatc
 	}
 	match := matches[bounded(state.jsonEditor.findIndex, 0, len(matches)-1)]
 	start := projectedOffset(state.jsonEditor.projection, match.start)
-	for i, visible := range jsonEditorMatches(state.jsonEditor.projection.text, state.jsonEditor.findQuery) {
-		if visible.start == start {
-			return i
-		}
+	e := &state.jsonEditor
+	e.projectedMatches.update(e.projection, e.projectionRevision, e.findQuery)
+	i := sort.Search(len(e.projectedMatches.matches), func(i int) bool { return e.projectedMatches.matches[i].start >= start })
+	if i < len(e.projectedMatches.matches) && e.projectedMatches.matches[i].start == start {
+		return i
 	}
 	return -1
 }

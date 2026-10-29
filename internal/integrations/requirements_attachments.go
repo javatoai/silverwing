@@ -9,36 +9,62 @@ import (
 )
 
 func (s *Service) readRequirementCommentAttachment(ctx context.Context, config domain.AppConfig, item domain.ParticipatedWorkItem,
-	key, identity, commentID, generation, fileURL string, retry bool) (any, error) {
-	resource, err := s.cachedCommentImageResource(key, commentID, generation, fileURL)
+	key string, session requirementIdentitySession, commentID, generation, fileURL string, retry bool) (any, error) {
+	resource, catalog, err := s.cachedCommentImageSnapshot(key, commentID, generation, fileURL)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.verifyRequirementIdentity(ctx, config, identity); err != nil {
+	if err := s.verifyRequirementIdentitySession(ctx, config, session.raw, session.generation); err != nil {
 		return nil, err
 	}
 	if resource.Path != "" || resource.Error != "" && !retry {
 		return resource, nil
 	}
-	release, err := acquireRequirementDocumentPermit(ctx, s.requirementDocumentCoordinator().imageSlots)
-	if err != nil {
-		return nil, err
+	load := func(downloadContext context.Context) ([]byte, error) {
+		// The shared flight owns the permit through CLI cleanup. A cancelled
+		// subscriber cannot release a slot while its download is still running.
+		release, err := acquireRequirementDocumentPermit(downloadContext, s.requirementDocumentCoordinator().imageSlots)
+		if err != nil {
+			return nil, &requirementImageAdmissionError{err}
+		}
+		defer release()
+		if err := s.verifyRequirementIdentitySession(downloadContext, config, session.raw, session.generation); err != nil {
+			return nil, &requirementImageAdmissionError{err}
+		}
+		// The permit wait may outlive a refresh. The initiating comment and
+		// catalog must still authorize the URL handed to the downloader.
+		_, currentCatalog, err := s.cachedCommentImageSnapshot(key, commentID, generation, fileURL)
+		if err != nil {
+			return nil, &requirementImageAdmissionError{err}
+		}
+		if currentCatalog != catalog {
+			return nil, &requirementImageAdmissionError{errRequirementReadSuperseded}
+		}
+		return s.downloadMeegleAttachment(downloadContext, config, item, fileURL)
 	}
-	defer release()
-	// The slot wait may outlive a comment refresh. Re-read the authoritative
-	// snapshot before handing its URL to the authenticated downloader.
-	if _, err := s.cachedCommentImageResource(key, commentID, generation, fileURL); err != nil {
-		return nil, err
+	var image []byte
+	if operation := requirementImageReadOperation(ctx); operation != nil {
+		byteKey := requirementImageByteKey{service: s, home: s.paths.Home, accountContext: session.context,
+			account: session.raw, epoch: session.generation, catalog: catalog, item: key, url: fileURL}
+		image, err = operation.read(ctx, byteKey, load)
+	} else {
+		image, err = load(ctx)
 	}
-	image, err := s.downloadMeegleAttachment(ctx, config, item, fileURL)
+	var admission *requirementImageAdmissionError
+	if errors.As(err, &admission) {
+		return nil, admission.cause
+	}
 	if process.IsCleanupFailure(err) {
 		return nil, err
 	}
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	if verifyErr := s.verifyRequirementIdentity(ctx, config, identity); verifyErr != nil {
+	if verifyErr := s.verifyRequirementIdentity(ctx, config, session.raw); verifyErr != nil {
 		return nil, verifyErr
+	}
+	if err := s.verifyRequirementIdentitySession(ctx, config, session.raw, session.generation); err != nil {
+		return nil, err
 	}
 	if err == nil {
 		err = requirementCacheImageBytes(image)
@@ -51,7 +77,7 @@ func (s *Service) readRequirementCommentAttachment(ctx context.Context, config d
 }
 
 func (s *Service) readRequirementAttachment(ctx context.Context, config domain.AppConfig, item domain.ParticipatedWorkItem,
-	key, identity, generation, fileURL string, retry, specialAttachment bool) (any, error) {
+	key string, session requirementIdentitySession, generation, fileURL string, retry, specialAttachment bool) (any, error) {
 	document, err := s.readRequirementDocument(key)
 	if err != nil || document == nil {
 		if err == nil {
@@ -69,7 +95,7 @@ func (s *Service) readRequirementAttachment(ctx context.Context, config domain.A
 			entry := document.Index.Images[fileURL]
 			refreshed := entry.Generation == generation && entry.Error == ""
 			if resource.Path != "" && (!retry || refreshed) {
-				if err := s.verifyRequirementIdentity(ctx, config, identity); err != nil {
+				if err := s.verifyRequirementIdentitySession(ctx, config, session.raw, session.generation); err != nil {
 					return nil, err
 				}
 				return RequirementResource{URL: fileURL, Path: resource.Path}, nil
@@ -79,7 +105,7 @@ func (s *Service) readRequirementAttachment(ctx context.Context, config domain.A
 	if !resourceKnown {
 		return nil, errors.New("图片不属于当前需求正文")
 	}
-	if err := s.verifyRequirementIdentity(ctx, config, identity); err != nil {
+	if err := s.verifyRequirementIdentitySession(ctx, config, session.raw, session.generation); err != nil {
 		return nil, err
 	}
 	release, err := acquireRequirementDocumentPermit(ctx, s.requirementDocumentCoordinator().imageSlots)
@@ -87,6 +113,13 @@ func (s *Service) readRequirementAttachment(ctx context.Context, config domain.A
 		return nil, err
 	}
 	defer release()
+	if err := s.verifyRequirementIdentitySession(ctx, config, session.raw, session.generation); err != nil {
+		return nil, err
+	}
+	current, err := s.readRequirementDocument(key)
+	if err != nil || current == nil || current.Index.Generation != generation {
+		return nil, errors.New("需求正文已刷新，请重新读取图片")
+	}
 	var image []byte
 	if specialAttachment {
 		image, err = s.downloadMeegleAttachment(ctx, config, item, fileURL)
@@ -100,8 +133,11 @@ func (s *Service) readRequirementAttachment(ctx context.Context, config domain.A
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	if verifyErr := s.verifyRequirementIdentity(ctx, config, identity); verifyErr != nil {
+	if verifyErr := s.verifyRequirementIdentity(ctx, config, session.raw); verifyErr != nil {
 		return nil, verifyErr
+	}
+	if err := s.verifyRequirementIdentitySession(ctx, config, session.raw, session.generation); err != nil {
+		return nil, err
 	}
 	if err != nil {
 		message := redactAttachmentURL(err, fileURL).Error()

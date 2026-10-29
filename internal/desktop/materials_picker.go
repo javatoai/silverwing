@@ -171,18 +171,23 @@ func (s *app) queueMaterialsSearch() {
 }
 
 func (s *app) runMaterialsSearch(ctx context.Context, state *materialsPickerState, generation uint64, taskID, query string) {
-	ctx = documents.WithMaterialsSearchProgress(ctx, func(progress documents.MaterialsSearchProgress) {
+	identity := materialsSearchDeliveryIdentity{state: state, generation: generation, taskID: taskID}
+	currentSearch := func() bool {
+		return identity.current(ctx, s.materialsUnit.state.materialsPicker, s.taskUnit.currentTask().id, s.win == nil || s.win.IsDestroyed())
+	}
+	delivery := newMaterialsSearchProgressDelivery(ctx, func(callback func()) bool {
 		win := s.win
 		if win == nil || win.IsDestroyed() {
-			return
+			return false
 		}
-		win.Update(func() {
-			if s.materialsUnit.state.materialsPicker != state || state.searchGeneration != generation || !state.searchOpen || s.taskUnit.currentTask().id != taskID {
-				return
-			}
+		win.Update(callback)
+		return true
+	}, func(progress documents.MaterialsSearchProgress) {
+		if currentSearch() {
 			state.searchProgress = progress
-		})
+		}
 	})
+	ctx = documents.WithMaterialsSearchProgress(ctx, delivery.progress)
 	var result application.ActionResult
 	err := s.acquireBackend(ctx)
 	if err == nil {
@@ -196,20 +201,13 @@ func (s *app) runMaterialsSearch(ctx context.Context, state *materialsPickerStat
 		}
 		s.releaseBackend()
 	}
-	win := s.win
-	if win == nil || win.IsDestroyed() {
-		return
-	}
-	win.Update(func() {
-		if s.materialsUnit.state.materialsPicker != state || state.searchGeneration != generation || !state.searchOpen || s.taskUnit.currentTask().id != taskID {
+	delivery.finish(func(progress documents.MaterialsSearchProgress) {
+		if !currentSearch() {
 			return
 		}
+		state.searchProgress = progress
 		state.searchCancel = nil
 		state.searchLoading = false
-		if ctx.Err() != nil {
-			state.searchStopped = true
-			return
-		}
 		if err != nil {
 			state.searchError = err.Error()
 			return
@@ -225,6 +223,7 @@ func (s *app) runMaterialsSearch(ctx context.Context, state *materialsPickerStat
 			return
 		}
 		state.searchResult = &searchResult
+		state.searchProgress = documents.MaterialsSearchProgress{CompletedFiles: searchResult.SearchedFiles + searchResult.SkippedFiles, TotalFiles: searchResult.TotalFiles}
 		state.searchSelected = 0
 	})
 }

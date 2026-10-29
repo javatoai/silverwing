@@ -35,7 +35,7 @@ func (s *app) requestCodexAISnapshot() {
 	state.snapshotError = ""
 	s.startCodexAIRequest("snapshot", application.Action{
 		Kind: "codex.ai/snapshot", TaskID: state.identity.taskID,
-		Payload: map[string]any{"cwd": state.identity.cwd, "includeSkills": state.identity.cwd != ""},
+		Payload: map[string]any{"cwd": state.identity.cwd, "includeSkills": state.identity.cwd != "" && state.tab == codexAITabSkills},
 	})
 }
 
@@ -411,6 +411,7 @@ func (s *app) finishCodexAIRequest(request *codexAIRequest, result application.A
 		}
 		state.snapshot = &snapshot
 		state.snapshotLoading, state.snapshotLoaded, state.snapshotError = false, true, ""
+		state.skillsLoaded = codexAIPayloadBool(request.action.Payload, "includeSkills")
 		state.snapshotRevision++
 		if previousFile != "" {
 			if !codexAIFileAllowed(state.snapshot, previousFile) {

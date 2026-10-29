@@ -67,6 +67,17 @@ func New(home string) (*App, error) {
 }
 
 func (a *App) Snapshot(ctx context.Context) (Snapshot, error) {
+	return a.SnapshotFor(ctx, SnapshotRequest{Tasks: true, Skills: true})
+}
+
+// SnapshotRequest makes each navigation read explicit. A partial snapshot is
+// a projection only; callers merge its selected collections and retain the
+// others. It never authorizes an operation or caches external state.
+type SnapshotRequest struct {
+	Tasks, Skills bool
+}
+
+func (a *App) SnapshotFor(ctx context.Context, request SnapshotRequest) (Snapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return Snapshot{}, err
 	}
@@ -106,28 +117,30 @@ func (a *App) Snapshot(ctx context.Context) (Snapshot, error) {
 		appendSnapshotError(&s, a.startupTaskRootError.Error())
 	}
 	a.appendStartupMigrationDiagnostics(&s)
-	data, platformErr := a.Platform.Execute(ctx, "skills.catalog", nil)
-	if cancelled := ctx.Err(); cancelled != nil {
-		return Snapshot{}, cancelled
-	}
-	if platformErr == nil {
-		var e error
-		s.Skills, e = localSkillRows(data)
-		if e != nil {
-			appendSnapshotError(&s, e.Error())
+	if request.Skills {
+		data, platformErr := a.Platform.Execute(ctx, "skills.catalog", nil)
+		if cancelled := ctx.Err(); cancelled != nil {
+			return Snapshot{}, cancelled
 		}
-	} else {
-		if errors.Is(platformErr, context.Canceled) || errors.Is(platformErr, context.DeadlineExceeded) {
-			return Snapshot{}, platformErr
+		if platformErr == nil {
+			var e error
+			s.Skills, e = localSkillRows(data)
+			if e != nil {
+				appendSnapshotError(&s, e.Error())
+			}
+		} else {
+			if errors.Is(platformErr, context.Canceled) || errors.Is(platformErr, context.DeadlineExceeded) {
+				return Snapshot{}, platformErr
+			}
+			appendSnapshotError(&s, platformErr.Error())
 		}
-		appendSnapshotError(&s, platformErr.Error())
 	}
 	names := map[string]string{}
 	for _, g := range config.Groups {
 		names[g.ID] = g.Name
 		s.Groups = append(s.Groups, Group{ID: g.ID, Name: g.Name})
 	}
-	if config.TaskRoot != nil {
+	if request.Tasks && config.TaskRoot != nil {
 		scan, e := a.Manifests.Scan(*config.TaskRoot)
 		if e != nil {
 			appendSnapshotError(&s, e.Error())
@@ -225,19 +238,14 @@ func (a *App) taskInConfig(action Action, config domain.AppConfig) (domain.TaskM
 	if config.TaskRoot == nil {
 		return domain.TaskManifest{}, "", errors.New("任务根目录未配置")
 	}
-	entries, err := a.Manifests.List(*config.TaskRoot)
+	entry, err := a.Manifests.LoadTask(*config.TaskRoot, action.TaskID)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return domain.TaskManifest{}, "", fmt.Errorf("未找到任务：%s", action.TaskID)
+		}
 		return domain.TaskManifest{}, "", err
 	}
-	for _, entry := range entries {
-		if action.TaskID == filepath.Base(entry.Path) {
-			if entry.Manifest.TaskDirectoryName != action.TaskID {
-				return domain.TaskManifest{}, "", errors.New("任务清单的目录标识与实际路径不一致，请修复后重试")
-			}
-			return entry.Manifest, entry.Path, nil
-		}
-	}
-	return domain.TaskManifest{}, "", fmt.Errorf("未找到任务：%s", action.TaskID)
+	return entry.Manifest, entry.Path, nil
 }
 func (a *App) materialRoot(action Action) (string, error) {
 	manifest, _, err := a.task(action)

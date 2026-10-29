@@ -135,33 +135,45 @@ func (s *Service) requirementCommentsResult(key string, result RequirementCommen
 }
 
 func (s *Service) validateCommentImageResource(key, commentID, generation, imageURL string) (RequirementCommentResource, error) {
+	resource, _, err := s.validateCommentImageSnapshot(key, commentID, generation, imageURL)
+	return resource, err
+}
+
+func (s *Service) validateCommentImageSnapshot(key, commentID, generation, imageURL string) (RequirementCommentResource, string, error) {
 	saved, _, err := s.readRequirementCommentsCacheUnlocked(key)
 	if err != nil {
-		return RequirementCommentResource{}, err
+		return RequirementCommentResource{}, "", err
 	}
 	if saved == nil {
-		return RequirementCommentResource{}, errors.New("当前需求评论尚未持久缓存")
+		return RequirementCommentResource{}, "", errors.New("当前需求评论尚未持久缓存")
 	}
-	for _, resource := range commentImageResources(saved.Data.Comments) {
+	resources := commentImageResources(saved.Data.Comments)
+	for _, resource := range resources {
 		if resource.CommentID == commentID && resource.Generation == generation && resource.URL == imageURL {
-			return resource, nil
+			return resource, commentImageCatalogVersion(saved.FetchedAt, resources), nil
 		}
 	}
-	return RequirementCommentResource{}, errors.New("评论已刷新或图片不属于当前评论")
+	return RequirementCommentResource{}, "", errors.New("评论已刷新或图片不属于当前评论")
 }
 
 func (s *Service) cachedCommentImageResource(key, commentID, generation, imageURL string) (RequirementCommentResource, error) {
+	resource, _, err := s.cachedCommentImageSnapshot(key, commentID, generation, imageURL)
+	return resource, err
+}
+
+func (s *Service) cachedCommentImageSnapshot(key, commentID, generation, imageURL string) (RequirementCommentResource, string, error) {
 	requirementCacheMu.Lock()
 	defer requirementCacheMu.Unlock()
-	resource, err := s.validateCommentImageResource(key, commentID, generation, imageURL)
+	resource, version, err := s.validateCommentImageSnapshot(key, commentID, generation, imageURL)
 	if err != nil {
-		return resource, err
+		return resource, "", err
 	}
 	index, err := s.readRequirementCommentImageIndex(key)
 	if err != nil {
-		return resource, err
+		return resource, "", err
 	}
-	return s.resolveCommentImageResource(key, resource, index)
+	resource, err = s.resolveCommentImageResource(key, resource, index)
+	return resource, version, err
 }
 
 func (s *Service) saveCommentImageResource(ctx context.Context, key, commentID, generation, imageURL string, image []byte, message string) (RequirementCommentResource, error) {
@@ -184,7 +196,10 @@ func (s *Service) saveCommentImageResource(ctx context.Context, key, commentID, 
 			return resource, err
 		}
 		extension, _ := requirementImageExtension(image)
-		relative := "assets/" + requirementCacheDigest(string(image)) + "-" + requirementCacheDigest(commentID + "\x00" + imageURL)[:12] + "." + extension
+		// The sidecar retains independent comment ownership while identical
+		// immutable bytes occupy a single asset in this account/item directory.
+		// Older sidecar paths remain readable without migration.
+		relative := "assets/" + requirementCacheDigest(string(image)) + "." + extension
 		path := filepath.Join(s.requirementCommentImageDirectory(key), filepath.FromSlash(relative))
 		if err := atomicRequirementWrite(s.paths.Cache, path, image); err != nil {
 			return resource, err

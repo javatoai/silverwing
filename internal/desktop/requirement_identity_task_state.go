@@ -9,6 +9,7 @@ import (
 // body/list views. Advance generations even for requests that have already
 // queued their completion and no longer have a visible loading entry.
 func (s *app) invalidateTaskRequirementIdentityMetadata() {
+	s.taskUnit.state.metadataDiscoveryValid = false
 	ids := make(map[string]struct{}, len(s.requirementUnit.state.taskRequirementMetadata)+len(s.requirementUnit.state.taskRequirementMetadataCancels))
 	for id := range s.requirementUnit.state.taskRequirementMetadata {
 		ids[id] = struct{}{}
@@ -29,7 +30,7 @@ func (s *app) invalidateTaskRequirementMetadataIdentity(taskID string) {
 		cancel()
 	}
 	delete(s.requirementUnit.state.taskRequirementMetadataCancels, taskID)
-	delete(s.requirementUnit.state.taskRequirementMetadata, taskID)
+	s.deleteTaskRequirementMetadata(taskID)
 	if s.requirementUnit.state.taskRequirementMetadataGeneration == nil {
 		s.requirementUnit.state.taskRequirementMetadataGeneration = make(map[string]uint64)
 	}
@@ -70,6 +71,7 @@ func (s *app) closeTaskRequirementIdentityReaders(taskID string) {
 		if reader.taskID != taskID {
 			continue
 		}
+		s.retireRequirementCommentImages(reader)
 		if state := s.requirementUnit.state.requirementContentJobs; state != nil {
 			for _, request := range state.requests {
 				if request.reader == reader {
@@ -78,6 +80,9 @@ func (s *app) closeTaskRequirementIdentityReaders(taskID string) {
 			}
 			if state.visible == key {
 				state.visible = ""
+			}
+			if state.entered == reader {
+				state.entered = nil
 			}
 		}
 		closeMarkdownPreviewState(reader.bodyMarkdown)

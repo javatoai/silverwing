@@ -102,7 +102,10 @@ func TestRequirementListProgressRealQueryStages(t *testing.T) {
 }
 
 const listProgressFixtureScript = `$ErrorActionPreference = 'Stop'
-[IO.File]::AppendAllText($env:SILVERWING_LIST_PROGRESS_CALLS, (($args -join ' ') + [Environment]::NewLine))
+for ($logAttempt = 0; ; $logAttempt++) {
+  try { [IO.File]::AppendAllText($env:SILVERWING_LIST_PROGRESS_CALLS, (($args -join ' ') + [Environment]::NewLine)); break }
+  catch [IO.IOException] { if ($logAttempt -ge 100) { throw }; Start-Sleep -Milliseconds 10 }
+}
 $mode = $env:SILVERWING_LIST_PROGRESS_MODE
 if ($args[0] -eq '--version') { 'fixture-1'; exit 0 }
 if ($args[0] -eq 'auth') { '{"authenticated":true}'; exit 0 }

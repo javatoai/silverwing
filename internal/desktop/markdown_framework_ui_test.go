@@ -15,7 +15,6 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
-	"github.com/egoist/mygo/ui/markdown/parser"
 )
 
 func saveFrameworkReadingFixture(t *testing.T, tester *ui.Tester, name string) {
@@ -98,8 +97,11 @@ func TestMyGOReadingImageTrustAndLightbox(t *testing.T) {
 	const target = "https://project.feishu.cn/goapi/v5/platform/file/stream/download/test-token"
 	const source = "文字 ![行内图](" + target + ") 后续 needle\n\n![独立图](" + target + ")"
 	state := newReadonlyMarkdownState("account-requirement-comment", source, nil)
-	t.Cleanup(func() { closeMarkdownPreviewState(state) })
 	s := &app{page: "tasks"}
+	t.Cleanup(func() {
+		closeMarkdownPreviewState(state)
+		drainMarkdownPreviewTestJobs(t, s)
+	})
 	tester := ui.NewTester(func(c *ui.Context) {
 		p := setTheme(c, false)
 		s.renderMarkdownPreview(c, p, state)
@@ -112,18 +114,7 @@ func TestMyGOReadingImageTrustAndLightbox(t *testing.T) {
 		t.Fatal("image placeholder text entered visible find")
 	}
 	bitmap := ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 240, 100)))
-	native := ensureFrameworkMarkdown(state)
-	for i := 1; i < native.document.Len(); i++ {
-		for _, node := range native.document.Inlines(i) {
-			if node.Kind != parser.Image {
-				continue
-			}
-			part := native.partAt(state, node.Start)
-			start, end := native.projection.OriginalOffset(node.Start), native.projection.OriginalOffset(node.End)
-			key := fmt.Sprintf("%d:%d:%d", part.ID, start, end)
-			state.inlineImages[key] = &markdownInlineImageState{key: strings.Join([]string{state.taskID, state.path, target, ""}, "\x00"), bitmap: bitmap}
-		}
-	}
+	seedMarkdownReadyImages(t, s, state, bitmap)
 	tester.Frame()
 	if err := tester.Click("Markdown 图片：独立图"); err != nil {
 		t.Fatal(err)

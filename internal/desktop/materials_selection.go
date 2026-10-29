@@ -2,6 +2,7 @@ package desktop
 
 import (
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -16,8 +17,12 @@ type materialsFileSelectionEntry struct {
 // materialsSelection owns document choice, independently from the active
 // reader, native focus, filesystem operations, and permission decisions.
 type materialsSelection struct {
-	selected map[string]materialsFileSelectionEntry
-	anchor   string
+	selected            map[string]materialsFileSelectionEntry
+	anchor              string
+	generation          uint64
+	operationGeneration uint64
+	operations          []materialsFileSelectionEntry
+	operationsValid     bool
 }
 
 func (s *materialsSelection) ensure() {
@@ -27,16 +32,25 @@ func (s *materialsSelection) ensure() {
 }
 
 func (s *materialsSelection) reset() {
-	s.selected = make(map[string]materialsFileSelectionEntry)
-	s.anchor = ""
+	s.replace(make(map[string]materialsFileSelectionEntry), "")
 }
 
 func (s *materialsSelection) selectOnly(entry materialsFileSelectionEntry) {
-	s.selected = map[string]materialsFileSelectionEntry{entry.Key: entry}
-	s.anchor = entry.Key
+	s.replace(map[string]materialsFileSelectionEntry{entry.Key: entry}, entry.Key)
+}
+
+func (s *materialsSelection) replace(selected map[string]materialsFileSelectionEntry, anchor string) {
+	s.selected, s.anchor = selected, anchor
+	s.changed()
+}
+
+func (s *materialsSelection) changed() {
+	s.generation++
+	s.operations, s.operationsValid = nil, false
 }
 
 func (s *materialsSelection) apply(entry materialsFileSelectionEntry, visible []materialsFileSelectionEntry, toggle, extend bool) {
+	defer s.changed()
 	s.ensure()
 	if extend && s.anchor != "" {
 		from, to := -1, -1
@@ -74,7 +88,16 @@ func (s *materialsSelection) apply(entry materialsFileSelectionEntry, visible []
 	}
 }
 
-func (s materialsSelection) operationEntries() []materialsFileSelectionEntry {
+func (s *materialsSelection) operationEntries() []materialsFileSelectionEntry {
+	if s.operationsValid && s.operationGeneration == s.generation {
+		return s.operations
+	}
+	s.operations = s.projectOperationEntries()
+	s.operationGeneration, s.operationsValid = s.generation, true
+	return s.operations
+}
+
+func (s materialsSelection) projectOperationEntries() []materialsFileSelectionEntry {
 	if len(s.selected) == 0 {
 		return nil
 	}
@@ -85,22 +108,27 @@ func (s materialsSelection) operationEntries() []materialsFileSelectionEntry {
 	sort.Slice(entries, func(i, j int) bool {
 		return strings.ToLower(entries[i].Relative) < strings.ToLower(entries[j].Relative)
 	})
-	selectedDirs := make([]string, 0, len(entries))
+	selectedDirs := make(map[string]string, len(entries))
 	for _, entry := range entries {
 		if entry.Directory {
-			selectedDirs = append(selectedDirs, filepath.Clean(entry.Path))
+			selectedDirs[materialsSelectionPathKey(entry.Path)] = filepath.Clean(entry.Path)
 		}
 	}
 	filtered := entries[:0]
 	for _, entry := range entries {
 		covered := false
-		for _, parent := range selectedDirs {
-			if normalizedReadingPath(parent) == normalizedReadingPath(entry.Path) {
-				continue
+		clean := filepath.Clean(entry.Path)
+		for ancestor := filepath.Dir(clean); ancestor != clean; ancestor = filepath.Dir(ancestor) {
+			if parent, selected := selectedDirs[materialsSelectionPathKey(ancestor)]; selected {
+				// One boundary check for a matching ancestor retains native Rel
+				// semantics (volumes, case and relative '..'), without S x D scans.
+				relative, err := filepath.Rel(parent, entry.Path)
+				if err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative) {
+					covered = true
+					break
+				}
 			}
-			relative, err := filepath.Rel(parent, entry.Path)
-			if err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative) {
-				covered = true
+			if ancestor == filepath.Dir(ancestor) {
 				break
 			}
 		}
@@ -109,6 +137,14 @@ func (s materialsSelection) operationEntries() []materialsFileSelectionEntry {
 		}
 	}
 	return filtered
+}
+
+func materialsSelectionPathKey(path string) string {
+	path = filepath.Clean(path)
+	if runtime.GOOS == "windows" {
+		path = strings.ToLower(path)
+	}
+	return path
 }
 
 // Copying paths keeps selected descendants and uses the entry key order. File
@@ -126,7 +162,7 @@ func (s materialsSelection) copyPaths() []string {
 	return paths
 }
 
-func (s materialsSelection) contextEntries(entry materialsFileSelectionEntry) []materialsFileSelectionEntry {
+func (s *materialsSelection) contextEntries(entry materialsFileSelectionEntry) []materialsFileSelectionEntry {
 	if _, selected := s.selected[entry.Key]; selected {
 		return s.operationEntries()
 	}
@@ -166,15 +202,22 @@ func (s materialsSelection) currentDirectory(projection materialsDocumentProject
 
 func (s *materialsSelection) reconcile(projection materialsDocumentProjection) map[string]materialsFileSelectionEntry {
 	available, anchorAvailable := projection.entryIndex(s.anchor)
+	changed := false
 	for key, entry := range s.selected {
 		if current, ok := available[normalizedReadingPath(entry.Path)]; !ok || current.Directory != entry.Directory {
 			delete(s.selected, key)
+			changed = true
 		} else {
+			changed = changed || s.selected[key] != current
 			s.selected[key] = current
 		}
 	}
 	if !anchorAvailable {
+		changed = changed || s.anchor != ""
 		s.anchor = ""
+	}
+	if changed {
+		s.changed()
 	}
 	return available
 }

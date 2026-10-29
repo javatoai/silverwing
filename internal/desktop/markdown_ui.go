@@ -4,13 +4,10 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"silverwing-go/internal/editor"
 
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -34,6 +31,9 @@ type markdownEditorState struct {
 	trustedImages          map[string]string
 	localPreviewFiles      localPreviewFileResolver
 	inlineImages           map[string]*markdownInlineImageState
+	imagePool              *nativeImagePool
+	imagePoolOwned         bool
+	imageScope             markdownImageScope
 	imageRenderSeen        map[string]bool
 	readonlyReader         *readonlyMarkdownReaderState
 	composingOwner         string
@@ -76,6 +76,7 @@ type markdownInlineImageState struct {
 	bitmap     *ui.Bitmap
 	error      string
 	loading    bool
+	waiting    bool
 	cancel     context.CancelFunc
 }
 
@@ -171,8 +172,7 @@ func (s *app) renderMarkdownPreview(c *ui.Context, p palette, state *markdownEdi
 		label(c, "Markdown 预览暂不可用。", 13, p.muted)
 		return
 	}
-	parts := state.doc.Parts()
-	if len(parts) == 0 {
+	if state.doc.PartCount() == 0 {
 		s.pruneMarkdownImagePreviews(state, nil)
 		label(c, "文档内容为空。", 13, p.muted)
 		return
@@ -1089,9 +1089,6 @@ func (s *app) renderMarkdownMermaid(c *ui.Context, p palette, state *markdownEdi
 }
 
 func (s *app) renderMermaidDiagram(state *markdownEditorState, partID uint64, source, key string, diagram *markdownDiagramState) {
-	if state.renderer == nil && state.rendererError == "" {
-		state.renderer, state.rendererError = loadMermaidRenderer()
-	}
 	if state.rendererError != "" {
 		diagram.key, diagram.source, diagram.error = key, source, state.rendererError
 		return
@@ -1099,13 +1096,52 @@ func (s *app) renderMermaidDiagram(state *markdownEditorState, partID uint64, so
 	if diagram.cancel != nil {
 		diagram.cancel()
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	lease, leaseErr := s.beginMarkdownPreviewJob()
+	if leaseErr != nil {
+		diagram.key, diagram.loading = key, false
+		return
+	}
+	ctx, cancel := context.WithCancel(lease.Context())
 	dark := s.dark
 	diagram.cancel, diagram.key, diagram.source, diagram.dark, diagram.loading = cancel, key, source, dark, true
 	diagram.error = ""
 	renderer := state.renderer
+	owner := s.mermaidInitializerFor()
 	win := s.win
+	post := func(apply func()) {
+		if win == nil || win.IsDestroyed() {
+			cancel()
+			lease.Cancel()
+			return
+		}
+		win.Update(func() {
+			defer cancel()
+			defer lease.Cancel()
+			if s.win != win || s.markdownPreviewJobsClosed() {
+				return
+			}
+			apply()
+		})
+	}
 	go func() {
+		defer lease.Complete(nil)
+		if renderer == nil {
+			var message string
+			renderer, message = owner.load(ctx)
+			if message != "" {
+				post(func() {
+					if markdownMermaidResultRelevant(state, s.materialsUnit.state.markdown, diagram, partID, key, ctx, s.materialsUnit.state.documentPath) {
+						diagram.loading, diagram.error = false, message
+					}
+				})
+				return
+			}
+		}
+		if ctx.Err() != nil {
+			cancel()
+			lease.Cancel()
+			return
+		}
 		result := renderer.RenderDebounced(ctx, source, dark)
 		var bitmap *ui.Bitmap
 		var err error
@@ -1114,10 +1150,7 @@ func (s *app) renderMermaidDiagram(state *markdownEditorState, partID uint64, so
 		} else if result.Error != "" {
 			err = fmt.Errorf("%s", result.Error)
 		}
-		if win == nil || win.IsDestroyed() {
-			return
-		}
-		win.Update(func() {
+		post(func() {
 			if !markdownMermaidResultRelevant(state, s.materialsUnit.state.markdown, diagram, partID, key, ctx, s.materialsUnit.state.documentPath) {
 				return
 			}
@@ -1147,32 +1180,6 @@ func markdownMermaidResultRelevant(state, currentState *markdownEditorState, dia
 		return false
 	}
 	return state.diagrams[partID] == diagram && diagram.key == key && ctx.Err() == nil
-}
-
-func loadMermaidRenderer() (*editor.MermaidRenderer, string) {
-	platform, err := editor.NativeMermaidPlatform()
-	if err != nil {
-		return nil, err.Error()
-	}
-	resources, err := mygo.App.Path(mygo.PathResources)
-	if err != nil {
-		return nil, err.Error()
-	}
-	path := filepath.Join(resources, "native-mermaid", platform.Key, platform.ExecutableName)
-	resource, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Sprintf("缺少离线 Mermaid 渲染器：%s", path)
-	}
-	defer resource.Close()
-	cache, err := mygo.App.Path(mygo.PathCache)
-	if err != nil {
-		return nil, err.Error()
-	}
-	executable, err := editor.InstallMermaidExecutable(resource, cache, platform)
-	if err != nil {
-		return nil, err.Error()
-	}
-	return editor.NewMermaidRenderer(executable, nil), ""
 }
 
 func minFloat32(a, b float32) float32 {

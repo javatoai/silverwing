@@ -15,34 +15,46 @@ import (
 )
 
 type jsonToolState struct {
-	viewSource        string
-	sourceSnapshot    string
-	projection        jsonTextProjection
-	folded            map[string]bool
-	finding           bool
-	findQuery         string
-	lastFindQuery     string
-	findIndex         int
-	findChanged       bool
-	lines             jsonNativeLines
-	scroll            ui.ScrollState
-	native            codeeditor.State
-	nativeSource      string
-	nativeVersion     uint64
-	nativeNodeMenu    *jsonNodeCopyRequest
-	foldCache         map[int]tools.JSONSourceNode
-	foldCacheSource   string
-	foldCacheView     string
-	foldCacheRevision uint64
-	foldCacheValid    bool
-	history           []jsonEditorSnapshot
-	historyIndex      int
-	historyReady      bool
-	lastSelection     jsonEditorSnapshot
-	pendingSelection  bool
-	pendingFocus      bool
-	selectionStart    int
-	selectionEnd      int
+	viewSource             string
+	sourceSnapshot         string
+	sourceIndex            *jsonTextIndex
+	projection             jsonTextProjection
+	projectionKey          jsonProjectionKey
+	projectionReady        bool
+	projectionRevision     uint64
+	folded                 map[string]bool
+	foldRevision           uint64
+	finding                bool
+	findQuery              string
+	lastFindQuery          string
+	findIndex              int
+	findChanged            bool
+	lines                  jsonNativeLines
+	scroll                 ui.ScrollState
+	native                 codeeditor.State
+	nativeSource           string
+	nativeVersion          uint64
+	nativeIndex            *jsonTextIndex
+	nativeIndexVersion     uint64
+	nativeNodeMenu         *jsonNodeCopyRequest
+	foldCache              map[int]tools.JSONSourceNode
+	foldCacheProjection    uint64
+	gutterLines            []int
+	gutterLinesProjection  uint64
+	sourceMatches          jsonMatchCache
+	projectedMatches       jsonProjectedMatchCache
+	findHighlightsReady    bool
+	findHighlightsRevision uint64
+	findHighlightsQuery    string
+	findHighlightsCurrent  int
+	history                []jsonEditorSnapshot
+	historyIndex           int
+	historyReady           bool
+	lastSelection          jsonEditorSnapshot
+	pendingSelection       bool
+	pendingFocus           bool
+	selectionStart         int
+	selectionEnd           int
 }
 
 // toolPageState keeps the developer tools independent from the legacy task
@@ -60,6 +72,7 @@ type toolPageState struct {
 	jsonErrorColumn        int
 	jsonEditor             jsonToolState
 	jsonRevision           uint64
+	jsonParseRevision      uint64
 	jsonValidationCancel   context.CancelFunc
 	jsonErrorLocatePending bool
 
@@ -155,6 +168,7 @@ func (s *app) queueJSONValidation() {
 	state.jsonRevision++
 	revision, source := state.jsonRevision, state.jsonSource
 	state.jsonDoc = tools.JSONDocument{}
+	state.jsonParseRevision++
 	state.jsonErrorLocatePending = false
 	state.jsonError = ""
 	state.jsonErrorLine, state.jsonErrorColumn = 0, 0
@@ -185,12 +199,14 @@ func (s *app) queueJSONValidation() {
 			}
 			if err != nil {
 				state.jsonDoc = tools.JSONDocument{}
+				state.jsonParseRevision++
 				state.jsonValid = false
 				state.jsonPending = false
 				state.setJSONError(err)
 				return
 			}
 			state.jsonDoc = doc
+			state.jsonParseRevision++
 			state.jsonValid = true
 			state.jsonPending = false
 			state.jsonError = ""
@@ -395,6 +411,7 @@ func (s *toolPageState) clearPortStopping(item tools.PortProcess, sequence uint6
 }
 
 func (s *toolPageState) validateJSON(source string) {
+	s.jsonParseRevision++
 	if strings.TrimSpace(source) == "" {
 		s.jsonDoc = tools.JSONDocument{}
 		s.jsonPending = false

@@ -14,12 +14,14 @@ import (
 type materialsDocumentProjection struct {
 	root      string
 	documents []application.Document
+	index     *materialsDocumentIndex
 }
 
 type materialsDocumentRow struct {
-	entry materialsFileSelectionEntry
-	name  string
-	depth int
+	entry       materialsFileSelectionEntry
+	name        string
+	depth       int
+	parent, end int
 }
 
 type quickPickerEntry struct {
@@ -55,10 +57,17 @@ func (p materialsDocumentProjection) entry(document application.Document) (mater
 }
 
 func (p materialsDocumentProjection) find(path string) (materialsFileSelectionEntry, bool) {
+	pathKey := normalizedReadingPath(path)
+	if p.index != nil {
+		match := p.index.paths[pathKey]
+		return match.entry, match.valid
+	}
+	// Standalone callers supply a live, arbitrary slice. Preserve its DFS first
+	// match without building unrelated tree, quick-picker or timestamp indexes.
 	var visit func([]application.Document) (materialsFileSelectionEntry, bool)
 	visit = func(items []application.Document) (materialsFileSelectionEntry, bool) {
 		for _, document := range items {
-			if normalizedReadingPath(document.Path) == normalizedReadingPath(path) {
+			if normalizedReadingPath(document.Path) == pathKey {
 				return p.entry(document)
 			}
 			if entry, ok := visit(document.Children); ok {
@@ -73,98 +82,32 @@ func (p materialsDocumentProjection) find(path string) (materialsFileSelectionEn
 // Catalog reconciliation visits children even when their parent cannot be an
 // entry. Tree presentation and visible-range selection retain their own walk.
 func (p materialsDocumentProjection) entryIndex(anchor string) (map[string]materialsFileSelectionEntry, bool) {
-	available := make(map[string]materialsFileSelectionEntry)
-	anchorAvailable := false
-	var visit func([]application.Document)
-	visit = func(items []application.Document) {
-		for _, document := range items {
-			if entry, ok := p.entry(document); ok {
-				available[normalizedReadingPath(entry.Path)] = entry
-				if entry.Key == anchor {
-					anchorAvailable = true
-				}
-			}
-			visit(document.Children)
-		}
-	}
-	visit(p.documents)
-	return available, anchorAvailable
+	index := p.documentIndex()
+	return index.entries, index.keys[anchor]
 }
 
 func (p materialsDocumentProjection) treeRows(order string) []materialsDocumentRow {
-	rows := make([]materialsDocumentRow, 0, len(p.documents))
-	var visit func([]application.Document, int)
-	visit = func(items []application.Document, depth int) {
-		for _, document := range items {
-			entry, ok := p.entry(document)
-			if !ok {
-				continue
-			}
-			rows = append(rows, materialsDocumentRow{entry: entry, name: document.Name, depth: depth})
-			visit(document.Children, depth+1)
-		}
-	}
-	visit(sortDocumentsByOrder(p.documents, order), 0)
-	return rows
+	return p.documentIndex().orderedRows(order).rows
 }
 
 func (p materialsDocumentProjection) visibleEntries(order string, expanded map[string]bool) []materialsFileSelectionEntry {
-	entries := make([]materialsFileSelectionEntry, 0, len(p.documents))
-	var visit func([]application.Document)
-	visit = func(items []application.Document) {
-		for _, document := range items {
-			entry, ok := p.entry(document)
-			if !ok {
-				continue
-			}
-			entries = append(entries, entry)
-			if entry.Directory && expanded[entry.Relative] {
-				visit(document.Children)
-			}
-		}
-	}
-	visit(sortDocumentsByOrder(p.documents, order))
-	return entries
+	return p.documentIndex().orderedRows(order).visibleEntries(expanded)
 }
 
 func (p materialsDocumentProjection) quickMatches(query string) []quickPickerEntry {
-	if p.root == "" {
-		return nil
-	}
-	query = strings.ToLower(strings.TrimSpace(query))
-	matches := make([]quickPickerEntry, 0, 32)
-	var visit func([]application.Document)
-	visit = func(items []application.Document) {
-		if len(matches) >= 200 {
-			return
-		}
-		for _, document := range items {
-			if len(matches) >= 200 {
-				return
-			}
-			if isDocumentDirectory(document) {
-				visit(document.Children)
-				if len(matches) >= 200 {
-					return
-				}
-				continue
-			}
-			// Quick-open historically accepts a file at relative "." and
-			// keeps its original Path spelling, unlike selectable tree entries.
-			relative, err := filepath.Rel(p.root, document.Path)
-			if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
-				continue
-			}
-			relative = filepath.ToSlash(relative)
-			if query != "" && !strings.Contains(strings.ToLower(relative), query) {
-				continue
-			}
-			matches = append(matches, quickPickerEntry{path: document.Path, name: filepath.Base(document.Path), relative: relative})
-		}
-	}
-	visit(p.documents)
-	return matches
+	return p.documentIndex().quickMatches(query)
 }
+
+func (p materialsDocumentProjection) documentIndex() *materialsDocumentIndex {
+	if p.index != nil {
+		return p.index
+	}
+	// Standalone values do not cache a borrowed slice: callers can replace an
+	// element or Children between calls. Controller snapshots use generation.
+	return newMaterialsDocumentIndex(p.root, p.documents)
+}
+
+func (p materialsDocumentProjection) count() int { return p.documentIndex().count }
 
 func isDocumentDirectory(document application.Document) bool {
 	return document.Kind == "directory" || document.Kind == "dir" || document.Kind == "folder"

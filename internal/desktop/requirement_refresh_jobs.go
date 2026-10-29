@@ -160,7 +160,7 @@ func (s *app) startRequirementRefresh(url string) {
 						previous.Status = requirementMetadataLoaded
 					}
 				}
-				s.requirementUnit.state.taskRequirementMetadata[task.id] = previous
+				s.setTaskRequirementMetadata(task.id, previous)
 			}
 		}
 	}
@@ -183,6 +183,7 @@ func (s *app) startRequirementRefresh(url string) {
 
 func executeRequirementRefresh(backend application.Backend, job *requirementRefreshJob) requirementRefreshResult {
 	var result requirementRefreshResult
+	ctx := application.WithRequirementReadOperation(job.ctx)
 	for _, part := range []struct {
 		kind, label string
 		target      any
@@ -194,7 +195,7 @@ func executeRequirementRefresh(backend application.Backend, job *requirementRefr
 		if job.ctx.Err() != nil {
 			break
 		}
-		response, err := backend.Dispatch(job.ctx, application.Action{Kind: part.kind, Payload: job.payload})
+		response, err := backend.Dispatch(ctx, application.Action{Kind: part.kind, Payload: job.payload})
 		if errors.As(err, &result.identityError) {
 			break
 		}
@@ -207,6 +208,7 @@ func executeRequirementRefresh(backend application.Backend, job *requirementRefr
 		}
 		if err != nil {
 			result.failures = append(result.failures, part.label+"："+err.Error())
+			ctx = application.WithRequirementReadOperation(job.ctx)
 			continue
 		}
 		problem := ""
@@ -253,6 +255,7 @@ func executeRequirementRefresh(backend application.Backend, job *requirementRefr
 		}
 		if problem != "" {
 			result.failures = append(result.failures, part.label+"："+problem)
+			ctx = application.WithRequirementReadOperation(job.ctx)
 		}
 	}
 	return result
@@ -303,7 +306,7 @@ func (s *app) finishRequirementRefresh(job *requirementRefreshJob, result requir
 			if metadata.WorkItem != nil {
 				participants.QCOwners, participants.ProductManagers = metadata.WorkItem.QCOwners, metadata.WorkItem.ProductManagers
 			}
-			s.requirementUnit.state.taskRequirementMetadata[task.id] = taskRequirementMetadataState{URL: task.requirementURL, Status: requirementMetadataLoaded, Metadata: requirementMetadata{ID: metadata.ID, ProjectKey: metadata.ProjectKey, Type: metadata.Type, Title: metadata.Title, Status: metadata.Status, Participants: participants, WorkItem: metadata.WorkItem}}
+			s.setTaskRequirementMetadata(task.id, taskRequirementMetadataState{URL: task.requirementURL, Status: requirementMetadataLoaded, Metadata: requirementMetadata{ID: metadata.ID, ProjectKey: metadata.ProjectKey, Type: metadata.Type, Title: metadata.Title, Status: metadata.Status, Participants: participants, WorkItem: metadata.WorkItem}})
 		}
 	}
 	for _, reader := range s.requirementUnit.state.requirementReaders {

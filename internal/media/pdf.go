@@ -46,6 +46,8 @@ type PDFDocument struct {
 	info      DocumentInfo
 	cropBoxes []cropBox
 	cache     *pngCache
+	rgbaCache *rgbaCache
+	turn      pdfTurn
 }
 
 func OpenPDF(ctx context.Context, path string, options Options) (*PDFDocument, error) {
@@ -110,7 +112,7 @@ func OpenPDF(ctx context.Context, path string, options Options) (*PDFDocument, e
 	doc := &PDFDocument{
 		api: api, document: document, input: input, options: options,
 		info:      DocumentInfo{PageCount: pageCount, Pages: make([]PageInfo, 0, pageCount)},
-		cropBoxes: make([]cropBox, 0, pageCount), cache: newPNGCache(options.CacheBytes),
+		cropBoxes: make([]cropBox, 0, pageCount), cache: newPNGCache(options.CacheBytes / 2), rgbaCache: newRGBACache(options.CacheBytes - options.CacheBytes/2),
 	}
 	for index := 0; index < pageCount; index++ {
 		if err := contextError(ctx); err != nil {
@@ -191,77 +193,130 @@ func (d *PDFDocument) RenderPagePNG(ctx context.Context, pageIndex, widthPx int)
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if pageIndex < 0 {
-		return RenderedPage{}, errors.New("PDF 页码无效")
+	if err := contextError(ctx); err != nil {
+		return RenderedPage{}, err
 	}
-	if widthPx <= 0 {
-		return RenderedPage{}, errors.New("PDF 预览宽度无效")
+	if pageIndex < 0 || widthPx <= 0 {
+		return RenderedPage{}, errors.New("PDF 页码或预览宽度无效")
+	}
+	d.mu.Lock()
+	if d.closed || d.document == 0 {
+		d.mu.Unlock()
+		return RenderedPage{}, ErrClosed
+	}
+	page := minInt(pageIndex, d.info.PageCount-1)
+	info := d.info.Pages[page]
+	width, height, dimensionErr := pdfPixelDimensions(info.WidthPoints, info.HeightPoints, widthPx)
+	key := fmt.Sprintf("pdf:%d:%d:%d", page, width, height)
+	if data, ok := d.cache.get(key); dimensionErr == nil && ok {
+		d.mu.Unlock()
+		return RenderedPage{PageIndex: page, PageCount: d.info.PageCount, Width: width, Height: height, AspectRatio: info.AspectRatio, PNG: data}, nil
+	}
+	d.mu.Unlock()
+	pixels, err := d.RenderPageRGBA(ctx, pageIndex, widthPx)
+	if err != nil {
+		return RenderedPage{}, err
+	}
+	var output bytes.Buffer
+	if err := png.Encode(&output, pixels.RGBA); err != nil {
+		return RenderedPage{}, fmt.Errorf("编码 PDF 页面失败：%w", err)
 	}
 	if err := contextError(ctx); err != nil {
 		return RenderedPage{}, err
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.closed || d.document == 0 {
+	if d.closed {
 		return RenderedPage{}, ErrClosed
+	}
+	encoded := output.Bytes()
+	d.cache.put(key, encoded)
+	return RenderedPage{PageIndex: pixels.PageIndex, PageCount: pixels.PageCount, Width: pixels.Width, Height: pixels.Height,
+		AspectRatio: pixels.AspectRatio, PNG: encoded}, nil
+}
+
+func (d *PDFDocument) RenderPageRGBA(ctx context.Context, pageIndex, widthPx int) (RenderedRGBA, error) {
+	if d == nil {
+		return RenderedRGBA{}, ErrClosed
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if pageIndex < 0 {
+		return RenderedRGBA{}, errors.New("PDF 页码无效")
+	}
+	if widthPx <= 0 {
+		return RenderedRGBA{}, errors.New("PDF 预览宽度无效")
+	}
+	if err := contextError(ctx); err != nil {
+		return RenderedRGBA{}, err
+	}
+	release, err := d.turn.acquire(ctx, true)
+	if err != nil {
+		return RenderedRGBA{}, err
+	}
+	defer release()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closed || d.document == 0 {
+		return RenderedRGBA{}, ErrClosed
 	}
 	pageIndex = minInt(pageIndex, d.info.PageCount-1)
 	widthPx = minInt(widthPx, maxPDFPreviewWidth)
 	pageInfo := d.info.Pages[pageIndex]
 	width, height, err := pdfPixelDimensions(pageInfo.WidthPoints, pageInfo.HeightPoints, widthPx)
 	if err != nil {
-		return RenderedPage{}, err
+		return RenderedRGBA{}, err
 	}
 	key := fmt.Sprintf("pdf:%d:%d:%d", pageIndex, width, height)
-	if png, ok := d.cache.get(key); ok {
-		return RenderedPage{PageIndex: pageIndex, PageCount: d.info.PageCount,
-			Width: width, Height: height, AspectRatio: pageInfo.AspectRatio, PNG: png}, nil
+	if pixels, ok := d.rgbaCache.get(key); ok {
+		return RenderedRGBA{PageIndex: pageIndex, PageCount: d.info.PageCount,
+			Width: width, Height: height, AspectRatio: pageInfo.AspectRatio, RGBA: pixels}, nil
 	}
 	if err := acquirePDFium(ctx); err != nil {
-		return RenderedPage{}, err
+		return RenderedRGBA{}, err
+	}
+	if err := contextError(ctx); err != nil {
+		releasePDFium()
+		return RenderedRGBA{}, err
 	}
 	page := d.api.loadPage(d.document, int32(pageIndex))
 	if page == 0 {
 		releasePDFium()
-		return RenderedPage{}, fmt.Errorf("PDF 第 %d 页无法读取", pageIndex+1)
+		return RenderedRGBA{}, fmt.Errorf("PDF 第 %d 页无法读取", pageIndex+1)
 	}
 	bitmap := d.api.createBitmap(int32(width), int32(height), 0)
 	if bitmap == 0 {
 		d.api.closePage(page)
 		releasePDFium()
-		return RenderedPage{}, errors.New("PDFium 无法分配页面预览位图")
+		return RenderedRGBA{}, errors.New("PDFium 无法分配页面预览位图")
 	}
 	if d.api.fillRect(bitmap, 0, 0, int32(width), int32(height), 0xffffffff) == 0 {
 		d.api.destroyBitmap(bitmap)
 		d.api.closePage(page)
 		releasePDFium()
-		return RenderedPage{}, errors.New("PDFium 无法初始化页面预览位图")
+		return RenderedRGBA{}, errors.New("PDFium 无法初始化页面预览位图")
 	}
 	d.api.renderPageBitmap(bitmap, page, 0, 0, int32(width), int32(height), 0, 1)
 	if err := contextError(ctx); err != nil {
 		d.api.destroyBitmap(bitmap)
 		d.api.closePage(page)
 		releasePDFium()
-		return RenderedPage{}, err
+		return RenderedRGBA{}, err
 	}
 	imageData, err := copyPDFiumBitmap(d.api, bitmap, width, height)
 	d.api.destroyBitmap(bitmap)
 	d.api.closePage(page)
 	releasePDFium()
 	if err != nil {
-		return RenderedPage{}, err
-	}
-	var output bytes.Buffer
-	if err := png.Encode(&output, imageData); err != nil {
-		return RenderedPage{}, fmt.Errorf("编码 PDF 页面失败：%w", err)
+		return RenderedRGBA{}, err
 	}
 	if err := contextError(ctx); err != nil {
-		return RenderedPage{}, err
+		return RenderedRGBA{}, err
 	}
-	encoded := output.Bytes()
-	d.cache.put(key, encoded)
-	return RenderedPage{PageIndex: pageIndex, PageCount: d.info.PageCount,
-		Width: width, Height: height, AspectRatio: pageInfo.AspectRatio, PNG: append([]byte(nil), encoded...)}, nil
+	d.rgbaCache.put(key, imageData)
+	return RenderedRGBA{PageIndex: pageIndex, PageCount: d.info.PageCount,
+		Width: width, Height: height, AspectRatio: pageInfo.AspectRatio, RGBA: imageData}, nil
 }
 
 func copyPDFiumBitmap(api *pdfiumAPI, bitmap uintptr, width, height int) (*image.RGBA, error) {
@@ -329,67 +384,92 @@ func pdfPixelDimensions(width, height float64, requestedWidth int) (int, int, er
 }
 
 func (d *PDFDocument) TextIndex(ctx context.Context) (TextIndex, error) {
+	return d.TextIndexPrioritized(ctx, nil)
+}
+
+// TextIndexPrioritized extracts visible pages first while returning the same
+// complete page-ordered index. No partial index is reported as a search result.
+func (d *PDFDocument) TextIndexPrioritized(ctx context.Context, visible []int) (TextIndex, error) {
 	if d == nil {
 		return TextIndex{}, ErrClosed
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if err := contextError(ctx); err != nil {
-		return TextIndex{}, err
-	}
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	if d.closed || d.document == 0 {
+		d.mu.Unlock()
 		return TextIndex{}, ErrClosed
 	}
-	if err := acquirePDFium(ctx); err != nil {
-		return TextIndex{}, err
+	info := cloneDocumentInfo(d.info)
+	d.mu.Unlock()
+	index := TextIndex{Pages: make([]TextPage, info.PageCount), Outline: info.Outline}
+	order := make([]int, 0, info.PageCount)
+	seen := make([]bool, info.PageCount)
+	for _, page := range visible {
+		if page >= 0 && page < info.PageCount && !seen[page] {
+			order = append(order, page)
+			seen[page] = true
+		}
 	}
-	defer releasePDFium()
-	index := TextIndex{Pages: make([]TextPage, 0, d.info.PageCount), Outline: append([]OutlineEntry(nil), d.info.Outline...)}
+	for page := 0; page < info.PageCount; page++ {
+		if !seen[page] {
+			order = append(order, page)
+		}
+	}
 	totalChars, totalPositions := 0, 0
-	for pageIndex := 0; pageIndex < d.info.PageCount; pageIndex++ {
-		if err := contextError(ctx); err != nil {
-			return TextIndex{}, err
-		}
-		page := d.api.loadPage(d.document, int32(pageIndex))
-		if page == 0 {
-			return TextIndex{}, fmt.Errorf("PDF 第 %d 页文字无法读取", pageIndex+1)
-		}
-		textPage := d.api.textLoadPage(page)
-		if textPage == 0 {
-			d.api.closePage(page)
-			return TextIndex{}, fmt.Errorf("PDF 第 %d 页文字无法读取", pageIndex+1)
-		}
-		charCount := int(d.api.textCountChars(textPage))
-		if charCount < 0 || charCount > maxPDFPagePositions {
-			d.api.textClosePage(textPage)
-			d.api.closePage(page)
-			return TextIndex{}, errors.New("PDF 文字较多，请使用外部阅读器查找文字")
-		}
-		totalPositions += charCount
-		if totalPositions > maxPDFTextPositions {
-			d.api.textClosePage(textPage)
-			d.api.closePage(page)
-			return TextIndex{}, errors.New("PDF 文字较多，请使用外部阅读器查找文字")
-		}
-		pageText, err := readPDFPageText(ctx, d.api, textPage, d.cropBoxes[pageIndex], d.info.Pages[pageIndex].Rotation)
-		d.api.textClosePage(textPage)
-		d.api.closePage(page)
+	for _, page := range order {
+		text, positions, err := d.readTextPage(ctx, page, maxPDFTextPositions-totalPositions)
 		if err != nil {
 			return TextIndex{}, err
 		}
-		totalChars += utf8.RuneCountInString(pageText.Text)
+		totalPositions += positions
+		totalChars += utf8.RuneCountInString(text.Text)
 		if totalChars > maxPDFTextChars {
 			return TextIndex{}, errors.New("PDF 文字较多，请使用外部阅读器查找文字")
 		}
-		index.Pages = append(index.Pages, pageText)
+		index.Pages[page] = text
 	}
 	if err := contextError(ctx); err != nil {
 		return TextIndex{}, err
 	}
 	return index, nil
+}
+
+func (d *PDFDocument) readTextPage(ctx context.Context, pageIndex, remaining int) (TextPage, int, error) {
+	release, err := d.turn.acquire(ctx, false)
+	if err != nil {
+		return TextPage{}, 0, err
+	}
+	defer release()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closed || d.document == 0 {
+		return TextPage{}, 0, ErrClosed
+	}
+	if err := acquirePDFium(ctx); err != nil {
+		return TextPage{}, 0, err
+	}
+	defer releasePDFium()
+	if err := contextError(ctx); err != nil {
+		return TextPage{}, 0, err
+	}
+	page := d.api.loadPage(d.document, int32(pageIndex))
+	if page == 0 {
+		return TextPage{}, 0, fmt.Errorf("PDF 第 %d 页文字无法读取", pageIndex+1)
+	}
+	defer d.api.closePage(page)
+	textPage := d.api.textLoadPage(page)
+	if textPage == 0 {
+		return TextPage{}, 0, fmt.Errorf("PDF 第 %d 页文字无法读取", pageIndex+1)
+	}
+	defer d.api.textClosePage(textPage)
+	count := int(d.api.textCountChars(textPage))
+	if count < 0 || count > maxPDFPagePositions || count > remaining {
+		return TextPage{}, 0, errors.New("PDF 文字较多，请使用外部阅读器查找文字")
+	}
+	text, err := readPDFPageText(ctx, d.api, textPage, d.cropBoxes[pageIndex], d.info.Pages[pageIndex].Rotation)
+	return text, count, err
 }
 
 func readPDFPageText(ctx context.Context, api *pdfiumAPI, textPage uintptr, box cropBox, rotation int) (TextPage, error) {
@@ -540,6 +620,7 @@ func (d *PDFDocument) ClearCache() {
 		return
 	}
 	d.cache.clear()
+	d.rgbaCache.clear()
 }
 
 func (d *PDFDocument) Close() error {
@@ -553,6 +634,7 @@ func (d *PDFDocument) Close() error {
 	}
 	d.closed = true
 	d.cache.clear()
+	d.rgbaCache.clear()
 	if d.document != 0 {
 		if err := acquirePDFium(context.Background()); err != nil {
 			return err

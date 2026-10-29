@@ -80,14 +80,14 @@ func decodeNativeImagePreview(ctx context.Context, path string, maxWidthPx int) 
 		return nil, err
 	}
 	defer document.Close()
-	rendered, err := document.RenderPNG(ctx, maxWidthPx)
+	rendered, err := document.RenderRGBA(ctx, maxWidthPx)
 	if err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return ui.DecodeBitmap(rendered.PNG)
+	return ui.NewBitmap(rendered.RGBA), nil
 }
 
 func fetchNativeRemoteImagePreview(ctx context.Context, rawURL string, maxWidthPx int) (*ui.Bitmap, error) {

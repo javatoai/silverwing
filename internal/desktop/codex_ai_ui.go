@@ -61,6 +61,9 @@ func (s *app) renderCodexAI(c *ui.Context, p palette) {
 						if tab == codexAITabSessions && !state.threadsLoaded && !state.threadsLoading {
 							s.requestCodexAIThreads()
 						}
+						if tab == codexAITabSkills && !state.skillsLoaded {
+							s.requestCodexAISnapshot()
+						}
 					})
 				}
 			})

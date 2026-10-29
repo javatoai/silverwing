@@ -43,7 +43,9 @@ func commentComposerFixture(t *testing.T) (*app, *taskOpenToolsProbeBackend, cha
 			if c.cancel != nil {
 				c.cancel()
 			}
+			closeMarkdownPreviewState(c.markdown)
 		}
+		drainMarkdownPreviewTestJobs(t, s)
 	})
 	return s, b, updates, state
 }
@@ -219,19 +221,18 @@ func TestCommentComposerNativeDialogLayoutAndKeyboard(t *testing.T) {
 						ui.Column(c).Fill().Background(p.bg)
 						s.renderRequirementCommentComposer(c, p)
 					}, width, 900)
-					if state.markdown != nil {
+					if state.preview {
 						bitmap, e := decodeNativeImagePreview(context.Background(), imagePath, 1200)
 						if e != nil {
 							t.Fatal(e)
 						}
-						for _, entry := range state.markdown.inlineImages {
-							entry.loading = false
-							entry.bitmap = bitmap
-							entry.error = ""
-						}
+						seedMarkdownReadyImages(t, s, state.markdown, bitmap)
 						tt.Frame()
 						if tt.HasText("图片加载失败") {
 							t.Fatal("native comment image preview failed")
+						}
+						if _, ok := tt.Find("Markdown 图片：" + state.draft.Images[0].Name); !ok {
+							t.Fatal("native comment preview did not render its image fixture")
 						}
 					}
 					for _, name := range []string{"添加评论", "编辑", "预览", "添加图片", "添加附件"} {

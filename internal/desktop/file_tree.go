@@ -59,6 +59,7 @@ type FileTreeState struct {
 type FileTreeProps struct {
 	Key             string
 	Root            FileTreeRow
+	HideRoot        bool // Hide only the presentation row; Root still owns background input.
 	Rows            []FileTreeRow
 	Prepared        *FileTreeProjection
 	Expanded        map[string]bool
@@ -119,46 +120,50 @@ func FileTree(c *ui.Context, p palette, props FileTreeProps) ui.Element {
 	container := ui.Column(c.Key(props.Key)).FillWidth().Grow(1).MinHeight(0).MinWidth(0).Background(p.side).Font("system-ui")
 	showRootActions := container.Hovered() || container.FocusWithin()
 	container.Children(func() {
-		root := ui.Row(c.Key(props.Key+"-root")).Height(fileTreeRowHeight).Shrink(0).FillWidth().Padding(0, 6).Gap(2).AlignItems(ui.Center)
-		var rootButton ui.Element
-		root.Children(func() {
-			b := ui.ButtonBase(c.Key(props.Key + "-root-toggle")).Row().Grow(1).MinWidth(0).Height(fileTreeRowHeight).Gap(5).AlignItems(ui.Center).Label(props.Root.Name)
-			rootButton = b
-			b.Children(func() {
-				arrow, folder := "chevron", "folder-open"
-				if state.rootCollapsed {
-					arrow, folder = "chevron-right", "folder"
-				}
-				icon(c, arrow, 12, p.muted)
-				icon(c, folder, fileTreeIconSize, p.muted)
-				label(c, props.Root.Name, fileTreeFontSize, p.text).FontWeight(600).SingleLine().Grow(1).MinWidth(0)
-			})
-			if b.Clicked() {
-				state.rootCollapsed = !state.rootCollapsed
-			}
-			if props.RootActions != nil {
-				ui.Row(c).Width(props.RootActionWidth).Shrink(0).Height(fileTreeRowHeight).Gap(0).AlignItems(ui.Center).Children(func() {
-					if showRootActions {
-						props.RootActions()
+		hovered := false
+		if !props.HideRoot {
+			root := ui.Row(c.Key(props.Key+"-root")).Height(fileTreeRowHeight).Shrink(0).FillWidth().Padding(0, 6).Gap(2).AlignItems(ui.Center)
+			var rootButton ui.Element
+			root.Children(func() {
+				b := ui.ButtonBase(c.Key(props.Key + "-root-toggle")).Row().Grow(1).MinWidth(0).Height(fileTreeRowHeight).Gap(5).AlignItems(ui.Center).Label(props.Root.Name)
+				rootButton = b
+				b.Children(func() {
+					arrow, folder := "chevron", "folder-open"
+					if state.rootCollapsed {
+						arrow, folder = "chevron-right", "folder"
 					}
+					icon(c, arrow, 12, p.muted)
+					icon(c, folder, fileTreeIconSize, p.muted)
+					label(c, props.Root.Name, fileTreeFontSize, p.text).FontWeight(600).SingleLine().Grow(1).MinWidth(0)
+				})
+				if b.Clicked() {
+					state.rootCollapsed = !state.rootCollapsed
+				}
+				if props.RootActions != nil {
+					ui.Row(c).Width(props.RootActionWidth).Shrink(0).Height(fileTreeRowHeight).Gap(0).AlignItems(ui.Center).Children(func() {
+						if showRootActions {
+							props.RootActions()
+						}
+					})
+				}
+			})
+			if props.ContextMenu != nil {
+				root.ContextMenu(func(m *ui.Menu) {
+					state.suppressID = state.hoverID
+					props.ContextMenu(props.Root, m)
 				})
 			}
-		})
-		if props.ContextMenu != nil {
-			root.ContextMenu(func(m *ui.Menu) {
-				state.suppressID = state.hoverID
-				props.ContextMenu(props.Root, m)
-			})
-		}
-		if props.AcceptFiles {
-			if root.FileDragOver() {
-				root.Background(p.blue.Alpha(.08))
+			if props.AcceptFiles {
+				if root.FileDragOver() {
+					root.Background(p.blue.Alpha(.08))
+				}
+				if files := root.DroppedFiles(); len(files) > 0 {
+					fileTreeEmit(props, FileTreeInput{Kind: FileTreeDrop, Row: props.Root, Files: files})
+				}
 			}
-			if files := root.DroppedFiles(); len(files) > 0 {
-				fileTreeEmit(props, FileTreeInput{Kind: FileTreeDrop, Row: props.Root, Files: files})
-			}
+			fileTreeTooltip(c, p, rootButton, props, state, props.Root)
+			hovered = rootButton.Hovered()
 		}
-		fileTreeTooltip(c, p, rootButton, props, state, props.Root)
 		tree := ui.Scroll(c.Key(props.Key+"-rows")).TrackScroll(scroll).Grow(1).MinHeight(0).FillWidth().Padding(2, 4, 8, 4).Gap(0).Focusable().Role(ui.RoleTree).Label(props.Root.Name + "文件树")
 		if props.Shortcuts != nil {
 			props.Shortcuts(tree)
@@ -180,9 +185,8 @@ func FileTree(c *ui.Context, p palette, props FileTreeProps) ui.Element {
 				break
 			}
 		}
-		hovered := rootButton.Hovered()
 		tree.Children(func() {
-			if state.rootCollapsed {
+			if state.rootCollapsed && !props.HideRoot {
 				return
 			}
 			for index, row := range rows {

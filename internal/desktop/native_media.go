@@ -386,13 +386,7 @@ func (s *app) renderNativeMedia(c *ui.Context, p palette, viewport ui.Rect) {
 		return
 	}
 	if m.previewError != "" {
-		ui.Column(c).FillWidth().Padding(18).Gap(8).Background(p.amberBg).Border(1, p.line).Radius(10).Children(func() {
-			label(c, "无法预览此文件", 14, p.amber).FontWeight(600)
-			label(c, m.previewError, 12, p.text).Wrap()
-			if action(c, "media-open-external", "arrow", "使用系统阅读器打开", p, false) {
-				s.act("document.open", s.taskUnit.currentTask().id, "", "", s.materialsUnit.state.documentPath, "", nil)
-			}
-		})
+		s.renderMaterialsPreviewFallback(c, p, "无法预览此文件："+m.previewError)
 		return
 	}
 	if m.openLoading {

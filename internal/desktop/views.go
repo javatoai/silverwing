@@ -223,6 +223,9 @@ func (s *app) documentTree(c *ui.Context, p palette, width float32) {
 				label(c, fmt.Sprintf("(%d)", projection.count()), 11, p.muted)
 			}
 			ui.Spacer(c)
+			if width >= materialsTreeInlineActionsMinWidth {
+				s.materialsTreeHeaderActions(c, p, canWriteDirectory)
+			}
 			sortLabel := map[string]string{"NAME": "按名称排序", "MODIFIED_DESC": "最近修改排序"}[order]
 			miniButton(c, p, "materials-sort", "sort", sortLabel, order == "MODIFIED_DESC").Menu(func(m *ui.Menu) {
 				if m.Item("按名称").Chosen() {
@@ -240,12 +243,10 @@ func (s *app) documentTree(c *ui.Context, p palette, width float32) {
 					s.openMaterialsFullTextSearch()
 				}
 				if m.Item("new-document", "新建文档").Icon("file").Disabled(!canWriteDirectory).Chosen() {
-					directory, _ := s.materialsCurrentDirectory(state)
-					s.openMaterialsFileNameForm("document.create", "新建文档", directory)
+					s.openMaterialsNewEntry("document.create", "新建文档")
 				}
 				if m.Item("new-folder", "新建文件夹").Icon("folder").Disabled(!canWriteDirectory).Chosen() {
-					directory, _ := s.materialsCurrentDirectory(state)
-					s.openMaterialsFileNameForm("document.mkdir", "新建文件夹", directory)
+					s.openMaterialsNewEntry("document.mkdir", "新建文件夹")
 				}
 				if m.Item("import", "导入文件…").Icon("plus").Disabled(!canWriteDirectory).Chosen() {
 					s.startMaterialsImportPicker()
@@ -259,9 +260,10 @@ func (s *app) documentTree(c *ui.Context, p palette, width float32) {
 				}
 				m.Separator()
 				if m.Item("refresh", "刷新资料").Icon("refresh").Chosen() {
-					s.materialsUnit.replaceDocuments(nil)
-					s.materialsUnit.state.documentsLoaded, s.materialsUnit.state.documentsRequested = false, false
-					s.loadDocuments()
+					s.reloadMaterialsDocuments()
+				}
+				if m.Item("collapse-folders", "收起全部文件夹").Icon("collapse-folders").Chosen() {
+					s.collapseMaterialsTreeDirectories()
 				}
 				m.Separator()
 				s.documentMoreMenu(c, m)
@@ -282,7 +284,7 @@ func (s *app) documentTree(c *ui.Context, p palette, width float32) {
 		}
 		FileTree(c, p, FileTreeProps{
 			Key: "materials-file-tree", Root: FileTreeRow{ID: "@root", Name: filepath.Base(state.root), Path: state.root, Directory: true},
-			Prepared: prepared, Selected: selected, State: &state.tree,
+			HideRoot: true, Prepared: prepared, Selected: selected, State: &state.tree,
 			Scroll: s.readingScrollState("directory"), Empty: "此任务资料目录为空。", AcceptFiles: true,
 			SuppressTooltip: s.dialogOpen || s.overflowMenus != nil && s.overflowMenus.openKey != "",
 			OnInput:         func(input FileTreeInput) { s.materialsTreeInput(state, input) },
@@ -295,23 +297,6 @@ func (s *app) documentTree(c *ui.Context, p palette, width float32) {
 			Shortcuts: func(element ui.Element) {
 				element.OnShortcut(ui.Cmd, ui.KeyC, s.copyMaterialsSelectionToClipboard)
 				element.OnShortcut(ui.Cmd, ui.KeyV, s.pasteMaterialsIntoCurrentDirectory)
-			},
-			RootActionWidth: 88,
-			RootActions: func() {
-				if fileTreeIconButton(c, p, "materials-root-new-file", "file-plus", "新建文档").Clicked() {
-					s.openMaterialsFileNameForm("document.create", "新建文档", state.root)
-				}
-				if fileTreeIconButton(c, p, "materials-root-new-folder", "folder-plus", "新建文件夹").Clicked() {
-					s.openMaterialsFileNameForm("document.mkdir", "新建文件夹", state.root)
-				}
-				if fileTreeIconButton(c, p, "materials-root-refresh", "refresh", "刷新资料").Clicked() {
-					s.reloadMaterialsDocuments()
-				}
-				if fileTreeIconButton(c, p, "materials-root-collapse", "collapse-folders", "收起全部文件夹").Clicked() {
-					for directory := range expanded {
-						s.setReadingDirectoryExpanded(directory, false)
-					}
-				}
 			},
 		})
 	})

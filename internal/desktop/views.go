@@ -63,14 +63,7 @@ func (s *app) materials(c *ui.Context, p palette) {
 		ui.Column(c).Grow(1).MinWidth(0).Background(p.surface).Children(func() {
 			s.documentToolbar(c, p)
 			if s.materialsUnit.state.documentKind == "unsupported" {
-				ui.Column(c).Grow(1).FillWidth().Center().Gap(12).Padding(24).Children(func() {
-					icon(c, "file", 28, p.muted)
-					label(c, filepath.Base(s.materialsUnit.state.documentPath), 14, p.text).FontWeight(600)
-					label(c, "此格式暂不支持预览，请使用系统应用打开。", 13, p.muted)
-					if action(c, "unsupported-open-external", "arrow", "使用系统应用打开", p, false) {
-						s.act("document.open", t.id, "", "", s.materialsUnit.state.documentPath, "", nil)
-					}
-				})
+				s.renderMaterialsPreviewFallback(c, p, "此格式暂不支持预览")
 				return
 			}
 			if s.materialsUnit.state.documentKind == "pdf" || s.materialsUnit.state.documentKind == "image" {

@@ -18,6 +18,7 @@ type systemOpenScope struct {
 	home, sourcePath                           string
 	taskID, taskPath, createdAt, materialsRoot string
 	workspacePath                              string
+	materialsConfigJSON                        string
 }
 
 type systemOpenJob struct {
@@ -113,6 +114,9 @@ func (s *app) systemOpenCurrentScope(action application.Action) (systemOpenScope
 // opens retain their selected-task contract and cannot opt in via a payload.
 func (s *app) systemOpenScopeFor(action application.Action, taskScope *taskMenuScope) (systemOpenScope, error) {
 	scope := systemOpenScope{home: s.snapshot.Home, sourcePath: systemOpenSourcePath(action)}
+	if action.Kind == "document.open" || action.Kind == "document.reveal" {
+		scope.materialsConfigJSON = s.settingsUnit.state.configJSON
+	}
 	if scope.sourcePath == "" && action.Kind != "system.logs" {
 		return scope, errors.New("路径不能为空")
 	}
@@ -177,6 +181,18 @@ func (s *app) beginScopedSystemOpenJob(action application.Action, taskScope *tas
 	scope, err := s.systemOpenScopeFor(action, taskScope)
 	if err != nil {
 		return nil, err
+	}
+	// Document wrappers validate this captured identity again at the backend
+	// boundary. Keep the checks shared by every materials external-open entry.
+	if action.Kind == "document.open" || action.Kind == "document.reveal" {
+		action = cloneMaterialsFileJobAction(action)
+		action.Payload["draftTaskPath"] = scope.taskPath
+		action.Payload["draftMaterialsRoot"] = scope.materialsRoot
+		action.Payload["desktopRenameTaskCreatedAt"] = scope.createdAt
+		action.Payload["materialsHome"] = scope.home
+		if config, ok := s.materialsGitConfig(); ok {
+			action.Payload["materialsConfigScope"] = application.MaterialsGitScope(scope.home, config)
+		}
 	}
 	jobs := s.ensureSystemOpenJobs()
 	key := systemOpenJobKey(action)

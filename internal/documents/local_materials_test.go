@@ -100,7 +100,7 @@ func TestStandaloneMaterialsScopeAndSafeRollback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !scope.Writable(filepath.Join(scope.Owned, "file.md"), false) || !scope.Writable(filepath.Join(scope.Temporary, "scratch.txt"), false) || scope.Writable(filepath.Join(scope.Root, "peer", "file.md"), false) || scope.Writable(filepath.Join(scope.Temporary, ".gitignore"), false) {
+	if !scope.Writable(filepath.Join(scope.Owned, "file.md"), false) || !scope.Writable(filepath.Join(scope.Temporary, "scratch.txt"), false) || scope.Writable(filepath.Join(scope.Root, "peer", "file.md"), false) || !scope.Writable(filepath.Join(scope.Temporary, ".gitignore"), false) {
 		t.Fatal("local materials permissions are incorrect")
 	}
 	if _, ok := AnnualScope(scope.Owned); ok {
@@ -130,10 +130,23 @@ func TestStandaloneMaterialsScopeAndSafeRollback(t *testing.T) {
 	if err := CleanupLocalTaskMaterials(task); err == nil {
 		t.Fatal("rollback removed temporary user content")
 	}
-	if _, err := os.Stat(filepath.Join(scope.Temporary, ".gitignore")); err != nil {
-		t.Fatal("failed cleanup removed temp ignore protection")
+	if _, err := os.Stat(filepath.Join(scope.Temporary, ".gitignore")); !os.IsNotExist(err) {
+		t.Fatal("generated a temp ignore", err)
+	}
+	ignore := filepath.Join(scope.Temporary, ".gitignore")
+	if err := os.WriteFile(ignore, []byte("# user ignore\n*.scratch\n"), 0600); err != nil {
+		t.Fatal(err)
 	}
 	if err := os.Remove(temporary); err != nil {
+		t.Fatal(err)
+	}
+	if err := CleanupLocalTaskMaterials(task); err == nil {
+		t.Fatal("rollback removed a user ignore")
+	}
+	if data, err := os.ReadFile(ignore); err != nil || string(data) != "# user ignore\n*.scratch\n" {
+		t.Fatal("user ignore changed", err)
+	}
+	if err := os.Remove(ignore); err != nil {
 		t.Fatal(err)
 	}
 	if err := CleanupLocalTaskMaterials(task); err != nil {

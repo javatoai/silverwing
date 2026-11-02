@@ -11,11 +11,30 @@ import (
 // Every action that hides or persists an editor captures the same committed
 // source. IME preedit and failed drafts stay with their current field.
 func (s *app) captureMarkdownEditorInput(state *markdownEditorState) error {
-	if state == nil || state.doc == nil || state.closed || state.readOnly || state.detached {
+	if state == nil || state.doc == nil || state.closed || state.readOnly {
+		return nil
+	}
+	if isCommentDraftMarkdownOwner(state) {
+		composers := s.requirementUnit.state.commentComposers
+		if composers == nil || composers.active == nil || composers.active.markdown != state {
+			return errors.New("评论编辑上下文已失效，当前输入已保留")
+		}
+		if !s.captureCommentMarkdownInput(composers.active) {
+			return errors.New(firstNonEmpty(composers.active.errorText, "评论输入尚未提交，当前输入已保留"))
+		}
+		return nil
+	}
+	if state.detached {
 		return nil
 	}
 	if !s.markdownEditorIsCurrent(state) {
 		return errors.New("Markdown 编辑上下文已失效，请重新读取文件")
+	}
+	if state.live != nil {
+		if state.binding != nil {
+			return s.captureSettingsInstructionInput(state)
+		}
+		return s.captureMaterialsMarkdownInput(state)
 	}
 	if state.doc.Composing() {
 		return editor.ErrComposing

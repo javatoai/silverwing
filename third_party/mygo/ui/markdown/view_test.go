@@ -148,16 +148,14 @@ func TestRevealPaces(t *testing.T) {
 	if len(first) >= len(text)-1 {
 		t.Fatalf("a burst showed at once: %d of %d bytes", len(first), len(text))
 	}
-	time.Sleep(60 * time.Millisecond)
-	tt.Frame()
+	tt.Advance(60 * time.Millisecond)
 	if second := strings.Join(tt.Texts(), ""); len(second) <= len(first) {
 		t.Fatalf("no more text after a while: %d then %d bytes", len(first), len(second))
 	}
 	done = true
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-		tt.Frame()
+	// Within two seconds of the clock.
+	for range 100 {
+		tt.Advance(20 * time.Millisecond)
 		if strings.Join(tt.Texts(), "") == strings.TrimSpace(text) {
 			return
 		}
@@ -188,6 +186,31 @@ func TestThemeOverrides(t *testing.T) {
 	got := resolve(th, def)
 	if got.Link != th.Link || got.FontSize != 20 || got.Text != def.Text || got.Headings[0].Size != def.Headings[0].Size {
 		t.Errorf("resolved %+v", got)
+	}
+}
+
+// TestThemeLink checks that links draw in Theme.Link, not the window
+// theme's accent.
+func TestThemeLink(t *testing.T) {
+	o := &Options{Theme: &Theme{Link: ui.RGB(255, 0, 0)}}
+	tt := ui.NewTester(func(c *ui.Context) { View(c, "plain [a link](https://example.com)", o) }, 300, 80)
+	img := tt.Image()
+	acc := ui.LightTheme().Accent
+	reds, accent := 0, 0
+	for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
+		for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
+			r, g, b, _ := img.At(x, y).RGBA()
+			r, g, b = r>>8, g>>8, b>>8
+			if r > 200 && g < 60 && b < 60 {
+				reds++
+			}
+			if r == uint32(acc.R) && g == uint32(acc.G) && b == uint32(acc.B) {
+				accent++
+			}
+		}
+	}
+	if reds == 0 || accent > 0 {
+		t.Errorf("%d pixels in Theme.Link, %d in the window theme's accent", reds, accent)
 	}
 }
 
@@ -232,10 +255,10 @@ func TestFadeReplayed(t *testing.T) {
 	text, done = "", false
 	tt.Frame()
 	text = src
+	tt.Frame()
 	faded := false
 	for range 20 {
-		time.Sleep(10 * time.Millisecond)
-		tt.Frame()
+		tt.Advance(10 * time.Millisecond)
 		for i := range st.paras {
 			for _, pc := range st.paras[i].p.pieces {
 				for _, s := range pc.spans {
@@ -270,6 +293,58 @@ func TestSentenceEnds(t *testing.T) {
 
 // TestRevealBySentence checks that Stream by sentence shows only the
 // sentences complete while more is coming, and all once done.
+func TestSnapByWordCJK(t *testing.T) {
+	src := "Go语言 is 今日は。"
+	for _, c := range []struct{ i, want int }{
+		{0, 2},  // "Go", up to 语
+		{1, 2},  // in "Go"
+		{2, 5},  // 语
+		{3, 5},  // inside 语
+		{5, 9},  // 言 and the space after it
+		{9, 12}, // "is "
+		{12, 15},
+		{15, 18},
+		{18, 21},
+		{21, 24}, // 。
+	} {
+		if got := snap(src, c.i, len(src), ByWord); got != c.want {
+			t.Errorf("snap(%d) = %d, want %d", c.i, got, c.want)
+		}
+	}
+}
+
+// TestRevealCJKByWord streams Chinese in bursts, as a model's replies
+// come over a network: ByWord shows it a character or two at a time, not
+// each burst at once, as it shows English a word at a time (#668).
+func TestRevealCJKByWord(t *testing.T) {
+	zh := []rune(strings.Repeat("今天天气很好，我们去公园散步，看到了很多鸟在树上唱歌。", 4))
+	const burst = 30
+	text := ""
+	tt := ui.NewTester(func(c *ui.Context) {
+		ui.Column(c).Fill().Padding(10).Children(func() { Stream(c, text, &Options{}) })
+	}, 600, 400)
+	tt.Frame()
+	shown, steps, biggest := 0, 0, 0
+	for fed, frame := 0, 0; shown < len(zh) && frame < 600; frame++ {
+		if frame%12 == 0 && fed < len(zh) { // a burst every 12 frames
+			fed = min(fed+burst, len(zh))
+			text = string(zh[:fed])
+			tt.Frame()
+		}
+		tt.Advance(16 * time.Millisecond)
+		if n := utf8.RuneCountInString(strings.Join(tt.Texts(), "")); n != shown {
+			steps, biggest, shown = steps+1, max(biggest, n-shown), n
+		}
+	}
+	if shown != len(zh) {
+		t.Fatalf("showed %d of %d runes", shown, len(zh))
+	}
+	t.Logf("%d visible changes, the largest %d runes", steps, biggest)
+	if biggest > 4 || steps < len(zh)/4 {
+		t.Errorf("%d visible changes, the largest %d runes: CJK came in bursts", steps, biggest)
+	}
+}
+
 func TestRevealBySentence(t *testing.T) {
 	text, done := "", false
 	o := &Options{Reveal: &Reveal{Unit: BySentence, CatchUp: time.Millisecond}}
@@ -281,18 +356,14 @@ func TestRevealBySentence(t *testing.T) {
 		}
 	}, 600, 400)
 	text = "First sentence here. Second one is still"
-	for range 10 {
-		time.Sleep(10 * time.Millisecond)
-		tt.Frame()
-	}
+	tt.Frame()
+	tt.Advance(100 * time.Millisecond)
 	if got := strings.Join(tt.Texts(), ""); got != "First sentence here." {
 		t.Errorf("streaming shows %q", got)
 	}
 	done = true
-	for range 10 {
-		time.Sleep(10 * time.Millisecond)
-		tt.Frame()
-	}
+	tt.Frame()
+	tt.Advance(100 * time.Millisecond)
 	if got := strings.Join(tt.Texts(), ""); got != text {
 		t.Errorf("done, shows %q", got)
 	}

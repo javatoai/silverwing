@@ -3,6 +3,8 @@
 package darwin
 
 import (
+	"runtime"
+
 	"github.com/ebitengine/purego/objc"
 
 	"github.com/egoist/mygo/internal/accelerator"
@@ -77,6 +79,7 @@ func registerMenuTarget() {
 		method("mygoMenuItemClicked:", func(self id, _ objc.SEL, item id) {
 			theBackend.h.MenuItemClicked(sendInt(item, "tag"))
 		}),
+		method("mygoContextItemClicked:", contextItemClicked),
 	})
 }
 
@@ -153,6 +156,15 @@ func (b *Backend) buildItem(it *platform.MenuItem, owner int) id {
 }
 
 func applyItemState(item id, it *platform.MenuItem) {
+	if it.Type != platform.MenuItemSeparator && menuImage != nil {
+		var img id
+		if it.Icon != nil {
+			img = menuImage(it.Icon)
+		}
+		if send(item, "image") != img {
+			send(item, "setImage:", uintptr(img))
+		}
+	}
 	send(item, "setEnabled:", boolArg(it.Enabled))
 	send(item, "setHidden:", boolArg(!it.Visible))
 	state := uintptr(0)
@@ -163,6 +175,37 @@ func applyItemState(item id, it *platform.MenuItem) {
 	if it.ToolTip != "" {
 		send(item, "setToolTip:", uintptr(nsString(it.ToolTip)))
 	}
+}
+
+// menuImage is iconImage once LinkMenuIcons links it, when the app first
+// gives a menu item an icon.
+var menuImage func(ic *platform.MenuIcon) id
+
+// LinkMenuIcons links the code of the icons of menu items.
+func LinkMenuIcons() { menuImage = iconImage }
+
+// iconImage returns the NSImage of an icon, made once and released once
+// no snapshot holds the icon: AppKit draws it at 16 points, keeping its
+// aspect, from the representation fit for the display (an image of 32
+// pixels for Retina), and tints a template image as the menu's text, white
+// on the highlight. Its menu items show their state (the check) beside it.
+func iconImage(ic *platform.MenuIcon) id {
+	img, _ := ic.Native(func() any {
+		img := send(send(class("NSImage"), "alloc"), "initWithData:", uintptr(nsData(ic.PNG)))
+		if img == 0 {
+			return nil
+		}
+		size := msgSize(img, sel("size"))
+		if box := float64(platform.MenuIconSize); size.Width > 0 && size.Height > 0 {
+			scale := box / max(size.Width, size.Height)
+			msgSetSize(img, sel("setSize:"), NSSize{size.Width * scale, size.Height * scale})
+		}
+		send(img, "setTemplate:", boolArg(ic.Template))
+		// NSImage may be released on any thread.
+		runtime.AddCleanup(ic, func(img id) { release(img) }, img)
+		return img
+	}).(id)
+	return img
 }
 
 func (b *Backend) UpdateMenuItem(it *platform.MenuItem) {
@@ -280,6 +323,21 @@ type tray struct {
 	item   id
 	button id
 	owner  int
+	// dark is the menu bar's appearance, as last told.
+	dark bool
+}
+
+// secondaryClick reports whether a click on a status item, ending with an
+// event of type typ and modifier flags, is a right-click: the right button's,
+// or the primary button's with Control held, as a Control-click is a
+// secondary click across macOS, and in windows of native UI.
+func secondaryClick(typ, flags uint) bool {
+	const (
+		leftMouseUp  = 2       // NSEventTypeLeftMouseUp
+		rightMouseUp = 4       // NSEventTypeRightMouseUp
+		control      = 1 << 18 // NSEventModifierFlagControl
+	)
+	return typ == rightMouseUp || typ == leftMouseUp && flags&control != 0
 }
 
 func registerTrayTarget() {
@@ -290,10 +348,23 @@ func registerTrayTarget() {
 				return
 			}
 			ev := send(theBackend.app, "currentEvent")
-			if ev != 0 && sendInt(ev, "type") == 4 { // NSEventTypeRightMouseUp
+			if ev != 0 && secondaryClick(uint(sendInt(ev, "type")), uint(send(ev, "modifierFlags"))) {
 				t.h.RightClicked()
 			} else {
 				t.h.Clicked()
+			}
+		}),
+		// The menu bar under the button turned dark or light: with the
+		// system's appearance, or the wallpaper under a translucent menu
+		// bar.
+		method("observeValueForKeyPath:ofObject:change:context:", func(self id, _ objc.SEL, keyPath, object, change id, ctx uintptr) {
+			t := theBackend.trays[object]
+			if t == nil {
+				return
+			}
+			if dark := t.Dark(); dark != t.dark {
+				t.dark = dark
+				t.h.AppearanceChanged()
 			}
 		}),
 	})
@@ -313,9 +384,42 @@ func (b *Backend) NewTray(h platform.TrayHandler) (platform.Tray, error) {
 		send(t.button, "setTarget:", uintptr(trayTarget))
 		send(t.button, "setAction:", uintptr(sel("mygoTrayClicked:")))
 		send(t.button, "sendActionOn:", 1<<2|1<<4) // left and right mouse up
+		// Draw the title's digits at one width, so a changing number
+		// (a rate, a timer) doesn't resize the item and shift the icon and
+		// the items beside it. The menu bar's font at its size and weight,
+		// set on the button rather than in an attributed title, keeps
+		// AppKit's colors for light and dark bars and the highlight.
+		size := msgFloat(msgFloatID(class("NSFont"), sel("menuBarFontOfSize:"), 0), sel("pointSize"))
+		if font := msgFloat2ID(class("NSFont"), sel("monospacedDigitSystemFontOfSize:weight:"), size, 0); font != 0 { // NSFontWeightRegular
+			send(t.button, "setFont:", uintptr(font))
+		}
+		send(t.button, "addObserver:forKeyPath:options:context:", uintptr(trayTarget), uintptr(nsString("effectiveAppearance")), 0, 0)
 	})
 	b.trays[t.button] = t
+	t.dark = t.Dark()
 	return t, nil
+}
+
+// Dark reports whether the menu bar under the button is dark, as AppKit
+// draws its own status items: by the button's appearance, which follows
+// the menu bar's.
+func (t *tray) Dark() bool {
+	if t.item == 0 {
+		return false
+	}
+	dark := false
+	withPool(func() {
+		names := nsArray(nsString("NSAppearanceNameAqua"), nsString("NSAppearanceNameDarkAqua"))
+		match := send(send(t.button, "effectiveAppearance"), "bestMatchFromAppearancesWithNames:", uintptr(names))
+		dark = match != 0 && goString(match) == "NSAppearanceNameDarkAqua"
+	})
+	return dark
+}
+
+// SetID gives the status item an autosave name: macOS keeps under it where
+// the user dragged the item with ⌘, and puts it there as it is made again.
+func (t *tray) SetID(id string) {
+	withPool(func() { send(t.item, "setAutosaveName:", uintptr(nsString(id))) })
 }
 
 func (t *tray) SetImage(png []byte, template bool) error {
@@ -356,6 +460,9 @@ func (t *tray) SetMenu(m *platform.Menu) {
 	})
 }
 
+// SetActivatable does nothing: AppKit reports its clicks itself.
+func (t *tray) SetActivatable(bool) {}
+
 func (t *tray) PopUpMenu(m *platform.Menu) {
 	if m == nil || t.item == 0 {
 		return
@@ -391,6 +498,7 @@ func (t *tray) Destroy() {
 		return
 	}
 	delete(t.b.trays, t.button)
+	send(t.button, "removeObserver:forKeyPath:", uintptr(trayTarget), uintptr(nsString("effectiveAppearance")))
 	dropOwner(t.owner)
 	send(send(class("NSStatusBar"), "systemStatusBar"), "removeStatusItem:", uintptr(t.item))
 	release(t.item)

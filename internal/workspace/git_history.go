@@ -47,7 +47,7 @@ func (s *WorkspaceGitHistoryService) ReadContext(ctx context.Context, worktreePa
 	result, err := s.Git.runReadBudget(ctx, worktreePath, 2*time.Minute, 32*1024*1024,
 		"log", revision, "--format=%H%x00%P%x00%cI%x00%cn%x00%ce%x00%an%x00%ae%x00%B%x00")
 	if err != nil {
-		if errors.Is(err, errGitReadOutputLimit) || result.ExitCode <= 0 {
+		if gitReadExecutionFailed(err) || errors.Is(err, errGitReadOutputLimit) || result.ExitCode <= 0 {
 			return nil, err
 		}
 	}

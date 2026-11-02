@@ -7,7 +7,6 @@ import (
 	"math"
 	"strconv"
 	"syscall/js"
-	"time"
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/internal/gpu/gl"
@@ -47,12 +46,9 @@ type surface struct {
 	// event that follows does not repeat.
 	copied bool
 
-	// The last press, which the next counts clicks from.
-	downAt     time.Time
-	downX      float64
-	downY      float64
-	downButton int
-	clicks     int
+	// downX and downY place the last press, where a context menu opens.
+	downX, downY float64
+	clicks       platform.ClickCounter
 }
 
 func newSurface(w *window) (*surface, error) {
@@ -165,14 +161,9 @@ func (s *surface) listen() {
 		}
 		c.Call("setPointerCapture", e.Get("pointerId"))
 		b := buttonOf(button)
-		now := time.Now()
-		if b == s.downButton && now.Sub(s.downAt) < 500*time.Millisecond && math.Abs(x-s.downX) < 5 && math.Abs(y-s.downY) < 5 {
-			s.clicks++
-		} else {
-			s.clicks = 1
-		}
-		s.downAt, s.downX, s.downY, s.downButton = now, x, y, b
-		s.send(platform.SurfaceEvent{Kind: platform.PointerDown, X: x, Y: y, Button: b, Clicks: s.clicks, Mods: s.mods(e)})
+		s.downX, s.downY = x, y
+		clicks := s.clicks.Press(b, x, y, uint32(e.Get("timeStamp").Float()), platform.DefaultDoubleClick) // browsers tell no double-click settings
+		s.send(platform.SurfaceEvent{Kind: platform.PointerDown, X: x, Y: y, Button: b, Clicks: clicks, Mods: s.mods(e)})
 	})
 	s.on(c, "pointerup", true, func(e js.Value) {
 		button := e.Get("button").Int()
@@ -180,7 +171,7 @@ func (s *surface) listen() {
 			return
 		}
 		x, y := s.point(e)
-		s.send(platform.SurfaceEvent{Kind: platform.PointerUp, X: x, Y: y, Button: buttonOf(button), Clicks: s.clicks, Mods: s.mods(e)})
+		s.send(platform.SurfaceEvent{Kind: platform.PointerUp, X: x, Y: y, Button: buttonOf(button), Mods: s.mods(e)})
 	})
 	s.on(c, "pointercancel", true, func(e js.Value) {
 		x, y := s.point(e)
@@ -210,8 +201,33 @@ func (s *surface) listen() {
 				precise = false
 			}
 		}
+		if precise && e.Get("ctrlKey").Bool() {
+			// A touchpad's pinch, which Chrome and Firefox send as
+			// scrolling with Control held, as they do Control and two
+			// fingers: Chrome scrolls 100 pixels by the natural log of
+			// the scale.
+			s.send(platform.SurfaceEvent{Kind: platform.PointerZoom, X: x, Y: y, Scale: math.Exp(-dy / 100), Mods: s.mods(e)})
+			return
+		}
 		s.send(platform.SurfaceEvent{Kind: platform.PointerScroll, X: x, Y: y, DX: dx, DY: dy, Precise: precise, Mods: s.mods(e)})
 	})
+	// Safari sends pinches as gesture events instead, whose scale is from
+	// 1 as the pinch began; without preventDefault it zooms the page.
+	pinch := 1.0
+	gesture := func(e js.Value) {
+		e.Call("preventDefault")
+		scale := e.Get("scale").Float()
+		if e.Get("type").String() == "gesturestart" {
+			pinch = 1
+		}
+		if scale > 0 && pinch > 0 && scale != pinch {
+			x, y := s.point(e)
+			s.send(platform.SurfaceEvent{Kind: platform.PointerZoom, X: x, Y: y, Scale: scale / pinch, Mods: s.mods(e)})
+		}
+		pinch = scale
+	}
+	s.on(c, "gesturestart", false, gesture)
+	s.on(c, "gesturechange", false, gesture)
 
 	// Files dragged over the canvas, and dropped: their bytes are read, as
 	// browsers give them, before the drop goes to the content (files.go).

@@ -90,11 +90,73 @@ type MaterialSurface interface {
 	ShowsMaterial() bool
 }
 
+// PacedSurface is a Surface whose frames following each other come at the
+// display's refreshes, marked Paced: a renderer that waits for the display
+// lets such a frame draw once the display can take it, with FrameNow.
+type PacedSurface interface {
+	// FrameNow sends a SurfaceFrame at once, as a refresh would, for a
+	// frame a Paced one left to draw.
+	FrameNow()
+}
+
+// RefreshSurface is a PacedSurface whose frames drawn in memory
+// (PresentPixels) show at once, and whose frames asked for (RequestFrame)
+// come at once, not at the display's refreshes, as Windows' do: after
+// each frame drawn in memory, the content waits for the next refresh off
+// the main thread, and Paced frames that come meanwhile wait for it.
+type RefreshSurface interface {
+	// AwaitRefresh returns once the display shows its next refresh, or
+	// at once when nothing is to show. It blocks, and is called from a
+	// goroutine of its own, never the main thread.
+	AwaitRefresh()
+}
+
+// FrameRateSurface is a Surface that can have its display refresh less
+// often than it can while frames come at a lower rate, as macOS's display
+// links do on ProMotion displays.
+type FrameRateSurface interface {
+	// SetFrameRate tells how many frames a second come from now on while
+	// they follow each other, a whole fraction of RefreshRate, or 0 for
+	// one each refresh.
+	SetFrameRate(fps float64)
+}
+
+// ImmediateFrameSurface is a Surface whose RequestFrame sends a
+// SurfaceFrame at once, as Windows' does, rather than at the display's next
+// refresh: a frame due at a later refresh waits on a timer instead.
+type ImmediateFrameSurface interface {
+	// FramesAtOnce marks the surface.
+	FramesAtOnce()
+}
+
+// MaximizeButtonSurface is a Surface whose window makes the maximize
+// button its content draws (in a window without its own, as
+// WindowOptions.HideWindowButtons) the system's for the pointer: Windows
+// shows the snap layouts over it. Package ui reaches it only once a view
+// marks such a button (ui.Element.MaximizeButton), for apps that mark none
+// not to link it.
+type MaximizeButtonSurface interface {
+	// SetMaximizeButton tells where the content shows the window's
+	// maximize button, in DIPs from the top-left corner of the content.
+	// The zero RectF is nowhere.
+	SetMaximizeButton(r RectF)
+}
+
 // IdleSurface is a Surface that can give back memory once frames stop.
 type IdleSurface interface {
 	// Idle tells that no frame came for a while: the surface may give
 	// back memory that drawing frames took and freed.
 	Idle()
+}
+
+// BackgroundSurface is a Surface told the color the content's frames fill
+// the window with, which its window shows where no frame of its size
+// shows yet: on Windows, DWM can show a window at its new size, as the
+// user drags its border, before the frame of that size, and would show
+// black where the window grew.
+type BackgroundSurface interface {
+	// SetBackground sets the color, opaque, or transparent for none.
+	SetBackground(c Color)
 }
 
 // TextInputState is the state of the text input that has the keyboard,
@@ -160,7 +222,9 @@ const (
 	// PointerMove reports the pointer at X, Y.
 	PointerMove
 	// PointerDown and PointerUp report Button pressed or released at X,
-	// Y; Clicks counts quick successive presses (2 for a double click).
+	// Y; Clicks counts quick successive presses (2 for a double click),
+	// by the system's double-click settings. A release may leave it 0, for
+	// its press's.
 	PointerDown
 	PointerUp
 	// PointerLeave reports the pointer left the surface.
@@ -168,6 +232,9 @@ const (
 	// PointerScroll scrolls by DX, DY DIPs at X, Y: positive DY moves the
 	// view down the content, as dragging a scroll bar's thumb down does.
 	PointerScroll
+	// PointerZoom zooms by Scale at X, Y, as pinching a touchpad does: 2
+	// shows the content twice as large as it was.
+	PointerZoom
 	// KeyPressed and KeyReleased report Key with Mods; Repeat marks
 	// auto-repeat.
 	KeyPressed
@@ -237,10 +304,15 @@ type SurfaceEvent struct {
 	Button int
 	Clicks int
 	// DX and DY are scroll distances in DIPs; Precise marks touchpads and
-	// other devices that scroll by pixels rather than by lines.
-	DX, DY  float64
-	Precise bool
-	Key     Key
+	// other devices that scroll by pixels rather than by lines. Momentum
+	// marks scrolling that continues after the fingers leave a touchpad.
+	DX, DY   float64
+	Precise  bool
+	Momentum bool
+	// Scale is PointerZoom's. A wheel-derived zoom may also carry DX/DY and
+	// Precise as an optional legacy-scroll fallback when zoom is unhandled.
+	Scale float64
+	Key   Key
 	// PhysicalKey is the key by its position on an ANSI US keyboard,
 	// whatever the active layout types; KeyUnknown where the backend does
 	// not report it. Key and PhysicalKey agree on a US layout.
@@ -263,6 +335,11 @@ type SurfaceEvent struct {
 	Action AccessActionKind
 	// WebView is WebViewTabOut's.
 	WebView WebView
+	// Paced marks a SurfaceFrame of frames following each other at the
+	// display's refreshes (PacedSurface): the content may draw it later,
+	// once the display can take it, which it tells by returning true from
+	// SurfaceEvent; the refreshes go on meanwhile.
+	Paced bool
 }
 
 // Modifiers are the modifier keys held during an event.
@@ -358,7 +435,8 @@ const (
 	KeyY
 	KeyZ
 	// KeyBack and KeyForward go back and forward in a history: the side
-	// buttons of a mouse, and the keys of keyboards that have them.
+	// buttons of a mouse, the keys of keyboards that have them, and on
+	// macOS swipes between pages.
 	KeyBack
 	KeyForward
 )

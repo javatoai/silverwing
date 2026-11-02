@@ -73,7 +73,7 @@ func TestWorkspaceReviewRenderersKeepDividerAndReadingPosition(t *testing.T) {
 				t.Fatal("workspace divider snapped back after rebuild")
 			}
 			if fallback {
-				state.DiffRows.oldScroll.X, state.DiffRows.newScroll.X = 20, 70
+				state.DiffRows.oldScroll.X, state.DiffRows.newScroll.X, state.DiffRows.lastSharedX = 70, 70, 70
 				state.DiffRows.oldScroll.Y, state.DiffRows.newScroll.Y, state.DiffRows.lastSharedY = 400, 400, 400
 			} else {
 				state.NativeDiff.view.SetScrollPosition(editor.DiffScrollPosition{OldX: 20, NewX: 70, Y: 400})
@@ -94,7 +94,7 @@ func TestWorkspaceReviewRenderersKeepDividerAndReadingPosition(t *testing.T) {
 				position := state.NativeDiff.view.ScrollPosition()
 				oldX, newX, restoredY = position.OldX, position.NewX, position.Y
 			}
-			if math.Abs(restoredY-400) > 1 || oldX != 20 || newX != 70 {
+			if math.Abs(restoredY-400) > 1 || oldX != 70 || newX != 70 {
 				t.Fatalf("file reading position was not restored: oldX=%v newX=%v y=%v", oldX, newX, restoredY)
 			}
 		})

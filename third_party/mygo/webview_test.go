@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -30,6 +31,12 @@ func (pageService) Where(ctx context.Context) string {
 // view, its page loaded.
 func webViewWindow(t *testing.T, show *bool) (*Window, *WebView, *fake.Surface, *fake.WebView) {
 	t.Helper()
+	return webViewWindowOpts(t, show, WebViewOptions{})
+}
+
+// webViewWindowOpts is webViewWindow for a web view made with opts.
+func webViewWindowOpts(t *testing.T, show *bool, opts WebViewOptions) (*Window, *WebView, *fake.Surface, *fake.WebView) {
+	t.Helper()
 	var v *WebView
 	w, _, s := contentWindow(t, func(c *ui.Context) {
 		ui.Column(c).Fill().AlignItems(ui.Stretch).Children(func() {
@@ -39,7 +46,7 @@ func webViewWindow(t *testing.T, show *bool) (*Window, *WebView, *fake.Surface, 
 			}
 		})
 	})
-	v, err := w.NewWebView(WebViewOptions{})
+	v, err := w.NewWebView(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,6 +80,77 @@ func TestWebViewThemePreferences(t *testing.T) {
 	src := onMainValue(func() string { return fv.Opts.UserScripts[1].Source })
 	if !strings.Contains(src, `"textScale":2`) {
 		t.Errorf("web view's preferences script after a change = %s", src)
+	}
+}
+
+// TestWebViewTabFocus passes the page's Tab behavior to a web view: every
+// control by default, Safari's text fields only when asked for.
+func TestWebViewTabFocus(t *testing.T) {
+	w, _, s := contentWindow(t, func(c *ui.Context) {})
+	if _, err := w.NewWebView(WebViewOptions{Page: PageOptions{SafariTabFocus: true}}); err != nil {
+		t.Fatal(err)
+	}
+	if views := s.WebViews(); len(views) != 1 || views[0].Opts.TabFocusesLinks {
+		t.Errorf("web views %d: SafariTabFocus not applied", len(views))
+	}
+	if _, err := w.NewWebView(WebViewOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if views := s.WebViews(); len(views) != 2 || !views[1].Opts.TabFocusesLinks {
+		t.Error("Tab reaches every control by default")
+	}
+}
+
+// TestWebViewPictureInPicture passes PictureInPicture to a web view, whose
+// page moves its video into picture in picture.
+func TestWebViewPictureInPicture(t *testing.T) {
+	w, _, s := contentWindow(t, func(c *ui.Context) {})
+	v, err := w.NewWebView(WebViewOptions{Page: PageOptions{PictureInPicture: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if views := s.WebViews(); len(views) != 1 || !views[0].Opts.PictureInPicture {
+		t.Fatalf("web views %d: PictureInPicture not applied", len(views))
+	}
+	v.Page().TogglePictureInPicture()
+	if !v.Page().IsPictureInPictureActive() {
+		t.Error("TogglePictureInPicture did not reach the web view")
+	}
+}
+
+// TestPageGestures passes SwipeNavigation and PinchZoom to the backend for
+// a window's page and a web view's, both off unless asked for.
+func TestPageGestures(t *testing.T) {
+	gestures := PageOptions{SwipeNavigation: true, PinchZoom: true}
+	_, fw := testWindow(t, WindowOptions{})
+	if o := fw.Opts; o.SwipeNavigation || o.PinchZoom {
+		t.Errorf("a window's page swipes %v and pinches %v by default", o.SwipeNavigation, o.PinchZoom)
+	}
+	_, fw = testWindow(t, WindowOptions{Page: gestures})
+	if o := fw.Opts; !o.SwipeNavigation || !o.PinchZoom {
+		t.Errorf("a window's page asked to swipes %v and pinches %v", o.SwipeNavigation, o.PinchZoom)
+	}
+	_, fw = testWindow(t, WindowOptions{Page: PageOptions{PinchZoom: true}})
+	if o := fw.Opts; o.SwipeNavigation || !o.PinchZoom {
+		t.Errorf("a window's page asked to pinch swipes %v and pinches %v", o.SwipeNavigation, o.PinchZoom)
+	}
+
+	w, _, s := contentWindow(t, func(c *ui.Context) {})
+	if _, err := w.NewWebView(WebViewOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.NewWebView(WebViewOptions{Page: gestures}); err != nil {
+		t.Fatal(err)
+	}
+	views := s.WebViews()
+	if len(views) != 2 {
+		t.Fatalf("%d web views", len(views))
+	}
+	if o := views[0].Opts; o.SwipeNavigation || o.PinchZoom {
+		t.Errorf("a web view swipes %v and pinches %v by default", o.SwipeNavigation, o.PinchZoom)
+	}
+	if o := views[1].Opts; !o.SwipeNavigation || !o.PinchZoom {
+		t.Errorf("a web view asked to swipes %v and pinches %v", o.SwipeNavigation, o.PinchZoom)
 	}
 }
 
@@ -171,6 +249,27 @@ func TestWebViewPage(t *testing.T) {
 	}
 	if got := v.Page().URL(); got != "https://example.com/" {
 		t.Errorf("URL %q", got)
+	}
+	fv.SetProcessID(31)
+	if got := v.Page().ProcessID(); got != 31 {
+		t.Errorf("ProcessID %d, want 31", got)
+	}
+	v.Page().SetAudioMuted(true)
+	if !fv.IsAudioMuted() || !v.Page().IsAudioMuted() {
+		t.Errorf("SetAudioMuted: the web view's %v, the page's %v", fv.IsAudioMuted(), v.Page().IsAudioMuted())
+	}
+	var audible []bool
+	v.Page().OnAudibleChanged(func(a bool) { audible = append(audible, a) })
+	onMain(func() { fv.SetAudible(true) })
+	if !v.Page().IsAudible() || !slices.Equal(audible, []bool{true}) {
+		t.Errorf("a web view playing: IsAudible %v, changes %v", v.Page().IsAudible(), audible)
+	}
+	var muted []CaptureState
+	v.Page().OnCaptureStateChanged(func(_ CaptureKind, s CaptureState) { muted = append(muted, s) })
+	onMain(func() { fv.SetCapture(platform.CaptureMicrophone, platform.CaptureActive) })
+	v.Page().SetCaptureState(CaptureMicrophone, CaptureMuted)
+	if got := v.Page().CaptureState(CaptureMicrophone); got != CaptureMuted || !slices.Equal(muted, []CaptureState{CaptureActive, CaptureMuted}) {
+		t.Errorf("a web view's microphone muted: CaptureState %d, changes %v", got, muted)
 	}
 }
 

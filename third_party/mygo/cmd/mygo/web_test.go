@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/egoist/mygo/internal/wait"
 )
 
 func TestWebPage(t *testing.T) {
@@ -92,7 +94,7 @@ func TestWebDev(t *testing.T) {
 		select {
 		case e := <-done:
 			return e
-		case <-time.After(5 * time.Second):
+		case <-time.After(wait.Guard):
 			t.Fatal("no event")
 			return ""
 		}

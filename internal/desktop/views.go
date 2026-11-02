@@ -89,6 +89,10 @@ func (s *app) materials(c *ui.Context, p palette) {
 				}
 				return
 			}
+			if s.materialsMarkdownEditorVisible() {
+				s.renderMaterialsMarkdownEditor(c, p)
+				return
+			}
 			// Match the source reader's 12dp pane inset plus 18dp vertical / 26dp
 			// horizontal native Markdown reader padding.
 			ext := strings.ToLower(filepath.Ext(s.materialsUnit.state.documentPath))
@@ -197,7 +201,7 @@ func (s *app) materialsUnavailable(c *ui.Context, p palette, t task) {
 		if t.requirementURL == "" && action(c, "materials-prepare-local", "folder", "准备本地资料", p, true) {
 			s.act("task.materials-retry", t.id, "", "", "", "", nil)
 		} else if t.requirementURL != "" && !configured && action(c, "materials-open-settings", "settings", "配置任务资料", p, false) {
-			s.page, s.settingsUnit.state.settingsTab, s.settingsUnit.state.settingsPage, s.settingsUnit.state.settingsLoaded = "settings", "存储", "paths", ""
+			s.page, s.settingsUnit.state.settingsTab, s.settingsUnit.state.settingsPage, s.settingsUnit.state.settingsLoaded = "settings", "资料与说明", "paths", ""
 		} else if t.requirementURL != "" && configured && action(c, "materials-associate", "refresh", map[bool]string{true: "重试关联", false: "关联任务资料"}[t.materialsFailed()], p, true) {
 			s.act("task.materials-retry", t.id, "", "", "", "", nil)
 		}
@@ -216,11 +220,18 @@ func (s *app) documentTree(c *ui.Context, p palette, width float32) {
 	order := s.readingMaterialsSortOrder()
 	projection := s.materialsDocumentProjection()
 	expanded := s.readingExpandedDirectories()
+	loading := !s.materialsUnit.state.documentsLoaded || s.materialsUnit.state.documentsRequested
+	emptyMessage := "此任务资料目录为空。"
+	if loading {
+		emptyMessage = "正在加载资料目录…"
+	}
 	ui.Column(c).Width(width).Shrink(0).MinHeight(0).Background(p.side).Border(1, p.line).BorderWidth(0, 1, 0, 0).Children(func() {
 		ui.Row(c).Height(34).Shrink(0).Padding(0, 8).Gap(2).AlignItems(ui.Center).Children(func() {
 			label(c, "资料", 13, p.text).FontWeight(600)
 			if selectedCount := len(selection); selectedCount > 0 {
 				label(c, fmt.Sprintf("已选 %d", selectedCount), 11, p.blue).SingleLine().Shrink(1).MinWidth(0)
+			} else if loading && projection.count() == 0 {
+				label(c, "加载中", 11, p.muted)
 			} else {
 				label(c, fmt.Sprintf("(%d)", projection.count()), 11, p.muted)
 			}
@@ -287,7 +298,7 @@ func (s *app) documentTree(c *ui.Context, p palette, width float32) {
 		FileTree(c, p, FileTreeProps{
 			Key: "materials-file-tree", Root: FileTreeRow{ID: "@root", Name: filepath.Base(state.root), Path: state.root, Directory: true},
 			HideRoot: true, Prepared: prepared, Selected: selected, State: &state.tree,
-			Scroll: s.readingScrollState("directory"), Empty: "此任务资料目录为空。", AcceptFiles: true,
+			Scroll: s.readingScrollState("directory"), Empty: emptyMessage, AcceptFiles: true,
 			SuppressTooltip: s.dialogOpen || s.overflowMenus != nil && s.overflowMenus.openKey != "",
 			OnInput:         func(input FileTreeInput) { s.materialsTreeInput(state, input) },
 			ContextMenu: func(row FileTreeRow, menu *ui.Menu) {
@@ -400,6 +411,7 @@ func (s *app) documentTabsBar(c *ui.Context, p palette) {
 
 func (s *app) documentToolbar(c *ui.Context, p palette) {
 	s.renderMaterialsTextEditorHeader(c, p)
+	s.renderMaterialsMarkdownHeader(c, p)
 	if s.materialsUnit.state.documentsCollapsed {
 		ui.Row(c).Height(36).Shrink(0).Padding(0, 12).Gap(8).AlignItems(ui.Center).Background(p.soft).Border(1, p.line).BorderWidth(0, 0, 1, 0).Children(func() {
 			if miniButton(c, p, "materials-expand-list", "chevron", "展开文档列表", false).Clicked() {
@@ -442,7 +454,7 @@ func (s *app) documentMoreMenu(c *ui.Context, m *overflowMenuBuilder) {
 			s.openDocumentFind(c)
 		}
 	}
-	if ext == ".md" || ext == ".markdown" {
+	if (ext == ".md" || ext == ".markdown") && !s.materialsMarkdownWritable(s.materialsUnit.state.documentPath) {
 		label, next := "查看 Markdown 原文", "SOURCE"
 		if s.readingMode() == "SOURCE" {
 			label, next = "返回 Markdown 预览", "RENDERED"
@@ -450,6 +462,9 @@ func (s *app) documentMoreMenu(c *ui.Context, m *overflowMenuBuilder) {
 		if m.Item("markdown-mode", label).Icon("file").Chosen() {
 			s.setReadingMode(next)
 		}
+	}
+	if s.materialsMarkdownWritable(s.materialsUnit.state.documentPath) && m.Item("markdown-save", "立即保存").Icon("save").Chosen() {
+		s.saveMarkdownEditor(s.materialsUnit.state.markdown)
 	}
 	if s.materialsUnit.state.documentDirty && ext != ".md" && ext != ".markdown" {
 		label := "保存"
@@ -510,6 +525,10 @@ func miniButton(c *ui.Context, p palette, key, image, accessible string, selecte
 
 func (s *app) closeDocumentTab(path string) {
 	if path == s.materialsUnit.state.documentPath {
+		if err := s.captureMarkdownEditorInput(s.materialsUnit.state.markdown); err != nil {
+			s.lastError = err.Error()
+			return
+		}
 		if err := s.captureMaterialTextInput(); err != nil {
 			s.lastError = err.Error()
 			return

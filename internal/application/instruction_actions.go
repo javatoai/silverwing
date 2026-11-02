@@ -14,6 +14,9 @@ import (
 )
 
 func (a *App) instructionAction(ctx context.Context, action Action) (actionResult ActionResult, actionErr error) {
+	if action.Kind == "instructions.images.import" {
+		return a.importInstructionImages(ctx, action)
+	}
 	if boolPayload(action, "localTaskRules") && (action.Kind == "instructions.read" || action.Kind == "instructions.save") {
 		return a.localTaskRulesAction(ctx, action)
 	}

@@ -92,6 +92,7 @@ type Backend interface {
 	Theme() Theme
 	Power() Power
 	Network() Network
+	NowPlaying() NowPlaying
 	// Secrets may be called before Init, from any goroutine.
 	Secrets() Secrets
 	// Applications lists the applications installed on the computer.
@@ -171,15 +172,28 @@ type AppHandler interface {
 	NetworkChanged(status NetworkStatus)
 	HotkeyPressed(id int)
 	NotificationClicked(id string)
+	// MediaCommand reports a media key or a remote command for what
+	// NowPlaying shows; position is where MediaSeek asks to go.
+	MediaCommand(cmd MediaCommand, position time.Duration)
 }
 
 // AppController exposes application level native features.
 type AppController interface {
 	SetActivationPolicy(policy string)
 	Activate()
+	// AllowForeground lets the next process to ask bring its windows to
+	// the front, which Windows only lets the process in front do.
+	AllowForeground()
+	// WithActivationToken runs fn with the startup notification or XDG
+	// activation token of the launch that caused it, which the window fn
+	// shows or focuses first may need to take the focus (Wayland).
+	WithActivationToken(token string, fn func())
 	Hide()
 	Unhide()
 	IsHidden() bool
+	// IsActive reports whether the app is the active one: in front on
+	// macOS, with a window that has the keyboard elsewhere.
+	IsActive() bool
 	SetBadge(label string)
 	Badge() string
 	// Bounce requests user attention and returns an id for CancelBounce.
@@ -188,17 +202,31 @@ type AppController interface {
 	SetDockIcon(png []byte) error
 	// SetDockMenu sets the menu of the Dock icon (macOS); nil removes it.
 	SetDockMenu(m *Menu)
-	// ClearBrowsingData deletes the data pages stored; done runs on the
-	// main thread.
-	ClearBrowsingData(done func(error))
-	// Cookie operations address the default page store. Calls and exactly-once
-	// completions run on main; ListCookies returns independent Go values:
-	// every cookie, or with an http or https url the cookies a request to
-	// it sends (CookieMatchesURL where the engine cannot tell).
-	ListCookies(url string, done func([]Cookie, error))
-	SetCookie(cookie Cookie, done func(error))
-	DeleteCookie(key CookieKey, done func(error))
-	ClearCookies(done func(error))
+	// NewDataStore makes a website data store other than the default one
+	// (mygo.Session), which WindowOptions.DataStore and the calls below
+	// take. The core makes one store per session and closes it with
+	// DataStore.Close.
+	NewDataStore(opts DataStoreOptions) (DataStore, error)
+	// ClearBrowsingData deletes the data of types pages stored in store,
+	// nil for the default one; done runs on the main thread.
+	ClearBrowsingData(store DataStore, types SiteData, done func(error))
+	// Cookie operations address store, nil for the default page store.
+	// Calls and exactly-once completions run on main; ListCookies returns
+	// independent Go values: every cookie, or with an http or https url
+	// the cookies a request to it sends (CookieMatchesURL where the engine
+	// cannot tell).
+	ListCookies(store DataStore, url string, done func([]Cookie, error))
+	SetCookie(store DataStore, cookie Cookie, done func(error))
+	DeleteCookie(store DataStore, key CookieKey, done func(error))
+	ClearCookies(store DataStore, done func(error))
+	// CompileContentRules makes a content rule list of rules, in WebKit's
+	// content blocker JSON format: it loads the list kept as identifier
+	// (ContentRulesIdentifier) where the engine keeps compiled lists,
+	// else compiles rules, keeps the list as identifier and removes the
+	// lists kept for id under other identifiers (StaleContentRules).
+	// done runs on the main thread exactly once, with a handle
+	// Page.SetContentRules takes.
+	CompileContentRules(id, identifier, rules string, done func(list any, err error))
 	ShowAboutPanel(opts AboutPanelOptions)
 	// PreferredLanguages returns the languages the user reads, most
 	// preferred first, as the system's settings list them, in the forms
@@ -330,12 +358,19 @@ type WindowOptions struct {
 	TitleBarStyle string
 	// TitleBarHeight is the height of a hidden title bar in DIPs (Linux,
 	// Windows); 0 is the backend's own.
-	TitleBarHeight       int
+	TitleBarHeight int
+	// HideWindowButtons hides the window controls of a hidden title bar,
+	// which the page draws itself: TitleBar is then zero.
+	HideWindowButtons    bool
 	TrafficLightPosition *Point
 	Vibrancy             string
-	Opacity              float64
-	Parent               Window
-	Modal                bool
+	// CornerRadius rounds a frameless window's corners, in DIPs: its
+	// content and material are cut to them (macOS), or the system rounds
+	// it with its own corners (Windows 11).
+	CornerRadius int
+	Opacity      float64
+	Parent       Window
+	Modal        bool
 	// Flyout makes the window a flyout of its Parent, placed next to an
 	// anchor (Window.PlaceFlyout), at Width and Height: borderless,
 	// transparent, out of the taskbar, with Focusable telling whether it
@@ -352,10 +387,40 @@ type WindowOptions struct {
 	UserScripts []UserScript
 	// Schemes lists the custom protocols the webview must route to
 	// WindowHandler.SchemeRequest.
-	Schemes   []string
-	DevTools  bool
+	Schemes  []string
+	DevTools bool
+	// UserAgent overrides the user agent of the webview.
 	UserAgent string
-	Zoom      float64
+	// UserAgentSuffix is appended to UserAgent, or to the webview's own
+	// user agent, after a space. The public package trims it.
+	UserAgentSuffix string
+	Zoom            float64
+	// TabFocusesLinks makes Tab reach links and form controls that are not
+	// text fields (macOS, WKPreferences.tabFocusesLinks); the other
+	// platforms reach them already.
+	TabFocusesLinks bool
+	// NoBackgroundThrottling keeps the page running at full speed while
+	// its window is hidden, minimized or covered
+	// (mygo.PageOptions.BackgroundThrottling): its timers unthrottled, its
+	// process at the priority of a visible one.
+	NoBackgroundThrottling bool
+	// Autoplay lets the page play audible media without a user gesture
+	// (mygo.PageOptions.Autoplay).
+	Autoplay bool
+	// PictureInPicture lets the page's videos go into picture in picture
+	// (macOS, WebKit's private _allowsPictureInPictureMediaPlayback);
+	// WebView2 lets them already, and WebKitGTK has none.
+	PictureInPicture bool
+	// SwipeNavigation lets a swipe go back and forward through the page's
+	// history (mygo.PageOptions.SwipeNavigation).
+	SwipeNavigation bool
+	// PinchZoom lets a pinch magnify the page; the backends turn it off
+	// where their webview has it on by default (mygo.PageOptions.PinchZoom).
+	PinchZoom bool
+	// DataStore is the website data store of the page, one of
+	// AppController.NewDataStore; nil is the default store. A window
+	// opened by window.open has its opener's.
+	DataStore DataStore
 	// Native carries backend specific state, e.g. the WKWebViewConfiguration
 	// WebKit hands us for window.open().
 	Native uintptr
@@ -365,6 +430,51 @@ type WindowOptions struct {
 	// webview methods do nothing and the webview options are ignored.
 	Surface bool
 }
+
+// DataStoreOptions describe a website data store (AppController.NewDataStore).
+type DataStoreOptions struct {
+	// ID identifies a persistent store from one run to the next: a UUID
+	// in lowercase hex with dashes, which the core derives from the
+	// session's name. It is empty for an ephemeral store.
+	ID string
+	// Ephemeral keeps the store's data in memory, where it goes with the
+	// store.
+	Ephemeral bool
+	// DataDir and CacheDir are where a persistent store keeps its data and
+	// its caches, for the backends that choose (Linux).
+	DataDir, CacheDir string
+}
+
+// DataStore is a website data store a backend made: cookies, local and
+// session storage, IndexedDB, caches and service workers that the pages
+// using it share, apart from those of other stores.
+type DataStore interface {
+	// Close lets the store go once the backend no longer needs it: the
+	// core calls it when no page uses an ephemeral store, whose data then
+	// goes, and makes another store for the session's next page. Calls
+	// under way finish.
+	Close()
+}
+
+// SiteData are kinds of data pages store, for ClearBrowsingData.
+type SiteData uint
+
+const (
+	SiteDataCookies SiteData = 1 << iota
+	// SiteDataLocalStorage is localStorage and sessionStorage.
+	SiteDataLocalStorage
+	// SiteDataIndexedDB is IndexedDB, and WebSQL where the engine has it.
+	SiteDataIndexedDB
+	// SiteDataCaches is the HTTP caches, and Cache Storage.
+	SiteDataCaches
+	SiteDataServiceWorkers
+	// SiteDataAll is all the data the engine keeps for sites, the kinds
+	// above and the others (HSTS, media keys, …).
+	SiteDataAll SiteData = 1<<iota - 1 | 1<<31
+)
+
+// All reports whether t asks for all the data, SiteDataAll.
+func (t SiteData) All() bool { return t&SiteDataAll == SiteDataAll }
 
 // UserScript is JavaScript injected into pages.
 type UserScript struct {
@@ -436,6 +546,13 @@ type Window interface {
 	SetIgnoreMouseEvents(v bool)
 	SetContentProtection(v bool)
 	SetVibrancy(material string)
+	// SetActiveAppearance keeps the window drawn as active, as the key
+	// window of the app in front, while it is not (macOS).
+	SetActiveAppearance(v bool)
+	// SetWindowButtonsTheme draws the controls of a hidden title bar for a
+	// "light" or "dark" background whatever the app's appearance, or
+	// follows it again with "system" (Windows).
+	SetWindowButtonsTheme(source string)
 	// SetProgressBar shows progress on the taskbar button, Dock icon or
 	// launcher entry: state is "" (none), "normal", "indeterminate",
 	// "paused" or "error", value between 0 and 1.
@@ -495,6 +612,10 @@ type Page interface {
 	// the current document keeps what it ran. Scripts a backend injects
 	// itself, as the title bar's, stay.
 	SetUserScripts(scripts []UserScript)
+	// SetContentRules replaces the content rule lists the page's loads
+	// go through from then on with lists, handles of
+	// AppController.CompileContentRules; none removes them.
+	SetContentRules(lists []any)
 	// CallAsyncFunction runs body as the body of an async function in the
 	// main frame, awaits it and reports the returned value, which the
 	// caller arranges to be a string. err is non-nil when the body fails to
@@ -504,6 +625,50 @@ type Page interface {
 	Zoom() float64
 	SetUserAgent(ua string)
 	UserAgent() string
+	// ProcessID returns the ID of the operating system's process that
+	// the backend reports for the page (see Page.ProcessID in package
+	// mygo for which one), 0 when it reports none.
+	ProcessID() int
+	// IsAudible reports whether the page plays sound, from any of its
+	// frames, as WindowHandler.AudibleChanged reports its changes; false
+	// where the backend cannot tell.
+	IsAudible() bool
+	// SetAudioMuted mutes the page's sound, or lets it play again. A
+	// backend whose web view does not exist yet mutes it once it does;
+	// one that cannot mute does nothing.
+	SetAudioMuted(muted bool)
+	// IsAudioMuted reports what SetAudioMuted set, false where the
+	// backend cannot mute.
+	IsAudioMuted() bool
+	// CaptureState reports whether the page captures kind, and whether
+	// it is muted, as WindowHandler.CaptureStateChanged reports its
+	// changes; CaptureNone where the backend cannot tell.
+	CaptureState(kind CaptureKind) CaptureState
+	// SetCaptureState mutes the page's capture of kind (CaptureMuted),
+	// lets it go on (CaptureActive) or stops it (CaptureNone). It does
+	// nothing while the page captures no such device, and where the
+	// backend cannot.
+	SetCaptureState(kind CaptureKind, state CaptureState)
+	// TogglePictureInPicture moves a video of the page into picture in
+	// picture, or the one out back into the page (see
+	// Page.TogglePictureInPicture in package mygo for which video); a
+	// backend that cannot does nothing.
+	TogglePictureInPicture()
+	// PictureInPictureActive tells cb whether a video of the page is in
+	// picture in picture, false where the backend cannot tell. cb runs on
+	// the main thread exactly once, maybe before PictureInPictureActive
+	// returns.
+	PictureInPictureActive(cb func(active bool))
+	// SessionState returns the engine's own state of the page's
+	// back/forward list, with the scroll positions and form state it
+	// saved of its entries, nil where the backend keeps none.
+	SessionState() []byte
+	// RestoreSessionState puts back a back/forward list that
+	// SessionState returned and loads its current entry, as LoadURL
+	// loads a page, and reports whether it did: false where the backend
+	// keeps no state or can't read this one, for the core to load the
+	// page's URL instead.
+	RestoreSessionState(state []byte) bool
 	OpenDevTools()
 	CloseDevTools()
 	IsDevToolsOpened() bool
@@ -517,6 +682,27 @@ type Page interface {
 	DroppedFiles() []string
 	Print()
 }
+
+// CaptureKind is a kind of device a page captures (Page.CaptureState).
+type CaptureKind int
+
+const (
+	CaptureCamera CaptureKind = iota
+	CaptureMicrophone
+	// CaptureDisplay is the capture of a screen or a window,
+	// getDisplayMedia().
+	CaptureDisplay
+)
+
+// CaptureState is whether a page captures a kind of device. The values
+// are WebKit's WKMediaCaptureState and WebKitMediaCaptureState.
+type CaptureState int
+
+const (
+	CaptureNone CaptureState = iota
+	CaptureActive
+	CaptureMuted
+)
 
 // WebView is a web view in a window showing a Surface, which its content
 // places (Surface.NewWebView, Surface.PlaceWebViews): under the surface,
@@ -603,6 +789,11 @@ type WindowHandler interface {
 	// ClosedByPage is called when the page calls window.close().
 	ClosedByPage()
 	RenderProcessGone(reason string)
+	// AudibleChanged is called when Page.IsAudible changes.
+	AudibleChanged(audible bool)
+	// CaptureStateChanged is called when Page.CaptureState of kind may
+	// have changed, with its state.
+	CaptureStateChanged(kind CaptureKind, state CaptureState)
 	SchemeRequest(req *SchemeRequest)
 	// DownloadStarted returns where to save a download, "" to cancel it;
 	// DownloadFinished reports how it ended.
@@ -614,6 +805,21 @@ type WindowHandler interface {
 	// PermissionRequested asks whether the page at origin may use kinds:
 	// "camera", "microphone", "geolocation" or "notifications".
 	PermissionRequested(kinds []string, origin string) bool
+	// AuthRequested answers an HTTP authentication challenge of the page,
+	// or of what it loads.
+	AuthRequested(req AuthRequest) AuthResponse
+	// CertificateError asks whether to load what a server sent with a
+	// certificate that does not verify: false fails it, as without the
+	// call. A backend that verifies certificates itself to tell (macOS)
+	// does so only while HandlesCertificateErrors reports true, and
+	// leaves them to the web view otherwise.
+	CertificateError(e CertificateError) bool
+	HandlesCertificateErrors() bool
+	// ContextMenu asks what the page's context menu shows, as it is
+	// about to open, and HandlesContextMenu whether to ask at all: a
+	// backend describes its menu only while it does.
+	ContextMenu(m *ContextMenu) ContextMenuResponse
+	HandlesContextMenu() bool
 
 	// SurfaceEvent delivers input on the window's Surface, and changes of
 	// it. For FileDragOver and FileDrop it reports whether the content
@@ -645,6 +851,10 @@ type NewWindowRequest struct {
 	Disposition string
 	// Width/Height/X/Y come from window.open() features; zero when absent.
 	X, Y, Width, Height int
+	// UserInitiated is true when a user's gesture, as a click or a key
+	// press, opened the window: a click on the link, or its handler
+	// calling window.open().
+	UserInitiated bool
 	// Native must be copied into WindowOptions.Native of the window that is
 	// returned.
 	Native uintptr
@@ -718,7 +928,18 @@ type MenuItem struct {
 	Visible     bool
 	Checked     bool
 	ToolTip     string
-	Submenu     *Menu
+	// Icon is the image beside the label, nil for none.
+	Icon    *MenuIcon
+	Submenu *Menu
+	// Native is set on the web view's own items of a page's context menu
+	// (WindowHandler.ContextMenu): the backend's number for the item,
+	// from 1, which it shows where the core puts it, doing what the web
+	// view does; ID is then not the backend's business. Name is such an
+	// item's name (ContextMenuReload and the other names of package mygo,
+	// else the platform's own), and Accelerator the platform's own text of
+	// its shortcut, shown as it is, where the backend draws the menu.
+	Native int
+	Name   string
 }
 
 // FileFilter restricts the files shown in file dialogs.
@@ -915,6 +1136,40 @@ type Power interface {
 	IdleTime() time.Duration
 }
 
+// MediaCommand is a command of the system's media controls, or a set of
+// them (NowPlayingInfo.Commands).
+type MediaCommand uint32
+
+const (
+	MediaPlay MediaCommand = 1 << iota
+	MediaPause
+	MediaTogglePlayPause
+	MediaStop
+	MediaNext
+	MediaPrevious
+	MediaSeek
+)
+
+// NowPlayingInfo is what the app plays, fully defaulted by the core.
+type NowPlayingInfo struct {
+	Title, Artist, Album string
+	Artwork              []byte // PNG or JPEG, or nil
+	Duration             time.Duration
+	// Position is where playback was when the core set the info; the
+	// system advances it at Rate while State is "playing".
+	Position time.Duration
+	Rate     float64 // the speed while playing, 1 by default
+	State    string  // "playing", "paused" or "stopped"
+	Commands MediaCommand
+}
+
+// NowPlaying shows what the app plays where the system shows media, and
+// reports AppHandler.MediaCommand for the commands the info enables.
+type NowPlaying interface {
+	// Set shows info; nil removes it and stops reporting commands.
+	Set(info *NowPlayingInfo)
+}
+
 // NetworkStatus is the state of the computer's network connection.
 type NetworkStatus struct {
 	Online  bool
@@ -954,15 +1209,26 @@ type Secrets interface {
 type TrayHandler interface {
 	Clicked()
 	RightClicked()
+	// AppearanceChanged tells that the bar the icon shows on turned dark
+	// or light.
+	AppearanceChanged()
 }
 
 // Tray is a status bar / notification area icon.
 type Tray interface {
+	// SetID names the icon across launches (macOS's autosave name).
+	SetID(id string)
+	// Dark reports whether the bar the icon shows on is dark.
+	Dark() bool
 	SetImage(png []byte, template bool) error
 	SetTitle(title string)
 	SetToolTip(tip string)
 	SetMenu(m *Menu)
 	PopUpMenu(m *Menu)
+	// SetActivatable tells the panel whether the icon answers activation,
+	// so that it can tell a single click from a double one. Platforms that
+	// report clicks themselves ignore it.
+	SetActivatable(on bool)
 	Bounds() Rect
 	Destroy()
 }
@@ -976,5 +1242,12 @@ type Notification struct {
 	Silent   bool
 	// Group gathers the notifications that share it (threadIdentifier on
 	// macOS).
-	Group string
+	Group  string
+	Sender *NotificationSender
+}
+
+// NotificationSender describes an incoming direct message's sender.
+type NotificationSender struct {
+	ID, Name string
+	Avatar   []byte
 }

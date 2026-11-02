@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+const personalEstimateRuleVersion = 2
+
 type exactDecimal struct {
 	coefficient *big.Int
 	scale       int
@@ -151,8 +153,9 @@ type subTaskEstimate struct {
 }
 
 type nodeEstimates struct {
-	personal []personalSchedule
-	children map[string]subTaskEstimate
+	personal  []personalSchedule
+	children  map[string]subTaskEstimate
+	aggregate *personalSchedule
 }
 
 func personalEstimate(nodes []map[string]any, currentUserKey string, sprint sprintRange) (*exactDecimal, error) {
@@ -177,18 +180,22 @@ func personalEstimate(nodes []map[string]any, currentUserKey string, sprint spri
 	total := &exactDecimal{coefficient: new(big.Int)}
 	for _, node := range unique {
 		schedules := node.personal
+		if node.aggregate != nil {
+			schedules = []personalSchedule{*node.aggregate}
+		}
 		if len(node.children) > 0 {
 			mine := []personalSchedule{}
 			childTotal := &exactDecimal{coefficient: new(big.Int)}
 			completedZero := false
+			sharedRecord := false
 			for _, child := range node.children {
 				if !child.owners[currentUserKey] {
 					continue
 				}
 				points := child.schedule.points
-				if len(child.owners) > 1 && points != nil && points.coefficient.Sign() != 0 {
-					return nil, errors.New("多人子项缺少个人估分分配，无法计算当前用户估分")
-				}
+				sharedRecord = sharedRecord || len(child.owners) > 1
+				// A shared record belongs in full to each named owner. The
+				// provider's per-person rollup can be a divided share of it.
 				mine = append(mine, child.schedule)
 				if points != nil {
 					childTotal = childTotal.add(points)
@@ -201,10 +208,8 @@ func personalEstimate(nodes []map[string]any, currentUserKey string, sprint spri
 			if len(node.personal) == 1 && node.personal[0].points != nil {
 				rollup = node.personal[0].points
 			}
-			if childTotal.cmp(rollup) < 0 && completedZero {
+			if childTotal.cmp(rollup) < 0 && completedZero && !sharedRecord {
 				schedules = node.personal
-			} else if childTotal.cmp(rollup) != 0 {
-				return nil, errors.New("子项个人估分与节点个人汇总不一致，无法确认明细完整性")
 			} else {
 				schedules = mine
 			}
@@ -282,8 +287,19 @@ func parseNodeEstimates(node map[string]any, currentUserKey string) (nodeEstimat
 		}
 		parsedChildren[id] = estimate
 	}
+	var aggregate *personalSchedule
+	if len(parsedChildren) == 0 {
+		var err error
+		aggregate, err = ownedNodeSchedule(node, currentUserKey)
+		if err != nil {
+			return nodeEstimates{}, err
+		}
+	}
 	personalRaw, exists := node["assignee_schedule_list"]
 	if !exists {
+		if len(parsedChildren) > 0 || aggregate != nil {
+			return nodeEstimates{children: parsedChildren, aggregate: aggregate}, nil
+		}
 		return nodeEstimates{}, errors.New("节点缺少个人排期列表")
 	}
 	var personal []personalSchedule
@@ -336,7 +352,53 @@ func parseNodeEstimates(node map[string]any, currentUserKey string) (nodeEstimat
 			return nodeEstimates{}, errors.New("同一节点的个人排期重复且不一致")
 		}
 	}
-	return nodeEstimates{personal: personal, children: parsedChildren}, nil
+	return nodeEstimates{personal: personal, children: parsedChildren, aggregate: aggregate}, nil
+}
+
+// A node without estimate children uses its total once when the logged-in
+// user is one of its estimate owners. Participants and role members are not
+// owners; the per-person schedules remain a fallback for responses without a
+// node total, and for the existing completed-zero estimate compensation.
+func ownedNodeSchedule(node map[string]any, currentUserKey string) (*personalSchedule, error) {
+	ownersRaw := at(node, "assignees", "owners")
+	if ownersRaw == nil {
+		return nil, nil
+	}
+	owners, ok := ownersRaw.([]any)
+	if !ok {
+		return nil, errors.New("节点估分人员列表格式无效")
+	}
+	mine := false
+	for _, raw := range owners {
+		user := text(object(raw)["user_key"])
+		if user == "" {
+			return nil, errors.New("节点估分人员缺少 user_key")
+		}
+		mine = mine || user == currentUserKey
+	}
+	info := object(node["schedule"])
+	if !mine || info == nil {
+		return nil, nil
+	}
+	points, err := optionalPoints(info["points"])
+	if err != nil {
+		return nil, err
+	}
+	start, err := optionalMillis(info["estimate_start_time"])
+	if err != nil {
+		return nil, err
+	}
+	end, err := optionalMillis(info["estimate_finish_time"])
+	if err != nil {
+		return nil, err
+	}
+	if start != nil && end != nil && *start > *end {
+		return nil, errors.New("节点排期开始时间晚于结束时间")
+	}
+	if points == nil || start == nil || end == nil {
+		return nil, nil
+	}
+	return &personalSchedule{points: points, start: start, end: end}, nil
 }
 
 func optionalPoints(value any) (*exactDecimal, error) {

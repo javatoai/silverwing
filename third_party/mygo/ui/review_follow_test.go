@@ -316,3 +316,137 @@ func TestReviewFollowScrollDownDuringGlide(t *testing.T) {
 		t.Errorf("after a row came, the last row ends at %v, want 400", r.Y+r.H)
 	}
 }
+
+// TestListFollowGlideKeepsRowsThatStay checks that a list following its
+// end with a FollowAnimation leaves the rows that do not change where
+// they show on the frame its content changes, then glides them to their
+// place: the rows fit it, or overflow it, or stop overflowing it, and
+// the list is as tall as its content.
+func TestListFollowGlideKeepsRowsThatStay(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		rows     int
+		from, to float32 // the last row's height before and after
+		add      bool    // a row of height to comes after the last
+		justify  Align
+		glide    float32 // how far the row that stays moves, once settled
+		// hug, when set, makes the list as tall as its content, up to hug
+		// when it is above 0, in a column under a title.
+		hug float32
+	}{
+		{"fit start grow", 3, 40, 100, false, Start, 0, 0},
+		{"fit start add", 3, 40, 40, true, Start, 0, 0},
+		{"fit end grow", 3, 40, 100, false, End, -60, 0},
+		{"fit center grow", 3, 40, 100, false, Center, -30, 0},
+		{"start to overflow", 9, 40, 100, false, Start, -20, 0},
+		{"overflow grow", 20, 40, 100, false, Start, -60, 0},
+		{"overflow add", 20, 40, 40, true, Start, -40, 0},
+		{"overflow to fit", 10, 300, 40, false, Start, 260, 0},
+		{"overflow to fit, far", 5, 500, 40, false, Start, 260, 0},
+		{"hug start grow", 3, 44, 66, false, Start, 0, -1},
+		{"hug start add", 3, 44, 44, true, Start, 0, -1},
+		{"hug end grow", 3, 44, 66, false, End, 0, -1},
+		{"hug center grow", 3, 44, 66, false, Center, 0, -1},
+		{"hug start shrink", 3, 88, 44, false, Start, 0, -1},
+		{"hug end shrink", 3, 88, 44, false, End, 0, -1},
+		{"hug to its max height", 3, 44, 110, false, Start, -34, 200},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n, last := tc.rows, tc.from
+			s := ListState{FollowEnd: true, FollowAnimation: &Smooth}
+			now := time.Unix(1000, 0)
+			list := func(c *context) *node {
+				return coreList(c, &s, n, func(i int) {
+					h := float32(40)
+					if tc.hug != 0 {
+						h = 44
+					}
+					if i == n-1 {
+						h = last
+					}
+					coreBox(c).Height(h).Children(func() { coreTextf(c, "Message %d", i) })
+				}).Justify(tc.justify)
+			}
+			tt := coreNewTester(func(c *context) {
+				if tc.hug == 0 {
+					list(c).Grow(1)
+					return
+				}
+				coreColumn(c).Grow(1).Padding(14).Gap(10).Children(func() {
+					coreTextf(c, "Chat")
+					coreBox(c).Children(func() {
+						l := list(c).Gap(8).Padding(10)
+						if tc.hug > 0 {
+							l.MaxHeight(tc.hug)
+						}
+					})
+				})
+			}, 300, 400)
+			tt.rt.clock = func() time.Time { return now }
+			tt.Frame()
+			stay := tc.rows - 2
+			before, _ := rowBox(tt, &s, stay)
+			if tc.add {
+				n++
+			}
+			last = tc.to
+			tt.Frame()
+			if r, _ := rowBox(tt, &s, stay); r.Y != before.Y {
+				t.Errorf("on the frame the content changed, row %d moved from %v to %v (lag %v, offset %v)",
+					stay, before.Y, r.Y, s.followLag.value, listStateOf(&s).scrollY)
+			}
+			now = now.Add(50 * time.Millisecond)
+			tt.Frame()
+			mid, _ := rowBox(tt, &s, stay)
+			if moved := mid.Y - before.Y; tc.glide == 0 && moved != 0 || tc.glide != 0 && (moved*tc.glide <= 0 || abs(moved) >= abs(tc.glide)) {
+				t.Errorf("50 ms into the glide, row %d is at %v: want it on its way from %v by %v", stay, mid.Y, before.Y, tc.glide)
+			}
+			now = now.Add(2 * time.Second)
+			tt.Frame()
+			if r, _ := rowBox(tt, &s, stay); r.Y != before.Y+tc.glide {
+				t.Errorf("after the glide, row %d is at %v, want %v", stay, r.Y, before.Y+tc.glide)
+			}
+			if r, _ := rowBox(tt, &s, n-1); tc.rows > 9 && r.Y+r.H != 400 {
+				t.Errorf("after the glide, the last row ends at %v, want 400", r.Y+r.H)
+			}
+			if !s.following {
+				t.Error("the list stopped following its end")
+			}
+		})
+	}
+}
+
+// TestListFollowGlideHugStreams checks that a list as tall as its content,
+// whose last row grows in every frame, as a reply streams in, keeps the
+// rows above it where they are: its height follows its content a frame
+// late.
+func TestListFollowGlideHugStreams(t *testing.T) {
+	last := float32(44)
+	s := ListState{FollowEnd: true, FollowAnimation: &Smooth}
+	now := time.Unix(1000, 0)
+	tt := coreNewTester(func(c *context) {
+		coreColumn(c).Grow(1).Padding(14).Gap(10).Children(func() {
+			coreTextf(c, "Chat")
+			coreBox(c).Children(func() {
+				coreList(c, &s, 3, func(i int) {
+					h := float32(44)
+					if i == 2 {
+						h = last
+					}
+					coreBox(c).Height(h).Children(func() { coreTextf(c, "Message %d", i) })
+				}).Gap(8).Padding(10)
+			})
+		})
+	}, 300, 400)
+	tt.rt.clock = func() time.Time { return now }
+	tt.Frame()
+	before, _ := rowBox(tt, &s, 1)
+	for k := range 8 {
+		last += 22
+		now = now.Add(16 * time.Millisecond)
+		tt.Frame()
+		if r, _ := rowBox(tt, &s, 1); r.Y != before.Y {
+			t.Fatalf("line %d: row 1 moved from %v to %v (lag %v)", k+1, before.Y, r.Y, s.followLag.value)
+		}
+	}
+}

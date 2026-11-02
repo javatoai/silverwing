@@ -329,8 +329,7 @@ func TestTagHistoryUnknownFailureAndTooltip(t *testing.T) {
 	branches := record.SourceBranch + " → " + record.TargetBranch
 	branchRect, _ := tester.Find("合并分支 · running")
 	tester.Move(branchRect.X+branchRect.W/2, branchRect.Y+branchRect.H/2)
-	time.Sleep(650 * time.Millisecond)
-	tester.Frame()
+	tester.Advance(650 * time.Millisecond)
 	count := 0
 	for _, text := range tester.Texts() {
 		if text == branches {

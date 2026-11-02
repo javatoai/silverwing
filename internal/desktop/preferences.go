@@ -20,16 +20,17 @@ const (
 // DesktopPreferences contains display state only. Task identity and content view
 // are stored with the reading cache so they cannot drift into a second source.
 type DesktopPreferences struct {
-	Width                        int    `json:"width"`
-	Height                       int    `json:"height"`
-	Maximized                    bool   `json:"maximized"`
-	SettingsSection              string `json:"settingsSection"`
-	TaskListPaneWidth            int    `json:"taskListPaneWidth,omitempty"`
-	TaskListPaneCollapsed        bool   `json:"taskListPaneCollapsed"`
-	MaterialsDirectoryPaneWidth  int    `json:"materialsDirectoryPaneWidth,omitempty"`
-	MaterialsExpansionDepth      int    `json:"materialsExpansionDepth"`
-	MaterialsExpansionRevision   uint64 `json:"materialsExpansionRevision"`
-	WorkspaceNavigationCollapsed bool   `json:"workspaceNavigationCollapsed"`
+	Width                        int      `json:"width"`
+	Height                       int      `json:"height"`
+	Maximized                    bool     `json:"maximized"`
+	SettingsSection              string   `json:"settingsSection"`
+	TaskListPaneWidth            int      `json:"taskListPaneWidth,omitempty"`
+	TaskListPaneCollapsed        bool     `json:"taskListPaneCollapsed"`
+	MaterialsDirectoryPaneWidth  int      `json:"materialsDirectoryPaneWidth,omitempty"`
+	MaterialsExpansionDepth      int      `json:"materialsExpansionDepth"`
+	MaterialsExpansionRevision   uint64   `json:"materialsExpansionRevision"`
+	WorkspaceNavigationCollapsed bool     `json:"workspaceNavigationCollapsed"`
+	HiddenTaskTabs               []string `json:"hiddenTaskTabs,omitempty"`
 }
 
 // DefaultDesktopPreferences supplies the initial Go desktop layout.
@@ -145,6 +146,10 @@ func (s *DesktopPreferencesStore) readLocked() (DesktopPreferences, map[string]j
 	}
 	readBool(raw, "workspaceNavigationCollapsed", &value.WorkspaceNavigationCollapsed)
 	readString(raw, "settingsSection", &value.SettingsSection)
+	var hidden []string
+	if item, ok := raw["hiddenTaskTabs"]; ok && json.Unmarshal(item, &hidden) == nil {
+		value.HiddenTaskTabs = normalizeHiddenTaskTabs(hidden)
+	}
 	if value.Width <= 0 {
 		value.Width = defaultDesktopWidth
 	}
@@ -175,6 +180,12 @@ func (s *DesktopPreferencesStore) saveLocked(raw map[string]json.RawMessage, val
 	}
 	if raw == nil {
 		raw = make(map[string]json.RawMessage)
+	}
+	hidden := normalizeHiddenTaskTabs(value.HiddenTaskTabs)
+	if len(hidden) == 0 {
+		delete(raw, "hiddenTaskTabs")
+	} else if err := putPreference(raw, "hiddenTaskTabs", hidden); err != nil {
+		return err
 	}
 	if value.SettingsSection == "" {
 		value.SettingsSection = "basic"

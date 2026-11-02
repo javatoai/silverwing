@@ -2,7 +2,6 @@ package ui
 
 import (
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/internal/platform"
@@ -45,7 +44,7 @@ func (w *widgetTextInput) publish() {
 				ed.bufferDirty = true
 			}
 		}
-		w.rt.blinkStart = time.Now()
+		w.rt.blinkStart = w.rt.now()
 		return
 	}
 	if ed.value != nil && *ed.value != ed.buf.s {
@@ -54,7 +53,7 @@ func (w *widgetTextInput) publish() {
 		}
 		ed.nativeDirty = true
 	}
-	w.rt.blinkStart = time.Now()
+	w.rt.blinkStart = w.rt.now()
 }
 
 // A navigation key may precede another native callback without a frame.
@@ -264,7 +263,7 @@ func (w *widgetTextInput) layout() *text.Layout {
 		params.Text = ed.displayText()
 		params.Spans = ""
 		if !ed.password {
-			params.Spans, _ = ed.rangeSpans(0, ed.buf.n)
+			params.Spans = ed.rangeKey(0, ed.buf.n)
 		}
 		ed.shapeInput(params)
 	}

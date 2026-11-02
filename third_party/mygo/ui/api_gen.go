@@ -460,6 +460,28 @@ func (_handle *Context) SetTheme(t *Theme) {
 	_ctx.SetTheme(t)
 }
 
+// SetZoom zooms the window's content by z, as a browser zooms a page: the
+// view is laid out in a window 1/z its size and shown z times larger,
+// drawn at the screen's resolution times z, so that text, icons, vectors
+// and images stay as sharp as at that size natively, not a picture of
+// the window scaled up. 1 shows the content at its size; the zoom
+// stays until set again, and is clamped to between 0.25 and 5. A frame
+// that sets another builds again at the new size before it shows.
+//
+// What the view sees is zoomed: Size, TitleBar, Bounds and every length
+// are in the content's DIPs, z of them to the window's. The pointer, text
+// input, input methods, accessibility, context menus, drags and web views
+// follow it.
+//
+//	c.SetZoom(app.zoom) // 1.25 for 125%
+func (_handle *Context) SetZoom(z float32) {
+	_ctx := _handle.build()
+	if _ctx == nil {
+		return
+	}
+	_ctx.SetZoom(z)
+}
+
 // Shortcut reports whether the key with exactly the modifiers mods was
 // pressed, wherever the keyboard focus is, unless a focused element
 // handled it first: a focused button or link takes Enter and Space, and a
@@ -576,6 +598,15 @@ func (_handle *Context) WriteClipboard(s string) {
 		return
 	}
 	_ctx.WriteClipboard(s)
+}
+
+// Zoom returns the zoom SetZoom set, 1 for none.
+func (_handle *Context) Zoom() float32 {
+	_ctx := _handle.build()
+	if _ctx == nil {
+		return 0
+	}
+	return _ctx.Zoom()
 }
 
 // Accordion creates sections, one above the other in a bordered box, that
@@ -1317,6 +1348,8 @@ func Local[T any](e Element, key any, init func() T) *T {
 //			}
 //		}
 //	})
+//
+// PopoverMenuButton draws its menu in the window, with the theme's look.
 func MenuButton(c *Context, label string, build func(m *Menu)) Element {
 	_ctx := c.build()
 	if _ctx == nil {
@@ -1486,6 +1519,28 @@ func PopoverBase(c *Context, anchor Element, open *bool, fn func(panel Element))
 	}
 	_ctx.rt.beginBuild()
 	_e := corePopoverBase(_ctx, anchor.nodeFor(_ctx.rt), open, func(panel *node) { fn(wrapElement(panel)) })
+	_ctx.rt.endBuild()
+	return wrapElement(_e)
+}
+
+// PopoverMenuButton creates a button showing label and an arrow, as
+// MenuButton does, whose menu MyGo draws in the window with the theme's
+// look, as PopoverMenu draws a context menu (Element.PopoverMenuButton):
+//
+//	ui.PopoverMenuButton(c, "Sort by", func(m *ui.Menu) {
+//		for _, by := range []string{"Name", "Date", "Size"} {
+//			if m.Item(by).Radio(app.sort == by).Chosen() {
+//				app.sort = by
+//			}
+//		}
+//	})
+func PopoverMenuButton(c *Context, label string, build func(m *Menu)) Element {
+	_ctx := c.build()
+	if _ctx == nil {
+		return Element{}
+	}
+	_ctx.rt.beginBuild()
+	_e := corePopoverMenuButton(_ctx, label, build)
 	_ctx.rt.endBuild()
 	return wrapElement(_e)
 }
@@ -1699,8 +1754,8 @@ func ScrollHorizontal(c *Context) Element {
 // SearchField creates a field for searching, editing *query: a magnifying
 // glass, the text, and a button clearing it while it holds any, as Escape
 // does then. Enter is its Submitted, and Changed reports a change. It
-// shows Search while empty, and assistive technology sees a search field;
-// name it with Label.
+// shows Search while empty, or what Placeholder sets, and assistive
+// technology sees a search field; name it with Label.
 //
 //	if ui.SearchField(c, &app.query).Label("Search mail").Changed() {
 //		app.filter()
@@ -1926,8 +1981,9 @@ func Spinner(c *Context) Element {
 // Split lays out first and second side by side, with a divider between
 // them that the user drags to resize them, or moves with the arrows once
 // it has the keyboard focus: *size is the width of first, which the
-// divider keeps 40 DIPs from either edge. Changed reports a move. Right to
-// left (Direction), first is on the right.
+// divider keeps 40 DIPs from either edge. With less room than that, first
+// gives way, keeping *size for when there is room again. Changed reports a
+// move. Right to left (Direction), first is on the right.
 //
 //	ui.Split(c, &app.sidebar, app.files, app.editor).Fill()
 func Split(c *Context, size *float32, first func(), second func()) Element {
@@ -1948,7 +2004,26 @@ func SplitRatio(c *Context, ratio *float32, first func(), second func()) Element
 	if _ctx == nil {
 		return Element{}
 	}
-	return wrapElement(coreSplitRatio(_ctx, ratio, first, second))
+	_ctx.rt.beginBuild()
+	_e := coreSplitRatio(_ctx, ratio, first, second)
+	_ctx.rt.endBuild()
+	return wrapElement(_e)
+}
+
+// SplitPercent is Split with *p the percentage of the room first takes,
+// from 0 to 100, so that both panes grow and shrink with the room, in
+// proportion.
+//
+//	ui.SplitPercent(c, &app.sidebarPercent, app.files, app.editor).Fill()
+func SplitPercent(c *Context, p *float32, first func(), second func()) Element {
+	_ctx := c.build()
+	if _ctx == nil {
+		return Element{}
+	}
+	_ctx.rt.beginBuild()
+	_e := coreSplitPercent(_ctx, p, first, second)
+	_ctx.rt.endBuild()
+	return wrapElement(_e)
 }
 
 // SplitVertical is Split with first above second, *size its height.
@@ -1959,6 +2034,18 @@ func SplitVertical(c *Context, size *float32, first func(), second func()) Eleme
 	}
 	_ctx.rt.beginBuild()
 	_e := coreSplitVertical(_ctx, size, first, second)
+	_ctx.rt.endBuild()
+	return wrapElement(_e)
+}
+
+// SplitVerticalPercent is SplitPercent with first above second.
+func SplitVerticalPercent(c *Context, p *float32, first func(), second func()) Element {
+	_ctx := c.build()
+	if _ctx == nil {
+		return Element{}
+	}
+	_ctx.rt.beginBuild()
+	_e := coreSplitVerticalPercent(_ctx, p, first, second)
 	_ctx.rt.endBuild()
 	return wrapElement(_e)
 }
@@ -2487,6 +2574,37 @@ func TreeItem(c *Context, label string, open *bool, children func()) Element {
 	return wrapElement(_e)
 }
 
+// Video creates an element showing a player's video, by default at its
+// size as DIPs, scaled to fit when given another size, as Image shows a
+// bitmap:
+//
+//	//go:embed waves.gif
+//	var wavesGIF []byte
+//
+//	d, err := ui.NewGIFDecoder(wavesGIF)
+//	...
+//	app.waves, err = ui.NewVideoPlayer(d)
+//	app.waves.SetLoop(true)
+//
+//	ui.Video(c, app.waves).Fill().Fit(ui.Cover)
+//
+// The video moves on only while the view builds it and some of the window
+// shows: one that went out of the view, or a window out of sight, goes on
+// from where it stood. Each frame of the video is a frame of the window,
+// which After asks for as it comes due. While the desktop asks for less
+// motion (Preferences.ReduceMotion), it shows its first frame and does
+// not play.
+func Video(c *Context, p *VideoPlayer) Element {
+	_ctx := c.build()
+	if _ctx == nil {
+		return Element{}
+	}
+	_ctx.rt.beginBuild()
+	_e := coreVideo(_ctx, p)
+	_ctx.rt.endBuild()
+	return wrapElement(_e)
+}
+
 // View returns the content of a window whose user interface view builds,
 // for mygo.WindowOptions.Content:
 //
@@ -2824,6 +2942,22 @@ func (_handle Element) BasisPercent(p float32) Element {
 	return wrapElement(_node.BasisPercent(p))
 }
 
+// Blur blurs the element, with its children, by sigma DIPs, the standard
+// deviation of a Gaussian, as CSS's filter: blur() does: what it draws
+// spreads that far around, transparent beyond, on the GPU. It renders
+// into a bitmap first, as Effect does, about 3 sigma larger each way, and
+// an element with an Effect draws through it instead. Hit testing, focus
+// and accessibility do not change: only what shows.
+func (_handle Element) Blur(sigma float32) Element {
+	_node := _handle.node()
+	if _node == nil {
+		return Element{}
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return wrapElement(_node.Blur(sigma))
+}
+
 // Bold sets a bold font weight.
 func (_handle Element) Bold() Element {
 	_node := _handle.node()
@@ -2859,6 +2993,21 @@ func (_handle Element) BorderColor(c Color) Element {
 	return wrapElement(_node.BorderColor(c))
 }
 
+// BorderConicGradient paints the element's border (Border, BorderWidth)
+// with a conic gradient around the element, in place of its color: a ring
+// of colors, as SwiftUI's strokeBorder with an AngularGradient draws.
+//
+//	ui.Box(c).Size(120, 80).Radius(16).Border(4, ui.Color{}).BorderConicGradient(ui.ConicGradient{Stops: rainbow})
+func (_handle Element) BorderConicGradient(g ConicGradient) Element {
+	_node := _handle.node()
+	if _node == nil {
+		return Element{}
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return wrapElement(_node.BorderConicGradient(g))
+}
+
 func (_handle Element) BorderEndWidth(v float32) Element {
 	_node := _handle.node()
 	if _node == nil {
@@ -2867,6 +3016,18 @@ func (_handle Element) BorderEndWidth(v float32) Element {
 	_ctx := _node.c
 	_ = _ctx
 	return wrapElement(_node.BorderEndWidth(v))
+}
+
+// BorderLinearGradient paints the element's border (Border, BorderWidth)
+// with a linear gradient across the element, in place of its color.
+func (_handle Element) BorderLinearGradient(g LinearGradient) Element {
+	_node := _handle.node()
+	if _node == nil {
+		return Element{}
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return wrapElement(_node.BorderLinearGradient(g))
 }
 
 // BorderStartWidth and BorderEndWidth set the width of the border on the
@@ -2929,7 +3090,8 @@ func (_handle Element) BottomPercent(p float32) Element {
 }
 
 // Bounds returns the previous frame's transformed bounding rectangle in
-// window DIPs; it is empty for an element the previous frame lacked.
+// window DIPs, the content's when zoomed (Context.SetZoom); it is empty
+// for an element the previous frame lacked.
 // LayoutBounds returns its box before visual transforms.
 func (_handle Element) Bounds() Rect {
 	_node := _handle.node()
@@ -2939,6 +3101,42 @@ func (_handle Element) Bounds() Rect {
 	_ctx := _node.c
 	_ = _ctx
 	return _node.Bounds()
+}
+
+// Cache keeps what the element paints, with its children, in a bitmap of
+// the GPU that frames draw as one image, as Flutter's RepaintBoundary and
+// SwiftUI's drawingGroup do: for a still subtree that costs much to draw,
+// as a card of gradients, blurred images and large shadows, under or
+// around a drawing that moves. A frame redrawing where something above or
+// next to it changed then draws the bitmap there, not each of its layers,
+// and moving, scaling or rotating the element (Translate, Scale, Rotate,
+// AnimatePose) moves the bitmap, not what it holds.
+//
+// The bitmap is the size of the element's box at the window's scale, and
+// of what it and those inside it paint around it: shadows, focus rings,
+// and children beyond the box that it does not clip, as Draw callbacks
+// paint (within the box and the shadows' reach). It is drawn again when
+// what the subtree paints changes: built anew with other content, laid
+// out at another size, at another scale or in another theme, or as
+// something inside it moves on its own (Painter.AnimationFrame, a pose,
+// a transition), as then it is every frame. Painting the window still
+// paints the subtree, to tell; frames that only paint the drawings that
+// asked for them (Painter.AnimationFrame, Painter.After) do not.
+//
+// As in an effect's bitmap (Effect), its text is smoothed in grayscale
+// where the subtree paints no opaque background under it, web views
+// inside it do not show, and a subtree larger than 8192 pixels across is
+// drawn as it is. The bitmap is drawn at the window's scale, so that
+// turned, or scaled up by a transform, it shows a little softer than the
+// shapes it holds would.
+func (_handle Element) Cache() Element {
+	_node := _handle.node()
+	if _node == nil {
+		return Element{}
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return wrapElement(_node.Cache())
 }
 
 // Center centers the children along and across the main axis.
@@ -3122,6 +3320,22 @@ func (_handle Element) Composing() bool {
 	return _node.Composing()
 }
 
+// ConicGradient fills the element with a conic gradient, its colors
+// turning around a point (CSS's conic-gradient()):
+//
+//	ui.Box(c).Size(80, 80).Radius(40).ConicGradient(ui.ConicGradient{
+//		Stops: []ui.GradientStop{{red, 0}, {yellow, 1.0 / 3}, {blue, 2.0 / 3}, {red, 1}},
+//	})
+func (_handle Element) ConicGradient(g ConicGradient) Element {
+	_node := _handle.node()
+	if _node == nil {
+		return Element{}
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return wrapElement(_node.ConicGradient(g))
+}
+
 // ContentTransition animates the element's content as it changes, as t
 // says: the text of a Text, the icon of an Icon, the picture of an Image.
 // Changes animate from frame to frame while the element is painted, in
@@ -3169,6 +3383,8 @@ func (_handle Element) ContentTransition(t ContentTransition) Element {
 //		m.Separator()
 //		m.EditItems()
 //	})
+//
+// PopoverMenu draws the same menu in the window, with the theme's look.
 func (_handle Element) ContextMenu(build func(m *Menu)) Element {
 	_node := _handle.node()
 	if _node == nil {
@@ -3498,6 +3714,25 @@ func (_handle Element) Draw(fn func(p *Painter, r Rect)) Element {
 	return wrapElement(_node.Draw(fn))
 }
 
+// DrawObjects paints the inline objects of a text (Span.ObjectWidth)
+// with p, after its glyphs: fn gets each one that shows, its rune in
+// the text, the text elements' inside it included, and its box, in
+// window DIPs, ObjectHeight above the baseline and ObjectDescent below.
+// It paints in the text's clip and in the transform of the element
+// holding the object. fn only paints: it may run more than once a frame.
+//
+//	ui.RichText(c, ui.Span{Text: "area "}, ui.Span{Text: "\uFFFC", ObjectWidth: w, ObjectHeight: h, ObjectDescent: d}).
+//		DrawObjects(func(p *ui.Painter, at int, r ui.Rect) { formula.Draw(p, r) })
+func (_handle Element) DrawObjects(fn func(p *Painter, at int, r Rect)) Element {
+	_node := _handle.node()
+	if _node == nil {
+		return Element{}
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return wrapElement(_node.DrawObjects(fn))
+}
+
 // DrawOver paints on the element with p after its children.
 func (_handle Element) DrawOver(fn func(p *Painter, r Rect)) Element {
 	_node := _handle.node()
@@ -3520,6 +3755,31 @@ func (_handle Element) DroppedFiles() []string {
 	_ctx := _node.c
 	_ = _ctx
 	return _node.DroppedFiles()
+}
+
+// Effect draws the element, with its children, through fx, an effect of
+// package ui/shader, in place of drawing it as it is; nil draws it as it
+// is:
+//
+//	ui.Text(c, "Wavy").Effect(wave.Effect(shader.Options{
+//		Uniforms:        map[string]any{"Time": t},
+//		MaxSampleOffset: ui.Point{Y: 8},
+//	}))
+//
+// What the element renders, with its children, shadows and what its Draw
+// callbacks paint, renders into a bitmap of the GPU, the size of its box
+// and the effect's margin (Effect.EffectMargin) around it, every frame
+// the element paints, which the effect then draws over the box and the
+// margin, transformed, clipped and faded as the element would be. Web views
+// inside the element do not show through an effect.
+func (_handle Element) Effect(fx Effect) Element {
+	_node := _handle.node()
+	if _node == nil {
+		return Element{}
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return wrapElement(_node.Effect(fx))
 }
 
 // Ellipsis sets what ends text that MaxLines or SingleLine cuts, "…" by
@@ -3649,7 +3909,8 @@ func (_handle Element) FixedLineHeight(v float32) Element {
 }
 
 // Focus gives the element the keyboard focus. Called in every frame, it
-// keeps it there; AutoFocus gives it once.
+// keeps it there; AutoFocus gives it once. A field around an input, as
+// SearchField's, gives it to its input, where typing goes.
 func (_handle Element) Focus() Element {
 	_node := _handle.node()
 	if _node == nil {
@@ -3728,7 +3989,8 @@ func (_handle Element) Focusable() Element {
 	return wrapElement(_node.Focusable())
 }
 
-// Focused reports whether the element has the keyboard focus.
+// Focused reports whether the element has the keyboard focus: for a field
+// around an input, as SearchField's, whether its input has it.
 func (_handle Element) Focused() bool {
 	_node := _handle.node()
 	if _node == nil {
@@ -3880,15 +4142,16 @@ func (_handle Element) Grow(f float32) Element {
 // HandleInput has fn take the element's input as it comes, on the main
 // thread, before the next frame is built: keys, text and edit commands
 // while the element has the keyboard focus, the pointer pressed on it,
-// moving over it or scrolling over it. fn reports whether it took the
+// moving over it, scrolling or pinching over it. fn reports whether it took the
 // event; one it leaves goes on as it would without fn, to shortcuts, Tab,
 // context menus and scroll containers. Keys that the window or an element
 // around the focus handles as a Shortcut go to the shortcut first. A frame
 // follows the events fn takes.
 //
 // It is for widgets that need every key as it is pressed, such as a
-// terminal; most widgets ask about their input as they are built instead
-// (Clicked, Shortcut, Dragged).
+// terminal, or the scrolling and pinching over them, such as a chart that
+// zooms and pans; most widgets ask about their input as they are built
+// instead (Clicked, Shortcut, Dragged).
 func (_handle Element) HandleInput(fn func(ev InputEvent) bool) Element {
 	_node := _handle.node()
 	if _node == nil {
@@ -3934,6 +4197,29 @@ func (_handle Element) HeightPercent(p float32) Element {
 	_ctx := _node.c
 	_ = _ctx
 	return wrapElement(_node.HeightPercent(p))
+}
+
+// Hidden hides the element and its children when hide is true, as CSS's
+// display: none does: unlike an Invisible element, it takes no room in
+// the layout, nor a gap between its siblings, and draws nothing, takes
+// neither the pointer nor the focus, and is not read by assistive
+// technology. It is still built, so that what is inside it keeps its
+// state (scroll offsets, text being edited, animations) while it is
+// hidden, and shows as it was once hide is false again:
+//
+//	ui.Column(c).Hidden(!app.showDetails).Children(func() { ... })
+//
+// The focus leaves it as it hides, and what is attached to it
+// (AttachTo) hides with it. A List's rows are built as the list lays out,
+// so a hidden List builds none.
+func (_handle Element) Hidden(hide bool) Element {
+	_node := _handle.node()
+	if _node == nil {
+		return Element{}
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return wrapElement(_node.Hidden(hide))
 }
 
 // Highlighted reports whether an option of a select is the one the pointer
@@ -4023,7 +4309,7 @@ func (_handle Element) InsetShadow(x float32, y float32, blur float32, spread fl
 
 // Invisible hides the element and its children, which keep their room in
 // the layout but draw nothing and take neither the pointer nor the focus,
-// as CSS's visibility: hidden does.
+// as CSS's visibility: hidden does. Hidden takes the room away too.
 func (_handle Element) Invisible() Element {
 	_node := _handle.node()
 	if _node == nil {
@@ -4398,6 +4684,23 @@ func (_handle Element) MaxWidthPercent(p float32) Element {
 	return wrapElement(_node.MaxWidthPercent(p))
 }
 
+// MaximizeButton marks the element as the window's maximize button, which
+// the view draws in a window with a hidden title bar without the system's
+// (mygo.WindowOptions.HideWindowButtons): on Windows 11, holding the
+// pointer over it shows the snap layouts, as over the system's. It takes
+// the pointer as any element does, and the view maximizes the window when
+// it is clicked (mygo.Window.Maximize). The first such element of a frame
+// counts; elsewhere it does nothing.
+func (_handle Element) MaximizeButton() Element {
+	_node := _handle.node()
+	if _node == nil {
+		return Element{}
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return wrapElement(_node.MaximizeButton())
+}
+
 // Menu makes the element a menu button: it opens a menu below it, which
 // build fills with items, as the pointer goes down on it, as a pop-up
 // button does, and for Enter, Space or Down while it has the focus. It
@@ -4412,6 +4715,9 @@ func (_handle Element) MaxWidthPercent(p float32) Element {
 //			app.duplicate()
 //		}
 //	})
+//
+// PopoverMenuButton draws the same menu in the window, with the theme's
+// look.
 func (_handle Element) Menu(build func(m *Menu)) Element {
 	_node := _handle.node()
 	if _node == nil {
@@ -4689,7 +4995,9 @@ func (_handle Element) Perspective(distance float32) Element {
 	return wrapElement(_node.Perspective(distance))
 }
 
-// Placeholder shows s in an empty text input.
+// Placeholder shows s in an empty text input. On a field around an input,
+// as SearchField, TokenField and Combobox, it shows in the field's input,
+// in place of the field's own: SearchField shows Search without one.
 func (_handle Element) Placeholder(s string) Element {
 	_node := _handle.node()
 	if _node == nil {
@@ -4713,6 +5021,84 @@ func (_handle Element) PointerPosition() (float32, float32, bool) {
 	return _node.PointerPosition()
 }
 
+// PopoverMenu gives the element a context menu, as ContextMenu does, which
+// MyGo draws in the window with the theme's look, as a popover, rather
+// than the system showing one of its own. It opens where the element is
+// clicked with the secondary button, or Control-clicked on macOS, and,
+// while the element or one inside it has the focus, below it when the
+// menu key or Shift+F10 is pressed. build fills it with the items
+// ContextMenu's function takes, and the item chosen reports Chosen as
+// there:
+//
+//	row.PopoverMenu(func(m *ui.Menu) {
+//		if m.Item("Rename").Shortcut(0, ui.KeyF2).Chosen() {
+//			app.renaming = i
+//		}
+//		if m.Item("Pinned").Checked(note.pinned).Chosen() {
+//			note.pinned = !note.pinned
+//		}
+//		m.Separator()
+//		if m.Item("Delete").Disabled(note.locked).Chosen() {
+//			app.delete(i)
+//		}
+//	})
+//
+// The menu takes the focus as it opens and gives it back as it closes, to
+// the element that had it. Up and Down move among its items, past those
+// disabled, as do Home, End and typing the first letters of an item;
+// Right opens a submenu and Left closes it, the other way round right to
+// left (Direction); Enter and Space choose an item, Escape closes the
+// submenu on top, and a press outside the menu closes it. It shows below
+// and after where it opened, and on the other side where the window has
+// no room. Assistive technology sees a menu of items, check box items and
+// radio items, as the system's.
+//
+// PopoverMenuButton draws the menu of a menu button so.
+func (_handle Element) PopoverMenu(build func(m *Menu)) Element {
+	_node := _handle.node()
+	if _node == nil {
+		return Element{}
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return wrapElement(_node.PopoverMenu(build))
+}
+
+// PopoverMenuButton makes the element a menu button, as Menu does, whose
+// menu MyGo draws in the window with the theme's look, as PopoverMenu
+// draws a context menu, rather than the system showing one of its own. It
+// opens below the element, or above it where the window has no room, as
+// the pointer goes down on it, and for Enter, Space or Down while it has
+// the focus, which it takes. build fills it with the items Menu's
+// function takes, and the item chosen reports Chosen as there:
+//
+//	more := ui.ButtonBase(c).Label("More").Padding(4).Radius(6)
+//	more.Children(func() { ui.Icon(c, moreIcon).Size(16, 16) })
+//	more.PopoverMenuButton(func(m *ui.Menu) {
+//		if m.Item("Duplicate").Chosen() {
+//			app.duplicate()
+//		}
+//		if m.Item("Delete").Disabled(app.locked).Chosen() {
+//			app.delete()
+//		}
+//	})
+//
+// The menu has the keys of PopoverMenu's, and takes the focus as it opens
+// and gives it back as it closes, as there; a press on the element closes
+// it too. Opened by the keyboard, it starts on its first item. Assistive
+// technology sees a menu button, expanded while its menu shows, and the
+// menu as PopoverMenu's. The function PopoverMenuButton is a button with
+// such a menu, as MenuButton is one with a menu of the system's.
+func (_handle Element) PopoverMenuButton(build func(m *Menu)) Element {
+	_node := _handle.node()
+	if _node == nil {
+		return Element{}
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return wrapElement(_node.PopoverMenuButton(build))
+}
+
 // Pressed reports whether the element is being pressed with the pointer,
 // unless it is disabled.
 func (_handle Element) Pressed() bool {
@@ -4732,7 +5118,8 @@ func (_handle Element) Pressed() bool {
 // closes then, the press going on to what is under the pointer, as
 // PopoverBase does. The last press decides: one on the button opening a
 // popover after a press elsewhere, as on a web view's page, in the same
-// frame, keeps it open.
+// frame, keeps it open. A press before the element showed, as the one
+// opening it, is not outside it: an Overlay opened by a press stays.
 func (_handle Element) PressedOutside() bool {
 	_node := _handle.node()
 	if _node == nil {
@@ -4897,6 +5284,27 @@ func (_handle Element) Row() Element {
 	_ctx := _node.c
 	_ = _ctx
 	return wrapElement(_node.Row())
+}
+
+// RowDoubleClicked reports, while a row of a List or a Table builds, that
+// the row was double-clicked since the last frame with the pointer over the
+// element: a cell sees its row's double click this way and leaves the click
+// to the row, which chooses, where DoubleClicked would take it.
+//
+//	ui.Table(c, &app.list, cols, len(app.rows), func(row, col int) {
+//		cell := ui.Box(c).FillWidth().Children(func() { ui.Text(c, app.rows[row][col]) })
+//		if cell.RowDoubleClicked() {
+//			app.edit(row, col)
+//		}
+//	})
+func (_handle Element) RowDoubleClicked() bool {
+	_node := _handle.node()
+	if _node == nil {
+		return false
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return _node.RowDoubleClicked()
 }
 
 // RowSpan makes the element span n rows of its grid, or, for a negative n,
@@ -5293,6 +5701,19 @@ func (_handle Element) TextAlign(a Align) Element {
 	_ctx := _node.c
 	_ = _ctx
 	return wrapElement(_node.TextAlign(a))
+}
+
+// TextAnchorCaret returns the selection of a text input as offsets in runes
+// into its text, from where it was started to its caret: the anchor is after
+// the caret when the selection was made backwards.
+func (_handle Element) TextAnchorCaret() (int, int) {
+	_node := _handle.node()
+	if _node == nil {
+		return 0, 0
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return _node.TextAnchorCaret()
 }
 
 // TextBackground fills the lines of text behind it with c, as a

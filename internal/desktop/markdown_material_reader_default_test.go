@@ -13,7 +13,7 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-func TestMarkdownMaterialReaderHasNoEditingModeAndPreservesDrafts(t *testing.T) {
+func TestMarkdownMaterialWithoutEditingCapabilityPreservesReadonlyDrafts(t *testing.T) {
 	const source = "正文 **保留**。\r\n\r\n| 名称 | 内容 |\r\n| --- | --- |\r\n| 表格 | 不变 |\r\n\r\n```go\r\nkeep()  \r\nnext()\n```\r\n"
 	s, backend, files := materialTextEditorFixture(t, map[string]string{"reading.md": source})
 	s.readingSession = newMemoryReadingSession(s.snapshot.Home)
@@ -33,7 +33,8 @@ func TestMarkdownMaterialReaderHasNoEditingModeAndPreservesDrafts(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A stale writable payload and recovered draft cannot reactivate editing.
+	// A writable-looking snapshot without the explicit task-materials read
+	// capability must not reactivate editing or restore older drafts.
 	content.ReadOnly = false
 	content.Draft, content.DraftError = &originalDraft, "old draft error must not enter reading"
 	s.materialsUnit.state.documentDrafts[content.Path] = "old in-memory draft"
@@ -120,7 +121,7 @@ func TestMarkdownMaterialReaderKeepsPlainTextEditors(t *testing.T) {
 	}
 }
 
-func TestMarkdownMaterialReaderIgnoresPendingEditAndSaveResults(t *testing.T) {
+func TestMarkdownMaterialWithoutEditingCapabilityIgnoresPendingEditAndSaveResults(t *testing.T) {
 	s, _, files := materialTextEditorFixture(t, map[string]string{"new.md": "# New document\n"})
 	content := files["new.md"]
 	s.materialsUnit.state.documentPath, s.materialsUnit.state.documentReadPending = content.Path, true

@@ -34,7 +34,7 @@ func textInputBase(c *context, value *string, multiline bool) *node {
 	}
 	st := e.st
 	if st.editor == nil || st.editor.document != nil {
-		st.editor = newEditor()
+		st.editor = newEditor(c.rt.now)
 		st.editor.setText(*value)
 		st.editor.caret, st.editor.anchor = st.editor.buf.n, st.editor.buf.n
 	}
@@ -62,10 +62,16 @@ func textInputBase(c *context, value *string, multiline bool) *node {
 	return e
 }
 
-// Placeholder shows s in an empty text input.
+// Placeholder shows s in an empty text input. On a field around an input,
+// as SearchField, TokenField and Combobox, it shows in the field's input,
+// in place of the field's own: SearchField shows Search without one.
 func (e *node) Placeholder(s string) *node {
-	if e.st.editor != nil {
-		e.st.editor.placeholder = s
+	in := e
+	if in.st.editor == nil && in.focusTo != nil {
+		in = in.focusTo
+	}
+	if in.st.editor != nil {
+		in.st.editor.placeholder = s
 	}
 	return e
 }
@@ -205,6 +211,17 @@ func (e *node) TextSelection() (start, end int) {
 		return 0, 0
 	}
 	return ed.selection()
+}
+
+// TextAnchorCaret returns the selection of a text input as offsets in runes
+// into its text, from where it was started to its caret: the anchor is after
+// the caret when the selection was made backwards.
+func (e *node) TextAnchorCaret() (anchor, caret int) {
+	ed := e.st.editor
+	if ed == nil {
+		return 0, 0
+	}
+	return ed.anchor, ed.caret
 }
 
 // SetTextSelection selects the runes of a text input from start to end, or

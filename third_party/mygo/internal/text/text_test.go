@@ -85,6 +85,22 @@ func TestTruncation(t *testing.T) {
 	}
 }
 
+// TestFitsItsWidth lays a line out again at the width it measured, as an
+// element sized to its text gives it, and at a rounding under it, as summing
+// the same advances in another order comes out: the line fits, uncut.
+func TestFitsItsWidth(t *testing.T) {
+	s := Shared()
+	for _, text := range []string{"停止翻译", "Stop translating", "翻訳を開始"} {
+		style := Style{Size: 16, Weight: 700}
+		w := s.Layout(Params{Text: text, Style: style}).Width
+		for _, at := range []float32{w, w * (1 - 1e-6)} {
+			if l := s.Layout(Params{Text: text, Style: style, Width: at, MaxLines: 1}); l.Truncated || len(l.Lines) != 1 {
+				t.Errorf("%q at %v of its %v: %d lines, truncated %v", text, at, w, len(l.Lines), l.Truncated)
+			}
+		}
+	}
+}
+
 func TestGlyphRaster(t *testing.T) {
 	s := Shared()
 	l := s.Layout(Params{Text: "Ag", Style: Style{Size: 32}})
@@ -618,7 +634,7 @@ func TestSpans(t *testing.T) {
 }
 
 func TestEncodeSpans(t *testing.T) {
-	spans := []Span{{End: 3, Family: "A, B", Size: 1.5, Weight: 600, Italic: true, LetterSpacing: -0.5, Features: "tnum", Lang: "ja"}, {End: 9}}
+	spans := []Span{{End: 3, Family: "A, B", Size: 1.5, Weight: 600, Italic: true, LetterSpacing: -0.5, Features: "tnum", Lang: "ja"}, {End: 5, BaselineShift: -2.5}, {End: 9}}
 	if got := DecodeSpans(EncodeSpans(spans)); !slices.Equal(got, spans) {
 		t.Errorf("decoded %+v, want %+v", got, spans)
 	}
@@ -843,5 +859,31 @@ func TestSetLanguage(t *testing.T) {
 	s.SetLanguage("ja")
 	if s.Generation() != gen {
 		t.Error("the same language made a new generation")
+	}
+}
+
+// A flex item gives text exactly the width of its unconstrained layout.
+// That width sums advances in float32, which may round below the
+// engine's own line width: on Core Text, 20pt semibold "Action required:
+// Complete your Artifact Signing identity validation" measured 599.78
+// and wrapped its last word at that width.
+func TestLayoutAtMeasuredWidth(t *testing.T) {
+	s := Shared()
+	texts := []string{
+		"Action required: Complete your Artifact Signing identity validation",
+		"The quick brown fox jumps over the lazy dog",
+		"Settings and Privacy",
+		"Welcome back, your inbox is up to date",
+	}
+	for _, text := range texts {
+		for _, weight := range []int{400, 500, 600, 700} {
+			for size := float32(10); size <= 32; size += 0.5 {
+				p := Params{Text: text, Style: Style{Size: size, Weight: weight}}
+				p.Width = s.Layout(p).Width
+				if l := s.Layout(p); len(l.Lines) != 1 {
+					t.Errorf("%q, weight %d, size %g: at measured width %g, %d lines", text, weight, size, p.Width, len(l.Lines))
+				}
+			}
+		}
 	}
 }

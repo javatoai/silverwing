@@ -42,6 +42,10 @@ type Result struct {
 	StderrTruncated bool
 }
 
+// ErrOutputLimit reports a command stopped by its configured output budget.
+// Failures to clean up the process are returned separately, before this error.
+var ErrOutputLimit = errors.New("命令输出超过允许的大小，已停止进程")
+
 func (r Result) Successful() bool { return r.ExitCode == 0 }
 func (r Result) RequireSuccess() error {
 	if r.ExitCode == 0 {
@@ -279,12 +283,18 @@ func (r *Runner) run(ctx context.Context, spec Spec, exchange func(context.Conte
 		return result, cleanupResultError(errors.Join(ctx.Err(), interactionErr), err)
 	}
 	if spec.KillOnOutputLimit && (result.StdoutTruncated || result.StderrTruncated) {
-		return result, errors.New("命令输出超过允许的大小，已停止进程")
+		return result, ErrOutputLimit
 	}
 	if ctx.Err() != nil {
 		deadlineExpired := errors.Is(ctx.Err(), context.DeadlineExceeded)
 		if parentContext.Err() != nil || deadlineExpired || !interactionCanceled {
 			return result, fmt.Errorf("命令已取消或超时：%w", ctx.Err())
+		}
+		// A completed exchange cancels its child as normal session cleanup.
+		// Wait may observe that cancellation after an otherwise successful exit.
+		// Only discard the bare self-cancel result after reaping the child.
+		if waitObserved && err == context.Canceled {
+			err = nil
 		}
 	}
 	if interactionErr != nil {

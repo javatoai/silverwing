@@ -156,8 +156,7 @@ func TestTaskCreationLeftGenerateInteraction(t *testing.T) {
 	}
 	beforeTooltip := labelCount()
 	tester.Move(generate.X+generate.W/2, generate.Y+generate.H/2)
-	time.Sleep(650 * time.Millisecond)
-	tester.Frame()
+	tester.Advance(650 * time.Millisecond)
 	if labelCount() <= beforeTooltip {
 		t.Fatal("hover must render the generation tooltip in addition to its accessible label")
 	}

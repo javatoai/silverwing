@@ -216,11 +216,32 @@ func (s *WorkspaceGitDiffService) validateReadWorkspace(ctx context.Context, ws 
 	if err := ctx.Err(); err != nil {
 		return "", "", err
 	}
-	top, err := s.run(ctx, root, nil, 2*1024*1024, false, "rev-parse", "--show-toplevel")
+	// These two path queries share one Git setup on the ordinary path. Git
+	// writes them as newline-delimited, unquoted paths; ambiguous output must use
+	// the separate queries below so paths containing newlines keep working.
+	identity, identityErr := s.run(ctx, root, nil, 2*1024*1024, false,
+		"rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir")
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return "", "", ctxErr
 	}
-	if err != nil || top.ExitCode != 0 || !samePath(strings.TrimSpace(top.Stdout), root) {
+	var top, common string
+	batched := false
+	if identityErr == nil && identity.ExitCode == 0 {
+		top, common, batched = parseWorkspaceDirectoryIdentity(identity.Stdout)
+	}
+	if !batched {
+		// A failed or unfamiliar combined response does not identify which query
+		// failed. Preserve the existing query order and its error messages.
+		result, readErr := s.run(ctx, root, nil, 2*1024*1024, false, "rev-parse", "--show-toplevel")
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", "", ctxErr
+		}
+		if readErr != nil || result.ExitCode != 0 {
+			return "", "", errors.New("工作区路径不再是任务记录中的 Git 根目录")
+		}
+		top = strings.TrimSpace(result.Stdout)
+	}
+	if !samePath(top, root) {
 		return "", "", errors.New("工作区路径不再是任务记录中的 Git 根目录")
 	}
 	if err := ctx.Err(); err != nil {
@@ -233,9 +254,11 @@ func (s *WorkspaceGitDiffService) validateReadWorkspace(ctx context.Context, ws 
 	if err != nil || branch.ExitCode != 0 || strings.TrimSpace(branch.Stdout) != ws.Branch {
 		return "", "", errors.New("工作区分支与任务记录不一致，请刷新后重试")
 	}
-	common, err := s.commonDirectory(ctx, root)
-	if err != nil {
-		return "", "", err
+	if !batched {
+		common, err = s.commonDirectory(ctx, root)
+		if err != nil {
+			return "", "", err
+		}
 	}
 	switch ws.Strategy {
 	case domain.WorkspaceStandardWorktree:
@@ -266,6 +289,19 @@ func (s *WorkspaceGitDiffService) validateReadWorkspace(ctx context.Context, ws 
 		return "", "", err
 	}
 	return root, common, nil
+}
+
+func parseWorkspaceDirectoryIdentity(output string) (string, string, bool) {
+	lines := strings.Split(output, "\n")
+	if len(lines) != 3 || lines[2] != "" {
+		return "", "", false
+	}
+	for _, path := range lines[:2] {
+		if !filepath.IsAbs(path) || strings.TrimSpace(path) != path || strings.ContainsAny(path, "\x00\r") {
+			return "", "", false
+		}
+	}
+	return lines[0], filepath.Clean(lines[1]), true
 }
 
 func (s *WorkspaceGitDiffService) commonDirectory(ctx context.Context, repository string) (string, error) {

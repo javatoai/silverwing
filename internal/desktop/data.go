@@ -32,6 +32,7 @@ type task struct {
 type formField struct {
 	key, label, value  string
 	placeholder, error string
+	format             formFieldFormat
 	multiline          bool
 	secret             bool
 	options            []string
@@ -43,11 +44,17 @@ type actionForm struct {
 	text                                           string
 	fields                                         []formField
 	taskScope                                      *taskMenuScope
+	markdown                                       *actionFormMarkdownState
+	sourceBranches                                 *sourceBranchFormState
 }
 
 type app struct {
+	taskTabExplicit        bool
 	mermaidInitializer     *mermaidInitializer
 	taskUnit               taskController
+	taskFilesUnit          taskFilesController
+	taskServicesUnit       taskServicesController
+	taskTerminalUnit       taskTerminalController
 	materialsUnit          materialsController
 	requirementUnit        requirementController
 	settingsUnit           settingsController
@@ -86,9 +93,14 @@ type app struct {
 	form                   actionForm
 }
 
-const taskTagTab = 4
+const (
+	taskTagTab      = 4
+	taskFilesTab    = 5
+	taskServicesTab = 6
+	taskTerminalTab = 7
+)
 
-var tabs = []string{"任务详情", "任务资料", "需求详情", "需求说明", "Tag"}
+var tabs = []string{"任务分支", "任务资料", "需求详情", "任务说明", "Tag", "任务文件", "服务信息", "终端"}
 
 func newApp(backend application.Backend, opts Options) *app {
 	s := &app{
@@ -101,7 +113,7 @@ func newApp(backend application.Backend, opts Options) *app {
 			taskRequirementMetadata:           make(map[string]taskRequirementMetadataState),
 			taskRequirementMetadataCancels:    make(map[string]context.CancelFunc),
 			taskRequirementMetadataGeneration: make(map[string]uint64)}},
-		settingsUnit: settingsController{state: settingsState{settingsTab: "基础",
+		settingsUnit: settingsController{state: settingsState{settingsTab: "外观与交互",
 			settingsPage:       "basic",
 			settingsAgentScope: "global",
 			settingsBoolInputs: make(map[string]*bool)}},
@@ -112,6 +124,7 @@ func newApp(backend application.Backend, opts Options) *app {
 		page:                opts.Page,
 		dark:                opts.Dark,
 		tab:                 opts.Tab,
+		taskTabExplicit:     opts.TabExplicit || opts.Tab != 0,
 		desktopPreferences:  &desktopPreferencesState{enabled: opts.CapturePath == ""},
 		listWidth:           240,
 		inputs:              make(map[string]*string),
@@ -150,7 +163,7 @@ func (s *app) applySnapshot(snapshot application.Snapshot) {
 	s.reconcileSidebarNavigation()
 	if selectionChanged {
 		s.finishTaskLifecycleSelection()
-	} else if refreshWorkspaceGit {
+	} else if refreshWorkspaceGit && s.tab != taskFilesTab && s.tab != taskServicesTab && s.tab != taskTerminalTab {
 		s.requestWorkspaceGitStatus(true)
 	}
 	s.restoreReadingSessionOnSnapshot()
@@ -341,8 +354,19 @@ func (s *app) input(name, value string) *string {
 	return v
 }
 
-func (s *app) openForm(kind, title, taskID, serviceID, moduleID, path string, fields ...formField) {
-	if kind == "skills.sources/save" || kind == "codex.extensions/marketplaces/add-source" {
+func (s *app) openForm(kind, title, taskID, serviceID, moduleID, path string, fields ...formField) bool {
+	if s.dialogOpen && s.form.mode == "task-create" {
+		if err := s.captureTaskCreationMarkdown(s.taskUnit.state.taskCreation); err != nil {
+			s.lastError = err.Error()
+			return false
+		}
+		closeTaskCreationMarkdown(s.taskUnit.state.taskCreation)
+	}
+	if s.dialogOpen && !s.captureActionFormMarkdown() {
+		return false
+	}
+	s.closeActionFormMarkdown()
+	if extensionSourceForm(s.form.kind) || extensionSourceForm(kind) {
 		s.resetSettingsExtensionForm()
 	}
 	for _, field := range fields {
@@ -351,15 +375,19 @@ func (s *app) openForm(kind, title, taskID, serviceID, moduleID, path string, fi
 			*s.settingsBoolInput("form-secret:"+kind+":"+field.key, false) = false
 		}
 	}
-	s.form = actionForm{kind: kind, title: title, taskID: taskID, serviceID: serviceID, moduleID: moduleID, path: path, fields: fields}
+	s.form = actionForm{kind: kind, title: title, taskID: taskID, serviceID: serviceID, moduleID: moduleID, path: path, fields: fields, markdown: newActionFormMarkdownState()}
+	s.form.sourceBranches = newSourceBranchForm(kind)
 	s.lastError = ""
 	s.dialogTitle = title
 	s.dialogOpen = true
+	return true
 }
 
 func (s *app) openTaskCreateForm(title, requirementTitle, requirementURL string) {
-	fields := []formField{{key: "title", label: "任务名称", value: requirementTitle}, {key: "branch", label: "分支名称"}, {key: "requirementURL", label: "需求链接", value: requirementURL}, {key: "taskNotes", label: "任务说明", multiline: true}}
-	s.openForm("task.create", title, "", "", "", "", fields...)
+	fields := []formField{{key: "title", label: "任务名称", value: requirementTitle}, {key: "branch", label: "分支名称"}, {key: "requirementURL", label: "需求链接", value: requirementURL}, {key: "taskNotes", label: "任务说明", multiline: true, format: formFieldMarkdown}}
+	if !s.openForm("task.create", title, "", "", "", "", fields...) {
+		return
+	}
 	s.form.mode = "task-create"
 	s.taskUnit.state.taskGroupID = ""
 	s.taskUnit.state.taskServices = make(map[string]bool)
@@ -372,10 +400,12 @@ func (s *app) openTaskCreateForm(title, requirementTitle, requirementURL string)
 
 func (s *app) openWorkspaceAddForm(t task) {
 	branch := t.branch
-	s.openForm("workspace.add", "添加服务工作区", t.id, "", "", "",
+	if !s.openForm("workspace.add", "添加服务工作区", t.id, "", "", "",
 		formField{key: "baseRef", label: "基础分支（留空则继承）"},
 		formField{key: "strategy", label: "工作区策略", value: "STANDARD_WORKTREE"},
-		formField{key: "branch", label: "任务分支", value: branch})
+		formField{key: "branch", label: "任务分支", value: branch}) {
+		return
+	}
 	s.form.mode = "workspace-add"
 	s.workspaceUnit.state.workspaceAddServiceID = ""
 	s.workspaceUnit.state.workspaceAddModuleID = ""

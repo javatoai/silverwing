@@ -59,6 +59,26 @@ func Rotation(degrees float32) Affine {
 // Perspective reports whether m is projective, not affine.
 func (m Affine) Perspective() bool { return m.Set && (m.G != 0 || m.H != 0) }
 
+// MovedClip returns the rectangle of a clip of r under m, and what of m is
+// left to apply to it: nothing when m only moves it, as a pose sliding a
+// panel in or a card lifting under the pointer does. A clip only moved is
+// a rectangle like any other, which renderers cut as they cut those that
+// nothing transforms, rather than with a mask of its transformed shape.
+func MovedClip(r Rect, m Affine) (Rect, Affine) {
+	if !m.Set || m.A != 1 || m.B != 0 || m.C != 0 || m.D != 1 || m.G != 0 || m.H != 0 {
+		return r, m
+	}
+	r.X += m.X
+	r.Y += m.Y
+	return r, Affine{}
+}
+
+// moves reports whether m only moves what it maps, without scaling,
+// turning, skewing it or showing it in perspective.
+func (m Affine) moves() bool {
+	return m.A == 1 && m.B == 0 && m.C == 0 && m.D == 1 && m.G == 0 && m.H == 0
+}
+
 // matrix returns m's matrix, by rows.
 func (m Affine) matrix() [3][3]float64 {
 	if !m.Set {
@@ -97,6 +117,10 @@ func (m Affine) Mul(n Affine) Affine {
 	}
 	if !n.Set {
 		return m
+	}
+	if m.moves() && n.moves() {
+		// As the general product, but for the signs of zeros.
+		return Matrix(1, 0, 0, 1, n.X+m.X, n.Y+m.Y)
 	}
 	if !m.Perspective() && !n.Perspective() {
 		return Matrix(m.A*n.A+m.C*n.B, m.B*n.A+m.D*n.B,
@@ -189,6 +213,16 @@ func (m Affine) Inverse() (Affine, bool) {
 func (m Affine) Bounds(r Rect) Rect {
 	if !m.Set {
 		return r
+	}
+	if m.B == 0 && m.C == 0 && m.G == 0 && m.H == 0 {
+		// Without rotation, skew or perspective: as from the corners, but
+		// for the signs of zeros, rounding the products as Point does
+		// (float32 keeps them from fusing with the sums).
+		x0, x1 := float32(m.A*r.X)+m.X, float32(m.A*(r.X+r.W))+m.X
+		y0, y1 := float32(m.D*r.Y)+m.Y, float32(m.D*(r.Y+r.H))+m.Y
+		x0, x1 = min(x0, x1), max(x0, x1)
+		y0, y1 = min(y0, y1), max(y0, y1)
+		return Rect{x0, y0, x1 - x0, y1 - y0}
 	}
 	corners := [4][2]float32{{r.X, r.Y}, {r.X + r.W, r.Y}, {r.X, r.Y + r.H}, {r.X + r.W, r.Y + r.H}}
 	if m.Perspective() {

@@ -42,7 +42,13 @@ func (a *App) Dispatch(ctx context.Context, action Action) (ActionResult, error)
 	case "config.export":
 		return a.exportConfiguration(action)
 	case "config.import":
-		config, err := a.Config.ImportFrom(actionPath(action))
+		var config domain.AppConfig
+		var err error
+		if fingerprint := textPayload(action, "expectedFingerprint"); fingerprint != "" {
+			config, err = a.Config.ImportFromPreview(actionPath(action), fingerprint)
+		} else {
+			config, err = a.Config.ImportFrom(actionPath(action))
+		}
 		return ActionResult{Message: "配置已导入", Data: config}, err
 	case "repository.add":
 		config, err := a.Config.Load()
@@ -109,7 +115,16 @@ func (a *App) Dispatch(ctx context.Context, action Action) (ActionResult, error)
 	case "codex.run":
 		return a.openCodex(ctx, action)
 	}
+	if strings.HasPrefix(action.Kind, "task.services.") {
+		return a.taskServicesAction(ctx, action)
+	}
+	if strings.HasPrefix(action.Kind, "task.files.") {
+		return a.taskFilesAction(ctx, action)
+	}
 	if strings.HasPrefix(action.Kind, "document.") {
+		if action.Kind == "document.link-preview" {
+			return a.documentLinkPreview(ctx, action)
+		}
 		return a.documentAction(ctx, action)
 	}
 	if strings.HasPrefix(action.Kind, "instructions.") {

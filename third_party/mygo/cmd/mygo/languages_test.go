@@ -188,8 +188,32 @@ func TestLanguagePackaging(t *testing.T) {
 	}
 	langs, _ := c.languages()
 	res := t.TempDir()
-	if err := writeLocalizations(c, res, langs); err != nil {
+	// The app's resources translate the reasons of Info.plist themselves, as Xcode's projects do.
+	os.MkdirAll(filepath.Join(res, "zh-Hans.lproj"), 0o755)
+	os.WriteFile(filepath.Join(res, "zh-Hans.lproj", "InfoPlist.strings"), []byte(`"NSMicrophoneUsageDescription" = "用麦克风录语音笔记。";`), 0o644)
+	os.MkdirAll(filepath.Join(res, "fr.lproj"), 0o755)
+	os.WriteFile(filepath.Join(res, "fr.lproj", "InfoPlist.strings"), []byte(`NSMicrophoneUsageDescription = "Enregistrer des notes vocales.";`), 0o644)
+	// A link among the resources is copied as a link: the build must not write through it.
+	linked := filepath.Join(t.TempDir(), "InfoPlist.strings")
+	os.WriteFile(linked, []byte(`"NSCameraUsageDescription" = "Kamera";`), 0o644)
+	os.MkdirAll(filepath.Join(res, "de.lproj"), 0o755)
+	os.Symlink(linked, filepath.Join(res, "de.lproj", "InfoPlist.strings"))
+	if err := writeLocalizations(c, res, append(langs, appLanguage{Tag: "de", Name: "Notizen"})); err != nil {
 		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(linked); string(data) != `"NSCameraUsageDescription" = "Kamera";` {
+		t.Errorf("the build wrote through a link among the resources:\n%s", data)
+	}
+	if data, _ := os.ReadFile(filepath.Join(res, "de.lproj", "InfoPlist.strings")); !strings.Contains(string(data), "<string>Kamera</string>") || !strings.Contains(string(data), "<string>Notizen</string>") {
+		t.Errorf("de.lproj/InfoPlist.strings:\n%s", data)
+	}
+	for lproj, want := range map[string]string{
+		"zh-Hans": "<key>NSMicrophoneUsageDescription</key>\n\t<string>用麦克风录语音笔记。</string>",
+		"fr":      "<key>NSMicrophoneUsageDescription</key>\n\t<string>Enregistrer des notes vocales.</string>",
+	} {
+		if data, _ := os.ReadFile(filepath.Join(res, lproj+".lproj", "InfoPlist.strings")); !strings.Contains(string(data), want) {
+			t.Errorf("the app's InfoPlist.strings of %s is not kept:\n%s", lproj, data)
+		}
 	}
 	for lproj, name := range map[string]string{"en": "", "zh-Hans": "笔记", "zh-HK": "筆記", "fr": "", "sr-Latn": ""} {
 		data, err := os.ReadFile(filepath.Join(res, lproj+".lproj", "InfoPlist.strings"))

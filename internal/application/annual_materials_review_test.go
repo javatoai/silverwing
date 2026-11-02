@@ -41,7 +41,7 @@ func TestAnnualApplicationArchiveCustomRouterSucceedsWithVisibleWarningAndLocalR
 	}
 	data, _ := os.ReadFile(router)
 	contextData, _ := os.ReadFile(filepath.Join(taskPath, ".workspace", "agent", "TASK-CONTEXT.md"))
-	if string(data) != custom || !strings.Contains(string(contextData), peer) {
+	if string(data) != custom || strings.Contains(string(contextData), peer) || !strings.Contains(string(contextData), "主动阅读") {
 		t.Fatal("archive overwrote custom AGENTS or skipped safe context")
 	}
 	a.Platform = platform.NewService(a.Paths, a.Config, nil)
@@ -59,7 +59,7 @@ func TestAnnualApplicationArchiveCustomRouterSucceedsWithVisibleWarningAndLocalR
 		t.Fatal("standalone local retry did not settle the warning", result.Message, err)
 	}
 	data, _ = os.ReadFile(router)
-	if !strings.Contains(string(data), peer) {
+	if strings.Contains(string(data), peer) || !strings.Contains(string(data), "主动阅读") {
 		t.Fatal("local retry did not refresh the archived task's managed block")
 	}
 }
@@ -92,7 +92,7 @@ func TestAnnualApplicationInstructionsSaveCustomRouterWarnsAndUpdatesSafeContext
 	}
 	data, readErr := os.ReadFile(router)
 	contextData, contextErr := os.ReadFile(filepath.Join(taskPath, workspace.AgentWorkspaceDir, workspace.AgentDirectoryName, workspace.AgentContextFileName))
-	if readErr != nil || string(data) != string(custom) || contextErr != nil || !strings.Contains(string(contextData), peer) {
+	if readErr != nil || string(data) != string(custom) || contextErr != nil || strings.Contains(string(contextData), peer) || !strings.Contains(string(contextData), "主动阅读") {
 		t.Fatal("instructions.save overwrote the custom router or skipped safe context", string(data), readErr, contextErr)
 	}
 	notesData, readErr := os.ReadFile(notes)
@@ -187,7 +187,7 @@ func TestAnnualApplicationScanDiagnosticsDoNotSilentlySkipArchives(t *testing.T)
 	for _, path := range []string{taskPath, goodArchive} {
 		for _, relative := range []string{"AGENTS.md", filepath.Join(".workspace", "agent", "TASK-CONTEXT.md")} {
 			data, err := os.ReadFile(filepath.Join(path, relative))
-			if err != nil || !strings.Contains(string(data), peer) {
+			if err != nil || strings.Contains(string(data), peer) || !strings.Contains(string(data), "主动阅读") {
 				t.Fatal("scan diagnostics prevented safe task fanout", path, relative, err)
 			}
 		}
@@ -237,6 +237,9 @@ func TestAnnualApplicationClearedConfigurationNeverReenablesFlatMaterials(t *tes
 			if err != nil || len(snapshot.Tasks) != 1 || snapshot.Tasks[0].MaterialsStatus != string(domain.MaterialsFailed) ||
 				snapshot.Tasks[0].MaterialsPath != "" || snapshot.Tasks[0].MaterialsFailureReason == "" {
 				t.Fatal("cleared configuration left materials available in Snapshot", snapshot.Tasks, err)
+			}
+			if layout == "flat" && snapshot.Tasks[0].MaterialsFailureReason != "无法识别任务资料目录" {
+				t.Fatal("unrecognized materials exposed a legacy-format warning", snapshot.Tasks[0].MaterialsFailureReason)
 			}
 			for _, action := range []Action{
 				{Kind: "document.create", Path: owned, Payload: map[string]any{"name": "must-not-exist.txt"}},

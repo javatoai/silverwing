@@ -562,6 +562,10 @@ func (s *app) applyPendingMaterialsSearchHit(action application.Action, result a
 	if filepath.Clean(path) != filepath.Clean(state.pendingHitPath) || filepath.Clean(s.materialsUnit.state.documentPath) != filepath.Clean(state.pendingHitPath) {
 		return
 	}
+	if err := s.captureMarkdownEditorInput(s.materialsUnit.state.markdown); err != nil {
+		s.lastError = err.Error()
+		return
+	}
 	hit := *state.pendingHit
 	state.pendingHit = nil
 	state.pendingHitTask = ""

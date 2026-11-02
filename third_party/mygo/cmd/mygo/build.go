@@ -26,10 +26,11 @@ func runBuild(args []string) error {
 	flags := newFlags("build", "[flags] [dir]", `Builds a production app for each platform. It runs buildCommand from
 mygo.json, then compiles the app with the frontendDist files embedded, served
 at mygo://localhost/. macOS gets a signed .app bundle and a
-"<name> <version> <arch>.dmg" disk image, without the arch for
-darwin/universal, whose window invites dragging the app to Applications;
-other platforms get an executable. Linux also gets a Debian
-package, and the app as <name>-<version>-linux-<arch>.tar.gz with
+"<slug>-<version>-<arch>.dmg" disk image (slug in mygo.json, by default
+the name in lower case), without the arch for darwin/universal, whose
+window invites dragging the app to Applications; other platforms get an
+executable. Linux also gets a Debian
+package, and the app as <slug>-<version>-linux-<arch>.tar.gz with
 install.sh, which installs it for the user in ~/.local, where it can update
 itself. The contents of the
 resources directory and the resources listed in mygo.json are copied into
@@ -39,7 +40,7 @@ platform, such as resources/darwin or resources/linux-amd64, only ship with
 that platform's apps; darwin/universal combines darwin-arm64 and
 darwin-amd64. MyGo needs no cgo, so any platform can be compiled from any
 machine; signing and disk images need macOS. Windows also gets
-"<name> Setup <version> <arch>.exe", made with NSIS, which mygo build
+"<slug>-setup-<version>-<arch>.exe", made with NSIS, which mygo build
 downloads on Windows when it is not installed.
 
 Set macos.signingIdentity in mygo.json (or -sign) to a Developer ID to ship
@@ -86,6 +87,10 @@ WebAssembly, named by its content: a static site, to serve from anywhere.`)
 	}
 	if c.MacOS.Notarize != nil && !opts.skipNotarize && opts.sign == "-" {
 		return fmt.Errorf("notarization needs a Developer ID signing identity: set macos.signingIdentity or pass -sign")
+	}
+	if c.MacOS.ProvisioningProfile != "" && opts.sign == "-" && slices.ContainsFunc(splitList(*platforms), func(p string) bool { return strings.HasPrefix(p, "darwin/") }) {
+		// Before building anything, as codesign would.
+		return errProfileAdHoc
 	}
 
 	con.startBanner("build")
@@ -147,6 +152,15 @@ WebAssembly, named by its content: a static site, to serve from anywhere.`)
 		built = append(built, paths...)
 		if err != nil {
 			return err
+		}
+	}
+	if c.Updates != nil {
+		sums, err := writeChecksums(c.path(c.Out), built)
+		if err != nil {
+			return err
+		}
+		if sums != "" {
+			built = append(built, sums)
 		}
 	}
 	con.println(buildSummary(c, built, time.Since(started)))
@@ -213,6 +227,7 @@ func buildPlatform(c *Config, goos, goarch string, opts buildOptions) ([]string,
 		// A GUI app, not a console one.
 		ldflags += " -H=windowsgui"
 	}
+	ldflags += extraLDFlags()
 	compile := func(arch, out string) error {
 		t := con.start("Compiling " + goos + "/" + arch)
 		err := func() error {
@@ -262,10 +277,8 @@ func buildPlatform(c *Config, goos, goarch string, opts buildOptions) ([]string,
 		if err != nil {
 			return nil, err
 		}
-		var icns []byte
-		if car != nil && car.icns != nil {
-			icns = car.icns // the .icon's own rendering for older macOS
-		} else if icns, err = appIcon(c); err != nil {
+		icns, err := bundleICNS(c, car)
+		if err != nil {
 			return nil, err
 		}
 		app, err := writeBundle(c, stage, bin, icns, car, res)
@@ -315,11 +328,11 @@ func buildPlatform(c *Config, goos, goarch string, opts buildOptions) ([]string,
 		}
 		artifacts = append(artifacts, exe)
 	default:
-		exe := filepath.Join(stage, slugify(name))
+		exe := filepath.Join(stage, c.slug())
 		if err := compile(goarch, exe); err != nil {
 			return nil, err
 		}
-		files, err := writeLinuxDesktop(c, stage, slugify(name))
+		files, err := writeLinuxDesktop(c, stage, c.slug())
 		if err != nil {
 			return nil, err
 		}
@@ -358,7 +371,7 @@ func buildPlatform(c *Config, goos, goarch string, opts buildOptions) ([]string,
 		}
 	}
 	if _, ok := debArch[goarch]; goos == "linux" && ok {
-		deb, err := writeDeb(c, stage, slugify(name), goarch, installed)
+		deb, err := writeDeb(c, stage, c.slug(), goarch, installed)
 		if err != nil {
 			return nil, err
 		}
@@ -369,8 +382,17 @@ func buildPlatform(c *Config, goos, goarch string, opts buildOptions) ([]string,
 		return nil, err
 	}
 	artifacts = append(artifacts, files...)
-	if goos == "linux" {
+	// install.sh installs on Linux, and with updates on macOS; install.ps1
+	// runs the Windows installer of the latest version.
+	if goos == "linux" || goos == "darwin" && c.Updates != nil {
 		script, err := writeInstallScript(c, stage)
+		if err != nil {
+			return nil, err
+		}
+		artifacts = append(artifacts, script)
+	}
+	if goos == "windows" && c.Updates != nil && slices.ContainsFunc(artifacts, func(a string) bool { return filepath.Base(a) == installerFileName(c, goarch) }) {
+		script, err := writeInstallPS1(c, stage)
 		if err != nil {
 			return nil, err
 		}
@@ -421,6 +443,16 @@ func productionTags(debug bool) []string {
 		}
 	}
 	return []string{"-tags", strings.Join(append(tags, inspectorTag), ",")}
+}
+
+// extraLDFlags returns the -ldflags of MYGO_LDFLAGS, which a build adds
+// after its own, so that its -X flags win: GOFLAGS cannot give any, as
+// the -ldflags of mygo build override those of GOFLAGS.
+func extraLDFlags() string {
+	if f := strings.TrimSpace(os.Getenv("MYGO_LDFLAGS")); f != "" {
+		return " " + f
+	}
+	return ""
 }
 
 // packageFlags are the -ldflags that link what mygo.json says about the app

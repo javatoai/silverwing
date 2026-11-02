@@ -112,6 +112,11 @@ func (s *app) captureDocumentCloseInput() error {
 	if state := s.taskUnit.state.taskNotesUI; state != nil && state.activeKey != "" {
 		s.preserveActiveInstructionDraft(state.activeKey)
 		if markdown := state.activeMarkdown; markdown != nil && markdown.doc != nil && !markdown.closed {
+			if markdown.live != nil {
+				if err := s.captureMarkdownEditorInput(markdown); err != nil {
+					return err
+				}
+			}
 			for _, rich := range allMarkdownRichFields(markdown) {
 				if rich != nil && rich.input != nil && !rich.input.composing && (rich.input.dirty || rich.input.errorText != "") {
 					return errors.New("富文本内容尚未提交，请处理编辑错误后再关闭；当前草稿已保留")
@@ -129,7 +134,7 @@ func (s *app) captureDocumentCloseInput() error {
 			return errors.New("中文输入尚未结束，请提交输入后再关闭；当前草稿已保留")
 		}
 	}
-	if state := s.materialsUnit.state.markdown; state != nil && state.doc != nil && !state.closed && !state.readOnly && !state.detached {
+	if state := s.materialsUnit.state.markdown; state != nil && state.doc != nil && state.live == nil && !state.closed && !state.readOnly && !state.detached {
 		for _, rich := range allMarkdownRichFields(state) {
 			if !rich.input.composing && (rich.input.dirty || rich.input.errorText != "") {
 				return errors.New("富文本内容尚未提交，请处理编辑错误后再关闭；当前草稿已保留")

@@ -287,6 +287,9 @@ func (s *app) finishCLIJob(request *cliJobRequest, result application.ActionResu
 		return
 	}
 	currentSection := s.page == request.page && s.settingsUnit.state.settingsPage == request.section
+	if currentSection && settingsCanonicalPage(request.section) == "cli-tools" {
+		currentSection = s.settingsCLIPageActive(request.tool)
+	}
 	if request.userCancelled && !process.IsCleanupFailure(err) {
 		if currentSection {
 			s.settingsUnit.state.settingsOutput = "登录操作已取消。"
@@ -295,6 +298,12 @@ func (s *app) finishCLIJob(request *cliJobRequest, result application.ActionResu
 	}
 	if err != nil {
 		cleanupFailure := process.IsCleanupFailure(err)
+		if request.action.Kind == "cli.status" && !errors.Is(err, context.Canceled) {
+			if s.settingsUnit.state.settingsCLIErrors == nil {
+				s.settingsUnit.state.settingsCLIErrors = make(map[string]string)
+			}
+			s.settingsUnit.state.settingsCLIErrors[request.tool] = err.Error()
+		}
 		if s.applyMeegleProjectCatalogFailure(request.action, err) {
 			return
 		}
@@ -318,6 +327,9 @@ func (s *app) finishCLIJob(request *cliJobRequest, result application.ActionResu
 		return
 	}
 	previousOutput := s.settingsUnit.state.settingsOutput
+	if request.action.Kind == "cli.status" {
+		delete(s.settingsUnit.state.settingsCLIErrors, request.tool)
+	}
 	if request.action.Kind == "meegle.projects" {
 		if s.meegleCatalogActionRelevant(request.action) {
 			s.settingsUnit.state.meegleProjectCatalog.context = request.meegleContext
@@ -364,6 +376,7 @@ func (s *app) invalidateCLIConfiguration(snapshot application.Snapshot) {
 			s.clearMeegleSessionViews()
 		}
 		delete(s.settingsUnit.state.settingsCLIStatus, tool)
+		delete(s.settingsUnit.state.settingsCLIErrors, tool)
 		delete(s.settingsUnit.state.settingsCLISessions, tool)
 	}
 }

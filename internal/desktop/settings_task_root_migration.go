@@ -147,7 +147,10 @@ func (s *app) previewTaskRootMigrationTarget(target string) {
 }
 
 func (s *app) observeTaskRootMigrationNavigation() {
-	if !s.taskUnit.state.taskRootTargetFocused || s.page == "settings" && s.settingsUnit.state.settingsPage == "paths" {
+	if !s.taskUnit.state.taskRootTargetFocused || s.page == "settings" && s.settingsUnit.state.settingsPage == "task-paths" {
+		return
+	}
+	if s.busy || s.settingsUnit.state.settingsPickerBusy {
 		return
 	}
 	s.taskUnit.state.taskRootTargetFocused = false

@@ -67,10 +67,9 @@ func (s *app) showStartedTagBuild(t task) bool {
 	}
 	s.markReadingInteraction()
 	s.observeReadingSession()
-	if s.tab == 3 {
-		s.deactivateInstructionEditor()
+	if !s.selectTaskContentTab(taskTagTab) {
+		return false
 	}
-	s.tab = taskTagTab
 	s.observeReadingSession()
 	return true
 }

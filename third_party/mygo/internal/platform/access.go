@@ -227,4 +227,7 @@ const (
 	AccessCollapse
 	// AccessSelectText selects runes From to To of a text field's Value.
 	AccessSelectText
+	// AccessInsertText replaces the selection of a text field with Text,
+	// as typing it does: at the caret when nothing is selected.
+	AccessInsertText
 )

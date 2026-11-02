@@ -38,6 +38,7 @@ func TestDependencyRulesRejectViolatingImports(t *testing.T) {
 		{"asyncjob process", "asyncjob/jobs.go", fixtureModule + "/internal/process", "", "pure-package"},
 		{"profile adapter", "productprofile/current.go", fixtureModule + "/internal/platform", "", "pure-package"},
 		{"pure external", "asyncjob/jobs.go", "example.test/framework", "", "pure-package"},
+		{"yaml outside markdown", "asyncjob/jobs.go", "go.yaml.in/yaml/v3", "", "pure-package"},
 		{"nonstandard unqualified path", "asyncjob/jobs.go", "framework/runtime", "", "pure-package"},
 		{"goldmark outside markdown", "productprofile/current.go", "github.com/yuin/goldmark/ast", "", "pure-package"},
 		{"application desktop", "application/actions.go", fixtureModule + "/internal/desktop", "", "application-ui"},
@@ -72,6 +73,7 @@ func TestDependencyRulesAllowLegitimateConsumers(t *testing.T) {
 	root := fixture(t, map[string]string{
 		"domain/model.go":               sourceImport(fixtureModule + "/internal/markdowntext"),
 		"markdowntext/parse.go":         sourceImport("github.com/yuin/goldmark/ast"),
+		"markdowntext/properties.go":    sourceImport("go.yaml.in/yaml/v3"),
 		"filelanguage/language.go":      sourceImport("path/filepath"),
 		"asyncjob/jobs.go":              sourceImport("context"),
 		"productprofile/current.go":     sourceImport("strings"),

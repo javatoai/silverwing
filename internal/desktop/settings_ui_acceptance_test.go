@@ -27,8 +27,8 @@ func TestSettingsSystemScreensIsolatedLayout(test *testing.T) {
 						})
 					})
 				}, size[0], size[1])
-				assertSettingsVisibleBounds(test, tester, "快捷工具", size[0], size[1])
-				for _, tab := range []string{"关于", "更新", "应用数据目录"} {
+				assertSettingsVisibleBounds(test, tester, "外观与交互", size[0], size[1])
+				for _, tab := range []string{"关于与更新", "数据目录", "日志与诊断", "配置与备份"} {
 					assertSettingsVisibleBounds(test, tester, tab, size[0], size[1])
 				}
 				assertSettingsSystemCardAlignment(test, tester, size[0])
@@ -38,17 +38,7 @@ func TestSettingsSystemScreensIsolatedLayout(test *testing.T) {
 					test.Fatal("application data path still appears on the about page")
 				}
 				captureDesktopTestFrame(test, tester, fmt.Sprintf("settings-system-about-%dx%d-dark-%t", size[0], size[1], dark))
-				if err := tester.Click("更新"); err != nil {
-					test.Fatal(err)
-				}
-				if state.settingsUnit.state.settingsPage != "updates" || !tester.HasText("获取新版") || tester.HasText("已是最新版本") {
-					test.Fatal("update tab did not retain the manual update flow")
-				}
-				assertSettingsVisibleBounds(test, tester, "打开更新页面", size[0], size[1])
-				assertSettingsVisibleBounds(test, tester, "复制链接", size[0], size[1])
-				assertSettingsSystemCardAlignment(test, tester, size[0])
-				captureDesktopTestFrame(test, tester, fmt.Sprintf("settings-system-updates-%dx%d-dark-%t", size[0], size[1], dark))
-				if err := tester.Click("应用数据目录"); err != nil {
+				if err := tester.Click("数据目录"); err != nil {
 					test.Fatal(err)
 				}
 				if state.settingsUnit.state.settingsPage != "app-data" || !tester.HasText(state.snapshot.Home) {
@@ -64,7 +54,7 @@ func TestSettingsSystemScreensIsolatedLayout(test *testing.T) {
 				if tester.Clipboard() != state.snapshot.Home {
 					test.Fatalf("data tab copied %q, want %q", tester.Clipboard(), state.snapshot.Home)
 				}
-				if err := tester.Click("关于"); err != nil {
+				if err := tester.Click("关于与更新"); err != nil {
 					test.Fatal(err)
 				}
 				if state.settingsUnit.state.settingsPage != "about" || !tester.HasText("SilverWing") || tester.HasText(state.snapshot.Home) {
@@ -85,8 +75,8 @@ func TestSettingsSystemScreensIsolatedLayout(test *testing.T) {
 func assertSettingsSystemCardAlignment(test *testing.T, tester *ui.Tester, width int) {
 	test.Helper()
 	card, cardFound := tester.Find("系统设置卡片")
-	tab, tabFound := tester.Find("关于")
-	if !cardFound || !tabFound || card.X != tab.X || card.X+card.W != float32(width)-28 {
+	tab, tabFound := tester.Find("配置与备份")
+	if !cardFound || !tabFound || card.X != tab.X || card.X+card.W != float32(width)-24 {
 		test.Fatalf("system card does not fill the content area: card=%+v firstTab=%+v viewport=%d", card, tab, width)
 	}
 }

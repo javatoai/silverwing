@@ -17,7 +17,7 @@ var settingsHelpImage = func() *ui.SVG {
 // Settings help is deliberately separate from settingsMuted: that renderer is
 // also used for empty states, progress and content outside the settings pages.
 func settingsHelpLabel(c *ui.Context, p palette, title, help string, size float32, weight int) {
-	ui.Row(c).MinWidth(0).Gap(4).AlignItems(ui.Center).Children(func() {
+	settingsReveal(c, ui.Row(c).MinWidth(0).Gap(4).AlignItems(ui.Center), p, title).Children(func() {
 		if title != "" {
 			label(c, title, size, p.text).FontWeight(weight).MinWidth(0).Wrap()
 		}
@@ -29,12 +29,9 @@ func settingsHelpLabel(c *ui.Context, p palette, title, help string, size float3
 
 func settingsHelp(c *ui.Context, p palette, title, help string) {
 	button := ui.ButtonBase(c.Key("settings-help-" + title)).Width(24).Height(24).Shrink(0).Radius(6).Center().
-		Label(title + "说明").Description(help)
+		Label(title + "说明").Description(help).FocusRing(true)
 	if button.Hovered() {
 		button.Background(p.soft)
-	}
-	if button.Focused() {
-		button.Border(2, p.blue)
 	}
 	button.Children(func() { ui.Icon(c, settingsHelpImage).Width(16).Height(16).TextColor(p.muted) })
 	button.Tooltip(help)

@@ -74,6 +74,23 @@ func coreCalendar(c *context, date *time.Time) *node {
 	return g
 }
 
+// monthChevron draws the arrow of a calendar's button to the month before,
+// back, or after, mirrored right to left: drawn, it sits in the middle of
+// the button, where the text's ‹ and › sat low.
+func monthChevron(c *context, back bool) {
+	t := c.theme
+	e := coreBox(c).Size(t.Space(1.5), t.Space(2.5)).Shrink(0)
+	tip, ends := float32(0.15), float32(0.85) // ‹
+	if back == e.rtl() {
+		tip, ends = ends, tip // ›
+	}
+	e.Draw(func(p *Painter, r Rect) {
+		var path Path
+		path.MoveTo(r.X+r.W*ends, r.Y+r.H*0.1).LineTo(r.X+r.W*tip, r.Y+r.H*0.5).LineTo(r.X+r.W*ends, r.Y+r.H*0.9)
+		p.StrokePath(&path, 1.5, t.Text)
+	})
+}
+
 // setDay sets the day of *date to d's, keeping its time of day and its
 // location, and reports whether it changed.
 func setDay(date *time.Time, d time.Time) bool {
@@ -142,7 +159,8 @@ func calendarGrid(c *context, date, cursor *time.Time, moveChooses bool, choose 
 	})
 	grid.Children(func() {
 		coreRow(c).AlignItems(Center).Gap(t.Space(1)).Children(func() {
-			prev := coreButton(c, "‹").Padding(t.Space(0.5), t.Space(2.5)).Label(c.texts().PreviousMonth())
+			prev := coreButton(c, "").Padding(t.Space(1), t.Space(2.5)).Label(c.texts().PreviousMonth())
+			prev.Children(func() { monthChevron(c, true) })
 			prev.flags |= flagClickable
 			prev.afterInput(func() {
 				if prev.Clicked() {
@@ -150,7 +168,8 @@ func calendarGrid(c *context, date, cursor *time.Time, moveChooses bool, choose 
 				}
 			})
 			coreText(c, title).Bold().Grow(1).TextAlign(Center)
-			next := coreButton(c, "›").Padding(t.Space(0.5), t.Space(2.5)).Label(c.texts().NextMonth())
+			next := coreButton(c, "").Padding(t.Space(1), t.Space(2.5)).Label(c.texts().NextMonth())
+			next.Children(func() { monthChevron(c, false) })
 			next.flags |= flagClickable
 			next.afterInput(func() {
 				if next.Clicked() {

@@ -9,6 +9,7 @@ import (
 	"image/color"
 	"image/png"
 	"math"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -46,10 +47,18 @@ func (ShellModule) ShowItemInFolder(path string) {
 	onMain(func() { backend().Shell().ShowItemInFolder(path) })
 }
 
-// TrashItem moves a file or directory to the trash.
+// TrashItem moves a file or directory to the trash, the recycle bin on
+// Windows. A relative path is relative to the working directory. It fails,
+// and leaves the item where it is, when the item cannot go to the trash
+// and would be deleted permanently instead: on Windows one too big for the
+// recycle bin, or on a drive without one, as network shares are.
 func (ShellModule) TrashItem(path string) error {
 	needsApp("Shell.TrashItem")
-	return onMainValue(func() error { return backend().Shell().TrashItem(path) })
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	return onMainValue(func() error { return backend().Shell().TrashItem(abs) })
 }
 
 // FileIcon returns the icon the file manager shows for a file, a folder or
@@ -532,6 +541,11 @@ var GlobalShortcut = &GlobalShortcutModule{}
 // it, lets them pick other keys, and needs the app installed with its
 // desktop entry. The window fn shows or focuses first gets the activation
 // token of the key press, which lets it take the focus.
+//
+// Register claims the accelerator before the desktop binds it, so that
+// calls arriving at once cannot bind it twice: IsRegistered reports it
+// while the desktop binds it, and a second Register of the same
+// accelerator fails.
 func (g *GlobalShortcutModule) Register(acc string, fn func()) error {
 	needsApp("GlobalShortcut.Register")
 	a, err := accelerator.Parse(acc, runtime.GOOS)
@@ -549,12 +563,25 @@ func (g *GlobalShortcutModule) Register(acc string, fn func()) error {
 	}
 	g.next++
 	id := g.next
+	g.byKey[key] = id
 	g.mu.Unlock()
 	if err := onMainValue(func() error { return backend().RegisterHotkey(id, acc) }); err != nil {
+		g.mu.Lock()
+		if g.byKey[key] == id {
+			delete(g.byKey, key)
+		}
+		g.mu.Unlock()
 		return err
 	}
 	g.mu.Lock()
-	g.byKey[key], g.byID[id], g.keyByID[id] = id, fn, key
+	if g.byKey[key] != id {
+		// Unregistered, or registered again, while the desktop bound it:
+		// give the desktop back the shortcut this call made.
+		g.mu.Unlock()
+		onMain(func() { backend().UnregisterHotkey(id) })
+		return errors.New("mygo: shortcut " + key + " was unregistered while it was being registered")
+	}
+	g.byID[id], g.keyByID[id] = fn, key
 	g.mu.Unlock()
 	return nil
 }
@@ -617,10 +644,19 @@ func (g *GlobalShortcutModule) pressed(id int) {
 
 // TrayOptions configures NewTray.
 type TrayOptions struct {
+	// ID names the icon across launches, unique among the app's icons: on
+	// macOS, where the user moves menu bar items by dragging them with ⌘
+	// held, the icon goes back where the user put it, as an app's several
+	// items each keep their place. Empty, a new icon goes left of those
+	// already there. On Windows, which places icons itself, the icon keeps
+	// whether the user shows it on the taskbar or in its overflow, as the
+	// app makes it again or makes its icons in another order. It does
+	// nothing on Linux, whose panels place icons themselves.
+	ID string
 	// Icon is a PNG image, ideally 16x16 points (32x32 pixels for Retina).
 	Icon []byte
 	// IconIsTemplate lets macOS tint a black-and-transparent icon to match
-	// the menu bar.
+	// the menu bar; Windows shows it white on a dark taskbar.
 	IconIsTemplate bool
 	// Title is shown next to the icon (macOS).
 	Title   string
@@ -631,16 +667,18 @@ type TrayOptions struct {
 
 // Tray is an icon in the menu bar (macOS) or notification area.
 type Tray struct {
-	native  platform.Tray
-	menu    *Menu
-	onClick listeners[func()]
-	onRight listeners[func()]
+	native       platform.Tray
+	menu         *Menu
+	onClick      listeners[func()]
+	onRight      listeners[func()]
+	onAppearance listeners[func()]
 }
 
 type trayHandler struct{ t *Tray }
 
-func (h trayHandler) Clicked()      { fire(&h.t.onClick) }
-func (h trayHandler) RightClicked() { fire(&h.t.onRight) }
+func (h trayHandler) Clicked()           { fire(&h.t.onClick) }
+func (h trayHandler) RightClicked()      { fire(&h.t.onRight) }
+func (h trayHandler) AppearanceChanged() { fire(&h.t.onAppearance) }
 
 // NewTray adds an icon to the menu bar or notification area. It must be
 // called after the application is ready.
@@ -656,6 +694,9 @@ func NewTray(opts TrayOptions) (*Tray, error) {
 		t.native, err = backend().NewTray(trayHandler{t})
 		if err != nil {
 			return
+		}
+		if opts.ID != "" {
+			t.native.SetID(opts.ID)
 		}
 		if len(opts.Icon) > 0 {
 			if err = t.native.SetImage(opts.Icon, opts.IconIsTemplate); err != nil {
@@ -696,7 +737,11 @@ func (t *Tray) SetIcon(png []byte, template bool) error {
 	return err
 }
 
-// SetTitle sets the text next to the icon (macOS).
+// SetTitle sets the text next to the icon (macOS). Its digits all have
+// the same width, so a number that changes, such as a rate, keeps the
+// item's width as long as the text keeps its length: pad the value to a
+// fixed number of characters with figure spaces (U+2007), as wide as a
+// digit, rather than ordinary spaces.
 func (t *Tray) SetTitle(title string) { t.do(func(n platform.Tray) { n.SetTitle(title) }) }
 
 // SetToolTip sets the hover text.
@@ -736,11 +781,49 @@ func (t *Tray) Destroy() {
 	})
 }
 
-// OnClick is called when the icon is clicked and it has no menu.
-func (t *Tray) OnClick(fn func()) (off func()) { return t.onClick.add(fn, false) }
+// OnClick is called when the icon is clicked and it has no menu. On Linux
+// it is the panel's activation as well: GNOME's AppIndicator extension
+// sends it for a double click, and opens the menu for a single one after
+// the double click time. While nothing listens the icon answers no
+// activation, so its menu still opens on the first click.
+func (t *Tray) OnClick(fn func()) func() {
+	off := t.onClick.add(fn, false)
+	t.activatable()
+	return func() {
+		off()
+		t.activatable()
+	}
+}
 
-// OnRightClick is called when the icon is right-clicked.
+// activatable tells the native tray whether a click has anywhere to go. It
+// reads the listeners on the main thread, so that the last call wins
+// whichever goroutines add and remove them.
+func (t *Tray) activatable() {
+	t.do(func(n platform.Tray) { n.SetActivatable(t.onClick.len() > 0) })
+}
+
+// OnRightClick is called when the icon is right-clicked, or Control-clicked
+// on macOS.
 func (t *Tray) OnRightClick(fn func()) (off func()) { return t.onRight.add(fn, false) }
+
+// Dark reports whether the bar the icon shows on is dark: the macOS menu
+// bar, as AppKit tints its items (by the system's appearance, or the
+// wallpaper under a translucent menu bar), or the Windows taskbar, in
+// the system's mode, which may differ from the apps'. It is false on
+// Linux, where panels draw their icon themes their own way.
+//
+// A template icon (TrayOptions.IconIsTemplate) follows the bar by itself:
+// Dark is for an icon in color, as one drawing its measures in theirs,
+// which draws its ink light on a dark bar, and dark on a light one. With
+// several displays, it is the bar of the display with the menu bar.
+func (t *Tray) Dark() bool {
+	return onMainValue(func() bool { return t.native != nil && t.native.Dark() })
+}
+
+// OnAppearanceChange is called when the bar the icon shows on turns dark
+// or light (see Dark), on the main thread: set the icon drawn for it
+// again.
+func (t *Tray) OnAppearanceChange(fn func()) (off func()) { return t.onAppearance.add(fn, false) }
 
 // NotificationOptions configures a desktop notification.
 type NotificationOptions struct {
@@ -758,6 +841,23 @@ type NotificationOptions struct {
 	// Notification Center (macOS), such as the messages of a conversation.
 	// Empty leaves them in the app's.
 	Group string
+	// Sender describes the sender of an incoming direct message. macOS 12+
+	// can show its avatar with the app's small icon when the signed app has
+	// the Communication Notifications capability. Otherwise, or if preparing
+	// the communication fails, it shows the ordinary notification.
+	// Other platforms ignore Sender. NewNotification copies it and Avatar.
+	Sender *NotificationSender
+}
+
+// NotificationSender is the sender of an incoming direct message.
+type NotificationSender struct {
+	// ID is a stable identifier for the person in the app.
+	ID string
+	// Name is the display name; empty uses the notification's Title.
+	Name string
+	// Avatar is an encoded image, such as PNG or JPEG. An empty ID or Avatar
+	// leaves the notification ordinary. MyGo does not fetch remote images.
+	Avatar []byte
 }
 
 // Notification is a desktop notification.
@@ -814,6 +914,13 @@ func NewNotification(opts NotificationOptions) *Notification {
 		// Unique across runs too, as notifications outlive them.
 		id = "mygo-" + randomText()
 	}
+	if opts.Sender != nil {
+		sender := *opts.Sender
+		sender.Name = cmp.Or(sender.Name, opts.Title)
+		sender.Avatar = slices.Clone(sender.Avatar)
+		opts.Sender = &sender
+		enableNotificationSenders()
+	}
 	return &Notification{id: id, opts: opts}
 }
 
@@ -840,14 +947,18 @@ func (n *Notification) Show() error {
 	notifications.Unlock()
 	ch := make(chan error, 1)
 	onMain(func() {
-		backend().ShowNotification(&platform.Notification{
+		note := &platform.Notification{
 			ID:       n.id,
 			Title:    n.opts.Title,
 			Subtitle: n.opts.Subtitle,
 			Body:     n.opts.Body,
 			Silent:   n.opts.Silent,
 			Group:    n.opts.Group,
-		}, func(err error) { deliver(ch, err) })
+		}
+		if s := n.opts.Sender; s != nil {
+			note.Sender = &platform.NotificationSender{ID: s.ID, Name: s.Name, Avatar: s.Avatar}
+		}
+		backend().ShowNotification(note, func(err error) { deliver(ch, err) })
 	})
 	err := await(ch)
 	if err != nil && !shown {

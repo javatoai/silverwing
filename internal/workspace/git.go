@@ -75,6 +75,7 @@ type GitClient struct {
 	Executable        string
 	Environment       map[string]string
 	RemoveEnvironment []string
+	readCommand       func(context.Context, process.Spec) (process.Result, error)
 }
 
 func NewGitClient(runner *process.Runner, executable string) *GitClient {

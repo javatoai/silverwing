@@ -20,19 +20,29 @@ func matchPublishedComment(d *domain.RequirementCommentDraft, comments []domain.
 	if d == nil || d.Attempt == nil {
 		return domain.RequirementComment{}, "缺少本次发布记录，请保留草稿并核对原需求。"
 	}
-	expected, sequence, err := comparableCommentBody(d.Attempt.Body, d.Images)
+	images := d.ActiveImages()
+	expected, sequence, err := comparableCommentBody(d.Attempt.Body, images)
 	if err != nil {
 		return domain.RequirementComment{}, "本次图片上传凭证不完整，暂不能确认发布结果。"
 	}
-	wanted := make([]string, 0, len(d.Images))
-	for _, image := range d.Images {
+	wanted := make(map[string]bool, len(images))
+	for _, image := range images {
 		if image.Upload == nil || image.Upload.Token == "" {
 			return domain.RequirementComment{}, "本次图片上传凭证不完整，暂不能确认发布结果。"
 		}
-		wanted = append(wanted, image.Upload.Token)
+		wanted[image.Upload.Token] = true
 	}
-	if !slices.Equal(sequence, wanted) {
+	seen := make(map[string]bool, len(sequence))
+	for _, token := range sequence {
+		seen[token] = true
+	}
+	if len(seen) != len(wanted) {
 		return domain.RequirementComment{}, "发布快照中的图片与上传凭证不一致，请核对原需求。"
+	}
+	for token := range wanted {
+		if !seen[token] {
+			return domain.RequirementComment{}, "发布快照中的图片与上传凭证不一致，请核对原需求。"
+		}
 	}
 	previous := make(map[string]bool, len(d.Attempt.BeforeIDs))
 	for _, id := range d.Attempt.BeforeIDs {
@@ -57,7 +67,7 @@ func matchPublishedComment(d *domain.RequirementCommentDraft, comments []domain.
 			reason = "新增评论的创建时间无法确认属于本次发布，请核对原需求。"
 			continue
 		}
-		body, actualSequence, bodyErr := comparableCommentBody(c.Content, d.Images)
+		body, actualSequence, bodyErr := comparableCommentBody(c.Content, images)
 		if bodyErr != nil || !slices.Equal(sequence, actualSequence) || body != expected {
 			reason = "新增评论的正文或图片凭证与本次发布不一致，请核对原需求。"
 			continue
@@ -84,7 +94,7 @@ func matchPublishedComment(d *domain.RequirementCommentDraft, comments []domain.
 			if !previous[c.ID] || c.ParentID != nil || d.Attempt.AuthorKey == "" || c.AuthorKey != d.Attempt.AuthorKey {
 				continue
 			}
-			body, oldSequence, bodyErr := comparableCommentBody(c.Content, d.Images)
+			body, oldSequence, bodyErr := comparableCommentBody(c.Content, images)
 			if bodyErr != nil || body != expected || !slices.Equal(sequence, oldSequence) {
 				continue
 			}

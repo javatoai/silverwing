@@ -123,6 +123,26 @@ func (a *Autosave) Edit(path, content string) {
 	}
 }
 
+// RequestSave explicitly persists even a pristine entry, for example an empty
+// document that does not exist yet. Merely seeding or opening it never writes.
+func (a *Autosave) RequestSave(path string) bool {
+	key := normalizePath(path)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	entry := a.entries[key]
+	if entry == nil || entry.composing || entry.error != "" || entry.conflict || entry.failClosed || entry.quiesceCount != 0 {
+		return false
+	}
+	if entry.revision == entry.savedRevision {
+		entry.revision++
+		a.queueDraftLocked(key)
+	}
+	a.stopTimerLocked(entry)
+	a.enqueueLocked(key)
+	a.ensureWorkerLocked()
+	return true
+}
+
 func (a *Autosave) SetComposing(path string, composing bool) {
 	key := normalizePath(path)
 	a.mu.Lock()

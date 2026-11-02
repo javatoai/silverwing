@@ -30,11 +30,12 @@ func (s *app) settingsSkills(c *ui.Context, p palette) {
 					ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
 						settingsHelpLabel(c, p, name, "刷新来源后显示可用 Skill。", 12, 600)
 						label(c, mapString(source, "repositoryUrl"), 10, p.muted).SingleLine()
+						label(c, "来源分支 / 标签："+firstNonEmpty(mapString(source, "ref"), "默认分支"), 10, p.muted).Wrap().Selectable()
 						roots := stringArray(mustArray(dataValue(status, "discoveredRoots")))
 						if len(roots) > 0 {
 							label(c, strings.Join(roots, " · "), 9, p.muted).SingleLine()
 						}
-						if errText := mapString(status, "error"); errText != "" {
+						if errText := skillSourceSnapshotUnavailable(status); errText != "" {
 							label(c, errText, 10, p.amber).LineHeight(1.35).Wrap()
 						}
 					})
@@ -56,21 +57,27 @@ func (s *app) settingsSkills(c *ui.Context, p palette) {
 				for _, skill := range skills {
 					skillName := mapString(skill, "name")
 					ownership := mapString(skill, "ownership")
+					payload, remoteReady := skillSourceActionPayload(sourceID, skillName, status)
 					key := sourceID + ":" + skillName
 					ui.Row(c).Padding(8, 10).Gap(8).AlignItems(ui.Center).Background(p.surface).Radius(8).Children(func() {
 						ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
 							settingsHelpLabel(c, p, skillName, mapString(skill, "description"), 11, 500)
 							label(c, extensionOwnershipLabel(ownership), 10, p.muted)
+							if ownership == "MANAGED" || ownership == "EXTERNAL" {
+								origin := skillInstalledOriginText(skill)
+								label(c, origin, 9, p.muted).Wrap().Selectable()
+							}
 						})
-						if action(c, "skill-preview-"+key, "file", "预览", p, false) {
-							s.act("skills.preview", "", "", "", "", "", map[string]any{"sourceId": sourceID, "name": skillName})
+						if skillSourceAction(c, "skill-preview-"+key, "file", "预览", p, remoteReady) {
+							s.act("skills.preview", "", "", "", "", "", payload)
 						}
 						switch ownership {
 						case "MANAGED":
 							s.overflowMenu(c, p, "skill-more-"+key, "更多 Skill 操作 · "+skillName, false, func(m *overflowMenuBuilder) {
-								if m.Item("update", "更新").Icon("refresh").Chosen() {
+								if m.Item("update", "更新").Icon("refresh").Disabled(!remoteReady).Chosen() {
 									s.confirmNative("更新 Skill", "将备份当前版本，再安装此来源中的更新。", skillName, func() {
-										s.act("skills.update", "", "", "", "", "", map[string]any{"sourceId": sourceID, "name": skillName, "confirmed": true})
+										payload["confirmed"] = true
+										s.act("skills.update", "", "", "", "", "", payload)
 									})
 								}
 								m.Separator()
@@ -81,15 +88,17 @@ func (s *app) settingsSkills(c *ui.Context, p palette) {
 								}
 							})
 						case "EXTERNAL":
-							if action(c, "skill-takeover-"+key, "link", "接管", p, false) {
+							if skillSourceAction(c, "skill-takeover-"+key, "link", "接管", p, remoteReady) {
 								s.confirmNative("接管 Skill", "将备份并覆盖当前外部安装版本，之后由 SilverWing 管理更新与卸载。", skillName, func() {
-									s.act("skills.install", "", "", "", "", "", map[string]any{"sourceId": sourceID, "name": skillName, "takeOver": true, "confirmed": true})
+									payload["takeOver"], payload["confirmed"] = true, true
+									s.act("skills.install", "", "", "", "", "", payload)
 								})
 							}
 						case "NOT_INSTALLED":
-							if action(c, "skill-install-"+key, "plus", "安装", p, false) {
+							if skillSourceAction(c, "skill-install-"+key, "plus", "安装", p, remoteReady) {
 								s.confirmNative("安装 Skill", "将把来源中的 Skill 复制到 ~/.agents/skills。", skillName, func() {
-									s.act("skills.install", "", "", "", "", "", map[string]any{"sourceId": sourceID, "name": skillName, "takeOver": false, "confirmed": true})
+									payload["takeOver"], payload["confirmed"] = false, true
+									s.act("skills.install", "", "", "", "", "", payload)
 								})
 							}
 						}

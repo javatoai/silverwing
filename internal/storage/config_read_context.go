@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"os"
 )
@@ -52,6 +53,55 @@ func ConfigurationArchiveFingerprintContext(ctx context.Context, path string) (s
 		return "", err
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+// Parse and hash a private copy of the same byte stream. Reopening the source
+// separately for validation and fingerprinting can bind preview A to archive B.
+// A temporary file keeps ZIP random access without buffering the entire archive.
+func readArchiveSnapshotContext(ctx context.Context, path string) (decodedConfig, string, error) {
+	if err := ctx.Err(); err != nil {
+		return decodedConfig{}, "", err
+	}
+	info, err := os.Stat(path)
+	if cancelled := ctx.Err(); cancelled != nil {
+		return decodedConfig{}, "", cancelled
+	}
+	if err != nil {
+		return decodedConfig{}, "", fmt.Errorf("配置 ZIP 不存在或无法读取：%w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return decodedConfig{}, "", fmt.Errorf("配置 ZIP 不是普通文件：%s", path)
+	}
+	file, err := openConfigurationContext(ctx, path)
+	if err != nil {
+		return decodedConfig{}, "", err
+	}
+	defer file.Close()
+	info, err = file.Stat()
+	if err != nil {
+		return decodedConfig{}, "", err
+	}
+	if !info.Mode().IsRegular() {
+		return decodedConfig{}, "", fmt.Errorf("配置 ZIP 不是普通文件：%s", path)
+	}
+	temporary, err := os.CreateTemp("", "silverwing-config-snapshot-*.zip")
+	if err != nil {
+		return decodedConfig{}, "", err
+	}
+	defer os.Remove(temporary.Name())
+	defer temporary.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(temporary, hash), configContextReader{ctx: ctx, reader: file}); err != nil {
+		return decodedConfig{}, "", err
+	}
+	if err := temporary.Close(); err != nil {
+		return decodedConfig{}, "", err
+	}
+	decoded, err := readArchiveContext(ctx, temporary.Name())
+	if err != nil {
+		return decodedConfig{}, "", err
+	}
+	return decoded, hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 type configContextReader struct {

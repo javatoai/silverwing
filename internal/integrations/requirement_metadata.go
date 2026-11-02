@@ -144,7 +144,7 @@ func (s *Service) requirementMetadata(ctx context.Context, config domain.AppConf
 		if estimateErr != nil {
 			result.EstimateError = estimateErr.Error()
 		} else {
-			result.SprintEstimates = map[string]RequirementSprintEstimate{sprintKey: {Days: days, FetchedAt: startedAt}}
+			result.SprintEstimates = map[string]RequirementSprintEstimate{sprintKey: {Days: days, FetchedAt: startedAt, RuleVersion: personalEstimateRuleVersion}}
 		}
 	}
 	if boolValue(payload, "fullRefresh") {

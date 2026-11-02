@@ -24,6 +24,7 @@ import (
 
 	_ "golang.org/x/image/webp"
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/markdowntext"
 	"silverwing-go/internal/storage"
 )
 
@@ -302,6 +303,88 @@ func commentExpectedDraft(d domain.RequirementCommentDraft, p map[string]any) er
 	return nil
 }
 
+func normalizeLoadedCommentDraft(d *domain.RequirementCommentDraft) error {
+	if d.Pending() {
+		return nil
+	}
+	d.NormalizeImageReferences()
+	if len(d.Content) > 2<<20 {
+		return errors.New("评论图片引用加入正文后超过 2 MB，原草稿已保留")
+	}
+	return nil
+}
+
+// Inline imports register cache metadata first. The component inserts their
+// references only after its captured caret/version is still current. Retained
+// unused imports and deleted references do not consume an active-image slot.
+func commentStageImage(d *domain.RequirementCommentDraft, a domain.CommentDraftAsset, inline bool) domain.CommentDraftAsset {
+	if inline {
+		a.MarkdownRef = domain.CommentImageMarkdownRef(a.ID)
+	}
+	d.Images = append(append([]domain.CommentDraftAsset{}, d.Images...), a)
+	return a
+}
+
+func commentRemoveImageReferences(d *domain.RequirementCommentDraft, id string) {
+	images := []domain.CommentDraftAsset{}
+	for _, a := range d.Images {
+		if a.ID == id {
+			ref := a.MarkdownRef
+			if ref == "" {
+				ref = a.OriginalURL
+			}
+			if ref == "" {
+				continue // Legacy append-only image removed by the legacy API.
+			}
+			d.Content = markdowntext.RewriteCommentImages(d.Content, map[string]*string{ref: nil})
+		}
+		images = append(images, a)
+	}
+	d.Images = images
+}
+
+func commentCanStageImage(d domain.RequirementCommentDraft, p map[string]any) bool {
+	pending, _ := strconv.Atoi(fmt.Sprint(p["pendingImages"]))
+	if pending < 1 {
+		pending = 1
+	}
+	return len(d.ActiveImages())+pending <= 20
+}
+
+func commentDraftOperationContent(d *domain.RequirementCommentDraft, p map[string]any, op string) error {
+	if op != "add-image" && op != "add-attachment" && op != "paste" && op != "remove" {
+		return nil
+	}
+	if body, provided := p["content"].(string); provided {
+		if len(body) > 2<<20 {
+			return errors.New("评论文字不能超过 2 MB")
+		}
+		d.Content = body
+	}
+	return nil
+}
+
+func (s *Service) guardCommentDraftSession(ctx context.Context, scope, identity string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	current, err := s.config.Load()
+	if err != nil {
+		return err
+	}
+	if s.commentScope(ctx, current) != scope {
+		return errors.New("账号或配置已变化，评论草稿未覆盖")
+	}
+	_, loggedOut, err := s.requirementIdentityFor(ctx, current, identity, false, s.requirementCacheIdentity)
+	if err != nil {
+		return err
+	}
+	if loggedOut {
+		return errors.New("Meegle 已退出登录，评论草稿未覆盖")
+	}
+	return ctx.Err()
+}
+
 func (s *Service) requirementCommentDraft(ctx context.Context, config domain.AppConfig, p map[string]any) (any, error) {
 	if stringValue(p, "editCommentID") != "" {
 		return s.requirementCommentEditDraft(ctx, config, p)
@@ -347,6 +430,9 @@ func (s *Service) requirementCommentDraft(ctx context.Context, config domain.App
 			return nil, errors.New("发布结果待核对，请先核对发布结果")
 		}
 	}
+	if err = commentDraftOperationContent(&d, p, op); err != nil {
+		return nil, err
+	}
 	switch op {
 	case "load":
 		var identity []string
@@ -368,6 +454,12 @@ func (s *Service) requirementCommentDraft(ctx context.Context, config domain.App
 		}
 		d.Scope = scope
 		d.Item = item
+		if err = normalizeLoadedCommentDraft(&d); err != nil {
+			return nil, err
+		}
+		if err = s.guardCommentDraftSession(ctx, scope, session.token); err != nil {
+			return nil, err
+		}
 		if err = s.saveCommentDraft(&d); err != nil {
 			return nil, err
 		}
@@ -377,12 +469,15 @@ func (s *Service) requirementCommentDraft(ctx context.Context, config domain.App
 			return nil, errors.New("评论文字不能超过 2 MB")
 		}
 		d.Content = body
+		if len(d.ActiveImages()) > 20 {
+			return nil, errors.New("每条评论最多添加 20 张图片")
+		}
 		d.Attempt = nil
 	case "add-image", "add-attachment", "paste":
 		if op == "add-attachment" && d.Attachment != nil {
 			return nil, errors.New("每条评论只能添加一个附件，请先移除原附件")
 		}
-		if op != "add-attachment" && len(d.Images) >= 20 {
+		if op != "add-attachment" && !commentCanStageImage(d, p) {
 			return nil, errors.New("每条评论最多添加 20 张图片")
 		}
 		png, _ := p["imagePNG"].([]byte)
@@ -396,18 +491,12 @@ func (s *Service) requirementCommentDraft(ctx context.Context, config domain.App
 		if op == "add-attachment" {
 			d.Attachment = &a
 		} else {
-			d.Images = append(d.Images, a)
+			commentStageImage(&d, a, boolValue(p, "inlineImage"))
 		}
 		d.Attempt = nil
 	case "remove":
 		id := stringValue(p, "assetID")
-		images := []domain.CommentDraftAsset{}
-		for _, a := range d.Images {
-			if a.ID != id {
-				images = append(images, a)
-			}
-		}
-		d.Images = images
+		commentRemoveImageReferences(&d, id)
 		if d.Attachment != nil && d.Attachment.ID == id {
 			d.Attachment = nil
 		}
@@ -443,6 +532,12 @@ func (s *Service) requirementCommentDraft(ctx context.Context, config domain.App
 		return nil, errors.New("未知评论草稿操作")
 	}
 	if op != "load" {
+		if !d.Pending() && len(d.ActiveImages()) > 20 {
+			return nil, errors.New("每条评论最多添加 20 张图片")
+		}
+		if err = s.guardCommentDraftSession(ctx, scope, session.token); err != nil {
+			return nil, err
+		}
 		if err = s.saveCommentDraft(&d); err != nil {
 			return nil, err
 		}

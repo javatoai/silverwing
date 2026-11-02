@@ -642,6 +642,11 @@ func (s *Service) readRequirementMetadataCache(key string) (*requirementMetadata
 	if saved.Data.Participants.ProductManagers == nil {
 		saved.Data.Participants.ProductManagers = []domain.RequirementPerson{}
 	}
+	for sprint, estimate := range saved.Data.SprintEstimates {
+		if estimate.RuleVersion != personalEstimateRuleVersion {
+			delete(saved.Data.SprintEstimates, sprint)
+		}
+	}
 	return &saved, path, nil
 }
 

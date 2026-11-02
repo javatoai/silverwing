@@ -14,7 +14,7 @@ func (s *app) settingsConfigPathRow(c *ui.Context, p palette, key, title, placeh
 
 func (s *app) settingsPathInput(c *ui.Context, p palette, title, placeholder string, value *string, directory bool, onChoose func(string)) {
 	ui.Column(c).Gap(5).Children(func() {
-		label(c, title, 11, p.text)
+		settingsReveal(c, label(c, title, 11, p.text), p, title)
 		s.settingsPathInputBody(c, p, title, placeholder, value, directory, onChoose, false)
 	})
 }
@@ -79,7 +79,7 @@ func (s *app) settingsTextInputBody(c *ui.Context, p palette, key, placeholder s
 
 func (s *app) settingsTextRow(c *ui.Context, p palette, key, title, placeholder string, multiline bool, save func(string)) {
 	ui.Column(c).Gap(5).Children(func() {
-		label(c, title, 11, p.text)
+		settingsReveal(c, label(c, title, 11, p.text), p, title)
 		s.settingsTextInputBody(c, p, key, placeholder, multiline, save, false)
 	})
 }
@@ -90,6 +90,9 @@ func (s *app) settingsChoice(c *ui.Context, p palette, key, title string, select
 	if selected {
 		b.Background(p.selected)
 		fg = p.blue
+		if s.dark {
+			fg = p.text
+		}
 	} else {
 		b.Border(1, p.line)
 	}

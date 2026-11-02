@@ -130,11 +130,17 @@ func TestDirectoryWatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	next(platform.FileWatchNotice{Target: 1, Kind: platform.FileWatchCreate, Name: "h"})
-	// Closing doesn't wait for I/O that already completed.
-	start := time.Now()
+	// Closing doesn't wait for I/O that already completed: waiting for it,
+	// it would give up on the session after 5 s and leak it.
+	leaked := func() int {
+		leakedSessions.Lock()
+		defer leakedSessions.Unlock()
+		return len(leakedSessions.sessions)
+	}
+	before := leaked()
 	w.Close()
-	if d := time.Since(start); d > time.Second {
-		t.Fatalf("closing took %v", d)
+	if n := leaked() - before; n > 0 {
+		t.Fatalf("closing gave up waiting for the I/O of %d sessions", n)
 	}
 }
 

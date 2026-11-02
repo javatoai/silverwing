@@ -32,6 +32,9 @@ func (s *app) observeMaterialsWindowRefresh() {
 	if !state.windowRefreshPending {
 		return
 	}
+	if s.materialsMarkdownSaveInProgress() {
+		return
+	}
 	state.windowRefreshPending = false
 	s.materialsUnit.state.documentsLoaded, s.materialsUnit.state.documentsRequested = false, false
 	if s.materialsUnit.state.documentPath == "" {
@@ -45,6 +48,10 @@ func (s *app) observeMaterialsWindowRefresh() {
 
 func (s *app) rereadSelectedMaterial(discardDraft bool) {
 	if s.materialsUnit.state.documentPath == "" || s.materialsFileReadBlocked() || s.backend == nil {
+		return
+	}
+	if err := s.captureMarkdownEditorInput(s.materialsUnit.state.markdown); err != nil {
+		s.lastError = err.Error()
 		return
 	}
 	if discardDraft {

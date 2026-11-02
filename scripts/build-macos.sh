@@ -10,7 +10,7 @@ if [[ "$(uname -m)" != "arm64" ]]; then
   echo "The current product release target is Apple silicon (macOS arm64); Intel macOS is not packaged." >&2
   exit 1
 fi
-command -v go >/dev/null || { echo "Go 1.27.1 is required." >&2; exit 1; }
+command -v go >/dev/null || { echo "Go 1.27.3 is required." >&2; exit 1; }
 command -v curl >/dev/null || { echo "curl is required to fetch pinned build-time assets." >&2; exit 1; }
 command -v hdiutil >/dev/null || { echo "hdiutil is required to create the DMG." >&2; exit 1; }
 
@@ -86,6 +86,12 @@ ldflags="-s -w -X silverwing-go/internal/buildinfo.Version=$version -X silverwin
   GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -tags mygo_noinspector -ldflags "$ldflags" -o "$macos_dir/$profile_executable" ./cmd/silverwing
 )
 chmod 755 "$macos_dir/$profile_executable"
+
+# Include MyGO Terminal in PathResources before signing the bundle.
+(
+  cd "$repo_root"
+  go run ./scripts/terminal-runtime -target darwin-arm64 -resources "$resource_root" -cache "$repo_root/build/native-cache" -notices "$notice_root/ghostty-vt"
+)
 
 mmdr_archive="$(fetch_pinned \
   'mmdr-aarch64-apple-darwin.tar.gz' \

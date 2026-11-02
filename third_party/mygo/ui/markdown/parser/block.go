@@ -436,6 +436,14 @@ func (d *Document) parse(off, end int, resync func(line int) bool) bool {
 	d.restart, d.restartAt = off, len(d.blocks)
 	src := p.src
 	pos := off
+	if off == 0 && d.sourcePrefixEnd > 0 && d.sourcePrefixEnd <= end {
+		i := p.addChild(0, SourcePrefix, 0)
+		b := &d.blocks[i]
+		b.End = d.sourcePrefixEnd
+		b.Open, b.parse.open, b.parse.quiet = false, false, true
+		pos = d.sourcePrefixEnd
+		d.restart, d.restartAt = pos, len(d.blocks)
+	}
 	// The next \n and \r, found once each, so that lines ending in one
 	// of them alone take linear time.
 	nl, cr := -1, -1
@@ -447,6 +455,7 @@ func (d *Document) parse(off, end int, resync func(line int) bool) bool {
 			} else {
 				nl += pos
 			}
+			d.steps += nl - pos
 		}
 		if cr < pos {
 			if cr = strings.IndexByte(src[pos:], '\r'); cr < 0 {
@@ -454,6 +463,7 @@ func (d *Document) parse(off, end int, resync func(line int) bool) bool {
 			} else {
 				cr += pos
 			}
+			d.steps += cr - pos
 		}
 		lineEnd, next := nl, nl+1
 		if cr < nl {
@@ -594,6 +604,7 @@ func (p *blockParser) addChild(parent int, kind Kind, start int) int {
 // isBelow reports whether block c is a descendant of block parent.
 func (p *blockParser) isBelow(c, parent int) bool {
 	for c >= 0 {
+		p.d.steps++
 		c = p.d.blocks[c].Parent
 		if c == parent {
 			return true
@@ -733,9 +744,11 @@ func (p *blockParser) resolveDefinitions(i int) bool {
 		return true
 	}
 	text, _ := d.contentOf(i)
+	m := d.sourceMap(i)
 	pos := 0
 	for pos < len(text) && text[pos] == '[' {
-		n := d.inp.parseReference(d, text[pos:], d.srcOffset(i, pos))
+		d.steps++
+		n := d.inp.parseReference(d, text[pos:], m.source(pos))
 		if n == 0 {
 			break
 		}
@@ -747,6 +760,7 @@ func (p *blockParser) resolveDefinitions(i int) bool {
 	// Drop the lines the definitions took.
 	consumed := pos
 	for b.segA < b.segB {
+		d.steps++
 		s := d.segs[b.segA]
 		l := int(s.pad) + int(s.end-s.start) + 1
 		if consumed < l {
@@ -875,6 +889,7 @@ func (p *blockParser) checkOpenBlocks(allMatched *bool) (int, bool) {
 	d := p.d
 	container := 0
 	for {
+		d.steps++
 		lc := d.blocks[container].parse.lastChild
 		if lc < 0 || !d.blocks[lc].parse.open {
 			break
@@ -991,7 +1006,7 @@ func (p *blockParser) openNewBlocks(container *int, allMatched bool) {
 			*container = p.addChild(cont, Heading, start)
 			d.blocks[*container].Level = level
 
-		case !indented && (c == '`' || c == '~') && func() bool { n = scanOpenFence(p.ln, p.firstNonspace); return n > 0 }():
+		case !indented && !d.literalFenceLine(p.lineStart) && (c == '`' || c == '~') && func() bool { n = scanOpenFence(p.ln, p.firstNonspace); return n > 0 }():
 			start := p.lineStart + p.firstNonspace
 			*container = p.addChild(cont, CodeBlock, start)
 			b := &d.blocks[*container]
@@ -1515,34 +1530,73 @@ func (d *Document) contentOf(i int) (string, int) {
 	return b.text, int(b.textS)
 }
 
-// srcOffset returns the source offset of byte off of block i's content.
-func (d *Document) srcOffset(i, off int) int {
+// sourceMap maps offsets in the content of a block to the source.
+type sourceMap struct {
+	d *Document
+	i int
+	// marks are, for content that is not a slice of the source, the
+	// offset in it where each line starts, or in a table cell the offsets
+	// of the | written \|.
+	marks []int
+}
+
+// sourceMap returns the map of block i's content, valid until the
+// block or the next map changes. Maps of content joined from lines look
+// up an offset by binary search, so that the offsets of all the inlines
+// of a paragraph of many lines take n log n time, not quadratic.
+func (d *Document) sourceMap(i int) sourceMap {
 	b := &d.blocks[i]
+	m := sourceMap{d: d, i: i}
+	if b.textS >= 0 {
+		return m
+	}
+	marks := d.marks[:0]
+	segs := d.segsOf(b)
+	if len(segs) > 0 && segs[0].cell {
+		src := d.src[segs[0].start:segs[0].end]
+		d.steps += len(src)
+		o := 0
+		for j := 0; j < len(src); j++ {
+			if src[j] == '\\' && j+1 < len(src) && src[j+1] == '|' {
+				j++
+				marks = append(marks, o)
+			}
+			o++
+		}
+	} else {
+		d.steps += len(segs)
+		o := 0
+		for _, s := range segs {
+			marks = append(marks, o)
+			o += int(s.pad) + int(s.end-s.start) + 1
+		}
+	}
+	d.marks, m.marks = marks, marks
+	return m
+}
+
+// source returns the source offset of byte off of the content.
+func (m sourceMap) source(off int) int {
+	b := &m.d.blocks[m.i]
+	m.d.steps++
 	if b.textS >= 0 {
 		return int(b.textS) + off
 	}
-	segs := d.segsOf(b)
-	for k, s := range segs {
-		l := int(s.pad) + int(s.end-s.start)
-		if s.cell {
-			// Each \| removed shifts what follows by one.
-			src := d.src[s.start:s.end]
-			o := 0
-			for j := 0; j < len(src) && o < off; j++ {
-				if src[j] == '\\' && j+1 < len(src) && src[j+1] == '|' {
-					j++
-				}
-				o++
-				if o == off {
-					return int(s.start) + j + 1
-				}
-			}
-			return int(s.start) + min(off, len(src))
-		}
-		if off <= l || k == len(segs)-1 {
-			return int(s.start) + max(min(off-int(s.pad), int(s.end-s.start)), 0)
-		}
-		off -= l + 1
+	segs := m.d.segsOf(b)
+	if len(segs) == 0 {
+		return b.Start
 	}
-	return b.Start
+	if s := segs[0]; s.cell {
+		// Each \| read as | shifts what follows by one.
+		n := int(s.end-s.start) - len(m.marks)
+		if off > n {
+			return int(s.start) + min(off, int(s.end-s.start))
+		}
+		k, _ := slices.BinarySearch(m.marks, off)
+		return int(s.start) + off + k
+	}
+	// The line holding off: the last starting at or before it.
+	k, _ := slices.BinarySearch(m.marks, off+1)
+	s := segs[k-1]
+	return int(s.start) + max(min(off-m.marks[k-1]-int(s.pad), int(s.end-s.start)), 0)
 }

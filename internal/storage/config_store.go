@@ -291,21 +291,28 @@ func (s *ConfigStore) PreviewImport(source string) (domain.AppConfig, error) {
 }
 
 func (s *ConfigStore) PreviewImportContext(ctx context.Context, source string) (domain.AppConfig, error) {
+	config, _, err := s.PreviewImportSnapshotContext(ctx, source)
+	return config, err
+}
+
+// PreviewImportSnapshotContext returns the fingerprint of the exact archive
+// bytes used for the decoded preview.
+func (s *ConfigStore) PreviewImportSnapshotContext(ctx context.Context, source string) (domain.AppConfig, string, error) {
 	if err := ctx.Err(); err != nil {
-		return domain.AppConfig{}, err
+		return domain.AppConfig{}, "", err
 	}
 	normalized, err := filepath.Abs(source)
 	if err != nil {
-		return domain.AppConfig{}, err
+		return domain.AppConfig{}, "", err
 	}
 	if !strings.EqualFold(filepath.Ext(normalized), ".zip") {
-		return domain.AppConfig{}, fmt.Errorf("导入配置必须是 ZIP 文件")
+		return domain.AppConfig{}, "", fmt.Errorf("导入配置必须是 ZIP 文件")
 	}
-	decoded, err := readArchiveContext(ctx, normalized)
+	decoded, fingerprint, err := readArchiveSnapshotContext(ctx, normalized)
 	if err != nil {
-		return domain.AppConfig{}, err
+		return domain.AppConfig{}, "", err
 	}
-	return decoded.Config, nil
+	return decoded.Config, fingerprint, nil
 }
 
 // PreviewRestore applies the same directory and strict archive validation as
@@ -315,25 +322,30 @@ func (s *ConfigStore) PreviewRestore(backup string) (domain.AppConfig, error) {
 }
 
 func (s *ConfigStore) PreviewRestoreContext(ctx context.Context, backup string) (domain.AppConfig, error) {
+	config, _, err := s.PreviewRestoreSnapshotContext(ctx, backup)
+	return config, err
+}
+
+func (s *ConfigStore) PreviewRestoreSnapshotContext(ctx context.Context, backup string) (domain.AppConfig, string, error) {
 	if err := ctx.Err(); err != nil {
-		return domain.AppConfig{}, err
+		return domain.AppConfig{}, "", err
 	}
 	normalized, err := filepath.Abs(backup)
 	if err != nil {
-		return domain.AppConfig{}, err
+		return domain.AppConfig{}, "", err
 	}
 	backups, err := filepath.Abs(s.paths.Backups)
 	if err != nil {
-		return domain.AppConfig{}, err
+		return domain.AppConfig{}, "", err
 	}
 	if filepath.Dir(normalized) != backups || !strings.HasPrefix(filepath.Base(normalized), backupPrefix) || !strings.HasSuffix(filepath.Base(normalized), ".zip") {
-		return domain.AppConfig{}, fmt.Errorf("只能恢复 silverwing 配置备份目录中的 ZIP 文件")
+		return domain.AppConfig{}, "", fmt.Errorf("只能恢复 silverwing 配置备份目录中的 ZIP 文件")
 	}
-	decoded, err := readArchiveContext(ctx, normalized)
+	decoded, fingerprint, err := readArchiveSnapshotContext(ctx, normalized)
 	if err != nil {
-		return domain.AppConfig{}, err
+		return domain.AppConfig{}, "", err
 	}
-	return decoded.Config, nil
+	return decoded.Config, fingerprint, nil
 }
 
 func (s *ConfigStore) Restore(backup string) (domain.AppConfig, error) {
@@ -390,6 +402,17 @@ func (s *ConfigStore) ExportTo(target string) (string, error) {
 }
 
 func (s *ConfigStore) ImportFrom(source string) (domain.AppConfig, error) {
+	return s.importFrom(source, "")
+}
+
+func (s *ConfigStore) ImportFromPreview(source, expectedFingerprint string) (domain.AppConfig, error) {
+	if expectedFingerprint == "" {
+		return domain.AppConfig{}, fmt.Errorf("配置预览已失效，请重新预览后导入")
+	}
+	return s.importFrom(source, expectedFingerprint)
+}
+
+func (s *ConfigStore) importFrom(source, expectedFingerprint string) (domain.AppConfig, error) {
 	normalized, err := filepath.Abs(source)
 	if err != nil {
 		return domain.AppConfig{}, err
@@ -402,9 +425,12 @@ func (s *ConfigStore) ImportFrom(source string) (domain.AppConfig, error) {
 		return domain.AppConfig{}, err
 	}
 	defer release()
-	imported, err := readArchive(normalized)
+	imported, fingerprint, err := readArchiveSnapshotContext(context.Background(), normalized)
 	if err != nil {
 		return domain.AppConfig{}, err
+	}
+	if expectedFingerprint != "" && fingerprint != expectedFingerprint {
+		return domain.AppConfig{}, fmt.Errorf("配置文件在预览后已变化，请重新预览后导入")
 	}
 	if err := s.replaceCurrentUnlocked(imported); err != nil {
 		return domain.AppConfig{}, err

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"silverwing-go/internal/editor"
+	markdownui "silverwing-go/internal/ui/markdown"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
@@ -18,8 +19,34 @@ type frameworkMarkdownState struct {
 	richTextReading bool
 	projection      editor.ReadingProjection
 	document        *parser.Document
+	imageTargets    []string
 	blocks          []documentFindBlock
 	options         markdown.Options
+	sourceOffset    func(int) int
+}
+
+func frameworkMarkdownImageTargets(doc *parser.Document) []string {
+	var targets []string
+	seen := make(map[string]bool)
+	for index := 1; index < doc.Len(); index++ {
+		for _, inline := range doc.Inlines(index) {
+			if inline.Kind == parser.Image {
+				target := strings.TrimSpace(inline.Dest)
+				if target != "" && !seen[target] {
+					targets = append(targets, target)
+					seen[target] = true
+				}
+			}
+		}
+	}
+	return targets
+}
+
+func (native *frameworkMarkdownState) originalOffset(offset int) int {
+	if native.sourceOffset != nil {
+		return native.sourceOffset(offset)
+	}
+	return native.projection.OriginalOffset(offset)
 }
 
 func ensureFrameworkMarkdown(state *markdownEditorState) *frameworkMarkdownState {
@@ -59,7 +86,7 @@ func frameworkMarkdownFindBlocks(state *markdownEditorState) []documentFindBlock
 }
 
 func (native *frameworkMarkdownState) partAt(state *markdownEditorState, offset int) editor.Part {
-	raw := native.projection.OriginalOffset(offset)
+	raw := native.originalOffset(offset)
 	for _, part := range state.doc.Parts() {
 		if raw >= part.Range.Start && raw < part.Range.End {
 			return part
@@ -70,6 +97,22 @@ func (native *frameworkMarkdownState) partAt(state *markdownEditorState, offset 
 
 func (s *app) renderFrameworkMarkdown(c *ui.Context, p palette, state *markdownEditorState) {
 	native := ensureFrameworkMarkdown(state)
+	s.configureFrameworkMarkdown(c, p, state, native)
+	document := markdownui.Document{ID: s.snapshot.Home + "\x00" + markdownEditorHostID(state), Source: native.projection.Source, Path: state.path}
+	if state.componentReader == nil {
+		state.componentReader = markdownui.NewReaderState(document)
+	} else {
+		state.componentReader.SetDocument(document)
+	}
+	if s.materialsUnit.state.markdown == state && s.materialsUnit.state.documentLinkFragment != "" {
+		line, _ := markdownLinkLocation(s.materialsUnit.state.documentLinkFragment)
+		state.componentReader.RevealLocation(line, s.materialsUnit.state.documentLinkFragment)
+		s.materialsUnit.state.documentLinkFragment = ""
+	}
+	markdownui.MarkdownReader(c.Key("framework-markdown-"+s.snapshot.Home+"-"+markdownEditorHostID(state)), state.componentReader, markdownui.ReaderOptions{Native: &native.options, ContentOnly: true}).FillWidth().MinWidth(0)
+}
+
+func (s *app) configureFrameworkMarkdown(c *ui.Context, p palette, state *markdownEditorState, native *frameworkMarkdownState) {
 	find := s.markdownFindStateFor(state)
 	o := &native.options
 	o.Theme = &markdown.Theme{Font: markdownSansFontFamily, FontSize: 15 * state.zoom, LineHeight: 1.6,
@@ -83,7 +126,7 @@ func (s *app) renderFrameworkMarkdown(c *ui.Context, p palette, state *markdownE
 	o.ContextMenu = state.contextMenu
 	o.OnLink = func(target string) { s.openMarkdownLink(state, target) }
 	o.CopySource = func(start, end int) string {
-		return native.original[native.projection.OriginalOffset(start):native.projection.OriginalOffset(end)]
+		return native.original[native.originalOffset(start):native.originalOffset(end)]
 	}
 	o.TransformText = func(block, offset int, spans []ui.Span) []ui.Span {
 		if find == nil || find.query == "" {
@@ -134,11 +177,11 @@ func (s *app) renderFrameworkMarkdown(c *ui.Context, p palette, state *markdownE
 	}
 	o.Image = func(c *ui.Context, block, start, end int, target, alt string) {
 		part := native.partAt(state, start)
-		node := editor.Node{Kind: "image", Destination: target, Text: alt, Range: editor.SourceRange{Start: native.projection.OriginalOffset(start), End: native.projection.OriginalOffset(end)}}
+		node := editor.Node{Kind: "image", Destination: target, Text: alt, Range: editor.SourceRange{Start: native.originalOffset(start), End: native.originalOffset(end)}}
 		s.renderMarkdownImage(c, p, state, part, node, 15*state.zoom)
 	}
 	o.Link = func(c *ui.Context, in *parser.Inline, block, offset int) bool {
-		raw := native.projection.OriginalOffset(in.Start)
+		raw := native.originalOffset(in.Start)
 		for _, preview := range native.projection.LinkPreviews {
 			if preview.Range.Start == raw && preview.Destination == in.Dest {
 				part := native.partAt(state, in.Start)
@@ -149,7 +192,7 @@ func (s *app) renderFrameworkMarkdown(c *ui.Context, p palette, state *markdownE
 		return false
 	}
 	o.BlockLink = func(in *parser.Inline) bool {
-		raw := native.projection.OriginalOffset(in.Start)
+		raw := native.originalOffset(in.Start)
 		for _, preview := range native.projection.LinkPreviews {
 			if preview.Range.Start == raw && preview.Destination == in.Dest {
 				return true
@@ -178,5 +221,4 @@ func (s *app) renderFrameworkMarkdown(c *ui.Context, p palette, state *markdownE
 		}
 		return s.copyTextToClipboard(c.Services(), code, "已复制")
 	}
-	markdown.View(c.Key("framework-markdown-"+s.snapshot.Home+"-"+markdownEditorHostID(state)), native.projection.Source, o).FillWidth().MinWidth(0)
 }

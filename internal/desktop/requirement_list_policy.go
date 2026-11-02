@@ -84,6 +84,7 @@ func (s *app) invalidateRequirementListIdentity() {
 	s.requirementUnit.state.requirementListProgress = nil
 	state := s.ensureRequirementListJobs()
 	s.retireRequirementListRequest(state)
+	s.resetRequirementSprintCatalog(state)
 	state.generation++
 	state.hasIdentity = false
 	s.clearRequirementListView()
@@ -91,6 +92,7 @@ func (s *app) invalidateRequirementListIdentity() {
 
 func (s *app) resetRequirementListForIdentity(state *requirementListJobState, identity requirementListIdentity) {
 	s.retireRequirementListRequest(state)
+	s.resetRequirementSprintCatalog(state)
 	state.generation++
 	state.identity, state.hasIdentity = identity, true
 	s.clearRequirementListView()

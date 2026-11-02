@@ -56,7 +56,7 @@ func (a *App) lockMaterialsGitDocumentMutation(kind, root string) (func(), error
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 		return func() {}, nil
 	}
-	release, err := storage.AcquireLock(filepath.Join(base, ".silverwing-requirement-materials.lock"))
+	release, err := storage.AcquireMaterialsRepositoryLock(base)
 	if err != nil {
 		return nil, fmt.Errorf("资料 Git 同步或文件操作正在执行，请稍后重试：%w", err)
 	}
@@ -140,7 +140,7 @@ func (a *App) finishMaterialsGitSync(ctx context.Context, expected workspace.Mat
 	// Git may have applied a checkout/merge before a push failed (or stopped
 	// with conflicts). Describe the actual local tree regardless of push outcome.
 	if check != nil && check() == nil {
-		unlock, lockErr := storage.AcquireLock(filepath.Join(expected.Root, ".silverwing-requirement-materials.lock"))
+		unlock, lockErr := storage.AcquireMaterialsRepositoryLock(expected.Root)
 		if lockErr == nil {
 			catalogErr := a.refreshMaterialsAgentCatalogs(ctx, expected)
 			unlock()

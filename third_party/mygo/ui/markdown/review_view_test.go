@@ -163,11 +163,11 @@ func TestReviewByLineFramesForever(t *testing.T) {
 	o := &Options{Reveal: &Reveal{Unit: ByLine}}
 	frames := 0
 	tt := ui.NewTester(func(c *ui.Context) { frames++; Stream(c, text, o) }, 600, 400)
-	time.Sleep(400 * time.Millisecond)
+	tt.Advance(400 * time.Millisecond)
 	frames = 0
 	tt.Frame()
-	if frames >= 20 {
-		t.Errorf("one Frame ran %d frames: the view keeps asking for them with nothing to show", frames)
+	if frames >= 20 || tt.FramePending() {
+		t.Errorf("one Frame ran %d frames, one pending %v: the view keeps asking for them with nothing to show", frames, tt.FramePending())
 	}
 }
 

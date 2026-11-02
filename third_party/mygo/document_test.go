@@ -6,7 +6,6 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"github.com/egoist/mygo/internal/l10n"
 	"io"
 	"os"
 	"path/filepath"
@@ -16,6 +15,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/egoist/mygo/internal/l10n"
+	"github.com/egoist/mygo/internal/wait"
 
 	"github.com/egoist/mygo/internal/fake"
 	"github.com/egoist/mygo/internal/platform"
@@ -57,16 +59,10 @@ func fakeWindow(w *Window) *fake.Window {
 	return onMainValue(func() *fake.Window { return w.native.(*fake.Window) })
 }
 
-// waitFor polls cond for up to three seconds.
+// waitFor waits until cond holds.
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	wait.Until(t, what, cond)
 }
 
 // asked records the messages of the message boxes shown.
@@ -107,17 +103,16 @@ func writeTemp(t *testing.T, name, content string) string {
 
 func readString(t *testing.T, path string) string {
 	t.Helper()
-	b, err := os.ReadFile(path)
+	b, err := readAppFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return string(b)
 }
 
-// fileIs reports whether the file at path holds want, false while it
-// cannot be read: Windows refuses to open a file being replaced.
+// fileIs reports whether the file at path holds want.
 func fileIs(path, want string) bool {
-	b, err := os.ReadFile(path)
+	b, err := readAppFile(path)
 	return err == nil && string(b) == want
 }
 
@@ -219,6 +214,69 @@ func TestDocumentSave(t *testing.T) {
 	}
 	if readString(t, path) != "three" || !d.IsEdited() {
 		t.Fatalf("file %q, edited %v: the edit made while writing was lost", readString(t, path), d.IsEdited())
+	}
+}
+
+// A system that removes the file and can't put the new one in its place
+// (ReplaceFileW's ERROR_UNABLE_TO_MOVE_REPLACEMENT) leaves the new contents
+// only in the sibling: the save keeps it and names it in its error. When the
+// file is still there, the sibling goes as before.
+func TestDocumentSaveKeepsTheNewContentsWhenReplacingFails(t *testing.T) {
+	for _, removed := range []bool{true, false} {
+		t.Run(fmt.Sprintf("removed=%v", removed), func(t *testing.T) {
+			ds := testDocs(t, DocumentsOptions[string]{Autosave: AutosaveOff})
+			path := writeTemp(t, "a.txt", "one")
+			d, _ := ds.Open(path)
+			d.Set("two")
+			onMain(func() {
+				fb.ReplaceFileHook = func(target, replacement string) error {
+					if removed {
+						if err := os.Remove(target); err != nil {
+							return err
+						}
+					}
+					return errors.New("cannot move the replacement")
+				}
+			})
+			err := d.Save()
+			onMain(func() { fb.ReplaceFileHook = nil })
+			entries, _ := os.ReadDir(filepath.Dir(path))
+			if err == nil || len(entries) != 1 {
+				t.Fatalf("save error %v, files %v", err, entries)
+			}
+			left := filepath.Join(filepath.Dir(path), entries[0].Name())
+			// The error names the sibling by the file's real path, which on
+			// Windows may spell a temporary directory's 8.3 name in full.
+			if removed && (readString(t, left) != "two" || !strings.Contains(err.Error(), entries[0].Name())) {
+				t.Errorf("kept %s with %q; error %v", left, readString(t, left), err)
+			}
+			if !removed && (left != path || readString(t, path) != "one") {
+				t.Errorf("left %s with %q; error %v", left, readString(t, left), err)
+			}
+		})
+	}
+}
+
+// A sibling that could not be written goes, even when the file went
+// meanwhile: it holds no new contents to keep.
+func TestDocumentSaveDropsASiblingNotWritten(t *testing.T) {
+	var path string
+	ds := testDocs(t, DocumentsOptions[string]{
+		Autosave: AutosaveOff,
+		Write: func(w io.Writer, s string) error {
+			if err := os.Remove(path); err != nil {
+				return err
+			}
+			return errors.New("cannot write")
+		},
+	})
+	path = writeTemp(t, "a.txt", "one")
+	d, _ := ds.Open(path)
+	d.Set("two")
+	err := d.Save()
+	entries, _ := os.ReadDir(filepath.Dir(path))
+	if err == nil || len(entries) != 0 {
+		t.Fatalf("save error %v, files %v", err, entries)
 	}
 }
 
@@ -373,18 +431,13 @@ func TestDocumentRecovery(t *testing.T) {
 	d := ds.New()
 	d.Set("unsaved")
 	root, _ := ds.kind.recovery.root()
-	var copyPath string
-	waitFor(t, "the recovery copy", func() bool {
-		m, _ := filepath.Glob(filepath.Join(root, "*", d.id))
-		if len(m) == 1 {
-			copyPath = m[0]
-		}
-		if copyPath == "" || readString(t, copyPath) != "unsaved" {
-			return false
-		}
-		_, err := os.Stat(filepath.Join(filepath.Dir(copyPath), "index.json"))
-		return err == nil
-	})
+	// Backed up once the copy and the index are written.
+	waitFor(t, "the recovery copy", func() bool { return d.backedUpAt() != 0 })
+	m, _ := filepath.Glob(filepath.Join(root, "*", d.id))
+	if len(m) != 1 || readString(t, m[0]) != "unsaved" {
+		t.Fatalf("recovery copies %q", m)
+	}
+	copyPath := m[0]
 	var entries []recoveryEntry
 	if err := json.Unmarshal([]byte(readString(t, filepath.Join(filepath.Dir(copyPath), "index.json"))), &entries); err != nil || len(entries) != 1 || entries[0].Name != "Untitled" {
 		t.Fatalf("index %v: %v", entries, err)
@@ -497,6 +550,48 @@ func TestDocumentRenameMove(t *testing.T) {
 	dup := d.Duplicate()
 	if dup.Name() != "new copy" || dup.Content() != "x" || !dup.IsEdited() || dup.Path() != "" {
 		t.Errorf("duplicate %q %q %v", dup.Name(), dup.Content(), dup.IsEdited())
+	}
+}
+
+// TestDocumentFollowsReplacedRename renames a file that another app
+// replaced, after the document read the new file but before its watch
+// looked again: the watch knows only the file replaced, so the document
+// finds the new one by what it read.
+func TestDocumentFollowsReplacedRename(t *testing.T) {
+	ds := testDocs(t, DocumentsOptions[string]{Autosave: AutosaveOff})
+	path := writeTemp(t, "doc.txt", "one")
+	path, _ = filepath.EvalSymlinks(path)
+	d, _ := ds.Open(path)
+	// The watch saw the first file once it enrolled the file itself.
+	var watch *fake.FileWatch
+	waitFor(t, "the watch to see the file", func() bool {
+		watch = fb.LastFileWatch()
+		return slices.ContainsFunc(watch.Targets(), func(t platform.FileWatchTarget) bool { return t.Path == path && !t.Directory })
+	})
+	if err := os.WriteFile(path+".tmp", []byte("two, longer"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path+".tmp", path); err != nil {
+		t.Fatal(err)
+	}
+	// Read by the look when the watch started or the window was focused.
+	d.checkDisk()
+	waitFor(t, "the document to read the new file", func() bool { return d.Content() == "two, longer" })
+	renamed := filepath.Join(filepath.Dir(path), "renamed.txt")
+	if err := os.Rename(path, renamed); err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range watch.Targets() {
+		if target.Path == filepath.Dir(path) {
+			watch.Notify(platform.FileWatchNotice{Target: target.ID, Name: "doc.txt", Kind: platform.FileWatchRemove})
+		}
+	}
+	// Following it records it as recent, in the user data the test removes.
+	waitFor(t, "the document to follow the rename", func() bool {
+		return d.Path() == renamed && slices.Contains(App.RecentDocuments(), renamed)
+	})
+	if d.State().Deleted {
+		t.Error("deleted")
 	}
 }
 

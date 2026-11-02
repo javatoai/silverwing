@@ -125,10 +125,15 @@ func TestCommentEditorNativeLayoutConflictPendingAndEscape(t *testing.T) {
 						s.renderRequirementCommentComposer(c, p)
 						s.renderConfirmationDialog(c, p)
 					}, width, 900)
-					for _, text := range []string{"编辑评论", "编辑", "预览", "添加图片", "粘贴截图", "添加附件"} {
+					for _, text := range []string{"编辑评论", "添加图片", "粘贴截图", "添加附件"} {
 						if !tester.HasText(text) {
 							t.Fatal("missing", text)
 						}
+					}
+					_, editButton := tester.Find("编辑")
+					_, previewButton := tester.Find("预览")
+					if editButton || previewButton || state.markdown.componentEditor == nil {
+						t.Fatal("edit comment did not use the public Markdown editor")
 					}
 					for _, text := range []string{"Meegle 账号", "account-1", "测试账号", "发布评论", "重新发布…"} {
 						if tester.HasText(text) {

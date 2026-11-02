@@ -76,6 +76,11 @@ type editor struct {
 	ranges []TextRange
 	apart  bool
 	merge  rangeMerge
+	// paintStyles, paintSpans and painted hold what rangeSpans returns to
+	// paint a text, used again for the next: painting keeps none.
+	paintStyles []text.Span
+	paintSpans  []Span
+	painted     spanPaint
 	// layout is what the last frame laid out of a single-line input or a
 	// selectable text; area lays out a text area (textarea.go).
 	layout           *text.Layout
@@ -92,15 +97,17 @@ type editor struct {
 	hasDesired       bool
 	undo, redo       []undoStep
 	lastEdit         time.Time
-	coalesce         bool
-	dragging         bool
-	dragUnit         int // 1 rune, 2 word, 3 line
-	dragStart        [2]int
-	pressMods        Modifiers
-	contentW         float32
+	// now is the time, the engine's (engine.now), for what depends on it.
+	now       func() time.Time
+	coalesce  bool
+	dragging  bool
+	dragUnit  int // 1 rune, 2 word, 3 line
+	dragStart [2]int
+	pressMods Modifiers
+	contentW  float32
 }
 
-func newEditor() *editor { return &editor{} }
+func newEditor(now func() time.Time) *editor { return &editor{now: now} }
 
 func (ed *editor) String() string { return ed.buf.string() }
 

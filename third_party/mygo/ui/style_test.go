@@ -220,6 +220,35 @@ func TestFlexOptions(t *testing.T) {
 			}
 		}
 	})
+	t.Run("percentage limits on the main axis", func(t *testing.T) {
+		// A maximum that is a percentage of the parent resolves against the
+		// parent's definite main size, but the automatic minimum of a child
+		// is measured against an unknown block, where that percentage does
+		// not resolve: the maximum has to bind all the same, as it does when
+		// the limit is in DIPs.
+		row := boxes(t, func(c *context) {
+			coreRow(c).Size(400, 100).Children(func() {
+				coreText(c, "supercalifragilisticexpialidocious").MaxWidthPercent(10).Shrink(0).Label("pct")
+				coreText(c, "supercalifragilisticexpialidocious").MaxWidth(40).Shrink(0).Label("px")
+			})
+		}, 400, 400, "pct", "px")
+		if row["pct"].W > 40.5 {
+			t.Errorf("a text limited to 10%% of a 400-wide row is %g wide, want 40 (MaxWidth(40) gives %g)", row["pct"].W, row["px"].W)
+		}
+		column := boxes(t, func(c *context) {
+			coreColumn(c).Size(200, 400).Children(func() {
+				coreBox(c).Height(300).MaxHeightPercent(50).Shrink(0).Label("pct")
+			})
+		}, 200, 400, "pct")
+		pixels := boxes(t, func(c *context) {
+			coreColumn(c).Size(200, 400).Children(func() {
+				coreBox(c).Height(300).MaxHeight(200).Shrink(0).Label("px")
+			})
+		}, 200, 400, "px")
+		if column["pct"].H > 200.5 {
+			t.Errorf("a box limited to 50%% of a 400-high column is %g high, want 200, as MaxHeight(200) gives %g", column["pct"].H, pixels["px"].H)
+		}
+	})
 	t.Run("absolute in the padding box", func(t *testing.T) {
 		// As in CSS, insets are measured from inside the border, whatever
 		// the padding, and percentages from the padding box's size.
@@ -525,6 +554,59 @@ func TestScrollbarInsets(t *testing.T) {
 	}
 }
 
+func TestScrollbarCursor(t *testing.T) {
+	var sc *node
+	var content Rect
+	tt := coreNewTester(func(c *context) {
+		coreRow(c).Children(func() {
+			sc = coreScroll(c).Size(100, 200).Children(func() {
+				coreBox(c).Size(100, 800).Cursor(CursorText).Draw(func(p *Painter, r Rect) { content = r })
+			})
+			coreBox(c).Size(100, 200).Cursor(CursorPointer)
+		})
+	}, 200, 200)
+	tt.Move(50, 100)
+	if tt.Cursor() != CursorText {
+		t.Fatalf("the pointer is %v over the text", tt.Cursor())
+	}
+	st := sc.st
+	g := scrollBars(Rect{st.x, st.y, st.w, st.h}, st.barInset, float32(st.contentW), float32(st.contentH), float32(st.scrollX), float32(st.scrollY), st.flags, 6, false)
+	// Over the track, under the thumb and over it, the bar's arrow, not
+	// the text's I-beam.
+	if tt.Move(g.vTrack.X+1, g.vTrack.Y+g.vTrack.H-5); tt.Cursor() != CursorDefault {
+		t.Errorf("the pointer is %v over the track", tt.Cursor())
+	}
+	x, y := g.v.X+g.v.W/2, g.v.Y+g.v.H/2
+	if tt.Move(x, y); tt.Cursor() != CursorDefault {
+		t.Errorf("the pointer is %v over the thumb", tt.Cursor())
+	}
+	// Dragging the thumb keeps the arrow, off the track over the text and
+	// out of the scroll container over what sets another.
+	tt.Press(x, y)
+	if tt.Cursor() != CursorDefault {
+		t.Errorf("the pointer is %v pressing the thumb", tt.Cursor())
+	}
+	tt.Move(50, y+20)
+	if tt.Cursor() != CursorDefault {
+		t.Errorf("the pointer is %v dragging the thumb over the text", tt.Cursor())
+	}
+	tt.Move(150, y+40)
+	if tt.Cursor() != CursorDefault {
+		t.Errorf("the pointer is %v dragging the thumb out of the container", tt.Cursor())
+	}
+	if content.Y >= 0 {
+		t.Errorf("dragging the thumb scrolled to %v", content.Y)
+	}
+	// Let go, the pointer shows what it is over again.
+	tt.Release(150, y+40)
+	if tt.Cursor() != CursorPointer {
+		t.Errorf("the pointer is %v after the drag, over a box setting the pointer", tt.Cursor())
+	}
+	if tt.Move(50, 100); tt.Cursor() != CursorText {
+		t.Errorf("the pointer is %v back over the text", tt.Cursor())
+	}
+}
+
 func TestScrollContentShrinks(t *testing.T) {
 	long := true
 	var top *node
@@ -573,8 +655,7 @@ func TestEasingAndLoop(t *testing.T) {
 		e := coreBox(c)
 		values = append(values, e.Loop("spin", 50*time.Millisecond, Linear))
 	}, 50, 50)
-	time.Sleep(20 * time.Millisecond)
-	tt.Frame()
+	tt.Advance(20 * time.Millisecond)
 	moved := false
 	for _, v := range values {
 		if v < 0 || v >= 1 {

@@ -75,6 +75,12 @@ func (s *app) buildMarkdownTaskRootMigrationUI(plan *markdownTaskRootMigrationPl
 		if err != nil {
 			return nil, err
 		}
+		for _, path := range []*string{&state.tasks[index].materials.ReadRoot, &state.tasks[index].materials.OwnedRoot, &state.tasks[index].materials.TemporaryRoot} {
+			*path, err = rebase(*path)
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 	for index := range state.snapshotTasks {
 		state.snapshotTasks[index].Path, err = rebase(state.snapshotTasks[index].Path)
@@ -84,6 +90,12 @@ func (s *app) buildMarkdownTaskRootMigrationUI(plan *markdownTaskRootMigrationPl
 		state.snapshotTasks[index].MaterialsPath, err = rebase(state.snapshotTasks[index].MaterialsPath)
 		if err != nil {
 			return nil, err
+		}
+		for _, path := range []*string{&state.snapshotTasks[index].Materials.ReadRoot, &state.snapshotTasks[index].Materials.OwnedRoot, &state.snapshotTasks[index].Materials.TemporaryRoot} {
+			*path, err = rebase(*path)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	state.documents, err = rebaseMarkdownTaskRootDocuments(s.materialsUnit.state.documents, mappings)
@@ -129,6 +141,12 @@ func (s *app) buildMarkdownTaskRootMigrationUI(plan *markdownTaskRootMigrationPl
 			if entry.before.kind != "instruction" {
 				continue
 			}
+			if entry.before.localTaskRules {
+				if notes.localDrafts[entry.newKey] != nil && entry.newKey != entry.oldKey {
+					return nil, errors.New("迁移目标已有任务说明草稿")
+				}
+				continue
+			}
 			old := notes.markdownEditors[entry.oldKey]
 			if old == nil {
 				continue
@@ -167,9 +185,16 @@ func (s *app) applyMarkdownTaskRootMigrationUI(plan *markdownTaskRootMigrationPl
 	s.materialsUnit.state.documentDrafts, s.materialsUnit.state.documentDirtyMap = state.drafts, state.dirty
 	s.taskUnit.state.notePaths = state.notePaths
 	if s.materialsUnit.state.markdown != nil {
-		s.materialsUnit.state.markdown.path, s.materialsUnit.state.markdown.linkRoot = state.markdownPath, state.markdownRoot
+		s.rebindMaterialsMarkdownPath(s.materialsUnit.state.markdown, state.markdownPath, state.markdownRoot)
 	}
 	if notes := s.taskUnit.state.taskNotesUI; notes != nil {
+		for _, entry := range plan.entries {
+			if entry.before.localTaskRules {
+				if draft := notes.localDrafts[entry.oldKey]; draft != nil {
+					s.rebindTaskLocalNote(draft, entry.newKey, entry.after.taskPath, entry.after.path)
+				}
+			}
+		}
 		for _, entry := range state.instructions {
 			old := entry.state
 			// The existing constructor regenerates closures over the new key.

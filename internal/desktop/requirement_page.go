@@ -51,26 +51,22 @@ type taskRequirementMetadataState struct {
 	Error    string
 }
 
-func requirementTypeGroupLabel(item application.Requirement) string {
-	switch strings.ToLower(item.Type) {
-	case "userstory":
-		return "User Story"
-	case "technical":
-		return "Tech Improvement"
-	case "othertask":
-		return "Task"
-	case "bug":
-		return "Bug"
-	default:
-		return firstNonEmpty(item.TypeLabel, item.Type, "其他")
-	}
-}
 func (s *app) requestRequirements(sprintKey string, refresh bool) {
 	if len(s.readConfigArray("meegleProjects")) == 0 {
 		return
 	}
+	if refresh {
+		// Retire the startup directory read before a manual refresh queues its
+		// identity probe, so an older result cannot race that user action.
+		state := s.ensureRequirementListJobs()
+		s.retireRequirementSprintCatalogRequest(state)
+		state.catalogAttempted = true
+	}
 	if sprintKey == "" {
 		sprintKey = s.requirementUnit.state.requirementsSelectedSprintKey
+	}
+	if s.hasRequirementSprintCatalog() {
+		sprintKey = s.resolveRequirementSprintCatalogSelection(s.requirementSprintCatalog(), sprintKey)
 	}
 	// Re-entering the page must not replace a manual refresh's pending identity
 	// intent or restart its already-running list query.
@@ -98,27 +94,39 @@ func (s *app) startRequirementListWithKnownIdentity(sprintKey string, refresh bo
 }
 
 func (s *app) applyRequirementsResult(result application.ActionResult) {
-	previousKey := s.requirementUnit.state.selectedRequirementKey
-	data := mapData(result.Data)
-	items, err := decodeData[application.Requirement](data["items"])
+	data, err := application.ResultData[application.RequirementList](result)
 	if err != nil {
 		s.requirementUnit.state.requirementsLoading = false
 		s.requirementUnit.state.requirementsLoadError = "读取需求列表格式失败：" + err.Error()
 		return
 	}
-	s.requirementUnit.state.requirements = items
-	s.requirementUnit.state.requirementsFetchedAt = dataInt64(data, "fetchedAt")
+	if data.SprintsFetchedAt != nil && *data.SprintsFetchedAt > 0 || data.FromCache != nil && *data.FromCache || s.hasRequirementSprintCatalog() {
+		// Generic action results share the same complete-catalogue policy as
+		// dedicated list jobs; legacy payloads keep their existing behavior.
+		s.observeRequirementListIdentity()
+		request := &requirementListJob{
+			identity: s.currentRequirementListIdentity(), sprintKey: s.requirementUnit.state.requirementsSelectedSprintKey, sameSprint: true,
+			items: append([]application.Requirement(nil), s.requirementUnit.state.requirements...), selectedKey: s.requirementUnit.state.selectedRequirementKey,
+		}
+		s.applyRequirementListResult(request, result)
+		return
+	}
+	previousKey := s.requirementUnit.state.selectedRequirementKey
+	s.requirementUnit.state.requirements = data.Items
+	s.requirementUnit.state.requirementsFetchedAt = data.FetchedAt
 	s.requirementUnit.state.requirementsLoaded = true
 	s.requirementUnit.state.requirementsLoading = false
 	s.requirementUnit.state.requirementsLoadError = ""
-	s.requirementUnit.state.requirementsFailures = mapsString(data["failures"])
-	s.requirementUnit.state.requirementsCompletedQueries = int(dataInt64(data, "completedQueries"))
-	s.requirementUnit.state.requirementsSprints, err = decodeData[requirementSprint](data["sprints"])
-	if err != nil {
-		s.requirementUnit.state.requirementsSprints = nil
-		s.requirementUnit.state.requirementsLoadError = "读取 Sprint 列表格式失败：" + err.Error()
+	s.requirementUnit.state.requirementsFailures = data.Failures
+	s.requirementUnit.state.requirementsCompletedQueries = data.CompletedQueries
+	s.requirementUnit.state.requirementsSprints = make([]requirementSprint, 0, len(data.Sprints))
+	for _, sprint := range data.Sprints {
+		s.requirementUnit.state.requirementsSprints = append(s.requirementUnit.state.requirementsSprints, requirementSprint(sprint))
 	}
-	s.requirementUnit.state.requirementsSelectedSprintKey = dataString(data, "selectedSprintKey")
+	s.requirementUnit.state.requirementsSelectedSprintKey = ""
+	if data.SelectedSprintKey != nil {
+		s.requirementUnit.state.requirementsSelectedSprintKey = *data.SelectedSprintKey
+	}
 	s.overlayRefreshedRequirements(s.requirementUnit.state.requirements, s.requirementUnit.state.requirementsSelectedSprintKey, s.requirementUnit.state.requirementsFetchedAt)
 	if selected, ok := s.selectedRequirementByKey(s.requirementUnit.state.selectedRequirementKey); ok {
 		s.requirementUnit.state.selectedRequirement = selected
@@ -437,40 +445,11 @@ func (s *app) renderTaskRequirementParticipants(c *ui.Context, p palette, item t
 		developers = metadata.WorkItem.Developers
 		participants.QCOwners, participants.ProductManagers = metadata.WorkItem.QCOwners, metadata.WorkItem.ProductManagers
 	}
-	values := make([]string, 0, 3)
-	for _, role := range []struct {
-		label  string
-		people []domain.RequirementPerson
-	}{
-		{"研发", developers},
-		{"测试", participants.QCOwners},
-		{"产品", participants.ProductManagers},
-	} {
-		if summary := requirementPeopleSummary(role.label, role.people); summary != "" {
-			values = append(values, summary)
-		}
-	}
-	if len(values) == 0 {
-		return
-	}
-	ui.Row(c).FillWidth().MinWidth(0).Gap(6).Wrap().Children(func() {
-		for _, value := range values {
-			ui.Box(c).Padding(3, 7).Radius(6).Background(p.soft).Children(func() { label(c, value, 11, p.muted).NoWrap() })
-		}
-	})
+	renderRequirementRoleBadges(c, p, developers, participants.QCOwners, participants.ProductManagers)
 }
 
 func requirementPeopleSummary(role string, people []domain.RequirementPerson) string {
-	names := make([]string, 0, len(people))
-	for _, person := range people {
-		name := strings.TrimSpace(person.Name)
-		if name == "" && person.Email != nil {
-			name = strings.TrimSpace(*person.Email)
-		}
-		if name != "" {
-			names = append(names, name)
-		}
-	}
+	names := requirementPeopleNames(people)
 	if len(names) == 0 {
 		return ""
 	}
@@ -481,25 +460,7 @@ func requirementPeopleSummary(role string, people []domain.RequirementPerson) st
 }
 
 func (s *app) renderRequirementMetadataSummary(c *ui.Context, p palette, item application.Requirement) {
-	roles := []struct {
-		label  string
-		people []domain.RequirementPerson
-	}{
-		{"研发", item.WorkItem.Developers},
-		{"测试", item.WorkItem.QCOwners},
-		{"产品", item.WorkItem.ProductManagers},
-	}
-	values := make([]string, 0, len(roles))
-	for _, role := range roles {
-		value := requirementPeopleSummary(role.label, role.people)
-		if value != "" {
-			values = append(values, value)
-		}
-	}
-	if len(values) == 0 {
-		return
-	}
-	label(c, strings.Join(values, " · "), 12, p.muted).Wrap()
+	renderRequirementRoleBadges(c, p, item.WorkItem.Developers, item.WorkItem.QCOwners, item.WorkItem.ProductManagers)
 }
 
 func (s *app) replicaRequirements(c *ui.Context, p palette) {
@@ -639,17 +600,14 @@ func (s *app) renderRequirementDetailSkeleton(c *ui.Context, p palette) {
 }
 
 func (s *app) openMeegleSettings() {
-	s.page, s.settingsUnit.state.settingsTab, s.settingsUnit.state.settingsPage, s.settingsUnit.state.settingsLoaded = "settings", "CLI", "cli-meegle", ""
+	s.page, s.settingsUnit.state.settingsTab, s.settingsUnit.state.settingsPage, s.settingsUnit.state.settingsLoaded = "settings", "工具与连接", "cli-meegle", ""
 }
 
 func (s *app) selectedRequirementSprint() requirementSprint {
-	for _, sprint := range s.requirementUnit.state.requirementsSprints {
+	for _, sprint := range s.requirementSprintCatalog() {
 		if sprint.key() == s.requirementUnit.state.requirementsSelectedSprintKey {
 			return sprint
 		}
-	}
-	if len(s.requirementUnit.state.requirementsSprints) > 0 {
-		return s.requirementUnit.state.requirementsSprints[0]
 	}
 	return requirementSprint{}
 }
@@ -700,9 +658,9 @@ func (s *app) requirementList(c *ui.Context, p palette, focused bool) {
 				label(c, s.requirementSprintLabel(s.selectedRequirementSprint()), 11, p.text).Grow(1).SingleLine().Tooltip(s.requirementSprintLabel(s.selectedRequirementSprint()))
 				icon(c, "chevron-down", 13, p.muted)
 			})
-			button.Disabled(len(s.requirementUnit.state.requirementsSprints) == 0)
+			button.Disabled(len(s.requirementSprintCatalog()) == 0)
 			button.Menu(func(menu *ui.Menu) {
-				for _, option := range s.requirementUnit.state.requirementsSprints {
+				for _, option := range s.requirementSprintCatalog() {
 					text := firstNonEmpty(option.Title, option.ID) + " · " + firstNonEmpty(option.ProjectName, option.ProjectKey) + " · " + option.Status
 					if menu.Item(text).Checked(option.key() == s.requirementUnit.state.requirementsSelectedSprintKey).Chosen() {
 						s.requestRequirements(option.key(), false)
@@ -710,12 +668,15 @@ func (s *app) requirementList(c *ui.Context, p palette, focused bool) {
 				}
 			})
 			refreshLabel := "刷新当前 Sprint"
+			if s.requirementUnit.state.requirementsSelectedSprintKey == "" {
+				refreshLabel = "刷新 Sprint 列表"
+			}
 			progress := s.requirementUnit.state.requirementListProgress
 			viewProgress := s.requirementListProgressCurrent(progress) && progress.running
 			if viewProgress {
 				refreshLabel = "查看刷新进度"
 			}
-			if iconButtonDisabled(c, "refresh-requirements", "refresh", refreshLabel, p, (s.requirementUnit.state.requirementsLoading && !viewProgress) || s.requirementUnit.state.requirementsSelectedSprintKey == "").Clicked() {
+			if iconButtonDisabled(c, "refresh-requirements", "refresh", refreshLabel, p, s.requirementUnit.state.requirementsLoading && !viewProgress).Clicked() {
 				s.refreshRequirementListWithProgress(s.requirementUnit.state.requirementsSelectedSprintKey)
 			}
 		})
@@ -745,8 +706,11 @@ func (s *app) requirementList(c *ui.Context, p palette, focused bool) {
 			return
 		}
 		ui.Scroll(c).Grow(1).MinHeight(0).FillWidth().Padding(1).Gap(4).Children(func() {
-			for _, item := range s.requirementUnit.state.requirements {
-				s.requirementListItem(c, p, item, focused)
+			for _, group := range groupRequirementList(s.requirementUnit.state.requirements) {
+				requirementGroupHeader(c, p, group)
+				for _, item := range group.items {
+					s.requirementListItem(c, p, item, focused)
+				}
 			}
 		})
 	})
@@ -783,18 +747,14 @@ func (s *app) requirementListItem(c *ui.Context, p palette, item application.Req
 	}
 	button.Children(func() {
 		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-			label(c, item.Title, 12, p.text).FontWeight(500).Grow(1).SingleLine().Tooltip(item.Title)
-			compactState(c, item.Status, p)
+			label(c, item.Title, 12, p.text).FontWeight(500).Grow(1).MinWidth(0).SingleLine().Tooltip(item.Title)
+			requirementCardStatus(c, p, item.Status)
 		})
-		estimate := ""
+		estimate := "估时：-"
 		if days := item.WorkItem.MySprintEstimateDays; days != nil && strings.TrimSpace(*days) != "" {
-			estimate = "估时 " + strings.TrimSpace(*days) + " 天"
+			estimate = "估时：" + strings.TrimSpace(*days) + " 天"
 		}
-		secondary := requirementTypeGroupLabel(item)
-		if estimate != "" {
-			secondary += " · " + estimate
-		}
-		label(c, secondary, 10, p.muted).FillWidth().SingleLine().Tooltip(secondary)
+		label(c, estimate, 11, p.muted).FillWidth().SingleLine().Tooltip(estimate)
 	})
 	if button.Clicked() && index >= 0 {
 		nextKey := requirementKey(item)
@@ -813,6 +773,15 @@ func (s *app) requirementListItem(c *ui.Context, p palette, item application.Req
 			s.requirementUnit.state.requirementsFocusedDetail = true
 		}
 	}
+}
+
+func requirementCardStatus(c *ui.Context, p palette, text string) {
+	text = firstNonEmpty(text, "未标记")
+	bg, fg := statusBadgeColors(text, p)
+	ui.Box(c).Shrink(1).MinWidth(0).MaxWidth(88).Padding(2, 7).Radius(20).
+		Border(1, p.line).Background(bg).Clip().Tooltip(text).Children(func() {
+		label(c, text, 11, fg).MinWidth(0).SingleLine()
+	})
 }
 
 func (s *app) requirementDetail(c *ui.Context, p palette, item application.Requirement) {

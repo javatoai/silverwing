@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/internal/platform"
+	"github.com/egoist/mygo/internal/wait"
 )
 
 func TestWatchInotifyParser(t *testing.T) {
@@ -148,7 +149,7 @@ func TestInotifyShared(t *testing.T) {
 			if n.Target != 7 || n.Name != name || n.Kind != platform.FileWatchCreate {
 				t.Fatalf("notice %+v", n)
 			}
-		case <-time.After(5 * time.Second):
+		case <-time.After(wait.Guard):
 			t.Fatal("no notice")
 		}
 	}

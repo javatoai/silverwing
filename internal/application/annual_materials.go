@@ -201,7 +201,7 @@ func validAnnualTaskMaterials(manifest domain.TaskManifest, config domain.AppCon
 	}
 	scope, ok := documents.AnnualScope(owned)
 	if !ok {
-		return errors.New("此任务使用旧平铺资料目录，请重新准备年度资料目录；原文件保留")
+		return errors.New("无法识别任务资料目录")
 	}
 	if value(config.RequirementMaterialsRoot) == "" || value(config.RequirementMaterialsSubdirectory) == "" {
 		return errors.New("请先配置任务资料根目录和可写子目录")

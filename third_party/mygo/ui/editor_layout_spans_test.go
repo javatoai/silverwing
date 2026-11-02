@@ -40,6 +40,12 @@ func TestRangeSpansSame(t *testing.T) {
 			ed.compose, ed.caret = "かな", max(0, start-2+rng.IntN(end-start+5))
 		}
 		k1, p1 := ed.rangeSpans(start, end)
+		if p1 != nil { // the editor's, which spansOf builds again
+			p1 = &spanPaint{spans: slices.Clone(p1.spans), styles: slices.Clone(p1.styles)}
+		}
+		if k := ed.rangeKey(start, end); k != k1 {
+			t.Fatalf("ranges %v, %d to %d: key %q, want %q", ed.ranges, start, end, k, k1)
+		}
 		k2, p2 := ed.spansOf(ed.ranges, start, end)
 		if k1 != k2 || !reflect.DeepEqual(p1, p2) {
 			t.Fatalf("ranges %v, %d to %d, composing %d runes at %d: %q %+v, want %q %+v",
@@ -157,6 +163,54 @@ func TestTextRangesCalledForEach(t *testing.T) {
 	}
 	if got := once.st.editor.ranges; !reflect.DeepEqual(got, want) {
 		t.Errorf("one call kept %v, want %v", got, want)
+	}
+}
+
+// Laying out and painting the ranges of a paragraph allocates nothing
+// when they set only colors, and a frame of a text area colored line by
+// line allocates no more than one without ranges does.
+func TestRangesPaintWithoutAllocating(t *testing.T) {
+	red := RGB(220, 0, 0)
+	ed := &editor{}
+	for l := range 20 {
+		for i := range 10 {
+			at := l*40 + i*4
+			ed.ranges = append(ed.ranges, TextRange{Start: at, End: at + 3, Color: red})
+		}
+	}
+	ed.sortRanges()
+	ed.rangeSpans(0, 39) // grows the editor's buffers
+	if n := testing.AllocsPerRun(100, func() {
+		for l := range 20 {
+			ed.rangeKey(l*40, l*40+39)
+			ed.rangeSpans(l*40, l*40+39)
+		}
+	}); n != 0 {
+		t.Errorf("%v allocations to style 20 lines, want none", n)
+	}
+
+	const lines = 200
+	text := strings.Repeat(strings.Repeat("abc ", 10)[:39]+"\n", lines)
+	frame := func(ranges bool) float64 {
+		tt := coreNewTester(func(c *context) {
+			a := coreTextAreaBase(c, &text).Width(600).Height(4000)
+			if ranges {
+				for l := range lines {
+					for i := range 10 {
+						at := l*40 + i*4
+						a.TextRanges(TextRange{Start: at, End: at + 3, Color: red})
+					}
+				}
+			}
+		}, 640, 4000)
+		defer tt.rt.close()
+		return testing.AllocsPerRun(10, func() {
+			tt.h.img.Invalidate()
+			tt.Frame()
+		})
+	}
+	if plain, colored := frame(false), frame(true); colored > plain {
+		t.Errorf("a frame of %d colored lines allocates %v times, %v without colors", lines, colored, plain)
 	}
 }
 

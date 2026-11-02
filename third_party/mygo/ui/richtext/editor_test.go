@@ -1,10 +1,12 @@
 package richtext
 
 import (
+	"bytes"
 	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -69,6 +71,23 @@ func joinRun(run, text string) string {
 func typeRunes(tt *ui.Tester, s string) {
 	for _, r := range s {
 		tt.Type(string(r))
+	}
+}
+
+// The caret blinks by the frames' time, and shows again as it moves.
+func TestRichTextCaretBlinks(t *testing.T) {
+	const blink = 530 * time.Millisecond
+	tt, _ := richTester(t, NewDocument(Text{}))
+	tt.Type("hello")
+	shown := bytes.Clone(tt.Image().Pix)
+	tt.Advance(blink)
+	if bytes.Equal(tt.Image().Pix, shown) {
+		t.Fatal("the caret still shows a blink on")
+	}
+	tt.Key(0, ui.KeyLeft)
+	tt.Key(0, ui.KeyRight)
+	if !bytes.Equal(tt.Image().Pix, shown) {
+		t.Error("the caret does not show as it moved")
 	}
 }
 
@@ -504,7 +523,7 @@ func TestRichTextLinkOpensSafely(t *testing.T) {
 		Paragraph{Runs: []Run{{Text: "site", Attributes: Attributes{Link: "https://example.com"}}}},
 	))
 	tt, _ := richTester(t, doc)
-	for y := float32(2); y < 80; y += 4 {
+	for y := float32(2); y < 80; y += 6 { // apart, so that no click is a double click
 		tt.Move(10, y)
 		if tt.Cursor() == ui.CursorPointer {
 			tt.ClickAt(10, y)
@@ -513,5 +532,26 @@ func TestRichTextLinkOpensSafely(t *testing.T) {
 	got := tt.OpenedURLs()
 	if len(got) == 0 || slices.ContainsFunc(got, func(u string) bool { return u != "https://example.com" }) {
 		t.Errorf("opened %q", got)
+	}
+}
+
+// TestRichTextCJKWords deletes and moves by words in Chinese and
+// Japanese: a character at a time, as they have no spaces (#668).
+func TestRichTextCJKWords(t *testing.T) {
+	word := ui.Ctrl
+	if runtime.GOOS == "darwin" {
+		word = ui.Alt
+	}
+	doc := NewDocument(TextOf(Paragraph{Runs: []Run{{Text: "Go语言，今日は"}}}))
+	tt, _ := richTester(t, doc)
+	tt.Key(word, ui.KeyBackspace)
+	if got := doc.Text().String(); got != "Go语言，今日" {
+		t.Fatalf("word backspace left %q", got)
+	}
+	for _, want := range []int{6, 5, 3, 2, 0} {
+		tt.Key(word, ui.KeyLeft)
+		if a, c := doc.Selection(); a != want || c != want {
+			t.Fatalf("word left went to %d–%d, want %d", a, c, want)
+		}
 	}
 }

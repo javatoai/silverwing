@@ -28,6 +28,7 @@ import (
 	"github.com/egoist/mygo/internal/fake"
 	"github.com/egoist/mygo/internal/platform"
 	"github.com/egoist/mygo/internal/tsgen"
+	"github.com/egoist/mygo/internal/wait"
 	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 )
@@ -38,7 +39,10 @@ var fb *fake.Backend
 // backend, like a real program, and the tests on another goroutine.
 func TestMain(m *testing.M) {
 	if os.Getenv("MYGO_TEST_SECOND_INSTANCE") == "1" {
-		// Helper process for TestSingleInstance.
+		// Helper process for TestSingleInstance. Only an instance that
+		// hands over passes the foreground on (Windows).
+		helper := fake.New()
+		backendOnce.Do(func() { theBackend = helper })
 		packageIdentifier = os.Getenv("MYGO_TEST_IDENTIFIER")
 		App.SetName("MyGoTest")
 		if App.RequestSingleInstanceLock() {
@@ -47,10 +51,18 @@ func TestMain(m *testing.M) {
 		} else {
 			fmt.Println("forwarded")
 		}
+		if helper.ForegroundAllowed > 0 {
+			fmt.Println("passed the foreground on")
+		}
 		os.Exit(0)
 	}
 	fb = fake.New()
 	backendOnce.Do(func() { theBackend = fb })
+	if os.Getenv("MYGO_TEST_STUCK_QUIT") == "1" {
+		stuckQuit()
+	}
+	// A quit that a test lets through must not end the tests.
+	stopGrace = 0
 	if os.Getenv("MYGO_TEST_BEFORE_RUN") == "1" {
 		beforeRun()
 	}
@@ -104,8 +116,8 @@ func secret(fw *fake.Window) string {
 // received waits until the page received a message matching pred.
 func received(t *testing.T, fw *fake.Window, pred func(m map[string]any) bool) map[string]any {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
+	var found map[string]any
+	if wait.Poll(func() bool {
 		for _, s := range fw.Scripts() {
 			const prefix = "__mygo.receive("
 			if !strings.HasPrefix(s, prefix) {
@@ -117,11 +129,14 @@ func received(t *testing.T, fw *fake.Window, pred func(m map[string]any) bool) m
 			}
 			for _, m := range msgs {
 				if pred(m) {
-					return m
+					found = m
+					return true
 				}
 			}
 		}
-		time.Sleep(5 * time.Millisecond)
+		return false
+	}) {
+		return found
 	}
 	t.Fatalf("message not received; scripts: %q", fw.Scripts())
 	return nil
@@ -151,6 +166,10 @@ func TestWindowDefaults(t *testing.T) {
 	if !o.DevTools {
 		t.Error("devtools should be enabled in development")
 	}
+	// Tab reaches every control, as desktop apps do, unless asked otherwise.
+	if !o.TabFocusesLinks {
+		t.Error("Tab should reach links and form controls by default")
+	}
 	// The bridge configuration, then the settings of the desktop, which it
 	// tells.
 	if len(o.UserScripts) != 2 || !strings.Contains(o.UserScripts[0].Source, `"windowId":`+fmt.Sprint(w.ID())) {
@@ -161,6 +180,27 @@ func TestWindowDefaults(t *testing.T) {
 	}
 	if WindowByID(w.ID()) != w {
 		t.Error("WindowByID")
+	}
+}
+
+// TestGlassWindowOptions passes a floating panel's look to the backend: the
+// glass and the corners of a frameless window, a negative radius none; and
+// its active look, which SetActiveAppearance sets.
+func TestGlassWindowOptions(t *testing.T) {
+	w, fw := testWindow(t, WindowOptions{Frameless: true, Transparent: true, Vibrancy: VibrancyGlassClear, CornerRadius: 16})
+	if o := fw.Opts; o.Vibrancy != "glass-clear" || o.CornerRadius != 16 {
+		t.Errorf("vibrancy %q, radius %d", o.Vibrancy, o.CornerRadius)
+	}
+	if fw.ActiveAppearance() {
+		t.Error("drawn as active before SetActiveAppearance")
+	}
+	w.SetActiveAppearance(true)
+	if !fw.ActiveAppearance() {
+		t.Error("SetActiveAppearance(true) did not reach the backend")
+	}
+	_, fw = testWindow(t, WindowOptions{Frameless: true, CornerRadius: -4})
+	if o := fw.Opts; o.CornerRadius != 0 {
+		t.Errorf("radius %d; want none", o.CornerRadius)
 	}
 }
 
@@ -191,6 +231,13 @@ func TestWindowOptions(t *testing.T) {
 	}
 	if fw.URL() != "https://example.com/" {
 		t.Errorf("URL not loaded: %q", fw.URL())
+	}
+}
+
+func TestSafariTabFocusOption(t *testing.T) {
+	_, fw := testWindow(t, WindowOptions{Page: PageOptions{SafariTabFocus: true}})
+	if fw.Opts.TabFocusesLinks {
+		t.Error("SafariTabFocus should leave links and form controls out of Tab")
 	}
 }
 
@@ -348,6 +395,50 @@ func TestWillNavigate(t *testing.T) {
 	check(platform.Navigation{URL: "https://blocked.example", IsMainFrame: true}, false)
 	check(platform.Navigation{URL: "https://blocked.example", IsMainFrame: false}, true)
 	check(platform.Navigation{URL: "https://blocked.example", IsMainFrame: true, Unasked: true}, true)
+}
+
+// TestUserInitiated checks that whether a user's gesture opened a window
+// or navigated reaches the window open handler and OnWillNavigate, which
+// can refuse what a page's script did on its own.
+func TestUserInitiated(t *testing.T) {
+	w, fw := testWindow(t, WindowOptions{})
+	off := App.OnWindowCreated(func(c *Window) { t.Cleanup(c.Destroy) })
+	defer off()
+	var asked []WindowOpenRequest
+	w.Page().SetWindowOpenHandler(func(req WindowOpenRequest) *WindowOptions {
+		asked = append(asked, req)
+		if !req.UserInitiated {
+			return nil // a pop-up
+		}
+		return &WindowOptions{}
+	})
+	opens := func(req platform.NewWindowRequest) bool {
+		return onMainValue(func() bool { return fw.H.NewWindow(req) != nil })
+	}
+	if !opens(platform.NewWindowRequest{URL: "https://clicked.example/", Width: 300, Height: 200, UserInitiated: true}) {
+		t.Error("the window a user's click opened was refused")
+	}
+	if opens(platform.NewWindowRequest{URL: "https://popup.example/"}) {
+		t.Error("the window a script opened on its own was opened")
+	}
+	want := []WindowOpenRequest{
+		{URL: "https://clicked.example/", Width: 300, Height: 200, UserInitiated: true},
+		{URL: "https://popup.example/"},
+	}
+	if !slices.Equal(asked, want) {
+		t.Errorf("the handler was asked %+v, want %+v", asked, want)
+	}
+
+	var users []bool
+	w.Page().OnWillNavigate(func(e *NavigateEvent) { users = append(users, e.UserInitiated) })
+	for _, user := range []bool{true, false} {
+		onMain(func() {
+			fw.H.WillNavigate(platform.Navigation{URL: "https://next.example/", IsMainFrame: true, UserInitiated: user})
+		})
+	}
+	if !slices.Equal(users, []bool{true, false}) {
+		t.Errorf("OnWillNavigate was told UserInitiated %v, want [true false]", users)
+	}
 }
 
 // TestReloadLoadsHTMLAgain checks that a reload of a document LoadHTML
@@ -593,7 +684,7 @@ func TestCallContextCanceledOnNavigation(t *testing.T) {
 	onMain(func() { fw.H.NavigationCommitted("https://next.example/") })
 	select {
 	case <-pc.Done():
-	case <-time.After(time.Second):
+	case <-time.After(wait.Guard):
 		t.Fatal("page context not canceled after navigation")
 	}
 	if w.pageContext().Err() != nil {
@@ -721,14 +812,15 @@ func TestChannels(t *testing.T) {
 		t.Fatalf("Send did not wait for the page: %v", err)
 	case <-time.After(50 * time.Millisecond):
 	}
-	// The main thread posts the values Send queued as it gets to them.
+	// Send queued each value and posted the flush that hands it to the
+	// page before it returned. The main loop runs functions in the order
+	// they were posted, so once one posted now has run, that flush has too,
+	// however long the main thread took to get to it.
+	onMain(func() {})
 	asks := 0
-	for deadline := time.Now().Add(3 * time.Second); asks < 2 && time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
-		asks = 0
-		for _, m := range pageMessages(t, fw) {
-			if m["c"] == float64(8) && m["a"] == float64(1) {
-				asks++
-			}
+	for _, m := range pageMessages(t, fw) {
+		if m["c"] == float64(8) && m["a"] == float64(1) {
+			asks++
 		}
 	}
 	if asks != 2 {
@@ -784,7 +876,7 @@ func TestChannels(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Errorf("call context of a channel closed early: %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(wait.Guard):
 		t.Fatal("a channel the page closed before its call started did not cancel the call")
 	}
 	if err := <-s.sent; !errors.Is(err, ErrChannelClosed) {
@@ -812,7 +904,7 @@ func TestChannelsClosedAtOnce(t *testing.T) {
 	for range n {
 		select {
 		case <-s.stopped:
-		case <-time.After(5 * time.Second):
+		case <-time.After(wait.Guard):
 			t.Fatal("a call whose channel the page closed was not canceled")
 		}
 	}
@@ -999,15 +1091,26 @@ func TestEval(t *testing.T) {
 }
 
 // TestEvalLateReply: on the main thread, a reply arriving after the
-// context was canceled must not block.
+// cancellation of the context was delivered, before EvalContext took it,
+// must not block.
 func TestEvalLateReply(t *testing.T) {
 	w, fw := testWindow(t, WindowOptions{})
 	ctx, cancel := context.WithCancel(context.Background())
+	delivered := make(chan struct{})
+	var once sync.Once
+	evalCanceled = func() { once.Do(func() { close(delivered) }) }
+	t.Cleanup(func() { evalCanceled = nil })
 	fw.AsyncCallback = func(body string, reply func(string, error)) {
 		postMain(func() {
 			cancel()
-			time.Sleep(50 * time.Millisecond) // the cancellation is delivered...
-			reply(`{"ok":true,"v":1}`, nil)   // ...then the page answers
+			// The main thread, which EvalContext waits on, is busy here: the
+			// cancellation is delivered...
+			select {
+			case <-delivered:
+			case <-time.After(time.Minute):
+				t.Error("the cancellation was not delivered")
+			}
+			reply(`{"ok":true,"v":1}`, nil) // ...then the page answers
 		})
 	}
 	done := make(chan error, 1)
@@ -1020,7 +1123,7 @@ func TestEvalLateReply(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Errorf("EvalContext = %v", err)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(wait.Guard):
 		t.Fatal("the late reply blocked the main thread")
 	}
 }
@@ -1050,7 +1153,7 @@ func request(t *testing.T, fw *fake.Window, method, url string, body io.Reader) 
 	onMain(func() { fw.H.SchemeRequest(req) })
 	select {
 	case <-rec.finished:
-	case <-time.After(3 * time.Second):
+	case <-time.After(wait.Guard):
 		t.Fatal("request did not finish")
 	}
 	return rec
@@ -1151,17 +1254,18 @@ func TestProtocolCORS(t *testing.T) {
 		onMain(func() { fw.H.SchemeRequest(req) })
 		select {
 		case <-rec.finished:
-		case <-time.After(3 * time.Second):
+		case <-time.After(wait.Guard):
 			t.Fatal("request did not finish")
 		}
 		return rec
 	}
 
 	for _, origin := range []string{
-		"mygo://localhost",        // the frontend
-		"http://mygo.localhost",   // the frontend, as WebView2 serves it
-		"http://assets.localhost", // a custom scheme, as WebView2 serves it
-		"https://app.example.com", // in PageOptions.TrustedOrigins
+		"mygo://localhost",            // the frontend
+		"http://mygo.localhost",       // the frontend, as WebView2 serves it
+		"http://assets.localhost",     // a custom scheme, as WebView2 serves it
+		"http://abc.assets.localhost", // another host of a custom scheme, as WebView2 serves it
+		"https://app.example.com",     // in PageOptions.TrustedOrigins
 	} {
 		rec := send("GET", "/data", origin, nil)
 		if rec.status != 200 || rec.body.String() != "data" {
@@ -1180,7 +1284,7 @@ func TestProtocolCORS(t *testing.T) {
 			t.Errorf("dev server: Access-Control-Allow-Origin = %q", got)
 		}
 	}
-	for _, origin := range []string{"", "null", "https://example.com", "http://evil.localhost", "http://assets.localhost:8080"} {
+	for _, origin := range []string{"", "null", "https://example.com", "http://evil.localhost", "http://assets.localhost:8080", "http://abc.evil.localhost", "http://a_b.assets.localhost"} {
 		if got := send("GET", "/data", origin, nil).header.Get("Access-Control-Allow-Origin"); got != "" {
 			t.Errorf("%q got Access-Control-Allow-Origin %q", origin, got)
 		}
@@ -1256,7 +1360,7 @@ func TestProtocolBodyWriter(t *testing.T) {
 		onMain(func() { fw.H.SchemeRequest(req) })
 		select {
 		case <-rec.finished:
-		case <-time.After(3 * time.Second):
+		case <-time.After(wait.Guard):
 			t.Fatal("request did not finish")
 		}
 	}
@@ -1675,7 +1779,7 @@ func TestThemePreferences(t *testing.T) {
 		if p != want {
 			t.Errorf("Preferences from another goroutine = %+v, want %+v", p, want)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(wait.Guard):
 		t.Fatal("Preferences from another goroutine hung")
 	}
 }
@@ -1869,6 +1973,7 @@ var needsAppCalls = []struct {
 	{"App.SetBadgeCount", func() { App.SetBadgeCount(1) }},
 	{"App.ShowAboutPanel", func() { App.ShowAboutPanel(AboutPanelOptions{}) }},
 	{"App.ClearBrowsingData", func() { App.ClearBrowsingData() }},
+	{"Session.ClearData", func() { NewEphemeralSession().ClearData(SiteDataAll) }},
 	{"App.Dock.SetBadge", func() { App.Dock.SetBadge("1") }},
 	{"App.Dock.Badge", func() { App.Dock.Badge() }},
 	{"App.Dock.Bounce", func() { App.Dock.Bounce(false) }},
@@ -1917,6 +2022,42 @@ var needsAppCalls = []struct {
 	{"Dialog.Error", func() { Dialog.Error("title", "content") }},
 	{"Menu.Popup", func() { NewMenu(nil).Popup(nil) }},
 	{"Menu.PopupAt", func() { NewMenu(nil).PopupAt(nil, 0, 0) }},
+}
+
+// TestQuitWhileLoopRuns: once the quit sequence has run, a loop that goes
+// on running does not keep the app: a later quit asks it to stop again,
+// and the app finishes and exits after stopGrace.
+func TestQuitWhileLoopRuns(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe, "-test.run=^$")
+	cmd.Env = append(os.Environ(), "MYGO_TEST_STUCK_QUIT=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got := string(out); !strings.Contains(got, "asked again: 2\n") || !strings.Contains(got, "quit\n") {
+		t.Errorf("output:\n%s", got)
+	}
+}
+
+// stuckQuit is a helper process for TestQuitWhileLoopRuns: its event
+// loop does not stop when asked.
+func stuckQuit() {
+	fb.IgnoresQuit = true
+	stopGrace = 100 * time.Millisecond
+	App.OnWindowAllClosed(func() {})
+	App.OnQuit(func() { fmt.Println("quit") })
+	App.WhenReady(func() {
+		App.Quit()
+		App.Quit()
+		postMain(func() { fmt.Println("asked again:", fb.Quits) })
+	})
+	App.Run()
+	fmt.Println("the loop stopped")
+	os.Exit(1)
 }
 
 // beforeRun is a helper process for TestBeforeRun: it does what main may
@@ -2005,12 +2146,46 @@ func TestGlobalShortcut(t *testing.T) {
 	onMain(func() { fb.PressHotkey("CmdOrCtrl+Shift+K") })
 	select {
 	case <-pressed:
-	case <-time.After(time.Second):
+	case <-time.After(wait.Guard):
 		t.Error("shortcut callback not called")
 	}
 	GlobalShortcut.Unregister("CmdOrCtrl+Shift+K")
 	if GlobalShortcut.IsRegistered("CmdOrCtrl+Shift+K") {
 		t.Error("Unregister")
+	}
+}
+
+// TestGlobalShortcutRegisterRace: calls that register the same
+// accelerator at once bind it once, and Unregister leaves nothing of the
+// shortcut behind.
+func TestGlobalShortcutRegisterRace(t *testing.T) {
+	defer GlobalShortcut.UnregisterAll()
+	const acc = "CmdOrCtrl+Alt+Shift+J"
+	var bound, calls atomic.Int32
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if err := GlobalShortcut.Register(acc, func() { calls.Add(1) }); err == nil {
+				bound.Add(1)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if n := bound.Load(); n != 1 {
+		t.Errorf("Register(%q) succeeded %d times, want 1", acc, n)
+	}
+	GlobalShortcut.Unregister(acc)
+	if GlobalShortcut.IsRegistered(acc) {
+		t.Error("IsRegistered after Unregister")
+	}
+	onMain(func() { fb.PressHotkey(acc) })
+	if n := calls.Load(); n != 0 {
+		t.Errorf("a shortcut left bound by a lost race fired %d time(s) after Unregister", n)
 	}
 }
 
@@ -2118,6 +2293,10 @@ func TestSingleInstance(t *testing.T) {
 		if wd == "" {
 			t.Error("working directory not forwarded")
 		}
+		// The window it focuses can take the focus on Wayland.
+		if fb.ActivationToken != "mygo-test-token" {
+			t.Errorf("activation token = %q", fb.ActivationToken)
+		}
 		got <- args
 	})
 	defer off()
@@ -2128,12 +2307,13 @@ func TestSingleInstance(t *testing.T) {
 	onMain(func() { packageURLSchemes = "mygo-test" })
 	defer onMain(func() { packageURLSchemes = schemes })
 	cmd := exec.Command(os.Args[0], "-test.run=^$", "--from-second", "instance", "mygo-test://open?x=1")
-	cmd.Env = append(os.Environ(), "MYGO_TEST_SECOND_INSTANCE=1")
+	cmd.Env = append(os.Environ(), "MYGO_TEST_SECOND_INSTANCE=1", "XDG_ACTIVATION_TOKEN=mygo-test-token")
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.TrimSpace(string(out)) != "forwarded" {
+	// It lets the first instance bring its windows to the front (Windows).
+	if strings.TrimSpace(string(out)) != "forwarded\npassed the foreground on" {
 		t.Fatalf("second instance printed %q", out)
 	}
 	select {
@@ -2141,7 +2321,7 @@ func TestSingleInstance(t *testing.T) {
 		if !slices.Contains(args, "--from-second") || !slices.Contains(args, "instance") {
 			t.Errorf("forwarded args = %q", args)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(wait.Guard):
 		t.Fatal("OnSecondInstance not called")
 	}
 	// Deep links started a second instance: the first one opens them.
@@ -2150,7 +2330,7 @@ func TestSingleInstance(t *testing.T) {
 		if u != "mygo-test://open?x=1" {
 			t.Errorf("OnOpenURL got %q", u)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(wait.Guard):
 		t.Fatal("OnOpenURL not called for the forwarded URL")
 	}
 }

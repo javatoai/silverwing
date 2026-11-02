@@ -115,6 +115,11 @@ func (s *app) discardTaskCreation(state *taskCreationState) {
 	if state == nil || s.taskUnit.state.taskCreation != state {
 		return
 	}
+	if err := s.captureTaskCreationMarkdown(state); err != nil {
+		state.inlineError, s.dialogOpen = err.Error(), true
+		return
+	}
+	closeTaskCreationMarkdown(state)
 	s.cancelTaskCreationReads(state, false)
 	s.closeTaskCreationRequirements()
 	s.closeTaskCreationAINaming()

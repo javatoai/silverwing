@@ -67,7 +67,7 @@ func (s *app) settingsProxy(c *ui.Context, p palette) {
 			ui.TextInput(c.Key("proxy-host"), host).Grow(1).Height(36).Placeholder("代理主机")
 			ui.TextInput(c.Key("proxy-port"), port).Width(110).Height(36).Placeholder("端口")
 		})
-		ui.Column(c).Gap(5).Children(func() {
+		settingsReveal(c, ui.Column(c).Gap(5), p, "不通过代理的地址").Children(func() {
 			label(c, "不通过代理的地址", 11, p.muted)
 			ui.TextInput(c.Key("proxy-no-proxy"), noProxy).FillWidth().Height(36).Placeholder("*.example.com, 192.168.*")
 		})
@@ -75,30 +75,31 @@ func (s *app) settingsProxy(c *ui.Context, p palette) {
 		authentication := s.localSettingBool("proxy-auth-enabled", useAuth)
 		passwordVisible := s.localSettingBool("proxy-password-visible", false)
 		settingsSwitchRow(c, p, "proxy-auth-enabled", "代理认证", "需要账号密码时启用。", authentication)
-		if *authentication {
-			ui.Row(c).Gap(8).Children(func() {
-				ui.TextInput(c.Key("proxy-username"), username).Grow(1).Height(36).Placeholder("账号")
-				input := ui.TextInput(c.Key("proxy-password"), password).Grow(1).Height(36).Placeholder("密码").Label("代理密码")
-				if !*passwordVisible {
-					input.Password()
-				}
-				if action(c, "proxy-password-visibility", "eye", map[bool]string{true: "隐藏密码", false: "显示密码"}[*passwordVisible], p, false) {
-					*passwordVisible = !*passwordVisible
-				}
-			})
-		} else {
+		ui.Row(c).Gap(8).Disabled(!*authentication).Children(func() {
+			ui.TextInput(c.Key("proxy-username"), username).Grow(1).Height(36).Placeholder("账号")
+			input := ui.TextInput(c.Key("proxy-password"), password).Grow(1).Height(36).Placeholder("密码").Label("代理密码")
+			if !*passwordVisible {
+				input.Password()
+			}
+			if action(c, "proxy-password-visibility", "eye", map[bool]string{true: "隐藏密码", false: "显示密码"}[*passwordVisible], p, false) {
+				*passwordVisible = !*passwordVisible
+			}
+		})
+		if !*authentication {
 			*passwordVisible = false
 		}
-		label(c, "代理目标", 12, p.text).FontWeight(500)
-		for _, target := range []struct{ id, title, description string }{
-			{"CODEX", "Codex CLI", "AI 命名与 Codex 扩展。"}, {"GIT", "Git", "仓库和远程分支操作。"},
-			{"WORKSPACE_COMMAND", "服务快捷命令", "Maven、Gradle 等初始化命令。"}, {"MEEGLE", "Meegle CLI", "需求、项目与登录状态。"},
-			{"GENBU", "Genbu CLI", "Tag 构建与发布状态。"},
-		} {
-			selected := containsString(stringArray(s.configArray("commandProxyTargets")), target.id)
-			value := s.settingsBoolInput("proxy-target:"+target.id, selected)
-			settingsSwitchRow(c, p, "proxy-target-"+target.id, target.title, target.description, value)
-		}
+		settingsReveal(c, ui.Column(c), p, "代理目标").Children(func() {
+			label(c, "代理目标", 12, p.text).FontWeight(500)
+			for _, target := range []struct{ id, title, description string }{
+				{"CODEX", "Codex CLI", "AI 命名与 Codex 扩展。"}, {"GIT", "Git", "仓库和远程分支操作。"},
+				{"WORKSPACE_COMMAND", "服务快捷命令", "Maven、Gradle 等初始化命令。"}, {"MEEGLE", "Meegle CLI", "需求、项目与登录状态。"},
+				{"GENBU", "Genbu CLI", "Tag 构建与发布状态。"},
+			} {
+				selected := containsString(stringArray(s.configArray("commandProxyTargets")), target.id)
+				value := s.settingsBoolInput("proxy-target:"+target.id, selected)
+				settingsSwitchRow(c, p, "proxy-target-"+target.id, target.title, target.description, value)
+			}
+		})
 		ui.Row(c).Gap(8).Children(func() {
 			if action(c, "proxy-test", "search", "测试代理", p, false) {
 				s.act("proxy.test", "", "", "", "", "", map[string]any{"url": proxyURL(*host, *port, *protocol)})
@@ -149,8 +150,8 @@ func (s *app) settingsGit(c *ui.Context, p palette) {
 			gitStatus, gitColor = "可用", p.green
 		}
 		settingsToolStatusRow(c, p, "命令状态", gitStatus, gitColor)
-		if strings.HasPrefix(s.settingsUnit.state.settingsOutput, "CLI 状态读取失败：") {
-			settingsToolStatusRow(c, p, "检测错误", strings.TrimPrefix(s.settingsUnit.state.settingsOutput, "CLI 状态读取失败："), p.amber)
+		if message := s.settingsUnit.state.settingsCLIErrors["git"]; message != "" {
+			settingsToolStatusRow(c, p, "检测错误", message, p.amber)
 		}
 		if source := mapString(s.settingsUnit.state.settingsCLIStatus["git"], "source"); source != "" {
 			settingsToolStatusRow(c, p, "来源", cliStatusSourceLabel(source), p.text)
@@ -161,13 +162,7 @@ func (s *app) settingsGit(c *ui.Context, p palette) {
 			s.renderGitEnvironment(c, p)
 		}
 	})
-	settingsHelpCard(c, p, "Git 命令路径", "留空时使用 PATH 自动探测；更改后自动保存。", func() {
-		s.settingsConfigPathRow(c, p, "gitExecutablePath", "Git 可执行文件路径", "留空时使用 PATH 自动探测", false)
-		if s.toolsUnit.state.cliJobs == nil || s.toolsUnit.state.cliJobs.requests["status:git"] == nil {
-			s.settingsCLIPathDiscoveryHint(c, p, "git")
-		}
-		s.settingsCLICommandActions(c, p, "git", resolved)
-	})
+	s.settingsCLIDependency(c, p, "git", "Git 命令配置")
 	settingsHelpCard(c, p, "分支写保护", "匹配实际分支完整名称，忽略大小写。\n\n启用后会禁用受保护分支上的 Commit、Push、Commit & Push，以及需要写入分支的测试 Tag 流程。", func() {
 		branches := stringArray(s.configArray("blockedGitWriteBranches"))
 		for index, branch := range branches {

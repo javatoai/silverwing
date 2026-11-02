@@ -226,9 +226,12 @@ type app struct{}
 
 func (app) SetActivationPolicy(string)                        {}
 func (app) Activate()                                         {}
+func (app) AllowForeground()                                  {}
+func (app) WithActivationToken(_ string, fn func())           { fn() }
 func (app) Hide()                                             {}
 func (app) Unhide()                                           {}
 func (app) IsHidden() bool                                    { return js.Global().Get("document").Get("hidden").Bool() }
+func (app) IsActive() bool                                    { return js.Global().Get("document").Call("hasFocus").Bool() }
 func (app) SetBadge(string)                                   {}
 func (app) Badge() string                                     { return "" }
 func (app) Bounce(bool) int                                   { return 0 }
@@ -243,7 +246,12 @@ func (app) SetOpenAtLogin(bool, string, string, string) error { return errUnsupp
 func (app) OpenAtLogin(string, string, string) bool           { return false }
 func (app) OpenedAtLogin() bool                               { return false }
 func (app) SetDockMenu(*platform.Menu)                        {}
-func (app) ClearBrowsingData(done func(error))                { done(errUnsupported) }
+func (app) ClearBrowsingData(_ platform.DataStore, _ platform.SiteData, done func(error)) {
+	done(errUnsupported)
+}
+func (app) NewDataStore(platform.DataStoreOptions) (platform.DataStore, error) {
+	return nil, errUnsupported
+}
 
 // PreferredLanguages returns the browser's languages, navigator.languages.
 func (app) PreferredLanguages() []string {

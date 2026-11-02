@@ -23,6 +23,7 @@ type workspaceReviewReadingState struct {
 	Kind                domain.WorkspaceGitFileChangeKind
 	PreviewMode         workspace.WorkspaceFilePreviewMode
 	ChangedOnly         bool
+	ContextOnly         bool
 	FileView            string
 	ExpandedDirectories map[string]bool
 	FileScrolls         map[string]ui.ScrollState
@@ -119,7 +120,7 @@ func (s *app) saveWorkspaceReviewSelection(state *workspaceHistoryState) {
 	readings[key] = workspaceReviewReadingState{
 		Path: state.SelectedPath, OldPath: state.SelectedOldPath,
 		Kind: state.SelectedKind, PreviewMode: state.PreviewMode,
-		ChangedOnly: state.ChangedLinesOnly, FileView: state.FileView,
+		ChangedOnly: state.ChangedLinesOnly, ContextOnly: state.ContextLinesOnly, FileView: state.FileView,
 		ExpandedDirectories: cloneBoolMap(state.ExpandedDirectories),
 		FileScrolls:         cloneFileScrollValueMap(state.FileScrolls),
 	}

@@ -232,6 +232,9 @@ func TestLocalMaterialsApplicationOperationsRejectScopeEscapes(t *testing.T) {
 		}
 	}
 	ignore := fixture.physical(t, filepath.Join(scope.Temporary, ".gitignore"))
+	if err := os.WriteFile(ignore, []byte("# user ignore\n*.scratch\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	ignoreBytes, err := os.ReadFile(ignore)
 	if err != nil {
 		t.Fatal(err)
@@ -250,7 +253,6 @@ func TestLocalMaterialsApplicationOperationsRejectScopeEscapes(t *testing.T) {
 		{"other-alias-namespace", application.Action{Kind: "document.read", Path: filepath.Join(secondAlias, "task-a", ".workspace", "materials", documents.LocalMaterialsSubdirectory, "sentinel.txt")}},
 		{"outside-destination", application.Action{Kind: "document.create", Path: filepath.Dir(outside), Text: "must not write", Payload: map[string]any{"name": "sentinel.txt"}}},
 		{"peer-destination", application.Action{Kind: "document.create", Path: peer, Text: "must not write", Payload: map[string]any{"name": "sentinel.txt"}}},
-		{"temp-ignore", application.Action{Kind: "document.create", Path: scope.Temporary, Text: "must not write", Payload: map[string]any{"name": ".gitignore"}}},
 	} {
 		t.Run(item.name, func(t *testing.T) {
 			action := item.action
@@ -264,6 +266,14 @@ func TestLocalMaterialsApplicationOperationsRejectScopeEscapes(t *testing.T) {
 			localMaterialsOperationRequireBytes(t, ignore, ignoreBytes)
 		})
 	}
+	if err := os.Remove(ignore); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.app.Dispatch(context.Background(), application.Action{Kind: "document.create", TaskID: "task-a", Path: scope.Temporary, Text: "# user-created ignore\n", Payload: map[string]any{"name": ".gitignore"}}); err != nil {
+		t.Fatal("temp ignore user creation denied", err)
+	}
+	localMaterialsOperationRequireBytes(t, ignore, []byte("# user-created ignore\n"))
+
 }
 
 func TestLocalMaterialsApplicationOperationsRejectInternalDirectoryLinks(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/domain"
+	markdownui "silverwing-go/internal/ui/markdown"
 )
 
 func TestCommentDraftImageTopLayerAndEscape(t *testing.T) {
@@ -21,7 +22,11 @@ func TestCommentDraftImageTopLayerAndEscape(t *testing.T) {
 				state.draft.Content = state.body
 				path := filepath.Join(t.TempDir(), "screenshot.png")
 				writeMarkdownImageFixture(t, path, 320, 180)
-				state.draft.Images = []domain.CommentDraftAsset{{ID: "image", Name: "截图.png", LocalPath: path}}
+				imageRef := domain.CommentImageMarkdownRef("image")
+				state.draft.Images = []domain.CommentDraftAsset{{ID: "image", Name: "截图.png", MarkdownRef: imageRef, LocalPath: path}}
+				state.body += "\n\n![截图.png](" + imageRef + ")"
+				state.draft.Content = state.body
+				wantBody := state.body
 				pixels := image.NewRGBA(image.Rect(0, 0, 320, 180))
 				for y := 0; y < 180; y++ {
 					for x := 0; x < 320; x++ {
@@ -66,7 +71,7 @@ func TestCommentDraftImageTopLayerAndEscape(t *testing.T) {
 				}
 				tester.Key(0, ui.KeyEscape)
 				tester.Frame()
-				if s.materialsUnit.state.markdownBitmapViewer != nil || !state.open || state.body != "# 你好" || !state.preview {
+				if s.materialsUnit.state.markdownBitmapViewer != nil || !state.open || state.body != wantBody || !state.preview {
 					t.Fatal("Esc closed or changed the underlying draft")
 				}
 				if !tester.Focused("Markdown 图片：截图.png") {
@@ -106,13 +111,13 @@ func TestCommentDraftImageTopLayerAndEscape(t *testing.T) {
 }
 
 func TestCommentDraftImageOwnerInvalidation(t *testing.T) {
-	for _, change := range []string{"closed", "edit", "active", "navigation", "home", "config", "account", "published"} {
+	for _, change := range []string{"closed", "source", "active", "navigation", "home", "config", "account", "published"} {
 		t.Run(change, func(t *testing.T) {
 			s, _, _, state := commentComposerFixture(t)
 			s.backend = nil
 			state.preview = true
-			state.markdown = newReadonlyMarkdownState("comment-draft:"+state.draft.ID, "preview", nil)
-			state.markdown.commentReading = true
+			state.body, state.draft.Content = "preview", "preview"
+			s.ensureCommentMarkdownEditor(state)
 			t.Cleanup(func() { closeMarkdownPreviewState(state.markdown) })
 			s.openMarkdownBitmapViewer(state.markdown, ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 20, 20))))
 			viewer := s.materialsUnit.state.markdownBitmapViewer
@@ -124,8 +129,8 @@ func TestCommentDraftImageOwnerInvalidation(t *testing.T) {
 			switch change {
 			case "closed":
 				state.open = false
-			case "edit":
-				state.preview = false
+			case "source":
+				_ = state.markdown.componentEditor.SetMode(markdownui.Source)
 			case "active":
 				s.requirementUnit.state.commentComposers.active = &requirementCommentComposer{}
 			case "navigation":

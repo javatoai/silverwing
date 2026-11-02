@@ -161,7 +161,7 @@ func (s *app) afterSettingsCLIPathSave(action application.Action) {
 		return
 	}
 	scope, ok := action.Payload["settingsCLIPathSave"].(settingsCLIPathSaveScope)
-	if !ok || scope.Tool != "meegle" || scope.Home != s.snapshot.Home || s.settingsUnit.state.settingsPage != "cli-"+scope.Tool {
+	if !ok || scope.Tool != "meegle" || scope.Home != s.snapshot.Home || !s.settingsCLIPageActive(scope.Tool) {
 		return
 	}
 	key := scope.Tool + "ExecutablePath"

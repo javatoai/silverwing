@@ -20,10 +20,11 @@ const (
 )
 
 type participatedListCacheEnvelope struct {
-	Version   int                `json:"version"`
-	Key       string             `json:"key"`
-	FetchedAt int64              `json:"fetchedAt"`
-	Value     participatedResult `json:"value"`
+	Version             int                `json:"version"`
+	Key                 string             `json:"key"`
+	FetchedAt           int64              `json:"fetchedAt"`
+	Value               participatedResult `json:"value"`
+	EstimateRuleVersion int                `json:"estimateRuleVersion,omitempty"`
 }
 
 type participatedListCacheKeys struct {
@@ -38,6 +39,7 @@ func (s *Service) loadParticipatedList(ctx context.Context, key string, force bo
 	if !force {
 		cached, _, cacheErr := s.readRequirementListCache(key)
 		if cacheErr == nil && cached != nil {
+			cached.Value.FromCache = true
 			return cached.Value, true, nil
 		}
 	}
@@ -50,6 +52,7 @@ func (s *Service) loadParticipatedList(ctx context.Context, key string, force bo
 	}
 	if typed, ok := result.(participatedResult); ok {
 		typed.FetchedAt = startedAt
+		typed.FromCache = false
 		return typed, false, nil
 	}
 	return result, false, nil
@@ -73,9 +76,10 @@ func (s *Service) readConfirmedRequirementListCache(ctx context.Context, expecte
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
-	if _, err := s.confirmedRequirementIdentity(expected); err != nil {
+	if confirmed, err := s.confirmedRequirementIdentity(expected); err != nil || !confirmed {
 		return nil, false, err
 	}
+	cached.Value.FromCache = true
 	return cached.Value, true, nil
 }
 
@@ -152,8 +156,14 @@ func (s *Service) readRequirementListCache(key string) (*participatedListCacheEn
 		discardRequirementListCache(s.paths.Cache, path)
 		return nil, path, errors.New("需求列表缓存格式不匹配或已过期")
 	}
+	if saved.EstimateRuleVersion != personalEstimateRuleVersion {
+		// Re-read derived estimates under the current rule without touching
+		// catalog, account, configuration or unrelated metadata caches.
+		return nil, path, nil
+	}
 	normalizeParticipatedResult(&saved.Value)
 	saved.Value.FetchedAt = saved.FetchedAt
+	saved.Value.FromCache = false
 	return &saved, path, nil
 }
 
@@ -167,13 +177,15 @@ func (s *Service) writeRequirementListCache(key string, result participatedResul
 	requirementCacheMu.Lock()
 	defer requirementCacheMu.Unlock()
 	normalizeParticipatedResult(&result)
+	result.FromCache = false
 	fetchedAt := result.FetchedAt
 	result.FetchedAt = 0
 	envelope := participatedListCacheEnvelope{
-		Version:   participatedListCacheVersion,
-		Key:       requirementCacheDigest(key),
-		FetchedAt: fetchedAt,
-		Value:     result,
+		Version:             participatedListCacheVersion,
+		Key:                 requirementCacheDigest(key),
+		FetchedAt:           fetchedAt,
+		Value:               result,
+		EstimateRuleVersion: personalEstimateRuleVersion,
 	}
 	data, err := marshalRequirementJSON(envelope)
 	if err != nil {

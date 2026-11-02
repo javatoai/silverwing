@@ -116,6 +116,7 @@ func (ip *inlineParser) wwwLink() bool {
 	for end < len(data) && !isUnicodeSpaceByte(data[end]) && data[end] != '<' {
 		end++
 	}
+	ip.d.steps += end
 	end = autolinkDelim(data, end)
 	if end == 0 {
 		return false
@@ -150,6 +151,7 @@ func (ip *inlineParser) urlLink() bool {
 	for rewind < len(ln.text) && isASCIILetter(ln.text[len(ln.text)-1-rewind]) {
 		rewind++
 	}
+	ip.d.steps += rewind
 	start := pos - rewind
 	scheme := strings.ToLower(s[start:pos])
 	if scheme != "http" && scheme != "https" && scheme != "ftp" {
@@ -167,6 +169,7 @@ func (ip *inlineParser) urlLink() bool {
 	for end < len(data) && !isUnicodeSpaceByte(data[end]) && data[end] != '<' {
 		end++
 	}
+	ip.d.steps += end
 	end = autolinkDelim(data, end)
 	if end == 0 {
 		return false
@@ -213,8 +216,10 @@ func (ip *inlineParser) splitEmails(c int32) {
 		data := nd.text
 		a, b, mailto, ok := findEmail(data)
 		if !ok {
+			ip.d.steps += len(data)
 			return
 		}
+		ip.d.steps += b
 		source := ip.s[nd.start:min(nd.end, len(ip.s))]
 		off := func(i int) int { return nd.start + literalToSource(source, data, i) }
 		start, end := nd.start, nd.end

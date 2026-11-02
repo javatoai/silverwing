@@ -43,6 +43,7 @@ type taskCreationState struct {
 	renderingInputs   bool
 	draft             domain.RequirementDraftState
 	notes             string
+	markdown          *taskCreationMarkdownState
 	groupID           string
 	groupQuery        string
 	serviceSearch     string
@@ -126,6 +127,7 @@ type taskCreationGroupDraft struct {
 var taskCreationSequence atomic.Uint64
 
 func (s *app) initTaskCreation(title, requirementTitle, requirementURL string) {
+	closeTaskCreationMarkdown(s.taskUnit.state.taskCreation)
 	s.cancelTaskCreationReads(s.taskUnit.state.taskCreation, false)
 	s.closeTaskCreationRequirements()
 	s.closeTaskCreationAINaming()
@@ -169,7 +171,7 @@ func (s *app) initTaskCreation(title, requirementTitle, requirementURL string) {
 	}
 	s.taskUnit.state.taskCreation = state
 	s.syncTaskCreationLegacySelection()
-	s.loadTaskCreationWorkspaceTools()
+	s.loadTaskCreationTemplates()
 }
 
 func (s *app) loadTaskCreationTemplates() {
@@ -949,6 +951,10 @@ func (s *app) beginTaskCreationPreflight() bool {
 	if state == nil {
 		return false
 	}
+	if err := s.captureTaskCreationMarkdown(state); err != nil {
+		state.inlineError = err.Error()
+		return true
+	}
 	s.syncTaskCreationDraft()
 	s.cancelTaskCreationAINaming()
 	if s.busy {
@@ -1028,6 +1034,10 @@ func taskCreationActionPayload(payload map[string]any, token string) map[string]
 func (s *app) submitTaskCreation(keys []workspace.BranchReuseKey) {
 	state := s.taskUnit.state.taskCreation
 	if state == nil || state.preview == nil {
+		return
+	}
+	if err := s.captureTaskCreationMarkdown(state); err != nil {
+		state.inlineError = err.Error()
 		return
 	}
 	if state.preview.signature != s.taskCreationSignature() {
@@ -1112,6 +1122,10 @@ func (s *app) toggleTaskCreationTemplate(template domain.AgentTaskTemplate) {
 	if state == nil {
 		return
 	}
+	if err := s.captureTaskCreationMarkdown(state); err != nil {
+		state.inlineError = err.Error()
+		return
+	}
 	var selected *domain.AgentTaskTemplate
 	selectedID := state.selectedTemplate
 	if selectedID == "" {
@@ -1122,14 +1136,18 @@ func (s *app) toggleTaskCreationTemplate(template domain.AgentTaskTemplate) {
 	}
 	if selected != nil && selected.ID == template.ID {
 		if state.notes == template.Content {
-			state.notes = ""
+			if !s.replaceTaskCreationMarkdownNotes(state, "") {
+				return
+			}
 		}
 		state.selectedTemplate = ""
 		state.pendingTemplate = ""
 		return
 	}
 	if strings.TrimSpace(state.notes) == "" || selected != nil && state.notes == selected.Content {
-		state.notes = template.Content
+		if !s.replaceTaskCreationMarkdownNotes(state, template.Content) {
+			return
+		}
 		state.selectedTemplate = template.ID
 		state.pendingTemplate = ""
 		return
@@ -1144,7 +1162,9 @@ func (s *app) confirmTaskCreationTemplateReplacement(confirm bool) {
 	}
 	template := s.taskCreationTemplate(state.pendingTemplate)
 	if confirm && template != nil {
-		state.notes = template.Content
+		if !s.replaceTaskCreationMarkdownNotes(state, template.Content) {
+			return
+		}
 		state.selectedTemplate = template.ID
 	}
 	state.pendingTemplate = ""
@@ -1384,6 +1404,7 @@ func (s *app) taskCreationActionResult(action application.Action, result applica
 		}
 		return true
 	case "task.create":
+		closeTaskCreationMarkdown(state)
 		s.closeTaskCreationRequirements()
 		s.closeTaskCreationAINaming()
 		s.stopTaskCreationPreviewDebounce()
@@ -1584,6 +1605,7 @@ func (s *app) renderTaskCreationDialog(c *ui.Context, p palette) bool {
 						})
 						s.syncTaskCreationDraft()
 						s.renderTaskCreationWorkspaceTools(c, p)
+						s.renderTaskCreationMarkdownNotes(c, p)
 						if state.inlineError != "" && !(state.phase == "creating" && state.creationProgress != nil) {
 							if state.validationTarget == nil || state.validationTarget.serviceID == "" && state.validationTarget.field != "service" {
 								label(c, state.inlineError, 11, p.amber).Wrap()
@@ -1639,6 +1661,11 @@ func (s *app) renderTaskCreationDialog(c *ui.Context, p palette) bool {
 			})
 		})
 	})
+	dialog.OnShortcut(ui.Cmd, ui.KeyS, func() {
+		if !inputsLocked && !s.busy {
+			s.beginTaskCreationPreflight()
+		}
+	})
 	if dialog.Dismissed() {
 		if inputsLocked {
 			open = true
@@ -1652,154 +1679,17 @@ func (s *app) renderTaskCreationDialog(c *ui.Context, p palette) bool {
 		s.dialogOpen = false
 	}
 	if !s.dialogOpen {
+		if err := s.captureTaskCreationMarkdown(state); err != nil {
+			state.inlineError = err.Error()
+			s.dialogOpen = true
+			return true
+		}
 		s.requestTaskCreationDismiss()
 		return true
 	}
 	s.renderTaskCreationBranchReuseDialog(c, p, state)
+	s.renderTaskCreationGeneratedMarkdown(c, p, state)
 	return true
-}
-
-func (s *app) renderTaskCreationNotesAndPreview(c *ui.Context, p palette) {
-	state := s.taskUnit.state.taskCreation
-	if state == nil {
-		return
-	}
-	ui.Column(c).FillWidth().Padding(12).Gap(9).Background(p.soft).Border(1, p.line).Radius(10).Children(func() {
-		ui.Row(c).Gap(8).Children(func() {
-			for _, tab := range []struct{ id, label string }{{"preview", "任务说明预览"}, {"notes", "编辑任务说明"}} {
-				button := ui.ButtonBase(c.Key("task-create-right-tab-"+tab.id)).Height(30).Padding(0, 12).Radius(8).Label(tab.label)
-				if state.rightTab == tab.id {
-					button.Background(p.selected)
-				}
-				button.Children(func() { label(c, tab.label, 11, p.text) })
-				if button.Clicked() {
-					state.rightTab = tab.id
-				}
-			}
-			if state.rightTab == "preview" {
-				label(c, "实时更新", 10, p.muted)
-			}
-		})
-		if state.rightTab == "notes" {
-			ui.Column(c).Gap(6).Children(func() {
-				label(c, "从模板填充（单选）", 11, p.muted)
-				if state.templatesLoading {
-					label(c, "正在读取任务说明模板…", 11, p.muted)
-				} else if state.templatesError != "" {
-					ui.Row(c).Gap(8).Children(func() {
-						label(c, "模板读取失败："+state.templatesError, 11, p.amber).Grow(1)
-						if action(c, "task-create-templates-retry", "refresh", "重试", p, false) {
-							state.templatesError = ""
-							s.loadTaskCreationTemplates()
-						}
-					})
-				} else if len(state.templates) == 0 {
-					label(c, "还没有可用模板，可在设置中创建任务说明模板。", 11, p.muted)
-				} else {
-					ui.Row(c).Gap(6).Children(func() {
-						for _, template := range state.templates {
-							button := ui.ButtonBase(c.Key("task-create-template-"+template.ID)).Height(30).Padding(0, 10).Radius(16).Label(template.Name).Tooltip(template.Name)
-							if state.selectedTemplate == template.ID {
-								button.Background(p.selected)
-							}
-							button.Children(func() { label(c, template.Name, 11, p.text).SingleLine() })
-							if button.Clicked() {
-								s.toggleTaskCreationTemplate(template)
-							}
-						}
-					})
-				}
-				if state.pendingTemplate != "" {
-					target := s.taskCreationTemplate(state.pendingTemplate)
-					name := state.pendingTemplate
-					if target != nil {
-						name = target.Name
-					}
-					ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-						label(c, "替换当前手工编辑的说明为“"+name+"”？", 11, p.amber).Grow(1)
-						if action(c, "task-create-template-confirm", "check", "替换", p, true) {
-							s.confirmTaskCreationTemplateReplacement(true)
-						}
-						if action(c, "task-create-template-cancel", "close", "保留当前内容", p, false) {
-							s.confirmTaskCreationTemplateReplacement(false)
-						}
-					})
-				}
-				ui.TextArea(c.Key("task-create-notes"), &state.notes).FillWidth().Height(190).Padding(10).Background(p.surface).Border(1, p.line).Radius(8)
-				label(c, "创建后可在任务详情中继续阅读和管理任务说明。", 10, p.muted)
-			})
-			s.syncTaskCreationDraft()
-			return
-		}
-		if state.materialsPreviewPending {
-			label(c, "正在解析需求资料目录…", 10, p.muted)
-		} else if state.materialsPreviewErr != "" {
-			label(c, "需求资料预览提示："+state.materialsPreviewErr, 10, p.amber)
-		}
-		if state.agentPreviewBusy {
-			label(c, "正在生成任务说明预览…", 12, p.muted)
-			return
-		}
-		if state.agentPreviewErr != "" {
-			label(c, "预览失败："+state.agentPreviewErr, 12, p.amber)
-			return
-		}
-		if state.agentPreview == nil || len(state.agentPreview.Files) == 0 {
-			label(c, "尚未生成任务说明预览。", 12, p.muted)
-			return
-		}
-		selected := -1
-		for index := range state.agentPreview.Files {
-			if state.agentPreview.Files[index].RelativePath == state.agentPreviewFile {
-				selected = index
-				break
-			}
-		}
-		if selected < 0 {
-			state.agentPreviewFile = firstTaskAgentPreviewFile(state.agentPreview.Files)
-			for index := range state.agentPreview.Files {
-				if state.agentPreview.Files[index].RelativePath == state.agentPreviewFile {
-					selected = index
-					break
-				}
-			}
-		}
-		if selected < 0 {
-			settingsMuted(c, p, "当前没有可预览的任务说明。")
-			return
-		}
-		ui.Row(c).Gap(6).Children(func() {
-			for _, tab := range []struct{ id, label string }{{"preview", "预览"}, {"source", "源码"}} {
-				button := ui.ButtonBase(c.Key("task-create-preview-mode-"+tab.id)).Height(26).Padding(0, 9).Radius(7).Label(tab.label)
-				if state.agentPreviewTab == tab.id {
-					button.Background(p.selected)
-				}
-				button.Children(func() { label(c, tab.label, 10, p.text) })
-				if button.Clicked() {
-					state.agentPreviewTab = tab.id
-				}
-			}
-			if action(c, "task-create-preview-copy", "copy", "复制源码", p, false) {
-				state.agentPreviewCopy = ""
-				if s.copyTextToClipboard(c.Services(), state.agentPreview.Files[selected].Content, "") {
-					state.agentPreviewCopy = "已复制 " + state.agentPreview.Files[selected].RelativePath
-				}
-			}
-		})
-		if state.agentPreviewTab == "source" {
-			file := state.agentPreview.Files[selected]
-			renderNativeCodePreview(c, p, &state.agentCodePreview,
-				state.token+"\x00"+file.RelativePath, file.RelativePath, file.Content,
-				"task-create-preview-content-"+file.RelativePath).Height(230)
-		} else {
-			ui.Scroll(c).FillWidth().Height(230).Padding(10).Background(p.surface).Border(1, p.line).Radius(8).Children(func() {
-				renderMarkdown(c, p, state.agentPreview.Files[selected].Content)
-			})
-		}
-		if state.agentPreviewCopy != "" {
-			label(c, state.agentPreviewCopy, 10, p.muted)
-		}
-	})
 }
 
 func (s *app) renderTaskCreationWorkspaceTools(c *ui.Context, p palette) {

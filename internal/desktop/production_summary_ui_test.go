@@ -146,8 +146,7 @@ func TestProductionIncludedRelationsDisableMergeButtons(t *testing.T) {
 						t.Fatal("missing inclusion status")
 					}
 					tester.Move(status.X+status.W/2, status.Y+status.H/2)
-					time.Sleep(650 * time.Millisecond)
-					tester.Frame()
+					tester.Advance(650 * time.Millisecond)
 					if !tester.HasText("master 已包含生产 Tag " + v.Preview.ProductionTag + "。") {
 						t.Fatal("inclusion relation was lost from the status tooltip")
 					}
@@ -189,6 +188,7 @@ func TestProductionCreateConfirmationHasCollapsedTechnicalDetail(t *testing.T) {
 				if err := tester.Click("详细信息"); err != nil {
 					t.Fatal(err)
 				}
+				tester.Advance(220 * time.Millisecond)
 				if !tester.HasText(v.Preview.MainSHA) || !tester.HasText("synthetic technical commit details") {
 					t.Fatal("expanded detail lost full original content")
 				}
@@ -200,8 +200,8 @@ func TestProductionCreateConfirmationHasCollapsedTechnicalDetail(t *testing.T) {
 				}
 				captureProductionSummary(t, tester, fmt.Sprintf("confirm-%d-dark-%t-expanded", width, dark))
 				text, ok := tester.Find(d.Detail)
-				if !ok {
-					t.Fatal("expanded technical detail is not selectable text")
+				if !ok || text.W <= 0 || text.H <= 0 {
+					t.Fatalf("expanded technical detail is not visible selectable text: %+v", text)
 				}
 				tester.ClickAt(text.X+12, text.Y+7)
 				tester.Key(ui.Cmd, ui.KeyA)

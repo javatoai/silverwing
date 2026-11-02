@@ -36,6 +36,7 @@ type settingsAutosaveState struct {
 	active  *settingsAutosaveAttempt
 	timer   *time.Timer
 	failure string
+	saved   bool
 	closing bool
 	closed  bool
 }
@@ -147,6 +148,7 @@ func (s *app) finishSettingsAutosaveAction(action application.Action, result app
 			s.lastError = ""
 		} else {
 			attempt.entry.failed = false
+			state.saved = true
 			// Only the successful save may normalize its unchanged draft. Other
 			// background reads must leave the in-flight input intact.
 			if !attempt.entry.pending && attempt.entry.latest != nil && attempt.entry.latest() == attempt.value {

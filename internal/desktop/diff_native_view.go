@@ -37,13 +37,14 @@ func newDiffNativeViewState(oldText, newText string) *diffNativeViewState {
 		newText:      newText,
 		contextLines: 3,
 		view: editor.DiffState{
-			Old:          editor.NewBuffer(oldText),
-			New:          editor.NewBuffer(newText),
-			Layout:       editor.DiffSplit,
-			SplitRatio:   .5,
-			Inline:       editor.DiffInlineWordAlt,
-			Indicators:   editor.DiffClassic,
-			ContextLines: 3,
+			Old:            editor.NewBuffer(oldText),
+			New:            editor.NewBuffer(newText),
+			Layout:         editor.DiffSplit,
+			SplitRatio:     .5,
+			SyncHorizontal: true,
+			Inline:         editor.DiffInlineWordAlt,
+			Indicators:     editor.DiffClassic,
+			ContextLines:   3,
 		},
 	}
 }
@@ -107,6 +108,7 @@ func (view *diffNativeViewState) render(c *ui.Context, p palette, collapse, wrap
 	view.view.LineSelection = false
 	view.view.NoLineNumbers = false
 	view.view.Wrap = wrap
+	view.view.SyncHorizontal = true
 	view.view.Font = ui.Font{Family: "monospace", Size: textEditorFontSize}
 	view.view.LineHeight = textEditorLineHeight
 	view.view.Theme = textEditorTheme(p)

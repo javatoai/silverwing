@@ -1,30 +1,15 @@
 package workspace
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"silverwing-go/internal/documents"
 	"strings"
 )
 
 func splitGitNUL(text string) []string {
 	return strings.FieldsFunc(text, func(r rune) bool { return r == 0 })
-}
-
-func materialsGitOwned(path, subdirectory string) bool {
-	parts := strings.Split(filepath.ToSlash(path), "/")
-	if len(parts) < 4 || !documents.MaterialsYear(parts[0]) || !documents.MaterialsRequirementName(parts[1]) || parts[2] != subdirectory || strings.EqualFold(subdirectory, "temp") {
-		return false
-	}
-	for _, part := range parts {
-		if part == "." || part == ".." || strings.EqualFold(part, ".git") || strings.HasPrefix(strings.ToLower(part), ".silverwing-") {
-			return false
-		}
-	}
-	return true
 }
 
 // Inspect every existing path component, including Windows junctions. For a
@@ -65,33 +50,4 @@ func materialsGitSafePath(root, path string, rejectNested bool) error {
 		}
 	}
 	return nil
-}
-
-func (s *MaterialsGitSyncService) materialPaths(ctx context.Context, scope MaterialsGitScope) ([]string, error) {
-	// ls-files includes tracked deletions, honors ignore rules for untracked
-	// files and never recurses into submodules. Literal arguments protect names
-	// containing pathspec metacharacters such as brackets and a leading colon.
-	r, err := s.run(ctx, scope, true, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
-	if err != nil {
-		return nil, err
-	}
-	seen := map[string]bool{}
-	var result []string
-	for _, path := range splitGitNUL(r.Stdout) {
-		if seen[path] || !materialsGitOwned(path, scope.Subdirectory) {
-			continue
-		}
-		seen[path] = true
-		absolute := filepath.Join(scope.Root, filepath.FromSlash(path))
-		if err := materialsGitSafePath(scope.Root, absolute, true); err != nil {
-			return nil, err
-		}
-		if info, err := os.Lstat(absolute); err == nil && !info.Mode().IsRegular() {
-			return nil, fmt.Errorf("资料不是普通文件：%s", path)
-		} else if err != nil && !os.IsNotExist(err) {
-			return nil, err
-		}
-		result = append(result, path)
-	}
-	return result, nil
 }

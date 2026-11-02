@@ -780,7 +780,7 @@ func (e *coreText) styleSpans(attributed uintptr, style Style, spans []Span, tex
 			// Each rune is an object of its own: a run Core Text sizes by
 			// its delegate.
 			for k := start; k < to; k++ {
-				if d := runDelegates.delegate(objects, sp.ObjectWidth, sp.ObjectHeight); d != 0 {
+				if d := runDelegates.delegate(objects, sp.ObjectWidth, sp.ObjectHeight, sp.ObjectDescent); d != 0 {
 					ct.attributedSet(styled, cfRange{at[k], at[k+1] - at[k]}, runDelegates.attribute, d)
 					ct.release(d)
 				}
@@ -986,7 +986,10 @@ func (e *coreText) shape(text []rune, style Style, spans []Span, width float32, 
 	for start := 0; start < n; {
 		count := n - start
 		if width > 0 {
-			count = max(ct.suggestLineBreak(typesetter, start, float64(width)), 1)
+			// A width measured by Layout sums advances in float32, which
+			// may round below Core Text's own line width and wrap the
+			// last word; allow a 1/1024 point, as Pango's units do.
+			count = max(ct.suggestLineBreak(typesetter, start, float64(width)+1.0/1024), 1)
 			// Core Text breaks a word that does not fit a line; carry
 			// on to the next break instead.
 			if breaks != nil {

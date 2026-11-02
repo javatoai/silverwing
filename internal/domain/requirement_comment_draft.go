@@ -22,6 +22,9 @@ type CommentDraftAsset struct {
 	Error       string         `json:"error,omitempty"`
 	Upload      *CommentUpload `json:"upload,omitempty"`
 	OriginalURL string         `json:"originalUrl,omitempty"`
+	// MarkdownRef is a registered, draft-local image destination. Its cache
+	// remains available after deleting an occurrence so Undo can restore it.
+	MarkdownRef string `json:"markdownRef,omitempty"`
 }
 
 type CommentEditTarget struct {
@@ -59,18 +62,49 @@ func (d RequirementCommentDraft) Editing() bool { return d.Edit != nil && d.Edit
 
 func (d RequirementCommentDraft) ActiveImages() []CommentDraftAsset {
 	urls := map[string]bool{}
-	if d.Editing() {
-		for _, n := range markdowntext.CommentImages(d.Content) {
-			urls[n.Destination] = true
-		}
+	for _, n := range markdowntext.CommentImages(d.Content) {
+		urls[n.Destination] = true
 	}
 	var images []CommentDraftAsset
+	seen := map[string]bool{}
 	for _, a := range d.Images {
-		if a.OriginalURL == "" || urls[a.OriginalURL] {
+		if seen[a.ID] {
+			continue
+		}
+		if a.MarkdownRef != "" && (a.MarkdownRef != CommentImageMarkdownRef(a.ID) || !urls[a.MarkdownRef]) {
+			continue
+		}
+		if a.MarkdownRef != "" || a.OriginalURL == "" || urls[a.OriginalURL] {
 			images = append(images, a)
+			seen[a.ID] = true
 		}
 	}
 	return images
+}
+
+func CommentImageMarkdownRef(assetID string) string { return "#sw-comment-image/" + assetID }
+
+// NormalizeImageReferences upgrades editable legacy append-only images in one
+// draft transaction. Pending attempts retain their exact publication snapshot.
+func (d *RequirementCommentDraft) NormalizeImageReferences() bool {
+	if d == nil || d.Pending() {
+		return false
+	}
+	changed := false
+	for i := range d.Images {
+		a := &d.Images[i]
+		if a.MarkdownRef != "" || a.OriginalURL != "" {
+			continue
+		}
+		a.MarkdownRef = CommentImageMarkdownRef(a.ID)
+		markup := commentImageMarkup(a.Name, a.MarkdownRef, "")
+		if d.Content != "" {
+			d.Content += "\n\n"
+		}
+		d.Content += markup
+		changed = true
+	}
+	return changed
 }
 
 func (d RequirementCommentDraft) HasChanges() bool {
@@ -103,43 +137,49 @@ func (d RequirementCommentDraft) HasContent() bool {
 	return strings.TrimSpace(d.Content) != "" || len(d.ActiveImages()) > 0 || d.Attachment != nil
 }
 
-// Only explicitly staged images are appended. Arbitrary local Markdown paths
-// are never interpreted as upload requests.
+// Only registered staged images authorize uploads. Rewriting targets real image
+// nodes, preserving their position, alt text, title and surrounding Markdown.
 func (d RequirementCommentDraft) Markdown(image func(CommentDraftAsset) (string, string)) string {
 	parts := []string{}
 	body := d.Content
 	images := d.ActiveImages()
-	if d.Editing() {
-		replacements := map[string]*string{}
-		annotations := map[string]string{}
-		for _, a := range images {
-			if a.OriginalURL != "" {
-				u, token := image(a)
-				replacements[a.OriginalURL] = &u
-				annotations[a.OriginalURL] = token
-			}
+	replacements := map[string]*string{}
+	annotations := map[string]string{}
+	for _, a := range images {
+		ref := a.MarkdownRef
+		if ref == "" {
+			ref = a.OriginalURL
 		}
-		body = markdowntext.RewriteCommentImages(body, replacements, annotations)
+		if ref != "" {
+			u, token := image(a)
+			replacements[ref] = &u
+			annotations[ref] = token
+		}
 	}
+	body = markdowntext.RewriteCommentImages(body, replacements, annotations)
 	if body := strings.TrimSpace(body); body != "" {
 		parts = append(parts, body)
 	}
 	for _, asset := range images {
-		if asset.OriginalURL != "" {
+		if asset.OriginalURL != "" || asset.MarkdownRef != "" {
 			continue
 		}
-		name := strings.NewReplacer("\\", "\\\\", "[", "\\[", "]", "\\]", "\r", "", "\n", " ").Replace(asset.Name)
 		url, token := image(asset)
-		markup := "![" + name + "](" + url + ")"
-		if token != "" {
-			markup += "<!--" + token + "-->"
-		}
-		parts = append(parts, markup)
+		parts = append(parts, commentImageMarkup(asset.Name, url, token))
 	}
 	if len(parts) == 0 && d.Attachment != nil {
 		parts = append(parts, "附件："+d.Attachment.Name)
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+func commentImageMarkup(name, destination, token string) string {
+	name = strings.NewReplacer("\\", "\\\\", "[", "\\[", "]", "\\]", "\r", "", "\n", " ").Replace(name)
+	markup := "![" + name + "](" + destination + ")"
+	if token != "" {
+		markup += "<!--" + token + "-->"
+	}
+	return markup
 }
 
 type CommentPublishProgress struct {

@@ -86,7 +86,9 @@ func (s *app) renderTaskNoteMenuItems(c *ui.Context, menu *overflowMenuBuilder, 
 func (s *app) renderInstructionTextArea(c *ui.Context, p palette, key, kind string, tab int, content *string, height float32) {
 	state := s.ensureTaskNotesUI()
 	if state.activeKey != key {
-		s.deactivateInstructionEditor()
+		if !s.leaveSettingsInstructionEditor() {
+			return
+		}
 		state.activeKey, state.activeKind, state.activeTab = key, kind, tab
 	}
 	state.activeContent = *content
@@ -112,15 +114,22 @@ func (s *app) renderInstructionTextArea(c *ui.Context, p palette, key, kind stri
 		})
 		return
 	}
+	if kind == "settings" {
+		s.renderSettingsInstructionMarkdown(c, p, markdown, height)
+		return
+	}
 	s.renderInstructionMarkdown(c, p, markdown, height)
 	s.commitMarkdownEditorSource(markdown, markdown.doc.Source())
 }
 
 func (s *app) renderInstructionSaveStatus(c *ui.Context, p palette, key string) {
-	if markdownReadingOnly || s.materialsUnit.state.markdownAutosave == nil {
+	if instructionMarkdownReadOnly(s, key) || s.materialsUnit.state.markdownAutosave == nil {
 		return
 	}
 	status := s.materialsUnit.state.markdownAutosave.Status(key)
+	if !status.Conflict && status.Error == "" {
+		return
+	}
 	labelText := markdownSaveLabel(status)
 	if labelText == "" {
 		labelText = "已自动保存"
@@ -169,6 +178,12 @@ func (s *app) requestTaskInstructionRead(acceptDisk bool) {
 
 func (s *app) requestSettingsInstructionRead(acceptDisk bool) {
 	state := s.ensureTaskNotesUI()
+	if markdown := state.activeMarkdown; state.activeKind == "settings" && markdown != nil && markdown.live != nil {
+		if err := s.captureSettingsInstructionInput(markdown); err != nil {
+			state.settingsReadError = err.Error()
+			return
+		}
+	}
 	scope, groupID := s.settingsInstructionScope()
 	if s.busy {
 		state.settingsReadDeferred = true
@@ -180,7 +195,11 @@ func (s *app) requestSettingsInstructionRead(acceptDisk bool) {
 	state.settingsRequestGeneration = state.settingsGeneration
 	state.settingsRequestPending = true
 	state.settingsReadError = ""
-	payload := map[string]any{"scope": scope, "instructionGeneration": state.settingsRequestGeneration}
+	payload := map[string]any{"scope": scope, "instructionGeneration": state.settingsRequestGeneration, "instructionHome": s.snapshot.Home}
+	if markdown := state.activeMarkdown; state.activeKind == "settings" && markdown != nil && markdown.live != nil {
+		payload["instructionBufferVersion"] = markdown.live.Buffer().Version()
+	}
+	s.captureSettingsInstructionSaveVersion(payload, scope, groupID)
 	if scope == "group" {
 		payload["groupId"] = groupID
 	}
@@ -204,6 +223,12 @@ func (s *app) settingsInstructionScope() (scope, groupID string) {
 func (s *app) requestInstructionDiskVersion(key string) {
 	ref, ok := s.instructionSaveRef(key)
 	if !ok {
+		return
+	}
+	if ref.localTaskRules {
+		if notes := s.taskUnit.state.taskNotesUI; notes != nil {
+			s.requestTaskLocalNoteRead(notes.localDrafts[key], true)
+		}
 		return
 	}
 	if ref.scope == "group" || ref.scope == "global" {
@@ -235,7 +260,8 @@ func (s *app) applyInstructionReadResult(action application.Action, result appli
 	if scope == "global" || scope == "group" {
 		contextKey := scope + ":" + payloadString(action.Payload, "groupId")
 		if contextKey != s.settingsUnit.state.settingsAgentContext || s.settingsUnit.state.settingsPage != "agents" ||
-			(generation != 0 && generation != state.settingsRequestGeneration) {
+			(generation != 0 && generation != state.settingsRequestGeneration) ||
+			(payloadString(action.Payload, "instructionHome") != "" && normalizeIdentityPath(payloadString(action.Payload, "instructionHome")) != normalizeIdentityPath(s.snapshot.Home)) {
 			return
 		}
 	} else {
@@ -248,9 +274,31 @@ func (s *app) applyInstructionReadResult(action application.Action, result appli
 		}
 	}
 	key := s.instructionAutosaveKey(scope, taskID, groupID, path)
+	// Even a clean draft may contain edits saved after this read started. Never
+	// let its older response reset the native buffer, history or baseline hash.
+	if (scope == "global" || scope == "group") && !s.instructionReadMayReplaceDraft(action, key) {
+		state.settingsRequestPending = false
+		state.settingsReadDeferred = !s.settingsUnit.state.settingsAgentLoaded
+		state.settingsReadAcceptDisk = false
+		state.settingsReadError = ""
+		return
+	}
+	if markdown := state.activeMarkdown; state.activeKey == key && markdown != nil && markdown.live != nil {
+		if markdown.live.Composing() {
+			state.settingsRequestPending = false
+			state.settingsReadError = "输入尚未结束，已保留当前内容，请稍后重新读取"
+			return
+		}
+		s.observeSettingsInstructionInput(markdown)
+	}
 	s.preserveActiveInstructionDraft(key)
 	key, content, readOnly := s.seedInstructionAutosave(action, result)
 	if key == "" {
+		if scope == "global" || scope == "group" {
+			state.settingsRequestPending = false
+			state.settingsReadDeferred = !s.settingsUnit.state.settingsAgentLoaded
+			state.settingsReadAcceptDisk = false
+		}
 		return
 	}
 	if scope == "global" || scope == "group" {
@@ -294,11 +342,13 @@ func (s *app) applyInstructionReadFailure(action application.Action, err error) 
 	}
 	if scope == "global" || scope == "group" {
 		contextKey := scope + ":" + payloadString(action.Payload, "groupId")
-		if contextKey == s.settingsUnit.state.settingsAgentContext && s.settingsUnit.state.settingsPage == "agents" && (generation == 0 || generation == state.settingsRequestGeneration) {
+		if contextKey == s.settingsUnit.state.settingsAgentContext && s.settingsUnit.state.settingsPage == "agents" && (generation == 0 || generation == state.settingsRequestGeneration) &&
+			(payloadString(action.Payload, "instructionHome") == "" || normalizeIdentityPath(payloadString(action.Payload, "instructionHome")) == normalizeIdentityPath(s.snapshot.Home)) {
 			state.settingsRequestPending = false
 			state.settingsReadDeferred = false
 			state.settingsReadError = message
-			s.settingsUnit.state.settingsAgentLoaded = false
+			// Refresh failure keeps a previously opened editor and its binding
+			// usable. Initial reads and scope switches already start unloaded.
 		}
 		return
 	}
@@ -346,11 +396,17 @@ func (s *app) deactivateInstructionEditor() {
 	if state == nil {
 		return
 	}
-	state.localActiveKey = ""
 	if state.activeKey == "" {
+		state.localActiveKey = ""
 		return
 	}
 	if markdown := state.activeMarkdown; markdown != nil {
+		if markdown.live != nil {
+			if err := s.captureSettingsInstructionInput(markdown); err != nil {
+				s.lastError = err.Error()
+				return
+			}
+		}
 		s.cancelInstructionMarkdownDrafts(markdown)
 		suspendInstructionMarkdownPreviews(markdown)
 		s.commitMarkdownEditorSource(markdown, markdown.doc.Source())
@@ -361,6 +417,7 @@ func (s *app) deactivateInstructionEditor() {
 	s.editInstructionAutosave(state.activeKey, state.activeContent)
 	s.setInstructionComposing(state.activeKey, false)
 	state.activeKey = ""
+	state.localActiveKey = ""
 	state.activeKind = ""
 	state.activeTab = -1
 	state.activeComposing = false
@@ -388,6 +445,10 @@ func (s *app) activeInstructionContent(state *taskNotesUIState) string {
 		}
 	case "settings":
 		return s.settingsUnit.state.settingsAgentContent
+	case "task-local":
+		if d := state.localDrafts[state.localActiveKey]; d != nil {
+			return d.text()
+		}
 	}
 	return state.activeContent
 }

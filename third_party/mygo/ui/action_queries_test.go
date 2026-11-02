@@ -57,8 +57,8 @@ func TestActionQueriesReadPendingBoundEdit(t *testing.T) {
 				if name == "DoubleClicked" {
 					presses = 2
 				}
-				for range presses {
-					ev := platform.SurfaceEvent{Kind: platform.PointerDown, X: float64(r.X + r.W/2), Y: float64(r.Y + r.H/2), Button: button}
+				for i := range presses {
+					ev := platform.SurfaceEvent{Kind: platform.PointerDown, X: float64(r.X + r.W/2), Y: float64(r.Y + r.H/2), Button: button, Clicks: i + 1}
 					tt.rt.event(ev)
 					ev.Kind = platform.PointerUp
 					tt.rt.event(ev)

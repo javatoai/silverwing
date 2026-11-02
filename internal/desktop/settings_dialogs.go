@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"path/filepath"
 	"silverwing-go/internal/application"
 	"strings"
 	"time"
@@ -373,19 +374,22 @@ func (s *app) settingsActionForm(form actionForm, payload map[string]any) bool {
 		if form.kind == "codex.extensions/mcp/edit" {
 			extra["oldName"], extra["file"] = oldName, form.path
 		}
+		scope := payloadString(payload, "scope")
 		payload = s.settingsMCPPayload(extra)
 		if form.kind == "codex.extensions/mcp/add" {
-			scope := payloadString(payload, "scope")
-			delete(payload, "scope")
-			if scope == "全局配置" {
+			if scope == "" || scope == "全局配置" {
 				delete(payload, "cwd")
 			} else if scope == "当前任务" {
 				if taskPath := s.taskUnit.currentTask().path; taskPath != "" {
 					payload["cwd"] = taskPath
+					payload["file"] = filepath.Join(taskPath, ".codex", "config.toml")
 				} else {
 					s.lastError = "没有可用的当前任务目录。"
 					return true
 				}
+			} else {
+				s.lastError = "请选择有效的 MCP 配置范围。"
+				return true
 			}
 		}
 		s.dialogOpen = false

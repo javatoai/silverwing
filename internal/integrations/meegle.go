@@ -35,6 +35,10 @@ type participatedResult struct {
 	Sprints           []sprintItem                  `json:"sprints"`
 	SelectedSprintKey *string                       `json:"selectedSprintKey,omitempty"`
 	FetchedAt         int64                         `json:"fetchedAt,omitempty"`
+	FromCache         bool                          `json:"fromCache"`
+	SprintsFetchedAt  int64                         `json:"sprintsFetchedAt"`
+
+	sprintCatalogReadStartedAt int64
 }
 type workItemType struct {
 	MQLName        string
@@ -137,12 +141,16 @@ func (s *Service) listRequirements(ctx context.Context, config domain.AppConfig,
 }
 
 func (s *Service) listRequirementsWithProgress(ctx context.Context, config domain.AppConfig, payload map[string]any, force bool, progress *requirementListReporter) (any, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	catalogStartedAt := nextRequirementSprintCatalogRead()
 	expected, provided, err := expectedRequirementIdentity(payload)
 	if err != nil {
 		return nil, err
 	}
 	if !provided {
-		return s.listRequirementsQueryWithProgress(ctx, config, payload, progress)
+		return s.listRequirementsQueryWithCatalogProgress(ctx, config, payload, progress, catalogStartedAt)
 	}
 	keys, err := participatedListCacheKeysFor(config, expected, payload)
 	if err != nil {
@@ -160,21 +168,29 @@ func (s *Service) listRequirementsWithProgress(ctx context.Context, config domai
 		}
 		if hit {
 			if typed, ok := cached.(participatedResult); ok {
-				return s.overlayRequirementList(s.requirementOverlayIdentity(keys.Identity), typed), nil
+				typed = s.overlayRequirementSprintCatalog(keys, typed)
+				typed = s.overlayRequirementList(s.requirementOverlayIdentity(keys.Identity), typed)
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				confirmed, identityErr := s.confirmedRequirementIdentity(expected)
+				if identityErr != nil {
+					return nil, identityErr
+				}
+				if !confirmed {
+					return nil, &RequirementIdentityChangedError{}
+				}
+				return typed, nil
 			}
 			return cached, nil
 		}
 	}
 	cacheHit := false
-	result, err := executeRequirementListWithIdentity(
-		ctx,
-		expected,
-		func(ctx context.Context, token string) error {
-			return s.verifyExpectedRequirementIdentity(ctx, config, token)
-		},
+	result, generation, err := s.executeRequirementSprintRead(
+		ctx, config, expected,
 		func(ctx context.Context) (any, error) {
 			value, hit, loadErr := s.loadParticipatedList(ctx, requestedKey, force, func(ctx context.Context) (any, error) {
-				return s.listRequirementsQueryWithProgress(ctx, config, payload, progress)
+				return s.listRequirementsQueryWithCatalogProgress(ctx, config, payload, progress, catalogStartedAt)
 			})
 			cacheHit = hit
 			return value, loadErr
@@ -183,13 +199,28 @@ func (s *Service) listRequirementsWithProgress(ctx context.Context, config domai
 	if err != nil {
 		return nil, err
 	}
-	if !cacheHit {
-		if typed, ok := result.(participatedResult); ok && requirementListResultCacheable(typed) {
-			s.persistParticipatedListCache(keys, typed, force)
-		}
-	}
 	if typed, ok := result.(participatedResult); ok {
-		return s.overlayRequirementList(s.requirementOverlayIdentity(keys.Identity), typed), nil
+		if !cacheHit {
+			catalog := requirementSprintCatalogResult{Sprints: typed.Sprints, FetchedAt: typed.SprintsFetchedAt, readStartedAt: typed.sprintCatalogReadStartedAt}
+			if err := s.persistRequirementSprintCatalog(ctx, config, keys, generation, catalog); err != nil {
+				var changed *RequirementIdentityChangedError
+				if ctx.Err() != nil || errors.As(err, &changed) || errors.Is(err, errRequirementReadSuperseded) {
+					return nil, err
+				}
+			}
+			if err := s.withRequirementSprintReadIdentity(ctx, config, expected, generation, func() error {
+				s.persistParticipatedListCache(keys, typed, force)
+				return nil
+			}); err != nil {
+				return nil, err
+			}
+		}
+		typed = s.overlayRequirementSprintCatalog(keys, typed)
+		typed = s.overlayRequirementList(s.requirementOverlayIdentity(keys.Identity), typed)
+		if err := s.withRequirementSprintReadIdentity(ctx, config, expected, generation, nil); err != nil {
+			return nil, err
+		}
+		return typed, nil
 	}
 	return result, nil
 }
@@ -199,9 +230,14 @@ func (s *Service) listRequirementsQuery(ctx context.Context, config domain.AppCo
 }
 
 func (s *Service) listRequirementsQueryWithProgress(ctx context.Context, config domain.AppConfig, payload map[string]any, progress *requirementListReporter) (any, error) {
-	projects := append([]domain.MeegleProjectConfig(nil), config.MeegleProjects...)
-	if len(projects) == 0 {
-		return participatedResult{Items: []domain.ParticipatedWorkItem{}, Failures: []string{}}, nil
+	return s.listRequirementsQueryWithCatalogProgress(ctx, config, payload, progress, nextRequirementSprintCatalogRead())
+}
+
+func (s *Service) listRequirementsQueryWithCatalogProgress(ctx context.Context, config domain.AppConfig, payload map[string]any, progress *requirementListReporter, catalogStartedAt int64) (any, error) {
+	unique := requirementSprintProjects(config)
+	if len(unique) == 0 {
+		return participatedResult{Items: []domain.ParticipatedWorkItem{}, Failures: []string{}, Sprints: []sprintItem{},
+			SprintsFetchedAt: catalogStartedAt / int64(time.Millisecond), sprintCatalogReadStartedAt: catalogStartedAt}, nil
 	}
 	progress.update("account", "running", "正在核对 Meegle 账号…", 0, 0)
 	statusValue, statusErr := s.meegleStatus(ctx, config)
@@ -226,42 +262,11 @@ func (s *Service) listRequirementsQueryWithProgress(ctx context.Context, config 
 		return participatedResult{Items: []domain.ParticipatedWorkItem{}, Failures: []string{reason}}, nil
 	}
 	progress.update("account", "done", "账号核对完成", 0, 0)
-	// Project-key duplicates are removed before the sprint catalog is read.
-	unique := make([]domain.MeegleProjectConfig, 0, len(projects))
-	seenProjects := map[string]bool{}
-	for _, project := range projects {
-		if !seenProjects[project.ProjectKey] {
-			unique = append(unique, project)
-			seenProjects[project.ProjectKey] = true
-		}
+	catalog, failures, err := s.queryRequirementSprintCatalog(ctx, config, catalogStartedAt, progress)
+	if err != nil {
+		return nil, err
 	}
-
-	sprints := make([]sprintItem, 0)
-	failures := make([]string, 0)
-	completedSprints := 0
-	for index, project := range unique {
-		progress.update("sprints", "running", "正在读取 "+project.SimpleName+" 的 Sprint…", index, len(unique))
-		items, err := s.querySprints(ctx, config, project)
-		if err != nil {
-			if process.IsCleanupFailure(err) {
-				return nil, err
-			}
-			failures = append(failures, project.SimpleName+" · Sprint："+err.Error())
-			continue
-		}
-		sprints = append(sprints, items...)
-		completedSprints++
-	}
-	sprintStatus, sprintMessage := "done", "Sprint 读取完成"
-	if len(failures) > 0 {
-		sprintStatus, sprintMessage = "failed", strings.Join(failures, "；")
-	}
-	progress.update("sprints", sprintStatus, sprintMessage, len(unique), len(unique))
-	sort.SliceStable(sprints, func(i, j int) bool { return sprints[i].Status != "进行中" && sprints[j].Status == "进行中" })
-	var sprintCatalog []sprintItem
-	if len(sprints) > 0 || completedSprints > 0 {
-		sprintCatalog = sprints
-	}
+	sprints := catalog.Sprints
 	selectedKey := stringValue(payload, "sprintKey", "selectedSprintKey")
 	var selected *sprintItem
 	if selectedKey != "" {
@@ -274,29 +279,14 @@ func (s *Service) listRequirementsQueryWithProgress(ctx context.Context, config 
 	} else {
 		// Auto-selection is safe only after every configured project returned its
 		// sprint catalog. Explicit selection above still works with partial results.
-		if completedSprints == len(unique) {
-			var ongoing []sprintItem
-			for i := range sprints {
-				if sprints[i].Status == "进行中" {
-					ongoing = append(ongoing, sprints[i])
-				}
-			}
-			if len(ongoing) == 1 {
-				selected = &ongoing[0]
-			}
-			if selected == nil && config.MeegleDefaultSprintProjectKey != nil {
-				for i := range ongoing {
-					if ongoing[i].ProjectKey == *config.MeegleDefaultSprintProjectKey {
-						selected = &ongoing[i]
-						break
-					}
-				}
-			}
+		if catalog.readStartedAt > 0 {
+			selected = selectDefaultRequirementSprint(sprints, config.MeegleDefaultSprintProjectKey)
 		}
 	}
 	if selected == nil {
-		result := participatedResult{Items: []domain.ParticipatedWorkItem{}, Failures: failures, Sprints: sprintCatalog}
-		if selectedKey != "" && sprintCatalog != nil {
+		result := participatedResult{Items: []domain.ParticipatedWorkItem{}, Failures: failures, Sprints: sprints,
+			SprintsFetchedAt: catalog.FetchedAt, sprintCatalogReadStartedAt: catalog.readStartedAt}
+		if selectedKey != "" && sprints != nil {
 			result.Failures = append(result.Failures, "所选 Sprint 已不可选，请重新选择")
 		}
 		return result, nil
@@ -310,7 +300,8 @@ func (s *Service) listRequirementsQueryWithProgress(ctx context.Context, config 
 		return nil, err
 	}
 	failures = append(failures, queryFailures...)
-	return participatedResult{Items: items, Failures: failures, CompletedQueries: completed, Sprints: sprintCatalog, SelectedSprintKey: nonblank(selected.Key())}, nil
+	return participatedResult{Items: items, Failures: failures, CompletedQueries: completed, Sprints: sprints, SelectedSprintKey: nonblank(selected.Key()),
+		SprintsFetchedAt: catalog.FetchedAt, sprintCatalogReadStartedAt: catalog.readStartedAt}, nil
 }
 
 func projectByKey(projects []domain.MeegleProjectConfig, key string) (domain.MeegleProjectConfig, bool) {

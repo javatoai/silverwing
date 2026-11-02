@@ -17,7 +17,6 @@ const (
 	requirementManifestName    = ".silverwing-requirement.json"
 	requirementIndexName       = ".silverwing-requirement-index.jsonl"
 	requirementOverviewName    = "00-需求总览.md"
-	requirementMaterialsLock   = ".silverwing-requirement-materials.lock"
 )
 
 type RequirementIdentity struct {
@@ -411,5 +410,5 @@ func (s *PreparationService) Materialize(ctx context.Context, config domain.AppC
 }
 
 func (s *PreparationService) acquireMaterialsLock(root string) (func(), error) {
-	return storage.AcquireLock(filepath.Join(root, requirementMaterialsLock))
+	return storage.AcquireMaterialsRepositoryLock(root)
 }

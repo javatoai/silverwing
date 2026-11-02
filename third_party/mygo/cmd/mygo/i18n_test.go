@@ -39,6 +39,43 @@ func TestI18nConfig(t *testing.T) {
 	}
 }
 
+func TestI18nModule(t *testing.T) {
+	tests := []struct {
+		name   string
+		config string
+		files  map[string]string
+		want   string // relative to the project, "" for no module
+	}{
+		{"without a frontend", `{"i18n": {}}`, nil, ""},
+		{"a workspace root", `{"i18n": {}}`, map[string]string{"package.json": `{"private": true, "workspaces": ["website"]}`}, ""},
+		{"a Yarn workspace root", `{"i18n": {}}`, map[string]string{"package.json": `{"workspaces": {"packages": ["site"]}}`}, ""},
+		{"the app's own package.json", `{"i18n": {}}`, map[string]string{"package.json": `{"name": "app", "dependencies": {"mygo-runtime": "^1"}}`}, "src/locales.ts"},
+		{"a package.json of native UI", `{"i18n": {}}`, map[string]string{"package.json": `{"name": "app", "devDependencies": {"mygo-cli": "^1"}}`}, ""},
+		{"a frontend directory", `{"i18n": {}}`, map[string]string{"frontend/package.json": `{"dependencies": {"mygo-runtime": "^1"}}`}, "frontend/src/locales.ts"},
+		{"the frontend options", `{"i18n": {}, "frontendDist": "dist"}`, nil, "locales.ts"},
+		{"an explicit bindings path", `{"bindings": "web/api.ts", "i18n": {}}`, nil, "web/locales.ts"},
+		{"explicit bindings at a workspace root", `{"bindings": "web/api.ts", "i18n": {}}`, map[string]string{"package.json": `{"workspaces": ["website"]}`}, "web/locales.ts"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFiles(t, dir, map[string]string{jsonConfig: tc.config, "locales/en.json": `{}`})
+			writeFiles(t, dir, tc.files)
+			c, err := loadConfig(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := ""
+			if tc.want != "" {
+				want = filepath.Join(dir, filepath.FromSlash(tc.want))
+			}
+			if got := i18nModule(c); got != want {
+				t.Errorf("i18nModule = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestWriteI18n(t *testing.T) {
 	dir := t.TempDir()
 	writeFiles(t, dir, map[string]string{

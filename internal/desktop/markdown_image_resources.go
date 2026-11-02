@@ -21,12 +21,15 @@ func (s *app) markdownImageScopeFor(state *markdownEditorState) markdownImageSco
 	scope := markdownImageScope{home: s.snapshot.Home, config: s.settingsUnit.state.configJSON,
 		account: s.currentRequirementAccountIdentity(), readerGeneration: s.requirementUnit.state.requirementReaderGeneration,
 		taskID: state.taskID, path: state.path, linkRoot: state.linkRoot}
+	if state.binding != nil {
+		if ref, ok := s.materialsUnit.documentSaveRef(state.binding.id); ok && ref.kind == "instruction" {
+			scope.taskPath, scope.createdAt, scope.root = ref.taskPath, ref.createdAt, filepath.Dir(state.path)
+			return scope
+		}
+	}
 	if !state.detached {
 		task := s.taskUnit.currentTask()
 		scope.taskPath, scope.createdAt, scope.root = task.path, task.createdAt, task.materialsPath
-	}
-	if state.doc != nil {
-		scope.source = state.doc.Source()
 	}
 	return scope
 }
@@ -43,8 +46,11 @@ func (s *app) markdownImagePoolFor(state *markdownEditorState) *nativeImagePool 
 	return state.imagePool
 }
 
-func markdownImageNodeKey(part editor.Part, node editor.Node) string {
-	return fmt.Sprintf("%d:%d:%d", part.ID, node.Range.Start, node.Range.End)
+// Each document owns one reference per target. Moving or duplicating source
+// occurrences must not cancel a still-used immutable resource. Ownership and
+// trust changes remain part of markdownImageStateKey and the pool's scope.
+func markdownImageNodeKey(_ editor.Part, node editor.Node) string {
+	return strings.TrimSpace(node.Destination)
 }
 
 func (s *app) markdownImageStateKey(state *markdownEditorState, pool *nativeImagePool, link string) string {

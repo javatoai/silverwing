@@ -32,13 +32,11 @@ func TestSettingsHelpNativeHoverKeyboardAndEscape(t *testing.T) {
 		t.Fatal("the help icon is missing")
 	}
 	tt.Move(icon.X+icon.W/2, icon.Y+icon.H/2)
-	time.Sleep(80 * time.Millisecond)
-	tt.Frame()
+	tt.Advance(80 * time.Millisecond)
 	if tt.HasText(help) {
 		t.Fatal("hover help appeared before the native delay")
 	}
-	time.Sleep(550 * time.Millisecond)
-	tt.Frame()
+	tt.Advance(550 * time.Millisecond)
 	if !tt.HasText(help) {
 		t.Fatal("native hover help did not appear")
 	}
@@ -202,7 +200,7 @@ func TestSettingsHelpAllPagesLayout(t *testing.T) {
 							}
 						}
 						captureDesktopTestFrame(t, tt, fmt.Sprintf("settings-help-%s-%d-dark-%t", page.key, width, dark))
-						if page.key == "paths" {
+						if page.key == "paths" || page.key == "materials-sync" {
 							shell := ui.NewTester(func(c *ui.Context) {
 								p := setTheme(c, dark)
 								ui.Row(c).Fill().AlignItems(ui.Stretch).Background(p.bg).Children(func() {
@@ -210,7 +208,11 @@ func TestSettingsHelpAllPagesLayout(t *testing.T) {
 									ui.Column(c).Grow(1).MinWidth(0).Children(func() { s.settingsScreen(c, p) })
 								})
 							}, width, 1000)
-							for _, name := range []string{"Git 自动同步说明", "默认展开目录层级说明", "同步周期（分钟）"} {
+							names := []string{"默认展开目录层级说明"}
+							if page.key == "materials-sync" {
+								names = []string{"Git 自动同步说明", "同步周期（分钟）"}
+							}
+							for _, name := range names {
 								assertSettingsVisibleBounds(t, shell, name, width, 1000)
 							}
 							captureDesktopTestFrame(t, shell, fmt.Sprintf("settings-help-shell-paths-%d-dark-%t", width, dark))

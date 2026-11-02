@@ -109,12 +109,7 @@ func (s *MaterialsGitSyncService) run(ctx context.Context, scope MaterialsGitSco
 		}
 	}
 	if !readOnly {
-		command, tail := gitMutationCommand(args)
-		if (command == "checkout" || command == "merge") && len(tail) > 0 {
-			if err := s.checkMaterialsTree(ctx, scope, tail[len(tail)-1]); err != nil {
-				return process.Result{}, err
-			}
-		}
+		args = materialsGitNoOverwrite(args)
 	}
 	return s.Git.RunContext(ctx, scope.Root, 2*time.Minute, true, readOnly, args...)
 }
@@ -159,6 +154,14 @@ func (s *MaterialsGitSyncService) Sync(ctx context.Context, scope MaterialsGitSc
 	if s.Git == nil {
 		return status, errors.New("Git 同步执行器不可用")
 	}
+	if err := ctx.Err(); err != nil {
+		return status, err
+	}
+	if s.Check != nil {
+		if err := s.Check(); err != nil {
+			return status, err
+		}
+	}
 	if scope.Root == "" || !filepath.IsAbs(scope.Root) {
 		return status, errors.New("请先配置任务资料根目录")
 	}
@@ -168,9 +171,8 @@ func (s *MaterialsGitSyncService) Sync(ctx context.Context, scope MaterialsGitSc
 	if err := os.MkdirAll(scope.Root, 0o755); err != nil {
 		return status, err
 	}
-	locks := NewOperationLocks(s.Paths.Locks)
-	resultErr = locks.WithRepository(scope.Root, func() error {
-		unlock, err := storage.AcquireLock(filepath.Join(scope.Root, ".silverwing-requirement-materials.lock"))
+	resultErr = func() error {
+		unlock, err := storage.AcquireMaterialsRepositoryLock(scope.Root)
 		if err != nil {
 			return fmt.Errorf("资料目录正在被其他操作使用：%w", err)
 		}
@@ -203,7 +205,7 @@ func (s *MaterialsGitSyncService) Sync(ctx context.Context, scope MaterialsGitSc
 			return errors.Join(err, errors.New(state.Error))
 		}
 		return err
-	})
+	}()
 	return status, resultErr
 }
 
@@ -219,16 +221,10 @@ func (s *MaterialsGitSyncService) syncLocked(ctx context.Context, scope Material
 	if _, err := s.run(ctx, scope, true, "check-ref-format", "--branch", scope.Branch); err != nil {
 		return err
 	}
-	// Verify the selected branch before initialization or local commits.
 	if _, _, err := s.remoteBranch(ctx, scope); err != nil {
 		return err
 	}
-	// Ignore a repository inherited from a parent directory. Never alter it.
-	_, statErr := os.Lstat(filepath.Join(scope.Root, ".git"))
-	if statErr != nil && !os.IsNotExist(statErr) {
-		return statErr
-	}
-	if os.IsNotExist(statErr) {
+	if _, err := os.Lstat(filepath.Join(scope.Root, ".git")); os.IsNotExist(err) {
 		if state.URL != "" && !state.Initializing {
 			return errors.New("原资料仓库的 Git 元数据已变化，请检查仓库后重新接入")
 		}
@@ -237,51 +233,12 @@ func (s *MaterialsGitSyncService) syncLocked(ctx context.Context, scope Material
 		if err := s.save(scope, *state); err != nil {
 			return err
 		}
-		_, exists, err := s.remoteBranch(ctx, scope)
-		if err != nil {
+		// Init leaves local bytes in place; checkout applies native collision checks.
+		if _, err := s.run(ctx, scope, false, "init", "--initial-branch="+scope.Branch, "."); err != nil {
 			return err
 		}
-		entries, err := os.ReadDir(scope.Root)
-		if err != nil {
-			return err
-		}
-		empty := true
-		for _, entry := range entries {
-			if entry.Name() != ".silverwing-requirement-materials.lock" {
-				empty = false
-			}
-		}
-		if empty && exists {
-			// The shared materials lock prevents Git clone from using the root
-			// directly. Clone without checkout, into an empty sibling, then move
-			// only the Git metadata; checkout itself uses Git's collision checks.
-			stage, err := os.MkdirTemp(filepath.Dir(scope.Root), ".silverwing-git-clone-")
-			if err != nil {
-				return err
-			}
-			defer os.Remove(stage) // only removes an empty staging directory
-			if s.Check != nil {
-				if err := s.Check(); err != nil {
-					return err
-				}
-			}
-			_, err = s.Git.RunGlobalContext(ctx, 2*time.Minute, true, false, "clone", "--no-checkout", "--single-branch", "--branch", scope.Branch, "--", scope.URL, stage)
-			if err != nil {
-				return err
-			}
-			state.CheckoutPending = true
-			if err := s.save(scope, *state); err != nil {
-				return err
-			}
-			if err := os.Rename(filepath.Join(stage, ".git"), filepath.Join(scope.Root, ".git")); err != nil {
-				return err
-			}
-
-		} else {
-			if _, err := s.run(ctx, scope, false, "init", "--initial-branch="+scope.Branch, "."); err != nil {
-				return err
-			}
-		}
+	} else if err != nil {
+		return err
 	}
 	root, err := s.run(ctx, scope, true, "rev-parse", "--show-toplevel")
 	if err != nil {
@@ -302,7 +259,7 @@ func (s *MaterialsGitSyncService) syncLocked(ctx context.Context, scope Material
 		return err
 	}
 	if !hasOrigin && state.Initializing && state.URL == scope.URL {
-		if _, err = s.run(ctx, scope, false, "remote", "add", "origin", scope.URL); err != nil {
+		if _, err := s.run(ctx, scope, false, "remote", "add", "origin", scope.URL); err != nil {
 			return err
 		}
 	} else if !hasOrigin || !materialsGitSameURL(url, scope.URL) {
@@ -317,15 +274,8 @@ func (s *MaterialsGitSyncService) syncLocked(ctx context.Context, scope Material
 			return errors.New("origin 推送地址与配置不一致，已停止同步")
 		}
 	}
-	if err := s.excludeRuntimeFiles(ctx, scope); err != nil {
+	if err := s.migrateGeneratedIgnores(ctx, scope); err != nil {
 		return err
-	}
-	if head, ok, err := s.optional(ctx, scope, "rev-parse", "--verify", "HEAD"); err != nil {
-		return err
-	} else if ok {
-		if err := s.checkMaterialsTree(ctx, scope, head); err != nil {
-			return err
-		}
 	}
 	if state.CheckoutPending {
 		if state.URL != scope.URL || state.Branch != scope.Branch {
@@ -334,10 +284,7 @@ func (s *MaterialsGitSyncService) syncLocked(ctx context.Context, scope Material
 		if _, err := s.run(ctx, scope, false, "checkout", scope.Branch); err != nil {
 			return err
 		}
-		state.CheckoutPending, state.Initializing = false, false
-		if err := s.save(scope, *state); err != nil {
-			return err
-		}
+		state.CheckoutPending = false
 	}
 	if err := s.switchBranch(ctx, scope, state); err != nil {
 		return err
@@ -351,61 +298,72 @@ func (s *MaterialsGitSyncService) syncLocked(ctx context.Context, scope Material
 			return errors.New("请先在 Git 中配置 user.name 和 user.email")
 		}
 	}
-	// Do not accidentally commit a user's pre-staged changes, even in scope.
-	staged, err := s.run(ctx, scope, true, "diff", "--cached", "--name-only", "-z")
+	// Merge before staging so the latest remote ignores govern local uploads.
+	// Native merge preconditions protect existing staged and working edits.
+	progress("拉取并合并远端更新")
+	if _, _, err := s.remoteBranch(ctx, scope); err != nil {
+		return err
+	}
+	remote := "refs/remotes/origin/" + scope.Branch
+	if _, err := s.run(ctx, scope, false, "fetch", "--no-tags", "--no-recurse-submodules", scope.URL, "+refs/heads/"+scope.Branch+":"+remote); err != nil {
+		return err
+	}
+	_, hasHead, err := s.optional(ctx, scope, "rev-parse", "--verify", "HEAD")
 	if err != nil {
 		return err
 	}
+	if !hasHead {
+		if _, err := s.run(ctx, scope, false, "checkout", "-b", scope.Branch, remote); err != nil {
+			return fmt.Errorf("接入远端资料失败，本地文件已保留，请处理同名文件后重试：%w", err)
+		}
+	} else {
+		args := []string{"-c", "commit.gpgSign=false", "merge", "--no-commit", "--no-edit", "--no-stat", "--ff", "--no-squash", "--no-autostash"}
+		if state.Initializing {
+			args = append(args, "--allow-unrelated-histories")
+		}
+		args = append(args, remote)
+		if _, err := s.run(ctx, scope, false, args...); err != nil {
+			return fmt.Errorf("合并远端更新失败，本地修改已保留，请使用 Git 工具处理后重新检查：%w", err)
+		}
+	}
+	state.Initializing = false
+	if err := s.save(scope, *state); err != nil {
+		return err
+	}
+	// A remote tree may still contain an older generated ignore/runtime file.
+	if err := s.migrateGeneratedIgnores(ctx, scope); err != nil {
+		return err
+	}
+	progress("提交本地资料")
 	head, _, err := s.optional(ctx, scope, "rev-parse", "--verify", "HEAD")
 	if err != nil {
 		return err
 	}
-	if staged.Stdout != "" && !materialsGitRecoverableIndex(*state, head, splitGitNUL(staged.Stdout)) {
-		return errors.New("仓库已有暂存内容，请先使用 Git 工具提交或取消暂存后重试")
-	}
-	for _, path := range splitGitNUL(staged.Stdout) {
-		if !materialsGitOwned(path, scope.Subdirectory) {
-			return fmt.Errorf("恢复暂存区含范围外资料，已停止：%s", path)
-		}
-	}
-	progress("提交本地资料")
-	paths, err := s.materialPaths(ctx, scope)
-	if err != nil {
-		return err
-	}
-	state.Staging, state.StageHead, state.StagePaths = true, head, append([]string(nil), paths...)
+	state.Staging, state.StageHead, state.StagePaths = true, head, nil
 	if err := s.save(scope, *state); err != nil {
 		return err
 	}
-	// Stage in bounded batches to support Windows' command-line limit.
-	for len(paths) > 0 {
-		n := 1
-		size := len(paths[0])
-		for n < len(paths) && n < 64 && size+len(paths[n]) < 6000 {
-			size += len(paths[n])
-			n++
-		}
-		args := append([]string{"--literal-pathspecs", "add", "-A", "--"}, paths[:n]...)
-		if _, err := s.run(ctx, scope, false, args...); err != nil {
-			return err
-		}
-		paths = paths[n:]
+	// Whole repository: existing staged entries, tracked ignored files,
+	// deletions and ordinary metadata all use Git's own ignore semantics.
+	if _, err := s.run(ctx, scope, false, "add", "-A", "--", "."); err != nil {
+		return err
 	}
-	staged, err = s.run(ctx, scope, true, "diff", "--cached", "--name-only", "-z")
+	staged, err := s.run(ctx, scope, true, "diff", "--cached", "--name-only", "-z")
 	if err != nil {
 		return err
 	}
-	if staged.Stdout != "" {
-		// Recheck paths after staging; no user-added path may enter this commit.
-		for _, path := range splitGitNUL(staged.Stdout) {
-			if !materialsGitOwned(path, scope.Subdirectory) {
-				return errors.New("暂存区出现范围外文件，已停止提交，请检查仓库")
-			}
-			if err := materialsGitSafePath(scope.Root, filepath.Join(scope.Root, filepath.FromSlash(path)), true); err != nil {
-				return err
-			}
+	_, merging, err := s.optional(ctx, scope, "rev-parse", "--verify", "MERGE_HEAD")
+	if err != nil {
+		return err
+	}
+	if staged.Stdout != "" || merging {
+		commit := []string{"-c", "commit.gpgSign=false", "commit", "-m", "docs: sync task materials"}
+		if merging {
+			// A necessary merge records ancestry even for equal final trees. Keep
+			// its native message rather than duplicating a prior local sync commit.
+			commit = []string{"-c", "commit.gpgSign=false", "commit", "--no-edit"}
 		}
-		if _, err := s.run(ctx, scope, false, "-c", "commit.gpgSign=false", "commit", "-m", "docs: sync task materials"); err != nil {
+		if _, err := s.run(ctx, scope, false, commit...); err != nil {
 			return err
 		}
 	}
@@ -413,57 +371,7 @@ func (s *MaterialsGitSyncService) syncLocked(ctx context.Context, scope Material
 	if err := s.save(scope, *state); err != nil {
 		return err
 	}
-	progress("拉取并合并远端更新")
-	_, exists, err := s.remoteBranch(ctx, scope)
-	if err != nil {
-		return err
-	}
-	if exists {
-		if _, err := s.run(ctx, scope, false, "fetch", "--no-tags", "--no-recurse-submodules", scope.URL, "+refs/heads/"+scope.Branch+":refs/remotes/origin/"+scope.Branch); err != nil {
-			return err
-		}
-		_, headExists, err := s.optional(ctx, scope, "rev-parse", "--verify", "HEAD")
-		if err != nil {
-			return err
-		}
-		if !headExists {
-			if _, err := s.run(ctx, scope, false, "checkout", "-b", scope.Branch, "refs/remotes/origin/"+scope.Branch); err != nil {
-				return err
-			}
-		} else {
-			if err := s.checkMaterialsOutgoing(ctx, scope, "refs/remotes/origin/"+scope.Branch, true); err != nil {
-				return err
-			}
-			args := []string{"-c", "commit.gpgSign=false", "merge", "--no-edit", "--no-stat", "--ff", "--no-squash", "--no-autostash"}
-			if state.Initializing {
-				args = append(args, "--allow-unrelated-histories")
-			}
-			args = append(args, "refs/remotes/origin/"+scope.Branch)
-			if _, err := s.run(ctx, scope, false, args...); err != nil {
-				return fmt.Errorf("合并远端更新失败，请打开仓库使用 Git 工具处理后重新检查：%w", err)
-			}
-		}
-	}
-	state.Initializing = false
-	if err := s.save(scope, *state); err != nil {
-		return err
-	}
-	_, headExists, err := s.optional(ctx, scope, "rev-parse", "--verify", "HEAD")
-	if err != nil {
-		return err
-	}
-	if !headExists {
-		return nil
-	} // an empty repository with no saved materials
 	progress("推送资料")
-	if err := s.checkMaterialsTree(ctx, scope, "HEAD"); err != nil {
-		return err
-	}
-	if exists {
-		if err := s.checkMaterialsOutgoing(ctx, scope, "refs/remotes/origin/"+scope.Branch, false); err != nil {
-			return err
-		}
-	}
 	if _, _, err := s.remoteBranch(ctx, scope); err != nil {
 		return err
 	}
@@ -555,35 +463,7 @@ func (s *MaterialsGitSyncService) switchBranch(ctx context.Context, scope Materi
 	return nil
 }
 
-func materialsGitRecoverableIndex(state materialsGitBinding, head string, staged []string) bool {
-	if !state.Staging || state.StageHead != head {
-		return false
-	}
-	paths := make(map[string]bool, len(state.StagePaths))
-	for _, path := range state.StagePaths {
-		paths[path] = true
-	}
-	for _, path := range staged {
-		if !paths[path] {
-			return false
-		}
-	}
-	return true
-}
-
-func materialsGitUserChanges(status string) bool {
-	for _, entry := range splitGitNUL(status) {
-		if len(entry) < 4 {
-			return true
-		}
-		path := entry[3:]
-		if entry[:2] == "??" && strings.HasPrefix(filepath.Base(path), ".silverwing-") {
-			continue
-		}
-		return true
-	}
-	return false
-}
+func materialsGitUserChanges(status string) bool { return status != "" }
 
 func materialsGitSameURL(a, b string) bool {
 	return strings.TrimSuffix(strings.TrimSpace(a), "/") == strings.TrimSuffix(strings.TrimSpace(b), "/")
@@ -604,42 +484,4 @@ func materialsGitRetryable(err error) bool {
 		}
 	}
 	return false
-}
-
-func (s *MaterialsGitSyncService) excludeRuntimeFiles(ctx context.Context, scope MaterialsGitScope) error {
-	result, err := s.run(ctx, scope, true, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude")
-	if err != nil {
-		return err
-	}
-	path := strings.TrimSpace(result.Stdout)
-	data, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	rules := []string{".silverwing-*", "/[0-9][0-9][0-9][0-9]/*/[tT][eE][mM][pP]/"}
-	var missing []string
-	for _, rule := range rules {
-		found := false
-		for _, line := range strings.Split(string(data), "\n") {
-			if strings.TrimSpace(line) == rule {
-				found = true
-				break
-			}
-		}
-		if !found {
-			missing = append(missing, rule)
-		}
-	}
-	if len(missing) == 0 {
-		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	_, err = file.WriteString("\n# Silverwing local runtime and temporary files\n" + strings.Join(missing, "\n") + "\n")
-	return errors.Join(err, file.Close())
 }

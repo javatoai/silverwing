@@ -236,8 +236,11 @@ func (w *window) closeWebView() {
 		if w.hasKeyboard() && w.host.surface != nil {
 			send(w.win, "makeFirstResponder:", uintptr(w.host.surface.view))
 		}
-		send(w.web, "removeObserver:forKeyPath:", uintptr(w.delegate), uintptr(nsString("title")))
+		w.stopObserving()
 		send(w.ucc, "removeScriptMessageHandlerForName:", uintptr(nsString("mygo")))
+		if w.opts.PictureInPicture {
+			send(w.ucc, "removeScriptMessageHandlerForName:", uintptr(nsString(pipHandler)))
+		}
 		send(w.ucc, "removeAllUserScripts")
 		send(w.web, "stopLoading")
 		send(w.web, "setNavigationDelegate:", 0)

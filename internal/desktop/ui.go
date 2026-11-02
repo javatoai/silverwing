@@ -5,7 +5,18 @@ import (
 )
 
 func (s *app) view(c *ui.Context) {
+	s.reconcileTaskContentTabs()
+	s.drainTaskTerminalEvents()
+	if !s.taskTerminalPageActive() {
+		s.taskTerminalUnit.current = nil
+	}
 	defer s.observeProductionBuildNavigation()
+	if !s.taskServicesPageActive() {
+		s.leaveTaskServices()
+	}
+	if (s.page != "tasks" && s.page != "archive") || s.tab != taskFilesTab || s.workspaceReviewPageVisible() {
+		s.leaveTaskFiles()
+	}
 	s.observeMaterialTextInput()
 	s.observeMaterialsGitSync()
 	s.observeMaterialsGitBranches()
@@ -78,6 +89,7 @@ func (s *app) view(c *ui.Context) {
 	s.renderCodexAI(c, p)
 	s.renderMarkdownRichLinkDialog(c, p)
 	s.renderMarkdownBitmapViewer(c, p)
+	s.renderMarkdownLinkFile(c, p)
 	s.observeSettingsExtensionRequests()
 	s.observeSettingsConfigRecovery()
 	s.observeTagGenbuAutoProbe()
@@ -88,15 +100,20 @@ func (s *app) view(c *ui.Context) {
 	s.observeWorkspaceCommandJobIdentity()
 	s.observeRequirementListIdentity()
 	s.renderRequirementListProgressDialog(c, p)
-	s.observeRequirementCommentComposers()
-	s.renderRequirementCommentComposer(c, p)
-	s.renderCommentDraftBitmapViewer(c, p)
+	s.renderRequirementCommentLayers(c, p)
 	s.observeRequirementDocumentPreparation()
 	s.observeMaterialsLiveRefresh()
 	s.renderConfirmationDialog(c, p)
 	ui.ThemedMenus(c, s.popupMenuScope())
 	s.renderOperationNotifications(c)
 	s.renderSettingsAutosaveNotification(c)
+}
+
+func (s *app) renderRequirementCommentLayers(c *ui.Context, p palette) {
+	s.observeRequirementCommentComposers()
+	s.renderRequirementCommentComposer(c, p)
+	s.renderCommentDraftMarkdownLinkFile(c, p)
+	s.renderCommentDraftBitmapViewer(c, p)
 }
 
 func workspaceCommandDialogVisible(page string, tab int) bool {

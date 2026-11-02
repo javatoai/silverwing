@@ -55,7 +55,7 @@ func (ed *editor) retry(fn func() bool) bool {
 }
 
 func (ed *editor) dispatch(ev ui.InputEvent) bool {
-	ed.frameNow = time.Now()
+	ed.frameNow = ev.Time
 	switch ev.Kind {
 	case ui.InputKeyDown:
 		return ed.key(ev)
@@ -294,7 +294,7 @@ func (ed *editor) extendGesture(off int) {
 		sels = append(slices.Clone(g.others), s)
 	}
 	ed.sels = mergeSels(sels)
-	ed.blinkStart = time.Now()
+	ed.blinkStart = ed.frameNow
 }
 
 // columnSelect selects the columns from where the press began to x, y on
@@ -383,12 +383,12 @@ func (ed *editor) pointerMove(ev ui.InputEvent) bool {
 		if off >= 0 && off >= h.start && off <= h.end {
 			h.hideAt = time.Time{}
 		} else if h.hideAt.IsZero() {
-			h.hideAt = time.Now().Add(hoverHideDelay)
+			h.hideAt = ed.frameNow.Add(hoverHideDelay)
 			changed = true
 		}
 	}
 	if off >= 0 && (ed.o.onHover != nil || len(ed.diags) > 0) && off != h.restOff {
-		h.restOff, h.restAt, h.pending = off, time.Now(), true
+		h.restOff, h.restAt, h.pending = off, ed.frameNow, true
 		changed = true
 	}
 	return changed
@@ -404,7 +404,7 @@ func (ed *editor) wheel(ev ui.InputEvent) bool {
 	}
 	if ev.DX != 0 && !ed.view.wrap {
 		before := ed.scrollX
-		ed.scrollX = max(0, min(ed.scrollX+ev.DX, ed.maxScrollX()))
+		ed.setScrollXShared(max(0, min(ed.scrollX+ev.DX, ed.maxScrollX())))
 		moved = moved || ed.scrollX != before
 	}
 	if moved && ed.gesture.active {
@@ -414,18 +414,43 @@ func (ed *editor) wheel(ev ui.InputEvent) bool {
 	return moved
 }
 
+// trackWidth is the room the scroll bar's track takes at the right edge:
+// none when the editor fits its content, as it then never scrolls. The
+// old side of a split diff, which draws no vertical scroll bar of its own
+// (noScrollbar), keeps the room all the same, so that both sides wrap
+// their lines at the same width.
+func (ed *editor) trackWidth() float32 {
+	if ed.o.fitContent {
+		return 0
+	}
+	return scrollbarWidth
+}
+
 // scrollbars reports which scroll bars the editor shows, and takes
 // presses on: the vertical one while it scrolls, as it does past the end
 // of a short text, and the horizontal one while a line runs under the
 // vertical one or beyond.
 func (ed *editor) scrollbars() (vertical, horizontal bool) {
-	if ed.o.noScrollbar || ed.o.fitContent {
+	if ed.o.fitContent {
 		return false, false
 	}
-	return ed.scrollMax() > 0, !ed.view.wrap && ed.view.maxLine > ed.r.W-ed.textX-scrollbarWidth
+	if shared := ed.o.sharedScroll; shared != nil && shared.syncHorizontal {
+		return !ed.o.noScrollbar && ed.scrollMax() > 0, !ed.view.wrap && shared.maxX() > 0
+	}
+	if ed.o.minHorizontalExtent > 0 {
+		return !ed.o.noScrollbar && ed.scrollMax() > 0, !ed.view.wrap && ed.maxScrollX() > 0
+	}
+	return !ed.o.noScrollbar && ed.scrollMax() > 0, !ed.view.wrap && ed.view.maxLine > ed.r.W-ed.textX-scrollbarWidth
 }
 
 func (ed *editor) maxScrollX() float32 {
+	if shared := ed.o.sharedScroll; shared != nil && shared.syncHorizontal {
+		return shared.maxX()
+	}
+	return max(ed.intrinsicMaxScrollX(), ed.o.minHorizontalExtent)
+}
+
+func (ed *editor) intrinsicMaxScrollX() float32 {
 	return max(0, ed.view.maxLine+ed.view.charWidth*4-(ed.r.W-ed.textX))
 }
 
@@ -452,7 +477,7 @@ func (ed *editor) dragScrollbar(ev ui.InputEvent) {
 	if ed.scrollbar.horizontal {
 		track := ed.r.W - ed.textX - scrollbarWidth
 		f := (ev.X - ed.textX - ed.scrollbar.grab) / max(1, track-size)
-		ed.scrollX = max(0, min(f*ed.maxScrollX(), ed.maxScrollX()))
+		ed.setScrollXShared(max(0, min(f*ed.maxScrollX(), ed.maxScrollX())))
 		return
 	}
 	track := ed.viewH
@@ -475,6 +500,11 @@ func (ed *editor) thumb(horizontal bool) (float32, float32) {
 	if horizontal {
 		track := ed.r.W - ed.textX - scrollbarWidth
 		content := ed.view.maxLine + ed.view.charWidth*4
+		if shared := ed.o.sharedScroll; shared != nil && shared.syncHorizontal {
+			content = track + shared.maxX()
+		} else if ed.o.minHorizontalExtent > 0 {
+			content = track + ed.maxScrollX()
+		}
 		size := max(24, track*track/max(content, track))
 		f := float32(0)
 		if m := ed.maxScrollX(); m > 0 {

@@ -59,6 +59,9 @@ func (a *App) documentDraftAction(ctx context.Context, action Action, root, path
 	if documents.Kind(path) != "markdown" {
 		return ActionResult{}, errors.New("资料草稿仅支持 Markdown 原文")
 	}
+	if textPayload(action, "markdownEditContext") == taskMaterialsMarkdownEditContext {
+		return a.materialMarkdownDraftAction(ctx, action, root, path)
+	}
 	if action.Kind != "document.draft-read" {
 		return ActionResult{}, errMarkdownMaterialReadOnly
 	}

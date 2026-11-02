@@ -107,6 +107,10 @@ func (s *app) renderWorkspaceReviewPage(c *ui.Context, p palette) {
 			state.CommitPickerOpen = false
 			return
 		}
+		if state.FileNavigation != nil && state.FileNavigation.Query != "" {
+			state.FileNavigation.Query = ""
+			return
+		}
 		s.backWorkspaceReview(state)
 	})
 
@@ -128,61 +132,48 @@ func (s *app) renderWorkspaceReviewPage(c *ui.Context, p palette) {
 				label(c, title, 14, p.text).FontWeight(600).SingleLine().Tooltip(title)
 				label(c, branch, 11, p.muted).SingleLine().Tooltip(branch)
 			})
-			if iconButtonRunning(c, key+"-refresh", "refresh", "刷新差异", p, state.FilesLoading || state.HistoryLoading || state.PreviewLoading, state.FilesLoading || state.HistoryLoading || state.PreviewLoading).Clicked() {
-				s.refreshWorkspaceReview(state)
-			}
-			s.overflowMenu(c, p, key+"-more", "更多审阅操作", false, func(menu *overflowMenuBuilder) {
-				if state.CompareMode == workspaceReviewMainline {
-					if menu.Item("include-working-tree", "包含本地未提交").Icon("check").Checked(state.IncludeWorkingTree).Chosen() {
-						s.saveWorkspaceReviewSelection(state)
-						state.IncludeWorkingTree = !state.IncludeWorkingTree
-						s.readWorkspaceReviewFiles(state)
+			ui.Row(c.Key(key + "-tools")).Shrink(0).MinWidth(0).Gap(6).AlignItems(ui.Center).Role(ui.RoleToolbar).Label("差异比较工具栏").Children(func() {
+				s.renderWorkspaceReviewComparisonControls(c, p, state, key, width)
+				if iconButtonRunning(c, key+"-refresh", "refresh", "刷新差异", p, state.FilesLoading || state.HistoryLoading || state.PreviewLoading, state.FilesLoading || state.HistoryLoading || state.PreviewLoading).Clicked() {
+					s.refreshWorkspaceReview(state)
+				}
+				s.overflowMenu(c, p, key+"-more", "更多审阅操作", false, func(menu *overflowMenuBuilder) {
+					if state.CompareMode == workspaceReviewMainline {
+						if menu.Item("include-working-tree", "包含本地未提交").Icon("check").Checked(state.IncludeWorkingTree).Chosen() {
+							s.saveWorkspaceReviewSelection(state)
+							state.IncludeWorkingTree = !state.IncludeWorkingTree
+							s.readWorkspaceReviewFiles(state)
+						}
 					}
-				}
-				if state.CompareMode == workspaceReviewCommits && len(state.CommitHashes) > 0 {
-					if menu.Item("simulate-on-mainline", "模拟应用到主分支").Icon("check").Checked(state.SimulateOnMainline).Chosen() {
-						s.saveWorkspaceReviewSelection(state)
-						state.SimulateOnMainline = !state.SimulateOnMainline
-						s.readWorkspaceReviewFiles(state)
+					if state.CompareMode == workspaceReviewCommits && len(state.CommitHashes) > 0 {
+						if menu.Item("simulate-on-mainline", "模拟应用到主分支").Icon("check").Checked(state.SimulateOnMainline).Chosen() {
+							s.saveWorkspaceReviewSelection(state)
+							state.SimulateOnMainline = !state.SimulateOnMainline
+							s.readWorkspaceReviewFiles(state)
+						}
 					}
-				}
-				menu.Separator()
-				fileViewLabel, fileViewKey := "按相对路径平铺", "file-view-flat"
-				if state.FileView == "flat" {
-					fileViewLabel, fileViewKey = "按目录树排列", "file-view-tree"
-				}
-				if menu.Item(fileViewKey, fileViewLabel).Icon("folder").Chosen() {
+					menu.Separator()
+					fileViewLabel, fileViewKey := "按相对路径平铺", "file-view-flat"
 					if state.FileView == "flat" {
-						state.FileView = "tree"
-					} else {
-						state.FileView = "flat"
+						fileViewLabel, fileViewKey = "按目录树排列", "file-view-tree"
 					}
-					s.saveWorkspaceReviewSelection(state)
-				}
-				menu.Separator()
-				if menu.Item("open-folder", "打开工作区目录").Icon("folder").Chosen() {
-					s.act("system.open", t.id, item.ServiceID, item.ModuleID, item.Path, "", map[string]any{"desktopSystemOpenDirectory": true})
-				}
-				if menu.Item("terminal", "在终端中打开").Icon("terminal").Chosen() {
-					s.act("system.terminal", t.id, item.ServiceID, item.ModuleID, item.Path, "", nil)
-				}
+					if menu.Item(fileViewKey, fileViewLabel).Icon("folder").Chosen() {
+						if state.FileView == "flat" {
+							state.FileView = "tree"
+						} else {
+							state.FileView = "flat"
+						}
+						s.saveWorkspaceReviewSelection(state)
+					}
+					menu.Separator()
+					if menu.Item("open-folder", "打开工作区目录").Icon("folder").Chosen() {
+						s.act("system.open", t.id, item.ServiceID, item.ModuleID, item.Path, "", map[string]any{"desktopSystemOpenDirectory": true})
+					}
+					if menu.Item("terminal", "在终端中打开").Icon("terminal").Chosen() {
+						s.act("system.terminal", t.id, item.ServiceID, item.ModuleID, item.Path, "", nil)
+					}
+				})
 			})
-		})
-
-		ui.Row(c).FillWidth().Height(38).Shrink(0).Gap(6).AlignItems(ui.Center).Children(func() {
-			workspaceReviewModeButton(c, key+"-mode-mainline", "整体差异", state.CompareMode == workspaceReviewMainline, p, func() {
-				s.setWorkspaceReviewMode(state, workspaceReviewMainline)
-			})
-			workspaceReviewModeButton(c, key+"-mode-uncommitted", "本地未提交", state.CompareMode == workspaceReviewUncommitted, p, func() {
-				s.setWorkspaceReviewMode(state, workspaceReviewUncommitted)
-			})
-			workspaceReviewModeButton(c, key+"-mode-commits", "提交范围", state.CompareMode == workspaceReviewCommits, p, func() {
-				s.setWorkspaceReviewMode(state, workspaceReviewCommits)
-			})
-			if state.CompareMode == workspaceReviewCommits {
-				s.renderWorkspaceReviewCommitPicker(c, p, state, key)
-			}
-			ui.Spacer(c)
 		})
 		if state.Error != "" {
 			ui.Row(c).FillWidth().Shrink(0).Gap(8).Padding(8, 10).Radius(8).Background(p.amberBg).AlignItems(ui.Center).Children(func() {
@@ -230,6 +221,50 @@ func (s *app) renderWorkspaceReviewPage(c *ui.Context, p palette) {
 				s.renderWorkspaceReviewPreview(c, p, state, key)
 			})
 		})
+	})
+}
+
+func (s *app) renderWorkspaceReviewComparisonControls(c *ui.Context, p palette, state *workspaceHistoryState, key string, width float32) {
+	if width >= 1050 {
+		ui.Row(c).Gap(3).AlignItems(ui.Center).Children(func() {
+			workspaceReviewModeButton(c, key+"-mode-mainline", "整体差异", state.CompareMode == workspaceReviewMainline, p, func() {
+				s.setWorkspaceReviewMode(state, workspaceReviewMainline)
+			})
+			workspaceReviewModeButton(c, key+"-mode-uncommitted", "本地未提交", state.CompareMode == workspaceReviewUncommitted, p, func() {
+				s.setWorkspaceReviewMode(state, workspaceReviewUncommitted)
+			})
+			workspaceReviewModeButton(c, key+"-mode-commits", "提交范围", state.CompareMode == workspaceReviewCommits, p, func() {
+				s.setWorkspaceReviewMode(state, workspaceReviewCommits)
+			})
+		})
+	} else {
+		selected := "整体差异"
+		switch state.CompareMode {
+		case workspaceReviewUncommitted:
+			selected = "本地未提交"
+		case workspaceReviewCommits:
+			selected = "提交范围"
+		}
+		if ui.Select(c.Key(key+"-compare-mode"), &selected, []string{"整体差异", "本地未提交", "提交范围"}).
+			Width(112).Height(32).FontSize(12).Label("比较模式").Tooltip("选择差异比较模式").Changed() {
+			mode := map[string]string{"整体差异": workspaceReviewMainline, "本地未提交": workspaceReviewUncommitted, "提交范围": workspaceReviewCommits}[selected]
+			s.setWorkspaceReviewMode(state, mode)
+		}
+	}
+	if state.CompareMode == workspaceReviewCommits {
+		s.renderWorkspaceReviewCommitPicker(c, p, state, key)
+	}
+	scopeWidth := float32(200)
+	if width < 1050 {
+		scopeWidth = 150
+	}
+	if width < 800 {
+		scopeWidth = 88
+	}
+	summary, tooltip := workspaceReviewComparisonSummary(state)
+	ui.Box(c.Key(key + "-comparison-scope")).Width(scopeWidth).Height(32).MinWidth(0).
+		Label("比较范围").Description(tooltip).Tooltip(tooltip).Center().Children(func() {
+		label(c, summary, 11, p.muted).FillWidth().MinWidth(0).SingleLine().Tooltip(tooltip)
 	})
 }
 
@@ -311,8 +346,13 @@ func (s *app) renderWorkspaceReviewCommitPicker(c *ui.Context, p palette, state 
 		labelText = fmt.Sprintf("%s → %s · %d 次", shortCommitID(state.StartCommit), shortCommitID(state.EndCommit), len(state.CommitHashes))
 		tooltip = state.StartCommit + " → " + state.EndCommit
 	}
+	width, height := c.Size()
+	triggerWidth := float32(190)
+	if width < 800 {
+		triggerWidth = 108
+	}
 	trigger := ui.ButtonBase(c.Key(key+"-range-picker")).Row().Height(32).Padding(0, 10).Gap(6).Radius(8).
-		Role(ui.RoleButton).Label("提交范围：" + labelText).Tooltip(tooltip).FocusRing(true)
+		MinWidth(0).MaxWidth(triggerWidth).Role(ui.RoleButton).Label("提交范围：" + labelText).Tooltip(tooltip).FocusRing(true)
 	if state.CommitPickerOpen || trigger.Focused() {
 		trigger.Background(p.selected)
 	} else if trigger.Hovered() {
@@ -320,7 +360,7 @@ func (s *app) renderWorkspaceReviewCommitPicker(c *ui.Context, p palette, state 
 	}
 	trigger.Children(func() {
 		icon(c, "commit", 14, p.blue)
-		label(c, labelText, 11, p.text).NoWrap().Tooltip(tooltip)
+		label(c, labelText, 11, p.text).MinWidth(0).SingleLine().Tooltip(tooltip)
 		icon(c, "chevron", 13, p.muted)
 	})
 	if trigger.Clicked() {
@@ -329,7 +369,6 @@ func (s *app) renderWorkspaceReviewCommitPicker(c *ui.Context, p palette, state 
 	if !state.CommitPickerOpen {
 		return
 	}
-	width, height := c.Size()
 	maxWidth := max(float32(1), width-20)
 	panelWidth := min(float32(560), maxWidth)
 	panelHeight := workspaceReviewCommitPickerHeight(height, len(state.Commits), state.HistorySummaries, state.HistoryPageError != "")
@@ -463,6 +502,9 @@ func (s *app) renderWorkspaceReviewCommitOption(c *ui.Context, p palette, state 
 
 func (s *app) renderWorkspaceReviewFileList(c *ui.Context, p palette, state *workspaceHistoryState, key string) {
 	state.PrefetchFrameVisible = state.PrefetchFrameVisible[:0]
+	if state.PrefetchFrameVisible == nil {
+		state.PrefetchFrameVisible = make([]workspace.CompareChange, 0, 16)
+	}
 	if state.FileSelected == nil {
 		defer func() { s.updateWorkspaceReviewPrefetch(state, state.PrefetchFrameVisible) }()
 	}
@@ -474,9 +516,11 @@ func (s *app) renderWorkspaceReviewFileList(c *ui.Context, p palette, state *wor
 		})
 		return
 	}
+	navigation := workspaceReviewNavigation(state)
 	ui.Column(c).Fill().MinHeight(0).Children(func() {
 		ui.Row(c).FillWidth().Height(38).Shrink(0).Padding(0, 9).Gap(5).AlignItems(ui.Center).Children(func() {
-			label(c, "变更文件", 12, p.text).FontWeight(600).Grow(1)
+			label(c, "变更文件", 12, p.text).FontWeight(600).Grow(1).MinWidth(0).SingleLine()
+			label(c, fmt.Sprintf("%d / %d", len(navigation.filteredFiles), len(navigation.files)), 10, p.muted).NoWrap().Tooltip("匹配文件数 / 全部变更文件数")
 			if state.FileView == "flat" {
 				label(c, "路径", 10, p.muted).NoWrap()
 			} else {
@@ -487,6 +531,16 @@ func (s *app) renderWorkspaceReviewFileList(c *ui.Context, p palette, state *wor
 			}
 		})
 		ui.Divider(c)
+		ui.Row(c).FillWidth().MinWidth(0).Height(42).Shrink(0).Padding(5, 7).Gap(3).AlignItems(ui.Center).Children(func() {
+			input := ui.TextInput(c.Key(key+"-file-filter"), &navigation.Query).Grow(1).MinWidth(0).Height(30).
+				Placeholder("筛选文件或路径").Label("筛选文件").Tooltip("按文件名或相对路径筛选；空格分隔关键词，可匹配重命名前的路径")
+			if navigation.Query != "" {
+				input.OnShortcut(0, ui.KeyEscape, func() { navigation.Query = "" })
+			}
+			if navigation.Query != "" && iconButton(c, key+"-clear-file-filter", "close", "清除文件筛选", p).Clicked() {
+				navigation.Query = ""
+			}
+		})
 		if state.FilesLoading && len(state.Files) == 0 {
 			ui.Column(c).Grow(1).FillWidth().Center().Children(func() { label(c, "正在读取文件…", 11, p.muted) })
 			return
@@ -503,82 +557,51 @@ func (s *app) renderWorkspaceReviewFileList(c *ui.Context, p palette, state *wor
 			ui.Column(c).Grow(1).FillWidth().Center().Padding(16).Children(func() { label(c, message, 11, p.muted).Wrap() })
 			return
 		}
-		workspaceReviewEnsureExpandedDirectories(state, state.Files)
-		if state.FileScrolls == nil {
-			state.FileScrolls = make(map[string]*ui.ScrollState)
+		if len(navigation.filteredFiles) == 0 {
+			ui.Column(c).Grow(1).FillWidth().Center().Padding(16).Children(func() {
+				label(c, "没有匹配的文件。", 11, p.muted).Wrap()
+				label(c, "清除筛选后查看全部变更。", 10, p.muted).Wrap()
+			})
+			return
 		}
-		scroll := state.FileScrolls[state.FileView]
-		if scroll == nil {
-			scroll = &ui.ScrollState{}
-			state.FileScrolls[state.FileView] = scroll
-		}
-		list := ui.Scroll(c.Key(key + "-files-" + state.FileView)).Grow(1).MinHeight(0).TrackScroll(scroll).Padding(5).Gap(2)
+		rows := navigation.rows(state)
+		listState, scroll, suffix := navigation.listState(state)
+		listState.Key = func(index int) any { return rows[index].Key }
+		list := ui.List(c.Key(key+"-files-"+suffix), listState, len(rows), func(index int) {
+			row := rows[index]
+			if row.Directory != nil {
+				s.renderWorkspaceReviewDirectoryRow(c, p, state, key, navigation, row)
+			} else {
+				s.renderWorkspaceReviewFileRow(c, p, state, key, row.File, row.Depth)
+			}
+		}).Grow(1).MinWidth(0).MinHeight(0).TrackScroll(scroll).Padding(5).Gap(2)
 		state.PrefetchViewport = list.Bounds()
-		list.Children(func() {
-			if state.FileView == "flat" {
-				for _, file := range workspaceReviewSortedFiles(state.Files) {
-					s.renderWorkspaceReviewFileRow(c, p, state, key, file, 0)
-				}
-				return
+		first, last := listState.Visible()
+		for index := max(0, first); index <= last && index < len(rows) && len(state.PrefetchFrameVisible) < 16; index++ {
+			if rows[index].Directory == nil {
+				state.PrefetchFrameVisible = append(state.PrefetchFrameVisible, rows[index].File)
 			}
-			root := workspaceReviewTree(state.Files)
-			for _, file := range root.Files {
-				s.renderWorkspaceReviewFileRow(c, p, state, key, file, 0)
-			}
-			for _, directory := range workspaceReviewSortedDirectories(root) {
-				s.renderWorkspaceReviewDirectory(c, p, state, key, directory, 0)
-			}
-		})
+		}
 	})
 }
 
-func (s *app) renderWorkspaceReviewDirectory(c *ui.Context, p palette, state *workspaceHistoryState, key string, directory *workspaceReviewTreeDirectory, depth int) {
-	chain := []*workspaceReviewTreeDirectory{directory}
-	terminal := directory
-	for len(terminal.Files) == 0 && len(terminal.Directories) == 1 {
-		children := workspaceReviewSortedDirectories(terminal)
-		terminal = children[0]
-		chain = append(chain, terminal)
-	}
-	chainKeys := make([]string, len(chain))
-	segments := make([]string, len(chain))
-	expanded := true
-	for index, entry := range chain {
-		chainKeys[index] = entry.Path
-		segments[index] = entry.Name
-		if !state.ExpandedDirectories[entry.Path] {
-			expanded = false
-		}
-	}
-	path := terminal.Path
-	name := strings.Join(segments, "/")
-	button := ui.ButtonBase(c.Key(key+"-dir-"+path)).FillWidth().Row().Height(28).Padding(3, 7+float32(depth)*12).Gap(7).Radius(6).
-		Label(name).Tooltip(strings.Join(chainKeys, "/"))
+func (s *app) renderWorkspaceReviewDirectoryRow(c *ui.Context, p palette, state *workspaceHistoryState, key string, navigation *workspaceReviewFileNavigation, row workspaceReviewNavigationRow) {
+	button := ui.ButtonBase(c.Key(key+"-dir-"+row.Directory.Path)).FillWidth().MinWidth(0).Row().Height(28).Padding(3, 7+float32(row.Depth)*12).Gap(7).Radius(6).
+		Label(row.Name).Tooltip(row.Directory.Path).FocusRing(true)
 	if button.Hovered() {
 		button.Background(p.surface)
 	}
 	button.Children(func() {
 		iconName := "arrow"
-		if expanded {
+		if row.Expanded {
 			iconName = "chevron"
 		}
 		icon(c, iconName, 12, p.muted)
 		icon(c, "folder", 15, p.blue)
-		label(c, name, 10, p.text).Grow(1).MinWidth(0).SingleLine().Tooltip(terminal.Path)
+		label(c, row.Name, 10, p.text).Grow(1).MinWidth(0).SingleLine().Tooltip(row.Directory.Path)
 	})
 	if button.Clicked() {
-		for _, entry := range chain {
-			state.ExpandedDirectories[entry.Path] = !expanded
-		}
-	}
-	if !expanded {
-		return
-	}
-	for _, file := range terminal.Files {
-		s.renderWorkspaceReviewFileRow(c, p, state, key, file, depth+1)
-	}
-	for _, child := range workspaceReviewSortedDirectories(terminal) {
-		s.renderWorkspaceReviewDirectory(c, p, state, key, child, depth+1)
+		navigation.toggleDirectory(state, row)
 	}
 }
 
@@ -593,11 +616,9 @@ func (s *app) renderWorkspaceReviewFileRow(c *ui.Context, p palette, state *work
 	kind := workspaceGitChangeKind(file.Kind)
 	tooltip = workspaceChangeKindLabel(kind) + "：" + tooltip
 	image, color := workspaceReviewFileStyle(kind, p)
-	button := ui.ButtonBase(c.Key(key+"-file-"+file.Kind+"-"+file.OldPath+"-"+file.Path)).FillWidth().Row().Padding(6, 7+float32(depth)*12).Gap(7).Radius(7).Label(tooltip).Tooltip(tooltip)
-	box, viewport := button.Bounds(), state.PrefetchViewport
-	if len(state.PrefetchFrameVisible) < 16 && box.W > 0 && box.H > 0 && viewport.W > 0 && viewport.H > 0 &&
-		box.X < viewport.X+viewport.W && box.X+box.W > viewport.X && box.Y < viewport.Y+viewport.H && box.Y+box.H > viewport.Y {
-		state.PrefetchFrameVisible = append(state.PrefetchFrameVisible, file)
+	button := ui.ButtonBase(c.Key(key+"-file-"+file.Kind+"-"+file.OldPath+"-"+file.Path)).FillWidth().MinWidth(0).Row().Height(30).Padding(5, 7+float32(depth)*12).Gap(7).Radius(7).Label(tooltip).Tooltip(tooltip).FocusRing(true)
+	if state.FileView == "flat" {
+		button.Height(44)
 	}
 	if selected {
 		button.Background(p.selected)
@@ -606,7 +627,16 @@ func (s *app) renderWorkspaceReviewFileRow(c *ui.Context, p palette, state *work
 	}
 	button.Children(func() {
 		icon(c, image, 13, color)
-		label(c, display, 10, color).Grow(1).MinWidth(0).SingleLine().Tooltip(tooltip)
+		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+			label(c, display, 10, color).FillWidth().MinWidth(0).SingleLine().Tooltip(tooltip)
+			if state.FileView == "flat" {
+				parent := workspaceReviewParentPath(file.Path)
+				if file.OldPath != "" && file.OldPath != file.Path {
+					parent = workspaceReviewParentPath(file.OldPath) + " → " + parent
+				}
+				label(c, parent, 9, p.muted).FillWidth().MinWidth(0).SingleLine().Tooltip(tooltip)
+			}
+		})
 	})
 	if button.Clicked() && !selected {
 		if state.FileSelected != nil {
@@ -641,38 +671,51 @@ func workspaceGitChangeKind(kind string) domain.WorkspaceGitFileChangeKind {
 }
 
 func (s *app) renderWorkspaceReviewPreview(c *ui.Context, p palette, state *workspaceHistoryState, key string) {
-	ui.Row(c).FillWidth().Height(38).Shrink(0).Gap(6).AlignItems(ui.Center).Children(func() {
-		if state.SelectedPath == "" {
-			label(c, "选择文件查看变更", 12, p.muted).Grow(1)
+	panel := ui.Column(c.Key(key + "-file-preview")).Fill().MinWidth(0).MinHeight(0).Gap(0)
+	width := panel.Bounds().W
+	if width <= 0 {
+		width, _ = c.Size()
+		c.Invalidate()
+	}
+	inlineChoices := width >= 760 && state.Preview != nil && !state.PreviewLoading
+	panel.Children(func() {
+		ui.Row(c).FillWidth().Height(28).Shrink(0).MinWidth(0).Gap(8).AlignItems(ui.Center).Label("文件差异信息栏").Children(func() {
+			if state.SelectedPath == "" {
+				label(c, "选择文件查看变更", 12, p.muted).Grow(1)
+				return
+			}
+			path := state.SelectedPath
+			if state.SelectedOldPath != "" && state.SelectedOldPath != state.SelectedPath {
+				path = state.SelectedOldPath + " → " + state.SelectedPath
+			}
+			filename := state.SelectedPath[strings.LastIndexAny(state.SelectedPath, "/\\")+1:]
+			label(c, path, 12, p.text).Grow(1).MinWidth(0).FontWeight(600).SingleLine().Ellipsis("…/" + filename).Clip().Tooltip(path)
+			label(c, workspaceChangeKindLabel(state.SelectedKind), 10, p.muted).NoWrap().Shrink(0)
+			if inlineChoices {
+				s.renderWorkspacePreviewChoices(c, p, state, state.Preview, true)
+			}
+		})
+		ui.Divider(c)
+		if state.PreviewLoading {
+			ui.Column(c).Grow(1).FillWidth().Center().Children(func() { label(c, "正在读取 Diff…", 12, p.muted) })
 			return
 		}
-		path := state.SelectedPath
-		if state.SelectedOldPath != "" && state.SelectedOldPath != state.SelectedPath {
-			path = state.SelectedOldPath + " → " + state.SelectedPath
+		if state.Preview != nil {
+			preview, started := state.Preview, state.PreviewStartedAt
+			ui.Column(c).Grow(1).FillWidth().MinWidth(0).MinHeight(0).DrawOver(func(_ *ui.Painter, bounds ui.Rect) {
+				if bounds.W > 0 && bounds.H > 0 && !state.PreviewFirstFrame && !started.IsZero() && state.Preview == preview && state.PreviewStartedAt.Equal(started) {
+					// DrawOver runs after the preview's children have produced their
+					// paint commands. GPU presentation remains owned by the platform.
+					slog.Default().Debug("workspace git review", "phase", "first_paint", "duration_ms", float64(time.Since(started).Microseconds())/1000)
+					state.PreviewFirstFrame = true
+				}
+			}).Children(func() { s.renderWorkspaceFilePreviewBody(c, p, state, preview, !inlineChoices) })
+			return
 		}
-		label(c, path, 12, p.text).Grow(1).MinWidth(0).FontWeight(600).SingleLine().Tooltip(path)
-		label(c, workspaceChangeKindLabel(state.SelectedKind), 10, p.muted).NoWrap()
+		if state.SelectedPath != "" && state.Error == "" {
+			ui.Column(c).Grow(1).FillWidth().Center().Children(func() { label(c, "等待差异结果…", 11, p.muted) })
+			return
+		}
+		ui.Column(c).Grow(1).FillWidth().Center().Children(func() { label(c, "选择左侧文件查看变更", 12, p.muted) })
 	})
-	ui.Divider(c)
-	if state.PreviewLoading {
-		ui.Column(c).Grow(1).FillWidth().Center().Children(func() { label(c, "正在读取 Diff…", 12, p.muted) })
-		return
-	}
-	if state.Preview != nil {
-		preview, started := state.Preview, state.PreviewStartedAt
-		ui.Column(c).Grow(1).FillWidth().MinWidth(0).MinHeight(0).DrawOver(func(_ *ui.Painter, bounds ui.Rect) {
-			if bounds.W > 0 && bounds.H > 0 && !state.PreviewFirstFrame && !started.IsZero() && state.Preview == preview && state.PreviewStartedAt.Equal(started) {
-				// DrawOver runs after the preview's children have produced their
-				// paint commands. GPU presentation remains owned by the platform.
-				slog.Default().Debug("workspace git review", "phase", "first_paint", "duration_ms", float64(time.Since(started).Microseconds())/1000)
-				state.PreviewFirstFrame = true
-			}
-		}).Children(func() { s.renderWorkspaceFilePreview(c, p, state, preview) })
-		return
-	}
-	if state.SelectedPath != "" && state.Error == "" {
-		ui.Column(c).Grow(1).FillWidth().Center().Children(func() { label(c, "等待差异结果…", 11, p.muted) })
-		return
-	}
-	ui.Column(c).Grow(1).FillWidth().Center().Children(func() { label(c, "选择左侧文件查看变更", 12, p.muted) })
 }

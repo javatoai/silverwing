@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -20,6 +21,8 @@ type frame struct {
 	first, last int
 	matches     []diffRange
 	current     diffRange
+	// texts are the app's text backgrounds in the lines in view.
+	texts       []TextBackground
 	occurrence  string
 	brackets    [2]Range
 	bracketsOK  bool
@@ -46,7 +49,7 @@ func (ed *editor) layout(w, h, scale float32) {
 	}
 	ed.viewH = h
 	wrap := ed.o.wrap != ed.toggledWrap
-	ww := w - ed.textX - scrollbarWidth - 4
+	ww := w - ed.textX - ed.trackWidth() - 4
 	if ed.o.wrapColumn > 0 {
 		ww = min(ww, float32(ed.o.wrapColumn)*v.charWidth)
 	}
@@ -173,6 +176,11 @@ func (ed *editor) prepare(f *frame) {
 		f.matches = append(f.matches, range_)
 		if match.Current {
 			f.current = range_
+		}
+	}
+	for _, b := range ed.o.textBgs {
+		if b.Start < b.End && b.End > a && b.Start < z && b.Color.A > 0 {
+			f.texts = append(f.texts, b)
 		}
 	}
 	p := ed.primary()
@@ -359,6 +367,14 @@ func (ed *editor) paintLine(p *ui.Painter, r ui.Rect, f *frame, line int, g line
 		if active && !lineSelected {
 			p.Fill(ui.Rect{X: textRect.X, Y: y, W: textRect.W, H: lh}, ct.ActiveLine, 0)
 		}
+		// The app's ranges of text, at characters' edges.
+		for _, b := range f.texts {
+			if b.End <= l.start || b.Start >= l.start+len(l.text) {
+				continue
+			}
+			a, z := runeAt(l.text, max(b.Start-l.start, 0)), runeAt(l.text, min(b.End-l.start, len(l.text)))
+			ed.fillRange(p, f, l, row, ox, y, l.toDisp(a, false), l.toDisp(z, false), b.Color, 0)
+		}
 		// Words a diff changed.
 		if ed.o.decor != nil {
 			for _, w := range ed.o.decor.words(line) {
@@ -506,6 +522,14 @@ func (s lineLook) word(ct *Theme, ed *editor) ui.Color {
 		return ct.Occurrence
 	}
 	return s.bar.Alpha(0.22)
+}
+
+// runeAt returns i, or the start of the character holding byte i of s.
+func runeAt(s string, i int) int {
+	for i > 0 && i < len(s) && !utf8.RuneStart(s[i]) {
+		i--
+	}
+	return i
 }
 
 // fillRange fills displayed bytes a to b of a row.
@@ -765,17 +789,31 @@ func (ed *editor) paintGutter(p *ui.Painter, r ui.Rect, f *frame) {
 }
 
 // paintBar draws a diff's change bar: solid for additions, striped for
-// deletions, as Pierre's, so the two differ without their colors.
+// deletions, as Pierre's, so the two differ without their colors. The
+// stripes keep to the content, not to r, so those of consecutive lines
+// make one pattern, which scrolls with them.
 func (ed *editor) paintBar(p *ui.Painter, r ui.Rect, s lineLook) {
 	if !s.stripes {
 		p.Fill(r, s.bar, 0)
 		return
 	}
-	p.Clip(r, 0, func() {
-		for y := r.Y; y < r.Y+r.H; y += 4 {
-			p.Fill(ui.Rect{X: r.X, Y: y, W: r.W, H: 2}, s.bar, 0)
+	barStripes(r, float64(r.Y-ed.r.Y)+ed.scrollY, func(sr ui.Rect) { p.Fill(sr, s.bar, 0) })
+}
+
+// barStripes calls fn with the stripes of a deletion bar r whose top is
+// at top in the content: 2 DIPs every 4 from the content's top, cut to r.
+func barStripes(r ui.Rect, top float64, fn func(ui.Rect)) {
+	const period, width = 4, 2
+	phase := math.Mod(top, period)
+	if phase < 0 {
+		phase += period
+	}
+	for y := r.Y - float32(phase); y < r.Y+r.H; y += period {
+		y0, y1 := max(y, r.Y), min(y+width, r.Y+r.H)
+		if y1 > y0 {
+			fn(ui.Rect{X: r.X, Y: y0, W: r.W, H: y1 - y0})
 		}
-	})
+	}
 }
 
 // paintScrollbars draws the scroll bars, the vertical one with markers

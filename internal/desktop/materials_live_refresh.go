@@ -55,7 +55,7 @@ func (s *app) observeMaterialsLiveRefresh() {
 	relative := s.materialsRelativePath(s.materialsUnit.state.documentPath)
 	live.mu.Lock()
 	live.selected = filepath.ToSlash(relative)
-	if s.materialsFileReadBlocked() || s.loading || !live.pending {
+	if s.materialsFileReadBlocked() || s.loading || !live.pending || s.materialsMarkdownSaveInProgress() {
 		live.mu.Unlock()
 		return
 	}

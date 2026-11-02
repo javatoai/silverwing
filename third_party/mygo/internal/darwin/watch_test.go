@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/internal/platform"
+	"github.com/egoist/mygo/internal/wait"
 )
 
 func TestFSEventsEventMapping(t *testing.T) {
@@ -102,7 +103,7 @@ func watchTestNext(t *testing.T, notices chan platform.FileWatchNotice, target u
 // the mapping calls dirty.
 func watchTestNextKinds(t *testing.T, notices chan platform.FileWatchNotice, target uint64, kinds []platform.FileWatchKind, names ...string) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(wait.Guard)
 	for time.Now().Before(deadline) {
 		select {
 		case n := <-notices:
@@ -215,8 +216,9 @@ func TestFSEventsWatch(t *testing.T) {
 	watchTestNextKinds(t, notices, 2, watchTestWritten, "file")
 }
 
-// A file target is watched through the directory that holds it, whose
-// stream reports it by name.
+// A file is watched through the directory that holds it, whose stream
+// reports it by name: a file target is refused, so that the core enrolls
+// no files.
 func TestFSEventsWatchFile(t *testing.T) {
 	dir := watchTestDir(t)
 	file := filepath.Join(dir, "config.json")
@@ -227,7 +229,7 @@ func TestFSEventsWatchFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Add(platform.FileWatchTarget{ID: 2, Path: file, Info: info}); err != nil {
+	if err := w.Add(platform.FileWatchTarget{ID: 2, Path: file, Info: info}); !errors.Is(err, platform.ErrUnsupported) {
 		t.Fatalf("file target: %v", err)
 	}
 	watchTestWrite(t, file, "two, longer")

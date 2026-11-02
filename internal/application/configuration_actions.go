@@ -52,11 +52,12 @@ func (a *App) configurationActionWithProgress(ctx context.Context, action Action
 	case "config.import-preview", "config.restore-preview":
 		path := actionPath(action)
 		var config domain.AppConfig
+		var fingerprint string
 		var err error
 		if action.Kind == "config.import-preview" {
-			config, err = a.Config.PreviewImportContext(ctx, path)
+			config, fingerprint, err = a.Config.PreviewImportSnapshotContext(ctx, path)
 		} else {
-			config, err = a.Config.PreviewRestoreContext(ctx, path)
+			config, fingerprint, err = a.Config.PreviewRestoreSnapshotContext(ctx, path)
 		}
 		if err != nil {
 			return ActionResult{}, err
@@ -92,10 +93,6 @@ func (a *App) configurationActionWithProgress(ctx context.Context, action Action
 			if _, e := os.Stat(tool.Path); e != nil {
 				preview.InvalidDevelopmentTools = append(preview.InvalidDevelopmentTools, string(tool.Type))
 			}
-		}
-		fingerprint, err := storage.ConfigurationArchiveFingerprintContext(ctx, path)
-		if err != nil {
-			return ActionResult{}, err
 		}
 		preview.Fingerprint = fingerprint
 		return ActionResult{Message: "配置预览已读取，请确认变更", Path: path, Data: preview}, nil

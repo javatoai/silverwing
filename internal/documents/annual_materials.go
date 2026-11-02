@@ -2,7 +2,6 @@ package documents
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -85,7 +84,7 @@ func (s MaterialsScope) Writable(path string, allowRoot bool) bool {
 				return false
 			}
 		}
-		return !(strings.EqualFold(root, s.Temporary) && strings.EqualFold(rel, ".gitignore"))
+		return true
 	}
 	return false
 }
@@ -104,24 +103,7 @@ func (s MaterialsScope) EnsureLocal() error {
 			return err
 		}
 	}
-	path := filepath.Join(s.Temporary, ".gitignore")
-	if info, err := os.Lstat(path); err == nil && (!info.Mode().IsRegular() || isUnsafeDirectory(info, path)) {
-		return errors.New("temp 忽略文件不是普通文件")
-	} else if err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	data, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	const rule = "# Silverwing local temporary files\n*\n"
-	if strings.HasSuffix(strings.ReplaceAll(string(data), "\r\n", "\n"), rule) {
-		return nil
-	}
-	if len(data) > 0 && data[len(data)-1] != '\n' {
-		data = append(data, '\n')
-	}
-	return storage.WriteFileAtomic(path, append(data, []byte(rule)...), 0o600)
+	return storage.MigrateMaterialsTemporaryIgnore(filepath.Join(s.Temporary, ".gitignore"))
 }
 
 func findAnnualRequirementDirectory(root, id, folder string, year int) (string, error) {
@@ -198,20 +180,16 @@ func (s MaterialsScope) DirectoryInstructions(planned bool) (string, error) {
 			return "", fmt.Errorf("资料目录包含不安全的链接：%s", path)
 		}
 	}
-	entries, err := os.ReadDir(s.Root)
-	if err != nil && !(planned && os.IsNotExist(err)) {
-		return "", err
-	}
 	var b strings.Builder
 	b.WriteString("## 资料目录清单\n\n")
 	if planned {
 		b.WriteString("以下为资料准备目标；仅在准备成功后使用，不能据此宣称目录已经创建。\n\n")
 	}
-	ownedLabel := "正式资料目录（可读写，按配置参与 Git 同步）"
+	ownedLabel := "本人正式资料目录（可读写）"
 	if s.local() {
 		ownedLabel = "任务资料目录（可读写，仅保存在当前任务内，不参与需求资料 Git 同步）"
 	}
-	for _, area := range []struct{ path, label string }{{s.Owned, ownedLabel}, {s.Temporary, "本地临时目录（可读写，禁止提交、推送或通过 Git 覆盖）"}} {
+	for _, area := range []struct{ path, label string }{{s.Owned, ownedLabel}, {s.Temporary, "临时资料目录（可读写，用于过程日志、临时脚本和中间结果）"}} {
 		info, err := os.Lstat(area.path)
 		if os.IsNotExist(err) && !planned {
 			fmt.Fprintf(&b, "- 尚未准备的%s：%s（不表示目录已存在）\n", area.label, materialsCodePath(area.path))
@@ -225,24 +203,11 @@ func (s MaterialsScope) DirectoryInstructions(planned bool) (string, error) {
 		}
 		fmt.Fprintf(&b, "- %s：%s\n", area.label, materialsCodePath(area.path))
 	}
-	for _, entry := range entries {
-		if !entry.IsDir() || strings.EqualFold(entry.Name(), ".git") || strings.HasPrefix(strings.ToLower(entry.Name()), ".silverwing-") || strings.EqualFold(entry.Name(), filepath.Base(s.Owned)) || strings.EqualFold(entry.Name(), TemporaryMaterialsDirectory) {
-			continue
-		}
-		path := filepath.Join(s.Root, entry.Name())
-		info, err := os.Lstat(path)
-		if err != nil {
-			return "", err
-		}
-		if isUnsafeDirectory(info, path) {
-			continue
-		}
-		fmt.Fprintf(&b, "- 同事资料目录（只读，可浏览和复制，禁止修改及上传本地变化）：%s\n", materialsCodePath(path))
-	}
+	b.WriteString("\n除以上两个可读写目录外，其他同级子文件夹均属于其他团队成员的资料目录。请自行查看实际有哪些目录，并主动阅读与当前任务相关的资料作为参考。这些目录只读，不得新增、修改、删除、移动或重命名其中的文件和目录，也不得通过复制、导入等操作向其中写入。\n")
 	if s.local() {
-		b.WriteString("\n分析、方案和文档写入任务资料目录；过程日志、临时脚本和中间结果写入 temp。关联需求不会自动移动这些文件，也不会将其纳入需求资料 Git 同步。不得修改忽略规则或强制添加 temp。其他同级文件同样只读。产品源代码仍只写入本任务授权服务工作区。\n")
+		b.WriteString("\n分析、方案和文档写入任务资料目录；过程日志、临时脚本和中间结果写入临时资料目录。关联需求不会自动移动这些文件，也不会将其纳入需求资料 Git 同步。其他同级文件同样只读。产品源代码仍只写入本任务授权服务工作区。\n")
 	} else {
-		b.WriteString("\n需求分析、设计、测试、验收等正式交付资料写入正式资料目录；过程日志、临时脚本、中间结果和临时导出写入 temp。不得修改忽略规则或强制添加 temp。其他同级文件同样只读。产品源代码仍只写入本任务授权服务工作区。\n")
+		b.WriteString("\n需求分析、设计、测试、验收等本人交付资料写入本人正式资料目录；过程日志、临时脚本、中间结果和临时导出写入临时资料目录。其他同级文件同样只读。产品源代码仍只写入本任务授权服务工作区。\n")
 	}
 	return b.String(), nil
 }

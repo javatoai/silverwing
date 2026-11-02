@@ -170,7 +170,7 @@ func (s *app) ensureSettingsPageData() {
 	if s.busy || !s.pageLocalReadReady() {
 		return
 	}
-	key := s.snapshot.Home + "\x00" + s.settingsUnit.state.settingsTab + "/" + s.settingsUnit.state.settingsPage
+	key := s.snapshot.Home + "\x00" + s.settingsUnit.state.settingsTab + "/" + s.settingsContentKey()
 	if s.settingsUnit.state.settingsLoaded == key {
 		return
 	}
@@ -188,10 +188,10 @@ func (s *app) ensureSettingsPageData() {
 	case "codex-mcp":
 		s.requestSettingsCLIStatus("codex", false)
 		s.act("codex.extensions/mcp/status", "", "", "", "", "", s.settingsMCPPayload(nil))
-	case "cli-meegle", "cli-genbu":
+	case "cli-tools":
+		s.requestSettingsCLIStatus(s.currentSettingsCLITool(), false)
+	case "cli-git", "cli-codex", "cli-meegle", "cli-genbu":
 		s.requestSettingsCLIStatus(strings.TrimPrefix(s.settingsUnit.state.settingsPage, "cli-"), false)
-	case "task-creation":
-		s.requestSettingsCLIStatus("codex", false)
 	case "skill-sources":
 		s.act("skills.sources/catalog", "", "", "", "", "", nil)
 	case "git":

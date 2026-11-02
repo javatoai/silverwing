@@ -109,6 +109,7 @@ type toolPageState struct {
 	diffSplitRatio          float32
 	diffSharedScrollSide    int
 	diffObservedScrollY     [2]float64
+	diffObservedScrollX     [2]float32
 	diffObservedScrollReady bool
 
 	portFilter           string

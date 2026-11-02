@@ -97,8 +97,9 @@ func (s *Service) verifyRequirementRefresh(ctx context.Context, config domain.Ap
 // Optional fields extend the v1 metadata cache. Common fields are shared across
 // Sprints; personal estimates are explicitly scoped and keep their own age.
 type RequirementSprintEstimate struct {
-	Days      *string `json:"days"`
-	FetchedAt int64   `json:"fetchedAt"`
+	Days        *string `json:"days"`
+	FetchedAt   int64   `json:"fetchedAt"`
+	RuleVersion int     `json:"ruleVersion,omitempty"`
 }
 
 func (s *Service) refreshRequirementEstimate(ctx context.Context, config domain.AppConfig, item domain.ParticipatedWorkItem, sprintKey string) (*string, error) {

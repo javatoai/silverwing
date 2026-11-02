@@ -58,7 +58,7 @@ func TestDiffToolSplitRatioCanBeAdjustedAndSurvivesResize(t *testing.T) {
 	if delta := leftPosition.Y - rightPosition.Y; delta < -0.5 || delta > 0.5 {
 		t.Fatalf("vertical scroll positions are not synchronized: left=%v right=%v", leftPosition.Y, rightPosition.Y)
 	}
-	if leftPosition.X != 30 || rightPosition.X != 70 {
-		t.Fatalf("horizontal scroll positions should remain independent: left=%v right=%v", leftPosition.X, rightPosition.X)
+	if leftPosition.X != 30 || rightPosition.X != 30 {
+		t.Fatalf("horizontal scroll positions should synchronize from the active left pane: left=%v right=%v", leftPosition.X, rightPosition.X)
 	}
 }

@@ -30,6 +30,23 @@ func BenchmarkParse(b *testing.B) {
 	}
 }
 
+// BenchmarkPathological parses the inputs of TestLinearTime, which
+// counts the parser's steps; this times them.
+func BenchmarkPathological(b *testing.B) {
+	srcs := make([]string, len(pathological))
+	for i, c := range pathological {
+		srcs[i] = c.src(5000)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		for i, c := range pathological {
+			d := New(c.ext)
+			d.Set(srcs[i])
+			inlinesAll(d)
+		}
+	}
+}
+
 // benchStream streams the answer in chunks of n bytes, with healing, the
 // inlines of the tail parsed after each, as a frame shows them; it
 // reports the time per chunk.

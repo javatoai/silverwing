@@ -3,6 +3,7 @@ package desktop
 import (
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 
 	"silverwing-go/internal/workspace"
@@ -61,6 +62,7 @@ func (s *app) buildMarkdownTaskRootReadingRelocation(plan *markdownTaskRootMigra
 	materialKeys := map[string]bool{}
 	for index := range state.cache.Materials {
 		record := &state.cache.Materials[index]
+		previousRoot := readingRootValue(record.Root)
 		record.TaskPath, err = rebase(record.TaskPath)
 		if err != nil {
 			return nil, err
@@ -77,6 +79,19 @@ func (s *app) buildMarkdownTaskRootReadingRelocation(plan *markdownTaskRootMigra
 			return nil, errors.New("迁移目标已有不同的资料阅读身份")
 		}
 		materialKeys[key] = true
+		if record.Files != nil {
+			files := make(map[string]ReadingPositionSnapshot, len(record.Files))
+			for relative, position := range record.Files {
+				previous := filepath.Join(previousRoot, filepath.FromSlash(relative))
+				replacement, err := rebase(previous)
+				if err != nil {
+					return nil, err
+				}
+				position.Editor = rebindMarkdownReadingDocument(position.Editor, previous, replacement)
+				files[relative] = position
+			}
+			record.Files = files
+		}
 		// All relative files, tabs, selection, expansion and scroll positions
 		// remain unchanged when their complete task/materials root moves.
 	}

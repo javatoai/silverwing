@@ -17,6 +17,8 @@ type RequirementSprint struct {
 	Status      string `json:"status"`
 }
 type RequirementList struct {
+	FromCache         *bool               `json:"fromCache,omitempty"`
+	SprintsFetchedAt  *int64              `json:"sprintsFetchedAt,omitempty"`
 	Items             []Requirement       `json:"items"`
 	Failures          []string            `json:"failures"`
 	CompletedQueries  int                 `json:"completedQueries"`
@@ -103,6 +105,8 @@ func requirementListResult(raw any) (OperationResult[RequirementList], error) {
 	// The integrations adapter owns its cached domain result. Convert once at
 	// this boundary and give all UI consumers the same application view.
 	query, err := ResultData[struct {
+		FromCache         *bool                         `json:"fromCache,omitempty"`
+		SprintsFetchedAt  *int64                        `json:"sprintsFetchedAt,omitempty"`
 		Items             []domain.ParticipatedWorkItem `json:"items"`
 		Failures          []string                      `json:"failures"`
 		CompletedQueries  int                           `json:"completedQueries"`
@@ -121,7 +125,7 @@ func requirementListResult(raw any) (OperationResult[RequirementList], error) {
 		}
 		items = append(items, Requirement{ID: item.ID, Title: item.Title, Project: item.ProjectName, ProjectKey: item.ProjectKey, Type: item.Type, TypeLabel: item.TypeLabel, URL: item.URL, Status: value(item.Status), Participants: participants, WorkItem: item})
 	}
-	result := OperationResult[RequirementList]{Message: "参与的工作项已读取", Data: RequirementList{Items: items, Failures: query.Failures, CompletedQueries: query.CompletedQueries, Sprints: query.Sprints, SelectedSprintKey: query.SelectedSprintKey, FetchedAt: query.FetchedAt}}
+	result := OperationResult[RequirementList]{Message: "参与的工作项已读取", Data: RequirementList{Items: items, Failures: query.Failures, CompletedQueries: query.CompletedQueries, Sprints: query.Sprints, SelectedSprintKey: query.SelectedSprintKey, FetchedAt: query.FetchedAt, FromCache: query.FromCache, SprintsFetchedAt: query.SprintsFetchedAt}}
 	if len(query.Failures) > 0 {
 		result.Message = "工作项已读取，部分查询失败；请查看失败说明"
 	}

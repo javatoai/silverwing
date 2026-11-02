@@ -50,6 +50,10 @@ func runFeatureClosers(closers ...func() error) error {
 }
 
 func (s *app) stopDesktopFeatures() {
+	s.stopTaskTerminals()
+	s.closeMarkdownLinkFile()
+	s.taskFilesUnit.stopTaskFiles()
+	s.stopTaskServices()
 	s.taskUnit.stopFeature()
 	s.materialsUnit.stopFeature()
 	s.settingsUnit.stopFeature()
@@ -61,7 +65,23 @@ func (s *app) stopDesktopFeatures() {
 // Window shutdown coordinates complete feature entries. Each feature owns the
 // detailed worker list, resource state, and late-result cleanup rules above.
 func (s *app) closeDesktopFeatures(runErr error) error {
+	// Sample positions and finish pending saves before disposing the current
+	// component context, including resource imports outside the preview group.
+	defer func() {
+		if state := s.materialsUnit.state.markdown; state != nil {
+			closeMarkdownPreviewAssets(state)
+		}
+	}()
 	closers := []func() error{
+		func() error {
+			return runFeatureCleanup(featureCleanupStep{"退出前任务终端清理未完成", 10 * time.Second, s.closeTaskTerminals})
+		},
+		func() error {
+			return runFeatureCleanup(featureCleanupStep{"退出前服务信息读取清理未完成", 10 * time.Second, s.closeTaskServices})
+		},
+		func() error {
+			return runFeatureCleanup(featureCleanupStep{"退出前任务文件读取清理未完成", 10 * time.Second, s.taskFilesUnit.closeTaskFiles})
+		},
 		s.materialsUnit.drainFeature,
 		s.drainDeveloperFeatures,
 		s.settingsUnit.drainFeature,

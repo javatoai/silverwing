@@ -98,8 +98,7 @@ func assertWorkspaceCopyTooltip(t *testing.T, tester *ui.Tester, action, tooltip
 		t.Fatalf("missing copy anchor %q: %+v", action, anchor)
 	}
 	tester.Move(anchor.X+anchor.W/2, anchor.Y+anchor.H/2)
-	time.Sleep(650 * time.Millisecond)
-	tester.Frame()
+	tester.Advance(650 * time.Millisecond)
 	tip, ok := tester.Find(tooltip)
 	if !ok {
 		t.Fatalf("complete tooltip missing for %s; texts=%q", action, tester.Texts())

@@ -21,6 +21,13 @@ var (
 	epoxyHasExtension func(name string) bool
 	currentGDKContext func() uintptr // gdk_gl_context_get_current, when GDK is loaded
 
+	// GTK's functions of a GtkGLArea's context, when GTK is loaded
+	// (MakeAreaCurrent).
+	gdkClearCurrent    func()                     // gdk_gl_context_clear_current
+	gtkAreaContext     func(area uintptr) uintptr // gtk_gl_area_get_context
+	gtkAreaMakeCurrent func(area uintptr)         // gtk_gl_area_make_current
+	gtkAreaAttach      func(area uintptr)         // gtk_gl_area_attach_buffers
+
 	glGetString             func(name uint32) uintptr
 	glGetError              func() uint32
 	glGetIntegerv           func(name uint32, data *int32)
@@ -38,10 +45,14 @@ var (
 	glUseProgram            func(program uint32)
 	glDeleteProgram         func(program uint32)
 	glGetUniformLocation    func(program uint32, name string) int32
+	glGetUniformBlockIndex  func(program uint32, name string) uint32
+	glUniformBlockBinding   func(program, index, binding uint32)
+	glBindBufferBase        func(target, index, buffer uint32)
 	glUniform1i             func(location, v int32)
 	glUniform2f             func(location int32, x, y float32)
 	glUniform1f             func(location int32, v float32)
 	glUniform2i             func(location, x, y int32)
+	glUniform4i             func(location, x, y, z, w int32)
 	glCopyTexSubImage2D     func(target uint32, level, xoff, yoff, x, y, w, h int32)
 	glGenVertexArrays       func(n int32, out *uint32)
 	glBindVertexArray       func(array uint32)
@@ -125,10 +136,14 @@ func load() error {
 		gl(&glUseProgram, "glUseProgram")
 		gl(&glDeleteProgram, "glDeleteProgram")
 		gl(&glGetUniformLocation, "glGetUniformLocation")
+		gl(&glGetUniformBlockIndex, "glGetUniformBlockIndex")
+		gl(&glUniformBlockBinding, "glUniformBlockBinding")
+		gl(&glBindBufferBase, "glBindBufferBase")
 		gl(&glUniform1i, "glUniform1i")
 		gl(&glUniform2f, "glUniform2f")
 		gl(&glUniform1f, "glUniform1f")
 		gl(&glUniform2i, "glUniform2i")
+		gl(&glUniform4i, "glUniform4i")
 		gl(&glCopyTexSubImage2D, "glCopyTexSubImage2D")
 		gl(&glGenVertexArrays, "glGenVertexArrays")
 		gl(&glBindVertexArray, "glBindVertexArray")
@@ -173,8 +188,56 @@ func load() error {
 		if sym, err := purego.Dlsym(purego.RTLD_DEFAULT, "gdk_gl_context_get_current"); err == nil && sym != 0 {
 			purego.RegisterFunc(&currentGDKContext, sym)
 		}
+		gtk := map[string]any{
+			"gdk_gl_context_clear_current": &gdkClearCurrent, "gtk_gl_area_get_context": &gtkAreaContext,
+			"gtk_gl_area_make_current": &gtkAreaMakeCurrent, "gtk_gl_area_attach_buffers": &gtkAreaAttach,
+		}
+		for name, f := range gtk {
+			sym, err := purego.Dlsym(purego.RTLD_DEFAULT, name)
+			if err != nil || sym == 0 {
+				gdkClearCurrent = nil // all or none
+				break
+			}
+			purego.RegisterFunc(f, sym)
+		}
 	})
 	return errLoad
+}
+
+// MakeAreaCurrent makes the context of a GtkGLArea current again, with the
+// area's framebuffer bound, when it no longer is during the area's render
+// signal, and reports whether OpenGL has a current context after. GTK
+// makes the area's context current before the signal, but what a frame
+// runs before it draws, as a window that a button's action creates, shows
+// or hides, can leave another context current, or none: GDK's
+// gdk_window_hide clears the current context of the window it hides, and
+// disposing a context makes EGL's current one none. GDK remembers the
+// context it last made current and does nothing when asked for it again,
+// so the area's context is made current again past that memory: cleared
+// first, then made current.
+func MakeAreaCurrent(area uintptr) bool {
+	if load() != nil {
+		return false
+	}
+	if area == 0 || gdkClearCurrent == nil || currentGDKContext == nil {
+		return hasContext()
+	}
+	ctx, has := gtkAreaContext(area), hasContext()
+	if !needsRestore(ctx, currentGDKContext(), has) {
+		return has
+	}
+	gdkClearCurrent()
+	gtkAreaMakeCurrent(area)
+	gtkAreaAttach(area)
+	return hasContext()
+}
+
+// needsRestore reports whether the context of a GtkGLArea, area, must be
+// made current again before drawing into the area: GDK has another
+// context current, current, or OpenGL none at all, has false, whatever
+// GDK thinks. An area without a context has none to make current.
+func needsRestore(area, current uintptr, has bool) bool {
+	return area != 0 && (current != area || !has)
 }
 
 func currentContext() uintptr {
@@ -205,8 +268,16 @@ func contextVersion() (version int32, es bool) { return epoxyGLVersion(), !epoxy
 // hasExtension reports whether the current context has an extension.
 func hasExtension(name string) bool { return epoxyHasExtension(name) }
 
+// hasContext reports whether a context is current, which GDK may think one
+// is when OpenGL does not: libepoxy aborts the first call of most GL
+// functions without one. glGetString it finds without.
+func hasContext() bool { return glGetString(glVersion) != 0 }
+
 // versionString describes the current context's version, for errors.
 func versionString() string { return goString(glGetString(glVersion)) }
+
+// rendererString names the current context's renderer.
+func rendererString() string { return goString(glGetString(glRenderer)) }
 
 // setShaderSource sets the source of a shader.
 func setShaderSource(s uint32, src string) {

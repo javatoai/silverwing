@@ -14,11 +14,20 @@ func (s *app) bindMaterialsReadingContextMenu(state *markdownEditorState) {
 			s.openDocumentFind(c)
 		}
 		mode, next := "查看 Markdown 源码", "SOURCE"
-		if s.readingMode() == "SOURCE" {
+		materialsEditor := state.live != nil && s.materialsMarkdownWritable(path)
+		if materialsEditor && s.materialsUnit.state.documentEditing && state.live.SourceMode || !materialsEditor && s.readingMode() == "SOURCE" {
 			mode, next = "查看 Markdown 预览", "RENDERED"
 		}
-		if menu.Item(mode).Chosen() {
-			s.setReadingMode(next)
+		if state.componentEditor == nil && menu.Item(mode).Chosen() {
+			if materialsEditor {
+				if next == "SOURCE" {
+					s.setMaterialsMarkdownMode("source")
+				} else {
+					s.setMaterialsMarkdownMode("live")
+				}
+			} else {
+				s.setReadingMode(next)
+			}
 		}
 		if menu.Item("重新读取文档").Disabled(s.materialsUnit.state.documentReadPending || s.materialsFileInputBusy()).Chosen() {
 			s.rereadSelectedMaterial(true)

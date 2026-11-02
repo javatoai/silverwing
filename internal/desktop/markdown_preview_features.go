@@ -57,6 +57,14 @@ func closeMarkdownPreviewState(state *markdownEditorState) {
 }
 
 func closeMarkdownPreviewAssets(state *markdownEditorState) {
+	if state.componentReader != nil {
+		state.componentReader.Close()
+		state.componentReader = nil
+	}
+	if state.componentEditor != nil {
+		state.componentEditor.Close()
+		state.componentEditor = nil
+	}
 	if state.imagePoolOwned {
 		state.imagePool.close()
 		state.imagePool = nil
@@ -180,6 +188,9 @@ func (s *app) renderMarkdownImage(c *ui.Context, p palette, state *markdownEdito
 				s.openMarkdownBitmapViewer(state, image.bitmap)
 			}
 			preview := ui.Image(c.Key(previewKey), image.bitmap).Width(float32(width)).MaxWidthPercent(100).AspectRatio(float32(width) / float32(height)).Fit(ui.Contain).Label("Markdown 图片：" + alt).OnClick(open)
+			// Images are controls inside the native writing surface, like code
+			// copy/language controls. Stop its text-drag handler owning the click.
+			preview.HandleInput(func(ui.InputEvent) bool { return false })
 			if isCommentDraftMarkdownOwner(state) {
 				preview.Focusable().OnShortcut(0, ui.KeyEnter, open)
 				if s.requirementUnit.state.commentComposers != nil && s.requirementUnit.state.commentComposers.active != nil {
@@ -230,7 +241,8 @@ func (s *app) ensureMarkdownImage(state *markdownEditorState, part editor.Part, 
 	pool := s.markdownImagePoolFor(state)
 	cacheKey := s.markdownImageStateKey(state, pool, link)
 	image := state.inlineImages[nodeKey]
-	if image != nil && image.key == cacheKey {
+	if image != nil && image.key == cacheKey &&
+		(!image.waiting || image.bitmap != nil || s.win == nil || s.win.IsDestroyed()) {
 		return image, nil
 	}
 	if image != nil && image.cancel != nil {
@@ -280,7 +292,6 @@ func (s *app) ensureMarkdownImage(state *markdownEditorState, part editor.Part, 
 	win := s.win
 	if win == nil || win.IsDestroyed() {
 		cancel()
-		delete(state.inlineImages, nodeKey)
 		image.loading, image.waiting = false, true
 		return image, nil
 	}
@@ -296,7 +307,7 @@ func (s *app) ensureMarkdownImage(state *markdownEditorState, part editor.Part, 
 				return
 			}
 			if !state.detached {
-				if state.binding != nil {
+				if state.binding != nil || state.live != nil {
 					if !s.markdownEditorIsCurrent(state) {
 						return
 					}
@@ -407,7 +418,20 @@ func (s *app) resolveTaskMarkdownImage(state *markdownEditorState, link string) 
 	}
 	source, err = filepath.EvalSymlinks(source)
 	if err != nil {
-		return "", false, fmt.Errorf("Markdown 文档不可访问")
+		// A newly edited task note may import an image before its first
+		// debounced save. Its existing, verified parent is the image base.
+		ref, writable := documentSaveRef{}, false
+		if state.binding != nil {
+			ref, writable = s.materialsUnit.documentSaveRef(state.binding.id)
+		}
+		if !os.IsNotExist(err) || !writable || !ref.localTaskRules || ref.expectedExists {
+			return "", false, fmt.Errorf("Markdown 文档不可访问")
+		}
+		parent, parentErr := filepath.EvalSymlinks(filepath.Dir(state.path))
+		if parentErr != nil || !markdownPathWithin(root, parent) {
+			return "", false, fmt.Errorf("Markdown 文档目录不可访问")
+		}
+		source = filepath.Join(parent, filepath.Base(state.path))
 	}
 	if !markdownPathWithin(root, source) {
 		return "", false, fmt.Errorf("Markdown 文档不在当前%s目录内", rootLabel)

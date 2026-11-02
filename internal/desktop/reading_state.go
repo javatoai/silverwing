@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	markdownui "silverwing-go/internal/ui/markdown"
 	"sort"
 	"strings"
 	"sync"
@@ -67,11 +68,12 @@ func (s *NativeMarkdownReadingState) UnmarshalJSON(data []byte) error {
 // ReadingPositionSnapshot mirrors Source's per-document position DTO. The order
 // slices retain LRU order through JSON even though callers can use ordinary maps.
 type ReadingPositionSnapshot struct {
-	Mode        string                     `json:"mode"`
-	Zoom        int                        `json:"zoom"`
-	Scrolls     map[string]int             `json:"scrolls"`
-	Lists       map[string][]int           `json:"lists"`
-	Chromium    NativeMarkdownReadingState `json:"chromium"`
+	Editor      *markdownui.EditorViewState `json:"editor,omitempty"`
+	Mode        string                      `json:"mode"`
+	Zoom        int                         `json:"zoom"`
+	Scrolls     map[string]int              `json:"scrolls"`
+	Lists       map[string][]int            `json:"lists"`
+	Chromium    NativeMarkdownReadingState  `json:"chromium"`
 	scrollOrder []string
 	listOrder   []string
 }
@@ -120,6 +122,7 @@ func (p ReadingPositionSnapshot) bounded() ReadingPositionSnapshot {
 		return []int{clampInt(index, 0, 1_000_000), clampInt(offset, 0, 100_000_000)}
 	})
 	p.Chromium = p.Chromium.bounded()
+	p.Editor = boundedMarkdownEditorView(p.Editor)
 	return p
 }
 
@@ -152,13 +155,14 @@ func (p ReadingPositionSnapshot) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 	type wire struct {
-		Mode     string                     `json:"mode"`
-		Zoom     int                        `json:"zoom"`
-		Scrolls  json.RawMessage            `json:"scrolls"`
-		Lists    json.RawMessage            `json:"lists"`
-		Chromium NativeMarkdownReadingState `json:"chromium"`
+		Editor   *markdownui.EditorViewState `json:"editor,omitempty"`
+		Mode     string                      `json:"mode"`
+		Zoom     int                         `json:"zoom"`
+		Scrolls  json.RawMessage             `json:"scrolls"`
+		Lists    json.RawMessage             `json:"lists"`
+		Chromium NativeMarkdownReadingState  `json:"chromium"`
 	}
-	return json.Marshal(wire{p.Mode, p.Zoom, scrolls, lists, p.Chromium})
+	return json.Marshal(wire{p.Editor, p.Mode, p.Zoom, scrolls, lists, p.Chromium})
 }
 
 type MaterialsDocumentTab struct {
@@ -867,7 +871,7 @@ func hasWindowsDrivePrefix(value string) bool {
 
 func validTaskContentView(value string) bool {
 	switch value {
-	case "DETAIL", "MATERIALS", "REQUIREMENT", "NOTES", "TAG":
+	case "DETAIL", "MATERIALS", "REQUIREMENT", "NOTES", "TAG", "FILES", "SERVICES", "TERMINAL":
 		return true
 	default:
 		return false

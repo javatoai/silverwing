@@ -284,7 +284,7 @@ func (s *app) openMaterialsFileNameForm(kind, title, directory string) {
 		fields[0] = formField{key: "name", label: "文件夹名", value: "新建文件夹"}
 	}
 	if kind == "document.create" {
-		fields = append(fields, formField{key: "text", label: "初始内容", multiline: true})
+		fields = append(fields, formField{key: "text", label: "初始内容", multiline: true, format: formFieldFileBody})
 	}
 	s.openForm(kind, title, state.taskID, "", "", directory, fields...)
 }

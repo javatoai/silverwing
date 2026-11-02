@@ -166,6 +166,7 @@ func TestLocalMaterialsCatalogRejectsAliasRetargetBeforeCommit(t *testing.T) {
 
 func TestLocalMaterialsCatalogRejectsAgentReplacementBeforeCommit(t *testing.T) {
 	f := newLocalMaterialsCatalogFixture(t)
+	markMaterialsCatalogStale(t, f.physical.Base)
 	router := filepath.Join(f.physical.Base, AgentRouterFileName)
 	custom := []byte("# custom user router\r\n")
 	if err := os.WriteFile(router, custom, 0600); err != nil {

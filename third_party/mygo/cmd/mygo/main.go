@@ -37,7 +37,7 @@ Commands:
 Run "mygo <command> -h" for the flags of a command.
 `
 
-const version = "0.5.0"
+const version = "0.7.3"
 
 func main() {
 	if len(os.Args) < 2 {

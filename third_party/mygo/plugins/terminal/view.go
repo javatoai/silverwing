@@ -4,7 +4,6 @@ import (
 	"math"
 	"runtime"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -30,15 +29,15 @@ import (
 // The wheel scrolls the scrollback unless the program takes the mouse,
 // and zooms with Control held (Command on macOS; Options.OnZoom). Hold
 // Shift to select while a program takes the mouse, and Command (Control
-// elsewhere) to open a link on click: a hyperlink (OSC 8), a URL printed as
-// text, or a file path with Options.OpenLink.
+// elsewhere) to underline a link and open it on click: a hyperlink (OSC 8),
+// a URL printed as text, or a file path with Options.OpenLink.
 func View(c *ui.Context, t *Terminal) ui.Element {
 	v := t.viewOf(c)
 	// A terminal's grid is left to right in a right-to-left interface too.
 	e := ui.Box(c).Direction(ui.LeftToRight).Focusable().FocusRing(false).Clip().Label("Terminal")
 	v.build(c, e)
-	cursor := ui.CursorText
-	if v.hoverLink {
+	cursor := v.pointerAt
+	if v.hover.on() {
 		cursor = ui.CursorPointer
 	}
 	e.Cursor(cursor)
@@ -49,14 +48,90 @@ func View(c *ui.Context, t *Terminal) ui.Element {
 	return e
 }
 
+// pointerShape is the pointer over the grid, as Ghostty shows it: the
+// shape the program asked for (OSC 22), the I-beam until it asks; the
+// arrow once it takes the mouse, and the I-beam again once it leaves it,
+// until it asks for another; and the I-beam while Shift is held over a
+// program that takes the mouse, as Shift selects then.
+func (v *view) pointerShape(term *vt.Terminal, mods ui.Modifiers) ui.Cursor {
+	asked := term.MouseShape()
+	if tracking := term.MouseTracking(); tracking != v.tracking {
+		v.tracking, v.modeOSC, v.modeShape = tracking, asked, shapeText
+		if tracking {
+			v.modeShape = shapeDefault
+		}
+	}
+	if v.tracking && mods&ui.Shift != 0 {
+		return ui.CursorText
+	}
+	shape := asked
+	if asked == v.modeOSC {
+		shape = v.modeShape
+	}
+	return cursorOf(shape)
+}
+
+// Ghostty's pointer shapes (GhosttyMouseShape), as OSC 22 names them.
+const (
+	shapeDefault = 0
+	shapeText    = 8
+)
+
+// cursorOf returns the pointer for a Ghostty pointer shape: the nearest
+// one the platform has, or the arrow.
+func cursorOf(shape int) ui.Cursor {
+	shapes := [...]ui.Cursor{
+		ui.CursorDefault,      // default
+		ui.CursorContextMenu,  // context-menu
+		ui.CursorDefault,      // help
+		ui.CursorPointer,      // pointer
+		ui.CursorDefault,      // progress
+		ui.CursorDefault,      // wait
+		ui.CursorCrosshair,    // cell
+		ui.CursorCrosshair,    // crosshair
+		ui.CursorText,         // text
+		ui.CursorVerticalText, // vertical-text
+		ui.CursorAlias,        // alias
+		ui.CursorCopy,         // copy
+		ui.CursorMove,         // move
+		ui.CursorNotAllowed,   // no-drop
+		ui.CursorNotAllowed,   // not-allowed
+		ui.CursorGrab,         // grab
+		ui.CursorGrabbing,     // grabbing
+		ui.CursorMove,         // all-scroll
+		ui.CursorResizeColumn, // col-resize
+		ui.CursorResizeRow,    // row-resize
+		ui.CursorResizeN,      // n-resize
+		ui.CursorResizeE,      // e-resize
+		ui.CursorResizeS,      // s-resize
+		ui.CursorResizeW,      // w-resize
+		ui.CursorResizeNESW,   // ne-resize
+		ui.CursorResizeNWSE,   // nw-resize
+		ui.CursorResizeNWSE,   // se-resize
+		ui.CursorResizeNESW,   // sw-resize
+		ui.CursorResizeEW,     // ew-resize
+		ui.CursorResizeNS,     // ns-resize
+		ui.CursorResizeNESW,   // nesw-resize
+		ui.CursorResizeNWSE,   // nwse-resize
+		ui.CursorDefault,      // zoom-in
+		ui.CursorDefault,      // zoom-out
+	}
+	if shape < 0 || shape >= len(shapes) {
+		return ui.CursorDefault
+	}
+	return shapes[shape]
+}
+
 // viewOf returns the terminal's view state, made on the first frame
 // showing it.
 func (t *Terminal) viewOf(c *ui.Context) *view {
+	t.mu.Lock()
 	if t.v == nil {
 		t.v = &view{t: t, blinkStart: time.Now()}
 		t.v.shaped.init(4096)
 	}
 	v := t.v
+	t.mu.Unlock()
 	if v.services != c.Services() {
 		v.services = c.Services()
 		draw := v.services.Invalidate
@@ -66,7 +141,8 @@ func (t *Terminal) viewOf(c *ui.Context) *view {
 }
 
 // view is what a frame of the terminal needs from frame to frame. Main
-// thread only.
+// thread only, except its native input objects (keys/mouse/gesture), which
+// share Terminal.mu with Close so a removed view can be disposed off-thread.
 type view struct {
 	t        *Terminal
 	services ui.Services
@@ -78,7 +154,8 @@ type view struct {
 
 	// The grid, in device pixels: the cells, the baseline in a cell, and
 	// the origin of the grid relative to the element; scale is device
-	// pixels per DIP.
+	// pixels per DIP, and size the element's in DIPs.
+	size                   [2]float32
 	font                   fontKey
 	fonts                  [4]ui.Font
 	scale                  float32
@@ -87,10 +164,18 @@ type view struct {
 	cols, rows             int
 
 	colors    vt.Colors
+	contrast  float32 // Options.MinimumContrast, as of the last paint
 	cursor    vt.Cursor
 	scrollbar vt.Scrollbar
 	lines     []rowCache
 	shaped    lru
+	// images are the placements of images that show, and bitmaps their
+	// images' (readImages).
+	images  []shownImage
+	bitmaps map[uint32]*cachedImage
+	// virtual are the virtual placements, by their images' ids, which
+	// placeholder cells show.
+	virtual map[uint32][]virtualImage
 
 	keys    *vt.KeyEncoder
 	mouse   *vt.MouseEncoder
@@ -108,11 +193,35 @@ type view struct {
 	// selecting tells that the primary button selects; reporting that a
 	// press went to the program, which gets the release too.
 	selecting, reporting bool
-	pointer              [2]float32
-	// hoverLink: Command is held over a link, which a click opens;
-	// linkPress: the primary button pressed one, and the press is the
-	// link's until the release.
-	hoverLink, linkPress bool
+	// extending keeps a Shift-click drag anchored to the existing selection.
+	extending bool
+	pointer   [2]float32
+	// barHeld tells that the primary button drags the scroll bar, held
+	// barGrab DIPs below the thumb's top; overBar that the pointer is over
+	// the bar, as of its last move, and barHover as of the last build.
+	// barLit is whether the last paint showed the bar hovered or held,
+	// barBack how many rows the viewport was above the bottom, and barSeen
+	// when either last changed, from which the bar fades out.
+	barHeld, overBar, barHover, barLit bool
+	barGrab                            float32
+	barBack                            int64
+	barSeen                            time.Time
+	// hover is the link Command is held over, which a click opens and
+	// which shows underlined, hoverLink what it opens and hoverPath
+	// whether that is a file path (HoveredLink); linkPress: the primary
+	// button pressed one, and the press is the link's until the release.
+	hover     linkSpan
+	hoverLink string
+	hoverPath bool
+	linkPress bool
+	// pointerAt is the pointer over the grid (pointerShape); tracking whether
+	// the program took the mouse as of the last frame, and modeShape the
+	// shape that taking or leaving it showed, while the program's shape
+	// (OSC 22) is still modeOSC, the one it had then.
+	pointerAt ui.Cursor
+	tracking  bool
+	modeShape int
+	modeOSC   int
 	// opening is the link a click asked to open, opened once t.mu is
 	// released; openingPath tells it is a file path, which the system
 	// does not open.
@@ -125,6 +234,7 @@ type view struct {
 	rightClick RightClickAction
 	scrolled   float32 // scrolling not yet a whole row
 	zoomed     float32 // wheel with the zoom modifier not yet a notch
+	scrollZoom bool    // a touchpad scroll gesture zooms, from how it began
 	ticking    bool    // an autoscroll tick is due
 
 	// reads are the program's reads of the clipboard waiting to be
@@ -133,6 +243,13 @@ type view struct {
 	reads      []*clipboardRequest
 	clipPrompt *clipboardRequest
 	clipOpen   bool
+
+	// searched is the search's status OnSearch was last told; matches are
+	// the cells of the matches the viewport shows, as of the last paint,
+	// found in matchBuf.
+	searched SearchStatus
+	matches  []matchSpan
+	matchBuf []vt.Selection
 }
 
 type pendingKey struct {
@@ -148,6 +265,9 @@ type pendingKey struct {
 // build updates the view as a frame builds.
 func (v *view) build(c *ui.Context, e ui.Element) {
 	t := v.t
+	if files := e.DroppedFiles(); len(files) > 0 {
+		t.dropFiles(files)
+	}
 	v.lang = c.Locale()
 	dark := c.Theme().Dark
 	focused := e.Focused()
@@ -166,15 +286,24 @@ func (v *view) build(c *ui.Context, e ui.Element) {
 		if v.applied != theme {
 			theme.apply(t.term)
 			v.applied = theme
+			t.themeConn(theme)
 		}
+		t.schemeChanged(t.curTheme, theme)
 		t.curTheme = theme
 		if focused != v.focused && t.term.Mode(vt.ModeFocusEvent) {
 			t.in.push(vt.EncodeFocus(focused))
 		}
 		// The hand over a link follows Command as it is pressed and let
 		// go of, with the pointer still.
-		link, _ := v.linkUnder(c.Modifiers(), v.pointer[0], v.pointer[1])
-		v.hoverLink = link != ""
+		v.hover, v.hoverLink, v.hoverPath = linkSpan{}, "", false
+		if e.Hovered() {
+			v.hoverLink, v.hoverPath, v.hover = v.linkUnder(c.Modifiers(), v.pointer[0], v.pointer[1])
+		}
+		v.pointerAt = v.pointerShape(t.term, c.Modifiers())
+		v.barHover = e.Hovered() && v.overScrollbar(v.pointer[0], v.pointer[1])
+		if v.barHover || v.barHeld {
+			v.pointerAt = ui.CursorDefault // the bar's, not the text's
+		}
 		// Input methods compose where the cursor is now, which the last
 		// frame may not show yet.
 		v.caretCell = [2]int{v.cursor.X, v.cursor.Y}
@@ -188,9 +317,22 @@ func (v *view) build(c *ui.Context, e ui.Element) {
 	reads := t.clipReads
 	t.clipReads = nil
 	term := t.term
+	searching := term != nil && t.find.drive(term)
+	searched := t.find.status
 	t.mu.Unlock()
+	if searched != v.searched {
+		v.searched = searched
+		if t.opts.OnSearch != nil {
+			t.opts.OnSearch(searched)
+		}
+	}
+	if searching {
+		// The rest of the scrollback, in the frames to come.
+		c.After(time.Millisecond)
+	}
 	for _, s := range copied {
 		c.WriteClipboard(s)
+		v.copied(s, CopyProgram)
 	}
 	if term != nil {
 		v.reads = append(v.reads, reads...)
@@ -398,14 +540,16 @@ func (v *view) caret() ui.Rect {
 func (v *view) menu(m *ui.Menu) {
 	t := v.t
 	t.mu.Lock()
-	text, selected := "", false
+	text, selected, alt := "", false, false
 	if t.term != nil {
 		text, selected = t.term.SelectionText()
+		alt = t.term.AltScreen()
 	}
 	t.mu.Unlock()
 	tx := l10n.In(v.lang)
 	if v.menuItem(m, tx.Copy(), ActionCopy).Disabled(!selected || text == "").Chosen() {
 		v.services.WriteClipboard(text)
+		v.copied(text, CopyUser)
 	}
 	if v.menuItem(m, tx.Paste(), ActionPaste).Chosen() {
 		v.paste()
@@ -414,8 +558,10 @@ func (v *view) menu(m *ui.Menu) {
 		v.selectAll()
 	}
 	m.Separator()
-	if m.Item(tx.ClearScrollback()).Chosen() {
-		t.Feed([]byte("\x1b[3J"))
+	// Clear clears as ⌘K does, as Ghostty's: clearing the scrollback
+	// alone would change nothing on the screen.
+	if v.menuItem(m, tx.ClearTerminal(), ActionClearScreen).Disabled(alt).Chosen() {
+		v.clearScreen()
 	}
 }
 
@@ -466,6 +612,7 @@ func (v *view) input(ev ui.InputEvent) bool {
 			// up while another program has it.
 			v.copying = ""
 			v.services.WriteClipboard(text)
+			v.copied(text, CopySelect)
 		}
 		if a := v.rightClick; a != RightClickContextMenu {
 			// Outside pointerEvent's lock, which copying and pasting take.
@@ -602,11 +749,11 @@ func (v *view) scrollBack(a Action) bool {
 	return true
 }
 
-// clearScreen clears the scrollback and the screen above the cursor's
-// line, which moves to the top, as Kitty's clear_terminal to_cursor: the
-// prompt the shell shows stays. A full-screen program's screen, which this
-// would break, is left alone, as in Ghostty; it reports whether it
-// cleared.
+// clearScreen clears as ActionClearScreen does (Terminal.ClearScreen), or
+// has Options.OnClear clear, letting go of the selection and scrolling to
+// the bottom; it reports whether it cleared. A full-screen program's
+// screen, which this would break, is left alone, as in Ghostty, and
+// OnClear is not asked.
 func (v *view) clearScreen() bool {
 	t := v.t
 	t.mu.Lock()
@@ -616,16 +763,12 @@ func (v *view) clearScreen() bool {
 	}
 	t.term.SetSelection(nil)
 	t.term.ScrollToBottom()
-	x, y := t.term.Cursor()
 	t.mu.Unlock()
-	seq := "\x1b[3J"
-	if y > 0 {
-		// Delete the rows above the cursor's from the top, then put the
-		// cursor back on its line, now the first.
-		seq += "\x1b[H\x1b[" + strconv.Itoa(y) + "M\x1b[1;" + strconv.Itoa(x+1) + "H"
+	if on := t.opts.OnClear; on != nil && on(ClearScreen) {
+		v.services.Invalidate()
+		return true
 	}
-	t.Feed([]byte(seq))
-	return true
+	return t.ClearScreen()
 }
 
 func (v *view) keyUp(ev ui.InputEvent) bool {
@@ -762,10 +905,19 @@ func (v *view) copy(clear bool) bool {
 		return false
 	}
 	v.services.WriteClipboard(text)
+	v.copied(text, CopyUser)
 	if clear {
 		v.services.Invalidate()
 	}
 	return true
+}
+
+// copied tells Options.OnCopy of text the terminal wrote to the
+// clipboard.
+func (v *view) copied(text string, by CopySource) {
+	if on := v.t.opts.OnCopy; on != nil {
+		on(text, by)
+	}
 }
 
 // paste pastes the clipboard and reports whether it held anything. It
@@ -817,12 +969,22 @@ func (v *view) clearSelection() {
 func (v *view) selectAll() {
 	t := v.t
 	t.mu.Lock()
+	text := ""
 	if t.term != nil {
 		if s, ok := t.term.SelectAll(); ok {
 			t.term.SetSelection(&s)
+			if t.opts.CopyOnSelect == CopyOnSelectClipboard {
+				text, _ = t.term.SelectionText()
+			}
 		}
 	}
 	t.mu.Unlock()
+	if text != "" {
+		// Outside the lock, which the clipboard may hold up while
+		// another program has it.
+		v.services.WriteClipboard(text)
+		v.copied(text, CopySelect)
+	}
 	v.services.Invalidate()
 }
 
@@ -853,11 +1015,14 @@ func (v *view) pointerEvent(ev ui.InputEvent) bool {
 		v.linkPress = ev.Kind != ui.InputPointerUp
 		return true
 	}
+	if v.scrollbarEvent(ev) {
+		return true
+	}
 	// Command over a link: a hand, and a click opens it, before a
 	// program that takes the mouse sees it.
-	link, path := v.linkUnder(ev.Mods, ev.X, ev.Y)
-	if hover := link != ""; hover != v.hoverLink {
-		v.hoverLink = hover
+	link, path, hover := v.linkUnder(ev.Mods, ev.X, ev.Y)
+	if hover != v.hover {
+		v.hover, v.hoverLink, v.hoverPath = hover, link, path
 		v.services.Invalidate()
 	}
 	if link != "" && ev.Kind == ui.InputPointerDown && ev.Button == 0 {
@@ -892,6 +1057,11 @@ func (v *view) pointerEvent(ev ui.InputEvent) bool {
 			return false
 		}
 		v.selecting = true
+		v.extending = ev.Mods&ui.Shift != 0 && t.term.ExtendSelection(ref)
+		if v.extending {
+			v.gesture.Reset(t.term)
+			return true
+		}
 		if s, ok := v.gesture.Press(t.term, ref, px, py, uint64(time.Now().UnixNano())); ok {
 			t.term.SetSelection(&s)
 		} else {
@@ -906,6 +1076,11 @@ func (v *view) pointerEvent(ev ui.InputEvent) bool {
 		if !ok {
 			return true
 		}
+		if v.extending {
+			t.term.ExtendSelection(ref)
+			v.ticking = v.selectionScrollDirection() != 0
+			return true
+		}
 		if s, ok := v.gesture.Drag(t.term, ref, px, py, v.geometry(), ev.Mods&ui.Alt != 0); ok {
 			t.term.SetSelection(&s)
 		}
@@ -917,7 +1092,9 @@ func (v *view) pointerEvent(ev ui.InputEvent) bool {
 		}
 		v.selecting, v.ticking = false, false
 		ref, ok := t.term.CellAt(col, row)
-		if ok {
+		if v.extending {
+			v.extending = false
+		} else if ok {
 			v.gesture.Release(t.term, &ref)
 		} else {
 			v.gesture.Release(t.term, nil)
@@ -932,35 +1109,148 @@ func (v *view) pointerEvent(ev ui.InputEvent) bool {
 	return false
 }
 
-// linkUnder is the link a click with mods at (x, y) opens, and whether it
-// is a file path: none without Command, or while the primary button
-// selects or the program has a press; t.mu is held.
-func (v *view) linkUnder(mods ui.Modifiers, x, y float32) (link string, path bool) {
-	if mods&ui.Cmd == 0 || v.selecting || v.reporting || v.cellW == 0 {
-		return "", false
+// linkSpan is the cells of a link in a row of the viewport, columns x0 up
+// to x1; the zero span is no link.
+type linkSpan struct{ row, x0, x1 int }
+
+func (s linkSpan) on() bool { return s.x1 > s.x0 }
+
+// HoveredLink returns the link Command (Control elsewhere) is held over
+// in the view, which a click opens and which shows underlined, as
+// Options.OpenLink takes it; whether it is a file path; and the rectangle
+// of its cells in DIPs, relative to the view. It returns "" over no link,
+// or while no view shows the terminal. An app shows a preview of a link
+// with it, over the view: read it in the view function, after View.
+func (t *Terminal) HoveredLink() (link string, path bool, at ui.Rect) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	v := t.v
+	if v == nil || !v.hover.on() || v.scale == 0 {
+		return "", false, ui.Rect{}
+	}
+	cw, ch := float32(v.cellW)/v.scale, float32(v.cellH)/v.scale
+	h := v.hover
+	return v.hoverLink, v.hoverPath, ui.Rect{
+		X: float32(v.ox)/v.scale + float32(h.x0)*cw,
+		Y: float32(v.oy)/v.scale + float32(h.row)*ch,
+		W: float32(h.x1-h.x0) * cw,
+		H: ch,
+	}
+}
+
+// linkUnder is the link a click with mods at (x, y) opens, whether it is
+// a file path, and its cells: none without Command, or while the primary
+// button selects or the program has a press; t.mu is held.
+func (v *view) linkUnder(mods ui.Modifiers, x, y float32) (link string, path bool, at linkSpan) {
+	if mods&ui.Cmd == 0 || v.selecting || v.reporting || v.cellW == 0 || v.overScrollbar(x, y) {
+		return "", false, linkSpan{}
 	}
 	return v.linkAt(v.cellAt(x, y))
 }
 
+// scrollbarStrip is how wide the strip at the right edge is over which the
+// scroll bar takes the pointer, in DIPs.
+const scrollbarStrip = 12
+
+// overScrollbar reports whether the scroll bar takes the pointer at (x, y):
+// over its strip while there is a scrollback, which shows the bar, or
+// while it is dragged; t.mu is held.
+func (v *view) overScrollbar(x, y float32) bool {
+	if v.barHeld {
+		return true
+	}
+	w, h := v.size[0], v.size[1]
+	if x < w-scrollbarStrip || x >= w || y < 0 || y >= h {
+		return false
+	}
+	sb := v.t.term.Scrollbar()
+	return sb.Total > sb.Len
+}
+
+// scrollbarEvent drags the scroll bar, and reports whether it took the
+// event: a press on the thumb holds it where it is pressed, and one on the
+// rest of the strip by its middle, which comes to the pointer; the moves
+// until the release scroll the scrollback along. t.mu is held.
+func (v *view) scrollbarEvent(ev ui.InputEvent) bool {
+	if over := v.overScrollbar(ev.X, ev.Y); over != v.overBar {
+		v.overBar = over
+		v.services.Invalidate() // the pointer's shape
+	}
+	switch {
+	case v.barHeld && ev.Kind == ui.InputPointerUp && ev.Button == 0:
+		v.barHeld = false
+		v.services.Invalidate()
+	case v.barHeld:
+		v.dragScrollbar(ev.Y)
+	case v.overBar && ev.Kind == ui.InputPointerDown && ev.Button == 0:
+		y, h := thumb(v.t.term.Scrollbar(), v.size[1])
+		v.barGrab = h / 2
+		if ev.Y >= y && ev.Y < y+h {
+			v.barGrab = ev.Y - y
+		}
+		v.barHeld = true
+		v.dragScrollbar(ev.Y)
+	default:
+		return false
+	}
+	return true
+}
+
+// dragScrollbar scrolls the scrollback so that the thumb's top is barGrab
+// above y; t.mu is held.
+func (v *view) dragScrollbar(y float32) {
+	term := v.t.term
+	sb := term.Scrollbar()
+	if sb.Total <= sb.Len {
+		return
+	}
+	_, h := thumb(sb, v.size[1])
+	travel := v.size[1] - h
+	if travel <= 0 {
+		return
+	}
+	f := max(0, min((y-v.barGrab)/travel, 1))
+	to := int(math.Round(float64(f) * float64(sb.Total-sb.Len)))
+	if d := to - int(sb.Offset); d != 0 {
+		term.ScrollBy(d)
+		v.services.Invalidate()
+	}
+}
+
 // linkAt is the link at the cell: a hyperlink (OSC 8), a URL printed as
 // text, or with Options.OpenLink a file path, or ""; t.mu is held.
-func (v *view) linkAt(col, row int) (link string, path bool) {
+func (v *view) linkAt(col, row int) (link string, path bool, at linkSpan) {
 	t := v.t
-	if ref, ok := t.term.CellAt(col, row); ok {
-		if url := t.term.Hyperlink(ref); url != "" {
-			return url, false
+	if url := v.hyperlinkAt(col, row); url != "" {
+		// The hyperlink's cells are those around the cell with its URL.
+		x0, x1 := col, col+1
+		for x0 > 0 && v.hyperlinkAt(x0-1, row) == url {
+			x0--
 		}
+		for x1 < v.cols && v.hyperlinkAt(x1, row) == url {
+			x1++
+		}
+		return url, false, linkSpan{row, x0, x1}
 	}
 	text, cols := t.term.RowText(row)
-	if url := urlAt(text, cols, col); url != "" {
-		return url, false
+	if url, x0, x1 := urlAt(text, cols, col); url != "" {
+		return url, false, linkSpan{row, x0, x1}
 	}
 	if t.opts.OpenLink != nil {
-		if p := pathAt(text, cols, col); p != "" {
-			return p, true
+		if p, x0, x1 := pathAt(text, cols, col); p != "" {
+			return p, true, linkSpan{row, x0, x1}
 		}
 	}
-	return "", false
+	return "", false, linkSpan{}
+}
+
+// hyperlinkAt is the URL of the hyperlink (OSC 8) at the cell, or ""; t.mu
+// is held.
+func (v *view) hyperlinkAt(col, row int) string {
+	if ref, ok := v.t.term.CellAt(col, row); ok {
+		return v.t.term.Hyperlink(ref)
+	}
+	return ""
 }
 
 // geometry is the grid in pixels, for selection gestures.
@@ -972,16 +1262,39 @@ func (v *view) geometry() vt.Geometry {
 // is held.
 func (v *view) autoscroll() {
 	t := v.t
-	dir := v.gesture.Autoscroll(t.term)
+	dir := 0
+	if v.extending {
+		dir = v.selectionScrollDirection()
+	} else {
+		dir = v.gesture.Autoscroll(t.term)
+	}
 	if dir == 0 || !v.selecting {
 		v.ticking = false
 		return
 	}
 	t.term.ScrollBy(dir)
 	col, row := v.cellAt(v.pointer[0], v.pointer[1])
+	if v.extending {
+		if ref, ok := t.term.CellAt(col, row); ok {
+			t.term.ExtendSelection(ref)
+		}
+		return
+	}
 	if s, ok := v.gesture.Tick(t.term, col, row, float64(v.pointer[0]*v.scale), float64(v.pointer[1]*v.scale), v.geometry(), false); ok {
 		t.term.SetSelection(&s)
 	}
+}
+
+// selectionScrollDirection follows a Shift-click drag past either edge.
+func (v *view) selectionScrollDirection() int {
+	y := v.pointer[1] * v.scale
+	if y < float32(v.oy) {
+		return -1
+	}
+	if y >= float32(v.oy+v.rows*v.cellH) {
+		return 1
+	}
+	return 0
 }
 
 // report reports the pointer to the program; t.mu is held.
@@ -1019,13 +1332,39 @@ func (v *view) report(ev ui.InputEvent) bool {
 	return ev.Kind != ui.InputPointerMove || len(out) > 0
 }
 
+// wheelRows turns dy DIPs of a mouse wheel's notches (scrolling that is
+// not Precise) on goos into the rows the terminal scrolls. A notch scrolls
+// three rows on macOS and Linux, and on Windows as many as its "lines to
+// scroll" setting asks, 3 unless changed, as Windows Terminal does. The
+// DIPs are what the backends send: 40 a line on macOS (internal/darwin),
+// 50 a step on Linux (internal/linux), and 33 a line of the setting on
+// Windows (internal/windows), where a notch sends that many lines.
+func wheelRows(dy float32, goos string) float32 {
+	switch goos {
+	case "windows":
+		return dy / 33
+	case "linux":
+		return dy / 50 * 3
+	}
+	return dy / 40 * 3
+}
+
 // scroll scrolls the scrollback, or reports the wheel to the program.
 func (v *view) scroll(ev ui.InputEvent) bool {
 	t := v.t
 	if v.cellH == 0 {
 		return false
 	}
-	if ev.Mods&ui.Cmd != 0 {
+	zooming := ev.Mods&ui.Cmd != 0
+	if ev.Precise {
+		// A touchpad gesture keeps what it began as, even if Command comes
+		// down while its momentum still runs.
+		if !ev.Momentum {
+			v.scrollZoom = zooming
+		}
+		zooming = v.scrollZoom
+	}
+	if zooming {
 		// Rolling up is a step up. DY is the scroll offset's change, so up
 		// comes negative; a wheel's event is a notch, a trackpad's many
 		// small moves, which add up to a step by 40.
@@ -1046,11 +1385,10 @@ func (v *view) scroll(ev ui.InputEvent) bool {
 		return true
 	}
 	ch := float32(v.cellH) / v.scale
-	dy := ev.DY
-	if !ev.Precise {
-		dy = dy / 40 * 3 * ch // a notch scrolls three rows
-	}
-	v.scrolled += dy
+	t.mu.Lock()
+	m := t.opts.ScrollMultiplier
+	t.mu.Unlock()
+	v.scrolled += m.rows(ev.DY, ch, ev.Precise, runtime.GOOS) * ch
 	rows := int(v.scrolled / ch)
 	v.scrolled -= float32(rows) * ch
 	if rows == 0 {

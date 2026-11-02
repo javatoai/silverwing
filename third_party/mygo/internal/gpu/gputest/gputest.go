@@ -24,7 +24,7 @@ import (
 // gray, and effects, reading their backdrop blurred at each size or not,
 // over each other, clipped and at the frame's edge, or reading none.
 func Scene() *scene.Scene {
-	s := &scene.Scene{Width: 320, Height: 600, Clear: scene.Color{R: 246, G: 247, B: 249, A: 255},
+	s := &scene.Scene{Width: 320, Height: 740, Clear: scene.Color{R: 246, G: 247, B: 249, A: 255},
 		Text: scene.TextParams{GammaRatios: scene.GammaRatios(1.8), Contrast: 1, SubpixelContrast: 0.5}}
 	mask := scene.NewAtlas(1, 64, 64)
 	color := scene.NewAtlas(4, 64, 32)
@@ -225,6 +225,50 @@ func Scene() *scene.Scene {
 	inset(scene.Rect{X: 110.5, Y: 548.25, W: 90, H: 44}, 14, scene.Rect{X: 117.5, Y: 556.25, W: 82, H: 36}, 10, yellow, 8)
 	inset(scene.Rect{X: 210, Y: 548, W: 50, H: 44}, 12, scene.Rect{X: 216, Y: 555, W: 38, H: 30}, 6, red, 0)
 	inset(scene.Rect{X: 270, Y: 548, W: 40, H: 44}, 20, scene.Rect{}, 0, blue, 6)
+
+	// Gradients of stops: conic, in sRGB with a hard stop and in Oklab,
+	// linear, half transparent and to transparent, painting borders, plain
+	// and dashed, and glyphs; and images blurred, at full size and a
+	// quarter of it.
+	stops := func(st ...scene.Stop) [2]int32 {
+		a := int32(len(s.Stops))
+		s.Stops = append(s.Stops, st...)
+		return [2]int32{a, int32(len(s.Stops))}
+	}
+	green := scene.Color{R: 34, G: 197, B: 94, A: 255}
+	add(scene.Op{Kind: scene.OpFill, Rect: scene.Rect{X: 10, Y: 605, W: 60, H: 60}, Radii: r4(30), Paint: scene.PaintConic,
+		Gradient: [4]float32{40, 635, 0.4, 0}, Stops: stops(scene.Stop{Color: red, At: 0}, scene.Stop{Color: yellow, At: 0.3}, scene.Stop{Color: blue, At: 0.3}, scene.Stop{Color: green, At: 0.7}, scene.Stop{Color: red, At: 1})})
+	add(scene.Op{Kind: scene.OpFill, Rect: scene.Rect{X: 80.5, Y: 605.25, W: 60, H: 60}, Radii: r4(8), Paint: scene.PaintConicOklab,
+		Gradient: [4]float32{100, 625, -1, 0}, Stops: stops(scene.Stop{Color: blue, At: 0.1}, scene.Stop{Color: yellow, At: 0.5}, scene.Stop{Color: red, At: 0.9})})
+	add(scene.Op{Kind: scene.OpFill, Rect: scene.Rect{X: 150, Y: 605, W: 70, H: 25}, Radii: r4(6), Paint: scene.PaintLinearStops,
+		Gradient: [4]float32{150, 605, 220, 630}, Stops: stops(scene.Stop{Color: red, At: 0.1}, scene.Stop{Color: scene.Color{R: 37, G: 99, B: 235, A: 120}, At: 0.5}, scene.Stop{Color: yellow, At: 0.9})})
+	add(scene.Op{Kind: scene.OpFill, Rect: scene.Rect{X: 150, Y: 637, W: 70, H: 25}, Paint: scene.PaintLinearStopsOklab,
+		Gradient: [4]float32{150, 0, 220, 0}, Stops: stops(scene.Stop{Color: blue, At: 0}, scene.Stop{Color: green, At: 0.6}, scene.Stop{Color: scene.Color{}, At: 1})})
+	add(scene.Op{Kind: scene.OpFill, Rect: scene.Rect{X: 230.5, Y: 605.25, W: 80, H: 60}, Radii: r4(14), Color: scene.Color{R: 255, G: 255, B: 255, A: 120},
+		Border: scene.Uniform(6), BorderColor: scene.Color{R: 255, G: 255, B: 255, A: 255}, BorderPaint: true, Paint: scene.PaintConicOklab,
+		Gradient: [4]float32{270, 635, 0, 0}, Stops: stops(scene.Stop{Color: red, At: 0}, scene.Stop{Color: blue, At: 0.5}, scene.Stop{Color: red, At: 1})})
+	add(scene.Op{Kind: scene.OpFill, Rect: scene.Rect{X: 230, Y: 670, W: 80, H: 30}, Radii: r4(6), Border: scene.Uniform(3),
+		BorderColor: scene.Color{R: 255, G: 255, B: 255, A: 200}, BorderPaint: true, Dashed: true, Paint: scene.PaintLinearStops,
+		Gradient: [4]float32{230, 0, 310, 0}, Stops: stops(scene.Stop{Color: green, At: 0}, scene.Stop{Color: red, At: 1})})
+	start = int32(len(s.Glyphs))
+	for i := range 3 {
+		s.Glyphs = append(s.Glyphs, scene.Glyph{X: float32(10 + i*18), Y: 676, W: 16, H: 16, U: uint16(dx), V: uint16(dy), UW: 16, VH: 16, Color: ink})
+	}
+	add(scene.Op{Kind: scene.OpGlyphs, Start: start, End: int32(len(s.Glyphs)), Paint: scene.PaintConic,
+		Gradient: [4]float32{36, 684, 0, 0}, Stops: stops(scene.Stop{Color: red, At: 0}, scene.Stop{Color: blue, At: 0.5}, scene.Stop{Color: yellow, At: 1})})
+	add(scene.Op{Kind: scene.OpImage, Rect: scene.Rect{X: 70, Y: 672, W: 48, H: 48}, Image: img, Src: scene.Rect{W: 8, H: 8}, Blur: 1.2})
+	big := make([]byte, 64*64*4)
+	for y := range 64 {
+		for x := range 64 {
+			i := (y*64 + x) * 4
+			if x >= 16 && x < 48 && y >= 20 && y < 44 {
+				big[i], big[i+1], big[i+2], big[i+3] = 220, 40, 40, 255
+			} else if (x/8+y/8)%2 == 0 && x > 4 && x < 60 && y > 4 && y < 60 {
+				big[i], big[i+1], big[i+2], big[i+3] = 18, 50, 117, 128
+			}
+		}
+	}
+	add(scene.Op{Kind: scene.OpImage, Rect: scene.Rect{X: 130, Y: 672, W: 64, H: 64}, Radii: r4(8), Image: scene.NewImageRGBA(64, 64, big), Src: scene.Rect{W: 64, H: 64}, Blur: 12})
 	return s
 }
 
@@ -382,6 +426,7 @@ func ShadowCases() []ShadowCase {
 		{Radius: 8, Blur: []float32{4}, Spread: []float32{-2}, DY: []float32{40}},
 		{Radius: 60, Blur: []float32{8, 0}, Spread: []float32{0, 5}, DY: []float32{0, 0}},
 		{Radius: 30, Blur: []float32{60}, Spread: []float32{-40}, DY: []float32{-10}},
+		{Radius: 110, Blur: []float32{80, 6}, Spread: []float32{20, 0}, DY: []float32{0, 2}}, // a pill
 	}
 }
 
@@ -467,6 +512,23 @@ func RingCases() []RingCase {
 	add("rounded clip", true, &scene.Op{Kind: scene.OpPushClip, Rect: scene.Rect{X: 30, Y: 30, W: 300, H: 280}, Radii: r4(30)}, ring(panel, r4(16), scene.Uniform(2), half))
 	add("frame edges", true, nil, ring(scene.Rect{X: -10, Y: -10, W: 500, H: 380}, r4(12), scene.Uniform(2), half))
 	add("two rings", true, nil, ring(panel, r4(16), scene.Uniform(2), half), ring(scene.Rect{X: 30, Y: 30, W: 420, H: 300}, r4(8), scene.Uniform(1), red))
+	add("circle", true, nil, ring(scene.Rect{X: 90.5, Y: 30.25, W: 300, H: 300}, r4(150), scene.Uniform(1), half))
+	add("pill", true, nil, ring(scene.Rect{X: 40, Y: 120, W: 400, H: 100}, r4(50), scene.Uniform(2), red))
+	add("uneven round", true, nil, ring(panel, [4]float32{150, 20, 90, 0}, [4]float32{1, 3, 2, 5}, half))
+	// Grooves rippling out of a record across a card, as a music app's:
+	// circles a pixel wide or less, most larger than the card, clipped by it.
+	func() {
+		var grooves []scene.Op
+		for i := range 12 {
+			rad := 30 + float32(i)*50
+			w := float32(1)
+			if i%2 == 1 {
+				w = 0.7
+			}
+			grooves = append(grooves, ring(scene.Rect{X: 360 - rad, Y: 180.5 - rad, W: 2 * rad, H: 2 * rad}, r4(rad), scene.Uniform(w), half))
+		}
+		add("grooves", true, &scene.Op{Kind: scene.OpPushClip, Rect: scene.Rect{X: 20, Y: 60, W: 440, H: 240}, Radii: r4(16)}, grooves...)
+	}()
 	add("a fill with a border", false, nil, func() scene.Op {
 		op := ring(panel, r4(16), scene.Uniform(2), half)
 		op.Color = scene.Color{R: 255, G: 255, B: 255, A: 1}
@@ -659,5 +721,113 @@ func WideScene() *scene.Scene {
 		scene.Op{Kind: scene.OpGlyphs, Start: 0, End: int32(len(s.Glyphs)), Paint: scene.PaintOklab, Gradient: [4]float32{40, 0, 240, 0}, Color: green, Color2: red, Wide: 2},
 		scene.Op{Kind: scene.OpFill, Rect: scene.Rect{X: 70, Y: 200, W: 380, H: 100}, Color: red, Wide: 1},
 		scene.Op{Kind: scene.OpPopClip})
+	return s
+}
+
+// WithoutNewPaints returns s without what shaders older than gradients of
+// stops draw differently: ops painting with stops (scene.Stop), borders
+// painted with a gradient (Op.BorderPaint) and images blurred, for tests
+// that compare a renderer with an earlier copy of its shader.
+func WithoutNewPaints(s *scene.Scene) *scene.Scene {
+	out := *s
+	out.Ops = nil
+	for _, op := range s.Ops {
+		if op.Paint.HasStops() || op.BorderPaint || op.Kind == scene.OpImage && op.Blur > 0 {
+			continue
+		}
+		out.Ops = append(out.Ops, op)
+	}
+	return &out
+}
+
+// Continuously returns a copy of s whose ops all have continuous corners
+// (scene.Op.Continuous): fills, shadows, images, holes, effects and clips.
+func Continuously(s *scene.Scene) *scene.Scene {
+	c := *s
+	c.Ops = append([]scene.Op(nil), s.Ops...)
+	for i := range c.Ops {
+		c.Ops[i].Continuous = true
+	}
+	return &c
+}
+
+// CardsScene returns a w×h scene of cards with continuous corners (as
+// macOS draws them) at the sizes of panels, which the builder draws as
+// nine-patches: each casting a soft shadow and a tight one, at places
+// between pixels, with radii from 4 to 60 and uneven ones; a card with a
+// border, a dashed border, a gradient, a translucent color, a border
+// only, a large image, an inner shadow, a hard shadow, a shadow offset
+// beyond its blur, one under a rounded clip and one under a continuous
+// clip.
+func CardsScene(w, h int) *scene.Scene {
+	s := &scene.Scene{Width: w, Height: h, Clear: scene.Color{R: 240, G: 241, B: 244, A: 255}}
+	pix := make([]byte, 32*32*4)
+	for y := range 32 {
+		for x := range 32 {
+			i := (y*32 + x) * 4
+			pix[i], pix[i+1], pix[i+2], pix[i+3] = byte(x*8), byte(y*8), 160, 255
+		}
+	}
+	img := scene.NewImageRGBA(32, 32, pix)
+	r4 := func(r float32) [4]float32 { return [4]float32{r, r, r, r} }
+	radii := [][4]float32{r4(4), r4(12), r4(24), r4(60), {30, 8, 0, 16}, r4(18), r4(999), r4(10), r4(36), {0, 40, 40, 0}, r4(16), r4(20)}
+	cols := 4
+	cw, ch := (float32(w)-40)/float32(cols)-30, (float32(h)-40)/3-30
+	white := scene.Color{R: 255, G: 255, B: 255, A: 255}
+	blue := scene.Color{R: 37, G: 99, B: 235, A: 255}
+	for i, r := range radii {
+		card := scene.Rect{X: 35 + float32(i%cols)*(cw+30) + float32(i%3)*0.25, Y: 35 + float32(i/cols)*(ch+30) + float32(i%5)*0.2, W: cw, H: ch}
+		if i == 6 {
+			card.H = ch / 2 // a pill
+		}
+		sh := card
+		sh.Y += 4
+		blur := float32(24)
+		switch i {
+		case 7:
+			blur = 0 // hard
+		case 8:
+			sh.Y += 40 // offset beyond the blur
+			blur = 8
+		}
+		fill := scene.Op{Kind: scene.OpFill, Rect: card, Radii: r, Color: white, Continuous: true}
+		switch i {
+		case 1:
+			fill.Border, fill.BorderColor = scene.Uniform(1.5), blue
+		case 2:
+			fill.Border, fill.BorderColor, fill.Dashed = scene.Uniform(2), blue, true
+		case 3:
+			fill.Paint, fill.Color2, fill.Gradient = scene.PaintLinear, blue, [4]float32{card.X, card.Y, card.X + card.W, card.Y + card.H}
+		case 4:
+			fill.Color = scene.Color{R: 255, G: 255, B: 255, A: 160}
+		case 5:
+			fill.Color, fill.Border, fill.BorderColor = scene.Color{}, [4]float32{1, 3, 2, 4}, blue
+		}
+		if i == 10 {
+			s.Ops = append(s.Ops, scene.Op{Kind: scene.OpPushClip, Rect: scene.Rect{X: card.X - 20, Y: card.Y - 10, W: card.W + 40, H: card.H}, Radii: r4(30)})
+		}
+		if i == 11 {
+			s.Ops = append(s.Ops, scene.Op{Kind: scene.OpPushClip, Rect: scene.Rect{X: card.X + 10, Y: card.Y - 30, W: card.W, H: card.H}, Radii: r4(30), Continuous: true})
+		}
+		// The soft shadow is opaque, so that the least difference shows.
+		s.Ops = append(s.Ops,
+			scene.Op{Kind: scene.OpShadow, Rect: sh, Radii: r, Color: scene.Color{A: 255}, Blur: blur, Cast: card, CastRadii: r, Continuous: true},
+			scene.Op{Kind: scene.OpShadow, Rect: card, Radii: r, Color: scene.Color{A: 40}, Blur: 3, Cast: card, CastRadii: r, Continuous: true},
+			fill)
+		switch i {
+		case 0:
+			// On whole pixels: the CPU renderer samples images between them
+			// differently.
+			in := scene.Rect{X: float32(math.Round(float64(card.X + 20))), Y: float32(math.Round(float64(card.Y + 20))),
+				W: float32(math.Round(float64(card.W - 40))), H: float32(math.Round(float64(card.H - 40)))}
+			s.Ops = append(s.Ops, scene.Op{Kind: scene.OpImage, Rect: in, Radii: r4(20), Image: img, Src: scene.Rect{W: 32, H: 32}, Continuous: true})
+		case 9:
+			in := scene.Rect{X: card.X + 10, Y: card.Y + 10, W: card.W - 20, H: card.H - 20}
+			s.Ops = append(s.Ops, scene.Op{Kind: scene.OpShadow, Inset: true, Rect: in, Radii: r4(12), Color: scene.Color{R: 220, G: 40, B: 40, A: 160},
+				Blur: 16, Cast: card, CastRadii: r, Continuous: true})
+		case 10, 11:
+			s.Ops = append(s.Ops, scene.Op{Kind: scene.OpPopClip})
+		}
+	}
 	return s
 }

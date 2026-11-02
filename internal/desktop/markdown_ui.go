@@ -7,13 +7,25 @@ import (
 	"strings"
 
 	"silverwing-go/internal/editor"
+	markdownui "silverwing-go/internal/ui/markdown"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/markdown"
 )
 
 const markdownSansFontFamily = "sans-serif"
 
 type markdownEditorState struct {
+	viewBinding            *readingScrollBinding
+	viewRestored           bool
+	componentReader        *markdownui.ReaderState
+	componentEditor        *markdownui.EditorState
+	live                   *markdown.EditorState
+	liveVersion            uint64
+	liveSource             string
+	liveFramework          *frameworkMarkdownState
+	liveIdentity           string
+	liveError              string
 	frameworkMarkdown      *frameworkMarkdownState
 	contextMenu            func(*ui.Context, *ui.Menu)
 	taskID                 string
@@ -82,30 +94,43 @@ type markdownInlineImageState struct {
 
 func (s *app) ensureMarkdownEditor() *markdownEditorState {
 	taskID := s.taskUnit.currentTask().id
-	if s.materialsUnit.state.markdown != nil && s.materialsUnit.state.markdown.taskID == taskID && s.materialsUnit.state.markdown.path == s.materialsUnit.state.documentPath && s.materialsUnit.state.markdown.doc != nil {
-		s.materialsUnit.state.markdown.readOnly = markdownReadingOnly || s.materialsUnit.state.documentReadOnly
+	if s.materialsUnit.state.markdown != nil && s.materialsUnit.state.markdown.taskID == taskID && s.materialsUnit.state.markdown.path == s.materialsUnit.state.documentPath && s.materialsUnit.state.markdown.doc != nil &&
+		(s.materialsUnit.state.markdown.live == nil || s.markdownEditorIsCurrent(s.materialsUnit.state.markdown)) {
+		s.materialsUnit.state.markdown.readOnly = !s.materialsMarkdownWritable(s.materialsUnit.state.documentPath)
 		s.configureMarkdownSourceLimit(s.materialsUnit.state.markdown)
-		if s.materialsUnit.state.markdown.doc.Source() != s.materialsUnit.state.documentContent {
+		if s.materialsUnit.state.markdown.live != nil {
+			s.observeMaterialsMarkdownInput(s.materialsUnit.state.markdown)
+			s.syncMaterialsMarkdownBuffer(s.materialsUnit.state.markdown, s.materialsUnit.state.documentContent)
+		} else if s.materialsUnit.state.markdown.doc.Source() != s.materialsUnit.state.documentContent {
 			s.materialsUnit.state.markdown.doc.SyncExternal(s.materialsUnit.state.documentContent)
 		}
+		s.ensureMaterialsMarkdownLiveState(s.materialsUnit.state.markdown)
 		return s.materialsUnit.state.markdown
 	}
 	s.closeMarkdownEditor()
 	s.materialsUnit.state.markdown = &markdownEditorState{
 		taskID: taskID, path: s.materialsUnit.state.documentPath, doc: editor.NewDocument(s.materialsUnit.state.documentContent, taskID+"\x00"+s.materialsUnit.state.documentPath),
 		zoom:     s.markdownZoom(),
-		readOnly: markdownReadingOnly || s.materialsUnit.state.documentReadOnly, remoteImages: true, diagrams: make(map[uint64]*markdownDiagramState), inlineImages: make(map[string]*markdownInlineImageState),
+		readOnly: !s.materialsMarkdownWritable(s.materialsUnit.state.documentPath), remoteImages: true, diagrams: make(map[uint64]*markdownDiagramState), inlineImages: make(map[string]*markdownInlineImageState),
 	}
 	s.configureMarkdownSourceLimit(s.materialsUnit.state.markdown)
+	s.ensureMaterialsMarkdownLiveState(s.materialsUnit.state.markdown)
 	return s.materialsUnit.state.markdown
 }
 
 func (s *app) configureMarkdownSourceLimit(state *markdownEditorState) {
 	limit := editor.MaxDocumentBytes
-	if ref, ok := s.materialsUnit.documentSaveRef(s.documentAutosaveKey(state.path)); ok && ref.hasUTF8BOM {
+	key := s.documentAutosaveKey(state.path)
+	if state.binding != nil {
+		key = state.binding.id
+	}
+	if ref, ok := s.materialsUnit.documentSaveRef(key); ok && ref.hasUTF8BOM {
 		limit -= 3
 	}
 	state.doc.SetMaxSourceBytes(limit)
+	if state.live != nil {
+		state.live.Buffer().SetMaxSourceBytes(limit)
+	}
 }
 
 func (s *app) syncMarkdownDocument(path, source string) {
@@ -115,7 +140,9 @@ func (s *app) syncMarkdownDocument(path, source string) {
 	if s.materialsUnit.state.markdown == nil || s.materialsUnit.state.markdown.taskID != s.taskUnit.currentTask().id || s.materialsUnit.state.markdown.path != path || s.materialsUnit.state.markdown.doc == nil {
 		s.ensureMarkdownEditor()
 	}
-	if s.materialsUnit.state.markdown.doc.Source() != source {
+	if s.materialsUnit.state.markdown.live != nil {
+		s.syncMaterialsMarkdownBuffer(s.materialsUnit.state.markdown, source)
+	} else if s.materialsUnit.state.markdown.doc.Source() != source {
 		s.materialsUnit.state.markdown.doc.SyncExternal(source)
 	}
 }
@@ -124,13 +151,21 @@ func (s *app) syncMarkdownEditor() {
 	if s.materialsUnit.state.markdown == nil || s.materialsUnit.state.markdown.doc == nil || s.materialsUnit.state.markdown.path != s.materialsUnit.state.documentPath {
 		return
 	}
+	if s.materialsUnit.state.markdown.live != nil {
+		_ = s.captureMaterialsMarkdownInput(s.materialsUnit.state.markdown)
+		return
+	}
 	s.commitMarkdownEditorSource(s.materialsUnit.state.markdown, s.materialsUnit.state.markdown.doc.Source())
 }
 
 func (s *app) closeMarkdownEditor() {
+	if s.materialsUnit.state.markdownLinkFile != nil && s.materialsUnit.state.markdownLinkFile.owner == s.materialsUnit.state.markdown {
+		s.closeMarkdownLinkFile()
+	}
 	if s.materialsUnit.state.markdown == nil {
 		return
 	}
+	s.captureMarkdownViewMemory(s.materialsUnit.state.markdown)
 	s.clearMarkdownComposition(s.materialsUnit.state.markdown)
 	closeMarkdownPreviewState(s.materialsUnit.state.markdown)
 	s.materialsUnit.state.markdown = nil
@@ -1057,13 +1092,17 @@ func (s *app) renderMarkdownMermaid(c *ui.Context, p palette, state *markdownEdi
 		ui.Row(c).FillWidth().Height(34).Gap(2).AlignItems(ui.Center).Children(func() {
 			label(c, "Mermaid 图表", scaleMarkdownSize(10, state.zoom), p.muted).FontWeight(600)
 			ui.Spacer(c)
-			if diagram.bitmap != nil && iconButton(c, markdownEditorControlKey(state, "mermaid-expand-"+fmt.Sprint(part.ID)), "expand", "放大查看", p).Width(30).Height(30).Clicked() {
-				s.openMarkdownBitmapViewer(state, diagram.bitmap)
-			}
-			s.overflowMenu(c, p, markdownEditorControlKey(state, "mermaid-more-"+fmt.Sprint(part.ID)), "更多图表操作", false, func(menu *overflowMenuBuilder) {
-				if menu.Item("copy-source", "复制图表源码").Icon("copy").Chosen() {
-					s.copyTextToClipboard(c.Services(), source, "")
+			// Leave button presses to the controls, without moving the editor's
+			// selection. The title and diagram still reveal their source.
+			ui.Row(c).Gap(2).AlignItems(ui.Center).KeepFocus().HandleInput(func(ui.InputEvent) bool { return false }).Children(func() {
+				if diagram.bitmap != nil && iconButton(c, markdownEditorControlKey(state, "mermaid-expand-"+fmt.Sprint(part.ID)), "expand", "放大查看", p).Width(30).Height(30).Clicked() {
+					s.openMarkdownBitmapViewer(state, diagram.bitmap)
 				}
+				s.overflowMenu(c, p, markdownEditorControlKey(state, "mermaid-more-"+fmt.Sprint(part.ID)), "更多图表操作", false, func(menu *overflowMenuBuilder) {
+					if menu.Item("copy-source", "复制图表源码").Icon("copy").Chosen() {
+						s.copyTextToClipboard(c.Services(), source, "")
+					}
+				})
 			})
 		})
 		if diagram.bitmap != nil {

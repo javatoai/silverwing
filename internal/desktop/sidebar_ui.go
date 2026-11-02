@@ -9,10 +9,11 @@ import (
 func (s *app) sidebar(c *ui.Context, p palette, compact bool) {
 	defer s.observeProductionBuildNavigation()
 	width := float32(128)
+	horizontalPadding := float32(6)
 	if compact {
-		width = 72
+		width, horizontalPadding = 52, 3
 	}
-	ui.Column(c).Width(width).Shrink(0).Padding(16, 6).Gap(4).Background(p.surface).Border(1, p.line).Radius(0, 16, 16, 0).Children(func() {
+	ui.Column(c).Width(width).Shrink(0).Padding(16, horizontalPadding).Gap(4).Background(p.surface).Border(1, p.line).Radius(0, 16, 16, 0).Children(func() {
 		if !compact {
 			label(c, "工作空间", 11, p.muted).Padding(5, 6)
 		}
@@ -38,7 +39,7 @@ func (s *app) sidebar(c *ui.Context, p palette, compact bool) {
 				b.Background(p.soft)
 			}
 			if compact {
-				b.Height(48).Width(48).AlignSelf(ui.Center).Center().Tooltip(n.name)
+				b.Height(48).Width(44).AlignSelf(ui.Center).Center().Tooltip(n.name)
 			}
 			b.Children(func() {
 				if !compact {
@@ -71,6 +72,9 @@ func (s *app) sidebar(c *ui.Context, p palette, compact bool) {
 				}
 			})
 			if b.Clicked() {
+				if (s.page == "settings" || s.page == "tasks" && s.tab == 3) && !s.leaveSettingsInstructionEditor() {
+					continue
+				}
 				s.markReadingInteraction()
 				if n.page == "tasks" && (s.page == "archive" || s.taskUnit.currentTask().archived) {
 					s.switchTaskIndexCategory(false)

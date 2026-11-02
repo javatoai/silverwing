@@ -3,6 +3,7 @@
 package mygo
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/egoist/mygo/internal/fake"
@@ -51,6 +52,15 @@ func TestFlyoutOptions(t *testing.T) {
 	// top of the work area (25): their tops instead.
 	if got := fl.Bounds(); got != (Rectangle{X: 100 + 10 + 80 + 4, Y: 100 + 20, Width: 150, Height: 200}) {
 		t.Errorf("flyout at %+v", got)
+	}
+}
+
+// TestFlyoutGlass passes a flyout's glass and corners to its window.
+func TestFlyoutGlass(t *testing.T) {
+	parent, _ := testWindow(t, WindowOptions{})
+	_, fw := testFlyout(t, FlyoutOptions{Parent: parent, Vibrancy: VibrancyGlassClear, CornerRadius: 12, Content: ui.View(func(c *ui.Context) {})})
+	if o := fw.Opts; o.Vibrancy != "glass-clear" || o.Flyout == nil || o.Flyout.Radius != 12 {
+		t.Errorf("vibrancy %q, flyout %+v", o.Vibrancy, o.Flyout)
 	}
 }
 
@@ -171,4 +181,48 @@ func TestTrayFlyout(t *testing.T) {
 		parent, _ := testWindow(t, WindowOptions{})
 		NewFlyout(FlyoutOptions{Parent: parent, Tray: tray})
 	}()
+}
+
+// TestTrayID names the icons that have an ID, so that macOS keeps where
+// the user put each of an app's icons.
+func TestTrayID(t *testing.T) {
+	before := len(fb.TrayIDs())
+	for _, id := range []string{"cpu", "", "memory"} {
+		tray, err := NewTray(TrayOptions{ID: id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tray.Destroy()
+	}
+	if got := fb.TrayIDs()[before:]; !slices.Equal(got, []string{"cpu", "memory"}) {
+		t.Errorf("the icons were named %q", got)
+	}
+}
+
+// TestTrayDark tells an icon's listeners as the bar it shows on turns
+// dark or light, and not when it stays as it was.
+func TestTrayDark(t *testing.T) {
+	tray, err := NewTray(TrayOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tray.Destroy()
+	told := 0
+	off := tray.OnAppearanceChange(func() { told++ })
+	if tray.Dark() {
+		t.Error("the menu bar starts dark")
+	}
+	fb.SetTrayDark(true)
+	if !tray.Dark() || told != 1 {
+		t.Errorf("turned dark: Dark %v, told %d times", tray.Dark(), told)
+	}
+	fb.SetTrayDark(true)
+	if told != 1 {
+		t.Errorf("told %d times of no change", told)
+	}
+	off()
+	fb.SetTrayDark(false)
+	if tray.Dark() || told != 1 {
+		t.Errorf("turned light: Dark %v, told %d times after off", tray.Dark(), told)
+	}
 }

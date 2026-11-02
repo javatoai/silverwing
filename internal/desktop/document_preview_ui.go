@@ -71,7 +71,10 @@ func (s *app) documentFindBlocks(cache *documentFindState, identity string) []do
 			}
 		}
 		return blocks
-	case documentKindForPath(s.materialsUnit.state.documentPath) == "markdown" && s.materialsUnit.state.documentEditing && !s.materialsUnit.state.documentReadOnly && s.markdownEditorIsCurrent(s.materialsUnit.state.markdown):
+	case documentKindForPath(s.materialsUnit.state.documentPath) == "markdown" && !s.materialsUnit.state.documentReadOnly && s.markdownEditorIsCurrent(s.materialsUnit.state.markdown):
+		if s.materialsUnit.state.markdown.live != nil {
+			return []documentFindBlock{{key: "live-source", text: s.materialsUnit.state.markdown.live.Buffer().Snapshot().String(), lineSize: 24}}
+		}
 		return markdownEditorFindBlocks(s.materialsUnit.state.markdown)
 	case documentKindForPath(s.materialsUnit.state.documentPath) == "markdown" && (!s.materialsUnit.state.documentEditing || s.materialsUnit.state.documentReadOnly) && s.readingMode() == "RENDERED":
 		state := s.ensureMarkdownEditor()
@@ -226,7 +229,6 @@ func (s *app) renderCSVPreview(c *ui.Context, p palette, source string) {
 		if selection.identity != cacheIdentity {
 			*selection = csvSelectionState{identity: cacheIdentity, anchorRow: -1, anchorColumn: -1, extentRow: -1, extentColumn: -1}
 		}
-		scroll := s.readingScrollState("text")
 		columns := 0
 		for _, row := range rows {
 			columns = maxInt(columns, len(row))
@@ -236,7 +238,9 @@ func (s *app) renderCSVPreview(c *ui.Context, p palette, source string) {
 		}
 		inside := root.HandleInput(func(event ui.InputEvent) bool {
 			cellAt := func(x, y float32) (int, int) {
-				row := int(maxFloat32(y+scroll.Y, 0) / csvPreviewRowHeight)
+				// Input coordinates are already relative to the scrolled grid.
+				// Persisted reading state is optional and must not be dereferenced.
+				row := int(maxFloat32(y, 0) / csvPreviewRowHeight)
 				column := int(maxFloat32(x, 0) / csvPreviewCellWidth)
 				return minInt(row, len(rows)-1), minInt(column, columns-1)
 			}
@@ -249,7 +253,8 @@ func (s *app) renderCSVPreview(c *ui.Context, p palette, source string) {
 				selection.anchorRow, selection.anchorColumn = row, column
 				selection.extentRow, selection.extentColumn = row, column
 				selection.dragging = true
-				root.Focus()
+				// The native pointer dispatcher focuses this Focusable grid before
+				// delivering input; the build-only root Element is expired here.
 				return true
 			case ui.InputPointerMove:
 				if selection.dragging {

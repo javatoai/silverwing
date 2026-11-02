@@ -207,7 +207,15 @@ func ownStyles(rt *engine, e *node) []inspDecl {
 		if e.borderStyle == BorderDashed {
 			style = "dashed"
 		}
-		ds = append(ds, inspDecl{name: "border", value: v + " " + style + " " + colorText(e.borderC), color: e.borderC, swatch: true})
+		if e.grads != nil && e.grads.border != borderColor {
+			add("border", v+" "+style)
+			add("border-image", "gradient")
+		} else {
+			ds = append(ds, inspDecl{name: "border", value: v + " " + style + " " + colorText(e.borderC), color: e.borderC, swatch: true})
+		}
+	}
+	if e.blur > 0 {
+		add("filter", "blur("+num(e.blur)+"px)")
 	}
 	if v, ok := edgesCSS(e.radius); ok {
 		add("border-radius", v)
@@ -228,9 +236,14 @@ func ownStyles(rt *engine, e *node) []inspDecl {
 	}
 	if e.kind == kindBox || e.kind == kindText && e.bg.A > 0 {
 		switch {
+		case e.fill == fillGradient && len(e.grad.Stops) > 0:
+			add("background", fmt.Sprintf("linear-gradient(%sdeg, %d stops)", num(e.grad.Angle), len(e.grad.Stops)))
 		case e.fill == fillGradient:
 			g := e.grad
 			add("background", fmt.Sprintf("linear-gradient(%sdeg, %s, %s)", num(g.Angle), colorText(g.From), colorText(g.To)))
+		case e.fill == fillConic:
+			g := e.grads.conic
+			add("background", fmt.Sprintf("conic-gradient(from %sdeg, %d stops)", num(g.Angle), len(g.Stops)))
 		case e.fill == fillStripes:
 			add("background", "stripes "+colorText(e.stripes.c))
 		case e.fill == fillMaterial:
@@ -256,6 +269,9 @@ func ownStyles(rt *engine, e *node) []inspDecl {
 	}
 	if e.flags&flagInvisible != 0 {
 		add("visibility", "hidden")
+	}
+	if e.hidden {
+		add("display", "none")
 	}
 	if e.flags&flagPassThrough != 0 {
 		add("pointer-events", "none")
@@ -370,6 +386,8 @@ func computed(e *node) []inspDecl {
 	add := func(name, value string) { ds = append(ds, inspDecl{name: name, value: value}) }
 	display := "flex"
 	switch {
+	case e.hidden:
+		display = "none"
 	case e.grid:
 		display = "grid"
 	case e.kind == kindText:
@@ -465,7 +483,7 @@ func properties(rt *engine, e *node) []inspSection {
 		{name: "role", value: role},
 		{name: "name", value: strconv.Quote(name)},
 		{name: "keyboard-focusable", value: yes(e.flags&flagFocusable != 0 && !e.IsDisabled())},
-		{name: "ignored", value: yes(!seen || e.flags&(flagInvisible|flagInert) != 0)},
+		{name: "ignored", value: yes(!seen || e.flags&(flagInvisible|flagInert) != 0 || e.inHidden())},
 	}}
 	if e.description != "" {
 		acc.rows = append(acc.rows, inspDecl{name: "description", value: strconv.Quote(e.description)})
@@ -489,6 +507,8 @@ func cssAlign(a Align) string {
 		return "space-around"
 	case SpaceEvenly:
 		return "space-evenly"
+	case Baseline:
+		return "baseline"
 	}
 	return "auto"
 }

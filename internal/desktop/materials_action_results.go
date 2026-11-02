@@ -40,18 +40,27 @@ func (s *app) applyMaterialsActionResult(action application.Action, result appli
 		if action.TaskID != s.taskUnit.currentTask().id {
 			return true
 		}
-		opening := s.materialsUnit.state.documentReadPending
-		s.materialsUnit.state.documentReadPending = false
 		path := result.Path
 		if path == "" {
 			path = action.Path
 		}
 		if path == s.materialsUnit.state.documentPath {
+			if err := s.captureMarkdownEditorInput(s.materialsUnit.state.markdown); err != nil {
+				s.lastError = err.Error()
+				return true
+			}
+			readGuard, fresh := s.beginMaterialsMarkdownRead(action, path)
+			if !fresh {
+				return true
+			}
+			defer readGuard.release()
+			opening := s.materialsUnit.state.documentReadPending
+			s.materialsUnit.state.documentReadPending = false
 			s.materialsUnit.state.documentKind = dataString(result.Data, "kind")
 			if s.materialsUnit.state.documentKind == "" {
 				s.materialsUnit.state.documentKind = documentKindForPath(path)
 			}
-			s.materialsUnit.state.documentReadOnly = dataBool(result.Data, "readOnly") || markdownReadingOnly && s.materialsUnit.state.documentKind == "markdown"
+			s.materialsUnit.state.documentReadOnly = dataBool(result.Data, "readOnly") || s.materialsUnit.state.documentKind == "markdown" && !s.materialsMarkdownReadWritable(action, result, path)
 			if opening || s.materialsUnit.state.documentKind != "markdown" || s.materialsUnit.state.documentReadOnly {
 				s.materialsUnit.state.documentEditing = false
 			}
@@ -71,8 +80,16 @@ func (s *app) applyMaterialsActionResult(action application.Action, result appli
 				if err != nil {
 					s.lastError = "读取 Markdown 草稿格式失败：" + err.Error()
 				}
-				s.seedMarkdownAutosaveDraft(action.TaskID, path, diskContent, localContent, s.materialsUnit.state.documentHash, content.Draft, content.DraftError, content)
+				if readGuard != nil {
+					s.seedMarkdownAutosaveDraftLocked(action.TaskID, path, diskContent, localContent, s.materialsUnit.state.documentHash, content.Draft, content.DraftError, content)
+				} else {
+					s.seedMarkdownAutosaveDraft(action.TaskID, path, diskContent, localContent, s.materialsUnit.state.documentHash, content.Draft, content.DraftError, content)
+				}
+				if opening && !s.materialsUnit.state.documentReadOnly {
+					s.materialsUnit.state.documentEditing = true
+				}
 			}
+			readGuard.release()
 			if documents.EditableMaterialText(path) && !s.materialsUnit.state.documentReadOnly {
 				content, err := decodeSingleMaterialsData[documents.Content](result.Data)
 				if err != nil {
@@ -92,7 +109,9 @@ func (s *app) applyMaterialsActionResult(action application.Action, result appli
 		}
 		s.applyMaterialsFileReadResult(action)
 	case "document.save":
-		if markdownReadingOnly && documentKindForPath(action.Path) == "markdown" {
+		if documentKindForPath(action.Path) == "markdown" {
+			// Markdown saves belong to the captured autosave snapshot. A late
+			// ordinary action result cannot accept an older version as clean.
 			return true
 		}
 		hash := dataString(result.Data, "hash")

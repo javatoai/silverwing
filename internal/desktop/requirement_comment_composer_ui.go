@@ -2,6 +2,7 @@ package desktop
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/egoist/mygo/ui"
 	"silverwing-go/internal/application"
@@ -16,8 +17,8 @@ func (s *app) renderRequirementCommentComposer(c *ui.Context, p palette) {
 	if !s.commentComposerCurrent(state) || !state.open {
 		return
 	}
-	locked := !state.loaded || state.draft.Pending() || state.running && state.operation != "save"
-	blocked := locked || state.running || state.dirty || state.clipboardReading || len(state.pendingScreenshot) > 0 || s.confirmationDialog != nil
+	locked := !state.loaded || state.draft.Pending() || state.running && state.operation != "save" && state.operation != "import-images"
+	blocked := locked || state.running || state.dirty || commentImportHasResources(state) || s.confirmationDialog != nil
 	editing := state.editCommentID != ""
 	title, primary, discard := "添加评论", "发布评论", "清空草稿"
 	dialogLabel := "添加需求评论弹窗"
@@ -39,20 +40,6 @@ func (s *app) renderRequirementCommentComposer(c *ui.Context, p palette) {
 				label(c, name, 13, p.text).FillWidth().Wrap().Selectable()
 			})
 			ui.Row(c).FillWidth().Gap(8).Wrap().Shrink(0).Children(func() {
-				edit := requirementProgressButton(c, p, "comment-edit", "编辑", false).Tooltip("支持 Markdown；Enter 换行")
-				if !state.preview {
-					edit.Background(p.selected)
-				}
-				if edit.Clicked() {
-					state.preview = false
-				}
-				preview := requirementProgressButton(c, p, "comment-preview", "预览", !state.loaded)
-				if state.preview {
-					preview.Background(p.selected)
-				}
-				if preview.Clicked() {
-					state.preview = true
-				}
 				ui.Spacer(c).Grow(1)
 				if requirementProgressButton(c, p, "comment-add-images", "添加图片", blocked).Clicked() {
 					s.chooseCommentFiles(state, true)
@@ -65,46 +52,26 @@ func (s *app) renderRequirementCommentComposer(c *ui.Context, p palette) {
 				}
 			})
 			ui.Column(c).FillWidth().Grow(1).MinHeight(0).MinWidth(0).Gap(10).Children(func() {
-				if state.preview {
-					draft := state.draft
-					draft.Content = state.body
-					images := map[string]string{}
-					source := draft.Markdown(func(a domain.CommentDraftAsset) (string, string) {
-						link := "sw-comment-image:" + a.ID
-						if a.LocalPath != "" {
-							images[link] = a.LocalPath
+				s.renderCommentMarkdownEditor(c, p, state, locked)
+				if images := commentLegacyPendingImages(state.draft); len(images) > 0 {
+					ui.Scroll(c.Key("comment-legacy-pending-images")).FillWidth().MinHeight(0).MaxHeight(120).Children(func() {
+						for _, image := range images {
+							asset := image
+							ui.Row(c.Key("legacy-image-" + asset.ID)).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+								label(c, "待核对图片 · "+asset.Name, 12, p.muted).Grow(1).MinWidth(0).Wrap()
+								ui.Button(c, "查看图片").Label("待核对图片：" + asset.Name).Disabled(asset.LocalPath == "").OnClick(func() {
+									if s.commentComposerCurrent(state) && state.draft.Pending() {
+										s.openMarkdownLocalImageViewer(state.markdown, asset.LocalPath)
+									}
+								})
+							})
 						}
-						return link, ""
-					})
-					if state.markdown == nil {
-						state.markdown = newReadonlyMarkdownState("comment-draft:"+draft.ID, source, images)
-					} else if state.markdown.doc.Source() != source || !sameMarkdownTrustedImages(state.markdown.trustedImages, images) {
-						updateReadonlyMarkdownState(state.markdown, source, images)
-					}
-					state.markdown.commentReading = true
-					s.renderReadonlyMarkdownReaderContent(c, p, state.markdown)
-				} else {
-					ui.TextArea(c.Key("requirement-comment-markdown"), &state.body).FillWidth().Grow(1).MinHeight(90).Padding(12).Background(p.soft).Border(1, p.line).Radius(8).Label("评论 Markdown 正文").Placeholder("输入评论…").ReadOnly(locked).OnChange(func() {
-						state.dirty = true
-						state.errorText = ""
-						s.startCommentComposerJob(state, "save", nil)
-					}).OnPaste(func(text string) bool {
-						if text != "" {
-							return false
-						}
-						if !locked {
-							s.pasteCommentScreenshot(state)
-						}
-						return true
 					})
 				}
-				if len(state.draft.Images) > 0 || state.draft.Attachment != nil {
+				if state.draft.Attachment != nil {
 					ui.Scroll(c.Key("comment-staged-files")).FillWidth().MinHeight(0).MaxHeight(145).Gap(6).Label("评论图片及附件").Children(func() {
-						for _, a := range state.draft.Images {
-							s.renderCommentDraftAsset(c, p, state, a, true, blocked)
-						}
 						if a := state.draft.Attachment; a != nil {
-							s.renderCommentDraftAsset(c, p, state, *a, false, blocked)
+							s.renderCommentDraftAsset(c, p, state, *a, blocked)
 						}
 					})
 				}
@@ -173,7 +140,7 @@ func (s *app) renderRequirementCommentComposer(c *ui.Context, p palette) {
 						text = "收起"
 					}
 					if requirementProgressButton(c, p, "comment-composer-hide", text, false).Clicked() {
-						state.open = false
+						s.hideRequirementCommentComposer(state)
 					}
 					if !state.draft.Pending() {
 						b := ui.ButtonBase(c.Key("comment-publish")).Height(34).Padding(0, 16).Center().Radius(20).Background(p.blue).Border(1, p.blue).Label(primary).Disabled(!commentComposerCanPublish(state))
@@ -196,21 +163,25 @@ func (s *app) renderRequirementCommentComposer(c *ui.Context, p palette) {
 		})
 	})
 	if dialog.Dismissed() {
-		state.open = false
+		s.hideRequirementCommentComposer(state)
 	}
 }
 
-func (s *app) renderCommentDraftAsset(c *ui.Context, p palette, state *requirementCommentComposer, a domain.CommentDraftAsset, isImage, blocked bool) {
+func (s *app) hideRequirementCommentComposer(state *requirementCommentComposer) {
+	if !s.captureCommentMarkdownInput(state) {
+		state.open = true
+		return
+	}
+	state.open = false
+	if state.dirty && !state.running && !state.draft.Pending() {
+		s.startCommentComposerJob(state, "save", nil)
+	}
+}
+
+func (s *app) renderCommentDraftAsset(c *ui.Context, p palette, state *requirementCommentComposer, a domain.CommentDraftAsset, blocked bool) {
 	ui.Column(c.Key("comment-file-" + a.ID)).FillWidth().MinWidth(0).Gap(4).Children(func() {
 		ui.Row(c).FillWidth().MinWidth(0).Gap(8).AlignItems(ui.Center).Children(func() {
-			if bitmap := state.thumbnails[a.ID]; isImage && bitmap != nil {
-				ui.Image(c, bitmap).Width(64).Height(48).Fit(ui.Contain).Label("图片缩略图：" + a.Name)
-			}
-			kind := "附件"
-			if isImage {
-				kind = "图片"
-			}
-			label(c, fmt.Sprintf("%s · %s · %s", kind, a.Name, commentFileSize(a.Size)), 12, p.text).Grow(1).MinWidth(0).Wrap().Selectable()
+			label(c, fmt.Sprintf("附件 · %s · %s", a.Name, commentFileSize(a.Size)), 12, p.text).Grow(1).MinWidth(0).Wrap().Selectable()
 			if requirementProgressButton(c, p, "comment-remove-"+a.ID, "移除", blocked).Clicked() {
 				s.startCommentComposerJob(state, "remove", map[string]any{"assetID": a.ID})
 			}
@@ -229,4 +200,19 @@ func commentFileSize(size int64) string {
 		return fmt.Sprintf("%.1f KB", float64(size)/1024)
 	}
 	return fmt.Sprintf("%.1f MB", float64(size)/(1024*1024))
+}
+
+// Reconciliation must retain the exact legacy body and upload credentials.
+// Its append-only images remain available through explicit read-only controls.
+func commentLegacyPendingImages(draft domain.RequirementCommentDraft) []domain.CommentDraftAsset {
+	if !draft.Pending() {
+		return nil
+	}
+	var images []domain.CommentDraftAsset
+	for _, asset := range draft.Images {
+		if asset.MarkdownRef == "" && (asset.OriginalURL == "" || !strings.Contains(draft.Content, asset.OriginalURL)) {
+			images = append(images, asset)
+		}
+	}
+	return images
 }

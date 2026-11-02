@@ -1,8 +1,11 @@
 package desktop
 
 import (
+	"fmt"
 	"net/url"
 	"path/filepath"
+	markdownui "silverwing-go/internal/ui/markdown"
+	"strconv"
 	"strings"
 )
 
@@ -10,6 +13,18 @@ type markdownLinkDestination struct {
 	url      string
 	path     string
 	fragment string
+}
+
+func markdownLinkLocation(fragment string) (line, column int) {
+	if len(fragment) < 2 || fragment[0] != 'L' && fragment[0] != 'l' {
+		return 0, 0
+	}
+	parts := strings.SplitN(fragment[1:], ":", 2)
+	line, _ = strconv.Atoi(parts[0])
+	if len(parts) > 1 {
+		column, _ = strconv.Atoi(parts[1])
+	}
+	return
 }
 
 // resolveMarkdownLinkDestination mirrors the source reader's link boundary:
@@ -100,6 +115,27 @@ func (s *app) openMarkdownLink(state *markdownEditorState, destination string) {
 	if state == nil || state.closed {
 		return
 	}
+	resolved, err := markdownui.ResolveLink(state.path, destination)
+	if err != nil {
+		s.lastError = err.Error()
+		return
+	}
+	if resolved.URL != "" {
+		s.act("system.open", "", "", "", resolved.URL, "", nil)
+		return
+	}
+	root := state.linkRoot
+	if !state.detached {
+		root = s.taskUnit.currentTask().materialsPath
+	}
+	if resolved.Path != "" && (root == "" || !markdownLinkPathWithinRoot(root, resolved.Path)) {
+		s.openMarkdownFileLink(state, resolved)
+		return
+	}
+	if state.detached && (state.onNavigateLocalLink == nil || state.linkRoot == "") {
+		s.openMarkdownFileLink(state, resolved)
+		return
+	}
 	if target, ok := resolveMarkdownLinkDestination(state.path, "", destination); ok && target.url != "" {
 		s.act("system.open", "", "", "", target.url, "", nil)
 		return
@@ -108,7 +144,8 @@ func (s *app) openMarkdownLink(state *markdownEditorState, destination string) {
 		if !state.readOnly || state.linkRoot == "" || state.onNavigateLocalLink == nil || state.path == "" {
 			return
 		}
-		target, ok := resolveMarkdownLinkDestination(state.path, state.linkRoot, destination)
+		target := markdownLinkDestination{path: resolved.Path, fragment: resolved.Fragment}
+		ok := target.path != ""
 		if !ok || target.path == "" {
 			return
 		}
@@ -123,14 +160,19 @@ func (s *app) openMarkdownLink(state *markdownEditorState, destination string) {
 		return
 	}
 	task := s.taskUnit.currentTask()
-	target, ok := resolveMarkdownLinkDestination(state.path, task.materialsPath, destination)
+	target := markdownLinkDestination{path: resolved.Path, fragment: resolved.Fragment}
+	ok := target.path != "" && markdownLinkPathWithinRoot(task.materialsPath, resolved.Path)
 	if !ok || target.path == "" {
 		return
 	}
 	entry, ok := s.findMaterialsEntry(target.path, s.materialsUnit.state.documents)
 	if !ok || entry.Directory {
+		s.openMarkdownFileLink(state, resolved)
 		return
 	}
 	s.selectMaterialsPath(entry.Path)
 	s.materialsUnit.state.documentLinkFragment = target.fragment
+	if resolved.Line > 0 {
+		s.materialsUnit.state.documentLinkFragment = fmt.Sprintf("L%d:%d", resolved.Line, resolved.Column)
+	}
 }

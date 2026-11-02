@@ -18,7 +18,7 @@ if ($env:OS -ne 'Windows_NT') {
     throw 'This script packages the Windows x64 native application and must run on Windows.'
 }
 if (-not $PayloadDirectory -and -not (Get-Command go -ErrorAction SilentlyContinue)) {
-    throw 'Go is required. Install the version declared in go.mod (Go 1.27.1).'
+    throw 'Go is required. Install the version declared in go.mod (Go 1.27.3).'
 }
 
 $domainModels = Get-Content (Join-Path $repoRoot 'internal/domain/models.go') -Raw
@@ -149,6 +149,7 @@ try {
         foreach ($required in @(
             $guiExecutable,
             'resources/native/pdfium.dll',
+            'resources/ghostty-vt.dll',
             'resources/native-mermaid/windows-x64/mmdr.exe'
         )) {
             if (-not (Test-Path -LiteralPath (Join-Path $payloadSource $required) -PathType Leaf)) { throw "Reusable payload is incomplete: missing $required" }
@@ -262,6 +263,24 @@ Each section identifies its original file; original formats, including the Micro
 The app bundle contains no WebView runtime or JVM. Windows system graphics/runtime components are supplied by Windows.
 '@
     Set-Content -LiteralPath (Join-Path $noticeRoot 'THIRD-PARTY-NOTICES.txt') -Value $notice -Encoding utf8
+    }
+
+    # Terminal loads from PathResources itself, rather than native/.
+    # Repackaging an existing payload continues to work without a Go compiler.
+    if ($PayloadDirectory) {
+        $terminalManifest = Get-Content -LiteralPath (Join-Path $repoRoot 'third_party/mygo/plugins/terminal/mygo-plugin.json') -Raw | ConvertFrom-Json
+        $terminalSpec = @($terminalManifest.libraries | Where-Object { $_.name -eq 'libghostty-vt' })[0].files.'windows-amd64'
+        if ($null -eq $terminalSpec -or $terminalSpec.name -ne 'ghostty-vt.dll') { throw 'Invalid terminal runtime manifest.' }
+        $terminalHash = (Get-FileHash -LiteralPath (Join-Path $resourceRoot 'ghostty-vt.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($terminalHash -ne $terminalSpec.sha256) { throw "Reusable payload terminal checksum mismatch: $terminalHash" }
+        $terminalNoticeFiles = @(Get-ChildItem -LiteralPath $noticeRoot -Recurse -File)
+        $terminalFlatNotices = Join-Path $resourceRoot 'THIRD-PARTY-NOTICES.txt'
+        if (Test-Path -LiteralPath $terminalFlatNotices -PathType Leaf) { $terminalNoticeFiles += Get-Item -LiteralPath $terminalFlatNotices }
+        $terminalNoticesPresent = @($terminalNoticeFiles | Select-String -SimpleMatch 'Ghostty contributors').Count -gt 0
+        if (-not $terminalNoticesPresent) { throw 'Reusable payload is missing the Ghostty runtime license.' }
+    }
+    else {
+        Invoke-Go @('run', './scripts/terminal-runtime', '-target', 'windows-amd64', '-resources', $resourceRoot, '-cache', $cacheRoot, '-notices', (Join-Path $noticeRoot 'ghostty-vt'))
     }
 
     # Ship the product license alongside the GUI in every package.

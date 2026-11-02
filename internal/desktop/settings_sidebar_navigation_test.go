@@ -1,276 +1,172 @@
 package desktop
 
 import (
-	"path/filepath"
-	"strings"
-	"testing"
-
 	"github.com/egoist/mygo/ui"
+	"path/filepath"
+	"testing"
 )
 
 func settingsSidebarTester(state *app, height int) *ui.Tester {
-	return ui.NewTester(func(context *ui.Context) {
-		theme := setTheme(context, state.dark)
-		ui.Row(context).Fill().AlignItems(ui.Stretch).Children(func() {
-			state.renderSettingsSidebar(context, theme)
-		})
+	return ui.NewTester(func(c *ui.Context) {
+		p := setTheme(c, state.dark)
+		ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() { state.renderSettingsSidebar(c, p) })
 	}, 220, height)
 }
 
-func TestSettingsSidebarSectionsAndVisualGroups(test *testing.T) {
-	expected := []string{"基础", "快捷工具", "存储", "开发工具", "任务", "Git", "AGENTS.md", "Codex", "skill", "CLI", "代理", "日志", "系统"}
-	expectedGroups := []int{0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3}
-	if len(settingsSections) != len(expected) {
-		test.Fatalf("sidebar has %d categories, want %d", len(settingsSections), len(expected))
+func TestSettingsSidebarSectionsAndVisualGroups(t *testing.T) {
+	want := []string{"外观与交互", "任务与工作区", "资料与说明", "Git 与发布", "AI 与扩展", "工具与连接", "数据与维护"}
+	if len(settingsSections) != len(want) {
+		t.Fatalf("categories=%d", len(settingsSections))
 	}
-	groupStarts := 0
-	for index, section := range settingsSections {
-		if section.name != expected[index] {
-			test.Fatalf("category %d is %q, want %q", index, section.name, expected[index])
+	seen := map[string]bool{}
+	for i, section := range settingsSections {
+		if section.name != want[i] {
+			t.Fatalf("category %d=%s", i, section.name)
 		}
-		if section.group != expectedGroups[index] {
-			test.Fatalf("category %q belongs to group %d, want %d", section.name, section.group, expectedGroups[index])
-		}
-		if index > 0 && section.group != settingsSections[index-1].group {
-			groupStarts++
-		}
-	}
-	if groupStarts != 3 {
-		test.Fatalf("sidebar has %d visual group boundaries, want 3", groupStarts)
-	}
-	if settingsSections[1].pages[0].key != "tool-visibility" || settingsSections[1].pages[0].label != "研发工具" {
-		test.Fatal("renaming the settings category changed its existing page identity")
-	}
-
-	state := &app{
-		settingsUnit: settingsController{state: settingsState{settingsTab: "基础",
-			settingsPage: "basic"}},
-	}
-	tester := settingsSidebarTester(state, 820)
-	dividerCount := 0
-	for _, text := range tester.Texts() {
-		if text == "设置分组分隔线" {
-			dividerCount++
-		}
-	}
-	if dividerCount != 3 {
-		test.Fatalf("rendered sidebar has %d separators, want 3; texts=%q", dividerCount, tester.Texts())
-	}
-	line, lineFound := tester.Find("设置分组分隔线")
-	previous, previousFound := tester.Find("存储")
-	following, followingFound := tester.Find("开发工具")
-	if !lineFound || !previousFound || !followingFound || line.H != 1 || line.Y-previous.Y-previous.H != 8 || following.Y-line.Y-line.H != 8 || line.X != previous.X+14 {
-		test.Fatalf("first separator must be 1 DIP, aligned with menu text, with 8 DIP breathing room: previous=%+v line=%+v following=%+v", previous, line, following)
-	}
-	if tester.Focused("设置分组分隔线") {
-		test.Fatal("visual category separators must not take keyboard focus")
-	}
-}
-
-func TestSettingsSidebarPointerAndKeyboardNavigation(test *testing.T) {
-	expected := []struct {
-		name string
-		page string
-	}{
-		{"基础", "basic"},
-		{"快捷工具", "tool-visibility"},
-		{"存储", "paths"},
-		{"开发工具", "dev-tools"},
-		{"任务", "task-creation"},
-		{"Git", "git"},
-		{"AGENTS.md", "agents"},
-		{"Codex", "codex-plugins"},
-		{"skill", "skill-local"},
-		{"CLI", "cli-meegle"},
-		{"代理", "proxy"},
-		{"日志", "logs"},
-		{"系统", "about"},
-	}
-	state := &app{
-		settingsUnit: settingsController{state: settingsState{settingsTab: "基础",
-			settingsPage: "basic"}},
-	}
-	tester := settingsSidebarTester(state, 820)
-	for _, item := range expected {
-		if err := tester.Click(item.name); err != nil {
-			test.Fatal(err)
-		}
-		if state.settingsUnit.state.settingsTab != item.name || state.settingsUnit.state.settingsPage != item.page {
-			test.Fatalf("clicking %q selected %q / %q, want %q / %q", item.name, state.settingsUnit.state.settingsTab, state.settingsUnit.state.settingsPage, item.name, item.page)
-		}
-	}
-
-	state = &app{
-		settingsUnit: settingsController{state: settingsState{settingsTab: "基础",
-			settingsPage: "basic"}},
-	}
-	tester = settingsSidebarTester(state, 820)
-	for index, item := range expected {
-		tester.Key(0, ui.KeyTab)
-		if !tester.Focused(item.name) {
-			test.Fatalf("Tab %d focused another control instead of %q", index+1, item.name)
-		}
-		if tester.Focused("设置分组分隔线") {
-			test.Fatal("a visual separator entered the keyboard focus order")
-		}
-	}
-}
-
-func TestSettingsSidebarScrollsAtShortHeight(test *testing.T) {
-	state := &app{
-		settingsUnit: settingsController{state: settingsState{settingsTab: "基础",
-			settingsPage: "basic"}},
-	}
-	tester := settingsSidebarTester(state, 190)
-	last, found := tester.Find("系统")
-	if found && last.H > 0 {
-		test.Fatal("the last category should require scrolling in a short sidebar")
-	}
-	tester.Scroll(80, 150, 0, 900)
-	last, found = tester.Find("系统")
-	if !found || last.H == 0 {
-		test.Fatalf("scrolling did not expose the last settings category: rect=%+v found=%t", last, found)
-	}
-	if err := tester.Click("系统"); err != nil {
-		test.Fatal(err)
-	}
-	if state.settingsUnit.state.settingsTab != "系统" || state.settingsUnit.state.settingsPage != "about" {
-		test.Fatalf("last category is not reachable after scrolling: tab=%q page=%q", state.settingsUnit.state.settingsTab, state.settingsUnit.state.settingsPage)
-	}
-}
-
-func TestSettingsSystemPagesAndAppDataRoute(test *testing.T) {
-	expected := []settingsPage{{"about", "关于"}, {"updates", "更新"}, {"app-data", "应用数据目录"}}
-	system := settingsSections[len(settingsSections)-1]
-	if system.name != "系统" || len(system.pages) != len(expected) {
-		test.Fatalf("system settings contain %d pages, want %d", len(system.pages), len(expected))
-	}
-	for index, page := range expected {
-		if system.pages[index] != page {
-			test.Fatalf("system page %d is %+v, want %+v", index, system.pages[index], page)
-		}
-	}
-
-	state := &app{
-		settingsUnit: settingsController{state: settingsState{settingsTab: "系统",
-			settingsPage: "app-data"}},
-	}
-	section := state.currentSettingsSection()
-	if state.settingsUnit.state.settingsPage != "app-data" || section.name != "系统" {
-		test.Fatalf("app-data route was not preserved in the system category: page=%q section=%q", state.settingsUnit.state.settingsPage, section.name)
-	}
-
-	state = &app{
-		settingsUnit: settingsController{state: settingsState{settingsTab: "快捷工具",
-			settingsPage: "tool-visibility"}},
-	}
-	tester := settingsSidebarTester(state, 820)
-	if err := tester.Click("系统"); err != nil {
-		test.Fatal(err)
-	}
-	if state.settingsUnit.state.settingsTab != "系统" || state.settingsUnit.state.settingsPage != "about" {
-		test.Fatalf("selecting the system category must open About first: %q / %q", state.settingsUnit.state.settingsTab, state.settingsUnit.state.settingsPage)
-	}
-}
-
-func TestSettingsPreferenceAliasesAndRestore(test *testing.T) {
-	for _, item := range []struct {
-		name string
-		key  string
-	}{
-		{"快捷工具", "developer-tools"},
-		{"工具", "developer-tools"},
-		{"存储", "storage"},
-		{"开发工具", "development"},
-		{"系统", "system"},
-	} {
-		if key := settingsPreferenceKey(item.name); key != item.key {
-			test.Fatalf("preference key for %q is %q, want %q", item.name, key, item.key)
-		}
-	}
-	for _, item := range []struct {
-		key       string
-		name      string
-		roundTrip string
-	}{
-		{"developer-tools", "快捷工具", "developer-tools"},
-		{"tools", "快捷工具", "developer-tools"},
-		{"storage", "存储", "storage"},
-		{"development", "开发工具", "development"},
-		{"app-data", "系统", "system"},
-		{"system", "系统", "system"},
-		{"about", "系统", "system"},
-		{"updates", "系统", "system"},
-	} {
-		if name := settingsPreferenceName(item.key); name != item.name {
-			test.Fatalf("preference name for %q is %q, want %q", item.key, name, item.name)
-		}
-		if key := settingsPreferenceKey(settingsPreferenceName(item.key)); key != item.roundTrip {
-			test.Fatalf("preference %q did not round-trip to %q: %q", item.key, item.roundTrip, key)
-		}
-	}
-
-	for _, legacyKey := range []string{"developer-tools", "tools"} {
-		test.Run(legacyKey, func(test *testing.T) {
-			home := test.TempDir()
-			store := NewDesktopPreferencesStore(filepath.Join(home, desktopPreferencesFile))
-			if _, err := store.Update(func(value *DesktopPreferences) { value.SettingsSection = legacyKey }); err != nil {
-				test.Fatal(err)
+		for _, page := range section.pages {
+			if seen[page.key] {
+				t.Fatalf("duplicate editable route %s", page.key)
 			}
-			state := &app{desktopPreferences: &desktopPreferencesState{enabled: true}}
-			state.restoreDesktopPreferences(home)
-			if state.settingsUnit.state.settingsTab != "快捷工具" || state.settingsUnit.state.settingsPage != "tool-visibility" {
-				test.Fatalf("restoring %q selected %q / %q", legacyKey, state.settingsUnit.state.settingsTab, state.settingsUnit.state.settingsPage)
-			}
-		})
+			seen[page.key] = true
+		}
 	}
-
-	home := test.TempDir()
-	state := &app{desktopPreferences: &desktopPreferencesState{enabled: true}}
-	state.restoreDesktopPreferences(home)
-	if state.settingsUnit.state.settingsTab != "基础" || state.settingsUnit.state.settingsPage != "basic" {
-		test.Fatalf("missing preference no longer restores the basic page: %q / %q", state.settingsUnit.state.settingsTab, state.settingsUnit.state.settingsPage)
+	if len(seen) != 23 {
+		t.Fatalf("pages=%d", len(seen))
 	}
+	for _, old := range []string{"basic", "tool-visibility", "paths", "config-backup", "dev-tools", "task-creation", "task-area", "git", "branch-naming", "tag", "agents", "instruction-templates", "codex-plugins", "codex-mcp", "skill-local", "skill-sources", "cli-meegle", "cli-genbu", "proxy", "logs", "about", "updates", "app-data"} {
+		if _, ok := settingsSectionForPage(old); !ok {
+			t.Fatalf("lost existing route %s", old)
+		}
+	}
+}
 
-	home = test.TempDir()
+func TestSettingsSidebarPointerAndKeyboardNavigation(t *testing.T) {
+	s := &app{settingsUnit: settingsController{state: settingsState{settingsTab: "外观与交互", settingsPage: "basic"}}}
+	view := settingsSidebarTester(s, 820)
+	for _, section := range settingsSections {
+		if err := view.Click(section.name); err != nil {
+			t.Fatal(err)
+		}
+		if s.settingsUnit.state.settingsTab != section.name || s.settingsUnit.state.settingsPage != section.pages[0].key {
+			t.Fatal("wrong category target", section.name)
+		}
+	}
+	s = &app{settingsUnit: settingsController{state: settingsState{settingsTab: "外观与交互", settingsPage: "basic"}}}
+	view = settingsSidebarTester(s, 820)
+	for _, section := range settingsSections {
+		view.Key(0, ui.KeyTab)
+		if !view.Focused(section.name) {
+			t.Fatal("keyboard category unreachable", section.name)
+		}
+	}
+	if !s.navigateSettingsPage("instruction-templates", "") {
+		t.Fatal("navigate")
+	}
+	s.navigateSettingsPage("git", "")
+	view.Frame()
+	if err := view.Click("资料与说明"); err != nil {
+		t.Fatal(err)
+	}
+	if s.settingsUnit.state.settingsPage != "instruction-templates" {
+		t.Fatal("category did not remember its last subpage")
+	}
+}
+
+func TestSettingsSidebarScrollsAtShortHeight(t *testing.T) {
+	s := &app{settingsUnit: settingsController{state: settingsState{settingsTab: "外观与交互", settingsPage: "basic"}}}
+	v := settingsSidebarTester(s, 190)
+	v.Scroll(80, 150, 0, 900)
+	if err := v.Click("数据与维护"); err != nil {
+		t.Fatal(err)
+	}
+	if s.settingsUnit.state.settingsPage != "config-backup" {
+		t.Fatal("last category unreachable")
+	}
+}
+
+func TestSettingsPreferenceAliasesAndRestore(t *testing.T) {
+	cases := map[string]string{"basic": "外观与交互", "developer-tools": "外观与交互", "tools": "外观与交互", "storage": "资料与说明", "agents": "资料与说明", "development": "工具与连接", "commands": "工具与连接", "proxy": "工具与连接", "skill-sources": "AI 与扩展", "codex": "AI 与扩展", "system": "数据与维护", "app-data": "数据与维护", "logs": "数据与维护", "branch-naming": "任务与工作区", "tasks": "任务与工作区", "git": "Git 与发布"}
+	for key, name := range cases {
+		if got := settingsPreferenceName(key); got != name {
+			t.Fatalf("%s=%s want %s", key, got, name)
+		}
+	}
+	for _, section := range settingsSections {
+		if got := settingsPreferenceName(settingsPreferenceKey(section.name)); got != section.name {
+			t.Fatal("category preference roundtrip", section.name, got)
+		}
+	}
+	home := t.TempDir()
 	store := NewDesktopPreferencesStore(filepath.Join(home, desktopPreferencesFile))
-	state = &app{
-		settingsUnit: settingsController{state: settingsState{settingsTab: "系统",
-			settingsPage: "app-data"}},
-		desktopPreferences: &desktopPreferencesState{enabled: true, store: store},
+	if _, err := store.Update(func(p *DesktopPreferences) { p.SettingsSection = "system" }); err != nil {
+		t.Fatal(err)
 	}
-	if err := state.persistDesktopLayout(); err != nil {
-		test.Fatal(err)
-	}
-	persisted, err := store.Load()
-	if err != nil || persisted.SettingsSection != "system" {
-		test.Fatalf("system page selection did not persist the system category: %+v %v", persisted, err)
-	}
-	restored := &app{desktopPreferences: &desktopPreferencesState{enabled: true}}
-	restored.restoreDesktopPreferences(home)
-	if restored.settingsUnit.state.settingsTab != "系统" || restored.settingsUnit.state.settingsPage != "about" {
-		test.Fatalf("restoring the system category must open About without remembering a subpage: %q / %q", restored.settingsUnit.state.settingsTab, restored.settingsUnit.state.settingsPage)
+	s := &app{desktopPreferences: &desktopPreferencesState{enabled: true}}
+	s.restoreDesktopPreferences(home)
+	if s.settingsUnit.state.settingsTab != "数据与维护" || s.settingsUnit.state.settingsPage != "config-backup" {
+		t.Fatal("restore lost maintenance category")
 	}
 }
 
-func TestReconcileSidebarNavigationUsesShortcutToolsCategory(test *testing.T) {
-	state := &app{
-		settingsUnit: settingsController{state: settingsState{settingsTab: "基础",
-			settingsPage: "basic",
-			configJSON:   `{"toolVisibility":{"json":false,"dateTime":false,"textDiff":false,"killPort":false}}`}},
-		page: "tools",
+func TestSettingsSearchAliasesAndTargetNavigation(t *testing.T) {
+	for query, page := range map[string]string{"资料同步": "materials-sync", "AGENTS": "agents", "Meego": "cli-meegle", "配置源码": "config-backup", "端口占用": "tool-visibility", "分支名": "task-creation", "MCP": "codex-mcp"} {
+		matches := settingsSearch(query)
+		if len(matches) == 0 || matches[0].page != page {
+			t.Fatalf("%s=%v", query, matches)
+		}
 	}
-	state.reconcileSidebarNavigation()
-	if state.page != "settings" || state.settingsUnit.state.settingsTab != "快捷工具" || state.settingsUnit.state.settingsPage != "tool-visibility" {
-		test.Fatalf("all-disabled tools fallback selected %q / %q / %q", state.page, state.settingsUnit.state.settingsTab, state.settingsUnit.state.settingsPage)
+	if len(settingsSearch("not-a-real-setting-58398")) != 0 {
+		t.Fatal("unknown query matched")
+	}
+	s := newApp(nil, Options{Page: "settings", CapturePath: "settings-test"})
+	s.loading = false
+	s.settingsUnit.state.configJSON = `{}`
+	s.settingsUnit.state.settingsSearchQuery = "资料同步"
+	v := ui.NewTester(func(c *ui.Context) { s.settingsScreen(c, setTheme(c, false)) }, 1080, 800)
+	if _, ok := v.Find("资料与说明 · 资料 Git 自动同步"); ok {
+		t.Fatal("removed settings-search results returned")
+	}
+	// Aliases remain available to internal links, without a visible search UI.
+	s.openSettingsSearchResult(settingsSearch("资料同步")[0])
+	if s.settingsUnit.state.settingsPage != "materials-sync" || s.settingsUnit.state.settingsSearchQuery != "" {
+		t.Fatal("search did not route")
 	}
 
-	state = &app{
-		settingsUnit: settingsController{state: settingsState{configJSON: `{"toolVisibility":{"json":false,"dateTime":false,"textDiff":false,"killPort":false}}`}},
-		dark:         false,
+	v.Frame()
+	if s.settingsUnit.state.settingsSearchPending {
+		t.Fatal("search target not revealed")
 	}
-	tester := ui.NewTester(func(context *ui.Context) { state.renderDeveloperTools(context) }, 640, 400)
-	if !tester.HasText("设置 → 快捷工具") || tester.HasText("设置 → 工具") {
-		test.Fatalf("empty-state guidance is stale: %q", strings.Join(tester.Texts(), " | "))
+	if len(v.OpenedURLs()) != 0 {
+		t.Fatal("navigation opened external URL")
+	}
+}
+
+func TestSettingsCommandToolsAndExpandedProxy(t *testing.T) {
+	s := newApp(nil, Options{Page: "settings", CapturePath: "settings-test"})
+	s.settingsUnit.state.configJSON, s.settingsUnit.state.settingsPage = `{}`, "cli-tools"
+	s.settingsUnit.state.settingsCLIErrors = map[string]string{"codex": "synthetic-codex-error"}
+	v := ui.NewTester(func(c *ui.Context) {
+		ui.Scroll(c).Fill().Children(func() { s.settingsCommandTools(c, setTheme(c, false)) })
+	}, 1100, 2200)
+	if !v.HasText("Git 状态") || v.HasText("Codex CLI 状态") || v.HasText("Meegle CLI 状态") || v.HasText("Genbu CLI 状态") || v.HasText("synthetic-codex-error") {
+		t.Fatal("default Git tab leaked another command")
+	}
+	s.navigateSettingsPage("cli-codex", "")
+	v.Frame()
+	if !v.HasText("Codex CLI 状态") || v.HasText("Git 状态") || v.HasText("Meegle CLI 状态") || v.HasText("Genbu CLI 状态") {
+		t.Fatal("selected Codex tab did not isolate its command")
+	}
+	errors := 0
+	for _, text := range v.Texts() {
+		if text == "synthetic-codex-error" {
+			errors++
+		}
+	}
+	if errors != 1 {
+		t.Fatal("CLI failure leaked across tools", errors)
+	}
+	v = ui.NewTester(func(c *ui.Context) { s.settingsProxy(c, setTheme(c, false)) }, 1100, 1000)
+	if _, ok := v.Find("代理密码"); !ok {
+		t.Fatal("disabled auth fields hidden instead of expanded")
 	}
 }

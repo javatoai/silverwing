@@ -11,7 +11,12 @@ import (
 )
 
 func markdownDraftPayload(ref documentSaveRef) map[string]any {
-	return map[string]any{"expectedHash": ref.hash, "draftTaskPath": ref.taskPath, "draftMaterialsRoot": ref.materialsRoot, "hasUtf8Bom": ref.hasUTF8BOM, "newline": ref.newline}
+	payload := map[string]any{"expectedHash": ref.hash, "draftTaskPath": ref.taskPath, "draftMaterialsRoot": ref.materialsRoot, "hasUtf8Bom": ref.hasUTF8BOM, "newline": ref.newline}
+	if ref.kind == "material-markdown" {
+		payload["markdownEditContext"] = taskMaterialsMarkdownEditContext
+		payload["desktopRenameTaskCreatedAt"] = ref.createdAt
+	}
+	return payload
 }
 
 func (s *app) writeMarkdownDraft(ctx context.Context, key, content string, discard bool) error {
@@ -22,7 +27,7 @@ func (s *app) writeMarkdownDraft(ctx context.Context, key, content string, disca
 	if !ok {
 		return errors.New("找不到 Markdown 草稿的任务身份，请重新打开文件")
 	}
-	if markdownReadingOnly || ref.kind == "instruction" {
+	if !markdownSaveRefWritable(ref) || ref.kind != "material-markdown" {
 		return editor.ErrDraftUnsupported
 	}
 	if ref.readOnly {
@@ -37,7 +42,7 @@ func (s *app) writeMarkdownDraft(ctx context.Context, key, content string, disca
 	}
 	// Cache writes have their own serialized journal. They must remain able to
 	// preserve typing while an unrelated operation holds the backend gate.
-	_, err := s.backend.Dispatch(ctx, application.Action{Kind: kind, TaskID: ref.taskID, Path: ref.path, Text: content, Payload: markdownDraftPayload(ref)})
+	_, err := s.dispatchMaterialsBackend(ctx, s.backend, ref.taskPath, application.Action{Kind: kind, TaskID: ref.taskID, Path: ref.path, Text: content, Payload: markdownDraftPayload(ref)})
 	if err != nil {
 		s.invalidateInstructionEditor()
 	}

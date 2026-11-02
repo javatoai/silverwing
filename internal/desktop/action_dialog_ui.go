@@ -1,7 +1,6 @@
 package desktop
 
 import (
-	"fmt"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -16,10 +15,13 @@ func (s *app) actionDialog(c *ui.Context, p palette) {
 		s.renderServiceEditorDialog(c, p)
 		return
 	}
-	ui.DialogBase(c.Key("action-dialog"), &s.dialogOpen, func(backdrop, panel ui.Element) {
+	s.observeSourceBranchForm()
+	open := s.dialogOpen
+	ui.DialogBase(c.Key("action-dialog"), &open, func(backdrop, panel ui.Element) {
 		backdrop.Background(ui.RGBA(0, 0, 0, 0.32))
 		w, h := c.Size()
 		panel.Width(min(680, w-48)).MaxHeight(min(720, h-32)).Padding(22).Gap(18).Background(p.surface).Border(1, p.line).Radius(18)
+		panel.OnShortcut(ui.Cmd, ui.KeyS, s.submitForm)
 		panel.Children(func() {
 			label(c, s.dialogTitle, 20, p.text).FontWeight(600).Shrink(0)
 			ui.Divider(c).Shrink(0)
@@ -46,7 +48,10 @@ func (s *app) actionDialog(c *ui.Context, p palette) {
 								}
 							}
 						})
-						if field.multiline {
+						if extensionSourceForm(s.form.kind) && field.key == "ref" {
+							s.renderSourceBranchRef(c, p, field)
+						} else if s.renderActionFormMarkdown(c, p, field) {
+						} else if field.multiline {
 							ui.TextArea(c.Key("action-form-"+field.key), s.input("form:"+field.key, field.value)).FillWidth().Height(160).Padding(12).Background(p.surface).Border(1, p.line).Radius(8)
 						} else if len(field.options) > 0 {
 							value := s.input("form:"+field.key, field.value)
@@ -67,6 +72,9 @@ func (s *app) actionDialog(c *ui.Context, p palette) {
 							})
 						} else {
 							input := ui.TextInput(c.Key("action-form-"+field.key), s.input("form:"+field.key, field.value)).FillWidth().Height(40).Placeholder(firstNonEmpty(field.placeholder, field.label))
+							if extensionSourceForm(s.form.kind) && field.key == "repositoryUrl" {
+								input.OnChange(s.observeSourceBranchForm)
+							}
 							if field.secret && !*s.settingsBoolInput("form-secret:"+s.form.kind+":"+field.key, false) {
 								input.Password()
 							}
@@ -84,22 +92,8 @@ func (s *app) actionDialog(c *ui.Context, p palette) {
 							label(c, requests.branchError, 11, p.danger).Wrap().Selectable()
 						}
 						if action(c, "source-read-branches", "branch", "读取远程分支", p, false) {
-							kind := "skills.sources/branches/list"
-							if s.form.kind == "codex.extensions/marketplaces/add-source" {
-								kind = "codex.extensions/branches/list"
-							}
-							s.act(kind, "", "", "", "", "", map[string]any{"repositoryUrl": *s.input("form:repositoryUrl", "")})
+							s.requestSourceBranches(true)
 						}
-					}
-					if field.key == "ref" && len(s.settingsUnit.state.settingsBranchChoices) > 0 {
-						ui.Scroll(c).Height(72).FillWidth().Padding(6).Gap(4).Background(p.soft).Radius(8).Children(func() {
-							for index, branch := range s.settingsUnit.state.settingsBranchChoices {
-								value := s.input("form:ref", "")
-								if action(c, fmt.Sprintf("source-branch-%d", index), "branch", branch, p, *value == branch) {
-									*value = branch
-								}
-							}
-						})
 					}
 				}
 				if s.form.mode == "service-add" || s.form.mode == "service-edit" {
@@ -114,7 +108,7 @@ func (s *app) actionDialog(c *ui.Context, p palette) {
 			})
 			ui.Row(c).FillWidth().Gap(8).Shrink(0).Wrap().Justify(ui.End).Children(func() {
 				if action(c, "action-cancel", "close", "取消", p, false) {
-					s.dialogOpen = false
+					open = false
 				}
 				submitLabel := "继续"
 				if s.form.kind == "task.requirement-link" {
@@ -126,6 +120,13 @@ func (s *app) actionDialog(c *ui.Context, p palette) {
 			})
 		})
 	})
+	if !open && s.dialogOpen && s.captureActionFormMarkdown() {
+		s.dialogOpen = false
+	}
+	if !s.dialogOpen {
+		s.closeSourceBranchForm()
+		s.closeActionFormMarkdown()
+	}
 }
 
 func (s *app) taskCreateSelection(c *ui.Context, p palette) {

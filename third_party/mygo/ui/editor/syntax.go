@@ -99,6 +99,10 @@ type Language struct {
 	// bracket typed first on its line takes its opener's indentation.
 	IncreaseIndent *regexp.Regexp
 	DecreaseIndent *regexp.Regexp
+	// Imports matches a line that imports, as one starting with import:
+	// a run of them folds as one, the lines in brackets of each with
+	// them, and State.FoldImports folds the first.
+	Imports *regexp.Regexp
 	// WordChars are characters other than letters, digits and _ that
 	// words hold, as - in CSS.
 	WordChars string
@@ -325,7 +329,7 @@ func (b *Buffer) highlighter() Highlighter {
 	}
 	s := b.syntax
 	if s == nil || s.lang != lang {
-		s = &syntaxState{lang: lang, text: Snapshot{b.text, b.version, b.crlf}}
+		s = &syntaxState{lang: lang, text: b.snapshotLocked()}
 		b.syntax = s
 	}
 	b.mu.Unlock()
@@ -340,7 +344,7 @@ func (b *Buffer) highlighter() Highlighter {
 		return s.h
 	}
 	for _, e := range entries {
-		next := Snapshot{e.text, e.version, b.crlf}
+		next := e.snapshot()
 		s.h.Edit(s.text, next, publicChanges(e.changes))
 		s.text = next
 	}

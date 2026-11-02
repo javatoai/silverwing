@@ -62,11 +62,13 @@ type ExternalSkill struct {
 }
 
 type SkillSourceSnapshot struct {
-	SourceID        string          `json:"sourceId"`
-	Skills          []ExternalSkill `json:"skills"`
-	DiscoveredRoots []string        `json:"discoveredRoots"`
-	UpdatedAt       *string         `json:"updatedAt,omitempty"`
-	Error           *string         `json:"error,omitempty"`
+	SourceID          string                `json:"sourceId"`
+	SourceFingerprint *string               `json:"sourceFingerprint,omitempty"`
+	ResolvedOrigin    *SkillInstalledOrigin `json:"resolvedOrigin,omitempty"`
+	Skills            []ExternalSkill       `json:"skills"`
+	DiscoveredRoots   []string              `json:"discoveredRoots"`
+	UpdatedAt         *string               `json:"updatedAt,omitempty"`
+	Error             *string               `json:"error,omitempty"`
 }
 
 type extensionState struct {
@@ -82,9 +84,10 @@ type managedPlugin struct {
 	ManagedAt string `json:"managedAt"`
 }
 type managedSkill struct {
-	SourceID  string `json:"sourceId"`
-	Name      string `json:"skillName"`
-	ManagedAt string `json:"managedAt"`
+	SourceID        string                `json:"sourceId"`
+	Name            string                `json:"skillName"`
+	ManagedAt       string                `json:"managedAt"`
+	InstalledOrigin *SkillInstalledOrigin `json:"installedOrigin,omitempty"`
 }
 type marketplaceRecord struct {
 	Name, Source, Cache string
@@ -110,6 +113,13 @@ func (s *Service) executeSkills(ctx context.Context, kind string, payload map[st
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	var expectedFingerprint []string
+	if kind == "skills.preview" || kind == "skills.preview/path" || kind == "skills.install" || kind == "skills.update" {
+		expectedFingerprint, err = skillFingerprintExpectation(payload)
+		if err != nil {
+			return nil, err
+		}
+	}
 	switch kind {
 	case "skills.sources/catalog":
 		if id := payloadString(payload, "sourceId"); id != "" {
@@ -121,7 +131,7 @@ func (s *Service) executeSkills(ctx context.Context, kind string, payload map[st
 			if err != nil {
 				return nil, err
 			}
-			return s.skillSourceStatusView(status, state), nil
+			return s.skillSourceStatusView(status, state, source), nil
 		}
 		return s.skillSourcesSnapshot(cfg, state), nil
 	case "skills.sources/save":
@@ -154,7 +164,7 @@ func (s *Service) executeSkills(ctx context.Context, kind string, payload map[st
 		if err != nil {
 			return nil, err
 		}
-		return s.skillSourceStatusView(status, state), nil
+		return s.skillSourceStatusView(status, state, source), nil
 	case "skills.sources/remove":
 		if err := requireConfirmed(payload, "移除 Skill 来源及其 SilverWing 缓存"); err != nil {
 			return nil, err
@@ -188,13 +198,13 @@ func (s *Service) executeSkills(ctx context.Context, kind string, payload map[st
 	case "skills.files/preview":
 		return s.previewLocalSkillFile(payloadString(payload, "directoryName"), payloadRawString(payload, "relativePath"))
 	case "skills.files/copy-path":
-		path, err := s.extensionSkillCopyFilePath(cfg, state, payload)
+		path, err := s.extensionSkillCopyFilePath(ctx, cfg, state, payload)
 		if err != nil {
 			return nil, err
 		}
 		return map[string]any{"path": path}, nil
 	case "skills.preview":
-		file, err := s.externalSkillPreviewFile(cfg, state, payloadString(payload, "sourceId"), payloadString(payload, "name"))
+		file, err := s.externalSkillPreviewFile(ctx, cfg, state, payloadString(payload, "sourceId"), payloadString(payload, "name"), expectedFingerprint...)
 		if err != nil {
 			return nil, err
 		}
@@ -204,7 +214,7 @@ func (s *Service) executeSkills(ctx context.Context, kind string, payload map[st
 		}
 		return map[string]any{"name": payloadString(payload, "name"), "text": string(content), "path": file}, nil
 	case "skills.preview/path":
-		file, err := s.externalSkillPreviewFile(cfg, state, payloadString(payload, "sourceId"), payloadString(payload, "name"))
+		file, err := s.externalSkillPreviewFile(ctx, cfg, state, payloadString(payload, "sourceId"), payloadString(payload, "name"), expectedFingerprint...)
 		if err != nil {
 			return nil, err
 		}
@@ -225,7 +235,7 @@ func (s *Service) executeSkills(ctx context.Context, kind string, payload map[st
 			}
 			takeOver = false
 		}
-		return s.installExternalSkill(ctx, source, skillName, takeOver, state)
+		return s.installExternalSkill(ctx, source, skillName, takeOver, state, expectedFingerprint...)
 	case "skills.remove":
 		if err := requireConfirmed(payload, "卸载 Skill"); err != nil {
 			return nil, err
@@ -984,7 +994,7 @@ func (s *Service) skillSourcesSnapshot(cfg domain.AppConfig, state extensionStat
 		if !ok {
 			status = SkillSourceSnapshot{SourceID: source.ID, Skills: []ExternalSkill{}, DiscoveredRoots: []string{}}
 		}
-		items = append(items, map[string]any{"source": source, "status": s.skillSourceStatusView(status, state)})
+		items = append(items, map[string]any{"source": source, "status": s.skillSourceStatusView(status, state, source)})
 	}
 	return map[string]any{"sources": items}
 }
@@ -1004,7 +1014,7 @@ func (s *Service) extensionsSnapshot(cfg domain.AppConfig, state extensionState)
 		if !ok {
 			status = SkillSourceSnapshot{SourceID: source.ID, Skills: []ExternalSkill{}, DiscoveredRoots: []string{}}
 		}
-		skillSources = append(skillSources, map[string]any{"source": source, "status": s.skillSourceStatusView(status, state)})
+		skillSources = append(skillSources, map[string]any{"source": source, "status": s.skillSourceStatusView(status, state, source)})
 	}
 	return map[string]any{"marketplaces": marketplaces, "skillSources": skillSources}
 }
@@ -1034,8 +1044,13 @@ func marketplaceStatusView(status MarketplaceSnapshot, state extensionState) map
 	return result
 }
 
-func (s *Service) skillSourceStatusView(status SkillSourceSnapshot, state extensionState) map[string]any {
+func (s *Service) skillSourceStatusView(status SkillSourceSnapshot, state extensionState, source domain.SkillSource) map[string]any {
 	result := jsonObject(status)
+	problem := validateSkillSourceSnapshot(source, status)
+	result["stale"], result["needsRefresh"] = problem != nil, problem != nil
+	if problem != nil && status.Error == nil {
+		result["error"] = problem.Error()
+	}
 	skills := make([]map[string]any, 0, len(status.Skills))
 	for _, skill := range status.Skills {
 		item := jsonObject(skill)
@@ -1046,6 +1061,11 @@ func (s *Service) skillSourceStatusView(status SkillSourceSnapshot, state extens
 			item["ownership"] = extensionOwnershipManaged
 		default:
 			item["ownership"] = extensionOwnershipExternal
+		}
+		if item["ownership"] != extensionOwnershipNotInstalled {
+			if origin := installedSkillOrigin(state, skill.Name); origin != nil {
+				item["installedOrigin"] = origin
+			}
 		}
 		skills = append(skills, item)
 	}
@@ -1085,7 +1105,7 @@ func (s *Service) localSkillDirectoryExists(name string) bool {
 
 // Resolve the preview's source identity again before copying its file reference.
 // A path supplied by the desktop is never a copy target.
-func (s *Service) extensionSkillCopyFilePath(cfg domain.AppConfig, state extensionState, payload map[string]any) (string, error) {
+func (s *Service) extensionSkillCopyFilePath(ctx context.Context, cfg domain.AppConfig, state extensionState, payload map[string]any) (string, error) {
 	if pluginName := payloadString(payload, "pluginName"); pluginName != "" {
 		preview, err := s.previewPluginSkill(cfg, state, payloadString(payload, "sourceId"), pluginName, payloadString(payload, "skillName"))
 		if err != nil {
@@ -1094,12 +1114,22 @@ func (s *Service) extensionSkillCopyFilePath(cfg domain.AppConfig, state extensi
 		return preview["path"].(string), nil
 	}
 	if sourceID := payloadString(payload, "sourceId"); sourceID != "" {
-		return s.externalSkillPreviewFile(cfg, state, sourceID, payloadString(payload, "name"))
+		expected, err := skillFingerprintExpectation(payload)
+		if err != nil {
+			return "", err
+		}
+		return s.externalSkillPreviewFile(ctx, cfg, state, sourceID, payloadString(payload, "name"), expected...)
 	}
 	return s.resolveLocalSkillFilePath(payloadString(payload, "directoryName"), payloadRawString(payload, "relativePath"))
 }
 
 func (s *Service) refreshSkillSource(ctx context.Context, cfg domain.AppConfig, source domain.SkillSource, state extensionState) (SkillSourceSnapshot, error) {
+	return s.refreshSkillSourceWithCheckout(ctx, cfg, source, state, func() (string, *SkillInstalledOrigin, error) {
+		return s.ensureSkillCheckout(ctx, cfg, source)
+	})
+}
+
+func (s *Service) refreshSkillSourceWithCheckout(ctx context.Context, cfg domain.AppConfig, source domain.SkillSource, state extensionState, checkoutSource func() (string, *SkillInstalledOrigin, error)) (SkillSourceSnapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return SkillSourceSnapshot{}, err
 	}
@@ -1107,19 +1137,37 @@ func (s *Service) refreshSkillSource(ctx context.Context, cfg domain.AppConfig, 
 		return SkillSourceSnapshot{}, err
 	}
 	previous := state.SkillSources[source.ID]
-	checkout, err := s.ensureSkillCheckout(ctx, cfg, source)
+	if _, err := s.currentSkillSourceConfig(source); err != nil {
+		return SkillSourceSnapshot{}, err
+	}
+	// Invalidate before touching the checkout. Cancellation or process-cleanup
+	// failure must never leave an older successful snapshot installable.
+	refreshing := previous
+	refreshing.SourceID, refreshing.Error = source.ID, stringPtr("Skill 来源缓存尚未验证，请成功刷新后再操作")
+	state.SkillSources[source.ID] = refreshing
+	if err := s.saveExtensionState(state); err != nil {
+		return SkillSourceSnapshot{}, err
+	}
+	checkout, origin, err := checkoutSource()
 	if err == nil {
 		var skills []ExternalSkill
 		var roots []string
-		skills, roots, err = discoverSkills(source, checkout)
+		skills, roots, err = discoverSkillsWithContext(ctx, source, checkout)
 		if err == nil {
 			if err := ctx.Err(); err != nil {
 				return SkillSourceSnapshot{}, err
 			}
-			updated := SkillSourceSnapshot{SourceID: source.ID, Skills: skills, DiscoveredRoots: roots, UpdatedAt: stringPtr(time.Now().UTC().Format(time.RFC3339Nano))}
+			if _, err := s.currentSkillSourceConfig(source); err != nil {
+				return SkillSourceSnapshot{}, err
+			}
+			fingerprint := skillSourceFingerprint(source)
+			updated := SkillSourceSnapshot{SourceID: source.ID, SourceFingerprint: &fingerprint, ResolvedOrigin: origin, Skills: skills, DiscoveredRoots: roots, UpdatedAt: stringPtr(time.Now().UTC().Format(time.RFC3339Nano))}
+			if err := validateSkillSourceSnapshot(source, updated); err != nil {
+				return SkillSourceSnapshot{}, err
+			}
 			state.SkillSources[source.ID] = updated
-			if saveErr := s.saveExtensionState(state); saveErr != nil {
-				return SkillSourceSnapshot{}, saveErr
+			if err := s.saveExtensionState(state); err != nil {
+				return SkillSourceSnapshot{}, err
 			}
 			return updated, nil
 		}
@@ -1128,6 +1176,9 @@ func (s *Service) refreshSkillSource(ctx context.Context, cfg domain.AppConfig, 
 		return SkillSourceSnapshot{}, err
 	}
 	if err := ctx.Err(); err != nil {
+		return SkillSourceSnapshot{}, err
+	}
+	if _, err := s.currentSkillSourceConfig(source); err != nil {
 		return SkillSourceSnapshot{}, err
 	}
 	previous.SourceID = source.ID
@@ -1139,167 +1190,13 @@ func (s *Service) refreshSkillSource(ctx context.Context, cfg domain.AppConfig, 
 	}
 	previous.Error = stringPtr(redactProxy(cfg, err.Error()))
 	state.SkillSources[source.ID] = previous
-	if saveErr := s.saveExtensionState(state); saveErr != nil {
-		return SkillSourceSnapshot{}, saveErr
+	if err := s.saveExtensionState(state); err != nil {
+		return SkillSourceSnapshot{}, err
 	}
 	return previous, nil
 }
 
-func (s *Service) ensureSkillCheckout(ctx context.Context, cfg domain.AppConfig, source domain.SkillSource) (string, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	root := filepath.Join(s.paths.Codex, skillSourcesName)
-	checkout := filepath.Join(root, source.ID)
-	rootAbs, err := filepath.Abs(root)
-	if err != nil {
-		return "", err
-	}
-	checkoutAbs, err := filepath.Abs(checkout)
-	if err != nil {
-		return "", err
-	}
-	if !within(rootAbs, checkoutAbs) || samePath(rootAbs, checkoutAbs) {
-		return "", fmt.Errorf("Skill 缓存路径不安全")
-	}
-	if err := ensureNoExistingSymlinks(rootAbs); err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(rootAbs, 0o755); err != nil {
-		return "", err
-	}
-	if err := ensureNoExistingSymlinks(rootAbs); err != nil {
-		return "", err
-	}
-	_, git, _, err := s.resolveCLIExecutable(ctx, cfg, "git")
-	if err != nil {
-		return "", err
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	gitArgs := []string{"-c", "core.symlinks=false"}
-	gitDirectory := filepath.Join(checkoutAbs, ".git")
-	if !isDir(gitDirectory) || isSymlink(gitDirectory) {
-		if exists(checkoutAbs) {
-			if err := removeWithin(rootAbs, checkoutAbs); err != nil {
-				return "", err
-			}
-		}
-		gitArgs = append(gitArgs, "clone", "--depth", "1")
-		if source.Ref != nil && strings.TrimSpace(*source.Ref) != "" {
-			gitArgs = append(gitArgs, "--branch", *source.Ref)
-		}
-		gitArgs = append(gitArgs, source.RepositoryURL, checkoutAbs)
-	} else if err := ensureNoSymlinks(checkoutAbs); err != nil {
-		return "", err
-	} else if source.Ref == nil || strings.TrimSpace(*source.Ref) == "" {
-		gitArgs = append(gitArgs, "-C", checkoutAbs, "pull", "--ff-only")
-	} else {
-		fetch := []string{"-c", "core.symlinks=false", "-C", checkoutAbs, "fetch", "--depth", "1", "origin", *source.Ref}
-		if _, err := s.runTool(ctx, cfg, domain.ProxyTargetGit, git, fetch, checkoutAbs, 5*time.Minute); err != nil {
-			return "", err
-		}
-		gitArgs = append(gitArgs, "-C", checkoutAbs, "checkout", "--force", "FETCH_HEAD")
-	}
-	if _, err := s.runTool(ctx, cfg, domain.ProxyTargetGit, git, gitArgs, rootAbs, 5*time.Minute); err != nil {
-		return "", err
-	}
-	if err := ensureNoSymlinks(checkoutAbs); err != nil {
-		return "", err
-	}
-	return checkoutAbs, nil
-}
-
-func discoverSkills(source domain.SkillSource, checkout string) ([]ExternalSkill, []string, error) {
-	root := filepath.Clean(checkout)
-	var candidates []string
-	if source.SkillRoot != nil && strings.TrimSpace(*source.SkillRoot) != "" {
-		resolved, err := safeChild(root, *source.SkillRoot)
-		if err != nil {
-			return nil, nil, err
-		}
-		candidates = []string{resolved}
-	} else {
-		candidates = []string{filepath.Join(root, ".agents", "skills"), filepath.Join(root, "skills")}
-	}
-	var skills []ExternalSkill
-	var discoveredRoots []string
-	for _, candidate := range candidates {
-		if !isDir(candidate) || isSymlink(candidate) {
-			continue
-		}
-		dirs := []string{}
-		if isRegular(filepath.Join(candidate, skillFileName)) {
-			dirs = append(dirs, candidate)
-		} else {
-			entries, err := os.ReadDir(candidate)
-			if err != nil {
-				return nil, nil, err
-			}
-			for _, entry := range entries {
-				if entry.IsDir() && entry.Type()&os.ModeSymlink == 0 && isRegular(filepath.Join(candidate, entry.Name(), skillFileName)) {
-					dirs = append(dirs, filepath.Join(candidate, entry.Name()))
-				}
-			}
-		}
-		if len(dirs) == 0 {
-			continue
-		}
-		relRoot, err := filepath.Rel(root, candidate)
-		if err != nil {
-			return nil, nil, err
-		}
-		discoveredRoots = append(discoveredRoots, filepath.ToSlash(relRoot))
-		for _, dir := range dirs {
-			item, err := parseSkillDirectory(dir, root)
-			if err != nil {
-				return nil, nil, err
-			}
-			skills = append(skills, item)
-		}
-	}
-	sort.Slice(skills, func(i, j int) bool { return skills[i].Name < skills[j].Name })
-	seen := map[string]bool{}
-	for _, skill := range skills {
-		if seen[skill.Name] {
-			return nil, nil, fmt.Errorf("Skill 来源包含重复名称：%s", skill.Name)
-		}
-		seen[skill.Name] = true
-	}
-	return skills, discoveredRoots, nil
-}
-
-func parseSkillDirectory(directory, checkout string) (ExternalSkill, error) {
-	if err := validateSkillTree(directory); err != nil {
-		return ExternalSkill{}, err
-	}
-	data, err := readExtensionText(filepath.Join(directory, skillFileName), maxSkillBytes)
-	if err != nil {
-		return ExternalSkill{}, err
-	}
-	front := skillFrontMatter.FindSubmatch(data)
-	if len(front) < 2 {
-		return ExternalSkill{}, fmt.Errorf("Skill 缺少 YAML frontmatter：%s", directory)
-	}
-	name, description := frontMatterValue(string(front[1]), "name"), frontMatterValue(string(front[1]), "description")
-	if name == "" {
-		return ExternalSkill{}, fmt.Errorf("Skill 缺少 name：%s", directory)
-	}
-	if !skillNamePattern.MatchString(name) {
-		return ExternalSkill{}, fmt.Errorf("Skill name 不合法：%s", name)
-	}
-	if description == "" {
-		return ExternalSkill{}, fmt.Errorf("Skill description 不能为空：%s", name)
-	}
-	rel, err := filepath.Rel(checkout, directory)
-	if err != nil {
-		return ExternalSkill{}, err
-	}
-	return ExternalSkill{Name: name, Description: description, SourcePath: filepath.ToSlash(rel)}, nil
-}
-
-func (s *Service) externalSkillPreviewFile(cfg domain.AppConfig, state extensionState, sourceID, skillName string) (string, error) {
+func (s *Service) externalSkillPreviewFile(ctx context.Context, cfg domain.AppConfig, state extensionState, sourceID, skillName string, expected ...string) (string, error) {
 	source, ok := findSkillSource(cfg.SkillSources, sourceID)
 	if !ok {
 		return "", fmt.Errorf("找不到 Skill 来源：%s", sourceID)
@@ -1307,6 +1204,12 @@ func (s *Service) externalSkillPreviewFile(cfg domain.AppConfig, state extension
 	status, ok := state.SkillSources[source.ID]
 	if !ok {
 		return "", fmt.Errorf("请先加载 Skill 来源“%s”", source.Name)
+	}
+	if err := validateSkillSourceSnapshot(source, status, expected...); err != nil {
+		return "", err
+	}
+	if _, err := s.currentSkillSourceConfig(source); err != nil {
+		return "", err
 	}
 	var skill *ExternalSkill
 	for i := range status.Skills {
@@ -1318,28 +1221,73 @@ func (s *Service) externalSkillPreviewFile(cfg domain.AppConfig, state extension
 	if skill == nil {
 		return "", fmt.Errorf("Skill 来源“%s”中找不到 %s", source.Name, skillName)
 	}
-	checkout := filepath.Join(s.paths.Codex, skillSourcesName, source.ID)
+	checkout, err := s.skillCheckoutPath(source)
+	if err != nil {
+		return "", err
+	}
 	directory, err := safeChild(checkout, skill.SourcePath)
 	if err != nil {
 		return "", err
 	}
-	if err := validateNamedSkillTree(directory, skillName); err != nil {
+	if err := validateNamedSkillTreeWithContext(ctx, directory, skillName); err != nil {
 		return "", err
 	}
 	file := filepath.Join(directory, skillFileName)
 	if !isRegular(file) {
 		return "", fmt.Errorf("Skill 文档不存在或不是普通文件：%s", directory)
 	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if _, err := s.currentSkillSourceConfig(source); err != nil {
+		return "", err
+	}
 	return file, nil
 }
 
-func (s *Service) installExternalSkill(ctx context.Context, source domain.SkillSource, name string, takeover bool, state extensionState) (SkillSourceSnapshot, error) {
+func (s *Service) installExternalSkill(ctx context.Context, source domain.SkillSource, name string, takeover bool, state extensionState, expected ...string) (SkillSourceSnapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return SkillSourceSnapshot{}, err
 	}
 	status, ok := state.SkillSources[source.ID]
 	if !ok {
 		return SkillSourceSnapshot{}, fmt.Errorf("请先加载 Skill 来源“%s”", source.Name)
+	}
+	if err := validateSkillSourceSnapshot(source, status, expected...); err != nil {
+		return SkillSourceSnapshot{}, err
+	}
+	cfg, err := s.currentSkillSourceConfig(source)
+	if err != nil {
+		return SkillSourceSnapshot{}, err
+	}
+	checkout, err := s.skillCheckoutPath(source)
+	if err != nil {
+		return SkillSourceSnapshot{}, err
+	}
+	run, err := s.skillGit(ctx, cfg)
+	if err != nil {
+		return SkillSourceSnapshot{}, err
+	}
+	origin, err := verifySkillCheckoutOrigin(source, status, checkout, run)
+	if err != nil {
+		return SkillSourceSnapshot{}, err
+	}
+	return s.installSkillFromSnapshot(ctx, source, name, takeover, state, *origin)
+}
+
+func (s *Service) installSkillFromSnapshot(ctx context.Context, source domain.SkillSource, name string, takeover bool, state extensionState, origin SkillInstalledOrigin) (SkillSourceSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return SkillSourceSnapshot{}, err
+	}
+	status, ok := state.SkillSources[source.ID]
+	if !ok {
+		return SkillSourceSnapshot{}, fmt.Errorf("请先加载 Skill 来源“%s”", source.Name)
+	}
+	if err := validateSkillSourceSnapshot(source, status); err != nil {
+		return SkillSourceSnapshot{}, err
+	}
+	if origin != *status.ResolvedOrigin {
+		return SkillSourceSnapshot{}, fmt.Errorf("Skill 安装出处与已验证来源不匹配")
 	}
 	var item *ExternalSkill
 	for i := range status.Skills {
@@ -1351,8 +1299,7 @@ func (s *Service) installExternalSkill(ctx context.Context, source domain.SkillS
 	if item == nil {
 		return SkillSourceSnapshot{}, fmt.Errorf("Skill 来源“%s”中找不到 %s", source.Name, name)
 	}
-	root := filepath.Join(s.paths.Codex, skillSourcesName)
-	checkout, err := filepath.Abs(filepath.Join(root, source.ID))
+	checkout, err := s.skillCheckoutPath(source)
 	if err != nil {
 		return SkillSourceSnapshot{}, err
 	}
@@ -1399,6 +1346,9 @@ func (s *Service) installExternalSkill(ctx context.Context, source domain.SkillS
 	if err := ctx.Err(); err != nil {
 		return SkillSourceSnapshot{}, err
 	}
+	if _, err := s.currentSkillSourceConfig(source); err != nil {
+		return SkillSourceSnapshot{}, err
+	}
 	// Once replacement begins, finish publishing its ownership without canceling
 	// between removal and rename. All potentially long copying happens above.
 	if exists(destination) {
@@ -1412,7 +1362,7 @@ func (s *Service) installExternalSkill(ctx context.Context, source domain.SkillS
 		}
 		return SkillSourceSnapshot{}, err
 	}
-	state.ManagedSkills = append(filterManagedSkillsByName(state.ManagedSkills, name), managedSkill{SourceID: source.ID, Name: name, ManagedAt: time.Now().UTC().Format(time.RFC3339Nano)})
+	state.ManagedSkills = append(filterManagedSkillsByName(state.ManagedSkills, name), managedSkill{SourceID: source.ID, Name: name, ManagedAt: time.Now().UTC().Format(time.RFC3339Nano), InstalledOrigin: &origin})
 	if err := s.saveExtensionState(state); err != nil {
 		return SkillSourceSnapshot{}, err
 	}
@@ -1531,10 +1481,11 @@ func (s *Service) localSkillsCatalog(state extensionState) (map[string]any, erro
 		return nil, err
 	}
 	type localItem struct {
-		DirectoryName string `json:"directoryName"`
-		Name          string `json:"name"`
-		Description   string `json:"description"`
-		Ownership     string `json:"ownership"`
+		DirectoryName   string                `json:"directoryName"`
+		Name            string                `json:"name"`
+		Description     string                `json:"description"`
+		Ownership       string                `json:"ownership"`
+		InstalledOrigin *SkillInstalledOrigin `json:"installedOrigin,omitempty"`
 	}
 	items := []localItem{}
 	for _, entry := range entries {
@@ -1543,12 +1494,12 @@ func (s *Service) localSkillsCatalog(state extensionState) (map[string]any, erro
 		}
 		data, readErr := readBounded(filepath.Join(root, entry.Name(), skillFileName), maxSkillBytes)
 		if readErr != nil {
-			items = append(items, localItem{entry.Name(), entry.Name(), "无法读取 SKILL.md：" + readErr.Error(), localSkillOwnership(state, entry.Name())})
+			items = append(items, localItem{entry.Name(), entry.Name(), "无法读取 SKILL.md：" + readErr.Error(), localSkillOwnership(state, entry.Name()), installedSkillOrigin(state, entry.Name())})
 			continue
 		}
 		name, description := localSkillMetadata(entry.Name(), data)
 		ownership := localSkillOwnership(state, entry.Name())
-		items = append(items, localItem{entry.Name(), name, description, ownership})
+		items = append(items, localItem{entry.Name(), name, description, ownership, installedSkillOrigin(state, entry.Name())})
 	}
 	sort.Slice(items, func(i, j int) bool {
 		if strings.ToLower(items[i].Name) == strings.ToLower(items[j].Name) {

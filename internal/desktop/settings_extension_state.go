@@ -25,6 +25,8 @@ type settingsExtensionRequestState struct {
 	serial                uint64
 	branchToken           string
 	branchURL, branchForm string
+	branchOwner           *sourceBranchFormState
+	branchGeneration      uint64
 	branchLoading         bool
 	branchError           string
 	previewToken          string
@@ -127,12 +129,21 @@ func (s *app) prepareSettingsExtensionRead(action *application.Action) {
 	payload["extensionRequestToken"] = token
 	action.Payload = payload
 	state.readActions[key] = *action
-	state.readScopes[key] = s.settingsExtensionCurrentScope()
+	state.readScopes[key] = s.settingsExtensionActionScope(*action)
 	switch key {
 	case "workspace-tools":
 		state.workspaceToolsToken, state.workspaceToolsLoading, state.workspaceToolsError = token, true, ""
 		state.workspaceToolsScope = s.settingsExtensionCurrentScope()
 	case "branches":
+		if s.form.sourceBranches == nil {
+			s.form.sourceBranches = newSourceBranchForm(s.form.kind)
+		}
+		state.branchOwner = s.form.sourceBranches
+		if state.branchOwner != nil {
+			stopSourceBranchTimer(state.branchOwner)
+			state.branchOwner.home, state.branchOwner.url = s.snapshot.Home, strings.TrimSpace(payloadString(payload, "repositoryUrl"))
+			state.branchGeneration = state.branchOwner.generation
+		}
 		state.branchToken, state.branchURL, state.branchForm = token, strings.TrimSpace(payloadString(payload, "repositoryUrl")), s.form.kind
 		state.branchLoading, state.branchError = true, ""
 		s.settingsUnit.state.settingsBranchChoices = nil
@@ -167,17 +178,20 @@ func (s *app) settingsExtensionActionRelevant(action application.Action) bool {
 	key := settingsExtensionReadKey(action)
 	token := payloadString(action.Payload, "extensionRequestToken")
 	scope, exists := state.readScopes[key]
-	if !exists || scope != s.settingsExtensionCurrentScope() || s.page != "settings" || token == "" || token != settingsExtensionReadToken(state, key) {
+	if !exists || scope != s.settingsExtensionActionScope(action) || s.page != "settings" || token == "" || token != settingsExtensionReadToken(state, key) {
 		return false
 	}
 	switch key {
 	case "branches":
-		return s.dialogOpen && state.branchForm == s.form.kind && state.branchURL == strings.TrimSpace(*s.input("form:repositoryUrl", ""))
+		return s.dialogOpen && state.branchOwner != nil && state.branchOwner == s.form.sourceBranches && state.branchGeneration == state.branchOwner.generation && state.branchForm == s.form.kind && state.branchURL == s.sourceBranchURL()
 	case "catalog", "workspace-tools":
 		return true
 	case "files":
 		return s.settingsUnit.state.settingsSkillFilesDirectory == payloadString(action.Payload, "directoryName")
 	default:
+		if action.Kind == "skills.preview" && payloadString(action.Payload, "sourceFingerprint") != "" && !s.skillSourceFingerprintCurrent(payloadString(action.Payload, "sourceId"), payloadString(action.Payload, "sourceFingerprint")) {
+			return false
+		}
 		return s.settingsUnit.state.settingsSkillPreviewOpen
 	}
 }
@@ -210,6 +224,7 @@ func (s *app) invalidateSettingsExtensionRead(key, reason string) {
 		state.workspaceTools = nil
 	case "branches":
 		state.branchToken, state.branchLoading, state.branchError = "", false, reason
+		state.branchOwner, state.branchGeneration = nil, 0
 		s.settingsUnit.state.settingsBranchChoices = nil
 	case "catalog":
 		state.catalogToken = ""
@@ -238,7 +253,7 @@ func (s *app) observeSettingsExtensionRequests() {
 		if settingsExtensionReadToken(state, key) != "" && !s.settingsExtensionActionRelevant(action) {
 			reason := ""
 			previous := state.readScopes[key]
-			if previous.page == s.page && previous.settingsPage == s.settingsUnit.state.settingsPage && (previous.home != s.snapshot.Home || previous.config != s.settingsUnit.state.configJSON) {
+			if previous.page == s.page && previous.settingsPage == s.settingsUnit.state.settingsPage && (previous.home != s.snapshot.Home || !extensionBranchesRead(action.Kind) && previous.config != s.settingsUnit.state.configJSON) {
 				reason = "应用或扩展配置已变化，请重新读取。"
 			}
 			s.invalidateSettingsExtensionRead(key, reason)
@@ -247,6 +262,7 @@ func (s *app) observeSettingsExtensionRequests() {
 }
 
 func (s *app) resetSettingsExtensionForm() {
+	s.closeSourceBranchForm()
 	state := s.ensureSettingsExtensionRequests()
 	s.invalidateSettingsExtensionRead("branches", "")
 	state.branchToken, state.branchURL, state.branchForm = "", "", ""

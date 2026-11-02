@@ -170,28 +170,7 @@ func (s *app) applySettingsActionResult(action application.Action, result applic
 		s.invalidateLocalSkillsCatalog()
 		s.act("skills.sources/catalog", "", "", "", "", "", nil)
 	case "skills.sources/branches/list", "codex.extensions/branches/list":
-		if !s.settingsExtensionActionRelevant(action) {
-			return true
-		}
-		s.settingsUnit.state.settingsBranchChoices = mapsString(result.Data)
-		ref := s.input("form:ref", "")
-		if strings.TrimSpace(*ref) == "" {
-			for _, preferred := range []string{"master", "main"} {
-				for _, branch := range s.settingsUnit.state.settingsBranchChoices {
-					if branch == preferred {
-						*ref = branch
-						break
-					}
-				}
-				if *ref != "" {
-					break
-				}
-			}
-		}
-		if s.settingsUnit.state.settingsExtensionRequests != nil {
-			s.settingsUnit.state.settingsExtensionRequests.branchLoading = false
-			s.settingsUnit.state.settingsExtensionRequests.branchError = ""
-		}
+		s.applySourceBranches(action, result)
 	case "codex.extensions/plugin/preview", "codex.extensions/plugin/skill-preview":
 		s.applySettingsExtensionPreview(action, result)
 	case "cli.status", "proxy.test", "git.version", "diagnostics.export", "logs.list", "logs.read", "update.check":

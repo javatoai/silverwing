@@ -29,12 +29,23 @@ type runMark struct {
 	exact          bool
 }
 
+// mathObject is math within a paragraph that Options.InlineMath made an
+// object of: its rune, the source of the math, delimiters included, and
+// how it draws.
+type mathObject struct {
+	rune, src, end int
+	draw           func(p *ui.Painter, r ui.Rect)
+}
+
 // para is what a paragraph, heading or cell shows.
 type para struct {
 	pieces []piece
 	marks  []runMark
-	runes  int
-	fading bool // its spans fade in: build them anew next frame
+	// objects are its math drawn by the app, in order: a slice of each
+	// build's own, which the view's drawing keeps.
+	objects []mathObject
+	runes   int
+	fading  bool // its spans fade in: build them anew next frame
 	// width is the width of its text on one line, once measured.
 	width    float32
 	measured bool
@@ -69,6 +80,10 @@ type spanBuilder struct {
 	notes func(label string) int
 	// linkIndex is the inline of the link being built.
 	linkIndex int
+	// math makes math within text objects (Options.InlineMath).
+	math func(tex string, size float32) (InlineObject, bool)
+	// Native editor projections keep the source's physical paragraph lines.
+	preserveSoftBreaks bool
 }
 
 // build makes the paragraph of block i, of base style s.
@@ -211,6 +226,9 @@ func (sb *spanBuilder) addSpan(text string, src, end int, exact bool, s spanStyl
 	if s.color.A > 0 {
 		sp.Color = s.color
 	}
+	if s.inLink {
+		sp.Color = th.Link
+	}
 	if alpha < 1 {
 		// Not quite transparent: a color of alpha 0 is none, the text's.
 		alpha = max(alpha, 0.02)
@@ -248,7 +266,11 @@ func (sb *spanBuilder) inlines(from, to int, s spanStyle) {
 				sb.addAligned(n.Text, n.Start, n.End, sb.htmlStyle(s), link)
 			}
 		case parser.SoftBreak:
-			sb.add(" ", n.Start, n.End, false, s, link)
+			text := " "
+			if sb.preserveSoftBreaks {
+				text = "\n"
+			}
+			sb.add(text, n.Start, n.End, false, s, link)
 		case parser.LineBreak:
 			sb.add("\n", n.Start, n.End, false, s, link)
 		case parser.Code:
@@ -307,6 +329,9 @@ func (sb *spanBuilder) inlines(from, to int, s spanStyle) {
 				sb.add(n.Text, n.Start, n.End, true, s, link)
 			}
 		case parser.Math:
+			if sb.mathObject(n, sb.htmlStyle(s), link) {
+				continue
+			}
 			cs := s
 			cs.font = sb.th.CodeFont
 			cs.color = sb.th.Muted
@@ -329,6 +354,36 @@ func (sb *spanBuilder) inlines(from, to int, s spanStyle) {
 			sb.add("["+label+"]", n.Start, n.End, false, cs, -2-k)
 		}
 	}
+}
+
+// mathObject adds math n, within text of style s, as the object
+// Options.InlineMath makes of it, and reports whether it made one.
+func (sb *spanBuilder) mathObject(n *parser.Inline, s spanStyle, link int) bool {
+	if sb.math == nil {
+		return false
+	}
+	size := sb.th.FontSize
+	if s.size != 0 {
+		size = s.size
+	}
+	if s.sub {
+		size *= 0.75
+	}
+	o, ok := sb.math(n.Text, size)
+	if !ok || !(o.Width > 0) {
+		return false
+	}
+	p := sb.p
+	p.objects = append(p.objects, mathObject{rune: p.runes, src: n.Start, end: n.End, draw: o.Draw})
+	sp := ui.Span{Text: "\uFFFC", Size: size, ObjectWidth: o.Width, ObjectHeight: max(o.Height, 0), ObjectDescent: max(o.Depth, 0)}
+	if sb.fade != nil {
+		sb.p.fading = sb.p.fading || sb.fade(n.Start) < 1
+	}
+	pc := sb.piece(link)
+	pc.spans = append(pc.spans, sp)
+	p.marks = append(p.marks, runMark{rune: p.runes, src: n.Start, end: n.End})
+	p.runes++
+	return true
 }
 
 // codeStart returns where a code span's text starts in the source.

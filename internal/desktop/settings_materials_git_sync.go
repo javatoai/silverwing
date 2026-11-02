@@ -50,7 +50,7 @@ func (s *app) settingsMaterialsGitSync(c *ui.Context, p palette) {
 			statusDetails = settingsHelpText(status, "最近成功 "+when.Local().Format("2006-01-02 15:04"))
 		}
 	}
-	help := settingsHelpText("按周期提交、拉取并推送任务资料；仅在 SW 运行时执行。", statusDetails)
+	help := settingsHelpText("按周期先拉取远端内容，再提交并推送整个任务资料仓库；遵循仓库忽略规则，仅在 SW 运行时执行。", statusDetails)
 	settingsAppearanceRow(c, p, "Git 自动同步", help, func(stacked bool) {
 		ui.Switch(c.Key("settings-materials-git-enabled"), value).Width(52).Height(32).Radius(16).Label("Git 自动同步").Disabled(pending || s.busy || s.materialsGitSettingsPending(config) || !settings.Enabled && !s.materialsGitBranchReady(settings.Branch)).OnChange(func() {
 			settings.Enabled = *value

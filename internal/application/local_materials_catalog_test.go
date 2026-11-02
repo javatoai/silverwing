@@ -38,6 +38,20 @@ func localCatalogOutsideBlock(t *testing.T, data []byte) ([]byte, []byte) {
 	return data[:start], data[end+len(localCatalogEnd):]
 }
 
+func localCatalogMarkStale(t *testing.T, paths ...string) {
+	t.Helper()
+	for _, path := range paths {
+		data := localCatalogRead(t, path)
+		if bytes.Count(data, []byte(localCatalogEnd)) != 1 {
+			t.Fatal("missing managed block", path)
+		}
+		next := bytes.Replace(data, []byte(localCatalogEnd), []byte("旧版本资料目录说明，等待迁移\n"+localCatalogEnd), 1)
+		if err := os.WriteFile(path, next, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestLocalMaterialsApplicationCatalogRefreshesAliasWithoutWarning(t *testing.T) {
 	f := newLocalMaterialsOperationFixture(t)
 	task := filepath.Join(f.alias, "task-a")
@@ -65,7 +79,7 @@ func TestLocalMaterialsApplicationCatalogRefreshesAliasWithoutWarning(t *testing
 		data := localCatalogRead(t, f.physical(t, path))
 		prefix, suffix := localCatalogOutsideBlock(t, original)
 		updatedPrefix, updatedSuffix := localCatalogOutsideBlock(t, data)
-		if !bytes.Equal(prefix, updatedPrefix) || !bytes.Equal(suffix, updatedSuffix) || !bytes.Contains(data, []byte(peer)) || bytes.Contains(data, []byte(filepath.Join(f.actual, "task-a"))) {
+		if !bytes.Equal(prefix, updatedPrefix) || !bytes.Equal(suffix, updatedSuffix) || (bytes.Contains(data, []byte(peer)) || !bytes.Contains(data, []byte(documents.LocalTaskMaterials(task).Owned)) || !bytes.Contains(data, []byte("主动阅读"))) || bytes.Contains(data, []byte(filepath.Join(f.actual, "task-a"))) {
 			t.Fatalf("catalog refresh changed user bytes or exposed the physical namespace: %s", data)
 		}
 	}
@@ -81,7 +95,7 @@ func TestLocalMaterialsApplicationCatalogRefreshesAliasWithoutWarning(t *testing
 	}
 	data := localCatalogRead(t, f.physical(t, router))
 	localCatalogOutsideBlock(t, data)
-	if !bytes.Contains(data, []byte(peer)) || bytes.Contains(data, []byte(filepath.Join(f.actual, "task-a"))) {
+	if (bytes.Contains(data, []byte(peer)) || !bytes.Contains(data, []byte(documents.LocalTaskMaterials(task).Owned)) || !bytes.Contains(data, []byte("主动阅读"))) || bytes.Contains(data, []byte(filepath.Join(f.actual, "task-a"))) {
 		t.Fatalf("restored router lost its public material paths: %s", data)
 	}
 }
@@ -92,6 +106,7 @@ func TestLocalMaterialsApplicationCatalogPreservesCustomRouter(t *testing.T) {
 			f := newLocalMaterialsOperationFixture(t)
 			task := filepath.Join(f.alias, "task-a")
 			paths := localCatalogDocumentPaths(task)
+			localCatalogMarkStale(t, f.physical(t, paths[0]), f.physical(t, paths[1]))
 			if err := os.WriteFile(f.physical(t, paths[0]), []byte(custom), 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -104,7 +119,7 @@ func TestLocalMaterialsApplicationCatalogPreservesCustomRouter(t *testing.T) {
 				t.Fatalf("custom catalog warning was lost or became a fatal list error: %+v %v", result, err)
 			}
 			localMaterialsOperationRequireBytes(t, f.physical(t, paths[0]), []byte(custom))
-			if data := localCatalogRead(t, f.physical(t, paths[1])); !bytes.Contains(data, []byte(peer)) {
+			if data := localCatalogRead(t, f.physical(t, paths[1])); bytes.Contains(data, []byte(peer)) || !bytes.Contains(data, []byte(documents.LocalTaskMaterials(task).Owned)) || !bytes.Contains(data, []byte("主动阅读")) {
 				t.Fatalf("custom router prevented the safe context from refreshing: %s", data)
 			}
 		})
@@ -117,6 +132,7 @@ func TestLocalMaterialsApplicationCatalogRejectsInternalLinks(t *testing.T) {
 			f := newLocalMaterialsOperationFixture(t)
 			task := filepath.Join(f.alias, "task-a")
 			paths := localCatalogDocumentPaths(task)
+			localCatalogMarkStale(t, f.physical(t, paths[0]), f.physical(t, paths[1]))
 			peer := filepath.Join(documents.LocalTaskMaterials(task).Root, "new-peer")
 			if err := os.Mkdir(f.physical(t, peer), 0700); err != nil {
 				t.Fatal(err)

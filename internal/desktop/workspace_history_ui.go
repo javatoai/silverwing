@@ -46,6 +46,7 @@ type workspaceHistoryState struct {
 	CommitPickerOpen                bool
 	CommitPickerScroll              ui.ScrollState
 	FileView                        string
+	FileNavigation                  *workspaceReviewFileNavigation
 	ExpandedDirectories             map[string]bool
 	FileScrolls                     map[string]*ui.ScrollState
 	ActiveComparisonKey             string
@@ -91,6 +92,7 @@ type workspaceHistoryState struct {
 	PrefetchVisible                                       []workspace.CompareChange
 	PrefetchFrameVisible                                  []workspace.CompareChange
 	PrefetchViewport                                      ui.Rect
+	ContextLinesOnly                                      bool
 }
 
 const (
@@ -280,6 +282,7 @@ func (s *app) readWorkspaceReviewFiles(state *workspaceHistoryState) {
 			state.SelectedPath, state.SelectedOldPath = saved.Path, saved.OldPath
 			state.SelectedKind = saved.Kind
 			state.PreviewMode, state.ChangedLinesOnly = saved.PreviewMode, saved.ChangedOnly
+			state.ContextLinesOnly = saved.ContextOnly
 			state.FileView = firstNonEmpty(saved.FileView, "tree")
 			state.ExpandedDirectories = cloneBoolMap(saved.ExpandedDirectories)
 			state.FileScrolls = cloneFileScrollMap(saved.FileScrolls)
@@ -309,7 +312,6 @@ func (s *app) selectWorkspaceReviewFile(state *workspaceHistoryState, change wor
 	state.SelectedKind = domain.WorkspaceGitFileChangeKind(change.Kind)
 	state.Preview = nil
 	state.PreviewMode = ""
-	state.ChangedLinesOnly = false
 	state.resetWorkspaceDiffView()
 	state.DiffRows = nil
 	state.resetWorkspaceContentPreview()
@@ -628,7 +630,9 @@ func (s *app) applyWorkspaceHistoryResult(action application.Action, result appl
 		}
 		state.Preview = &preview
 		state.PreviewMode = preview.DefaultMode()
-		state.ChangedLinesOnly = false
+		if state.Mode != "review" {
+			state.ChangedLinesOnly, state.ContextLinesOnly = false, false
+		}
 		state.resetWorkspaceDiffView()
 		state.DiffRows = nil
 		state.resetWorkspaceContentPreview()
@@ -823,6 +827,10 @@ func nestedPayloadString(payload map[string]any, key, child string) string {
 }
 
 func (s *app) renderWorkspaceFilePreview(c *ui.Context, p palette, state *workspaceHistoryState, preview *workspace.WorkspaceGitFilePreview) {
+	s.renderWorkspaceFilePreviewBody(c, p, state, preview, true)
+}
+
+func (s *app) renderWorkspaceFilePreviewBody(c *ui.Context, p palette, state *workspaceHistoryState, preview *workspace.WorkspaceGitFilePreview, showChoices bool) {
 	if preview == nil {
 		return
 	}
@@ -853,14 +861,55 @@ func (s *app) renderWorkspaceFilePreview(c *ui.Context, p palette, state *worksp
 		}
 		return
 	}
+	prepareWorkspacePreviewMode(state, preview)
+	if showChoices {
+		s.renderWorkspacePreviewChoices(c, p, state, preview, false)
+	}
+	if message := workspaceFilePreviewTruncationMessage(preview, state.PreviewMode); message != "" {
+		label(c, message, 11, p.amber).Wrap()
+	}
+	if state.PreviewMode == workspace.PreviewComparison && hasComparison {
+		s.renderWorkspaceComparison(c, p, state, comparison, state.ChangedLinesOnly)
+		return
+	}
+	if state.PreviewMode == workspace.PreviewContent && hasContent {
+		renderWorkspaceFileContentPreview(c, p, state, preview).Grow(1)
+		return
+	}
+	if !hasComparison && !hasContent && preview.UnavailableReason != "" {
+		label(c, preview.UnavailableReason, 11, p.muted).Wrap()
+	}
+}
+
+func prepareWorkspacePreviewMode(state *workspaceHistoryState, preview *workspace.WorkspaceGitFilePreview) {
 	if state.PreviewMode == "" {
 		state.PreviewMode = preview.DefaultMode()
 	}
 	state.PreviewMode = workspacePreviewDisplayedMode(preview, state.PreviewMode)
-	if hasComparison || hasContent {
-		ui.Row(c).FillWidth().Gap(5).Children(func() {
-			if hasComparison && hasContent {
-				if workspaceHistoryChoice(c, "workspace-preview-comparison", "左右对比", state.PreviewMode == workspace.PreviewComparison, p).Clicked() {
+}
+
+// The same controls appear either beside the file identity or, on a narrow
+// preview, on their own wrapping row. State and native button keys are shared.
+func (s *app) renderWorkspacePreviewChoices(c *ui.Context, p palette, state *workspaceHistoryState, preview *workspace.WorkspaceGitFilePreview, inline bool) {
+	if preview == nil || state.SelectedKind == domain.WorkspaceGitAdded {
+		return
+	}
+	hasComparison := preview.Comparison != nil && len(preview.Comparison.Rows) > 0
+	hasContent := preview.Content != nil
+	if !hasComparison {
+		return
+	}
+	prepareWorkspacePreviewMode(state, preview)
+	row := ui.Row(c.Key("workspace-file-preview-choices")).MinWidth(0).Gap(5).Wrap().AlignItems(ui.Center)
+	if inline {
+		row.Shrink(0)
+	} else {
+		row.FillWidth()
+	}
+	row.Children(func() {
+		if hasComparison && hasContent {
+			ui.Row(c).Gap(5).Shrink(0).Children(func() {
+				if workspacePreviewChoice(c, "workspace-preview-comparison", "左右对比", state.PreviewMode == workspace.PreviewComparison, p).Clicked() {
 					state.PreviewMode = workspace.PreviewComparison
 				}
 				contentLabel := "文件内容"
@@ -878,36 +927,40 @@ func (s *app) renderWorkspaceFilePreview(c *ui.Context, p palette, state *worksp
 						contentLabel = state.DiffBaseLabel + "内容"
 					}
 				}
-				if workspaceHistoryChoice(c, "workspace-preview-content", contentLabel, state.PreviewMode == workspace.PreviewContent, p).Clicked() {
+				if workspacePreviewChoice(c, "workspace-preview-content", contentLabel, state.PreviewMode == workspace.PreviewContent, p).Clicked() {
 					state.PreviewMode = workspace.PreviewContent
 				}
-			}
+			})
+		}
+		if !inline {
 			ui.Spacer(c)
-			if hasComparison && state.PreviewMode == workspace.PreviewComparison {
-				label := "仅看改动"
-				if state.ChangedLinesOnly {
-					label = "查看全部"
+		} else if hasContent && state.PreviewMode == workspace.PreviewComparison {
+			ui.Box(c).Width(1).Height(14).Margin(0, 3).Shrink(0).Background(p.line)
+		}
+		if hasComparison && state.PreviewMode == workspace.PreviewComparison {
+			ui.Row(c).Gap(5).Shrink(0).Children(func() {
+				for _, mode := range []struct {
+					key, title, tooltip string
+					context, changed    bool
+				}{
+					{"all", "查看全部", "显示完整文件", false, false},
+					{"context", "改动上下文", "显示改动及附近 3 行，相同内容可展开", true, false},
+					{"changed", "仅看改动", "严格显示改动行，保留原始行号", false, true},
+				} {
+					selected := state.ChangedLinesOnly == mode.changed && state.ContextLinesOnly == mode.context
+					if workspacePreviewChoice(c, "workspace-preview-lines-"+mode.key, mode.title, selected, p).Tooltip(mode.tooltip).Clicked() {
+						state.saveActiveWorkspaceDiffRenderer()
+						state.ContextLinesOnly, state.ChangedLinesOnly = mode.context, mode.changed
+						s.saveWorkspaceReviewSelection(state)
+					}
 				}
-				if workspaceHistoryChoice(c, "workspace-preview-lines", label, state.ChangedLinesOnly, p).Clicked() {
-					state.ChangedLinesOnly = !state.ChangedLinesOnly
-				}
-			}
-		})
-	}
-	if message := workspaceFilePreviewTruncationMessage(preview, state.PreviewMode); message != "" {
-		label(c, message, 11, p.amber).Wrap()
-	}
-	if state.PreviewMode == workspace.PreviewComparison && hasComparison {
-		s.renderWorkspaceComparison(c, p, state, comparison, state.ChangedLinesOnly)
-		return
-	}
-	if state.PreviewMode == workspace.PreviewContent && hasContent {
-		renderWorkspaceFileContentPreview(c, p, state, preview).Grow(1)
-		return
-	}
-	if !hasComparison && !hasContent && preview.UnavailableReason != "" {
-		label(c, preview.UnavailableReason, 11, p.muted).Wrap()
-	}
+			})
+		}
+	})
+}
+
+func workspacePreviewChoice(c *ui.Context, key, title string, selected bool, p palette) ui.Element {
+	return workspaceHistoryChoice(c, key, title, selected, p).Height(24).MaxWidth(160).Padding(4, 10).Radius(5).Shrink(0).Clip().Tooltip(title)
 }
 
 // renderWorkspaceCommitHistory and renderWorkspaceDirtyFilePreview are retained

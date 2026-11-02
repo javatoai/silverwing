@@ -20,6 +20,9 @@ type DiffState struct {
 	// SplitRatio is the old side's fraction of the width in DiffSplit.
 	// It defaults to .5 and is updated by the draggable divider.
 	SplitRatio float32
+	// SyncHorizontal locks split panes to the same horizontal code position.
+	// Both panes share the widest scroll range; defaults to independent X.
+	SyncHorizontal bool
 	// Editable lets the new text be edited where it shows, with all an
 	// editor does; the diff follows as it is typed.
 	Editable bool
@@ -73,8 +76,9 @@ type DiffState struct {
 	// button in place of its own (DefaultSeparator, DefaultHunkActions
 	// and DefaultGutterButton, which they can call to wrap them): each is
 	// given the element the viewer places, to style and fill, and what
-	// the part shows and does. A separator is as wide as the viewer, and
-	// 32 DIPs high.
+	// the part shows and does. A separator is as wide as the viewer, less
+	// the room of the scroll bar's track while the viewer scrolls, and 32
+	// DIPs high.
 	RenderSeparator    func(c *ui.Context, sep ui.Element, s *DiffSeparator)
 	RenderHunkActions  func(c *ui.Context, bar ui.Element, a *DiffHunkActions)
 	RenderGutterButton func(c *ui.Context, btn ui.Element, line DiffLineRange)
@@ -334,8 +338,8 @@ func (d *DiffState) goToHunkNow(i int) {
 	}
 }
 
-// DiffScrollPosition stores the independent horizontal positions and the
-// shared vertical position of a split diff.
+// DiffScrollPosition stores the horizontal positions and shared vertical
+// position. OldX and NewX are equal when SyncHorizontal is enabled.
 type DiffScrollPosition struct {
 	OldX, NewX float32
 	Y          float64
@@ -354,6 +358,10 @@ func (d *DiffState) ScrollPosition() DiffScrollPosition {
 // layout clamps it to the new content and viewport.
 func (d *DiffState) SetScrollPosition(position DiffScrollPosition) {
 	d.scroll.y = max(0, position.Y)
+	if d.SyncHorizontal {
+		position.OldX = position.NewX
+		d.scroll.x = max(0, position.NewX)
+	}
 	for i, x := range []float32{position.OldX, position.NewX} {
 		ed := &d.eds[i]
 		ed.scrollX = max(0, x)
@@ -474,13 +482,19 @@ func (d *DiffState) sideOptions(old bool) options {
 // DiffView builds the diff viewer.
 func DiffView(c *ui.Context, d *DiffState) ui.Element {
 	d.ensure()
+	wasSynced := d.scroll.syncHorizontal
+	d.scroll.syncHorizontal = d.SyncHorizontal && d.Layout == DiffSplit && !d.FitContent
+	if d.scroll.syncHorizontal && !wasSynced {
+		d.scroll.x = d.eds[1].scrollX
+		d.eds[0].scrollX = d.scroll.x
+	}
 	t := c.Theme()
 	ct := d.Theme.resolve(t)
 	opts := d.sideOptions
 	d.sides[0] = diffSide{d: d, old: true, hide: d.sides[0].hide, blks: d.sides[0].blks}
 	d.sides[1] = diffSide{d: d, unified: d.Layout == DiffUnified, hide: d.sides[1].hide, blks: d.sides[1].blks}
 	if d.Layout == DiffUnified {
-		d.oldView.theme = ct
+		d.oldView.setTheme(ct)
 		d.oldView.setBuffer(d.Old)
 		d.oldView.sync(nil)
 		o := opts(false)
@@ -512,6 +526,7 @@ func DiffView(c *ui.Context, d *DiffState) ui.Element {
 			d.buildSeparators(c, ct)
 		})
 		if d.FitContent {
+			d.fit()
 			root.Height(float32(d.eds[1].view.heights.total()))
 		}
 		return root
@@ -550,7 +565,7 @@ func DiffView(c *ui.Context, d *DiffState) ui.Element {
 			maxRatio = max(minRatio, (available-minPane)/r.W)
 		}
 		ratio := min(max(d.SplitRatio, minRatio), maxRatio)
-		leftWidth := r.W * ratio
+		leftWidth := available * ratio
 		rightWidth := max(float32(0), r.W-leftWidth-1)
 		d.eds[0].layout(leftWidth, r.H, p.Scale())
 		d.eds[1].layout(rightWidth, r.H, p.Scale())
@@ -576,14 +591,54 @@ func DiffView(c *ui.Context, d *DiffState) ui.Element {
 		}
 		d.rebuildIfMoved()
 	})
+	root.DrawOver(func(p *ui.Painter, _ ui.Rect) {
+		if !d.scroll.syncHorizontal {
+			return
+		}
+		// Measure both panes before clamping restored positions. The wider
+		// line may be on the side painted second, especially on first layout.
+		extent := d.scroll.maxX()
+		x := max(0, min(d.scroll.x, extent))
+		changed := d.eds[0].scrollX != x || d.eds[1].scrollX != x || d.scroll.xExtent != extent
+		d.scroll.x, d.scroll.xExtent = x, extent
+		d.eds[0].scrollX, d.eds[1].scrollX = x, x
+		if changed {
+			p.AnimationFrame()
+		}
+	})
 	root.Children(func() {
 		ui.SplitRatio(c, &d.SplitRatio, buildSide(0), buildSide(1)).Fill()
 		d.buildSeparators(c, ct)
 	})
 	if d.FitContent {
+		d.fit()
 		root.Height(float32(max(d.eds[0].view.heights.total(), d.eds[1].view.heights.total())))
 	}
 	return root
+}
+
+// fit lays out a diff that fits its content as its Draw does, its
+// unchanged lines folded, at the size its editors were built at. A diff
+// not drawn yet, as one below the view of a scroll container, is then as
+// high as it shows, not as all its lines: else it would shrink as it came
+// into view, and the container's end with it, under the user scrolling.
+func (d *DiffState) fit() {
+	eds := d.eds[:]
+	if d.Layout == DiffUnified {
+		eds = d.eds[1:]
+		ed := &d.eds[1]
+		d.oldView.setStyle(ed.view.font, ed.o.lineHeight, max(1, ed.view.scale), ed.tabSize())
+		d.oldView.setWrap(ed.view.wrap, ed.view.wrapWidth)
+	}
+	d.prepare()
+	for i := range eds {
+		ed := &eds[i]
+		w := ed.r.W
+		if w <= 0 {
+			w = 600
+		}
+		ed.layout(w, ed.viewH, max(1, ed.view.scale))
+	}
 }
 
 // expand reveals lines of the gap starting at old line a: at its top,

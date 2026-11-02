@@ -35,11 +35,23 @@ type workspaceDiffRendererState struct {
 	RowsOldX, RowsNewX     float32
 	RowsScrollY            float32
 	HasRowsScroll          bool
+	RowsAnchorSource       int
+	RowsAnchorFraction     float32
+	RowsAnchorValid        bool
+	RowsExpanded           []workspaceDiffSourceRange
+	RowsContextOnly        bool
+	RowsChangedOnly        bool
+	RowsActive             bool
 	HunkIndex              int
 	HunkSelected           bool
 	InitialPositioned      bool
 	Collapsed              bool
 	CollapseKnown          bool
+	NativeRestorePending   bool
+	NativeRestoreReady     bool
+	NativeRestoreVertical  bool
+	NativeRestoreCursor    int
+	NativeRestoreSide      editor.DiffSide
 }
 
 func (identity workspaceDiffIdentity) matches(other workspaceDiffIdentity) bool {
@@ -100,24 +112,32 @@ func (state *workspaceHistoryState) saveActiveWorkspaceDiffRenderer() {
 	if saved == nil {
 		return
 	}
-	saved.HunkIndex = state.DiffHunkIndex
-	saved.HunkSelected = state.DiffHunkSelected
 	if view := state.NativeDiff; view != nil {
+		syncWorkspaceNativeHunk(state, view)
+		saved.RowsActive = false
 		if !view.singlePane {
 			state.SplitRatio = firstNonZeroSplitRatio(view.view.SplitRatio, state.SplitRatio)
 		}
-		position := view.view.ScrollPosition()
-		saved.NativeOldX, saved.NativeNewX, saved.NativeScrollY = position.OldX, position.NewX, position.Y
-		saved.HasNativeScroll = true
+		if !saved.NativeRestorePending {
+			position := view.view.ScrollPosition()
+			saved.NativeOldX, saved.NativeNewX, saved.NativeScrollY = position.OldX, position.NewX, position.Y
+			saved.HasNativeScroll = true
+		}
 		saved.InitialPositioned = view.positioned
 		saved.Collapsed, saved.CollapseKnown = view.collapsed, view.collapseKnown
-	}
-	if view := state.DiffRows; view != nil {
+	} else if view := state.DiffRows; view != nil {
+		saved.RowsActive = true
 		view.syncScroll()
 		saved.RowsOldX, saved.RowsNewX = view.oldScroll.X, view.newScroll.X
 		saved.RowsScrollY = view.newScroll.Y
 		saved.HasRowsScroll = true
+		saved.RowsAnchorSource, saved.RowsAnchorFraction = view.sourceAnchor()
+		saved.RowsAnchorValid = len(view.rows) > 0
+		saved.RowsExpanded = append([]workspaceDiffSourceRange(nil), view.expanded...)
+		saved.RowsContextOnly, saved.RowsChangedOnly = view.contextOnly, view.changedOnly
 	}
+	saved.HunkIndex = state.DiffHunkIndex
+	saved.HunkSelected = state.DiffHunkSelected
 }
 
 func (state *workspaceHistoryState) resetWorkspaceDiffView() {
@@ -161,11 +181,7 @@ func (s *app) workspaceNativeDiffView(state *workspaceHistoryState, comparison *
 		identity.newTruncated = comparison.NewContent.Truncated
 	}
 	if state.NativeDiffIdentity == nil || !state.NativeDiffIdentity.matches(identity) {
-		keepFilterPreference := state.SelectedKind == domain.WorkspaceGitAdded || state.NativeDiffIdentity != nil && state.NativeDiffIdentity.kind == domain.WorkspaceGitAdded
 		state.resetWorkspaceDiffView()
-		if !keepFilterPreference {
-			state.ChangedLinesOnly = false
-		}
 		state.NativeDiffIdentity = &identity
 	}
 	rendererKey := workspaceDiffRendererKey(state)
@@ -174,7 +190,9 @@ func (s *app) workspaceNativeDiffView(state *workspaceHistoryState, comparison *
 	// Source CHANGED_LINES is a strict row filter, not collapsed context.
 	// The existing numbered row renderer preserves the service line numbers.
 	if state.ChangedLinesOnly && state.SelectedKind != domain.WorkspaceGitAdded {
-		state.saveActiveWorkspaceDiffRenderer()
+		if state.NativeDiff != nil {
+			state.saveActiveWorkspaceDiffRenderer()
+		}
 		state.NativeDiff = nil
 		return nil
 	}
@@ -190,13 +208,29 @@ func (s *app) workspaceNativeDiffView(state *workspaceHistoryState, comparison *
 		}
 		state.NativeDiff.view.SplitRatio = firstNonZeroSplitRatio(state.SplitRatio, .5)
 		if saved != nil {
+			saved.NativeRestorePending, saved.NativeRestoreReady = false, false
 			state.NativeDiff.view.ExpandUnchanged = !saved.Collapsed
-			if saved.HasNativeScroll {
-				state.NativeDiff.view.SetScrollPosition(editor.DiffScrollPosition{
-					OldX: saved.NativeOldX, NewX: saved.NativeNewX, Y: saved.NativeScrollY,
-				})
+			if saved.HunkSelected && state.SelectedKind != domain.WorkspaceGitAdded {
+				// Initialize before GoToHunk so the SDK restores the caret now,
+				// rather than queuing it after this frame's saved scroll.
+				state.NativeDiff.view.Run(editor.MoveDocStart)
+				state.NativeDiff.goToHunk(saved.HunkIndex)
 			}
-			state.NativeDiff.positioned = saved.InitialPositioned
+			if saved.HasNativeScroll {
+				position := editor.DiffScrollPosition{OldX: saved.NativeOldX, NewX: saved.NativeNewX}
+				if !saved.RowsActive {
+					position.Y = saved.NativeScrollY
+				}
+				state.NativeDiff.view.SetScrollPosition(position)
+				// GoToHunk also reveals its caret. Restore pixels after that
+				// first layout, unless a new input has moved the caret meanwhile.
+				if saved.HunkSelected && state.SelectedKind != domain.WorkspaceGitAdded {
+					saved.NativeRestorePending, saved.NativeRestoreReady = true, false
+					saved.NativeRestoreVertical = !saved.RowsActive
+					saved.NativeRestoreCursor, saved.NativeRestoreSide = state.NativeDiff.view.Cursor(), state.NativeDiff.view.ActiveSide()
+				}
+			}
+			state.NativeDiff.positioned = saved.InitialPositioned || saved.HunkSelected
 			state.NativeDiff.collapsed, state.NativeDiff.collapseKnown = saved.Collapsed, saved.CollapseKnown
 		}
 		syntax := workspaceFilePreviewLanguage(state.SelectedPath, language)
@@ -302,72 +336,31 @@ func (s *app) renderWorkspaceNativeComparison(c *ui.Context, p palette, state *w
 	if state == nil || view == nil {
 		return
 	}
-	added, removed := view.stats()
-	hunks := view.hunkCount()
-	if state.DiffHunkSelected && state.DiffHunkIndex >= hunks {
-		state.DiffHunkIndex = max(0, hunks-1)
-		state.DiffHunkSelected = hunks > 0
-	}
-	comparison := state.Preview.Comparison
-	oldTitle, newTitle := workspaceDiffSideLabels(state, comparison)
 	ratio := firstNonZeroSplitRatio(state.SplitRatio, view.view.SplitRatio)
 	singlePane := view.singlePane
-	width, _ := c.Size()
-	showStats := singlePane || width*(1-ratio) >= 260
 	if !view.positioned {
 		if singlePane {
 			view.view.SetScrollPosition(editor.DiffScrollPosition{})
 		} else if view.hunkCount() > 0 {
+			view.view.Run(editor.MoveDocStart)
 			view.goToHunk(0)
-			state.DiffHunkIndex, state.DiffHunkSelected = 0, true
 		}
 		view.positioned = true
 	}
+	syncWorkspaceNativeHunk(state, view)
 	if singlePane {
 		view.render(c, p, false, false)
 		state.saveActiveWorkspaceDiffRenderer()
 		return
 	}
 	ui.Column(c).Grow(1).MinHeight(0).Background(p.surface).Radius(7).Children(func() {
-		ui.Row(c).FillWidth().MinWidth(0).Gap(0).Padding(0, 6).AlignItems(ui.Center).Background(p.soft).Children(func() {
-			if singlePane {
-				label(c, newTitle, 10, p.muted).Grow(1).MinWidth(0).NoWrap().Tooltip(workspaceDiffSideTooltip(state, comparison, false))
-			} else {
-				label(c, oldTitle, 10, p.muted).WidthPercent(ratio * 100).MinWidth(0).Shrink(0).NoWrap().Tooltip(workspaceDiffSideTooltip(state, comparison, true))
-				ui.Box(c.Key("workspace-native-diff-title-divider")).Width(1).Shrink(0).Background(p.line)
-				label(c, newTitle, 10, p.muted).Grow(1).Basis(0).MinWidth(0).NoWrap().Tooltip(workspaceDiffSideTooltip(state, comparison, false))
-			}
-			ui.Row(c).Gap(5).Shrink(0).AlignItems(ui.Center).Children(func() {
-				if showStats {
-					label(c, "+"+formatWorkspaceDiffCount(added), 10, p.green).NoWrap()
-					label(c, "−"+formatWorkspaceDiffCount(removed), 10, p.danger).NoWrap()
-				}
-				workspaceDiffHunkButton(c, "workspace-diff-hunk-previous", "上一处", p,
-					hunks > 0 && state.DiffHunkSelected && state.DiffHunkIndex > 0, func() {
-						state.DiffHunkIndex--
-						view.goToHunk(state.DiffHunkIndex)
-					})
-				hunkLabel := "无差异块"
-				if hunks > 0 && state.DiffHunkSelected {
-					hunkLabel = formatWorkspaceDiffCount(state.DiffHunkIndex+1) + " / " + formatWorkspaceDiffCount(hunks)
-				} else if hunks > 0 {
-					hunkLabel = formatWorkspaceDiffCount(hunks) + " 处差异"
-				}
-				label(c, hunkLabel, 10, p.muted).NoWrap()
-				workspaceDiffHunkButton(c, "workspace-diff-hunk-next", "下一处", p,
-					hunks > 0 && (!state.DiffHunkSelected || state.DiffHunkIndex < hunks-1), func() {
-						if !state.DiffHunkSelected {
-							state.DiffHunkIndex = 0
-							state.DiffHunkSelected = true
-						} else {
-							state.DiffHunkIndex++
-						}
-						view.goToHunk(state.DiffHunkIndex)
-					})
-			})
-		})
+		renderWorkspaceNativeControls(c, p, state, view, ratio)
 		view.view.SplitRatio = ratio
-		view.render(c, p, state.ChangedLinesOnly, false)
+		view.render(c, p, state.ContextLinesOnly, false)
+		restoreWorkspaceNativeScroll(c, state, view)
+		if syncWorkspaceNativeHunk(state, view) {
+			c.Invalidate() // ActiveSide follows the editor that just acquired focus.
+		}
 		state.SplitRatio = view.view.SplitRatio
 		state.saveActiveWorkspaceDiffRenderer()
 	})
@@ -452,7 +445,7 @@ func workspaceDiffSideTooltip(state *workspaceHistoryState, comparison *workspac
 	return strings.Join(parts, "\n")
 }
 
-func workspaceDiffHunkButton(c *ui.Context, key, text string, p palette, enabled bool, clicked func()) {
+func workspaceDiffHunkButton(c *ui.Context, key, text string, p palette, enabled bool, clicked func()) ui.Element {
 	button := ui.ButtonBase(c.Key(key)).Width(26).Height(24).Center().Radius(6).Label(text).Tooltip(text).Disabled(!enabled)
 	if !enabled {
 		button.Background(p.soft)
@@ -471,6 +464,7 @@ func workspaceDiffHunkButton(c *ui.Context, key, text string, p palette, enabled
 	if button.Clicked() && enabled {
 		clicked()
 	}
+	return button
 }
 
 func formatWorkspaceDiffCount(count int) string {

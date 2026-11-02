@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/egoist/mygo/i18n"
 	"github.com/egoist/mygo/internal/platform"
@@ -17,7 +18,9 @@ import (
 // headless renders frames in memory with the software renderer.
 type headless struct {
 	w, h, scale float32
-	img         raster.Renderer
+	// maxButton is where the view shows the maximize button.
+	maxButton Rect
+	img       raster.Renderer
 	// requested is set when the view asks for a frame, from any goroutine
 	// for invalidate.
 	requested atomic.Bool
@@ -54,6 +57,12 @@ type headless struct {
 	// window shows.
 	hz     float32
 	hidden bool
+	// frameRate is what the engine last told of the frames a second that
+	// come while only drawings move (setFrameRate).
+	frameRate float32
+	// atOnce has requestFrame stand for a surface whose frames come at
+	// once rather than at the display's next refresh (framesAtOnce).
+	atOnce bool
 	// material tells that the window shows one (SetVibrancy).
 	material bool
 	// reading runs once as the clipboard is next read, as GTK's nested
@@ -70,17 +79,34 @@ type headless struct {
 	webViews   []placedWebView
 	tabbedInto NativeWebView
 	tabbedBack bool
+
+	// invalidated asks for a frame built anew, as a window's Changed.
+	invalidated atomic.Bool
+	// afterAt and repaintAt are when the timers of After and Painter.After
+	// are due, zero for none; afterFrom is when After's was armed. No
+	// timer runs: the Tester's time may stop or leap.
+	afterAt, afterFrom, repaintAt time.Time
+	clock                         func() time.Time
 }
 
 func (h *headless) size() (float32, float32, float32) { return h.w, h.h, h.scale }
 func (h *headless) refreshRate() float32              { return h.hz }
+func (h *headless) setFrameRate(fps float32)          { h.frameRate = fps }
+func (h *headless) framesAtOnce() bool                { return h.atOnce }
 func (h *headless) occluded() bool                    { return h.hidden }
 func (h *headless) present(s *scene.Scene) {
 	h.last = s
 	h.img.Render(s)
 }
+func (h *headless) afterTimer(at time.Time) {
+	h.afterAt = at
+	if h.clock != nil {
+		h.afterFrom = h.clock()
+	}
+}
 func (h *headless) framePath() string                          { return "drawn in memory" }
 func (h *headless) requestFrame()                              { h.requested.Store(true) }
+func (h *headless) repaintTimer(at time.Time)                  { h.repaintAt = at }
 func (h *headless) setCursor(c Cursor)                         { h.cursor = c }
 func (h *headless) setTextInput(t platform.TextInputState)     { h.ime = t }
 func (h *headless) updateAccessibility(t *platform.AccessTree) { h.keepAccess(t) }
@@ -138,6 +164,7 @@ func (h *headless) finishDataDrag(r transfer.Result) {
 	}
 }
 func (h *headless) titleBarDoubleClicked()            {}
+func (h *headless) setMaximizeButton(r Rect)          { h.maxButton = r }
 func (h *headless) escape()                           { h.escapes++ }
 func (h *headless) isDark() bool                      { return h.dark }
 func (h *headless) rightToLeft() bool                 { return h.rtl }
@@ -146,7 +173,10 @@ func (h *headless) locale() string                    { return h.lang }
 func (h *headless) region() i18n.Region               { return h.reg }
 func (h *headless) titleBar() TitleBar                { return h.bar }
 func (h *headless) vibrancy() bool                    { return h.material }
-func (h *headless) invalidate()                       { h.requested.Store(true) }
+func (h *headless) invalidate() {
+	h.invalidated.Store(true)
+	h.requested.Store(true)
+}
 
 // openURL notes the link, and gives done the error FailOpenURL set before
 // the next frame, as a window gives it after the system opened the link.
@@ -192,9 +222,19 @@ func coreRender(view func(c *context), width, height int, scale float32) *image.
 // Tester runs a view without a window, as a test drives it: it renders
 // frames in memory and sends the view pointer and keyboard input, between
 // which it settles the frames the view asks for.
+//
+// Its clock stands still unless the test moves it with Advance, so what
+// depends on time (animations, Context.After, the clicks that make a
+// double click, typing that undoes in one step, tooltips) does the same
+// however fast the machine runs the test.
 type Tester struct {
-	rt *engine
-	h  *headless
+	rt     *engine
+	h      *headless
+	clicks platform.ClickCounter
+	// now is the Tester's time, which only Advance moves, and frameAt
+	// that of the last frame.
+	now     time.Time
+	frameAt time.Time
 }
 
 // NewTester starts testing view in a window of width×height DIPs. Two
@@ -202,7 +242,9 @@ type Tester struct {
 // was given, as apps only log it.
 func coreNewTester(view func(c *context), width, height int) *Tester {
 	h := &headless{w: float32(width), h: float32(height), scale: 1}
-	t := &Tester{rt: newRuntime(view, h), h: h}
+	t := &Tester{rt: newRuntime(view, h), h: h, now: time.Now()}
+	t.rt.clock = t.Now
+	h.clock = t.Now
 	t.rt.collect = true
 	// Duplicate keys panic, so that the test fails where the key was given.
 	t.rt.strict = true
@@ -213,21 +255,115 @@ func coreNewTester(view func(c *context), width, height int) *Tester {
 
 // settle runs frames until the view asks for no more, or 20 of them.
 func (t *Tester) settle() {
+	t.frameAt = t.Now()
 	for i := 0; i < 20; i++ {
 		t.h.requested.Store(false)
-		for len(t.h.later) > 0 {
-			fn := t.h.later[0]
-			t.h.later = t.h.later[1:]
-			fn()
-		}
+		t.h.invalidated.Store(false)
+		t.runLater()
 		t.rt.runFrame()
-		if !t.h.requested.Load() && len(t.h.later) == 0 {
+		if !t.asked() {
 			return
 		}
 	}
 }
 
+// asked reports whether the view asked for a frame.
+func (t *Tester) asked() bool { return t.h.requested.Load() || len(t.h.later) > 0 }
+
+// runLater runs what the view asked to run after the frame.
+func (t *Tester) runLater() {
+	for len(t.h.later) > 0 {
+		fn := t.h.later[0]
+		t.h.later = t.h.later[1:]
+		fn()
+	}
+}
+
+// Now returns the Tester's time, that of its next frame, which stands
+// still until Advance moves it.
+func (t *Tester) Now() time.Time { return t.now }
+
+// Advance moves the Tester's clock on by d, running the frames due
+// meanwhile at their times: one each refresh while something moves, and
+// those of After and Painter.After when they come due. An animation of
+// 200 ms is a quarter of the way after Advance(50 * time.Millisecond),
+// and done after another Advance(150 * time.Millisecond).
+func (t *Tester) Advance(d time.Duration) {
+	end := t.now.Add(max(d, 0))
+	for {
+		at, ok := t.due()
+		if !ok || at.After(end) {
+			break
+		}
+		t.now = at
+		if h := t.h; !h.afterAt.IsZero() && !at.Before(h.afterAt) {
+			h.afterAt = time.Time{}
+			h.invalidate()
+		}
+		if h := t.h; !h.repaintAt.IsZero() && !at.Before(h.repaintAt) {
+			h.repaintAt = time.Time{}
+			t.rt.repaintNow()
+		}
+		if t.asked() {
+			// Built anew after invalidate, as a window's.
+			if t.h.invalidated.Swap(false) {
+				t.rt.redraw = false
+			}
+			t.h.requested.Store(false)
+			t.runLater()
+			t.rt.surfaceFrame()
+			t.frameAt = at
+		}
+	}
+	t.now = end
+}
+
+// due returns when the next frame is due: the next refresh if one was
+// asked for, or a timer's.
+func (t *Tester) due() (time.Time, bool) {
+	now := t.Now()
+	var at time.Time
+	consider := func(due time.Time) {
+		if due.Before(now) {
+			due = now
+		}
+		if at.IsZero() || due.Before(at) {
+			at = due
+		}
+	}
+	if t.asked() {
+		hz := t.h.hz
+		if hz <= 0 {
+			hz = 60
+		}
+		consider(t.frameAt.Add(time.Duration(float64(time.Second) / float64(hz))))
+	}
+	if due, ok := t.timerDue(t.h.afterAt, t.h.afterFrom); ok {
+		consider(due)
+	}
+	if due, ok := t.timerDue(t.h.repaintAt, t.frameAt); ok {
+		consider(due)
+	}
+	return at, !at.IsZero()
+}
+
+// timerDue returns when a timer for at, armed at armed, fires: at least a
+// millisecond later, as a window's.
+func (t *Tester) timerDue(at, armed time.Time) (time.Time, bool) {
+	if at.IsZero() {
+		return at, false
+	}
+	if soonest := armed.Add(time.Millisecond); at.Before(soonest) {
+		at = soonest
+	}
+	return at, true
+}
+
 func (t *Tester) send(ev platform.SurfaceEvent) {
+	if ev.Kind == platform.PointerDown && ev.Clicks == 0 {
+		// Counted as a backend counts.
+		ev.Clicks = t.clicks.Press(ev.Button, ev.X, ev.Y, uint32(t.now.UnixMilli()), platform.DefaultDoubleClick)
+	}
 	t.rt.event(ev)
 	t.settle()
 }
@@ -241,6 +377,14 @@ func (t *Tester) SetSize(width, height int) {
 // SetScale sets the device pixels per DIP.
 func (t *Tester) SetScale(scale float32) {
 	t.h.scale = scale
+	t.settle()
+}
+
+// SetZoom zooms the content by z, as the view's Context.SetZoom does. The
+// Tester's coordinates stay the window's: Find, ClickAt, Move, Scroll and
+// TextCaret are in its DIPs, the view's z times smaller.
+func (t *Tester) SetZoom(z float32) {
+	t.rt.setZoom(z)
 	t.settle()
 }
 
@@ -303,14 +447,22 @@ func (t *Tester) SetDirection(d Direction) {
 // Frame renders another frame, as when the view's state changed.
 func (t *Tester) Frame() { t.h.requested.Store(true); t.settle() }
 
+// FramePending reports whether the view still asks for a frame, as one
+// that animates or never settles does after an input or Frame. The
+// frames of After and Painter.After wait for Advance to reach their
+// time, as the clock stands still until then.
+func (t *Tester) FramePending() bool { return t.asked() }
+
 // Image returns the last frame.
 func (t *Tester) Image() *image.RGBA { return t.h.image() }
 
-// Find returns the box of the first element showing text s, or labeled s.
+// Find returns the box of the first element showing text s, or labeled s,
+// in the window's DIPs: zoomed (SetZoom), z times the content's.
 func (t *Tester) Find(s string) (Rect, bool) {
 	for _, n := range t.rt.labels {
 		if n.text == s {
-			return n.r, true
+			r, z := n.r, t.rt.zoomFactor()
+			return Rect{r.X * z, r.Y * z, r.W * z, r.H * z}, true
 		}
 	}
 	return Rect{}, false
@@ -335,13 +487,32 @@ func (t *Tester) HasText(s string) bool {
 	return false
 }
 
-// Click clicks the center of the element showing text or labeled s.
-func (t *Tester) Click(s string) error {
+// targetCenter returns the center of the element showing text or labeled s,
+// or an error when no element matches or its center lies outside the window.
+// Find walks the element tree without checking geometry, so it can return an
+// element the window never shows; clicking it would land on nothing while
+// reporting success.
+func (t *Tester) targetCenter(s string) (float32, float32, error) {
 	r, ok := t.Find(s)
 	if !ok {
-		return fmt.Errorf("ui: no element shows %q", s)
+		return 0, 0, fmt.Errorf("ui: no element shows %q", s)
 	}
-	t.ClickAt(r.X+r.W/2, r.Y+r.H/2)
+	x, y := r.X+r.W/2, r.Y+r.H/2
+	if x < 0 || y < 0 || x >= t.h.w || y >= t.h.h {
+		return 0, 0, fmt.Errorf("ui: %q is at (%v, %v), outside the window", s, x, y)
+	}
+	return x, y, nil
+}
+
+// Click clicks the center of the element showing text or labeled s. It
+// returns an error when no element shows s, or when the element's center
+// is outside the window, where the click would land on nothing.
+func (t *Tester) Click(s string) error {
+	x, y, err := t.targetCenter(s)
+	if err != nil {
+		return err
+	}
+	t.ClickAt(x, y)
 	return nil
 }
 
@@ -351,11 +522,11 @@ func (t *Tester) ClickAt(x, y float32) { t.ClickAtWith(0, x, y) }
 // ClickWith clicks the center of the element showing text or labeled s
 // holding the modifier keys mods, as a Shift-click.
 func (t *Tester) ClickWith(mods Modifiers, s string) error {
-	r, ok := t.Find(s)
-	if !ok {
-		return fmt.Errorf("ui: no element shows %q", s)
+	x, y, err := t.targetCenter(s)
+	if err != nil {
+		return err
 	}
-	t.ClickAtWith(mods, r.X+r.W/2, r.Y+r.H/2)
+	t.ClickAtWith(mods, x, y)
 	return nil
 }
 
@@ -371,13 +542,14 @@ func (t *Tester) ClickAtWith(mods Modifiers, x, y float32) {
 }
 
 // RightClick clicks the center of the element showing text or labeled s
-// with the secondary button.
+// with the secondary button. Like Click, it returns an error when no
+// element shows s or its center is outside the window.
 func (t *Tester) RightClick(s string) error {
-	r, ok := t.Find(s)
-	if !ok {
-		return fmt.Errorf("ui: no element shows %q", s)
+	x, y, err := t.targetCenter(s)
+	if err != nil {
+		return err
 	}
-	t.RightClickAt(r.X+r.W/2, r.Y+r.H/2)
+	t.RightClickAt(x, y)
 	return nil
 }
 
@@ -493,9 +665,38 @@ func (t *Tester) Move(x, y float32) {
 	t.send(platform.SurfaceEvent{Kind: platform.PointerMove, X: float64(x), Y: float64(y)})
 }
 
-// Scroll scrolls by dx, dy DIPs with the pointer at (x, y).
+// Scroll scrolls by dx, dy DIPs with the pointer at (x, y), as a touchpad
+// does: at once.
 func (t *Tester) Scroll(x, y, dx, dy float32) {
+	t.send(platform.SurfaceEvent{Kind: platform.PointerScroll, X: float64(x), Y: float64(y), DX: float64(dx), DY: float64(dy), Precise: true})
+}
+
+// ScrollWith scrolls by dx, dy DIPs at (x, y) while holding mods. Modifiers
+// belong to the pointer event itself, as on a native surface.
+func (t *Tester) ScrollWith(mods Modifiers, x, y, dx, dy float32) {
+	t.send(platform.SurfaceEvent{Kind: platform.PointerScroll, X: float64(x), Y: float64(y), DX: float64(dx), DY: float64(dy), Mods: platform.Modifiers(mods), Precise: true})
+}
+
+// DropFiles drops files dragged from another app at (x, y), as from
+// Finder, and reports whether an element took them (DroppedFiles).
+func (t *Tester) DropFiles(x, y float32, paths ...string) bool {
+	t.send(platform.SurfaceEvent{Kind: platform.FileDragOver, X: float64(x), Y: float64(y)})
+	taken := t.rt.event(platform.SurfaceEvent{Kind: platform.FileDrop, X: float64(x), Y: float64(y), Files: paths})
+	t.settle()
+	return taken
+}
+
+// Wheel scrolls by dx, dy DIPs with the pointer at (x, y), as a notch of
+// a mouse wheel does: a scroll container glides there over a moment,
+// which advancing the clock (Advance) shows.
+func (t *Tester) Wheel(x, y, dx, dy float32) {
 	t.send(platform.SurfaceEvent{Kind: platform.PointerScroll, X: float64(x), Y: float64(y), DX: float64(dx), DY: float64(dy)})
+}
+
+// Pinch zooms by scale with the pointer at (x, y), as pinching a touchpad
+// does (InputZoom).
+func (t *Tester) Pinch(x, y, scale float32) {
+	t.send(platform.SurfaceEvent{Kind: platform.PointerZoom, X: float64(x), Y: float64(y), Scale: float64(scale)})
 }
 
 // HoldModifiers presses or lets go of modifier keys on their own, as holding

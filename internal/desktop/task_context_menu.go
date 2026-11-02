@@ -151,7 +151,7 @@ func (s *app) taskContextMenu(services ui.Services, t task, menu *ui.Menu) {
 	case "materials-copy-path":
 		s.copyTextToClipboard(services, t.materialsPath, "已复制任务资料路径")
 	case "materials-configure":
-		s.page, s.settingsUnit.state.settingsTab, s.settingsUnit.state.settingsPage, s.settingsUnit.state.settingsLoaded = "settings", "存储", "paths", ""
+		s.page, s.settingsUnit.state.settingsTab, s.settingsUnit.state.settingsPage, s.settingsUnit.state.settingsLoaded = "settings", "资料与说明", "paths", ""
 	case "materials-retry":
 		s.dispatchTaskContextAction(application.Action{Kind: "task.materials-retry", TaskID: t.id}, opened)
 	case "pin":

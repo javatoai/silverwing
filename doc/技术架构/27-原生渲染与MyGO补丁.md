@@ -10,13 +10,13 @@ Silverwing 使用 Go 与 MyGO 原生桌面组件显示任务资料、源码、�
 
 ## MyGO 版本与本地源码
 
-根模块在 `go.mod` 固定 `github.com/egoist/mygo v0.5.0`，同时用 `replace` 指向仓库内的 `third_party/mygo`。Silverwing 的原生输入和排版依赖这份本地源码，因此升级时除了更新版本号，还要检查本地扩展是否仍需要、与上游实现是否冲突。
+根模块在 `go.mod` 固定 `github.com/egoist/mygo v0.7.3`，同时用 `replace` 指向仓库内的 `third_party/mygo`。Silverwing 的原生输入和排版依赖这份本地源码，因此升级时除了更新版本号，还要检查本地扩展是否仍需要、与上游实现是否冲突。
 
 补丁主要保留应用实际使用的契约：原生 TextEditor 的源码大小限制、组合输入通知、保留混合换行与剪贴板错误处理；Markdown 阅读器的原文映射、图片和链接回调；菜单命令派发、分栏比例、Windows 文件对话框错误，以及窗口缩放呈现。详细变更和升级检查点维护在 `third_party/MYGO-PATCHES.md`。该文件记录补丁目的，不代表每个运行环境都已完成实体设备验收。
 
 ## Markdown、TextEditor 与 FileTree
 
-任务资料 Markdown 正文使用 MyGO `markdown.View` 和原生代码块布局，支持当前已接入的查找、选择复制、图片信任校验、链接和 Mermaid 预览。查看 Markdown 原文时，应用复用公共 TextEditor 的只读视图。任务资料 Markdown 不提供编辑或保存入口；代码库里存在 Markdown 编辑器实现，不能据此推断任务资料页面允许编辑。
+任务资料中的可写 Markdown 使用原生 `markdown.Editor`，由一个 Buffer 管理原文和撤销事务，一个输入客户端管理全文光标、选区及组合输入。活跃区域展开源码，非活跃区域复用原生 Markdown 排版；表格、图片和代码块是显示投影，不拥有独立输入框。保存使用同版本原文快照。可写资料的阅读模式复用同一 `markdown.Editor` 状态，以只读排版保留全文选区。其他只读入口继续使用 `markdown.View`，保留查找、选择复制、图片信任校验、链接和 Mermaid 预览。
 
 公共 TextEditor 也用于普通 TXT、SQL、代码以及部分 JSON/CSV 源码编辑。宿主负责文档身份、输入回收、草稿、保存、冲突和权限；组件负责原生 Buffer、光标、选择、撤销、输入法和绘制。成功保存后继续复用现有 Buffer，避免输入位置或撤销状态意外重置。
 

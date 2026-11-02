@@ -28,6 +28,9 @@ func (s *app) restoreDesktopPreferences(home string) {
 	state.store = NewDesktopPreferencesStore(filepath.Join(home, desktopPreferencesFile))
 	value, err := state.store.Load()
 	state.value = value
+	if !s.taskTabExplicit {
+		s.tab = s.restoredTaskContentTab(s.tab)
+	}
 	if input := s.inputs["setting:materialsExpansionDepth"]; input != nil {
 		*input = fmt.Sprint(value.MaterialsExpansionDepth)
 	}
@@ -53,48 +56,41 @@ func (s *app) restoreDesktopPreferences(home string) {
 }
 
 func settingsPreferenceKey(name string) string {
-	keys := map[string]string{
-		"基础": "basic", "快捷工具": "developer-tools", "工具": "developer-tools", "存储": "storage", "研发配置": "development", "开发工具": "development",
-		"任务": "tasks", "AGENTS.md": "agents", "Codex": "codex", "CLI": "commands",
-		"skill": "skill-sources", "代理": "proxy", "Git": "git", "日志": "logs", "系统": "system",
-	}
-	if key, ok := keys[name]; ok {
-		return key
+	switch name {
+	case "外观与交互", "基础", "快捷工具":
+		return "basic"
+	case "任务与工作区", "任务":
+		return "tasks"
+	case "资料与说明", "存储", "AGENTS.md":
+		return "storage"
+	case "Git 与发布", "Git":
+		return "git"
+	case "AI 与扩展", "Codex", "skill":
+		return "codex"
+	case "工具与连接", "开发工具", "CLI", "代理":
+		return "commands"
+	case "数据与维护", "系统", "日志":
+		return "system"
 	}
 	return "basic"
 }
 
 func settingsPreferenceName(key string) string {
-	// Source also migrates older leaf-page preferences to their category.
 	switch key {
-	case "developer-tools":
-		return "快捷工具"
-	case "paths", "config-backup", "storage":
-		return "存储"
-	case "groups", "development":
-		return "开发工具"
-	case "tools":
-		return "快捷工具"
-	case "task-creation", "codex-task-creation", "task-area", "tasks":
-		return "任务"
-	case "agents", "instruction-templates":
-		return "AGENTS.md"
-	case "codex-plugins", "codex-mcp", "codex":
-		return "Codex"
-	case "feishu", "lark", "genbu", "cli", "advanced", "commands":
-		return "CLI"
-	case "skill-sources":
-		return "skill"
-	case "network-proxy", "proxy":
-		return "代理"
-	case "git", "branch-naming", "tag":
-		return "Git"
-	case "logs":
-		return "日志"
-	case "about", "updates", "app-data", "system":
-		return "系统"
+	case "task-creation", "codex-task-creation", "tasks", "branch-naming":
+		return "任务与工作区"
+	case "paths", "storage", "agents", "instruction-templates":
+		return "资料与说明"
+	case "git", "tag":
+		return "Git 与发布"
+	case "codex", "codex-plugins", "codex-mcp", "skill-sources":
+		return "AI 与扩展"
+	case "groups", "development", "feishu", "lark", "genbu", "cli", "advanced", "commands", "network-proxy", "proxy":
+		return "工具与连接"
+	case "config-backup", "logs", "about", "updates", "app-data", "system":
+		return "数据与维护"
 	default:
-		return "基础"
+		return "外观与交互"
 	}
 }
 

@@ -4,10 +4,10 @@ package e2e
 
 import (
 	"testing"
-	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/internal/linux"
+	"github.com/egoist/mygo/internal/wait"
 )
 
 func activateMenu(w *mygo.Window, path ...string) (err error) {
@@ -20,10 +20,37 @@ func pressShortcut(string, bool) (bool, bool) { return false, false }
 
 func endSheet(*mygo.Window) (bool, bool) { return false, false }
 
+// fake runs a hook that fakes input through XTEST, and returns once the
+// app handled that input, as the hooks of macOS and Windows do: the X
+// server makes the events and the app gets them later, on the main
+// thread, after other work queued there. A test that went on at once
+// would race them: Edit > Copy while the press of a drag was handled but
+// not its release, a composition the click's press then ended.
+func fake(hook func() bool) (ok bool) {
+	mygo.RunOnMain(func() { ok = hook() })
+	if !ok {
+		return false
+	}
+	// The hook synced with the X server: the events wait in the app's
+	// queue, and it has handled them once it has no events left. All but
+	// a last motion, which GDK holds until its next frame to merge it with
+	// the ones that follow: a test moving the pointer alone waits for
+	// what the move does.
+	wait.Poll(func() (pending bool) {
+		mygo.RunOnMain(func() { pending = linux.TestInputPending() })
+		return !pending
+	})
+	return true
+}
+
 // Clicks reach windows showing native UI only, through XTEST.
-func click(w *mygo.Window, x, y float64) (ok bool) {
-	mygo.RunOnMain(func() { ok = linux.TestClickSurface(w.NativeHandle(), x, y) })
-	return ok
+func click(w *mygo.Window, x, y float64) bool {
+	return fake(func() bool { return linux.TestClickSurface(w.NativeHandle(), x, y) })
+}
+
+// clickPage clicks a window's page, through XTEST.
+func clickPage(w *mygo.Window, x, y float64) bool {
+	return fake(func() bool { return linux.TestClickPage(w.NativeHandle(), x, y) })
 }
 
 // appClick is click, already through XTEST.
@@ -33,22 +60,29 @@ func appClick(w *mygo.Window, x, y float64) bool { return click(w, x, y) }
 // that closes it, however long it is held.
 func heldAppClick(w *mygo.Window, x, y float64) bool { return appClick(w, x, y) }
 
-func sideButton(w *mygo.Window, back bool) (ok bool) {
-	mygo.RunOnMain(func() { ok = linux.TestSideButton(w.NativeHandle(), back) })
-	return ok
+func sideButton(w *mygo.Window, back bool) bool {
+	return fake(func() bool { return linux.TestSideButton(w.NativeHandle(), back) })
 }
 
-func drag(w *mygo.Window, points [][2]float64) (ok bool) {
-	mygo.RunOnMain(func() { ok = linux.TestDragSurface(w.NativeHandle(), points) })
-	return ok
+// pinch pinches the touchpad at (x, y) by scale with GDK's events, which
+// only Wayland makes.
+func pinch(w *mygo.Window, x, y, scale float64) (got float64, ok bool) {
+	mygo.RunOnMain(func() { ok = linux.TestPinchSurface(w.NativeHandle(), x, y, scale) })
+	return scale, ok
+}
+
+func drag(w *mygo.Window, points [][2]float64) bool {
+	return fake(func() bool { return linux.TestDragSurface(w.NativeHandle(), points) })
 }
 
 func webViewAttached(*mygo.Window) (bool, bool) { return false, false }
 
 // Collection behaviors and deactivating the app are macOS's.
-func collectionBehavior(*mygo.Window) (uint, bool) { return 0, false }
-func deactivateApp() bool                          { return false }
-func appActive() (bool, bool)                      { return false, false }
+func collectionBehavior(*mygo.Window) (uint, bool)               { return 0, false }
+func deactivateApp() bool                                        { return false }
+func material(*mygo.Window) (string, int, float64, bool, bool)   { return "", 0, 0, false, false }
+func roundedBacking(*mygo.Window) (bool, float64, float64, bool) { return false, 0, 0, false }
+func appActive() (bool, bool)                                    { return false, false }
 
 // WebKitGTK docks the inspector inside the web view.
 func dockDevTools(*mygo.Window) bool { return false }
@@ -83,9 +117,8 @@ func recentDocumentRecorded(path string) (recorded, supported bool) {
 }
 
 // pressCtrlShiftK presses Ctrl+Shift+K like a keyboard.
-func pressCtrlShiftK() (ok bool) {
-	mygo.RunOnMain(func() { ok = linux.TestPressKeys("Control_L", "Shift_L", "k") })
-	return ok
+func pressCtrlShiftK() bool {
+	return fake(func() bool { return linux.TestPressKeys("Control_L", "Shift_L", "k") })
 }
 
 // usePortalShortcuts makes global shortcuts bind through the XDG desktop
@@ -96,9 +129,8 @@ func usePortalShortcuts() (restore func(), ok bool) {
 }
 
 // pressKeys presses keys, X keysym names such as "Control_L", together.
-func pressKeys(keys ...string) (ok bool) {
-	mygo.RunOnMain(func() { ok = linux.TestPressKeys(keys...) })
-	return ok
+func pressKeys(keys ...string) bool {
+	return fake(func() bool { return linux.TestPressKeys(keys...) })
 }
 
 // Only macOS windows have a toolbar.
@@ -110,14 +142,12 @@ func setWindowAppearance(*mygo.Window, bool)              {}
 
 // movePointer moves the pointer to a point of the screen, and pressButton
 // presses or releases the first mouse button, like a mouse.
-func movePointer(x, y int) (ok bool) {
-	mygo.RunOnMain(func() { ok = linux.TestMovePointer(x, y) })
-	return ok
+func movePointer(x, y int) bool {
+	return fake(func() bool { return linux.TestMovePointer(x, y) })
 }
 
-func pressButton(press bool) (ok bool) {
-	mygo.RunOnMain(func() { ok = linux.TestPressButton(press) })
-	return ok
+func pressButton(press bool) bool {
+	return fake(func() bool { return linux.TestPressButton(press) })
 }
 
 func resizeCursor(w *mygo.Window) (name string, supported bool) {
@@ -145,18 +175,9 @@ func enterMenuBar(w *mygo.Window, key string) (during, after, supported bool) {
 		mygo.RunOnMain(func() { shown, open = linux.TestMenuBarState(w.NativeHandle()) })
 		return shown, open
 	}
-	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
-		if shown, open := state(); shown && open {
-			during = true
-			break
-		}
-	}
+	during = wait.Poll(func() bool { shown, open := state(); return shown && open })
 	mygo.RunOnMain(func() { linux.TestCloseMenuBar(w.NativeHandle()) })
-	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
-		if after, _ = state(); !after {
-			break
-		}
-	}
+	wait.Poll(func() bool { after, _ = state(); return !after })
 	return during, after, true
 }
 
@@ -185,6 +206,7 @@ func titleButtonColor(*mygo.Window, string) (uint8, uint8, uint8, bool) { return
 
 // Linux shows no material.
 func composition(*mygo.Window) (bool, bool, bool) { return false, false, false }
+func canCompose() bool                            { return false }
 func loseComposition(bool) bool                   { return false }
 
 // WebKitGTK creates web views with their windows.
@@ -270,9 +292,8 @@ func surfaceOnScreen(w *mygo.Window) (png []byte, supported bool) {
 
 // rightClick clicks (x, y) in a window showing native UI with the
 // secondary button, through XTEST.
-func rightClick(w *mygo.Window, x, y float64) (ok bool) {
-	mygo.RunOnMain(func() { ok = linux.TestRightClickSurface(w.NativeHandle(), x, y) })
-	return ok
+func rightClick(w *mygo.Window, x, y float64) bool {
+	return fake(func() bool { return linux.TestRightClickSurface(w.NativeHandle(), x, y) })
 }
 
 // popupMenus returns the labels of the items of the context menus shown.
@@ -325,3 +346,61 @@ func endSheetButton(*mygo.Window, int) bool               { return false }
 
 // Panels' window styles are Windows'.
 func panelStyles(*mygo.Window) (bool, bool, bool, bool) { return false, false, false, false }
+
+// throttlingOff reports whether the page of w, or of its first web view,
+// is set up to keep running while it can't be seen, and how many of the
+// settings that take the platform has.
+func throttlingOff(w *mygo.Window, webView bool) (off bool, settings int) {
+	mygo.RunOnMain(func() { off, settings = linux.TestBackgroundThrottlingOff(w.NativeHandle(), webView) })
+	return off, settings
+}
+
+// mockCapture gives a window's page WebKit's mock camera and microphone.
+func mockCapture(w *mygo.Window) (ok bool) {
+	mygo.RunOnMain(func() { ok = linux.TestMockCaptureDevices(w.NativeHandle()) })
+	return ok
+}
+
+// pageGestures reports whether a swipe navigates and a pinch zooms the page
+// of a window, or with webView 0 or more, of its web view of that index.
+func pageGestures(w *mygo.Window, webView int) (swipe, pinch, ok bool) {
+	mygo.RunOnMain(func() { swipe, pinch, ok = linux.TestPageGestures(w.NativeHandle(), webView) })
+	return swipe, pinch, ok
+}
+
+// pinchPage pinches the touchpad over the page of a window, or of its web
+// view, from 1 through scales, with GDK's events, which only Wayland
+// makes.
+func pinchPage(w *mygo.Window, webView int, x, y float64, scales ...float64) (ok bool) {
+	mygo.RunOnMain(func() { ok = linux.TestPinchPage(w.NativeHandle(), webView, x, y, scales) })
+	return ok
+}
+
+// pageMenusHooked tells that the tests can right-click a page and read
+// the menu it opens, through rightClickPage, pageMenu, choosePageMenuItem
+// and dismissPageMenu.
+const pageMenusHooked = true
+
+// rightClickPage clicks (x, y) in a window's page with the secondary
+// button, through XTEST.
+func rightClickPage(w *mygo.Window, x, y float64) bool {
+	return fake(func() bool { return linux.TestRightClickPage(w.NativeHandle(), x, y) })
+}
+
+// pageMenu returns the labels of the items of the web view's context menu
+// shown over a page, "-" for separators, and whether one is shown.
+func pageMenu() (labels []string, shown bool) {
+	mygo.RunOnMain(func() { labels, shown = linux.TestPageMenu() })
+	return labels, shown
+}
+
+// choosePageMenuItem chooses an item of that menu by its label.
+func choosePageMenuItem(label string) (ok bool) {
+	mygo.RunOnMain(func() { ok = linux.TestChoosePageMenuItem(label) })
+	return ok
+}
+
+func dismissPageMenu() { mygo.RunOnMain(linux.TestDismissPageMenu) }
+
+// Only Windows' tests start a process that takes the foreground.
+func takeForeground(*mygo.Window) {}

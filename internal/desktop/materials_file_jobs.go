@@ -181,6 +181,10 @@ func (s *app) dispatchIndependentMaterialsFileAction(action application.Action) 
 	action.Payload["draftMaterialsRoot"] = scope.root
 	action.Payload["desktopRenameTaskCreatedAt"] = scope.createdAt
 	action.Payload["materialsHome"] = scope.home
+	if action.Kind == "document.read" && documentKindForPath(action.Path) == "markdown" && s.materialsWritable(action.Path, false) {
+		action.Payload["markdownEditContext"] = taskMaterialsMarkdownEditContext
+	}
+	s.captureMaterialsMarkdownReadVersion(&action)
 	if config, ok := s.materialsGitConfig(); ok {
 		action.Payload["materialsConfigScope"] = application.MaterialsGitScope(scope.home, config)
 	}
@@ -305,7 +309,7 @@ func (s *app) runMaterialsFileJob(state *materialsFileJobState, request *materia
 		resultErr = err
 		return
 	}
-	result, resultErr = request.backend.Dispatch(request.ctx, request.action)
+	result, resultErr = s.dispatchMaterialsBackend(request.ctx, request.backend, request.scope.taskPath, request.action)
 }
 
 func (request *materialsFileJob) abandonRenameLease() {

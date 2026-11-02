@@ -499,11 +499,18 @@ func devHelp() string {
 
 // devConfig configures the development app: "<Name> Dev" with the
 // identifier "<identifier>.dev", so that its data, preferences and single
-// instance lock stay apart from the production app's.
+// instance lock stay apart from the production app's, and the icon's -dev
+// sibling for its icon, when there is one, to tell it from the app's.
 func devConfig(c *Config) *Config {
 	d := *c
 	d.Name += " Dev"
 	d.Identifier += ".dev"
+	if d.Slug != "" {
+		d.Slug += "-dev"
+	}
+	if icon := c.devIcon(); icon != "" {
+		d.Icon = icon
+	}
 	return &d
 }
 
@@ -532,7 +539,7 @@ func (s *devSession) buildAndLaunch(ctx context.Context, t *task, running [32]by
 	case "windows":
 		name += ".exe"
 	default:
-		name = slugify(dc.Name)
+		name = dc.slug()
 	}
 	bin := filepath.Join(stage, name)
 	cleanup := func() {}
@@ -573,7 +580,7 @@ func (s *devSession) buildAndLaunch(ctx context.Context, t *task, running [32]by
 	}
 	var icns []byte
 	if runtime.GOOS == "darwin" {
-		if icns, err = s.icon(c); err != nil {
+		if icns, err = s.icon(dc); err != nil {
 			return nil, sum, err
 		}
 		iconFile := ""
@@ -591,13 +598,15 @@ func (s *devSession) buildAndLaunch(ctx context.Context, t *task, running [32]by
 		return nil, sum, errUnchanged
 	}
 
-	t.set("generating the TypeScript client")
-	changed, err := generateBindings(c, bin)
-	if err != nil {
-		return nil, sum, err
-	}
-	if changed {
-		logf("Wrote %s", cyan(relPathTo(c.root, c.path(c.Bindings))))
+	if c.Bindings != "" {
+		t.set("generating the TypeScript client")
+		changed, err := generateBindings(c, bin)
+		if err != nil {
+			return nil, sum, err
+		}
+		if changed {
+			logf("Wrote %s", cyan(relPathTo(c.root, c.path(c.Bindings))))
+		}
 	}
 	exe := filepath.Join(dir, name)
 	if runtime.GOOS == "darwin" {
@@ -647,11 +656,13 @@ func (s *devSession) updateI18n(c *Config) error {
 	return nil
 }
 
-// hashEntitlements writes the entitlements that sign the app and code among
-// its resources to w, to tell whether they changed.
+// hashEntitlements fingerprints the app's profile and the entitlements
+// that sign it and code among its resources.
 func hashEntitlements(w io.Writer, c *Config) error {
-	files := map[string]string{"": c.MacOS.Entitlements} // "": the app
-	maps.Copy(files, c.MacOS.HelperEntitlements)
+	files := map[string]string{"app": c.MacOS.Entitlements, "profile": c.MacOS.ProvisioningProfile}
+	for name, file := range c.MacOS.HelperEntitlements {
+		files["helper:"+name] = file
+	}
 	for _, name := range slices.Sorted(maps.Keys(files)) {
 		if files[name] == "" {
 			continue

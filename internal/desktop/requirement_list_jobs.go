@@ -18,6 +18,9 @@ func (s *app) ensureRequirementListJobs() *requirementListJobState {
 	} else if s.requirementUnit.state.requirementListJobs.snapshots == nil {
 		s.requirementUnit.state.requirementListJobs.snapshots = make(map[requirementListSnapshotKey]requirementListViewSnapshot)
 	}
+	if s.requirementUnit.state.requirementListJobs.running == nil {
+		s.requirementUnit.state.requirementListJobs.running = make(map[*requirementListJob]struct{})
+	}
 	return s.requirementUnit.state.requirementListJobs
 }
 
@@ -31,22 +34,31 @@ func (s *app) saveRequirementListSnapshot(identity requirementListIdentity, spri
 	if s.hasCompleteRequirementsEstimate() {
 		estimate = requirementsEstimateTotal(s.requirementUnit.state.requirements)
 	}
+	stamp := int64(0)
+	if s.hasRequirementSprintCatalog() {
+		stamp = state.catalogFetchedAt
+	}
 	state.snapshots[key] = requirementListViewSnapshot{
-		fetchedAt: s.requirementUnit.state.requirementsFetchedAt,
-		items:     append([]application.Requirement(nil), s.requirementUnit.state.requirements...),
-		selected:  s.requirementUnit.state.selectedRequirementKey,
-		sprints:   append([]requirementSprint(nil), s.requirementUnit.state.requirementsSprints...),
-		failures:  append([]string(nil), s.requirementUnit.state.requirementsFailures...),
-		completed: s.requirementUnit.state.requirementsCompletedQueries,
-		loadError: s.requirementUnit.state.requirementsLoadError,
-		loaded:    s.requirementUnit.state.requirementsLoaded,
-		estimate:  estimate,
+		fetchedAt:        s.requirementUnit.state.requirementsFetchedAt,
+		items:            append([]application.Requirement(nil), s.requirementUnit.state.requirements...),
+		selected:         s.requirementUnit.state.selectedRequirementKey,
+		sprints:          append([]requirementSprint(nil), s.requirementSprintCatalog()...),
+		sprintsFetchedAt: stamp,
+		failures:         append([]string(nil), s.requirementUnit.state.requirementsFailures...),
+		completed:        s.requirementUnit.state.requirementsCompletedQueries,
+		loadError:        s.requirementUnit.state.requirementsLoadError,
+		loaded:           s.requirementUnit.state.requirementsLoaded,
+		estimate:         estimate,
 	}
 }
 
 func (s *app) activateRequirementSprint(sprintKey string) {
 	if sprintKey == "" {
 		sprintKey = s.requirementUnit.state.requirementsSelectedSprintKey
+	}
+	if s.hasRequirementSprintCatalog() {
+		s.requirementUnit.state.requirementsSprints = append([]requirementSprint(nil), s.requirementSprintCatalog()...)
+		sprintKey = s.resolveRequirementSprintCatalogSelection(s.requirementUnit.state.requirementsSprints, sprintKey)
 	}
 	if sprintKey == s.requirementUnit.state.requirementsSelectedSprintKey {
 		return
@@ -57,10 +69,15 @@ func (s *app) activateRequirementSprint(sprintKey string) {
 	if state.hasIdentity && state.identity == identity {
 		s.saveRequirementListSnapshot(identity, s.requirementUnit.state.requirementsSelectedSprintKey)
 	}
-	if cached, ok := state.snapshots[requirementListSnapshotKey{identity: identity, sprint: sprintKey}]; ok {
+	if cached, ok := state.snapshots[requirementListSnapshotKey{identity: identity, sprint: sprintKey}]; ok && sprintKey != "" {
 		s.requirementUnit.state.requirementsFetchedAt = cached.fetchedAt
 		s.requirementUnit.state.requirements = append([]application.Requirement(nil), cached.items...)
-		s.requirementUnit.state.requirementsSprints = append([]requirementSprint(nil), cached.sprints...)
+		s.acceptRequirementSprintCatalog(cached.sprints, cached.sprintsFetchedAt, false)
+		if s.hasRequirementSprintCatalog() {
+			s.requirementUnit.state.requirementsSprints = append([]requirementSprint(nil), s.requirementSprintCatalog()...)
+		} else {
+			s.requirementUnit.state.requirementsSprints = append([]requirementSprint(nil), cached.sprints...)
+		}
 		s.requirementUnit.state.requirementsFailures = append([]string(nil), cached.failures...)
 		s.requirementUnit.state.requirementsCompletedQueries = cached.completed
 		s.requirementUnit.state.requirementsLoadError = cached.loadError
@@ -89,13 +106,14 @@ func (s *app) retireRequirementListRequest(state *requirementListJobState) {
 }
 
 func (s *app) startRequirementListJob(sprintKey string, refresh bool) {
-	if s.backend == nil || s.win == nil || s.win.IsDestroyed() {
+	state := s.ensureRequirementListJobs()
+	win := s.requirementListWindow(state)
+	if s.backend == nil || win == nil || win.IsDestroyed() {
 		s.requirementUnit.state.requirementsLoading = false
 		s.requirementUnit.state.requirementsLoadError = "需求列表后端或窗口不可用，请重试。"
 		s.failRequirementListProgress(s.requirementUnit.state.requirementListProgress, []string{s.requirementUnit.state.requirementsLoadError})
 		return
 	}
-	state := s.ensureRequirementListJobs()
 	state.mu.Lock()
 	closed := state.closed
 	state.mu.Unlock()
@@ -110,6 +128,10 @@ func (s *app) startRequirementListJob(sprintKey string, refresh bool) {
 		state.identity, state.hasIdentity = identity, true
 	} else if state.identity != identity {
 		s.resetRequirementListForIdentity(state, identity)
+	}
+	if refresh {
+		s.retireRequirementSprintCatalogRequest(state)
+		state.catalogAttempted = true
 	}
 
 	previousSprint := s.requirementUnit.state.requirementsSelectedSprintKey
@@ -149,6 +171,13 @@ func (s *app) startRequirementListJob(sprintKey string, refresh bool) {
 	state.current = request
 	s.bindRequirementListProgress(request)
 	state.mu.Lock()
+	if state.closed {
+		state.mu.Unlock()
+		request.cancel()
+		state.current = nil
+		s.requirementUnit.state.requirementsLoading = false
+		return
+	}
 	state.running[request] = struct{}{}
 	state.mu.Unlock()
 
@@ -164,7 +193,7 @@ func (s *app) startRequirementListJob(sprintKey string, refresh bool) {
 	s.requirementUnit.state.requirementsLoadError = ""
 	s.requirementUnit.state.requirementsFailures = nil
 	s.requirementUnit.state.requirementsCompletedQueries = 0
-	backend, win := s.backend, s.win
+	backend := s.backend
 	win.Invalidate()
 	go func() {
 		result, err := executeRequirementListJob(backend, request)
@@ -285,20 +314,86 @@ func (s *app) applyRequirementListResult(request *requirementListJob, result app
 		return
 	}
 	items, failures, completed := data.Items, data.Failures, data.CompletedQueries
-	sprints := append([]requirementSprint(nil), s.requirementUnit.state.requirementsSprints...)
-	hasSprintCatalog := data.Sprints != nil
+	sprints := append([]requirementSprint(nil), s.requirementSprintCatalog()...)
+	previousSprints := sprints
+	var sprintsFetchedAt int64
+	if data.SprintsFetchedAt != nil {
+		sprintsFetchedAt = *data.SprintsFetchedAt
+	}
+	fromCache := data.FromCache != nil && *data.FromCache
+	completeCatalog := sprintsFetchedAt > 0
+	hasSprintCatalog := data.Sprints != nil || completeCatalog
+	selectedSprintKey := ""
+	if data.SelectedSprintKey != nil {
+		selectedSprintKey = *data.SelectedSprintKey
+	}
 	if hasSprintCatalog {
 		sprints = make([]requirementSprint, 0, len(data.Sprints))
 		for _, sprint := range data.Sprints {
 			sprints = append(sprints, requirementSprint(sprint))
 		}
 	}
+	if completeCatalog {
+		s.acceptRequirementSprintCatalog(sprints, sprintsFetchedAt, !fromCache)
+	}
+	if s.hasRequirementSprintCatalog() {
+		sprints = append([]requirementSprint(nil), s.requirementSprintCatalog()...)
+	}
+	if fromCache {
+		defer s.startRequirementSprintCatalogRefresh()
+	}
+	hasCatalogTimestamp := data.SprintsFetchedAt != nil
+	hasCacheProvenance := data.FromCache != nil
+	state := s.requirementUnit.state.requirementListJobs
+	retainAvailableCatalog := !completeCatalog && len(failures) > 0 && len(previousSprints) > 0 && state != nil && state.hasIdentity &&
+		state.identity == request.identity && s.currentRequirementListIdentity() == request.identity &&
+		(s.hasRequirementSprintCatalog() || (hasCatalogTimestamp && hasCacheProvenance))
+	if retainAvailableCatalog {
+		// New DTOs explicitly mark incomplete directory reads. Before the first
+		// complete read, retain usable same-scope cached choices without assigning
+		// them an authoritative timestamp. Markerless legacy payloads keep their
+		// existing selection/failure policy.
+		sprints = previousSprints
+	}
 	resolvedSprintKey := request.sprintKey
 	if hasSprintCatalog {
-		resolvedSprintKey = ""
-		if data.SelectedSprintKey != nil {
-			resolvedSprintKey = *data.SelectedSprintKey
+		resolvedSprintKey = selectedSprintKey
+	}
+	if completeCatalog {
+		preferred := request.sprintKey
+		if preferred == "" {
+			preferred = resolvedSprintKey
 		}
+		next := s.resolveRequirementSprintCatalogSelection(sprints, preferred)
+		if !requirementSprintCatalogContains(sprints, resolvedSprintKey) || next != resolvedSprintKey {
+			// These items belong to the old/invalid selection. The target Sprint
+			// must acquire its own items through the normal list path.
+			s.requirementUnit.state.requirementsSprints = sprints
+			s.requirementUnit.state.requirements, s.requirementUnit.state.requirementsFetchedAt = nil, 0
+			s.clearRequirementListSelection()
+			s.requirementUnit.state.requirementsSelectedSprintKey = ""
+			s.requirementUnit.state.requirementsLoading, s.requirementUnit.state.requirementsLoaded = false, true
+			s.requirementUnit.state.requirementsFailures, s.requirementUnit.state.requirementsCompletedQueries, s.requirementUnit.state.requirementsLoadError = nil, 0, ""
+			s.requirementUnit.state.requirementsFocusedDetail = false
+			if p := request.progress; p != nil && s.requirementUnit.state.requirementListProgress == p {
+				p.viewSprintKey = ""
+				s.finishRequirementListProgress(request)
+			}
+			if next != "" {
+				s.requestRequirements(next, false)
+			}
+			return
+		}
+	} else if retainAvailableCatalog && request.sameSprint && request.sprintKey == s.requirementUnit.state.requirementsSelectedSprintKey &&
+		requirementSprintCatalogContains(sprints, request.sprintKey) && selectedSprintKey != request.sprintKey {
+		// An incomplete directory read cannot unbind the usable current Sprint,
+		// including a cached view shown before the first complete directory read.
+		// Foreign/unbound items cannot be relabelled as belonging to this Sprint.
+		resolvedSprintKey, items, completed = request.sprintKey, nil, 0
+	} else if s.hasRequirementSprintCatalog() && resolvedSprintKey != "" && !requirementSprintCatalogContains(sprints, resolvedSprintKey) {
+		// A legacy/partial item cache cannot revive an expired Sprint, but its
+		// existing failure/retry policy remains responsible for incomplete reads.
+		resolvedSprintKey, items, completed = "", nil, 0
 	}
 	retain := request.sameSprint && resolvedSprintKey == request.sprintKey
 	retainedItems := []application.Requirement(nil)

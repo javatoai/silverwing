@@ -36,7 +36,7 @@ func (s *app) materialsGitBranchReady(branch string) bool {
 
 func (s *app) observeMaterialsGitBranches() {
 	state := s.materialsUnit.state.materialsGitBranches
-	if state != nil && (s.page != "settings" || s.settingsUnit.state.settingsPage != "paths") {
+	if state != nil && (s.page != "settings" || s.settingsUnit.state.settingsPage != "materials-sync" && s.settingsUnit.state.settingsPage != "paths") {
 		state.visible = false
 	}
 	if state != nil && !s.materialsGitScopeCurrent(state.scope) && state.cancel != nil {

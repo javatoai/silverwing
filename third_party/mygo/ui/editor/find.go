@@ -418,7 +418,7 @@ func (g *goToLine) show(ed *editor) {
 func (g *goToLine) close(ed *editor) {
 	g.open = false
 	ed.setScroll(g.savedY)
-	ed.scrollX = g.savedX
+	ed.setScrollXShared(g.savedX)
 	g.preview = -1
 	ed.refocus = true
 }

@@ -140,17 +140,22 @@ func TestMaterialsSettingsRefinementLayout(t *testing.T) {
 				scope := application.MaterialsGitScope(s.snapshot.Home, cfg)
 				s.materialsUnit.state.materialsGit.scope = scope
 				s.materialsUnit.state.materialsGitBranches = &materialsGitBranchesState{scope: scope, loaded: true, branches: []string{cfg.MaterialsGitSync.Branch, "master"}}
-				tt := ui.NewTester(func(c *ui.Context) {
+				paths := ui.NewTester(func(c *ui.Context) {
 					p := setTheme(c, dark)
 					ui.Scroll(c).Fill().Padding(24).Gap(14).Background(p.bg).Children(func() { s.settingsPaths(c, p) })
 				}, width, 1000)
-				for _, text := range []string{"Git 自动同步", "Git 仓库地址", "选择同步分支", "同步周期（分钟）", "默认展开目录层级"} {
-					assertSettingsVisibleBounds(t, tt, text, width, 1000)
-				}
+				assertSettingsVisibleBounds(t, paths, "默认展开目录层级", width, 1000)
 				for _, text := range []string{"飞书同步目标", "默认展开二级目录文件夹", "Lark CLI"} {
-					if tt.HasText(text) {
+					if paths.HasText(text) {
 						t.Fatalf("retired setting visible: %s", text)
 					}
+				}
+				tt := ui.NewTester(func(c *ui.Context) {
+					p := setTheme(c, dark)
+					ui.Scroll(c).Fill().Padding(24).Gap(14).Background(p.bg).Children(func() { s.settingsMaterialsGitSync(c, p) })
+				}, width, 1000)
+				for _, text := range []string{"Git 自动同步", "Git 仓库地址", "选择同步分支", "同步周期（分钟）"} {
+					assertSettingsVisibleBounds(t, tt, text, width, 1000)
 				}
 				captureDesktopTestFrame(t, tt, fmt.Sprintf("materials-refinement-%d-dark-%t", width, dark))
 				if err := tt.Click("选择同步分支"); err != nil {

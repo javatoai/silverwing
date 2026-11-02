@@ -76,6 +76,22 @@ type FlyoutOptions struct {
 	Gap int
 	// Width and Height of the flyout in DIPs (default 200x200).
 	Width, Height int
+	// FitContent sizes the flyout to its page's content, and follows it
+	// as it changes, as browsers size the popups of their extensions:
+	// Width and Height are its size until the page tells its own, which
+	// it does before its DOM is ready. The page's root element (html) is
+	// laid out at the width of its content, within MinWidth and MaxWidth,
+	// at which its text wraps; its height is its content's, the body's
+	// margins included, within MinHeight and MaxHeight, beyond which the
+	// page scrolls. A page that gives html a size of its own, as
+	// height: 100%, keeps the flyout at that size. Native UI (Content)
+	// does not fit.
+	FitContent bool
+	// MinWidth, MinHeight, MaxWidth and MaxHeight bound the size
+	// FitContent gives the flyout, in DIPs; 0 is no bound. The work area
+	// bounds it too, as it bounds any flyout.
+	MinWidth, MinHeight int
+	MaxWidth, MaxHeight int
 	// Focusable makes the flyout take the keyboard as it shows, and close
 	// as a menu does when the user presses outside it, another window
 	// takes the keyboard or the app is deactivated: OnClose listeners
@@ -114,8 +130,18 @@ type FlyoutOptions struct {
 	// the keyboard while it shows, Focusable or not, which makes it close
 	// as the user clicks elsewhere. Its content draws no background there
 	// (ui.Context.Vibrancy reports the material): elsewhere, where Popover
-	// changes nothing, it draws its own.
+	// changes nothing, it draws its own. A Tray's icon is highlighted while
+	// its popover shows, as a status item is while its menu does.
 	Popover bool
+	// Vibrancy puts a translucent, blurred material behind the flyout's
+	// content, as WindowOptions.Vibrancy does behind a window's: the
+	// content draws no background where the material shows
+	// (ui.Context.Vibrancy reports it). A Popover has its own.
+	Vibrancy Vibrancy
+	// CornerRadius rounds the flyout's corners on macOS, in DIPs: its
+	// material and content are cut to them, and its Shadow follows them.
+	// Windows 11 rounds flyouts as it rounds its menus; Linux does not.
+	CornerRadius int
 
 	// URL is loaded right after the flyout is created, as
 	// WindowOptions.URL.
@@ -141,6 +167,13 @@ func NewFlyout(opts FlyoutOptions) *Window {
 	if err != nil {
 		panic(err)
 	}
+	var fit *fitContent
+	if opts.FitContent {
+		fit = &fitContent{
+			min: platform.Size{Width: opts.MinWidth, Height: opts.MinHeight},
+			max: platform.Size{Width: opts.MaxWidth, Height: opts.MaxHeight},
+		}
+	}
 	return createWindow("NewFlyout", WindowOptions{
 		URL:               opts.URL,
 		Width:             or(opts.Width, 200),
@@ -158,14 +191,16 @@ func NewFlyout(opts FlyoutOptions) *Window {
 		Page:              opts.Page,
 		Content:           opts.Content,
 		Hidden:            opts.Hidden,
-	}, nil, &flyoutOptions{fo, opts.Tray})
+		Vibrancy:          opts.Vibrancy,
+	}, nil, &flyoutOptions{fo, opts.Tray, fit})
 }
 
 // flyoutOptions carries what newWindow needs of a flyout: its tray's
-// native icon is read on the main thread.
+// native icon is read on the main thread, and FitContent's limits.
 type flyoutOptions struct {
 	flyout *platform.Flyout
 	tray   *Tray
+	fit    *fitContent
 }
 
 func (o *FlyoutOptions) platform() (*platform.Flyout, error) {
@@ -180,6 +215,7 @@ func (o *FlyoutOptions) platform() (*platform.Flyout, error) {
 		Gap:       o.Gap,
 		Focusable: o.Focusable,
 		Popover:   o.Popover,
+		Radius:    o.CornerRadius,
 	}, nil
 }
 

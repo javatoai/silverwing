@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"silverwing-go/internal/application"
 )
@@ -26,14 +27,30 @@ type settingsExtensionReadJob struct {
 // The window owns current requests and presentation tokens. Workers share only
 // running: canceled/replaced requests stay there until their backend exits.
 type settingsExtensionJobs struct {
-	current map[string]*settingsExtensionReadJob
-	mu      sync.Mutex
-	running map[*settingsExtensionReadJob]struct{}
-	closed  bool
+	current     map[string]*settingsExtensionReadJob
+	mu          sync.Mutex
+	running     map[*settingsExtensionReadJob]struct{}
+	closed      bool
+	branchTimer *time.Timer // protected by mu; shutdown can stop a pending form read
+}
+
+func ensureSettingsExtensionJobs(state *settingsExtensionRequestState) *settingsExtensionJobs {
+	if state.jobs == nil {
+		state.jobs = &settingsExtensionJobs{current: make(map[string]*settingsExtensionReadJob), running: make(map[*settingsExtensionReadJob]struct{})}
+	}
+	return state.jobs
 }
 
 func (s *app) settingsExtensionCurrentScope() settingsExtensionReadScope {
 	return settingsExtensionReadScope{home: s.snapshot.Home, config: s.settingsUnit.state.configJSON, page: s.page, settingsPage: s.settingsUnit.state.settingsPage}
+}
+
+func (s *app) settingsExtensionActionScope(action application.Action) settingsExtensionReadScope {
+	scope := s.settingsExtensionCurrentScope()
+	if extensionBranchesRead(action.Kind) {
+		scope.config = ""
+	}
+	return scope
 }
 
 func (s *app) beginSettingsExtensionRead(action application.Action) (*settingsExtensionReadJob, error) {
@@ -41,13 +58,11 @@ func (s *app) beginSettingsExtensionRead(action application.Action) (*settingsEx
 		return nil, errors.New("这不是设置扩展读取请求。")
 	}
 	state := s.ensureSettingsExtensionRequests()
-	if state.jobs == nil {
-		state.jobs = &settingsExtensionJobs{current: make(map[string]*settingsExtensionReadJob), running: make(map[*settingsExtensionReadJob]struct{})}
-	}
+	ensureSettingsExtensionJobs(state)
 	s.prepareSettingsExtensionRead(&action)
 	ctx, cancel := context.WithCancel(context.Background())
 	request := &settingsExtensionReadJob{action: action, key: settingsExtensionReadKey(action),
-		scope: s.settingsExtensionCurrentScope(), owner: state.jobs, ctx: ctx, cancel: cancel, done: make(chan struct{})}
+		scope: s.settingsExtensionActionScope(action), owner: state.jobs, ctx: ctx, cancel: cancel, done: make(chan struct{})}
 	if !s.settingsExtensionActionRelevant(action) {
 		cancel()
 		return request, errors.New("设置扩展读取的页面或来源已变化，请重新读取。")
@@ -68,7 +83,7 @@ func (s *app) beginSettingsExtensionRead(action application.Action) (*settingsEx
 func (s *app) settingsExtensionReadRelevant(request *settingsExtensionReadJob) bool {
 	state := s.settingsUnit.state.settingsExtensionRequests
 	if request == nil || state == nil || state.jobs != request.owner || request.owner.current[request.key] != request ||
-		request.ctx.Err() != nil || request.scope != s.settingsExtensionCurrentScope() || !s.settingsExtensionActionRelevant(request.action) {
+		request.ctx.Err() != nil || request.scope != s.settingsExtensionActionScope(request.action) || !s.settingsExtensionActionRelevant(request.action) {
 		return false
 	}
 	request.owner.mu.Lock()
@@ -182,6 +197,10 @@ func (s *settingsController) closeSettingsExtensionReads(ctx context.Context) er
 	jobs := state.jobs
 	jobs.mu.Lock()
 	jobs.closed = true
+	if jobs.branchTimer != nil {
+		jobs.branchTimer.Stop()
+		jobs.branchTimer = nil
+	}
 	running := make([]*settingsExtensionReadJob, 0, len(jobs.running))
 	for request := range jobs.running {
 		request.cancel()

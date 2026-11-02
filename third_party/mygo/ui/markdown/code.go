@@ -37,6 +37,8 @@ type codeState struct {
 	chunks   []codeChunk
 	copiedAt time.Time
 	seen     bool
+	// The select's value survives its native input pass without owning text.
+	languageSelection string
 }
 
 // codeChunk is chunkLines lines of a code block, laid out as one text, so
@@ -92,11 +94,19 @@ func DefaultCodeBlock(c *ui.Context, b *CodeBlockView) ui.Element {
 	return box.Children(func() {
 		head := ui.Row(c).AlignItems(ui.Center).Padding(th.em(0.35), th.em(0.4), 0, th.em(th.CodeBlockPadding))
 		head.Children(func() {
-			ui.Text(c, b.Language).FontSize(th.em(0.8)).TextColor(th.Muted).Unselectable()
-			ui.Spacer(c)
+			if s := b.st.editor; s != nil && s.opts.InPlaceCode && !s.SourceMode {
+				ui.Spacer(c)
+				b.LanguageSelect(c)
+			} else {
+				ui.Text(c, b.Language).FontSize(th.em(0.8)).TextColor(th.Muted).Unselectable()
+				ui.Spacer(c)
+			}
 			b.CopyButton(c)
 		})
-		b.Body(c)
+		// Balance the header's room with a display-only line below the code.
+		// Keep this inside the body viewport so its scrollbar stays at the edge;
+		// actual empty source lines, copying and native caret rows are unchanged.
+		b.Body(c).Padding(0, 0, th.em(th.CodeSize*th.CodeLineHeight), 0)
 	})
 }
 
@@ -121,6 +131,9 @@ func (b *CodeBlockView) CopyButton(c *ui.Context) ui.Element {
 	copied := !cs.copiedAt.IsZero() && c.Now().Sub(cs.copiedAt) < 2*time.Second
 	tx := l10n.In(c.Locale())
 	btn := ui.ButtonBase(c).Padding(th.em(0.2), th.em(0.45)).Radius(5).Gap(th.em(0.3)).Label(tx.CopyCode()).Disabled(b.Open)
+	if st.editor != nil && st.editor.opts.InPlaceCode && !st.editor.SourceMode {
+		btn.HandleInput(codeControlInput)
+	}
 	if btn.Hovered() && !b.Open {
 		btn.Background(th.Text.Alpha(0.08))
 	}
@@ -154,6 +167,9 @@ func (b *CodeBlockView) CopyButton(c *ui.Context) ui.Element {
 // text, scrolling sideways unless Options.WrapCode.
 func (b *CodeBlockView) Body(c *ui.Context) ui.Element {
 	st := b.st
+	if s := st.editor; s != nil && s.codeKeepsCard(b.Index) {
+		return s.codeBody(c, b.Index)
+	}
 	th := &st.th
 	cs := st.codeState(b.Index)
 	st.highlight(cs, b.Index)
@@ -190,16 +206,23 @@ func (b *CodeBlockView) Body(c *ui.Context) ui.Element {
 func (st *viewState) highlight(cs *codeState, i int) {
 	d := st.doc
 	n := d.LineCount(i)
+	st.highlightLines(cs, n, func(k int) string { line, _ := d.Line(i, k); return line })
+}
+
+// The live editor supplies virtual preedit lines to the same token cache used
+// by the reader; no second source buffer or editor is created for a card.
+func (st *viewState) highlightLines(cs *codeState, n int, lineAt func(int) string) {
 	// The first line that differs from those tokenized.
 	k0 := 0
 	for k0 < n && k0 < len(cs.lines) {
-		line, _ := d.Line(i, k0)
+		line := lineAt(k0)
 		if line != cs.lines[k0] {
 			break
 		}
 		k0++
 	}
-	if k0 == n && len(cs.lines) == n && len(cs.chunks) == (n+chunkLines-1)/chunkLines {
+	chunks := max(1, (n+chunkLines-1)/chunkLines)
+	if k0 == n && len(cs.lines) == n && len(cs.chunks) == chunks {
 		return
 	}
 	cs.lines, cs.ends, cs.toks = cs.lines[:k0], cs.ends[:k0], cs.toks[:k0]
@@ -208,7 +231,7 @@ func (st *viewState) highlight(cs *codeState, i int) {
 		state = cs.ends[k0-1]
 	}
 	for k := k0; k < n; k++ {
-		line, _ := d.Line(i, k)
+		line := lineAt(k)
 		var toks []editor.Token
 		if cs.tok != nil {
 			toks, state = cs.tok.Tokenize(line, state, nil)
@@ -216,10 +239,6 @@ func (st *viewState) highlight(cs *codeState, i int) {
 		cs.lines = append(cs.lines, line)
 		cs.ends = append(cs.ends, state)
 		cs.toks = append(cs.toks, toks)
-	}
-	chunks := (n + chunkLines - 1) / chunkLines
-	if n == 0 {
-		chunks = 1
 	}
 	for len(cs.chunks) < chunks {
 		cs.chunks = append(cs.chunks, codeChunk{})

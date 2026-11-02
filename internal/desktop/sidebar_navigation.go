@@ -27,7 +27,7 @@ func (s *app) sidebarNavigationItems() []sidebarNavigationItem {
 
 func (s *app) reconcileSidebarNavigation() {
 	if s.page == "skills" {
-		s.page, s.settingsUnit.state.settingsTab, s.settingsUnit.state.settingsPage = "settings", "skill", "skill-local"
+		s.page, s.settingsUnit.state.settingsTab, s.settingsUnit.state.settingsPage = "settings", "AI 与扩展", "skill-local"
 		s.settingsUnit.state.settingsLoaded = ""
 	}
 	if s.loading {
@@ -38,11 +38,11 @@ func (s *app) reconcileSidebarNavigation() {
 	}
 	if s.page == "tags" {
 		s.page = "tasks"
-		s.tab = taskTagTab
+		s.selectTaskContentTab(taskTagTab)
 	}
 	if s.page == "tools" && len(s.visibleDeveloperToolTabs()) == 0 {
 		s.page = "settings"
-		s.settingsUnit.state.settingsTab = "快捷工具"
+		s.settingsUnit.state.settingsTab = "外观与交互"
 		s.settingsUnit.state.settingsPage = "tool-visibility"
 		s.settingsUnit.state.settingsLoaded = ""
 	}

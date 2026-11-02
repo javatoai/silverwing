@@ -5,9 +5,9 @@ package mygo
 import (
 	"encoding/json/v2"
 	"testing"
-	"time"
 
 	"github.com/egoist/mygo/internal/platform"
+	"github.com/egoist/mygo/internal/wait"
 )
 
 func TestNetwork(t *testing.T) {
@@ -31,13 +31,7 @@ func TestNetwork(t *testing.T) {
 		mainOK = mainOK && isMainThread()
 	})
 	defer off()
-	deadline := time.Now().Add(time.Second)
-	for !onMainValue(func() bool { return fb.WatchingNetwork }) {
-		if time.Now().After(deadline) {
-			t.Fatal("the backend was not asked to watch the network")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	wait.Until(t, "the backend asked to watch the network", func() bool { return onMainValue(func() bool { return fb.WatchingNetwork }) })
 
 	// The status when watching started is the one changes are told from,
 	// and a report that changes nothing calls no listener.

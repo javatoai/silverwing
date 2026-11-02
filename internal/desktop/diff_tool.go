@@ -18,8 +18,8 @@ func (s *app) renderDiffTool(c *ui.Context, p palette, state *toolPageState) {
 		state.syncDiffEditableDecorations(p)
 		s.renderDiffToolToolbar(c, p, state)
 		// Keep the splitter ratio in the tool state so resizing survives tab
-		// switches and rebuilding either editor pane. Scroll only vertically;
-		// each side keeps its own horizontal reading position.
+		// switches and rebuilding either editor pane. Both scroll axes keep
+		// corresponding code positions aligned between the two inputs.
 		s.syncDiffEditableScroll(state)
 		ui.SplitRatio(c.Key("tool-diff-editable-split"), &state.diffSplitRatio,
 			func() { s.diffEditor(c, p, state, "左侧文本", "tool-diff-left", &state.diffLeft) },
@@ -145,18 +145,22 @@ func (s *app) renderDiffToolToolbar(c *ui.Context, p palette, state *toolPageSta
 }
 
 func (s *app) syncDiffEditableScroll(state *toolPageState) {
+	extent := max(state.diffInputHistory[0].view.HorizontalExtent(), state.diffInputHistory[1].view.HorizontalExtent())
+	for side := range state.diffInputHistory {
+		state.diffInputHistory[side].view.MinHorizontalExtent = extent
+	}
 	positions := [2]editor.ScrollPosition{
 		state.diffInputHistory[0].view.ScrollPosition(),
 		state.diffInputHistory[1].view.ScrollPosition(),
 	}
 	active := state.diffSharedScrollSide
 	if !state.diffObservedScrollReady {
-		if positions[0].Y == 0 && positions[1].Y != 0 {
+		if positions[0].Y == 0 && positions[0].X == 0 && (positions[1].Y != 0 || positions[1].X != 0) {
 			active = 1
 		}
 	} else {
-		leftMoved := math.Abs(positions[0].Y-state.diffObservedScrollY[0]) > 0.5
-		rightMoved := math.Abs(positions[1].Y-state.diffObservedScrollY[1]) > 0.5
+		leftMoved := math.Abs(positions[0].Y-state.diffObservedScrollY[0]) > 0.5 || math.Abs(float64(positions[0].X-state.diffObservedScrollX[0])) > .5
+		rightMoved := math.Abs(positions[1].Y-state.diffObservedScrollY[1]) > 0.5 || math.Abs(float64(positions[1].X-state.diffObservedScrollX[1])) > .5
 		switch {
 		case leftMoved && !rightMoved:
 			active = 0
@@ -170,14 +174,19 @@ func (s *app) syncDiffEditableScroll(state *toolPageState) {
 	}
 
 	target := 1 - active
-	if math.Abs(positions[target].Y-positions[active].Y) > 0.5 {
+	if math.Abs(positions[target].Y-positions[active].Y) > 0.5 || math.Abs(float64(positions[target].X-positions[active].X)) > .5 {
 		positions[target].Y = positions[active].Y
+		positions[target].X = positions[active].X
 		state.diffInputHistory[target].view.SetScrollPosition(positions[target])
 	}
 	state.diffSharedScrollSide = active
 }
 
 func (s *app) recordDiffEditableScroll(state *toolPageState) {
+	state.diffObservedScrollX = [2]float32{
+		state.diffInputHistory[0].view.ScrollPosition().X,
+		state.diffInputHistory[1].view.ScrollPosition().X,
+	}
 	state.diffObservedScrollY = [2]float64{
 		state.diffInputHistory[0].view.ScrollPosition().Y,
 		state.diffInputHistory[1].view.ScrollPosition().Y,

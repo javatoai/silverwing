@@ -128,6 +128,9 @@ func materialTextEditorFixture(t *testing.T, files map[string]string) (*app, *ma
 	contents := make(map[string]documents.Content)
 	for name, source := range files {
 		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(path, []byte(source), 0600); err != nil {
 			t.Fatal(err)
 		}

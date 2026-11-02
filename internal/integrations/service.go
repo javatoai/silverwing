@@ -79,6 +79,8 @@ func (s *Service) Execute(ctx context.Context, kind string, payload map[string]a
 		return s.listRequirements(ctx, config, payload, false)
 	case "requirements.refresh":
 		return s.listRequirements(ctx, config, payload, true)
+	case "requirements.sprints-refresh":
+		return s.refreshRequirementSprints(ctx, config, payload)
 	case "requirements.read":
 		return s.readRequirement(ctx, config, payload)
 	case "requirements.metadata":

@@ -47,6 +47,14 @@ func (a *App) localTaskRulesAction(ctx context.Context, action Action) (ActionRe
 	if !strings.EqualFold(latestRoot, root) || latest.CreatedAt != manifest.CreatedAt {
 		return ActionResult{}, errors.New("任务身份或目录已变化，请重新打开需求说明")
 	}
-	content, err := a.Documents.SaveTaskRules(ctx, root, path, action.Text, textPayload(action, "expectedHash"), boolPayload(action, "expectedExists"))
+	expectedHash, expectedExists := textPayload(action, "expectedHash"), boolPayload(action, "expectedExists")
+	if boolPayload(action, "overwrite") {
+		current, readErr := a.Documents.ReadTaskRules(root, path)
+		if readErr != nil {
+			return ActionResult{}, readErr
+		}
+		expectedHash, expectedExists = current.Hash, current.Exists
+	}
+	content, err := a.Documents.SaveTaskRules(ctx, root, path, action.Text, expectedHash, expectedExists)
 	return ActionResult{Message: "需求说明已保存", Path: content.Path, Text: content.Text, Data: content}, err
 }

@@ -102,8 +102,7 @@ func TestTagFailureDisclosureAndChecks(t *testing.T) {
 	if err := tester.Click("Tag 失败详情 · conflict"); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(220 * time.Millisecond)
-	tester.Frame()
+	tester.Advance(220 * time.Millisecond)
 	if tester.HasText(record.Detail) || tester.HasText(record.Guidance) || tester.HasText("解决冲突后提交并推送") {
 		t.Fatal("expanded details repeated the raw error or long recovery guidance")
 	}
@@ -116,16 +115,14 @@ func TestTagFailureDisclosureAndChecks(t *testing.T) {
 	captureTagFailure(t, tester, "failure-expanded-wide")
 	// The native disclosure retains focus and responds to the keyboard.
 	tester.Key(0, ui.KeySpace)
-	time.Sleep(220 * time.Millisecond)
-	tester.Frame()
+	tester.Advance(220 * time.Millisecond)
 	if tester.HasText(prompt) {
 		t.Fatal("Space did not collapse focused disclosure")
 	}
 	if err := tester.Click("Tag 失败详情 · conflict"); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(220 * time.Millisecond)
-	tester.Frame()
+	tester.Advance(220 * time.Millisecond)
 	if err := tester.Click("复制处理提示 · conflict"); err != nil {
 		t.Fatal(err)
 	}
@@ -229,8 +226,7 @@ func TestTagFailureNarrowDetailsEnd(t *testing.T) {
 	if err := tester.Click("Tag 失败详情 · conflict"); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(220 * time.Millisecond)
-	tester.Frame()
+	tester.Advance(220 * time.Millisecond)
 	tester.Scroll(180, 400, 0, 100000)
 	tester.Frame()
 	end, ok := tester.Find(" M src/末尾检查证据.go")

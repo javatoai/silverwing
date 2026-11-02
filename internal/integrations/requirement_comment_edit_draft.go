@@ -140,6 +140,9 @@ func (s *Service) requirementCommentEditDraft(ctx context.Context, config domain
 			return nil, errors.New("修改结果待核对，请先核对原评论；不会自动重新保存")
 		}
 	}
+	if err = commentDraftOperationContent(&d, p, op); err != nil {
+		return nil, err
+	}
 	switch op {
 	case "load", "reload":
 		if op == "reload" && !boolValue(p, "confirmed") {
@@ -165,17 +168,23 @@ func (s *Service) requirementCommentEditDraft(ctx context.Context, config domain
 			return nil, errors.New("当前 Meegle 账号信息不完整")
 		}
 		d.Scope, d.Item, d.Account = scope, item, identity[4]
+		if err = normalizeLoadedCommentDraft(&d); err != nil {
+			return nil, err
+		}
 	case "save":
 		body, _ := p["content"].(string)
 		if len(body) > 2<<20 {
 			return nil, errors.New("评论文字不能超过 2 MB")
 		}
 		d.Content, d.Attempt = body, nil
+		if len(d.ActiveImages()) > 20 {
+			return nil, errors.New("每条评论最多添加 20 张图片")
+		}
 	case "add-image", "add-attachment", "paste":
 		if op == "add-attachment" && d.Attachment != nil {
 			return nil, errors.New("每条评论只能添加一个附件，请先移除原附件")
 		}
-		if op != "add-attachment" && len(d.Images) >= 20 {
+		if op != "add-attachment" && !commentCanStageImage(d, p) {
 			return nil, errors.New("每条评论最多添加 20 张图片")
 		}
 		png, _ := p["imagePNG"].([]byte)
@@ -189,22 +198,12 @@ func (s *Service) requirementCommentEditDraft(ctx context.Context, config domain
 		if op == "add-attachment" {
 			d.Attachment = &a
 		} else {
-			d.Images = append(append([]domain.CommentDraftAsset{}, d.Images...), a)
+			commentStageImage(&d, a, boolValue(p, "inlineImage"))
 		}
 		d.Attempt = nil
 	case "remove":
 		id := stringValue(p, "assetID")
-		images := []domain.CommentDraftAsset{}
-		for _, a := range d.Images {
-			if a.ID == id {
-				if a.OriginalURL != "" {
-					d.Content = editor.RewriteCommentImages(d.Content, map[string]*string{a.OriginalURL: nil})
-				}
-			} else {
-				images = append(images, a)
-			}
-		}
-		d.Images = images
+		commentRemoveImageReferences(&d, id)
 		if d.Attachment != nil && d.Attachment.ID == id {
 			d.Attachment = nil
 		}
@@ -218,6 +217,9 @@ func (s *Service) requirementCommentEditDraft(ctx context.Context, config domain
 		d.Edit = &domain.CommentEditTarget{CommentID: commentID}
 	default:
 		return nil, errors.New("未知评论编辑稿操作")
+	}
+	if !d.Pending() && len(d.ActiveImages()) > 20 {
+		return nil, errors.New("每条评论最多添加 20 张图片")
 	}
 	// A slow read/download cannot persist a new target's state or discard the
 	// original draft after configuration/session replacement.

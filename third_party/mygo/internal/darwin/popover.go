@@ -81,6 +81,15 @@ func (w *window) showPopover() {
 	msgSetSize(w.popover, sel("setContentSize:"), NSSize{float64(w.flyoutSize.Width), float64(w.flyoutSize.Height)})
 	msgRectIDUint(w.popover, sel("showRelativeToRect:ofView:preferredEdge:"), r, view, edge)
 	w.adoptPopoverWindow()
+	w.highlightTray(true)
+}
+
+// highlightTray highlights the tray icon a popover shows from while it
+// shows, as AppKit's status items are while their menus show.
+func (w *window) highlightTray(on bool) {
+	if t, ok := w.flyout.Tray.(*tray); ok && t.item != 0 {
+		send(t.button, "highlight:", boolArg(on))
+	}
 }
 
 // adoptPopoverWindow makes the window the popover shows in the flyout's.
@@ -142,6 +151,7 @@ func (w *window) cleanupPopover() {
 	w.forgetPopoverWindow()
 	send(w.popover, "setDelegate:", 0)
 	if sendBool(w.popover, "isShown") {
+		w.highlightTray(false)
 		send(w.popover, "setAnimates:", 0)
 		send(w.popover, "close")
 	}
@@ -171,6 +181,7 @@ func popoverDelegateMethods() []objc.MethodDef {
 			if w == nil {
 				return
 			}
+			w.highlightTray(false)
 			w.forgetPopoverWindow()
 			if w.popoverClosing {
 				w.popoverClosing = false
@@ -182,23 +193,33 @@ func popoverDelegateMethods() []objc.MethodDef {
 	}
 }
 
-// pressed reports whether the event being handled is a press on the
-// icon's button.
+// pressed reports whether the user is pressing the icon's button: the
+// event being handled is a press on it, or a mouse button is down with the
+// pointer over it, as when the app hears of the press only after it made
+// the app resign, or in a monitor of other apps' events, which the menu
+// bar's are on recent macOS.
 func (t *tray) pressed() bool {
-	ev := send(t.b.app, "currentEvent")
-	if ev == 0 || t.item == 0 {
-		return false
-	}
-	switch sendInt(ev, "type") {
-	case 1, 3: // NSEventTypeLeftMouseDown, RightMouseDown
-	default:
+	if t.item == 0 {
 		return false
 	}
 	win := send(t.button, "window")
-	if win == 0 || send(ev, "window") != win {
+	if win == 0 {
 		return false
 	}
-	p := msgPointFromView(t.button, sel("convertPoint:fromView:"), msgPoint(ev, sel("locationInWindow")), 0)
-	b := msgRect(t.button, sel("bounds"))
-	return p.X >= b.Origin.X && p.Y >= b.Origin.Y && p.X < b.Origin.X+b.Size.Width && p.Y < b.Origin.Y+b.Size.Height
+	if ev := send(t.b.app, "currentEvent"); ev != 0 && send(ev, "window") == win {
+		switch sendInt(ev, "type") {
+		case 1, 3: // NSEventTypeLeftMouseDown, RightMouseDown
+			p := msgPointFromView(t.button, sel("convertPoint:fromView:"), msgPoint(ev, sel("locationInWindow")), 0)
+			return inRect(p, msgRect(t.button, sel("bounds")))
+		}
+	}
+	if send(class("NSEvent"), "pressedMouseButtons") == 0 {
+		return false
+	}
+	return inRect(msgPoint(class("NSEvent"), sel("mouseLocation")), msgRect(win, sel("frame")))
+}
+
+// inRect reports whether p is in r, its far edges excluded.
+func inRect(p NSPoint, r NSRect) bool {
+	return p.X >= r.Origin.X && p.Y >= r.Origin.Y && p.X < r.Origin.X+r.Size.Width && p.Y < r.Origin.Y+r.Size.Height
 }

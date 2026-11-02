@@ -135,10 +135,17 @@ func (c *Config) resourcesWith(goos, goarch string, natives []source, reserved .
 	}
 	var top []source
 	platforms := map[string]bool{}
+	devIcon := ""
+	if icon := c.devIcon(); icon != "" {
+		devIcon = filepath.Clean(c.path(icon))
+	}
 	for _, e := range entries {
 		name, path := e.Name(), filepath.Join(dir, e.Name())
 		if hiddenName(name) {
 			continue
+		}
+		if filepath.Clean(path) == devIcon {
+			continue // the development app's icon, which no app reads
 		}
 		if _, _, ok := platformDir(name); ok {
 			if !isDir(path) {
@@ -535,9 +542,9 @@ func reservedNames(c *Config, goos string) []string {
 		}
 		return []string{bundleIcon}
 	case "windows":
-		return []string{c.executableName() + ".exe"}
+		return []string{c.executableName() + ".exe", installPS1Name}
 	}
-	name := slugify(c.executableName())
+	name := c.slug()
 	return []string{name, name + ".desktop", name + ".png", name + ".xml", installScriptName}
 }
 

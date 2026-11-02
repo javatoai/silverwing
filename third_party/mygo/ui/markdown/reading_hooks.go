@@ -15,6 +15,7 @@ type TextBlock struct {
 
 func TextBlocks(doc *parser.Document) []TextBlock {
 	st := newState()
+	st.o = &defaultOptions
 	st.doc = doc
 	st.th = *DefaultTheme(&ui.Theme{FontSize: 15})
 	st.sb.d, st.sb.th = doc, &st.th

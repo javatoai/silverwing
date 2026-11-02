@@ -567,6 +567,7 @@ func registerAccessClass() {
 		"accessibilityPerformIncrement": platform.ActionIncrement,
 		"accessibilityPerformDecrement": platform.ActionDecrement,
 		"setAccessibilityValue:":        platform.ActionSetValue,
+		"setAccessibilitySelectedText:": platform.ActionSetValue,
 		"setAccessibilityFocused:":      platform.ActionFocus,
 		"setAccessibilityDisclosed:":    platform.ActionExpand,
 	}
@@ -630,6 +631,8 @@ func registerAccessClass() {
 			switch stringOf(attr) {
 			case "AXValue":
 				return !textual(el.node.Role) || el.node.Actions&platform.ActionSetValue != 0
+			case "AXSelectedText":
+				return textual(el.node.Role) && el.node.Actions&platform.ActionSetValue != 0
 			case "AXFocused":
 				return true
 			case "AXDisclosing":
@@ -709,6 +712,14 @@ func registerAccessClass() {
 			sendSuper(self, "MyGoAccessibilityElement", cmd, uintptr(value))
 			if el := b().accessElementOf(self); el != nil && textual(el.node.Role) {
 				el.act(platform.AccessSetValue, stringOf(value))
+			}
+		}),
+		// Typing into a text field over its selection, as Voice Control,
+		// dictation and automation insert text (kAXSelectedTextAttribute).
+		method("setAccessibilitySelectedText:", func(self id, cmd objc.SEL, text id) {
+			sendSuper(self, "MyGoAccessibilityElement", cmd, uintptr(text))
+			if el := b().accessElementOf(self); el != nil && textual(el.node.Role) && el.node.Actions&platform.ActionSetValue != 0 {
+				el.act(platform.AccessInsertText, stringOf(text))
 			}
 		}),
 		// Moving the selection of a text field, as VoiceOver does.

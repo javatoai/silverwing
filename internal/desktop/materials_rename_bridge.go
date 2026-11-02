@@ -27,6 +27,9 @@ func (s *app) applyMaterialsRenameResult(action application.Action, result appli
 		return
 	}
 	previous, replacement := operation.PreviousRelativePath, operation.RelativePath
+	if s.taskUnit.currentTask().id == action.TaskID {
+		s.captureMarkdownViewMemory(s.materialsUnit.state.markdown)
+	}
 	s.remapMaterialTextEditors(task.id, task.path, task.materialsPath, oldPath, newPath)
 	s.remapMaterialsReading(task.path, task.materialsPath, previous, replacement)
 	if s.taskUnit.currentTask().id != action.TaskID {
@@ -48,7 +51,7 @@ func (s *app) applyMaterialsRenameResult(action application.Action, result appli
 		s.materialsUnit.state.documentPath = selectedPath
 		s.materialsUnit.state.documentKind = documentKindForPath(selectedPath)
 		if s.materialsUnit.state.markdown != nil {
-			s.materialsUnit.state.markdown.path = remap(s.materialsUnit.state.markdown.path)
+			s.rebindMaterialsMarkdownPath(s.materialsUnit.state.markdown, remap(s.materialsUnit.state.markdown.path), task.materialsPath)
 			if s.materialsUnit.state.documentKind != "markdown" {
 				s.syncMarkdownEditor()
 				s.closeMarkdownEditor()
@@ -236,6 +239,7 @@ func (s *app) remapMaterialsReading(taskPath, root, previous, replacement string
 		}
 		for path, position := range record.Files {
 			if mapped := remap(path); mapped != path {
+				position.Editor = rebindMarkdownReadingDocument(position.Editor, filepath.Join(root, filepath.FromSlash(path)), filepath.Join(root, filepath.FromSlash(mapped)))
 				files[mapped] = position
 			}
 		}

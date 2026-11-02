@@ -98,6 +98,17 @@ func TestAccessibilityTree(t *testing.T) {
 	if f := accessNode(t, tt.h.access, platform.RoleTextField, ""); f.Value != "Grace" || f.SelStart != 5 || f.SelEnd != 5 || tt.h.access.Focus != f.ID {
 		t.Errorf("text field after setting it: %+v, focus %d", f, tt.h.access.Focus)
 	}
+	// Inserting text replaces the selection, as typing does: what
+	// assistive technology and automation type with AXSelectedText.
+	tt.send(platform.SurfaceEvent{Kind: platform.AccessAction, ID: field.ID, Action: platform.AccessSelectText, From: 0, To: 5})
+	tt.send(platform.SurfaceEvent{Kind: platform.AccessAction, ID: field.ID, Action: platform.AccessInsertText, Text: "Ada"})
+	if d.name != "Ada" {
+		t.Errorf("inserting over the selection: %q", d.name)
+	}
+	tt.send(platform.SurfaceEvent{Kind: platform.AccessAction, ID: field.ID, Action: platform.AccessInsertText, Text: " L."})
+	if f := accessNode(t, tt.h.access, platform.RoleTextField, ""); d.name != "Ada L." || f.SelStart != 6 || f.SelEnd != 6 {
+		t.Errorf("inserting at the caret: %q, %+v", d.name, f)
+	}
 }
 
 // byID returns the node of the tree with id.
@@ -318,4 +329,53 @@ func TestInputMethodContext(t *testing.T) {
 	if !strings.HasSuffix(d.name, "xaB") {
 		t.Errorf("replacing in a long text: ...%q", d.name[len(d.name)-5:])
 	}
+}
+
+// BenchmarkAccessTree describes a frame of many clickable cards of two
+// texts each, as the content does every frame once assistive technology
+// asked for the window.
+func BenchmarkAccessTree(b *testing.B) {
+	tt := coreNewTester(func(c *context) {
+		coreColumn(c).Fill().Children(func() {
+			for i := range 400 {
+				card := coreColumn(c).Padding(8)
+				card.Clicked()
+				card.Children(func() {
+					coreTextf(c, "Game %d", i)
+					coreText(c, "Studio")
+				})
+			}
+		})
+	}, 640, 20000)
+	tt.send(platform.SurfaceEvent{Kind: platform.AccessibilityOn})
+	b.ReportAllocs()
+	for b.Loop() {
+		tt.rt.accessTree()
+	}
+}
+
+// TestRowNamedByLabels: a list's row is named by its content, an element
+// inside it with a Label by the label rather than its texts, as the web
+// names from content with a descendant's aria-label.
+func TestRowNamedByLabels(t *testing.T) {
+	var ls ListState
+	tt := NewTester(func(c *Context) {
+		List(c, &ls, 1, func(i int) {
+			Row(c).Children(func() {
+				Box(c).Label("Done").Children(func() { Text(c, "✓") })
+				Text(c, "Write the report")
+			})
+		}).Fill()
+	}, 320, 240)
+	tt.rt.access = true
+	tt.Frame()
+	for _, n := range tt.rt.accessTree().Nodes {
+		if n.Role == platform.RoleListItem {
+			if n.Label != "Done Write the report" {
+				t.Errorf("row named %q, want %q", n.Label, "Done Write the report")
+			}
+			return
+		}
+	}
+	t.Error("no row for assistive technology")
 }

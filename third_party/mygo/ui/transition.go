@@ -4,6 +4,8 @@ import (
 	"math"
 	"slices"
 	"time"
+
+	"github.com/egoist/mygo/internal/scene"
 )
 
 // ElementTransition animates an element (Element.Transition) from what the
@@ -86,6 +88,7 @@ const defaultDuration = 200 * time.Millisecond
 // collapsing fades in place.
 func (e *node) Transition(t ElementTransition) *node {
 	e.c.transitions = append(e.c.transitions, transitionUse{e: e, t: t})
+	scene.FoldTranslations() // renderers draw the poses that only move as untransformed content
 	return e
 }
 
@@ -174,6 +177,9 @@ type transition struct {
 	gone    tbox
 	opacity float32
 	turn    Transform
+	// index is where the element was among its siblings in the frame it
+	// went from, which orders the copies going under one parent.
+	index int
 	// match moves an element appearing where the one it Matches showed:
 	// its box in the window, from the box that one had.
 	match    [4]channel
@@ -398,6 +404,13 @@ func (rt *engine) animateLayout(root *node, w, h float32) {
 		e := u.e
 		if e.parent == nil {
 			continue // the root's
+		}
+		if e.inHidden() {
+			// Hidden, it has no box to go from or to, and shows again
+			// where it is then, as it hides, at once.
+			delete(rt.trans, e.id)
+			e.st.trec = nil
+			continue
 		}
 		r := rt.trans[e.id]
 		if r == nil {
@@ -638,6 +651,7 @@ func (s tbox) turn() (Transform, bool) {
 // which the engine kept for them.
 func (rt *engine) animateExits(root *node, now time.Time, still, instant bool) {
 	var byID map[uint64]*node
+	going := rt.going[:0]
 	for id, r := range rt.trans {
 		if r.built == rt.frame {
 			continue
@@ -675,7 +689,24 @@ func (rt *engine) animateExits(root *node, now time.Time, still, instant bool) {
 			}
 			// From where it showed, as fast as it went.
 			r.head(r.gone.moved(r.t.Exit, r.collapse, still), moveAll, now)
+			// The frame it went from is still whole.
+			r.index = 0
+			for c := e.parent.first; c != nil && c != e; c = c.next {
+				r.index++
+			}
 		}
+		going = append(going, exit{id, r, p})
+	}
+	// The copies go under their parents in the order the elements had,
+	// not the map's, which changes from run to run: an insertion sort, as
+	// few go at once.
+	for i := 1; i < len(going); i++ {
+		for j := i; j > 0 && going[j].before(going[j-1]); j-- {
+			going[j], going[j-1] = going[j-1], going[j]
+		}
+	}
+	for _, x := range going {
+		id, r, p := x.id, x.r, x.p
 		s := r.sample(r.gone.moved(r.t.Exit, r.collapse, still), now)
 		if r.moving == 0 {
 			delete(rt.trans, id)
@@ -699,6 +730,23 @@ func (rt *engine) animateExits(root *node, now time.Time, still, instant bool) {
 		r.shown = s
 		rt.animating = true
 	}
+	clear(going)
+	rt.going = going[:0]
+}
+
+// exit is a transition whose element's copy goes under p.
+type exit struct {
+	id uint64
+	r  *transition
+	p  *node
+}
+
+// before tells whether x's copy goes before y's under a parent.
+func (x exit) before(y exit) bool {
+	if x.r.index != y.r.index {
+		return x.r.index < y.r.index
+	}
+	return x.id < y.id
 }
 
 // elementsByID returns the elements of the frame by ID, in a map the
@@ -727,15 +775,24 @@ func ghostOf(e *node) *node {
 	*g = *e
 	st := *e.st
 	st.trec = nil
+	// Its spans, and the styles they paint with, are its own: another
+	// element taking its state in its place, in this frame, made the
+	// state's its own already. A paragraph's spans are in a buffer of the
+	// state (inlineSpans).
+	g.spans, st.spans = slices.Clone(e.spans), nil
+	if g.spans != nil {
+		st.spans = &spanCache{}
+		st.spans.update(g.spans)
+	}
 	g.st = &st
 	g.parent, g.first, g.last, g.next, g.nchild = nil, nil, nil, nil, 0
 	g.shadows, g.cols, g.rows, g.frags = slices.Clone(e.shadows), slices.Clone(e.cols), slices.Clone(e.rows), slices.Clone(e.frags)
 	g.track, g.popover, g.list, g.rowsOf, g.overflow = nil, nil, nil, nil, nil
-	g.activeDescendant, g.nameFrom, g.field, g.form = nil, nil, nil, nil
+	g.activeDescendant, g.nameFrom, g.focusTo, g.field, g.form = nil, nil, nil, nil, nil
 	g.followX, g.colFit, g.gridFit = nil, nil, nil
 	g.inputFn, g.ghosts = nil, false
 	g.poseSet = false // it keeps the pose it had
-	g.tl, g.nmeasure, g.leafOK = nil, 0, false
+	g.tl, g.nmeasure, g.leafOK, g.intrOK, g.lay = nil, 0, false, 0, 0
 	g.flags = g.flags&^(flagModal|flagPage|flagFocusTarget) | flagInert
 	for c := e.first; c != nil; c = c.next {
 		if c.leaving == 0 {
@@ -785,6 +842,15 @@ func (rt *engine) animateColors(e *node, r *transition) {
 		}
 	}
 	e.bg, e.borderC = r.colorShown[0], r.colorShown[1]
+}
+
+// forgetColors shows the colors of the elements at once: a route change is
+// where an element that comes back shows its own colors, not the color of
+// the element that took its place while it was away.
+func (rt *engine) forgetColors() {
+	for _, r := range rt.trans {
+		r.colorSet = false
+	}
 }
 
 // mixPremultiplied returns the color k of the way from a to b, mixed with

@@ -10,6 +10,7 @@ import (
 
 func commentMatchFixture() (domain.RequirementCommentDraft, domain.RequirementComment) {
 	d := domain.RequirementCommentDraft{Content: "# 你好", Images: []domain.CommentDraftAsset{{Name: "截图.png", Upload: &domain.CommentUpload{Token: "image-token-1", URL: "https://project.feishu.cn/upload/image-token-1"}}}}
+	d.Images[0].ID = "image-one"
 	d.Attempt = &domain.CommentPublishAttempt{State: "unknown", AuthorKey: "author-1", StartedAt: "2026-10-27T01:52:57.8768215Z", BeforeIDs: []string{"old"}}
 	d.Attempt.Body = d.Markdown(func(a domain.CommentDraftAsset) (string, string) { return a.Upload.URL, a.Upload.Token })
 	c := domain.RequirementComment{ID: "new", AuthorKey: "author-1", CreatedAt: "2026-10-27 09:53:00", Content: "# 你好\n\n![](https://project.feishu.cn/goapi/v5/platform/file/stream/download/image-token-1)"}
@@ -121,6 +122,7 @@ func TestCommentPublishMatchCodeAndExactSource(t *testing.T) {
 func TestCommentPublishMatchOrderAttachmentsAndIdentityID(t *testing.T) {
 	d, c := commentMatchFixture()
 	d.Images = append(d.Images, domain.CommentDraftAsset{Upload: &domain.CommentUpload{Token: "second", URL: "https://project.feishu.cn/upload/second"}})
+	d.Images[1].ID = "image-two"
 	d.Attempt.Body += "\n\n![二](https://project.feishu.cn/upload/second)<!--second-->"
 	c.Content += "\n\n![](https://project.feishu.cn/goapi/v5/platform/file/stream/download/second)"
 	if got, reason := matchPublishedComment(&d, []domain.RequirementComment{c}); got.ID == "" {

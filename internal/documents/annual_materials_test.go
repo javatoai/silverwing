@@ -80,6 +80,13 @@ func TestAnnualScopeTempAndPermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	ignore := filepath.Join(scope.Temporary, ".gitignore")
+	if _, err := os.Stat(ignore); !os.IsNotExist(err) {
+		t.Fatal("generated an ignore file", err)
+	}
+	user := []byte("# user bytes\r\n*\r\n")
+	if err := os.WriteFile(ignore, user, 0600); err != nil {
+		t.Fatal(err)
+	}
 	before, _ := os.Stat(ignore)
 	if err := scope.EnsureLocal(); err != nil {
 		t.Fatal(err)
@@ -88,12 +95,15 @@ func TestAnnualScopeTempAndPermissions(t *testing.T) {
 	if !before.ModTime().Equal(after.ModTime()) {
 		t.Fatal("no-op rewrote ignore")
 	}
-	for _, path := range []string{"自定义资料/a.bin", "自定义资料/nested/anything.xyz", "temp/scratch.sql"} {
+	if data, err := os.ReadFile(ignore); err != nil || string(data) != string(user) {
+		t.Fatal("user ignore changed", err)
+	}
+	for _, path := range []string{"自定义资料/a.bin", "自定义资料/nested/anything.xyz", "temp/scratch.sql", "temp/.gitignore"} {
 		if !scope.Writable(path, false) {
 			t.Fatal("denied", path)
 		}
 	}
-	for _, path := range []string{"测试/a.md", "outside.txt", "自定义资料", "temp", "temp/.gitignore", "../其他/资料/a", "自定义资料/.git/config", "自定义资料/.silverwing-private"} {
+	for _, path := range []string{"测试/a.md", "outside.txt", "自定义资料", "temp", "../其他/资料/a", "自定义资料/.git/config", "自定义资料/.silverwing-private"} {
 		if scope.Writable(path, false) {
 			t.Fatal("allowed", path)
 		}
@@ -106,8 +116,23 @@ func TestAnnualScopeTempAndPermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	text, err := scope.DirectoryInstructions(false)
-	if err != nil || !strings.Contains(text, peer) || !strings.Contains(text, "只读") || !strings.Contains(text, scope.Temporary) {
+	if err != nil || strings.Contains(text, peer) || !strings.Contains(text, scope.Owned) || !strings.Contains(text, scope.Temporary) {
 		t.Fatal(text, err)
+	}
+	for _, required := range []string{"其他团队成员", "自行查看", "主动阅读", "只读", "不得新增、修改、删除、移动或重命名"} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("missing permission guidance %q: %s", required, text)
+		}
+	}
+	if err := os.Rename(peer, filepath.Join(scope.Root, "其他团队")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(scope.Root, "产品"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := scope.DirectoryInstructions(false)
+	if err != nil || updated != text {
+		t.Fatal("peer folder names changed generic instructions", updated, err)
 	}
 }
 
@@ -132,7 +157,7 @@ func TestAnnualPreviewDoesNotCreateAndEnsureReuses(t *testing.T) {
 	if err != nil || ready.Status != domain.MaterialsReady || *ready.WriteRoot != *preview.WriteRoot {
 		t.Fatal(ready, err)
 	}
-	if _, err := os.Stat(filepath.Join(existing, "temp", ".gitignore")); err != nil {
+	if _, err := os.Stat(filepath.Join(existing, "temp", ".gitignore")); !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
 	for _, path := range []string{filepath.Join(root, "README.md"), filepath.Join(root, "Index.md"), filepath.Join(existing, "README.md")} {

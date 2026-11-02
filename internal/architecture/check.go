@@ -132,8 +132,9 @@ func (c *sourceChecker) importProblems(source, dependency string, sharedEditor b
 	}
 	if c.purePackage(source) {
 		goldmark := inPackage(source, internal+"markdowntext") && inPackage(dependency, "github.com/yuin/goldmark")
-		if !c.standardImport(dependency) && !c.purePackage(dependency) && !goldmark {
-			add("pure-package", "pure packages may use the standard library and other pure packages; only markdowntext may use Goldmark")
+		yaml := inPackage(source, internal+"markdowntext") && dependency == "go.yaml.in/yaml/v3"
+		if !c.standardImport(dependency) && !c.purePackage(dependency) && !goldmark && !yaml {
+			add("pure-package", "pure packages may use the standard library and other pure packages; only markdowntext may use Goldmark and YAML")
 		}
 	}
 	if inPackage(source, internal+"application") && (inPackage(dependency, internal+"desktop") || inPackage(dependency, "github.com/egoist/mygo")) {

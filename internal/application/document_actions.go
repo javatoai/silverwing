@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -96,7 +97,7 @@ func (a *App) documentActionLocked(ctx context.Context, action Action) (result A
 		if documents.Kind(path) == "markdown" {
 			content, snapshotErr := a.Documents.MarkdownSnapshot(root, path)
 			if snapshotErr == nil {
-				return markdownReadResult(content), nil
+				return a.materialMarkdownReadResult(ctx, action, root, content)
 			}
 			preview, previewErr := a.Documents.ReadMaterialsPreview(root, path)
 			if previewErr != nil {
@@ -112,7 +113,7 @@ func (a *App) documentActionLocked(ctx context.Context, action Action) (result A
 			return a.materialTextSaveResult(ctx, action, root, path)
 		}
 		if documents.Kind(path) == "markdown" {
-			return ActionResult{}, errMarkdownMaterialReadOnly
+			return a.materialMarkdownSaveResult(ctx, action, root, path)
 		}
 		content, err := a.Documents.Save(root, path, actionText(action), textPayload(action, "expectedHash"), boolPayload(action, "overwrite"))
 		return ActionResult{Message: "文档已保存", Path: content.Path, Text: content.Text, Data: content}, err
@@ -199,7 +200,17 @@ func (a *App) documentActionLocked(ctx context.Context, action Action) (result A
 		}
 		return ActionResult{Message: "已复制到系统文件剪贴板", Data: selected}, documents.NewClipboardService().CopyFiles(ctx, selected)
 	case "document.paste":
-		payload, err := documents.NewClipboardService().Read(ctx)
+		var payload documents.ClipboardPayload
+		var err error
+		if boolPayload(action, "capturedClipboard") {
+			encoded, encodeErr := json.Marshal(action.Payload["clipboard"])
+			if encodeErr != nil {
+				return ActionResult{}, encodeErr
+			}
+			err = json.Unmarshal(encoded, &payload)
+		} else {
+			payload, err = documents.NewClipboardService().Read(ctx)
+		}
 		if err != nil {
 			return ActionResult{}, err
 		}
@@ -211,6 +222,16 @@ func (a *App) documentActionLocked(ctx context.Context, action Action) (result A
 			}
 		}
 		result, err := a.Documents.PasteClipboard(ctx, root, documentDirectory(action, root), payload)
+		if err == nil && boolPayload(action, "capturedClipboard") && result.Conflict != nil {
+			resolved, resolveErr := a.Documents.ResolveFileOperationConflict(ctx, root, *result.Conflict, documents.FileConflictSaveAs, "")
+			if resolveErr != nil {
+				return ActionResult{}, resolveErr
+			}
+			if resolved.Status == documents.FileOperationCompleted {
+				result.Completed = append(result.Completed, resolved)
+				result.Conflict = nil
+			}
+		}
 		return fileBatchActionResult(root, result), err
 	case "document.conflict-resolve":
 		return a.resolveDocumentConflict(ctx, root, action)

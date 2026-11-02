@@ -48,7 +48,13 @@ func (s *app) taskIndex(c *ui.Context, p palette) {
 			if archived {
 				text = "返回研发任务"
 			}
-			label(c, text, 14, p.blue)
+			b.Tooltip(text)
+			if s.taskIndexCompact() {
+				b.Label(text)
+			}
+			if !s.taskIndexCompact() {
+				label(c, text, 14, p.blue)
+			}
 		})
 		if b.Clicked() {
 			s.markReadingInteraction()
@@ -69,6 +75,9 @@ func (s *app) taskIndexToolbar(c *ui.Context, p palette, state *taskIndexBrowsin
 				state.scroll.X, state.scroll.Y = 0, 0
 				s.markReadingInteraction()
 			})
+			if s.taskIndexCompact() {
+				search.Padding(0, 6)
+			}
 			search.OnShortcut(0, ui.KeyEscape, func() { s.clearTaskIndexSearch(c, state) })
 			search.OnShortcut(0, ui.KeyDown, func() { s.focusTaskIndexRow(c, state, 0) })
 			search.OnShortcut(0, ui.KeyUp, func() { s.focusTaskIndexRow(c, state, len(state.visibleRows)-1) })
@@ -79,7 +88,7 @@ func (s *app) taskIndexToolbar(c *ui.Context, p palette, state *taskIndexBrowsin
 					s.focusTaskIndexRow(c, state, 0)
 				}
 			})
-			if state.search != "" {
+			if state.search != "" && !s.taskIndexCompact() {
 				clear := ui.ButtonBase(c.Key("task-index-clear-search")).Width(26).Height(28).Shrink(0).
 					Center().Radius(6).Label("清除任务搜索").Tooltip("清除搜索 (Esc)")
 				if clear.Hovered() {
@@ -173,18 +182,50 @@ func (s *app) taskIndexTask(c *ui.Context, p palette, state *taskIndexBrowsingSt
 		if pinned {
 			button.Description("已置顶")
 		}
+		if s.taskIndexCompact() {
+			status := s.taskRequirementStatus(t)
+			if status == "" {
+				status = "未标记"
+			}
+			description := "状态：" + status
+			if pinned {
+				description = "已置顶；" + description
+			}
+			button.Description(description)
+		}
 		button.Children(func() {
-			ui.Row(c).FillWidth().MinWidth(0).Gap(8).AlignItems(ui.Center).Children(func() {
+			gap := float32(8)
+			if s.taskIndexCompact() {
+				gap = 4
+			}
+			ui.Row(c).FillWidth().MinWidth(0).Gap(gap).AlignItems(ui.Center).Children(func() {
 				if pinned {
-					ui.Icon(c, icons["pin"]).Width(16).Height(16).Shrink(0).TextColor(p.blue).
+					pinSize := float32(16)
+					if s.taskIndexCompact() {
+						pinSize = 12
+					}
+					ui.Icon(c, icons["pin"]).Width(pinSize).Height(pinSize).Shrink(0).TextColor(p.blue).
 						Role(ui.RoleImage).Label("已置顶：" + t.title).Tooltip("已置顶")
 				}
 				weight := 400
 				if selected {
 					weight = 600
 				}
-				label(c, t.title, 14, p.text).FontWeight(weight).Grow(1).MinWidth(48).SingleLine()
-				taskIndexStatus(c, s.taskRequirementStatus(t), p)
+				minimum := float32(48)
+				if s.taskIndexCompact() {
+					minimum = 0
+				}
+				label(c, t.title, 14, p.text).FontWeight(weight).Grow(1).MinWidth(minimum).SingleLine()
+				status := s.taskRequirementStatus(t)
+				if s.taskIndexCompact() {
+					if status == "" {
+						status = "未标记"
+					}
+					_, fg := statusBadgeColors(status, p)
+					ui.Box(c.Key("task-status-dot")).Size(8, 8).Shrink(0).Radius(4).Background(fg).Label(status).Tooltip(status)
+				} else {
+					taskIndexStatus(c, status, p)
+				}
 			})
 		})
 		if state.revealTaskKey == key {
@@ -214,6 +255,11 @@ func (s *app) taskIndexTask(c *ui.Context, p palette, state *taskIndexBrowsingSt
 		}
 	})
 	row.ContextMenu(func(menu *ui.Menu) { s.taskContextMenu(c.Services(), t, menu) })
+}
+
+func (s *app) taskIndexCompact() bool {
+	width := s.taskListPaneLayout().width
+	return width > 0 && width < 160
 }
 
 func taskIndexStatus(c *ui.Context, text string, p palette) {

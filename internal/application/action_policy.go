@@ -34,6 +34,13 @@ func DescribeAction(kind string) ActionDescriptor {
 // Each operation has exactly one policy record. Adding a task-menu operation
 // therefore does not require independent scope, refresh and label lists.
 var actionDescriptors = map[string]ActionDescriptor{
+	"task.services.pods":                           {Kind: "task.services.pods", Label: "读取服务 Pod", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},
+	"task.services.config":                         {Kind: "task.services.config", Label: "读取服务配置", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},
+	"task.files.list":                              {Kind: "task.files.list", Label: "读取任务文件", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},
+	"task.files.read":                              {Kind: "task.files.read", Label: "预览任务文件", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},
+	"task.files.search":                            {Kind: "task.files.search", Label: "查找任务文件", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},
+	"task.files.open":                              {Kind: "task.files.open", Label: "系统打开任务文件", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},
+	"task.files.reveal":                            {Kind: "task.files.reveal", Label: "定位任务文件", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},
 	"task.requirement-link":                        {Kind: "task.requirement-link", Label: "关联需求", Known: true, TaskMenuScoped: true, ReloadSnapshot: true},
 	"requirements.copy-document":                   {Kind: "requirements.copy-document", Label: "requirements.copy-document", Known: true, DedicatedResult: true},
 	"requirements.copy-comments":                   {Kind: "requirements.copy-comments", Label: "requirements.copy-comments", Known: true, DedicatedResult: true},
@@ -77,6 +84,7 @@ var actionDescriptors = map[string]ActionDescriptor{
 	"document.save":                                {Kind: "document.save", Label: "保存文档", Known: true},
 	"document.trash":                               {Kind: "document.trash", Label: "移至回收站", Known: true},
 	"instructions.read":                            {Kind: "instructions.read", Label: "读取任务说明", Known: true, QuietSuccess: true, DedicatedResult: true},
+	"instructions.images.import":                   {Kind: "instructions.images.import", Label: "插入说明图片", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},
 	"instructions.save":                            {Kind: "instructions.save", Label: "保存任务说明", Known: true, ReloadSnapshot: true, DedicatedResult: true},
 	"meegle.projects":                              {Kind: "meegle.projects", Label: "meegle.projects", Known: true, DedicatedResult: true},
 	"migration.apply":                              {Kind: "migration.apply", Label: "migration.apply", Known: true, ReloadSnapshot: true},

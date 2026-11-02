@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	taskListPaneMinWidth   = float32(160)
+	taskListPaneMinWidth   = float32(108)
 	taskDetailPaneMinWidth = float32(600)
 	taskListResizeWidth    = float32(8)
 )

@@ -14,7 +14,7 @@ Silverwing 是基于 Go 与 MyGO 的原生桌面工作台。桌面在进程内�
 | `internal/documents` | 资料目录与权限、文件操作、准备计划、读写及草稿；消费需求来源接口 |
 | `internal/requirementprovider` | `Meegle` 适配器；执行远端 CLI、解码响应并实现 `documents.RequirementProvider` |
 | `internal/editor` | 编辑器运行时 part ID、查找/撤销、Mermaid 和自动保存状态；保留纯 Markdown API 的兼容包装 |
-| `internal/markdowntext` | Markdown AST、源区间、表格、围栏、阅读投影及评论图片算法；仅使用标准库与 Goldmark |
+| `internal/markdowntext` | Markdown AST、Frontmatter、源区间、表格、围栏、阅读投影及评论图片算法；仅使用标准库、Goldmark 与 YAML v3 |
 | `internal/filelanguage` | 中性的语言枚举、文件名映射和源码编辑覆盖规则 |
 | `internal/asyncjob` | 与业务、窗口无关的作业登记、取消、完成、等待和关闭后回写门禁 |
 | `internal/productprofile` | 本分支固定的名称、edition、默认目录、安装标识和发布渠道 |
@@ -41,6 +41,8 @@ flowchart TD
     ui --> language[filelanguage]
 ```
 
+MyGO 固定为 v0.7.3，使用 `third_party/mygo` 的本地源码。字体回退、输入法、菜单、剪贴板及绘制由框架负责；本地扩展和升级注意事项见 [MYGO-PATCHES.md](../third_party/MYGO-PATCHES.md)。
+
 ## 功能单元与应用边界
 
 `desktop` 在同一包内按功能持有显式 controller 和私有 state。任务、资料、需求、设置和工具分别由 `taskController`、`materialsController`、`requirementController`、`settingsController`、`toolsController` 管理；controller 不保存 `*app`、窗口、Backend 或通用宿主，只通过窄 view/cleanup ports 协作。功能状态与已拆分的取消、停止、等待清理方法由对应 controller 拥有；仍需窗口能力的方法通过窄 ports 调用。
@@ -55,6 +57,7 @@ flowchart TD
 | 桌面功能 | controller 持有功能 state 与局部生命周期 | app 保留渲染、原生窗口和跨功能协调 |
 | 异步基础 | `asyncjob.Group` / `Lease` 负责登记、关闭、取消和等待，`Post` 只接受窄排队函数 | 已接入 `tool_jobs.go` / `cli_jobs.go`；资料屏障、账号身份与不可取消操作策略仍由调用方处理 |
 | 产品身份 | `productprofile/current.go` 是本分支唯一的固定身份源 | 三个分支仍按原功能边界裁剪，不提供运行时 edition 切换 |
+任务资料中的可写 Markdown 使用原生 `markdown.Editor` 实时预览，整篇共享一个 Buffer、输入客户端与撤销历史；光标所在内容显示必要语法，表格与代码块支持原位编辑，Mermaid 保留源码编辑入口。阅读和源码模式保留同一编辑会话，保存使用同版本的原文保真快照。已有只读的任务说明、AGENTS、Skills、Git 等入口继续使用 `markdown.View`，保留查找、原文复制、图片权限、链接及 Mermaid 渲染。详见 [TEXT-EDITOR-AND-FILE-TREE.md](TEXT-EDITOR-AND-FILE-TREE.md)。
 
 `DescribeAction(kind)` 的 `ActionDescriptor` 集中表达标签、任务菜单作用域、刷新、反馈、专用结果与取消属性。描述符供呈现和调度使用，不替代业务操作、路径授权或后台身份校验。
 
@@ -76,11 +79,11 @@ typed 请求在兼容转换时保留捕获的任务路径、创建时间、配�
 
 ## 编辑与持久化
 
-MyGO 固定为 v0.5.0，使用 `third_party/mygo` 的本地源码。输入法、字体回退、菜单、剪贴板和绘制由框架负责；本地补丁见 [MYGO-PATCHES.md](../third_party/MYGO-PATCHES.md)。
+MyGO 固定为 v0.7.3，使用 `third_party/mygo` 的本地源码。输入法、字体回退、菜单、剪贴板和绘制由框架负责；本地补丁见 [MYGO-PATCHES.md](../third_party/MYGO-PATCHES.md)。
 
 资料与 Skills 复用 FileTree 的展示与输入组件。普通文本和代码复用 TextEditor；宿主持有文档身份、草稿、权限、保存和冲突状态。成功保存不重建 Buffer。普通资料文本上限为含 BOM 的 3 MiB，开发工具单个输入上限为 2 MiB。
 
-Markdown 使用 MyGO `markdown.View` 与 `DefaultCodeBlock` 只读阅读，原文预览使用只读 TextEditor。普通阅读不加载或改写 Markdown 草稿，不提供 Markdown 编辑与保存；纯算法拆分没有改变该边界。详见 [TEXT-EDITOR-AND-FILE-TREE.md](TEXT-EDITOR-AND-FILE-TREE.md)。
+任务说明、Skills 等只读场景通过公共 MarkdownReader 使用 MyGO `markdown.View` 与 `DefaultCodeBlock`，原文预览使用只读 TextEditor，不加载或改写草稿。可写任务资料通过公共 MarkdownEditor 提供原位编辑，实时、源码和预览共享同一个 Buffer 与撤销历史，保存保留原始 Markdown。详见 [TEXT-EDITOR-AND-FILE-TREE.md](TEXT-EDITOR-AND-FILE-TREE.md)。
 
 普通文本保留 UTF-8 BOM 和混合换行，使用 `materials-text-drafts.json` 与 650ms 防抖自动保存，组合输入期间暂停落盘。写入前重新验证任务及资料身份、根目录、普通文件、符号链接或 junction 和基线摘要，再原子替换；失败或冲突保留草稿。
 
@@ -129,7 +132,7 @@ go test ./internal/architecture
 该命令只用标准库读取源码 AST，不启动桌面、不执行外部 CLI，也不递归调用 go test。检查覆盖 `internal` 下全部非 `_test.go` 源文件，包括其他 GOOS 和未启用 build tag 的文件；排除 testdata、vendor、隐藏目录和嵌套模块，因此 Windows 与 macOS 上判定相同。
 
 - domain 不反向依赖 editor、application、desktop 或基础设施；本模块内只消费 domain 和纯模块。
-- markdowntext、filelanguage、asyncjob、productprofile 不依赖业务或框架；markdowntext 单独允许 Goldmark。
+- markdowntext、filelanguage、asyncjob、productprofile 不依赖业务或框架；markdowntext 单独允许 Goldmark 和 YAML v3，仅用于 Markdown 与 Frontmatter 解析。
 - application 不依赖 desktop 或 MyGO。
 - documents 不依赖具体 requirementprovider、integrations 或远端进程协议。media、storage、本机剪贴板/回收站依赖保持合法；直接字面量远端 CLI 入口另有 AST 检查。
 - 声明公共 TextEditor 与语言映射入口的源码不依赖 workspace，使用 filelanguage；检查不要求三版使用相同文件名。

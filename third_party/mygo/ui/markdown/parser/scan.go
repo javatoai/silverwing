@@ -320,7 +320,7 @@ func scanHTMLTag(s string, i int, no *htmlMemo) int {
 	case r[1] == '/':
 		return scanClosingTag(s, i)
 	case r[1] == '?':
-		return scanUntil(s, i, 2, "?>", &no.pi)
+		return no.until(s, i, 2, "?>", &no.pi)
 	case strings.HasPrefix(r, "<!--"):
 		if strings.HasPrefix(r, "<!-->") {
 			return 5
@@ -328,33 +328,38 @@ func scanHTMLTag(s string, i int, no *htmlMemo) int {
 		if strings.HasPrefix(r, "<!--->") {
 			return 6
 		}
-		return scanUntil(s, i, 4, "-->", &no.comment)
+		return no.until(s, i, 4, "-->", &no.comment)
 	case strings.HasPrefix(r, "<![CDATA["):
-		return scanUntil(s, i, 9, "]]>", &no.cdata)
+		return no.until(s, i, 9, "]]>", &no.cdata)
 	case r[1] == '!':
 		if len(r) > 2 && isASCIILetter(r[2]) {
-			return scanUntil(s, i, 3, ">", &no.decl)
+			return no.until(s, i, 3, ">", &no.decl)
 		}
 		return 0
 	}
 	return scanOpenTag(s, i)
 }
 
-type htmlMemo struct{ pi, comment, cdata, decl int }
+type htmlMemo struct {
+	pi, comment, cdata, decl int
+	steps                    int // the bytes searched, as Document.steps
+}
 
-func (m *htmlMemo) reset() { *m = htmlMemo{-1, -1, -1, -1} }
+func (m *htmlMemo) reset() { *m = htmlMemo{-1, -1, -1, -1, 0} }
 
-// scanUntil returns the length up to and including end, searched from
+// until returns the length up to and including end, searched from
 // i+skip, or 0; *none notes the offset after which none is.
-func scanUntil(s string, i, skip int, end string, none *int) int {
+func (m *htmlMemo) until(s string, i, skip int, end string, none *int) int {
 	if *none >= 0 && i+skip >= *none {
 		return 0
 	}
 	k := strings.Index(s[i+skip:], end)
 	if k < 0 {
+		m.steps += len(s) - i - skip
 		*none = i + skip
 		return 0
 	}
+	m.steps += k
 	return skip + k + len(end)
 }
 

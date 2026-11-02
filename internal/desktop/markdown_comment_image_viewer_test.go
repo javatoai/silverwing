@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"github.com/egoist/mygo/ui/markdown/parser"
 	"hash/crc32"
 	"image"
 	"image/color"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"silverwing-go/internal/editor"
 	"silverwing-go/internal/media"
 
 	"github.com/egoist/mygo/ui"
@@ -27,12 +29,26 @@ func TestMarkdownImageClickSelectsOriginalOnlyForComments(t *testing.T) {
 			owner := newReadonlyMarkdownState("synthetic-comment", source, map[string]string{target: path})
 			owner.commentReading = comment
 			state := &app{page: "tasks", tab: 2}
-			t.Cleanup(func() {
-				closeMarkdownPreviewState(owner)
-				drainMarkdownPreviewTestJobs(t, state)
-			})
+			t.Cleanup(func() { closeMarkdownPreviewState(owner); drainMarkdownPreviewTestJobs(t, state) })
 			bitmap := ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 240, 100)))
-			seedMarkdownReadyImages(t, state, owner, bitmap)
+			native := ensureFrameworkMarkdown(owner)
+			for index := 1; index < native.document.Len(); index++ {
+				for _, node := range native.document.Inlines(index) {
+					if node.Kind != parser.Image {
+						continue
+					}
+					part := native.partAt(owner, node.Start)
+					start, end := native.projection.OriginalOffset(node.Start), native.projection.OriginalOffset(node.End)
+					resource, err := state.ensureMarkdownImage(owner, part, editor.Node{Destination: node.Dest, Range: editor.SourceRange{Start: start, End: end}})
+					if err != nil {
+						t.Fatal(err)
+					}
+					resource.bitmap, resource.error, resource.loading = bitmap, "", false
+					if comment {
+						resource.sourcePath = path
+					}
+				}
+			}
 			tester := ui.NewTester(func(context *ui.Context) {
 				theme := setTheme(context, false)
 				state.renderMarkdownPreview(context, theme, owner)

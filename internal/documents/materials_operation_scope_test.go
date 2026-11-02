@@ -220,10 +220,34 @@ func TestLocalMaterialsOperationRejectsOtherNamespacesAndReadOnlyWrites(t *testi
 			}
 		})
 	}
-	for _, path := range []string{filepath.Join(peer, "new.txt"), filepath.Join(f.public.Temporary, ".gitignore"), f.public.Owned, f.public.Temporary} {
+	for _, path := range []string{filepath.Join(peer, "new.txt"), f.public.Owned, f.public.Temporary} {
 		if _, err := f.service.Create(f.public.Root, path, []byte("bad"), false); err == nil {
 			t.Fatalf("read-only or root write accepted: %s", path)
 		}
+	}
+	ignore := filepath.Join(f.public.Temporary, ".gitignore")
+	if _, err := f.service.Create(f.public.Root, ignore, []byte("# user ignore\n*.scratch\n"), false); err != nil {
+		t.Fatal("user temp ignore denied", err)
+	}
+	localOperationBytes(t, filepath.Join(f.physical.Temporary, ".gitignore"), []byte("# user ignore\n*.scratch\n"))
+	entries, err := f.service.List(f.public.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var visible func([]Entry) bool
+	visible = func(items []Entry) bool {
+		for _, item := range items {
+			if item.Path == ignore || visible(item.Children) {
+				return true
+			}
+		}
+		return false
+	}
+	if !visible(entries) {
+		t.Fatal("user temp ignore remains hidden")
+	}
+	if snapshot, err := f.service.MaterialTextSnapshot(f.public.Root, ignore); err != nil || snapshot.Text != "# user ignore\n*.scratch\n" {
+		t.Fatal("user ignore has no editable snapshot", err)
 	}
 	if content, err := f.service.ReadMaterialsPreview(f.public.Root, filepath.Join(peer, "reference.txt")); err != nil || content.Text != "reference" {
 		t.Fatalf("peer became unreadable: %+v %v", content, err)

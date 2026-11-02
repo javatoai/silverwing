@@ -21,12 +21,16 @@ func main() {
 	dark := flag.Bool("dark", false, "start with the dark theme")
 	width := flag.Int("width", 0, "initial window width; zero restores the saved size")
 	height := flag.Int("height", 0, "initial window height; zero restores the saved size")
-	tab := flag.Int("tab", 0, "initial task tab: 0 detail, 1 materials, 2 requirement, 3 notes, 4 Tag")
+	tab := flag.Int("tab", 0, "initial task tab: 0 task branches, 1 materials, 2 requirement, 3 task instructions, 4 Tag, 5 task files, 6 service info, 7 terminal")
 	capture := flag.String("capture", "", "write a PNG capture of the native window")
 	captureOnly := flag.Bool("capture-only", false, "exit after writing the requested capture")
 	flag.Parse()
 	explicitNavigation := false
+	explicitTab := false
 	flag.Visit(func(item *flag.Flag) {
+		if item.Name == "tab" {
+			explicitTab = true
+		}
 		if item.Name == "page" || item.Name == "tab" {
 			explicitNavigation = true
 		}
@@ -39,6 +43,7 @@ func main() {
 	if err := desktop.Run(backend, desktop.Options{
 		Home: backend.Paths.Home, RestoreSession: *capture == "" && !explicitNavigation,
 		Page: *page, Dark: *dark, Width: *width, Height: *height, Tab: *tab,
+		TabExplicit: explicitTab,
 		CapturePath: *capture, CaptureOnly: *captureOnly,
 	}); err != nil {
 		log.Fatal(err)

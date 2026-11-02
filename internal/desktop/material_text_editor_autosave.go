@@ -25,7 +25,7 @@ func (s *app) writeMaterialTextDraft(ctx context.Context, key string, ref docume
 	}
 	payload := markdownDraftPayload(ref)
 	payload["hasUtf8Bom"], payload["newline"] = ref.hasUTF8BOM, ref.newline
-	_, err := s.backend.Dispatch(ctx, application.Action{Kind: kind, TaskID: ref.taskID, Path: ref.path, Text: content, Payload: payload})
+	_, err := s.dispatchMaterialsBackend(ctx, s.backend, ref.taskPath, application.Action{Kind: kind, TaskID: ref.taskID, Path: ref.path, Text: content, Payload: payload})
 	if err != nil {
 		s.invalidateInstructionEditor()
 	}
@@ -118,7 +118,7 @@ func (s *app) discardMaterialTextAndReload(state *materialTextEditorState) {
 		}
 		var result application.ActionResult
 		if err == nil {
-			result, err = backend.Dispatch(ctx, application.Action{Kind: "document.read", TaskID: ref.taskID, Path: ref.path, Payload: markdownDraftPayload(ref)})
+			result, err = s.dispatchMaterialsBackend(ctx, backend, ref.taskPath, application.Action{Kind: "document.read", TaskID: ref.taskID, Path: ref.path, Payload: markdownDraftPayload(ref)})
 		}
 		if err == nil {
 			err = engine.DiscardDraft(ctx, state.key)

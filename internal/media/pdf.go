@@ -65,6 +65,29 @@ func OpenPDF(ctx context.Context, path string, options Options) (*PDFDocument, e
 	if err != nil {
 		return nil, err
 	}
+	return openPDFData(ctx, data, options)
+}
+
+// OpenPDFBytes copies a bounded snapshot into the native document's owned
+// input. It does not open a filesystem path and retains no caller-owned slice.
+func OpenPDFBytes(ctx context.Context, data []byte, options Options) (*PDFDocument, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	options, err := options.normalized()
+	if err != nil {
+		return nil, err
+	}
+	return openPDFData(ctx, data, options)
+}
+
+func openPDFData(ctx context.Context, data []byte, options Options) (*PDFDocument, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > options.MaxPDFBytes {
+		return nil, fmt.Errorf("PDF 超过 %d 字节预览限制", options.MaxPDFBytes)
+	}
 	if len(data) == 0 {
 		return nil, errors.New("PDF 文件为空")
 	}
@@ -377,7 +400,16 @@ func pdfPixelDimensions(width, height float64, requestedWidth int) (int, int, er
 	}
 	w := maxInt(1, int(math.Ceil(width*scale)))
 	h := maxInt(1, int(math.Ceil(height*scale)))
-	if w > maxPDFPreviewEdge || h > maxPDFPreviewEdge || int64(w)*int64(h) > maxPDFPreviewPixels {
+	// Rounding both edges up can exceed the continuous area cap. Fit the
+	// longer edge in integer pixels; leave ordinary, already bounded sizes alone.
+	if int64(w)*int64(h) > maxPDFPreviewPixels {
+		if w >= h {
+			w = maxPDFPreviewPixels / h
+		} else {
+			h = maxPDFPreviewPixels / w
+		}
+	}
+	if w < 1 || h < 1 || w > maxPDFPreviewEdge || h > maxPDFPreviewEdge || int64(w)*int64(h) > maxPDFPreviewPixels {
 		return 0, 0, errors.New("PDF 页面超过预览位图上限")
 	}
 	return w, h, nil

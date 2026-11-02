@@ -80,8 +80,9 @@ func TestSidebarSettingsLayoutAndSaveFailure(t *testing.T) {
 				s.loading, s.dark = false, dark
 				encoded, _ := json.Marshal(domain.DefaultAppConfig())
 				s.settingsUnit.state.configJSON = string(encoded)
+				s.settingsUnit.state.settingsTab, s.settingsUnit.state.settingsPage = "外观与交互", "tool-visibility"
 				tester := ui.NewTester(func(c *ui.Context) {
-					ui.Column(c).Fill().Padding(24).Gap(16).Children(func() { s.settingsBasic(c, setTheme(c, dark)) })
+					ui.Column(c).Fill().Padding(24).Gap(16).Children(func() { s.settingsNavigation(c, setTheme(c, dark)) })
 				}, width, 900)
 				for _, name := range []string{"侧边栏展示", "需求", "研发工具", "生产发布", "服务"} {
 					assertSettingsVisibleBounds(t, tester, name, width, 900)

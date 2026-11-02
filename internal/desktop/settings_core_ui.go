@@ -14,6 +14,9 @@ func (s *app) settingsBasic(c *ui.Context, p palette) {
 		settingsAppearanceDivider(c)
 		s.settingsAppearanceThemeRow(c, p)
 	})
+}
+
+func (s *app) settingsNavigation(c *ui.Context, p palette) {
 	settingsHelpCard(c, p, "侧边栏展示", "任务和设置始终显示。隐藏入口不会关闭对应功能。", func() {
 		for index, item := range []struct{ key, title string }{
 			{"requirements", "需求"}, {"tools", "研发工具"}, {"production", "生产发布"}, {"services", "服务"},
@@ -42,13 +45,16 @@ func (s *app) settingsToolVisibility(c *ui.Context, p palette) {
 	})
 }
 
-func (s *app) settingsPaths(c *ui.Context, p palette) {
+func (s *app) settingsTaskPaths(c *ui.Context, p palette) {
 	settingsHelpCard(c, p, "任务路径设置", "更改目录时选择是否迁移旧任务数据。", func() {
 		path := s.input("setting:taskRootTarget", s.configString("taskRoot"))
 		settingsAppearanceRow(c, p, "任务根目录", "选择迁移旧任务，或保留旧目录并直接切换。", func(stacked bool) {
 			s.taskRootMigrationPathControl(c, p, path, stacked)
 		})
 	})
+}
+
+func (s *app) settingsPaths(c *ui.Context, p palette) {
 	settingsHelpCard(c, p, "任务资料目录设置", "根目录与子目录均配置后才启用任务资料目录。", func() {
 		root := s.input("setting:requirementMaterialsRoot", s.configString("requirementMaterialsRoot"))
 		s.settingsAppearancePathRow(c, p, "任务资料根目录", "根目录和子目录都配置后，才会启用任务资料目录。", "选择任务资料目录", root, true, func(value string) {
@@ -56,8 +62,6 @@ func (s *app) settingsPaths(c *ui.Context, p palette) {
 		})
 		settingsAppearanceDivider(c)
 		s.settingsAppearanceTextRow(c, p, "requirementMaterialsSubdirectory", "任务资料子目录", "相对根目录的子目录，例如：研发。", "例如：研发", func(value string) { s.saveConfigField("requirementMaterialsSubdirectory", nullableString(value)) })
-		settingsAppearanceDivider(c)
-		s.settingsMaterialsGitSync(c, p)
 		settingsAppearanceDivider(c)
 		s.settingsMaterialsExpansionDepth(c, p)
 	})
@@ -149,7 +153,7 @@ func (s *app) settingsDevelopmentTools(c *ui.Context, p palette) {
 			toolStatus := findMap(mapsFromData(dataValue(s.settingsUnit.state.settingsDevelopmentToolsSnapshot, "tools")), "type", typeKey)
 			initialPath := firstNonEmpty(mapString(toolStatus, "path"), s.developmentToolPath(typeKey))
 			value := s.input("setting:development-tool:"+typeKey, initialPath)
-			ui.Column(c).FillWidth().Padding(10, 12).Gap(7).Background(p.soft).Radius(9).Children(func() {
+			settingsReveal(c, ui.Column(c).FillWidth().Padding(10, 12).Gap(7).Background(p.soft).Radius(9), p, title).Children(func() {
 				ui.Row(c).Gap(8).Children(func() {
 					label(c, title, 12, p.text).FontWeight(500).Grow(1)
 					state, color := developmentToolStatusLabel(toolStatus, p)
@@ -174,7 +178,7 @@ func (s *app) settingsDevelopmentTools(c *ui.Context, p palette) {
 				})
 			})
 		}
-		ui.Row(c).Gap(8).Children(func() {
+		settingsReveal(c, ui.Row(c).FillWidth().MinWidth(0).Wrap().Gap(8), p, "全局默认开发工具").Children(func() {
 			label(c, "全局默认开发工具", 12, p.text).Width(140)
 			for _, tool := range []struct{ value, label string }{{"INTELLIJ_IDEA", "IntelliJ IDEA"}, {"WEBSTORM", "WebStorm"}, {"PYCHARM", "PyCharm"}, {"VISUAL_STUDIO_CODE", "VS Code"}, {"ANDROID_STUDIO", "Android Studio"}, {"DEVECO_STUDIO", "DevEco Studio"}} {
 				choice := tool
@@ -187,31 +191,8 @@ func (s *app) settingsDevelopmentTools(c *ui.Context, p palette) {
 
 func (s *app) settingsTaskCreation(c *ui.Context, p palette) {
 	s.settingsWorkspaceTools(c, p)
-	status := s.settingsUnit.state.settingsCLIStatus["codex"]
-	command := firstNonEmpty(mapString(status, "command"), mapString(status, "commandPath"))
-	settingsHelpCardWithActions(c, p, "Codex CLI 状态", "用于任务命名与 Codex 扩展管理。", func() {
-		s.overflowMenu(c, p, "settings-codex-cli-more", "更多 Codex CLI 操作", false, func(menu *overflowMenuBuilder) {
-			if menu.Item("check-status", "检查状态").Icon("refresh").Chosen() {
-				s.act("cli.status", "", "", "", "", "", map[string]any{"tool": "codex"})
-			}
-			disabled := s.busy || strings.TrimSpace(command) == ""
-			if menu.Item("copy-command", "复制命令路径").Icon("copy").Disabled(disabled).Chosen() {
-				s.copyTextToClipboard(c.Services(), command, "命令路径已复制")
-			}
-			if menu.Item("run-terminal", "在终端中运行").Icon("terminal").Disabled(disabled).Chosen() {
-				s.act("system.cli-terminal", "", "", "", command, "", map[string]any{"tool": "codex"})
-			}
-		})
-	}, func() {
-		s.settingsCLIStatusDetails(c, p, "codex")
-	})
-	settingsHelpCard(c, p, "Codex CLI 命令路径", "留空时自动探测，也可以手动选择；更改后自动保存。", func() {
-		s.settingsConfigPathRow(c, p, "codexExecutablePath", "Codex CLI 可执行文件", "留空时使用 PATH 自动探测", false)
-		if s.toolsUnit.state.cliJobs == nil || s.toolsUnit.state.cliJobs.requests["status:codex"] == nil {
-			s.settingsCLIPathDiscoveryHint(c, p, "codex")
-		}
-		s.settingsCLICommandActions(c, p, "codex", command)
-	})
+	s.settingsBranchNaming(c, p)
+	s.settingsCLIDependency(c, p, "codex", "AI 命名所需工具")
 	settingsHelpCard(c, p, "AI 命名", "仅将需求标题与正文片段交给配置的模型；保留本地编辑能力。", func() {
 		s.settingsSwitch(c, p, "aiRequirementNamingEnabled", "开启 AI 生成分支名和文件夹名", "创建任务时自动补全尚未手动修改的名称。", false)
 		s.settingsSwitch(c, p, "aiRequirementNamingPrewarmEnabled", "拉取需求列表后自动预热命名", "提前准备本次读取到的需求，不受搜索和筛选影响。", false)
@@ -253,29 +234,44 @@ func (s *app) settingsAgents(c *ui.Context, p palette) {
 	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Padding(16).Gap(8).Background(p.surface).Border(1, p.line).Radius(12).Children(func() {
 		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Wrap().Shrink(0).Children(func() {
 			s.settingsChoice(c, p, "agents-scope-global", "全局", s.settingsUnit.state.settingsAgentScope == "global", func() {
-				s.deactivateInstructionEditor()
+				if !s.leaveSettingsInstructionEditor() {
+					return
+				}
 				s.settingsUnit.state.settingsAgentScope, s.settingsUnit.state.settingsAgentGroupID = "global", ""
 				s.loadSettingsAgentInstructions()
 			})
 			for _, group := range s.snapshot.Groups {
 				item := group
 				s.settingsChoice(c, p, "agents-scope-"+item.ID, item.Name, s.settingsUnit.state.settingsAgentScope == item.ID, func() {
-					s.deactivateInstructionEditor()
+					if !s.leaveSettingsInstructionEditor() {
+						return
+					}
 					s.settingsUnit.state.settingsAgentScope, s.settingsUnit.state.settingsAgentGroupID = item.ID, item.ID
 					s.loadSettingsAgentInstructions()
 				})
 			}
 			ui.Spacer(c)
-			if markdown != nil {
+			if markdown != nil && markdown.readOnly {
 				s.renderReadonlyMarkdownReaderActions(c, p, markdown, func(menu *overflowMenuBuilder) {
 					s.renderSettingsInstructionMenuItems(c, menu)
 				})
 			} else {
+				if markdown != nil {
+					s.renderInstructionSaveStatus(c, p, markdown.binding.id)
+				}
 				s.overflowMenu(c, p, "settings-agents-more-"+s.snapshot.Home+":"+s.settingsUnit.state.settingsAgentContext, "更多文档操作", false, func(menu *overflowMenuBuilder) {
 					s.renderSettingsInstructionMenuItems(c, menu)
 				})
 			}
 		})
+		if s.settingsUnit.state.settingsAgentLoaded && state.settingsReadError != "" {
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Padding(8).Background(p.amberBg).Radius(8).Children(func() {
+				label(c, state.settingsReadError, 11, p.amber).Grow(1).Wrap()
+				if action(c, "settings-agents-read-retry", "refresh", "重试读取", p, false) {
+					s.requestSettingsInstructionRead(false)
+				}
+			})
+		}
 		if !s.settingsUnit.state.settingsAgentLoaded {
 			if state.settingsReadError != "" {
 				ui.Row(c).Padding(10).Background(p.amberBg).Radius(8).Children(func() {
@@ -343,7 +339,7 @@ func (s *app) settingsInstructionTemplates(c *ui.Context, p palette) {
 					label(c, firstLine(content), 10, p.muted).SingleLine()
 				})
 				if iconButton(c, fmt.Sprintf("settings-template-edit-%d", index), "edit", "编辑模板", p).Clicked() {
-					s.openForm("instructions.templates.save", "编辑任务说明模板", "", "", "", "", formField{key: "id", label: "模板 ID", value: id}, formField{key: "name", label: "模板名称", value: name}, formField{key: "content", label: "模板内容", value: content, multiline: true})
+					s.openForm("instructions.templates.save", "编辑任务说明模板", "", "", "", "", formField{key: "id", label: "模板 ID", value: id}, formField{key: "name", label: "模板名称", value: name}, formField{key: "content", label: "模板内容", value: content, multiline: true, format: formFieldMarkdown})
 				}
 				if iconButton(c, fmt.Sprintf("settings-template-remove-%d", index), "delete", "删除模板", p).Clicked() {
 					s.confirmNative("删除任务说明模板", "此操作不可撤销。", name, func() { s.act("instructions.templates.remove", "", "", "", "", "", map[string]any{"id": id}) })
@@ -352,14 +348,16 @@ func (s *app) settingsInstructionTemplates(c *ui.Context, p palette) {
 		}
 		ui.Row(c).Justify(ui.End).Children(func() {
 			if action(c, "settings-template-add", "plus", "新建模板", p, false) {
-				s.openForm("instructions.templates.save", "新建任务说明模板", "", "", "", "", formField{key: "name", label: "模板名称"}, formField{key: "content", label: "模板内容", multiline: true})
+				s.openForm("instructions.templates.save", "新建任务说明模板", "", "", "", "", formField{key: "name", label: "模板名称"}, formField{key: "content", label: "模板内容", multiline: true, format: formFieldMarkdown})
 			}
 		})
 	})
 }
 
 func (s *app) loadSettingsAgentInstructions() {
-	s.deactivateInstructionEditor()
+	if !s.leaveSettingsInstructionEditor() {
+		return
+	}
 	scope, groupID := s.settingsInstructionScope()
 	s.settingsUnit.state.settingsAgentContext = scope + ":" + groupID
 	s.settingsUnit.state.settingsAgentLoaded = false

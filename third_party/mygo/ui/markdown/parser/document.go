@@ -71,9 +71,11 @@ const (
 	FootnoteDefinition
 	// MathBlock is display math, whose lines are its TeX.
 	MathBlock
+	// SourcePrefix is an opt-in opaque source range supplied by a host projection.
+	SourcePrefix
 )
 
-var kindNames = [...]string{"root", "paragraph", "heading", "thematic break", "code block", "HTML block", "quote", "list", "item", "table", "table row", "table cell", "footnote definition", "math block"}
+var kindNames = [...]string{"root", "paragraph", "heading", "thematic break", "code block", "HTML block", "quote", "list", "item", "table", "table row", "table cell", "footnote definition", "math block", "source prefix"}
 
 func (k Kind) String() string {
 	if int(k) < len(kindNames) {
@@ -206,7 +208,9 @@ func (b *Block) Healed() bool { return b.healed }
 // Document is Markdown parsed, which takes text appended to it, or edits,
 // and parses only what they change.
 type Document struct {
-	src string
+	src               string
+	literalFenceLines []int
+	sourcePrefixEnd   int
 	// buf holds the source as text is appended: its bytes before the
 	// source's length never change, so that the source is a string over
 	// them, and appending copies only the text appended.
@@ -240,6 +244,13 @@ type Document struct {
 	// revs counts the inlines parsed, to give each a Revision of its own.
 	revs uint32
 	inp  inlineParser
+	// steps counts the work parsing does beyond reading the source once:
+	// the bytes scanned ahead or back, and the delimiters, brackets, nodes
+	// and lines walked, as the loops that could take quadratic time do it.
+	// Tests check that it grows linearly with the source.
+	steps int
+	// marks is the buffer of the last sourceMap.
+	marks []int
 }
 
 type oldInline struct {
@@ -283,6 +294,7 @@ func Parse(src string) *Document {
 // New returns an empty document reading ext.
 func New(ext Extensions) *Document {
 	d := &Document{ext: ext, healedAt: -1}
+	d.inp.d = d
 	d.reset()
 	return d
 }
@@ -300,6 +312,8 @@ func (d *Document) reset() {
 
 // Source returns the text of the document.
 func (d *Document) Source() string { return d.src }
+
+func (d *Document) SourcePrefixEnd() int { return d.sourcePrefixEnd }
 
 // Footnote returns the FootnoteDefinition block of a label, as a
 // FootnoteRef's Text holds it.
@@ -337,13 +351,15 @@ func (d *Document) Streaming() bool { return d.streaming }
 // SetStreaming sets whether the document is text still being written, as
 // a language model's reply: its end then shows what it will most likely
 // become rather than the half-written syntax it is. The last paragraph
-// closes its emphasis, code spans, strikethrough and math, a link whose
-// destination is being written is a link (Inline.Pending), a tag being
-// written is left out, and lines that could still turn into something
-// else are held back: a line of only a few markers, as - or ==, which
-// would make the paragraph above a heading, and a table's header until
-// its delimiter row comes. Finished blocks are never changed. Turn it off
-// once the text is complete, to parse its end exactly as CommonMark does.
+// closes its emphasis, code spans, strikethrough and math (a single $'s
+// too, with ExtDollarMath), within which _ and * open no emphasis; a
+// link whose destination is being written is a link (Inline.Pending), a
+// tag being written is left out, and lines that could still turn into
+// something else are held back: a line of only a few markers, as - or
+// ==, which would make the paragraph above a heading, and a table's
+// header until its delimiter row comes. Finished blocks are never
+// changed. Turn it off once the text is complete, to parse its end
+// exactly as CommonMark does.
 func (d *Document) SetStreaming(on bool) {
 	if d.streaming == on {
 		return
@@ -355,7 +371,9 @@ func (d *Document) SetStreaming(on bool) {
 // Set makes src the text of the document, parsing only what changed
 // since the last: text appended to it, or else the blocks around the
 // change (see Edit).
-func (d *Document) Set(src string) {
+func (d *Document) Set(src string) { d.SetWithLiteralFenceLines(src, nil) }
+
+func (d *Document) setSource(src string) {
 	old := d.src
 	switch {
 	case src == old:

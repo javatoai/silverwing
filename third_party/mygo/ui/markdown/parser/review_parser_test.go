@@ -542,15 +542,7 @@ func TestParserReviewMathBlockOpeningLine(t *testing.T) {
 // Lines ending in \r alone make the parser look for \n to the end of the
 // source on every line.
 func TestParserReviewCROnlyQuadratic(t *testing.T) {
-	cost := func(src string) time.Duration {
-		t0 := time.Now()
-		Parse(src)
-		return time.Since(t0)
-	}
-	cr, lf := cost(strings.Repeat("a\r", 200000)), cost(strings.Repeat("a\n", 200000))
-	if cr > 10*lf {
-		t.Errorf("200k lines: CR %v, LF %v", cr, lf)
-	}
+	checkLinearWork(t, "lines ending in CR", Default, false, repeat("a\r"))
 }
 
 // \[ display math never closes at \]: mathBracket compares with the raw

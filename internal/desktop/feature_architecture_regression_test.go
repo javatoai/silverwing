@@ -459,9 +459,9 @@ func TestFeatureArchitectureSnapshotPermissionsDriveMaterialsForms(t *testing.T)
 			if mode == "annual" && !s.dialogOpen || mode != "annual" && s.dialogOpen {
 				t.Fatalf("temp write capability disagrees with the snapshot: mode=%s open=%t error=%s", mode, s.dialogOpen, s.lastError)
 			}
-			// The local ignore rule is protected even though scratch files are writable.
-			if s.materialsWritable(filepath.Join(temporary, ".gitignore"), false) {
-				t.Fatal("temp synchronization exclusion became editable")
+			// User-managed ignore files have the same temporary-area capability.
+			if got := s.materialsWritable(filepath.Join(temporary, ".gitignore"), false); got != (mode == "annual") {
+				t.Fatal("temp ignore capability differs from the area", mode, got)
 			}
 			// This directory would be writable if explicit NONE were confused
 			// with the absent descriptor used by older test backends.

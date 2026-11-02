@@ -26,6 +26,8 @@ package i18n
 
 import (
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"golang.org/x/text/language"
 )
@@ -36,12 +38,28 @@ import (
 // "sr_RS@latin" is "sr-Latn-RS") and the old codes of a language ("iw" is
 // "he", "in" is "id").
 func Normalize(locale string) string {
-	t, ok := parse(locale)
-	if !ok {
-		return ""
+	if tag, ok := normalized.Load(locale); ok {
+		return tag.(string)
 	}
-	return t.String()
+	var tag string
+	if t, ok := parse(locale); ok {
+		tag = t.String()
+	}
+	if cached.Add(1) <= maxNormalized {
+		normalized.Store(locale, tag)
+	}
+	return tag
 }
+
+// normalized caches Normalize, which formatting calls for every message,
+// for the first maxNormalized locales asked for: an app normalizing what
+// pages or users send would keep every string otherwise.
+var (
+	normalized sync.Map // string -> string
+	cached     atomic.Int64
+)
+
+const maxNormalized = 256
 
 // parse reads locale as Normalize does.
 func parse(locale string) (language.Tag, bool) {

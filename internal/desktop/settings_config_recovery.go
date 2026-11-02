@@ -297,11 +297,11 @@ func (s *app) settingsConfigMutationFinished(action application.Action) {
 
 func (s *app) settingsConfigImportAction() (application.Action, bool) {
 	state := s.settingsUnit.state.settingsConfigRecovery
-	if state == nil || state.preview == nil || !s.materialsUnit.state.importPreview || s.busy ||
+	if state == nil || state.preview == nil || state.preview.Fingerprint == "" || !s.materialsUnit.state.importPreview || s.busy ||
 		!s.settingsConfigRecoveryVisible() || state.previewScope != s.settingsExtensionCurrentScope() {
 		return application.Action{}, false
 	}
-	return application.Action{Kind: "config.import", Path: state.preview.Path}, true
+	return application.Action{Kind: "config.import", Path: state.preview.Path, Payload: map[string]any{"expectedFingerprint": state.preview.Fingerprint}}, true
 }
 
 func (s *app) confirmSettingsConfigImport() {

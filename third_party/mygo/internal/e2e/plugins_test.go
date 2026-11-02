@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/internal/wait"
 	"github.com/egoist/mygo/plugins/fetch"
 	"github.com/egoist/mygo/plugins/sqlite"
 	"github.com/egoist/mygo/plugins/watch"
@@ -200,7 +201,7 @@ func TestPlugins(t *testing.T) {
 	}
 	select {
 	case <-aborted:
-	case <-time.After(5 * time.Second):
+	case <-time.After(wait.Guard):
 		t.Error("the server's request was not canceled")
 	}
 

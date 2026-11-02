@@ -24,6 +24,9 @@ func (s *app) materialsTextPreviewVisible() bool {
 		return true
 	}
 	if documentKindForPath(s.materialsUnit.state.documentPath) == "markdown" {
+		if s.materialsMarkdownWritable(s.materialsUnit.state.documentPath) {
+			return false
+		}
 		return s.readingMode() == "SOURCE"
 	}
 	if strings.EqualFold(filepath.Ext(s.materialsUnit.state.documentPath), ".csv") {
@@ -111,6 +114,11 @@ func (s *app) renderDetectedMaterialsText(c *ui.Context, p palette) *nativeCodeP
 		view.SetScrollPosition(position)
 	}
 	find.nativePreview = owner
+	if line, column := markdownLinkLocation(s.materialsUnit.state.documentLinkFragment); line > 0 {
+		at := markdownLinkLocationOffset(s.materialsUnit.state.documentContent, line, column)
+		view.Select(at, at)
+		s.materialsUnit.state.documentLinkFragment = ""
+	}
 	if markdownSource {
 		state := s.ensureMarkdownEditor()
 		s.bindMaterialsReadingContextMenu(state)

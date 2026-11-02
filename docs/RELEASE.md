@@ -18,7 +18,7 @@ Bun or a JVM to run the app.
 
 ## Build on Windows
 
-Use Go 1.27.1 as declared by `go.mod`. The portable build compiles the GUI,
+Use Go 1.27.3 as declared by `go.mod`. The portable build compiles the GUI,
 fetches or reuses checksum-pinned assets, checks the dependency licenses,
 and creates a portable application directory and ZIP:
 
@@ -62,7 +62,7 @@ the ignored `build/native-packaging/` and `build/native-cache/` directories.
 ## Build on macOS
 
 The current DMG target is Apple silicon (macOS arm64).
-Run the script on an Apple silicon Mac with Go 1.27.1, Xcode command line tools,
+Run the script on an Apple silicon Mac with Go 1.27.3, Xcode command line tools,
 `codesign`, `plutil`, and `hdiutil`:
 
 ```bash

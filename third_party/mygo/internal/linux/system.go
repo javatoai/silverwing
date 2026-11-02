@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -353,6 +354,17 @@ func portalColorScheme() (uint32, bool) {
 	return gVariantGetUint32(inner), true
 }
 
+// doubleClick reads the double click as GTK's settings have it from the
+// desktop.
+func doubleClick() platform.DoubleClick {
+	ms, distance := int32(400), int32(5) // GTK's defaults
+	if settings := gtkSettingsGetDefault(); settings != 0 {
+		gObjectGetPtr(settings, cs("gtk-double-click-time"), unsafe.Pointer(&ms), 0)
+		gObjectGetPtr(settings, cs("gtk-double-click-distance"), unsafe.Pointer(&distance), 0)
+	}
+	return platform.DoubleClick{Time: time.Duration(ms) * time.Millisecond, DX: float64(distance), DY: float64(distance)}
+}
+
 // Preferences reads GTK's animations setting, and the accent, contrast
 // and text size the desktop portal gives, as GNOME's and KDE's do.
 func (t theme) Preferences() platform.Preferences {
@@ -399,6 +411,12 @@ func (t theme) Preferences() platform.Preferences {
 }
 
 func (t theme) IsDark() bool {
+	switch themeSource {
+	case "light":
+		return false
+	case "dark":
+		return true
+	}
 	settings := gtkSettingsGetDefault()
 	var prefer int32
 	gObjectGetPtr(settings, cs("gtk-application-prefer-dark-theme"), unsafe.Pointer(&prefer), 0)
@@ -408,18 +426,46 @@ func (t theme) IsDark() bool {
 	if scheme, ok := portalColorScheme(); ok && scheme != 0 {
 		return scheme == 1
 	}
-	var name ptr
-	gObjectGetPtr(settings, cs("gtk-theme-name"), unsafe.Pointer(&name), 0)
-	return strings.Contains(strings.ToLower(takeStr(name)), "dark")
+	return strings.Contains(strings.ToLower(gtkThemeName(settings)), "dark")
 }
 
+var (
+	// themeSource is the appearance SetSource was given last.
+	themeSource string
+	// lightTheme is true while SetSource("light") has put the light
+	// variant in place of the desktop's dark theme.
+	lightTheme bool
+)
+
 func (t theme) SetSource(source string) {
+	themeSource = source
+	settings := gtkSettingsGetDefault()
+	// A theme named for its dark variant, as Ubuntu's Yaru-dark in dark
+	// mode, keeps GTK and WebKitGTK's prefers-color-scheme dark whatever
+	// gtk-application-prefer-dark-theme says: the light appearance takes
+	// the theme of the name without the suffix (Yaru, or GTK's Adwaita
+	// where there is none), and the others the desktop's theme again.
+	if source != "light" && lightTheme {
+		lightTheme = false
+		gtkSettingsResetProperty(settings, cs("gtk-theme-name"))
+	}
+	if name := gtkThemeName(settings); source == "light" && !lightTheme && len(name) > 5 && strings.EqualFold(name[len(name)-5:], "-dark") {
+		lightTheme = true
+		gObjectSetStr(settings, cs("gtk-theme-name"), cs(name[:len(name)-5]), 0)
+	}
 	dark := source == "dark"
 	if source == "system" {
 		scheme, _ := portalColorScheme()
 		dark = scheme == 1
 	}
-	gObjectSetBool(gtkSettingsGetDefault(), cs("gtk-application-prefer-dark-theme"), dark, 0)
+	gObjectSetBool(settings, cs("gtk-application-prefer-dark-theme"), dark, 0)
+}
+
+// gtkThemeName returns the name of GTK's theme.
+func gtkThemeName(settings ptr) string {
+	var name ptr
+	gObjectGetPtr(settings, cs("gtk-theme-name"), unsafe.Pointer(&name), 0)
+	return takeStr(name)
 }
 
 // D-Bus helpers.

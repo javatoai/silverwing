@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,7 +12,7 @@ import (
 	"silverwing-go/internal/storage"
 )
 
-func TestAnnualGitMergeHistoryRejectsTransientForbiddenTrees(t *testing.T) {
+func TestAnnualGitMergeHistoryPublishesAllNativePaths(t *testing.T) {
 	for _, kind := range []string{"temp", "peer"} {
 		t.Run(kind, func(t *testing.T) {
 			f := newMaterialsGitFixture(t, true)
@@ -34,9 +33,9 @@ func TestAnnualGitMergeHistoryRejectsTransientForbiddenTrees(t *testing.T) {
 			if kind == "peer" {
 				target, original = "2026/123-需求/产品/design.md", "product\n"
 			}
-			materialsGitTestFile(t, f.root, target, "FORBIDDEN PRIVATE CONTENT")
+			materialsGitTestFile(t, f.root, target, "transient local content")
 			materialsGitTestRun(t, f.root, "add", "-f", "--", target)
-			materialsGitTestRun(t, f.root, "commit", "-m", "merge introduces forbidden data")
+			materialsGitTestRun(t, f.root, "commit", "-m", "merge introduces local data")
 			introduced := materialsGitTestRun(t, f.root, "rev-parse", "HEAD")
 			materialsGitTestRun(t, f.root, "merge", "--no-ff", "--no-commit", "right")
 			if kind == "temp" {
@@ -46,28 +45,15 @@ func TestAnnualGitMergeHistoryRejectsTransientForbiddenTrees(t *testing.T) {
 				materialsGitTestRun(t, f.root, "add", "--", target)
 			}
 			materialsGitTestRun(t, f.root, "commit", "-m", "merge restores allowed final tree")
-			// Neither ordinary commits nor the final net diff reveal this leak.
+			// Native history retains the path even when the final net diff is empty.
 			if paths := materialsGitTestRun(t, f.root, "diff", "--name-only", remoteHead, "HEAD"); strings.Contains(paths, target) {
 				t.Fatal("fixture did not hide the transient forbidden path from the net diff", paths)
 			}
-			status, err := f.service.Sync(context.Background(), f.scope, true, nil)
-			if err == nil || !status.Paused || materialsGitTestRun(t, f.remote, "rev-parse", "master") != remoteHead {
-				t.Fatalf("forbidden merge history was published: status=%+v err=%v introduced=%s", status, err, introduced)
+			f.sync()
+			if materialsGitTestRun(t, f.remote, "rev-parse", "master") != materialsGitTestRun(t, f.root, "rev-parse", "HEAD") {
+				t.Fatal("native history was not published")
 			}
-			want := "范围外"
-			if kind == "temp" {
-				want = "temp"
-			}
-			if !strings.Contains(err.Error(), want) {
-				t.Fatal("fixture paused for a different reason than the forbidden merge", err)
-			}
-			probe := exec.Command("git", "-C", f.remote, "cat-file", "-e", introduced)
-			probe.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+filepath.Join(t.TempDir(), "missing"), "GIT_TERMINAL_PROMPT=0")
-			probeErr := probe.Run()
-			var exited *exec.ExitError
-			if !errors.As(probeErr, &exited) {
-				t.Fatalf("remote object check was not a Git rejection; forbidden commit may be readable: %v", probeErr)
-			}
+			materialsGitTestRun(t, f.remote, "cat-file", "-e", introduced)
 		})
 	}
 }
@@ -103,7 +89,7 @@ func TestAnnualGitMergeMayInheritAlreadyRemotePeerContent(t *testing.T) {
 	}
 }
 
-func TestAnnualGitMergeCannotRestoreOldLocalParentPeerThenHideIt(t *testing.T) {
+func TestAnnualGitMergeRetainsUserSelectedPeerHistory(t *testing.T) {
 	f := newMaterialsGitFixture(t, true)
 	f.sync()
 	peer := "2026/123-需求/产品/design.md"
@@ -142,19 +128,12 @@ func TestAnnualGitMergeCannotRestoreOldLocalParentPeerThenHideIt(t *testing.T) {
 	if paths := materialsGitTestRun(t, f.root, "diff", "--name-only", remoteHead, "HEAD"); strings.Contains(paths, peer) {
 		t.Fatal("fixture did not hide the peer changes from the final net diff", paths)
 	}
-	status, err := f.service.Sync(context.Background(), f.scope, true, nil)
-	if err == nil || !status.Paused || !strings.Contains(err.Error(), "范围外") || !strings.Contains(err.Error(), peer) {
-		t.Fatal("inherited old peer history was not rejected at the scope boundary", status, err)
+	f.sync()
+	if materialsGitTestRun(t, f.remote, "rev-parse", "master") != materialsGitTestRun(t, f.root, "rev-parse", "HEAD") {
+		t.Fatal("native merge history was blocked")
 	}
-	if materialsGitTestRun(t, f.remote, "rev-parse", "master") != remoteHead {
-		t.Fatal("inherited old peer merge changed the remote branch")
-	}
-	probe := exec.Command("git", "-C", f.remote, "cat-file", "-e", forbidden)
-	probe.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+filepath.Join(t.TempDir(), "missing"), "GIT_TERMINAL_PROMPT=0")
-	var rejected *exec.ExitError
-	if err := probe.Run(); !errors.As(err, &rejected) {
-		t.Fatalf("forbidden merge object was readable remotely or its probe did not run: %v", err)
-	}
+	materialsGitTestRun(t, f.remote, "cat-file", "-e", forbidden)
+
 }
 
 func TestAnnualGitOwnedHistoryBehindRemotePeerUsesTrustedAncestor(t *testing.T) {
@@ -180,6 +159,7 @@ func TestAnnualGitOwnedHistoryBehindRemotePeerUsesTrustedAncestor(t *testing.T) 
 
 func TestAnnualAgentConcurrentUserEditPreservedAndSafeContextUpdated(t *testing.T) {
 	service, manifest, config, task, scope := annualAgentFixture(t)
+	markMaterialsCatalogStale(t, task)
 	router := filepath.Join(task, AgentRouterFileName)
 	peer := filepath.Join(scope.Root, "new-peer")
 	if err := os.Mkdir(peer, 0755); err != nil {
@@ -207,14 +187,14 @@ func TestAnnualAgentConcurrentUserEditPreservedAndSafeContextUpdated(t *testing.
 	}
 	contextPath := filepath.Join(task, AgentWorkspaceDir, AgentDirectoryName, AgentContextFileName)
 	data, err = os.ReadFile(contextPath)
-	if err != nil || !strings.Contains(string(data), peer) {
+	if err != nil || strings.Contains(string(data), peer) || !strings.Contains(string(data), "主动阅读") {
 		t.Fatal("router conflict prevented safe context refresh", string(data), err)
 	}
 	if err := service.RefreshMaterialsDirectories(task, manifest, config, nil); err != nil {
 		t.Fatal("local retry failed", err)
 	}
 	data, _ = os.ReadFile(router)
-	if !strings.Contains(string(data), peer) || !strings.Contains(string(data), "CONCURRENT USER NOTE") {
+	if strings.Contains(string(data), peer) || !strings.Contains(string(data), "主动阅读") || !strings.Contains(string(data), "CONCURRENT USER NOTE") {
 		t.Fatal("retry lost either the new catalogue or the user's note")
 	}
 }
@@ -235,7 +215,7 @@ func TestAnnualAgentCustomAndMalformedRouterDoNotBlockContext(t *testing.T) {
 		}
 		data, _ := os.ReadFile(router)
 		contextData, _ := os.ReadFile(filepath.Join(task, AgentWorkspaceDir, AgentDirectoryName, AgentContextFileName))
-		if string(data) != custom || !strings.Contains(string(contextData), peer) {
+		if string(data) != custom || strings.Contains(string(contextData), peer) || !strings.Contains(string(contextData), "主动阅读") {
 			t.Fatal("per-document catalogue refresh overwrote the custom router or skipped safe context")
 		}
 		if _, err := service.WriteTaskDocument(task, manifest, config); err != nil {
@@ -249,6 +229,7 @@ func TestAnnualAgentCustomAndMalformedRouterDoNotBlockContext(t *testing.T) {
 
 func TestAnnualAgentHardLinkedRouterPreservesOutsideFileAndUpdatesSafeContext(t *testing.T) {
 	service, manifest, config, task, scope := annualAgentFixture(t)
+	markMaterialsCatalogStale(t, task)
 	router := filepath.Join(task, AgentRouterFileName)
 	before, err := os.ReadFile(router)
 	if err != nil {
@@ -277,7 +258,7 @@ func TestAnnualAgentHardLinkedRouterPreservesOutsideFileAndUpdatesSafeContext(t 
 		}
 	}
 	contextData, err := os.ReadFile(filepath.Join(task, AgentWorkspaceDir, AgentDirectoryName, AgentContextFileName))
-	if err != nil || !strings.Contains(string(contextData), peer) {
+	if err != nil || strings.Contains(string(contextData), peer) || !strings.Contains(string(contextData), "主动阅读") {
 		t.Fatal("hard-linked router prevented safe context refresh", string(contextData), err)
 	}
 	if err := os.Remove(outside); err != nil {
@@ -287,7 +268,7 @@ func TestAnnualAgentHardLinkedRouterPreservesOutsideFileAndUpdatesSafeContext(t 
 		t.Fatal("single-link local retry failed", err)
 	}
 	data, err := os.ReadFile(router)
-	if err != nil || !strings.Contains(string(data), peer) || !strings.Contains(string(data), "USER NOTE MUST STAY") {
+	if err != nil || strings.Contains(string(data), peer) || !strings.Contains(string(data), "主动阅读") || !strings.Contains(string(data), "USER NOTE MUST STAY") {
 		t.Fatal("single-link retry lost the managed update or user's note", string(data), err)
 	}
 }

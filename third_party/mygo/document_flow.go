@@ -562,7 +562,7 @@ func (b *docBase) relocate(target string) error {
 }
 
 func copyFile(from, to string) error {
-	src, err := os.Open(from)
+	src, err := openShared(from)
 	if err != nil {
 		return err
 	}

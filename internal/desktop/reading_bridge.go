@@ -126,7 +126,7 @@ func (s *app) restoreReadingSessionOnSnapshot() {
 	session.restoreAttempted = true
 	if session.restoreLastTask && !session.userInteracted && readingStartupIdentityMatches(session.startupIdentity, s.readingUIIdentity()) {
 		if tab, ok := readingTabForView(session.cache.View); ok {
-			s.tab = tab
+			s.tab = s.restoredTaskContentTab(tab)
 		}
 		if session.cache.LastTaskPath != "" {
 			last := normalizedReadingPath(session.cache.LastTaskPath)
@@ -169,7 +169,7 @@ func (s *app) afterReadingTaskSelection() {
 		delete(session.restoredMaterials, readingMaterialsKey(current.path, current.materialsPath))
 	}
 	if tab, ok := readingTabForView(session.cache.View); ok {
-		s.tab = tab
+		s.tab = s.restoredTaskContentTab(tab)
 	}
 	s.observeReadingSession()
 }
@@ -203,6 +203,7 @@ func (s *app) observeReadingSession() {
 		}
 	}
 	inputs := s.readingObservationInputs()
+	s.captureMarkdownViewMemory(s.materialsUnit.state.markdown)
 	if !session.dirty && session.observation.unchanged(inputs, s.materialsUnit.state.documentTabs, session.scrollStates) {
 		return
 	}
@@ -463,6 +464,7 @@ func (s *app) closeReadingSession() error {
 	if session == nil || session.closed {
 		return nil
 	}
+	s.captureMarkdownViewMemory(s.materialsUnit.state.markdown)
 	if session.store == nil {
 		session.closed = true
 		return nil
@@ -1069,6 +1071,12 @@ func readingViewForTab(tab int) string {
 		return "NOTES"
 	case taskTagTab:
 		return "TAG"
+	case taskFilesTab:
+		return "FILES"
+	case taskServicesTab:
+		return "SERVICES"
+	case taskTerminalTab:
+		return "TERMINAL"
 	default:
 		return "DETAIL"
 	}
@@ -1086,6 +1094,12 @@ func readingTabForView(view string) (int, bool) {
 		return 3, true
 	case "TAG":
 		return taskTagTab, true
+	case "FILES":
+		return taskFilesTab, true
+	case "SERVICES":
+		return taskServicesTab, true
+	case "TERMINAL":
+		return taskTerminalTab, true
 	default:
 		return 0, false
 	}

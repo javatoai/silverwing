@@ -8,11 +8,12 @@ import (
 )
 
 func TestTaskListDensityKeepsRowsCompactAcrossLayouts(test *testing.T) {
-	for _, width := range []int{160, 280, 360} {
+	for _, width := range []int{108, 160, 280, 360} {
 		for _, dark := range []bool{false, true} {
 			for _, archived := range []bool{false, true} {
 				test.Run(fmt.Sprintf("width-%d-dark-%t-archived-%t", width, dark, archived), func(test *testing.T) {
 					state := taskNavigationFixture()
+					state.listWidth = float32(width)
 					state.dark = dark
 					state.page = "tasks"
 					if archived {

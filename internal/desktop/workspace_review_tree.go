@@ -12,6 +12,7 @@ type workspaceReviewTreeDirectory struct {
 	Name        string
 	Path        string
 	Directories map[string]*workspaceReviewTreeDirectory
+	Children    []*workspaceReviewTreeDirectory
 	Files       []workspace.CompareChange
 }
 
@@ -60,12 +61,24 @@ func workspaceReviewSortTree(directory *workspaceReviewTreeDirectory) {
 	sort.SliceStable(directory.Files, func(i, j int) bool {
 		return strings.ToLower(directory.Files[i].Path) < strings.ToLower(directory.Files[j].Path)
 	})
+	directory.Children = make([]*workspaceReviewTreeDirectory, 0, len(directory.Directories))
 	for _, child := range directory.Directories {
 		workspaceReviewSortTree(child)
+		directory.Children = append(directory.Children, child)
 	}
+	sort.Slice(directory.Children, func(i, j int) bool {
+		left, right := directory.Children[i].Name, directory.Children[j].Name
+		if strings.ToLower(left) == strings.ToLower(right) {
+			return left < right
+		}
+		return strings.ToLower(left) < strings.ToLower(right)
+	})
 }
 
 func workspaceReviewSortedDirectories(directory *workspaceReviewTreeDirectory) []*workspaceReviewTreeDirectory {
+	if directory.Children != nil {
+		return directory.Children
+	}
 	children := make([]*workspaceReviewTreeDirectory, 0, len(directory.Directories))
 	for _, child := range directory.Directories {
 		children = append(children, child)

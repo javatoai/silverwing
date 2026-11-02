@@ -5,8 +5,11 @@ package desktop
 // seedMarkdownAutosave so external changes are checked against the draft's
 // original baseline rather than accepted as a new baseline.
 func (s *app) restoreMaterialsDraftForOpening(path string) {
-	if markdownReadingOnly && documentKindForPath(path) == "markdown" {
-		return
+	if documentKindForPath(path) == "markdown" {
+		ref, ok := s.materialsUnit.documentSaveRef(s.documentAutosaveKey(path))
+		if !ok || !markdownSaveRefWritable(ref) || ref.kind != "material-markdown" {
+			return
+		}
 	}
 	if draft, ok := s.materialsUnit.state.documentDrafts[path]; ok {
 		s.materialsUnit.state.documentContent = draft

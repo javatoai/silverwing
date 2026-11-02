@@ -1,6 +1,7 @@
 package desktop
 
 import (
+	"github.com/egoist/mygo/ui"
 	"time"
 )
 
@@ -16,7 +17,14 @@ type settingsState struct {
 	autoSync                         bool
 	notifications                    bool
 	settingsTab                      string
+	settingsLastPages                map[string]string
+	settingsSearchQuery              string
+	settingsSearchTarget             string
+	settingsSearchPending            bool
+	settingsSearchEpoch              uint64
+	settingsContentScrolls           map[string]*ui.ScrollState
 	settingsPage                     string
+	settingsCLITool                  string
 	settingsLoaded                   string
 	settingsOutput                   string
 	settingsConfigOpen               bool
@@ -56,6 +64,7 @@ type settingsState struct {
 	settingsGitEnvironment           map[string]any
 	settingsDevelopmentToolsSnapshot map[string]any
 	settingsCLIStatus                map[string]map[string]any
+	settingsCLIErrors                map[string]string
 	meegleProjectCatalog             *meegleProjectCatalogState
 	skillsBrowser                    *skillsBrowserState
 	settingsCLISessions              map[string]map[string]any

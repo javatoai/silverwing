@@ -32,8 +32,17 @@ func (t TaskTransition) changed() bool { return t.previous != t.next }
 // The shell coordinates owners; it does not reach into their cancel functions,
 // editor fields, or job registries. Reading is captured before presentation reset.
 func (s *app) prepareFeatureTaskSelection(transition TaskTransition) error {
+	if transition.changed() {
+		if err := s.captureTaskLocalNoteInput(); err != nil {
+			return err
+		}
+	}
 	if err := s.materialsUnit.prepareTaskSelection(transition, s); err != nil {
 		return err
+	}
+	if transition.changed() {
+		s.leaveTaskFiles()
+		s.leaveTaskServices()
 	}
 	if transition.origin == taskTransitionSnapshot {
 		s.beforeReadingTaskSelection()

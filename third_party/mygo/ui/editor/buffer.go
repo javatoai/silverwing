@@ -87,9 +87,16 @@ type change struct {
 }
 
 type logEntry struct {
-	version uint64
-	text    rope.Text
-	changes []change
+	version             uint64
+	text, original      rope.Text
+	preserveLineEndings bool
+	crlf                bool
+	changes             []change
+}
+
+func (e logEntry) snapshot() Snapshot {
+	return Snapshot{t: e.text, version: e.version, crlf: e.crlf,
+		original: e.original, preserveLineEndings: e.preserveLineEndings}
 }
 
 // transaction is a step of undo: the text before and after, the changes
@@ -103,6 +110,7 @@ type transaction struct {
 	// which undo and redo log as they go through them, so that each
 	// entry's text is its changes' (as tree-sitter needs).
 	texts     []rope.Text
+	originals []rope.Text // preserved sources of the same versions as texts
 	owner     any
 	selBefore any
 	selAfter  any
@@ -177,6 +185,14 @@ func (b *Buffer) SetMaxSourceBytes(limit int) {
 	defer b.mu.Unlock()
 	b.maxSourceBytes = limit
 	b.sourceLimitSet = limit >= 0
+}
+
+// SourceLimit returns the configured source-byte budget and whether it is set.
+// Structural editors can reject amplified operations before building the edit.
+func (b *Buffer) SourceLimit() (int, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.maxSourceBytes, b.sourceLimitSet
 }
 
 // OriginalText returns the exact source of a source-preserving buffer, or the
@@ -360,7 +376,13 @@ func (b *Buffer) snapshot() (rope.Text, uint64) {
 func (b *Buffer) Snapshot() Snapshot {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return Snapshot{b.text, b.version, b.crlf}
+	return b.snapshotLocked()
+}
+
+// snapshotLocked captures both persistent trees at the same version; b.mu is held.
+func (b *Buffer) snapshotLocked() Snapshot {
+	return Snapshot{t: b.text, version: b.version, crlf: b.crlf,
+		original: b.original, preserveLineEndings: b.preserveLineEndings}
 }
 
 // String returns the text.
@@ -535,8 +557,10 @@ func (b *Buffer) undoStep() (transaction, bool) {
 	b.lastEdit = time.Time{}
 	for i := len(tx.changes) - 1; i >= 0; i-- {
 		b.text = tx.before
+		b.original = tx.originalBefore
 		if i > 0 {
 			b.text = tx.texts[i-1]
+			b.original = tx.originals[i-1]
 		}
 		b.record(invertChanges(tx.changes[i]))
 	}
@@ -558,6 +582,7 @@ func (b *Buffer) redoStep() (transaction, bool) {
 	b.lastEdit = time.Time{}
 	for i, c := range tx.changes {
 		b.text = tx.texts[i]
+		b.original = tx.originals[i]
 		b.record(c)
 	}
 	b.text = tx.after
@@ -568,10 +593,17 @@ func (b *Buffer) redoStep() (transaction, bool) {
 // edit applies edits as a transaction, or into the open one; b.mu is
 // held. It returns the changes, nil when nothing changed.
 func (b *Buffer) edit(edits []Edit, kind editKind, owner, selBefore any) []change {
+	return b.editWithSelection(edits, kind, owner, selBefore, nil)
+}
+
+// editWithSelection computes candidate text and selection metadata before
+// publishing either. The callback must not reenter Buffer; b.mu is held.
+func (b *Buffer) editWithSelection(edits []Edit, kind editKind, owner, selBefore any, selectionAfter func(Snapshot, []Change) any) []change {
 	b.limitExceeded = false
-	if len(edits) == 0 {
+	if len(edits) == 0 && selectionAfter == nil {
 		return nil
 	}
+	hasEdits := len(edits) != 0
 	if !slices.IsSortedFunc(edits, func(x, y Edit) int { return x.Start - y.Start }) {
 		edits = slices.Clone(edits)
 		slices.SortStableFunc(edits, func(x, y Edit) int { return x.Start - y.Start })
@@ -614,11 +646,27 @@ func (b *Buffer) edit(edits []Edit, kind editKind, owner, selBefore any) []chang
 	if b.preserveLineEndings {
 		resultBytes = original.Len()
 	}
-	if b.sourceLimitSet && resultBytes > b.maxSourceBytes {
+	if hasEdits && b.sourceLimitSet && resultBytes > b.maxSourceBytes {
 		b.limitExceeded = true
 		return nil
 	}
-	if len(changes) == 0 && original.Same(originalBefore) {
+	changed := len(changes) != 0 || !original.Same(originalBefore)
+	var selAfter any
+	if selectionAfter != nil {
+		version := b.version
+		if changed {
+			version++
+		}
+		selAfter = selectionAfter(Snapshot{t: text, original: original, version: version,
+			crlf: b.crlf, preserveLineEndings: b.preserveLineEndings}, publicChanges(changes))
+	}
+	if !changed {
+		// A same-text composition commit can still finalize the selection.
+		if selectionAfter != nil && kind == editCompose && !b.lastEdit.IsZero() {
+			if n := len(b.undo); n > 0 && b.undo[n-1].kind == editCompose && b.undo[n-1].owner == owner {
+				b.undo[n-1].selAfter = selAfter
+			}
+		}
 		return nil
 	}
 	b.text = text
@@ -632,6 +680,7 @@ func (b *Buffer) edit(edits []Edit, kind editKind, owner, selBefore any) []chang
 		tx.originalAfter = original
 		tx.changes = append(tx.changes, changes)
 		tx.texts = append(tx.texts, text)
+		tx.originals = append(tx.originals, original)
 	case b.open == 0 && kind != editOther && len(b.undo) > 0 && b.undo[len(b.undo)-1].kind == kind &&
 		b.undo[len(b.undo)-1].owner == owner && (now.Sub(b.lastEdit) < groupTimeout || kind == editCompose && !b.lastEdit.IsZero()):
 		tx := &b.undo[len(b.undo)-1]
@@ -639,15 +688,21 @@ func (b *Buffer) edit(edits []Edit, kind editKind, owner, selBefore any) []chang
 		tx.originalAfter = original
 		tx.changes = append(tx.changes, changes)
 		tx.texts = append(tx.texts, text)
+		tx.originals = append(tx.originals, original)
 	default:
 		b.undo = append(b.undo, transaction{before: before, after: text, changes: [][]change{changes}, texts: []rope.Text{text},
-			originalBefore: originalBefore, originalAfter: original,
+			originalBefore: originalBefore, originalAfter: original, originals: []rope.Text{original},
 			owner: owner, selBefore: selBefore, kind: kind})
 		if len(b.undo) > undoMax {
 			b.undo = slices.Delete(b.undo, 0, len(b.undo)-undoMax)
 		}
 		if b.open > 0 {
 			b.openTx = &b.undo[len(b.undo)-1]
+		}
+	}
+	if selectionAfter != nil {
+		if n := len(b.undo); n > 0 && b.undo[n-1].owner == owner {
+			b.undo[n-1].selAfter = selAfter
 		}
 	}
 	b.lastEdit = now
@@ -734,7 +789,8 @@ func (b *Buffer) setSelectionsAfter(owner, sel any) {
 // b.mu is held.
 func (b *Buffer) record(changes []change) {
 	b.version++
-	b.log = append(b.log, logEntry{version: b.version, text: b.text, changes: changes})
+	b.log = append(b.log, logEntry{version: b.version, text: b.text, original: b.original,
+		preserveLineEndings: b.preserveLineEndings, crlf: b.crlf, changes: changes})
 	if len(b.log) > logMax {
 		b.log = slices.Delete(b.log, 0, len(b.log)-logMax/2)
 	}
@@ -942,9 +998,39 @@ func offsetOf(t rope.Text, p Pos) int {
 // Snapshot is a version of a buffer's text, which stays as it is while
 // the buffer changes: read it from any goroutine.
 type Snapshot struct {
-	t       rope.Text
-	version uint64
-	crlf    bool
+	t, original         rope.Text
+	version             uint64
+	crlf                bool
+	preserveLineEndings bool
+}
+
+// OriginalText returns the exact preserved source at this snapshot's version.
+// Ordinary buffers return their LF text, as Buffer.OriginalText does.
+func (s Snapshot) OriginalText() string {
+	if s.preserveLineEndings {
+		return s.original.String()
+	}
+	return s.t.String()
+}
+
+// OriginalSlice returns a range of the preserved source, with start and end
+// measured in the snapshot's LF UTF-8 byte offsets, as Slice uses.
+func (s Snapshot) OriginalSlice(start, end int) string {
+	if !s.preserveLineEndings {
+		return s.t.Slice(start, end)
+	}
+	start, end = max(0, min(start, s.t.Len())), max(0, min(end, s.t.Len()))
+	return s.original.Slice(originalOffset(s.t, s.original, start), originalOffset(s.t, s.original, end))
+}
+
+// WriteOriginalTo writes the snapshot's exact preserved source without newline
+// conversion. WriteTo keeps its existing line-ending conversion behavior.
+func (s Snapshot) WriteOriginalTo(w io.Writer) (int64, error) {
+	text := s.t
+	if s.preserveLineEndings {
+		text = s.original
+	}
+	return rope.WriteTo(text.Root(), w)
 }
 
 // Version returns the buffer's version the snapshot is of.

@@ -9,6 +9,14 @@ import (
 )
 
 func (s *app) submitForm() {
+	defer func() {
+		if !s.dialogOpen {
+			s.closeSourceBranchForm()
+		}
+	}()
+	if !s.captureActionFormMarkdown() {
+		return
+	}
 	materialsForm := isMaterialsFileManagementAction(s.form.kind) || s.form.kind == "document.rename"
 	if (materialsForm && s.materialsFileInputBusy()) || (!materialsForm && s.busy) {
 		s.lastError = "当前有操作正在执行，请等待完成或取消后重试。"
@@ -122,6 +130,9 @@ func (s *app) submitForm() {
 		payload["groupId"] = s.serviceFormGroupID(payload)
 	}
 	if s.settingsActionForm(form, payload) {
+		if !s.dialogOpen {
+			s.closeActionFormMarkdown()
+		}
 		if s.win != nil {
 			s.win.Invalidate()
 		}
@@ -132,6 +143,7 @@ func (s *app) submitForm() {
 		return
 	}
 	s.dialogOpen = false
+	s.closeActionFormMarkdown()
 	s.act(form.kind, form.taskID, serviceID, moduleID, path, text, payload)
 }
 

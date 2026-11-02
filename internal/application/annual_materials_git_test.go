@@ -113,14 +113,12 @@ func TestAnnualGitAppliedTreeUpdatesAllAgentsWhenPushFails(t *testing.T) {
 	}
 	// Other tasks still update when one task's custom file cannot be managed.
 	data, _ := os.ReadFile(filepath.Join(archivedPath, "AGENTS.md"))
+	var peerPaths []string
 	for _, name := range []string{"验证", "产品"} {
-		if !strings.Contains(string(data), filepath.Join(scope.Root, name)) {
-			t.Fatal(string(data))
-		}
+		peerPaths = append(peerPaths, filepath.Join(scope.Root, name))
 	}
-	if strings.Contains(string(data), "`"+filepath.Join(scope.Root, "测试")+"`") {
-		t.Fatal("removed peer remained")
-	}
+	peerPaths = append(peerPaths, filepath.Join(scope.Root, "测试"))
+	assertGenericMaterialsGuidance(t, string(data), scope, peerPaths...)
 	head := annualLocalGit(t, scope.Base, "rev-parse", "HEAD")
 	remote := annualLocalGit(t, bare, "rev-parse", "master")
 	if err := os.WriteFile(rootAgent, saved, 0644); err != nil {
@@ -130,9 +128,7 @@ func TestAnnualGitAppliedTreeUpdatesAllAgentsWhenPushFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	data, _ = os.ReadFile(rootAgent)
-	if !strings.Contains(string(data), filepath.Join(scope.Root, "验证")) {
-		t.Fatal(string(data))
-	}
+	assertGenericMaterialsGuidance(t, string(data), scope, peerPaths...)
 	if annualLocalGit(t, scope.Base, "rev-parse", "HEAD") != head || annualLocalGit(t, bare, "rev-parse", "master") != remote {
 		t.Fatal("local retry repeated Git writes")
 	}

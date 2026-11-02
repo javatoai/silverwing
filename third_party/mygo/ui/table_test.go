@@ -166,6 +166,55 @@ func TestTableReorderFar(t *testing.T) {
 	}
 }
 
+// The last column sharing the room left ends at the table's end: its
+// header has no edge, as AppKit's. A last column with a width keeps its.
+func TestTableLastColumnEdge(t *testing.T) {
+	// edge reports whether the end of a column's header resizes it, its
+	// pointer moving there and dragging it 30 DIPs out.
+	edge := func(tt *Tester, s *ListState, title string, rtl bool) bool {
+		h := header(t, tt, title)
+		x, y, dx := float32(h.X+h.W)-2, float32(h.Y+h.H/2), float32(-30)
+		if rtl {
+			x, dx = float32(h.X)+2, 30
+		}
+		tt.Move(x, y)
+		cursor := tt.Cursor() == CursorResizeEW
+		before := header(t, tt, title).W
+		tt.Press(x, y)
+		tt.Move(x+dx, y)
+		tt.Release(x+dx, y)
+		after := header(t, tt, title).W
+		if cursor != (after != before) {
+			t.Errorf("%s: the resize pointer %v, but dragged from %v to %v", title, cursor, before, after)
+		}
+		return cursor
+	}
+	for _, rtl := range []bool{false, true} {
+		s := ListState{}
+		cols := []TableColumn{{Title: "Name", Width: 150}, {Title: "Kind", Width: 100}, {Title: "Size"}}
+		tt := coreNewTester(tableView(&s, cols, []string{"a.txt"}), 500, 300)
+		if rtl {
+			tt.SetDirection(RightToLeft)
+		}
+		if edge(tt, &s, "Size", rtl) {
+			t.Errorf("rtl %v: the last column, sharing the room left, has an edge", rtl)
+		}
+		if _, ok := s.Columns.Widths["Size"]; ok {
+			t.Errorf("rtl %v: the last column took a width: %v", rtl, s.Columns.Widths)
+		}
+		if !edge(tt, &s, "Kind", rtl) {
+			t.Errorf("rtl %v: a column with a width before it has no edge", rtl)
+		}
+		// Moved before the others, it has its edge back, and the last one,
+		// with a width, keeps its own.
+		s.Columns.Order = []string{"Size", "Name", "Kind"}
+		tt.Frame()
+		if !edge(tt, &s, "Size", rtl) || !edge(tt, &s, "Kind", rtl) {
+			t.Errorf("rtl %v: moved first, Size or the last column, Kind, has no edge", rtl)
+		}
+	}
+}
+
 func TestTableScrollsSideways(t *testing.T) {
 	s := ListState{}
 	cols := []TableColumn{{Title: "Name", Width: 200}, {Title: "Kind", Width: 200}, {Title: "Size", Width: 200}}
@@ -248,8 +297,7 @@ func TestEditableTextInTable(t *testing.T) {
 	if tt.HasText("beach.jpeg") != true {
 		t.Fatal("the click edited at once")
 	}
-	time.Sleep(renameDelay + 50*time.Millisecond)
-	tt.Frame()
+	tt.Advance(renameDelay + 50*time.Millisecond)
 	tt.Type("sea")
 	tt.Click("notes.txt")
 	if names[1] != "sea.jpeg" || sel != 0 {
@@ -258,8 +306,7 @@ func TestEditableTextInTable(t *testing.T) {
 	// A double click opens, and does not edit.
 	tt.Click("notes.txt")
 	tt.Click("notes.txt")
-	time.Sleep(renameDelay + 50*time.Millisecond)
-	tt.Frame()
+	tt.Advance(renameDelay + 50*time.Millisecond)
 	tt.Type("x")
 	if opened != 0 || names[0] != "notes.txt" {
 		t.Errorf("a double click: opened %d, the name %q", opened, names[0])
@@ -489,5 +536,34 @@ func TestTableHeaderMenuPastTheColumns(t *testing.T) {
 	tt.RightClick("Kind")
 	if built != 1 {
 		t.Fatalf("a column's header built the menu for column %d", built)
+	}
+}
+
+// CellMenu gives the cells a context menu over the whole cell, its padding
+// too, told the row and the column as the cell builder receives them.
+func TestTableCellMenu(t *testing.T) {
+	var s ListState
+	cols := []TableColumn{{Title: "A", Width: 100, Fixed: true}, {Title: "B", Width: 100, Fixed: true}}
+	gotRow, gotCol := -1, -1
+	s.CellMenu = func(m *Menu, row, col int) {
+		gotRow, gotCol = row, col
+		if col == 1 {
+			m.Item("Open")
+		}
+	}
+	tt := NewTester(func(c *Context) {
+		Table(c, &s, cols, 4, func(row, col int) { Textf(c, "r%dc%d", row, col) }).Grow(1)
+	}, 400, 300)
+	tt.Frame()
+	r, _ := tt.Find("r2c1")
+	tt.RightClickAt(r.X+r.W+20, r.Y+r.H/2) // past the text, in the cell
+	if m := tt.Menu(); len(m) != 1 || m[0] != "Open" || gotRow != 2 || gotCol != 1 {
+		t.Fatalf("right-click in r2c1 past its text: menu %q, row %d, col %d", m, gotRow, gotCol)
+	}
+	tt.CloseMenu()
+	r, _ = tt.Find("r1c0")
+	tt.RightClickAt(r.X+2, r.Y+r.H/2)
+	if m := tt.Menu(); m != nil || gotRow != 1 || gotCol != 0 {
+		t.Fatalf("a menu built without items opened: %q (row %d, col %d)", m, gotRow, gotCol)
 	}
 }

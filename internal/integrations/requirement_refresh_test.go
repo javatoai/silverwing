@@ -55,7 +55,7 @@ func TestRequirementRefreshCacheOverlaySurvivesRestartAndIsolatesScopes(t *testi
 		map[string]any{"name": "QC Owner", "members": []any{map[string]any{"name": "new QC"}}},
 		map[string]any{"name": "产品经理", "members": []any{map[string]any{"name": "new PM"}}},
 	}
-	metadata := RequirementMetadataReadResult{ID: item.ID, ProjectKey: item.ProjectKey, Type: item.Type, Title: refreshString("new title"), Status: refreshString("Done"), WorkItem: metadataWorkItem(item.ProjectKey, item.Type, item.ID, refreshString("new title"), refreshString("Done"), roles), SprintEstimates: map[string]RequirementSprintEstimate{"project-a:900": {Days: refreshString("5"), FetchedAt: 200}}}
+	metadata := RequirementMetadataReadResult{ID: item.ID, ProjectKey: item.ProjectKey, Type: item.Type, Title: refreshString("new title"), Status: refreshString("Done"), WorkItem: metadataWorkItem(item.ProjectKey, item.Type, item.ID, refreshString("new title"), refreshString("Done"), roles), SprintEstimates: map[string]RequirementSprintEstimate{"project-a:900": {Days: refreshString("5"), FetchedAt: 200, RuleVersion: personalEstimateRuleVersion}}}
 	if _, err := s.writeRequirementMetadataCache(requirementCacheKey("metadata", "account-a", item), metadata, 200); err != nil {
 		t.Fatal(err)
 	}

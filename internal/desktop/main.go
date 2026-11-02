@@ -27,6 +27,7 @@ type Options struct {
 	Width          int
 	Height         int
 	Tab            int
+	TabExplicit    bool
 	CapturePath    string
 	CaptureOnly    bool
 }
@@ -52,6 +53,7 @@ func Run(backend application.Backend, opts Options) error {
 	if opts.Page == "materials" {
 		opts.Page = "tasks"
 		opts.Tab = 1
+		opts.TabExplicit = true
 	}
 	if opts.Width < 0 || opts.Height < 0 {
 		return fmt.Errorf("window width and height must not be negative")

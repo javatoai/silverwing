@@ -93,6 +93,9 @@ func (s *Service) saveMarkdown(ctx context.Context, root, relativePath, content,
 	if int64(len([]byte(content))) > MaxEditableMarkdown {
 		return MarkdownFileSnapshot{}, errMaterialsPreviewTooLarge
 	}
+	if !utf8.ValidString(content) {
+		return MarkdownFileSnapshot{}, errors.New("Markdown 必须是有效 UTF-8 文本")
+	}
 	root, err := validatedMaterialsRoot(root)
 	if err != nil {
 		return MarkdownFileSnapshot{}, err

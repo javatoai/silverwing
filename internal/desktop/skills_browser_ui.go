@@ -436,6 +436,8 @@ func (s *app) renderSkillsBrowserList(c *ui.Context, p palette, state *skillsBro
 								label(c, mapString(skill, "description"), 9, p.muted).SingleLine()
 							}
 							label(c, extensionOwnershipLabel(mapString(skill, "ownership")), 8, p.muted).SingleLine()
+							origin := skillInstalledOriginText(skill)
+							label(c, origin, 8, p.muted).SingleLine().Tooltip(origin)
 						})
 					})
 					if button.Clicked() {

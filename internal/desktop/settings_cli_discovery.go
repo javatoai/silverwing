@@ -17,7 +17,7 @@ func (s *app) settingsCLIPathDiscoveryHint(c *ui.Context, p palette, tool string
 		return
 	}
 	status := s.settingsUnit.state.settingsCLIStatus[tool]
-	if len(status) > 0 && !dataBool(status, "installed") || strings.HasPrefix(s.settingsUnit.state.settingsOutput, "CLI 状态读取失败") {
+	if len(status) > 0 && !dataBool(status, "installed") || s.settingsUnit.state.settingsCLIErrors[tool] != "" {
 		label(c, "未检测到可用命令，请手动填写可执行文件路径，修改后自动保存。", 10, p.amber).Wrap()
 		return
 	}

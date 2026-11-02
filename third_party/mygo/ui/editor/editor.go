@@ -36,6 +36,7 @@ type options struct {
 	wrapGuides           []int
 	indentGuides         bool
 	scrollPastEnd        bool
+	minHorizontalExtent  float32
 	autoClose            bool
 	folding              bool
 	activeLine           bool
@@ -60,6 +61,7 @@ type options struct {
 	onCompositionChanged func(bool)
 	onLimitExceeded      func()
 	clipboardWrite       func(string) bool
+	textBgs              []TextBackground
 	// The parts' render functions, nil for the editor's own.
 	renderFindBar     func(*ui.Context, ui.Element, *FindBar)
 	renderGoToLine    func(*ui.Context, ui.Element, *GoToLineBar)
@@ -78,10 +80,40 @@ type options struct {
 	signs bool
 }
 
-// sharedScroll is the vertical scroll several editors share.
+// sharedScroll is the vertical position a split diff shares, and optionally
+// its horizontal code position. A common X extent lets either pane reach the
+// longer side's tail without making columns drift in unequal-width panes.
 type sharedScroll struct {
-	y   float64
-	eds []*editor
+	y              float64
+	eds            []*editor
+	x              float32
+	syncHorizontal bool
+	xExtent        float32
+}
+
+func (s *sharedScroll) maxX() float32 {
+	var extent float32
+	for _, ed := range s.eds {
+		if !ed.view.wrap {
+			extent = max(extent, ed.intrinsicMaxScrollX())
+		}
+	}
+	return extent
+}
+
+func (s *sharedScroll) setX(x float32) {
+	s.x = max(0, min(x, s.maxX()))
+	for _, ed := range s.eds {
+		ed.scrollX = s.x
+	}
+}
+
+func (ed *editor) setScrollXShared(x float32) {
+	if shared := ed.o.sharedScroll; shared != nil && shared.syncHorizontal {
+		shared.setX(x)
+		return
+	}
+	ed.scrollX = x
 }
 
 func (s *sharedScroll) set(y float64) {
@@ -238,7 +270,7 @@ type gesture struct {
 func (ed *editor) init(buf *Buffer, o options, t *ui.Theme) {
 	ed.o = o
 	ed.theme = o.theme.resolve(t)
-	ed.view.theme = ed.theme
+	ed.view.setTheme(ed.theme)
 	ed.view.readOnly = o.readOnly
 	if ed.view.buf != nil && ed.view.buf != buf {
 		ed.resetForBuffer()
@@ -247,7 +279,7 @@ func (ed *editor) init(buf *Buffer, o options, t *ui.Theme) {
 	if ed.sels == nil {
 		ed.sels = []sel{{goal: -1, id: 0}}
 		ed.nextID = 1
-		ed.blinkStart = time.Now()
+		ed.blinkStart = ed.frameNow
 		ed.hover.asked = -1
 		ed.hoverLine = -1
 	}
@@ -298,6 +330,11 @@ func (ed *editor) wordChars() string {
 // sync follows the buffer's edits: selections, folds, diagnostics and
 // the overlays move with the text.
 func (ed *editor) sync() {
+	if shared := ed.o.sharedScroll; ((shared != nil && shared.syncHorizontal) || ed.o.minHorizontalExtent > 0) && ed.view.buf != nil && ed.view.version != ed.view.buf.Version() {
+		// A shared extent must shrink with edited content instead of retaining
+		// the longest line from a previous buffer version.
+		ed.view.maxLine = 0
+	}
 	f := &ed.find
 	searched := !f.stale && f.version == ed.view.version
 	ed.view.sync(func(cs []change) {
@@ -400,7 +437,7 @@ func (ed *editor) setSels(sels []sel, reveal reveal) {
 	if reveal != revealNone {
 		ed.reveal = max(ed.reveal, reveal)
 	}
-	ed.blinkStart = time.Now()
+	ed.blinkStart = ed.frameNow
 	ed.autoclosed = ed.autoclosed[:0]
 	// What select next, add cursor and select larger go on from.
 	ed.wholeWord = false
@@ -600,9 +637,9 @@ func (ed *editor) doReveal() {
 		x := cr.X
 		em := v.charWidth * 2
 		if x-em < ed.scrollX {
-			ed.scrollX = max(0, x-em)
+			ed.setScrollXShared(max(0, x-em))
 		} else if x+em > ed.scrollX+w {
-			ed.scrollX = x + em - w
+			ed.setScrollXShared(x + em - w)
 		}
 	}
 }

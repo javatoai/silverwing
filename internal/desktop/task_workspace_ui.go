@@ -32,8 +32,10 @@ func (s *app) taskWorkspace(c *ui.Context, p palette) {
 		s.renderWorkspaceReviewPage(c, p)
 		return
 	}
-	s.ensureTaskRequirementMetadata()
-	s.requestWorkspaceGitStatus(false)
+	if s.tab != taskFilesTab && s.tab != taskServicesTab && s.tab != taskTerminalTab {
+		s.ensureTaskRequirementMetadata()
+		s.requestWorkspaceGitStatus(false)
+	}
 	w, _ := c.Size()
 	// Match Source: keep both panes visible at every width. The 960dp
 	// focused-pane helper is unused in Source; only split-pane width is clamped.
@@ -45,32 +47,26 @@ func (s *app) taskWorkspace(c *ui.Context, p palette) {
 func (s *app) taskWorkspaceDetail(c *ui.Context, p palette) {
 	ui.Column(c).Fill().MinWidth(0).Padding(0, 0, 0, 7).Children(func() {
 		ui.Row(c).FillWidth().Height(51).Shrink(0).Padding(8).Gap(2).Label("任务内容页签").Children(func() {
-			for i, name := range tabs {
-				b := ui.ButtonBase(c.Key(fmt.Sprintf("tab-%d", i))).Height(35).Padding(0, 10).Radius(10).Label(name)
-				fg := p.muted
-				if s.tab == i {
-					fg = p.blue
-					b.Background(p.selected)
-				} else if b.Hovered() {
-					b.Background(p.soft)
-				}
-				b.Children(func() { label(c, name, 14, fg).NoWrap() })
-				if b.Clicked() {
-					s.markReadingInteraction()
-					if s.tab == 3 && i != 3 {
-						s.deactivateInstructionEditor()
+			ui.ScrollHorizontal(c.Key("task-content-tab-scroll")).Grow(1).MinWidth(0).Height(35).Children(func() {
+				ui.Row(c).Height(35).Gap(2).Children(func() {
+					for _, i := range s.visibleTaskContentTabs() {
+						name := tabs[i]
+						b := ui.ButtonBase(c.Key(fmt.Sprintf("tab-%d", i))).Height(35).Padding(0, 10).Radius(10).Label(name)
+						fg := p.muted
+						if s.tab == i {
+							fg = p.blue
+							b.Background(p.selected)
+						} else if b.Hovered() {
+							b.Background(p.soft)
+						}
+						b.Children(func() { label(c, name, 14, fg).NoWrap() })
+						if b.Clicked() {
+							s.selectTaskContentTab(i)
+						}
 					}
-					s.tab = i
-					if i == taskTagTab {
-						s.requestTagHistoryRefresh()
-					}
-					if i == 1 {
-						s.loadDocuments()
-					}
-				}
-			}
+				})
+			})
 			if s.tab == taskTagTab && s.taskUnit.currentTask().id != "" {
-				ui.Spacer(c)
 				s.renderTagHistoryPageMenu(c, p, s.taskUnit.currentTask())
 			}
 		})
@@ -86,6 +82,12 @@ func (s *app) taskWorkspaceDetail(c *ui.Context, p palette) {
 			s.renderTaskNotes(c, p)
 		case taskTagTab:
 			s.renderTaskTagHistory(c, p, s.taskUnit.currentTask())
+		case taskFilesTab:
+			s.renderTaskFiles(c, p)
+		case taskServicesTab:
+			s.renderTaskServices(c, p)
+		case taskTerminalTab:
+			s.renderTaskTerminals(c, p)
 		case 0:
 			ui.Column(c).Grow(1).MinHeight(0).Background(p.surface).Border(1, p.line).Radius(18).Children(func() {
 				ui.Scroll(c).Grow(1).MinHeight(0).TrackScroll(s.taskWorkspaceDetailScroll(s.taskUnit.currentTask())).Padding(18).Children(func() { s.taskDetails(c, p) })

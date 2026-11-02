@@ -7,7 +7,7 @@ import (
 )
 
 func (s *app) observeMeegleProjectPicker() {
-	if state := s.settingsUnit.state.meegleProjectCatalog; state != nil && state.pickerOpen && (s.page != "settings" || s.settingsUnit.state.settingsPage != "cli-meegle") {
+	if state := s.settingsUnit.state.meegleProjectCatalog; state != nil && state.pickerOpen && (s.page != "settings" || !s.settingsCLIPageActive("meegle")) {
 		s.closeMeegleProjectPicker()
 	}
 	if state := s.settingsUnit.state.meegleProjectCatalog; state != nil && state.pickerOpen &&

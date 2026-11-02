@@ -61,7 +61,7 @@ func historyPageLimit(request WorkspaceGitHistoryPageRequest) (int, error) {
 func (s *WorkspaceGitHistoryService) historySnapshot(ctx context.Context, path, baselineRef string) (head, baseline string, err error) {
 	result, err := s.Git.runReadBudget(ctx, path, time.Minute, 4096, "rev-parse", "--verify", "--quiet", "HEAD^{commit}")
 	if err != nil {
-		if ctx.Err() == nil && result.ExitCode == 1 && strings.TrimSpace(result.Stdout) == "" && !result.StdoutTruncated && !result.StderrTruncated {
+		if !gitReadExecutionFailed(err) && ctx.Err() == nil && result.ExitCode == 1 && strings.TrimSpace(result.Stdout) == "" && !result.StdoutTruncated && !result.StderrTruncated {
 			return "", "", nil // An unborn repository has no history.
 		}
 		return "", "", err
@@ -172,7 +172,7 @@ func (s *WorkspaceGitHistoryService) ReadMessageContext(ctx context.Context, pat
 	}
 	ancestor := func(target string) (bool, error) {
 		result, err := s.Git.runReadBudget(ctx, path, time.Minute, 4096, "merge-base", "--is-ancestor", sha, target)
-		if result.ExitCode == 1 && ctx.Err() == nil && !result.StdoutTruncated && !result.StderrTruncated {
+		if !gitReadExecutionFailed(err) && result.ExitCode == 1 && ctx.Err() == nil && !result.StdoutTruncated && !result.StderrTruncated {
 			return false, nil
 		}
 		return err == nil, err
@@ -196,7 +196,7 @@ func (s *WorkspaceGitHistoryService) ReadMessageContext(ctx context.Context, pat
 	result, err := s.Git.runReadBudget(ctx, path, time.Minute, historyMessageOutputBytes, "show", "--no-patch", "--format=%B", "--end-of-options", sha, "--")
 	message := WorkspaceGitCommitMessage{SHA: sha, Message: strings.TrimRight(strings.ToValidUTF8(result.Stdout, "�"), "\r\n")}
 	if err != nil {
-		if ctx.Err() != nil || !errors.Is(err, errGitReadOutputLimit) || !result.StdoutTruncated {
+		if gitReadExecutionFailed(err) || ctx.Err() != nil || !errors.Is(err, errGitReadOutputLimit) || !result.StdoutTruncated {
 			return WorkspaceGitCommitMessage{}, err
 		}
 		message.Truncated = true

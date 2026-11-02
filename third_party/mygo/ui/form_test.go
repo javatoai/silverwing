@@ -119,7 +119,17 @@ func TestFormLayout(t *testing.T) {
 			coreField(c, "Name", func() { coreTextInput(c, &name) })
 			coreField(c, "Email address", func() { coreTextInput(c, &email) }).Description("For receipts.")
 			coreField(c, "Notifications", func() { coreCheckbox(c, &notify, "Send emails") })
-			coreField(c, "Express", func() { coreSwitch(c, &express) })
+			// A description under a control without text leaves its label
+			// level with the control, not with the description.
+			coreField(c, "Express", func() { coreSwitch(c, &express) }).Description("Ships the next day.")
+			// Beside a dot drawn before it, the text of a row lines up
+			// with the label.
+			coreField(c, "Status", func() {
+				coreRow(c).Gap(6).AlignItems(Start).Children(func() {
+					coreBox(c).Width(8).Height(8).Background(RGB(0, 200, 0))
+					coreText(c, "Online")
+				})
+			})
 			coreFieldset(c, "Shipping", func() {
 				coreField(c, "City", func() { coreTextInput(c, &city) })
 			})
@@ -160,6 +170,9 @@ func TestFormLayout(t *testing.T) {
 	sw := box(platform.RoleSwitch, "Express")
 	if l := find("Express"); math.Abs(float64(l.Y+l.H/2)-(sw.Y+sw.H/2)) > 1.5 {
 		t.Errorf("the label's center is at %v, the switch's at %v", l.Y+l.H/2, sw.Y+sw.H/2)
+	}
+	if l, v := find("Status"), find("Online"); !near(float64(l.Y), float64(v.Y)) {
+		t.Errorf("the label is at %v, the text beside the dot at %v", l.Y, v.Y)
 	}
 	// The description sits below its input, in the controls' column.
 	if d := find("For receipts."); !near(float64(d.X), emailIn.X) || float64(d.Y) < emailIn.Y+emailIn.H {

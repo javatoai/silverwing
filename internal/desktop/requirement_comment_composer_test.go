@@ -16,6 +16,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/domain"
+	markdownui "silverwing-go/internal/ui/markdown"
 )
 
 func commentComposerFixture(t *testing.T) (*app, *taskOpenToolsProbeBackend, chan func(), *requirementCommentComposer) {
@@ -195,9 +196,12 @@ func TestCommentComposerNativeDialogLayoutAndKeyboard(t *testing.T) {
 						t.Fatal(err)
 					}
 					_ = imageFile.Close()
-					state.draft.Images = []domain.CommentDraftAsset{{ID: "image-1", Name: strings.Repeat("多图预览", 9) + ".png", Size: 16384, LocalPath: imagePath}}
+					imageName := strings.Repeat("多图预览", 9) + ".png"
+					imageRef := domain.CommentImageMarkdownRef("image-1")
+					state.draft.Images = []domain.CommentDraftAsset{{ID: "image-1", Name: imageName, MarkdownRef: imageRef, Size: 16384, LocalPath: imagePath}}
+					state.body += "\n\n![" + imageName + "](" + imageRef + ")"
+					state.draft.Content = state.body
 					state.draft.Attachment = &domain.CommentDraftAsset{ID: "attachment-1", Name: "发布说明及处理结果.md", Size: 8000}
-					state.thumbnails = map[string]*ui.Bitmap{"image-1": ui.NewBitmap(bitmapImage)}
 					if mode == "preview" {
 						state.preview = true
 					}
@@ -235,10 +239,15 @@ func TestCommentComposerNativeDialogLayoutAndKeyboard(t *testing.T) {
 							t.Fatal("native comment preview did not render its image fixture")
 						}
 					}
-					for _, name := range []string{"添加评论", "编辑", "预览", "添加图片", "添加附件"} {
+					for _, name := range []string{"添加评论", "添加图片", "添加附件"} {
 						if !tt.HasText(name) {
 							t.Fatalf("missing %s %v", name, tt.Texts())
 						}
+					}
+					_, editButton := tt.Find("编辑")
+					_, previewButton := tt.Find("预览")
+					if editButton || previewButton || state.markdown.componentEditor == nil {
+						t.Fatal("public Markdown editor was replaced by mode buttons")
 					}
 					visible := strings.Join(tt.Texts(), "\n")
 					for _, redundant := range []string{"Meegle 账号", "测试账号", "account-1", "草稿已自动保存", "保存草稿", "输入评论，支持 Markdown；Enter 换行"} {
@@ -354,37 +363,14 @@ func TestCommentComposerHelpAndIdleSaveClose(t *testing.T) {
 		t.Fatalf("editor is not quiet by default: %#v", tt.Texts())
 	}
 	captureDesktopTestFrame(t, tt, "comment-minimal-empty-960-light")
-	edit, ok := tt.Find("编辑")
-	if !ok {
-		t.Fatal("edit control missing")
-	}
-	tt.Move(edit.X+edit.W/2, edit.Y+edit.H/2)
-	time.Sleep(650 * time.Millisecond)
-	tt.Frame()
-	if !tt.HasText(help) {
-		t.Fatal("edit help did not appear on hover")
-	}
-	tt.Key(0, ui.KeyEscape)
-	if tt.HasText(help) || !state.open {
-		t.Fatal("Escape closed the composer instead of its tooltip")
-	}
-	tt.Move(950, 890)
-	tt.Frame()
-	for i := 0; i < 16; i++ {
-		tt.Key(0, ui.KeyTab)
-		if tt.Focused("编辑") {
-			break
-		}
-	}
-	if !tt.Focused("编辑") || !tt.HasText(help) {
-		t.Fatal("keyboard focus did not show native help")
-	}
-	tt.Key(0, ui.KeyEscape)
-	if !state.open || tt.HasText(help) {
-		t.Fatal("keyboard help dismissal changed the composer")
+	if tt.HasText("编辑") || tt.HasText("预览") || state.markdown.componentEditor.Mode() != markdownui.Live {
+		t.Fatal("comment editor did not start quietly in Live mode")
 	}
 	state.running = true
 	state.operation = "save"
+	if err := state.markdown.live.ReplaceRange(0, 0, "保留输入", state.markdown.componentEditor.Snapshot().Version); err != nil {
+		t.Fatal(err)
+	}
 	state.body = "保留输入"
 	state.dirty = true
 	tt.Frame()

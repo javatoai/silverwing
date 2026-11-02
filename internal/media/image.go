@@ -39,20 +39,48 @@ type ImageDocument struct {
 }
 
 func OpenImage(ctx context.Context, path string, options Options) (*ImageDocument, error) {
-	options, err := options.normalized()
+	options, err := imageInputOptions(path, options)
 	if err != nil {
 		return nil, err
-	}
-	if extension := extensionOf(path); extension != "" {
-		if _, ok := supportedImageExtensions[extension]; !ok {
-			return nil, fmt.Errorf("%w：%s", ErrUnsupportedType, extension)
-		}
-	} else {
-		return nil, ErrUnsupportedType
 	}
 	data, err := readRegularFile(ctx, path, options.MaxImageBytes, "图片")
 	if err != nil {
 		return nil, err
+	}
+	return openImageData(ctx, data, options)
+}
+
+// OpenImageBytes decodes a bounded snapshot without opening nameHint. Callers
+// keep data unchanged until the call returns; the decoded document owns pixels.
+func OpenImageBytes(ctx context.Context, nameHint string, data []byte, options Options) (*ImageDocument, error) {
+	options, err := imageInputOptions(nameHint, options)
+	if err != nil {
+		return nil, err
+	}
+	return openImageData(ctx, data, options)
+}
+
+func imageInputOptions(nameHint string, options Options) (Options, error) {
+	options, err := options.normalized()
+	if err != nil {
+		return options, err
+	}
+	if extension := extensionOf(nameHint); extension != "" {
+		if _, ok := supportedImageExtensions[extension]; !ok {
+			return options, fmt.Errorf("%w：%s", ErrUnsupportedType, extension)
+		}
+	} else {
+		return options, ErrUnsupportedType
+	}
+	return options, nil
+}
+
+func openImageData(ctx context.Context, data []byte, options Options) (*ImageDocument, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > options.MaxImageBytes {
+		return nil, fmt.Errorf("图片超过 %d 字节预览限制", options.MaxImageBytes)
 	}
 	if len(data) == 0 {
 		return nil, errors.New("图片文件为空")
@@ -318,7 +346,6 @@ func icoDIBToBMP(dib []byte) ([]byte, error) {
 		return nil, errors.New("ICO 位图高度无效")
 	}
 	height /= 2
-	binary.LittleEndian.PutUint32(dib[8:12], uint32(height))
 	paletteEntries := uint32(binary.LittleEndian.Uint32(dib[32:36]))
 	if paletteEntries == 0 && bpp <= 8 {
 		paletteEntries = 1 << bpp
@@ -340,6 +367,9 @@ func icoDIBToBMP(dib []byte) ([]byte, error) {
 	binary.LittleEndian.PutUint32(bmpData[2:6], uint32(len(bmpData)))
 	binary.LittleEndian.PutUint32(bmpData[10:14], uint32(dataOffset))
 	copy(bmpData[14:], dib)
+	// Only the generated BMP header has a halved height. dib may belong to a
+	// caller-owned snapshot shared by subsequent decodes and integrity checks.
+	binary.LittleEndian.PutUint32(bmpData[22:26], uint32(height))
 	if _, err := bmp.DecodeConfig(bytes.NewReader(bmpData)); err != nil {
 		return nil, fmt.Errorf("ICO 位图格式不受支持：%w", err)
 	}

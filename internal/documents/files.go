@@ -41,19 +41,20 @@ type Entry struct {
 	Children []Entry `json:"children,omitempty"`
 }
 type Content struct {
-	Path       string             `json:"path"`
-	Kind       string             `json:"kind"`
-	Text       string             `json:"text"`
-	Hash       string             `json:"hash"`
-	Size       int64              `json:"size"`
-	Modified   string             `json:"modified"`
-	Rows       [][]string         `json:"rows,omitempty"`
-	ReadOnly   bool               `json:"readOnly"`
-	Draft      *MarkdownDraft     `json:"draft,omitempty"`
-	TextDraft  *MaterialTextDraft `json:"textDraft,omitempty"`
-	DraftError string             `json:"draftError,omitempty"`
-	HasUTF8BOM bool               `json:"hasUtf8Bom,omitempty"`
-	Newline    string             `json:"newline,omitempty"`
+	Path                string             `json:"path"`
+	Kind                string             `json:"kind"`
+	Text                string             `json:"text"`
+	Hash                string             `json:"hash"`
+	Size                int64              `json:"size"`
+	Modified            string             `json:"modified"`
+	Rows                [][]string         `json:"rows,omitempty"`
+	ReadOnly            bool               `json:"readOnly"`
+	Draft               *MarkdownDraft     `json:"draft,omitempty"`
+	TextDraft           *MaterialTextDraft `json:"textDraft,omitempty"`
+	DraftError          string             `json:"draftError,omitempty"`
+	HasUTF8BOM          bool               `json:"hasUtf8Bom,omitempty"`
+	Newline             string             `json:"newline,omitempty"`
+	MarkdownEditContext string             `json:"markdownEditContext,omitempty"`
 }
 type Service struct {
 	CacheRoot string
@@ -74,7 +75,7 @@ func Kind(path string) string {
 		return "image"
 	case ".pdf":
 		return "pdf"
-	case ".txt",
+	case ".txt", ".gitignore",
 		".java", ".kt", ".kts", ".gradle",
 		".properties", ".ini", ".conf",
 		".html", ".htm", ".xml", ".svg",
@@ -115,9 +116,6 @@ func list(root, directory string, depth int) ([]Entry, error) {
 	}
 	entries := make([]Entry, 0, len(children))
 	for _, child := range children {
-		if depth == 1 && strings.EqualFold(filepath.Base(directory), "temp") && strings.EqualFold(child.Name(), ".gitignore") {
-			continue
-		}
 		if stagingName.MatchString(child.Name()) || strings.EqualFold(child.Name(), ".git") || strings.HasPrefix(strings.ToLower(child.Name()), ".silverwing-") ||
 			!child.IsDir() && hiddenMaterialsMetadataName(child.Name()) {
 			continue

@@ -18,20 +18,25 @@ import (
 )
 
 type documentSaveRef struct {
-	taskID        string
-	taskPath      string
-	materialsRoot string
-	relativePath  string
-	path          string
-	hash          string
-	overwrite     bool
-	kind          string
-	scope         string
-	groupID       string
-	readOnly      bool
-	hasUTF8BOM    bool
-	newline       string
-	textOwner     *materialTextEditorState
+	taskID         string
+	taskPath       string
+	createdAt      string
+	materialsRoot  string
+	relativePath   string
+	path           string
+	hash           string
+	overwrite      bool
+	kind           string
+	scope          string
+	groupID        string
+	readOnly       bool
+	hasUTF8BOM     bool
+	newline        string
+	textOwner      *materialTextEditorState
+	restoredDraft  bool
+	saveVersion    uint64
+	localTaskRules bool
+	expectedExists bool
 }
 
 func (s *app) initMarkdownAutosave() {
@@ -40,7 +45,7 @@ func (s *app) initMarkdownAutosave() {
 		if !ok {
 			return errors.New("找不到当前 Markdown 文件的保存上下文，请重新读取文件后重试")
 		}
-		if markdownReadingOnly && ref.kind != "material-text" {
+		if !markdownSaveRefWritable(ref) {
 			return errors.New("Markdown 当前仅支持只读阅读")
 		}
 		if s.backend == nil {
@@ -63,6 +68,10 @@ func (s *app) initMarkdownAutosave() {
 		kind := "document.save"
 		if ref.kind == "instruction" {
 			kind = "instructions.save"
+			if ref.localTaskRules {
+				payload["localTaskRules"], payload["taskPath"], payload["taskCreatedAt"] = true, ref.taskPath, ref.createdAt
+				payload["expectedExists"] = ref.expectedExists
+			}
 			if ref.scope != "" {
 				payload["scope"] = ref.scope
 			}
@@ -70,7 +79,7 @@ func (s *app) initMarkdownAutosave() {
 				payload["groupId"] = ref.groupID
 			}
 		}
-		result, err := s.backend.Dispatch(ctx, application.Action{
+		result, err := s.dispatchMaterialsBackend(ctx, s.backend, ref.taskPath, application.Action{
 			Kind: kind, TaskID: ref.taskID, Path: ref.path, Text: snapshot.Content, Payload: payload,
 		})
 		s.releaseBackend()
@@ -89,11 +98,17 @@ func (s *app) initMarkdownAutosave() {
 		}
 		s.materialsUnit.state.documentSaveMu.Lock()
 		current, exists := s.materialsUnit.state.documentSaveRefs[key]
-		if !exists || current.path != ref.path || current.taskPath != ref.taskPath || current.materialsRoot != ref.materialsRoot || current.hash != ref.hash || current.textOwner != ref.textOwner {
+		if !exists || current.path != ref.path || current.taskPath != ref.taskPath || current.createdAt != ref.createdAt || current.materialsRoot != ref.materialsRoot || current.hash != ref.hash || current.textOwner != ref.textOwner {
 			s.materialsUnit.state.documentSaveMu.Unlock()
 			return nil
 		}
-		ref.hash, ref.overwrite = hash, false
+		ref.hash, ref.overwrite, ref.restoredDraft = hash, false, false
+		if ref.localTaskRules {
+			ref.expectedExists = true
+		}
+		if ref.kind == "material-markdown" || ref.kind == "instruction" {
+			ref.saveVersion++
+		}
 		s.materialsUnit.state.documentSaveRefs[key] = ref
 		s.materialsUnit.state.documentSaveMu.Unlock()
 		s.materialsUnit.state.markdownAutosave.SetCacheError(key, dataString(result.Data, "draftError"))
@@ -142,11 +157,11 @@ func (s *app) initMarkdownAutosave() {
 			} else {
 				delete(s.materialsUnit.state.documentDrafts, ref.path)
 				delete(s.materialsUnit.state.documentDirtyMap, ref.path)
-				s.lastMessage = "Markdown 已自动保存"
 			}
 			if state.Error != "" {
 				s.lastError = state.Error
 			}
+			win.Invalidate()
 		})
 	})
 }
@@ -568,6 +583,12 @@ func (s *app) seedMarkdownAutosave(taskID, path, diskContent, localContent, hash
 }
 
 func (s *app) seedMarkdownAutosaveDraft(taskID, path, diskContent, localContent, hash string, draft *documents.MarkdownDraft, draftError string, snapshots ...documents.Content) {
+	s.materialsUnit.state.documentSaveMu.Lock()
+	defer s.materialsUnit.state.documentSaveMu.Unlock()
+	s.seedMarkdownAutosaveDraftLocked(taskID, path, diskContent, localContent, hash, draft, draftError, snapshots...)
+}
+
+func (s *app) seedMarkdownAutosaveDraftLocked(taskID, path, diskContent, localContent, hash string, draft *documents.MarkdownDraft, draftError string, snapshots ...documents.Content) {
 	if s.materialsUnit.state.markdownAutosave == nil || documentKindForPath(path) != "markdown" {
 		return
 	}
@@ -585,10 +606,8 @@ func (s *app) seedMarkdownAutosaveDraft(taskID, path, diskContent, localContent,
 	}
 	if taskID == s.taskUnit.currentTask().id && normalizeIdentityPath(path) == normalizeIdentityPath(s.materialsUnit.state.documentPath) && s.materialsUnit.state.documentReadOnly {
 		s.materialsUnit.state.markdownAutosave.Seed(key, diskContent)
-		s.materialsUnit.state.documentSaveMu.Lock()
 		s.materialsUnit.state.documentSaveRefs[key] = documentSaveRef{taskID: taskID, taskPath: taskPath, materialsRoot: root,
 			relativePath: relativeDocumentPath(root, path), path: path, hash: hash, readOnly: true, hasUTF8BOM: hasBOM, newline: newline}
-		s.materialsUnit.state.documentSaveMu.Unlock()
 		if taskID == s.taskUnit.currentTask().id && normalizeIdentityPath(path) == normalizeIdentityPath(s.materialsUnit.state.documentPath) {
 			s.materialsUnit.state.documentContent, s.materialsUnit.state.documentHash, s.materialsUnit.state.documentDirty = diskContent, hash, false
 			delete(s.materialsUnit.state.documentDrafts, path)
@@ -596,7 +615,7 @@ func (s *app) seedMarkdownAutosaveDraft(taskID, path, diskContent, localContent,
 		}
 		return
 	}
-	previous, hadPrevious := s.materialsUnit.documentSaveRef(key)
+	previous, hadPrevious := s.materialsUnit.state.documentSaveRefs[key]
 	// documentDrafts is keyed by path for legacy UI bookkeeping. It cannot
 	// establish task ownership, so do not import it into a new task identity.
 	_ = localContent
@@ -608,8 +627,8 @@ func (s *app) seedMarkdownAutosaveDraft(taskID, path, diskContent, localContent,
 	s.materialsUnit.state.markdownAutosave.SetCacheError(key, draftError)
 	content, _ := s.materialsUnit.state.markdownAutosave.Content(key)
 	status := s.materialsUnit.state.markdownAutosave.Status(key)
-	ref := documentSaveRef{taskID: taskID, taskPath: taskPath, materialsRoot: root,
-		relativePath: relativeDocumentPath(root, path), path: path, hasUTF8BOM: hasBOM, newline: newline}
+	ref := documentSaveRef{taskID: taskID, taskPath: taskPath, createdAt: s.taskUnit.taskByID(taskID).createdAt, materialsRoot: root, restoredDraft: restored || hadPrevious && previous.restoredDraft, saveVersion: previous.saveVersion,
+		relativePath: relativeDocumentPath(root, path), path: path, kind: "material-markdown", hasUTF8BOM: hasBOM, newline: newline}
 	if status.Dirty {
 		if restored {
 			ref.hash = draft.BaselineHash
@@ -624,6 +643,9 @@ func (s *app) seedMarkdownAutosaveDraft(taskID, path, diskContent, localContent,
 			ref.hash, ref.overwrite = previous.hash, previous.overwrite
 			ref.hasUTF8BOM, ref.newline = previous.hasUTF8BOM, previous.newline
 			switch {
+			case previous.kind == "material-markdown" && previous.createdAt != ref.createdAt:
+				s.materialsUnit.state.markdownAutosave.MarkConflict(key, content, "资料所属任务已变化，请接受磁盘版本或明确覆盖旧草稿")
+				status = s.materialsUnit.state.markdownAutosave.Status(key)
 			case hash != "" && previous.hash != "" && hash != previous.hash:
 				s.materialsUnit.state.markdownAutosave.MarkConflict(key, content, "文件已被外部修改，请接受外部版本或明确覆盖")
 				status = s.materialsUnit.state.markdownAutosave.Status(key)
@@ -641,9 +663,7 @@ func (s *app) seedMarkdownAutosaveDraft(taskID, path, diskContent, localContent,
 	} else {
 		ref.hash = hash
 	}
-	s.materialsUnit.state.documentSaveMu.Lock()
 	s.materialsUnit.state.documentSaveRefs[key] = ref
-	s.materialsUnit.state.documentSaveMu.Unlock()
 	if taskID == s.taskUnit.currentTask().id && normalizeIdentityPath(path) == normalizeIdentityPath(s.materialsUnit.state.documentPath) {
 		s.materialsUnit.state.documentContent = content
 		s.materialsUnit.state.documentHash = ref.hash
@@ -685,32 +705,43 @@ func instructionIdentity(action application.Action, path string) (scope, taskID,
 // a changed disk hash marks it conflicted instead of silently replacing it.
 func (s *app) seedInstructionAutosave(action application.Action, result application.ActionResult) (string, string, bool) {
 	if s.materialsUnit.state.markdownAutosave == nil {
-		return "", result.Text, markdownReadingOnly || dataBool(result.Data, "readOnly")
+		return "", result.Text, true
 	}
 	path := result.Path
 	if path == "" {
 		path = action.Path
 	}
 	if strings.TrimSpace(path) == "" {
-		return "", result.Text, markdownReadingOnly || dataBool(result.Data, "readOnly")
+		return "", result.Text, true
 	}
 	scope, taskID, groupID := instructionIdentity(action, path)
 	key := s.instructionAutosaveKey(scope, taskID, groupID, path)
-	readOnly := markdownReadingOnly || dataBool(result.Data, "readOnly")
+	permission := documentSaveRef{kind: "instruction", scope: scope, readOnly: dataBool(result.Data, "readOnly")}
+	readOnly := !markdownSaveRefWritable(permission)
 	newHash := dataString(result.Data, "hash")
-	if markdownReadingOnly {
+	// Use the writer's publication lock through validation and seeding. A save
+	// that has written bytes but not published its hash remains Saving; a save
+	// completed during this read is detected even if the Buffer did not change.
+	s.materialsUnit.state.documentSaveMu.Lock()
+	defer s.materialsUnit.state.documentSaveMu.Unlock()
+	previous, hadPrevious := s.materialsUnit.state.documentSaveRefs[key]
+	if _, captured := action.Payload["instructionSaveVersion"]; captured &&
+		(!hadPrevious || previous.hash != payloadString(action.Payload, "instructionBaselineHash") || previous.saveVersion != payloadUint64(action.Payload, "instructionSaveVersion")) {
+		return "", "", readOnly
+	}
+	if !readOnly && s.materialsUnit.state.markdownAutosave.Status(key).Saving {
+		return "", "", readOnly
+	}
+	if readOnly {
 		s.materialsUnit.state.markdownAutosave.Seed(key, result.Text)
 		ref := documentSaveRef{taskID: taskID, path: path, hash: newHash, kind: "instruction", readOnly: true}
 		if scope != "task" {
 			ref.scope, ref.groupID = scope, groupID
 		}
-		s.materialsUnit.state.documentSaveMu.Lock()
 		s.materialsUnit.state.documentSaveRefs[key] = ref
-		s.materialsUnit.state.documentSaveMu.Unlock()
 		return key, result.Text, true
 	}
-	acceptDisk := dataBool(action.Payload, "acceptDisk")
-	previous, hadPrevious := s.materialsUnit.documentSaveRef(key)
+	acceptDisk := dataBool(action.Payload, "acceptDisk") && s.instructionReadMayReplaceDraft(action, key)
 
 	if acceptDisk {
 		s.materialsUnit.state.markdownAutosave.AcceptDisk(key, result.Text, true)
@@ -720,6 +751,7 @@ func (s *app) seedInstructionAutosave(action application.Action, result applicat
 	content, _ := s.materialsUnit.state.markdownAutosave.Content(key)
 	status := s.materialsUnit.state.markdownAutosave.Status(key)
 	ref := documentSaveRef{taskID: taskID, path: path, kind: "instruction", scope: "", groupID: "", readOnly: readOnly}
+	ref.saveVersion = previous.saveVersion
 	if scope != "task" {
 		ref.scope, ref.groupID = scope, groupID
 	}
@@ -732,9 +764,7 @@ func (s *app) seedInstructionAutosave(action application.Action, result applicat
 	} else {
 		ref.hash = newHash
 	}
-	s.materialsUnit.state.documentSaveMu.Lock()
 	s.materialsUnit.state.documentSaveRefs[key] = ref
-	s.materialsUnit.state.documentSaveMu.Unlock()
 	return key, content, readOnly
 }
 
@@ -744,19 +774,13 @@ func (s *app) instructionSaveRef(key string) (documentSaveRef, bool) {
 }
 
 func (s *app) editInstructionAutosave(key, content string) {
-	if markdownReadingOnly {
-		return
-	}
-	if ref, ok := s.instructionSaveRef(key); ok && !ref.readOnly && s.materialsUnit.state.markdownAutosave != nil {
+	if ref, ok := s.instructionSaveRef(key); ok && markdownSaveRefWritable(ref) && s.materialsUnit.state.markdownAutosave != nil {
 		s.materialsUnit.state.markdownAutosave.Edit(key, content)
 	}
 }
 
 func (s *app) setInstructionComposing(key string, composing bool) {
-	if markdownReadingOnly {
-		return
-	}
-	if ref, ok := s.instructionSaveRef(key); ok && !ref.readOnly && s.materialsUnit.state.markdownAutosave != nil {
+	if ref, ok := s.instructionSaveRef(key); ok && markdownSaveRefWritable(ref) && s.materialsUnit.state.markdownAutosave != nil {
 		s.materialsUnit.state.markdownAutosave.SetComposing(key, composing)
 	}
 }
@@ -792,6 +816,12 @@ func (s *app) observeMarkdownComposition(state *markdownEditorState, owner strin
 }
 
 func (s *app) clearMarkdownComposition(state *markdownEditorState) {
+	if state != nil && state.live != nil {
+		state.live.EndComposition()
+		s.observeMaterialsMarkdownInput(state)
+		s.setMarkdownEditorComposing(state, state.live.Composing())
+		return
+	}
 	if state == nil || state.composingOwner == "" {
 		return
 	}
@@ -802,6 +832,9 @@ func (s *app) clearMarkdownComposition(state *markdownEditorState) {
 
 func (s *app) setMarkdownEditorComposing(state *markdownEditorState, composing bool) {
 	if state == nil {
+		return
+	}
+	if state.live != nil && !s.markdownEditorIsCurrent(state) {
 		return
 	}
 	if state.binding != nil {
@@ -840,7 +873,7 @@ func (s *app) editMarkdownAutosave(path, content string) {
 	s.materialsUnit.state.documentSaveMu.Lock()
 	ref, exists := s.materialsUnit.state.documentSaveRefs[key]
 	s.materialsUnit.state.documentSaveMu.Unlock()
-	if !exists || ref.readOnly || markdownReadingOnly || ref.kind == "instruction" || ref.kind == "material-text" {
+	if !exists || !markdownSaveRefWritable(ref) || ref.kind != "material-markdown" {
 		return
 	}
 	s.materialsUnit.state.markdownAutosave.Edit(key, content)
@@ -856,7 +889,7 @@ func (s *app) markdownSaveState() (string, editor.SaveState) {
 
 func (s *app) flushMarkdownAutosave(key string) {
 	ref, exists := s.materialsUnit.documentSaveRef(key)
-	if s.materialsUnit.state.markdownAutosave == nil || key == "" || !exists || ref.readOnly || markdownReadingOnly && ref.kind != "material-text" {
+	if s.materialsUnit.state.markdownAutosave == nil || key == "" || !exists || !markdownSaveRefWritable(ref) {
 		return
 	}
 	go func() {
@@ -889,7 +922,7 @@ func (s *app) flushMarkdownAutosave(key string) {
 
 func (s *app) retryMarkdownAutosave(key string) {
 	ref, exists := s.materialsUnit.documentSaveRef(key)
-	if exists && !ref.readOnly && !(markdownReadingOnly && ref.kind != "material-text") && s.materialsUnit.state.markdownAutosave != nil && s.materialsUnit.state.markdownAutosave.Retry(key) {
+	if exists && markdownSaveRefWritable(ref) && s.materialsUnit.state.markdownAutosave != nil && s.materialsUnit.state.markdownAutosave.Retry(key) {
 		s.lastError = ""
 	}
 }
@@ -900,12 +933,12 @@ func (s *app) overwriteMarkdownAfterConflict(key string) {
 	}
 	s.materialsUnit.state.documentSaveMu.Lock()
 	ref, ok := s.materialsUnit.state.documentSaveRefs[key]
-	if ok && !ref.readOnly && !(markdownReadingOnly && ref.kind != "material-text") {
+	if ok && markdownSaveRefWritable(ref) {
 		ref.overwrite = true
 		s.materialsUnit.state.documentSaveRefs[key] = ref
 	}
 	s.materialsUnit.state.documentSaveMu.Unlock()
-	if ok && !ref.readOnly && !(markdownReadingOnly && ref.kind != "material-text") {
+	if ok && markdownSaveRefWritable(ref) {
 		s.materialsUnit.state.markdownAutosave.ResumeAfterConflict(key)
 	}
 }
@@ -975,6 +1008,7 @@ func (s *app) discardMarkdownAndReload() {
 			s.closeMarkdownEditor()
 			s.materialsUnit.state.documentDirty, s.materialsUnit.state.documentEditing = false, false
 			s.materialsUnit.state.documentContent, s.lastError = "", ""
+			s.materialsUnit.state.documentReadPending = true
 			s.act("document.read", ref.taskID, "", "", ref.path, "", nil)
 		})
 	}()

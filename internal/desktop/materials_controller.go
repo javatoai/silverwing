@@ -14,6 +14,9 @@ import (
 type materialsController struct{ state materialsState }
 
 type materialsState struct {
+	markdownLinkFile              *markdownLinkFilePreview
+	materialsBackendMu            sync.Mutex
+	materialsBackendLanes         map[string]*materialsBackendLane
 	materialsGit                  *materialsGitDesktopState
 	materialsGitBranches          *materialsGitBranchesState
 	materialsGitCapture           bool

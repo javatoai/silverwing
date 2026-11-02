@@ -2,6 +2,7 @@ package desktop
 
 import (
 	"fmt"
+	"github.com/egoist/mygo/ui/markdown/parser"
 	"image"
 	"image/png"
 	"math"
@@ -12,6 +13,7 @@ import (
 
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/editor"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -33,7 +35,7 @@ func saveFrameworkReadingFixture(t *testing.T, tester *ui.Tester, name string) {
 }
 
 func TestMyGOReadingLayoutCopyAndProjection(t *testing.T) {
-	if mygo.Version != "0.5.0" {
+	if mygo.Version != "0.7.3" {
 		t.Fatalf("runtime version %s", mygo.Version)
 	}
 	const code = "fmt.Println(\"原始代码\")  \r\nnext()\r\n"
@@ -114,7 +116,21 @@ func TestMyGOReadingImageTrustAndLightbox(t *testing.T) {
 		t.Fatal("image placeholder text entered visible find")
 	}
 	bitmap := ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 240, 100)))
-	seedMarkdownReadyImages(t, s, state, bitmap)
+	native := ensureFrameworkMarkdown(state)
+	for i := 1; i < native.document.Len(); i++ {
+		for _, node := range native.document.Inlines(i) {
+			if node.Kind != parser.Image {
+				continue
+			}
+			part := native.partAt(state, node.Start)
+			start, end := native.projection.OriginalOffset(node.Start), native.projection.OriginalOffset(node.End)
+			resource, err := s.ensureMarkdownImage(state, part, editor.Node{Destination: node.Dest, Range: editor.SourceRange{Start: start, End: end}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			resource.bitmap, resource.error, resource.loading = bitmap, "", false
+		}
+	}
 	tester.Frame()
 	if err := tester.Click("Markdown 图片：独立图"); err != nil {
 		t.Fatal(err)
@@ -128,6 +144,80 @@ func TestMyGOReadingImageTrustAndLightbox(t *testing.T) {
 	tester.Key(0, ui.KeyEscape)
 	if s.materialsUnit.state.markdownBitmapViewer != nil || state.doc.Source() != source {
 		t.Fatal("lightbox close lost reader/source")
+	}
+}
+
+func TestMarkdownImageResourceSurvivesOffsetChangesAndSharesReferences(t *testing.T) {
+	const target = "https://example.invalid/shared-image"
+	state := newReadonlyMarkdownState("image-owner", "![first]("+target+")", nil)
+	t.Cleanup(func() { closeMarkdownPreviewState(state) })
+	s := &app{}
+	first, err := s.ensureMarkdownImage(state, editor.Part{ID: 1}, editor.Node{Destination: target, Range: editor.SourceRange{Start: 0, End: 20}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.bitmap = ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 8, 8)))
+	cancelled := false
+	first.cancel = func() { cancelled = true }
+	state.imageRenderSeen = make(map[string]bool)
+	shifted, err := s.ensureMarkdownImage(state, editor.Part{ID: 2}, editor.Node{Destination: target, Range: editor.SourceRange{Start: 25, End: 45}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicate, err := s.ensureMarkdownImage(state, editor.Part{ID: 3}, editor.Node{Destination: target, Range: editor.SourceRange{Start: 70, End: 90}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.pruneMarkdownImagePreviews(state, state.imageRenderSeen)
+	if shifted != first || duplicate != first || len(state.inlineImages) != 1 || cancelled || first.bitmap == nil {
+		t.Fatalf("source offsets replaced or released a shared image: same-shift=%v same-duplicate=%v resources=%d cancelled=%v", shifted == first, duplicate == first, len(state.inlineImages), cancelled)
+	}
+}
+
+func TestMarkdownImageResourceKeyRetainsOwnershipAndTrustScope(t *testing.T) {
+	const target = "https://example.invalid/scoped-image"
+	for _, change := range []string{"task", "document", "target", "trusted-path", "materials-root", "skill-root"} {
+		t.Run(change, func(t *testing.T) {
+			state := newReadonlyMarkdownState("image-owner", "![image]("+target+")", nil)
+			t.Cleanup(func() { closeMarkdownPreviewState(state) })
+			s := &app{taskUnit: taskController{state: taskState{tasks: []task{{id: "image-owner", materialsPath: "first-root"}}}}}
+			if change == "materials-root" {
+				state.detached = false
+			} else if change == "skill-root" {
+				state.taskID, state.path, state.linkRoot, state.remoteImages = "local-skill:image", "SKILL.md", "first-root", true
+			}
+			node := editor.Node{Destination: target, Range: editor.SourceRange{Start: 0, End: 20}}
+			first, err := s.ensureMarkdownImage(state, editor.Part{ID: 1}, node)
+			if err != nil {
+				t.Fatal(err)
+			}
+			first.bitmap = ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 8, 8)))
+			cancelled := false
+			first.cancel = func() { cancelled = true }
+			switch change {
+			case "task":
+				state.taskID = "other-owner"
+			case "document":
+				state.path = "other.md"
+			case "target":
+				node.Destination += "-other"
+			case "trusted-path":
+				state.trustedImages = map[string]string{target: filepath.Join(t.TempDir(), "other.png")}
+			case "materials-root":
+				s.taskUnit.state.tasks[0].materialsPath = "second-root"
+			case "skill-root":
+				state.linkRoot = "second-root"
+			}
+			state.imageRenderSeen = make(map[string]bool)
+			next, err := s.ensureMarkdownImage(state, editor.Part{ID: 1}, node)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.pruneMarkdownImagePreviews(state, state.imageRenderSeen)
+			if next == first || next.key == first.key || next.bitmap != nil || !cancelled || len(state.inlineImages) != 1 {
+				t.Fatalf("image crossed %s scope or retained its stale request: same=%v resources=%d cancelled=%v", change, next == first, len(state.inlineImages), cancelled)
+			}
+		})
 	}
 }
 

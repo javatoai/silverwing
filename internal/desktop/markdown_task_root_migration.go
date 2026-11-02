@@ -95,7 +95,7 @@ func (s *app) hasPendingTaskMarkdownMigrationSource() bool {
 	s.materialsUnit.state.documentSaveMu.Lock()
 	defer s.materialsUnit.state.documentSaveMu.Unlock()
 	for key, ref := range s.materialsUnit.state.documentSaveRefs {
-		if ref.taskID == "" || ref.kind == "instruction" && ref.scope != "" {
+		if ref.taskID == "" || ref.kind == "instruction" && ref.scope != "" && !ref.localTaskRules {
 			continue
 		}
 		if s.materialsUnit.state.markdownAutosave != nil {
@@ -194,7 +194,7 @@ func (s *app) captureMarkdownTaskRootMigration(action application.Action) (*mark
 				break
 			}
 		}
-		if owner == nil || ref.kind == "instruction" && ref.scope != "" {
+		if owner == nil || ref.kind == "instruction" && ref.scope != "" && !ref.localTaskRules {
 			continue
 		}
 		if plan.autosave != nil && plan.autosave.Status(key).Composing {
@@ -213,6 +213,12 @@ func (s *app) captureMarkdownTaskRootMigration(action application.Action) (*mark
 				continue
 			}
 			after.path = path
+			if ref.localTaskRules {
+				after.taskPath, _, err = workspace.RebaseTaskRootMigrationPath(ref.taskPath, preview.PathMappings)
+				if err != nil {
+					return nil, err
+				}
+			}
 		} else {
 			if normalizeIdentityPath(ref.taskPath) != normalizeIdentityPath(owner.path) || normalizeIdentityPath(ref.materialsRoot) != normalizeIdentityPath(owner.materialsPath) {
 				return nil, errors.New("Markdown 保存身份已变化，请重新打开文件再迁移")
@@ -238,6 +244,9 @@ func (s *app) captureMarkdownTaskRootMigration(action application.Action) (*mark
 		newKey := s.documentAutosaveKeyForIdentity(ref.taskID, after.taskPath, after.materialsRoot, after.path)
 		if ref.kind == "instruction" {
 			newKey = s.instructionAutosaveKey("task", ref.taskID, "", after.path)
+			if ref.localTaskRules {
+				newKey += "\x00" + ref.createdAt
+			}
 		}
 		if newKey == "" || destinations[newKey] {
 			return nil, errors.New("Markdown 迁移后保存身份冲突")
@@ -285,7 +294,7 @@ func (s *app) flushMarkdownTaskRootMigrationInputs(plan *markdownTaskRootMigrati
 		if err := s.captureMarkdownEditorInput(s.materialsUnit.state.markdown); err != nil {
 			return err
 		}
-		if notes := s.taskUnit.state.taskNotesUI; notes != nil && notes.activeKind == "task" {
+		if notes := s.taskUnit.state.taskNotesUI; notes != nil && (notes.activeKind == "task" || notes.activeKind == "task-local") {
 			if err := s.captureMarkdownEditorInput(notes.activeMarkdown); err != nil {
 				return err
 			}
@@ -374,6 +383,7 @@ func (l *markdownTaskRootMigrationLease) Complete(result application.ActionResul
 		}
 		// A save already running at Capture may have advanced its disk baseline.
 		updates[index].after.hash, updates[index].after.overwrite = current.hash, current.overwrite
+		updates[index].after.expectedExists, updates[index].after.saveVersion = current.expectedExists, current.saveVersion
 	}
 	s.materialsUnit.state.documentSaveMu.Unlock()
 	uiState, err := s.buildMarkdownTaskRootMigrationUI(l.plan)

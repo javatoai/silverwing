@@ -105,6 +105,9 @@ func (s *Service) writeUserRequirementComment(ctx context.Context, p map[string]
 	if !d.HasContent() {
 		return nil, errors.New("请输入评论、添加图片或附件")
 	}
+	if len(d.Content) > 2<<20 || len(d.ActiveImages()) > 20 {
+		return nil, errors.New("评论文字不能超过 2 MB，图片最多 20 张")
+	}
 	if editing && !d.HasChanges() {
 		return nil, errors.New("评论内容未变化，无需保存")
 	}
@@ -195,6 +198,7 @@ func (s *Service) writeUserRequirementComment(ctx context.Context, p map[string]
 	for i := range d.Images {
 		if activeImages[d.Images[i].ID] {
 			assets = append(assets, &d.Images[i])
+			delete(activeImages, d.Images[i].ID)
 		}
 	}
 	imageCount := len(assets)

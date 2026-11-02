@@ -3,7 +3,6 @@ package parser
 import (
 	"strings"
 	"testing"
-	"time"
 )
 
 // Bugs found reviewing the inline parser; each test fails on 088606d5.
@@ -26,23 +25,9 @@ func TestReviewEmailOffsets(t *testing.T) {
 // Quadratic time: nested footnote-like brackets, $ math with
 // ExtDollarMath, and \( without \).
 func TestReviewQuadratic(t *testing.T) {
-	for _, c := range []struct {
-		name string
-		src  string
-		ext  Extensions
-	}{
-		{"footnote brackets", strings.Repeat("[^a", 20000) + strings.Repeat("]", 20000), Default},
-		{"dollar openers", strings.Repeat("$a ", 30000), Default | ExtDollarMath},
-		{"\\( openers", strings.Repeat(`\(`, 100000), Default},
-	} {
-		start := time.Now()
-		d := New(c.ext)
-		d.Set(c.src)
-		_ = d.HTML()
-		if el := time.Since(start); el > time.Second {
-			t.Errorf("%s took %v", c.name, el)
-		}
-	}
+	checkLinear(t, "footnote brackets", Default, func(n int) string { return strings.Repeat("[^a", n) + strings.Repeat("]", n) })
+	checkLinear(t, "dollar openers", Default|ExtDollarMath, repeat("$a "))
+	checkLinear(t, "\\( openers", Default, repeat(`\(`))
 }
 
 // HTML entities are only names of the table followed by ;, not a

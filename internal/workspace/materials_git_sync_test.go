@@ -108,10 +108,13 @@ func TestMaterialsGitInitialJoinKeepsBothSidesAndScope(t *testing.T) {
 		}
 	}
 	tracked := materialsGitTestRun(t, f.remote, "ls-tree", "-r", "--name-only", "master")
-	for _, p := range []string{"outside.txt", ".silverwing-import-temp", "ignored.log"} {
-		if strings.Contains(tracked, p) {
-			t.Fatalf("unexpected upload %s: %s", p, tracked)
+	for _, path := range []string{"outside.txt", ".silverwing-import-temp"} {
+		if !strings.Contains(tracked, path) {
+			t.Fatalf("whole repository path missing %s: %s", path, tracked)
 		}
+	}
+	if strings.Contains(tracked, "ignored.log") {
+		t.Fatalf("user ignore was not honored: %s", tracked)
 	}
 	head := materialsGitTestRun(t, f.root, "rev-parse", "HEAD")
 	f.sync()
@@ -162,6 +165,8 @@ func TestMaterialsGitConflictPauseAndManualRecovery(t *testing.T) {
 	materialsGitTestRun(t, f.seed, "commit", "-m", "other")
 	materialsGitTestRun(t, f.seed, "push", "origin", "master")
 	materialsGitTestFile(t, f.root, "2026/123-需求/研发/remote.md", "my edit\n")
+	materialsGitTestRun(t, f.root, "add", ".")
+	materialsGitTestRun(t, f.root, "commit", "-m", "local edit before conflict")
 	remoteHead := materialsGitTestRun(t, f.remote, "rev-parse", "master")
 	status, err := f.service.Sync(context.Background(), f.scope, true, nil)
 	if err == nil || !status.Paused {
@@ -184,16 +189,13 @@ func TestMaterialsGitConflictPauseAndManualRecovery(t *testing.T) {
 	}
 }
 
-func TestMaterialsGitRejectsStagedChangesWrongOriginAndMissingBranch(t *testing.T) {
-	for _, kind := range []string{"staged", "origin", "branch"} {
+func TestMaterialsGitRejectsWrongOriginAndMissingBranch(t *testing.T) {
+	for _, kind := range []string{"origin", "branch"} {
 		t.Run(kind, func(t *testing.T) {
 			f := newMaterialsGitFixture(t, true)
 			f.sync()
 			head := materialsGitTestRun(t, f.root, "rev-parse", "HEAD")
 			switch kind {
-			case "staged":
-				materialsGitTestFile(t, f.root, "outside.txt", "other")
-				materialsGitTestRun(t, f.root, "add", "outside.txt")
 			case "origin":
 				materialsGitTestRun(t, f.root, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "different.git"))
 			case "branch":
@@ -275,7 +277,7 @@ func TestMaterialsGitPushRaceRetriesWithoutDuplicateLocalCommit(t *testing.T) {
 	}
 }
 
-func TestMaterialsGitInterruptedStagingRecoversOnlyOwnedIndex(t *testing.T) {
+func TestMaterialsGitInterruptedStagingRecoversNativeIndex(t *testing.T) {
 	f := newMaterialsGitFixture(t, true)
 	f.sync()
 	materialsGitTestFile(t, f.root, "2026/123-需求/研发/new.md", "new")

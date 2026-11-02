@@ -1,6 +1,7 @@
 package markdown
 
 import (
+	"slices"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -43,6 +44,13 @@ type Options struct {
 	// Math, when set, builds blocks of display math from their TeX, which
 	// show as their TeX without it; math within text shows as its TeX.
 	Math func(c *ui.Context, tex string)
+	// InlineMath, when set, makes math within text an object of the
+	// text, from its TeX and the size of the text around it in DIPs: one
+	// on the baseline, which wraps with the words and copies as its
+	// source, as $x_i$. When it returns false, the math shows as its
+	// TeX. It is asked again whenever the paragraph changes, as every
+	// frame of a paragraph streaming in: keep what it makes.
+	InlineMath func(tex string, size float32) (InlineObject, bool)
 	// HTML, when set, builds HTML blocks from their HTML, which show as
 	// their HTML without it; within text, the tags of formatting (<b>,
 	// <i>, <code>, <br>, <mark>, <sub>, …) apply, and other tags show as
@@ -51,6 +59,9 @@ type Options struct {
 	// Block, when set, is asked first for each block, and builds it in
 	// its place when it returns true.
 	Block func(c *ui.Context, d *parser.Document, i int) bool
+	// SourcePrefix returns the end of a host-validated opaque metadata prefix.
+	// It is evaluated against the current source, including undo/redo versions.
+	SourcePrefix func(source string) int
 
 	// Reveal is how Stream shows text as it comes: DefaultReveal when nil.
 	Reveal *Reveal
@@ -64,8 +75,13 @@ type Options struct {
 	OnText        func(c *ui.Context, element ui.Element, block, offset int, spans []ui.Span)
 	Image         func(c *ui.Context, block, start, end int, url, alt string)
 	Link          func(c *ui.Context, in *parser.Inline, block, offset int) bool
-	BlockLink     func(in *parser.Inline) bool
-	CopySource    func(start, end int) string
+	// LinkView can wrap the native formatted label in a host-owned popover.
+	// Returning false retains the regular link and its selection geometry.
+	// In an Editor with RenderedLinks, use EditorState.LinkLabel for the
+	// children and combine LinkClicked with the element's Clicked.
+	LinkView   func(c *ui.Context, in *parser.Inline, block, offset int, children func()) bool
+	BlockLink  func(in *parser.Inline) bool
+	CopySource func(start, end int) string
 	// CopyCode keeps the default code block's layout and copy feedback while
 	// allowing the host to copy its original source through its clipboard.
 	// Return false on failure to suppress the copied indicator. Nil retains
@@ -75,6 +91,15 @@ type Options struct {
 	ContextMenu func(c *ui.Context, menu *ui.Menu)
 
 	images sync.Map // url → *imageEntry
+}
+
+// InlineObject is math within text, as Options.InlineMath makes it: a
+// box Width wide, Height above the baseline and Depth below it, in DIPs,
+// which Draw paints in r, its box in the window. Draw only paints: it
+// may run more than once a frame.
+type InlineObject struct {
+	Width, Height, Depth float32
+	Draw                 func(p *ui.Painter, r ui.Rect)
 }
 
 // View shows src, finished Markdown, as it reads: CommonMark and what
@@ -112,13 +137,15 @@ type stateKey struct{}
 
 // viewState is what a view keeps from frame to frame.
 type viewState struct {
-	o     *Options
-	doc   *parser.Document
-	ext   parser.Extensions
-	uiTh  ui.Theme
-	def   *Theme
-	th    Theme
-	paras []paraCache
+	// editor observes display geometry; only its root owns text input and selection.
+	editor *EditorState
+	o      *Options
+	doc    *parser.Document
+	ext    parser.Extensions
+	uiTh   ui.Theme
+	def    *Theme
+	th     Theme
+	paras  []paraCache
 	// elems notes, for copying, the block each paragraph's element shows,
 	// and, for a code block's, its first line.
 	elems  []elemInfo
@@ -175,7 +202,14 @@ func build(c *ui.Context, src string, o *Options, streaming bool) ui.Element {
 		// show other text.
 		st.forget()
 	}
-	st.doc.Set(src[:shown])
+	prefix := 0
+	if o.SourcePrefix != nil {
+		prefix = o.SourcePrefix(src[:shown])
+	}
+	if st.doc.SourcePrefixEnd() != prefix {
+		st.forget()
+	}
+	st.doc.SetWithPolicy(src[:shown], prefix, nil)
 	st.fade = st.reveal.fader(c, o.Reveal)
 
 	root.FontSize(th.FontSize).LineHeight(th.LineHeight).TextColor(th.Text)
@@ -308,6 +342,8 @@ func (st *viewState) defaultBlock(c *ui.Context, i int, tight bool, base spanSty
 	th := &st.th
 	b := d.Block(i)
 	switch b.Kind {
+	case parser.SourcePrefix:
+		return st.text(c, i, 0, []ui.Span{{Text: d.Source()[b.Start:b.End]}}).Font(th.CodeFont).TextColor(th.Muted)
 	case parser.Paragraph:
 		if imagesOnly(d.Inlines(i)) {
 			return st.images(c, i)
@@ -317,6 +353,17 @@ func (st *viewState) defaultBlock(c *ui.Context, i int, tight bool, base spanSty
 		h := th.Headings[b.Level-1]
 		s := base
 		s.weight, s.size, s.color = h.Weight, th.em(h.Size), h.Color
+		if st.editor != nil {
+			// Source and rendered headings share the same font metrics and
+			// external rule box; decoration does not enlarge the text run.
+			box := ui.Column(c).AlignSelf(ui.Stretch).Role(ui.RoleHeading).Level(b.Level)
+			if h.Rule {
+				box.BorderWidth(0, 0, 1, 0).BorderColor(th.Rule).Padding(0, 0, th.em(.3), 0)
+			}
+			return box.Children(func() {
+				st.paragraph(c, i, s).FontSize(s.size).LineHeight(th.LineHeight).MinHeight(s.size * th.LineHeight)
+			})
+		}
 		el := st.paragraph(c, i, s).Role(ui.RoleHeading).Level(b.Level)
 		if h.Rule {
 			el.BorderWidth(0, 0, 1, 0).BorderColor(th.Rule).Padding(0, 0, th.em(0.3), 0)
@@ -394,6 +441,10 @@ func (st *viewState) para(i int, base spanStyle) *para {
 	sb.block = i
 	sb.fade = st.fade
 	sb.notes = st.noteNumber
+	sb.math = st.o.InlineMath
+	// Editor ownership is stable across focus, source and read-only modes,
+	// so their paragraph caches keep the same physical line projection.
+	sb.preserveSoftBreaks = st.editor != nil
 	sb.build(&pc.p, base)
 	return &pc.p
 }
@@ -401,12 +452,33 @@ func (st *viewState) para(i int, base spanStyle) *para {
 // paragraph builds the text of block i: a paragraph, a heading or a cell.
 func (st *viewState) paragraph(c *ui.Context, i int, base spanStyle) ui.Element {
 	p := st.para(i, base)
+	firstRun := 0
+	if st.editor != nil {
+		firstRun = len(st.editor.runs)
+	}
+	if st.editor != nil && (!st.editor.opts.RenderedLinks || !st.editor.blockHasLinks(i)) {
+		// Keep an ordinary paragraph as one shaped text run. Its links retain
+		// their styles; activation belongs to the editor's source selection.
+		var spans []ui.Span
+		mixed := false
+		for _, pc := range p.pieces {
+			mixed = mixed || st.blockPiece(i, &pc)
+			spans = append(spans, pc.spans...)
+		}
+		if !mixed {
+			el := st.text(c, i, 0, spans)
+			paragraphObjects(el, p)
+			st.note(el.ID(), i, -1)
+			return el
+		}
+	}
 	for _, pc := range p.pieces {
 		if st.blockPiece(i, &pc) {
 			return st.mixedParagraph(c, i, p.pieces)
 		}
 	}
 	ps := p.pieces
+	continuous := len(ps) > 0 && ps[0].link == -1 && !ps[0].image
 	var el ui.Element
 	offset := 0
 	switch {
@@ -417,18 +489,48 @@ func (st *viewState) paragraph(c *ui.Context, i int, base spanStyle) ui.Element 
 		offset = spanBytes(ps[0].spans)
 		ps = ps[1:]
 	default:
-		el = ui.RichText(c)
+		// An empty RichText has no shaped line to host its inline children.
+		// A paragraph beginning with a link still needs a real layout box.
+		el = ui.Row(c).Wrap().MinWidth(0).AlignItems(ui.Center)
 	}
 	if len(ps) > 0 {
 		el.Children(func() {
 			for k := range ps {
+				if st.editor != nil && !st.editor.projectionCurrent() {
+					return
+				}
 				st.piece(c, i, &ps[k], offset)
 				offset += spanBytes(ps[k].spans)
 			}
 		})
 	}
+	if continuous && st.editor != nil && st.editor.opts.RenderedLinks && st.editor.projectionCurrent() {
+		// A RichText paragraph paints all inline descendants as one shaped
+		// paragraph. Its full source mapping must live on the same element.
+		var spans []ui.Span
+		caretStart, caretEnd := st.editor.runs[firstRun].caretStart, st.editor.runs[firstRun].caretEnd
+		for _, run := range st.editor.runs[firstRun:] {
+			spans = append(spans, run.spans...)
+			caretStart, caretEnd = min(caretStart, run.caretStart), max(caretEnd, run.caretEnd)
+		}
+		st.editor.runs = st.editor.runs[:firstRun]
+		st.editor.observeText(el, i, 0, spans)
+		run := st.editor.runs[len(st.editor.runs)-1]
+		run.caretStart, run.caretEnd = caretStart, caretEnd
+	}
+	paragraphObjects(el, p)
 	st.note(el.ID(), i, -1)
 	return el
+}
+
+func paragraphObjects(el ui.Element, p *para) {
+	if objects := p.objects; len(objects) > 0 {
+		el.DrawObjects(func(pa *ui.Painter, at int, r ui.Rect) {
+			if k, ok := slices.BinarySearchFunc(objects, at, func(o mathObject, at int) int { return o.rune - at }); ok && objects[k].draw != nil {
+				objects[k].draw(pa, r)
+			}
+		})
+	}
 }
 
 func (st *viewState) blockPiece(block int, pc *piece) bool {
@@ -453,7 +555,7 @@ func (st *viewState) mixedParagraph(c *ui.Context, block int, ps []piece) ui.Ele
 			if st.blockPiece(block, &ps[k]) {
 				st.piece(c, block, &ps[k], offset)
 				for _, sp := range ps[k].spans {
-					if !ps[k].image {
+					if !ps[k].image || st.editor != nil {
 						offset += len(sp.Text)
 					}
 					runes += utf8.RuneCountInString(sp.Text)
@@ -499,6 +601,9 @@ func (st *viewState) text(c *ui.Context, block, offset int, spans []ui.Span) ui.
 	if st.o.OnText != nil {
 		st.o.OnText(c, el, block, offset, spans)
 	}
+	if st.editor != nil {
+		st.editor.observeText(el, block, offset, spans)
+	}
 	return el
 }
 
@@ -529,30 +634,49 @@ func (st *viewState) piece(c *ui.Context, block int, pc *piece, offset int) {
 
 // link builds a link to in.Dest whose text children builds.
 func (st *viewState) link(c *ui.Context, in *parser.Inline, block, offset int, children func()) {
+	if st.o.LinkView != nil && st.o.LinkView(c, in, block, offset, children) {
+		return
+	}
 	if st.o.Link != nil && st.o.Link(c, in, block, offset) {
 		return
 	}
 	dest := in.Dest
+	rootClick := false
+	if st.editor != nil && st.editor.opts.RenderedLinks {
+		_, rootClick = st.editor.LinkClicked(in)
+	}
 	var l ui.Element
 	switch {
 	case in.Pending:
 		l = ui.Link(c, "", "")
 	case st.o.OnLink != nil:
 		l = ui.Link(c, "", "")
-		if l.Clicked() {
+		if l.Clicked() || rootClick {
 			st.o.OnLink(dest)
 		}
 	case strings.HasPrefix(dest, "#"):
 		l = ui.Link(c, "", "")
-		if l.Clicked() {
+		if l.Clicked() || rootClick {
 			st.scrollTo = st.headingNamed(dest[1:])
 		}
 	case linkAllowed(dest, c.Router() != nil):
 		l = ui.Link(c, "", dest)
+		if rootClick {
+			if router := c.Router(); router != nil && !strings.Contains(dest, ":") {
+				router.Push(dest)
+			} else {
+				c.OpenURL(dest)
+			}
+		}
 	default:
 		l = ui.Link(c, "", "")
 	}
-	l.Children(children)
+	l.TextColor(st.th.Link)
+	if st.editor != nil && st.editor.opts.RenderedLinks {
+		st.editor.LinkLabel(l, children, in)
+	} else {
+		l.Children(children)
+	}
 	switch {
 	case in.Title != "":
 		l.Tooltip(in.Title)

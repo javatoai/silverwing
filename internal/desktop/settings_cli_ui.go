@@ -15,23 +15,41 @@ func (s *app) settingsCLI(c *ui.Context, p palette) {
 	if tool == "" {
 		return
 	}
-	settingsHelpCardWithActions(c, p, title+" 状态", "", func() {
-		s.settingsCLIToolsMenu(c, p, tool, title)
-	}, func() {
-		s.settingsCLIStatusDetails(c, p, tool)
-		if tool == "meegle" {
-			s.settingsCLIAuth(c, p, tool)
-		}
+	s.renderSettingsCLI(c, p, tool, title, pathKey)
+}
+
+func (s *app) renderSettingsCLI(c *ui.Context, p palette, tool, title, pathKey string) {
+
+	reveal := ui.Local(c.Root(), settingsRevealKey{}, func() settingsRevealState { return settingsRevealState{} })
+	match := reveal.active && reveal.target == title+" 状态"
+	active := reveal.active
+	if match {
+		reveal.active = false
+	}
+	group := ui.Column(c.Key("settings-cli-group-" + tool)).FillWidth().MinWidth(0).Gap(14).Children(func() {
+		settingsHelpCardWithActions(c, p, title+" 状态", "", func() {
+			s.settingsCLIToolsMenu(c, p, tool, title)
+		}, func() {
+			s.settingsCLIStatusDetails(c, p, tool)
+			if tool == "meegle" {
+				s.settingsCLIAuth(c, p, tool)
+			}
+		})
+		settingsHelpCard(c, p, title+" 命令路径", "留空时自动探测，也可以手动选择；更改后自动保存。", func() {
+			s.settingsConfigPathRow(c, p, pathKey, title+" 可执行文件", "留空时自动探测", false)
+			if s.toolsUnit.state.cliJobs == nil || s.toolsUnit.state.cliJobs.requests["status:"+tool] == nil {
+				s.settingsCLIPathDiscoveryHint(c, p, tool)
+			}
+			status := s.settingsUnit.state.settingsCLIStatus[tool]
+			command := firstNonEmpty(mapString(status, "command"), mapString(status, "commandPath"))
+			s.settingsCLICommandActions(c, p, tool, command)
+		})
+
 	})
-	settingsHelpCard(c, p, title+" 命令路径", "留空时自动探测，也可以手动选择；更改后自动保存。", func() {
-		s.settingsConfigPathRow(c, p, pathKey, title+" 可执行文件", "留空时自动探测", false)
-		if s.toolsUnit.state.cliJobs == nil || s.toolsUnit.state.cliJobs.requests["status:"+tool] == nil {
-			s.settingsCLIPathDiscoveryHint(c, p, tool)
-		}
-		status := s.settingsUnit.state.settingsCLIStatus[tool]
-		command := firstNonEmpty(mapString(status, "command"), mapString(status, "commandPath"))
-		s.settingsCLICommandActions(c, p, tool, command)
-	})
+	if match {
+		reveal.active = active
+		settingsReveal(c, group, p, title+" 状态")
+	}
 	if tool == "meegle" {
 		s.settingsMeegleProjects(c, p)
 	}
@@ -40,6 +58,12 @@ func (s *app) settingsCLI(c *ui.Context, p palette) {
 func (s *app) settingsCLIStatusDetails(c *ui.Context, p palette, tool string) {
 	status := s.settingsUnit.state.settingsCLIStatus[tool]
 	state, color := settingsToolAvailability(status, p)
+	if s.settingsUnit.state.settingsCLIErrors[tool] != "" {
+		state, color = "检测失败", p.amber
+	}
+	if jobs := s.toolsUnit.state.cliJobs; jobs != nil && jobs.requests["status:"+tool] != nil {
+		state, color = "检测中…", p.muted
+	}
 	settingsToolStatusRow(c, p, "命令状态", state, color)
 	if version := strings.TrimSpace(mapString(status, "version")); version != "" && tool != "git" {
 		settingsToolStatusRow(c, p, "版本", version, p.text)
@@ -49,8 +73,8 @@ func (s *app) settingsCLIStatusDetails(c *ui.Context, p palette, tool string) {
 	}
 	if message := mapString(status, "error"); message != "" {
 		settingsToolStatusRow(c, p, "检测错误", message, p.amber)
-	} else if strings.HasPrefix(s.settingsUnit.state.settingsOutput, "CLI 状态读取失败：") {
-		settingsToolStatusRow(c, p, "检测错误", strings.TrimPrefix(s.settingsUnit.state.settingsOutput, "CLI 状态读取失败："), p.amber)
+	} else if message := s.settingsUnit.state.settingsCLIErrors[tool]; message != "" {
+		settingsToolStatusRow(c, p, "检测错误", message, p.amber)
 	}
 }
 
@@ -270,12 +294,9 @@ func cliIdentitySuffix(status map[string]any) string {
 }
 
 func (s *app) cliSettingsTarget() (tool, title, pathKey string) {
-	switch s.settingsUnit.state.settingsPage {
-	case "cli-meegle":
-		return "meegle", "Meegle CLI", "meegleExecutablePath"
-	case "cli-genbu":
-		return "genbu", "Genbu CLI", "genbuExecutablePath"
-	default:
+	if s.settingsUnit.state.settingsPage != "cli-tools" && settingsCLIToolFromPage(s.settingsUnit.state.settingsPage) == "" {
 		return "", "", ""
 	}
+	tool = s.currentSettingsCLITool()
+	return tool, settingsCLITitle(tool), tool + "ExecutablePath"
 }

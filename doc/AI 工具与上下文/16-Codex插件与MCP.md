@@ -4,7 +4,7 @@
 
 > 适用：Silverwing Go / MyGO，源码版本 0.0.1；按 2026-10-19 的代码核对。
 
-Codex 插件和 MCP 管理需要本机 Codex CLI。Silverwing 通过 CLI 浏览 Marketplace、安装或卸载插件；MCP 状态和配置读写通过 CLI 的 `app-server --stdio` 接口完成。Codex 桌面应用仍是独立程序，打开任务目录的方式见 [IDE 与 Agent 配置](13-IDE与Agent配置.md)。
+Codex 插件和 MCP 服务需要本机 Codex CLI。Silverwing 通过 CLI 浏览 Marketplace、安装或卸载插件；MCP 状态和配置读写通过 CLI 的 `app-server --stdio` 接口完成。Codex 桌面应用仍是独立程序，打开任务目录的方式见 [IDE 与 Agent 配置](13-IDE与Agent配置.md)。
 
 ![扩展来源、预览、安装与配置边界的通用示意图](../assets/extensions-lifecycle.png)
 
@@ -12,13 +12,13 @@ Codex 插件和 MCP 管理需要本机 Codex CLI。Silverwing 通过 CLI 浏览 
 
 ## 准备 Codex CLI
 
-打开 **设置 → 任务 → 任务创建区**，查看 **Codex CLI 状态**。路径留空时 Silverwing 自动探测；也可在 **Codex CLI 命令路径** 中手动选择程序，再从状态卡更多菜单点 **检查状态**。状态可用后，Codex 插件页面才能查询 Marketplace；MCP 页面还要成功连接 CLI 的 app-server。
+打开 **设置 → 工具与连接 → 命令行与账号 → Codex**，查看 **Codex CLI 状态**。路径留空时 Silverwing 自动探测；也可在 **Codex CLI 命令路径** 中手动选择程序，再从状态卡更多菜单点 **检查状态**。状态可用后，Codex 插件页面才能查询 Marketplace；MCP 页面还要成功连接 CLI 的 app-server。
 
 任务目录用 Codex 的桌面应用入口打开，并不要求 CLI；反过来，CLI 状态正常也不保证 `codex://` 桌面链接能打开。遇到问题时分别确认 CLI 状态与 Codex 桌面应用安装。
 
 ## Marketplace 与插件
 
-1. 进入 **设置 → Codex → Codex 插件**，点 **添加来源**，填写来源名称、Marketplace Git 仓库地址和可选分支或标签。当前界面按仓库根目录读取 Marketplace 清单。
+1. 进入 **设置 → AI 与扩展 → Codex 插件**，点 **添加来源**，填写来源名称、Marketplace Git 仓库地址和可选分支或标签。当前界面按仓库根目录读取 Marketplace 清单。
 2. 添加来源会把它登记到本机 Codex，并立即尝试读取插件目录。若目录未读取，打开来源更多菜单点 **刷新目录**；这会刷新 Marketplace、更新本机目录缓存并重新列出插件，不只是读取 Silverwing 内部快照。
 3. 在插件行点 **预览**，查看名称、说明、README、能力和内置 Skill。预览只读取已缓存清单与文件，不安装或执行插件。
 4. 点 **安装** 并确认。若显示外部已安装，可选择 **接管**；接管只让 Silverwing 记录并管理该插件的后续卸载，不代表重新安装。成功后来源卡会显示已安装及管理归属。
@@ -28,7 +28,7 @@ Codex 插件和 MCP 管理需要本机 Codex CLI。Silverwing 通过 CLI 浏览 
 
 ## 查看和管理 MCP
 
-从 **设置 → Codex → MCP 管理** 可在 **全局配置** 与 **当前任务** 间切换；当前任务范围仅在任务目录可用时显示。也可从任务详情更多操作进入 **Codex 配置**，直接检查该任务上下文。面板会显示配置来源、文件路径、范围、启用状态和最近连接检查结果。
+从 **设置 → AI 与扩展 → MCP 服务** 可在 **全局配置** 与 **当前任务** 间切换；当前任务范围仅在任务目录可用时显示。也可从任务详情更多操作进入 **Codex 配置**，直接检查该任务上下文。面板会显示配置来源、文件路径、范围、启用状态和最近连接检查结果。
 
 **读取状态** 会通过 Codex app-server 读取有效配置层，不修改配置。它也会读取已安装插件的缓存清单，发现插件声明的 MCP，并把这些项目标为 **插件提供**。这是目录发现与状态展示，不表示 Silverwing 已启动 MCP，也不代表连接成功。点 **检查连接** 会读取 Codex 返回的 MCP 状态与工具数量；它同样不改配置。
 

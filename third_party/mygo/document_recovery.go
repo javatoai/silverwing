@@ -183,7 +183,7 @@ func (s *recoveryStore) claim() (orphans []orphan, done func()) {
 		locks = append(locks, lock)
 		claimed = append(claimed, dir)
 		var entries []recoveryEntry
-		if data, err := os.ReadFile(filepath.Join(dir, "index.json")); err == nil {
+		if data, err := readAppFile(filepath.Join(dir, "index.json")); err == nil {
 			if err := json.Unmarshal(data, &entries); err != nil {
 				log.Printf("mygo: documents: %s: %v", dir, err)
 			}
@@ -261,7 +261,7 @@ func (k *docKind) restore() int {
 			switch now, exists, _ := statStamp(e.Path); {
 			case !exists:
 				b.deleted = true
-			case now != e.Stamp:
+			case !now.same(e.Stamp):
 				b.conflict = true
 			}
 			b.readOnly = !b.deleted && !fileWritable(e.Path)
@@ -289,7 +289,7 @@ func writeAppFile(path string, write func(io.Writer) error) error {
 		err = cerr
 	}
 	if err == nil {
-		err = os.Rename(f.Name(), path)
+		err = rename(f.Name(), path)
 	}
 	if err != nil {
 		os.Remove(f.Name())

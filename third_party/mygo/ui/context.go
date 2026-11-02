@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"hash/maphash"
+	"reflect"
 	"time"
 
 	"github.com/egoist/mygo/internal/scene"
@@ -265,7 +266,7 @@ func (c *context) rekey(e *node, k any) {
 		// Another element of the pass has the key under the same parent.
 		rt.duplicateKey(id, k)
 	}
-	e.id, e.st = id, st
+	e.id, e.st, e.key = id, st, k
 	if rt.insp.open {
 		rt.insp.noteKey(id, k)
 		if id == rt.insp.selected {
@@ -280,16 +281,38 @@ func keyedID(parent uint64, k any) uint64 {
 	switch k := k.(type) {
 	case string:
 		h = maphash.String(keySeed, k)
+	// Integers of different types are different keys, as in a map.
 	case int:
 		h = uint64(k)*0x9E3779B97F4A7C15 + 1
 	case int64:
-		h = uint64(k)*0x9E3779B97F4A7C15 + 1
+		h = uint64(k)*0x9E3779B97F4A7C15 + 2
 	case uint64:
-		h = k*0x9E3779B97F4A7C15 + 1
+		h = k*0x9E3779B97F4A7C15 + 3
 	default:
-		h = maphash.String(keySeed, fmt.Sprintf("%T:%v", k, k))
+		h = keyHash(k)
 	}
 	return mix(parent, h^0xA5A5A5A5A5A5A5A5)
+}
+
+// keyHash hashes a key as Go compares it, as a map's key: a pointer by the
+// object it points to, whatever the object holds, a struct or an array by
+// its fields or elements, and keys of different types apart. A key Go
+// cannot compare, such as a slice, is hashed by its value printed, and so
+// is a key not equal to itself, as a NaN, which a map would hash anew
+// each time.
+func keyHash(k any) (h uint64) {
+	printed := func() uint64 { return maphash.String(keySeed, fmt.Sprintf("%T:%v", k, k)) }
+	defer func() {
+		if recover() != nil {
+			h = printed()
+		}
+	}()
+	if k != k { // panics for a key Go cannot compare
+		return printed()
+	}
+	// One instance of Comparable for both: another, for reflect.Type,
+	// would grow every native app by 16 KB.
+	return maphash.Comparable[any](keySeed, k) ^ maphash.Comparable[any](keySeed, reflect.TypeOf(k))*0x9E3779B97F4A7C15
 }
 
 // mix combines two hashes (the finalizer of splitmix64).
@@ -466,7 +489,13 @@ func coreLocal[T any](e *node, key any, init func() T) *T {
 type state struct {
 	rt            *engine
 	pendingSubmit bool
+	pendingChange bool
 	noticeQueued  bool
+
+	// rowPressed marks a row of a list the pointer pressed, until the
+	// release; pressChose, that the press chose it, so that its click does
+	// not choose again.
+	rowPressed, pressChose bool
 
 	world scene.Affine
 	clips bool
@@ -484,6 +513,10 @@ type state struct {
 	// lookup (lookState), 0 for a state it created.
 	lookedSeen uint64
 	lookedPass int
+	// lay is what the element's last layout was (layoutcache.go), and
+	// text what it measured and laid out of its text (heldText).
+	lay  layoutRecord
+	text *heldText
 	// The element's box and its visible part in the last frame.
 	x, y, w, h     float32
 	vx, vy, vw, vh float32
@@ -492,6 +525,9 @@ type state struct {
 	cursor         Cursor
 	// tip marks an element with a tooltip (TooltipBase).
 	tip bool
+	// effectLayer is what the element and its children render into for
+	// its Effect, kept from frame to frame.
+	effectLayer *Canvas
 	// webView is the web view the element shows (WebView).
 	webView NativeWebView
 
@@ -528,9 +564,16 @@ type state struct {
 	contentH         float64
 	// barInset is the element's ScrollbarInsets.
 	barInset [4]float32
+	// barsShown reports whether the last frame painted the element's
+	// scroll bars: they show only while it is hovered or a bar is
+	// dragged.
+	barsShown bool
 	// track is the ScrollState of the last frame's element, which events
 	// that scroll it update (scrollTo).
 	track *ScrollState
+	// wheel is the notches of a mouse wheel on their way through the
+	// content (wheelScroll).
+	wheel *wheelGlide
 	// startX and startY are the offset before frame moveFrame moved it.
 	moveFrame      uint64
 	startX, startY float64
@@ -628,7 +671,7 @@ func (rt *engine) lookState(id uint64) (s *state, built bool) {
 			s = rt.free[n-1]
 			rt.free[n-1] = nil
 			rt.free = rt.free[:n-1]
-			*s = state{id: id, born: rt.frame}
+			*s = state{id: id, born: rt.frame, text: s.text}
 		} else {
 			s = &state{id: id, born: rt.frame}
 		}
@@ -658,7 +701,7 @@ func (rt *engine) unlook(s *state) {
 		return
 	}
 	delete(rt.states, s.id)
-	*s = state{}
+	*s = state{text: s.text.emptied()}
 	if len(rt.free) < maxFree {
 		rt.free = append(rt.free, s)
 	}

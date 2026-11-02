@@ -1,7 +1,5 @@
 package ui
 
-import "time"
-
 // Orientation says which arrows move the focus in a FocusGroup: Left and
 // Right (Horizontal), Up and Down (Vertical), or all four
 // (Horizontal|Vertical).
@@ -136,7 +134,7 @@ func (rt *engine) groupKey(mods Modifiers, key Key) bool {
 		return false
 	}
 	id := members[to]
-	rt.focused, rt.focusVisible, rt.blinkStart = id, true, time.Now()
+	rt.focused, rt.focusVisible, rt.blinkStart = id, true, rt.now()
 	if rt.groupLast == nil {
 		rt.groupLast = map[uint64]uint64{}
 	}

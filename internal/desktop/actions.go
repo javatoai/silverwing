@@ -139,6 +139,10 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 	s.operationCancelling = false
 	s.lastError = ""
 	s.lastMessage = ""
+	var terminalDeleteBarrier func(context.Context) error
+	if action.Kind == "task.delete" {
+		terminalDeleteBarrier = s.prepareTaskTerminalDelete(action.TaskID)
+	}
 	if s.win != nil {
 		s.win.Invalidate()
 	}
@@ -150,6 +154,9 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 		var renameLease *markdownAutosaveRenameLease
 		var migrationLease *markdownTaskRootMigrationLease
 		err := fileBarrier.wait(ctx)
+		if err == nil && terminalDeleteBarrier != nil {
+			err = terminalDeleteBarrier(ctx)
+		}
 		if err == nil {
 			migrationPlan, err = s.settleMaterialsBeforeRootAction(ctx, action, fileBarrier, migrationPlan)
 		}
@@ -231,6 +238,9 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 			defer s.resumeMaterialsLiveRefresh(watchBarrier)
 			defer s.resumeMaterialsFileJobs(fileBarrier)
 			s.busy = false
+			if action.Kind == "task.delete" {
+				delete(s.taskTerminalUnit.deleting, action.TaskID)
+			}
 			s.operation = ""
 			s.operationKind = ""
 			s.operationCancelling = false

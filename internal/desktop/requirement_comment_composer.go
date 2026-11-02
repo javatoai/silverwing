@@ -6,17 +6,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"image"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/ui"
-	"golang.org/x/image/draw"
 	"silverwing-go/internal/application"
-	"silverwing-go/internal/documents"
 	"silverwing-go/internal/domain"
+	markdownui "silverwing-go/internal/ui/markdown"
 )
 
 type requirementCommentComposer struct {
@@ -28,15 +24,17 @@ type requirementCommentComposer struct {
 	body, errorText, status, requestID, operation string
 	progress                                      domain.CommentPublishProgress
 	markdown                                      *markdownEditorState
-	paths                                         []string
 	cancel                                        context.CancelFunc
 	done                                          chan struct{}
-	thumbnails                                    map[string]*ui.Bitmap
-	clipboardReading                              bool
-	pendingScreenshot                             []byte
 	imageFocusKey                                 string
 	restoreImageFocus                             bool
+	capturingInput, importing                     bool
+	pendingImport                                 *commentMarkdownImport
+	publishAfterSave                              *commentComposerPublishIntent
+	jobSerial                                     uint64
 }
+
+type commentComposerPublishIntent struct{ draftID, body string }
 
 type requirementCommentComposers struct {
 	active *requirementCommentComposer
@@ -157,19 +155,39 @@ func (s *app) startCommentComposerJob(state *requirementCommentComposer, op stri
 	if op != "load" && !state.loaded {
 		return
 	}
-	if op == "publish" && state.editCommentID != "" && !commentComposerCanPublish(state) {
+	if state.loaded && op != "check" && !s.captureCommentMarkdownInput(state) {
+		return
+	}
+	if op == "publish" && state.dirty {
+		if state.draft.Pending() || commentImportHasResources(state) {
+			return
+		}
+		state.publishAfterSave = &commentComposerPublishIntent{draftID: state.draft.ID, body: state.body}
+		s.startCommentComposerJob(state, "save", nil)
+		return
+	}
+	if op == "publish" && !commentComposerCanPublish(state) {
+		return
+	}
+	if op == "load" && state.loaded && state.dirty {
+		s.startCommentComposerJob(state, "save", nil)
+		return
+	}
+	if state.draft.Pending() && op != "load" && op != "check" && op != "allow-retry" {
 		return
 	}
 	state.running = true
 	state.errorText = ""
 	state.progress = domain.CommentPublishProgress{}
 	state.operation = op
+	state.jobSerial++
+	serial, sentDraftID, sentRevision := state.jobSerial, state.draft.ID, state.draft.Revision
 	p := s.commentComposerPayload(state, op)
 	for k, v := range extra {
 		p[k] = v
 	}
 	sentBody := state.body
-	if op == "save" {
+	if op == "save" || op == "add-attachment" || op == "add-image" || op == "paste" || op == "remove" {
 		p["content"] = sentBody
 	}
 	kind := "requirements.comment-draft"
@@ -198,7 +216,7 @@ func (s *app) startCommentComposerJob(state *requirementCommentComposer, op stri
 		if publishing, ok := backend.(application.RequirementCommentPublishBackend); ok && op == "publish" {
 			result, err = publishing.DispatchRequirementComment(ctx, action, func(progress domain.CommentPublishProgress) {
 				s.commentComposerUpdate(func() {
-					if s.commentComposerCurrent(state) && state.running {
+					if s.commentComposerCurrent(state) && state.running && state.jobSerial == serial {
 						state.progress = progress
 					}
 				})
@@ -207,6 +225,9 @@ func (s *app) startCommentComposerJob(state *requirementCommentComposer, op stri
 			result, err = backend.Dispatch(ctx, action)
 		}
 		s.commentComposerUpdate(func() {
+			if state.jobSerial != serial {
+				return
+			}
 			state.running = false
 			state.cancel = nil
 			// Old results belong to the original draft only. Do not retarget a
@@ -214,10 +235,20 @@ func (s *app) startCommentComposerJob(state *requirementCommentComposer, op stri
 			current := s.commentComposerCurrent(state)
 			if !current {
 				state.open = false
+				state.publishAfterSave = nil
+				if pending := state.pendingImport; pending != nil {
+					state.pendingImport = nil
+					pending.complete(markdownui.ImportResult{}, markdownui.ErrStale)
+				}
+				return
 			}
 			if err != nil {
 				state.errorText = err.Error()
-				state.paths = nil
+				state.publishAfterSave = nil
+				if pending := state.pendingImport; pending != nil {
+					state.pendingImport = nil
+					pending.complete(markdownui.ImportResult{}, err)
+				}
 				return
 			}
 			raw, e := json.Marshal(result.Data)
@@ -226,6 +257,7 @@ func (s *app) startCommentComposerJob(state *requirementCommentComposer, op stri
 				return
 			}
 			var draft domain.RequirementCommentDraft
+			publishedOK := false
 			if op == "publish" || op == "check" {
 				var published domain.CommentPublishResult
 				if e = json.Unmarshal(raw, &published); e != nil {
@@ -233,22 +265,13 @@ func (s *app) startCommentComposerJob(state *requirementCommentComposer, op stri
 					return
 				}
 				draft = published.Draft
-				if !commentComposerDraftMatches(state, draft) {
+				if !commentComposerDraftMatches(state, draft) || draft.ID != sentDraftID || draft.Revision < sentRevision {
 					state.errorText = "评论编辑目标已变化，请重新打开核对"
 					return
 				}
 				state.status = published.Message
 				if published.Status == "published" || published.Status == "updated" {
-					state.body = ""
-					state.dirty = false
-					state.open = false
-					if current {
-						s.lastMessage = "评论已发布"
-						if state.editCommentID != "" {
-							s.lastMessage = "评论已修改"
-						}
-						s.refreshPublishedRequirementComments(state.url)
-					}
+					publishedOK = true
 				} else {
 					state.errorText = published.Message
 				}
@@ -260,44 +283,65 @@ func (s *app) startCommentComposerJob(state *requirementCommentComposer, op stri
 				state.errorText = "评论草稿返回的账号或需求不匹配，请重新读取草稿核对"
 				return
 			}
+			if state.draft.ID != sentDraftID || state.draft.Revision != sentRevision || op != "load" && op != "reload" && op != "clear" && op != "discard" && draft.ID != sentDraftID || draft.Revision < sentRevision || op != "load" && draft.Scope != state.draft.Scope {
+				state.errorText = "评论草稿版本已变化，当前输入已保留，请重新核对"
+				state.publishAfterSave = nil
+				return
+			}
+			// Observe any newer committed native input before accepting a receipt.
+			if current && state.markdown != nil && state.markdown.componentEditor != nil && !state.markdown.live.Composing() {
+				state.capturingInput = true
+				s.commitCommentMarkdownInput(state, state.markdown, state.markdown.componentEditor.Snapshot().Source)
+				state.capturingInput = false
+			}
+			newerInput := state.body != sentBody || state.markdown != nil && state.markdown.live != nil && state.markdown.live.Composing()
 			state.draft = draft
 			if draft.Pending() && draft.Attempt.Error != "" {
 				state.errorText = draft.Attempt.Error
 			}
 			state.loaded = true
-			if op == "discard" {
+			if op == "discard" && !newerInput {
 				state.open, state.loaded = false, false
 			}
 			state.account = draft.Identity
-			if op == "save" {
-				state.dirty = state.body != sentBody
-			} else {
+			if (op == "load" || op == "reload" || op == "clear" || op == "discard" || op == "check" || op == "publish" || op == "allow-retry") && !newerInput {
 				state.body = draft.Content
-				state.dirty = false
+				if op == "load" || op == "reload" || op == "clear" || op == "discard" || publishedOK {
+					s.acceptCommentMarkdownRead(state, draft.Content)
+				}
 			}
-			if !current {
-				state.paths = nil
-				return
+			state.dirty = state.body != draft.Content
+			if publishedOK {
+				if !newerInput {
+					state.open = false
+				}
+				if current {
+					s.lastMessage = "评论已发布"
+					if state.editCommentID != "" {
+						s.lastMessage = "评论已修改"
+					}
+					s.refreshPublishedRequirementComments(state.url)
+				}
 			}
-			s.queueCommentThumbnails(state)
 			if op == "allow-retry" {
 				s.startCommentComposerJob(state, "publish", nil)
 				return
 			}
-			if len(state.pendingScreenshot) > 0 && !state.dirty {
-				data := state.pendingScreenshot
-				state.pendingScreenshot = nil
-				s.startCommentComposerJob(state, "paste", map[string]any{"imagePNG": data})
-				return
-			}
-			if len(state.paths) > 0 {
-				path := state.paths[0]
-				state.paths = state.paths[1:]
-				s.startCommentComposerJob(state, "add-image", map[string]any{"sourcePath": path})
-				return
-			}
 			if state.dirty {
 				s.startCommentComposerJob(state, "save", nil)
+				return
+			}
+			if intent := state.publishAfterSave; intent != nil {
+				state.publishAfterSave = nil
+				if state.draft.ID == intent.draftID && state.body == intent.body && !newerInput {
+					s.startCommentComposerJob(state, "publish", nil)
+				} else {
+					state.errorText = "评论输入已变化，请再次点击发布或保存修改"
+				}
+				return
+			}
+			if state.pendingImport != nil {
+				s.startPendingCommentMarkdownImport(state)
 			}
 		})
 	}()
@@ -330,14 +374,15 @@ func (s *app) observeRequirementCommentComposers() {
 		if state.dirty && state.errorText == "" && !state.running {
 			s.startCommentComposerJob(state, "save", nil)
 		}
-		if !state.running && !state.dirty && state.errorText == "" && len(state.pendingScreenshot) > 0 {
-			data := state.pendingScreenshot
-			state.pendingScreenshot = nil
-			s.startCommentComposerJob(state, "paste", map[string]any{"imagePNG": data})
+		if !state.running && !state.dirty && state.errorText == "" && state.pendingImport != nil {
+			s.startPendingCommentMarkdownImport(state)
 		}
 	}
 	if viewer := s.materialsUnit.state.markdownBitmapViewer; viewer != nil && viewer.composer != nil && !s.commentComposerImageCurrent(viewer) {
 		s.dismissMarkdownBitmapViewer()
+	}
+	if viewer := s.materialsUnit.state.markdownLinkFile; viewer != nil && viewer.composer != nil && !s.markdownLinkFileCurrent(viewer) {
+		s.closeMarkdownLinkFilePreview(viewer)
 	}
 }
 
@@ -350,54 +395,18 @@ func (s *app) commentComposerImageCurrent(viewer *markdownBitmapViewerState) boo
 		return false
 	}
 	state := viewer.composer
-	return s.requirementUnit.state.commentComposers.active == state && state.open && state.preview && state.markdown == viewer.owner &&
-		s.commentComposerCurrent(state) && state.navigation == s.commentComposerNavigation()
-}
-
-func (s *app) queueCommentThumbnails(state *requirementCommentComposer) {
-	if s.win == nil {
-		return
-	}
-	if state.thumbnails == nil {
-		state.thumbnails = map[string]*ui.Bitmap{}
-	}
-	for _, a := range state.draft.Images {
-		if _, exists := state.thumbnails[a.ID]; exists || a.LocalPath == "" {
-			continue
+	sourceAllowed := state.markdown == nil || state.markdown.componentEditor == nil || state.markdown.componentEditor.Mode() != markdownui.Source
+	if !sourceAllowed && viewer.sourcePath != "" {
+		for _, asset := range commentLegacyPendingImages(state.draft) {
+			if asset.LocalPath != "" && sameInstructionPath(asset.LocalPath, viewer.sourcePath) {
+				sourceAllowed = true
+				break
+			}
 		}
-		state.thumbnails[a.ID] = nil
-		go func(asset domain.CommentDraftAsset) {
-			file, err := os.Open(asset.LocalPath)
-			if err != nil {
-				return
-			}
-			defer file.Close()
-			img, _, err := image.Decode(file)
-			if err != nil {
-				return
-			}
-			bounds := img.Bounds()
-			w, h := bounds.Dx(), bounds.Dy()
-			if w <= 0 || h <= 0 {
-				return
-			}
-			scale := min(float64(160)/float64(w), float64(100)/float64(h), float64(1))
-			thumb := image.NewRGBA(image.Rect(0, 0, max(1, int(float64(w)*scale)), max(1, int(float64(h)*scale))))
-			draw.CatmullRom.Scale(thumb, thumb.Bounds(), img, bounds, draw.Over, nil)
-			bitmap := ui.NewBitmap(thumb)
-			s.commentComposerUpdate(func() {
-				if !s.commentComposerCurrent(state) {
-					return
-				}
-				for _, current := range state.draft.Images {
-					if current.ID == asset.ID && current.Hash == asset.Hash {
-						state.thumbnails[asset.ID] = bitmap
-						break
-					}
-				}
-			})
-		}(a)
 	}
+	return s.requirementUnit.state.commentComposers.active == state && state.open && state.markdown != nil && state.markdown == viewer.owner &&
+		state.markdown.taskID == "comment-draft:"+state.draft.ID && sourceAllowed &&
+		s.commentComposerCurrent(state) && state.navigation == s.commentComposerNavigation()
 }
 
 func (s *app) refreshPublishedRequirementComments(link string) {
@@ -414,21 +423,34 @@ func (s *app) refreshPublishedRequirementComments(link string) {
 }
 
 func (s *app) chooseCommentFiles(state *requirementCommentComposer, images bool) {
+	if images {
+		s.requestCommentImagePicker(state)
+		return
+	}
 	if state.running || state.dirty || !s.commentComposerCurrent(state) {
 		return
 	}
+	if !s.captureCommentMarkdownInput(state) || state.dirty {
+		if state.dirty {
+			s.startCommentComposerJob(state, "save", nil)
+		}
+		return
+	}
 	state.running = true
+	state.operation = "choose-attachment"
+	state.jobSerial++
+	serial := state.jobSerial
+	draftID, revision := state.draft.ID, state.draft.Revision
 	window := s.win
 	go func() {
-		opts := mygo.OpenDialogOptions{Parent: window, Title: "添加附件", Multiple: images}
-		if images {
-			opts.Title = "添加图片"
-			opts.Filters = []mygo.FileFilter{{Name: "图片", Extensions: []string{"png", "jpg", "jpeg", "gif", "webp"}}}
-		}
+		opts := mygo.OpenDialogOptions{Parent: window, Title: "添加附件"}
 		paths, err := mygo.Dialog.Open(opts)
 		s.commentComposerUpdate(func() {
+			if state.jobSerial != serial {
+				return
+			}
 			state.running = false
-			if !s.commentComposerCurrent(state) {
+			if !s.commentComposerCurrent(state) || state.draft.ID != draftID || state.draft.Revision != revision {
 				return
 			}
 			if err != nil {
@@ -438,48 +460,16 @@ func (s *app) chooseCommentFiles(state *requirementCommentComposer, images bool)
 			if len(paths) == 0 {
 				return
 			}
-			op := "add-attachment"
-			if images {
-				op = "add-image"
-				state.paths = paths[1:]
-			}
-			s.startCommentComposerJob(state, op, map[string]any{"sourcePath": paths[0]})
+			s.startCommentComposerJob(state, "add-attachment", map[string]any{"sourcePath": paths[0]})
 		})
 	}()
 }
 
 func (s *app) pasteCommentScreenshot(state *requirementCommentComposer) {
-	if state.clipboardReading || state.draft.Pending() || state.running && state.operation != "save" || !s.commentComposerCurrent(state) {
+	if state == nil || state.draft.Pending() || state.running && state.operation != "save" || !s.commentComposerCurrent(state) {
 		return
 	}
-	state.clipboardReading = true
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		clip, err := documents.NewClipboardService().Read(ctx)
-		s.commentComposerUpdate(func() {
-			state.clipboardReading = false
-			if !s.commentComposerCurrent(state) {
-				return
-			}
-			if err != nil {
-				state.errorText = err.Error()
-				return
-			}
-			if len(clip.ImagePNG) == 0 {
-				state.errorText = "剪贴板中没有截图，请复制图片后重试"
-				return
-			}
-			state.pendingScreenshot = clip.ImagePNG
-			if !state.running && !state.dirty {
-				data := state.pendingScreenshot
-				state.pendingScreenshot = nil
-				s.startCommentComposerJob(state, "paste", map[string]any{"imagePNG": data})
-			} else if !state.running {
-				s.startCommentComposerJob(state, "save", nil)
-			}
-		})
-	}()
+	s.requestCommentScreenshot(state)
 }
 
 func (s *app) confirmCommentDraftChange(state *requirementCommentComposer, retry bool) {
@@ -515,8 +505,11 @@ func (s *app) commentComposerCloseError() error {
 		return nil
 	}
 	for _, state := range s.requirementUnit.state.commentComposers.all {
-		if state.running || state.clipboardReading || len(state.pendingScreenshot) > 0 {
+		if state.running || commentImportHasResources(state) {
 			return fmt.Errorf("评论草稿或发布操作正在执行，请完成后再关闭；可先收起弹窗")
+		}
+		if s.commentComposerCurrent(state) && !s.captureCommentMarkdownInput(state) {
+			return fmt.Errorf("评论输入尚未确认，请处理编辑错误后再关闭；当前输入已保留")
 		}
 		if state.dirty {
 			if s.commentComposerCurrent(state) {
@@ -529,7 +522,7 @@ func (s *app) commentComposerCloseError() error {
 }
 
 func commentComposerCanPublish(state *requirementCommentComposer) bool {
-	if state == nil || !state.loaded || state.running || state.clipboardReading || len(state.pendingScreenshot) != 0 || state.dirty || state.draft.Pending() {
+	if state == nil || !state.loaded || state.running || state.dirty || state.draft.Pending() || commentImportHasResources(state) {
 		return false
 	}
 	d := state.draft

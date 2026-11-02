@@ -135,7 +135,7 @@ func (s *diffSide) paintBlock(p *ui.Painter, ed *editor, b *block, r ui.Rect) {
 func (s *diffSide) paintDeleted(p *ui.Painter, ed *editor, b *block, r ui.Rect) {
 	d := s.d
 	ov := &d.oldView
-	ov.theme = ed.theme
+	ov.setTheme(ed.theme)
 	ov.advanceSyntax(b.to, 0)
 	dc := s.colors(ed)
 	lh := ed.view.lineHeight
@@ -388,7 +388,7 @@ func (s *diffSide) buildBlocks(c *ui.Context, ed *editor) {
 			if top < y0-float64(v.lineHeight) || top > y1 {
 				continue
 			}
-			bar := ui.Row(c).Key(fmt.Sprint("hunk actions ", i)).Absolute().Right(scrollbarWidth + 6).Top(float32(top-ed.scrollY) + 2).
+			bar := ui.Row(c).Key(fmt.Sprint("hunk actions ", i)).Absolute().Right(ed.trackWidth() + 6).Top(float32(top-ed.scrollY) + 2).
 				Cursor(ui.CursorDefault).KeepFocus().HandleInput(shield)
 			render := d.RenderHunkActions
 			if render == nil {

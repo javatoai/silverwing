@@ -289,8 +289,10 @@ func (s *app) finishMeegleProjectPickerSave(action application.Action, result ap
 		}
 		return true
 	}
-	// This successful write already includes the current project-row drafts.
-	// Retire the old whole-list autosave before its completion callback flushes.
+	// The submitted list includes drafts captured at submission, but the user
+	// can keep typing while it is saved. Rebase those newer drafts on the list
+	// that now includes the added project; an old whole-list callback would drop it.
+	rowDrafts := s.settingsMeegleProjectsDraftReader(mapsFromArray(s.configArray("meegleProjects")))()
 	s.cancelSettingsAutosave("settings:meegle-projects")
 	if !s.syncMeegleProjectPickerCommittedConfig(action) {
 		if pendingMatches {
@@ -299,6 +301,7 @@ func (s *app) finishMeegleProjectPickerSave(action application.Action, result ap
 		}
 		return true
 	}
+	s.rebaseMeegleProjectPickerDrafts(rowDrafts)
 	if refreshErr != nil {
 		if pendingMatches {
 			state.pickerCommittedKey = strings.TrimSpace(payloadString(action.Payload, "meegleProjectPickerSaveProjectKey"))
@@ -315,6 +318,33 @@ func (s *app) finishMeegleProjectPickerSave(action application.Action, result ap
 	state.pickerQuery = ""
 	state.pickerSelection = ""
 	return true
+}
+
+func (s *app) rebaseMeegleProjectPickerDrafts(drafts []map[string]any) {
+	committed := mapsFromArray(s.configArray("meegleProjects"))
+	if len(drafts) > len(committed) {
+		return
+	}
+	changed := false
+	for i, draft := range drafts {
+		changed = changed || mapString(draft, "project_key") != mapString(committed[i], "project_key") ||
+			mapString(draft, "simple_name") != mapString(committed[i], "simple_name")
+	}
+	if !changed {
+		return
+	}
+	for i, draft := range drafts {
+		*s.input(fmt.Sprintf("setting:meegle-project-key:%d", i), "") = mapString(draft, "project_key")
+		*s.input(fmt.Sprintf("setting:meegle-project-name:%d", i), "") = mapString(draft, "simple_name")
+	}
+	readDraft := s.settingsMeegleProjectsDraftReader(committed)
+	readLatest := func() string {
+		encoded, _ := json.Marshal(readDraft())
+		return string(encoded)
+	}
+	baseline, _ := json.Marshal(committed)
+	s.observeSettingsAutosave("settings:meegle-projects", string(baseline), s.saveSettingsMeegleProjectsAutosave, readLatest)
+	s.observeSettingsAutosave("settings:meegle-projects", readLatest(), s.saveSettingsMeegleProjectsAutosave, readLatest)
 }
 
 func (s *app) syncMeegleProjectPickerCommittedConfig(action application.Action) bool {

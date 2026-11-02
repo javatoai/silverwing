@@ -3,7 +3,6 @@ package ui
 import (
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/egoist/mygo/internal/platform"
 )
@@ -195,34 +194,73 @@ func leafRole(r platform.AccessRole) bool {
 }
 
 // innerText returns the texts of an element and those inside it, joined
-// by spaces.
+// by spaces. An element inside it with a Label gives its label in place
+// of its texts, as a name from content takes a descendant's aria-label on
+// the web: a row reads "Branch main (checked out)" rather than the "✓
+// main" drawn for it. Assistive technology names elements by it every
+// frame, so a single text is returned as it is, without a copy.
 func (e *node) innerText() string {
-	var b strings.Builder
-	var walk func(e *node)
-	walk = func(e *node) {
-		if e.flags&flagInvisible != 0 {
-			return
-		}
-		if e.kind == kindText {
-			if e.text != "" {
-				if b.Len() > 0 {
-					b.WriteByte(' ')
-				}
-				b.WriteString(e.text)
-			}
-			return // its text holds that of the elements inside it
-		}
-		for ch := e.first; ch != nil; ch = ch.next {
-			walk(ch)
-		}
+	if e.flags&flagInvisible != 0 || e.hidden {
+		return ""
 	}
-	walk(e)
-	return b.String()
+	if e.kind == kindText {
+		return e.text // its text holds that of the elements inside it
+	}
+	var t innerTexts
+	for ch := e.first; ch != nil; ch = ch.next {
+		t.walk(ch)
+	}
+	if t.b.Len() == 0 {
+		return t.first
+	}
+	return t.b.String()
+}
+
+// innerTexts joins texts: first holds the first alone, b all of them once
+// there is a second.
+type innerTexts struct {
+	first string
+	b     strings.Builder
+}
+
+func (t *innerTexts) walk(e *node) {
+	if e.flags&flagInvisible != 0 || e.hidden {
+		return
+	}
+	if e.label != "" {
+		t.add(e.label)
+		return
+	}
+	if e.kind == kindText {
+		t.add(e.text)
+		return // its text holds that of the elements inside it
+	}
+	for ch := e.first; ch != nil; ch = ch.next {
+		t.walk(ch)
+	}
+}
+
+func (t *innerTexts) add(s string) {
+	switch {
+	case s == "":
+	case t.first == "":
+		t.first = s
+	case t.b.Len() == 0:
+		t.b.Grow(len(t.first) + 1 + len(s))
+		t.b.WriteString(t.first)
+		fallthrough
+	default:
+		t.b.WriteByte(' ')
+		t.b.WriteString(s)
+	}
 }
 
 // accessTree describes the last frame for assistive technology.
 func (rt *engine) accessTree() *platform.AccessTree {
-	t := &platform.AccessTree{}
+	// As many nodes as the last frame's, which the next is usually close
+	// to: growing the slice from empty would copy it again and again.
+	t := &platform.AccessTree{Nodes: make([]platform.AccessNode, 0, rt.accessNodes)}
+	defer func() { rt.accessNodes = len(t.Nodes) }()
 	var focused *node
 	switch root := rt.c.root; {
 	case root == nil:
@@ -286,22 +324,24 @@ func (e *node) rowsOfElement() *listFrame {
 // node parent; scrolled is set inside a scroll container, and focused gets
 // the element with the keyboard focus.
 func (rt *engine) accessElement(t *platform.AccessTree, e *node, parent int, scrolled bool, focused **node) {
-	if e.flags&(flagInvisible|flagInert) != 0 {
+	if e.flags&(flagInvisible|flagInert) != 0 || e.hidden {
 		return
 	}
 	if e.id == rt.focused {
 		*focused = e
 	}
 	if role, ok := e.accessRole(); ok {
-		n := platform.AccessNode{
+		// Filled in where it lies in the tree: a node of its own, whose
+		// address accessDetails takes, would be allocated for each.
+		t.Nodes = append(t.Nodes, platform.AccessNode{
 			ID: e.id, Parent: parent, Role: role, Label: e.label,
 			Bounds: accessBounds(e),
-		}
+		})
+		n := &t.Nodes[len(t.Nodes)-1]
 		if scrolled {
 			n.Actions |= platform.ActionScrollIntoView
 		}
-		rt.accessDetails(e, &n)
-		t.Nodes = append(t.Nodes, n)
+		rt.accessDetails(e, n)
 		parent = len(t.Nodes) - 1
 		if e.kind == kindText {
 			rt.accessInline(t, e, parent)
@@ -469,11 +509,14 @@ func (rt *engine) accessDetails(e *node, n *platform.AccessNode) {
 func (rt *engine) accessibilityOn() {
 	if !rt.access {
 		rt.access = true
-		if rt.c.root == nil {
+		// None built yet, or one waiting for the window to show: the
+		// frame builds, out of sight too (the event is input), so that
+		// assistive technology reads what the window shows now.
+		if rt.c.root == nil || rt.held {
 			rt.requestFrame()
 		}
 	}
-	rt.host.updateAccessibility(rt.accessTree())
+	rt.host.updateAccessibility(rt.windowAccess(rt.accessTree()))
 }
 
 // accessAction performs an action of assistive technology on an element
@@ -486,7 +529,7 @@ func (rt *engine) accessAction(ev platform.SurfaceEvent) {
 	switch ev.Action {
 	case platform.AccessPress:
 		if s.flags&flagMenuButton != 0 {
-			rt.openMenuButton(s)
+			rt.openMenuButton(s, true)
 			break
 		}
 		if s.flags&flagClickable != 0 {
@@ -547,7 +590,7 @@ func (rt *engine) accessAction(ev platform.SurfaceEvent) {
 			break
 		}
 		if s.input != nil {
-			s.input(InputEvent{Kind: InputSelect, Start: ev.From, End: ev.To})
+			s.input(InputEvent{Kind: InputSelect, Start: ev.From, End: ev.To, Time: rt.now()})
 		}
 	case platform.AccessSetValue:
 		if s.editor == nil || s.flags&flagEditable == 0 || s.editor.readOnly {
@@ -555,6 +598,12 @@ func (rt *engine) accessAction(ev platform.SurfaceEvent) {
 		}
 		rt.focusOn(s)
 		s.editor.queue = append(s.editor.queue, editEvent{kind: editCommand, text: "selectAll"}, editEvent{kind: editInsert, text: ev.Text})
+	case platform.AccessInsertText:
+		if s.editor == nil || s.flags&flagEditable == 0 || s.editor.readOnly {
+			return
+		}
+		rt.focusOn(s)
+		s.editor.queue = append(s.editor.queue, editEvent{kind: editInsert, text: ev.Text})
 	}
 	rt.requestFrame()
 }
@@ -566,7 +615,7 @@ func (rt *engine) focusOn(s *state) {
 	}
 	if rt.focused != s.id {
 		rt.focused = s.id
-		rt.blinkStart = time.Now()
+		rt.blinkStart = rt.now()
 	}
 	rt.focusVisible = true
 	rt.reveal(s.id)

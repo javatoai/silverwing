@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,7 +11,9 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo"
 )
@@ -173,12 +176,12 @@ func TestDocumentOtherApps(t *testing.T) {
 	if err := os.WriteFile(path+".tmp", []byte("two, longer"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Rename(path+".tmp", path); err != nil {
+	if err := renameAsApps(path+".tmp", path); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "the document to read the new file", func() bool { return doc.Content() == "two, longer" })
 	renamed := filepath.Join(dir, "renamed.e2enote")
-	if err := os.Rename(path, renamed); err != nil {
+	if err := renameAsApps(path, renamed); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "the document to follow the rename", func() bool { return doc.Path() == renamed })
@@ -190,4 +193,22 @@ func TestDocumentOtherApps(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "the document to be deleted", func() bool { return doc.State().Deleted })
+}
+
+// renameAsApps renames as the apps saving a document do on Windows: they
+// try again while the system refuses, which it does as long as any
+// program holds either file open without sharing its deletion, as a
+// virus scanner reading a file just written, or the shell a recent
+// document. The guard only stops a rename that never succeeds.
+func renameAsApps(from, to string) error {
+	deadline := time.Now().Add(time.Minute)
+	for {
+		err := os.Rename(from, to)
+		if err == nil || runtime.GOOS != "windows" || time.Now().After(deadline) ||
+			// ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION
+			!errors.Is(err, syscall.Errno(5)) && !errors.Is(err, syscall.Errno(32)) {
+			return err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }

@@ -76,7 +76,6 @@ func TestAnnualApplicationPeerReadOnlyAndMutationGuards(t *testing.T) {
 		{Kind: "document.paste", Path: filepath.Dir(peer)},
 		{Kind: "document.rename", Path: scope.Owned, Payload: map[string]any{"name": "newowned"}},
 		{Kind: "document.trash-preview", Path: scope.Temporary},
-		{Kind: "document.create", Path: scope.Temporary, Payload: map[string]any{"name": ".gitignore"}},
 	} {
 		action.TaskID = "task"
 		if _, err := a.documentAction(ctx, action); err == nil {
@@ -89,6 +88,17 @@ func TestAnnualApplicationPeerReadOnlyAndMutationGuards(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(peer); string(data) != "peer text" {
 		t.Fatal("peer file changed")
+	}
+	ignore := filepath.Join(scope.Temporary, ".gitignore")
+	if _, err := a.documentAction(ctx, Action{Kind: "document.create", TaskID: "task", Path: scope.Temporary, Text: "*.user\n", Payload: map[string]any{"name": ".gitignore"}}); err != nil {
+		t.Fatal("user temp ignore creation denied", err)
+	}
+	read, err := a.documentAction(ctx, Action{Kind: "document.read", TaskID: "task", Path: ignore})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content, ok := read.Data.(documents.Content); !ok || content.ReadOnly || content.Text != "*.user\n" {
+		t.Fatal("user temp ignore is not editable text", read)
 	}
 	if _, err := a.documentAction(ctx, Action{Kind: "document.copy", TaskID: "task", Path: peer, Payload: map[string]any{"destination": filepath.Join(scope.Owned, "copied.txt")}}); err != nil {
 		t.Fatal("copy from peer denied", err)
@@ -133,9 +143,10 @@ func TestAnnualApplicationCatalogAllTasksAndLocalRetry(t *testing.T) {
 	for _, task := range []string{taskPath, archivedPath} {
 		for _, file := range []string{"AGENTS.md", filepath.Join(".workspace", "agent", "TASK-CONTEXT.md")} {
 			data, err := os.ReadFile(filepath.Join(task, file))
-			if err != nil || !strings.Contains(string(data), peer) {
+			if err != nil {
 				t.Fatal(task, file, string(data), err)
 			}
+			assertGenericMaterialsGuidance(t, string(data), scope, peer)
 		}
 	}
 	target := filepath.Join(taskPath, "AGENTS.md")
@@ -160,15 +171,31 @@ func TestAnnualApplicationCatalogAllTasksAndLocalRetry(t *testing.T) {
 	if a.Runner != nil {
 		t.Fatal("unexpected runner")
 	}
-	if data, _ := os.ReadFile(target); !strings.Contains(string(data), filepath.Join(scope.Root, "测试新")) || strings.Contains(string(data), "`"+peer+"`") {
-		t.Fatal(string(data))
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
 	}
+	assertGenericMaterialsGuidance(t, string(data), scope, peer, filepath.Join(scope.Root, "测试新"))
 	c.MaterialsGitSync = &domain.MaterialsGitSyncSettings{Branch: "other", IntervalMinutes: 5}
 	if err := a.Config.Save(c); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.refreshMaterialsAgentCatalogs(context.Background(), expected); err == nil {
 		t.Fatal("late config scope accepted")
+	}
+}
+
+func assertGenericMaterialsGuidance(t *testing.T, text string, scope documents.MaterialsScope, peerPaths ...string) {
+	t.Helper()
+	for _, required := range []string{scope.Owned, scope.Temporary, "其他团队成员", "主动阅读", "只读", "不得新增、修改、删除、移动或重命名"} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("task instructions lack %q: %s", required, text)
+		}
+	}
+	for _, peer := range peerPaths {
+		if strings.Contains(text, peer) {
+			t.Fatalf("task instructions enumerate a teammate folder %q: %s", peer, text)
+		}
 	}
 }
 

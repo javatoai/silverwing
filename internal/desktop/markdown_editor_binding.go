@@ -9,6 +9,7 @@ import (
 // to their own autosave key and never borrow the app-wide materials document.
 type markdownEditorBinding struct {
 	id           string
+	label        string
 	isCurrent    func() bool
 	commit       func(string)
 	setComposing func(bool)
@@ -38,6 +39,10 @@ func (s *app) markdownEditorIsCurrent(state *markdownEditorState) bool {
 	}
 	if state.binding != nil {
 		return state.binding.isCurrent != nil && state.binding.isCurrent()
+	}
+	if state.live != nil {
+		scope, ok := s.materialsFileScope(state.taskID)
+		return ok && state.liveIdentity == materialsFileScopeKey(scope) && s.materialsUnit.state.markdown == state && s.materialsUnit.state.documentPath == state.path && s.taskUnit.currentTask().id == state.taskID
 	}
 	return s.materialsUnit.state.markdown == state && s.materialsUnit.state.documentPath == state.path
 }
@@ -94,7 +99,7 @@ func (s *app) ensureInstructionMarkdownEditor(key, kind string, tab int, source 
 					s.instructionAutosaveKey("task", taskID, "", s.taskUnit.state.notePaths[tab]) == key
 			case "settings":
 				scope, groupID := s.settingsInstructionScope()
-				return current.activeKind == "settings" && s.settingsUnit.state.settingsPage == "agents" && s.settingsUnit.state.settingsAgentLoaded &&
+				return current.activeKind == "settings" && s.page == "settings" && s.settingsUnit.state.settingsPage == "agents" && s.settingsUnit.state.settingsAgentLoaded &&
 					s.instructionAutosaveKey(scope, "", groupID, s.settingsUnit.state.settingsAgentPath) == key
 			default:
 				return false
@@ -146,11 +151,25 @@ func (s *app) ensureInstructionMarkdownEditor(key, kind string, tab int, source 
 
 func instructionMarkdownReadOnly(s *app, key string) bool {
 	ref, ok := s.instructionSaveRef(key)
-	return markdownReadingOnly || ok && ref.readOnly
+	return !ok || !markdownSaveRefWritable(ref)
 }
 
 func (s *app) resetInstructionMarkdownEditor(state *markdownEditorState, source string) {
 	if state == nil || state.doc == nil || state.doc.Source() == source {
+		return
+	}
+	if state.live != nil {
+		if state.live.Composing() {
+			return
+		}
+		if err := state.componentEditor.Reload(source, state.live.Buffer().Version()); err != nil {
+			state.liveError = err.Error()
+			return
+		}
+		state.liveSource = source
+		state.liveVersion = state.live.Buffer().Version()
+		state.liveFramework = nil
+		state.doc.SyncExternal(source)
 		return
 	}
 	s.cancelInstructionMarkdownDrafts(state)

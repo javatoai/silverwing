@@ -129,6 +129,9 @@ func (rt *engine) buildThemedMenu(c *context) {
 	t := c.theme
 	c.nextKey, c.keySet = "themed-menu-popup", true
 	panel := corePopoverBase(c, anchor, &open, func(panel *node) {
+		if !p.shown.button {
+			panel.AttachTo(anchor, AnchorTopStart, AnchorTopStart)
+		}
 		panel.Width(min(float32(292), max(float32(1), c.w-20))).MaxHeight(maxHeight+12).
 			Padding(5).Background(t.Surface).Border(1, t.Border).Radius(12).
 			Shadow(0, 6, 20, 0, RGBA(0, 0, 0, .18))

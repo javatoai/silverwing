@@ -118,8 +118,7 @@ func TestTaskRequirementTitleTooltip(t *testing.T) {
 		t.Fatal("title action missing")
 	}
 	tester.Move(r.X+r.W/2, r.Y+r.H/2)
-	time.Sleep(650 * time.Millisecond)
-	tester.Frame()
+	tester.Advance(650 * time.Millisecond)
 	if !tester.HasText("点击复制需求名称") || !tester.HasText(full) {
 		t.Fatal("hover did not expose the copy instruction and complete name")
 	}

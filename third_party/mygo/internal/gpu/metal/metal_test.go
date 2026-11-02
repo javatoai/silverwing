@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -72,6 +73,13 @@ func TestDrawsAsTheCPURenderer(t *testing.T) {
 			t.Fatal(err)
 		}
 		gputest.Compare(t, "metal-perspective", pix, s.Width*4, s)
+	}
+	for i, s := range gputest.TranslatedScenes() {
+		pix, err := r.renderOffscreen(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gputest.Compare(t, "metal-translated"+[]string{"", "-between-pixels"}[i], pix, s.Width*4, s)
 	}
 	s = gputest.ContinuousScene()
 	pix, err := r.renderOffscreen(s)
@@ -401,8 +409,9 @@ func TestRingSplitDrawsTheSamePixels(t *testing.T) {
 			instances := len(r.b.Instances)
 			r.b.NoRingSplit = true
 			whole := renderRaw(t, r, c.Scene, wide)
-			if c.Split && instances <= len(r.b.Instances) {
-				t.Errorf("%s wide=%v: the split drew %d instances, whole %d", c.Name, wide, instances, len(r.b.Instances))
+			// Split, a ring is more pieces, or none where it shows nothing.
+			if c.Split && instances == len(r.b.Instances) {
+				t.Errorf("%s wide=%v: the split drew %d instances, as whole", c.Name, wide, instances)
 			}
 			if d := differing(split, whole); d != 0 {
 				t.Errorf("%s wide=%v: %d bytes differ between split and whole", c.Name, wide, d)
@@ -498,8 +507,9 @@ func identityCases() []gputest.CullCase {
 }
 
 // TestClassesDrawTheSamePixels draws every scene with a fragment function
-// specialized for each batch (gpu.Class) and with the general one, in BGRA8
-// and float16 targets, and requires the same bytes.
+// specialized for each batch (gpu.Class), small batches joined (with one of
+// their classes, gpu.Batch.Joined) and apart (gpu.Builder.NoJoin), and with
+// the general one, in BGRA8 and float16 targets, and requires the same bytes.
 func TestClassesDrawTheSamePixels(t *testing.T) {
 	r, err := newRenderer()
 	if err != nil {
@@ -507,29 +517,40 @@ func TestClassesDrawTheSamePixels(t *testing.T) {
 	}
 	defer r.Release()
 	var seen [gpu.NumClasses]int
+	joined := map[uint32]int{}
 	for _, wide := range []bool{false, true} {
 		if wide && !r.SetWide(true) {
 			t.Log("no wide target:", r.wideErr)
 			continue
 		}
-		for _, c := range shaderIdentityCases() {
-			r.b.NoClasses = false
-			special := renderRaw(t, r, c.Scene, wide)
-			var classes [gpu.NumClasses]int
-			for _, bt := range r.b.Batches {
-				classes[bt.Class]++
-			}
+		// And scenes whose small batches of classes interleave.
+		cases := append(shaderIdentityCases(), gputest.CullCase{Name: "boxes", Scene: gputest.BoxesScene(640, 400, 120, false)},
+			gputest.CullCase{Name: "translated boxes", Scene: gputest.BoxesScene(640, 400, 120, true)},
+			gputest.CullCase{Name: "rows", Scene: gputest.RowsScene(640, 400, 30)})
+		for _, c := range cases {
 			r.b.NoClasses = true
-			c.Scene.EachCanvas(func(c *scene.Image) { c.Changed() })
 			general := renderRaw(t, r, c.Scene, wide)
-			for k, n := range classes {
-				seen[k] += n
-			}
-			if d := differing(special, general); d != 0 {
-				t.Errorf("%s wide=%v: %d bytes differ between specialized and general shaders (classes %v)", c.Name, wide, d, classes)
+			for _, apart := range []bool{false, true} {
+				r.b.NoClasses, r.b.NoJoin = false, apart
+				c.Scene.EachCanvas(func(c *scene.Image) { c.Changed() })
+				special := renderRaw(t, r, c.Scene, wide)
+				var classes [gpu.NumClasses]int
+				for _, bt := range r.b.Batches {
+					classes[bt.Class]++
+					if bt.Joined != 0 {
+						joined[bt.Joined]++
+					}
+				}
+				for k, n := range classes {
+					seen[k] += n
+				}
+				if d := differing(special, general); d != 0 {
+					t.Errorf("%s wide=%v apart=%v: %d bytes differ between specialized and general shaders (classes %v)", c.Name, wide, apart, d, classes)
+				}
 			}
 		}
 	}
+	r.b.NoClasses, r.b.NoJoin = false, false
 	for k, n := range seen {
 		if n == 0 {
 			t.Errorf("no batch of class %d was drawn", k)
@@ -537,15 +558,24 @@ func TestClassesDrawTheSamePixels(t *testing.T) {
 		// The test proves nothing if a specialized pipeline did not build and
 		// the frames drew with the general one in its place.
 		cl := gpu.Class(k)
-		if cl != gpu.ClassGeneral && specializable(pixelFormatBGRA8Unorm, cl, blendOver) &&
-			!r.usedSpecialized(pipeKey{pixelFormatBGRA8Unorm, cl, false, blendOver}) && !r.usedSpecialized(pipeKey{pixelFormatBGRA8Unorm, cl, true, blendOver}) {
+		if cl != gpu.ClassGeneral && specializable(pixelFormatBGRA8Unorm, 1<<cl, blendOver) &&
+			!r.usedSpecialized(pipeKey{pixelFormatBGRA8Unorm, 1 << cl, false, blendOver}) && !r.usedSpecialized(pipeKey{pixelFormatBGRA8Unorm, 1 << cl, true, blendOver}) {
 			t.Errorf("class %d drew with no specialized pipeline", k)
 		}
 	}
+	// Shadows joined with fills (boxes), and fills with glyphs (rows).
+	for _, set := range []uint32{1<<gpu.ClassShadow | 1<<gpu.ClassPlain, 1<<gpu.ClassPlain | 1<<gpu.ClassGlyph} {
+		if joined[set] == 0 {
+			t.Errorf("no batch joined the classes %b", set)
+		}
+		if !r.usedSpecialized(pipeKey{pixelFormatBGRA8Unorm, set, false, blendOver}) && !r.usedSpecialized(pipeKey{pixelFormatBGRA8Unorm, set, true, blendOver}) {
+			t.Errorf("the classes %b drew with no specialized pipeline", set)
+		}
+	}
+	t.Logf("joined classes: %v", joined)
 	if built, failed := r.pipelineCounts(); failed != 0 || built == 0 {
 		t.Errorf("%d specialized pipelines built, %d failed", built, failed)
 	}
-	r.b.NoClasses = false
 }
 
 // TestSplitsDrawTheSamePixels draws every identity case with the shadow and
@@ -580,6 +610,54 @@ func TestSplitsDrawTheSamePixels(t *testing.T) {
 		t.Error("nothing was split")
 	}
 	r.b.NoRingSplit, r.b.NoShadowSplit = false, false
+}
+
+// TestCornerSplitDrawsTheSamePixels draws every identity case, and each
+// with continuous corners everywhere, with shapes of continuous corners
+// drawn as nine-patches (their corners and a twin with square corners) and
+// whole (gpu.Builder.NoCornerSplit), in BGRA8 and float16, and requires the
+// same bytes, and of the cards, the CPU renderer's pixels.
+func TestCornerSplitDrawsTheSamePixels(t *testing.T) {
+	r, err := newRenderer()
+	if err != nil {
+		unavailable(t, err)
+	}
+	defer r.Release()
+	cases := []gputest.CullCase{{Name: "cards", Scene: gputest.CardsScene(1400, 900)},
+		{Name: "odd cards", Scene: gputest.CardsScene(1001, 777)}, {Name: "retina cards", Scene: gputest.CardsScene(2560, 1600)}}
+	for _, c := range identityCases() {
+		cases = append(cases, c, gputest.CullCase{Name: c.Name + " (continuous)", Scene: gputest.Continuously(c.Scene)})
+	}
+	pieces := 0
+	for _, wide := range []bool{false, true} {
+		if wide && !r.SetWide(true) {
+			t.Log("no wide target:", r.wideErr)
+			continue
+		}
+		for _, c := range cases {
+			r.b.NoCornerSplit = false
+			split := renderRaw(t, r, c.Scene, wide)
+			n := len(r.b.Instances)
+			r.b.NoCornerSplit = true
+			whole := renderRaw(t, r, c.Scene, wide)
+			pieces += n - len(r.b.Instances)
+			if d := differing(split, whole); d != 0 {
+				t.Errorf("%s wide=%v: %d bytes differ between nine-patches and whole shapes", c.Name, wide, d)
+			}
+			if !wide && strings.HasSuffix(c.Name, "cards") {
+				r.b.NoCornerSplit = false
+				pix, err := r.renderOffscreen(c.Scene)
+				if err != nil {
+					t.Fatal(err)
+				}
+				gputest.Compare(t, "metal-"+strings.ReplaceAll(c.Name, " ", "-"), pix, c.Scene.Width*4, c.Scene)
+			}
+		}
+	}
+	if pieces == 0 {
+		t.Error("nothing was drawn in pieces")
+	}
+	r.b.NoCornerSplit = false
 }
 
 // holdPipelineBuilds blocks specialized compilation, including an accidental
@@ -657,7 +735,7 @@ func TestFramesNeverWaitForACompile(t *testing.T) {
 		t.Fatal("the first frame did not draw with a general fallback")
 	}
 	f := r.cur
-	if p := r.pipeFor(f, gpu.ClassGlyph, true, blendOver); p != f.pipeline {
+	if p := r.pipeFor(f, 1<<gpu.ClassGlyph, true, blendOver); p != f.pipeline {
 		t.Error("a pipeline that is not made yet is not the general one")
 	}
 	// The frame finished while compilation was held. Let the worker make
@@ -666,7 +744,7 @@ func TestFramesNeverWaitForACompile(t *testing.T) {
 	plain := f.pipeline
 	for i := 0; i < 200 && plain == f.pipeline; i++ {
 		time.Sleep(50 * time.Millisecond)
-		plain = r.pipeFor(f, gpu.ClassPlain, false, blendOver)
+		plain = r.pipeFor(f, 1<<gpu.ClassPlain, false, blendOver)
 		if plain == 0 {
 			t.Fatal("no pipeline")
 		}
@@ -688,7 +766,7 @@ func TestFramesNeverWaitForACompile(t *testing.T) {
 	}
 	defer r2.Release()
 	renderRaw(t, r2, s, false)
-	if p := r2.pipeFor(r2.cur, gpu.ClassPlain, false, blendOver); p == r2.cur.pipeline {
+	if p := r2.pipeFor(r2.cur, 1<<gpu.ClassPlain, false, blendOver); p == r2.cur.pipeline {
 		t.Error("a second renderer did not find the pipeline made by the first")
 	}
 }
@@ -722,8 +800,10 @@ func TestMatchesTheUpstreamShader(t *testing.T) {
 			continue
 		}
 		for _, c := range shaderIdentityCases() {
-			got := renderRaw(t, r, c.Scene, wide)
-			want := renderRaw(t, ref, c.Scene, wide)
+			// What the upstream shader draws: no gradients of stops yet.
+			sc := gputest.WithoutNewPaints(c.Scene)
+			got := renderRaw(t, r, sc, wide)
+			want := renderRaw(t, ref, sc, wide)
 			if d := differing(got, want); d != 0 {
 				t.Errorf("%s wide=%v: %d bytes differ from the upstream shader", c.Name, wide, d)
 			}
@@ -1037,5 +1117,118 @@ func TestReleaseStopsQueuedPipelineCompiles(t *testing.T) {
 	}
 	if failed != 0 {
 		t.Fatalf("%d pipeline builds failed", failed)
+	}
+}
+
+// A shader precompiled (PrecompileShader) is the library and the pipeline
+// a renderer on the default GPU draws it with.
+func TestPrecompileShader(t *testing.T) {
+	r, err := newRenderer()
+	if err != nil {
+		t.Skip(err)
+	}
+	defer r.Release()
+	src := ShaderSource("struct Uniforms { float4 a; };\nfloat4 shaderMain(constant Uniforms& uniforms, texture2d<float> T0, texture2d<float> T1, texture2d<float> T2, texture2d<float> T3, float2 p, float4 rect) { return float4(0.25, 0.5, 0.75, 1); }\n")
+	PrecompileShader(src)
+	lib, pipe, ok := sharedShader(r.device, src, precompiledFormat)
+	if !ok || lib == 0 || pipe == 0 {
+		t.Fatalf("the renderer's device %#x shares nothing (default device %#x): library %#x, pipeline %#x", r.device, shaders.device, lib, pipe)
+	}
+	release(&lib)
+	release(&pipe)
+	if _, _, ok := sharedShader(r.device, src+"// another\n", precompiledFormat); ok {
+		t.Error("a source never precompiled is shared")
+	}
+}
+
+// Boxes that translations move draw the pixels of the same boxes placed
+// without transforms, and those of the CPU renderer.
+func TestTranslatedBoxes(t *testing.T) {
+	r, err := newRenderer()
+	if err != nil {
+		unavailable(t, err)
+	}
+	defer r.Release()
+	placed, err := r.renderOffscreen(gputest.BoxesScene(400, 300, 60, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := gputest.BoxesScene(400, 300, 60, true)
+	moved, err := r.renderOffscreen(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(moved, placed) {
+		t.Error("translated boxes draw other pixels than boxes in their places")
+	}
+	gputest.Compare(t, "metal-translated-boxes", moved, s.Width*4, s)
+}
+
+// TestBorderedCardDrawsAsTheCPURenderer draws the card of #531, a large
+// opaque card with a border of 2 pixels and continuous corners at scale 2,
+// over an opaque backdrop, and a small button like it, with each way the
+// builder can split them (an opaque core and pieces around it, nine-patches
+// of continuous corners, rings, specialized shaders) and without, and
+// requires the CPU renderer's pixels along their straight edges, exactly:
+// Metal drew a second line of border color at about 65% inside the card's
+// top edge, in the rows under its border, which Compare's tolerance (as
+// in the other parity tests) lets through.
+func TestBorderedCardDrawsAsTheCPURenderer(t *testing.T) {
+	r, err := newRenderer()
+	if err != nil {
+		unavailable(t, err)
+	}
+	defer r.Release()
+	reset := func() {
+		r.b.Opaque, r.b.NoCornerSplit, r.b.NoRingSplit, r.b.NoCull = true, false, false, false
+		r.b.NoClasses, r.b.GeneralFill, r.b.NoClipSkip, r.b.NoJoin = false, false, false, false
+	}
+	defer reset()
+	wide := r.SetWide(true)
+	if !wide {
+		t.Log("no wide target:", r.wideErr)
+	}
+	ways := []struct {
+		name string
+		set  func()
+	}{
+		{"", func() {}},
+		{"-blended", func() { r.b.Opaque = false }},
+		{"-whole-corners", func() { r.b.NoCornerSplit = true }},
+		{"-blended-whole-corners", func() { r.b.Opaque, r.b.NoCornerSplit = false, true }},
+		{"-no-cull", func() { r.b.NoCull, r.b.NoRingSplit = true, true }},
+		{"-general", func() { r.b.NoClasses, r.b.GeneralFill, r.b.NoClipSkip = true, true, true }},
+	}
+	for _, continuous := range []bool{true, false} {
+		s := gputest.BorderedCardScene(continuous)
+		name := "metal-bordered-card"
+		if !continuous {
+			name += "-round"
+		}
+		for _, w := range ways {
+			reset()
+			w.set()
+			// Twice: the second frame draws with what the first made.
+			for range 2 {
+				pix, err := r.renderOffscreen(s)
+				if err != nil {
+					t.Fatal(err)
+				}
+				gputest.CompareStraightEdges(t, name+w.name, pix, s.Width*4, s)
+			}
+			if !wide {
+				continue
+			}
+			// In float16, as windows showing wide colors draw.
+			raw := renderRaw(t, r, s, true)
+			pix := make([]byte, s.Width*s.Height*4)
+			for i := range s.Width * s.Height {
+				for c, from := range [4]int{2, 1, 0, 3} { // RGBA to BGRA
+					v := half(uint16(raw[8*i+2*from]) | uint16(raw[8*i+2*from+1])<<8)
+					pix[4*i+c] = byte(math.Round(float64(min(max(v, 0), 1) * 255)))
+				}
+			}
+			gputest.CompareStraightEdges(t, name+w.name+"-float16", pix, s.Width*4, s)
+		}
 	}
 }

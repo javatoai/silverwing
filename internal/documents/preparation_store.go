@@ -210,19 +210,7 @@ type requirementDirectoryContext struct {
 }
 
 func requireMaterialsRoot(configured *string) (string, error) {
-	if configured == nil || strings.TrimSpace(*configured) == "" {
-		return "", fmt.Errorf("尚未配置任务资料根目录；请在 silverwing 设置 > 路径设置中配置")
-	}
-	value, err := filepath.Abs(strings.TrimSpace(*configured))
-	if err != nil {
-		return "", err
-	}
-	value = filepath.Clean(value)
-	info, err := os.Lstat(value)
-	if err != nil || !info.IsDir() || isUnsafeDirectory(info, value) || !sameResolvedPath(value) {
-		return "", fmt.Errorf("资料根路径必须是已存在的普通目录")
-	}
-	return value, nil
+	return configuredRequirementsRoot(configured, false)
 }
 
 func requireMaterialsSubdirectory(configured *string) (string, error) {

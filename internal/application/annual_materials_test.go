@@ -15,7 +15,7 @@ import (
 func annualApplicationFixture(t *testing.T) (*App, documents.AnnualMaterialsScope, string) {
 	t.Helper()
 	a, _, taskPath := materialTextApplicationFixture(t)
-	base := filepath.Join(a.Paths.Home, "annual")
+	base := filepath.Join(a.Paths.Home, "annual", "requirements")
 	owned := filepath.Join(base, "2026", "123-需求", "研发")
 	scope, _ := documents.AnnualScope(owned)
 	if err := os.MkdirAll(base, 0755); err != nil {

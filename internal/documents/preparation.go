@@ -114,7 +114,10 @@ func (s *PreparationService) Ensure(ctx context.Context, config domain.AppConfig
 	if err != nil {
 		return fail(err.Error())
 	}
-	root, err := requireMaterialsRoot(config.RequirementMaterialsRoot)
+	if ctx != nil && ctx.Err() != nil {
+		return domain.RequirementMaterialsDirectory{}, ctx.Err()
+	}
+	root, err := configuredRequirementsRoot(config.RequirementMaterialsRoot, true)
 	if err != nil {
 		return fail(err.Error())
 	}
@@ -299,7 +302,10 @@ func (s *PreparationService) Materialize(ctx context.Context, config domain.AppC
 	if err := plan.Validate(); err != nil {
 		return Materialization{}, err
 	}
-	root, err := requireMaterialsRoot(config.RequirementMaterialsRoot)
+	if ctx != nil && ctx.Err() != nil {
+		return Materialization{}, ctx.Err()
+	}
+	root, err := configuredRequirementsRoot(config.RequirementMaterialsRoot, true)
 	if err != nil {
 		return Materialization{}, err
 	}
@@ -410,5 +416,9 @@ func (s *PreparationService) Materialize(ctx context.Context, config domain.AppC
 }
 
 func (s *PreparationService) acquireMaterialsLock(root string) (func(), error) {
-	return storage.AcquireMaterialsRepositoryLock(root)
+	paths, err := domain.ResolveMaterialsPaths(root)
+	if err != nil {
+		return nil, err
+	}
+	return storage.AcquireMaterialsRepositoryLock(paths.Root)
 }

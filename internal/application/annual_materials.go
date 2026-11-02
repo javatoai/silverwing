@@ -34,7 +34,7 @@ func (a *App) documentAnnualScope(root string) (documents.AnnualMaterialsScope, 
 		return scope, true, nil
 	}
 	scope, ok := annualMaterialsScope(root, value(config.RequirementMaterialsSubdirectory))
-	if ok && !sameTaskContextPath(scope.Base, value(config.RequirementMaterialsRoot)) {
+	if ok && !sameTaskContextPath(scope.Base, configuredRequirementsPath(config)) {
 		return scope, false, errors.New("资料目录配置已变化，请重新打开任务")
 	}
 	return scope, ok, nil
@@ -206,7 +206,7 @@ func validAnnualTaskMaterials(manifest domain.TaskManifest, config domain.AppCon
 	if value(config.RequirementMaterialsRoot) == "" || value(config.RequirementMaterialsSubdirectory) == "" {
 		return errors.New("请先配置任务资料根目录和可写子目录")
 	}
-	if !sameTaskContextPath(scope.Base, value(config.RequirementMaterialsRoot)) || !strings.EqualFold(filepath.Base(scope.Owned), value(config.RequirementMaterialsSubdirectory)) {
+	if !sameTaskContextPath(scope.Base, configuredRequirementsPath(config)) || !strings.EqualFold(filepath.Base(scope.Owned), value(config.RequirementMaterialsSubdirectory)) {
 		return errors.New("资料根目录或可写子目录已变化，请重新准备任务资料")
 	}
 	id := value(manifest.RequirementID)
@@ -220,4 +220,12 @@ func validAnnualTaskMaterials(manifest domain.TaskManifest, config domain.AppCon
 		return errors.New("需求资料目录不存在或不可读取")
 	}
 	return nil
+}
+
+func configuredRequirementsPath(config domain.AppConfig) string {
+	paths, err := config.MaterialsPaths()
+	if err != nil {
+		return ""
+	}
+	return paths.Requirements
 }

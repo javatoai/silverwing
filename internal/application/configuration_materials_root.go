@@ -2,23 +2,20 @@ package application
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
+	"silverwing-go/internal/documents"
 	"silverwing-go/internal/domain"
 )
 
 func (a *App) saveMaterialsRoot(action Action) (ActionResult, error) {
 	var root *string
 	if input := strings.TrimSpace(action.Path); input != "" {
-		path, err := filepath.Abs(input)
+		paths, err := documents.EnsureMaterialsPaths(input)
 		if err != nil {
-			return ActionResult{}, fmt.Errorf("规范任务资料根目录失败：%w", err)
+			return ActionResult{}, fmt.Errorf("准备任务资料目录失败：%w", err)
 		}
-		if err := os.MkdirAll(path, 0o755); err != nil {
-			return ActionResult{}, fmt.Errorf("创建任务资料根目录失败：%w", err)
-		}
+		path := paths.Root
 		root = &path
 	}
 	_, err := a.Config.Update(func(config domain.AppConfig) (domain.AppConfig, error) {

@@ -22,6 +22,7 @@ import (
 )
 
 type App struct {
+	directoryRecycler           documents.DirectoryRecycler
 	materialsGitGate            sync.RWMutex
 	Paths                       storage.Paths
 	Config                      *storage.ConfigStore

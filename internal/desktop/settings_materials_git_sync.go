@@ -100,7 +100,9 @@ func (s *app) settingsMaterialsGitSync(c *ui.Context, p palette) {
 	}
 	ui.Row(c).FillWidth().Gap(8).Wrap().Justify(ui.End).Children(func() {
 		if action(c, "materials-git-open", "folder", "打开仓库", p, false) && config.RequirementMaterialsRoot != nil {
-			s.act("system.open", "", "", "", *config.RequirementMaterialsRoot, "", map[string]any{"desktopSystemOpenDirectory": true})
+			if paths, err := config.MaterialsPaths(); err == nil {
+				s.act("system.open", "", "", "", paths.Root, "", map[string]any{"desktopSystemOpenDirectory": true})
+			}
 		}
 		title := "立即同步"
 		if state != nil && (state.status.Paused || state.needsResume) {

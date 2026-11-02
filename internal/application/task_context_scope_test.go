@@ -20,7 +20,7 @@ func taskContextScopeFixture(t *testing.T) (*App, domain.AppConfig, domain.TaskM
 	app := &App{Paths: paths, Config: storage.NewConfigStore(paths), Manifests: storage.NewManifestStore()}
 	config := domain.DefaultAppConfig()
 	config.TaskRoot = &paths.Tasks
-	materialsRoot := filepath.Join(paths.Home, "materials", "2026", "123-需求", "requirements")
+	materialsRoot := filepath.Join(paths.Home, "materials", "requirements", "2026", "123-需求", "requirements")
 	materialsBase := filepath.Join(paths.Home, "materials")
 	materialsSubdirectory := "requirements"
 	config.RequirementMaterialsRoot = &materialsBase

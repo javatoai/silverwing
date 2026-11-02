@@ -99,7 +99,7 @@ func annualAgentFixture(t *testing.T) (*AgentDocumentService, domain.TaskManifes
 	t.Helper()
 	paths := storage.NewPaths(t.TempDir())
 	task := filepath.Join(paths.Home, "tasks", "one")
-	owned := filepath.Join(paths.Home, "materials", "2026", "123-需求", "文档")
+	owned := filepath.Join(paths.Home, "materials", "requirements", "2026", "123-需求", "文档")
 	scope, _ := documents.AnnualScope(owned)
 	if err := os.MkdirAll(scope.Base, 0755); err != nil {
 		t.Fatal(err)

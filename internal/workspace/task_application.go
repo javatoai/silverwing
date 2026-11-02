@@ -461,7 +461,16 @@ func (s *TaskApplicationService) createLocked(ctx context.Context, config domain
 
 // RetryRequirementMaterials re-runs only the independent materials-directory
 // preparation and persists the new result without touching Git workspaces.
-func (s *TaskApplicationService) RetryRequirementMaterials(ctx context.Context, config domain.AppConfig, taskPath string) (domain.TaskManifest, error) {
+func (s *TaskApplicationService) RetryRequirementMaterials(ctx context.Context, config domain.AppConfig, taskPath string) (result domain.TaskManifest, err error) {
+	err = s.Locks.WithTaskRoot(stringValue(config.TaskRoot), func() error {
+		var inner error
+		result, inner = s.retryRequirementMaterials(ctx, config, taskPath)
+		return inner
+	})
+	return
+}
+
+func (s *TaskApplicationService) retryRequirementMaterials(ctx context.Context, config domain.AppConfig, taskPath string) (domain.TaskManifest, error) {
 	var updated domain.TaskManifest
 	err := s.withTaskManifestMutation(ctx, config, taskPath, func(ctx context.Context, manifest domain.TaskManifest) error {
 		if err := ctx.Err(); err != nil {
@@ -773,28 +782,7 @@ func (s *TaskApplicationService) Restore(ctx context.Context, config domain.AppC
 }
 
 func (s *TaskApplicationService) Delete(ctx context.Context, config domain.AppConfig, taskPath string, forceDiscard bool) error {
-	return s.withTaskManifestMutation(ctx, config, taskPath, func(ctx context.Context, manifest domain.TaskManifest) error {
-		risks, err := s.Lifecycle.InspectDeleteRisks(ctx, config, taskPath, manifest)
-		if err != nil {
-			return err
-		}
-		for _, risk := range risks {
-			if risk.StatusCheckError != nil {
-				return fmt.Errorf("存在无法安全验证的工作区，请先修复其 Git 身份或路径后再删除")
-			}
-		}
-		if len(risks) > 0 && !forceDiscard {
-			return fmt.Errorf("存在未提交改动，请确认强制丢弃后再删除")
-		}
-		removal, err := s.Lifecycle.RemoveAll(ctx, config, taskPath, manifest, forceDiscard)
-		if err != nil {
-			return err
-		}
-		if len(removal.RetainedBackupPaths) > 0 {
-			return fmt.Errorf("任务已删除，但部分工作区备份清理失败，已保留：%s", strings.Join(removal.RetainedBackupPaths, ", "))
-		}
-		return nil
-	})
+	return s.DeleteWithOptions(ctx, config, taskPath, TaskDeleteOptions{ForceDiscard: forceDiscard})
 }
 
 func (s *TaskApplicationService) SaveTaskNotes(config domain.AppConfig, taskPath, notes string) error {

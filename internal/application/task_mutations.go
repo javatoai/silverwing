@@ -51,8 +51,16 @@ func (a *App) RestoreTask(ctx context.Context, target TaskTarget) (OperationResu
 	})
 }
 func (a *App) DeleteTask(ctx context.Context, request TaskDeleteRequest) (OperationResult[struct{}], error) {
-	result, err := a.mutateTask(ctx, request.Target, "task.delete", map[string]any{"forceDiscard": request.ForceDiscard}, func(ctx context.Context, config domain.AppConfig, service *workspace.TaskApplicationService, _ domain.TaskManifest, path string) (OperationResult[domain.TaskManifest], error) {
-		return OperationResult[domain.TaskManifest]{Message: "任务已删除"}, service.Delete(ctx, config, path, request.ForceDiscard)
+	result, err := a.mutateTask(ctx, request.Target, "task.delete", map[string]any{"forceDiscard": request.ForceDiscard, "deleteMaterials": request.DeleteMaterials, "materialsGuard": request.MaterialsGuard}, func(ctx context.Context, config domain.AppConfig, service *workspace.TaskApplicationService, _ domain.TaskManifest, path string) (OperationResult[domain.TaskManifest], error) {
+		err := service.DeleteWithOptions(ctx, config, path, workspace.TaskDeleteOptions{ForceDiscard: request.ForceDiscard, DeleteMaterials: request.DeleteMaterials, MaterialsGuard: request.MaterialsGuard})
+		result := OperationResult[domain.TaskManifest]{Message: "任务已移入回收站"}
+		var warning *workspace.TaskRecycleCleanupWarning
+		if errors.As(err, &warning) {
+			result.Text = warning.Error()
+			result.Message = "任务已移入回收站，部分工作区登记未清理"
+			return result, nil
+		}
+		return result, err
 	})
 	return OperationResult[struct{}]{Message: result.Message, Text: result.Text, Path: result.Path}, err
 }

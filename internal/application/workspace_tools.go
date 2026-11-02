@@ -64,6 +64,7 @@ func (c cursorWorkspaceLauncher) Open(ctx context.Context, task workspace.TaskWo
 func (a *App) taskService(config domain.AppConfig) *workspace.TaskApplicationService {
 	dependencies := workspace.ComposeTaskApplicationDependencies(a.Manifests, a.git(config), a.Paths, a.materialsPreparation())
 	service := workspace.NewTaskApplicationServiceWithDependencies(dependencies)
+	service.Lifecycle.Recycler = a.directoryRecycler
 	registry, _ := workspace.NewTaskWorkspaceToolRegistry([]workspace.TaskWorkspaceToolLauncher{codexWorkspaceLauncher{}, cursorWorkspaceLauncher{runner: a.Runner}})
 	service.WorkspaceTools.Registry = registry
 	return service

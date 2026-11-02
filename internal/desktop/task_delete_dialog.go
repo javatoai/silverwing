@@ -1,12 +1,14 @@
 package desktop
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync/atomic"
 
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/workspace"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -21,6 +23,8 @@ type taskDeleteDialogState struct {
 	RiskScope                                   *taskDeleteRiskScope
 	Open, Loading, ExternalWindowsClosed        bool
 	DiscardChanges, Submitting                  bool
+	DeleteMaterials                             bool
+	Materials                                   workspace.TaskMaterialsDeletePreview
 	Error                                       string
 }
 
@@ -49,6 +53,8 @@ func (s *app) requestTaskDeleteRisks() {
 	s.cancelTaskDeleteRiskRead()
 	state.Risks = nil
 	state.RiskScope = nil
+	state.Materials = workspace.TaskMaterialsDeletePreview{}
+	state.DeleteMaterials = false
 	state.Error = ""
 	state.RequestID = taskDeleteRequestSequence.Add(1)
 	if s.backend == nil {
@@ -108,6 +114,9 @@ func (s *app) applyTaskDeleteActionResult(action application.Action, result appl
 	}
 	if action.Kind == "task.delete" && s.taskDeleteStateMatches(action) {
 		s.taskUnit.state.taskDeleteDialog = nil
+		if strings.TrimSpace(result.Text) != "" {
+			s.lastMessage = result.Text
+		}
 		s.lastResult = ""
 		return true
 	}
@@ -142,13 +151,27 @@ func (s *app) applyTaskDeleteRiskResult(action application.Action, result applic
 	state := s.taskUnit.state.taskDeleteDialog
 	state.Loading = false
 	state.Error = ""
-	risks, err := decodeData[domain.DeleteRisk](result.Data)
-	if err != nil {
-		state.Risks = nil
-		state.RiskScope = nil
-		state.Error = "删除检查结果格式错误：" + err.Error()
-		return
+	data, err := json.Marshal(result.Data)
+	var preview workspace.TaskDeletePreview
+	if err == nil {
+		err = json.Unmarshal(data, &preview)
 	}
+	if err != nil {
+		// Optional test/older read adapters may still return the risk array.
+		risks, legacyErr := decodeData[domain.DeleteRisk](result.Data)
+		if legacyErr != nil {
+			state.Risks = nil
+			state.RiskScope = nil
+			state.Error = "删除检查结果格式错误"
+			return
+		}
+		preview.Risks = risks
+	}
+	state.Materials = preview.Materials
+	if !state.Materials.CanDelete {
+		state.DeleteMaterials = false
+	}
+	risks := preview.Risks
 	state.Risks = risks
 }
 
@@ -195,7 +218,7 @@ func (s *app) taskDeleteNeedsDiscardAck() bool {
 func (s *app) taskDeleteConfirmationAction() (application.Action, bool) {
 	state := s.taskUnit.state.taskDeleteDialog
 	if state == nil || !state.Open || state.Loading || state.Submitting || state.Error != "" || s.busy ||
-		!state.ExternalWindowsClosed || s.taskDeleteHasStatusCheckFailure() ||
+		!state.ExternalWindowsClosed || s.taskDeleteHasStatusCheckFailure() || (state.DeleteMaterials && !state.Materials.CanDelete) ||
 		(len(state.Risks) > 0 && !state.DiscardChanges) {
 		return application.Action{}, false
 	}
@@ -215,6 +238,7 @@ func (s *app) taskDeleteConfirmationAction() (application.Action, bool) {
 		Kind: "task.delete", TaskID: state.TaskID, Path: state.TaskPath,
 		Payload: map[string]any{
 			"forceDiscard": forceDiscard, "taskDeleteRequestID": fmt.Sprint(state.RequestID),
+			"deleteMaterials": state.DeleteMaterials, "materialsGuard": state.Materials.Guard,
 			"taskDeleteCreatedAt": state.TaskCreatedAt,
 		},
 	}, true
@@ -259,16 +283,24 @@ func (s *app) renderTaskDeleteDialog(c *ui.Context, p palette) {
 				icon(c, "delete", 18, p.danger)
 				label(c, "删除任务", 17, p.text).FontWeight(600).Grow(1)
 			})
-			label(c, fmt.Sprintf("即将永久删除“%s”的任务目录及其中的本地资料、所有工作区；远程分支和独立的需求资料目录保留。", state.FolderName), 12, p.text).Wrap()
+			label(c, fmt.Sprintf("“%s”的任务目录和工作区文件将移入系统回收站；独立资料按下方选项处理，本地和远程分支保留。", state.FolderName), 12, p.text).Wrap()
 			ui.Box(c).FillWidth().Padding(10, 12).Radius(9).Background(p.amberBg).Border(1, p.line).Children(func() {
 				label(c, "删除前请确认已关闭：Codex 中关联的项目或任务、IDE 中打开的此任务或工作区窗口，以及文件管理器中打开的任务目录。它们可能占用文件，导致删除失败。silverwing 不会自动关闭这些外部窗口。", 11, p.danger).Wrap()
 			})
 			ui.Checkbox(c.Key("task-delete-external-windows"), &state.ExternalWindowsClosed, "我已关闭上述 Codex 项目、IDE 窗口和文件夹").FillWidth()
+			ui.Checkbox(c.Key("task-delete-materials"), &state.DeleteMaterials, "删除任务资料目录").FillWidth().Disabled(state.Loading || !state.Materials.CanDelete)
+			if state.Materials.Root != "" {
+				label(c, state.Materials.Root, 11, p.muted).Wrap().Selectable()
+			}
+			if state.Materials.Reason != "" {
+				label(c, state.Materials.Reason, 11, p.muted).Wrap()
+			}
+
 			if state.Loading {
 				ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
 					ui.Spinner(c).Size(15, 15).TextColor(p.blue).Label("检查中")
 					if state.Submitting {
-						label(c, "正在删除任务…", 12, p.muted)
+						label(c, "正在移入回收站…", 12, p.muted)
 					} else {
 						label(c, "正在检查 Git 状态…", 12, p.muted)
 					}
@@ -297,17 +329,17 @@ func (s *app) renderTaskDeleteDialog(c *ui.Context, p palette) {
 				})
 			}
 			if s.taskDeleteNeedsDiscardAck() {
-				ui.Checkbox(c.Key("task-delete-discard-risk"), &state.DiscardChanges, "确认丢弃未提交改动").FillWidth()
+				ui.Checkbox(c.Key("task-delete-discard-risk"), &state.DiscardChanges, "确认将包含未提交改动的工作区移入回收站").FillWidth()
 			}
 			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
 				if action(c, "task-delete-cancel", "close", "取消", p, false) {
 					s.closeTaskDeleteDialog()
 				}
 				_, canDelete := s.taskDeleteConfirmationAction()
-				button := ui.ButtonBase(c.Key("task-delete-confirm")).Row().Gap(7).Height(34).Padding(0, 16).Radius(20).Label("永久删除任务").Tooltip("永久删除任务").Disabled(!canDelete)
+				button := ui.ButtonBase(c.Key("task-delete-confirm")).Row().Gap(7).Height(34).Padding(0, 16).Radius(20).Label("移入回收站").Tooltip("移入回收站").Disabled(!canDelete)
 				button.Background(p.danger).Children(func() {
 					icon(c, "delete", 16, ui.Hex("#FFFFFF"))
-					label(c, "永久删除任务", 12, ui.Hex("#FFFFFF")).NoWrap()
+					label(c, "移入回收站", 12, ui.Hex("#FFFFFF")).NoWrap()
 				})
 				if button.Clicked() && canDelete {
 					s.confirmTaskDelete()

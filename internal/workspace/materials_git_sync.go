@@ -19,6 +19,8 @@ import (
 // before every command, so configuration edits cannot redirect an active job.
 type MaterialsGitScope struct {
 	Home, Root, Subdirectory, URL, Branch, EnvironmentID string
+	RequirementsRoot                                     string
+	RequireRootConfirmation                              bool
 }
 
 type MaterialsGitSyncStatus struct {
@@ -30,6 +32,7 @@ type MaterialsGitSyncStatus struct {
 
 type materialsGitBinding struct {
 	MaterialsGitSyncStatus
+	ConfirmedRoot           string
 	URL, Branch             string
 	StatusURL, StatusBranch string
 	// Written before init. Kept until the initial histories have been joined.
@@ -80,6 +83,9 @@ func (s *MaterialsGitSyncService) save(scope MaterialsGitScope, state materialsG
 
 func (s *MaterialsGitSyncService) Status(scope MaterialsGitScope) (MaterialsGitSyncStatus, error) {
 	state, err := s.load(scope)
+	if scope.RequireRootConfirmation && state.ConfirmedRoot != scope.Root {
+		return MaterialsGitSyncStatus{Paused: true, Error: "资料总目录已变化，请重新检查并确认同步范围"}, err
+	}
 	if !materialsGitStatusMatches(state, scope) {
 		return MaterialsGitSyncStatus{}, err
 	}
@@ -185,6 +191,13 @@ func (s *MaterialsGitSyncService) Sync(ctx context.Context, scope MaterialsGitSc
 			state.MaterialsGitSyncStatus = MaterialsGitSyncStatus{}
 		}
 		status = state.MaterialsGitSyncStatus
+		if scope.RequireRootConfirmation && state.ConfirmedRoot != scope.Root {
+			if !resume {
+				status = MaterialsGitSyncStatus{Paused: true, Error: "资料总目录已变化，请重新检查并确认同步范围"}
+				return errors.New(status.Error)
+			}
+			state.ConfirmedRoot = scope.Root
+		}
 		if state.Paused && !resume {
 			return errors.New(state.Error)
 		}
@@ -217,6 +230,13 @@ func materialsGitStatusMatches(state materialsGitBinding, scope MaterialsGitScop
 }
 
 func (s *MaterialsGitSyncService) syncLocked(ctx context.Context, scope MaterialsGitScope, state *materialsGitBinding, progress func(string)) error {
+	if scope.RequirementsRoot != "" && !samePath(scope.Root, scope.RequirementsRoot) {
+		if _, err := os.Lstat(filepath.Join(scope.RequirementsRoot, ".git")); err == nil {
+			return errors.New("requirements 仍是独立 Git 仓库，请先自行整理嵌套仓库后重新检查；程序不会移动或删除 Git 元数据")
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
 	progress("核对仓库与分支")
 	if _, err := s.run(ctx, scope, true, "check-ref-format", "--branch", scope.Branch); err != nil {
 		return err

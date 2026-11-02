@@ -69,8 +69,8 @@ func TestAnnualGitAppliedTreeUpdatesAllAgentsWhenPushFails(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write(seed, "2026/123-需求/测试/case.md", "peer")
-	write(seed, "2026/123-需求/研发/remote.md", "remote")
+	write(seed, "requirements/2026/123-需求/测试/case.md", "peer")
+	write(seed, "requirements/2026/123-需求/研发/remote.md", "remote")
 	annualLocalGit(t, seed, "add", ".")
 	annualLocalGit(t, seed, "commit", "-m", "seed")
 	annualLocalGit(t, seed, "remote", "add", "origin", bare)
@@ -88,8 +88,8 @@ func TestAnnualGitAppliedTreeUpdatesAllAgentsWhenPushFails(t *testing.T) {
 	if _, err := a.finishMaterialsGitSync(context.Background(), expected, status, syncErr, service.Check); err != nil {
 		t.Fatal(err)
 	}
-	annualLocalGit(t, seed, "mv", "2026/123-需求/测试", "2026/123-需求/验证")
-	write(seed, "2026/123-需求/产品/design.md", "peer design")
+	annualLocalGit(t, seed, "mv", "requirements/2026/123-需求/测试", "requirements/2026/123-需求/验证")
+	write(seed, "requirements/2026/123-需求/产品/design.md", "peer design")
 	annualLocalGit(t, seed, "add", ".")
 	annualLocalGit(t, seed, "commit", "-m", "peer rename and add")
 	annualLocalGit(t, seed, "push", "origin", "master")

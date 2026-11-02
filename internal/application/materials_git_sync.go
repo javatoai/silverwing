@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"silverwing-go/internal/documents"
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/storage"
 	"silverwing-go/internal/workspace"
@@ -48,7 +49,14 @@ func (a *App) lockMaterialsGitDocumentMutation(kind, root string) (func(), error
 	if err != nil {
 		return nil, err
 	}
-	base := value(config.RequirementMaterialsRoot)
+	if strings.TrimSpace(value(config.RequirementMaterialsRoot)) == "" {
+		return func() {}, nil
+	}
+	paths, pathErr := config.MaterialsPaths()
+	if pathErr != nil {
+		return nil, pathErr
+	}
+	base := paths.Root
 	if base == "" {
 		return func() {}, nil
 	}
@@ -68,7 +76,9 @@ func MaterialsGitScope(home string, config domain.AppConfig) workspace.Materials
 	// Include execution/credential routing and enablement, but not unrelated
 	// service configuration. The digest never exposes proxy credentials to UI.
 	env, _ := json.Marshal([]any{config.GitExecutablePath, config.CommandProxyURL, config.CommandProxyNoProxy, config.CommandProxyUsername, config.CommandProxyPassword, config.CommandProxyTargets, settings.Enabled})
-	return workspace.MaterialsGitScope{Home: home, Root: value(config.RequirementMaterialsRoot), Subdirectory: value(config.RequirementMaterialsSubdirectory), URL: settings.RepositoryURL, Branch: settings.Branch, EnvironmentID: fmt.Sprintf("%x", sha256.Sum256(env))}
+	paths, pathsErr := config.MaterialsPaths()
+	rawRoot := filepath.Clean(value(config.RequirementMaterialsRoot))
+	return workspace.MaterialsGitScope{Home: home, Root: paths.Root, RequirementsRoot: paths.Requirements, RequireRootConfirmation: pathsErr == nil && !sameTaskContextPath(rawRoot, paths.Root), Subdirectory: value(config.RequirementMaterialsSubdirectory), URL: settings.RepositoryURL, Branch: settings.Branch, EnvironmentID: fmt.Sprintf("%x", sha256.Sum256(env))}
 }
 
 func (a *App) materialsGitService(expected workspace.MaterialsGitScope) (*workspace.MaterialsGitSyncService, error) {
@@ -124,6 +134,9 @@ func (a *App) SyncMaterialsGit(ctx context.Context, expected workspace.Materials
 		return workspace.MaterialsGitSyncStatus{}, err
 	}
 	if err := config.MaterialsGitSettings().Validate(); err != nil {
+		return workspace.MaterialsGitSyncStatus{}, err
+	}
+	if _, err := documents.ValidateMaterialsPaths(value(config.RequirementMaterialsRoot)); err != nil {
 		return workspace.MaterialsGitSyncStatus{}, err
 	}
 	if strings.TrimSpace(expected.URL) == "" {

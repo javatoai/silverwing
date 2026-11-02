@@ -43,7 +43,7 @@ func TestMaterialsGitScopeAndDocumentMutationGuards(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, ".git")); !os.IsNotExist(err) {
 		t.Fatal("stale scope initialized repository")
 	}
-	unlock, err := storage.AcquireMaterialsRepositoryLock(root)
+	unlock, err := storage.AcquireMaterialsRepositoryLock(scope.Root)
 	if err != nil {
 		t.Fatal(err)
 	}

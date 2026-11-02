@@ -108,6 +108,9 @@ func (s MaterialsScope) EnsureLocal() error {
 
 func findAnnualRequirementDirectory(root, id, folder string, year int) (string, error) {
 	entries, err := os.ReadDir(root)
+	if os.IsNotExist(err) {
+		return filepath.Join(root, fmt.Sprint(year), id+"-"+folder), nil
+	}
 	if err != nil {
 		return "", err
 	}

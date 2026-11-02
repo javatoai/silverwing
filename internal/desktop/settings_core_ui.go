@@ -57,11 +57,11 @@ func (s *app) settingsTaskPaths(c *ui.Context, p palette) {
 func (s *app) settingsPaths(c *ui.Context, p palette) {
 	settingsHelpCard(c, p, "任务资料目录设置", "根目录与子目录均配置后才启用任务资料目录。", func() {
 		root := s.input("setting:requirementMaterialsRoot", s.configString("requirementMaterialsRoot"))
-		s.settingsAppearancePathRow(c, p, "任务资料根目录", "根目录和子目录都配置后，才会启用任务资料目录。", "选择任务资料目录", root, true, func(value string) {
+		s.settingsAppearancePathRow(c, p, "任务资料根目录", "选择总目录或 requirements；程序自动识别，Git 同步使用总目录。", "选择任务资料目录", root, true, func(value string) {
 			s.saveMaterialsRoot(value)
 		})
 		settingsAppearanceDivider(c)
-		s.settingsAppearanceTextRow(c, p, "requirementMaterialsSubdirectory", "任务资料子目录", "相对根目录的子目录，例如：研发。", "例如：研发", func(value string) { s.saveConfigField("requirementMaterialsSubdirectory", nullableString(value)) })
+		s.settingsAppearanceTextRow(c, p, "requirementMaterialsSubdirectory", "任务资料子目录", "每份需求资料的可写子目录，例如：研发。", "例如：研发", func(value string) { s.saveConfigField("requirementMaterialsSubdirectory", nullableString(value)) })
 		settingsAppearanceDivider(c)
 		s.settingsMaterialsExpansionDepth(c, p)
 	})

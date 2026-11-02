@@ -18,7 +18,7 @@ func materialTextApplicationFixture(t *testing.T) (*App, string, string) {
 	paths := storage.NewPaths(t.TempDir())
 	paths.Tasks = filepath.Join(paths.Home, "isolated-tasks")
 	materialsBase := filepath.Join(paths.Home, "isolated-materials")
-	materials := filepath.Join(materialsBase, "2026", "123-text", "owned")
+	materials := filepath.Join(materialsBase, "requirements", "2026", "123-text", "owned")
 	if err := os.MkdirAll(materials, 0700); err != nil {
 		t.Fatal(err)
 	}

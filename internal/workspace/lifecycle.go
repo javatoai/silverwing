@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"silverwing-go/internal/documents"
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/storage"
 )
@@ -32,6 +33,7 @@ type WorkspaceLifecycle struct {
 	Git       *GitClient
 	Locks     *OperationLocks
 	Bootstrap *BootstrapService
+	Recycler  documents.DirectoryRecycler
 }
 
 func NewWorkspaceLifecycle(manifests TaskManifestReader, git *GitClient, locks *OperationLocks) *WorkspaceLifecycle {
@@ -852,7 +854,7 @@ func copyDirectory(source, target string) error {
 			return os.MkdirAll(destination, info.Mode().Perm())
 		}
 		if !info.Mode().IsRegular() {
-			return fmt.Errorf("不支持恢复特殊文件：%s", path)
+			return copyIrregularRecoveryFile(path, destination)
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {

@@ -13,7 +13,7 @@ import (
 )
 
 func TestAnnualRequirementReuseAndDuplicates(t *testing.T) {
-	root := t.TempDir()
+	root := annualCollectionRoot(t)
 	original := filepath.Join(root, "2024", "123-原名")
 	for _, path := range []string{original, filepath.Join(root, "2025", "1234-不同需求"), filepath.Join(root, "123-旧平铺")} {
 		if err := os.MkdirAll(path, 0755); err != nil {
@@ -37,7 +37,7 @@ func TestAnnualRequirementReuseAndDuplicates(t *testing.T) {
 }
 
 func TestAnnualPlanRaceReusesWinnerAndCapturedYear(t *testing.T) {
-	root := t.TempDir()
+	root := annualCollectionRoot(t)
 	sub := "资料"
 	config := domain.AppConfig{RequirementMaterialsRoot: &root, RequirementMaterialsSubdirectory: &sub}
 	service := NewPreparationService(storage.NewPaths(t.TempDir()), nil)
@@ -137,7 +137,7 @@ func TestAnnualScopeTempAndPermissions(t *testing.T) {
 }
 
 func TestAnnualPreviewDoesNotCreateAndEnsureReuses(t *testing.T) {
-	root := t.TempDir()
+	root := annualCollectionRoot(t)
 	sub := "文档"
 	existing := filepath.Join(root, "2023", "123-老名字")
 	if err := os.MkdirAll(existing, 0755); err != nil {
@@ -168,7 +168,7 @@ func TestAnnualPreviewDoesNotCreateAndEnsureReuses(t *testing.T) {
 }
 
 func TestAnnualCandidateIdentityConflictAndFlatIgnored(t *testing.T) {
-	root := t.TempDir()
+	root := annualCollectionRoot(t)
 	sub := "研发"
 	flat := filepath.Join(root, "123-旧名字", sub)
 	if err := os.MkdirAll(flat, 0755); err != nil {
@@ -194,4 +194,13 @@ func TestAnnualCandidateIdentityConflictAndFlatIgnored(t *testing.T) {
 	if _, err := requireMaterialsSubdirectory(&[]string{"TEMP"}[0]); err == nil {
 		t.Fatal("temp alias accepted")
 	}
+}
+
+func annualCollectionRoot(t *testing.T) string {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "requirements")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	return root
 }

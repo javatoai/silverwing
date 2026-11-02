@@ -46,7 +46,7 @@ func (a *App) refreshMaterialsAgentCatalogs(ctx context.Context, expected worksp
 	}
 	for _, entry := range scan.Current {
 		scope, ok := documents.AnnualScope(value(entry.Manifest.RequirementMaterials.WriteRoot))
-		if !ok || !sameTaskContextPath(scope.Base, expected.Root) || !strings.EqualFold(filepath.Base(scope.Owned), expected.Subdirectory) {
+		if !ok || !sameTaskContextPath(scope.Base, configuredRequirementsPath(config)) || !strings.EqualFold(filepath.Base(scope.Owned), expected.Subdirectory) {
 			continue
 		}
 		taskPath, original := entry.Path, entry.Manifest

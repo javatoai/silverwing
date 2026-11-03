@@ -19,5 +19,5 @@ require (
 require (
 	github.com/go-text/typesetting v0.3.5 // indirect
 	go.yaml.in/yaml/v3 v3.0.5
-	golang.org/x/net v0.59.0 // indirect
+	golang.org/x/net v0.59.0
 )

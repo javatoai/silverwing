@@ -180,6 +180,45 @@ func (s *app) configureFrameworkMarkdown(c *ui.Context, p palette, state *markdo
 		node := editor.Node{Kind: "image", Destination: target, Text: alt, Range: editor.SourceRange{Start: native.originalOffset(start), End: native.originalOffset(end)}}
 		s.renderMarkdownImage(c, p, state, part, node, 15*state.zoom)
 	}
+	o.ImageContent = func(c *ui.Context, block, start, end int, target, alt string) {
+		part := native.partAt(state, start)
+		node := editor.Node{Kind: "image", Destination: target, Text: alt, Range: editor.SourceRange{Start: native.originalOffset(start), End: native.originalOffset(end)}}
+		s.renderMarkdownImage(c, p, state, part, node, 15*state.zoom, true)
+	}
+	o.OnImageOpen = func(info markdown.ImageInfo) {
+		part := native.partAt(state, info.Start)
+		node := editor.Node{Kind: "image", Destination: info.Destination, Text: info.Alt, Range: editor.SourceRange{Start: native.originalOffset(info.Start), End: native.originalOffset(info.End)}}
+		image, err := s.ensureMarkdownImage(state, part, node)
+		if err != nil {
+			state.liveError = err.Error()
+			return
+		}
+		if image.bitmap != nil {
+			if image.sourcePath != "" && state.commentReading && state.detached {
+				s.openMarkdownLocalImageViewer(state, image.sourcePath)
+			} else {
+				s.openMarkdownBitmapViewer(state, image.bitmap)
+			}
+		}
+	}
+	o.ValidateImage = func(target string) error {
+		resolved, err := markdownui.ResolveLink(state.path, target)
+		if err != nil {
+			return err
+		}
+		if resolved.URL != "" {
+			return nil
+		}
+		if state.detached {
+			if path := state.trustedImages[target]; path != "" {
+				_, err := validateTrustedMarkdownImage(path)
+				return err
+			}
+			return fmt.Errorf("图片引用不属于当前文档")
+		}
+		_, _, err = s.resolveTaskMarkdownImage(state, target)
+		return err
+	}
 	o.Link = func(c *ui.Context, in *parser.Inline, block, offset int) bool {
 		raw := native.originalOffset(in.Start)
 		for _, preview := range native.projection.LinkPreviews {

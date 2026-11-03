@@ -97,6 +97,9 @@ func MarkdownEditor(c *ui.Context, s *EditorState, options EditorOptions) ui.Ele
 		s.reader.configureProperties(native, s.ApplyTagChange, func() uint64 { return s.Snapshot().Version })
 	}
 	baseLinkView := native.LinkView
+	if native.OnImageOpen == nil {
+		native.OnImageOpen = s.openImage
+	}
 	native.LinkView = func(ctx *ui.Context, in *parser.Inline, block, offset int, children func()) bool {
 		if baseLinkView != nil && baseLinkView(ctx, in, block, offset, children) {
 			return true
@@ -112,6 +115,7 @@ func MarkdownEditor(c *ui.Context, s *EditorState, options EditorOptions) ui.Ele
 			baseMenu(ctx, menu)
 		}
 		s.commandMenu(menu)
+		s.imageMenu(menu)
 		menu.Separator()
 		if (options.Native == nil || options.Native.ContextMenu == nil) && menu.Item("查找正文 · Ctrl+F").Chosen() {
 			s.reader.find.Open = true
@@ -125,7 +129,7 @@ func MarkdownEditor(c *ui.Context, s *EditorState, options EditorOptions) ui.Ele
 			s.renderReplace(c)
 		}
 		surface := md.Editor(c.Key("native-editor"), s.native, md.EditorOptions{
-			Options: native, Label: options.Label, ReadOnly: options.ReadOnly, InPlaceTables: true, RenderedLinks: true, InPlaceCode: true, ContinueBlocks: true, InteractiveTasks: true, SmartEditing: true, ConfirmCodeFenceOnEnter: true,
+			Options: native, Label: options.Label, ReadOnly: options.ReadOnly, InPlaceTables: true, RenderedLinks: true, InPlaceCode: true, InPlaceImages: true, ImageActions: s.imageActions, ContinueBlocks: true, InteractiveTasks: true, SmartEditing: true, ConfirmCodeFenceOnEnter: true,
 			SourceHighlights: s.sourceFindHighlights(document.Source),
 			OnChange:         s.notify, OnError: s.report, OnCompositionChanged: options.OnCompositionChanged,
 			OnPaste: func(plain bool) bool { return s.pasteContent(services, plain) },
@@ -133,6 +137,7 @@ func MarkdownEditor(c *ui.Context, s *EditorState, options EditorOptions) ui.Ele
 		}).Grow(1).FillWidth().MinHeight(0)
 		s.floatingToolbar(c)
 		s.insertPopover(c, surface)
+		s.imagePopover(c, surface)
 		if dialog := s.insert; dialog != nil && !dialog.open && pendingInsertInput(dialog) {
 			// Dismissing a popover outside its buttons cannot discard a draft.
 			// Explicit cancel/apply clear s.insert in the popover itself.
@@ -158,6 +163,9 @@ func (s *EditorState) CaptureInput() (Snapshot, error) {
 	s.notify()
 	if pendingLinkInput(s.link) {
 		return s.Snapshot(), fmt.Errorf("请先保存或取消当前链接编辑，再继续")
+	}
+	if pendingImageInput(s.image) {
+		return s.Snapshot(), fmt.Errorf("请先保存或取消当前图片编辑，再继续")
 	}
 	if pendingInsertInput(s.insert) {
 		return s.Snapshot(), fmt.Errorf("请先插入或取消当前链接或图片，再继续")

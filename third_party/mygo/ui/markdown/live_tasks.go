@@ -140,7 +140,7 @@ func (s *EditorState) toggleTask(hit *editorTaskPress) {
 	gap := s.focusedCodeGap() != nil
 	var omitted *editorOmittedCellHistory
 	if gap {
-		history = editorCodeGapHistory{selection: before}
+		history = s.captureCodeGapHistory(before)
 	} else if cell := s.focusedOmittedTableCell(); cell != nil {
 		saved := editorOmittedCellHistory{selection: before, start: cell.table.start, row: cell.cell.row, column: cell.cell.column}
 		omitted, history = &saved, saved
@@ -157,7 +157,7 @@ func (s *EditorState) toggleTask(hit *editorTaskPress) {
 	s.codeGapFocus.valid = false
 	s.omittedTableCell = nil
 	if gap {
-		s.restoreCodeGap(s.caret)
+		s.restoreCodeGapHistory(history.(editorCodeGapHistory))
 	} else if omitted != nil {
 		s.restoreOmittedTableCell(*omitted)
 	}

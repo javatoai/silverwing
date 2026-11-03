@@ -86,7 +86,7 @@ func TestCommentMarkdownImportInsertsAtCapturedCaretAndRetainsDeletedCache(t *te
 	d.Images = append(d.Images, a)
 	call.reply <- taskOpenToolsProbeReply{result: application.ActionResult{Data: d}}
 	nextTaskOpenToolsUpdate(t, updates)()
-	if !strings.HasPrefix(state.body, "前文![picked.png]") || !strings.HasSuffix(state.body, " 后文") || !strings.Contains(state.body, a.MarkdownRef) || owner.trustedImages[a.MarkdownRef] != path {
+	if !strings.HasPrefix(state.body, "前文\n\n![picked.png]") || !strings.HasSuffix(state.body, "\n\n 后文") || !strings.Contains(state.body, a.MarkdownRef) || owner.trustedImages[a.MarkdownRef] != path {
 		t.Fatalf("image was appended or failed to acquire trusted metadata: %q", state.body)
 	}
 	call = nextCommentComposerCall(t, backend)
@@ -116,6 +116,80 @@ func TestCommentMarkdownImportInsertsAtCapturedCaretAndRetainsDeletedCache(t *te
 	if !strings.Contains(state.body, a.MarkdownRef) {
 		t.Fatal("Redo did not restore its registered image reference")
 	}
+}
+
+func TestReviewCommentImageReplacementWhileNewerBodyNeedsSave(t *testing.T) {
+	s, backend, updates, state := commentComposerFixture(t)
+	path := filepath.Join(t.TempDir(), "old.png")
+	writeMarkdownImageFixture(t, path, 16, 16)
+	oldID := strings.Repeat("d", 32)
+	oldRef := domain.CommentImageMarkdownRef(oldID)
+	state.body = "![a](" + oldRef + ")"
+	state.draft.Content = state.body
+	state.draft.Images = []domain.CommentDraftAsset{{ID: oldID, Name: "old.png", MarkdownRef: oldRef, LocalPath: path}}
+	v := commentMarkdownTester(s)
+	owner := state.markdown
+	seedMarkdownReadyImages(t, s, owner, ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 16, 16))))
+	v.Frame()
+	if err := owner.live.ReplaceRange(owner.live.Buffer().Len(), owner.live.Buffer().Len(), " first", owner.componentEditor.Snapshot().Version); err != nil {
+		t.Fatal(err)
+	}
+	first := nextCommentComposerCall(t, backend)
+	if err := owner.live.ReplaceRange(owner.live.Buffer().Len(), owner.live.Buffer().Len(), " second", owner.componentEditor.Snapshot().Version); err != nil {
+		t.Fatal(err)
+	}
+	v.Frame()
+	if err := v.Click("Markdown 图片：a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Click("编辑"); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Click("图片地址"); err != nil {
+		t.Fatal(err)
+	}
+	v.Key(ui.Cmd, ui.KeyA)
+	v.Type("D:/synthetic/replacement.png")
+	if err := v.Click("保存"); err != nil {
+		t.Fatal(err)
+	}
+	if state.pendingImport == nil {
+		t.Fatalf("replacement was not queued behind save: op=%q running=%v error=%q body=%q view=%v", state.operation, state.running, state.errorText, state.body, v.Texts())
+	}
+	d := state.draft
+	d.Content = first.action.Payload["content"].(string)
+	d.Revision++
+	first.reply <- taskOpenToolsProbeReply{result: application.ActionResult{Data: d}}
+	nextTaskOpenToolsUpdate(t, updates)()
+	if !state.running || state.operation != "save" {
+		t.Fatalf("queued import blocked prerequisite body save: operation=%q error=%q", state.operation, state.errorText)
+	}
+	second := nextCommentComposerCall(t, backend)
+	d = state.draft
+	d.Content = state.body
+	d.Revision++
+	second.reply <- taskOpenToolsProbeReply{result: application.ActionResult{Data: d}}
+	nextTaskOpenToolsUpdate(t, updates)()
+	imported := nextCommentComposerCall(t, backend)
+	if imported.action.Payload["operation"] != "add-image" {
+		t.Fatal("replacement import never started")
+	}
+	newID := strings.Repeat("e", 32)
+	newRef := domain.CommentImageMarkdownRef(newID)
+	d = state.draft
+	d.Revision++
+	d.Images = append(d.Images, domain.CommentDraftAsset{ID: newID, Name: "new.png", MarkdownRef: newRef, LocalPath: path})
+	imported.reply <- taskOpenToolsProbeReply{result: application.ActionResult{Data: d}}
+	nextTaskOpenToolsUpdate(t, updates)()
+	if state.pendingImport != nil || state.importing || !strings.Contains(state.body, newRef) || !strings.HasSuffix(state.body, " first second") {
+		t.Fatalf("replacement lost body or stayed pending: %q error=%q", state.body, state.errorText)
+	}
+	saved := nextCommentComposerCall(t, backend)
+	d = state.draft
+	d.Content = state.body
+	d.Revision++
+	saved.reply <- taskOpenToolsProbeReply{result: application.ActionResult{Data: d}}
+	nextTaskOpenToolsUpdate(t, updates)()
 }
 
 func TestCommentMarkdownLateImportAndReceiptKeepNewerInput(t *testing.T) {
@@ -214,6 +288,15 @@ func TestCommentLiveInlineImageUsesOriginalViewerAboveComposer(t *testing.T) {
 	}, 960, 900)
 	seedMarkdownReadyImages(t, s, state.markdown, ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 48, 24))))
 	tester.Frame()
+	if err := tester.Click("Markdown 图片：实时图片"); err != nil {
+		t.Fatal(err)
+	}
+	if s.materialsUnit.state.markdownBitmapViewer != nil {
+		t.Fatal("single click opened live image")
+	}
+	if _, ok := state.markdown.live.SelectedImage(); !ok {
+		t.Fatal("single click did not select live image")
+	}
 	if err := tester.Click("Markdown 图片：实时图片"); err != nil {
 		t.Fatal(err)
 	}

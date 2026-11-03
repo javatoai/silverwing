@@ -14,9 +14,10 @@ const ProductName = productprofile.Name
 
 // These variables are overridden by release builds with -ldflags -X.
 var (
-	Version   = domain.CurrentProductVersion
-	Commit    = "unknown"
-	BuildTime = "unknown"
+	Version         = domain.CurrentProductVersion
+	Commit          = "unknown"
+	BuildTime       = "unknown"
+	UpdatePublicKey = ""
 )
 
 // FullVersion returns the version and, when available, the source revision.

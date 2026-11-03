@@ -74,6 +74,11 @@ type Options struct {
 	TransformText func(block, offset int, spans []ui.Span) []ui.Span
 	OnText        func(c *ui.Context, element ui.Element, block, offset int, spans []ui.Span)
 	Image         func(c *ui.Context, block, start, end int, url, alt string)
+	// ImageContent draws only the image for an editable image object. The
+	// editor owns clicks, selection and its actions. Readers keep using Image.
+	ImageContent  func(c *ui.Context, block, start, end int, url, alt string)
+	OnImageOpen   func(ImageInfo)
+	ValidateImage func(target string) error
 	Link          func(c *ui.Context, in *parser.Inline, block, offset int) bool
 	// LinkView can wrap the native formatted label in a host-owned popover.
 	// Returning false retains the regular link and its selection geometry.
@@ -534,6 +539,9 @@ func paragraphObjects(el ui.Element, p *para) {
 }
 
 func (st *viewState) blockPiece(block int, pc *piece) bool {
+	if pc.image && st.editor != nil && st.editor.opts.InPlaceImages {
+		return true
+	}
 	if pc.image && st.o.Image != nil {
 		return true
 	}
@@ -608,8 +616,12 @@ func (st *viewState) text(c *ui.Context, block, offset int, spans []ui.Span) ui.
 }
 
 func (st *viewState) piece(c *ui.Context, block int, pc *piece, offset int) {
-	if pc.image && st.o.Image != nil {
+	if pc.image && (st.o.Image != nil || st.editor != nil && st.editor.opts.InPlaceImages) {
 		in := st.doc.Inlines(block)[pc.imageIndex]
+		if st.editor != nil && st.editor.opts.InPlaceImages {
+			st.editor.imageView(c, block, &in, parser.PlainText(st.doc.Inlines(block)[pc.imageIndex+1:in.Next]))
+			return
+		}
 		st.o.Image(c, block, in.Start, in.End, in.Dest, parser.PlainText(st.doc.Inlines(block)[pc.imageIndex+1:in.Next]))
 		return
 	}

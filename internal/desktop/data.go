@@ -65,6 +65,7 @@ type app struct {
 	backend                application.Backend
 	systemOpenJobs         *systemOpenJobs
 	desktopPreferences     *desktopPreferencesState
+	appUpdates             *appUpdateState
 	readingSession         *desktopReadingSession
 	overflowMenus          *overflowMenuState
 	page                   string

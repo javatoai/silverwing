@@ -1,5 +1,32 @@
 # MyGO local native patches
 
+## Atomic images in the live Markdown editor
+
+The opt-in EditorOptions.InPlaceImages keeps images rendered and treats each
+reference as one selection. The shared application editor supplies image actions
+and a link/alt dialog; Options.ImageContent, OnImageOpen and ValidateImage leave
+loading, viewing and authorization with the host. Reader click behavior is
+unchanged. Imported images use InsertImageParagraphsAt to commit paragraph
+separators and references in one Buffer transaction; table/code/source contexts
+retain their existing insertion rules.
+
+Virtual image writing rows share the existing input client and undo history.
+Moves reorder complete same-level blocks while retaining positional separators,
+list/quote prefixes, BOM, line endings and attached recognized metadata. Reference
+edits detach only the selected use, leaving shared definitions and files intact.
+Keep the image suites in the SDK, shared component and materials/comment hosts
+when upgrading MyGO.
+
+## Verified update preparation
+
+`update_bundle.go` exposes a small facade around the existing updater's download,
+Ed25519 verification and archive implementation. `PrepareUpdate` only stages
+files; `ExtractVerifiedUpdateArchive` re-verifies bytes at the external helper
+boundary. `WriteUpdateArchive` is the packaging counterpart. Existing
+`Update.Install` behavior is unchanged. The application owns normal shutdown,
+installer selection and rollback; no second updater timer or web window is used.
+Keep `TestPrepareUpdateStagesVerifiedBytesWithoutInstalling` when updating MyGO.
+
 ## Terminal disposal and pending process startup
 
 `plugins/terminal/terminal.go` closes a process that finishes spawning after its

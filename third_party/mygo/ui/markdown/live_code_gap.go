@@ -12,7 +12,10 @@ import (
 // A gap is a source-owned projection, not another editor. Equal start/end
 // represents a writing row before an adjacent opener without storing bytes.
 type editorCodeGap struct {
+	paragraph                 bool
 	table                     bool
+	image                     bool
+	imageStart, imageEnd      int
 	start, end, before, after int
 	version                   uint64
 	rect                      ui.Rect
@@ -29,7 +32,40 @@ type editorCodeGapFocus struct {
 
 // Only gap-originated edits need this extra history intent. Ordinary Markdown
 // source selections retain their existing history representation.
-type editorCodeGapHistory struct{ selection editorSelection }
+type editorCodeGapHistory struct {
+	selection            editorSelection
+	imageParagraph       bool
+	imageStart, imageEnd int
+	after                bool
+}
+
+func (s *EditorState) captureCodeGapHistory(selection editorSelection) editorCodeGapHistory {
+	history := editorCodeGapHistory{selection: selection}
+	if gap := s.focusedCodeGap(); gap != nil && gap.image && gap.paragraph {
+		history.imageParagraph = true
+		history.imageStart, history.imageEnd = gap.imageStart, gap.imageEnd
+		history.after = gap.before != 0
+	}
+	return history
+}
+
+func (s *EditorState) restoreCodeGapHistory(history editorCodeGapHistory) {
+	if history.imageParagraph && s.opts.InPlaceImages && !s.SourceMode && !s.opts.ReadOnly {
+		for _, info := range s.Images() {
+			if info.Start != history.imageStart || info.End != history.imageEnd {
+				continue
+			}
+			gap := s.imageGap(info, history.after)
+			if !gap.contains(s.anchor) || !gap.contains(s.caret) {
+				break
+			}
+			gap.paragraph = true
+			s.focusCodeGap(gap)
+			return
+		}
+	}
+	s.restoreCodeGap(s.caret)
+}
 
 func (s *EditorState) codeGapBetween(d *parser.Document, previous, next int) *editorCodeGap {
 	if !s.opts.InPlaceCode || s.SourceMode || previous <= 0 || next <= 0 {
@@ -81,7 +117,7 @@ func (s *EditorState) codeGapAfter(d *parser.Document, previous int) *editorCode
 
 func (s *EditorState) focusedCodeGap() *editorCodeGap {
 	focus := &s.codeGapFocus
-	if !focus.valid || !s.opts.InPlaceCode || s.SourceMode || s.opts.ReadOnly || focus.gap.version != s.snapshot.Version() {
+	if !focus.valid || !(s.opts.InPlaceCode || s.opts.InPlaceImages) || s.SourceMode || s.opts.ReadOnly || focus.gap.version != s.snapshot.Version() {
 		return nil
 	}
 	if s.focusedOmittedTableCell() != nil {
@@ -113,6 +149,18 @@ func (s *EditorState) ensureCodeTail(at int) {
 
 func (s *EditorState) restoreCodeGap(at int) {
 	s.codeGapFocus.valid = false
+	if s.opts.InPlaceImages && !s.SourceMode && !s.opts.ReadOnly {
+		for _, info := range s.Images() {
+			if _, _, ok := s.imageBlock(info); ok {
+				for _, after := range []bool{false, true} {
+					if gap := s.imageGap(info, after); gap.start == at {
+						s.focusCodeGap(gap)
+						return
+					}
+				}
+			}
+		}
+	}
 	if !s.opts.InPlaceCode || s.SourceMode || s.opts.ReadOnly {
 		return
 	}
@@ -131,7 +179,7 @@ func (s *EditorState) restoreCodeGap(at int) {
 }
 
 func (s *EditorState) codeGapAt(x, y float32) *editorCodeGap {
-	if !s.opts.InPlaceCode || s.SourceMode {
+	if !(s.opts.InPlaceCode || s.opts.InPlaceImages) || s.SourceMode {
 		return nil
 	}
 	for _, gap := range s.codeGaps {
@@ -146,6 +194,9 @@ func (s *EditorState) codeGapBlock(c *ui.Context, gap *editorCodeGap) {
 	s.codeGaps = append(s.codeGaps, gap)
 	th := &s.view.th
 	start, end := s.virtualOffset(gap.start, false), s.virtualOffset(gap.end, true)
+	if gap.image && s.composing && !s.codeGapComposition() {
+		start = end
+	}
 	text := s.virtualText()[start:end]
 	if gap.start != gap.end && gap.after != 0 {
 		text = strings.TrimSuffix(text, "\n")
@@ -164,6 +215,12 @@ func (s *EditorState) codeGapBlock(c *ui.Context, gap *editorCodeGap) {
 	if gap.table {
 		label = "在表格后插入内容"
 	}
+	if gap.image {
+		label = "在图片前插入内容"
+		if gap.before != 0 {
+			label = "在图片后插入内容"
+		}
+	}
 	box := ui.Column(c).Key("code-gap-" + strconv.Itoa(gap.start)).AlignSelf(ui.Stretch).MinHeight(max(th.em(th.BlockSpacing), th.FontSize*th.LineHeight)).
 		Role(ui.RoleGroup).Label(label)
 	block := &editorBlock{start: start, end: end, element: box}
@@ -177,10 +234,30 @@ func (s *EditorState) codeGapBlock(c *ui.Context, gap *editorCodeGap) {
 	})
 }
 
-func (s *EditorState) codeGapInput(a, z int, text string, endpoint int) (string, int, bool) {
+func (s *EditorState) codeGapInput(a, z int, text string, endpoint int) (int, int, string, int, bool) {
 	gap := s.focusedCodeGap()
 	if gap == nil || a < gap.start || z > gap.end || text == "" && a == z {
-		return text, endpoint, false
+		return a, z, text, endpoint, false
+	}
+	if gap.image && gap.paragraph {
+		return s.imageParagraphInput(a, z, text, endpoint, gap)
+	}
+	if gap.image {
+		block := gap.before
+		if block == 0 {
+			block = gap.after
+		}
+		continuation := s.imageContinuation(block)
+		ending := s.buffer.LineEnding()
+		separator := ending + strings.TrimRight(continuation, " \t") + ending + continuation
+		if gap.after != 0 {
+			return a, z, text + separator, endpoint, true
+		}
+		suffix := ""
+		if z == len(s.source) && !strings.HasSuffix(normalizedText(text), "\n") {
+			suffix = ending
+		}
+		return a, z, separator + text + suffix, len(normalizedText(separator)) + endpoint, true
 	}
 	if gap.after == 0 {
 		if gap.table {
@@ -189,7 +266,7 @@ func (s *EditorState) codeGapInput(a, z int, text string, endpoint int) (string,
 				count++
 			}
 			prefix := strings.Repeat(s.buffer.LineEnding(), 2-count)
-			return prefix + text, len(prefix) + endpoint, true
+			return a, z, prefix + text, len(prefix) + endpoint, true
 		}
 		// At EOF a closer may have no physical newline yet. Only explicit
 		// editing adds that prefix, before the requested outside-code text.
@@ -203,14 +280,29 @@ func (s *EditorState) codeGapInput(a, z int, text string, endpoint int) (string,
 		// source caret before that separator, even for Enter/paste/IME.
 		text += s.buffer.LineEnding()
 	}
-	return text, endpoint, true
+	return a, z, text, endpoint, true
 }
 
 func (s *EditorState) codeGapKey(key ui.Key, mods ui.Modifiers) bool {
-	if !s.opts.InPlaceCode || s.SourceMode || s.opts.ReadOnly || s.composing || mods != 0 || s.anchor != s.caret {
+	if !(s.opts.InPlaceCode || s.opts.InPlaceImages) || s.SourceMode || s.opts.ReadOnly || s.composing || mods != 0 || s.anchor != s.caret {
 		return false
 	}
 	if gap := s.focusedCodeGap(); gap != nil {
+		if gap.image {
+			enter := gap.before != 0 && (key == ui.KeyUp || key == ui.KeyLeft || key == ui.KeyBackspace) || gap.after != 0 && (key == ui.KeyDown || key == ui.KeyRight || key == ui.KeyDelete)
+			if enter {
+				for _, info := range s.Images() {
+					if info.Start == gap.imageStart && info.End == gap.imageEnd {
+						s.report(s.SelectImage(info))
+						return true
+					}
+				}
+			}
+			if (key == ui.KeyBackspace || key == ui.KeyDelete) && gap.start == gap.end {
+				return true
+			}
+			return false
+		}
 		if gap.start == gap.end && (key == ui.KeyBackspace || key == ui.KeyDelete) {
 			return true // a virtual writing row cannot delete either fence
 		}

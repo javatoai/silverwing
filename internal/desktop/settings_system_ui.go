@@ -99,26 +99,7 @@ func (state *app) settingsAbout(context *ui.Context, theme palette) {
 }
 
 func (state *app) settingsUpdates(context *ui.Context, theme palette) {
-	settingsSystemCard(context, theme, func() {
-		label(context, "获取新版", 19, theme.text).FontWeight(600).Wrap()
-		ui.Divider(context)
-		ui.Column(context).FillWidth().MinWidth(0).Gap(6).Children(func() {
-			label(context, "当前版本", 12, theme.muted)
-			label(context, domain.CurrentProductVersion, 14, theme.text).FontWeight(500)
-		})
-		ui.Column(context).FillWidth().MinWidth(0).Gap(8).Children(func() {
-			settingsHelpLabel(context, theme, "GitHub Releases", "下载适用于当前系统的安装包，并按安装包说明手动安装。", 13, 500)
-			label(context, silverwingReleasesURL, 11, theme.muted).FillWidth().MinWidth(0).Wrap().Selectable()
-		})
-		ui.Row(context).FillWidth().MinWidth(0).Wrap().Gap(8).Label("更新操作").Children(func() {
-			if settingsSystemAction(context, "updates-open", "launch", "打开更新页面", theme, settingsSystemActionOutline, false) {
-				mygo.Shell.OpenExternal(silverwingReleasesURL)
-			}
-			if settingsSystemAction(context, "updates-copy", "copy", "复制链接", theme, settingsSystemActionOutline, false) {
-				state.copyTextToClipboard(context.Services(), silverwingReleasesURL, "更新链接已复制")
-			}
-		})
-	})
+	state.renderAppUpdates(context, theme)
 }
 
 func (state *app) settingsAppData(context *ui.Context, theme palette) {

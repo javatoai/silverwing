@@ -7,9 +7,9 @@ import (
 	"strings"
 	"sync"
 
+	"silverwing-go/internal/appupdate"
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/process"
-	"silverwing-go/internal/productprofile"
 	"silverwing-go/internal/storage"
 )
 
@@ -23,6 +23,10 @@ type Service struct {
 	codexURIOpener func(context.Context, string) error
 	authMu         sync.Mutex
 	authSessions   map[string]*cliAuthSession
+	updateChecker  *githubReleaseChecker
+	updateBackoff  appUpdateCheckBackoff
+	updateMu       sync.Mutex
+	updates        *appupdate.Coordinator
 }
 
 func NewService(paths storage.Paths, config *storage.ConfigStore, runner *process.Runner) *Service {
@@ -79,11 +83,9 @@ func (s *Service) Execute(ctx context.Context, kind string, payload map[string]a
 	case "logs.clear":
 		return s.clearApplicationLogs(ctx, payload)
 	case "update.check":
-		return map[string]any{
-			"currentVersion": domain.CurrentProductVersion,
-			"releasesUrl":    productprofile.ReleasesURL(),
-			"automatic":      productprofile.AutomaticUpdates,
-		}, nil
+		return s.checkApplicationUpdate(ctx)
+	case "update.prepare", "update.status", "update.cancel", "update.apply":
+		return s.executeAppUpdate(ctx, kind, payload)
 	default:
 		return nil, fmt.Errorf("未知平台操作：%s", kind)
 	}

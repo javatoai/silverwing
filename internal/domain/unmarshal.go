@@ -36,7 +36,7 @@ func (v *TagBuildMode) UnmarshalJSON(data []byte) error {
 	return e
 }
 func (v *CommandProxyTarget) UnmarshalJSON(data []byte) error {
-	x, e := decodeEnum(data, "CODEX", "GIT", "WORKSPACE_COMMAND", "MEEGLE", "LARK", "GENBU")
+	x, e := decodeEnum(data, "CODEX", "GIT", "WORKSPACE_COMMAND", "MEEGLE", "LARK", "GENBU", "APP_UPDATES")
 	*v = CommandProxyTarget(x)
 	return e
 }

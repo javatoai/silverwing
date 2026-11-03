@@ -14,6 +14,16 @@ func TestCommandAndNamingDefaultsRespectExplicitSettings(t *testing.T) {
 		}
 	}
 	assertDefault(DefaultAppConfig())
+	var updates AppConfig
+	if err := json.Unmarshal([]byte(`{"commandProxyTargets":["APP_UPDATES"]}`), &updates); err != nil {
+		t.Fatal(err)
+	}
+	if err := updates.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(updates.CommandProxyTargets, []CommandProxyTarget{ProxyTargetAppUpdates}) {
+		t.Fatal("update proxy target lost")
+	}
 	var missing AppConfig
 	if err := json.Unmarshal([]byte(`{}`), &missing); err != nil {
 		t.Fatal(err)

@@ -178,6 +178,7 @@ type EditorState struct {
 	options           EditorOptions
 	link              *linkEdit
 	insert            *insertDialog
+	image             *imageEdit
 	sourceFindOwner   *FindController
 	sourceFindRequest uint64
 }
@@ -222,6 +223,7 @@ func (s *EditorState) SetMode(mode Mode) error {
 	s.native.SourceMode = mode == Source
 	s.link = nil
 	s.insert = nil
+	s.image = nil
 	if mode != Preview {
 		s.native.Focus()
 	}
@@ -271,7 +273,7 @@ func (s *EditorState) Reload(source string, expectedVersion uint64) error {
 	if s.native.Buffer().OriginalText() == source {
 		return nil
 	}
-	if pendingLinkInput(s.link) || pendingInsertInput(s.insert) || pendingPropertyTagInput(s.reader.properties.dialog) {
+	if pendingLinkInput(s.link) || pendingInsertInput(s.insert) || pendingImageInput(s.image) || pendingPropertyTagInput(s.reader.properties.dialog) {
 		return fmt.Errorf("请先完成或取消当前编辑，再读取外部内容")
 	}
 	a, z := s.native.Selection()
@@ -279,13 +281,18 @@ func (s *EditorState) Reload(source string, expectedVersion uint64) error {
 	s.native.SetSelection(a, z)
 	s.observed = s.native.Buffer().Version()
 	s.link = nil
+	s.image = nil
 	return nil
 }
 
 func (s *EditorState) Close() {
 	if s != nil {
+		if s.image != nil && s.image.cancel != nil {
+			s.image.cancel()
+		}
 		s.closed = true
 		s.link = nil
+		s.image = nil
 		s.reader.Close()
 	}
 }

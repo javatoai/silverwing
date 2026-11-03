@@ -155,8 +155,18 @@ func (s *app) startCommentComposerJob(state *requirementCommentComposer, op stri
 	if op != "load" && !state.loaded {
 		return
 	}
-	if state.loaded && op != "check" && !s.captureCommentMarkdownInput(state) {
-		return
+	if state.loaded && op != "check" {
+		// A queued image replacement owns an unconfirmed popup, but its
+		// captured Buffer body is already confirmed. Saving that exact body
+		// must not wait for the import whose prerequisite is this save.
+		confirmedImportBody := false
+		if pending := state.pendingImport; op == "save" && pending != nil && s.commentMarkdownImportCurrent(state, pending) && !pending.owner.NativeState().Composing() {
+			snapshot := pending.owner.Snapshot()
+			confirmedImportBody = snapshot.Source == state.body
+		}
+		if !confirmedImportBody && !s.captureCommentMarkdownInput(state) {
+			return
+		}
 	}
 	if op == "publish" && state.dirty {
 		if state.draft.Pending() || commentImportHasResources(state) {

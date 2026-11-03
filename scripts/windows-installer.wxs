@@ -9,6 +9,7 @@
            UpgradeCode="$(var.ProfileWindowsUpgradeCode)">
     <Package InstallerVersion="500" Platform="x64" Compressed="yes" InstallScope="perUser" Description="Silverwing native desktop application" />
     <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer $(var.ProfileWindowsInstallName) version is already installed." />
+    <SetProperty Id="ARPINSTALLLOCATION" Value="[INSTALLFOLDER]" After="CostFinalize" Sequence="execute" />
     <Property Id="NSIS_INSTALLED">
       <RegistrySearch Id="FindSetupInstallation" Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\Uninstall\$(var.ProfileWindowsRegistryNamespace)" Name="UninstallString" Type="raw" Win64="yes" />
     </Property>

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"silverwing-go/internal/application"
+	"silverwing-go/internal/appupdate/native"
 	"silverwing-go/internal/buildinfo"
 	"silverwing-go/internal/domain"
 
@@ -20,16 +21,19 @@ import (
 // Options controls the initial native desktop state. It is also used by the
 // command line to capture stable screenshots for visual verification.
 type Options struct {
-	Home           string
-	RestoreSession bool
-	Page           string
-	Dark           bool
-	Width          int
-	Height         int
-	Tab            int
-	TabExplicit    bool
-	CapturePath    string
-	CaptureOnly    bool
+	Home              string
+	RestoreSession    bool
+	Page              string
+	Dark              bool
+	Width             int
+	Height            int
+	Tab               int
+	TabExplicit       bool
+	CapturePath       string
+	CaptureOnly       bool
+	UpdateHealthPath  string
+	UpdateHealthToken string
+	UpdateResultPath  string
 }
 
 // Run starts the native MyGO window and talks to the application in-process.
@@ -90,6 +94,8 @@ func Run(backend application.Backend, opts Options) error {
 	mygo.App.SetPath(mygo.PathResources, buildinfo.ResourceRoot(executable))
 
 	captureFrame := &captureFrameState{}
+	updateHealthReported := false
+	updateOutcomeLoaded := false
 	mygo.App.WhenReady(func() {
 		s.win = mygo.NewWindow(mygo.WindowOptions{
 			Title:     buildinfo.ProductName,
@@ -100,6 +106,31 @@ func Run(backend application.Backend, opts Options) error {
 			MinHeight: 760,
 			Content: ui.View(func(c *ui.Context) {
 				s.view(c)
+				if !updateOutcomeLoaded && opts.UpdateResultPath != "" && s.snapshot.Home != "" {
+					updateOutcomeLoaded = true
+					home, window := s.snapshot.Home, s.win
+					go func() {
+						outcome, err := native.ReadOutcome(home, opts.UpdateResultPath)
+						if err == nil && outcome.Error != "" && window != nil && !window.IsDestroyed() {
+							window.Update(func() {
+								if s.snapshot.Home == home {
+									s.ensureAppUpdateState().failure = "上次更新：" + outcome.Error
+								}
+							})
+						}
+					}()
+				}
+				if !updateHealthReported && !s.loading && s.snapshot.Home == opts.Home && opts.UpdateHealthPath != "" && s.win != nil {
+					width, height := c.Size()
+					if width > 0 && height > 0 {
+						updateHealthReported = true
+						go func() {
+							if err := native.Acknowledge(opts.Home, opts.UpdateHealthPath, opts.UpdateHealthToken); err != nil {
+								log.Print(err)
+							}
+						}()
+					}
+				}
 				s.observeDesktopPreferences()
 				s.observeReadingSession()
 				if opts.CapturePath != "" {
@@ -117,6 +148,7 @@ func Run(backend application.Backend, opts Options) error {
 		}
 		s.win.OnClosed(s.stopDesktopFeatures)
 		s.win.OnFocus(func() {
+			s.observeAppUpdates()
 			s.onMaterialsWindowFocused()
 			s.onRequirementWindowFocused()
 			s.onMeegleProjectPickerWindowFocused()
@@ -126,6 +158,9 @@ func Run(backend application.Backend, opts Options) error {
 		s.win.OnUnmaximize(s.recordDesktopWindowBounds)
 		s.win.OnClose(func(event *mygo.CloseEvent) {
 			s.recordDesktopWindowBounds()
+			if s.guardAppUpdateClose(event) {
+				return
+			}
 			if s.handleSettingsAutosaveClose(event) {
 				return
 			}
@@ -137,7 +172,7 @@ func Run(backend application.Backend, opts Options) error {
 		}
 	})
 	runErr := mygo.App.Run()
-	return s.closeDesktopFeatures(runErr)
+	return s.applyAppUpdateAfterExit(s.closeDesktopFeatures(runErr))
 }
 
 func (s *app) loadInitialSnapshot() {

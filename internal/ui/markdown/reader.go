@@ -23,6 +23,7 @@ func CopyNativeOptions(dst, src *md.Options) {
 	dst.Reveal, dst.ShareSelection = src.Reveal, src.ShareSelection
 	dst.TransformText, dst.OnText, dst.Image, dst.Link, dst.BlockLink = src.TransformText, src.OnText, src.Image, src.Link, src.BlockLink
 	dst.LinkView = src.LinkView
+	dst.ImageContent, dst.OnImageOpen, dst.ValidateImage = src.ImageContent, src.OnImageOpen, src.ValidateImage
 	dst.CopySource, dst.CopyCode, dst.ContextMenu = src.CopySource, src.CopyCode, src.ContextMenu
 }
 

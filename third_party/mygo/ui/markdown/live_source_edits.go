@@ -57,7 +57,7 @@ func (s *EditorState) InsertMarkdown(start, end int, text string, version uint64
 	return s.InsertMarkdownAt(point, text)
 }
 
-func (s *EditorState) applySourceCommand(edits []editor.Edit, anchor, caret int, version uint64, confirmLine int) error {
+func (s *EditorState) applySourceCommand(edits []editor.Edit, anchor, caret int, version uint64, confirmLine int, selectionIntent ...editorCodeGapHistory) error {
 	s.sync()
 	if s.opts.ReadOnly {
 		return errors.New("Markdown is read-only")
@@ -86,7 +86,7 @@ func (s *EditorState) applySourceCommand(edits []editor.Edit, anchor, caret int,
 	}
 	before := any(editorSelection{s.anchor, s.caret})
 	if s.focusedCodeGap() != nil {
-		before = editorCodeGapHistory{selection: editorSelection{s.anchor, s.caret}}
+		before = s.captureCodeGapHistory(editorSelection{s.anchor, s.caret})
 	}
 	if hit := s.focusedOmittedTableCell(); hit != nil {
 		before = editorOmittedCellHistory{selection: editorSelection{s.anchor, s.caret}, start: hit.table.start, row: hit.cell.row, column: hit.cell.column}
@@ -98,6 +98,7 @@ func (s *EditorState) applySourceCommand(edits []editor.Edit, anchor, caret int,
 	var nextDrafts []int
 	var nextPairs []autoPair
 	after := editorSelection{anchor, caret}
+	afterGap := false
 	s.buffer.EndUndoGroup()
 	result := s.buffer.ApplyTransaction(editor.Transaction{Version: version, Edits: edits, Kind: editor.EditOther, Owner: s,
 		SelectionBefore: s.writingHistory(before, s.fenceDrafts),
@@ -105,6 +106,13 @@ func (s *EditorState) applySourceCommand(edits []editor.Edit, anchor, caret int,
 			after.Anchor, after.Caret = byteBoundary(snapshot.String(), anchor), byteBoundary(snapshot.String(), caret)
 			nextDrafts = s.draftsAfterEdit(snapshot.String(), changes, drafts, -1)
 			nextPairs = s.pairsAfterEdit(snapshot.String(), changes, s.autoPairs)
+			if len(selectionIntent) > 0 {
+				intent := selectionIntent[0]
+				after = editorSelection{byteBoundary(snapshot.String(), intent.selection.Anchor), byteBoundary(snapshot.String(), intent.selection.Caret)}
+				intent.selection = after
+				afterGap = true
+				return s.writingHistory(intent, nextDrafts, nextPairs)
+			}
 			return s.writingHistory(after, nextDrafts, nextPairs)
 		}})
 	s.buffer.EndUndoGroup()
@@ -121,6 +129,9 @@ func (s *EditorState) applySourceCommand(edits []editor.Edit, anchor, caret int,
 	s.anchor, s.caret = after.Anchor, after.Caret
 	s.codeGapFocus.valid = false
 	s.omittedTableCell = nil
+	if afterGap {
+		s.restoreCodeGapHistory(selectionIntent[0])
+	}
 	s.affinity = ui.TextDownstream
 	s.reveal, s.hasDesired = true, false
 	s.blink = time.Now()

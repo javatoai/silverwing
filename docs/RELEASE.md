@@ -1,5 +1,33 @@
 # Native Go build and packaging
 
+## One-click application updates
+
+The desktop keeps its daily version check and only installs after an explicit
+click on **Update now**. Setup, MSI, portable Windows and macOS app bundles keep
+their original installation form. A separate updater waits for a clean exit;
+failed saves or active write operations do not hand off an installation.
+
+Automatic installation requires signed release artifacts. Configure the Ed25519
+private key as the GitHub Actions secret `MYGO_UPDATER_PRIVATE_KEY` and its
+base64 public key as the repository variable `MYGO_UPDATER_PUBLIC_KEY`. Use
+MyGO's update key format (64-byte private key, 32-byte public key). Private keys
+are consumed only by release-tag builds and are never included in packages.
+Unsigned builds retain manual download. Existing versions need one manual
+upgrade to a build with the updater, layout metadata and pinned public key.
+
+The native scripts emit four additional signed archives and four corresponding
+`update-<target>.json` descriptors when signing is configured: Windows Setup,
+MSI, portable, and macOS arm64. The publisher accepts either the original four
+packages or a complete signed set, verifies signatures before publishing, and
+includes every asset in `SHA256SUMS.txt`. It refuses partial signed sets.
+
+The updater re-verifies and re-extracts archives at handoff. MSI recovery uses
+its verified previous installer and Windows Installer registration; it never
+restores only MSI-owned files. Tests use temporary application roots and unique
+test product/registry identities, never the user's installation. Run the native
+silent-installer fixture with `SILVERWING_NATIVE_INSTALLER_TESTS=1` only where
+the pinned NSIS/WiX tools are available; native UI testing remains manual.
+
 ## Versioning and packages
 
 The Go product uses its own release sequence, starting at `0.0.1`.

@@ -185,6 +185,10 @@ try {
     }
     else {
         $commonLdflags = "-s -w -X silverwing-go/internal/buildinfo.Version=$version -X silverwing-go/internal/buildinfo.Commit=$commit -X silverwing-go/internal/buildinfo.BuildTime=$utc"
+		if ($env:MYGO_UPDATER_PUBLIC_KEY) {
+			if ([Convert]::FromBase64String($env:MYGO_UPDATER_PUBLIC_KEY).Length -ne 32) { throw 'Invalid updater public key.' }
+			$commonLdflags += " -X silverwing-go/internal/buildinfo.UpdatePublicKey=$env:MYGO_UPDATER_PUBLIC_KEY"
+		}
 
     $oldGOOS, $oldGOARCH, $oldCGO = $env:GOOS, $env:GOARCH, $env:CGO_ENABLED
     $env:GOOS = 'windows'
@@ -200,6 +204,7 @@ try {
             -IconPath (Join-Path $repoRoot 'internal/desktop/assets/app-icon.png')
         $iconObjectCreated = $true
         Invoke-Go @('build', '-trimpath', '-tags', 'mygo_noinspector', '-ldflags', "$commonLdflags -H=windowsgui", '-o', (Join-Path $stage $guiExecutable), './cmd/silverwing')
+		Invoke-Go @('build', '-trimpath', '-tags', 'mygo_noinspector', '-ldflags', "$commonLdflags -H=windowsgui", '-o', (Join-Path $resourceRoot "$($productProfile.ExecutableName)-updater.exe"), './cmd/silverwing-updater')
     }
     finally {
         $env:GOOS, $env:GOARCH, $env:CGO_ENABLED = $oldGOOS, $oldGOARCH, $oldCGO
@@ -307,6 +312,13 @@ The app bundle contains no WebView runtime or JVM. Windows system graphics/runti
     }
     finally { $noticeStream.Dispose() }
 
+    if (Test-Path -LiteralPath (Join-Path $resourceRoot "$($productProfile.ExecutableName)-updater.exe") -PathType Leaf) {
+		$layoutPath = Join-Path $resourceRoot 'update-installation.json'
+		if (Test-Path -LiteralPath $layoutPath) { Remove-Item -LiteralPath $layoutPath -Force }
+		Invoke-Go @('run', './scripts/update-bundle', '-layout', $stage, '-version', $version)
+	}
+	elseif ($env:MYGO_UPDATER_PRIVATE_KEY) { throw 'Reusable payload lacks the updater; rebuild the application before signing.' }
+
     if (-not $PortableOnly) {
         $nsisExecutable = ''
         if ($NSISPath) {
@@ -363,6 +375,14 @@ The app bundle contains no WebView runtime or JVM. Windows system graphics/runti
         Copy-Item -LiteralPath $installerExe -Destination $outputDirectory
         Copy-Item -LiteralPath $installerMsi -Destination $outputDirectory
     }
+	if ($env:MYGO_UPDATER_PRIVATE_KEY) {
+		if (-not $env:MYGO_UPDATER_PUBLIC_KEY) { throw 'A pinned public key is required for signed updates.' }
+		Invoke-Go @('run', './scripts/update-bundle', '-layout', $stage, '-version', $version, '-bundle', 'portable', '-payload', $stage, '-out', $outputDirectory)
+		if (-not $PortableOnly) {
+			Invoke-Go @('run', './scripts/update-bundle', '-layout', $stage, '-version', $version, '-bundle', 'setup', '-payload', $installerExe, '-out', $outputDirectory)
+			Invoke-Go @('run', './scripts/update-bundle', '-layout', $stage, '-version', $version, '-bundle', 'msi', '-payload', $installerMsi, '-out', $outputDirectory)
+		}
+	}
     Write-Host "Native Go package version $version ($commit) created at $outputDirectory"
     Get-ChildItem -LiteralPath $outputDirectory -File | Select-Object Name, Length | Format-Table -AutoSize
 }

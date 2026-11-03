@@ -17,20 +17,21 @@ const (
 	defaultDesktopHeight = 980
 )
 
-// DesktopPreferences contains display state only. Task identity and content view
+// DesktopPreferences contains local display and notification preferences. Task identity and content view
 // are stored with the reading cache so they cannot drift into a second source.
 type DesktopPreferences struct {
-	Width                        int      `json:"width"`
-	Height                       int      `json:"height"`
-	Maximized                    bool     `json:"maximized"`
-	SettingsSection              string   `json:"settingsSection"`
-	TaskListPaneWidth            int      `json:"taskListPaneWidth,omitempty"`
-	TaskListPaneCollapsed        bool     `json:"taskListPaneCollapsed"`
-	MaterialsDirectoryPaneWidth  int      `json:"materialsDirectoryPaneWidth,omitempty"`
-	MaterialsExpansionDepth      int      `json:"materialsExpansionDepth"`
-	MaterialsExpansionRevision   uint64   `json:"materialsExpansionRevision"`
-	WorkspaceNavigationCollapsed bool     `json:"workspaceNavigationCollapsed"`
-	HiddenTaskTabs               []string `json:"hiddenTaskTabs,omitempty"`
+	Width                        int                  `json:"width"`
+	Height                       int                  `json:"height"`
+	Maximized                    bool                 `json:"maximized"`
+	SettingsSection              string               `json:"settingsSection"`
+	TaskListPaneWidth            int                  `json:"taskListPaneWidth,omitempty"`
+	TaskListPaneCollapsed        bool                 `json:"taskListPaneCollapsed"`
+	MaterialsDirectoryPaneWidth  int                  `json:"materialsDirectoryPaneWidth,omitempty"`
+	MaterialsExpansionDepth      int                  `json:"materialsExpansionDepth"`
+	MaterialsExpansionRevision   uint64               `json:"materialsExpansionRevision"`
+	WorkspaceNavigationCollapsed bool                 `json:"workspaceNavigationCollapsed"`
+	HiddenTaskTabs               []string             `json:"hiddenTaskTabs,omitempty"`
+	Updates                      appUpdatePreferences `json:"updates"`
 }
 
 // DefaultDesktopPreferences supplies the initial Go desktop layout.
@@ -40,6 +41,7 @@ func DefaultDesktopPreferences() DesktopPreferences {
 		SettingsSection:              "basic",
 		WorkspaceNavigationCollapsed: true,
 		MaterialsExpansionDepth:      2, MaterialsExpansionRevision: 1,
+		Updates: appUpdatePreferences{CheckTime: "10:00"},
 	}
 }
 
@@ -146,6 +148,15 @@ func (s *DesktopPreferencesStore) readLocked() (DesktopPreferences, map[string]j
 	}
 	readBool(raw, "workspaceNavigationCollapsed", &value.WorkspaceNavigationCollapsed)
 	readString(raw, "settingsSection", &value.SettingsSection)
+	if item, ok := raw["updates"]; ok {
+		var updates appUpdatePreferences
+		if json.Unmarshal(item, &updates) == nil {
+			value.Updates = updates
+		}
+	}
+	if _, valid := normalizeAppUpdateTime(value.Updates.CheckTime); !valid {
+		value.Updates.CheckTime = "10:00"
+	}
 	var hidden []string
 	if item, ok := raw["hiddenTaskTabs"]; ok && json.Unmarshal(item, &hidden) == nil {
 		value.HiddenTaskTabs = normalizeHiddenTaskTabs(hidden)
@@ -211,6 +222,7 @@ func (s *DesktopPreferencesStore) saveLocked(raw map[string]json.RawMessage, val
 		"materialsExpansionDepth":      value.MaterialsExpansionDepth,
 		"materialsExpansionRevision":   value.MaterialsExpansionRevision,
 		"workspaceNavigationCollapsed": value.WorkspaceNavigationCollapsed,
+		"updates":                      value.Updates,
 	} {
 		if err := putPreference(raw, key, item); err != nil {
 			return err

@@ -111,7 +111,11 @@ func (s *EditorState) renderedBlock(c *ui.Context, i int, base spanStyle) {
 	wrap.Children(func() {
 		prefixEnd := s.view.doc.Block(i).Start
 		if prefixEnd <= start {
-			s.view.block(c, i, false, base)
+			if s.imageCompositionLeaf(i) {
+				s.renderImageComposition(c, i, base)
+			} else {
+				s.view.block(c, i, false, base)
+			}
 			return
 		}
 		// Complex native children still need the source prefix which their
@@ -123,7 +127,13 @@ func (s *EditorState) renderedBlock(c *ui.Context, i int, base spanStyle) {
 		}
 		ui.Row(c).AlignItems(ui.Start).AlignSelf(ui.Stretch).Children(func() {
 			s.literalRun(c, start, prefixEnd, ui.Font{Family: th.Font, Size: th.FontSize}, color, th.LineHeight).Shrink(0).NoWrap()
-			ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Children(func() { s.view.block(c, i, false, base) })
+			ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Children(func() {
+				if s.imageCompositionLeaf(i) {
+					s.renderImageComposition(c, i, base)
+				} else {
+					s.view.block(c, i, false, base)
+				}
+			})
 		})
 	})
 }
@@ -154,7 +164,7 @@ func (s *EditorState) containerText(c *ui.Context, i int, base spanStyle) {
 		}
 	}
 	if complex {
-		if active {
+		if active && !(s.opts.InPlaceImages && s.blockHasImages(i)) {
 			s.sourceBlock(c, start, end, i)
 		} else {
 			s.renderedBlock(c, i, base)

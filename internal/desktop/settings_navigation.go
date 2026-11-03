@@ -169,13 +169,18 @@ func (s *app) renderSettingsSidebar(c *ui.Context, p palette) {
 	ui.Scroll(c).Width(164).Shrink(0).Padding(8).Gap(4).Background(p.soft).Border(1, p.line).Radius(12).Children(func() {
 		for _, section := range settingsSections {
 			item := section
-			button := ui.ButtonBase(c.Key("settings-section-"+item.name)).Height(42).FillWidth().Padding(0, 12).Justify(ui.Start).Radius(8).Label(item.name)
+			button := ui.ButtonBase(c.Key("settings-section-"+item.name)).Row().Height(42).FillWidth().Padding(0, 12).Gap(6).AlignItems(ui.Center).Justify(ui.Start).Radius(8).Label(item.name)
 			fg, weight := p.text, 400
 			if s.settingsUnit.state.settingsTab == item.name {
 				button.Background(p.selected)
 				weight = 600
 			}
-			button.Children(func() { label(c, item.name, 14, fg).FontWeight(weight).NoWrap() })
+			button.Children(func() {
+				label(c, item.name, 14, fg).FontWeight(weight).NoWrap()
+				if item.name == "数据与维护" && s.hasAppUpdate() {
+					appUpdateDot(c, p, false)
+				}
+			})
 			if button.Clicked() && s.settingsUnit.state.settingsTab != item.name {
 				key := s.settingsUnit.state.settingsLastPages[item.name]
 				if section, ok := settingsSectionForPage(key); !ok || section.name != item.name {
@@ -190,7 +195,7 @@ func (s *app) renderSettingsSidebar(c *ui.Context, p palette) {
 }
 
 func (s *app) settingsTabButton(c *ui.Context, p palette, key, name string) {
-	b := ui.ButtonBase(c.Key("settings-page-"+key)).Height(34).Padding(0, 12).Radius(8).Label(name)
+	b := ui.ButtonBase(c.Key("settings-page-"+key)).Row().Height(34).Padding(0, 12).Gap(6).AlignItems(ui.Center).Radius(8).Label(name)
 	fg := p.muted
 	if s.settingsUnit.state.settingsPage == key {
 		b.Background(p.selected)
@@ -199,7 +204,12 @@ func (s *app) settingsTabButton(c *ui.Context, p palette, key, name string) {
 			fg = p.text
 		}
 	}
-	b.Children(func() { label(c, name, 12, fg).FontWeight(500) })
+	b.Children(func() {
+		label(c, name, 12, fg).FontWeight(500)
+		if key == "about" && s.hasAppUpdate() {
+			appUpdateDot(c, p, false)
+		}
+	})
 	if b.Clicked() && s.settingsUnit.state.settingsPage != key {
 		s.navigateSettingsPage(key, "")
 	}

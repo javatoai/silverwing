@@ -171,6 +171,7 @@ func (s *EditorState) moveTo(at int, aff ui.TextAffinity, extend bool) {
 	s.formatPending = false
 	s.closePendingIME()
 	s.omittedTableCell = nil
+	at = s.imageVisiblePosition(at)
 	if !extend {
 		at = s.codeVisiblePosition(at)
 		at = max(at, s.sourcePrefixEnd())
@@ -238,6 +239,9 @@ func (s *EditorState) key(key ui.Key, mods ui.Modifiers) bool {
 	if s.composing {
 		return false
 	} // native input methods own composition keys
+	if s.imageKey(key, mods) {
+		return true
+	}
 	if s.pairKey(key, mods) {
 		return true
 	}
@@ -439,8 +443,10 @@ func (s *EditorState) command(name string) bool {
 					selection, preserveReading = saved.selection, true
 				}
 				var omitted *editorOmittedCellHistory
+				var gapHistory editorCodeGapHistory
 				if saved, ok := selection.(editorCodeGapHistory); ok {
 					selection, gap = saved.selection, true
+					gapHistory = saved
 				} else if saved, ok := selection.(editorOmittedCellHistory); ok {
 					selection, omitted = saved.selection, &saved
 				}
@@ -449,7 +455,7 @@ func (s *EditorState) command(name string) bool {
 					s.codeGapFocus.valid = false
 					s.omittedTableCell = nil
 					if gap {
-						s.restoreCodeGap(s.caret)
+						s.restoreCodeGapHistory(gapHistory)
 					} else if omitted != nil {
 						s.restoreOmittedTableCell(*omitted)
 					}

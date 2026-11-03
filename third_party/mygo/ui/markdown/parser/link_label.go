@@ -4,6 +4,15 @@ package parser
 // pair of brackets. Literal inline children own their complete source ranges,
 // so brackets inside code, math, HTML and images cannot end the label.
 func (d *Document) LinkLabelRange(block, index int) (start, end int, ok bool) {
+	return d.inlineLabelRange(block, index, Link)
+}
+
+// ImageLabelRange keeps code/math/HTML brackets inside an image label literal.
+func (d *Document) ImageLabelRange(block, index int) (start, end int, ok bool) {
+	return d.inlineLabelRange(block, index, Image)
+}
+
+func (d *Document) inlineLabelRange(block, index int, kind InlineKind) (start, end int, ok bool) {
 	if block < 0 || block >= d.Len() {
 		return 0, 0, false
 	}
@@ -12,7 +21,11 @@ func (d *Document) LinkLabelRange(block, index int) (start, end int, ok bool) {
 		return 0, 0, false
 	}
 	in := inlines[index]
-	if in.Kind != Link || in.Auto || in.Pending || in.Start < 0 || in.Start >= in.End || in.End > len(d.src) || d.src[in.Start] != '[' {
+	bracket := in.Start
+	if kind == Image {
+		bracket++
+	}
+	if in.Kind != kind || in.Auto || in.Pending || in.Start < 0 || bracket >= in.End || in.End > len(d.src) || d.src[bracket] != '[' {
 		return 0, 0, false
 	}
 	literal := make(map[int]int)
@@ -22,7 +35,7 @@ func (d *Document) LinkLabelRange(block, index int) (start, end int, ok bool) {
 		}
 	}
 	depth := 0
-	for at := in.Start; at < in.End; at++ {
+	for at := bracket; at < in.End; at++ {
 		if stop, found := literal[at]; found && stop > at {
 			at = stop - 1
 			continue
@@ -35,7 +48,7 @@ func (d *Document) LinkLabelRange(block, index int) (start, end int, ok bool) {
 		case ']':
 			depth--
 			if depth == 0 {
-				return in.Start + 1, at, true
+				return bracket + 1, at, true
 			}
 		}
 	}

@@ -55,7 +55,7 @@ var settingsSearchEntries = []settingsSearchEntry{
 	{"cli-meegle", "Meegle CLI 状态", "meego meegle 飞书 登录 账号 命令 路径 授权"}, {"cli-meegle", "Meegle 项目空间", "meego meegle 飞书 项目 key 短名 sprint 默认空间"},
 	{"cli-meegle", "默认 Sprint 团队空间", "meego meegle 默认迭代 default sprint team space"},
 	{"cli-genbu", "Genbu CLI 状态", "genbu 玄武 构建 发布 命令 路径"},
-	{"proxy", "命令网络代理", "proxy http https socks5 协议 代理主机 端口 认证 账号 密码 例外 目标 测试 清除"},
+	{"proxy", "网络代理", "proxy http https socks5 协议 代理主机 端口 认证 账号 密码 例外 目标 测试 清除 应用更新 下载"},
 	{"config-backup", "配置与备份", "配置源码 JSON 导入 导出 预览 恢复 删除 backup"},
 	{"app-data", "数据目录", "应用数据目录 home 存储 打开 复制 路径"}, {"logs", "日志与诊断", "日志 错误 清理 复制 导出 diagnostics"},
 	{"about", "关于与更新", "版本 下载 release github 仓库 更新"},

@@ -197,6 +197,9 @@ func (s *EditorState) Execute(command EditorCommand) error {
 			prefix = "!["
 		}
 		text := prefix + encodedLabel + "](<" + parser.EscapeLinkDestination(target) + ">)"
+		if command.Kind == CommandInsertImage && s.opts.InPlaceImages {
+			return s.InsertImageParagraphsAt(s.CaptureInsertionPoint(), []string{text})
+		}
 		if _, _, cell := s.editingTable(); cell {
 			text = escapeEditorTableText(text)
 		}

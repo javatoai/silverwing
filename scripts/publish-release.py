@@ -47,6 +47,12 @@ def publish(asset_directory):
         f'{executable}-{version}-windows-x64.msi',
         f'{executable}-{version}-macos-arm64.dmg',
     ])
+    actual_names = sorted(path.name for path in directory.iterdir())
+    signed_updates = actual_names != names
+    if signed_updates:
+        targets = ['windows-amd64-setup', 'windows-amd64-msi', 'windows-amd64-portable', 'darwin-arm64-macos-app']
+        names = sorted(names + [item for target in targets for item in (
+            f'update-{target}.json', f'{executable}-{version}-{target}.tar.gz')])
     require(sorted(path.name for path in directory.iterdir()) == names,
             'Expected exactly the four versioned Windows/macOS release packages.')
     expected = {}
@@ -57,6 +63,9 @@ def publish(asset_directory):
         with path.open('rb') as package:
             digest = hashlib.file_digest(package, 'sha256').hexdigest()
         expected[name] = (path.stat().st_size, digest)
+    if signed_updates:
+        require(os.environ.get('MYGO_UPDATER_PUBLIC_KEY'), 'Pinned update public key is required.')
+        subprocess.run(['go', 'run', './scripts/update-bundle', '-verify', str(directory), '-version', version], check=True)
 
     endpoint = f'repos/{repo}/releases'
     require(json.loads(gh('api', f'repos/{repo}/commits/{tag}'))['sha'] == sha,

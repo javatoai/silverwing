@@ -79,6 +79,10 @@ func (st *viewState) images(c *ui.Context, i int) ui.Element {
 				continue
 			}
 			alt := parser.PlainText(in[k+1 : n.Next])
+			if st.editor != nil && st.editor.opts.InPlaceImages {
+				st.editor.imageView(c, i, n, alt)
+				continue
+			}
 			if st.o.Image != nil {
 				st.o.Image(c, i, n.Start, n.End, n.Dest, alt)
 				continue

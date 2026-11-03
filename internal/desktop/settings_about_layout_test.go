@@ -90,8 +90,9 @@ func TestSettingsUpdatesLayoutCopyAndKeyboardOrder(test *testing.T) {
 				if !tester.HasText("获取新版") || !tester.HasText("当前版本") || !tester.HasText(domain.CurrentProductVersion) || !tester.HasText(silverwingReleasesURL) {
 					test.Fatalf("update page is missing its title, current version, or release URL: %v", tester.Texts())
 				}
-				if tester.HasText("已是最新版本") || tester.HasText("检查更新") {
-					test.Fatal("update page makes an unsupported release-status claim")
+				_, hasSchedule := tester.Find("每日检查时间")
+				if tester.HasText("已是最新版本") || !tester.HasText("检查更新") || !hasSchedule || state.appUpdates.timeDraft != "10:00" {
+					test.Fatal("update page must offer a scheduled/manual check without assuming it already succeeded")
 				}
 				assertSettingsSystemCardBounds(test, tester, width)
 				open, openFound := tester.Find("打开更新页面")

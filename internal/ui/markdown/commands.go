@@ -98,7 +98,10 @@ func (s *EditorState) commandMenu(menu *ui.Menu) {
 }
 
 func (s *EditorState) floatingToolbar(c *ui.Context) {
-	if s.closed || s.options.ReadOnly || s.Mode() != Live || s.insert != nil && s.insert.open {
+	if s.closed || s.options.ReadOnly || s.Mode() != Live || s.insert != nil && s.insert.open || s.image != nil {
+		return
+	}
+	if _, selected := s.native.SelectedImage(); selected {
 		return
 	}
 	rect, ok := s.native.SelectionBounds()

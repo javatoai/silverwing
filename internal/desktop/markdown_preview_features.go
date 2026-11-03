@@ -149,7 +149,8 @@ func sameMarkdownTrustedImages(left, right map[string]string) bool {
 	return true
 }
 
-func (s *app) renderMarkdownImage(c *ui.Context, p palette, state *markdownEditorState, part editor.Part, node editor.Node, size float32) {
+func (s *app) renderMarkdownImage(c *ui.Context, p palette, state *markdownEditorState, part editor.Part, node editor.Node, size float32, editContent ...bool) {
+	interactive := len(editContent) > 0 && editContent[0]
 	alt := strings.TrimSpace(node.Text)
 	if alt == "" {
 		alt = "图片"
@@ -170,11 +171,6 @@ func (s *app) renderMarkdownImage(c *ui.Context, p palette, state *markdownEdito
 		if width < 1 || height < 1 {
 			width, height = 320, 180
 		}
-		maxWidth := float32(520)
-		if width > int(maxWidth) {
-			height = int(float32(height) * maxWidth / float32(width))
-			width = int(maxWidth)
-		}
 		ui.Column(c).Shrink(0).Gap(3).Children(func() {
 			previewKey := markdownEditorControlKey(state, fmt.Sprintf("markdown-image-preview-%d-%d", part.ID, node.Range.Start))
 			open := func() {
@@ -187,11 +183,16 @@ func (s *app) renderMarkdownImage(c *ui.Context, p palette, state *markdownEdito
 				}
 				s.openMarkdownBitmapViewer(state, image.bitmap)
 			}
-			preview := ui.Image(c.Key(previewKey), image.bitmap).Width(float32(width)).MaxWidthPercent(100).AspectRatio(float32(width) / float32(height)).Fit(ui.Contain).Label("Markdown 图片：" + alt).OnClick(open)
+			preview := ui.Image(c.Key(previewKey), image.bitmap).Width(float32(width)).MaxWidthPercent(100).AspectRatio(float32(width) / float32(height)).Fit(ui.Contain).Label("Markdown 图片：" + alt)
+			if !interactive {
+				preview.OnClick(open)
+			}
 			// Images are controls inside the native writing surface, like code
 			// copy/language controls. Stop its text-drag handler owning the click.
-			preview.HandleInput(func(ui.InputEvent) bool { return false })
-			if isCommentDraftMarkdownOwner(state) {
+			if !interactive {
+				preview.HandleInput(func(ui.InputEvent) bool { return false })
+			}
+			if isCommentDraftMarkdownOwner(state) && !interactive {
 				preview.Focusable().OnShortcut(0, ui.KeyEnter, open)
 				if s.requirementUnit.state.commentComposers != nil && s.requirementUnit.state.commentComposers.active != nil {
 					composer := s.requirementUnit.state.commentComposers.active

@@ -66,9 +66,10 @@ func (s *EditorState) insertMarkdownAt(p InsertionPoint, text string, validate f
 		return err
 	}
 	a, z := min(s.anchor, s.caret), max(s.anchor, s.caret)
+	a, z = s.protectImageRange(a, z)
 	text, compatible := s.mergeInlineFragment(a, z, text)
 	endpoint := len(text)
-	text, endpoint, gap := s.codeGapInput(a, z, text, endpoint)
+	a, z, text, endpoint, gap := s.codeGapInput(a, z, text, endpoint)
 	if !gap && !s.SourceMode {
 		if _, cell, ok := s.editingTable(); ok && a >= cell.sourceStart && z <= cell.sourceEnd {
 			text, endpoint = s.tableInputText(a, z, text, endpoint)

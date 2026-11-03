@@ -152,7 +152,7 @@ func TestSettingsAuditFixedNamesRevealRealControls(t *testing.T) {
 	for _, query := range []string{"协议", "代理主机", "端口"} {
 		t.Run(query, func(t *testing.T) {
 			for _, entry := range settingsSearch(query) {
-				if entry.page == "proxy" && entry.title == "命令网络代理" {
+				if entry.page == "proxy" && entry.title == "网络代理" {
 					return
 				}
 			}

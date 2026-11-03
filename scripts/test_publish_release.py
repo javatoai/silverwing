@@ -123,6 +123,26 @@ class PublishReleaseChecks(unittest.TestCase):
         self.assertEqual(sum(call == ('api', 'repos/javatoai/silverwing/releases/123') for call in self.calls), 2)
         self.assertFalse(any('/releases/tags/' in str(call) for call in self.calls))
 
+    def test_signed_release_requires_complete_set_and_verifies_before_publish(self):
+        targets = ['windows-amd64-setup', 'windows-amd64-msi', 'windows-amd64-portable', 'darwin-arm64-macos-app']
+        for target in targets:
+            (self.assets / f'update-{target}.json').write_text('{}')
+            (self.assets / f'{self.executable}-2.1.8-{target}.tar.gz').write_bytes(b'fixture')
+        self.env['MYGO_UPDATER_PUBLIC_KEY'] = 'test-pinned-key'
+        with patch.object(release.subprocess, 'run') as verify:
+            self.run_publish()
+        self.assertTrue(self.published)
+        self.assertEqual(len(list(self.assets.iterdir())), 13)
+        self.assertEqual(len((self.assets / 'SHA256SUMS.txt').read_text().splitlines()), 12)
+        verify.assert_called_once()
+        self.assertIn('-verify', verify.call_args.args[0])
+
+    def test_partial_signed_bundle_set_never_creates_a_release(self):
+        (self.assets / 'update-windows-amd64-msi.json').write_text('{}')
+        with self.assertRaises(RuntimeError):
+            self.run_publish()
+        self.assertFalse(self.created)
+
     def test_pr_branch_manual_wrong_tag_and_wrong_repository_never_write(self):
         for key, value in [('GITHUB_EVENT_NAME', 'pull_request'), ('GITHUB_EVENT_NAME', 'workflow_dispatch'),
                            ('GITHUB_REF', 'refs/heads/master'), ('GITHUB_REF', 'refs/tags/' + self.profile['ReleaseTagPrefix'] + '2.1.9'),

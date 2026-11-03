@@ -919,7 +919,7 @@ func stringValue(v *string) string {
 }
 func validProxyTarget(v CommandProxyTarget) bool {
 	switch v {
-	case ProxyTargetCodex, ProxyTargetGit, ProxyTargetWorkspaceCommand, ProxyTargetMeegle, ProxyTargetGenbu:
+	case ProxyTargetCodex, ProxyTargetGit, ProxyTargetWorkspaceCommand, ProxyTargetMeegle, ProxyTargetGenbu, ProxyTargetAppUpdates:
 		return true
 	}
 	return false

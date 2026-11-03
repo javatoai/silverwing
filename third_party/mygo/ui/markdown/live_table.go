@@ -261,7 +261,13 @@ func (s *EditorState) tableBlock(c *ui.Context, index int, base spanStyle) {
 								align = ui.End
 							}
 							active := s.focused && !s.opts.ReadOnly && hasActive && activeTable.start == t.start && activeCell.block == cell.block
-							if active && s.composing {
+							if active && s.composing && s.opts.InPlaceImages && s.blockHasImages(cell.block) {
+								if s.codeGapComposition() {
+									s.view.paragraph(c, cell.block, base).TextAlign(align)
+								} else {
+									s.renderImageComposition(c, cell.block, base)
+								}
+							} else if active && s.composing {
 								font := ui.Font{Family: th.Font, Size: th.FontSize}
 								if rowIndex == 0 {
 									font.Weight = th.StrongWeight

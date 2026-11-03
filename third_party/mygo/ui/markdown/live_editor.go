@@ -30,6 +30,11 @@ type EditorOptions struct {
 	// contents through this Editor's single input client and Buffer. Language
 	// renderers in Options.Code retain their existing activation behavior.
 	InPlaceCode bool
+	// InPlaceImages keeps image references atomic and rendered while editing.
+	// The host retains image loading/permissions; ImageActions supplies optional
+	// selected-image controls without owning the source or input client.
+	InPlaceImages bool
+	ImageActions  func(*ui.Context, ImageInfo, ui.Element)
 	// ContinueBlocks enables source-preserving list and quote writing aids in
 	// live mode. SourceMode and the zero-value SDK options retain raw keys.
 	ContinueBlocks bool
@@ -97,6 +102,7 @@ type EditorState struct {
 	tableCells                                      []*editorTableHit
 	omittedTableCell                                *editorTableHit
 	codeGaps                                        []*editorCodeGap
+	imageHits                                       []*editorImageHit
 	codeGapFocus                                    editorCodeGapFocus
 	fenceDrafts, parsedFenceDrafts                  []int
 	formatPending                                   bool
@@ -145,6 +151,7 @@ func (s *EditorState) SetSelection(anchor, caret int) {
 	s.codeGapFocus.valid = false
 	s.omittedTableCell = nil
 	s.anchor, s.caret = byteBoundary(s.source, anchor), byteBoundary(s.source, caret)
+	s.normalizeImageSelection()
 	if s.anchor == s.caret {
 		s.ensureCodeTail(s.caret)
 	}
@@ -243,6 +250,7 @@ func Editor(c *ui.Context, s *EditorState, options ...EditorOptions) ui.Element 
 	}
 	s.services = c.Services()
 	s.sync()
+	s.normalizeImageSelection()
 	if s.SourceMode {
 		s.formatPending = false
 	}
@@ -322,6 +330,7 @@ func Editor(c *ui.Context, s *EditorState, options ...EditorOptions) ui.Element 
 	s.blocks = nil
 	s.tableCells = nil
 	s.codeGaps = nil
+	s.imageHits = nil
 	// A chosen context-menu action runs while this root is built. Let the
 	// host prepare its source projections again before traversing new blocks.
 	s.sync()
@@ -335,6 +344,7 @@ func Editor(c *ui.Context, s *EditorState, options ...EditorOptions) ui.Element 
 	root.Children(func() {
 		ui.Column(c).AlignSelf(ui.Stretch).Padding(12).Children(func() { s.buildBlocks(c) })
 	})
+	s.imageDropTargets()
 	if !s.projectionCurrent() {
 		// A LinkView action can change source during the traversal. Discard
 		// the partial geometry and rebuild from the new snapshot next frame.
@@ -440,6 +450,9 @@ func (s *EditorState) replaceSource(a, z int, text string, kind editor.EditKind,
 		return false
 	}
 	a, z = byteBoundary(s.source, min(a, z)), byteBoundary(s.source, max(a, z))
+	if tableInput {
+		a, z = s.protectImageRange(a, z)
+	}
 	leadingLine := ""
 	if prefix := s.sourcePrefixEnd(); tableInput && prefix > 0 && s.anchor == s.caret {
 		a, z = max(a, prefix), max(z, prefix)
@@ -491,7 +504,7 @@ func (s *EditorState) replaceSource(a, z int, text string, kind editor.EditKind,
 	var codeEdits []editor.Edit
 	gapInput := false
 	if tableInput {
-		text, endpoint, gapInput = s.codeGapInput(a, z, text, endpoint)
+		a, z, text, endpoint, gapInput = s.codeGapInput(a, z, text, endpoint)
 	}
 	if tableInput && !gapInput {
 		a, z = s.protectLinkEdit(a, z)
@@ -506,7 +519,7 @@ func (s *EditorState) replaceSource(a, z int, text string, kind editor.EditKind,
 	before := editorSelection{s.anchor, s.caret}
 	var historyBefore any = before
 	if gapBefore {
-		historyBefore = editorCodeGapHistory{selection: before}
+		historyBefore = s.captureCodeGapHistory(before)
 	} else if hit := s.focusedOmittedTableCell(); hit != nil {
 		historyBefore = editorOmittedCellHistory{selection: before, start: hit.table.start, row: hit.cell.row, column: hit.cell.column}
 	}

@@ -81,9 +81,14 @@ if git -C "$repo_root" rev-parse --short=12 HEAD >/dev/null 2>&1; then
   commit="$(git -C "$repo_root" rev-parse --short=12 HEAD)"
 fi
 ldflags="-s -w -X silverwing-go/internal/buildinfo.Version=$version -X silverwing-go/internal/buildinfo.Commit=$commit -X silverwing-go/internal/buildinfo.BuildTime=$build_time"
+if [[ -n "${MYGO_UPDATER_PUBLIC_KEY:-}" ]]; then
+  ldflags="$ldflags -X silverwing-go/internal/buildinfo.UpdatePublicKey=$MYGO_UPDATER_PUBLIC_KEY"
+fi
 (
   cd "$repo_root"
   GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -tags mygo_noinspector -ldflags "$ldflags" -o "$macos_dir/$profile_executable" ./cmd/silverwing
+  mkdir -p "$payload/Contents/Helpers"
+  GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -tags mygo_noinspector -ldflags "$ldflags" -o "$payload/Contents/Helpers/$profile_executable-updater" ./cmd/silverwing-updater
 )
 chmod 755 "$macos_dir/$profile_executable"
 
@@ -180,6 +185,11 @@ cat > "$payload/Contents/Info.plist" <<EOF
 EOF
 printf 'APPL????' > "$payload/Contents/PkgInfo"
 plutil -lint "$payload/Contents/Info.plist"
+(
+  cd "$repo_root"
+  go run ./scripts/update-bundle -layout "$payload" -platform darwin/arm64 -version "$version" \
+    -marker Contents/Resources/update-installation.json -exe "Contents/MacOS/$profile_executable" -helper "Contents/Helpers/$profile_executable-updater"
+)
 codesign --force --deep --sign - "$payload"
 codesign --verify --deep --strict "$payload"
 
@@ -187,5 +197,12 @@ mkdir -p "$out_dir"
 cp -R "$payload" "$out_dir/$profile_directory.app"
 dmg="$out_dir/$profile_executable-$version-macos-arm64.dmg"
 hdiutil create -format UDZO -volname "$profile_name $version" -srcfolder "$out_dir/$profile_directory.app" "$dmg"
+if [[ -n "${MYGO_UPDATER_PRIVATE_KEY:-}" ]]; then
+  (
+    cd "$repo_root"
+    go run ./scripts/update-bundle -layout "$payload" -platform darwin/arm64 -version "$version" \
+      -marker Contents/Resources/update-installation.json -bundle macos-app -payload "$payload" -out "$out_dir"
+  )
+fi
 printf 'Native Go package version %s (%s) created at %s\n' "$version" "$commit" "$out_dir"
 ls -lh "$out_dir"

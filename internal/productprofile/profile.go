@@ -5,6 +5,7 @@ package productprofile
 
 import "path/filepath"
 
+// AutomaticUpdates means unattended installation, not release notifications.
 const AutomaticUpdates = false
 
 // These projections retain the existing public naming constant and repository URL.

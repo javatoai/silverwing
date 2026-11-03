@@ -2,7 +2,7 @@ package domain
 
 // Persisted schema versions are deliberately independent of the product version.
 const (
-	CurrentProductVersion            = "0.0.9"
+	CurrentProductVersion            = "0.0.10"
 	CurrentAppConfigSchemaVersion    = "6.0.0"
 	CurrentTaskManifestSchemaVersion = "2.0.0"
 	DefaultGroupID                   = "default"
@@ -52,6 +52,7 @@ const (
 	ProxyTargetWorkspaceCommand CommandProxyTarget = "WORKSPACE_COMMAND"
 	ProxyTargetMeegle           CommandProxyTarget = "MEEGLE"
 	ProxyTargetGenbu            CommandProxyTarget = "GENBU"
+	ProxyTargetAppUpdates       CommandProxyTarget = "APP_UPDATES"
 )
 
 // NormalizeCommandProxyTargets applies the persisted Set semantics while

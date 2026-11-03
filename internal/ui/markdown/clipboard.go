@@ -116,7 +116,15 @@ func (s *EditorState) importResources(request ImportRequest) {
 			}
 			parts = append(parts, prefix+linkSource(text, resource.Target))
 		}
-		s.report(s.native.InsertMarkdownAt(point, strings.Join(parts, s.native.Buffer().LineEnding())))
+		anyImage := false
+		for _, resource := range result.Resources {
+			anyImage = anyImage || resource.Image
+		}
+		if anyImage {
+			s.report(s.native.InsertImageParagraphsAt(point, parts))
+		} else {
+			s.report(s.native.InsertMarkdownAt(point, strings.Join(parts, s.native.Buffer().LineEnding())))
+		}
 		s.native.Focus()
 		s.notify()
 	})

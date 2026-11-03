@@ -50,7 +50,7 @@ func gitOriginSuffix(entry map[string]any) string {
 }
 
 func (s *app) settingsProxy(c *ui.Context, p palette) {
-	settingsHelpCard(c, p, "命令网络代理", "只对选中的命令生效；例外地址按逗号分隔。", func() {
+	settingsHelpCard(c, p, "网络代理", "只对选中的项目生效；例外地址按逗号分隔。", func() {
 		proxy := proxyParts(s.configString("commandProxyUrl"))
 		protocol := s.input("setting:proxy-scheme", proxy[0])
 		host := s.input("setting:proxy-host", proxy[1])
@@ -94,6 +94,7 @@ func (s *app) settingsProxy(c *ui.Context, p palette) {
 				{"CODEX", "Codex CLI", "AI 命名与 Codex 扩展。"}, {"GIT", "Git", "仓库和远程分支操作。"},
 				{"WORKSPACE_COMMAND", "服务快捷命令", "Maven、Gradle 等初始化命令。"}, {"MEEGLE", "Meegle CLI", "需求、项目与登录状态。"},
 				{"GENBU", "Genbu CLI", "Tag 构建与发布状态。"},
+				{"APP_UPDATES", "应用更新", "检查更新和下载更新包。"},
 			} {
 				selected := containsString(stringArray(s.configArray("commandProxyTargets")), target.id)
 				value := s.settingsBoolInput("proxy-target:"+target.id, selected)
@@ -108,12 +109,12 @@ func (s *app) settingsProxy(c *ui.Context, p palette) {
 				*protocol, *host, *port, *noProxy, *username, *password = "http", "", "80", "", "", ""
 				*authentication = false
 				*passwordVisible = false
-				for _, target := range []string{"CODEX", "GIT", "WORKSPACE_COMMAND", "MEEGLE", "GENBU"} {
+				for _, target := range []string{"CODEX", "GIT", "WORKSPACE_COMMAND", "MEEGLE", "GENBU", "APP_UPDATES"} {
 					*s.settingsBoolInput("proxy-target:"+target, false) = false
 				}
 			}
 		})
-		targetIDs := []string{"CODEX", "GIT", "WORKSPACE_COMMAND", "MEEGLE", "GENBU"}
+		targetIDs := []string{"CODEX", "GIT", "WORKSPACE_COMMAND", "MEEGLE", "GENBU", "APP_UPDATES"}
 		targetInputs := make([]*bool, 0, len(targetIDs))
 		for _, target := range targetIDs {
 			targetInputs = append(targetInputs, s.settingsBoolInput("proxy-target:"+target, containsString(stringArray(s.configArray("commandProxyTargets")), target)))

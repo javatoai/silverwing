@@ -24,6 +24,9 @@ func main() {
 	tab := flag.Int("tab", 0, "initial task tab: 0 task branches, 1 materials, 2 requirement, 3 task instructions, 4 Tag, 5 task files, 6 service info, 7 terminal")
 	capture := flag.String("capture", "", "write a PNG capture of the native window")
 	captureOnly := flag.Bool("capture-only", false, "exit after writing the requested capture")
+	updateHealth := flag.String("update-health", "", "internal updater readiness receipt")
+	updateToken := flag.String("update-token", "", "internal updater readiness token")
+	updateResult := flag.String("update-result", "", "internal updater result receipt")
 	flag.Parse()
 	explicitNavigation := false
 	explicitTab := false
@@ -45,6 +48,8 @@ func main() {
 		Page: *page, Dark: *dark, Width: *width, Height: *height, Tab: *tab,
 		TabExplicit: explicitTab,
 		CapturePath: *capture, CaptureOnly: *captureOnly,
+		UpdateHealthPath: *updateHealth, UpdateHealthToken: *updateToken,
+		UpdateResultPath: *updateResult,
 	}); err != nil {
 		log.Fatal(err)
 	}

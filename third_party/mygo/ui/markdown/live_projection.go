@@ -68,6 +68,9 @@ func (s *EditorState) chooseActive() {
 }
 
 func (s *EditorState) buildBlocks(c *ui.Context) {
+	if s.opts.InPlaceImages && !s.SourceMode && !s.opts.ReadOnly {
+		defer s.imageDropTail(c)
+	}
 	if s.SourceMode {
 		s.sourceBlock(c, 0, len(s.source), 0)
 		return
@@ -105,6 +108,14 @@ func (s *EditorState) buildBlocks(c *ui.Context) {
 				s.sourceBlock(c, at, start, 0)
 			}
 			s.tableBlock(c, i, spanStyle{})
+			at = max(at, end)
+			continue
+		}
+		if s.opts.InPlaceImages && s.blockHasImages(i) {
+			if start > at {
+				s.sourceBlock(c, at, start, 0)
+			}
+			s.renderedBlock(c, i, spanStyle{})
 			at = max(at, end)
 			continue
 		}

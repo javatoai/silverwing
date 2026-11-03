@@ -5,13 +5,16 @@ from pathlib import Path
 import re
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 
 from product_profile import PROFILE_PATH, read_profile
 
 
 SOURCE_ROOT = Path(__file__).resolve().parent.parent
 # Hashes of the pre-refactor templates with their existing installation identity.
-# Rendered metadata must reproduce those exact UTF-8/LF bytes in each branch.
+# Rendered metadata must reproduce those exact UTF-8/LF bytes in each branch,
+# apart from the separately checked updater install-location registration.
+_MSI_UPDATE_LOCATION = '    <SetProperty Id="ARPINSTALLLOCATION" Value="[INSTALLFOLDER]" After="CostFinalize" Sequence="execute" />\n'
 _INSTALLER_HASHES = {
     '': {
         'windows-installer.nsi': '6b2df2a9b671590b5214e8e034b6e8b75d8252ee9d0313105fa0956d31d2bbe0',
@@ -53,7 +56,20 @@ class ProductProfileChecks(unittest.TestCase):
                 source = (SOURCE_ROOT / 'scripts' / name).read_text(encoding='utf-8-sig')
                 rendered = re.sub(r'\$\{PROFILE_(\w+)\}', lambda match: profile[match[1]], source)
                 rendered = re.sub(r'\$\(var\.Profile(\w+)\)', lambda match: profile[match[1]], rendered)
+                if name == 'windows-installer.wxs':
+                    rendered = rendered.replace(_MSI_UPDATE_LOCATION, '')
                 self.assertEqual(hashlib.sha256(rendered.encode('utf-8')).hexdigest(), expected_digest)
+
+    def test_msi_registers_actual_install_location_for_updater(self):
+        template = SOURCE_ROOT / 'scripts/windows-installer.wxs'
+        root = ET.fromstring(template.read_text(encoding='utf-8-sig'))
+        properties = root.findall('.//w:Product/w:SetProperty[@Id="ARPINSTALLLOCATION"]',
+                                  {'w': 'http://schemas.microsoft.com/wix/2006/wi'})
+        self.assertEqual(len(properties), 1)
+        self.assertEqual(properties[0].attrib, {
+            'Id': 'ARPINSTALLLOCATION', 'Value': '[INSTALLFOLDER]',
+            'After': 'CostFinalize', 'Sequence': 'execute',
+        })
 
     def test_packaging_reader_does_not_require_ui_labels_to_be_literals(self):
         source = (SOURCE_ROOT / PROFILE_PATH).read_text(encoding='utf-8-sig')

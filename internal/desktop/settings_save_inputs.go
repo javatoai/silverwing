@@ -97,7 +97,7 @@ func settingsConfigInputValues(config map[string]any) (map[string]any, map[strin
 	}
 	booleans["local:proxy-auth-enabled"] = mapString(config, "commandProxyUsername") != "" && mapString(config, "commandProxyPassword") != ""
 	targets := stringArray(mustArray(config["commandProxyTargets"]))
-	for _, target := range []string{"CODEX", "GIT", "WORKSPACE_COMMAND", "MEEGLE", "GENBU"} {
+	for _, target := range []string{"CODEX", "GIT", "WORKSPACE_COMMAND", "MEEGLE", "GENBU", "APP_UPDATES"} {
 		booleans["proxy-target:"+target] = containsString(targets, target)
 	}
 	visibility, _ := config["toolVisibility"].(map[string]any)

@@ -18,6 +18,8 @@ func (s *app) view(c *ui.Context) {
 		s.leaveTaskFiles()
 	}
 	s.observeMaterialTextInput()
+	s.observeAppUpdates()
+	s.observeAppUpdateInstall()
 	s.observeMaterialsGitSync()
 	s.observeMaterialsGitBranches()
 	defer s.observeMaterialTextInput()

@@ -140,7 +140,10 @@ jobs:
           bash ./scripts/build-macos.sh
           mkdir -p dist/macos-arm64
           cp build/native-release/macos-arm64/*/*.dmg dist/macos-arm64/
-          find build/native-release/macos-arm64 -type f \( -name 'update-*.json' -o -name '*-darwin-arm64-macos-app.tar.gz' \) -exec cp {} dist/macos-arm64/ \;
+          for asset in build/native-release/macos-arm64/*/update-darwin-arm64-macos-app.json \
+                       build/native-release/macos-arm64/*/*-darwin-arm64-macos-app.tar.gz; do
+            if [[ -f "$asset" ]]; then cp "$asset" dist/macos-arm64/; fi
+          done
 
       - name: Upload platform packages
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

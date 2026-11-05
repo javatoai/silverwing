@@ -392,7 +392,7 @@ func configElementType(t reflect.Type) reflect.Type {
 func configJSONNull(data []byte) bool { return bytes.Equal(bytes.TrimSpace(data), []byte("null")) }
 
 func retiredConfigField(t reflect.Type, name string) bool {
-	return t == reflect.TypeOf(integrationsShard{}) && (name == "larkExecutablePath" || name == "requirementMaterialsFeishuTarget")
+	return t == reflect.TypeOf(integrationsShard{}) && name == "requirementMaterialsFeishuTarget"
 }
 
 // An archive replaces settings, rather than inheriting extensions from the

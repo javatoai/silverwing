@@ -2,6 +2,7 @@ package desktop
 
 import (
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/releasenotice"
 	"silverwing-go/internal/workspace"
 
 	"github.com/egoist/mygo/ui"
@@ -66,6 +67,14 @@ func (s *app) renderTaskBranchInfoDialog(c *ui.Context, p palette) {
 							label(c, option.Label, 11, p.text).FontWeight(600).Grow(1).MinWidth(0).SingleLine().Tooltip(option.Label)
 							if iconButton(c, "copy", "copy", "复制"+option.Label, p).Clicked() {
 								s.copyTextToClipboard(c.Services(), option.Text, option.Message)
+							}
+							if option.Key == "branches" {
+								_, err := releasenotice.BranchRows(taskBranchInfoManifest(t).Services)
+								sending := s.releaseNotices.running()
+								button := iconButton(c, "send-branches", "launch", s.noticeButtonText(releasenotice.Branches, ""), p).Disabled(s.busy || sending || err != nil)
+								if button.Clicked() {
+									s.sendBranchNotice(t)
+								}
 							}
 						})
 						ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).Label("分支信息预览 · " + option.Key).Children(func() {

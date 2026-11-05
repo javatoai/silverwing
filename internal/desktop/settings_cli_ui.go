@@ -68,6 +68,23 @@ func (s *app) settingsCLIStatusDetails(c *ui.Context, p palette, tool string) {
 	if version := strings.TrimSpace(mapString(status, "version")); version != "" && tool != "git" {
 		settingsToolStatusRow(c, p, "版本", version, p.text)
 	}
+	if tool == "lark" && dataBool(status, "installed") {
+		name := firstNonEmpty(mapString(status, "userName"), "未取得本地身份")
+		settingsToolStatusRow(c, p, "当前用户", name, p.text)
+		userState := map[string]string{"expired": "已过期（本地身份可用）", "valid": "有效", "ready": "有效"}[mapString(status, "userState")]
+		if userState == "" {
+			userState = "未确认"
+		}
+		settingsToolStatusRow(c, p, "个人登录", userState, p.muted)
+		bot, color := "不可用", p.amber
+		if dataBool(status, "botReady") {
+			bot, color = "可用", p.green
+		}
+		settingsToolStatusRow(c, p, "通知机器人", bot, color)
+		if message := mapString(status, "authenticationError"); message != "" {
+			settingsToolStatusRow(c, p, "身份检查", message, p.amber)
+		}
+	}
 	if source := mapString(status, "source"); source != "" {
 		settingsToolStatusRow(c, p, "来源", cliStatusSourceLabel(source), p.text)
 	}
@@ -94,7 +111,7 @@ func cliAuthLinkRemaining(session map[string]any) string {
 // the configured executable. Command actions live in the card's menu.
 func (s *app) settingsCLICommandActions(c *ui.Context, p palette, tool, command string) {
 	switch tool {
-	case "git", "codex", "genbu", "meegle":
+	case "git", "codex", "genbu", "meegle", "lark":
 	default:
 		return
 	}

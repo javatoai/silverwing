@@ -103,7 +103,7 @@ func (s *app) cliJobTool(action application.Action) string {
 }
 
 func (s *app) cliConfiguredPath(tool string) string {
-	key := map[string]string{"meegle": "meegleExecutablePath", "codex": "codexExecutablePath", "git": "gitExecutablePath", "genbu": "genbuExecutablePath"}[tool]
+	key := map[string]string{"lark": "larkExecutablePath", "meegle": "meegleExecutablePath", "codex": "codexExecutablePath", "git": "gitExecutablePath", "genbu": "genbuExecutablePath"}[tool]
 	if key == "" {
 		return ""
 	}
@@ -259,6 +259,9 @@ func (s *app) cliJobRelevant(request *cliJobRequest) bool {
 	if s.snapshot.Home != request.home || s.cliConfiguredPath(request.tool) != request.path {
 		return false
 	}
+	if request.tool == "lark" && larkCLIIdentityConfig(request.config) != larkCLIIdentityConfig(s.settingsUnit.state.configJSON) {
+		return false
+	}
 	if request.action.Kind == "meegle.projects" && request.meegleContext != s.currentRequirementIdentityContext() {
 		return false
 	}
@@ -366,8 +369,8 @@ func (s *app) invalidateCLIConfiguration(snapshot application.Snapshot) {
 	if json.Unmarshal([]byte(snapshot.ConfigJSON), &config) != nil {
 		return
 	}
-	for tool, key := range map[string]string{"meegle": "meegleExecutablePath", "codex": "codexExecutablePath", "git": "gitExecutablePath", "genbu": "genbuExecutablePath"} {
-		if s.snapshot.Home == snapshot.Home && s.cliConfiguredPath(tool) == strings.TrimSpace(mapString(config, key)) {
+	for tool, key := range map[string]string{"lark": "larkExecutablePath", "meegle": "meegleExecutablePath", "codex": "codexExecutablePath", "git": "gitExecutablePath", "genbu": "genbuExecutablePath"} {
+		if s.snapshot.Home == snapshot.Home && s.cliConfiguredPath(tool) == strings.TrimSpace(mapString(config, key)) && (tool != "lark" || larkCLIIdentityConfig(s.settingsUnit.state.configJSON) == larkCLIIdentityConfig(snapshot.ConfigJSON)) {
 			continue
 		}
 		s.invalidateCLIJobs(tool)
@@ -425,9 +428,19 @@ func (s *app) closeCLIJobs(ctx context.Context) error {
 
 func desktopCLIJobSupported(tool string) bool {
 	switch tool {
-	case "meegle", "codex", "git", "genbu":
+	case "meegle", "codex", "git", "genbu", "lark":
 		return true
 	default:
 		return false
 	}
+}
+
+func larkCLIIdentityConfig(source string) string {
+	cfg, e := decodeAppConfig(source)
+	if e != nil {
+		return source
+	}
+	lark := cfg.EffectiveLarkNotice()
+	encoded, _ := json.Marshal([]string{lark.Profile, lark.AppID})
+	return string(encoded)
 }

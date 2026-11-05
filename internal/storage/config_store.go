@@ -732,6 +732,8 @@ func decodeShardsContext(ctx context.Context, files map[string][]byte) (decodedC
 	config.GitExecutablePath = git.GitExecutablePath
 	config.MeegleProjects = integrations.MeegleProjects
 	config.MeegleDefaultSprintProjectKey = integrations.MeegleDefaultSprintProjectKey
+	config.LarkExecutablePath = integrations.LarkExecutablePath
+	config.LarkNotice = integrations.LarkNotice
 	config.MeegleExecutablePath = integrations.MeegleExecutablePath
 	config.CodexExecutablePath = integrations.CodexExecutablePath
 	config.CommandProxyURL = integrations.CommandProxyURL
@@ -822,7 +824,7 @@ func shardsFor(config domain.AppConfig) configShards {
 		Tag:          tagShard{Schema: configShardSchema, TagEnabled: config.TagEnabled, TagHistoryMaxGroups: config.TagHistoryMaxGroups, AllowTaskTagTargetEditing: config.AllowTaskTagTargetEditing},
 		Tools:        toolsShard{Schema: configShardSchema, TerminalExecutable: config.TerminalExecutable, DevelopmentTools: config.DevelopmentTools, DefaultDevelopmentTool: config.DefaultDevelopmentTool, AllowTemporaryDevelopmentToolSelection: config.AllowTemporaryDevelopmentToolSelection, DefaultWorkspaceToolIDs: config.DefaultWorkspaceToolIDs},
 		Git:          gitShard{Schema: configShardSchema, BlockedGitWriteBranches: config.BlockedGitWriteBranches, GitExecutablePath: config.GitExecutablePath},
-		Integrations: integrationsShard{Schema: configShardSchema, AIRequirementNamingEnabled: config.AIRequirementNamingEnabled, AIRequirementNamingPrewarmEnabled: config.AIRequirementNamingPrewarmEnabled, AIRequirementNamingModel: config.AIRequirementNamingModel, MeegleProjects: config.MeegleProjects, MeegleDefaultSprintProjectKey: config.MeegleDefaultSprintProjectKey, MeegleExecutablePath: config.MeegleExecutablePath, CodexExecutablePath: config.CodexExecutablePath, CommandProxyURL: config.CommandProxyURL, CommandProxyNoProxy: config.CommandProxyNoProxy, CommandProxyUsername: config.CommandProxyUsername, CommandProxyPassword: config.CommandProxyPassword, CommandProxyTargets: config.CommandProxyTargets, GenbuExecutablePath: config.GenbuExecutablePath, GenbuExecutableAutoDetected: config.GenbuExecutableAutoDetected, RequirementMaterialsRoot: config.RequirementMaterialsRoot, RequirementMaterialsSubdirectory: config.RequirementMaterialsSubdirectory, MaterialsGitSync: config.MaterialsGitSync, CodexPluginMarketplaceSources: config.CodexPluginMarketplaceSources, SkillSources: config.SkillSources},
+		Integrations: integrationsShard{Schema: configShardSchema, AIRequirementNamingEnabled: config.AIRequirementNamingEnabled, AIRequirementNamingPrewarmEnabled: config.AIRequirementNamingPrewarmEnabled, AIRequirementNamingModel: config.AIRequirementNamingModel, MeegleProjects: config.MeegleProjects, MeegleDefaultSprintProjectKey: config.MeegleDefaultSprintProjectKey, LarkExecutablePath: config.LarkExecutablePath, LarkNotice: config.LarkNotice, MeegleExecutablePath: config.MeegleExecutablePath, CodexExecutablePath: config.CodexExecutablePath, CommandProxyURL: config.CommandProxyURL, CommandProxyNoProxy: config.CommandProxyNoProxy, CommandProxyUsername: config.CommandProxyUsername, CommandProxyPassword: config.CommandProxyPassword, CommandProxyTargets: config.CommandProxyTargets, GenbuExecutablePath: config.GenbuExecutablePath, GenbuExecutableAutoDetected: config.GenbuExecutableAutoDetected, RequirementMaterialsRoot: config.RequirementMaterialsRoot, RequirementMaterialsSubdirectory: config.RequirementMaterialsSubdirectory, MaterialsGitSync: config.MaterialsGitSync, CodexPluginMarketplaceSources: config.CodexPluginMarketplaceSources, SkillSources: config.SkillSources},
 		Appearance:   appearanceShard{Schema: configShardSchema, Theme: config.Theme, ToolVisibility: config.ToolVisibility, SidebarVisibility: config.SidebarVisibility, ShowTaskDetailGitActionGroup: config.ShowTaskDetailGitActionGroup, ShowTaskDetailPathActionGroup: config.ShowTaskDetailPathActionGroup, ShowWorkspaceGitActionGroup: config.ShowWorkspaceGitActionGroup, ShowWorkspacePathActionGroup: config.ShowWorkspacePathActionGroup, ShowTaskAreaCopyIcons: config.ShowTaskAreaCopyIcons, ShowTaskAreaBranchCopyIcons: config.ShowTaskAreaBranchCopyIcons, ShowTaskAreaRequirementCopyIcons: config.ShowTaskAreaRequirementCopyIcons, ShowTaskAreaProjectNameCopyIcons: config.ShowTaskAreaProjectNameCopyIcons},
 	}
 }
@@ -1274,6 +1276,8 @@ type gitShard struct {
 	GitExecutablePath       *string  "json:\"gitExecutablePath\""
 }
 type integrationsShard struct {
+	LarkExecutablePath                *string                               `json:"larkExecutablePath"`
+	LarkNotice                        *domain.LarkNoticeConfig              `json:"larkNotice,omitempty"`
 	Schema                            int                                   "json:\"schema\""
 	AIRequirementNamingEnabled        bool                                  "json:\"aiRequirementNamingEnabled\""
 	AIRequirementNamingPrewarmEnabled bool                                  "json:\"aiRequirementNamingPrewarmEnabled\""

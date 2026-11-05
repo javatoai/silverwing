@@ -2,7 +2,7 @@ package domain
 
 // Persisted schema versions are deliberately independent of the product version.
 const (
-	CurrentProductVersion            = "0.0.11"
+	CurrentProductVersion            = "0.0.12"
 	CurrentAppConfigSchemaVersion    = "6.0.0"
 	CurrentTaskManifestSchemaVersion = "2.0.0"
 	DefaultGroupID                   = "default"
@@ -225,6 +225,8 @@ type AppConfig struct {
 	BlockedGitWriteBranches                []string                       `json:"blockedGitWriteBranches"`
 	MeegleProjects                         []MeegleProjectConfig          `json:"meegleProjects"`
 	MeegleDefaultSprintProjectKey          *string                        `json:"meegleDefaultSprintProjectKey"`
+	LarkExecutablePath                     *string                        `json:"larkExecutablePath"`
+	LarkNotice                             *LarkNoticeConfig              `json:"larkNotice"`
 	MeegleExecutablePath                   *string                        `json:"meegleExecutablePath"`
 	CodexExecutablePath                    *string                        `json:"codexExecutablePath"`
 	CommandProxyURL                        *string                        `json:"commandProxyUrl"`

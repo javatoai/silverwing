@@ -34,6 +34,7 @@ func (s *app) view(c *ui.Context) {
 	s.observeRequirementIdentityJobs()
 	s.observeRequirementNamingPreparation()
 	s.observeTagJobs()
+	s.observeReleaseNotice()
 	if !s.localSkillsViewActive() || s.pageLocalReadReady() {
 		s.observeSkillsBrowserNavigation()
 	}

@@ -16,7 +16,7 @@ func TestRetiredCloudActionsCannotExecute(t *testing.T) {
 			t.Fatalf("retired action executable: %s", kind)
 		}
 	}
-	for _, kind := range []string{"cli.status", "cli.auth.start", "cli.auth.logout"} {
+	for _, kind := range []string{"cli.auth.start", "cli.auth.logout"} {
 		if _, err := a.Dispatch(context.Background(), Action{Kind: kind, Payload: map[string]any{"tool": "lark"}}); err == nil || !strings.Contains(strings.ToLower(err.Error()), "cli") && !strings.Contains(err.Error(), "Meegle") {
 			t.Fatalf("retired Lark %s: %v", kind, err)
 		}

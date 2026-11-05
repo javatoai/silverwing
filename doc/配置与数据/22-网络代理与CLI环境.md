@@ -61,3 +61,15 @@
 - [外部 CLI 与 Codex 集成](../技术架构/26-外部CLI与Codex集成.md)
 
 源码索引：`internal/executable/resolver.go`、`internal/platform/cli_resolution.go`、`internal/platform/cli.go`、`internal/platform/exec.go`、`internal/workspace/proxy_environment.go`、`internal/workspace/custom_command.go`、`internal/process/runner.go`、`internal/desktop/settings_environment_ui.go`、`internal/desktop/settings_save_proxy.go`、`internal/domain/models.go`、`internal/domain/validation.go`。
+
+## Lark 本人通知
+
+在「设置 → 工具与连接 → 命令行与账号 → Lark」检查命令、当前用户和通知机器人状态。两种通知都仅发送给当前 profile 下本地 CLI 返回的本人 open_id，不提供群或测试联系人配置。已有群、联系人配置保留但不参与发送。Lark 不使用 Silverwing 的网络代理设置。
+
+Tag 批次全部推送且 Genbu 编译成功后，点击「发送给自己」即可直接发送；「任务分支 → 分支信息」的服务分支复制按钮右侧提供发送分支通知给自己的图标，点击后分支信息窗口保持打开。两种入口都不再弹出通知确认框，准备和发送期间禁用重复点击，并显示发送结果。
+
+通知使用机器人身份。个人令牌过期不影响有效的本地身份缓存；缺失本人 open_id、应用不匹配或机器人不可用时停止发送。姓名缺失不阻止发送，卡片标题、需求链接文字和摘要均不拼接本人姓名。Tag 卡片标题为「申请发布UAT环境版本」；分支卡片标题为「上线分支通知」，沿用自适应宽屏、服务列 240px 和分支列自适应布局。
+
+发送成功后，两种入口都允许主动再次发送，产生新消息。每次再次发送绑定当前成功回执，同一请求重复提交不会多发。失败或结果未知时保留原卡片及幂等键重试；超过一小时或旧卡片内容不匹配时，应先在飞书核实结果，不自动换键重发。历史群和同事回执不会算作本人已收到。接口接受消息不代表已读。
+
+Windows npm 版继续使用同一 `@larksuite/cli` 安装内的原生 `lark-cli.exe`，保留结构化 JSON 参数。通知入口不会触发 Tag 构建、Git 推送或部署；个人登录授权和资料云同步不通过此入口恢复。

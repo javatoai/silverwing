@@ -179,6 +179,9 @@ func (c AppConfig) Validate() error {
 	if c.SchemaVersion != CurrentAppConfigSchemaVersion {
 		return fmt.Errorf("配置 schema 不受支持：%s", c.SchemaVersion)
 	}
+	if err := c.EffectiveLarkNotice().Validate(); err != nil {
+		return err
+	}
 	if c.AIRequirementNamingModel == "" || strings.TrimSpace(c.AIRequirementNamingModel) != c.AIRequirementNamingModel || strings.IndexFunc(c.AIRequirementNamingModel, unicode.IsSpace) >= 0 {
 		return fmt.Errorf("AI 命名模型不合法")
 	}

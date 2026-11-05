@@ -18,6 +18,9 @@ func (s *Service) executeCLI(ctx context.Context, kind string, payload map[strin
 	if _, ok := cliProxyTarget(tool); !ok {
 		return nil, fmt.Errorf("不支持的 CLI：%s", tool)
 	}
+	if tool == "lark" {
+		return s.larkCLIStatus(ctx, payloadBool(payload, "force"))
+	}
 	cfg, err := s.loadConfig()
 	if err != nil {
 		return nil, err

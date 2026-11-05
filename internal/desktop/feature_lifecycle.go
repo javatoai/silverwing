@@ -51,6 +51,7 @@ func runFeatureClosers(closers ...func() error) error {
 
 func (s *app) stopDesktopFeatures() {
 	s.stopAppUpdates()
+	s.stopReleaseNotices()
 	s.stopTaskTerminals()
 	s.closeMarkdownLinkFile()
 	s.taskFilesUnit.stopTaskFiles()
@@ -74,6 +75,9 @@ func (s *app) closeDesktopFeatures(runErr error) error {
 		}
 	}()
 	closers := []func() error{
+		func() error {
+			return runFeatureCleanup(featureCleanupStep{"退出前通知发送清理未完成", 10 * time.Second, s.closeReleaseNotices})
+		},
 		func() error {
 			return runFeatureCleanup(featureCleanupStep{"退出前更新检查清理未完成", 5 * time.Second, s.closeAppUpdates})
 		},

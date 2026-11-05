@@ -49,6 +49,7 @@ type actionForm struct {
 }
 
 type app struct {
+	releaseNotices         releaseNoticeController
 	taskTabExplicit        bool
 	mermaidInitializer     *mermaidInitializer
 	taskUnit               taskController

@@ -86,6 +86,8 @@ func (s *Service) persistDiscoveredCLIExecutable(ctx context.Context, cfg domain
 
 func setCLIConfiguredPath(config *domain.AppConfig, tool, path string) {
 	switch tool {
+	case "lark":
+		config.LarkExecutablePath = &path
 	case "git":
 		config.GitExecutablePath = &path
 	case "meegle":
@@ -100,6 +102,8 @@ func setCLIConfiguredPath(config *domain.AppConfig, tool, path string) {
 
 func cliConfiguredPath(cfg domain.AppConfig, tool string) *string {
 	switch tool {
+	case "lark":
+		return cfg.LarkExecutablePath
 	case "git":
 		return cfg.GitExecutablePath
 	case "meegle":
@@ -115,6 +119,8 @@ func cliConfiguredPath(cfg domain.AppConfig, tool string) *string {
 
 func cliProxyTarget(tool string) (domain.CommandProxyTarget, bool) {
 	switch tool {
+	case "lark":
+		return "", true // Supported CLI, with no SW proxy target.
 	case "git":
 		return domain.ProxyTargetGit, true
 	case "meegle":
@@ -139,6 +145,8 @@ func cliEnvironmentContext(ctx context.Context, tool, command string) map[string
 func cliEnvironmentWithRunner(ctx context.Context, runner executable.Runner, tool, command string) map[string]string {
 	var resolvedTool executable.Tool
 	switch tool {
+	case "lark":
+		resolvedTool = executable.ToolLark
 	case "codex":
 		resolvedTool = executable.ToolCodex
 	case "git":

@@ -26,7 +26,7 @@ var settingsSections = []settingsSection{
 
 func settingsCanonicalPage(key string) string {
 	switch key {
-	case "cli-meegle", "cli-genbu", "cli-codex", "cli-git":
+	case "cli-meegle", "cli-lark", "cli-genbu", "cli-codex", "cli-git":
 		return "cli-tools"
 	case "branch-naming":
 		return "task-creation"
@@ -267,7 +267,7 @@ func (s *app) settingsPageContent(c *ui.Context, p palette) {
 }
 
 func settingsCLITitle(tool string) string {
-	return map[string]string{"git": "Git", "codex": "Codex CLI", "meegle": "Meegle CLI", "genbu": "Genbu CLI"}[tool]
+	return map[string]string{"git": "Git", "codex": "Codex CLI", "meegle": "Meegle CLI", "lark": "Lark CLI", "genbu": "Genbu CLI"}[tool]
 }
 
 func (s *app) settingsCommandTools(c *ui.Context, p palette) {

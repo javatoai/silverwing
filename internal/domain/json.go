@@ -70,7 +70,7 @@ func stripRetiredCloudConfig(data []byte, target reflect.Type) ([]byte, error) {
 		return data, err
 	}
 	changed := false
-	for _, key := range []string{"larkExecutablePath", "requirementMaterialsFeishuTarget"} {
+	for _, key := range []string{"requirementMaterialsFeishuTarget"} {
 		if _, exists := fields[key]; exists {
 			delete(fields, key)
 			changed = true

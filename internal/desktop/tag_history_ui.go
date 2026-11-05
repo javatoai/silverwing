@@ -140,6 +140,21 @@ func (s *app) renderTagHistoryGroup(c *ui.Context, p palette, state *tagHistoryV
 				text := s.tagHistoryAnnouncement(group)
 				s.copyTextToClipboard(c.Services(), text, s.tagHistoryAnnouncementCopiedMessage(group, text))
 			}
+			sending := s.releaseNotices.running()
+			enabled := !s.busy && !sending && s.releaseNoticeReady(group)
+			send := ui.ButtonBase(c.Key("send-announcement")).Row().Shrink(0).Height(28).Padding(0, 8).Gap(5).AlignItems(ui.Center).
+				Background(p.surface).Radius(8).Border(1, p.line).Label(s.noticeButtonText("", group.Item.GroupID) + " · " + group.Item.GroupID).Disabled(!enabled).
+				Tooltip("全部 Tag 推送且 Genbu 编译成功后，直接发送给自己")
+			if send.Hovered() && enabled {
+				send.Background(p.soft)
+			}
+			send.Children(func() {
+				icon(c, "launch", 14, p.muted)
+				label(c, s.noticeButtonText("", group.Item.GroupID), 11, p.muted).NoWrap()
+			})
+			if send.Clicked() {
+				s.sendTagNotice(state, group)
+			}
 		})
 		if progress := s.tagBatchProgress(group.Item.GroupID); progress.Total > 0 {
 			text := fmt.Sprintf("本次操作 %d 项 · 执行中 %d · 完成 %d · 失败 %d", progress.Total, progress.Running, progress.Completed, progress.Failed)

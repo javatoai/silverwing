@@ -36,6 +36,8 @@ var settingsSearchEntries = []settingsSearchEntry{
 	{"cli-git", "Git 可执行文件", "gitExecutablePath 命令路径"},
 	{"cli-codex", "Codex CLI 可执行文件", "codexExecutablePath 命令路径"},
 	{"cli-meegle", "Meegle CLI 可执行文件", "meegleExecutablePath 命令路径"},
+	{"cli-lark", "Lark CLI 可执行文件", "larkExecutablePath 命令路径 飞书机器人"},
+	{"cli-lark", "Lark CLI 状态", "飞书 通知 机器人 身份"},
 	{"cli-genbu", "Genbu CLI 可执行文件", "genbuExecutablePath 命令路径"},
 	{"basic", "界面主题", "外观 浅色 深色 系统 theme"}, {"basic", "折叠工作空间导航", "最左侧 图标 宽度"},
 	{"tool-visibility", "侧边栏展示", "导航 需求 生产发布 服务 入口"}, {"tool-visibility", "研发工具", "快捷工具 JSON 日期时间 时间戳 文本对比 diff 杀端口 端口占用"},

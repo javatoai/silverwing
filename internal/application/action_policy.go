@@ -34,6 +34,10 @@ func DescribeAction(kind string) ActionDescriptor {
 // Each operation has exactly one policy record. Adding a task-menu operation
 // therefore does not require independent scope, refresh and label lists.
 var actionDescriptors = map[string]ActionDescriptor{
+	"task.branch-notice.prepare":                   {Kind: "task.branch-notice.prepare", Label: "准备上线分支通知", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},
+	"task.branch-notice.send":                      {Kind: "task.branch-notice.send", Label: "发送上线分支通知", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},
+	"tag.notice.prepare":                           {Kind: "tag.notice.prepare", Label: "准备发版通知", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},
+	"tag.notice.send":                              {Kind: "tag.notice.send", Label: "发送发版通知", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},
 	"task.services.pods":                           {Kind: "task.services.pods", Label: "读取服务 Pod", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},
 	"task.services.config":                         {Kind: "task.services.config", Label: "读取服务配置", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},
 	"task.files.list":                              {Kind: "task.files.list", Label: "读取任务文件", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},

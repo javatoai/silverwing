@@ -115,6 +115,9 @@ func (a *App) Dispatch(ctx context.Context, action Action) (ActionResult, error)
 	case "codex.run":
 		return a.openCodex(ctx, action)
 	}
+	if strings.HasPrefix(action.Kind, "task.branch-notice.") {
+		return a.branchNoticeAction(ctx, action)
+	}
 	if strings.HasPrefix(action.Kind, "task.services.") {
 		return a.taskServicesAction(ctx, action)
 	}
@@ -135,6 +138,9 @@ func (a *App) Dispatch(ctx context.Context, action Action) (ActionResult, error)
 	}
 	if strings.HasPrefix(action.Kind, "skills.") || strings.HasPrefix(action.Kind, "codex.extensions") || strings.HasPrefix(action.Kind, "codex.ai/") || strings.HasPrefix(action.Kind, "cli.") || strings.HasPrefix(action.Kind, "logs.") || strings.HasPrefix(action.Kind, "git.environment") || strings.HasPrefix(action.Kind, "development-tools/") || action.Kind == "terminal.resolve" || action.Kind == "diagnostics.export" || action.Kind == "proxy.test" || action.Kind == "git.version" || strings.HasPrefix(action.Kind, "update.") {
 		return a.platformAction(ctx, action)
+	}
+	if strings.HasPrefix(action.Kind, "tag.notice.") {
+		return a.releaseNoticeAction(ctx, action)
 	}
 	if strings.HasPrefix(action.Kind, "tag.") || strings.HasPrefix(action.Kind, "agent.") {
 		return a.deliveryAction(ctx, action)

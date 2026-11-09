@@ -48,7 +48,21 @@ type shellExecuteInfo struct {
 	Monitor, Process                  uintptr
 }
 
-func (nativeSystem) activate(ctx context.Context, uri string) error {
+func (s nativeSystem) activate(ctx context.Context, uri string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	legacy, err := s.legacyStoreAlias()
+	if err != nil {
+		return err
+	}
+	if legacy {
+		return fmt.Errorf("%w（旧桌面启动别名需要更新）", errAssociationMissing)
+	}
+	return activateInUserContext(ctx, uri, currentProcessElevated, activateNative, s.activateDesktop)
+}
+
+func activateNative(ctx context.Context, uri string) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	initialized, _, _ := initializeCOM.Call(0, 0x6) // STA, disable OLE1 DDE.

@@ -4,6 +4,7 @@ package codexprotocol
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -113,6 +114,48 @@ func TestStoreAliasAllowsZeroBytesAndRejectsCLI(t *testing.T) {
 	self, _ := os.Executable()
 	if desktopGUI(self) {
 		t.Fatal("console test binary treated as GUI")
+	}
+}
+
+func TestStoreDiscoveryPrefersManifestDesktopOverExecutionAlias(t *testing.T) {
+	local := t.TempDir()
+	installation := filepath.Join(local, "package")
+	desktop := filepath.Join(installation, "app", "ChatGPT.exe")
+	if err := os.MkdirAll(filepath.Dir(desktop), 0700); err != nil {
+		t.Fatal(err)
+	}
+	image := make([]byte, 512)
+	copy(image, "MZ")
+	binary.LittleEndian.PutUint32(image[0x3c:], 0x80)
+	copy(image[0x80:], "PE\x00\x00")
+	binary.LittleEndian.PutUint16(image[0x84:], 0x8664)
+	binary.LittleEndian.PutUint16(image[0x94:], 240)
+	binary.LittleEndian.PutUint16(image[0x98:], 0x20b)
+	binary.LittleEndian.PutUint16(image[0x98+68:], 2)
+	binary.LittleEndian.PutUint32(image[0x98+108:], 16)
+	if err := os.WriteFile(desktop, image, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if !desktopGUI(desktop) {
+		t.Fatal("invalid GUI fixture")
+	}
+	entry := storeAlias{Family: "OpenAI.Codex_2p2nqsd0c76g0", Alias: "chatgpt-desktop.exe", InstallLocation: installation, Executable: "app/ChatGPT.exe"}
+	alias := filepath.Join(local, "Microsoft", "WindowsApps", entry.Family, entry.Alias)
+	if err := os.MkdirAll(filepath.Dir(alias), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(alias, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	command, err := storeDesktopCommand(local, []storeAlias{entry})
+	if err != nil || command.Executable != desktop || !reflect.DeepEqual(command.Arguments, []string{"--single-argument"}) {
+		t.Fatal("alias may select another Electron profile", command, err)
+	}
+	for _, path := range []string{"../outside/ChatGPT.exe", "app/resources/codex.exe", "missing.exe", desktop} {
+		entry.Executable = path
+		if _, err := storeDesktopCommand(local, []storeAlias{entry}); err == nil {
+			t.Fatal("unconfirmed entry accepted", path)
+		}
 	}
 }
 

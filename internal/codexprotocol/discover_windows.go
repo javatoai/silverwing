@@ -17,7 +17,7 @@ import (
 	"silverwing-go/internal/process"
 )
 
-// Read only the main desktop application's declared aliases, never the CLI's bin directory.
+// Read only the main desktop application's manifest, never the CLI's bin directory.
 const storeDiscoveryScript = `$ErrorActionPreference='Stop'
 $entries=@(Get-AppxPackage -Name OpenAI.Codex | ForEach-Object {
  $package=$_
@@ -27,7 +27,7 @@ $entries=@(Get-AppxPackage -Name OpenAI.Codex | ForEach-Object {
   foreach($extension in $app.Extensions.Extension) {
    if($extension.Category -eq 'windows.appExecutionAlias') {
     foreach($alias in $extension.AppExecutionAlias.ExecutionAlias) {
-     [pscustomobject]@{family=$package.PackageFamilyName;alias=$alias.Alias}
+     [pscustomobject]@{family=$package.PackageFamilyName;alias=$alias.Alias;installLocation=$package.InstallLocation;executable=[string]$app.Executable}
     }
    }
   }
@@ -36,8 +36,10 @@ $entries=@(Get-AppxPackage -Name OpenAI.Codex | ForEach-Object {
 ConvertTo-Json -InputObject $entries -Compress`
 
 type storeAlias struct {
-	Family string `json:"family"`
-	Alias  string `json:"alias"`
+	Family          string `json:"family"`
+	Alias           string `json:"alias"`
+	InstallLocation string `json:"installLocation"`
+	Executable      string `json:"executable"`
 }
 
 func storeDesktopCommand(local string, aliases []storeAlias) (desktopCommand, error) {
@@ -45,6 +47,21 @@ func storeDesktopCommand(local string, aliases []storeAlias) (desktopCommand, er
 		if alias.Family != "OpenAI.Codex_2p2nqsd0c76g0" ||
 			(alias.Alias != "chatgpt-desktop.exe" && alias.Alias != "codex-desktop.exe") {
 			continue
+		}
+		if alias.InstallLocation != "" || alias.Executable != "" {
+			// Prefer the installed manifest's GUI entry over a retained execution
+			// alias. This also follows versioned package paths after an upgrade.
+			if !filepath.IsAbs(alias.InstallLocation) || filepath.IsAbs(alias.Executable) {
+				return desktopCommand{}, errors.New("Codex 安装清单中的桌面入口路径无效")
+			}
+			path := filepath.Join(alias.InstallLocation, alias.Executable)
+			relative, err := filepath.Rel(alias.InstallLocation, path)
+			base := filepath.Base(path)
+			if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) ||
+				(!strings.EqualFold(base, "ChatGPT.exe") && !strings.EqualFold(base, "Codex.exe")) || !desktopGUI(path) {
+				return desktopCommand{}, errors.New("无法确认 Codex 安装清单中的桌面程序")
+			}
+			return desktopCommand{Executable: path, Arguments: []string{"--single-argument"}}, nil
 		}
 		path := filepath.Join(local, "Microsoft", "WindowsApps", alias.Family, alias.Alias)
 		// AppExecutionAlias files are legitimate zero-byte reparse points.

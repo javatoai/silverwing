@@ -87,10 +87,11 @@ fi
 (
   cd "$repo_root"
   GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -tags mygo_noinspector -ldflags "$ldflags" -o "$macos_dir/$profile_executable" ./cmd/silverwing
+  GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -tags mygo_noinspector -ldflags "$ldflags" -o "$macos_dir/sw" ./cmd/sw
   mkdir -p "$payload/Contents/Helpers"
   GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -tags mygo_noinspector -ldflags "$ldflags" -o "$payload/Contents/Helpers/$profile_executable-updater" ./cmd/silverwing-updater
 )
-chmod 755 "$macos_dir/$profile_executable"
+chmod 755 "$macos_dir/$profile_executable" "$macos_dir/sw"
 
 # Include MyGO Terminal in PathResources before signing the bundle.
 (
@@ -147,7 +148,7 @@ EOF
 
 (
   cd "$repo_root"
-  go run ./scripts/licenses -out "$notice_root/go" -tags mygo_noinspector ./cmd/silverwing
+  go run ./scripts/licenses -out "$notice_root/go" -tags mygo_noinspector ./cmd/silverwing ./cmd/sw
 )
 cat > "$notice_root/THIRD-PARTY-NOTICES.txt" <<'EOF'
 Silverwing native package third-party notices

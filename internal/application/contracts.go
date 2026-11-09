@@ -66,26 +66,31 @@ type Group struct {
 }
 type Skill struct{ Name, Description, Path, Source string }
 type TagRecord struct {
-	ID              string                     `json:"id"`
-	TaskID          string                     `json:"taskId"`
-	FolderName      string                     `json:"folderName"`
-	ServiceID       string                     `json:"serviceId"`
-	ServiceName     string                     `json:"serviceName"`
-	ModuleID        string                     `json:"moduleId"`
-	BatchID         string                     `json:"batchId"`
-	CreatedAt       string                     `json:"createdAt"`
-	SourceBranch    string                     `json:"sourceBranch"`
-	TargetBranch    string                     `json:"targetBranch"`
-	Remote          string                     `json:"remote"`
-	Tag             string                     `json:"tag"`
-	State           string                     `json:"state"`
-	RetryKind       string                     `json:"retryKind"`
-	Updated         string                     `json:"updated"`
-	Detail          string                     `json:"detail"`
-	ConflictSummary string                     `json:"conflictSummary"`
-	ConflictFiles   []string                   `json:"conflictFiles"`
-	Guidance        string                     `json:"guidance"`
-	GenbuStatus     domain.GenbuTagProbeStatus `json:"genbuStatus"`
+	ID                string                     `json:"id"`
+	TaskID            string                     `json:"taskId"`
+	FolderName        string                     `json:"folderName"`
+	ServiceID         string                     `json:"serviceId"`
+	ServiceName       string                     `json:"serviceName"`
+	ModuleID          string                     `json:"moduleId"`
+	BatchID           string                     `json:"batchId"`
+	CreatedAt         string                     `json:"createdAt"`
+	SourceBranch      string                     `json:"sourceBranch"`
+	TargetBranch      string                     `json:"targetBranch"`
+	SourceSHA         string                     `json:"sourceSha,omitempty"`
+	TargetSHA         string                     `json:"targetSha,omitempty"`
+	Remote            string                     `json:"remote"`
+	Tag               string                     `json:"tag"`
+	State             string                     `json:"state"`
+	RetryKind         string                     `json:"retryKind"`
+	Updated           string                     `json:"updated"`
+	Detail            string                     `json:"detail"`
+	ConflictSummary   string                     `json:"conflictSummary"`
+	ConflictFiles     []string                   `json:"conflictFiles"`
+	Conflict          *domain.TagConflict        `json:"conflict,omitempty"`
+	BlockedBy         string                     `json:"blockedBy,omitempty"`
+	PreflightWorktree string                     `json:"preflightWorktree,omitempty"`
+	Guidance          string                     `json:"guidance"`
+	GenbuStatus       domain.GenbuTagProbeStatus `json:"genbuStatus"`
 }
 
 type TagHistoryMutationResult struct {

@@ -27,6 +27,7 @@ const (
 	TagJobPhaseCompleted     TagJobPhase = "completed"
 	TagJobPhaseFailed        TagJobPhase = "failed"
 	TagJobPhaseConflict      TagJobPhase = "conflict"
+	TagJobPhaseBlocked       TagJobPhase = "blocked"
 	TagJobPhaseCanceled      TagJobPhase = "canceled"
 )
 

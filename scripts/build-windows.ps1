@@ -145,9 +145,10 @@ try {
     if ($PayloadDirectory) {
         $payloadSource = (Resolve-Path -LiteralPath $PayloadDirectory).Path
         if (-not (Test-Path -LiteralPath $payloadSource -PathType Container)) { throw "Payload path is not a directory: $payloadSource" }
-        if (Test-Path -LiteralPath (Join-Path $payloadSource ($productProfile.ExecutableName + '-cli.exe'))) { throw 'Reusable payload contains the removed Silverwing CLI; provide a GUI-only payload' }
+        if (Test-Path -LiteralPath (Join-Path $payloadSource ($productProfile.ExecutableName + '-cli.exe'))) { throw 'Reusable payload contains the removed legacy CLI' }
         foreach ($required in @(
             $guiExecutable,
+            'sw.exe',
             'resources/native/pdfium.dll',
             'resources/ghostty-vt.dll',
             'resources/native-mermaid/windows-x64/mmdr.exe'
@@ -204,6 +205,7 @@ try {
             -IconPath (Join-Path $repoRoot 'internal/desktop/assets/app-icon.png')
         $iconObjectCreated = $true
         Invoke-Go @('build', '-trimpath', '-tags', 'mygo_noinspector', '-ldflags', "$commonLdflags -H=windowsgui", '-o', (Join-Path $stage $guiExecutable), './cmd/silverwing')
+        Invoke-Go @('build', '-trimpath', '-tags', 'mygo_noinspector', '-ldflags', $commonLdflags, '-o', (Join-Path $stage 'sw.exe'), './cmd/sw')
 		Invoke-Go @('build', '-trimpath', '-tags', 'mygo_noinspector', '-ldflags', "$commonLdflags -H=windowsgui", '-o', (Join-Path $resourceRoot "$($productProfile.ExecutableName)-updater.exe"), './cmd/silverwing-updater')
     }
     finally {
@@ -259,7 +261,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $pdfiumExtract 'licenses') -Destination (Join-Path $pdfiumNotices 'licenses') -Recurse
     Set-Content -LiteralPath (Join-Path $pdfiumNotices 'SOURCE.txt') -Value "PDFium 157.0.8086.0 (chromium/8086)`nhttps://github.com/bblanchon/pdfium-binaries/releases/tag/chromium%2F8086`nArchive: pdfium-win-x64.tgz`nArchive SHA-256: 1fd8af952832dbb0eb16d9249f68fe09e5f5ebf7c3dd9f6066ea2720cc28487d`nDLL SHA-256: 1f2aee4286b8cf0413ab4562b7121aa454f9cfd9afd6ca8609bcef80927b3f80`nThe distribution LICENSE and all dependency license files are reproduced below." -Encoding utf8
 
-    Invoke-Go @('run', './scripts/licenses', '-out', (Join-Path $noticeRoot 'go'), '-tags', 'mygo_noinspector', './cmd/silverwing')
+    Invoke-Go @('run', './scripts/licenses', '-out', (Join-Path $noticeRoot 'go'), '-tags', 'mygo_noinspector', './cmd/silverwing', './cmd/sw')
     $notice = @'
 Silverwing native package third-party notices
 

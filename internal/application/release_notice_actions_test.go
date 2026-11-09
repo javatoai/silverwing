@@ -3,6 +3,8 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -56,6 +58,28 @@ func TestReleaseNoticeWholeBatchAndConfigurationGate(t *testing.T) {
 	changed, e := a.releaseNoticeBatch(context.Background(), action, false)
 	if e != nil || changed.scope == first.scope {
 		t.Fatal("changed batch reused notice scope", e)
+	}
+	fakeGenbu, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SILVERWING_TEST_NOTICE_GENBU", "1")
+	cfg.GenbuExecutablePath = &fakeGenbu
+	cfg.Groups[0].Services[0].GenbuServiceName = "new-alias"
+	if e = a.Config.Save(cfg); e != nil {
+		t.Fatal(e)
+	}
+	cfg, _ = a.Config.Load()
+	action.Payload["noticeConfigIdentity"] = ReleaseNoticeConfigIdentity(cfg)
+	if _, e = a.releaseNoticeBatch(context.Background(), action, true); e != nil {
+		t.Fatal("fixture did not retain the fresh cache from the old alias", e)
+	}
+	t.Setenv("SILVERWING_TEST_NOTICE_GENBU_CAS", filepath.Join(scope.TaskPath, "tag-operations", first.operations[0].OperationID+".json"))
+	if _, e = a.readReleaseNoticeBatch(context.Background(), action, true, true); e == nil || !strings.Contains(e.Error(), "编译尚未全部成功") {
+		t.Fatal("CLI notification accepted the cache of the previous Genbu alias", e)
+	}
+	if _, e = a.releaseNoticeBatch(context.Background(), action, false); e != nil {
+		t.Fatal("fixture did not simulate a successful old probe winning the cache write", e)
 	}
 	cfg.Groups[0].Services[0].GenbuProbeEnabled = false
 	if e = a.Config.Save(cfg); e != nil {

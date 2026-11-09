@@ -41,6 +41,16 @@ func (a *App) systemAction(ctx context.Context, action Action) (ActionResult, er
 		return ActionResult{Message: "开发工具已打开", Path: target}, launchToolArguments(ctx, plan.Executable, plan.Arguments...)
 	}
 	path := actionPath(action)
+	if operationID := textPayload(action, "operationId"); action.Kind == "system.ide" && operationID != "" {
+		config, err := a.Config.Load()
+		if err != nil {
+			return ActionResult{}, err
+		}
+		path, err = a.delivery(config).OpenTagConflictWorkspace(ctx, action.TaskID, operationID)
+		if err != nil {
+			return ActionResult{}, err
+		}
+	}
 	if path == "" {
 		return ActionResult{}, errors.New("路径不能为空")
 	}

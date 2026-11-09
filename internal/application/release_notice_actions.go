@@ -37,6 +37,10 @@ type releaseNoticeBatch struct {
 
 // Load the complete persisted batch, never a client-provided or filtered list.
 func (a *App) releaseNoticeBatch(ctx context.Context, action Action, refresh bool) (releaseNoticeBatch, error) {
+	return a.readReleaseNoticeBatch(ctx, action, refresh, false)
+}
+
+func (a *App) readReleaseNoticeBatch(ctx context.Context, action Action, refresh, forceProbe bool) (releaseNoticeBatch, error) {
 	var b releaseNoticeBatch
 	c, e := a.Config.Load()
 	if e != nil {
@@ -90,7 +94,11 @@ func (a *App) releaseNoticeBatch(ctx context.Context, action Action, refresh boo
 		if op.State != domain.TagOperationSuccess || strings.TrimSpace(value(op.Tag)) == "" {
 			return b, errors.New("本批次的 Tag 尚未全部推送成功")
 		}
-		if refresh && !releaseNoticeProbeFresh(op.GenbuStatus) {
+		if forceProbe {
+			if e = a.delivery(c).CheckLiveTagBuild(ctx, action.TaskID, op); e != nil {
+				return b, e
+			}
+		} else if refresh && !releaseNoticeProbeFresh(op.GenbuStatus) {
 			if _, e = a.delivery(c).Status(ctx, action.TaskID, op.OperationID); e != nil {
 				return b, fmt.Errorf("核对构建状态：%w", e)
 			}
@@ -204,23 +212,25 @@ func noticeSelection(action Action) (releasenotice.Selection, error) {
 }
 
 func (a *App) noticeMetadata(ctx context.Context, link string) (integrations.RequirementMetadataReadResult, error) {
+	m, err := a.readNoticeMetadata(ctx, link, false)
+	if err == nil && strings.TrimSpace(value(m.Title)) == "" {
+		err = errors.New("未取得需求标题，请刷新需求后重试")
+	}
+	return m, err
+}
+
+func (a *App) readNoticeMetadata(ctx context.Context, link string, force bool) (integrations.RequirementMetadataReadResult, error) {
 	var m integrations.RequirementMetadataReadResult
 	if a.Integrations == nil {
 		return m, errors.New("需求元数据服务不可用")
 	}
-	metadata, e := a.Integrations.Execute(ctx, "requirements.metadata", map[string]any{"url": link})
+	metadata, e := a.Integrations.Execute(ctx, "requirements.metadata", map[string]any{"url": link, "force": force})
 	if e != nil {
 		return m, fmt.Errorf("读取需求标题失败：%w", e)
 	}
-	data, e := json.Marshal(metadata)
-	if e != nil {
-		return m, e
-	}
-	if e = json.Unmarshal(data, &m); e != nil {
-		return m, e
-	}
-	if strings.TrimSpace(value(m.Title)) == "" {
-		return m, errors.New("未取得需求标题，请刷新需求后重试")
+	m, ok := metadata.(integrations.RequirementMetadataReadResult)
+	if !ok {
+		return m, errors.New("需求元数据响应类型无效")
 	}
 	return m, nil
 }

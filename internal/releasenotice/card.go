@@ -10,17 +10,30 @@ import (
 func SessionCard(s Session) (string, error) {
 	switch s.Kind {
 	case "":
-		return Card(s.Title, s.URL, s.Rows)
+		return Card(s.Title, s.URL, s.Identity.Name, s.Rows)
 	case Branches:
 		return BranchCard(s.Title, s.URL, s.Rows)
 	default:
 		return "", errors.New("通知类型无法识别")
 	}
 }
-func Card(title, link string, rows []Row) (string, error) {
+func Card(title, link, applicant string, rows []Row) (string, error) {
+	return renderUATCard(title, link, applicant, rows, false)
+}
+
+// applicantInBody reproduces the saved payload of an earlier notification.
+func renderUATCard(title, link, applicant string, rows []Row, applicantInBody bool) (string, error) {
 	content, e := noticeLink(title, link)
 	if e != nil {
 		return "", e
+	}
+	header := "申请发布UAT环境版本"
+	if name := strings.Join(strings.Fields(applicant), " "); name != "" {
+		if applicantInBody {
+			content += "\n申请人：" + escapeNoticeText.Replace(name)
+		} else {
+			header = name + "：" + header
+		}
 	}
 	if len(rows) == 0 {
 		return "", errors.New("本批次没有可通知的 Tag")
@@ -32,7 +45,6 @@ func Card(title, link string, rows []Row) (string, error) {
 		}
 		cells = append(cells, map[string]string{"service": r.Service, "version": r.Version})
 	}
-	header := "申请发布UAT环境版本"
 	return marshalNoticeCard(header, header+"｜"+title, "default", []any{
 		map[string]any{"tag": "markdown", "content": content, "text_size": "normal"},
 		noticeTable("version", "UAT版本", cells),
@@ -60,6 +72,9 @@ func BranchCard(title, link string, rows []Row) (string, error) {
 		noticeTable("branch", "服务分支", cells),
 	})
 }
+
+var escapeNoticeText = strings.NewReplacer("&", "&amp;", "<", "&#60;", ">", "&#62;", "[", "&#91;", "]", "&#93;", "*", "&#42;", "_", "&#95;", "~", "&#126;", "`", "&#96;", "\\", "&#92;")
+
 func noticeLink(title, link string) (string, error) {
 	if strings.TrimSpace(title) == "" {
 		return "", errors.New("需求标题为空")
@@ -68,8 +83,7 @@ func noticeLink(title, link string) (string, error) {
 	if e != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
 		return "", errors.New("任务缺少有效的需求链接")
 	}
-	escape := strings.NewReplacer("&", "&amp;", "<", "&#60;", ">", "&#62;", "[", "&#91;", "]", "&#93;", "*", "&#42;", "_", "&#95;", "~", "&#126;")
-	return "**[" + escape.Replace(title) + "](" + strings.NewReplacer("(", "%28", ")", "%29").Replace(u.String()) + ")**", nil
+	return "**[" + escapeNoticeText.Replace(title) + "](" + strings.NewReplacer("(", "%28", ")", "%29").Replace(u.String()) + ")**", nil
 }
 func noticeTable(valueKey, title string, rows []map[string]string) map[string]any {
 	serviceWidth, valueWidth := "52%", "48%"

@@ -125,6 +125,28 @@ func newKey() (string, error) {
 // Send holds the per-notice OS lock across receipts and RPC. A crash leaves
 // "sending", which is uncertain; an explicit retry retains the original key.
 func (s Store) Send(ctx context.Context, id string, choice Selection, g Gateway, validate func(context.Context, Session) error) (out Session, err error) {
+	return s.withVerifiedSession(ctx, id, g, validate, func(out *Session) error {
+		card, err := SessionCard(*out)
+		if err != nil {
+			return err
+		}
+		// Keep the original payload and key for either earlier UAT layout.
+		reuseCard := false
+		if receipt, ok := out.LatestReceipt(); ok && out.Kind == "" && receipt.Card != card {
+			for _, applicant := range []string{"", out.Identity.Name} {
+				legacy, err := renderUATCard(out.Title, out.URL, applicant, out.Rows, true)
+				if err == nil && receipt.Card == legacy {
+					reuseCard = true
+					break
+				}
+			}
+		}
+		_, _, err = s.sendReceipt(ctx, out, out.Identity.OpenID, card, choice, reuseCard, g)
+		return err
+	})
+}
+
+func (s Store) withVerifiedSession(ctx context.Context, id string, g Gateway, validate func(context.Context, Session) error, send func(*Session) error) (out Session, err error) {
 	err = s.Locked(id, func() error {
 		var e error
 		out, e = s.load(id)
@@ -147,70 +169,78 @@ func (s Store) Send(ctx context.Context, id string, choice Selection, g Gateway,
 		if identity.AppID != out.Identity.AppID || identity.OpenID != out.Identity.OpenID {
 			return errors.New("当前 Lark 账号已变化，请重新发起通知")
 		}
-		card, e := SessionCard(out)
-		if e != nil {
-			return e
-		}
-		if e = ctx.Err(); e != nil {
-			return e
-		}
-		idx := -1
-		for n := len(out.Receipts) - 1; n >= 0; n-- {
-			if r := out.Receipts[n]; r.ChatID == "" && r.OpenID == identity.OpenID {
-				idx = n
-				break
-			}
-		}
-		if choice.Resend {
-			if idx < 0 || choice.ResendAfter == "" {
-				return errors.New("再次发送缺少原通知成功回执")
-			}
-			// Replays of the same explicit click cannot create another message.
-			if out.Receipts[idx].Key != choice.ResendAfter {
-				return nil
-			}
-			if out.Receipts[idx].State != "sent" {
-				return errors.New("原通知尚未确认发送成功，请先核实或重试")
-			}
-		}
-		if idx >= 0 && !choice.Resend {
-			r := out.Receipts[idx]
-			if r.State == "sent" || !choice.Retry {
-				return nil
-			}
-			if r.Card != card {
-				return errors.New("待重试卡片内容已变化，请先在飞书核实原消息")
-			}
-			if age := time.Since(r.StartedAt); age < 0 || age >= time.Hour {
-				return errors.New("已超过一小时去重窗口，请在飞书核实消息结果")
-			}
-		} else {
-			key, e := newKey()
-			if e != nil {
-				return e
-			}
-			if out.Kind == Branches {
-				key = strings.Replace(key, "uat-card-", "branch-card-", 1)
-			}
-			out.Receipts = append(out.Receipts, Receipt{OpenID: identity.OpenID, Key: key, Card: card, StartedAt: time.Now().UTC()})
-			idx = len(out.Receipts) - 1
-		}
-		r := &out.Receipts[idx]
-		r.State, r.Error = "sending", ""
-		if e = s.save(out); e != nil {
-			return e
-		}
-		if e = ctx.Err(); e != nil {
-			return e
-		}
-		answer := g.Send(ctx, identity.OpenID, r.Card, r.Key)
-		r.MessageID, r.Error, r.State = answer.MessageID, answer.Error, "failed"
-		if answer.MessageID != "" && answer.Error == "" {
-			r.State = "sent"
-		} else if answer.Unknown {
-			r.State = "unknown"
-		}
-		return s.save(out)
+		out.Identity = identity
+		return send(&out)
 	})
 	return
+}
+
+type receiptRetryBlockedError string
+
+func (e receiptRetryBlockedError) Error() string { return string(e) }
+
+func (s Store) sendReceipt(ctx context.Context, out *Session, recipient, card string, choice Selection, reuseCard bool, g Gateway) (Receipt, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return Receipt{}, false, err
+	}
+	idx := -1
+	for n := len(out.Receipts) - 1; n >= 0; n-- {
+		if r := out.Receipts[n]; r.ChatID == "" && r.OpenID == recipient {
+			idx = n
+			break
+		}
+	}
+	if choice.Resend {
+		if idx < 0 || choice.ResendAfter == "" {
+			return Receipt{}, false, errors.New("再次发送缺少原通知成功回执")
+		}
+		// Replays of the same explicit click cannot create another message.
+		if out.Receipts[idx].Key != choice.ResendAfter {
+			return out.Receipts[idx], true, nil
+		}
+		if out.Receipts[idx].State != "sent" {
+			return out.Receipts[idx], false, errors.New("原通知尚未确认发送成功，请先核实或重试")
+		}
+	}
+	if idx >= 0 && !choice.Resend {
+		r := out.Receipts[idx]
+		if r.State == "sent" || !choice.Retry {
+			return r, true, nil
+		}
+		if r.Card != card && !reuseCard {
+			return r, false, receiptRetryBlockedError("待重试卡片内容已变化，请先在飞书核实原消息")
+		}
+		if r.Card == "" || r.Key == "" {
+			return r, false, receiptRetryBlockedError("原通知缺少卡片或幂等键，请先在飞书核实消息")
+		}
+		if age := time.Since(r.StartedAt); age < 0 || age >= time.Hour {
+			return r, false, receiptRetryBlockedError("已超过一小时去重窗口，请在飞书核实消息结果")
+		}
+	} else {
+		key, err := newKey()
+		if err != nil {
+			return Receipt{}, false, err
+		}
+		if out.Kind == Branches {
+			key = strings.Replace(key, "uat-card-", "branch-card-", 1)
+		}
+		out.Receipts = append(out.Receipts, Receipt{OpenID: recipient, Key: key, Card: card, StartedAt: time.Now().UTC()})
+		idx = len(out.Receipts) - 1
+	}
+	r := &out.Receipts[idx]
+	r.State, r.Error = "sending", ""
+	if err := s.save(*out); err != nil {
+		return *r, false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return *r, false, err
+	}
+	answer := g.Send(ctx, recipient, r.Card, r.Key)
+	r.MessageID, r.Error, r.State = answer.MessageID, answer.Error, "failed"
+	if answer.MessageID != "" && answer.Error == "" {
+		r.State = "sent"
+	} else if answer.Unknown {
+		r.State = "unknown"
+	}
+	return *r, false, s.save(*out)
 }

@@ -190,6 +190,9 @@ func (s *app) ensureSettingsPageData() {
 		s.act("codex.extensions/mcp/status", "", "", "", "", "", s.settingsMCPPayload(nil))
 	case "cli-tools":
 		s.requestSettingsCLIStatus(s.currentSettingsCLITool(), false)
+	case "sw-install":
+		s.settingsUnit.state.settingsCLIBundleStatus = nil
+		s.act("cli.bundle.status", "", "", "", "", "", map[string]any{"settingsCLIBundleHome": s.snapshot.Home})
 	case "cli-git", "cli-codex", "cli-meegle", "cli-lark", "cli-genbu":
 		s.requestSettingsCLIStatus(strings.TrimPrefix(s.settingsUnit.state.settingsPage, "cli-"), false)
 	case "skill-sources":

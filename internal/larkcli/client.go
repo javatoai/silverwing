@@ -20,8 +20,9 @@ type Runner interface {
 	Run(context.Context, process.Spec) (process.Result, error)
 }
 type Client struct {
-	Runner Runner
-	Config domain.AppConfig
+	Runner     Runner
+	Config     domain.AppConfig
+	VerifyUser bool
 }
 
 func (c Client) Run(ctx context.Context, args []string, timeout time.Duration) (process.Result, error) {
@@ -49,11 +50,20 @@ func (c Client) Run(ctx context.Context, args []string, timeout time.Duration) (
 }
 func (c Client) Identity(ctx context.Context) (releasenotice.Identity, error) {
 	settings := c.Config.EffectiveLarkNotice()
-	r, e := c.Run(ctx, []string{"auth", "status", "--profile", settings.Profile, "--json"}, 15*time.Second)
+	args := []string{"auth", "status", "--profile", settings.Profile, "--json"}
+	timeout := 15 * time.Second
+	if c.VerifyUser {
+		args = append(args, "--verify")
+		timeout = 30 * time.Second
+	}
+	r, e := c.Run(ctx, args, timeout)
 	if e != nil {
 		return releasenotice.Identity{}, fmt.Errorf("无法读取 Lark 本地身份：%w", e)
 	}
 	if r.ExitCode != 0 {
+		if c.VerifyUser {
+			return releasenotice.Identity{}, fmt.Errorf("无法验证 Lark 登录，请检查网络和 CLI 状态，并确认已用 profile %s 登录", settings.Profile)
+		}
 		return releasenotice.Identity{}, errors.New("Lark 本地身份读取失败，请检查 CLI 应用配置")
 	}
 	data := []byte(r.Stdout)
@@ -70,6 +80,7 @@ func (c Client) Identity(ctx context.Context) (releasenotice.Identity, error) {
 				UserName    string `json:"userName"`
 				TokenStatus string `json:"tokenStatus"`
 				OpenID      string `json:"openId"`
+				Verified    bool   `json:"verified"`
 			} `json:"user"`
 			Bot struct {
 				Status string `json:"status"`
@@ -81,6 +92,9 @@ func (c Client) Identity(ctx context.Context) (releasenotice.Identity, error) {
 	}
 	if state.AppID != settings.AppID {
 		return releasenotice.Identity{}, errors.New("Lark profile 的应用与通知应用配置不匹配")
+	}
+	if c.VerifyUser && (!state.Identities.User.Verified || !releasenotice.ValidOpenID(strings.TrimSpace(state.Identities.User.OpenID))) {
+		return releasenotice.Identity{}, fmt.Errorf("当前用户未通过 Lark 登录验证，请用同一 profile 登录后重试：lark-cli auth login --profile %s", settings.Profile)
 	}
 	// Cached identity remains usable when the personal OAuth token expires.
 	return releasenotice.Identity{AppID: state.AppID, Name: strings.TrimSpace(state.Identities.User.UserName), OpenID: strings.TrimSpace(state.Identities.User.OpenID), BotReady: state.Identities.Bot.Status == "ready", UserState: state.Identities.User.TokenStatus}, nil

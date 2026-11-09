@@ -148,7 +148,7 @@ func pill(c *ui.Context, text string, p palette) {
 		bg, fg = p.selected, p.blue
 	case "待验收":
 		bg, fg = p.amberBg, p.amber
-	case "已完成", "干净", "已就绪":
+	case "已完成", "干净", "已就绪", "已安装":
 		bg, fg = p.greenBg, p.green
 	}
 	ui.Box(c).Padding(3, 8).Radius(5).Background(bg).Children(func() { label(c, text, 11, fg).NoWrap() })

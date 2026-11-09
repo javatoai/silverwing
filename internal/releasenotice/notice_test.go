@@ -30,7 +30,7 @@ func (f *fakeGateway) Send(_ context.Context, to, card, key string) SendResult {
 }
 func noticeFixture(t *testing.T, kind string) (Store, Session, *fakeGateway, Selection) {
 	t.Helper()
-	identity := Identity{AppID: "cli_fixture", Name: "本地姓名不应出现在通知", OpenID: "ou_self", BotReady: true, UserState: "expired"}
+	identity := Identity{AppID: "cli_fixture", Name: "本地用户名", OpenID: "ou_self", BotReady: true, UserState: "expired"}
 	session := Session{Scope: "scope", Kind: kind, Identity: identity, Title: "测试需求", URL: "https://example.invalid/requirement", Rows: []Row{{OperationID: "one", Service: "synthetic", Version: "1.beta-1", Branch: "feature/task"}}}
 	session.BindOwner("task-one")
 	store := Store{Directory: t.TempDir()}
@@ -41,7 +41,7 @@ func noticeFixture(t *testing.T, kind string) (Store, Session, *fakeGateway, Sel
 }
 func validateOK(context.Context, Session) error { return nil }
 
-func TestCardHasNoApplicantAndPreservesCard20Structure(t *testing.T) {
+func TestCardPreservesCard20StructureAndTagApplicant(t *testing.T) {
 	for _, kind := range []string{"", Branches} {
 		t.Run(kind, func(t *testing.T) {
 			_, session, _, _ := noticeFixture(t, kind)
@@ -71,10 +71,11 @@ func TestCardHasNoApplicantAndPreservesCard20Structure(t *testing.T) {
 			if e = json.Unmarshal([]byte(raw), &card); e != nil {
 				t.Fatal(e)
 			}
-			if card.Schema != "2.0" || card.Header.Template != "blue" || card.Header.Icon.Token != "bell_outlined" || card.Header.Subtitle != nil || card.Body.Padding != "12px" || card.Body.Spacing != "12px" || strings.Contains(raw, session.Identity.Name) {
+			if card.Schema != "2.0" || card.Header.Template != "blue" || card.Header.Icon.Token != "bell_outlined" || card.Header.Subtitle != nil || card.Body.Padding != "12px" || card.Body.Spacing != "12px" {
 				t.Fatal(raw)
 			}
-			if card.Body.Elements[0]["content"] != "**[需求 &#91;A&#93;](https://example.invalid/requirement)**" {
+			content := "**[需求 &#91;A&#93;](https://example.invalid/requirement)**"
+			if card.Body.Elements[0]["content"] != content {
 				t.Fatal(raw)
 			}
 			if kind == Branches {
@@ -82,7 +83,8 @@ func TestCardHasNoApplicantAndPreservesCard20Structure(t *testing.T) {
 					t.Fatal(raw)
 				}
 			} else {
-				if card.Config.WidthMode != "default" || card.Header.Title.Content != "申请发布UAT环境版本" || len(card.Body.Elements) != 3 || card.Body.Elements[2]["element_id"] != "genbu_link" || card.Config.Summary.Content != "申请发布UAT环境版本｜需求 [A]" {
+				header := session.Identity.Name + "：申请发布UAT环境版本"
+				if card.Config.WidthMode != "default" || card.Header.Title.Content != header || len(card.Body.Elements) != 3 || card.Body.Elements[2]["element_id"] != "genbu_link" || card.Config.Summary.Content != header+"｜需求 [A]" {
 					t.Fatal(raw)
 				}
 			}
@@ -159,6 +161,28 @@ func TestBothNoticesRetryUncertainResultWithoutNewMessage(t *testing.T) {
 				t.Fatal(done, e)
 			}
 		})
+	}
+}
+
+func TestCLINoticeDeduplicatesAndReusesUncertainSelfReceipt(t *testing.T) {
+	store, session, g, _ := noticeFixture(t, "")
+	g.answers = []SendResult{{Error: "timeout", Unknown: true}}
+	results, err := store.SendCLI(context.Background(), session.ID, g, validateOK)
+	if err == nil || len(results) != 1 || !results[0].Self || results[0].State != "unknown" || len(g.to) != 1 || g.to[0] != session.Identity.OpenID {
+		t.Fatal(results, err, g.to)
+	}
+	session.Title = "Refreshed requirement title"
+	if _, err := store.Prepare(session); err != nil {
+		t.Fatal(err)
+	}
+	results, err = store.SendCLI(context.Background(), session.ID, g, validateOK)
+	if err != nil || len(results) != 1 || results[0].Skipped || results[0].State != "sent" ||
+		len(g.to) != 2 || g.to[1] != session.Identity.OpenID || g.keys[0] != g.keys[1] || g.cards[0] != g.cards[1] {
+		t.Fatal(results, err, g.to)
+	}
+	results, err = store.SendCLI(context.Background(), session.ID, g, validateOK)
+	if err != nil || len(results) != 1 || !results[0].Skipped || len(g.to) != 2 {
+		t.Fatal("successful self receipt was sent again", results, err, g.to)
 	}
 }
 func TestUnsafeIdentityOrLegacyRecipientsNeverReachSend(t *testing.T) {
@@ -293,7 +317,7 @@ func TestLegacyHistoryOnlyImportsSelfAndPreservesOldFiles(t *testing.T) {
 	}
 }
 
-func TestLegacySelfSuccessResendsNewAnonymousCard(t *testing.T) {
+func TestLegacySelfSuccessResendsUsingCurrentLayout(t *testing.T) {
 	for _, kind := range []string{"", Branches} {
 		t.Run(kind, func(t *testing.T) {
 			store, session, g, _ := noticeFixture(t, kind)
@@ -305,9 +329,37 @@ func TestLegacySelfSuccessResendsNewAnonymousCard(t *testing.T) {
 			if e != nil || !choice.Resend || choice.ResendAfter != "old-self" {
 				t.Fatal(choice, e)
 			}
+			card, e := SessionCard(session)
+			if e != nil {
+				t.Fatal(e)
+			}
 			out, e := store.Send(context.Background(), session.ID, choice, g, validateOK)
-			if e != nil || len(g.to) != 1 || g.to[0] != "ou_self" || g.keys[0] == "old-self" || strings.Contains(g.cards[0], session.Identity.Name) || !json.Valid([]byte(g.cards[0])) || len(out.Receipts) != 4 {
+			if e != nil || len(g.to) != 1 || g.to[0] != "ou_self" || g.keys[0] == "old-self" || g.cards[0] != card || len(out.Receipts) != 4 {
 				t.Fatal(out, e, g.to)
+			}
+		})
+	}
+}
+
+func TestUATNoticeRetriesPreviousLayoutsWithOriginalPayload(t *testing.T) {
+	for _, layout := range []string{"anonymous", "applicant-in-body"} {
+		t.Run(layout, func(t *testing.T) {
+			store, session, g, choice := noticeFixture(t, "")
+			applicant := ""
+			if layout == "applicant-in-body" {
+				applicant = session.Identity.Name
+			}
+			oldCard, err := renderUATCard(session.Title, session.URL, applicant, session.Rows, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			session.Receipts = []Receipt{{OpenID: session.Identity.OpenID, State: "unknown", Key: "uat-card-original", Card: oldCard, StartedAt: time.Now()}}
+			if err := store.save(session); err != nil {
+				t.Fatal(err)
+			}
+			out, err := store.Send(context.Background(), session.ID, choice, g, validateOK)
+			if err != nil || len(g.cards) != 1 || g.cards[0] != oldCard || g.keys[0] != "uat-card-original" || len(out.Receipts) != 1 || out.Receipts[0].State != "sent" {
+				t.Fatal(out, err, g.cards, g.keys)
 			}
 		})
 	}

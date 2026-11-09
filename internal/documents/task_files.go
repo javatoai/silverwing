@@ -172,15 +172,23 @@ func (d *taskFilesDirectoryHandle) check() error {
 		return err
 	}
 	for _, expected := range d.ancestors {
-		info, err := d.scope.root.Lstat(filepath.FromSlash(expected.relative))
-		path := filepath.Join(d.scope.real, filepath.FromSlash(expected.relative))
-		if err != nil || !info.IsDir() || isUnsafeDirectory(info, path) || !os.SameFile(expected.info, info) {
-			return errors.New("任务文件目录已变化或包含链接")
+		name := filepath.FromSlash(expected.relative)
+		path := filepath.Join(d.scope.real, name)
+		if err := checkTaskFilesDirectory(d.scope.root, name, path, expected.info); err != nil {
+			return err
 		}
-		canonical, err := canonicalLocalTaskPath(path)
-		if err != nil || !samePathName(canonical, path) {
-			return errors.New("任务文件目录存在重定向或别名")
-		}
+	}
+	return nil
+}
+
+func checkTaskFilesDirectory(parent *os.Root, name, path string, expected os.FileInfo) error {
+	info, err := parent.Lstat(name)
+	if err != nil || !info.IsDir() || isUnsafeDirectory(info, path) || !os.SameFile(expected, info) {
+		return errors.New("任务文件目录已变化或包含链接")
+	}
+	canonical, err := canonicalLocalTaskPath(path)
+	if err != nil || !samePathName(canonical, path) {
+		return errors.New("任务文件目录存在重定向或别名")
 	}
 	return nil
 }
@@ -222,23 +230,12 @@ func (s *TaskFilesScope) directory(ctx context.Context, relative string) (*taskF
 	if name == "" {
 		name = "."
 	}
-	d.root, err = s.root.OpenRoot(name)
-	if err != nil {
-		return nil, err
-	}
-	d.file, err = d.root.Open(".")
-	if err != nil {
-		d.close()
-		return nil, err
-	}
-	opened, err := d.file.Stat()
 	expected := s.identity
 	if len(d.ancestors) > 0 {
 		expected = d.ancestors[len(d.ancestors)-1].info
 	}
-	if err != nil || !os.SameFile(expected, opened) {
-		d.close()
-		return nil, errors.New("打开任务文件目录时身份发生变化")
+	if err := d.open(s.root, name, expected); err != nil {
+		return nil, err
 	}
 	if err := d.check(); err != nil {
 		d.close()
@@ -247,16 +244,38 @@ func (s *TaskFilesScope) directory(ctx context.Context, relative string) (*taskF
 	return d, nil
 }
 
-func (s *TaskFilesScope) entry(d *taskFilesDirectoryHandle, parent string, child os.DirEntry) TaskFileEntry {
-	relative := child.Name()
-	if parent != "" {
-		relative = parent + "/" + relative
+func (d *taskFilesDirectoryHandle) open(parent *os.Root, name string, expected os.FileInfo) error {
+	var err error
+	d.root, err = parent.OpenRoot(name)
+	if err != nil {
+		return err
 	}
+	d.file, err = d.root.Open(".")
+	if err != nil {
+		d.close()
+		return err
+	}
+	opened, err := d.file.Stat()
+	if err != nil || !os.SameFile(expected, opened) {
+		d.close()
+		return errors.New("打开任务文件目录时身份发生变化")
+	}
+	return nil
+}
+
+func taskFilesChildPath(parent, name string) string {
+	if parent != "" {
+		return parent + "/" + name
+	}
+	return name
+}
+
+func (s *TaskFilesScope) entry(d *taskFilesDirectoryHandle, relative string, child os.DirEntry) (TaskFileEntry, os.FileInfo) {
 	entry := TaskFileEntry{Path: relative, Name: child.Name(), Kind: taskFileKind(child.Name()), Directory: child.IsDir()}
 	info, err := d.root.Lstat(child.Name())
 	if err != nil {
 		entry.RestrictedReason = "无法读取文件信息：" + err.Error()
-		return entry
+		return entry, nil
 	}
 	entry.Directory, entry.Size, entry.Modified = info.IsDir(), info.Size(), info.ModTime().Format(time.RFC3339Nano)
 	if entry.Directory {
@@ -271,7 +290,7 @@ func (s *TaskFilesScope) entry(d *taskFilesDirectoryHandle, parent string, child
 		// it is a repository directory or a worktree pointer file.
 		entry.Kind, entry.Directory = "external", false
 	}
-	return entry
+	return entry, info
 }
 
 func (s *TaskFilesScope) List(ctx context.Context, relative string) (TaskFilesDirectory, error) {
@@ -291,7 +310,8 @@ func (s *TaskFilesScope) List(ctx context.Context, relative string) (TaskFilesDi
 			if err := ctx.Err(); err != nil {
 				return TaskFilesDirectory{}, err
 			}
-			result.Entries = append(result.Entries, s.entry(d, relative, child))
+			entry, _ := s.entry(d, taskFilesChildPath(relative, child.Name()), child)
+			result.Entries = append(result.Entries, entry)
 		}
 		if readErr == io.EOF {
 			break
@@ -330,45 +350,73 @@ func (s *TaskFilesScope) Search(ctx context.Context, query string, limit int) (T
 	if limit <= 0 || limit > TaskFilesSearchLimit {
 		limit = TaskFilesSearchLimit
 	}
+	if err := ctx.Err(); err != nil {
+		return TaskFilesSearchResult{}, err
+	}
+	// All directory opens are relative to the same pinned root. Validate its
+	// configured path once here and again before publishing the results.
+	if err := s.Check(); err != nil {
+		return TaskFilesSearchResult{}, err
+	}
 	needle := strings.ToLower(query)
-	var visit func(string) error
-	visit = func(relative string) (visitErr error) {
+	addIssue := func(relative string, err error) error {
+		if relative == "" {
+			return err
+		}
+		if len(result.Issues) < 32 {
+			result.Issues = append(result.Issues, TaskFilesIssue{relative, err.Error()})
+		}
+		return nil
+	}
+	var visit func(*os.Root, string, string, os.FileInfo) error
+	visit = func(parent *os.Root, name, relative string, expected os.FileInfo) (visitErr error) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		d, err := s.directory(ctx, relative)
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
+		if relative != "" {
+			validated, err := taskFilesRelative(relative)
+			if err != nil {
+				return addIssue(relative, err)
 			}
-			if rootErr := s.Check(); rootErr != nil {
-				return rootErr
+			if validated != relative {
+				return addIssue(relative, errors.New("任务文件目录存在重定向或别名"))
 			}
-			if relative == "" {
-				return err
-			}
-			if len(result.Issues) < 32 {
-				result.Issues = append(result.Issues, TaskFilesIssue{relative, err.Error()})
-			}
-			return nil
 		}
-		defer func() {
-			// Every active frame must validate before releasing its directory,
-			// including a successful result-limit unwind. Do not join the limit
-			// sentinel: callers must never mistake an identity error for truncation.
-			if err := d.check(); err != nil {
-				visitErr = err
+		d := &taskFilesDirectoryHandle{scope: s}
+		if err := d.open(parent, name, expected); err != nil {
+			if canceled := ctx.Err(); canceled != nil {
+				return canceled
 			}
-			d.close()
-		}()
+			return addIssue(relative, err)
+		}
+		defer d.close()
+		if relative != "" {
+			path := filepath.Join(s.real, filepath.FromSlash(relative))
+			if err := checkTaskFilesDirectory(parent, name, path, expected); err != nil {
+				return addIssue(relative, err)
+			}
+			// A child is checked against its pinned parent. Each frame checks
+			// its own link in the chain on unwind, even when the limit is hit.
+			defer func() {
+				if err := checkTaskFilesDirectory(parent, name, path, expected); err != nil {
+					visitErr = err
+				}
+			}()
+		}
 		for {
 			children, readErr := d.file.ReadDir(128)
 			for _, child := range children {
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				entry := s.entry(d, relative, child)
-				if strings.Contains(strings.ToLower(entry.Path), needle) {
+				path := taskFilesChildPath(relative, child.Name())
+				matches := strings.Contains(strings.ToLower(path), needle)
+				if !matches && !child.IsDir() {
+					continue
+				}
+				// Only results and candidate directories need a fresh no-follow stat.
+				entry, info := s.entry(d, path, child)
+				if matches {
 					if len(result.Entries) == limit {
 						result.Truncated = true
 						return errTaskFilesSearchLimit
@@ -376,7 +424,7 @@ func (s *TaskFilesScope) Search(ctx context.Context, query string, limit int) (T
 					result.Entries = append(result.Entries, entry)
 				}
 				if entry.Directory && entry.RestrictedReason == "" {
-					if err := visit(entry.Path); err != nil {
+					if err := visit(d.root, entry.Name, entry.Path, info); err != nil {
 						return err
 					}
 				}
@@ -385,18 +433,12 @@ func (s *TaskFilesScope) Search(ctx context.Context, query string, limit int) (T
 				break
 			}
 			if readErr != nil {
-				if relative == "" {
-					return readErr
-				}
-				if len(result.Issues) < 32 {
-					result.Issues = append(result.Issues, TaskFilesIssue{relative, readErr.Error()})
-				}
-				break
+				return addIssue(relative, readErr)
 			}
 		}
 		return nil
 	}
-	err := visit("")
+	err := visit(s.root, ".", "", s.identity)
 	if err != nil && err != errTaskFilesSearchLimit {
 		return TaskFilesSearchResult{}, err
 	}

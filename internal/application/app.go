@@ -40,6 +40,20 @@ type App struct {
 }
 
 func New(home string) (*App, error) {
+	app, err := newApp(home)
+	if err != nil {
+		return nil, err
+	}
+	// Recover an interrupted migration once before the desktop scans tasks.
+	if config, loadErr := app.Config.Load(); loadErr == nil {
+		app.startupMigrationDiagnostics = app.recoverStartupTaskRootMigration(config)
+	} else {
+		errors.As(loadErr, &app.startupTaskRootError)
+	}
+	return app, nil
+}
+
+func newApp(home string) (*App, error) {
 	if strings.TrimSpace(home) == "" {
 		return nil, errors.New("请指定应用数据目录 --home")
 	}
@@ -56,18 +70,6 @@ func New(home string) (*App, error) {
 	app := &App{Paths: paths, Config: storage.NewConfigStore(paths), Manifests: storage.NewManifestStore(), Runner: process.NewRunner(), Documents: documents.NewService(paths.Cache), diffSessions: workspace.NewWorkspaceGitDiffSessionManager()}
 	app.Integrations = integrations.NewService(paths, app.Config, app.Runner)
 	app.Platform = platform.NewService(paths, app.Config, app.Runner)
-	// Configuration stays in the chosen application home; new task roots default
-	// to the user's tasks directory. Existing configured roots are retained.
-	// Unsupported configuration is presented as a startup error in Snapshot.
-	// Recover a valid interrupted task-root migration once before Snapshot can
-	// scan task manifests. Recovery diagnostics are surfaced by Snapshot.
-	if config, loadErr := app.Config.Load(); loadErr == nil {
-		app.startupMigrationDiagnostics = app.recoverStartupTaskRootMigration(config)
-	} else {
-		// Default initialization may persist an editable configuration with no
-		// task root. Retain the failure that the next successful Load cannot see.
-		errors.As(loadErr, &app.startupTaskRootError)
-	}
 	return app, nil
 }
 

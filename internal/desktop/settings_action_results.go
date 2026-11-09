@@ -8,6 +8,10 @@ import (
 // applySettingsActionResult applies only settings feature results on the UI thread.
 func (s *app) applySettingsActionResult(action application.Action, result application.ActionResult) bool {
 	switch action.Kind {
+	case "cli.bundle.install":
+		s.applyCLIBundleInstall(action, result)
+	case "cli.bundle.status":
+		s.applyCLIBundleStatus(action, result)
 	case "workspace.tools-options":
 		if !settingsExtensionRead(action) {
 			return false

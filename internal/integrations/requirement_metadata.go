@@ -27,6 +27,8 @@ type RequirementMetadataReadResult struct {
 	FetchedAt       int64                                `json:"fetchedAt,omitempty"`
 	WorkItem        *domain.ParticipatedWorkItem         `json:"workItem,omitempty"`
 	SprintEstimates map[string]RequirementSprintEstimate `json:"sprintEstimates,omitempty"`
+	// Only a fresh, well-formed roles response can confirm an empty roster.
+	ReleaseTesters []domain.RequirementPerson `json:"-"`
 }
 
 type requirementMetadataResult = RequirementMetadataReadResult
@@ -213,8 +215,36 @@ func (s *Service) fetchRequirementMetadata(ctx context.Context, config domain.Ap
 	}
 	return RequirementMetadataReadResult{
 		ID: id, ProjectKey: projectKey, Type: kind, Title: title, Status: status, Participants: participants,
-		WorkItem: metadataWorkItem(projectKey, kind, id, title, status, attributes["role_members"]),
+		WorkItem:       metadataWorkItem(projectKey, kind, id, title, status, attributes["role_members"]),
+		ReleaseTesters: releaseTesterRoster(attributes["role_members"]),
 	}, nil
+}
+
+func releaseTesterRoster(roles any) []domain.RequirementPerson {
+	list, ok := roles.([]any)
+	if !ok {
+		return nil
+	}
+	for _, raw := range list {
+		role := object(raw)
+		name, ok := requirementMetadataPrimitiveContent(role["name"])
+		if !ok || name == "" {
+			return nil
+		}
+		if name != "QC Owner" {
+			continue
+		}
+		members, ok := role["members"].([]any)
+		if !ok {
+			return nil
+		}
+		for _, raw := range members {
+			if requirementMetadataText(object(raw)["name"]) == "" {
+				return nil
+			}
+		}
+	}
+	return requirementMetadataMembers(roles, "QC Owner")
 }
 
 // The metadata provider consumes work_item_attribute.role_members, whose shape

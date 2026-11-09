@@ -60,6 +60,10 @@ func (s *Service) Execute(ctx context.Context, kind string, payload map[string]a
 		return s.executeCodexAI(ctx, kind, payload)
 	case "cli.status":
 		return s.executeCLI(ctx, kind, payload)
+	case "cli.bundle.install":
+		return s.installCLIBundle(ctx, payload)
+	case "cli.bundle.status":
+		return s.cliBundleStatus(ctx)
 	case "cli.auth.start", "cli.auth.session", "cli.auth.poll", "cli.auth.cancel", "cli.auth.logout":
 		return s.executeCLIAuth(ctx, kind, payload)
 	case "git.environment", "git.environment/snapshot":

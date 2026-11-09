@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -66,6 +67,11 @@ func HistoryRetentionOperationIDs(items []domain.TagHistoryItem, maxGroups int) 
 	selected := []string{}
 	seen := map[string]bool{}
 	for _, item := range items[min(maxGroups, len(items)):] {
+		if hasUnfinishedTagConflict(item) || slices.ContainsFunc(item.Operations, func(operation domain.TagOperation) bool {
+			return operation.PreflightID != "" && operation.State != domain.TagOperationSuccess
+		}) {
+			continue
+		}
 		for _, operation := range item.Operations {
 			if operation.OperationID != "" && !seen[operation.OperationID] {
 				selected = append(selected, operation.OperationID)
@@ -74,6 +80,15 @@ func HistoryRetentionOperationIDs(items []domain.TagHistoryItem, maxGroups int) 
 		}
 	}
 	return selected, nil
+}
+
+func hasUnfinishedTagConflict(item domain.TagHistoryItem) bool {
+	for _, operation := range item.Operations {
+		if operation.Conflict != nil && operation.State != domain.TagOperationSuccess {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) HistoryItems(ctx context.Context, config domain.AppConfig, tasks []domain.TaskManifest) ([]domain.TagHistoryItem, error) {
@@ -140,6 +155,9 @@ func (s *Service) DeleteHistory(ctx context.Context, config domain.AppConfig, ta
 			if count > 0 && count != len(group.Operations) {
 				return 0, errors.New("Tag历史只能按完整批次删除，所选批次已变化，请刷新后重新确认")
 			}
+			if count > 0 && hasUnfinishedTagConflict(group) {
+				return 0, errors.New("该批次仍保留冲突工作区，请完成冲突操作后再删除")
+			}
 		}
 		return s.store.deleteSelected(historyContext(ctx), directory, operationIDs)
 	})
@@ -147,7 +165,25 @@ func (s *Service) DeleteHistory(ctx context.Context, config domain.AppConfig, ta
 
 func (s *Service) ClearHistory(ctx context.Context, config domain.AppConfig, tasks []domain.TaskManifest) (int, error) {
 	return s.mutateHistory(ctx, config, tasks, func(directory string) (int, error) {
-		return s.store.clear(historyContext(ctx), directory)
+		operations, err := s.store.list(directory)
+		if err != nil {
+			return 0, err
+		}
+		var ids []string
+		retained := false
+		for _, item := range GroupTagHistory(operations) {
+			if hasUnfinishedTagConflict(item) {
+				retained = true
+				continue
+			}
+			for _, operation := range item.Operations {
+				ids = append(ids, operation.OperationID)
+			}
+		}
+		if !retained {
+			return s.store.clear(historyContext(ctx), directory)
+		}
+		return s.store.deleteSelected(historyContext(ctx), directory, ids)
 	})
 }
 

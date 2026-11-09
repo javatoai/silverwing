@@ -30,8 +30,11 @@ func TestSettingsSidebarSectionsAndVisualGroups(t *testing.T) {
 			seen[page.key] = true
 		}
 	}
-	if len(seen) != 23 {
+	if len(seen) != 24 {
 		t.Fatalf("pages=%d", len(seen))
+	}
+	if section, ok := settingsSectionForPage("sw-install"); !ok || section.name != "工具与连接" {
+		t.Fatal("Silverwing CLI installer is outside its settings section")
 	}
 	for _, old := range []string{"basic", "tool-visibility", "paths", "config-backup", "dev-tools", "task-creation", "task-area", "git", "branch-naming", "tag", "agents", "instruction-templates", "codex-plugins", "codex-mcp", "skill-local", "skill-sources", "cli-meegle", "cli-genbu", "proxy", "logs", "about", "updates", "app-data"} {
 		if _, ok := settingsSectionForPage(old); !ok {

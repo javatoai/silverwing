@@ -20,7 +20,7 @@ var settingsSections = []settingsSection{
 	{"资料与说明", 0, []settingsPage{{"paths", "资料目录与浏览"}, {"materials-sync", "资料自动同步"}, {"agents", "全局与组说明"}, {"instruction-templates", "任务说明模板"}}},
 	{"Git 与发布", 1, []settingsPage{{"git", "Git 环境与写保护"}, {"tag", "Tag 与构建"}}},
 	{"AI 与扩展", 1, []settingsPage{{"codex-plugins", "Codex 插件"}, {"codex-mcp", "MCP 服务"}, {"skill-local", "本机 Skill"}, {"skill-sources", "Skill 来源与安装"}}},
-	{"工具与连接", 1, []settingsPage{{"dev-tools", "编辑器与 IDE"}, {"cli-tools", "命令行与账号"}, {"proxy", "网络代理"}}},
+	{"工具与连接", 1, []settingsPage{{"dev-tools", "编辑器与 IDE"}, {"cli-tools", "命令行与账号"}, {"sw-install", "Silverwing CLI"}, {"proxy", "网络代理"}}},
 	{"数据与维护", 2, []settingsPage{{"config-backup", "配置与备份"}, {"app-data", "数据目录"}, {"logs", "日志与诊断"}, {"about", "关于与更新"}}},
 }
 
@@ -248,6 +248,8 @@ func (s *app) settingsPageContent(c *ui.Context, p palette) {
 		s.settingsCodexMCP(c, p)
 	case "cli-tools":
 		s.settingsCommandTools(c, p)
+	case "sw-install":
+		s.settingsCLIBundle(c, p)
 	case "skill-sources":
 		s.settingsSkills(c, p)
 	case "proxy":

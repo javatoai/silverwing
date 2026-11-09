@@ -1,8 +1,10 @@
 package desktop
 
 import (
-	"github.com/egoist/mygo/ui"
 	"time"
+
+	"github.com/egoist/mygo/ui"
+	"silverwing-go/internal/platform"
 )
 
 // settingsController owns this feature's state. Its zero value is usable in headless tests.
@@ -64,6 +66,7 @@ type settingsState struct {
 	settingsGitEnvironment           map[string]any
 	settingsDevelopmentToolsSnapshot map[string]any
 	settingsCLIStatus                map[string]map[string]any
+	settingsCLIBundleStatus          *platform.CLIBundleStatus
 	settingsCLIErrors                map[string]string
 	meegleProjectCatalog             *meegleProjectCatalogState
 	skillsBrowser                    *skillsBrowserState

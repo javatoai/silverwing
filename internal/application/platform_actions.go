@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"silverwing-go/internal/documents"
+	"silverwing-go/internal/platform"
 )
 
 func (a *App) platformAction(ctx context.Context, action Action) (ActionResult, error) {
@@ -55,6 +56,12 @@ func (a *App) platformAction(ctx context.Context, action Action) (ActionResult, 
 		return ActionResult{}, err
 	}
 	result := ActionResult{Message: "操作结果已读取", Data: data}
+	if installed, ok := data.(platform.CLIBundleInstallResult); ok && kind == "cli.bundle.install" {
+		result.Path, result.Message = installed.Path, "已安装"
+		if installed.Replacement != "" {
+			result.Message = ""
+		}
+	}
 	if kind == "skills.catalog" {
 		result.Message = "本机 Skills 已读取"
 	}

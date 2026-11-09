@@ -2,7 +2,7 @@ package domain
 
 // Persisted schema versions are deliberately independent of the product version.
 const (
-	CurrentProductVersion            = "0.0.12"
+	CurrentProductVersion            = "0.0.13"
 	CurrentAppConfigSchemaVersion    = "6.0.0"
 	CurrentTaskManifestSchemaVersion = "2.0.0"
 	DefaultGroupID                   = "default"
@@ -376,27 +376,54 @@ const (
 )
 
 type TagOperation struct {
-	OperationID    string              `json:"operationId"`
-	FolderName     string              `json:"folderName"`
-	ServiceName    string              `json:"serviceName"`
-	RepositoryID   string              `json:"repositoryId"`
-	SourceBranch   string              `json:"sourceBranch"`
-	TargetBranch   *string             `json:"targetBranch"`
-	Remote         string              `json:"remote"`
-	TagMode        TagBuildMode        `json:"tagMode"`
-	State          TagOperationState   `json:"state"`
-	CreatedAt      string              `json:"createdAt"`
-	UpdatedAt      string              `json:"updatedAt"`
-	SourceSHA      *string             `json:"sourceSha"`
-	TargetSHA      *string             `json:"targetSha"`
-	Tag            *string             `json:"tag"`
-	Message        *string             `json:"message"`
-	ConflictFiles  []string            `json:"conflictFiles"`
-	GroupServiceID string              `json:"groupServiceId"`
-	ModuleID       string              `json:"moduleId"`
-	GenbuStatus    GenbuTagProbeStatus `json:"genbuStatus"`
-	BatchID        *string             `json:"batchId"`
+	OperationID       string               `json:"operationId"`
+	FolderName        string               `json:"folderName"`
+	ServiceName       string               `json:"serviceName"`
+	RepositoryID      string               `json:"repositoryId"`
+	SourceBranch      string               `json:"sourceBranch"`
+	TargetBranch      *string              `json:"targetBranch"`
+	Remote            string               `json:"remote"`
+	TagMode           TagBuildMode         `json:"tagMode"`
+	State             TagOperationState    `json:"state"`
+	CreatedAt         string               `json:"createdAt"`
+	UpdatedAt         string               `json:"updatedAt"`
+	SourceSHA         *string              `json:"sourceSha"`
+	TargetSHA         *string              `json:"targetSha"`
+	Tag               *string              `json:"tag"`
+	Message           *string              `json:"message"`
+	ConflictFiles     []string             `json:"conflictFiles"`
+	Conflict          *TagConflict         `json:"conflict,omitempty"`
+	BlockedBy         string               `json:"blockedBy,omitempty"`
+	GroupServiceID    string               `json:"groupServiceId"`
+	ModuleID          string               `json:"moduleId"`
+	GenbuStatus       GenbuTagProbeStatus  `json:"genbuStatus"`
+	BatchID           *string              `json:"batchId"`
+	PreflightID       string               `json:"preflightId,omitempty"`
+	PreflightWorktree string               `json:"preflightWorktree,omitempty"`
+	WriteEndpoint     *TagWriteEndpointPin `json:"writeEndpoint,omitempty"`
 }
+
+// TagWriteEndpointPin is captured before the first remote write and reused
+// after a restart. It contains digests only, never a remote URL.
+type TagWriteEndpointPin struct {
+	Identity string `json:"identity"`
+	Key      string `json:"key"`
+}
+
+// TagConflict pins an editable detached merge to the repository and refs
+// observed when it started. MergeSHA is journaled before the first push.
+type TagConflict struct {
+	Worktree         string `json:"worktree"`
+	Repository       string `json:"repository"`
+	RemoteKey        string `json:"remoteKey"`
+	RemoteIdentity   string `json:"remoteIdentity"`
+	WriteEndpointKey string `json:"writeEndpointKey,omitempty"`
+	TaskCreatedAt    string `json:"taskCreatedAt"`
+	RemoteSourceSHA  string `json:"remoteSourceSha"`
+	TargetBaseSHA    string `json:"targetBaseSha"`
+	MergeSHA         string `json:"mergeSha,omitempty"`
+}
+
 type GenbuStageStatus string
 
 const (

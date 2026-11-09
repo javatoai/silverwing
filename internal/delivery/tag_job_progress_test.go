@@ -19,7 +19,7 @@ import (
 
 type tagWorkflowFakeGit struct {
 	mu                                                         sync.Mutex
-	worktree, common                                           string
+	worktree, common, remoteURL, pushURL, ignoredFile          string
 	dirty, localTag, remoteTag, failPush, failRemote, conflict bool
 	commands                                                   []string
 }
@@ -59,15 +59,23 @@ func (g *tagWorkflowFakeGit) RunContext(ctx context.Context, _ string, _ time.Du
 		if g.conflict && strings.Contains(cmd, "--diff-filter=U") {
 			result.Stdout = "synthetic.go\n"
 		}
-	case cmd == "remote get-url origin":
+	case cmd == "remote get-url origin", cmd == "remote get-url -- origin", cmd == "remote get-url --push --all -- origin":
 		if g.failRemote {
 			return result, errors.New("synthetic repository is unavailable")
 		}
 		result.Stdout = "https://example.invalid/team/synthetic.git"
+		if g.remoteURL != "" {
+			result.Stdout = g.remoteURL
+		}
+		if strings.Contains(cmd, "--push") && g.pushURL != "" {
+			result.Stdout = g.pushURL
+		}
 	case args[0] == "log":
 		result.Stdout = "abcd synthetic commit\n"
 	case args[0] == "for-each-ref":
 		result.Stdout = "1 1.2.3.beta-1\n"
+	case args[0] == "ls-files":
+		result.Stdout = g.ignoredFile
 	case args[0] == "rev-parse" && strings.Contains(cmd, "origin/feature/synthetic"):
 		result.ExitCode = 1
 	case args[0] == "rev-parse" && strings.Contains(cmd, "refs/tags/"):
@@ -88,7 +96,7 @@ func (g *tagWorkflowFakeGit) RunContext(ctx context.Context, _ string, _ time.Du
 		if strings.Contains(cmd, "refs/tags/") {
 			if g.failPush {
 				result.ExitCode = 1
-				result.Stderr = "synthetic push failure"
+				result.Stderr = "synthetic push failure to https://user:fixture-secret@example.invalid/team/synthetic.git"
 			} else {
 				g.remoteTag = true
 			}
@@ -100,10 +108,13 @@ func (g *tagWorkflowFakeGit) RunContext(ctx context.Context, _ string, _ time.Du
 }
 
 func TestTagJobMergeWorkflowStagesAndTypedConflict(t *testing.T) {
-	for _, conflict := range []bool{false, true} {
-		t.Run(map[bool]string{false: "merge", true: "conflict"}[conflict], func(t *testing.T) {
+	for _, scenario := range []string{"merge", "conflict", "retained"} {
+		t.Run(scenario, func(t *testing.T) {
 			task, git := tagProgressTaskFixture(t)
-			git.conflict = conflict
+			git.conflict = scenario == "conflict"
+			if scenario == "retained" {
+				git.ignoredFile = "ignored-test-output\x00"
+			}
 			target := "origin/synthetic-integration"
 			task.task.manifest.Services[0].TagMode = domain.TagBuildMergeToTargetBranch
 			task.task.manifest.Services[0].TagTargetRef = &target
@@ -124,7 +135,7 @@ func TestTagJobMergeWorkflowStagesAndTypedConflict(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if conflict {
+			if git.conflict {
 				if failure != "conflict" || operation.State != domain.TagOperationConflict || len(operation.ConflictFiles) != 1 {
 					t.Fatalf("conflict was not typed and persisted: %+v %s", operation, failure)
 				}
@@ -133,6 +144,9 @@ func TestTagJobMergeWorkflowStagesAndTypedConflict(t *testing.T) {
 			want := []string{"checking", "pushing-source", "merging", "pushing-target", "creating-tag", "pushing-tag", "completed"}
 			if operation.State != domain.TagOperationSuccess || !reflect.DeepEqual(phases, want) {
 				t.Fatalf("merge stages mismatch: %v %+v", phases, operation)
+			}
+			if scenario == "retained" && operation.PreflightWorktree == "" {
+				t.Fatal("successful Tag lost the retained worktree location")
 			}
 		})
 	}
@@ -155,6 +169,60 @@ func TestTagJobRemoteReadFailureKeepsInitialItemAndFailsWithoutGitWrites(t *test
 	}
 	if len(git.commands) != 1 || git.commands[0] != "remote get-url origin" {
 		t.Fatalf("unavailable repository reached a mutation: %v", git.commands)
+	}
+}
+
+func TestLegacyTagBuildRechecksWriteEndpointBeforeSourcePush(t *testing.T) {
+	for _, drift := range []bool{false, true} {
+		t.Run(map[bool]string{false: "initial-mismatch", true: "after-preflight"}[drift], func(t *testing.T) {
+			task, git := tagProgressTaskFixture(t)
+			redirect := "https://example.invalid:444/team/synthetic.git"
+			if !drift {
+				git.pushURL = redirect
+			}
+			item, err := task.Plan(context.Background(), "service:module", "", "batch")
+			if err != nil {
+				t.Fatal(err)
+			}
+			operation, _, err := task.Run(context.Background(), "tag.build", item, func(event TagProgress) {
+				if drift && event.Phase == "pushing-source" {
+					git.pushURL = redirect
+				}
+			})
+			if err != nil || operation.State != domain.TagOperationFailed || !strings.Contains(value(operation.Message), "同一个远端") {
+				t.Fatalf("legacy build did not reject the write address: %+v %v", operation, err)
+			}
+			for _, command := range git.commands {
+				if strings.HasPrefix(command, "push ") || strings.HasPrefix(command, "tag ") {
+					t.Fatalf("legacy build reached a write: %s", command)
+				}
+			}
+		})
+	}
+}
+
+func TestLegacyTagPartialRetryUsesOriginalEndpoint(t *testing.T) {
+	ctx := context.Background()
+	task, git := tagProgressTaskFixture(t)
+	git.failPush = true
+	item, err := task.Plan(ctx, "service:module", "", "batch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, _, err := task.Run(ctx, "tag.build", item, nil)
+	if err != nil || op.State != domain.TagOperationPartial || op.WriteEndpoint == nil {
+		t.Fatalf("original write endpoint was not journaled with the partial operation: %+v %v", op, err)
+	}
+	git.failPush = false
+	git.remoteURL = "https://example.invalid/team/another.git"
+	before := len(git.commands)
+	if _, err := task.service.resumePartial(ctx, task.task, op.OperationID); err == nil || !strings.Contains(err.Error(), "远端仓库配置已变化") {
+		t.Fatal("partial retry accepted a different remote", err)
+	}
+	for _, command := range git.commands[before:] {
+		if strings.HasPrefix(command, "push ") || strings.HasPrefix(command, "tag ") {
+			t.Fatal("partial retry reached a Git write", command)
+		}
 	}
 }
 
@@ -255,6 +323,9 @@ func TestTagJobTypedDirtyAndPartialResumeReuseExistingWorkflow(t *testing.T) {
 			}
 			if operation.State != domain.TagOperationPartial || operation.Tag == nil {
 				t.Fatalf("partial result missing: %+v", operation)
+			}
+			if strings.Contains(value(operation.Message), "fixture-secret") {
+				t.Fatal("failed push exposed a credential in the persisted operation")
 			}
 			git.failPush = false
 			retry, err := task.Plan(context.Background(), "", operation.OperationID, "")

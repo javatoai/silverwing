@@ -88,7 +88,10 @@ func (a *App) StartTagJob(ctx context.Context, scope TagJobScope, action Action)
 			}
 			return a.StartTagJob(ctx, scope, action)
 		}
-		m.admitLocked(old, works)
+		if err := m.admitLocked(old, works); err != nil {
+			m.mu.Unlock()
+			return TagJobSnapshot{}, err
+		}
 		snapshot := m.snapshotLocked(old)
 		m.mu.Unlock()
 		return snapshot, nil
@@ -148,7 +151,9 @@ func (a *App) AppendTagJob(ctx context.Context, scope TagJobScope, id string, ac
 	if m.closed || j.closing || j.ctx.Err() != nil {
 		return TagJobSnapshot{}, errors.New("Tag作业已结束或正在关闭")
 	}
-	m.admitLocked(j, works)
+	if err := m.admitLocked(j, works); err != nil {
+		return TagJobSnapshot{}, err
+	}
 	return m.snapshotLocked(j), nil
 }
 
@@ -170,7 +175,8 @@ func optionalTagString(value *string) string {
 	}
 	return *value
 }
-func (m *tagJobManager) admitLocked(j *tagJob, works []*tagJobWork) {
+func (m *tagJobManager) admitLocked(j *tagJob, works []*tagJobWork) error {
+	admitted := make([]*tagJobWork, 0, len(works))
 	for _, w := range works {
 		duplicate := false
 		for _, existing := range j.works {
@@ -188,14 +194,32 @@ func (m *tagJobManager) admitLocked(j *tagJob, works []*tagJobWork) {
 			w.planned.Operation.BatchID = &batch
 			w.view.Record.BatchID = batch
 		}
-		j.works = append(j.works, w)
-		j.remaining++
-		if j.ready {
-			m.pending = append(m.pending, w)
-		}
+		admitted = append(admitted, w)
 	}
+	if j.ready {
+		if err := initializeTagBuilds(j, admitted); err != nil {
+			return err
+		}
+		m.pending = append(m.pending, admitted...)
+	}
+	j.works = append(j.works, admitted...)
+	j.remaining += len(admitted)
 	m.publishLocked(j)
 	m.scheduleLocked()
+	return nil
+}
+
+// Persist all selected items before any Git write. A process interruption
+// cannot turn a partially completed selection into a successful whole batch.
+func initializeTagBuilds(j *tagJob, works []*tagJobWork) error {
+	for _, w := range works {
+		if w.view.Kind == "tag.build" {
+			if err := j.task.Initialize(j.ctx, w.planned); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (m *tagJobManager) runJob(j *tagJob) {
@@ -207,6 +231,10 @@ func (m *tagJobManager) runJob(j *tagJob) {
 			return err
 		}
 		m.mu.Lock()
+		if err := initializeTagBuilds(j, j.works); err != nil {
+			m.mu.Unlock()
+			return err
+		}
 		j.ready = true
 		m.pending = append(m.pending, j.works...)
 		m.scheduleLocked()
@@ -279,28 +307,23 @@ func (m *tagJobManager) runWork(w *tagJobWork) {
 			err = errors.Join(err, saveErr)
 		}
 	} else {
-		if w.view.Kind == "tag.build" {
-			err = j.task.Initialize(j.ctx, w.planned)
-		}
-		if err == nil {
-			operation, check, err = j.task.Run(j.ctx, w.view.Kind, w.planned, func(event delivery.TagProgress) {
-				m.mu.Lock()
-				defer m.mu.Unlock()
-				if event.Phase != "" {
-					w.view.Phase = TagJobPhase(event.Phase)
-				}
-				if event.Step != "" {
-					w.view.Step = event.Step
-				}
-				if event.FailureKind != "" {
-					w.view.FailureKind = event.FailureKind
-				}
-				if event.Operation != nil {
-					m.setRecordLocked(w, *event.Operation)
-				}
-				m.publishLocked(j)
-			})
-		}
+		operation, check, err = j.task.Run(j.ctx, w.view.Kind, w.planned, func(event delivery.TagProgress) {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			if event.Phase != "" {
+				w.view.Phase = TagJobPhase(event.Phase)
+			}
+			if event.Step != "" {
+				w.view.Step = event.Step
+			}
+			if event.FailureKind != "" {
+				w.view.FailureKind = event.FailureKind
+			}
+			if event.Operation != nil {
+				m.setRecordLocked(w, *event.Operation)
+			}
+			m.publishLocked(j)
+		})
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -322,6 +345,8 @@ func (m *tagJobManager) runWork(w *tagJobWork) {
 		w.view.Phase = TagJobPhaseCanceled
 	case operation.State == domain.TagOperationConflict:
 		w.view.Phase, w.view.FailureKind = TagJobPhaseConflict, TagJobFailureConflict
+	case operation.BlockedBy != "":
+		w.view.Phase, w.view.Step = TagJobPhaseBlocked, "等待冲突处理"
 	case operation.State == domain.TagOperationFailed || operation.State == domain.TagOperationPartial:
 		w.view.Phase = TagJobPhaseFailed
 		if w.view.Record != nil {

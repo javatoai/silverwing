@@ -26,7 +26,7 @@ type tagWorkspaceCheckState struct {
 
 func tagWorkspaceCheckEligible(record application.TagRecord) bool {
 	state := strings.ToUpper(strings.TrimSpace(record.State))
-	if state == "CONFLICT" {
+	if state == "CONFLICT" || record.Conflict != nil && state != "SUCCESS" {
 		return true
 	}
 	return state == "FAILED" && strings.Contains(record.Detail, "特性工作区存在未提交改动")
@@ -66,6 +66,9 @@ func (s *app) tagConflictWorkspace(record application.TagRecord) (task, applicat
 	if count != 1 {
 		return t, application.Workspace{}, "未找到唯一匹配的任务工作区，已禁用工作区操作。"
 	}
+	if record.Conflict != nil {
+		match.Path = record.Conflict.Worktree
+	}
 	if strings.TrimSpace(match.Path) == "" {
 		return t, application.Workspace{}, "任务工作区没有可用路径，已禁用工作区操作。"
 	}
@@ -82,7 +85,7 @@ func (s *app) renderTagConflictCard(c *ui.Context, p palette, record application
 	if workspaceError == "" && s.backend == nil {
 		workspaceError = "应用后端不可用，无法执行工作区操作。"
 	}
-	conflict := strings.EqualFold(strings.TrimSpace(record.State), "CONFLICT")
+	conflict := record.Conflict != nil || strings.EqualFold(strings.TrimSpace(record.State), "CONFLICT")
 	disabled := s.tagRecordBusy(record) || state.Loading || workspaceError != ""
 	retryLabel, _ := tagHistoryRetryPresentation(record)
 	if conflict {
@@ -123,10 +126,14 @@ func (s *app) renderTagConflictCard(c *ui.Context, p palette, record application
 			label(c, "正在检查工作区…", 11, p.muted)
 		}
 		if state.Check != nil {
+			clean, dirty := "工作区干净，可以重试。", "工作区仍有未提交改动，请处理后重试。"
+			if record.Conflict != nil {
+				clean, dirty = "工作区已就绪，可以重试。", "请处理工作区中的冲突或未暂存改动，再重试。"
+			}
 			if state.Check.Clean {
-				label(c, "工作区干净，可以重试。", 11, p.green).Wrap().LineHeight(1.4)
+				label(c, clean, 11, p.green).Wrap().LineHeight(1.4)
 			} else {
-				label(c, "工作区仍有未提交改动，请处理后重试。", 11, p.amber).Wrap().LineHeight(1.4)
+				label(c, dirty, 11, p.amber).Wrap().LineHeight(1.4)
 			}
 		}
 		if state.Error != "" && state.Error != workspaceError {

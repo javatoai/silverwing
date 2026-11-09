@@ -51,6 +51,8 @@ var actionDescriptors = map[string]ActionDescriptor{
 	"task.create-preview":                          {Kind: "task.create-preview", Label: "task.create-preview", Known: true},
 	"cli.auth.logout":                              {Kind: "cli.auth.logout", Label: "cli.auth.logout", Known: true, Cancellable: true},
 	"cli.auth.start":                               {Kind: "cli.auth.start", Label: "cli.auth.start", Known: true, Cancellable: true},
+	"cli.bundle.install":                           {Kind: "cli.bundle.install", Label: "安装 Silverwing 工具", Known: true, SettingsDedicatedResult: true, Cancellable: true},
+	"cli.bundle.status":                            {Kind: "cli.bundle.status", Label: "检测安装状态", Known: true, QuietSuccess: true},
 	"codex.ai/mcp/authenticate":                    {Kind: "codex.ai/mcp/authenticate", Label: "codex.ai/mcp/authenticate", Known: true, Cancellable: true},
 	"codex.extensions":                             {Kind: "codex.extensions", Label: "读取 Codex 扩展", Known: true},
 	"codex.extensions/marketplaces/add-source":     {Kind: "codex.extensions/marketplaces/add-source", Label: "codex.extensions/marketplaces/add-source", Known: true, RefreshOnError: true, Cancellable: true},

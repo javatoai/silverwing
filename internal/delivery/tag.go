@@ -140,25 +140,27 @@ type FeatureSyncStatus struct {
 	RemoteExists bool `json:"remoteExists"`
 	Ahead        int  `json:"ahead"`
 	Behind       int  `json:"behind"`
+	remoteSHA    string
 }
 
 func (s FeatureSyncStatus) CanPush() bool      { return s.Behind == 0 }
 func (s FeatureSyncStatus) PushRequired() bool { return !s.RemoteExists || s.Ahead > 0 }
 
 type TagPreflight struct {
-	FolderName   string              `json:"folderName"`
-	ServiceName  string              `json:"serviceName"`
-	SourceBranch string              `json:"sourceBranch"`
-	SourceSHA    string              `json:"sourceSha"`
-	Remote       string              `json:"remote"`
-	TargetBranch *string             `json:"targetBranch"`
-	TargetSHA    *string             `json:"targetSha"`
-	SourceSync   FeatureSyncStatus   `json:"sourceSync"`
-	TagMode      domain.TagBuildMode `json:"tagMode"`
-	MergeMode    *string             `json:"mergeMode"`
-	CommitList   []string            `json:"commitList"`
-	DiffStat     string              `json:"diffStat"`
-	EstimatedTag string              `json:"estimatedTag"`
+	FolderName    string              `json:"folderName"`
+	ServiceName   string              `json:"serviceName"`
+	SourceBranch  string              `json:"sourceBranch"`
+	SourceSHA     string              `json:"sourceSha"`
+	Remote        string              `json:"remote"`
+	TargetBranch  *string             `json:"targetBranch"`
+	TargetSHA     *string             `json:"targetSha"`
+	SourceSync    FeatureSyncStatus   `json:"sourceSync"`
+	TagMode       domain.TagBuildMode `json:"tagMode"`
+	MergeMode     *string             `json:"mergeMode"`
+	CommitList    []string            `json:"commitList"`
+	DiffStat      string              `json:"diffStat"`
+	EstimatedTag  string              `json:"estimatedTag"`
+	ConflictFiles []string            `json:"conflictFiles,omitempty"`
 }
 
 type resolvedTask struct {
@@ -380,6 +382,7 @@ func (s *Service) buildUnlocked(ctx context.Context, task resolvedTask, selectio
 		operation.State, operation.UpdatedAt = domain.TagOperationCreated, now
 		operation.SourceSHA, operation.TargetSHA, operation.Tag, operation.Message = nil, nil, nil, nil
 		operation.ConflictFiles = []string{}
+		operation.Conflict, operation.BlockedBy = nil, ""
 		operation.GroupServiceID, operation.ModuleID = workspaceRecord.GroupServiceID, workspaceRecord.ModuleID
 		operation.GenbuStatus = initialGenbuStatus()
 	} else {
@@ -510,15 +513,33 @@ func repositoryByID(config domain.AppConfig, id string) (domain.RepositoryConfig
 }
 
 func (s *Service) runTagBuild(ctx context.Context, task resolvedTask, target domain.EffectiveTagTarget, validated mutationTarget, operation *domain.TagOperation) error {
-	preview, err := s.preflightUnlocked(ctx, task.manifest, target, validated)
+	blocker, err := s.tagBuildBlocker(ctx, task, validated, *operation)
+	if err != nil {
+		return s.finishBuildFailure(ctx, task.directory, operation, err)
+	}
+	if blocker != "" {
+		operation.BlockedBy = blocker
+		message := "等待同仓库目标分支的冲突操作完成：" + blocker
+		return s.transition(ctx, task.directory, operation, domain.TagOperationCreated, nil, nil, nil, &message, nil)
+	}
+	endpoint, err := s.bindTagWriteEndpoint(ctx, validated.repository, target.Remote, operation)
+	if err != nil {
+		return s.finishBuildFailure(ctx, task.directory, operation, err)
+	}
+	identity := endpoint.identity()
+	ctx = withTagRemoteIdentity(ctx, identity, endpoint.key)
+	var conflictPath string
+	if target.Mode == domain.TagBuildMergeToTargetBranch {
+		conflictPath, err = s.conflictWorktreePath(operation.OperationID)
+		if err != nil {
+			return s.finishBuildFailure(ctx, task.directory, operation, err)
+		}
+	}
+	preview, err := s.preflightUnlocked(ctx, task.manifest, target, validated, conflictPath)
 	if err != nil {
 		var conflict *mergeConflictError
 		if errors.As(err, &conflict) {
-			message := mergeConflictMessage(target.Workspace.ServiceName, target.SourceBranch, target.Remote+"/"+value(target.TargetBranch))
-			if transitionErr := s.transition(ctx, task.directory, operation, domain.TagOperationConflict, nil, nil, nil, &message, conflict.files); transitionErr != nil {
-				return s.finishBuildFailure(ctx, task.directory, operation, errors.Join(err, transitionErr))
-			}
-			return s.recordTagHistoryWithCleanup(ctx, task.directory, *operation)
+			return s.recordTagConflict(ctx, task, validated, operation, preview.SourceSHA, preview.SourceSync.remoteSHA, conflict, endpoint)
 		}
 		return s.finishBuildFailure(ctx, task.directory, operation, err)
 	}
@@ -530,8 +551,14 @@ func (s *Service) runTagBuild(ctx context.Context, task resolvedTask, target dom
 	}
 	if preview.SourceSync.PushRequired() || target.Mode == domain.TagBuildCurrentBranch {
 		s.notifyTag("pushing-source", "推送源分支", "", operation)
-		if _, err = s.run(ctx, validated.repository, 10*time.Minute, true, false, "push", "--set-upstream", target.Remote, target.SourceBranch+":refs/heads/"+target.SourceBranch); err != nil {
+		if err = s.requireTagRemoteIdentity(ctx, validated.repository, target.Remote, identity); err != nil {
 			return s.finishBuildFailure(ctx, task.directory, operation, err)
+		}
+		sourceRef := "refs/heads/" + target.SourceBranch
+		push, err := s.run(ctx, validated.repository, 10*time.Minute, false, false, "push", "--no-follow-tags", "--no-mirror",
+			"--recurse-submodules=no", "--set-upstream", "--", target.Remote, sourceRef+":"+sourceRef)
+		if err != nil || push.ExitCode != 0 {
+			return s.finishBuildFailure(ctx, task.directory, operation, guardedTagGitFailure(ctx, "推送源分支失败", push.ExitCode))
 		}
 	}
 	if err = s.transition(ctx, task.directory, operation, domain.TagOperationSourceBranchPushed, nil, nil, nil, nil, nil); err != nil {
@@ -539,17 +566,18 @@ func (s *Service) runTagBuild(ctx context.Context, task resolvedTask, target dom
 	}
 	var tagCommit string
 	if target.Mode == domain.TagBuildMergeToTargetBranch {
-		mergeResult, mergeErr := s.mergeAndPushTargetBranch(ctx, validated.repository, preview.SourceSHA, target, target.Workspace.ServiceName)
+		mergeResult, mergeErr := s.mergeAndPushTargetBranch(ctx, validated.repository, preview.SourceSHA, target, conflictPath)
 		if mergeErr != nil {
-			var conflict *mergeConflictError
-			if errors.As(mergeErr, &conflict) {
-				message := mergeConflictMessage(target.Workspace.ServiceName, target.SourceBranch, target.Remote+"/"+value(target.TargetBranch))
-				if err := s.transition(ctx, task.directory, operation, domain.TagOperationConflict, nil, nil, nil, &message, conflict.files); err != nil {
-					return s.finishBuildFailure(ctx, task.directory, operation, err)
+			if mergeResult.targetSHA == "" {
+				var conflict *mergeConflictError
+				if errors.As(mergeErr, &conflict) {
+					return s.recordTagConflict(ctx, task, validated, operation, preview.SourceSHA, preview.SourceSHA, conflict, endpoint)
 				}
-				return s.recordTagHistoryWithCleanup(ctx, task.directory, *operation)
+				return s.finishBuildFailure(ctx, task.directory, operation, mergeErr)
 			}
-			return s.finishBuildFailure(ctx, task.directory, operation, mergeErr)
+			// The target was verified. Cleanup can leave a worktree with
+			// ignored test evidence, without blocking the Tag push.
+			operation.PreflightWorktree = conflictPath
 		}
 		tagCommit = mergeResult.targetSHA
 		if err = s.transition(ctx, task.directory, operation, domain.TagOperationTargetBranchPushed, nil, &tagCommit, nil, nil, nil); err != nil {
@@ -558,13 +586,21 @@ func (s *Service) runTagBuild(ctx context.Context, task resolvedTask, target dom
 	} else {
 		tagCommit = preview.SourceSHA
 	}
+	return s.completeTagBuild(ctx, task, target, validated.repository, operation, tagCommit)
+}
+
+func (s *Service) completeTagBuild(ctx context.Context, task resolvedTask, target domain.EffectiveTagTarget, repository string, operation *domain.TagOperation, tagCommit string) error {
 	s.notifyTag("creating-tag", "创建测试Tag", "", operation)
-	initial, err := s.nextTag(ctx, validated.repository, tagCommit)
-	if err != nil {
-		return s.finishBuildFailure(ctx, task.directory, operation, err)
+	initial := value(operation.Tag)
+	if initial == "" {
+		var err error
+		initial, err = s.nextTag(ctx, repository, tagCommit)
+		if err != nil {
+			return s.finishBuildFailure(ctx, task.directory, operation, err)
+		}
 	}
-	message := s.auditMessage(task.manifest, target, preview.SourceSHA)
-	pushedTag, err := s.createAndPushTag(ctx, validated.repository, target.Remote, initial, tagCommit, message, func(candidate string) error {
+	message := s.auditMessage(task.manifest, target, value(operation.SourceSHA))
+	pushedTag, err := s.createAndPushTag(ctx, repository, target.Remote, initial, tagCommit, message, func(candidate string) error {
 		return s.transition(ctx, task.directory, operation, operation.State, nil, nil, &candidate, nil, nil)
 	}, func(candidate string) error {
 		return s.transition(ctx, task.directory, operation, domain.TagOperationLocalTagCreated, nil, nil, &candidate, nil, nil)
@@ -587,7 +623,8 @@ func (s *Service) finishBuildFailure(ctx context.Context, taskDirectory string, 
 }
 
 func (s *Service) finishBuildFailureWithTargetSHA(ctx context.Context, taskDirectory string, operation *domain.TagOperation, cause error, targetSHA *string) error {
-	partial := operation.Tag != nil && oneOf(operation.State, domain.TagOperationSourceBranchPushed, domain.TagOperationTargetBranchPushed, domain.TagOperationLocalTagCreated)
+	partial := oneOf(operation.State, domain.TagOperationTargetBranchPushed, domain.TagOperationPartial) ||
+		operation.Tag != nil && oneOf(operation.State, domain.TagOperationSourceBranchPushed, domain.TagOperationLocalTagCreated, domain.TagOperationTagPushed)
 	state := domain.TagOperationFailed
 	if partial {
 		state = domain.TagOperationPartial
@@ -658,7 +695,7 @@ func (s *Service) transition(ctx context.Context, taskDirectory string, operatio
 	return nil
 }
 
-func (s *Service) preflightUnlocked(ctx context.Context, manifest domain.TaskManifest, target domain.EffectiveTagTarget, validated mutationTarget) (TagPreflight, error) {
+func (s *Service) preflightUnlocked(ctx context.Context, manifest domain.TaskManifest, target domain.EffectiveTagTarget, validated mutationTarget, conflictPath string) (TagPreflight, error) {
 	if err := s.ensureCleanFeatureWorktree(ctx, validated.worktree); err != nil {
 		return TagPreflight{}, err
 	}
@@ -668,11 +705,11 @@ func (s *Service) preflightUnlocked(ctx context.Context, manifest domain.TaskMan
 	if err := s.fetchTags(ctx, validated.repository, target.Remote); err != nil {
 		return TagPreflight{}, err
 	}
-	sourceSHA, err := s.resolve(ctx, validated.repository, target.Workspace.Branch)
+	sourceSHA, err := s.resolve(ctx, validated.repository, "refs/heads/"+target.Workspace.Branch)
 	if err != nil {
 		return TagPreflight{}, err
 	}
-	remoteSourceRef := target.Remote + "/" + target.Workspace.Branch
+	remoteSourceRef := "refs/remotes/" + target.Remote + "/" + target.Workspace.Branch
 	sync, err := s.featureSync(ctx, validated.repository, sourceSHA, remoteSourceRef)
 	if err != nil {
 		return TagPreflight{}, err
@@ -701,7 +738,7 @@ func (s *Service) preflightUnlocked(ctx context.Context, manifest domain.TaskMan
 	if target.TargetBranch == nil {
 		return TagPreflight{}, errors.New("合并到目标分支模式缺少目标分支")
 	}
-	targetRef := target.Remote + "/" + *target.TargetBranch
+	targetRef := "refs/remotes/" + target.Remote + "/" + *target.TargetBranch
 	targetSHA, err := s.resolve(ctx, validated.repository, targetRef)
 	if err != nil {
 		return TagPreflight{}, err
@@ -720,8 +757,12 @@ func (s *Service) preflightUnlocked(ctx context.Context, manifest domain.TaskMan
 		mergeMode = "MERGE_COMMIT"
 	}
 	preview.MergeMode = &mergeMode
-	if err = s.verifyMergeInTemporaryWorktree(ctx, validated.repository, targetSHA, sourceSHA, target.Workspace.ServiceName); err != nil {
-		return TagPreflight{}, err
+	if err = s.verifyMergeInTemporaryWorktree(ctx, validated.repository, targetSHA, sourceSHA, target.Workspace.ServiceName, conflictPath); err != nil {
+		var conflict *mergeConflictError
+		if errors.As(err, &conflict) {
+			preview.ConflictFiles = conflict.files
+		}
+		return preview, err
 	}
 	commits, err := s.run(ctx, validated.repository, 10*time.Minute, true, true, "log", "--format=%h %s", "--no-merges", targetSHA+".."+sourceSHA)
 	if err != nil {
@@ -796,10 +837,13 @@ func (s *Service) featureSync(ctx context.Context, repository, sourceSHA, remote
 	if err != nil {
 		return FeatureSyncStatus{}, err
 	}
-	return FeatureSyncStatus{RemoteExists: true, Ahead: a, Behind: b}, nil
+	return FeatureSyncStatus{RemoteExists: true, Ahead: a, Behind: b, remoteSHA: strings.TrimSpace(result.Stdout)}, nil
 }
 
-type mergeConflictError struct{ files []string }
+type mergeConflictError struct {
+	files           []string
+	path, targetSHA string
+}
 
 func (e *mergeConflictError) Error() string {
 	return "合并存在冲突：" + strings.Join(e.files, ", ")
@@ -812,103 +856,139 @@ type genbuCandidate struct {
 	service   string
 }
 
-func (s *Service) mergeAndPushTargetBranch(ctx context.Context, repository, sourceSHA string, target domain.EffectiveTagTarget, serviceName string) (mergePushResult, error) {
+func (s *Service) mergeAndPushTargetBranch(ctx context.Context, repository, sourceSHA string, target domain.EffectiveTagTarget, conflictPath string) (mergePushResult, error) {
 	branch := value(target.TargetBranch)
+	identity := tagRemoteIdentityFromContext(ctx)
+	if identity == "" {
+		var err error
+		_, identity, err = s.tagRemoteIdentity(ctx, repository, target.Remote)
+		if err != nil {
+			return mergePushResult{}, err
+		}
+	}
 	for attempt := 0; attempt < 2; attempt++ {
+		if err := s.requireTagRemoteIdentity(ctx, repository, target.Remote, identity); err != nil {
+			return mergePushResult{}, err
+		}
 		if err := s.fetch(ctx, repository, target.Remote); err != nil {
 			return mergePushResult{}, err
 		}
 		if err := s.fetchTags(ctx, repository, target.Remote); err != nil {
 			return mergePushResult{}, err
 		}
-		remoteRef := target.Remote + "/" + branch
+		remoteRef := "refs/remotes/" + target.Remote + "/" + branch
 		remoteTargetSHA, err := s.resolve(ctx, repository, remoteRef)
 		if err != nil {
 			return mergePushResult{}, err
+		}
+		recovered, err := s.recoverTagWorktree(ctx, repository, conflictPath, remoteTargetSHA, sourceSHA)
+		if err != nil {
+			return mergePushResult{}, err
+		}
+		if recovered.conflict != nil {
+			return mergePushResult{}, recovered.conflict
 		}
 		merged, err := s.isAncestor(ctx, repository, sourceSHA, remoteTargetSHA)
 		if err != nil {
 			return mergePushResult{}, err
 		}
 		if merged {
+			if recovered.exists && recovered.mergedSHA == "" {
+				if err := s.removeCleanTagWorktree(ctx, repository, conflictPath); err != nil {
+					return mergePushResult{}, err
+				}
+			}
 			return mergePushResult{targetSHA: remoteTargetSHA}, nil
 		}
-		temporary := s.temporaryWorktreePath(repository, serviceName+"-build-"+strconv.Itoa(attempt+1))
-		if err := s.addDetachedWorktree(ctx, repository, temporary, remoteTargetSHA); err != nil {
-			return mergePushResult{}, err
-		}
-		cleanup := func() {
-			_, _ = s.run(context.Background(), temporary, 2*time.Minute, false, false, "merge", "--abort")
-			_ = s.removeWorktree(context.Background(), repository, temporary, true)
-			_, _ = s.run(context.Background(), repository, 2*time.Minute, false, false, "worktree", "prune")
-		}
-		s.notifyTag("merging", "合并目标分支", "", nil)
-		merge, runErr := s.run(ctx, temporary, 10*time.Minute, false, false, "merge", "--no-edit", sourceSHA)
-		if runErr != nil {
-			cleanup()
-			return mergePushResult{}, runErr
-		}
-		if merge.ExitCode != 0 {
-			files, _ := s.conflictFiles(ctx, temporary)
-			_, _ = s.run(context.Background(), temporary, 2*time.Minute, false, false, "merge", "--abort")
-			cleanup()
-			if len(files) > 0 {
-				return mergePushResult{}, &mergeConflictError{files: files}
-			}
-			return mergePushResult{}, gitFailure("合并目标分支失败", merge)
-		}
-		mergedSHA, err := s.resolve(ctx, temporary, "HEAD")
+		mergedSHA, err := s.prepareTagTargetMerge(ctx, repository, conflictPath, remoteTargetSHA, sourceSHA, recovered)
 		if err != nil {
-			cleanup()
 			return mergePushResult{}, err
 		}
 		s.notifyTag("pushing-target", "推送目标分支", "", nil)
-		push, runErr := s.run(ctx, temporary, 10*time.Minute, false, false, "push", target.Remote, "HEAD:refs/heads/"+branch)
+		if err := s.requireTagRemoteIdentity(ctx, repository, target.Remote, identity); err != nil {
+			return mergePushResult{}, tagWorktreeNeedsReview(conflictPath, err)
+		}
+		push, runErr := s.run(ctx, repository, 10*time.Minute, false, false, "push", "--no-follow-tags", "--no-mirror",
+			"--recurse-submodules=no", "--", target.Remote, mergedSHA+":refs/heads/"+branch)
 		if runErr != nil {
-			cleanup()
-			return mergePushResult{}, runErr
+			if ctx.Err() != nil {
+				return mergePushResult{}, tagWorktreeNeedsReview(conflictPath, ctx.Err())
+			}
+			return mergePushResult{}, tagWorktreeNeedsReview(conflictPath, errors.New("无法执行目标分支推送"))
 		}
 		if push.ExitCode == 0 {
-			cleanup()
+			if err := s.requireTagRemoteIdentity(ctx, repository, target.Remote, identity); err != nil {
+				return mergePushResult{}, tagWorktreeNeedsReview(conflictPath, err)
+			}
 			if err := s.fetch(ctx, repository, target.Remote); err != nil {
-				return mergePushResult{}, err
+				return mergePushResult{}, tagWorktreeNeedsReview(conflictPath, err)
 			}
 			if err := s.fetchTags(ctx, repository, target.Remote); err != nil {
-				return mergePushResult{}, err
+				return mergePushResult{}, tagWorktreeNeedsReview(conflictPath, err)
 			}
 			verified, err := s.resolve(ctx, repository, remoteRef)
 			if err != nil {
-				return mergePushResult{}, err
+				return mergePushResult{}, tagWorktreeNeedsReview(conflictPath, err)
 			}
 			if verified != mergedSHA {
-				return mergePushResult{}, fmt.Errorf("推送后远端 %s 的 SHA 校验失败", branch)
+				return mergePushResult{}, tagWorktreeNeedsReview(conflictPath, changedTagBaseline(target.Remote+"/"+branch, mergedSHA, verified))
+			}
+			if err := s.removeCleanTagWorktree(ctx, repository, conflictPath); err != nil {
+				return mergePushResult{targetSHA: mergedSHA}, err
 			}
 			return mergePushResult{targetSHA: mergedSHA}, nil
 		}
-		cleanup()
-		if attempt == 1 {
-			return mergePushResult{}, gitFailure("目标分支在推送期间被更新，重试后仍失败", push)
+		if recovered.exists || attempt == 1 {
+			return mergePushResult{}, tagWorktreeNeedsReview(conflictPath, fmt.Errorf("推送远端分支 %s 失败（退出码 %d）", branch, push.ExitCode))
+		}
+		if err := s.removeCleanTagWorktree(ctx, repository, conflictPath); err != nil {
+			return mergePushResult{}, err
 		}
 	}
 	return mergePushResult{}, errors.New("无法更新目标分支")
 }
 
-func (s *Service) verifyMergeInTemporaryWorktree(ctx context.Context, repository, targetSHA, sourceSHA, serviceName string) error {
+func (s *Service) verifyMergeInTemporaryWorktree(ctx context.Context, repository, targetSHA, sourceSHA, serviceName, conflictPath string) error {
+	recovered, err := s.recoverTagWorktree(ctx, repository, conflictPath, targetSHA, sourceSHA)
+	if err != nil {
+		return err
+	}
+	if recovered.conflict != nil {
+		return recovered.conflict
+	}
+	if recovered.mergedSHA != "" {
+		return nil
+	}
 	alreadyMerged, err := s.isAncestor(ctx, repository, sourceSHA, targetSHA)
 	if err != nil || alreadyMerged {
 		return err
 	}
-	temporary := s.temporaryWorktreePath(repository, serviceName+"-preflight")
-	if err := s.addDetachedWorktree(ctx, repository, temporary, targetSHA); err != nil {
-		return err
+	temporary := conflictPath
+	if temporary == "" {
+		temporary = s.temporaryWorktreePath(repository, serviceName+"-preflight")
 	}
+	if !recovered.exists {
+		if err := s.addDetachedWorktree(ctx, repository, temporary, targetSHA); err != nil {
+			if conflictPath != "" {
+				return tagWorktreeNeedsReview(conflictPath, err)
+			}
+			return err
+		}
+	}
+	retain := false
 	defer func() {
+		if retain || recovered.exists {
+			return
+		}
 		_, _ = s.run(context.Background(), temporary, 2*time.Minute, false, false, "merge", "--abort")
 		_ = s.removeWorktree(context.Background(), repository, temporary, true)
-		_, _ = s.run(context.Background(), repository, 2*time.Minute, false, false, "worktree", "prune")
 	}()
-	merge, runErr := s.run(ctx, temporary, 10*time.Minute, false, false, "merge", "--no-commit", "--no-ff", sourceSHA)
+	merge, runErr := s.run(ctx, temporary, 10*time.Minute, false, false, "merge", "--no-commit", "--no-ff", "--no-overwrite-ignore", sourceSHA)
 	if runErr != nil {
+		if conflictPath != "" {
+			retain = true
+			return tagWorktreeNeedsReview(conflictPath, runErr)
+		}
 		return runErr
 	}
 	files, err := s.conflictFiles(ctx, temporary)
@@ -916,10 +996,20 @@ func (s *Service) verifyMergeInTemporaryWorktree(ctx context.Context, repository
 		return err
 	}
 	if len(files) > 0 {
-		return &mergeConflictError{files: files}
+		retain = conflictPath != ""
+		return &mergeConflictError{files: files, path: conflictPath, targetSHA: targetSHA}
 	}
 	if merge.ExitCode != 0 {
-		return gitFailure("合并预检失败", merge)
+		err := gitFailure("合并预检失败", merge)
+		if recovered.exists {
+			return tagWorktreeNeedsReview(conflictPath, err)
+		}
+		return err
+	}
+	if recovered.exists {
+		if _, err := s.run(ctx, temporary, 2*time.Minute, true, false, "merge", "--abort"); err != nil {
+			return tagWorktreeNeedsReview(conflictPath, err)
+		}
 	}
 	return nil
 }
@@ -1004,6 +1094,7 @@ func (s *Service) createOrValidateLocalTag(ctx context.Context, repository, tag,
 }
 
 func (s *Service) pushTag(ctx context.Context, repository, remote, tag, commit string) error {
+	identity := tagRemoteIdentityFromContext(ctx)
 	before, err := s.remoteTagSHA(ctx, repository, remote, tag)
 	if err != nil {
 		return err
@@ -1014,16 +1105,34 @@ func (s *Service) pushTag(ctx context.Context, repository, remote, tag, commit s
 		}
 		return nil
 	}
-	push, err := s.run(ctx, repository, 10*time.Minute, false, false, "push", remote, "refs/tags/"+tag+":refs/tags/"+tag)
+	args := []string{"push"}
+	if identity != "" {
+		if err := s.requireTagRemoteIdentity(ctx, repository, remote, identity); err != nil {
+			return err
+		}
+		args = append(args, "--no-follow-tags", "--no-mirror", "--recurse-submodules=no", "--")
+	}
+	push, err := s.run(ctx, repository, 10*time.Minute, false, false, append(args, remote, "refs/tags/"+tag+":refs/tags/"+tag)...)
 	if err != nil {
+		if identity != "" {
+			return guardedTagGitFailure(ctx, "推送测试Tag失败", push.ExitCode)
+		}
 		return err
 	}
-	if push.ExitCode == 0 {
+	if identity == "" && push.ExitCode == 0 {
 		return nil
+	}
+	var pushErr error
+	if push.ExitCode != 0 {
+		if identity != "" {
+			pushErr = guardedTagGitFailure(ctx, "推送测试Tag失败", push.ExitCode)
+		} else {
+			pushErr = gitFailure("推送测试Tag失败", push)
+		}
 	}
 	after, queryErr := s.remoteTagSHA(ctx, repository, remote, tag)
 	if queryErr != nil {
-		return errors.Join(gitFailure("推送测试Tag失败", push), queryErr)
+		return errors.Join(pushErr, queryErr)
 	}
 	if after != "" && after != commit {
 		return &TagCollisionError{tag, after, commit, "远端"}
@@ -1031,22 +1140,37 @@ func (s *Service) pushTag(ctx context.Context, repository, remote, tag, commit s
 	if after == commit {
 		return nil
 	}
-	return gitFailure("推送测试Tag失败", push)
+	if pushErr != nil {
+		return pushErr
+	}
+	return errors.New("推送后未读到远端测试Tag")
 }
 
 func (s *Service) remoteTagSHA(ctx context.Context, repository, remote, tag string) (string, error) {
-	peeled, err := s.run(ctx, repository, 2*time.Minute, false, true, "ls-remote", remote, "refs/tags/"+tag+"^{}")
+	identity := tagRemoteIdentityFromContext(ctx)
+	readRef := func(ref string) (string, error) {
+		args := []string{"ls-remote"}
+		if identity != "" {
+			if err := s.requireTagRemoteIdentity(ctx, repository, remote, identity); err != nil {
+				return "", err
+			}
+			args = append(args, "--")
+		}
+		result, err := s.run(ctx, repository, 2*time.Minute, identity == "", true, append(args, remote, ref)...)
+		if identity != "" && (err != nil || result.ExitCode != 0 || result.StdoutTruncated) {
+			return "", guardedTagGitFailure(ctx, "读取远端测试Tag失败", result.ExitCode)
+		}
+		return remoteOutputSHA(result.Stdout), err
+	}
+	ref := "refs/tags/" + tag
+	peeled, err := readRef(ref + "^{}")
 	if err != nil {
 		return "", err
 	}
-	if value := remoteOutputSHA(peeled.Stdout); value != "" {
-		return value, nil
+	if peeled != "" {
+		return peeled, nil
 	}
-	direct, err := s.run(ctx, repository, 2*time.Minute, false, true, "ls-remote", remote, "refs/tags/"+tag)
-	if err != nil {
-		return "", err
-	}
-	return remoteOutputSHA(direct.Stdout), nil
+	return readRef(ref)
 }
 
 func remoteOutputSHA(output string) string {
@@ -1177,18 +1301,10 @@ func (s *Service) isAncestor(ctx context.Context, repository, ancestor, descenda
 	return false, gitFailure("Git 祖先关系检查失败", result)
 }
 func (s *Service) fetch(ctx context.Context, repository, remote string) error {
-	if remote == "" {
-		remote = "origin"
-	}
-	_, err := s.run(ctx, repository, 5*time.Minute, true, false, "fetch", "--prune", "--no-tags", remote)
-	return err
+	return s.fetchTagRemote(ctx, repository, remote, "--prune", "--no-tags")
 }
 func (s *Service) fetchTags(ctx context.Context, repository, remote string) error {
-	if remote == "" {
-		remote = "origin"
-	}
-	_, err := s.run(ctx, repository, 5*time.Minute, true, false, "fetch", "--tags", "--prune", "--prune-tags", "--force", remote)
-	return err
+	return s.fetchTagRemote(ctx, repository, remote, "--tags", "--no-prune", "--no-prune-tags")
 }
 func (s *Service) addDetachedWorktree(ctx context.Context, repository, target, ref string) error {
 	_, err := s.run(ctx, repository, 5*time.Minute, true, false, "-c", "core.symlinks=false", "worktree", "add", "--detach", target, ref)
@@ -1209,8 +1325,12 @@ func (s *Service) Preflight(ctx context.Context, taskFolder, selection string) (
 	if err != nil {
 		return TagPreflight{}, err
 	}
+	return s.preflightTask(ctx, task, selection)
+}
+
+func (s *Service) preflightTask(ctx context.Context, task resolvedTask, selection string) (TagPreflight, error) {
 	var preview TagPreflight
-	err = s.withTaskLock(task.directory, func() error {
+	err := s.withTaskLock(task.directory, func() error {
 		target, err := domain.ResolveEffectiveTagTarget(task.config, task.manifest, selection)
 		if err != nil {
 			return err
@@ -1221,7 +1341,7 @@ func (s *Service) Preflight(ctx context.Context, taskFolder, selection string) (
 		}
 		return s.withRepositoryLock(ctx, validated.repository, func() error {
 			var inner error
-			preview, inner = s.preflightUnlocked(ctx, task.manifest, target, validated)
+			preview, inner = s.preflightUnlocked(ctx, task.manifest, target, validated, "")
 			if inner != nil {
 				return inner
 			}
@@ -1239,7 +1359,7 @@ func (s *Service) Status(ctx context.Context, taskFolder, operationID string) (T
 	if !task.config.TagEnabled {
 		return TagOperationReport{}, errors.New("全局测试Tag已关闭")
 	}
-	operation, err := s.probeOperation(ctx, task, operationID)
+	operation, err := s.probeOperation(ctx, task, operationID, nil)
 	if err != nil {
 		return TagOperationReport{}, err
 	}
@@ -1280,14 +1400,20 @@ func (s *Service) Retry(ctx context.Context, taskFolder, operationID string) (Ta
 }
 
 func (s *Service) retryTask(ctx context.Context, task resolvedTask, operationID string) (TagOperationReport, error) {
-	// Desktop retry validates saved state, as TagBuildService.retag does in
-	// the source. Genbu probing belongs to the explicit refresh actions.
-	operation, err := s.store.load(task.directory, operationID)
-	if err != nil {
-		return TagOperationReport{}, err
-	}
 	var updated domain.TagOperation
-	err = s.withTaskLock(task.directory, func() error {
+	err := s.withTaskLock(task.directory, func() error {
+		operation, err := s.store.load(task.directory, operationID)
+		if err != nil {
+			return err
+		}
+		if operation.PreflightID != "" {
+			updated = operation
+			return s.retryApprovedTag(ctx, task, &updated)
+		}
+		if operation.Conflict != nil && operation.State != domain.TagOperationSuccess {
+			updated, err = s.resumeTagConflict(ctx, task, operation)
+			return err
+		}
 		var inner error
 		switch retryKind(operation) {
 		case TagRetryResolveConflict:
@@ -1332,6 +1458,9 @@ func (s *Service) retryTask(ctx context.Context, task resolvedTask, operationID 
 		return inner
 	})
 	if err != nil {
+		if updated.OperationID != "" {
+			return operationReport(updated, task.manifest.TaskDirectoryName), err
+		}
 		return TagOperationReport{}, err
 	}
 	return operationReport(updated, task.manifest.TaskDirectoryName), nil
@@ -1367,7 +1496,7 @@ func (s *Service) resumePartial(ctx context.Context, task resolvedTask, operatio
 	if err != nil {
 		return domain.TagOperation{}, err
 	}
-	if operation.State != domain.TagOperationPartial {
+	if retryKind(operation) != TagRetryPartial {
 		return domain.TagOperation{}, fmt.Errorf("只有部分失败的测试Tag操作可以恢复")
 	}
 	target, err := domain.ResolveHistoricalTagTarget(task.config, task.manifest, operation)
@@ -1378,10 +1507,6 @@ func (s *Service) resumePartial(ctx context.Context, task resolvedTask, operatio
 	if err != nil {
 		return domain.TagOperation{}, err
 	}
-	tag := value(operation.Tag)
-	if tag == "" {
-		return domain.TagOperation{}, errors.New("操作没有可恢复的本地测试Tag")
-	}
 	tagCommit := value(operation.TargetSHA)
 	if tagCommit == "" {
 		tagCommit = value(operation.SourceSHA)
@@ -1390,26 +1515,18 @@ func (s *Service) resumePartial(ctx context.Context, task resolvedTask, operatio
 		return domain.TagOperation{}, errors.New("操作没有可恢复的测试Tag提交")
 	}
 	err = s.withRepositoryLock(ctx, validated.repository, func() error {
-		pushed, pushErr := s.createAndPushTag(ctx, validated.repository, target.Remote, tag, tagCommit,
-			s.auditMessage(task.manifest, target, value(operation.SourceSHA)),
-			func(candidate string) error {
-				return s.transition(ctx, task.directory, &operation, operation.State, nil, nil, &candidate, nil, nil)
-			},
-			func(candidate string) error {
-				return s.transition(ctx, task.directory, &operation, domain.TagOperationLocalTagCreated, nil, nil, &candidate, nil, nil)
-			},
-		)
-		if pushErr != nil {
-			return s.finishTagFailure(ctx, task.directory, &operation, domain.TagOperationPartial, pushErr, nil)
+		hadPin := operation.WriteEndpoint != nil
+		endpoint, err := s.bindTagWriteEndpoint(ctx, validated.repository, target.Remote, &operation)
+		if err != nil {
+			return err
 		}
-		if err := s.transition(ctx, task.directory, &operation, domain.TagOperationTagPushed, nil, nil, nil, nil, nil); err != nil {
-			return s.finishTagFailure(ctx, task.directory, &operation, domain.TagOperationPartial, err, nil)
+		guarded := withTagRemoteIdentity(ctx, endpoint.identity(), endpoint.key)
+		if !hadPin {
+			if err := s.transition(guarded, task.directory, &operation, operation.State, nil, nil, nil, nil, nil); err != nil {
+				return err
+			}
 		}
-		message := target.Workspace.ServiceName + "：" + pushed
-		if err := s.transition(ctx, task.directory, &operation, domain.TagOperationSuccess, nil, nil, nil, &message, nil); err != nil {
-			return s.finishTagFailure(ctx, task.directory, &operation, domain.TagOperationPartial, err, nil)
-		}
-		return s.recordTagHistoryWithCleanup(ctx, task.directory, operation)
+		return s.completeTagBuild(guarded, task, target, validated.repository, &operation, tagCommit)
 	})
 	return operation, err
 }
@@ -1431,6 +1548,9 @@ func (s *Service) workspaceCheckTask(ctx context.Context, task resolvedTask, ope
 		operation, err := s.store.load(task.directory, operationID)
 		if err != nil {
 			return err
+		}
+		if operation.Conflict != nil && operation.State != domain.TagOperationSuccess {
+			return s.checkTagConflict(ctx, task, operation, &report)
 		}
 		if operation.State != domain.TagOperationConflict && operation.State != domain.TagOperationFailed {
 			return fmt.Errorf("只有冲突或失败的测试Tag需要检测工作区（当前：%s）", stateLabel(operation.State))
@@ -1491,15 +1611,16 @@ func tagWorkspaceChanges(statusOutput string) []string {
 
 func retryKind(operation domain.TagOperation) TagRetryKind {
 	switch {
-	case operation.State == domain.TagOperationConflict:
+	case operation.State == domain.TagOperationConflict || operation.Conflict != nil && operation.State != domain.TagOperationSuccess:
 		return TagRetryResolveConflict
+	case oneOf(operation.State, domain.TagOperationPartial, domain.TagOperationTargetBranchPushed, domain.TagOperationLocalTagCreated, domain.TagOperationTagPushed),
+		operation.State == domain.TagOperationSourceBranchPushed && operation.Tag != nil:
+		return TagRetryPartial
 	case oneOf(operation.State, domain.TagOperationCreated, domain.TagOperationPreflightPassed, domain.TagOperationSourceBranchPushed):
 		return TagRetryInterrupted
 	case operation.State == domain.TagOperationFailed:
 		return TagRetryBuild
-	case operation.State == domain.TagOperationPartial:
-		return TagRetryPartial
-	case operation.State == domain.TagOperationSuccess && operation.GenbuStatus.Build == domain.GenbuFailed && operation.GenbuStatus.FailureReason == nil:
+	case operation.PreflightID == "" && operation.State == domain.TagOperationSuccess && operation.GenbuStatus.Build == domain.GenbuFailed && operation.GenbuStatus.FailureReason == nil:
 		return TagRetryRetag
 	default:
 		return TagRetryNone
@@ -1511,6 +1632,14 @@ func operationReport(operation domain.TagOperation, taskFolder string) TagOperat
 }
 
 func operationGuidance(operation domain.TagOperation, taskFolder string) *string {
+	if operation.PreflightID != "" && operation.GenbuStatus.FailureReason == nil {
+		if operation.State != domain.TagOperationSuccess && operation.BlockedBy == "" {
+			return stringPointer("使用原操作 ID 续接本次构建")
+		}
+		if operation.State == domain.TagOperationSuccess && operation.GenbuStatus.Build == domain.GenbuFailed {
+			return stringPointer("Genbu 编译失败。需要重新预检才能创建新 Tag")
+		}
+	}
 	retry := "在桌面端打开任务“" + taskFolder + "”的 Tag 历史，选择记录 " + operation.OperationID + " 并点击“重试”"
 	var guidance string
 	switch retryKind(operation) {
@@ -1519,13 +1648,22 @@ func operationGuidance(operation domain.TagOperation, taskFolder string) *string
 		if operation.TargetBranch != nil {
 			target = operation.Remote + "/" + *operation.TargetBranch
 		}
-		guidance = mergeConflictMessage(operation.ServiceName, operation.SourceBranch, target) + "\n解决冲突后提交并推送 `" + target + "`，再" + retry + "。"
+		guidance = mergeConflictMessage(operation.ServiceName, operation.SourceBranch, target)
+		if operation.Conflict != nil {
+			guidance += "\n工作区：" + operation.Conflict.Worktree + "\n解决并暂存冲突文件后，重试原操作。"
+		} else {
+			guidance += "\n" + retry + "以准备冲突工作区。"
+		}
 	case TagRetryInterrupted:
-		guidance = "上次Tag构建被中断，尚未合并目标分支或创建测试Tag；" + retry + "。"
+		if operation.BlockedBy != "" {
+			guidance = "等待冲突操作 " + operation.BlockedBy + " 完成后重试。"
+		} else {
+			guidance = "上次Tag构建被中断，尚未合并目标分支或创建测试Tag；" + retry + "。"
+		}
 	case TagRetryBuild:
 		guidance = "Tag构建失败：" + value(operation.Message) + "；修复后，" + retry + "。"
 	case TagRetryPartial:
-		guidance = "测试Tag " + value(operation.Tag) + " 的创建或推送尚未完成；解决记录中的错误后，" + retry + "。"
+		guidance = "测试Tag 的创建或推送尚未完成；解决记录中的错误后，" + retry + "。"
 	case TagRetryRetag:
 		guidance = "Genbu 构建失败；" + retry + "，版本号将在 " + value(operation.Tag) + " 基础上自动 +1。"
 	case TagRetryNone:
@@ -1540,7 +1678,7 @@ func operationGuidance(operation domain.TagOperation, taskFolder string) *string
 }
 
 func mergeConflictMessage(service, source, target string) string {
-	return fmt.Sprintf("我在将服务 %s 的 %s 分支合并到 %s 时遇到了冲突，请你解决。", service, source, target)
+	return fmt.Sprintf("我在将服务 %s 的 %s 分支合并到 %s 时遇到了冲突，请你解决。禁止将 %s 分支合并到 %s 分支。", service, source, target, target, source)
 }
 
 func stateLabel(state domain.TagOperationState) string {
@@ -1574,7 +1712,7 @@ func initialGenbuStatus() domain.GenbuTagProbeStatus {
 	return domain.GenbuTagProbeStatus{Build: domain.GenbuUnknown, UAT: domain.GenbuUnknown, Production: domain.GenbuUnknown}
 }
 
-func (s *Service) probeOperation(ctx context.Context, task resolvedTask, operationID string) (domain.TagOperation, error) {
+func (s *Service) probeOperation(ctx context.Context, task resolvedTask, operationID string, observed *domain.GenbuTagProbeStatus) (domain.TagOperation, error) {
 	operation, err := s.store.load(task.directory, operationID)
 	if err != nil {
 		return domain.TagOperation{}, err
@@ -1609,6 +1747,9 @@ func (s *Service) probeOperation(ctx context.Context, task resolvedTask, operati
 		updated.GenbuStatus.ReleasedCompletedAt = queried.UATReleasedCompletedAt
 		updated.GenbuStatus.ProductionReleasedCompletedAt = queried.ProductionReleasedCompletedAt
 		updated.GenbuStatus.FailureReason = nil
+	}
+	if observed != nil {
+		*observed = updated.GenbuStatus
 	}
 	current, _, err := s.store.updateIfUnchanged(ctx, task.directory, operation, func(domain.TagOperation) domain.TagOperation { return updated })
 	if err != nil {

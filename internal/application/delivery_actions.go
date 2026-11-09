@@ -158,8 +158,9 @@ func tagRecord(taskID string, report delivery.TagOperationReport) TagRecord {
 		ID: o.OperationID, TaskID: taskID, ServiceID: o.GroupServiceID, ModuleID: o.ModuleID,
 		FolderName: o.FolderName, ServiceName: o.ServiceName, BatchID: value(o.BatchID), CreatedAt: o.CreatedAt,
 		SourceBranch: o.SourceBranch, TargetBranch: value(o.TargetBranch), Remote: o.Remote,
+		SourceSHA: value(o.SourceSHA), TargetSHA: value(o.TargetSHA),
 		Tag: value(o.Tag), State: string(o.State), RetryKind: string(report.RetryKind), Updated: o.UpdatedAt,
 		Detail: value(o.Message), ConflictSummary: report.ConflictSummary(), ConflictFiles: append([]string{}, o.ConflictFiles...), Guidance: value(report.Guidance),
-		GenbuStatus: o.GenbuStatus,
+		GenbuStatus: o.GenbuStatus, Conflict: o.Conflict, BlockedBy: o.BlockedBy, PreflightWorktree: o.PreflightWorktree,
 	}
 }

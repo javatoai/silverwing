@@ -14,6 +14,21 @@ import (
 	"silverwing-go/internal/workspace"
 )
 
+func TestTagHistoryRetentionPreservesIncompletePreflightBatch(t *testing.T) {
+	groups := []domain.TagHistoryItem{
+		{GroupID: "newer", Operations: []domain.TagOperation{{OperationID: "new", State: domain.TagOperationSuccess}}},
+		{GroupID: "unfinished", Operations: []domain.TagOperation{
+			{OperationID: "pushed", PreflightID: "unfinished", State: domain.TagOperationSuccess},
+			{OperationID: "interrupted", PreflightID: "unfinished", State: domain.TagOperationSourceBranchPushed},
+		}},
+		{GroupID: "finished", Operations: []domain.TagOperation{{OperationID: "old", PreflightID: "finished", State: domain.TagOperationSuccess}}},
+	}
+	deleted, err := HistoryRetentionOperationIDs(groups, 1)
+	if err != nil || len(deleted) != 1 || deleted[0] != "old" {
+		t.Fatalf("expected only the finished old batch to be pruned: %v, %v", deleted, err)
+	}
+}
+
 func TestTagHistoryRetentionLimitIsPerTask(t *testing.T) {
 	root := t.TempDir()
 	config := domain.DefaultAppConfig()

@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-func taskFilesWrite(t *testing.T, root, path string, data []byte) {
+func taskFilesWrite(t testing.TB, root, path string, data []byte) {
 	t.Helper()
 	full := filepath.Join(root, filepath.FromSlash(path))
 	if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
@@ -23,7 +23,7 @@ func taskFilesWrite(t *testing.T, root, path string, data []byte) {
 		t.Fatal(err)
 	}
 }
-func taskFilesScope(t *testing.T, root string) *TaskFilesScope {
+func taskFilesScope(t testing.TB, root string) *TaskFilesScope {
 	t.Helper()
 	scope, err := OpenTaskFilesScope(root)
 	if err != nil {
@@ -31,6 +31,29 @@ func taskFilesScope(t *testing.T, root string) *TaskFilesScope {
 	}
 	t.Cleanup(scope.Close)
 	return scope
+}
+
+func BenchmarkTaskFilesSearchSparse(b *testing.B) {
+	root := b.TempDir()
+	data := []byte("synthetic\n")
+	const repositories = 6
+	for repo := range repositories {
+		taskFilesWrite(b, root, fmt.Sprintf("repo-%d/AGENTS.md", repo), data)
+		for module := range 20 {
+			for file := range 96 {
+				path := fmt.Sprintf("repo-%d/src/main/java/team/module-%02d/file-%03d.java", repo, module, file)
+				taskFilesWrite(b, root, path, data)
+			}
+		}
+	}
+	scope := taskFilesScope(b, root)
+	ctx := context.Background()
+	for b.Loop() {
+		result, err := scope.Search(ctx, "AGE", TaskFilesSearchLimit)
+		if err != nil || len(result.Entries) != repositories || result.Truncated || len(result.Issues) != 0 {
+			b.Fatal(result, err)
+		}
+	}
 }
 
 type taskFilesCancelAfter struct {
@@ -311,16 +334,12 @@ func TestTaskFilesRejectsRedirectsAndAllowsConfiguredRootAlias(t *testing.T) {
 	outside := t.TempDir()
 	taskFilesWrite(t, outside, "secret.txt", []byte("outside"))
 	alias := filepath.Join(container, "alias")
-	if err := os.Symlink(physical, alias); err != nil {
-		t.Skip("directory symlink privilege unavailable:", err)
-	}
+	localMaterialsDirectoryLink(t, alias, physical)
 	scope := taskFilesScope(t, filepath.Join(alias, "task"))
 	if _, err := scope.Read(context.Background(), "safe.txt"); err != nil {
 		t.Fatal("configured ancestor alias rejected", err)
 	}
-	if err := os.Symlink(outside, filepath.Join(task, "linked")); err != nil {
-		t.Fatal(err)
-	}
+	localMaterialsDirectoryLink(t, filepath.Join(task, "linked"), outside)
 	list, err := scope.List(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
@@ -457,9 +476,9 @@ func TestTaskFilesSearchLimitRevalidatesChangedChildBeforePublishing(t *testing.
 			replaced := false
 			ctx := &taskFilesCheckpointContext{Context: context.Background()}
 			ctx.hook = func(checkpoint int) {
-				// Six checks open root/child. Each following check precedes a
-				// matching child entry: replace just before the overflow match.
-				if checkpoint != 7+limit {
+				// Four checks open root/child. Replace the pinned directory
+				// just before the overflow match.
+				if checkpoint != 5+limit {
 					return
 				}
 				if err := os.Rename(filepath.Join(root, "child"), filepath.Join(root, "old-child")); err != nil {
@@ -476,6 +495,31 @@ func TestTaskFilesSearchLimitRevalidatesChangedChildBeforePublishing(t *testing.
 				t.Fatal("truncation published stale child entries or swallowed identity failure", result, err)
 			}
 		})
+	}
+}
+
+func TestTaskFilesSearchRejectsRetargetedTaskRootAlias(t *testing.T) {
+	base := t.TempDir()
+	original, replacement := filepath.Join(base, "original"), filepath.Join(base, "replacement")
+	taskFilesWrite(t, original, "task/child/needle.txt", []byte("old"))
+	taskFilesWrite(t, replacement, "task/child/needle.txt", []byte("new"))
+	alias := filepath.Join(base, "configured")
+	localMaterialsDirectoryLink(t, alias, original)
+	scope := taskFilesScope(t, filepath.Join(alias, "task"))
+	retargeted := false
+	ctx := &taskFilesCheckpointContext{Context: context.Background(), hook: func(checkpoint int) {
+		if checkpoint != 5 {
+			return
+		}
+		if err := os.Rename(alias, filepath.Join(base, "previous")); err != nil {
+			t.Fatal(err)
+		}
+		localMaterialsDirectoryLink(t, alias, replacement)
+		retargeted = true
+	}}
+	result, err := scope.Search(ctx, "needle", TaskFilesSearchLimit)
+	if !retargeted || err == nil || len(result.Entries) != 0 {
+		t.Fatal("search published results after its configured root changed", result, err)
 	}
 }
 

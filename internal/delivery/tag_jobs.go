@@ -116,7 +116,11 @@ func (t *TagTask) Plan(ctx context.Context, selection, operationID, batchID stri
 	} else {
 		resources = append(resources, "repository:"+w.RepositoryID)
 	}
-	return TagTaskItem{SelectionKey: w.SelectionKey(), WorkspacePath: w.WorktreePath, TagMessagePrefix: w.TagMessagePrefix, Resources: resources, Operation: operation, planFailure: remoteErr}, nil
+	path := w.WorktreePath
+	if operation.Conflict != nil && operation.State != domain.TagOperationSuccess {
+		path = operation.Conflict.Worktree
+	}
+	return TagTaskItem{SelectionKey: w.SelectionKey(), WorkspacePath: path, TagMessagePrefix: w.TagMessagePrefix, Resources: resources, Operation: operation, planFailure: remoteErr}, nil
 }
 
 func normalizedResourcePath(path string) string {

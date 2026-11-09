@@ -48,6 +48,7 @@ type Session struct {
 	Title    string    `json:"title"`
 	URL      string    `json:"url"`
 	Rows     []Row     `json:"rows"`
+	Testers  []string  `json:"testers,omitempty"`
 	People   []Person  `json:"people,omitempty"`
 	Receipts []Receipt `json:"receipts"`
 	Kind     string    `json:"kind,omitempty"`

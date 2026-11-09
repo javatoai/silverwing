@@ -90,7 +90,11 @@ func runTagTestCLI(args []string) int {
 		var notice struct {
 			Header struct{ Title struct{ Content string } }
 		}
-		if json.Unmarshal([]byte(card), &notice) != nil || notice.Header.Title.Content != "Fixture applicant：申请发布UAT环境版本" || strings.Contains(card, "申请人：") || key == "" {
+		wantHeader := "Tester、Unmapped, 申请发布UAT环境版本"
+		if roster := os.Getenv("SW_TAG_TEST_ROSTER"); roster == "empty" || roster == "failed" {
+			wantHeader = "测试负责人待确认, 申请发布UAT环境版本"
+		}
+		if json.Unmarshal([]byte(card), &notice) != nil || notice.Header.Title.Content != wantHeader || strings.Contains(card, "申请人：") || key == "" {
 			return 95
 		}
 		log, err := os.OpenFile(os.Getenv("SW_TAG_TEST_SEND_LOG"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)

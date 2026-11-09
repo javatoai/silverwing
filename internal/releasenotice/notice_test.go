@@ -41,7 +41,7 @@ func noticeFixture(t *testing.T, kind string) (Store, Session, *fakeGateway, Sel
 }
 func validateOK(context.Context, Session) error { return nil }
 
-func TestCardPreservesCard20StructureAndTagApplicant(t *testing.T) {
+func TestCardPreservesCard20StructureAndTagTester(t *testing.T) {
 	for _, kind := range []string{"", Branches} {
 		t.Run(kind, func(t *testing.T) {
 			_, session, _, _ := noticeFixture(t, kind)
@@ -83,7 +83,7 @@ func TestCardPreservesCard20StructureAndTagApplicant(t *testing.T) {
 					t.Fatal(raw)
 				}
 			} else {
-				header := session.Identity.Name + "：申请发布UAT环境版本"
+				header := "测试负责人待确认, 申请发布UAT环境版本"
 				if card.Config.WidthMode != "default" || card.Header.Title.Content != header || len(card.Body.Elements) != 3 || card.Body.Elements[2]["element_id"] != "genbu_link" || card.Config.Summary.Content != header+"｜需求 [A]" {
 					t.Fatal(raw)
 				}
@@ -341,15 +341,24 @@ func TestLegacySelfSuccessResendsUsingCurrentLayout(t *testing.T) {
 	}
 }
 
+func TestTagTitleNamesTestersWithoutApplicantOrBrackets(t *testing.T) {
+	_, session, _, _ := noticeFixture(t, "")
+	session.Testers = []string{"靳保新", "梁聪"}
+	card, err := SessionCard(session)
+	if err != nil || !strings.Contains(card, "靳保新、梁聪, 申请发布UAT环境版本") || strings.Contains(card, session.Identity.Name) || strings.ContainsAny(card, "《》") || strings.Contains(card, "请转发") {
+		t.Fatal(card, err)
+	}
+}
+
 func TestUATNoticeRetriesPreviousLayoutsWithOriginalPayload(t *testing.T) {
-	for _, layout := range []string{"anonymous", "applicant-in-body"} {
+	for _, layout := range []string{"anonymous", "applicant-in-body", "applicant-in-header"} {
 		t.Run(layout, func(t *testing.T) {
 			store, session, g, choice := noticeFixture(t, "")
 			applicant := ""
-			if layout == "applicant-in-body" {
+			if layout != "anonymous" {
 				applicant = session.Identity.Name
 			}
-			oldCard, err := renderUATCard(session.Title, session.URL, applicant, session.Rows, true)
+			oldCard, err := renderUATCard(session.Title, session.URL, applicant, session.Rows, layout != "applicant-in-header")
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -159,7 +159,7 @@ func (a *App) releaseNoticeAction(ctx context.Context, action Action) (ActionRes
 			return ActionResult{}, e
 		}
 		title := strings.TrimSpace(value(m.Title))
-		session := releasenotice.Session{Scope: b.scope, Identity: identity, Title: title, URL: b.task.RequirementLink, Rows: b.rows}
+		session := releasenotice.Session{Scope: b.scope, Identity: identity, Title: title, URL: b.task.RequirementLink, Rows: b.rows, Testers: releaseNoticeTesters(m)}
 		session.BindOwner(a.noticeOwnerKey(b.config, b.task))
 		// Revalidate after asynchronous metadata and identity reads.
 		current, e := a.releaseNoticeBatch(ctx, action, false)

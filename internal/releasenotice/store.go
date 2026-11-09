@@ -134,10 +134,11 @@ func (s Store) Send(ctx context.Context, id string, choice Selection, g Gateway,
 		reuseCard := false
 		if receipt, ok := out.LatestReceipt(); ok && out.Kind == "" && receipt.Card != card {
 			for _, applicant := range []string{"", out.Identity.Name} {
-				legacy, err := renderUATCard(out.Title, out.URL, applicant, out.Rows, true)
-				if err == nil && receipt.Card == legacy {
-					reuseCard = true
-					break
+				for _, inBody := range []bool{true, false} {
+					legacy, err := renderUATCard(out.Title, out.URL, applicant, out.Rows, inBody)
+					if err == nil && receipt.Card == legacy {
+						reuseCard = true
+					}
 				}
 			}
 		}

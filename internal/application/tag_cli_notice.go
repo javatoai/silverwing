@@ -66,7 +66,11 @@ func (a *App) CLITagNotify(ctx context.Context, taskID, batchID string) (CLITagN
 			out.Warnings = append(out.Warnings, "未取得需求标题，卡片使用任务名称")
 		}
 		store := releasenotice.Store{Directory: filepath.Join(a.Paths.Home, "release-notices")}
-		session := releasenotice.Session{Scope: batch.scope, Identity: identity, Title: title, URL: batch.task.RequirementLink, Rows: batch.rows}
+		testers := releaseNoticeTesters(metadata)
+		if len(testers) == 0 {
+			out.Warnings = append(out.Warnings, "未取得测试负责人姓名，卡片标题标为待确认")
+		}
+		session := releasenotice.Session{Scope: batch.scope, Identity: identity, Title: title, URL: batch.task.RequirementLink, Rows: batch.rows, Testers: testers}
 		session.BindOwner(a.noticeOwnerKey(config, batch.task))
 		if _, err := store.Prepare(session); err != nil {
 			return err

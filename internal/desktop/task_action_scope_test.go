@@ -1,6 +1,7 @@
 package desktop
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -8,6 +9,26 @@ import (
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/workspace"
 )
+
+func TestTaskSelectionCancelsPendingCodexOpenOnly(t *testing.T) {
+	for _, operation := range []string{"codex.run", "task.create"} {
+		t.Run(operation, func(t *testing.T) {
+			s := taskNavigationFixture()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			s.operationKind, s.cancelOperation = operation, cancel
+			if !s.selectTaskIndex(0) || ctx.Err() != nil {
+				t.Fatal("reselecting the current task canceled the operation")
+			}
+			if !s.selectTaskIndex(1) {
+				t.Fatal("task selection failed")
+			}
+			if (ctx.Err() != nil) != (operation == "codex.run") {
+				t.Fatal("wrong operation canceled", operation, ctx.Err())
+			}
+		})
+	}
+}
 
 func TestTaskMaterialsOpenScopesPreserveSelectionAndRejectStaleResults(t *testing.T) {
 	for _, change := range []string{"selection", "materials", "created", "removed", "home", "root", "page", "status"} {
@@ -62,7 +83,7 @@ func TestTaskMaterialsScopeCannotOpenOtherResources(t *testing.T) {
 		s, _ := taskMenuFixture(t)
 		target := s.taskUnit.state.tasks[1]
 		scope, _ := s.taskMenuScopeFor(target)
-		action := application.Action{Kind: kind, TaskID: target.id, Path: target.path,
+		action := application.Action{Kind: kind, TaskID: target.id, Path: target.path + "-other",
 			Payload: map[string]any{"desktopSystemOpenDirectory": true}}
 		if _, err := s.beginScopedSystemOpenJob(action, &scope); err == nil {
 			t.Fatalf("task materials scope allowed %s on another resource", kind)

@@ -72,7 +72,7 @@ func taskMenuFixture(t *testing.T) (*app, *taskMenuBackend) {
 }
 
 func TestTaskMenuMigratesActionsAndKeepsTarget(t *testing.T) {
-	for _, action := range []string{"复制任务资料路径", "在 Codex 中打开", "打开任务资料目录", "批量合并主分支", "关联任务资料", "重试关联任务资料", "配置任务资料"} {
+	for _, action := range []string{"复制任务目录", "打开任务目录", "复制任务资料路径", "在 Codex 中打开", "打开任务资料目录", "批量合并主分支", "关联任务资料", "重试关联任务资料", "配置任务资料"} {
 		t.Run(action, func(t *testing.T) {
 			s, backend := taskMenuFixture(t)
 			if strings.Contains(action, "关联任务资料") || action == "配置任务资料" {
@@ -101,6 +101,10 @@ func TestTaskMenuMigratesActionsAndKeepsTarget(t *testing.T) {
 				if backend.clipboard != target.materialsPath {
 					t.Fatal("copied the current task instead of the context target")
 				}
+			case "复制任务目录":
+				if backend.clipboard != target.path {
+					t.Fatal("copied a different task or materials directory")
+				}
 			case "批量合并主分支":
 				state := s.workspaceUnit.state.workspaceMergeBatch
 				if state == nil || state.TaskID != target.id || len(state.Items) != 1 || !state.Items[0].Selected {
@@ -125,6 +129,8 @@ func TestTaskMenuMigratesActionsAndKeepsTarget(t *testing.T) {
 					wantKind, wantPath := "codex.run", target.path
 					if action == "打开任务资料目录" {
 						wantKind, wantPath = "system.open", target.materialsPath
+					} else if action == "打开任务目录" {
+						wantKind, wantPath = "system.open", target.path
 					} else if strings.Contains(action, "关联任务资料") {
 						wantKind, wantPath = "task.materials-retry", ""
 					}
@@ -169,7 +175,7 @@ func TestTaskMenuOrderAndMaterialsVariants(t *testing.T) {
 			if s.taskUnit.state.tasks[index].requirementURL == "" {
 				want = append(want, "关联需求")
 			}
-			want = append(want, "批量合并主分支", "-")
+			want = append(want, "批量合并主分支", "-", "打开任务目录", "复制任务目录", "-")
 			want = append(want, materials...)
 			want = append(want, "-", "置顶任务", "-", lifecycle, "-", "删除任务")
 			if got := tester.Menu(); !slices.Equal(got, want) {

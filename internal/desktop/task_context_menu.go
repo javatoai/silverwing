@@ -75,6 +75,13 @@ func (s *app) taskContextMenu(services ui.Services, t task, menu *ui.Menu) {
 	if menu.Item("批量合并主分支").Icon(icons["branch"]).Disabled(!valid || s.busy || s.backend == nil || t.archived || !s.taskHasMainBranchMergeBatch(t)).Chosen() {
 		chosen = "merge-main-batch"
 	}
+	menu.Separator()
+	if menu.Item("打开任务目录").Icon(icons["folder"]).Disabled(!valid || s.backend == nil || t.path == "").Chosen() {
+		chosen = "task-open-directory"
+	}
+	if menu.Item("复制任务目录").Icon(icons["copy"]).Disabled(!valid || t.path == "").Chosen() {
+		chosen = "task-copy-directory"
+	}
 	if t.materialsReady() {
 		menu.Separator()
 		if menu.Item("打开任务资料目录").Icon(icons["folder"]).Disabled(!valid || s.backend == nil).Chosen() {
@@ -145,6 +152,11 @@ func (s *app) taskContextMenu(services ui.Services, t task, menu *ui.Menu) {
 		s.dispatchTaskContextAction(application.Action{Kind: "task.tools-launch", TaskID: t.id, Path: t.path, Payload: map[string]any{"toolIds": []string{"cursor"}}}, opened)
 	case "merge-main-batch":
 		s.openWorkspaceMergeBatch(t)
+	case "task-open-directory":
+		s.dispatchScopedSystemOpen(application.Action{Kind: "system.open", TaskID: t.id, Path: t.path,
+			Payload: map[string]any{"desktopSystemOpenDirectory": true}}, opened)
+	case "task-copy-directory":
+		s.copyTextToClipboard(services, t.path, "已复制任务目录")
 	case "materials-open":
 		s.dispatchScopedSystemOpen(application.Action{Kind: "system.open", TaskID: t.id, Path: t.materialsPath,
 			Payload: map[string]any{"desktopSystemOpenDirectory": true}}, opened)

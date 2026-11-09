@@ -41,6 +41,7 @@ func (s *app) prepareFeatureTaskSelection(transition TaskTransition) error {
 		return err
 	}
 	if transition.changed() {
+		s.cancelPendingTaskCodexOpen()
 		s.leaveTaskFiles()
 		s.leaveTaskServices()
 	}

@@ -872,6 +872,12 @@ func (s *app) cancelAction() {
 	s.cancelOperation()
 }
 
+func (s *app) cancelPendingTaskCodexOpen() {
+	if s.operationKind == "codex.run" && s.cancelOperation != nil {
+		s.cancelOperation()
+	}
+}
+
 func (s *app) canCancelOperation() bool {
 	return s.busy && !s.operationCancelling && s.cancelOperation != nil && cancellableOperation(s.operationKind)
 }

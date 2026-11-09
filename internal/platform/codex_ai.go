@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"silverwing-go/internal/codexprotocol"
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/process"
 	"silverwing-go/internal/storage"
@@ -294,17 +295,21 @@ func (s *Service) openCodexWorkspace(ctx context.Context, payload map[string]any
 		}
 		return map[string]any{"opened": true, "url": deepLink, "workspacePath": absolute, "threadId": nullableString(threadID), "forceNew": forceNew}, nil
 	}
-	if err := openCodexURI(deepLink); err != nil {
+	if err := s.openCodexURI(ctx, deepLink); err != nil {
 		return nil, fmt.Errorf("打开 Codex 深链失败：%w", err)
 	}
 	return map[string]any{"opened": true, "url": deepLink, "workspacePath": absolute, "threadId": nullableString(threadID), "forceNew": forceNew}, nil
 }
 
-func openCodexURI(deepLink string) error {
+func (s *Service) openCodexURI(ctx context.Context, deepLink string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if runtime.GOOS == "windows" {
+		return codexprotocol.Open(ctx, deepLink, s.paths.Backups, s.runner)
+	}
 	var command *exec.Cmd
 	switch runtime.GOOS {
-	case "windows":
-		command = process.NewDetachedCommand("rundll32", "url.dll,FileProtocolHandler", deepLink)
 	case "darwin":
 		command = process.NewDetachedCommand(executable.SystemCommand("open"), deepLink)
 	default:

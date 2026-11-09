@@ -135,7 +135,7 @@ func (s *app) systemOpenScopeFor(action application.Action, taskScope *taskMenuS
 	}
 	if action.TaskID == "" {
 		if taskScope != nil {
-			return scope, errors.New("任务资料打开缺少目标任务。")
+			return scope, errors.New("目录打开缺少目标任务。")
 		}
 		return scope, nil
 	}
@@ -143,9 +143,10 @@ func (s *app) systemOpenScopeFor(action application.Action, taskScope *taskMenuS
 	if taskScope != nil {
 		actual, valid := s.taskMenuScopeFor(task)
 		directory, _ := action.Payload["desktopSystemOpenDirectory"].(bool)
-		if !valid || actual != *taskScope || action.Kind != "system.open" || !directory || !task.materialsReady() ||
-			scope.sourcePath != task.materialsPath || action.ServiceID != "" || action.ModuleID != "" {
-			return scope, errors.New("任务资料目录或应用上下文已变化，请重新打开任务菜单。")
+		allowedDirectory := scope.sourcePath == task.path || (task.materialsReady() && scope.sourcePath == task.materialsPath)
+		if !valid || actual != *taskScope || action.Kind != "system.open" || !directory || !allowedDirectory ||
+			action.ServiceID != "" || action.ModuleID != "" {
+			return scope, errors.New("任务目录或应用上下文已变化，请重新打开任务菜单。")
 		}
 	} else if task.id == "" || s.taskUnit.currentTask().id != task.id {
 		return scope, errors.New("系统打开的任务已变化，请重新选择后重试。")

@@ -39,7 +39,7 @@ func TestTaskContextMenuKeepsSelectionAndDraft(t *testing.T) {
 	if err := tester.RightClick("界面体验"); err != nil {
 		t.Fatal(err)
 	}
-	if got := tester.Menu(); !slices.Equal(got, []string{"在 Codex 中打开", "-", "批量合并主分支", "-", "配置任务资料", "-", "置顶任务", "-", "归档任务", "-", "删除任务"}) {
+	if got := tester.Menu(); !slices.Equal(got, []string{"在 Codex 中打开", "-", "批量合并主分支", "-", "打开任务目录", "复制任务目录", "-", "配置任务资料", "-", "置顶任务", "-", "归档任务", "-", "删除任务"}) {
 		t.Fatalf("active menu: %v", got)
 	}
 	if err := tester.ChooseMenuItem("置顶任务"); err != nil {
@@ -99,7 +99,7 @@ func TestTaskContextMenuArchiveAndDeleteTarget(t *testing.T) {
 	if err := tester.RightClick("已归档任务"); err != nil {
 		t.Fatal(err)
 	}
-	if got := tester.Menu(); !slices.Equal(got, []string{"在 Codex 中打开", "-", "关联需求", "批量合并主分支", "-", "准备本地任务资料", "-", "置顶任务", "-", "恢复归档", "-", "删除任务"}) {
+	if got := tester.Menu(); !slices.Equal(got, []string{"在 Codex 中打开", "-", "关联需求", "批量合并主分支", "-", "打开任务目录", "复制任务目录", "-", "准备本地任务资料", "-", "置顶任务", "-", "恢复归档", "-", "删除任务"}) {
 		t.Fatalf("archive menu: %v", got)
 	}
 }

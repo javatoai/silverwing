@@ -233,6 +233,22 @@ func (s *app) runReleaseNotice(d *noticeSendState) {
 }
 
 func (s *app) finishNoticeSend(session releasenotice.Session, e error) {
+	if session.Audience == releasenotice.UserTesters {
+		complete := len(session.Recipients) > 0
+		for _, r := range session.Deliveries() {
+			if r.State != "sent" {
+				complete = false
+			}
+		}
+		if e != nil {
+			s.lastError = session.DeliverySummary() + "；" + e.Error()
+		} else if !complete {
+			s.lastError = session.DeliverySummary()
+		} else {
+			s.lastMessage = session.DeliverySummary()
+		}
+		return
+	}
 	if e != nil {
 		s.lastError = e.Error()
 		return

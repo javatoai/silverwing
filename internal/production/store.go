@@ -58,7 +58,7 @@ func (s Store) Load(id string) (Batch, error) {
 		return b, errors.New("生产批次记录身份或版本不匹配")
 	}
 	unversioned := b.Version == "" && b.ReleaseBranch == "" && b.InitialSHA == "" && b.ReleaseSHA == "" && len(b.Branches) == 0 && len(b.Tags) == 0 && b.TagPlan == nil
-	if err := ValidateVersion(b.Version, nil); !unversioned && (err != nil || b.ReleaseBranch != "release/"+b.Version) {
+	if _, err := parseBaseVersion(b.Version); !unversioned && (err != nil || b.ReleaseBranch != "release/"+b.Version) {
 		return b, errors.New("生产批次版本与 release 分支不匹配")
 	}
 	return b, nil

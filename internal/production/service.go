@@ -290,7 +290,6 @@ func (s *Service) observe(ctx context.Context, t Target, c domain.AppConfig, man
 	}
 	p.Tags = tagNames(refs)
 	p.BranchHeads = map[string]string{}
-	p.SuggestedVersion, _ = SuggestedVersion(p.Tags)
 	for ref, sha := range refs {
 		if strings.HasPrefix(ref, "refs/heads/") {
 			name := strings.TrimPrefix(ref, "refs/heads/")
@@ -375,6 +374,11 @@ func (s *Service) observe(ctx context.Context, t Target, c domain.AppConfig, man
 		if err != nil {
 			return p, err
 		}
+	}
+	if suggested, suggestionErr := SuggestedVersion(p); suggestionErr != nil {
+		p.Warning = strings.TrimSpace(p.Warning + "\n" + suggestionErr.Error())
+	} else {
+		p.SuggestedVersion = suggested
 	}
 	if !details {
 		return p, nil

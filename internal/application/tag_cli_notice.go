@@ -2,10 +2,8 @@ package application
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
-	"strings"
 
 	"silverwing-go/internal/larkcli"
 	"silverwing-go/internal/releasenotice"
@@ -47,48 +45,34 @@ func (a *App) CLITagNotify(ctx context.Context, taskID, batchID string) (CLITagN
 				return fmt.Errorf("无法确认 %s 的 Tag %s 已推送（%s） %s", operation.ServiceName, value(operation.Tag), push.State, push.Error)
 			}
 		}
-		client := larkcli.Client{Runner: a.Runner, Config: config, VerifyUser: true}
-		identity, err := client.Identity(ctx)
+		client := larkcli.Client{Runner: a.Runner, Config: config, AsUser: true}
+		session, preparation, err := a.prepareUserTagNotice(ctx, batch, client)
 		if err != nil {
 			return err
 		}
-		if err := identity.ValidateSelf(); err != nil {
+		if err = a.checkUserTagNotice(ctx, action, session, preparation); err != nil {
 			return err
-		}
-
-		metadata, _ := a.readNoticeMetadata(ctx, batch.task.RequirementLink, false)
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		title := strings.TrimSpace(value(metadata.Title))
-		if title == "" {
-			title = batch.task.FolderName
-			out.Warnings = append(out.Warnings, "未取得需求标题，卡片使用任务名称")
 		}
 		store := releasenotice.Store{Directory: filepath.Join(a.Paths.Home, "release-notices")}
-		testers := releaseNoticeTesters(metadata)
-		if len(testers) == 0 {
-			out.Warnings = append(out.Warnings, "未取得测试负责人姓名，卡片标题标为待确认")
+		if session.Warning != "" {
+			out.Warnings = append(out.Warnings, session.Warning)
 		}
-		session := releasenotice.Session{Scope: batch.scope, Identity: identity, Title: title, URL: batch.task.RequirementLink, Rows: batch.rows, Testers: testers}
-		session.BindOwner(a.noticeOwnerKey(config, batch.task))
-		if _, err := store.Prepare(session); err != nil {
+		if session.PreparationStatus != "" {
+			out.Warnings = append(out.Warnings, session.PreparationStatus)
+		}
+		prepared, err := store.Prepare(session)
+		if err != nil {
 			return err
 		}
-		// Read the current local identity again at the send boundary after
-		// preparation. Online verification has already gated this invocation.
-		client.VerifyUser = false
-		out.Recipients, err = store.SendCLI(ctx, session.ID, client, func(ctx context.Context, saved releasenotice.Session) error {
-			current, err := a.releaseNoticeBatch(ctx, action, true)
-			if err != nil {
-				return err
+		sent, sendErr := store.SendTag(ctx, session.ID, prepared.RetryChoice(), client, a.userTagNoticeChecks(action))
+		out.Recipients = sent.Deliveries()
+		previous := prepared.Deliveries()
+		for i := range out.Recipients {
+			if i < len(previous) {
+				out.Recipients[i].Skipped = previous[i].State == "sent" && previous[i].MessageID == out.Recipients[i].MessageID
 			}
-			if current.scope != batch.scope || current.scope != saved.Scope {
-				return errors.New("通知批次或任务已变化，请重新发起通知")
-			}
-			return nil
-		})
-		return err
+		}
+		return sendErr
 	})
 	return out, err
 }

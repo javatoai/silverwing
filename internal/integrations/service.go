@@ -38,6 +38,7 @@ type Service struct {
 	naming                    *requirementNamingCoordinator
 	requirementDocuments      *requirementDocumentCoordinator
 	requirementReads          requirementReadOrder
+	noticePreparations        *noticePreparationJobs
 }
 
 func NewService(paths storage.Paths, config *storage.ConfigStore, runner *process.Runner) *Service {

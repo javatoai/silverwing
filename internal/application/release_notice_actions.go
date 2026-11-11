@@ -22,7 +22,7 @@ import (
 // This is an opaque digest: credentials and configuration are never in receipts.
 func ReleaseNoticeConfigIdentity(c domain.AppConfig) string {
 	return releasenotice.Digest([]any{c.TaskRoot, c.TagEnabled, c.Groups, c.Repositories,
-		c.LarkExecutablePath, releasenotice.SelfOnly, c.EffectiveLarkNotice().Profile, c.EffectiveLarkNotice().AppID, c.GenbuExecutablePath, c.GitExecutablePath,
+		c.LarkExecutablePath, releasenotice.UserTesters, c.EffectiveLarkNotice().Profile, c.EffectiveLarkNotice().AppID, c.EffectiveLarkNotice().Contacts, c.GenbuExecutablePath, c.GitExecutablePath,
 		c.MeegleExecutablePath, c.MeegleProjects, c.CommandProxyURL, c.CommandProxyTargets,
 		c.CommandProxyUsername, c.CommandProxyPassword, c.CommandProxyNoProxy})
 }
@@ -145,35 +145,17 @@ func (a *App) releaseNoticeAction(ctx context.Context, action Action) (ActionRes
 		return ActionResult{}, e
 	}
 	store := releasenotice.Store{Directory: filepath.Join(a.Paths.Home, "release-notices")}
-	client := larkcli.Client{Runner: a.Runner, Config: b.config}
+	client := larkcli.Client{Runner: a.Runner, Config: b.config, AsUser: true}
 	if action.Kind == "tag.notice.prepare" {
-		identity, e := client.Identity(ctx)
+		session, prepared, e := a.prepareUserTagNotice(ctx, b, client)
 		if e != nil {
 			return ActionResult{}, e
 		}
-		if e = identity.ValidateSelf(); e != nil {
+		if e = a.checkUserTagNotice(ctx, action, session, prepared); e != nil {
 			return ActionResult{}, e
-		}
-		m, e := a.noticeMetadata(ctx, b.task.RequirementLink)
-		if e != nil {
-			return ActionResult{}, e
-		}
-		title := strings.TrimSpace(value(m.Title))
-		session := releasenotice.Session{Scope: b.scope, Identity: identity, Title: title, URL: b.task.RequirementLink, Rows: b.rows, Testers: releaseNoticeTesters(m)}
-		session.BindOwner(a.noticeOwnerKey(b.config, b.task))
-		// Revalidate after asynchronous metadata and identity reads.
-		current, e := a.releaseNoticeBatch(ctx, action, false)
-		if e != nil {
-			return ActionResult{}, e
-		}
-		if current.scope != b.scope {
-			return ActionResult{}, errors.New("批次已变化，请重新发起通知")
 		}
 		saved, e := store.Prepare(session)
-		message := ""
-		if m.Stale || m.RefreshError != "" {
-			message = "需求标题来自本地缓存"
-		}
+		message := strings.Trim(strings.Join([]string{session.Warning, session.PreparationStatus}, "；"), "；")
 		return ActionResult{Data: saved, Message: message}, e
 	}
 	if !boolPayload(action, "confirmed") {
@@ -183,16 +165,7 @@ func (a *App) releaseNoticeAction(ctx context.Context, action Action) (ActionRes
 	if e != nil {
 		return ActionResult{}, e
 	}
-	session, e := store.Send(ctx, textPayload(action, "sessionId"), choice, client, func(ctx context.Context, session releasenotice.Session) error {
-		current, e := a.releaseNoticeBatch(ctx, action, true)
-		if e != nil {
-			return e
-		}
-		if current.scope != session.Scope {
-			return errors.New("通知批次或任务已变化，请重新发起通知")
-		}
-		return nil
-	})
+	session, e := store.SendTag(ctx, textPayload(action, "sessionId"), choice, client, a.userTagNoticeChecks(action))
 	return ActionResult{Data: session}, e
 }
 

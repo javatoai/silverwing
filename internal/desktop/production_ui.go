@@ -511,7 +511,7 @@ func (s *app) confirmProductionCreate(v *productionView) {
 		return
 	}
 	p, id := *v.Preview, v.BatchID
-	version, err := production.ReleaseVersion(v.Version, p.Tags)
+	version, err := production.ReleaseVersion(v.Version, p)
 	if err != nil {
 		v.Error = err.Error()
 		return

@@ -140,7 +140,9 @@ func (s *Service) listRequirements(ctx context.Context, config domain.AppConfig,
 	return s.listRequirementsWithProgress(ctx, config, payload, force, nil)
 }
 
-func (s *Service) listRequirementsWithProgress(ctx context.Context, config domain.AppConfig, payload map[string]any, force bool, progress *requirementListReporter) (any, error) {
+func (s *Service) listRequirementsWithProgress(ctx context.Context, config domain.AppConfig, payload map[string]any, force bool, progress *requirementListReporter) (data any, err error) {
+	refresh := s.beginNoticeListRefresh(ctx, config, force || boolValue(payload, "force"))
+	defer func() { s.finishNoticeListRefresh(ctx, config, refresh, data, err) }()
 	if ctx == nil {
 		ctx = context.Background()
 	}

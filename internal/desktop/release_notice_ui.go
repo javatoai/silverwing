@@ -4,6 +4,9 @@ import "silverwing-go/internal/releasenotice"
 
 func (s *app) noticeButtonText(kind, groupID string) string {
 	text := "发送给自己"
+	if kind == "" {
+		text = "发送发版通知"
+	}
 	d := s.releaseNotices.pending
 	if d != nil && d.kind == kind && d.groupID == groupID && s.releaseNoticeCurrent(d) {
 		if d.loading {
@@ -13,6 +16,16 @@ func (s *app) noticeButtonText(kind, groupID string) string {
 			return "发送中…"
 		}
 		if d.session != nil {
+			if d.session.Audience == releasenotice.UserTesters {
+				choice, err := d.session.SendChoice()
+				if err == nil && choice.Resend {
+					return "再次发送发版通知"
+				}
+				if len(d.session.Receipts) > 0 {
+					return "重试发版通知"
+				}
+				return text
+			}
 			if r, ok := d.session.LatestReceipt(); ok {
 				if r.State == "sent" {
 					text = "再次发送给自己"

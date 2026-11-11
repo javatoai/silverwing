@@ -168,6 +168,7 @@ func TestProductionCreateConfirmationHasCollapsedTechnicalDetail(t *testing.T) {
 				s, v, _ := productionFixture(t)
 				s.win = &mygo.Window{}
 				v.Preview.Commits = strings.Repeat("synthetic technical commit details\n", 80)
+				v.Preview.Branches = []string{v.Preview.Target.MainBranch, v.Branch}
 				s.confirmProductionCreate(v)
 				d := s.confirmationDialog
 				if d == nil || !strings.Contains(d.Detail, v.Preview.MainSHA) || d.DefaultIndex != d.CancelIndex {

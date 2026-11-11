@@ -137,7 +137,10 @@ func TestProductionGitConfirmationsIdentifyRepository(t *testing.T) {
 		name string
 		open func()
 	}{
-		{"create", func() { s.confirmProductionCreate(v) }},
+		{"create", func() {
+			v.Preview.Branches = []string{v.Preview.Target.MainBranch, v.Branch}
+			s.confirmProductionCreate(v)
+		}},
 		{"feature", func() { s.confirmProductionFeature(v, p, v.Branch) }},
 		{"sync", func() { s.confirmProductionSync(v, p) }},
 		{"pending", func() { s.confirmProductionPending(v, b, p) }},

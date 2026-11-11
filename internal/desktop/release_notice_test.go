@@ -25,9 +25,10 @@ func releaseNoticeDesktopFixture(t *testing.T) (*app, *noticeSendState, tagHisto
 	s.snapshot.TagHistory = []application.TagRecord{{ID: op.OperationID, TaskID: task.id, ServiceID: "s1", ServiceName: op.ServiceName, Tag: tag, State: string(op.State), GenbuStatus: op.GenbuStatus}}
 	s.ensureTaskTagHistoryView(task)
 	cfg, _ := s.readSnapshotAppConfig()
-	identity := releasenotice.Identity{AppID: "test-app", Name: "无需展示的姓名", OpenID: "ou_self", BotReady: true, UserState: "expired"}
+	identity := releasenotice.Identity{AppID: "test-app", Name: "无需展示的姓名", OpenID: "ou_self", BotReady: true, UserVerified: true}
 	session := &releasenotice.Session{Title: "合成需求", Identity: identity, Rows: []releasenotice.Row{{Service: "A service", Version: tag}}}
-	session.BindOwner("test-task")
+	session.Recipients = []releasenotice.Recipient{{Name: "测试人员", OpenID: "ou_self"}}
+	session.BindTagOwner("test-task", "profile")
 	d := &noticeSendState{owner: s.taskFilesIdentity(), link: task.requirementURL, groupID: g.Item.GroupID, configID: application.ReleaseNoticeConfigIdentity(cfg), batchID: releaseNoticeBatchID(g), session: session}
 	s.releaseNotices.pending = d
 	return s, d, g
@@ -47,7 +48,7 @@ func TestReleaseNoticeButtonRequiresWholeBatchSuccess(t *testing.T) {
 }
 func TestReleaseNoticeTaskConfigAndProgressIsolation(t *testing.T) {
 	s, d, g := releaseNoticeDesktopFixture(t)
-	if !s.releaseNoticeCurrent(d) || s.noticeButtonText("", g.Item.GroupID) != "发送给自己" {
+	if !s.releaseNoticeCurrent(d) || s.noticeButtonText("", g.Item.GroupID) != "发送发版通知" {
 		t.Fatal("current notice rejected")
 	}
 	d.loading = true
@@ -66,7 +67,7 @@ func TestReleaseNoticeTaskConfigAndProgressIsolation(t *testing.T) {
 	}
 	d.sending = false
 	d.session.Receipts = []releasenotice.Receipt{{OpenID: "ou_self", Key: "original", State: "sent", MessageID: "om_ok", StartedAt: time.Now()}}
-	if s.noticeButtonText("", g.Item.GroupID) != "再次发送给自己" {
+	if s.noticeButtonText("", g.Item.GroupID) != "再次发送发版通知" {
 		t.Fatal("Tag resend unavailable")
 	}
 	s.taskUnit.state.tasks[0].createdAt = "recreated"
@@ -95,6 +96,10 @@ func TestReleaseNoticeExecutesPrepareThenDirectSelfSend(t *testing.T) {
 			_, d, _ := releaseNoticeDesktopFixture(t)
 			session := *d.session
 			session.Kind = kind
+			if kind == releasenotice.Branches {
+				session.Recipients = nil
+				session.BindOwner("test-task")
+			}
 			session.Identity.Name = ""
 			prepare := application.Action{Kind: "prepare"}
 			send := application.Action{Kind: "send", Payload: map[string]any{"scope": "test"}}
@@ -131,14 +136,18 @@ func TestReleaseNoticeExecutesPrepareThenDirectSelfSend(t *testing.T) {
 			}
 			s := &app{}
 			s.finishNoticeSend(out, e)
-			if s.lastMessage != "已发送给自己" || s.lastError != "" {
+			want := "已发送给自己"
+			if kind == "" {
+				want = "测试人员：已发送"
+			}
+			if s.lastMessage != want || s.lastError != "" {
 				t.Fatal(s.lastMessage, s.lastError)
 			}
 		})
 	}
 }
 func TestReleaseNoticeDirectSendStopsForMissingIdentityAndStaleContext(t *testing.T) {
-	for _, mode := range []string{"missing-id", "missing-bot", "stale-context", "cancelled", "prepare-error"} {
+	for _, mode := range []string{"missing-id", "unverified-user", "stale-context", "cancelled", "prepare-error"} {
 		t.Run(mode, func(t *testing.T) {
 			_, d, _ := releaseNoticeDesktopFixture(t)
 			session := *d.session
@@ -148,8 +157,8 @@ func TestReleaseNoticeDirectSendStopsForMissingIdentityAndStaleContext(t *testin
 			if mode == "missing-id" {
 				session.Identity.OpenID = ""
 			}
-			if mode == "missing-bot" {
-				session.Identity.BotReady = false
+			if mode == "unverified-user" {
+				session.Identity.UserVerified = false
 			}
 			dispatch := func(context.Context, application.Action) (application.ActionResult, error) {
 				calls++
@@ -179,6 +188,10 @@ func TestReleaseNoticeDirectResendAndUnknownFeedback(t *testing.T) {
 			_, d, _ := releaseNoticeDesktopFixture(t)
 			session := *d.session
 			session.Kind = kind
+			if kind == releasenotice.Branches {
+				session.Recipients = nil
+				session.BindOwner("test-task")
+			}
 			session.Receipts = []releasenotice.Receipt{{OpenID: "ou_self", Key: "previous", State: "sent", MessageID: "om_previous"}}
 			calls := 0
 			dispatch := func(_ context.Context, a application.Action) (application.ActionResult, error) {
@@ -187,7 +200,8 @@ func TestReleaseNoticeDirectResendAndUnknownFeedback(t *testing.T) {
 					return application.ActionResult{Data: session}, nil
 				}
 				choice := a.Payload["selection"].(releasenotice.Selection)
-				if !choice.Resend || choice.ResendAfter != "previous" {
+				expected, _ := session.SendChoice()
+				if !choice.Resend || choice.ResendAfter != expected.ResendAfter {
 					t.Fatal("new click did not request guarded resend", choice)
 				}
 				session.Receipts = append(session.Receipts, releasenotice.Receipt{OpenID: "ou_self", Key: "next", State: "unknown", Error: "发送结果待核实"})
@@ -199,7 +213,11 @@ func TestReleaseNoticeDirectResendAndUnknownFeedback(t *testing.T) {
 			}
 			s := &app{}
 			s.finishNoticeSend(out, e)
-			if s.lastMessage != "" || s.lastError != "发送结果待核实" {
+			want := "发送结果待核实"
+			if kind == "" {
+				want = "测试人员：待核实"
+			}
+			if s.lastMessage != "" || s.lastError != want {
 				t.Fatal("unknown reported as success", s.lastError)
 			}
 		})

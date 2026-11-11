@@ -113,10 +113,12 @@ type requirementCommentsEnvelope struct {
 }
 
 type requirementMetadataEnvelope struct {
-	Version   int                           `json:"version"`
-	Key       string                        `json:"key"`
-	FetchedAt int64                         `json:"fetchedAt"`
-	Data      RequirementMetadataReadResult `json:"data"`
+	Version                 int                           `json:"version"`
+	Key                     string                        `json:"key"`
+	FetchedAt               int64                         `json:"fetchedAt"`
+	Data                    RequirementMetadataReadResult `json:"data"`
+	ReleaseTesters          []domain.RequirementPerson    `json:"releaseTesters"`
+	ReleaseTestersConfirmed bool                          `json:"releaseTestersConfirmed"`
 }
 
 func requirementCacheKey(kind, identity string, item domain.ParticipatedWorkItem) string {
@@ -639,6 +641,13 @@ func (s *Service) readRequirementMetadataCache(key string) (*requirementMetadata
 	if saved.Data.Participants.QCOwners == nil {
 		saved.Data.Participants.QCOwners = []domain.RequirementPerson{}
 	}
+	// Older metadata caches intentionally cannot establish a complete roster.
+	// Preserve the explicit empty-list distinction instead of inferring it from
+	// the display-only QCOwners projection, which may have dropped members.
+	if saved.ReleaseTestersConfirmed && saved.ReleaseTesters != nil {
+		saved.Data.ReleaseTesters = saved.ReleaseTesters
+		saved.Data.ReleaseTestersConfirmed = true
+	}
 	if saved.Data.Participants.ProductManagers == nil {
 		saved.Data.Participants.ProductManagers = []domain.RequirementPerson{}
 	}
@@ -666,7 +675,8 @@ func (s *Service) writeRequirementMetadataCache(key string, data RequirementMeta
 	data.RefreshError = ""
 	data.CacheError = ""
 	data.EstimateError = ""
-	envelope := requirementMetadataEnvelope{Version: requirementMetadataCacheVersion, Key: requirementCacheDigest(key), FetchedAt: fetchedAt, Data: data}
+	envelope := requirementMetadataEnvelope{Version: requirementMetadataCacheVersion, Key: requirementCacheDigest(key), FetchedAt: fetchedAt, Data: data,
+		ReleaseTesters: data.ReleaseTesters, ReleaseTestersConfirmed: data.ReleaseTestersConfirmed && data.ReleaseTesters != nil}
 	encoded, err := marshalRequirementJSON(envelope)
 	if err != nil {
 		return "", err

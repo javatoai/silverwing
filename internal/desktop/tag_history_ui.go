@@ -144,7 +144,7 @@ func (s *app) renderTagHistoryGroup(c *ui.Context, p palette, state *tagHistoryV
 			enabled := !s.busy && !sending && s.releaseNoticeReady(group)
 			send := ui.ButtonBase(c.Key("send-announcement")).Row().Shrink(0).Height(28).Padding(0, 8).Gap(5).AlignItems(ui.Center).
 				Background(p.surface).Radius(8).Border(1, p.line).Label(s.noticeButtonText("", group.Item.GroupID) + " · " + group.Item.GroupID).Disabled(!enabled).
-				Tooltip("全部 Tag 推送且 Genbu 编译成功后，直接发送给自己")
+				Tooltip("全部 Tag 推送且 Genbu 编译成功后，以当前用户身份通知测试负责人；无法确认接收人时回退本人")
 			if send.Hovered() && enabled {
 				send.Background(p.soft)
 			}

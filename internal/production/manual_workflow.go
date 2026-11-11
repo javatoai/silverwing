@@ -19,11 +19,8 @@ func (s *Service) initialize(ctx context.Context, preview Preview, version strin
 			return err
 		}
 		if !merge {
-			if err = ValidateVersion(version, p.Tags); err != nil {
+			if err = ValidateVersion(version, p); err != nil {
 				return err
-			}
-			if p.BranchHeads["release/"+version] != "" {
-				return errors.New("远端 release 分支已存在，请选择其他基础版本")
 			}
 			if err = domain.NewGitWritePolicy(c.BlockedGitWriteBranches).RequireAllowed("release/"+version, "创建生产 release"); err != nil {
 				return err
@@ -165,11 +162,11 @@ func (s *Service) MergeMainToRelease(ctx context.Context, id string, preview Pre
 
 // ReleaseVersion accepts the full branch name shown in the UI. The fixed
 // prefix is parsed once, and version policy remains shared with creation.
-func ReleaseVersion(branch string, tags []string) (string, error) {
+func ReleaseVersion(branch string, p Preview) (string, error) {
 	branch = strings.TrimSpace(branch)
 	if !strings.HasPrefix(branch, "release/") {
 		return "", errors.New("分支名必须以 release/ 开头")
 	}
 	version := strings.TrimPrefix(branch, "release/")
-	return version, ValidateVersion(version, tags)
+	return version, ValidateVersion(version, p)
 }

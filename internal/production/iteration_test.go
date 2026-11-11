@@ -36,8 +36,8 @@ func TestProductionTagsUseRemoteCreatorDatesWithoutChangingVersionPolicy(t *test
 	if strings.Join(selected, ",") != "1.0.0,1.0.1,0.1.0-beta,9.0.0" {
 		t.Fatalf("creator-date order: %v", selected)
 	}
-	if p.SuggestedVersion != "9.0.1" {
-		t.Fatalf("presentation order changed numeric version selection: %s", p.SuggestedVersion)
+	if p.SuggestedVersion != "2.3.44" {
+		t.Fatalf("suggestion left the production series: %s", p.SuggestedVersion)
 	}
 }
 

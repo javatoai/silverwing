@@ -10,22 +10,19 @@ import (
 func SessionCard(s Session) (string, error) {
 	switch s.Kind {
 	case "":
-		return Card(s.Title, s.URL, strings.Join(s.Testers, "、"), s.Rows)
+		return Card(s.Title, s.URL, s.Rows)
 	case Branches:
 		return BranchCard(s.Title, s.URL, s.Rows)
 	default:
 		return "", errors.New("通知类型无法识别")
 	}
 }
-func Card(title, link, testers string, rows []Row) (string, error) {
+func Card(title, link string, rows []Row) (string, error) {
 	content, err := noticeLink(title, link)
 	if err != nil {
 		return "", err
 	}
-	if testers = strings.TrimSpace(testers); testers == "" {
-		testers = "测试负责人待确认"
-	}
-	return renderUATElements(title, testers+", 申请发布UAT环境版本", content, rows)
+	return renderUATElements(title, "申请发布UAT环境版本", content, rows)
 }
 
 // applicantInBody reproduces the saved payload of an earlier notification.

@@ -86,13 +86,28 @@ func (s Store) Locked(id string, run func() error) error {
 	return run()
 }
 func (s Store) Prepare(v Session) (Session, error) {
-	if e := v.ValidateSelf(); e != nil {
+	if v.Audience == UserTesters {
+		var out Session
+		err := s.lockTag(v, func() error { var e error; out, e = s.prepare(v); return e })
+		return out, err
+	}
+	return s.prepare(v)
+}
+func (s Store) prepare(v Session) (Session, error) {
+	if e := v.Validate(); e != nil {
 		return Session{}, e
 	}
 	var out Session
 	err := s.Locked(v.ID, func() error {
 		old, e := s.load(v.ID)
 		if e == nil {
+			if v.Audience == UserTesters && (old.Title != v.Title || Digest(old.Testers) != Digest(v.Testers) || Digest(old.Recipients) != Digest(v.Recipients) || old.Warning != v.Warning || old.RequirementIdentity != "" && old.RequirementIdentity != v.RequirementIdentity) {
+				for _, r := range old.Receipts {
+					if r.State != "sent" {
+						return errors.New("待完成通知的内容或收件人快照已变化，请先核实原消息")
+					}
+				}
+			}
 			if old.Scope != v.Scope && (v.Owner == "" || old.Owner != v.Owner) {
 				return errors.New("通知内容已变化，请重新发起通知")
 			}
@@ -104,6 +119,14 @@ func (s Store) Prepare(v Session) (Session, error) {
 		}
 		if !os.IsNotExist(e) {
 			return e
+		}
+		if v.Audience == UserTesters {
+			v.Receipts, e = s.tagHistoryReceipts(v)
+			if e != nil {
+				return e
+			}
+			out = v
+			return s.save(v)
 		}
 		v.Receipts, e = s.compatibleReceipts(v)
 		if e != nil {

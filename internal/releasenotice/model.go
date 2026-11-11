@@ -1,4 +1,4 @@
-// Package releasenotice owns self-notification cards and durable receipts.
+// Package releasenotice owns notification cards, recipient policies and durable receipts.
 package releasenotice
 
 import (
@@ -12,11 +12,12 @@ import (
 )
 
 type Identity struct {
-	AppID     string `json:"appId"`
-	Name      string `json:"name"`
-	OpenID    string `json:"openId"`
-	BotReady  bool   `json:"botReady"`
-	UserState string `json:"userState,omitempty"`
+	AppID        string `json:"appId"`
+	Name         string `json:"name"`
+	OpenID       string `json:"openId"`
+	BotReady     bool   `json:"botReady"`
+	UserState    string `json:"userState,omitempty"`
+	UserVerified bool   `json:"userVerified,omitempty"`
 }
 
 // Person only decodes retired recipient lists so stale sessions can be rejected.
@@ -42,18 +43,24 @@ type Receipt struct {
 	ChatID    string    `json:"chatId,omitempty"`
 }
 type Session struct {
-	ID       string    `json:"id"`
-	Scope    string    `json:"scope"`
-	Identity Identity  `json:"identity"`
-	Title    string    `json:"title"`
-	URL      string    `json:"url"`
-	Rows     []Row     `json:"rows"`
-	Testers  []string  `json:"testers,omitempty"`
-	People   []Person  `json:"people,omitempty"`
-	Receipts []Receipt `json:"receipts"`
-	Kind     string    `json:"kind,omitempty"`
-	Audience string    `json:"audience,omitempty"`
-	Owner    string    `json:"owner,omitempty"`
+	ID                  string      `json:"id"`
+	Scope               string      `json:"scope"`
+	Identity            Identity    `json:"identity"`
+	Title               string      `json:"title"`
+	URL                 string      `json:"url"`
+	Rows                []Row       `json:"rows"`
+	Testers             []string    `json:"testers,omitempty"`
+	People              []Person    `json:"people,omitempty"`
+	Receipts            []Receipt   `json:"receipts"`
+	Kind                string      `json:"kind,omitempty"`
+	Audience            string      `json:"audience,omitempty"`
+	Owner               string      `json:"owner,omitempty"`
+	Sender              string      `json:"sender,omitempty"`
+	Profile             string      `json:"profile,omitempty"`
+	Recipients          []Recipient `json:"recipients,omitempty"`
+	Warning             string      `json:"warning,omitempty"`
+	RequirementIdentity string      `json:"requirementIdentity,omitempty"`
+	PreparationStatus   string      `json:"preparationStatus,omitempty"`
 }
 
 // A request's configuration scope may change while its task/content is the
@@ -64,6 +71,7 @@ func (s *Session) BindOwner(owner string) {
 }
 
 type Selection struct {
+	Snapshot    string `json:"snapshot,omitempty"`
 	Retry       bool   `json:"retry"`
 	Resend      bool   `json:"resend"`
 	ResendAfter string `json:"resendAfter,omitempty"`
@@ -121,6 +129,9 @@ func (s Session) LatestReceipt() (Receipt, bool) {
 
 // A fresh explicit click may resend a success; uncertain attempts keep their key.
 func (s Session) SendChoice() (Selection, error) {
+	if s.Audience == UserTesters {
+		return s.tagSendChoice()
+	}
 	choice := Selection{Retry: true}
 	if e := s.ValidateSelf(); e != nil {
 		return choice, e

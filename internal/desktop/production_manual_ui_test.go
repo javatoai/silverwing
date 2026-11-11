@@ -34,6 +34,16 @@ func TestProductionReleaseSuggestionPreservesManualBranch(t *testing.T) {
 	if v.Version != "release/2.3.50" {
 		t.Fatal("refresh overwrote manual branch")
 	}
+	v.updateSuggestedBranch("")
+	if v.Version != "release/2.3.50" {
+		t.Fatal("missing suggestion erased manual branch")
+	}
+	automatic := &productionView{}
+	automatic.updateSuggestedBranch("2.4.38")
+	automatic.updateSuggestedBranch("")
+	if automatic.Version != "" {
+		t.Fatal("unconfirmed baseline retained an automatic suggestion")
+	}
 }
 
 func TestProductionTagConfirmationMatchesFreshPreview(t *testing.T) {
@@ -69,6 +79,7 @@ func TestProductionInitializationExposesSeparateMergeAndCreate(t *testing.T) {
 	s, v, _ := productionFixture(t)
 	s.releaseUnit.state.production.batches = nil
 	v.BatchID = ""
+	v.Preview.Branches = []string{v.Preview.Target.MainBranch, v.Branch}
 	v.Preview.ProductionInMain = false
 	v.Preview.ProductionSHA = strings.Repeat("f", 40)
 	v.Preview.Diff = " example.go | 1 +\n 1 file changed, 1 insertion(+)"

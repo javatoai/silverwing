@@ -757,7 +757,7 @@ func TestProductionMixedPodsRequireExplicitBaseline(t *testing.T) {
 	f := newFixture(t)
 	f.g.versions = []string{"2.3.43", "2.3.42"}
 	p, err := f.s.Inspect(context.Background(), f.selection, "")
-	if err != nil || p.ProductionTag != "" {
+	if err != nil || p.ProductionTag != "" || p.SuggestedVersion != "" {
 		t.Fatalf("mixed versions auto-selected: %+v / %v", p, err)
 	}
 	p, err = f.s.Inspect(context.Background(), f.selection, "2.3.43")
@@ -774,21 +774,22 @@ func TestProductionMixedPodsRequireExplicitBaseline(t *testing.T) {
 	}
 	f.g.versionErr = errors.New("synthetic authentication failure")
 	p, err = f.s.Inspect(context.Background(), f.selection, "")
-	if err != nil || !strings.Contains(p.Warning, "authentication") || p.ProductionTag != "" {
+	if err != nil || !strings.Contains(p.Warning, "authentication") || p.ProductionTag != "" || p.SuggestedVersion != "" {
 		t.Fatal("runtime query failure treated as valid baseline")
 	}
 }
 
 func TestProductionVersionPolicy(t *testing.T) {
 	tags := []string{"2.3.9", "2.3.10", "2.3.43.2", "9.0.0.beta-9", "release", "2.3.44-rc1"}
-	if got, err := SuggestedVersion(tags); got != "2.3.44" || err != nil {
+	p := Preview{ProductionTag: "2.3.43.2", Tags: tags}
+	if got, err := SuggestedVersion(p); got != "2.3.44" || err != nil {
 		t.Fatalf("suggestion %s %v", got, err)
 	}
-	if err := ValidateVersion("2.4.0", tags); err != nil {
+	if err := ValidateVersion("2.4.0", p); err != nil {
 		t.Fatal(err)
 	}
 	for _, bad := range []string{"2.3.43", "2.3.44.1", "v2.4.0", "2.04.0", "2.4"} {
-		if ValidateVersion(bad, tags) == nil {
+		if ValidateVersion(bad, p) == nil {
 			t.Errorf("accepted %s", bad)
 		}
 	}

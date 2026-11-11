@@ -15,6 +15,13 @@ func TestProductionWritesUpdateVisibleStateWithoutFollowupReads(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			s, v, b, backend, window := productionRequestFixture(t)
 			v.Preview.MainInRelease = true
+			v.Preview.Tags = append([]string{"6.6.6"}, v.Preview.Tags...)
+			v.Version = "release/3.0.0"
+			b.ProductionTag, b.ProductionSHA = v.Preview.ProductionTag, v.Preview.ProductionSHA
+			b.MainSHA = v.Preview.MainSHA
+			if kind == "production.create" {
+				v.Preview.Branches = []string{b.Target.MainBranch, v.Branch}
+			}
 			if kind == "production.merge" {
 				// Feature merges must not replace a newer observed main SHA with
 				// the older baseline saved in this batch.
@@ -38,6 +45,9 @@ func TestProductionWritesUpdateVisibleStateWithoutFollowupReads(t *testing.T) {
 			productionTestUpdate(t, window)
 			if v.Busy || len(backend.calls) != 0 || v.Message != b.Message || v.Preview.ReleaseSHA != b.ReleaseSHA {
 				t.Fatal("successful push did not update the visible result immediately")
+			}
+			if v.Preview.SuggestedVersion != "2.3.45" || v.Version != "release/3.0.0" {
+				t.Fatalf("write receipt lost series/branch context or replaced manual input: %s / %s", v.Preview.SuggestedVersion, v.Version)
 			}
 			switch kind {
 			case "production.merge-main":
@@ -72,5 +82,26 @@ func TestProductionTagPreparationPreservesKnownDisplayOrder(t *testing.T) {
 	productionTestUpdate(t, window)
 	if !slices.Equal(v.Preview.Tags, []string{"2.3.43", "1.0.0", "2.3.42"}) || v.Busy || len(backend.calls) != 0 {
 		t.Fatal("lightweight observation changed the known Tag date order or started publishing")
+	}
+}
+
+func TestProductionWriteSuggestionExplainsUnavailableVersion(t *testing.T) {
+	for _, tc := range []struct{ production, tag, warning string }{
+		{"2.3.43", "2.3.18446744073709551615", "达到上限"},
+		{"production-current", "2.3.44", "无法自动建议"},
+	} {
+		t.Run(tc.production, func(t *testing.T) {
+			s, v, b, backend, window := productionRequestFixture(t)
+			v.Preview.ProductionTag = tc.production
+			v.Version = "release/3.0.0"
+			s.productionRequestFor(v, application.Action{Kind: "production.publish", Payload: map[string]any{"batchId": b.ID, "confirmed": true}}, "")
+			productionTestCall(t, backend)
+			b.Tags = []production.Tag{{Name: tc.tag, Commit: b.ReleaseSHA, Status: domain.GenbuTagProbeStatus{Build: domain.GenbuSuccess}}}
+			backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &b}}}
+			productionTestUpdate(t, window)
+			if v.Preview.SuggestedVersion != "" || !strings.Contains(v.Preview.Warning, tc.warning) || v.Version != "release/3.0.0" || len(backend.calls) != 0 {
+				t.Fatalf("write suggestion did not explain the unavailable series or changed input: %+v", v.Preview)
+			}
+		})
 	}
 }

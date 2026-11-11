@@ -3,6 +3,7 @@ package desktop
 import (
 	"maps"
 	"slices"
+	"strings"
 
 	"silverwing-go/internal/production"
 )
@@ -72,9 +73,13 @@ func applyProductionWritePreview(v *productionView, b production.Batch, kind str
 				p.Tags = append([]string{tag.Name}, p.Tags...)
 			}
 		}
-		p.SuggestedVersion, _ = production.SuggestedVersion(p.Tags)
 	default:
 		return
+	}
+	suggested, suggestionErr := production.SuggestedVersion(p)
+	p.SuggestedVersion = suggested
+	if suggestionErr != nil && !strings.Contains(p.Warning, suggestionErr.Error()) {
+		p.Warning = strings.TrimSpace(p.Warning + "\n" + suggestionErr.Error())
 	}
 	v.Preview = &p
 }

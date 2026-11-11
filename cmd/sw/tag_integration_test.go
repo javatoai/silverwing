@@ -45,6 +45,52 @@ func runTagTestCLI(args []string) int {
 		}
 		return ""
 	}
+	if root := os.Getenv("SW_TAG_TEST_NOTIFY_ONLY_ROOT"); root != "" {
+		if index := slices.Index(args, "-C"); index >= 0 && index+2 < len(args) {
+			repository, command := args[index+1], args[index+2:]
+			switch {
+			case slices.Equal(command, []string{"branch", "--show-current"}):
+				fmt.Println("feature/primary")
+			case slices.Equal(command, []string{"rev-parse", "--show-toplevel"}):
+				fmt.Println(repository)
+			case slices.Equal(command, []string{"rev-parse", "--path-format=absolute", "--git-common-dir"}):
+				fmt.Println(filepath.Join(root, "repository", ".git"))
+			case len(command) == 3 && command[0] == "ls-remote":
+				fmt.Println(strings.Repeat("a", 40) + "\t" + command[2])
+			default:
+				fmt.Fprintln(os.Stderr, "notification-only fixture rejects Git command", command)
+				return 98
+			}
+			return 0
+		}
+	}
+	phase := ""
+	switch args[0] {
+	case "config":
+		phase = "meegleProfile"
+	case "user":
+		phase = "meegleUser"
+	case "workitem":
+		phase = "metadata"
+	case "contact":
+		phase = "contact"
+	case "auth":
+		if value("--profile") != "" {
+			phase = "local"
+			if slices.Contains(args, "--verify") {
+				phase = "verify"
+			}
+		} else {
+			phase = "meegleAuth"
+		}
+	}
+	if directory := os.Getenv("SW_TAG_TEST_NOTICE_CALLS"); directory != "" && phase != "" {
+		file, err := os.CreateTemp(directory, phase+"-")
+		if err != nil {
+			return 99
+		}
+		_ = file.Close()
+	}
 	switch args[0] {
 	case "query-tag":
 		uat := "初始"
@@ -69,6 +115,8 @@ func runTagTestCLI(args []string) int {
 			return 92
 		case "empty":
 			fmt.Println(`{"name":"隔离测试需求","work_item_attribute":{"role_members":[]}}`)
+		case "unique":
+			fmt.Println(`{"name":"隔离测试需求","work_item_attribute":{"role_members":[{"name":"QC Owner","members":[{"name":"Tester"}]}]}}`)
 		default:
 			fmt.Println(`{"name":"隔离测试需求","work_item_attribute":{"role_members":[{"name":"QC Owner","members":[{"name":"Tester"},{"name":"Unmapped"}]}]}}`)
 		}
@@ -82,19 +130,23 @@ func runTagTestCLI(args []string) int {
 			verified := slices.Contains(args, "--verify") && os.Getenv("SW_TAG_TEST_LOGIN") != "expired"
 			fmt.Printf("{\"appId\":\"cli_fixture\",\"identities\":{\"user\":{\"userName\":\"Fixture applicant\",\"openId\":\"ou_self\",\"verified\":%t},\"bot\":{\"status\":\"ready\",\"verified\":true}}}\n", verified)
 		}
+	case "contact":
+		if os.Getenv("SW_TAG_TEST_ROSTER") == "unique" && value("--query") == "Tester" {
+			fmt.Println(`{"ok":true,"data":{"users":[{"open_id":"ou_qa","localized_name":"Tester","is_activated":true}]}}`)
+		} else {
+			fmt.Println(`{"ok":true,"data":{"users":[]}}`)
+		}
 	case "im":
-		if value("--profile") != "fixture-lark" || value("--as") != "bot" || value("--msg-type") != "interactive" {
+		if value("--profile") != "fixture-lark" || value("--as") != "user" || value("--msg-type") != "interactive" {
 			return 94
 		}
 		card, recipient, key := value("--content"), value("--user-id"), value("--idempotency-key")
 		var notice struct {
 			Header struct{ Title struct{ Content string } }
+			Config struct{ Summary struct{ Content string } }
 		}
-		wantHeader := "Tester、Unmapped, 申请发布UAT环境版本"
-		if roster := os.Getenv("SW_TAG_TEST_ROSTER"); roster == "empty" || roster == "failed" {
-			wantHeader = "测试负责人待确认, 申请发布UAT环境版本"
-		}
-		if json.Unmarshal([]byte(card), &notice) != nil || notice.Header.Title.Content != wantHeader || strings.Contains(card, "申请人：") || key == "" {
+		const wantHeader = "申请发布UAT环境版本"
+		if json.Unmarshal([]byte(card), &notice) != nil || notice.Header.Title.Content != wantHeader || !strings.HasPrefix(notice.Config.Summary.Content, wantHeader+"｜") || strings.Contains(card, "申请人：") || key == "" {
 			return 95
 		}
 		log, err := os.OpenFile(os.Getenv("SW_TAG_TEST_SEND_LOG"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
@@ -103,12 +155,138 @@ func runTagTestCLI(args []string) int {
 		}
 		fmt.Fprintln(log, recipient+" "+key)
 		log.Close()
+		if os.Getenv("SW_TAG_TEST_SEND_MODE") == "unknown" {
+			fmt.Println("incomplete response")
+			return 0
+		}
+		if os.Getenv("SW_TAG_TEST_SEND_MODE") == "failed" {
+			fmt.Fprintln(os.Stderr, `{"ok":false,"error":{"code":123,"message":"fixture rejected"}}`)
+			return 1
+		}
 		fmt.Printf("{\"ok\":true,\"data\":{\"message_id\":\"om_%s\"}}\n", recipient)
 	default:
 		fmt.Fprintln(os.Stderr, "unexpected fixture command", args[0])
 		return 91
 	}
 	return 0
+}
+
+// No Tag build or Git write is executed: all CLI tools, including Git, are
+// this test binary, and the successful batch exists only as isolated JSON.
+func newNotifyOnlyCLIFixture(t *testing.T) (cliFixture, string, string) {
+	t.Helper()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	accountDir := filepath.Join(root, "isolated-account", ".meegle")
+	if err := os.MkdirAll(accountDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range map[string][]byte{"config.json": []byte(`{"current":"fixture-meegle","profiles":{"fixture-meegle":{"host":"project.feishu.cn"}}}`), "credentials-fixture-meegle.enc": []byte("fake encrypted fixture account")} {
+		if err := os.WriteFile(filepath.Join(accountDir, name), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("USERPROFILE", filepath.Dir(accountDir))
+	t.Setenv("HOME", filepath.Dir(accountDir))
+	f := cliFixture{executable: executable, git: executable, home: filepath.Join(root, "home"), taskDir: filepath.Join(root, "tasks", "notice-task"), sends: filepath.Join(root, "sends.log")}
+	calls := filepath.Join(root, "calls")
+	repository, worktree := filepath.Join(root, "repository"), filepath.Join(f.taskDir, "svc-primary")
+	for _, directory := range []string{calls, repository, worktree, filepath.Join(f.taskDir, "tag-operations")} {
+		if err := os.MkdirAll(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("SW_TAG_TEST_NOTIFY_ONLY_ROOT", root)
+	t.Setenv("SW_TAG_TEST_NOTICE_CALLS", calls)
+	t.Setenv("SW_TAG_TEST_SEND_LOG", f.sends)
+	t.Setenv("SW_TAG_TEST_ROSTER", "unique")
+	t.Setenv("SW_TAG_TEST_LOGIN", "")
+	t.Setenv("SW_TAG_TEST_SEND_MODE", "")
+	config := domain.DefaultAppConfig()
+	taskRoot := filepath.Dir(f.taskDir)
+	config.TaskRoot, config.GitExecutablePath, config.GenbuExecutablePath, config.LarkExecutablePath, config.MeegleExecutablePath = &taskRoot, &executable, &executable, &executable, &executable
+	config.TagEnabled = true
+	config.CommandProxyURL, config.CommandProxyTargets = nil, nil
+	config.MeegleProjects = []domain.MeegleProjectConfig{{SimpleName: "fixture", ProjectKey: "fixture-project"}}
+	config.LarkNotice = &domain.LarkNoticeConfig{Profile: "fixture-lark", AppID: "cli_fixture", Contacts: []domain.LarkNoticeContact{}}
+	config.Repositories = []domain.RepositoryConfig{{ID: "svc", Name: "svc", RootPath: repository, GitCommonDirectory: filepath.Join(repository, ".git")}}
+	config.Groups[0].Services = []domain.GroupServiceConfig{{ID: "svc", DisplayName: "svc", RepositoryID: "svc", Enabled: true, GenbuServiceName: "svc-genbu", GenbuProbeEnabled: true, MasterBranch: "origin/uat", TestTagBaselineRef: "origin/uat", DevelopmentTool: domain.DevelopmentToolVisualStudioCode, Modules: []domain.ServiceModuleConfig{{ID: "primary", Name: "primary", Strategy: domain.WorkspaceStandardWorktree, TagMode: domain.TagBuildCurrentBranch, TagEnabled: true}}}}
+	manifest := domain.DefaultTaskManifest()
+	manifest.FolderName, manifest.TaskDirectoryName, manifest.FeatureBranch = "notice-task", "notice-task", "feature/primary"
+	manifest.CreatedAt, manifest.UpdatedAt = "2026-11-10 01:02:03", "2026-11-10 01:02:03"
+	manifest.RequirementLink = "https://project.feishu.cn/fixture/userstory/detail/101"
+	manifest.Services = []domain.ServiceWorkspace{{RepositoryID: "svc", ServiceName: "svc", RepositoryPath: repository, WorktreePath: worktree, Branch: "feature/primary", DevelopmentTool: domain.DevelopmentToolVisualStudioCode, Health: domain.WorkspaceReady, Strategy: domain.WorkspaceStandardWorktree, ModuleSource: domain.TaskModuleConfigured, Warnings: []string{}, GroupServiceID: "svc", ModuleID: "primary", ModuleName: "primary", TagEnabled: true, TagMode: domain.TagBuildCurrentBranch, PushRemote: "origin"}}
+	if err := storage.NewConfigStore(storage.NewPaths(f.home)).Save(config); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.NewManifestStore().Save(f.taskDir, manifest); err != nil {
+		t.Fatal(err)
+	}
+	batch, tag, sha := "notification-only-batch", "1.2.3.beta-1", strings.Repeat("a", 40)
+	now := domain.FormatSilverWingTime(time.Now())
+	op := domain.TagOperation{OperationID: delivery.NewTagJobID(), BatchID: &batch, FolderName: "notice-task", ServiceName: "svc", RepositoryID: "svc", SourceBranch: "feature/primary", Remote: "origin", TagMode: domain.TagBuildCurrentBranch, State: domain.TagOperationSuccess, CreatedAt: now, UpdatedAt: now, SourceSHA: &sha, Tag: &tag, GroupServiceID: "svc", ModuleID: "primary", ConflictFiles: []string{}, GenbuStatus: domain.GenbuTagProbeStatus{Build: domain.GenbuSuccess, UAT: domain.GenbuInitial, Production: domain.GenbuInitial, CheckedAt: &now}}
+	data, err := json.Marshal(op)
+	if err != nil || os.WriteFile(filepath.Join(f.taskDir, "tag-operations", op.OperationID+".json"), data, 0600) != nil {
+		t.Fatal("cannot save isolated notification batch", err)
+	}
+	return f, batch, calls
+}
+
+func TestTagCLINotifyOnlyOptimizedChecksAndRetry(t *testing.T) {
+	for _, outcome := range []string{"success", "unknown", "failed"} {
+		t.Run(outcome, func(t *testing.T) {
+			f, batch, calls := newNotifyOnlyCLIFixture(t)
+			expectedCode := 0
+			if outcome != "success" {
+				t.Setenv("SW_TAG_TEST_SEND_MODE", outcome)
+				expectedCode = exitError
+			}
+			first, _ := callTag[application.CLITagNoticeResult](t, f, expectedCode, "notify", "--batch", batch)
+			if len(first.Recipients) != 1 || first.Recipients[0].Name != "Tester" || first.Recipients[0].Self || first.Recipients[0].Skipped {
+				t.Fatal(first)
+			}
+			counts := map[string]int{}
+			files, err := os.ReadDir(calls)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, file := range files {
+				counts[strings.SplitN(file.Name(), "-", 2)[0]]++
+			}
+			if !reflect.DeepEqual(counts, map[string]int{"verify": 2, "metadata": 1, "contact": 1, "local": 2, "meegleProfile": 1, "meegleAuth": 1, "meegleUser": 1}) {
+				t.Fatal("sw tag notify did not share optimized dispatch checks", counts)
+			}
+			t.Setenv("SW_TAG_TEST_SEND_MODE", "")
+			repeated, _ := callTag[application.CLITagNoticeResult](t, f, 0, "notify", "--batch", batch)
+			if len(repeated.Recipients) != 1 || repeated.Recipients[0].State != "sent" || repeated.Recipients[0].Skipped != (outcome == "success") {
+				t.Fatal(repeated)
+			}
+			data, err := os.ReadFile(f.sends)
+			fields := strings.Fields(string(data))
+			wantFields := 2
+			if outcome != "success" {
+				wantFields = 4
+			}
+			if err != nil || len(fields) != wantFields || fields[0] != "ou_qa" || (wantFields == 4 && fields[1] != fields[3]) {
+				t.Fatal("CLI duplicate/retry changed recipient or idempotency key", string(data), err)
+			}
+			counts = map[string]int{}
+			files, err = os.ReadDir(calls)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, file := range files {
+				counts[strings.SplitN(file.Name(), "-", 2)[0]]++
+			}
+			if !reflect.DeepEqual(counts, map[string]int{"verify": 4, "metadata": 1, "contact": 1, "local": 4, "meegleProfile": 1, "meegleAuth": 1, "meegleUser": 1}) {
+				t.Fatal("new CLI process ignored disk preparation", counts)
+			}
+			t.Log("actual sw tag notify cold: verify=2 metadata=1 directory=1 Meegle identity=3 local=2; new process hit: verify=2 metadata=0 directory=0 Meegle identity=0 local=2; successful receipts skipped, unknown/failed key retained")
+		})
+	}
 }
 
 type cliFixture struct {

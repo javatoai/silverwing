@@ -35,6 +35,7 @@ func productionConfirmationFixture(t *testing.T, kind string) (*app, *production
 	s.releaseUnit.state.production.batches[0] = b
 	switch kind {
 	case "create":
+		v.Preview.Branches = []string{b.Target.MainBranch, v.Branch}
 		s.confirmProductionCreate(v)
 	case "main":
 		s.confirmProductionMain(v)

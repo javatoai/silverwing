@@ -158,13 +158,14 @@ func TestProductionDifferenceUsesImmutableIncomingTreesAndDoesNotTouchCheckout(t
 }
 
 func TestProductionReleaseBranchParsing(t *testing.T) {
+	p := Preview{ProductionTag: "2.3.43.2", Tags: []string{"2.3.43.2"}}
 	for _, name := range []string{"release/2.3.44", " release/2.3.45 "} {
-		if _, err := ReleaseVersion(name, []string{"2.3.43.2"}); err != nil {
+		if _, err := ReleaseVersion(name, p); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for _, name := range []string{"2.3.44", "feature/2.3.44", "release/release/2.3.44", "release/2.3.43", "release/2.3.44.1", "release/../2.3.44"} {
-		if _, err := ReleaseVersion(name, []string{"2.3.43.2"}); err == nil {
+		if _, err := ReleaseVersion(name, p); err == nil {
 			t.Fatalf("invalid release branch accepted: %s", name)
 		}
 	}

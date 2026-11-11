@@ -118,7 +118,7 @@ func (s Session) tagSendChoice() (Selection, error) {
 // The preparation snapshot is separate from stable receipt identity: metadata
 // edits invalidate an outstanding click without duplicating successful delivery.
 func (s Session) RetryChoice() Selection {
-	values := []any{s.Scope, s.Profile, s.Identity.AppID, s.Identity.OpenID, s.Title, s.URL, s.Rows, s.Testers, s.Recipients, s.Warning}
+	values := []any{s.Scope, s.Profile, s.Identity.AppID, s.Identity.OpenID, s.Title, s.URL, s.Rows, canonicalTesters(s.Testers), s.Recipients, s.Warning}
 	// Keep legacy snapshots byte-compatible until a newly prepared request
 	// explicitly binds its Meegle account. Receipt identity and cards are stable.
 	if s.RequirementIdentity != "" {
@@ -126,6 +126,16 @@ func (s Session) RetryChoice() Selection {
 	}
 	return Selection{Retry: true, Snapshot: Digest(values)}
 }
+
+// Empty tester lists are omitted by Session's JSON encoding and load as nil.
+// Use the persisted representation in digests without changing nonempty rosters.
+func canonicalTesters(testers []string) []string {
+	if len(testers) == 0 {
+		return nil
+	}
+	return testers
+}
+
 func (s Session) Deliveries() []RecipientDelivery {
 	out := []RecipientDelivery{}
 	for _, p := range s.Recipients {

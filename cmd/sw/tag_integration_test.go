@@ -289,6 +289,41 @@ func TestTagCLINotifyOnlyOptimizedChecksAndRetry(t *testing.T) {
 	}
 }
 
+func TestTagCLINotifyOnlyEmptyRosterSendsSelfOnce(t *testing.T) {
+	f, batch, calls := newNotifyOnlyCLIFixture(t)
+	t.Setenv("SW_TAG_TEST_ROSTER", "empty")
+	first, _ := callTag[application.CLITagNoticeResult](t, f, 0, "notify", "--batch", batch)
+	if len(first.Recipients) != 1 || !first.Recipients[0].Self || first.Recipients[0].State != "sent" || first.Recipients[0].Skipped || first.Recipients[0].MessageID != "om_ou_self" {
+		t.Fatal("empty roster did not send the isolated self fallback", first)
+	}
+	if !strings.Contains(strings.Join(first.Warnings, ";"), "需求未配置测试负责人") {
+		t.Fatal("empty-roster fallback reason was lost", first.Warnings)
+	}
+	// This is a new CLI process: its preparation comes from the temporary disk
+	// cache, and its successful receipt must suppress a second message RPC.
+	repeated, _ := callTag[application.CLITagNoticeResult](t, f, 0, "notify", "--batch", batch)
+	if len(repeated.Recipients) != 1 || !repeated.Recipients[0].Self || repeated.Recipients[0].State != "sent" || !repeated.Recipients[0].Skipped || repeated.Recipients[0].MessageID != first.Recipients[0].MessageID {
+		t.Fatal("cached empty roster did not retain the successful receipt", repeated)
+	}
+	data, err := os.ReadFile(f.sends)
+	fields := strings.Fields(string(data))
+	if err != nil || len(fields) != 2 || fields[0] != "ou_self" || fields[1] == "" {
+		t.Fatal("empty-roster fallback sent more than once or changed recipients", string(data), err)
+	}
+	counts := map[string]int{}
+	files, err := os.ReadDir(calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		counts[strings.SplitN(file.Name(), "-", 2)[0]]++
+	}
+	if !reflect.DeepEqual(counts, map[string]int{"verify": 4, "metadata": 1, "local": 4, "meegleProfile": 1, "meegleAuth": 1, "meegleUser": 1}) {
+		t.Fatal("repeat did not use the empty-roster disk cache or performed a contact lookup", counts)
+	}
+	t.Log("actual sw tag notify with fake tools: empty roster sent ou_self once; new process used disk preparation and skipped the successful receipt")
+}
+
 type cliFixture struct {
 	executable, git, home, taskDir, sends string
 	repository, remote, base, source      string

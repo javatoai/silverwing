@@ -13,16 +13,8 @@ import (
 func (o options) printResult(out io.Writer, data any, code int) {
 	switch result := data.(type) {
 	case []application.CLITagTarget:
-		for _, target := range result {
-			state := "可选"
-			remote := target.Remote
-			if !target.Selectable {
-				state = "不可选"
-				remote = "" // An unresolved target still contains its configured ref.
-			}
-			fmt.Fprintln(out, tagTargetText(target), "·", state)
-			printTagBranches(out, target.SourceBranch, remote, target.TargetBranch)
-			printTagDetail(out, "原因", target.Error)
+		if len(result) > 0 || code == 0 {
+			printTagList(out, result)
 		}
 	case application.CLITagPreflightResult:
 		printTagPreflight(out, result, code == 0)
@@ -35,12 +27,34 @@ func (o options) printResult(out io.Writer, data any, code int) {
 	}
 }
 
-func tagTargetText(target application.CLITagTarget) string {
-	name := target.Service
-	if target.Module != "" {
-		name += " / " + target.Module
+func printTagList(out io.Writer, targets []application.CLITagTarget) {
+	selectable := 0
+	for _, target := range targets {
+		if target.Selectable {
+			selectable++
+		}
 	}
-	return fmt.Sprintf("%s · 服务选择值 %s", name, target.SelectionKey)
+	fmt.Fprintf(out, "服务列表: %d 项（%d 项可选）\n", len(targets), selectable)
+	for _, target := range targets {
+		fmt.Fprintln(out)
+		state := "可选"
+		remote := target.Remote
+		if !target.Selectable {
+			state = "不可选"
+			remote = "" // An unresolved target still contains its configured ref.
+		}
+		printTagField(out, tagTargetName(target), state)
+		printTagDetail(out, "服务选择值", target.SelectionKey)
+		printTagBranches(out, target.SourceBranch, remote, target.TargetBranch)
+		printTagDetail(out, "原因", target.Error)
+	}
+}
+
+func tagTargetName(target application.CLITagTarget) string {
+	if target.Module != "" {
+		return target.Service + " / " + target.Module
+	}
+	return target.Service
 }
 
 func printTagBranches(out io.Writer, source, remote, target string) {
@@ -55,15 +69,14 @@ func printTagBranches(out io.Writer, source, remote, target string) {
 
 func printTagPreflight(out io.Writer, result application.CLITagPreflightResult, complete bool) {
 	items := result.Items
-	if result.ID != "" {
-		fmt.Fprintln(out, "预检编号", result.ID)
-	}
+	printTagField(out, "预检编号", result.ID)
 	if complete && len(items) > 0 {
-		fmt.Fprintf(out, "预检全部通过（%d 项）\n", len(items))
+		fmt.Fprintf(out, "预检结果: 预检全部通过（%d 项）\n", len(items))
 	} else {
-		fmt.Fprintln(out, "预检未全部通过")
+		printTagField(out, "预检结果", "预检未全部通过")
 	}
 	for _, item := range items {
+		fmt.Fprintln(out)
 		preview := item.Preview
 		state := "预检通过"
 		if item.BlockedBy != "" {
@@ -73,7 +86,8 @@ func printTagPreflight(out io.Writer, result application.CLITagPreflightResult, 
 		} else if item.Error != "" {
 			state = "预检失败"
 		}
-		fmt.Fprintln(out, tagTargetText(item.Target), "·", state)
+		printTagField(out, tagTargetName(item.Target), state)
+		printTagDetail(out, "服务选择值", item.Target.SelectionKey)
 		printTagBranches(out, preview.SourceBranch, preview.Remote, tagTextValue(preview.TargetBranch))
 		printTagDetail(out, "预估 Tag", preview.EstimatedTag)
 		printTagDetail(out, "原因", item.Error)
@@ -83,22 +97,28 @@ func printTagPreflight(out io.Writer, result application.CLITagPreflightResult, 
 		}
 		printTagConflict(out, nil, preview.ConflictFiles, item.BlockedBy)
 	}
+	if len(result.Warnings) > 0 {
+		fmt.Fprintln(out)
+	}
 	for _, warning := range result.Warnings {
-		printTagDetail(out, "部署范围", warning)
+		printTagField(out, "部署范围", warning)
 	}
 }
 
 func printTagJob(out io.Writer, job application.CLITagJobResult) {
-	if job.BatchID != "" {
-		fmt.Fprintln(out, "批次 ID", job.BatchID)
-	}
-	for _, item := range job.Items {
-		record := item.Record
-		name := item.SelectionKey
-		if record != nil && record.ServiceName != "" {
-			name = record.ServiceName + " · " + name
+	printTagField(out, "批次 ID", job.BatchID)
+	for i, item := range job.Items {
+		if job.BatchID != "" || i > 0 {
+			fmt.Fprintln(out)
 		}
-		fmt.Fprintln(out, name, "· 操作 ID", item.OperationID, "·", tagJobText(item))
+		record := item.Record
+		name := "操作结果"
+		if record != nil && record.ServiceName != "" {
+			name = record.ServiceName
+		}
+		printTagField(out, name, tagJobText(item))
+		printTagDetail(out, "操作 ID", item.OperationID)
+		printTagDetail(out, "服务选择值", item.SelectionKey)
 		printTagDetail(out, "原因", item.Error)
 		if record == nil {
 			continue
@@ -134,15 +154,13 @@ func tagJobText(item application.CLITagJobItem) string {
 }
 
 func printTagStatus(out io.Writer, rows []delivery.TagObservation, batchID string, complete bool) {
-	if batchID != "" {
-		fmt.Fprintln(out, "批次 ID", batchID)
-	}
+	printTagField(out, "批次 ID", batchID)
 	buildsReady := complete && len(rows) > 0
 	uatReady := buildsReady
 	runtimeReady := buildsReady
 	serviceTags := map[string]string{}
 	sharedVersions := false
-	for _, row := range rows {
+	for i, row := range rows {
 		op, status := row.Operation, row.Operation.GenbuStatus
 		build, uat := genbuStageText(status.Build), genbuStageText(status.UAT)
 		switch {
@@ -163,9 +181,15 @@ func printTagStatus(out io.Writer, rows []delivery.TagObservation, batchID strin
 			serviceTags[row.GenbuService] = tag
 		}
 
-		fmt.Fprintln(out, op.ServiceName, "· 操作 ID", op.OperationID)
+		if batchID != "" || i > 0 {
+			fmt.Fprintln(out)
+		}
+		printTagField(out, "服务", op.ServiceName)
+		printTagDetail(out, "操作 ID", op.OperationID)
 		printTagDetail(out, "Tag", tagTextValue(op.Tag))
-		fmt.Fprintf(out, "  Tag 推送 %s · Genbu 编译 %s · UAT 发版 %s\n", gitPushText(row.Git.State), build, uat)
+		printTagDetail(out, "Tag 推送", gitPushText(row.Git.State))
+		printTagDetail(out, "Genbu 编译", build)
+		printTagDetail(out, "UAT 发版", uat)
 		printTagDetail(out, "Genbu 服务", row.GenbuService)
 		printTagDetail(out, "远端校验", row.Git.Error)
 		printTagDetail(out, "Genbu 查询异常", tagTextValue(status.FailureReason))
@@ -184,22 +208,23 @@ func printTagStatus(out io.Writer, rows []delivery.TagObservation, batchID strin
 	if batchID == "" {
 		return
 	}
+	fmt.Fprintln(out, "\n批次汇总:")
 	if buildsReady {
-		fmt.Fprintln(out, "整批 Tag 已推送且编译成功")
+		printTagDetail(out, "Tag 推送与编译", "整批 Tag 已推送且编译成功")
 	} else {
-		fmt.Fprintln(out, "Tag 推送和编译尚未全部确认成功")
+		printTagDetail(out, "Tag 推送与编译", "Tag 推送和编译尚未全部确认成功")
 	}
 	if uatReady {
-		fmt.Fprintln(out, "整批 UAT 发版成功")
+		printTagDetail(out, "UAT 发版", "整批 UAT 发版成功")
 	} else {
-		fmt.Fprintln(out, "UAT 发版尚未全部确认成功")
+		printTagDetail(out, "UAT 发版", "UAT 发版尚未全部确认成功")
 	}
 	if buildsReady && uatReady && sharedVersions {
-		fmt.Fprintln(out, "同一 Genbu 服务包含多个 Tag，请按操作 ID 分开核对 UAT 运行版本")
+		printTagDetail(out, "UAT 运行", "同一 Genbu 服务包含多个 Tag，请按操作 ID 分开核对 UAT 运行版本")
 	} else if buildsReady && uatReady && runtimeReady {
-		fmt.Fprintln(out, "目标版本已就绪，可以自测")
+		printTagDetail(out, "UAT 运行", "目标版本已就绪，可以自测")
 	} else if uatReady {
-		fmt.Fprintln(out, "本批 UAT 运行版本尚未全部就绪")
+		printTagDetail(out, "UAT 运行", "本批 UAT 运行版本尚未全部就绪")
 	}
 }
 
@@ -226,8 +251,9 @@ func printTagRuntime(out io.Writer, runtime *delivery.TagRuntimeStatus) {
 		if versions == "" {
 			versions = "未知"
 		}
-		fmt.Fprintf(out, "  %s · 运行版本 %s · 版本匹配 %d/%d · 就绪 %d/%d\n",
-			ns.Namespace, versions, ns.MatchingPods, ns.PodCount, ns.ReadyPods, ns.PodCount)
+		printTagDetail(out, "namespace", ns.Namespace)
+		printTagField(out, "    运行版本", versions)
+		fmt.Fprintf(out, "    Pod: 版本匹配 %d/%d，就绪 %d/%d\n", ns.MatchingPods, ns.PodCount, ns.ReadyPods, ns.PodCount)
 	}
 }
 
@@ -262,11 +288,16 @@ func genbuStageText(state domain.GenbuStageStatus) string {
 }
 
 func printTagNotice(out io.Writer, result application.CLITagNoticeResult) {
-	fmt.Fprintln(out, "批次 ID", result.BatchID)
-	for _, receipt := range result.Recipients {
+	printTagField(out, "批次 ID", result.BatchID)
+	for i, receipt := range result.Recipients {
+		if result.BatchID != "" || i > 0 {
+			fmt.Fprintln(out)
+		}
 		name := receipt.Name
 		if receipt.Self {
 			name = "本人"
+		} else if name == "" {
+			name = "收件人"
 		}
 		state := "结果待核实"
 		switch {
@@ -277,13 +308,18 @@ func printTagNotice(out io.Writer, result application.CLITagNoticeResult) {
 			}
 		case receipt.State == "failed":
 			state = "发送失败"
+		case receipt.State == "pending" || receipt.State == "queued":
+			state = "待发送"
 		}
-		fmt.Fprintln(out, name, "·", state)
+		printTagField(out, name, state)
 		printTagDetail(out, "飞书消息 ID", receipt.MessageID)
 		printTagDetail(out, "原因", receipt.Error)
 	}
+	if len(result.Warnings) > 0 && (result.BatchID != "" || len(result.Recipients) > 0) {
+		fmt.Fprintln(out)
+	}
 	for _, warning := range result.Warnings {
-		fmt.Fprintln(out, "通知提示", warning)
+		printTagField(out, "通知提示", warning)
 	}
 }
 
@@ -298,8 +334,12 @@ func printTagConflict(out io.Writer, conflict *domain.TagConflict, files []strin
 }
 
 func printTagDetail(out io.Writer, label, value string) {
+	printTagField(out, "  "+label, value)
+}
+
+func printTagField(out io.Writer, label, value string) {
 	if value != "" {
-		fmt.Fprintf(out, "  %s %s\n", label, value)
+		fmt.Fprintf(out, "%s: %s\n", label, value)
 	}
 }
 

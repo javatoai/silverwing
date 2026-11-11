@@ -101,7 +101,7 @@ func (s Store) prepare(v Session) (Session, error) {
 	err := s.Locked(v.ID, func() error {
 		old, e := s.load(v.ID)
 		if e == nil {
-			if v.Audience == UserTesters && (old.Title != v.Title || Digest(old.Testers) != Digest(v.Testers) || Digest(old.Recipients) != Digest(v.Recipients) || old.Warning != v.Warning || old.RequirementIdentity != "" && old.RequirementIdentity != v.RequirementIdentity) {
+			if v.Audience == UserTesters && (old.Title != v.Title || Digest(canonicalTesters(old.Testers)) != Digest(canonicalTesters(v.Testers)) || Digest(old.Recipients) != Digest(v.Recipients) || old.Warning != v.Warning || old.RequirementIdentity != "" && old.RequirementIdentity != v.RequirementIdentity) {
 				for _, r := range old.Receipts {
 					if r.State != "sent" {
 						return errors.New("待完成通知的内容或收件人快照已变化，请先核实原消息")

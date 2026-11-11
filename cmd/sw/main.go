@@ -24,18 +24,42 @@ const (
 	exitConflict = 3
 )
 
-const usage = `用法
-  sw tag list   --task <任务目录名> [--json]
-  sw tag build  --task <任务目录名> (--service <服务[:模块]> ... | --all-services) --dry-run [--preflight <预检编号>] [--json]
-  sw tag build  --task <任务目录名> (--service <服务[:模块]> ... | --all-services) --preflight <预检编号> [--json]
-  sw tag status (--batch <ID> | --operation <ID>) [--task <任务目录名>] [--namespace <UAT namespace>] [--json]
-  sw tag retry  --operation <ID> [--task <任务目录名>] [--json]
-  sw tag notify --batch <ID> [--task <任务目录名>] [--json]
+const usage = `用法:
+  sw [--home <目录>] [--json] tag <命令> [选项]
+  sw --version
 
---home <目录> 指定 Silverwing 数据目录。默认使用本机桌面数据目录。
-默认输出中文结果。--json 输出结构化结果。
-退出码 1 表示失败或尚未完成，2 表示参数错误，3 表示合并冲突。
---version 显示版本。
+命令:
+  list: 列出任务的服务和分支
+    sw tag list --task <任务目录名>
+
+  build: 预检或构建 UAT Tag
+    sw tag build --task <任务目录名> (--service <服务[:模块]> ... | --all-services)
+                 --dry-run [--preflight <预检编号>]
+    sw tag build --task <任务目录名> (--service <服务[:模块]> ... | --all-services)
+                 --preflight <预检编号>
+
+  status: 查询 Tag 推送、编译、UAT 发版和运行状态
+    sw tag status (--batch <ID> | --operation <ID>) [--task <任务目录名>]
+                  [--namespace <UAT namespace>]
+
+  retry: 续接指定操作
+    sw tag retry --operation <ID> [--task <任务目录名>]
+
+  notify: 发送指定批次的 UAT 通知并显示回执
+    sw tag notify --batch <ID> [--task <任务目录名>]
+
+选项:
+  --home <目录>: 指定 Silverwing 数据目录，默认使用本机桌面数据目录。
+  --json: 输出结构化 JSON，默认输出中文结果。
+  --version: 显示版本。
+  --help, -h: 显示帮助。
+  --home 和 --json 也可放在子命令之后。
+
+退出码:
+  0: 成功
+  1: 失败或尚未完成
+  2: 参数错误
+  3: 合并冲突
 `
 
 type serviceFlags []string
@@ -61,14 +85,12 @@ func main() {
 
 func run(ctx context.Context, args []string, out, stderr io.Writer) int {
 	var o options
-	global := flag.NewFlagSet("sw", flag.ContinueOnError)
-	global.SetOutput(stderr)
-	global.Usage = func() { fmt.Fprint(global.Output(), usage) }
+	global := newCLIFlagSet("sw")
 	global.StringVar(&o.home, "home", "", "Silverwing 数据目录")
 	global.BoolVar(&o.asJSON, "json", false, "JSON 输出")
 	version := global.Bool("version", false, "显示版本")
 	if err := global.Parse(args); err != nil {
-		return flagExit(err)
+		return flagExit(stderr, err)
 	}
 	if *version && global.NArg() == 0 {
 		fmt.Fprintln(out, "sw "+buildinfo.FullVersion())
@@ -80,17 +102,14 @@ func run(ctx context.Context, args []string, out, stderr io.Writer) int {
 		return 0
 	}
 	if len(args) < 2 || args[0] != "tag" {
-		fmt.Fprint(stderr, usage)
-		return exitUsage
+		return usageError(stderr, fmt.Sprintf("未知命令 %q", args[0]))
 	}
 	if args[1] == "--help" || args[1] == "-h" || args[1] == "help" {
 		fmt.Fprint(out, usage)
 		return 0
 	}
 	o.command = args[1]
-	flags := flag.NewFlagSet("sw tag "+o.command, flag.ContinueOnError)
-	flags.SetOutput(stderr)
-	flags.Usage = global.Usage
+	flags := newCLIFlagSet("sw tag " + o.command)
 	flags.StringVar(&o.home, "home", o.home, "Silverwing 数据目录")
 	flags.BoolVar(&o.asJSON, "json", o.asJSON, "JSON 输出")
 	flags.StringVar(&o.task, "task", "", "任务目录名")
@@ -110,11 +129,10 @@ func run(ctx context.Context, args []string, out, stderr io.Writer) int {
 	case "notify":
 		flags.StringVar(&o.batch, "batch", "", "批次 ID")
 	default:
-		fmt.Fprintln(stderr, "未知 Tag 命令", o.command)
-		return exitUsage
+		return usageError(stderr, fmt.Sprintf("未知 Tag 命令 %q", o.command))
 	}
 	if err := flags.Parse(args[2:]); err != nil {
-		return flagExit(err)
+		return flagExit(stderr, err)
 	}
 	if flags.NArg() != 0 {
 		return o.outputResult(out, stderr, nil, exitUsage, errors.New("存在多余参数"))
@@ -137,11 +155,30 @@ func run(ctx context.Context, args []string, out, stderr io.Writer) int {
 	return o.outputResult(out, stderr, data, code, err)
 }
 
-func flagExit(err error) int {
+func newCLIFlagSet(name string) *flag.FlagSet {
+	flags := flag.NewFlagSet(name, flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.Usage = func() {}
+	return flags
+}
+
+func flagExit(stderr io.Writer, err error) int {
 	if errors.Is(err, flag.ErrHelp) {
+		fmt.Fprint(stderr, usage)
 		return 0
 	}
+	return usageError(stderr, err.Error())
+}
+
+func usageError(stderr io.Writer, message string) int {
+	printCLIError(stderr, message)
+	fmt.Fprintln(stderr)
+	fmt.Fprint(stderr, usage)
 	return exitUsage
+}
+
+func printCLIError(stderr io.Writer, message string) {
+	fmt.Fprintln(stderr, "错误:", message)
 }
 
 func (o options) validate() error {
@@ -260,13 +297,13 @@ func (o options) outputResult(out, stderr io.Writer, data any, code int, err err
 		encoder := json.NewEncoder(out)
 		encoder.SetEscapeHTML(false)
 		if err := encoder.Encode(response); err != nil {
-			fmt.Fprintln(stderr, err)
+			printCLIError(stderr, err.Error())
 			return exitError
 		}
 	} else {
 		o.printResult(out, data, code)
 		if message != "" {
-			fmt.Fprintln(stderr, message)
+			printCLIError(stderr, message)
 		}
 	}
 	return code

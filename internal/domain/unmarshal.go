@@ -175,7 +175,7 @@ func (v *GroupConfig) UnmarshalJSON(data []byte) error {
 }
 func (v *ToolVisibilitySettings) UnmarshalJSON(data []byte) error {
 	type plain ToolVisibilitySettings
-	x, e := decodeWithDefaults(data, plain{JSON: true, DateTime: true, TextDiff: true})
+	x, e := decodeWithDefaults(data, plain(defaultToolVisibilitySettings()))
 	*v = ToolVisibilitySettings(x)
 	return e
 }

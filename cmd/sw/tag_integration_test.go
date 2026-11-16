@@ -145,7 +145,7 @@ func runTagTestCLI(args []string) int {
 			Header struct{ Title struct{ Content string } }
 			Config struct{ Summary struct{ Content string } }
 		}
-		const wantHeader = "申请发布UAT环境版本"
+		const wantHeader = "辛苦发版UAT"
 		if json.Unmarshal([]byte(card), &notice) != nil || notice.Header.Title.Content != wantHeader || !strings.HasPrefix(notice.Config.Summary.Content, wantHeader+"｜") || strings.Contains(card, "申请人：") || key == "" {
 			return 95
 		}

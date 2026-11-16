@@ -14,6 +14,7 @@ import (
 	"image/png"
 	"io"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 
@@ -76,28 +77,8 @@ func imageInputOptions(nameHint string, options Options) (Options, error) {
 }
 
 func openImageData(ctx context.Context, data []byte, options Options) (*ImageDocument, error) {
-	if err := contextError(ctx); err != nil {
-		return nil, err
-	}
-	if int64(len(data)) > options.MaxImageBytes {
-		return nil, fmt.Errorf("图片超过 %d 字节预览限制", options.MaxImageBytes)
-	}
-	if len(data) == 0 {
-		return nil, errors.New("图片文件为空")
-	}
-	decoded, format, err := decodeImage(data, options.MaxImagePixels)
+	decoded, format, err := decodeImageData(ctx, data, options.MaxImageBytes, options.MaxImagePixels, nil)
 	if err != nil {
-		return nil, err
-	}
-	if strings.EqualFold(format, "jpeg") || strings.EqualFold(format, "jpg") {
-		if orientation := jpegOrientation(data); orientation != 0 && orientation != 1 {
-			decoded, err = applyOrientation(ctx, decoded, orientation)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-	if err := contextError(ctx); err != nil {
 		return nil, err
 	}
 	bounds := decoded.Bounds()
@@ -105,6 +86,56 @@ func openImageData(ctx context.Context, data []byte, options Options) (*ImageDoc
 		info:  ImageInfo{Width: bounds.Dx(), Height: bounds.Dy(), Format: format},
 		image: decoded, options: options, cache: newPNGCache(options.CacheBytes / 2), rgbaCache: newRGBACache(options.CacheBytes - options.CacheBytes/2),
 	}, nil
+}
+
+// DecodeStillImage returns the orientation-corrected image from a regular file
+// or a byte snapshot. The caller owns the decoded pixels and must keep data
+// unchanged until the call returns. Formats, when supplied, restrict the
+// detected image format before pixel decoding.
+func DecodeStillImage(ctx context.Context, path string, data []byte, maxBytes, maxPixels int64, formats ...string) (image.Image, error) {
+	if maxBytes < 1 || maxPixels < 1 {
+		return nil, errors.New("图片大小和像素上限必须为正数")
+	}
+	if path != "" {
+		if data != nil {
+			return nil, errors.New("请选择一个图片来源")
+		}
+		var err error
+		data, err = readRegularFile(ctx, path, maxBytes, "图片")
+		if err != nil {
+			return nil, err
+		}
+	}
+	decoded, _, err := decodeImageData(ctx, data, maxBytes, maxPixels, formats)
+	return decoded, err
+}
+
+func decodeImageData(ctx context.Context, data []byte, maxBytes, maxPixels int64, formats []string) (image.Image, string, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, "", err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, "", fmt.Errorf("图片超过 %d 字节预览限制", maxBytes)
+	}
+	if len(data) == 0 {
+		return nil, "", errors.New("图片文件为空")
+	}
+	decoded, format, err := decodeImage(data, maxPixels, formats)
+	if err != nil {
+		return nil, "", err
+	}
+	if strings.EqualFold(format, "jpeg") || strings.EqualFold(format, "jpg") {
+		if orientation := jpegOrientation(data); orientation != 0 && orientation != 1 {
+			decoded, err = applyOrientation(ctx, decoded, orientation)
+			if err != nil {
+				return nil, "", err
+			}
+		}
+	}
+	if err := contextError(ctx); err != nil {
+		return nil, "", err
+	}
+	return decoded, format, nil
 }
 
 func (d *ImageDocument) Info() ImageInfo {
@@ -241,7 +272,7 @@ func (d *ImageDocument) Close() error {
 	return nil
 }
 
-func decodeImage(data []byte, maxPixels int64) (image.Image, string, error) {
+func decodeImage(data []byte, maxPixels int64, formats []string) (image.Image, string, error) {
 	encoded := data
 	format := ""
 	if isICO(data) {
@@ -261,6 +292,9 @@ func decodeImage(data []byte, maxPixels int64) (image.Image, string, error) {
 	}
 	if format == "" {
 		format = decodedFormat
+	}
+	if len(formats) > 0 && !slices.Contains(formats, format) {
+		return nil, "", fmt.Errorf("%w：%s", ErrUnsupportedType, format)
 	}
 	img, actualFormat, err := image.Decode(bytes.NewReader(encoded))
 	if err != nil {

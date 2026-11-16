@@ -8,7 +8,9 @@ func (s *app) renderDeveloperTools(c *ui.Context) {
 	p := setTheme(c, s.dark)
 	state := s.ensureToolState()
 	tabs := s.visibleDeveloperToolTabs()
+	previousTab := state.activeTab
 	state.activeTab = reconcileDeveloperToolTab(state.activeTab, tabs)
+	revealTab := state.activeTab != previousTab
 	if _, ok := developerToolPrimaryActionForTab(state.activeTab); ok {
 		c.OnShortcut(ui.Cmd, ui.KeyEnter, func() {
 			s.runDeveloperToolPrimaryAction(state, state.activeTab)
@@ -21,34 +23,7 @@ func (s *app) renderDeveloperTools(c *ui.Context) {
 			})
 			return
 		}
-		ui.Row(c).Height(40).Shrink(0).Padding(0, 16).Children(func() {
-			for _, tab := range tabs {
-				selected := state.activeTab == tab.key
-				ui.Column(c).Height(40).MinWidth(90).Shrink(0).AlignItems(ui.Center).Children(func() {
-					b := ui.ButtonBase(c.Key("native-tool-tab-"+tab.key)).FillWidth().Height(37).Padding(0, 16).Radius(0).Label(tab.title)
-					fg := p.muted
-					if selected {
-						fg = p.blue
-					} else if b.Hovered() {
-						b.Background(p.soft)
-					}
-					b.Children(func() { label(c, tab.title, 14, fg).FontWeight(500).NoWrap() })
-					if b.Clicked() {
-						state.activeTab = tab.key
-					}
-					if selected {
-						width, _ := c.MeasureText(0, ui.Span{Text: tab.title, Size: 14, Weight: 500})
-						ui.Box(c).Height(3).Width(max(24, width)).Radius(1.5).Background(p.blue)
-					} else {
-						ui.Box(c).Height(3)
-					}
-				})
-			}
-			ui.Spacer(c)
-			if status := s.developerToolStatus(state.activeTab); status != "" {
-				label(c, status, 12, p.muted).NoWrap()
-			}
-		})
+		s.renderDeveloperToolTabs(c, p, state, tabs, revealTab)
 		ui.Divider(c)
 		ui.Column(c).Grow(1).MinWidth(0).MinHeight(0).Padding(12, 20).Children(func() {
 			switch state.activeTab {
@@ -58,6 +33,12 @@ func (s *app) renderDeveloperTools(c *ui.Context) {
 				s.renderDiffTool(c, p, state)
 			case "端口":
 				s.renderPortsTool(c, p, state)
+			case "Base64":
+				s.renderBase64Tool(c, p, state)
+			case "二维码":
+				s.renderQRTool(c, p, state)
+			case "文字计数":
+				s.renderTextCountTool(c, p, state)
 			default:
 				s.renderJSONTool(c, p, state)
 			}
@@ -65,20 +46,62 @@ func (s *app) renderDeveloperTools(c *ui.Context) {
 	})
 }
 
+type developerToolTabScrollKey struct{}
+
+func (s *app) renderDeveloperToolTabs(c *ui.Context, p palette, state *toolPageState, tabs []developerToolTab, revealTab bool) {
+	scroll := ui.Local(c.Root(), developerToolTabScrollKey{}, func() ui.ScrollState { return ui.ScrollState{} })
+	ui.Row(c).FillWidth().Height(46).Shrink(0).Padding(0, 16).Gap(12).AlignItems(ui.Center).Children(func() {
+		ui.ScrollHorizontal(c.Key("native-tool-tabs")).Grow(1).MinWidth(0).Height(46).Padding(0, 0, 6).TrackScroll(scroll).Label("研发工具标签").Children(func() {
+			for _, tab := range tabs {
+				selected := state.activeTab == tab.key
+				ui.Column(c).Height(40).MinWidth(90).Shrink(0).AlignItems(ui.Center).Children(func() {
+					b := ui.ButtonBase(c.Key("native-tool-tab-"+tab.key)).FillWidth().Height(37).Padding(0, 16).Radius(0).Label(tab.title).Checked(selected)
+					fg := p.muted
+					if selected {
+						fg = p.blue
+					} else if b.Hovered() {
+						b.Background(p.soft)
+					}
+					b.Children(func() { label(c, tab.title, 14, fg).FontWeight(500).NoWrap() })
+					if b.Clicked() {
+						state.activeTab = tab.key
+						b.ScrollIntoView()
+					} else if selected && revealTab {
+						b.ScrollIntoView()
+					}
+					if selected {
+						width, _ := c.MeasureText(0, ui.Span{Text: tab.title, Size: 14, Weight: 500})
+						ui.Box(c).Height(3).Width(max(24, width)).Radius(1.5).Background(p.blue)
+					} else {
+						ui.Box(c).Height(3)
+					}
+				})
+			}
+		})
+		if status := s.developerToolStatus(state.activeTab); status != "" {
+			label(c, status, 12, p.muted).Shrink(0).Padding(0, 0, 6).NoWrap()
+		}
+	})
+}
+
 type developerToolTab struct {
-	key, title, visibilityKey string
-	visibleByDefault          bool
+	key, title, visibilityKey, description string
+	visibleByDefault                       bool
+}
+
+var developerToolTabs = []developerToolTab{
+	{key: "JSON", title: "JSON", visibilityKey: "json", description: "格式化、压缩与转义 JSON。", visibleByDefault: true},
+	{key: "日期时间", title: "日期时间", visibilityKey: "dateTime", description: "时间戳与日期转换。", visibleByDefault: true},
+	{key: "文本对比", title: "文本对比", visibilityKey: "textDiff", description: "查看两段文本的差异。", visibleByDefault: true},
+	{key: "端口", title: "杀端口", visibilityKey: "killPort", description: "查找并结束占用端口的进程。"},
+	{key: "Base64", title: "Base64", visibilityKey: "base64", description: "编码和解码 UTF-8 文本。", visibleByDefault: true},
+	{key: "二维码", title: "二维码", visibilityKey: "qrCode", description: "生成二维码，从图片识别二维码内容。", visibleByDefault: true},
+	{key: "文字计数", title: "文字计数", visibilityKey: "textCount", description: "统计字符数、汉字数、行数与 UTF-8 字节数。", visibleByDefault: true},
 }
 
 func (s *app) visibleDeveloperToolTabs() []developerToolTab {
-	all := []developerToolTab{
-		{key: "JSON", title: "JSON", visibilityKey: "json", visibleByDefault: true},
-		{key: "日期时间", title: "日期时间", visibilityKey: "dateTime", visibleByDefault: true},
-		{key: "文本对比", title: "文本对比", visibilityKey: "textDiff", visibleByDefault: true},
-		{key: "端口", title: "杀端口", visibilityKey: "killPort", visibleByDefault: false},
-	}
-	visible := make([]developerToolTab, 0, len(all))
-	for _, tab := range all {
+	visible := make([]developerToolTab, 0, len(developerToolTabs))
+	for _, tab := range developerToolTabs {
 		if s.configNestedBool("toolVisibility", tab.visibilityKey, tab.visibleByDefault) {
 			visible = append(visible, tab)
 		}
@@ -95,20 +118,16 @@ func reconcileDeveloperToolTab(current string, visible []developerToolTab) strin
 			return current
 		}
 	}
-	order := []string{"JSON", "日期时间", "文本对比", "端口"}
 	currentIndex := -1
-	for i, key := range order {
-		if key == current {
+	for i, tab := range developerToolTabs {
+		if tab.key == current {
 			currentIndex = i
 			break
 		}
 	}
-	for offset := 1; offset <= len(order); offset++ {
-		index := (currentIndex + offset) % len(order)
-		if index < 0 {
-			index += len(order)
-		}
-		candidate := order[index]
+	for offset := 1; offset <= len(developerToolTabs); offset++ {
+		index := (currentIndex + offset) % len(developerToolTabs)
+		candidate := developerToolTabs[index].key
 		for _, tab := range visible {
 			if tab.key == candidate {
 				return candidate

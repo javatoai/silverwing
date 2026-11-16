@@ -22,7 +22,7 @@ func Card(title, link string, rows []Row) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return renderUATElements(title, "申请发布UAT环境版本", content, rows)
+	return renderUATElements(title, "辛苦发版UAT", content, rows)
 }
 
 // applicantInBody reproduces the saved payload of an earlier notification.

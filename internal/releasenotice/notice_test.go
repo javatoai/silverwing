@@ -83,7 +83,7 @@ func TestCardPreservesCard20StructureAndTitles(t *testing.T) {
 					t.Fatal(raw)
 				}
 			} else {
-				header := "申请发布UAT环境版本"
+				header := "辛苦发版UAT"
 				if card.Config.WidthMode != "default" || card.Header.Title.Content != header || len(card.Body.Elements) != 3 || card.Body.Elements[2]["element_id"] != "genbu_link" || card.Config.Summary.Content != header+"｜需求 [A]" {
 					t.Fatal(raw)
 				}
@@ -353,7 +353,7 @@ func TestTagTitleAndSummaryAreFixedRegardlessOfTesters(t *testing.T) {
 			Header struct{ Title struct{ Content string } }
 			Config struct{ Summary struct{ Content string } }
 		}
-		if err := json.Unmarshal([]byte(raw), &card); err != nil || card.Header.Title.Content != "申请发布UAT环境版本" || card.Config.Summary.Content != "申请发布UAT环境版本｜"+session.Title || strings.Contains(raw, session.Identity.Name) || strings.ContainsAny(raw, "《》") || strings.Contains(raw, "请转发") {
+		if err := json.Unmarshal([]byte(raw), &card); err != nil || card.Header.Title.Content != "辛苦发版UAT" || card.Config.Summary.Content != "辛苦发版UAT｜"+session.Title || strings.Contains(raw, session.Identity.Name) || strings.ContainsAny(raw, "《》") || strings.Contains(raw, "请转发") {
 			t.Fatal(raw, err)
 		}
 	}

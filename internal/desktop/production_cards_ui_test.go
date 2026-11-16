@@ -300,10 +300,14 @@ func TestProductionNavigationStaysInBottomGroup(t *testing.T) {
 		for _, enabled := range []bool{false, true} {
 			for _, compact := range []bool{false, true} {
 				s, _, _ := productionFixture(t)
-				s.settingsUnit.state.configJSON = fmt.Sprintf(`{"tagEnabled":%t,"toolVisibility":{"json":%t,"dateTime":%t,"textDiff":%t,"killPort":false}}`, enabled, tools, tools, tools)
+				s.settingsUnit.state.configJSON = fmt.Sprintf(`{"tagEnabled":%t,"toolVisibility":{"json":%t,"dateTime":%t,"textDiff":%t,"killPort":false,"base64":false,"qrCode":false,"textCount":false}}`, enabled, tools, tools, tools)
 				tester := ui.NewTester(func(c *ui.Context) {
 					ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() { s.sidebar(c, setTheme(c, false), compact) })
 				}, 240, 900)
+				tool, toolShown := tester.Find("研发工具")
+				if toolShown != tools {
+					t.Fatal("developer tools gate changed")
+				}
 				production, shown := tester.Find("生产发布")
 				if shown != enabled {
 					t.Fatal("global Tag gate changed")
@@ -315,11 +319,8 @@ func TestProductionNavigationStaysInBottomGroup(t *testing.T) {
 				if production.Y < 600 || production.Y+production.H >= services.Y {
 					t.Fatalf("production did not move above services in lower group: %+v %+v", production, services)
 				}
-				if tools {
-					tool, ok := tester.Find("研发工具")
-					if !ok || production.Y-tool.Y-tool.H != 4 {
-						t.Fatal("production is not immediately below developer tools")
-					}
+				if tools && production.Y-tool.Y-tool.H != 4 {
+					t.Fatal("production is not immediately below developer tools")
 				}
 			}
 		}

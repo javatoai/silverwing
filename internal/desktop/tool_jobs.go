@@ -464,7 +464,20 @@ func (s *app) developerToolTabVisible(tab string) bool {
 }
 
 func (s *app) cancelDeveloperToolTab(tab string) {
+	state := s.toolsUnit.state.tools
 	switch tab {
+	case "Base64":
+		if state != nil {
+			state.base64Tool.invalidate()
+		}
+	case "二维码":
+		if state != nil {
+			state.qrTool.invalidate()
+		}
+	case "文字计数":
+		if state != nil {
+			state.textCountTool.work.invalidate()
+		}
 	case "JSON":
 		s.cancelDeveloperToolJob("tool.json")
 		if s.toolsUnit.state.tools != nil && s.toolsUnit.state.tools.jsonValidationCancel != nil {

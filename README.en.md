@@ -37,7 +37,7 @@ One feature often spans several services. Silverwing brings their workspaces int
 - **Agent context:** combine global, group and task instructions into generated `AGENTS.md` context, and open the right workspace in Codex, Cursor or your IDE.
 - **Task materials:** browse local files and read Markdown, PDF, images, tables and diagrams; find text, inspect source and follow document links.
 - **Skills and Codex configuration:** browse local Skills, manage Git-based Skill sources and Codex plugins, and inspect MCP configuration.
-- **Developer tools:** format and fold JSON, convert dates and timestamps, compare text side by side, and optionally inspect local port usage.
+- **Developer tools:** format and fold JSON, convert dates and timestamps, compare text, encode and decode Base64, generate and read QR codes, count text, and optionally inspect local port usage.
 - **Connected workflows:** bring in Meegle requirements and comments, sync task materials through Git, and track task Tag delivery with optional Genbu status.
 - **Local workspace management:** keep configuration and task records on disk, switch between light and dark themes, and archive tasks while retaining their workspaces.
 

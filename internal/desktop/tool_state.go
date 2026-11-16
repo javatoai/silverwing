@@ -61,7 +61,10 @@ type jsonToolState struct {
 // input map. Revisions are carried through asynchronous actions so an old
 // response can never replace a newer edit.
 type toolPageState struct {
-	activeTab string
+	activeTab     string
+	base64Tool    base64ToolState
+	qrTool        qrToolState
+	textCountTool textCountToolState
 
 	jsonSource             string
 	jsonDoc                tools.JSONDocument
@@ -445,6 +448,9 @@ func (s *toolPageState) setJSONError(err error) {
 }
 
 func (s *toolPageState) cancelWork() {
+	s.base64Tool.invalidate()
+	s.qrTool.invalidate()
+	s.textCountTool.work.invalidate()
 	if s.jsonValidationCancel != nil {
 		s.jsonValidationCancel()
 		s.jsonValidationCancel = nil

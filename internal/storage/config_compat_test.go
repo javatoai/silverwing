@@ -149,6 +149,37 @@ func TestConfigCompatibilityMissingOptionalDefaults(t *testing.T) {
 	assertConfigJSON(t, readConfigObject(t, store, "integrations.json")["materialsGitSync"], `null`)
 }
 
+func TestConfigCompatibilityToolVisibility(t *testing.T) {
+	store := NewConfigStore(NewPaths(t.TempDir()))
+	if _, err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+	editConfigObject(t, store, "appearance.json", func(fields map[string]json.RawMessage) {
+		fields["toolVisibility"] = json.RawMessage(`{"json":false,"dateTime":true,"textDiff":false,"killPort":true}`)
+	})
+	config, err := store.Load()
+	want := domain.ToolVisibilitySettings{DateTime: true, KillPort: true, Base64: true, QRCode: true, TextCount: true}
+	if err != nil || config.ToolVisibility != want {
+		t.Fatalf("old tool preferences or new defaults changed: %+v %v", config.ToolVisibility, err)
+	}
+	config.ToolVisibility.Base64 = false
+	config.ToolVisibility.QRCode = false
+	config.ToolVisibility.TextCount = false
+	if err := store.Save(config); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Load()
+	if err != nil || loaded.ToolVisibility != config.ToolVisibility {
+		t.Fatalf("false tool preferences did not persist: %+v %v", loaded.ToolVisibility, err)
+	}
+	var persisted map[string]bool
+	raw := readConfigObject(t, store, "appearance.json")["toolVisibility"]
+	wantFields := map[string]bool{"json": false, "dateTime": true, "textDiff": false, "killPort": true, "base64": false, "qrCode": false, "textCount": false}
+	if err := json.Unmarshal(raw, &persisted); err != nil || !reflect.DeepEqual(persisted, wantFields) {
+		t.Fatalf("unexpected persisted tool preferences: %s %v", raw, err)
+	}
+}
+
 func TestConfigCompatibilityNestedRowIdentityAndDeletion(t *testing.T) {
 	store := NewConfigStore(NewPaths(t.TempDir()))
 	config, err := store.Load()

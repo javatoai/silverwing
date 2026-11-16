@@ -31,16 +31,11 @@ func (s *app) settingsNavigation(c *ui.Context, p palette) {
 
 func (s *app) settingsToolVisibility(c *ui.Context, p palette) {
 	settingsHelpCard(c, p, "研发工具", "选择显示在主导航中的工具。", func() {
-		for _, item := range []struct{ key, title, description string }{
-			{"json", "JSON", "格式化、压缩与转义 JSON。"},
-			{"dateTime", "日期时间", "时间戳与日期转换。"},
-			{"textDiff", "文本对比", "查看两段文本的差异。"},
-			{"killPort", "杀端口", "查找并结束占用端口的进程。"},
-		} {
-			if item.key != "json" {
+		for index, tab := range developerToolTabs {
+			if index > 0 {
 				settingsAppearanceDivider(c)
 			}
-			s.settingsAppearanceNestedSwitchRow(c, p, "toolVisibility", item.key, "tool-visibility-"+item.key, item.title, item.description, true)
+			s.settingsAppearanceNestedSwitchRow(c, p, "toolVisibility", tab.visibilityKey, "tool-visibility-"+tab.visibilityKey, tab.title, tab.description, tab.visibleByDefault)
 		}
 	})
 }

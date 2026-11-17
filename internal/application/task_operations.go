@@ -66,6 +66,7 @@ type TaskArchiveRequest struct {
 type TaskDeleteRequest struct {
 	Target          TaskTarget
 	ForceDiscard    bool
+	ForceGuard      string
 	DeleteMaterials bool
 	MaterialsGuard  string
 }
@@ -99,7 +100,10 @@ func TaskArchiveRequestFromAction(action Action) TaskArchiveRequest {
 	return TaskArchiveRequest{Target: TaskTargetFromAction(action), Cleanup: boolPayload(action, "cleanup")}
 }
 func TaskDeleteRequestFromAction(action Action) TaskDeleteRequest {
-	return TaskDeleteRequest{Target: TaskTargetFromAction(action), ForceDiscard: boolPayload(action, "forceDiscard"), DeleteMaterials: boolPayload(action, "deleteMaterials"), MaterialsGuard: textPayload(action, "materialsGuard")}
+	return TaskDeleteRequest{
+		Target: TaskTargetFromAction(action), ForceDiscard: boolPayload(action, "forceDiscard"), ForceGuard: textPayload(action, "forceGuard"),
+		DeleteMaterials: boolPayload(action, "deleteMaterials"), MaterialsGuard: textPayload(action, "materialsGuard"),
+	}
 }
 func TaskToolsRequestFromAction(action Action) (TaskToolsRequest, error) {
 	request := TaskToolsRequest{Target: TaskTargetFromAction(action)}

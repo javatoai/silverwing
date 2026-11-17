@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"silverwing-go/internal/application"
+	"silverwing-go/internal/workspace"
 )
 
 type taskDeleteRiskScope struct {
@@ -213,6 +214,10 @@ func (s *app) invalidateTaskDeleteRiskRead() {
 		dialog.RiskScope = nil
 		dialog.Loading = false
 		dialog.Risks = nil
+		dialog.Force = workspace.TaskForceDeletePreview{}
+		dialog.ForceReview, dialog.ForceConfirmed = false, false
+		dialog.Materials = workspace.TaskMaterialsDeletePreview{}
+		dialog.DeleteMaterials, dialog.DiscardChanges = false, false
 		dialog.Error = "任务或应用配置已变化，请重新检查。"
 	}
 }

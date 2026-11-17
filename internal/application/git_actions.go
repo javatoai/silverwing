@@ -18,7 +18,7 @@ func (a *App) workspaceWorkflow(ctx context.Context, action Action, config domai
 	}
 	switch action.Kind {
 	case "task.delete-risks":
-		data, err := service.InspectDeletion(ctx, config, taskPath)
+		data, err := a.inspectTaskDeletion(ctx, action, config, service, manifest, taskPath)
 		return result(data, "回收范围及工作区风险已检查", err)
 	case "task.archive-preview":
 		data, err := service.InspectDeleteRisks(ctx, config, taskPath)

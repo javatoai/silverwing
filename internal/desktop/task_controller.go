@@ -40,6 +40,7 @@ type taskState struct {
 	taskCreation           *taskCreationState
 	taskCreationPreflights *taskCreationPreflightJobState
 	taskDeleteDialog       *taskDeleteDialogState
+	archiveBatchDelete     *archiveBatchDeleteState
 	taskNotesUI            *taskNotesUIState
 	taskCreationWarning    string
 }

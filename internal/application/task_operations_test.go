@@ -102,3 +102,23 @@ func TestTypedTaskCreationCancellationPrecedesFilesystemChanges(t *testing.T) {
 		t.Fatalf("cancelled request wrote task: %v", err)
 	}
 }
+
+func TestScopedDeletePreviewRejectsReplacementBeforeInspection(t *testing.T) {
+	app, config, manifest, path := taskContextScopeFixture(t)
+	manifest.LifecycleStatus = domain.TaskArchived
+	if err := app.Manifests.Save(path, manifest); err != nil {
+		t.Fatal(err)
+	}
+	action := taskContextActionForTest(t, app, config, manifest, path, "task.delete-risks")
+	action.Path = path
+	if result, err := app.Dispatch(context.Background(), action); err != nil || result.Data == nil {
+		t.Fatalf("valid scoped preview failed: %+v %v", result, err)
+	}
+	manifest.CreatedAt = "2026-10-20T10:00:00Z"
+	if err := app.Manifests.Save(path, manifest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.Dispatch(context.Background(), action); !errors.Is(err, errDesktopTaskContextChanged) {
+		t.Fatalf("replacement task preview accepted: %v", err)
+	}
+}

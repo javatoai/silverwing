@@ -10,6 +10,8 @@ import (
 
 type taskManifestMutation func(context.Context, domain.AppConfig, *workspace.TaskApplicationService, domain.TaskManifest, string) (OperationResult[domain.TaskManifest], error)
 
+const TaskDeleteCleanupWarningMessage = "任务已移入回收站，部分工作区登记未清理"
+
 func (a *App) mutateTask(ctx context.Context, target TaskTarget, kind string, payload map[string]any, mutate taskManifestMutation) (result OperationResult[domain.TaskManifest], resultErr error) {
 	result.omitData = true
 	if err := operationContextError(ctx); err != nil {
@@ -50,14 +52,41 @@ func (a *App) RestoreTask(ctx context.Context, target TaskTarget) (OperationResu
 		return OperationResult[domain.TaskManifest]{Message: "任务已恢复", Data: manifest}, err
 	})
 }
+
+func (a *App) inspectTaskDeletion(ctx context.Context, action Action, config domain.AppConfig, service *workspace.TaskApplicationService, manifest domain.TaskManifest, path string) (workspace.TaskDeletePreview, error) {
+	if err := a.validateDesktopTaskContext(action, config, manifest, path); err != nil {
+		return workspace.TaskDeletePreview{}, err
+	}
+	preview, err := service.InspectDeletion(ctx, config, path)
+	if _, scoped := action.Payload[desktopTaskContextPayloadKey]; !scoped || err != nil {
+		return preview, err
+	}
+	current, err := a.Config.Load()
+	if err != nil {
+		return workspace.TaskDeletePreview{}, err
+	}
+	currentManifest, currentPath, err := a.taskInConfig(action, current)
+	if err != nil {
+		return workspace.TaskDeletePreview{}, err
+	}
+	if err := a.validateDesktopTaskContext(action, current, currentManifest, currentPath); err != nil {
+		return workspace.TaskDeletePreview{}, err
+	}
+	return preview, ctx.Err()
+}
+
 func (a *App) DeleteTask(ctx context.Context, request TaskDeleteRequest) (OperationResult[struct{}], error) {
-	result, err := a.mutateTask(ctx, request.Target, "task.delete", map[string]any{"forceDiscard": request.ForceDiscard, "deleteMaterials": request.DeleteMaterials, "materialsGuard": request.MaterialsGuard}, func(ctx context.Context, config domain.AppConfig, service *workspace.TaskApplicationService, _ domain.TaskManifest, path string) (OperationResult[domain.TaskManifest], error) {
-		err := service.DeleteWithOptions(ctx, config, path, workspace.TaskDeleteOptions{ForceDiscard: request.ForceDiscard, DeleteMaterials: request.DeleteMaterials, MaterialsGuard: request.MaterialsGuard})
+	payload := map[string]any{"forceDiscard": request.ForceDiscard, "forceGuard": request.ForceGuard, "deleteMaterials": request.DeleteMaterials, "materialsGuard": request.MaterialsGuard}
+	result, err := a.mutateTask(ctx, request.Target, "task.delete", payload, func(ctx context.Context, config domain.AppConfig, service *workspace.TaskApplicationService, _ domain.TaskManifest, path string) (OperationResult[domain.TaskManifest], error) {
+		err := service.DeleteWithOptions(ctx, config, path, workspace.TaskDeleteOptions{
+			ForceDiscard: request.ForceDiscard, ForceGuard: request.ForceGuard,
+			DeleteMaterials: request.DeleteMaterials, MaterialsGuard: request.MaterialsGuard,
+		})
 		result := OperationResult[domain.TaskManifest]{Message: "任务已移入回收站"}
 		var warning *workspace.TaskRecycleCleanupWarning
 		if errors.As(err, &warning) {
 			result.Text = warning.Error()
-			result.Message = "任务已移入回收站，部分工作区登记未清理"
+			result.Message = TaskDeleteCleanupWarningMessage
 			return result, nil
 		}
 		return result, err

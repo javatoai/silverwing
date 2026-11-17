@@ -2,6 +2,7 @@ package desktop
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -104,10 +105,165 @@ func (s *app) taskIndexToolbar(c *ui.Context, p palette, state *taskIndexBrowsin
 				s.openTaskCreateForm("新建任务", "", "")
 			}
 		})
+		if s.page == "archive" {
+			s.taskIndexArchiveBatchToolbar(c, p, state)
+		}
 		if message := s.taskNavigationFor().error; message != "" {
 			label(c, "任务导航偏好未保存", 11, p.danger).FillWidth().SingleLine().Tooltip(message)
 		}
 	})
+}
+
+func (s *app) taskIndexArchiveBatchToolbar(c *ui.Context, p palette, state *taskIndexBrowsingState) {
+	ui.Row(c.Key("archive-batch-toolbar")).FillWidth().MinWidth(0).Gap(6).AlignItems(ui.Center).Wrap().Children(func() {
+		if !state.archiveBatchSelecting {
+			if archiveBatchButton(c, "archive-batch-select", "批量选择", p, !s.busy).Clicked() {
+				state.archiveBatchSelecting = true
+				state.archiveBatchSelected = make(map[string]task)
+			}
+			return
+		}
+
+		selectedOutsideSearch := s.archiveBatchSelectedOutsideSearch(state)
+		countLabel := fmt.Sprintf("已选 %d 项", len(state.archiveBatchSelected))
+		if selectedOutsideSearch > 0 {
+			countLabel += fmt.Sprintf(" · 搜索外 %d 项", selectedOutsideSearch)
+		}
+		label(c, countLabel, 11, p.muted).Grow(1).MinWidth(0).Wrap()
+
+		rows := slices.Clone(state.visibleRows)
+		allSelected := len(rows) > 0
+		for _, index := range rows {
+			if _, selected := state.archiveBatchSelected[archiveBatchTaskKey(s.taskUnit.state.tasks[index])]; !selected {
+				allSelected = false
+				break
+			}
+		}
+		selectLabel := "全选搜索结果"
+		if allSelected {
+			selectLabel = "取消选择搜索结果"
+		}
+		if archiveBatchButton(c, "archive-batch-select-results", selectLabel, p, len(rows) > 0 && !s.busy).Clicked() {
+			s.setArchiveBatchSearchResultsSelected(rows, !allSelected)
+		}
+		if archiveBatchButton(c, "archive-batch-delete", "删除所选", p, len(state.archiveBatchSelected) > 0 && !s.busy && s.backend != nil).Clicked() && len(state.archiveBatchSelected) > 0 && !s.busy && s.backend != nil {
+			selected := s.orderedArchiveBatchSelection(state)
+			if len(selected) > 0 {
+				s.openArchiveBatchDelete(selected)
+			}
+		}
+		if archiveBatchButton(c, "archive-batch-cancel", "取消", p, true).Clicked() {
+			s.clearArchiveBatchSelection()
+		}
+	})
+}
+
+func archiveBatchButton(c *ui.Context, key, text string, p palette, enabled bool) ui.Element {
+	b := ui.ButtonBase(c.Key(key)).Row().Height(30).Shrink(0).Padding(0, 9).Gap(5).Radius(7).Label(text).Disabled(!enabled)
+	foreground := p.blue
+	if !enabled {
+		foreground = p.muted
+	} else if b.Hovered() {
+		b.Background(p.side)
+	}
+	b.Children(func() { label(c, text, 12, foreground).NoWrap() })
+	return b
+}
+
+func archiveBatchTaskKey(item task) string {
+	if item.id == "" || item.path == "" || !item.archived {
+		return ""
+	}
+	return strings.Join([]string{item.id, item.path, item.createdAt, "archived"}, "\x00")
+}
+
+// reconcileArchiveBatchSelection keeps choices only for the same archived task
+// incarnation and clears them as soon as the user leaves the archive page.
+func (s *app) reconcileArchiveBatchSelection() {
+	state := s.taskIndexBrowsingFor(true)
+	if s.page != "archive" {
+		s.clearArchiveBatchSelection()
+		return
+	}
+	if len(state.archiveBatchSelected) == 0 {
+		return
+	}
+	valid := make(map[string]bool, len(s.taskUnit.activeTasks(true)))
+	for _, index := range s.taskUnit.activeTasks(true) {
+		valid[archiveBatchTaskKey(s.taskUnit.state.tasks[index])] = true
+	}
+	for key := range state.archiveBatchSelected {
+		if !valid[key] {
+			delete(state.archiveBatchSelected, key)
+		}
+	}
+	if len(state.archiveBatchSelected) == 0 {
+		s.clearArchiveBatchSelection()
+	}
+}
+
+// clearArchiveBatchSelection ends the session-only selection. Batch-delete
+// completion should call this after reporting all item results.
+func (s *app) clearArchiveBatchSelection() {
+	state := s.taskIndexBrowsingFor(true)
+	state.archiveBatchSelecting = false
+	state.archiveBatchSelected = nil
+}
+
+func (s *app) setArchiveBatchTaskSelected(item task, selected bool) {
+	state := s.taskIndexBrowsingFor(true)
+	key := archiveBatchTaskKey(item)
+	if key == "" || s.page != "archive" || !state.archiveBatchSelecting {
+		return
+	}
+	current := s.taskUnit.taskByID(item.id)
+	if archiveBatchTaskKey(current) != key {
+		return
+	}
+	if selected {
+		if state.archiveBatchSelected == nil {
+			state.archiveBatchSelected = make(map[string]task)
+		}
+		state.archiveBatchSelected[key] = current
+		return
+	}
+	delete(state.archiveBatchSelected, key)
+}
+
+func (s *app) setArchiveBatchSearchResultsSelected(rows []int, selected bool) {
+	for _, index := range rows {
+		if index < 0 || index >= len(s.taskUnit.state.tasks) {
+			continue
+		}
+		s.setArchiveBatchTaskSelected(s.taskUnit.state.tasks[index], selected)
+	}
+}
+
+func (s *app) archiveBatchSelectedOutsideSearch(state *taskIndexBrowsingState) int {
+	visible := make(map[string]bool, len(state.visibleRows))
+	for _, index := range state.visibleRows {
+		visible[archiveBatchTaskKey(s.taskUnit.state.tasks[index])] = true
+	}
+	outside := 0
+	for key := range state.archiveBatchSelected {
+		if !visible[key] {
+			outside++
+		}
+	}
+	return outside
+}
+
+func (s *app) orderedArchiveBatchSelection(state *taskIndexBrowsingState) []task {
+	catalog := s.taskUnit.taskCatalog()
+	order := projectTaskIndexOrder(catalog.categories[1], catalog.keys, s.taskNavigationFor().value.Pinned, func(int) bool { return true })
+	selected := make([]task, 0, len(state.archiveBatchSelected))
+	for _, index := range order {
+		item := s.taskUnit.state.tasks[index]
+		if _, ok := state.archiveBatchSelected[archiveBatchTaskKey(item)]; ok {
+			selected = append(selected, item)
+		}
+	}
+	return selected
 }
 
 func (s *app) clearTaskIndexSearch(c *ui.Context, state *taskIndexBrowsingState) {
@@ -252,6 +408,16 @@ func (s *app) taskIndexTask(c *ui.Context, p palette, state *taskIndexBrowsingSt
 		button.OnShortcut(0, ui.KeyEscape, func() { state.searchInput.Focus(c) })
 		if button.Clicked() {
 			s.openTaskIndex(i)
+		}
+		if state.archiveBatchSelecting && t.archived {
+			checked := false
+			if _, selected := state.archiveBatchSelected[archiveBatchTaskKey(t)]; selected {
+				checked = true
+			}
+			ui.Checkbox(c.Key("archive-batch-task-"+key), &checked, "").Shrink(0).Label("选择已归档任务：" + t.title).
+				Tooltip("选择任务：" + t.title).Disabled(s.busy || archiveBatchTaskKey(t) == "").OnChange(func() {
+				s.setArchiveBatchTaskSelected(t, checked)
+			})
 		}
 	})
 	row.ContextMenu(func(menu *ui.Menu) { s.taskContextMenu(c.Services(), t, menu) })

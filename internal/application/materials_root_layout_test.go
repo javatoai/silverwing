@@ -55,9 +55,9 @@ func TestMaterialsRootSaveNormalizesAndDoesNotOverwrite(t *testing.T) {
 }
 
 func TestTaskDeleteActionCarriesMaterialsApproval(t *testing.T) {
-	request := TaskDeleteRequestFromAction(Action{Kind: "task.delete", TaskID: "task", Payload: map[string]any{"deleteMaterials": true, "materialsGuard": "captured-directory"}})
-	if !request.DeleteMaterials || request.MaterialsGuard != "captured-directory" {
-		t.Fatal("materials approval dropped")
+	request := TaskDeleteRequestFromAction(Action{Kind: "task.delete", TaskID: "task", Payload: map[string]any{"deleteMaterials": true, "materialsGuard": "captured-directory", "forceGuard": "force-preview"}})
+	if !request.DeleteMaterials || request.MaterialsGuard != "captured-directory" || request.ForceGuard != "force-preview" || request.ForceDiscard {
+		t.Fatal("separate task and materials approvals were not preserved")
 	}
 	if TaskDeleteRequestFromAction(Action{}).DeleteMaterials {
 		t.Fatal("materials enabled by default")

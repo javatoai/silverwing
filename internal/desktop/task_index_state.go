@@ -8,18 +8,20 @@ import (
 
 // Active and archived lists retain separate, session-only browsing positions.
 type taskIndexBrowsingState struct {
-	scroll          ui.ScrollState
-	list            ui.ListState
-	projection      taskIndexProjection
-	handlesRevision uint64
-	handlesValid    bool
-	pendingFocusKey string
-	detailScrolls   map[string]*ui.ScrollState
-	search          string
-	searchInput     ui.Handle
-	rowHandles      map[string]*ui.Handle
-	revealTaskKey   string
-	visibleRows     []int
+	scroll                ui.ScrollState
+	list                  ui.ListState
+	projection            taskIndexProjection
+	handlesRevision       uint64
+	handlesValid          bool
+	pendingFocusKey       string
+	detailScrolls         map[string]*ui.ScrollState
+	search                string
+	searchInput           ui.Handle
+	rowHandles            map[string]*ui.Handle
+	revealTaskKey         string
+	visibleRows           []int
+	archiveBatchSelecting bool
+	archiveBatchSelected  map[string]task
 }
 
 func (s *app) taskIndexBrowsingFor(archived bool) *taskIndexBrowsingState {

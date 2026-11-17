@@ -21,6 +21,21 @@ func (s *app) dispatch(action application.Action) {
 // Task-menu actions carry a private, transient context in the action payload so
 // the backend can revalidate it without making that task the visible selection.
 func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMenuScope) {
+	s.dispatchTaskContextActionWithCompletion(action, scope, nil)
+}
+
+// The archive batch observes completion only after each ordinary delete has
+// reconciled its snapshot and released the document and terminal barriers.
+func (s *app) dispatchTaskContextActionWithCompletion(action application.Action, scope *taskMenuScope, complete func(application.ActionResult, error, error)) {
+	started := false
+	if complete != nil {
+		defer func() {
+			if !started {
+				message := firstNonEmpty(s.lastError, "任务删除未能开始，请重试。")
+				complete(application.ActionResult{}, errors.New(message), nil)
+			}
+		}()
+	}
 	if s.materialsGitRunning() {
 		switch action.Kind {
 		case "migration.apply", "migration.recover", "task.delete", "workspace.remove", "config.materials-root.save", "config.task-root.save":
@@ -149,6 +164,7 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 	migrationProgress, finishMigrationProgress := s.taskRootMigrationProgressUpdates(ctx, action)
 	taskCreationProgress := s.taskCreationProgressUpdates(ctx, action)
 
+	started = true
 	go func() {
 		defer finishMigrationProgress()
 		var renameLease *markdownAutosaveRenameLease
@@ -199,7 +215,8 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 			if (err == nil && reloadsSnapshot(action.Kind)) || application.DescribeAction(action.Kind).RefreshOnError || (migrationLease != nil && backendDispatched) {
 				refreshContext := ctx
 				var stopRefresh context.CancelFunc
-				if err != nil && (settingsExtensionSourceSaveAction(action.Kind) || migrationLease != nil) {
+				if (err != nil && (settingsExtensionSourceSaveAction(action.Kind) || migrationLease != nil)) ||
+					(action.Kind == "task.delete" && ctx.Err() != nil) {
 					// A source can be durably saved before a canceled checkout.
 					// Read its committed configuration even after cancellation.
 					refreshContext, stopRefresh = context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
@@ -231,6 +248,9 @@ func (s *app) dispatchTaskContextAction(action application.Action, scope *taskMe
 				}
 				abandonMarkdownTaskRootDispatch(migrationLease, result, backendDispatched, refreshed, refreshErr)
 				return
+			}
+			if complete != nil {
+				defer func() { complete(result, err, refreshErr) }()
 			}
 			defer func() { s.finishSettingsAutosaveAction(action, result, errors.Join(err, refreshErr)) }()
 			defer func() { s.finishMeegleProjectPickerSave(action, result, err, refreshErr) }()

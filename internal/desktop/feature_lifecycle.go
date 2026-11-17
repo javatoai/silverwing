@@ -56,6 +56,7 @@ func (s *app) stopDesktopFeatures() {
 	s.closeMarkdownLinkFile()
 	s.taskFilesUnit.stopTaskFiles()
 	s.stopTaskServices()
+	s.stopArchiveBatchDelete()
 	s.taskUnit.stopFeature()
 	s.materialsUnit.stopFeature()
 	s.settingsUnit.stopFeature()

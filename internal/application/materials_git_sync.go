@@ -7,10 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 
+	"silverwing-go/internal/commandruntime"
 	"silverwing-go/internal/documents"
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/executable"
 	"silverwing-go/internal/storage"
 	"silverwing-go/internal/workspace"
 )
@@ -27,6 +30,11 @@ type MaterialsGitBranchesBackend interface {
 	MaterialsGitBranches(context.Context, workspace.MaterialsGitScope) ([]string, error)
 }
 
+type MaterialsGitLoginBackend interface {
+	VerifyMaterialsGitLogin(context.Context, workspace.MaterialsGitScope) error
+	MaterialsGitTerminalLoginCommand(context.Context, workspace.MaterialsGitScope) (string, error)
+}
+
 func (a *App) MaterialsGitBranches(ctx context.Context, expected workspace.MaterialsGitScope) ([]string, error) {
 	service, err := a.materialsGitService(expected)
 	if err != nil {
@@ -36,6 +44,48 @@ func (a *App) MaterialsGitBranches(ctx context.Context, expected workspace.Mater
 		return nil, err
 	}
 	return service.RemoteBranches(ctx, expected)
+}
+
+func (a *App) VerifyMaterialsGitLogin(ctx context.Context, expected workspace.MaterialsGitScope) error {
+	service, err := a.materialsGitService(expected)
+	if err != nil {
+		return err
+	}
+	return service.VerifyHTTPSLogin(ctx, expected)
+}
+
+func (a *App) MaterialsGitTerminalLoginCommand(ctx context.Context, expected workspace.MaterialsGitScope) (string, error) {
+	service, err := a.materialsGitService(expected)
+	if err != nil {
+		return "", err
+	}
+	args, err := service.HTTPSLoginArguments(ctx, expected)
+	if err != nil {
+		return "", err
+	}
+	git, err := commandruntime.Prepare(ctx, a.Runner, nil, "", executable.ToolGit, service.Git.Executable)
+	if err != nil {
+		return "", errors.New("无法定位用于验证的 Git，请在设置中检查 Git 路径")
+	}
+	if err := service.Check(); err != nil {
+		return "", err
+	}
+	return materialsGitTerminalLoginCommand(runtime.GOOS, git.Executable, args), ctx.Err()
+}
+
+func materialsGitTerminalLoginCommand(osName, git string, args []string) string {
+	args = append([]string{git, "--no-optional-locks", "-c", "core.longpaths=true"}, args...)
+	if isWindowsOS(osName) {
+		for index, arg := range args {
+			args[index] = powerShellLiteral(arg)
+		}
+		return `& { $saved = @{}; try { foreach ($entry in @{GIT_ALLOW_PROTOCOL='https';GIT_TERMINAL_PROMPT='1';GCM_INTERACTIVE='auto';GCM_TRACE='0';GCM_TRACE_SECRETS='0';GIT_TRACE_CURL='0';GIT_CURL_VERBOSE=$null;GIT_TRACE_REDACT='1'}.GetEnumerator()) { $saved[$entry.Key] = [Environment]::GetEnvironmentVariable($entry.Key); [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value) }; & ` +
+			strings.Join(args, " ") + ` } finally { foreach ($entry in $saved.GetEnumerator()) { [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value) } } }`
+	}
+	for index, arg := range args {
+		args[index] = posixTerminalLiteral(arg)
+	}
+	return "env -u GIT_CURL_VERBOSE GIT_ALLOW_PROTOCOL=https GIT_TERMINAL_PROMPT=1 GCM_INTERACTIVE=auto GCM_TRACE=0 GCM_TRACE_SECRETS=0 GIT_TRACE_CURL=0 GIT_TRACE_REDACT=1 " + strings.Join(args, " ")
 }
 
 // The provisioner already shares this root lock. Document writes take it as
@@ -93,8 +143,6 @@ func (a *App) materialsGitService(expected workspace.MaterialsGitScope) (*worksp
 	if git.Environment == nil {
 		git.Environment = map[string]string{}
 	}
-	git.Environment["GIT_TERMINAL_PROMPT"] = "0"
-	git.Environment["GCM_INTERACTIVE"] = "never"
 	git.Environment["GIT_MERGE_AUTOEDIT"] = "no"
 	git.Environment["GIT_EDITOR"] = "false"
 	return &workspace.MaterialsGitSyncService{Git: git, Paths: a.Paths, Check: func() error {

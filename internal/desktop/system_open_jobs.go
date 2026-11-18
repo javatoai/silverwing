@@ -47,7 +47,14 @@ type systemOpenJobs struct {
 	running map[*systemOpenJob]struct{}
 	closed  bool
 
-	message, error string // window thread only
+	message, error          string // window thread only
+	developmentToolSettings *systemOpenDevelopmentToolSettings
+}
+
+type systemOpenDevelopmentToolSettings struct{ home, target string }
+
+func (jobs *systemOpenJobs) setError(message string) {
+	jobs.error, jobs.developmentToolSettings = message, nil
 }
 
 func independentSystemOpenAction(kind string) bool {
@@ -241,7 +248,7 @@ func (s *app) beginScopedSystemOpenJob(action application.Action, taskScope *tas
 	if key == "open" {
 		jobs.opening = request
 	}
-	jobs.error = ""
+	jobs.setError("")
 	return request, nil
 }
 
@@ -256,12 +263,12 @@ func (s *app) dispatchScopedSystemOpen(action application.Action, taskScope *tas
 		return false
 	}
 	if s.backend == nil || (s.win != nil && s.win.IsDestroyed()) {
-		s.ensureSystemOpenJobs().error = "系统打开后端或窗口不可用，请重试。"
+		s.ensureSystemOpenJobs().setError("系统打开后端或窗口不可用，请重试。")
 		return true
 	}
 	request, err := s.beginScopedSystemOpenJob(action, taskScope)
 	if err != nil {
-		s.ensureSystemOpenJobs().error = err.Error()
+		s.ensureSystemOpenJobs().setError(err.Error())
 		if s.win != nil {
 			s.win.Invalidate()
 		}
@@ -344,16 +351,56 @@ func (s *app) finishSystemOpenJob(request *systemOpenJob, result application.Act
 	}
 	jobs := request.owner
 	if err != nil {
-		jobs.error = err.Error()
+		if request.key != "ide" || !s.recordDevelopmentToolUnavailable(err) {
+			jobs.setError(err.Error())
+		}
 		return
 	}
 	if outcome, ok := result.Data.(application.FileOpeningResult); ok && outcome.Status == "CANCELLED" {
 		return
 	}
-	jobs.error = ""
+	jobs.setError("")
 	if result.Message != "" {
 		jobs.message = result.Message
 	}
+}
+
+func (s *app) recordDevelopmentToolUnavailable(err error) bool {
+	var unavailable *application.DevelopmentToolUnavailableError
+	if !errors.As(err, &unavailable) {
+		return false
+	}
+	jobs := s.ensureSystemOpenJobs()
+	jobs.error = err.Error()
+	target := firstNonEmpty(unavailable.Tool.DisplayName(), "全局默认开发工具")
+	jobs.developmentToolSettings = &systemOpenDevelopmentToolSettings{home: s.snapshot.Home, target: target}
+	return true
+}
+
+func (s *app) renderSystemOpenResultNotification(c *ui.Context) {
+	jobs := s.systemOpenJobs
+	if jobs == nil {
+		return
+	}
+	if settings := jobs.developmentToolSettings; settings != nil && settings.home != s.snapshot.Home {
+		jobs.setError("")
+	}
+	if jobs.developmentToolSettings == nil || jobs.error == "" {
+		s.operationNotifications.present(c, "system-open", &jobs.message, &jobs.error)
+		return
+	}
+	failure := jobs.error
+	s.operationNotifications.presentWithErrorAction(c, "system-open", &jobs.message, &jobs.error, "success", "打开 IDE 设置", func() {
+		settings := jobs.developmentToolSettings
+		if s.systemOpenJobs != jobs || settings == nil || settings.home != s.snapshot.Home || jobs.error != failure {
+			return
+		}
+		if s.navigateSettingsPage("dev-tools", settings.target) {
+			s.markReadingInteraction()
+			s.page = "settings"
+			s.settingsUnit.state.settingsSearchQuery = ""
+		}
+	})
 }
 
 func (s *app) completeSystemOpenJob(request *systemOpenJob) {

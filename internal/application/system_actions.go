@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/platform"
 )
 
 func (a *App) systemAction(ctx context.Context, action Action) (ActionResult, error) {
@@ -105,19 +106,26 @@ func (a *App) systemAction(ctx context.Context, action Action) (ActionResult, er
 		if !info.IsDir() {
 			return ActionResult{}, fmt.Errorf("项目目录不存在：%s", path)
 		}
-		tool := textPayload(action, "tool")
-		if tool == "" {
-			tool = string(config.DefaultDevelopmentTool)
+		requested := strings.TrimSpace(textPayload(action, "tool"))
+		if requested == "" {
+			requested = string(config.DefaultDevelopmentTool)
 		}
+		tool := domain.DevelopmentToolType(strings.ToUpper(requested))
+		var configuredPath string
 		for _, configured := range config.DevelopmentTools {
-			if strings.EqualFold(string(configured.Type), tool) {
-				if _, err := os.Stat(configured.Path); err != nil {
-					return ActionResult{}, fmt.Errorf("开发工具路径不存在：%s", configured.Path)
-				}
-				return ActionResult{Message: "开发工具已打开", Path: path}, launchTool(ctx, configured.Type, configured.Path, path)
+			if strings.EqualFold(string(configured.Type), string(tool)) {
+				configuredPath = strings.TrimSpace(configured.Path)
+				break
 			}
 		}
-		return ActionResult{}, errors.New("开发工具尚未配置")
+		executable, err := platform.ResolveDevelopmentToolPath(ctx, tool, configuredPath)
+		if err != nil {
+			return ActionResult{}, err
+		}
+		if executable == "" {
+			return ActionResult{}, &DevelopmentToolUnavailableError{Tool: tool, ConfiguredPath: configuredPath}
+		}
+		return ActionResult{Message: "开发工具已打开", Path: path}, launchTool(ctx, tool, executable, path)
 	}
 	return ActionResult{}, errors.New("不支持的系统操作")
 }

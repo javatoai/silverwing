@@ -193,6 +193,16 @@ func TestTaskRecycleVerifiedForceRejectsActiveGitOperation(t *testing.T) {
 	if _, err := os.Stat(f.task); err != nil {
 		t.Fatal("task removed while a Git operation was active")
 	}
+	if err := os.Remove(filepath.Join(admin, "MERGE_HEAD")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(admin, "index.lock"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	preview, err = f.service.InspectDeletion(context.Background(), f.config, f.task)
+	if err != nil || preview.Force.CanForce || !strings.Contains(preview.Force.Reason, "index.lock") {
+		t.Fatalf("force preview must block a locked index: %+v %v", preview.Force, err)
+	}
 }
 
 func TestTaskRecycleVerifiedForceRecycleFailureKeepsTaskAndRegistration(t *testing.T) {

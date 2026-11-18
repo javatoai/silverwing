@@ -3,12 +3,100 @@ package workspace
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
+
+	"silverwing-go/internal/process"
 )
+
+func TestMaterialsGitHTTPSLoginBlocksHTTPRedirect(t *testing.T) {
+	f := newMaterialsGitFixture(t, false)
+	var httpsRequests, httpRequests atomic.Int32
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		httpRequests.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer plain.Close()
+	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		httpsRequests.Add(1)
+		http.Redirect(w, r, plain.URL+r.URL.RequestURI(), http.StatusMovedPermanently)
+	}))
+	defer secure.Close()
+	git := f.service.Git
+	git.Environment["GIT_SSL_NO_VERIFY"] = "1" // The loopback test server uses a self-signed certificate.
+	git.Environment["NO_PROXY"], git.Environment["no_proxy"] = "127.0.0.1", "127.0.0.1"
+	f.scope.URL = secure.URL + "/docs.git"
+	if err := f.service.VerifyHTTPSLogin(context.Background(), f.scope); err == nil || httpsRequests.Load() == 0 || httpRequests.Load() != 0 {
+		t.Fatalf("HTTPS login redirect: HTTPS requests=%d HTTP requests=%d error=%v", httpsRequests.Load(), httpRequests.Load(), err)
+	}
+}
+
+func TestMaterialsGitLoginUsesOnlyExplicitCredentialPrompt(t *testing.T) {
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip(err)
+	}
+	git := NewGitClient(nil, gitPath)
+	git.Environment = map[string]string{
+		"GIT_CONFIG_GLOBAL": filepath.Join(t.TempDir(), "missing"), "GIT_CONFIG_NOSYSTEM": "1",
+		"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "credential.helper", "GIT_CONFIG_VALUE_0": "fixture",
+		"GIT_ASKPASS": "configured-askpass", "https_proxy": "http://proxy.example.invalid:3128", "GIT_TRACE_CURL": "sensitive-trace",
+	}
+	ctx := context.Background()
+	scope := MaterialsGitScope{URL: "https://git.example.invalid/team/docs.git"}
+	var specs []process.Spec
+	git.readCommand = func(_ context.Context, spec process.Spec) (process.Result, error) {
+		specs = append(specs, spec)
+		if len(specs) == 1 {
+			return process.Result{ExitCode: 128, Stderr: "fatal: could not read Username for 'https://secret-marker@git.example.invalid': terminal prompts disabled"}, nil
+		}
+		return process.Result{Stdout: "ca93\trefs/heads/master\n"}, nil
+	}
+	service := &MaterialsGitSyncService{Git: git}
+	if _, err := service.RemoteBranches(ctx, scope); !GitRemoteNeedsAuthentication(err) || strings.Contains(err.Error(), "secret-marker") {
+		t.Fatalf("branch error = %v", err)
+	}
+	if err := service.VerifyHTTPSLogin(ctx, scope); err != nil {
+		t.Fatal(err)
+	}
+	if branches, err := service.RemoteBranches(ctx, scope); err != nil || !reflect.DeepEqual(branches, []string{"master"}) {
+		t.Fatalf("branches=%v err=%v", branches, err)
+	}
+	for index, spec := range specs {
+		if spec.Executable != gitPath || !reflect.DeepEqual(spec.Arguments, []string{"--no-optional-locks", "-c", "core.longpaths=true", "ls-remote", "--heads", "--", scope.URL}) ||
+			spec.Env["https_proxy"] != git.Environment["https_proxy"] || spec.Env["GIT_TERMINAL_PROMPT"] != "0" ||
+			spec.Env["GIT_ALLOW_PROTOCOL"] != "https" || spec.Env["GIT_TRACE_CURL"] != "0" {
+			t.Fatalf("wrong Git route on call %d: %+v", index, spec)
+		}
+		if index == 1 {
+			if spec.Env["GCM_INTERACTIVE"] != "auto" || spec.Env["GIT_ASKPASS"] != "configured-askpass" {
+				t.Fatal("explicit login did not permit the configured helper UI")
+			}
+		} else if spec.Env["GCM_INTERACTIVE"] != "never" || spec.Env["GIT_ASKPASS"] != "" {
+			t.Fatal("background branch query allowed a credential prompt")
+		}
+	}
+	if git.Environment["GIT_ASKPASS"] != "configured-askpass" || git.Environment["GCM_INTERACTIVE"] != "" {
+		t.Fatal("operation mutated the shared Git environment")
+	}
+	scope.URL = "http://git.example.invalid/team/docs.git"
+	if err := service.VerifyHTTPSLogin(ctx, scope); err == nil || len(specs) != 3 {
+		t.Fatalf("login accepted insecure address or launched Git: %v", err)
+	}
+	if _, err := service.HTTPSLoginArguments(ctx, scope); err == nil {
+		t.Fatal("terminal command accepted insecure address")
+	}
+	if upgraded := MaterialsGitHTTPSUpgrade(scope.URL); upgraded != "https://git.example.invalid/team/docs.git" || !materialsGitSameURL(scope.URL, upgraded) || materialsGitSameURL(upgraded, scope.URL) {
+		t.Fatalf("unexpected HTTP → HTTPS result %q", upgraded)
+	}
+}
 
 func TestMaterialsGitRemoteBranchesReadOnlyWithoutLocalRepository(t *testing.T) {
 	f := newMaterialsGitFixture(t, true)

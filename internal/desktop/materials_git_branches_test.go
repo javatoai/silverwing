@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,6 +28,38 @@ type materialsBranchesFake struct {
 	*materialsGitFakeBackend
 	count atomic.Int32
 	calls chan materialsBranchCall
+}
+
+type materialsGitLoginCall struct {
+	ctx   context.Context
+	scope workspace.MaterialsGitScope
+	reply chan error
+}
+
+type materialsLoginFake struct {
+	*materialsBranchesFake
+	logins chan materialsGitLoginCall
+}
+
+func (b *materialsLoginFake) VerifyMaterialsGitLogin(ctx context.Context, scope workspace.MaterialsGitScope) error {
+	call := materialsGitLoginCall{ctx: ctx, scope: scope, reply: make(chan error, 1)}
+	b.logins <- call
+	return <-call.reply
+}
+
+func (*materialsLoginFake) MaterialsGitTerminalLoginCommand(context.Context, workspace.MaterialsGitScope) (string, error) {
+	return "git ls-remote --heads -- 'https://github.com/example/docs.git'", nil
+}
+
+func nextMaterialsGitLoginCall(t *testing.T, b *materialsLoginFake) materialsGitLoginCall {
+	t.Helper()
+	select {
+	case call := <-b.logins:
+		return call
+	case <-time.After(3 * time.Second):
+		t.Fatal("missing Git login verification")
+		return materialsGitLoginCall{}
+	}
 }
 
 func (b *materialsBranchesFake) MaterialsGitBranches(ctx context.Context, scope workspace.MaterialsGitScope) ([]string, error) {
@@ -176,4 +209,100 @@ func TestMaterialsGitBranchReadHomeAndEnvironmentInvalidation(t *testing.T) {
 		})
 	}
 }
+
+func TestMaterialsGitLoginRefreshesBranchesAfterExplicitVerification(t *testing.T) {
+	s, branches, updates := materialsBranchesFixture(t)
+	b := &materialsLoginFake{materialsBranchesFake: branches, logins: make(chan materialsGitLoginCall, 2)}
+	s.backend = b
+	tt := ui.NewTester(func(c *ui.Context) { s.settingsMaterialsGitSync(c, setTheme(c, false)) }, 960, 800)
+	call := nextMaterialsBranchCall(t, branches)
+	call.reply <- materialsBranchReply{err: &workspace.GitRemoteFailure{Kind: workspace.GitRemoteAuthentication}}
+	materialsGitNextUpdate(t, updates)
+	tt.Frame()
+	if !tt.HasText("打开终端") || !tt.HasText("复制验证命令") || len(b.logins) != 0 {
+		t.Fatalf("missing recovery actions or automatic login: %v", tt.Texts())
+	}
+	if err := tt.Click("复制验证命令"); err != nil {
+		t.Fatal(err)
+	}
+	materialsGitNextUpdate(t, updates)
+	if tt.Clipboard() != "git ls-remote --heads -- 'https://github.com/example/docs.git'" || len(b.logins) != 0 {
+		t.Fatal("fallback did not copy the read-only command")
+	}
+	if err := tt.Click("登录并验证"); err != nil {
+		t.Fatal(err)
+	}
+	login := nextMaterialsGitLoginCall(t, b)
+	if login.scope != call.scope || len(branches.calls) != 0 {
+		t.Fatal("verification used the wrong scope or tried to refresh before login")
+	}
+	login.reply <- nil
+	refresh := nextMaterialsBranchCall(t, branches)
+	if refresh.scope != login.scope {
+		t.Fatal("branch refresh used a different scope")
+	}
+	refresh.reply <- materialsBranchReply{branches: []string{"master", "docs/team"}}
+	materialsGitNextUpdate(t, updates)
+	if !s.materialsGitBranchReady("master") || strings.Contains(s.lastMessage, "失败") || b.materialsGitFakeBackend.count.Load() != 0 {
+		t.Fatal("successful verification did not refresh readiness or unexpectedly synced")
+	}
+}
+
+func TestMaterialsGitLoginRequiresHTTPSAndDiscardsOldScope(t *testing.T) {
+	s, branches, updates := materialsBranchesFixture(t)
+	b := &materialsLoginFake{materialsBranchesFake: branches, logins: make(chan materialsGitLoginCall, 2)}
+	s.backend = b
+	config, _ := s.materialsGitConfig()
+	setURL := func(url string) {
+		settings := config.MaterialsGitSettings()
+		settings.RepositoryURL = url
+		config.MaterialsGitSync = &settings
+		raw, _ := json.Marshal(config)
+		s.settingsUnit.state.configJSON = string(raw)
+	}
+	setURL("http://git.example.invalid/team/docs.git")
+	tt := ui.NewTester(func(c *ui.Context) { s.settingsMaterialsGitSync(c, setTheme(c, false)) }, 960, 800)
+	call := nextMaterialsBranchCall(t, branches)
+	call.reply <- materialsBranchReply{err: &workspace.GitRemoteFailure{Kind: workspace.GitRemoteAuthentication}}
+	materialsGitNextUpdate(t, updates)
+	tt.Frame()
+	if !tt.HasText("确认改用 HTTPS") || !tt.HasText("https://git.example.invalid/team/docs.git") || tt.HasText("登录并验证") || tt.HasText("打开终端") {
+		t.Fatalf("HTTP recovery skipped confirmation: %v", tt.Texts())
+	}
+	s.beginMaterialsGitLogin()
+	if len(b.logins) != 0 {
+		t.Fatal("HTTP started explicit login")
+	}
+	setURL("https://git.example.invalid/team/docs.git")
+	syncMaterialsGitTestSettingsInputs(s, config)
+	s.loadMaterialsGitBranches(false)
+	call = nextMaterialsBranchCall(t, branches)
+	call.reply <- materialsBranchReply{err: &workspace.GitRemoteFailure{Kind: workspace.GitRemoteAuthentication}}
+	materialsGitNextUpdate(t, updates)
+	s.beginMaterialsGitLogin()
+	old := nextMaterialsGitLoginCall(t, b)
+	setURL("https://git.example.invalid/team/replacement.git")
+	syncMaterialsGitTestSettingsInputs(s, config)
+	s.observeMaterialsGitBranches()
+	s.loadMaterialsGitBranches(false)
+	select {
+	case <-old.ctx.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("old login was not canceled")
+	}
+	current := nextMaterialsBranchCall(t, branches)
+	current.reply <- materialsBranchReply{branches: []string{"master"}}
+	materialsGitNextUpdate(t, updates)
+	old.reply <- nil
+	materialsGitNextUpdate(t, updates)
+	if !s.materialsGitBranchReady("master") || len(branches.calls) != 0 || s.lastMessage != "" {
+		t.Fatal("old verification changed the current branch state")
+	}
+}
+
+func syncMaterialsGitTestSettingsInputs(s *app, config domain.AppConfig) {
+	input := s.inputs["setting:materialsGitSync:repositoryUrl"]
+	*input = config.MaterialsGitSettings().RepositoryURL
+}
+
 func ptrForMaterialsBranchTest(value string) *string { return &value }

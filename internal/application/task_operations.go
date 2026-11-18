@@ -69,6 +69,7 @@ type TaskDeleteRequest struct {
 	ForceGuard      string
 	DeleteMaterials bool
 	MaterialsGuard  string
+	Guard           string
 }
 type TaskToolsRequest struct {
 	Target  TaskTarget
@@ -103,6 +104,7 @@ func TaskDeleteRequestFromAction(action Action) TaskDeleteRequest {
 	return TaskDeleteRequest{
 		Target: TaskTargetFromAction(action), ForceDiscard: boolPayload(action, "forceDiscard"), ForceGuard: textPayload(action, "forceGuard"),
 		DeleteMaterials: boolPayload(action, "deleteMaterials"), MaterialsGuard: textPayload(action, "materialsGuard"),
+		Guard: textPayload(action, "deleteGuard"),
 	}
 }
 func TaskToolsRequestFromAction(action Action) (TaskToolsRequest, error) {

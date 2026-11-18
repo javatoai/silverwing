@@ -124,6 +124,9 @@ func (s *app) taskContextMenu(services ui.Services, t task, menu *ui.Menu) {
 	} else if menu.Item("归档任务").Icon(icons["archive"]).Disabled(!valid || s.busy).Chosen() {
 		chosen = "archive"
 	}
+	if menu.Item("恢复已回收工作区").Icon(icons["refresh"]).Disabled(!valid || s.busy || s.backend == nil).Chosen() {
+		chosen = "restore-recycled-workspaces"
+	}
 	menu.Separator()
 	if menu.Item("删除任务").Icon(icons["delete"]).Dangerous().Disabled(!valid || s.busy).Chosen() {
 		chosen = "delete"
@@ -172,6 +175,8 @@ func (s *app) taskContextMenu(services ui.Services, t task, menu *ui.Menu) {
 		s.openTaskArchiveDialog(t)
 	case "restore":
 		s.dispatchTaskContextAction(application.Action{Kind: "task.restore", TaskID: t.id, Path: t.path}, opened)
+	case "restore-recycled-workspaces":
+		s.dispatchTaskContextAction(application.Action{Kind: "task.restore-recycled-workspaces", TaskID: t.id, Path: t.path}, opened)
 	case "delete":
 		s.openTaskDeleteDialog(t)
 	}

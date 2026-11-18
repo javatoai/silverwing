@@ -280,7 +280,11 @@ func gitConfigValue(value *string) string {
 }
 
 func (g *GitClient) Worktrees(repository string) ([]WorktreeRecord, error) {
-	result, err := g.Run(repository, "worktree", "list", "--porcelain")
+	return g.WorktreesContext(context.Background(), repository)
+}
+
+func (g *GitClient) WorktreesContext(ctx context.Context, repository string) ([]WorktreeRecord, error) {
+	result, err := g.RunContext(ctx, repository, 10*time.Minute, true, true, "worktree", "list", "--porcelain")
 	if err != nil {
 		return nil, err
 	}
@@ -359,20 +363,27 @@ func (g *GitClient) IsAncestor(repository, ancestor, descendant string) (bool, e
 }
 
 func (g *GitClient) Fetch(repository, remote string) error {
-	if remote == "" {
-		remote = "origin"
-	}
-	_, err := g.RunContext(context.Background(), repository, 5*time.Minute, true, false, "fetch", "--prune", "--no-tags", remote)
+	return g.FetchContext(context.Background(), repository, remote)
+}
+
+func (g *GitClient) FetchContext(ctx context.Context, repository, remote string) error {
+	_, err := g.RunContext(ctx, repository, 5*time.Minute, true, false, BranchFetchArguments(remote)...)
 	return err
 }
 
-func (g *GitClient) FetchTags(repository, remote string) error {
+// BranchFetchArguments refreshes remote branches and prunes stale tracking
+// branches while excluding tags even if the remote config maps them explicitly.
+func BranchFetchArguments(remote string) []string {
 	if remote == "" {
 		remote = "origin"
 	}
-	_, err := g.RunContext(context.Background(), repository, 5*time.Minute, true, false,
-		"fetch", "--tags", "--prune", "--prune-tags", "--force", remote)
-	return err
+	if strings.Contains(remote, "=") {
+		// Git splits -c arguments at the first equals sign. Use the standard
+		// tracking refspec directly when a remote name contains that character.
+		return []string{"fetch", "--prune", "--no-tags", "--no-prune-tags", "--refmap=", "--", remote,
+			"+refs/heads/*:refs/remotes/" + remote + "/*"}
+	}
+	return []string{"-c", "remote." + remote + ".fetch=^refs/tags/*", "fetch", "--prune", "--no-tags", "--no-prune-tags", "--", remote}
 }
 
 func (g *GitClient) AddWorktree(repository, target, branch, baseRef string, trackingRemote ...string) error {

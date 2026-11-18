@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/process"
+	"silverwing-go/internal/workspace"
 )
 
 type tagWriteEndpoint struct {
@@ -237,23 +239,43 @@ func guardedTagGitFailure(ctx context.Context, action string, exitCode int) erro
 	return fmt.Errorf("%s（退出码 %d）", action, exitCode)
 }
 
-func (s *Service) fetchTagRemote(ctx context.Context, repository, remote string, options ...string) error {
+func (s *Service) fetchTagRemote(ctx context.Context, repository, remote string, tags bool) error {
 	if remote == "" {
 		remote = "origin"
 	}
-	args := append([]string{"fetch"}, options...)
 	identity := tagRemoteIdentityFromContext(ctx)
 	if identity != "" {
 		if err := s.requireTagRemoteIdentity(ctx, repository, remote, identity); err != nil {
 			return err
 		}
-		args = append(args, "--")
 	}
-	result, err := s.run(ctx, repository, 5*time.Minute, identity == "", false, append(args, remote)...)
-	if identity != "" && (err != nil || result.ExitCode != 0) {
-		return guardedTagGitFailure(ctx, "获取 Tag 远端引用失败", result.ExitCode)
+	var args []string
+	if tags {
+		// Ignore configured refspecs that could force-update local tags.
+		args = []string{"fetch", "--tags", "--no-prune", "--no-prune-tags", "--refmap=", "--", remote, "refs/tags/*:refs/tags/*"}
+	} else {
+		args = workspace.BranchFetchArguments(remote)
 	}
-	return err
+	result, err := s.run(ctx, repository, 5*time.Minute, false, false, args...)
+	if err == nil && result.ExitCode == 0 {
+		return nil
+	}
+	switch {
+	case process.IsCleanupFailure(err):
+		return &process.CleanupError{}
+	case ctx.Err() != nil:
+		return ctx.Err()
+	case errors.Is(err, context.Canceled):
+		return context.Canceled
+	case errors.Is(err, context.DeadlineExceeded):
+		return context.DeadlineExceeded
+	}
+	const action = "获取 Tag 远端引用失败"
+	failure := workspace.ClassifyGitRemoteFailure(result)
+	if failure.Kind == workspace.GitRemoteOther || failure.Kind == workspace.GitRemotePushRejected {
+		return guardedTagGitFailure(ctx, action, result.ExitCode)
+	}
+	return fmt.Errorf("%s：%w", action, failure)
 }
 
 func (s *Service) pushPinnedTagBranch(ctx context.Context, repository, remote, identity, ref, before, after string) error {

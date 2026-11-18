@@ -48,7 +48,7 @@ func TestSettingsBackupDeleteCompactSelectionLayout(t *testing.T) {
 			t.Run(fmt.Sprintf("%d-dark-%t", width, dark), func(t *testing.T) {
 				s := settingsBackupDeleteFixture(t)
 				tester := settingsBackupDeleteTester(s, width, dark)
-				if err := tester.Click("删除所选"); err != nil {
+				if err := tester.Click(settingsBackupDeleteButtonLabel(false)); err != nil {
 					t.Fatal(err)
 				}
 				if len(s.ensureSettingsConfigRecovery().jobs.current) != 0 {
@@ -75,7 +75,7 @@ func TestSettingsBackupDeleteCompactSelectionLayout(t *testing.T) {
 				}
 				check, _ := tester.Find("全选")
 				count, _ := tester.Find("已选 2 个")
-				remove, _ := tester.Find("删除所选")
+				remove, _ := tester.Find(settingsBackupDeleteButtonLabel(false))
 				if math.Abs(float64(check.Y-count.Y)) > 8 || math.Abs(float64(remove.Y-check.Y)) > 8 || remove.X+remove.W > float32(width-12) {
 					t.Fatalf("selection toolbar clipped or split: %+v %+v %+v", check, count, remove)
 				}
@@ -144,7 +144,7 @@ func TestSettingsBackupDeleteImmutablePlanBusyAndLateResults(t *testing.T) {
 		t.Fatal("list raced active deletion")
 	}
 	tester := settingsBackupDeleteTester(s, 480, false)
-	if err := tester.Click("正在删除…"); err != nil {
+	if err := tester.Click(settingsBackupDeleteButtonLabel(true)); err != nil {
 		t.Fatal(err)
 	}
 	if err := tester.Click("全选"); err != nil {

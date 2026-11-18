@@ -312,7 +312,7 @@ func (s *app) workspaceActions(c *ui.Context, p palette, t task, w application.W
 			if showAddModule && iconButtonDisabled(c, key+"-add-module", "plus", "添加模块", p, s.busy || t.archived).Clicked() {
 				s.openTaskAppendModules(t, w.ServiceID)
 			}
-			if iconButtonDisabled(c, key+"-delete-module", "delete", "删除当前模块", p, s.busy).Clicked() {
+			if iconButtonDisabled(c, key+"-delete-module", "delete", "回收当前模块", p, s.busy).Clicked() {
 				s.beginWorkspaceRemoval(t, w)
 			}
 		})
@@ -332,7 +332,7 @@ func (s *app) workspaceActions(c *ui.Context, p palette, t task, w application.W
 		})
 	}
 	iconGroup(c, p, func() {
-		if iconButton(c, key+"-ide", "code", "使用 "+workspaceDevelopmentToolName(w.Record.DevelopmentTool)+" 打开", p).Clicked() {
+		if iconButton(c, key+"-ide", "code", "使用 "+w.Record.DevelopmentTool.DisplayName()+" 打开", p).Clicked() {
 			s.act("system.ide", t.id, w.ServiceID, w.ModuleID, w.Path, "", map[string]any{"tool": string(w.Record.DevelopmentTool)})
 		}
 	})
@@ -361,14 +361,6 @@ func (s *app) workspaceNeedsRepair(t task, w application.Workspace) bool {
 	default:
 		return false
 	}
-}
-
-func workspaceDevelopmentToolName(tool domain.DevelopmentToolType) string {
-	return map[domain.DevelopmentToolType]string{
-		domain.DevelopmentToolIntelliJIdea: "IntelliJ IDEA", domain.DevelopmentToolWebStorm: "WebStorm",
-		domain.DevelopmentToolPyCharm: "PyCharm", domain.DevelopmentToolVisualStudioCode: "Visual Studio Code",
-		domain.DevelopmentToolAndroidStudio: "Android Studio", domain.DevelopmentToolDevEcoStudio: "DevEco Studio",
-	}[tool]
 }
 
 func taskServiceFailed(t task, serviceID string) bool {

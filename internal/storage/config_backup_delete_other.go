@@ -1,11 +1,12 @@
-//go:build !windows
+//go:build !windows && (!darwin || ios)
 
 package storage
 
-import "os"
+import (
+	"context"
+	"os"
+)
 
-func configBackupReparse(info os.FileInfo) bool { return info.Mode()&os.ModeSymlink != 0 }
-
-func removeListedConfigBackup(root *os.Root, name string, expected os.FileInfo) error {
+func removeListedConfigBackup(context.Context, *os.Root, string, os.FileInfo) error {
 	return errConfigBackupDeleteUnsupported
 }

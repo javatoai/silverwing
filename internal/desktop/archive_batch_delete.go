@@ -15,6 +15,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/systemtrash"
 	"silverwing-go/internal/workspace"
 )
 
@@ -220,25 +221,46 @@ func (s *app) stopArchiveBatchPreviewForGlobalDrift(job *archiveBatchDeletePrevi
 		job.cancel()
 		return true
 	}
-	changed := false
+	changed := make(chan bool, 1)
 	update(func() {
-		if s.archiveBatchDeleteJobCurrent(job) && !s.archiveBatchDeleteGlobalScopeCurrent(job.state) {
-			changed = true
-			job.state.Error = "页面或应用配置已变化，删除检查已停止。"
-			job.state.PreviewLoading = false
-			for index := range job.state.Items {
-				item := &job.state.Items[index]
-				if item.Status == "检查中" || item.Status == "等待检查" {
-					item.Status = "已跳过：页面或应用配置已变化"
-				}
-			}
-			job.cancel()
-			if s.win != nil {
-				s.win.Invalidate()
+		drift := s.archiveBatchDeleteJobCurrent(job) && !s.archiveBatchDeleteGlobalScopeCurrent(job.state)
+		if drift {
+			s.expireArchiveBatchPreview(job.state)
+		}
+		changed <- drift
+	})
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case drift := <-changed:
+			return drift
+		case <-job.ctx.Done():
+			return true
+		case <-ticker.C:
+			if window != nil && window.IsDestroyed() {
+				job.cancel()
+				return true
 			}
 		}
-	})
-	return changed
+	}
+}
+
+func (s *app) expireArchiveBatchPreview(state *archiveBatchDeleteState) {
+	state.Error = "页面或应用配置已变化，删除检查已停止。"
+	state.PreviewLoading = false
+	for index := range state.Items {
+		item := &state.Items[index]
+		if item.Status == "检查中" || item.Status == "等待检查" {
+			item.Status = "已跳过：页面或应用配置已变化"
+		}
+	}
+	if state.PreviewJob != nil {
+		state.PreviewJob.cancel()
+	}
+	if s.win != nil {
+		s.win.Invalidate()
+	}
 }
 
 func decodeArchiveBatchDeletePreview(value any) (workspace.TaskDeletePreview, error) {
@@ -336,7 +358,7 @@ func archiveBatchPreviewStatus(item archiveBatchDeleteItem) string {
 	if item.Preview.Force.CanForce {
 		return "需确认强制回收"
 	}
-	if archiveBatchHasStatusFailure(item.Preview.Risks) {
+	if archiveBatchHasStatusFailure(item.Preview.Risks) || item.Preview.Force.Reason != "" {
 		return "无法安全确认"
 	}
 	if archiveBatchHasOperationInProgress(item.Preview.Risks) || archiveBatchHasOperationInProgress(item.Preview.Force.Risks) {
@@ -376,7 +398,7 @@ func archiveBatchItemCanDelete(item archiveBatchDeleteItem) bool {
 	if item.Preview.Force.CanForce && (!item.ForceConfirmed || strings.TrimSpace(item.Preview.Force.Guard) == "") {
 		return false
 	}
-	if archiveBatchHasStatusFailure(item.Preview.Risks) && !item.ForceConfirmed {
+	if (archiveBatchHasStatusFailure(item.Preview.Risks) || item.Preview.Force.Reason != "") && !item.ForceConfirmed {
 		return false
 	}
 	if archiveBatchHasOperationInProgress(item.Preview.Risks) || archiveBatchHasOperationInProgress(item.Preview.Force.Risks) {
@@ -523,7 +545,7 @@ func (s *app) advanceArchiveBatchDelete() {
 		}
 		requestID := fmt.Sprintf("archive-batch-%d-%d", state.Generation, state.QueuePosition)
 		action := archiveBatchDeleteAction(*item, requestID)
-		item.Status = "正在移入回收站"
+		item.Status = "正在移入" + systemtrash.Label()
 		state.CurrentKey = key
 		scope := item.Scope
 		s.dispatchTaskContextActionWithCompletion(action, &scope, func(result application.ActionResult, actionErr, refreshErr error) {
@@ -539,6 +561,7 @@ func archiveBatchDeleteAction(item archiveBatchDeleteItem, requestID string) app
 	payload := map[string]any{
 		"forceDiscard":        forceDiscard,
 		"forceGuard":          "",
+		"deleteGuard":         item.Preview.Guard,
 		"deleteMaterials":     item.DeleteMaterials,
 		"materialsGuard":      item.Preview.Materials.Guard,
 		"taskDeleteCreatedAt": item.Task.createdAt,
@@ -577,10 +600,8 @@ func (s *app) completeArchiveBatchDeleteItem(state *archiveBatchDeleteState, key
 	case strings.HasPrefix(result.Message, application.TaskDeleteCleanupWarningMessage):
 		item.Status = "已回收，工作区登记待清理"
 		item.ResultText = result.Text
-	case strings.TrimSpace(result.Message) != "":
-		item.Status = "已移入回收站"
 	default:
-		item.Status = "已移入回收站"
+		item.Status = "已移入" + systemtrash.Label()
 	}
 	if actionErr == nil && (strings.HasPrefix(result.Message, application.TaskDeleteCleanupWarningMessage) || s.taskUnit.taskByID(item.Task.id).id == "") {
 		selection := s.taskIndexBrowsingFor(true).archiveBatchSelected
@@ -671,11 +692,7 @@ func (s *app) observeArchiveBatchDelete() {
 		state.PreviewJob.cancel()
 	}
 	if state.Open && state.PreviewLoading && !s.archiveBatchDeleteGlobalScopeCurrent(state) {
-		state.Error = "页面或应用配置已变化，删除检查已停止。"
-		if state.PreviewJob != nil {
-			state.PreviewJob.cancel()
-		}
-		state.PreviewLoading = false
+		s.expireArchiveBatchPreview(state)
 	}
 	if state.Running {
 		if !s.archiveBatchDeleteGlobalScopeCurrent(state) {
@@ -684,7 +701,6 @@ func (s *app) observeArchiveBatchDelete() {
 				state.AdvancePending = true
 			}
 		}
-		s.advanceArchiveBatchDelete()
 	}
 	if !state.Open && !state.Running && state.PreviewJob == nil {
 		s.taskUnit.state.archiveBatchDelete = nil
@@ -720,6 +736,8 @@ func (s *app) drainArchiveBatchDelete(ctx context.Context) error {
 
 func (s *app) renderArchiveBatchDelete(c *ui.Context, p palette) {
 	s.observeArchiveBatchDelete()
+	// Read this frame's stop click before dispatching the next operation.
+	defer s.advanceArchiveBatchDelete()
 	state := s.taskUnit.state.archiveBatchDelete
 	if state == nil || !state.Open || state.Closed {
 		return
@@ -733,7 +751,7 @@ func (s *app) renderArchiveBatchDelete(c *ui.Context, p palette) {
 				icon(c, "delete", 18, p.danger)
 				label(c, fmt.Sprintf("删除所选归档任务（%d）", len(state.Items)), 17, p.text).FontWeight(600).Grow(1)
 			})
-			label(c, "任务目录和工作区将移入系统回收站，本地与远程分支保留。任务资料目录默认保留；未完成逐项确认的任务会跳过。", 12, p.text).Wrap()
+			label(c, "任务目录和工作区将移入系统"+systemtrash.Label()+"，本地与远程分支保留。任务资料目录默认保留，未完成逐项确认的任务会跳过。", 12, p.text).Wrap()
 			ui.Box(c).FillWidth().Padding(10, 12).Radius(9).Background(p.amberBg).Border(1, p.line).Children(func() {
 				label(c, "请先关闭 Codex、IDE 和文件管理器中打开的相关任务或目录。正在使用的文件可能导致回收失败。", 11, p.danger).Wrap()
 			})
@@ -777,7 +795,7 @@ func (s *app) renderArchiveBatchDelete(c *ui.Context, p palette) {
 					s.closeArchiveBatchDeleteDialog()
 				}
 				ready := s.archiveBatchDeleteCountReady(state)
-				confirmLabel := fmt.Sprintf("移入 %d 项回收站", ready)
+				confirmLabel := fmt.Sprintf("移入 %s（%d 项）", systemtrash.Label(), ready)
 				if state.Started && !state.Running {
 					confirmLabel = "本批已处理"
 				}
@@ -805,7 +823,7 @@ func (s *app) renderArchiveBatchDeleteItem(c *ui.Context, p palette, state *arch
 			statusColor := p.muted
 			if strings.Contains(item.Status, "失败") || strings.Contains(item.Status, "无法") || strings.Contains(item.Status, "进行中") {
 				statusColor = p.danger
-			} else if strings.Contains(item.Status, "回收") || strings.Contains(item.Status, "移入回收站") {
+			} else if strings.HasPrefix(item.Status, "已回收") || strings.HasPrefix(item.Status, "已移入") {
 				statusColor = p.green
 			}
 			label(c, item.Status, 11, statusColor).Wrap()
@@ -840,14 +858,14 @@ func (s *app) renderArchiveBatchDeleteItem(c *ui.Context, p palette, state *arch
 			for riskIndex, risk := range item.Preview.Force.Risks {
 				label(c, "• "+taskDeleteRiskSummary(risk, riskIndex), 11, p.danger).Wrap().Selectable()
 			}
-			ui.Checkbox(c.Key("archive-batch-force-"+fmt.Sprint(index)), &item.ForceConfirmed, "我已核对路径和工作区风险，确认相关文件及本地改动可以一起移入回收站").FillWidth().Disabled(state.Running || state.PreviewLoading)
+			ui.Checkbox(c.Key("archive-batch-force-"+fmt.Sprint(index)), &item.ForceConfirmed, "我已核对路径和风险，确认将工作区及本地改动移入"+systemtrash.Label()).FillWidth().Disabled(state.Started || state.PreviewLoading)
 		}
 		if archiveBatchNeedsDiscardAck(item.Preview) {
-			ui.Checkbox(c.Key("archive-batch-discard-"+fmt.Sprint(index)), &item.DiscardChanges, "我确认将此项中显示的未提交改动或未推送提交一并移入回收站").FillWidth().Disabled(state.Running || state.PreviewLoading)
+			ui.Checkbox(c.Key("archive-batch-discard-"+fmt.Sprint(index)), &item.DiscardChanges, "我确认将此项中显示的未提交改动或未推送提交移入"+systemtrash.Label()).FillWidth().Disabled(state.Started || state.PreviewLoading)
 		}
 		materials := item.Preview.Materials
 		if materials.CanDelete {
-			ui.Checkbox(c.Key("archive-batch-materials-"+fmt.Sprint(index)), &item.DeleteMaterials, "同时删除任务资料目录").FillWidth().Disabled(state.Running || state.PreviewLoading)
+			ui.Checkbox(c.Key("archive-batch-materials-"+fmt.Sprint(index)), &item.DeleteMaterials, "同时删除任务资料目录").FillWidth().Disabled(state.Started || state.PreviewLoading)
 		}
 		if materials.Root != "" {
 			label(c, materials.Root, 11, p.muted).Wrap().Selectable()
@@ -908,7 +926,7 @@ func archiveBatchDeleteSummary(state *archiveBatchDeleteState) string {
 	counts := map[string]int{}
 	for _, item := range state.Items {
 		switch {
-		case strings.HasPrefix(item.Status, "已移入回收站"):
+		case strings.HasPrefix(item.Status, "已移入"+systemtrash.Label()):
 			counts["done"]++
 		case strings.HasPrefix(item.Status, "已回收"):
 			counts["warning"]++

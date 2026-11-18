@@ -2,9 +2,11 @@ package desktop
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"time"
 
+	"github.com/egoist/mygo/ui"
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/workspace"
@@ -15,6 +17,9 @@ type materialsGitBranchesState struct {
 	branches                         []string
 	err                              string
 	loading, loaded, visible, closed bool
+	invalidated                      bool
+	needsLogin, authenticating       bool
+	terminalPreparing                bool
 	loadedAt                         time.Time
 	cancel                           context.CancelFunc
 	done                             chan struct{}
@@ -23,7 +28,9 @@ type materialsGitBranchesState struct {
 
 func (s *app) materialsGitBranchesCurrent() *materialsGitBranchesState {
 	state := s.materialsUnit.state.materialsGitBranches
-	if state == nil || state.closed || !s.materialsGitScopeCurrent(state.scope) {
+	config, ok := s.materialsGitConfig()
+	if state == nil || state.closed || state.invalidated || !ok ||
+		application.MaterialsGitScope(s.snapshot.Home, config) != state.scope || s.materialsGitSettingsPending(config) {
 		return nil
 	}
 	return state
@@ -36,11 +43,17 @@ func (s *app) materialsGitBranchReady(branch string) bool {
 
 func (s *app) observeMaterialsGitBranches() {
 	state := s.materialsUnit.state.materialsGitBranches
-	if state != nil && (s.page != "settings" || s.settingsUnit.state.settingsPage != "materials-sync" && s.settingsUnit.state.settingsPage != "paths") {
+	if state == nil {
+		return
+	}
+	if s.page != "settings" || s.settingsUnit.state.settingsPage != "materials-sync" && s.settingsUnit.state.settingsPage != "paths" {
 		state.visible = false
 	}
-	if state != nil && !s.materialsGitScopeCurrent(state.scope) && state.cancel != nil {
-		state.cancel()
+	if s.materialsGitBranchesCurrent() == nil {
+		state.invalidated = true
+		if state.cancel != nil {
+			state.cancel()
+		}
 	}
 }
 
@@ -59,14 +72,31 @@ func (s *app) loadMaterialsGitBranches(force bool) {
 	if previous != nil && previous.closed {
 		return
 	}
-	if previous != nil && previous.scope == scope {
+	if previous != nil && !previous.invalidated && previous.scope == scope {
 		visible := previous.visible
 		previous.visible = true
-		if previous.loading || !force && (visible || time.Since(previous.loadedAt) < 30*time.Second) {
+		if previous.loading || previous.terminalPreparing || !force && (visible || time.Since(previous.loadedAt) < 30*time.Second) {
 			return
 		}
 	}
-	state := &materialsGitBranchesState{scope: scope, visible: true, loading: true, branches: []string{}}
+	s.startMaterialsGitBranchRead(scope, backend, nil, update)
+}
+
+func (s *app) beginMaterialsGitLogin() {
+	state := s.materialsGitBranchesCurrent()
+	login, canLogin := s.backend.(application.MaterialsGitLoginBackend)
+	branches, canRead := s.backend.(application.MaterialsGitBranchesBackend)
+	update := taskContextUpdater(s.win, s.taskUnit.state.taskContextUpdate)
+	if state == nil || !state.needsLogin || state.loading || state.terminalPreparing || s.busy || !canLogin || !canRead || update == nil ||
+		!workspace.MaterialsGitUsesHTTPS(state.scope.URL) {
+		return
+	}
+	s.startMaterialsGitBranchRead(state.scope, branches, login, update)
+}
+
+func (s *app) startMaterialsGitBranchRead(scope workspace.MaterialsGitScope, backend application.MaterialsGitBranchesBackend, login application.MaterialsGitLoginBackend, update func(func())) {
+	previous := s.materialsUnit.state.materialsGitBranches
+	state := &materialsGitBranchesState{scope: scope, visible: true, loading: true, authenticating: login != nil, branches: []string{}}
 	if previous != nil {
 		if previous.cancel != nil {
 			previous.cancel()
@@ -92,13 +122,24 @@ func (s *app) loadMaterialsGitBranches(force bool) {
 		state.loadedAt = time.Now()
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	timeout := 25 * time.Second
+	if login != nil {
+		timeout += 2 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	state.cancel, state.done = cancel, make(chan struct{})
 	window := s.win
 	go func() {
 		defer close(state.done)
 		defer cancel()
-		branches, err := backend.MaterialsGitBranches(ctx, scope)
+		var branches []string
+		var err error
+		if login != nil {
+			err = login.VerifyMaterialsGitLogin(ctx, scope)
+		}
+		if err == nil && ctx.Err() == nil {
+			branches, err = backend.MaterialsGitBranches(ctx, scope)
+		}
 		if err == nil {
 			err = ctx.Err()
 		}
@@ -106,14 +147,60 @@ func (s *app) loadMaterialsGitBranches(force bool) {
 			return
 		}
 		update(func() {
-			if s.materialsUnit.state.materialsGitBranches != state || state.closed || !s.materialsGitScopeCurrent(scope) {
+			if s.materialsGitBranchesCurrent() != state {
 				return
 			}
-			state.loading, state.loaded, state.loadedAt = false, true, time.Now()
+			state.loading, state.loaded, state.authenticating, state.loadedAt = false, true, false, time.Now()
 			if err != nil {
-				state.err = "读取远程分支失败：" + err.Error()
+				state.needsLogin = login != nil || workspace.GitRemoteNeedsAuthentication(err)
+				switch {
+				case errors.Is(err, context.Canceled):
+					state.err = "Git 登录验证已取消。"
+				case login != nil:
+					state.err = "登录验证或刷新分支失败：" + err.Error()
+				default:
+					state.err = "读取远程分支失败：" + err.Error()
+				}
 			} else {
 				state.branches = slices.Clone(branches)
+				if login != nil {
+					s.lastMessage = "Git 登录验证通过，已刷新远程分支"
+				}
+			}
+			if window != nil {
+				window.Invalidate()
+			}
+		})
+	}()
+}
+
+func (s *app) prepareMaterialsGitLoginTerminal(services ui.Services, open bool) {
+	state := s.materialsGitBranchesCurrent()
+	backend, ok := s.backend.(application.MaterialsGitLoginBackend)
+	window := s.win
+	update := taskContextUpdater(window, s.taskUnit.state.taskContextUpdate)
+	if state == nil || !state.needsLogin || state.loading || state.terminalPreparing || s.busy || !ok || update == nil ||
+		!workspace.MaterialsGitUsesHTTPS(state.scope.URL) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	state.terminalPreparing, state.cancel, state.done = true, cancel, make(chan struct{})
+	go func() {
+		defer close(state.done)
+		defer cancel()
+		command, err := backend.MaterialsGitTerminalLoginCommand(ctx, state.scope)
+		if window != nil && window.IsDestroyed() {
+			return
+		}
+		update(func() {
+			if s.materialsGitBranchesCurrent() != state {
+				return
+			}
+			state.terminalPreparing = false
+			if err != nil {
+				s.lastError = "准备 Git 验证命令失败：" + err.Error()
+			} else if s.copyTextToClipboard(services, command, "已复制 Git 验证命令") && open {
+				s.act("system.terminal", "", "", "", state.scope.Home, "", nil)
 			}
 			if window != nil {
 				window.Invalidate()

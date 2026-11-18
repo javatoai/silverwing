@@ -1301,10 +1301,10 @@ func (s *Service) isAncestor(ctx context.Context, repository, ancestor, descenda
 	return false, gitFailure("Git 祖先关系检查失败", result)
 }
 func (s *Service) fetch(ctx context.Context, repository, remote string) error {
-	return s.fetchTagRemote(ctx, repository, remote, "--prune", "--no-tags")
+	return s.fetchTagRemote(ctx, repository, remote, false)
 }
 func (s *Service) fetchTags(ctx context.Context, repository, remote string) error {
-	return s.fetchTagRemote(ctx, repository, remote, "--tags", "--no-prune", "--no-prune-tags")
+	return s.fetchTagRemote(ctx, repository, remote, true)
 }
 func (s *Service) addDetachedWorktree(ctx context.Context, repository, target, ref string) error {
 	_, err := s.run(ctx, repository, 5*time.Minute, true, false, "-c", "core.symlinks=false", "worktree", "add", "--detach", target, ref)

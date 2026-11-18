@@ -1,8 +1,9 @@
-//go:build !windows
+//go:build !windows && (!darwin || ios)
 
 package storage
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,7 +25,7 @@ func TestConfigBackupDeleteUnsupportedPlatformKeepsFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := removeListedConfigBackup(root, filepath.Base(path), info); err == nil || !strings.Contains(err.Error(), "当前平台") {
+	if err := removeListedConfigBackup(context.Background(), root, filepath.Base(path), info); err == nil || !strings.Contains(err.Error(), "当前平台") {
 		t.Fatal("unsupported platform did not refuse delete", err)
 	}
 	if data, err := os.ReadFile(path); err != nil || string(data) != "fixture" {

@@ -88,7 +88,7 @@ func (s *Service) developmentToolsSnapshot(ctx context.Context, detectMissing bo
 			Type:       toolType,
 			Path:       path,
 			Configured: path != "",
-			Exists:     path != "" && pathExists(path),
+			Exists:     path != "" && configuredDevelopmentToolExists(path, runtime.GOOS),
 		})
 	}
 	result := map[string]any{
@@ -109,7 +109,7 @@ func (s *Service) existingDevelopmentToolPaths(payload map[string]any) (any, err
 	existing := []domain.DevelopmentToolType{}
 	for _, toolType := range developmentToolTypes {
 		path := strings.TrimSpace(paths[string(toolType)])
-		if path != "" && pathExists(path) {
+		if path != "" && configuredDevelopmentToolExists(path, runtime.GOOS) {
 			existing = append(existing, toolType)
 		}
 	}
@@ -131,39 +131,66 @@ func resolveTerminalCommand(_ *string) terminalCommandResolution {
 	}
 }
 
+// ResolveDevelopmentToolPath resolves a single tool for this launch without saving a detected path.
+func ResolveDevelopmentToolPath(ctx context.Context, toolType domain.DevelopmentToolType, configuredPath string) (string, error) {
+	return resolveDevelopmentToolPath(ctx, runtime.GOOS, toolType, configuredPath, detectDevelopmentTool)
+}
+
+func resolveDevelopmentToolPath(ctx context.Context, goos string, toolType domain.DevelopmentToolType, configuredPath string, detect func(context.Context, domain.DevelopmentToolType) string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	configuredPath = strings.TrimSpace(configuredPath)
+	if configuredDevelopmentToolExists(configuredPath, goos) {
+		return configuredPath, nil
+	}
+	if goos != "darwin" {
+		return "", nil
+	}
+	path := detect(ctx, toolType)
+	return path, ctx.Err()
+}
+
+func configuredDevelopmentToolExists(path, goos string) bool {
+	if goos == "darwin" {
+		return applicationExists(path, goos)
+	}
+	return pathExists(path)
+}
+
 func detectDevelopmentTools(ctx context.Context, types []domain.DevelopmentToolType) map[domain.DevelopmentToolType]string {
 	result := map[domain.DevelopmentToolType]string{}
 	if runtime.GOOS != "windows" && runtime.GOOS != "darwin" {
 		return result
 	}
 	for _, toolType := range types {
-		for _, candidate := range standardToolCandidates(toolType) {
-			if applicationExists(candidate) {
-				result[toolType] = candidate
-				break
-			}
-		}
-		if result[toolType] == "" {
-			for _, candidate := range toolboxToolCandidates(toolType) {
-				if applicationExists(candidate) {
-					result[toolType] = candidate
-					break
-				}
-			}
-		}
-		if result[toolType] == "" {
-			if candidate := probeDevelopmentToolOnPath(ctx, toolType); candidate != "" && applicationExists(candidate) {
-				result[toolType] = candidate
-			}
+		if path := detectDevelopmentTool(ctx, toolType); path != "" {
+			result[toolType] = path
 		}
 	}
 	return result
 }
 
+func detectDevelopmentTool(ctx context.Context, toolType domain.DevelopmentToolType) string {
+	for _, candidate := range standardToolCandidates(toolType) {
+		if applicationExists(candidate, runtime.GOOS) {
+			return candidate
+		}
+	}
+	for _, candidate := range toolboxToolCandidates(toolType) {
+		if applicationExists(candidate, runtime.GOOS) {
+			return candidate
+		}
+	}
+	return probeDevelopmentToolOnPath(ctx, toolType)
+}
+
 func standardToolCandidates(toolType domain.DevelopmentToolType) []string {
 	if runtime.GOOS == "darwin" {
-		home, _ := os.UserHomeDir()
-		roots := []string{"/Applications", filepath.Join(home, "Applications")}
+		roots := []string{"/Applications"}
+		if home, err := os.UserHomeDir(); err == nil && filepath.IsAbs(home) {
+			roots = append(roots, filepath.Join(home, "Applications"))
+		}
 		result := []string{}
 		for _, root := range roots {
 			for _, name := range macToolApplicationNames(toolType) {
@@ -232,7 +259,10 @@ func toolboxToolCandidates(toolType domain.DevelopmentToolType) []string {
 		}
 		root = filepath.Join(local, "JetBrains", "Toolbox", "apps")
 	} else {
-		home, _ := os.UserHomeDir()
+		home, err := os.UserHomeDir()
+		if err != nil || !filepath.IsAbs(home) {
+			return nil
+		}
 		root = filepath.Join(home, "Library", "Application Support", "JetBrains", "Toolbox", "apps")
 	}
 	candidates := []string{}
@@ -271,20 +301,27 @@ func probeDevelopmentToolOnPath(ctx context.Context, toolType domain.Development
 		if err != nil {
 			return ""
 		}
-		if filepath.IsAbs(path) && applicationExists(path) {
+		if filepath.IsAbs(path) && applicationExists(path, runtime.GOOS) {
 			return filepath.Clean(path)
 		}
 	}
 	return ""
 }
 
-func applicationExists(path string) bool {
+func applicationExists(path, goos string) bool {
 	info, err := os.Stat(path)
 	if err != nil {
 		return false
 	}
-	if runtime.GOOS == "darwin" && strings.HasSuffix(strings.ToLower(path), ".app") {
-		return info.IsDir()
+	if goos == "darwin" {
+		if strings.HasSuffix(strings.ToLower(filepath.Clean(path)), ".app") {
+			if !info.IsDir() {
+				return false
+			}
+			plist, err := os.Stat(filepath.Join(path, "Contents", "Info.plist"))
+			return err == nil && plist.Mode().IsRegular()
+		}
+		return info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0
 	}
 	return info.Mode().IsRegular()
 }

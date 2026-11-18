@@ -552,6 +552,9 @@ func (s *app) productionRequestViewFromHistory(v *productionView, action applica
 			}
 			if err != nil {
 				v.Error = err.Error()
+				if action.Kind == "production.open-ide" {
+					s.recordDevelopmentToolUnavailable(err)
+				}
 				if action.Kind == "production.publish" {
 					v.PreparationInvalid = true
 				}

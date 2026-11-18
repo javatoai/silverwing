@@ -126,7 +126,7 @@ func (a *App) validateDesktopTaskContext(action Action, config domain.AppConfig,
 			action.Path == "" || !sameTaskContextPath(action.Path, taskPath) {
 			return errDesktopTaskContextChanged
 		}
-	case "task.delete", "task.delete-risks":
+	case "task.delete", "task.delete-risks", "task.restore-recycled-workspaces":
 		if action.ServiceID != "" || action.ModuleID != "" || action.Path == "" || !sameTaskContextPath(action.Path, taskPath) {
 			return errDesktopTaskContextChanged
 		}

@@ -8,6 +8,7 @@ import (
 
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/systemtrash"
 	"silverwing-go/internal/workspace"
 
 	"github.com/egoist/mygo/ui"
@@ -22,6 +23,7 @@ type taskDeleteDialogState struct {
 	Risks                                       []domain.DeleteRisk
 	RiskScope                                   *taskDeleteRiskScope
 	Force                                       workspace.TaskForceDeletePreview
+	DeleteGuard                                 string
 	Open, Loading, ExternalWindowsClosed        bool
 	DiscardChanges, Submitting, ForceReview     bool
 	ForceConfirmed                              bool
@@ -56,6 +58,7 @@ func (s *app) requestTaskDeleteRisks() {
 	state.Risks = nil
 	state.RiskScope = nil
 	state.Force = workspace.TaskForceDeletePreview{}
+	state.DeleteGuard = ""
 	state.Materials = workspace.TaskMaterialsDeletePreview{}
 	state.DeleteMaterials = false
 	state.DiscardChanges = false
@@ -192,6 +195,7 @@ func (s *app) applyTaskDeleteRiskResult(action application.Action, result applic
 	}
 	state.Materials = preview.Materials
 	state.Force = preview.Force
+	state.DeleteGuard = preview.Guard
 	state.ForceReview = false
 	state.ForceConfirmed = false
 	if !state.Materials.CanDelete {
@@ -273,6 +277,7 @@ func (s *app) taskDeleteConfirmationAction() (application.Action, bool) {
 			"forceDiscard": forceDiscard, "taskDeleteRequestID": fmt.Sprint(state.RequestID),
 			"deleteMaterials": state.DeleteMaterials, "materialsGuard": state.Materials.Guard,
 			"forceGuard":          forceGuard(state, forceConfirmed),
+			"deleteGuard":         state.DeleteGuard,
 			"taskDeleteCreatedAt": state.TaskCreatedAt,
 		},
 	}, true
@@ -302,7 +307,13 @@ func (s *app) confirmTaskDelete() {
 	state.Loading = true
 	state.Submitting = true
 	state.Error = ""
-	s.dispatchTaskContextAction(action, &scope)
+	s.dispatchTaskContextActionWithCompletion(action, &scope, func(_ application.ActionResult, err, _ error) {
+		if err != nil && s.taskUnit.state.taskDeleteDialog == state && state.Submitting {
+			state.Loading = false
+			state.Submitting = false
+			state.Error = err.Error()
+		}
+	})
 }
 
 func (s *app) renderTaskDeleteDialog(c *ui.Context, p palette) {
@@ -324,7 +335,7 @@ func (s *app) renderTaskDeleteDialog(c *ui.Context, p palette) {
 				icon(c, "delete", 18, p.danger)
 				label(c, "删除任务", 17, p.text).FontWeight(600).Grow(1)
 			})
-			label(c, fmt.Sprintf("“%s”的任务目录和工作区文件将移入系统回收站；独立资料按下方选项处理，本地和远程分支保留。", state.FolderName), 12, p.text).Wrap()
+			label(c, fmt.Sprintf("“%s”的任务目录和工作区文件将移入系统%s。独立资料按下方选项处理，本地和远程分支保留。", state.FolderName, systemtrash.Label()), 12, p.text).Wrap()
 			ui.Box(c).FillWidth().Padding(10, 12).Radius(9).Background(p.amberBg).Border(1, p.line).Children(func() {
 				label(c, "删除前请确认已关闭：Codex 中关联的项目或任务、IDE 中打开的此任务或工作区窗口，以及文件管理器中打开的任务目录。它们可能占用文件，导致删除失败。silverwing 不会自动关闭这些外部窗口。", 11, p.danger).Wrap()
 			})
@@ -347,7 +358,7 @@ func (s *app) renderTaskDeleteDialog(c *ui.Context, p palette) {
 					}
 				} else {
 					ui.Scroll(c.Key("task-delete-force-review")).FillWidth().MinHeight(0).MaxHeight(maxFloat32(120, minFloat32(340, height-280))).Padding(10, 12).Gap(7).Radius(9).Background(p.amberBg).Border(1, p.line).Children(func() {
-						label(c, "确认后将移入回收站：任务目录及以下列出的工作区。系统会在可验证时清理对应的 Git 工作区登记，本地与远程分支保留。", 11, p.danger).Wrap()
+						label(c, "确认后会将任务目录及以下工作区移入"+systemtrash.Label()+"。工作区登记会在回收后清理，本地与远程分支保留。", 11, p.danger).Wrap()
 						label(c, "任务目录："+firstNonEmpty(state.Force.TaskPath, state.TaskPath), 11, p.text).Wrap().Selectable()
 						label(c, "工作区路径", 11, p.text).FontWeight(600)
 						for _, path := range state.Force.Workspaces {
@@ -361,7 +372,7 @@ func (s *app) renderTaskDeleteDialog(c *ui.Context, p palette) {
 								}
 							})
 						}
-						ui.Checkbox(c.Key("task-delete-force-confirmed"), &state.ForceConfirmed, "我已核对路径和工作区风险，确认其中的文件及本地改动可以一起移入回收站").FillWidth().Disabled(state.Loading || state.Submitting)
+						ui.Checkbox(c.Key("task-delete-force-confirmed"), &state.ForceConfirmed, "我已核对路径和风险，确认将工作区及本地改动移入"+systemtrash.Label()).FillWidth().Disabled(state.Loading || state.Submitting)
 					})
 				}
 			}
@@ -370,7 +381,7 @@ func (s *app) renderTaskDeleteDialog(c *ui.Context, p palette) {
 				ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
 					ui.Spinner(c).Size(15, 15).TextColor(p.blue).Label("检查中")
 					if state.Submitting {
-						label(c, "正在移入回收站…", 12, p.muted)
+						label(c, "正在移入"+systemtrash.Label()+"…", 12, p.muted)
 					} else {
 						label(c, "正在检查 Git 状态…", 12, p.muted)
 					}
@@ -392,7 +403,7 @@ func (s *app) renderTaskDeleteDialog(c *ui.Context, p palette) {
 				})
 			}
 			if s.taskDeleteNeedsDiscardAck() && !state.ForceReview {
-				ui.Checkbox(c.Key("task-delete-discard-risk"), &state.DiscardChanges, "确认将包含未提交改动的工作区移入回收站").FillWidth()
+				ui.Checkbox(c.Key("task-delete-discard-risk"), &state.DiscardChanges, "确认将包含未提交改动的工作区移入"+systemtrash.Label()).FillWidth()
 			}
 			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
 				if state.ForceReview && action(c, "task-delete-force-cancel", "close", "返回普通删除", p, false) && !state.Loading && !state.Submitting {
@@ -403,7 +414,7 @@ func (s *app) renderTaskDeleteDialog(c *ui.Context, p palette) {
 					s.closeTaskDeleteDialog()
 				}
 				_, canDelete := s.taskDeleteConfirmationAction()
-				confirmLabel := "移入回收站"
+				confirmLabel := "移入" + systemtrash.Label()
 				if state.ForceReview {
 					confirmLabel = "确认强制删除"
 				}

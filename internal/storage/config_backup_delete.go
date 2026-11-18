@@ -190,7 +190,7 @@ func (s *ConfigStore) DeleteBackupsContext(ctx context.Context, ids []string) (B
 		case !os.SameFile(listed.directory, directory) || filepath.Dir(listed.backup.Path) != filepath.Clean(s.paths.Backups):
 			failure.Reason = "备份目录已变化，请重新读取"
 		default:
-			failure.Reason = configBackupDeleteReason(removeListedConfigBackup(root, failure.Name, listed.info))
+			failure.Reason = configBackupDeleteReason(removeListedConfigBackup(ctx, root, failure.Name, listed.info))
 		}
 		if failure.Reason != "" {
 			result.Failures = append(result.Failures, failure)
@@ -209,9 +209,12 @@ func (s *ConfigStore) DeleteBackupsContext(ctx context.Context, ids []string) (B
 }
 
 func configBackupDeleteReason(err error) string {
+	var trashError *configBackupTrashError
 	switch {
 	case err == nil:
 		return ""
+	case errors.As(err, &trashError):
+		return trashError.Error()
 	case errors.Is(err, errConfigBackupDeleteUnsupported):
 		return err.Error()
 	case errors.Is(err, os.ErrNotExist):

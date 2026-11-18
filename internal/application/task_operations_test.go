@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/systemtrash"
 	"silverwing-go/internal/workspace"
 )
 
@@ -42,7 +43,7 @@ func TestTypedTaskOperationsAndActionAdapterSharePersistedLifecycle(t *testing.T
 		t.Fatalf("legacy restore did not consume typed use case: %+v %v", restored, err)
 	}
 	deleted, err := lifecycle.DeleteTask(context.Background(), TaskDeleteRequest{Target: NewTaskTarget("typed", "")})
-	if err != nil || deleted.Message != "任务已移入回收站" {
+	if err != nil || deleted.Message != "任务已移入"+systemtrash.Label() {
 		t.Fatalf("typed delete: %+v %v", deleted, err)
 	}
 	if _, _, err = app.task(Action{TaskID: "typed"}); err == nil {

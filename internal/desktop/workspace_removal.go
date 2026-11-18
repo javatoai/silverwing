@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"silverwing-go/internal/application"
+	"silverwing-go/internal/systemtrash"
 	"silverwing-go/internal/workspace"
 
 	"github.com/egoist/mygo/ui"
@@ -114,13 +115,14 @@ func (s *app) applyWorkspaceRemovalResult(action application.Action, result appl
 		s.workspaceUnit.state.workspaceRemoval = nil
 		s.lastMessage = strings.TrimSpace(result.Message)
 		if s.lastMessage == "" {
-			s.lastMessage = "模块已删除"
+			if removed.DirectoryRecycled {
+				s.lastMessage = "模块已移入系统" + systemtrash.Label()
+			} else {
+				s.lastMessage = "已移除模块记录"
+			}
 		}
 		if cleanupError := strings.TrimSpace(removed.CleanupError); cleanupError != "" {
 			s.lastError = cleanupError
-			if backupPath := strings.TrimSpace(removed.RetainedBackupPath); backupPath != "" {
-				s.lastError += "\n保留备份：" + backupPath
-			}
 		}
 	}
 }
@@ -284,7 +286,7 @@ func (s *app) renderWorkspaceRemovalDialog(c *ui.Context, p palette) {
 		panel.Children(func() {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				icon(c, "delete", 18, p.amber)
-				title := "删除模块"
+				title := "回收模块"
 				if state.Preview != nil && state.Preview.ModuleName != "" {
 					title += " · " + state.Preview.ModuleName
 				}
@@ -292,9 +294,12 @@ func (s *app) renderWorkspaceRemovalDialog(c *ui.Context, p palette) {
 			})
 			ui.Scroll(c).TrackScroll(&state.Scroll).Grow(1).MinHeight(0).FillWidth().Gap(12).Children(func() {
 				if state.Loading {
-					loading := "正在检查工作区、未提交内容和未推送提交…"
+					loading := "正在离线检查工作区和本地 Git 引用…"
 					if state.Removing {
-						loading = "正在移除模块并清理临时备份…"
+						loading = "正在将模块目录移入系统" + systemtrash.Label() + "…"
+						if state.Preview != nil && state.Preview.PathMissing {
+							loading = "正在移除已缺失的模块记录…"
+						}
 					}
 					label(c, loading, 12, p.muted).Wrap()
 				}
@@ -304,7 +309,7 @@ func (s *app) renderWorkspaceRemovalDialog(c *ui.Context, p palette) {
 					})
 				}
 				if preview := state.Preview; preview != nil {
-					message := "工作区将先移动到同级临时备份；任务清单更新成功后才清理备份。"
+					message := "工作区及目录内的文件将移入系统" + systemtrash.Label() + "。"
 					if preview.PathMissing {
 						message = "工作区目录已缺失，将只清理任务记录。"
 					}
@@ -315,13 +320,24 @@ func (s *app) renderWorkspaceRemovalDialog(c *ui.Context, p palette) {
 					ui.Column(c).FillWidth().Padding(10).Gap(4).Background(p.soft).Radius(8).Children(func() {
 						label(c, "路径："+preview.WorkspacePath, 11, p.muted).Wrap().Selectable()
 						label(c, "分支："+preview.Branch, 11, p.muted).Wrap()
-						base := "主分支：未配置"
-						if preview.BaseRef != nil && strings.TrimSpace(*preview.BaseRef) != "" {
-							base = "主分支：" + *preview.BaseRef
+						if !preview.PathMissing {
+							label(c, "提交状态依据本地缓存引用。", 11, p.muted).Wrap()
+							base := "主分支：未配置"
+							if preview.BaseRef != nil && strings.TrimSpace(*preview.BaseRef) != "" {
+								base = "主分支：" + *preview.BaseRef
+							}
+							label(c, base, 11, p.muted).Wrap()
+							baseComparison := "相对主分支：未知（缺少可比较的缓存引用）"
+							if preview.BaseComparisonKnown {
+								baseComparison = "相对主分支：领先 " + fmtInt(preview.CommitsAheadOfBase) + " / 落后 " + fmtInt(preview.CommitsBehindBase)
+							}
+							label(c, baseComparison, 11, p.muted).Wrap()
+							upstreamComparison := "未推送提交：未知（缺少可比较的上游缓存引用）"
+							if preview.UpstreamComparisonKnown {
+								upstreamComparison = "未推送提交：" + fmtInt(preview.UnpushedCommits)
+							}
+							label(c, upstreamComparison, 11, p.muted).Wrap()
 						}
-						label(c, base, 11, p.muted).Wrap()
-						label(c, "相对主分支：ahead "+fmtInt(preview.CommitsAheadOfBase)+" / behind "+fmtInt(preview.CommitsBehindBase), 11, p.muted).Wrap()
-						label(c, "未推送提交："+fmtInt(preview.UnpushedCommits), 11, p.muted).Wrap()
 						if len(preview.ChangedFiles) > 0 {
 							label(c, "未提交文件：", 11, p.muted).Wrap()
 							for _, file := range preview.ChangedFiles {
@@ -332,7 +348,7 @@ func (s *app) renderWorkspaceRemovalDialog(c *ui.Context, p palette) {
 					if preview.RequiresRiskConfirmation {
 						ui.Row(c).FillWidth().Padding(7, 8).Gap(8).AlignItems(ui.Center).Background(p.amberBg).Radius(8).Children(func() {
 							ui.Checkbox(c.Key("workspace-removal-risk"), &state.Acknowledge, "").Shrink(0)
-							label(c, "我确认未提交文件会永久丢失，并接受提交差异及未推送提交不再保留在该工作区中的风险。", 11, p.amber).Wrap().Grow(1)
+							label(c, "我已查看工作区风险，确认将模块目录移入系统"+systemtrash.Label()+"。", 11, p.amber).Wrap().Grow(1)
 						})
 					}
 				}
@@ -343,10 +359,14 @@ func (s *app) renderWorkspaceRemovalDialog(c *ui.Context, p palette) {
 				}
 				canRemove := state.Preview != nil && !state.Loading && !state.Removing && !s.busy &&
 					(!state.Preview.RequiresRiskConfirmation || state.Acknowledge)
-				button := ui.ButtonBase(c.Key("workspace-removal-confirm")).Row().Gap(7).Height(34).Padding(0, 16).Radius(20).Label("删除模块").Tooltip("删除模块").Disabled(!canRemove)
+				confirmLabel := "移入" + systemtrash.Label()
+				if state.Preview != nil && state.Preview.PathMissing {
+					confirmLabel = "移除模块记录"
+				}
+				button := ui.ButtonBase(c.Key("workspace-removal-confirm")).Row().Gap(7).Height(34).Padding(0, 16).Radius(20).Label(confirmLabel).Tooltip(confirmLabel).Disabled(!canRemove)
 				button.Background(p.amber).Children(func() {
 					icon(c, "delete", 17, p.surface)
-					label(c, "删除模块", 13, p.surface).NoWrap()
+					label(c, confirmLabel, 13, p.surface).NoWrap()
 				})
 				if button.Clicked() && canRemove {
 					s.confirmWorkspaceRemoval()

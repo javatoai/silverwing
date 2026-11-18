@@ -314,7 +314,7 @@ func (s *app) dispatchTaskContextActionWithCompletion(action application.Action,
 				if s.applyTagHistoryRefreshFailure(action, err) {
 					return
 				}
-				if (action.Kind == "codex.run" || action.Kind == "task.tools-launch" || action.Kind == "task.delete") && refreshErr == nil && refreshed.ConfigJSON != "" {
+				if (action.Kind == "codex.run" || action.Kind == "task.tools-launch" || action.Kind == "task.delete" || action.Kind == "task.restore-recycled-workspaces") && refreshErr == nil && refreshed.ConfigJSON != "" {
 					// A failed launcher persists its FAILED tool state; task deletion
 					// may finish removal while reporting retained backup cleanup errors.
 					s.applySnapshot(refreshed)

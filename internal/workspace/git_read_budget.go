@@ -14,7 +14,11 @@ func (g *GitClient) runReadBudget(ctx context.Context, root string, timeout time
 	if g == nil {
 		g = NewGitClient(nil, "")
 	}
-	args := append([]string{"--no-optional-locks", "-c", "core.longpaths=true", "-C", root}, arguments...)
+	args := []string{"--no-optional-locks", "-c", "core.longpaths=true"}
+	if root != "" {
+		args = append(args, "-C", root)
+	}
+	args = append(args, arguments...)
 	spec := g.processSpec(args, root, timeout)
 	spec.MaxStdoutBytes, spec.MaxStderrBytes, spec.KillOnOutputLimit = stdoutBytes, 64*1024, true
 	run := g.runProcess

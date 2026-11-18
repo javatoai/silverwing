@@ -5,11 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/storage"
+	"silverwing-go/internal/systemtrash"
 )
+
+const settingsBackupTrashRestoreHint = "如需恢复，请把 ZIP 从废纸篓拖回备份目录，重新读取后点击对应备份的「恢复」。"
 
 type settingsBackupDeletePlan struct {
 	scope settingsExtensionReadScope
@@ -49,8 +53,14 @@ func (s *app) beginSettingsBackupDelete() {
 	if !valid {
 		return
 	}
-	s.showConfirmationDialog("删除配置备份", fmt.Sprintf("将永久删除所选的 %d 个备份文件，此操作不可撤销。", len(plan.ids)),
-		strings.Join(plan.names, "\n"), []confirmationDialogButton{{label: "删除所选"}, {label: "取消"}}, 1, 1,
+	title := "删除配置备份"
+	message := fmt.Sprintf("将永久删除所选的 %d 个备份文件，此操作不可撤销。", len(plan.ids))
+	if runtime.GOOS == "darwin" {
+		title = "将配置备份移入" + systemtrash.Label()
+		message = fmt.Sprintf("将所选的 %d 个备份文件移入%s。%s", len(plan.ids), systemtrash.Label(), settingsBackupTrashRestoreHint)
+	}
+	s.showConfirmationDialog(title, message,
+		strings.Join(plan.names, "\n"), []confirmationDialogButton{{label: settingsBackupDeleteButtonLabel(false)}, {label: "取消"}}, 1, 1,
 		func(index int) { s.finishSettingsBackupDeleteConfirmation(plan, index) })
 }
 
@@ -151,9 +161,29 @@ func (s *app) applySettingsBackupDelete(result application.ActionResult, actionE
 	if actionErr != nil {
 		state.backupDeleteError = actionErr.Error()
 	} else if len(deleted.Failures) > 0 {
-		state.backupDeleteError = fmt.Sprintf("已删除 %d 个，%d 个未删除；可重试或重新读取。", len(deleted.DeletedIDs), len(deleted.Failures))
+		if runtime.GOOS == "darwin" {
+			state.backupDeleteError = fmt.Sprintf("已将 %d 个配置备份移入%s，%d 个未完成。", len(deleted.DeletedIDs), systemtrash.Label(), len(deleted.Failures))
+		} else {
+			state.backupDeleteError = fmt.Sprintf("已删除 %d 个，%d 个未删除；可重试或重新读取。", len(deleted.DeletedIDs), len(deleted.Failures))
+		}
 	} else {
 		s.settingsUnit.state.settingsOutput = fmt.Sprintf("已删除 %d 个配置备份。", len(deleted.DeletedIDs))
+		if runtime.GOOS == "darwin" {
+			s.settingsUnit.state.settingsOutput = fmt.Sprintf("已将 %d 个配置备份移入%s。", len(deleted.DeletedIDs), systemtrash.Label())
+		}
 		state.backupFocusReload = len(s.settingsUnit.state.settingsBackups) == 0
 	}
+}
+
+func settingsBackupDeleteButtonLabel(loading bool) string {
+	if runtime.GOOS == "darwin" {
+		if loading {
+			return "正在移入" + systemtrash.Label() + "…"
+		}
+		return "移入" + systemtrash.Label()
+	}
+	if loading {
+		return "正在删除…"
+	}
+	return "删除所选"
 }

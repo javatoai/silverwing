@@ -132,31 +132,9 @@ func (a *App) workspaceWorkflow(ctx context.Context, action Action, config domai
 			}
 			data, e := service.RepairWorkspace(ctx, config, taskPath, preview, confirmation)
 			return result(data, data.Message, e)
-		case "workspace.remove-preview":
-			data, e := service.InspectModuleRemoval(config, taskPath, item.WorktreePath)
-			return result(data, "移除预览已读取", e)
-		case "workspace.remove":
-			if action.Payload["preview"] == nil {
-				data, e := service.InspectModuleRemoval(config, taskPath, item.WorktreePath)
-				return result(map[string]any{"preview": data, "requiresConfirmation": true}, "请确认移除预览", e)
-			}
-			var preview workspace.WorkspaceModuleRemovalPreview
-			var confirmation workspace.WorkspaceModuleRemovalConfirmation
-			if e := decodeField(action, "preview", &preview); e != nil {
-				return result(nil, "", e)
-			}
-			if e := decodeField(action, "confirmation", &confirmation); e != nil {
-				return result(nil, "", e)
-			}
-			if preview.WorkspacePath != item.WorktreePath {
-				return result(nil, "", errors.New("移除预览与选择的工作区不一致"))
-			}
-			data, e := service.RemoveModule(ctx, config, taskPath, preview, confirmation)
-			message := "工作区已移除"
-			if data.CleanupError != "" {
-				message = "清单已更新，目录清理未完成；请查看保留备份和原因"
-			}
-			return result(data, message, e)
+		case "workspace.remove-preview", "workspace.remove":
+			data, e := a.workspaceRemovalAction(ctx, action, config, service, manifest, taskPath, item)
+			return data, true, e
 		case "workspace.merge":
 			data, e := workspace.NewWorkspaceMainBranchMergeService(service.Git, service.Manifests, service.Locks, service.Lifecycle).Merge(ctx, config, taskPath, manifest, item)
 			if e != nil {

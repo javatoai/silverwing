@@ -3,6 +3,7 @@
 package storage
 
 import (
+	"context"
 	"errors"
 	"os"
 	"syscall"
@@ -23,7 +24,7 @@ var configBackupDisposition = syscall.NewLazyDLL("kernel32.dll").NewProc("SetFil
 
 // Open relative to the pinned directory, without following reparse points, and
 // delete the verified handle. Renaming/replacing a leaf cannot change the target.
-func removeListedConfigBackup(root *os.Root, name string, expected os.FileInfo) error {
+func removeListedConfigBackup(_ context.Context, root *os.Root, name string, expected os.FileInfo) error {
 	parent, err := root.Open(".")
 	if err != nil {
 		return err

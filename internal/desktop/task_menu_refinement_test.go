@@ -72,7 +72,7 @@ func taskMenuFixture(t *testing.T) (*app, *taskMenuBackend) {
 }
 
 func TestTaskMenuMigratesActionsAndKeepsTarget(t *testing.T) {
-	for _, action := range []string{"复制任务目录", "打开任务目录", "复制任务资料路径", "在 Codex 中打开", "打开任务资料目录", "批量合并主分支", "关联任务资料", "重试关联任务资料", "配置任务资料"} {
+	for _, action := range []string{"复制任务目录", "打开任务目录", "复制任务资料路径", "在 Codex 中打开", "打开任务资料目录", "批量合并主分支", "关联任务资料", "重试关联任务资料", "配置任务资料", "恢复已回收工作区"} {
 		t.Run(action, func(t *testing.T) {
 			s, backend := taskMenuFixture(t)
 			if strings.Contains(action, "关联任务资料") || action == "配置任务资料" {
@@ -131,6 +131,8 @@ func TestTaskMenuMigratesActionsAndKeepsTarget(t *testing.T) {
 						wantKind, wantPath = "system.open", target.materialsPath
 					} else if action == "打开任务目录" {
 						wantKind, wantPath = "system.open", target.path
+					} else if action == "恢复已回收工作区" {
+						wantKind = "task.restore-recycled-workspaces"
 					} else if strings.Contains(action, "关联任务资料") {
 						wantKind, wantPath = "task.materials-retry", ""
 					}
@@ -177,7 +179,7 @@ func TestTaskMenuOrderAndMaterialsVariants(t *testing.T) {
 			}
 			want = append(want, "批量合并主分支", "-", "打开任务目录", "复制任务目录", "-")
 			want = append(want, materials...)
-			want = append(want, "-", "置顶任务", "-", lifecycle, "-", "删除任务")
+			want = append(want, "-", "置顶任务", "-", lifecycle, "恢复已回收工作区", "-", "删除任务")
 			if got := tester.Menu(); !slices.Equal(got, want) {
 				t.Fatalf("menu=%q want=%q", got, want)
 			}

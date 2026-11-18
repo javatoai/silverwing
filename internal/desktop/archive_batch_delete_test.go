@@ -3,12 +3,15 @@ package desktop
 import (
 	"context"
 	"errors"
+	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
 
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/systemtrash"
 	"silverwing-go/internal/workspace"
 )
 
@@ -147,7 +150,7 @@ func TestArchiveBatchDeleteCompletionContinuesAfterFailureAndStopsOnUnknownRefre
 	state := &archiveBatchDeleteState{Open: true, Running: true, Started: true,
 		Scope: archiveBatchDeleteScope{home: s.snapshot.Home, page: s.page, taskRoot: s.configString("taskRoot"), configJSON: s.settingsUnit.state.configJSON},
 		Items: []archiveBatchDeleteItem{
-			{Task: first, Status: "正在移入回收站"},
+			{Task: first, Status: "正在移入" + systemtrash.Label()},
 			{Task: second, Status: "等待回收"},
 		},
 	}
@@ -159,8 +162,8 @@ func TestArchiveBatchDeleteCompletionContinuesAfterFailureAndStopsOnUnknownRefre
 	}
 
 	state.CurrentKey = archiveBatchTaskKey(second)
-	state.Items[1].Status = "正在移入回收站"
-	s.completeArchiveBatchDeleteItem(state, archiveBatchTaskKey(second), application.ActionResult{Message: "任务已移入回收站"}, nil, errors.New("snapshot unavailable"))
+	state.Items[1].Status = "正在移入" + systemtrash.Label()
+	s.completeArchiveBatchDeleteItem(state, archiveBatchTaskKey(second), application.ActionResult{Message: "任务已移入" + systemtrash.Label()}, nil, errors.New("snapshot unavailable"))
 	if !state.StopRequested || state.Error == "" || state.Items[1].Status != "结果待核实：刷新归档失败" {
 		t.Fatalf("an unknown refreshed state must stop later tasks and remain explicit: %+v", state)
 	}
@@ -179,7 +182,7 @@ func TestArchiveBatchDeleteStopAfterCurrentKeepsReceiptAndSkipsRemaining(t *test
 		Open: true, Running: true, Started: true, ExternalWindowsClosed: true,
 		Scope: archiveBatchDeleteScope{home: s.snapshot.Home, page: s.page, taskRoot: s.configString("taskRoot"), configJSON: s.settingsUnit.state.configJSON},
 		Items: []archiveBatchDeleteItem{
-			{Task: first, Status: "正在移入回收站", Previewed: true},
+			{Task: first, Status: "正在移入" + systemtrash.Label(), Previewed: true},
 			{Task: second, Status: "等待回收", Previewed: true},
 		},
 		Queue: []string{firstKey, secondKey}, QueuePosition: 1, CurrentKey: firstKey,
@@ -214,10 +217,15 @@ func TestDecodeArchiveBatchDeletePreviewRejectsMissingData(t *testing.T) {
 }
 
 func TestArchiveBatchSamePathNormalizesSeparatorsAndWindowsCase(t *testing.T) {
-	if !archiveBatchSamePath(`D:\tasks\sample\`, `d:\TASKS\sample`) {
+	if runtime.GOOS == "windows" && !archiveBatchSamePath(`D:\tasks\sample\`, `d:\TASKS\sample`) {
 		t.Fatal("equivalent Windows task paths should pass the force-preview identity check")
 	}
-	if archiveBatchSamePath(`D:\tasks\sample`, `D:\tasks\replacement`) {
+	root := t.TempDir()
+	sample := filepath.Join(root, "sample")
+	if !archiveBatchSamePath(sample+string(filepath.Separator), sample) {
+		t.Fatal("a trailing separator should not affect task path matching")
+	}
+	if archiveBatchSamePath(sample, filepath.Join(root, "replacement")) {
 		t.Fatal("different task directories must not share a force-preview identity")
 	}
 }

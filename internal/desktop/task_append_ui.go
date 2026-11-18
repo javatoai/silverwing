@@ -31,6 +31,7 @@ type taskAppendUIState struct {
 	moduleDraftID                                     string
 	nextModuleID                                      uint64
 	conflicts                                         []workspace.BranchReuseConflict
+	remoteCheck                                       *taskAppendRemoteCheckState
 }
 
 func (s *app) taskAppendGroup(t task) (domain.GroupConfig, error) {
@@ -82,6 +83,7 @@ func (s *app) openTaskAppendServices(t task) {
 		return
 	}
 	state.activeServiceID = state.serviceOrder[0]
+	s.workspaceUnit.state.workspaceAppend.clearRemoteCheck()
 	cancelTaskAppendRepositoryChoices(s.workspaceUnit.state.workspaceAppend)
 	s.workspaceUnit.state.workspaceAppend = state
 	s.dialogOpen = false
@@ -124,6 +126,7 @@ func (s *app) openTaskAppendModules(t task, serviceID string) {
 	} else {
 		s.replaceTaskAppendModuleWithTemporary(state, domain.WorkspaceStandardWorktree)
 	}
+	s.workspaceUnit.state.workspaceAppend.clearRemoteCheck()
 	cancelTaskAppendRepositoryChoices(s.workspaceUnit.state.workspaceAppend)
 	s.workspaceUnit.state.workspaceAppend = state
 	s.dialogOpen = false
@@ -316,6 +319,7 @@ func (s *app) invalidateTaskAppendPreview(_ string) {
 	if state == nil {
 		return
 	}
+	state.clearRemoteCheck()
 	state.previewSignature = ""
 	state.conflicts = nil
 	state.sharedAck = false
@@ -426,6 +430,7 @@ func (s *app) beginTaskAppendPreflight() {
 		state.inlineError = err.Error()
 		return
 	}
+	state.clearRemoteCheck()
 	cancelTaskAppendRepositoryChoices(state)
 	state.pending, state.pendingAction, state.pendingSignature = true, taskAppendPreviewAction(state.mode), signature
 	state.previewSignature, state.conflicts, state.inlineError = "", nil, "正在检查分支复用和工作区冲突…"
@@ -461,6 +466,7 @@ func (s *app) submitTaskAppend(keys []workspace.BranchReuseKey) {
 		s.invalidateTaskAppendPreview("表单内容已变化，请重新预检。")
 		return
 	}
+	state.clearRemoteCheck()
 	cancelTaskAppendRepositoryChoices(state)
 	payload["confirmedBranchReuseKeys"] = append([]workspace.BranchReuseKey(nil), keys...)
 	payload["taskAppendToken"], payload["taskAppendSignature"] = state.token, signature
@@ -586,6 +592,7 @@ func (s *app) retryFailedTaskServices(t task, serviceIDs []string) {
 	state.pendingSignature = hex.EncodeToString(digest[:])
 	state.pendingAction, state.pending = "task.services-retry", true
 	payload["taskAppendSignature"] = state.pendingSignature
+	s.workspaceUnit.state.workspaceAppend.clearRemoteCheck()
 	cancelTaskAppendRepositoryChoices(s.workspaceUnit.state.workspaceAppend)
 	s.workspaceUnit.state.workspaceAppend = state
 	s.act("task.services-retry", t.id, "", "", "", "", payload)
@@ -596,11 +603,15 @@ func (s *app) renderTaskAppendDialog(c *ui.Context, p palette) bool {
 	if state == nil || !state.open {
 		return false
 	}
+	if check := state.remoteCheck; check != nil && (check.home != s.snapshot.Home || check.configJSON != s.snapshot.ConfigJSON) {
+		state.clearRemoteCheck()
+	}
 	t := s.taskUnit.taskByID(state.taskID)
 	if t.id == "" || t.archived || t.updated != state.taskUpdated || t.path != state.taskPath || t.branch != state.taskBranch || s.taskUnit.currentTask().id != state.taskID {
 		state.open = false
 		state.inlineError = "任务状态已变化，请重新打开添加表单。"
 		if !state.pending {
+			state.clearRemoteCheck()
 			cancelTaskAppendRepositoryChoices(state)
 			s.workspaceUnit.state.workspaceAppend = nil
 			return false
@@ -638,6 +649,7 @@ func (s *app) renderTaskAppendDialog(c *ui.Context, p palette) bool {
 					if state.inlineError != "" {
 						label(c, state.inlineError, 11, p.amber).Wrap()
 					}
+					renderTaskAppendRemoteCheck(c, p, state.remoteCheck)
 					if len(state.conflicts) > 0 {
 						s.renderTaskAppendConflicts(c, p, state)
 					}
@@ -655,6 +667,7 @@ func (s *app) renderTaskAppendDialog(c *ui.Context, p palette) bool {
 				if cancel.Clicked() {
 					open = false
 				}
+				s.renderTaskAppendRemoteCheckButton(c, p, state)
 				if state.previewSignature != "" && len(state.conflicts) > 0 {
 					if taskAppendButton(c, "task-append-back", "返回修改", p, false, s.busy || state.pending) {
 						s.invalidateTaskAppendPreview("")
@@ -691,6 +704,7 @@ func (s *app) renderTaskAppendDialog(c *ui.Context, p palette) bool {
 	})
 	state.open = open
 	if !state.open && !state.pending {
+		state.clearRemoteCheck()
 		cancelTaskAppendRepositoryChoices(state)
 		s.workspaceUnit.state.workspaceAppend = nil
 	}

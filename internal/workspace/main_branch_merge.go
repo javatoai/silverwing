@@ -188,7 +188,7 @@ func (s *WorkspaceMainBranchMergeService) Merge(ctx context.Context, config doma
 				return fmt.Errorf("主分支远程不存在：%s", remote.Remote)
 			}
 			refspec := "refs/heads/" + remote.Branch + ":refs/remotes/" + source.LocalRef
-			if _, err := s.Git.RunContext(ctx, validated.Worktree, 5*time.Minute, true, false, "fetch", "--prune", "--no-tags", remote.Remote, refspec); err != nil {
+			if _, err := s.Git.RunContext(ctx, validated.Worktree, 5*time.Minute, true, false, "fetch", "--prune", "--no-tags", "--no-prune-tags", "--", remote.Remote, refspec); err != nil {
 				return err
 			}
 			if _, err := s.Lifecycle.ValidateForMutationContext(ctx, config, taskPath, task, *ws); err != nil {

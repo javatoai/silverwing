@@ -28,6 +28,7 @@ type Spec struct {
 	Env               map[string]string
 	RemoveEnv         []string
 	Stdin             []byte
+	StdinFile         *os.File // Read from the current offset of a caller-owned file.
 	Timeout           time.Duration
 	OnOutput          func(StreamEvent)
 	MaxStdoutBytes    int
@@ -81,7 +82,7 @@ func (r *Runner) Run(ctx context.Context, spec Spec) (Result, error) {
 // while retaining the same timeout, output capture, cancellation, and child
 // cleanup path as Run. Returning from the exchange ends the child process tree;
 // the callback must return when ctx is canceled or output is closed. Static
-// Spec.Stdin and interactive input are exclusive.
+// Spec.Stdin, Spec.StdinFile and interactive input are exclusive.
 func (r *Runner) RunInteractive(
 	ctx context.Context,
 	spec Spec,
@@ -90,7 +91,7 @@ func (r *Runner) RunInteractive(
 	if exchange == nil {
 		return Result{ExitCode: -1}, errors.New("交互命令回调不能为空")
 	}
-	if spec.Stdin != nil {
+	if spec.Stdin != nil || spec.StdinFile != nil {
 		return Result{ExitCode: -1}, errors.New("交互命令不能同时使用固定标准输入")
 	}
 	return r.run(ctx, spec, exchange)
@@ -99,6 +100,9 @@ func (r *Runner) RunInteractive(
 func (r *Runner) run(ctx context.Context, spec Spec, exchange func(context.Context, io.WriteCloser, <-chan StreamEvent) error) (result Result, runErr error) {
 	start := time.Now()
 	result = Result{ExitCode: -1}
+	if spec.Stdin != nil && spec.StdinFile != nil {
+		return result, errors.New("命令标准输入只能来自一个来源")
+	}
 	if strings.TrimSpace(spec.Executable) == "" {
 		return result, errors.New("可执行程序不能为空")
 	}
@@ -133,6 +137,8 @@ func (r *Runner) run(ctx context.Context, spec Spec, exchange func(context.Conte
 			case <-interactionDone:
 			}
 		}
+	} else if spec.StdinFile != nil {
+		cmd.Stdin = spec.StdinFile
 	} else if spec.Stdin != nil {
 		cmd.Stdin = bytes.NewReader(spec.Stdin)
 	}

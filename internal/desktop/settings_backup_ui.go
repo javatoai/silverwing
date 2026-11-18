@@ -60,10 +60,7 @@ func (s *app) renderSettingsBackupList(c *ui.Context, p palette) {
 				}
 			})
 			label(c, fmt.Sprintf("已选 %d 个", selected), 11, p.muted).Grow(1).MinWidth(0).SingleLine()
-			text := "删除所选"
-			if state.backupDeleteLoading {
-				text = "正在删除…"
-			}
+			text := settingsBackupDeleteButtonLabel(state.backupDeleteLoading)
 			button := ui.ButtonBase(c.Key("settings-backup-delete-selected")).Height(34).Padding(0, 9).Radius(7).
 				Row().Gap(5).AlignItems(ui.Center).Shrink(0).Disabled(locked || selected == 0).Label(text)
 			if button.Hovered() {

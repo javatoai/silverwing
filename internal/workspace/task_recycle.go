@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"silverwing-go/internal/documents"
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/storage"
+	"silverwing-go/internal/systemtrash"
 	"silverwing-go/internal/taskscope"
 )
 
@@ -26,12 +28,14 @@ type TaskDeletePreview struct {
 	Risks     []domain.DeleteRisk        `json:"risks"`
 	Materials TaskMaterialsDeletePreview `json:"materials"`
 	Force     TaskForceDeletePreview     `json:"force"`
+	Guard     string                     `json:"guard,omitempty"`
 }
 type TaskDeleteOptions struct {
 	ForceDiscard    bool
 	DeleteMaterials bool
 	MaterialsGuard  string
 	ForceGuard      string
+	Guard           string
 }
 
 type TaskForceDeletePreview struct {
@@ -81,7 +85,24 @@ func (s *TaskApplicationService) InspectDeletion(ctx context.Context, config dom
 			risks = append(risks, domain.DeleteRisk{ServiceName: ws.ServiceName, StatusCheckError: ptr("仓库配置不存在，请使用已验证的强制回收")})
 		}
 	}
-	return TaskDeletePreview{Risks: risks, Materials: s.inspectMaterialsDeletion(ctx, config, taskPath, manifest), Force: force}, nil
+	preview := TaskDeletePreview{Risks: risks, Materials: s.inspectMaterialsDeletion(ctx, config, taskPath, manifest), Force: force}
+	if force.CanForce || force.Reason != "" {
+		return preview, nil
+	}
+	for _, risk := range risks {
+		if risk.StatusCheckError != nil || risk.OperationInProgress != nil {
+			return preview, nil
+		}
+	}
+	preview.Guard, err = s.Lifecycle.taskRecycleGuard(ctx, taskPath, manifest)
+	if err == nil && len(risks) > 0 {
+		var current []domain.DeleteRisk
+		current, err = s.Lifecycle.InspectDeleteRisks(ctx, config, taskPath, manifest)
+		if err == nil && !reflect.DeepEqual(risks, current) {
+			err = errors.New("工作区风险在检查期间发生变化，请重新检查")
+		}
+	}
+	return preview, err
 }
 
 func (s *TaskApplicationService) inspectMaterialsDeletion(ctx context.Context, config domain.AppConfig, taskPath string, manifest domain.TaskManifest) (preview TaskMaterialsDeletePreview) {
@@ -139,14 +160,14 @@ func (s *TaskApplicationService) inspectMaterialsDeletion(ctx context.Context, c
 		if samePath(entry.Path, taskPath) {
 			continue
 		}
-		other, valid := documents.AnnualScope(stringValue(entry.Manifest.RequirementMaterials.WriteRoot))
-		if !valid {
+		otherOwned := strings.TrimSpace(stringValue(entry.Manifest.RequirementMaterials.WriteRoot))
+		if otherOwned == "" {
 			continue
 		}
-		shared := samePath(other.Root, scope.Root)
-		if !shared {
-			otherID, err := documents.DirectoryFingerprint(other.Root)
-			shared = err == nil && otherID == identity
+		shared, err := sharesTaskMaterials(otherOwned, scope, entry.Path)
+		if err != nil {
+			preview.Reason = "无法确认以下任务是否共用资料，保留资料：" + entry.Manifest.FolderName
+			return preview
 		}
 		if shared {
 			preview.SharedTasks = append(preview.SharedTasks, entry.Manifest.FolderName)
@@ -160,6 +181,53 @@ func (s *TaskApplicationService) inspectMaterialsDeletion(ctx context.Context, c
 	preview.Guard = fmt.Sprintf("%x", guard)
 	preview.CanDelete = true
 	return
+}
+
+func sharesTaskMaterials(owned string, target documents.AnnualMaterialsScope, otherTask string) (bool, error) {
+	if !filepath.IsAbs(owned) {
+		return false, errors.New("资料路径不是绝对路径")
+	}
+	targetInfo, err := os.Stat(target.Root)
+	if err != nil {
+		return false, err
+	}
+	// Some Windows junctions have stable file identity but cannot be expanded
+	// to their configured drive spelling by EvalSymlinks.
+	for path := filepath.Clean(owned); !isWithin(otherTask, path); path = filepath.Dir(path) {
+		if info, err := os.Stat(path); err == nil && os.SameFile(info, targetInfo) {
+			return true, nil
+		}
+		if path == filepath.Dir(path) {
+			break
+		}
+	}
+	// If a child folder is missing, check its actual existing ancestors. This
+	// also detects legacy paths that lead into the yearly tree via a junction.
+	resolved := filepath.Clean(owned)
+	for {
+		path, err := filepath.EvalSymlinks(resolved)
+		if err == nil {
+			if isWithin(path, target.Root) || samePath(path, target.Root) {
+				return true, nil
+			}
+			break
+		}
+		if !os.IsNotExist(err) {
+			return false, err
+		}
+		if _, statErr := os.Lstat(resolved); !os.IsNotExist(statErr) {
+			return false, err
+		}
+		next := filepath.Dir(resolved)
+		if next == resolved {
+			return false, err
+		}
+		resolved = next
+	}
+	if other, valid := documents.AnnualScope(owned); valid && samePath(other.Root, target.Root) {
+		return true, nil
+	}
+	return false, nil
 }
 
 func (s *TaskApplicationService) DeleteWithOptions(ctx context.Context, config domain.AppConfig, taskPath string, options TaskDeleteOptions) error {
@@ -185,7 +253,7 @@ func (s *TaskApplicationService) DeleteWithOptions(ctx context.Context, config d
 					}
 				}
 				if len(risks) > 0 && !options.ForceDiscard {
-					return errors.New("工作区包含未提交内容，请确认后再移入回收站")
+					return errors.New("工作区包含未提交内容，请确认后再移入" + systemtrash.Label())
 				}
 			} else {
 				force, _, roots, err := s.inspectForceDeletion(ctx, config, taskPath, manifest)
@@ -208,32 +276,32 @@ func (s *TaskApplicationService) DeleteWithOptions(ctx context.Context, config d
 				}
 			}
 			materialsRecycled := false
-			before := func() error {
-				if !options.DeleteMaterials {
+			var before func() error
+			if options.DeleteMaterials {
+				before = func() error {
+					current := s.inspectMaterialsDeletion(ctx, config, taskPath, manifest)
+					if !current.CanDelete || current.Guard != preview.Guard {
+						return errors.New("资料目录或共用关系已变化，请重新检查")
+					}
+					if err := taskscope.Validate(ctx, config, taskPath, manifest); err != nil {
+						return err
+					}
+					if err := s.Lifecycle.directoryRecycler().Recycle(ctx, preview.Root); err != nil {
+						return fmt.Errorf("资料未能回收，任务保留：%w", err)
+					}
+					materialsRecycled = true
 					return nil
 				}
-				current := s.inspectMaterialsDeletion(ctx, config, taskPath, manifest)
-				if !current.CanDelete || current.Guard != preview.Guard {
-					return errors.New("资料目录或共用关系已变化，请重新检查")
-				}
-				if err := taskscope.Validate(ctx, config, taskPath, manifest); err != nil {
-					return err
-				}
-				if err := s.Lifecycle.directoryRecycler().Recycle(ctx, preview.Root); err != nil {
-					return fmt.Errorf("资料未能回收，任务保留：%w", err)
-				}
-				materialsRecycled = true
-				return nil
 			}
 			var warnings []string
 			var err error
 			if options.ForceGuard == "" {
-				warnings, err = s.Lifecycle.recycleTask(ctx, config, taskPath, manifest, options.ForceDiscard, before)
+				warnings, err = s.Lifecycle.recycleTask(ctx, config, taskPath, manifest, options, before)
 			} else {
 				warnings, err = s.recycleVerifiedTask(ctx, config, taskPath, manifest, forcedRoots, options.ForceGuard, before)
 			}
 			if err != nil && materialsRecycled {
-				return fmt.Errorf("资料已移入回收站（%s），任务尚未完成回收：%w", preview.Root, err)
+				return fmt.Errorf("资料已移入%s（%s），任务尚未完成回收：%w", systemtrash.Label(), preview.Root, err)
 			}
 			if err != nil {
 				return err
@@ -249,7 +317,7 @@ func (s *TaskApplicationService) DeleteWithOptions(ctx context.Context, config d
 type TaskRecycleCleanupWarning struct{ Details string }
 
 func (e *TaskRecycleCleanupWarning) Error() string {
-	return "任务已移入回收站，工作区登记清理未完成：" + e.Details
+	return "任务已移入" + systemtrash.Label() + "，工作区登记清理未完成：" + e.Details
 }
 
 func (l *WorkspaceLifecycle) directoryRecycler() documents.DirectoryRecycler {
@@ -259,7 +327,7 @@ func (l *WorkspaceLifecycle) directoryRecycler() documents.DirectoryRecycler {
 	return documents.SystemDirectoryRecycler{}
 }
 
-func (l *WorkspaceLifecycle) recycleTaskDirectory(ctx context.Context, config domain.AppConfig, taskPath string, manifest domain.TaskManifest, before func() error) error {
+func (l *WorkspaceLifecycle) recycleTaskDirectory(ctx context.Context, config domain.AppConfig, taskPath string, manifest domain.TaskManifest, before, revalidate func() error) error {
 	identity, err := documents.DirectoryFingerprint(taskPath)
 	if err != nil {
 		return err
@@ -268,7 +336,15 @@ func (l *WorkspaceLifecycle) recycleTaskDirectory(ctx context.Context, config do
 	if err := taskscope.Validate(ctx, config, taskPath, manifest); err != nil {
 		return err
 	}
-	if err := before(); err != nil {
+	if before != nil {
+		if err := revalidate(); err != nil {
+			return err
+		}
+		if err := before(); err != nil {
+			return err
+		}
+	}
+	if err := revalidate(); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -287,7 +363,7 @@ func (l *WorkspaceLifecycle) recycleTaskDirectory(ctx context.Context, config do
 	return nil
 }
 
-func (l *WorkspaceLifecycle) recycleTask(ctx context.Context, config domain.AppConfig, taskPath string, manifest domain.TaskManifest, force bool, before func() error) (warnings []string, resultErr error) {
+func (l *WorkspaceLifecycle) recycleTask(ctx context.Context, config domain.AppConfig, taskPath string, manifest domain.TaskManifest, options TaskDeleteOptions, before func() error) (warnings []string, resultErr error) {
 	if err := l.validateTaskDirectory(config, taskPath, manifest); err != nil {
 		return nil, err
 	}
@@ -312,31 +388,47 @@ func (l *WorkspaceLifecycle) recycleTask(ctx context.Context, config domain.AppC
 		if err := l.requireNoGitOperation(existing, taskPath); err != nil {
 			return err
 		}
-		if !force {
+		if !options.ForceDiscard {
 			if err := l.requireClean(existing, taskPath); err != nil {
 				return err
 			}
 		}
-		if err := l.recycleTaskDirectory(ctx, config, taskPath, manifest, before); err != nil {
+		guard, err := l.taskRecycleGuard(ctx, taskPath, manifest)
+		if err != nil {
 			return err
 		}
+		if options.Guard != "" && options.Guard != guard {
+			return errors.New("工作区身份或 Git 状态已变化，请重新检查")
+		}
+		var proofs []forcedWorkspaceProof
 		for _, ws := range existing {
 			if ws.Strategy != domain.WorkspaceStandardWorktree {
 				continue
 			}
-			repo, err := l.configuredRepository(config, ws)
-			if err == nil {
-				if _, statErr := os.Lstat(ws.WorktreePath); !os.IsNotExist(statErr) {
-					err = errors.New("工作区路径重新出现，保留其 Git 登记")
-				} else {
-					err = l.Git.RemoveWorktree(repo, ws.WorktreePath, true)
-				}
-			}
+			repo, _ := repositoryByID(config, ws.RepositoryID)
+			target := mustAbs(ws.WorktreePath)
+			identity, err := documents.DirectoryFingerprint(target)
 			if err != nil {
-				warnings = append(warnings, err.Error())
+				return err
 			}
+			proof := forcedWorkspaceProof{workspace: ws, target: target, targetIdentity: identity}
+			verifier := TaskApplicationService{Git: l.Git}
+			if err := verifier.validateLinkedWorktree(ctx, ws, target, repo.RootPath, repo.GitCommonDirectory, stringValue(repo.OriginURL), &proof); err != nil {
+				return err
+			}
+			proof.statusOutput, err = recycleWorkspaceStatus(ctx, l.Git, target)
+			if err != nil {
+				return err
+			}
+			proofs = append(proofs, proof)
 		}
-		return nil
+		warnings, err = l.recycleTaskWithRecovery(ctx, config, taskPath, manifest, proofs, before, func() error {
+			if err := l.requireNoUntrackedWorkspaces(config, taskPath, manifest); err != nil {
+				return err
+			}
+			return l.checkTaskRecycleGuard(ctx, taskPath, manifest, guard)
+		})
+		return err
 	})
 	return
 }

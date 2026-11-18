@@ -3,6 +3,7 @@ package desktop
 import (
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/workspace"
 )
 
 func (s *app) saveMaterialsGitSettings(settings domain.MaterialsGitSyncSettings) {
@@ -168,6 +170,9 @@ func (s *app) settingsMaterialsGitBranch(c *ui.Context, p palette, settings doma
 			if loading {
 				placeholder = "正在读取远程分支…"
 			}
+			if state != nil && state.authenticating {
+				placeholder = "正在登录并验证…"
+			}
 			if selected == "" {
 				selected = placeholder
 			}
@@ -182,17 +187,26 @@ func (s *app) settingsMaterialsGitBranch(c *ui.Context, p palette, settings doma
 					s.saveMaterialsGitSettings(next)
 				}
 			}
-			if miniButton(c, p, "materials-git-branches-refresh", "refresh", "刷新远程分支", loading || s.busy || pending || settings.RepositoryURL == "").Clicked() {
+			if miniButton(c, p, "materials-git-branches-refresh", "refresh", "刷新远程分支", false).Disabled(loading || state != nil && state.terminalPreparing || s.busy || pending || settings.RepositoryURL == "").Clicked() {
 				s.loadMaterialsGitBranches(true)
 			}
 		})
 	})
+	if state != nil && state.authenticating {
+		label(c, "正在等待 Git 凭据助手完成验证…", 11, p.muted).Wrap()
+		if action(c, "materials-git-login-cancel", "close", "取消登录验证", p, false) {
+			state.cancel()
+		}
+	}
 	if state == nil || loading || settings.RepositoryURL == "" {
 		return
 	}
 	if state.err != "" {
 		label(c, state.err, 11, p.danger).Wrap().Selectable()
-		if action(c, "materials-git-branches-retry", "refresh", "重试读取分支", p, false) {
+		if state.needsLogin && s.settingsMaterialsGitLoginActions(c, p, settings, state) {
+			return
+		}
+		if !pending && action(c, "materials-git-branches-retry", "refresh", "重试读取分支", p, false) {
 			s.loadMaterialsGitBranches(true)
 		}
 	} else if ready && len(state.branches) == 0 {
@@ -200,4 +214,37 @@ func (s *app) settingsMaterialsGitBranch(c *ui.Context, p palette, settings doma
 	} else if ready && !slices.Contains(state.branches, settings.Branch) {
 		label(c, fmt.Sprintf("已保存的分支 %s 不在远程，请重新选择。", settings.Branch), 11, p.amber).Wrap().Selectable()
 	}
+}
+
+func (s *app) settingsMaterialsGitLoginActions(c *ui.Context, p palette, settings domain.MaterialsGitSyncSettings, state *materialsGitBranchesState) bool {
+	if candidate := workspace.MaterialsGitHTTPSUpgrade(settings.RepositoryURL); candidate != "" {
+		label(c, "Git 登录需要 HTTPS。确认改用以下地址后可以登录。", 11, p.muted).Wrap()
+		label(c, candidate, 11, p.text).Wrap().Selectable()
+		if ui.Button(c.Key("materials-git-switch-https"), "确认改用 HTTPS").Disabled(s.busy || s.materialsGitRunning()).Clicked() && s.materialsGitBranchesCurrent() == state {
+			settings.RepositoryURL = candidate
+			s.saveMaterialsGitSettings(settings)
+		}
+		return true
+	}
+	if _, ok := s.backend.(application.MaterialsGitLoginBackend); !ok || !workspace.MaterialsGitUsesHTTPS(settings.RepositoryURL) {
+		return false
+	}
+	if runtime.GOOS == "darwin" {
+		label(c, "Git 使用已配置的凭据助手，未配置时使用 macOS 钥匙串。", 11, p.muted).Wrap()
+	}
+	label(c, "终端验证时，粘贴复制的命令，完成后刷新远程分支。", 11, p.muted).Wrap()
+	services := c.Services()
+	disabled := s.busy || state.terminalPreparing || s.materialsGitRunning()
+	ui.Row(c).FillWidth().Gap(8).Wrap().Children(func() {
+		if ui.Button(c.Key("materials-git-login"), "登录并验证").Disabled(disabled).Clicked() {
+			s.beginMaterialsGitLogin()
+		}
+		if ui.Button(c.Key("materials-git-login-terminal"), "打开终端").Disabled(disabled).Clicked() {
+			s.prepareMaterialsGitLoginTerminal(services, true)
+		}
+		if ui.Button(c.Key("materials-git-login-copy"), "复制验证命令").Disabled(disabled).Clicked() {
+			s.prepareMaterialsGitLoginTerminal(services, false)
+		}
+	})
+	return true
 }

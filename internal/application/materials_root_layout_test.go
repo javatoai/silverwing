@@ -8,6 +8,7 @@ import (
 
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/storage"
+	"silverwing-go/internal/systemtrash"
 	"silverwing-go/internal/workspace"
 )
 
@@ -137,7 +138,7 @@ func TestTaskDeleteScopedMaterialsApprovalSurvivesItsOwnRecycle(t *testing.T) {
 	}
 	action := taskContextActionForTest(t, a, config, manifest, task, "task.delete")
 	result, err := a.DeleteTask(context.Background(), TaskDeleteRequest{Target: TaskTargetFromAction(action), DeleteMaterials: true, MaterialsGuard: preview.Materials.Guard})
-	if err != nil || result.Message != "任务已移入回收站" {
+	if err != nil || result.Message != "任务已移入"+systemtrash.Label() {
 		t.Fatalf("own move invalidated guard: %+v %v", result, err)
 	}
 	if len(recycler.calls) != 2 || recycler.calls[0] != scope.Root || recycler.calls[1] != task {

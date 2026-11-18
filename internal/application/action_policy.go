@@ -133,6 +133,7 @@ var actionDescriptors = map[string]ActionDescriptor{
 	"task.archive":                                 {Kind: "task.archive", Label: "归档任务", Known: true, TaskMenuScoped: true, ReloadSnapshot: true},
 	"task.create":                                  {Kind: "task.create", Label: "创建任务", Known: true, ReloadSnapshot: true, Cancellable: true},
 	"task.delete":                                  {Kind: "task.delete", Label: "删除任务", Known: true, TaskMenuScoped: true, ReloadSnapshot: true, RefreshOnError: true},
+	"task.restore-recycled-workspaces":             {Kind: "task.restore-recycled-workspaces", Label: "恢复已回收工作区", Known: true, TaskMenuScoped: true, ReloadSnapshot: true, RefreshOnError: true, Cancellable: true},
 	"task.delete-risks":                            {Kind: "task.delete-risks", Label: "检查删除风险", Known: true},
 	"task.materials-retry":                         {Kind: "task.materials-retry", Label: "关联任务资料", Known: true, TaskMenuScoped: true, ReloadSnapshot: true, Cancellable: true},
 	"task.modules-add":                             {Kind: "task.modules-add", Label: "添加模块", Known: true, ReloadSnapshot: true, Cancellable: true},

@@ -44,9 +44,10 @@ type materialsGitBinding struct {
 }
 
 type MaterialsGitSyncService struct {
-	Git   *GitClient
-	Paths storage.Paths
-	Check func() error
+	Git           *GitClient
+	Paths         storage.Paths
+	Check         func() error
+	remoteOptions []string
 }
 
 var ErrMaterialsGitScopeChanged = errors.New("Git 同步配置已变化，旧操作已停止")
@@ -238,6 +239,13 @@ func (s *MaterialsGitSyncService) syncLocked(ctx context.Context, scope Material
 		}
 	}
 	progress("核对仓库与分支")
+	git, options, err := s.prepareRemoteGit(ctx, scope, scope.Root, false)
+	if err != nil {
+		return err
+	}
+	prepared := *s
+	prepared.Git, prepared.remoteOptions = git, options
+	s = &prepared
 	if _, err := s.run(ctx, scope, true, "check-ref-format", "--branch", scope.Branch); err != nil {
 		return err
 	}
@@ -325,7 +333,7 @@ func (s *MaterialsGitSyncService) syncLocked(ctx context.Context, scope Material
 		return err
 	}
 	remote := "refs/remotes/origin/" + scope.Branch
-	if _, err := s.run(ctx, scope, false, "fetch", "--no-tags", "--no-recurse-submodules", scope.URL, "+refs/heads/"+scope.Branch+":"+remote); err != nil {
+	if err := s.runRemoteMutation(ctx, scope, "fetch", "--no-tags", "--no-recurse-submodules", scope.URL, "+refs/heads/"+scope.Branch+":"+remote); err != nil {
 		return err
 	}
 	_, hasHead, err := s.optional(ctx, scope, "rev-parse", "--verify", "HEAD")
@@ -395,12 +403,21 @@ func (s *MaterialsGitSyncService) syncLocked(ctx context.Context, scope Material
 	if _, _, err := s.remoteBranch(ctx, scope); err != nil {
 		return err
 	}
-	if _, err := s.run(ctx, scope, false, "push", "--porcelain", "--no-follow-tags", "--recurse-submodules=no", "--", scope.URL, "refs/heads/"+scope.Branch+":refs/heads/"+scope.Branch); err != nil {
+	if err := s.runRemoteMutation(ctx, scope, "push", "--porcelain", "--no-follow-tags", "--recurse-submodules=no", "--", scope.URL, "refs/heads/"+scope.Branch+":refs/heads/"+scope.Branch); err != nil {
 		return err
 	}
 	state.Changed = true
 	state.URL, state.Branch = scope.URL, scope.Branch
 	return nil
+}
+
+func (s *MaterialsGitSyncService) runRemoteMutation(ctx context.Context, scope MaterialsGitScope, args ...string) error {
+	_, err := s.run(ctx, scope, false, append(append([]string(nil), s.remoteOptions...), args...)...)
+	var gitErr *GitException
+	if errors.As(err, &gitErr) {
+		return diagnoseGitRemoteError(ctx, err)
+	}
+	return err
 }
 
 func (s *MaterialsGitSyncService) remoteBranch(ctx context.Context, scope MaterialsGitScope) (string, bool, error) {
@@ -412,10 +429,10 @@ func (s *MaterialsGitSyncService) remoteBranch(ctx context.Context, scope Materi
 			return "", false, err
 		}
 	}
-	result, err := s.Git.runReadBudget(ctx, scope.Root, 2*time.Minute, 4096,
-		"ls-remote", "--heads", "--", scope.URL, "refs/heads/"+scope.Branch)
+	args := append(append([]string(nil), s.remoteOptions...), "ls-remote", "--heads", "--", scope.URL, "refs/heads/"+scope.Branch)
+	result, err := s.Git.runReadBudget(ctx, scope.Root, 2*time.Minute, 4096, args...)
 	if err != nil {
-		return "", false, err
+		return "", false, diagnoseGitRemoteError(ctx, err)
 	}
 	for _, line := range strings.Split(result.Stdout, "\n") {
 		fields := strings.Fields(line)
@@ -486,12 +503,27 @@ func (s *MaterialsGitSyncService) switchBranch(ctx context.Context, scope Materi
 func materialsGitUserChanges(status string) bool { return status != "" }
 
 func materialsGitSameURL(a, b string) bool {
-	return strings.TrimSuffix(strings.TrimSpace(a), "/") == strings.TrimSuffix(strings.TrimSpace(b), "/")
+	a, b = strings.TrimSuffix(strings.TrimSpace(a), "/"), strings.TrimSuffix(strings.TrimSpace(b), "/")
+	// Sync explicitly uses the confirmed URL. An existing HTTP origin for the
+	// same repository can stay configured when the user upgrades to HTTPS.
+	return a == b || MaterialsGitUsesHTTPS(b) && MaterialsGitHTTPSUpgrade(a) == b
 }
 
 func materialsGitRetryable(err error) bool {
+	if process.IsCleanupFailure(err) {
+		return false
+	}
 	if errors.Is(err, storage.ErrLockBusy) || errors.Is(err, context.DeadlineExceeded) {
 		return true
+	}
+	var remote *GitRemoteFailure
+	if errors.As(err, &remote) {
+		switch remote.Kind {
+		case GitRemotePortRefused, GitRemoteClosed, GitRemoteUnavailable, GitRemoteTimeout, GitRemotePushRejected:
+			return true
+		default:
+			return false
+		}
 	}
 	text := strings.ToLower(err.Error())
 	var gitError *GitException

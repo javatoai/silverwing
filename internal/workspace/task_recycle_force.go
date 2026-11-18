@@ -21,6 +21,7 @@ import (
 type forcedWorkspaceProof struct {
 	workspace       domain.ServiceWorkspace
 	target          string
+	targetIdentity  string
 	repositoryRoot  string
 	commonDirectory string
 	commonIdentity  string
@@ -67,6 +68,7 @@ type forceWorkspaceFingerprint struct {
 	AdminGitDirFile string
 	Forced          bool
 	CloneOwner      cloneRecycleOwnership
+	CloneRefs       string
 }
 
 func (s *TaskApplicationService) inspectForceDeletion(ctx context.Context, config domain.AppConfig, taskPath string, manifest domain.TaskManifest) (TaskForceDeletePreview, []forcedWorkspaceProof, []string, error) {
@@ -155,7 +157,7 @@ func (s *TaskApplicationService) inspectForceDeletion(ctx context.Context, confi
 		}
 		allWorkspacePaths = append(allWorkspacePaths, target)
 		repository, configured := repositoryByID(config, ws.RepositoryID)
-		proof := forcedWorkspaceProof{workspace: ws, target: target, forced: !configured}
+		proof := forcedWorkspaceProof{workspace: ws, target: target, targetIdentity: targetIdentity, forced: !configured}
 		if !configured {
 			forced = true
 		}
@@ -250,11 +252,17 @@ func (s *TaskApplicationService) inspectForceDeletion(ctx context.Context, confi
 		proof.status = status
 		proof.branch, proof.head, proof.statusOutput, err = workspaceStateFingerprint(ctx, s.Git, target)
 		if err != nil {
-			preview.Reason = "无法核对工作区状态，已停止强制回收：" + target
+			preview.Reason = fmt.Sprintf("无法核对工作区状态，已停止强制回收：%s：%v", target, err)
 			return preview, nil, nil, nil
 		}
 		localOnly := 0
+		cloneRefs := ""
 		if ws.Strategy == domain.WorkspaceIndependentClone {
+			cloneRefs, err = recycleCloneRefs(ctx, s.Git, target)
+			if err != nil {
+				preview.Reason = "无法核对独立克隆中的分支和引用：" + target
+				return preview, nil, nil, nil
+			}
 			localOnly, err = deleteRiskLocalOnlyCommitCountContext(ctx, s.Git, target)
 			if err != nil {
 				preview.Reason = "无法核对独立克隆中的本地提交：" + target
@@ -290,6 +298,7 @@ func (s *TaskApplicationService) inspectForceDeletion(ctx context.Context, confi
 			Status: proof.status, StatusOutput: proof.statusOutput, OriginURL: origin,
 			AdminDirectory: proof.adminDirectory, AdminIdentity: proof.adminIdentity,
 			GitDirFile: proof.gitDirFile, AdminGitDirFile: proof.adminGitDirFile, Forced: proof.forced, CloneOwner: proof.cloneOwner,
+			CloneRefs: cloneRefs,
 		})
 	}
 	if !forced {
@@ -390,7 +399,7 @@ func (s *TaskApplicationService) inspectForceDeletion(ctx context.Context, confi
 		if proof.workspace.Strategy != domain.WorkspaceIndependentClone {
 			continue
 		}
-		entries, err := s.Git.Worktrees(proof.target)
+		entries, err := s.Git.WorktreesContext(ctx, proof.target)
 		if err != nil {
 			preview.Reason = "无法检查独立克隆中的其他工作区：" + proof.target
 			return preview, nil, nil, nil
@@ -432,11 +441,11 @@ func workspaceStateFingerprint(ctx context.Context, git *GitClient, target strin
 	if err != nil {
 		return "", "", "", err
 	}
-	statusResult, err := git.RunContext(ctx, target, 2*time.Minute, true, true, "status", "--porcelain=v1", "--untracked-files=all")
+	status, err = recycleWorkspaceStatus(ctx, git, target)
 	if err != nil {
 		return "", "", "", err
 	}
-	return strings.TrimSpace(branchResult.Stdout), strings.TrimSpace(headResult.Stdout), statusResult.Stdout, nil
+	return strings.TrimSpace(branchResult.Stdout), strings.TrimSpace(headResult.Stdout), status, nil
 }
 
 func (s *TaskApplicationService) validateLinkedWorktree(ctx context.Context, ws domain.ServiceWorkspace, target, root, expectedCommon, expectedOrigin string, proof *forcedWorkspaceProof) error {
@@ -447,8 +456,8 @@ func (s *TaskApplicationService) validateLinkedWorktree(ctx context.Context, ws 
 	if _, err := documents.DirectoryFingerprint(root); err != nil {
 		return fmt.Errorf("仓库来源目录不安全或无法确认身份：%s", root)
 	}
-	top, err := s.Git.TopLevel(root)
-	if err != nil || !samePath(top, root) {
+	top, err := s.Git.RunContext(ctx, root, 2*time.Minute, true, true, "rev-parse", "--show-toplevel")
+	if err != nil || !samePath(strings.TrimSpace(top.Stdout), root) {
 		return fmt.Errorf("仓库来源目录与 Git 顶层不匹配：%s", root)
 	}
 	targetGitPath := filepath.Join(target, ".git")
@@ -531,7 +540,7 @@ func (s *TaskApplicationService) validateLinkedWorktree(ctx context.Context, ws 
 	if err != nil || !samePath(resolveGitFilePath(adminDirectory, strings.TrimSpace(string(commondirBytes))), actualCommon) {
 		return fmt.Errorf("Linked Worktree 公共目录登记不匹配：%s", target)
 	}
-	entries, err := s.Git.Worktrees(root)
+	entries, err := s.Git.WorktreesContext(ctx, root)
 	if err != nil {
 		return fmt.Errorf("无法查询主仓库 worktree 登记：%s", root)
 	}
@@ -555,6 +564,8 @@ func (s *TaskApplicationService) validateLinkedWorktree(ctx context.Context, ws 
 	proof.adminIdentity = adminIdentity
 	proof.gitDirFile = targetGitLine
 	proof.adminGitDirFile = strings.TrimSpace(string(adminGitDirBytes))
+	proof.branch = ws.Branch
+	proof.head = strings.TrimSpace(headResult.Stdout)
 	return nil
 }
 
@@ -611,18 +622,17 @@ func (s *TaskApplicationService) recycleVerifiedTask(ctx context.Context, config
 		if !slices.Equal(currentRoots, roots) {
 			return errors.New("工作区仓库范围已变化，请重新检查")
 		}
-		if err := l.recycleTaskDirectory(ctx, config, taskPath, manifest, before); err != nil {
-			return err
-		}
-		for _, proof := range proofs {
-			if proof.workspace.Strategy != domain.WorkspaceStandardWorktree {
-				continue
+		warnings, err = l.recycleTaskWithRecovery(ctx, config, taskPath, manifest, proofs, before, func() error {
+			latest, _, latestRoots, err := s.inspectForceDeletion(ctx, config, taskPath, manifest)
+			if err != nil {
+				return err
 			}
-			if err := removeWorktreeRegistrationOnly(l.Git, proof); err != nil {
-				warnings = append(warnings, err.Error())
+			if !slices.Equal(latestRoots, roots) {
+				return errors.New("工作区仓库范围已变化，请重新检查")
 			}
-		}
-		return nil
+			return validateForceDeleteApproval(latest, guard)
+		})
+		return err
 	})
 	return warnings, err
 }

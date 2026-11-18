@@ -43,6 +43,7 @@ func (a *App) taskService(config domain.AppConfig) *workspace.TaskApplicationSer
 	dependencies := workspace.ComposeTaskApplicationDependencies(a.Manifests, a.git(config), a.Paths, a.materialsPreparation())
 	service := workspace.NewTaskApplicationServiceWithDependencies(dependencies)
 	service.Lifecycle.Recycler = a.directoryRecycler
+	service.ModuleRemoval.Recycler = a.directoryRecycler
 	registry, _ := workspace.NewTaskWorkspaceToolRegistry([]workspace.TaskWorkspaceToolLauncher{platformCodexWorkspaceLauncher{service: a.Platform, forceNew: true}, cursorWorkspaceLauncher{runner: a.Runner}})
 	service.WorkspaceTools.Registry = registry
 	return service

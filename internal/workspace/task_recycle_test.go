@@ -44,7 +44,10 @@ type taskRecycleFixture struct {
 
 func newTaskRecycleFixture(t *testing.T) *taskRecycleFixture {
 	t.Helper()
-	base := t.TempDir()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	root, data := filepath.Join(base, "tasks"), filepath.Join(base, "资料")
 	config := domain.DefaultAppConfig()
 	config.TaskRoot = &root

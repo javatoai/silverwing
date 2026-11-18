@@ -23,6 +23,26 @@ type SystemLaunchPlan struct {
 	Arguments  []string `json:"arguments"`
 }
 
+type DevelopmentToolUnavailableError struct {
+	Tool           domain.DevelopmentToolType
+	ConfiguredPath string
+}
+
+func (e *DevelopmentToolUnavailableError) Error() string {
+	name := e.Tool.DisplayName()
+	if name == "" {
+		name = string(e.Tool)
+	}
+	const settings = "请在设置的「工具与连接 → 编辑器与 IDE」中配置。"
+	if name == "" {
+		return "尚未选择开发工具。" + settings
+	}
+	if e.ConfiguredPath != "" {
+		return fmt.Sprintf("找不到 %s（配置路径：%s）。%s", name, e.ConfiguredPath, settings)
+	}
+	return fmt.Sprintf("找不到 %s。%s", name, settings)
+}
+
 // SystemTerminalResolution mirrors the result of the platform terminal
 // resolver. Terminal launches always use the operating system default.
 type SystemTerminalResolution struct {

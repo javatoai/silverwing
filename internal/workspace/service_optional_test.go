@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -110,6 +111,11 @@ func TestServiceOptionalAddRemoveAndReaddLocalWorkspaces(t *testing.T) {
 			gitCompare(t, repo, "remote", "add", "origin", remote)
 			gitCompare(t, repo, "push", "-u", "origin", "main")
 			before := gitCompareOutput(t, remote, "show-ref")
+			unrelated := filepath.Join(root, "unrelated")
+			if strategy == domain.WorkspaceStandardWorktree {
+				gitCompare(t, repo, "worktree", "add", "--detach", unrelated)
+				gitCompare(t, repo, "config", "gc.worktreePruneExpire", "now")
+			}
 			config := domain.DefaultAppConfig()
 			config.TaskRoot = &tasks
 			config.Repositories = []domain.RepositoryConfig{{ID: "repo", Name: "fixture", RootPath: repo, GitCommonDirectory: filepath.Join(repo, ".git"), OriginURL: &remote}}
@@ -117,6 +123,8 @@ func TestServiceOptionalAddRemoveAndReaddLocalWorkspaces(t *testing.T) {
 				config.Groups[0].Services = append(config.Groups[0].Services, domain.GroupServiceConfig{ID: id, RepositoryID: "repo", DisplayName: id, Enabled: true, MasterBranch: "origin/main", DevelopmentTool: domain.DevelopmentToolIntelliJIdea, Modules: []domain.ServiceModuleConfig{{ID: "module", Name: "module", Strategy: strategy, CustomCommands: []domain.WorkspaceCommandConfig{}}}})
 			}
 			service := NewTaskApplicationService(nil, nil, storage.NewPaths(filepath.Join(root, "profile")))
+			recycler := &fixtureDirectoryRecycler{base: root, bin: filepath.Join(root, "module-recycle-bin")}
+			service.ModuleRemoval.Recycler = recycler
 			manifest, err := service.CreateTask(context.Background(), config, CreateTaskRequest{FolderName: "analysis", TaskNotes: "keep notes"})
 			if err != nil {
 				t.Fatal(err)
@@ -135,30 +143,114 @@ func TestServiceOptionalAddRemoveAndReaddLocalWorkspaces(t *testing.T) {
 			if len(manifest.Services) != 2 {
 				t.Fatalf("expected 2 workspaces: %+v", manifest.Services)
 			}
+			if strategy == domain.WorkspaceStandardWorktree {
+				if err := os.Rename(unrelated, unrelated+"-parked"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Rename(remote, remote+"-offline"); err != nil {
+				t.Fatal(err)
+			}
 			for len(manifest.Services) > 0 {
 				ws := manifest.Services[0]
+				clean, err := service.ModuleRemoval.Inspect(config, path, ws.WorktreePath)
+				if err != nil || !clean.BaseComparisonKnown || clean.UpstreamComparisonKnown || !clean.RequiresRiskConfirmation ||
+					clean.Staged || clean.Unstaged || clean.Untracked {
+					t.Fatalf("offline clean preview: %+v %v", clean, err)
+				}
+				gitDir := gitCompareOutput(t, ws.WorktreePath, "rev-parse", "--absolute-git-dir")
+				marker := filepath.Join(gitDir, "index.lock")
+				if err := os.WriteFile(marker, nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := service.ModuleRemoval.Inspect(config, path, ws.WorktreePath); err == nil || !strings.Contains(err.Error(), "index.lock") {
+					t.Fatalf("inspection accepted an active Git operation: %v", err)
+				}
+				if err := os.Remove(marker); err != nil {
+					t.Fatal(err)
+				}
+				writeCompareFile(t, ws.WorktreePath, "base.txt", "staged change")
+				gitCompare(t, ws.WorktreePath, "add", "base.txt")
 				writeCompareFile(t, ws.WorktreePath, "untracked.txt", "user data")
 				preview, err := service.ModuleRemoval.Inspect(config, path, ws.WorktreePath)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if !preview.RequiresRiskConfirmation {
-					t.Fatal("untracked data lost risk check")
+				if !preview.RequiresRiskConfirmation || !preview.Staged || !preview.Untracked {
+					t.Fatalf("working tree risks not detected: %+v", preview)
 				}
 				if _, err := service.ModuleRemoval.Remove(context.Background(), config, path, preview, WorkspaceModuleRemovalConfirmation{Fingerprint: preview.Fingerprint}); err == nil {
 					t.Fatal("removal skipped data loss acknowledgement")
 				}
-				writeCompareFile(t, ws.WorktreePath, "added-after-preview.txt", "changed after preview")
+				untrackedPath := filepath.Join(ws.WorktreePath, "untracked.txt")
+				untrackedInfo, err := os.Stat(untrackedPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				writeCompareFile(t, ws.WorktreePath, "untracked.txt", "new bytes")
+				if err := os.Chtimes(untrackedPath, untrackedInfo.ModTime(), untrackedInfo.ModTime()); err != nil {
+					t.Fatal(err)
+				}
 				if _, err := service.ModuleRemoval.Remove(context.Background(), config, path, preview, WorkspaceModuleRemovalConfirmation{Fingerprint: preview.Fingerprint, AcknowledgeDataLoss: true}); err == nil {
-					t.Fatal("stale removal succeeded")
+					t.Fatal("stale removal accepted a same-size edit with its original modification time")
 				}
 				preview, err = service.ModuleRemoval.Inspect(config, path, ws.WorktreePath)
 				if err != nil {
 					t.Fatal(err)
 				}
+				confirm := WorkspaceModuleRemovalConfirmation{Fingerprint: preview.Fingerprint, AcknowledgeDataLoss: true}
+				contextPath := filepath.Join(path, AgentWorkspaceDir, AgentDirectoryName, AgentContextFileName)
+				beforeContext, err := os.ReadFile(contextPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				beforeContext = append(beforeContext, "\nOriginal context bytes.\n"...)
+				if err := os.WriteFile(contextPath, beforeContext, 0600); err != nil {
+					t.Fatal(err)
+				}
+				recycler.fail = ws.WorktreePath
+				if _, err := service.ModuleRemoval.Remove(context.Background(), config, path, preview, confirm); err == nil || !strings.Contains(err.Error(), "fixture recycle failure") {
+					t.Fatalf("expected recycler failure: %v", err)
+				}
+				recycler.fail = ""
+				if got, err := os.ReadFile(contextPath); err != nil || !bytes.Equal(got, beforeContext) {
+					t.Fatalf("module recycle failure did not restore exact context bytes: %v", err)
+				}
+				if current, err := service.Manifests.Load(path); err != nil || len(current.Services) != len(manifest.Services) {
+					t.Fatalf("module recycle failure lost records: %+v %v", current, err)
+				}
+				if _, err := os.Stat(gitDir); err != nil {
+					t.Fatalf("module recycle failure lost Git metadata: %v", err)
+				}
 				result, err := service.ModuleRemoval.Remove(context.Background(), config, path, preview, WorkspaceModuleRemovalConfirmation{Fingerprint: preview.Fingerprint, AcknowledgeDataLoss: true})
-				if err != nil || result.CleanupError != "" {
+				if err != nil || result.CleanupError != "" || !result.DirectoryRecycled {
 					t.Fatalf("remove: %v %+v", err, result)
+				}
+				recycled := filepath.Join(recycler.bin, filepath.Base(ws.WorktreePath))
+				if moved := recycler.calls[len(recycler.calls)-1]; moved != ws.WorktreePath {
+					t.Fatalf("recycler received %s, want original path %s", moved, ws.WorktreePath)
+				}
+				if got, err := os.ReadFile(filepath.Join(recycled, "untracked.txt")); err != nil || string(got) != "new bytes" {
+					t.Fatalf("move did not retain untracked contents: %q %v", got, err)
+				}
+				if info, err := os.Lstat(filepath.Join(recycled, ".git")); err != nil || info.IsDir() != (strategy == domain.WorkspaceIndependentClone) {
+					t.Fatalf("move did not retain the original .git entry: %v", err)
+				}
+				if strategy == domain.WorkspaceStandardWorktree {
+					if _, err := os.Lstat(gitDir); !os.IsNotExist(err) {
+						t.Fatalf("only the recycled worktree administration should be cleaned: %v", err)
+					}
+					entries, err := service.Git.Worktrees(repo)
+					if err != nil {
+						t.Fatal(err)
+					}
+					unrelatedFound := false
+					for _, entry := range entries {
+						unrelatedFound = unrelatedFound || samePath(entry.Path, unrelated)
+					}
+					if !unrelatedFound {
+						t.Fatal("module recycle modified an unrelated stale registration")
+					}
 				}
 				manifest = result.Manifest
 			}
@@ -167,6 +259,9 @@ func TestServiceOptionalAddRemoveAndReaddLocalWorkspaces(t *testing.T) {
 			}
 			if manifest.FeatureBranch != "" {
 				t.Fatal("add/remove changed the branch preset")
+			}
+			if err := os.Rename(remote+"-offline", remote); err != nil {
+				t.Fatal(err)
 			}
 			add("one", "feature/readded")
 			if len(manifest.Services) != 1 || gitCompareOutput(t, remote, "show-ref") != before {

@@ -835,6 +835,10 @@ func (s *TaskApplicationService) InspectModuleRemoval(config domain.AppConfig, t
 	return s.ModuleRemoval.Inspect(config, taskPath, workspacePath)
 }
 
+func (s *TaskApplicationService) InspectModuleRemovalContext(ctx context.Context, config domain.AppConfig, taskPath, workspacePath string) (WorkspaceModuleRemovalPreview, error) {
+	return s.ModuleRemoval.InspectContext(ctx, config, taskPath, workspacePath)
+}
+
 func (s *TaskApplicationService) RemoveModule(ctx context.Context, config domain.AppConfig, taskPath string, preview WorkspaceModuleRemovalPreview, confirmation WorkspaceModuleRemovalConfirmation) (WorkspaceModuleRemovalResult, error) {
 	return s.ModuleRemoval.Remove(ctx, config, taskPath, preview, confirmation)
 }

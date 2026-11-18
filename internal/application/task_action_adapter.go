@@ -29,6 +29,9 @@ func (a *App) dispatchTypedTaskAction(ctx context.Context, action Action, progre
 	case "task.restore":
 		result, err := a.RestoreTask(ctx, TaskTargetFromAction(action))
 		return result.ToActionResult(), true, err
+	case "task.restore-recycled-workspaces":
+		result, err := a.RestoreRecycledWorkspaces(ctx, TaskTargetFromAction(action))
+		return result.ToActionResult(), true, err
 	case "task.delete":
 		result, err := a.DeleteTask(ctx, TaskDeleteRequestFromAction(action))
 		return result.ToActionResult(), true, err

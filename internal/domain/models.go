@@ -2,7 +2,7 @@ package domain
 
 // Persisted schema versions are deliberately independent of the product version.
 const (
-	CurrentProductVersion            = "0.0.19"
+	CurrentProductVersion            = "0.0.20"
 	CurrentAppConfigSchemaVersion    = "6.0.0"
 	CurrentTaskManifestSchemaVersion = "2.0.0"
 	DefaultGroupID                   = "default"
@@ -21,6 +21,25 @@ const (
 	DevelopmentToolAndroidStudio    DevelopmentToolType = "ANDROID_STUDIO"
 	DevelopmentToolDevEcoStudio     DevelopmentToolType = "DEVECO_STUDIO"
 )
+
+func (tool DevelopmentToolType) DisplayName() string {
+	switch tool {
+	case DevelopmentToolIntelliJIdea:
+		return "IntelliJ IDEA"
+	case DevelopmentToolWebStorm:
+		return "WebStorm"
+	case DevelopmentToolPyCharm:
+		return "PyCharm"
+	case DevelopmentToolVisualStudioCode:
+		return "Visual Studio Code"
+	case DevelopmentToolAndroidStudio:
+		return "Android Studio"
+	case DevelopmentToolDevEcoStudio:
+		return "DevEco Studio"
+	default:
+		return ""
+	}
+}
 
 type ThemePreference string
 

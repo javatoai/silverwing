@@ -3,14 +3,16 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/systemtrash"
 	"silverwing-go/internal/workspace"
 )
 
 type taskManifestMutation func(context.Context, domain.AppConfig, *workspace.TaskApplicationService, domain.TaskManifest, string) (OperationResult[domain.TaskManifest], error)
 
-const TaskDeleteCleanupWarningMessage = "任务已移入回收站，部分工作区登记未清理"
+var TaskDeleteCleanupWarningMessage = "任务已移入" + systemtrash.Label() + "，部分工作区登记未清理"
 
 func (a *App) mutateTask(ctx context.Context, target TaskTarget, kind string, payload map[string]any, mutate taskManifestMutation) (result OperationResult[domain.TaskManifest], resultErr error) {
 	result.omitData = true
@@ -53,6 +55,22 @@ func (a *App) RestoreTask(ctx context.Context, target TaskTarget) (OperationResu
 	})
 }
 
+func (a *App) RestoreRecycledWorkspaces(ctx context.Context, target TaskTarget) (OperationResult[domain.TaskManifest], error) {
+	return a.mutateTask(ctx, target, "task.restore-recycled-workspaces", nil, func(ctx context.Context, config domain.AppConfig, service *workspace.TaskApplicationService, _ domain.TaskManifest, path string) (OperationResult[domain.TaskManifest], error) {
+		count, err := service.RestoreRecycledWorkspaces(ctx, config, path)
+		if err != nil {
+			if count > 0 {
+				err = fmt.Errorf("已恢复 %d 个工作区，其他工作区仍待恢复：%w", count, err)
+			}
+			return OperationResult[domain.TaskManifest]{}, err
+		}
+		if count == 0 {
+			return OperationResult[domain.TaskManifest]{Message: "未找到待恢复的工作区。请先将目录放回原路径。"}, nil
+		}
+		return OperationResult[domain.TaskManifest]{Message: fmt.Sprintf("已恢复 %d 个工作区", count)}, nil
+	})
+}
+
 func (a *App) inspectTaskDeletion(ctx context.Context, action Action, config domain.AppConfig, service *workspace.TaskApplicationService, manifest domain.TaskManifest, path string) (workspace.TaskDeletePreview, error) {
 	if err := a.validateDesktopTaskContext(action, config, manifest, path); err != nil {
 		return workspace.TaskDeletePreview{}, err
@@ -76,13 +94,13 @@ func (a *App) inspectTaskDeletion(ctx context.Context, action Action, config dom
 }
 
 func (a *App) DeleteTask(ctx context.Context, request TaskDeleteRequest) (OperationResult[struct{}], error) {
-	payload := map[string]any{"forceDiscard": request.ForceDiscard, "forceGuard": request.ForceGuard, "deleteMaterials": request.DeleteMaterials, "materialsGuard": request.MaterialsGuard}
+	payload := map[string]any{"forceDiscard": request.ForceDiscard, "forceGuard": request.ForceGuard, "deleteMaterials": request.DeleteMaterials, "materialsGuard": request.MaterialsGuard, "deleteGuard": request.Guard}
 	result, err := a.mutateTask(ctx, request.Target, "task.delete", payload, func(ctx context.Context, config domain.AppConfig, service *workspace.TaskApplicationService, _ domain.TaskManifest, path string) (OperationResult[domain.TaskManifest], error) {
 		err := service.DeleteWithOptions(ctx, config, path, workspace.TaskDeleteOptions{
 			ForceDiscard: request.ForceDiscard, ForceGuard: request.ForceGuard,
-			DeleteMaterials: request.DeleteMaterials, MaterialsGuard: request.MaterialsGuard,
+			DeleteMaterials: request.DeleteMaterials, MaterialsGuard: request.MaterialsGuard, Guard: request.Guard,
 		})
-		result := OperationResult[domain.TaskManifest]{Message: "任务已移入回收站"}
+		result := OperationResult[domain.TaskManifest]{Message: "任务已移入" + systemtrash.Label()}
 		var warning *workspace.TaskRecycleCleanupWarning
 		if errors.As(err, &warning) {
 			result.Text = warning.Error()

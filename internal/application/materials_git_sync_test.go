@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"silverwing-go/internal/domain"
@@ -61,6 +62,20 @@ func TestMaterialsGitScopeAndDocumentMutationGuards(t *testing.T) {
 		t.Fatal("document write ignored Git gate")
 	}
 	a.materialsGitGate.Unlock()
+}
+
+func TestMaterialsGitTerminalLoginCommandQuotesArguments(t *testing.T) {
+	args := []string{"-c", "credential.helper=osxkeychain", "ls-remote", "--heads", "--", "https://git.example.invalid/team/o'neil;docs.git"}
+	mac := materialsGitTerminalLoginCommand("darwin", "/opt/Tools O'Neil/git", args)
+	if !strings.Contains(mac, "GIT_ALLOW_PROTOCOL=https") || !strings.Contains(mac, `'/opt/Tools O'\''Neil/git'`) ||
+		!strings.Contains(mac, `'credential.helper=osxkeychain' 'ls-remote' '--heads' '--' 'https://git.example.invalid/team/o'\''neil;docs.git'`) {
+		t.Fatalf("command lost secure protocol, helper or shell argument quoting: %s", mac)
+	}
+	windows := materialsGitTerminalLoginCommand("windows", `C:\Tools O'Neil\git.exe`, args[2:])
+	if !strings.Contains(windows, "GIT_ALLOW_PROTOCOL='https'") || !strings.Contains(windows, `'C:\Tools O''Neil\git.exe'`) ||
+		!strings.Contains(windows, `'ls-remote' '--heads' '--' 'https://git.example.invalid/team/o''neil;docs.git'`) {
+		t.Fatalf("command lost secure protocol or PowerShell argument quoting: %s", windows)
+	}
 }
 
 func TestMaterialsGitTargetEditDisablesAutoSync(t *testing.T) {

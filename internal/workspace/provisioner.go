@@ -483,7 +483,7 @@ func (i *WorkspaceBranchReuseInspector) inspectWorktree(ctx context.Context, rep
 	if err != nil {
 		return nil, err
 	}
-	if err = i.Git.Fetch(root, remote); err != nil {
+	if err = fetchWorktreeRemote(ctx, i.Git, root, remote); err != nil {
 		return nil, err
 	}
 	local, err := i.Git.RunContext(ctx, root, 2*time.Minute, false, false, "rev-parse", "--verify", "refs/heads/"+branch)
@@ -689,7 +689,7 @@ func (p *StandardWorktreeProvisioner) provisionLocked(ctx context.Context, reque
 		remoteBaseRef := base.Remote + "/" + baseBranch
 		refresh := taskCreationProgressForModule(request.Service, module, TaskCreationPhaseRefreshingRemote)
 		err = runTaskCreationProgress(onProgress, refresh, "正在刷新远程主分支", "远程主分支已刷新", func() error {
-			if err := p.Git.Fetch(root, base.Remote); err != nil {
+			if err := fetchWorktreeRemote(ctx, p.Git, root, base.Remote); err != nil {
 				return err
 			}
 			exists, err := p.Git.RefExists(root, "refs/remotes/"+remoteBaseRef)

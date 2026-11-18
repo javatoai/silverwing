@@ -55,9 +55,7 @@ func (s *app) renderOperationNotifications(c *ui.Context) {
 	}
 	s.presentSettingsOutputNotification(c)
 	s.renderSystemOpenProgressNotifications(c)
-	if jobs := s.systemOpenJobs; jobs != nil {
-		s.operationNotifications.present(c, "system-open", &jobs.message, &jobs.error)
-	}
+	s.renderSystemOpenResultNotification(c)
 }
 
 func (s *app) renderRequirementRefreshProgressNotification(c *ui.Context) {
@@ -247,6 +245,14 @@ func (s *operationNotificationState) present(c *ui.Context, scope string, messag
 	s.presentWithKind(c, scope, message, failure, "success", retry...)
 }
 func (s *operationNotificationState) presentWithKind(c *ui.Context, scope string, message, failure *string, messageKind string, retry ...func()) {
+	var onRetry func()
+	if len(retry) > 0 {
+		onRetry = retry[0]
+	}
+	s.presentWithErrorAction(c, scope, message, failure, messageKind, "重试", onRetry)
+}
+
+func (s *operationNotificationState) presentWithErrorAction(c *ui.Context, scope string, message, failure *string, messageKind, errorAction string, onErrorAction func()) {
 	if s.shown == nil {
 		s.shown = make(map[string]string)
 	}
@@ -271,15 +277,16 @@ func (s *operationNotificationState) presentWithKind(c *ui.Context, scope string
 		return
 	}
 	key := kind + "\x00" + text
+	action := "关闭"
+	var onAction func()
+	if kind == "error" && onErrorAction != nil {
+		action, onAction = errorAction, onErrorAction
+		key += "\x00" + action
+	}
 	if s.shown[scope] == key {
 		return
 	}
 	s.shown[scope] = key
-	action := "关闭"
-	var onAction func()
-	if kind == "error" && len(retry) > 0 {
-		action, onAction = "重试", retry[0]
-	}
 	toast := ui.Toast{ID: id, Title: text, Type: kind, Timeout: timeout, Action: action, OnAction: onAction, OnClose: func() {
 		// A late close must not discard a newer operation's result.
 		if *source == text {

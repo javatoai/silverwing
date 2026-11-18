@@ -51,6 +51,7 @@ type workspaceShutdownPorts struct {
 func (s *workspaceController) drainFeature(ports workspaceShutdownPorts) error {
 	err := runFeatureCleanup(
 		featureCleanupStep{"退出前服务仓库读取清理未完成", 10 * time.Second, ports.closeServiceReads},
+		featureCleanupStep{"退出前远端连接检查清理未完成", 10 * time.Second, s.closeTaskAppendRemoteCheck},
 		featureCleanupStep{"退出前工作区命令清理未完成", 30 * time.Second, s.closeWorkspaceCommandJobs},
 		featureCleanupStep{"退出前工作区预览清理未完成", 10 * time.Second, s.closeWorkspaceHistoryJobs},
 		featureCleanupStep{"退出前 Git 差异快照清理未完成", 10 * time.Second, ports.closeDiffSessions},

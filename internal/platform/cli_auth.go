@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"silverwing-go/internal/domain"
+	"silverwing-go/internal/executable"
 	"silverwing-go/internal/process"
 )
 
@@ -62,9 +62,7 @@ func (s *Service) startCLIAuth(ctx context.Context, payload map[string]any) (any
 	if err != nil {
 		return nil, err
 	}
-	var command string
-	var target domain.CommandProxyTarget
-	cfg, command, target, err = s.resolveCLIExecutable(ctx, cfg, tool)
+	command, err := s.resolveCLIExecutable(ctx, cfg, executable.ToolMeegle)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +73,7 @@ func (s *Service) startCLIAuth(ctx context.Context, payload map[string]any) (any
 			host = "project.feishu.cn"
 		}
 		args := []string{"auth", "login", "--device-code", "--phase", "init", "--host", host, "--format", "json"}
-		result, runErr := s.runToolWithEnv(ctx, cfg, target, command, args, "", 30*time.Second, cliEnvironmentWithRunner(ctx, s.runner, tool, command))
+		result, runErr := s.runToolWithEnv(ctx, cfg, executable.ToolMeegle, command, args, "", 30*time.Second, cliEnvironmentWithRunner(ctx, s.runner, executable.ToolMeegle, command))
 		if runErr != nil {
 			return nil, wrapCommandDisplayError(fmt.Sprintf("生成 Meegle 登录验证码失败：%s", redactProxy(cfg, safeCLIAuthError(runErr.Error(), nil))), runErr)
 		}
@@ -197,16 +195,15 @@ func (s *Service) pollCLIAuth(ctx context.Context, payload map[string]any) (any,
 		} else {
 			cfg, err := s.loadConfig()
 			var command string
-			var target domain.CommandProxyTarget
 			if err == nil {
-				cfg, command, target, err = s.resolveCLIExecutable(pollCtx, cfg, snapshot.Tool)
+				command, err = s.resolveCLIExecutable(pollCtx, cfg, executable.ToolMeegle)
 			}
 			if err != nil {
 				pollErr = err
 				nextState = "AUTHORIZATION_PENDING"
 			} else {
 				args := []string{"auth", "login", "--device-code", "--phase", "poll", "--device-code-value", snapshot.deviceCode, "--client-id", snapshot.clientID, "--host", snapshot.host, "--once", "--format", "json"}
-				result, runErr := s.runToolWithEnv(pollCtx, cfg, target, command, args, "", 20*time.Second, cliEnvironmentWithRunner(pollCtx, s.runner, "meegle", command))
+				result, runErr := s.runToolWithEnv(pollCtx, cfg, executable.ToolMeegle, command, args, "", 20*time.Second, cliEnvironmentWithRunner(pollCtx, s.runner, executable.ToolMeegle, command))
 				if runErr != nil {
 					pollErr = runErr
 					nextState = "AUTHORIZATION_PENDING"
@@ -357,12 +354,12 @@ func (s *Service) logoutCLIAuth(ctx context.Context, payload map[string]any) (an
 	if err != nil {
 		return nil, err
 	}
-	cfg, command, target, err := s.resolveCLIExecutable(ctx, cfg, tool)
+	command, err := s.resolveCLIExecutable(ctx, cfg, executable.ToolMeegle)
 	if err != nil {
 		return nil, err
 	}
 	if tool == "meegle" {
-		if _, err := s.runToolWithEnv(ctx, cfg, target, command, []string{"auth", "logout"}, "", 10*time.Second, cliEnvironmentWithRunner(ctx, s.runner, tool, command)); err != nil {
+		if _, err := s.runToolWithEnv(ctx, cfg, executable.ToolMeegle, command, []string{"auth", "logout"}, "", 10*time.Second, cliEnvironmentWithRunner(ctx, s.runner, executable.ToolMeegle, command)); err != nil {
 			return nil, wrapCommandDisplayError(fmt.Sprintf("退出 Meegle 登录失败：%s", safeCLIAuthError(redactProxy(cfg, err.Error()), nil)), err)
 		}
 	}

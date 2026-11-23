@@ -13,9 +13,8 @@ func renderConfigurationFixture(tb testing.TB) *app {
 	tb.Helper()
 	s := taskNavigationFixture()
 	config := domain.DefaultAppConfig()
-	config.Groups[0].ID = "backend"
 	for i := 0; i < 100; i++ {
-		config.Groups[0].Services = append(config.Groups[0].Services, domain.GroupServiceConfig{
+		config.Services = append(config.Services, domain.GroupServiceConfig{
 			ID: fmt.Sprintf("service-%d", i), Enabled: i%2 == 0,
 			DevelopmentTool: domain.DevelopmentToolIntelliJIdea,
 			Bootstrap:       domain.BootstrapConfig{CopyRules: []domain.BootstrapCopyRule{}, Commands: []domain.BootstrapCommand{}},
@@ -45,7 +44,7 @@ func TestRenderConfigurationReadsAvoidRepeatedDecodeAndCopies(t *testing.T) {
 			read := func() {
 				switch page {
 				case "services":
-					_ = s.serviceEnabled("backend", "service-99")
+					_ = s.serviceEnabled("service-99")
 				case "materials-git":
 					_, _ = s.materialsGitConfig()
 				case "requirements":
@@ -65,13 +64,13 @@ func TestRenderConfigurationReadsAvoidRepeatedDecodeAndCopies(t *testing.T) {
 func TestRenderConfigurationReadsTrackSourceAndLiveIdentity(t *testing.T) {
 	s := renderConfigurationFixture(t)
 	initial := s.currentRequirementListIdentity()
-	if !s.serviceEnabled("backend", "service-0") || s.serviceEnabled("backend", "service-1") {
+	if !s.serviceEnabled("service-0") || s.serviceEnabled("service-1") {
 		t.Fatal("initial read projections are incorrect")
 	}
 	s.settingsUnit.state.configJSON = strings.ReplaceAll(s.settingsUnit.state.configJSON, "space-0", "changed-space")
 	s.settingsUnit.state.configJSON = strings.ReplaceAll(s.settingsUnit.state.configJSON, "/Target1", "/Target2")
 	s.settingsUnit.state.configJSON = strings.Replace(s.settingsUnit.state.configJSON, `"enabled":true`, `"enabled":false`, 1)
-	if s.serviceEnabled("backend", "service-0") || s.currentRequirementListIdentity().projects == initial.projects {
+	if s.serviceEnabled("service-0") || s.currentRequirementListIdentity().projects == initial.projects {
 		t.Fatal("render projections retained an earlier configuration")
 	}
 	// A mutable account status and application home must remain live even when
@@ -106,7 +105,7 @@ func BenchmarkDesktopPageConfigurationReads(b *testing.B) {
 			for b.Loop() {
 				switch page {
 				case "services":
-					_ = s.serviceEnabled("backend", "service-99")
+					_ = s.serviceEnabled("service-99")
 				case "requirements":
 					_ = s.currentRequirementListIdentity()
 				case "navigation":

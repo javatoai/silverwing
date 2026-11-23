@@ -13,7 +13,7 @@ import (
 
 // Service configuration is global. Switching tasks does not invalidate its reads.
 type serviceRepositoryChoiceScope struct {
-	home, session, groupID, serviceID, repositoryID, rootPath string
+	home, session, serviceID, repositoryID, rootPath string
 }
 
 type serviceRepositoryChoiceJob struct {
@@ -43,7 +43,7 @@ func (s *app) serviceRepositoryChoiceScope() serviceRepositoryChoiceScope {
 	}
 	repositoryID := strings.TrimSpace(*s.serviceEditorText("repositoryId", mapString(state.service, "repositoryId")))
 	_, root := s.currentRepositoryDetails(repositoryID)
-	return serviceRepositoryChoiceScope{s.snapshot.Home, state.session, state.groupID, state.serviceID, repositoryID, root}
+	return serviceRepositoryChoiceScope{s.snapshot.Home, state.session, state.serviceID, repositoryID, root}
 }
 
 func (s *app) serviceRepositoryChoiceReadCurrent(kind, remote string) bool {

@@ -21,28 +21,6 @@ type tagPlanGitFixture struct {
 // The child is this test binary, never a real Git executable. A missing broken
 // worktree exercises process.Runner's actual start error before the child runs.
 func TestMain(m *testing.M) {
-	if os.Getenv("SILVERWING_TEST_NOTICE_GENBU") == "1" && len(os.Args) > 1 && os.Args[1] == "query-tag" {
-		// Simulate an older alias winning the cache update while this query is in flight.
-		path := os.Getenv("SILVERWING_TEST_NOTICE_GENBU_CAS")
-		if path != "" {
-			data, err := os.ReadFile(path)
-			var op domain.TagOperation
-			if err != nil || json.Unmarshal(data, &op) != nil || op.GenbuStatus.CheckedAt == nil {
-				os.Exit(95)
-			}
-			stamp, err := domain.ParseSilverWingTime(*op.GenbuStatus.CheckedAt)
-			if err != nil {
-				os.Exit(96)
-			}
-			*op.GenbuStatus.CheckedAt = domain.FormatSilverWingTime(stamp.Add(-5 * time.Second))
-			data, err = json.Marshal(op)
-			if err != nil || os.WriteFile(path, data, 0600) != nil {
-				os.Exit(97)
-			}
-		}
-		fmt.Println(`{"build_status":"失败","uat_status":"初始","production_status":"初始"}`)
-		os.Exit(0)
-	}
 	if fixture := os.Getenv("SILVERWING_TEST_TAG_PLAN_GIT"); fixture != "" {
 		os.Exit(runTagPlanGitFixture(fixture))
 	}
@@ -62,6 +40,9 @@ func runTagPlanGitFixture(path string) int {
 			repository, args = os.Args[i+2], os.Args[i+3:]
 			break
 		}
+	}
+	for len(args) > 2 && args[0] == "-c" {
+		args = args[2:]
 	}
 	if len(args) == 0 {
 		return 91

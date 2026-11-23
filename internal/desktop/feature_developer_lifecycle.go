@@ -6,7 +6,6 @@ import (
 )
 
 func (s *app) stopDeveloperFeatures() {
-	s.taskUnit.stopTaskOpenTools()
 	s.releaseUnit.stopFeature()
 	s.toolsUnit.stopStartupDevelopmentTools()
 	s.stopServiceRepositoryChoices()

@@ -1,4 +1,4 @@
-//go:build linux && (amd64 || arm64)
+//go:build linux && !android && (amd64 || arm64) && !android
 
 package text
 
@@ -177,5 +177,147 @@ func TestWriteCacheFileConcurrent(t *testing.T) {
 		if mode := info.Mode().Perm(); mode != 0o644 {
 			t.Fatalf("round %d: font's mode %v, want 0644", round, mode)
 		}
+	}
+}
+
+// lcdFilterRule gives subpixel glyphs FreeType's LCD filter where
+// fontconfig names no filter, as cairo 1.17 and later do by default, and
+// keeps a filter fontconfig names (#1025).
+func TestLCDFilterRule(t *testing.T) {
+	if _, err := newPango(); err != nil {
+		t.Skip(err)
+	}
+	l := &pangoLib
+	if l.cairoVersion() < 11700 || l.fcConfigParseFromMemory == nil {
+		t.Skip("needs cairo 1.17 or later, whose default filter is FreeType's")
+	}
+	draw := func() []byte {
+		e, err := newPango()
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.setFontRendering("subpixel", "slight", "rgb")
+		var out []byte
+		for _, r := range e.shape([]rune("Illumination 测试"), Style{Family: "sans-serif", Size: 13}, nil, 0, false, false)[0].runs {
+			for _, g := range r.glyphs {
+				if b := e.draw(r.font, g.ID, 1, 0, true); b.pix != nil {
+					if !b.subpixel {
+						t.Fatal("glyph not drawn with subpixel antialiasing")
+					}
+					out = append(out, b.pix...)
+				}
+			}
+		}
+		return out
+	}
+	// Rules loaded later apply later, as the user's after the system's.
+	rule := func(xml string) {
+		t.Helper()
+		if l.fcConfigParseFromMemory(l.fcConfigGetCurrent(), xml, int32(gTrue)) == 0 {
+			t.Fatalf("fontconfig refused %s", xml)
+		}
+	}
+	set := func(edit string) string {
+		return `<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "fonts.dtd"><fontconfig><match target="font">` + edit + `</match></fontconfig>`
+	}
+	rule(set(`<edit name="lcdfilter" mode="assign"><const>lcdlegacy</const></edit>`))
+	legacy := draw()
+	rule(lcdFilterRule)
+	if !bytes.Equal(draw(), legacy) {
+		t.Error("lcdFilterRule replaced the legacy filter fontconfig names")
+	}
+	rule(set(`<edit name="lcdfilter" mode="delete"/>`))
+	unnamed := draw()
+	if bytes.Equal(unnamed, legacy) {
+		t.Fatal("cairo draws subpixel glyphs with the legacy filter by default")
+	}
+	rule(lcdFilterRule)
+	if !bytes.Equal(draw(), unnamed) {
+		t.Error("where fontconfig names no filter, lcdFilterRule draws otherwise than cairo's default")
+	}
+	rule(set(`<edit name="lcdfilter" mode="assign"><const>lcddefault</const></edit>`))
+	if !bytes.Equal(draw(), unnamed) {
+		t.Error("cairo's default filter is not FreeType's")
+	}
+}
+
+// Where the desktop's settings leave antialiasing to fontconfig (no
+// XSETTINGS value) and fontconfig gives fonts subpixel antialiasing
+// (rgba), glyphs are drawn in grayscale, not in the colors of their
+// subpixels, which made them color glyphs, white whatever the text's
+// color (#1426).
+func TestGrayGlyphsWhereFontconfigAsksForSubpixels(t *testing.T) {
+	if _, err := newPango(); err != nil {
+		t.Skip(err)
+	}
+	l := &pangoLib
+	if l.fcConfigParseFromMemory == nil {
+		t.Skip("no FcConfigParseAndLoadFromMemory")
+	}
+	rgba := `<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "fonts.dtd"><fontconfig><match target="font">` +
+		`<edit name="rgba" mode="assign"><const>rgb</const></edit></match></fontconfig>`
+	if l.fcConfigParseFromMemory(l.fcConfigGetCurrent(), rgba, int32(gTrue)) == 0 {
+		t.Fatalf("fontconfig refused %s", rgba)
+	}
+	for _, r := range [][3]string{{"", "", ""}, {"gray", "slight", ""}, {"subpixel", "slight", "rgb"}, {"none", "full", "rgb"}} {
+		e, err := newPango()
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.setFontRendering(r[0], r[1], r[2])
+		_, subpixel := e.textParams()
+		drawn := 0
+		for _, run := range e.shape([]rune("Candle 显示右侧边栏"), Style{Family: "sans-serif", Size: 13}, nil, 0, false, false)[0].runs {
+			for _, g := range run.glyphs {
+				b := e.glyph(run.font, g.ID, 1, 0, 0, subpixel)
+				if b.pix == nil {
+					continue
+				}
+				drawn++
+				if b.color {
+					t.Errorf("settings %q: glyph %d drawn as a color glyph", r, g.ID)
+				}
+				if b.subpixel != subpixel {
+					t.Errorf("settings %q: glyph %d drawn with subpixels %v, want %v", r, g.ID, b.subpixel, subpixel)
+				}
+			}
+		}
+		if drawn == 0 {
+			t.Skip("no glyphs drawn")
+		}
+	}
+}
+
+func TestGrayscaleFontPreservesColorGlyphs(t *testing.T) {
+	e, err := newPango()
+	if err != nil {
+		t.Skip(err)
+	}
+	found := false
+	for _, f := range e.fontMapFamilies() {
+		if f.Name == "Noto Color Emoji" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Skip("needs Noto Color Emoji")
+	}
+	e.setFontRendering("gray", "slight", "rgb")
+	drawn := 0
+	for _, run := range e.shape([]rune("😀"), Style{Family: "Noto Color Emoji", Size: 20}, nil, 0, false, false)[0].runs {
+		for _, g := range run.glyphs {
+			b := e.glyph(run.font, g.ID, 1, 0, 0, false)
+			if b.pix == nil {
+				continue
+			}
+			drawn++
+			if !b.color || b.subpixel {
+				t.Errorf("emoji glyph %d: color=%v, subpixel=%v", g.ID, b.color, b.subpixel)
+			}
+		}
+	}
+	if drawn == 0 {
+		t.Fatal("no emoji glyphs drawn")
 	}
 }

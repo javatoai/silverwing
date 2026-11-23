@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+
 	"silverwing-go/internal/domain"
-	"strings"
 )
 
 func (s *Service) checkPreview(ctx context.Context, p Preview, release string) (Preview, domain.AppConfig, error) {
@@ -14,18 +14,14 @@ func (s *Service) checkPreview(ctx context.Context, p Preview, release string) (
 		return p, c, err
 	}
 	if p.ProductionTag == "" || p.ProductionSHA == "" {
-		return p, c, errors.New("请先确认生产基线 Tag")
+		return p, c, errors.New("请先重新检查生产基线")
 	}
-	manual := ""
-	if p.Manual {
-		manual = p.ProductionTag
-	}
-	fresh, err := s.observe(ctx, p.Target, c, manual, release, false)
+	fresh, err := s.observe(ctx, p.Target, c, release, false)
 	if err != nil {
 		return fresh, c, err
 	}
 	if !sameProductionBaseline(p, fresh) || fresh.MainSHA != p.MainSHA {
-		return fresh, c, errors.New("生产基线或主分支已变化，请重新检查并确认")
+		return fresh, c, errors.New("生产基线或主分支已变化，请重新检查")
 	}
 	if release != "" && fresh.BranchHeads[release] != p.ReleaseSHA {
 		return fresh, c, errors.New("release 已变化，请重新检查差异并确认")
@@ -38,28 +34,28 @@ func (s *Service) Create(ctx context.Context, preview Preview, version, expected
 	return s.initialize(ctx, preview, version, false, expectedID)
 }
 
-func (s *Service) InspectBatch(ctx context.Context, id, manual string) (Batch, Preview, error) {
+func (s *Service) InspectBatch(ctx context.Context, id string) (Batch, Preview, error) {
 	var p Preview
+	var readErr error
 	b, err := s.withBatch(ctx, id, func(b *Batch, c domain.AppConfig) error {
-		var e error
-		p, e = s.observe(ctx, b.Target, c, manual, b.ReleaseBranch, true)
-		if e == nil {
-			p.ReleaseSHA = p.BranchHeads[b.ReleaseBranch]
-			if p.ReleaseSHA != "" && b.ReleaseSHA != "" && p.ReleaseSHA != b.ReleaseSHA {
-				var diff, commits string
-				diff, e = s.run(ctx, b.Target.Repository, "diff", "--stat", b.ReleaseSHA, p.ReleaseSHA, "--")
-				if e == nil {
-					commits, e = s.run(ctx, b.Target.Repository, "log", "--oneline", "--max-count=80", b.ReleaseSHA+".."+p.ReleaseSHA)
-				}
-				if e == nil {
-					p.Diff += "\n\n远端 release 相对本地批次的文件变化：\n" + diff
-					p.Commits += "\n\n远端 release 相对本地批次的新增提交（最多 80 条）：\n" + commits
-				}
-			}
+		// Read failures leave the persisted state of an unfinished action alone.
+		p, readErr = s.observe(ctx, b.Target, c, b.ReleaseBranch, true)
+		if readErr != nil || p.ReleaseSHA == "" || b.ReleaseSHA == "" || p.ReleaseSHA == b.ReleaseSHA {
+			return nil
 		}
-		return e
+		var diff, commits string
+		diff, readErr = s.run(ctx, b.Target.Repository, "diff", "--stat", b.ReleaseSHA, p.ReleaseSHA, "--")
+		if readErr != nil {
+			return nil
+		}
+		commits, readErr = s.run(ctx, b.Target.Repository, "log", "--oneline", "--max-count=80", b.ReleaseSHA+".."+p.ReleaseSHA)
+		if readErr == nil {
+			p.Diff += "\n\n远端 release 相对本地批次的文件变化：\n" + diff
+			p.Commits += "\n\n远端 release 相对本地批次的新增提交（最多 80 条）：\n" + commits
+		}
+		return nil
 	})
-	return b, p, err
+	return b, p, errors.Join(err, readErr)
 }
 
 func (s *Service) FeaturePreview(ctx context.Context, id, branch string) (Batch, Preview, error) {
@@ -199,11 +195,8 @@ func (s *Service) AcceptRemote(ctx context.Context, id, expectedSHA string) (Bat
 }
 
 func (s *Service) End(ctx context.Context, id string) (Batch, error) {
-	b, err := s.Store.Load(id)
-	if err != nil {
-		return b, err
-	}
-	err = s.locks.WithRepository(b.Target.CommonDirectory, func() error {
+	var b Batch
+	err := s.withBatchRecordLock(id, func() error {
 		var e error
 		b, e = s.Store.Load(id)
 		if e != nil {
@@ -228,11 +221,6 @@ func (s *Service) ConflictWorkspace(ctx context.Context, id string) (string, str
 		m := b.Intent.Merge
 		if err := s.validateMergeLocation(b, m); err != nil {
 			return err
-		}
-		root := filepath.Join(s.Paths.Home, "production-worktrees", b.ID)
-		rel, err := filepath.Rel(root, m.Worktree)
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return errors.New("冲突工作区不属于当前生产批次")
 		}
 		common, err := s.run(ctx, m.Worktree, "rev-parse", "--path-format=absolute", "--git-common-dir")
 		if err != nil || filepath.Clean(common) != filepath.Clean(b.Target.CommonDirectory) {
@@ -313,7 +301,7 @@ func (s *Service) advance(ctx context.Context, b *Batch, c domain.AppConfig, rec
 					return err
 				}
 			}
-			b.InitialSHA, b.ReleaseSHA = b.MainSHA, b.MainSHA
+			b.confirmReleaseCreation()
 			b.Intent, b.Phase, b.Message = nil, "READY", "release 已就绪，请逐个合并功能分支"
 			if err := s.savePushed(b); err != nil {
 				return err
@@ -379,12 +367,7 @@ func (s *Service) advance(ctx context.Context, b *Batch, c domain.AppConfig, rec
 		case "prepare-tag":
 			// Legacy records may already have completed their merge. Resuming
 			// this stage only prepares a read-only confirmation, never a Tag.
-			b.Intent = nil
-			manual := ""
-			if i.Preview.Manual {
-				manual = i.Preview.ProductionTag
-			}
-			preview, err := s.observe(ctx, b.Target, c, manual, b.ReleaseBranch, false)
+			preview, err := s.observe(ctx, b.Target, c, b.ReleaseBranch, false)
 			if err != nil {
 				return err
 			}

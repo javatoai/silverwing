@@ -12,22 +12,13 @@ import (
 // Reuse the existing job container and executor, but own a separate registry,
 // identity checks and presentation state for configuration recovery operations.
 type settingsConfigRecoveryState struct {
-	jobs                *settingsExtensionJobs
-	preview             *application.ConfigImportPreview
-	previewScope        settingsExtensionReadScope
-	previewText         string
-	previewLoading      bool
-	previewError        string
-	backupsLoading      bool
-	backupsLoaded       bool
-	backupsScope        settingsExtensionReadScope
-	backupsError        string
-	backupsDirty        bool
-	backupSelected      map[string]bool
-	backupFailures      map[string]string
-	backupDeleteLoading bool
-	backupDeleteError   string
-	backupFocusReload   bool
+	jobs           *settingsExtensionJobs
+	preview        *application.ConfigImportPreview
+	previewScope   settingsExtensionReadScope
+	previewText    string
+	previewOpen    bool
+	previewLoading bool
+	previewError   string
 }
 
 func (s *app) ensureSettingsConfigRecovery() *settingsConfigRecoveryState {
@@ -40,7 +31,7 @@ func (s *app) ensureSettingsConfigRecovery() *settingsConfigRecoveryState {
 }
 
 func settingsConfigRead(action application.Action) bool {
-	return action.Kind == "config.import-preview" || action.Kind == "config.backups" || action.Kind == "config.delete-backups"
+	return action.Kind == "config.import-preview"
 }
 
 func (s *app) settingsConfigRecoveryVisible() bool {
@@ -56,13 +47,7 @@ func (s *app) cancelSettingsConfigRead(key string) {
 		delete(state.jobs.current, key)
 		request.cancel()
 	}
-	if key == "config.delete-backups" {
-		state.backupDeleteLoading = false
-	} else if key == "config.backups" {
-		state.backupsLoading = false
-	} else {
-		state.previewLoading = false
-	}
+	state.previewLoading = false
 }
 
 func (s *app) beginSettingsConfigRead(action application.Action) (*settingsExtensionReadJob, error) {
@@ -70,9 +55,6 @@ func (s *app) beginSettingsConfigRead(action application.Action) (*settingsExten
 		return nil, errors.New("配置读取页面已变化，请重新读取。")
 	}
 	state := s.ensureSettingsConfigRecovery()
-	if state.backupDeleteLoading && (action.Kind == "config.delete-backups" || action.Kind == "config.backups") {
-		return nil, errors.New("正在删除备份，请等待完成。")
-	}
 	jobs := state.jobs
 	jobs.mu.Lock()
 	closed := jobs.closed
@@ -81,15 +63,6 @@ func (s *app) beginSettingsConfigRead(action application.Action) (*settingsExten
 		return nil, errors.New("配置读取已关闭。")
 	}
 	s.cancelSettingsConfigRead(action.Kind)
-	// Keep the confirmation's immutable selection outside mutable UI state.
-	payload := make(map[string]any, len(action.Payload))
-	for key, value := range action.Payload {
-		payload[key] = value
-	}
-	action.Payload = payload
-	if ids, ok := payload["ids"].([]string); ok {
-		payload["ids"] = append([]string(nil), ids...)
-	}
 	ctx, cancel := context.WithCancel(context.Background())
 	request := &settingsExtensionReadJob{action: action, key: action.Kind,
 		scope: s.settingsExtensionCurrentScope(), owner: jobs, ctx: ctx, cancel: cancel, done: make(chan struct{})}
@@ -97,19 +70,8 @@ func (s *app) beginSettingsConfigRead(action application.Action) (*settingsExten
 	jobs.running[request] = struct{}{}
 	jobs.mu.Unlock()
 	jobs.current[request.key] = request
-	if action.Kind == "config.delete-backups" {
-		s.cancelSettingsConfigRead("config.backups")
-		state.backupDeleteLoading, state.backupDeleteError = true, ""
-		state.backupFailures = map[string]string{}
-	} else if action.Kind == "config.backups" {
-		state.backupsLoading, state.backupsLoaded, state.backupsDirty = true, false, false
-		state.backupsError = ""
-		s.settingsUnit.state.settingsBackups = nil
-	} else {
-		state.previewLoading, state.previewError = true, ""
-		state.preview, state.previewText = nil, ""
-		s.materialsUnit.state.importPreview, s.materialsUnit.state.importPath = false, ""
-	}
+	state.previewLoading, state.previewOpen, state.previewError = true, false, ""
+	state.preview, state.previewText = nil, ""
 	return request, nil
 }
 
@@ -132,14 +94,7 @@ func (s *app) dispatchIndependentSettingsConfigRead(action application.Action) b
 	}
 	request, err := s.beginSettingsConfigRead(action)
 	if err != nil {
-		state := s.ensureSettingsConfigRecovery()
-		if action.Kind == "config.backups" {
-			state.backupsError = err.Error()
-		} else if action.Kind == "config.delete-backups" {
-			state.backupDeleteError = err.Error()
-		} else {
-			state.previewError = err.Error()
-		}
+		s.ensureSettingsConfigRecovery().previewError = err.Error()
 		return true
 	}
 	if s.backend == nil || s.win == nil || s.win.IsDestroyed() {
@@ -177,42 +132,26 @@ func (s *app) finishSettingsConfigRead(request *settingsExtensionReadJob, result
 	if !s.settingsConfigReadRelevant(request) {
 		if request.owner.current[request.key] == request {
 			s.cancelSettingsConfigRead(request.key)
-			if request.key == "config.backups" {
-				s.ensureSettingsConfigRecovery().backupsDirty = true
-			}
 		}
 		return
 	}
 	delete(request.owner.current, request.key)
 	state := s.ensureSettingsConfigRecovery()
-	if request.key == "config.delete-backups" {
-		state.backupDeleteLoading = false
-		s.applySettingsBackupDelete(result, err)
+	state.previewLoading = false
+	if err != nil {
+		state.previewError = err.Error()
 		return
 	}
-	if request.key == "config.backups" {
-		state.backupsLoading = false
-		if err != nil {
-			state.backupsError = err.Error()
-			return
-		}
-	} else {
-		state.previewLoading = false
-		if err == nil {
-			preview, decodeErr := settingsConfigPreview(result.Data)
-			err = decodeErr
-			if err == nil {
-				selected, selectedErr := filepath.Abs(request.action.Path)
-				returned, returnedErr := filepath.Abs(preview.Path)
-				if selectedErr != nil || returnedErr != nil || selected != returned {
-					err = errors.New("配置预览来源与本次选择不一致，请重新读取。")
-				}
-			}
-		}
-		if err != nil {
-			state.previewError = err.Error()
-			return
-		}
+	preview, err := settingsConfigPreview(result.Data)
+	if err != nil {
+		state.previewError = err.Error()
+		return
+	}
+	selected, selectedErr := filepath.Abs(request.action.Path)
+	returned, returnedErr := filepath.Abs(preview.Path)
+	if selectedErr != nil || returnedErr != nil || selected != returned {
+		state.previewError = "配置预览来源与本次选择不一致，请重新读取。"
+		return
 	}
 	s.applySettingsActionResult(request.action, result)
 }
@@ -222,7 +161,7 @@ func settingsConfigPreview(data any) (application.ConfigImportPreview, error) {
 	if pointer, pointerOK := data.(*application.ConfigImportPreview); pointerOK && pointer != nil {
 		preview, ok = *pointer, true
 	}
-	if !ok || preview.Path == "" {
+	if !ok || preview.Path == "" || preview.Fingerprint == "" {
 		return application.ConfigImportPreview{}, errors.New("后端未返回有效配置预览，请重新读取。")
 	}
 	preview.ChangedFields = append([]string(nil), preview.ChangedFields...)
@@ -240,19 +179,10 @@ func (s *app) applySettingsConfigPreview(data any) {
 	}
 	state.preview, state.previewScope = &preview, s.settingsExtensionCurrentScope()
 	state.previewText, state.previewError = configPreviewText(preview), ""
-	s.materialsUnit.state.importPreview, s.materialsUnit.state.importPath = true, preview.Path
+	state.previewOpen = true
 	// Keep the existing settings summary and formatter proof. The confirmation
 	// itself reads the dedicated immutable preview text below.
 	s.settingsUnit.state.settingsOutput = state.previewText
-}
-
-func (s *app) applySettingsConfigBackups(data any) {
-	state := s.ensureSettingsConfigRecovery()
-	s.settingsUnit.state.settingsBackups = mapsFromData(data)
-	s.reconcileSettingsBackupSelection()
-	state.backupFailures, state.backupDeleteError = nil, ""
-	state.backupsLoading, state.backupsLoaded, state.backupsDirty = false, true, false
-	state.backupsScope, state.backupsError = s.settingsExtensionCurrentScope(), ""
 }
 
 func (s *app) observeSettingsConfigRecovery() {
@@ -263,41 +193,17 @@ func (s *app) observeSettingsConfigRecovery() {
 	for key, request := range state.jobs.current {
 		if !s.settingsConfigReadRelevant(request) {
 			s.cancelSettingsConfigRead(key)
-			if key == "config.backups" {
-				state.backupsDirty = true
-			}
 		}
 	}
-	if state.preview != nil && (!s.materialsUnit.state.importPreview || !s.settingsConfigRecoveryVisible() || state.previewScope != s.settingsExtensionCurrentScope()) {
+	if state.preview != nil && (!state.previewOpen || !s.settingsConfigRecoveryVisible() || state.previewScope != s.settingsExtensionCurrentScope()) {
 		state.preview, state.previewText = nil, ""
-		s.materialsUnit.state.importPreview = false
+		state.previewOpen = false
 	}
-	if state.backupsLoaded && state.backupsScope != s.settingsExtensionCurrentScope() {
-		state.backupsLoaded, state.backupsDirty = false, true
-		s.settingsUnit.state.settingsBackups = nil
-		state.backupSelected, state.backupFailures, state.backupDeleteError = nil, nil, ""
-		state.backupFocusReload = false
-	}
-	if s.settingsConfigRecoveryVisible() && !s.busy && state.backupsDirty && !state.backupsLoading && !state.backupDeleteLoading {
-		s.act("config.backups", "", "", "", "", "", nil)
-	}
-}
-
-// Run after each attempted import/restore, including a failed replacement: the
-// backup may already have been created and the retention limit may have pruned.
-func (s *app) settingsConfigMutationFinished(action application.Action) {
-	if action.Kind != "config.import" && action.Kind != "config.restore-backup" {
-		return
-	}
-	state := s.ensureSettingsConfigRecovery()
-	s.cancelSettingsConfigRead("config.backups")
-	state.backupsLoaded, state.backupsDirty, state.backupsError = false, true, ""
-	s.settingsUnit.state.settingsBackups = nil
 }
 
 func (s *app) settingsConfigImportAction() (application.Action, bool) {
 	state := s.settingsUnit.state.settingsConfigRecovery
-	if state == nil || state.preview == nil || state.preview.Fingerprint == "" || !s.materialsUnit.state.importPreview || s.busy ||
+	if state == nil || state.preview == nil || state.preview.Fingerprint == "" || !state.previewOpen || s.busy ||
 		!s.settingsConfigRecoveryVisible() || state.previewScope != s.settingsExtensionCurrentScope() {
 		return application.Action{}, false
 	}
@@ -311,7 +217,7 @@ func (s *app) confirmSettingsConfigImport() {
 	}
 	s.dispatch(action)
 	if s.busy && s.operationKind == "config.import" {
-		s.materialsUnit.state.importPreview = false
+		s.settingsUnit.state.settingsConfigRecovery.previewOpen = false
 	}
 }
 

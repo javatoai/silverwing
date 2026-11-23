@@ -3,8 +3,12 @@ package desktop
 import (
 	"context"
 	"encoding/json"
-	"strings"
+	"reflect"
 	"testing"
+	"time"
+
+	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
 
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/domain"
@@ -15,12 +19,14 @@ import (
 func taskServicesDesktopFixture(t *testing.T) *app {
 	t.Helper()
 	cfg := domain.DefaultAppConfig()
+	genbuEnabled := true
+	cfg.OptionalCLIs.Genbu = &genbuEnabled
 	root := "D:/isolated-services"
 	cfg.TaskRoot = &root
-	cfg.Groups[0].Services = []domain.GroupServiceConfig{{ID: "s1", DisplayName: "A service", GenbuServiceName: "alias-one", GenbuProbeEnabled: true}, {ID: "s2", DisplayName: "Second service", GenbuServiceName: "alias-two", GenbuProbeEnabled: true}}
+	cfg.Services = []domain.GroupServiceConfig{{ID: "s1", DisplayName: "A service", GenbuServiceName: "alias-one", GenbuProbeEnabled: true}, {ID: "s2", DisplayName: "Second service", GenbuServiceName: "alias-two", GenbuProbeEnabled: true}}
 	cfg.Repositories = []domain.RepositoryConfig{}
-	for i := range cfg.Groups[0].Services {
-		service := &cfg.Groups[0].Services[i]
+	for i := range cfg.Services {
+		service := &cfg.Services[i]
 		service.RepositoryID = "repo-" + service.ID
 		cfg.Repositories = append(cfg.Repositories, domain.RepositoryConfig{ID: service.RepositoryID, Name: service.ID, RootPath: root + "/" + service.ID, GitCommonDirectory: root + "/" + service.ID + "/.git"})
 		service.MasterBranch = "origin/main"
@@ -42,6 +48,8 @@ func taskServicesDesktopFixture(t *testing.T) *app {
 		t.Fatal(err)
 	}
 	s := &app{page: "tasks", tab: taskServicesTab, snapshot: application.Snapshot{Home: "D:/isolated-home", ConfigJSON: string(data)}}
+	s.settingsUnit.state.configJSON = string(data)
+	seedPlatformConnectionsForDesktopTest(s, true, false)
 	s.taskUnit.state.tasks = []task{{id: "first", title: "First task", groupID: domain.DefaultGroupID, path: root + "/first", createdAt: "2026-11-02", serviceIDs: []string{"s2", "s1", "s2"}, workspaces: []application.Workspace{{ServiceID: "s2", Name: "Second service"}, {ServiceID: "s1", Name: "A service", ModuleID: "module-one"}, {ServiceID: "s1", Name: "A service", ModuleID: "module-two"}}}}
 	return s
 }
@@ -58,12 +66,13 @@ func TestTaskServicesProjectionOrderDedupAndQueryIdentity(t *testing.T) {
 	var cfg domain.AppConfig
 	json.Unmarshal([]byte(s.snapshot.ConfigJSON), &cfg)
 	old := application.TaskServiceQueryIdentity(cfg)
-	cfg.GenbuExecutablePath = stringPointerForServiceTest("other.exe")
+	disabled := false
+	cfg.OptionalCLIs.Genbu = &disabled
 	data, _ := json.Marshal(cfg)
 	s.snapshot.ConfigJSON = string(data)
 	_, changed := s.taskServicesProjection()
 	if old == application.TaskServiceQueryIdentity(cfg) || key == changed {
-		t.Fatal("CLI change did not invalidate service ownership")
+		t.Fatal("Genbu switch change did not invalidate service ownership")
 	}
 	s.taskUnit.state.tasks[0].serviceIDs = []string{"s2"}
 	s.taskUnit.state.tasks[0].workspaces = nil
@@ -72,8 +81,6 @@ func TestTaskServicesProjectionOrderDedupAndQueryIdentity(t *testing.T) {
 		t.Fatal("removed service retained", v.rows)
 	}
 }
-
-func stringPointerForServiceTest(text string) *string { return &text }
 
 func TestTaskServicesConsumesSnapshotWorkspaceIDsNotDisplayNames(t *testing.T) {
 	s := taskServicesDesktopFixture(t)
@@ -90,30 +97,6 @@ func TestTaskServicesConsumesSnapshotWorkspaceIDsNotDisplayNames(t *testing.T) {
 	}
 }
 
-func TestTaskServicesNamespaceDraftDoesNotAffectPodsAndIsNormalizedForConfig(t *testing.T) {
-	s := taskServicesDesktopFixture(t)
-	v := s.ensureTaskServicesCurrent()
-	if v == nil {
-		t.Fatal("missing service view")
-	}
-	row := v.rows[0]
-	row.namespace = "bad_namespace"
-	if got := s.taskServiceAction(v, row, "task.services.pods").Payload["namespace"]; got != "" {
-		t.Fatal("Pod query inherited configuration draft", got)
-	}
-	row.namespace = " fp "
-	s.requestTaskServiceConfig(v, row)
-	if row.namespace != "fp" {
-		t.Fatal("config namespace was not normalized", row.namespace)
-	}
-	row.pods = []production.RuntimePod{{Namespace: "fp"}, {Namespace: "secondary"}}
-	row.namespace = "  "
-	s.requestTaskServiceConfig(v, row)
-	if row.namespace != "" || !strings.Contains(row.configError, "请选择或输入") {
-		t.Fatal("whitespace bypassed namespace choice", row)
-	}
-}
-
 func TestTaskServicesSummaryAllVersionsReadyAndRawCreationTimes(t *testing.T) {
 	pods := []production.RuntimePod{{Namespace: "fp", Version: "long-v2", Ready: true, CreatedTime: "2026-11-02 12:34:56"}, {Namespace: "fp", Version: "v1", Ready: true, CreatedTime: "2026-11-01 10:11:12"}, {Namespace: "side", Version: "long-v2", Ready: false, CreatedTime: ""}}
 	versions := taskServiceVersions(pods)
@@ -122,9 +105,6 @@ func TestTaskServicesSummaryAllVersionsReadyAndRawCreationTimes(t *testing.T) {
 	}
 	if got := taskServiceFirstCreationTime(pods); got != "2026-11-02 12:34:56" {
 		t.Fatal("summary must use first returned Pod, not earliest time", got)
-	}
-	if got := taskServiceNamespaces(pods); len(got) != 2 || got[0] != "fp" || got[1] != "side" {
-		t.Fatal(got)
 	}
 	if taskServiceFirstCreationTime(nil) != "—" || taskServiceFirstCreationTime([]production.RuntimePod{{}, {CreatedTime: "later-known-time"}}) != "—" {
 		t.Fatal("empty Pods manufactured a timestamp")
@@ -141,14 +121,14 @@ func TestTaskServicesEnvironmentSwitchCancelsClosesAndRetainsIndependentCache(t 
 		row.loaded = true
 		row.pods = []production.RuntimePod{{Name: row.environment + "-cached"}}
 	}
-	v.expanded = v.rows[0].key()
-	v.detail = "config"
+	s.openTaskServiceDialog(v, v.rows[0], taskServiceConfigDetail)
+	dialog := v.dialog
+	dialog.config.text = "memory-only data"
 	v.vertical.Y = 120
-	v.horizontal.X = 80
 	cancelled := false
 	s.taskServicesUnit.jobs = map[string]*taskServicesRequest{"old-env": {view: v, epoch: v.epoch, environment: "uat", cancel: func() { cancelled = true }}}
 	before := v.epoch
-	if !s.selectTaskServicesEnvironment(v, "prod") || !cancelled || v.epoch <= before || v.expanded != "" || v.detail != "" || v.vertical.Y != 0 || v.horizontal.X != 0 || len(s.taskServicesUnit.jobs) != 0 {
+	if !s.selectTaskServicesEnvironment(v, "prod") || !cancelled || v.epoch <= before || v.dialog != nil || dialog.open || dialog.config.text != "" || v.vertical.Y != 0 || len(s.taskServicesUnit.jobs) != 0 {
 		t.Fatal("environment switch retained old request, detail or position", v)
 	}
 	for _, row := range v.visibleRows() {
@@ -172,8 +152,7 @@ func TestTaskServicesEachEntryDefaultsUATAndRefreshOnlyCurrentEnvironment(t *tes
 		row.pods = []production.RuntimePod{{Name: "cached"}}
 	}
 	v.environment = "prod"
-	v.expanded = v.rows[1].key()
-	if current := s.ensureTaskServicesCurrent(); current != v || v.environment != "uat" || v.expanded != "" {
+	if current := s.ensureTaskServicesCurrent(); current != v || v.environment != "uat" || v.dialog != nil {
 		t.Fatal("entry did not default to UAT")
 	}
 	for _, row := range v.rows {
@@ -215,13 +194,127 @@ func TestTaskServicesLeaveCancelsAndDropsOnlyConfigurationBodies(t *testing.T) {
 	row := v.rows[0]
 	row.loaded = true
 	row.pods = []production.RuntimePod{{Name: "kept-pod"}}
-	row.configText = "safe: <redacted>"
-	row.configLoaded = true
+	s.openTaskServiceDialog(v, row, taskServiceConfigDetail)
+	dialog := v.dialog
+	dialog.config.text = "safe: <redacted>"
+	dialog.config.loaded = true
 	cancelled := false
 	s.taskServicesUnit.jobs = map[string]*taskServicesRequest{"test": {view: v, cancel: func() { cancelled = true }}}
 	s.leaveTaskServices()
-	if !cancelled || v.active || len(s.taskServicesUnit.jobs) != 0 || row.configText != "" || row.configLoaded || !row.loaded || len(row.pods) != 1 {
+	if !cancelled || v.active || len(s.taskServicesUnit.jobs) != 0 || v.dialog != nil || dialog.config.text != "" || dialog.config.loaded || !row.loaded || len(row.pods) != 1 {
 		t.Fatal("leave lost reusable Pods or retained config/request", row)
+	}
+}
+
+func TestTaskServicesDialogCloseCancelsOnlyItsConfigAndDiscardsNamespace(t *testing.T) {
+	s := taskServicesDesktopFixture(t)
+	v := s.ensureTaskServicesCurrent()
+	row := v.rows[0]
+	s.openTaskServiceDialog(v, row, taskServiceConfigDetail)
+	old := v.dialog
+	old.config.namespace = "selected"
+	old.config.namespaceOptions = []string{"other", "selected"}
+	old.config.loaded = true
+	old.config.text = "safe: <redacted>"
+	old.config.preview.bind("kept", "config.txt", old.config.text)
+
+	podCanceled, configCanceled := false, false
+	s.taskServicesUnit.jobs["pods:"+row.key()] = &taskServicesRequest{view: v, cancel: func() { podCanceled = true }}
+	s.taskServicesUnit.jobs["config:"+row.key()] = &taskServicesRequest{view: v, cancel: func() { configCanceled = true }}
+	s.closeTaskServiceDialog(v, old)
+	if v.dialog != nil || old.open || !reflect.DeepEqual(old.config, taskServiceConfigView{}) {
+		t.Fatal("closing must dispose the config preview and namespace choices")
+	}
+	if !configCanceled || podCanceled || len(s.taskServicesUnit.jobs) != 1 {
+		t.Fatal("closing did not cancel only the config read")
+	}
+
+	s.openTaskServiceDialog(v, row, taskServicePodsDetail)
+	current := v.dialog
+	s.closeTaskServiceDialog(v, old)
+	s.requestTaskServiceConfig(v, old)
+	if current == nil || v.dialog != current || !current.open || !reflect.DeepEqual(old.config, taskServiceConfigView{}) || podCanceled {
+		t.Fatal("stale dialog changed the current modal or its Pod request")
+	}
+	s.leaveTaskServices()
+	if !podCanceled {
+		t.Fatal("leaving the page retained the Pod request")
+	}
+}
+
+func TestTaskServicesArchiveConfigUsesActiveScopeAndDiscardsLateResult(t *testing.T) {
+	s := taskServicesDesktopFixture(t)
+	s.page, s.taskUnit.state.tasks[0].archived = "archive", true
+	v := s.ensureTaskServicesCurrent()
+	if !s.selectTaskServicesEnvironment(v, "prod") {
+		t.Fatal("cannot select archived PROD scope")
+	}
+	row := v.rows[1]
+	row.pods = []production.RuntimePod{{Name: "existing-pod", Namespace: "fp"}, {Name: "other-pod", Namespace: "ops"}}
+	calls := make(chan application.Action, 2)
+	s.win = &mygo.Window{}
+	s.backend = &asyncLifecycleBackend{dispatch: func(ctx context.Context, action application.Action) (application.ActionResult, error) {
+		calls <- action
+		<-ctx.Done()
+		return application.ActionResult{Data: application.TaskServiceConfigResult{
+			ServiceID: row.serviceID, GenbuServiceName: row.genbuName,
+			Environment: "prod", Text: "old: <redacted>",
+		}}, nil
+	}}
+	t.Cleanup(s.stopTaskServices)
+
+	s.openTaskServiceDialog(v, row, taskServicePodsDetail)
+	if v.dialog == nil || len(s.taskServicesUnit.jobs) != 0 {
+		t.Fatal("opening Pod details started a read")
+	}
+	s.openTaskServiceDialog(v, row, taskServiceConfigDetail)
+	old := v.dialog
+	select {
+	case action := <-calls:
+		scope, ok := action.Payload["taskServicesContext"].(application.TaskServicesContext)
+		if action.Kind != "task.services.config" || action.TaskID != v.identity.id || action.ServiceID != row.serviceID ||
+			action.Payload["environment"] != "prod" || action.Payload["namespace"] != nil || !ok ||
+			!scope.Archived || scope.GenbuServiceName != row.genbuName {
+			t.Fatalf("wrong archive configuration request: %+v", action)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no configuration read")
+	}
+	request := s.taskServicesUnit.jobs["config:"+row.key()]
+	s.openTaskServiceDialog(v, row, taskServiceConfigDetail)
+	if request == nil || s.taskServicesUnit.jobs["config:"+row.key()] != request || v.dialog != old {
+		t.Fatal("reopening an already active dialog started another read")
+	}
+	s.closeTaskServiceDialog(v, old)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := s.closeTaskServices(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if request.ctx.Err() != context.Canceled || v.dialog != nil || !reflect.DeepEqual(old.config, taskServiceConfigView{}) {
+		t.Fatal("the dismissed modal retained its config request or content")
+	}
+}
+
+func TestTaskServicesDialogInvalidatesWithTaskAndPageScope(t *testing.T) {
+	for name, change := range map[string]func(*app){
+		"another task": func(s *app) { s.taskUnit.state.tasks[0].id = "other-task" },
+		"removed task": func(s *app) { s.taskUnit.state.tasks = nil },
+		"archive page": func(s *app) { s.page = "archive" },
+		"other tab":    func(s *app) { s.tab = taskFilesTab },
+		"other page":   func(s *app) { s.page = "services" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := taskServicesDesktopFixture(t)
+			v := s.ensureTaskServicesCurrent()
+			s.openTaskServiceDialog(v, v.rows[0], taskServicePodsDetail)
+			dialog := v.dialog
+			change(s)
+			tester := ui.NewTester(func(c *ui.Context) { s.renderTaskServiceDialog(c, setTheme(c, false)) }, 1100, 700)
+			if tester.HasText("Pod 明细") || v.dialog != nil || dialog.open {
+				t.Fatal("stale modal remained on screen")
+			}
+		})
 	}
 }
 

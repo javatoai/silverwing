@@ -69,7 +69,8 @@ type DamageSurface interface {
 // frames: the content then draws nothing that moves until it shows again.
 type OccludableSurface interface {
 	// Occluded reports whether nothing of the surface shows on screen. The
-	// surface sends SurfaceShown once some of it shows again.
+	// surface sends SurfaceHidden as none of it shows any more, and
+	// SurfaceShown once some of it shows again.
 	Occluded() bool
 }
 
@@ -79,6 +80,48 @@ type WideGamutSurface interface {
 	// WideGamut reports whether the screen showing most of the window
 	// shows colors outside the sRGB gamut, as Display P3 screens do.
 	WideGamut() bool
+}
+
+// GlassPlacement is where a surface shows the system's glass
+// (Surface.PlaceGlass), under its content, in DIPs from its top left.
+type GlassPlacement struct {
+	// ID identifies the element showing the glass from one frame to the
+	// next.
+	ID uint64
+	// Frame is the glass's box; Clip the part of it that shows.
+	Frame, Clip RectF
+	// Radii are the corners of the hole the content leaves, clockwise
+	// from the top left, and CornerRadius the one the glass view takes,
+	// where it takes one.
+	Radii        [4]float64
+	CornerRadius float64
+	// Style is NSGlassEffectView's style: 0 regular, 1 clear.
+	Style int
+	// Tint colors the glass, nil for none.
+	Tint *Color
+}
+
+// ViewSurface is a Surface that shows views of the platform's own under
+// it, as it shows web views: those of native modules (package native),
+// shown with ui.NativeView. macOS's surfaces are.
+type ViewSurface interface {
+	// EmbedView puts view, an NSView on macOS, under the surface, hidden
+	// until PlaceWebViews shows it as it shows a web view. The WebView it
+	// returns stands for it there; of its Page, only what concerns a view
+	// applies (Focus, TabInto, Close, which takes the view out of the
+	// window and lets go of it). The surface keeps view while it shows it.
+	EmbedView(view uintptr) (WebView, error)
+}
+
+// GlassSurface is a Surface that draws the system's glass under its
+// content, as macOS 26's NSGlassEffectView does, where the content leaves a
+// hole.
+type GlassSurface interface {
+	// NativeGlassSupported reports whether the system's glass is available.
+	NativeGlassSupported() bool
+	// PlaceGlass shows the glass where the content's last frame shows it,
+	// and hides the rest.
+	PlaceGlass(places []GlassPlacement)
 }
 
 // MaterialSurface is a Surface whose window can show a material
@@ -142,6 +185,74 @@ type MaximizeButtonSurface interface {
 	SetMaximizeButton(r RectF)
 }
 
+// InsetSurface is a Surface whose edges something covers, as the system's
+// bars, a display's cutout and the keyboard cover a phone's screen.
+type InsetSurface interface {
+	// Insets are how far in from each edge the content is covered: the
+	// content lays out inside them and paints its background under them.
+	Insets() Insets
+}
+
+// TouchSurface is a Surface of a touch screen, whose system has more to say
+// to fingers than pixels.
+type TouchSurface interface {
+	// Haptic plays a haptic (DeviceBackend.Haptic).
+	Haptic(kind string)
+	// ShowEditMenu shows the system's menu of the editing commands named, of
+	// "cut", "copy", "paste" and "selectAll", at a point in DIPs; they come as
+	// SurfaceCommand.
+	ShowEditMenu(x, y float64, actions []string)
+	// ShowMagnifier shows the system's magnifier of what is at a point in
+	// DIPs, as a finger drags a text handle, until HideMagnifier.
+	ShowMagnifier(x, y float64)
+	HideMagnifier()
+	// SetBackAvailable tells whether the content takes the system's back:
+	// without, it leaves the app, as the system's predictive back shows.
+	SetBackAvailable(on bool)
+}
+
+// StackSurface is a Surface whose window can show the pages of a Router as
+// the system's own stack of screens, as phones have: a navigation bar at
+// the top with the title of the page shown and a back button, and on iOS
+// the system's transitions and its swipe from the left edge
+// (ui.Router.SystemStack).
+type StackSurface interface {
+	// CanStack reports whether the window can show a stack: a window of
+	// its own scene, on an iPad, cannot.
+	CanStack() bool
+	// StackMoves reports whether the system moves the screens as they come
+	// and go, as iOS does, and follows a finger going back: the content
+	// then shows each page at once. Where it does not, as on Android, the
+	// content moves its pages itself, under the system's bar.
+	StackMoves() bool
+	// SetStack shows screens as the stack: the first page and those
+	// deeper, up to the one shown. The screens of the Keys the stack
+	// shows stay; it pushes the screens after them, or pops back to them,
+	// and replaces the others at once. It returns once the system took
+	// what the surface shows for the screen going out of sight, so that
+	// the frame presented next shows the page coming. No screens take the
+	// stack away.
+	SetStack(screens []StackScreen)
+	// StackShown tells that the content presented the page the stack shows
+	// last, after SetStack or SurfaceStackPopped.
+	StackShown()
+}
+
+// StackScreen is a screen of a StackSurface's stack: a page of a Router,
+// Key telling it apart from the other pages.
+type StackScreen struct {
+	Key   uint64
+	Title string
+}
+
+// PluginViewSurface is a Surface that holds native views of plugins' native
+// code, as it does web views: under it, where its frames leave holes. The
+// WebView of one has no page: only its place, its keyboard and Close do
+// anything.
+type PluginViewSurface interface {
+	NewPluginView(viewType string, args []byte, h WindowHandler) (WebView, error)
+}
+
 // IdleSurface is a Surface that can give back memory once frames stop.
 type IdleSurface interface {
 	// Idle tells that no frame came for a while: the surface may give
@@ -157,6 +268,18 @@ type IdleSurface interface {
 type BackgroundSurface interface {
 	// SetBackground sets the color, opaque, or transparent for none.
 	SetBackground(c Color)
+}
+
+// FirstFrameSurface is a Surface told when the content's first frame
+// reached it: a window made hidden draws that frame while hidden, which
+// no paint or refresh of the display asks for, and which makes it ready
+// to show. Windows' window also stays out of sight until then, rather
+// than show what it holds before, white.
+type FirstFrameSurface interface {
+	// FirstFrame tells that the content presented its first frame. It is
+	// called once, within the frame, before the window is told it is
+	// ready to show.
+	FirstFrame()
 }
 
 // TextInputState is the state of the text input that has the keyboard,
@@ -180,7 +303,88 @@ type TextInputState struct {
 	// composed, as winit's set_ime_allowed(false). Browsers cannot turn
 	// input methods off, and ignore it.
 	NoInputMethod bool
+	// Traits describe the input to on-screen keyboards.
+	Traits TextTraits
+	// ShowKeyboard counts the requests for the on-screen keyboard to show,
+	// as a finger taps the input again after the keyboard was dismissed
+	// while it kept the focus.
+	ShowKeyboard uint32
 }
+
+// TextTraits describe a text input to on-screen keyboards, as phones have.
+// Other platforms ignore them. Zero values are the keyboard's defaults.
+type TextTraits struct {
+	Keyboard    KeyboardKind
+	ReturnKey   ReturnKeyKind
+	Capitalize  CapitalizeKind
+	Autocorrect AutocorrectKind
+	Autofill    AutofillKind
+	// Multiline and Secure tell a text area and a password field.
+	Multiline, Secure bool
+}
+
+// KeyboardKind is the layout of an on-screen keyboard.
+type KeyboardKind uint8
+
+const (
+	KeyboardDefault KeyboardKind = iota
+	KeyboardEmail
+	KeyboardNumber
+	KeyboardDecimal
+	KeyboardPhone
+	KeyboardURL
+	KeyboardSearch
+)
+
+// ReturnKeyKind is what the return key of an on-screen keyboard says.
+type ReturnKeyKind uint8
+
+const (
+	ReturnDefault ReturnKeyKind = iota
+	ReturnDone
+	ReturnGo
+	ReturnNext
+	ReturnSearch
+	ReturnSend
+)
+
+// CapitalizeKind is what an on-screen keyboard capitalizes.
+type CapitalizeKind uint8
+
+const (
+	CapitalizeDefault CapitalizeKind = iota
+	CapitalizeNone
+	CapitalizeWords
+	CapitalizeSentences
+	CapitalizeCharacters
+)
+
+// AutocorrectKind is whether an on-screen keyboard corrects what is typed.
+type AutocorrectKind uint8
+
+const (
+	AutocorrectDefault AutocorrectKind = iota
+	AutocorrectOn
+	AutocorrectOff
+)
+
+// AutofillKind names what an input holds, for the system's passwords and
+// contacts.
+type AutofillKind uint8
+
+const (
+	AutofillNone AutofillKind = iota
+	AutofillUsername
+	AutofillPassword
+	AutofillNewPassword
+	AutofillOneTimeCode
+	AutofillEmail
+	AutofillName
+	AutofillPhone
+	AutofillAddress
+	AutofillPostalCode
+	AutofillCreditCard
+)
 
 // SurfaceNative holds the native objects of a Surface.
 type SurfaceNative struct {
@@ -201,6 +405,9 @@ type SurfaceNative struct {
 	// Context.ID), current while SurfaceFrame events are handled
 	// (browsers).
 	Canvas uintptr
+	// Window is the surface's ANativeWindow, which an EGL context draws
+	// into (Android); Layer is its CAMetalLayer on iOS.
+	Window uintptr
 }
 
 // RectF is a rectangle in DIPs with fractional coordinates.
@@ -210,6 +417,11 @@ type RectF struct{ X, Y, W, H float64 }
 func (r RectF) Contains(x, y float64) bool {
 	return x >= r.X && y >= r.Y && x < r.X+r.W && y < r.Y+r.H
 }
+
+// Insets are how far in from each edge of a surface its content is
+// covered, in DIPs: by the system's bars, a display's cutout or rounded
+// corners, or the keyboard (phones).
+type Insets struct{ Top, Left, Bottom, Right float64 }
 
 // SurfaceEventKind is the kind of a SurfaceEvent.
 type SurfaceEventKind uint8
@@ -227,6 +439,15 @@ const (
 	// its press's.
 	PointerDown
 	PointerUp
+	// PointerCancel reports that the system ended the pointer's press
+	// without a release, as Pointer Events' pointercancel: every button
+	// held is let go of, and no PointerUp follows for them. The content
+	// commits nothing a release would. Backends send it when they lose the
+	// press to the system (a browser's pointercancel, a window losing the
+	// mouse capture or a pointer grab while a button is down, a menu's
+	// loop taking the release), and the content ignores one while nothing
+	// is pressed.
+	PointerCancel
 	// PointerLeave reports the pointer left the surface.
 	PointerLeave
 	// PointerScroll scrolls by DX, DY DIPs at X, Y: positive DY moves the
@@ -242,6 +463,14 @@ const (
 	// ModifiersChanged reports the modifier keys held, Mods, as one of
 	// them goes down or up on its own.
 	ModifiersChanged
+	// RawKeyPressed and RawKeyReleased report a key by its position, Code,
+	// that KeyPressed and KeyReleased leave out: a modifier, a lock key, or
+	// one the layout types no Key for. PhysicalKey is set where it can be,
+	// Key never is. The content reports whether it took the press or the
+	// release, which then goes no further in the system, as Alt opening
+	// the window's menu bar.
+	RawKeyPressed
+	RawKeyReleased
 	// TextInput inserts Text, typed or committed by an input method.
 	TextInput
 	// TextComposition shows Text as the input method's composition, its
@@ -257,6 +486,10 @@ const (
 	// "italic", "underline", "strikethrough", "alignLeft", "alignCenter"
 	// or "alignRight".
 	SurfaceCommand
+	// SurfaceCommandEnabled asks whether SurfaceCommand with Text would
+	// act now, for a menu to enable its item: WindowHandler.SurfaceEvent
+	// reports it.
+	SurfaceCommandEnabled
 	// FileDragOver reports files of another app dragged over X, Y, and
 	// FileDragLeave that they left. FileDrop drops Files at X, Y.
 	// WindowHandler.SurfaceEvent returns whether the content takes them
@@ -272,8 +505,9 @@ const (
 	// tree, with Text the value of AccessSetValue.
 	AccessAction
 	// SurfaceShown reports that some of an OccludableSurface shows again
-	// after none did.
+	// after none did, and SurfaceHidden that none of it shows any more.
 	SurfaceShown
+	SurfaceHidden
 	// DataDragOver queries a destination; DataDrop commits a transfer.
 	// DataDragLeave clears its hover state. Drag carries the query/result.
 	DataDragOver
@@ -293,7 +527,61 @@ const (
 	// the surface has the keyboard again, and the content moves the focus
 	// on from the web view's element.
 	WebViewTabOut
+	// SurfaceLowMemory reports that the system is short of memory: the
+	// content lets go of what it can make again.
+	SurfaceLowMemory
+	// SurfaceBackGesture reports the system's gesture of going back as it
+	// goes, Android's predictive back: Text is "started", "progress" with
+	// how far in Scale, from 0 to 1, or "cancelled"; going back comes as the
+	// back key.
+	SurfaceBackGesture
+	// SurfaceScrollToTop reports a tap on iOS's status bar, which sends what
+	// scrolls under it back to its top.
+	SurfaceScrollToTop
+	// SurfaceStackPopped reports that the user took screens off the stack
+	// of StackSurface.SetStack, with its back button or a swipe: To is how
+	// many screens stay.
+	SurfaceStackPopped
+	// WebViewKey reports Key with Mods, pressed in the page of WebView,
+	// which has the keyboard, and which the page left unhandled: it did
+	// not cancel it, type it into an editable element or compose with it,
+	// and it is neither Tab nor a modifier key on its own. The content
+	// takes it as if the web view's element had the focus, and the
+	// keyboard stays with the page.
+	WebViewKey
+	// TouchDown, TouchMove, TouchUp and TouchCancel report a finger on a
+	// touchscreen landing, moving, lifting or taken by the system (as for
+	// an edge's gesture, where no TouchUp follows) at X, Y, with Pressure
+	// and the size of its contact (Width, Height) where the device tells
+	// them. ID tells the fingers down at once apart
+	// from the TouchDown to the TouchUp or TouchCancel; it may be used
+	// again after. They come besides the pointer events a backend makes of
+	// the fingers (taps, scrolls, pinches), which they leave as they are:
+	// the content tracks them only for elements that ask (ui.Element.Touches).
+	// Windows (WM_POINTER), Linux (GDK's touch sequences) and browsers
+	// (Pointer Events of pointerType touch) send them; macOS has no
+	// touchscreen, and a trackpad's fingers are not points on the screen.
+	TouchDown
+	TouchMove
+	TouchUp
+	TouchCancel
+	// DragRegionAt asks whether a finger landing at X, Y moves the
+	// window, as the mouse's press does on a drag region of a title bar
+	// the content draws (ui's DragWindow), but for one that scrolls, which
+	// the finger scrolls: WindowHandler.SurfaceEvent reports it, and
+	// changes nothing. A backend that makes taps of fingers itself
+	// (TouchGesture), which press only as they lift, asks as a finger
+	// lands, and leaves one that does to the system's mouse, whose press
+	// moves the window (Windows).
+	DragRegionAt
 )
+
+// EditCommands are the menu roles of edit commands, which native UI takes as
+// a SurfaceCommand and answers SurfaceCommandEnabled for.
+var EditCommands = map[string]bool{
+	"undo": true, "redo": true, "cut": true, "copy": true, "paste": true, "pasteAndMatchStyle": true,
+	"delete": true, "selectAll": true,
+}
 
 // SurfaceEvent is input on a Surface, or a change of it.
 type SurfaceEvent struct {
@@ -309,18 +597,33 @@ type SurfaceEvent struct {
 	DX, DY   float64
 	Precise  bool
 	Momentum bool
-	// Scale is PointerZoom's. A wheel-derived zoom may also carry DX/DY and
-	// Precise as an optional legacy-scroll fallback when zoom is unhandled.
-	Scale float64
-	Key   Key
+	// Scale is PointerZoom's, and Rotation the radians clockwise two fingers
+	// turned since the last, on touch screens. A wheel-derived zoom may also
+	// carry DX/DY and Precise for scrolling when zoom is unhandled.
+	Scale, Rotation float64
+	// Pointer is the device of PointerMove, PointerDown and PointerUp, as
+	// Pointer Events' pointerType, and Pressure how hard a pen or a finger
+	// presses, from 0 to 1, where the device tells: 0 where it does not,
+	// as a mouse, which the content takes for Pointer Events' default.
+	Pointer  PointerKind
+	Pressure float64
+	// Width and Height are the size of a finger's contact with the
+	// touchscreen in DIPs, of TouchDown and TouchMove, where the device
+	// tells it: 0 where it does not.
+	Width, Height float64
+	Key           Key
 	// PhysicalKey is the key by its position on an ANSI US keyboard,
 	// whatever the active layout types; KeyUnknown where the backend does
 	// not report it. Key and PhysicalKey agree on a US layout.
 	PhysicalKey Key
-	Mods        Modifiers
-	Repeat      bool
-	Text        string
-	Caret       int
+	// Code is the key by its position, on any keyboard and with the sides
+	// of the modifiers told apart; CodeUnknown where the backend does not
+	// report it. KeyPressed, KeyReleased and the raw keys have it.
+	Code   KeyCode
+	Mods   Modifiers
+	Repeat bool
+	Text   string
+	Caret  int
 	// Replace makes TextInput replace, and TextComposition compose over,
 	// the runes From to To of the last TextInputState.Text, instead of the
 	// selection.
@@ -330,17 +633,38 @@ type SurfaceEvent struct {
 	// for DataDrop's legacy file-listener fallback.
 	Files []string
 	Drag  *DataDragEvent
-	// ID and Action are AccessAction's.
+	// ID and Action are AccessAction's; ID is also the finger of
+	// TouchDown, TouchMove, TouchUp and TouchCancel.
 	ID     uint64
 	Action AccessActionKind
-	// WebView is WebViewTabOut's.
+	// WebView is WebViewTabOut's and WebViewKey's.
 	WebView WebView
+	// Canceled marks a PointerUp of a finger the system took away, as a second
+	// finger or its own gesture does: it clicks nothing and throws nothing.
+	Canceled bool
+	// Touch marks pointer events of a finger on a touch screen, which
+	// has no hover: a drag of one pans what scrolls under it, and no
+	// pointer stays over the content after it lifts.
+	Touch bool
 	// Paced marks a SurfaceFrame of frames following each other at the
 	// display's refreshes (PacedSurface): the content may draw it later,
 	// once the display can take it, which it tells by returning true from
 	// SurfaceEvent; the refreshes go on meanwhile.
 	Paced bool
 }
+
+// PointerKind is the kind of device of a pointer event.
+type PointerKind uint8
+
+const (
+	// PointerMouse is a mouse, or a touchpad, which moves the pointer as
+	// one does.
+	PointerMouse PointerKind = iota
+	// PointerPen is a pen on a tablet or a screen, its eraser too.
+	PointerPen
+	// PointerTouch is a finger on a touchscreen.
+	PointerTouch
+)
 
 // Modifiers are the modifier keys held during an event.
 type Modifiers uint8
@@ -536,4 +860,12 @@ const (
 	CursorAlias
 	CursorContextMenu
 	CursorNone
+	CursorProgress
+	CursorWait
+	CursorHelp
+	CursorCell
+	CursorZoomIn
+	CursorZoomOut
+	CursorAllScroll
+	CursorNoDrop
 )

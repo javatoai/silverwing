@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"silverwing-go/internal/process"
 )
@@ -20,7 +21,7 @@ func TestProductionVersionSequenceOfflineFixture(t *testing.T) {
 	f.run(f.seed, "push", "origin", "refs/tags/2.4.36", "refs/tags/2.4.37", "refs/tags/6.6.6", "refs/heads/release/2.4.37")
 	f.g.versions = []string{"2.4.36"}
 	ctx := context.Background()
-	p, err := f.s.Inspect(ctx, f.selection, "")
+	p, err := f.s.Inspect(ctx, f.selection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +64,7 @@ func TestProductionVersionSuggestionsUseConfirmedSeries(t *testing.T) {
 		{name: "current hotfix", production: "2.4.36.7", want: "2.4.37"},
 		{name: "zero baseline", production: "0.0.0", want: "0.0.1"},
 		{name: "maximum hotfix suffix", production: "2.4.36", tags: []string{"2.4.37." + maximum}, want: "2.4.38"},
-		{name: "no baseline", tags: []string{"2.4.37", "6.6.6"}, errorPart: "无法自动建议"},
+		{name: "no baseline", tags: []string{"2.4.37", "6.6.6"}, errorPart: ErrProductionBaselineUnavailable.Error()},
 		{name: "nonnumeric baseline", production: "production-current", tags: []string{"6.6.6"}, errorPart: "手工填写"},
 		{name: "malformed baseline", production: "2.4", errorPart: "无法自动建议"},
 		{name: "overflowing baseline", production: "2.4.18446744073709551616", errorPart: "无法自动建议"},
@@ -106,9 +107,9 @@ func TestProductionNewReleaseVersionContext(t *testing.T) {
 		{name: "equal production", version: "2.4.36", preview: Preview{ProductionTag: "2.4.36"}, wantError: []string{"必须大于", "2.4.36", "release/2.4.37"}},
 		{name: "behind current hotfix", version: "2.4.36", preview: Preview{ProductionTag: "2.4.36.1"}, wantError: []string{"线上生产 Tag 2.4.36.1", "release/2.4.37"}},
 		{name: "pre-release does not occupy", version: "2.4.38", preview: Preview{ProductionTag: "2.4.36", Tags: []string{"2.4.38.beta-1"}, Branches: []string{"release/2.4.38-rc1"}}},
-		{name: "manual nonnumeric production", version: "2.4.38", preview: Preview{ProductionTag: "production-current", Manual: true, Tags: []string{"6.6.6"}}},
-		{name: "manual still respects target series", version: "3.0.0", preview: Preview{ProductionTag: "production-current", Manual: true, Tags: []string{"3.0.2"}}, wantError: []string{"3.0.2", "release/3.0.3"}},
-		{name: "policy leaves baseline confirmation to workflow", version: "0.0.0", preview: Preview{}},
+		{name: "typed version with nonnumeric production Tag", version: "2.4.38", preview: Preview{ProductionTag: "production-current", Tags: []string{"6.6.6"}}},
+		{name: "typed version still respects target series", version: "3.0.0", preview: Preview{ProductionTag: "production-current", Tags: []string{"3.0.2"}}, wantError: []string{"3.0.2", "release/3.0.3"}},
+		{name: "policy leaves baseline detection to workflow", version: "0.0.0", preview: Preview{}},
 		{name: "upgrade beyond patch limit", version: "3.0.0", preview: Preview{ProductionTag: "2.4." + maximum, Tags: []string{"6.6.6"}}},
 		{name: "valid maximum patch", version: "2.4." + maximum, preview: Preview{ProductionTag: "2.4.36"}},
 		{name: "overflowing input", version: "2.4.18446744073709551616", wantError: []string{"三段正式数字"}},
@@ -139,7 +140,7 @@ func TestProductionCreateRechecksVersionReservations(t *testing.T) {
 		t.Run(ref, func(t *testing.T) {
 			f := newFixture(t)
 			ctx := context.Background()
-			p, err := f.s.Inspect(ctx, f.selection, "")
+			p, err := f.s.Inspect(ctx, f.selection)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -157,48 +158,81 @@ func TestProductionCreateRechecksVersionReservations(t *testing.T) {
 	}
 }
 
-func TestProductionManualNonnumericBaselineAndExistingCreateRecovery(t *testing.T) {
+func TestProductionAutomaticNonnumericBaselineAndExistingCreateRecovery(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
 	f.run(f.seed, "tag", "production-current", f.base)
 	f.run(f.seed, "tag", "6.6.6", f.base)
 	f.run(f.seed, "push", "origin", "refs/tags/production-current", "refs/tags/6.6.6")
-	f.g.versionErr = errors.New("offline runtime unavailable")
-	p, err := f.s.Inspect(ctx, f.selection, "")
-	if err != nil || p.SuggestedVersion != "" || p.ProductionTag != "" {
-		t.Fatalf("unavailable baseline produced a suggestion: %+v / %v", p, err)
+	f.g.versions = []string{"production-current"}
+	p, err := f.s.Inspect(ctx, f.selection)
+	if err != nil || p.ProductionTag != "production-current" || p.ProductionSHA != f.base || p.SuggestedVersion != "" || !strings.Contains(p.Warning, "手工填写") {
+		t.Fatalf("automatically detected nonnumeric Tag should leave the new release number open: %+v / %v", p, err)
 	}
-	if _, err = f.s.Create(ctx, p, "2.3.44", ""); err == nil || !strings.Contains(err.Error(), "生产基线") {
-		t.Fatalf("missing baseline bypassed existing workflow guard: %v", err)
-	}
-	p, err = f.s.Inspect(ctx, f.selection, "production-current")
-	if err != nil || !p.Manual || p.SuggestedVersion != "" || !strings.Contains(p.Warning, "手工填写") {
-		t.Fatalf("manual nonnumeric baseline: %+v / %v", p, err)
-	}
+	lostResult := &afterPushFailure{Git: f.git}
+	f.s.Git = lostResult
 	b, err := f.s.Create(ctx, p, "2.3.44", "")
-	if err != nil {
-		t.Fatalf("supported manual production Tag flow rejected: %v", err)
+	if err == nil || !lostResult.fired || b.InitialSHA != "" || b.ReleaseCreatedAt != "" {
+		t.Fatalf("creation with an uncertain push recorded a confirmed release: %+v / %v", b, err)
 	}
-	// Model an older persisted creation whose push succeeded before the result
-	// was saved. New-release policy must not invalidate or recreate this batch.
+	// A newer remote Tag must not invalidate or recreate the pending release.
 	f.run(f.remote, "update-ref", "refs/tags/2.3.50", f.base)
-	b.InitialSHA, b.ReleaseSHA = "", ""
-	b.Intent = &Intent{Kind: "create", Step: "release-create", Preview: p}
-	if err = f.s.Store.Save(&b); err != nil {
-		t.Fatal(err)
-	}
 	f.s = New(f.s.Paths, f.s.Config, f.git, process.NewRunner())
 	f.s.Genbu = f.g
 	stored, err := f.s.Store.Load(b.ID)
-	if err != nil || stored.Version != "2.3.44" || stored.Intent == nil {
+	if err != nil || stored.Version != "2.3.44" || stored.Intent == nil || stored.ReleaseCreatedAt != "" {
 		t.Fatalf("existing batch could not load: %+v / %v", stored, err)
 	}
 	before := f.run(f.remote, "for-each-ref", "--format=%(refname) %(objectname)")
+	requestedAt := time.Now()
 	done, err := f.s.Resume(ctx, b.ID)
 	if err != nil || done.ID != b.ID || done.Intent != nil || done.InitialSHA != p.MainSHA || len(done.Tags) != 0 {
 		t.Fatalf("existing creation recovery changed behavior: %+v / %v", done, err)
 	}
 	if f.run(f.remote, "for-each-ref", "--format=%(refname) %(objectname)") != before {
 		t.Fatal("recovery changed existing remote refs")
+	}
+	created, err := time.Parse(time.RFC3339Nano, done.ReleaseCreatedAt)
+	if err != nil || created.Location() != time.UTC || created.Before(requestedAt) {
+		t.Fatalf("recovery did not timestamp the first confirmation: %q, %v", done.ReleaseCreatedAt, err)
+	}
+	stored, err = f.s.Store.Load(b.ID)
+	if err != nil || stored.ReleaseCreatedAt != done.ReleaseCreatedAt {
+		t.Fatalf("recovered confirmation was not persisted: %q, %v", stored.ReleaseCreatedAt, err)
+	}
+}
+
+func TestProductionReconcileEndedReleaseCreation(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	p, err := f.s.Inspect(ctx, f.selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.s.Git = &afterPushFailure{Git: f.git}
+	b, err := f.s.Create(ctx, p, "2.3.44", "")
+	if err == nil || b.Intent == nil || b.ReleaseCreatedAt != "" {
+		t.Fatalf("expected an unconfirmed release: %+v / %v", b, err)
+	}
+	f.s.Git = &beforePushHook{Git: f.git, hook: func([]string) error {
+		t.Error("ended release reconciliation attempted to push")
+		return errors.New("forbidden push")
+	}}
+	b, err = f.s.End(ctx, b.ID)
+	if err != nil || b.ReleaseCreatedAt != "" {
+		t.Fatalf("ending an unconfirmed release timestamped it: %q, %v", b.ReleaseCreatedAt, err)
+	}
+	requestedAt := time.Now()
+	b, err = f.s.ReconcileEnded(ctx, b.ID)
+	if err != nil || !b.Ended || b.Intent == nil || !b.Intent.ResultConfirmed || b.InitialSHA != p.MainSHA {
+		t.Fatalf("ended release could not be confirmed: %+v / %v", b, err)
+	}
+	created, err := time.Parse(time.RFC3339Nano, b.ReleaseCreatedAt)
+	if err != nil || created.Location() != time.UTC || created.Before(requestedAt) {
+		t.Fatalf("ended release did not record its first confirmation: %q, %v", b.ReleaseCreatedAt, err)
+	}
+	confirmed, err := f.s.ReconcileEnded(ctx, b.ID)
+	if err != nil || confirmed.ReleaseCreatedAt != b.ReleaseCreatedAt {
+		t.Fatalf("repeated reconciliation changed the saved confirmation time: %q, %v", confirmed.ReleaseCreatedAt, err)
 	}
 }

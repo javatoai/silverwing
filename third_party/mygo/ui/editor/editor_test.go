@@ -2,11 +2,13 @@ package editor
 
 import (
 	"bytes"
+	"fmt"
 	"math"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/internal/rope"
@@ -125,6 +127,56 @@ func TestCodeEditorTyping(t *testing.T) {
 	ct.want("([abc])")
 }
 
+func TestCodeEditorAutoPairCJK(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		lang string
+		init string
+		typ  string
+		want string
+	}{
+		// Symmetric quotes and backticks auto-pair after CJK characters.
+		{name: "double-quote-after-han", lang: "go", init: "中|", typ: `"`, want: `中"|"`},
+		{name: "single-quote-after-han", lang: "python", init: "中文|", typ: `'`, want: `中文'|'`},
+		{name: "backtick-after-han", lang: "markdown", init: "中文|", typ: "`", want: "中文`|`"},
+		{name: "quote-after-hiragana", lang: "go", init: "あ|", typ: `"`, want: `あ"|"`},
+		{name: "quote-after-katakana", lang: "go", init: "ア|", typ: `"`, want: `ア"|"`},
+		{name: "quote-after-hangul", lang: "go", init: "한|", typ: `"`, want: `한"|"`},
+		{name: "backtick-after-hiragana", lang: "markdown", init: "あ|", typ: "`", want: "あ`|`"},
+		// Brackets and quotes auto-pair before closing CJK/smart brackets and trailing punctuation.
+		{name: "paren-before-cjk-period", lang: "markdown", init: "你好|。", typ: "(", want: "你好(|)。"},
+		{name: "bracket-before-cjk-comma", lang: "markdown", init: "你好|，", typ: "[", want: "你好[|]，"},
+		{name: "paren-before-cjk-comma", lang: "markdown", init: "|，", typ: "(", want: "(|)，"},
+		{name: "paren-before-cjk-closing-paren", lang: "markdown", init: "|）", typ: "(", want: "(|)）"},
+		{name: "paren-before-cjk-closing-corner", lang: "markdown", init: "「你好|」", typ: "(", want: "「你好(|)」"},
+		{name: "quote-after-han-before-cjk-period", lang: "go", init: "你好|。", typ: `"`, want: `你好"|"。`},
+		{name: "quote-before-cjk-closing-quote", lang: "go", init: "你好|”", typ: `"`, want: `你好"|"”`},
+		{name: "paren-before-cjk-closing-single-quote", lang: "markdown", init: "‘你好|’", typ: "(", want: "‘你好(|)’"},
+		{name: "paren-before-cjk-tilde", lang: "markdown", init: "你好|～", typ: "(", want: "你好(|)～"},
+		{name: "paren-before-cjk-middle-dot", lang: "markdown", init: "你好|·", typ: "(", want: "你好(|)·"},
+		// Do not auto-pair before opening CJK/smart brackets/quotes or general fullwidth symbols.
+		{name: "no-autopair-before-fullwidth-open-paren", lang: "markdown", init: "|（a）", typ: "(", want: "(|（a）"},
+		{name: "no-autopair-before-cjk-open-corner", lang: "go", init: "|「a」", typ: `"`, want: `"|「a」`},
+		{name: "no-autopair-before-smart-open-double-quote", lang: "markdown", init: "|“a”", typ: "(", want: "(|“a”"},
+		{name: "no-autopair-before-smart-open-single-quote", lang: "markdown", init: "|‘a’", typ: "(", want: "(|‘a’"},
+		{name: "no-autopair-before-fullwidth-hash", lang: "markdown", init: "|＃a", typ: "(", want: "(|＃a"},
+		{name: "no-autopair-before-fullwidth-quote", lang: "markdown", init: "|＂a", typ: "(", want: "(|＂a"},
+		// Latin contractions and trailing word characters still do not auto-pair.
+		{name: "latin-contraction", lang: "python", init: "don|", typ: `'`, want: "don'|"},
+		{name: "latin-contraction-before-ascii-apostrophe", lang: "python", init: "don|'t", typ: `'`, want: "don'|'t"},
+		{name: "latin-contraction-before-curly-apostrophe", lang: "python", init: "don|’t", typ: `'`, want: "don'|’t"},
+		{name: "latin-double-quote", lang: "go", init: "word|", typ: `"`, want: `word"|`},
+		// Do not auto-pair immediately before another Han character.
+		{name: "before-han-char", lang: "go", init: "中|文", typ: `"`, want: `中"|文`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ct := newEditorTest(t, tc.lang, tc.init)
+			ct.typ(tc.typ)
+			ct.want(tc.want)
+		})
+	}
+}
+
 func TestCodeEditorNewline(t *testing.T) {
 	ct := newEditorTest(t, "go", "func main() {|}")
 	ct.key(0, ui.KeyEnter)
@@ -208,6 +260,213 @@ func TestCodeEditorScrollbar(t *testing.T) {
 		t.Fatal("dragging the horizontal scroll bar did not scroll")
 	}
 	ct.want("|" + strings.Repeat("x", 200))
+}
+
+// A State's Scrollbar styles the editor's bar: its width and thumb, and
+// the thumb's rest, hover and drag colors, as a scroll container's.
+func TestCodeEditorScrollbarStyle(t *testing.T) {
+	ct := newEditorTest(t, "go", "|"+strings.Repeat("line\n", 200))
+	thumb, hover, active := ui.RGB(240, 20, 30), ui.RGB(20, 240, 30), ui.RGB(20, 30, 240)
+	ct.st.Scrollbar = ui.ScrollbarStyle{TrackWidth: 20, ThumbWidth: 8, Thumb: thumb, Hover: hover, Active: active}
+	ct.tt.Move(300, 200)
+	ct.tt.Frame()
+	if got := ct.st.ed.barWidth(); got != 20 {
+		t.Fatalf("the bar is %v DIPs wide, want 20", got)
+	}
+	if got := ct.st.ed.trackWidth(); got != 20 {
+		t.Fatalf("the bar takes %v DIPs of the text, want 20", got)
+	}
+	pixel := func(x, y float32) ui.Color {
+		img := ct.tt.Image()
+		s := float32(img.Bounds().Dx()) / 600
+		c := img.RGBAAt(int(x*s), int(y*s))
+		return ui.Color{R: c.R, G: c.G, B: c.B, A: c.A}
+	}
+	// The 20 DIP bar is at x 580 to 600; the 8 DIP thumb is centered in
+	// it, x 586 to 594, from y 2 to 26.
+	if got := pixel(590, 10); got != thumb {
+		t.Errorf("the thumb is %v, want %v", got, thumb)
+	}
+	ct.tt.Move(590, 200)
+	ct.tt.Frame()
+	if got := pixel(590, 10); got != hover {
+		t.Errorf("the hovered thumb is %v, want %v", got, hover)
+	}
+	ct.tt.Press(590, 10)
+	ct.tt.Frame()
+	if got := pixel(590, 10); got != active {
+		t.Errorf("the dragged thumb is %v, want %v", got, active)
+	}
+	ct.tt.Release(590, 10)
+}
+
+// A theme's ScrollbarStyle width reaches the editor's bar, though the
+// editor is 10 DIPs wide by default.
+func TestCodeEditorScrollbarThemeWidth(t *testing.T) {
+	st := &State{Buffer: NewBuffer(strings.Repeat("line\n", 200))}
+	tt := ui.NewTester(func(c *ui.Context) {
+		th := *c.Theme()
+		th.ScrollbarStyle.TrackWidth = 16
+		c.SetTheme(&th)
+		View(c, st).Fill()
+	}, 600, 400)
+	tt.Frame()
+	if got := st.ed.barWidth(); got != 16 {
+		t.Fatalf("the bar is %v DIPs wide, want the theme's 16", got)
+	}
+}
+
+// A track under the marks of changes leaves them showing: the editor
+// paints the track, then the marks, then the thumb.
+func TestCodeEditorScrollbarTrackUnderMarks(t *testing.T) {
+	var old, nw strings.Builder
+	for i := 0; i < 200; i++ {
+		line := fmt.Sprintf("line %d\n", i)
+		old.WriteString(line)
+		if i == 150 {
+			line = "changed\n"
+		}
+		nw.WriteString(line)
+	}
+	st := &State{Buffer: NewBuffer(nw.String()), DiffBase: NewBuffer(old.String())}
+	track := ui.RGB(0, 0, 255)
+	st.Scrollbar = ui.ScrollbarStyle{TrackWidth: 14, ThumbWidth: 10, Track: track}
+	tt := ui.NewTester(func(c *ui.Context) { View(c, st).Fill() }, 800, 500)
+	tt.SetScale(1)
+	tt.Frame()
+	ed := st.ed
+	img := tt.Image()
+	span := float32(ed.scrollMax()) + ed.viewH
+	y := int(float32(ed.view.heights.top(150))/span*500) + 1
+	// The change's mark is the first 3 DIPs of the 14 DIP bar.
+	if got := img.RGBAAt(800-14+1, y); (ui.Color{R: got.R, G: got.G, B: got.B, A: got.A}) == track {
+		t.Fatalf("the track covers the change's mark at y %d", y)
+	}
+	// Below the change, the track shows.
+	if got := img.RGBAAt(800-14+1, 400); (ui.Color{R: got.R, G: got.G, B: got.B, A: got.A}) != track {
+		t.Errorf("the track at y 400 is %v, want %v", got, track)
+	}
+}
+
+// TestCodeEditorAutoscroll checks that a selection dragged past the
+// text's right or left edge scrolls the editor that way.
+func TestCodeEditorAutoscroll(t *testing.T) {
+	ct := newEditorTest(t, "", "|"+strings.Repeat("x", 200))
+	ct.tt.Press(300, 5)
+	ct.tt.Move(650, 5)
+	ct.tt.Advance(time.Second)
+	right := ct.st.ed.scrollX
+	if right <= 0 {
+		t.Fatal("dragging past the right edge did not scroll")
+	}
+	if sel := ct.st.Selections()[0]; sel.Head <= sel.Anchor {
+		t.Fatalf("selection %+v, want it to grow to the right", sel)
+	}
+	ct.tt.Move(5, 5)
+	ct.tt.Advance(time.Second)
+	ct.tt.Release(5, 5)
+	if ct.st.ed.scrollX >= right {
+		t.Fatal("dragging over the gutter did not scroll back")
+	}
+}
+
+// TestCodeEditorScrollbarOnHover checks that the scroll bar's thumb
+// shows while the pointer is over the editor, as a scroll container's
+// does, and not otherwise, and over no track.
+func TestCodeEditorScrollbarOnHover(t *testing.T) {
+	ct := newEditorTest(t, "go", "|package main\n\nfunc main() {}\n")
+	thumb := func() bool {
+		img := ct.tt.Image()
+		s := img.Bounds().Dx() / 600
+		x, y := (600-scrollbarWidth/2)*s, 5*s
+		return img.RGBAAt(x, y) != img.RGBAAt(x-scrollbarWidth*s, y)
+	}
+	ct.tt.Frame()
+	if thumb() {
+		t.Fatal("the thumb shows with the pointer away")
+	}
+	ct.tt.Move(300, 200)
+	ct.tt.Frame()
+	if !thumb() {
+		t.Fatal("the thumb doesn't show with the pointer over the editor")
+	}
+	ct.tt.Move(-10, -10)
+	ct.tt.Frame()
+	if thumb() {
+		t.Fatal("the thumb stayed as the pointer left")
+	}
+	// Over the bar, the thumb and no track: below the thumb, the bar is
+	// the editor's background.
+	x := float32(600 - scrollbarWidth/2)
+	ct.tt.Move(x, 5)
+	ct.tt.Frame()
+	img := ct.tt.Image()
+	s := img.Bounds().Dx() / 600
+	if img.RGBAAt(int(x)*s, 390*s) != img.RGBAAt((int(x)-scrollbarWidth)*s, 390*s) {
+		t.Error("the bar shows a track under its thumb")
+	}
+}
+
+// TestCodeEditorKeepScrollbars checks that KeepScrollbars shows the
+// thumb with the pointer away, as it shows on hover, and that
+// NoScrollbars shows no bar, takes no press on it and leaves its room to
+// the text, while the wheel still scrolls.
+func TestCodeEditorKeepScrollbars(t *testing.T) {
+	ct := newEditorTest(t, "go", "|package main\n\nfunc main() {}\n")
+	bar := func() []uint32 {
+		img := ct.tt.Image()
+		s := img.Bounds().Dx() / 600
+		var px []uint32
+		for y := 0; y < 400*s; y++ {
+			for x := (600 - scrollbarWidth) * s; x < 600*s; x++ {
+				c := img.RGBAAt(x, y)
+				px = append(px, uint32(c.R)<<24|uint32(c.G)<<16|uint32(c.B)<<8|uint32(c.A))
+			}
+		}
+		return px
+	}
+	ct.tt.Move(-10, -10)
+	ct.tt.Frame()
+	none := bar()
+	ct.st.KeepScrollbars = true
+	ct.tt.Frame()
+	away := bar()
+	if slices.Equal(away, none) {
+		t.Fatal("a kept thumb doesn't show with the pointer away")
+	}
+	ct.tt.Move(300, 200)
+	ct.tt.Frame()
+	if hovered := bar(); !slices.Equal(away, hovered) {
+		t.Fatal("a kept thumb looks otherwise with the pointer away than on hover")
+	}
+	ct.st.KeepScrollbars = false
+	ct.st.NoScrollbars = true
+	ct.tt.Frame()
+	if v, h := ct.st.ed.scrollbars(); v || h || ct.st.ed.trackWidth() != 0 {
+		t.Fatalf("NoScrollbars: bars %v %v, room %v", v, h, ct.st.ed.trackWidth())
+	}
+	if !slices.Equal(bar(), none) {
+		t.Fatal("NoScrollbars painted a bar on hover")
+	}
+	x := float32(600 - scrollbarWidth/2)
+	ct.tt.Move(x, 5)
+	if c := ct.tt.Cursor(); c != ui.CursorText {
+		t.Fatalf("cursor where the bar was %v, want the I-beam", c)
+	}
+	ct.tt.Press(x, 5)
+	ct.tt.Move(x, 300)
+	ct.tt.Release(x, 300)
+	if ct.st.ScrollY() != 0 {
+		t.Fatal("dragging where the bar was scrolled")
+	}
+	ct.tt.Scroll(300, 200, 0, 20)
+	ct.tt.Frame()
+	if ct.st.ScrollY() != 20 {
+		t.Fatalf("the wheel scrolled to %v without bars, want 20", ct.st.ScrollY())
+	}
+	if ct.st.ViewportHeight() != 400 {
+		t.Fatalf("ViewportHeight %v, want 400", ct.st.ViewportHeight())
+	}
 }
 
 func TestCodeEditorMultiCursor(t *testing.T) {
@@ -355,6 +614,22 @@ func TestCodeEditorComposition(t *testing.T) {
 	ct.want("a日本|b\nc日本|d")
 	ct.key(ui.Cmd, ui.KeyZ)
 	ct.want("a|b\nc|d")
+}
+
+// Enter while an input method composes is its own, as choosing a
+// candidate: the editor breaks no line and leaves the composition to the
+// input method, which commits it (#1815).
+func TestCodeEditorComposingEnter(t *testing.T) {
+	ct := newEditorTest(t, "", "a|b")
+	ct.tt.Compose("に", 1)
+	ct.key(0, ui.KeyEnter)
+	ct.want("aに|b")
+	if _, marked := ct.st.ed.MarkedRange(); !marked {
+		t.Fatal("Enter ended the composition")
+	}
+	ct.tt.Type("に")
+	ct.key(0, ui.KeyEnter)
+	ct.want("aに\n|b")
 }
 
 func TestCodeEditorFind(t *testing.T) {
@@ -593,6 +868,188 @@ func TestCodeEditorWrapLongLines(t *testing.T) {
 	}
 }
 
+// contextSpaced shapes as Core Text does text in Chinese, the app's
+// language, in ways a character shaped alone does not show: it leaves a
+// quarter of an em between Han and Latin letters, given to the advance of
+// the one before as penAdvances does, and CJK punctuation that ends a
+// text takes half its width. on tells whether it does.
+func contextSpaced(on func(*text.System) bool) func(*text.System, text.Params) *text.Layout {
+	han := func(r rune) bool { return r >= 0x4e00 && r <= 0x9fff }
+	latin := func(r rune) bool { return r < 0x80 && (unicode.IsLetter(r) || unicode.IsDigit(r)) }
+	return func(sys *text.System, p text.Params) *text.Layout {
+		l := sys.Shape(p)
+		if !on(sys) {
+			return l
+		}
+		out := *l
+		out.Lines = slices.Clone(l.Lines)
+		out.Width = 0
+		room := p.Style.FontSize() / 4
+		for li := range out.Lines {
+			line := &out.Lines[li]
+			gs := slices.Clone(line.Glyphs)
+			shift := float32(0)
+			for k := range gs {
+				g := &gs[k]
+				g.X += shift
+				r := l.Runes[g.Cluster]
+				if k+1 < len(gs) {
+					if next := l.Runes[gs[k+1].Cluster]; han(r) && latin(next) || latin(r) && han(next) {
+						g.Advance += room
+						shift += room
+					}
+				} else if strings.ContainsRune("，。、；：！？", r) {
+					g.Advance /= 2
+					shift -= g.Advance
+				}
+			}
+			line.Glyphs = gs
+			line.Width += shift
+			out.Width = max(out.Width, line.X+line.Width)
+		}
+		return &out
+	}
+}
+
+// useShaper shapes the editors' text with shape until the test ends.
+func useShaper(t *testing.T, shape func(*text.System, text.Params) *text.Layout) {
+	old := shapeText
+	shapeText = shape
+	t.Cleanup(func() { shapeText = old })
+}
+
+// checkRowsFit fails when a row of a line of v, shaped as it is painted,
+// is wider than the editor.
+func checkRowsFit(t *testing.T, v *view) {
+	t.Helper()
+	for n := range v.text.LineCount() {
+		l := v.line(n)
+		for ri := range l.rows {
+			r := &l.rows[ri]
+			for pi := range r.pieces {
+				p := &r.pieces[pi]
+				if end := r.indent + p.x + v.piece(l, p).Width; end > v.wrapWidth+1e-3 {
+					t.Errorf("at %v: row %d of line %d, %q, ends at %v", v.wrapWidth, ri, n, l.disp[r.from:r.to], end)
+				}
+			}
+		}
+	}
+}
+
+// chineseText is Chinese text of #1576: Han characters alone, prose with
+// punctuation, Han and Latin letters mixed, and those indented.
+const chineseText = "城城城城城城城城城城城城城城城城城城城城城城城城城城城城城城城城城城城城城城城城城城城城城城城城城城城城\n" +
+	"这是一段用于测试软换行的中文文本，每一行都含有若干标点符号。逗号、顿号和句号在中文排版中占一个全角字宽；分号与冒号：同样如此。标点越多，行尾超出编辑器右边界的部分就越明显，最后几个字会被裁掉。\n" +
+	"城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a\n" +
+	"    城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a城a"
+
+// The room the text engine leaves between characters in context, as Core
+// Text does between Han and Latin letters and around CJK punctuation in
+// Chinese text, which no character shaped alone has, keeps wrapped rows
+// within the editor (#1576).
+func TestCodeEditorWrapContextSpacing(t *testing.T) {
+	useShaper(t, contextSpaced(func(*text.System) bool { return true }))
+	ct := newEditorTest(t, "", chineseText)
+	ct.st.SoftWrap = true
+	v := &ct.st.ed.view
+	for w := 300; w <= 600; w += 23 {
+		ct.tt.SetSize(w, 400)
+		ct.tt.Frame()
+		if len(v.line(2).rows) < 2 {
+			t.Fatalf("at %v: line 2 is not wrapped", v.wrapWidth)
+		}
+		checkRowsFit(t, v)
+	}
+}
+
+// Text without a language of its own, as the editor's, is shaped in the
+// app's language: when it changes, the rows are measured and shaped
+// again, in the spacing of the new one.
+func TestCodeEditorWrapLanguageChange(t *testing.T) {
+	useShaper(t, contextSpaced(func(sys *text.System) bool { return sys.Language() == "zh-Hans" }))
+	ct := newEditorTest(t, "", strings.Repeat("城a", 80))
+	t.Cleanup(func() { ct.tt.SetLocale("") })
+	ct.st.SoftWrap = true
+	ct.tt.Frame()
+	v := &ct.st.ed.view
+	before := len(v.line(0).rows)
+	ct.tt.SetLocale("zh-Hans")
+	ct.tt.Frame()
+	if after := len(v.line(0).rows); after <= before {
+		t.Errorf("in Chinese, the line takes %d rows, as many as before (%d)", after, before)
+	}
+	checkRowsFit(t, v)
+}
+
+// Closing punctuation does not start a row, nor opening punctuation end
+// one: the row ends a character earlier (kinsoku).
+func TestCodeEditorWrapKinsoku(t *testing.T) {
+	ct := newEditorTest(t, "", strings.Repeat("城", 200))
+	ct.st.SoftWrap = true
+	ct.tt.Frame()
+	v := &ct.st.ed.view
+	l := v.line(0)
+	if len(l.rows) < 2 {
+		t.Fatal("not wrapped")
+	}
+	n := utf8.RuneCountInString(l.disp[:l.rows[0].to]) // Han characters a row holds
+	// Punctuation is narrower than a Han character in some fonts (as
+	// Windows' fallback for 「), so it is put a few places around the
+	// first break: at one of them a row would otherwise end before the
+	// closing punctuation, or after the opening one.
+	for _, c := range []struct {
+		punct string
+		// moved tells that the break was moved for the punctuation, from
+		// what the second row starts with.
+		moved func(second string) bool
+	}{
+		{"，", func(s string) bool { return strings.HasPrefix(s, "城，") }},
+		{"。」", func(s string) bool { return strings.HasPrefix(s, "城。」") }},
+		{"「", func(s string) bool { return strings.HasPrefix(s, "「城") }},
+		{",", func(s string) bool { return strings.HasPrefix(s, "城,") }},
+	} {
+		seen := false
+		for k := n - 3; k <= n+1; k++ {
+			src := strings.Repeat("城", k) + c.punct + "城城城"
+			ct.st.Buffer = NewBuffer(src)
+			ct.tt.Frame()
+			l := v.line(0)
+			if len(l.rows) < 2 {
+				continue
+			}
+			for ri, r := range l.rows {
+				row := l.disp[r.from:r.to]
+				first, _ := utf8.DecodeRuneInString(row)
+				last, _ := utf8.DecodeLastRuneInString(row)
+				if ri > 0 && (closing(first) || first == ',') || ri < len(l.rows)-1 && opening(last) {
+					t.Errorf("%q: row %d is %q", src, ri, row)
+				}
+			}
+			if c.moved(l.disp[l.rows[1].from:]) {
+				seen = true
+			}
+		}
+		if !seen {
+			t.Errorf("%q: no break was moved for it", c.punct)
+		}
+	}
+	const prose = "这是一段用于测试软换行的中文文本，每一行都含有若干标点符号。逗号、顿号和句号在中文排版中占一个全角字宽；分号与冒号：同样如此。“引号”与（括号）、《书名号》和【方括号】也不例外！"
+	ct.st.Buffer = NewBuffer(prose)
+	for w := 200; w <= 600; w += 7 {
+		ct.tt.SetSize(w, 400)
+		ct.tt.Frame()
+		l := v.line(0)
+		for ri, r := range l.rows {
+			row := l.disp[r.from:r.to]
+			first, _ := utf8.DecodeRuneInString(row)
+			last, _ := utf8.DecodeLastRuneInString(row)
+			if ri > 0 && closing(first) || ri < len(l.rows)-1 && opening(last) {
+				t.Errorf("at %v: row %d is %q", v.wrapWidth, ri, row)
+			}
+		}
+	}
+}
+
 // Tokens whose style is bold or italic are shaped in those faces, and
 // carets and hits find the same places across the runs of faces, on one
 // row and on a line wrapped into rows measured before they are shaped.
@@ -689,5 +1146,38 @@ func TestFitContentFocusRevealsCaret(t *testing.T) {
 	top := 400 + float32(st.LineTop(200))
 	if scroll.Y > top || scroll.Y+400 < top+lh {
 		t.Fatalf("focused, the view scrolled to %v, which doesn't show the caret at %v", scroll.Y, top)
+	}
+}
+
+// TestCodeEditorNoScrollbarsCancelsDrag checks that hiding the bars while
+// a thumb is dragged lets the drag go: the pointer's moves scroll no
+// more.
+func TestCodeEditorNoScrollbarsCancelsDrag(t *testing.T) {
+	ct := newEditorTest(t, "", "|"+strings.Repeat("line\n", 200))
+	x := float32(600 - scrollbarWidth/2)
+	ct.tt.Move(x, 5)
+	ct.tt.Press(x, 5)
+	ct.tt.Move(x, 50)
+	if ct.st.ScrollY() <= 0 {
+		t.Fatal("dragging the thumb did not scroll")
+	}
+	ct.st.NoScrollbars = true
+	ct.tt.Frame()
+	before := ct.st.ScrollY()
+	ct.tt.Move(x, 300)
+	if ct.st.ed.scrollbar.active || ct.st.ScrollY() != before {
+		t.Fatalf("hidden bars kept the drag: active %v, scrolled from %v to %v", ct.st.ed.scrollbar.active, before, ct.st.ScrollY())
+	}
+	ct.tt.Release(x, 300)
+}
+
+// The zero heights measures as empty before anything marks it changed.
+func TestHeightsZeroValue(t *testing.T) {
+	var h heights
+	if got := h.total(); got != 0 {
+		t.Fatalf("total of the zero heights = %v, want 0", got)
+	}
+	if got := h.lineAt(10); got != 0 {
+		t.Fatalf("lineAt of the zero heights = %d, want 0", got)
 	}
 }

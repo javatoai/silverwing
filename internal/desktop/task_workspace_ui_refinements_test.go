@@ -68,16 +68,16 @@ func appendServiceToggleFixture(t *testing.T, width int, dark bool) (*app, *ui.T
 	for _, id := range []string{"existing", "alpha", "beta"} {
 		service := domain.GroupServiceConfig{ID: id, RepositoryID: "repo-" + id, DisplayName: map[string]string{"existing": "已有服务", "alpha": "合成服务甲", "beta": "合成服务乙"}[id], Enabled: true, DevelopmentTool: domain.DevelopmentToolIntelliJIdea, MasterBranch: "origin/main", Bootstrap: domain.BootstrapConfig{Commands: []domain.BootstrapCommand{}, CopyRules: []domain.BootstrapCopyRule{}}, Modules: []domain.ServiceModuleConfig{{ID: "api", Name: "API", Strategy: domain.WorkspaceStandardWorktree, TagMode: domain.TagBuildMergeToTargetBranch, CustomCommands: []domain.WorkspaceCommandConfig{}}}}
 		if len(config.Groups) == 0 {
-			config.Groups = []domain.GroupConfig{{ID: "synthetic-group", Name: "合成项目组"}}
+
 		}
-		config.Groups[0].Services = append(config.Groups[0].Services, service)
+		config.Services = append(config.Services, service)
 	}
 	raw, err := json.Marshal(config)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := &app{
-		taskUnit:     taskController{state: taskState{tasks: []task{{id: "task", title: "合成任务", groupID: config.Groups[0].ID, path: filepath.Join(root, "task"), branch: "feature/synthetic", updated: "fixed-version", serviceIDs: []string{"existing"}}}}},
+		taskUnit:     taskController{state: taskState{tasks: []task{{id: "task", title: "合成任务", path: filepath.Join(root, "task"), branch: "feature/synthetic", updated: "fixed-version", serviceIDs: []string{"existing"}}}}},
 		settingsUnit: settingsController{state: settingsState{configJSON: string(raw)}},
 		inputs:       map[string]*string{},
 	}

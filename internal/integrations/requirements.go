@@ -213,8 +213,12 @@ func (s *Service) fetchRequirementComments(ctx context.Context, config domain.Ap
 		if hasPages && totalPages < 0 {
 			return domain.RequirementComments{}, errors.New("需求评论分页状态无效")
 		}
-		if hasPages && !hasMoreField {
-			hasMore = page < totalPages
+		if hasPages {
+			moreFromPages := page < totalPages
+			if hasMoreField && hasMore != moreFromPages {
+				return domain.RequirementComments{}, errors.New("需求评论的总页数与后续页状态不一致")
+			}
+			hasMore = moreFromPages
 		}
 		fingerprint := compactJSON(rows)
 		if len(rows) > 0 && seenPages[fingerprint] {
@@ -630,14 +634,43 @@ func (s *Service) requirementAINaming(ctx context.Context, config domain.AppConf
 	forbidden := uniqueStrings(stringSlice(payload, "forbiddenFolderNames"))
 	force := boolValue(payload, "force") || len(forbidden) > 0
 	identity := item.ProjectKey + ":" + item.Type + ":" + item.ID
-	return s.requirementNamingCoordinator().suggest(ctx, requirementNamingKey{
+	account, hasAccount, err := expectedRequirementIdentity(payload)
+	if err != nil {
+		return domain.RequirementAiNamingSuggestion{}, err
+	}
+	cacheAuthorized := false
+	if hasAccount {
+		cacheAuthorized, err = s.confirmedRequirementIdentityForConfig(ctx, config, account)
+		if err != nil {
+			return domain.RequirementAiNamingSuggestion{}, err
+		}
+	}
+	suggestion, err := s.requirementNamingCoordinator().suggest(ctx, requirementNamingKey{
 		identity: identity, model: model,
-		context: s.requirementNamingContext(config, stringValue(payload, "expectedIdentity")),
+		context: s.requirementNamingContext(config, account),
 	}, force, forbidden, boolValue(payload, "background"),
-		func() *domain.RequirementAiNamingSuggestion { return s.readRequirementAINamingCache(identity, model) },
+		func() *domain.RequirementAiNamingSuggestion {
+			if hasAccount && !cacheAuthorized {
+				return nil
+			}
+			return s.readRequirementAINamingCache(identity, model, account)
+		},
 		func(shared context.Context) (domain.RequirementAiNamingSuggestion, error) {
-			return s.generateRequirementNaming(shared, config, item, identity, model, forbidden, force, stringValue(payload, "expectedIdentity"))
+			return s.generateRequirementNaming(shared, config, item, identity, model, forbidden, force, account)
 		})
+	if err != nil {
+		return domain.RequirementAiNamingSuggestion{}, err
+	}
+	if hasAccount {
+		confirmed, confirmErr := s.confirmedRequirementIdentityForConfig(ctx, config, account)
+		if confirmErr != nil {
+			return domain.RequirementAiNamingSuggestion{}, confirmErr
+		}
+		if !confirmed {
+			return domain.RequirementAiNamingSuggestion{}, &RequirementIdentityChangedError{State: requirementIdentityUnavailable}
+		}
+	}
+	return suggestion, nil
 }
 
 func requirementAINamingCacheKey(identity, model string) string {
@@ -645,7 +678,10 @@ func requirementAINamingCacheKey(identity, model string) string {
 	return string(data)
 }
 
-func (s *Service) readRequirementAINamingCache(identity, model string) *domain.RequirementAiNamingSuggestion {
+func (s *Service) readRequirementAINamingCache(identity, model, account string) *domain.RequirementAiNamingSuggestion {
+	if !validOpaqueRequirementIdentity(account) {
+		return nil
+	}
 	s.aiCacheMu.Lock()
 	defer s.aiCacheMu.Unlock()
 	cache, ok := s.loadRequirementAINamingCache()
@@ -654,8 +690,8 @@ func (s *Service) readRequirementAINamingCache(identity, model string) *domain.R
 	}
 	entry, exists := cache.Entries[requirementAINamingCacheKey(identity, model)]
 	if !exists {
-		// Version 1 originally keyed by identity alone. Retain those entries only
-		// when their embedded model and current validation rules still match.
+		// Keep the original identity-only v1 key readable when its embedded
+		// model and naming rules still match.
 		entry, exists = cache.Entries[identity]
 	}
 	if !exists || entry.Model != model || entry.RulesVersion != requirementAINamingRulesVersion {

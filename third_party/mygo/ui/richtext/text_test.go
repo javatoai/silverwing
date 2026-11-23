@@ -195,6 +195,88 @@ func TestAttributedTextAttachments(t *testing.T) {
 	}
 }
 
+// TestAttributedTextLongWalks walks the paragraphs and the runs of a text
+// of many chunks, of short paragraphs and some longer than a chunk, with
+// multi-byte runes, and checks them rune by rune against what it was made
+// of.
+func TestAttributedTextLongWalks(t *testing.T) {
+	rnd := rand.New(rand.NewPCG(3, 11))
+	words := []string{"a", "bc", "déf", "ghij", " ", "😀", "世界"}
+	var paras []Paragraph
+	var runes []rune
+	var attrs []Attributes
+	for i := range 3000 {
+		p := Paragraph{Style: testStyles[rnd.IntN(len(testStyles))]}
+		k := rnd.IntN(4)
+		if i%97 == 0 {
+			k = 1500
+		}
+		var last Attributes
+		for range k {
+			r := Run{Text: words[rnd.IntN(len(words))], Attributes: testAttrs[rnd.IntN(len(testAttrs))]}
+			p.Runs = append(p.Runs, r)
+			for _, c := range r.Text {
+				runes, attrs = append(runes, c), append(attrs, r.Attributes)
+			}
+			last = r.Attributes
+		}
+		paras = append(paras, p)
+		runes, attrs = append(runes, '\n'), append(attrs, last.extending())
+	}
+	runes = runes[:len(runes)-1]
+	at := TextOf(paras...)
+	checkInvariants(t, at)
+	if at.Len() != len(runes) || at.Len() < 20*1024 {
+		t.Fatalf("%d runes, made of %d", at.Len(), len(runes))
+	}
+
+	i, k := 0, 0
+	for start, p := range at.Paragraphs() {
+		if start != i || p.Style != paras[k].Style.normalized() {
+			t.Fatalf("paragraph %d: starts at %d, want %d; style %+v", k, start, i, p.Style)
+		}
+		for _, r := range p.Runs {
+			for _, c := range r.Text {
+				if runes[i] != c || attrs[i] != r.Attributes {
+					t.Fatalf("paragraph %d, rune %d: %q %+v, want %q %+v", k, i, c, r.Attributes, runes[i], attrs[i])
+				}
+				i++
+			}
+		}
+		if i < len(runes) && runes[i] != '\n' {
+			t.Fatalf("paragraph %d ends at rune %d, before %q", k, i, runes[i])
+		}
+		i, k = i+1, k+1
+	}
+	if k != len(paras) {
+		t.Fatalf("%d paragraphs, want %d", k, len(paras))
+	}
+
+	walk := func(a, z int) {
+		t.Helper()
+		next := a
+		for s, r := range at.Runs(a, z) {
+			if s != next || r.Text == "" {
+				t.Fatalf("Runs(%d, %d): a run of %q at %d, want one at %d", a, z, r.Text, s, next)
+			}
+			for _, c := range r.Text {
+				if runes[next] != c || attrs[next] != r.Attributes {
+					t.Fatalf("Runs(%d, %d), rune %d: %q %+v, want %q %+v", a, z, next, c, r.Attributes, runes[next], attrs[next])
+				}
+				next++
+			}
+		}
+		if next != z {
+			t.Fatalf("Runs(%d, %d) ends at %d", a, z, next)
+		}
+	}
+	walk(0, at.Len())
+	for range 300 {
+		a := rnd.IntN(at.Len() + 1)
+		walk(a, a+rnd.IntN(min(at.Len()-a, 9000)+1))
+	}
+}
+
 func TestAttributedTextRandom(t *testing.T) {
 	for seed := range uint64(300) {
 		rnd := rand.New(rand.NewPCG(seed, 7))

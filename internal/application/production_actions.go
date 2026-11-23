@@ -5,9 +5,17 @@ import (
 	"encoding/json"
 	"errors"
 
+	"silverwing-go/internal/domain"
 	"silverwing-go/internal/production"
 	"silverwing-go/internal/workspace"
 )
+
+func (a *App) genbuClient(ctx context.Context) (production.NativeGenbu, error) {
+	check, err := a.platformAdmission(ctx, "genbu")
+	return production.NativeGenbu{Client: a.embeddedGenbu, Require: check, Identity: func(ctx context.Context, _ domain.AppConfig) (string, error) {
+		return a.embeddedAccountIdentity(ctx, "genbu")
+	}}, err
+}
 
 func (a *App) productionService() (*production.Service, error) {
 	c, err := a.Config.Load()
@@ -20,12 +28,18 @@ func (a *App) productionService() (*production.Service, error) {
 }
 
 func (a *App) productionAction(ctx context.Context, action Action) (ActionResult, error) {
+	client, err := a.genbuClient(ctx)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	if action.Kind == "production.build-log" {
+		return a.productionBuildLogAction(ctx, action, client)
+	}
 	if action.Kind == "production.delete" {
 		if !boolPayload(action, "confirmed") {
 			return ActionResult{}, errors.New("请先确认删除本地批次记录")
 		}
-		// Local history management must work without configured CLIs or a
-		// reachable/configured repository, including removed historical services.
+		// Deletion only needs the saved record, including removed historical services.
 		s := production.New(a.Paths, nil, nil, nil)
 		if err := s.Delete(ctx, textPayload(action, "batchId"), textPayload(action, "recordToken")); err != nil {
 			return ActionResult{}, err
@@ -36,6 +50,7 @@ func (a *App) productionAction(ctx context.Context, action Action) (ActionResult
 	if err != nil {
 		return ActionResult{}, err
 	}
+	s.Genbu = client
 	if action.Kind == "production.diff-files" || action.Kind == "production.diff-preview" {
 		// Diff reads only need the confirmed target, never build/release status.
 		// Read older preview envelopes without decoding their unrelated enums.
@@ -74,21 +89,15 @@ func (a *App) productionAction(ctx context.Context, action Action) (ActionResult
 			return ActionResult{}, e
 		}
 		if action.Kind == "production.prepare-tag" {
-			// Build preparation needs the confirmation scope and manual baseline,
-			// never display-only status enums from an older or partial preview.
+			// Build preparation reads a fresh baseline and needs only the target
+			// from an older or partial preview.
 			var baseline struct {
-				Target               production.Target `json:"target"`
-				Manual               bool              `json:"manual"`
-				ProductionTag        string            `json:"productionTag"`
-				ProductionSHA        string            `json:"productionSha"`
-				ProductionCandidates []string          `json:"productionCandidates"`
-				RuntimeAvailable     bool              `json:"runtimeAvailable"`
+				Target production.Target `json:"target"`
 			}
 			if e = json.Unmarshal(data, &baseline); e != nil {
 				return ActionResult{}, e
 			}
-			preview = production.Preview{Target: baseline.Target, Manual: baseline.Manual, ProductionTag: baseline.ProductionTag,
-				ProductionSHA: baseline.ProductionSHA, ProductionCandidates: baseline.ProductionCandidates, RuntimeAvailable: baseline.RuntimeAvailable}
+			preview.Target = baseline.Target
 		} else if e = json.Unmarshal(data, &preview); e != nil {
 			return ActionResult{}, e
 		}
@@ -97,9 +106,9 @@ func (a *App) productionAction(ctx context.Context, action Action) (ActionResult
 	case "production.list":
 	case "production.inspect":
 		if id != "" {
-			batch, preview, err = s.InspectBatch(ctx, id, textPayload(action, "productionTag"))
+			batch, preview, err = s.InspectBatch(ctx, id)
 		} else {
-			preview, err = s.Inspect(ctx, production.Selection{GroupID: textPayload(action, "groupId"), ServiceID: action.ServiceID}, textPayload(action, "productionTag"))
+			preview, err = s.Inspect(ctx, production.Selection{ServiceID: action.ServiceID})
 		}
 		report.Preview = &preview
 	case "production.feature-preview":

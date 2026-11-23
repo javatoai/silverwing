@@ -15,14 +15,7 @@ type productionStepView struct {
 }
 
 func productionTagPlanCurrent(v *productionView, b *production.Batch) bool {
-	if b == nil || b.TagPlan == nil || v.PreparationInvalid {
-		return false
-	}
-	manual := ""
-	if b.TagPlan.Preview.Manual {
-		manual = b.TagPlan.Preview.ProductionTag
-	}
-	if v.ManualTag != manual || v.Preview == nil {
+	if b == nil || b.TagPlan == nil || v.PreparationInvalid || v.Preview == nil || v.Preview.ProductionSHA == "" {
 		return false
 	}
 	p, observed := b.TagPlan, v.Preview
@@ -146,21 +139,6 @@ func productionStep(v *productionView, b *production.Batch, step int) production
 		}
 	}
 	return result
-}
-
-func productionChoiceLabel(choice productionServiceChoice, grouped bool) string {
-	if grouped {
-		return choice.GroupName + " · " + choice.Name
-	}
-	return choice.Name
-}
-
-func productionHasMultipleGroups(choices []productionServiceChoice) bool {
-	groups := map[string]bool{}
-	for _, choice := range choices {
-		groups[choice.GroupID] = true
-	}
-	return len(groups) > 1
 }
 
 func (s *app) renderProductionInitialization(c *ui.Context, p palette, v *productionView, b *production.Batch) {

@@ -68,7 +68,7 @@ func (s *Service) noticeLocalAccount(ctx context.Context, cfg domain.AppConfig) 
 	}
 	native, observable := noticeNativeCredentialStamp(profile)
 	bound := known && host != "" && (token != "" || observable && (native != "" || len(fallback) != 0))
-	fingerprint := releasenotice.Digest([]any{filepath.Clean(home), s.commandPath(ctx, cfg, domain.ProxyTargetMeegle), string(data), env, native, releasenotice.Digest(fallback)})
+	fingerprint := releasenotice.Digest([]any{filepath.Clean(home), s.meegleCommandPath(ctx, cfg), string(data), env, native, releasenotice.Digest(fallback)})
 	return noticeAccountContext{fingerprint: fingerprint, profile: profile, host: host, bound: bound}
 }
 
@@ -102,7 +102,7 @@ func (s *Service) noticeCurrentAccount(ctx context.Context, cfg domain.AppConfig
 		if err != nil || text(user["user_key"]) == "" {
 			return "", errors.New("无法确认当前 Meegle 账号")
 		}
-		fields := []string{"meegle", s.commandPath(ctx, cfg, domain.ProxyTargetMeegle), local.profile, local.host, text(user["user_key"])}
+		fields := []string{"meegle", s.meegleCommandPath(ctx, cfg), local.profile, local.host, text(user["user_key"])}
 		for _, name := range []string{"tenant_key", "tenant_id", "enterprise_id"} {
 			fields = append(fields, text(user[name]))
 		}

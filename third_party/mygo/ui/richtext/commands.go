@@ -267,7 +267,12 @@ func (d *Document) ToggleQuote() {
 	d.lock()
 	defer d.mu.Unlock()
 	off := d.paragraphsAll(func(p ParagraphStyle) bool { return p.Quote })
-	d.formatParagraphs(func(p *ParagraphStyle) { p.Quote = !off })
+	d.formatParagraphs(func(p *ParagraphStyle) {
+		if off || !p.Quote {
+			p.QuoteDepth = 0
+		}
+		p.Quote = !off
+	})
 }
 
 func (d *Document) ToggleCodeBlock() {
@@ -314,6 +319,7 @@ func (d *Document) ToggleChecked(i int) {
 // InsertText replaces the selection with s, in the typing attributes, as
 // typing does but as a step of undo of its own.
 func (d *Document) InsertText(s string) {
+	s = normalizeNewlines(s)
 	d.lock()
 	defer d.mu.Unlock()
 	a, z := d.span()

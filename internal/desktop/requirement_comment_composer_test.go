@@ -92,7 +92,7 @@ func TestCommentComposerSharedDraftAutosaveAndSaveFailure(t *testing.T) {
 }
 
 func TestCommentComposerPublishMinimizeSwitchAndLateResults(t *testing.T) {
-	for _, change := range []string{"minimize", "requirement", "account", "home", "config", "success"} {
+	for _, change := range []string{"minimize", "requirement", "account", "home", "config", "proxy", "success"} {
 		t.Run(change, func(t *testing.T) {
 			s, b, updates, state := commentComposerFixture(t)
 			state.body = "snapshot text"
@@ -117,6 +117,8 @@ func TestCommentComposerPublishMinimizeSwitchAndLateResults(t *testing.T) {
 				s.snapshot.Home += "-changed"
 			case "config":
 				s.settingsUnit.state.configJSON = `{"meegleExecutablePath":"other-cli"}`
+			case "proxy":
+				s.settingsUnit.state.configJSON = `{"commandProxyUrl":"http://localhost:8080"}`
 			}
 			s.observeRequirementCommentComposers()
 			cancelled := change == "account" || change == "home" || change == "config"

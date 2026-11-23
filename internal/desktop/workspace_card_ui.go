@@ -143,7 +143,7 @@ func (s *app) workspaceWarning(c *ui.Context, p palette, t task, w application.W
 func (s *app) workspaceNames(groupID string, w application.Workspace) (string, string) {
 	name, moduleName := w.Record.ServiceName, w.Record.ModuleName
 	for _, service := range s.snapshot.Services {
-		if service.GroupID != groupID || service.ID != w.ServiceID {
+		if service.ID != w.ServiceID {
 			continue
 		}
 		name = firstNonEmpty(name, service.Name, w.Name, w.ServiceID)

@@ -48,6 +48,11 @@ func (s *app) overflowMenuOwned(c *ui.Context, p palette, triggerKey, ownerKey, 
 }
 
 func (s *app) overflowMenuOwnedAt(c *ui.Context, p palette, triggerKey, ownerKey, title string, disabled bool, at, self ui.Anchor, build func(*overflowMenuBuilder)) {
+	trigger := ui.ButtonBase(c.Key(triggerKey)).Width(34).Height(34).Radius(20).Center()
+	s.renderOverflowMenu(c, p, trigger, ownerKey, title, disabled, at, self, build)
+}
+
+func (s *app) renderOverflowMenu(c *ui.Context, p palette, trigger ui.Element, ownerKey, title string, disabled bool, at, self ui.Anchor, build func(*overflowMenuBuilder)) {
 	stateKey := "overflow-" + ownerKey
 	state := s.ensureOverflowMenuState()
 	if disabled && state.openKey == stateKey {
@@ -56,8 +61,7 @@ func (s *app) overflowMenuOwnedAt(c *ui.Context, p palette, triggerKey, ownerKey
 			state.pendingFocusKey = ""
 		}
 	}
-	trigger := ui.ButtonBase(c.Key(triggerKey)).Width(34).Height(34).Radius(20).Center().
-		Role(ui.RoleMenuButton).Label(title).Tooltip(title).Disabled(disabled)
+	trigger.Role(ui.RoleMenuButton).Label(title).Tooltip(title).Disabled(disabled)
 	focused, hovered := trigger.Focused(), trigger.Hovered()
 	triggerColor := p.text
 	if disabled {
@@ -164,6 +168,7 @@ type overflowMenuItem struct {
 	label     string
 	icon      string
 	disabled  bool
+	reason    string
 	danger    bool
 	checkable bool
 	checked   bool
@@ -195,6 +200,12 @@ func (item *overflowMenuItem) Disabled(disabled bool) *overflowMenuItem {
 	return item
 }
 
+func (item *overflowMenuItem) DisabledReason(reason string) *overflowMenuItem {
+	item.disabled = item.disabled || reason != ""
+	item.reason = reason
+	return item
+}
+
 func (item *overflowMenuItem) Dangerous() *overflowMenuItem {
 	item.danger = true
 	return item
@@ -212,10 +223,10 @@ func (item *overflowMenuItem) Chosen() bool {
 	if m.native != nil {
 		native := m.native.Item(item.label).Disabled(item.disabled)
 		if svg := icons[item.icon]; svg != nil {
-			native.Icon(svg)
+			native.IconSVG(svg)
 		}
 		if item.danger {
-			native.Dangerous()
+			native.Danger()
 		}
 		if item.checkable {
 			native.Checked(item.checked)
@@ -230,7 +241,7 @@ func (item *overflowMenuItem) Chosen() bool {
 	}
 	button := ui.ButtonBase(m.c.Key(m.key+"-item-"+item.key)).
 		Row().FillWidth().Height(34).Gap(9).Padding(0, 9).Radius(8).
-		AlignItems(ui.Center).Role(role).Label(item.label).Tooltip(item.label).
+		AlignItems(ui.Center).Role(role).Label(item.label).Description(item.reason).Tooltip(firstNonEmpty(item.reason, item.label)).
 		Disabled(item.disabled)
 	if item.checked {
 		button.Checked(true)
@@ -259,7 +270,7 @@ func (item *overflowMenuItem) Chosen() bool {
 				icon(m.c, item.icon, 16, foreground)
 			}
 		})
-		label(m.c, item.label, 12, foreground).Grow(1).MinWidth(0).SingleLine().Tooltip(item.label)
+		label(m.c, item.label, 12, foreground).Grow(1).MinWidth(0).SingleLine().Tooltip(firstNonEmpty(item.reason, item.label))
 		if item.checked {
 			icon(m.c, "check", 15, m.p.blue)
 		}

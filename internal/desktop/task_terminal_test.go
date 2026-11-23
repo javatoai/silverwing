@@ -2,6 +2,7 @@ package desktop
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	"silverwing-go/internal/application"
 )
 
 type fakeTaskTerminal struct {
@@ -143,6 +145,50 @@ func TestTaskTerminalTaskSwitchRenameAndRootChangePreserveProcesses(t *testing.T
 	s.taskUnit.state.tasks[0].createdAt = "replacement"
 	if s.ensureTaskTerminalsCurrent() == a {
 		t.Fatal("new task incarnation inherited old session")
+	}
+}
+
+func TestTaskTerminalUsesTaskDirectoryAcrossProfileRoots(t *testing.T) {
+	s, launches := taskTerminalFixture(t)
+	initialTask := s.taskUnit.currentTask()
+	snapshot := s.snapshot
+	snapshot.ProfileID = "fixture"
+	snapshot.Tasks = []application.Task{{ID: initialTask.id, CreatedAt: initialTask.createdAt}}
+	open := func(root string) (*taskTerminalOwner, *fakeTaskTerminal) {
+		t.Helper()
+		taskPath := filepath.Join(root, initialTask.id)
+		config, err := json.Marshal(map[string]string{"taskRoot": root})
+		if err != nil {
+			t.Fatal(err)
+		}
+		snapshot.ConfigJSON = string(config)
+		snapshot.Tasks[0].Path = taskPath
+		s.applySnapshot(snapshot)
+		owner := s.ensureTaskTerminalsCurrent()
+		select {
+		case launched := <-launches:
+			if launched.root != taskPath {
+				t.Fatalf("terminal started in %q, want %q", launched.root, taskPath)
+			}
+			return owner, launched.process
+		case <-time.After(5 * time.Second):
+			t.Fatal("terminal did not start")
+			return nil, nil
+		}
+	}
+	previous, previousProcess := open(t.TempDir())
+	current, currentProcess := open(t.TempDir())
+	if current == previous || previousProcess.closed.Load() != 0 {
+		t.Fatal("root switch reused or terminated a terminal from the previous root")
+	}
+	barrier := s.prepareTaskTerminalDelete(initialTask.id)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := barrier(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if previousProcess.closed.Load() != 0 || currentProcess.closed.Load() != 1 {
+		t.Fatal("deleting the current task affected a separate root's terminal")
 	}
 }
 

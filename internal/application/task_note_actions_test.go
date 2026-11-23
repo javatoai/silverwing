@@ -34,7 +34,7 @@ func TestLocalTaskRulesActionsAreRawAndConfined(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	sentinel := filepath.Join(filepath.Dir(path), workspace.AgentContextFileName)
+	sentinel := filepath.Join(root, workspace.AgentRouterFileName)
 	if err := os.WriteFile(sentinel, []byte("不要重写生成文档\r\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	time "time"
+
+	"github.com/egoist/mygo/internal/text"
 )
 
 // codeLines returns n lines of code, as a text area of a code editor or a
@@ -40,7 +42,7 @@ func BenchmarkEditorRetainedDeletion(b *testing.B) {
 		runtime.GC()
 		var before, after runtime.MemStats
 		runtime.ReadMemStats(&before)
-		ed := newEditor(time.Now)
+		ed := newEditor(time.Now, text.New())
 		ed.multiline = true
 		ed.buf.set(strings.Repeat("a", 8<<20))
 		for range 20 {

@@ -2,7 +2,6 @@ package desktop
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -720,31 +719,7 @@ func workspaceGitWritesBlocked(s *app, item application.Workspace) bool {
 }
 
 func (s *app) defaultWorkspaceCommitMessage(task task, item application.Workspace) string {
-	var config struct {
-		Groups []struct {
-			ID       string
-			Services []struct {
-				ID                    string
-				CommitMessageTemplate string
-			}
-		}
-	}
-	if json.Unmarshal([]byte(s.settingsUnit.state.configJSON), &config) != nil {
-		return ""
-	}
-	template := ""
-	for _, group := range config.Groups {
-		if group.ID != task.groupID {
-			continue
-		}
-		for _, service := range group.Services {
-			if service.ID == item.ServiceID {
-				template = service.CommitMessageTemplate
-				break
-			}
-		}
-		break
-	}
+	template := mapString(s.readServiceConfig(item.ServiceID), "commitMessageTemplate")
 	requirementNumber := ""
 	if match := workspaceRequirementDetailNumber.FindStringSubmatchIndex(task.requirementURL); len(match) >= 4 {
 		end := match[1]

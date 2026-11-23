@@ -73,15 +73,15 @@ func resolveTagTesters(ctx context.Context, metadata integrations.RequirementMet
 	return noticeprep.Resolve(ctx, names, resolve)
 }
 
-func (a *App) validateUserTagNotice(ctx context.Context, action Action, saved releasenotice.Session) (releasenotice.Identity, *integrations.TagNoticePreparation, error) {
-	current, err := a.releaseNoticeBatch(ctx, action, true)
+func (a *App) validateUserTagNotice(ctx context.Context, action Action, saved releasenotice.Session, client larkcli.Client) (releasenotice.Identity, *integrations.TagNoticePreparation, error) {
+	current, err := a.readReleaseNoticeBatch(ctx, action, true, false, client.BeforeRun)
 	if err != nil {
 		return releasenotice.Identity{}, nil, err
 	}
 	if current.scope != saved.Scope {
 		return releasenotice.Identity{}, nil, errors.New("通知批次、任务或配置已变化，请重新准备通知")
 	}
-	client := larkcli.Client{Runner: a.Runner, Config: current.config, AsUser: true}
+	client.Config = current.config
 	latest, prepared, err := a.prepareUserTagNotice(ctx, current, client)
 	if err != nil {
 		return releasenotice.Identity{}, nil, err
@@ -116,7 +116,7 @@ func (a *App) currentUserTagNoticeBatch(ctx context.Context, action Action, save
 // This is deliberately local: online login/permission verification is supplied
 // by Refresh for this send attempt. Re-read account and scope after async work,
 // and immediately before every RPC; local status alone is never verification.
-func (a *App) checkUserTagNotice(ctx context.Context, action Action, saved releasenotice.Session, prepared *integrations.TagNoticePreparation) (err error) {
+func (a *App) checkUserTagNotice(ctx context.Context, action Action, saved releasenotice.Session, prepared *integrations.TagNoticePreparation, client larkcli.Client) (err error) {
 	defer func() {
 		if err != nil && prepared != nil {
 			prepared.Discard()
@@ -126,7 +126,7 @@ func (a *App) checkUserTagNotice(ctx context.Context, action Action, saved relea
 	if err != nil {
 		return err
 	}
-	client := larkcli.Client{Runner: a.Runner, Config: current.config, AsUser: true}
+	client.Config = current.config
 	identity, err := client.LocalIdentity(ctx)
 	if err != nil {
 		return err
@@ -141,19 +141,22 @@ func (a *App) checkUserTagNotice(ctx context.Context, action Action, saved relea
 		return err
 	}
 	_, err = a.currentUserTagNoticeBatch(ctx, action, saved)
-	return err
+	if err != nil {
+		return err
+	}
+	return client.BeforeRun(ctx)
 }
 
-func (a *App) userTagNoticeChecks(action Action) releasenotice.TagSendChecks {
+func (a *App) userTagNoticeChecks(action Action, client larkcli.Client) releasenotice.TagSendChecks {
 	var prepared *integrations.TagNoticePreparation
 	return releasenotice.TagSendChecks{
 		Refresh: func(ctx context.Context, saved releasenotice.Session) (releasenotice.Identity, error) {
-			identity, current, err := a.validateUserTagNotice(ctx, action, saved)
+			identity, current, err := a.validateUserTagNotice(ctx, action, saved, client)
 			prepared = current
 			return identity, err
 		},
 		BeforeSend: func(ctx context.Context, saved releasenotice.Session) error {
-			return a.checkUserTagNotice(ctx, action, saved, prepared)
+			return a.checkUserTagNotice(ctx, action, saved, prepared, client)
 		},
 	}
 }

@@ -18,8 +18,12 @@ func (s *Service) ensureMerge(b *Batch, target, source, before string, noFF bool
 		return errors.New("合并源或目标提交缺失")
 	}
 	id := newID()
+	root := b.Target.WorktreeRoot
+	if root == "" {
+		return errors.New("批次缺少隔离工作区目录，请重新确认生产发布目标")
+	}
 	b.Intent.Merge = &Merge{ID: id, TargetBranch: target, SourceSHA: source, BeforeSHA: before, NoFF: noFF,
-		Worktree: filepath.Join(s.Paths.Home, "production-worktrees", b.ID, id), Branch: "sw-production/" + b.ID + "/" + id}
+		Worktree: filepath.Join(root, b.ID, id), Branch: "sw-production/" + b.ID + "/" + id}
 	return s.save(b)
 }
 
@@ -147,25 +151,29 @@ func (s *Service) validateMergeLocation(b *Batch, m *Merge) error {
 	if m == nil || !batchIDPattern.MatchString(m.ID) || !batchIDPattern.MatchString(b.ID) {
 		return errors.New("隔离工作区标识无效")
 	}
-	expected := filepath.Join(s.Paths.Home, "production-worktrees", b.ID, m.ID)
-	if filepath.Clean(m.Worktree) != filepath.Clean(expected) || m.Branch != "sw-production/"+b.ID+"/"+m.ID {
+	root := b.Target.WorktreeRoot
+	expected := filepath.Join(root, b.ID, m.ID)
+	if !filepath.IsAbs(root) || m.Worktree != expected || m.Branch != "sw-production/"+b.ID+"/"+m.ID {
 		return errors.New("隔离工作区不属于当前生产操作")
 	}
-	home, err := filepath.EvalSymlinks(s.Paths.Home)
-	if err != nil {
-		return err
+	directories := []string{filepath.Dir(m.Worktree), root}
+	if s.Paths.ProfileID != "" {
+		directories = append(directories, filepath.Dir(root))
 	}
-	for current := m.Worktree; filepath.Clean(current) != filepath.Clean(s.Paths.Home); current = filepath.Dir(current) {
-		if current == filepath.Dir(current) {
-			return errors.New("隔离工作区路径无效")
+	for _, current := range append(directories, m.Worktree) {
+		info, err := os.Lstat(current)
+		if os.IsNotExist(err) {
+			continue
 		}
-		if real, err := filepath.EvalSymlinks(current); err == nil {
-			rel, _ := filepath.Rel(s.Paths.Home, current)
-			if filepath.Clean(real) != filepath.Clean(filepath.Join(home, rel)) {
-				return errors.New("隔离工作区路径包含重定向")
-			}
-		} else if !os.IsNotExist(err) {
+		if err != nil {
 			return err
+		}
+		real, err := filepath.EvalSymlinks(current)
+		if err != nil || !info.IsDir() {
+			return errors.New("隔离工作区路径不是有效目录")
+		}
+		if relative, err := filepath.Rel(current, real); err != nil || relative != "." {
+			return errors.New("隔离工作区路径包含重定向")
 		}
 	}
 	return nil

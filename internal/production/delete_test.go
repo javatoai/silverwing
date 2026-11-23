@@ -142,11 +142,11 @@ func TestProductionDeleteRejectsStaleAndActiveRecords(t *testing.T) {
 	}
 }
 
-func TestProductionDeleteSharesRepositoryLockAndLateWritesCannotRecreate(t *testing.T) {
+func TestProductionDeleteSharesBatchRecordLockAndLateWritesCannotRecreate(t *testing.T) {
 	s, b, token := localDeleteFixture(t)
-	if err := s.locks.WithRepository(b.Target.CommonDirectory, func() error {
+	if err := s.withBatchRecordLock(b.ID, func() error {
 		if err := s.Delete(context.Background(), b.ID, token); !errors.Is(err, storage.ErrLockBusy) {
-			t.Fatalf("deletion bypassed an existing repository operation: %v", err)
+			t.Fatalf("deletion bypassed an existing batch operation: %v", err)
 		}
 		return nil
 	}); err != nil {

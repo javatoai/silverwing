@@ -135,6 +135,30 @@ func TestBufferWords(t *testing.T) {
 	}
 }
 
+// Backspace takes a combining mark alone, and an emoji sequence whole.
+func TestTextInputBackspaceMarks(t *testing.T) {
+	for _, c := range []struct{ s, want string }{
+		{"aนี้", "aนี"},
+		{"ทำ", "ท"},
+		{"é", "e"},
+		{"葛\U000E0100", ""},
+		{"❤️", ""},
+		{"👍🏽", ""},
+		{"🇹🇭", ""},
+	} {
+		v := ""
+		tt := NewTester(func(ctx *Context) {
+			TextInput(ctx, &v).AutoFocus().Label("field").Width(400)
+		}, 500, 120)
+		tt.Frame()
+		tt.Type(c.s)
+		tt.Key(0, KeyBackspace)
+		if v != c.want {
+			t.Errorf("backspace in %q leaves %q, want %q", c.s, v, c.want)
+		}
+	}
+}
+
 // TestTextInputCJKWords deletes, moves and selects by words in Chinese
 // and Japanese, which have no spaces between them: a character at a time,
 // not the whole run (#668).
@@ -279,7 +303,7 @@ func TestTextAreaLaysOutAsWholeText(t *testing.T) {
 	ed := e.st.editor
 	params := ed.area.params
 	params.Text = s
-	whole := textSystem().Layout(params)
+	whole := ed.sys.Layout(params)
 	for i := 0; i <= ed.buf.n; i++ {
 		x, y, h := ed.area.caretAt(ed, i, 0)
 		wx, wy, wh := whole.Caret(i)
@@ -413,7 +437,7 @@ func TestTextAreaSelectsAsWholeText(t *testing.T) {
 	a := ed.area
 	params := a.params
 	params.Text = s
-	whole := textSystem().Layout(params)
+	whole := ed.sys.Layout(params)
 	n := ed.buf.n
 	for from := 0; from <= n; from++ {
 		for to := from + 1; to <= n; to++ {
@@ -439,6 +463,80 @@ func TestTextAreaSelectsAsWholeText(t *testing.T) {
 					t.Fatalf("selection %d-%d: %v, laid out whole %v", from, to, got, want)
 				}
 			}
+		}
+	}
+}
+
+// TestTextAreaDragReleaseBeforeFrame selects as far as the pointer let go
+// before a frame showed its last moves, as a drag with frames between its
+// moves does.
+func TestTextAreaDragReleaseBeforeFrame(t *testing.T) {
+	s := "a line of text to select by dragging"
+	tt := coreNewTester(func(c *context) { coreTextArea(c, &s).Fill() }, 400, 300)
+	tt.Press(20, 15)
+	tt.Move(80, 15)
+	tt.Move(140, 15)
+	tt.Release(140, 15)
+	ed := textAreaState(tt).editor
+	want := ed.caret
+	tt.Advance(time.Second)
+	tt.Press(20, 15)
+	tt.Move(80, 15)
+	tt.rt.event(platform.SurfaceEvent{Kind: platform.PointerMove, X: 110, Y: 15})
+	tt.rt.event(platform.SurfaceEvent{Kind: platform.PointerUp, X: 140, Y: 15})
+	tt.rt.event(platform.SurfaceEvent{Kind: platform.PointerMove, X: 60, Y: 15})
+	tt.settle()
+	if ed.caret != want {
+		t.Errorf("let go before a frame: selected to %d, want %d as with frames", ed.caret, want)
+	}
+	// Right, pressed after the release before a frame, collapses the
+	// selection where the drag ended, and the drag selects no more.
+	tt.Advance(time.Second)
+	tt.Press(20, 15)
+	tt.Move(80, 15)
+	tt.rt.event(platform.SurfaceEvent{Kind: platform.PointerUp, X: 140, Y: 15})
+	tt.rt.event(platform.SurfaceEvent{Kind: platform.KeyPressed, Key: platform.Key(KeyRight)})
+	tt.rt.event(platform.SurfaceEvent{Kind: platform.KeyReleased, Key: platform.Key(KeyRight)})
+	tt.Frame()
+	if ed.anchor != want || ed.caret != want {
+		t.Errorf("Right after letting go before a frame: selected %d to %d, want the caret at %d", ed.anchor, ed.caret, want)
+	}
+}
+
+// TestTextAreaAppTextWhileDragging checks a drag that goes on as the app
+// replaces the text with one of fewer paragraphs, as a chat's input
+// cleared while the pointer is still down: the frame that takes the new
+// text looks for the pointer in it, before it is laid out.
+func TestTextAreaAppTextWhileDragging(t *testing.T) {
+	long := strings.Repeat("a line of the text area\n", 30)
+	s := long
+	buf := NewTextBuffer(long)
+	for name, view := range map[string]func(c *context){
+		"a string": func(c *context) { coreTextArea(c, &s).Fill() },
+		"a buffer": func(c *context) { coreTextAreaBuffer(c, buf).Fill() },
+	} {
+		s = long
+		buf.Set(long)
+		tt := coreNewTester(view, 300, 200)
+		tt.Press(100, 150) // far below the first paragraph
+		tt.Move(120, 160)
+		s = "one line"
+		buf.Set("one line")
+		tt.Move(130, 170)
+		tt.Release(130, 170)
+		ed := textAreaState(tt).editor
+		if got := ed.buf.string(); got != "one line" || ed.caret > len(got) || ed.anchor > len(got) {
+			t.Errorf("%s: the area holds %q, selected %d to %d", name, got, ed.anchor, ed.caret)
+		}
+		// A longer text again, while another drag goes on.
+		tt.Advance(time.Second)
+		tt.Press(100, 10)
+		s = long
+		buf.Set(long)
+		tt.Move(120, 150)
+		tt.Release(120, 150)
+		if got := ed.buf.string(); got != long || ed.caret == 0 {
+			t.Errorf("%s: after a longer text, the area holds %d bytes, the caret at %d", name, len(got), ed.caret)
 		}
 	}
 }
@@ -794,10 +892,10 @@ func TestInputPlaceholderStaysOnItsLine(t *testing.T) {
 		lineEl = coreTextInputBase(c, &line).Width(120).Placeholder("mmmm mmmm mmmm mmmm mmmm mmmm").Label("Field")
 		areaEl = coreTextAreaBase(c, &area).Width(120).Placeholder("mmmm mmmm mmmm mmmm mmmm mmmm").Label("Area")
 	}, 300, 160)
-	if n := len(textSystem().Layout(lineEl.placeholderParams(120)).Lines); n != 1 {
+	if n := len(lineEl.c.rt.text.Layout(lineEl.placeholderParams(120)).Lines); n != 1 {
 		t.Errorf("the input's placeholder takes %d lines", n)
 	}
-	if n := len(textSystem().Layout(areaEl.placeholderParams(120)).Lines); n < 2 {
+	if n := len(areaEl.c.rt.text.Layout(areaEl.placeholderParams(120)).Lines); n < 2 {
 		t.Errorf("the text area's placeholder takes %d lines", n)
 	}
 }

@@ -60,7 +60,7 @@ func (t *TagTask) PrepareBatch(ctx context.Context, id string, keys []string, al
 	err := t.WithLock(func() error {
 		var err error
 		if id == "" {
-			plan = TagBatchPreflight{ID: newUUID(), TaskIdentity: tagPlanTaskIdentity(t.task), AllServices: all}
+			plan = TagBatchPreflight{ID: newUUID(), TaskIdentity: t.service.tagPlanTaskIdentity(t.task), AllServices: all}
 			for _, key := range keys {
 				target, err := domain.ResolveEffectiveTagTarget(t.task.config, t.task.manifest, key)
 				if err != nil {
@@ -166,13 +166,13 @@ func (t *TagTask) prepareTagPlanItem(ctx context.Context, item *TagBatchPrefligh
 		}
 		commit := pins.Source
 		if targetKey != "" {
-			commit, err = s.prepareTagPlanMerge(ctx, item, repo.repository)
+			commit, err = s.prepareTagPlanMerge(ctx, t.task.config, item, repo.repository)
 			if err != nil {
 				return err
 			}
 		}
 		item.Commit = commit
-		if err := s.checkApprovedCommit(ctx, *item, target, repo.repository); err != nil {
+		if err := s.checkApprovedCommit(ctx, t.task.config, *item, target, repo.repository); err != nil {
 			return err
 		}
 		if targetKey != "" {
@@ -316,7 +316,7 @@ func tagPlanPreview(manifest domain.TaskManifest, target domain.EffectiveTagTarg
 		TagMode: target.Mode, CommitList: []string{}}
 }
 
-func (s *Service) prepareTagPlanMerge(ctx context.Context, item *TagBatchPreflightItem, repository string) (string, error) {
+func (s *Service) prepareTagPlanMerge(ctx context.Context, config domain.AppConfig, item *TagBatchPreflightItem, repository string) (string, error) {
 	source, base := item.Pins.Source, item.BeforeTarget
 	switch value(item.Preview.MergeMode) {
 	case "ALREADY_MERGED":
@@ -324,11 +324,11 @@ func (s *Service) prepareTagPlanMerge(ctx context.Context, item *TagBatchPreflig
 	case "FAST_FORWARD":
 		return source, nil
 	}
-	path, err := s.conflictWorktreePath(item.OperationID)
+	path, err := s.conflictWorktreePath(config, item.OperationID)
 	if err != nil {
 		return "", err
 	}
-	recovered, err := s.recoverTagWorktree(ctx, repository, path, base, source)
+	recovered, err := s.recoverTagWorktree(ctx, config, repository, path, base, source)
 	if err != nil {
 		return "", err
 	}
@@ -374,8 +374,21 @@ func tagPlanChanged(key string, before, after tagPlanPins) error {
 	}
 }
 
-func tagPlanTaskIdentity(task resolvedTask) string {
-	data, _ := json.Marshal([]any{canonicalPath(task.directory), task.config, task.manifest})
+func (s *Service) tagPlanTaskIdentity(task resolvedTask) string {
+	config := task.config
+	manifest := task.manifest
+	owner, namespace := canonicalPath(task.directory), ""
+	if s.paths.ProfileID != "" {
+		owner = s.paths.ProfileID + "/" + owner
+		namespace = s.paths.TaskWorktreeNamespace(config.TaskRoot)
+		config.RequirementMaterialsRoot = nil
+		if manifest.RequirementMaterials.WriteRoot != nil {
+			if relative, err := filepath.Rel(s.paths.Home, *manifest.RequirementMaterials.WriteRoot); err == nil && filepath.IsLocal(relative) {
+				manifest.RequirementMaterials.WriteRoot = stringPointer(filepath.ToSlash(relative))
+			}
+		}
+	}
+	data, _ := json.Marshal([]any{owner, namespace, config, manifest})
 	return fmt.Sprintf("%x", sha256.Sum256(data))
 }
 
@@ -384,12 +397,12 @@ func (t *TagTask) checkTagPlanScope(ctx context.Context, plan TagBatchPreflight)
 	if err != nil {
 		return err
 	}
-	manifest, err := t.service.manifests.Load(t.task.directory)
+	entry, err := t.service.manifests.LoadTask(t.service.locks.TaskRoot(cfg), t.task.manifest.TaskDirectoryName)
 	if err != nil {
 		return err
 	}
-	current := resolvedTask{cfg, t.task.directory, manifest}
-	if plan.TaskIdentity != tagPlanTaskIdentity(current) || manifest.LifecycleStatus == domain.TaskArchived {
+	current := resolvedTask{cfg, entry.Path, entry.Manifest}
+	if !samePathSpelling(t.task.directory, entry.Path) || plan.TaskIdentity != t.service.tagPlanTaskIdentity(current) || entry.Manifest.LifecycleStatus == domain.TaskArchived {
 		return errors.New("任务、服务选择或设置已变化，请重新预检")
 	}
 	return nil

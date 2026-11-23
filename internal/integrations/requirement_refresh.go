@@ -53,8 +53,7 @@ func (s *Service) finishRequirementRead(key string, generation uint64) {
 }
 
 func requirementReadConfig(config domain.AppConfig) string {
-	data, _ := json.Marshal([]any{config.MeegleExecutablePath, config.MeegleProjects, config.MeegleDefaultSprintProjectKey,
-		config.CommandProxyURL, config.CommandProxyNoProxy, config.CommandProxyUsername, config.CommandProxyPassword, config.CommandProxyTargets})
+	data, _ := json.Marshal([]any{config.MeegleExecutablePath, config.MeegleProjects, config.MeegleDefaultSprintProjectKey})
 	return string(data)
 }
 

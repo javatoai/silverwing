@@ -36,8 +36,7 @@ func requirementRefreshConfiguration(configJSON string) string {
 	if err := json.Unmarshal([]byte(configJSON), &config); err != nil {
 		return configJSON
 	}
-	encoded, _ := json.Marshal([]any{config.MeegleExecutablePath, config.MeegleProjects, config.MeegleDefaultSprintProjectKey,
-		config.CommandProxyURL, config.CommandProxyNoProxy, config.CommandProxyUsername, config.CommandProxyPassword, config.CommandProxyTargets})
+	encoded, _ := json.Marshal([]any{config.MeegleExecutablePath, config.MeegleProjects, config.MeegleDefaultSprintProjectKey})
 	return string(encoded)
 }
 

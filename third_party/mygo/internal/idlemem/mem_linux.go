@@ -1,3 +1,5 @@
+//go:build !android
+
 package main
 
 import (
@@ -79,4 +81,7 @@ func descendants(pid int) []int {
 }
 
 // stop asks the app to quit, which its WebKit processes follow.
-func stop(p *os.Process, _ []int) { p.Signal(syscall.SIGTERM) }
+func stop(p *os.Process, _ []int) error {
+	p.Signal(syscall.SIGTERM)
+	return nil
+}

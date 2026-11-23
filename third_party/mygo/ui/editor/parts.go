@@ -121,43 +121,92 @@ func (f *FindBar) ReplacementInput(in ui.Element) ui.Element {
 	return in
 }
 
-// DefaultFindBar builds the editor's own find bar into bar, as Zed's:
-// the query with its options, the count of matches and the buttons going
-// through them, and the replacement below it while replacing.
+const (
+	findBarReduced   = 520
+	findBarCollapsed = 360
+)
+
+// findBarSize is how much of the default find bar an editor w wide shows:
+// 2 all of it, 1 all but the count, 0 the fields, the button showing or
+// hiding the replacement and the close button.
+func findBarSize(w float32) int {
+	switch {
+	case w < findBarCollapsed:
+		return 0
+	case w < findBarReduced:
+		return 1
+	}
+	return 2
+}
+
+// DefaultFindBar builds the editor's own find bar into bar: the query
+// with its options inside its field, the count of matches and the buttons
+// going through them, and the replacement below it while replacing. In a
+// narrow editor it leaves out the count, then all but the fields, the
+// button showing or hiding the replacement and the close button.
 func DefaultFindBar(c *ui.Context, bar ui.Element, f *FindBar) {
 	t := c.Theme()
 	tx := l10n.In(c.Locale())
+	size := findBarSize(f.ed.fitWidth())
 	bar.Gap(t.Space(1)).Padding(t.Space(1.5)).Background(t.Surface).Border(1, t.Border).Radius(t.Radius).
 		Shadow(0, 2, 8, 0, ui.RGBA(0, 0, 0, 0.18))
-	field := func(value *string, placeholder string) ui.Element {
-		return ui.TextInputBase(c, value).Width(t.Space(50)).Placeholder(placeholder).Padding(t.Space(1), t.Space(2)).
-			Background(t.Background).Border(1, t.Border).Radius(t.Radius - 2).FontSize(t.FontSize - 1).Label(placeholder)
+	field := func(value *string, placeholder string, invalid bool, input func(ui.Element) ui.Element, inside func()) {
+		box := ui.Row(c).AlignItems(ui.Center).MaxWidth(t.Space(75)).
+			Padding(0, t.Space(0.5), 0, 0).Background(t.Background).Radius(t.Radius - 2)
+		var in ui.Element
+		box.Children(func() {
+			in = input(ui.TextInputBase(c, value).Grow(1).Placeholder(placeholder).Padding(t.Space(1), t.Space(2)).
+				FontSize(t.FontSize - 1).Label(placeholder).FocusRing(false).Invalid(invalid))
+			if size > 0 && inside != nil {
+				inside()
+			}
+		})
+		// The border tells an invalid query, as ui's fields do, since a
+		// narrow bar leaves out the status that says so.
+		border := t.Border
+		switch {
+		case invalid:
+			border = t.Danger
+		case in.Focused():
+			border = t.Accent
+		}
+		box.Border(1, border)
 	}
 	button := func(label, tip string) ui.Element {
 		b := ui.ButtonBase(c).Padding(t.Space(0.5), t.Space(1.5)).Radius(t.Radius - 2).Label(tip).Tooltip(tip).KeepFocus()
 		b.Children(func() { ui.Text(c, label).FontSize(t.FontSize - 1) })
 		return b
 	}
-	bar.Children(func() {
-		ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
-			f.QueryInput(field(f.Query(), tx.Find()))
-			toggle := func(on *bool, label, tip string) {
-				b := ui.ToggleBase(c, on).Padding(t.Space(0.5), t.Space(1.5)).Radius(t.Radius - 2).Label(tip).Tooltip(tip).KeepFocus()
-				if *on {
-					b.Background(t.Accent.Alpha(0.2)).TextColor(t.Accent)
-				}
-				b.Children(func() { ui.Text(c, label).FontSize(t.FontSize - 1) })
-			}
+	toggle := func(on *bool, label, tip string) {
+		b := ui.ToggleBase(c, on).Padding(t.Space(0.5), t.Space(1)).Radius(t.Radius - 2).Label(tip).Tooltip(tip).KeepFocus()
+		if *on {
+			b.Background(t.Accent.Alpha(0.2)).TextColor(t.Accent)
+		}
+		b.Children(func() { ui.Text(c, label).FontSize(t.FontSize - 2) })
+	}
+	row := func(children func()) {
+		ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(children)
+	}
+	// The fields in the first column, as wide as each other, their buttons
+	// in the second.
+	bar.Grid().ColumnTracks(ui.Fr(1), ui.FitContent()).Children(func() {
+		field(f.Query(), tx.Find(), f.Err() != nil, f.QueryInput, func() {
 			toggle(f.CaseSensitive(), "Aa", tx.MatchCase())
 			toggle(f.WholeWord(), "ab", tx.MatchWholeWord())
 			toggle(f.Regexp(), ".*", tx.UseRegularExpression())
 			toggle(f.InSelection(), "[ ]", tx.FindInSelection())
-			ui.Text(c, f.Status()).FontSize(t.FontSize - 2).TextColor(t.TextMuted).FontFeatures("tnum").MinWidth(t.Space(16)).Role(ui.RoleStatus)
-			if button("↑", tx.PreviousMatch()).Clicked() {
-				f.Previous()
+		})
+		row(func() {
+			if size > 1 {
+				ui.Text(c, f.Status()).FontSize(t.FontSize - 2).TextColor(t.TextMuted).FontFeatures("tnum").MinWidth(t.Space(16)).Role(ui.RoleStatus)
 			}
-			if button("↓", tx.NextMatch()).Clicked() {
-				f.Next()
+			if size > 0 {
+				if button("↑", tx.PreviousMatch()).Clicked() {
+					f.Previous()
+				}
+				if button("↓", tx.NextMatch()).Clicked() {
+					f.Next()
+				}
 			}
 			if f.CanReplace() && button("⇄", tx.Replace()).Clicked() {
 				f.SetReplacing(!f.Replacing())
@@ -167,13 +216,15 @@ func DefaultFindBar(c *ui.Context, bar ui.Element, f *FindBar) {
 			}
 		})
 		if f.Replacing() {
-			ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
-				f.ReplacementInput(field(f.Replacement(), tx.Replace()))
-				if ui.Button(c, tx.Replace()).Padding(t.Space(0.5), t.Space(2)).FontSize(t.FontSize - 1).Clicked() {
-					f.Replace()
-				}
-				if ui.Button(c, tx.ReplaceAll()).Padding(t.Space(0.5), t.Space(2)).FontSize(t.FontSize - 1).Clicked() {
-					f.ReplaceAll()
+			field(f.Replacement(), tx.Replace(), false, f.ReplacementInput, nil)
+			row(func() {
+				if size > 0 {
+					if ui.Button(c, tx.Replace()).Padding(t.Space(0.5), t.Space(2)).FontSize(t.FontSize - 1).Clicked() {
+						f.Replace()
+					}
+					if ui.Button(c, tx.ReplaceAll()).Padding(t.Space(0.5), t.Space(2)).FontSize(t.FontSize - 1).Clicked() {
+						f.ReplaceAll()
+					}
 				}
 			})
 		}
@@ -181,13 +232,15 @@ func DefaultFindBar(c *ui.Context, bar ui.Element, f *FindBar) {
 }
 
 // buildFindBar places the find bar over the editor's top right corner,
-// and builds it.
+// no wider than the editor, and builds it. Its margins, unlike its insets,
+// narrow the room it fits its content in.
 func (ed *editor) buildFindBar(c *ui.Context) {
 	f := &ed.find
 	f.update(ed)
 	t := c.Theme()
-	bar := ui.Box(c).Key("code find").Absolute().Top(t.Space(1)).Right(t.Space(4)).
+	bar := ui.Box(c).Key("code find").Absolute().Top(t.Space(1)).Right(0).Margin(0, t.Space(4), 0, t.Space(1)).
 		Role(ui.RoleToolbar).Label(l10n.In(c.Locale()).Find()).Cursor(ui.CursorDefault).HandleInput(shield)
+	f.builtW = ed.fitWidth()
 	render := ed.o.renderFindBar
 	if render == nil {
 		render = DefaultFindBar
@@ -556,3 +609,10 @@ func (ed *editor) buildHover(c *ui.Context, anchor ui.Element) {
 // goes to the innermost element taking it as it comes, which then leaves
 // it to the buttons and fields inside, as they take it.
 func shield(ui.InputEvent) bool { return false }
+
+// wheelOnly shields the presses on what a diff shows over its editors,
+// outside them, as its separators, but scrolls the editor by the wheel:
+// the input never reaches an editor from what is not inside it.
+func (ed *editor) wheelOnly(ev ui.InputEvent) bool {
+	return ev.Kind == ui.InputScroll && ed.wheel(ev)
+}

@@ -60,7 +60,8 @@ func writeBlocks(b *strings.Builder, paras []Paragraph) {
 			var quoted []Paragraph
 			for ; j < len(paras) && paras[j].Style.Quote; j++ {
 				q := paras[j]
-				q.Style.Quote = false
+				q.Style.QuoteDepth = q.Style.quoteDepth() - 1
+				q.Style.Quote = q.Style.QuoteDepth > 0
 				quoted = append(quoted, q)
 			}
 			b.WriteString("<blockquote>")
@@ -516,7 +517,7 @@ func (b *htmlBuilder) node(n *xhtml.Node, a Attributes) {
 		if k := len(b.lists); k > 0 {
 			kind = b.lists[k-1]
 		}
-		b.style = ParagraphStyle{List: kind, Indent: max(len(b.lists)-1, 0), Align: saved.Align, Quote: saved.Quote}
+		b.style = ParagraphStyle{List: kind, Indent: max(len(b.lists)-1, 0), Align: saved.Align, Quote: saved.Quote, QuoteDepth: saved.QuoteDepth}
 		block = true
 	case atom.P, atom.Div, atom.Section, atom.Article, atom.Header, atom.Footer, atom.Main, atom.Aside, atom.Nav,
 		atom.Figure, atom.Figcaption, atom.Tr, atom.Dt, atom.Dd, atom.Address, atom.Center:
@@ -524,15 +525,18 @@ func (b *htmlBuilder) node(n *xhtml.Node, a Attributes) {
 		block = true
 	case atom.H1, atom.H2, atom.H3, atom.H4, atom.H5, atom.H6:
 		b.flush()
-		b.style = ParagraphStyle{Heading: int(n.Data[1] - '0'), Align: saved.Align, Quote: saved.Quote}
+		b.style = ParagraphStyle{Heading: int(n.Data[1] - '0'), Align: saved.Align, Quote: saved.Quote, QuoteDepth: saved.QuoteDepth}
 		block = true
 	case atom.Blockquote:
 		b.flush()
+		if b.style.Quote {
+			b.style.QuoteDepth = b.style.quoteDepth() + 1
+		}
 		b.style.Quote = true
 		block = true
 	case atom.Pre:
 		b.flush()
-		b.style = ParagraphStyle{CodeBlock: true, Indent: saved.Indent, Quote: saved.Quote}
+		b.style = ParagraphStyle{CodeBlock: true, Indent: saved.Indent, Quote: saved.Quote, QuoteDepth: saved.QuoteDepth}
 		b.pre++
 		defer func() { b.pre-- }()
 		block = true

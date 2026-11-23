@@ -41,7 +41,7 @@ export type ConfigFn = (env: ConfigEnv) => Config | Promise<Config>;
 /** What a configuration function gets. */
 export interface ConfigEnv {
   /** The mygo command running. */
-  command: "dev" | "build" | "generate" | "init";
+  command: "dev" | "build" | "generate" | "init" | "publish";
 }
 
 /** The configuration of a MyGo project. Every field is optional. */
@@ -74,6 +74,12 @@ export interface Config {
    * the copyright notice without its "©" and years).
    */
   publisher?: string;
+  /**
+   * The SPDX license expression of the app, such as `MIT`, which the RPM
+   * package and the PKGBUILD of Arch Linux record (default: `license` in
+   * `package.json`).
+   */
+  license?: string;
   /** A square PNG, ideally 1024×1024 (default: `resources/icon.png` when it exists). */
   icon?: string;
   /** The Go package of the app, relative to the project (default: `.`). */
@@ -109,6 +115,14 @@ export interface Config {
    * `resources/linux-amd64`, hold the files of one platform.
    */
   resources?: string[];
+  /**
+   * Files of the project's resources directory left out of the apps:
+   * patterns of their paths there, with slashes, where `*` matches within a
+   * name and `**` any number of directories, as in `design/**`. A directory
+   * that matches is left out with what it holds. Go source files are always
+   * left out; listed `resources` ship whole.
+   */
+  resourcesExclude?: string[];
   /** The URL schemes the app opens, such as `myapp` for `myapp://…`, which reach `App.OnOpenURL`. */
   urlSchemes?: string[];
   /** The types of files the app opens, which reach `App.OnOpenFile`. */
@@ -126,6 +140,10 @@ export interface Config {
   windows?: WindowsConfig;
   /** Linux packaging. */
   linux?: LinuxConfig;
+  /** The iOS app (`mygo build -platform ios`, `ios/simulator`). */
+  ios?: IOSConfig;
+  /** The Android app (`mygo build -platform android`). */
+  android?: AndroidConfig;
 }
 
 /**
@@ -229,7 +247,7 @@ export interface MacOSConfig {
   infoPlist?: Record<string, unknown>;
   /** The volume name of the disk image (default: the name). */
   dmgTitle?: string;
-  /** Notarizes production disk images. */
+  /** Notarizes the app and the disk image of production builds. */
   notarize?: NotarizeConfig;
 }
 
@@ -273,25 +291,116 @@ export interface WindowsConfig {
 }
 
 /** Linux packaging. */
+/** The iOS app. */
+export interface IOSConfig {
+  /** The oldest iOS the app runs on (default: `17.0`). */
+  minimumSystemVersion?: string;
+  /** The ID of the Apple developer team that signs the app for devices. */
+  team?: string;
+  /** The provisioning profile to sign with: its name, UUID or the path of a `.mobileprovision` (default: the installed one that best fits). */
+  provisioningProfile?: string;
+  /** What the build is for (default: `app-store`, TestFlight too). */
+  distribution?: "app-store" | "ad-hoc" | "development" | "enterprise";
+  /** `CFBundleVersion`, which must grow with every upload of a version (default: the version). */
+  /** Lets WindowOptions.OwnScene open windows of the system's own on iPad. */
+  multipleWindows?: boolean;
+  buildNumber?: string;
+  /** The orientations the app turns to on iPhones (default: both); iPads take every one. */
+  orientations?: ("portrait" | "landscape")[];
+  /** Extra keys of Info.plist, which replace MyGo's own, as usage descriptions. */
+  infoPlist?: Record<string, unknown>;
+  /**
+   * The hosts of the app's universal links, which reach `App.OnOpenURL`:
+   * `example.com` signs the app with `applinks:example.com`, and a value with
+   * its own service, as `webcredentials:example.com`, stays as it is. The
+   * provisioning profile needs the capability Associated Domains.
+   */
+  associatedDomains?: string[];
+  /** What the system shows while the app starts (default: the system background). */
+  launchScreen?: IOSLaunchScreen;
+  /** The app's `UIBackgroundModes`, as `audio`, `fetch` or `remote-notification`, with those its plugins ask for. */
+  backgroundModes?: string[];
+}
+
+/** The launch screen of the iOS app: at least one of its fields. */
+export interface IOSLaunchScreen {
+  /** Its color, as `#102030`. */
+  background?: string;
+  /** A PNG shown centered, at the size of a 3x screen: a logo of 600×600 pixels takes 200×200 points. */
+  image?: string;
+}
+
+/** The Android app. */
+export interface AndroidConfig {
+  /** The oldest Android API level the app runs on (default: `26`, Android 8.0). */
+  minSdk?: number;
+  /** The integer version Google Play orders uploads by (default: from the version, major×10000 + minor×100 + patch). */
+  versionCode?: number;
+  /** Permissions the manifest declares besides INTERNET, as `android.permission.CAMERA` or `CAMERA`. */
+  permissions?: string[];
+  /** The keystore of the upload key that signs release builds; its passwords come from `MYGO_ANDROID_KEYSTORE_PASSWORD` and `MYGO_ANDROID_KEY_PASSWORD`. Without one, builds are signed with the debug key. */
+  keystore?: string;
+  /** The alias of the upload key in the keystore. */
+  keyAlias?: string;
+  /**
+   * The hosts of the app's https deep links, verified by Android, which reach
+   * `App.OnOpenURL`: each serves `/.well-known/assetlinks.json` naming the
+   * app. `*.example.com` takes its subdomains.
+   */
+  appLinks?: string[];
+  /** The launcher icon of Android 8.0 and later, which the launcher masks and moves. Without it, launchers show `icon` as it is. */
+  adaptiveIcon?: AndroidAdaptiveIcon;
+  /** The color of the screen the system shows while the app starts, as `#102030` (default: the theme's). */
+  splash?: string;
+}
+
+/** An icon of two layers. */
+export interface AndroidAdaptiveIcon {
+  /** A square PNG, ideally 432×432 or more, with transparency around what it shows: launchers crop to the middle 72/108 of it. */
+  foreground: string;
+  /** The color under it, as `#102030`. */
+  background: string;
+}
+
 export interface LinuxConfig {
-  /** `Name <email>`, the maintainer of the Debian package (default: `author` in package.json, else the app's name). */
+  /** `Name <email>`, the maintainer of the Debian and RPM packages and of the PKGBUILD (default: `author` in package.json, else the app's name). */
   maintainer?: string;
-  /** A short description, for the desktop entry and the package. */
+  /** A short description, for the desktop entry and the packages. */
   comment?: string;
   /** The categories of the desktop entry (default: `["Utility"]`). */
   categories?: string[];
-  /** Debian packages the app needs besides GTK and WebKitGTK. */
-  depends?: string[];
+  /** Packages the app needs besides GTK and WebKitGTK, by package format or as Debian packages mapped to Arch Linux and RPM where MyGo knows them. */
+  depends?: string[] | LinuxDepends;
   /**
    * `false` for an app that shows no web page, in a window or a `ui.WebView`,
-   * as an app of native UI: its Debian package depends on GTK alone, and
+   * as an app of native UI: its Debian and RPM packages and PKGBUILD depend on GTK alone, and
    * install.sh and `mygo doctor` do not ask for WebKitGTK (default: `true`).
    */
   webview?: boolean;
   /**
-   * A command that runs the app, such as `my-app`: a link in `/usr/bin` from
-   * the Debian package, and in `~/.local/bin` from install.sh (default: none;
-   * the app opens from the applications menu).
+   * A command that runs the app, such as `my-app`, or a list of names, such
+   * as `["my-app", "ma"]`, which adds a short one: a link in `/usr/bin` from
+   * the Debian and RPM packages and the PKGBUILD, and in `~/.local/bin` from install.sh, for each,
+   * which says to run the app by the first it links (default: none; the app
+   * opens from the applications menu).
    */
-  command?: string;
+  command?: string | string[];
+  /**
+   * The packages `mygo build` writes (default: all three). The archive with
+   * install.sh is always written, as install.sh updates the app from it and
+   * the PKGBUILD packages it; `[]` writes it alone.
+   */
+  formats?: ("deb" | "rpm" | "pkgbuild")[];
+}
+
+/**
+ * Extra package dependencies for Linux packages, by package format.
+ */
+export interface LinuxDepends {
+  /** Debian packages the app needs besides GTK and WebKitGTK. */
+  deb?: string[];
+  /** RPM package dependencies or library requirements besides GTK and WebKitGTK. */
+  rpm?: string[];
+  /** Arch Linux packages the app needs besides GTK and WebKitGTK. */
+  arch?: string[];
 }

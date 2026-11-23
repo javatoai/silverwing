@@ -2,9 +2,9 @@ package domain
 
 // Persisted schema versions are deliberately independent of the product version.
 const (
-	CurrentProductVersion            = "0.0.20"
-	CurrentAppConfigSchemaVersion    = "6.0.0"
-	CurrentTaskManifestSchemaVersion = "2.0.0"
+	CurrentProductVersion            = "0.0.21"
+	CurrentAppConfigSchemaVersion    = "7.0.0"
+	CurrentTaskManifestSchemaVersion = "3.0.0"
 	DefaultGroupID                   = "default"
 	DefaultGroupName                 = "默认组"
 	DefaultTagHistoryMaxGroups       = 3
@@ -66,23 +66,18 @@ const (
 type CommandProxyTarget string
 
 const (
-	ProxyTargetCodex            CommandProxyTarget = "CODEX"
-	ProxyTargetGit              CommandProxyTarget = "GIT"
-	ProxyTargetWorkspaceCommand CommandProxyTarget = "WORKSPACE_COMMAND"
-	ProxyTargetMeegle           CommandProxyTarget = "MEEGLE"
-	ProxyTargetGenbu            CommandProxyTarget = "GENBU"
-	ProxyTargetAppUpdates       CommandProxyTarget = "APP_UPDATES"
+	ProxyTargetCodex      CommandProxyTarget = "CODEX"
+	ProxyTargetAppUpdates CommandProxyTarget = "APP_UPDATES"
 )
 
-// NormalizeCommandProxyTargets applies the persisted Set semantics while
-// preserving the first-seen order used by Kotlin serialization.
+// NormalizeCommandProxyTargets drops retired targets and preserves first-seen
+// order when deduplicating the persisted set.
 func NormalizeCommandProxyTargets(values []CommandProxyTarget) []CommandProxyTarget {
 	seen := make(map[CommandProxyTarget]struct{}, len(values))
 	out := make([]CommandProxyTarget, 0, len(values))
 	for _, value := range values {
-		// Lark cloud-document synchronization has been retired. Ignore the old
-		// routing entry while loading otherwise valid configurations.
-		if value == CommandProxyTarget("LARK") {
+		switch value {
+		case "GIT", "WORKSPACE_COMMAND", "MEEGLE", "GENBU", "LARK":
 			continue
 		}
 		if _, exists := seen[value]; exists {
@@ -184,7 +179,7 @@ type ServiceModuleConfig struct {
 	TagMessagePrefix string                   `json:"tagMessagePrefix"`
 	CustomCommands   []WorkspaceCommandConfig `json:"customCommands"`
 }
-type GroupServiceConfig struct {
+type ServiceConfig struct {
 	ID                    string                `json:"id"`
 	RepositoryID          string                `json:"repositoryId"`
 	DisplayName           string                `json:"displayName"`
@@ -198,6 +193,9 @@ type GroupServiceConfig struct {
 	Bootstrap             BootstrapConfig       `json:"bootstrap"`
 	CommitMessageTemplate string                `json:"commitMessageTemplate"`
 }
+
+type GroupServiceConfig = ServiceConfig
+
 type GroupConfig struct {
 	ID         string               `json:"id"`
 	Name       string               `json:"name"`
@@ -229,7 +227,8 @@ type AppConfig struct {
 	TaskRoot                               *string                        `json:"taskRoot"`
 	DefaultBranchPrefix                    string                         `json:"defaultBranchPrefix"`
 	Repositories                           []RepositoryConfig             `json:"repositories"`
-	Groups                                 []GroupConfig                  `json:"groups"`
+	Services                               []ServiceConfig                `json:"services"`
+	Groups                                 []GroupConfig                  `json:"-"`
 	Theme                                  ThemePreference                `json:"theme"`
 	ToolVisibility                         ToolVisibilitySettings         `json:"toolVisibility"`
 	SidebarVisibility                      SidebarVisibilitySettings      `json:"sidebarVisibility"`
@@ -252,6 +251,7 @@ type AppConfig struct {
 	BlockedGitWriteBranches                []string                       `json:"blockedGitWriteBranches"`
 	MeegleProjects                         []MeegleProjectConfig          `json:"meegleProjects"`
 	MeegleDefaultSprintProjectKey          *string                        `json:"meegleDefaultSprintProjectKey"`
+	OptionalCLIs                           OptionalCLISettings            `json:"optionalCLIs"`
 	LarkExecutablePath                     *string                        `json:"larkExecutablePath"`
 	LarkNotice                             *LarkNoticeConfig              `json:"larkNotice"`
 	MeegleExecutablePath                   *string                        `json:"meegleExecutablePath"`
@@ -264,9 +264,18 @@ type AppConfig struct {
 	GitExecutablePath                      *string                        `json:"gitExecutablePath"`
 	GenbuExecutablePath                    *string                        `json:"genbuExecutablePath"`
 	GenbuExecutableAutoDetected            bool                           `json:"genbuExecutableAutoDetected"`
+	DragonExecutablePath                   *string                        `json:"dragonExecutablePath"`
+	DragonExecutableAutoDetected           bool                           `json:"dragonExecutableAutoDetected"`
 	RequirementMaterialsRoot               *string                        `json:"requirementMaterialsRoot"`
 	RequirementMaterialsSubdirectory       *string                        `json:"requirementMaterialsSubdirectory"`
 	MaterialsGitSync                       *MaterialsGitSyncSettings      `json:"materialsGitSync"`
+	ProjectInstructionsGitURL              string                         `json:"projectInstructionsGitUrl"`
+	ProjectInstructionsGitEnabled          *bool                          `json:"projectInstructionsGitEnabled"`
+	ProjectInstructionsGitBranch           string                         `json:"projectInstructionsGitBranch"`
+	ProjectInstructionsGitIntervalMinutes  *int                           `json:"projectInstructionsGitIntervalMinutes"`
+	ProjectInstructionsGitLocalRoot        string                         `json:"projectInstructionsGitLocalRoot"`
+	ProjectInstructionsGitRemoteName       string                         `json:"projectInstructionsGitRemoteName"`
+	ProjectInstructionsGitBindingID        string                         `json:"projectInstructionsGitBindingId"`
 	CodexPluginMarketplaceSources          []CodexPluginMarketplaceSource `json:"codexPluginMarketplaceSources"`
 	SkillSources                           []SkillSource                  `json:"skillSources"`
 	AIRequirementNamingEnabled             bool                           `json:"aiRequirementNamingEnabled"`
@@ -328,7 +337,7 @@ type ServiceWorkspace struct {
 	Branch              string              `json:"branch"`
 	Health              WorkspaceHealth     `json:"health"`
 	Warnings            []string            `json:"warnings"`
-	GroupServiceID      string              `json:"groupServiceId"`
+	GroupServiceID      string              `json:"serviceId"`
 	ModuleID            string              `json:"moduleId"`
 	ModuleName          string              `json:"moduleName"`
 	Strategy            WorkspaceStrategy   `json:"strategy"`
@@ -352,21 +361,24 @@ const (
 )
 
 type TaskManifest struct {
-	SchemaVersion         string                        `json:"schemaVersion"`
-	FolderName            string                        `json:"folderName"`
-	TaskDirectoryName     string                        `json:"taskDirectoryName"`
-	FeatureBranch         string                        `json:"featureBranch"`
-	RequirementLink       string                        `json:"requirementLink"`
-	RequirementID         *string                       `json:"requirementId"`
-	RequirementMaterials  RequirementMaterialsDirectory `json:"requirementMaterials"`
-	CreatedAt             string                        `json:"createdAt"`
-	UpdatedAt             string                        `json:"updatedAt"`
-	LifecycleStatus       TaskLifecycleStatus           `json:"lifecycleStatus"`
-	Services              []ServiceWorkspace            `json:"services"`
-	GroupID               string                        `json:"groupId"`
-	WorkspaceToolLaunches []WorkspaceToolLaunch         `json:"workspaceToolLaunches"`
-	AgentContext          *AgentTaskContext             `json:"agentContext"`
-	AgentDocumentLayout   AgentDocumentLayout           `json:"agentDocumentLayout"`
+	SchemaVersion                   string                        `json:"schemaVersion"`
+	FolderName                      string                        `json:"folderName"`
+	TaskDirectoryName               string                        `json:"taskDirectoryName"`
+	WorkspaceDirectory              string                        `json:"workspaceDirectory,omitempty"`
+	ProjectInstructionsGitURL       string                        `json:"projectInstructionsGitUrl,omitempty"`
+	ProjectInstructionsGitLocalRoot string                        `json:"projectInstructionsGitLocalRoot,omitempty"`
+	FeatureBranch                   string                        `json:"featureBranch"`
+	RequirementLink                 string                        `json:"requirementLink"`
+	RequirementID                   *string                       `json:"requirementId"`
+	RequirementMaterials            RequirementMaterialsDirectory `json:"requirementMaterials"`
+	CreatedAt                       string                        `json:"createdAt"`
+	UpdatedAt                       string                        `json:"updatedAt"`
+	LifecycleStatus                 TaskLifecycleStatus           `json:"lifecycleStatus"`
+	Services                        []ServiceWorkspace            `json:"services"`
+	GroupID                         string                        `json:"-"`
+	WorkspaceToolLaunches           []WorkspaceToolLaunch         `json:"workspaceToolLaunches"`
+	AgentContext                    *AgentTaskContext             `json:"agentContext"`
+	AgentDocumentLayout             AgentDocumentLayout           `json:"agentDocumentLayout"`
 }
 type AgentTaskContext struct {
 	ProtocolVersion        string `json:"protocolVersion"`
@@ -421,7 +433,7 @@ type TagOperation struct {
 	ConflictFiles     []string             `json:"conflictFiles"`
 	Conflict          *TagConflict         `json:"conflict,omitempty"`
 	BlockedBy         string               `json:"blockedBy,omitempty"`
-	GroupServiceID    string               `json:"groupServiceId"`
+	GroupServiceID    string               `json:"serviceId"`
 	ModuleID          string               `json:"moduleId"`
 	GenbuStatus       GenbuTagProbeStatus  `json:"genbuStatus"`
 	BatchID           *string              `json:"batchId"`
@@ -494,12 +506,6 @@ type TagHistoryItem struct {
 	UpdatedAt  string         `json:"updatedAt"`
 	Operations []TagOperation `json:"operations"`
 }
-type AgentTaskTemplate struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Content   string `json:"content"`
-	UpdatedAt string `json:"updatedAt"`
-}
 type CommandResult struct {
 	ExitCode int    `json:"exitCode"`
 	Stdout   string `json:"stdout"`
@@ -535,7 +541,7 @@ func DefaultCommandProxyTargets(endpoint *string) []CommandProxyTarget {
 
 func DefaultAppConfig() AppConfig {
 	endpoint := DefaultCommandProxyURL
-	return AppConfig{SchemaVersion: CurrentAppConfigSchemaVersion, DefaultBranchPrefix: "", Repositories: []RepositoryConfig{}, Groups: []GroupConfig{{ID: DefaultGroupID, Name: DefaultGroupName, TagEnabled: true, Services: []GroupServiceConfig{}}}, Theme: ThemeSystem, ToolVisibility: defaultToolVisibilitySettings(), SidebarVisibility: SidebarVisibilitySettings{Requirements: true, Tools: true, Production: true, Services: true}, TagEnabled: true, TagHistoryMaxGroups: DefaultTagHistoryMaxGroups, DevelopmentTools: []DevelopmentToolConfig{}, DefaultDevelopmentTool: DevelopmentToolIntelliJIdea, DefaultWorkspaceToolIDs: []string{"codex", "cursor"}, BlockedGitWriteBranches: []string{"master", "main"}, MeegleProjects: []MeegleProjectConfig{}, CommandProxyURL: &endpoint, CommandProxyTargets: DefaultCommandProxyTargets(&endpoint), CodexPluginMarketplaceSources: []CodexPluginMarketplaceSource{}, SkillSources: []SkillSource{}, AIRequirementNamingEnabled: true, AIRequirementNamingPrewarmEnabled: true, AIRequirementNamingModel: DefaultAIRequirementNamingModel}
+	return AppConfig{SchemaVersion: CurrentAppConfigSchemaVersion, DefaultBranchPrefix: "", Repositories: []RepositoryConfig{}, Services: []ServiceConfig{}, Groups: []GroupConfig{{ID: DefaultGroupID, Name: DefaultGroupName, TagEnabled: true, Services: []GroupServiceConfig{}}}, Theme: ThemeSystem, ToolVisibility: defaultToolVisibilitySettings(), SidebarVisibility: SidebarVisibilitySettings{Requirements: true, Tools: true, Production: true, Services: true}, TagEnabled: true, TagHistoryMaxGroups: DefaultTagHistoryMaxGroups, DevelopmentTools: []DevelopmentToolConfig{}, DefaultDevelopmentTool: DevelopmentToolIntelliJIdea, DefaultWorkspaceToolIDs: []string{"codex"}, BlockedGitWriteBranches: []string{"master", "main"}, MeegleProjects: []MeegleProjectConfig{}, CommandProxyURL: &endpoint, CommandProxyTargets: DefaultCommandProxyTargets(&endpoint), CodexPluginMarketplaceSources: []CodexPluginMarketplaceSource{}, SkillSources: []SkillSource{}, AIRequirementNamingEnabled: true, AIRequirementNamingPrewarmEnabled: true, AIRequirementNamingModel: DefaultAIRequirementNamingModel}
 }
 
 const DefaultAIRequirementNamingModel = "gpt-6-luna"
@@ -563,14 +569,14 @@ func DefaultWorkspaceHealth(workspaces []ServiceWorkspace) WorkspaceHealth {
 	return WorkspaceReady
 }
 
-func (s GroupServiceConfig) EffectiveMasterBranch(module ServiceModuleConfig) string {
+func (s ServiceConfig) EffectiveMasterBranch(module ServiceModuleConfig) string {
 	if module.MasterBranch != nil {
 		return *module.MasterBranch
 	}
 	return s.MasterBranch
 }
 
-func (s GroupServiceConfig) EffectiveMasterRemote(module ServiceModuleConfig) string {
+func (s ServiceConfig) EffectiveMasterRemote(module ServiceModuleConfig) string {
 	ref, err := ParseRemoteBranchRef(s.EffectiveMasterBranch(module))
 	if err != nil {
 		return ""
@@ -578,13 +584,13 @@ func (s GroupServiceConfig) EffectiveMasterRemote(module ServiceModuleConfig) st
 	return ref.Remote
 }
 
-func (s GroupServiceConfig) ResolvedModule(module ServiceModuleConfig) ServiceModuleConfig {
+func (s ServiceConfig) ResolvedModule(module ServiceModuleConfig) ServiceModuleConfig {
 	branch := s.EffectiveMasterBranch(module)
 	module.MasterBranch = &branch
 	return module
 }
 
-func (s GroupServiceConfig) EffectiveTagTargetRef(module ServiceModuleConfig) *string {
+func (s ServiceConfig) EffectiveTagTargetRef(module ServiceModuleConfig) *string {
 	if !module.TagEnabled || module.TagMode != TagBuildMergeToTargetBranch {
 		return nil
 	}

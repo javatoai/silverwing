@@ -1,6 +1,7 @@
 package documents
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -61,6 +62,85 @@ func TestMaterialsPreparationUsesInjectedFactsAndOfflineReuse(t *testing.T) {
 	reused, err := service.Ensure(ctx, config, link, "另一个名称")
 	if err != nil || reused.Status != domain.MaterialsReady || *reused.WriteRoot != *ready.WriteRoot || provider.resolveCalls != before {
 		t.Fatalf("offline reuse: %+v %v calls=%d", reused, err, provider.resolveCalls)
+	}
+}
+
+func TestMaterialsPreparationReusesStandardLinkDirectoryForOpaqueType(t *testing.T) {
+	root, subdirectory := t.TempDir(), "资料"
+	config := domain.AppConfig{RequirementMaterialsRoot: &root, RequirementMaterialsSubdirectory: &subdirectory}
+	provider := &preparationProvider{identity: RequirementIdentity{Space: "obt", Kind: "bug", WorkItemID: "123"}}
+	service := NewPreparationService(storage.Paths{}, provider)
+	ctx := context.Background()
+	original, err := service.Ensure(ctx, config, "https://project.feishu.cn/obt/bug/detail/123", "原目录")
+	if err != nil || original.Status != domain.MaterialsReady || original.WriteRoot == nil {
+		t.Fatalf("provision standard link: %+v %v", original, err)
+	}
+	writeRoot := *original.WriteRoot
+	manifestPath := filepath.Join(writeRoot, requirementManifestName)
+	manifest, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := filepath.Join(writeRoot, "已有文档.md")
+	if err := os.WriteFile(document, []byte("# 已有资料"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	provider.err = errors.New("offline")
+	link := "https://project.feishu.cn/obt/6785bc520a0621258bcf0583/detail/123"
+
+	preview, err := service.Preview(ctx, config, link, "新目录")
+	if err != nil || preview.Status != domain.MaterialsReady || preview.WriteRoot == nil || *preview.WriteRoot != writeRoot {
+		t.Fatalf("preview opaque link: %+v %v", preview, err)
+	}
+	ready, err := service.Ensure(ctx, config, link, "新目录")
+	if err != nil || ready.Status != domain.MaterialsReady || ready.WriteRoot == nil || *ready.WriteRoot != writeRoot {
+		t.Fatalf("ensure opaque link: %+v %v", ready, err)
+	}
+	plan, err := service.Plan(ctx, config, link, "新标题", "新目录")
+	if err != nil || !plan.ReusedExistingDirectory || plan.RequirementTitle != "原目录" {
+		t.Fatalf("plan opaque link: %+v %v", plan, err)
+	}
+	materialized, err := service.Materialize(ctx, config, plan)
+	if err != nil || materialized.CreatedRequirementDirectory || materialized.Plan.DocumentationDirectory != writeRoot {
+		t.Fatalf("materialize opaque link: %+v %v", materialized, err)
+	}
+	if provider.resolveCalls != 1 || provider.titleCalls != 0 {
+		t.Fatalf("reuse performed a source lookup: %+v", provider)
+	}
+	if data, err := os.ReadFile(manifestPath); err != nil || !bytes.Equal(data, manifest) {
+		t.Fatalf("existing manifest changed: %s %v", data, err)
+	}
+	if data, err := os.ReadFile(document); err != nil || string(data) != "# 已有资料" {
+		t.Fatalf("existing document changed: %s %v", data, err)
+	}
+}
+
+func TestMaterialsPreparationSupportsNewOpaqueTypeAndRejectsConflicts(t *testing.T) {
+	root, subdirectory := t.TempDir(), "资料"
+	config := domain.AppConfig{RequirementMaterialsRoot: &root, RequirementMaterialsSubdirectory: &subdirectory}
+	identity := RequirementIdentity{Space: "obt", Kind: "6785bc520a0621258bcf0583", WorkItemID: "123"}
+	provider := &preparationProvider{identity: identity}
+	service := NewPreparationService(storage.Paths{}, provider)
+	ctx := context.Background()
+	link := "https://project.feishu.cn/obt/" + identity.Kind + "/detail/123"
+	ready, err := service.Ensure(ctx, config, link, "目录")
+	if err != nil || ready.Status != domain.MaterialsReady || ready.WriteRoot == nil {
+		t.Fatalf("provision opaque link: %+v %v", ready, err)
+	}
+	manifest, err := service.files.readManagedManifest(*ready.WriteRoot, identity)
+	if err != nil || manifest == nil || manifest.Identity != identity {
+		t.Fatalf("read opaque manifest: %+v %v", manifest, err)
+	}
+	for _, test := range []struct {
+		link, reason string
+	}{
+		{"https://project.feishu.cn/rta/bug/detail/123", "需求空间不一致"},
+		{"https://project.feishu.cn/obt/6785bc520a0621258bcf0584/detail/123", "需求类型不一致"},
+	} {
+		preview, err := service.Preview(ctx, config, test.link, "目录")
+		if err != nil || preview.Status != domain.MaterialsFailed || preview.FailureReason == nil || !strings.Contains(*preview.FailureReason, test.reason) {
+			t.Fatalf("conflicting link %s: %+v %v", test.link, preview, err)
+		}
 	}
 }
 

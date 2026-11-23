@@ -5,7 +5,10 @@ import "strings"
 // A menu belongs to both its control and the currently visible entity.
 // File editors reuse controls, so their document identity is included too.
 func (s *app) popupMenuScope() string {
-	parts := []string{s.snapshot.Home, s.confirmationOwnerKey(), s.workspaceUnit.state.repositoryTab, s.workspaceUnit.state.serviceGroupID, s.toolsUnit.state.toolTab}
+	parts := []string{s.snapshot.Home, s.confirmationOwnerKey(), s.workspaceUnit.state.repositoryTab, s.toolsUnit.state.toolTab}
+	if pane := s.visibleProjectMaterials(); pane != nil {
+		parts = append(parts, pane.taskUnit.currentTask().id, pane.taskUnit.currentTask().path, pane.materialsUnit.state.documentPath)
+	}
 	if state := s.settingsUnit.state.skillsBrowser; state != nil {
 		parts = append(parts, state.selectedDirectory, state.selectedPath)
 	}

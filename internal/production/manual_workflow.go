@@ -12,68 +12,74 @@ import (
 // initialize persists an unversioned batch before its first main-branch write.
 // A release version is fixed only by the separate create-release confirmation.
 func (s *Service) initialize(ctx context.Context, preview Preview, version string, merge bool, expectedID string) (Batch, error) {
+	id := expectedID
+	if id == "" {
+		id = newID()
+	}
 	var b Batch
-	err := s.locks.WithRepository(preview.Target.CommonDirectory, func() error {
-		p, c, err := s.checkPreview(ctx, preview, "")
-		if err != nil {
-			return err
-		}
-		if !merge {
-			if err = ValidateVersion(version, p); err != nil {
+	err := s.withBatchRecordLock(id, func() error {
+		return s.withTargetLock(ctx, preview.Target, func(_ domain.AppConfig) error {
+			p, c, err := s.checkPreview(ctx, preview, "")
+			if err != nil {
 				return err
 			}
-			if err = domain.NewGitWritePolicy(c.BlockedGitWriteBranches).RequireAllowed("release/"+version, "创建生产 release"); err != nil {
+			if !merge {
+				if err = ValidateVersion(version, p); err != nil {
+					return err
+				}
+				if err = domain.NewGitWritePolicy(c.BlockedGitWriteBranches).RequireAllowed("release/"+version, "创建生产 release"); err != nil {
+					return err
+				}
+				ok, e := s.ancestor(ctx, p.Target, p.ProductionSHA, p.MainSHA)
+				if e != nil {
+					return e
+				}
+				if !ok {
+					return errors.New("生产 Tag 尚未合入主分支，请先点击合并生产 Tag")
+				}
+			}
+			batches, err := s.Store.List()
+			if err != nil {
 				return err
 			}
-			ok, e := s.ancestor(ctx, p.Target, p.ProductionSHA, p.MainSHA)
-			if e != nil {
-				return e
+			for _, existing := range batches {
+				if existing.Ended || existing.Target.CommonDirectory != p.Target.CommonDirectory {
+					continue
+				}
+				if existing.ID != expectedID || existing.Target != p.Target || existing.InitialSHA != "" || existing.Intent != nil || (existing.Version != "" && existing.Version != version) {
+					return errors.New("该仓库已有进行中的生产批次，请先继续或结束它")
+				}
+				b = existing
 			}
-			if !ok {
-				return errors.New("生产 Tag 尚未合入主分支，请先点击合并生产 Tag")
+			if expectedID != "" && b.ID != expectedID {
+				return errors.New("确认的初始化批次已结束或变化，请重新选择批次")
 			}
-		}
-		batches, err := s.Store.List()
-		if err != nil {
-			return err
-		}
-		for _, existing := range batches {
-			if existing.Ended || existing.Target.CommonDirectory != p.Target.CommonDirectory {
-				continue
+			if b.ID == "" {
+				b = Batch{ID: id, Target: p.Target, CreatedAt: timestamp(), Branches: []MergedBranch{}, Tags: []Tag{}}
 			}
-			if existing.ID != expectedID || existing.Target != p.Target || existing.InitialSHA != "" || existing.Intent != nil || (existing.Version != "" && existing.Version != version) {
-				return errors.New("该仓库已有进行中的生产批次，请先继续或结束它")
+			if merge {
+				b.Phase, b.Intent = "SYNC_MAIN", &Intent{Kind: "main", Step: "main", Preview: p}
+			} else {
+				b.Version, b.ReleaseBranch, b.MainSHA = version, "release/"+version, p.MainSHA
+				b.ProductionTag, b.ProductionSHA = p.ProductionTag, p.ProductionSHA
+				b.Phase, b.Intent = "CREATE_RELEASE", &Intent{Kind: "create", Step: "release-create", Preview: p}
 			}
-			b = existing
-		}
-		if expectedID != "" && b.ID != expectedID {
-			return errors.New("确认的初始化批次已结束或变化，请重新选择批次")
-		}
-		if b.ID == "" {
-			b = Batch{ID: newID(), Target: p.Target, CreatedAt: timestamp(), Branches: []MergedBranch{}, Tags: []Tag{}}
-		}
-		if merge {
-			b.Phase, b.Intent = "SYNC_MAIN", &Intent{Kind: "main", Step: "main", Preview: p}
-		} else {
-			b.Version, b.ReleaseBranch, b.MainSHA = version, "release/"+version, p.MainSHA
-			b.ProductionTag, b.ProductionSHA = p.ProductionTag, p.ProductionSHA
-			b.Phase, b.Intent = "CREATE_RELEASE", &Intent{Kind: "create", Step: "release-create", Preview: p}
-		}
-		if err = s.save(&b); err != nil {
-			b = Batch{}
-			return err
-		}
-		if err = s.advance(ctx, &b, c, false); err != nil {
-			if b.Intent == nil {
+			if err = s.save(&b); err != nil {
+				b = Batch{}
 				return err
 			}
-			b.Message = commandruntime.Redact(c, err.Error())
-			if b.Phase != "CONFLICT" {
-				b.Phase = "PAUSED"
+			if err = s.advance(ctx, &b, c, false); err != nil {
+				if b.Intent == nil {
+					return err
+				}
+				b.Message = commandruntime.Redact(c, err.Error())
+				if b.Phase != "CONFLICT" {
+					b.Phase = "PAUSED"
+				}
+				return errors.Join(err, s.save(&b))
 			}
-			return errors.Join(err, s.save(&b))
-		}
-		return nil
+			return nil
+		})
 	})
 	return b, err
 }

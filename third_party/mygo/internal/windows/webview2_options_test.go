@@ -2,7 +2,50 @@
 
 package windows
 
-import "testing"
+import (
+	"testing"
+	"unsafe"
+)
+
+// TestEnvOptionsArguments checks that the options object gives the
+// environment the arguments it holds, beside its language.
+func TestEnvOptionsArguments(t *testing.T) {
+	// ICoreWebView2EnvironmentOptions, from envOptionsVtbl.
+	const (
+		getAdditionalBrowserArguments = 3
+		getLanguage                   = 5
+	)
+	for _, tt := range []struct {
+		name, language, args string
+	}{
+		{"arguments only", "", "--remote-debugging-port=0"},
+		{"language only", "fr", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			options := newEnvOptions(tt.language, tt.args)
+			defer release(options)
+			for _, getter := range []struct {
+				name  string
+				index int
+				want  string
+			}{
+				{"AdditionalBrowserArguments", getAdditionalBrowserArguments, tt.args},
+				{"Language", getLanguage, tt.language},
+			} {
+				var p uintptr
+				if hr := comCall(options, getter.index, uintptr(unsafe.Pointer(&p))); failed(hr) {
+					t.Fatal(hresultError("get_"+getter.name, hr))
+				}
+				if getter.want == "" && p != 0 {
+					t.Errorf("get_%s returned a string for no value", getter.name)
+				}
+				if got := takeWstr(p); got != getter.want {
+					t.Errorf("get_%s = %q, want %q", getter.name, got, getter.want)
+				}
+			}
+		})
+	}
+}
 
 // TestChromiumLanguage checks the tags WebView2's browser is given for
 // Chinese, which Chromium names by region.

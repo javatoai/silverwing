@@ -166,8 +166,7 @@ func TestUserCommentPublishCLI(t *testing.T) {
 				}
 				if mode == "config-change" && e.Stage == "发布评论" {
 					cfg := f.config
-					v := "http://127.0.0.1:9999"
-					cfg.CommandProxyURL = &v
+					cfg.MeegleProjects = []domain.MeegleProjectConfig{{ProjectKey: "p", SimpleName: "fixture"}, {ProjectKey: "other", SimpleName: "other"}}
 					_ = f.s.config.Save(cfg)
 				}
 				if mode == "save-fail" && e.Stage == "发布评论" {

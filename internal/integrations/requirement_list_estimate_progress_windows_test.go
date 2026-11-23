@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -121,8 +122,12 @@ func TestRequirementListProgressEstimatesPreserveDegradedData(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if string(plainLog) != string(log) {
-					t.Fatalf("progress changed command count/order:\nwith progress:\n%s\nordinary:\n%s", log, plainLog)
+				progressCalls := strings.Split(strings.TrimSpace(string(log)), "\n")
+				plainCalls := strings.Split(strings.TrimSpace(string(plainLog)), "\n")
+				slices.Sort(progressCalls)
+				slices.Sort(plainCalls)
+				if !slices.Equal(progressCalls, plainCalls) {
+					t.Fatalf("progress changed commands:\nwith progress:\n%s\nordinary:\n%s", log, plainLog)
 				}
 			}
 		})

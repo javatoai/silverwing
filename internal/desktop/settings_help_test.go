@@ -92,7 +92,12 @@ func TestMaterialsSettingsHelpCurrentScopeAndActiveStates(t *testing.T) {
 	if tt.HasText("等待下次同步") || tt.HasText("最近成功") {
 		t.Fatal("idle status still takes up an inline row")
 	}
-	tt.Key(0, ui.KeyTab)
+	for range 12 {
+		tt.Key(0, ui.KeyTab)
+		if tt.Focused("Git 自动同步说明") {
+			break
+		}
+	}
 	if !tt.Focused("Git 自动同步说明") || !tt.HasText("等待下次同步") || !tt.HasText("最近成功") {
 		t.Fatal("sync help does not contain the current idle status")
 	}
@@ -200,7 +205,7 @@ func TestSettingsHelpAllPagesLayout(t *testing.T) {
 							}
 						}
 						captureDesktopTestFrame(t, tt, fmt.Sprintf("settings-help-%s-%d-dark-%t", page.key, width, dark))
-						if page.key == "paths" || page.key == "materials-sync" {
+						if page.key == "paths" {
 							shell := ui.NewTester(func(c *ui.Context) {
 								p := setTheme(c, dark)
 								ui.Row(c).Fill().AlignItems(ui.Stretch).Background(p.bg).Children(func() {
@@ -208,10 +213,7 @@ func TestSettingsHelpAllPagesLayout(t *testing.T) {
 									ui.Column(c).Grow(1).MinWidth(0).Children(func() { s.settingsScreen(c, p) })
 								})
 							}, width, 1000)
-							names := []string{"默认展开目录层级说明"}
-							if page.key == "materials-sync" {
-								names = []string{"Git 自动同步说明", "同步周期（分钟）"}
-							}
+							names := []string{"默认展开目录层级说明", "Git 自动同步说明", "同步周期（分钟）"}
 							for _, name := range names {
 								assertSettingsVisibleBounds(t, shell, name, width, 1000)
 							}

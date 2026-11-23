@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"silverwing-go/internal/application"
+	"silverwing-go/internal/workspace"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -12,37 +13,34 @@ import (
 // taskNotesUIState owns instruction readers and task-local explicit-save
 // drafts. The latter keep their native buffers across task navigation.
 type taskNotesUIState struct {
-	taskID                             string
-	tab                                int
-	taskGeneration                     uint64
-	taskRequestGeneration              uint64
-	taskRequestPending                 bool
-	taskReadDeferred                   bool
-	taskReadAcceptDisk                 bool
-	taskReadError                      string
-	settingsGeneration                 uint64
-	settingsRequestGeneration          uint64
-	settingsRequestPending             bool
-	settingsReadDeferred               bool
-	settingsReadAcceptDisk             bool
-	settingsReadError                  string
-	settingsTemplatesLoading           bool
-	settingsTemplatesError             string
-	settingsTemplatesRequestGeneration uint64
-	activeKey                          string
-	activeKind                         string
-	activeTab                          int
-	activeContent                      string
-	activeComposing                    bool
-	activeMarkdown                     *markdownEditorState
-	markdownEditors                    map[string]*markdownEditorState
-	localDrafts                        map[string]*taskLocalNoteDraft
-	localActiveKey                     string
+	taskID                    string
+	tab                       int
+	taskGeneration            uint64
+	taskRequestGeneration     uint64
+	taskRequestPending        bool
+	taskReadDeferred          bool
+	taskReadAcceptDisk        bool
+	taskReadError             string
+	settingsGeneration        uint64
+	settingsRequestGeneration uint64
+	settingsRequestPending    bool
+	settingsReadDeferred      bool
+	settingsReadAcceptDisk    bool
+	settingsReadError         string
+	activeKey                 string
+	activeKind                string
+	activeTab                 int
+	activeContent             string
+	activeComposing           bool
+	activeMarkdown            *markdownEditorState
+	markdownEditors           map[string]*markdownEditorState
+	localDrafts               map[string]*taskLocalNoteDraft
+	localActiveKey            string
 }
 
-var taskNoteNames = []string{"AGENTS.md", "TASK-CONTEXT.md", "TASK-RULES.md"}
+var taskNoteNames = [...]string{workspace.AgentRouterFileName, workspace.AgentRulesFileName}
 
-const taskRulesNoteTab = 2
+const taskRulesNoteTab = 1
 
 func (s *app) ensureTaskNotesUI() *taskNotesUIState {
 	if s.taskUnit.state.taskNotesUI == nil {
@@ -184,7 +182,6 @@ func (s *app) requestSettingsInstructionRead(acceptDisk bool) {
 			return
 		}
 	}
-	scope, groupID := s.settingsInstructionScope()
 	if s.busy {
 		state.settingsReadDeferred = true
 		state.settingsReadAcceptDisk = acceptDisk
@@ -195,29 +192,15 @@ func (s *app) requestSettingsInstructionRead(acceptDisk bool) {
 	state.settingsRequestGeneration = state.settingsGeneration
 	state.settingsRequestPending = true
 	state.settingsReadError = ""
-	payload := map[string]any{"scope": scope, "instructionGeneration": state.settingsRequestGeneration, "instructionHome": s.snapshot.Home}
+	payload := map[string]any{"scope": "global", "instructionGeneration": state.settingsRequestGeneration, "instructionHome": s.snapshot.Home}
 	if markdown := state.activeMarkdown; state.activeKind == "settings" && markdown != nil && markdown.live != nil {
 		payload["instructionBufferVersion"] = markdown.live.Buffer().Version()
 	}
-	s.captureSettingsInstructionSaveVersion(payload, scope, groupID)
-	if scope == "group" {
-		payload["groupId"] = groupID
-	}
+	s.captureSettingsInstructionSaveVersion(payload)
 	if acceptDisk {
 		payload["acceptDisk"] = true
 	}
 	s.act("instructions.read", "", "", "", "AGENTS.md", "", payload)
-}
-
-func (s *app) settingsInstructionScope() (scope, groupID string) {
-	if s.settingsUnit.state.settingsAgentScope == "global" {
-		return "global", ""
-	}
-	groupID = s.settingsUnit.state.settingsAgentGroupID
-	if groupID == "" {
-		groupID = s.settingsUnit.state.settingsAgentScope
-	}
-	return "group", groupID
 }
 
 func (s *app) requestInstructionDiskVersion(key string) {
@@ -231,7 +214,7 @@ func (s *app) requestInstructionDiskVersion(key string) {
 		}
 		return
 	}
-	if ref.scope == "group" || ref.scope == "global" {
+	if ref.scope == "global" {
 		s.requestSettingsInstructionRead(true)
 		return
 	}
@@ -257,7 +240,7 @@ func (s *app) applyInstructionReadResult(action application.Action, result appli
 	}
 	scope, taskID, groupID := instructionIdentity(action, path)
 	generation := instructionGeneration(action)
-	if scope == "global" || scope == "group" {
+	if scope == "global" {
 		contextKey := scope + ":" + payloadString(action.Payload, "groupId")
 		if contextKey != s.settingsUnit.state.settingsAgentContext || s.settingsUnit.state.settingsPage != "agents" ||
 			(generation != 0 && generation != state.settingsRequestGeneration) ||
@@ -276,7 +259,7 @@ func (s *app) applyInstructionReadResult(action application.Action, result appli
 	key := s.instructionAutosaveKey(scope, taskID, groupID, path)
 	// Even a clean draft may contain edits saved after this read started. Never
 	// let its older response reset the native buffer, history or baseline hash.
-	if (scope == "global" || scope == "group") && !s.instructionReadMayReplaceDraft(action, key) {
+	if (scope == "global") && !s.instructionReadMayReplaceDraft(action, key) {
 		state.settingsRequestPending = false
 		state.settingsReadDeferred = !s.settingsUnit.state.settingsAgentLoaded
 		state.settingsReadAcceptDisk = false
@@ -294,14 +277,14 @@ func (s *app) applyInstructionReadResult(action application.Action, result appli
 	s.preserveActiveInstructionDraft(key)
 	key, content, readOnly := s.seedInstructionAutosave(action, result)
 	if key == "" {
-		if scope == "global" || scope == "group" {
+		if scope == "global" {
 			state.settingsRequestPending = false
 			state.settingsReadDeferred = !s.settingsUnit.state.settingsAgentLoaded
 			state.settingsReadAcceptDisk = false
 		}
 		return
 	}
-	if scope == "global" || scope == "group" {
+	if scope == "global" {
 		s.settingsUnit.state.settingsAgentContent = content
 		s.settingsUnit.state.settingsAgentPath = result.Path
 		s.settingsUnit.state.settingsAgentLoaded = true
@@ -340,7 +323,7 @@ func (s *app) applyInstructionReadFailure(action application.Action, err error) 
 	if err != nil {
 		message = err.Error()
 	}
-	if scope == "global" || scope == "group" {
+	if scope == "global" {
 		contextKey := scope + ":" + payloadString(action.Payload, "groupId")
 		if contextKey == s.settingsUnit.state.settingsAgentContext && s.settingsUnit.state.settingsPage == "agents" && (generation == 0 || generation == state.settingsRequestGeneration) &&
 			(payloadString(action.Payload, "instructionHome") == "" || normalizeIdentityPath(payloadString(action.Payload, "instructionHome")) == normalizeIdentityPath(s.snapshot.Home)) {
@@ -454,6 +437,14 @@ func (s *app) activeInstructionContent(state *taskNotesUIState) string {
 }
 
 func (s *app) noteIndexForAction(action application.Action) int {
+	if action.Path != "" {
+		for index, candidate := range taskNoteNames {
+			if strings.EqualFold(filepath.Base(action.Path), candidate) {
+				return index
+			}
+		}
+		return -1
+	}
 	if value, ok := action.Payload["noteTab"]; ok {
 		switch index := value.(type) {
 		case int:
@@ -468,12 +459,6 @@ func (s *app) noteIndexForAction(action application.Action) int {
 			if index >= 0 && index < float64(len(taskNoteNames)) {
 				return int(index)
 			}
-		}
-	}
-	name := strings.ToLower(filepath.Base(action.Path))
-	for index, candidate := range taskNoteNames {
-		if strings.EqualFold(name, candidate) {
-			return index
 		}
 	}
 	return -1

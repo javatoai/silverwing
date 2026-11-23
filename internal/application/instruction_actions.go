@@ -20,22 +20,6 @@ func (a *App) instructionAction(ctx context.Context, action Action) (actionResul
 	if boolPayload(action, "localTaskRules") && (action.Kind == "instructions.read" || action.Kind == "instructions.save") {
 		return a.localTaskRulesAction(ctx, action)
 	}
-	templates := documents.NewTemplateStore(a.Paths)
-	switch action.Kind {
-	case "instructions.templates", "instructions.templates.list":
-		items, err := templates.List()
-		return ActionResult{Message: "模板已读取", Data: items}, err
-	case "instructions.templates.save":
-		content := actionText(action)
-		if content == "" {
-			content = textPayload(action, "content")
-		}
-		items, err := templates.Save(ctx, textPayload(action, "id"), textPayload(action, "name"), content)
-		return ActionResult{Message: "模板已保存", Data: items}, err
-	case "instructions.templates.remove":
-		items, err := templates.Remove(ctx, textPayload(action, "id"))
-		return ActionResult{Message: "模板已删除", Data: items}, err
-	}
 	config, err := a.Config.Load()
 	if err != nil {
 		return ActionResult{}, err
@@ -60,6 +44,9 @@ func (a *App) instructionAction(ctx context.Context, action Action) (actionResul
 		content.ReadOnly = content.ReadOnly || readOnly
 		return ActionResult{Message: "说明已读取", Path: content.Path, Text: content.Text, Data: content}, err
 	case "instructions.draft":
+		if readOnly {
+			return ActionResult{}, errors.New("此文件由系统生成，只读")
+		}
 		return ActionResult{Message: "草稿已缓存"}, a.Documents.CacheDraft(path, actionText(action))
 	case "instructions.save":
 		if readOnly {
@@ -138,12 +125,18 @@ func (a *App) instructionPath(action Action, docs *workspace.AgentDocumentServic
 		path, err = docs.EnsureGlobalFile()
 		return path, filepath.Dir(path), false, err
 	case "group":
+		if a.Paths.ProfileID != "" {
+			return "", "", true, errors.New("组说明入口已移除")
+		}
 		groupID := textPayload(action, "groupId")
 		if groupID == "" {
 			groupID = domain.DefaultGroupID
 		}
 		path, err = docs.EnsureGroupFile(groupID)
 		return path, filepath.Dir(path), false, err
+	case "", "task", "handoff":
+	default:
+		return "", "", false, errors.New("请选择任务中已知的说明文件")
 	}
 	manifest, taskPath, err := a.task(action)
 	if err != nil {
@@ -151,21 +144,17 @@ func (a *App) instructionPath(action Action, docs *workspace.AgentDocumentServic
 	}
 	requested := actionPath(action)
 	if requested == "" {
-		switch scope {
-		case "context":
-			requested = workspace.AgentContextFileName
-		case "handoff":
+		if scope == "handoff" {
 			requested = workspace.HandoffFileName
-		default:
-			requested = workspace.AgentRulesFileName
+		} else {
+			requested = workspace.AgentRouterFileName
 		}
 	}
 	notes := docs.TaskNotesPath(taskPath, manifest)
 	allowed := map[string]string{
-		workspace.AgentRouterFileName:  filepath.Join(taskPath, workspace.AgentRouterFileName),
-		workspace.AgentContextFileName: filepath.Join(taskPath, workspace.AgentWorkspaceDir, workspace.AgentDirectoryName, workspace.AgentContextFileName),
-		workspace.AgentRulesFileName:   notes,
-		workspace.HandoffFileName:      filepath.Join(taskPath, workspace.AgentWorkspaceDir, workspace.HandoffFileName),
+		workspace.AgentRouterFileName: filepath.Join(taskPath, workspace.AgentRouterFileName),
+		workspace.AgentRulesFileName:  notes,
+		workspace.HandoffFileName:     filepath.Join(taskPath, workspace.AgentWorkspaceDir, workspace.HandoffFileName),
 	}
 	if target, ok := allowed[requested]; ok {
 		path = target
@@ -184,7 +173,7 @@ func (a *App) instructionPath(action Action, docs *workspace.AgentDocumentServic
 	if path == "" {
 		return "", "", false, errors.New("请选择任务中已知的说明文件")
 	}
-	readOnly = filepath.Base(path) == workspace.AgentContextFileName || filepath.Base(path) == workspace.AgentRouterFileName
+	readOnly = path == allowed[workspace.AgentRouterFileName]
 	if _, err = os.Stat(path); err != nil {
 		return "", "", readOnly, err
 	}

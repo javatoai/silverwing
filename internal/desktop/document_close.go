@@ -53,14 +53,16 @@ func (s *app) handleDocumentClose(event *mygo.CloseEvent) {
 		return
 	}
 	state.preparing = true
-	window, autosave := s.win, s.materialsUnit.state.markdownAutosave
+	window, owners := s.win, s.documentCloseOwners()
 	window.Invalidate()
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		var failures []editor.FlushFailure
-		if autosave != nil {
-			failures = autosave.PrepareClose(ctx)
+		failures := make([][]editor.FlushFailure, len(owners))
+		for index, owner := range owners {
+			if autosave := owner.materialsUnit.state.markdownAutosave; autosave != nil {
+				failures[index] = autosave.PrepareClose(ctx)
+			}
 		}
 		flushErr := ctx.Err()
 		if window.IsDestroyed() {
@@ -71,9 +73,11 @@ func (s *app) handleDocumentClose(event *mygo.CloseEvent) {
 				return
 			}
 			state.preparing = false
-			if remaining := s.materialsUnit.documentClosePendingFailures(failures); len(remaining) > 0 {
-				s.showDocumentCloseError(s.documentCloseFailures(remaining))
-				return
+			for index, owner := range owners {
+				if remaining := owner.materialsUnit.documentClosePendingFailures(failures[index]); len(remaining) > 0 {
+					s.showDocumentCloseError(owner.documentCloseFailures(remaining))
+					return
+				}
 			}
 			if flushErr != nil {
 				s.showDocumentCloseError(fmt.Errorf("保存尚未完成，当前草稿已保留：%w", flushErr))
@@ -91,7 +95,19 @@ func (s *app) handleDocumentClose(event *mygo.CloseEvent) {
 	}()
 }
 
+func (s *app) documentCloseOwners() []*app {
+	if view := s.projectInstructions; view != nil && view.browser != nil {
+		return []*app{s, view.browser}
+	}
+	return []*app{s}
+}
+
 func (s *app) captureDocumentCloseInput() error {
+	if view := s.projectInstructions; view != nil && view.browser != nil {
+		if err := view.browser.captureDocumentCloseInput(); err != nil {
+			return err
+		}
+	}
 	if err := s.commentComposerCloseError(); err != nil {
 		return err
 	}
@@ -156,7 +172,7 @@ func (s *app) captureDocumentCloseInput() error {
 // The CLI owner reports its auth mutation boundary; status reads and device-code polling do not
 // block closing and are cancelled by closeCLIJobs after the window exits.
 func (s *app) documentCloseOperationBusy() bool {
-	if s.busy || s.materialsFileMutationRunning() || s.releaseNotices.running() {
+	if s.busy || s.materialsFileMutationRunning() || s.releaseNotices.running() || len(s.taskServicesUnit.configSubmissions) > 0 {
 		return true
 	}
 	if state := s.toolsUnit.state.cliJobs; state != nil && state.authMutationRunning() {
@@ -169,9 +185,11 @@ func (s *app) documentCloseReady() error {
 	if err := s.captureDocumentCloseInput(); err != nil {
 		return err
 	}
-	if s.materialsUnit.state.markdownAutosave != nil {
-		if failures := s.materialsUnit.documentClosePendingFailures(s.materialsUnit.state.markdownAutosave.PendingFailures()); len(failures) > 0 {
-			return s.documentCloseFailures(failures)
+	for _, owner := range s.documentCloseOwners() {
+		if autosave := owner.materialsUnit.state.markdownAutosave; autosave != nil {
+			if failures := owner.materialsUnit.documentClosePendingFailures(autosave.PendingFailures()); len(failures) > 0 {
+				return owner.documentCloseFailures(failures)
+			}
 		}
 	}
 	return nil

@@ -256,20 +256,18 @@ func (d *Document[T]) Set(content T) {
 	d.mu.Lock()
 	d.content = content
 	d.changes++
+	at, savedAt := d.changes, d.savedAt
 	edited := true
 	// Equal is the app's and may read the document, so it is called with
 	// the lock down: a document holding it would deadlock on the mutex its
 	// own Content takes (the same mistake ImageCache.ask made, 0487c37b).
 	eq, saved := d.ds.opts.Equal, d.saved
 	known := d.savedKnown
-	changes, savedAt := d.changes, d.savedAt
 	d.mu.Unlock()
 	if eq != nil && known {
 		edited = !eq(content, saved)
 	}
-	d.changedWhen(edited, func() bool {
-		return d.changes == changes && d.savedAt == savedAt && d.savedKnown == known
-	})
+	d.changedAt(edited, at, savedAt)
 }
 
 // Changed tells that the content changed without being replaced, for a
@@ -509,14 +507,15 @@ func (b *docBase) OnStateChange(fn func(DocumentState)) (off func()) {
 func (b *docBase) OnReload(fn func()) (off func()) { return b.onReload.add(fn, false) }
 
 // changed follows an edit of the content: edited is the new edited state.
-func (b *docBase) changed(edited bool) {
-	b.changedWhen(edited, nil)
-}
+func (b *docBase) changed(edited bool) { b.changedAt(edited, 0, 0) }
 
-// current is an internal generation check evaluated under the state lock.
-func (b *docBase) changedWhen(edited bool, current func() bool) {
+// changedAt applies edited only if the content and saved change counters
+// still match at and savedAt. A zero at skips that check. The check and the
+// change share one critical section so an Equal computed for older content
+// cannot overwrite a newer edit or save.
+func (b *docBase) changedAt(edited bool, at, savedAt uint64) {
 	b.mu.Lock()
-	if current != nil && !current() {
+	if at != 0 && (b.changes != at || b.savedAt != savedAt) {
 		b.mu.Unlock()
 		return
 	}

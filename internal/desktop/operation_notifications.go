@@ -11,7 +11,8 @@ import (
 
 // Native toasts keep feedback, progress and cancellation outside page layout.
 type operationNotificationState struct {
-	shown map[string]string
+	shown  map[string]string
+	prefix string
 }
 
 func (s *app) renderOperationNotifications(c *ui.Context) {
@@ -77,7 +78,7 @@ func operationProgressTitle(kind, title string) string {
 	case "development-tools/detect":
 		return "正在检测开发工具…"
 	case "development-tools/snapshot", "codex.extensions/snapshot", "codex.extensions/mcp/status",
-		"skills.sources/catalog", "instructions.templates.list", "config.backups", "config.view",
+		"skills.sources/catalog",
 		"git.environment", "git.environment/snapshot", "logs.list", "logs.read", "terminal.resolve":
 		return "" // Routine local reads update their pages silently.
 	}
@@ -91,7 +92,7 @@ func (s *operationNotificationState) progress(c *ui.Context, scope, title, ident
 	if s.shown == nil {
 		s.shown = make(map[string]string)
 	}
-	id := "silverwing-notification-" + scope
+	id := "silverwing-notification-" + s.prefix + scope
 	if title == "" {
 		if s.shown[scope] != "" {
 			delete(s.shown, scope)
@@ -256,7 +257,7 @@ func (s *operationNotificationState) presentWithErrorAction(c *ui.Context, scope
 	if s.shown == nil {
 		s.shown = make(map[string]string)
 	}
-	id := "silverwing-notification-" + scope
+	id := "silverwing-notification-" + s.prefix + scope
 	text, kind, source := *message, messageKind, message
 	if readCompleteNotification(text) {
 		text = ""

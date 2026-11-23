@@ -1,6 +1,8 @@
 package desktop
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -8,6 +10,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/productprofile"
+	"silverwing-go/internal/profilelaunch"
 )
 
 const silverwingRepositoryURL = productprofile.RepositoryURL
@@ -119,6 +122,101 @@ func (state *app) settingsAppData(context *ui.Context, theme palette) {
 			if settingsSystemAction(context, "settings-app-data-copy", "copy", "复制路径", theme, settingsSystemActionOutline, disabled) && !disabled {
 				state.copyTextToClipboard(context.Services(), home, "应用数据目录路径已复制")
 			}
+			pickerDisabled := disabled || state.settingsUnit.state.settingsPickerBusy
+			if settingsSystemAction(context, "settings-app-data-new-instance", "launch", "选择目录并打开新窗口", theme, settingsSystemActionOutline, pickerDisabled) {
+				state.chooseNewProfile(home)
+			}
+			if extension := profilelaunch.ShortcutExtension(); extension != "" {
+				shortcutDisabled := pickerDisabled || state.snapshot.ProfileID == ""
+				if settingsSystemAction(context, "settings-app-data-shortcut", "file", "另存为快捷方式", theme, settingsSystemActionOutline, shortcutDisabled) {
+					state.chooseProfileShortcut(home, state.snapshot.ProfileID, extension)
+				}
+			}
 		})
 	})
+}
+
+func (s *app) chooseNewProfile(home string) {
+	if s.settingsUnit.state.settingsPickerBusy || s.win == nil {
+		return
+	}
+	s.settingsUnit.state.settingsPickerBusy = true
+	win := s.win
+	win.Invalidate()
+	go func() {
+		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+			Parent: win, Title: "选择新实例的应用数据目录", DefaultPath: filepath.Dir(home),
+			ButtonLabel: "打开新实例", Directory: true, CreateDirectories: true,
+		})
+		selected := err == nil && len(paths) > 0
+		if selected {
+			err = profilelaunch.OpenDesktop(home, paths[0])
+		}
+		win.Update(func() {
+			s.settingsUnit.state.settingsPickerBusy = false
+			if err != nil {
+				s.lastError, s.lastMessage = err.Error(), ""
+			} else if selected {
+				s.lastError, s.lastMessage = "", "已发送新实例启动请求"
+			}
+		})
+	}()
+}
+
+func (s *app) chooseProfileShortcut(home, profileID, extension string) {
+	name := strings.TrimSuffix(profilelaunch.SuggestedShortcutName(home), extension)
+	directory, err := mygo.App.Path(mygo.PathDesktop)
+	if err != nil || directory == "" {
+		directory = filepath.Dir(home)
+	}
+	s.chooseSavePath("另存为快捷方式", filepath.Join(directory, name), []mygo.FileFilter{
+		{Name: "Silverwing 启动快捷方式", Extensions: []string{extension}},
+	}, func(chosen string) {
+		path, err := profilelaunch.ShortcutPath(chosen)
+		if err != nil {
+			s.lastError, s.lastMessage = err.Error(), ""
+			return
+		}
+		occupied, err := profilelaunch.ShortcutOccupant(path)
+		if err != nil {
+			s.lastError, s.lastMessage = err.Error(), ""
+			return
+		}
+		if occupied == nil {
+			s.saveProfileShortcut(home, profileID, path, nil)
+			return
+		}
+		s.showConfirmationDialog("替换启动快捷方式", "所选位置已有同名快捷方式。", path, []confirmationDialogButton{
+			{label: "替换", primary: true}, {label: "取消"},
+		}, 1, 1, func(choice int) {
+			if choice == 0 {
+				s.saveProfileShortcut(home, profileID, path, occupied)
+			}
+		})
+	})
+}
+
+func (s *app) saveProfileShortcut(home, profileID, path string, confirmed os.FileInfo) {
+	if s.settingsUnit.state.settingsPickerBusy || s.win == nil {
+		return
+	}
+	s.settingsUnit.state.settingsPickerBusy = true
+	win := s.win
+	win.Invalidate()
+	go func() {
+		executable, err := os.Executable()
+		if err == nil {
+			err = profilelaunch.CreateShortcut(path, profilelaunch.Shortcut{
+				Home: home, Executable: executable, ProfileID: profileID,
+			}, confirmed)
+		}
+		win.Update(func() {
+			s.settingsUnit.state.settingsPickerBusy = false
+			if err != nil {
+				s.lastError, s.lastMessage = "创建启动快捷方式失败："+err.Error(), ""
+				return
+			}
+			s.lastError, s.lastMessage = "", "已创建启动快捷方式："+path
+		})
+	}()
 }

@@ -55,3 +55,31 @@ func TestTypedDeveloperToolCancellationAndInvalidCompatibilityPayload(t *testing
 		t.Fatal("signed port accepted")
 	}
 }
+
+func TestDeveloperToolDiffActionSupportsJSONMode(t *testing.T) {
+	app := &App{}
+	ctx := context.Background()
+	action := Action{Kind: "tool.diff", Payload: map[string]any{
+		"mode": JSONDiffMode, "ignore": "traceId",
+		"left":  `{"traceId":"before","data":{"amount":100}}`,
+		"right": `{"data":{"amount":null},"traceId":"after"}`,
+	}}
+	result, err := app.Dispatch(ctx, action)
+	if err != nil {
+		t.Fatal(err)
+	}
+	diff, err := ResultData[tools.JSONDiffResult](result)
+	if err != nil || diff.Changed != 1 || len(diff.Entries) != 1 || diff.Entries[0].Path != "$.data.amount" ||
+		diff.Entries[0].Left != "100" || diff.Entries[0].Right != "null" {
+		t.Fatalf("JSON mode result = %+v, err = %v", diff, err)
+	}
+	delete(action.Payload, "mode")
+	result, err = app.Dispatch(ctx, action)
+	if err != nil {
+		t.Fatal(err)
+	}
+	textDiff, err := ResultData[tools.DiffResult](result)
+	if err != nil || textDiff.ChangedLines != 1 {
+		t.Fatalf("plain diff action result = %+v, err = %v", textDiff, err)
+	}
+}

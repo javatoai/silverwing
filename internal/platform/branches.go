@@ -24,7 +24,7 @@ func (s *Service) loadExtensionBranches(ctx context.Context, payload map[string]
 		return nil, err
 	}
 	command := s.gitExecutable(ctx, cfg)
-	spec, err := commandruntime.Prepare(ctx, s.runner, &cfg, domain.ProxyTargetGit, executable.ToolGit, command)
+	spec, err := commandruntime.Prepare(ctx, s.runner, &cfg, "", executable.ToolGit, command)
 	if err != nil {
 		return nil, err
 	}

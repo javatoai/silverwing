@@ -21,8 +21,8 @@ func TestDiffSynchronizedHorizontalDragWheelAndUnequalPanes(t *testing.T) {
 			if !horizontal {
 				t.Fatalf("long-old=%t pane %d lacks shared horizontal scrollbar", oldLong, side)
 			}
-			a, z := ed.thumb(true)
-			x, y := ed.r.X+ed.textX+(a+z)/2, ed.r.Y+ed.viewH-scrollbarWidth/2
+			start, length := ed.bar(true).Thumb()
+			x, y := ed.r.X+start+length/2, ed.r.Y+ed.hbarY+ed.barWidth()/2
 			before := d.ScrollPosition()
 			tester.Press(x, y)
 			tester.Move(x+80, y)
@@ -40,8 +40,8 @@ func TestDiffSynchronizedHorizontalDragWheelAndUnequalPanes(t *testing.T) {
 		}
 		// Even the shorter pane can drive the long pane all the way to its tail.
 		ed := &d.eds[0]
-		a, z := ed.thumb(true)
-		x, y := ed.r.X+ed.textX+(a+z)/2, ed.r.Y+ed.viewH-scrollbarWidth/2
+		start, length := ed.bar(true).Thumb()
+		x, y := ed.r.X+start+length/2, ed.r.Y+ed.hbarY+ed.barWidth()/2
 		tester.Press(x, y)
 		tester.Move(ed.r.X+ed.r.W-1, y)
 		tester.Release(ed.r.X+ed.r.W-1, y)

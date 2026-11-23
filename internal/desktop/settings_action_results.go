@@ -23,8 +23,10 @@ func (s *app) applySettingsActionResult(action application.Action, result applic
 			*input = result.Path
 		}
 	case "config.task-root.save":
-		*s.input("setting:taskRootTarget", "") = result.Path
-		s.settingsUnit.state.migrationPlan, s.settingsUnit.state.migrationReady, s.settingsUnit.state.migrationPreview = nil, false, ""
+		if s.snapshot.ProfileID == "" {
+			*s.input("setting:taskRootTarget", "") = result.Path
+			s.settingsUnit.state.migrationPlan, s.settingsUnit.state.migrationReady, s.settingsUnit.state.migrationPreview = nil, false, ""
+		}
 	case "migration.preview":
 		s.applyTaskRootMigrationPreview(action, result)
 	case "migration.apply":
@@ -38,15 +40,6 @@ func (s *app) applySettingsActionResult(action application.Action, result applic
 	case "migration.recover":
 		s.settingsUnit.state.migrationPreview = firstNonEmpty(result.Message, "迁移恢复状态已读取。")
 		s.settingsUnit.state.settingsOutput = ""
-	case "config.backups":
-		s.applySettingsConfigBackups(result.Data)
-	case "config.view":
-		s.settingsUnit.state.settingsConfigPath = result.Path
-		s.settingsUnit.state.settingsConfigText = result.Text
-		if s.settingsUnit.state.settingsConfigText == "" {
-			s.settingsUnit.state.settingsConfigText = resultText(result)
-		}
-		s.settingsUnit.state.settingsConfigOpen = true
 	case "config.save", "config.fields.save":
 		if s.page == "settings" && s.settingsUnit.state.settingsPage == "dev-tools" {
 			s.act("development-tools/snapshot", "", "", "", "", "", nil)
@@ -54,21 +47,9 @@ func (s *app) applySettingsActionResult(action application.Action, result applic
 	case "config.import-preview":
 		s.applySettingsConfigPreview(result.Data)
 	case "config.export":
-		s.settingsUnit.state.settingsOutput = "配置已导出。"
-		if result.Path != "" {
-			s.act("system.reveal", "", "", "", result.Path, "", nil)
-		}
+		s.settingsUnit.state.settingsOutput = "配置备份已保存。"
 	case "config.import":
-		s.materialsUnit.state.importPreview = false
-		s.settingsUnit.state.settingsOutput = "配置已导入。"
-	case "config.restore-backup":
 		s.settingsUnit.state.settingsOutput = "配置备份已恢复。"
-	case "instructions.templates.list":
-		s.settingsUnit.state.settingsTemplates = mapsFromData(result.Data)
-		s.settingsUnit.state.settingsTemplatesLoaded = true
-	case "instructions.templates.save", "instructions.templates.remove":
-		s.settingsUnit.state.settingsOutput = result.Message
-		s.act("instructions.templates.list", "", "", "", "", "", nil)
 	case "codex.extensions/snapshot":
 		s.settingsUnit.state.settingsMarketplaces = mapsFromData(dataValue(result.Data, "marketplaces"))
 		s.settingsUnit.state.settingsSkillSources = mapsFromData(dataValue(result.Data, "skillSources"))

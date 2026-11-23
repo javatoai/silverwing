@@ -6,6 +6,7 @@ import { type FitLimits, fitContent } from "./fit-content";
 import { createRuntime } from "./runtime";
 import { watchThemeColor } from "./theme-color";
 import type { BridgeConfig, ThemePreferences } from "./types";
+import { markWindowActive } from "./window-active";
 
 declare const __MYGO_CONFIG__: BridgeConfig;
 
@@ -31,7 +32,7 @@ let rootStyle: HTMLStyleElement | null = null;
   // iframes, whose messages Go must ignore.
   const post = (m: string) => raw.post(__MYGO_CONFIG__.secret + m);
 
-  const { runtime, internal } = createRuntime(__MYGO_CONFIG__, post);
+  const { runtime, internal, restored } = createRuntime(__MYGO_CONFIG__, post);
   Object.defineProperty(w, "mygo", { value: runtime, enumerable: true });
   Object.defineProperty(w, "__mygo", { value: Object.freeze({ ...internal, find, stopFind }) });
 
@@ -42,6 +43,7 @@ let rootStyle: HTMLStyleElement | null = null;
       "--mygo-titlebar-height": `${tb.height}px`,
       "--mygo-titlebar-inset-left": `${tb.left}px`,
       "--mygo-titlebar-inset-right": `${tb.right}px`,
+      "--mygo-titlebar-controls-bottom": `${tb.bottom}px`,
     }),
   );
 
@@ -54,6 +56,11 @@ let rootStyle: HTMLStyleElement | null = null;
       "--mygo-text-scale": String(p.textScale),
     }),
   );
+
+  // A window that is not the one the user's input goes to marks its pages,
+  // for CSS to draw them as native apps draw such windows:
+  // `:root[data-mygo-window-inactive] .sidebar { … }`.
+  runtime.on<boolean>("mygo:window-active", (active) => markWindowActive(document.documentElement, active));
 
   const notify = (t: "dom-ready" | "drag" | "dblclick" | "escape") => {
     try {
@@ -95,6 +102,25 @@ let rootStyle: HTMLStyleElement | null = null;
   } else {
     domReady();
   }
+  // A page the web view kept as it was left, and shows again on Back or
+  // Forward, runs no script again and fires no DOMContentLoaded, while Go
+  // took the navigation for a new page: it holds the page's events until
+  // its DOM is ready, and waits for its theme color and its size. So the
+  // page tells them again, whatever it told before.
+  w.addEventListener("pageshow", (e: PageTransitionEvent) => {
+    if (!e.persisted) return;
+    restored();
+    themeColorReady(true);
+    if (fit) fit.again();
+    notify("dom-ready");
+  });
+  // WebKit runs the microtasks that scripts queued once a listener of an
+  // event returns. An eval (Page.Eval) that runs in the page just as a
+  // navigation away commits can leave its continuation queued: with no
+  // listener of pagehide, nothing runs it before WebKit freezes the page
+  // in its back/forward cache, and the eval answers only if Back shows the
+  // page again. Listening has it run as the page is left.
+  w.addEventListener("pagehide", () => {});
 
   const nativeRegion = typeof CSS !== "undefined" && CSS.supports("-webkit-app-region", "drag");
   const appRegion = (el: Element): string => {
@@ -190,6 +216,7 @@ interface TitleBar {
   height: number;
   left: number;
   right: number;
+  bottom: number;
 }
 
 /** Sets MyGo's CSS variables of :root, keeping the ones already set. A null
@@ -242,6 +269,9 @@ interface Transport {
 function transport(w: any): Transport | null {
   const handler = w.webkit?.messageHandlers?.mygo;
   if (handler) return { post: (m) => handler.postMessage(m) };
+  // Android's web view: the host's JavaScript interface.
+  const android = w.mygoAndroid;
+  if (android) return { post: (m) => android.postMessage(m) };
   const webview = w.chrome?.webview;
   if (!webview) return null;
   return {

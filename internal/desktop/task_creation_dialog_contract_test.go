@@ -10,7 +10,6 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"silverwing-go/internal/application"
-	"silverwing-go/internal/domain"
 )
 
 func TestTaskCreationDialogFixedGeometry(t *testing.T) {
@@ -20,11 +19,11 @@ func TestTaskCreationDialogFixedGeometry(t *testing.T) {
 				s, tester := taskCreationLeftFixture(t, size[0], dark)
 				form := s.taskUnit.state.taskCreation
 				for i := 0; i < 24; i++ {
-					service := form.config.Groups[0].Services[0]
+					service := form.config.Services[0]
 					service.ID, service.DisplayName = fmt.Sprintf("synthetic-%02d", i), fmt.Sprintf("合成服务 %02d", i)
-					form.config.Groups[0].Services = append(form.config.Groups[0].Services, service)
+					form.config.Services = append(form.config.Services, service)
 				}
-				form.config.Groups = append(form.config.Groups, domain.GroupConfig{ID: "empty-group", Name: "合成空组", Services: []domain.GroupServiceConfig{}})
+
 				tester.SetSize(size[0], size[1])
 				tester.Frame()
 				panel, panelFound := tester.Find("创建任务表单")
@@ -59,10 +58,6 @@ func TestTaskCreationDialogFixedGeometry(t *testing.T) {
 				assertStable()
 				s.toggleTaskCreationService("service")
 				assertStable()
-				s.setTaskCreationGroup("empty-group")
-				assertStable()
-				s.setTaskCreationGroup(form.config.Groups[0].ID)
-				assertStable()
 				form.aiError = strings.Repeat("合成长提示自然滚动。", 80)
 				assertStable()
 				beforeRight, _ := tester.Find("任务服务与模块")
@@ -73,12 +68,12 @@ func TestTaskCreationDialogFixedGeometry(t *testing.T) {
 					t.Fatal("left scrolling moved the independent right pane")
 				}
 				beforeLeft, _ := tester.Find("任务基本信息")
-				beforeListScroll := form.serviceListScroll[form.groupID].Y
+				beforeListScroll := form.serviceListScroll.Y
 				tester.Scroll(serviceViewport.X+serviceViewport.W*.75, serviceViewport.Y+serviceViewport.H*.65, 0, 10000)
 				assertStable()
 				afterLeft, _ := tester.Find("任务基本信息")
-				if beforeLeft != afterLeft || form.serviceListScroll[form.groupID].Y <= beforeListScroll {
-					t.Fatalf("right service scrolling should move only its list: leftBefore=%+v leftAfter=%+v scrollBefore=%v scrollAfter=%+v", beforeLeft, afterLeft, beforeListScroll, form.serviceListScroll[form.groupID].Y)
+				if beforeLeft != afterLeft || form.serviceListScroll.Y <= beforeListScroll {
+					t.Fatalf("right service scrolling should move only its list: leftBefore=%+v leftAfter=%+v scrollBefore=%v scrollAfter=%+v", beforeLeft, afterLeft, beforeListScroll, form.serviceListScroll.Y)
 				}
 				form.aiError = ""
 				tester.Scroll(left.X+left.W/2, left.Y+left.H/2, 0, -10000)
@@ -89,56 +84,13 @@ func TestTaskCreationDialogFixedGeometry(t *testing.T) {
 	}
 }
 
-func TestTaskCreationDialogToolCheckboxes(t *testing.T) {
-	s, tester := taskCreationLeftFixture(t, 960, false)
-	form := s.taskUnit.state.taskCreation
-	heading, _ := tester.Find("创建后打开工作区工具")
-	codex, _ := tester.Find("Codex")
-	cursor, _ := tester.Find("Cursor")
-	if heading.H > 20 || codex.Y < heading.Y+heading.H || cursor.Y != codex.Y || codex.X != heading.X {
-		t.Fatal("tools must be native checkboxes on a separate row below a single-line heading")
-	}
-	if err := tester.Click("Codex"); err != nil {
-		t.Fatal(err)
-	}
-	if !form.selectedToolIDs["codex"] || !form.selectedToolIDs["cursor"] {
-		t.Fatal("checkbox click must retain multi-select semantics")
-	}
-	tester.Key(0, ui.KeySpace)
-	tester.Key(0, ui.KeyTab)
-	if !tester.Focused("Cursor") {
-		t.Fatal("checkboxes must retain native keyboard tab order")
-	}
-	tester.Key(0, ui.KeySpace)
-	if len(s.taskCreationSelectedToolIDs()) != 0 {
-		t.Fatal("keyboard checkbox changes must permit no selected tools")
-	}
-	form.workspaceTools = append(form.workspaceTools, taskCreationWorkspaceToolOption{ID: "custom", DisplayName: "合成工具", Available: false, Reason: "尚未配置"})
-	form.config.DefaultWorkspaceToolIDs = append(form.config.DefaultWorkspaceToolIDs, "custom")
-	tester.Frame()
-	if err := tester.Click("合成工具"); err != nil {
-		t.Fatal(err)
-	}
-	if form.selectedToolIDs["custom"] || !tester.HasText("合成工具（不可用）") {
-		t.Fatal("dynamic unavailable checkbox was removed or enabled")
-	}
-	s.busy = true
-	tester.Frame()
-	if err := tester.Click("Codex"); err != nil {
-		t.Fatal(err)
-	}
-	if form.selectedToolIDs["codex"] {
-		t.Fatal("busy checkbox accepted input")
-	}
-}
-
 func TestTaskCreationDialogDismissesDirectly(t *testing.T) {
 	for _, way := range []string{"cancel", "close", "backdrop", "escape"} {
 		t.Run(way, func(t *testing.T) {
 			s, tester := taskCreationLeftFixture(t, 960, false)
 			old := s.taskUnit.state.taskCreation
 			readCtx, readCancel := context.WithCancel(context.Background())
-			old.readRequest = &taskCreationReadRequest{kind: "workspace.tools-options", cancel: readCancel}
+			old.readRequest = &taskCreationReadRequest{kind: "task.materials-preview", cancel: readCancel}
 			preCtx, preCancel := context.WithCancel(context.Background())
 			request := &taskCreationPreflightRequest{form: old, token: old.token, ctx: preCtx, cancel: preCancel}
 			old.preflight = request
@@ -168,7 +120,7 @@ func TestTaskCreationDialogDismissesDirectly(t *testing.T) {
 			s.initTaskCreation("新建合成任务", "全新需求标题", "https://example.invalid/new-requirement")
 			fresh := s.taskUnit.state.taskCreation
 			s.lastMessage = "new-form-feedback"
-			for _, kind := range []string{"task.create", "task.create-preview", "workspace.tools-options", "requirements.ai-name"} {
+			for _, kind := range []string{"task.create", "task.create-preview", "task.materials-preview", "requirements.ai-name"} {
 				action := application.Action{Kind: kind, Payload: map[string]any{"taskCreateToken": old.token}}
 				s.taskCreationActionResult(action, application.ActionResult{Message: "late-success"})
 				s.taskCreationActionError(action, errors.New("late-error"))

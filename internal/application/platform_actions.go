@@ -51,6 +51,28 @@ func (a *App) platformAction(ctx context.Context, action Action) (ActionResult, 
 	if kind == "skills.refresh" {
 		kind = "skills.catalog"
 	}
+	tool := strings.ToLower(strings.TrimSpace(textPayload(action, "tool")))
+	if kind == "cli.status" && optionalCLIName(tool) != "" {
+		force := boolPayload(action, "force")
+		status, err := a.ProbeOptionalCLI(ctx, tool, force)
+		if err != nil {
+			return ActionResult{}, err
+		}
+		fields := status.statusFields()
+		if tool == "lark" && status.Ready() && !force && !boolPayload(action, "versionOnly") {
+			command, check, err := a.optionalCLIScope(ctx, tool)
+			if err != nil {
+				return ActionResult{}, err
+			}
+			if err = a.Platform.ReadVerifiedLarkIdentity(ctx, command, check, fields); err != nil {
+				return ActionResult{}, err
+			}
+			if err = check(ctx); err != nil {
+				return ActionResult{}, err
+			}
+		}
+		return ActionResult{Message: "操作结果已读取", Data: fields}, nil
+	}
 	data, err := a.Platform.Execute(ctx, kind, payload)
 	if err != nil {
 		return ActionResult{}, err

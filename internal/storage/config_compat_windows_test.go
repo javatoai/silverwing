@@ -74,19 +74,7 @@ func TestConfigCompatibilityWindowsFailedSaveRollsBackUnknownFields(t *testing.T
 					t.Fatal("failed transaction left staging file", entry.Name())
 				}
 			}
-			backups, err := store.Backups()
-			if err != nil || len(backups) != 1 {
-				t.Fatalf("recovery backup missing: %+v %v", backups, err)
-			}
-			backup, err := readArchive(backups[0].Path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for name, raw := range before {
-				if !bytes.Equal(raw, backup.Files[name]) {
-					t.Fatal("backup lost raw extension bytes", name)
-				}
-			}
+			assertConfigBackupDirectoryAbsent(t, store)
 		})
 	}
 }

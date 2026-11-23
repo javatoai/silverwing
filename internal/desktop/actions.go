@@ -12,6 +12,7 @@ import (
 	"github.com/egoist/mygo"
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/documents"
+	"silverwing-go/internal/editor"
 )
 
 func (s *app) dispatch(action application.Action) {
@@ -41,6 +42,11 @@ func (s *app) dispatchTaskContextActionWithCompletion(action application.Action,
 		case "migration.apply", "migration.recover", "task.delete", "workspace.remove", "config.materials-root.save", "config.task-root.save":
 			s.lastError = "资料 Git 同步正在执行，请稍后重试"
 			return
+		case "config.documents-git.bind", "config.documents-git.unbind":
+			if materialsMutationNeedsWatchBarrier(action) {
+				s.lastError = "资料 Git 同步正在执行，请稍后重试"
+				return
+			}
 		}
 	}
 	var scopeUpdate func(func())
@@ -145,6 +151,7 @@ func (s *app) dispatchTaskContextActionWithCompletion(action application.Action,
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	documentsDraftPlan := s.documentsGitDraftPlan(action)
 	watchBarrier := s.pauseMaterialsLiveRefresh(action)
 	fileBarrier := s.pauseMaterialsFileJobs(action)
 	s.cancelOperation = cancel
@@ -184,6 +191,10 @@ func (s *app) dispatchTaskContextActionWithCompletion(action application.Action,
 		}
 		if err == nil {
 			err = watchBarrier.wait(ctx)
+		}
+		var documentsDraftLease *editor.AutosaveLease
+		if err == nil {
+			documentsDraftLease, err = documentsDraftPlan.prepare(ctx)
 		}
 		backendAcquired := false
 		if err == nil {
@@ -231,6 +242,7 @@ func (s *app) dispatchTaskContextActionWithCompletion(action application.Action,
 			s.releaseBackend()
 		}
 		if s.win == nil || s.win.IsDestroyed() {
+			_ = documentsDraftPlan.finish(documentsDraftLease, action.Kind, result, err)
 			fileBarrier.Abandon()
 			if renameLease != nil {
 				renameLease.Abandon(materialsRenameCompleted(result))
@@ -239,6 +251,9 @@ func (s *app) dispatchTaskContextActionWithCompletion(action application.Action,
 			return
 		}
 		s.win.Update(func() {
+			if draftErr := documentsDraftPlan.finish(documentsDraftLease, action.Kind, result, err); draftErr != nil {
+				defer func() { s.lastError = "仓库已切换，原仓库草稿状态需要检查：" + draftErr.Error() }()
+			}
 			// The window can close after the worker queues this callback.
 			// Shutdown drains queued updates; keep that path lease-only too.
 			if s.win == nil || s.win.IsDestroyed() {
@@ -275,7 +290,6 @@ func (s *app) dispatchTaskContextActionWithCompletion(action application.Action,
 					return // A late task result cannot replace another context's UI.
 				}
 			}
-			s.settingsConfigMutationFinished(action)
 			if s.finishSettingsLogsAction(action, result, err) {
 				return
 			}
@@ -367,7 +381,8 @@ func (s *app) dispatchTaskContextActionWithCompletion(action application.Action,
 					s.applyInstructionReadFailure(action, err)
 					return
 				}
-				if s.applyInstructionActionFailure(action, err) {
+				if action.Kind == "instructions.save" && dataBool(action.Payload, "localTaskRules") {
+					s.applyTaskLocalNoteSave(action, application.ActionResult{}, err)
 					return
 				}
 				s.lastError = err.Error()
@@ -411,6 +426,7 @@ func (s *app) dispatchTaskContextActionWithCompletion(action application.Action,
 				}
 				s.applyActionResult(action, result)
 			}
+			s.retireOptionalCLIsAfterConfigReplacement(action.Kind)
 			if refreshErr != nil {
 				s.lastError = "操作已完成，但刷新数据失败：" + refreshErr.Error()
 			} else if reloadsSnapshot(action.Kind) {
@@ -421,7 +437,6 @@ func (s *app) dispatchTaskContextActionWithCompletion(action application.Action,
 				s.afterSettingsCLIPathSave(action)
 				s.applyTaskSnapshotSelection(action, result)
 				s.applyTaskLifecycleSnapshotSelection(action, result)
-				s.applyCreatedRepositoryGroupSelection(action)
 				if refreshesWorkspaceHealth(action.Kind) || taskAppendRefreshesWorkspaceHealth(action.Kind) {
 					s.requestWorkspaceGitStatus(true)
 				}
@@ -517,10 +532,10 @@ func (s *app) actionResultRelevant(action application.Action) bool {
 }
 
 func (s *app) currentNoteName() string {
-	if s.taskUnit.state.noteTab < 0 || s.taskUnit.state.noteTab >= 3 {
+	if s.taskUnit.state.noteTab < 0 || s.taskUnit.state.noteTab >= len(taskNoteNames) {
 		return ""
 	}
-	return []string{"AGENTS.md", "TASK-CONTEXT.md", "TASK-RULES.md"}[s.taskUnit.state.noteTab]
+	return taskNoteNames[s.taskUnit.state.noteTab]
 }
 
 func (s *app) selectedRequirementURL() string {

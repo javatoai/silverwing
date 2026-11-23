@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/domain"
@@ -111,14 +114,191 @@ func TestMaterialsGitDirtyMaterialsDeferWithoutSaving(t *testing.T) {
 	}
 }
 
+type sharedDocumentsGitFakeBackend struct{ *materialsGitFakeBackend }
+
+func (*sharedDocumentsGitFakeBackend) ProjectInstructionsGitStatus(context.Context, workspace.MaterialsGitScope) (workspace.MaterialsGitSyncStatus, error) {
+	return workspace.MaterialsGitSyncStatus{}, nil
+}
+
+func (b *sharedDocumentsGitFakeBackend) SyncProjectInstructionsGit(ctx context.Context, scope workspace.MaterialsGitScope, manual bool, progress func(string)) (workspace.MaterialsGitSyncStatus, error) {
+	return b.SyncMaterialsGit(ctx, scope, manual, progress)
+}
+
+func TestSharedDocumentsGitSyncDefersForPeerDrafts(t *testing.T) {
+	s, b, _ := materialsGitDesktopFixture(t)
+	s.backend = &sharedDocumentsGitFakeBackend{b}
+	s.win = &mygo.Window{}
+	config, _ := s.materialsGitConfig()
+	root := t.TempDir()
+	config.MaterialsGitSync.LocalRoot = root
+	config.MaterialsGitSync.RemoteName = "origin"
+	config.MaterialsGitSync.BindingID = "11111111111111111111111111111111"
+	config.ProjectInstructionsGitLocalRoot = root
+	config.ProjectInstructionsGitURL = config.MaterialsGitSync.RepositoryURL
+	config.ProjectInstructionsGitBranch = config.MaterialsGitSync.Branch
+	config.ProjectInstructionsGitRemoteName = "origin"
+	config.ProjectInstructionsGitBindingID = "22222222222222222222222222222222"
+	applyMaterialsGitTestConfig(t, s, config)
+	materials := s.materialsUnit.state.materialsGit
+	materials.scope = application.MaterialsGitScope(s.snapshot.Home, config)
+	view := &projectInstructionsView{scope: application.ProjectInstructionsGitScope(s.snapshot.Home, config), ctx: t.Context()}
+	s.projectInstructions = view
+	view.port = newProjectMaterialsBackend(s.backend, view.scope, view.ctx, nil)
+	view.browser = s.newProjectMaterialsBrowser(view)
+
+	projectDraft := filepath.Join(root, domain.ProjectInstructionsDirectory, "guide.md")
+	view.browser.materialsUnit.state.documentDrafts[projectDraft] = "unsaved project draft"
+	s.beginMaterialsGitSync(true)
+	if materials.running || s.lastError == "" || view.browser.materialsUnit.state.documentDrafts[projectDraft] != "unsaved project draft" {
+		t.Fatal("task materials sync ignored or changed the project draft")
+	}
+	delete(view.browser.materialsUnit.state.documentDrafts, projectDraft)
+
+	materialsDraft := filepath.Join(root, domain.RequirementsDirectory, "2026", "task", "研发", "note.md")
+	s.materialsUnit.state.documentDrafts[materialsDraft] = "unsaved task draft"
+	s.lastError = ""
+	s.syncProjectInstructions(view, true)
+	if view.syncing || s.lastError == "" || s.materialsUnit.state.documentDrafts[materialsDraft] != "unsaved task draft" {
+		t.Fatal("project instructions sync ignored or changed the task materials draft")
+	}
+
+	config.ProjectInstructionsGitLocalRoot = t.TempDir()
+	applyMaterialsGitTestConfig(t, s, config)
+	if s.sharedDocumentsGitPeerBusy(config, projectInstructionsGit) {
+		t.Fatal("a task draft blocked an independent project instructions checkout")
+	}
+}
+
 func TestMaterialsGitUnsavedSettingsCannotSyncPreviousTarget(t *testing.T) {
 	s, b, _ := materialsGitDesktopFixture(t)
-	*s.input("setting:materialsGitSync:repositoryUrl", s.materialsUnit.state.materialsGit.scope.URL) = "https://example.invalid/new-repo.git"
+	*s.input("setting:materialsGitSync:intervalMinutes", "5") = "15"
 	s.beginMaterialsGitSync(true)
 	s.beginMaterialsGitSync(false)
 	if b.count.Load() != 0 || s.materialsUnit.state.materialsGit.running {
-		t.Fatal("unsaved URL started the previous target")
+		t.Fatal("unsaved interval allowed synchronization")
 	}
+}
+
+func TestMaterialsGitBranchSettingsPreserveRepositoryBinding(t *testing.T) {
+	s, _, _ := materialsGitDesktopFixture(t)
+	backend := &settingsAuditCaptureBackend{calls: make(chan application.Action, 1)}
+	s.backend = backend
+	config, _ := s.materialsGitConfig()
+	settings := config.MaterialsGitSettings()
+	settings.Branch = "docs/team"
+	scope := taskMaterialsGit.scope(s.snapshot.Home, config)
+	s.saveDocumentsGitSetting(taskMaterialsGit, scope, settings, "branch")
+
+	select {
+	case action := <-backend.calls:
+		update, ok := action.Payload["update"].(application.ConfigFieldsUpdate)
+		patch := update.ObjectFields["materialsGitSync"]
+		if action.Kind != "config.fields.save" || action.Payload["documentsGitScope"] != scope || action.Payload["documentsGitRole"] != taskMaterialsGit.role() ||
+			!ok || len(update.Fields) != 0 || len(patch) != 2 ||
+			string(patch["branch"]) != `"`+settings.Branch+`"` || string(patch["enabled"]) != "false" {
+			t.Fatalf("branch save did not preserve binding fields: %+v", action)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("missing saved settings")
+	}
+}
+
+func TestMaterialsGitRepositoryURLSpellingKeepsScheduledSync(t *testing.T) {
+	for _, tc := range []struct{ name, before, after string }{
+		{"add suffix", "https://github.com/example/docs", "https://github.com/example/docs.git"},
+		{"remove suffix", "https://github.com/example/docs.git", "https://github.com/example/docs"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				s, backend, updates := materialsGitDesktopFixture(t)
+				config, _ := s.materialsGitConfig()
+				config.MaterialsGitSync.RepositoryURL = tc.before
+				config.MaterialsGitSync.Enabled = true
+				config.MaterialsGitSync.IntervalMinutes = 1
+				applyMaterialsGitTestConfig(t, s, config)
+				state := s.materialsUnit.state.materialsGit
+				state.scope = application.MaterialsGitScope(s.snapshot.Home, config)
+				state.intervalMinutes = 1
+				s.scheduleMaterialsGit(state, 20*time.Second)
+				time.Sleep(20 * time.Second)
+				synctest.Wait()
+				var oldTick func()
+				select {
+				case oldTick = <-updates:
+				default:
+					t.Fatal("previous scheduled sync did not queue")
+				}
+
+				config.MaterialsGitSync.RepositoryURL = tc.after
+				applyMaterialsGitTestConfig(t, s, config)
+				oldTick()
+				s.observeMaterialsGitSync()
+				materialsGitNextUpdate(t, updates)
+				if status, _, _ := s.settingsMaterialsGitStatus(true, palette{}); status != "等待下次同步" {
+					t.Fatalf("unexpected sync status after changing URL spelling: %q", status)
+				}
+
+				time.Sleep(time.Minute - time.Millisecond)
+				synctest.Wait()
+				if len(updates) != 0 || backend.count.Load() != 0 {
+					t.Fatal("changing the URL spelling triggered sync before the scheduled time")
+				}
+				time.Sleep(time.Millisecond)
+				materialsGitNextUpdate(t, updates)
+				select {
+				case scope := <-backend.start:
+					if scope.URL != tc.after {
+						t.Fatalf("scheduled sync used the stale URL %q", scope.URL)
+					}
+				case <-time.After(3 * time.Second):
+					t.Fatal("scheduled sync did not start")
+				}
+				backend.release <- struct{}{}
+				materialsGitNextUpdate(t, updates)
+			})
+		})
+	}
+}
+
+func TestMaterialsGitDifferentTargetRequiresResumeAfterURLSpellingEdit(t *testing.T) {
+	for _, name := range []string{"repository", "branch", "materials subdirectory"} {
+		t.Run(name, func(t *testing.T) {
+			s, _, updates := materialsGitDesktopFixture(t)
+			config, _ := s.materialsGitConfig()
+			config.MaterialsGitSync.Enabled = true
+			config.MaterialsGitSync.RepositoryURL = "https://github.com/example/docs"
+			switch name {
+			case "repository":
+				config.MaterialsGitSync.RepositoryURL = "https://github.com/example/other"
+			case "branch":
+				config.MaterialsGitSync.Branch = "docs/other"
+			case "materials subdirectory":
+				subdirectory := "文档"
+				config.RequirementMaterialsSubdirectory = &subdirectory
+			}
+			assertResumeRequired := func() {
+				t.Helper()
+				applyMaterialsGitTestConfig(t, s, config)
+				s.observeMaterialsGitSync()
+				materialsGitNextUpdate(t, updates)
+				if status, _, _ := s.settingsMaterialsGitStatus(true, palette{}); status != "同步目标已变化，请重新检查并恢复" {
+					t.Fatalf("unconfirmed target lost the warning: %q", status)
+				}
+			}
+			assertResumeRequired()
+			config.MaterialsGitSync.RepositoryURL += ".git"
+			assertResumeRequired()
+		})
+	}
+}
+
+func applyMaterialsGitTestConfig(t *testing.T, s *app, config domain.AppConfig) {
+	t.Helper()
+	data, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.settingsUnit.state.configJSON = string(data)
 }
 
 func TestMaterialsGitQueuedTimerDoesNotDuplicateManualSync(t *testing.T) {
@@ -152,19 +332,19 @@ func TestMaterialsGitQueuedTimerDoesNotDuplicateManualSync(t *testing.T) {
 func TestMaterialsGitImportedSettingsPreserveNewerInput(t *testing.T) {
 	s, _, _ := materialsGitDesktopFixture(t)
 	before := s.settingsUnit.state.configJSON
-	repositoryURL := s.input("setting:materialsGitSync:repositoryUrl", "https://github.com/example/docs.git")
+	interval := s.input("setting:materialsGitSync:intervalMinutes", "5")
 	config, _ := s.materialsGitConfig()
-	config.MaterialsGitSync.RepositoryURL = "https://github.com/imported/docs.git"
+	config.MaterialsGitSync.IntervalMinutes = 10
 	data, _ := json.Marshal(config)
 	s.syncSettingsConfigInputs(before, string(data))
-	if *repositoryURL != "https://github.com/imported/docs.git" {
+	if *interval != "10" {
 		t.Fatal("import did not refresh input")
 	}
-	*repositoryURL = "https://github.com/my-draft/docs.git"
-	config.MaterialsGitSync.RepositoryURL = "https://github.com/later/docs.git"
+	*interval = "15"
+	config.MaterialsGitSync.IntervalMinutes = 20
 	newData, _ := json.Marshal(config)
 	s.syncSettingsConfigInputs(string(data), string(newData))
-	if *repositoryURL != "https://github.com/my-draft/docs.git" {
+	if *interval != "15" {
 		t.Fatal("late refresh replaced settings draft")
 	}
 }
@@ -232,5 +412,41 @@ func TestMaterialsGitSettingsLayout(t *testing.T) {
 				captureDesktopTestFrame(t, tester, fmt.Sprintf("materials-git-settings-%d-dark-%t", width, dark))
 			})
 		}
+	}
+}
+
+func TestMaterialsGitOpenRepositoryUsesExistingRequirementsCheckout(t *testing.T) {
+	root := filepath.Join(t.TempDir(), domain.RequirementsDirectory)
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	config := domain.DefaultAppConfig()
+	config.RequirementMaterialsRoot = &root
+	data, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &settingsSystemBackend{actions: make(chan application.Action, 1)}
+	s := newApp(backend, Options{})
+	s.snapshot.Home = t.TempDir()
+	s.settingsUnit.state.configJSON = string(data)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := s.closeSystemOpenJobs(ctx); err != nil {
+			t.Error(err)
+		}
+	})
+	tester := settingsSystemPageTester(s, 960, false, s.settingsMaterialsGitSync)
+	if err := tester.Click("打开仓库"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case action := <-backend.actions:
+		if action.Kind != "system.open" || action.Path != root {
+			t.Fatalf("opened the wrong synchronization repository: %+v", action)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("opening the synchronization repository did not reach the backend")
 	}
 }

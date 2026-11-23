@@ -202,3 +202,98 @@ func TestRequirementBodyHTMLNativeMarkdownRenderingAndCopy(t *testing.T) {
 		}
 	}
 }
+
+func TestRequirementBodyHTMLTableNativeRenderingAndCopy(t *testing.T) {
+	const linkURL = "https://example.test/requirement-details"
+	const longCell = "系统应当保留处理记录，校验关联资料，展示准确的检查结果，并在审批人重新查看任务时提供完整的处理详情及必要的后续说明。"
+	const codeSample = "<table><tr><th>代码示例</th></tr></table>"
+	const afterLink = "[附加说明](https://example.test/appendix)"
+	const source = "# 场景与业务规则\r\n\r\n" +
+		"<table>\r\n<tr>\r\n<td>\r\n\r\n**规则编号**\r\n\r\n</td>\r\n" +
+		"<td>\r\n\r\n**场景**\r\n\r\n</td>\r\n<td>\r\n\r\n**规则与处理结果**\r\n\r\n</td>\r\n</tr>\r\n" +
+		"<tr>\r\n<td>BR-01</td>\r\n<td>验证任务</td>\r\n<td>" + longCell + "</td>\r\n</tr>\r\n" +
+		"<tr><td>BR-02</td><td>查看详情</td><td>[处理步骤](" + linkURL + ")</td></tr>\r\n</table>\r\n\r\n" +
+		"<span>后续说明</span> " + afterLink + "\r\n\r\n" +
+		"```html\r\n" + codeSample + "\r\n```\r\n"
+	path := filepath.Join(t.TempDir(), "body.md")
+	if err := os.WriteFile(path, []byte(source), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s := &app{page: "requirements"}
+	reader := s.requirementReader("task", "https://project.feishu.cn/test/bug/detail/123")
+	t.Cleanup(s.requirementUnit.closeRequirementReaders)
+	s.updateRequirementReaderBody(reader, application.RequirementContent{Body: source, MarkdownPath: path})
+	state := reader.bodyMarkdown
+	native := ensureFrameworkMarkdown(state)
+	tables, foundCellLink := 0, false
+	for index := 1; index < native.document.Len(); index++ {
+		block := native.document.Block(index)
+		switch block.Kind {
+		case parser.Table:
+			tables++
+			if len(block.Align) != 3 {
+				t.Fatalf("native table has %d columns, want 3", len(block.Align))
+			}
+		case parser.TableCell:
+			for _, inline := range native.document.Inlines(index) {
+				foundCellLink = foundCellLink || inline.Kind == parser.Link && inline.Dest == linkURL
+			}
+		}
+	}
+	if tables != 1 || !foundCellLink {
+		t.Fatalf("expected one native table with a link, got %d tables and link=%v", tables, foundCellLink)
+	}
+	originalLinkOffset := strings.Index(source, afterLink)
+	projectedLinkOffset := strings.Index(native.projection.Source, afterLink)
+	if projectedLinkOffset < 0 || native.originalOffset(projectedLinkOffset) != originalLinkOffset ||
+		native.originalOffset(projectedLinkOffset+len(afterLink)) != originalLinkOffset+len(afterLink) {
+		t.Fatal("content after the table lost its source offsets")
+	}
+	previewBlocks := requirementFindBlocksForReader(reader, false)
+	if hits, _ := documentFindHits(previewBlocks, "BR-01", 10); len(hits) != 1 {
+		t.Fatalf("search in the rendered table found %d occurrences, want 1", len(hits))
+	}
+	if hits, _ := documentFindHits(previewBlocks, "<td>", 10); len(hits) != 0 {
+		t.Fatal("rendered search indexed HTML cell tags")
+	}
+	if hits, _ := documentFindHits(requirementFindBlocksForReader(reader, true), "<td>", 10); len(hits) == 0 {
+		t.Fatal("source search lost the original table tags")
+	}
+
+	tester := ui.NewTester(func(c *ui.Context) {
+		p := setTheme(c, false)
+		ui.Column(c).Fill().Padding(16).Children(func() { s.renderMarkdownPreview(c, p, state) })
+	}, 960, 850)
+	tester.SetLocale("zh-Hans")
+	for _, label := range []string{longCell, "处理步骤", codeSample} {
+		if !tester.HasText(label) {
+			t.Fatalf("rendered preview lost %q: %#v", label, tester.Texts())
+		}
+	}
+	first, firstOK := tester.Find("规则编号")
+	second, secondOK := tester.Find("场景")
+	third, thirdOK := tester.Find("规则与处理结果")
+	if !firstOK || !secondOK || !thirdOK || first.X >= second.X || second.X >= third.X || first.Y != second.Y || second.Y != third.Y {
+		t.Fatalf("table headers did not render in one row: %+v %+v %+v", first, second, third)
+	}
+	title, ok := tester.Find("场景与业务规则")
+	if !ok {
+		t.Fatal("heading above the table was lost")
+	}
+	tester.ClickAt(title.X+2, title.Y+title.H/2)
+	tester.Key(ui.Cmd|ui.Shift, ui.KeyC)
+	if got := tester.Clipboard(); got != source {
+		t.Fatalf("copy Markdown source changed HTML table or line endings: %q", got)
+	}
+	tester.Command("selectAll")
+	tester.Command("copy")
+	if got := tester.Clipboard(); !strings.Contains(got, "规则编号\t场景\t规则与处理结果\nBR-01\t验证任务\t"+longCell) || !strings.Contains(got, codeSample) {
+		t.Fatalf("visible copy lost native table rows or literal code: %q", got)
+	}
+	if reader.body.Body != source || state.doc.Source() != source || state.doc.Snapshot().Version != 0 {
+		t.Fatal("native rendering changed the requirement body")
+	}
+	if contents, err := os.ReadFile(path); err != nil || string(contents) != source {
+		t.Fatalf("native rendering rewrote cached source: %v", err)
+	}
+}

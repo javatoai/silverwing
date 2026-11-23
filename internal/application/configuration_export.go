@@ -1,22 +1,15 @@
 package application
 
 import (
-	"fmt"
-	"path/filepath"
-	"time"
+	"errors"
+	"strings"
 )
 
-// exportConfiguration defaults to the same recoverable backup location as
-// the desktop source. Explicit destinations remain available to API callers.
 func (a *App) exportConfiguration(action Action) (ActionResult, error) {
-	target := configurationExportPath(actionPath(action), a.Paths.Backups, time.Now())
-	path, err := a.Config.ExportTo(target)
-	return ActionResult{Message: "配置已导出", Path: path}, err
-}
-
-func configurationExportPath(explicitPath, backups string, now time.Time) string {
-	if explicitPath != "" {
-		return explicitPath
+	target := actionPath(action)
+	if strings.TrimSpace(target) == "" {
+		return ActionResult{}, errors.New("请选择配置备份的保存位置")
 	}
-	return filepath.Join(backups, fmt.Sprintf("silverwing-config-%d.zip", now.UnixMilli()))
+	path, err := a.Config.ExportTo(target)
+	return ActionResult{Message: "配置备份已保存", Path: path}, err
 }

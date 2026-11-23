@@ -2,11 +2,12 @@ package production
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/snowball/genbuapi"
 )
 
 // RuntimePod describes an observed instance, not a desired replica or a release.
@@ -38,63 +39,98 @@ func serviceEnvironment(env string) (string, error) {
 	}
 }
 
-func (g CLIGenbu) Pods(ctx context.Context, cfg domain.AppConfig, env, service string) (ServicePods, error) {
-	env, err := serviceEnvironment(env)
+func (g NativeGenbu) Pods(ctx context.Context, cfg domain.AppConfig, env, service string) (ServicePods, error) {
+	wire, err := g.queryPods(ctx, cfg, env, service)
 	if err != nil {
 		return ServicePods{}, err
 	}
-	if strings.TrimSpace(service) == "" {
-		return ServicePods{}, errors.New("请先配置 Genbu 服务名")
-	}
-	data, err := g.run(ctx, cfg, "query-service-pods", "--json", env, service)
-	if err != nil {
-		return ServicePods{}, err
-	}
-	var wire struct {
-		Service     string        `json:"service"`
-		Environment string        `json:"environment"`
-		Pods        *[]RuntimePod `json:"pods"`
-	}
-	if json.Unmarshal(data, &wire) != nil || wire.Pods == nil || wire.Service == "" {
-		return ServicePods{}, errors.New("无法识别 Genbu Pod 输出")
-	}
-	actual := strings.ToLower(wire.Environment)
-	if actual == "prd" {
-		actual = "prod"
-	}
-	if actual != env {
-		return ServicePods{}, errors.New("Genbu 返回的 Pod 环境不匹配")
-	}
-	result := ServicePods{Service: wire.Service, Environment: env, Pods: []RuntimePod{}}
-	seen := map[string]bool{}
-	for _, pod := range *wire.Pods {
-		if pod.Name == "" || pod.Namespace == "" {
-			return ServicePods{}, errors.New("Genbu Pod 缺少实例名称或 namespace")
+	result := ServicePods{Service: wire.Service, Environment: genbuResponseEnvironment(wire.Environment), Pods: []RuntimePod{}}
+	seen := make(map[string]bool, len(wire.Pods))
+	for _, pod := range wire.Pods {
+		if !genbuIdentifier(pod.Name) || !genbuIdentifier(pod.Namespace) {
+			return ServicePods{}, errors.New("Genbu Pod 缺少有效的实例名称或 namespace")
 		}
 		key := pod.Namespace + "\x00" + pod.Name
 		if !seen[key] {
-			result.Pods = append(result.Pods, pod)
+			result.Pods = append(result.Pods, RuntimePod{
+				GroupName: pod.GroupName, Namespace: pod.Namespace, Name: pod.Name, Version: pod.AppVersion,
+				Restarts: pod.RestartCount, Phase: pod.Phase, Ready: pod.Ready, CreatedTime: pod.CreatedTime,
+			})
 			seen[key] = true
 		}
 	}
 	return result, nil
 }
 
-func (g CLIGenbu) ServiceConfig(ctx context.Context, cfg domain.AppConfig, env, service, namespace string) (string, error) {
+func (g NativeGenbu) queryPods(ctx context.Context, cfg domain.AppConfig, env, service string) (genbuapi.PodSnapshot, error) {
+	env, err := serviceEnvironment(env)
+	if err != nil {
+		return genbuapi.PodSnapshot{}, err
+	}
+	service = strings.TrimSpace(service)
+	if !genbuName(service) {
+		return genbuapi.PodSnapshot{}, errors.New("请先配置有效的 Genbu 服务名")
+	}
+	ctx, client, err := g.client(ctx, cfg)
+	if err != nil {
+		return genbuapi.PodSnapshot{}, err
+	}
+	wire, err := client.QueryServicePods(ctx, genbuapi.ServicePodsRequest{Service: service, Environment: env})
+	if scopeErr := checkGenbuReadScope(ctx); scopeErr != nil {
+		return genbuapi.PodSnapshot{}, scopeErr
+	}
+	if err != nil {
+		return genbuapi.PodSnapshot{}, genbuReadError(ctx, cfg, client, err)
+	}
+	if genbuResponseEnvironment(wire.Environment) != env || wire.Service != genbuapi.ResolveService(service).Name {
+		return genbuapi.PodSnapshot{}, errors.New("Genbu 返回的 Pod 服务或环境不匹配")
+	}
+	return wire, nil
+}
+
+func (g NativeGenbu) ServiceConfig(ctx context.Context, cfg domain.AppConfig, env, service, namespace string) (string, error) {
 	env, err := serviceEnvironment(env)
 	if err != nil {
 		return "", err
 	}
-	if strings.TrimSpace(service) == "" {
-		return "", errors.New("请先配置 Genbu 服务名")
+	service, namespace = strings.TrimSpace(service), strings.TrimSpace(namespace)
+	if !genbuName(service) {
+		return "", errors.New("请先配置有效的 Genbu 服务名")
 	}
-	args := []string{"query-service-config", env, service}
-	if namespace != "" {
-		args = append(args, "-namespace", namespace)
+	if namespace != "" && !serviceConfigNamespaceName.MatchString(namespace) {
+		return "", errors.New("请选择有效的 Genbu namespace")
 	}
-	data, err := g.run(ctx, cfg, args...)
+	ctx, client, err := g.client(ctx, cfg)
 	if err != nil {
 		return "", err
 	}
-	return string(data), nil
+	wire, err := client.QueryServiceConfig(ctx, genbuapi.ServiceConfigRequest{Service: service, Environment: env, Namespace: namespace})
+	if scopeErr := checkGenbuReadScope(ctx); scopeErr != nil {
+		return "", scopeErr
+	}
+	if err != nil {
+		var ambiguity *genbuapi.NamespaceAmbiguityError
+		if namespace == "" && errors.As(err, &ambiguity) && genbuResponseEnvironment(ambiguity.Environment) == env && len(ambiguity.Candidates) > 1 {
+			for _, candidate := range ambiguity.Candidates {
+				if !serviceConfigNamespaceName.MatchString(candidate) {
+					return "", errors.New("Genbu 返回的 namespace 无效")
+				}
+			}
+			return "", &ServiceConfigNamespaceError{Candidates: ambiguity.Candidates}
+		}
+		return "", genbuReadError(ctx, cfg, client, err)
+	}
+	if genbuResponseEnvironment(wire.Environment) != env || wire.Service != genbuapi.ResolveService(service).Name ||
+		namespace != "" && wire.Namespace != namespace {
+		return "", errors.New("Genbu 返回的配置目标与查询不匹配")
+	}
+	return genbuDisplayText(cfg, wire.Content, "暂无 "+strings.ToUpper(wire.Environment)+" 配置")
 }
+
+type ServiceConfigNamespaceError struct {
+	Candidates []string
+}
+
+func (e *ServiceConfigNamespaceError) Error() string { return "请选择配置所在的 namespace" }
+
+var serviceConfigNamespaceName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)

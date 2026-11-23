@@ -32,7 +32,7 @@ const (
 )
 
 type WorkspaceMainBranchMergeResult struct {
-	WorkspacePath string                          `json:"workspacePath"`
+	WorkspacePath string                          `json:"taskPath"`
 	ServiceName   string                          `json:"serviceName"`
 	ModuleName    string                          `json:"moduleName"`
 	SourceRef     string                          `json:"sourceRef"`
@@ -69,7 +69,7 @@ func NewWorkspaceMainBranchMergeService(git *GitClient, manifests TaskManifestRe
 func ResolveWorkspaceMainBranch(config domain.AppConfig, task domain.TaskManifest, ws domain.ServiceWorkspace) (WorkspaceMainBranch, bool, error) {
 	var saved *string = ws.BaseRef
 	if saved == nil {
-		service, err := config.GroupService(task.GroupID, ws.GroupServiceID)
+		service, err := config.Service(ws.GroupServiceID)
 		if err == nil {
 			module := findModule(service.Modules, ws.ModuleID)
 			if module != nil {
@@ -107,7 +107,7 @@ func (s *WorkspaceMainBranchMergeService) Merge(ctx context.Context, config doma
 		if err != nil {
 			return err
 		}
-		if task.TaskDirectoryName != expectedTask.TaskDirectoryName || task.CreatedAt != expectedTask.CreatedAt || task.GroupID != expectedTask.GroupID || task.FeatureBranch != expectedTask.FeatureBranch {
+		if task.TaskDirectoryName != expectedTask.TaskDirectoryName || task.CreatedAt != expectedTask.CreatedAt || task.WorkspaceDirectory != expectedTask.WorkspaceDirectory || task.FeatureBranch != expectedTask.FeatureBranch {
 			return fmt.Errorf("任务身份已变化，请重新选择任务后再试")
 		}
 		if task.LifecycleStatus != domain.TaskActive {
@@ -157,12 +157,12 @@ func (s *WorkspaceMainBranchMergeService) Merge(ctx context.Context, config doma
 		if err != nil {
 			return err
 		}
-		return s.Locks.WithRepository(common, func() error {
+		return s.GitOperations.withWorkspaceGitLock(*ws, common, func() error {
 			validated, err = s.Lifecycle.ValidateForMutationContext(ctx, config, taskPath, task, *ws)
 			if err != nil {
 				return err
 			}
-			if !samePath(mustAbs(taskPath), mustAbs(filepathDir(validated.Worktree))) {
+			if !samePath(taskPath, filepathDir(validated.Worktree)) {
 				return fmt.Errorf("工作区实际路径不属于当前任务目录，已拒绝合并")
 			}
 			if ws.Strategy == domain.WorkspaceIndependentClone {

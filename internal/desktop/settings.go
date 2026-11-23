@@ -54,6 +54,21 @@ func settingsCardLayout(c *ui.Context, p palette, title, description string, hea
 	})
 }
 
+func settingsCardAction(c *ui.Context, p palette, key, image, text string) bool {
+	button := ui.ButtonBase(c.Key(key)).Row().Shrink(0).Height(28).Padding(0, 10).Gap(5).
+		AlignItems(ui.Center).Radius(8).Border(1, p.line).Background(p.surface).Label(text).FocusRing(true)
+	if button.Hovered() {
+		button.Background(p.soft)
+	}
+	button.Children(func() {
+		if image != "" {
+			icon(c, image, 14, p.text)
+		}
+		label(c, text, 12, p.text).NoWrap()
+	})
+	return button.Clicked()
+}
+
 var settingsAppearanceIcon = func() *ui.SVG {
 	icon, err := ui.ParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 0 0 0 18h1.3a2.2 2.2 0 0 0 1.6-3.7 2.1 2.1 0 0 1 1.5-3.6H18a3 3 0 0 0 3-3c0-4.8-4-7.7-9-7.7z"/><circle cx="7.5" cy="11.5" r="1"/><circle cx="10.5" cy="7.5" r="1"/><circle cx="15.5" cy="7.5" r="1"/></svg>`))
 	if err != nil {

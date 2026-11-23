@@ -26,6 +26,11 @@ func (a *App) DispatchTagProbe(ctx context.Context, action Action, onRecord func
 	if err := ctx.Err(); err != nil {
 		return ActionResult{}, err
 	}
+	if action.Kind == "tag.status" || action.Kind == "tag.genbu.refresh" {
+		if err := a.RequireOptionalCLI(ctx, "genbu"); err != nil {
+			return ActionResult{}, err
+		}
+	}
 	m := a.tagJobManager()
 	m.mu.Lock()
 	if m.closed {
@@ -114,6 +119,9 @@ func (a *App) DispatchTagProbe(ctx context.Context, action Action, onRecord func
 	}
 	if action.Kind == "tag.history" {
 		return ActionResult{Data: items}, nil
+	}
+	if action.Kind == "tag.history.refresh" && !a.platformReadyFor(config, "genbu") {
+		return ActionResult{Data: TagHistoryRefreshResult{Records: items}}, nil
 	}
 	if action.Kind != "tag.history.refresh" && action.Kind != "tag.status" && action.Kind != "tag.genbu.refresh" {
 		return ActionResult{}, errors.New("不支持的Tag探测动作")

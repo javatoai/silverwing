@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/taskscope"
 )
 
 // RefreshAgents regenerates the ReferencedV2 task files while preserving user
@@ -22,6 +24,43 @@ func (s *TaskApplicationService) RefreshAgents(config domain.AppConfig, taskPath
 		}
 		path, err = s.Documents.EnsureTaskDocuments(taskPath, manifest, config)
 		return err
+	})
+	return path, err
+}
+
+// RegenerateTaskAgents applies the current shared rule sources to exactly one
+// existing task. It also works when an archived task's checkout has been removed.
+func (s *TaskApplicationService) RegenerateTaskAgents(ctx context.Context, config domain.AppConfig, taskPath string) (string, error) {
+	var path string
+	err := s.Locks.WithTask(taskPath, func() error {
+		manifest, err := s.Manifests.Load(taskPath)
+		if err != nil {
+			return err
+		}
+		if !samePath(filepath.Dir(taskPath), s.Locks.TaskRoot(config)) || filepath.Base(taskPath) != manifest.TaskDirectoryName {
+			return fmt.Errorf("任务清单与当前记录目录不匹配：%s", taskPath)
+		}
+		if err := taskscope.Validate(ctx, config, taskPath, manifest); err != nil {
+			return err
+		}
+		updated := manifest
+		if s.Paths.ProfileID != "" {
+			updated.ProjectInstructionsGitURL = config.ProjectInstructionsGitURL
+			updated.ProjectInstructionsGitLocalRoot = config.ProjectInstructionsGitLocalRoot
+		}
+		path, err = s.Documents.regenerateTaskDocuments(taskPath, updated, config)
+		if err != nil {
+			return err
+		}
+		if updated.ProjectInstructionsGitURL != manifest.ProjectInstructionsGitURL || updated.ProjectInstructionsGitLocalRoot != manifest.ProjectInstructionsGitLocalRoot {
+			if err := taskscope.Validate(ctx, config, taskPath, manifest); err != nil {
+				return err
+			}
+			if err := s.Manifests.Save(taskPath, updated); err != nil {
+				return fmt.Errorf("保存任务的项目资料关联失败：%w", err)
+			}
+		}
+		return nil
 	})
 	return path, err
 }
@@ -50,11 +89,10 @@ func (s *TaskApplicationService) inspectAddWorkspaceBranchReuse(ctx context.Cont
 		if manifest.LifecycleStatus != domain.TaskActive {
 			return fmt.Errorf("归档任务不能添加工作区")
 		}
-		group, err := config.Group(manifest.GroupID)
-		if err != nil {
+		if err := s.Locks.ValidateWorkspaceDirectory(config, taskPath, manifest); err != nil {
 			return err
 		}
-		selections, err := selectionsForAdd(group, request, manifest.FeatureBranch)
+		selections, err := selectionsForAdd(config, request, manifest.FeatureBranch)
 		if err != nil {
 			return err
 		}
@@ -126,8 +164,7 @@ func (s *TaskApplicationService) RetryFailedServices(ctx context.Context, config
 				return fmt.Errorf("没有可重试的失败服务")
 			}
 		}
-		group, err := config.Group(manifest.GroupID)
-		if err != nil {
+		if err := s.Locks.ValidateWorkspaceDirectory(config, taskPath, manifest); err != nil {
 			return err
 		}
 		created := []domain.ServiceWorkspace{}
@@ -150,17 +187,10 @@ func (s *TaskApplicationService) RetryFailedServices(ctx context.Context, config
 			return primary
 		}
 		for _, serviceID := range selected {
-			var configured *domain.GroupServiceConfig
-			for i := range group.Services {
-				if group.Services[i].ID == serviceID {
-					configured = &group.Services[i]
-					break
-				}
+			service, err := config.Service(serviceID)
+			if err != nil {
+				return rollback(err, false)
 			}
-			if configured == nil {
-				return rollback(fmt.Errorf("失败服务已不在组配置中：%s", serviceID), false)
-			}
-			service := *configured
 			service.Modules = []domain.ServiceModuleConfig{}
 			branches := map[string]string{}
 			sources := map[string]domain.TaskModuleSource{}
@@ -227,6 +257,9 @@ func (s *TaskApplicationService) ClearWorkspaceWarnings(config domain.AppConfig,
 		if err != nil {
 			return err
 		}
+		if err := s.Locks.ValidateWorkspaceDirectory(config, taskPath, manifest); err != nil {
+			return err
+		}
 		updated := manifest
 		updated.UpdatedAt = s.now().UTC().Format(time.RFC3339Nano)
 		updated.Services = append([]domain.ServiceWorkspace(nil), manifest.Services...)
@@ -277,18 +310,8 @@ func (s *TaskApplicationService) RerunWorkspaceBootstrap(ctx context.Context, co
 			return err
 		}
 		target := validated.Worktree
-		group, err := config.Group(manifest.GroupID)
+		service, err := config.Service(ws.GroupServiceID)
 		if err != nil {
-			return err
-		}
-		var service *domain.GroupServiceConfig
-		for i := range group.Services {
-			if group.Services[i].ID == ws.GroupServiceID {
-				service = &group.Services[i]
-				break
-			}
-		}
-		if service == nil {
 			return fmt.Errorf("服务配置已经不存在，无法重新执行 Bootstrap")
 		}
 		source := validated.Repository
@@ -331,6 +354,9 @@ func (s *TaskApplicationService) UpdateTagTarget(config domain.AppConfig, taskPa
 		if err != nil {
 			return err
 		}
+		if err := s.Locks.ValidateWorkspaceDirectory(config, taskPath, manifest); err != nil {
+			return err
+		}
 		if manifest.LifecycleStatus != domain.TaskActive {
 			return fmt.Errorf("归档任务不能修改测试目标分支")
 		}
@@ -350,7 +376,7 @@ func (s *TaskApplicationService) UpdateTagTarget(config domain.AppConfig, taskPa
 		if !config.TagEnabled || !ws.TagEnabled {
 			return fmt.Errorf("当前工作区未启用测试Tag")
 		}
-		if _, err := config.Group(manifest.GroupID); err != nil {
+		if _, err := config.Service(ws.GroupServiceID); err != nil {
 			return err
 		}
 		if ws.TagMode != domain.TagBuildMergeToTargetBranch {

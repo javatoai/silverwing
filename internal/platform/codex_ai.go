@@ -172,12 +172,12 @@ func (s *Service) executeCodexAI(ctx context.Context, kind string, payload map[s
 				return nil, err
 			}
 		}
-		_, resolution, target, err := s.resolveCLIExecutableWithSource(ctx, cfg, "codex")
+		command, err := s.resolveCLIExecutable(ctx, cfg, executable.ToolCodex)
 		if err != nil {
 			return nil, err
 		}
-		env := cliEnvironmentWithRunner(ctx, s.runner, "codex", resolution.Command)
-		if _, err := s.runToolWithEnv(ctx, cfg, target, resolution.Command, []string{"mcp", verb, name}, cwd, 3*time.Minute, env); err != nil {
+		env := cliEnvironmentWithRunner(ctx, s.runner, executable.ToolCodex, command)
+		if _, err := s.runToolWithEnv(ctx, cfg, executable.ToolCodex, command, []string{"mcp", verb, name}, cwd, 3*time.Minute, env); err != nil {
 			return nil, err
 		}
 		return map[string]any{"server": name, "authenticated": login}, nil

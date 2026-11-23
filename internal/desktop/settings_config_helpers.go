@@ -136,63 +136,6 @@ func (s *app) updateConfigObjectField(objectKey, fieldKey string, value any) {
 	s.saveSettingsConfigFields(application.ConfigFieldsUpdate{ObjectFields: map[string]map[string]json.RawMessage{objectKey: {fieldKey: encoded}}})
 }
 
-func (s *app) updateConfigGroup(groupID string, update func(map[string]any)) error {
-	config, err := s.settingsConfigMap()
-	if err != nil {
-		return err
-	}
-	groups, _ := config["groups"].([]any)
-	found := false
-	for _, item := range groups {
-		group, ok := item.(map[string]any)
-		if ok && mapString(group, "id") == groupID {
-			update(group)
-			found = true
-			break
-		}
-	}
-	if !found {
-		return fmt.Errorf("项目组 %q 不在当前配置中", groupID)
-	}
-	config["groups"] = groups
-	s.saveSettingsConfigMap(config)
-	return nil
-}
-
-func (s *app) removeConfigGroup(groupID string) {
-	config, err := s.settingsConfigMap()
-	if err != nil {
-		s.lastError = err.Error()
-		return
-	}
-	groups, _ := config["groups"].([]any)
-	if len(groups) <= 1 {
-		s.lastError = "至少保留一个项目组。"
-		return
-	}
-	filtered := make([]any, 0, len(groups))
-	found := false
-	for _, item := range groups {
-		group, _ := item.(map[string]any)
-		if mapString(group, "id") == groupID {
-			found = true
-			services, _ := group["services"].([]any)
-			if len(services) > 0 {
-				s.lastError = "此项目组仍包含服务，不能删除。"
-				return
-			}
-			continue
-		}
-		filtered = append(filtered, item)
-	}
-	if !found {
-		s.lastError = "项目组不在当前配置中。"
-		return
-	}
-	config["groups"] = filtered
-	s.saveSettingsConfigMap(config)
-}
-
 func (s *app) configString(key string) string {
 	config, err := s.readSettingsConfig()
 	if err != nil {
@@ -372,11 +315,6 @@ func removeMapValue(values []map[string]any, target map[string]any) []map[string
 		}
 	}
 	return values
-}
-
-func firstLine(value string) string {
-	line, _, _ := strings.Cut(value, "\n")
-	return strings.TrimSpace(line)
 }
 
 func firstNonEmpty(values ...string) string {

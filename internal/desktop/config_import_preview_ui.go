@@ -1,41 +1,35 @@
 package desktop
 
-import "strings"
+import (
+	"strings"
+
+	"silverwing-go/internal/application"
+)
 
 // configPreviewText displays the application's source-compatible change
 // descriptions, including the warning when the current shards are corrupt.
-func configPreviewText(data any) string {
-	if data == nil {
-		return "后端未返回配置预览内容。"
-	}
-	changes := mapsString(dataValue(data, "changes"))
-	changed := mapsString(dataValue(data, "changedFields"))
-	invalid := mapsString(dataValue(data, "invalidDevelopmentTools"))
-	lines := []string{"配置文件导入预览"}
-	if path := dataString(data, "path"); path != "" {
-		lines = append(lines, "来源："+path)
-	}
+func configPreviewText(preview application.ConfigImportPreview) string {
+	lines := []string{"确认后，当前配置将替换为所选备份。"}
 	switch {
-	case len(changes) > 0:
-		for _, change := range changes {
+	case len(preview.Changes) > 0:
+		for _, change := range preview.Changes {
 			lines = append(lines, "• "+change)
 		}
-	case len(changed) > 0:
-		lines = append(lines, "变化字段："+strings.Join(changed, "、"))
+	case len(preview.ChangedFields) > 0:
+		lines = append(lines, "有变更的字段包括 "+strings.Join(preview.ChangedFields, "、"))
 	default:
-		lines = append(lines, "当前版本可识别的设置没有变化；其他版本的设置字段仍以归档为准。")
+		lines = append(lines, "当前版本可识别的设置没有变化。其他字段以所选备份为准。")
 	}
-	if len(invalid) > 0 {
+	if len(preview.InvalidDevelopmentTools) > 0 {
 		names := map[string]string{
 			"INTELLIJ_IDEA": "IntelliJ IDEA", "WEBSTORM": "WebStorm", "PYCHARM": "PyCharm",
 			"VISUAL_STUDIO_CODE": "Visual Studio Code", "ANDROID_STUDIO": "Android Studio", "DEVECO_STUDIO": "DevEco Studio",
 		}
-		for i, tool := range invalid {
-			if name := names[tool]; name != "" {
-				invalid[i] = name
-			}
+		invalid := make([]string, 0, len(preview.InvalidDevelopmentTools))
+		for _, tool := range preview.InvalidDevelopmentTools {
+			invalid = append(invalid, firstNonEmpty(names[tool], tool))
 		}
-		lines = append(lines, "当前电脑路径无效，导入后需重新选择："+strings.Join(invalid, "、"))
+		lines = append(lines, "恢复后需重新配置这些开发工具的本地路径。", strings.Join(invalid, "、"))
 	}
 	return strings.Join(lines, "\n")
 }

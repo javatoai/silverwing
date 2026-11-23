@@ -187,21 +187,21 @@ func (s *app) materialsEntryContextMenu(c *ui.Context, menu *ui.Menu, state *mat
 		if s.readingExpandedDirectories()[entry.Relative] {
 			labelText = "收起文件夹"
 		}
-		if menu.Item(labelText).Icon(icons["folder"]).Disabled(busy).Chosen() {
+		if menu.Item(labelText).IconSVG(icons["folder"]).Disabled(busy).Chosen() {
 			s.setReadingDirectoryExpanded(entry.Relative, !s.readingExpandedDirectories()[entry.Relative])
 		}
-	} else if menu.Item("打开文档").Icon(icons["file"]).Disabled(busy).Chosen() {
+	} else if menu.Item("打开文档").IconSVG(icons["file"]).Disabled(busy).Chosen() {
 		s.selectMaterialsPath(entry.Path)
 	}
 	menu.Separator()
-	if menu.Item("新建文档").Icon(icons["file"]).Disabled(busy || !directoryWritable).Chosen() {
+	if menu.Item("新建文档").IconSVG(icons["file"]).Disabled(busy || !directoryWritable).Chosen() {
 		directory := entry.Path
 		if !folder {
 			directory = filepath.Dir(directory)
 		}
 		s.openMaterialsFileNameForm("document.create", "新建文档", directory)
 	}
-	if menu.Item("新建文件夹").Icon(icons["folder"]).Disabled(busy || !directoryWritable).Chosen() {
+	if menu.Item("新建文件夹").IconSVG(icons["folder"]).Disabled(busy || !directoryWritable).Chosen() {
 		directory := entry.Path
 		if !folder {
 			directory = filepath.Dir(directory)
@@ -209,50 +209,50 @@ func (s *app) materialsEntryContextMenu(c *ui.Context, menu *ui.Menu, state *mat
 		s.openMaterialsFileNameForm("document.mkdir", "新建文件夹", directory)
 	}
 	menu.Separator()
-	if menu.Item("导入文件到此处…").Icon(icons["plus"]).Disabled(busy || !directoryWritable).Chosen() {
+	if menu.Item("导入文件到此处…").IconSVG(icons["plus"]).Disabled(busy || !directoryWritable).Chosen() {
 		s.selectMaterialsDirectory(entry)
 		s.startMaterialsImportPicker()
 	}
-	if menu.Item("粘贴到此处").Icon(icons["copy"]).Disabled(busy || !directoryWritable).Chosen() {
+	if menu.Item("粘贴到此处").IconSVG(icons["copy"]).Disabled(busy || !directoryWritable).Chosen() {
 		s.selectMaterialsDirectory(entry)
 		s.pasteMaterialsIntoCurrentDirectory()
 	}
-	if menu.Item("重命名…").Icon(icons["edit"]).Disabled(busy || !writable).Chosen() {
+	if menu.Item("重命名…").IconSVG(icons["edit"]).Disabled(busy || !writable).Chosen() {
 		s.openMaterialsRenameForm(entry.Path)
 	}
-	if menu.Item("复制到剪贴板").Icon(icons["copy"]).Disabled(busy).Chosen() {
+	if menu.Item("复制到剪贴板").IconSVG(icons["copy"]).Disabled(busy).Chosen() {
 		s.withMaterialsContextSelection(state, entry, s.copyMaterialsSelectionToClipboard)
 	}
-	if menu.Item("复制路径").Icon(icons["copy"]).Disabled(busy || state.pathCopyRequest != nil).Chosen() {
+	if menu.Item("复制路径").IconSVG(icons["copy"]).Disabled(busy || state.pathCopyRequest != nil).Chosen() {
 		s.withMaterialsContextSelection(state, entry, func() { s.copyMaterialsSelectionPaths(c.Services()) })
 	}
-	if !folder && menu.Item("复制为新文档…").Icon(icons["copy"]).Disabled(busy || !directoryWritable).Chosen() {
+	if !folder && menu.Item("复制为新文档…").IconSVG(icons["copy"]).Disabled(busy || !directoryWritable).Chosen() {
 		s.openMaterialsCopyForm(entry.Path)
 	}
-	if materialsOpenWithAvailable() && !folder && menu.Item("选择应用打开").Icon(icons["launch"]).Disabled(systemBusy).Chosen() {
+	if materialsOpenWithAvailable() && !folder && menu.Item("选择应用打开").IconSVG(icons["launch"]).Disabled(systemBusy).Chosen() {
 		s.act("system.open-with", s.taskUnit.currentTask().id, "", "", entry.Path, "", nil)
 	}
 	openBusy := systemBusy
 	if folder {
 		openBusy = s.materialsSystemRevealBusy(state)
 	}
-	if menu.Item("在系统中打开").Icon(icons["launch"]).Disabled(openBusy).Chosen() {
+	if menu.Item("在系统中打开").IconSVG(icons["launch"]).Disabled(openBusy).Chosen() {
 		s.act("document.open", s.taskUnit.currentTask().id, "", "", entry.Path, "", map[string]any{"desktopSystemOpenDirectory": folder})
 	}
-	if menu.Item("显示位置").Icon(icons["folder"]).Disabled(s.materialsSystemRevealBusy(state)).Chosen() {
+	if menu.Item("显示位置").IconSVG(icons["folder"]).Disabled(s.materialsSystemRevealBusy(state)).Chosen() {
 		s.act("document.reveal", s.taskUnit.currentTask().id, "", "", entry.Path, "", nil)
 	}
 	menu.Separator()
 	contextSelection := s.materialsContextSelection(state, entry)
 	selectionCount := len(contextSelection)
-	if menu.Item(fmt.Sprintf("复制已选项目 (%d)", selectionCount)).Icon(icons["copy"]).Disabled(busy || selectionCount == 0).Chosen() {
+	if menu.Item(fmt.Sprintf("复制已选项目 (%d)", selectionCount)).IconSVG(icons["copy"]).Disabled(busy || selectionCount == 0).Chosen() {
 		s.withMaterialsContextSelection(state, entry, s.copyMaterialsSelectionToClipboard)
 	}
 	allWritable := true
 	for _, selected := range contextSelection {
 		allWritable = allWritable && s.materialsWritable(selected.Path, false)
 	}
-	if menu.Item("移入回收站…").Icon(icons["delete"]).Disabled(busy || selectionCount == 0 || !allWritable).Dangerous().Chosen() {
+	if menu.Item("移入回收站…").IconSVG(icons["delete"]).Disabled(busy || selectionCount == 0 || !allWritable).Danger().Chosen() {
 		s.withMaterialsContextSelection(state, entry, s.requestMaterialsTrashPreview)
 	}
 }

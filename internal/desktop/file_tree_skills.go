@@ -73,7 +73,7 @@ func (s *app) renderSkillsFileTree(c *ui.Context, p palette, state *skillsBrowse
 			}
 		},
 		ContextMenu: func(row FileTreeRow, menu *ui.Menu) {
-			if !row.Directory && menu.Item("复制文件").Icon(icons["copy"]).Disabled(s.backend == nil).Chosen() {
+			if !row.Directory && menu.Item("复制文件").IconSVG(icons["copy"]).Disabled(s.backend == nil).Chosen() {
 				copyFile(row.ID)
 			}
 		},

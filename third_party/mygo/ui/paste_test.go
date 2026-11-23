@@ -1,9 +1,12 @@
 package ui
 
 import (
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"testing"
+
+	"github.com/egoist/mygo/transfer"
 )
 
 func TestOnPaste(t *testing.T) {
@@ -74,6 +77,93 @@ func TestOnPaste(t *testing.T) {
 	}
 }
 
+// TestOnPasteReplaceText checks OnPaste's pattern for text of the app's
+// own in place of a paste: fn reads the image or the files from the
+// clipboard, and the view inserts a link with ReplaceText in the frame
+// the paste builds, at the caret or over the selection, as one step of
+// undo. Setting the bound value from fn is lost.
+func TestOnPasteReplaceText(t *testing.T) {
+	text := "before after"
+	setValue := false
+	var insert string
+	var pasted transfer.Data
+	tt := NewTester(func(c *Context) {
+		svc := c.Services()
+		in := TextArea(c, &text).Width(300).Label("draft").OnPaste(func(string) bool {
+			d := svc.ReadClipboardData(transfer.PNG, transfer.FileList)
+			if len(d.Items()) == 0 {
+				return false
+			}
+			pasted = d
+			if setValue {
+				text = "lost"
+			} else {
+				insert = "![image](u)"
+			}
+			return true
+		})
+		if insert != "" {
+			start, end := in.TextSelection()
+			in.ReplaceText(start, end, insert)
+			insert = ""
+		}
+	}, 400, 200)
+	tt.Click("draft")
+	tt.Key(Cmd, KeyHome)
+	for range len("before ") {
+		tt.Key(0, KeyRight)
+	}
+
+	png := transfer.New(transfer.NewItem(transfer.Bytes(transfer.PNG, []byte("\x89PNG"))))
+	tt.SetClipboardData(png)
+	setValue = true
+	tt.Key(Cmd, KeyV)
+	tt.Frame()
+	if text != "before after" {
+		t.Fatalf("the value fn set became %q", text)
+	}
+
+	// No frame between: the paste builds the one that inserts.
+	setValue = false
+	tt.Key(Cmd, KeyV)
+	if b, err := pasted.Read(transfer.PNG); err != nil || string(b) != "\x89PNG" {
+		t.Fatalf("fn read the image as %q, %v", b, err)
+	}
+	if text != "before ![image](u)after" {
+		t.Fatalf("inserted at the caret, it became %q", text)
+	}
+	tt.Type("!")
+	if text != "before ![image](u)!after" {
+		t.Fatalf("typed after the insert, it became %q", text)
+	}
+	tt.Key(Cmd, KeyZ)
+	tt.Key(Cmd, KeyZ)
+	if text != "before after" {
+		t.Fatalf("undone, it became %q", text)
+	}
+
+	// Files over a selection.
+	dir := t.TempDir()
+	a, b := filepath.Join(dir, "a.png"), filepath.Join(dir, "b.png")
+	files, err := transfer.FileData(a, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tt.SetClipboardData(files)
+	tt.Key(Cmd, KeyA)
+	tt.Key(Cmd, KeyV)
+	if got, err := pasted.Files(); err != nil || len(got) != 2 || got[0] != a || got[1] != b {
+		t.Fatalf("fn read the files as %q, %v", got, err)
+	}
+	if text != "![image](u)" {
+		t.Fatalf("inserted over the selection, it became %q", text)
+	}
+	tt.Key(Cmd, KeyZ)
+	if text != "before after" {
+		t.Fatalf("undone, it became %q", text)
+	}
+}
+
 // TestPasteCommandShortcut checks that the Edit menu's Paste, which takes
 // Command+V on macOS before the window sees it, runs the window's Cmd+V
 // when no text input has the focus, and pastes into one that does.
@@ -99,5 +189,27 @@ func TestPasteCommandShortcut(t *testing.T) {
 	tt.Frame()
 	if text != "hi" || pastes != want {
 		t.Fatalf("a paste into the field made %q and ran Cmd+V %d times", text, pastes)
+	}
+}
+
+// TestPasteLoneCR pastes text whose lines end with a lone \r, as old Mac
+// text does: a TextArea takes each as a newline, as it does \r\n, and an
+// Input as a space (#1915).
+func TestPasteLoneCR(t *testing.T) {
+	area, input := "", ""
+	tt := NewTester(func(c *Context) {
+		TextArea(c, &area).Width(200).Label("area")
+		TextInput(c, &input).Width(200).Label("input")
+	}, 300, 200)
+	tt.Click("area")
+	tt.SetClipboard("1. A\r2. B\r\n3. C")
+	tt.Key(Cmd, KeyV)
+	if area != "1. A\n2. B\n3. C" {
+		t.Errorf("a TextArea pasted %q, want each line break a newline", area)
+	}
+	tt.Click("input")
+	tt.Key(Cmd, KeyV)
+	if input != "1. A 2. B 3. C" {
+		t.Errorf("a TextInput pasted %q, want each line break a space", input)
 	}
 }

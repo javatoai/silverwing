@@ -1,6 +1,7 @@
 package mygo
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -59,6 +60,10 @@ type Rectangle struct{ X, Y, Width, Height int }
 // WindowOptions configures NewWindow. The zero value is a visible,
 // resizable 800x600 window centered on screen.
 type WindowOptions struct {
+	// OwnScene opens the window as a window of the system's own on iPad, beside
+	// the app's others, which ios.multipleWindows in mygo.json allows. Elsewhere
+	// it's a window as any: on a phone or Android, over the one before.
+	OwnScene bool
 	// Title of the window. Defaults to the application name. The title
 	// follows the page's <title> unless an OnPageTitleUpdated listener
 	// prevents it.
@@ -156,6 +161,11 @@ type WindowOptions struct {
 	// material can show one, and it has no menu bar: Alt and F10 open its
 	// menus in a popup.
 	Vibrancy Vibrancy
+	// VibrancyTint tints the material, in the syntax of BackgroundColor:
+	// "#80ff0000", "rgba(255, 0, 0, 0.5)", or "light-dark(...)" to follow
+	// the appearance. Only macOS 26's Liquid Glass takes a tint; other
+	// materials and platforms ignore it.
+	VibrancyTint string
 	// CornerRadius rounds a frameless window's corners on macOS, in DIPs:
 	// its content and material are cut to them, and its shadow follows
 	// them, as a launcher's or a floating panel's. The window need not be
@@ -166,14 +176,25 @@ type WindowOptions struct {
 	CornerRadius int
 	// Opacity of the window between 0 and 1 (default 1).
 	Opacity float64
+	// IgnoreMouseEvents creates the window letting the mouse through to
+	// what is behind it, as SetIgnoreMouseEvents(true) does: an overlay
+	// that marks a part of the screen never takes a click, not even
+	// between its creation and that call.
+	IgnoreMouseEvents bool
 	// Parent makes this window a child window that stays on top of it
 	// and closes with it. It can go to any display, and stays where it is
 	// as its parent moves. On macOS it is ordered above its parent
 	// whenever the parent comes in front, stays above a parent that is
 	// AlwaysOnTop, goes with it into full screen, and hides while the
-	// parent is minimized or hidden.
+	// parent is minimized or hidden. The Parent may be a flyout, a tray's
+	// included: without X and Y, the window is centered over it, in the
+	// work area of its display, and stays above it.
 	Parent *Window
-	// Modal makes a child window modal to its Parent.
+	// Modal makes a child window modal to its Parent, which takes no
+	// input until it closes: a sheet of the parent on macOS, unless the
+	// parent is a flyout. A flyout stays open while a window is modal to
+	// it, wherever the keyboard goes, and closing the flyout closes the
+	// window: a confirmation a tray's flyout asks for, wider than it.
 	Modal bool
 
 	// Panel makes the window a panel, as the windows of launchers and
@@ -196,12 +217,27 @@ type WindowOptions struct {
 	// same key, for example at the next launch, gets them back as long as
 	// it would show on a connected display: they override X, Y, Width,
 	// Height, UseContentSize, Maximized and FullScreen.
+	// App.ClearWindowStates forgets them.
 	StateKey string
 
 	// Content makes the window show a user interface MyGo draws itself,
 	// on the GPU where it can, instead of a web page: create it with
 	// package ui. The window then has no page (Window.Page is nil): URL
 	// and Page are ignored.
+	//
+	// The view first runs once NewWindow returned, so that it can use the
+	// window NewWindow returns, kept in a variable:
+	//
+	//	a.win = mygo.NewWindow(mygo.WindowOptions{Content: ui.View(func(c *ui.Context) {
+	//		ui.Text(c, a.win.Title())
+	//	})})
+	//
+	// Called on the main thread, as in App.WhenReady or an event handler,
+	// NewWindow leaves showing the window to the main loop's next turn, or
+	// to the first method that acts on it, such as IsVisible or Maximize,
+	// which finds it shown. Called from another goroutine, NewWindow shows
+	// the window and returns while the main thread goes on drawing it:
+	// guard the variable there, or set it with Window.Update.
 	Content Content
 }
 
@@ -215,11 +251,31 @@ type WindowState struct {
 	Height     int  `json:"height"`
 	Maximized  bool `json:"maximized,omitempty"`
 	FullScreen bool `json:"fullScreen,omitempty"`
+	// PixelX, PixelY, PixelWidth and PixelHeight are the normal bounds in
+	// the screen's pixels, which Windows keeps: where displays have
+	// different scales, X and Y change with the scales, and earlier
+	// versions' cannot tell the displays apart. Without them, a window is
+	// centered there when the displays have different scales.
+	PixelX      int `json:"pixelX,omitzero"`
+	PixelY      int `json:"pixelY,omitzero"`
+	PixelWidth  int `json:"pixelWidth,omitzero"`
+	PixelHeight int `json:"pixelHeight,omitzero"`
 }
 
 // WindowStateStore keeps the states of the windows with a
 // WindowOptions.StateKey, by key, for App.SetWindowStateStore. MyGo calls
-// it on the main thread, so it should return quickly.
+// it on the main thread, so it should return quickly. It keeps every
+// field of a state, as JSON does: on Windows, a window whose state lost
+// its pixels (WindowState.PixelX) is centered when the displays have
+// different scales.
+//
+// In a quit, the states are saved after the OnBeforeQuit listeners have
+// run, as each window closes, and once more after the event loop has
+// stopped, right before the OnQuit listeners run: states that the app
+// removes from the store itself in OnBeforeQuit are written again.
+// App.ClearWindowStates drops them for good instead, from any of those
+// listeners or at any other time, through SaveWindowStates with no
+// states.
 type WindowStateStore interface {
 	// LoadWindowStates returns the saved states. It is called once, when
 	// the first window with a StateKey is created. Without states (nil, or
@@ -227,8 +283,9 @@ type WindowStateStore interface {
 	LoadWindowStates() (map[string]WindowState, error)
 	// SaveWindowStates replaces the saved states with states, which the
 	// store may keep. It is called when a window with a StateKey closes
-	// and when the app quits, if a state changed. After an error the
-	// next call saves the states again.
+	// and when the app quits, if a state changed, and with an empty map
+	// by App.ClearWindowStates. After an error the next call saves the
+	// states again.
 	SaveWindowStates(states map[string]WindowState) error
 }
 
@@ -243,6 +300,18 @@ func (a *Application) SetWindowStateStore(s WindowStateStore) {
 	a.mu.Unlock()
 }
 
+// ClearWindowStates forgets the states of the windows
+// (WindowOptions.StateKey), as an app's "Reset settings" does: it saves
+// no states to the store (window-state.json, or the store of
+// SetWindowStateStore, with an empty map), and the windows save theirs no
+// more for the rest of the run. The windows open keep their bounds; those
+// created afterwards, as those of the next launch, get their options.
+// It may be called at any time, from any goroutine, from the OnBeforeQuit,
+// OnWillQuit and OnQuit listeners too, which run before the quit's last
+// save, and before Run. It returns the store's error; the next save, when
+// a window closes or the app quits, tries again.
+func (a *Application) ClearWindowStates() error { return onMainValue(clearWindowStates) }
+
 // Window is a native window hosting a web page, or the Content of package
 // ui. Create windows with NewWindow once the application is ready.
 type Window struct {
@@ -254,6 +323,15 @@ type Window struct {
 	flyoutSize platform.Size
 	// panel is WindowOptions.Panel.
 	panel bool
+	// active tells that the window is drawn as active (active.go);
+	// focusKnown, that it had the keyboard once or showed without it;
+	// keepActive, that SetActiveAppearance keeps it active. Main thread
+	// only.
+	active, focusKnown, keepActive bool
+	// focusedAt orders the windows by when they last had the keyboard,
+	// from focusCount, 0 for never: raiseApp shows the latest. Main
+	// thread only.
+	focusedAt uint64
 	// fit sizes a window that takes its page's size (FitContent), nil
 	// for others. Main thread only.
 	fit *fitContent
@@ -266,11 +344,14 @@ type Window struct {
 	// pg is the window's page, which Page returns unless the window shows
 	// native UI.
 	pg *Page
-	// content is WindowOptions.Content; conn connects it to the native
+	// content tells that the window shows WindowOptions.Content, which
+	// the window hands to its surface as it attaches it and keeps no
+	// reference to: the Content's view, and all it reaches, stays only as
+	// long as the window is open (#1281). conn connects it to the native
 	// surface (main thread only). devTools tells that PageOptions.DevTools
 	// turned the developer tools on: the web inspector, or the inspector
 	// of the Content.
-	content      Content
+	content      bool
 	conn         *surface.Conn
 	devTools     bool
 	invalidating atomic.Bool
@@ -293,8 +374,17 @@ type Window struct {
 	destroyed atomic.Bool
 	shown     bool
 	readyShow bool
+	// loads counts the loads the app asked the page for, so that a failed
+	// load knows whether its listeners started another. Main thread only.
+	loads int
+	// showLater tells that NewWindow left showing the window of native UI
+	// to the main loop's next turn (settleShow), and framing that its
+	// content draws a frame. Main thread only.
+	showLater, framing bool
 	// background is the BackgroundColor, if any. Main thread only.
 	background *background
+	// vibrancyTint is VibrancyTint, if any. Main thread only.
+	vibrancyTint *background
 	// hiddenTitleBar is a TitleBarStyle that hides the title bar: the pages
 	// hear the room the window controls take. Main thread only.
 	hiddenTitleBar bool
@@ -326,6 +416,7 @@ type Window struct {
 	permissionHandler  func(PermissionRequest) bool
 	authHandler        func(AuthRequest) AuthResponse
 	certificateHandler func(CertificateError) bool
+	clientCertHandler  func(ClientCertificateRequest) ClientCertificateResponse
 	pageCtx            context.Context
 	pageCancel         context.CancelFunc
 	// channels are those of the current page, by the page's id for them.
@@ -333,6 +424,16 @@ type Window struct {
 	// closedEarly holds the channels the current page closed before
 	// their calls made them, with the page's token.
 	closedEarly map[int64]string
+	// cancels are the calls of the current page that it may cancel, by
+	// the page's id for them, with the page's token.
+	cancels map[int64]pageCancel
+	// ran holds the ids of the calls of the current page that ran and
+	// are over, oldest first: a cancel that comes after their reply left
+	// finds them here, and is dropped.
+	ran []int64
+	// canceledEarly holds the calls the current page canceled before
+	// their calls made them, with the page's token.
+	canceledEarly map[int64]string
 
 	outMu    sync.Mutex
 	outbox   []message
@@ -431,6 +532,10 @@ var windows struct {
 	focused *Window
 }
 
+// focusCount counts the times a window took the keyboard
+// (Window.focusedAt). Main thread only.
+var focusCount uint64
+
 // NewWindow creates a window. It must be called after the application is
 // ready (see Application.WhenReady); when called from another goroutine it
 // waits for that.
@@ -440,22 +545,36 @@ func NewWindow(opts WindowOptions) *Window {
 	if err != nil {
 		panic(err)
 	}
-	return createWindow("NewWindow", opts, bg, nil)
+	tint, err := backgroundOption(opts.VibrancyTint)
+	if err != nil {
+		panic(err)
+	}
+	return createWindow("NewWindow", opts, bg, tint, nil)
 }
 
 // createWindow creates a window, or a flyout, once the application is
 // ready.
-func createWindow(caller string, opts WindowOptions, bg *background, flyout *flyoutOptions) *Window {
-	if !isMainThread() {
+func createWindow(caller string, opts WindowOptions, bg, tint *background, flyout *flyoutOptions) *Window {
+	main := isMainThread()
+	if !main {
 		App.waitReady()
 	} else if !App.IsReady() {
 		panic("mygo: " + caller + " called before the application is ready; create windows in App.WhenReady")
 	}
 	var w *Window
-	onMain(func() { w = newWindow(opts, bg, 0, flyout) })
+	onMain(func() {
+		w = newWindow(opts, bg, tint, 0, flyout)
+		if !main {
+			// Called from another goroutine, NewWindow returns while the
+			// main thread goes on drawing: the window of native UI shows
+			// before it does, as one of a page.
+			w.settleShow()
+		}
+	})
 	if w == nil {
 		// The event loop has already stopped.
 		w = &Window{}
+		w.pg = &Page{w}
 		w.destroyed.Store(true)
 	}
 	return w
@@ -485,6 +604,19 @@ func (w *Window) backgroundColor() *platform.Color {
 	return &c
 }
 
+// vibrancyTintColor returns the window's material tint for the current
+// appearance, or nil. Main thread only.
+func (w *Window) vibrancyTintColor() *platform.Color {
+	if w.vibrancyTint == nil {
+		return nil
+	}
+	c := w.vibrancyTint.light
+	if w.vibrancyTint.dark != c && backend().Theme().IsDark() {
+		c = w.vibrancyTint.dark
+	}
+	return &c
+}
+
 // updateBackgrounds gives windows with a light and a dark background the
 // one of the current appearance. Main thread only.
 func updateBackgrounds() {
@@ -492,25 +624,26 @@ func updateBackgrounds() {
 		if bg := w.background; w.native != nil && bg != nil && bg.light != bg.dark {
 			w.native.SetBackgroundColor(*w.backgroundColor())
 		}
+		if tint := w.vibrancyTint; w.native != nil && tint != nil && tint.light != tint.dark {
+			w.native.SetVibrancyTint(w.vibrancyTintColor())
+		}
 	}
 }
 
-func newWindow(opts WindowOptions, bg *background, native uintptr, flyout *flyoutOptions) *Window {
+func newWindow(opts WindowOptions, bg, tint *background, native uintptr, flyout *flyoutOptions) *Window {
 	windows.Lock()
 	windows.nextID++
 	id := windows.nextID
 	windows.Unlock()
 
-	w := &Window{id: id, parent: opts.Parent, trustedOrigins: opts.Page.TrustedOrigins, untrusted: opts.Page.Untrusted, secret: randomText(), stateKey: opts.StateKey, background: bg, content: opts.Content, panel: opts.Panel && flyout == nil}
+	w := &Window{id: id, parent: opts.Parent, trustedOrigins: opts.Page.TrustedOrigins, untrusted: opts.Page.Untrusted, secret: randomText(), stateKey: opts.StateKey, background: bg, vibrancyTint: tint, content: opts.Content != nil, panel: opts.Panel && flyout == nil, active: true}
 	w.pg = &Page{w}
-	if opts.Content == nil {
-		if flyout != nil {
-			w.fit = flyout.fit
-		} else if opts.FitContent {
-			w.fit = &fitContent{
-				min: platform.Size{Width: opts.MinWidth, Height: opts.MinHeight},
-				max: platform.Size{Width: opts.MaxWidth, Height: opts.MaxHeight},
-			}
+	if flyout != nil {
+		w.fit = flyout.fit
+	} else if opts.Content == nil && opts.FitContent {
+		w.fit = &fitContent{
+			min: platform.Size{Width: opts.MinWidth, Height: opts.MinHeight},
+			max: platform.Size{Width: opts.MaxWidth, Height: opts.MaxHeight},
 		}
 	}
 	w.hiddenTitleBar = !opts.Frameless && (opts.TitleBarStyle == TitleBarHidden || opts.TitleBarStyle == TitleBarHiddenInset)
@@ -518,6 +651,7 @@ func newWindow(opts WindowOptions, bg *background, native uintptr, flyout *flyou
 	popts := w.platformOptions(&opts)
 	popts.BackgroundColor = w.backgroundColor()
 	popts.Surface = opts.Content != nil
+	popts.OwnScene = opts.OwnScene
 	if opts.Transparent {
 		// Backends keep transparent windows clear; so do theme changes.
 		w.background = nil
@@ -555,11 +689,16 @@ func newWindow(opts WindowOptions, bg *background, native uintptr, flyout *flyou
 		panic(fmt.Sprintf("mygo: cannot create window: %v", err))
 	}
 	w.native = nw
+	if opts.IgnoreMouseEvents {
+		// Before the window shows, and on the turn that made it: no click
+		// reaches it in between.
+		nw.SetIgnoreMouseEvents(true)
+	}
 	if w.stateKey != "" {
 		w.initState(popts)
 	}
-	if w.content != nil {
-		w.attachContent()
+	if w.content {
+		w.attachContent(opts.Content)
 	} else {
 		startContentRules(nw, opts.Page.ContentRules)
 	}
@@ -569,10 +708,23 @@ func newWindow(opts WindowOptions, bg *background, native uintptr, flyout *flyou
 	windows.Unlock()
 
 	fire1(&App.onWindowCreated, w)
-	if w.content == nil {
+	if !w.content {
 		w.loadPage(opts.Page.SessionState, opts.URL)
 	}
-	if !opts.Hidden {
+	switch {
+	case opts.Hidden:
+	case w.content:
+		// The window of native UI shows, and its view runs for the first
+		// frame, once NewWindow returned on the main thread, so that the
+		// view can use what NewWindow returns (#1053): shown now, the
+		// window would draw its first frame at once on some systems, as
+		// AppKit may display a window it orders in and Windows a window
+		// maximized as it shows. The frame the content asked for draws on
+		// that turn as well, while the window is still hidden, as a
+		// window made Hidden draws its first, or as it shows.
+		w.showLater = true
+		postMain(w.settleShow)
+	default:
 		w.Show()
 	}
 	return w
@@ -609,6 +761,7 @@ func (w *Window) platformOptions(o *WindowOptions) *platform.WindowOptions {
 		TitleBarHeight:    max(o.TitleBarHeight, 0),
 		HideWindowButtons: o.HideWindowButtons,
 		Vibrancy:          string(o.Vibrancy),
+		VibrancyTint:      w.vibrancyTintColor(),
 		CornerRadius:      max(o.CornerRadius, 0),
 		Opacity:           o.Opacity,
 		Modal:             o.Modal,
@@ -650,6 +803,10 @@ func (w *Window) platformOptions(o *WindowOptions) *platform.WindowOptions {
 	}
 	if o.Parent != nil && o.Parent.native != nil {
 		p.Parent = o.Parent.native
+		if o.Parent.flyout != nil && p.Center {
+			p.Center = false
+			p.X, p.Y = overFlyout(o.Parent.native.Bounds(), platform.Size{Width: p.Width, Height: p.Height})
+		}
 	}
 	w.preload, w.preloadAllFrames = po.PreloadScript, po.PreloadAllFrames
 	if w.fit != nil {
@@ -660,6 +817,19 @@ func (w *Window) platformOptions(o *WindowOptions) *platform.WindowOptions {
 	// pagesLocaleChanged).
 	w.userScripts = p.UserScripts
 	return p
+}
+
+// overFlyout returns where a window of size goes over a flyout at
+// bounds: centered on it, and moved into the work area of its display,
+// which a dialog wider than a flyout at the edge of the screen, as a
+// tray's, would cross.
+func overFlyout(bounds platform.Rect, size platform.Size) (x, y int) {
+	r := platform.Rect{X: bounds.X + (bounds.Width-size.Width)/2, Y: bounds.Y + (bounds.Height-size.Height)/2, Width: size.Width, Height: size.Height}
+	if wa := platform.WorkAreaFor(bounds, backend().Screen().Displays()); wa.Width > 0 && wa.Height > 0 {
+		r.X = max(min(r.X, wa.X+wa.Width-r.Width), wa.X)
+		r.Y = max(min(r.Y, wa.Y+wa.Height-r.Height), wa.Y)
+	}
+	return r.X, r.Y
 }
 
 func jsPlatform() string {
@@ -717,6 +887,7 @@ func (w *Window) Parent() *Window { return w.parent }
 // has been destroyed.
 func (w *Window) do(fn func(n platform.Window)) {
 	onMain(func() {
+		w.settleShow()
 		if w.native != nil {
 			fn(w.native)
 		}
@@ -726,12 +897,26 @@ func (w *Window) do(fn func(n platform.Window)) {
 // get is do for functions returning a value.
 func get[T any](w *Window, fn func(n platform.Window) T) T {
 	return onMainValue(func() T {
+		w.settleShow()
 		if w.native == nil {
 			var zero T
 			return zero
 		}
 		return fn(w.native)
 	})
+}
+
+// settleShow shows the window that NewWindow left to show on the main
+// loop's next turn, unless Show, ShowInactive or Hide came first: the
+// methods acting on the native window show it first, so that they find it
+// shown, as NewWindow returned it. Not from the first frame, drawn while
+// the window is hidden, whose view may call them (Title): the system may
+// draw a frame as the window shows, which would run within that one. Main
+// thread only.
+func (w *Window) settleShow() {
+	if w.showLater && !w.framing {
+		w.show()
+	}
 }
 
 // Close closes the window as if the user clicked its close button, so
@@ -794,38 +979,73 @@ func (w *Window) destroy() {
 }
 
 // Show shows and focuses the window.
-func (w *Window) Show() {
-	onMain(func() {
-		if w.native == nil {
-			return
-		}
-		visible := w.native.IsVisible()
-		w.native.Show()
-		w.shown = true
-		if !visible {
-			fire(&w.onShow)
-		}
-	})
+func (w *Window) Show() { onMain(w.show) }
+
+func (w *Window) show() {
+	if backgroundShow {
+		w.showInactive()
+		return
+	}
+	w.showLater = false
+	if w.native == nil {
+		return
+	}
+	visible := w.native.IsVisible()
+	if w.fitShow(visible); w.native == nil {
+		return // the frame it laid out closed it
+	}
+	w.native.Show()
+	w.shown = true
+	if !visible {
+		fire(&w.onShow)
+	}
 }
 
 // ShowInactive shows the window without focusing it.
-func (w *Window) ShowInactive() {
-	onMain(func() {
-		if w.native == nil {
-			return
-		}
-		visible := w.native.IsVisible()
-		w.native.ShowInactive()
-		w.shown = true
-		if !visible {
-			fire(&w.onShow)
-		}
-	})
+func (w *Window) ShowInactive() { onMain(w.showInactive) }
+
+func (w *Window) showInactive() {
+	w.showLater = false
+	if w.native == nil {
+		return
+	}
+	visible := w.native.IsVisible()
+	if w.fitShow(visible); w.native == nil {
+		return // the frame it laid out closed it
+	}
+	w.native.ShowInactive()
+	w.shown = true
+	if !w.focusKnown {
+		w.focusKnown = true
+		scheduleActive()
+	}
+	if !visible {
+		fire(&w.onShow)
+	}
 }
 
-// Hide hides the window.
+// backgroundShow tells that an app `mygo dev -background` launched
+// (devBackground) has not come to the front yet: its windows show without
+// the focus, those NewWindow shows and those the app shows itself, as one
+// made Hidden until OnReadyToShow, since Show would bring the app there,
+// until one of its windows takes the focus, as the user clicks it, or the
+// app becomes the active one. Main thread only.
+var backgroundShow = devBackground
+
+// fitShow sizes a hidden flyout of native UI that takes its content's
+// size to that content before it shows (fitContent.show). Main thread
+// only.
+func (w *Window) fitShow(visible bool) {
+	if f := w.fit; f != nil && f.show != nil && !visible {
+		f.show(w)
+	}
+}
+
+// Hide hides the window. Called right after NewWindow, it keeps a window
+// of native UI from showing at all.
 func (w *Window) Hide() {
 	onMain(func() {
+		w.showLater = false
 		if w.native == nil || !w.native.IsVisible() {
 			return
 		}
@@ -838,7 +1058,12 @@ func (w *Window) Hide() {
 // WindowOptions.Panel.
 func (w *Window) IsPanel() bool { return w.panel }
 
-// IsVisible reports whether the window is shown.
+// IsVisible reports whether the window is shown: Show or ShowInactive
+// (or WindowOptions) showed it and Hide did not hide it since. A
+// minimized window is still shown, on every platform, as is one on
+// another desktop or covered by other windows. To ask whether it is
+// minimized, use IsMinimized; whether any of a window of native UI shows
+// on screen, Context.WindowHidden in its view.
 func (w *Window) IsVisible() bool { return get(w, platform.Window.IsVisible) }
 
 // Focus focuses the window.
@@ -849,6 +1074,16 @@ func (w *Window) Blur() { w.do(platform.Window.Blur) }
 
 // IsFocused reports whether the window has keyboard focus.
 func (w *Window) IsFocused() bool { return get(w, platform.Window.IsFocused) }
+
+// CornerRadius returns the radius, in DIPs, that the window's corners are
+// rounded to on screen, for content inset from its edges to round its own
+// corners concentric with them: a card inset by d takes CornerRadius less
+// d. On macOS it is the frameless window's WindowOptions.CornerRadius, or
+// the one the system draws the window with, which depends on the system
+// and the title bar (on macOS 26, 26 with TitleBarHiddenInset's toolbar
+// and 16 without one); on Windows 11, the 8 of its rounded windows. It is 0 where the corners are square (full screen, a maximized
+// window on Windows, Linux, browsers) or the system does not tell it.
+func (w *Window) CornerRadius() float64 { return get(w, platform.Window.CornerRadius) }
 
 // Minimize minimizes the window.
 func (w *Window) Minimize() { w.do(platform.Window.Minimize) }
@@ -999,7 +1234,14 @@ func (w *Window) Size() (width, height int) {
 	return b.Width, b.Height
 }
 
-// SetContentSize resizes the window so the page area has the given size.
+// SetContentSize resizes the window so the page area has the given size,
+// in the window's DIPs. A zoom does not change them: a page zoomed by z
+// (Page.SetZoomFactor), or native UI (ui's Context.SetZoom), lays out in
+// width/z × height/z of its own. Multiply a size the view needs by the
+// zoom:
+//
+//	z := c.Zoom() // in native UI; Page.ZoomFactor for a page
+//	win.SetContentSize(int(math.Ceil(float64(320*z))), int(math.Ceil(float64(400*z))))
 func (w *Window) SetContentSize(width, height int) {
 	w.do(func(n platform.Window) {
 		if w.setFlyoutSize(width, height) {
@@ -1011,7 +1253,8 @@ func (w *Window) SetContentSize(width, height int) {
 	})
 }
 
-// ContentSize returns the size of the page area.
+// ContentSize returns the size of the page area, in the window's DIPs:
+// a view zoomed by z sees it divided by z, as ui's Context.Size returns it.
 func (w *Window) ContentSize() (width, height int) {
 	b := w.ContentBounds()
 	return b.Width, b.Height
@@ -1109,9 +1352,55 @@ func (w *Window) SetHasShadow(v bool) { w.do(func(n platform.Window) { n.SetHasS
 // HasShadow reports whether the window has a shadow.
 func (w *Window) HasShadow() bool { return get(w, platform.Window.HasShadow) }
 
-// SetIgnoreMouseEvents makes the window transparent to mouse events.
+// SetIgnoreMouseEvents makes the window transparent to mouse events. It
+// wins over SetInputRegion.
 func (w *Window) SetIgnoreMouseEvents(v bool) {
 	w.do(func(n platform.Window) { n.SetIgnoreMouseEvents(v) })
+}
+
+// IgnoresMouseEvents reports whether the window lets the mouse through, as
+// SetIgnoreMouseEvents or WindowOptions.IgnoreMouseEvents made it. A
+// window with an input region (SetInputRegion) takes the mouse on a part
+// of it, and does not ignore it.
+func (w *Window) IgnoresMouseEvents() bool { return get(w, platform.Window.IgnoresMouseEvents) }
+
+// SetInputRegion limits the part of the window that takes the mouse to
+// rects, in DIPs from the top-left corner of its content: presses, moves
+// and the wheel elsewhere go through to what is behind the window, as
+// with SetIgnoreMouseEvents, another app's window or the desktop. It is
+// what a desktop pet needs, a frameless, transparent window always on
+// top: its character and speech bubble take clicks, and the rest of the
+// screen works as if the window were not there. Native UI's PassThrough
+// only lets the pointer through an element to the window's own content.
+//
+// nil gives the window all of it back, as it starts; an empty slice none
+// of it. Rectangles without area are dropped. Set the region again as
+// what takes clicks moves or changes size.
+//
+// On Linux, the window's input shape is the region (X11's SHAPE
+// extension, Wayland's input region). macOS and Windows shape no window's
+// input: the window takes the mouse or lets all of it through, switched
+// as the pointer comes into the region or leaves it, which macOS tells as
+// it moves and Windows is asked at each tick of its clock (15.6 ms) while
+// the window shows.
+// A button held keeps it as it is, so that a drag that started on the
+// character, as one moving the window, ends there; the release settles
+// it. In browsers it does nothing.
+func (w *Window) SetInputRegion(rects []Rectangle) {
+	var region []platform.Rect
+	if rects != nil {
+		region = make([]platform.Rect, 0, len(rects))
+		for _, r := range rects {
+			if r.Width > 0 && r.Height > 0 {
+				region = append(region, platform.Rect(r))
+			}
+		}
+	}
+	w.do(func(n platform.Window) {
+		if n, ok := n.(platform.InputRegionWindow); ok {
+			n.SetInputRegion(region)
+		}
+	})
 }
 
 // SetActiveAppearance keeps the window drawn as active, the key window of
@@ -1120,9 +1409,15 @@ func (w *Window) SetIgnoreMouseEvents(v bool) {
 // clear in a panel floating over another app, which never is active and
 // whose glass the system would frost. It uses AppKit's private
 // _setForceMainAppearance:, which a later macOS may drop: the window then
-// looks as any other. Apps for the Mac App Store should not call it.
+// looks as any other, but for its NSVisualEffectView material. Apps for
+// the Mac App Store should not call it. On every platform, its pages and
+// native UI stay active too (ui.Context.WindowActive).
 func (w *Window) SetActiveAppearance(v bool) {
-	w.do(func(n platform.Window) { n.SetActiveAppearance(v) })
+	w.do(func(n platform.Window) {
+		n.SetActiveAppearance(v)
+		w.keepActive = v
+		scheduleActive()
+	})
 }
 
 // SetWindowButtonsTheme draws the window controls of a window with a
@@ -1153,6 +1448,22 @@ func (w *Window) SetVibrancy(v Vibrancy) {
 	w.do(func(n platform.Window) { n.SetVibrancy(string(v)) })
 	// Native UI looks again whether the material shows.
 	w.Invalidate()
+}
+
+// SetVibrancyTint tints the window's material, in the syntax of
+// BackgroundColor, or "" to remove the tint. Only macOS 26's Liquid Glass
+// takes one; other materials and platforms ignore it. See
+// WindowOptions.VibrancyTint.
+func (w *Window) SetVibrancyTint(color string) error {
+	tint, err := backgroundOption(color)
+	if err != nil {
+		return err
+	}
+	w.do(func(n platform.Window) {
+		w.vibrancyTint = tint
+		n.SetVibrancyTint(w.vibrancyTintColor())
+	})
+	return nil
 }
 
 // ProgressState is the state of a progress bar; see ProgressBar.
@@ -1256,7 +1567,7 @@ func (w *Window) NativeHandle() uintptr { return get(w, platform.Window.Handle) 
 // SetFrontend). Besides http(s) URLs, schemes registered with
 // Protocol.Handle can be used.
 func (p *Page) LoadURL(rawURL string) error {
-	if p.w.content != nil {
+	if p.w.content {
 		return errNoPage
 	}
 	resolved, err := resolveURL(rawURL)
@@ -1265,6 +1576,7 @@ func (p *Page) LoadURL(rawURL string) error {
 	}
 	p.w.page(func(n platform.Window) {
 		p.w.html = nil
+		p.w.loads++
 		n.LoadURL(resolved)
 	})
 	return nil
@@ -1274,7 +1586,7 @@ func (p *Page) LoadURL(rawURL string) error {
 // working directory, then against the directory of the executable (and the
 // Resources directory of a macOS app bundle).
 func (p *Page) LoadFile(path string) error {
-	if p.w.content != nil {
+	if p.w.content {
 		return errNoPage
 	}
 	abs, err := resolveFile(path)
@@ -1283,6 +1595,7 @@ func (p *Page) LoadFile(path string) error {
 	}
 	p.w.page(func(n platform.Window) {
 		p.w.html = nil
+		p.w.loads++
 		n.LoadFile(abs, filepath.Dir(abs))
 	})
 	return nil
@@ -1361,6 +1674,7 @@ type htmlDocument struct {
 // thread only.
 func (w *Window) loadHTML(n platform.Window, html, baseURL string) {
 	w.html = &htmlDocument{html: html, baseURL: baseURL}
+	w.loads++
 	n.LoadHTML(html, baseURL)
 }
 
@@ -1379,10 +1693,12 @@ func (d *htmlDocument) isAt(url string) bool {
 }
 
 // Reload reloads the page.
-func (p *Page) Reload() { p.w.page(func(n platform.Window) { n.Reload(false) }) }
+func (p *Page) Reload() { p.w.page(func(n platform.Window) { p.w.loads++; n.Reload(false) }) }
 
 // ReloadIgnoringCache reloads the page bypassing the cache.
-func (p *Page) ReloadIgnoringCache() { p.w.page(func(n platform.Window) { n.Reload(true) }) }
+func (p *Page) ReloadIgnoringCache() {
+	p.w.page(func(n platform.Window) { p.w.loads++; n.Reload(true) })
+}
 
 // Stop stops loading the page.
 func (p *Page) Stop() { p.w.page(platform.Window.StopLoading) }
@@ -1441,6 +1757,31 @@ func (p *Page) UserAgent() string { return pageGet(p.w, platform.Window.UserAgen
 //   - Linux: always 0, WebKitGTK has no API for the web process of a page.
 func (p *Page) ProcessID() int { return pageGet(p.w, platform.Window.ProcessID) }
 
+// GPUProcessID returns the ID of the operating system's process that does
+// the page's graphics and media, which on macOS is where its sound comes
+// out (to capture it with a Core Audio process tap, for instance), 0 when
+// it is unknown: before the web view started one, after the window
+// closed, for a window showing native UI, and on Linux and in browsers.
+// Which process it is depends on the platform:
+//
+//   - macOS: WebKit's GPU process (com.apple.WebKit.GPU), which plays the
+//     page's audio and video, from WebKit's private
+//     -[WKWebView _gpuProcessIdentifier]; 0 when WebKit doesn't answer it
+//     or hasn't started the process yet, which it does once a page first
+//     needs it, to play media or draw with the GPU.
+//   - Windows: WebView2's GPU process (msedgewebview2.exe
+//     --type=gpu-process), a child of ProcessID's browser process, from
+//     ICoreWebView2Environment8's GetProcessInfos; 0 on runtimes without
+//     it. Sound on Windows comes out of WebView2's audio service, a
+//     utility process, not this one: capture the tree of ProcessID's
+//     process for it.
+//   - Linux: always 0, WebKitGTK has no API for its GPU process.
+//
+// The app's web views may share the process. It gets a new ID each time
+// the app runs and whenever the web view starts it again, after it
+// crashed or exited, so ask again rather than keep it.
+func (p *Page) GPUProcessID() int { return pageGet(p.w, platform.Window.GPUProcessID) }
+
 // OpenDevTools opens the web inspector (unless disabled with
 // PageOptions.DevTools).
 func (p *Page) OpenDevTools() { p.w.page(platform.Window.OpenDevTools) }
@@ -1468,7 +1809,7 @@ func (p *Page) Print() { p.w.page(platform.Window.Print) }
 // CapturePage returns a PNG screenshot of the visible page. For a window
 // showing Content it renders the content as it is.
 func (w *Window) CapturePage() ([]byte, error) {
-	if w.content != nil {
+	if w.content {
 		return w.captureContent()
 	}
 	type result struct {
@@ -1502,7 +1843,8 @@ var errNoPage = errors.New("mygo: the window shows Content, not a web page")
 //
 //	n, err := win.Page().Eval("const items = document.querySelectorAll('li'); return items.length")
 //
-// Eval is not subject to the page's Content Security Policy.
+// Eval is not subject to the page's Content Security Policy. It returns an
+// error when the window closes or the app quits before the page answers.
 func (p *Page) Eval(code string) (any, error) {
 	return p.EvalContext(context.Background(), code)
 }
@@ -1572,10 +1914,106 @@ func (w *Window) resetPage() {
 	w.pageCtx, w.pageCancel = ctx, cancel
 	w.channels = nil // they close with the previous page's context
 	w.closedEarly = nil
+	w.cancels = nil
+	w.ran = nil
+	w.canceledEarly = nil
 	w.mu.Unlock()
 	if prev != nil {
 		prev()
 	}
+}
+
+// pageCancel is a call of a page that the page may cancel. A call with no
+// cancel left is one that ran and is over: it is kept, so a cancel that
+// comes after the reply left for the page finds it here.
+type pageCancel struct {
+	token  string
+	cancel context.CancelFunc
+}
+
+// maxCanceledEarly bounds the calls a page may cancel before their calls
+// made them.
+const maxCanceledEarly = 1024
+
+// maxRan bounds the calls of a page that are remembered as run. A cancel
+// reaches the page's window within a reply's journey of the call it gives
+// up, so the ids of the calls that ran lately are enough.
+const maxRan = 1024
+
+// addCancel remembers the cancel of a call of the current page, so that
+// the page may cancel it with a signal. A cancel that came before the
+// call was made, as of a page aborting what it just started, cancels it
+// here and now.
+func (w *Window) addCancel(id int64, token string, cancel context.CancelFunc) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.cancels == nil {
+		w.cancels = map[int64]pageCancel{}
+	}
+	w.cancels[id] = pageCancel{token: token, cancel: cancel}
+	if tok, ok := w.canceledEarly[id]; ok && tok == token {
+		delete(w.canceledEarly, id)
+		cancel()
+	}
+}
+
+// removeCancel ends the call of the page with the id: its cancel is of no
+// use now, and a cancel that came before the call made it is dropped with
+// it. The id stays as one that ran, so a cancel that comes after the reply
+// left for the page finds it here and is dropped, rather than waiting in
+// canceledEarly until the page reloads: a page that lives long would fill
+// it, and its early cancels would be forgotten. The ids of the calls that
+// ran go oldest first, as a cancel for a call that ended longer ago than
+// a reply's journey would have come by now.
+func (w *Window) removeCancel(id int64, token string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	c, ok := w.cancels[id]
+	if !ok || c.token != token {
+		// The page reloaded or navigated while the call ran, or gave the
+		// call up: the call is of no page's business now, and the id may
+		// be the one of a call of the page that loaded since.
+		return
+	}
+	delete(w.canceledEarly, id)
+	w.cancels[id] = pageCancel{token: token}
+	w.ran = append(w.ran, id)
+	for len(w.ran) > maxRan {
+		old := w.ran[0]
+		w.ran = w.ran[1:]
+		if c, ok := w.cancels[old]; ok && c.cancel == nil {
+			delete(w.cancels, old)
+		}
+	}
+}
+
+// cancelCall cancels the call of the page with the id, if the page may
+// cancel it: the method's context is canceled, and its reply is of no
+// use to the page, which gave it up. Calls make their cancels on
+// goroutines of their own, so the page may cancel one before its call
+// made it, e.g. by aborting a request right after starting it: the call
+// is then canceled as soon as it makes it.
+func (w *Window) cancelCall(id int64, token string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	c, ok := w.cancels[id]
+	if !ok {
+		if len(w.canceledEarly) < maxCanceledEarly {
+			if w.canceledEarly == nil {
+				w.canceledEarly = map[int64]string{}
+			}
+			w.canceledEarly[id] = token
+		}
+		return
+	}
+	if c.token != token {
+		return // another page's call
+	}
+	delete(w.cancels, id)
+	if c.cancel == nil {
+		return // the call ran and is over: there is nothing left to cancel
+	}
+	c.cancel()
 }
 
 // pageContext returns the context of the current page. It is canceled when
@@ -1608,7 +2046,7 @@ const maxHeldEvents = 1024
 // the DOM of the page is ready; replies to calls are sent right away since
 // the page is waiting for them.
 func (w *Window) enqueue(msg message, event bool) {
-	if w.content != nil {
+	if w.content {
 		return
 	}
 	w.outMu.Lock()
@@ -1659,7 +2097,8 @@ func (w *Window) flush() {
 }
 
 // OnClose is called when the window is about to close. Call
-// e.PreventDefault to keep it open.
+// e.PreventDefault to keep it open, except when the OS ends the session
+// (see Application.OnBeforeQuit): the window closes then all the same.
 func (w *Window) OnClose(fn func(e *CloseEvent)) (off func()) { return w.onClose.add(fn, false) }
 
 // OnClosed is called after the window has been closed.
@@ -1679,8 +2118,10 @@ func (w *Window) OnHide(fn func()) (off func()) { return w.onHide.add(fn, false)
 
 // OnReadyToShow is called once, when the first page is ready to be
 // displayed. Create the window with Hidden and call Show here to avoid a
-// visual flash. A window showing Content is ready once it drew its first
-// frame, which a hidden window may not draw until shown.
+// visual flash. A page that failed to load makes the window ready too,
+// unless an OnDidFailLoad listener loaded another, which the window then
+// waits for. A window showing Content is ready once it drew its first
+// frame, which a hidden window draws while hidden.
 func (w *Window) OnReadyToShow(fn func()) (off func()) { return w.onReadyToShow.add(fn, false) }
 
 // OnResize is called after the window was resized.
@@ -1803,6 +2244,7 @@ func (h *windowHandler) Closed() {
 	}
 	if windows.focused == w {
 		windows.focused = nil
+		scheduleActive()
 	}
 	children := []*Window{}
 	for _, x := range windows.list {
@@ -1835,9 +2277,13 @@ func (h *windowHandler) Closed() {
 var closingParents int
 
 func (h *windowHandler) Focused() {
+	backgroundShow = false
 	windows.Lock()
 	windows.focused = h.w
 	windows.Unlock()
+	focusCount++
+	h.w.focusKnown, h.w.focusedAt = true, focusCount
+	scheduleActive()
 	fire(&h.w.onFocus)
 }
 
@@ -1847,6 +2293,7 @@ func (h *windowHandler) Blurred() {
 		windows.focused = nil
 	}
 	windows.Unlock()
+	scheduleActive()
 	fire(&h.w.onBlur)
 }
 
@@ -1942,7 +2389,15 @@ func (h *windowHandler) LoadFinished() {
 
 func (h *windowHandler) LoadFailed(url string, code int, desc string) {
 	h.w.themeColorSettled()
+	loads := h.w.loads
 	fire1(&h.w.onDidFailLoad, &LoadError{URL: url, Code: code, Description: desc})
+	// A page that failed to load never reports DOM ready, and its load
+	// never finishes: a window shown from OnReadyToShow would stay hidden
+	// for good. A listener that loaded another page instead, as one of
+	// the app's saying what went wrong, leaves the window to that page.
+	if h.w.loads == loads {
+		h.w.readyToShow()
+	}
 }
 
 func (h *windowHandler) TitleChanged(title string) {
@@ -1986,7 +2441,11 @@ func (h *windowHandler) NewWindow(req platform.NewWindowRequest) platform.Window
 	if err != nil {
 		log.Printf("mygo: window open handler: %v", err)
 	}
-	child := newWindow(o, bg, req.Native, nil)
+	tint, err := backgroundOption(o.VibrancyTint)
+	if err != nil {
+		log.Printf("mygo: window open handler: %v", err)
+	}
+	child := newWindow(o, bg, tint, req.Native, nil)
 	return child.native
 }
 
@@ -2024,8 +2483,9 @@ func (w *Window) filesDropped(paths []string, x, y int) {
 		return
 	}
 	if n, ok := w.native.(*webViewNative); ok {
-		// Where the web view shows in its window.
-		x, y = x+int(n.frame.X), y+int(n.frame.Y)
+		// Where the web view shows in its window, scaled as it shows.
+		sx, sy := cmp.Or(n.scaleX, 1), cmp.Or(n.scaleY, 1)
+		x, y = int(n.frame.X+float64(x)*sx), int(n.frame.Y+float64(y)*sy)
 	}
 	fire1(&w.top().onFileDrop, &FileDropEvent{Paths: paths, X: x, Y: y})
 	// Local paths are none of other pages' business.

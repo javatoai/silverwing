@@ -78,12 +78,8 @@ type taskFilesController struct {
 
 func (s *app) taskFilesIdentity() taskFilesIdentity {
 	t := s.taskUnit.currentTask()
-	taskRoot := ""
-	if cfg, err := s.readSnapshotAppConfig(); err == nil && cfg.TaskRoot != nil {
-		taskRoot = *cfg.TaskRoot
-	}
 	return taskFilesIdentity{home: s.snapshot.Home, id: t.id, createdAt: t.createdAt,
-		taskPath: t.path, taskRoot: taskRoot, archived: t.archived}
+		taskPath: t.path, taskRoot: s.snapshotTaskRoot(), archived: t.archived}
 }
 
 func (s *app) taskFilesPageActive() bool {
@@ -141,8 +137,7 @@ func (view *taskFilesView) entry(relative string) (application.TaskFileEntry, bo
 func (s *app) enterTaskFiles() { s.ensureTaskFilesCurrent() }
 
 func (s *app) ensureTaskFilesCurrent() *taskFilesView {
-	unit := &s.taskFilesUnit
-	if unit.stopped || !s.taskFilesPageActive() {
+	if s.taskFilesUnit.stopped || !s.taskFilesPageActive() {
 		return nil
 	}
 	identity := s.taskFilesIdentity()
@@ -150,6 +145,7 @@ func (s *app) ensureTaskFilesCurrent() *taskFilesView {
 		s.leaveTaskFiles()
 		return nil
 	}
+	unit := &s.taskFilesUnit
 	if unit.current != nil && unit.current.identity != identity {
 		s.leaveTaskFiles()
 	}

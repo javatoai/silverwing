@@ -206,7 +206,10 @@ const requirementSprintCatalogFixtureScript = `$ErrorActionPreference = 'Stop'
 $OutputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $fixturePath = $env:SILVERWING_SPRINT_CATALOG_FIXTURE
 $fixture = Get-Content -Raw -LiteralPath $fixturePath | ConvertFrom-Json
-[IO.File]::AppendAllText($fixture.calls, (($args -join ' ') + [Environment]::NewLine))
+for ($logAttempt = 0; ; $logAttempt++) {
+  try { [IO.File]::AppendAllText($fixture.calls, (($args -join ' ') + [Environment]::NewLine)); break }
+  catch [IO.IOException] { if ($logAttempt -ge 100) { throw }; Start-Sleep -Milliseconds 10 }
+}
 if ($args[0] -eq '--version') { 'fixture-1'; exit 0 }
 if ($args[0] -eq 'config') { 'fixture-profile'; exit 0 }
 if ($args[0] -eq 'auth') { '{"authenticated":true,"host":"project.feishu.cn","tenant_key":"fixture-tenant"}'; exit 0 }

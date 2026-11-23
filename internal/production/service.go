@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -24,6 +23,13 @@ import (
 type Git interface {
 	RunContext(context.Context, string, time.Duration, bool, bool, ...string) (process.Result, error)
 }
+
+type Runner interface {
+	Run(context.Context, process.Spec) (process.Result, error)
+}
+
+// ErrProductionBaselineUnavailable indicates that no unique production Tag can be verified.
+var ErrProductionBaselineUnavailable = errors.New("无法自动识别生产 Tag")
 
 type Service struct {
 	Paths        storage.Paths
@@ -42,7 +48,7 @@ func New(paths storage.Paths, config *storage.ConfigStore, git Git, runner Runne
 		owned.RemoveEnvironment = append(append([]string{}, client.RemoveEnvironment...), gitScopeEnvironment...)
 		git = &owned
 	}
-	return &Service{Paths: paths, Config: config, Git: git, Runner: runner, Genbu: CLIGenbu{runner}, Store: Store{Directory: filepath.Join(paths.Home, "production-releases")}, locks: workspace.NewOperationLocks(paths.Locks)}
+	return &Service{Paths: paths, Config: config, Git: git, Runner: runner, Genbu: NativeGenbu{}, Store: Store{Directory: filepath.Join(paths.Home, "production-releases")}, locks: workspace.NewOperationLocks(paths.Locks)}
 }
 
 func digest(value any) string {
@@ -64,7 +70,7 @@ func (s *Service) gitInput(ctx context.Context, t Target, input string, args ...
 	if c.GitExecutablePath != nil {
 		command = *c.GitExecutablePath
 	}
-	spec, err := commandruntime.Prepare(ctx, s.Runner, &c, domain.ProxyTargetGit, executable.ToolGit, command)
+	spec, err := commandruntime.Prepare(ctx, s.Runner, &c, "", executable.ToolGit, command)
 	if err != nil {
 		return "", err
 	}
@@ -89,20 +95,9 @@ func (s *Service) resolve(ctx context.Context, selection Selection) (Target, dom
 	if !c.TagEnabled {
 		return Target{}, c, errors.New("全局 Tag 已关闭")
 	}
-	var service *domain.GroupServiceConfig
-	for _, group := range c.Groups {
-		if group.ID != selection.GroupID {
-			continue
-		}
-		for _, item := range group.Services {
-			if item.ID == selection.ServiceID {
-				copy := item
-				service = &copy
-				break
-			}
-		}
-	}
-	if service == nil || !service.Enabled {
+	selection = Selection{ServiceID: selection.ServiceID}
+	service, err := c.Service(selection.ServiceID)
+	if err != nil || !service.Enabled {
 		return Target{}, c, errors.New("服务已移除或停用")
 	}
 	var repository *domain.RepositoryConfig
@@ -152,10 +147,32 @@ func (s *Service) resolve(ctx context.Context, selection Selection) (Target, dom
 	if strings.ContainsAny(pushURLs, "\r\n") || repositoryEndpoint(root, remoteURL) != repositoryEndpoint(root, pushURLs) {
 		return Target{}, c, errors.New("生产发布要求远端只推送到同一仓库，请核对 fetch／push URL 配置")
 	}
-	t := Target{Selection: selection, ServiceName: service.DisplayName, RepositoryID: repository.ID, Repository: root, CommonDirectory: common, Remote: ref.Remote, MainBranch: ref.Branch, RemoteIdentity: digest([]string{remoteURL, pushURLs}), GenbuService: service.GenbuServiceName, IDE: string(service.DevelopmentTool)}
-	t.ConfigIdentity = digest([]any{s.Paths.Home, selection, repository.ID, root, common, t.Remote, t.MainBranch, t.RemoteIdentity, service.GenbuServiceName, service.GenbuProbeEnabled, service.DevelopmentTool,
-		c.GitExecutablePath, c.GenbuExecutablePath, c.CommandProxyURL, c.CommandProxyTargets, c.CommandProxyUsername, c.CommandProxyPassword, c.CommandProxyNoProxy, c.BlockedGitWriteBranches})
+	worktreeRoot, err := s.productionWorktreeRoot(c)
+	if err != nil {
+		return Target{}, c, err
+	}
+	t := Target{Selection: selection, ServiceName: service.DisplayName, RepositoryID: repository.ID, Repository: root, CommonDirectory: common, WorktreeRoot: worktreeRoot, Remote: ref.Remote, MainBranch: ref.Branch, RemoteIdentity: digest([]string{remoteURL, pushURLs}), GenbuService: service.GenbuServiceName, IDE: string(service.DevelopmentTool)}
+	t.ConfigIdentity = digest([]any{s.profileIdentity(), selection, repository.ID, root, common, worktreeRoot, t.Remote, t.MainBranch, t.RemoteIdentity, service.GenbuServiceName, service.GenbuProbeEnabled, service.DevelopmentTool,
+		c.GitExecutablePath, c.OptionalCLIs.Genbu, c.CommandProxyURL, c.CommandProxyTargets, c.CommandProxyUsername, c.CommandProxyPassword, c.CommandProxyNoProxy, c.BlockedGitWriteBranches})
 	return t, c, nil
+}
+
+func (s *Service) profileIdentity() string {
+	if s.Paths.ProfileID != "" {
+		return s.Paths.ProfileID
+	}
+	return s.Paths.Home
+}
+
+func (s *Service) productionWorktreeRoot(config domain.AppConfig) (string, error) {
+	if s.Paths.ProfileID == "" {
+		return filepath.Join(s.Paths.Home, "production-worktrees"), nil
+	}
+	namespace := s.Paths.TaskWorktreeNamespace(config.TaskRoot)
+	if namespace == "" {
+		return "", errors.New("请配置可用于临时 Git 工作区的任务存放目录")
+	}
+	return filepath.Join(namespace, "production-worktrees"), nil
 }
 
 var gitScopeEnvironment = []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_NAMESPACE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"}
@@ -197,6 +214,9 @@ func (s *Service) validate(ctx context.Context, expected Target) (domain.AppConf
 		if t.MainBranch != expected.MainBranch {
 			changes = append(changes, "主分支")
 		}
+		if t.WorktreeRoot != expected.WorktreeRoot {
+			changes = append(changes, "隔离工作区目录")
+		}
 		if t.GenbuService != expected.GenbuService {
 			changes = append(changes, "Genbu 服务")
 		}
@@ -206,6 +226,19 @@ func (s *Service) validate(ctx context.Context, expected Target) (domain.AppConf
 		return c, fmt.Errorf("生产发布目标已变化，操作暂停，请重新核对。\n变化项：%s\n已确认：%s · %s · %s/%s\n当前：%s · %s · %s/%s", strings.Join(changes, "、"), expected.ServiceName, expected.Repository, expected.Remote, expected.MainBranch, t.ServiceName, t.Repository, t.Remote, t.MainBranch)
 	}
 	return c, ctx.Err()
+}
+
+func (s *Service) withTargetLock(ctx context.Context, target Target, operation func(domain.AppConfig) error) error {
+	if _, err := s.validate(ctx, target); err != nil {
+		return err
+	}
+	return s.locks.WithRepository(target.CommonDirectory, func() error {
+		config, err := s.validate(ctx, target)
+		if err != nil {
+			return err
+		}
+		return operation(config)
+	})
 }
 
 type references map[string]string
@@ -257,7 +290,7 @@ func (s *Service) ancestor(ctx context.Context, t Target, before, after string) 
 	return r.ExitCode == 0, nil
 }
 
-func (s *Service) Inspect(ctx context.Context, selection Selection, manual string) (Preview, error) {
+func (s *Service) Inspect(ctx context.Context, selection Selection) (Preview, error) {
 	t, c, err := s.resolve(ctx, selection)
 	if err != nil {
 		return Preview{}, err
@@ -265,24 +298,23 @@ func (s *Service) Inspect(ctx context.Context, selection Selection, manual strin
 	var p Preview
 	err = s.locks.WithRepository(t.CommonDirectory, func() error {
 		var e error
-		p, e = s.inspect(ctx, t, c, manual)
+		p, e = s.observe(ctx, t, c, "", true)
 		return e
 	})
 	return p, err
 }
 
-func (s *Service) inspect(ctx context.Context, t Target, c domain.AppConfig, manual string) (Preview, error) {
-	return s.observe(ctx, t, c, manual, "", true)
-}
-
 // A write preparation needs one observation, not the display-only build status
 // and baseline diff. All consumers of that preparation reuse these same refs.
-func (s *Service) observe(ctx context.Context, t Target, c domain.AppConfig, manual, release string, details bool) (Preview, error) {
-	p := Preview{Target: t, ObservedAt: timestamp(), Manual: strings.TrimSpace(manual) != "", ProductionTag: strings.TrimSpace(manual), ProductionStatus: unknownStatus()}
+func (s *Service) observe(ctx context.Context, t Target, c domain.AppConfig, release string, details bool) (Preview, error) {
+	p := Preview{Target: t, ObservedAt: timestamp(), ProductionStatus: unknownStatus()}
 	EmitProgress(ctx, Progress{Selection: t.Selection, Step: 1, State: "running", Message: "读取线上版本及远端引用"})
 	refs, err := s.remoteRefs(ctx, t)
 	if err != nil {
-		return p, err
+		if err := ctx.Err(); err != nil {
+			return p, err
+		}
+		return p, fmt.Errorf("%w：读取生产 Git 远端引用失败：%s", ErrProductionBaselineUnavailable, commandruntime.Redact(c, err.Error()))
 	}
 	p.MainSHA = refs["refs/heads/"+t.MainBranch]
 	if p.MainSHA == "" {
@@ -301,67 +333,47 @@ func (s *Service) observe(ctx context.Context, t Target, c domain.AppConfig, man
 	p.ReleaseSHA = p.BranchHeads[release]
 	p.ProductionCandidates, err = s.Genbu.Versions(ctx, c, t.GenbuService)
 	p.RuntimeAvailable = err == nil
-	if ctx.Err() != nil {
-		return p, ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return p, err
 	}
 	if err != nil {
-		p.Warning = strings.TrimSpace(p.Warning + "\n" + commandruntime.Redact(c, err.Error()))
 		p.ProductionCandidates = nil
+		return p, fmt.Errorf("%w：读取 Genbu 线上生产版本失败：%s", ErrProductionBaselineUnavailable, commandruntime.Redact(c, err.Error()))
 	}
-	if p.ProductionTag == "" && len(p.ProductionCandidates) == 1 {
-		p.ProductionTag = p.ProductionCandidates[0]
+	switch len(p.ProductionCandidates) {
+	case 0:
+		return p, fmt.Errorf("%w：Genbu 未发现线上生产版本", ErrProductionBaselineUnavailable)
+	case 1:
+	default:
+		return p, fmt.Errorf("%w：Genbu 发现多个线上生产版本（%s）", ErrProductionBaselineUnavailable, strings.Join(p.ProductionCandidates, "、"))
 	}
-	if len(p.ProductionCandidates) == 1 && p.Manual && p.ProductionTag != p.ProductionCandidates[0] {
-		return p, errors.New("填写的生产 Tag 与当前唯一运行版本不一致，请重新确认")
+	tag := p.ProductionCandidates[0]
+	tagRef := "refs/tags/" + tag
+	if refs[tagRef] == "" {
+		return p, fmt.Errorf("%w：线上生产 Tag %s 在远端不存在", ErrProductionBaselineUnavailable, tag)
 	}
-	if p.Manual && len(p.ProductionCandidates) != 1 {
-		p.Warning = strings.TrimSpace(p.Warning + "\n使用人工指定的生产基线，请核对线上版本和所选 Git Tag。")
-	}
-	if p.ProductionTag != "" && refs["refs/tags/"+p.ProductionTag] == "" {
-		return p, errors.New("生产 Tag 在所选远端不存在")
-	}
-	required := []string{"refs/heads/" + t.MainBranch}
+	required := []string{"refs/heads/" + t.MainBranch, tagRef}
 	if p.ReleaseSHA != "" {
 		required = append(required, "refs/heads/"+release)
-	}
-	if details {
-		for _, tag := range p.Tags {
-			required = append(required, "refs/tags/"+tag)
-		}
-	} else if p.ProductionTag != "" {
-		required = append(required, "refs/tags/"+p.ProductionTag)
 	}
 	if err = s.fetchMissing(ctx, t, refs, required...); err != nil {
 		return p, err
 	}
-	if details {
-		err = s.retainTagSnapshot(ctx, t, refs)
-		if err == nil {
-			p.Tags, err = s.tagsByCreation(ctx, t, refs)
-		}
-		if err != nil {
-			if ctx.Err() != nil {
-				return p, ctx.Err()
-			}
-			p.Warning = strings.TrimSpace(p.Warning + "\nTag 创建时间读取失败，暂按名称排序：" + commandruntime.Redact(c, err.Error()))
-		}
-	}
-	if p.ProductionTag == "" {
-		p.Warning = strings.TrimSpace(p.Warning + "\n无法唯一确定线上生产版本，请选择或填写生产 Tag 后重新检查。")
-		EmitProgress(ctx, Progress{Selection: t.Selection, Step: 1, State: "pending", Message: "请从“更多 → 手动确认生产 Tag”确认基线"})
-		return p, nil
-	}
-	p.ProductionSHA, err = s.commit(ctx, t, refs["refs/tags/"+p.ProductionTag])
+	productionSHA, err := s.commit(ctx, t, refs[tagRef])
 	if err != nil {
-		return p, err
+		if err := ctx.Err(); err != nil {
+			return p, err
+		}
+		return p, fmt.Errorf("%w：无法读取线上生产 Tag %s 的提交：%s", ErrProductionBaselineUnavailable, tag, commandruntime.Redact(c, err.Error()))
 	}
-	expected := refs["refs/tags/"+p.ProductionTag+"^{}"]
+	expected := refs[tagRef+"^{}"]
 	if expected == "" {
-		expected = refs["refs/tags/"+p.ProductionTag]
+		expected = refs[tagRef]
 	}
-	if p.ProductionSHA != expected {
-		return p, errors.New("生产 Tag 在读取期间发生变化，请重新检查")
+	if productionSHA != expected {
+		return p, fmt.Errorf("%w：生产 Tag 在读取期间发生变化，请重新检查", ErrProductionBaselineUnavailable)
 	}
+	p.ProductionTag, p.ProductionSHA = tag, productionSHA
 	if _, err = s.commit(ctx, t, p.MainSHA); err != nil {
 		return p, errors.New("主分支在读取期间发生变化，请重新检查")
 	}
@@ -383,7 +395,7 @@ func (s *Service) observe(ctx context.Context, t Target, c domain.AppConfig, man
 	if !details {
 		return p, nil
 	}
-	p.ProductionStatus, err = s.Genbu.Status(ctx, c, t.GenbuService, p.ProductionTag)
+	p.ProductionStatus, err = s.readTagStatus(ctx, c, t.GenbuService, p.ProductionTag)
 	p.ProductionStatus = normalizeStatus(p.ProductionStatus)
 	if ctx.Err() != nil {
 		return p, ctx.Err()
@@ -423,50 +435,51 @@ func (s *Service) savePushed(b *Batch) error {
 	return nil
 }
 
-// A manual choice is valid for the observation the user confirmed, including
-// an unavailable runtime query. A changed mixed version set needs confirmation
-// even if the chosen Tag and its commit did not change.
+func (p Preview) hasProductionBaseline() bool {
+	return p.RuntimeAvailable && len(p.ProductionCandidates) == 1 && p.ProductionCandidates[0] == p.ProductionTag &&
+		p.ProductionTag != "" && p.ProductionSHA != ""
+}
+
 func sameProductionBaseline(a, b Preview) bool {
-	aVersions, bVersions := slices.Clone(a.ProductionCandidates), slices.Clone(b.ProductionCandidates)
-	slices.Sort(aVersions)
-	slices.Sort(bVersions)
-	return a.ProductionTag == b.ProductionTag && a.ProductionSHA == b.ProductionSHA &&
-		a.RuntimeAvailable == b.RuntimeAvailable && slices.Equal(aVersions, bVersions)
+	return a.hasProductionBaseline() && b.hasProductionBaseline() &&
+		a.ProductionTag == b.ProductionTag && a.ProductionSHA == b.ProductionSHA
 }
 
 func (s *Service) withBatch(ctx context.Context, id string, operation func(*Batch, domain.AppConfig) error) (Batch, error) {
 	return s.withRecord(ctx, id, false, operation)
 }
 
-func (s *Service) withRecord(ctx context.Context, id string, allowEnded bool, operation func(*Batch, domain.AppConfig) error) (Batch, error) {
-	b, err := s.Store.Load(id)
-	if err != nil {
-		return b, err
+func (s *Service) withBatchRecordLock(id string, operation func() error) error {
+	if !batchIDPattern.MatchString(id) {
+		return errors.New("生产批次标识无效")
 	}
-	err = s.locks.WithRepository(b.Target.CommonDirectory, func() error {
-		var e error
-		b, e = s.Store.Load(id)
-		if e != nil {
-			return e
+	return s.locks.WithTask(filepath.Join(s.Store.Directory, id+".json"), operation)
+}
+
+func (s *Service) withRecord(ctx context.Context, id string, allowEnded bool, operation func(*Batch, domain.AppConfig) error) (Batch, error) {
+	var b Batch
+	err := s.withBatchRecordLock(id, func() error {
+		var err error
+		b, err = s.Store.Load(id)
+		if err != nil {
+			return err
 		}
 		if b.Ended && !allowEnded {
 			return errors.New("该生产批次已结束")
 		}
-		c, e := s.validate(ctx, b.Target)
-		if e != nil {
-			return e
-		}
-		e = operation(&b, c)
-		if e != nil && b.Intent != nil {
-			b.Message = commandruntime.Redact(c, e.Error())
-			if !b.Ended && b.Phase != "CONFLICT" && b.Phase != abortingMerge {
-				b.Phase = "PAUSED"
+		return s.withTargetLock(ctx, b.Target, func(c domain.AppConfig) error {
+			err := operation(&b, c)
+			if err != nil && b.Intent != nil {
+				b.Message = commandruntime.Redact(c, err.Error())
+				if !b.Ended && b.Phase != "CONFLICT" && b.Phase != abortingMerge {
+					b.Phase = "PAUSED"
+				}
+				if writeErr := s.save(&b); writeErr != nil {
+					return errors.Join(err, fmt.Errorf("保存中断状态失败：%w", writeErr))
+				}
 			}
-			if writeErr := s.save(&b); writeErr != nil {
-				return errors.Join(e, fmt.Errorf("保存中断状态失败：%w", writeErr))
-			}
-		}
-		return e
+			return err
+		})
 	})
 	return b, err
 }

@@ -19,6 +19,7 @@ import (
 type cliJobState struct {
 	next          uint64
 	requests      map[string]*cliJobRequest
+	optional      map[string]*desktopOptionalCLIState
 	lifecycle     asyncjob.Group
 	authMutations []*cliJobRequest // UI-owned close-blocking business operations
 }
@@ -103,7 +104,7 @@ func (s *app) cliJobTool(action application.Action) string {
 }
 
 func (s *app) cliConfiguredPath(tool string) string {
-	key := map[string]string{"lark": "larkExecutablePath", "meegle": "meegleExecutablePath", "codex": "codexExecutablePath", "git": "gitExecutablePath", "genbu": "genbuExecutablePath"}[tool]
+	key := map[string]string{"lark": "larkExecutablePath", "meegle": "meegleExecutablePath", "codex": "codexExecutablePath", "git": "gitExecutablePath"}[tool]
 	if key == "" {
 		return ""
 	}
@@ -115,9 +116,10 @@ func (s *app) beginCLIJob(action application.Action) (*cliJobRequest, error) {
 	if tool == "" {
 		return nil, fmt.Errorf("CLI 请求缺少工具或有效登录会话")
 	}
-	if s.toolsUnit.state.cliJobs == nil {
-		s.toolsUnit.state.cliJobs = &cliJobState{requests: make(map[string]*cliJobRequest)}
+	if desktopHasOptionalCLI(tool) && !s.optionalCLIReady(tool) {
+		return nil, fmt.Errorf("请在工具与连接中启用并检测 %s", settingsCLITitle(tool))
 	}
+	state := s.ensureCLIJobs()
 	key := "auth:" + tool
 	if action.Kind == "cli.status" {
 		key = "status:" + tool
@@ -126,7 +128,6 @@ func (s *app) beginCLIJob(action application.Action) (*cliJobRequest, error) {
 	} else if action.Kind == "meegle.projects" {
 		key = action.Kind
 	}
-	state := s.toolsUnit.state.cliJobs
 	if state.lifecycle.Closed() {
 		return nil, errors.New("CLI 请求已进入退出清理阶段")
 	}
@@ -196,6 +197,17 @@ func (s *app) beginCLIJob(action application.Action) (*cliJobRequest, error) {
 	return request, nil
 }
 
+func (s *app) ensureCLIJobs() *cliJobState {
+	if s.toolsUnit.state.cliJobs == nil {
+		s.toolsUnit.state.cliJobs = &cliJobState{}
+	}
+	state := s.toolsUnit.state.cliJobs
+	if state.requests == nil {
+		state.requests = make(map[string]*cliJobRequest)
+	}
+	return state
+}
+
 func executeCLIJob(backend application.Backend, request *cliJobRequest) (result application.ActionResult, snapshot application.Snapshot, err error) {
 	defer request.cancel()
 	defer func() { request.completionErr = err }()
@@ -257,6 +269,9 @@ func (s *app) cliJobRelevant(request *cliJobRequest) bool {
 		return false
 	}
 	if s.snapshot.Home != request.home || s.cliConfiguredPath(request.tool) != request.path {
+		return false
+	}
+	if desktopHasOptionalCLI(request.tool) && !s.optionalCLIReady(request.tool) {
 		return false
 	}
 	if request.tool == "lark" && larkCLIIdentityConfig(request.config) != larkCLIIdentityConfig(s.settingsUnit.state.configJSON) {
@@ -369,7 +384,7 @@ func (s *app) invalidateCLIConfiguration(snapshot application.Snapshot) {
 	if json.Unmarshal([]byte(snapshot.ConfigJSON), &config) != nil {
 		return
 	}
-	for tool, key := range map[string]string{"lark": "larkExecutablePath", "meegle": "meegleExecutablePath", "codex": "codexExecutablePath", "git": "gitExecutablePath", "genbu": "genbuExecutablePath"} {
+	for tool, key := range map[string]string{"lark": "larkExecutablePath", "meegle": "meegleExecutablePath", "codex": "codexExecutablePath", "git": "gitExecutablePath"} {
 		if s.snapshot.Home == snapshot.Home && s.cliConfiguredPath(tool) == strings.TrimSpace(mapString(config, key)) && (tool != "lark" || larkCLIIdentityConfig(s.settingsUnit.state.configJSON) == larkCLIIdentityConfig(snapshot.ConfigJSON)) {
 			continue
 		}
@@ -420,6 +435,7 @@ func (s *app) closeCLIJobs(ctx context.Context) error {
 		return nil
 	}
 	state.lifecycle.Close()
+	s.stopOptionalCLIProbes()
 	state.requests = make(map[string]*cliJobRequest)
 	err := state.lifecycle.Wait(ctx)
 	state.authMutationRunning()
@@ -428,7 +444,7 @@ func (s *app) closeCLIJobs(ctx context.Context) error {
 
 func desktopCLIJobSupported(tool string) bool {
 	switch tool {
-	case "meegle", "codex", "git", "genbu", "lark":
+	case "meegle", "codex", "git", "lark":
 		return true
 	default:
 		return false

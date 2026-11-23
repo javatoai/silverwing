@@ -858,3 +858,39 @@ func TestCloseWhileBuilding(t *testing.T) {
 		}
 	}
 }
+
+func TestHandleSelectAllSelectsTextOfFocusedInput(t *testing.T) {
+	var h Handle
+	text := "token"
+	show := false
+	tt := NewTester(func(c *Context) {
+		if show {
+			TextInput(c, &text).Label("Find").Bind(&h)
+		}
+	}, 200, 50)
+	// Asked for before the input is built, as a find box opening is.
+	h.SelectAll()
+	show = true
+	tt.Frame()
+	tt.Type("x")
+	if text != "x" {
+		t.Fatalf("typing after SelectAll gave %q, want the text replaced", text)
+	}
+	// Asked for again while the input has the focus, with a new text.
+	text = "query"
+	tt.Frame()
+	tt.Key(0, KeyEnd)
+	h.SelectAll()
+	tt.Frame()
+	tt.Type("y")
+	if text != "y" {
+		t.Fatalf("typing after SelectAll of a focused input gave %q", text)
+	}
+	// Focus alone keeps the caret where it is.
+	h.Focus()
+	tt.Frame()
+	tt.Type("z")
+	if text != "yz" {
+		t.Fatalf("typing after Focus gave %q, want yz", text)
+	}
+}

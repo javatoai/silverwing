@@ -16,11 +16,43 @@ import (
 const MaxDirectoryNameLength = 80
 
 var (
-	semverPattern     = regexp.MustCompile("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")
-	sourceIDPattern   = regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-	gitRefPattern     = regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9._/@-]*$")
-	moduleNamePattern = regexp.MustCompile("^[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*$")
+	semverPattern   = regexp.MustCompile("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")
+	sourceIDPattern = regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+	gitRefPattern   = regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9._/@-]*$")
 )
+
+// ValidateModuleName checks a normalized, nonempty workspace module name.
+// Slashes divide module-name segments; dots are allowed only between characters
+// inside a segment so names such as v4.1.5 remain valid without admitting
+// traversal-like or Git lock-file suffixes.
+func ValidateModuleName(name string) error {
+	if name == "" {
+		return fmt.Errorf("名称不能为空")
+	}
+	for _, segment := range strings.Split(name, "/") {
+		if segment == "" {
+			return fmt.Errorf("不能包含空路径段")
+		}
+		if strings.HasSuffix(strings.ToLower(segment), ".lock") {
+			return fmt.Errorf("路径段不能以 .lock 结尾")
+		}
+		for index := 0; index < len(segment); index++ {
+			char := segment[index]
+			if char == '.' {
+				if index == 0 || index == len(segment)-1 || segment[index-1] == '.' {
+					return fmt.Errorf("每个路径段中的点号必须位于字符之间且不能连续")
+				}
+				continue
+			}
+			if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+				(char >= '0' && char <= '9') || char == '_' || char == '-' {
+				continue
+			}
+			return fmt.Errorf("只允许英文字母、数字、点号、下划线和连字符，路径段之间使用 /")
+		}
+	}
+	return nil
+}
 
 func ValidateSchemaVersion(actual, expected string) bool {
 	a, e := semverPattern.FindStringSubmatch(actual), semverPattern.FindStringSubmatch(expected)
@@ -92,24 +124,24 @@ func ValidateRequirementMaterialsSubdirectory(value string) (string, error) {
 		return "", nil
 	}
 	if v == "." || v == ".." {
-		return "", fmt.Errorf("任务资料子目录不能是 . 或 ..")
+		return "", fmt.Errorf("任务角色名不能是 . 或 ..")
 	}
 	if strings.EqualFold(v, "temp") || strings.EqualFold(v, ".git") || strings.HasPrefix(strings.ToLower(v), ".silverwing-") {
-		return "", fmt.Errorf("任务资料子目录不能使用 temp 或系统保留目录名")
+		return "", fmt.Errorf("任务角色名不能使用 temp 或系统保留目录名")
 	}
 	if strings.ContainsAny(v, "/\\\\") {
-		return "", fmt.Errorf("任务资料子目录只能是单层目录名")
+		return "", fmt.Errorf("任务角色名须为单层目录名")
 	}
 	for _, r := range v {
 		if r < 0x20 || strings.ContainsRune("<>:\"|?*", r) {
-			return "", fmt.Errorf("任务资料子目录包含 Windows 不允许的字符")
+			return "", fmt.Errorf("任务角色名包含 Windows 不允许的字符")
 		}
 	}
 	if strings.HasSuffix(v, ".") || strings.HasSuffix(v, " ") {
-		return "", fmt.Errorf("任务资料子目录不能以点或空格结尾")
+		return "", fmt.Errorf("任务角色名不能以点或空格结尾")
 	}
 	if isWindowsReserved(v) {
-		return "", fmt.Errorf("任务资料子目录不能使用 Windows 保留名称")
+		return "", fmt.Errorf("任务角色名不能使用 Windows 保留名称")
 	}
 	return v, nil
 }
@@ -216,18 +248,8 @@ func (c AppConfig) Validate() error {
 			return err
 		}
 	}
-	if len(c.Groups) == 0 {
-		return fmt.Errorf("至少需要一个组")
-	}
-	if err := unique(groupIDs(c.Groups), "组 ID"); err != nil {
-		return err
-	}
-	groupNames := make([]string, 0, len(c.Groups))
-	for _, group := range c.Groups {
-		groupNames = append(groupNames, strings.TrimSpace(group.Name))
-	}
-	if err := uniqueLower(groupNames, "组名"); err != nil {
-		return err
+	if err := c.ProjectInstructionsGitSettings().validate(true); err != nil {
+		return fmt.Errorf("项目资料同步设置有误，%w", err)
 	}
 	if err := unique(repositoryIDs(c.Repositories), "仓库 ID"); err != nil {
 		return err
@@ -295,17 +317,16 @@ func (c AppConfig) Validate() error {
 		}
 		branches[k] = true
 	}
-	for _, g := range c.Groups {
-		if err := g.Validate(); err != nil {
-			return err
+	services := c.ServiceCatalog()
+	if err := uniqueLower(serviceIDs(services), "服务 ID"); err != nil {
+		return err
+	}
+	for _, s := range services {
+		if !repoIDs[s.RepositoryID] {
+			return fmt.Errorf("服务 %s 引用了不存在的仓库：%s", s.DisplayName, s.RepositoryID)
 		}
-		for _, s := range g.Services {
-			if !repoIDs[s.RepositoryID] {
-				return fmt.Errorf("服务 %s 引用了不存在的仓库：%s", s.DisplayName, s.RepositoryID)
-			}
-			if err := s.Validate(); err != nil {
-				return err
-			}
+		if err := s.Validate(); err != nil {
+			return err
 		}
 	}
 	for _, t := range c.CommandProxyTargets {
@@ -415,12 +436,12 @@ func (s ServiceModuleConfig) Validate() error {
 	}
 	return nil
 }
-func (s GroupServiceConfig) Validate() error {
+func (s ServiceConfig) Validate() error {
 	if s.ID == "" || s.RepositoryID == "" || s.DisplayName == "" {
-		return fmt.Errorf("组内服务 ID、仓库 ID 和服务名称不能为空")
+		return fmt.Errorf("服务 ID、仓库 ID 和服务名称不能为空")
 	}
 	if !safeDirectoryIdentifier(s.ID) {
-		return fmt.Errorf("组内服务 ID 必须是安全且稳定的目录片段")
+		return fmt.Errorf("服务 ID 必须是安全且稳定的目录片段")
 	}
 	if s.GenbuProbeEnabled && s.GenbuServiceName == "" {
 		return fmt.Errorf("启用 Genbu 探测时必须配置 Genbu 服务名")
@@ -460,7 +481,7 @@ func (m TaskManifest) Validate() error {
 	if !ValidateSchemaVersion(m.SchemaVersion, CurrentTaskManifestSchemaVersion) {
 		return fmt.Errorf("任务 JSON 版本不受支持：%s，当前版本为 %s", m.SchemaVersion, CurrentTaskManifestSchemaVersion)
 	}
-	if m.FolderName == "" || m.TaskDirectoryName == "" || m.FeatureBranch == "" || m.CreatedAt == "" || m.UpdatedAt == "" {
+	if m.FolderName == "" || m.TaskDirectoryName == "" || m.CreatedAt == "" || m.UpdatedAt == "" {
 		return fmt.Errorf("任务清单缺少必填字段")
 	}
 	if m.AgentContext != nil {
@@ -496,9 +517,32 @@ func (c AgentTaskContext) Validate() error {
 	return nil
 }
 
+func (c AppConfig) ServiceCatalog() []ServiceConfig {
+	if len(c.Services) != 0 || len(c.Groups) == 0 {
+		return c.Services
+	}
+	services := c.Services
+	for _, group := range c.Groups {
+		services = append(services, group.Services...)
+	}
+	return services
+}
+
+func (c AppConfig) Service(serviceID string) (ServiceConfig, error) {
+	for _, service := range c.ServiceCatalog() {
+		if service.ID == serviceID {
+			return service, nil
+		}
+	}
+	return ServiceConfig{}, fmt.Errorf("找不到服务：%s", serviceID)
+}
+
 func (c AppConfig) Group(groupID string) (GroupConfig, error) {
 	for _, g := range c.Groups {
 		if g.ID == groupID {
+			if groupID == DefaultGroupID && len(g.Services) == 0 {
+				g.Services = c.Services
+			}
 			return g, nil
 		}
 	}
@@ -517,10 +561,11 @@ func (c AppConfig) GroupService(groupID, serviceID string) (GroupServiceConfig, 
 	return GroupServiceConfig{}, fmt.Errorf("组中找不到服务：%s", serviceID)
 }
 func (c AppConfig) RequirementMaterialsConfigured() bool {
-	return c.RequirementMaterialsRoot != nil && *c.RequirementMaterialsRoot != "" && c.RequirementMaterialsSubdirectory != nil && *c.RequirementMaterialsSubdirectory != ""
+	rootConfigured := c.MaterialsGitSettings().LocalRoot != "" || c.RequirementMaterialsRoot != nil && *c.RequirementMaterialsRoot != ""
+	return rootConfigured && c.RequirementMaterialsSubdirectory != nil && *c.RequirementMaterialsSubdirectory != ""
 }
 func (c AppConfig) TagNavigationVisible() bool {
-	return c.TagEnabled && len(c.Groups) > 0
+	return c.TagEnabled
 }
 func (s CodexPluginMarketplaceSource) RequiresRootMarketplaceMigration() bool {
 	return s.MarketplaceDirectory != "."
@@ -705,8 +750,8 @@ func StandardWorktreeModuleNames(modules []ServiceModuleConfig) (map[string]stri
 		if name == "" {
 			name = "default"
 		}
-		if !moduleNamePattern.MatchString(name) {
-			return nil, fmt.Errorf("模块 %s 名称不合法：%s", m.ID, name)
+		if err := ValidateModuleName(name); err != nil {
+			return nil, fmt.Errorf("模块 %s 名称不合法：%s：%v", m.ID, name, err)
 		}
 		names[m.ID] = name
 		if len(modules) > 1 {
@@ -832,13 +877,6 @@ func uniqueNonblank(values []string, label string) error {
 	}
 	return nil
 }
-func groupIDs(v []GroupConfig) []string {
-	r := []string{}
-	for _, x := range v {
-		r = append(r, x.ID)
-	}
-	return r
-}
 func repositoryIDs(v []RepositoryConfig) []string {
 	r := []string{}
 	for _, x := range v {
@@ -900,7 +938,7 @@ func moduleIDs(v []ServiceModuleConfig) []string {
 	}
 	return r
 }
-func serviceIDs(v []GroupServiceConfig) []string {
+func serviceIDs(v []ServiceConfig) []string {
 	r := []string{}
 	for _, x := range v {
 		r = append(r, x.ID)
@@ -922,7 +960,7 @@ func stringValue(v *string) string {
 }
 func validProxyTarget(v CommandProxyTarget) bool {
 	switch v {
-	case ProxyTargetCodex, ProxyTargetGit, ProxyTargetWorkspaceCommand, ProxyTargetMeegle, ProxyTargetGenbu, ProxyTargetAppUpdates:
+	case ProxyTargetCodex, ProxyTargetAppUpdates:
 		return true
 	}
 	return false

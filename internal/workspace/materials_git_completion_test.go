@@ -22,7 +22,7 @@ func TestMaterialsGitRemoteIgnoresApplyBeforeFirstLocalCommit(t *testing.T) {
 			materialsGitTestRun(t, f.seed, "add", ".")
 			materialsGitTestRun(t, f.seed, "commit", "-m", "remote ignore rules")
 			materialsGitTestRun(t, f.seed, "push", "origin", "master")
-			secret := "2026/123-需求/研发/never.private"
+			secret := "requirements/2026/123-需求/研发/never.private"
 			materialsGitTestFile(t, f.root, secret, "retain local bytes")
 			materialsGitTestFile(t, f.root, "cache/result.txt", "local cache")
 			materialsGitTestFile(t, f.root, "non-annual/local.md", "upload")
@@ -53,13 +53,13 @@ func TestMaterialsGitExistingStageAndTrackedIgnoredPathsParticipate(t *testing.T
 	materialsGitTestRun(t, f.seed, "commit", "-m", "tracked path plus ignore")
 	materialsGitTestRun(t, f.seed, "push", "origin", "master")
 	f.sync()
-	for _, path := range []string{"tracked.log", "outside.txt", ".silverwing-persistent.json", "2026/123-需求/产品/design.md", "2026/123-需求/temp/script.txt"} {
+	for _, path := range []string{"tracked.log", "outside.txt", ".silverwing-persistent.json", "requirements/2026/123-需求/产品/design.md", "requirements/2026/123-需求/temp/script.txt"} {
 		materialsGitTestFile(t, f.root, path, "whole repo change")
 	}
 	materialsGitTestRun(t, f.root, "add", "outside.txt")
 	materialsGitTestFile(t, f.root, "new-ignored.log", "stay local")
 	f.sync()
-	for _, path := range []string{"tracked.log", "outside.txt", ".silverwing-persistent.json", "2026/123-需求/产品/design.md", "2026/123-需求/temp/script.txt"} {
+	for _, path := range []string{"tracked.log", "outside.txt", ".silverwing-persistent.json", "requirements/2026/123-需求/产品/design.md", "requirements/2026/123-需求/temp/script.txt"} {
 		if content := materialsGitTestRun(t, f.remote, "show", "master:"+path); content != "whole repo change" {
 			t.Fatal(path, content)
 		}
@@ -73,7 +73,7 @@ func TestMaterialsGitInitialCollisionRetainsIgnoredAndUntrackedBytes(t *testing.
 	for _, ignored := range []bool{false, true} {
 		t.Run(map[bool]string{false: "untracked", true: "ignored"}[ignored], func(t *testing.T) {
 			f := newMaterialsGitFixture(t, true)
-			path := "2026/123-需求/产品/design.md"
+			path := "requirements/2026/123-需求/产品/design.md"
 			materialsGitTestFile(t, f.root, path, "local must survive")
 			if ignored {
 				materialsGitTestFile(t, f.root, ".gitignore", "*.md\n")
@@ -96,10 +96,10 @@ func TestMaterialsGitInitialCollisionRetainsIgnoredAndUntrackedBytes(t *testing.
 func TestMaterialsGitMigratesMarkedDefaultsAndPreservesUserRules(t *testing.T) {
 	f := newMaterialsGitFixture(t, true)
 	f.sync()
-	ignore := "2026/123-需求/temp/.gitignore"
+	ignore := "requirements/2026/123-需求/temp/.gitignore"
 	materialsGitTestFile(t, f.root, ignore, "# user\r\n*.scratch\r\n# Silverwing local temporary files\n*\n")
-	materialsGitTestFile(t, f.root, "2026/123-需求/temp/include.txt", "include")
-	materialsGitTestFile(t, f.root, "2026/123-需求/temp/local.scratch", "private")
+	materialsGitTestFile(t, f.root, "requirements/2026/123-需求/temp/include.txt", "include")
+	materialsGitTestFile(t, f.root, "requirements/2026/123-需求/temp/local.scratch", "private")
 	materialsGitTestFile(t, f.root, ".git/info/exclude", "# user\n*.local\n# Silverwing local runtime and temporary files\n.silverwing-*\n/[0-9][0-9][0-9][0-9]/*/[tT][eE][mM][pP]/\n")
 	materialsGitTestFile(t, f.root, "keep.local", "private")
 	materialsGitTestFile(t, f.root, ".silverwing-visible", "persistent")
@@ -165,7 +165,7 @@ func TestMaterialsGitCancelledBeforeStartDoesNotMigrateLocalFiles(t *testing.T) 
 	if err := os.WriteFile(legacy, nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	ignore := "2026/123-需求/temp/.gitignore"
+	ignore := "requirements/2026/123-需求/temp/.gitignore"
 	const generated = "# Silverwing local temporary files\n*\n"
 	materialsGitTestFile(t, f.root, ignore, generated)
 	ctx, cancel := context.WithCancel(context.Background())

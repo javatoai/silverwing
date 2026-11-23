@@ -23,6 +23,7 @@ import (
 	"github.com/egoist/mygo/internal/accelerator"
 	"github.com/egoist/mygo/internal/platform"
 	"github.com/egoist/mygo/internal/schemehost"
+	"github.com/egoist/mygo/internal/schemestream"
 )
 
 // Custom schemes are served from http://<scheme>.localhost/, and their
@@ -87,6 +88,7 @@ func (w *window) withWebViewOr(fn func(), fail func(error)) {
 // failPending fails the calls waiting for the webview.
 func (w *window) failPending(err error) {
 	failCookieRequests(w, err)
+	w.abortSchemes(err)
 	pending := w.pending
 	w.pending = nil
 	for _, c := range pending {
@@ -229,6 +231,9 @@ func (w *window) setUp(controller uintptr) {
 	w.applyWebViewBackground()
 
 	w.addUserScripts()
+	if w.host != nil {
+		forwardKeys(w)
+	}
 
 	// The add methods write a registration token. Its address is taken in
 	// each call (go:uintptrescapes), as a uintptr saved earlier goes stale
@@ -342,8 +347,27 @@ func (w *window) becomeReady() {
 	}
 }
 
+// addFilter makes WebView2 raise WebResourceRequested for the requests
+// whose URL matches pattern, of every resource context, from the page's
+// frames, those of other origins among them (#1912): an iframe of a custom
+// scheme's other host loads its scripts, styles and fetches through the
+// scheme. Runtimes without ICoreWebView2_22 only have the older filter,
+// which reaches the main frame and its same-origin iframes alone.
+//
+// Service and shared workers are left out, as with the older filter: their
+// requests reach every web view of the profile that filters them, so each
+// window would answer them, and apply its content rules to them.
 func (w *window) addFilter(pattern string) {
-	comCall(w.webview, wvAddWebResourceRequestedFilter, uintptr(unsafe.Pointer(u16(pattern))), 0) // COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL
+	const contextAll = 0 // COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL
+	uri := u16(pattern)
+	if wv22 := queryInterface(w.webview, &iidICoreWebView2_22); wv22 != 0 {
+		hr := comCall(wv22, wv22AddWebResourceRequestedFilterWithRequestSourceKinds, uintptr(unsafe.Pointer(uri)), contextAll, requestSourceDocument)
+		release(wv22)
+		if !failed(hr) {
+			return
+		}
+	}
+	comCall(w.webview, wvAddWebResourceRequestedFilter, uintptr(unsafe.Pointer(uri)), contextAll)
 }
 
 func (w *window) resizeWebView() {
@@ -626,22 +650,16 @@ func (w *window) acceleratorKeyPressed(_, args uintptr) {
 	w.b.menuCommand(cmd, w)
 }
 
-// pageEditRoles are the roles whose keys a page keeps, as in a browser and
-// in native UI: WebView2 cuts, copies and pastes with the page's own events
-// and every format of the clipboard, where editRole pastes text alone.
-var pageEditRoles = map[string]bool{
-	"undo": true, "redo": true, "cut": true, "copy": true, "paste": true,
-	"pasteAndMatchStyle": true, "delete": true, "selectAll": true,
-}
-
 // pageAccelerator returns the menu command a key pressed in a page runs,
-// if any.
+// if any. A page keeps the keys of the edit roles, as in a browser and in
+// native UI: WebView2 cuts, copies and pastes with the page's own events
+// and every format of the clipboard.
 func (w *window) pageAccelerator(key accelKey) (uint16, bool) {
 	cmd, ok := w.accels[key]
 	if !ok {
 		return 0, false
 	}
-	if e := w.b.menus.entries[cmd]; e != nil && pageEditRoles[e.role] && pageEditKey(key) {
+	if e := w.b.menus.entries[cmd]; e != nil && platform.EditCommands[e.role] && pageEditKey(key) {
 		return 0, false
 	}
 	return cmd, true
@@ -673,7 +691,7 @@ func (w *window) LoadURL(raw string) {
 func (w *window) LoadHTML(html, baseURL string) {
 	w.withWebView(func() {
 		w.programmatic = true
-		if baseURL == "" {
+		if !servedAtBase(baseURL) {
 			comCall(w.webview, wvNavigateToString, uintptr(unsafe.Pointer(u16(html))))
 			return
 		}
@@ -687,6 +705,15 @@ func (w *window) LoadHTML(html, baseURL string) {
 		}
 		comCall(w.webview, wvNavigate, uintptr(unsafe.Pointer(u16(target))))
 	})
+}
+
+// servedAtBase reports whether LoadHTML serves its document at baseURL,
+// answering the navigation's request for it. WebView2 requests no about:
+// URL, about:blank among them, so their documents, as those without a base
+// URL, go through NavigateToString, which shows them at about:blank.
+func servedAtBase(baseURL string) bool {
+	scheme, _, _ := strings.Cut(baseURL, ":")
+	return baseURL != "" && !strings.EqualFold(scheme, "about")
 }
 
 func (w *window) LoadFile(path, _ string) {
@@ -957,6 +984,44 @@ func (w *window) ProcessID() int {
 	return int(pid)
 }
 
+// GPUProcessID returns the GPU process of the web view's environment,
+// which its web views share, from ICoreWebView2Environment8's
+// GetProcessInfos; 0 before the web view is made, on runtimes older than
+// it, and while the environment runs no GPU process.
+func (w *window) GPUProcessID() int {
+	if w.webview == 0 {
+		return 0
+	}
+	env8 := queryInterface(w.b.env, &iidICoreWebView2Environment8)
+	if env8 == 0 {
+		return 0
+	}
+	defer release(env8)
+	var infos uintptr
+	if failed(comCall(env8, env8GetProcessInfos, uintptr(unsafe.Pointer(&infos)))) || infos == 0 {
+		return 0
+	}
+	defer release(infos)
+	var n uint32
+	if failed(comCall(infos, procInfosGetCount, uintptr(unsafe.Pointer(&n)))) {
+		return 0
+	}
+	for i := range n {
+		var info uintptr
+		if failed(comCall(infos, procInfosGetValueAtIndex, uintptr(i), uintptr(unsafe.Pointer(&info)))) || info == 0 {
+			continue
+		}
+		var kind, pid int32
+		ok := !failed(comCall(info, procInfoGetKind, uintptr(unsafe.Pointer(&kind)))) && kind == processKindGPU &&
+			!failed(comCall(info, procInfoGetProcessId, uintptr(unsafe.Pointer(&pid))))
+		release(info)
+		if ok {
+			return int(pid)
+		}
+	}
+	return 0
+}
+
 // webView8 returns the web view's ICoreWebView2_8, which the caller
 // releases, or 0 before the web view is made and on runtimes older than
 // it.
@@ -1189,7 +1254,10 @@ func (w *window) resourceRequested(_, args uintptr) {
 	uri := takeWstr(p)
 	var resource int32
 	comCall(args, resReqGetResourceContext, uintptr(unsafe.Pointer(&resource)))
-	const document = 1 // COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT
+	const (
+		document = 1 // COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT
+		media    = 4 // COREWEBVIEW2_WEB_RESOURCE_CONTEXT_MEDIA
+	)
 	if w.contentFilter != nil && w.contentFilter(args, req, uri, resource) {
 		return
 	}
@@ -1209,6 +1277,15 @@ func (w *window) resourceRequested(_, args uintptr) {
 		sreq.Body = io.NopCloser(bytes.NewReader(readStream(content)))
 		release(content)
 	}
+	if resource == media {
+		// Media elements ask for the rest of the file from a byte on
+		// (bytes=X-): narrowed, a response ends soon, and the element asks
+		// for what follows as it plays.
+		header := http.Header(sreq.Header)
+		if r := header.Get("Range"); r != "" {
+			header.Set("Range", schemestream.ClampRange(r, mediaRange))
+		}
+	}
 	var deferral uintptr
 	if comCall(args, resReqGetDeferral, uintptr(unsafe.Pointer(&deferral))) != sOK {
 		return
@@ -1216,7 +1293,13 @@ func (w *window) resourceRequested(_, args uintptr) {
 	addRef(args)
 	ctx, cancel := context.WithCancel(context.Background())
 	sreq.Context = ctx
-	sreq.Responder = &schemeResponse{w: w, args: args, deferral: deferral, cancel: cancel, url: target, document: resource == document}
+	r := &schemeResponse{w: w, args: args, deferral: deferral, cancel: cancel, url: target, document: resource == document}
+	r.pipe = schemestream.NewPipe(streamLimit, func() { w.b.post(r.handover) })
+	if w.schemes == nil {
+		w.schemes = map[*schemeResponse]struct{}{}
+	}
+	w.schemes[r] = struct{}{}
+	sreq.Responder = r
 	w.h.SchemeRequest(sreq)
 }
 
@@ -1251,13 +1334,17 @@ func requestHeaders(req uintptr) http.Header {
 // respond answers a WebResourceRequested event; deferral is 0 for a
 // synchronous answer.
 func (w *window) respond(args, deferral uintptr, status int, header http.Header, body []byte) {
+	w.respondStream(args, deferral, status, header, memStream(body))
+}
+
+// respondStream answers with the body stream, and releases it.
+func (w *window) respondStream(args, deferral uintptr, status int, header http.Header, stream uintptr) {
 	var raw strings.Builder
 	for k, vs := range header {
 		for _, v := range vs {
 			raw.WriteString(k + ": " + v + "\r\n")
 		}
 	}
-	stream := memStream(body)
 	var resp uintptr
 	hr := comCall(w.b.env, envCreateWebResourceResponse, stream, uintptr(status),
 		uintptr(unsafe.Pointer(u16(http.StatusText(status)))), uintptr(unsafe.Pointer(u16(raw.String()))), uintptr(unsafe.Pointer(&resp)))
@@ -1271,7 +1358,31 @@ func (w *window) respond(args, deferral uintptr, status int, header http.Header,
 	}
 }
 
-// schemeResponse buffers a response: WebView2 wants it whole.
+const (
+	// streamLimit is how much of a response's body MyGo holds for
+	// WebView2: the handler's writes, the shared layer's chunks
+	// (protocol.go), wait once this much was not read.
+	streamLimit = 1 << 20
+	// mediaRange is the most a media element gets for a range it left
+	// open (bytes=X-).
+	mediaRange = 4 << 20
+)
+
+// schemeResponse answers a custom scheme request. The handler's goroutine
+// writes the body into a pipe (WriteBody). A body that ends before it
+// fills the pipe (streamLimit) is answered whole at Finish, as WebView2's
+// documentation asks: a response's content is all there when the
+// deferral completes. A larger one is answered as the pipe fills, with a
+// stream that reads the pipe as the handler writes it (bodyStream): MyGo
+// holds at most about streamLimit of it, and the handler waits while
+// WebView2 is behind. WebView2 reads the streams of all responses on one
+// thread (MicrosoftEdge/WebView2Feedback#3519), and a Read waiting for a
+// handler holds the others back: answering only once that much was
+// written keeps a handler that is slow to start from doing so.
+//
+// The request's context is canceled once the response is answered whole,
+// once WebView2 releases the stream of a streaming one, and when the
+// window closes.
 type schemeResponse struct {
 	w        *window
 	args     uintptr
@@ -1281,15 +1392,76 @@ type schemeResponse struct {
 	document bool // a page loads, rather than a resource of one
 	status   int
 	header   http.Header
-	body     bytes.Buffer
-	done     bool
+	pipe     *schemestream.Pipe
+	// answered is set once WebView2 has its answer and the deferral is
+	// complete; streaming when that answer is the pipe's stream; done
+	// once the handler is done with the response (Finish, Fail) or the
+	// window closed.
+	answered, streaming, done bool
 }
 
 func (r *schemeResponse) Respond(status int, header map[string][]string) {
+	if r.done || r.answered {
+		return
+	}
 	r.status, r.header = status, header
+	if r.w.closed {
+		r.abort(errDestroyed)
+		return
+	}
+	if r.document && status < 300 && isDownload(r.header) {
+		// WebView2 does not download what it gets from here: the page
+		// stays, and the app serves the URL again into a download.
+		r.answer(http.StatusNoContent, nil, nil)
+		r.pipe.Release() // the handler's writes fail: nothing reads them
+		r.w.h.SchemeDownload(r.url)
+	}
 }
 
-func (r *schemeResponse) Write(p []byte) { r.body.Write(p) }
+// Write is not used: the body goes through WriteBody.
+func (r *schemeResponse) Write([]byte) {}
+
+// WriteBody writes to the pipe, waiting while it is full. It fails once
+// WebView2 no longer reads the response.
+func (r *schemeResponse) WriteBody(p []byte) error { return r.pipe.Write(p) }
+
+// handover answers with the stream of the pipe, which the handler filled
+// (the pipe's onFull, posted to the main thread).
+func (r *schemeResponse) handover() {
+	if r.answered || r.done {
+		return
+	}
+	if r.w.closed {
+		r.abort(errDestroyed)
+		return
+	}
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+	r.answered, r.streaming = true, true
+	size := int64(-1)
+	if n, err := strconv.ParseInt(r.header.Get("Content-Length"), 10, 64); err == nil && n >= 0 {
+		size = n
+	}
+	// The stream cancels the context once WebView2 releases it.
+	r.w.respondStream(r.args, r.deferral, r.status, r.header, newBodyStream(r.pipe, size, r.cancel))
+	release(r.deferral)
+	release(r.args)
+}
+
+// answer answers with a body held whole, and cancels the context. With
+// status 0, it only completes the deferral: WebView2 gets no response.
+func (r *schemeResponse) answer(status int, header http.Header, body []byte) {
+	r.answered = true
+	if !r.w.closed && status != 0 {
+		r.w.respond(r.args, r.deferral, status, header, body)
+	} else {
+		comCall(r.deferral, deferralComplete)
+	}
+	release(r.deferral)
+	release(r.args)
+	r.cancel()
+}
 
 // isDownload reports whether a page response is a file to save: an
 // attachment, or plain bytes.
@@ -1302,43 +1474,60 @@ func (r *schemeResponse) Finish() {
 	if r.done {
 		return
 	}
-	r.done = true
+	r.end()
+	r.pipe.Close() // a streaming body ends after what the pipe holds
+	if r.answered {
+		return
+	}
 	if r.status == 0 {
 		r.status = http.StatusOK
 	}
-	if r.document && r.status < 300 && isDownload(r.header) && !r.w.closed {
-		// WebView2 does not download what it gets from here: the page
-		// stays, and the app serves the URL again into a download.
-		r.w.respond(r.args, r.deferral, http.StatusNoContent, nil, nil)
-		r.w.h.SchemeDownload(r.url)
-		r.release()
-		return
-	}
-	if !r.w.closed {
-		r.w.respond(r.args, r.deferral, r.status, r.header, r.body.Bytes())
-	} else {
-		comCall(r.deferral, deferralComplete)
-	}
-	r.release()
+	r.answer(r.status, r.header, r.pipe.Take())
+	r.pipe.Release()
 }
 
 func (r *schemeResponse) Fail(err error) {
 	if r.done {
 		return
 	}
-	r.done = true
-	if !r.w.closed {
-		r.w.respond(r.args, r.deferral, http.StatusBadGateway, http.Header{"Content-Type": {"text/plain; charset=utf-8"}}, []byte(err.Error()))
-	} else {
-		comCall(r.deferral, deferralComplete)
+	r.end()
+	switch {
+	case r.streaming:
+		r.pipe.Fail(err) // WebView2's reads fail once they took what came before
+	case !r.answered:
+		r.answer(http.StatusBadGateway, http.Header{"Content-Type": {"text/plain; charset=utf-8"}}, []byte(err.Error()))
+		r.pipe.Release()
 	}
-	r.release()
 }
 
-func (r *schemeResponse) release() {
+// abort ends a response whose handler still runs as its window closes:
+// the handler's writes fail and its context is canceled.
+func (r *schemeResponse) abort(err error) {
+	if r.done {
+		return
+	}
+	r.end()
+	switch {
+	case r.streaming:
+		r.pipe.Fail(err)
+	case !r.answered:
+		r.answer(0, nil, nil)
+	}
+	r.pipe.Release()
 	r.cancel()
-	release(r.deferral)
-	release(r.args)
+}
+
+// end records that the handler is done with the response.
+func (r *schemeResponse) end() {
+	r.done = true
+	delete(r.w.schemes, r)
+}
+
+// abortSchemes ends the responses whose handlers still run.
+func (w *window) abortSchemes(err error) {
+	for r := range w.schemes {
+		r.abort(err)
+	}
 }
 
 // openScript makes window.open give WebView2 the URLs of the app's schemes

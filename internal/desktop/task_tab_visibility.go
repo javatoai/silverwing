@@ -2,6 +2,8 @@ package desktop
 
 import "fmt"
 
+var taskContentTabOrder = [...]int{0, 1, 2, taskTagTab, taskFilesTab, taskProjectInstructionsTab, taskServicesTab, taskTerminalTab}
+
 // Reading view IDs are stable across label changes and keep CLI indices intact.
 func normalizeHiddenTaskTabs(hidden []string) []string {
 	set := make(map[string]bool, len(hidden))
@@ -11,19 +13,19 @@ func normalizeHiddenTaskTabs(hidden []string) []string {
 		}
 	}
 	var result []string
-	for index := range tabs {
+	for _, index := range taskContentTabOrder {
 		if id := readingViewForTab(index); set[id] {
 			result = append(result, id)
 		}
 	}
-	if len(result) == len(tabs) {
+	if len(result) == len(taskContentTabOrder) {
 		result = result[1:] // A malformed preference must still leave one page.
 	}
 	return result
 }
 
 func taskContentTabEnabled(hidden []string, index int) bool {
-	if index < 0 || index >= len(tabs) {
+	if !availableTaskContentTab(index) {
 		return false
 	}
 	id := readingViewForTab(index)
@@ -45,17 +47,17 @@ func (s *app) taskContentTabEnabled(index int) bool {
 
 func (s *app) enabledTaskContentTabCount() int {
 	count := 0
-	for index := range tabs {
-		if s.taskContentTabEnabled(index) {
+	for _, index := range taskContentTabOrder {
+		if s.taskContentTabAvailable(index) && s.taskContentTabEnabled(index) {
 			count++
 		}
 	}
 	return count
 }
 
-func firstEnabledTaskContentTab(hidden []string) int {
-	for index := range tabs {
-		if taskContentTabEnabled(hidden, index) {
+func (s *app) firstEnabledTaskContentTab(hidden []string) int {
+	for _, index := range taskContentTabOrder {
+		if s.taskContentTabAvailable(index) && taskContentTabEnabled(hidden, index) {
 			return index
 		}
 	}
@@ -63,11 +65,11 @@ func firstEnabledTaskContentTab(hidden []string) int {
 }
 
 func (s *app) restoredTaskContentTab(index int) int {
-	if s.taskContentTabEnabled(index) {
+	if s.taskContentTabAvailable(index) && s.taskContentTabEnabled(index) {
 		return index
 	}
-	for next := range tabs {
-		if s.taskContentTabEnabled(next) {
+	for _, next := range taskContentTabOrder {
+		if s.taskContentTabAvailable(next) && s.taskContentTabEnabled(next) {
 			return next
 		}
 	}
@@ -76,9 +78,9 @@ func (s *app) restoredTaskContentTab(index int) int {
 
 func (s *app) visibleTaskContentTabs() []int {
 	var visible []int
-	for index := range tabs {
+	for _, index := range taskContentTabOrder {
 		// Explicit navigation may temporarily reveal a hidden active page.
-		if s.taskContentTabEnabled(index) || s.tab == index {
+		if s.taskContentTabAvailable(index) && (s.taskContentTabEnabled(index) || s.tab == index) {
 			visible = append(visible, index)
 		}
 	}
@@ -86,7 +88,7 @@ func (s *app) visibleTaskContentTabs() []int {
 }
 
 func (s *app) setTaskContentTabEnabled(index int, enabled bool) bool {
-	if index < 0 || index >= len(tabs) {
+	if !s.taskContentTabAvailable(index) {
 		return false
 	}
 	if s.taskContentTabEnabled(index) == enabled {
@@ -102,14 +104,14 @@ func (s *app) setTaskContentTabEnabled(index int, enabled bool) bool {
 		return false
 	}
 	hidden := make([]string, 0, len(tabs)-1)
-	for next := range tabs {
+	for _, next := range taskContentTabOrder {
 		if next == index && !enabled || next != index && !s.taskContentTabEnabled(next) {
 			hidden = append(hidden, readingViewForTab(next))
 		}
 	}
 	next := s.tab
 	if !enabled && s.tab == index {
-		next = firstEnabledTaskContentTab(hidden)
+		next = s.firstEnabledTaskContentTab(hidden)
 		if !s.prepareTaskContentTab(next) {
 			return false
 		}
@@ -128,7 +130,10 @@ func (s *app) setTaskContentTabEnabled(index int, enabled bool) bool {
 }
 
 func (s *app) reconcileTaskContentTabs() {
-	if s.page != "tasks" && s.page != "archive" && !s.taskContentTabEnabled(s.tab) {
+	if s.initialGenbuRouteWaiting() || s.tab == taskProjectInstructionsTab && s.loading {
+		return
+	}
+	if !s.taskContentTabAvailable(s.tab) || (s.page != "tasks" && s.page != "archive" && !s.taskContentTabEnabled(s.tab)) {
 		// Leaving a temporarily revealed page restores the user's hidden entry.
 		s.selectTaskContentTab(s.restoredTaskContentTab(s.tab))
 	}

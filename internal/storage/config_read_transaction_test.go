@@ -20,15 +20,18 @@ func TestConfigReadersWaitForWholeShardTransaction(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			config.Groups = append(config.Groups, domain.GroupConfig{ID: "second", Name: "second", TagEnabled: true, Services: []domain.GroupServiceConfig{}})
+			config.Repositories = []domain.RepositoryConfig{{ID: "repo", Name: "repo", RootPath: "C:/repo", GitCommonDirectory: "C:/repo/.git"}}
+			config.Services = []domain.ServiceConfig{{ID: "service", RepositoryID: "repo", DisplayName: "Service", MasterBranch: "origin/main", TestTagBaselineRef: "origin/test", DevelopmentTool: domain.DevelopmentToolIntelliJIdea,
+				Modules: []domain.ServiceModuleConfig{{ID: "default", Name: "default", Strategy: domain.WorkspaceStandardWorktree, TagMode: domain.TagBuildMergeToTargetBranch}}}}
+			config = normalizeConfigCollections(config)
 			release, err := store.acquireMutationLock()
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer release()
-			// Hold the real writer lock after only layout has been committed. A
-			// reader must not decode it with the previous services shard.
-			if err := store.writeShards(shardsFor(config), []string{"layout.json"}); err != nil {
+			// Hold the writer lock while the service still points to a repository
+			// that will only appear in the second shard replacement.
+			if err := store.writeShards(shardsFor(config), []string{"services.json"}); err != nil {
 				t.Fatal(err)
 			}
 			done := make(chan error, 1)
@@ -40,8 +43,8 @@ func TestConfigReadersWaitForWholeShardTransaction(t *testing.T) {
 						done <- errors.New(*snapshot.ReadError)
 						return
 					}
-					if snapshot.Content == nil || strings.Count(*snapshot.Content, `"groupId": "second"`) != 1 {
-						done <- errors.New("raw snapshot missed committed services group")
+					if snapshot.Content == nil || strings.Count(*snapshot.Content, `"id": "repo"`) != 1 || strings.Count(*snapshot.Content, `"id": "service"`) != 1 {
+						done <- errors.New("raw snapshot missed committed repository or service")
 						return
 					}
 					done <- nil
@@ -54,8 +57,8 @@ func TestConfigReadersWaitForWholeShardTransaction(t *testing.T) {
 				} else {
 					observed, readErr = other.Load()
 				}
-				if readErr == nil && len(observed.Groups) != 2 {
-					readErr = errors.New("reader missed committed group")
+				if readErr == nil && (len(observed.Services) != 1 || len(observed.Repositories) != 1) {
+					readErr = errors.New("reader missed committed repository or service")
 				}
 				done <- readErr
 			}()
@@ -64,7 +67,7 @@ func TestConfigReadersWaitForWholeShardTransaction(t *testing.T) {
 				t.Fatalf("reader escaped the active transaction: %v", err)
 			case <-time.After(40 * time.Millisecond):
 			}
-			if err := store.writeShards(shardsFor(config), []string{"services.json"}); err != nil {
+			if err := store.writeShards(shardsFor(config), []string{"workspace.json"}); err != nil {
 				t.Fatal(err)
 			}
 			release()

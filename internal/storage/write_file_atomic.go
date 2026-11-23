@@ -32,11 +32,24 @@ func WriteFileAtomic(path string, data []byte, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
+	return retryFileChange(func() error { return replaceFile(temporaryPath, path) })
+}
+
+// RemoveFileIfPresent retries a temporary Windows sharing conflict.
+func RemoveFileIfPresent(path string) error {
+	err := retryFileChange(func() error { return os.Remove(path) })
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
+func retryFileChange(operation func() error) error {
 	// Windows readers/scanners can briefly hold the target without delete
-	// sharing. Retry only those errors; never remove or truncate the old file.
+	// sharing. Retry the requested operation only for those errors.
 	deadline := time.Now().Add(250 * time.Millisecond)
 	for {
-		err = replaceFile(temporaryPath, path)
+		err := operation()
 		transient := errors.Is(err, syscall.Errno(5)) || errors.Is(err, syscall.Errno(32)) || errors.Is(err, syscall.Errno(33))
 		if err == nil || runtime.GOOS != "windows" || !transient || !time.Now().Before(deadline) {
 			return err

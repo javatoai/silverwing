@@ -3,7 +3,6 @@ package desktop
 import (
 	"testing"
 
-	"silverwing-go/internal/domain"
 	"silverwing-go/internal/workspace"
 )
 
@@ -36,7 +35,7 @@ func TestTaskCreationTargetEditKeepsPreflightAcrossStableFrames(t *testing.T) {
 
 func TestTaskAppendTargetEditKeepsPreflightAcrossStableFrames(t *testing.T) {
 	draft := &taskCreationModuleDraft{taskModuleDraftValues: taskModuleDraftValues{ID: "api", Name: "API", LastName: "API", TargetBranch: "feature/default", LastTargetBranch: "feature/default"}}
-	state := taskAppendNewState(task{branch: "feature/task"}, "services", domain.GroupConfig{})
+	state := taskAppendNewState(task{branch: "feature/task"}, "services")
 	state.moduleData["service"] = map[string]*taskCreationModuleDraft{"api": draft}
 	state.moduleOrder["service"] = []string{"api"}
 	s := &app{

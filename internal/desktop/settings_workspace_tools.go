@@ -3,11 +3,55 @@ package desktop
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 
 	"silverwing-go/internal/application"
+	"silverwing-go/internal/domain"
 
 	"github.com/egoist/mygo/ui"
 )
+
+type taskCreationWorkspaceToolOption struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+	Description string `json:"description"`
+	Available   bool   `json:"available"`
+	Reason      string `json:"reason"`
+}
+
+func normalizeTaskCreationWorkspaceTools(items []taskCreationWorkspaceToolOption, configuredIDs []string) []taskCreationWorkspaceToolOption {
+	result := make([]taskCreationWorkspaceToolOption, 0, len(items)+len(configuredIDs))
+	seen := make(map[string]bool, len(items)+len(configuredIDs))
+	for _, option := range items {
+		option.ID = strings.TrimSpace(option.ID)
+		if option.ID == "" || seen[option.ID] || domain.IsLegacyCursorToolID(option.ID) {
+			continue
+		}
+		if option.DisplayName == "" {
+			option.DisplayName = option.ID
+		}
+		seen[option.ID] = true
+		result = append(result, option)
+	}
+	for _, id := range configuredIDs {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] || domain.IsLegacyCursorToolID(id) {
+			continue
+		}
+		seen[id] = true
+		result = append(result, taskCreationWorkspaceToolOption{ID: id, DisplayName: workspaceToolDisplayName(id), Reason: "当前版本未返回此工具的注册和可用状态"})
+	}
+	return result
+}
+
+func workspaceToolDisplayName(id string) string {
+	switch id {
+	case "codex":
+		return "Codex"
+	default:
+		return id
+	}
+}
 
 func (s *app) requestSettingsWorkspaceTools() {
 	s.act("workspace.tools-options", "", "", "", "", "", map[string]any{"taskCreateToken": "settings-workspace-tools"})
@@ -32,8 +76,6 @@ func (s *app) applySettingsWorkspaceTools(action application.Action, result appl
 		return
 	}
 	state.workspaceTools, state.workspaceToolsLoaded, state.workspaceToolsError = options, true, ""
-	s.taskUnit.stopTaskOpenTools()
-	s.taskUnit.state.taskOpenTools = &taskOpenToolsState{home: s.snapshot.Home, config: s.settingsUnit.state.configJSON, options: options, loaded: true}
 }
 
 func (s *app) settingsWorkspaceTools(c *ui.Context, p palette) {
@@ -43,7 +85,11 @@ func (s *app) settingsWorkspaceTools(c *ui.Context, p palette) {
 		state.workspaceToolsScope = scope
 		s.requestSettingsWorkspaceTools()
 	}
-	settingsHelpCard(c, p, "任务打开工具", "启用后在任务创建窗口和右键菜单中显示，并默认勾选。", func() {
+	settingsHelpCardWithActions(c, p, "任务打开工具", "启用的工具会在任务创建完成后自动打开，也可从任务右键菜单打开。", func() {
+		if settingsCardAction(c, p, "settings-workspace-tools-refresh", "refresh", "重新检查工具") {
+			s.requestSettingsWorkspaceTools()
+		}
+	}, func() {
 		if state.workspaceToolsLoading {
 			settingsMuted(c, p, "正在检查可用工具…")
 		} else if state.workspaceToolsError != "" {
@@ -51,7 +97,7 @@ func (s *app) settingsWorkspaceTools(c *ui.Context, p palette) {
 		} else if state.workspaceToolsLoaded && len(state.workspaceTools) == 0 {
 			settingsMuted(c, p, "当前没有已注册的工作区工具。")
 		}
-		configured := stringArray(s.configArray("defaultWorkspaceToolIds"))
+		configured := domain.WithoutLegacyCursorTool(stringArray(s.configArray("defaultWorkspaceToolIds")))
 		for _, option := range normalizeTaskCreationWorkspaceTools(state.workspaceTools, configured) {
 			tool := option
 			selected := containsString(configured, tool.ID)
@@ -71,9 +117,6 @@ func (s *app) settingsWorkspaceTools(c *ui.Context, p palette) {
 					}
 				})
 			})
-		}
-		if action(c, "settings-workspace-tools-refresh", "refresh", "重新检查工具", p, false) {
-			s.requestSettingsWorkspaceTools()
 		}
 	})
 }

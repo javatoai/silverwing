@@ -14,7 +14,7 @@ func workspaceNativeControlsFixture(t *testing.T, width int, dark bool) (*worksp
 	t.Helper()
 	state := reviewRendererTestState(false)
 	comparison := state.Preview.Comparison
-	for _, index := range []int{20, 200} {
+	for _, index := range []int{20, 238} {
 		row := &comparison.Rows[index]
 		row.OldLine.Kind = workspace.PreviewDeleted
 		row.NewLine.Kind = workspace.PreviewAdded
@@ -41,6 +41,22 @@ func workspaceNativeControlsFixture(t *testing.T, width int, dark bool) (*worksp
 	return state, tester
 }
 
+func TestWorkspaceNativePreparedHunkKeepsGitEndOfFileRange(t *testing.T) {
+	oldText, newText := "line\n", "line"
+	comparison := &workspace.WorkspaceFileComparison{Rows: []workspace.WorkspaceFileComparisonRow{{
+		OldLine: &workspace.WorkspaceFileComparisonLine{Kind: workspace.PreviewDeleted, LineNumber: 1, Text: "line"},
+		NewLine: &workspace.WorkspaceFileComparisonLine{Kind: workspace.PreviewAdded, LineNumber: 1, Text: "line"},
+	}}}
+	hunks, ok := workspacePreparedDiffHunks(comparison)
+	if want := (editor.DiffHunk{OldEnd: 1, NewEnd: 1}); !ok || len(hunks) != 1 || hunks[0] != want {
+		t.Fatalf("Git newline change projected to %v, want %v", hunks, want)
+	}
+	view := newDiffNativeViewState(oldText, newText)
+	if !view.view.SetPreparedHunks(hunks) {
+		t.Fatal("SDK rejected the Git range for a final newline change")
+	}
+}
+
 func TestWorkspaceNativeContextModeActuallyCollapsesUnchangedLines(t *testing.T) {
 	state, tester := workspaceNativeControlsFixture(t, 1100, false)
 	state.NativeDiff.view.GoToHunk(1)
@@ -48,7 +64,7 @@ func TestWorkspaceNativeContextModeActuallyCollapsesUnchangedLines(t *testing.T)
 	state.ContextLinesOnly = true
 	tester.Frame()
 	if state.NativeDiff.view.ExpandUnchanged || state.NativeDiff.view.ContextLines != 3 || !tester.HasText("行相同内容已折叠") {
-		t.Fatalf("context mode did not collapse unchanged source with three context lines: expand=%v context=%d", state.NativeDiff.view.ExpandUnchanged, state.NativeDiff.view.ContextLines)
+		t.Fatalf("context mode did not collapse unchanged source with three context lines: expand=%v context=%d scroll=%v texts=%q", state.NativeDiff.view.ExpandUnchanged, state.NativeDiff.view.ContextLines, state.NativeDiff.view.ScrollY(), tester.Texts())
 	}
 	if hunk, _ := state.NativeDiff.view.CurrentHunk(); hunk != 1 {
 		t.Fatalf("changing context mode lost the current source hunk: %d", hunk)
@@ -66,9 +82,13 @@ func TestWorkspaceNativeHunkControlsFollowCaretAndKeyboardWrap(t *testing.T) {
 	tester.ClickAt(850, 300)
 	state.NativeDiff.view.GoToHunk(0)
 	tester.Frame()
-	tester.Key(ui.Alt, ui.KeyF5)
+	if ui.Cmd == ui.Super {
+		tester.Key(ui.Cmd, ui.KeyF8)
+	} else {
+		tester.Key(ui.Alt, ui.KeyF5)
+	}
 	if hunk, inside := state.NativeDiff.view.CurrentHunk(); hunk != 1 || !inside {
-		t.Fatalf("Alt+F5 did not move the native caret: hunk=%d inside=%v", hunk, inside)
+		t.Fatalf("the next-change shortcut did not move the native caret: hunk=%d inside=%v", hunk, inside)
 	}
 	if state.DiffHunkIndex != 1 || !state.DiffHunkSelected || !tester.HasText("2 / 3") {
 		t.Fatalf("counter ignored native keyboard navigation: index=%d selected=%v texts=%q", state.DiffHunkIndex, state.DiffHunkSelected, tester.Texts())
@@ -91,6 +111,58 @@ func TestWorkspaceNativeHunkControlsFollowCaretAndKeyboardWrap(t *testing.T) {
 	tester.Frame()
 	if hunk, _ := state.NativeDiff.view.CurrentHunk(); hunk != -1 || state.DiffHunkSelected {
 		t.Fatalf("source before the first change retained a selected hunk: caret=%d selected=%v", hunk, state.DiffHunkSelected)
+	}
+}
+
+func TestWorkspaceNativeHunkButtonsReturnKeyboardToActivePane(t *testing.T) {
+	for _, side := range []struct {
+		name string
+		pane editor.DiffSide
+		x    float32
+	}{
+		{"old", editor.DiffOld, 250},
+		{"new", editor.DiffNew, 850},
+	} {
+		t.Run(side.name, func(t *testing.T) {
+			state, tester := workspaceNativeControlsFixture(t, 1100, false)
+			tester.ClickAt(side.x, 300)
+			view := &state.NativeDiff.view
+			if view.ActiveSide() != side.pane {
+				t.Fatal("fixture did not select the expected pane")
+			}
+			view.GoToHunk(0)
+			tester.Frame()
+			for _, button := range []string{"下一处", "上一处"} {
+				if err := tester.Click(button); err != nil {
+					t.Fatal(err)
+				}
+				line := view.CursorPos().Line
+				tester.Key(0, ui.KeyDown)
+				if view.ActiveSide() != side.pane || view.CursorPos().Line != line+1 {
+					t.Fatalf("%q did not leave the keyboard in the %s pane: side=%v line=%d, want %d", button, side.name, view.ActiveSide(), view.CursorPos().Line, line+1)
+				}
+			}
+		})
+	}
+}
+
+func TestWorkspaceNativeHunkNavigationCentersLastChange(t *testing.T) {
+	state, tester := workspaceNativeControlsFixture(t, 1100, false)
+	if err := tester.Click("上一处"); err != nil {
+		t.Fatal(err)
+	}
+	tester.Frame()
+	view := &state.NativeDiff.view
+	if hunk, inside := view.CurrentHunk(); hunk != 2 || !inside {
+		t.Fatalf("previous change did not wrap to the last hunk: index=%d inside=%v", hunk, inside)
+	}
+	viewport := view.ViewportHeight()
+	end := view.LineTop(editor.DiffNew, view.New.LineCount()) - viewport
+	y := view.ScrollY()
+	changeY := view.LineTop(editor.DiffNew, view.CursorPos().Line) - y
+	lineHeight := float64(textEditorFontSize * textEditorLineHeight)
+	if viewport <= 0 || y <= end || changeY < viewport/2-lineHeight || changeY > viewport/2+lineHeight {
+		t.Fatalf("last hunk did not center past the end of the source: scroll=%v end=%v change=%v viewport=%v", y, end, changeY, viewport)
 	}
 }
 
@@ -135,7 +207,7 @@ func TestWorkspaceNativeReadingButtonsUseSDKCommands(t *testing.T) {
 	if findBar == nil || findBar.CanReplace() {
 		t.Fatal("find button did not open the SDK's read-only find bar")
 	}
-	*findBar.Query() = "line_200"
+	*findBar.Query() = "line_238"
 	findBar.Next()
 	tester.Frame()
 	if state.DiffHunkIndex != 2 || !tester.HasText("3 / 3") {

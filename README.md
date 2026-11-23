@@ -111,7 +111,9 @@ Genbu 和任务资料 Git 同步均为可选能力。接入它们或 Meegle 之�
 | Codex／Cursor | 携带相应 Agent 上下文打开任务工作区 | 安装并配置需要使用的工具 |
 | Meegle／飞书项目 | 需求列表、任务创建、需求详情与评论 | 接入 Meegle CLI 和项目账号 |
 | 资料 Git 同步 | 按配置周期提交、拉取并推送任务资料 | 配置 Git 仓库并选择已有远程分支 |
-| Genbu | 查看已配置任务 Tag 的构建和 UAT 状态 | 配置团队使用的 Genbu 集成 |
+| Genbu / Dragon | 查看构建和 UAT 状态，提交青龙提测审批 | 在「设置 → 工具与连接 → 平台连接」使用原工具的共用账号并测试所需连接 |
+
+Genbu 和 Dragon 使用 `~/.snowball-config/credentials.json`（Windows 为 `%USERPROFILE%\.snowball-config\credentials.json`）。点击「保存账号」会更新该文件，所有 `--conf-dir` 共用账号，各自保存连接开关。
 
 Silverwing 管理代码工作区及其上下文。服务进程、数据库、容器、凭据和测试环境仍由各项目自行管理。
 

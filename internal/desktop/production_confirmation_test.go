@@ -102,7 +102,7 @@ func TestProductionAllConfirmationsUseSummaryAndKeepOriginalPayload(t *testing.T
 					t.Fatalf("summary lost confirmed identity %s", value)
 				}
 			}
-			if !strings.Contains(d.Detail, b.Target.RepositoryID) || !strings.Contains(d.Detail, b.Target.GroupID) {
+			if !strings.Contains(d.Detail, b.Target.RepositoryID) || !strings.Contains(d.Detail, b.Target.ServiceID) {
 				t.Fatal("details lost original repository identity")
 			}
 			tester := productionIterationTester(s, 960, false)
@@ -218,7 +218,7 @@ func TestProductionContentRecheckOnlyReadsAndKeepsManualBranch(t *testing.T) {
 }
 
 func TestProductionConfirmationRejectsChangedContextAndOldDialogs(t *testing.T) {
-	for _, changed := range []string{"none", "page", "service", "batch", "manual", "home", "config", "unrelated-config", "selection", "replaced"} {
+	for _, changed := range []string{"none", "page", "service", "batch", "preview", "generation", "home", "config", "task-root", "unrelated-config", "selection", "replaced"} {
 		t.Run(changed, func(t *testing.T) {
 			s, v, _ := productionFixture(t)
 			s.win = &mygo.Window{}
@@ -234,20 +234,25 @@ func TestProductionConfirmationRejectsChangedContextAndOldDialogs(t *testing.T) 
 				v.BatchID = "another"
 			case "selection":
 				v.Selection.ServiceID = "another"
-			case "manual":
-				v.ManualTag = "another"
+			case "preview":
+				v.Preview = nil
+			case "generation":
+				v.Generation++
 			case "home":
 				s.snapshot.Home = "another"
-			case "config", "unrelated-config":
+			case "config", "task-root", "unrelated-config":
 				var c domain.AppConfig
 				if err := json.Unmarshal([]byte(s.settingsUnit.state.configJSON), &c); err != nil {
 					t.Fatal(err)
 				}
 				value := "another"
-				if changed == "config" {
+				switch changed {
+				case "config":
 					c.GitExecutablePath = &value
-				} else {
+				case "task-root":
 					c.TaskRoot = &value
+				case "unrelated-config":
+					c.RequirementMaterialsSubdirectory = &value
 				}
 				data, _ := json.Marshal(c)
 				s.settingsUnit.state.configJSON = string(data)

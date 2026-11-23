@@ -266,7 +266,7 @@ func TestMaterialsGitLoginRequiresHTTPSAndDiscardsOldScope(t *testing.T) {
 	call.reply <- materialsBranchReply{err: &workspace.GitRemoteFailure{Kind: workspace.GitRemoteAuthentication}}
 	materialsGitNextUpdate(t, updates)
 	tt.Frame()
-	if !tt.HasText("确认改用 HTTPS") || !tt.HasText("https://git.example.invalid/team/docs.git") || tt.HasText("登录并验证") || tt.HasText("打开终端") {
+	if !tt.HasText("更新本地仓库的远程地址后重新选择目录") || !tt.HasText("https://git.example.invalid/team/docs.git") || tt.HasText("登录并验证") || tt.HasText("打开终端") {
 		t.Fatalf("HTTP recovery skipped confirmation: %v", tt.Texts())
 	}
 	s.beginMaterialsGitLogin()
@@ -274,7 +274,6 @@ func TestMaterialsGitLoginRequiresHTTPSAndDiscardsOldScope(t *testing.T) {
 		t.Fatal("HTTP started explicit login")
 	}
 	setURL("https://git.example.invalid/team/docs.git")
-	syncMaterialsGitTestSettingsInputs(s, config)
 	s.loadMaterialsGitBranches(false)
 	call = nextMaterialsBranchCall(t, branches)
 	call.reply <- materialsBranchReply{err: &workspace.GitRemoteFailure{Kind: workspace.GitRemoteAuthentication}}
@@ -282,7 +281,6 @@ func TestMaterialsGitLoginRequiresHTTPSAndDiscardsOldScope(t *testing.T) {
 	s.beginMaterialsGitLogin()
 	old := nextMaterialsGitLoginCall(t, b)
 	setURL("https://git.example.invalid/team/replacement.git")
-	syncMaterialsGitTestSettingsInputs(s, config)
 	s.observeMaterialsGitBranches()
 	s.loadMaterialsGitBranches(false)
 	select {
@@ -298,11 +296,6 @@ func TestMaterialsGitLoginRequiresHTTPSAndDiscardsOldScope(t *testing.T) {
 	if !s.materialsGitBranchReady("master") || len(branches.calls) != 0 || s.lastMessage != "" {
 		t.Fatal("old verification changed the current branch state")
 	}
-}
-
-func syncMaterialsGitTestSettingsInputs(s *app, config domain.AppConfig) {
-	input := s.inputs["setting:materialsGitSync:repositoryUrl"]
-	*input = config.MaterialsGitSettings().RepositoryURL
 }
 
 func ptrForMaterialsBranchTest(value string) *string { return &value }

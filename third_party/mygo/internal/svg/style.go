@@ -16,6 +16,9 @@ const (
 	specColor
 	specCurrent
 	specURL
+	// The fill and the stroke of the element a marker is drawn on.
+	specContextFill
+	specContextStroke
 )
 
 // paintSpec is a fill or stroke as written: none, a color, currentColor,
@@ -46,6 +49,17 @@ type style struct {
 	colorSet    bool
 	visible     bool
 	strokeFirst bool
+	// The font and the layout of text.
+	fontFamily    string
+	fontSize      float64
+	fontWeight    int
+	italic        bool
+	letterSpacing float64
+	anchor        uint8 // text-anchor
+	baseline      uint8 // dominant-baseline
+	preserve      bool  // white-space that keeps spaces
+	// The markers of paths, lines, polylines and polygons.
+	markerStart, markerMid, markerEnd string
 
 	// Not inherited.
 	opacity     float64
@@ -55,7 +69,27 @@ type style struct {
 	maskAlpha   bool
 	stopColor   paintSpec
 	stopOpacity float64
+	align       uint8 // alignment-baseline, which overrides baseline
+	overflow    bool  // overflow is visible
 }
+
+// Values of text-anchor.
+const (
+	anchorStart uint8 = iota
+	anchorMiddle
+	anchorEnd
+)
+
+// Baselines of dominant-baseline and alignment-baseline.
+const (
+	baselineAuto uint8 = iota // the alphabetic baseline
+	baselineMiddle
+	baselineCentral
+	baselineHanging
+	baselineTop
+	baselineBottom
+	baselineMath
+)
 
 func initialStyle() style {
 	return style{
@@ -63,8 +97,12 @@ func initialStyle() style {
 		fillOpacity: 1, strokeOpacity: 1, strokeWidth: 1, miterLimit: 4,
 		visible: true, opacity: 1, display: true,
 		stopColor: paintSpec{kind: specColor, color: black}, stopOpacity: 1,
+		fontSize: 16, fontWeight: 400,
 	}
 }
+
+// initial is the initial value of every property.
+var initial = initialStyle()
 
 // properties are the properties that attributes, style sheets and style
 // attributes set.
@@ -75,6 +113,19 @@ var properties = map[string]bool{
 	"opacity": true, "color": true, "display": true, "visibility": true, "paint-order": true,
 	"clip-path": true, "clip-rule": true, "mask": true, "mask-type": true,
 	"stop-color": true, "stop-opacity": true,
+	"font": true, "font-family": true, "font-size": true, "font-weight": true, "font-style": true,
+	"letter-spacing": true, "text-anchor": true, "dominant-baseline": true, "alignment-baseline": true,
+	"white-space": true, "marker": true, "marker-start": true, "marker-mid": true, "marker-end": true,
+	"overflow": true,
+}
+
+// inherited reports whether a property is inherited.
+func inherited(name string) bool {
+	switch name {
+	case "opacity", "display", "clip-path", "mask", "mask-type", "stop-color", "stop-opacity", "alignment-baseline", "overflow":
+		return false
+	}
+	return true
 }
 
 // computeStyle computes the style of e, a child of an element of style
@@ -83,11 +134,20 @@ func computeStyle(e *elem, parent *style, vw, vh float64) style {
 	s := *parent
 	s.opacity, s.display, s.clipPath, s.mask, s.maskAlpha = 1, true, "", "", false
 	s.stopColor, s.stopOpacity = paintSpec{kind: specColor, color: black}, 1
+	s.align, s.overflow = baselineAuto, false
 	diag := math.Sqrt((vw*vw + vh*vh) / 2)
 	for _, d := range e.props {
 		v := d.value
-		if v == "inherit" {
+		switch v {
+		case "inherit":
 			s.inherit(d.name, parent)
+			continue
+		case "initial", "unset":
+			if v == "unset" && inherited(d.name) {
+				s.inherit(d.name, parent)
+			} else {
+				s.inherit(d.name, &initial)
+			}
 			continue
 		}
 		switch d.name {
@@ -174,9 +234,174 @@ func computeStyle(e *elem, parent *style, vw, vh float64) style {
 			} else if c, ok := parseColor(v); ok {
 				s.stopColor = paintSpec{kind: specColor, color: c}
 			}
+		case "font":
+			s.font(v, parent)
+		case "font-family":
+			s.fontFamily = v
+		case "font-size":
+			if n, ok := parseFontSize(v, parent.fontSize); ok {
+				s.fontSize = n
+			}
+		case "font-weight":
+			if w, ok := parseWeight(v, parent.fontWeight); ok {
+				s.fontWeight = w
+			}
+		case "font-style":
+			s.italic = v == "italic" || strings.HasPrefix(v, "oblique")
+		case "letter-spacing":
+			if v == "normal" {
+				s.letterSpacing = 0
+			} else if l, ok := parseEm(v, s.fontSize); ok {
+				s.letterSpacing = l
+			}
+		case "text-anchor":
+			switch v {
+			case "start":
+				s.anchor = anchorStart
+			case "middle":
+				s.anchor = anchorMiddle
+			case "end":
+				s.anchor = anchorEnd
+			}
+		case "dominant-baseline":
+			if b, ok := parseBaseline(v); ok {
+				s.baseline = b
+			}
+		case "alignment-baseline":
+			if b, ok := parseBaseline(v); ok {
+				s.align = b
+			}
+		case "white-space":
+			s.preserve = strings.HasPrefix(v, "pre") || v == "break-spaces"
+		case "marker":
+			id := urlID(v)
+			s.markerStart, s.markerMid, s.markerEnd = id, id, id
+		case "marker-start":
+			s.markerStart = urlID(v)
+		case "marker-mid":
+			s.markerMid = urlID(v)
+		case "marker-end":
+			s.markerEnd = urlID(v)
+		case "overflow":
+			s.overflow = v == "visible" || v == "auto"
 		}
 	}
 	return s
+}
+
+// font sets the properties the font shorthand does: a style and a weight,
+// a size with an optional line height, and the families.
+func (s *style) font(v string, parent *style) {
+	f := strings.Fields(v)
+	for i, t := range f {
+		size, _, _ := strings.Cut(t, "/")
+		if n, ok := parseFontSize(size, parent.fontSize); ok {
+			s.fontSize = n
+			rest := f[i+1:]
+			if len(rest) > 0 && strings.HasPrefix(rest[0], "/") {
+				rest = rest[1:] // a line height after a space
+			}
+			s.fontFamily = strings.Join(rest, " ")
+			s.italic, s.fontWeight = false, 400
+			for _, k := range f[:i] {
+				if k == "italic" || k == "oblique" {
+					s.italic = true
+				} else if w, ok := parseWeight(k, parent.fontWeight); ok {
+					s.fontWeight = w
+				}
+			}
+			return
+		}
+	}
+}
+
+// parseFontSize parses a font size: a length, a percentage or em of the
+// parent's, or a keyword.
+func parseFontSize(v string, parent float64) (float64, bool) {
+	switch v {
+	case "larger":
+		return parent * 1.2, true
+	case "smaller":
+		return parent / 1.2, true
+	case "xx-small":
+		return 9, true
+	case "x-small":
+		return 10, true
+	case "small":
+		return 13, true
+	case "medium":
+		return 16, true
+	case "large":
+		return 18, true
+	case "x-large":
+		return 24, true
+	case "xx-large":
+		return 32, true
+	}
+	if n, ok := parseEm(v, parent); ok && n >= 0 {
+		return n, true
+	}
+	return 0, false
+}
+
+// parseEm parses a length with em and percentages of em.
+func parseEm(v string, em float64) (float64, bool) {
+	l := strings.ToLower(v)
+	if n, ok := parseNumber(strings.TrimSuffix(l, "em")); ok && strings.HasSuffix(l, "em") && !strings.HasSuffix(l, "rem") {
+		return n * em, true
+	}
+	return parseLength(v, em)
+}
+
+// parseWeight parses a font weight, bolder and lighter than the parent's
+// as CSS's table says.
+func parseWeight(v string, parent int) (int, bool) {
+	switch v {
+	case "normal":
+		return 400, true
+	case "bold":
+		return 700, true
+	case "bolder":
+		switch {
+		case parent < 350:
+			return 400, true
+		case parent < 550:
+			return 700, true
+		}
+		return 900, true
+	case "lighter":
+		switch {
+		case parent < 550:
+			return 100, true
+		case parent < 750:
+			return 400, true
+		}
+		return 700, true
+	}
+	if n, ok := parseNumber(v); ok && n >= 1 && n <= 1000 {
+		return int(n), true
+	}
+	return 0, false
+}
+
+func parseBaseline(v string) (uint8, bool) {
+	switch v {
+	case "auto", "alphabetic", "baseline":
+		return baselineAuto, true
+	case "middle":
+		return baselineMiddle, true
+	case "central":
+		return baselineCentral, true
+	case "hanging":
+		return baselineHanging, true
+	case "text-top", "text-before-edge", "before-edge":
+		return baselineTop, true
+	case "text-bottom", "text-after-edge", "after-edge", "ideographic":
+		return baselineBottom, true
+	case "mathematical":
+		return baselineMath, true
+	}
+	return 0, false
 }
 
 // inherit takes a property from the parent's style, undoing what an
@@ -227,6 +452,36 @@ func (s *style) inherit(name string, p *style) {
 		s.stopColor = p.stopColor
 	case "stop-opacity":
 		s.stopOpacity = p.stopOpacity
+	case "font":
+		s.fontFamily, s.fontSize, s.fontWeight, s.italic = p.fontFamily, p.fontSize, p.fontWeight, p.italic
+	case "font-family":
+		s.fontFamily = p.fontFamily
+	case "font-size":
+		s.fontSize = p.fontSize
+	case "font-weight":
+		s.fontWeight = p.fontWeight
+	case "font-style":
+		s.italic = p.italic
+	case "letter-spacing":
+		s.letterSpacing = p.letterSpacing
+	case "text-anchor":
+		s.anchor = p.anchor
+	case "dominant-baseline":
+		s.baseline = p.baseline
+	case "alignment-baseline":
+		s.align = p.align
+	case "white-space":
+		s.preserve = p.preserve
+	case "marker":
+		s.markerStart, s.markerMid, s.markerEnd = p.markerStart, p.markerMid, p.markerEnd
+	case "marker-start":
+		s.markerStart = p.markerStart
+	case "marker-mid":
+		s.markerMid = p.markerMid
+	case "marker-end":
+		s.markerEnd = p.markerEnd
+	case "overflow":
+		s.overflow = p.overflow
 	}
 }
 
@@ -267,6 +522,10 @@ func parsePaint(v string) (paintSpec, bool) {
 		return paintSpec{kind: specNone}, true
 	case strings.EqualFold(v, "currentColor"):
 		return paintSpec{kind: specCurrent}, true
+	case v == "context-fill":
+		return paintSpec{kind: specContextFill}, true
+	case v == "context-stroke":
+		return paintSpec{kind: specContextStroke}, true
 	case strings.HasPrefix(v, "url("):
 		id := urlID(v)
 		if id == "" {
@@ -275,7 +534,7 @@ func parsePaint(v string) (paintSpec, bool) {
 		p := paintSpec{kind: specURL, id: id}
 		if rest := strings.TrimSpace(v[strings.IndexByte(v, ')')+1:]); rest != "" {
 			fb, ok := parsePaint(rest)
-			if !ok || fb.kind == specURL {
+			if !ok || fb.kind >= specURL {
 				return paintSpec{}, false
 			}
 			p.fallback, p.color = fb.kind, fb.color

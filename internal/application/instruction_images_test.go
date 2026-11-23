@@ -109,7 +109,7 @@ func TestInstructionImageImportRejectsStaleTaskAndClientDestinations(t *testing.
 			case "stale-path":
 				action.Payload["taskPath"] = t.TempDir()
 			case "generated-document":
-				action.Path = workspace.AgentContextFileName
+				action.Path = workspace.AgentRouterFileName
 			case "foreign-document":
 				action.Path = filepath.Join(t.TempDir(), workspace.AgentRulesFileName)
 			case "client-root":

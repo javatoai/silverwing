@@ -96,6 +96,46 @@ func TestSplit(t *testing.T) {
 	if size != 70 {
 		t.Errorf("dragged 20 DIPs right from over the first pane, it is %v wide", size)
 	}
+	// The release's own move moves it too.
+	tt.Press(73, y)
+	tt.Move(103, y)
+	tt.Release(133, y)
+	if size != 130 {
+		t.Errorf("let go 60 DIPs right, the first pane is %v wide", size)
+	}
+}
+
+// TestSplitDragKeepsOvershoot checks that a drag past a pane's limit
+// keeps how far it went: coming back moves the divider only once the
+// pointer is over it again (#1474).
+func TestSplitDragKeepsOvershoot(t *testing.T) {
+	size := float32(120)
+	tt := coreNewTester(func(c *context) {
+		coreSplit(c, &size, func() { coreText(c, "left") }, func() { coreText(c, "right") }).Fill()
+	}, 400, 200)
+	x, y := float32(123), float32(100)
+	tt.Press(x, y)
+	// 80 DIPs to the first pane's least, 40, and 200 past it.
+	tt.Move(x-280, y)
+	if size != 40 {
+		t.Fatalf("dragged past the least, the first pane is %v wide", size)
+	}
+	tt.Move(x-130, y)
+	if size != 40 {
+		t.Errorf("150 DIPs back, still 50 past the divider, the first pane is %v wide", size)
+	}
+	tt.Move(x-30, y)
+	if size != 90 {
+		t.Errorf("100 more back, 50 over the divider, the first pane is %v wide", size)
+	}
+	tt.Release(x-30, y)
+	// The next drag starts afresh.
+	tt.Press(93, y)
+	tt.Move(113, y)
+	tt.Release(113, y)
+	if size != 110 {
+		t.Errorf("a new drag of 20 DIPs right, the first pane is %v wide", size)
+	}
 }
 
 func TestSplitVertical(t *testing.T) {
@@ -119,6 +159,111 @@ func TestSplitVertical(t *testing.T) {
 	tt.Release(100, 101)
 	if size != 100 {
 		t.Errorf("dragged 40 DIPs down, the first pane is %v high", size)
+	}
+}
+
+// TestSplitResetOnDoubleClick restores the size SplitReset chose, while a
+// single click keeps the one the user dragged to.
+func TestSplitResetOnDoubleClick(t *testing.T) {
+	size := float32(120)
+	tt := coreNewTester(func(c *context) {
+		coreSplit(c, &size, func() { coreText(c, "left") }, func() { coreText(c, "right") }).SplitReset(220).Fill()
+	}, 400, 200)
+	drag(tt, 121, 100, 171, 100)
+	if size != 170 {
+		t.Fatalf("dragged to 170, the first pane is %v", size)
+	}
+	tt.ClickAt(171, 100)
+	if size != 170 {
+		t.Errorf("a click reset the first pane to %v", size)
+	}
+	tt.ClickAt(171, 100)
+	if size != 220 {
+		t.Errorf("double click on the divider: first pane %v, want 220", size)
+	}
+	if r, _ := tt.Find("right"); r.X != 221 {
+		t.Errorf("the second pane starts at %v after the reset, want 221", r.X)
+	}
+}
+
+// TestSplitResetThroughTheFacade is TestSplitResetOnDoubleClick through
+// the public API, whose constructor applies input before the chained
+// SplitReset of that build runs: the value the build before set is the one
+// the input applies by.
+func TestSplitResetThroughTheFacade(t *testing.T) {
+	size := float32(120)
+	tt := NewTester(func(c *Context) {
+		Split(c, &size, func() { Text(c, "left") }, func() { Text(c, "right") }).SplitReset(220).Fill()
+	}, 400, 200)
+	drag(tt, 121, 100, 171, 100)
+	if size != 170 {
+		t.Fatalf("dragged to 170, the first pane is %v", size)
+	}
+	tt.ClickAt(171, 100)
+	tt.ClickAt(171, 100)
+	if size != 220 {
+		t.Errorf("double click on the divider: first pane %v, want 220", size)
+	}
+	if r, _ := tt.Find("right"); r.X != 221 {
+		t.Errorf("the second pane starts at %v after the reset, want 221", r.X)
+	}
+}
+
+// TestSplitPercentResetOnDoubleClick resets a percent split in percent,
+// not DIPs.
+func TestSplitPercentResetOnDoubleClick(t *testing.T) {
+	firstPercent := float32(75)
+	tt := coreNewTester(func(c *context) {
+		coreSplitVerticalPercent(c, &firstPercent, func() { coreText(c, "top") }, func() { coreText(c, "bottom") }).SplitReset(50).Fill()
+	}, 300, 401)
+	drag(tt, 100, 301, 100, 101)
+	if firstPercent != 25 {
+		t.Fatalf("dragged to a quarter, the first pane takes %v%%", firstPercent)
+	}
+	tt.ClickAt(100, 101)
+	tt.ClickAt(100, 101)
+	if firstPercent != 50 {
+		t.Errorf("double click on the divider: first pane takes %v%%, want 50", firstPercent)
+	}
+	if r := at(t, tt, "bottom"); r.Y != 201 {
+		t.Errorf("the second pane starts at %v after the reset, want 201", r.Y)
+	}
+}
+
+// TestSplitResetKeepsSizeForLater keeps a size the window is too small to
+// show, as a press on the divider does, so the pane takes it back when the
+// window grows.
+func TestSplitResetKeepsSizeForLater(t *testing.T) {
+	size := float32(120)
+	tt := coreNewTester(func(c *context) {
+		coreSplit(c, &size, func() { coreText(c, "left") }, func() { coreText(c, "right") }).SplitReset(220).Fill()
+	}, 200, 200)
+	tt.ClickAt(121, 100)
+	tt.ClickAt(121, 100)
+	if size != 220 {
+		t.Fatalf("double click in a window 200 wide: first pane %v, want 220", size)
+	}
+	if r := at(t, tt, "right"); r.X != 160 {
+		t.Errorf("the second pane starts at %v in a window 200 wide, want 160", r.X)
+	}
+	tt.SetSize(400, 200)
+	if r := at(t, tt, "right"); r.X != 221 {
+		t.Errorf("made wide again, the second pane starts at %v, want 221", r.X)
+	}
+}
+
+// TestSplitWithoutResetKeepsSizeOnDoubleClick leaves a split without
+// SplitReset as it was.
+func TestSplitWithoutResetKeepsSizeOnDoubleClick(t *testing.T) {
+	size := float32(120)
+	tt := coreNewTester(func(c *context) {
+		coreSplit(c, &size, func() { coreText(c, "left") }, func() { coreText(c, "right") }).Fill()
+	}, 400, 200)
+	drag(tt, 121, 100, 171, 100)
+	tt.ClickAt(171, 100)
+	tt.ClickAt(171, 100)
+	if size != 170 {
+		t.Errorf("a double click without SplitReset changed the first pane to %v", size)
 	}
 }
 
@@ -310,6 +455,30 @@ func TestNumberInput(t *testing.T) {
 	}
 	if v != 10 {
 		t.Errorf("Up past the top: %v", v)
+	}
+}
+
+// A width given to a NumberInput or DecimalInput sizes the whole input,
+// buttons and all: the field gives up the room the buttons need rather
+// than pushing them over what comes after.
+func TestNumberInputsKeepToTheirWidth(t *testing.T) {
+	n, d := 600.0, "600"
+	for _, input := range []func(c *context) *node{
+		func(c *context) *node { return coreNumberInput(c, &n, 100, 2000, 100) },
+		func(c *context) *node { return coreDecimalInput(c, &d, "100", "2000", "100") },
+	} {
+		tt := coreNewTester(func(c *context) {
+			coreRow(c).Padding(10).AlignItems(Center).Children(func() {
+				input(c).Width(90).Label("Wait")
+				coreText(c, "after")
+			})
+		}, 400, 100)
+		field, _ := tt.Find("Wait")
+		plus, _ := tt.Find("Increase")
+		after, _ := tt.Find("after")
+		if right := plus.X + plus.W; right > field.X+90 || right > after.X {
+			t.Errorf("the + button ends at x %.0f, past the input's 90 (from x %.0f) and the text after it (from x %.0f)", right, field.X, after.X)
+		}
 	}
 }
 

@@ -34,6 +34,9 @@ type Completion struct {
 	Kind   CompletionKind
 	// Insert replaces the word before the caret, Label when empty.
 	Insert string
+	// Snippet inserts a parsed template, overriding Insert and Label.
+	// Kind alone only chooses an icon; it never interprets Insert.
+	Snippet *Snippet
 	// Documentation shows beside the list for the completion chosen.
 	Documentation string
 	// FilterText is matched instead of Label when set.
@@ -87,12 +90,20 @@ const (
 type Inlay struct {
 	Offset int
 	Text   string
+	// Trailing marks text at the end of a line, such as a diagnostic or
+	// a blame: the caret stays before it and a selection to the end of
+	// the line does not cover it, as for a suggestion.
+	Trailing bool
+	// Ellipsis shortens trailing text to the room left on its last display
+	// row rather than wrapping it onto another row. Empty disables elision.
+	Ellipsis string
 }
 
 // completions is the list of completions the editor shows.
 type completions struct {
 	shown    bool
 	at       int // where the word being completed starts
+	caret    int // where the caret after it is
 	items    []Completion
 	filtered []int
 	scores   []int
@@ -120,6 +131,19 @@ func (cc *completions) step(d int) {
 
 func (cc *completions) moved(cs []change) {
 	cc.at = mapOffset(cc.at, cs, biasLeft)
+	cc.caret = mapOffset(cc.caret, cs, biasRight)
+}
+
+// completing reports whether the completions are open, closing those
+// whose caret went elsewhere than by typing, as one a command adds on
+// another line: the word they complete is before it no more, and
+// accepting one would replace the text from the word to the caret.
+func (ed *editor) completing() bool {
+	cc := &ed.complete
+	if p := ed.primary(); cc.shown && (!p.empty() || p.head != cc.caret) {
+		cc.close()
+	}
+	return cc.open()
 }
 
 // wordStartBefore returns where the word before off starts.
@@ -153,6 +177,7 @@ func (ed *editor) requestCompletions(explicit bool) bool {
 		ed.complete.close()
 	}
 	if ed.complete.shown && ed.complete.at == start && len(ed.complete.items) > 0 {
+		ed.complete.caret = p.head
 		ed.complete.filter(prefix)
 		if len(ed.complete.filtered) > 0 || !explicit {
 			if len(ed.complete.filtered) == 0 {
@@ -161,7 +186,7 @@ func (ed *editor) requestCompletions(explicit bool) bool {
 			return true
 		}
 	}
-	ed.complete.at = start
+	ed.complete.at, ed.complete.caret = start, p.head
 	ed.complete.request = true
 	ed.complete.version = ed.view.version
 	ed.o.onCompletion(CompletionRequest{Offset: p.head, Prefix: prefix, Version: ed.view.version, Explicit: explicit})
@@ -180,7 +205,7 @@ func (ed *editor) showCompletions(at int, items []Completion) {
 	if at >= 0 && at <= p.head {
 		start = at
 	}
-	cc.shown, cc.at, cc.items, cc.request = true, start, items, false
+	cc.shown, cc.at, cc.caret, cc.items, cc.request = true, start, p.head, items, false
 	cc.filter(ed.slice(start, p.head))
 	if len(cc.filtered) == 0 {
 		cc.shown = false
@@ -276,6 +301,9 @@ func (ed *editor) acceptCompletion() bool {
 	if ins == "" {
 		ins = it.Label
 	}
+	if it.Snippet != nil {
+		ins = it.Snippet.text
+	}
 	p := ed.primary()
 	n := p.head - cc.at
 	typed := ed.slice(cc.at, p.head)
@@ -289,6 +317,9 @@ func (ed *editor) acceptCompletion() bool {
 			a = s.head - n
 		}
 		edits = append(edits, Edit{Start: a, End: s.end(), Text: ins})
+	}
+	if it.Snippet != nil {
+		return ed.insertSnippet(it.Snippet, edits)
 	}
 	sels := slices.Clone(ed.sels)
 	ed.apply(edits, editOther, func(move func(int, bias) int) []sel {
@@ -325,6 +356,10 @@ type hover struct {
 	hideAt  time.Time
 	focused bool
 }
+
+// defaultHoverDelay is how long the pointer rests before a hover is asked
+// for, when State.HoverDelay is not set: a tooltip's.
+const defaultHoverDelay = 600 * time.Millisecond
 
 // hoverHideDelay is how long a hover stays once the pointer has left the
 // text hovered, for the pointer to go into it, as VS Code's
@@ -424,6 +459,7 @@ func (ed *editor) setSuggestion(off int, text string) {
 		sortInlays(ed.view.inlays)
 	}
 	ed.view.lines.m = nil
+	ed.view.invalidateStyledLines()
 }
 
 func sortInlays(in []inlay) {
@@ -432,10 +468,15 @@ func sortInlays(in []inlay) {
 
 // setInlays shows the inlay hints.
 func (ed *editor) setInlays(hints []Inlay) {
-	ed.view.inlays = slices.DeleteFunc(ed.view.inlays, func(in inlay) bool { return in.kind == 0 })
+	ed.view.inlays = slices.DeleteFunc(ed.view.inlays, func(in inlay) bool { return in.kind == 0 || in.kind == inlayTrailing })
 	for _, h := range hints {
-		ed.view.inlays = append(ed.view.inlays, inlay{at: h.Offset, text: h.Text})
+		kind := 0
+		if h.Trailing {
+			kind = inlayTrailing
+		}
+		ed.view.inlays = append(ed.view.inlays, inlay{at: h.Offset, text: h.Text, kind: kind, ellipsis: h.Ellipsis})
 	}
 	sortInlays(ed.view.inlays)
 	ed.view.lines.m = nil
+	ed.view.invalidateStyledLines()
 }

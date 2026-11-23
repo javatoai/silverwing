@@ -2,23 +2,19 @@ package delivery
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"silverwing-go/internal/commandruntime"
 	"silverwing-go/internal/domain"
-	"silverwing-go/internal/executable"
 	"silverwing-go/internal/process"
+	"silverwing-go/internal/production"
 	"silverwing-go/internal/storage"
 	"silverwing-go/internal/workspace"
 )
@@ -33,12 +29,19 @@ type Service struct {
 	store       tagOperationStore
 	preparation PreparationAPI
 	tasks       *workspace.TaskApplicationService
+	genbuClient func(context.Context) (TagGenbu, error)
 	progress    func(TagProgress)
 	lockedTask  string
 }
 
 type tagProcessRunner interface {
 	Run(context.Context, process.Spec) (process.Result, error)
+}
+
+type TagGenbu interface {
+	Status(context.Context, domain.AppConfig, string, string) (domain.GenbuTagProbeStatus, error)
+	Pods(context.Context, domain.AppConfig, string, string) (production.ServicePods, error)
+	CheckScope(context.Context) error
 }
 
 // NewService preserves the legacy concrete task-service defaults.
@@ -50,8 +53,17 @@ func NewService(paths storage.Paths, config *storage.ConfigStore, manifests *sto
 
 // NewServiceWithTasks is the production composition entry point. It uses the
 // supplied task facade without choosing a materials provider or task storage.
-func NewServiceWithTasks(paths storage.Paths, config *storage.ConfigStore, manifests *storage.ManifestStore, git *workspace.GitClient, runner *process.Runner, tasks *workspace.TaskApplicationService) *Service {
-	return newService(paths, config, manifests, git, runner, func(*storage.ManifestStore, *workspace.GitClient) *workspace.TaskApplicationService { return tasks })
+func NewServiceWithTasks(paths storage.Paths, config *storage.ConfigStore, manifests *storage.ManifestStore, git *workspace.GitClient, runner *process.Runner, tasks *workspace.TaskApplicationService, genbuClient func(context.Context) (TagGenbu, error)) *Service {
+	service := newService(paths, config, manifests, git, runner, func(*storage.ManifestStore, *workspace.GitClient) *workspace.TaskApplicationService { return tasks })
+	service.genbuClient = genbuClient
+	return service
+}
+
+func (s *Service) requireGenbuClient(ctx context.Context) (TagGenbu, error) {
+	if s.genbuClient == nil {
+		return nil, errors.New("Genbu 平台连接尚未配置")
+	}
+	return s.genbuClient(ctx)
 }
 
 func newService(paths storage.Paths, config *storage.ConfigStore, manifests *storage.ManifestStore, git *workspace.GitClient, runner *process.Runner, taskFactory func(*storage.ManifestStore, *workspace.GitClient) *workspace.TaskApplicationService) *Service {
@@ -60,6 +72,9 @@ func newService(paths storage.Paths, config *storage.ConfigStore, manifests *sto
 	}
 	if manifests == nil {
 		manifests = storage.NewManifestStore()
+		if paths.ProfileID != "" {
+			manifests = storage.NewProfileManifestStore(paths)
+		}
 	}
 	if git == nil {
 		git = workspace.NewGitClient(runner, "")
@@ -75,7 +90,7 @@ func newService(paths storage.Paths, config *storage.ConfigStore, manifests *sto
 	}
 	return &Service{
 		paths: paths, config: config, manifests: manifests, git: git, runner: runner,
-		locks: workspace.NewOperationLocks(paths.Locks), tasks: taskFactory(manifests, git),
+		locks: workspace.NewTaskOperationLocks(paths), tasks: taskFactory(manifests, git),
 	}
 }
 
@@ -171,40 +186,30 @@ type resolvedTask struct {
 
 func (s *Service) resolveTask(taskFolder string) (resolvedTask, error) {
 	folder := strings.TrimSpace(taskFolder)
-	if folder == "" {
-		return resolvedTask{}, errors.New("任务文件夹名不能为空")
+	if !filepath.IsLocal(folder) || folder == "." || filepath.Base(folder) != folder || strings.ContainsAny(folder, `/\`) {
+		return resolvedTask{}, errors.New("任务目录必须是任务根目录的直接子目录")
 	}
 	config, err := s.config.Load()
 	if err != nil {
 		return resolvedTask{}, err
 	}
-	if config.TaskRoot == nil || strings.TrimSpace(*config.TaskRoot) == "" {
+	if strings.TrimSpace(s.locks.TaskRoot(config)) == "" {
 		return resolvedTask{}, errors.New("尚未配置任务根目录")
 	}
-	root, err := filepath.Abs(*config.TaskRoot)
+	root, err := filepath.Abs(s.locks.TaskRoot(config))
 	if err != nil {
 		return resolvedTask{}, err
 	}
-	directory, err := filepath.Abs(filepath.Join(root, folder))
+	entry, err := s.manifests.LoadTask(root, folder)
 	if err != nil {
 		return resolvedTask{}, err
 	}
-	if !samePath(filepath.Dir(directory), root) {
-		return resolvedTask{}, errors.New("任务目录必须是任务根目录的直接子目录")
+	if s.paths.ProfileID != "" {
+		if err := s.locks.ValidateWorkspaceDirectory(config, entry.Path, entry.Manifest); err != nil {
+			return resolvedTask{}, err
+		}
 	}
-	manifestPath := filepath.Join(directory, storage.TaskManifestFileName)
-	info, err := os.Stat(manifestPath)
-	if err != nil || !info.Mode().IsRegular() {
-		return resolvedTask{}, fmt.Errorf("找不到研发任务：%s", folder)
-	}
-	manifest, err := s.manifests.Load(directory)
-	if err != nil {
-		return resolvedTask{}, err
-	}
-	if filepath.Base(directory) != manifest.TaskDirectoryName {
-		return resolvedTask{}, fmt.Errorf("任务目录与任务清单名称不一致：%s（清单记录：%s）", folder, manifest.TaskDirectoryName)
-	}
-	return resolvedTask{config, directory, manifest}, nil
+	return resolvedTask{config, entry.Path, entry.Manifest}, nil
 }
 
 func (s *Service) Build(ctx context.Context, taskFolder string, selections []string, allServices bool) ([]TagOperationReport, error) {
@@ -221,9 +226,6 @@ func (s *Service) buildSelected(ctx context.Context, taskFolder string, selectio
 	}
 	if !task.config.TagEnabled {
 		return nil, errors.New("全局测试Tag已关闭")
-	}
-	if _, err := task.config.Group(task.manifest.GroupID); err != nil {
-		return nil, err
 	}
 	keys := make([]string, 0, len(selections))
 	if allServices {
@@ -415,7 +417,11 @@ func (s *Service) validateForMutation(ctx context.Context, task resolvedTask, se
 	if err := ctx.Err(); err != nil {
 		return mutationTarget{}, err
 	}
-	root, err := filepath.Abs(value(task.config.TaskRoot))
+	rootPath := value(task.config.TaskRoot)
+	if rootPath == "" {
+		return mutationTarget{}, errors.New("尚未配置任务目录")
+	}
+	root, err := filepath.Abs(rootPath)
 	if err != nil {
 		return mutationTarget{}, err
 	}
@@ -430,8 +436,17 @@ func (s *Service) validateForMutation(ctx context.Context, task resolvedTask, se
 	if err != nil {
 		return mutationTarget{}, err
 	}
+	if s.paths.ProfileID != "" {
+		if err := s.locks.ValidateWorkspaceDirectory(task.config, directory, task.manifest); err != nil {
+			return mutationTarget{}, err
+		}
+		real, err := filepath.EvalSymlinks(target)
+		if err != nil || !samePathSpelling(real, filepath.Join(canonicalPath(directory), filepath.Base(target))) {
+			return mutationTarget{}, fmt.Errorf("Git 工作树不存在或路径已重定向：%s", target)
+		}
+	}
 	if !samePath(filepath.Dir(target), directory) {
-		return mutationTarget{}, fmt.Errorf("工作区路径不在任务目录的直接子级，已拒绝操作：%s", target)
+		return mutationTarget{}, fmt.Errorf("Git 工作树不在任务目录的直接子级，已拒绝操作：%s", target)
 	}
 	if info, statErr := os.Stat(target); statErr != nil || !info.IsDir() {
 		return mutationTarget{}, fmt.Errorf("任务工作区不存在：%s", target)
@@ -530,12 +545,12 @@ func (s *Service) runTagBuild(ctx context.Context, task resolvedTask, target dom
 	ctx = withTagRemoteIdentity(ctx, identity, endpoint.key)
 	var conflictPath string
 	if target.Mode == domain.TagBuildMergeToTargetBranch {
-		conflictPath, err = s.conflictWorktreePath(operation.OperationID)
+		conflictPath, err = s.conflictWorktreePath(task.config, operation.OperationID)
 		if err != nil {
 			return s.finishBuildFailure(ctx, task.directory, operation, err)
 		}
 	}
-	preview, err := s.preflightUnlocked(ctx, task.manifest, target, validated, conflictPath)
+	preview, err := s.preflightUnlocked(ctx, task, target, validated, conflictPath)
 	if err != nil {
 		var conflict *mergeConflictError
 		if errors.As(err, &conflict) {
@@ -566,7 +581,7 @@ func (s *Service) runTagBuild(ctx context.Context, task resolvedTask, target dom
 	}
 	var tagCommit string
 	if target.Mode == domain.TagBuildMergeToTargetBranch {
-		mergeResult, mergeErr := s.mergeAndPushTargetBranch(ctx, validated.repository, preview.SourceSHA, target, conflictPath)
+		mergeResult, mergeErr := s.mergeAndPushTargetBranch(ctx, task.config, validated.repository, preview.SourceSHA, target, conflictPath)
 		if mergeErr != nil {
 			if mergeResult.targetSHA == "" {
 				var conflict *mergeConflictError
@@ -695,7 +710,7 @@ func (s *Service) transition(ctx context.Context, taskDirectory string, operatio
 	return nil
 }
 
-func (s *Service) preflightUnlocked(ctx context.Context, manifest domain.TaskManifest, target domain.EffectiveTagTarget, validated mutationTarget, conflictPath string) (TagPreflight, error) {
+func (s *Service) preflightUnlocked(ctx context.Context, task resolvedTask, target domain.EffectiveTagTarget, validated mutationTarget, conflictPath string) (TagPreflight, error) {
 	if err := s.ensureCleanFeatureWorktree(ctx, validated.worktree); err != nil {
 		return TagPreflight{}, err
 	}
@@ -718,7 +733,7 @@ func (s *Service) preflightUnlocked(ctx context.Context, manifest domain.TaskMan
 		return TagPreflight{}, fmt.Errorf("远端当前分支领先本地 %d 个提交，请先手工同步；工具不会自动 pull/rebase", sync.Behind)
 	}
 	preview := TagPreflight{
-		FolderName: manifest.FolderName, ServiceName: target.Workspace.ServiceName, SourceBranch: target.Workspace.Branch,
+		FolderName: task.manifest.FolderName, ServiceName: target.Workspace.ServiceName, SourceBranch: target.Workspace.Branch,
 		SourceSHA: sourceSHA, Remote: target.Remote, TargetBranch: target.TargetBranch,
 		SourceSync: sync, TagMode: target.Mode, CommitList: []string{},
 	}
@@ -757,7 +772,7 @@ func (s *Service) preflightUnlocked(ctx context.Context, manifest domain.TaskMan
 		mergeMode = "MERGE_COMMIT"
 	}
 	preview.MergeMode = &mergeMode
-	if err = s.verifyMergeInTemporaryWorktree(ctx, validated.repository, targetSHA, sourceSHA, target.Workspace.ServiceName, conflictPath); err != nil {
+	if err = s.verifyMergeInTemporaryWorktree(ctx, task.config, validated.repository, targetSHA, sourceSHA, conflictPath); err != nil {
 		var conflict *mergeConflictError
 		if errors.As(err, &conflict) {
 			preview.ConflictFiles = conflict.files
@@ -856,7 +871,7 @@ type genbuCandidate struct {
 	service   string
 }
 
-func (s *Service) mergeAndPushTargetBranch(ctx context.Context, repository, sourceSHA string, target domain.EffectiveTagTarget, conflictPath string) (mergePushResult, error) {
+func (s *Service) mergeAndPushTargetBranch(ctx context.Context, config domain.AppConfig, repository, sourceSHA string, target domain.EffectiveTagTarget, conflictPath string) (mergePushResult, error) {
 	branch := value(target.TargetBranch)
 	identity := tagRemoteIdentityFromContext(ctx)
 	if identity == "" {
@@ -881,7 +896,7 @@ func (s *Service) mergeAndPushTargetBranch(ctx context.Context, repository, sour
 		if err != nil {
 			return mergePushResult{}, err
 		}
-		recovered, err := s.recoverTagWorktree(ctx, repository, conflictPath, remoteTargetSHA, sourceSHA)
+		recovered, err := s.recoverTagWorktree(ctx, config, repository, conflictPath, remoteTargetSHA, sourceSHA)
 		if err != nil {
 			return mergePushResult{}, err
 		}
@@ -948,8 +963,8 @@ func (s *Service) mergeAndPushTargetBranch(ctx context.Context, repository, sour
 	return mergePushResult{}, errors.New("无法更新目标分支")
 }
 
-func (s *Service) verifyMergeInTemporaryWorktree(ctx context.Context, repository, targetSHA, sourceSHA, serviceName, conflictPath string) error {
-	recovered, err := s.recoverTagWorktree(ctx, repository, conflictPath, targetSHA, sourceSHA)
+func (s *Service) verifyMergeInTemporaryWorktree(ctx context.Context, config domain.AppConfig, repository, targetSHA, sourceSHA, conflictPath string) error {
+	recovered, err := s.recoverTagWorktree(ctx, config, repository, conflictPath, targetSHA, sourceSHA)
 	if err != nil {
 		return err
 	}
@@ -965,7 +980,10 @@ func (s *Service) verifyMergeInTemporaryWorktree(ctx context.Context, repository
 	}
 	temporary := conflictPath
 	if temporary == "" {
-		temporary = s.temporaryWorktreePath(repository, serviceName+"-preflight")
+		temporary, err = s.tagWorktreePath(config, "tag-preflight-worktrees", newUUID())
+		if err != nil {
+			return err
+		}
 	}
 	if !recovered.exists {
 		if err := s.addDetachedWorktree(ctx, repository, temporary, targetSHA); err != nil {
@@ -1196,43 +1214,6 @@ func (s *Service) auditMessage(manifest domain.TaskManifest, target domain.Effec
 	return strings.Join(lines, "\n")
 }
 
-func (s *Service) temporaryWorktreePath(repository, label string) string {
-	common, err := s.git.CommonDirectory(repository)
-	if err != nil {
-		common = repository
-	}
-	abs, err := filepath.Abs(common)
-	if err != nil {
-		abs = filepath.Clean(common)
-	}
-	if runtime.GOOS == "windows" {
-		abs = strings.ToLower(abs)
-	}
-	digest := sha256.Sum256([]byte(filepath.Clean(abs)))
-	safe := sanitizePathLabel(label)
-	parent := filepath.Join(s.paths.Temp, "tag-build", fmt.Sprintf("%x", digest[:12]))
-	_ = os.MkdirAll(parent, 0o755)
-	return filepath.Join(parent, safe+"-"+newUUID())
-}
-
-func sanitizePathLabel(value string) string {
-	var out strings.Builder
-	for _, r := range value {
-		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._-", r) {
-			out.WriteRune(r)
-		} else {
-			out.WriteByte('-')
-		}
-		if out.Len() >= 50 {
-			break
-		}
-	}
-	if out.Len() == 0 {
-		return "tag-build"
-	}
-	return out.String()
-}
-
 func (s *Service) run(ctx context.Context, repository string, timeout time.Duration, check, readOnly bool, args ...string) (process.Result, error) {
 	result, err := s.git.RunContext(ctx, repository, timeout, check, readOnly, args...)
 	if err != nil {
@@ -1341,7 +1322,7 @@ func (s *Service) preflightTask(ctx context.Context, task resolvedTask, selectio
 		}
 		return s.withRepositoryLock(ctx, validated.repository, func() error {
 			var inner error
-			preview, inner = s.preflightUnlocked(ctx, task.manifest, target, validated, "")
+			preview, inner = s.preflightUnlocked(ctx, task, target, validated, "")
 			if inner != nil {
 				return inner
 			}
@@ -1440,6 +1421,9 @@ func (s *Service) retryTask(ctx context.Context, task resolvedTask, operationID 
 		case TagRetryPartial:
 			updated, inner = s.resumePartial(ctx, task, operationID)
 		case TagRetryRetag:
+			if _, err := s.requireGenbuClient(ctx); err != nil {
+				return err
+			}
 			updated, inner = s.resumeExisting(ctx, task, operationID, func(current domain.TagOperation) error {
 				if current.State != domain.TagOperationSuccess || current.GenbuStatus.Build != domain.GenbuFailed {
 					return errors.New("只有 Genbu 构建失败的测试Tag可以重新打Tag")
@@ -1717,37 +1701,23 @@ func (s *Service) probeOperation(ctx context.Context, task resolvedTask, operati
 	if err != nil {
 		return domain.TagOperation{}, err
 	}
-	group, err := task.config.Group(task.manifest.GroupID)
+	service, err := task.config.Service(operation.GroupServiceID)
+	if err != nil || !service.GenbuProbeEnabled || !domain.TagGenbuProbeEligible(operation.State, value(operation.Tag)) {
+		return operation, nil
+	}
+	client, err := s.requireGenbuClient(ctx)
 	if err != nil {
-		return operation, nil
+		return operation, err
 	}
-	var service *domain.GroupServiceConfig
-	for i := range group.Services {
-		if group.Services[i].ID == operation.GroupServiceID {
-			service = &group.Services[i]
-			break
-		}
+	queried, queryErr := client.Status(ctx, task.config, strings.TrimSpace(service.GenbuServiceName), value(operation.Tag))
+	if err := client.CheckScope(ctx); err != nil {
+		return operation, err
 	}
-	if service == nil || !service.GenbuProbeEnabled || !domain.TagGenbuProbeEligible(operation.State, value(operation.Tag)) {
-		return operation, nil
-	}
-	queried, queryErr := s.queryGenbu(ctx, task.config, strings.TrimSpace(service.GenbuServiceName), value(operation.Tag))
 	if err := ctx.Err(); err != nil {
 		return operation, err
 	}
 	updated := operation
-	updated.GenbuStatus.CheckedAt = stringPointer(formatSilverwingTime(time.Now()))
-	if queryErr != nil {
-		updated.GenbuStatus.NotFound = false
-		updated.GenbuStatus.FailureReason = stringPointer(queryErr.Error())
-	} else {
-		updated.GenbuStatus.Build, updated.GenbuStatus.UAT, updated.GenbuStatus.Production = queried.Build, queried.UAT, queried.Production
-		updated.GenbuStatus.NotFound = queried.NotFound
-		updated.GenbuStatus.BuiltCompletedAt = queried.BuiltCompletedAt
-		updated.GenbuStatus.ReleasedCompletedAt = queried.UATReleasedCompletedAt
-		updated.GenbuStatus.ProductionReleasedCompletedAt = queried.ProductionReleasedCompletedAt
-		updated.GenbuStatus.FailureReason = nil
-	}
+	updated.GenbuStatus = refreshedGenbuStatus(operation.GenbuStatus, queried, queryErr)
 	if observed != nil {
 		*observed = updated.GenbuStatus
 	}
@@ -1759,85 +1729,6 @@ func (s *Service) probeOperation(ctx context.Context, task resolvedTask, operati
 		return domain.TagOperation{}, fmt.Errorf("找不到Tag构建记录：%s", operationID)
 	}
 	return current, nil
-}
-
-type genbuTagQueryResult struct {
-	Build                         domain.GenbuStageStatus `json:"-"`
-	UAT                           domain.GenbuStageStatus `json:"-"`
-	Production                    domain.GenbuStageStatus `json:"-"`
-	NotFound                      bool                    `json:"notFound"`
-	BuiltCompletedAt              *string                 `json:"builtCompletedAt,omitempty"`
-	UATReleasedCompletedAt        *string                 `json:"uatReleasedCompletedAt,omitempty"`
-	ProductionReleasedCompletedAt *string                 `json:"productionReleasedCompletedAt,omitempty"`
-}
-type genbuTagQueryJSON struct {
-	BuildStatus           string  `json:"build_status"`
-	BuildCompletedAt      *string `json:"build_completed_at"`
-	UATStatus             string  `json:"uat_status"`
-	UATCompletedAt        *string `json:"uat_completed_at"`
-	ProductionStatus      string  `json:"production_status"`
-	ProductionCompletedAt *string `json:"production_completed_at"`
-}
-
-func (s *Service) queryGenbu(ctx context.Context, config domain.AppConfig, service, tag string) (genbuTagQueryResult, error) {
-	if strings.TrimSpace(service) == "" {
-		return genbuTagQueryResult{}, errors.New("Genbu 服务名不能为空")
-	}
-	if strings.TrimSpace(tag) == "" {
-		return genbuTagQueryResult{}, errors.New("Tag 不能为空")
-	}
-	configured := ""
-	if config.GenbuExecutablePath != nil {
-		configured = *config.GenbuExecutablePath
-	}
-	spec, err := commandruntime.Prepare(ctx, s.runner, &config, domain.ProxyTargetGenbu, executable.ToolGenbu, configured)
-	if err != nil {
-		return genbuTagQueryResult{}, err
-	}
-	spec.Arguments, spec.Timeout = []string{"query-tag", "--json", service, tag}, 20*time.Second
-	result, err := s.runner.Run(ctx, spec)
-	if err != nil {
-		return genbuTagQueryResult{}, fmt.Errorf("Genbu CLI 执行失败：%s", commandruntime.Redact(config, err.Error()))
-	}
-	if result.ExitCode != 0 {
-		detail := strings.TrimSpace(result.Stderr)
-		if detail == "" {
-			detail = strings.TrimSpace(result.Stdout)
-		}
-		if isGenbuTagNotFound(detail) {
-			return genbuTagQueryResult{Build: domain.GenbuUnknown, UAT: domain.GenbuUnknown, Production: domain.GenbuUnknown, NotFound: true}, nil
-		}
-		if detail == "" {
-			detail = fmt.Sprintf("genbu query-tag 执行失败（退出码 %d）", result.ExitCode)
-		}
-		return genbuTagQueryResult{}, errors.New(commandruntime.Redact(config, detail))
-	}
-	var parsed genbuTagQueryJSON
-	if err := json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &parsed); err != nil {
-		return genbuTagQueryResult{}, errors.New("无法识别 Genbu Tag 查询输出")
-	}
-	return genbuTagQueryResult{
-		Build: parseGenbuStage(parsed.BuildStatus), UAT: parseGenbuStage(parsed.UATStatus), Production: parseGenbuStage(parsed.ProductionStatus),
-		BuiltCompletedAt: nonEmptyPointer(value(parsed.BuildCompletedAt)), UATReleasedCompletedAt: nonEmptyPointer(value(parsed.UATCompletedAt)), ProductionReleasedCompletedAt: nonEmptyPointer(value(parsed.ProductionCompletedAt)),
-	}, nil
-}
-
-func parseGenbuStage(value string) domain.GenbuStageStatus {
-	switch strings.TrimSpace(value) {
-	case "初始":
-		return domain.GenbuInitial
-	case "构建中":
-		return domain.GenbuBuilding
-	case "成功":
-		return domain.GenbuSuccess
-	case "失败":
-		return domain.GenbuFailed
-	default:
-		return domain.GenbuUnknown
-	}
-}
-func isGenbuTagNotFound(detail string) bool {
-	return strings.Contains(detail, "未在产线") || regexp.MustCompile(`(?i)未找到.*tag`).MatchString(detail)
 }
 
 func nonEmptyPointer(value string) *string {
@@ -1854,7 +1745,7 @@ func (s *Service) Probe(ctx context.Context, config domain.AppConfig, tasks []do
 	return s.ProbeWithProgress(ctx, config, tasks, force, nil, nil)
 }
 
-func refreshedGenbuStatus(status domain.GenbuTagProbeStatus, result genbuTagQueryResult, err error) domain.GenbuTagProbeStatus {
+func refreshedGenbuStatus(status domain.GenbuTagProbeStatus, result domain.GenbuTagProbeStatus, err error) domain.GenbuTagProbeStatus {
 	status.CheckedAt = stringPointer(formatSilverwingTime(time.Now()))
 	if err != nil {
 		status.NotFound = false
@@ -1863,7 +1754,7 @@ func refreshedGenbuStatus(status domain.GenbuTagProbeStatus, result genbuTagQuer
 	}
 	status.Build, status.UAT, status.Production = result.Build, result.UAT, result.Production
 	status.NotFound, status.BuiltCompletedAt = result.NotFound, result.BuiltCompletedAt
-	status.ReleasedCompletedAt, status.ProductionReleasedCompletedAt = result.UATReleasedCompletedAt, result.ProductionReleasedCompletedAt
+	status.ReleasedCompletedAt, status.ProductionReleasedCompletedAt = result.ReleasedCompletedAt, result.ProductionReleasedCompletedAt
 	status.FailureReason = nil
 	return status
 }

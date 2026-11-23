@@ -14,13 +14,26 @@ import (
 	"silverwing-go/internal/domain"
 )
 
-func (s *Service) conflictWorktreePath(id string) (string, error) {
+func (s *Service) conflictWorktreePath(config domain.AppConfig, id string) (string, error) {
+	return s.tagWorktreePath(config, "tag-conflicts", id)
+}
+
+func (s *Service) tagWorktreePath(config domain.AppConfig, category, id string) (string, error) {
 	if !validOperationID(id) || s.paths.Home == "" {
 		return "", errors.New("冲突工作区的操作标识或数据目录无效")
 	}
-	root := filepath.Join(canonicalPath(s.paths.Home), "tag-conflicts")
+	base := canonicalPath(s.paths.Home)
+	var managed []string
+	if s.paths.ProfileID != "" {
+		base = s.paths.TaskWorktreeNamespace(config.TaskRoot)
+		if base == "" {
+			return "", errors.New("请配置可用于临时 Git 工作区的任务存放目录")
+		}
+		managed = append(managed, base)
+	}
+	root := filepath.Join(base, category)
 	path := filepath.Join(root, id)
-	for _, part := range []string{root, path} {
+	for _, part := range append(managed, root, path) {
 		info, err := os.Lstat(part)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
@@ -123,7 +136,7 @@ func (s *Service) validateTagConflict(ctx context.Context, task resolvedTask, op
 		return target, validated, "", err
 	}
 	saved := operation.Conflict
-	path, err := s.conflictWorktreePath(operation.OperationID)
+	path, err := s.conflictWorktreePath(task.config, operation.OperationID)
 	if err != nil {
 		return target, validated, "", err
 	}

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"silverwing-go/internal/process"
 )
@@ -35,6 +36,70 @@ func TestMaterialsGitHTTPSLoginBlocksHTTPRedirect(t *testing.T) {
 	f.scope.URL = secure.URL + "/docs.git"
 	if err := f.service.VerifyHTTPSLogin(context.Background(), f.scope); err == nil || httpsRequests.Load() == 0 || httpRequests.Load() != 0 {
 		t.Fatalf("HTTPS login redirect: HTTPS requests=%d HTTP requests=%d error=%v", httpsRequests.Load(), httpRequests.Load(), err)
+	}
+}
+
+func TestMaterialsGitRemoteBranchLookupRetriesHTTPSProjectURLWithGitSuffix(t *testing.T) {
+	f := newMaterialsGitFixture(t, false)
+	f.scope.URL = "https://gitlab.example.invalid/fp/obt-team-docs"
+	var specs []process.Spec
+	f.service.Git.readCommand = func(_ context.Context, spec process.Spec) (process.Result, error) {
+		specs = append(specs, spec)
+		if len(specs) == 1 {
+			return process.Result{
+				ExitCode: 128,
+				Stderr:   `fatal: unable to access 'https://gitlab.example.invalid/fp/obt-team-docs/': Protocol "http" disabled (in redirect)`,
+			}, nil
+		}
+		return process.Result{Stdout: "ca93\trefs/heads/master\n"}, nil
+	}
+
+	result, endpoint, git, options, err := f.service.readRemoteBranchHeadsAt(context.Background(), f.scope, "", false, time.Second, 4096, "refs/heads/master")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if endpoint != "https://gitlab.example.invalid/fp/obt-team-docs.git" {
+		t.Fatalf("effective endpoint = %q", endpoint)
+	}
+	if git == nil || !reflect.DeepEqual(options, []string(nil)) {
+		t.Fatalf("unexpected transport configuration: git=%v options=%v", git, options)
+	}
+	if len(specs) != 2 {
+		t.Fatalf("Git attempts = %d, want 2", len(specs))
+	}
+	for i, spec := range specs {
+		if spec.Env["GIT_ALLOW_PROTOCOL"] != "https" || spec.Env["GIT_TERMINAL_PROMPT"] != "0" {
+			t.Fatalf("attempt %d did not retain HTTPS-only non-interactive transport: %#v", i, spec.Env)
+		}
+		attemptURL := f.scope.URL
+		if i == 1 {
+			attemptURL = endpoint
+		}
+		wantTail := []string{"ls-remote", "--heads", "--", attemptURL, "refs/heads/master"}
+		if len(spec.Arguments) < len(wantTail) || !reflect.DeepEqual(spec.Arguments[len(spec.Arguments)-len(wantTail):], wantTail) {
+			t.Fatalf("attempt %d arguments = %v, want suffix %v", i, spec.Arguments, wantTail)
+		}
+	}
+	if strings.Contains(strings.Join(specs[1].Arguments, " "), "http://") {
+		t.Fatal("fallback allowed an HTTP downgrade")
+	}
+	if !strings.Contains(result.Stdout, "refs/heads/master") || f.scope.URL != "https://gitlab.example.invalid/fp/obt-team-docs" {
+		t.Fatal("branch read changed the configured URL or returned no ref")
+	}
+}
+
+func TestMaterialsGitRemoteBranchLookupDoesNotRetryForAuthenticationFailure(t *testing.T) {
+	f := newMaterialsGitFixture(t, false)
+	f.scope.URL = "https://gitlab.example.invalid/fp/obt-team-docs"
+	var calls atomic.Int32
+	f.service.Git.readCommand = func(_ context.Context, _ process.Spec) (process.Result, error) {
+		calls.Add(1)
+		return process.Result{ExitCode: 128, Stderr: "fatal: Authentication failed"}, nil
+	}
+
+	_, err := f.service.readRemoteBranchHeads(context.Background(), f.scope, false, time.Second)
+	if calls.Load() != 1 || !GitRemoteNeedsAuthentication(err) {
+		t.Fatalf("calls=%d err=%v", calls.Load(), err)
 	}
 }
 
@@ -137,7 +202,7 @@ func TestMaterialsGitDeletedRemoteBranchDoesNotCommitOrRecreate(t *testing.T) {
 	f := newMaterialsGitFixture(t, true)
 	f.sync()
 	head := materialsGitTestRun(t, f.root, "rev-parse", "HEAD")
-	materialsGitTestFile(t, f.root, "2026/123-需求/研发/new.md", "unsynced")
+	materialsGitTestFile(t, f.root, "requirements/2026/123-需求/研发/new.md", "unsynced")
 	materialsGitTestRun(t, f.remote, "update-ref", "-d", "refs/heads/master")
 	status, err := f.service.Sync(context.Background(), f.scope, true, nil)
 	if err == nil || !status.Paused {
@@ -154,7 +219,7 @@ func TestMaterialsGitDeletedRemoteBranchDoesNotCommitOrRecreate(t *testing.T) {
 func TestMaterialsGitRemoteBranchDeletedBeforePushStops(t *testing.T) {
 	f := newMaterialsGitFixture(t, true)
 	f.sync()
-	materialsGitTestFile(t, f.root, "2026/123-需求/研发/new.md", "new")
+	materialsGitTestFile(t, f.root, "requirements/2026/123-需求/研发/new.md", "new")
 	status, err := f.service.Sync(context.Background(), f.scope, true, func(phase string) {
 		if phase == "推送资料" {
 			materialsGitTestRun(t, f.remote, "update-ref", "-d", "refs/heads/master")

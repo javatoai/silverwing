@@ -138,9 +138,9 @@ func TestMaterialsRemoteBranchTargetsOneRefAtEveryRead(t *testing.T) {
 	}
 	failed := f.scope
 	failed.URL = filepath.Join(t.TempDir(), "not-a-repository")
-	_, _, err := f.service.remoteBranch(context.Background(), failed)
-	var commandErr *GitException
-	if !errors.As(err, &commandErr) {
-		t.Fatalf("command failure became an absent branch: %v", err)
+	_, exists, err := f.service.remoteBranch(context.Background(), failed)
+	var commandErr *GitRemoteFailure
+	if exists || !errors.As(err, &commandErr) || commandErr.Kind == GitRemoteBranchMissing {
+		t.Fatalf("command failure was not reported as a remote access error: exists=%v, error=%v", exists, err)
 	}
 }

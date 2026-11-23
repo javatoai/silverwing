@@ -39,49 +39,20 @@ type cliRunFailure struct {
 func (e *cliRunFailure) Error() string { return e.message }
 func (e *cliRunFailure) Unwrap() error { return e.cause }
 
-func (s *Service) commandPath(ctx context.Context, config domain.AppConfig, target domain.CommandProxyTarget) string {
-	command, _, err := s.resolveCommand(ctx, config, target)
-	if err != nil {
-		return ""
-	}
-	return command
-}
-
-func (s *Service) resolveCommand(ctx context.Context, config domain.AppConfig, target domain.CommandProxyTarget) (string, *executable.Resolver, error) {
-	var tool executable.Tool
-	var configured *string
-	switch target {
-	case domain.ProxyTargetMeegle:
-		tool, configured = executable.ToolMeegle, config.MeegleExecutablePath
-	default:
-		return "", nil, fmt.Errorf("不支持的 CLI 目标：%s", target)
-	}
-	value := ""
-	if configured != nil {
-		value = *configured
-	}
+func (s *Service) meegleCommandPath(ctx context.Context, config domain.AppConfig) string {
 	resolver := executable.NewResolver(s.runner)
-	resolution := resolver.Resolve(ctx, tool, value)
-	if resolution.Command == "" {
-		return "", nil, fmt.Errorf("未能解析 %s CLI", tool)
-	}
-	return resolution.Command, resolver, nil
+	return resolver.Resolve(ctx, executable.ToolMeegle, valuePointer(config.MeegleExecutablePath)).Command
 }
 
-func (s *Service) childEnvironment(config domain.AppConfig, target domain.CommandProxyTarget) (map[string]string, []string) {
-	return commandruntime.ProxyEnvironment(config, target)
-}
-
-func (s *Service) runCLI(ctx context.Context, config domain.AppConfig, target domain.CommandProxyTarget, args []string, stdin []byte, timeout time.Duration, operation string, workingDirectory string) (process.Result, error) {
-	command, _, err := s.resolveCommand(ctx, config, target)
+func (s *Service) runMeegle(ctx context.Context, config domain.AppConfig, args []string, timeout time.Duration, operation string) (process.Result, error) {
+	spec, err := commandruntime.Prepare(ctx, s.runner, &config, "", executable.ToolMeegle, valuePointer(config.MeegleExecutablePath))
 	if err != nil {
 		return process.Result{}, err
 	}
-	spec, err := commandruntime.Prepare(ctx, s.runner, &config, target, executable.Tool(targetToolName(target)), command)
-	if err != nil {
+	spec.Arguments, spec.Timeout = args, timeout
+	if err := commandruntime.CheckAdmission(ctx); err != nil {
 		return process.Result{}, err
 	}
-	spec.Arguments, spec.Directory, spec.Stdin, spec.Timeout = args, workingDirectory, stdin, timeout
 	result, err := s.runner.Run(ctx, spec)
 	if err != nil {
 		return result, &cliRunFailure{message: fmt.Sprintf("%s：%s", operation, s.safeDiagnostic(config, err.Error())), cause: err}
@@ -100,33 +71,8 @@ func (s *Service) runCLI(ctx context.Context, config domain.AppConfig, target do
 	return result, nil
 }
 
-func targetToolName(target domain.CommandProxyTarget) string {
-	switch target {
-	case domain.ProxyTargetMeegle:
-		return string(executable.ToolMeegle)
-	default:
-		return ""
-	}
-}
-
-func (s *Service) runMeegle(ctx context.Context, config domain.AppConfig, args []string, timeout time.Duration, operation string) (process.Result, error) {
-	return s.runCLI(ctx, config, domain.ProxyTargetMeegle, args, nil, timeout, operation, "")
-}
-
 func (s *Service) safeDiagnostic(config domain.AppConfig, message string) string {
 	return commandruntime.Redact(config, message)
-}
-
-func (s *Service) runJSON(ctx context.Context, config domain.AppConfig, target domain.CommandProxyTarget, args []string, timeout time.Duration, operation string) (any, process.Result, error) {
-	result, err := s.runCLI(ctx, config, target, args, nil, timeout, operation, "")
-	if err != nil {
-		return nil, result, err
-	}
-	var value any
-	if err := json.Unmarshal([]byte(result.Stdout), &value); err != nil {
-		return nil, result, fmt.Errorf("%s 返回的 JSON 无法解析：%w", operation, err)
-	}
-	return value, result, nil
 }
 
 // writeJSONArgument creates a UTF-8 JSON file for CLIs that parse @file

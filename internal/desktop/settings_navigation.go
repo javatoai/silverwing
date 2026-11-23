@@ -17,19 +17,23 @@ type settingsPage struct{ key, label string }
 var settingsSections = []settingsSection{
 	{"外观与交互", 0, []settingsPage{{"basic", "外观"}, {"tool-visibility", "导航与快捷工具"}, {"task-area", "任务工具栏"}, {"task-tabs", "任务页签"}}},
 	{"任务与工作区", 0, []settingsPage{{"task-paths", "任务目录"}, {"task-creation", "创建与命名"}}},
-	{"资料与说明", 0, []settingsPage{{"paths", "资料目录与浏览"}, {"materials-sync", "资料自动同步"}, {"agents", "全局与组说明"}, {"instruction-templates", "任务说明模板"}}},
+	{"资料与说明", 0, []settingsPage{{"paths", "任务资料"}, {"project-instructions", "项目资料"}, {"agents", "全局说明"}}},
 	{"Git 与发布", 1, []settingsPage{{"git", "Git 环境与写保护"}, {"tag", "Tag 与构建"}}},
 	{"AI 与扩展", 1, []settingsPage{{"codex-plugins", "Codex 插件"}, {"codex-mcp", "MCP 服务"}, {"skill-local", "本机 Skill"}, {"skill-sources", "Skill 来源与安装"}}},
-	{"工具与连接", 1, []settingsPage{{"dev-tools", "编辑器与 IDE"}, {"cli-tools", "命令行与账号"}, {"sw-install", "Silverwing CLI"}, {"proxy", "网络代理"}}},
+	{"工具与连接", 1, []settingsPage{{"dev-tools", "编辑器与 IDE"}, {"cli-tools", "命令行与账号"}, {platformConnectionsPage, "平台连接"}, {"sw-install", "Silverwing CLI"}, {"proxy", "网络代理"}}},
 	{"数据与维护", 2, []settingsPage{{"config-backup", "配置与备份"}, {"app-data", "数据目录"}, {"logs", "日志与诊断"}, {"about", "关于与更新"}}},
 }
 
 func settingsCanonicalPage(key string) string {
 	switch key {
-	case "cli-meegle", "cli-lark", "cli-genbu", "cli-codex", "cli-git":
+	case "cli-meegle", "cli-lark", "cli-codex", "cli-git":
 		return "cli-tools"
+	case "cli-genbu", "cli-dragon":
+		return platformConnectionsPage
 	case "branch-naming":
 		return "task-creation"
+	case "materials-sync":
+		return "paths"
 	case "updates":
 		return "about"
 	}
@@ -58,6 +62,8 @@ func (s *app) currentSettingsSection() settingsSection {
 			if tool := settingsCLIToolFromPage(old); tool != "" {
 				state.settingsCLITool = tool
 				state.settingsSearchTarget, state.settingsSearchPending = settingsCLITitle(tool)+" 状态", true
+			} else if target := legacyPlatformSettingsTarget(old); target != "" {
+				state.settingsSearchTarget, state.settingsSearchPending = target, true
 			}
 		}
 		return section
@@ -74,19 +80,25 @@ func (s *app) currentSettingsSection() settingsSection {
 
 func (s *app) navigateSettingsPage(key, target string) bool {
 	cliTool := settingsCLIToolFromPage(key)
+	if platformTarget := legacyPlatformSettingsTarget(key); platformTarget != "" {
+		target = platformTarget
+	}
 	key = settingsCanonicalPage(key)
 	section, ok := settingsSectionForPage(key)
 	if !ok || !s.leaveSettingsInstructionEditor() {
 		return false
 	}
 	state := &s.settingsUnit.state
-	if draft := s.inputs["setting:taskRootTarget"]; state.settingsPage == "task-paths" && key != "task-paths" && draft != nil {
+	if draft := s.inputs["setting:taskRootTarget"]; s.snapshot.ProfileID == "" && state.settingsPage == "task-paths" && key != "task-paths" && draft != nil {
 		target := strings.TrimSpace(*draft)
 		if target != "" && workspaceHealthPathKey(target) != workspaceHealthPathKey(s.configString("taskRoot")) {
 			// Keep the confirmation's owner page stable until the user chooses.
 			s.requestTaskRootChange(target)
 			return false
 		}
+	}
+	if state.settingsPage == platformConnectionsPage && key != platformConnectionsPage && state.platformConnections != nil {
+		state.platformConnections.leavePlatformAccountPage()
 	}
 	if state.settingsLastPages == nil {
 		state.settingsLastPages = make(map[string]string)
@@ -134,12 +146,18 @@ func (s *app) settingsScreen(c *ui.Context, p palette) {
 		ui.Column(c).Grow(1).MinWidth(0).MinHeight(0).Gap(12).Children(func() {
 			section := s.currentSettingsSection()
 			ui.Row(c).FillWidth().MinHeight(36).Wrap().Gap(12).AlignItems(ui.Center).Children(func() {
-				ui.Row(c).Grow(1).MinWidth(0).Wrap().Gap(4).Children(func() {
-					for _, page := range section.pages {
-						s.settingsTabButton(c, p, page.key, page.label)
-					}
-				})
-				s.renderSettingsSaveStatus(c, p)
+				if section.name == "资料与说明" {
+					s.settingsDocumentsTabs(c, p, section.pages)
+				} else {
+					ui.Row(c).Grow(1).MinWidth(0).Wrap().Gap(4).Children(func() {
+						for _, page := range section.pages {
+							s.settingsTabButton(c, p, page.key, page.label)
+						}
+					})
+				}
+				if s.settingsUnit.state.settingsPage != platformConnectionsPage {
+					s.renderSettingsSaveStatus(c, p)
+				}
 			})
 			if s.settingsUnit.state.settingsPage == "cli-tools" {
 				s.renderSettingsCLITabs(c, p)
@@ -160,7 +178,6 @@ func (s *app) settingsScreen(c *ui.Context, p palette) {
 			}
 		})
 	})
-	s.settingsConfigDialog(c, p)
 	s.settingsImportDialog(c, p)
 	s.settingsSkillPreviewDialog(c, p)
 }
@@ -215,6 +232,36 @@ func (s *app) settingsTabButton(c *ui.Context, p palette, key, name string) {
 	}
 }
 
+func (s *app) settingsDocumentsTabs(c *ui.Context, p palette, pages []settingsPage) {
+	previous := s.settingsUnit.state.settingsPage
+	selected := 0
+	for index, page := range pages {
+		if page.key == previous {
+			selected = index
+		}
+	}
+	tabs := ui.TabsBase(c.Key("settings-documents-tabs"), &selected, len(pages))
+	tabs.List.Grow(1).MinWidth(0).Wrap().Gap(4).Label("资料与说明").Children(func() {
+		for index, page := range pages {
+			tab := tabs.Tab(index).Height(34).Padding(0, 12).Radius(8).Label(page.label).FocusRing(true)
+			fg := p.muted
+			if index == selected {
+				tab.Background(p.selected)
+				fg = p.blue
+				if s.dark {
+					fg = p.text
+				}
+			} else if tab.Hovered() {
+				tab.Background(p.soft)
+			}
+			tab.Children(func() { label(c, page.label, 12, fg).FontWeight(500) })
+		}
+	})
+	if next := pages[selected].key; next != previous {
+		s.navigateSettingsPage(next, "")
+	}
+}
+
 func (s *app) settingsPageContent(c *ui.Context, p palette) {
 	switch s.settingsUnit.state.settingsPage {
 	case "basic":
@@ -226,8 +273,8 @@ func (s *app) settingsPageContent(c *ui.Context, p palette) {
 		s.settingsTaskPaths(c, p)
 	case "paths":
 		s.settingsPaths(c, p)
-	case "materials-sync":
-		settingsHelpCard(c, p, "资料 Git 自动同步", "仅同步任务资料仓库。", func() { s.settingsMaterialsGitSync(c, p) })
+	case "project-instructions":
+		s.settingsProjectInstructions(c, p)
 	case "config-backup":
 		s.settingsConfigBackup(c, p)
 	case "dev-tools":
@@ -240,14 +287,14 @@ func (s *app) settingsPageContent(c *ui.Context, p palette) {
 		s.settingsTaskTabs(c, p)
 	case "agents":
 		s.settingsAgents(c, p)
-	case "instruction-templates":
-		s.settingsInstructionTemplates(c, p)
 	case "codex-plugins":
 		s.settingsCodexPlugins(c, p)
 	case "codex-mcp":
 		s.settingsCodexMCP(c, p)
 	case "cli-tools":
 		s.settingsCommandTools(c, p)
+	case platformConnectionsPage:
+		s.settingsPlatformConnections(c, p)
 	case "sw-install":
 		s.settingsCLIBundle(c, p)
 	case "skill-sources":
@@ -269,7 +316,7 @@ func (s *app) settingsPageContent(c *ui.Context, p palette) {
 }
 
 func settingsCLITitle(tool string) string {
-	return map[string]string{"git": "Git", "codex": "Codex CLI", "meegle": "Meegle CLI", "lark": "Lark CLI", "genbu": "Genbu CLI"}[tool]
+	return map[string]string{"git": "Git", "codex": "Codex CLI", "meegle": "Meegle CLI", "lark": "Lark CLI"}[tool]
 }
 
 func (s *app) settingsCommandTools(c *ui.Context, p palette) {
@@ -282,13 +329,23 @@ func (s *app) settingsCLIPageActive(tool string) bool {
 }
 
 func (s *app) settingsCLIDependency(c *ui.Context, p palette, tool, title string) {
-	settingsHelpCard(c, p, title, "命令路径在“工具与连接”中统一管理。", func() {
-		state, color := settingsToolAvailability(s.settingsUnit.state.settingsCLIStatus[tool], p)
-		settingsToolStatusRow(c, p, settingsCLITitle(tool), state, color)
-		if action(c, "settings-configure-"+tool, "", "配置 "+settingsCLITitle(tool), p, false) {
-			s.navigateSettingsPage("cli-"+tool, settingsCLITitle(tool)+" 状态")
-		}
+	settingsHelpCardWithActions(c, p, title, "命令路径在“工具与连接”中统一管理。", func() {
+		s.settingsConfigureCLIAction(c, p, tool)
+	}, func() {
+		s.settingsCLIDependencyStatus(c, p, tool)
 	})
+}
+
+func (s *app) settingsConfigureCLIAction(c *ui.Context, p palette, tool string) {
+	title := settingsCLITitle(tool)
+	if settingsCardAction(c, p, "settings-configure-"+tool, "", "配置 "+title) {
+		s.navigateSettingsPage("cli-"+tool, title+" 状态")
+	}
+}
+
+func (s *app) settingsCLIDependencyStatus(c *ui.Context, p palette, tool string) {
+	state, color := settingsToolAvailability(s.settingsUnit.state.settingsCLIStatus[tool], p)
+	settingsToolStatusRow(c, p, settingsCLITitle(tool), state, color)
 }
 
 func (s *app) renderSettingsSaveStatus(c *ui.Context, p palette) {

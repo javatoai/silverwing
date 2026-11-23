@@ -3,29 +3,42 @@ package desktop
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/ui"
+	"os"
 	"path/filepath"
-	"silverwing-go/internal/application"
 	"strings"
 	"time"
+
+	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
+	"silverwing-go/internal/application"
 )
 
-func (s *app) openSettingsConfig() {
-	s.settingsUnit.state.settingsConfigOpen = false
-	s.settingsUnit.state.settingsConfigText = ""
-	s.settingsUnit.state.settingsConfigPath = ""
-	s.act("config.view", "", "", "", "", "", nil)
+var configBackupZIPFilters = []mygo.FileFilter{{Name: "配置备份 ZIP", Extensions: []string{"zip"}}}
+
+func configBackupStartDirectory(home string) string {
+	directory := filepath.Join(home, "backups")
+	if info, err := os.Stat(directory); err == nil && info.IsDir() {
+		return directory
+	}
+	return home
 }
 
-func (s *app) exportConfig() {
-	s.act("config.export", "", "", "", "", "", nil)
+func (s *app) backupConfig() {
+	home := s.snapshot.Home
+	filename := time.Now().Format("silverwing-config-20060102-150405.zip")
+	s.chooseSavePath("保存配置备份", filepath.Join(configBackupStartDirectory(home), filename), configBackupZIPFilters, func(path string) {
+		if s.snapshot.Home == home && s.settingsConfigRecoveryVisible() {
+			s.act("config.export", "", "", "", path, "", nil)
+		}
+	})
 }
 
-func (s *app) importConfig() {
-	s.pickNativePath("选择要导入的配置", s.snapshot.Home, false, nil, func(path string) {
-		s.materialsUnit.state.importPath = path
-		s.act("config.import-preview", "", "", "", path, "", nil)
+func (s *app) restoreConfig() {
+	home := s.snapshot.Home
+	s.pickNativePath("选择要恢复的配置备份", configBackupStartDirectory(home), false, configBackupZIPFilters, func(path string) {
+		if s.snapshot.Home == home && s.settingsConfigRecoveryVisible() {
+			s.act("config.import-preview", "", "", "", path, "", nil)
+		}
 	})
 }
 
@@ -84,54 +97,26 @@ func (s *app) confirmNative(title, message, detail string, confirmed func()) {
 	})
 }
 
-func (s *app) settingsConfigDialog(c *ui.Context, p palette) {
-	ui.DialogBase(c.Key("settings-config-dialog"), &s.settingsUnit.state.settingsConfigOpen, func(backdrop, panel ui.Element) {
-		backdrop.Background(ui.RGBA(0, 0, 0, 0.34))
-		w, h := c.Size()
-		panel.Width(min(900, w-80)).Height(min(760, h-32)).Padding(20).Gap(12).Background(p.surface).Border(1, p.line).Radius(16)
-		panel.Children(func() {
-			ui.Row(c).Gap(8).Shrink(0).Children(func() {
-				label(c, "应用配置", 17, p.text).FontWeight(600).Grow(1)
-				if iconButton(c, "settings-config-copy", "copy", "复制配置", p).Clicked() {
-					s.copyTextToClipboard(c.Services(), s.settingsUnit.state.settingsConfigText, "已复制配置")
-				}
-				if action(c, "settings-config-close", "close", "关闭", p, false) {
-					s.settingsUnit.state.settingsConfigOpen = false
-				}
-			})
-			if s.settingsUnit.state.settingsConfigPath != "" {
-				label(c, s.settingsUnit.state.settingsConfigPath, 10, p.muted).SingleLine()
-			}
-			ui.Scroll(c).Grow(1).MinHeight(0).Padding(12).Background(p.soft).Border(1, p.line).Radius(8).Children(func() {
-				label(c, s.settingsUnit.state.settingsConfigText, 11, p.text).Font("Consolas").LineHeight(1.45).Selectable()
-			})
-		})
-	})
-}
-
 func (s *app) settingsImportDialog(c *ui.Context, p palette) {
-	if !s.materialsUnit.state.importPreview {
+	state := s.settingsUnit.state.settingsConfigRecovery
+	if state == nil || state.preview == nil || !state.previewOpen {
 		return
 	}
-	ui.DialogBase(c.Key("settings-import-preview"), &s.materialsUnit.state.importPreview, func(backdrop, panel ui.Element) {
+	ui.DialogBase(c.Key("settings-import-preview"), &state.previewOpen, func(backdrop, panel ui.Element) {
 		backdrop.Background(ui.RGBA(0, 0, 0, 0.34))
 		w, h := c.Size()
 		panel.Width(min(720, w-80)).Height(min(640, h-32)).Padding(20).Gap(12).Background(p.surface).Border(1, p.line).Radius(16)
 		panel.Children(func() {
-			label(c, "导入配置预览", 17, p.text).FontWeight(600).Shrink(0)
-			label(c, s.materialsUnit.state.importPath, 10, p.muted).SingleLine().Shrink(0)
+			label(c, "配置恢复预览", 17, p.text).FontWeight(600).Shrink(0)
+			label(c, state.preview.Path, 10, p.muted).SingleLine().Shrink(0)
 			ui.Scroll(c).Grow(1).MinHeight(0).Padding(12).Background(p.soft).Radius(8).Children(func() {
-				text := s.ensureSettingsConfigRecovery().previewText
-				if text == "" {
-					text = "后端尚未返回预览内容。"
-				}
-				label(c, text, 11, p.text).LineHeight(1.45).Wrap().Selectable()
+				label(c, state.previewText, 11, p.text).LineHeight(1.45).Wrap().Selectable()
 			})
 			ui.Row(c).FillWidth().Gap(8).Shrink(0).Wrap().Justify(ui.End).Children(func() {
 				if action(c, "settings-import-cancel", "close", "取消", p, false) {
-					s.materialsUnit.state.importPreview = false
+					state.previewOpen = false
 				}
-				if action(c, "settings-import-apply", "arrow", "确认导入", p, true) {
+				if action(c, "settings-import-apply", "arrow", "确认恢复", p, true) {
 					s.confirmSettingsConfigImport()
 				}
 			})
@@ -280,36 +265,6 @@ func settingsPathValue(c *ui.Context, p palette, title, value string) {
 
 func (s *app) settingsActionForm(form actionForm, payload map[string]any) bool {
 	switch form.kind {
-	case "settings.group.add":
-		name := payloadString(payload, "name")
-		if name == "" {
-			s.lastError = "项目组名称不能为空。"
-			return true
-		}
-		config, err := s.settingsConfigMap()
-		if err != nil {
-			s.lastError = err.Error()
-			return true
-		}
-		groups, _ := config["groups"].([]any)
-		groupID := fmt.Sprintf("group-%x", time.Now().UnixNano())
-		groups = append(groups, map[string]any{"id": groupID, "name": name, "services": []any{}})
-		config["groups"] = groups
-		s.dialogOpen = false
-		s.saveCreatedRepositoryGroup(config, groupID)
-		return true
-	case "settings.group.rename":
-		name := payloadString(payload, "name")
-		if name == "" {
-			s.lastError = "项目组名称不能为空。"
-			return true
-		}
-		if err := s.updateConfigGroup(form.serviceID, func(group map[string]any) { group["name"] = name }); err != nil {
-			s.lastError = err.Error()
-			return true
-		}
-		s.dialogOpen = false
-		return true
 	case "settings.meegle-project.add":
 		s.lastError = "请从 Meegle 项目目录中选择项目空间后添加。"
 		return true

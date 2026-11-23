@@ -141,11 +141,21 @@ func (a *App) workspaceActionWithProgress(ctx context.Context, action Action, on
 			remote = "origin"
 		}
 		var resultText string
-		err = workspace.NewOperationLocks(a.Paths.Locks).WithRepository(w.RepositoryPath, func() error {
-			result, e := git.RunContext(ctx, w.WorktreePath, 2*time.Minute, true, false, "fetch", remote)
+		fetch := func() error {
+			result, err := git.RunContext(ctx, w.WorktreePath, 2*time.Minute, true, false, "fetch", remote)
 			resultText = result.Stdout + result.Stderr
-			return e
-		})
+			return err
+		}
+		locks := workspace.NewTaskOperationLocks(a.Paths)
+		if w.Strategy == domain.WorkspaceIndependentClone {
+			err := locks.WithIndependentCheckout(w.WorktreePath, fetch)
+			return ActionResult{Message: "远端已刷新", Text: resultText}, err
+		}
+		common, err := git.CommonDirectory(w.WorktreePath)
+		if err != nil {
+			return ActionResult{}, err
+		}
+		err = locks.WithRepository(common, fetch)
 		return ActionResult{Message: "远端已刷新", Text: resultText}, err
 	}
 	return ActionResult{}, fmt.Errorf("工作区操作 %s 正在迁移，当前版本尚未实现", action.Kind)

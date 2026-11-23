@@ -48,9 +48,10 @@ func (b *productionTestBackend) Dispatch(ctx context.Context, a application.Acti
 func productionFixture(t *testing.T) (*app, *productionView, production.Batch) {
 	t.Helper()
 	c := domain.DefaultAppConfig()
-	c.Groups[0].Name = "国内组"
-	c.Groups[0].Services = []domain.GroupServiceConfig{{ID: "service", RepositoryID: "repo", DisplayName: "示例服务", Enabled: true, MasterBranch: "origin/master", TestTagBaselineRef: "origin/release/test", DevelopmentTool: domain.DevelopmentToolVisualStudioCode, Modules: []domain.ServiceModuleConfig{}}}
-	c.Groups[0].Services[0].Bootstrap = domain.BootstrapConfig{CopyRules: []domain.BootstrapCopyRule{}, Commands: []domain.BootstrapCommand{}}
+	genbuEnabled := true
+	c.OptionalCLIs.Genbu = &genbuEnabled
+	c.Services = []domain.GroupServiceConfig{{ID: "service", RepositoryID: "repo", DisplayName: "示例服务", Enabled: true, MasterBranch: "origin/master", TestTagBaselineRef: "origin/release/test", DevelopmentTool: domain.DevelopmentToolVisualStudioCode, Modules: []domain.ServiceModuleConfig{}}}
+	c.Services[0].Bootstrap = domain.BootstrapConfig{CopyRules: []domain.BootstrapCopyRule{}, Commands: []domain.BootstrapCommand{}}
 	data, err := json.Marshal(c)
 	if err != nil {
 		t.Fatal(err)
@@ -63,6 +64,7 @@ func productionFixture(t *testing.T) (*app, *productionView, production.Batch) {
 	s.loading = false
 	s.settingsUnit.state.configJSON = string(data)
 	s.snapshot = application.Snapshot{Home: t.TempDir(), Services: []application.Service{{ID: "service", GroupID: domain.DefaultGroupID, Name: "示例服务", RepositoryID: "repo", MasterBranch: "origin/master"}}, Groups: []application.Group{{ID: domain.DefaultGroupID, Name: "国内组"}}, Repositories: []application.Repository{{ID: "repo", Name: "synthetic-repo", RootPath: "C:/synthetic/repo-one"}}}
+	seedPlatformConnectionsForDesktopTest(s, true, false)
 	selection := production.Selection{GroupID: domain.DefaultGroupID, ServiceID: "service"}
 	v := &productionView{Selection: selection, Version: "release/2.3.44", Branch: "feature/synthetic"}
 	target := production.Target{Selection: selection, ServiceName: "示例服务", RepositoryID: "repo", Repository: "C:/synthetic/repo-one", Remote: "origin", MainBranch: "master", IDE: string(domain.DevelopmentToolVisualStudioCode)}
@@ -81,8 +83,7 @@ func productionFixture(t *testing.T) (*app, *productionView, production.Batch) {
 
 func TestProductionSameNameServicesShowAndSearchRepositoryIdentity(t *testing.T) {
 	s, _, _ := productionFixture(t)
-	other := application.Service{ID: "service", GroupID: "other", Name: "示例服务", RepositoryID: "repo-two", MasterBranch: "origin/master"}
-	s.snapshot.Groups = append(s.snapshot.Groups, application.Group{ID: "other", Name: "海外组"})
+	other := application.Service{ID: "service-other", Name: "示例服务", RepositoryID: "repo-two", MasterBranch: "origin/master"}
 	s.snapshot.Repositories = append(s.snapshot.Repositories, application.Repository{ID: "repo-two", Name: "synthetic-overseas", RootPath: "C:/synthetic/overseas-repo"})
 	s.releaseUnit.state.production.choices = append(s.releaseUnit.state.production.choices, productionChoice(other, s.snapshot))
 	selection := production.Selection{GroupID: other.GroupID, ServiceID: other.ID}
@@ -92,7 +93,7 @@ func TestProductionSameNameServicesShowAndSearchRepositoryIdentity(t *testing.T)
 			p := setTheme(c, dark)
 			ui.Row(c).Fill().AlignItems(ui.Stretch).Background(p.bg).Children(func() { s.sidebar(c, p, true); s.renderProductionPage(c, p) })
 		}, 960, 900)
-		for _, text := range []string{"国内组 · 示例服务", "海外组 · 示例服务"} {
+		for _, text := range []string{"示例服务 · synthetic-repo", "示例服务 · synthetic-overseas"} {
 			if !tester.HasText(text) {
 				t.Fatalf("same-name service identity not visible: %s", text)
 			}
@@ -116,11 +117,11 @@ func TestProductionSameNameServicesShowAndSearchRepositoryIdentity(t *testing.T)
 			}
 		}
 	}
-	for _, query := range []string{"海外组", "synthetic-overseas", "overseas-repo", "repo-two"} {
+	for _, query := range []string{"service-other", "synthetic-overseas", "overseas-repo", "repo-two"} {
 		*s.input("production-service-query", "") = query
 		tester := ui.NewTester(func(c *ui.Context) { s.renderProductionPage(c, setTheme(c, false)) }, 960, 900)
-		if !tester.HasText("海外组 · 示例服务") || tester.HasText("国内组 · 示例服务") {
-			t.Fatalf("repository/group search %q did not isolate target", query)
+		if !tester.HasText("示例服务 · synthetic-overseas") || tester.HasText("示例服务 · synthetic-repo") {
+			t.Fatalf("repository/service search %q did not isolate target", query)
 		}
 	}
 }
@@ -150,7 +151,7 @@ func TestProductionGitConfirmationsIdentifyRepository(t *testing.T) {
 			if s.confirmationDialog == nil {
 				t.Fatal("missing confirmation")
 			}
-			for _, identity := range []string{b.Target.Repository, b.Target.RepositoryID, b.Target.GroupID, "origin/master"} {
+			for _, identity := range []string{b.Target.Repository, b.Target.RepositoryID, b.Target.ServiceID, "origin/master"} {
 				if !strings.Contains(s.confirmationDialog.Detail, identity) {
 					t.Fatalf("missing confirmed repository identity %s", identity)
 				}
@@ -182,40 +183,60 @@ func TestProductionRemovedServiceBatchRemainsSelectableAfterReload(t *testing.T)
 	}
 }
 
-func TestProductionEndedBatchKeepsUnconfirmedTagVisible(t *testing.T) {
-	s, _, b := productionFixture(t)
-	b.Ended, b.Phase = true, "ENDED"
-	b.Intent = &production.Intent{Kind: "tag", Step: "tag-push", Tag: "2.3.44", TagCommit: b.ReleaseSHA, TagObject: strings.Repeat("e", 40)}
-	s.releaseUnit.state.production.batches[0] = b
+func TestProductionHistoryDetailKeepsUnconfirmedTagVisible(t *testing.T) {
 	for _, dark := range []bool{false, true} {
-		tester := ui.NewTester(func(c *ui.Context) {
-			p := setTheme(c, dark)
-			ui.Row(c).Fill().AlignItems(ui.Stretch).Background(p.bg).Children(func() { s.sidebar(c, p, true); s.renderProductionPage(c, p) })
-		}, 960, 900)
-		if !tester.HasText("未确认 Tag：2.3.44") || !tester.HasText("核对远端结果") {
-			t.Fatal("ending hid an ambiguous Tag push")
-		}
-		if directory := os.Getenv("SILVERWING_PRODUCTION_EVIDENCE_DIR"); directory != "" {
-			if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Run(fmt.Sprint(dark), func(t *testing.T) {
+			s, v, b, backend, window := productionRequestFixture(t)
+			old := productionHistoryRecord(b, "history-pending", "release/2.3.42", time.Now())
+			old.Tags = nil
+			old.Intent = &production.Intent{Kind: "tag", Step: "tag-push", Tag: "2.3.42", TagCommit: old.ReleaseSHA, TagObject: strings.Repeat("e", 40)}
+			s.releaseUnit.state.production.batches = append(s.releaseUnit.state.production.batches, old)
+			tester := productionIterationTester(s, 960, dark)
+			if tester.HasText("未确认 Tag：2.3.42") {
+				t.Fatal("an ambiguous history Tag was shown in the active release")
+			}
+			if err := tester.Click("历史批次"); err != nil {
 				t.Fatal(err)
 			}
-			file, err := os.Create(filepath.Join(directory, fmt.Sprintf("production-960-dark-%t-ended.png", dark)))
-			if err != nil {
+			if call := productionTestCall(t, backend); call.Kind != "production.list" {
+				t.Fatalf("opening history dispatched %s", call.Kind)
+			}
+			backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batches: []production.Batch{b, old}}}}
+			productionTestUpdate(t, window)
+			tester.Frame()
+			if err := tester.Click(old.ReleaseBranch); err != nil {
 				t.Fatal(err)
 			}
-			encodeErr, closeErr := png.Encode(file, tester.Image()), file.Close()
-			if encodeErr != nil || closeErr != nil {
-				t.Fatalf("capture: %v/%v", encodeErr, closeErr)
+			if !tester.HasText("未确认 Tag：2.3.42") || !tester.HasText("核对远端结果") || v.BatchID != b.ID {
+				t.Fatal("drawer detail lost the pending Tag or changed the active batch")
 			}
-		}
+			captureProductionSummary(t, tester, fmt.Sprintf("production-960-dark-%t-ended", dark))
+			preview, generation := v.Preview, v.Generation
+			if err := tester.Click("核对远端结果"); err != nil {
+				t.Fatal(err)
+			}
+			if call := productionTestCall(t, backend); call.Kind != "production.reconcile-ended" || call.Payload["batchId"] != old.ID {
+				t.Fatalf("history verification addressed the wrong batch: %+v", call)
+			}
+			confirmed := *old.Intent
+			confirmed.ResultConfirmed = true
+			old.Intent = &confirmed
+			backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &old}}}
+			productionTestUpdate(t, window)
+			tester.Frame()
+			if !tester.HasText("原步骤已确认；后续阶段未继续。") || v.BatchID != b.ID || v.Preview != preview || v.Generation != generation || len(backend.calls) != 0 {
+				t.Fatal("history verification lost the record result or changed the active release")
+			}
+		})
 	}
 }
 
 func TestProductionNavigationUsesIndependentGlobalTagGate(t *testing.T) {
 	for _, enabled := range []bool{true, false} {
 		s := &app{
-			settingsUnit: settingsController{state: settingsState{configJSON: fmt.Sprintf(`{"tagEnabled":%t}`, enabled)}},
+			settingsUnit: settingsController{state: settingsState{configJSON: fmt.Sprintf(`{"tagEnabled":%t,"optionalCLIs":{"genbu":true}}`, enabled)}},
 		}
+		seedPlatformConnectionsForDesktopTest(s, true, false)
 		found := false
 		for _, item := range s.sidebarNavigationItems() {
 			if item.page == "production" {
@@ -363,24 +384,25 @@ func TestProductionBackgroundCompletionPreservesPageTaskDraftAndSelection(t *tes
 	}
 }
 
-func TestProductionLateReadAfterInputChangeAndCloseCancellation(t *testing.T) {
+func TestProductionLateReadAfterPreviewChangeAndCloseCancellation(t *testing.T) {
 	s, v, _ := productionFixture(t)
 	backend := &productionTestBackend{calls: make(chan application.Action, 2), replies: make(chan productionTestAnswer, 2)}
 	window := &refreshTestWindow{updates: make(chan func(), 8)}
 	s.backend, s.releaseUnit.state.production.window = backend, window
-	v.Preview = nil
 	s.productionInspect("")
 	<-backend.calls
-	v.ManualTag = "changed"
-	backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Preview: &production.Preview{ProductionTag: "old"}}}}
+	fresh := *v.Preview
+	fresh.ProductionTag = "2.3.45"
+	v.Preview = &fresh
+	backend.replies <- productionTestAnswer{err: production.ErrProductionBaselineUnavailable}
 	select {
 	case update := <-window.updates:
 		update()
 	case <-time.After(time.Second):
 		t.Fatal("no completion")
 	}
-	if v.Preview != nil {
-		t.Fatal("late baseline replaced current input")
+	if v.Preview != &fresh || v.PreparationInvalid || v.Error != "" {
+		t.Fatal("late baseline failure invalidated the newer preview")
 	}
 	s.productionInspect("")
 	<-backend.calls

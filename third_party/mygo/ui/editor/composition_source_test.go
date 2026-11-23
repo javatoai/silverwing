@@ -6,6 +6,29 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+func TestCompositionProjectsOrdinaryBufferSelection(t *testing.T) {
+	b := NewBuffer("az")
+	st := &State{Buffer: b}
+	tt := ui.NewTester(func(c *ui.Context) { View(c, st).Fill().AutoFocus() }, 600, 400)
+	st.Select(1, 1)
+	tt.Frame()
+	tt.Compose("甲\r\n乙", 3)
+	if got := b.String(); got != "a甲\n乙z" {
+		t.Fatalf("composition text = %q", got)
+	}
+	if got := st.Cursor(); got != len("a甲\n") {
+		t.Fatalf("composition cursor = %d", got)
+	}
+	want := ui.TextInputRange{Start: 1, End: 4}
+	if got, ok := st.ed.MarkedRange(); !ok || got != want {
+		t.Fatalf("marked range = %v, %v; want %v", got, ok, want)
+	}
+	tt.Type("终")
+	if got := b.String(); got != "a终z" {
+		t.Fatalf("commit text = %q", got)
+	}
+}
+
 func TestCompositionPreservesOutsideCR(t *testing.T) {
 	b := NewBufferPreservingLineEndings("a\r")
 	st := &State{Buffer: b}

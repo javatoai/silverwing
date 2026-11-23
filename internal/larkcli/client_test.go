@@ -28,7 +28,7 @@ func fakeClient(r *fakeRunner) Client {
 	cfg.LarkExecutablePath = &path
 	proxy := "http://proxy.invalid:9999"
 	cfg.CommandProxyURL = &proxy
-	cfg.CommandProxyTargets = []domain.CommandProxyTarget{domain.ProxyTargetGenbu, domain.ProxyTargetMeegle}
+	cfg.CommandProxyTargets = []domain.CommandProxyTarget{domain.ProxyTargetCodex, domain.ProxyTargetAppUpdates}
 	return Client{Runner: r, Config: cfg}
 }
 func TestIdentityReadsCachedNameDespiteExpiredPersonalToken(t *testing.T) {

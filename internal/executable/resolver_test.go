@@ -29,3 +29,14 @@ func TestCanceledLoginPathDiscoveryDoesNotPoisonCache(t *testing.T) {
 		t.Fatalf("fresh lookup reused cancelled discovery: %q (%d calls)", path, runner.calls)
 	}
 }
+
+func TestEmbeddedPlatformsHaveNoExecutableResolution(t *testing.T) {
+	resolver := NewResolver(&loginPathRunner{})
+	for _, tool := range []Tool{ToolGenbu, ToolDragon} {
+		for _, path := range []string{"", "legacy-executable.exe"} {
+			if got := resolver.Resolve(context.Background(), tool, path); got.Command != "" {
+				t.Fatalf("%s had an executable resolution: %+v", tool, got)
+			}
+		}
+	}
+}

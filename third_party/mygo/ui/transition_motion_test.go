@@ -146,10 +146,16 @@ func TestTransitionMatchesElements(t *testing.T) {
 	if p := tt.Image().RGBAAt(30, 35); p.R < 200 || p.B > 50 {
 		t.Errorf("appearing, the hero is %v, not the thumbnail's red", p)
 	}
+	if c := shownBackground(keyed(tt, "hero")); c != RGB(255, 0, 0) {
+		t.Errorf("appearing, the hero's background is %v, not the thumbnail's red", c)
+	}
 	*now = now.Add(50 * time.Millisecond)
 	tt.Frame()
 	if b := keyed(tt, "hero").Bounds(); !nearRect(b, Rect{60, 65, 120, 60}) {
 		t.Errorf("halfway, the hero shows at %v", b)
+	}
+	if c := shownBackground(keyed(tt, "hero")); c.R < 100 || c.B < 100 {
+		t.Errorf("halfway, the hero's background is %v, not between red and blue", c)
 	}
 	if keyed(tt, "hero").st.world.Set {
 		t.Error("halfway, the hero is scaled rather than laid out at its size")
@@ -374,4 +380,401 @@ func TestTransitionExitsKeepSiblingOrder(t *testing.T) {
 			t.Fatalf("another run paints the copies leaving in the order %v, not %v", o, order)
 		}
 	}
+}
+
+// leavingUnder returns the copies leaving under p.
+func leavingUnder(p *node) []*node {
+	var gs []*node
+	for g := p.first; g != nil; g = g.next {
+		if g.leaving != 0 {
+			gs = append(gs, g)
+		}
+	}
+	return gs
+}
+
+func TestTransitionEntersAndExitsBlurred(t *testing.T) {
+	show, own := false, float32(0)
+	tr := ElementTransition{Duration: 100 * time.Millisecond, Ease: Linear,
+		Enter: &Motion{Opacity: 1, Blur: 8},
+		Exit:  &Motion{Opacity: 1, Blur: 4}}
+	tt, now := clockTester(func(c *context) {
+		coreBox(c).Size(200, 200).Children(func() {
+			if show {
+				keep("blur", coreBox(c).Key("blur")).Absolute().Left(80).Top(80).Size(40, 40).
+					Background(RGB(255, 0, 0)).Blur(own).Transition(tr)
+			}
+		})
+	}, 200, 200)
+	// Just outside the box, what a blur spreads.
+	outside := func() uint8 { return 255 - tt.Image().RGBAAt(124, 100).G }
+	show = true
+	tt.Frame()
+	if b := keyed(tt, "blur").blur; b != 8 {
+		t.Fatalf("entering, the box is blurred by %v", b)
+	}
+	if outside() == 0 {
+		t.Error("entering, the blur spreads nothing beyond the box")
+	}
+	*now = now.Add(50 * time.Millisecond)
+	tt.Frame()
+	if b := keyed(tt, "blur").blur; !within(b, 4, 0.01) {
+		t.Errorf("halfway in, the box is blurred by %v", b)
+	}
+	*now = now.Add(time.Second)
+	tt.Frame()
+	if b := keyed(tt, "blur").blur; b != 0 {
+		t.Errorf("in, the box is blurred by %v", b)
+	}
+	if v := outside(); v != 0 {
+		t.Errorf("in, the box spreads %v beyond it", v)
+	}
+
+	// Its copy blurs too, from its own blur.
+	own = 3
+	tt.Frame()
+	show = false
+	tt.Frame()
+	*now = now.Add(50 * time.Millisecond)
+	tt.Frame()
+	gs := leavingUnder(tt.rt.c.root.first)
+	if len(gs) != 1 {
+		t.Fatalf("%d copies leaving", len(gs))
+	}
+	// Its own 3 and the exit's 2, as Gaussians compose.
+	if b := gs[0].blur; !within(b, 3.606, 0.01) {
+		t.Errorf("halfway out, the copy is blurred by %v", b)
+	}
+	if outside() == 0 {
+		t.Error("halfway out, the copy's blur spreads nothing beyond it")
+	}
+}
+
+func TestTransitionBlurWithoutMotion(t *testing.T) {
+	show := false
+	tr := ElementTransition{Duration: 100 * time.Millisecond, Ease: Linear, Enter: &Motion{Opacity: 1, Blur: 6, Y: 20}}
+	tt, now := clockTester(func(c *context) {
+		coreBox(c).Size(200, 200).Children(func() {
+			if show {
+				keep("blur", coreBox(c).Key("blur")).Size(40, 40).Transition(tr)
+			}
+		})
+	}, 200, 200)
+	tt.SetPreferences(Preferences{ReduceMotion: true})
+	show = true
+	tt.Frame()
+	*now = now.Add(50 * time.Millisecond)
+	tt.Frame()
+	// It blurs in place, as it would fade: a blur moves nothing.
+	e := keyed(tt, "blur")
+	if !within(e.blur, 3, 0.01) || e.y != 0 {
+		t.Errorf("without motion, halfway in, the box is at %v blurred by %v", e.y, e.blur)
+	}
+}
+
+func TestTransitionChildExitDecidesAsItGoes(t *testing.T) {
+	page, dir := 0, float32(1)
+	parentExit := true
+	tt, now := clockTester(func(c *context) {
+		slot := coreBox(c).Size(200, 100)
+		if parentExit {
+			slot.ChildExit(Motion{X: -40 * dir})
+		}
+		slot.Children(func() {
+			coreBox(c).Key(page).Absolute().Size(100, 100).Transition(ElementTransition{
+				Duration: 100 * time.Millisecond, Ease: Linear,
+				Enter: &Motion{Opacity: 1, X: 40 * dir},
+				Exit:  &Motion{Opacity: 1, X: -40 * dir},
+			})
+		})
+	}, 200, 100)
+	slot := func() *node { return tt.rt.c.root.first }
+	halfway := func() float32 {
+		t.Helper()
+		*now = now.Add(50 * time.Millisecond)
+		tt.Frame()
+		gs := leavingUnder(slot())
+		if len(gs) != 1 {
+			t.Fatalf("%d copies leaving", len(gs))
+		}
+		return gs[0].x - slot().x
+	}
+	// Forward, then back: the page that goes as the step turns around,
+	// built going forward, goes as its parent says now, back.
+	page = 1
+	tt.Frame()
+	*now = now.Add(time.Second)
+	tt.Frame()
+	page, dir = 0, -1
+	tt.Frame()
+	if x := halfway(); !within(x, 20, 0.01) {
+		t.Errorf("going back, halfway, the page gone is at %v, not 20", x)
+	}
+	// Without its parent's, it goes as it was built to.
+	*now = now.Add(time.Second)
+	tt.Frame()
+	parentExit = false
+	page, dir = 1, 1
+	tt.Frame()
+	if x := halfway(); !within(x, 20, 0.01) {
+		t.Errorf("without ChildExit, halfway, the page gone is at %v, not 20", x)
+	}
+}
+
+func TestTransitionAfterExits(t *testing.T) {
+	page := 0
+	tr := ElementTransition{Duration: 100 * time.Millisecond, Ease: Linear, Enter: &Motion{}, Exit: &Motion{}, AfterExits: true}
+	tt, now := clockTester(func(c *context) {
+		coreBox(c).Size(200, 100).Children(func() {
+			keep(page, coreBox(c).Key(page)).Absolute().Size(100, 100).Background(RGB(0, 0, 255)).Transition(tr)
+		})
+	}, 200, 100)
+	slot := func() *node { return tt.rt.c.root.first }
+	page = 1
+	tt.Frame()
+	if len(leavingUnder(slot())) != 1 {
+		t.Fatal("the page gone does not leave")
+	}
+	if e := keyed(tt, 1); e.flags&flagInvisible == 0 {
+		t.Error("the page coming shows while the other leaves")
+	}
+	*now = now.Add(50 * time.Millisecond)
+	tt.Frame()
+	if e := keyed(tt, 1); e.flags&flagInvisible == 0 || len(leavingUnder(slot())) != 1 {
+		t.Error("halfway, the page coming shows, or the other no longer leaves")
+	}
+	// The page gone gone, the other comes in.
+	*now = now.Add(60 * time.Millisecond)
+	tt.Frame()
+	if len(leavingUnder(slot())) != 0 {
+		t.Fatal("the page gone is still leaving")
+	}
+	if e := keyed(tt, 1); e.flags&flagInvisible != 0 || !e.opacitySet || e.opacity != 0 {
+		t.Errorf("the page coming does not start coming in: %v", e.opacity)
+	}
+	*now = now.Add(50 * time.Millisecond)
+	tt.Frame()
+	if e := keyed(tt, 1); !within(e.opacity, 0.5, 0.01) {
+		t.Errorf("halfway in, the page coming is %v opaque", e.opacity)
+	}
+	// Gone before it showed, it leaves nothing.
+	*now = now.Add(time.Second)
+	tt.Frame()
+	shown := keyed(tt, 1).id
+	page = 2
+	tt.Frame()
+	page = 3
+	tt.Frame()
+	if gs := leavingUnder(slot()); len(gs) != 1 || gs[0].id != shown {
+		t.Errorf("%d copies leave for the page shown and one that never showed", len(gs))
+	}
+	if e := keyed(tt, 3); e.flags&flagInvisible == 0 {
+		t.Error("the page coming shows while the other leaves")
+	}
+}
+
+// TestTransitionAfterExitsFocus checks that an element held back by
+// AfterExits, given the focus as it replaces another (by a Handle or
+// AutoFocus), takes it once it shows, unless the focus went elsewhere
+// meanwhile.
+func TestTransitionAfterExitsFocus(t *testing.T) {
+	for _, how := range []string{"handle", "autofocus", "elsewhere"} {
+		t.Run(how, func(t *testing.T) {
+			confirm := false
+			var h Handle
+			tr := ElementTransition{Duration: 100 * time.Millisecond, Ease: Linear, Enter: &Motion{}, Exit: &Motion{}}
+			tt := NewTester(func(c *Context) {
+				Column(c).Children(func() {
+					ButtonBase(c).Size(80, 20).Label("other")
+					Box(c).Size(200, 40).Children(func() {
+						if !confirm {
+							ButtonBase(c).Key("actions").Size(80, 20).Label("delete").Transition(tr)
+							return
+						}
+						held := tr
+						held.AfterExits = true
+						b := ButtonBase(c).Key("confirm").Size(80, 20).Label("confirm").Transition(held).Bind(&h)
+						if how == "autofocus" {
+							b.AutoFocus()
+						}
+					})
+				})
+			}, 200, 100)
+			if err := tt.Click("delete"); err != nil {
+				t.Fatal(err)
+			}
+			confirm = true
+			if how != "autofocus" {
+				h.Focus()
+			}
+			tt.Frame()
+			if tt.Focused("confirm") {
+				t.Error("the element held back has the focus while unseen")
+			}
+			if how == "elsewhere" {
+				if err := tt.Click("other"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			tt.Advance(50 * time.Millisecond)
+			if tt.Focused("confirm") {
+				t.Error("halfway through the exit, the element held back has the focus")
+			}
+			tt.Advance(time.Second)
+			if want := how != "elsewhere"; tt.Focused("confirm") != want {
+				t.Errorf("once it shows, the element held back has the focus: %v, want %v", !want, want)
+			}
+			if how == "elsewhere" && !tt.Focused("other") {
+				t.Error("the focus moved elsewhere meanwhile was taken back")
+			}
+		})
+	}
+}
+
+func TestTransitionMotionPercent(t *testing.T) {
+	show := false
+	tt, now := clockTester(func(c *context) {
+		coreBox(c).Size(200, 200).Children(func() {
+			if show {
+				keep("p", coreBox(c).Key("p")).Absolute().Left(100).Top(100).Size(40, 20).Transition(ElementTransition{
+					Duration: 100 * time.Millisecond, Ease: Linear,
+					Enter: &Motion{Opacity: 1, XPercent: -100},
+					Exit:  &Motion{Opacity: 1, X: 10, YPercent: 50},
+				})
+			}
+		})
+	}, 200, 200)
+	show = true
+	tt.Frame()
+	if x := keyed(tt, "p").x; x != 60 {
+		t.Errorf("entering, it is at %v, its width to the left", x)
+	}
+	*now = now.Add(50 * time.Millisecond)
+	tt.Frame()
+	if x := keyed(tt, "p").x; !within(x, 80, 0.01) {
+		t.Errorf("halfway in, it is at %v", x)
+	}
+	*now = now.Add(time.Second)
+	tt.Frame()
+	show = false
+	tt.Frame()
+	*now = now.Add(50 * time.Millisecond)
+	tt.Frame()
+	gs := leavingUnder(tt.rt.c.root.first)
+	if len(gs) != 1 || !within(gs[0].x, 105, 0.01) || !within(gs[0].y, 105, 0.01) {
+		t.Fatalf("halfway out, the copies are %v", gs)
+	}
+}
+
+// TestTransitionExitDelay checks that the Exit waits Animation's Delay
+// unless ExitDelay says otherwise: a positive one is how long it waits,
+// a negative one means it does not.
+func TestTransitionExitDelay(t *testing.T) {
+	ms := time.Millisecond
+	for _, tc := range []struct {
+		name  string
+		delay time.Duration // Animation's Delay
+		t     ElementTransition
+		// whether the copy has moved 50 ms after the element is removed,
+		// and, if it waits, 50 ms after the wait
+		movedAt50, movedAfterWait bool
+	}{
+		{"none", 200 * ms, ElementTransition{}, false, true},
+		{"negative", 200 * ms, ElementTransition{ExitDelay: -1}, true, false},
+		{"negative with ExitDuration", 200 * ms, ElementTransition{ExitDelay: -1, ExitDuration: 100 * ms}, true, false},
+		{"positive", 0, ElementTransition{ExitDelay: 200 * ms, ExitDuration: 100 * ms}, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			shown := true
+			tr := tc.t
+			tr.Animation = &Animation{Duration: 100 * ms, Ease: Linear, Delay: tc.delay}
+			tr.Exit = &Motion{X: 15}
+			tt, now := clockTester(func(c *context) {
+				coreRow(c).Size(200, 40).Background(RGB(255, 255, 255)).Children(func() {
+					if shown {
+						coreBox(c).Key("x").Size(20, 20).Background(RGB(255, 0, 0)).Transition(tr)
+					}
+				})
+			}, 200, 40)
+			*now = now.Add(500 * ms)
+			tt.Frame()
+			shown = false
+			tt.Frame()
+			// The copy has moved over x = 23 once it is no longer white.
+			moved := func() bool { return tt.Image().RGBAAt(23, 10).G < 250 }
+			*now = now.Add(50 * ms)
+			tt.Frame()
+			if got := moved(); got != tc.movedAt50 {
+				t.Errorf("50 ms after it goes, the copy moved is %v, not %v", got, tc.movedAt50)
+			}
+			if !tc.movedAfterWait {
+				return
+			}
+			*now = now.Add(150 * ms)
+			tt.Frame()
+			*now = now.Add(50 * ms)
+			tt.Frame()
+			if !moved() {
+				t.Error("50 ms after the wait, the copy has not moved")
+			}
+		})
+	}
+}
+
+// A child pinned to its parent's far corner follows the parent's Size
+// transition, whatever its own Transition does not animate: it goes
+// with the layout of each in-between size, and only what it animates
+// moves on its own, toward the final place.
+func TestTransitionChildFollowsParentSize(t *testing.T) {
+	const d = 100 * time.Millisecond
+	// grow runs a parent growing in the dimension (w, h) over d, and
+	// returns the child's place at 0, 25, 50 and 100 ms, and a second
+	// later.
+	grow := func(child *ElementTransition, width bool) (xs, ys [5]float32) {
+		pw, ph := float32(120), float32(44)
+		tt, now := clockTester(func(c *context) {
+			coreBox(c).Size(300, 300).Children(func() {
+				coreBox(c).Key("parent").Size(pw, ph).Transition(ElementTransition{Size: true, Duration: d, Ease: Linear}).Children(func() {
+					e := keep("child", coreBox(c).Key("child")).Size(20, 20).Absolute().Bottom(0).Right(0)
+					if child != nil {
+						e.Transition(*child)
+					}
+				})
+			})
+		}, 300, 300)
+		if width {
+			pw = 200
+		} else {
+			ph = 200
+		}
+		last := time.Duration(0)
+		for i, at := range []time.Duration{0, 25 * time.Millisecond, 50 * time.Millisecond, d, d + time.Second} {
+			*now = now.Add(at - last)
+			last = at
+			tt.Frame()
+			e := keyed(tt, "child")
+			xs[i], ys[i] = e.x, e.y
+		}
+		return xs, ys
+	}
+	follows := [5]float32{24, 63, 102, 180, 180}
+	same := func(name string, got, want [5]float32) {
+		t.Helper()
+		if got != want {
+			t.Errorf("%s: %v, not %v", name, got, want)
+		}
+	}
+	_, ys := grow(nil, false)
+	same("child without a Transition, top", ys, follows)
+	_, ys = grow(&ElementTransition{Colors: true, Duration: d}, false)
+	same("child animating colors only, top", ys, follows)
+	// A child animating its position heads for the place the layout gives
+	// it at each frame, which moves with the parent: it is not at its
+	// final place before the parent is.
+	_, ys = grow(&ElementTransition{Position: true, Duration: d, Ease: Linear}, false)
+	same("child animating position, top", ys, follows)
+	// Animating its height alone, a child pinned to the right edge still
+	// follows the parent's width.
+	xs, _ := grow(&ElementTransition{Height: true, Duration: d}, true)
+	same("child animating height only, left", xs, [5]float32{100, 120, 140, 180, 180})
 }

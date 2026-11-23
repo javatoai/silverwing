@@ -45,6 +45,7 @@ type tagGenbuAutoProbeSession struct {
 	ctx              context.Context
 	cancel           context.CancelFunc
 	done             chan struct{}
+	polling          bool                                 // UI-thread-owned; false for local-history-only reads.
 	request          *tagGenbuAutoProbeRequest            // UI-thread-owned
 	historyRefresh   bool                                 // UI-thread-owned; consumed when the request starts
 	retentionPending bool                                 // Retry on timer, never on every frame.
@@ -115,6 +116,9 @@ func (s *app) observeTagGenbuAutoProbeWindow(win tagGenbuAutoProbeWindow) {
 		}
 	}
 	state := s.ensureTagGenbuAutoProbeState()
+	if !s.integrationReady("genbu") && state.current != nil && state.current.polling {
+		s.disableTagGenbuOptionalState()
+	}
 	scope := identity // Includes saved retention settings as well as task identity.
 	if state.visibleScope != scope {
 		state.visibleScope, state.refreshPending = scope, true
@@ -124,6 +128,9 @@ func (s *app) observeTagGenbuAutoProbeWindow(win tagGenbuAutoProbeWindow) {
 		}
 	}
 	session := s.ensureTagGenbuAutoProbe(identity, win)
+	if session != nil && s.integrationReady("genbu") {
+		s.startTagGenbuAutoProbePolling(session, win)
+	}
 	if session != nil && state.refreshPending && session.request == nil {
 		state.refreshPending = false
 		session.historyRefresh = true
@@ -134,9 +141,14 @@ func (s *app) observeTagGenbuAutoProbeWindow(win tagGenbuAutoProbeWindow) {
 // Entry, repeated tab clicks and the menu share one cancellable request owner.
 // Multiple clicks during an in-flight request coalesce into one pending refresh.
 func (s *app) requestTagHistoryRefresh() {
-	s.ensureTagGenbuAutoProbeState().refreshPending = true
-	s.releaseUnit.state.tagGenbuAutoProbe.forcePending = true
-	s.releaseUnit.state.tagGenbuAutoProbe.forceIdentity = s.taskTagGenbuIdentity()
+	state := s.ensureTagGenbuAutoProbeState()
+	state.refreshPending = true
+	state.forcePending = s.integrationReady("genbu")
+	if state.forcePending {
+		state.forceIdentity = s.taskTagGenbuIdentity()
+	} else {
+		state.forceIdentity = ""
+	}
 }
 
 func (s *app) taskTagGenbuIdentity() string {
@@ -178,9 +190,35 @@ func (s *app) ensureTagGenbuAutoProbe(identity string, win tagGenbuAutoProbeWind
 	}
 	state.sessions[session] = struct{}{}
 	state.mu.Unlock()
-	go s.runTagGenbuAutoProbe(session, win)
+	if s.integrationReady("genbu") {
+		s.startTagGenbuAutoProbePolling(session, win)
+	}
 	s.startTagGenbuAutoProbeRequest(session, win)
 	return session
+}
+
+func (s *app) startTagGenbuAutoProbePolling(session *tagGenbuAutoProbeSession, win tagGenbuAutoProbeWindow) {
+	if session == nil || session.polling || session.ctx.Err() != nil || win == nil || win.IsDestroyed() || !s.integrationReady("genbu") {
+		return
+	}
+	session.polling = true
+	go s.runTagGenbuAutoProbe(session, win)
+}
+
+// disableTagGenbuOptionalState invalidates remote status work while leaving
+// the visible history scope ready to perform one local-only history read.
+func (s *app) disableTagGenbuOptionalState() {
+	if s == nil {
+		return
+	}
+	state := s.releaseUnit.state.tagGenbuAutoProbe
+	if state == nil {
+		return
+	}
+	state.refreshPending = true
+	state.forcePending = false
+	state.forceIdentity = ""
+	s.stopTagGenbuAutoProbe()
 }
 
 func (s *app) ensureTagGenbuAutoProbeState() *tagGenbuAutoProbeState {
@@ -223,7 +261,7 @@ func (s *app) queueTagGenbuAutoProbe(session *tagGenbuAutoProbeSession, win tagG
 	}
 	win.Update(func() {
 		if session.ctx.Err() != nil || !s.tagGenbuAutoProbeSessionRelevant(session) ||
-			s.loading || s.backend == nil || win.IsDestroyed() ||
+			s.loading || s.backend == nil || win.IsDestroyed() || !s.integrationReady("genbu") ||
 			s.taskTagGenbuIdentity() != session.identity || session.request != nil {
 			return
 		}
@@ -368,6 +406,9 @@ func (s *app) tagGenbuAutoProbeRequestRelevant(request *tagGenbuAutoProbeRequest
 		s.loading || s.backend == nil {
 		return false
 	}
+	if request.action.Kind != "tag.history" && !s.integrationReady("genbu") {
+		return false
+	}
 	return s.taskTagGenbuIdentity() == request.identity && s.taskUnit.currentTask().id == request.action.TaskID
 }
 
@@ -380,6 +421,15 @@ func (s *releaseController) stopTagGenbuAutoProbe() {
 	session.cancel()
 	if session.request != nil {
 		session.request.cancel()
+	}
+	if !session.polling {
+		state := s.state.tagGenbuAutoProbe
+		state.mu.Lock()
+		if _, tracked := state.sessions[session]; tracked {
+			delete(state.sessions, session)
+			close(session.done)
+		}
+		state.mu.Unlock()
 	}
 }
 

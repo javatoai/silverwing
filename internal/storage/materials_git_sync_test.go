@@ -42,15 +42,12 @@ func TestMaterialsGitSettingsRoundTripExportAndBackup(t *testing.T) {
 	if _, err := target.Load(); err != nil {
 		t.Fatal(err)
 	}
+	backup := exportConfigFixture(t, target)
 	imported, err := target.ImportFrom(archive)
 	if err != nil || !reflect.DeepEqual(imported.MaterialsGitSync, &s) {
 		t.Fatalf("import: %+v %v", imported.MaterialsGitSync, err)
 	}
-	backups, err := target.Backups()
-	if err != nil || len(backups) == 0 {
-		t.Fatal("backup", err)
-	}
-	restored, err := target.Restore(backups[0].Path)
+	restored, err := target.ImportFrom(backup)
 	if err != nil || restored.MaterialsGitSettings().Enabled {
 		t.Fatalf("restore: %+v %v", restored.MaterialsGitSettings(), err)
 	}

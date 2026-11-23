@@ -180,7 +180,10 @@ func (w *widgetTextInput) ReplaceText(r *TextInputRange, s string) {
 		return
 	}
 	if r == nil || ed.password {
-		if ed.compose != "" {
+		// The input method may clear the preedit before its commit delivers
+		// the text, as GTK's fcitx module does: the composition's undo step
+		// takes it then, rather than a step of its own that changes nothing.
+		if ed.compose != "" || ed.compositionActive && len(ed.undo) > 0 {
 			ed.compose = ""
 			ed.replace(ed.caret, ed.caret, s)
 		} else {
@@ -211,6 +214,11 @@ func (w *widgetTextInput) SetMarkedText(r *TextInputRange, s string, selected Te
 	if ed.readOnly {
 		return
 	}
+	if s == "" && r == nil && ed.compose == "" {
+		// A preedit that is already gone, as GTK clears it after a commit
+		// delivered the text: nothing to mark, and no undo step to start.
+		return
+	}
 	if ed.compose == "" || r != nil {
 		a, z := ed.selection()
 		ranges := ed.selectedRanges()
@@ -237,6 +245,7 @@ func (w *widgetTextInput) SetMarkedText(r *TextInputRange, s string, selected Te
 	selected.Start, selected.End = min(selected.Start, n), min(selected.End, n)
 	selected.Start = countUnits(s[:UTF16ByteOffset(s, selected.Start)])
 	selected.End = countUnits(s[:UTF16ByteOffset(s, selected.End)])
+	ed.dragging = false // as an edit does
 	ed.compose, ed.composeSelected = s, selected
 	ed.composeCaret = utf8.RuneCountInString(s[:UTF16ByteOffset(s, selected.End)])
 	if ed.area != nil {
@@ -256,9 +265,26 @@ func (w *widgetTextInput) UnmarkText() {
 	w.publish()
 }
 
+// SetTextSelection moves the selection, as an on-screen keyboard does.
+func (w *widgetTextInput) SetTextSelection(r TextInputRange) {
+	w.prepare()
+	ed := w.ed
+	if ed.password {
+		return
+	}
+	ed.commitCompose()
+	a, z := ed.buf.runeAtUTF16(r.Start), ed.buf.runeAtUTF16(r.End)
+	ed.anchor, ed.caret = a, z
+	ed.hasDesired = false
+	if ed.area != nil {
+		ed.area.reveal = true
+	}
+	w.publish()
+}
+
 func (w *widgetTextInput) layout() *text.Layout {
 	ed := w.ed
-	if ed.layout != nil && (ed.layoutVersion != ed.buf.version || ed.layoutCompose != ed.compose || ed.layoutPassword != ed.password || ed.layoutGeneration != textSystem().Generation()) {
+	if ed.layout != nil && (ed.layoutVersion != ed.buf.version || ed.layoutCompose != ed.compose || ed.layoutPassword != ed.password || ed.layoutGeneration != ed.sys.Generation()) {
 		params := ed.layout.Params
 		params.Text = ed.displayText()
 		params.Spans = ""

@@ -88,12 +88,11 @@ func NewGitClient(runner *process.Runner, executable string) *GitClient {
 	return &GitClient{Runner: runner, Executable: executable}
 }
 
-// NewGitClientWithConfig creates a Git client whose child-process environment
-// reflects the configured Git proxy target. Proxy variables inherited from the
-// desktop process are removed when Git is not explicitly selected as a target.
+// NewGitClientWithConfig uses the configured executable and removes inherited
+// proxy variables from Git commands started by Silverwing.
 func NewGitClientWithConfig(runner *process.Runner, config domain.AppConfig) *GitClient {
 	client := NewGitClient(runner, gitConfigValue(config.GitExecutablePath))
-	client.Environment, client.RemoveEnvironment = proxyProcessEnvironment(config, domain.ProxyTargetGit)
+	client.Environment, client.RemoveEnvironment = commandruntime.ProxyEnvironment(config, "")
 	return client
 }
 
@@ -404,19 +403,47 @@ func (g *GitClient) AddWorktree(repository, target, branch, baseRef string, trac
 	if err != nil && created {
 		_ = g.RemoveWorktree(repository, target, true)
 		_, _ = g.RunContext(context.Background(), repository, 10*time.Minute, false, false, "branch", "-D", branch)
-		_, _ = g.RunContext(context.Background(), repository, 10*time.Minute, false, false, "worktree", "prune")
 	}
 	return err
 }
 
-func (g *GitClient) AddExistingWorktree(repository, target, branch string, force bool) error {
-	args := []string{"-c", "core.symlinks=false", "worktree", "add"}
-	if force {
-		args = append(args, "--force")
-	}
-	args = append(args, target, branch)
-	_, err := g.RunContext(context.Background(), repository, 5*time.Minute, true, false, args...)
+func (g *GitClient) AddExistingWorktree(repository, target, branch string) error {
+	_, err := g.RunContext(context.Background(), repository, 5*time.Minute, true, false,
+		"-c", "core.symlinks=false", "worktree", "add", target, branch)
 	return err
+}
+
+func (g *GitClient) requireWorktreeBranchAvailable(repository, target, branch string) error {
+	worktrees, err := g.Worktrees(repository)
+	if err != nil {
+		return err
+	}
+	for _, wt := range worktrees {
+		if wt.Branch == branch && !samePath(wt.Path, target) {
+			return fmt.Errorf("分支 %s 已在其他工作树检出：%s", branch, wt.Path)
+		}
+	}
+	return nil
+}
+
+func (g *GitClient) removeMissingWorktreeRegistration(repository, target string) error {
+	worktrees, err := g.Worktrees(repository)
+	if err != nil {
+		return err
+	}
+	for _, wt := range worktrees {
+		if !samePath(wt.Path, target) {
+			continue
+		}
+		if wt.Locked {
+			return fmt.Errorf("工作树登记已锁定：%s", target)
+		}
+		if _, err := os.Lstat(target); !os.IsNotExist(err) {
+			return fmt.Errorf("工作树路径仍存在或无法读取，拒绝清除登记：%s", target)
+		}
+		return g.RemoveWorktree(repository, target, true)
+	}
+	return nil
 }
 
 func (g *GitClient) AddTrackedRemoteWorktree(repository, target, branch, remote string) error {
@@ -429,7 +456,6 @@ func (g *GitClient) AddTrackedRemoteWorktree(repository, target, branch, remote 
 	if err != nil && created {
 		_ = g.RemoveWorktree(repository, target, true)
 		_, _ = g.RunContext(context.Background(), repository, 10*time.Minute, false, false, "branch", "-D", branch)
-		_, _ = g.RunContext(context.Background(), repository, 10*time.Minute, false, false, "worktree", "prune")
 	}
 	return err
 }

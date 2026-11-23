@@ -152,13 +152,13 @@ func TestConfigurationReadsAvoidRepeatedFullDecode(t *testing.T) {
 func TestTypedConfigurationReadsKeepSourcesAndDraftsIndependent(t *testing.T) {
 	s := taskNavigationFixture()
 	config := domain.DefaultAppConfig()
-	config.Groups = []domain.GroupConfig{{ID: "backend", Services: []domain.GroupServiceConfig{{
+	config.Services = []domain.ServiceConfig{{
 		ID: "service", DisplayName: "original service", Enabled: true, DevelopmentTool: domain.DevelopmentToolIntelliJIdea,
 		Bootstrap: domain.BootstrapConfig{CopyRules: []domain.BootstrapCopyRule{}, Commands: []domain.BootstrapCommand{}},
 		Modules: []domain.ServiceModuleConfig{{ID: "module", Strategy: domain.WorkspaceStandardWorktree, TagMode: domain.TagBuildMergeToTargetBranch, CustomCommands: []domain.WorkspaceCommandConfig{{
 			ID: "command", Enabled: true, Arguments: []string{"saved"},
 		}}}},
-	}}}}
+	}}
 	encode := func() string {
 		encoded, err := json.Marshal(config)
 		if err != nil {
@@ -181,11 +181,11 @@ func TestTypedConfigurationReadsKeepSourcesAndDraftsIndependent(t *testing.T) {
 	if s.workspaceCommandsFor(s.taskUnit.state.tasks[0], w)[0].Arguments[0] != "saved" {
 		t.Fatal("command arguments mutated the typed configuration cache")
 	}
-	group, err := s.taskAppendGroup(s.taskUnit.state.tasks[0])
+	catalog, err := s.taskAppendCatalog()
 	if err != nil {
 		t.Fatal(err)
 	}
-	group.Services[0].DisplayName = "unsaved service"
+	catalog[0].DisplayName = "unsaved service"
 	if s.taskAddableServices(s.taskUnit.state.tasks[0])[0].Name != "original service" {
 		t.Fatal("task append draft mutated the snapshot configuration cache")
 	}
@@ -198,8 +198,8 @@ func TestTypedConfigurationReadsKeepSourcesAndDraftsIndependent(t *testing.T) {
 	if allocations := testing.AllocsPerRun(20, read); allocations > 32 {
 		t.Fatalf("stable workspace rendering still decodes full typed configurations: %.0f allocations", allocations)
 	}
-	config.Groups[0].Services[0].DisplayName = "changed service"
-	config.Groups[0].Services[0].Modules[0].CustomCommands[0].Arguments[0] = "changed"
+	config.Services[0].DisplayName = "changed service"
+	config.Services[0].Modules[0].CustomCommands[0].Arguments[0] = "changed"
 	s.settingsUnit.state.configJSON = encode()
 	if s.workspaceCommandsFor(s.taskUnit.state.tasks[0], w)[0].Arguments[0] != "changed" || s.taskAddableServices(s.taskUnit.state.tasks[0])[0].Name != "original service" {
 		t.Fatal("current and snapshot configuration sources were conflated")

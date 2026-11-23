@@ -76,7 +76,7 @@ func diffEditableLogicalLines(source string) ([]diffEditableLogicalLine, string)
 }
 
 func (state *toolPageState) syncDiffEditableDecorations(p palette) {
-	ready := state.diffHasData && state.diffOutputRevision == state.diffRevision
+	ready := !state.diffJSONMode && state.diffHasData && state.diffOutputRevision == state.diffRevision
 	var first *tools.DiffRow
 	if len(state.diffResult.Rows) != 0 {
 		first = &state.diffResult.Rows[0]

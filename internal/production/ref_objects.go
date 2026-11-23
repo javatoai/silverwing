@@ -51,23 +51,15 @@ func (s *Service) fetchMissing(ctx context.Context, t Target, refs references, n
 		return ctx.Err()
 	}
 	args := []string{"fetch", "--no-tags", t.Remote}
-	argumentBytes := 0
+	prefix := namespace(t) + "/"
 	for _, name := range missing {
-		refspec := "+" + name + ":" + namespace(t) + "/" + strings.TrimPrefix(name, "refs/")
-		// Large Tag pickers must also fit Windows' command-line length limit.
-		if argumentBytes+len(refspec) > 16000 && len(args) > 3 {
-			if _, err := s.run(ctx, t.Repository, args...); err != nil {
-				return err
-			}
-			args, argumentBytes = args[:3], 0
-		}
-		args = append(args, refspec)
-		argumentBytes += len(refspec) + 1
+		destination := prefix + strings.TrimPrefix(name, "refs/")
+		args = append(args, "+"+name+":"+destination)
 	}
 	if _, err := s.run(ctx, t.Repository, args...); err != nil {
 		return err
 	}
-	out, err = s.run(ctx, t.Repository, "for-each-ref", "--format=%(refname)%00%(objectname)", namespace(t)+"/")
+	out, err = s.run(ctx, t.Repository, "for-each-ref", "--format=%(refname)%00%(objectname)", prefix)
 	if err != nil {
 		return err
 	}
@@ -78,23 +70,9 @@ func (s *Service) fetchMissing(ctx context.Context, t Target, refs references, n
 		}
 	}
 	for _, name := range missing {
-		if fetched[namespace(t)+"/"+strings.TrimPrefix(name, "refs/")] != refs[name] {
+		if fetched[prefix+strings.TrimPrefix(name, "refs/")] != refs[name] {
 			return fmt.Errorf("远端 %s 在读取期间发生变化，请重新检查", name)
 		}
 	}
 	return nil
-}
-
-// Date ordering needs local refs, including lightweight Tags whose objects were
-// already present. Update only our private cache, without another remote fetch.
-func (s *Service) retainTagSnapshot(ctx context.Context, t Target, refs references) error {
-	var input strings.Builder
-	for _, name := range tagNames(refs) {
-		input.WriteString("update " + namespace(t) + "/tags/" + name + " " + refs["refs/tags/"+name] + "\n")
-	}
-	if input.Len() == 0 {
-		return nil
-	}
-	_, err := s.gitInput(ctx, t, input.String(), "update-ref", "--stdin")
-	return err
 }

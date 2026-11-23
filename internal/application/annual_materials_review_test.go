@@ -15,14 +15,10 @@ import (
 	"silverwing-go/internal/workspace"
 )
 
-func TestAnnualApplicationArchiveCustomRouterSucceedsWithVisibleWarningAndLocalRetry(t *testing.T) {
+func TestAnnualApplicationArchiveIntegratesCustomAGENTS(t *testing.T) {
 	t.Setenv("USERPROFILE", t.TempDir())
 	a, scope, taskPath := annualApplicationFixture(t)
 	router := filepath.Join(taskPath, workspace.AgentRouterFileName)
-	original, err := os.ReadFile(router)
-	if err != nil {
-		t.Fatal(err)
-	}
 	custom := "# user-owned instructions\nkeep every byte\n"
 	if err := os.WriteFile(router, []byte(custom), 0644); err != nil {
 		t.Fatal(err)
@@ -32,39 +28,25 @@ func TestAnnualApplicationArchiveCustomRouterSucceedsWithVisibleWarningAndLocalR
 		t.Fatal(err)
 	}
 	result, err := a.Dispatch(context.Background(), Action{Kind: "task.archive", TaskID: "task"})
-	if err != nil || !strings.Contains(result.Message, "警告") || !strings.Contains(result.Message, "刷新资料可单独重试") {
-		t.Fatal("custom catalogue turned archive into a fatal or silent failure", result.Message, err)
+	if err != nil || strings.Contains(result.Message, "警告") {
+		t.Fatal("archive did not integrate the managed blocks", result.Message, err)
 	}
 	archived, err := a.Manifests.Load(taskPath)
 	if err != nil || archived.LifecycleStatus != domain.TaskArchived {
 		t.Fatal("archive did not persist normally", archived, err)
 	}
 	data, _ := os.ReadFile(router)
-	contextData, _ := os.ReadFile(filepath.Join(taskPath, ".workspace", "agent", "TASK-CONTEXT.md"))
-	if string(data) != custom || strings.Contains(string(contextData), peer) || !strings.Contains(string(contextData), "主动阅读") {
-		t.Fatal("archive overwrote custom AGENTS or skipped safe context")
+	if !strings.HasPrefix(string(data), custom) || strings.Contains(string(data), peer) || !strings.Contains(string(data), "主动阅读") || !strings.Contains(string(data), archived.RequirementLink) {
+		t.Fatal("archive lost custom AGENTS content or failed to include the task context")
 	}
 	a.Platform = platform.NewService(a.Paths, a.Config, nil)
 	refreshed, err := a.Dispatch(context.Background(), Action{Kind: "task.refresh"})
-	if err != nil || !strings.Contains(refreshed.Message, "警告") {
-		t.Fatal("ordinary task refresh hid the nonfatal catalogue warning", refreshed.Message, err)
-	}
-	// Restore a manageable document as the user would, then use the existing
-	// local refresh. No Git runner is present, so it cannot repeat sync writes.
-	if err := os.WriteFile(router, original, 0644); err != nil {
-		t.Fatal(err)
-	}
-	result, err = a.Dispatch(context.Background(), Action{Kind: "document.list", TaskID: "task"})
-	if err != nil || strings.Contains(result.Message, "说明更新失败") || a.Runner != nil {
-		t.Fatal("standalone local retry did not settle the warning", result.Message, err)
-	}
-	data, _ = os.ReadFile(router)
-	if strings.Contains(string(data), peer) || !strings.Contains(string(data), "主动阅读") {
-		t.Fatal("local retry did not refresh the archived task's managed block")
+	if err != nil || strings.Contains(refreshed.Message, "警告") {
+		t.Fatal("refresh reported a catalogue warning after archive", refreshed.Message, err)
 	}
 }
 
-func TestAnnualApplicationInstructionsSaveCustomRouterWarnsAndUpdatesSafeContext(t *testing.T) {
+func TestAnnualApplicationInstructionsSaveUpdatesCustomAGENTS(t *testing.T) {
 	a, scope, taskPath := annualApplicationFixture(t)
 	router := filepath.Join(taskPath, workspace.AgentRouterFileName)
 	custom := []byte("# USER CUSTOM INSTRUCTIONS\nkeep all user bytes\n")
@@ -85,30 +67,28 @@ func TestAnnualApplicationInstructionsSaveCustomRouterWarnsAndUpdatesSafeContext
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := a.Dispatch(context.Background(), Action{Kind: "instructions.save", TaskID: "task", Text: "saved task rules", Payload: map[string]any{"expectedHash": current.Hash}})
-	if err != nil || !strings.Contains(result.Message, "说明已保存") || !strings.Contains(result.Message, "警告") ||
-		!strings.Contains(result.Message, "刷新资料可单独重试") {
-		t.Fatal("instructions.save lost either the successful save or its catalogue warning", result.Message, err)
+	result, err := a.Dispatch(context.Background(), Action{Kind: "instructions.save", TaskID: "task", Path: workspace.AgentRulesFileName, Text: "saved task rules", Payload: map[string]any{"expectedHash": current.Hash}})
+	if err != nil || !strings.Contains(result.Message, "说明已保存") || strings.Contains(result.Message, "警告") {
+		t.Fatal("instructions.save did not integrate the managed blocks", result.Message, err)
 	}
 	data, readErr := os.ReadFile(router)
-	contextData, contextErr := os.ReadFile(filepath.Join(taskPath, workspace.AgentWorkspaceDir, workspace.AgentDirectoryName, workspace.AgentContextFileName))
-	if readErr != nil || string(data) != string(custom) || contextErr != nil || strings.Contains(string(contextData), peer) || !strings.Contains(string(contextData), "主动阅读") {
-		t.Fatal("instructions.save overwrote the custom router or skipped safe context", string(data), readErr, contextErr)
+	if readErr != nil || !strings.HasPrefix(string(data), string(custom)) || strings.Contains(string(data), peer) || !strings.Contains(string(data), "主动阅读") || !strings.Contains(string(data), manifest.RequirementLink) {
+		t.Fatal("instructions.save lost custom AGENTS content or failed to include the task context", string(data), readErr)
 	}
 	notesData, readErr := os.ReadFile(notes)
 	content, ok := result.Data.(documents.Content)
 	if readErr != nil || string(notesData) != "saved task rules" || !ok || content.Hash != documents.Hash(notesData) {
-		t.Fatal("warning changed saved rules or the returned editor conflict hash", string(notesData), content, readErr)
+		t.Fatal("save changed task rules or the returned editor conflict hash", string(notesData), content, readErr)
 	}
 }
 
-func TestAnnualApplicationInstructionsSaveRequiredContextFailureRemainsFatal(t *testing.T) {
+func TestAnnualApplicationInstructionsSaveRequiredAGENTSFailureRemainsFatal(t *testing.T) {
 	a, _, taskPath := annualApplicationFixture(t)
-	contextPath := filepath.Join(taskPath, workspace.AgentWorkspaceDir, workspace.AgentDirectoryName, workspace.AgentContextFileName)
-	if err := os.Remove(contextPath); err != nil {
+	agentsPath := filepath.Join(taskPath, workspace.AgentRouterFileName)
+	if err := os.Remove(agentsPath); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(contextPath, 0700); err != nil {
+	if err := os.Mkdir(agentsPath, 0700); err != nil {
 		t.Fatal(err)
 	}
 	manifest, err := a.Manifests.Load(taskPath)
@@ -120,9 +100,9 @@ func TestAnnualApplicationInstructionsSaveRequiredContextFailureRemainsFatal(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := a.Dispatch(context.Background(), Action{Kind: "instructions.save", TaskID: "task", Text: "save must report context I/O failure", Payload: map[string]any{"expectedHash": current.Hash}})
+	result, err := a.Dispatch(context.Background(), Action{Kind: "instructions.save", TaskID: "task", Path: workspace.AgentRulesFileName, Text: "save must report AGENTS I/O failure", Payload: map[string]any{"expectedHash": current.Hash}})
 	if err == nil || strings.Contains(result.Message, "说明已保存") {
-		t.Fatal("required TASK-CONTEXT I/O failure became a successful optional warning", result.Message, err)
+		t.Fatal("required AGENTS I/O failure became a successful optional warning", result.Message, err)
 	}
 }
 
@@ -185,11 +165,9 @@ func TestAnnualApplicationScanDiagnosticsDoNotSilentlySkipArchives(t *testing.T)
 		t.Fatal("incomplete scan was presented as full coverage", result.Message, err)
 	}
 	for _, path := range []string{taskPath, goodArchive} {
-		for _, relative := range []string{"AGENTS.md", filepath.Join(".workspace", "agent", "TASK-CONTEXT.md")} {
-			data, err := os.ReadFile(filepath.Join(path, relative))
-			if err != nil || strings.Contains(string(data), peer) || !strings.Contains(string(data), "主动阅读") {
-				t.Fatal("scan diagnostics prevented safe task fanout", path, relative, err)
-			}
+		data, err := os.ReadFile(filepath.Join(path, workspace.AgentRouterFileName))
+		if err != nil || strings.Contains(string(data), peer) || !strings.Contains(string(data), "主动阅读") {
+			t.Fatal("scan diagnostics prevented safe task fanout", path, err)
 		}
 	}
 	for path, original := range savedBytes {

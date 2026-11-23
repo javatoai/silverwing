@@ -17,6 +17,9 @@ func (a *App) Dispatch(ctx context.Context, action Action) (ActionResult, error)
 	if err := ctx.Err(); err != nil {
 		return ActionResult{}, err
 	}
+	if a.Paths.ProfileID != "" && (strings.HasPrefix(action.Kind, "migration.") || action.Kind == "config.materials-root.save") {
+		return ActionResult{}, errors.New("请在设置中直接选择任务目录或配置任务资料仓库")
+	}
 	if action.Kind == workspace.CompareSessionCloseAction {
 		sessionID := textPayload(action, "sessionId")
 		if strings.TrimSpace(sessionID) == "" {
@@ -25,31 +28,37 @@ func (a *App) Dispatch(ctx context.Context, action Action) (ActionResult, error)
 		a.workspaceGitDiffSessions().Retire(sessionID)
 		return ActionResult{Message: "Git 差异会话已关闭"}, nil
 	}
-	if strings.HasPrefix(action.Kind, "migration.") || action.Kind == "config.view" || action.Kind == "config.backups" || action.Kind == "config.delete-backups" || action.Kind == "config.import-preview" || action.Kind == "config.restore-preview" || action.Kind == "config.restore-backup" {
+	if strings.HasPrefix(action.Kind, "migration.") || action.Kind == "config.import-preview" {
 		return a.configurationAction(ctx, action)
 	}
 	switch action.Kind {
+	case "platform.connections", "platform.credentials.save", "platform.connection.set", "platform.login.test":
+		return a.platformConnectionAction(ctx, action)
 	case "config.task-root.save":
 		return a.saveTaskRootSwitch(ctx, action)
 	case "config.materials-root.save":
 		return a.saveMaterialsRoot(action)
+	case "config.documents-git.bind", "config.documents-git.unbind":
+		return a.configureDocumentsGit(ctx, action)
 	case "task.refresh":
 		return a.refreshTasks(ctx)
 	case "config.save":
-		return a.saveConfiguration(action)
+		return a.updateOptionalCLIConfig(true, func() (ActionResult, error) { return a.saveConfiguration(action) })
 	case "config.fields.save":
-		return a.saveConfigurationFields(action)
+		return a.updateOptionalCLIConfig(false, func() (ActionResult, error) { return a.saveConfigurationFields(action) })
 	case "config.export":
 		return a.exportConfiguration(action)
 	case "config.import":
-		var config domain.AppConfig
-		var err error
-		if fingerprint := textPayload(action, "expectedFingerprint"); fingerprint != "" {
-			config, err = a.Config.ImportFromPreview(actionPath(action), fingerprint)
-		} else {
-			config, err = a.Config.ImportFrom(actionPath(action))
-		}
-		return ActionResult{Message: "配置已导入", Data: config}, err
+		return a.updateOptionalCLIConfig(true, func() (ActionResult, error) {
+			var config domain.AppConfig
+			var err error
+			if fingerprint := textPayload(action, "expectedFingerprint"); fingerprint != "" {
+				config, err = a.Config.ImportFromPreview(actionPath(action), fingerprint)
+			} else {
+				config, err = a.Config.ImportFrom(actionPath(action))
+			}
+			return ActionResult{Message: "配置已恢复", Data: config}, err
+		})
 	case "repository.add":
 		config, err := a.Config.Load()
 		if err != nil {
@@ -81,11 +90,9 @@ func (a *App) Dispatch(ctx context.Context, action Action) (ActionResult, error)
 			id = action.ServiceID
 		}
 		_, err := a.Config.Update(func(c domain.AppConfig) (domain.AppConfig, error) {
-			for _, g := range c.Groups {
-				for _, s := range g.Services {
-					if s.RepositoryID == id {
-						return c, errors.New("仓库仍被服务引用，请先调整服务")
-					}
+			for _, service := range c.ServiceCatalog() {
+				if service.RepositoryID == id {
+					return c, errors.New("仓库仍被服务引用，请先调整服务")
 				}
 			}
 			found := false
@@ -114,24 +121,20 @@ func (a *App) Dispatch(ctx context.Context, action Action) (ActionResult, error)
 		return a.developerToolAction(ctx, action)
 	case "codex.run":
 		return a.openCodex(ctx, action)
+	case "instructions.read", "instructions.draft", "instructions.save", "instructions.images.import":
+		return a.instructionAction(ctx, action)
 	}
 	if strings.HasPrefix(action.Kind, "task.branch-notice.") {
 		return a.branchNoticeAction(ctx, action)
 	}
-	if strings.HasPrefix(action.Kind, "task.services.") {
+	if strings.HasPrefix(action.Kind, taskServicesActionPrefix) || strings.HasPrefix(action.Kind, serviceRuntimeActionPrefix) {
 		return a.taskServicesAction(ctx, action)
 	}
 	if strings.HasPrefix(action.Kind, "task.files.") {
 		return a.taskFilesAction(ctx, action)
 	}
 	if strings.HasPrefix(action.Kind, "document.") {
-		if action.Kind == "document.link-preview" {
-			return a.documentLinkPreview(ctx, action)
-		}
 		return a.documentAction(ctx, action)
-	}
-	if strings.HasPrefix(action.Kind, "instructions.") {
-		return a.instructionAction(ctx, action)
 	}
 	if strings.HasPrefix(action.Kind, "requirements.") || strings.HasPrefix(action.Kind, "meegle.") {
 		return a.integrationAction(ctx, action)
@@ -190,74 +193,59 @@ func (a *App) serviceConfig(action Action) (ActionResult, error) {
 	if id == "" {
 		id = textPayload(action, "serviceId")
 	}
-	groupID := textPayload(action, "groupId")
-	if groupID == "" {
-		groupID = domain.DefaultGroupID
-	}
 	_, err := a.Config.Update(func(c domain.AppConfig) (domain.AppConfig, error) {
-		for gi := range c.Groups {
-			if c.Groups[gi].ID != groupID {
-				continue
+		c.Services = append([]domain.ServiceConfig{}, c.ServiceCatalog()...)
+		c.Groups = nil
+		index := -1
+		for i, service := range c.Services {
+			if service.ID == id {
+				index = i
+				break
 			}
-			index := -1
-			for i, s := range c.Groups[gi].Services {
-				if s.ID == id {
-					index = i
-					break
-				}
-			}
-			if action.Kind == "service.remove" {
-				if index < 0 {
-					return c, errors.New("服务不存在")
-				}
-				c.Groups[gi].Services = append(c.Groups[gi].Services[:index], c.Groups[gi].Services[index+1:]...)
-				return c, nil
-			}
-			if id == "" {
-				return c, errors.New("服务 ID 不能为空")
-			}
-			masterBranch := textPayload(action, "masterBranch")
-			if masterBranch == "" {
-				masterBranch = "origin/master"
-			}
-			strategy := domain.WorkspaceStandardWorktree
-			if raw := textPayload(action, "strategy"); raw != "" {
-				strategy = domain.WorkspaceStrategy(raw)
-			}
-			module := domain.ServiceModuleConfig{ID: "default", Name: "default", Strategy: strategy, TagEnabled: true, TagMode: domain.TagBuildMergeToTargetBranch, TagMessagePrefix: "Tag", CustomCommands: []domain.WorkspaceCommandConfig{}}
-			service := domain.GroupServiceConfig{ID: id, Enabled: true, DisplayName: textPayload(action, "name"), GenbuServiceName: textPayload(action, "name"), RepositoryID: textPayload(action, "repositoryId"), MasterBranch: masterBranch, TestTagBaselineRef: "origin/release/test", DevelopmentTool: c.DefaultDevelopmentTool, Modules: []domain.ServiceModuleConfig{module}, Bootstrap: domain.BootstrapConfig{CopyRules: []domain.BootstrapCopyRule{}, Commands: []domain.BootstrapCommand{}}}
-			if index >= 0 {
-				service = c.Groups[gi].Services[index]
-				if name := textPayload(action, "name"); name != "" {
-					service.DisplayName = name
-				}
-				if ref := textPayload(action, "masterBranch"); ref != "" {
-					service.MasterBranch = ref
-				}
-				if repo := textPayload(action, "repositoryId"); repo != "" {
-					service.RepositoryID = repo
-				}
-			}
-			if _, ok := action.Payload["testTagBaselineRef"]; ok {
-				service.TestTagBaselineRef = textPayload(action, "testTagBaselineRef")
-			}
-			if raw, ok := action.Payload["service"]; ok {
-				data, e := json.Marshal(raw)
-				if e != nil {
-					return c, e
-				}
-				if e = json.Unmarshal(data, &service); e != nil {
-					return c, e
-				}
-			}
-			if index < 0 {
-				c.Groups[gi].Services = append(c.Groups[gi].Services, service)
-			} else {
-				c.Groups[gi].Services[index] = service
-			}
-			return c, nil
 		}
-		return c, errors.New("组不存在")
+		if id == "" {
+			return c, errors.New("服务 ID 不能为空")
+		}
+		masterBranch := textPayload(action, "masterBranch")
+		if masterBranch == "" {
+			masterBranch = "origin/master"
+		}
+		strategy := domain.WorkspaceStandardWorktree
+		if raw := textPayload(action, "strategy"); raw != "" {
+			strategy = domain.WorkspaceStrategy(raw)
+		}
+		module := domain.ServiceModuleConfig{ID: "default", Name: "default", Strategy: strategy, TagEnabled: true, TagMode: domain.TagBuildMergeToTargetBranch, TagMessagePrefix: "Tag", CustomCommands: []domain.WorkspaceCommandConfig{}}
+		service := domain.GroupServiceConfig{ID: id, Enabled: true, DisplayName: textPayload(action, "name"), GenbuServiceName: textPayload(action, "name"), RepositoryID: textPayload(action, "repositoryId"), MasterBranch: masterBranch, TestTagBaselineRef: "origin/release/test", DevelopmentTool: c.DefaultDevelopmentTool, Modules: []domain.ServiceModuleConfig{module}, Bootstrap: domain.BootstrapConfig{CopyRules: []domain.BootstrapCopyRule{}, Commands: []domain.BootstrapCommand{}}}
+		if index >= 0 {
+			service = c.Services[index]
+			if name := textPayload(action, "name"); name != "" {
+				service.DisplayName = name
+			}
+			if ref := textPayload(action, "masterBranch"); ref != "" {
+				service.MasterBranch = ref
+			}
+			if repo := textPayload(action, "repositoryId"); repo != "" {
+				service.RepositoryID = repo
+			}
+		}
+		if _, ok := action.Payload["testTagBaselineRef"]; ok {
+			service.TestTagBaselineRef = textPayload(action, "testTagBaselineRef")
+		}
+		if raw, ok := action.Payload["service"]; ok {
+			data, e := json.Marshal(raw)
+			if e != nil {
+				return c, e
+			}
+			if e = json.Unmarshal(data, &service); e != nil {
+				return c, e
+			}
+		}
+		if index < 0 {
+			c.Services = append(c.Services, service)
+		} else {
+			c.Services[index] = service
+		}
+		return c, nil
 	})
 	return ActionResult{Message: "服务配置已更新"}, err
 }

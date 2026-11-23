@@ -8,16 +8,19 @@ import (
 	_ "image/jpeg" // DecodeBitmap
 	_ "image/png"  // DecodeBitmap
 	"math"
+	"weak"
 
 	_ "golang.org/x/image/bmp"  // DecodeBitmap
 	_ "golang.org/x/image/webp" // DecodeBitmap
 
+	"github.com/egoist/mygo/internal/media"
 	"github.com/egoist/mygo/internal/scene"
 )
 
 // Bitmap is an image to show with Image. Create it once: converting an
 // image is not free.
 type Bitmap struct {
+	imageMark
 	img  *scene.Image
 	w, h int
 	// levels are the bitmap halved again and again, made as it shows
@@ -29,16 +32,27 @@ type Bitmap struct {
 	fresh int
 	// pixelated draws each pixel as a square of its color.
 	pixelated bool
-	// decode decodes again the data DecodeBitmap decoded, which re-makes
-	// the pixels after ReleasePixels: nil for bitmaps NewBitmap made,
-	// canvases' and ones Update changed, which keep their pixels. A
-	// function, so that apps that decode no bitmap don't link decoding.
-	// released tells that ReleasePixels dropped the pixels of the base
-	// image and of the levels, to keep only the textures of a GPU
-	// renderer, which re-upload from decode and drop them again once
+	// remake makes the pixels again after ReleasePixels: it decodes again
+	// the data DecodeBitmap decoded, or converts again the image a bitmap
+	// NewBitmap made was made of, once ReleasePixels took it (source).
+	// It is nil for canvases' bitmaps and ones Update changed, which keep
+	// their pixels. A function, so that apps that decode no bitmap don't
+	// link decoding. released tells that ReleasePixels dropped the pixels
+	// of the base image and of the levels, to keep only the textures of a
+	// GPU renderer, which re-upload from remake and drop them again once
 	// uploaded. All of this runs on the main thread, as drawing does.
-	decode   func() (*scene.Image, error)
+	remake   func() (*scene.Image, error)
 	released bool
+	// source returns the image NewBitmap converted while the app keeps
+	// it, and nil once it no longer does: a weak reference, which keeps
+	// nothing, for ReleasePixels to convert it again from (#1281). nil for
+	// an image of a type of its own, and other bitmaps.
+	source func() image.Image
+	// videoPix are the pixels a frame of video was converted into, for
+	// the next (showPicture), and chroma the chroma of an I420 frame,
+	// interleaved as NV12's (UpdateYUV).
+	videoPix []byte
+	chroma   []byte
 }
 
 // Pixelated draws the bitmap's pixels as squares of their colors where it
@@ -54,10 +68,57 @@ func (b *Bitmap) Pixelated() *Bitmap {
 	return b
 }
 
-// NewBitmap converts img.
+// NewBitmap converts img. The bitmap keeps no reference to img, unless
+// ReleasePixels has it convert img again when it needs the pixels.
 func NewBitmap(img image.Image) *Bitmap {
 	s := scene.NewImage(img)
-	return &Bitmap{img: s, w: s.W, h: s.H}
+	return &Bitmap{img: s, w: s.W, h: s.H, source: weakImage(img)}
+}
+
+// weakImage returns a function returning img while something else keeps
+// it, and nil once nothing does, for the image types of package image;
+// nil for others.
+func weakImage(img image.Image) func() image.Image {
+	switch m := img.(type) {
+	case *image.RGBA:
+		return weakOf(m)
+	case *image.NRGBA:
+		return weakOf(m)
+	case *image.RGBA64:
+		return weakOf(m)
+	case *image.NRGBA64:
+		return weakOf(m)
+	case *image.Gray:
+		return weakOf(m)
+	case *image.Gray16:
+		return weakOf(m)
+	case *image.Alpha:
+		return weakOf(m)
+	case *image.Alpha16:
+		return weakOf(m)
+	case *image.CMYK:
+		return weakOf(m)
+	case *image.Paletted:
+		return weakOf(m)
+	case *image.YCbCr:
+		return weakOf(m)
+	case *image.NYCbCrA:
+		return weakOf(m)
+	}
+	return nil
+}
+
+func weakOf[T any, P interface {
+	*T
+	image.Image
+}](m P) func() image.Image {
+	w := weak.Make((*T)(m))
+	return func() image.Image {
+		if p := w.Value(); p != nil {
+			return P(p)
+		}
+		return nil
+	}
 }
 
 // DecodeBitmap decodes a PNG, JPEG, GIF (its first frame), WebP or BMP
@@ -69,7 +130,55 @@ func DecodeBitmap(data []byte) (*Bitmap, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Bitmap{img: s, w: s.W, h: s.H, decode: func() (*scene.Image, error) { return decodeImage(data) }}, nil
+	return &Bitmap{img: s, w: s.W, h: s.H, remake: func() (*scene.Image, error) { return decodeImage(data) }}, nil
+}
+
+// DecodeBitmapScaled decodes as DecodeBitmap, to a bitmap no longer on either
+// side than maxSide pixels: a list of thumbnails of photos holds the memory of
+// its thumbnails, not of its photos. It doesn't enlarge. Unlike DecodeBitmap it
+// doesn't keep data, so that its bitmap holds only its pixels, and
+// ReleasePixels leaves them.
+func DecodeBitmapScaled(data []byte, maxSide int) (*Bitmap, error) {
+	s, err := decodeImage(data)
+	if err != nil {
+		return nil, err
+	}
+	s = shrinkImage(s, maxSide)
+	return &Bitmap{img: s, w: s.W, h: s.H}, nil
+}
+
+// shrinkImage averages each pixel of the result over the pixels it covers.
+func shrinkImage(s *scene.Image, maxSide int) *scene.Image {
+	if maxSide <= 0 || (s.W <= maxSide && s.H <= maxSide) {
+		return s
+	}
+	w, h := maxSide, maxSide
+	if s.W > s.H {
+		h = max(s.H*maxSide/s.W, 1)
+	} else {
+		w = max(s.W*maxSide/s.H, 1)
+	}
+	out := make([]byte, 4*w*h)
+	for y := range h {
+		y0, y1 := y*s.H/h, max((y+1)*s.H/h, y*s.H/h+1)
+		for x := range w {
+			x0, x1 := x*s.W/w, max((x+1)*s.W/w, x*s.W/w+1)
+			var sum [4]int
+			for sy := y0; sy < y1; sy++ {
+				row := s.Pix[sy*s.W*4:]
+				for sx := x0; sx < x1; sx++ {
+					for k := range 4 {
+						sum[k] += int(row[sx*4+k])
+					}
+				}
+			}
+			n := (x1 - x0) * (y1 - y0)
+			for k := range 4 {
+				out[(y*w+x)*4+k] = byte((sum[k] + n/2) / n)
+			}
+		}
+	}
+	return scene.NewImageRGBA(w, h, out)
 }
 
 // decodeImage decodes the bytes to a premultiplied RGBA bitmap, upright
@@ -93,15 +202,16 @@ func decodeImage(data []byte) (*scene.Image, error) {
 // origin, as image.NewRGBA makes, is taken as it is, without a copy:
 // don't change its pixels until the next Update. Call it on the main
 // thread, in the view or through Window.Update, which redraws the window
-// to show it.
+// to show it. UpdateYUV shows frames in Y′CbCr, as decoders give them,
+// without converting them.
 func (b *Bitmap) Update(img image.Image) {
 	if b.img.Scene != nil {
 		return // a canvas's: Canvas.Draw draws it
 	}
-	// The picture is no longer data's: the bitmap keeps its pixels again,
-	// and its levels made of the last one are redone in place, in
-	// buffers of their own (smaller).
-	b.decode = nil
+	// The picture is no longer data's, nor the image's NewBitmap
+	// converted: the bitmap keeps its pixels again, and its levels made of
+	// the last one are redone in place, in buffers of their own (smaller).
+	b.remake, b.source = nil, nil
 	if b.released {
 		b.released = false
 		b.img.Restore, b.img.Dropped = nil, nil
@@ -110,7 +220,7 @@ func (b *Bitmap) Update(img image.Image) {
 		}
 	}
 	s := scene.NewImage(img)
-	if s.W == b.img.W && s.H == b.img.H {
+	if s.W == b.img.W && s.H == b.img.H && b.img.Surface == nil {
 		b.img.Pix = s.Pix
 		b.img.Changed()
 	} else {
@@ -121,22 +231,63 @@ func (b *Bitmap) Update(img image.Image) {
 	b.fresh = 0
 }
 
+// showPicture shows a frame of video where a system's decoder left it, in
+// place of the bitmap's picture: renderers sample its surface, and those
+// that need pixels convert it (Picture.RGBA), into a buffer the bitmap
+// keeps for the next frame.
+func (b *Bitmap) showPicture(pic media.Picture) {
+	b.remake, b.source, b.released = nil, nil, false
+	img := b.img
+	if img.W != pic.W || img.H != pic.H || img.Surface == nil {
+		img = scene.NewImageRGBA(pic.W, pic.H, nil)
+		b.img, b.w, b.h, b.levels = img, pic.W, pic.H, nil
+	}
+	img.Surface = pic.Surface
+	if img.Pix != nil {
+		b.videoPix = img.Pix
+	}
+	img.Pix, img.Dropped = nil, nil
+	convert := pic.RGBA
+	img.Restore = func() []byte {
+		if convert == nil {
+			return nil
+		}
+		b.videoPix = convert(b.videoPix)
+		return b.videoPix
+	}
+	img.Changed()
+	b.fresh = 0
+}
+
 // Size returns the bitmap's size in pixels, which Image shows as DIPs.
 func (b *Bitmap) Size() (w, h int) { return b.w, b.h }
 
-// ReleasePixels drops the CPU pixels of a bitmap DecodeBitmap made,
-// those of its picture and of its levels, keeping the copies a GPU
-// renderer uploaded: the bitmap draws as before. The pixels are decoded
-// again from the data DecodeBitmap took, which must stay as it was, when
-// something needs them — a renderer that lost its textures or let one
-// go, the CPU renderer, or a level for drawing the bitmap smaller — and a
-// GPU renderer's upload drops them again. A bitmap NewBitmap made, a
-// canvas's, or one Update changed has nothing else to make them from and
-// keeps them. Call it once the bitmap has shown, on the main thread, as
-// drawing does.
+// ReleasePixels drops the CPU pixels of a bitmap, those of its picture and
+// of its levels, keeping the copies a GPU renderer uploaded: the bitmap
+// draws as before. The pixels are made again when something needs them —
+// a renderer that lost its textures or let one go, the CPU renderer, or a
+// level for drawing the bitmap smaller — and a GPU renderer's upload
+// drops them again: decoded again from the data DecodeBitmap took, or
+// converted again from the image NewBitmap took, which the bitmap keeps
+// from then on, without a copy. Either must stay as it was. A bitmap
+// NewBitmap made of an image the app no longer keeps (or of a type other
+// than package image's), a canvas's, or one Update changed has nothing
+// else to make them from and keeps them. Call it once the bitmap has
+// shown, on the main thread, as drawing does.
 func (b *Bitmap) ReleasePixels() {
-	if b.decode == nil || b.img.Scene != nil {
+	if b.img.Scene != nil {
 		return
+	}
+	if b.remake == nil {
+		var img image.Image
+		if b.source != nil {
+			img = b.source()
+		}
+		if img == nil {
+			return
+		}
+		b.remake = func() (*scene.Image, error) { return scene.NewImage(img), nil }
+		b.source = nil
 	}
 	b.released = true
 	b.armBase()
@@ -147,11 +298,11 @@ func (b *Bitmap) ReleasePixels() {
 	}
 }
 
-// armBase has the base image decode its pixels again, and drop them
-// again once a renderer uploaded them.
+// armBase has the base image make its pixels again, and drop them again
+// once a renderer uploaded them.
 func (b *Bitmap) armBase() {
 	b.img.Restore = func() []byte {
-		s, err := b.decode()
+		s, err := b.remake()
 		if err != nil {
 			return nil
 		}
@@ -161,10 +312,10 @@ func (b *Bitmap) armBase() {
 }
 
 // levelPix re-makes the pixels of levels[i], i+1 halvings of the base,
-// decoded again.
+// made again.
 func (b *Bitmap) levelPix(i int) func() []byte {
 	return func() []byte {
-		s, err := b.decode()
+		s, err := b.remake()
 		if err != nil {
 			return nil
 		}
@@ -189,6 +340,9 @@ func (b *Bitmap) imageSize() (float32, float32) {
 func (b *Bitmap) smaller(shrink float32) *scene.Image {
 	if b.img.Scene != nil {
 		return b.img // a canvas, whose pixels the GPU keeps
+	}
+	if b.img.Surface != nil {
+		return b.img // a frame of video, where its decoder left it
 	}
 	if shrink < 2 {
 		return b.img

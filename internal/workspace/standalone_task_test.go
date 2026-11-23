@@ -63,8 +63,7 @@ func TestStandaloneTaskLocalMaterialsAndRequirementLink(t *testing.T) {
 	if !strings.HasSuffix(string(after), "\n用户手写说明\n") {
 		t.Fatal("association overwrote user AGENTS notes")
 	}
-	contextFile, _ := os.ReadFile(filepath.Join(path, AgentWorkspaceDir, AgentDirectoryName, AgentContextFileName))
-	if !strings.Contains(string(contextFile), link) || !strings.Contains(string(contextFile), scope.Owned) {
+	if !strings.Contains(string(after), link) || !strings.Contains(string(after), scope.Owned) {
 		t.Fatal("association did not update task instructions")
 	}
 	if _, err := s.LinkRequirement(context.Background(), config, path, link); err != nil {
@@ -107,11 +106,11 @@ func TestStandaloneTaskLinkFailurePreservesManifestAndFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(root, "analysis")
-	contextPath := filepath.Join(path, AgentWorkspaceDir, AgentDirectoryName, AgentContextFileName)
-	if err := os.Remove(contextPath); err != nil {
+	agents := filepath.Join(path, AgentRouterFileName)
+	if err := os.Remove(agents); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(contextPath, 0700); err != nil {
+	if err := os.Mkdir(agents, 0700); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.LinkRequirement(context.Background(), config, path, "https://project.feishu.cn/obt/userstory/detail/123"); err == nil {

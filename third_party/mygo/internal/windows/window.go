@@ -4,6 +4,7 @@ package windows
 
 import (
 	"errors"
+	"log"
 	"time"
 	"unsafe"
 
@@ -40,6 +41,9 @@ type window struct {
 	scriptGen  int
 	closed     bool
 	destroying bool
+	// schemes are the custom scheme responses whose handlers run, which
+	// end when the page's webview closes (webview.go).
+	schemes map[*schemeResponse]struct{}
 
 	// contentFilter applies the content rules of SetContentRules to a
 	// request (content_rules.go), and reports whether it answered it; nil
@@ -73,14 +77,19 @@ type window struct {
 		value float64
 	}
 	icons [2]uintptr // small and big, from SetIcon
+	// placing is the rectangle, in pixels, that place is moving the window
+	// to, already in the DPI of its display: WM_DPICHANGED keeps it.
+	placing *rect
 	// surface shows the content MyGo draws, in place of the webview.
 	surface *surface
 	// webViews are the web views under the surface (webview_embed.go), and
 	// host the window whose surface a web view is under, which shows it
 	// through its composition controller comp (comp3 its drag and drop,
 	// on runtimes having it; uia the provider of its page for UI
-	// Automation), in the visual webVis inside clipVis, at frame clipped
-	// to clip while shown. focused tells that it has the keyboard, and
+	// Automation), in the visual webVis inside clipVis, where placement puts
+	// it while shown: scaled by pageScale from pageAt, in the surface's
+	// pixels, and cut to its corners by corners, a rectangle clip of
+	// webVis. focused tells that it has the keyboard, and
 	// cursor is the cursor its page wants. hidden tells that a host is
 	// hidden, which hides its web views too: WebView2 shows their pages
 	// in windows of its own, which hiding the host alone leaves on the
@@ -89,11 +98,17 @@ type window struct {
 	host             *window
 	comp, comp3, uia uintptr
 	clipVis, webVis  uintptr
-	frame, clip      platform.RectF
-	shown, focused   bool
-	hidden           bool
-	cursor           uintptr
-	saved            struct {
+	placement        platform.WebViewPlacement
+	pageAt           [2]float32
+	pageScale        [2]float32
+	corners          uintptr
+	// effect fades the page itself, where the placement says it does not
+	// show whole, which the clip visual's sub-tree is composed by.
+	effect         uintptr
+	shown, focused bool
+	hidden         bool
+	cursor         uintptr
+	saved          struct {
 		style, exStyle uintptr
 		placement      windowPlacement
 	}
@@ -105,6 +120,11 @@ type window struct {
 	glass       margins // the frame's extension under the material
 	shadow      bool
 	ignoreMouse bool
+	// inputRegion is SetInputRegion's (input_region.go), nil for none;
+	// through tells that the window lets the mouse through
+	// (WS_EX_TRANSPARENT), as it or SetIgnoreMouseEvents set it last.
+	inputRegion []platform.Rect
+	through     bool
 
 	menu    *platform.Menu // menu bar
 	hmenu   uintptr
@@ -115,6 +135,7 @@ type window struct {
 	// the keyboard is in the menu bar.
 	autoHideMenu, revealed bool
 	inMenu                 bool    // in a menu loop, of the bar or a popup
+	menusHaveKeyboard      bool    // the bar's menu loop took the keyboard from the page (takeKeyboardForMenus)
 	menuKey                menuKey // the letter that opened popupMenuBar
 
 	programmatic bool
@@ -127,6 +148,11 @@ type window struct {
 	htmlNext     bool              // LoadHTML started the next navigation
 	calls        map[int]func(string, error)
 	nextCall     int
+
+	// flyoutLeft tells that the activation left the window's focusable
+	// flyout for another app's window, which draws the window inactive
+	// though the flyout still shows (keepsActive).
+	flyoutLeft bool
 }
 
 func (b *Backend) NewWindow(o *platform.WindowOptions, h platform.WindowHandler) (platform.Window, error) {
@@ -152,13 +178,7 @@ func (b *Backend) NewWindow(o *platform.WindowOptions, h platform.WindowHandler)
 	// keeps its bitmap: what it shows shows, and the material does not. The
 	// style is the window's for life: Windows neither adds it nor removes it
 	// later.
-	w.noRedirect = o.Vibrancy != "" && systemBackdrops() && (!w.hiddenTitleBar && !o.Surface || b.composition() != nil)
-	if o.Flyout != nil || o.Transparent && o.Surface {
-		// What the content leaves transparent shows what is behind: native
-		// UI's frames show their alpha through DirectComposition, which an
-		// opaque redirection bitmap would cover.
-		w.noRedirect = b.composition() != nil
-	}
+	w.noRedirect = w.needsNoRedirect(b.composition)
 	var owner uintptr
 	if p, ok := o.Parent.(*window); ok && p != nil && !p.closed {
 		w.parent, owner = p, p.hwnd
@@ -176,7 +196,12 @@ func (b *Backend) NewWindow(o *platform.WindowOptions, h platform.WindowHandler)
 			class = flyoutShadowClass
 		}
 	}
-	w.hwnd = createWindow(ex, class, o.Title, style, 0, 0, 0, 0, owner)
+	if p := w.parent; p != nil && p.opts.Flyout != nil && p.IsAlwaysOnTop() {
+		// Above a tray's flyout, which is above other apps' windows.
+		ex |= wsExTopmost
+	}
+	initial := initialWindowBounds(o, screenSpace())
+	w.hwnd = createWindow(ex, class, o.Title, style, initial.Left, initial.Top, initial.Right-initial.Left, initial.Bottom-initial.Top, owner)
 	if w.hwnd == 0 {
 		return nil, errors.New("mygo: cannot create a window")
 	}
@@ -228,6 +253,7 @@ func (b *Backend) NewWindow(o *platform.WindowOptions, h platform.WindowHandler)
 	if o.Vibrancy != "" {
 		w.SetVibrancy(o.Vibrancy)
 	}
+	w.applyTransparentFramePolicy()
 	if b.icon != 0 {
 		w.setIcon(b.icon)
 	}
@@ -244,10 +270,41 @@ func (b *Backend) NewWindow(o *platform.WindowOptions, h platform.WindowHandler)
 	}
 	w.skipTaskbar = o.SkipTaskbar // applied once the taskbar button exists
 	w.layoutControls()
-	if !o.Surface {
+	if webViewBuilt && !o.Surface {
 		b.whenEnvironment(w.createWebView)
 	}
 	return w, nil
+}
+
+// initialWindowBounds creates a window on its target display, a restored
+// one at its pixels and one with a position at its rectangle in s, so that
+// moving it there does not send WM_DPICHANGED, whose rectangle would scale
+// the size already in that display's scale a second time. A centered
+// window is created on the primary display, at 0, 0, where it stays.
+func initialWindowBounds(o *platform.WindowOptions, s dipSpace) rect {
+	if o.Flyout != nil {
+		return rect{}
+	}
+	r := o.StateBounds
+	if r == nil {
+		if o.Center {
+			return rect{}
+		}
+		p, _ := s.rectToPixels(platform.Rect{X: o.X, Y: o.Y, Width: o.Width, Height: o.Height})
+		r = &p
+	}
+	return rect{int32(r.X), int32(r.Y), int32(r.X + r.Width), int32(r.Y + r.Height)}
+}
+
+// needsNoRedirect keeps transparent web pages clear without initializing MyGo's
+// compositor. Native UI, flyouts and hidden caption controls need that compositor
+// to show without a redirection bitmap; make it only when they need it.
+func (w *window) needsNoRedirect(compose func() *composition) bool {
+	o := w.opts
+	if o.Flyout != nil || o.Transparent && o.Surface {
+		return compose() != nil
+	}
+	return !o.Surface && o.Transparent || o.Vibrancy != "" && systemBackdrops() && (!w.hiddenTitleBar && !o.Surface || compose() != nil)
 }
 
 func (w *window) styles() (style, ex uint32) {
@@ -280,30 +337,59 @@ func (w *window) styles() (style, ex uint32) {
 }
 
 // placeInitially sizes and positions a new window, in the DPI of the
-// monitor it appears on.
+// monitor it appears on: the primary one for a centered window, and for
+// one with a position, the one its rectangle is on in the screen's DIPs
+// (dipSpace).
+//
+// It has Windows compute the frame again (SWP_FRAMECHANGED): during
+// CreateWindowEx the window is not in Backend.windows yet, so
+// WM_NCCALCSIZE gives it the frame of DefWindowProc, a whole title bar
+// on one without a caption (frameCalcSize). A window created at its
+// rectangle (initialWindowBounds) keeps its size here, and a move alone
+// sends no WM_NCCALCSIZE.
 func (w *window) placeInitially() {
 	o := w.opts
-	var mon uintptr
-	if o.Center {
-		mon, _, _ = procMonitorFromPoint.Call(0, monitorDefaultToPrimary)
-	} else {
-		mon = monitorAt(o.X, o.Y)
+	if r := o.StateBounds; r != nil {
+		w.place(rect{int32(r.X), int32(r.Y), int32(r.X + r.Width), int32(r.Y + r.Height)}, swpFrameChanged)
+		return
 	}
-	dpi := monitorDPI(mon)
-	width, height := toPx(o.Width, dpi), toPx(o.Height, dpi)
+	var p platform.Rect // the window's, or its content's, in pixels
+	var dpi int
+	var work rect
+	if o.Center {
+		mon, _, _ := procMonitorFromPoint.Call(0, monitorDefaultToPrimary)
+		dpi, work = monitorDPI(mon), monitorWorkArea(mon)
+		p = platform.Rect{Width: int(toPx(o.Width, dpi)), Height: int(toPx(o.Height, dpi))}
+	} else {
+		s := screenSpace()
+		var i int
+		p, i = s.rectToPixels(platform.Rect{X: o.X, Y: o.Y, Width: o.Width, Height: o.Height})
+		dpi = s.dpiOf(i)
+	}
+	width, height := int32(p.Width), int32(p.Height)
 	if o.UseContentSize {
 		width, height = w.outerSize(width, height, dpi)
 	}
-	x, y := toPx(o.X, dpi), toPx(o.Y, dpi)
+	x, y := int32(p.X), int32(p.Y)
 	if o.Center {
-		work := monitorWorkArea(mon)
 		x = work.Left + (work.Right-work.Left-width)/2
 		y = work.Top + (work.Bottom-work.Top-height)/2
 	}
-	procSetWindowPos.Call(w.hwnd, 0, uintptr(x), uintptr(y), uintptr(width), uintptr(height), swpNoZOrder|swpNoActivate)
+	w.place(rect{x, y, x + width, y + height}, swpFrameChanged)
 	if o.UseContentSize && !w.captionless() {
-		w.fitContent(width, height, toPx(o.Width, dpi), toPx(o.Height, dpi), false, 0, 0)
+		w.fitContent(width, height, int32(p.Width), int32(p.Height), false, 0, 0)
 	}
+}
+
+// place moves the window to r, in pixels, computed in the DPI of the
+// display r is on, with SetWindowPos's flags besides: where that DPI is
+// not the window's, WM_DPICHANGED keeps r, rather than the rectangle it
+// suggests, which scales r's size by the change of DPI a second time.
+func (w *window) place(r rect, flags uintptr) {
+	prev := w.placing
+	w.placing = &r
+	procSetWindowPos.Call(w.hwnd, 0, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right-r.Left), uintptr(r.Bottom-r.Top), swpNoZOrder|swpNoActivate|flags)
+	w.placing = prev
 }
 
 // fitContent grows the window, outerW by outerH, whose content was to be
@@ -325,7 +411,7 @@ func (w *window) fitContent(outerW, outerH, wantW, wantH int32, at bool, atX, at
 	if dw == 0 && dh == 0 && dx == 0 && dy == 0 {
 		return
 	}
-	procSetWindowPos.Call(w.hwnd, 0, uintptr(wr.Left+dx), uintptr(wr.Top+dy), uintptr(outerW+dw), uintptr(outerH+dh), swpNoZOrder|swpNoActivate)
+	w.place(rect{wr.Left + dx, wr.Top + dy, wr.Left + dx + outerW + dw, wr.Top + dy + outerH + dh}, 0)
 }
 
 // outerSize returns the window size for a content size, in pixels.
@@ -341,8 +427,9 @@ func (w *window) outerSize(width, height int32, dpi int) (int32, int32) {
 
 // addFrame grows r, a page area in pixels, to the window around it. A window
 // without a caption has no title bar or menu bar, and keeps what
-// frameCalcSize leaves it: the borders of a resizable one, and the pixel at
-// the top of a hidden title bar on Windows 11.
+// frameCalcSize leaves it: the borders of a resizable one, less what the
+// client area takes of them (frameBorder), and the pixel at the top of a
+// hidden title bar on Windows 11.
 func (w *window) addFrame(r *rect, menu uintptr, dpi int) {
 	style, ex := windowLong(w.hwnd, gwlStyle), windowLong(w.hwnd, gwlExStyle)
 	captionless := w.captionless()
@@ -359,9 +446,12 @@ func (w *window) addFrame(r *rect, menu uintptr, dpi int) {
 		if w.hiddenTitleBar && windows11() {
 			r.Top--
 		}
+		b := w.frameBorder()
+		r.Left, r.Right, r.Bottom = r.Left+b, r.Right-b, r.Bottom-b
 	}
 }
 
+// monitorAt returns the monitor at x, y in pixels, or the nearest.
 func monitorAt(x, y int) uintptr {
 	pt := uintptr(uint32(int32(x))) | uintptr(uint32(int32(y)))<<32
 	m, _, _ := procMonitorFromPoint.Call(pt, monitorDefaultToNearest)
@@ -406,6 +496,18 @@ func (w *window) message(m uint32, wp, lp uintptr) (uintptr, bool) {
 	if m == wmMouseActivate && w.ownsFocusableFlyout() {
 		return maActivateAndEat, true
 	}
+	if m == wmNCActivate && wp == 0 && w.keepsActive() {
+		// Its flyout takes the activation: the frame and the material
+		// stay active, as the window's own menus and popovers keep them.
+		if r, ok := w.menuBarMessage(m, 1, lp); ok {
+			return r, true
+		}
+		r, _, _ := procDefWindowProcW.Call(w.hwnd, uintptr(m), 1, lp)
+		return r, true
+	}
+	if m == wmInitMenuPopup {
+		w.enableEditItems(wp)
+	}
 	if r, ok := w.b.menuItemMessage(w.hwnd, m, wp, lp); ok {
 		return r, true
 	}
@@ -413,6 +515,14 @@ func (w *window) message(m uint32, wp, lp uintptr) (uintptr, bool) {
 		return r, true
 	}
 	switch m {
+	case wmNCPaint:
+		if w.plainTransparentFrame() {
+			return 0, true
+		}
+	case wmNCActivate:
+		if w.plainTransparentFrame() {
+			return 1, true
+		}
 	case wmClose:
 		if w.h.ShouldClose() {
 			w.destroy()
@@ -423,11 +533,17 @@ func (w *window) message(m uint32, wp, lp uintptr) (uintptr, bool) {
 		w.h.Closed()
 		return 0, true
 	case wmTimer:
+		if wp == timerInputRegion && checkInputRegion != nil {
+			checkInputRegion(w)
+			return 0, true
+		}
 		if wp != timerWebView {
 			return 0, false
 		}
 		procKillTimer.Call(w.hwnd, timerWebView)
-		w.createWebView()
+		if webViewBuilt {
+			w.createWebView()
+		}
 		return 0, true
 	case wmSize:
 		if !w.reframing { // SetFullScreen lays the window out once it is done
@@ -450,6 +566,9 @@ func (w *window) message(m uint32, wp, lp uintptr) (uintptr, bool) {
 		for _, v := range w.webViews {
 			v.placeEmbedded()
 		}
+		if inputRegionShown != nil {
+			inputRegionShown(w, wp != 0)
+		}
 		return 0, false
 	case wmMove:
 		if w.controller != 0 {
@@ -463,8 +582,11 @@ func (w *window) message(m uint32, wp, lp uintptr) (uintptr, bool) {
 		w.h.Moved()
 		return 0, true
 	case wmActivate:
+		if loword(wp) != waInactive {
+			w.flyoutLeft = false
+		}
 		if w.caption != nil {
-			w.caption.activate(loword(wp) != waInactive)
+			w.caption.activate(loword(wp) != waInactive || w.keepsActive())
 		}
 		if loword(wp) == waInactive {
 			w.h.Blurred()
@@ -473,6 +595,9 @@ func (w *window) message(m uint32, wp, lp uintptr) (uintptr, bool) {
 		}
 		return 0, false
 	case wmSetFocus:
+		if w.menusHaveKeyboard {
+			return 0, true // the page gets it back once the menus close
+		}
 		if w.surface != nil {
 			procSetFocus.Call(w.surface.hwnd)
 		} else {
@@ -494,6 +619,9 @@ func (w *window) message(m uint32, wp, lp uintptr) (uintptr, bool) {
 		return 0, true
 	case wmDpiChanged:
 		r := (*rect)(native(lp))
+		if w.placing != nil {
+			r = w.placing
+		}
 		procSetWindowPos.Call(w.hwnd, 0, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right-r.Left), uintptr(r.Bottom-r.Top), swpNoZOrder|swpNoActivate)
 		return 0, true
 	case wmNCCalcSize:
@@ -516,6 +644,9 @@ func (w *window) message(m uint32, wp, lp uintptr) (uintptr, bool) {
 		return 1, true
 	case wmWindowPosChanging:
 		pos := (*windowPos)(native(lp))
+		if pos.Flags&swpShowWindow != 0 && w.surface != nil {
+			w.surface.showing()
+		}
 		w.maximizeInWorkArea(pos)
 		if !w.movable {
 			pos.Flags |= swpNoMove
@@ -528,8 +659,15 @@ func (w *window) message(m uint32, wp, lp uintptr) (uintptr, bool) {
 		}
 	case wmEnterMenuLoop:
 		w.inMenu = true
+		if w.surface != nil {
+			w.surface.liftKeys()
+		}
+		if wp == 0 { // the bar's, or the window menu's, not TrackPopupMenu's
+			w.takeKeyboardForMenus()
+		}
 	case wmExitMenuLoop:
 		w.inMenu = false
+		w.giveKeyboardBack()
 	case wmMenuChar:
 		if r, ok := w.menuChar(wp, lp); ok {
 			return r, true
@@ -559,9 +697,12 @@ func (w *window) sized(kind uintptr) {
 	if w.surface != nil {
 		// What the window grew by shows the content's background, not
 		// black, until the surface presents the frame of its new size,
-		// which fitting it draws at once.
+		// which fitting it draws at once. The window's own pixels under
+		// the surface take it too, which show where the window next
+		// shrinks, until DWM takes its new size (fillUnder).
 		w.surface.fillUncovered()
 		w.surface.fit()
+		w.surface.fillUnder()
 	}
 	if kind != sizeMinimized {
 		w.layoutControls()
@@ -569,6 +710,7 @@ func (w *window) sized(kind uintptr) {
 	if w.vibrancy != "" && kind != sizeMinimized {
 		w.extendGlass(false)
 	}
+	was := w.state
 	switch kind {
 	case sizeMinimized:
 		if w.state != sizeMinimized {
@@ -592,6 +734,14 @@ func (w *window) sized(kind uintptr) {
 			w.h.Unmaximized()
 		}
 		w.state = sizeRestored
+	}
+	// Nothing of a minimized window shows (Surface.Occluded).
+	if s := w.surface; s != nil && (was == sizeMinimized) != (w.state == sizeMinimized) {
+		ev := platform.SurfaceEvent{Kind: platform.SurfaceShown}
+		if w.state == sizeMinimized {
+			ev.Kind = platform.SurfaceHidden
+		}
+		s.send(ev)
 	}
 	w.h.Resized()
 }
@@ -715,6 +865,9 @@ func (w *window) plainCaption() {
 // snap layouts over the maximize button of a window that is not maximized.
 // Windows 10 has no snap layouts, and over a window that keeps any of its top
 // it draws its whole title bar, above the page and the controls.
+//
+// A frameless window on Windows 10 takes the visible pixel of its borders
+// too (frameBorder), and keeps only the invisible ones.
 func (w *window) frameCalcSize(wp, lp uintptr) uintptr {
 	params := (*ncCalcSizeParams)(native(lp))
 	if w.IsMaximized() {
@@ -737,8 +890,31 @@ func (w *window) frameCalcSize(wp, lp uintptr) uintptr {
 		if w.hiddenTitleBar && windows11() {
 			params.Rgrc[0].Top++
 		}
+		if b := w.frameBorder(); b > 0 {
+			params.Rgrc[0].Left -= b
+			params.Rgrc[0].Right += b
+			params.Rgrc[0].Bottom += b
+		}
 	}
 	return 0
+}
+
+// frameBorder returns how many pixels of the left, right and bottom
+// borders that DefWindowProc keeps a resizable frameless window are its
+// client area's on Windows 10: the innermost, which DWM draws as the
+// visible line around windows, inside the invisible ones that resize them.
+// Windows 10 draws that line in the non-client area only, white or of the
+// accent color, and it showed as a white frame around the content,
+// whatever its color (#916). Over the client area, the content covers it:
+// the window shows the content to its edges, and DWM's shadow around it.
+// The line is a pixel at any scale. Windows 11 draws a border of its own
+// color around the rounded corners, which is left as it is, and windows
+// with a hidden title bar keep the line of other apps' windows.
+func (w *window) frameBorder() int32 {
+	if !w.frameless || w.opts.Flyout != nil || windows11() || !w.hasStyle(wsThickFrame) {
+		return 0
+	}
+	return 1
 }
 
 func (w *window) destroy() {
@@ -749,6 +925,12 @@ func (w *window) destroy() {
 	// Re-enable the owner first, or Windows activates another app.
 	if w.opts.Modal && w.parent != nil && !w.parent.closed {
 		procEnableWindow.Call(w.parent.hwnd, 1)
+		// And give it the activation while w has it, as EndDialog does:
+		// Windows otherwise activates the window under w, another app's
+		// once the user switched to one and back (#1055).
+		if fg, _, _ := procGetForegroundWindow.Call(); fg == w.hwnd && w.parent.IsVisible() && !w.parent.IsMinimized() {
+			w.parent.Focus()
+		}
 	}
 	procDestroyWindow.Call(w.hwnd)
 }
@@ -831,43 +1013,49 @@ func utf16Decode(b []uint16) []rune {
 	return out
 }
 
-func (w *window) rectToDIP(r rect) platform.Rect {
-	dpi := dpiOf(w.hwnd)
-	return platform.Rect{X: toDIP(r.Left, dpi), Y: toDIP(r.Top, dpi), Width: toDIP(r.Right-r.Left, dpi), Height: toDIP(r.Bottom-r.Top, dpi)}
-}
-
+// SetBounds moves the window to r, in the screen's DIPs (dipSpace), at
+// the scale of the display r is on.
 func (w *window) SetBounds(r platform.Rect) {
-	dpi := dpiOf(w.hwnd)
-	procSetWindowPos.Call(w.hwnd, 0, uintptr(toPx(r.X, dpi)), uintptr(toPx(r.Y, dpi)), uintptr(toPx(r.Width, dpi)), uintptr(toPx(r.Height, dpi)), swpNoZOrder|swpNoActivate)
+	p, _ := screenSpace().rectToPixels(r)
+	w.place(rect{int32(p.X), int32(p.Y), int32(p.X + p.Width), int32(p.Y + p.Height)}, 0)
 }
 
+// Bounds returns the window's rectangle in the screen's DIPs, at the
+// scale of the display it is the most on, whose DPI it has.
 func (w *window) Bounds() platform.Rect {
 	var r rect
 	procGetWindowRect.Call(w.hwnd, uintptr(unsafe.Pointer(&r)))
-	return w.rectToDIP(r)
+	return screenSpace().rectToDIP(pixelRect(r))
 }
 
+// SetContentBounds moves the window so that its client area is r, in the
+// screen's DIPs, at the scale of the display r is on.
 func (w *window) SetContentBounds(r platform.Rect) {
-	dpi := dpiOf(w.hwnd)
-	outer := rect{toPx(r.X, dpi), toPx(r.Y, dpi), toPx(r.X+r.Width, dpi), toPx(r.Y+r.Height, dpi)}
+	s := screenSpace()
+	p, i := s.rectToPixels(r)
+	dpi := s.dpiOf(i)
+	outer := rect{int32(p.X), int32(p.Y), int32(p.X + p.Width), int32(p.Y + p.Height)}
 	menu := uintptr(0)
 	if w.menuShown() {
 		menu = 1
 	}
 	w.addFrame(&outer, menu, dpi)
-	procSetWindowPos.Call(w.hwnd, 0, uintptr(outer.Left), uintptr(outer.Top), uintptr(outer.Right-outer.Left), uintptr(outer.Bottom-outer.Top), swpNoZOrder|swpNoActivate)
+	w.place(outer, 0)
 	if !w.captionless() {
-		x, y := toPx(r.X, dpi), toPx(r.Y, dpi)
-		w.fitContent(outer.Right-outer.Left, outer.Bottom-outer.Top, toPx(r.X+r.Width, dpi)-x, toPx(r.Y+r.Height, dpi)-y, true, x, y)
+		w.fitContent(outer.Right-outer.Left, outer.Bottom-outer.Top, int32(p.Width), int32(p.Height), true, int32(p.X), int32(p.Y))
 	}
 }
 
+// ContentBounds returns the client area in the screen's DIPs, at the
+// scale of the display the window is the most on, as Bounds.
 func (w *window) ContentBounds() platform.Rect {
-	var r rect
+	var wr, r rect
+	procGetWindowRect.Call(w.hwnd, uintptr(unsafe.Pointer(&wr)))
 	procGetClientRect.Call(w.hwnd, uintptr(unsafe.Pointer(&r)))
 	var origin point
 	procClientToScreen.Call(w.hwnd, uintptr(unsafe.Pointer(&origin)))
-	return w.rectToDIP(rect{origin.X, origin.Y, origin.X + r.Right, origin.Y + r.Bottom})
+	s := screenSpace()
+	return s.toDIPOn(s.pixelDisplay(pixelRect(wr)), platform.Rect{X: int(origin.X), Y: int(origin.Y), Width: int(r.Right), Height: int(r.Bottom)})
 }
 
 func (w *window) SetMinimumSize(s platform.Size) { w.minW, w.minH = s.Width, s.Height }
@@ -902,6 +1090,11 @@ func (w *window) SetResizable(v bool) {
 		bits |= wsMaximizeBox
 	}
 	w.setStyle(bits, v)
+	if w.captionless() && w.shadow && w.opts.Flyout == nil {
+		// Without borders, the window needs its frame extended for its
+		// shadow, which with borders it may not have (frameBorder).
+		w.SetHasShadow(true)
+	}
 	w.captionChanged()
 }
 
@@ -948,6 +1141,10 @@ func (w *window) SetAlwaysOnTop(v bool) {
 func (w *window) IsAlwaysOnTop() bool { return windowLong(w.hwnd, gwlExStyle)&wsExTopmost != 0 }
 
 func (w *window) Show() {
+	if w.surface != nil && w.surface.cloaked && w.surface.drawn && !w.IsVisible() {
+		w.surface.uncloak()
+		defer w.surface.fillUnder()
+	}
 	if f := w.opts.Flyout; f != nil && !f.Focusable {
 		procShowWindow.Call(w.hwnd, swShowNoActivate)
 		return
@@ -962,6 +1159,10 @@ func (w *window) Show() {
 }
 
 func (w *window) ShowInactive() {
+	if w.surface != nil && w.surface.cloaked && w.surface.drawn && !w.IsVisible() {
+		w.surface.uncloak()
+		defer w.surface.fillUnder()
+	}
 	if w.showMaximized {
 		// Maximizing activates the window; there is no inactive variant.
 		w.showMaximized = false
@@ -1009,6 +1210,20 @@ func (w *window) IsFocused() bool {
 	return fg == w.hwnd
 }
 
+// CornerRadius is the 8 DIPs Windows 11 rounds a window's corners with: a
+// window with a frame, a panel, or a frameless one given a CornerRadius
+// (which takes the system's whatever its radius). A maximized or full-screen
+// window, a child host, and every window before Windows 11 are square.
+func (w *window) CornerRadius() float64 {
+	if w.host != nil || !windows11() || w.fullScreen || w.IsMaximized() {
+		return 0
+	}
+	if w.frameless && !w.opts.Panel && w.opts.CornerRadius <= 0 {
+		return 0
+	}
+	return 8
+}
+
 func (w *window) Minimize() { procShowWindow.Call(w.hwnd, swMinimize) }
 
 func (w *window) IsMinimized() bool {
@@ -1042,7 +1257,14 @@ func (w *window) IsMaximized() bool {
 	return r != 0
 }
 
-func (w *window) Restore() { procShowWindow.Call(w.hwnd, swRestore) }
+// Restore brings a minimized window back, maximized again if it was.
+// SW_RESTORE would also take a visible window out of maximized, which
+// Restore leaves alone, as on macOS and Linux.
+func (w *window) Restore() {
+	if w.IsMinimized() {
+		procShowWindow.Call(w.hwnd, swRestore)
+	}
+}
 
 // SetFullScreen takes the window's frame and menu bar away, or gives them
 // back. Each step sizes the window again: it is laid out once, at the end.
@@ -1150,34 +1372,57 @@ func (w *window) SetOpacity(v float64) {
 func (w *window) Opacity() float64 { return w.opacity }
 
 // updateLayered makes the window layered while it is translucent or lets
-// the mouse through.
+// the mouse through, all of it or but its input region.
 func (w *window) updateLayered() {
-	layered := w.opacity < 1 || w.ignoreMouse
+	layered := w.opacity < 1 || w.ignoreMouse || w.inputRegion != nil
 	w.setExStyle(wsExLayered, layered)
 	if layered {
 		procSetLayeredWindowAttributes.Call(w.hwnd, 0, uintptr(byte(w.opacity*255+0.5)), lwaAlpha)
 	}
 }
 
+// SetHasShadow casts DWM's shadow around a window without a caption, or
+// none, by extending its frame a pixel into the client area: a window
+// whose client area is all of it, with no borders, has no shadow
+// otherwise. A resizable frameless window on Windows 10 keeps borders,
+// invisible ones (frameBorder), which DWM casts the shadow around: it is
+// left unextended, as Windows 10 draws the frame extended as a white line
+// along the top of the client area.
 func (w *window) SetHasShadow(v bool) {
 	w.shadow = v
+	w.applyTransparentFramePolicy()
 	if !w.captionless() || w.vibrancy != "" {
 		return
 	}
 	m := margins{}
-	if v {
+	if v && w.frameBorder() == 0 {
 		m.Top = 1 // a frame the size of a pixel brings the shadow back
 	}
 	procDwmExtendFrameIntoClientArea.Call(w.hwnd, uintptr(unsafe.Pointer(&m)))
 }
 
-func (w *window) HasShadow() bool { return w.shadow }
-
-func (w *window) SetIgnoreMouseEvents(v bool) {
-	w.ignoreMouse = v
-	w.setExStyle(wsExTransparent, v)
-	w.updateLayered()
+// Transparent web overlays keep native sizing borders for hit testing, but a
+// shadowless frameless window must not draw DWM or GDI decorations over them.
+func (w *window) plainTransparentFrame() bool {
+	return w.frameless && w.opts.Transparent && !w.opts.Surface && w.vibrancy == "" && !w.shadow
 }
+
+func (w *window) applyTransparentFramePolicy() {
+	if !w.frameless || !w.opts.Transparent || w.opts.Surface {
+		return
+	}
+	policy := int32(0) // DWMNCRP_USEWINDOWSTYLE
+	if w.plainTransparentFrame() {
+		policy = 1 // DWMNCRP_DISABLED
+	}
+	const dwmwaNCRenderingPolicy = 2
+	hr, _, _ := procDwmSetWindowAttribute.Call(w.hwnd, dwmwaNCRenderingPolicy, uintptr(unsafe.Pointer(&policy)), 4)
+	if failed(hr) {
+		log.Print(hresultError("setting the transparent window frame policy", hr))
+	}
+}
+
+func (w *window) HasShadow() bool { return w.shadow }
 
 func (w *window) SetContentProtection(v bool) {
 	if !has(procSetWindowDisplayAffinity) {
@@ -1248,6 +1493,7 @@ func (w *window) buttonsDark() bool {
 
 func (w *window) SetVibrancy(material string) {
 	w.vibrancy = material
+	w.applyTransparentFramePolicy()
 	backdrop := backdropFor(material)
 	w.extendGlass(true)
 	procDwmSetWindowAttribute.Call(w.hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
@@ -1257,6 +1503,9 @@ func (w *window) SetVibrancy(material string) {
 	w.withWebView(w.applyWebViewBackground)
 	procInvalidateRect(w.hwnd)
 }
+
+// SetVibrancyTint does nothing: Windows' backdrops take no tint.
+func (w *window) SetVibrancyTint(*platform.Color) {}
 
 // extendGlass extends the frame where the material shows, behind the
 // page: over the whole client area, or nowhere without a material. With
@@ -1277,19 +1526,24 @@ func (w *window) extendGlass(always bool) {
 
 // glassFromBottom reports a window whose frame extends from the bottom
 // over its client area (glassMargins) rather than all over: a frameless
-// window, and a maximized one with a hidden title bar. Flyouts are popups
-// without a caption, whose frame DWM draws no buttons in.
+// window, and a maximized one. Flyouts are popups without a caption, whose
+// frame DWM draws no buttons in.
 //
 // A frameless window keeps WS_CAPTION, WS_SYSMENU and the boxes of its
 // styles, for snapping, Win+arrow keys, the taskbar's minimize and the
 // window menu of Alt+Space; frameCalcSize leaves it no title bar. Extended
 // all over, the frame covers the window's top, and DWM draws its caption
 // buttons there, over the page.
+//
+// A maximized window's title bar is shorter than a restored one's, but in a
+// frame extended all over DWM draws the system's caption buttons as tall as
+// a restored window's: past the title bar, where the color of the one under
+// the pointer shows through a translucent page.
 func (w *window) glassFromBottom() bool {
 	if w.frameless {
 		return w.opts.Flyout == nil
 	}
-	return w.hiddenTitleBar && !w.fullScreen && w.IsMaximized()
+	return !w.fullScreen && w.IsMaximized()
 }
 
 // glassMargins returns the frame's extension that shows the material over
@@ -1300,8 +1554,8 @@ func (w *window) glassFromBottom() bool {
 // above the title bar's; a frameless window has no buttons of its own at
 // all. fromBottom extends the frame from the bottom over the whole client
 // area instead: the material still shows everywhere, and the frame's top
-// is only what lies above the client area, a strip off screen or nothing,
-// too short for buttons.
+// is only what lies above the client area: a strip off screen or nothing,
+// too short for buttons, or the system's title bar, which holds them.
 func glassMargins(fromBottom bool, height int32) margins {
 	if fromBottom {
 		return margins{Bottom: max(height, 1)}

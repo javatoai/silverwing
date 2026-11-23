@@ -4,12 +4,12 @@ go 1.27.3
 
 tool github.com/egoist/mygo/cmd/mygo
 
-// v0.7.3 with the native patches documented in third_party/MYGO-PATCHES.md.
+// v0.10.0 with the native patches documented in third_party/MYGO-PATCHES.md.
 replace github.com/egoist/mygo => ./third_party/mygo
 
 require (
 	github.com/ebitengine/purego v0.11.1
-	github.com/egoist/mygo v0.7.3
+	github.com/egoist/mygo v0.10.0
 	github.com/go-text/typesetting v0.3.5
 	github.com/makiuchi-d/gozxing v0.1.1
 	github.com/yuin/goldmark v1.8.6
@@ -20,4 +20,12 @@ require (
 	golang.org/x/text v0.43.0
 )
 
-require golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
+require (
+	github.com/ProtonMail/go-crypto v1.4.1 // indirect
+	github.com/cloudflare/circl v1.6.2 // indirect
+	github.com/klauspost/compress v1.18.6 // indirect
+	github.com/ulikunitz/xz v0.5.15 // indirect
+	go.digitalxero.dev/rpm v0.3.4 // indirect
+	golang.org/x/crypto v0.57.0 // indirect
+	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
+)

@@ -10,6 +10,9 @@ import (
 )
 
 func Enabled(config domain.AppConfig, target domain.CommandProxyTarget) bool {
+	if target != domain.ProxyTargetCodex && target != domain.ProxyTargetAppUpdates {
+		return false
+	}
 	for _, candidate := range config.CommandProxyTargets {
 		if candidate == target {
 			return true

@@ -21,10 +21,6 @@ func (s *taskController) taskByID(id string) task {
 	return task{}
 }
 
-func (s *app) taskGroup(id string) application.Group {
-	return s.serviceCatalog().groups[id]
-}
-
-func (s *app) serviceByID(groupID, id string) (application.Service, bool) {
-	return s.serviceCatalog().service(groupID, id)
+func (s *app) serviceByID(id string) (application.Service, bool) {
+	return s.serviceCatalog().service(id)
 }

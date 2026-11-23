@@ -98,7 +98,7 @@ func TestProductionPreparedTagUsesOneObservationAndPushReceipt(t *testing.T) {
 
 func TestProductionSuccessfulReleasePushDoesNotReadRemoteAgain(t *testing.T) {
 	f := newFixture(t)
-	p, err := f.s.Inspect(context.Background(), f.selection, "")
+	p, err := f.s.Inspect(context.Background(), f.selection)
 	if err != nil {
 		t.Fatal(err)
 	}

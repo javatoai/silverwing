@@ -200,7 +200,7 @@ func (a *Autosave) Quiesce(ctx context.Context, paths []string) (*AutosaveLease,
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		if err := a.FlushDrafts(ctx); err != nil {
+		if err := a.flushDrafts(ctx, seen); err != nil {
 			lease.Release()
 			return nil, err
 		}
@@ -322,6 +322,34 @@ func (l *AutosaveLease) Move(paths map[string]string) error {
 // state. Dirty, healthy entries receive a fresh debounce interval.
 func (l *AutosaveLease) Release() {
 	l.release("")
+}
+
+// DetachCachedDrafts drops the in-memory editors after their repository scope
+// changes. The draft store remains available when that scope is reopened.
+func (l *AutosaveLease) DetachCachedDrafts() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		return nil
+	}
+	a := l.a
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, key := range l.keys {
+		entry := a.entries[key]
+		if entry != nil && (entry.quiesceCount != 1 || entry.saving || entry.draftSaving ||
+			entry.revision > entry.savedRevision && entry.revision > entry.draftRevision) {
+			return errors.New("原仓库中有尚未缓存的草稿")
+		}
+	}
+	for _, key := range l.keys {
+		if entry := a.entries[key]; entry != nil {
+			a.stopDraftTimerLocked(entry)
+			delete(a.entries, key)
+		}
+	}
+	l.closed = true
+	return nil
 }
 
 // FailClosed releases a lease without re-arming autosave after a rename has

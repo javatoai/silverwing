@@ -26,6 +26,16 @@ type CodeBlockView struct {
 // Code returns the block's code, its lines ending with newlines.
 func (b *CodeBlockView) Code() string { return b.st.doc.Lines(b.Index) }
 
+// SourceLine returns the line of the view's source the block starts on,
+// from 1: its opening fence, or indented code's first line. Line k of a
+// fenced block's Code, from 1, is line SourceLine()+k of the source, and
+// of indented code line SourceLine()+k-1: an app that builds the block as
+// a view of its own, as of the Markdown in it, maps that view's lines
+// (Options.OnTask's) back to the source so.
+func (b *CodeBlockView) SourceLine() int {
+	return lineAt(b.st.doc.Source(), b.st.doc.Block(b.Index).Start)
+}
+
 // codeState is what a view keeps of a code block: the tokens of its lines
 // and the spans of its chunks of lines, to highlight only what changed.
 type codeState struct {

@@ -19,6 +19,7 @@ type materialsState struct {
 	materialsBackendLanes         map[string]*materialsBackendLane
 	materialsGit                  *materialsGitDesktopState
 	materialsGitBranches          *materialsGitBranchesState
+	projectGitBranches            *materialsGitBranchesState
 	materialsGitCapture           bool
 	materialsFileManagement       *materialsFileManagementState
 	materialsFileJobs             *materialsFileJobState
@@ -57,8 +58,6 @@ type materialsState struct {
 	documentsCollapsed            bool
 	documentsRequested            bool
 	documentsLoaded               bool
-	importPreview                 bool
-	importPath                    string
 }
 
 func (s *materialsController) stopFeature() {

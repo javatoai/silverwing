@@ -21,7 +21,9 @@ func (o options) printResult(out io.Writer, data any, code int) {
 	case application.CLITagJobResult:
 		printTagJob(out, result)
 	case []delivery.TagObservation:
-		printTagStatus(out, result, o.batch, code == 0)
+		if len(result) > 0 || code == 0 {
+			printTagStatus(out, result, o.batch, code == 0)
+		}
 	case application.CLITagNoticeResult:
 		printTagNotice(out, result)
 	}
@@ -155,11 +157,13 @@ func tagJobText(item application.CLITagJobItem) string {
 
 func printTagStatus(out io.Writer, rows []delivery.TagObservation, batchID string, complete bool) {
 	printTagField(out, "批次 ID", batchID)
+	pushesReady := len(rows) > 0
 	buildsReady := complete && len(rows) > 0
 	uatReady := buildsReady
 	runtimeReady := buildsReady
 	serviceTags := map[string]string{}
 	sharedVersions := false
+	genbuQueried := false
 	for i, row := range rows {
 		op, status := row.Operation, row.Operation.GenbuStatus
 		build, uat := genbuStageText(status.Build), genbuStageText(status.UAT)
@@ -170,6 +174,8 @@ func printTagStatus(out io.Writer, rows []delivery.TagObservation, batchID strin
 			build, uat = "暂无此 Tag 记录", "暂无此 Tag 记录"
 		}
 		probeOK := row.GenbuService != "" && status.FailureReason == nil && !status.NotFound
+		pushesReady = pushesReady && row.Git.State == "PUSHED"
+		genbuQueried = genbuQueried || !row.GenbuSkipped
 		buildsReady = buildsReady && row.Git.State == "PUSHED" && op.State == domain.TagOperationSuccess &&
 			probeOK && status.Build == domain.GenbuSuccess
 		uatReady = uatReady && probeOK && status.UAT == domain.GenbuSuccess
@@ -188,11 +194,13 @@ func printTagStatus(out io.Writer, rows []delivery.TagObservation, batchID strin
 		printTagDetail(out, "操作 ID", op.OperationID)
 		printTagDetail(out, "Tag", tagTextValue(op.Tag))
 		printTagDetail(out, "Tag 推送", gitPushText(row.Git.State))
-		printTagDetail(out, "Genbu 编译", build)
-		printTagDetail(out, "UAT 发版", uat)
-		printTagDetail(out, "Genbu 服务", row.GenbuService)
+		if !row.GenbuSkipped {
+			printTagDetail(out, "Genbu 编译", build)
+			printTagDetail(out, "UAT 发版", uat)
+			printTagDetail(out, "Genbu 服务", row.GenbuService)
+			printTagDetail(out, "Genbu 查询异常", tagTextValue(status.FailureReason))
+		}
 		printTagDetail(out, "远端校验", row.Git.Error)
-		printTagDetail(out, "Genbu 查询异常", tagTextValue(status.FailureReason))
 		printTagDetail(out, "保留工作区", op.PreflightWorktree)
 		if op.PreflightID != "" && op.State != domain.TagOperationSuccess {
 			printTagDetail(out, "上次执行结果", tagTextValue(op.Message))
@@ -209,6 +217,14 @@ func printTagStatus(out io.Writer, rows []delivery.TagObservation, batchID strin
 		return
 	}
 	fmt.Fprintln(out, "\n批次汇总:")
+	if !genbuQueried {
+		if pushesReady {
+			printTagDetail(out, "Tag 推送", "整批 Tag 已推送且提交一致")
+		} else {
+			printTagDetail(out, "Tag 推送", "Tag 推送尚未全部确认成功")
+		}
+		return
+	}
 	if buildsReady {
 		printTagDetail(out, "Tag 推送与编译", "整批 Tag 已推送且编译成功")
 	} else {

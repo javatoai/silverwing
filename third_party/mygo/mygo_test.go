@@ -3,6 +3,7 @@
 package mygo
 
 import (
+	"cmp"
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -44,22 +45,29 @@ func TestMain(m *testing.M) {
 		helper := fake.New()
 		backendOnce.Do(func() { theBackend = helper })
 		packageIdentifier = os.Getenv("MYGO_TEST_IDENTIFIER")
-		App.SetName("MyGoTest")
-		if App.RequestSingleInstanceLock() {
-			fmt.Println("locked")
-			releaseSingleInstanceLock()
-		} else {
-			fmt.Println("forwarded")
-		}
-		if helper.ForegroundAllowed > 0 {
-			fmt.Println("passed the foreground on")
-		}
+		App.SetName(cmp.Or(os.Getenv("MYGO_TEST_INSTANCE_NAME"), "MyGoTest"))
+		singleInstanceTestHelper(helper)
+		os.Exit(0)
+	}
+	if os.Getenv("MYGO_TEST_INSTANCE_CHILD") == "1" {
+		// A process that an instance started, which outlives it.
+		fmt.Println("child started")
+		_, _ = io.Copy(io.Discard, os.Stdin)
 		os.Exit(0)
 	}
 	fb = fake.New()
 	backendOnce.Do(func() { theBackend = fb })
 	if os.Getenv("MYGO_TEST_STUCK_QUIT") == "1" {
 		stuckQuit()
+	}
+	if dir := os.Getenv("MYGO_TEST_CLEAR_WINDOW_STATES"); dir != "" {
+		clearWindowStatesOnQuit(dir)
+	}
+	if mode := os.Getenv("MYGO_TEST_END_SESSION"); mode != "" {
+		endSession(mode)
+	}
+	if os.Getenv("MYGO_TEST_EVAL_AFTER_QUIT") == "1" {
+		evalAfterQuit()
 	}
 	// A quit that a test lets through must not end the tests.
 	stopGrace = 0
@@ -154,6 +162,35 @@ func call(t *testing.T, fw *fake.Window, id int, method string, args ...any) map
 	})
 }
 
+// A window made with IgnoreMouseEvents lets the mouse through from the
+// start, as one given SetIgnoreMouseEvents(true) does later.
+func TestWindowIgnoreMouseEvents(t *testing.T) {
+	w, _ := testWindow(t, WindowOptions{})
+	if w.IgnoresMouseEvents() {
+		t.Error("a window takes the mouse by default, and says it ignores it")
+	}
+	w.SetIgnoreMouseEvents(true)
+	if !w.IgnoresMouseEvents() {
+		t.Error("IgnoresMouseEvents is false after SetIgnoreMouseEvents(true)")
+	}
+	w.SetIgnoreMouseEvents(false)
+	if w.IgnoresMouseEvents() {
+		t.Error("IgnoresMouseEvents is true after SetIgnoreMouseEvents(false)")
+	}
+
+	through, fw := testWindow(t, WindowOptions{IgnoreMouseEvents: true})
+	if !fw.IgnoresMouseEvents() {
+		t.Error("the backend's window made with IgnoreMouseEvents takes the mouse")
+	}
+	if !through.IgnoresMouseEvents() {
+		t.Error("IgnoresMouseEvents is false for a window made with IgnoreMouseEvents")
+	}
+	through.Destroy()
+	if through.IgnoresMouseEvents() {
+		t.Error("a destroyed window says it ignores the mouse")
+	}
+}
+
 func TestWindowDefaults(t *testing.T) {
 	w, fw := testWindow(t, WindowOptions{})
 	o := fw.Opts
@@ -183,6 +220,28 @@ func TestWindowDefaults(t *testing.T) {
 	}
 }
 
+// TestMinimizedWindowIsVisible holds IsVisible to what Show and Hide set,
+// as every backend reports it (#1542): a minimized window is still shown,
+// Show does not show it again, and Hide hides it.
+func TestMinimizedWindowIsVisible(t *testing.T) {
+	w, _ := testWindow(t, WindowOptions{})
+	var shows, hides atomic.Int32
+	w.OnShow(func() { shows.Add(1) })
+	w.OnHide(func() { hides.Add(1) })
+	w.Minimize()
+	if !w.IsMinimized() || !w.IsVisible() {
+		t.Fatalf("minimized: IsMinimized %v, IsVisible %v", w.IsMinimized(), w.IsVisible())
+	}
+	w.ShowInactive()
+	if shows.Load() != 0 {
+		t.Errorf("ShowInactive on a minimized window fired OnShow %d times", shows.Load())
+	}
+	w.Hide()
+	if w.IsVisible() || hides.Load() != 1 {
+		t.Errorf("Hide on a minimized window: IsVisible %v, OnHide %d times", w.IsVisible(), hides.Load())
+	}
+}
+
 // TestGlassWindowOptions passes a floating panel's look to the backend: the
 // glass and the corners of a frameless window, a negative radius none; and
 // its active look, which SetActiveAppearance sets.
@@ -201,6 +260,33 @@ func TestGlassWindowOptions(t *testing.T) {
 	_, fw = testWindow(t, WindowOptions{Frameless: true, CornerRadius: -4})
 	if o := fw.Opts; o.CornerRadius != 0 {
 		t.Errorf("radius %d; want none", o.CornerRadius)
+	}
+}
+
+// TestInputRegion passes a desktop pet's region to the backend, a copy
+// without the rectangles that hold nothing, keeping nil (all of the
+// window) apart from an empty region (none of it).
+func TestInputRegion(t *testing.T) {
+	w, fw := testWindow(t, WindowOptions{Frameless: true, Transparent: true, AlwaysOnTop: true})
+	region := func() []platform.Rect {
+		return onMainValue(func() []platform.Rect { return fw.InputRegion })
+	}
+	if region() != nil {
+		t.Fatalf("a new window has region %v", region())
+	}
+	rects := []Rectangle{{X: 10, Y: 80, Width: 120, Height: 140}, {X: 0, Y: 0, Width: 0, Height: 40}, {X: 5, Y: 5, Width: 160, Height: -1}, {X: 0, Y: 0, Width: 200, Height: 60}}
+	w.SetInputRegion(rects)
+	rects[0].X = 99 // the caller's slice is its own
+	if got, want := region(), []platform.Rect{{X: 10, Y: 80, Width: 120, Height: 140}, {X: 0, Y: 0, Width: 200, Height: 60}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("region %v, want %v", got, want)
+	}
+	w.SetInputRegion([]Rectangle{{Width: 0, Height: 10}})
+	if got := region(); got == nil || len(got) != 0 {
+		t.Errorf("region %#v, want an empty one", got)
+	}
+	w.SetInputRegion(nil)
+	if got := region(); got != nil {
+		t.Errorf("region %v, want nil", got)
 	}
 }
 
@@ -513,6 +599,34 @@ func TestReadyToShowFiresOnce(t *testing.T) {
 	}
 }
 
+// A window created hidden and shown from OnReadyToShow shows when its
+// first page fails to load, unless a listener of the failure loads
+// another page, which the window then waits for.
+func TestReadyToShowAfterFailedLoad(t *testing.T) {
+	w, fw := testWindow(t, WindowOptions{Hidden: true})
+	var n atomic.Int32
+	w.OnReadyToShow(func() { n.Add(1) })
+	fail := func() { onMain(func() { fw.H.LoadFailed("https://down.example/", -1004, "could not connect") }) }
+	fail()
+	if n.Load() != 1 {
+		t.Errorf("ready-to-show fired %d times after a failed load, want 1", n.Load())
+	}
+
+	w, fw = testWindow(t, WindowOptions{Hidden: true})
+	n.Store(0)
+	w.OnReadyToShow(func() { n.Add(1) })
+	off := w.Page().OnDidFailLoad(func(*LoadError) { w.Page().LoadHTML("<p>offline</p>", "") })
+	fail()
+	if n.Load() != 0 {
+		t.Errorf("ready-to-show fired %d times while the page of a listener loads, want 0", n.Load())
+	}
+	off()
+	fail()
+	if n.Load() != 1 {
+		t.Errorf("ready-to-show fired %d times after that page failed too, want 1", n.Load())
+	}
+}
+
 // Bound services.
 
 type testUser struct {
@@ -585,6 +699,28 @@ func TestCalls(t *testing.T) {
 	}
 	if svc.calls.Load() != 1 {
 		t.Errorf("Hello called %d times", svc.calls.Load())
+	}
+}
+
+// Text cut in the middle of an emoji holds half of a surrogate pair, which
+// JSON.stringify writes as an escape that is no character. The call is
+// made with U+FFFD in its place, and answered.
+func TestCallLoneSurrogate(t *testing.T) {
+	bindForTest(t, "Half", &testService{})
+	_, fw := testWindow(t, WindowOptions{})
+	for i, tt := range []struct{ method, arg, want string }{
+		{"Half.Hello", `"x\ud83d"`, "hello x\ufffd"},
+		{"Half.Hello", `"\ude00x"`, "hello \ufffdx"},
+		{"Half.Echo", `{"name":"a\ud83d","tags":[]}`, "map[name:a\ufffd tags:[echoed]]"},
+	} {
+		id := 300 + i
+		page(fw, fmt.Sprintf(`{"t":"call","id":%d,"k":"tok","m":%q,"a":[%s]}`, id, tt.method, tt.arg))
+		m := received(t, fw, func(m map[string]any) bool {
+			return m["t"] == "reply" && m["id"] == float64(id)
+		})
+		if m["ok"] != true || fmt.Sprint(m["v"]) != tt.want {
+			t.Errorf("%s(%s) = %v (%v), want %q", tt.method, tt.arg, m["v"], m["e"], tt.want)
+		}
 	}
 }
 
@@ -988,35 +1124,35 @@ func TestEventsWaitForDOMReady(t *testing.T) {
 
 func TestHiddenTitleBar(t *testing.T) {
 	// titleBar matches the page event of the room the window controls take.
-	titleBar := func(height, left, right float64) func(m map[string]any) bool {
+	titleBar := func(height, left, right, bottom float64) func(m map[string]any) bool {
 		return func(m map[string]any) bool {
 			p, _ := m["p"].(map[string]any)
-			return m["n"] == "mygo:title-bar" && p["height"] == height && p["left"] == left && p["right"] == right
+			return m["n"] == "mygo:title-bar" && p["height"] == height && p["left"] == left && p["right"] == right && p["bottom"] == bottom
 		}
 	}
 	w, fw := readyWindow(t, WindowOptions{TitleBarStyle: TitleBarHidden, TitleBarHeight: 52})
 	if fw.Opts.TitleBarHeight != 52 {
 		t.Errorf("TitleBarHeight = %d, want 52", fw.Opts.TitleBarHeight)
 	}
-	received(t, fw, titleBar(52, 0, 138))
+	received(t, fw, titleBar(52, 0, 138, 52))
 
 	// The backend reports a change, such as another button layout.
 	onMain(func() {
-		fw.TitleBarRoom = platform.TitleBar{Height: 46, Left: 80}
+		fw.TitleBarRoom = platform.TitleBar{Height: 46, Left: 80, Bottom: 30}
 		fw.H.TitleBarChanged()
 	})
-	received(t, fw, titleBar(46, 80, 0))
+	received(t, fw, titleBar(46, 80, 0, 30))
 
 	// The page gets CSS pixels, which zoom makes larger.
 	w.Page().SetZoomFactor(2)
-	received(t, fw, titleBar(23, 40, 0))
+	received(t, fw, titleBar(23, 40, 0, 15))
 
 	// A later page hears it once its DOM is ready: the script the backend
 	// runs at document start may be older.
 	onMain(func() { fw.H.NavigationCommitted("https://next.example/") })
 	n := len(fw.Scripts())
 	page(fw, `{"t":"dom-ready"}`)
-	received(t, fw, titleBar(23, 40, 0))
+	received(t, fw, titleBar(23, 40, 0, 15))
 	if len(fw.Scripts()) == n {
 		t.Error("the new page did not hear the title bar")
 	}
@@ -1126,6 +1262,143 @@ func TestEvalLateReply(t *testing.T) {
 	case <-time.After(wait.Guard):
 		t.Fatal("the late reply blocked the main thread")
 	}
+}
+
+// TestEvalWindowCloses: a page whose window closes never answers, and Eval,
+// which may have no context to end it, must not wait for it.
+func TestEvalWindowCloses(t *testing.T) {
+	w, fw := testWindow(t, WindowOptions{})
+	asked := make(chan struct{})
+	fw.AsyncFunction = func(string) (string, error) {
+		close(asked)
+		return "", fake.ErrNoReply
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := w.Page().Eval("1")
+		done <- err
+	}()
+	<-asked
+	w.Destroy()
+	select {
+	case err := <-done:
+		if !errors.Is(err, errDestroyed) {
+			t.Errorf("Eval = %v", err)
+		}
+	case <-time.After(wait.Guard):
+		t.Fatal("Eval still waits for the page of a closed window")
+	}
+}
+
+// TestEvalAnsweredByNextPage: an eval sent just before a navigation
+// commits may run in the page that comes next, as one sent right after
+// opening a window may run in the page it loads rather than the empty one
+// it starts with: the navigation leaves it be, and Eval returns the
+// answer of that page.
+func TestEvalAnsweredByNextPage(t *testing.T) {
+	w, fw := testWindow(t, WindowOptions{})
+	replies := make(chan func(string, error), 1)
+	fw.AsyncCallback = func(body string, reply func(string, error)) { replies <- reply }
+	type res struct {
+		v   any
+		err error
+	}
+	done := make(chan res, 1)
+	go func() {
+		v, err := w.Page().Eval("navigator.userAgent")
+		done <- res{v, err}
+	}()
+	reply := <-replies
+	onMain(func() { fw.H.NavigationCommitted("app://localhost/") })
+	onMain(func() { reply(`{"ok":true,"v":"Agent"}`, nil) })
+	select {
+	case r := <-done:
+		if r.v != "Agent" || r.err != nil {
+			t.Errorf("Eval = %v, %v", r.v, r.err)
+		}
+	case <-time.After(wait.Guard):
+		t.Fatal("Eval did not return the answer of the page that came next")
+	}
+}
+
+// TestEvalWebViewDestroyed is TestEvalWindowCloses for a web view's page.
+func TestEvalWebViewDestroyed(t *testing.T) {
+	show := true
+	_, v, _, fv := webViewWindow(t, &show)
+	asked := make(chan struct{})
+	fv.Window.AsyncFunction = func(string) (string, error) {
+		close(asked)
+		return "", fake.ErrNoReply
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := v.Page().Eval("1")
+		done <- err
+	}()
+	<-asked
+	v.Destroy()
+	select {
+	case err := <-done:
+		if !errors.Is(err, errDestroyed) {
+			t.Errorf("Eval = %v", err)
+		}
+	case <-time.After(wait.Guard):
+		t.Fatal("Eval still waits for the page of a destroyed web view")
+	}
+}
+
+// TestEvalAfterQuit: a window created once the app has quit has a page, as
+// the documentation of Page says, on which Eval fails.
+func TestEvalAfterQuit(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe, "-test.run=^$")
+	cmd.Env = append(os.Environ(), "MYGO_TEST_EVAL_AFTER_QUIT=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	for _, want := range []string{"while stopping: " + errLoopStopped.Error() + "\n", "stopped: " + errDestroyed.Error() + "\n"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("no %q in:\n%s", want, out)
+		}
+	}
+}
+
+// evalAfterQuit is a helper process for TestEvalAfterQuit: Eval with the quit
+// under way, in a window no one will close and on a loop that will soon stop,
+// and then with the loop stopped.
+func evalAfterQuit() {
+	App.OnWindowAllClosed(func() {})
+	eval := func(when string) {
+		w := NewWindow(WindowOptions{})
+		if wins := fb.Windows(); !w.IsDestroyed() {
+			wins[len(wins)-1].AsyncFunction = func(string) (string, error) { return "", fake.ErrNoReply }
+		}
+		_, err := w.Page().Eval("1")
+		fmt.Printf("%s: %v\n", when, err)
+	}
+	fb.IgnoresQuit = true
+	stopGrace = 0
+	App.WhenReady(func() {
+		App.Quit()
+		go func() {
+			onMain(func() {})
+			eval("while stopping")
+			fb.IgnoresQuit = false
+			App.Quit()
+		}()
+	})
+	App.Run()
+	done := make(chan struct{})
+	go func() {
+		eval("stopped")
+		close(done)
+	}()
+	<-done
+	os.Exit(0)
 }
 
 // Custom protocols.
@@ -1559,6 +1832,46 @@ func TestMenuRolesAndState(t *testing.T) {
 	}
 }
 
+func TestMenuBadge(t *testing.T) {
+	menu := NewMenu([]*MenuItem{{
+		ID: "node", Label: "Node", Badge: "120 ms", BadgeAlign: BadgeAlignLeft,
+		BadgeShape: BadgeShapePill, BadgeColor: "#34c759", BadgeTextColor: "#fff",
+	}})
+	snap := menu.snapshot()
+	if got := snap.Items[0].Badge; got != "120 ms" {
+		t.Fatalf("badge = %q", got)
+	}
+	if got := snap.Items[0].BadgeAlign; got != platform.BadgeAlignLeft {
+		t.Fatalf("badge align = %q", got)
+	}
+	if pill := snap.Items[0]; pill.BadgeShape != platform.BadgeShapePill || pill.BadgeColor == nil ||
+		*pill.BadgeColor != (platform.Color{R: 0x34, G: 0xc7, B: 0x59, A: 255}) ||
+		pill.BadgeTextColor == nil || *pill.BadgeTextColor != (platform.Color{R: 255, G: 255, B: 255, A: 255}) {
+		t.Fatalf("badge pill = %+v", pill)
+	}
+	item := menu.ItemByID("node")
+	item.SetBadge("1.2s")
+	item.SetBadgeAlign(BadgeAlignCenter)
+	item.SetBadgeShape("")
+	item.SetBadgeColor("")
+	item.SetBadgeTextColor("#000")
+	onMain(func() {}) // the updates reach the backend on the main thread
+	updates := fb.MenuUpdates()
+	last := updates[len(updates)-1]
+	if last.ID != item.uid || last.Badge != "1.2s" || last.BadgeAlign != platform.BadgeAlignCenter ||
+		last.BadgeShape != "" || last.BadgeColor != nil ||
+		last.BadgeTextColor == nil || *last.BadgeTextColor != (platform.Color{R: 0, G: 0, B: 0, A: 255}) {
+		t.Errorf("badge updates not propagated: %+v", last)
+	}
+}
+
+func TestMenuKeepOpen(t *testing.T) {
+	menu := NewMenu([]*MenuItem{{ID: "node", Label: "Node", KeepOpen: true}})
+	if !menu.snapshot().Items[0].KeepOpen {
+		t.Error("KeepOpen lost in the snapshot")
+	}
+}
+
 func TestDefaultMenu(t *testing.T) {
 	m := fb.AppMenu()
 	if runtime.GOOS != "darwin" {
@@ -1678,6 +1991,35 @@ func TestQuitCanBeCanceled(t *testing.T) {
 	}
 }
 
+func TestQuitCanceledEvent(t *testing.T) {
+	var canceled int
+	off := App.OnQuitCanceled(func() { canceled++ })
+	defer off()
+
+	offBefore := App.OnBeforeQuit(func(e *QuitEvent) { e.PreventDefault() })
+	if onMainValue(fb.QuitRequested) {
+		t.Fatal("quit was not canceled by OnBeforeQuit")
+	}
+	offBefore()
+
+	w, _ := testWindow(t, WindowOptions{})
+	offClose := w.OnClose(func(e *CloseEvent) { e.PreventDefault() })
+	if onMainValue(fb.QuitRequested) {
+		t.Fatal("quit was not canceled by a window")
+	}
+	offClose()
+
+	offWill := App.OnWillQuit(func(e *QuitEvent) { e.PreventDefault() })
+	if onMainValue(fb.QuitRequested) {
+		t.Fatal("quit was not canceled by OnWillQuit")
+	}
+	offWill()
+
+	if canceled != 3 {
+		t.Errorf("OnQuitCanceled ran %d times, want 3", canceled)
+	}
+}
+
 func TestPaths(t *testing.T) {
 	dir, err := App.Path(PathUserData)
 	if err != nil || !strings.HasSuffix(dir, "MyGoTest") {
@@ -1786,6 +2128,58 @@ func TestThemePreferences(t *testing.T) {
 
 // TestThemePreferencesJSON checks the JSON of the preferences, which is
 // mygo-runtime's ThemePreferences: the accent a CSS color or null.
+// Theme.SetGTKCSS gives the backend the sheet, from any goroutine, each
+// in place of the one before, and returns why one did not load (#1121).
+func TestThemeGTKCSS(t *testing.T) {
+	defer onMain(func() { fb.StyleSheet, fb.StyleSheetError = "", nil })
+	sheet := func() (s string) {
+		onMain(func() { s = fb.StyleSheet })
+		return s
+	}
+	for _, css := range []string{"headerbar { min-height: 46px; }", "button.titlebutton { min-width: 24px; }"} {
+		if err := Theme.SetGTKCSS(css); err != nil {
+			t.Fatal(err)
+		}
+		if got := sheet(); got != css {
+			t.Errorf("sheet = %q, want %q", got, css)
+		}
+	}
+
+	parse := errors.New("<data>:1:29: not a number")
+	onMain(func() { fb.StyleSheetError = parse })
+	err := Theme.SetGTKCSS("button.titlebutton { min-width: nonsense; }")
+	if !errors.Is(err, parse) || err.Error() != "mygo: Theme.SetGTKCSS: <data>:1:29: not a number" {
+		t.Errorf("SetGTKCSS of a sheet that does not load = %v, want the backend's error", err)
+	}
+	if got := sheet(); got != "button.titlebutton { min-width: 24px; }" {
+		t.Errorf("sheet after one that does not load = %q, want the one before", got)
+	}
+}
+
+// Theme.WindowButtons reports the desktop's layout, which is empty under a
+// tiling window manager.
+func TestThemeWindowButtons(t *testing.T) {
+	defer onMain(func() { fb.StartButtons, fb.EndButtons = nil, nil })
+	onMain(func() { fb.StartButtons, fb.EndButtons = []string{"close"}, []string{"minimize", "maximize"} })
+	b := Theme.WindowButtons()
+	if !slices.Equal(b.Start, []string{"close"}) || !slices.Equal(b.End, []string{"minimize", "maximize"}) {
+		t.Errorf("WindowButtons = %+v, want the backend's layout", b)
+	}
+	if b.Empty() || !b.Has("close") || !b.Has("maximize") {
+		t.Errorf("Empty, Has of %+v", b)
+	}
+	onMain(func() { fb.StartButtons, fb.EndButtons = nil, nil })
+	if b := Theme.WindowButtons(); !b.Empty() || b.Has("close") {
+		t.Errorf("WindowButtons with none = %+v, want empty", b)
+	}
+	if b := defaultWindowButtons("windows"); !slices.Equal(b.End, []string{"minimize", "maximize", "close"}) || len(b.Start) != 0 {
+		t.Errorf("defaultWindowButtons(windows) = %+v", b)
+	}
+	if b := defaultWindowButtons("darwin"); !slices.Equal(b.Start, []string{"close", "minimize", "maximize"}) {
+		t.Errorf("defaultWindowButtons(darwin) = %+v", b)
+	}
+}
+
 func TestThemePreferencesJSON(t *testing.T) {
 	for _, tt := range []struct {
 		p    ThemePreferences
@@ -1985,6 +2379,7 @@ var needsAppCalls = []struct {
 	{"Shell.TrashItem", func() { Shell.TrashItem("/nonexistent") }},
 	{"Shell.Beep", func() { Shell.Beep() }},
 	{"Shell.FileIcon", func() { Shell.FileIcon("/", 16) }},
+	{"Shell.TypeIcon", func() { Shell.TypeIcon("pdf", 16) }},
 	{"Shell.InstalledApps", func() { Shell.InstalledApps() }},
 	{"Shell.LaunchApp", func() { Shell.LaunchApp(InstalledApp{Path: "/"}) }},
 	{"Clipboard.ReadText", func() { Clipboard.ReadText() }},
@@ -2043,6 +2438,78 @@ func TestQuitWhileLoopRuns(t *testing.T) {
 	}
 }
 
+// TestEndSession: when the OS ends the session, the quit listeners and the
+// windows' OnClose run before OnQuit, synchronously and in a quit's
+// order, and what they prevent is ignored; after a quit that ran them,
+// they do not run again.
+func TestEndSession(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for mode, want := range map[string]string{
+		"fresh": "before true\nclose\nwill true\nquit\nended\n",
+		// The quit ran the sequence; its loop had not stopped yet.
+		"quit": "before false\nclose\nwill false\nquit\nended\n",
+	} {
+		cmd := exec.Command(exe, "-test.run=^$")
+		cmd.Env = append(os.Environ(), "MYGO_TEST_END_SESSION="+mode)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s: %v\n%s", mode, err, out)
+		}
+		if string(out) != want {
+			t.Errorf("%s: output:\n%s\nwant:\n%s", mode, out, want)
+		}
+	}
+}
+
+// endSession is a helper process for TestEndSession: the OS ends the
+// session while the app runs ("fresh"), when every listener tries to
+// cancel, or after a quit ran its sequence and the loop has yet to stop
+// ("quit").
+func endSession(mode string) {
+	fb.IgnoresQuit = true
+	stopGrace = 0
+	App.OnWindowAllClosed(func() { fmt.Println("all closed") })
+	App.OnBeforeQuit(func(e *QuitEvent) {
+		fmt.Println("before", e.SessionEnding)
+		if mode == "fresh" {
+			e.PreventDefault()
+		}
+	})
+	App.OnWillQuit(func(e *QuitEvent) {
+		fmt.Println("will", e.SessionEnding)
+		if mode == "fresh" {
+			e.PreventDefault()
+		}
+	})
+	App.OnQuit(func() { fmt.Println("quit") })
+	App.WhenReady(func() {
+		w := NewWindow(WindowOptions{})
+		w.OnClose(func(e *CloseEvent) {
+			fmt.Println("close")
+			if mode == "fresh" {
+				e.PreventDefault()
+			}
+		})
+		if mode == "quit" {
+			App.Quit() // its loop does not stop (IgnoresQuit)
+		}
+		postMain(func() {
+			fb.EndSession()
+			if !w.IsDestroyed() {
+				fmt.Println("the window is open")
+			}
+			fmt.Println("ended")
+			os.Exit(0)
+		})
+	})
+	App.Run()
+	fmt.Println("the loop stopped")
+	os.Exit(1)
+}
+
 // stuckQuit is a helper process for TestQuitWhileLoopRuns: its event
 // loop does not stop when asked.
 func stuckQuit() {
@@ -2069,6 +2536,7 @@ func beforeRun() {
 	NewEvent[int]("test:before-run")
 	// Settings, which Run applies.
 	Theme.SetSource(ThemeDark)
+	_ = Theme.SetGTKCSS("headerbar {}")
 	App.Dock.SetMenu(NewMenu([]*MenuItem{{Label: "New Window"}}))
 	// Calls that work without the running app.
 	App.Locale()
@@ -2086,6 +2554,7 @@ func beforeRun() {
 	}
 	App.WhenReady(func() {
 		fmt.Println("dark:", Theme.IsDark())
+		fmt.Println("gtk css:", fb.StyleSheet == "headerbar {}")
 		fmt.Println("dock menu:", fb.DockMenu != nil && fb.DockMenu.Items[0].Label == "New Window")
 		App.Quit()
 	})
@@ -2115,7 +2584,7 @@ func TestBeforeRun(t *testing.T) {
 		return string(out)
 	}
 	out := run()
-	wants := []string{"dark: true\n", "dock menu: true\n"}
+	wants := []string{"dark: true\n", "gtk css: true\n", "dock menu: true\n"}
 	for _, c := range needsAppCalls {
 		wants = append(wants, c.name+": mygo: "+c.name+" called before ")
 	}
@@ -2152,6 +2621,49 @@ func TestGlobalShortcut(t *testing.T) {
 	GlobalShortcut.Unregister("CmdOrCtrl+Shift+K")
 	if GlobalShortcut.IsRegistered("CmdOrCtrl+Shift+K") {
 		t.Error("Unregister")
+	}
+}
+
+// TestGlobalShortcutKeys: a desktop that binds shortcuts for apps hears
+// what a shortcut does, and the shortcut hears the keys it got, once for
+// each change, until it is unregistered.
+func TestGlobalShortcutKeys(t *testing.T) {
+	defer GlobalShortcut.UnregisterAll()
+	const acc = "CmdOrCtrl+Alt+."
+	var got []string
+	opts := GlobalShortcutOptions{Description: "Stop all", OnKeys: func(keys string) { got = append(got, keys) }}
+	if err := GlobalShortcut.RegisterWith(acc, opts, func() {}); err != nil {
+		t.Fatal(err)
+	}
+	if err := GlobalShortcut.Register("CmdOrCtrl+Alt+,", func() {}); err != nil {
+		t.Fatal(err)
+	}
+	onMain(func() {
+		if d := fb.HotkeyDescription(acc); d != "Stop all" {
+			t.Errorf("the desktop heard the description %q", d)
+		}
+		if d := fb.HotkeyDescription("CmdOrCtrl+Alt+,"); d != "" {
+			t.Errorf("a shortcut without a description got %q", d)
+		}
+		fb.BindHotkey("CmdOrCtrl+Alt+,", "Ctrl+Alt+,") // nobody listens
+		fb.BindHotkey(acc, "")                         // the user declined it
+		fb.BindHotkey(acc, "")                         // the desktop answers again as other shortcuts change
+		fb.BindHotkey(acc, "Meta+S")                   // the user picked keys in the desktop's settings
+		fb.BindHotkey(acc, "Meta+S")
+		fb.BindHotkey(acc, "")
+	})
+	if want := []string{"", "Meta+S", ""}; !slices.Equal(got, want) {
+		t.Errorf("the shortcut heard the keys %q, want %q", got, want)
+	}
+	// A shortcut registered again starts over: it hears keys it heard before.
+	got = nil
+	GlobalShortcut.Unregister(acc)
+	if err := GlobalShortcut.RegisterWith(acc, opts, func() {}); err != nil {
+		t.Fatal(err)
+	}
+	onMain(func() { fb.BindHotkey(acc, "") })
+	if want := []string{""}; !slices.Equal(got, want) {
+		t.Errorf("registered again, the shortcut heard the keys %q, want %q", got, want)
 	}
 }
 

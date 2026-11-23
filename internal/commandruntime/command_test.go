@@ -24,8 +24,9 @@ func (r *environmentRunner) Run(ctx context.Context, spec process.Spec) (process
 
 func TestPrepareSharesToolDefaultsAndTargetProxy(t *testing.T) {
 	config := domain.DefaultAppConfig()
+	config.CommandProxyTargets = append(config.CommandProxyTargets, "GIT", "MEEGLE", "GENBU", "WORKSPACE_COMMAND")
 	runner := &environmentRunner{}
-	for _, tool := range []executable.Tool{executable.ToolMeegle, executable.ToolCodex, executable.ToolGit, executable.ToolGenbu} {
+	for _, tool := range []executable.Tool{executable.ToolMeegle, executable.ToolCodex, executable.ToolGit} {
 		target := domain.CommandProxyTarget(strings.ToUpper(string(tool)))
 		spec, err := Prepare(context.Background(), runner, &config, target, tool, "/fixture/command")
 		if err != nil {
@@ -41,7 +42,17 @@ func TestPrepareSharesToolDefaultsAndTargetProxy(t *testing.T) {
 			t.Fatal("inherited proxy was retained")
 		}
 	}
-	spec, err := Prepare(context.Background(), runner, nil, "", "", "/fixture/bootstrap")
+	for _, tool := range []executable.Tool{executable.ToolGenbu, executable.ToolDragon} {
+		before := runner.calls
+		if spec, err := Prepare(context.Background(), runner, &config, "", tool, "/fixture/legacy-command"); err == nil || spec.Executable != "" || runner.calls != before {
+			t.Fatalf("embedded platform resolved an external process: %s %+v %v", tool, spec, err)
+		}
+	}
+	spec, err := Prepare(context.Background(), runner, &config, "WORKSPACE_COMMAND", "", "/fixture/shortcut")
+	if err != nil || spec.Env["HTTP_PROXY"] != "" || !slices.Contains(spec.RemoveEnv, "http_proxy") {
+		t.Fatalf("legacy shortcut target affected child environment: %+v %v", spec, err)
+	}
+	spec, err = Prepare(context.Background(), runner, nil, "", "", "/fixture/bootstrap")
 	if err != nil || len(spec.RemoveEnv) != 0 {
 		t.Fatalf("Bootstrap inheritance changed: %+v %v", spec, err)
 	}
@@ -61,8 +72,8 @@ func TestProxyCredentialsAndNoProxyRemainScopedAndRedacted(t *testing.T) {
 	c := domain.DefaultAppConfig()
 	endpoint, user, password, noProxy := "http://proxy.invalid:8080", "fixture-user", "fixture-secret", "localhost,127.0.0.1"
 	c.CommandProxyURL, c.CommandProxyUsername, c.CommandProxyPassword, c.CommandProxyNoProxy = &endpoint, &user, &password, &noProxy
-	c.CommandProxyTargets = []domain.CommandProxyTarget{domain.ProxyTargetGenbu}
-	env, _ := ProxyEnvironment(c, domain.ProxyTargetGenbu)
+	c.CommandProxyTargets = []domain.CommandProxyTarget{domain.ProxyTargetCodex}
+	env, _ := ProxyEnvironment(c, domain.ProxyTargetCodex)
 	if !strings.Contains(env["HTTP_PROXY"], "fixture-user:fixture-secret@") || env["NO_PROXY"] != noProxy {
 		t.Fatalf("proxy options lost: %+v", env)
 	}
@@ -72,8 +83,8 @@ func TestProxyCredentialsAndNoProxyRemainScopedAndRedacted(t *testing.T) {
 			t.Fatalf("credential leaked: %s", text)
 		}
 	}
-	other, _ := ProxyEnvironment(c, domain.ProxyTargetMeegle)
+	other, _ := ProxyEnvironment(c, domain.ProxyTargetAppUpdates)
 	if len(other) != 0 {
-		t.Fatal("Genbu proxy applied to Meegle")
+		t.Fatal("Codex proxy applied to application updates")
 	}
 }

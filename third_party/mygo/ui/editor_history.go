@@ -84,17 +84,40 @@ func (ed *editor) record(typing bool) {
 	ed.lastEdit = now
 }
 
+// lineBreaks turns the line breaks of s that are not a newline, \r\n and a
+// lone \r as old Mac text has (a paste of it), into newlines, as the text
+// holds them (#1915).
+var lineBreaks = strings.NewReplacer("\r\n", "\n", "\r", "\n")
+
+// lineBreaksAsSpaces returns s as a single-line input takes it.
+func lineBreaksAsSpaces(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' {
+			return ' '
+		}
+		return r
+	}, s)
+}
+
+// edited returns s as an edit puts it in the text, for what compares it
+// with the text there first: a line break of two characters is one, as
+// insert takes it, and a lone \r one too, and a single-line input has
+// spaces for line breaks, as replace gives it.
+func (ed *editor) edited(s string) string {
+	s = lineBreaks.Replace(s)
+	if !ed.multiline {
+		s = lineBreaksAsSpaces(s)
+	}
+	return s
+}
+
 // replace replaces the runes from start to end with s, as the last step
 // of undo notes, and puts the caret after it.
 func (ed *editor) replace(start, end int, s string) {
 	if !ed.multiline {
-		s = strings.Map(func(r rune) rune {
-			if r == '\n' || r == '\r' {
-				return ' '
-			}
-			return r
-		}, s)
+		s = lineBreaksAsSpaces(s)
 	}
+	s = ed.fit(start, end, s)
 	if n := len(ed.undo); n > 0 {
 		step := &ed.undo[n-1]
 		removed := ed.buf.slice(start, end)
@@ -125,6 +148,17 @@ func (ed *editor) replace(start, end int, s string) {
 		ed.undo[n-1].caretAfter, ed.undo[n-1].anchorAfter = ed.caret, ed.anchor
 		ed.undo[n-1].selectionAfter = ed.editorSelection.clone()
 	}
+}
+
+// fit returns what of s the user may put in place of the runes from start
+// to end under MaxLength: as much as fits, in UTF-16 units, without
+// splitting a surrogate pair, as a browser cuts a paste.
+func (ed *editor) fit(start, end int, s string) string {
+	if ed.maxLength <= 0 {
+		return s
+	}
+	room := ed.maxLength - ed.buf.units + ed.buf.utf16At(end) - ed.buf.utf16At(start)
+	return s[:UTF16ByteOffset(s, room)]
 }
 
 // takeBack undoes the last step of undo, or redoes the last undone with

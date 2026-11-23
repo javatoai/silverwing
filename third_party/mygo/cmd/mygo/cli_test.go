@@ -390,7 +390,7 @@ func TestProductionTags(t *testing.T) {
 	t.Setenv("GOFLAGS", "")
 	t.Setenv("MYGO_INSPECTOR", "")
 	tags := func(debug bool) string { return strings.Join(productionTags(debug), " ") }
-	if got := tags(false); got != "-tags mygo_noinspector" {
+	if got := tags(false); got != "-tags mygo_nodownload,mygo_noinspector" {
 		t.Errorf("a production build has %q", got)
 	}
 	if got := tags(true); got != "" {
@@ -398,11 +398,11 @@ func TestProductionTags(t *testing.T) {
 	}
 	// The tags of GOFLAGS stay: -tags would override them.
 	t.Setenv("GOFLAGS", "-mod=mod -tags=sqlite,fts5")
-	if got := tags(false); got != "-tags sqlite,fts5,mygo_noinspector" {
+	if got := tags(false); got != "-tags sqlite,fts5,mygo_nodownload,mygo_noinspector" {
 		t.Errorf("with GOFLAGS' tags, a production build has %q", got)
 	}
 	t.Setenv("MYGO_INSPECTOR", "1")
-	if got := tags(false); got != "" {
+	if got := tags(false); got != "-tags sqlite,fts5,mygo_nodownload" {
 		t.Errorf("MYGO_INSPECTOR=1 leaves %q", got)
 	}
 }
@@ -540,8 +540,8 @@ func TestSignWindowsResources(t *testing.T) {
 			t.Errorf("%s signed: %v, want %v", name, got, want)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(dir, "bin", ".hidden.dll")); err == nil {
-		t.Error("a hidden file was copied")
+	if b, err := os.ReadFile(filepath.Join(dir, "bin", ".hidden.dll")); err != nil || !bytes.HasSuffix(b, []byte("signed")) {
+		t.Errorf("a dotfile resource was not copied and signed: %q, %v", b, err)
 	}
 	c.Windows.SignCommand = "false %1"
 	if err := signWindowsResources(c, dir, res); err == nil {
@@ -586,6 +586,36 @@ func TestFileAssociations(t *testing.T) {
 		os.WriteFile(filepath.Join(dir, "mygo.json"), []byte(`{"fileAssociations": `+bad+`}`), 0o644)
 		if _, err := loadConfig(dir); err == nil {
 			t.Errorf("accepted fileAssociations %s", bad)
+		}
+	}
+}
+
+// TestDesktopEntryStartupWMClass: an X11 session groups the app's window
+// with its entry through StartupWMClass, which names the program, not the
+// arguments of Exec that a file association adds.
+func TestDesktopEntryStartupWMClass(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		mime  bool
+		want  string
+		notIn string
+	}{
+		{"notes", false, "StartupWMClass=notes\n", ""},
+		{"notes", true, "StartupWMClass=notes\n", "StartupWMClass=notes %U"},
+		// The Debian package and the PKGBUILD run the app from /opt: the
+		// window class is still the basename.
+		{"/opt/notes/notes", false, "StartupWMClass=notes\n", "StartupWMClass=/opt/notes/notes"},
+	} {
+		c := &Config{Name: "Notes", Identifier: "com.example.notes", Version: "1.0.0"}
+		if tc.mime {
+			c.FileAssociations = []FileAssociation{{Ext: []string{"md"}, Name: "Markdown", MimeType: "text/markdown"}}
+		}
+		entry := linuxDesktopEntry(c, tc.name, tc.name)
+		if !strings.Contains(entry, tc.want) {
+			t.Errorf("desktop entry lacks %q:\n%s", tc.want, entry)
+		}
+		if tc.notIn != "" && strings.Contains(entry, tc.notIn) {
+			t.Errorf("desktop entry has %q:\n%s", tc.notIn, entry)
 		}
 	}
 }

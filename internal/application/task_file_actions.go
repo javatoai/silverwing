@@ -67,6 +67,10 @@ func (a *App) taskFilesIdentity(ctx context.Context, action Action, expected Tas
 	if err != nil {
 		return domain.TaskManifest{}, "", err
 	}
+	return a.taskFilesIdentityForConfig(action, expected, cfg)
+}
+
+func (a *App) taskFilesIdentityForConfig(action Action, expected TaskFilesContext, cfg domain.AppConfig) (domain.TaskManifest, string, error) {
 	if cfg.TaskRoot == nil || !sameTaskContextPath(expected.Home, a.Paths.Home) || !sameTaskContextPath(expected.TaskRoot, *cfg.TaskRoot) {
 		return domain.TaskManifest{}, "", errTaskFilesContext
 	}

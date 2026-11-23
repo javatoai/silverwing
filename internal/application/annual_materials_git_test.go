@@ -2,6 +2,8 @@ package application
 
 import (
 	"context"
+	"net/http/cgi"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"silverwing-go/internal/documents"
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/workspace"
 )
@@ -17,7 +20,7 @@ func annualLocalGit(t *testing.T, root string, args ...string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
+	command := exec.CommandContext(ctx, "git", append([]string{"-c", "core.longpaths=true", "-C", root}, args...)...)
 	command.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+filepath.Join(t.TempDir(), "missing"), "GIT_TERMINAL_PROMPT=0", "GIT_AUTHOR_NAME=SW Test", "GIT_AUTHOR_EMAIL=test@example.invalid", "GIT_COMMITTER_NAME=SW Test", "GIT_COMMITTER_EMAIL=test@example.invalid")
 	result, err := command.CombinedOutput()
 	if err != nil {
@@ -27,19 +30,30 @@ func annualLocalGit(t *testing.T, root string, args ...string) string {
 }
 
 func TestAnnualGitAppliedTreeUpdatesAllAgentsWhenPushFails(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
+	git, err := exec.LookPath("git")
+	if err != nil {
 		t.Skip(err)
 	}
+	base := t.TempDir()
+	bare, seed := filepath.Join(base, "remote.git"), filepath.Join(base, "peer-clone")
+	server := httptest.NewServer(&cgi.Handler{Path: git, Args: []string{"http-backend"}, Dir: base,
+		Env: []string{"GIT_PROJECT_ROOT=" + filepath.ToSlash(base), "GIT_HTTP_EXPORT_ALL=1", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=" + filepath.Join(base, "missing")}})
+	t.Cleanup(server.Close)
 	a, scope, taskPath := annualApplicationFixture(t)
 	c, _ := a.Config.Load()
-	// A validated UI address is used only as a binding. All Git commands in
-	// this test use the isolated local bare repository below.
-	c.MaterialsGitSync = &domain.MaterialsGitSyncSettings{RepositoryURL: "https://example.invalid/materials.git", Branch: "master", IntervalMinutes: 5}
+	c.MaterialsGitSync = &domain.MaterialsGitSyncSettings{RepositoryURL: server.URL + "/remote.git", Branch: "master", IntervalMinutes: 5}
+	expected := MaterialsGitScope(a.Paths.Home, c)
+	c.RequirementMaterialsRoot = &expected.Root
 	if err := a.Config.Save(c); err != nil {
 		t.Fatal(err)
 	}
-	expected := MaterialsGitScope(a.Paths.Home, c)
+	owned := filepath.Join(expected.Root, "requirements", "2026", "123-需求", "研发")
+	scope, _ = documents.AnnualScope(owned)
 	archived, _ := a.Manifests.Load(taskPath)
+	archived.RequirementMaterials.WriteRoot = &owned
+	if err := a.Manifests.Save(taskPath, archived); err != nil {
+		t.Fatal(err)
+	}
 	archived.TaskDirectoryName = "archived"
 	archived.FolderName = "archived"
 	archived.LifecycleStatus = domain.TaskArchived
@@ -47,17 +61,13 @@ func TestAnnualGitAppliedTreeUpdatesAllAgentsWhenPushFails(t *testing.T) {
 	if err := a.Manifests.Save(archivedPath, archived); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := workspace.NewAgentDocumentService(a.Paths, a.Manifests).EnsureTaskDocuments(archivedPath, archived, c); err != nil {
-		t.Fatal(err)
-	}
-	base := t.TempDir()
-	bare, seed := filepath.Join(base, "remote.git"), filepath.Join(base, "peer-clone")
 	for _, path := range []string{bare, seed} {
 		if err := os.MkdirAll(path, 0755); err != nil {
 			t.Fatal(err)
 		}
 	}
 	annualLocalGit(t, bare, "init", "--bare", "--initial-branch=master")
+	annualLocalGit(t, bare, "config", "http.receivepack", "true")
 	annualLocalGit(t, seed, "init", "--initial-branch=master")
 	write := func(root, path, content string) {
 		t.Helper()
@@ -79,12 +89,20 @@ func TestAnnualGitAppliedTreeUpdatesAllAgentsWhenPushFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for k, v := range map[string]string{"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": filepath.Join(base, "missing"), "GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_0": "user.name", "GIT_CONFIG_VALUE_0": "SW Test", "GIT_CONFIG_KEY_1": "user.email", "GIT_CONFIG_VALUE_1": "test@example.invalid"} {
+	gitConfig := filepath.Join(base, "gitconfig")
+	annualLocalGit(t, seed, "config", "--file", gitConfig, "user.name", "SW Test")
+	annualLocalGit(t, seed, "config", "--file", gitConfig, "user.email", "test@example.invalid")
+	for k, v := range map[string]string{"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": gitConfig, "GIT_ALLOW_PROTOCOL": "http"} {
 		service.Git.Environment[k] = v
 	}
-	local := expected
-	local.URL = bare
-	status, syncErr := service.Sync(context.Background(), local, true, nil)
+	status, syncErr := service.Sync(context.Background(), expected, true, nil)
+	if syncErr != nil {
+		t.Fatal(syncErr)
+	}
+	docs := workspace.NewAgentDocumentService(a.Paths, a.Manifests)
+	if _, err := docs.EnsureTaskDocuments(archivedPath, archived, c); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := a.finishMaterialsGitSync(context.Background(), expected, status, syncErr, service.Check); err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +116,7 @@ func TestAnnualGitAppliedTreeUpdatesAllAgentsWhenPushFails(t *testing.T) {
 	if err := os.WriteFile(hook, []byte("#!/bin/sh\necho local-test-reject >&2\nexit 1\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	status, syncErr = service.Sync(context.Background(), local, true, nil)
+	status, syncErr = service.Sync(context.Background(), expected, true, nil)
 	if syncErr == nil {
 		t.Fatal("push rejection did not happen")
 	}

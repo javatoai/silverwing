@@ -12,7 +12,7 @@ import (
 type productionResultIdentity struct {
 	Selection                             production.Selection
 	BatchID, Branch, SourceSHA, TargetSHA string
-	Home, ConfigScope, ManualTag          string
+	Home, ConfigScope                     string
 	Generation                            uint64
 }
 
@@ -64,7 +64,7 @@ func (s *app) productionSection(v *productionView, b *production.Batch, step int
 	view := *v
 	if observed, exists := v.Steps[step]; exists && observed.Identity != nil {
 		i := observed.Identity
-		if i.Selection != v.Selection || i.BatchID != v.BatchID || i.Home != s.snapshot.Home || i.ConfigScope != s.currentProductionScope() || i.ManualTag != v.ManualTag || i.Generation > v.Generation || (step == 4 && i.Branch != v.Branch) {
+		if i.Selection != v.Selection || i.BatchID != v.BatchID || i.Home != s.snapshot.Home || i.ConfigScope != s.currentProductionScope() || i.Generation > v.Generation || (step == 4 && i.Branch != v.Branch) {
 			if step == 4 && productionIntentStep(b) != 4 {
 				return productionSectionPresentation{}
 			}
@@ -202,6 +202,23 @@ func (v *productionView) invalidateProductionBranchResult(p *production.Preview)
 	if i := result.Identity; i != nil && ((i.TargetSHA != "" && p.ReleaseSHA != i.TargetSHA) || (i.SourceSHA != "" && p.BranchHeads[i.Branch] != i.SourceSHA)) {
 		delete(v.Steps, 4)
 	}
+}
+
+func (v *productionView) invalidateProductionBaseline(observed *production.Preview) {
+	previous := v.Preview
+	v.Preview = nil
+	if observed != nil && observed.Target.Selection == v.Selection {
+		v.Preview = &production.Preview{Target: observed.Target, Branches: observed.Branches, MainSHA: observed.MainSHA}
+	} else if previous != nil {
+		// Keep branch choices available for independent feature merges.
+		v.Preview = &production.Preview{Target: previous.Target, Branches: previous.Branches}
+	}
+	v.PreparationInvalid, v.BuildChecked = true, false
+	v.updateSuggestedBranch("")
+	delete(v.Steps, 1)
+	delete(v.Steps, 2)
+	delete(v.Steps, 5)
+	delete(v.Steps, 6)
 }
 
 func (v *productionView) selectProductionBatch(id string) {

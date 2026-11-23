@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 
 	"silverwing-go/internal/domain"
@@ -46,9 +45,6 @@ func (a *App) addRepositories(ctx context.Context, action Action) (ActionResult,
 	if err := decodePayload(action.Payload, &request); err != nil {
 		return ActionResult{}, err
 	}
-	if strings.TrimSpace(request.GroupID) == "" {
-		return ActionResult{}, errors.New("groupId 不能为空")
-	}
 	if request.Paths == nil {
 		return ActionResult{}, errors.New("paths 必须是字符串数组")
 	}
@@ -74,7 +70,7 @@ func (a *App) addRepositories(ctx context.Context, action Action) (ActionResult,
 
 	// Preflight avoids even acquiring the mutation lock when every selected
 	// directory is invalid, already registered, or already bound to the group.
-	_, planned, err := resolveRepositoryBatch(config, request.GroupID, inspected)
+	_, planned, err := resolveRepositoryBatch(config, inspected)
 	if err != nil {
 		return ActionResult{}, err
 	}
@@ -90,7 +86,7 @@ func (a *App) addRepositories(ctx context.Context, action Action) (ActionResult,
 		if err := ctx.Err(); err != nil {
 			return current, err
 		}
-		next, result, resolveErr := resolveRepositoryBatch(current, request.GroupID, inspected)
+		next, result, resolveErr := resolveRepositoryBatch(current, inspected)
 		if resolveErr != nil {
 			return current, resolveErr
 		}
@@ -114,18 +110,14 @@ func (a *App) addRepositories(ctx context.Context, action Action) (ActionResult,
 	return ActionResult{Message: "仓库批量添加完成", Data: resolved}, nil
 }
 
-func resolveRepositoryBatch(config domain.AppConfig, groupID string, inspected []inspectedRepository) (domain.AppConfig, RepositoryBatchResult, error) {
+func resolveRepositoryBatch(config domain.AppConfig, inspected []inspectedRepository) (domain.AppConfig, RepositoryBatchResult, error) {
 	result := RepositoryBatchResult{Added: []string{}, Skipped: []RepositoryBatchSkip{}}
-	group, err := config.Group(groupID)
-	if err != nil {
-		return config, result, err
-	}
 
 	knownRepositories := make(map[string]domain.RepositoryConfig, len(config.Repositories))
 	for _, repository := range config.Repositories {
 		knownRepositories[strings.ToLower(repository.GitCommonDirectory)] = repository
 	}
-	services := append([]domain.GroupServiceConfig{}, group.Services...)
+	services := append([]domain.GroupServiceConfig{}, config.ServiceCatalog()...)
 	repositories := append([]domain.RepositoryConfig{}, config.Repositories...)
 	seenCommonDirectories := make(map[string]struct{}, len(inspected))
 
@@ -160,7 +152,7 @@ func resolveRepositoryBatch(config domain.AppConfig, groupID string, inspected [
 			}
 		}
 		if alreadyBound {
-			result.Skipped = append(result.Skipped, RepositoryBatchSkip{Path: item.path, Reason: fmt.Sprintf("该仓库已存在于组 %s 中", group.Name)})
+			result.Skipped = append(result.Skipped, RepositoryBatchSkip{Path: item.path, Reason: "该仓库已配置为服务"})
 			continue
 		}
 
@@ -173,15 +165,9 @@ func resolveRepositoryBatch(config domain.AppConfig, groupID string, inspected [
 		return config, result, nil
 	}
 
-	groups := append([]domain.GroupConfig{}, config.Groups...)
-	for i := range groups {
-		if groups[i].ID == groupID {
-			groups[i].Services = services
-			break
-		}
-	}
 	config.Repositories = repositories
-	config.Groups = groups
+	config.Services = services
+	config.Groups = nil
 	result.Config = config
 	return config, result, nil
 }

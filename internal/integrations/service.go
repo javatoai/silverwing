@@ -32,6 +32,7 @@ type Service struct {
 	confirmedIdentity         string
 	confirmedIdentityRaw      string
 	identityContext           string
+	identityLocalContext      string
 	identitySessionGeneration uint64
 	identitySessions          map[string]requirementIdentitySession
 	identityRequests          map[string]*requirementIdentityRequest
@@ -39,6 +40,7 @@ type Service struct {
 	requirementDocuments      *requirementDocumentCoordinator
 	requirementReads          requirementReadOrder
 	noticePreparations        *noticePreparationJobs
+	noticeCLIReady            func(domain.AppConfig) bool
 }
 
 func NewService(paths storage.Paths, config *storage.ConfigStore, runner *process.Runner) *Service {

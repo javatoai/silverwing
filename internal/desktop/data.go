@@ -49,60 +49,70 @@ type actionForm struct {
 }
 
 type app struct {
-	releaseNotices         releaseNoticeController
-	taskTabExplicit        bool
-	mermaidInitializer     *mermaidInitializer
-	taskUnit               taskController
-	taskFilesUnit          taskFilesController
-	taskServicesUnit       taskServicesController
-	taskTerminalUnit       taskTerminalController
-	materialsUnit          materialsController
-	requirementUnit        requirementController
-	settingsUnit           settingsController
-	toolsUnit              toolsController
-	workspaceUnit          workspaceController
-	releaseUnit            releaseController
-	win                    *mygo.Window
-	backend                application.Backend
-	systemOpenJobs         *systemOpenJobs
-	desktopPreferences     *desktopPreferencesState
-	appUpdates             *appUpdateState
-	readingSession         *desktopReadingSession
-	overflowMenus          *overflowMenuState
-	page                   string
-	dark                   bool
-	tab                    int
-	file                   int
-	source                 bool
-	listWidth              float32
-	navigationCollapsed    bool
-	confirmationDialog     *confirmationDialogState
-	inputs                 map[string]*string
-	snapshot               application.Snapshot
-	backendGate            chan struct{}
-	lastResult             string
-	lastMessage            string
-	lastError              string
-	operationNotifications operationNotificationState
-	loading                bool
-	busy                   bool
-	operation              string
-	operationKind          string
-	operationCancelling    bool
-	cancelOperation        context.CancelFunc
-	dialogTitle            string
-	dialogOpen             bool
-	form                   actionForm
+	releaseNotices             releaseNoticeController
+	taskTabExplicit            bool
+	initialGenbuRoute          bool
+	mermaidInitializer         *mermaidInitializer
+	taskUnit                   taskController
+	taskFilesUnit              taskFilesController
+	taskServicesUnit           taskServicesController
+	genbuBuildLog              *genbuBuildLogDialogState
+	genbuApprovals             *genbuApprovalsDialogState
+	taskTerminalUnit           taskTerminalController
+	materialsUnit              materialsController
+	projectMaterials           *projectMaterialsControls
+	projectInstructions        *projectInstructionsView
+	projectInstructionsClosed  bool
+	projectInstructionsWorkers []<-chan struct{}
+	projectInstructionsGate    chan struct{}
+	requirementUnit            requirementController
+	settingsUnit               settingsController
+	toolsUnit                  toolsController
+	workspaceUnit              workspaceController
+	releaseUnit                releaseController
+	win                        *mygo.Window
+	backend                    application.Backend
+	systemOpenJobs             *systemOpenJobs
+	desktopPreferences         *desktopPreferencesState
+	appUpdates                 *appUpdateState
+	readingSession             *desktopReadingSession
+	overflowMenus              *overflowMenuState
+	page                       string
+	dark                       bool
+	tab                        int
+	file                       int
+	source                     bool
+	listWidth                  float32
+	navigationCollapsed        bool
+	confirmationDialog         *confirmationDialogState
+	inputs                     map[string]*string
+	snapshot                   application.Snapshot
+	backendGate                chan struct{}
+	lastResult                 string
+	lastMessage                string
+	lastError                  string
+	operationNotifications     operationNotificationState
+	loading                    bool
+	busy                       bool
+	operation                  string
+	operationKind              string
+	operationCancelling        bool
+	cancelOperation            context.CancelFunc
+	dialogTitle                string
+	dialogOpen                 bool
+	form                       actionForm
 }
 
 const (
-	taskTagTab      = 4
-	taskFilesTab    = 5
-	taskServicesTab = 6
-	taskTerminalTab = 7
+	taskTagTab                 = 4
+	taskFilesTab               = 5
+	taskServicesTab            = 6
+	taskTerminalTab            = 7
+	taskProjectInstructionsTab = 8
 )
 
-var tabs = []string{"任务分支", "任务资料", "需求详情", "任务说明", "Tag", "任务文件", "服务信息", "终端"}
+// Index 3 was the task instructions tab. Keep the remaining --tab IDs stable.
+var tabs = []string{0: "任务分支", 1: "任务资料", 2: "需求详情", taskTagTab: "Tag", taskFilesTab: "任务文件", taskServicesTab: "服务信息", taskTerminalTab: "终端", taskProjectInstructionsTab: "项目资料"}
 
 func newApp(backend application.Backend, opts Options) *app {
 	s := &app{
@@ -117,7 +127,6 @@ func newApp(backend application.Backend, opts Options) *app {
 			taskRequirementMetadataGeneration: make(map[string]uint64)}},
 		settingsUnit: settingsController{state: settingsState{settingsTab: "外观与交互",
 			settingsPage:       "basic",
-			settingsAgentScope: "global",
 			settingsBoolInputs: make(map[string]*bool)}},
 		toolsUnit: toolsController{state: toolsState{toolTab: "JSON",
 			toolEnabled: [4]bool{true, true, true, true},
@@ -126,7 +135,8 @@ func newApp(backend application.Backend, opts Options) *app {
 		page:                opts.Page,
 		dark:                opts.Dark,
 		tab:                 opts.Tab,
-		taskTabExplicit:     opts.TabExplicit || opts.Tab != 0,
+		taskTabExplicit:     availableTaskContentTab(opts.Tab) && (opts.TabExplicit || opts.Tab != 0),
+		initialGenbuRoute:   opts.Page == "production" || opts.Tab == taskServicesTab && (opts.Page == "tasks" || opts.Page == "archive"),
 		desktopPreferences:  &desktopPreferencesState{enabled: opts.CapturePath == ""},
 		listWidth:           240,
 		inputs:              make(map[string]*string),
@@ -134,13 +144,20 @@ func newApp(backend application.Backend, opts Options) *app {
 		navigationCollapsed: true,
 		loading:             true,
 	}
+	if !availableTaskContentTab(s.tab) {
+		s.tab = 0
+	}
 	s.initMarkdownAutosave()
 	return s
 }
 
 func (s *app) applySnapshot(snapshot application.Snapshot) {
+	if s.projectInstructions != nil {
+		s.captureProjectInstructionsInput()
+	}
 	previousTasks, previousConfigJSON := s.taskUnit.state.tasks, s.settingsUnit.state.configJSON
 	previousTask := s.taskUnit.currentTask()
+	previousTaskRoot := s.snapshotTaskRoot()
 	s.invalidateCLIConfiguration(snapshot)
 	if s.desktopPreferences != nil && s.desktopPreferences.enabled {
 		s.restoreDesktopPreferences(snapshot.Home)
@@ -152,6 +169,9 @@ func (s *app) applySnapshot(snapshot application.Snapshot) {
 	nextIndex := s.taskLifecycleSnapshotIndex(nextTasks)
 	selectionChanged := s.prepareTaskLifecycleSelection(previousTask, taskLifecycleSelectionAt(nextTasks, nextIndex))
 	s.snapshot = snapshot
+	if snapshot.ProfileID != "" && previousTaskRoot != s.snapshotTaskRoot() {
+		s.resetTaskDirectoryViews()
+	}
 	s.workspaceUnit.publishServiceCatalog(catalog)
 	s.taskUnit.replaceTasks(nextTasks, nextIndex)
 	if snapshot.Error != "" {
@@ -159,13 +179,15 @@ func (s *app) applySnapshot(snapshot application.Snapshot) {
 	}
 	s.syncSettingsConfigInputs(s.settingsUnit.state.configJSON, snapshot.ConfigJSON)
 	s.settingsUnit.state.configJSON = snapshot.ConfigJSON
+	s.syncPlatformConnections(previousConfigJSON)
+	s.observeOptionalCLIs()
 	refreshWorkspaceGit := s.reconcileWorkspaceGitDisplayCache()
 	s.observeServiceRepositoryChoiceScope()
 	s.reconcileTaskRequirementIdentities(previousTasks, previousConfigJSON)
 	s.reconcileSidebarNavigation()
 	if selectionChanged {
 		s.finishTaskLifecycleSelection()
-	} else if refreshWorkspaceGit && s.tab != taskFilesTab && s.tab != taskServicesTab && s.tab != taskTerminalTab {
+	} else if refreshWorkspaceGit && s.taskTabNeedsWorkspaceGit() {
 		s.requestWorkspaceGitStatus(true)
 	}
 	s.restoreReadingSessionOnSnapshot()
@@ -265,7 +287,7 @@ func projectTasksWithCatalog(snapshot application.Snapshot, catalog *desktopServ
 		for _, workspace := range source.Workspaces {
 			name := workspace.Name
 			if name == "" {
-				if service, ok := catalog.service(source.GroupID, workspace.ServiceID); ok {
+				if service, ok := catalog.service(workspace.ServiceID); ok {
 					name = service.Name
 				}
 			}
@@ -287,7 +309,7 @@ func projectTasksWithCatalog(snapshot application.Snapshot, catalog *desktopServ
 				seenServiceIDs[serviceID] = true
 			}
 			name := ""
-			if service, ok := catalog.service(source.GroupID, serviceID); ok {
+			if service, ok := catalog.service(serviceID); ok {
 				name = service.Name
 			}
 			if name == "" {
@@ -358,11 +380,7 @@ func (s *app) input(name, value string) *string {
 
 func (s *app) openForm(kind, title, taskID, serviceID, moduleID, path string, fields ...formField) bool {
 	if s.dialogOpen && s.form.mode == "task-create" {
-		if err := s.captureTaskCreationMarkdown(s.taskUnit.state.taskCreation); err != nil {
-			s.lastError = err.Error()
-			return false
-		}
-		closeTaskCreationMarkdown(s.taskUnit.state.taskCreation)
+		closeTaskCreationGeneratedPreview(s.taskUnit.state.taskCreation)
 	}
 	if s.dialogOpen && !s.captureActionFormMarkdown() {
 		return false
@@ -386,17 +404,17 @@ func (s *app) openForm(kind, title, taskID, serviceID, moduleID, path string, fi
 }
 
 func (s *app) openTaskCreateForm(title, requirementTitle, requirementURL string) {
-	fields := []formField{{key: "title", label: "任务名称", value: requirementTitle}, {key: "branch", label: "分支名称"}, {key: "requirementURL", label: "需求链接", value: requirementURL}, {key: "taskNotes", label: "任务说明", multiline: true, format: formFieldMarkdown}}
+	if s.profileNeedsTaskRoot() {
+		s.pickProfileTaskRoot()
+		return
+	}
+	fields := []formField{{key: "title", label: "任务名称", value: requirementTitle}, {key: "branch", label: "分支名称"}, {key: "requirementURL", label: "需求链接", value: requirementURL}}
 	if !s.openForm("task.create", title, "", "", "", "", fields...) {
 		return
 	}
 	s.form.mode = "task-create"
-	s.taskUnit.state.taskGroupID = ""
 	s.taskUnit.state.taskServices = make(map[string]bool)
 	s.taskUnit.state.taskModules = make(map[string]map[string]bool)
-	if len(s.snapshot.Groups) > 0 {
-		s.taskUnit.state.taskGroupID = s.snapshot.Groups[0].ID
-	}
 	s.initTaskCreation(title, requirementTitle, requirementURL)
 }
 

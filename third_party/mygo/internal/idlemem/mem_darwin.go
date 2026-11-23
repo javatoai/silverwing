@@ -1,3 +1,5 @@
+//go:build !ios
+
 package main
 
 import (
@@ -88,4 +90,7 @@ func webKit() []int32 {
 }
 
 // stop asks the app to quit, which its WebKit processes follow.
-func stop(p *os.Process, _ []int) { p.Signal(syscall.SIGTERM) }
+func stop(p *os.Process, _ []int) error {
+	p.Signal(syscall.SIGTERM)
+	return nil
+}

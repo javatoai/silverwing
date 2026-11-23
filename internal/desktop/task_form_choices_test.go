@@ -35,8 +35,7 @@ func TestTaskCreationSelectingServiceDefaultsAllConfiguredModules(t *testing.T) 
 		Modules: []domain.ServiceModuleConfig{{ID: "api", Name: "API"}, {ID: "worker", Name: "Worker"}},
 	}
 	state := &taskCreationState{
-		groupID:  "group-a",
-		config:   domain.AppConfig{Groups: []domain.GroupConfig{{ID: "group-a", Services: []domain.GroupServiceConfig{service}}}},
+		config:   domain.AppConfig{Services: []domain.ServiceConfig{service}},
 		draft:    domain.RequirementDraftState{Branch: "feature/example"},
 		services: make(map[string]bool), modules: make(map[string]map[string]bool),
 		moduleData: make(map[string]map[string]*taskCreationModuleDraft), moduleOrder: make(map[string][]string),
@@ -80,7 +79,7 @@ func TestTaskAppendSelectingServiceDefaultsAllConfiguredModules(t *testing.T) {
 		ID: "service-orders", DisplayName: "订单服务", RepositoryID: "repo-orders",
 		Modules: []domain.ServiceModuleConfig{{ID: "api", Name: "API"}, {ID: "worker", Name: "Worker"}},
 	}
-	state := taskAppendNewState(task{}, "services", domain.GroupConfig{})
+	state := taskAppendNewState(task{}, "services")
 	state.serviceOrder = []string{service.ID}
 	state.services[service.ID] = service
 	server := &app{

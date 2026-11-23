@@ -78,39 +78,62 @@ func (s *app) taskCreationAINamingScope(form *taskCreationState) taskCreationAIN
 
 func (s *app) requestTaskCreationAINamingJob(force bool) {
 	form := s.taskUnit.state.taskCreation
-	if form == nil {
+	if form == nil || !form.aiEligible || !form.config.AIRequirementNamingEnabled || strings.TrimSpace(form.draft.RequirementLink) == "" {
 		return
 	}
 	state := s.ensureTaskCreationAINamingScope()
-	if state == nil || state.closed || !form.aiEligible || !form.config.AIRequirementNamingEnabled || strings.TrimSpace(form.draft.RequirementLink) == "" {
+	if state.closed {
 		return
 	}
+	if identity := s.requirementUnit.state.requirementIdentityJobs; identity != nil && identity.hasContext && identity.context != state.scope.identityContext {
+		s.resetRequirementIdentityContext(identity, state.scope.identityContext)
+		state = s.ensureTaskCreationAINamingScope()
+	}
 
-	link := form.draft.RequirementLink
+	scope := state.scope
+	link := scope.link
 	action := application.Action{Kind: "requirements.ai-name", Payload: map[string]any{
 		"requirementLink": link, "requestLink": link, "taskCreateToken": form.token, "force": force,
 	}}
-	s.taskUnit.cancelTaskCreationAINamingRequest(form, state)
 	if s.backend == nil {
+		s.taskUnit.cancelTaskCreationAINamingRequest(form, state)
 		s.taskCreationActionError(action, errors.New("AI 命名服务不可用。"))
+		return
+	}
+	account, accountSet, identityErr := taskCreationExpectedRequirementIdentity(s)
+	if identityErr != nil {
+		s.taskUnit.cancelTaskCreationAINamingRequest(form, state)
+		s.taskCreationActionError(action, identityErr)
+		return
+	}
+	if cached, ok := s.backend.(application.RequirementNamingCacheBackend); ok && accountSet && !force {
+		suggestion, found, err := cached.CachedRequirementAINaming(context.Background(), link, account)
+		if s.taskUnit.state.taskCreation != form || state.closed || scope != s.taskCreationAINamingScope(form) {
+			s.taskUnit.cancelTaskCreationAINamingRequest(form, state)
+			return
+		}
+		if err != nil || found {
+			s.taskUnit.cancelTaskCreationAINamingRequest(form, state)
+			if err != nil {
+				s.taskCreationAINamingError(action, err)
+			} else {
+				s.taskCreationActionResult(action, application.ActionResult{Data: suggestion})
+			}
+			return
+		}
+	}
+	if !force && state.request != nil {
 		return
 	}
 	if s.win == nil || s.win.IsDestroyed() {
 		return
 	}
-	account, accountSet, identityErr := taskCreationExpectedRequirementIdentity(s)
-	if identityErr != nil {
-		form.aiPending = true
-		form.aiError = ""
-		s.taskCreationActionError(action, identityErr)
-		return
-	}
 
+	s.taskUnit.cancelTaskCreationAINamingRequest(form, state)
 	ctx, cancel := context.WithCancel(context.Background())
 	request := &taskCreationAINamingRequest{
-		form: form, token: form.token, home: s.snapshot.Home, link: link,
-		config:   taskCreationRequirementsConfigFingerprint(s.snapshot.ConfigJSON, form.config),
-		identity: s.currentRequirementListIdentity(), profile: s.currentRequirementIdentityContext(),
+		form: form, token: scope.token, home: scope.home, link: link, config: scope.config,
+		identity: scope.identity, profile: scope.identityContext,
 		account: account, accountSet: accountSet, generation: state.generation,
 		ctx: ctx, cancel: cancel, action: action,
 	}
@@ -119,12 +142,9 @@ func (s *app) requestTaskCreationAINamingJob(force bool) {
 	form.aiError = ""
 	backend, win := s.backend, s.win
 	go func() {
+		defer cancel()
 		result, err := runTaskCreationAINamingRequest(backend, request)
-		if ctx.Err() != nil {
-			err = errors.Join(ctx.Err(), err)
-		}
-		if win.IsDestroyed() {
-			cancel()
+		if ctx.Err() != nil || win.IsDestroyed() {
 			return
 		}
 		updated := make(chan struct{})
@@ -136,7 +156,6 @@ func (s *app) requestTaskCreationAINamingJob(force bool) {
 		case <-updated:
 		case <-ctx.Done():
 		}
-		cancel()
 	}()
 }
 
@@ -144,9 +163,14 @@ func (s *app) requestTaskCreationAINamingJob(force bool) {
 // validation belongs to the form and must never cause another AI request.
 func runTaskCreationAINamingRequest(backend application.Backend, request *taskCreationAINamingRequest) (application.ActionResult, error) {
 	ctx := request.ctx
-	account, confirmed, err := taskCreationRequirementIdentityBeforeRead(ctx, backend, request.account, request.accountSet)
-	if err != nil {
-		return application.ActionResult{}, err
+	_, cacheAware := backend.(application.RequirementNamingCacheBackend)
+	account, confirmed := request.account, request.accountSet
+	if !cacheAware || !confirmed {
+		var err error
+		account, confirmed, err = taskCreationRequirementIdentityBeforeRead(ctx, backend, account, confirmed)
+		if err != nil {
+			return application.ActionResult{}, err
+		}
 	}
 	action := request.action
 	action.Payload = taskCreationActionPayload(action.Payload, request.token)
@@ -154,7 +178,7 @@ func runTaskCreationAINamingRequest(backend application.Backend, request *taskCr
 		action.Payload["expectedIdentity"] = account
 	}
 	result, err := backend.Dispatch(ctx, action)
-	if err == nil && confirmed {
+	if err == nil && confirmed && !cacheAware {
 		err = taskCreationRequirementIdentityAfterRead(ctx, backend, account)
 	}
 	if ctx.Err() != nil {
@@ -173,14 +197,18 @@ func (s *app) finishTaskCreationAINaming(request *taskCreationAINamingRequest, r
 	state := request.form.aiNaming
 	state.request = nil
 	if requestErr != nil {
-		var changed *application.RequirementIdentityChangedError
-		if errors.As(requestErr, &changed) {
-			s.applyRequirementListIdentityFailure(changed.Snapshot, requestErr)
-		}
-		s.taskCreationActionError(request.action, requestErr)
+		s.taskCreationAINamingError(request.action, requestErr)
 		return
 	}
 	s.taskCreationActionResult(request.action, result)
+}
+
+func (s *app) taskCreationAINamingError(action application.Action, err error) {
+	var changed *application.RequirementIdentityChangedError
+	if errors.As(err, &changed) {
+		s.applyRequirementListIdentityFailure(changed.Snapshot, err)
+	}
+	s.taskCreationActionError(action, err)
 }
 
 func (s *app) taskCreationAINamingRequestRelevant(request *taskCreationAINamingRequest) bool {

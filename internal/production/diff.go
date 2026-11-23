@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"silverwing-go/internal/domain"
 	"silverwing-go/internal/workspace"
 )
 
@@ -25,10 +26,7 @@ func (s *Service) Difference(ctx context.Context, target Target, sourceSHA, targ
 
 func (s *Service) DifferenceSession(ctx context.Context, target Target, sourceSHA, targetSHA string, incoming bool, sessionID string, change *workspace.CompareChange) (DiffResult, error) {
 	var result DiffResult
-	err := s.locks.WithRepository(target.CommonDirectory, func() error {
-		if _, err := s.validate(ctx, target); err != nil {
-			return err
-		}
+	err := s.withTargetLock(ctx, target, func(_ domain.AppConfig) error {
 		client, ok := s.Git.(*workspace.GitClient)
 		if !ok {
 			return errors.New("当前 Git 读取器不支持文件差异预览")
@@ -59,11 +57,11 @@ func (s *Service) DifferenceSession(ctx context.Context, target Target, sourceSH
 		reader := workspace.NewWorkspaceGitDiffService(client, s.locks)
 		var err error
 		owner := digest(struct {
-			Home                 string
+			Profile              string
 			Target               Target
 			SourceSHA, TargetSHA string
 			Incoming             bool
-		}{s.Paths.Home, target, sourceSHA, targetSHA, incoming})
+		}{s.profileIdentity(), target, sourceSHA, targetSHA, incoming})
 		if s.DiffSessions != nil && change == nil {
 			result.Files, err = reader.TreeFilesSessionContext(ctx, s.DiffSessions, owner, target.Repository, base, sourceSHA)
 		} else if s.DiffSessions != nil && sessionID != "" && change != nil {

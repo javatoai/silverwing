@@ -75,7 +75,7 @@ func TestActionPolicyRetainsDynamicFeedbackPrefixes(t *testing.T) {
 	if !DescribeAction("instructions.extension/unregistered").DedicatedResult {
 		t.Fatal("instruction prefix feedback changed")
 	}
-	for _, kind := range []string{"config.extension", "migration.extension", "instructions.templates.extension", "skills.extension", "codex.extensions/new", "codex.ai/new", "cli.extension", "logs.extension"} {
+	for _, kind := range []string{"config.extension", "migration.extension", "skills.extension", "codex.extensions/new", "codex.ai/new", "cli.extension", "logs.extension"} {
 		if !DescribeAction(kind).SettingsDedicatedResult {
 			t.Errorf("settings feedback prefix changed: %s", kind)
 		}

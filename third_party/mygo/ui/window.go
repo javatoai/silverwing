@@ -1,12 +1,14 @@
 package ui
 
 import (
+	"errors"
 	"log"
 	"os"
 	"slices"
 	"time"
 
 	"github.com/egoist/mygo/i18n"
+	"github.com/egoist/mygo/internal/pacing"
 	"github.com/egoist/mygo/internal/platform"
 	"github.com/egoist/mygo/internal/raster"
 	"github.com/egoist/mygo/internal/scene"
@@ -34,8 +36,10 @@ func coreView(view func(c *context)) *Content { return &Content{view: view} }
 
 // RegisterFont adds a TrueType or OpenType font, or collection, that text
 // can use with Font(family). An empty family keeps the font's own name.
+// The fonts registered under a family make it up, apart from other fonts
+// of their own family. A Tester's window draws them too.
 func RegisterFont(data []byte, family string) error {
-	return text.Shared().RegisterFont(data, family)
+	return text.RegisterAppFont(data, family)
 }
 
 // A FontFamily is a font family text can use, as FontFamilies lists it.
@@ -84,6 +88,7 @@ func (v *Content) AttachContent(conn *surface.Conn) {
 		rt.themeChanged()
 	}
 	conn.TitleBarChanged = rt.requestFrame
+	conn.ActiveChanged = rt.activeChanged
 	conn.Changed = rt.changed
 	conn.LocaleChanged = func() {
 		h.textLanguage()
@@ -91,6 +96,10 @@ func (v *Content) AttachContent(conn *surface.Conn) {
 	}
 	conn.Capture = h.capture
 	conn.Detach = h.detach
+	if conn.ContentSize != nil && conn.FitWidth != nil {
+		rt.fit = newFitter(conn.FitWidth, conn.ContentSize)
+		conn.Fit = h.fit
+	}
 	rt.insp.enabled = conn.DevTools
 	conn.ToggleDevTools = func() {
 		if rt.insp.enabled {
@@ -100,6 +109,9 @@ func (v *Content) AttachContent(conn *surface.Conn) {
 	h.uiFont()
 	h.textLanguage()
 	h.automate()
+	if devAttach != nil {
+		devAttach(h)
+	}
 	// Load the fonts while the window shows up.
 	go text.Shared().Preload()
 	h.requestFrame()
@@ -128,8 +140,9 @@ type windowHost struct {
 	lastFrame time.Time
 	// framing tells that the surface asked for the frame being drawn, and
 	// frameAsked that the content asked the surface for a frame that has
-	// not come yet.
-	framing, frameAsked bool
+	// not come yet; unshown that it asked for it only to show a frame built
+	// outside the surface's, as a capture's, and nothing asked since.
+	framing, frameAsked, unshown bool
 	// told is what accelerated last told the frame being painted, asked
 	// that it did.
 	told, asked bool
@@ -156,6 +169,8 @@ type windowHost struct {
 	// the web views.
 	placed []platform.WebViewPlacement
 	views  []NativeWebView
+	// glassPlaced is where the surface shows the system's glass.
+	glassPlaced []platform.GlassPlacement
 	// waiting tells that a frame paced by the display waits for waitingOn,
 	// the GPU renderer or refresh, to be able to draw it (displayWaiter);
 	// wake and displayReady draw it then, at the time the display asked
@@ -269,10 +284,10 @@ func (h *windowHost) waiter() displayWaiter {
 
 // refreshPresented has the paced frames following one drawn in memory
 // wait for the display's next refresh, where the surface shows it at once
-// (refreshWaiter).
+// (refreshWaiter); uncapped (MYGO_UNCAPPED), they follow it at once.
 func (h *windowHost) refreshPresented() {
 	s, ok := h.conn.Surface.(platform.RefreshSurface)
-	if !ok || h.conn.Post == nil {
+	if !ok || h.conn.Post == nil || pacing.Uncapped {
 		return
 	}
 	if h.refresh == nil {
@@ -304,6 +319,9 @@ var newGPU = newGPURenderer
 // event handles an event of the surface, noting when it asks for a frame:
 // only then may renderers draw (OpenGL's context is current only then).
 func (h *windowHost) event(ev platform.SurfaceEvent) bool {
+	if h.detached {
+		return false // the window closed: it draws nothing more
+	}
 	if ev.Kind == platform.SurfaceRenew {
 		// The next frame makes the renderer again, for the surface's new
 		// native objects.
@@ -315,9 +333,30 @@ func (h *windowHost) event(ev platform.SurfaceEvent) bool {
 		h.requestFrame()
 		return false
 	}
-	if ev.Kind == platform.WebViewTabOut {
-		if i := slices.IndexFunc(h.placed, func(p platform.WebViewPlacement) bool { return p.WebView == ev.WebView }); i >= 0 {
+	if ev.Kind >= platform.SurfaceLowMemory && ev.Kind <= platform.SurfaceStackPopped {
+		if ev.Kind == platform.SurfaceLowMemory {
+			// What the next frame makes again: the renderer's textures, its
+			// atlases and pipelines among them.
+			if h.gpu != nil {
+				h.gpu.Release()
+				h.gpu = nil
+				h.gpuTried, h.retryAt = false, time.Time{}
+			}
+			h.requestFrame()
+		}
+		if touchSystem != nil {
+			touchSystem(h.rt, ev)
+		}
+		return false
+	}
+	if ev.Kind == platform.WebViewTabOut || ev.Kind == platform.WebViewKey {
+		i := slices.IndexFunc(h.placed, func(p platform.WebViewPlacement) bool { return p.WebView == ev.WebView })
+		switch {
+		case i < 0:
+		case ev.Kind == platform.WebViewTabOut:
 			h.rt.webViewTabOut(h.views[i], ev.Mods&platform.ModShift != 0)
+		default:
+			h.rt.webViewKey(h.views[i], Modifiers(ev.Mods), Key(ev.Key), Key(ev.PhysicalKey), ev.Repeat)
 		}
 		return false
 	}
@@ -331,7 +370,7 @@ func (h *windowHost) event(ev platform.SurfaceEvent) bool {
 			return true
 		}
 		h.waiting, h.waitingOn = false, nil
-		h.frameAsked = false
+		h.frameAsked, h.unshown = false, false
 		h.framing = true
 		defer func() { h.framing = false }()
 	}
@@ -430,6 +469,9 @@ func (h *windowHost) size() (float32, float32, float32) {
 }
 
 func (h *windowHost) present(s *scene.Scene) {
+	if h.detached {
+		return // closed while the frame was built: nothing shows it
+	}
 	h.last, h.path = s, ""
 	defer h.recheck()
 	if s.Width <= 0 || s.Height <= 0 {
@@ -445,6 +487,7 @@ func (h *windowHost) present(s *scene.Scene) {
 		// A frame built outside the surface's, for a capture, is shown by
 		// the surface's next.
 		h.requestFrame()
+		h.unshown = true
 		return
 	}
 	due := !h.retryAt.IsZero() && !time.Now().Before(h.retryAt)
@@ -480,13 +523,17 @@ func (h *windowHost) present(s *scene.Scene) {
 	h.refreshPresented()
 }
 
-// ready tells the window, after the first frame, that it is ready to show:
-// once the frame returns, as its listeners may show the window.
+// ready tells the surface, after the first frame, that the frame reached
+// it, and the window that it is ready to show: once the frame returns, as
+// its listeners may show the window.
 func (h *windowHost) ready() {
 	if h.shown {
 		return
 	}
 	h.shown = true
+	if f, ok := h.conn.Surface.(platform.FirstFrameSurface); ok {
+		f.FirstFrame()
+	}
 	if h.conn.Ready != nil && h.conn.Post != nil {
 		h.conn.Post(h.conn.Ready)
 	}
@@ -523,6 +570,7 @@ func (h *windowHost) idle() {
 		return
 	}
 	h.soft.Release()
+	h.rt.text.ReleaseShaping()
 	if s, ok := h.conn.Surface.(platform.IdleSurface); ok {
 		s.Idle()
 	}
@@ -553,16 +601,28 @@ func (h *windowHost) screenWide() bool {
 // render draws s with the GPU renderer and reports whether it did. One
 // that fails gives way to another made at once, in case the GPU is back
 // already, or another, or Windows' software rasterizer, can draw; when
-// that fails too, frames are drawn in memory until a later try.
+// that fails too, frames are drawn in memory until a later try. A frame
+// the GPU did not finish in time is the exception: the driver is wedged,
+// so it is drawn in memory and the GPU left alone until the wait is over.
 func (h *windowHost) render(s *scene.Scene) bool {
 	for try := 0; h.gpu != nil; try++ {
-		err := h.gpu.Render(s)
+		g := h.gpu
+		err := g.Render(s)
 		if err == nil {
 			return true
 		}
 		log.Printf("mygo: drawing without the GPU: %v", err)
-		h.gpu.Release()
+		g.Release()
 		h.gpu = nil
+		if t, ok := g.(interface{ TimedOut() bool }); ok && t.TimedOut() {
+			// A frame submitted now would wait the same timeout through,
+			// and the window would show nothing all the while.
+			if time.Since(h.gpuSince) > time.Minute {
+				h.backoff = 0
+			}
+			h.retryLater()
+			return false
+		}
 		if try > 0 {
 			h.retryLater()
 			return false
@@ -656,10 +716,14 @@ func (h *windowHost) retryLater() {
 }
 
 // capture renders the last frame in memory: built now where none was yet,
-// or where one waits for the window to show (holdFrame), so that a window
-// out of sight shows what it shows now.
+// or where one waits for the window to show (holdFrame, waitsOutOfSight),
+// so that a window out of sight shows what it shows now; or where the
+// glyph atlases, which every window shares, moved or forgot the glyphs it
+// draws since it was painted, as another window making room in them does
+// (System.MakeRoom), as repaintParts tells: its text would show what took
+// their places (#1920). Within a frame, runFrame builds none.
 func (h *windowHost) capture() (int, int, []byte) {
-	if h.last == nil || h.rt.held {
+	if h.last == nil || h.rt.held || h.waitsOutOfSight() || atlasGenerations(h.last) != h.rt.atlases {
 		h.rt.runFrame()
 	}
 	s := h.last
@@ -670,6 +734,29 @@ func (h *windowHost) capture() (int, int, []byte) {
 	img.Resize(s.Width, s.Height)
 	raster.Render(&img, s)
 	return img.W, img.H, img.RGBA()
+}
+
+// waitsOutOfSight reports whether nothing of the window shows while a
+// frame waits to build: one held until some of it shows (holdFrame), or one
+// asked for, after input or a change, that has not come, which the surface
+// of a window out of sight may draw only once it shows: macOS draws none
+// for a hidden window, nor for any while the screen is locked.
+func (h *windowHost) waitsOutOfSight() bool {
+	return h.occluded() && (h.rt.held || h.frameAsked && !h.unshown)
+}
+
+// fit builds the frame that waits for the window to show, if one does,
+// for a window that takes its content's size to measure what it shows
+// now before it shows (surface.Conn.Fit), as capture does; the surface's
+// next frame draws it. It builds none within a frame, nor before the
+// first: the view runs as the window first draws, not within NewWindow.
+func (h *windowHost) fit() bool {
+	rt := h.rt
+	if h.detached || rt.inFrame || h.last == nil || !h.frameAsked && !rt.held {
+		return false
+	}
+	rt.runFrame()
+	return true
 }
 
 func (h *windowHost) detach() {
@@ -683,16 +770,24 @@ func (h *windowHost) detach() {
 		h.gpu.Release()
 		h.gpu = nil
 	}
+	// The last frame, and the bitmaps it drew, go with the window (#1281).
+	h.last = nil
+	h.placed, h.views, h.glassPlaced = nil, nil, nil
 }
 
 func (h *windowHost) requestFrame() {
-	h.frameAsked = true
+	h.frameAsked, h.unshown = true, false
 	h.conn.Surface.RequestFrame()
 }
 
+// framesAtOnce reports whether the surface's frames come as soon as asked
+// for: Windows', and every desktop surface's uncapped (MYGO_UNCAPPED),
+// whose next frame comes once the last was presented rather than at the
+// display's next refresh. A drawing asking for fewer frames
+// (Painter.AnimationFrameRate) then has the repaint timer keep its pace.
 func (h *windowHost) framesAtOnce() bool {
 	_, ok := h.conn.Surface.(platform.ImmediateFrameSurface)
-	return ok
+	return ok || pacing.Uncapped
 }
 
 func (h *windowHost) setFrameRate(fps float32) {
@@ -748,13 +843,17 @@ func (h *windowHost) post(fn func()) {
 // know them.
 func (h *windowHost) uiFont() {
 	if h.conn.UIFont != nil {
-		text.Shared().SetUIFamily(h.conn.UIFont())
+		h.textSystem().SetUIFamily(h.conn.UIFont())
 	}
 	if h.conn.FontRendering != nil {
 		r := h.conn.FontRendering()
-		text.Shared().SetFontRendering(r.Antialias, r.Hinting, r.Subpixels)
+		h.textSystem().SetFontRendering(r.Antialias, r.Hinting, r.Subpixels)
 	}
 }
+
+// textSystem returns the window's text system: the process's shared one,
+// which the app's windows shape and paint in together.
+func (h *windowHost) textSystem() *text.System { return text.Shared() }
 
 func (h *windowHost) setCursor(c Cursor) { h.conn.Surface.SetCursor(platform.Cursor(c)) }
 
@@ -784,6 +883,23 @@ func (h *windowHost) writeClipboard(s string) {
 	}
 }
 
+func (h *windowHost) writeClipboardThen(s string, done func(error)) {
+	c := h.conn.Clipboard
+	if later, ok := c.(platform.LaterClipboard); ok {
+		later.WriteTextThen(s, done)
+		return
+	}
+	err := errNoClipboard
+	if c != nil {
+		err = c.WriteData(transfer.TextData(s), false, nil)
+	}
+	h.post(func() { done(err) })
+}
+
+// errNoClipboard is what writing the clipboard of a window without one
+// comes to.
+var errNoClipboard = errors.New("ui: the window has no clipboard")
+
 func (h *windowHost) readClipboardData(formats []transfer.Format) transfer.Data {
 	if h.conn.Clipboard == nil {
 		return transfer.Data{}
@@ -797,7 +913,7 @@ func (h *windowHost) readClipboardData(formats []transfer.Format) transfer.Data 
 
 func (h *windowHost) writeClipboardData(d transfer.Data) {
 	if h.conn.Clipboard != nil {
-		h.conn.Clipboard.WriteData(d, nil)
+		h.conn.Clipboard.WriteData(d, false, nil)
 	}
 }
 
@@ -862,7 +978,15 @@ func (h *windowHost) region() i18n.Region {
 // textLanguage makes the language the app shows that of the text the
 // text engine lays out without one, as Painter.Shape does.
 func (h *windowHost) textLanguage() {
-	text.Shared().SetLanguage(h.locale())
+	h.textSystem().SetLanguage(h.locale())
+}
+
+// insets are those the surface tells, as a phone's.
+func (h *windowHost) insets() platform.Insets {
+	if s, ok := h.conn.Surface.(platform.InsetSurface); ok {
+		return s.Insets()
+	}
+	return platform.Insets{}
 }
 
 func (h *windowHost) titleBar() TitleBar {
@@ -870,13 +994,15 @@ func (h *windowHost) titleBar() TitleBar {
 		return TitleBar{}
 	}
 	t := h.conn.TitleBar()
-	return TitleBar{Height: float32(t.Height), Left: float32(t.Left), Right: float32(t.Right)}
+	return TitleBar{Height: float32(t.Height), Left: float32(t.Left), Right: float32(t.Right), Bottom: float32(t.Bottom)}
 }
 
 func (h *windowHost) vibrancy() bool {
 	s, ok := h.conn.Surface.(platform.MaterialSurface)
 	return ok && s.ShowsMaterial()
 }
+
+func (h *windowHost) active() bool { return h.conn.Active == nil || h.conn.Active() }
 
 func (h *windowHost) invalidate() { h.conn.Invalidate() }
 
@@ -886,6 +1012,35 @@ func (h *windowHost) openURL(u string, done func(error)) {
 	}
 }
 
+// nativeGlass reports whether the surface draws the system's glass.
+func (h *windowHost) nativeGlass() bool {
+	s, ok := h.conn.Surface.(platform.GlassSurface)
+	return ok && s.NativeGlassSupported()
+}
+
+// placeGlass gives the surface where the frame shows the system's glass,
+// unless it is where the last frame showed it.
+func (h *windowHost) placeGlass(places []platform.GlassPlacement) {
+	s, ok := h.conn.Surface.(platform.GlassSurface)
+	if !ok {
+		return
+	}
+	if slices.EqualFunc(places, h.glassPlaced, sameGlassPlacement) {
+		return
+	}
+	h.glassPlaced = append(h.glassPlaced[:0], places...)
+	s.PlaceGlass(places)
+}
+
+// sameGlassPlacement reports whether a and b place the same glass.
+func sameGlassPlacement(a, b platform.GlassPlacement) bool {
+	if a.ID != b.ID || a.Frame != b.Frame || a.Clip != b.Clip || a.Radii != b.Radii ||
+		a.CornerRadius != b.CornerRadius || a.Style != b.Style || (a.Tint == nil) != (b.Tint == nil) {
+		return false
+	}
+	return a.Tint == nil || *a.Tint == *b.Tint
+}
+
 // placeWebViews gives the surface where the frame shows the window's web
 // views, unless it is where the last frame showed them.
 func (h *windowHost) placeWebViews(views []placedWebView) {
@@ -893,12 +1048,13 @@ func (h *windowHost) placeWebViews(views []placedWebView) {
 	natives := make([]NativeWebView, 0, len(views))
 	for _, v := range views {
 		if n := v.v.SurfaceWebView(h.conn); n != nil {
-			list = append(list, platform.WebViewPlacement{WebView: n, Frame: v.frame, Clip: v.clip, Covers: v.covers})
+			list = append(list, v.placement(n))
 			natives = append(natives, v.v)
 		}
 	}
 	if slices.EqualFunc(list, h.placed, func(a, b platform.WebViewPlacement) bool {
-		return a.WebView == b.WebView && a.Frame == b.Frame && a.Clip == b.Clip && slices.Equal(a.Covers, b.Covers)
+		return a.WebView == b.WebView && a.Frame == b.Frame && a.Clip == b.Clip && a.Width == b.Width && a.Height == b.Height &&
+			a.Radii == b.Radii && a.Opacity == b.Opacity && slices.Equal(a.Covers, b.Covers)
 	}) {
 		return
 	}
@@ -918,6 +1074,16 @@ func (h *windowHost) tabIntoWebView(v NativeWebView, back bool) {
 	if n := v.SurfaceWebView(h.conn); n != nil {
 		n.TabInto(back)
 	}
+}
+
+func (h *windowHost) touchSurface() platform.TouchSurface {
+	s, _ := h.conn.Surface.(platform.TouchSurface)
+	return s
+}
+
+func (h *windowHost) stackSurface() platform.StackSurface {
+	s, _ := h.conn.Surface.(platform.StackSurface)
+	return s
 }
 
 func (h *windowHost) popupMenu(m *platform.Menu, x, y float32, chosen func(int)) {

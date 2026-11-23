@@ -72,7 +72,7 @@ func taskMenuFixture(t *testing.T) (*app, *taskMenuBackend) {
 }
 
 func TestTaskMenuMigratesActionsAndKeepsTarget(t *testing.T) {
-	for _, action := range []string{"复制任务目录", "打开任务目录", "复制任务资料路径", "在 Codex 中打开", "打开任务资料目录", "批量合并主分支", "关联任务资料", "重试关联任务资料", "配置任务资料", "恢复已回收工作区"} {
+	for _, action := range []string{"复制任务目录", "打开任务目录", "复制任务资料路径", "在 Codex 中打开", "打开任务资料目录", "批量合并主分支", "关联任务资料", "重试关联任务资料", "配置任务资料", "恢复已回收工作区", regenerateTaskInstructionsLabel} {
 		t.Run(action, func(t *testing.T) {
 			s, backend := taskMenuFixture(t)
 			if strings.Contains(action, "关联任务资料") || action == "配置任务资料" {
@@ -133,6 +133,8 @@ func TestTaskMenuMigratesActionsAndKeepsTarget(t *testing.T) {
 						wantKind, wantPath = "system.open", target.path
 					} else if action == "恢复已回收工作区" {
 						wantKind = "task.restore-recycled-workspaces"
+					} else if action == regenerateTaskInstructionsLabel {
+						wantKind = "task.refresh-agents"
 					} else if strings.Contains(action, "关联任务资料") {
 						wantKind, wantPath = "task.materials-retry", ""
 					}
@@ -142,6 +144,33 @@ func TestTaskMenuMigratesActionsAndKeepsTarget(t *testing.T) {
 				case <-time.After(time.Second):
 					t.Fatal("context action was not dispatched")
 				}
+			}
+		})
+	}
+}
+
+func TestTaskInstructionRefreshUsesRowContextMenu(t *testing.T) {
+	for _, page := range []string{"tasks", "archive"} {
+		t.Run(page, func(t *testing.T) {
+			s, backend := taskMenuFixture(t)
+			s.page, s.tab, s.taskUnit.state.selected = page, 0, 1
+			if page == "archive" {
+				s.taskUnit.state.selected = 3
+			}
+			target := s.taskUnit.currentTask()
+			detail := ui.NewTester(func(c *ui.Context) { s.taskWorkspaceDetail(c, setTheme(c, false)) }, 1000, 600)
+			if _, found := detail.Find(regenerateTaskInstructionsLabel); found {
+				t.Fatal("detail toolbar still shows instruction refresh")
+			}
+			list := taskNavigationTester(s, 340, 560)
+			navigationChooseTaskMenu(t, list, target.title, regenerateTaskInstructionsLabel)
+			select {
+			case action := <-backend.calls:
+				if action.Kind != "task.refresh-agents" || action.TaskID != target.id || action.Path != target.path || action.Payload[applicationTaskContextPayloadKey] == nil {
+					t.Fatalf("menu did not dispatch a scoped instruction refresh: %+v", action)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("menu did not dispatch an instruction refresh")
 			}
 		})
 	}
@@ -177,7 +206,7 @@ func TestTaskMenuOrderAndMaterialsVariants(t *testing.T) {
 			if s.taskUnit.state.tasks[index].requirementURL == "" {
 				want = append(want, "关联需求")
 			}
-			want = append(want, "批量合并主分支", "-", "打开任务目录", "复制任务目录", "-")
+			want = append(want, "批量合并主分支", "-", "打开任务目录", "复制任务目录", regenerateTaskInstructionsLabel, "-")
 			want = append(want, materials...)
 			want = append(want, "-", "置顶任务", "-", lifecycle, "恢复已回收工作区", "-", "删除任务")
 			if got := tester.Menu(); !slices.Equal(got, want) {

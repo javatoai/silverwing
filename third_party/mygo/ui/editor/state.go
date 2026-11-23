@@ -2,9 +2,14 @@ package editor
 
 import (
 	"slices"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
+
+// defaultScrollMargin is how many lines the editor keeps above
+// and below the caret as it reveals it, as Zed's vertical_scroll_margin.
+const defaultScrollMargin = 3
 
 // State is a code editor's state, kept by the app across
 // frames: the buffer it edits, its options, and what the editor keeps of
@@ -48,6 +53,12 @@ type State struct {
 	// Related editors can use the widest range to keep code columns aligned.
 	// Zero uses this editor's content; SoftWrap still disables horizontal scroll.
 	MinHorizontalExtent float32
+	// ScrollMargin is how many lines to keep above and below the
+	// caret when scrolling it into view. Zero uses the default of three
+	// lines, a positive value sets that many lines, and a negative value
+	// removes the margin. The margin shrinks to fit the viewport and
+	// stops at the scroll limits.
+	ScrollMargin int
 	// NoAutoClose stops closing brackets and quotes as they are typed.
 	NoAutoClose bool
 	// NoFolding hides the fold markers of the gutter and turns folding
@@ -62,6 +73,22 @@ type State struct {
 	// FitContent makes the editor as high as its lines, to show in a
 	// scroll view or a list, rather than scrolling them itself.
 	FitContent bool
+	// KeepScrollbars keeps the thumbs of the scroll bars, and the marks
+	// of the carets on the vertical one, showing while the text has
+	// anywhere to scroll, rather than only while the pointer is over the
+	// editor or drags a thumb, as ui's KeepScrollbars does for a scroll
+	// container; they look the same either way.
+	// NoScrollbars takes the scroll bars away, with the marks of changes,
+	// matches and diagnostics on them, and their room, which goes to the
+	// text; the wheel, the keys and SetScrollY still scroll it.
+	KeepScrollbars bool
+	NoScrollbars   bool
+	// Scrollbar styles the editor's scroll bars, as a theme's
+	// ScrollbarStyle does: their track and thumb colors, the widths of
+	// their bars and thumbs, their corners and shortest thumb. Its zero
+	// fields follow the theme's; its TrackWidth, 0, is 10 DIPs unless the
+	// theme's style sets one, as the editor's bar has always been.
+	Scrollbar ui.ScrollbarStyle
 	// Placeholder shows while the buffer is empty.
 	Placeholder string
 	// Label names the editor for assistive technology.
@@ -84,9 +111,23 @@ type State struct {
 	// OnHover asks the app what to show for the text under the pointer
 	// once it rests there: answer with ShowHover.
 	OnHover func(HoverRequest)
+	// HoverDelay is how long the pointer rests on the text before the
+	// hover is asked for: a tooltip's, 600 ms, when zero or less.
+	HoverDelay time.Duration
+	// NoPointerHover shows no hover as the pointer rests, an app's nor a
+	// diagnostic's, as VS Code's editor.hover.enabled off: ShowHover, as
+	// Cmd+K Cmd+I, still asks for one at the caret.
+	NoPointerHover bool
 	// OnDefinition is called for Cmd+click (Ctrl+click elsewhere) and F12
 	// on a word, as to go to its definition.
 	OnDefinition func(offset int)
+	// NoDefinitionClick leaves Cmd+click to the editor's other clicks,
+	// with no link under it: F12 and the context menu still go to the
+	// definition.
+	NoDefinitionClick bool
+	// NoDefinitionLink shows no link under the pointer with Cmd held,
+	// though Cmd+click still goes to the definition.
+	NoDefinitionLink bool
 	// OnGutterClick is called for a click on a line's number, as to set a
 	// breakpoint.
 	OnGutterClick func(line int)
@@ -236,15 +277,27 @@ type TextBackground struct {
 }
 
 func (st *State) options() options {
+	scrollMargin := defaultScrollMargin
+	if st.ScrollMargin > 0 {
+		scrollMargin = st.ScrollMargin
+	} else if st.ScrollMargin < 0 {
+		scrollMargin = 0
+	}
 	return options{
 		minHorizontalExtent: max(0, st.MinHorizontalExtent),
 		readOnly:            st.ReadOnly, font: st.Font, lineHeight: st.LineHeight, tabSize: st.TabSize, indent: st.Indent,
 		wrap: st.SoftWrap, wrapColumn: st.WrapColumn, lineNumbers: st.LineNumbers, whitespace: st.Whitespace,
-		wrapGuides: st.WrapGuides, indentGuides: !st.NoIndentGuides, scrollPastEnd: !st.NoScrollPastEnd && !st.FitContent,
+		wrapGuides: st.WrapGuides, indentGuides: !st.NoIndentGuides,
+		scrollPastEnd: !st.NoScrollPastEnd && !st.FitContent, scrollMargin: scrollMargin,
+		keepScrollbars: st.KeepScrollbars, hideScrollbars: st.NoScrollbars, scrollbar: st.Scrollbar,
 		autoClose: !st.NoAutoClose, folding: !st.NoFolding, activeLine: !st.NoActiveLine, cursorShape: st.CursorShape, fitContent: st.FitContent,
 		placeholder: st.Placeholder, label: st.Label, theme: st.Theme, bindings: st.Bindings, gutterMarks: st.GutterMarks,
 		backgrounds: st.LineBackgrounds, textBgs: st.TextBackgrounds, findHighlights: st.FindHighlights, diffBase: st.DiffBase, onCompletion: st.OnCompletion, onHover: st.OnHover, onDefinition: st.OnDefinition,
-		onGutterClick: st.OnGutterClick, contextMenu: st.ContextMenu, replaceContextMenu: st.ReplaceContextMenu, clipboardWrite: st.ClipboardWrite, onInput: st.OnInput, noInputMethod: st.NoInputMethod, onCompositionChanged: st.OnCompositionChanged, onLimitExceeded: st.OnLimitExceeded, minDigits: 3,
+		hoverDelay: st.HoverDelay, noPointerHover: st.NoPointerHover,
+		noDefinitionClick: st.NoDefinitionClick, noDefinitionLink: st.NoDefinitionLink,
+		onGutterClick: st.OnGutterClick, contextMenu: st.ContextMenu, replaceContextMenu: st.ReplaceContextMenu,
+		clipboardWrite: st.ClipboardWrite, onInput: st.OnInput, noInputMethod: st.NoInputMethod,
+		onCompositionChanged: st.OnCompositionChanged, onLimitExceeded: st.OnLimitExceeded, minDigits: 3,
 		renderFindBar: st.RenderFindBar, renderGoToLine: st.RenderGoToLine,
 		renderCompletions: st.RenderCompletions, renderHover: st.RenderHover,
 	}
@@ -345,6 +398,13 @@ func (st *State) SetScrollY(y float64) {
 	st.ensure()
 	st.ed.setScroll(y)
 }
+
+// ViewportHeight returns the height of the part of the text the editor
+// shows, in DIPs, as the last frame laid it out: from ScrollY to ScrollY
+// plus ViewportHeight, against LineTop, is what is in view, as a minimap
+// beside the editor shows it. An editor as high as its lines
+// (FitContent) is that high.
+func (st *State) ViewportHeight() float64 { return float64(st.ed.viewH) }
 
 // LineTop returns the top of a line, from 0, in DIPs below the top of the
 // first, as the last frame laid the lines out: less ScrollY, it is where
@@ -485,6 +545,54 @@ func (st *State) ShowHover(start, end int, text string, build func(c *ui.Context
 func (st *State) SetInlays(inlays []Inlay) {
 	st.ensure()
 	st.ed.setInlays(inlays)
+}
+
+// SetReplacements shows ranges of the text as something else, as text,
+// as an element, or as nothing, as a Markdown editor hides the marks of
+// emphasis and draws a check box in place of "[ ]": they move with the
+// edits until set again, as inlays do. Set them again as the text or the
+// selections change, as such an editor shows the marks of the lines with
+// a caret. Empty ranges, and ranges overlapping one before them, are left
+// out.
+//
+// A range may cover lines: the lines it covers from their start through
+// their newline show no rows, as folded ones, but the one it starts on
+// when it shows something there; the line it ends in shows what follows
+// it.
+func (st *State) SetReplacements(rs []Replacement) {
+	st.ensure()
+	st.ed.setReplacements(rs)
+}
+
+// Replacements returns the replacements shown, where the edits since
+// moved them.
+func (st *State) Replacements() []Replacement { return slices.Clone(st.ed.view.repls) }
+
+// SetLineStyles draws lines in other fonts, as a Markdown editor's
+// headings in larger type: each line's rows are as high as its style
+// makes them, and only the lines in view are laid out still. They move
+// with the edits until set again, a style going with its line's text.
+// Set them again as the text changes: setting the same styles costs
+// nothing, and a change lays out again only the lines whose style
+// changed. Styles of lines that don't exist are left out, and the last
+// given for a line wins. A diff's sides take none.
+//
+// The gutter numbers styled lines in the editor's font, on the baseline
+// of their first row, and a replacement's element without a Width is as
+// wide as the line's rows are high.
+func (st *State) SetLineStyles(styles []LineStyle) {
+	st.ensure()
+	st.ed.setLineStyles(styles)
+}
+
+// LineStyles returns the styles shown, where the edits since moved them.
+func (st *State) LineStyles() []LineStyle {
+	st.ensure()
+	out := make([]LineStyle, len(st.ed.view.lineStyles))
+	for i, s := range st.ed.view.lineStyles {
+		out[i] = s.LineStyle
+	}
+	return out
 }
 
 // SetSuggestion shows text at offset, muted, as an edit prediction:

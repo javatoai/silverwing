@@ -13,14 +13,12 @@ import (
 	"reflect"
 	"strings"
 	"sync"
-	"time"
 
 	"silverwing-go/internal/domain"
 )
 
-const configShardSchema = 6
+const configShardSchema = 7
 const configLockFile = "config.lock"
-const backupPrefix = "silverwing-config-"
 const shardStagePrefix = ".silverwing-shard-"
 
 var shardNames = []string{
@@ -32,9 +30,9 @@ type UnsupportedConfigVersionError struct{ Actual string }
 
 func (e *UnsupportedConfigVersionError) Error() string {
 	if e.Actual == "" {
-		return "配置 schema 不受支持：缺少 schema；当前分片 schema 为 6。silverwing 不读取或改写旧配置。"
+		return fmt.Sprintf("配置 schema 不受支持：缺少 schema；当前分片 schema 为 %d。silverwing 不读取或改写旧配置。", configShardSchema)
 	}
-	return fmt.Sprintf("配置 schema 不受支持：%s；当前分片 schema 为 6。silverwing 不读取或改写旧配置。", e.Actual)
+	return fmt.Sprintf("配置 schema 不受支持：%s；当前分片 schema 为 %d。silverwing 不读取或改写旧配置。", e.Actual, configShardSchema)
 }
 
 type DefaultTaskRootInitializationError struct {
@@ -47,12 +45,6 @@ func (e *DefaultTaskRootInitializationError) Error() string {
 }
 func (e *DefaultTaskRootInitializationError) Unwrap() error { return e.Cause }
 
-type Backup struct {
-	ID         string
-	Path       string
-	ModifiedAt time.Time
-}
-
 // ConfigFileSnapshot mirrors the source ConfigStore's read-only raw-file view.
 // Content and ReadError are nil when absent; file contents are never parsed or
 // repaired by this API.
@@ -64,9 +56,7 @@ type ConfigFileSnapshot struct {
 }
 
 type ConfigStore struct {
-	paths         Paths
-	backupMu      sync.Mutex
-	listedBackups map[string]listedConfigBackup
+	paths Paths
 }
 
 var configMutationLocks sync.Map
@@ -97,7 +87,7 @@ func (s *ConfigStore) LoadForPreview(ctx context.Context) (domain.AppConfig, err
 		return domain.AppConfig{}, err
 	}
 	if !present {
-		return domain.DefaultAppConfig(), nil
+		return s.runtimeConfig(domain.DefaultAppConfig()), nil
 	}
 	return s.readCurrentContext(ctx)
 }
@@ -111,17 +101,16 @@ func (s *ConfigStore) Load() (domain.AppConfig, error) {
 	if s.hasConfigurationData() {
 		return s.readCurrent()
 	}
-	config := domain.DefaultAppConfig()
-	taskRoot := s.paths.Tasks
-	if err := os.MkdirAll(taskRoot, 0o755); err != nil {
-		if writeErr := s.writeShards(shardsFor(domain.DefaultAppConfig()), shardNames); writeErr != nil {
-			return domain.AppConfig{}, writeErr
+	config := s.initialConfig()
+	if config.TaskRoot != nil {
+		if err := os.MkdirAll(*config.TaskRoot, 0o755); err != nil {
+			if writeErr := s.writeShards(s.persistedShards(domain.DefaultAppConfig()), shardNames); writeErr != nil {
+				return domain.AppConfig{}, writeErr
+			}
+			return domain.AppConfig{}, &DefaultTaskRootInitializationError{TaskRoot: *config.TaskRoot, Cause: err}
 		}
-		return domain.AppConfig{}, &DefaultTaskRootInitializationError{TaskRoot: taskRoot, Cause: err}
 	}
-	config.TaskRoot = &taskRoot
-	config.RequirementMaterialsRoot = defaultProfileMaterialsRoot(s.paths.Home)
-	if err := s.writeShards(shardsFor(config), shardNames); err != nil {
+	if err := s.writeShards(s.persistedShards(config), shardNames); err != nil {
 		return domain.AppConfig{}, err
 	}
 	return config, nil
@@ -161,14 +150,13 @@ func (s *ConfigStore) Update(transform func(domain.AppConfig) (domain.AppConfig,
 
 func (s *ConfigStore) loadUnlocked() (domain.AppConfig, error) {
 	if !s.hasConfigurationData() {
-		config := domain.DefaultAppConfig()
-		taskRoot := s.paths.Tasks
-		if err := os.MkdirAll(taskRoot, 0o755); err != nil {
-			return domain.AppConfig{}, &DefaultTaskRootInitializationError{TaskRoot: taskRoot, Cause: err}
+		config := s.initialConfig()
+		if config.TaskRoot != nil {
+			if err := os.MkdirAll(*config.TaskRoot, 0o755); err != nil {
+				return domain.AppConfig{}, &DefaultTaskRootInitializationError{TaskRoot: *config.TaskRoot, Cause: err}
+			}
 		}
-		config.TaskRoot = &taskRoot
-		config.RequirementMaterialsRoot = defaultProfileMaterialsRoot(s.paths.Home)
-		if err := s.writeShards(shardsFor(config), shardNames); err != nil {
+		if err := s.writeShards(s.persistedShards(config), shardNames); err != nil {
 			return domain.AppConfig{}, err
 		}
 		return config, nil
@@ -178,13 +166,17 @@ func (s *ConfigStore) loadUnlocked() (domain.AppConfig, error) {
 
 func (s *ConfigStore) saveUnlocked(config domain.AppConfig) error {
 	config = normalizeConfigCollections(config)
+	if s.paths.ProfileID != "" && config.TaskRoot != nil {
+		root := filepath.Clean(*config.TaskRoot)
+		config.TaskRoot = &root
+	}
 	if config.SchemaVersion != domain.CurrentAppConfigSchemaVersion {
 		return &UnsupportedConfigVersionError{Actual: config.SchemaVersion}
 	}
 	if err := config.Validate(); err != nil {
 		return err
 	}
-	target := shardsFor(config)
+	target := s.persistedShards(config)
 	encoded := make(map[string][]byte, len(shardNames))
 	for _, name := range shardNames {
 		data, err := encodeShard(name, target)
@@ -193,8 +185,12 @@ func (s *ConfigStore) saveUnlocked(config domain.AppConfig) error {
 		}
 		encoded[name] = data
 	}
-	if _, err := decodeShards(encoded); err != nil {
+	decoded, err := decodeShards(encoded)
+	if err != nil {
 		return fmt.Errorf("配置序列化结果无法按当前 schema 读取：%w", err)
+	}
+	if _, err := s.configFromShards(decoded); err != nil {
+		return err
 	}
 	if !s.hasConfigurationData() {
 		return s.writeShardFiles(encoded, shardNames)
@@ -207,12 +203,15 @@ func (s *ConfigStore) saveUnlocked(config domain.AppConfig) error {
 	if err != nil {
 		return err
 	}
+	if _, err := s.configFromShards(current); err != nil {
+		return err
+	}
 	changed := changedShardNames(current.Shards, target)
 	if len(changed) == 0 {
 		return nil
 	}
 	// Merge against the latest files while holding the existing mutation lock.
-	// Validate every result before backing up or replacing any shard.
+	// Validate every result before replacing any shard.
 	for _, name := range changed {
 		value, err := configShardValue(name, target)
 		if err != nil {
@@ -226,9 +225,6 @@ func (s *ConfigStore) saveUnlocked(config domain.AppConfig) error {
 	if _, err := decodeShards(encoded); err != nil {
 		return fmt.Errorf("兼容配置合并校验失败：%w", err)
 	}
-	if err := s.createBackup(currentFiles); err != nil {
-		return err
-	}
 	return s.writeShardFiles(encoded, changed)
 }
 
@@ -237,29 +233,27 @@ func (s *ConfigStore) saveUnlocked(config domain.AppConfig) error {
 // encoding, while copying nested slices so Save does not mutate its caller.
 func normalizeConfigCollections(config domain.AppConfig) domain.AppConfig {
 	config.Repositories = cloneSlice(config.Repositories)
-	config.Groups = cloneSlice(config.Groups)
+	config.Services = cloneSlice(config.ServiceCatalog())
+	config.Groups = nil
 	config.DevelopmentTools = cloneSlice(config.DevelopmentTools)
-	config.DefaultWorkspaceToolIDs = cloneSlice(config.DefaultWorkspaceToolIDs)
+	config.DefaultWorkspaceToolIDs = domain.WithoutLegacyCursorTool(config.DefaultWorkspaceToolIDs)
 	config.BlockedGitWriteBranches = cloneSlice(config.BlockedGitWriteBranches)
 	config.MeegleProjects = cloneSlice(config.MeegleProjects)
 	config.CommandProxyTargets = domain.NormalizeCommandProxyTargets(config.CommandProxyTargets)
 	config.CodexPluginMarketplaceSources = cloneSlice(config.CodexPluginMarketplaceSources)
 	config.SkillSources = cloneSlice(config.SkillSources)
-	for i := range config.Groups {
-		config.Groups[i].Services = cloneSlice(config.Groups[i].Services)
-		for j := range config.Groups[i].Services {
-			service := &config.Groups[i].Services[j]
-			service.Modules = cloneSlice(service.Modules)
-			service.Bootstrap.CopyRules = cloneSlice(service.Bootstrap.CopyRules)
-			service.Bootstrap.Commands = cloneSlice(service.Bootstrap.Commands)
-			for k := range service.Bootstrap.Commands {
-				service.Bootstrap.Commands[k].Arguments = cloneSlice(service.Bootstrap.Commands[k].Arguments)
-			}
-			for k := range service.Modules {
-				service.Modules[k].CustomCommands = cloneSlice(service.Modules[k].CustomCommands)
-				for n := range service.Modules[k].CustomCommands {
-					service.Modules[k].CustomCommands[n].Arguments = cloneSlice(service.Modules[k].CustomCommands[n].Arguments)
-				}
+	for i := range config.Services {
+		service := &config.Services[i]
+		service.Modules = cloneSlice(service.Modules)
+		service.Bootstrap.CopyRules = cloneSlice(service.Bootstrap.CopyRules)
+		service.Bootstrap.Commands = cloneSlice(service.Bootstrap.Commands)
+		for j := range service.Bootstrap.Commands {
+			service.Bootstrap.Commands[j].Arguments = cloneSlice(service.Bootstrap.Commands[j].Arguments)
+		}
+		for j := range service.Modules {
+			service.Modules[j].CustomCommands = cloneSlice(service.Modules[j].CustomCommands)
+			for k := range service.Modules[j].CustomCommands {
+				service.Modules[j].CustomCommands[k].Arguments = cloneSlice(service.Modules[j].CustomCommands[k].Arguments)
 			}
 		}
 	}
@@ -273,14 +267,6 @@ func cloneSlice[T any](values []T) []T {
 	cloned := make([]T, len(values))
 	copy(cloned, values)
 	return cloned
-}
-
-func (s *ConfigStore) Backups() ([]Backup, error) {
-	return s.BackupsContext(context.Background())
-}
-
-func (s *ConfigStore) BackupsContext(ctx context.Context) ([]Backup, error) {
-	return s.listConfigBackups(ctx)
 }
 
 // PreviewImport strictly validates a configuration ZIP without changing the
@@ -312,67 +298,8 @@ func (s *ConfigStore) PreviewImportSnapshotContext(ctx context.Context, source s
 	if err != nil {
 		return domain.AppConfig{}, "", err
 	}
-	return decoded.Config, fingerprint, nil
-}
-
-// PreviewRestore applies the same directory and strict archive validation as
-// Restore, but performs no mutation and does not create a backup.
-func (s *ConfigStore) PreviewRestore(backup string) (domain.AppConfig, error) {
-	return s.PreviewRestoreContext(context.Background(), backup)
-}
-
-func (s *ConfigStore) PreviewRestoreContext(ctx context.Context, backup string) (domain.AppConfig, error) {
-	config, _, err := s.PreviewRestoreSnapshotContext(ctx, backup)
-	return config, err
-}
-
-func (s *ConfigStore) PreviewRestoreSnapshotContext(ctx context.Context, backup string) (domain.AppConfig, string, error) {
-	if err := ctx.Err(); err != nil {
-		return domain.AppConfig{}, "", err
-	}
-	normalized, err := filepath.Abs(backup)
-	if err != nil {
-		return domain.AppConfig{}, "", err
-	}
-	backups, err := filepath.Abs(s.paths.Backups)
-	if err != nil {
-		return domain.AppConfig{}, "", err
-	}
-	if filepath.Dir(normalized) != backups || !strings.HasPrefix(filepath.Base(normalized), backupPrefix) || !strings.HasSuffix(filepath.Base(normalized), ".zip") {
-		return domain.AppConfig{}, "", fmt.Errorf("只能恢复 silverwing 配置备份目录中的 ZIP 文件")
-	}
-	decoded, fingerprint, err := readArchiveSnapshotContext(ctx, normalized)
-	if err != nil {
-		return domain.AppConfig{}, "", err
-	}
-	return decoded.Config, fingerprint, nil
-}
-
-func (s *ConfigStore) Restore(backup string) (domain.AppConfig, error) {
-	normalized, err := filepath.Abs(backup)
-	if err != nil {
-		return domain.AppConfig{}, err
-	}
-	backups, err := filepath.Abs(s.paths.Backups)
-	if err != nil {
-		return domain.AppConfig{}, err
-	}
-	if filepath.Dir(normalized) != backups || !strings.HasPrefix(filepath.Base(normalized), backupPrefix) || !strings.HasSuffix(filepath.Base(normalized), ".zip") {
-		return domain.AppConfig{}, fmt.Errorf("只能恢复 silverwing 配置备份目录中的 ZIP 文件")
-	}
-	release, err := s.acquireMutationLock()
-	if err != nil {
-		return domain.AppConfig{}, err
-	}
-	defer release()
-	imported, err := readArchive(normalized)
-	if err != nil {
-		return domain.AppConfig{}, err
-	}
-	if err := s.replaceCurrentUnlocked(imported); err != nil {
-		return domain.AppConfig{}, err
-	}
-	return s.readCurrent()
+	config, err := s.configFromShards(decoded)
+	return config, fingerprint, err
 }
 
 func (s *ConfigStore) ExportTo(target string) (string, error) {
@@ -389,7 +316,11 @@ func (s *ConfigStore) ExportTo(target string) (string, error) {
 	}
 	files, readErr := s.readShardFiles()
 	if readErr == nil {
-		_, readErr = decodeShards(files)
+		var decoded decodedConfig
+		decoded, readErr = decodeShards(files)
+		if readErr == nil {
+			_, readErr = s.configFromShards(decoded)
+		}
 	}
 	release()
 	if readErr != nil {
@@ -439,6 +370,9 @@ func (s *ConfigStore) importFrom(source, expectedFingerprint string) (domain.App
 }
 
 func (s *ConfigStore) replaceCurrentUnlocked(imported decodedConfig) error {
+	if _, err := s.configFromShards(imported); err != nil {
+		return err
+	}
 	files, err := importedConfigFiles(imported)
 	if err != nil {
 		return err
@@ -459,9 +393,6 @@ func (s *ConfigStore) replaceCurrentUnlocked(imported decodedConfig) error {
 	}
 	if len(changed) == 0 {
 		return nil
-	}
-	if err := s.createBackup(currentFiles); err != nil {
-		return err
 	}
 	return s.writeShardFiles(files, changed)
 }
@@ -559,7 +490,7 @@ func (s *ConfigStore) readCurrentContext(ctx context.Context) (domain.AppConfig,
 	if err != nil {
 		return domain.AppConfig{}, err
 	}
-	return decoded.Config, nil
+	return s.configFromShards(decoded)
 }
 
 func (s *ConfigStore) readShardFiles() (map[string][]byte, error) {
@@ -647,7 +578,7 @@ func decodeShardsContext(ctx context.Context, files map[string][]byte) (decodedC
 		return err
 	}
 	var layout layoutShard
-	if err := decode(files["layout.json"], &layout, layoutShard{Schema: configShardSchema, Groups: []groupLayoutShard{{ID: domain.DefaultGroupID, Name: domain.DefaultGroupName, TagEnabled: true}}}, "layout.json"); err != nil {
+	if err := decode(files["layout.json"], &layout, layoutShard{Schema: configShardSchema}, "layout.json"); err != nil {
 		return decodedConfig{}, err
 	}
 	var workspace workspaceShard
@@ -655,7 +586,7 @@ func decodeShardsContext(ctx context.Context, files map[string][]byte) (decodedC
 		return decodedConfig{}, err
 	}
 	var services servicesShard
-	if err := decode(files["services.json"], &services, servicesShard{Schema: configShardSchema, Groups: []groupServicesShard{{GroupID: domain.DefaultGroupID, Services: []domain.GroupServiceConfig{}}}}, "services.json"); err != nil {
+	if err := decode(files["services.json"], &services, servicesShard{Schema: configShardSchema}, "services.json", "services"); err != nil {
 		return decodedConfig{}, err
 	}
 	var tag tagShard
@@ -683,43 +614,11 @@ func decodeShardsContext(ctx context.Context, files map[string][]byte) (decodedC
 	if err := decode(files["appearance.json"], &appearance, shardsFor(domain.DefaultAppConfig()).Appearance, "appearance.json"); err != nil {
 		return decodedConfig{}, err
 	}
-	servicesByGroup := map[string]domain.GroupServiceConfig{}
-	seenGroup := map[string]bool{}
-	for _, group := range services.Groups {
-		if err := ctx.Err(); err != nil {
-			return decodedConfig{}, err
-		}
-		if seenGroup[group.GroupID] {
-			return decodedConfig{}, fmt.Errorf("services.json 包含重复组 ID")
-		}
-		seenGroup[group.GroupID] = true
-		servicesByGroup[group.GroupID] = domain.GroupServiceConfig{}
-	}
-	layoutIDs := map[string]bool{}
-	groups := make([]domain.GroupConfig, 0, len(layout.Groups))
-	for _, group := range layout.Groups {
-		if err := ctx.Err(); err != nil {
-			return decodedConfig{}, err
-		}
-		if layoutIDs[group.ID] {
-			return decodedConfig{}, fmt.Errorf("layout.json 包含重复组 ID")
-		}
-		layoutIDs[group.ID] = true
-		svc, ok := findServicesGroup(services.Groups, group.ID)
-		if !ok {
-			return decodedConfig{}, fmt.Errorf("layout.json 与 services.json 的组 ID 不一致")
-		}
-		groups = append(groups, domain.GroupConfig{ID: group.ID, Name: group.Name, TagEnabled: group.TagEnabled, Services: svc.Services})
-	}
-	if len(layoutIDs) != len(seenGroup) {
-		return decodedConfig{}, fmt.Errorf("layout.json 与 services.json 的组 ID 不一致")
-	}
-	_ = servicesByGroup
 	config := domain.DefaultAppConfig()
 	config.TaskRoot = workspace.TaskRoot
 	config.DefaultBranchPrefix = workspace.DefaultBranchPrefix
 	config.Repositories = workspace.Repositories
-	config.Groups = groups
+	config.Services = services.Services
 	config.TagEnabled = tag.TagEnabled
 	config.TagHistoryMaxGroups = tag.TagHistoryMaxGroups
 	config.AllowTaskTagTargetEditing = tag.AllowTaskTagTargetEditing
@@ -727,11 +626,12 @@ func decodeShardsContext(ctx context.Context, files map[string][]byte) (decodedC
 	config.DevelopmentTools = tools.DevelopmentTools
 	config.DefaultDevelopmentTool = tools.DefaultDevelopmentTool
 	config.AllowTemporaryDevelopmentToolSelection = tools.AllowTemporaryDevelopmentToolSelection
-	config.DefaultWorkspaceToolIDs = tools.DefaultWorkspaceToolIDs
+	config.DefaultWorkspaceToolIDs = domain.WithoutLegacyCursorTool(tools.DefaultWorkspaceToolIDs)
 	config.BlockedGitWriteBranches = git.BlockedGitWriteBranches
 	config.GitExecutablePath = git.GitExecutablePath
 	config.MeegleProjects = integrations.MeegleProjects
 	config.MeegleDefaultSprintProjectKey = integrations.MeegleDefaultSprintProjectKey
+	config.OptionalCLIs = integrations.OptionalCLIs
 	config.LarkExecutablePath = integrations.LarkExecutablePath
 	config.LarkNotice = integrations.LarkNotice
 	config.MeegleExecutablePath = integrations.MeegleExecutablePath
@@ -743,9 +643,18 @@ func decodeShardsContext(ctx context.Context, files map[string][]byte) (decodedC
 	config.CommandProxyTargets = integrations.CommandProxyTargets
 	config.GenbuExecutablePath = integrations.GenbuExecutablePath
 	config.GenbuExecutableAutoDetected = integrations.GenbuExecutableAutoDetected
+	config.DragonExecutablePath = integrations.DragonExecutablePath
+	config.DragonExecutableAutoDetected = integrations.DragonExecutableAutoDetected
 	config.RequirementMaterialsRoot = integrations.RequirementMaterialsRoot
 	config.RequirementMaterialsSubdirectory = integrations.RequirementMaterialsSubdirectory
 	config.MaterialsGitSync = integrations.MaterialsGitSync
+	config.ProjectInstructionsGitURL = integrations.ProjectInstructionsGitURL
+	config.ProjectInstructionsGitEnabled = integrations.ProjectInstructionsGitEnabled
+	config.ProjectInstructionsGitBranch = integrations.ProjectInstructionsGitBranch
+	config.ProjectInstructionsGitIntervalMinutes = integrations.ProjectInstructionsGitIntervalMinutes
+	config.ProjectInstructionsGitLocalRoot = integrations.ProjectInstructionsGitLocalRoot
+	config.ProjectInstructionsGitRemoteName = integrations.ProjectInstructionsGitRemoteName
+	config.ProjectInstructionsGitBindingID = integrations.ProjectInstructionsGitBindingID
 	config.CodexPluginMarketplaceSources = integrations.CodexPluginMarketplaceSources
 	config.SkillSources = integrations.SkillSources
 	config.AIRequirementNamingEnabled = integrations.AIRequirementNamingEnabled
@@ -795,6 +704,9 @@ func decodeConfigShard(data []byte, target any, defaults any, name string, requi
 	if version != configShardSchema {
 		return &UnsupportedConfigVersionError{Actual: fmt.Sprint(version)}
 	}
+	if _, exists := meta["groups"]; exists && (name == "layout.json" || name == "services.json") {
+		return fmt.Errorf("%s 包含已移除的 groups 字段", name)
+	}
 	targetValue := reflect.ValueOf(target)
 	defaultsValue := reflect.ValueOf(defaults)
 	if targetValue.Kind() != reflect.Pointer || targetValue.IsNil() || defaultsValue.Type() != targetValue.Elem().Type() {
@@ -812,20 +724,50 @@ func decodeConfigShard(data []byte, target any, defaults any, name string, requi
 }
 
 func shardsFor(config domain.AppConfig) configShards {
-	groups, serviceGroups := []groupLayoutShard{}, []groupServicesShard{}
-	for _, g := range config.Groups {
-		groups = append(groups, groupLayoutShard{ID: g.ID, Name: g.Name, TagEnabled: g.TagEnabled})
-		serviceGroups = append(serviceGroups, groupServicesShard{GroupID: g.ID, Services: g.Services})
-	}
 	return configShards{
-		Layout:       layoutShard{Schema: configShardSchema, Groups: groups},
-		Workspace:    workspaceShard{Schema: configShardSchema, TaskRoot: config.TaskRoot, DefaultBranchPrefix: config.DefaultBranchPrefix, Repositories: config.Repositories},
-		Services:     servicesShard{Schema: configShardSchema, Groups: serviceGroups},
-		Tag:          tagShard{Schema: configShardSchema, TagEnabled: config.TagEnabled, TagHistoryMaxGroups: config.TagHistoryMaxGroups, AllowTaskTagTargetEditing: config.AllowTaskTagTargetEditing},
-		Tools:        toolsShard{Schema: configShardSchema, TerminalExecutable: config.TerminalExecutable, DevelopmentTools: config.DevelopmentTools, DefaultDevelopmentTool: config.DefaultDevelopmentTool, AllowTemporaryDevelopmentToolSelection: config.AllowTemporaryDevelopmentToolSelection, DefaultWorkspaceToolIDs: config.DefaultWorkspaceToolIDs},
-		Git:          gitShard{Schema: configShardSchema, BlockedGitWriteBranches: config.BlockedGitWriteBranches, GitExecutablePath: config.GitExecutablePath},
-		Integrations: integrationsShard{Schema: configShardSchema, AIRequirementNamingEnabled: config.AIRequirementNamingEnabled, AIRequirementNamingPrewarmEnabled: config.AIRequirementNamingPrewarmEnabled, AIRequirementNamingModel: config.AIRequirementNamingModel, MeegleProjects: config.MeegleProjects, MeegleDefaultSprintProjectKey: config.MeegleDefaultSprintProjectKey, LarkExecutablePath: config.LarkExecutablePath, LarkNotice: config.LarkNotice, MeegleExecutablePath: config.MeegleExecutablePath, CodexExecutablePath: config.CodexExecutablePath, CommandProxyURL: config.CommandProxyURL, CommandProxyNoProxy: config.CommandProxyNoProxy, CommandProxyUsername: config.CommandProxyUsername, CommandProxyPassword: config.CommandProxyPassword, CommandProxyTargets: config.CommandProxyTargets, GenbuExecutablePath: config.GenbuExecutablePath, GenbuExecutableAutoDetected: config.GenbuExecutableAutoDetected, RequirementMaterialsRoot: config.RequirementMaterialsRoot, RequirementMaterialsSubdirectory: config.RequirementMaterialsSubdirectory, MaterialsGitSync: config.MaterialsGitSync, CodexPluginMarketplaceSources: config.CodexPluginMarketplaceSources, SkillSources: config.SkillSources},
-		Appearance:   appearanceShard{Schema: configShardSchema, Theme: config.Theme, ToolVisibility: config.ToolVisibility, SidebarVisibility: config.SidebarVisibility, ShowTaskDetailGitActionGroup: config.ShowTaskDetailGitActionGroup, ShowTaskDetailPathActionGroup: config.ShowTaskDetailPathActionGroup, ShowWorkspaceGitActionGroup: config.ShowWorkspaceGitActionGroup, ShowWorkspacePathActionGroup: config.ShowWorkspacePathActionGroup, ShowTaskAreaCopyIcons: config.ShowTaskAreaCopyIcons, ShowTaskAreaBranchCopyIcons: config.ShowTaskAreaBranchCopyIcons, ShowTaskAreaRequirementCopyIcons: config.ShowTaskAreaRequirementCopyIcons, ShowTaskAreaProjectNameCopyIcons: config.ShowTaskAreaProjectNameCopyIcons},
+		Layout:    layoutShard{Schema: configShardSchema},
+		Workspace: workspaceShard{Schema: configShardSchema, TaskRoot: config.TaskRoot, DefaultBranchPrefix: config.DefaultBranchPrefix, Repositories: config.Repositories},
+		Services:  servicesShard{Schema: configShardSchema, Services: config.ServiceCatalog()},
+		Tag:       tagShard{Schema: configShardSchema, TagEnabled: config.TagEnabled, TagHistoryMaxGroups: config.TagHistoryMaxGroups, AllowTaskTagTargetEditing: config.AllowTaskTagTargetEditing},
+		Tools:     toolsShard{Schema: configShardSchema, TerminalExecutable: config.TerminalExecutable, DevelopmentTools: config.DevelopmentTools, DefaultDevelopmentTool: config.DefaultDevelopmentTool, AllowTemporaryDevelopmentToolSelection: config.AllowTemporaryDevelopmentToolSelection, DefaultWorkspaceToolIDs: config.DefaultWorkspaceToolIDs},
+		Git:       gitShard{Schema: configShardSchema, BlockedGitWriteBranches: config.BlockedGitWriteBranches, GitExecutablePath: config.GitExecutablePath},
+		Integrations: integrationsShard{
+			Schema:                            configShardSchema,
+			AIRequirementNamingEnabled:        config.AIRequirementNamingEnabled,
+			AIRequirementNamingPrewarmEnabled: config.AIRequirementNamingPrewarmEnabled,
+			AIRequirementNamingModel:          config.AIRequirementNamingModel,
+			MeegleProjects:                    config.MeegleProjects,
+			MeegleDefaultSprintProjectKey:     config.MeegleDefaultSprintProjectKey,
+			OptionalCLIs:                      config.OptionalCLIs,
+			LarkExecutablePath:                config.LarkExecutablePath,
+			LarkNotice:                        config.LarkNotice,
+			MeegleExecutablePath:              config.MeegleExecutablePath,
+			CodexExecutablePath:               config.CodexExecutablePath,
+			CommandProxyURL:                   config.CommandProxyURL,
+			CommandProxyNoProxy:               config.CommandProxyNoProxy,
+			CommandProxyUsername:              config.CommandProxyUsername,
+			CommandProxyPassword:              config.CommandProxyPassword,
+			CommandProxyTargets:               config.CommandProxyTargets,
+			GenbuExecutablePath:               config.GenbuExecutablePath,
+			GenbuExecutableAutoDetected:       config.GenbuExecutableAutoDetected,
+			DragonExecutablePath:              config.DragonExecutablePath,
+			DragonExecutableAutoDetected:      config.DragonExecutableAutoDetected,
+			RequirementMaterialsRoot:          config.RequirementMaterialsRoot,
+			RequirementMaterialsSubdirectory:  config.RequirementMaterialsSubdirectory,
+			MaterialsGitSync:                  config.MaterialsGitSync,
+
+			ProjectInstructionsGitURL:             config.ProjectInstructionsGitURL,
+			ProjectInstructionsGitEnabled:         config.ProjectInstructionsGitEnabled,
+			ProjectInstructionsGitBranch:          config.ProjectInstructionsGitBranch,
+			ProjectInstructionsGitIntervalMinutes: config.ProjectInstructionsGitIntervalMinutes,
+			ProjectInstructionsGitLocalRoot:       config.ProjectInstructionsGitLocalRoot,
+			ProjectInstructionsGitRemoteName:      config.ProjectInstructionsGitRemoteName,
+			ProjectInstructionsGitBindingID:       config.ProjectInstructionsGitBindingID,
+
+			CodexPluginMarketplaceSources: config.CodexPluginMarketplaceSources,
+			SkillSources:                  config.SkillSources,
+		},
+		Appearance: appearanceShard{Schema: configShardSchema, Theme: config.Theme, ToolVisibility: config.ToolVisibility, SidebarVisibility: config.SidebarVisibility, ShowTaskDetailGitActionGroup: config.ShowTaskDetailGitActionGroup, ShowTaskDetailPathActionGroup: config.ShowTaskDetailPathActionGroup, ShowWorkspaceGitActionGroup: config.ShowWorkspaceGitActionGroup, ShowWorkspacePathActionGroup: config.ShowWorkspacePathActionGroup, ShowTaskAreaCopyIcons: config.ShowTaskAreaCopyIcons, ShowTaskAreaBranchCopyIcons: config.ShowTaskAreaBranchCopyIcons, ShowTaskAreaRequirementCopyIcons: config.ShowTaskAreaRequirementCopyIcons, ShowTaskAreaProjectNameCopyIcons: config.ShowTaskAreaProjectNameCopyIcons},
 	}
 }
 
@@ -976,57 +918,17 @@ func (s *ConfigStore) writeShardFiles(files map[string][]byte, names []string) e
 	return nil
 }
 
-func (s *ConfigStore) createBackup(files map[string][]byte) error {
-	if err := os.MkdirAll(s.paths.Backups, 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(s.paths.Backups, backupPrefix+"*.zip.tmp")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	_ = tmp.Close()
-	target := strings.TrimSuffix(tmpPath, ".tmp")
-	if err := writeZipUsingTemp(target, files, tmpPath); err != nil {
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	backups, err := s.Backups()
-	if err != nil {
-		return err
-	}
-	if len(backups) > 10 {
-		for _, old := range backups[10:] {
-			if err := os.Remove(old.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 func writeZip(target string, files map[string][]byte) error {
 	parent := filepath.Dir(target)
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(parent, ".config-*.zip.tmp")
+	f, err := os.CreateTemp(parent, ".config-*.zip.tmp")
 	if err != nil {
 		return err
 	}
-	tmpPath := tmp.Name()
-	_ = tmp.Close()
-	if err := writeZipUsingTemp(target, files, tmpPath); err != nil {
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	return nil
-}
-func writeZipUsingTemp(target string, files map[string][]byte, tmpPath string) error {
-	f, err := os.Create(tmpPath)
-	if err != nil {
-		return err
-	}
+	tmpPath := f.Name()
+	defer os.Remove(tmpPath)
 	zw := zip.NewWriter(f)
 	for _, name := range shardNames {
 		data, ok := files[name]
@@ -1209,14 +1111,6 @@ func uniqueNames(values []string) []string {
 	}
 	return out
 }
-func findServicesGroup(groups []groupServicesShard, id string) (groupServicesShard, bool) {
-	for _, g := range groups {
-		if g.GroupID == id {
-			return g, true
-		}
-	}
-	return groupServicesShard{}, false
-}
 
 type decodedConfig struct {
 	Config domain.AppConfig
@@ -1234,27 +1128,17 @@ type configShards struct {
 	Appearance   appearanceShard
 }
 type layoutShard struct {
-	Schema int                "json:\"schema\""
-	Groups []groupLayoutShard "json:\"groups\""
-}
-type groupLayoutShard struct {
-	ID         string "json:\"id\""
-	Name       string "json:\"name\""
-	TagEnabled bool   "json:\"tagEnabled\""
+	Schema int `json:"schema"`
 }
 type workspaceShard struct {
 	Schema              int                       "json:\"schema\""
-	TaskRoot            *string                   "json:\"taskRoot\""
+	TaskRoot            *string                   `json:"taskRoot,omitempty"`
 	DefaultBranchPrefix string                    "json:\"defaultBranchPrefix\""
 	Repositories        []domain.RepositoryConfig "json:\"repositories\""
 }
 type servicesShard struct {
-	Schema int                  "json:\"schema\""
-	Groups []groupServicesShard "json:\"groups\""
-}
-type groupServicesShard struct {
-	GroupID  string                      "json:\"groupId\""
-	Services []domain.GroupServiceConfig "json:\"services\""
+	Schema   int                    `json:"schema"`
+	Services []domain.ServiceConfig `json:"services"`
 }
 type tagShard struct {
 	Schema                    int  "json:\"schema\""
@@ -1276,28 +1160,42 @@ type gitShard struct {
 	GitExecutablePath       *string  "json:\"gitExecutablePath\""
 }
 type integrationsShard struct {
-	LarkExecutablePath                *string                               `json:"larkExecutablePath"`
-	LarkNotice                        *domain.LarkNoticeConfig              `json:"larkNotice,omitempty"`
-	Schema                            int                                   "json:\"schema\""
-	AIRequirementNamingEnabled        bool                                  "json:\"aiRequirementNamingEnabled\""
-	AIRequirementNamingPrewarmEnabled bool                                  "json:\"aiRequirementNamingPrewarmEnabled\""
-	AIRequirementNamingModel          string                                "json:\"aiRequirementNamingModel\""
-	MeegleProjects                    []domain.MeegleProjectConfig          "json:\"meegleProjects\""
-	MeegleDefaultSprintProjectKey     *string                               "json:\"meegleDefaultSprintProjectKey\""
-	MeegleExecutablePath              *string                               "json:\"meegleExecutablePath\""
-	CodexExecutablePath               *string                               "json:\"codexExecutablePath\""
-	CommandProxyURL                   *string                               "json:\"commandProxyUrl\""
-	CommandProxyNoProxy               *string                               "json:\"commandProxyNoProxy\""
-	CommandProxyUsername              *string                               "json:\"commandProxyUsername\""
-	CommandProxyPassword              *string                               "json:\"commandProxyPassword\""
-	CommandProxyTargets               []domain.CommandProxyTarget           "json:\"commandProxyTargets\""
-	GenbuExecutablePath               *string                               "json:\"genbuExecutablePath\""
-	GenbuExecutableAutoDetected       bool                                  "json:\"genbuExecutableAutoDetected\""
-	RequirementMaterialsRoot          *string                               "json:\"requirementMaterialsRoot\""
-	RequirementMaterialsSubdirectory  *string                               "json:\"requirementMaterialsSubdirectory\""
-	MaterialsGitSync                  *domain.MaterialsGitSyncSettings      `json:"materialsGitSync"`
-	CodexPluginMarketplaceSources     []domain.CodexPluginMarketplaceSource "json:\"codexPluginMarketplaceSources\""
-	SkillSources                      []domain.SkillSource                  "json:\"skillSources\""
+	OptionalCLIs                      domain.OptionalCLISettings       `json:"optionalCLIs"`
+	LarkExecutablePath                *string                          `json:"larkExecutablePath"`
+	LarkNotice                        *domain.LarkNoticeConfig         `json:"larkNotice,omitempty"`
+	Schema                            int                              "json:\"schema\""
+	AIRequirementNamingEnabled        bool                             "json:\"aiRequirementNamingEnabled\""
+	AIRequirementNamingPrewarmEnabled bool                             "json:\"aiRequirementNamingPrewarmEnabled\""
+	AIRequirementNamingModel          string                           "json:\"aiRequirementNamingModel\""
+	MeegleProjects                    []domain.MeegleProjectConfig     "json:\"meegleProjects\""
+	MeegleDefaultSprintProjectKey     *string                          "json:\"meegleDefaultSprintProjectKey\""
+	MeegleExecutablePath              *string                          "json:\"meegleExecutablePath\""
+	CodexExecutablePath               *string                          "json:\"codexExecutablePath\""
+	CommandProxyURL                   *string                          "json:\"commandProxyUrl\""
+	CommandProxyNoProxy               *string                          "json:\"commandProxyNoProxy\""
+	CommandProxyUsername              *string                          "json:\"commandProxyUsername\""
+	CommandProxyPassword              *string                          "json:\"commandProxyPassword\""
+	CommandProxyTargets               []domain.CommandProxyTarget      "json:\"commandProxyTargets\""
+	RequirementMaterialsRoot          *string                          `json:"requirementMaterialsRoot,omitempty"`
+	RequirementMaterialsSubdirectory  *string                          "json:\"requirementMaterialsSubdirectory\""
+	MaterialsGitSync                  *domain.MaterialsGitSyncSettings `json:"materialsGitSync"`
+
+	// Older configurations and backups may contain these retired fields.
+	GenbuExecutablePath          *string `json:"genbuExecutablePath,omitempty"`
+	GenbuExecutableAutoDetected  bool    `json:"genbuExecutableAutoDetected,omitempty"`
+	DragonExecutablePath         *string `json:"dragonExecutablePath,omitempty"`
+	DragonExecutableAutoDetected bool    `json:"dragonExecutableAutoDetected,omitempty"`
+
+	ProjectInstructionsGitURL             string `json:"projectInstructionsGitUrl"`
+	ProjectInstructionsGitEnabled         *bool  `json:"projectInstructionsGitEnabled,omitempty"`
+	ProjectInstructionsGitBranch          string `json:"projectInstructionsGitBranch,omitempty"`
+	ProjectInstructionsGitIntervalMinutes *int   `json:"projectInstructionsGitIntervalMinutes,omitempty"`
+	ProjectInstructionsGitLocalRoot       string `json:"projectInstructionsGitLocalRoot,omitempty"`
+	ProjectInstructionsGitRemoteName      string `json:"projectInstructionsGitRemoteName,omitempty"`
+	ProjectInstructionsGitBindingID       string `json:"projectInstructionsGitBindingId,omitempty"`
+
+	CodexPluginMarketplaceSources []domain.CodexPluginMarketplaceSource "json:\"codexPluginMarketplaceSources\""
+	SkillSources                  []domain.SkillSource                  "json:\"skillSources\""
 }
 type appearanceShard struct {
 	Schema                           int                              "json:\"schema\""

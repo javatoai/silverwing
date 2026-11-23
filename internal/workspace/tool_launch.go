@@ -99,7 +99,7 @@ func (s *WorkspaceToolLaunchService) Availability(ctx context.Context, toolID st
 	return launcher.Availability(ctx)
 }
 
-func (s *WorkspaceToolLaunchService) Launch(ctx context.Context, taskPath string, manifest domain.TaskManifest, toolIDs []string) (domain.TaskManifest, error) {
+func (s *WorkspaceToolLaunchService) Launch(ctx context.Context, config domain.AppConfig, taskPath string, manifest domain.TaskManifest, toolIDs []string) (domain.TaskManifest, error) {
 	selected := uniqueStringsNonEmpty(toolIDs)
 	if len(selected) == 0 {
 		return manifest, nil
@@ -120,7 +120,10 @@ func (s *WorkspaceToolLaunchService) Launch(ctx context.Context, taskPath string
 		if !sameTaskManifest(current, manifest) {
 			return fmt.Errorf("任务清单已发生变化，请重新尝试启动")
 		}
-		if err := taskscope.Validate(ctx, domain.AppConfig{}, taskPath, current); err != nil {
+		if err := taskscope.Validate(ctx, config, taskPath, current); err != nil {
+			return err
+		}
+		if err := s.Locks.ValidateWorkspaceDirectory(config, taskPath, current); err != nil {
 			return err
 		}
 		if err := ctx.Err(); err != nil {
@@ -155,7 +158,7 @@ func (s *WorkspaceToolLaunchService) Launch(ctx context.Context, taskPath string
 				} else if !availability.Available {
 					status.Message = ptr(availability.Reason)
 				} else {
-					if err := taskscope.Validate(ctx, domain.AppConfig{}, taskPath, updated); err != nil {
+					if err := taskscope.Validate(ctx, config, taskPath, updated); err != nil {
 						// Do not leave a retryable canceled launch looking pending, and
 						// never write this result over a replacement task incarnation.
 						if currentErr := s.requireCurrentManifest(taskPath, updated); currentErr != nil {
@@ -169,7 +172,11 @@ func (s *WorkspaceToolLaunchService) Launch(ctx context.Context, taskPath string
 					if err := s.requireCurrentManifest(taskPath, updated); err != nil {
 						return err
 					}
-					ctxData := TaskWorkspaceContext{TaskName: current.FolderName, TaskDirectory: mustAbs(taskPath), AgentsFile: filepath.Join(mustAbs(taskPath), "AGENTS.md"), Workspaces: append([]domain.ServiceWorkspace(nil), current.Services...)}
+					if err := s.Locks.ValidateWorkspaceDirectory(config, taskPath, updated); err != nil {
+						return err
+					}
+					launchDirectory := mustAbs(taskPath)
+					ctxData := TaskWorkspaceContext{TaskName: current.FolderName, TaskDirectory: launchDirectory, AgentsFile: filepath.Join(launchDirectory, AgentRouterFileName), Workspaces: append([]domain.ServiceWorkspace(nil), current.Services...)}
 					if runErr := launcher.Open(ctx, ctxData); runErr != nil {
 						status.Message = ptr(runErr.Error())
 					} else {
@@ -202,11 +209,11 @@ func (s *WorkspaceToolLaunchService) requireCurrentManifest(path string, expecte
 	return nil
 }
 
-func (s *WorkspaceToolLaunchService) Retry(ctx context.Context, taskPath string, manifest domain.TaskManifest, toolID string) (domain.TaskManifest, error) {
+func (s *WorkspaceToolLaunchService) Retry(ctx context.Context, config domain.AppConfig, taskPath string, manifest domain.TaskManifest, toolID string) (domain.TaskManifest, error) {
 	if strings.TrimSpace(toolID) == "" {
 		return domain.TaskManifest{}, fmt.Errorf("工作区工具 ID 不能为空")
 	}
-	return s.Launch(ctx, taskPath, manifest, []string{toolID})
+	return s.Launch(ctx, config, taskPath, manifest, []string{toolID})
 }
 
 func (s *WorkspaceToolLaunchService) now() string {

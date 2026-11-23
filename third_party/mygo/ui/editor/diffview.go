@@ -1,8 +1,11 @@
 package editor
 
 import (
+	"sort"
 	"strconv"
+	"time"
 
+	"github.com/egoist/mygo/internal/l10n"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -13,18 +16,31 @@ import (
 type DiffState struct {
 	// Old and New are the texts compared; empty buffers are made when
 	// nil. New is the one edited when Editable, and can be the buffer of
-	// an editor's too: an edit in either shows in both.
+	// an editor's too: an edit in either shows in both. An empty text has
+	// no lines, as of a file added or deleted: its side numbers none.
 	Old, New *Buffer
 	// Layout shows the texts side by side, or one over the other.
 	Layout DiffLayout
-	// SplitRatio is the old side's fraction of the width in DiffSplit.
-	// It defaults to .5 and is updated by the draggable divider.
+	// SplitPercent is the percentage of a split view's width the old
+	// side takes, from 0 to 100, half when 0: the user drags the line
+	// between the sides to change it, or moves it with the arrows once it
+	// has the keyboard focus, as ui.SplitPercent's divider, and the app
+	// keeps it to show the sides as the user left them. Each side keeps
+	// the room of its gutter and 12 columns of text, where the view is
+	// wide enough for both, and the share is kept for when it is again.
+	SplitPercent float32
+	// SplitRatio optionally stores the same split as a fraction in (0, 1).
+	// When set, it takes precedence over SplitPercent and follows the divider.
 	SplitRatio float32
 	// SyncHorizontal locks split panes to the same horizontal code position.
-	// Both panes share the widest scroll range; defaults to independent X.
+	// Both panes share the widest scroll range.
 	SyncHorizontal bool
 	// Editable lets the new text be edited where it shows, with all an
-	// editor does; the diff follows as it is typed.
+	// editor does; the diff follows as it is typed. It also shows the empty
+	// line after each text's final newline, where typing adds a line,
+	// which a diff that is not editable leaves out, as git diff does: it
+	// compares lines with their line feeds, and marks a last line without
+	// one "No newline at end of file".
 	Editable bool
 	// Inline highlights what changed within changed lines.
 	Inline DiffInline
@@ -46,6 +62,14 @@ type DiffState struct {
 	// FitContent makes the viewer as high as its lines, as a file of a
 	// list of them, rather than scrolling them itself.
 	FitContent bool
+	// ScrollPastEnd lets the lines scroll up until the last is at the top,
+	// as State's do unless NoScrollPastEnd, so that GoToHunk can bring a
+	// change near the end to the middle of the view too.
+	ScrollPastEnd bool
+	// KeepScrollbars and NoScrollbars are those of State: the scroll
+	// bars stay with the pointer away, or are taken away with their room.
+	KeepScrollbars bool
+	NoScrollbars   bool
 	// Font, LineHeight, TabSize and Theme are those of State.
 	Font       ui.Font
 	LineHeight float32
@@ -91,7 +115,12 @@ type DiffState struct {
 	eds     [2]editor // the old side's and the new side's
 	sides   [2]diffSide
 	oldView view // the old text, for its lines in a unified view
-	scroll  sharedScroll
+	// deletedTops are, for each hunk, the tops of its deleted lines in a
+	// unified view from the top of their block, and the block's bottom
+	// last, as prepare placed them.
+	deletedTops [][]float64
+	scroll      sharedScroll
+	split       diffSplit
 	// revealed are the unchanged lines expanded, in the old text, which
 	// edits of the new text leave where they are; revealedVer is the old
 	// text's version they are of.
@@ -108,12 +137,13 @@ type DiffState struct {
 	// blocksV counts the blocks prepare made, and built is the geometry
 	// the separators and buttons were built for, which a frame changing
 	// it builds again (diffGeom).
-	blocksV        int
-	built          diffGeom
-	gapList        []diffGap
-	partial        *diffPartial
-	pendingHunk    int
-	hasPendingHunk bool
+	blocksV int
+	built   diffGeom
+	gapList []diffGap
+	partial *diffPartial
+	// endMark marks a last line without a final newline, in the
+	// window's language (markEnds).
+	endMark string
 }
 
 // DiffLayout is how a diff viewer lays out its two texts.
@@ -217,7 +247,7 @@ func (d *DiffState) ensure() {
 		d.partial = nil
 		d.prepared = diffPrepared{}
 	}
-	d.model.set(d.Old, d.New)
+	d.model.set(d.Old, d.New, !d.Editable)
 	d.model.update()
 	// The lines revealed move with edits of the old text, as Keep makes,
 	// and go with it.
@@ -254,6 +284,15 @@ func (d *DiffState) Hunks() []DiffHunk {
 func (d *DiffState) Stats() (added, deleted int) {
 	d.ensure()
 	return d.model.stats()
+}
+
+// Comparing reports whether the texts are being compared off the main
+// thread, as large texts a window shows are: until they are, the viewer
+// shows them without changes, and Hunks and Stats have none. The window
+// draws again when the comparison is done.
+func (d *DiffState) Comparing() bool {
+	d.ensure()
+	return d.model.comparing()
 }
 
 // Revert puts the old lines of hunk i back in New.
@@ -302,17 +341,6 @@ func (d *DiffState) GoToHunk(i int) {
 	if i < 0 || i >= len(d.model.hunks) {
 		return
 	}
-	if d.eds[1].view.buf == nil {
-		d.pendingHunk, d.hasPendingHunk = i, true
-		return
-	}
-	d.goToHunkNow(i)
-}
-
-func (d *DiffState) goToHunkNow(i int) {
-	if i < 0 || i >= len(d.model.hunks) {
-		return
-	}
 	h := d.model.hunks[i]
 	side := d.ActiveSide()
 	ed := d.editorOf(side)
@@ -323,23 +351,17 @@ func (d *DiffState) goToHunkNow(i int) {
 	r := &ed.view.text
 	off := r.LineStart(min(line, r.LineCount()-1))
 	ed.setSels([]sel{ed.newSel(off, off)}, revealCenter)
-	// A queued initial navigation can run from Draw before the editor's
-	// next build consumes revealCenter. The line geometry is ready here.
-	if ed.viewH > 0 && !d.FitContent {
-		line := ed.view.text.LineOf(off)
-		y := ed.rowTop(line) - max(0, (float64(ed.viewH)-float64(ed.view.lineHeight))/2)
-		if d.Layout == DiffSplit && len(d.scroll.eds) > 0 {
-			d.scroll.set(y)
-		} else {
-			ed.setScroll(y)
-			d.scroll.y = ed.scrollY
-		}
-		ed.reveal = revealNone
-	}
+}
+
+// Focus gives the keyboard to the editor of the active side when the
+// viewer is next built, so that its caret shows, as after GoToHunk from
+// a button.
+func (d *DiffState) Focus() {
+	d.editorOf(d.ActiveSide()).refocus = true
 }
 
 // DiffScrollPosition stores the horizontal positions and shared vertical
-// position. OldX and NewX are equal when SyncHorizontal is enabled.
+// position. OldX and NewX are equal when SyncHorizontal is enabled in a split.
 type DiffScrollPosition struct {
 	OldX, NewX float32
 	Y          float64
@@ -370,11 +392,142 @@ func (d *DiffState) SetScrollPosition(position DiffScrollPosition) {
 			ed.anchorLine = ed.view.heights.lineAt(ed.scrollY)
 			ed.anchorOff = ed.scrollY - ed.view.heights.top(ed.anchorLine)
 		} else {
-			// The viewer may be restored before its first layout. Keeping
-			// the Y offset at line zero lets build restore it after measuring.
+			// Preserve the offset until the first layout measures the lines.
 			ed.anchorLine, ed.anchorOff = 0, ed.scrollY
 		}
 	}
+}
+
+// ScrollY returns how far the diff's rows are scrolled up, in DIPs, as the
+// last frame laid them out, however they were scrolled: by the wheel, the
+// keys, the scroll bar, GoToHunk or SetScrollY. It is the new side's, which
+// the old side of a split view shares, 0 for a viewer as high as its lines
+// (FitContent). SetScrollY scrolls them, as far as they scroll, as a
+// minimap beside the diff does when it is clicked or dragged.
+func (d *DiffState) ScrollY() float64 { return d.eds[1].scrollY }
+
+func (d *DiffState) SetScrollY(y float64) {
+	ed := d.editorOf(DiffNew)
+	if d.Layout == DiffSplit && !d.FitContent {
+		// Both sides, which the frame keeps together (sharedScroll).
+		d.scroll.set(y)
+		return
+	}
+	ed.setScroll(y)
+}
+
+// ViewportHeight returns the height of the part of the diff the viewer
+// shows, in DIPs, as the last frame laid it out: from ScrollY to ScrollY
+// plus ViewportHeight, against LineTop, is what is in view. A viewer as
+// high as its lines (FitContent) is that high.
+func (d *DiffState) ViewportHeight() float64 { return float64(d.eds[1].viewH) }
+
+// LineTop returns the top of a line of a side, from 0, in DIPs below the
+// top of the diff's first row, as the last frame laid the diff out: less
+// ScrollY, it is where the line shows in the viewer, as State's LineTop.
+// The separators, the annotations and the room a split view leaves across
+// from lines of the other side take their heights; unchanged lines
+// collapsed into a separator take none, and are at its top. In a unified
+// view, a line the new text deleted is among the deleted lines above its
+// change, and an unchanged line of the old text where it is in the new.
+// LineTop of a side's count of lines is the height of the whole diff, as
+// a minimap scales it.
+func (d *DiffState) LineTop(side DiffSide, line int) float64 {
+	d.ensure()
+	line = max(line, 0)
+	h := &d.eds[1].view.heights
+	switch {
+	case side == DiffOld && d.Layout == DiffSplit:
+		h = &d.eds[0].view.heights
+	case side == DiffOld:
+		if nl, ok := d.model.newLineOf(line); ok || line >= d.Old.LineCount() {
+			if !ok {
+				nl = h.n
+			}
+			return rowsTop(h, nl)
+		}
+		return d.deletedTop(line)
+	}
+	return rowsTop(h, line)
+}
+
+// rowsTop returns the top of the rows of line, below its blocks above;
+// for a line collapsed into a separator, the separator's top; past the
+// last line, the height of them all.
+func rowsTop(h *heights, line int) float64 {
+	if line >= h.n {
+		return h.total()
+	}
+	if h.isHidden(line) {
+		// The separator of the run is above the line after it, or, for
+		// the run after the last change, below the line before it.
+		i := sort.Search(len(h.hidden), func(i int) bool { return h.hidden[i].to >= line })
+		span := h.hidden[i]
+		sep := func(b *block) bool { return b.kind == blockSeparator && line >= b.from && line < b.to }
+		if span.to+1 < h.n {
+			if top, ok := blockTop(h, span.to+1, false, sep); ok {
+				return top
+			}
+		}
+		if span.from > 0 {
+			if top, ok := blockTop(h, span.from-1, true, sep); ok {
+				return top
+			}
+		}
+	}
+	return h.geometry(line).rows
+}
+
+// blockTop returns the top of the first block of line that is is, among
+// those above it or those below, and whether there is one.
+func blockTop(h *heights, line int, below bool, is func(b *block) bool) (float64, bool) {
+	g := h.geometry(line)
+	above, under := h.blocksOf(line)
+	blks, top := above, g.top
+	if below {
+		blks, top = under, g.below
+	}
+	for i := range blks {
+		if is(&blks[i]) {
+			return top, true
+		}
+		top += float64(blks[i].height)
+	}
+	return 0, false
+}
+
+// deletedTop returns the top of a deleted line of the old text in a
+// unified view, in the block of the deleted lines of its change.
+func (d *DiffState) deletedTop(line int) float64 {
+	ed := &d.eds[1]
+	h := &ed.view.heights
+	n := h.n
+	for i, hk := range d.model.hunks {
+		if line < hk.A0 || line >= hk.A1 {
+			continue
+		}
+		// Where prepare put the block: above the change's first new line,
+		// or below the last line of the text.
+		at, below := hk.B0, false
+		if at >= n {
+			at, below = n-1, true
+		}
+		if at < 0 {
+			return 0
+		}
+		// The line's top in the block by the tops prepare kept with it,
+		// which an edit since the last frame leaves as they were.
+		var blk block
+		top, ok := blockTop(h, at, below, func(b *block) bool {
+			blk = *b
+			return b.kind == blockDeleted && b.hunk == i
+		})
+		if !ok || line < blk.from || line >= blk.to {
+			return h.geometry(at).rows
+		}
+		return top + d.deletedTops[blk.hunk][line-blk.from]
+	}
+	return h.total()
 }
 
 // Run runs a command in the editor of the active side (ActiveSide), as
@@ -467,8 +620,11 @@ func (d *DiffState) sideOptions(old bool) options {
 		readOnly: old || !d.Editable, font: d.Font, lineHeight: d.LineHeight, tabSize: d.TabSize,
 		wrap: d.Wrap, lineNumbers: LineNumbersOn, whitespace: WhitespaceNone, autoClose: true,
 		theme: d.Theme, bindings: d.Bindings, fitContent: d.FitContent, minDigits: digits,
+		scrollPastEnd:  d.ScrollPastEnd && !d.FitContent,
+		keepScrollbars: d.KeepScrollbars, hideScrollbars: d.NoScrollbars,
 		renderFindBar: d.RenderFindBar, renderGoToLine: d.RenderGoToLine,
 	}
+	o.scrollMargin = defaultScrollMargin
 	if d.NoLineNumbers {
 		o.lineNumbers = LineNumbersOff
 	}
@@ -481,6 +637,13 @@ func (d *DiffState) sideOptions(old bool) options {
 
 // DiffView builds the diff viewer.
 func DiffView(c *ui.Context, d *DiffState) ui.Element {
+	if d.New == nil {
+		d.New = NewBuffer("")
+	}
+	// The window showing the buffers from the first frame, for which
+	// large texts are compared off the main thread, the window drawing
+	// again when they are (diffModel.full).
+	d.New.watch(c.Services())
 	d.ensure()
 	wasSynced := d.scroll.syncHorizontal
 	d.scroll.syncHorizontal = d.SyncHorizontal && d.Layout == DiffSplit && !d.FitContent
@@ -488,6 +651,17 @@ func DiffView(c *ui.Context, d *DiffState) ui.Element {
 		d.scroll.x = d.eds[1].scrollX
 		d.eds[0].scrollX = d.scroll.x
 	}
+	d.endMark = "  " + l10n.In(c.Locale()).NoNewlineAtEnd()
+	// The new side's editor scrolls as it is built, as to a caret
+	// GoToHunk moved, where a split view's scrolls as it is drawn
+	// (rebuildIfMoved): either builds the view again, for what read
+	// ScrollY before.
+	scrolled := d.eds[1].scrollY
+	defer func() {
+		if d.eds[1].scrollY != scrolled {
+			c.Invalidate()
+		}
+	}()
 	t := c.Theme()
 	ct := d.Theme.resolve(t)
 	opts := d.sideOptions
@@ -506,14 +680,10 @@ func DiffView(c *ui.Context, d *DiffState) ui.Element {
 		root.Draw(func(p *ui.Painter, r ui.Rect) {
 			ed := &d.eds[1]
 			ed.layout(r.W, r.H, p.Scale())
+			d.oldView.sys = ed.view.sys
 			d.oldView.setStyle(ed.view.font, ed.o.lineHeight, p.Scale(), ed.tabSize())
 			d.oldView.setWrap(ed.view.wrap, ed.view.wrapWidth)
 			d.prepare()
-			if d.hasPendingHunk {
-				i := d.pendingHunk
-				d.hasPendingHunk = false
-				d.goToHunkNow(i)
-			}
 			ed.layout(r.W, r.H, p.Scale())
 			d.rebuildIfMoved()
 		})
@@ -524,6 +694,7 @@ func DiffView(c *ui.Context, d *DiffState) ui.Element {
 				ed.FillWidth()
 			}
 			d.buildSeparators(c, ct)
+			d.buildBars(c, 1)
 		})
 		if d.FitContent {
 			d.fit()
@@ -533,54 +704,43 @@ func DiffView(c *ui.Context, d *DiffState) ui.Element {
 	}
 	// Side by side: two editors sharing their scroll.
 	d.scroll.eds = []*editor{&d.eds[0], &d.eds[1]}
-	buildSide := func(i int) func() {
-		return func() {
-			b := []*Buffer{d.Old, d.New}[i]
-			o := opts(i == 0)
-			o.decor = &d.sides[i]
-			o.sharedScroll = &d.scroll
-			if d.FitContent {
-				o.sharedScroll = nil
-			}
-			o.noScrollbar = i == 0
-			if d.Indicators == DiffClassic {
-				o.signs = true
-			}
-			ed := d.eds[i].build(c, b, o)
-			ed.Grow(1).Basis(0).FillHeight()
-			if d.eds[i].focused {
-				d.oldActive = i == 0
+	// The old text on the left, as code reads left to right.
+	row := ui.Row(c).Direction(ui.LeftToRight).Clip()
+	row.Draw(func(p *ui.Painter, r ui.Rect) {
+		if r.W != d.split.width {
+			// Resized: the build shares the new width between the sides.
+			d.split.width = r.W
+			d.eds[1].services.Invalidate()
+		}
+		w := d.split.widths(r.W)
+		for i := range d.eds {
+			d.eds[i].layout(w[i], r.H, p.Scale())
+		}
+		if d.Wrap && d.eds[0].view.wrapWidth != d.eds[1].view.wrapWidth {
+			// Sides wrapping at unlike widths are aligned line by line
+			// (prepare): the lines in view measured first, which the
+			// editors would measure as they paint, after.
+			for i := range d.eds {
+				d.eds[i].view.measureWraps(d.eds[i].anchorLine, 0)
 			}
 		}
-	}
-	root := ui.Box(c).Direction(ui.LeftToRight).Clip()
-	root.Draw(func(p *ui.Painter, r ui.Rect) {
-		available := max(float32(0), r.W-1)
-		minPane := t.Space(40)
-		minRatio := float32(0)
-		maxRatio := float32(1)
-		if r.W > 0 {
-			minPane = min(minPane, max(float32(0), available/2))
-			minRatio = minPane / r.W
-			maxRatio = max(minRatio, (available-minPane)/r.W)
-		}
-		ratio := min(max(d.SplitRatio, minRatio), maxRatio)
-		leftWidth := available * ratio
-		rightWidth := max(float32(0), r.W-leftWidth-1)
-		d.eds[0].layout(leftWidth, r.H, p.Scale())
-		d.eds[1].layout(rightWidth, r.H, p.Scale())
+		changedExpansion := d.prepared.lh > 0 && d.prepared.expAll != d.ExpandUnchanged
 		d.prepare()
-		if d.hasPendingHunk {
-			i := d.pendingHunk
-			d.hasPendingHunk = false
-			d.goToHunkNow(i)
+		for i := range d.eds {
+			d.eds[i].layout(w[i], r.H, p.Scale())
 		}
-		d.eds[0].layout(leftWidth, r.H, p.Scale())
-		d.eds[1].layout(rightWidth, r.H, p.Scale())
 		if !d.FitContent {
+			if changedExpansion {
+				// Keep the source anchor when the same lines occupy a different
+				// height. Clamping an old pixel offset can jump to the last row.
+				ed := &d.eds[1]
+				ed.restoreScroll()
+				d.scroll.y = ed.scrollY
+			}
 			d.scroll.set(d.scroll.y)
 			// The new side reveals its carets for both.
-			if ed := &d.eds[1]; ed.reveal != revealNone {
+			ed := &d.eds[1]
+			if ed.reveal != revealNone {
 				ed.doReveal()
 				d.scroll.set(ed.scrollY)
 			}
@@ -591,12 +751,11 @@ func DiffView(c *ui.Context, d *DiffState) ui.Element {
 		}
 		d.rebuildIfMoved()
 	})
-	root.DrawOver(func(p *ui.Painter, _ ui.Rect) {
+	row.DrawOver(func(p *ui.Painter, _ ui.Rect) {
 		if !d.scroll.syncHorizontal {
 			return
 		}
-		// Measure both panes before clamping restored positions. The wider
-		// line may be on the side painted second, especially on first layout.
+		// Clamp only after both panes have measured the visible columns.
 		extent := d.scroll.maxX()
 		x := max(0, min(d.scroll.x, extent))
 		changed := d.eds[0].scrollX != x || d.eds[1].scrollX != x || d.scroll.xExtent != extent
@@ -606,15 +765,210 @@ func DiffView(c *ui.Context, d *DiffState) ui.Element {
 			p.AnimationFrame()
 		}
 	})
-	root.Children(func() {
-		ui.SplitRatio(c, &d.SplitRatio, buildSide(0), buildSide(1)).Fill()
+	row.Children(func() {
+		var sides [2]ui.Element
+		var div ui.Element
+		for i, b := range []*Buffer{d.Old, d.New} {
+			o := opts(i == 0)
+			o.decor = &d.sides[i]
+			o.sharedScroll = &d.scroll
+			if d.FitContent {
+				o.sharedScroll = nil
+			}
+			o.noScrollbar = i == 0
+			if d.Indicators == DiffClassic {
+				o.signs = true
+			}
+			sides[i] = d.eds[i].build(c, b, o).Basis(0).FillHeight()
+			if i == 0 {
+				div = ui.Box(c).Key("diff divider").Width(1).Shrink(0).FillHeight()
+			}
+			if d.eds[i].focused {
+				d.oldActive = i == 0
+			}
+		}
+		if d.buildDivider(c, ct, div) {
+			row.SetChanged()
+		}
+		for i := range sides {
+			sides[i].Grow(d.split.grow[i])
+		}
 		d.buildSeparators(c, ct)
+		d.buildBars(c, 0, 1)
 	})
 	if d.FitContent {
 		d.fit()
-		root.Height(float32(max(d.eds[0].view.heights.total(), d.eds[1].view.heights.total())))
+		row.Height(float32(max(d.eds[0].view.heights.total(), d.eds[1].view.heights.total())))
 	}
-	return root
+	return row
+}
+
+// buildBars builds the find and go to line bars of the sides, after the
+// separators, which would else cover them: each in a box over its side
+// that lets the pointer through to the text.
+func (d *DiffState) buildBars(c *ui.Context, sides ...int) {
+	w := d.split.widths(d.split.width)
+	for _, i := range sides {
+		ed := &d.eds[i]
+		if !ed.find.open && !ed.goTo.open {
+			continue
+		}
+		box := ui.Box(c).Key("diff bars " + strconv.Itoa(i)).Absolute().Top(0).Bottom(0).PassThrough()
+		switch {
+		case d.Layout == DiffUnified:
+			box.Left(0).Right(0)
+		case i == 0:
+			box.Left(0).Width(w[0])
+		default:
+			box.Right(0).Width(w[1])
+		}
+		box.Children(func() { ed.buildBars(c) })
+	}
+}
+
+// diffMinColumns is how many columns of text a side of a split view
+// keeps at least, besides its gutter, wherever the line between the
+// sides is dragged.
+const diffMinColumns = 12
+
+// diffSplit is how a split view shares its width between its sides.
+type diffSplit struct {
+	// width is the view's as the last frame drew it, which the build
+	// shares out and the divider moves within.
+	width float32
+	// grow are the sides' factors of growth as built, by which the frame
+	// lays them out (widths).
+	grow [2]float32
+}
+
+// widths returns the widths the layout gives the sides in a view w wide,
+// the divider taking 1 DIP: its arithmetic, that of a row whose items
+// grow from nothing, so that the sides are laid out for painting at the
+// widths they are drawn at to the bit.
+func (s *diffSplit) widths(w float32) [2]float32 {
+	free := max(w-1, 0)
+	var sum float32
+	sum += s.grow[0]
+	sum += s.grow[1]
+	if sum == 0 {
+		return [2]float32{}
+	}
+	return [2]float32{free * s.grow[0] / sum, free * s.grow[1] / sum}
+}
+
+// sideMin returns the least width of a side of a split view: its gutter
+// and diffMinColumns columns of text, as its editor was last laid out,
+// and at least what ui.Split keeps of a pane.
+func (d *DiffState) sideMin(t *ui.Theme) float32 {
+	m := t.Space(10)
+	for i := range d.eds {
+		ed := &d.eds[i]
+		m = max(m, ed.textX+diffMinColumns*ed.view.charWidth+ed.trackWidth()+4)
+	}
+	return m
+}
+
+// buildDivider builds the line between the sides of a split view, div,
+// as ui.Split's divider: the pointer drags it, from a handle a few DIPs
+// wide over either side, and it takes the focus between the sides, in
+// their order, and moves with the arrows. It shares the view's width
+// between the sides by SplitPercent or SplitRatio, and reports whether a
+// drag or a key moved it.
+func (d *DiffState) buildDivider(c *ui.Context, ct *Theme, div ui.Element) bool {
+	t := c.Theme()
+	minSide, grip, step := d.sideMin(t), t.Space(1.5), t.Space(2.5)
+	// The room to share, as the last frame drew it: none before.
+	room := max(d.split.width-1, 0)
+	useRatio := d.SplitRatio > 0 && d.SplitRatio < 1
+	share := min(d.SplitPercent, 100) / 100
+	if useRatio {
+		share = d.SplitRatio
+		minSide = min(t.Space(40), room/2)
+	}
+	fits := room > 0 && room >= 2*minSide
+	fit := func(v float32) float32 { return max(minSide, min(v, room-minSide)) }
+	// shown is the old side's width as the last frame laid it out, which
+	// drags and keys move the line from: half the room with no share, or
+	// where the sides do not fit beside each other.
+	shown := room / 2
+	moved := false
+	if share > 0 && fits {
+		shown = fit(share * room)
+		if useRatio && shown != share*room {
+			d.SplitRatio, moved = shown/room, true
+		}
+	}
+	set := func(v float32) {
+		if !fits {
+			return
+		}
+		if v = fit(v); v != shown {
+			share = v / room
+			if useRatio {
+				d.SplitRatio = share
+			} else {
+				d.SplitPercent = v * 100 / room
+			}
+			shown, moved = v, true
+		}
+	}
+	div.Focusable().FocusRing(false).Role(ui.RoleSplitter).Label(l10n.In(c.Locale()).Divider())
+	// The arrows move the line the way they point: the view is laid out
+	// left to right in either direction, as code reads.
+	if div.Shortcut(0, ui.KeyLeft) {
+		set(shown - step)
+	}
+	if div.Shortcut(0, ui.KeyRight) {
+		set(shown + step)
+	}
+	// The handle the pointer drags spans a few DIPs over either side,
+	// above them. The wheel over it scrolls the diff, as over the lines.
+	// The line and its handle are above the separators, which span both
+	// sides, built after them: it crosses them, as a header's text keeps
+	// short of it, and is dragged from over them too.
+	div.ZIndex(1)
+	handle := ui.Box(c).Key("diff divider handle").Absolute().Top(0).Bottom(0).Width(grip).ZIndex(1).
+		Cursor(ui.CursorResizeEW).HandleInput(d.eds[1].wheelOnly)
+	// A press there focuses the line, as a press on it would; only a move
+	// moves it.
+	dx, _, held := handle.Dragged()
+	if useRatio && handle.DoubleClicked() {
+		set(room / 2)
+	} else if held {
+		div.Focus()
+		if dx != 0 {
+			set(shown + dx)
+		}
+	}
+	handle.Left(shown - (grip-1)/2)
+	lo, hi := minSide, max(room-minSide, minSide)
+	if !fits {
+		lo, hi = shown, shown
+	}
+	div.Range(float64(lo), float64(hi), float64(shown)).Step(float64(step))
+	line := ct.Background.Mix(t.Border, 0.6)
+	if held || handle.Hovered() {
+		line = t.Accent
+	}
+	div.Background(line)
+	handle.Draw(func(p *ui.Painter, r ui.Rect) {
+		if div.FocusVisible() {
+			p.FocusRing(r, [4]float32{})
+		}
+	})
+	// The layout shares this frame's width as the last frame's: the old
+	// side's width, as shown, and the rest; halves, as two items growing
+	// alike are laid out, where the share is not set or the sides do not
+	// fit beside each other.
+	switch {
+	case share > 0 && fits:
+		d.split.grow = [2]float32{shown, room - shown}
+	case share > 0 && d.split.width == 0:
+		d.split.grow = [2]float32{share, 1 - share}
+	default:
+		d.split.grow = [2]float32{1, 1}
+	}
+	return moved
 }
 
 // fit lays out a diff that fits its content as its Draw does, its
@@ -627,17 +981,29 @@ func (d *DiffState) fit() {
 	if d.Layout == DiffUnified {
 		eds = d.eds[1:]
 		ed := &d.eds[1]
+		d.oldView.sys = ed.view.sys
 		d.oldView.setStyle(ed.view.font, ed.o.lineHeight, max(1, ed.view.scale), ed.tabSize())
 		d.oldView.setWrap(ed.view.wrap, ed.view.wrapWidth)
 	}
-	d.prepare()
-	for i := range eds {
-		ed := &eds[i]
-		w := ed.r.W
-		if w <= 0 {
-			w = 600
+	layout := func() {
+		d.prepare()
+		for i := range eds {
+			ed := &eds[i]
+			ed.layout(ed.fitWidth(), ed.viewH, max(1, ed.view.scale))
 		}
-		ed.layout(w, ed.viewH, max(1, ed.view.scale))
+	}
+	layout()
+	// The wraps of the lines shown, those folded away left, and the
+	// layout again for the rows they found.
+	measured := false
+	for i := range eds {
+		v := &eds[i].view
+		before := v.heights.wraps.version
+		v.measureWraps(0, time.Second)
+		measured = measured || v.heights.wraps.version != before
+	}
+	if measured {
+		layout()
 	}
 }
 

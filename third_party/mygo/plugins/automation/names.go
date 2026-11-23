@@ -20,7 +20,10 @@ var roleNames = [...]string{
 	"row", "cell", "columnHeader", "tree", "treeItem", "listItem", "menuButton",
 	"toolbar", "radioGroup", "toggleButton", "comboBox", "disclosure", "meter",
 	"stepper", "colorWell", "alertDialog", "menu", "menuBar", "menuItem",
-	"menuItemCheckBox", "menuItemRadio", "heading",
+	"menuItemCheckBox", "menuItemRadio", "heading", "region", "log", "timer",
+	"alert", "separator", "rowHeader", "search", "article",
+	"navigation", "grid", "treeGrid", "deletion", "insertion", "tabPanel",
+	"main", "banner", "contentInfo", "complementary",
 }
 
 func roleName(r platform.AccessRole) string {
@@ -36,7 +39,8 @@ var stateNames = [...]string{
 	"focusable", "disabled", "checked", "mixed", "selected", "expanded",
 	"multiline", "password", "readOnly", "selectable", "offscreen",
 	"multiselectable", "segment", "search", "invalid", "sortAscending",
-	"sortDescending", "expandable", "vertical",
+	"sortDescending", "expandable", "vertical", "busy", "sortOther",
+	"horizontal",
 }
 
 // actionNames are the names of platform.AccessActions' bits, from the
@@ -93,6 +97,9 @@ type inputEvent struct {
 	// ctrl, alt, super or cmdOrCtrl.
 	Mods []string `json:"mods"`
 	Text string   `json:"text"`
+	// Touch marks pointer events as a finger's, on a phone: they pan and fling
+	// what scrolls, rather than press as a mouse's.
+	Touch bool `json:"touch"`
 }
 
 // surfaceEvents returns the events of the surface that evs make, as the
@@ -115,7 +122,7 @@ func surfaceEvents(evs []inputEvent) ([]platform.SurfaceEvent, error) {
 			return nil, errorf(codeInvalid, "event %d: no button %q: left, right or middle", i, e.Button)
 		}
 		clicks := max(e.Clicks, 1)
-		at := platform.SurfaceEvent{X: e.X, Y: e.Y, Mods: mods}
+		at := platform.SurfaceEvent{X: e.X, Y: e.Y, Mods: mods, Touch: e.Touch}
 		pointer := func(kind platform.SurfaceEventKind, clicks int) platform.SurfaceEvent {
 			ev := at
 			ev.Kind, ev.Button, ev.Clicks = kind, button, clicks
@@ -128,6 +135,10 @@ func surfaceEvents(evs []inputEvent) ([]platform.SurfaceEvent, error) {
 			out = append(out, pointer(platform.PointerDown, clicks))
 		case "pointerUp":
 			out = append(out, pointer(platform.PointerUp, clicks))
+			if e.Touch {
+				// A finger is gone as it lifts, as phones tell.
+				out = append(out, platform.SurfaceEvent{Kind: platform.PointerLeave, Touch: true})
+			}
 		case "click":
 			// A double click is two presses, the second counting 2.
 			out = append(out, pointer(platform.PointerMove, 0))

@@ -22,7 +22,7 @@ type markdownTaskRootMigrationUI struct {
 	tabs                       []string
 	drafts                     map[string]string
 	dirty                      map[string]bool
-	notePaths                  [3]string
+	notePaths                  [len(taskNoteNames)]string
 	markdownPath, markdownRoot string
 	instructions               []markdownTaskRootInstructionEditor
 }

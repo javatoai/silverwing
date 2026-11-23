@@ -78,3 +78,20 @@ func TestFullReviewNativePinchDoesNotInventLegacyScroll(t *testing.T) {
 		t.Fatal("native pinch without wheel payload acquired scrolling")
 	}
 }
+
+func TestFullReviewNativeRotationReachesInputHandler(t *testing.T) {
+	var zoom InputEvent
+	view := NewTester(func(c *Context) {
+		Box(c).Fill().HandleInput(func(e InputEvent) bool {
+			if e.Kind == InputZoom {
+				zoom = e
+			}
+			return false
+		})
+	}, 300, 200)
+	defer view.rt.close()
+	view.send(platform.SurfaceEvent{Kind: platform.PointerZoom, X: 20, Y: 20, Scale: 1, Rotation: .25})
+	if zoom.Kind != InputZoom || zoom.Scale != 1 || zoom.Rotation != .25 {
+		t.Fatalf("rotation-only gesture sent %+v, want InputZoom with scale 1 and rotation .25", zoom)
+	}
+}

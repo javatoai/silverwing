@@ -62,9 +62,12 @@ func generate(t *testing.T) string {
 func TestGenerate(t *testing.T) {
 	src := generate(t)
 	for _, want := range []string{
-		`import { call, event, type Channel } from "mygo-runtime";`,
+		`import { bind, event, type Channel } from "mygo-runtime";`,
 		`export type Status = "todo" | "done";`,
 		`export type Priority = 0 | 1 | 2;`,
+		"export interface FixtureChannel {\n  name: string;\n}",
+		"export interface FixtureRecord {\n  values: Record<string, string>;\n}",
+		"export interface FixturePromise {\n  done: boolean;\n}",
 		"/** Task is a unit of work. */\nexport interface Task {",
 		"  id: number;\n",
 		"  /** Title of the task. */\n  title: string;\n",
@@ -74,7 +77,11 @@ func TestGenerate(t *testing.T) {
 		"  due: string | null;\n",
 		"  meta?: Record<string, unknown>;\n",
 		"  parent?: Task;\n",
+		"  channel?: FixtureChannel;\n",
+		"  record?: FixtureRecord;\n",
+		"  promise?: FixturePromise;\n",
 		"  count: string;\n",
+		"  countPtr: string | null;\n",
 		"  raw: unknown;\n",
 		"  data: string;\n",
 		"  scores: Record<number, number>;\n",
@@ -85,12 +92,14 @@ func TestGenerate(t *testing.T) {
 		"  createdAt: string;\n",
 		"export interface PageTask {\n  items: Task[];\n  next?: string;\n}",
 		"/** Tasks manages tasks. */\nexport const Tasks = {",
-		"  /** List returns tasks with the given status. */\n  list(status: Status, limit: number): Promise<PageTask> {\n    return call(\"Tasks.List\", status, limit);\n  },",
+		"  /** List returns tasks with the given status. */\n  list: bind<[Status, number], PageTask>(\"Tasks.List\", (status: Status, limit: number) => [status, limit]),",
 		"   * It fails when a task has no title.\n",
-		"  add(...tasks: Task[]): Promise<void> {\n    return call(\"Tasks.Add\", ...tasks);\n  },",
-		"  count(): Promise<number> {",
-		"  delete(arg0: number): Promise<void> {",
-		"  watch(status: Status, updates: Channel<Task>): Promise<void> {\n    return call(\"Tasks.Watch\", status, updates);\n  },",
+		"  add: bind<[...Task[]], void>(\"Tasks.Add\", (...tasks: Task[]) => [...tasks]),",
+		"  count: bind<[], number>(\"Tasks.Count\", () => []),",
+		"  delete: bind<[number], void>(\"Tasks.Delete\", (arg0: number) => [arg0]),",
+		"  dispatch: bind<[string, string], void>(\"Tasks.Dispatch\", (call_: string, call__: string) => [call_, call__]),",
+		"  dispatchMany: bind<[...string[]], void>(\"Tasks.DispatchMany\", (...call_: string[]) => [...call_]),",
+		"  watch: bind<[Status, Channel<Task>], void>(\"Tasks.Watch\", (status: Status, updates: Channel<Task>) => [status, updates]),",
 		`  taskAdded: event<Task>("task-added"),`,
 	} {
 		if !strings.Contains(src, want) {
@@ -136,11 +145,20 @@ func TestGeneratedCodeTypeChecks(t *testing.T) {
 		t.Fatal(err)
 	}
 	usage := `import { Channel, runtime } from "mygo-runtime";
-import { Tasks, events, type Task, type Status } from "./client";
+import { Tasks, events, type Task, type Status, type FixtureChannel, type PageTask } from "./client";
 const s: Status = "todo";
 const page = await Tasks.list(s, 10);
+const ac = new AbortController();
+const canceled: Promise<PageTask> = Tasks.list.with({ signal: ac.signal })(s, 10);
+void canceled;
 const first: Task | undefined = page.items[0];
-await Tasks.add({ id: 1, title: "x", status: "done", priority: 2, tags: [], due: null, count: "1", raw: null, data: "", scores: {}, matrix: [], children: [], extra: { A: true }, NoTag: "", createdAt: "" });
+const channel: FixtureChannel | undefined = first?.channel;
+channel?.name.toUpperCase();
+first?.record?.values["key"]?.toUpperCase();
+const done: boolean | undefined = first?.promise?.done;
+await Tasks.add({ id: 1, title: "x", status: "done", priority: 2, tags: [], due: null, count: "1", countPtr: "9007199254740993", raw: null, data: "", scores: {}, matrix: [], children: [], extra: { A: true }, NoTag: "", createdAt: "" });
+await Tasks.dispatch("first", "second");
+await Tasks.dispatchMany("first", "second");
 const off = events.taskAdded.on((t) => t.title.toUpperCase());
 off();
 runtime().window.minimize();
@@ -166,6 +184,19 @@ Tasks.list("nope", 1);
 	}
 }
 
+// Without streaming parameters, an app's Channel keeps its original name.
+func TestChannelNameWithoutStreaming(t *testing.T) {
+	out, err := Generate(Model{Events: []Event{{Name: "channel", Type: reflect.TypeFor[fixture.Channel]()}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"export interface Channel {", `channel: event<Channel>("channel")`} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("client lacks %s:\n%s", want, out)
+		}
+	}
+}
+
 func TestNames(t *testing.T) {
 	for in, want := range map[string]string{"Greet": "greet", "GetUserByID": "getUserByID", "URLFor": "urlFor", "ID": "id", "already": "already"} {
 		if got := camel(in); got != want {
@@ -184,6 +215,45 @@ func TestNames(t *testing.T) {
 	}
 	if safeName("new") != "new_" || safeName("x") != "x" {
 		t.Error("safeName")
+	}
+}
+
+func TestMethodNameCollision(t *testing.T) {
+	service := Service{Name: "Links", Type: reflect.TypeFor[struct{}](), Methods: []Method{{Name: "URL"}, {Name: "Url"}}}
+	out, err := Generate(Model{Services: []Service{service}})
+	if err == nil || !strings.Contains(err.Error(), "URL") || !strings.Contains(err.Error(), "Url") || !strings.Contains(err.Error(), "url") {
+		t.Fatalf("Generate = %s, %v; want an error identifying the colliding methods", out, err)
+	}
+	if len(out) != 0 {
+		t.Error("a collision returned a partial client")
+	}
+}
+
+func TestEventNameCollision(t *testing.T) {
+	out, err := Generate(Model{Events: []Event{
+		{Name: "file-changed", Type: reflect.TypeFor[string]()},
+		{Name: "file_changed", Type: reflect.TypeFor[string]()},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "file-changed") || !strings.Contains(err.Error(), "file_changed") || !strings.Contains(err.Error(), "fileChanged") {
+		t.Fatalf("Generate = %s, %v; want an error identifying the colliding events", out, err)
+	}
+	if len(out) != 0 {
+		t.Error("a collision returned a partial client")
+	}
+}
+
+func TestMethodNamesAreScopedToServices(t *testing.T) {
+	out, err := Generate(Model{Services: []Service{
+		{Name: "First", Type: reflect.TypeFor[struct{}](), Methods: []Method{{Name: "URL"}}},
+		{Name: "Second", Type: reflect.TypeFor[struct{}](), Methods: []Method{{Name: "Url"}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`bind<[], void>("First.URL", () => [])`, `bind<[], void>("Second.Url", () => [])`} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("client lacks %s", want)
+		}
 	}
 }
 

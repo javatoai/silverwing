@@ -9,7 +9,7 @@ import (
 )
 
 func (s *app) productionProgressCurrent(state *productionUIState, v *productionView, request *productionWorker) bool {
-	if state == nil || s.releaseUnit.state.production != state || v == nil || request == nil || !v.Busy || v.request != request {
+	if !s.productionAvailable() || state == nil || s.releaseUnit.state.production != state || v == nil || request == nil || !v.Busy || v.request != request {
 		return false
 	}
 	state.mu.Lock()
@@ -17,7 +17,7 @@ func (s *app) productionProgressCurrent(state *productionUIState, v *productionV
 	state.mu.Unlock()
 	i := request.identity
 	return !closed && state.views[productionKey(i.Selection)] == v && v.Generation == i.Generation &&
-		v.Selection == i.Selection && v.BatchID == i.BatchID && v.ManualTag == i.ManualTag && v.Branch == i.Branch &&
+		v.Selection == i.Selection && v.BatchID == i.BatchID && v.Preview == request.preview && v.Branch == i.Branch &&
 		s.snapshot.Home == i.Home && s.currentProductionScope() == i.ConfigScope
 }
 
@@ -41,7 +41,7 @@ func (s *app) renderProductionProgressNotifications(c *ui.Context) {
 			if s.page != "production" || key != state.selected || len(keys) > 1 {
 				name := view.Selection.ServiceID
 				for _, choice := range state.choices {
-					if choice.GroupID == view.Selection.GroupID && choice.ID == view.Selection.ServiceID {
+					if choice.ID == view.Selection.ServiceID {
 						name = choice.Name
 						break
 					}

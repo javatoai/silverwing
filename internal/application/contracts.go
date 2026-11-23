@@ -21,6 +21,7 @@ type WorkspaceCommandBackend interface {
 
 type Snapshot struct {
 	Home         string
+	ProfileID    string
 	Tasks        []Task
 	Repositories []Repository
 	Services     []Service
@@ -37,6 +38,7 @@ type Snapshot struct {
 type Task struct {
 	Materials                                                        MaterialsPermissions
 	ID, Title, Project, Status, Updated, Branch, Path, MaterialsPath string
+	WorkspacePath                                                    string
 	CreatedAt                                                        string
 	RequirementURL, RequirementTitle, GroupID                        string
 	RequirementID, MaterialsStatus, MaterialsFailureReason           string

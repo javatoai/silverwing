@@ -41,7 +41,6 @@ if ($index -ge $fixture.responses.Count) { [Console]::Error.WriteLine('unexpecte
 	calls = fixture + ".calls"
 	config := domain.DefaultAppConfig()
 	config.MeegleExecutablePath = &cli
-	config.CommandProxyTargets = nil
 	service := NewService(storage.NewPaths(filepath.Join(root, "home")), nil, nil)
 	set := func(responses ...string) {
 		t.Helper()

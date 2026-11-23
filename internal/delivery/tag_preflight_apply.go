@@ -65,7 +65,7 @@ func (t *TagTask) validateTagPlan(ctx context.Context, plan TagBatchPreflight) e
 			if item.Pins != pins {
 				return tagPlanChanged(item.SelectionKey, item.Pins, pins)
 			}
-			return t.service.checkApprovedCommit(ctx, item, target, repo.repository)
+			return t.service.checkApprovedCommit(ctx, t.task.config, item, target, repo.repository)
 		})
 		if err != nil {
 			return fmt.Errorf("%s：%w", item.SelectionKey, err)
@@ -74,7 +74,7 @@ func (t *TagTask) validateTagPlan(ctx context.Context, plan TagBatchPreflight) e
 	return t.checkTagPlanScope(ctx, plan)
 }
 
-func (s *Service) checkApprovedCommit(ctx context.Context, item TagBatchPreflightItem, target domain.EffectiveTagTarget, repository string) error {
+func (s *Service) checkApprovedCommit(ctx context.Context, config domain.AppConfig, item TagBatchPreflightItem, target domain.EffectiveTagTarget, repository string) error {
 	if !validOperationID(item.OperationID) || !validCommitSHA(item.Commit) || !validCommitSHA(item.Pins.Source) {
 		return errors.New("预检记录缺少有效提交，请重新预检")
 	}
@@ -88,14 +88,14 @@ func (s *Service) checkApprovedCommit(ctx context.Context, item TagBatchPrefligh
 		return errors.New("预检记录缺少目标分支基线")
 	}
 	if item.Worktree != "" {
-		path, err := s.conflictWorktreePath(item.OperationID)
+		path, err := s.conflictWorktreePath(config, item.OperationID)
 		if err != nil {
 			return err
 		}
 		if !samePathSpelling(path, item.Worktree) {
 			return errors.New("预检工作区路径与记录不一致")
 		}
-		recovered, err := s.recoverTagWorktree(ctx, repository, path, item.BeforeTarget, item.Pins.Source)
+		recovered, err := s.recoverTagWorktree(ctx, config, repository, path, item.BeforeTarget, item.Pins.Source)
 		if err != nil {
 			return err
 		}
@@ -181,7 +181,7 @@ func (t *TagTask) runApprovedTag(ctx context.Context, plan TagBatchPreflight, it
 			return tagPlanChanged(item.SelectionKey, expected, actual)
 		}
 		ctx = withTagRemoteIdentity(ctx, pins.Identity, pins.RemoteKey)
-		if err := s.checkApprovedCommit(ctx, item, target, repo.repository); err != nil {
+		if err := s.checkApprovedCommit(ctx, t.task.config, item, target, repo.repository); err != nil {
 			return err
 		}
 		if err := s.requireTagBranchesAllowed(t.task.config, target, item.Preview); err != nil {
@@ -237,7 +237,7 @@ func (t *TagTask) runApprovedTag(ctx context.Context, plan TagBatchPreflight, it
 			defer cancel()
 			// Only remove the still-verified, clean worktree. Preserve any
 			// files the user added after confirming the preflight.
-			if s.checkApprovedCommit(cleanup, item, target, repo.repository) == nil &&
+			if s.checkApprovedCommit(cleanup, t.task.config, item, target, repo.repository) == nil &&
 				s.removeCleanTagWorktree(cleanup, repo.repository, item.Worktree) == nil {
 				op.PreflightWorktree = ""
 				return s.transition(cleanup, t.task.directory, op, op.State, nil, nil, nil, nil, nil)

@@ -38,14 +38,7 @@ func (s *TaskApplicationService) PreviewAgentInstructions(
 		directoryName = "任务名称"
 	}
 	featureBranch := strings.TrimSpace(request.FeatureBranch)
-	if featureBranch == "" && (len(request.ServiceIDs) > 0 || len(request.ServiceSelections) > 0) {
-		featureBranch = "feature/example"
-	}
 
-	group, err := config.Group(request.GroupID)
-	if err != nil {
-		return AgentDocumentPreview{}, err
-	}
 	if err := ctx.Err(); err != nil {
 		return AgentDocumentPreview{}, err
 	}
@@ -66,8 +59,10 @@ func (s *TaskApplicationService) PreviewAgentInstructions(
 	}
 
 	root := s.Paths.Temp
-	if config.TaskRoot != nil && strings.TrimSpace(*config.TaskRoot) != "" {
-		root = *config.TaskRoot
+	if configured := s.Locks.TaskRoot(config); configured != "" {
+		root = configured
+	} else if s.Paths.ProfileID != "" {
+		return AgentDocumentPreview{}, fmt.Errorf("尚未配置任务根目录")
 	}
 	taskDirectory := filepath.Join(root, directoryName)
 	if strings.TrimSpace(request.RequirementLink) == "" {
@@ -75,7 +70,7 @@ func (s *TaskApplicationService) PreviewAgentInstructions(
 		materials = domain.RequirementMaterialsDirectory{Status: domain.MaterialsReady, WriteRoot: &scope.Owned}
 	}
 	workspaces := make([]domain.ServiceWorkspace, 0)
-	for _, service := range group.Services {
+	for _, service := range config.ServiceCatalog() {
 		if err := ctx.Err(); err != nil {
 			return AgentDocumentPreview{}, err
 		}
@@ -94,10 +89,7 @@ func (s *TaskApplicationService) PreviewAgentInstructions(
 		if !hasSelection {
 			modules = make([]TaskModuleSelection, 0, len(service.Modules))
 			for _, configured := range service.Modules {
-				target := featureBranch
-				if len(service.Modules) != 1 {
-					target += "-" + configured.Name
-				}
+				target := defaultTargetBranch(featureBranch, service.Modules, configured)
 				modules = append(modules, configuredModuleSelection(service, configured, service.EffectiveMasterBranch(configured), target))
 			}
 		}
@@ -127,6 +119,9 @@ func (s *TaskApplicationService) PreviewAgentInstructions(
 			targetBranch := strings.TrimSpace(selected.TargetBranch)
 			if targetBranch == "" && module.Strategy == domain.WorkspaceStandardWorktree {
 				targetBranch = featureBranch
+				if targetBranch == "" {
+					targetBranch = "feature/example"
+				}
 				if len(modules) != 1 {
 					targetBranch += "-" + module.Name
 				}
@@ -175,7 +170,8 @@ func (s *TaskApplicationService) PreviewAgentInstructions(
 	manifest.CreatedAt = stamp
 	manifest.UpdatedAt = stamp
 	manifest.Services = workspaces
-	manifest.GroupID = request.GroupID
+	manifest.ProjectInstructionsGitURL = config.ProjectInstructionsGitURL
+	manifest.ProjectInstructionsGitLocalRoot = config.ProjectInstructionsGitLocalRoot
 	manifest.AgentDocumentLayout = domain.AgentDocumentReferencedV2
 
 	documents := s.Documents

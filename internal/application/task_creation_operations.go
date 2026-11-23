@@ -46,6 +46,13 @@ func (a *App) CreateTask(ctx context.Context, request TaskCreateRequest, progres
 	if err != nil {
 		return result, err
 	}
+	var taskRoot string
+	if config.TaskRoot != nil {
+		taskRoot, err = filepath.Abs(*config.TaskRoot)
+		if err != nil {
+			return result, err
+		}
+	}
 	service := a.taskService(config)
 	defer func() { appendOperationCatalogWarnings(&result, service.Documents) }()
 	ids := append([]string(nil), config.DefaultWorkspaceToolIDs...)
@@ -57,8 +64,8 @@ func (a *App) CreateTask(ctx context.Context, request TaskCreateRequest, progres
 	if err != nil {
 		return result, err
 	}
-	path := filepath.Join(value(config.TaskRoot), manifest.TaskDirectoryName)
-	return operationResultFromAction[domain.TaskManifest](finishCreatedTask(ctx, service, path, manifest, ids, progress))
+	path := filepath.Join(taskRoot, manifest.TaskDirectoryName)
+	return operationResultFromAction[domain.TaskManifest](finishCreatedTask(ctx, config, service, path, manifest, ids, progress))
 }
 
 func orderedTaskProgress(progress func(workspace.TaskCreationProgress)) func(workspace.TaskCreationProgress) {

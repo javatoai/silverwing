@@ -733,7 +733,7 @@ func (s *app) requirementListItem(c *ui.Context, p palette, item application.Req
 		if running {
 			name = "刷新中…"
 		}
-		if menu.Item(name).Icon(icons["refresh"]).Disabled(running || s.backend == nil || scope != s.currentRequirementListIdentity()).Chosen() {
+		if menu.Item(name).IconSVG(icons["refresh"]).Disabled(running || s.backend == nil || scope != s.currentRequirementListIdentity()).Chosen() {
 			s.startRequirementRefresh(item.URL)
 		}
 	})
@@ -789,7 +789,11 @@ func (s *app) requirementDetail(c *ui.Context, p palette, item application.Requi
 	ui.Column(c).Grow(1).MinWidth(0).MinHeight(0).Gap(10).Padding(16).Background(p.surface).Border(1, p.line).Radius(14).Children(func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Start).Children(func() {
 			label(c, item.Title, 14, p.text).FontWeight(400).Grow(1).Wrap()
-			if primaryIconButton(c, "create-task-from-requirement", "plus", "基于需求创建任务", p).Clicked() {
+			if s.profileNeedsTaskRoot() {
+				if iconButtonDisabled(c, "requirement-choose-task-directory", "folder", "选择任务目录", p, s.busy || s.backend == nil || s.settingsUnit.state.settingsPickerBusy).Clicked() {
+					s.pickProfileTaskRoot()
+				}
+			} else if primaryIconButton(c, "create-task-from-requirement", "plus", "基于需求创建任务", p).Clicked() {
 				s.openTaskCreateForm("基于需求创建任务", item.Title, item.URL)
 			}
 			s.renderRequirementReaderActions(c, p, reader, func(menu *overflowMenuBuilder) {

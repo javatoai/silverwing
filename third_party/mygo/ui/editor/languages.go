@@ -8,9 +8,62 @@ import (
 )
 
 // LanguageFor returns the language of a file by its name, as
-// "main.go" or "Makefile", or nil when MyGo knows none for it.
+// "main.go" or "Makefile", or nil when MyGo knows none for it. A
+// template's text is in the language its name gives before the
+// template's extension: "compose.yaml.j2" is Jinja in YAML, and
+// "notice.text.erb" ERB in plain text; without one, as "show.erb", it is
+// in the template's own, HTML for ERB and plain text for Jinja.
 func LanguageFor(filename string) *Language {
 	base := path.Base(strings.ReplaceAll(filename, "\\", "/"))
+	l := languageForBase(base)
+	if l == nil {
+		return nil
+	}
+	t, ok := l.Tokenizer.(*templateLexer)
+	if !ok {
+		return l
+	}
+	inner := base[:len(base)-len(path.Ext(base))]
+	host := languageForBase(inner)
+	if host == nil && path.Ext(inner) == "" {
+		return l
+	}
+	var tk Tokenizer
+	if host != nil {
+		if _, nested := host.Tokenizer.(*templateLexer); nested {
+			return l
+		}
+		tk = host.Tokenizer
+	}
+	if tk == t.host {
+		return l
+	}
+	return templateIn(l, t, host)
+}
+
+// templateIn returns template l with its text in host's language, plain
+// text when host is nil: one language for each pair, made once.
+func templateIn(l *Language, t *templateLexer, host *Language) *Language {
+	key := [2]*Language{l, host}
+	if in, ok := templateHosts.Load(key); ok {
+		return in.(*Language)
+	}
+	in, lt := *l, *t
+	lt.host = nil
+	if host != nil {
+		lt.host = host.Tokenizer
+	}
+	in.Tokenizer = &lt
+	got, _ := templateHosts.LoadOrStore(key, &in)
+	return got.(*Language)
+}
+
+// templateHosts holds the templates templateIn made, by template and host.
+var templateHosts sync.Map
+
+// languageForBase returns the language of a file named base, by its name
+// or else its extension.
+func languageForBase(base string) *Language {
 	ext := strings.ToLower(path.Ext(base))
 	for _, l := range Languages() {
 		for _, f := range l.Filenames {
@@ -27,6 +80,56 @@ func LanguageFor(filename string) *Language {
 		}
 	}
 	return nil
+}
+
+// LanguageForText returns the language of a file by its name, as
+// LanguageFor does, else by the interpreter its text's #! line runs, as
+// "#!/usr/bin/env ruby" or "#!/bin/bash -e"; nil when neither tells.
+func LanguageForText(filename, text string) *Language {
+	if l := LanguageFor(filename); l != nil {
+		return l
+	}
+	name := shebangInterpreter(text)
+	if name == "" {
+		return nil
+	}
+	for _, l := range Languages() {
+		for _, i := range l.Interpreters {
+			if i == name {
+				return l
+			}
+		}
+	}
+	return nil
+}
+
+// shebangInterpreter returns the program the #! line opening text runs,
+// without its directory or version: "python" for "#!/usr/bin/python3.12",
+// and "ruby" for "#!/usr/bin/env -S ruby -w", skipping env's options and
+// variables.
+func shebangInterpreter(text string) string {
+	line, ok := strings.CutPrefix(text, "#!")
+	if !ok {
+		return ""
+	}
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = line[:i]
+	}
+	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		return ""
+	}
+	name := path.Base(fields[0])
+	if name == "env" {
+		name = ""
+		for _, f := range fields[1:] {
+			if !strings.HasPrefix(f, "-") && !strings.Contains(f, "=") {
+				name = path.Base(f)
+				break
+			}
+		}
+	}
+	return strings.TrimRight(name, "0123456789.")
 }
 
 // LanguageNamed returns the language MyGo knows by a name, as "Go",
@@ -67,6 +170,10 @@ func languageAlias(name string) string {
 		return "shell"
 	case "yml":
 		return "yaml"
+	case "eruby":
+		return "erb"
+	case "terraform":
+		return "hcl"
 	case "md":
 		return "markdown"
 	case "rs":
@@ -148,7 +255,7 @@ func makeLanguages() {
 		TokenType, "Array Boolean Date Error Function JSON Map Math Number Object Promise Proxy Reflect RegExp Set String Symbol WeakMap WeakSet BigInt console window document globalThis"}
 	jsStrings := []lexString{cString("\""), cString("'"), {open: "`", close: "`", escape: '\\', multiline: true, interpOpen: "${", interpClose: "}", kind: TokenString}}
 	javascript := &Language{
-		Name: "JavaScript", Extensions: []string{".js", ".mjs", ".cjs", ".jsx"}, LineComment: "//", BlockComment: [2]string{"/*", "*/"},
+		Name: "JavaScript", Extensions: []string{".js", ".mjs", ".cjs", ".jsx"}, Interpreters: []string{"node", "nodejs"}, LineComment: "//", BlockComment: [2]string{"/*", "*/"},
 		Imports:  regexp.MustCompile(`^import[\s{*'"]`),
 		Brackets: cBrackets, AutoClose: cAutoClose("\"", "'", "`"), WordChars: "$", TabSize: 2,
 		Tokenizer: &lexer{lineComments: []string{"//"}, blockComments: [][2]string{{"/*", "*/"}}, strings: jsStrings,
@@ -157,7 +264,7 @@ func makeLanguages() {
 	tsWords := append(append([]any{}, jsWords...), TokenKeyword, "abstract declare enum implements interface keyof namespace private protected public readonly type infer is satisfies override module",
 		TokenType, "any boolean never number object string symbol unknown void bigint")
 	typescript := &Language{
-		Name: "TypeScript", Extensions: []string{".ts", ".mts", ".cts", ".tsx"}, LineComment: "//", BlockComment: [2]string{"/*", "*/"},
+		Name: "TypeScript", Extensions: []string{".ts", ".mts", ".cts", ".tsx"}, Interpreters: []string{"deno", "ts-node", "tsx"}, LineComment: "//", BlockComment: [2]string{"/*", "*/"},
 		Imports:  regexp.MustCompile(`^import[\s{*'"]`),
 		Brackets: cBrackets, AutoClose: cAutoClose("\"", "'", "`"), WordChars: "$", TabSize: 2,
 		Tokenizer: &lexer{lineComments: []string{"//"}, blockComments: [][2]string{{"/*", "*/"}}, strings: jsStrings,
@@ -187,7 +294,7 @@ func makeLanguages() {
 		}
 	}
 	python := &Language{
-		Name: "Python", Extensions: []string{".py", ".pyi", ".pyw"}, Filenames: []string{"SConstruct", "SConscript"}, LineComment: "#",
+		Name: "Python", Extensions: []string{".py", ".pyi", ".pyw"}, Filenames: []string{"SConstruct", "SConscript"}, Interpreters: []string{"python", "pypy"}, LineComment: "#",
 		Imports:  regexp.MustCompile(`^(import|from)\s`),
 		Brackets: cBrackets, AutoClose: cAutoClose("\"", "'"), TabSize: 4,
 		IncreaseIndent: regexp.MustCompile(`^\s*(class|def|elif|else|except|finally|for|if|try|while|with|async|match|case)\b.*:\s*(#.*)?$|[\[({]\s*$`),
@@ -243,7 +350,7 @@ func makeLanguages() {
 			words: words(javaWords...), calls: true, capitalTypes: true, decorator: '@', operators: cOperators},
 	}
 	kotlin := &Language{
-		Name: "Kotlin", Extensions: []string{".kt", ".kts"}, LineComment: "//", BlockComment: [2]string{"/*", "*/"},
+		Name: "Kotlin", Extensions: []string{".kt", ".kts"}, Interpreters: []string{"kotlin"}, LineComment: "//", BlockComment: [2]string{"/*", "*/"},
 		Imports:  regexp.MustCompile(`^import\s`),
 		Brackets: cBrackets, AutoClose: cAutoClose("\"", "'"), TabSize: 4,
 		Tokenizer: &lexer{lineComments: []string{"//"}, blockComments: [][2]string{{"/*", "*/"}}, nestComments: true,
@@ -268,7 +375,7 @@ func makeLanguages() {
 	scalaStrings = append(scalaStrings, lexString{open: `"""`, close: `"""`, multiline: true, kind: TokenString}, cString("\""), cString("'"),
 		lexString{open: "`", close: "`", kind: TokenVariable})
 	scala := &Language{
-		Name: "Scala", Extensions: []string{".scala", ".sc", ".sbt"}, LineComment: "//", BlockComment: [2]string{"/*", "*/"},
+		Name: "Scala", Extensions: []string{".scala", ".sc", ".sbt"}, Interpreters: []string{"scala"}, LineComment: "//", BlockComment: [2]string{"/*", "*/"},
 		Imports:  regexp.MustCompile(`^import\s`),
 		Brackets: cBrackets, AutoClose: cAutoClose("\"", "'"), TabSize: 2,
 		Tokenizer: &lexer{lineComments: []string{"//"}, blockComments: [][2]string{{"/*", "*/"}}, nestComments: true, strings: scalaStrings,
@@ -278,7 +385,7 @@ func makeLanguages() {
 			calls: true, capitalTypes: true, decorator: '@', operators: cOperators},
 	}
 	swift := &Language{
-		Name: "Swift", Extensions: []string{".swift"}, LineComment: "//", BlockComment: [2]string{"/*", "*/"},
+		Name: "Swift", Extensions: []string{".swift"}, Interpreters: []string{"swift"}, LineComment: "//", BlockComment: [2]string{"/*", "*/"},
 		Imports:  regexp.MustCompile(`^(@\w+(\([^)]*\))?\s+)?import\s`),
 		Brackets: cBrackets, AutoClose: cAutoClose("\""), TabSize: 4,
 		Tokenizer: &lexer{lineComments: []string{"//"}, blockComments: [][2]string{{"/*", "*/"}}, nestComments: true,
@@ -301,7 +408,7 @@ func makeLanguages() {
 		}
 	}
 	dart := &Language{
-		Name: "Dart", Extensions: []string{".dart"}, LineComment: "//", BlockComment: [2]string{"/*", "*/"},
+		Name: "Dart", Extensions: []string{".dart"}, Interpreters: []string{"dart"}, LineComment: "//", BlockComment: [2]string{"/*", "*/"},
 		Imports:  regexp.MustCompile(`^(import|export|part)\s`),
 		Brackets: cBrackets, AutoClose: cAutoClose("\"", "'"), WordChars: "$", TabSize: 2,
 		Tokenizer: &lexer{lineComments: []string{"//"}, blockComments: [][2]string{{"/*", "*/"}}, nestComments: true, strings: dartStrings,
@@ -322,7 +429,7 @@ func makeLanguages() {
 			calls: true, capitalTypes: true, directives: true, operators: cOperators},
 	}
 	shell := &Language{
-		Name: "Shell", Extensions: []string{".sh", ".bash", ".zsh", ".fish", ".ksh", ".command"}, Filenames: []string{".bashrc", ".zshrc", ".profile", ".bash_profile", "PKGBUILD", ".envrc"},
+		Name: "Shell", Extensions: []string{".sh", ".bash", ".zsh", ".fish", ".ksh", ".command"}, Filenames: []string{".bashrc", ".zshrc", ".profile", ".bash_profile", "PKGBUILD", ".envrc"}, Interpreters: []string{"sh", "bash", "zsh", "ksh", "dash", "ash", "fish"},
 		LineComment: "#", Brackets: cBrackets, AutoClose: cAutoClose("\"", "'", "`"), TabSize: 2,
 		IncreaseIndent: regexp.MustCompile(`(\bthen|\bdo|\{|\(|\belse)\s*$`),
 		DecreaseIndent: regexp.MustCompile(`^\s*(fi|done|esac|else|elif|\}|\))\b`),
@@ -369,7 +476,7 @@ func makeLanguages() {
 		}
 	}
 	rLang := &Language{
-		Name: "R", Extensions: []string{".r"}, Filenames: []string{".Rprofile"}, LineComment: "#",
+		Name: "R", Extensions: []string{".r"}, Filenames: []string{".Rprofile"}, Interpreters: []string{"Rscript"}, LineComment: "#",
 		Imports:  regexp.MustCompile(`^(library|require)\(`),
 		Brackets: cBrackets, AutoClose: cAutoClose("\"", "'", "`"), WordChars: ".", TabSize: 2,
 		Tokenizer: &lexer{lineComments: []string{"#"}, strings: rStrings,
@@ -379,7 +486,7 @@ func makeLanguages() {
 			identChars: ".", calls: true, operators: "+-*/^=&|!<>~?:$@\\"},
 	}
 	ruby := &Language{
-		Name: "Ruby", Extensions: []string{".rb", ".rake", ".gemspec"}, Filenames: []string{"Gemfile", "Rakefile", "Podfile", "Fastfile"}, LineComment: "#",
+		Name: "Ruby", Extensions: []string{".rb", ".rake", ".gemspec", ".rbs"}, Filenames: []string{"Gemfile", "Rakefile", "Podfile", "Fastfile"}, Interpreters: []string{"ruby", "jruby", "truffleruby"}, LineComment: "#",
 		Imports:  regexp.MustCompile(`^require(_relative)?\b`),
 		Brackets: cBrackets, AutoClose: cAutoClose("\"", "'"), TabSize: 2,
 		IncreaseIndent: regexp.MustCompile(`^\s*(class|module|def|if|unless|else|elsif|while|until|for|begin|rescue|ensure|case|when)\b|\bdo(\s*\|.*\|)?\s*$|[\[({]\s*$`),
@@ -391,7 +498,7 @@ func makeLanguages() {
 			identChars: "?!", calls: true, capitalTypes: true, variables: false, operators: cOperators},
 	}
 	lua := &Language{
-		Name: "Lua", Extensions: []string{".lua"}, LineComment: "--", BlockComment: [2]string{"--[[", "]]"},
+		Name: "Lua", Extensions: []string{".lua"}, Interpreters: []string{"lua", "luajit"}, LineComment: "--", BlockComment: [2]string{"--[[", "]]"},
 		Imports:  regexp.MustCompile(`^local\s+\w+\s*=\s*require\b`),
 		Brackets: cBrackets, AutoClose: cAutoClose("\"", "'"), TabSize: 2,
 		IncreaseIndent: regexp.MustCompile(`\b(then|do|else|function\b.*\))\s*$|^\s*(local\s+)?function\b|[\[({]\s*$`),
@@ -402,7 +509,7 @@ func makeLanguages() {
 			calls:   true, operators: "+-*/%^#=<>~.:"},
 	}
 	php := &Language{
-		Name: "PHP", Extensions: []string{".php"}, LineComment: "//", BlockComment: [2]string{"/*", "*/"},
+		Name: "PHP", Extensions: []string{".php"}, Interpreters: []string{"php"}, LineComment: "//", BlockComment: [2]string{"/*", "*/"},
 		Imports:  regexp.MustCompile(`^(use|require|require_once|include|include_once)\s`),
 		Brackets: cBrackets, AutoClose: cAutoClose("\"", "'"), TabSize: 4,
 		Tokenizer: &lexer{lineComments: []string{"//", "#"}, blockComments: [][2]string{{"/*", "*/"}},
@@ -418,7 +525,7 @@ func makeLanguages() {
 		Tokenizer: &cssLexer{},
 	}
 	html := &Language{
-		Name: "HTML", Extensions: []string{".html", ".htm", ".xhtml", ".vue", ".svelte"}, BlockComment: [2]string{"<!--", "-->"},
+		Name: "HTML", Extensions: []string{".html", ".htm", ".xhtml", ".vue"}, BlockComment: [2]string{"<!--", "-->"},
 		Brackets:  []BracketPair{{Open: "<", Close: ">"}, {Open: "(", Close: ")"}, {Open: "[", Close: "]"}, {Open: "{", Close: "}"}},
 		AutoClose: cAutoClose("\"", "'"), WordChars: "-", TabSize: 2,
 		IncreaseIndent: regexp.MustCompile(`<(\w[\w-]*)(\s[^>]*)?>[^<]*$|[\[({]\s*$`),
@@ -451,7 +558,7 @@ func makeLanguages() {
 			variables: true, identChars: "-", operators: "=&|;<>"},
 	}
 	makefile := &Language{
-		Name: "Makefile", Extensions: []string{".mk", ".mak"}, Filenames: []string{"Makefile", "makefile", "GNUmakefile"}, LineComment: "#",
+		Name: "Makefile", Extensions: []string{".mk", ".mak"}, Filenames: []string{"Makefile", "makefile", "GNUmakefile"}, Interpreters: []string{"make"}, LineComment: "#",
 		Brackets: cBrackets, AutoClose: cAutoClose("\"", "'"), TabSize: 4, HardTabs: true,
 		Tokenizer: &lexer{lineComments: []string{"#"},
 			strings:   []lexString{{open: "\"", close: "\"", escape: '\\', dollar: true, kind: TokenString}, {open: "'", close: "'", kind: TokenString}},
@@ -489,8 +596,64 @@ func makeLanguages() {
 				TokenConstant, "true false null undefined"),
 			calls: true, capitalTypes: true, decorator: '@', operators: cOperators},
 	}
+	nix := &Language{
+		Name: "Nix", Extensions: []string{".nix"}, LineComment: "#", BlockComment: [2]string{"/*", "*/"},
+		Brackets: cBrackets, AutoClose: cAutoClose("\""), WordChars: "-", TabSize: 2,
+		Tokenizer: &lexer{lineComments: []string{"#"}, blockComments: [][2]string{{"/*", "*/"}},
+			// ''…'' strings lex without their escapes, ''$, ''' and ''\,
+			// which end them early: an escape here is one byte.
+			strings: []lexString{{open: "\"", close: "\"", escape: '\\', multiline: true, interpOpen: "${", interpClose: "}", kind: TokenString},
+				{open: "''", close: "''", multiline: true, interpOpen: "${", interpClose: "}", kind: TokenString}},
+			words: words(TokenKeyword, "assert else if in inherit let or rec then with",
+				TokenConstant, "true false null builtins",
+				TokenFunction, "import abort throw derivation toString map removeAttrs baseNameOf dirOf isNull fetchTarball fetchGit"),
+			identChars: "-", assignKeys: true, operators: "+-*/=<>!&|?:@"},
+	}
+	hcl := &Language{
+		Name: "HCL", Extensions: []string{".hcl", ".tf", ".tfvars"}, LineComment: "#", BlockComment: [2]string{"/*", "*/"},
+		Brackets: cBrackets, AutoClose: cAutoClose("\""), WordChars: "-", TabSize: 2,
+		IncreaseIndent: regexp.MustCompile(`[\[({]\s*$`),
+		Tokenizer: &hclLexer{lexer{lineComments: []string{"#", "//"}, blockComments: [][2]string{{"/*", "*/"}},
+			strings: []lexString{{open: "\"", close: "\"", escape: '\\', interpOpen: "${", interpClose: "}", kind: TokenString}},
+			words: words(TokenKeyword, "for in if else endif endfor resource data variable output module provider locals terraform",
+				TokenType, "string number bool list map set object tuple any",
+				TokenConstant, "true false null"),
+			identChars: "-", assignKeys: true, calls: true, operators: "+-*/%=<>!&|?:"}},
+	}
 	// HTML's tokenizer highlights the scripts and styles inside it.
 	html.Tokenizer = &markupLexer{html: true, script: javascript.Tokenizer, style: css.Tokenizer}
+	// ERB's text is HTML, unless its name says otherwise: LanguageFor gives
+	// "config.json.erb" JSON text, and "notice.text.erb" plain text.
+	erb := &Language{
+		Name: "ERB", Extensions: []string{".erb", ".rhtml", ".tt"}, BlockComment: html.BlockComment,
+		Brackets: html.Brackets, AutoClose: html.AutoClose, WordChars: "-", TabSize: 2,
+		IncreaseIndent: html.IncreaseIndent, DecreaseIndent: html.DecreaseIndent,
+		Tokenizer: &templateLexer{host: html.Tokenizer, code: ruby.Tokenizer,
+			tags: []templateTag{{open: "<%#", close: "%>", comment: true}, {open: "<%", close: "%>"}}, marks: "=-", trims: "-", escape: "<%%"},
+	}
+	// Jinja's text is plain, unless its name says what it makes: LanguageFor
+	// gives "compose.yaml.j2" YAML text. The tags may cut that text's
+	// syntax anywhere, and the text resumes after a tag as it was before.
+	jinja := &Language{
+		Name: "Jinja", Extensions: []string{".j2", ".jinja", ".jinja2"}, BlockComment: [2]string{"{#", "#}"},
+		Brackets: cBrackets, AutoClose: cAutoClose("\"", "'"), TabSize: 2,
+		Tokenizer: &templateLexer{
+			code: &lexer{strings: []lexString{cString("\""), cString("'")},
+				words: words(TokenKeyword, "for in if elif else endif endfor set endset macro endmacro call endcall block endblock "+
+					"extends include import from as with endwith without context filter endfilter raw endraw autoescape endautoescape "+
+					"trans endtrans pluralize do continue break and or not is recursive scoped required ignore missing",
+					TokenConstant, "true false none True False None"),
+				calls: true, operators: "+-*/%=<>!|~:?"},
+			tags:  []templateTag{{open: "{#", close: "#}", comment: true}, {open: "{{", close: "}}"}, {open: "{%", close: "%}"}},
+			marks: "-+", trims: "-+"},
+	}
+	svelte := &Language{
+		Name: "Svelte", Extensions: []string{".svelte"}, BlockComment: html.BlockComment,
+		Brackets: html.Brackets, AutoClose: html.AutoClose, WordChars: "-", TabSize: 2,
+		IncreaseIndent: regexp.MustCompile(`<(\w[\w-]*)(\s[^>]*)?>[^<]*$|\{[#:][^}]*\}\s*$|[\[({]\s*$`),
+		DecreaseIndent: regexp.MustCompile(`^\s*(</|\{[/:])`),
+		Tokenizer:      &markupLexer{html: true, script: javascript.Tokenizer, style: css.Tokenizer, braces: true, ts: typescript.Tokenizer},
+	}
 	languageList = []*Language{goLang, javascript, typescript, json, python, rust, c, cpp, java, kotlin, scala, swift, dart, csharp,
-		shell, yaml, toml, sql, rLang, ruby, lua, php, css, html, xml, markdown, diffLang, dockerfile, makefile, protobuf, graphql, zig}
+		shell, yaml, toml, sql, rLang, ruby, lua, php, css, html, erb, svelte, xml, markdown, diffLang, dockerfile, makefile, protobuf, graphql, zig, nix, jinja, hcl}
 }

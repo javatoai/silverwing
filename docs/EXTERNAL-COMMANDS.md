@@ -8,25 +8,23 @@
 
 - 显式命令优先；macOS 子进程 PATH 顺序为命令目录、登录 PATH、原进程 PATH，去重后使用。裸命令在该 PATH 中解析，不把用户命令拼接进 shell。
 - 登录环境只获取 PATH；不导入整套 shell 环境，不修改 SW 进程的全局环境。并发探测共享结果，取消与强制刷新有代次保护。
-- 启用代理的 CLI 使用对应目标的代理和 NO_PROXY；未选择的目标移除继承代理。Bootstrap 保留原有代理继承行为。
+- Silverwing 的代理目标为 Codex CLI 和应用更新。未启用代理的受控命令会移除继承的代理变量。Bootstrap 保留原有环境继承行为。
 - Git 隔离索引、Codex 独立 HOME 等操作专用环境最后叠加。外部工具执行不进入界面绘制循环。
 
 ## 调用清单
 
 | 入口 | 命令与环境 | 超时、取消与运行方式 |
 |---|---|---|
-| integrations 的 Meegle 正文、评论、身份及列表 | 共享准备；按 MEEGLE 代理目标 | 各业务既有超时，调用方上下文，Runner 清理 |
-| documents 的资料项目核对与标题读取 | 共享 Meegle 准备；显式路径和 macOS Node PATH；按 MEEGLE 代理目标 | 核对 20 秒、标题 8 秒；取消不变为资料查询失败 |
+| integrations 的 Meegle 正文、评论、身份及列表 | 共享命令准备 | 各业务既有超时，调用方上下文，Runner 清理 |
+| documents 的资料项目核对与标题读取 | 共享 Meegle 准备，保留显式路径和 macOS Node PATH | 核对 20 秒、标题 8 秒；取消不变为资料查询失败 |
 | platform 的 CLI 状态、登录、退出、诊断 | 同一共享环境；诊断不再遗漏 Node PATH | 既有操作超时，调用方上下文 |
 | Codex RPC、扩展和 MCP 管理 | 共享 CODEX 环境，保留独立 HOME 与操作参数 | 既有超时；RPC 交互与子进程清理保持原路径 |
 | AI 命名、预热 | 共享 CODEX 环境；仅该用途关闭插件、Apps、Hooks、analytics、OTEL；读取 MCP 名称后逐项禁用 | 整体 60 秒；MCP 枚举 5 秒；推理参数降级保持隔离，不因重名重试 |
-| 工作区 Git、clone、Git 版本 | 每次执行在共享准备后叠加 Git 代理环境 | 原有 Git 超时、取消、只读锁设置与清理 |
+| 工作区 Git、clone、Git 版本 | 共享 Git 命令准备 | 原有 Git 超时、取消、只读锁设置与清理 |
 | Git 差异读取 | 共享命令及 PATH；保留独立索引和原有 GIT_* 移除策略 | 原有输出上限、超时与取消 |
-| platform 的扩展仓库、ls-remote、Git 环境及诊断 | 共享 GIT 环境，补齐分支查询代理遗漏 | 原有超时，调用方上下文 |
-| Genbu Tag 查询与轮询 | 共享 GENBU 命令和目标代理；保留原查询协议 | 20 秒，调用方上下文，错误脱敏 |
-| 生产发布的线上版本和构建状态 | Genbu `query-service-pods --json prod <service>` 与 `query-tag --json <service> <tag>`；共享 GENBU 环境，运行版本与流水线状态分开处理 | 每次 20 秒；后台执行，切页继续，退出取消并等待清理 |
+| platform 的扩展仓库、ls-remote、Git 环境及诊断 | 共享 Git 命令准备 | 原有超时，调用方上下文 |
 | 生产发布 Git 编排 | 共享 GIT 环境及仓库锁；独立 fetch 引用空间、隔离 worktree、普通快进保护的 push 和 annotated Tag | 单命令 2 分钟；Tag 对象准备 30 秒；阶段先落盘，失败后核实远端再恢复 |
-| 工作区快捷命令 | 工作区路径约束后共享命令准备；按 WORKSPACE_COMMAND 代理目标 | 用户配置超时、流式输出、取消与清理 |
+| 工作区快捷命令 | 工作区路径约束后共享命令准备 | 用户配置超时、流式输出、取消与清理 |
 | Bootstrap | 共享命令及 PATH；保留相对工作目录约束、代理继承和警告语义 | 每条命令原超时，调用方上下文 |
 | Cursor 检测和启动 | 共享 PATH 查找；保留 Windows 注册表发现；检测可取消 | 启动后独立运行，不随创建操作结束而终止 |
 | IDE 探测与显式启动 | 共享缓存查找；保留标准安装位置、Toolbox 和 `.app` 打开方式 | 探测在后台；启动后独立运行 |
@@ -36,6 +34,10 @@
 | macOS 端口与进程查询 | `/usr/sbin/lsof`、`/bin/ps` | 原有 20/5 秒限制与调用方上下文 |
 | Windows 系统工具、Linux 桌面工具 | 保留平台原生命令、查找和参数约束 | 原有生命周期；不套用 AI 命名隔离或业务代理策略 |
 | 离线 Mermaid | 已验证的随包绝对路径；无 Node 发现或联网安装 | 原有 5 秒总限制、输出上限与 Runner 清理 |
+
+Genbu 状态查询、生产发布的 Genbu 查询和 Dragon 提测审批使用内置平台客户端。在「设置 → 工具与连接 → 平台连接」读取原工具的共用账号 `~/.snowball-config/credentials.json`，只有点击「保存账号」才会更新该文件。Windows 使用 `%USERPROFILE%\.snowball-config\credentials.json`。
+
+所有 `--conf-dir` 使用同一份账号文件，连接开关保存在各自的配置目录。内置客户端的登录会话与原工具的会话缓存独立。旧配置目录中的 `genbu.json` 原样保留，新连接始终读取用户目录中的共用账号文件。
 
 ## 任务创建结果
 

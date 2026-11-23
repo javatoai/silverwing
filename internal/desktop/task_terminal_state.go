@@ -41,7 +41,7 @@ func (t *nativeTaskTerminal) Close() error {
 
 type taskTerminalFactory func(context.Context, string) (taskTerminalProcess, error)
 
-type taskTerminalIdentity struct{ home, id, createdAt string }
+type taskTerminalIdentity struct{ home, taskRoot, id, createdAt string }
 
 type taskTerminalSession struct {
 	id, generation uint64
@@ -115,7 +115,9 @@ func newTaskTerminal(ctx context.Context, root string) (taskTerminalProcess, err
 	if err := taskTerminalRuntimeAvailable(resources, executable, os.Getenv("MYGO_GHOSTTY_VT"), runtime.GOOS); err != nil {
 		return nil, err
 	}
-	t, err := terminal.New(terminal.Options{Dir: directory})
+	// Inheriting NO_COLOR can make interactive programs fall back to
+	// indexed colors despite the terminal's truecolor support.
+	t, err := terminal.New(terminal.Options{Dir: directory, UnsetEnv: []string{"NO_COLOR"}})
 	if err != nil {
 		return nil, fmt.Errorf("启动终端：%w", err)
 	}
@@ -181,7 +183,7 @@ func (s *app) ensureTaskTerminalsCurrent() *taskTerminalOwner {
 	if t.id == "" {
 		return nil
 	}
-	identity := taskTerminalIdentity{s.snapshot.Home, t.id, t.createdAt}
+	identity := taskTerminalIdentity{s.snapshot.Home, s.taskTerminalRootScope(), t.id, t.createdAt}
 	if u.owners == nil {
 		u.owners = make(map[taskTerminalIdentity]*taskTerminalOwner)
 	}
@@ -196,6 +198,13 @@ func (s *app) ensureTaskTerminalsCurrent() *taskTerminalOwner {
 		u.current, owner.focus = owner, true
 	}
 	return owner
+}
+
+func (s *app) taskTerminalRootScope() string {
+	if s.snapshot.ProfileID != "" {
+		return s.snapshotTaskRoot()
+	}
+	return ""
 }
 
 func (s *app) taskTerminalInvalidate() func() {
@@ -390,8 +399,9 @@ func (s *app) prepareTaskTerminalDelete(taskID string) func(context.Context) err
 	}
 	u.deleting[taskID] = true
 	var owners []*taskTerminalOwner
+	taskRoot := s.taskTerminalRootScope()
 	for _, owner := range u.owners {
-		if owner.identity.id != taskID || owner.identity.home != s.snapshot.Home {
+		if owner.identity.id != taskID || owner.identity.home != s.snapshot.Home || owner.identity.taskRoot != taskRoot {
 			continue
 		}
 		owners = append(owners, owner)

@@ -65,6 +65,117 @@ test("takes a Request", async () => {
   expect(res.body).toBeNull();
 });
 
+test("clones preserve response metadata and independently readable bodies", async () => {
+  go = fakeGo({
+    "plugin:fetch.Fetch": (c) => {
+      c.send(1, head(201, [["content-type", "text/plain"], ["x-test", "clone"]]));
+      c.send(1, { chunk: b64("first ") });
+      c.send(1, { chunk: b64("second") });
+    },
+  });
+  const res = await fetch("https://example.com/start");
+  const copy = res.clone();
+  const another = copy.clone();
+  for (const response of [res, copy, another]) {
+    expect(response).toBeInstanceOf(Response);
+    expect(response.url).toBe("https://example.com/final");
+    expect(response.redirected).toBe(true);
+    expect(response.status).toBe(201);
+    expect(response.statusText).toBe("OK");
+    expect(response.headers.get("x-test")).toBe("clone");
+    expect(response.bodyUsed).toBe(false);
+  }
+  expect(await Promise.all([res.text(), copy.text(), another.text()])).toEqual([
+    "first second", "first second", "first second",
+  ]);
+  expect(go.calls).toHaveLength(1);
+});
+
+for (const status of [101, 204]) {
+  test(`clones preserve metadata of a bodyless ${status} response`, async () => {
+    go = fakeGo({
+      "plugin:fetch.Fetch": (c) => {
+        c.send(1, { status, statusText: "", url: "https://example.com/final", redirected: true });
+      },
+    });
+    const res = await fetch("https://example.com/start");
+    const copy = res.clone().clone();
+    expect(copy.status).toBe(status);
+    expect(copy.url).toBe(res.url);
+    expect(copy.redirected).toBe(true);
+    expect(copy.body).toBeNull();
+  });
+}
+
+test("cloning still rejects a locked or consumed body", async () => {
+  go = fakeGo({
+    "plugin:fetch.Fetch": (c) => {
+      c.send(1, head());
+      c.send(1, { chunk: b64("body") });
+    },
+  });
+  const res = await fetch("https://example.com/start");
+  const copy = res.clone();
+  const reader = copy.body!.getReader();
+  expect(() => copy.clone()).toThrow(TypeError);
+  reader.releaseLock();
+  expect(await copy.text()).toBe("body");
+  expect(() => copy.clone()).toThrow(TypeError);
+  expect(await res.text()).toBe("body");
+  expect(() => res.clone()).toThrow(TypeError);
+});
+
+test("rejects URL credentials before calling Go", async () => {
+  go = fakeGo({ "plugin:fetch.Fetch": (c) => c.send(1, head(204)) });
+  for (const url of [
+    "https://user:password@example.com/",
+    "http://user@example.com/",
+    "https://:password@example.com/",
+  ]) {
+    for (const input of [url, new URL(url)]) {
+      await expect(fetch(input)).rejects.toThrow(TypeError);
+      expect(go.calls).toEqual([]);
+    }
+  }
+});
+
+test("allows an empty URL userinfo and explicit authorization", async () => {
+  let got: Req | undefined;
+  go = fakeGo({
+    "plugin:fetch.Fetch": (c) => {
+      got = c.args[0] as Req;
+      c.send(1, head(204));
+    },
+  });
+  await fetch("https://:@example.com/", { headers: { authorization: "Basic dXNlcjpwYXNzd29yZA==" } });
+  expect(got?.url).toBe("https://example.com/");
+  expect(got?.headers).toContainEqual(["authorization", "Basic dXNlcjpwYXNzd29yZA=="]);
+});
+
+test("inherits a Request body when init.body is null or omitted", async () => {
+  let got: Req | undefined;
+  go = fakeGo({
+    "plugin:fetch.Fetch": (c) => {
+      got = c.args[0] as Req;
+      c.send(1, head(204));
+    },
+  });
+  for (const body of [undefined, null, "replacement", ""]) {
+    const req = new Request("https://example.com/x", { method: "POST", body: "original" });
+    await fetch(req, { body });
+    expect(got?.body).toBe(b64(body ?? "original"));
+  }
+});
+
+test("an explicit null signal stops inheriting the Request signal", async () => {
+  go = fakeGo({ "plugin:fetch.Fetch": (c) => c.send(1, head(204)) });
+  const signal = AbortSignal.abort(new Error("original request aborted"));
+  const req = new Request("https://example.com/x", { signal });
+  expect(await fetch(req, { signal: undefined }).catch((err) => err)).toBe(signal.reason);
+  expect((await fetch(req, { signal: null })).status).toBe(204);
+  expect(go.calls).toHaveLength(1);
+});
+
 test("rejects when Go fails", async () => {
   go = fakeGo({
     "plugin:fetch.Fetch": () => {
@@ -153,3 +264,48 @@ test("refuses a GET body", async () => {
   go = fakeGo({});
   expect(fetch("https://example.com", { body: "x" })).rejects.toThrow(TypeError);
 });
+
+test("does not send a JSON POST aborted before its body is ready", async () => {
+  go = fakeGo({
+    "plugin:fetch.Fetch": (c) => {
+      c.send(1, head());
+    },
+  });
+  const ctrl = new AbortController();
+  const pending = fetch("https://example.com/items", {
+    method: "POST",
+    body: JSON.stringify({ name: "Ada" }),
+    signal: ctrl.signal,
+  });
+  ctrl.abort();
+  const result = await pending.then(() => "sent", (error: unknown) => error);
+  expect(result).toBe(ctrl.signal.reason);
+  expect(go.calls).toEqual([]);
+});
+
+for (const source of ["init", "Request"] as const) {
+  test(`does not send a request aborted while reading its ${source} body`, async () => {
+    go = fakeGo({
+      "plugin:fetch.Fetch": (c) => {
+        c.send(1, head());
+      },
+    });
+    let finish!: () => void;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("upload"));
+        finish = () => controller.close();
+      },
+    });
+    const ctrl = new AbortController();
+    const reason = new Error("Upload canceled");
+    const pending = source === "init"
+      ? fetch("https://example.com/upload", { method: "POST", body, signal: ctrl.signal })
+      : fetch(new Request("https://example.com/upload", { method: "POST", body, signal: ctrl.signal }));
+    ctrl.abort(reason);
+    finish();
+    const result = await pending.then(() => "sent", (error: unknown) => error);
+    expect(result).toBe(reason);
+    expect(go.calls).toEqual([]);
+  });
+}

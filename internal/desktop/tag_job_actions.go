@@ -41,6 +41,10 @@ func (s *app) queueTagActionWindow(action application.Action, win tagGenbuAutoPr
 		s.lastError = "Tag 执行后端或窗口不可用。"
 		return false
 	}
+	if action.Kind == "tag.retry" && s.tagRetryRequiresGenbu(action) {
+		s.lastError = "重新打 Tag 需要先在平台连接中启用 Genbu 并保存账号。"
+		return false
+	}
 	scope := s.tagJobScope()
 	if action.TaskID != scope.TaskID || scope.TaskID == "" || scope.TaskPath == "" || scope.ConfigIdentity == "" {
 		s.lastError = "任务上下文已变化，请重新选择后再操作。"
@@ -87,8 +91,33 @@ func (s *app) queueTagActionWindow(action application.Action, win tagGenbuAutoPr
 	return true
 }
 
+func (s *app) tagRetryRequiresGenbu(action application.Action) bool {
+	if s.integrationReady("genbu") {
+		return false
+	}
+	operationID := payloadString(action.Payload, "operationId")
+	if operationID == "" {
+		return false
+	}
+	for _, record := range s.snapshot.TagHistory {
+		if record.ID == operationID && record.TaskID == action.TaskID {
+			return record.RetryKind == "RETAG"
+		}
+	}
+	return false
+}
+
 func (s *app) startNextTagJobCommand(scope application.TagJobScope, view *tagDesktopJobView, backend application.TagJobBackend, win tagGenbuAutoProbeWindow) {
 	if view.commandRunning || len(view.commands) == 0 {
+		return
+	}
+	for len(view.commands) > 0 && view.commands[0].action.Kind == "tag.retry" && s.tagRetryRequiresGenbu(view.commands[0].action) {
+		view.commands = view.commands[1:]
+		if s.tagJobScope() == scope {
+			s.ensureTagHistoryView().Error = "重新打Tag 需要先在平台连接中启用 Genbu 并保存账号。"
+		}
+	}
+	if len(view.commands) == 0 {
 		return
 	}
 	worker := s.newTagDesktopWorker()

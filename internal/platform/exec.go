@@ -15,18 +15,25 @@ import (
 	"silverwing-go/internal/storage"
 )
 
-var proxyEnvironmentNames = []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"}
-
 func commandEnvironment(config domain.AppConfig, target domain.CommandProxyTarget) (map[string]string, []string) {
 	return commandruntime.ProxyEnvironment(config, target)
 }
 
-func (s *Service) runTool(ctx context.Context, config domain.AppConfig, target domain.CommandProxyTarget, executable string, args []string, directory string, timeout time.Duration) (process.Result, error) {
-	return s.runToolWithEnv(ctx, config, target, executable, args, directory, timeout, nil)
+func cliCommandProxyTarget(tool executable.Tool) domain.CommandProxyTarget {
+	if tool == executable.ToolCodex {
+		return domain.ProxyTargetCodex
+	}
+	return ""
 }
 
-func (s *Service) runToolWithEnv(ctx context.Context, config domain.AppConfig, target domain.CommandProxyTarget, command string, args []string, directory string, timeout time.Duration, extraEnv map[string]string) (process.Result, error) {
-	spec, err := commandruntime.Prepare(ctx, s.runner, &config, target, executable.Tool(strings.ToLower(string(target))), command)
+func (s *Service) runTool(ctx context.Context, config domain.AppConfig, tool executable.Tool, command string, args []string, directory string, timeout time.Duration) (process.Result, error) {
+	return s.runToolWithEnv(ctx, config, tool, command, args, directory, timeout, nil)
+}
+
+func (s *Service) runToolWithEnv(ctx context.Context, config domain.AppConfig, tool executable.Tool, command string, args []string, directory string, timeout time.Duration, extraEnv map[string]string) (process.Result, error) {
+	target := cliCommandProxyTarget(tool)
+	// Keep the explicit policy for direct tools so inherited proxy variables are cleared.
+	spec, err := commandruntime.Prepare(ctx, s.runner, &config, target, tool, command)
 	if err != nil {
 		return process.Result{}, err
 	}
@@ -46,17 +53,21 @@ func (s *Service) runToolWithEnv(ctx context.Context, config domain.AppConfig, t
 		if message == "" {
 			message = fmt.Sprintf("退出码 %d", result.ExitCode)
 		}
-		return result, fmt.Errorf("%s 执行失败（%s）：%s", filepath.Base(command), proxyStatus(config, target), redactProxy(config, message))
+		message = redactProxy(config, message)
+		if target != "" {
+			return result, fmt.Errorf("%s 执行失败（%s）：%s", filepath.Base(command), proxyStatus(config, target), message)
+		}
+		return result, fmt.Errorf("%s 执行失败：%s", filepath.Base(command), message)
 	}
 	return result, nil
 }
 
 func (s *Service) runCodex(ctx context.Context, config domain.AppConfig, args ...string) (process.Result, error) {
-	_, resolution, target, err := s.resolveCLIExecutableWithSource(ctx, config, string(executable.ToolCodex))
+	command, err := s.resolveCLIExecutable(ctx, config, executable.ToolCodex)
 	if err != nil {
 		return process.Result{}, err
 	}
-	return s.runToolWithEnv(ctx, config, target, resolution.Command, args, "", 2*time.Minute, cliEnvironmentWithRunner(ctx, s.runner, string(executable.ToolCodex), resolution.Command))
+	return s.runToolWithEnv(ctx, config, executable.ToolCodex, command, args, "", 2*time.Minute, cliEnvironmentWithRunner(ctx, s.runner, executable.ToolCodex, command))
 }
 
 func (s *Service) runCodexOutput(ctx context.Context, config domain.AppConfig, args ...string) (string, error) {
@@ -68,11 +79,11 @@ func (s *Service) runCodexOutput(ctx context.Context, config domain.AppConfig, a
 }
 
 func (s *Service) gitExecutable(ctx context.Context, config domain.AppConfig) string {
-	_, resolution, _, err := s.resolveCLIExecutableWithSource(ctx, config, string(executable.ToolGit))
+	command, err := s.resolveCLIExecutable(ctx, config, executable.ToolGit)
 	if err != nil {
 		return "git"
 	}
-	return resolution.Command
+	return command
 }
 
 func proxyStatus(config domain.AppConfig, target domain.CommandProxyTarget) string {

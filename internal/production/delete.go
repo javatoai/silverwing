@@ -29,14 +29,7 @@ func (s *Service) Delete(ctx context.Context, id, expectedToken string) error {
 	if token, err := hex.DecodeString(expectedToken); err != nil || len(token) != sha256.Size {
 		return errors.New("请重新打开批次并确认删除")
 	}
-	b, err := s.Store.Load(id)
-	if os.IsNotExist(err) {
-		return nil // Retrying an already completed local deletion is harmless.
-	}
-	if err != nil {
-		return err
-	}
-	return s.locks.WithRepository(b.Target.CommonDirectory, func() error {
+	return s.withBatchRecordLock(id, func() error {
 		current, err := s.Store.Load(id)
 		if os.IsNotExist(err) {
 			return nil

@@ -91,6 +91,9 @@ type toolPageState struct {
 
 	diffLeft                string
 	diffRight               string
+	diffJSONMode            bool
+	diffJSONIgnore          string
+	diffJSONResult          tools.JSONDiffResult
 	diffOptions             tools.DiffOptions
 	diffAuto                bool
 	diffHideInputs          bool
@@ -272,7 +275,9 @@ func (s *app) queueDiff() {
 	s.cancelDeveloperToolJob("tool.diff")
 	state.diffRevision++
 	revision, left, right, options := state.diffRevision, state.diffLeft, state.diffRight, state.diffOptions
+	jsonMode, ignore := state.diffJSONMode, state.diffJSONIgnore
 	state.diffHasData = false
+	state.diffJSONResult = tools.JSONDiffResult{}
 	state.diffPending = false
 	state.diffError = ""
 	state.diffExpandedEqual = make(map[int]bool)
@@ -281,7 +286,11 @@ func (s *app) queueDiff() {
 		state.diffCancel()
 		state.diffCancel = nil
 	}
-	if !state.diffAuto || left == "" && right == "" {
+	hasInputs := left != "" || right != ""
+	if jsonMode {
+		hasInputs = strings.TrimSpace(left) != "" && strings.TrimSpace(right) != ""
+	}
+	if !state.diffAuto || !hasInputs {
 		return
 	}
 	state.diffPending = true
@@ -295,12 +304,20 @@ func (s *app) queueDiff() {
 			return
 		case <-timer.C:
 		}
-		result, err := tools.CompareText(ctx, left, right, options)
+		var result tools.DiffResult
+		var jsonResult tools.JSONDiffResult
+		var err error
+		if jsonMode {
+			jsonResult, err = tools.CompareJSON(ctx, left, right, ignore)
+		} else {
+			result, err = tools.CompareText(ctx, left, right, options)
+		}
 		if s.win == nil {
 			return
 		}
 		s.win.Update(func() {
-			if s.toolsUnit.state.tools != state || state.diffRevision != revision || state.diffLeft != left || state.diffRight != right || ctx.Err() != nil {
+			if s.toolsUnit.state.tools != state || state.diffRevision != revision || state.diffLeft != left || state.diffRight != right ||
+				state.diffJSONMode != jsonMode || (jsonMode && state.diffJSONIgnore != ignore) || ctx.Err() != nil {
 				return
 			}
 			state.diffPending = false
@@ -311,6 +328,7 @@ func (s *app) queueDiff() {
 				return
 			}
 			state.diffResult = result
+			state.diffJSONResult = jsonResult
 			state.diffHasData = true
 			state.diffOutputRevision = revision
 			state.diffError = ""
@@ -343,11 +361,18 @@ func (s *toolPageState) handleResult(action application.Action, result applicati
 			s.timeError = ""
 		}
 	case "tool.diff":
-		if payloadUint64(action.Payload, "revision") != s.diffRevision {
+		if payloadUint64(action.Payload, "revision") != s.diffRevision || (action.Payload["mode"] == application.JSONDiffMode) != s.diffJSONMode {
 			return
 		}
 		s.diffPending = false
-		if compared, ok := actionData[tools.DiffResult](result.Data); ok {
+		if s.diffJSONMode {
+			if compared, ok := actionData[tools.JSONDiffResult](result.Data); ok {
+				s.diffJSONResult = compared
+				s.diffHasData = true
+				s.diffError = ""
+				s.diffOutputRevision = s.diffRevision
+			}
+		} else if compared, ok := actionData[tools.DiffResult](result.Data); ok {
 			s.diffResult = compared
 			s.diffHasData = true
 			s.diffError = ""

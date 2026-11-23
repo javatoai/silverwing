@@ -35,6 +35,10 @@ type DiffSeparator struct {
 	a     int // the old line its gap starts at
 	theme *Theme
 	font  ui.Font
+	// oldWidth is the old side's width in a split view, which a header's
+	// text keeps to, as the separator spans the new side too; 0 in a
+	// unified view.
+	oldWidth float32
 }
 
 // ExpandUp shows Step more of its lines, those right above the change
@@ -56,13 +60,19 @@ func DefaultSeparator(c *ui.Context, sep ui.Element, s *DiffSeparator) {
 	t := c.Theme()
 	tx := l10n.In(c.Locale())
 	ct := s.Theme()
-	sep.Padding(4)
+	const pad = 4
+	sep.Padding(pad)
 	sep.Children(func() {
 		bar := ui.Row(c).Grow(1).AlignSelf(ui.Stretch).AlignItems(ui.Center).Gap(t.Space(0.5)).Padding(0, t.Space(1.5)).
 			Radius(6).Background(mixLab(ct.Background, ct.Text, 0.06))
 		bar.Children(func() {
 			if s.Lines == 0 {
-				ui.Text(c, s.Header).Font(s.Font().Family).FontSize(s.Font().Size - 1).TextColor(t.TextMuted).SingleLine().Shrink(1)
+				h := ui.Text(c, s.Header).Font(s.Font().Family).FontSize(s.Font().Size - 1).TextColor(t.TextMuted).SingleLine().Shrink(1)
+				if s.oldWidth > 0 {
+					// Cut at the line between the sides, the bar's padding
+					// short of it.
+					h.MaxWidth(max(s.oldWidth-pad-2*t.Space(1.5), 0))
+				}
 				return
 			}
 			expand := func(fn func()) {
@@ -127,6 +137,9 @@ func (d *DiffState) buildSeparators(c *ui.Context, ct *Theme) {
 	}
 	ed.blocksInView(func(b *block, top float64) {
 		s := &DiffSeparator{d: d, Step: d.expansionLines(), theme: ct, font: ed.view.font}
+		if d.Layout != DiffUnified {
+			s.oldWidth = d.split.widths(d.split.width)[0]
+		}
 		var key string
 		switch b.kind {
 		case blockSeparator:
@@ -139,12 +152,20 @@ func (d *DiffState) buildSeparators(c *ui.Context, ct *Theme) {
 		default:
 			return
 		}
-		label := s.Header
+		label, desc := s.Header, ""
 		if s.Lines > 0 {
-			label = l10n.In(c.Locale()).UnmodifiedLines(s.Lines)
+			tx := l10n.In(c.Locale())
+			label = tx.UnmodifiedLines(s.Lines)
+			// Which lines it collapses, as their numbers show once
+			// expanded.
+			g := d.gapList[b.hunk]
+			oldFrom, newFrom := g.hideA+1, g.hideB+1
+			if desc = tx.UnmodifiedLineNumbers(newFrom, newFrom+g.hidden-1); oldFrom != newFrom {
+				desc = tx.UnmodifiedLineNumbersOldNew(oldFrom, oldFrom+g.hidden-1, newFrom, newFrom+g.hidden-1)
+			}
 		}
 		sep := ui.Box(c).Key(key).Absolute().Left(0).Right(ed.trackWidth()).Top(float32(top - ed.scrollY)).Height(b.height).
-			Role(ui.RoleGroup).Label(label).Cursor(ui.CursorDefault).KeepFocus().HandleInput(shield)
+			Role(ui.RoleGroup).Label(label).Description(desc).Cursor(ui.CursorDefault).KeepFocus().HandleInput(ed.wheelOnly)
 		render(c, sep, s)
 	})
 }

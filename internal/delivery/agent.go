@@ -24,7 +24,6 @@ type AgentBranchReuseKey struct {
 type AgentCreateTaskRequest struct {
 	FolderName               string                `json:"folderName"`
 	FeatureBranch            string                `json:"featureBranch"`
-	GroupID                  string                `json:"groupId"`
 	ServiceIDs               []string              `json:"serviceIds"`
 	RequirementLink          string                `json:"requirementLink"`
 	RequirementTitle         *string               `json:"requirementTitle"`
@@ -154,7 +153,7 @@ func (s *Service) AgentInspect() (AgentInspection, error) {
 		missing = append(missing, "任务资料根目录")
 	}
 	if config.RequirementMaterialsSubdirectory == nil || strings.TrimSpace(*config.RequirementMaterialsSubdirectory) == "" {
-		missing = append(missing, "任务资料子目录")
+		missing = append(missing, "任务角色名")
 	}
 	result := AgentInspection{
 		TaskRoot: config.TaskRoot, RequirementMaterialsRoot: config.RequirementMaterialsRoot,
@@ -209,9 +208,6 @@ func validateAgentRequest(request AgentCreateTaskRequest) error {
 	if strings.TrimSpace(request.FeatureBranch) == "" {
 		return errors.New("任务分支不能为空")
 	}
-	if strings.TrimSpace(request.GroupID) == "" {
-		return errors.New("任务组不能为空")
-	}
 	if len(request.ServiceIDs) == 0 {
 		return errors.New("至少选择一个服务")
 	}
@@ -261,7 +257,7 @@ func (s *Service) agentPreflight(ctx context.Context, config domain.AppConfig, r
 		return agentPreflightResult{}, fmt.Errorf("读取需求资料计划：%w", err)
 	}
 	domainRequest := workspace.CreateTaskRequest{
-		FolderName: folder, FeatureBranch: request.FeatureBranch, GroupID: request.GroupID,
+		FolderName: folder, FeatureBranch: request.FeatureBranch,
 		ServiceIDs: append([]string(nil), request.ServiceIDs...), RequirementLink: request.RequirementLink,
 		TaskNotes: request.TaskNotes, ConfirmedBranchReuseKeys: toWorkspaceReuseKeys(request.ConfirmedBranchReuseKeys),
 	}
@@ -283,6 +279,11 @@ func (s *Service) agentPreflight(ctx context.Context, config domain.AppConfig, r
 	} else if !os.IsNotExist(err) {
 		return agentPreflightResult{}, err
 	}
+	owner := taskDirectory
+	if s.paths.ProfileID != "" {
+		owner = s.paths.ProfileID + "/" + taskDirectory
+		config.RequirementMaterialsRoot = nil
+	}
 	configJSON, err := json.Marshal(config)
 	if err != nil {
 		return agentPreflightResult{}, err
@@ -295,7 +296,7 @@ func (s *Service) agentPreflight(ctx context.Context, config domain.AppConfig, r
 	if err != nil {
 		return agentPreflightResult{}, err
 	}
-	identity := strings.Join([]string{string(configJSON), string(requestJSON), taskDirectory, "taskDirectoryExists=false", string(conflictsJSON)}, "\n")
+	identity := strings.Join([]string{string(configJSON), string(requestJSON), owner, "taskDirectoryExists=false", string(conflictsJSON)}, "\n")
 	digest := sha256.Sum256([]byte(identity))
 	return agentPreflightResult{
 		documentation: documentation, documentationJSON: docBytes, taskDirectory: taskDirectory,
@@ -430,7 +431,7 @@ func (s *Service) applyAgentPlan(ctx context.Context, current AgentOperationReco
 	handoffPath := filepath.Join(fresh.taskDirectory, workspace.AgentWorkspaceDir, workspace.HandoffFileName)
 	_, err = s.tasks.CreateTask(ctx, config, workspace.CreateTaskRequest{
 		FolderName: current.Request.FolderName, FeatureBranch: current.Request.FeatureBranch,
-		GroupID: current.Request.GroupID, ServiceIDs: append([]string(nil), current.Request.ServiceIDs...),
+		ServiceIDs:      append([]string(nil), current.Request.ServiceIDs...),
 		RequirementLink: current.Request.RequirementLink, TaskNotes: current.Request.TaskNotes,
 		ConfirmedBranchReuseKeys: toWorkspaceReuseKeys(current.Request.ConfirmedBranchReuseKeys),
 		AgentContext:             &materialized.AgentContext, AgentHandoffMarkdown: &handoff,

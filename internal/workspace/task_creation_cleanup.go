@@ -17,16 +17,19 @@ type generatedTaskDocument struct {
 // removeGeneratedTaskDocuments removes only the fixed documents created by a
 // task. Every existing path component is checked with Lstat so a link or
 // Windows reparse point cannot redirect cleanup outside the owned task root.
-func removeGeneratedTaskDocuments(taskPath string, owned os.FileInfo) error {
+func removeGeneratedTaskDocuments(taskPath string, owned os.FileInfo, generatedTaskRules bool) error {
 	paths := []generatedTaskDocument{
 		{path: storage.TaskManifestFileName},
 		{path: AgentRouterFileName},
-		{path: filepath.Join(AgentWorkspaceDir, AgentDirectoryName, AgentContextFileName)},
-		{path: filepath.Join(AgentWorkspaceDir, AgentDirectoryName, AgentRulesFileName)},
-		{path: filepath.Join(AgentWorkspaceDir, AgentDirectoryName), directory: true},
-		{path: filepath.Join(AgentWorkspaceDir, HandoffFileName)},
-		{path: AgentWorkspaceDir, directory: true},
 	}
+	if generatedTaskRules {
+		paths = append(paths, generatedTaskDocument{path: filepath.Join(AgentWorkspaceDir, AgentDirectoryName, AgentRulesFileName)})
+	}
+	paths = append(paths,
+		generatedTaskDocument{path: filepath.Join(AgentWorkspaceDir, AgentDirectoryName), directory: true},
+		generatedTaskDocument{path: filepath.Join(AgentWorkspaceDir, HandoffFileName)},
+		generatedTaskDocument{path: AgentWorkspaceDir, directory: true},
+	)
 	for _, generated := range paths {
 		path, _, exists, err := inspectOwnedTaskPath(taskPath, owned, generated.path, generated.directory)
 		if err != nil {

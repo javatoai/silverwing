@@ -23,11 +23,7 @@ func CheckAppendWorktreeRemotes(ctx context.Context, git *GitClient, config doma
 	if manifest.LifecycleStatus != domain.TaskActive {
 		return nil, errors.New("归档任务不能添加工作区")
 	}
-	group, err := config.Group(manifest.GroupID)
-	if err != nil {
-		return nil, err
-	}
-	selections, err := selectionsForAdd(group, request, manifest.FeatureBranch)
+	selections, err := selectionsForAdd(config, request, manifest.FeatureBranch)
 	if err != nil {
 		return nil, err
 	}

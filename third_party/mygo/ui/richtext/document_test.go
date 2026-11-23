@@ -76,3 +76,16 @@ func TestDocumentNoOpSteps(t *testing.T) {
 		t.Fatalf("undo steps %d → %d", n, len(d.undo))
 	}
 }
+
+// TestDocumentInsertTextCRLF checks that InsertText takes the newlines of
+// other systems as typing does.
+func TestDocumentInsertTextCRLF(t *testing.T) {
+	d := NewDocument(NewText("ab"))
+	d.InsertText("c\r\nd\re")
+	if got := d.Text().String(); got != "abc\nd\ne" {
+		t.Fatalf("text %q", got)
+	}
+	if _, c := d.Selection(); c != 7 {
+		t.Fatalf("caret at %d, want 7", c)
+	}
+}

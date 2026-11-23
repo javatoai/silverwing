@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"testing"
+	"unsafe"
 )
 
 // The layout benchmarks lay out trees of boxes shaped as Taffy's flexbox
@@ -113,6 +114,10 @@ var layoutBenches = []layoutBench{
 	}},
 	{"Wide/1000", func() []*benchBox { return newBenchTree(randomBox).flat(1000) }},
 	{"Wide/10000", func() []*benchBox { return newBenchTree(randomBox).flat(10000) }},
+	// A wide tree of many leaves: the walk over the children of every box
+	// in it, which the layout does for the ones out of the flow, is what
+	// makes it slower than the others.
+	{"Wide/100000", func() []*benchBox { return newBenchTree(randomBox).flat(100000) }},
 	{"DeepRandom/4000", func() []*benchBox { return newBenchTree(randomBox).deep(4000, 2) }},
 	{"DeepRandom/10000", func() []*benchBox { return newBenchTree(randomBox).deep(10000, 2) }},
 	{"DeepAuto/4000", func() []*benchBox {
@@ -195,5 +200,55 @@ func TestLayoutBenchTrees(t *testing.T) {
 		} else {
 			t.Log(lb.name, fmt.Sprint(n))
 		}
+	}
+}
+
+// A flex item stays within a cache line: one larger made the deep trees
+// above take longer to lay out.
+func TestFlexItemFitsCacheLine(t *testing.T) {
+	if n := unsafe.Sizeof(flexItem{}); n > 64 {
+		t.Errorf("a flexItem is %d bytes, more than 64", n)
+	}
+}
+
+// A container's layout walks its children, reading these of each of them:
+// the tree's links and the flags, what lays the child out, and the box it is
+// given — and a child that is a container reads of itself how it lays its
+// own out, as it lays out in turn. They must stay in as few cache lines as
+// the walk can read them in — four, with the box — or the deep trees above
+// take longer to lay out. What was measured of the element is the one more
+// line a measuring pass reads beyond these (measured).
+func TestChildWalkFitsCacheLines(t *testing.T) {
+	const want = 4
+	var n node
+	offs := [...]uintptr{
+		unsafe.Offsetof(n.flags), unsafe.Offsetof(n.hidden),
+		unsafe.Offsetof(n.first), unsafe.Offsetof(n.next),
+		unsafe.Offsetof(n.st), unsafe.Offsetof(n.laid),
+		unsafe.Offsetof(n.x), unsafe.Offsetof(n.y),
+		unsafe.Offsetof(n.w), unsafe.Offsetof(n.h),
+		unsafe.Offsetof(n.margin), unsafe.Offsetof(n.pad),
+		unsafe.Offsetof(n.border), unsafe.Offsetof(n.width),
+		unsafe.Offsetof(n.height), unsafe.Offsetof(n.minW),
+		unsafe.Offsetof(n.minH), unsafe.Offsetof(n.maxW),
+		unsafe.Offsetof(n.maxH), unsafe.Offsetof(n.grow),
+		unsafe.Offsetof(n.shrink), unsafe.Offsetof(n.basis),
+		unsafe.Offsetof(n.aspect), unsafe.Offsetof(n.kind),
+		unsafe.Offsetof(n.self), unsafe.Offsetof(n.row),
+		unsafe.Offsetof(n.wrap), unsafe.Offsetof(n.reverse),
+		unsafe.Offsetof(n.wrapReverse), unsafe.Offsetof(n.dir),
+		unsafe.Offsetof(n.justify), unsafe.Offsetof(n.align),
+		unsafe.Offsetof(n.alignContent), unsafe.Offsetof(n.grid),
+		unsafe.Offsetof(n.gapX), unsafe.Offsetof(n.gapY),
+	}
+	var lines [16]bool
+	nlines := 0
+	for _, o := range offs {
+		if l := int(o) / 64; l < len(lines) && !lines[l] {
+			lines[l], nlines = true, nlines+1
+		}
+	}
+	if nlines > want {
+		t.Errorf("a container's walk of its children reads %d cache lines of an element, more than %d", nlines, want)
 	}
 }

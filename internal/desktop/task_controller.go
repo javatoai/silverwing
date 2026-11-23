@@ -20,21 +20,21 @@ type taskState struct {
 	metadataDiscoveryRetry map[string]task
 	taskNavigation         *taskNavigationState
 	taskContextScope       *taskMenuScope
-	taskOpenTools          *taskOpenToolsState
 	taskContextUpdate      func(func())
 	taskIndexes            map[bool]*taskIndexBrowsingState
 	taskListFocused        bool
 	selected               int
 	tasks                  []task
-	notes                  [3]string
-	notePaths              [3]string
-	noteHashes             [3]string
+	notes                  [len(taskNoteNames)]string
+	notePaths              [len(taskNoteNames)]string
+	noteHashes             [len(taskNoteNames)]string
 	noteTab                int
 	noteEditing            bool
 	taskRootTargetFocused  bool
 	taskBranchInfo         *taskBranchInfoState
+	dragonQA               *dragonQAViewState
+	dragonQAJobs           map[dragonQAScope]*dragonQARunningJob
 	taskDeleteRiskJobs     *taskDeleteRiskJobState
-	taskGroupID            string
 	taskServices           map[string]bool
 	taskModules            map[string]map[string]bool
 	taskCreation           *taskCreationState
@@ -67,6 +67,13 @@ func (s *taskController) restoredTaskPresent(taskID string) bool {
 type taskSelectionDialogView interface{ closeTaskDeleteDialog() }
 
 func (s *taskController) leaveTaskSelection(transition TaskTransition, view taskSelectionDialogView) {
+	if state := s.state.dragonQA; state != nil {
+		next := transition.next
+		target := state.scope.task
+		if next.id != target.TaskID || next.path != target.TaskPath || next.createdAt != target.TaskCreatedAt || next.archived {
+			s.state.dragonQA = nil
+		}
+	}
 	if transition.origin == taskTransitionSnapshot {
 		view.closeTaskDeleteDialog()
 	}

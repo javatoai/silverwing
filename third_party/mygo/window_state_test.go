@@ -5,9 +5,12 @@ package mygo
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -21,7 +24,9 @@ func TestWindowState(t *testing.T) {
 	App.SetPath(PathUserData, dir)
 	delay := windowStateDelay
 	windowStateDelay = 20 * time.Millisecond
-	forget := func() { windowStates.loaded, windowStates.byKey, windowStates.dirty = false, nil, false }
+	forget := func() {
+		windowStates.loaded, windowStates.byKey, windowStates.dirty, windowStates.cleared = false, nil, false, false
+	}
 	onMain(forget)
 	// A new process: the states are written as when the app quits, and read
 	// again.
@@ -154,7 +159,9 @@ func (m *memoryStates) SaveWindowStates(states map[string]WindowState) error {
 func TestWindowStateStore(t *testing.T) {
 	dir := t.TempDir()
 	App.SetPath(PathUserData, dir)
-	forget := func() { windowStates.loaded, windowStates.byKey, windowStates.dirty = false, nil, false }
+	forget := func() {
+		windowStates.loaded, windowStates.byKey, windowStates.dirty, windowStates.cleared = false, nil, false, false
+	}
 	onMain(forget)
 	store := &memoryStates{states: map[string]WindowState{"main": {X: 30, Y: 40, Width: 640, Height: 480, Maximized: true}}}
 	App.SetWindowStateStore(store)
@@ -209,6 +216,245 @@ func TestWindowStateStore(t *testing.T) {
 	onMain(saveWindowStates)
 	if got := onMainValue(func() WindowState { return store.states["failed"] }); got != want {
 		t.Errorf("saved %+v after a failed save, want %+v", got, want)
+	}
+}
+
+// TestClearWindowStates: ClearWindowStates empties the store, and no
+// window saves its state again in the run, as one that moves and closes
+// after it, the quit's last save, or one created then with options
+// that would capture a state.
+func TestClearWindowStates(t *testing.T) {
+	forget := func() {
+		windowStates.loaded, windowStates.byKey, windowStates.dirty, windowStates.cleared = false, nil, false, false
+	}
+	onMain(forget)
+	store := &memoryStates{states: map[string]WindowState{"main": {X: 30, Y: 40, Width: 640, Height: 480}, "other": {Width: 300, Height: 200}}}
+	App.SetWindowStateStore(store)
+	t.Cleanup(func() {
+		onMain(forget)
+		App.SetWindowStateStore(nil)
+	})
+	saved := func() map[string]WindowState {
+		return onMainValue(func() map[string]WindowState { return store.states })
+	}
+
+	w, fw := testWindow(t, WindowOptions{StateKey: "main", Width: 400, Height: 300})
+	if o := fw.Opts; o.X != 30 || o.Width != 640 {
+		t.Fatalf("restored options = %+v", o)
+	}
+	// A failed save is tried again by the next one.
+	onMain(func() { store.err = errors.New("database is locked") })
+	if err := App.ClearWindowStates(); err == nil || len(saved()) != 2 {
+		t.Fatalf("ClearWindowStates with a failing store = %v, saved %v", err, saved())
+	}
+	onMain(func() { store.err = nil })
+
+	onMain(func() {
+		fw.SetBounds(platform.Rect{X: 200, Y: 150, Width: 800, Height: 600})
+		w.captureState() // as once the move settled
+	})
+	w.Destroy()
+	if s := saved(); len(s) != 0 {
+		t.Errorf("saved %v after ClearWindowStates", s)
+	}
+	_, fw = testWindow(t, WindowOptions{StateKey: "other", Maximized: true, X: 5, Y: 6, Width: 500, Height: 400})
+	if o := fw.Opts; o.Width != 500 || o.Height != 400 || o.X != 5 {
+		t.Errorf("a window created after ClearWindowStates got %+v, want its options", o)
+	}
+	onMain(saveWindowStates) // as when the app quits
+	if s := saved(); len(s) != 0 {
+		t.Errorf("the quit saved %v after ClearWindowStates", s)
+	}
+	if loads := onMainValue(func() int { return store.loads }); loads != 1 {
+		t.Errorf("states loaded %d times", loads)
+	}
+}
+
+// TestClearWindowStatesOnQuit: states cleared in OnBeforeQuit stay
+// cleared, while the windows close and the app finishes after it.
+func TestClearWindowStatesOnQuit(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	cmd := exec.Command(exe, "-test.run=^$")
+	cmd.Env = append(os.Environ(), "MYGO_TEST_CLEAR_WINDOW_STATES="+dir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, windowStateFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var states map[string]WindowState
+	if err := json.Unmarshal(data, &states); err != nil || len(states) != 0 {
+		t.Errorf("%s after the quit: %s (%v)", windowStateFile, data, err)
+	}
+}
+
+// clearWindowStatesOnQuit is a helper process for
+// TestClearWindowStatesOnQuit: with a window whose state was saved in
+// dir, it quits, clearing the states in OnBeforeQuit.
+func clearWindowStatesOnQuit(dir string) {
+	App.SetPath(PathUserData, dir)
+	App.WhenReady(func() {
+		w := NewWindow(WindowOptions{StateKey: "main", X: 10, Y: 20, Width: 500, Height: 400})
+		w.closeState()
+		if _, err := os.Stat(filepath.Join(dir, windowStateFile)); err != nil {
+			fmt.Println("not saved:", err)
+			os.Exit(1)
+		}
+		App.OnBeforeQuit(func(*QuitEvent) {
+			if err := App.ClearWindowStates(); err != nil {
+				fmt.Println(err)
+				os.Exit(1)
+			}
+		})
+		App.Quit()
+	})
+	if err := App.Run(); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	os.Exit(0)
+}
+
+// pixelScreen, pixelBackend and pixelWindow stand for a backend that
+// places windows in pixels, as Windows does.
+type pixelScreen struct {
+	platform.Screen
+	displays []platform.Display
+}
+
+func (s pixelScreen) Displays() []platform.Display { return s.displays }
+
+type pixelBackend struct {
+	platform.Backend
+	displays []platform.Display
+	accept   bool
+	pixels   platform.Rect // what RestoreWindowState was given
+}
+
+func (b *pixelBackend) Screen() platform.Screen { return pixelScreen{displays: b.displays} }
+
+func (b *pixelBackend) RestoreWindowState(o *platform.WindowOptions, pixels platform.Rect) bool {
+	b.pixels = pixels
+	if !b.accept || pixels.Width <= 0 {
+		return false
+	}
+	o.StateBounds, o.Center = &pixels, false
+	return true
+}
+
+type pixelWindow struct {
+	platform.Window
+	bounds, pixels                   platform.Rect
+	maximized, fullScreen, minimized bool
+}
+
+func (w *pixelWindow) Bounds() platform.Rect            { return w.bounds }
+func (w *pixelWindow) WindowStateBounds() platform.Rect { return w.pixels }
+func (w *pixelWindow) IsMaximized() bool                { return w.maximized }
+func (w *pixelWindow) IsFullScreen() bool               { return w.fullScreen }
+func (w *pixelWindow) IsMinimized() bool                { return w.minimized }
+
+// TestWindowStatePixels restores a state's pixels, read back from JSON,
+// through a backend that places windows in pixels, whatever its DIPs.
+func TestWindowStatePixels(t *testing.T) {
+	data, err := json.Marshal(WindowState{X: 2286, Y: 57, Width: 900, Height: 600, Maximized: true, PixelX: 4000, PixelY: 100, PixelWidth: 1575, PixelHeight: 1050})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"x":2286,"y":57,"width":900,"height":600,"maximized":true,"pixelX":4000,"pixelY":100,"pixelWidth":1575,"pixelHeight":1050}`; string(data) != want {
+		t.Errorf("JSON = %s, want %s", data, want)
+	}
+	var st WindowState
+	if err := json.Unmarshal(data, &st); err != nil {
+		t.Fatal(err)
+	}
+	b := &pixelBackend{accept: true, displays: []platform.Display{{Primary: true, WorkArea: platform.Rect{Width: 1920, Height: 1040}, ScaleFactor: 2}}}
+	p := &platform.WindowOptions{Width: 1180, Height: 780, Center: true, UseContentSize: true}
+	restoreWindowStateFrom(st, p, b)
+	want := platform.Rect{X: 4000, Y: 100, Width: 1575, Height: 1050}
+	if b.pixels != want || p.StateBounds == nil || *p.StateBounds != want {
+		t.Fatalf("pixels = %+v, StateBounds = %+v, want %+v", b.pixels, p.StateBounds, want)
+	}
+	if p.Center || p.UseContentSize || !p.Maximized || p.Width != 900 || p.Height != 600 {
+		t.Errorf("restored options = %+v", *p)
+	}
+}
+
+// TestWindowStateWithoutPixels takes the DIPs of a state without pixels
+// only where every display has the same scale, and centers the window
+// whose pixels show on no display.
+func TestWindowStateWithoutPixels(t *testing.T) {
+	primary := platform.Display{Primary: true, WorkArea: platform.Rect{Width: 1920, Height: 1040}, ScaleFactor: 2}
+	tests := []struct {
+		name     string
+		pixels   platform.Rect
+		displays []platform.Display
+		want     platform.WindowOptions
+	}{
+		{
+			name:     "same scale",
+			displays: []platform.Display{{Primary: true, WorkArea: platform.Rect{Width: 3840, Height: 2080}, ScaleFactor: 2}},
+			want:     platform.WindowOptions{X: 100, Y: 100, Width: 2200, Height: 1200, FullScreen: true},
+		},
+		{
+			name:     "different scales",
+			displays: []platform.Display{primary, {WorkArea: platform.Rect{X: 1920, Width: 1280, Height: 720}, ScaleFactor: 1.25}},
+			want:     platform.WindowOptions{Center: true, Width: 1920, Height: 1040, FullScreen: true},
+		},
+		{
+			name:     "disconnected display",
+			pixels:   platform.Rect{X: 8000, Y: 100, Width: 2200, Height: 1200},
+			displays: []platform.Display{primary},
+			want:     platform.WindowOptions{Center: true, Width: 1920, Height: 1040, FullScreen: true},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := WindowState{X: 100, Y: 100, Width: 2200, Height: 1200, FullScreen: true,
+				PixelX: tt.pixels.X, PixelY: tt.pixels.Y, PixelWidth: tt.pixels.Width, PixelHeight: tt.pixels.Height}
+			p := &platform.WindowOptions{}
+			restoreWindowStateFrom(st, p, &pixelBackend{displays: tt.displays})
+			if !reflect.DeepEqual(*p, tt.want) {
+				t.Errorf("restored options = %+v, want %+v", *p, tt.want)
+			}
+		})
+	}
+	if !sameScale(nil) {
+		t.Error("sameScale(nil) = false")
+	}
+}
+
+// TestWindowStatePixelCapture captures a window's DIPs and pixels
+// together, and keeps both while the window is maximized, full screen or
+// minimized, or the system gives no pixels.
+func TestWindowStatePixelCapture(t *testing.T) {
+	n := &pixelWindow{
+		bounds: platform.Rect{X: 2286, Y: 57, Width: 900, Height: 600},
+		pixels: platform.Rect{X: 4001, Y: 101, Width: 1575, Height: 1050},
+	}
+	saved := captureWindowState(WindowState{}, n)
+	want := WindowState{X: 2286, Y: 57, Width: 900, Height: 600, PixelX: 4001, PixelY: 101, PixelWidth: 1575, PixelHeight: 1050}
+	if saved != want {
+		t.Fatalf("captured %+v, want %+v", saved, want)
+	}
+	n.bounds, n.pixels = platform.Rect{Width: 1920, Height: 1040}, platform.Rect{Width: 3840, Height: 2080}
+	for _, state := range []string{"maximized", "full screen", "minimized"} {
+		n.maximized, n.fullScreen, n.minimized = state == "maximized", state == "full screen", state == "minimized"
+		st := captureWindowState(saved, n)
+		st.Maximized, st.FullScreen = false, false
+		if st != saved {
+			t.Errorf("%s: captured %+v, want the normal bounds %+v", state, st, saved)
+		}
+	}
+	n.maximized, n.fullScreen, n.minimized = false, false, false
+	n.pixels = platform.Rect{}
+	if st := captureWindowState(saved, n); st != saved {
+		t.Errorf("without pixels: captured %+v, want %+v", st, saved)
 	}
 }
 

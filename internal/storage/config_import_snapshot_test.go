@@ -31,7 +31,6 @@ func TestConfigImportSnapshotRejectsReplacedArchiveWithoutMutation(t *testing.T)
 		t.Fatal(err)
 	}
 	before, _ := target.readShardFiles()
-	backupsBefore, _ := target.Backups()
 	preview, fingerprint, err := target.PreviewImportSnapshotContext(ctx, archive)
 	if err != nil || preview.Theme != domain.ThemeLight {
 		t.Fatalf("preview: %+v %v", preview, err)
@@ -51,9 +50,8 @@ func TestConfigImportSnapshotRejectsReplacedArchiveWithoutMutation(t *testing.T)
 		t.Fatalf("changed archive accepted: %v", err)
 	}
 	after, _ := target.readShardFiles()
-	backupsAfter, _ := target.Backups()
-	if !reflect.DeepEqual(before, after) || len(backupsBefore) != len(backupsAfter) {
-		t.Fatal("rejected archive changed configuration or created a backup")
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("rejected archive changed configuration")
 	}
 	_, latest, err := target.PreviewImportSnapshotContext(ctx, archive)
 	if err != nil || latest == fingerprint {
@@ -63,6 +61,7 @@ func TestConfigImportSnapshotRejectsReplacedArchiveWithoutMutation(t *testing.T)
 	if err != nil || imported.Theme != domain.ThemeDark {
 		t.Fatalf("freshly confirmed archive did not import: %+v %v", imported, err)
 	}
+	assertConfigBackupDirectoryAbsent(t, target)
 }
 
 func TestConfigImportSnapshotRejectsCanceledAndInvalidSources(t *testing.T) {

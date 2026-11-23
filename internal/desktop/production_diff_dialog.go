@@ -17,7 +17,7 @@ import (
 type productionDiffDialog struct {
 	Open                                              bool
 	Title, SourceRef, TargetRef, SourceSHA, TargetSHA string
-	Home, Scope, BatchID, ManualTag                   string
+	Home, Scope, BatchID                              string
 	Incoming                                          bool
 	View                                              *productionView
 	Target                                            production.Target
@@ -30,14 +30,14 @@ type productionDiffDialog struct {
 }
 
 func (s *app) openProductionDiff(v *productionView, title, sourceRef, targetRef, sourceSHA, targetSHA string, incoming bool) {
-	if v == nil || v.Preview == nil || sourceSHA == "" || targetSHA == "" || s.page != "production" {
+	if !s.productionAvailable() || v == nil || v.Preview == nil || sourceSHA == "" || targetSHA == "" || s.page != "production" {
 		return
 	}
 	state := s.ensureProduction()
 	s.closeProductionDiff()
 	d := &productionDiffDialog{Open: true, Title: title, SourceRef: sourceRef, TargetRef: targetRef, SourceSHA: sourceSHA, TargetSHA: targetSHA, Incoming: incoming,
-		Home: s.snapshot.Home, Scope: productionConfigScope(s.settingsUnit.state.configJSON), BatchID: v.BatchID, ManualTag: v.ManualTag, View: v, Target: v.Preview.Target, Preview: v.Preview}
-	d.Review = workspaceHistoryState{Open: true, Mode: "production", FileView: "tree", LeftWidth: 250, TaskSessionKey: fmt.Sprintf("production-diff-%p", d), CompareMode: workspaceReviewMainline}
+		Home: s.snapshot.Home, Scope: productionConfigScope(s.settingsUnit.state.configJSON), BatchID: v.BatchID, View: v, Target: v.Preview.Target, Preview: v.Preview}
+	d.Review = workspaceHistoryState{Open: true, Mode: "production", FileView: "tree", TaskSessionKey: fmt.Sprintf("production-diff-%p", d), CompareMode: workspaceReviewMainline}
 	d.Review.DiffBaseLabel, d.Review.DiffTargetLabel, d.Review.FileContentLabel = targetRef, "源提交 · "+sourceRef, "源提交内容"
 	if incoming {
 		d.Review.DiffBaseLabel = "合并基点"
@@ -48,9 +48,9 @@ func (s *app) openProductionDiff(v *productionView, title, sourceRef, targetRef,
 }
 
 func (s *app) productionDiffCurrent(d *productionDiffDialog) bool {
-	return d != nil && d.Open && d.View != nil && s.releaseUnit.state.production != nil && s.releaseUnit.state.production.diffDialog == d && s.page == "production" &&
+	return d != nil && d.Open && d.View != nil && s.releaseUnit.state.production != nil && s.releaseUnit.state.production.diffDialog == d && s.productionAvailable() && s.page == "production" &&
 		s.productionView() == d.View && s.snapshot.Home == d.Home && productionConfigScope(s.settingsUnit.state.configJSON) == d.Scope &&
-		d.View.BatchID == d.BatchID && d.View.ManualTag == d.ManualTag && d.View.Preview != nil && d.View.Preview == d.Preview && d.View.Preview.Target == d.Target
+		d.View.BatchID == d.BatchID && d.View.Preview != nil && d.View.Preview == d.Preview && d.View.Preview.Target == d.Target
 }
 
 func (s *app) closeProductionDiff() {
@@ -211,14 +211,28 @@ func (s *app) renderProductionDiffDialog(c *ui.Context, p palette) {
 		return
 	}
 	r := &d.Review
+	const margin, padding = 12, 8
+	width, height := c.Size()
 	dialog := ui.DialogBase(c.Key("production-diff-dialog"), &d.Open, func(backdrop, panel ui.Element) {
 		backdrop.Background(ui.RGBA(0, 0, 0, .38))
-		width, height := c.Size()
-		panel.Width(min(float32(1360), width-32)).Height(min(float32(850), height-32)).MinWidth(0).MinHeight(0).Padding(16).Gap(10).Background(p.surface).Border(1, p.line).Radius(16)
+		panel.Label("Git 差异").Width(max(1, width-2*margin)).Height(max(1, height-2*margin)).
+			MinWidth(0).MinHeight(0).Padding(padding).Gap(8).Background(p.surface).Border(1, p.line).Radius(12)
 		panel.OnShortcut(0, ui.KeyEscape, func() { s.closeProductionDiff() })
 		panel.Children(func() {
-			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				label(c, d.Title, 18, p.text).FontWeight(600).Grow(1).MinWidth(0).SingleLine()
+			refs := "源：" + d.SourceRef + "　→　目标：" + d.TargetRef
+			refsTooltip := "源：" + d.SourceRef + "  " + d.SourceSHA + "\n目标：" + d.TargetRef + "  " + d.TargetSHA
+			if d.Incoming {
+				refsTooltip += "\n文件差异按合并基点计算待合入变更。"
+			}
+			ui.Row(c).FillWidth().Height(44).Shrink(0).Gap(8).AlignItems(ui.Center).Children(func() {
+				workspaceReviewHeading(c, p, d.Title, refs, refsTooltip)
+				workspaceReviewModeButton(c, "production-diff-files", "文件差异", d.Tab != "commits", p, func() { d.Tab = "files" })
+				workspaceReviewModeButton(c, "production-diff-commits", "提交记录", d.Tab == "commits", p, func() { d.Tab = "commits" })
+				if d.Tab != "commits" && len(r.Files) > 0 {
+					s.overflowMenu(c, p, "production-diff-more", "更多审阅操作", false, func(menu *overflowMenuBuilder) {
+						workspaceReviewFileViewMenuItem(menu, r)
+					})
+				}
 				if productionButton(c, "production-diff-close", "关闭", p, false, false) {
 					s.closeProductionDiff()
 				}
@@ -226,29 +240,21 @@ func (s *app) renderProductionDiffDialog(c *ui.Context, p palette) {
 			if !d.Open {
 				return
 			}
-			sourceTooltip := d.SourceRef + "\n" + d.SourceSHA
-			if d.Incoming {
-				sourceTooltip += "\n文件差异按合并基点计算待合入变更。"
-			}
-			label(c, "源："+d.SourceRef, 11, p.muted).FillWidth().MinWidth(0).SingleLine().Tooltip(sourceTooltip)
-			label(c, "目标："+d.TargetRef, 11, p.muted).FillWidth().MinWidth(0).SingleLine().Tooltip(d.TargetRef + "\n" + d.TargetSHA)
-			ui.Row(c).FillWidth().Gap(6).Children(func() {
-				workspaceReviewModeButton(c, "production-diff-files", "文件差异", d.Tab != "commits", p, func() { d.Tab = "files" })
-				workspaceReviewModeButton(c, "production-diff-commits", "提交记录", d.Tab == "commits", p, func() { d.Tab = "commits" })
-			})
 			if r.Error != "" {
-				label(c, r.Error, 12, p.danger).Wrap()
-				if productionButton(c, "production-diff-retry", "重试", p, false, false) {
-					if r.SelectedPath == "" {
-						s.requestProductionDiff(d, nil)
-					} else {
-						f := workspace.CompareChange{Path: r.SelectedPath, OldPath: r.SelectedOldPath, Kind: string(r.SelectedKind)}
-						s.requestProductionDiff(d, &f)
+				ui.Row(c).FillWidth().Shrink(0).Gap(8).Padding(8, 10).Radius(8).Background(p.amberBg).AlignItems(ui.Center).Children(func() {
+					label(c, r.Error, 12, p.danger).Grow(1).MinWidth(0).Wrap()
+					if productionButton(c, "production-diff-retry", "重试", p, false, r.FilesLoading || r.PreviewLoading) {
+						if r.SelectedPath == "" {
+							s.requestProductionDiff(d, nil)
+						} else {
+							f := workspace.CompareChange{Path: r.SelectedPath, OldPath: r.SelectedOldPath, Kind: string(r.SelectedKind)}
+							s.requestProductionDiff(d, &f)
+						}
 					}
-				}
+				})
 			}
-			ui.Divider(c)
 			if d.Tab == "commits" {
+				ui.Divider(c)
 				if d.Incoming {
 					label(c, "< 目标独有 · > 来源独有", 11, p.muted).Wrap()
 				}
@@ -256,18 +262,10 @@ func (s *app) renderProductionDiffDialog(c *ui.Context, p palette) {
 				return
 			}
 			if !r.FilesLoading && r.Error == "" && r.TargetCommit != "" && len(r.Files) == 0 {
-				label(c, "无差异", 12, p.muted)
+				ui.Column(c).Grow(1).FillWidth().Center().Children(func() { label(c, "无差异", 12, p.muted) })
 				return
 			}
-			ui.Row(c).Grow(1).FillWidth().MinHeight(0).MinWidth(0).Gap(10).AlignItems(ui.Stretch).Children(func() {
-				left := min(float32(280), max(float32(160), (width-64)*.25))
-				if r.LeftCollapsed {
-					left = 36
-				}
-				ui.Column(c).Width(left).MinHeight(0).Shrink(0).Children(func() { s.renderWorkspaceReviewFileList(c, p, r, "production-diff") })
-				ui.Box(c).Width(1).Background(p.line)
-				ui.Column(c).Grow(1).MinWidth(0).MinHeight(0).Children(func() { s.renderWorkspaceReviewPreview(c, p, r, "production-diff") })
-			})
+			s.renderWorkspaceReviewFiles(c, p, r, "production-diff", width-2*(margin+padding))
 		})
 	})
 	if dialog.Dismissed() || !d.Open {

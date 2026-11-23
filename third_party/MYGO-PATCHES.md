@@ -39,25 +39,25 @@ cover both cases; compare/remove these patches when updating upstream MyGO.
 
 ## Upstream baseline and upgrade verification
 
-The local module is MyGO v0.7.3, upstream commit
-`6f28d7bb07b31177cf218e51586f6a5e99b38016`, with Go 1.27.3. It was rebased by
-three-way comparison from v0.5.0 (`208e952608a63f0d3d9cfa8c4a069b7e3a83a943`),
-the previous patched source, and the official v0.7.3 tag archive. The root
-module keeps `replace github.com/egoist/mygo => ./third_party/mygo`; changing
-the required version alone does not update the code that Silverwing builds.
+The local module is MyGO v0.10.0, upstream commit
+`ebde9399baf2734b3361856a53f4036859973d1d`, with Go 1.27.3. It was rebased by
+comparing the official v0.7.3 archive, Silverwing's patched working tree and
+the official v0.10.0 archive. The root module keeps
+`replace github.com/egoist/mygo => ./third_party/mygo`; the required version
+and the vendored source both need to change on an upgrade.
 
 The existing removal of upstream examples, website, documentation and repository
 maintenance files is retained. Runtime resources, native sources, licenses and
-the upstream and local regression tests remain present. The upgrade's original
-dependency/module snapshot, source archives, SHA-256 manifests and merge decisions
-are preserved in the local ignored `build/mygo-upgrade-20261029` directory.
+the upstream and local regression tests remain present. The source archive,
+SHA-256 manifests and merge inventory are in the local ignored
+`build/mygo-upgrade-v0.10.0-20261119` directory.
 
 Test the nested module separately from the application: `go test ./...` at the
-repository root does not execute MyGO's tests. The v0.7.3 migration passed
-`go -C third_party/mygo test -mod=readonly ./ui/editor/... ./ui/markdown/...`,
-the native menu/toast/split regression group, the text package, and targeted
-Windows pre-growth, resize-settling and resize-loop-scope tests. Physical IME,
-mixed-DPI dragging and macOS packaging are distinct acceptance checks.
+repository root does not execute MyGO's tests. On upgrades, exercise its
+editor, Markdown, core UI, terminal and Windows resize suites. Physical IME,
+mixed-DPI dragging and macOS packaging are distinct acceptance checks. The
+[v0.10.0 release notes](https://github.com/egoist/mygo/releases/tag/v0.10.0)
+describe upstream rendering and layout changes.
 
 ## Keyboard menu Escape and item tooltips
 
@@ -380,7 +380,7 @@ mouse release. The first visible frame must match the known geometry, so
 startup animation or a covered desktop cannot satisfy the probe.
 Recheck this patch when upgrading MyGO rather than carrying it unconditionally.
 
-## MyGO 0.7.3 Markdown reading adapters
+## MyGO Markdown reading adapters
 
 The local native diff divider, clipboard failure handling, source-preserving
 CRLF/IME transactions, caret indexing and Windows live-resize behavior extend
@@ -409,8 +409,7 @@ unused: existing trusted-resource and retry gates remain authoritative. Mermaid
 is registered through `Options.Code["mermaid"]`; normal code uses the framework
 highlighted Body and the original-source application copy action.
 
-Upstream is from https://github.com/egoist/mygo/tree/v0.7.3. Module versions
-are pinned in go.mod and go.sum; keep checksum validation enabled.
+Module versions are pinned in go.mod and go.sum. Keep checksum validation enabled.
 
 Targeted reading fixtures cover 420/960 DIP, light/dark, numbered-list first-line
 alignment, tables and exact source/code clipboard data, metadata counterexamples,
@@ -500,8 +499,8 @@ Windows wheel-derived PointerZoom retains its original precise scroll payload.
 The UI engine first offers zoom to its existing consumer and only falls back to
 scroll when unconsumed; native pinch events without a scroll payload do not
 acquire scrolling. This preserves legacy Ctrl-wheel hosts and content transforms.
-Document.Set keeps app equality callbacks outside the lock while rejecting dirty
-state decisions from an older content/saved generation under the state lock.
+The v0.10.0 upstream Document.Set generation check replaces the earlier local
+implementation. The Silverwing recovery and stale comparison test remains.
 
 The environment proxy resolver accepts ALL_PROXY/all_proxy as a fallback for
 unset HTTP/HTTPS-specific proxies, preserving standard NO_PROXY and loopback

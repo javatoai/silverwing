@@ -416,9 +416,6 @@ func (i *WorkspaceBranchReuseInspector) InspectWithProgress(ctx context.Context,
 		if actualCommon != expectedCommon {
 			return fmt.Errorf("配置的仓库 Git 身份已变化：%s", root)
 		}
-		if err := i.Git.PruneWorktrees(root); err != nil {
-			return err
-		}
 		request := WorkspaceProvisionRequest{TaskDirectory: root, Repository: repository, Service: service, RequestedFeatureBranch: requestedBranch, ModuleBranches: moduleBranches}
 		targets, err := resolveModuleTargets(request)
 		if err != nil {
@@ -459,7 +456,7 @@ func (i *WorkspaceBranchReuseInspector) inspectClone(ctx context.Context, reposi
 		return nil, err
 	}
 	if _, err = i.remoteHeadSHA(ctx, repository, base.Remote, base.Branch); errors.Is(err, errRemoteBranchMissing) {
-		return nil, fmt.Errorf("远程主分支不存在：%s/%s", base.Remote, base.Branch)
+		return nil, fmt.Errorf("远程克隆分支不存在：%s", FormatRemoteBranchRef(base))
 	} else if err != nil {
 		return nil, err
 	}
@@ -506,7 +503,6 @@ func (i *WorkspaceBranchReuseInspector) inspectWorktree(ctx context.Context, rep
 	if localSHA == "" && len(refs) == 0 {
 		return nil, nil
 	}
-	var occupied []WorktreeRecord
 	if localSHA != "" {
 		all, err := i.Git.Worktrees(root)
 		if err != nil {
@@ -514,7 +510,7 @@ func (i *WorkspaceBranchReuseInspector) inspectWorktree(ctx context.Context, rep
 		}
 		for _, wt := range all {
 			if wt.Branch == branch {
-				occupied = append(occupied, wt)
+				return nil, fmt.Errorf("分支 %s 已在其他工作树检出：%s", branch, wt.Path)
 			}
 		}
 	}
@@ -526,14 +522,7 @@ func (i *WorkspaceBranchReuseInspector) inspectWorktree(ctx context.Context, rep
 		base := moduleMasterBranch(service, module)
 		display = base[strings.LastIndex(base, "/")+1:]
 	}
-	var paths, locked []string
-	for _, wt := range occupied {
-		paths = append(paths, wt.Path)
-		if wt.Locked {
-			locked = append(locked, wt.Path)
-		}
-	}
-	return &BranchReuseConflict{Key: BranchReuseKey{repository.ID, branch, branchReuseFingerprint(localSHA, refs, occupied)}, ServiceID: service.ID, ServiceName: service.DisplayName, ModuleName: display, LocalExists: localSHA != "", RemoteRefs: stripRemoteRefHashes(refs), OccupiedWorktreePaths: paths, LockedWorktreePaths: locked, Strategy: domain.WorkspaceStandardWorktree, RequiresForceAttach: len(paths) > 0}, nil
+	return &BranchReuseConflict{Key: BranchReuseKey{repository.ID, branch, branchReuseFingerprint(localSHA, refs, nil)}, ServiceID: service.ID, ServiceName: service.DisplayName, ModuleName: display, LocalExists: localSHA != "", RemoteRefs: stripRemoteRefHashes(refs), Strategy: domain.WorkspaceStandardWorktree}, nil
 }
 
 func stripRemoteRefHashes(refs []string) []string {
@@ -638,9 +627,6 @@ func (p *StandardWorktreeProvisioner) provisionLocked(ctx context.Context, reque
 		if common != expectedCommon {
 			return fmt.Errorf("仓库 Git 身份已变化，请先手动刷新并检查配置")
 		}
-		if err := p.Git.PruneWorktrees(root); err != nil {
-			return err
-		}
 		if err := os.MkdirAll(request.TaskDirectory, 0o755); err != nil {
 			return err
 		}
@@ -730,27 +716,20 @@ func (p *StandardWorktreeProvisioner) provisionLocked(ctx context.Context, reque
 		if err != nil {
 			return failPreparation(err)
 		}
-		var matching []WorktreeRecord
 		if localExists {
 			for _, wt := range worktrees {
-				if wt.Branch == branch && filepath.Clean(wt.Path) != target {
-					matching = append(matching, wt)
+				if wt.Branch == branch && !samePath(wt.Path, target) {
+					return failPreparation(fmt.Errorf("分支 %s 已在其他工作树检出：%s", branch, wt.Path))
 				}
 			}
 		}
-		key := BranchReuseKey{RepositoryID: request.Repository.ID, Branch: branch, StateFingerprint: branchReuseFingerprint(localSHA, remoteRefs, matching)}
+		key := BranchReuseKey{RepositoryID: request.Repository.ID, Branch: branch, StateFingerprint: branchReuseFingerprint(localSHA, remoteRefs, nil)}
 		if (localExists || len(remoteRefs) > 0) && !confirmedReuse(request, key) {
 			return failPreparation(fmt.Errorf("分支复用状态已变化或尚未确认，请重新预检：%s", branch))
 		}
-		for _, wt := range matching {
-			if wt.Locked {
-				return failPreparation(fmt.Errorf("分支被锁定 Worktree 占用，不能强制复用：%s", wt.Path))
-			}
-		}
-		forceAttach := len(matching) > 0
 		switch {
 		case localExists:
-			err = p.Git.AddExistingWorktree(root, target, branch, forceAttach)
+			err = p.Git.AddExistingWorktree(root, target, branch)
 		case len(remoteRefs) > 0:
 			err = p.Git.AddTrackedRemoteWorktree(root, target, branch, base.Remote)
 		default:
@@ -772,7 +751,7 @@ func (p *StandardWorktreeProvisioner) provisionLocked(ctx context.Context, reque
 			names, _ := resolveModuleDisplayNames(request)
 			moduleName = names[module.ID]
 		}
-		workspace := domain.ServiceWorkspace{RepositoryID: request.Repository.ID, ServiceName: request.Service.DisplayName, RepositoryPath: request.Repository.RootPath, WorktreePath: target, DevelopmentTool: request.Service.DevelopmentTool, Branch: branch, Health: domain.WorkspaceReady, GroupServiceID: request.Service.ID, ModuleID: module.ID, ModuleName: moduleName, Strategy: domain.WorkspaceStandardWorktree, ModuleSource: source, OriginURL: request.Repository.OriginURL, BaseRef: ptr(remoteBaseRef), TargetBranch: ptr(branch), TagEnabled: module.TagEnabled, TagMode: module.TagMode, TagTargetRef: optionalPtr(moduleEffectiveTagTarget(request.Service, module)), TagMessagePrefix: module.TagMessagePrefix, BranchCreatedByTask: !localExists, ForceWorktreeAttach: forceAttach, PushRemote: base.Remote}
+		workspace := domain.ServiceWorkspace{RepositoryID: request.Repository.ID, ServiceName: request.Service.DisplayName, RepositoryPath: request.Repository.RootPath, WorktreePath: target, DevelopmentTool: request.Service.DevelopmentTool, Branch: branch, Health: domain.WorkspaceReady, GroupServiceID: request.Service.ID, ModuleID: module.ID, ModuleName: moduleName, Strategy: domain.WorkspaceStandardWorktree, ModuleSource: source, OriginURL: request.Repository.OriginURL, BaseRef: ptr(remoteBaseRef), TargetBranch: ptr(branch), TagEnabled: module.TagEnabled, TagMode: module.TagMode, TagTargetRef: optionalPtr(moduleEffectiveTagTarget(request.Service, module)), TagMessagePrefix: module.TagMessagePrefix, BranchCreatedByTask: !localExists, PushRemote: base.Remote}
 		created = append(created, workspace)
 		var initialized BootstrapResult
 		initializing := taskCreationProgressForModule(request.Service, module, TaskCreationPhaseInitializingWorkspace)
@@ -843,7 +822,6 @@ func rollbackStandardWithProgress(ctx context.Context, p *StandardWorktreeProvis
 			cause = errors.Join(cause, cleanupErr)
 		}
 	}
-	_, _ = p.Git.RunContext(ctx, request.Repository.RootPath, 2*time.Minute, false, false, "worktree", "prune")
 	return nil, cause
 }
 func (p *StandardWorktreeProvisioner) Rollback(ctx context.Context, request WorkspaceProvisionRequest, workspaces []domain.ServiceWorkspace) error {
@@ -895,12 +873,6 @@ func (p *StandardWorktreeProvisioner) RollbackWithProgress(ctx context.Context, 
 				} else if err := gitCleanupProgressFailure("删除任务分支 "+ws.Branch, result); err != nil {
 					progressFailures[i] = errors.Join(progressFailures[i], err)
 				}
-			}
-		}
-		if _, err := p.Git.RunContext(ctx, root, 2*time.Minute, false, false, "worktree", "prune"); err != nil {
-			failure = errors.Join(failure, err)
-			for i := range progressFailures {
-				progressFailures[i] = errors.Join(progressFailures[i], err)
 			}
 		}
 		for i := len(workspaces) - 1; i >= 0; i-- {
@@ -966,9 +938,6 @@ func (p *IndependentCloneProvisioner) ProvisionWithProgress(ctx context.Context,
 			return failChecking(err)
 		}
 		targetBranch := strings.TrimSpace(request.ModuleBranches[module.ID])
-		if targetBranch == "" {
-			targetBranch = ""
-		}
 		directory, err := moduleDirectoryName(request.Service, module)
 		if err != nil {
 			return failChecking(err)
@@ -988,9 +957,9 @@ func (p *IndependentCloneProvisioner) ProvisionWithProgress(ctx context.Context,
 		emitTaskCreationProgress(onProgress, checked)
 		targetSHA := ""
 		refresh := taskCreationProgressForModule(request.Service, module, TaskCreationPhaseRefreshingRemote)
-		err = runTaskCreationProgress(onProgress, refresh, "正在检查远程主分支和目标分支", "远程分支检查完成", func() error {
+		err = runTaskCreationProgress(onProgress, refresh, "正在检查远程克隆分支", "远程分支检查完成", func() error {
 			if _, err := p.remoteHeadSHA(ctx, request.Repository, base.Remote, base.Branch); errors.Is(err, errRemoteBranchMissing) {
-				return fmt.Errorf("远程主分支不存在：%s", FormatRemoteBranchRef(base))
+				return fmt.Errorf("远程克隆分支不存在：%s", FormatRemoteBranchRef(base))
 			} else if err != nil {
 				return err
 			}
@@ -1008,7 +977,7 @@ func (p *IndependentCloneProvisioner) ProvisionWithProgress(ctx context.Context,
 		}
 		ownership := cloneOwnership(request.TaskDirectory, request.Repository.ID, request.Service.ID, module.ID)
 		cloning := taskCreationProgressForModule(request.Service, module, TaskCreationPhaseCloningRepository)
-		err = runTaskCreationProgress(onProgress, cloning, "正在克隆仓库并准备目标分支", "仓库克隆完成", func() error {
+		err = runTaskCreationProgress(onProgress, cloning, "正在克隆所选分支", "仓库克隆完成", func() error {
 			if targetBranch != "" && targetSHA == "" {
 				for _, confirmed := range request.ConfirmedBranchReuseKeys {
 					if confirmed.RepositoryID == request.Repository.ID && confirmed.Branch == targetBranch && strings.HasPrefix(confirmed.StateFingerprint, "clone-remote=") {
@@ -1043,6 +1012,15 @@ func (p *IndependentCloneProvisioner) ProvisionWithProgress(ctx context.Context,
 					}
 					_, err := p.Git.RunContext(ctx, staging, 5*time.Minute, true, false, "switch", "-c", targetBranch)
 					return err
+				}
+				// A similarly named tag can become the clone candidate if the branch disappears after preflight.
+				upstream, err := p.Git.RunContext(ctx, staging, time.Minute, false, true, "rev-parse", "--symbolic-full-name", "--verify", "@{upstream}")
+				if err != nil {
+					return err
+				}
+				upstreamRef := strings.TrimSpace(upstream.Stdout)
+				if upstream.ExitCode != 0 || !strings.HasPrefix(upstreamRef, "refs/remotes/") || !strings.HasSuffix(upstreamRef, "/"+base.Branch) {
+					return fmt.Errorf("克隆未跟踪所选远程分支：%s", FormatRemoteBranchRef(base))
 				}
 				return nil
 			})

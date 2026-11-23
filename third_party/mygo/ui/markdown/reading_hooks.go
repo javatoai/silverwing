@@ -37,6 +37,12 @@ func TextBlocks(doc *parser.Document) []TextBlock {
 			text.WriteString(doc.Lines(i))
 		case parser.HTMLBlock, parser.MathBlock:
 			text.WriteString(strings.TrimRight(doc.Lines(i), "\n"))
+		case parser.Quote:
+			if alert := doc.Block(i).Alert; alert != parser.NoAlert {
+				text.WriteString(alert.String())
+			} else {
+				continue
+			}
 		default:
 			continue
 		}

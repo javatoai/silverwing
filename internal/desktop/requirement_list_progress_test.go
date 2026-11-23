@@ -220,9 +220,17 @@ func TestRequirementListProgressDialogLayoutsAndDismissal(t *testing.T) {
 					p.sprintTitle = strings.Repeat("长 Sprint 名称与项目说明 ", 8)
 					s.applyRequirementListProgress(request, application.RequirementListProgress{Sequence: 1, Phase: "account", Status: "done"})
 					s.applyRequirementListProgress(request, application.RequirementListProgress{Sequence: 2, Phase: "sprints", Status: "done", Completed: 1, Total: 1})
-					s.applyRequirementListProgress(request, application.RequirementListProgress{Sequence: 3, Phase: "items", Status: "done", WorkItemType: "userstory", Completed: 1, Total: 4})
-					s.applyRequirementListProgress(request, application.RequirementListProgress{Sequence: 4, Phase: "items", Status: "done", WorkItemType: "technical", Completed: 2, Total: 4})
-					s.applyRequirementListProgress(request, application.RequirementListProgress{Sequence: 5, Phase: "items", Status: "running", WorkItemType: "bug", Label: "缺陷", Completed: 2, Total: 4})
+					const queryMessage = "正在并行查询工作项…"
+					s.applyRequirementListProgress(request, application.RequirementListProgress{Sequence: 3, Phase: "items", Status: "running", Message: queryMessage, Total: 4})
+					for i, kind := range []string{"userstory", "technical", "bug", "othertask"} {
+						s.applyRequirementListProgress(request, application.RequirementListProgress{Sequence: uint64(i + 4), Phase: "items", Status: "running", WorkItemType: kind, Message: "正在读取当前类型…", Total: 4})
+					}
+					s.applyRequirementListProgress(request, application.RequirementListProgress{Sequence: 8, Phase: "items", Status: "done", WorkItemType: "technical", Message: "查询完成，1 条", Completed: 1, Total: 4})
+					s.applyRequirementListProgress(request, application.RequirementListProgress{Sequence: 9, Phase: "items", Status: "done", WorkItemType: "userstory", Message: "查询完成，2 条", Completed: 2, Total: 4})
+					if summary := p.steps["items"]; summary.Status != "running" || summary.Message != queryMessage || summary.Completed != 2 || summary.Total != 4 ||
+						p.steps["items:technical"].Message != "查询完成，1 条" || p.steps["items:bug"].Status != "running" || p.steps["items:othertask"].Status != "running" {
+						t.Fatal("per-type updates replaced the query summary or another type's status")
+					}
 					if failed {
 						s.failRequirementListProgress(p, []string{strings.Repeat("缺陷查询超时，请重试。", 30)})
 						s.requirementUnit.state.requirementsLoading = false
@@ -234,6 +242,9 @@ func TestRequirementListProgressDialogLayoutsAndDismissal(t *testing.T) {
 					panel, found := tester.Find("需求刷新进度弹窗")
 					if !found || panel.W > 600 || panel.X < 0 || panel.Y < 0 || panel.Y+panel.H > 800 {
 						t.Fatalf("progress panel escaped viewport: %+v", panel)
+					}
+					if !failed && !tester.HasText(queryMessage) {
+						t.Fatal("progress dialog did not show the parallel query summary")
 					}
 					buttonName := "收起"
 					if failed {

@@ -121,13 +121,19 @@ func (s *TaskApplicationService) inspectMaterialsDeletion(ctx context.Context, c
 		preview.Reason = "无法安全确认任务资料目录"
 		return
 	}
+	if settings := config.MaterialsGitSettings(); settings.LocalRoot != "" {
+		if err := documents.ValidateLocalDocumentsBranch(settings.LocalRoot, settings.Branch); err != nil {
+			preview.Reason = err.Error()
+			return
+		}
+	}
 	preview.Root = scope.Root
 	id := stringValue(manifest.RequirementID)
 	if link := domain.ParseFeishuWorkItemLink(manifest.RequirementLink); link != nil {
 		id = link.WorkItemID
 	}
 	if id == "" || !strings.HasPrefix(filepath.Base(scope.Root), id+"-") ||
-		isWithin(taskPath, scope.Root) || isWithin(stringValue(config.TaskRoot), scope.Root) {
+		isWithin(taskPath, scope.Root) || isWithin(s.Locks.TaskRoot(config), scope.Root) {
 		preview.Reason = "资料目录与需求身份不一致或包含受保护的任务目录"
 		return
 	}
@@ -143,11 +149,12 @@ func (s *TaskApplicationService) inspectMaterialsDeletion(ctx context.Context, c
 	scanner, ok := s.Manifests.(interface {
 		Scan(string) (storage.ManifestScanResult, error)
 	})
-	if !ok || config.TaskRoot == nil {
+	taskRoot := s.Locks.TaskRoot(config)
+	if !ok || taskRoot == "" {
 		preview.Reason = "无法完整检查资料共用关系"
 		return
 	}
-	scan, err := scanner.Scan(*config.TaskRoot)
+	scan, err := scanner.Scan(taskRoot)
 	if err != nil || len(scan.Failures) != 0 || len(scan.UnsupportedPaths) != 0 {
 		preview.Reason = "任务清单未能完整读取，保留资料"
 		return
@@ -160,7 +167,8 @@ func (s *TaskApplicationService) inspectMaterialsDeletion(ctx context.Context, c
 		if samePath(entry.Path, taskPath) {
 			continue
 		}
-		otherOwned := strings.TrimSpace(stringValue(entry.Manifest.RequirementMaterials.WriteRoot))
+		other := documents.ResolveBoundTaskMaterials(entry.Manifest, config)
+		otherOwned := strings.TrimSpace(stringValue(other.RequirementMaterials.WriteRoot))
 		if otherOwned == "" {
 			continue
 		}
@@ -231,11 +239,15 @@ func sharesTaskMaterials(owned string, target documents.AnnualMaterialsScope, ot
 }
 
 func (s *TaskApplicationService) DeleteWithOptions(ctx context.Context, config domain.AppConfig, taskPath string, options TaskDeleteOptions) error {
-	return s.Locks.WithTaskRoot(stringValue(config.TaskRoot), func() error {
+	return s.Locks.WithTaskRoot(s.Locks.TaskRoot(config), func() error {
 		return s.withTaskManifestMutation(ctx, config, taskPath, func(ctx context.Context, manifest domain.TaskManifest) error {
 			var release func()
 			if paths, err := config.MaterialsPaths(); err == nil {
-				release, err = storage.AcquireMaterialsRepositoryLock(paths.Root)
+				acquire := storage.AcquireMaterialsRepositoryLock
+				if config.MaterialsGitSettings().LocalRoot != "" {
+					acquire = storage.AcquireDocumentsRepositoryLock
+				}
+				release, err = acquire(paths.Root)
 				if err != nil {
 					return err
 				}

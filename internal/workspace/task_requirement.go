@@ -45,9 +45,9 @@ func (s *TaskApplicationService) LinkRequirement(ctx context.Context, config dom
 		if err := s.Manifests.Save(taskPath, next); err != nil {
 			return err
 		}
-		if _, err := s.Documents.writeTaskDocuments(taskPath, next, repositoryInfos(config), nil, false); err != nil {
+		if _, err := s.Documents.writeTaskDocuments(taskPath, next, config, nil, false); err != nil {
 			rollback := s.Manifests.Save(taskPath, original)
-			_, documentsErr := s.Documents.writeTaskDocuments(taskPath, original, repositoryInfos(config), nil, false)
+			_, documentsErr := s.Documents.writeTaskDocuments(taskPath, original, config, nil, false)
 			return fmt.Errorf("关联需求时更新说明失败：%w", errors.Join(err, rollback, documentsErr))
 		}
 		updated = next

@@ -1,4 +1,4 @@
-//go:build linux && (amd64 || arm64)
+//go:build linux && !android && (amd64 || arm64)
 
 package gl
 
@@ -40,12 +40,14 @@ type Offscreen struct {
 	w, h             int
 	release          func()
 	r                *Renderer
+	// scratch holds the framebuffer's rows as GL reads them (Read).
+	scratch []byte
 }
 
 // NewOffscreen makes an OpenGL 3.3 context, or with es an OpenGL ES 3.0
 // one, current on the calling thread, and binds a framebuffer of w×h
 // pixels.
-func NewOffscreen(es bool, w, h int) (o *Offscreen, err error) {
+func NewOffscreen(es bool, w, h int) (_ *Offscreen, err error) {
 	lib, err := purego.Dlopen("libEGL.so.1", purego.RTLD_NOW|purego.RTLD_GLOBAL)
 	if err != nil {
 		return nil, fmt.Errorf("gl: no EGL: %w", err)
@@ -71,16 +73,18 @@ func NewOffscreen(es bool, w, h int) (o *Offscreen, err error) {
 		}
 		purego.RegisterFunc(fn, sym)
 	}
-	o = &Offscreen{w: w, h: h}
+	// A variable of its own, not a named result: returning an error would
+	// set that to nil before the undoing below runs.
+	off := &Offscreen{w: w, h: h}
 	var undo []func()
-	o.release = func() {
+	off.release = func() {
 		for i := len(undo) - 1; i >= 0; i-- {
 			undo[i]()
 		}
 	}
 	defer func() {
 		if err != nil {
-			o.release()
+			off.release()
 		}
 	}()
 	display := getPlatformDisplay(eglPlatformSurfaceless, 0, nil)
@@ -114,22 +118,22 @@ func NewOffscreen(es bool, w, h int) (o *Offscreen, err error) {
 	if err := load(); err != nil {
 		return nil, err
 	}
-	o.tex = newTexture(glRGBA8, glRGBA, w, h, nil, 0)
-	glGenFramebuffers(1, &o.fb)
-	glBindFramebuffer(glFramebuffer, o.fb)
-	glFramebufferTexture2D(glFramebuffer, glColorAttachment0, glTexture2D, o.tex, 0)
+	off.tex = newTexture(glRGBA8, glRGBA, w, h, nil, 0)
+	glGenFramebuffers(1, &off.fb)
+	glBindFramebuffer(glFramebuffer, off.fb)
+	glFramebufferTexture2D(glFramebuffer, glColorAttachment0, glTexture2D, off.tex, 0)
 	undo = append(undo, func() {
-		if o.r != nil {
-			o.r.Release()
+		if off.r != nil {
+			off.r.Release()
 		}
 		glBindFramebuffer(glFramebuffer, 0)
-		glDeleteFramebuffers(1, &o.fb)
-		glDeleteTextures(1, &o.tex)
+		glDeleteFramebuffers(1, &off.fb)
+		glDeleteTextures(1, &off.tex)
 	})
 	if status := glCheckFramebufferState(glFramebuffer); status != glFramebufferDone {
 		return nil, fmt.Errorf("gl: framebuffer incomplete: %#x", status)
 	}
-	return o, nil
+	return off, nil
 }
 
 // Info names the context's version and renderer.
@@ -152,6 +156,50 @@ func (o *Offscreen) Render(s *scene.Scene) ([]byte, error) {
 		return nil, err
 	}
 	return ReadFramebuffer(o.w, o.h)
+}
+
+// Draw draws s, which must be as large as the framebuffer, with a
+// renderer of its own, without reading it back: Read does, for videos
+// (plugins/render), which build the next frame meanwhile.
+func (o *Offscreen) Draw(s *scene.Scene) error {
+	if o.r == nil {
+		r, err := New()
+		if err != nil {
+			return err
+		}
+		o.r = r
+	}
+	if err := o.r.Render(s); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Read copies the framebuffer into dst, as the CPU renderer draws:
+// premultiplied BGRA rows from the top, 4×width bytes each.
+func (o *Offscreen) Read(dst []byte) error {
+	n := 4 * o.w * o.h
+	if len(dst) < n {
+		return errors.New("gl: too small a buffer")
+	}
+	if len(o.scratch) != n {
+		o.scratch = make([]byte, n)
+	}
+	glPixelStorei(glPackAlignment, 1)
+	glReadPixels(0, 0, int32(o.w), int32(o.h), glRGBA, glUnsignedByte, unsafe.Pointer(&o.scratch[0]))
+	glPixelStorei(glPackAlignment, 4)
+	if e := glGetError(); e != glNoError {
+		return fmt.Errorf("gl: reading the framebuffer failed (error %#x)", e)
+	}
+	// GL's rows go up, and its bytes are RGBA.
+	row := 4 * o.w
+	for y := range o.h {
+		src, out := o.scratch[row*(o.h-1-y):][:row], dst[row*y:][:row]
+		for x := 0; x < row; x += 4 {
+			out[x], out[x+1], out[x+2], out[x+3] = src[x+2], src[x+1], src[x], src[x+3]
+		}
+	}
+	return nil
 }
 
 // Release deletes the context and what it holds.

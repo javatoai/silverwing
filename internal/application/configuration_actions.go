@@ -29,36 +29,9 @@ func (a *App) configurationAction(ctx context.Context, action Action) (ActionRes
 
 func (a *App) configurationActionWithProgress(ctx context.Context, action Action, onProgress func(workspace.TaskRootMigrationProgress)) (ActionResult, error) {
 	switch action.Kind {
-	case "config.view":
-		data := a.Config.FileSnapshot()
-		text := value(data.Content)
-		if data.ReadError != nil {
-			text = *data.ReadError
-		}
-		return ActionResult{Message: "配置文件原始内容已读取", Path: data.Path, Text: text, Data: data}, nil
-	case "config.backups":
-		data, err := a.Config.BackupsContext(ctx)
-		return ActionResult{Message: "配置备份已读取", Data: data}, err
-	case "config.delete-backups":
-		if !boolPayload(action, "confirmed") {
-			return ActionResult{}, errors.New("请先确认删除所选备份")
-		}
-		var ids []string
-		if err := decodeField(action, "ids", &ids); err != nil {
-			return ActionResult{}, errors.New("备份选择无效，请重新选择")
-		}
-		data, err := a.Config.DeleteBackupsContext(ctx, ids)
-		return ActionResult{Message: fmt.Sprintf("已删除 %d 个配置备份", len(data.DeletedIDs)), Data: data}, err
-	case "config.import-preview", "config.restore-preview":
+	case "config.import-preview":
 		path := actionPath(action)
-		var config domain.AppConfig
-		var fingerprint string
-		var err error
-		if action.Kind == "config.import-preview" {
-			config, fingerprint, err = a.Config.PreviewImportSnapshotContext(ctx, path)
-		} else {
-			config, fingerprint, err = a.Config.PreviewRestoreSnapshotContext(ctx, path)
-		}
+		config, fingerprint, err := a.Config.PreviewImportSnapshotContext(ctx, path)
 		if err != nil {
 			return ActionResult{}, err
 		}
@@ -81,7 +54,7 @@ func (a *App) configurationActionWithProgress(ctx context.Context, action Action
 		}
 		preview := ConfigImportPreview{Path: filepath.Clean(path), ChangedFields: []string{}, Changes: []string{}, InvalidDevelopmentTools: []string{}}
 		if err != nil {
-			preview.Changes = []string{"当前配置已损坏；确认后将先归档完整分片，再以导入配置替换"}
+			preview.Changes = []string{"当前配置已损坏，确认后会用选中的备份替换当前配置。"}
 		} else {
 			preview.ChangedFields = changedConfigFields(current, config)
 			preview.Changes = configImportChanges(current, config)
@@ -96,9 +69,6 @@ func (a *App) configurationActionWithProgress(ctx context.Context, action Action
 		}
 		preview.Fingerprint = fingerprint
 		return ActionResult{Message: "配置预览已读取，请确认变更", Path: path, Data: preview}, nil
-	case "config.restore-backup":
-		config, err := a.Config.Restore(actionPath(action))
-		return ActionResult{Message: "配置备份已恢复", Data: config}, err
 	}
 	config, err := a.Config.Load()
 	if err != nil {
@@ -159,8 +129,8 @@ func configImportChanges(before, after domain.AppConfig) []string {
 	}
 	add(value(before.TaskRoot) != value(after.TaskRoot), fmt.Sprintf("任务路径：%s → %s", value(before.TaskRoot), value(after.TaskRoot)))
 	add(value(before.RequirementMaterialsRoot) != value(after.RequirementMaterialsRoot), fmt.Sprintf("任务资料根路径：%s → %s", value(before.RequirementMaterialsRoot), value(after.RequirementMaterialsRoot)))
-	add(value(before.RequirementMaterialsSubdirectory) != value(after.RequirementMaterialsSubdirectory), fmt.Sprintf("任务资料子目录：%s → %s", value(before.RequirementMaterialsSubdirectory), value(after.RequirementMaterialsSubdirectory)))
-	add(len(before.Groups) != len(after.Groups), fmt.Sprintf("任务组：%d → %d", len(before.Groups), len(after.Groups)))
+	add(value(before.RequirementMaterialsSubdirectory) != value(after.RequirementMaterialsSubdirectory), fmt.Sprintf("任务角色名从 %s 改为 %s", value(before.RequirementMaterialsSubdirectory), value(after.RequirementMaterialsSubdirectory)))
+	add(len(before.ServiceCatalog()) != len(after.ServiceCatalog()), fmt.Sprintf("服务：%d → %d", len(before.ServiceCatalog()), len(after.ServiceCatalog())))
 	add(len(before.Repositories) != len(after.Repositories), fmt.Sprintf("仓库：%d → %d", len(before.Repositories), len(after.Repositories)))
 	add(!reflect.DeepEqual(before.DevelopmentTools, after.DevelopmentTools), "开发工具配置将更新")
 	add(before.ToolVisibility != after.ToolVisibility, "研发工具显示设置将更新")

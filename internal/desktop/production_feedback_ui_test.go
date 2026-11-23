@@ -1,9 +1,13 @@
 package desktop
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
+
+	"silverwing-go/internal/application"
+	"silverwing-go/internal/production"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -125,9 +129,62 @@ func TestProductionBaselineFeedbackRetainsActivityAndFailures(t *testing.T) {
 		t.Fatal("successful baseline display hid the latest refresh error")
 	}
 	v.Error = ""
-	v.Steps[1] = productionStepView{State: "warning", Message: "线上存在多个版本，请确认基线"}
+	v.Steps[1] = productionStepView{State: "warning", Message: "无法自动建议 release 版本"}
 	if got := s.productionSection(v, &b, 1); got.Message == "" || got.State != "warning" {
 		t.Fatal("baseline warning was hidden with success messages")
+	}
+}
+
+func TestProductionBaselineFailureInvalidatesPreparedBuildAndKeepsRetry(t *testing.T) {
+	for _, tc := range []struct {
+		kind string
+		err  error
+	}{
+		{"production.inspect", fmt.Errorf("%w：Genbu 发现多个线上生产版本", production.ErrProductionBaselineUnavailable)},
+		{"production.inspect", errors.New("读取远端 Git 引用失败")},
+		{"production.prepare-tag", production.ErrProductionBaselineUnavailable},
+		{"production.sync", production.ErrProductionBaselineUnavailable},
+	} {
+		t.Run(tc.kind+"/"+tc.err.Error(), func(t *testing.T) {
+			s, v, b, backend, window := productionRequestFixture(t)
+			old := *v.Preview
+			b.TagPlan = &production.TagPlan{Token: "obsolete", Commit: old.ReleaseSHA, MainSHA: old.MainSHA, Preview: old}
+			s.releaseUnit.state.production.batches[0] = b
+			v.SuggestedBranch, v.BuildChecked = v.Version, true
+			if !productionTagPlanCurrent(v, &b) {
+				t.Fatal("fixture does not have a prepared build")
+			}
+			s.productionRequestFor(v, application.Action{Kind: tc.kind, Payload: map[string]any{"batchId": b.ID}}, "")
+			productionTestCall(t, backend)
+			report := production.Report{Batch: &b}
+			if tc.kind == "production.inspect" {
+				// The failure can return partial evidence gathered before the error.
+				report.Preview = &old
+			}
+			backend.replies <- productionTestAnswer{result: application.ActionResult{Data: report}, err: tc.err}
+			productionTestUpdate(t, window)
+			if v.Busy || v.Error != tc.err.Error() || !v.PreparationInvalid || v.BuildChecked || productionTagPlanCurrent(v, &b) || v.Version != "" ||
+				v.Preview == nil || v.Preview.ProductionTag != "" || v.Preview.ProductionSHA != "" || len(v.Preview.Branches) == 0 || len(backend.calls) != 0 {
+				t.Fatalf("baseline failure left stale write preparation or lost unrelated branch choices: %+v", v)
+			}
+			tester := productionIterationTester(s, 960, false)
+			tester.SetSize(960, 1400)
+			if !tester.HasText(tc.err.Error()) {
+				t.Fatalf("baseline failure was not shown: %v", tc.err)
+			}
+			if err := tester.Click("重新检查"); err != nil {
+				t.Fatal(err)
+			}
+			call := productionTestCall(t, backend)
+			if call.Kind != "production.inspect" || len(call.Payload) != 1 || call.Payload["batchId"] != b.ID {
+				t.Fatalf("retry must only reread this batch's automatic baseline: %+v", call)
+			}
+			backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &b, Preview: &old}}}
+			productionTestUpdate(t, window)
+			if v.Error != "" || v.Preview == nil || v.Preview.ProductionSHA != old.ProductionSHA || productionTagPlanCurrent(v, &b) || len(backend.calls) != 0 {
+				t.Fatal("recheck did not restore the baseline or reused the invalidated build plan")
+			}
+		})
 	}
 }
 

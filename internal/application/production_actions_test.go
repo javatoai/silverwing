@@ -12,6 +12,7 @@ import (
 
 func TestProductionActionsRequireConfirmationAndKeepTaskTagHistorySeparate(t *testing.T) {
 	a, _, _ := tagJobManagerFixture(t, "synthetic")
+	useVerifiedGenbuFixture(t, a)
 	result, err := a.Dispatch(context.Background(), Action{Kind: "production.list"})
 	if err != nil {
 		t.Fatal(err)
@@ -30,6 +31,7 @@ func TestProductionActionsRequireConfirmationAndKeepTaskTagHistorySeparate(t *te
 
 func TestProductionPreparationDecodesPartialPreviewAndRejectsRemovedService(t *testing.T) {
 	a, _, _ := tagJobManagerFixture(t, "synthetic")
+	useVerifiedGenbuFixture(t, a)
 	b := production.Batch{ID: strings.Repeat("a", 32), Version: "1.0.2", ReleaseBranch: "release/1.0.2",
 		Target: production.Target{Selection: production.Selection{GroupID: "default", ServiceID: "removed-service"},
 			CommonDirectory: filepath.Join(a.Paths.Home, "synthetic.git")}}

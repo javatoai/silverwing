@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/domain"
@@ -21,25 +22,36 @@ type noticeSendState struct {
 }
 
 type releaseNoticeController struct {
-	pending *noticeSendState
-	stopped bool
-	wg      sync.WaitGroup
+	pending     *noticeSendState
+	stopped     bool
+	wg          sync.WaitGroup
+	activeSends atomic.Int32
 }
 
 func (n *releaseNoticeController) running() bool {
-	return n.pending != nil && (n.pending.loading || n.pending.sending)
+	return n.activeSends.Load() > 0 || n.pending != nil && (n.pending.loading || n.pending.sending)
+}
+
+func (s *app) branchNoticeAvailable() bool {
+	return application.OptionalCLIFeatureBranchNotice.Available(s.integrationReady)
+}
+
+func (s *app) tagNoticeAvailable() bool {
+	return application.OptionalCLIFeatureTagNotice.Available(s.integrationReady)
 }
 
 // Use the complete batch. Search/visibility projections cannot enable a
 // notification for only the successful subset of a batch.
 func (s *app) releaseNoticeReady(group tagHistoryGroup) bool {
+	if !s.tagNoticeAvailable() {
+		return false
+	}
 	c, e := s.readSnapshotAppConfig()
 	if e != nil || !c.TagEnabled || len(group.Item.Operations) == 0 {
 		return false
 	}
-	t := s.taskUnit.currentTask()
 	for _, op := range group.Item.Operations {
-		service, e := c.GroupService(t.groupID, op.GroupServiceID)
+		service, e := c.Service(op.GroupServiceID)
 		if e != nil || !service.GenbuProbeEnabled || op.State != domain.TagOperationSuccess || op.Tag == nil || *op.Tag == "" || op.GenbuStatus.Build != domain.GenbuSuccess || op.GenbuStatus.NotFound || op.GenbuStatus.FailureReason != nil && *op.GenbuStatus.FailureReason != "" {
 			return false
 		}
@@ -62,7 +74,8 @@ func releaseNoticeBatchID(g tagHistoryGroup) string {
 }
 
 func (s *app) sendTagNotice(history *tagHistoryViewState, g tagHistoryGroup) {
-	if s.busy || s.releaseNotices.running() || s.releaseNotices.stopped || !s.tagHistoryStateCurrent(history) || !s.releaseNoticeReady(g) {
+	if s.tab != taskTagTab || s.page != "tasks" && s.page != "archive" || s.workspaceReviewPageVisible() ||
+		s.busy || s.releaseNotices.running() || s.releaseNotices.stopped || !s.tagHistoryStateCurrent(history) || !s.releaseNoticeReady(g) {
 		return
 	}
 	cfg, e := s.readSnapshotAppConfig()
@@ -76,7 +89,10 @@ func (s *app) sendTagNotice(history *tagHistoryViewState, g tagHistoryGroup) {
 }
 
 func (s *app) sendBranchNotice(t task) {
-	if s.busy || s.releaseNotices.running() || s.releaseNotices.stopped || s.taskUnit.currentTask().id != t.id {
+	current := s.taskUnit.currentTask()
+	if s.tab != 0 || s.page != "tasks" && s.page != "archive" || s.workspaceReviewPageVisible() || !s.branchNoticeAvailable() ||
+		s.busy || s.releaseNotices.running() || s.releaseNotices.stopped ||
+		current.id != t.id || current.path != t.path || current.createdAt != t.createdAt {
 		return
 	}
 	rows, e := releasenotice.BranchRows(taskBranchInfoManifest(t).Services)
@@ -107,10 +123,12 @@ func (s *app) releaseNoticeCurrent(d *noticeSendState) bool {
 		return false
 	}
 	expectedTab := taskTagTab
+	available := s.tagNoticeAvailable
 	if d.kind == releasenotice.Branches {
 		expectedTab = 0
+		available = s.branchNoticeAvailable
 	}
-	if s.tab != expectedTab || s.taskFilesIdentity() != d.owner || s.taskUnit.currentTask().requirementURL != d.link {
+	if !available() || s.tab != expectedTab || s.taskFilesIdentity() != d.owner || s.taskUnit.currentTask().requirementURL != d.link {
 		return false
 	}
 	cfg, e := s.readSnapshotAppConfig()
@@ -183,7 +201,7 @@ func (s *app) runReleaseNotice(d *noticeSendState) {
 		s.lastError = "通知窗口或后端不可用"
 		return
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(s.optionalCLIContext("lark"))
 	d.cancel = cancel
 	window, backend := s.win, s.backend
 	prepare := s.releaseNoticeAction(d, d.actionKind("prepare"))
@@ -216,7 +234,17 @@ func (s *app) runReleaseNotice(d *noticeSendState) {
 			}
 			return nil
 		}
-		session, e := executeNoticeSend(ctx, prepare, send, backend.Dispatch, func(v releasenotice.Session) error {
+		dispatch := func(ctx context.Context, action application.Action) (application.ActionResult, error) {
+			if action.Kind == send.Kind {
+				s.releaseNotices.activeSends.Add(1)
+				defer func() {
+					s.releaseNotices.activeSends.Add(-1)
+					window.Invalidate()
+				}()
+			}
+			return backend.Dispatch(ctx, action)
+		}
+		session, e := executeNoticeSend(ctx, prepare, send, dispatch, func(v releasenotice.Session) error {
 			return update(func() { d.session = &v; d.loading = false; d.sending = true })
 		})
 		if ctx.Err() != nil {
@@ -299,7 +327,9 @@ func executeNoticeSend(ctx context.Context, prepare, send application.Action, di
 	}
 	payload["sessionId"], payload["selection"], payload["confirmed"] = session.ID, choice, true
 	send.Payload = payload
-	result, e = dispatch(ctx, send)
+	// Once admitted, a send can write a receipt even if the user changes
+	// pages or disables the CLI while the external command is running.
+	result, e = dispatch(context.WithoutCancel(ctx), send)
 	if result.Data != nil {
 		v, decodeErr := decodeTaskFilesResult[releasenotice.Session](result)
 		if decodeErr == nil && v.ID != "" {

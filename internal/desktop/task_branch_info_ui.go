@@ -68,7 +68,7 @@ func (s *app) renderTaskBranchInfoDialog(c *ui.Context, p palette) {
 							if iconButton(c, "copy", "copy", "复制"+option.Label, p).Clicked() {
 								s.copyTextToClipboard(c.Services(), option.Text, option.Message)
 							}
-							if option.Key == "branches" {
+							if option.Key == "branches" && s.branchNoticeAvailable() {
 								_, err := releasenotice.BranchRows(taskBranchInfoManifest(t).Services)
 								sending := s.releaseNotices.running()
 								button := iconButton(c, "send-branches", "launch", s.noticeButtonText(releasenotice.Branches, ""), p).Disabled(s.busy || sending || err != nil)

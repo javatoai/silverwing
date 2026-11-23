@@ -45,7 +45,8 @@ func (a *App) refreshMaterialsAgentCatalogs(ctx context.Context, expected worksp
 		failures = append(failures, fmt.Errorf("%s：任务记录版本不受支持，无法确认资料说明覆盖：%s", filepath.Base(path), scan.UnsupportedReasons[path]))
 	}
 	for _, entry := range scan.Current {
-		scope, ok := documents.AnnualScope(value(entry.Manifest.RequirementMaterials.WriteRoot))
+		resolved := documents.ResolveBoundTaskMaterials(entry.Manifest, config)
+		scope, ok := documents.AnnualScope(value(resolved.RequirementMaterials.WriteRoot))
 		if !ok || !sameTaskContextPath(scope.Base, configuredRequirementsPath(config)) || !strings.EqualFold(filepath.Base(scope.Owned), expected.Subdirectory) {
 			continue
 		}
@@ -69,7 +70,7 @@ func (a *App) refreshMaterialsAgentCatalogs(ctx context.Context, expected worksp
 				if fresh.TaskDirectoryName != original.TaskDirectoryName || fresh.CreatedAt != original.CreatedAt || value(fresh.RequirementMaterials.WriteRoot) != value(original.RequirementMaterials.WriteRoot) || fresh.RequirementLink != original.RequirementLink {
 					return errors.New("任务身份或资料关联已变化，旧说明更新已停止")
 				}
-				return validAnnualTaskMaterials(fresh, current)
+				return validAnnualTaskMaterials(documents.ResolveBoundTaskMaterials(fresh, current), current)
 			}
 			if err := check(); err != nil {
 				if os.IsNotExist(err) {
@@ -77,7 +78,7 @@ func (a *App) refreshMaterialsAgentCatalogs(ctx context.Context, expected worksp
 				}
 				return err
 			}
-			return service.RefreshMaterialsDirectories(taskPath, original, config, check)
+			return service.RefreshMaterialsDirectories(taskPath, resolved, config, check)
 		})
 		if err != nil && !os.IsNotExist(err) {
 			failures = append(failures, fmt.Errorf("%s：%w", filepath.Base(taskPath), err))

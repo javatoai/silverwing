@@ -1,4 +1,4 @@
-//go:build linux && (amd64 || arm64)
+//go:build linux && !android && (amd64 || arm64)
 
 package linux
 
@@ -66,7 +66,10 @@ func (a appController) SetLanguages(tags []string, rtl bool) {
 		gtkWidgetSetDefaultDirection(dir)
 	}
 	a.b.languages = append([]string(nil), tags...)
-	if libWebKit != 0 {
+	// WebKitGTK may have loaded on another goroutine (WebViewAvailable),
+	// which libWebKit does not tell safely: webKit then makes its first
+	// calls here, on the main thread.
+	if webKitLoaded.Load() && webKit() == nil {
 		a.b.applyWebLanguages()
 	}
 }

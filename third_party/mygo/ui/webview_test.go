@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"math"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/internal/platform"
 	"github.com/egoist/mygo/internal/scene"
@@ -114,21 +116,75 @@ func TestWebViewHole(t *testing.T) {
 }
 
 // A translucent web view blends over what is painted under it: its hole
-// takes the opacity away from the pixels under it.
+// takes the opacity away from the pixels under it. Over nothing painted —
+// a window whose background shows through — the placement instead tells
+// the host to fade the page itself, over what is behind the window.
 func TestWebViewOpacity(t *testing.T) {
 	page := &testWebView{"page"}
-	tt := coreNewTester(func(c *context) {
+	opaque := coreNewTester(func(c *context) {
 		c.Root().Background(RGB(255, 255, 255))
 		coreBox(c).Fill().Padding(20).Opacity(0.5).Children(func() {
 			coreWebView(c, page).Grow(1)
 		})
 	}, 200, 140)
-	o := tt.Image().PixOffset(100, 70)
-	if c := tt.Image().Pix[o : o+4]; c[3] < 126 || c[3] > 129 {
+	o := opaque.Image().PixOffset(100, 70)
+	if c := opaque.Image().Pix[o : o+4]; c[3] < 126 || c[3] > 129 {
 		t.Errorf("the hole of a web view at half opacity is %v: want half the white under it", c)
 	}
-	if places := tt.rt.webPlaces; len(places) != 1 {
+	// The white under it blends with the page by that half erase alone:
+	// the page itself stays opaque, or it would fade twice.
+	if places := opaque.rt.webPlaces; len(places) != 1 {
 		t.Errorf("placed %d web views: want the translucent one", len(places))
+	} else if places[0].opacity != 1 {
+		t.Errorf("the page over an opaque background placed at opacity %v: want 1, the hole fading for it", places[0].opacity)
+	}
+	clear := coreNewTester(func(c *context) {
+		c.Root().Background(Transparent)
+		coreBox(c).Fill().Padding(20).Opacity(0.5).Children(func() {
+			coreWebView(c, page).Grow(1)
+		})
+	}, 200, 140)
+	if places := clear.rt.webPlaces; len(places) != 1 || places[0].opacity != 0.5 {
+		t.Errorf("placed %d web views at %v: want one at 0.5 over nothing painted", len(places), places)
+	}
+	// Over a panel painted through, as a flyout's fading over a live parent
+	// window, the hole blends the page with the panel as it is with an
+	// opaque one: fading the page too would fade it twice, and leave the
+	// white of the panel hazing through.
+	through := coreNewTester(func(c *context) {
+		c.Root().Background(Transparent)
+		coreBox(c).Fill().Background(RGBA(255, 255, 255, 128)).Padding(20).Opacity(0.5).Children(func() {
+			coreWebView(c, page).Grow(1)
+		})
+	}, 200, 140)
+	if places := through.rt.webPlaces; len(places) != 1 || places[0].opacity != 1 {
+		t.Errorf("placed %d web views at %v: want one at 1 over the panel painted under it", len(places), places)
+	}
+	// One the content faded out nothing of shows: its place carries an
+	// opacity of none, for the host to fade the page away by.
+	none := coreNewTester(func(c *context) {
+		c.Root().Background(RGB(255, 255, 255))
+		coreBox(c).Fill().Padding(20).Opacity(0).Children(func() {
+			coreWebView(c, page).Grow(1)
+		})
+	}, 200, 140)
+	if places := none.rt.webPlaces; len(places) != 1 || places[0].opacity != 0 {
+		t.Errorf("placed %d web views at %v: want one faded out", len(places), places)
+	}
+	// The copy a drag paints under the pointer tells nothing of how the
+	// page shows: the page stays where the element is, at the fade of the
+	// place painted for it, not the copy's.
+	drag := coreNewTester(func(c *context) {
+		c.Root().Background(Transparent)
+		coreBox(c).Size(200, 140).Padding(20).Opacity(0.5).Drag("v").Children(func() {
+			coreWebView(c, page).Grow(1)
+		})
+	}, 200, 140)
+	drag.Press(10, 10)
+	drag.Move(80, 90)
+	drag.Frame()
+	if places := drag.rt.webPlaces; len(places) != 1 || places[0].opacity != 0.5 {
+		t.Errorf("placed %d web views at %v while dragging: want one at 0.5, the copy's fade apart", len(places), places)
 	}
 }
 
@@ -303,5 +359,168 @@ func TestPopoverLastPressDecides(t *testing.T) {
 	tt.Frame()
 	if open {
 		t.Error("a press on the anchor then elsewhere left the popover open")
+	}
+}
+
+// A web view in a panel scaling as one surface, as a peek zooming in,
+// keeps its page's layout and shows it scaled: the placement carries the
+// page's size, unchanged throughout the animation, and the corners of its
+// hole, inside which alone the page takes the pointer; what the panel
+// paints over the page covers it where it shows, scaled.
+func TestWebViewScaledRounded(t *testing.T) {
+	page := &testWebView{"page"}
+	small := false
+	tt := coreNewTester(func(c *context) {
+		target := float32(1)
+		if small {
+			target = 0.5
+		}
+		scale := c.Root().AnimateTo("scale", target, Animation{Duration: 400 * time.Millisecond})
+		coreBox(c).Absolute().Left(40).Top(40).Size(320, 200).Scale(scale, scale).Children(func() {
+			coreWebView(c, page).Grow(1).Radius(24).Children(func() {
+				coreBox(c).Absolute().Top(10).Right(10).Size(20, 20) // a button over the page
+			})
+		})
+	}, 400, 280)
+	check := func(scale float64) placedWebView {
+		t.Helper()
+		p, ok := placed(tt, page)
+		if !ok {
+			t.Fatalf("scaled %v: the web view does not show", scale)
+		}
+		if p.size != [2]float64{320, 200} {
+			t.Errorf("scaled %v: the page lays out at %v: want 320 by 200, as unscaled", scale, p.size)
+		}
+		if p.radii != [4]float64{24, 24, 24, 24} {
+			t.Errorf("scaled %v: the page's corners %v: want the hole's, 24", scale, p.radii)
+		}
+		near := func(a, b float64) bool { return math.Abs(a-b) < 1e-3 }
+		want := platform.RectF{X: 200 - 160*scale, Y: 140 - 100*scale, W: 320 * scale, H: 200 * scale}
+		if f := p.frame; !near(f.X, want.X) || !near(f.Y, want.Y) || !near(f.W, want.W) || !near(f.H, want.H) {
+			t.Errorf("scaled %v: the page shows at %+v: want %+v", scale, f, want)
+		}
+		pl := p.placement(nil)
+		if sx, sy := pl.Scale(); !near(sx, scale) || !near(sy, scale) {
+			t.Errorf("scaled %v: the placement scales the page by %v, %v", scale, sx, sy)
+		}
+		return p
+	}
+	at := func(x, y float64) bool { return tt.WebViewAt(float32(x), float32(y)) == page }
+
+	p := check(1)
+	if !at(200, 140) || at(p.frame.X+3, p.frame.Y+3) || at(p.frame.X+p.frame.W-3, p.frame.Y+p.frame.H-3) || !at(p.frame.X+3, 140) {
+		t.Error("unscaled, the page takes the pointer outside its rounded corners, or not inside them")
+	}
+
+	small = true
+	tt.Frame()
+	for range 4 {
+		tt.Advance(100 * time.Millisecond)
+		p, _ := placed(tt, page)
+		check(p.frame.W / 320)
+	}
+	p = check(0.5)
+	if !at(200, 140) || at(p.frame.X+2, p.frame.Y+2) || at(p.frame.X+p.frame.W-2, p.frame.Y+2) || !at(p.frame.X+2, 140) {
+		t.Error("scaled, the page takes the pointer outside its rounded corners, or not inside them")
+	}
+	// The button: 20 by 20, 10 from the top-right corner, scaled by half
+	// around the panel's center.
+	if at(270, 100) || !at(250, 100) {
+		t.Error("the button over the scaled page does not cover it where it shows")
+	}
+	// A press in a corner the page does not show in is the content's.
+	tt.ClickAt(float32(p.frame.X+1), float32(p.frame.Y+1))
+	if tt.WebViewAt(float32(p.frame.X+1), float32(p.frame.Y+1)) != nil {
+		t.Error("a corner cut off takes the pointer to the page")
+	}
+}
+
+// A key the page of a web view leaves unhandled acts as if the web view's
+// element had the focus, which a press on the page gave it: Page Down
+// scrolls the container around it, as a reader showing its document in
+// native UI needs, and the shortcuts around it see the key.
+func TestWebViewKey(t *testing.T) {
+	page := &testWebView{"page"}
+	var scroll ScrollState
+	var text string
+	nexts := 0
+	tt := coreNewTester(func(c *context) {
+		coreColumn(c).Fill().AlignItems(Stretch).Children(func() {
+			coreTextInput(c, &text).Label("Name")
+			reader := coreScroll(c).Grow(1).TrackScroll(&scroll).Children(func() {
+				coreWebView(c, page).Height(1000)
+			})
+			if reader.Shortcut(0, KeyJ) {
+				nexts++
+			}
+		})
+	}, 300, 300)
+	tt.ClickAt(150, 200)
+	if s := tt.rt.states[tt.rt.focused]; s == nil || s.webView != page || tt.rt.focusVisible {
+		t.Fatal("a press on the page did not give the web view's element the focus, unshown")
+	}
+	tt.rt.webViewKey(page, 0, KeyPageDown, KeyUnknown, false)
+	tt.Frame()
+	if scroll.Y <= 0 {
+		t.Errorf("Page Down the page left scrolled the container to %v", scroll.Y)
+	}
+	tt.rt.webViewKey(page, 0, KeyJ, KeyUnknown, false)
+	tt.Frame()
+	if nexts != 1 {
+		t.Errorf("J the page left reached the container's shortcut %d times, want 1", nexts)
+	}
+	// A key of a web view no element shows goes nowhere.
+	tt.rt.webViewKey(&testWebView{"other"}, 0, KeyJ, KeyUnknown, false)
+	tt.Frame()
+	if nexts != 1 {
+		t.Error("a key of another web view reached the shortcut")
+	}
+}
+
+// A nil native view, a module's where it has no implementation, is a
+// plain box: it paints its background, and punches no hole.
+func TestNativeViewNil(t *testing.T) {
+	tt := coreNewTester(func(c *context) {
+		coreNativeView(c, PlatformView(nil)).Size(20, 20).Background(RGB(255, 0, 0))
+	}, 20, 20)
+	if got := tt.Image().RGBAAt(10, 10); got.R != 255 || got.A != 255 {
+		t.Fatalf("the nil view's box shows %v, not its background", got)
+	}
+}
+
+// fakeView is a view of the platform, closed once its handle is 0.
+type fakeView struct{ h uintptr }
+
+func (v *fakeView) NativeView() uintptr { return v.h }
+
+// A view gone, closed or released, leaves the window: the frames after
+// forget it. The window holds no Go value of it.
+func TestNativeViewGone(t *testing.T) {
+	v := &fakeView{h: 1}
+	show := true
+	tt := coreNewTester(func(c *context) {
+		if show {
+			coreNativeView(c, v).Size(20, 20)
+		}
+	}, 20, 20)
+	if len(tt.rt.platformViews) != 1 || tt.rt.platformViews[0].h != 1 {
+		t.Fatalf("%d views stand for the one shown", len(tt.rt.platformViews))
+	}
+	// Hidden, it keeps its state: it stays.
+	show = false
+	tt.Frame()
+	if len(tt.rt.platformViews) != 1 {
+		t.Fatal("a view the frame does not build was dropped")
+	}
+	tt.rt.platformViews[0].leave() // as native tells of it
+	tt.Frame()
+	if len(tt.rt.platformViews) != 0 {
+		t.Fatal("a view gone is still in the window")
+	}
+	// A closed view, whose handle is 0, is a plain box.
+	v.h, show = 0, true
+	tt.Frame()
+	if len(tt.rt.platformViews) != 0 {
+		t.Fatal("a closed view came back")
 	}
 }

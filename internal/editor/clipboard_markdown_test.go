@@ -33,13 +33,7 @@ func TestClipboardHTMLLiteralEntitiesAndCodeFallbackKeepOriginalCharacters(t *te
 		var cells []string
 		for b := 1; b < d.Len(); b++ {
 			if d.Block(b).Kind == parser.TableCell {
-				var text strings.Builder
-				for _, in := range d.Inlines(b) {
-					if in.Kind == parser.Text || in.Kind == parser.Code {
-						text.WriteString(in.Text)
-					}
-				}
-				cells = append(cells, text.String())
+				cells = append(cells, parser.PlainText(d.Inlines(b)))
 			}
 		}
 		if len(cells) != 2 || cells[1] != body {

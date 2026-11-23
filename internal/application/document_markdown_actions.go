@@ -8,13 +8,16 @@ import (
 	"silverwing-go/internal/documents"
 )
 
-// The entry marker routes only the task materials editor. The current task,
-// configured materials root and writable subdirectory remain authoritative.
+// The entry marker routes the materials editor. Its resolved document scope
+// and writable directory remain authoritative.
 const taskMaterialsMarkdownEditContext = "task-materials"
 
 func (a *App) materialMarkdownWritable(action Action, root, path string) (bool, error) {
 	if textPayload(action, "markdownEditContext") != taskMaterialsMarkdownEditContext || action.ServiceID != "" || action.ModuleID != "" {
 		return false, nil
+	}
+	if isProjectInstructionsDocumentAction(action) {
+		return true, nil
 	}
 	scope, present, err := a.documentAnnualScope(root)
 	if err != nil {
@@ -30,6 +33,9 @@ func (a *App) materialMarkdownWriteIdentity(action Action, root, path string) (d
 	}
 	if !writable {
 		return documents.MarkdownDraftIdentity{}, errMarkdownMaterialReadOnly
+	}
+	if isProjectInstructionsDocumentAction(action) {
+		return a.documentDraftIdentity(action, root, path)
 	}
 	manifest, taskPath, err := a.task(action)
 	if err != nil {
@@ -103,10 +109,12 @@ func (a *App) materialMarkdownDraftAction(ctx context.Context, action Action, ro
 	if err != nil {
 		return ActionResult{}, err
 	}
-	// A cache write must not recreate the identity of a deleted file or accept a
-	// symlink/file-type substitution that the editor itself could not open.
-	if _, err := a.Documents.MarkdownSnapshot(root, path); err != nil {
-		return ActionResult{}, err
+	if !isProjectInstructionsDocumentAction(action) {
+		// A task cache write cannot recreate the identity of a deleted file or
+		// accept a symlink or file-type substitution.
+		if _, err := a.Documents.MarkdownSnapshot(root, path); err != nil {
+			return ActionResult{}, err
+		}
 	}
 	result := ActionResult{Path: filepath.Join(identity.MaterialsRoot, filepath.FromSlash(identity.RelativePath))}
 	switch action.Kind {

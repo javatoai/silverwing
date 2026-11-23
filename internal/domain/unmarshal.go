@@ -1,11 +1,6 @@
 package domain
 
-import (
-	"bytes"
-	"encoding/json"
-	"fmt"
-	"strings"
-)
+import "encoding/json"
 
 func decodeWithDefaults[T any](data []byte, defaults T, required ...string) (T, error) {
 	value := defaults
@@ -36,7 +31,7 @@ func (v *TagBuildMode) UnmarshalJSON(data []byte) error {
 	return e
 }
 func (v *CommandProxyTarget) UnmarshalJSON(data []byte) error {
-	x, e := decodeEnum(data, "CODEX", "GIT", "WORKSPACE_COMMAND", "MEEGLE", "LARK", "GENBU", "APP_UPDATES")
+	x, e := decodeEnum(data, string(ProxyTargetCodex), string(ProxyTargetAppUpdates))
 	*v = CommandProxyTarget(x)
 	return e
 }
@@ -151,8 +146,8 @@ func (v *ServiceModuleConfig) UnmarshalJSON(data []byte) error {
 	*v = ServiceModuleConfig(x)
 	return e
 }
-func (v *GroupServiceConfig) UnmarshalJSON(data []byte) error {
-	type plain GroupServiceConfig
+func (v *ServiceConfig) UnmarshalJSON(data []byte) error {
+	type plain ServiceConfig
 	x, e := decodeWithDefaults(data, plain{Enabled: true, DevelopmentTool: DevelopmentToolIntelliJIdea, Modules: []ServiceModuleConfig{{ID: "default", Name: "default", Strategy: WorkspaceStandardWorktree, TagEnabled: true, TagMode: TagBuildMergeToTargetBranch, TagMessagePrefix: "Tag", CustomCommands: []WorkspaceCommandConfig{}}}, Bootstrap: BootstrapConfig{CopyRules: []BootstrapCopyRule{}, Commands: []BootstrapCommand{}}, CommitMessageTemplate: ""}, "id", "repositoryId", "displayName", "masterBranch", "testTagBaselineRef")
 	if e != nil {
 		return e
@@ -164,7 +159,7 @@ func (v *GroupServiceConfig) UnmarshalJSON(data []byte) error {
 	if _, ok := raw["genbuServiceName"]; !ok {
 		x.GenbuServiceName = x.DisplayName
 	}
-	*v = GroupServiceConfig(x)
+	*v = ServiceConfig(x)
 	return nil
 }
 func (v *GroupConfig) UnmarshalJSON(data []byte) error {
@@ -214,7 +209,7 @@ func (v *ServiceWorkspace) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["groupServiceId"]; !ok {
+	if _, ok := raw["serviceId"]; !ok {
 		x.GroupServiceID = x.RepositoryID
 	}
 	if _, ok := raw["moduleName"]; !ok {
@@ -258,8 +253,14 @@ func (v *TagOperation) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["groupServiceId"]; !ok {
-		x.GroupServiceID = x.RepositoryID
+	if _, ok := raw["serviceId"]; !ok {
+		if old, ok := raw["groupServiceId"]; ok {
+			if err := json.Unmarshal(old, &x.GroupServiceID); err != nil {
+				return err
+			}
+		} else {
+			x.GroupServiceID = x.RepositoryID
+		}
 	}
 	*v = TagOperation(x)
 	return nil
@@ -281,34 +282,4 @@ func (v *TagHistoryItem) UnmarshalJSON(data []byte) error {
 	x, e := decodeWithDefaults(data, plain{}, "groupId", "folderName", "createdAt", "updatedAt", "operations")
 	*v = TagHistoryItem(x)
 	return e
-}
-func (v *AgentTaskTemplate) UnmarshalJSON(data []byte) error {
-	type plain AgentTaskTemplate
-	// The user-editable template library uses ignoreUnknownKeys in Source,
-	// unlike the strict AppConfig shards. Its four fields remain required.
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return err
-	}
-	for _, name := range []string{"id", "name", "content", "updatedAt"} {
-		raw, exists := fields[name]
-		if !exists {
-			return fmt.Errorf("missing required field %q", name)
-		}
-		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-			return fmt.Errorf("null is not valid for template field %q", name)
-		}
-	}
-	var x plain
-	if err := json.Unmarshal(data, &x); err != nil {
-		return err
-	}
-	if strings.TrimSpace(x.Name) == "" {
-		return fmt.Errorf("模板名称不能为空")
-	}
-	if strings.TrimSpace(x.Content) == "" {
-		return fmt.Errorf("模板内容不能为空")
-	}
-	*v = AgentTaskTemplate(x)
-	return nil
 }

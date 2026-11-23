@@ -2,73 +2,38 @@ package production
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"silverwing-go/internal/domain"
-	"silverwing-go/internal/process"
 )
 
-func TestProductionTagsUseRemoteCreatorDatesWithoutChangingVersionPolicy(t *testing.T) {
+func TestProductionInspectionUsesRemoteNamesWithoutFetchingUnrelatedTags(t *testing.T) {
 	f := newFixture(t)
-	t.Setenv("GIT_COMMITTER_DATE", "2020-01-01T00:00:00Z")
-	old := f.feature("feature/dated", "old.txt", "old\n", f.base)
-	f.run(f.seed, "tag", "9.0.0", old)
-	t.Setenv("GIT_COMMITTER_DATE", "2020-03-01T00:00:00Z")
-	f.run(f.seed, "tag", "-a", "1.0.0", old, "-m", "new tag, old commit")
-	f.run(f.seed, "tag", "-a", "1.0.1", old, "-m", "same date")
-	t.Setenv("GIT_COMMITTER_DATE", "2020-02-01T00:00:00Z")
-	newer := f.feature("feature/dated-new", "new.txt", "new\n", f.base)
-	f.run(f.seed, "tag", "0.1.0-beta", newer)
+	for _, tag := range []string{"2.3.43.1", "2.3.44.2", "9.0.0"} {
+		f.run(f.seed, "tag", "-a", tag, f.base, "-m", tag)
+	}
 	f.run(f.seed, "push", "origin", "--tags")
-	p, err := f.s.Inspect(context.Background(), f.selection, "")
-	if err != nil {
-		t.Fatal(err)
+	f.g.versions = []string{"2.3.43.1"}
+	git := &observedGit{Git: f.git}
+	f.s.Git = git
+	p, err := f.s.Inspect(context.Background(), f.selection)
+	if err != nil || p.ProductionTag != "2.3.43.1" || p.ProductionSHA != f.base {
+		t.Fatalf("could not resolve automatic production Tag: %+v / %v", p, err)
 	}
-	var selected []string
-	for _, name := range p.Tags {
-		if name != "2.3.43" {
-			selected = append(selected, name)
-		}
+	if strings.Join(p.Tags, ",") != "2.3.43,2.3.43.1,2.3.44.2,9.0.0" || p.SuggestedVersion != "2.3.45" {
+		t.Fatalf("version policy lost remote Tag names: %v, suggested %s", p.Tags, p.SuggestedVersion)
 	}
-	if strings.Join(selected, ",") != "1.0.0,1.0.1,0.1.0-beta,9.0.0" {
-		t.Fatalf("creator-date order: %v", selected)
-	}
-	if p.SuggestedVersion != "2.3.44" {
-		t.Fatalf("suggestion left the production series: %s", p.SuggestedVersion)
-	}
-}
-
-type productionOrderGit struct {
-	output string
-	err    error
-}
-
-func (g productionOrderGit) RunContext(context.Context, string, time.Duration, bool, bool, ...string) (process.Result, error) {
-	return process.Result{Stdout: g.output}, g.err
-}
-
-func TestProductionTagDateMissingAndUnrelatedObjectsSortLast(t *testing.T) {
-	target := Target{CommonDirectory: "synthetic", Remote: "origin"}
-	prefix := namespace(target) + "/tags/"
-	s := &Service{Git: productionOrderGit{output: prefix + "known\x00a\x00100\n" + prefix + "stale\x00other\x00999\n" + prefix + "missing\x00b\x00"}}
-	refs := references{"refs/tags/known": "a", "refs/tags/stale": "c", "refs/tags/missing": "b", "refs/tags/absent": "d"}
-	names, err := s.tagsByCreation(context.Background(), target, refs)
-	if err != nil || strings.Join(names, ",") != "known,absent,missing,stale" {
-		t.Fatalf("bad missing/stale fallback: %v %v", names, err)
-	}
-	s.Git = productionOrderGit{err: errors.New("synthetic read failure")}
-	names, err = s.tagsByCreation(context.Background(), target, refs)
-	if err == nil || strings.Join(names, ",") != "absent,known,missing,stale" {
-		t.Fatalf("bad failed-read fallback: %v %v", names, err)
+	fetch := strings.Join(git.fetchArgs, " ")
+	if git.fetches != 1 || !strings.Contains(fetch, "refs/tags/2.3.43.1") ||
+		strings.Contains(fetch, "2.3.44.2") || strings.Contains(fetch, "9.0.0") {
+		t.Fatalf("baseline fetched unrelated Tag objects: %v", git.fetchArgs)
 	}
 }
 
 func TestProductionRepeatedMergesAndBuildCyclesInvalidateOldPreparation(t *testing.T) {
 	f := newFixture(t)
-	p, err := f.s.Inspect(context.Background(), f.selection, "")
+	p, err := f.s.Inspect(context.Background(), f.selection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +70,7 @@ func TestProductionRepeatedMergesAndBuildCyclesInvalidateOldPreparation(t *testi
 	}
 	one = f.feature("feature/one", "one.txt", "one again\n", one)
 	b = f.merge(b, "feature/one", one)
-	_, preview, err := f.s.InspectBatch(ctx, b.ID, "")
+	_, preview, err := f.s.InspectBatch(ctx, b.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

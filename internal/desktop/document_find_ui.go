@@ -306,10 +306,13 @@ func (s *app) openDocumentFind(c *ui.Context) {
 		view.Run(codeeditor.Find)
 		return
 	}
+	if s.materialsTextPreviewVisible() || s.materialsTextEditingVisible() {
+		return
+	}
 	f := s.ensureDocumentFindState()
 	s.materialsUnit.state.documentFindOpen = true
 	f.navigation++
-	f.focus.Focus(c)
+	f.focus.SelectAll(c)
 }
 
 func (s *app) closeDocumentFind() {
@@ -318,8 +321,9 @@ func (s *app) closeDocumentFind() {
 	}
 	s.materialsUnit.state.documentFindOpen = false
 	s.materialsUnit.state.documentSearch = ""
-	if s.materialsUnit.state.documentFind != nil {
-		s.materialsUnit.state.documentFind.close()
+	if f := s.materialsUnit.state.documentFind; f != nil {
+		f.focus.CancelFocus()
+		f.close()
 	}
 }
 

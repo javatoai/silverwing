@@ -514,6 +514,65 @@ func TestListKeysAppChoiceAtTheSameIndex(t *testing.T) {
 	}
 }
 
+// Without a Selection, the app choosing another item with Choose, at the
+// row the choice had, keeps it: a new file sorted above the one chosen,
+// then chosen, as a file list does once it is created.
+func TestListChooseAtTheSameIndex(t *testing.T) {
+	ids := []string{"a", "b", "c"}
+	sel, choose := 1, -1
+	s := ListState{Selected: &sel, Key: func(i int) any { return ids[i] }}
+	tt := coreNewTester(func(c *context) {
+		if choose >= 0 {
+			s.Choose(choose)
+			choose = -1
+		}
+		coreList(c, &s, len(ids), func(i int) { coreText(c, ids[i]).Height(20) }).Grow(1)
+	}, 300, 400)
+	ids = []string{"a", "new", "b", "c"}
+	choose = 1
+	tt.Frame()
+	if sel != 1 || ids[sel] != "new" {
+		t.Fatalf("chose the new row 1: cursor %d", sel)
+	}
+	// The choice follows its new item from then on.
+	ids = []string{"x", "a", "new", "b", "c"}
+	tt.Frame()
+	if sel != 2 || ids[sel] != "new" {
+		t.Errorf("a row added above: cursor %d", sel)
+	}
+	s.Choose(-1)
+	tt.Frame()
+	if sel != -1 {
+		t.Errorf("chose none: cursor %d", sel)
+	}
+}
+
+// A list moved to another window, as a tab torn off into its own, keeps
+// its ListState: the new window's first frame and pass number the old
+// one's last, which is no second List. Two Lists in one window still panic.
+func TestListStateMovesToAnotherWindow(t *testing.T) {
+	var s ListState
+	list := func(c *context) { coreList(c, &s, 3, func(i int) { coreText(c, "row").Height(20) }).Grow(1) }
+	inFirst := true
+	first := coreNewTester(func(c *context) {
+		if inFirst {
+			list(c)
+		}
+	}, 200, 200)
+	inFirst = false
+	first.Frame()
+	if _, ok := rowBox(coreNewTester(list, 200, 200), &s, 0); !ok {
+		t.Fatal("the moved list shows no row 0")
+	}
+
+	defer func() {
+		if r := recover(); r != "ui: a ListState shown by two Lists" {
+			t.Fatalf("two Lists in one window: got %v", r)
+		}
+	}()
+	coreNewTester(func(c *context) { list(c); list(c) }, 200, 400)
+}
+
 // Without Selected, the cursor is the list's own, which the user moves:
 // it follows its item as rows come above it, though the item is not
 // chosen, and is gone with it.
@@ -709,7 +768,7 @@ func TestListScrollBarDragReachesTheEnd(t *testing.T) {
 	}, 300, 400)
 	tt.Move(150, 200)
 	st := listStateOf(&s)
-	g := scrollBars(Rect{st.x, st.y, st.w, st.h}, st.barInset, float32(st.contentH), float32(st.contentH), 0, float32(st.scrollY), st.flags, 6, false)
+	g := scrollBars(Rect{st.x, st.y, st.w, st.h}, st.barInset, float32(st.contentH), float32(st.contentH), 0, float32(st.scrollY), st.flags, testScrollbarStyle(), false)
 	x, y := g.v.X+g.v.W/2, g.v.Y+g.v.H/2
 	tt.Move(x, y)
 	tt.Press(x, y)
@@ -740,7 +799,7 @@ func TestListScrollBarDragFollowsThePointerAsEstimatesChange(t *testing.T) {
 	}, 300, 400)
 	tt.Move(150, 200)
 	st := listStateOf(&s)
-	g := scrollBars(Rect{st.x, st.y, st.w, st.h}, st.barInset, float32(st.contentH), float32(st.contentH), 0, float32(st.scrollY), st.flags, 6, false)
+	g := scrollBars(Rect{st.x, st.y, st.w, st.h}, st.barInset, float32(st.contentH), float32(st.contentH), 0, float32(st.scrollY), st.flags, testScrollbarStyle(), false)
 	x, y := g.v.X+g.v.W/2, g.v.Y+g.v.H/2
 	travel := g.vTrack.H - 4 - g.v.H
 	tt.Move(x, y)
@@ -1520,4 +1579,105 @@ func TestRightClickChoiceIsChanged(t *testing.T) {
 		t.Fatalf("right-click Row 3: chose %v, changed %d times", got, changed)
 	}
 	tt.CloseMenu()
+}
+
+// Issue #1439: a chat list draws its rows' hover, press and ripple in the
+// content it builds, which reads them from its ListRow and takes no input
+// for it: the row, named by the state's Label, still takes the click.
+func TestListRowPointerState(t *testing.T) {
+	names := []string{"Alice", "Bob", "Carol"}
+	sel := -1
+	s := ListState{Selected: &sel, Label: func(i int) string { return "Chat with " + names[i] }}
+	type seen struct {
+		hovered, pressed, over bool
+		x, y                   float32
+	}
+	var rows [3]seen
+	changed := 0
+	tt := NewTester(func(c *Context) {
+		List(c, &s, len(names)).Grow(1).OnChange(func() { changed++ }).Rows(func(row ListRow) {
+			x, y, over := row.PointerPosition()
+			rows[row.Index] = seen{row.Hovered(), row.Pressed(), over, x, y}
+			Box(row.Context).Height(40).Grow(1).Children(func() {
+				Text(row.Context, names[row.Index])
+			})
+		})
+	}, 300, 200)
+	defer tt.rt.close()
+	tt.Frame()
+	bob, ok := tt.Find("Chat with Bob")
+	if !ok {
+		t.Fatal("no row is labeled Chat with Bob")
+	}
+	at := func(r Rect) (float32, float32) { return r.X + 30, r.Y + 10 }
+	only := func(what string, i int, get func(seen) bool) {
+		t.Helper()
+		for j, r := range rows {
+			if get(r) != (j == i) {
+				t.Errorf("%s: row %d reports %v", what, j, get(r))
+			}
+		}
+	}
+
+	x, y := at(bob)
+	tt.Move(x, y)
+	only("hover over Bob", 1, func(r seen) bool { return r.hovered })
+	only("hover over Bob", 1, func(r seen) bool { return r.over })
+	only("hover over Bob", -1, func(r seen) bool { return r.pressed })
+	if r := rows[1]; r.x != 30 || r.y != 10 {
+		t.Errorf("hover over Bob: the pointer is at (%v, %v) in the row, want (30, 10)", r.x, r.y)
+	}
+
+	tt.Press(x, y)
+	only("press on Bob", 1, func(r seen) bool { return r.pressed })
+	if r := rows[1]; r.x != 30 || r.y != 10 {
+		t.Errorf("press on Bob: pressed at (%v, %v) in the row, want (30, 10)", r.x, r.y)
+	}
+	tt.Release(x, y)
+	only("released", -1, func(r seen) bool { return r.pressed })
+	if sel != 1 || changed != 1 {
+		t.Fatalf("click on Bob: chose %d, changed %d times; want 1, 1", sel, changed)
+	}
+
+	// The content reading the row's state takes no click: the row stays
+	// the input target of its label.
+	if err := tt.Click("Chat with Carol"); err != nil {
+		t.Fatal(err)
+	}
+	if sel != 2 || changed != 2 {
+		t.Errorf("Click on Carol: chose %d, changed %d times; want 2, 2", sel, changed)
+	}
+	only("after the click on Carol", 2, func(r seen) bool { return r.hovered })
+	tt.Move(x, y)
+	only("hover back over Bob", 1, func(r seen) bool { return r.hovered })
+}
+
+// A list choosing no rows has rows taking no press, until their content
+// asks whether the row is pressed: the row then takes it, as an element
+// asking Pressed does.
+func TestListRowPressedWithoutChoosing(t *testing.T) {
+	pressed := -1
+	tt := NewTester(func(c *Context) {
+		pressed = -1
+		List(c, nil, 3).Grow(1).Rows(func(row ListRow) {
+			if row.Pressed() {
+				pressed = row.Index
+			}
+			Textf(row.Context, "Row %d", row.Index).Height(40)
+		})
+	}, 300, 200)
+	defer tt.rt.close()
+	tt.Frame()
+	r, ok := tt.Find("Row 2")
+	if !ok {
+		t.Fatal("no Row 2")
+	}
+	tt.Press(r.X+5, r.Y+5)
+	if pressed != 2 {
+		t.Errorf("press on Row 2: row %d reports the press", pressed)
+	}
+	tt.Release(r.X+5, r.Y+5)
+	if pressed != -1 {
+		t.Errorf("released: row %d reports the press", pressed)
+	}
 }

@@ -4,7 +4,11 @@ import "github.com/egoist/mygo/ui"
 
 func (s *app) settingsTaskTabs(c *ui.Context, p palette) {
 	settingsCard(c, p, "", "", func() {
-		for index, name := range tabs {
+		for _, index := range taskContentTabOrder {
+			if !s.taskContentTabAvailable(index) {
+				continue
+			}
+			name := tabs[index]
 			if index > 0 {
 				ui.Divider(c)
 			}
@@ -12,7 +16,7 @@ func (s *app) settingsTaskTabs(c *ui.Context, p palette) {
 			lastEnabled := enabled && s.enabledTaskContentTabCount() == 1
 			ui.Row(c.Key("task-tab-visibility-" + readingViewForTab(index))).FillWidth().MinWidth(0).MinHeight(38).Gap(16).AlignItems(ui.Center).Children(func() {
 				label(c, name, 13, p.text).Grow(1).MinWidth(0).Wrap()
-				control := ui.Switch(c.Key("task-tab-toggle"), &enabled).Label(name).Disabled(lastEnabled)
+				control := ui.Switch(c.Key("task-tab-toggle"), &enabled).Label("显示" + name + "页签").Disabled(lastEnabled)
 				if lastEnabled {
 					control.Tooltip("至少保留一个任务页签")
 				}

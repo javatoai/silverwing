@@ -18,6 +18,7 @@ func tagJobProbeFixture(t *testing.T) (*App, TagJobScope, map[string]domain.TagO
 	t.Helper()
 	a, scopes, tasks := tagJobManagerFixture(t, "synthetic")
 	scope := scopes["synthetic"]
+	scope.ConfigIdentity = configTagIdentity(useVerifiedGenbuFixture(t, a))
 	manifest := tasks[scope.TaskID].manifest
 	operations := map[string]domain.TagOperation{}
 	for _, key := range []string{"fast", "slow"} {

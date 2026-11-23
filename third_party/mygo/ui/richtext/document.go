@@ -37,12 +37,14 @@ type Document struct {
 	log []change
 	// newID names the paragraphs edits make (IdentifyParagraphs).
 	newID func() string
-	// shownIn is the editor that last showed the document, for
-	// VisibleParagraphs; read is set as the app reads them, which boxes
-	// holds, for the editor's next paint to tell whether it moved them.
-	shownIn weak.Pointer[view]
-	read    bool
-	boxes   []ParagraphBox
+	// shownIn is the editor built last that shows the document, for
+	// VisibleParagraphs and CaretRect: an app that shows it in two
+	// editors reads each one's right after building it. What was read is
+	// kept in that editor, for its next paint to tell whether it moved
+	// what was read; readNone is set when the app read them with no
+	// editor yet, for the first to paint to ask for another frame.
+	shownIn  weak.Pointer[view]
+	readNone bool
 }
 
 // change is a change of a document: the runes from start to oldEnd
@@ -58,7 +60,18 @@ type undoStep struct {
 	before, after         Text
 	selBefore, selAfter   [2]int
 	start, oldEnd, newEnd int
+	// parts are its replacements in the order they were made, each in the
+	// text the ones before it left, for undo and redo to tell the editor
+	// of one by one, as the edit did; nil past maxUndoParts (typing a
+	// while), for them to tell it of the region.
+	parts []change
 }
+
+// maxUndoParts is how many replacements a step of undo keeps: more than
+// the edits that move text need (a move is two), and well under the 128
+// changes the log keeps for the editor, past which it lays the whole text
+// out again. A longer step, as typing a while, is one region.
+const maxUndoParts = 16
 
 // NewDocument returns a document of text, its caret at the end.
 func NewDocument(text Text) *Document {
@@ -200,27 +213,32 @@ func (d *Document) changed(start, oldEnd, newEnd int) {
 }
 
 // since returns the change from version v to the document's, as one
-// region, and whether the log holds all of it.
-func (d *Document) since(v uint64) (change, bool) {
+// region, the changes it is made of in the order they were made, and
+// whether the log holds all of it. The changes are the log's, which the
+// next change of the document reuses.
+func (d *Document) since(v uint64) (change, []change, bool) {
 	if v == d.version {
-		return change{version: v}, true
+		return change{version: v}, nil, true
 	}
 	var c change
-	found := false
-	for _, l := range d.log {
+	from := -1
+	for i, l := range d.log {
 		if l.version <= v {
 			continue
 		}
-		if !found {
+		if from < 0 {
 			if l.version != v+1 {
-				return change{}, false
+				return change{}, nil, false
 			}
-			c, found = l, true
+			c, from = l, i
 			continue
 		}
 		c = composeChanges(c, l)
 	}
-	return c, found && c.version == d.version
+	if from < 0 || c.version != d.version {
+		return change{}, nil, false
+	}
+	return c, d.log[from:], true
 }
 
 // composeChanges returns the change a then b make together.
@@ -310,12 +328,18 @@ func (d *Document) apply(step *undoStep, start, removed, inserted int, t Text) {
 	formatted := t.text == d.text.text // the text is the same: only formats changed
 	d.text = t
 	if step != nil {
+		part := change{start: start, oldEnd: start + removed, newEnd: start + inserted}
 		if step.start < 0 {
-			step.start, step.oldEnd, step.newEnd = start, start+removed, start+inserted
+			step.start, step.oldEnd, step.newEnd = part.start, part.oldEnd, part.newEnd
+			step.parts = []change{part}
 		} else {
-			c := composeChanges(change{start: step.start, oldEnd: step.oldEnd, newEnd: step.newEnd},
-				change{start: start, oldEnd: start + removed, newEnd: start + inserted})
+			c := composeChanges(change{start: step.start, oldEnd: step.oldEnd, newEnd: step.newEnd}, part)
 			step.start, step.oldEnd, step.newEnd = c.start, c.oldEnd, c.newEnd
+			if step.parts != nil && len(step.parts) < maxUndoParts {
+				step.parts = append(step.parts, part)
+			} else {
+				step.parts = nil
+			}
 		}
 		step.after = t
 	}
@@ -478,13 +502,26 @@ func (d *Document) takeBack(redo bool) {
 	s := (*from)[n-1]
 	(*from)[n-1] = undoStep{}
 	*from = (*from)[:n-1]
-	if redo {
+	switch {
+	case redo:
 		d.text = s.after
-		d.changed(s.start, s.oldEnd, s.newEnd)
+		for _, p := range s.parts {
+			d.changed(p.start, p.oldEnd, p.newEnd)
+		}
+		if s.parts == nil {
+			d.changed(s.start, s.oldEnd, s.newEnd)
+		}
 		d.setSelection(s.selAfter[0], s.selAfter[1])
-	} else {
+	default:
+		// The parts taken back from the last.
 		d.text = s.before
-		d.changed(s.start, s.newEnd, s.oldEnd)
+		for i := len(s.parts) - 1; i >= 0; i-- {
+			p := s.parts[i]
+			d.changed(p.start, p.newEnd, p.oldEnd)
+		}
+		if s.parts == nil {
+			d.changed(s.start, s.newEnd, s.oldEnd)
+		}
 		d.setSelection(s.selBefore[0], s.selBefore[1])
 	}
 	*to = append(*to, s)

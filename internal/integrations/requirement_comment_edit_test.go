@@ -213,8 +213,7 @@ func TestCommentEditCLI(t *testing.T) {
 				}
 				if mode == "config-change" && e.Stage == "保存修改" {
 					cfg := f.config
-					proxy := "http://127.0.0.1:9999"
-					cfg.CommandProxyURL = &proxy
+					cfg.MeegleProjects = []domain.MeegleProjectConfig{{ProjectKey: "p", SimpleName: "fixture"}, {ProjectKey: "other", SimpleName: "other"}}
 					_ = f.s.config.Save(cfg)
 				}
 				if mode == "account-change" && e.Stage == "保存修改" {

@@ -1,9 +1,11 @@
 package desktop
 
 import (
+	"context"
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	"silverwing-go/internal/asyncjob"
 	"silverwing-go/internal/platform"
 )
 
@@ -29,16 +31,8 @@ type settingsState struct {
 	settingsCLITool                  string
 	settingsLoaded                   string
 	settingsOutput                   string
-	settingsConfigOpen               bool
-	settingsConfigText               string
-	settingsConfigPath               string
-	settingsBackups                  []map[string]any
 	settingsConfigRecovery           *settingsConfigRecoveryState
-	settingsTemplates                []map[string]any
-	settingsTemplatesLoaded          bool
 	settingsMarketplaces             []map[string]any
-	settingsAgentScope               string
-	settingsAgentGroupID             string
 	settingsAgentContent             string
 	settingsAgentPath                string
 	settingsAgentLoaded              bool
@@ -73,7 +67,6 @@ type settingsState struct {
 	settingsCLISessions              map[string]map[string]any
 	settingsAuthPollTimers           map[string]*time.Timer
 	settingsTerminalResolution       map[string]any
-	settingsGroupID                  string
 	settingsPickerBusy               bool
 	settingsBoolInputs               map[string]*bool
 	migrationPlan                    any
@@ -82,11 +75,17 @@ type settingsState struct {
 	taskRootChange                   *taskRootChangeRequest
 	pageLocalRead                    *pageLocalReadState
 	settingsAutosave                 *settingsAutosaveState
+	platformConnections              *desktopPlatformConnections
+	platformJobs                     asyncjob.Group
 }
 
 func (s *settingsController) stopFeature() {
 	s.stopSettingsAutosave()
 	s.stopPageLocalRead()
+	s.state.platformJobs.Close()
+	if state := s.state.platformConnections; state != nil {
+		state.close()
+	}
 }
 
 func (s *settingsController) drainFeature() error {
@@ -95,6 +94,10 @@ func (s *settingsController) drainFeature() error {
 		featureCleanupStep{"", 30 * time.Second, s.closeSkillsBrowserReads},
 		featureCleanupStep{"退出前设置扩展读取清理未完成", 10 * time.Second, s.closeSettingsExtensionReads},
 		featureCleanupStep{"退出前配置读取清理未完成", 10 * time.Second, s.closeSettingsConfigReads},
+		featureCleanupStep{"退出前平台连接操作收尾未完成", 30 * time.Second, func(ctx context.Context) error {
+			s.state.platformJobs.Close()
+			return s.state.platformJobs.Wait(ctx)
+		}},
 	)
 	if state := s.state.settingsExtensionRequests; state != nil {
 		closeMarkdownPreviewState(state.previewMarkdown)

@@ -1,76 +1,72 @@
 package desktop
 
 import (
-	"fmt"
-	"strings"
+	"encoding/json"
 	"testing"
 
 	"silverwing-go/internal/application"
 )
 
-func TestTaskCreationToolsRespectEnabledSettings(t *testing.T) {
-	for _, tc := range []struct {
-		name            string
-		ids             []string
-		cursorAvailable bool
+func TestTaskCreationUsesSavedToolDefaults(t *testing.T) {
+	for _, entry := range []struct {
+		title, requirementTitle, link string
 	}{
-		{"codex-only", []string{"codex"}, true},
-		{"cursor-only", []string{"cursor"}, true},
-		{"both", []string{"codex", "cursor"}, true},
-		{"none", []string{}, true},
-		{"cursor-unavailable", []string{"cursor"}, false},
+		{title: "新建任务"},
+		{title: "基于需求创建任务", requirementTitle: "原始需求", link: "https://project.feishu.cn/obt/userstory/detail/1000000004"},
 	} {
-		for _, width := range []int{960, 1440} {
-			for _, dark := range []bool{false, true} {
-				t.Run(fmt.Sprintf("%s-%d-dark-%t", tc.name, width, dark), func(t *testing.T) {
-					s, tester := taskCreationLeftFixture(t, width, dark)
-					form := s.taskUnit.state.taskCreation
-					form.config.DefaultWorkspaceToolIDs = tc.ids
-					action := application.Action{Kind: "workspace.tools-options", Payload: map[string]any{"taskCreateToken": form.token}}
-					options := []taskCreationWorkspaceToolOption{
-						{ID: "codex", DisplayName: "Codex", Available: true},
-						{ID: "cursor", DisplayName: "Cursor", Available: tc.cursorAvailable, Reason: "未安装"},
+		for _, settings := range []struct {
+			name      string
+			ids       []string
+			available bool
+		}{
+			{name: "enabled", ids: []string{"codex"}, available: true},
+			{name: "disabled", ids: []string{}, available: true},
+			{name: "unavailable", ids: []string{"codex"}},
+		} {
+			t.Run(entry.title+"/"+settings.name, func(t *testing.T) {
+				s, tester := taskCreationCompactFixture(t, 960, false, 1)
+				config := s.taskUnit.state.taskCreation.config
+				config.DefaultWorkspaceToolIDs = settings.ids
+				raw, err := json.Marshal(config)
+				if err != nil {
+					t.Fatal(err)
+				}
+				s.requestTaskCreationDismiss()
+				saved := string(raw)
+				s.snapshot.ConfigJSON, s.settingsUnit.state.configJSON = saved, saved
+				tools := s.ensureSettingsExtensionRequests()
+				tools.workspaceToolsLoaded = true
+				tools.workspaceTools = []taskCreationWorkspaceToolOption{{ID: "codex", DisplayName: "Codex", Available: settings.available}}
+				s.openTaskCreateForm(entry.title, entry.requirementTitle, entry.link)
+				form := s.taskUnit.state.taskCreation
+				if form == nil || form.readRequest != nil || s.busy {
+					t.Fatal("creation form did not open directly")
+				}
+				t.Cleanup(s.requestTaskCreationDismiss)
+				form.draft.TaskName = "示例任务"
+				tester.Frame()
+				if tester.HasText("创建后打开工作区工具") || tester.HasText("Codex") || tester.HasText("Codex（不可用）") {
+					t.Fatalf("unexpected tool controls in creation form: %v", tester.Texts())
+				}
+
+				payload, err := s.taskCreationPayload()
+				if err != nil {
+					t.Fatal(err)
+				}
+				form.preview = s.snapshotTaskCreationPreview(payload)
+				for _, action := range []application.Action{
+					{Kind: "task.create-preview", Payload: taskCreationActionPayload(form.preview.payload, form.token)},
+					{Kind: "task.create", Payload: taskCreationSubmissionPayload(form, nil)},
+				} {
+					request, err := application.TaskCreateRequestFromAction(action)
+					if _, overridden := action.Payload["workspaceToolIds"]; err != nil || overridden || request.WorkspaceToolIDs != nil || request.RequirementLink != entry.link {
+						t.Fatalf("%s did not leave the tool selection to settings: %+v (%v)", action.Kind, request, err)
 					}
-					if !s.taskCreationActionResult(action, application.ActionResult{Data: options}) {
-						t.Fatal("tool result not applied")
-					}
-					tester.Frame()
-					for _, option := range options {
-						text := option.DisplayName
-						if !option.Available {
-							text += "（不可用）"
-						}
-						if tester.HasText(text) != containsString(tc.ids, option.ID) {
-							t.Fatalf("creation ignored enabled settings: ids=%v tool=%s visible=%t", tc.ids, option.ID, tester.HasText(text))
-						}
-					}
-					if len(tc.ids) == 0 && tester.HasText("创建后打开工作区工具") {
-						t.Fatal("disabled tool group left a heading")
-					}
-					// Even stale selection state must not launch a hidden or unavailable tool.
-					form.selectedToolIDs = map[string]bool{"codex": true, "cursor": true}
-					want := []string{}
-					for _, option := range options {
-						if option.Available && containsString(tc.ids, option.ID) {
-							want = append(want, option.ID)
-						}
-					}
-					if got := s.taskCreationSelectedToolIDs(); strings.Join(got, ",") != strings.Join(want, ",") {
-						t.Fatalf("creation selected hidden tools: got=%v want=%v", got, want)
-					}
-					if containsString(want, "codex") {
-						before := s.settingsUnit.state.configJSON
-						if err := tester.Click("Codex"); err != nil {
-							t.Fatal(err)
-						}
-						tester.Frame()
-						if form.selectedToolIDs["codex"] || !tester.HasText("Codex") || s.settingsUnit.state.configJSON != before {
-							t.Fatal("temporary deselection changed visibility or global settings")
-						}
-					}
-					captureTaskCreationLeft(t, tester, fmt.Sprintf("enabled-tools-%s-%d-dark-%t", tc.name, width, dark))
-				})
-			}
+				}
+				if s.settingsUnit.state.configJSON != saved {
+					t.Fatal("task creation changed the saved settings")
+				}
+			})
 		}
 	}
 }

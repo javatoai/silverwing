@@ -72,3 +72,29 @@ func TestWriteFileAtomicWindowsRetriesTransientOccupation(t *testing.T) {
 	}
 	assertNoAtomicWriteTemps(t, directory)
 }
+
+func TestRemoveFileIfPresentWindowsRetriesTransientOccupation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "submit-record.json")
+	if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	handle := holdAtomicTarget(t, path)
+	released := make(chan error, 1)
+	go func() {
+		time.Sleep(40 * time.Millisecond)
+		released <- syscall.CloseHandle(handle)
+	}()
+	err := RemoveFileIfPresent(path)
+	if closeErr := <-released; closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("finished submission record remains: %v", err)
+	}
+	if err := RemoveFileIfPresent(path); err != nil {
+		t.Fatal(err)
+	}
+}

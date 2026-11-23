@@ -36,8 +36,8 @@ func TestDiagnosticCredentialRedaction(t *testing.T) {
 
 func TestProxyCredentialRedactionMatchesCommandEnvironment(t *testing.T) {
 	endpoint, username, password := "http://proxy.invalid:18080", " user@example ", "pass@word"
-	cfg := domain.AppConfig{CommandProxyURL: &endpoint, CommandProxyUsername: &username, CommandProxyPassword: &password, CommandProxyTargets: []domain.CommandProxyTarget{domain.ProxyTargetGit}}
-	env, _ := commandEnvironment(cfg, domain.ProxyTargetGit)
+	cfg := domain.AppConfig{CommandProxyURL: &endpoint, CommandProxyUsername: &username, CommandProxyPassword: &password, CommandProxyTargets: []domain.CommandProxyTarget{domain.ProxyTargetCodex}}
+	env, _ := commandEnvironment(cfg, domain.ProxyTargetCodex)
 	if got := redactProxy(cfg, env["HTTPS_PROXY"]); got != "[代理地址已隐藏]" {
 		t.Fatalf("actual command proxy URL was not hidden: %q", got)
 	}

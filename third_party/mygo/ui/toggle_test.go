@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"math"
 	"slices"
 	"testing"
 
@@ -63,6 +64,102 @@ func TestFocusGroupIsOneTabStop(t *testing.T) {
 	}
 	if got := tabs(tt, Shift, 1, labels...); got[0] != "Before" {
 		t.Errorf("Shift+Tab out of the toolbar went to %q", got[0])
+	}
+}
+
+// TestTabStopFalse checks that an element of TabStop(false) takes the
+// focus from a click and from Focus while Tab passes over it, as HTML's
+// tabindex="-1" (#1308).
+func TestTabStopFalse(t *testing.T) {
+	var card *node
+	focus := false
+	labels := []string{"Before", "Inside", "After"}
+	tt := coreNewTester(func(c *context) {
+		coreColumn(c).Padding(10).Gap(8).Children(func() {
+			coreButton(c, "Before")
+			card = coreColumn(c).Padding(20).TabStop(false).Label("Card")
+			card.Children(func() { coreButton(c, "Inside") })
+			if focus {
+				card.Focus()
+			}
+			coreButton(c, "After")
+		})
+	}, 400, 300)
+	if got := tabs(tt, 0, 4, labels...); !slices.Equal(got, []string{"Before", "Inside", "After", "Before"}) {
+		t.Fatalf("Tab went %q", got)
+	}
+	if got := tabs(tt, Shift, 3, labels...); !slices.Equal(got, []string{"After", "Inside", "Before"}) {
+		t.Fatalf("Shift+Tab went %q", got)
+	}
+	// A press on it gives it the focus, and Tab goes on into it.
+	r, ok := tt.Find("Card")
+	if !ok {
+		t.Fatal("no card")
+	}
+	tt.ClickAt(r.X+5, r.Y+5)
+	if tt.rt.focused != card.id {
+		t.Fatal("a click did not focus the card")
+	}
+	if got := tabs(tt, 0, 1, labels...); got[0] != "Inside" {
+		t.Errorf("Tab from the card went to %q", got[0])
+	}
+	focus = true
+	tt.Frame()
+	focus = false
+	if tt.rt.focused != card.id {
+		t.Fatal("Focus did not focus the card")
+	}
+	if got := tabs(tt, Shift, 1, labels...); got[0] != "Before" {
+		t.Errorf("Shift+Tab from the card went to %q", got[0])
+	}
+	tt.send(platform.SurfaceEvent{Kind: platform.AccessibilityOn})
+	if n := accessNode(t, tt.h.access, platform.RoleGroup, "Card"); n.States&platform.AccessFocusable == 0 {
+		t.Errorf("the card is not focusable to assistive technology: %+v", n)
+	}
+	// TabStop(true) is a tab stop again.
+	tt = coreNewTester(func(c *context) {
+		coreColumn(c).Children(func() {
+			coreButton(c, "Before")
+			card = coreColumn(c).Padding(20).TabStop(false).TabStop(true).Label("Card")
+			card.Children(func() { coreButton(c, "Inside") })
+		})
+	}, 400, 300)
+	tabs(tt, 0, 2)
+	if tt.rt.focused != card.id {
+		t.Error("Tab did not stop at TabStop(true)")
+	}
+}
+
+// TestFocusGroupEntersPastTabStopFalse checks that Tab enters a focus
+// group at a member it stops at, not at one of TabStop(false).
+func TestFocusGroupEntersPastTabStopFalse(t *testing.T) {
+	labels := []string{"Before", "Cut", "Copy", "Paste", "After"}
+	tt := coreNewTester(func(c *context) {
+		coreColumn(c).Padding(10).Gap(8).Children(func() {
+			coreButton(c, "Before")
+			coreToolbar(c, func() {
+				coreButton(c, "Cut").TabStop(false)
+				coreButton(c, "Copy")
+				coreButton(c, "Paste")
+			}).Label("Edit")
+			coreButton(c, "After")
+		})
+	}, 500, 300)
+	if got := tabs(tt, 0, 3, labels...); !slices.Equal(got, []string{"Before", "Copy", "After"}) {
+		t.Fatalf("Tab went %q", got)
+	}
+	// The arrows still reach it, and Tab comes back into the group where
+	// it stops.
+	if got := tabs(tt, Shift, 1, labels...); got[0] != "Copy" {
+		t.Fatalf("Shift+Tab went to %q", got[0])
+	}
+	tt.Key(0, KeyLeft)
+	if !tt.Focused("Cut") {
+		t.Fatal("Left did not go to Cut")
+	}
+	tabs(tt, 0, 1)
+	if got := tabs(tt, Shift, 1, labels...); got[0] != "Copy" {
+		t.Errorf("Shift+Tab back into the toolbar went to %q", got[0])
 	}
 }
 
@@ -137,6 +234,30 @@ func TestRadioGroupArrowsChoose(t *testing.T) {
 	}
 }
 
+func TestRadioGroupEntersAtTheOneChosen(t *testing.T) {
+	value := ""
+	labels := []string{"a", "b", "c", "After"}
+	tt := coreNewTester(func(c *context) {
+		coreColumn(c).Padding(10).Gap(8).Children(func() {
+			coreRadioGroup(c, func() {
+				for _, v := range []string{"a", "b", "c"} {
+					coreRadioBase(c, &value, v).Children(func() { coreText(c, v) })
+				}
+			}).Label("Letters")
+			coreButton(c, "After")
+		})
+	}, 400, 300)
+	tt.Click("a")
+	if got := tabs(tt, 0, 1, labels...); value != "a" || got[0] != "After" {
+		t.Fatalf("chose %q, then Tab went to %q", value, got[0])
+	}
+	value = "c" // as another control would
+	tt.Frame()
+	if got := tabs(tt, Shift, 1, labels...); got[0] != "c" {
+		t.Errorf("Shift+Tab back into the group went to %q, not to the one chosen", got[0])
+	}
+}
+
 func TestToggle(t *testing.T) {
 	bold, changes := false, 0
 	tt := coreNewTester(func(c *context) {
@@ -181,6 +302,124 @@ func TestSegmented(t *testing.T) {
 	}
 }
 
+// FillEqually stretches a segmented control across its parent and shares
+// the width equally among its segments, which choose, take the keys and
+// read as they do otherwise.
+func TestSegmentedFillEqually(t *testing.T) {
+	view, changes, even := 0, 0, true
+	off := false
+	tt := coreNewTester(func(c *context) {
+		coreColumn(c).Fill().Padding(20).Children(func() {
+			seg := coreSegmented(c, &view, "Light", "Dark", "System settings")
+			if even {
+				seg.FillEqually()
+			}
+			if seg.Label("Appearance").Changed() {
+				changes++
+			}
+			g := coreToggleGroup(c, func() {
+				coreToggle(c, &off, "Off")
+				coreToggle(c, &off, "On, always")
+			}).Label("Mode")
+			if even {
+				g.FillEqually()
+			}
+		})
+	}, 520, 200)
+	bounds := func(role platform.AccessRole, labels ...string) []platform.RectF {
+		t.Helper()
+		tt.send(platform.SurfaceEvent{Kind: platform.AccessibilityOn})
+		var rs []platform.RectF
+		for _, l := range labels {
+			rs = append(rs, accessNode(t, tt.h.access, role, l).Bounds)
+		}
+		return rs
+	}
+	segs := bounds(platform.RoleRadio, "Light", "Dark", "System settings")
+	track := bounds(platform.RoleRadioGroup, "Appearance")[0]
+	if track.X != 20 || track.W != 480 {
+		t.Fatalf("the track is %+v, not across the column", track)
+	}
+	for i, r := range segs {
+		if math.Abs(r.W-segs[0].W) > 0.5 {
+			t.Errorf("segment %d is %v wide, the first %v", i, r.W, segs[0].W)
+		}
+	}
+	if end := segs[2].X + segs[2].W; track.X+track.W-end > 4 {
+		t.Errorf("the last segment ends at %v, the track at %v", end, track.X+track.W)
+	}
+	// The label sits in the middle of its share.
+	dark, _ := tt.Find("Dark")
+	if mid := float64(dark.X + dark.W/2); math.Abs(mid-(segs[1].X+segs[1].W/2)) > 1 {
+		t.Errorf("Dark's label is centered at %v in %+v", mid, segs[1])
+	}
+	toggles := bounds(platform.RoleToggleButton, "Off", "On, always")
+	if math.Abs(toggles[0].W-toggles[1].W) > 0.5 || toggles[0].W < 200 {
+		t.Errorf("the toggles are %v and %v wide", toggles[0].W, toggles[1].W)
+	}
+	// Clicks, keys and assistive technology as without it.
+	tt.ClickAt(float32(segs[1].X+segs[1].W-6), float32(segs[1].Y+segs[1].H/2))
+	if view != 1 || changes != 1 {
+		t.Fatalf("a click near the end of Dark's share: view %d, %d changes", view, changes)
+	}
+	tt.Key(0, KeyRight)
+	if view != 2 || !tt.Focused("System settings") {
+		t.Errorf("Right chose %d", view)
+	}
+	if n := accessNode(t, tt.h.access, platform.RoleRadio, "System settings"); n.States&platform.AccessChecked == 0 {
+		t.Errorf("System settings reads %+v", n)
+	}
+	// Without it, the segments are as wide as their labels.
+	even = false
+	tt.Frame()
+	segs = bounds(platform.RoleRadio, "Light", "Dark", "System settings")
+	if segs[2].W <= segs[1].W+20 {
+		t.Errorf("without FillEqually, the segments are %v and %v wide", segs[1].W, segs[2].W)
+	}
+	// In a narrow parent the shares stay equal, and a label longer than
+	// its share ends with an ellipsis, within its segment.
+	even = true
+	tt.SetSize(180, 200)
+	segs = bounds(platform.RoleRadio, "Light", "Dark", "System settings")
+	label, _ := tt.Find("System settings")
+	if math.Abs(segs[0].W-segs[2].W) > 0.5 || float64(label.X+label.W) > segs[2].X+segs[2].W {
+		t.Errorf("in a narrow track the segments are %v, %v and %v wide, the long label %+v", segs[0].W, segs[1].W, segs[2].W, label)
+	}
+}
+
+// FillEqually on SegmentedBase's Track, after its segments, shares the
+// width among them, a disabled one too, which still takes no click.
+func TestSegmentedBaseFillEqually(t *testing.T) {
+	view := 0
+	tt := coreNewTester(func(c *context) {
+		coreColumn(c).Fill().Padding(20).Children(func() {
+			seg := coreSegmentedBase(c, &view, 3)
+			seg.Track.Padding(3).Children(func() {
+				for i, label := range []string{"Grid", "List", "Columns view"} {
+					s := seg.Segment(i).Padding(4, 10).Disabled(i == 2)
+					s.Children(func() { coreText(c, label).SingleLine() })
+				}
+			}).FillEqually().Label("View")
+		})
+	}, 420, 200)
+	tt.send(platform.SurfaceEvent{Kind: platform.AccessibilityOn})
+	var segs []platform.RectF
+	for _, l := range []string{"Grid", "List", "Columns view"} {
+		segs = append(segs, accessNode(t, tt.h.access, platform.RoleRadio, l).Bounds)
+	}
+	if math.Abs(segs[0].W-segs[2].W) > 0.5 || math.Abs(segs[0].W-125) > 1 {
+		t.Fatalf("the segments are %v, %v and %v wide", segs[0].W, segs[1].W, segs[2].W)
+	}
+	tt.ClickAt(float32(segs[2].X+segs[2].W/2), float32(segs[2].Y+segs[2].H/2))
+	if view != 0 {
+		t.Errorf("a click on the disabled segment chose %d", view)
+	}
+	tt.ClickAt(float32(segs[1].X+segs[1].W-4), float32(segs[1].Y+segs[1].H/2))
+	if view != 1 {
+		t.Errorf("a click near the end of List's share chose %d", view)
+	}
+}
+
 func TestTabsAreOneTabStop(t *testing.T) {
 	tab := 1
 	labels := []string{"Before", "One", "Two", "Three", "After"}
@@ -193,6 +432,11 @@ func TestTabsAreOneTabStop(t *testing.T) {
 	}, 400, 200)
 	if got := tabs(tt, 0, 3, labels...); !slices.Equal(got, []string{"Before", "Two", "After"}) {
 		t.Errorf("Tab went %q", got)
+	}
+	tab = 2 // as another control would
+	tt.Frame()
+	if got := tabs(tt, Shift, 1, labels...); got[0] != "Three" {
+		t.Errorf("Shift+Tab back into the tabs went to %q, not to the one chosen", got[0])
 	}
 }
 
@@ -289,5 +533,28 @@ func TestToolbarEntersAtItsFirst(t *testing.T) {
 	tt.Key(0, KeyTab)
 	if !tt.Focused("Cut") {
 		t.Error("Tab went to the toggle that is on, not to the first control")
+	}
+}
+
+func TestToolbarEntersWhereItWasLeft(t *testing.T) {
+	view := 0
+	labels := []string{"Cut", "List", "Grid", "After"}
+	tt := coreNewTester(func(c *context) {
+		coreColumn(c).Gap(8).Children(func() {
+			coreToolbar(c, func() {
+				coreButton(c, "Cut")
+				coreSegmented(c, &view, "List", "Grid").Label("View")
+			})
+			coreButton(c, "After")
+		})
+	}, 400, 200)
+	tt.Click("Cut")
+	tabs(tt, 0, 1, labels...)
+	view = 1
+	tt.Frame()
+	// A radio group inside a toolbar is part of it: the toolbar keeps
+	// where it was left.
+	if got := tabs(tt, Shift, 1, labels...); got[0] != "Cut" {
+		t.Errorf("Shift+Tab back into the toolbar went to %q", got[0])
 	}
 }

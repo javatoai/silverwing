@@ -13,6 +13,9 @@ func (s *app) settingsCLIToolsMenu(c *ui.Context, p palette, tool, title string)
 		}
 		status := s.settingsUnit.state.settingsCLIStatus[tool]
 		command := firstNonEmpty(mapString(status, "command"), mapString(status, "commandPath"))
+		if desktopHasOptionalCLI(tool) {
+			command = firstNonEmpty(s.optionalCLIStatus(tool).Command, command)
+		}
 		s.settingsCLICommandMenuItems(c, menu, tool, command)
 		if (tool == "meegle") && (dataBool(status, "authenticated") || mapString(status, "authenticationState") == "AUTHENTICATED") {
 			pending := false

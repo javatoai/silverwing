@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/executable"
 	"silverwing-go/internal/process"
 )
 
@@ -37,7 +38,7 @@ func (s *Service) gitVersion(ctx context.Context) (map[string]any, error) {
 		return nil, err
 	}
 	command := s.gitExecutable(ctx, cfg)
-	result, err := s.runTool(ctx, cfg, domain.ProxyTargetGit, command, []string{"--version"}, "", 10*time.Second)
+	result, err := s.runTool(ctx, cfg, executable.ToolGit, command, []string{"--version"}, "", 10*time.Second)
 	if err != nil {
 		return map[string]any{"command": command, "success": false, "error": redactProxy(cfg, err.Error())}, nil
 	}
@@ -271,27 +272,27 @@ func (s *Service) diagnosticSystemSummary(ctx context.Context, cfg domain.AppCon
 	var out strings.Builder
 	fmt.Fprintf(&out, "silverwing config schema: %s\n", domain.CurrentAppConfigSchemaVersion)
 	fmt.Fprintf(&out, "OS: %s %s %s\n", runtime.GOOS, runtime.GOARCH, runtime.Version())
-	if result, err := s.runTool(ctx, cfg, domain.ProxyTargetGit, s.gitExecutable(ctx, cfg), []string{"--version"}, "", 10*time.Second); err == nil {
+	if result, err := s.runTool(ctx, cfg, executable.ToolGit, s.gitExecutable(ctx, cfg), []string{"--version"}, "", 10*time.Second); err == nil {
 		fmt.Fprintf(&out, "Git: %s\n", firstNonBlank(result.Stdout, result.Stderr))
 	} else if process.IsCleanupFailure(err) || ctx.Err() != nil {
 		return "", err
 	} else {
 		fmt.Fprintf(&out, "Git: unavailable: %s\n", sanitizeDiagnosticText(redactProxy(cfg, err.Error())))
 	}
-	_, resolution, _, resolveErr := s.resolveCLIExecutableWithSource(ctx, cfg, "meegle")
+	command, resolveErr := s.resolveCLIExecutable(ctx, cfg, executable.ToolMeegle)
 	if process.IsCleanupFailure(resolveErr) || ctx.Err() != nil {
 		if resolveErr != nil {
 			return "", resolveErr
 		}
 		return "", ctx.Err()
 	}
-	if resolveErr == nil && resolution.Command != "" {
-		version, err := s.diagnosticCommand(ctx, cfg, domain.ProxyTargetMeegle, resolution.Command, []string{"--version"})
+	if resolveErr == nil && command != "" {
+		version, err := s.diagnosticCommand(ctx, cfg, executable.ToolMeegle, command, []string{"--version"})
 		if err != nil {
 			return "", err
 		}
 		fmt.Fprintf(&out, "Meegle: %s\n", version)
-		auth, err := s.diagnosticCommand(ctx, cfg, domain.ProxyTargetMeegle, resolution.Command, []string{"auth", "status", "--format", "json"})
+		auth, err := s.diagnosticCommand(ctx, cfg, executable.ToolMeegle, command, []string{"auth", "status", "--format", "json"})
 		if err != nil {
 			return "", err
 		}
@@ -302,8 +303,8 @@ func (s *Service) diagnosticSystemSummary(ctx context.Context, cfg domain.AppCon
 	return out.String(), nil
 }
 
-func (s *Service) diagnosticCommand(ctx context.Context, cfg domain.AppConfig, target domain.CommandProxyTarget, executable string, args []string) (string, error) {
-	result, err := s.runTool(ctx, cfg, target, executable, args, "", 10*time.Second)
+func (s *Service) diagnosticCommand(ctx context.Context, cfg domain.AppConfig, tool executable.Tool, command string, args []string) (string, error) {
+	result, err := s.runTool(ctx, cfg, tool, command, args, "", 10*time.Second)
 	if err != nil {
 		if process.IsCleanupFailure(err) || ctx.Err() != nil {
 			return "", err
@@ -318,7 +319,7 @@ func (s *Service) diagnosticRepositorySummary(ctx context.Context, cfg domain.Ap
 	for _, repository := range cfg.Repositories {
 		fmt.Fprintf(&out, "[%s] %s\n", repository.ID, repository.Name)
 		fmt.Fprintf(&out, "root=%s\n", redactHome(repository.RootPath))
-		result, err := s.runTool(ctx, cfg, domain.ProxyTargetGit, s.gitExecutable(ctx, cfg), []string{"--no-optional-locks", "-C", repository.RootPath, "worktree", "list", "--porcelain"}, "", 10*time.Second)
+		result, err := s.runTool(ctx, cfg, executable.ToolGit, s.gitExecutable(ctx, cfg), []string{"--no-optional-locks", "-C", repository.RootPath, "worktree", "list", "--porcelain"}, "", 10*time.Second)
 		if process.IsCleanupFailure(err) || ctx.Err() != nil {
 			if err != nil {
 				return "", err
@@ -376,7 +377,7 @@ func sanitizedConfig(cfg domain.AppConfig) (map[string]any, error) {
 			}
 		}
 	}
-	for _, key := range []string{"terminalExecutable", "meegleExecutablePath", "codexExecutablePath", "gitExecutablePath", "genbuExecutablePath"} {
+	for _, key := range []string{"terminalExecutable", "meegleExecutablePath", "codexExecutablePath", "gitExecutablePath"} {
 		if value, ok := result[key].(string); ok && value != "" {
 			result[key] = "<configured>"
 		}

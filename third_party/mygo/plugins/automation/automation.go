@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -17,20 +18,46 @@ import (
 // window opens, so that the content of every window of native UI comes to
 // the plugin as it attaches.
 func init() {
+	if runtime.GOOS == "android" {
+		// Android's host sets the environment after this package's init, as
+		// the library has to load to run anything: the variable shows by the
+		// time the app is ready, before any window opens.
+		a := newApp()
+		surface.Automate = a.attached
+		mygo.App.WhenReady(func() {
+			close(a.ready)
+			if path := os.Getenv("MYGO_AUTOMATION"); path != "" {
+				a.listen(path)
+			}
+		})
+		return
+	}
 	path := os.Getenv("MYGO_AUTOMATION")
 	if path == "" {
 		return
 	}
+	a := newApp()
+	if !a.listen(path) {
+		return
+	}
+	surface.Automate = a.attached
+	mygo.App.WhenReady(func() { close(a.ready) })
+}
+
+func newApp() *app {
+	return &app{ready: make(chan struct{}), targets: map[*mygo.Window]target{}}
+}
+
+// listen serves requests on the socket at path, and reports whether it can.
+func (a *app) listen(path string) bool {
 	l, err := listen(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "mygo: automation:", err)
-		return
+		return false
 	}
-	a := &app{ready: make(chan struct{}), targets: map[*mygo.Window]target{}}
-	surface.Automate = a.attached
-	mygo.App.WhenReady(func() { close(a.ready) })
 	mygo.App.OnQuit(func() { l.Close() })
 	go serve(l, a)
+	return true
 }
 
 // app drives the running app's windows.
@@ -58,6 +85,8 @@ func (a *app) attached(conn *surface.Conn, content surface.Automated) {
 	}
 	if w, ok := conn.Window.(*mygo.Window); ok {
 		a.targets[w] = target{conn, content}
+		// A closed window's content goes, with what it showed (#1281).
+		w.OnClosed(func() { delete(a.targets, w) })
 	}
 }
 
@@ -147,9 +176,12 @@ func rectOf(r mygo.Rectangle) rect {
 	return rect{float64(r.X), float64(r.Y), float64(r.Width), float64(r.Height)}
 }
 
+// tree reads the elements the window shows: in a window out of sight, of
+// the frame waiting to build (Automated.Settle), built first.
 func (a *app) tree(id int) (window int, tree *platform.AccessTree, keys map[uint64]any, err error) {
 	err = a.content(id, func(w *mygo.Window, t target) error {
 		window = w.ID()
+		t.content.Settle()
 		tree, keys = t.content.AutomationTree()
 		return nil
 	})
@@ -157,13 +189,16 @@ func (a *app) tree(id int) (window int, tree *platform.AccessTree, keys map[uint
 }
 
 // act gives the content an action of assistive technology, as the
-// backend gives it those of the system's.
+// backend gives it those of the system's. In a window out of sight, the
+// frame that takes it builds at once (Automated.Settle).
 func (a *app) act(id int, ev platform.SurfaceEvent) error {
 	return a.content(id, func(w *mygo.Window, t target) error {
+		t.content.Settle()
 		tree, _ := t.content.AutomationTree()
 		for _, n := range tree.Nodes {
 			if n.ID == ev.ID {
 				t.conn.Event(ev)
+				t.content.Settle()
 				return nil
 			}
 		}
@@ -171,12 +206,14 @@ func (a *app) act(id int, ev platform.SurfaceEvent) error {
 	})
 }
 
-// input gives the content events, as the backend gives it the system's.
+// input gives the content events, as the backend gives it the system's,
+// and in a window out of sight builds the frame that takes them.
 func (a *app) input(id int, evs []platform.SurfaceEvent) error {
 	return a.content(id, func(w *mygo.Window, t target) error {
 		for _, ev := range evs {
 			t.conn.Event(ev)
 		}
+		t.content.Settle()
 		return nil
 	})
 }
@@ -246,6 +283,7 @@ func (a *app) idle(id int, timeout time.Duration) error {
 	for {
 		pending := false
 		err := a.content(id, func(_ *mygo.Window, t target) error {
+			t.content.Settle()
 			pending = t.content.FramePending()
 			return nil
 		})

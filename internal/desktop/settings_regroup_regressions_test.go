@@ -5,23 +5,25 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
+	"silverwing-go/internal/application"
 )
 
 func TestSettingsRegroupDeferredCLIHeightKeepsSearchTargetUsable(t *testing.T) {
 	s := newApp(nil, Options{Page: "settings", CapturePath: "settings-regroup-test"})
 	s.loading = false
 	s.snapshot.Home = t.TempDir()
-	s.settingsUnit.state.configJSON = `{}`
-	s.openSettingsSearchResult(settingsSearchEntry{"cli-genbu", "Genbu CLI 状态", ""})
+	enableOptionalCLIsForDesktopTest(t, s, "lark")
+	s.openSettingsSearchResult(settingsSearchEntry{"cli-lark", "Lark CLI 状态", ""})
 	s.busy = true
 	v := ui.NewTester(func(c *ui.Context) { s.settingsScreen(c, setTheme(c, false)) }, 1168, 854)
-	before, _ := v.Find("Genbu CLI 状态")
-	s.settingsUnit.state.settingsCLIErrors = map[string]string{"genbu": strings.Repeat("synthetic delayed error ", 20)}
+	before, _ := v.Find("Lark CLI 状态")
+	request := s.replaceOptionalCLI("lark", s.optionalCLIScope("lark"), application.OptionalCLIStatus{Phase: application.OptionalCLIUnavailable, Error: strings.Repeat("synthetic delayed error ", 20)})
+	t.Cleanup(request.cancel)
 	s.busy = false
 	v.Frame()
 	v.Frame()
 	v.Frame()
-	for _, name := range []string{"Genbu CLI 状态", "Genbu CLI 可执行文件"} {
+	for _, name := range []string{"Lark CLI 状态", "Lark CLI 可执行文件"} {
 		r, ok := v.Find(name)
 		t.Log("before", before, "after", name, r)
 		if !ok || r.H <= 0 || r.Y < 100 || r.Y+r.H > 774 {
@@ -49,12 +51,43 @@ func TestSettingsRegroupRootDraftBlocksNavigationUntilChoice(t *testing.T) {
 	}
 }
 
+func TestSettingsProfileShowsOnlyTaskDirectory(t *testing.T) {
+	s := newApp(&annualMaterialsUIBackend{}, Options{Page: "settings", CapturePath: "settings-profile-task-root"})
+	s.loading = false
+	s.snapshot.ProfileID = "fixture"
+	s.snapshot.ConfigJSON = `{}`
+	s.settingsUnit.state.configJSON = s.snapshot.ConfigJSON
+	s.navigateSettingsPage("task-paths", "")
+	tester := ui.NewTester(func(c *ui.Context) { s.settingsScreen(c, setTheme(c, false)) }, 1100, 760)
+	for _, label := range []string{"任务目录", "尚未设置", "选择目录"} {
+		if _, found := tester.Find(label); !found {
+			t.Fatalf("profile directory settings are missing %q", label)
+		}
+	}
+	if _, found := tester.Find("工作区根目录"); found {
+		t.Fatal("retired workspace setting is still visible")
+	}
+	matches := settingsSearch("工作区根目录")
+	if len(matches) != 1 || matches[0].page != "task-paths" || matches[0].title != "任务目录" {
+		t.Fatalf("search for the old setting should lead to the task directory: %v", matches)
+	}
+	snapshot := s.snapshot
+	snapshot.ConfigJSON = `{"taskRoot":"C:/existing-tasks"}`
+	s.applySnapshot(snapshot)
+	tester.Frame()
+	for _, label := range []string{"C:/existing-tasks", "更改目录"} {
+		if _, found := tester.Find(label); !found {
+			t.Fatalf("profile directory settings are missing %q after refresh, rendered root %q, labels %v", label, s.snapshotTaskRoot(), tester.Texts())
+		}
+	}
+}
+
 func TestSettingsRegroupPendingRevealYieldsToManualScroll(t *testing.T) {
 	s := newApp(nil, Options{Page: "settings", CapturePath: "settings-regroup-test"})
 	s.loading = false
 	s.snapshot.Home = t.TempDir()
 	s.settingsUnit.state.configJSON = `{}`
-	s.openSettingsSearchResult(settingsSearchEntry{"cli-genbu", "Genbu CLI 状态", ""})
+	s.openSettingsSearchResult(settingsSearchEntry{"cli-lark", "Lark CLI 状态", ""})
 	s.busy = true
 	v := ui.NewTester(func(c *ui.Context) { s.settingsScreen(c, setTheme(c, false)) }, 1168, 854)
 	if !s.settingsUnit.state.settingsSearchPending {
@@ -76,9 +109,9 @@ func TestSettingsRegroupPendingRevealYieldsToKeyboardContent(t *testing.T) {
 	s := newApp(nil, Options{Page: "settings", CapturePath: "settings-regroup-test"})
 	s.loading = false
 	s.snapshot.Home = t.TempDir()
-	s.settingsUnit.state.configJSON = `{}`
-	s.openSettingsSearchResult(settingsSearchEntry{"cli-genbu", "Genbu CLI 状态", ""})
-	s.toolsUnit.state.cliJobs = &cliJobState{requests: map[string]*cliJobRequest{"status:genbu": {tool: "genbu"}}}
+	enableOptionalCLIsForDesktopTest(t, s, "lark")
+	s.openSettingsSearchResult(settingsSearchEntry{"cli-lark", "Lark CLI 状态", ""})
+	s.toolsUnit.state.cliJobs = &cliJobState{requests: map[string]*cliJobRequest{"status:lark": {tool: "lark"}}}
 	v := ui.NewTester(func(c *ui.Context) { s.settingsScreen(c, setTheme(c, false)) }, 1168, 854)
 	found := false
 	for range 80 {
@@ -96,7 +129,7 @@ func TestSettingsRegroupPendingRevealYieldsToKeyboardContent(t *testing.T) {
 	if s.settingsUnit.state.settingsSearchPending {
 		t.Fatal("keyboard content edit kept delayed search reveal active")
 	}
-	delete(s.toolsUnit.state.cliJobs.requests, "status:genbu")
+	delete(s.toolsUnit.state.cliJobs.requests, "status:lark")
 	v.Frame()
 	v.Frame()
 	if s.settingsUnit.state.settingsSearchPending {
@@ -130,7 +163,7 @@ func TestSettingsRegroupMaterialsEntryPoints(t *testing.T) {
 }
 
 func TestSettingsRegroupExactVisibleNamesAndReveal(t *testing.T) {
-	for query, page := range map[string]string{"全局默认开发工具": "dev-tools", "允许临时选择开发工具": "dev-tools", "代理认证": "proxy", "同步周期": "materials-sync"} {
+	for query, page := range map[string]string{"全局默认开发工具": "dev-tools", "允许临时选择开发工具": "dev-tools", "代理认证": "proxy", "同步周期": "paths"} {
 		t.Run(query, func(t *testing.T) {
 			matches := settingsSearch(query)
 			if len(matches) == 0 || matches[0].page != page {
@@ -177,11 +210,11 @@ func TestSettingsRegroupTaskRootFocusFollowsActualOwner(t *testing.T) {
 func TestSettingsRegroupCLIRevealIncludesEditableCard(t *testing.T) {
 	s := newApp(nil, Options{Page: "settings", CapturePath: "settings-regroup-test"})
 	s.loading = false
-	s.settingsUnit.state.configJSON = `{}`
-	s.openSettingsSearchResult(settingsSearchEntry{"cli-genbu", "Genbu CLI 状态", ""})
+	enableOptionalCLIsForDesktopTest(t, s, "lark")
+	s.openSettingsSearchResult(settingsSearchEntry{"cli-lark", "Lark CLI 状态", ""})
 	v := ui.NewTester(func(c *ui.Context) { s.settingsScreen(c, setTheme(c, false)) }, 1100, 760)
 	v.Frame()
-	for _, name := range []string{"Genbu CLI 状态", "Genbu CLI 可执行文件"} {
+	for _, name := range []string{"Lark CLI 状态", "Lark CLI 可执行文件"} {
 		r, ok := v.Find(name)
 		if !ok || r.H <= 0 || r.Y < 0 || r.Y+r.H > 760 {
 			t.Fatal("CLI target card clipped", name, r)

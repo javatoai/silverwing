@@ -5,7 +5,7 @@ package production
 import "silverwing-go/internal/domain"
 
 type Selection struct {
-	GroupID   string `json:"groupId"`
+	GroupID   string `json:"-"`
 	ServiceID string `json:"serviceId"`
 }
 
@@ -17,6 +17,7 @@ type Target struct {
 	RepositoryID    string `json:"repositoryId"`
 	Repository      string `json:"repository"`
 	CommonDirectory string `json:"commonDirectory"`
+	WorktreeRoot    string `json:"worktreeRoot,omitempty"`
 	Remote          string `json:"remote"`
 	MainBranch      string `json:"mainBranch"`
 	RemoteIdentity  string `json:"remoteIdentity"`
@@ -35,7 +36,6 @@ type Preview struct {
 	ProductionInMain     bool                       `json:"productionInMain,omitempty"`
 	MainInRelease        bool                       `json:"mainInRelease,omitempty"`
 	ProductionStatus     domain.GenbuTagProbeStatus `json:"productionStatus"`
-	Manual               bool                       `json:"manual"`
 	Warning              string                     `json:"warning"`
 	MainSHA              string                     `json:"mainSha"`
 	ReleaseSHA           string                     `json:"releaseSha"`
@@ -104,6 +104,7 @@ type Batch struct {
 	Version           string         `json:"version"`
 	ReleaseBranch     string         `json:"releaseBranch"`
 	CreatedAt         string         `json:"createdAt"`
+	ReleaseCreatedAt  string         `json:"releaseCreatedAt,omitempty"`
 	UpdatedAt         string         `json:"updatedAt"`
 	Ended             bool           `json:"ended"`
 	Phase             string         `json:"phase"`
@@ -118,6 +119,13 @@ type Batch struct {
 	Intent            *Intent        `json:"intent,omitempty"`
 	TagPlan           *TagPlan       `json:"tagPlan,omitempty"`
 	RetainedWorktrees []string       `json:"retainedWorktrees,omitempty"`
+}
+
+func (b *Batch) confirmReleaseCreation() {
+	b.InitialSHA, b.ReleaseSHA = b.MainSHA, b.MainSHA
+	if b.ReleaseCreatedAt == "" {
+		b.ReleaseCreatedAt = timestamp()
+	}
 }
 
 func (b Batch) LastTagCommit() string {

@@ -64,7 +64,7 @@ func abortConflictFixture(t *testing.T, stage string) (*fixture, Batch) {
 		f.run(f.seed, "tag", "2.3.43.1", fix)
 		f.run(f.seed, "push", "origin", "2.3.43.1")
 		f.g.versions = []string{"2.3.43.1"}
-		p, e := f.s.Inspect(context.Background(), f.selection, "")
+		p, e := f.s.Inspect(context.Background(), f.selection)
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -78,7 +78,7 @@ func abortConflictFixture(t *testing.T, stage string) (*fixture, Batch) {
 			b, err = f.s.MergeFeature(context.Background(), b.ID, "feature/two", two, b.ReleaseSHA)
 		} else {
 			f.feature("master", "base.txt", "new master change\n", f.base)
-			_, p, e := f.s.InspectBatch(context.Background(), b.ID, "")
+			_, p, e := f.s.InspectBatch(context.Background(), b.ID)
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -132,7 +132,7 @@ func TestProductionAbortAllMergeStagesPreservesHistoryAndAllowsRetry(t *testing.
 			if stage == "feature" {
 				retry, err = f.s.MergeFeature(context.Background(), b.ID, b.Intent.SourceBranch, m.SourceSHA, m.BeforeSHA)
 			} else {
-				_, p, e := f.s.InspectBatch(context.Background(), b.ID, "")
+				_, p, e := f.s.InspectBatch(context.Background(), b.ID)
 				if e != nil {
 					t.Fatal(e)
 				}
@@ -286,13 +286,13 @@ func TestProductionAbortRejectsCommittedOrChangedTargets(t *testing.T) {
 				}
 				original := config
 				original.Groups = slices.Clone(config.Groups)
-				original.Groups[0].Services = slices.Clone(config.Groups[0].Services)
+				original.Services = slices.Clone(config.Services)
 				defer func() {
 					if err := f.s.Config.Save(original); err != nil {
 						t.Error(err)
 					}
 				}()
-				config.Groups[0].Services[0].MasterBranch = "origin/another-main"
+				config.Services[0].MasterBranch = "origin/another-main"
 				if err := f.s.Config.Save(config); err != nil {
 					t.Fatal(err)
 				}

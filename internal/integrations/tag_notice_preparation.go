@@ -35,11 +35,10 @@ func (s *Service) noticeStore() noticeprep.Store {
 	return noticeprep.Store{Directory: filepath.Join(s.paths.Cache, "tag-notice-preparation")}
 }
 
-// Only recipient-relevant values enter this opaque digest. Credentials and
-// proxy passwords are never written to a preparation record.
+// Only recipient-relevant values enter this opaque digest.
 func noticeConfigIdentity(c domain.AppConfig) string {
-	return releasenotice.Digest([]any{c.LarkExecutablePath, c.EffectiveLarkNotice(), c.MeegleExecutablePath, c.MeegleProjects,
-		c.CommandProxyURL, c.CommandProxyTargets, c.CommandProxyUsername, c.CommandProxyPassword, c.CommandProxyNoProxy})
+	return releasenotice.Digest([]any{c.TagEnabled, c.OptionalCLIEnabled("lark"), c.LarkExecutablePath, c.EffectiveLarkNotice(),
+		c.OptionalCLIs.Genbu, c.MeegleExecutablePath, c.MeegleProjects})
 }
 
 func noticeScope(cfg domain.AppConfig, link string) (noticeprep.Scope, error) {

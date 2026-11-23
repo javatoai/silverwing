@@ -39,13 +39,13 @@ func TestScopedSnapshotAvoidsUnrequestedCatalogTasksAndHistory(t *testing.T) {
 		t.Fatalf("task-only projection read history or lost scan diagnostics: %+v, %v", tasks, err)
 	}
 	if _, err := a.Config.Update(func(cConfig domain.AppConfig) (domain.AppConfig, error) {
-		cConfig.Groups[0].Name = "external group change"
+		cConfig.ProjectInstructionsGitURL = "https://example.invalid/updated-project.git"
 		return cConfig, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	updated, err := a.SnapshotFor(context.Background(), SnapshotRequest{})
-	if err != nil || !strings.Contains(updated.ConfigJSON, "external group change") {
+	if err != nil || !strings.Contains(updated.ConfigJSON, "https://example.invalid/updated-project.git") {
 		t.Fatalf("scoped read hid external configuration changes: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())

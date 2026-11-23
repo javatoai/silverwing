@@ -1,4 +1,4 @@
-//go:build linux && (amd64 || arm64)
+//go:build linux && !android && (amd64 || arm64)
 
 package linux
 
@@ -25,13 +25,20 @@ var (
 	clipboardID                                        ptr
 	clipboardGeneration                                uint64
 	clipboardConnected                                 bool
+	clipboardChanged                                   func()
 )
 
 type gtkClipboardSource struct {
-	id       ptr
-	data     transfer.Data
-	released func()
+	id        ptr
+	data      transfer.Data
+	concealed bool
+	released  func()
 }
+
+// gtkPasswordManagerHint is KDE's target of confidential content, offered
+// next to the content with the value "secret", which Klipper and other
+// clipboard managers leave out of their histories.
+const gtkPasswordManagerHint = "x-kde-passwordManagerHint"
 
 func initClipboardCallbacks() {
 	// Clipboard-only apps may never create a surface or initialize its drag
@@ -48,7 +55,13 @@ func initClipboardCallbacks() {
 			return
 		}
 		atom := gtkSelectionDataTarget(sel)
-		f := gtkFormat(takeStr(gdkAtomName(atom)))
+		name := takeStr(gdkAtomName(atom))
+		if name == gtkPasswordManagerHint && s.concealed {
+			secret := []byte("secret")
+			gtkSelectionDataSet(sel, atom, 8, &secret[0], int32(len(secret)))
+			return
+		}
+		f := gtkFormat(name)
 		b, err := s.data.Read(f)
 		if errors.Is(err, transfer.ErrFormat) && f == transfer.URIList {
 			b, err = s.data.Read(transfer.FileList)
@@ -73,7 +86,20 @@ func initClipboardCallbacks() {
 			s.release()
 		}
 	})
-	cbClipboardOwner = purego.NewCallback(func(board, event, data ptr) { clipboardGeneration++ })
+	cbClipboardOwner = purego.NewCallback(func(board, event, data ptr) {
+		clipboardGeneration++
+		if clipboardChanged != nil {
+			clipboardChanged()
+		}
+	})
+}
+
+func (clipboard) WatchChanges(changed func()) (func(), error) {
+	// This signal is already needed to detect ownership changes during
+	// reads. Removing the watch leaves that lightweight guard connected.
+	clip()
+	clipboardChanged = changed
+	return func() { clipboardChanged = nil }, nil
 }
 
 func (s *gtkClipboardSource) release() {
@@ -83,7 +109,7 @@ func (s *gtkClipboardSource) release() {
 	}
 }
 
-func (c clipboard) WriteData(data transfer.Data, released func()) error {
+func (c clipboard) WriteData(data transfer.Data, concealed bool, released func()) error {
 	if len(data.Formats()) == 0 {
 		c.Clear()
 		if released != nil {
@@ -92,9 +118,12 @@ func (c clipboard) WriteData(data transfer.Data, released func()) error {
 		return nil
 	}
 	clipboardID++
-	s := &gtkClipboardSource{id: clipboardID, data: data, released: released}
+	s := &gtkClipboardSource{id: clipboardID, data: data, concealed: concealed, released: released}
 	gtkClipboardSources[s.id] = s
 	targets := gtkTargets(data.Formats())
+	if concealed {
+		targets = append(targets, gtkTargetEntry{target: cs(gtkPasswordManagerHint), info: uint32(len(targets))})
+	}
 	if !gtkClipboardSetWithData(clip(), unsafe.Pointer(&targets[0]), uint32(len(targets)), cbClipboardGet, cbClipboardClear, s.id) {
 		delete(gtkClipboardSources, s.id)
 		return errors.New("mygo: cannot own the clipboard selection")
@@ -133,8 +162,14 @@ func clipboardTargets() ([]transfer.Format, map[transfer.Format]ptr) {
 		if !slices.Contains(out, f) {
 			out = append(out, f)
 		}
-		// Prefer canonical MIME targets over aliases where both are offered.
-		if targets[f] == 0 || name == string(f) {
+		// Prefer canonical MIME targets over aliases where both are offered,
+		// except for text: a bare text/plain is compound text, whose encoding
+		// escapes characters outside Latin-1 as \uXXXX literals, so the UTF-8
+		// targets always win.
+		switch {
+		case f == transfer.Text && (name == "UTF8_STRING" || name == "text/plain;charset=utf-8"):
+			targets[f] = atom
+		case targets[f] == 0 || (f != transfer.Text && name == string(f)):
 			targets[f] = atom
 		}
 		if f == transfer.URIList && targets[transfer.FileList] == 0 {

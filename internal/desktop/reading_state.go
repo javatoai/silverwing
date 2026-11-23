@@ -10,12 +10,14 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	markdownui "silverwing-go/internal/ui/markdown"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf16"
+
+	"silverwing-go/internal/storage"
+	markdownui "silverwing-go/internal/ui/markdown"
 )
 
 const (
@@ -544,13 +546,14 @@ func (t MaterialsDocumentTabsSnapshot) bounded() MaterialsDocumentTabsSnapshot {
 // debounce is deliberately owned here so callers can schedule snapshots without
 // adding timers or revision counters to the desktop app state.
 type ReadingStateStore struct {
-	path     string
-	mu       sync.Mutex
-	writeMu  sync.Mutex
-	revision uint64
-	timer    *time.Timer
-	closed   bool
-	lastErr  error
+	path        string
+	profileHome string
+	mu          sync.Mutex
+	writeMu     sync.Mutex
+	revision    uint64
+	timer       *time.Timer
+	closed      bool
+	lastErr     error
 }
 
 func NewReadingStateStore(path string) *ReadingStateStore {
@@ -611,7 +614,29 @@ func (s *ReadingStateStore) LoadWithError() (ReadingSnapshot, error) {
 	if writtenAt < 0 || writtenAt < now-maxReadingCacheAge.Milliseconds() || writtenAt > now+int64(24*time.Hour/time.Millisecond) {
 		return empty, nil
 	}
-	return saved.Bounded(), nil
+	return remapReadingPaths(saved, func(path string) string { return storage.ResolveProfilePath(s.profileHome, path) }).Bounded(), nil
+}
+
+func remapReadingPaths(value ReadingSnapshot, mapPath func(string) string) ReadingSnapshot {
+	mapOptional := func(path *string) *string {
+		if path == nil {
+			return nil
+		}
+		next := mapPath(*path)
+		return &next
+	}
+	value.LastTaskPath = mapPath(value.LastTaskPath)
+	value.Materials = append([]MaterialsSnapshot{}, value.Materials...)
+	for i := range value.Materials {
+		material := &value.Materials[i]
+		material.TaskPath = mapPath(material.TaskPath)
+		material.Root = mapOptional(material.Root)
+	}
+	value.Requirements = append([]RequirementReadingSnapshot{}, value.Requirements...)
+	for i := range value.Requirements {
+		value.Requirements[i].TaskPath = mapPath(value.Requirements[i].TaskPath)
+	}
+	return value
 }
 
 // ReserveSaveRevision lets callers capture a revision before delaying a save.
@@ -749,7 +774,7 @@ func (s *ReadingStateStore) writeRevision(value ReadingSnapshot, revision uint64
 	var content []byte
 	for {
 		var err error
-		content, err = json.Marshal(value)
+		content, err = json.Marshal(remapReadingPaths(value, func(path string) string { return storage.StoreProfilePath(s.profileHome, path) }))
 		if err != nil {
 			return fmt.Errorf("encode reading cache: %w", err)
 		}
@@ -870,12 +895,8 @@ func hasWindowsDrivePrefix(value string) bool {
 }
 
 func validTaskContentView(value string) bool {
-	switch value {
-	case "DETAIL", "MATERIALS", "REQUIREMENT", "NOTES", "TAG", "FILES", "SERVICES", "TERMINAL":
-		return true
-	default:
-		return false
-	}
+	_, ok := readingTabForView(value)
+	return ok
 }
 
 func boundedOrderedMap[V any](values map[string]V, order []string, limit int, valid func(string) bool, bound func(V) V) (map[string]V, []string) {

@@ -67,15 +67,37 @@ func posixTerminalLiteral(value string) string {
 }
 
 func (a *App) systemCLITerminal(ctx context.Context, action Action) (ActionResult, error) {
-	if strings.TrimSpace(actionPath(action)) == "" {
+	command := strings.TrimSpace(actionPath(action))
+	if command == "" {
 		return ActionResult{}, errors.New("CLI 命令路径不能为空")
 	}
-	plan, err := PlanSystemCLITerminalLaunch(runtime.GOOS, actionPath(action), false)
+	tool := strings.ToLower(strings.TrimSpace(textPayload(action, "tool")))
+	var check func(context.Context) error
+	switch tool {
+	case "lark":
+		verified, checkScope, err := a.optionalCLIScope(ctx, tool)
+		if err != nil {
+			return ActionResult{}, err
+		}
+		if command != verified {
+			return ActionResult{}, errors.New("CLI 命令路径已变化，请重新读取状态")
+		}
+		check = checkScope
+	case "git", "meegle", "codex":
+	default:
+		return ActionResult{}, errors.New("请指定要在终端中运行的 CLI")
+	}
+	plan, err := PlanSystemCLITerminalLaunch(runtime.GOOS, command, false)
 	if err != nil {
 		return ActionResult{}, err
 	}
 	if err := ctx.Err(); err != nil {
 		return ActionResult{}, err
 	}
-	return ActionResult{Message: "CLI 终端已打开", Path: actionPath(action)}, launchSystemTerminalPlan(ctx, plan)
+	if check != nil {
+		if err := check(ctx); err != nil {
+			return ActionResult{}, err
+		}
+	}
+	return ActionResult{Message: "CLI 终端已打开", Path: command}, launchSystemTerminalPlan(ctx, plan)
 }

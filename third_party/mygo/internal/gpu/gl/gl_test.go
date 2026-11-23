@@ -1,4 +1,4 @@
-//go:build linux && (amd64 || arm64)
+//go:build linux && !android && (amd64 || arm64)
 
 package gl
 
@@ -73,11 +73,37 @@ func TestDrawsAsTheCPURenderer(t *testing.T) {
 				}
 				gputest.Compare(t, "gl-perspective", read(), s.Width*4, s)
 			}
+			s = gputest.BehindOriginScene()
+			for range 2 {
+				if err := r.Render(s); err != nil {
+					t.Fatal(err)
+				}
+				pix := read()
+				gputest.Compare(t, "gl-behind-origin", pix, s.Width*4, s)
+				if p := pix[370*s.Width*4+160*4:][:4]; p[1] > 100 {
+					t.Errorf("the card turned far from its origin does not show: %v at its center", p)
+				}
+			}
 			for i, s := range gputest.TranslatedScenes() {
 				if err := r.Render(s); err != nil {
 					t.Fatal(err)
 				}
 				gputest.Compare(t, "gl-translated"+[]string{"", "-between-pixels"}[i], read(), s.Width*4, s)
+			}
+			s = gputest.MaskedClipScene()
+			// Twice: the second frame finds the clips' masks it made.
+			for range 2 {
+				if err := r.Render(s); err != nil {
+					t.Fatal(err)
+				}
+				gputest.Compare(t, "gl-masked-clips", read(), s.Width*4, s)
+			}
+			s = gputest.CornerClipScene()
+			for range 2 {
+				if err := r.Render(s); err != nil {
+					t.Fatal(err)
+				}
+				gputest.Compare(t, "gl-corner-clips", read(), s.Width*4, s)
 			}
 		})
 	}
@@ -122,6 +148,39 @@ func TestPresentsFramesDrawnInMemory(t *testing.T) {
 				}
 				if got := read(); !bytes.Equal(got, want.Pix[:len(got)]) {
 					t.Fatal("the frame presented differs from the frame drawn")
+				}
+			}
+		})
+	}
+}
+
+// TestDrawsVideoAsTheCPURenderer draws frames of video in NV12 from their
+// planes, which the shader converts as the CPU renderer does.
+func TestDrawsVideoAsTheCPURenderer(t *testing.T) {
+	for _, api := range apis {
+		t.Run(api.name, func(t *testing.T) {
+			s := gputest.VideoScene()
+			read := offscreen(t, api.es, s.Width, s.Height)
+			r, err := New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Release()
+			// Twice: the second frame updates the planes in place.
+			for i := range 2 {
+				for _, op := range s.Ops {
+					op.Image.Changed()
+				}
+				if err := r.Render(s); err != nil {
+					t.Fatal(err)
+				}
+				gputest.Compare(t, "gl-video", read(), s.Width*4, s)
+				if i == 0 {
+					for _, op := range s.Ops {
+						if t := r.images[op.Image.ID()]; t == nil || t.chroma == 0 {
+							panic("a frame of video drew from RGBA, not its planes")
+						}
+					}
 				}
 			}
 		})

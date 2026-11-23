@@ -1,5 +1,21 @@
 package domain
 
+import "strings"
+
+func IsLegacyCursorToolID(id string) bool {
+	return strings.EqualFold(strings.TrimSpace(id), "cursor")
+}
+
+func WithoutLegacyCursorTool(ids []string) []string {
+	kept := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if !IsLegacyCursorToolID(id) {
+			kept = append(kept, id)
+		}
+	}
+	return kept
+}
+
 // NormalizeTaskManifest returns a copy whose non-null list fields use the
 // serialized empty-list representation expected by Kotlin. Nil pointer fields
 // remain nil because they are nullable in the persisted model.

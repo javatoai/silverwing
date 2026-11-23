@@ -88,6 +88,32 @@ func TestBranchNoticeRejectsRecreatedTaskAndRetainsRetiredConfig(t *testing.T) {
 	}
 }
 
+func TestBranchNoticeDisabledDoesNotLaunchLark(t *testing.T) {
+	f := newTagNoticeDispatchFixture(t, "TesterA")
+	setOptionalCLISwitch(t, f.app, "lark", false)
+	cfg, err := f.app.Config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := Action{Kind: "task.branch-notice.prepare", TaskID: f.scope.TaskID, Payload: map[string]any{
+		"noticeConfigIdentity": BranchNoticeConfigIdentity(cfg),
+		"taskFilesContext":     TaskFilesContext{Home: f.scope.Home, TaskRoot: f.scope.TaskRoot, TaskPath: f.scope.TaskPath, TaskCreatedAt: f.scope.TaskCreatedAt},
+		"confirmed":            true,
+	}}
+	for _, kind := range []string{"task.branch-notice.prepare", "task.branch-notice.send"} {
+		action.Kind = kind
+		if _, err := f.app.Dispatch(context.Background(), action); err == nil || !strings.Contains(err.Error(), "Lark CLI 未启用") {
+			t.Fatal(kind, err)
+		}
+	}
+	if f.count(t, "local") != 0 || f.count(t, "send") != 0 || f.count(t, "metadata") != 0 {
+		t.Fatal("disabled branch notification launched a CLI")
+	}
+	if b, err := f.app.branchNoticeScope(context.Background(), action); err != nil || len(b.rows) == 0 {
+		t.Fatal("branch rows unavailable", b, err)
+	}
+}
+
 func TestNoticeSelectionRejectsRetiredReceiverOverrides(t *testing.T) {
 	for _, payload := range []any{nil, map[string]any{"keys": []string{"ou_other"}}, map[string]any{"selfOpenId": "ou_other"}, map[string]any{"selfName": "untrusted"}, map[string]any{"chatId": "oc_group"}, map[string]any{"receivers": []string{"ou_other"}}} {
 		if _, e := noticeSelection(Action{Payload: map[string]any{"selection": payload}}); e == nil {

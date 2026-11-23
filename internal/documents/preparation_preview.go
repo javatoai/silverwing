@@ -30,8 +30,11 @@ func (s *PreparationService) Preview(ctx context.Context, config domain.AppConfi
 	if err != nil {
 		return fail(err.Error())
 	}
-	root, err := requireMaterialsRoot(config.RequirementMaterialsRoot)
+	paths, err := config.MaterialsPaths()
 	if err != nil {
+		return fail(err.Error())
+	}
+	if err := validateMaterialsPaths(paths); err != nil {
 		return fail(err.Error())
 	}
 	subdirectory, err := requireMaterialsSubdirectory(config.RequirementMaterialsSubdirectory)
@@ -42,7 +45,7 @@ func (s *PreparationService) Preview(ctx context.Context, config domain.AppConfi
 	if err := validateMaterialsSegment(folder, "需求文件夹名称", 80); err != nil {
 		return fail(err.Error())
 	}
-	requirementDirectory, err := buildRequirementDirectory(root, id, folder, materialsCreationYear(ctx))
+	requirementDirectory, err := buildRequirementDirectory(paths.Requirements, id, folder, materialsCreationYear(ctx))
 	if err != nil {
 		return fail(err.Error())
 	}

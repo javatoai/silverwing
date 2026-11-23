@@ -1,156 +1,68 @@
 package desktop
 
 import (
-	"strings"
 	"testing"
 
-	"silverwing-go/internal/domain"
 	markdownui "silverwing-go/internal/ui/markdown"
 	"silverwing-go/internal/workspace"
-
-	"github.com/egoist/mygo/ui"
 )
 
-func scrollTaskCreationToNotes(t *testing.T, view *ui.Tester) ui.Rect {
-	t.Helper()
-	left, found := view.Find("任务基本信息")
-	if !found {
-		t.Fatal("actual task dialog has no basic-information scroll")
-	}
-	view.Scroll(left.X+left.W*.65, left.Y+left.H*.6, 0, 10000)
-	view.Frame()
-	return left
-}
-
-func TestTaskCreationActualLeftScrollHasOwnedMarkdownAndTemplates(t *testing.T) {
+func TestTaskCreationFormOmitsTaskNotesFromSubmission(t *testing.T) {
 	s, view := taskCreationCompactFixture(t, 1100, false, 1)
 	state := s.taskUnit.state.taskCreation
-	t.Cleanup(func() { closeTaskCreationMarkdown(state) })
-	state.templatesError = ""
-	state.templates = []domain.AgentTaskTemplate{
-		{ID: "first", Name: "模板一", Content: "# 第一份\r\n\r\n原始格式  \r\n"},
-		{ID: "second", Name: "模板二", Content: "# 第二份\n\n替换后正文\n"},
+	for _, removed := range []string{"任务说明 Markdown 编辑区", "从模板填充", "还没有可用模板", "创建后可在任务详情中继续管理任务说明"} {
+		if view.HasText(removed) {
+			t.Fatalf("removed notes control or hint is visible: %q", removed)
+		}
 	}
-	view.Frame()
-	left := scrollTaskCreationToNotes(t, view)
-	if state.markdown == nil || state.markdown.notes == nil || !view.HasText("任务说明 Markdown 编辑区") || !view.HasText("模板一") || !view.HasText("查看生成说明") {
-		t.Fatalf("actual creation entry is missing Markdown controls: %v", view.Texts())
+	if _, found := view.Find("任务说明"); found {
+		t.Fatal("the form still has a task notes field")
 	}
-	if _, found := view.Find("任务服务列表"); !found {
-		t.Fatal("notes replaced the existing services column")
+	for _, label := range []string{"查看生成说明", "任务服务列表", "检查并创建任务"} {
+		if _, found := view.Find(label); !found {
+			t.Fatalf("creation form is missing %q", label)
+		}
 	}
-	if err := view.Click("模板一"); err != nil {
-		t.Fatal(err)
-	}
-	owner := state.markdown
-	draft := owner.notes
-	buffer := draft.editor.NativeState().Buffer()
-	if state.notes != state.templates[0].Content || state.selectedTemplate != "first" || draft.editor.Snapshot().Source != state.notes {
-		t.Fatal("template selection did not update the owned Buffer and original notes payload")
-	}
-	native := draft.editor.NativeState()
-	native.SetSelection(len(buffer.String()), len(buffer.String()))
-	native.Focus()
-	view.Frame()
-	view.Type("手工补充😀")
-	manual := state.notes
-	view.Scroll(left.X+left.W*.65, left.Y+left.H*.6, 0, 10000)
-	view.Frame()
-	if err := view.Click("模板二"); err != nil {
-		t.Fatal(err)
-	}
-	if state.pendingTemplate != "second" || state.notes != manual || !view.HasText("保留当前内容") {
-		t.Fatal("dirty template selection bypassed replacement confirmation")
-	}
-	if err := view.Click("保留当前内容"); err != nil {
-		t.Fatal(err)
-	}
-	if state.notes != manual || state.pendingTemplate != "" {
-		t.Fatal("keeping current notes changed the draft")
-	}
-	if err := view.Click("模板二"); err != nil {
-		t.Fatal(err)
-	}
-	if err := view.Click("替换"); err != nil {
-		t.Fatal(err)
-	}
-	if state.notes != state.templates[1].Content || draft.editor.Snapshot().Source != state.notes || state.markdown != owner || draft.editor.NativeState().Buffer() != buffer {
-		t.Fatal("accepted template replacement lost the form owner or selected source")
-	}
+
 	payload, err := s.taskCreationPayload()
-	if err != nil || payload["taskNotes"] != state.templates[1].Content {
-		t.Fatalf("task notes no longer feed original creation payload: %+v %v", payload, err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	native.Focus()
-	view.Frame()
-	view.Command("undo")
-	if state.notes != manual {
-		t.Fatalf("template replacement lost Undo: %q want %q", state.notes, manual)
+	state.preview = s.snapshotTaskCreationPreview(payload)
+	submission := taskCreationSubmissionPayload(state, nil)
+	if _, exists := submission["taskNotes"]; exists {
+		t.Fatal("creation submission still includes taskNotes")
 	}
-	view.Command("redo")
-	if state.notes != state.templates[1].Content {
-		t.Fatal("template replacement lost Redo")
-	}
-}
-
-func TestTaskCreationPreflightCapturesMarkdownIMEBeforePayload(t *testing.T) {
-	s, view := taskCreationCompactFixture(t, 1100, false, 1)
-	state := s.taskUnit.state.taskCreation
-	t.Cleanup(func() { closeTaskCreationMarkdown(state) })
-	const source = "\ufeff# 说明\r\n\r\n正文  \r\n"
-	if !s.replaceTaskCreationMarkdownNotes(state, source) {
-		t.Fatal(state.inlineError)
-	}
-	scrollTaskCreationToNotes(t, view)
-	native := state.markdown.notes.editor.NativeState()
-	buffer := native.Buffer()
-	native.SetSelection(len(buffer.String()), len(buffer.String()))
-	native.Focus()
-	view.Frame()
-	view.Compose("中文😀", 3)
-	if !native.Composing() || state.notes != source {
-		t.Fatal("preflight test did not start with a virtual preedit")
-	}
-	// Even a later configuration/validation failure must retain the just-
-	// captured source. The submit boundary cannot omit composition text.
-	state.configError = "fixture configuration error"
-	s.beginTaskCreationPreflight()
-	if native.Composing() || state.notes != source+"中文😀" || native.Buffer() != buffer {
-		t.Fatalf("preflight omitted IME or replaced owner: %q", state.notes)
-	}
-	payload, err := s.taskCreationPayload()
-	if err != nil || payload["taskNotes"] != state.notes {
-		t.Fatalf("captured note did not feed task payload: %+v %v", payload, err)
+	selections, _ := submission["serviceSelections"].([]workspace.TaskServiceSelection)
+	if submission["taskCreateToken"] != state.token || submission["folderName"] != state.draft.TaskName ||
+		submission["requirementLink"] != state.draft.RequirementLink || len(selections) != 1 || selections[0].ServiceID != "service" {
+		t.Fatalf("creation submission omitted existing form values: %+v", submission)
 	}
 }
 
-func TestTaskCreationGeneratedDocumentsUseSeparateReadonlyReader(t *testing.T) {
+func TestTaskCreationGeneratedDocumentsUseReadonlyReader(t *testing.T) {
 	s, view := taskCreationCompactFixture(t, 1100, false, 1)
 	state := s.taskUnit.state.taskCreation
-	t.Cleanup(func() { closeTaskCreationMarkdown(state) })
-	const notes = "# 可编辑说明\n\n人工正文\n"
-	if !s.replaceTaskCreationMarkdownNotes(state, notes) {
-		t.Fatal(state.inlineError)
-	}
+	t.Cleanup(func() { closeTaskCreationGeneratedPreview(state) })
 	state.materialsPreviewInputSig = s.taskCreationMaterialsPreviewSignature()
 	state.agentPreviewSig = s.taskCreationAgentPreviewSignature()
-	state.agentPreviewErr = ""
 	state.agentPreview = &workspace.AgentDocumentPreview{Files: []workspace.AgentDocumentPreviewFile{
-		{RelativePath: "AGENTS.md", Content: "# 生成 AGENTS\n\n生成文档只读\n"},
-		{RelativePath: "TASK-CONTEXT.md", Content: "# 生成 CONTEXT\n\n上下文只读\n"},
+		{RelativePath: workspace.AgentRouterFileName, Content: "# 生成 AGENTS\n\n生成文档只读\n"},
+		{RelativePath: ".workspace/agent/TASK-CONTEXT.md", Content: "旧上下文"},
 	}}
-	state.agentPreviewFile = "AGENTS.md"
-	scrollTaskCreationToNotes(t, view)
-	buffer := state.markdown.notes.editor.NativeState().Buffer()
 	if err := view.Click("查看生成说明"); err != nil {
 		t.Fatal(err)
 	}
-	owner := state.markdown
-	if !owner.previewOpen || owner.reader == nil || !view.HasText("生成文档只读") {
-		t.Fatalf("generated preview did not use separate Reader: %v", view.Texts())
+	preview := state.generatedPreview
+	if preview == nil || !preview.open || preview.reader == nil || !view.HasText("生成文档只读") {
+		t.Fatalf("generated preview did not open the reader: %v", view.Texts())
 	}
-	if owner.reader.Document().ID == owner.notes.editor.Snapshot().DocumentID || owner.reader.Snapshot().Source != state.agentPreview.Files[0].Content {
-		t.Fatal("generated reader borrowed editable notes owner or transformed source")
+	if view.HasText("TASK-CONTEXT.md") || view.HasText("旧上下文") {
+		t.Fatal("generated preview offers a separate task context")
+	}
+	source := state.agentPreview.Files[0].Content
+	if preview.reader.Snapshot().Source != source {
+		t.Fatal("generated preview lost the original Markdown")
 	}
 	if err := view.Click("生成文档只读"); err != nil {
 		t.Fatal(err)
@@ -163,18 +75,20 @@ func TestTaskCreationGeneratedDocumentsUseSeparateReadonlyReader(t *testing.T) {
 		t.Fatal(err)
 	}
 	view.Type("不能写入源码")
-	if owner.reader.Mode() != markdownui.Source || owner.reader.Snapshot().Source != state.agentPreview.Files[0].Content || state.notes != notes || state.markdown.notes.editor.NativeState().Buffer() != buffer {
-		t.Fatal("generated source view changed a generated file or the editable notes")
+	if preview.reader.Mode() != markdownui.Source || preview.reader.Snapshot().Source != source || state.agentPreview.Files[0].Content != source {
+		t.Fatal("generated Markdown source was unavailable or editable")
 	}
-	for _, label := range view.Texts() {
-		if strings.Contains(label, "实时编辑") {
-			t.Fatal("generated Reader offered an editable mode")
-		}
+	if view.HasText("实时编辑") {
+		t.Fatal("generated reader offered an editable mode")
 	}
+	readerContext := preview.reader.Context()
 	if err := view.Click("关闭预览"); err != nil {
 		t.Fatal(err)
 	}
-	if owner.previewOpen || owner.reader != nil || state.notes != notes {
-		t.Fatal("closing generated preview lost notes or left its reader active")
+	if state.generatedPreview != nil || readerContext.Err() == nil {
+		t.Fatal("closing generated preview left its reader active")
+	}
+	if !s.dialogOpen || s.taskUnit.state.taskCreation != state {
+		t.Fatal("closing generated preview dismissed the creation form")
 	}
 }

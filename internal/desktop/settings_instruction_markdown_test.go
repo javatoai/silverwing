@@ -57,7 +57,7 @@ func settingsInstructionFixture(t *testing.T, source string) (*app, *settingsIns
 		materialsUnit: materialsController{state: materialsState{documentSaveRefs: map[string]documentSaveRef{}}}}
 	s.snapshot.Home = paths.Home
 	s.snapshot.Groups = []application.Group{{ID: domain.DefaultGroupID, Name: "默认分组"}}
-	s.settingsUnit.state.settingsPage, s.settingsUnit.state.settingsAgentScope = "agents", "global"
+	s.settingsUnit.state.settingsPage = "agents"
 	s.settingsUnit.state.settingsAgentContext = "global:"
 	s.initMarkdownAutosave()
 	s.materialsUnit.state.markdownAutosave.SetDebounce(time.Hour)
@@ -149,43 +149,25 @@ func TestSettingsInstructionsSharedEditorSaveUndoAndModes(t *testing.T) {
 	}
 }
 
-func TestSettingsInstructionsScopeAndLateResultIsolation(t *testing.T) {
+func TestSettingsInstructionsIgnoreRetiredScopeAndLateResults(t *testing.T) {
 	s, backend, view := settingsInstructionFixture(t, "# 全局\n\n原文\n")
 	global := appendSettingsInstruction(t, s, view, "全局新增")
-	globalKey := global.binding.id
-	if !s.leaveSettingsInstructionEditor() {
-		t.Fatal(s.lastError)
-	}
-	s.settingsUnit.state.settingsAgentScope, s.settingsUnit.state.settingsAgentGroupID = domain.DefaultGroupID, domain.DefaultGroupID
-	s.settingsUnit.state.settingsAgentContext = "group:" + domain.DefaultGroupID
-	read := application.Action{Kind: "instructions.read", Payload: map[string]any{"scope": "group", "groupId": domain.DefaultGroupID}}
-	result, err := backend.Dispatch(context.Background(), read)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.applyInstructionReadResult(read, result)
-	view.Frame()
-	group := appendSettingsInstruction(t, s, view, "分组新增")
-	if group == global || group.live.Buffer() == global.live.Buffer() {
-		t.Fatal("global and group share an input buffer")
-	}
-	global.binding.commit("stale callback")
-	s.applyInstructionReadResult(application.Action{Kind: "instructions.read", Payload: map[string]any{"scope": "global"}}, application.ActionResult{Path: backend.Paths.GlobalAgents, Text: "late global read"})
-	staleHome := application.Action{Kind: "instructions.read", Payload: map[string]any{"scope": "group", "groupId": domain.DefaultGroupID, "instructionHome": filepath.Join(backend.Paths.Home, "old-home")}}
-	s.applyInstructionReadResult(staleHome, application.ActionResult{Path: result.Path, Text: "wrong home"})
-	if !strings.Contains(s.settingsUnit.state.settingsAgentContent, "分组新增") {
-		t.Fatal("a stale scope/home callback replaced the current document")
+	group := application.Action{Kind: "instructions.read", Payload: map[string]any{"scope": "group", "groupId": "old-group"}}
+	s.applyInstructionReadResult(group, application.ActionResult{Path: "old.md", Text: "retired group read"})
+	staleHome := application.Action{Kind: "instructions.read", Payload: map[string]any{"scope": "global", "instructionHome": filepath.Join(backend.Paths.Home, "old-home")}}
+	s.applyInstructionReadResult(staleHome, application.ActionResult{Path: backend.Paths.GlobalAgents, Text: "wrong home"})
+	if !strings.Contains(s.settingsUnit.state.settingsAgentContent, "全局新增") {
+		t.Fatal("stale scope or home callback replaced the global document")
 	}
 	if failures := flushMaterialTextTest(t, s); len(failures) > 0 {
 		t.Fatal(failures)
 	}
 	globalDisk, _ := os.ReadFile(backend.Paths.GlobalAgents)
-	groupDisk, _ := os.ReadFile(result.Path)
-	if string(globalDisk) != "# 全局\n\n原文\n全局新增" || string(groupDisk) != "# 分组\n\n组说明\n分组新增" {
-		t.Fatalf("scope saves crossed: global=%q group=%q", globalDisk, groupDisk)
+	if string(globalDisk) != "# 全局\n\n原文\n全局新增" {
+		t.Fatalf("global save = %q", globalDisk)
 	}
-	if ref, ok := s.instructionSaveRef(globalKey); !ok || ref.scope != "global" {
-		t.Fatal("inactive save lost the captured scope")
+	if ref, ok := s.instructionSaveRef(global.binding.id); !ok || ref.scope != "global" {
+		t.Fatal("save lost the captured global scope")
 	}
 }
 
@@ -280,7 +262,7 @@ func TestSettingsInstructionsRejectedIMEKeepsScope(t *testing.T) {
 	state.live.Buffer().SetMaxSourceBytes(len("正文"))
 	view.Compose("输入", 2)
 	key := s.ensureTaskNotesUI().activeKey
-	if s.leaveSettingsInstructionEditor() || !state.live.Composing() || s.ensureTaskNotesUI().activeKey != key || s.settingsUnit.state.settingsAgentScope != "global" {
+	if s.leaveSettingsInstructionEditor() || !state.live.Composing() || s.ensureTaskNotesUI().activeKey != key {
 		t.Fatal("rejected IME lost the active document")
 	}
 	if err := s.captureDocumentCloseInput(); err == nil {
@@ -297,7 +279,7 @@ func TestSettingsInstructionsEditingRequiresReadPermission(t *testing.T) {
 	for _, scope := range []string{"task", "", "unknown", "global", "group"} {
 		for _, readOnly := range []bool{false, true} {
 			ref := documentSaveRef{kind: "instruction", scope: scope, readOnly: readOnly}
-			want := !readOnly && (scope == "global" || scope == "group")
+			want := !readOnly && scope == "global"
 			if markdownSaveRefWritable(ref) != want {
 				t.Fatalf("permission widened for %#v", ref)
 			}
@@ -393,7 +375,7 @@ func settingsInstructionReadTicket(s *app, acceptDisk bool) application.Action {
 		"scope": "global", "instructionHome": s.snapshot.Home, "acceptDisk": acceptDisk,
 		"instructionBufferVersion": state.live.Buffer().Version(),
 	}}
-	s.captureSettingsInstructionSaveVersion(action.Payload, "global", "")
+	s.captureSettingsInstructionSaveVersion(action.Payload)
 	return action
 }
 
@@ -491,7 +473,7 @@ func TestSettingsInstructionsReturningScopeRetainsPendingSave(t *testing.T) {
 	}
 	s.settingsUnit.state.settingsAgentLoaded = false
 	read := application.Action{Kind: "instructions.read", Payload: map[string]any{"scope": "global", "instructionHome": s.snapshot.Home}}
-	s.captureSettingsInstructionSaveVersion(read.Payload, "global", "")
+	s.captureSettingsInstructionSaveVersion(read.Payload)
 	if _, captured := read.Payload["instructionSaveVersion"]; !captured {
 		t.Fatal("returning to an inactive scope did not capture its pending save")
 	}
@@ -507,7 +489,7 @@ func TestSettingsInstructionsReturningScopeRetainsPendingSave(t *testing.T) {
 		t.Fatal("a stale initial read must defer a fresh read instead of showing old content or an empty pane")
 	}
 	read.Payload = map[string]any{"scope": "global", "instructionHome": s.snapshot.Home}
-	s.captureSettingsInstructionSaveVersion(read.Payload, "global", "")
+	s.captureSettingsInstructionSaveVersion(read.Payload)
 	fresh, err := backend.Dispatch(context.Background(), read)
 	if err != nil {
 		t.Fatal(err)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"math"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -514,6 +515,42 @@ func TestWAV(t *testing.T) {
 	}
 }
 
+// A header can say any length: ReadSound reserves no more than a start
+// for it, and keeps what the decoder had.
+func TestSoundOfAWrongLength(t *testing.T) {
+	t.Run("a WAV cut short", func(t *testing.T) {
+		b := wav(1, 8, 1, []byte{128, 192, 64, 0})
+		binary.LittleEndian.PutUint32(b[len(b)-8:], 0xfffffffe) // the data chunk's size
+		s, err := DecodeSound(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(s.samples) != 4 {
+			t.Errorf("decoded %d samples, want 4", len(s.samples))
+		}
+		if cap(s.samples) > reserveFrames {
+			t.Errorf("reserved %d samples for 4", cap(s.samples))
+		}
+	})
+	t.Run("a decoder of any length", func(t *testing.T) {
+		s, err := ReadSound(wrongLength{&genDecoder{ch: 2, length: 8}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(s.samples) != 16 {
+			t.Errorf("decoded %d samples, want 16", len(s.samples))
+		}
+		if cap(s.samples) > 2*reserveFrames {
+			t.Errorf("reserved %d samples for 16", cap(s.samples))
+		}
+	})
+}
+
+// wrongLength says its decoder is longer than any sound.
+type wrongLength struct{ *genDecoder }
+
+func (wrongLength) Len() int64 { return math.MaxInt64 }
+
 func TestWAVSeek(t *testing.T) {
 	data := make([]byte, 0, 200)
 	for i := range 100 {
@@ -637,5 +674,98 @@ func TestNullDeviceKeepsTime(t *testing.T) {
 	clock = start.Add(2*time.Second + time.Millisecond)
 	if err := d.write(chunk); err != errRetry {
 		t.Errorf("after 2 s: %v, want errRetry", err)
+	}
+}
+
+// A stream's decoder sleeps while the ring is mostly full, rather than
+// waking on every mix to find nothing to do.
+func TestStreamWakesItsDecoderRarely(t *testing.T) {
+	setup(t)
+	const total = 10 * sampleRate // 10 s
+	d := &heldDecoder{
+		genDecoder: genDecoder{ch: 2, length: total},
+		held:       make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+	p := NewPlayer(d)
+	defer p.Close()
+	s := p.v.src.(*stream)
+	// Count from its first read, while it can't be in the cond's Wait.
+	wait.For(t, "the first read", d.held)
+	s.mu.Lock()
+	wakes := &wakeCounter{Locker: s.cond.L}
+	s.cond.L = wakes
+	s.mu.Unlock()
+	close(d.release)
+	decoded := func(n int) bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.n >= n*s.keep || s.atEOF
+	}
+	wait.Until(t, "the ring to fill", func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return len(s.ring)-s.n < decodeFrames*s.keep
+	})
+	p.Play()
+	const chunk = 512 // as macOS mixes
+	out := make([]float32, chunk*channels)
+	for range total / chunk {
+		// As fast as the decoder goes, never faster.
+		wait.Until(t, "the stream to decode", func() bool { return decoded(chunk) })
+		mix(out)
+	}
+	s.mu.Lock()
+	n := wakes.n
+	s.mu.Unlock()
+	// Every wake but the last follows a quarter of the ring read, less
+	// the chunk the decoder may have left free.
+	if limit := total/(len(s.ring)/4/s.keep-decodeFrames) + 1; n > limit {
+		t.Errorf("the decoder woke %d times in 10 s, want at most %d", n, limit)
+	}
+}
+
+// A heldDecoder holds its first Read until released.
+type heldDecoder struct {
+	genDecoder
+	held, release chan struct{}
+	once          sync.Once
+}
+
+func (d *heldDecoder) Read(buf []float32) (int, error) {
+	d.once.Do(func() { close(d.held); <-d.release })
+	return d.genDecoder.Read(buf)
+}
+
+// A wakeCounter counts the wakes of a cond whose L it is, as Wait locks
+// L again on each.
+type wakeCounter struct {
+	sync.Locker
+	n int
+}
+
+func (l *wakeCounter) Lock() { l.Locker.Lock(); l.n++ }
+
+// Mixing allocates nothing once playing, sounds and streams alike.
+func TestMixDoesNotAllocate(t *testing.T) {
+	setup(t)
+	p := NewPlayer(&genDecoder{ch: 2, length: 1 << 40})
+	defer p.Close()
+	s := p.v.src.(*stream)
+	wait.Until(t, "the stream to decode", func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.n > 0
+	})
+	p.Play()
+	// 1.1 s, which ends within the 2.1 s mixed: ending allocates nothing
+	// either.
+	snd := NewSound(22050, 1, ramp(sampleRate/2)).Play()
+	out := make([]float32, 512*channels)
+	if n := testing.AllocsPerRun(200, func() { mix(out) }); n != 0 {
+		t.Errorf("mix allocated %v times a call", n)
+	}
+	if snd.Playing() {
+		t.Error("the sound still plays")
 	}
 }

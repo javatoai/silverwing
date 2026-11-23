@@ -1,11 +1,16 @@
-//go:build linux && (amd64 || arm64)
+//go:build linux && !android && (amd64 || arm64)
 
 package linux
 
 import (
+	"bytes"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode"
@@ -24,6 +29,9 @@ type nativeItem struct {
 	item     ptr
 	check    bool
 	windowID int // menu bar or popup's window; 0 for a tray
+	// disabled keeps the app's choice when enableEditItems changes the native
+	// item's state.
+	disabled bool
 	// icon is the item's icon; image and label are the widgets of an item
 	// that shows one, or did (menuicon.go).
 	icon         *platform.MenuIcon
@@ -41,6 +49,8 @@ var (
 
 	cbMenuActivate   ptr
 	cbMenuDeactivate ptr
+	cbPopupRelease   ptr
+	cbMenuMap        ptr
 	cbTrayActivate   ptr
 
 	// Menu bars that hide (window.menuHides), and the keys of items with a
@@ -115,6 +125,22 @@ func initMenuCallbacks() {
 	cbMenuDeactivate = purego.NewCallback(func(menu, loop ptr) {
 		gMainLoopQuit(loop)
 	})
+	// The first release a menu hears, within GTK's MENU_SHELL_TIMEOUT
+	// (500 ms) of the press that opened it, leaves the menu open
+	// (PopupMenu); a later one, as a quick click on an item, goes to GTK.
+	// The time is a GdkEventButton's, at 20.
+	cbPopupRelease = purego.NewCallback(func(menu, event, _ ptr) bool {
+		if menu != opening.menu {
+			return false
+		}
+		opening.menu = 0
+		return field[uint32](event, 20)-opening.at <= 500
+	})
+	cbMenuMap = purego.NewCallback(func(menu, data ptr) {
+		if w := theBackend.window(data); w != nil {
+			w.enableEditItems()
+		}
+	})
 	// Alt pressed and released alone, or F10, show a menu bar that hides.
 	cbMenuKey = purego.NewCallback(func(widget, event, data ptr) bool {
 		w := theBackend.window(data)
@@ -127,8 +153,13 @@ func initMenuCallbacks() {
 		// GTK runs those it leaves. The app's own items go first, as on macOS.
 		if field[int32](event, 0) == 8 && w.surface != nil { // GDK_KEY_PRESS
 			k := [2]uint32{gdkKeyvalToLower(field[uint32](event, 28)), field[uint32](event, 24) & modifierMask}
-			if roleKeys[w.accel][k] && gtkWindowPropagateKeyEvent(w.win, event) {
-				return true
+			if roleKeys[w.accel][k] {
+				if gtkWindowPropagateKeyEvent(w.win, event) {
+					return true
+				}
+				// GTK drops the shortcut of an item made insensitive as the
+				// content was when its menu last opened, not as it is now.
+				w.enableEditItems()
 			}
 		}
 		if !w.menuHides() || w.menubar == 0 || gtkWidgetGetVisible(w.menubar) {
@@ -213,14 +244,17 @@ func buildItem(it *platform.MenuItem, accel ptr, owner, windowID int, bar bool) 
 	case platform.MenuItemSeparator:
 		item = gtkSeparatorMenuItemNew()
 	case platform.MenuItemCheckbox, platform.MenuItemRadio:
-		item = gtkCheckMenuItemNewWithLabel(cs(it.Label))
+		item = gtkCheckMenuItemNewWithLabel(cs(it.LabelWithSubtitleAndBadge()))
 		gtkCheckMenuItemSetDrawAsRadio(item, it.Type == platform.MenuItemRadio)
 		check = true
 	default:
-		item = gtkMenuItemNewWithLabel(cs(it.Label))
+		item = gtkMenuItemNewWithLabel(cs(it.LabelWithSubtitleAndBadge()))
 	}
 	if it.Submenu != nil {
 		sub := gtkMenuNew()
+		if windowID != 0 {
+			connect(sub, "map", cbMenuMap, ptr(windowID))
+		}
 		buildMenu(sub, it.Submenu, accel, owner, windowID, false)
 		gtkMenuItemSetSubmenu(item, sub)
 	} else if it.Type != platform.MenuItemSeparator {
@@ -239,7 +273,7 @@ func buildItem(it *platform.MenuItem, accel ptr, owner, windowID int, bar bool) 
 		}
 	}
 	applyState(item, it, check)
-	n := nativeItem{owner: owner, item: item, check: check, windowID: windowID, bar: bar}
+	n := nativeItem{owner: owner, item: item, check: check, windowID: windowID, disabled: !it.Enabled, bar: bar}
 	if it.Icon != nil && it.Type != platform.MenuItemSeparator && !bar && setMenuItemIcon != nil {
 		n.icon = it.Icon
 		if windowID != 0 {
@@ -418,9 +452,9 @@ func (b *Backend) UpdateMenuItem(it *platform.MenuItem) {
 		n := &itemsByID[it.ID][i]
 		if it.Type != platform.MenuItemSeparator {
 			if n.label != 0 {
-				gtkLabelSetLabel(n.label, cs(it.Label))
+				gtkLabelSetLabel(n.label, cs(it.LabelWithSubtitleAndBadge()))
 			} else {
-				gtkMenuItemSetLabel(n.item, cs(it.Label))
+				gtkMenuItemSetLabel(n.item, cs(it.LabelWithSubtitleAndBadge()))
 			}
 			if it.Icon != n.icon && !n.bar && setMenuItemIcon != nil {
 				n.icon = it.Icon
@@ -428,7 +462,38 @@ func (b *Backend) UpdateMenuItem(it *platform.MenuItem) {
 			}
 		}
 		applyState(n.item, it, n.check)
+		n.disabled = !it.Enabled
 	}
+}
+
+// enableEditItems makes the items of the edit roles in the window's menu
+// bar and popups sensitive as the native UI it shows can act on them.
+// Those of a page keep the app's state: what a page would do is not known
+// before.
+func (w *window) enableEditItems() {
+	native := w.surface != nil && w.focusedWebView() == nil
+	for id, role := range itemRoles {
+		if !platform.EditCommands[role] {
+			continue
+		}
+		for _, n := range itemsByID[id] {
+			if n.windowID != w.id {
+				continue
+			}
+			on := !n.disabled
+			if on && native {
+				on = w.h.SurfaceEvent(platform.SurfaceEvent{Kind: platform.SurfaceCommandEnabled, Text: role})
+			}
+			gtkWidgetSetSensitive(n.item, on)
+		}
+	}
+}
+
+// opening is the menu shown last by a press, and when the press went
+// down, until the menu hears its first release (PopupMenu).
+var opening struct {
+	menu ptr
+	at   uint32
 }
 
 // PopupMenu shows a context menu and blocks until it is dismissed.
@@ -452,6 +517,7 @@ func (b *Backend) PopupMenu(m *platform.Menu, pw platform.Window, pos *platform.
 	defer dropOwner(owner)
 	menu := gtkMenuNew()
 	buildMenu(menu, m, 0, owner, w.id, false)
+	w.enableEditItems()
 	gtkWidgetShowAll(menu)
 	event, anchor := w.popupTrigger(), w.contentWindow()
 	const northWest = 1 // GDK_GRAVITY_NORTH_WEST
@@ -480,6 +546,17 @@ func (b *Backend) PopupMenu(m *platform.Menu, pw platform.Window, pos *platform.
 		gtkWidgetDestroy(menu)
 		return
 	}
+	if b.onX11 && os.Getenv("WAYLAND_DISPLAY") != "" && event != 0 && field[int32](event, 0) == 4 { // GDK_BUTTON_PRESS
+		// GTK keeps a menu open on the release of the press that opened it,
+		// within MENU_SHELL_TIMEOUT, unless the pointer entered an item
+		// since. Under XWayland it enters one at the release, as the
+		// compositor gives the pointer to the menu's window, and the menu
+		// closed as soon as it opened.
+		outer := opening
+		opening.menu, opening.at = menu, field[uint32](event, 20)
+		defer func() { opening = outer }()
+		connect(menu, "button-release-event", cbPopupRelease, 0)
+	}
 	loop := gMainLoopNew(0, false)
 	connect(menu, "deactivate", cbMenuDeactivate, loop)
 	b.popups = append(b.popups, menu)
@@ -499,6 +576,7 @@ type tray struct {
 	b       *Backend
 	h       platform.TrayHandler
 	id      int
+	name    string // the indicator's ID (trayName)
 	ind     ptr
 	menu    ptr
 	owner   int
@@ -507,24 +585,85 @@ type tray struct {
 	// activate is the handler of the "activate" signal, 0 while the icon
 	// does not answer activation.
 	activate uint64
+	// dark is the desktop's color scheme, as last told. image is the PNG
+	// the icon shows, and template whether it is black and transparent,
+	// which the icon shows white while the desktop prefers dark, as macOS
+	// tints a template image.
+	dark     bool
+	image    []byte
+	template bool
+	// title, tip and spec are the title, tooltip and menu the app set
+	// last, and pending tells that some waited for the watcher
+	// (trayhost.go).
+	title, tip string
+	spec       *platform.Menu
+	pending    bool
 }
 
-func (b *Backend) NewTray(h platform.TrayHandler) (platform.Tray, error) {
+func (b *Backend) NewTray(id string, h platform.TrayHandler) (platform.Tray, error) {
 	if appIndicatorNew == nil {
 		return nil, fmt.Errorf("mygo: tray icons need libayatana-appindicator3: %w", platform.ErrUnsupported)
 	}
+	traysAppearanceChanged = b.traysAppearance
+	watchTrayWatcher()
 	b.nextTray++
-	t := &tray{b: b, h: h, id: b.nextTray}
-	name := fmt.Sprintf("mygo-%d-%d", os.Getpid(), t.id)
-	t.ind = appIndicatorNew(cs(name), cs("application-x-executable"), 0) // APPLICATION_STATUS
-	appIndicatorSetStatus(t.ind, 1)                                      // ACTIVE
+	t := &tray{b: b, h: h, id: b.nextTray, dark: desktopDark()}
+	t.name = b.trayName(id, goStr(gGetPrgname()), t.id)
+	t.ind = appIndicatorNew(cs(t.name), cs("application-x-executable"), 0) // APPLICATION_STATUS
+	if t.ind == 0 {
+		return nil, fmt.Errorf("mygo: libayatana-appindicator3 made no tray icon: %w", platform.ErrUnsupported)
+	}
+	appIndicatorSetStatus(t.ind, 1) // ACTIVE
 	// AppIndicator only shows up once it has a menu.
 	t.SetMenu(&platform.Menu{})
 	b.trays[t.id] = t
 	return t, nil
 }
 
-func (t *tray) SetImage(png []byte, template bool) error {
+// trayName is the indicator's ID, its StatusNotifierItem Id, which the
+// icon is given as it is made. A panel keeps its settings for an icon by
+// it, as KDE Plasma keeps whether it shows the icon, and with no watcher
+// libayatana's fallback window is of that class. An icon of an ID is
+// named after the program and the ID, which then stays across launches,
+// and is apart from other apps' icons of that ID; an ID another of the
+// app's icons has takes a number after it. An icon of no ID is named
+// after the program and its number among the app's icons, which stays
+// too as the app makes its icons in the same order.
+func (b *Backend) trayName(id, program string, n int) string {
+	if id == "" {
+		id = strconv.Itoa(n)
+	}
+	if program == "" {
+		program = "mygo"
+	}
+	base := program + "-" + id
+	taken := func(name string) bool {
+		for _, t := range b.trays {
+			if t.name == name {
+				return true
+			}
+		}
+		return false
+	}
+	name := base
+	for i := 2; taken(name); i++ {
+		name = fmt.Sprintf("%s-%d", base, i)
+	}
+	return name
+}
+
+func (t *tray) SetImage(data []byte, template bool) error {
+	if t.held() {
+		t.image, t.template = data, template
+		return nil
+	}
+	img := data
+	if template && t.dark {
+		var err error
+		if img, err = whiten(data); err != nil {
+			return err
+		}
+	}
 	if t.iconDir == "" {
 		dir, err := os.MkdirTemp("", "mygo-tray-")
 		if err != nil {
@@ -532,34 +671,118 @@ func (t *tray) SetImage(png []byte, template bool) error {
 		}
 		t.iconDir = dir
 	}
-	// A new file name makes the indicator host reload the icon.
+	// A new file name makes the indicator host reload the icon. The icon
+	// goes by its absolute path, not by a name in IconThemePath: KDE looks
+	// a name up in the icon theme first, falling back from "icon-1" to
+	// "icon", and showed a theme's icon in place of the app's.
 	t.icons++
-	name := fmt.Sprintf("icon-%d", t.icons)
-	if err := os.WriteFile(filepath.Join(t.iconDir, name+".png"), png, 0o644); err != nil {
+	file := filepath.Join(t.iconDir, fmt.Sprintf("icon-%d.png", t.icons))
+	if err := os.WriteFile(file, img, 0o644); err != nil {
 		return err
 	}
-	appIndicatorSetIconThemePath(t.ind, cs(t.iconDir))
-	appIndicatorSetIconFull(t.ind, cs(name), cs(""))
+	appIndicatorSetIconFull(t.ind, cs(file), cs(""))
+	t.image, t.template = data, template
 	return nil
 }
 
-// Dark reports false: AppIndicator tells nothing of the panel, whose
-// icon theme draws the icon in its own colors.
-func (t *tray) Dark() bool { return false }
+// Dark reports whether the desktop prefers dark. AppIndicator tells
+// nothing of the panel itself, whose theme can differ from the desktop's.
+func (t *tray) Dark() bool { return desktopDark() }
 
-// SetID does nothing: the indicator's ID is given as it is made, and
-// panels place indicators themselves.
+// desktopDark reads the desktop's color scheme from the settings portal:
+// the system's, not the app's own (Theme.SetSource), which the panel does
+// not follow. Without a portal it is false.
+func desktopDark() bool {
+	scheme, ok := portalColorScheme()
+	return ok && scheme == 1
+}
+
+// traysAppearance tells the icons that the desktop turned dark or light.
+func (b *Backend) traysAppearance() {
+	if len(b.trays) == 0 {
+		return
+	}
+	dark := desktopDark()
+	for _, t := range b.trays {
+		t.appearanceChanged(dark)
+	}
+}
+
+func (t *tray) appearanceChanged(dark bool) {
+	if dark == t.dark {
+		return
+	}
+	t.dark = dark
+	if t.template && t.image != nil {
+		_ = t.SetImage(t.image, true)
+	}
+	if t.h != nil {
+		t.h.AppearanceChanged()
+	}
+}
+
+// traysAppearanceChanged is linked by NewTray: portal settings changes
+// reach every app, but only those with a tray need its image code.
+var traysAppearanceChanged func()
+
+// whiten draws a template image white, keeping its alpha, as the Windows
+// backend does on a dark taskbar.
+func whiten(data []byte) ([]byte, error) {
+	src, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	r := src.Bounds()
+	dst := image.NewNRGBA(r)
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		for x := r.Min.X; x < r.Max.X; x++ {
+			_, _, _, a := src.At(x, y).RGBA()
+			dst.SetNRGBA(x, y, color.NRGBA{255, 255, 255, uint8(a >> 8)})
+		}
+	}
+	var b bytes.Buffer
+	if err := png.Encode(&b, dst); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+// SetID does nothing: the indicator's ID is given as it is made
+// (NewTray), and panels place indicators themselves.
 func (t *tray) SetID(string) {}
 
-func (t *tray) SetTitle(title string) { appIndicatorSetLabel(t.ind, cs(title), cs(title)) }
+func (t *tray) SetTitle(title string) {
+	t.title = title
+	if !t.held() {
+		appIndicatorSetLabel(t.ind, cs(title), cs(title))
+	}
+}
 
+// SetTitleMonospaced does nothing: a panel draws the label in the font
+// it chooses.
+func (t *tray) SetTitleMonospaced(bool) {}
+
+// SetToolTip sets the hover text. The title is what panels show when they
+// fall back to it, and setting it announces NewTitle alone: a host that
+// caches the ToolTip property, such as quickshell, would go on showing the
+// text it read when the icon appeared. Setting the tooltip as well announces
+// NewToolTip, so both stay in step.
 func (t *tray) SetToolTip(tip string) {
+	if t.tip = tip; t.held() {
+		return
+	}
 	if appIndicatorSetTitle != nil {
 		appIndicatorSetTitle(t.ind, cs(tip))
+	}
+	if appIndicatorSetTooltipFull != nil {
+		appIndicatorSetTooltipFull(t.ind, nil, cs(tip), nil)
 	}
 }
 
 func (t *tray) SetMenu(m *platform.Menu) {
+	if t.spec = m; t.held() {
+		return
+	}
 	dropOwner(t.owner)
 	t.owner = newOwner()
 	menu := gtkMenuNew()
@@ -606,15 +829,7 @@ func (t *tray) SetActivatable(on bool) {
 // "activate" signal, which older libayatana-appindicator3 releases lack:
 // their icons answer no activation, whatever the app listens to. It is
 // asked once an indicator exists, which registers the type.
-var trayActivates = sync.OnceValue(func() bool {
-	var lookup func(name *byte, typ uintptr) uint32
-	var typeFromName func(name *byte) uintptr
-	if !bind(libGObject, &lookup, "g_signal_lookup") || !bind(libGObject, &typeFromName, "g_type_from_name") {
-		return false
-	}
-	typ := typeFromName(cs("AppIndicator"))
-	return typ != 0 && lookup(cs("activate"), typ) != 0
-})
+var trayActivates = sync.OnceValue(func() bool { return indicatorSignal("activate") != 0 })
 
 func (t *tray) Destroy() {
 	if t.ind == 0 {
@@ -623,7 +838,7 @@ func (t *tray) Destroy() {
 	t.SetActivatable(false)
 	appIndicatorSetStatus(t.ind, 0) // PASSIVE
 	gObjectUnref(t.ind)
-	t.ind = 0
+	t.ind, t.pending = 0, false
 	dropOwner(t.owner)
 	delete(t.b.trays, t.id)
 	if t.iconDir != "" {

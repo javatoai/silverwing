@@ -145,7 +145,7 @@ func projectTaskIndexOrder(candidates []int, keys, pins []string, matches func(i
 }
 
 func (s *app) taskSearchText(item task) string {
-	fields := []string{item.id, item.title, item.requirementID, item.requirementTitle, item.requirementURL, item.project, item.groupID, s.taskGroupName(item), item.branch}
+	fields := []string{item.id, item.title, item.requirementID, item.requirementTitle, item.requirementURL, item.branch}
 	fields = append(fields, item.services...)
 	metadata := s.taskRequirementMetadataFor(item).Metadata
 	fields = append(fields, metadata.ID)

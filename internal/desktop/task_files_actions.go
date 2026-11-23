@@ -167,6 +167,9 @@ func (s *app) requestTaskFilesSearch(view *taskFilesView) {
 }
 
 func (s *app) cancelTaskFilesSearch(view *taskFilesView) {
+	if !s.taskFilesCurrent(view) {
+		return
+	}
 	s.taskFilesUnit.jobs.cancel("search")
 	view.searching, view.searchDone, view.searchError = false, false, ""
 }

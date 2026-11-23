@@ -23,7 +23,6 @@ func productionIterationTester(s *app, width int, dark bool) *ui.Tester {
 		p := setTheme(c, dark)
 		ui.MenuScope(c, s.popupMenuScope())
 		ui.Row(c).Fill().Background(p.bg).AlignItems(ui.Stretch).Children(func() { s.renderProductionPage(c, p) })
-		s.renderProductionBaselineDialog(c, p)
 		s.renderProductionDiffDialog(c, p)
 		s.renderProductionWorktreesDialog(c, p)
 		s.renderProductionHistoryDialog(c, p)
@@ -38,84 +37,30 @@ func TestProductionCompactServiceLabelsDoNotChangeWithSearch(t *testing.T) {
 	if !tester.HasText("示例服务") || tester.HasText("国内组 · 示例服务") || tester.HasText("origin/master · C:/synthetic/repo-one") {
 		t.Fatal("single-group row was not distilled")
 	}
-	other := productionServiceChoice{Service: application.Service{ID: "other", GroupID: "other", Name: "国外服务"}, GroupName: "海外组"}
+	other := productionServiceChoice{Service: application.Service{ID: "other", GroupID: "other", Name: "国外服务"}}
 	s.releaseUnit.state.production.choices = append(s.releaseUnit.state.production.choices, other)
-	*s.input("production-service-query", "") = "国内组"
+	*s.input("production-service-query", "") = "示例服务"
 	tester = productionIterationTester(s, 960, false)
-	if !tester.HasText("国内组 · 示例服务") || tester.HasText("海外组 · 国外服务") {
-		t.Fatal("filter changed group-count presentation or did not filter")
+	if !tester.HasText("示例服务") || tester.HasText("国外服务") {
+		t.Fatal("filter changed flat service presentation or did not filter")
 	}
 }
 
-func TestProductionBaselineMoreAndDialogCancelLeaveInputUnchanged(t *testing.T) {
+func TestProductionMoreOffersBatchActionsWithoutManualBaseline(t *testing.T) {
 	s, v, _ := productionFixture(t)
 	tester := productionIterationTester(s, 960, false)
-	if tester.HasText("手动确认生产 Tag") || tester.HasText("生产基线 Tag") {
-		t.Fatal("manual baseline still permanently visible")
-	}
 	if err := tester.Click("更多生产发布操作"); err != nil {
 		t.Fatal(err)
 	}
-	if !tester.HasText("手动确认生产 Tag") {
-		t.Fatal("more menu did not expose manual baseline")
+	if tester.HasText("手动确认生产 Tag") || !tester.HasText("结束批次") {
+		t.Fatal("more menu must expose only the applicable batch actions")
 	}
-	if err := tester.Click("手动确认生产 Tag"); err != nil {
-		t.Fatal(err)
-	}
-	d := s.releaseUnit.state.production.baselineDialog
-	if d == nil || !tester.HasText("应用并重新检查") {
-		t.Fatal("no native baseline dialog")
-	}
-	d.Tag = "typed-but-canceled"
 	tester.Key(0, ui.KeyEscape)
-	if d.Open || v.ManualTag != "" || v.Preview == nil {
-		t.Fatal("Esc applied manual baseline")
-	}
-	s.openProductionBaseline(v)
-	d = s.releaseUnit.state.production.baselineDialog
-	d.Tag = "another"
-	s.page = "tasks"
-	s.applyProductionBaseline(d, false)
-	if v.ManualTag != "" {
-		t.Fatal("stale dialog applied after page change")
-	}
-}
-
-func TestProductionBaselineApplyAndAutomaticUseInspectWithoutWriting(t *testing.T) {
-	for _, automatic := range []bool{false, true} {
-		t.Run(fmt.Sprint(automatic), func(t *testing.T) {
-			s, v, _ := productionFixture(t)
-			backend := &productionTestBackend{calls: make(chan application.Action, 1), replies: make(chan productionTestAnswer, 1)}
-			window := &refreshTestWindow{updates: make(chan func(), 8)}
-			s.backend, s.releaseUnit.state.production.window = backend, window
-			v.ManualTag = "old"
-			s.openProductionBaseline(v)
-			d := s.releaseUnit.state.production.baselineDialog
-			d.Tag = "  2.3.43  "
-			s.applyProductionBaseline(d, automatic)
-			select {
-			case action := <-backend.calls:
-				expected := "2.3.43"
-				if automatic {
-					expected = ""
-				}
-				if action.Kind != "production.inspect" || action.Payload["productionTag"] != expected || v.ManualTag != expected {
-					t.Fatalf("wrong baseline action: %+v", action)
-				}
-			case <-time.After(time.Second):
-				t.Fatal("missing read request")
-			}
-			if d.Open || !v.PreparationInvalid {
-				t.Fatal("dialog did not close/invalidate old preparation")
-			}
-			backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{}}}
-			(<-window.updates)()
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
-			if err := s.releaseUnit.closeProductionJobs(ctx); err != nil {
-				t.Fatal(err)
-			}
-		})
+	s.ensureProduction().batches = nil
+	v.BatchID = ""
+	tester.Frame()
+	if tester.HasText("更多生产发布操作") || !tester.HasText("重新检查") {
+		t.Fatal("unstarted release must show baseline inspection without an empty action menu")
 	}
 }
 
@@ -166,7 +111,7 @@ func (b *productionProgressBackend) Dispatch(ctx context.Context, action applica
 }
 
 func TestProductionProgressBoundToRequestBatchAndApplicationContext(t *testing.T) {
-	for _, change := range []string{"none", "batch", "config", "home", "generation", "input", "wrong-target", "wrong-batch", "page", "state-reset"} {
+	for _, change := range []string{"none", "batch", "config", "home", "generation", "preview", "wrong-target", "wrong-batch", "page", "state-reset"} {
 		t.Run(change, func(t *testing.T) {
 			s, v, b := productionFixture(t)
 			backend := &productionProgressBackend{productionTestBackend: &productionTestBackend{calls: make(chan application.Action, 1), replies: make(chan productionTestAnswer, 1)}, contexts: make(chan context.Context, 1)}
@@ -192,8 +137,8 @@ func TestProductionProgressBoundToRequestBatchAndApplicationContext(t *testing.T
 				s.snapshot.Home = "changed"
 			case "generation":
 				v.Generation++
-			case "input":
-				v.ManualTag = "changed"
+			case "preview":
+				v.Preview = nil
 			case "page":
 				s.page = "tasks"
 			case "state-reset":
@@ -218,7 +163,7 @@ func TestProductionProgressBoundToRequestBatchAndApplicationContext(t *testing.T
 func TestProductionIterationEvidenceStates(t *testing.T) {
 	for _, width := range []int{960, 1440} {
 		for _, dark := range []bool{false, true} {
-			for _, state := range []string{"prepared", "building", "manual"} {
+			for _, state := range []string{"prepared", "building"} {
 				t.Run(fmt.Sprintf("%d-%t-%s", width, dark, state), func(t *testing.T) {
 					s, v, b := productionFixture(t)
 					if state == "prepared" {
@@ -228,9 +173,6 @@ func TestProductionIterationEvidenceStates(t *testing.T) {
 						b.Tags = []production.Tag{{Name: "2.3.44", Commit: b.ReleaseSHA, Status: domain.GenbuTagProbeStatus{Build: domain.GenbuBuilding}}}
 					}
 					s.releaseUnit.state.production.batches[0] = b
-					if state == "manual" {
-						s.openProductionBaseline(v)
-					}
 					tester := productionIterationTester(s, width, dark)
 					for _, control := range []string{"合并到 release", "构建 Tag"} {
 						if !tester.HasText(control) {

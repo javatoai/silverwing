@@ -12,13 +12,14 @@ import (
 const settingsAutosaveDelay = 500 * time.Millisecond
 
 type settingsAutosaveEntry struct {
-	value   string
-	save    func(string)
-	latest  func() string
-	input   *string
-	due     time.Time
-	pending bool
-	failed  bool
+	value         string
+	save          func(string)
+	latest        func() string
+	deferAutosave func(string) bool
+	input         *string
+	due           time.Time
+	pending       bool
+	failed        bool
 }
 
 type settingsAutosaveAttempt struct {
@@ -107,13 +108,21 @@ func (s *app) flushSettingsAutosaves(force bool) {
 		return
 	}
 	for {
+		now := time.Now()
 		var next *settingsAutosaveEntry
 		for _, entry := range state.entries {
-			if entry.pending && (next == nil || entry.due.Before(next.due)) {
+			if !entry.pending {
+				continue
+			}
+			if !force && !state.closing && !now.Before(entry.due) && entry.deferAutosave != nil && entry.deferAutosave(entry.value) {
+				entry.due = now.Add(settingsAutosaveDelay)
+				continue
+			}
+			if next == nil || entry.due.Before(next.due) {
 				next = entry
 			}
 		}
-		if next == nil || !force && !state.closing && time.Now().Before(next.due) {
+		if next == nil || !force && !state.closing && now.Before(next.due) {
 			break
 		}
 		attempt := &settingsAutosaveAttempt{entry: next, value: next.value, config: s.settingsUnit.state.configJSON}
@@ -255,11 +264,16 @@ func (s *settingsController) stopSettingsAutosave() {
 
 // Common text/path controls share a stable source pointer for final close flush.
 func (s *app) autosaveSettingsInput(key string, value *string, save func(string)) {
+	s.autosaveSettingsInputWithDeferral(key, value, save, nil)
+}
+
+func (s *app) autosaveSettingsInputWithDeferral(key string, value *string, save func(string), deferAutosave func(string) bool) {
 	if value == nil || save == nil {
 		return
 	}
 	s.observeSettingsAutosave(key, *value, save, func() string { return *value })
-	s.settingsUnit.state.settingsAutosave.entries[key].input = value
+	entry := s.settingsUnit.state.settingsAutosave.entries[key]
+	entry.input, entry.deferAutosave = value, deferAutosave
 }
 
 func settingsAutosaveFieldKey(key string) string { return "setting:" + strings.TrimSpace(key) }

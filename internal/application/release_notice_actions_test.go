@@ -24,7 +24,7 @@ func TestReleaseNoticeWholeBatchAndConfigurationGate(t *testing.T) {
 	cfg.Repositories = []domain.RepositoryConfig{}
 	for name, op := range ops {
 		cfg.Repositories = append(cfg.Repositories, domain.RepositoryConfig{ID: name, Name: name, RootPath: scope.TaskPath + "/" + name, GitCommonDirectory: scope.TaskPath + "/" + name + "/.git"})
-		cfg.Groups[0].Services = append(cfg.Groups[0].Services, domain.GroupServiceConfig{ID: name, DisplayName: name, RepositoryID: name, GenbuServiceName: name, GenbuProbeEnabled: true, MasterBranch: "origin/master", TestTagBaselineRef: "origin/release/test", DevelopmentTool: domain.DevelopmentToolVisualStudioCode, Modules: []domain.ServiceModuleConfig{{ID: "module", Name: "default", Strategy: domain.WorkspaceStandardWorktree, TagMode: domain.TagBuildCurrentBranch, TagEnabled: true}}})
+		cfg.Services = append(cfg.Services, domain.ServiceConfig{ID: name, DisplayName: name, RepositoryID: name, GenbuServiceName: name, GenbuProbeEnabled: true, MasterBranch: "origin/master", TestTagBaselineRef: "origin/release/test", DevelopmentTool: domain.DevelopmentToolVisualStudioCode, Modules: []domain.ServiceModuleConfig{{ID: "module", Name: "default", Strategy: domain.WorkspaceStandardWorktree, TagMode: domain.TagBuildCurrentBranch, TagEnabled: true}}})
 		op.BatchID = &batch
 		op.GenbuStatus = domain.GenbuTagProbeStatus{Build: domain.GenbuSuccess, UAT: domain.GenbuUnknown, Production: domain.GenbuUnknown, CheckedAt: &now}
 		ops[name] = op
@@ -59,13 +59,35 @@ func TestReleaseNoticeWholeBatchAndConfigurationGate(t *testing.T) {
 	if e != nil || changed.scope == first.scope {
 		t.Fatal("changed batch reused notice scope", e)
 	}
-	fakeGenbu, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
+	cfg.Services[0].GenbuServiceName = "new-alias"
+	services := []string{}
+	for _, service := range cfg.ServiceCatalog() {
+		services = append(services, service.GenbuServiceName)
 	}
-	t.Setenv("SILVERWING_TEST_NOTICE_GENBU", "1")
-	cfg.GenbuExecutablePath = &fakeGenbu
-	cfg.Groups[0].Services[0].GenbuServiceName = "new-alias"
+	installFixtureGenbuHTTP(t, a, services, 2, func() error {
+		// Simulate an older alias winning the cache update while the HTTP
+		// query is in progress. The fresh query's own result must still win.
+		path := filepath.Join(scope.TaskPath, "tag-operations", first.operations[0].OperationID+".json")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var op domain.TagOperation
+		if err := json.Unmarshal(data, &op); err != nil {
+			return err
+		}
+		stamp, err := domain.ParseSilverWingTime(value(op.GenbuStatus.CheckedAt))
+		if err != nil {
+			return err
+		}
+		checkedAt := domain.FormatSilverWingTime(stamp.Add(-5 * time.Second))
+		op.GenbuStatus.CheckedAt = &checkedAt
+		data, err = json.Marshal(op)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(path, data, 0o600)
+	})
 	if e = a.Config.Save(cfg); e != nil {
 		t.Fatal(e)
 	}
@@ -74,14 +96,13 @@ func TestReleaseNoticeWholeBatchAndConfigurationGate(t *testing.T) {
 	if _, e = a.releaseNoticeBatch(context.Background(), action, true); e != nil {
 		t.Fatal("fixture did not retain the fresh cache from the old alias", e)
 	}
-	t.Setenv("SILVERWING_TEST_NOTICE_GENBU_CAS", filepath.Join(scope.TaskPath, "tag-operations", first.operations[0].OperationID+".json"))
-	if _, e = a.readReleaseNoticeBatch(context.Background(), action, true, true); e == nil || !strings.Contains(e.Error(), "编译尚未全部成功") {
+	if _, e = a.readReleaseNoticeBatch(context.Background(), action, true, true, context.Context.Err); e == nil || !strings.Contains(e.Error(), "编译尚未全部成功") {
 		t.Fatal("CLI notification accepted the cache of the previous Genbu alias", e)
 	}
 	if _, e = a.releaseNoticeBatch(context.Background(), action, false); e != nil {
 		t.Fatal("fixture did not simulate a successful old probe winning the cache write", e)
 	}
-	cfg.Groups[0].Services[0].GenbuProbeEnabled = false
+	cfg.Services[0].GenbuProbeEnabled = false
 	if e = a.Config.Save(cfg); e != nil {
 		t.Fatal(e)
 	}

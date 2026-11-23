@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
@@ -15,6 +16,13 @@ import (
 )
 
 const TaskManifestFileName = "silverwing.json"
+
+const (
+	taskMaterialsPathBase   = "@task"
+	taskMaterialsLocalPath  = ".workspace/materials/docs"
+	taskMaterialsLocalRoot  = taskMaterialsPathBase + "/" + taskMaterialsLocalPath
+	externalMaterialsPrefix = "@documents/"
+)
 
 type ManifestEntry struct {
 	Path     string
@@ -40,9 +48,13 @@ func (e *UnsupportedManifestVersionError) Error() string {
 	return fmt.Sprintf("任务 JSON 版本不受支持：%s，当前版本为 %s", actual, domain.CurrentTaskManifestSchemaVersion)
 }
 
-type ManifestStore struct{}
+type ManifestStore struct{ profileHome string }
 
 func NewManifestStore() *ManifestStore { return &ManifestStore{} }
+
+func NewProfileManifestStore(paths Paths) *ManifestStore {
+	return &ManifestStore{profileHome: paths.Home}
+}
 
 func (s *ManifestStore) Load(taskDir string) (domain.TaskManifest, error) {
 	path := filepath.Join(taskDir, TaskManifestFileName)
@@ -50,7 +62,76 @@ func (s *ManifestStore) Load(taskDir string) (domain.TaskManifest, error) {
 	if err != nil {
 		return domain.TaskManifest{}, err
 	}
-	return decodeManifest(path, data)
+	return s.decode(path, data)
+}
+
+func (s *ManifestStore) decode(path string, data []byte) (domain.TaskManifest, error) {
+	manifest, err := decodeManifest(path, data)
+	if err != nil || manifest.RequirementMaterials.WriteRoot == nil {
+		return manifest, err
+	}
+	stored := *manifest.RequirementMaterials.WriteRoot
+	root, err := s.resolveMaterialsRoot(filepath.Dir(path), stored)
+	if err != nil {
+		return domain.TaskManifest{}, fmt.Errorf("读取 %s: %w", path, err)
+	}
+	manifest.RequirementMaterials.WriteRoot = &root
+	return manifest, nil
+}
+
+func (s *ManifestStore) resolveMaterialsRoot(taskDir, stored string) (string, error) {
+	if stored == taskMaterialsLocalRoot {
+		return filepath.Abs(filepath.Join(taskDir, filepath.FromSlash(taskMaterialsLocalPath)))
+	}
+	slashed := strings.ReplaceAll(stored, `\`, "/")
+	if hasTaskMaterialsBase(slashed) || hasTaskMaterialsBase(path.Clean(slashed)) {
+		return "", errors.New("任务本地资料路径必须指向 .workspace/materials/docs")
+	}
+	if s.profileHome == "" {
+		return stored, nil
+	}
+	if external, ok := strings.CutPrefix(stored, externalMaterialsPrefix); ok {
+		external = filepath.FromSlash(external)
+		if !validExternalTaskMaterialsRoot(external) {
+			return "", errors.New("外部任务资料路径必须指向本地仓库的年度需求资料目录")
+		}
+		return external, nil
+	}
+	stored = filepath.FromSlash(stored)
+	if stored == "" || filepath.IsAbs(stored) || filepath.VolumeName(stored) != "" {
+		return "", errors.New("任务资料路径必须相对于应用数据目录")
+	}
+	resolved := filepath.Join(s.profileHome, stored)
+	if !isUnderDirectory(s.profileHome, resolved) || sameDirectoryPath(s.profileHome, resolved) {
+		return "", errors.New("任务资料路径超出应用数据目录")
+	}
+	return resolved, nil
+}
+
+func hasTaskMaterialsBase(path string) bool {
+	base, _, _ := strings.Cut(path, "/")
+	return strings.EqualFold(base, taskMaterialsPathBase)
+}
+
+func validExternalTaskMaterialsRoot(root string) bool {
+	if !filepath.IsAbs(root) || filepath.Clean(root) != root || strings.ContainsRune(root, '\x00') {
+		return false
+	}
+	requirement := filepath.Dir(root)
+	year := filepath.Dir(requirement)
+	if !strings.EqualFold(filepath.Base(filepath.Dir(year)), domain.RequirementsDirectory) {
+		return false
+	}
+	yearName := filepath.Base(year)
+	id, title, separator := strings.Cut(filepath.Base(requirement), "-")
+	digits := func(value string) bool {
+		return value != "" && strings.IndexFunc(value, func(r rune) bool { return r < '0' || r > '9' }) == -1
+	}
+	if len(yearName) != 4 || yearName[0] == '0' || !digits(yearName) || !separator || !digits(id) || title == "" {
+		return false
+	}
+	_, err := domain.ValidateRequirementMaterialsSubdirectory(filepath.Base(root))
+	return err == nil
 }
 
 func decodeManifest(path string, data []byte) (domain.TaskManifest, error) {
@@ -140,7 +221,7 @@ func (s *ManifestStore) LoadTask(taskRoot, taskID string) (ManifestEntry, error)
 		return ManifestEntry{}, err
 	}
 	path := filepath.Join(taskRoot, taskID)
-	manifest, err := decodeManifest(filepath.Join(path, TaskManifestFileName), data)
+	manifest, err := s.decode(filepath.Join(path, TaskManifestFileName), data)
 	if err != nil {
 		return ManifestEntry{}, err
 	}
@@ -181,14 +262,18 @@ func (s *ManifestStore) Save(taskDir string, manifest domain.TaskManifest) error
 	}
 	manifest.SchemaVersion = domain.CurrentTaskManifestSchemaVersion
 	manifest = domain.NormalizeTaskManifest(manifest)
+	if manifest.RequirementMaterials.WriteRoot != nil {
+		stored, err := s.storeMaterialsRoot(taskDir, *manifest.RequirementMaterials.WriteRoot)
+		if err != nil {
+			return err
+		}
+		manifest.RequirementMaterials.WriteRoot = &stored
+	}
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return err
 	}
-	var roundTrip domain.TaskManifest
-	if err := domain.DecodeStrict(data, &roundTrip,
-		"folderName", "taskDirectoryName", "featureBranch", "createdAt", "updatedAt", "services",
-	); err != nil {
+	if _, err := s.decode(filepath.Join(taskDir, TaskManifestFileName), data); err != nil {
 		return fmt.Errorf("任务清单无法按当前 schema 读取：%w", err)
 	}
 	if err := os.MkdirAll(taskDir, 0o755); err != nil {
@@ -211,6 +296,27 @@ func (s *ManifestStore) Save(taskDir string, manifest domain.TaskManifest) error
 		return err
 	}
 	return replaceFile(tmpPath, filepath.Join(taskDir, TaskManifestFileName))
+}
+
+func (s *ManifestStore) storeMaterialsRoot(taskDir, root string) (string, error) {
+	local, err := filepath.Abs(filepath.Join(taskDir, filepath.FromSlash(taskMaterialsLocalPath)))
+	if err != nil {
+		return "", err
+	}
+	if sameDirectoryPath(local, root) {
+		return taskMaterialsLocalRoot, nil
+	}
+	if s.profileHome == "" {
+		return root, nil
+	}
+	rel, err := filepath.Rel(s.profileHome, root)
+	if err != nil || rel == "." || !isUnderDirectory(s.profileHome, root) {
+		if validExternalTaskMaterialsRoot(root) {
+			return externalMaterialsPrefix + filepath.ToSlash(root), nil
+		}
+		return "", errors.New("任务资料路径超出应用数据目录或当前任务目录")
+	}
+	return filepath.ToSlash(rel), nil
 }
 
 // List matches the source repository's list contract: return compatible,

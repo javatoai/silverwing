@@ -1,9 +1,15 @@
 package desktop
 
+import "silverwing-go/internal/application"
+
 type sidebarNavigationItem struct{ page, name, image string }
 
 func (s *app) showsTagNavigation() bool {
-	return s.configBool("tagEnabled", true) && len(s.readConfigArray("groups")) > 0
+	return s.configBool("tagEnabled", true) && len(s.readConfigArray("services")) > 0
+}
+
+func (s *app) productionAvailable() bool {
+	return s.configBool("tagEnabled", true) && application.OptionalCLIFeatureGenbu.Available(s.integrationReady)
 }
 
 func (s *app) sidebarNavigationItems() []sidebarNavigationItem {
@@ -14,7 +20,7 @@ func (s *app) sidebarNavigationItems() []sidebarNavigationItem {
 		if item.page != "tasks" && item.page != "settings" && !s.configNestedBool("sidebarVisibility", item.page, true) {
 			continue
 		}
-		if item.page == "production" && !s.configBool("tagEnabled", true) {
+		if item.page == "production" && !s.productionAvailable() {
 			continue
 		}
 		if item.page == "tools" && !showTools {
@@ -33,7 +39,7 @@ func (s *app) reconcileSidebarNavigation() {
 	if s.loading {
 		return
 	}
-	if s.page == "production" && !s.configBool("tagEnabled", true) {
+	if s.page == "production" && !s.productionAvailable() && !s.initialGenbuRouteWaiting() {
 		s.page = "tasks"
 	}
 	if s.page == "tags" {

@@ -11,7 +11,9 @@ import (
 
 func (a *App) delivery(config domain.AppConfig) *delivery.Service {
 	tasks := a.taskService(config)
-	service := delivery.NewServiceWithTasks(a.Paths, a.Config, a.Manifests, a.git(config), a.Runner, tasks)
+	service := delivery.NewServiceWithTasks(a.Paths, a.Config, a.Manifests, a.git(config), a.Runner, tasks, func(ctx context.Context) (delivery.TagGenbu, error) {
+		return a.genbuClient(ctx)
+	})
 	preparation := tasks.MaterialsPreparation
 	service.SetPreparationAPI(delivery.PreparationAPI{
 		Plan: func(ctx context.Context, config domain.AppConfig, link, title, folder string) (json.RawMessage, error) {
@@ -39,6 +41,11 @@ func (a *App) delivery(config domain.AppConfig) *delivery.Service {
 // ExecuteDelivery preserves the source CLI's report JSON. Desktop presentation
 // adapts the same reports into compact rows after this shared operation returns.
 func (a *App) ExecuteDelivery(ctx context.Context, kind string, payload map[string]any) (any, error) {
+	if kind == "tag.status" {
+		if err := a.RequireOptionalCLI(ctx, "genbu"); err != nil {
+			return nil, err
+		}
+	}
 	config, err := a.Config.Load()
 	if err != nil {
 		return nil, err
@@ -106,6 +113,9 @@ func (a *App) refreshTagGenbu(ctx context.Context, force bool) (ActionResult, er
 }
 
 func (a *App) refreshTagGenbuForAction(ctx context.Context, force bool, action Action) (ActionResult, error) {
+	if err := a.RequireOptionalCLI(ctx, "genbu"); err != nil {
+		return ActionResult{}, err
+	}
 	config, err := a.Config.Load()
 	if err != nil {
 		return ActionResult{}, err
@@ -123,10 +133,8 @@ func (a *App) refreshTagGenbuForAction(ctx context.Context, force bool, action A
 		return ActionResult{}, err
 	}
 	probeEnabled := false
-	for _, group := range config.Groups {
-		for _, configuredService := range group.Services {
-			probeEnabled = probeEnabled || configuredService.GenbuProbeEnabled
-		}
+	for _, service := range config.ServiceCatalog() {
+		probeEnabled = probeEnabled || service.GenbuProbeEnabled
 	}
 	items := make([]TagRecord, 0)
 	for _, task := range tasks {

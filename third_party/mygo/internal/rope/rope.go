@@ -237,6 +237,30 @@ func ByteOfRune(n *Node, index int) int {
 	return offset + len(n.text)
 }
 
+// ByteAfterRunes returns the byte count runes after byte from, which
+// starts a rune, or the end of the text: it reads on from from rather
+// than from the start of the chunk holding it, as ByteOfRune does, so a
+// walk through the text in order reads each byte once.
+func ByteAfterRunes(n *Node, from, count int) int {
+	end := Sum(n).Bytes
+	at := max(0, min(from, end))
+	if count <= 0 {
+		return at
+	}
+	Chunks(n, at, end, func(s string) bool {
+		for i := range s {
+			if count == 0 {
+				at += i
+				return false
+			}
+			count--
+		}
+		at += len(s)
+		return true
+	})
+	return at
+}
+
 // RuneOfUnit returns the rune holding UTF-16 unit index, or after it.
 func RuneOfUnit(n *Node, index int) int {
 	offset := 0

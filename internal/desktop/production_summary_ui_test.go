@@ -35,25 +35,24 @@ func captureProductionSummary(t *testing.T, tester *ui.Tester, name string) {
 func TestProductionCheckEntryBelongsToContent(t *testing.T) {
 	for _, width := range []int{960, 1440} {
 		for _, dark := range []bool{false, true} {
-			for _, state := range []string{"first", "initial", "busy", "error", "completed", "ended"} {
+			for _, state := range []string{"first", "initial", "busy", "error", "completed", "started-with-history"} {
 				t.Run(fmt.Sprintf("%d-%t-%s", width, dark, state), func(t *testing.T) {
 					s, v, b := productionFixture(t)
-					anchor := "生产 Tag → 主分支"
 					switch state {
 					case "first", "initial", "busy", "error":
 						s.releaseUnit.state.production.batches, v.BatchID = nil, ""
 						if state == "first" {
-							v.Preview = nil
+							v.Preview, v.ReleaseStarted = nil, true
 						} else if state == "busy" {
 							v.Busy, v.ActiveStep = true, 1
 							v.Steps = map[int]productionStepView{1: {State: "running"}}
 						} else if state == "error" {
 							v.ActiveStep, v.Error = 3, "版本已被占用，请修改版本号。"
 						}
-					case "ended":
-						b.Ended = true
-						s.releaseUnit.state.production.batches[0] = b
-						anchor = "正在查看已结束批次：" + b.ReleaseBranch
+					case "started-with-history":
+						b.Ended, b.Phase = true, "ENDED"
+						s.releaseUnit.state.production.batches[0], v.BatchID = b, ""
+						v.ReleaseStarted = true
 					}
 					tester := ui.NewTester(func(c *ui.Context) {
 						p := setTheme(c, dark)
@@ -63,36 +62,34 @@ func TestProductionCheckEntryBelongsToContent(t *testing.T) {
 						})
 					}, width, 900)
 					check, found := tester.Find("重新检查")
-					section, ok := tester.Find(anchor)
+					section, ok := tester.Find("生产 Tag → 主分支")
 					if !found || !ok || check.Y < section.Y+section.H || check.W > 180 || check.H != 34 {
 						t.Errorf("check is outside content section: check=%+v section=%+v found=%t/%t", check, section, found, ok)
 					}
-					if state != "ended" {
-						diffText := "无差异"
-						if state == "first" {
-							diffText = "查看差异"
+					diffText := "无差异"
+					if state == "first" {
+						diffText = "查看差异"
+					}
+					diff, ok := tester.Find(diffText)
+					if !ok || diff.Y != check.Y || diff.X <= check.X+check.W {
+						t.Errorf("check/diff are not compact siblings: check=%+v diff=%+v", check, diff)
+					}
+					if v.Preview != nil {
+						baseline, present := tester.Find("生产基线摘要")
+						tag, hasTag := tester.Find(v.Preview.ProductionTag)
+						main, hasMain := tester.Find("origin/master")
+						if !present || baseline.W > 600 || !hasTag || !hasMain || tag.X != main.X || tag.Y >= main.Y {
+							t.Errorf("baseline values are not compact and aligned: baseline=%+v tag=%+v main=%+v", baseline, tag, main)
 						}
-						diff, ok := tester.Find(diffText)
-						if !ok || diff.Y != check.Y || diff.X <= check.X+check.W {
-							t.Errorf("check/diff are not compact siblings: check=%+v diff=%+v", check, diff)
+						if tester.HasText("master 已包含生产 Tag " + v.Preview.ProductionTag + "。") {
+							t.Error("included relation still repeats the heading in body copy")
 						}
-						if v.Preview != nil {
-							baseline, present := tester.Find("生产基线摘要")
-							tag, hasTag := tester.Find(v.Preview.ProductionTag)
-							main, hasMain := tester.Find("origin/master")
-							if !present || baseline.W > 600 || !hasTag || !hasMain || tag.X != main.X || tag.Y >= main.Y {
-								t.Errorf("baseline values are not compact and aligned: baseline=%+v tag=%+v main=%+v", baseline, tag, main)
-							}
-							if tester.HasText("master 已包含生产 Tag " + v.Preview.ProductionTag + "。") {
-								t.Error("included relation still repeats the heading in body copy")
-							}
-						}
-						if tester.HasText("自动计算分支名，可修改版本部分；确认后仅创建并推送该分支。") {
-							t.Error("obsolete release instructions are still visible")
-						}
-						if state == "error" && !tester.HasText(v.Error) {
-							t.Error("compact layout hid the validation error")
-						}
+					}
+					if tester.HasText("自动计算分支名，可修改版本部分；确认后仅创建并推送该分支。") {
+						t.Error("obsolete release instructions are still visible")
+					}
+					if state == "error" && !tester.HasText(v.Error) {
+						t.Error("compact layout hid the validation error")
 					}
 					captureProductionSummary(t, tester, fmt.Sprintf("summary-%d-dark-%t-%s", width, dark, state))
 				})

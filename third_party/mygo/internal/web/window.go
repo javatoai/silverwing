@@ -120,8 +120,10 @@ func (w *window) Opacity() float64                           { return 1 }
 func (w *window) SetHasShadow(bool)                          {}
 func (w *window) HasShadow() bool                            { return false }
 func (w *window) SetIgnoreMouseEvents(bool)                  {}
+func (w *window) IgnoresMouseEvents() bool                   { return false }
 func (w *window) SetContentProtection(bool)                  {}
 func (w *window) SetVibrancy(string)                         {}
+func (w *window) SetVibrancyTint(*platform.Color)            {}
 func (w *window) SetActiveAppearance(bool)                   {}
 func (w *window) SetWindowButtonsTheme(string)               {}
 func (w *window) SetProgressBar(string, float64)             {}
@@ -168,6 +170,9 @@ func (w *window) IsVisible() bool { return w.visible }
 func (w *window) Focus()          { w.s.focus() }
 func (w *window) Blur()           { w.s.input.Call("blur") }
 func (w *window) IsFocused() bool { return w.focused }
+
+// CornerRadius is 0: the window is an element of the page, square.
+func (w *window) CornerRadius() float64 { return 0 }
 
 // SetFullScreen asks the browser to show the window's element on the whole
 // screen, which it allows while the user acts.
@@ -231,6 +236,7 @@ func (w *window) OpenDevTools()                                            {}
 func (w *window) CloseDevTools()                                           {}
 func (w *window) IsDevToolsOpened() bool                                   { return false }
 func (w *window) ProcessID() int                                           { return 0 }
+func (w *window) GPUProcessID() int                                        { return 0 }
 func (w *window) IsAudible() bool                                          { return false }
 func (w *window) SetAudioMuted(bool)                                       {}
 func (w *window) IsAudioMuted() bool                                       { return false }

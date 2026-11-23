@@ -34,17 +34,14 @@ func (f taskServicesFake) ServiceConfig(ctx context.Context, _ domain.AppConfig,
 func taskServicesFixture(t *testing.T) (*App, Action) {
 	t.Helper()
 	a, manifest, old := taskFilesActionFixture(t)
-	cfg, err := a.Config.LoadForPreview(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := useVerifiedGenbuFixture(t, a)
 	cfg.Repositories = []domain.RepositoryConfig{{ID: "repo", Name: "synthetic", RootPath: a.Paths.Tasks, GitCommonDirectory: a.Paths.Tasks + "/.git"}}
-	cfg.Groups[0].Services = []domain.GroupServiceConfig{{ID: "service", RepositoryID: "repo", DisplayName: "service", GenbuServiceName: "alias", Enabled: true, MasterBranch: "origin/main", TestTagBaselineRef: "origin/release/test", DevelopmentTool: domain.DevelopmentToolVisualStudioCode, Modules: []domain.ServiceModuleConfig{{ID: "one", Name: "one", Strategy: domain.WorkspaceStandardWorktree, TagMode: domain.TagBuildMergeToTargetBranch}, {ID: "two", Name: "two", Strategy: domain.WorkspaceStandardWorktree, TagMode: domain.TagBuildMergeToTargetBranch}}}}
-	if err = a.Config.Save(cfg); err != nil {
+	cfg.Services = []domain.GroupServiceConfig{{ID: "service", RepositoryID: "repo", DisplayName: "service", GenbuServiceName: "alias", Enabled: true, MasterBranch: "origin/main", TestTagBaselineRef: "origin/release/test", DevelopmentTool: domain.DevelopmentToolVisualStudioCode, Modules: []domain.ServiceModuleConfig{{ID: "one", Name: "one", Strategy: domain.WorkspaceStandardWorktree, TagMode: domain.TagBuildMergeToTargetBranch}, {ID: "two", Name: "two", Strategy: domain.WorkspaceStandardWorktree, TagMode: domain.TagBuildMergeToTargetBranch}}}}
+	if err := a.Config.Save(cfg); err != nil {
 		t.Fatal(err)
 	}
 	setTaskServicesProbe(t, a, true)
-	cfg, err = a.Config.LoadForPreview(context.Background())
+	cfg, err := a.Config.LoadForPreview(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,10 +129,10 @@ func TestTaskServicesRejectStaleOwnershipMappingAndCancelledResult(t *testing.T)
 						t.Fatal(err)
 					}
 					if change == "mapping" {
-						cfg.Groups[0].Services[0].GenbuServiceName = "new-alias"
+						cfg.Services[0].GenbuServiceName = "new-alias"
 					} else {
-						p := "other.exe"
-						cfg.GenbuExecutablePath = &p
+						disabled := false
+						cfg.OptionalCLIs.Genbu = &disabled
 					}
 					if err = a.Config.Save(cfg); err != nil {
 						t.Fatal(err)
@@ -166,6 +163,37 @@ func TestTaskServicesNamespaceValidationIsConfigurationOnly(t *testing.T) {
 	result, err := a.taskServicesActionWithReader(context.Background(), action, taskServicesFake{})
 	if err != nil || result.Data.(TaskServiceConfigResult).Namespace != "team" {
 		t.Fatal(result, err)
+	}
+}
+
+func TestTaskServicesConfigReportsNamespaceCandidatesForCurrentService(t *testing.T) {
+	a, action := taskServicesFixture(t)
+	action.Kind = "task.services.config"
+	ambiguity := &production.ServiceConfigNamespaceError{Candidates: []string{"config-a", "config-b"}}
+	var changeMapping bool
+	reader := taskServicesFake{config: func(ctx context.Context, env, service, namespace string) (string, error) {
+		if env != "uat" || service != "alias" || namespace != "" {
+			t.Fatal(env, service, namespace)
+		}
+		if changeMapping {
+			cfg, err := a.Config.LoadForPreview(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.Services[0].GenbuServiceName = "changed"
+			if err := a.Config.Save(cfg); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return "", ambiguity
+	}}
+	if _, err := a.taskServicesActionWithReader(context.Background(), action, reader); err != ambiguity {
+		t.Fatalf("lost the resolved namespace choices: %v", err)
+	}
+	changeMapping = true
+	var candidates *production.ServiceConfigNamespaceError
+	if _, err := a.taskServicesActionWithReader(context.Background(), action, reader); err == nil || errors.As(err, &candidates) {
+		t.Fatalf("accepted namespace choices for an outdated service mapping: %v", err)
 	}
 }
 

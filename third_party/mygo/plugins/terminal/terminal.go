@@ -33,6 +33,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -85,10 +86,19 @@ type Options struct {
 	// to a UTF-8 locale when no locale is set, as when the app starts from
 	// the Finder.
 	Env []string
+	// UnsetEnv removes named variables from the program's environment
+	// after applying Env. Names are case-insensitive on Windows.
+	UnsetEnv []string
+	// ShellIntegration marks a local zsh's prompt so resizing can clear its
+	// old layout before zsh redraws it, including right and multiline prompts.
+	// User startup files are sourced normally and are never modified. Other
+	// local shells are unchanged. With Conn, the source must supply OSC 133
+	// prompt markers and redraw its prompt on resize.
+	ShellIntegration bool
 	// Conn connects the terminal to something other than a program, such
 	// as a remote shell: what the terminal reads from it shows, and what
-	// is typed is written to it. Command, Dir and Env are then ignored. A
-	// Conn with a method Resize(cols, rows int) error is told the size;
+	// is typed is written to it. Command, Dir, Env and UnsetEnv are ignored.
+	// A Conn with a method Resize(cols, rows int) error is told the size;
 	// one with ResizePixels(cols, rows, cellWidth, cellHeight int) error
 	// is told it with the size of a cell in pixels instead, which the
 	// other end needs to answer a program's size queries and to read
@@ -110,6 +120,11 @@ type Options struct {
 	// from where it thinks it is, would land elsewhere, as the server's
 	// screen would show to the next client attaching.
 	ResizeByConn bool
+	// NoExitMessage leaves out the dim line the terminal writes on its
+	// screen when the program ends, "[Process exited]" ("[Disconnected]"
+	// with Conn), for an app that says so itself or closes the view.
+	// OnExit, Done and ExitCode are the same either way.
+	NoExitMessage bool
 
 	// Font is the font of the text: the system's monospaced font at 13
 	// DIPs when zero.
@@ -248,6 +263,12 @@ type Options struct {
 	// the clipboard's files or image (d.Files, transfer.PNG) for a remote
 	// program, then pastes their paths with Paste.
 	OnPaste func(d transfer.Data) bool
+	// OnDrop sees the paths of files dropped on the terminal before it
+	// pastes them, escaped for a shell, on the main thread, and reports
+	// whether it took the drop; a drop taken sends nothing, as when an app
+	// uploads the files for a remote program, then pastes their paths
+	// there with Paste.
+	OnDrop func(paths []string) bool
 	// OnKey sees a key press before Keybinds and before the terminal
 	// encodes it, on the main thread, and reports whether it took the key;
 	// a key taken sends nothing, neither the text it types nor its
@@ -509,6 +530,11 @@ type Terminal struct {
 	events  events
 	closed  bool
 	clipOut []string // what programs copied, for the view to write
+	// prompt is guarded by mu too; shellDir is immutable after New and removed
+	// once the program exits, including a terminal closed before it starts.
+	prompt   promptTracker
+	shellDir string
+
 	// clipForward are reads of the clipboard for a Mirror to pass on, with
 	// ClipboardForward: whether each is of the primary selection. The
 	// first Mirror to frame takes them, as one terminal answers a read.
@@ -536,9 +562,12 @@ type Terminal struct {
 	src    io.ReadWriteCloser
 	proc   *pty.PTY
 	launch *pty.Options
+	timer  *time.Timer // starts the program when no view does
 	// Optional internal launcher for deterministic lifecycle tests; guarded by mu.
 	startPTY func(pty.Options) (*pty.PTY, error)
-	timer    *time.Timer // starts the program when no view does
+	// fg is the process group last seen in the foreground of proc's
+	// terminal (see resetLeftModes).
+	fg int
 
 	srcOnce sync.Once
 	srcErr  error
@@ -655,6 +684,9 @@ func New(opts Options) (*Terminal, error) {
 	if opts.Conn != nil {
 		t.src = opts.Conn
 		t.quoting = quotingFor(runtime.GOOS, "")
+		if opts.ShellIntegration {
+			t.term.Write([]byte(promptRedraw))
+		}
 		t.run()
 		return t, nil
 	}
@@ -669,7 +701,19 @@ func New(opts Options) (*Terminal, error) {
 	if dir == "" {
 		dir, _ = os.UserHomeDir()
 	}
-	t.launch = &pty.Options{Path: path, Args: args, Dir: dir, Env: environment(opts.Env)}
+	t.launch = &pty.Options{Path: path, Args: args, Dir: dir, Env: environment(opts.Env, opts.UnsetEnv)}
+	if opts.ShellIntegration && filepath.Base(path) == "zsh" {
+		t.launch.Env, t.shellDir, err = zshEnvironment(t.launch.Env)
+		if err != nil {
+			t.rs.Free()
+			t.term.Free()
+			return nil, err
+		}
+		t.term.Write([]byte(promptRedraw))
+	} else {
+		// Other shells may not redraw their prompts: theirs stay.
+		t.opts.ShellIntegration = false
+	}
 	if runtime.GOOS == "windows" {
 		// ConPTY keeps a screen of its own, which a resize pulling rows
 		// back from the scrollback would disagree with.
@@ -785,9 +829,9 @@ func command(cmd []string) (path string, args []string, err error) {
 	return shell, []string{"-" + filepath.Base(shell)}, nil
 }
 
-// environment returns the environment of the program: this process's with
-// the terminal's variables and extra.
-func environment(extra []string) []string {
+// environment builds the program's environment from the current process,
+// terminal defaults, extra variables and exclusions.
+func environment(extra, unset []string) []string {
 	env := os.Environ()
 	set := func(kv string) {
 		k, _, _ := strings.Cut(kv, "=")
@@ -806,6 +850,15 @@ func environment(extra []string) []string {
 	}
 	for _, kv := range extra {
 		set(kv)
+	}
+	for _, name := range unset {
+		if name == "" {
+			continue
+		}
+		env = slices.DeleteFunc(env, func(kv string) bool {
+			key, _, ok := strings.Cut(kv, "=")
+			return ok && (key == name || (runtime.GOOS == "windows" && strings.EqualFold(key, name)))
+		})
 	}
 	return env
 }
@@ -831,6 +884,10 @@ func (t *Terminal) write(p []byte) {
 	var ev events
 	var title string
 	if t.term != nil {
+		if t.opts.ShellIntegration {
+			t.prompt.feed(p)
+		}
+		t.resetLeftModes()
 		t.term.Write(p)
 		ev, t.events = t.events, events{}
 		if ev.title {
@@ -840,6 +897,31 @@ func (t *Terminal) write(p []byte) {
 	t.mu.Unlock()
 	t.fire(ev, title)
 	t.redraw()
+}
+
+// leftModes turns off what a program asks of the terminal for itself, as
+// a full-screen one does: reports of the mouse, of focus and of keys in
+// the kitty keyboard protocol or with modifyOtherKeys, and a hidden
+// cursor. The shell's own bracketed pastes stay.
+const leftModes = "\x1b[?9;1000;1002;1003;1004;1005;1006;1015;1016l\x1b[=0;1u\x1b[>4;0m\x1b[?25h"
+
+// resetLeftModes turns off leftModes when the program's shell takes its
+// terminal back from a job, which a program killed (or crashed) leaves on:
+// otherwise the shell gets the mouse's and keys' reports as text. A job
+// that ends well turned them off already. It runs with t.mu held, before
+// the output that follows, so that the shell sets what it wants again.
+func (t *Terminal) resetLeftModes() {
+	if t.proc == nil {
+		return
+	}
+	fg := t.proc.Foreground()
+	if fg == 0 {
+		return
+	}
+	if fg != t.fg && fg == t.proc.Pid() && t.fg != 0 {
+		t.term.Write([]byte(leftModes))
+	}
+	t.fg = fg
 }
 
 func (t *Terminal) fire(ev events, title string) {
@@ -867,7 +949,7 @@ func (t *Terminal) ended() {
 		t.code.Store(int64(code))
 	}
 	t.mu.Lock()
-	if t.term != nil && !t.closed {
+	if t.term != nil && !t.closed && !t.opts.NoExitMessage {
 		msg := "[Process exited]"
 		if code := t.code.Load(); code != 0 {
 			msg = fmt.Sprintf("[Process exited with code %d]", code)
@@ -887,6 +969,9 @@ func (t *Terminal) ended() {
 // finish closes Done and calls OnExit, once.
 func (t *Terminal) finish() {
 	t.doneOnce.Do(func() {
+		if t.shellDir != "" {
+			os.RemoveAll(t.shellDir)
+		}
 		close(t.done)
 		t.in.close()
 		if t.opts.OnExit != nil {
@@ -1273,6 +1358,18 @@ func (t *Terminal) resize(s gridSize) {
 	}
 	if s == t.size {
 		return
+	}
+	// zsh redraws its prompt on SIGWINCH. Clear it at the old width first:
+	// reflowing right-prompt padding would otherwise create extra prompt rows
+	// that zsh's cursor movements cannot erase. Command output still reflows.
+	// Ghostty clears it on a resize, which to the same size does nothing:
+	// the rows change first, or grow by one when they stay.
+	if t.opts.ShellIntegration && t.prompt.atPrompt && !t.term.AltScreen() && s.cols != t.size.cols {
+		rows := s.rows
+		if rows == t.size.rows {
+			rows++
+		}
+		t.term.Resize(t.size.cols, rows, s.cellW, s.cellH)
 	}
 	t.size = s
 	t.term.Resize(s.cols, s.rows, s.cellW, s.cellH)

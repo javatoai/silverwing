@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/ed25519"
+	"encoding/base64"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -110,9 +112,11 @@ func TestNSISCloseApp(t *testing.T) {
 // shortcut but not the desktop one the finish page offers, and the
 // uninstall removes both.
 func TestWindowsInstaller(t *testing.T) {
-	dir, artifacts := buildTestInstaller(t, map[string]string{
+	dir, work, artifacts := buildTestInstaller(t, map[string]string{
 		"main.go":              "package main\n\nfunc main() {}\n",
-		"mygo.json":            `{"name": "Setup Test", "identifier": "com.example.setuptest", "version": "2.0.0", "urlSchemes": ["setuptest"], "fileAssociations": [{"ext": ["setuptest"], "name": "Setup Test File"}], "windows": {"signCommand": "echo %1>>signed.txt"}}`,
+		"mygo.json":            `{"name": "Setup Test", "identifier": "com.example.setuptest", "version": "2.0.0", "urlSchemes": ["setuptest"], "fileAssociations": [{"ext": ["setuptest"], "name": "Setup Test File"}], "windows": {"signCommand": "echo %1>>signed.txt"}, "i18n": {}}`,
+		"locales/en.json":      `{}`,
+		"locales/zh-Hans.json": `{}`,
 		"resources/data/a.txt": "a",
 		"resources/icon.png":   string(defaultIcon()),
 	})
@@ -129,6 +133,21 @@ func TestWindowsInstaller(t *testing.T) {
 	}
 	if len(signed) != 3 || signed[0] != "Setup Test.exe" || signed[1] == signed[0] || signed[1] == signed[2] || signed[2] != "setup-test-setup-2.0.0-amd64.exe" {
 		t.Errorf("signed %q", signed)
+	}
+	// The finish page uses a LangString, defined for every wizard language.
+	nsi := filepath.Join(work, "installer.nsi")
+	script, err := os.ReadFile(nsi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`!define MUI_FINISHPAGE_SHOWREADME_TEXT "$(MYGO_DESKTOP_SHORTCUT)"`,
+		`LangString MYGO_DESKTOP_SHORTCUT ${LANG_ENGLISH} "Create a desktop shortcut"`,
+		`LangString MYGO_DESKTOP_SHORTCUT ${LANG_SIMPCHINESE} "创建桌面快捷方式"`,
+	} {
+		if n := strings.Count(string(script), want); n != 1 {
+			t.Errorf("installer.nsi has %d of %q, want one", n, want)
+		}
 	}
 	if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
 		return
@@ -178,10 +197,71 @@ func TestWindowsInstaller(t *testing.T) {
 	uninstall(t, install)
 }
 
+// TestSkipInstaller builds a Windows app with updates and -skip-installer,
+// with a makensis first on PATH that leaves a mark and fails: the build
+// never runs NSIS, makes no installer nor install.ps1, and has the update
+// files to upload. Without the flag, the same build runs it.
+func TestSkipInstaller(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles programs")
+	}
+	bin := t.TempDir()
+	mark := filepath.Join(bin, "ran")
+	fake, script := "makensis", "#!/bin/sh\ntouch '"+mark+"'\nexit 1\n"
+	if runtime.GOOS == "windows" {
+		fake, script = "makensis.bat", "@echo off\r\necho.>\""+mark+"\"\r\nexit /b 1\r\n"
+	}
+	if err := os.WriteFile(filepath.Join(bin, fake), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	t.Setenv("MYGO_UPDATER_PRIVATE_KEY", base64.StdEncoding.EncodeToString(priv))
+
+	dir := testModule(t, map[string]string{
+		"main.go":   "package main\n\nfunc main() {}\n",
+		"mygo.json": `{"name": "Skip Test", "version": "1.0.0", "updates": {"github": "me/skip-test", "deltas": 0, "publicKey": "` + base64.StdEncoding.EncodeToString(pub) + `"}}`,
+	})
+	c, err := loadConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := buildOptions{sign: "-", skipInstaller: true, work: t.TempDir()}
+	if opts.pkg, err = packageDir(c); err != nil {
+		t.Fatal(err)
+	}
+	artifacts, err := buildPlatform(c, "windows", "amd64", opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fileExists(mark) {
+		t.Error("the build with -skip-installer ran makensis")
+	}
+	names, err := entryNames(filepath.Join(dir, "dist", "windows-amd64"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if strings.Contains(name, installerMark) || name == installPS1Name {
+			t.Errorf("the build with -skip-installer made %s", name)
+		}
+	}
+	files, manifests, err := uploads(artifacts)
+	if err != nil || len(files) != 1 || filepath.Base(files[0]) != "skip-test-1.0.0-windows-amd64.tar.gz" || len(manifests) != 1 {
+		t.Errorf("uploads of %q = %q, %q, %v", artifacts, files, manifests, err)
+	}
+
+	opts.skipInstaller = false
+	if _, err := buildPlatform(c, "windows", "amd64", opts); err == nil || !strings.Contains(err.Error(), "makensis") || !fileExists(mark) {
+		t.Errorf("the build without -skip-installer: %v, ran makensis: %v", err, fileExists(mark))
+	}
+}
+
 // buildTestInstaller builds the Windows installer of a module of files
-// for amd64, and returns the module's directory and the artifacts, the
-// installer last. It skips the test without NSIS.
-func buildTestInstaller(t *testing.T, files map[string]string) (string, []string) {
+// for amd64, and returns the module's directory, the work directory the
+// installer script is written to, and the artifacts, the installer last.
+// It skips the test without NSIS.
+func buildTestInstaller(t *testing.T, files map[string]string) (string, string, []string) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("compiles programs")
@@ -204,7 +284,7 @@ func buildTestInstaller(t *testing.T, files map[string]string) (string, []string
 	if err != nil {
 		t.Fatal(err)
 	}
-	return dir, artifacts
+	return dir, opts.work, artifacts
 }
 
 // shellFolder returns the path of a special folder of the user on
@@ -226,7 +306,7 @@ func shellFolder(t *testing.T, folder string) string {
 // name; Settings > Apps lists the app by it, and the uninstall removes the
 // shortcuts.
 func TestWindowsInstallerDisplayName(t *testing.T) {
-	_, artifacts := buildTestInstaller(t, map[string]string{
+	_, _, artifacts := buildTestInstaller(t, map[string]string{
 		"main.go":   "package main\n\nfunc main() {}\n",
 		"mygo.json": `{"name": "Display Test", "identifier": "com.example.displaytest", "version": "1.0.0", "windows": {"displayName": "显示测试: Beta"}}`,
 	})
@@ -548,6 +628,33 @@ func TestNSISHooks(t *testing.T) {
 		if b, err := exec.Command(tool, "-V2", nsi).CombinedOutput(); err != nil {
 			t.Errorf("makensis: %v\n%s", err, b)
 		}
+	}
+}
+
+// TestWindowsInstallerLanguages compiles an installer in two languages and
+// checks that makensis warns of nothing: it reports a LangString missing in
+// a language only as a warning, which does not fail the build.
+func TestWindowsInstallerLanguages(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles an installer")
+	}
+	tool, err := nsisCompiler()
+	if err != nil {
+		t.Fatal(err)
+	} else if tool == "" {
+		t.Skip("NSIS is not installed")
+	}
+	c := project(t, `{"name": "Notes", "identifier": "com.example.notes", "version": "1.0.0", "i18n": {}}`, map[string]string{
+		"en.json":      `{}`,
+		"zh-Hans.json": `{}`,
+	})
+	stage, work := t.TempDir(), t.TempDir()
+	writeFiles(t, stage, map[string]string{"Notes.exe": "app"})
+	if _, err := writeInstaller(c, stage, work, "Notes.exe", "amd64", []string{"Notes.exe"}); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(tool, "-V2", filepath.Join(work, "installer.nsi")).CombinedOutput(); err != nil || strings.Contains(strings.ToLower(string(out)), "warning") {
+		t.Fatalf("makensis must compile every language without warnings: %v\n%s", err, out)
 	}
 }
 

@@ -15,7 +15,6 @@ import (
 type taskCreationProgressState struct {
 	token      string
 	generation uint64
-	groupID    string
 	signature  string
 	mode       string
 
@@ -64,7 +63,6 @@ type taskCreationProgressRequest struct {
 	progress   *taskCreationProgressState
 	token      string
 	generation uint64
-	groupID    string
 	home       string
 	configJSON string
 	signature  string
@@ -77,7 +75,7 @@ func newTaskCreationProgressState(s *app, state *taskCreationState, generation u
 		return nil
 	}
 	progress := &taskCreationProgressState{
-		token: state.token, generation: generation, groupID: state.groupID,
+		token: state.token, generation: generation,
 		mode:    "create",
 		phase:   workspace.TaskCreationPhasePreparingWorktree,
 		message: "正在创建任务并准备工作区…",
@@ -85,11 +83,7 @@ func newTaskCreationProgressState(s *app, state *taskCreationState, generation u
 	if state.preview != nil {
 		progress.signature = state.preview.signature
 	}
-	group := s.taskCreationGroup()
-	if group == nil {
-		return progress
-	}
-	for _, service := range group.Services {
+	for _, service := range state.config.ServiceCatalog() {
 		if !state.services[service.ID] {
 			continue
 		}
@@ -128,7 +122,7 @@ func (s *app) taskCreationProgressUpdates(ctx context.Context, action applicatio
 	}
 	request := &taskCreationProgressRequest{
 		ctx: ctx, window: s.win, state: state, progress: progress,
-		token: state.token, generation: state.progressGeneration, groupID: state.groupID,
+		token: state.token, generation: state.progressGeneration,
 		home: s.snapshot.Home, configJSON: s.settingsUnit.state.configJSON, signature: progress.signature, kind: action.Kind,
 	}
 	return s.taskCreationProgressCallback(request)
@@ -145,7 +139,7 @@ func (s *app) taskCreationPreflightProgressUpdates(preflight *taskCreationPrefli
 	}
 	request := &taskCreationProgressRequest{
 		ctx: preflight.ctx, window: s.win, state: state, progress: progress,
-		token: preflight.token, generation: state.progressGeneration, groupID: state.groupID,
+		token: preflight.token, generation: state.progressGeneration,
 		home: preflight.home, configJSON: s.settingsUnit.state.configJSON, signature: preflight.previewSignature,
 		kind: "task.create-preview", preflight: preflight,
 	}
@@ -193,7 +187,7 @@ func (s *app) applyTaskCreationProgressEvent(request *taskCreationProgressReques
 	if request.state == nil || s.taskUnit.state.taskCreation != request.state || !s.dialogOpen || s.form.mode != "task-create" ||
 		request.kind == "task.create" && (!s.busy || s.operationKind != "task.create" || request.state.phase != "creating") ||
 		request.state.token != request.token || request.state.preview == nil ||
-		request.state.progressGeneration != request.generation || request.state.groupID != request.groupID ||
+		request.state.progressGeneration != request.generation ||
 		request.state.creationProgress != request.progress || request.progress.generation != request.generation ||
 		s.snapshot.Home != request.home || s.settingsUnit.state.configJSON != request.configJSON ||
 		request.state.preview.signature != request.signature || request.state.preview.signature != s.taskCreationSignature() || event.Sequence == 0 || event.Sequence <= request.progress.lastSeq {

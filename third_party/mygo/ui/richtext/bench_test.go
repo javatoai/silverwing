@@ -2,6 +2,7 @@ package richtext
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -94,5 +95,104 @@ func BenchmarkScrollFrame(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		tt.Scroll(500, 400, 0, 120)
+	}
+}
+
+// shortParagraphs returns n short paragraphs, as a note's lines or a
+// list's items are, many to a chunk of the text: their words run plain,
+// bold and plain, with a multi-byte rune in each.
+func shortParagraphs(n int) Text {
+	paras := make([]Paragraph, n)
+	for i := range paras {
+		paras[i] = Paragraph{Runs: []Run{
+			{Text: fmt.Sprintf("Line %d — ", i)},
+			{Text: "bold", Attributes: Attributes{Weight: 700}},
+			{Text: "."},
+		}}
+	}
+	return TextOf(paras...)
+}
+
+// benchShort are the sizes of the documents of short paragraphs.
+var benchShort = []int{100, 300, 1000, 3000}
+
+// BenchmarkParagraphs walks the paragraphs of a document of short ones,
+// as saving or searching it does.
+func BenchmarkParagraphs(b *testing.B) {
+	for _, n := range benchShort {
+		t := shortParagraphs(n)
+		b.Run(fmt.Sprint(n), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				for range t.Paragraphs() {
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkRuns walks the runs of the whole of a document of short
+// paragraphs, as copying it does.
+func BenchmarkRuns(b *testing.B) {
+	for _, n := range benchShort {
+		t := shortParagraphs(n)
+		b.Run(fmt.Sprint(n), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				for range t.Runs(0, t.Len()) {
+				}
+			}
+		})
+	}
+}
+
+// readsAsRuns returns a paragraph with every mark Markdown writes.
+func readsAsRuns() []Run {
+	bold := Attributes{Weight: 700}
+	italic := Attributes{Italic: true}
+	underlined := Attributes{Underline: true}
+	strike := Attributes{Strikethrough: true}
+	code := Attributes{Code: true}
+	linked := Attributes{Link: "https://example.com"}
+	attachment := &Attachment{Name: "a cat", URL: "cat.png"}
+	var runs []Run
+	for repeat := 0; repeat < 32; repeat++ {
+		runs = append(runs,
+			Run{Text: "a é "},
+			Run{Text: "bold", Attributes: bold},
+			Run{Text: " "},
+			Run{Text: "italic", Attributes: italic},
+			Run{Text: " "},
+			Run{Text: "under", Attributes: underlined},
+			Run{Text: " "},
+			Run{Text: "strike", Attributes: strike},
+			Run{Text: " "},
+			Run{Text: "code", Attributes: code},
+			Run{Text: " "},
+			Run{Text: "link", Attributes: linked},
+			Run{Text: " "},
+			Run{Text: string(ObjectReplacement), Attributes: Attributes{Attachment: attachment}},
+			Run{Text: " "},
+		)
+	}
+	runs = append(runs, Run{Text: "  "})
+	return runs
+}
+
+// BenchmarkReadsAs measures reading a written paragraph back, which
+// compares every rune and its marks.
+func BenchmarkReadsAs(bench *testing.B) {
+	runs := readsAsRuns()
+	var builder strings.Builder
+	writeMarkdownRuns(&builder, runs)
+	markdown := builder.String()
+	if !readsAs(markdown, runs) {
+		bench.Fatal("Markdown does not read back")
+	}
+	bench.ReportAllocs()
+	for bench.Loop() {
+		if !readsAs(markdown, runs) {
+			bench.Fatal("Markdown does not read back")
+		}
 	}
 }

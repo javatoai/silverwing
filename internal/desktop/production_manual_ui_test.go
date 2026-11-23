@@ -108,7 +108,7 @@ func TestProductionInitializationExposesSeparateMergeAndCreate(t *testing.T) {
 }
 
 func TestProductionDiffReadIsIndependentAndRejectsLateResults(t *testing.T) {
-	for _, change := range []string{"none", "close", "page", "batch", "config", "home", "manual", "service"} {
+	for _, change := range []string{"none", "close", "page", "batch", "config", "task-root", "home", "preview", "service"} {
 		t.Run(change, func(t *testing.T) {
 			s, v, _ := productionFixture(t)
 			s.taskUnit.state.tasks = []task{{id: "selected-task", title: "kept"}}
@@ -138,11 +138,16 @@ func TestProductionDiffReadIsIndependentAndRejectsLateResults(t *testing.T) {
 			if change == "config" {
 				s.settingsUnit.state.configJSON = `{"tagEnabled":false}`
 			}
+			if change == "task-root" {
+				s.settingsUnit.state.configJSON = `{"taskRoot":"D:/another-task-root"}`
+			}
 			if change == "home" {
 				s.snapshot.Home = "changed"
 			}
-			if change == "manual" {
-				v.ManualTag = "changed"
+			if change == "preview" {
+				fresh := *v.Preview
+				fresh.ProductionSHA = strings.Repeat("f", 40)
+				v.Preview = &fresh
 			}
 			if change == "service" {
 				s.releaseUnit.state.production.selected = "other"
@@ -198,6 +203,47 @@ func TestProductionDiffDialogReusesFileViewerAndEsc(t *testing.T) {
 				}
 				if r.NativeDiff == nil && r.DiffRows == nil {
 					t.Fatal("shared code comparison renderer was not activated")
+				}
+				if _, ok := tester.Find("拖动调整文件列表宽度"); !ok {
+					t.Fatal("production diff is missing the task review splitter")
+				}
+				if width == 1440 && !dark {
+					var resizedFileListWidth float32
+					for _, size := range [][2]int{{2240, 1250}, {960, 680}} {
+						tester.SetSize(size[0], size[1])
+						panel, ok := tester.Find("Git 差异")
+						if !ok || panel.X != 12 || panel.Y != 12 || panel.W != float32(size[0]-24) || panel.H != float32(size[1]-24) {
+							t.Fatalf("diff did not follow the window at %v: %+v", size, panel)
+						}
+						if r.SelectedPath != "src/service.go" {
+							t.Fatalf("resizing lost the selected file: %q", r.SelectedPath)
+						}
+						if resizedFileListWidth == 0 {
+							splitter, _ := tester.Find("拖动调整文件列表宽度")
+							x, y := splitter.X+splitter.W/2, splitter.Y+splitter.H/2
+							tester.Press(x, y)
+							tester.Move(x+320, y)
+							tester.Release(x+320, y)
+							resizedFileListWidth = r.LeftWidth
+							if resizedFileListWidth <= 260 {
+								t.Fatal("drag did not resize the shared file list")
+							}
+						} else if r.LeftWidth != resizedFileListWidth {
+							t.Fatal("shrinking the dialog overwrote the file list preference")
+						}
+					}
+					if err := tester.Click("收起文件列表"); err != nil || !r.LeftCollapsed {
+						t.Fatalf("could not collapse the shared file list: %v", err)
+					}
+					if err := tester.Click("展开文件列表"); err != nil || r.LeftCollapsed {
+						t.Fatalf("could not expand the shared file list: %v", err)
+					}
+					if err := tester.Click("更多审阅操作"); err != nil {
+						t.Fatal(err)
+					}
+					if err := tester.Click("按相对路径平铺"); err != nil || r.FileView != "flat" {
+						t.Fatalf("could not use the shared file view menu: %v", err)
+					}
 				}
 				if dir := os.Getenv("SILVERWING_PRODUCTION_EVIDENCE_DIR"); dir != "" {
 					if err := os.MkdirAll(dir, 0700); err != nil {

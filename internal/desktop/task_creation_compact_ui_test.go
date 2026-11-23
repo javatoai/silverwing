@@ -24,7 +24,7 @@ func taskCreationCompactFixture(t *testing.T, width int, dark bool, count int) (
 	tasks, materials := filepath.Join(root, "tasks"), filepath.Join(root, "materials")
 	config.TaskRoot, config.RequirementMaterialsRoot = &tasks, &materials
 	modules := []domain.ServiceModuleConfig{{ID: "api", Name: "API", Strategy: domain.WorkspaceStandardWorktree, TagMode: domain.TagBuildMergeToTargetBranch, CustomCommands: []domain.WorkspaceCommandConfig{}}, {ID: "worker", Name: "Worker", Strategy: domain.WorkspaceIndependentClone, TagMode: domain.TagBuildCurrentBranch, CustomCommands: []domain.WorkspaceCommandConfig{}}}
-	config.Groups = []domain.GroupConfig{{ID: "group", Name: "项目组", Services: []domain.GroupServiceConfig{{ID: "service", RepositoryID: "repo", DisplayName: "fixture-service", Enabled: true, DevelopmentTool: domain.DevelopmentToolIntelliJIdea, MasterBranch: "origin/main", Bootstrap: domain.BootstrapConfig{Commands: []domain.BootstrapCommand{}, CopyRules: []domain.BootstrapCopyRule{}}, Modules: modules[:count]}}}}
+	config.Services = []domain.GroupServiceConfig{{ID: "service", RepositoryID: "repo", DisplayName: "fixture-service", Enabled: true, DevelopmentTool: domain.DevelopmentToolIntelliJIdea, MasterBranch: "origin/main", Bootstrap: domain.BootstrapConfig{Commands: []domain.BootstrapCommand{}, CopyRules: []domain.BootstrapCopyRule{}}, Modules: modules[:count]}}
 	raw, err := json.Marshal(config)
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +43,6 @@ func taskCreationCompactFixture(t *testing.T, width int, dark bool, count int) (
 	if form.configError != "" {
 		t.Fatal(form.configError)
 	}
-	form.toolsLoaded, form.toolsLoading, form.toolsError = true, false, ""
 	s.ensureTaskCreationService("service")
 	s.focusTaskCreationService("service")
 	for _, draft := range form.moduleData["service"] {
@@ -100,11 +99,27 @@ func scrollTaskCreationRight(t *testing.T, tester *ui.Tester, viewport ui.Rect, 
 	tester.Frame()
 }
 
+func requireSingleTaskCreationModuleTab(t *testing.T, tester *ui.Tester, name string) {
+	t.Helper()
+	if _, found := tester.AccessByRole(ui.RoleTabList, "模块页签"); !found {
+		t.Fatal("module tab row is missing")
+	}
+	var tabs []ui.AccessInfo
+	for _, control := range tester.AccessAll() {
+		if control.Role == ui.RoleTab {
+			tabs = append(tabs, control)
+		}
+	}
+	if len(tabs) != 1 || tabs[0].Name != name || !tabs[0].Selected || tabs[0].Offscreen {
+		t.Fatalf("expected a single visible, selected module tab named %q, got %+v", name, tabs)
+	}
+}
+
 func TestTaskCreationCompactLayout(t *testing.T) {
 	for _, width := range []int{960, 1440} {
 		for _, dark := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%d-dark-%t", width, dark), func(t *testing.T) {
-				s, tester := taskCreationCompactFixture(t, width, dark, 2)
+				_, tester := taskCreationCompactFixture(t, width, dark, 2)
 				left, _ := tester.Find("任务基本信息")
 				right, _ := tester.Find("任务服务与模块")
 				serviceViewport, serviceViewportFound := tester.Find("任务服务列表")
@@ -123,22 +138,25 @@ func TestTaskCreationCompactLayout(t *testing.T) {
 				if oldPicker || tester.HasText("搜索需求标题或链接") || tester.HasText("本次任务的模块设置") || tester.HasText("条需求候选") {
 					t.Fatal("duplicate requirement input or repeated module cards remain")
 				}
-				for _, moduleID := range s.taskUnit.state.taskCreation.moduleOrder["service"] {
-					if !s.taskUnit.state.taskCreation.moduleExpanded["service"][moduleID] {
-						t.Fatalf("configured modules should default to expanded in the vertical service flow: module=%q expanded=%v", moduleID, s.taskUnit.state.taskCreation.moduleExpanded["service"])
-					}
-				}
+				tabs, tabsFound := tester.Find("模块页签")
+				api, apiFound := tester.Find("API")
+				worker, workerFound := tester.Find("Worker")
 				first, firstFound := tester.Find("模块名称 · service:api")
-				if !firstFound || first.W <= 0 || first.X < right.X || first.X+first.W > right.X+right.W {
-					t.Fatalf("first configured module should be visible in the full-width service pane: rect=%+v right=%+v", first, right)
+				if !tabsFound || !apiFound || !workerFound || !firstFound || api.Y != worker.Y || api.X+api.W > worker.X ||
+					tabs.Y+tabs.H > first.Y || first.W <= 0 || first.X < right.X || first.X+first.W > right.X+right.W {
+					t.Fatalf("module tabs should share a row above the first module form: tabs=%+v api=%+v worker=%+v form=%+v pane=%+v", tabs, api, worker, first, right)
+				}
+				if _, exists := tester.Find("模块名称 · service:worker"); exists {
+					t.Fatal("the inactive module form is still rendered")
 				}
 			})
 		}
 	}
 	_, single := taskCreationCompactFixture(t, 960, false, 1)
-	if !single.HasText("模块名称 · service:api") {
+	if _, found := single.Find("模块名称 · service:api"); !found {
 		t.Fatalf("single module should start as the active editor: %+v", single.Texts())
 	}
+	requireSingleTaskCreationModuleTab(t, single, "API")
 }
 
 func TestTaskCreationCompactRequirementInput(t *testing.T) {
@@ -200,23 +218,36 @@ func TestTaskCreationCompactModuleDraftAndPayload(t *testing.T) {
 	compactCreationEdit(t, tester, "模块名称 · service:api", "API-edited")
 	compactCreationEdit(t, tester, "模块目标分支 · service:api", "feature/custom-api")
 	draft := form.moduleData["service"]["api"]
-	clickTaskCreationVisible(t, tester, "折叠模块：service:api", serviceViewport)
-	if form.moduleExpanded["service"]["api"] || draft.Name != "API-edited" || draft.TargetBranch != "feature/custom-api" || !draft.TargetEdited || !form.moduleExpanded["service"]["worker"] {
-		t.Fatal("folding one module should preserve its draft and leave the other module expanded")
+	clickTaskCreationVisible(t, tester, "Worker", serviceViewport)
+	if _, found := tester.Find("模块名称 · service:api"); found {
+		t.Fatal("selecting another module left the previous form rendered")
 	}
-	clickTaskCreationVisible(t, tester, "展开模块：service:api", serviceViewport)
-	form.preview = &taskCreationPreview{signature: s.taskCreationSignature()}
-	form.phase = "confirm"
+	compactCreationEdit(t, tester, "模块名称 · service:worker", "Worker-edited")
+	preview := &taskCreationPreview{signature: s.taskCreationSignature()}
+	form.preview, form.phase = preview, "confirm"
 	tester.Frame()
+	clickTaskCreationVisible(t, tester, "Worker-edited", serviceViewport)
+	tester.Key(0, ui.KeyLeft)
+	target, found := tester.Access("模块目标分支 · service:api")
+	if !found || target.Value != "feature/custom-api" || !draft.TargetEdited || !tester.Focused("API-edited") {
+		t.Fatalf("keyboard tab switch did not restore the edited branch and tab focus: field=%+v found=%t", target, found)
+	}
+	if form.preview != preview || form.phase != "confirm" {
+		t.Fatal("changing the active module invalidated the preflight")
+	}
 	scrollTaskCreationRight(t, tester, serviceViewport, 10000)
 	clickTaskCreationVisible(t, tester, "添加临时模块", serviceViewport)
 	order := form.moduleOrder["service"]
-	newID := order[len(order)-1]
-	newDraft := form.moduleData["service"][newID]
-	if !form.moduleExpanded["service"][newID] || !tester.Focused("模块名称 · service:"+newID) || len(order) != 3 || form.preview != nil || form.phase != "editing" {
-		t.Fatalf("temporary module did not append, expand/focus, or invalidate preflight: expanded=%v id=%q focus=%t count=%d preview=%+v phase=%q texts=%+v", form.moduleExpanded["service"], newID, tester.Focused("模块名称 · service:"+newID), len(order), form.preview, form.phase, tester.Texts())
+	if len(order) != 3 {
+		t.Fatalf("temporary module was not appended: %v", order)
 	}
-	nameBox, _ := tester.Find("模块名称 · service:" + newID)
+	newID := order[2]
+	newDraft := form.moduleData["service"][newID]
+	nameLabel := "模块名称 · service:" + newID
+	if !tester.Focused(nameLabel) || form.preview != nil || form.phase != "editing" {
+		t.Fatalf("temporary module did not become active, take focus, or invalidate preflight: id=%q focus=%t preview=%+v phase=%q", newID, tester.Focused(nameLabel), form.preview, form.phase)
+	}
+	nameBox, _ := tester.Find(nameLabel)
 	if nameBox.Y < serviceViewport.Y || nameBox.Y+nameBox.H > serviceViewport.Y+serviceViewport.H {
 		t.Fatalf("new module focus was not scrolled into view: input=%+v viewport=%+v", nameBox, serviceViewport)
 	}
@@ -225,7 +256,7 @@ func TestTaskCreationCompactModuleDraftAndPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	selections := payload["serviceSelections"].([]workspace.TaskServiceSelection)
-	if len(selections) != 1 || len(selections[0].Modules) != 3 || selections[0].Modules[0].Name != "API-edited" || selections[0].Modules[0].TargetBranch != "feature/custom-api" || selections[0].Modules[0].Strategy != domain.WorkspaceStandardWorktree || selections[0].Modules[2].Source != domain.TaskModuleTemporary {
+	if len(selections) != 1 || len(selections[0].Modules) != 3 || selections[0].Modules[0].Name != "API-edited" || selections[0].Modules[0].TargetBranch != "feature/custom-api" || selections[0].Modules[0].Strategy != domain.WorkspaceStandardWorktree || selections[0].Modules[1].Name != "Worker-edited" || selections[0].Modules[2].Source != domain.TaskModuleTemporary {
 		t.Fatalf("visible module drafts diverged from preflight selection: %+v", selections)
 	}
 	clickTaskCreationVisible(t, tester, "删除模块 "+newDraft.Name, serviceViewport)
@@ -239,7 +270,7 @@ func TestTaskCreationCompactModuleDraftAndPayload(t *testing.T) {
 	}
 }
 
-func TestTaskCreationTemporaryModuleDeletionKeepsOneModule(t *testing.T) {
+func TestTaskCreationModuleDeletionKeepsRemainingTabAndDraft(t *testing.T) {
 	s, tester := taskCreationCompactFixture(t, 960, false, 1)
 	form := s.taskUnit.state.taskCreation
 	serviceViewport, _ := tester.Find("任务服务列表")
@@ -254,9 +285,55 @@ func TestTaskCreationTemporaryModuleDeletionKeepsOneModule(t *testing.T) {
 	}
 	temporaryID := order[1]
 	draft := form.moduleData["service"][temporaryID]
-	clickTaskCreationVisible(t, tester, "删除模块 "+draft.Name, serviceViewport)
-	if len(form.moduleOrder["service"]) != 1 || form.moduleOrder["service"][0] != "api" || form.moduleData["service"]["api"] == nil {
-		t.Fatalf("deleting the only temporary module must preserve the configured module: order=%v data=%v", form.moduleOrder["service"], form.moduleData["service"])
+	nameLabel := "模块名称 · service:" + temporaryID
+	if _, found := tester.Find("模块页签"); !found || !tester.Focused(nameLabel) {
+		t.Fatal("adding a second module should show tabs and focus the new module")
+	}
+	const remainingName = "temporary-edited"
+	compactCreationEdit(t, tester, nameLabel, remainingName)
+	scrollTaskCreationRight(t, tester, serviceViewport, -10000)
+	clickTaskCreationVisible(t, tester, "API", serviceViewport)
+	clickTaskCreationVisible(t, tester, "删除模块 API", serviceViewport)
+	order = form.moduleOrder["service"]
+	if len(order) != 1 || order[0] != temporaryID || form.moduleData["service"][temporaryID] != draft || form.moduleData["service"]["api"] != nil {
+		t.Fatalf("deleting the configured module must preserve the temporary draft: order=%v data=%v", order, form.moduleData["service"])
+	}
+	requireSingleTaskCreationModuleTab(t, tester, remainingName)
+	if name, found := tester.Access(nameLabel); !found || name.Value != remainingName {
+		t.Fatalf("the active editor should retain the remaining module name: field=%+v found=%t", name, found)
+	}
+	if _, found := tester.Find("删除模块 " + remainingName); found {
+		t.Fatal("the remaining module should not offer deletion")
+	}
+}
+
+func TestTaskCreationModuleTabsFollowServiceAndValidation(t *testing.T) {
+	s, tester := taskCreationCompactFixture(t, 1100, false, 2)
+	form := s.taskUnit.state.taskCreation
+	other := form.config.Services[0]
+	other.ID, other.DisplayName = "other", "other-service"
+	other.Modules = other.Modules[:1]
+	form.config.Services = append(form.config.Services, other)
+	tester.Frame()
+
+	serviceViewport, _ := tester.Find("任务服务列表")
+	compactCreationEdit(t, tester, "模块目标分支 · service:api", "")
+	clickTaskCreationVisible(t, tester, "Worker", serviceViewport)
+	clickTaskCreationVisible(t, tester, "配置服务：other-service", serviceViewport)
+	if _, found := tester.Find("模块名称 · other:api"); !found {
+		t.Fatal("switching services did not show the other service's module")
+	}
+	requireSingleTaskCreationModuleTab(t, tester, "API")
+	clickTaskCreationVisible(t, tester, "配置服务：fixture-service", serviceViewport)
+	if _, found := tester.Find("模块名称 · service:worker"); !found {
+		t.Fatal("returning to a service lost its active module")
+	}
+	if err := tester.Click("检查并创建任务"); err != nil {
+		t.Fatal(err)
+	}
+	const targetLabel = "模块目标分支 · service:api"
+	if !tester.Focused(targetLabel) || !tester.HasText("Worktree 模块目标分支不能为空：API") {
+		t.Fatalf("preflight should reveal and focus an invalid field in an inactive module: %q", form.inlineError)
 	}
 }
 
@@ -265,7 +342,7 @@ func TestTaskCreationCompactRequirementRetiresLateCandidates(t *testing.T) {
 	form, state := s.taskUnit.state.taskCreation, s.taskUnit.state.taskCreation.requirements
 	for _, scope := range []string{"home", "project", "account"} {
 		ctx, cancel := context.WithCancel(context.Background())
-		request := &taskCreationRequirementRequest{form: form, token: form.token, ctx: ctx, cancel: cancel, home: s.snapshot.Home, groupID: form.groupID, config: taskCreationRequirementsConfigFingerprint(s.snapshot.ConfigJSON, form.config), generation: state.candidateGeneration}
+		request := &taskCreationRequirementRequest{form: form, token: form.token, ctx: ctx, cancel: cancel, home: s.snapshot.Home, config: taskCreationRequirementsConfigFingerprint(s.snapshot.ConfigJSON, form.config), generation: state.candidateGeneration}
 		state.candidateRequest, state.candidatesLoading = request, true
 		if scope == "home" {
 			s.snapshot.Home = filepath.Join(t.TempDir(), "other-home")

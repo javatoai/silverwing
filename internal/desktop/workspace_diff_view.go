@@ -203,7 +203,9 @@ func (s *app) workspaceNativeDiffView(state *workspaceHistoryState, comparison *
 	}
 	if state.NativeDiff == nil {
 		state.NativeDiff = newDiffNativeViewState(oldText, newText)
-		if hunks, ok := workspacePreparedDiffHunks(comparison, oldText, newText); ok {
+		state.NativeDiff.view.ScrollPastEnd = true
+		state.NativeDiff.view.KeepScrollbars = true
+		if hunks, ok := workspacePreparedDiffHunks(comparison); ok {
 			state.NativeDiff.view.SetPreparedHunks(hunks)
 		}
 		state.NativeDiff.view.SplitRatio = firstNonZeroSplitRatio(state.SplitRatio, .5)
@@ -242,9 +244,9 @@ func (s *app) workspaceNativeDiffView(state *workspaceHistoryState, comparison *
 	return state.NativeDiff
 }
 
-// workspacePreparedDiffHunks projects the already computed service rows onto
-// the complete native buffers; it never runs a second line-diff algorithm.
-func workspacePreparedDiffHunks(comparison *workspace.WorkspaceFileComparison, oldText, newText string) ([]editor.DiffHunk, bool) {
+// workspacePreparedDiffHunks projects the already computed Git rows onto
+// the native buffers using the line ranges of MyGO's read-only diff.
+func workspacePreparedDiffHunks(comparison *workspace.WorkspaceFileComparison) ([]editor.DiffHunk, bool) {
 	if comparison == nil || comparison.Truncated {
 		return nil, false
 	}
@@ -277,16 +279,6 @@ func workspacePreparedDiffHunks(comparison *workspace.WorkspaceFileComparison, o
 		}
 	}
 	flush()
-	// Git's rows exclude the final empty line; native buffers retain it.
-	// A newline present on just one side belongs to the last change.
-	nOld, nNew := nativeDiffLineCount(oldText), nativeDiffLineCount(newText)
-	if nOld-a != nNew-b {
-		if len(hunks) > 0 && hunks[len(hunks)-1].OldEnd == a && hunks[len(hunks)-1].NewEnd == b {
-			hunks[len(hunks)-1].OldEnd, hunks[len(hunks)-1].NewEnd = nOld, nNew
-		} else {
-			hunks = append(hunks, editor.DiffHunk{OldStart: a, OldEnd: nOld, NewStart: b, NewEnd: nNew})
-		}
-	}
 	return hunks, true
 }
 

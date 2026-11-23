@@ -25,7 +25,7 @@ import (
 // original locations by the operating system.
 func (s *TaskApplicationService) RestoreRecycledWorkspaces(ctx context.Context, config domain.AppConfig, taskPath string) (restored int, resultErr error) {
 	taskPath = mustAbs(taskPath)
-	resultErr = s.Locks.WithTaskRoot(stringValue(config.TaskRoot), func() error {
+	resultErr = s.Locks.WithTaskRoot(s.Locks.TaskRoot(config), func() error {
 		return s.withTaskManifestMutation(ctx, config, taskPath, func(ctx context.Context, manifest domain.TaskManifest) error {
 			if err := s.Lifecycle.validateTaskDirectory(config, taskPath, manifest); err != nil {
 				return err
@@ -35,10 +35,14 @@ func (s *TaskApplicationService) RestoreRecycledWorkspaces(ctx context.Context, 
 				return conflicts
 			}
 			roots := make(map[string]string)
+			workspaces := make([]domain.ServiceWorkspace, 0, len(records))
 			for _, record := range records {
-				roots[strings.ToLower(record.CommonDirectory)] = record.CommonDirectory
+				if record.Workspace.Strategy == domain.WorkspaceStandardWorktree {
+					roots[strings.ToLower(record.CommonDirectory)] = record.CommonDirectory
+				}
+				workspaces = append(workspaces, record.Workspace)
 			}
-			err := s.Lifecycle.withRepositoryLocks(valuesSorted(roots), 0, func() error {
+			err := s.Lifecycle.withWorkspaceLocks(valuesSorted(roots), workspaces, func() error {
 				var err error
 				restored, err = s.restoreWorkspaceRecords(ctx, config, taskPath, manifest, records)
 				return err
@@ -83,9 +87,10 @@ func findRestoredWorkspaceRecords(ctx context.Context, locks *OperationLocks, ta
 		if err != nil {
 			return nil, err
 		}
-		if record.State == workspaceRecycleDone || !record.matchesTask(taskPath, taskIdentity, manifest) {
+		if record.State == workspaceRecycleDone || !record.matchesTask(locks.Paths.ProfileID, taskPath, taskIdentity, manifest) {
 			continue
 		}
+		record.taskPath = taskPath
 		identity, err := documents.DirectoryFingerprint(record.Target)
 		if os.IsNotExist(err) {
 			continue
@@ -143,9 +148,22 @@ func readWorkspaceRecycleRecord(path string) (*workspaceRecycleRecord, error) {
 
 func (r *workspaceRecycleRecord) validReceipt() bool {
 	if r.Version != workspaceRecycleVersion || (r.State != workspaceRecyclePending && r.State != workspaceRecycleMoved && r.State != workspaceRecycleDone) ||
-		r.TaskIdentity == "" || r.TaskCreatedAt == "" || r.TaskDirectoryName != filepath.Base(r.TaskPath) || r.TargetIdentity == "" ||
-		!sameRecyclePath(filepath.Dir(r.Target), r.TaskPath) || !sameRecyclePath(mustAbs(r.Workspace.WorktreePath), r.Target) ||
+		r.TaskIdentity == "" || r.TaskCreatedAt == "" || r.TargetIdentity == "" ||
+		!sameRecyclePath(filepath.Dir(r.Target), r.workspaceDirectory()) || !sameRecyclePath(mustAbs(r.Workspace.WorktreePath), r.Target) ||
 		r.Workspace.RepositoryID == "" || r.Branch == "" || r.Branch != r.Workspace.Branch || !validGitObjectID(r.Head) || r.CommonIdentity == "" {
+		return false
+	}
+	if _, err := RequireValidTaskDirectoryName(r.TaskDirectoryName); err != nil {
+		return false
+	}
+	taskPath := r.TaskPath
+	if taskPath == "" && r.ProfileID != "" {
+		// Legacy profile receipts recorded a separate checkout. They are
+		// readable but cannot match a task in the configured root.
+		taskPath = r.WorkspaceDirectory
+	}
+	if r.TaskDirectoryName != filepath.Base(taskPath) || !filepath.IsAbs(taskPath) ||
+		(r.WorkspaceDirectory != "" && !sameRecyclePath(taskPath, r.WorkspaceDirectory)) {
 		return false
 	}
 	previous := -1
@@ -213,10 +231,10 @@ func (s *TaskApplicationService) restoreWorkspaceRecords(ctx context.Context, co
 		return 0, errors.Join(conflicts...)
 	}
 	defer func() { resultErr = errors.Join(append(conflicts, resultErr)...) }()
-	var taskContext *workspaceTaskContextUpdate
+	var taskAgents *workspaceTaskAgentsUpdate
 	if moduleRecords {
 		var err error
-		taskContext, err = captureWorkspaceTaskContext(taskPath)
+		taskAgents, err = captureWorkspaceTaskAgents(taskPath)
 		if err != nil {
 			return 0, err
 		}
@@ -274,9 +292,9 @@ func (s *TaskApplicationService) restoreWorkspaceRecords(ctx context.Context, co
 			return s.Manifests.Save(taskPath, manifest)
 		})
 	}
-	if taskContext != nil {
-		undo = append(undo, taskContext.rollback)
-		if err := taskContext.write(s.Documents, updated, config); err != nil {
+	if taskAgents != nil {
+		undo = append(undo, taskAgents.rollback)
+		if err := taskAgents.write(s.Documents, updated, config); err != nil {
 			return 0, err
 		}
 	}
@@ -375,7 +393,7 @@ func (r *workspaceRecycleRecord) verifyRestoredWorkspace(ctx context.Context, co
 }
 
 func (r *workspaceRecycleRecord) verifyRestoredClone(ctx context.Context, git *GitClient) error {
-	owner, err := verifyModuleRecycleClone(ctx, git, r.TaskPath, r.Workspace, r.Target)
+	owner, err := verifyModuleRecycleClone(ctx, git, r.workspaceDirectory(), r.Workspace, r.Target)
 	if err != nil {
 		return err
 	}

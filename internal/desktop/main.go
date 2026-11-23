@@ -150,6 +150,9 @@ func Run(backend application.Backend, opts Options) error {
 		s.win.OnFocus(func() {
 			s.observeAppUpdates()
 			s.onMaterialsWindowFocused()
+			if pane := s.visibleProjectMaterials(); pane != nil {
+				pane.onMaterialsWindowFocused()
+			}
 			s.onRequirementWindowFocused()
 			s.onMeegleProjectPickerWindowFocused()
 		})
@@ -265,7 +268,7 @@ func captureWindow(s *app, frame *captureFrameState, path string, captureOnly bo
 }
 
 func (s *app) captureReady() bool {
-	if s == nil || s.loading || s.busy {
+	if s == nil || s.loading || s.busy || s.initialGenbuRouteWaiting() {
 		return false
 	}
 	if s.page == "tasks" || s.page == "archive" {

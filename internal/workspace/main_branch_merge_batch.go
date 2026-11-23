@@ -15,7 +15,7 @@ import (
 type WorkspaceMainBranchMergeBatchConfirmation struct {
 	TaskDirectoryName string                                            `json:"taskDirectoryName"`
 	CreatedAt         string                                            `json:"createdAt"`
-	GroupID           string                                            `json:"groupId"`
+	GroupID           string                                            `json:"-"`
 	FeatureBranch     string                                            `json:"featureBranch"`
 	Workspaces        []WorkspaceMainBranchMergeBatchConfirmedWorkspace `json:"workspaces"`
 }
@@ -27,7 +27,7 @@ type WorkspaceMainBranchMergeBatchConfirmedWorkspace struct {
 
 func (confirmation WorkspaceMainBranchMergeBatchConfirmation) ConfirmedWorkspaces(config domain.AppConfig, manifest domain.TaskManifest, selected []domain.ServiceWorkspace) ([]domain.ServiceWorkspace, error) {
 	if confirmation.TaskDirectoryName != manifest.TaskDirectoryName || confirmation.CreatedAt != manifest.CreatedAt ||
-		confirmation.GroupID != manifest.GroupID || confirmation.FeatureBranch != manifest.FeatureBranch {
+		confirmation.FeatureBranch != manifest.FeatureBranch {
 		return nil, errors.New("任务信息已变化，请刷新后重新选择工作区")
 	}
 	if len(confirmation.Workspaces) == 0 || len(selected) != len(confirmation.Workspaces) {

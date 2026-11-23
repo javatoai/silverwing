@@ -69,7 +69,6 @@ func (s *app) confirmationOwnerKey() string {
 		s.materialsUnit.state.documentPath,
 		s.settingsUnit.state.settingsPage,
 		s.settingsUnit.state.settingsTab,
-		s.settingsUnit.state.settingsGroupID,
 		fmt.Sprintf("%p", s.workspaceUnit.state.serviceEditor),
 	}, "\x00")
 }

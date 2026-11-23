@@ -1,4 +1,4 @@
-//go:build linux && (amd64 || arm64)
+//go:build linux && !android && (amd64 || arm64)
 
 package linux
 
@@ -46,5 +46,14 @@ func TestEventPhysicalKey(t *testing.T) {
 			t.Errorf("hardware_keycode=%d: got %v, want %v", tc.code, got, tc.want)
 		}
 		runtime.KeepAlive(&event)
+	}
+}
+
+func TestCursorNames(t *testing.T) {
+	// Every cursor has its CSS name, which cursor themes name theirs by.
+	for c := platform.CursorDefault; c <= platform.CursorNoDrop; c++ {
+		if cursorNames[c] == "" {
+			t.Errorf("cursor %d has no name", c)
+		}
 	}
 }

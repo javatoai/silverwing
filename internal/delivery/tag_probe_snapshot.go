@@ -45,6 +45,10 @@ func tagProbeSnapshotScope(config domain.AppConfig, tasks []domain.TaskManifest)
 
 func (s *Service) ReadTagProbeSnapshot(ctx context.Context, config domain.AppConfig, tasks []domain.TaskManifest) (*TagProbeSnapshot, error) {
 	snapshot := &TagProbeSnapshot{scope: tagProbeSnapshotScope(config, tasks), byID: make(map[string][]tagProbeSnapshotOperation), candidates: make(map[string][]genbuCandidate)}
+	services := map[string]domain.ServiceConfig{}
+	for _, service := range config.ServiceCatalog() {
+		services[service.ID] = service
+	}
 	for _, task := range tasks {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -58,12 +62,6 @@ func (s *Service) ReadTagProbeSnapshot(ctx context.Context, config domain.AppCon
 			return nil, err
 		}
 		snapshot.tasks = append(snapshot.tasks, tagProbeSnapshotTask{task.TaskDirectoryName, directory, operations})
-		services := make(map[string]domain.GroupServiceConfig)
-		if group, groupErr := config.Group(task.GroupID); groupErr == nil {
-			for _, service := range group.Services {
-				services[service.ID] = service
-			}
-		}
 		for operationIndex, operation := range operations {
 			snapshot.byID[operation.OperationID] = append(snapshot.byID[operation.OperationID], tagProbeSnapshotOperation{len(snapshot.tasks) - 1, operationIndex})
 			service, ok := services[operation.GroupServiceID]

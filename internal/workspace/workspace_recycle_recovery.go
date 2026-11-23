@@ -32,11 +32,13 @@ type workspaceRecycleRow struct {
 type workspaceRecycleReceipt struct {
 	Version            int                        `json:"version"`
 	State              string                     `json:"state"`
-	TaskPath           string                     `json:"taskPath"`
+	TaskPath           string                     `json:"taskPath,omitempty"`
+	ProfileID          string                     `json:"profileId,omitempty"`
 	TaskIdentity       string                     `json:"taskIdentity"`
 	TaskCreatedAt      string                     `json:"taskCreatedAt"`
 	TaskDirectoryName  string                     `json:"taskDirectoryName"`
 	TaskGroupID        string                     `json:"taskGroupId"`
+	WorkspaceDirectory string                     `json:"workspaceDirectory,omitempty"`
 	Workspace          domain.ServiceWorkspace    `json:"workspace"`
 	Target             string                     `json:"target"`
 	TargetIdentity     string                     `json:"targetIdentity"`
@@ -63,6 +65,7 @@ type workspaceRecycleRecord struct {
 	directoryIdentity string
 	receiptDigest     string
 	statusOutput      string
+	taskPath          string
 }
 
 func (l *WorkspaceLifecycle) prepareModuleRecycle(ctx context.Context, taskPath string, manifest domain.TaskManifest, ws domain.ServiceWorkspace, repo domain.RepositoryConfig) (*workspaceRecycleRecord, error) {
@@ -159,15 +162,17 @@ func (l *WorkspaceLifecycle) prepareWorkspaceRecycle(ctx context.Context, taskPa
 			Version: workspaceRecycleVersion, State: workspaceRecyclePending,
 			TaskPath: taskPath, TaskIdentity: taskIdentity, TaskCreatedAt: manifest.CreatedAt,
 			TaskDirectoryName: manifest.TaskDirectoryName, TaskGroupID: manifest.GroupID,
+			ProfileID: l.Locks.Paths.ProfileID,
 			Workspace: proof.workspace, Target: proof.target, TargetIdentity: proof.targetIdentity,
 			RepositoryRoot: proof.repositoryRoot, CommonDirectory: proof.commonDirectory, CommonIdentity: proof.commonIdentity,
 			AdminDirectory: proof.adminDirectory, AdminIdentity: proof.adminIdentity, AdminGitDirFile: proof.adminGitDirFile,
 			Branch: proof.branch, Head: proof.head, CloneOwner: proof.cloneOwner, ModuleRows: rows,
 		},
 		statusOutput: proof.statusOutput,
+		taskPath:     taskPath,
 	}
-	if !record.matchesTask(taskPath, taskIdentity, manifest) || !filepath.IsAbs(record.Target) ||
-		!sameRecyclePath(filepath.Dir(record.Target), taskPath) || !sameRecyclePath(mustAbs(record.Workspace.WorktreePath), record.Target) ||
+	if !record.matchesTask(l.Locks.Paths.ProfileID, taskPath, taskIdentity, manifest) || !filepath.IsAbs(record.Target) ||
+		!sameRecyclePath(filepath.Dir(record.Target), record.workspaceDirectory()) || !sameRecyclePath(mustAbs(record.Workspace.WorktreePath), record.Target) ||
 		!validGitObjectID(record.Head) || record.Branch != record.Workspace.Branch {
 		return nil, errors.New("回收工作区的任务或 Git 身份不完整")
 	}
@@ -241,6 +246,9 @@ func workspaceRecycleRoot(locks *OperationLocks, taskPath string, create bool) (
 		return "", err
 	}
 	key := filepath.Clean(mustAbs(taskPath))
+	if locks.Paths.ProfileID != "" {
+		key = locks.Paths.ProfileID + "\x00" + filepath.Base(key)
+	}
 	if runtime.GOOS == "windows" {
 		key = strings.ToLower(key)
 	}
@@ -273,14 +281,28 @@ func sameRecyclePath(a, b string) bool {
 	return a == b
 }
 
-func (r *workspaceRecycleRecord) matchesTask(path, identity string, manifest domain.TaskManifest) bool {
-	return sameRecyclePath(r.TaskPath, path) && r.TaskIdentity != "" && r.TaskIdentity == identity &&
+func (r *workspaceRecycleRecord) matchesTask(profileID, path, identity string, manifest domain.TaskManifest) bool {
+	if r.ProfileID != profileID || !sameRecyclePath(r.TaskPath, path) || filepath.Base(path) != r.TaskDirectoryName {
+		return false
+	}
+	return r.TaskIdentity != "" && r.TaskIdentity == identity &&
 		r.TaskCreatedAt != "" && r.TaskCreatedAt == manifest.CreatedAt &&
 		r.TaskDirectoryName == manifest.TaskDirectoryName && r.TaskGroupID == manifest.GroupID
 }
 
+func (r *workspaceRecycleRecord) workspaceDirectory() string {
+	if r.WorkspaceDirectory != "" {
+		return r.WorkspaceDirectory
+	}
+	return r.TaskPath
+}
+
 func (r *workspaceRecycleRecord) checkTargetIdentity() error {
-	if err := checkRecycleDirectory(r.TaskPath, r.TaskIdentity); err != nil {
+	taskPath := r.taskPath
+	if taskPath == "" {
+		taskPath = r.TaskPath
+	}
+	if err := checkRecycleDirectory(taskPath, r.TaskIdentity); err != nil {
 		return err
 	}
 	return checkRecycleDirectory(r.Target, r.TargetIdentity)

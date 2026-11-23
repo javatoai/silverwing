@@ -38,6 +38,9 @@ func (a *App) dispatchTypedTaskAction(ctx context.Context, action Action, progre
 	case "task.materials-retry":
 		result, err := a.RetryTaskMaterials(ctx, TaskTargetFromAction(action))
 		return result.ToActionResult(), true, err
+	case "task.refresh-agents":
+		result, err := a.RefreshTaskAgents(ctx, TaskTargetFromAction(action))
+		return result.ToActionResult(), true, err
 	case "task.tools-launch":
 		request, err := TaskToolsRequestFromAction(action)
 		if err != nil {

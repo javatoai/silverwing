@@ -102,7 +102,7 @@ func (s *TaskApplicationService) InspectCreateBranchReuseWithProgress(ctx contex
 	checking := TaskCreationProgress{Phase: TaskCreationPhaseChecking, ServiceName: "任务"}
 	var conflicts []BranchReuseConflict
 	err := runTaskCreationProgress(onProgress, checking, "正在检查任务信息与远程分支", "任务信息与远程分支检查完成", func() error {
-		root, err := taskRoot(config)
+		root, err := taskRoot(s.Locks.TaskRoot(config))
 		if err != nil {
 			return err
 		}
@@ -110,28 +110,19 @@ func (s *TaskApplicationService) InspectCreateBranchReuseWithProgress(ctx contex
 		if err != nil {
 			return err
 		}
-		if err := requireAvailableTaskDirectory(filepath.Join(root, folder)); err != nil {
-			return err
-		}
-		groupID := request.GroupID
-		if groupID == "" {
-			groupID = domain.DefaultGroupID
-		}
-		group, err := config.Group(groupID)
-		if err != nil {
+		taskPath := filepath.Join(root, folder)
+		if err := requireAvailableTaskDirectory(taskPath); err != nil {
 			return err
 		}
 		feature := strings.TrimSpace(request.FeatureBranch)
-		if len(request.ServiceIDs) > 0 || len(request.ServiceSelections) > 0 {
-			if err := s.validateFeatureBranch(feature); err != nil {
-				return err
-			}
-		}
-		resolved, err := resolveTaskSelections(group, request.ServiceIDs, request.ServiceSelections, request.BaseOverrides, feature)
+		resolved, err := resolveTaskSelections(config, request.ServiceIDs, request.ServiceSelections, request.BaseOverrides, feature)
 		if err != nil {
 			return err
 		}
-		if err := requireUniqueWorkspacePaths(filepath.Join(root, folder), nil, resolved); err != nil {
+		if err := s.validateSelectedFeatureBranch(feature, resolved); err != nil {
+			return err
+		}
+		if err := requireUniqueWorkspacePaths(taskPath, nil, resolved); err != nil {
 			return err
 		}
 		conflicts, err = s.inspectBranchReuseWithProgress(ctx, config, resolved, feature, onProgress)
@@ -160,12 +151,11 @@ func (s *TaskApplicationService) CreateTaskWithProgress(ctx context.Context, con
 	root := ""
 	folderName := ""
 	feature := ""
-	var group domain.GroupConfig
 	var selections []effectiveTaskService
 	taskPath := ""
 	err := runTaskCreationProgress(onProgress, checking, "正在检查任务信息与远程分支", "任务信息与远程分支检查完成", func() error {
 		var checkErr error
-		root, checkErr = taskRoot(config)
+		root, checkErr = taskRoot(s.Locks.TaskRoot(config))
 		if checkErr != nil {
 			return checkErr
 		}
@@ -177,24 +167,14 @@ func (s *TaskApplicationService) CreateTaskWithProgress(ctx context.Context, con
 			return checkErr
 		}
 		feature = strings.TrimSpace(request.FeatureBranch)
-		if len(request.ServiceIDs) > 0 || len(request.ServiceSelections) > 0 {
-			if checkErr = s.validateFeatureBranch(feature); checkErr != nil {
-				return checkErr
-			}
-		}
 		if (request.AgentContext == nil) != (request.AgentHandoffMarkdown == nil) {
 			return fmt.Errorf("Agent 任务上下文与交接文档必须同时提供")
 		}
-		groupID := request.GroupID
-		if groupID == "" {
-			groupID = domain.DefaultGroupID
-		}
-		group, checkErr = config.Group(groupID)
+		selections, checkErr = resolveTaskSelections(config, request.ServiceIDs, request.ServiceSelections, request.BaseOverrides, feature)
 		if checkErr != nil {
 			return checkErr
 		}
-		selections, checkErr = resolveTaskSelections(group, request.ServiceIDs, request.ServiceSelections, request.BaseOverrides, feature)
-		if checkErr != nil {
+		if checkErr = s.validateSelectedFeatureBranch(feature, selections); checkErr != nil {
 			return checkErr
 		}
 		taskPath = filepath.Join(root, folderName)
@@ -211,22 +191,32 @@ func (s *TaskApplicationService) CreateTaskWithProgress(ctx context.Context, con
 	err = s.Locks.WithTaskRoot(root, func() error {
 		return s.Locks.WithTask(taskPath, func() error {
 			var inner error
-			manifest, inner = s.createLocked(ctx, config, request, group, selections, folderName, feature, root, taskPath, onProgress)
+			manifest, inner = s.createLocked(ctx, config, request, selections, folderName, feature, root, taskPath, onProgress)
 			return inner
 		})
 	})
 	return manifest, err
 }
 
-func (s *TaskApplicationService) createLocked(ctx context.Context, config domain.AppConfig, request CreateTaskRequest, group domain.GroupConfig, selections []effectiveTaskService, folderName, feature, taskRootPath, taskPath string, onProgress func(TaskCreationProgress)) (domain.TaskManifest, error) {
+func (s *TaskApplicationService) createLocked(ctx context.Context, config domain.AppConfig, request CreateTaskRequest, selections []effectiveTaskService, folderName, feature, taskRootPath, taskPath string, onProgress func(TaskCreationProgress)) (domain.TaskManifest, error) {
 	createdTime := s.now()
 	ctx = documents.WithMaterialsCreationTime(ctx, createdTime)
 	if err := ctx.Err(); err != nil {
 		return domain.TaskManifest{}, err
 	}
+	var configuredRoot os.FileInfo
 	checking := TaskCreationProgress{Phase: TaskCreationPhaseChecking, ServiceName: "任务"}
 	if err := runTaskCreationProgress(onProgress, checking, "正在检查任务目录", "任务目录检查完成", func() error {
-		if err := os.MkdirAll(taskRootPath, 0o755); err != nil {
+		if s.Paths.ProfileID != "" {
+			if _, err := storage.ValidateTaskRootPath(s.Paths.Home, taskRootPath); err != nil {
+				return err
+			}
+			info, err := os.Stat(taskRootPath)
+			if err != nil || !info.IsDir() || !os.SameFile(info, info) {
+				return fmt.Errorf("任务根目录不可用：%s", taskRootPath)
+			}
+			configuredRoot = info
+		} else if err := os.MkdirAll(taskRootPath, 0o755); err != nil {
 			return err
 		}
 		if parent, err := filepath.Abs(filepath.Dir(taskPath)); err != nil || !samePath(parent, mustAbs(taskRootPath)) {
@@ -284,7 +274,7 @@ func (s *TaskApplicationService) createLocked(ctx context.Context, config domain
 			return fmt.Errorf("任务目录身份已变化，跳过工作区回滚以保护新目录；已保留现场：%s: %w", taskPath, errors.Join(primary, cleanupErr))
 		}
 		if len(workspaces) > 0 {
-			if cleanupErr := s.rollbackWorkspacesWithProgress(ctx, config, group.ID, taskPath, workspaces, onProgress); cleanupErr != nil {
+			if cleanupErr := s.rollbackWorkspacesWithProgress(ctx, config, taskPath, workspaces, onProgress); cleanupErr != nil {
 				finishRollback(cleanupErr)
 				return fmt.Errorf("任务创建失败且自动回滚未完成；为避免 Git 元数据损坏，已保留目录供人工检查：%s: %w", taskPath, errors.Join(primary, cleanupErr))
 			}
@@ -295,7 +285,7 @@ func (s *TaskApplicationService) createLocked(ctx context.Context, config domain
 				return errors.Join(primary, cleanErr)
 			}
 		}
-		if cleanErr := removeGeneratedTaskDocuments(taskPath, ownedTaskDirectory); cleanErr != nil {
+		if cleanErr := removeGeneratedTaskDocuments(taskPath, ownedTaskDirectory, s.Paths.ProfileID == ""); cleanErr != nil {
 			finishRollback(cleanErr)
 			return fmt.Errorf("任务创建失败，清理生成文档失败，已保留现场：%s: %w", taskPath, errors.Join(primary, cleanErr))
 		}
@@ -311,6 +301,12 @@ func (s *TaskApplicationService) createLocked(ctx context.Context, config domain
 	if err := runTaskCreationProgress(onProgress, preparingDirectory, "正在创建任务目录", "任务目录已创建", func() error {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if configuredRoot != nil {
+			current, err := os.Stat(taskRootPath)
+			if err != nil || !current.IsDir() || !os.SameFile(configuredRoot, current) {
+				return fmt.Errorf("任务根目录已变化：%s", taskRootPath)
+			}
 		}
 		if err := os.Mkdir(taskPath, 0o755); err != nil {
 			return err
@@ -346,7 +342,6 @@ func (s *TaskApplicationService) createLocked(ctx context.Context, config domain
 	if err := verifyOwnedTaskDirectory(taskPath, ownedTaskDirectory); err != nil {
 		return domain.TaskManifest{}, rollback(err)
 	}
-
 	for _, effective := range selections {
 		if err := ctx.Err(); err != nil {
 			return domain.TaskManifest{}, rollback(err)
@@ -396,7 +391,8 @@ func (s *TaskApplicationService) createLocked(ctx context.Context, config domain
 	manifest.CreatedAt = now
 	manifest.UpdatedAt = now
 	manifest.Services = workspaces
-	manifest.GroupID = group.ID
+	manifest.ProjectInstructionsGitURL = config.ProjectInstructionsGitURL
+	manifest.ProjectInstructionsGitLocalRoot = config.ProjectInstructionsGitLocalRoot
 	manifest.AgentContext = request.AgentContext
 	manifest.AgentDocumentLayout = domain.AgentDocumentReferencedV2
 	manifest = domain.NormalizeTaskManifest(manifest)
@@ -426,7 +422,7 @@ func (s *TaskApplicationService) createLocked(ctx context.Context, config domain
 		if err := verifyOwnedTaskDirectory(taskPath, ownedTaskDirectory); err != nil {
 			return err
 		}
-		if _, err := s.Documents.writeTaskDocuments(taskPath, manifest, repositoryInfos(config), &request.TaskNotes, true); err != nil {
+		if _, err := s.Documents.writeTaskDocuments(taskPath, manifest, config, &request.TaskNotes, true); err != nil {
 			return err
 		}
 		if err := ctx.Err(); err != nil {
@@ -462,7 +458,7 @@ func (s *TaskApplicationService) createLocked(ctx context.Context, config domain
 // RetryRequirementMaterials re-runs only the independent materials-directory
 // preparation and persists the new result without touching Git workspaces.
 func (s *TaskApplicationService) RetryRequirementMaterials(ctx context.Context, config domain.AppConfig, taskPath string) (result domain.TaskManifest, err error) {
-	err = s.Locks.WithTaskRoot(stringValue(config.TaskRoot), func() error {
+	err = s.Locks.WithTaskRoot(s.Locks.TaskRoot(config), func() error {
 		var inner error
 		result, inner = s.retryRequirementMaterials(ctx, config, taskPath)
 		return inner
@@ -498,7 +494,7 @@ func (s *TaskApplicationService) retryRequirementMaterials(ctx context.Context, 
 		if err := s.Manifests.Save(taskPath, manifest); err != nil {
 			return err
 		}
-		if _, err := s.Documents.writeTaskDocuments(taskPath, manifest, repositoryInfos(config), nil, false); err != nil {
+		if _, err := s.Documents.writeTaskDocuments(taskPath, manifest, config, nil, false); err != nil {
 			return err
 		}
 		updated = manifest
@@ -526,6 +522,9 @@ func (s *TaskApplicationService) withTaskManifestMutation(ctx context.Context, c
 	return s.Locks.WithTask(taskPath, func() error {
 		manifest, err := s.Manifests.Load(taskPath)
 		if err != nil {
+			return err
+		}
+		if err := s.Locks.ValidateWorkspaceDirectory(config, taskPath, manifest); err != nil {
 			return err
 		}
 		if err := taskscope.Validate(ctx, config, taskPath, manifest); err != nil {
@@ -603,12 +602,18 @@ func (s *TaskApplicationService) addWorkspace(ctx context.Context, config domain
 		if manifest.LifecycleStatus != domain.TaskActive {
 			return fmt.Errorf("归档任务不能添加工作区")
 		}
-		group, err := config.Group(manifest.GroupID)
+		selections, err := selectionsForAdd(config, request, manifest.FeatureBranch)
 		if err != nil {
 			return err
 		}
-		selections, err := selectionsForAdd(group, request, manifest.FeatureBranch)
+		if err := s.Locks.ValidateWorkspaceDirectory(config, taskPath, manifest); err != nil {
+			return err
+		}
+		ownedTaskDirectory, err := os.Lstat(taskPath)
 		if err != nil {
+			return err
+		}
+		if err := verifyOwnedTaskDirectory(taskPath, ownedTaskDirectory); err != nil {
 			return err
 		}
 		if addServices {
@@ -651,6 +656,9 @@ func (s *TaskApplicationService) addWorkspace(ctx context.Context, config domain
 		requests := []WorkspaceProvisionRequest{}
 		before := manifest
 		compensate := func(primary error, restoreManifest, restoreDocuments, provisioningRollbackIncomplete bool) error {
+			if err := verifyOwnedTaskDirectory(taskPath, ownedTaskDirectory); err != nil {
+				return errors.Join(primary, err)
+			}
 			var compensationFailures []error
 			restoreTaskState := func() {
 				if restoreManifest {
@@ -691,6 +699,9 @@ func (s *TaskApplicationService) addWorkspace(ctx context.Context, config domain
 			)
 		}
 		for _, effective := range selections {
+			if err := verifyOwnedTaskDirectory(taskPath, ownedTaskDirectory); err != nil {
+				return compensate(err, false, false, false)
+			}
 			repository, ok := repositoryByID(config, effective.Service.RepositoryID)
 			if !ok {
 				return compensate(fmt.Errorf("服务 %s 的仓库配置不存在", effective.Service.DisplayName), false, false, false)
@@ -704,9 +715,6 @@ func (s *TaskApplicationService) addWorkspace(ctx context.Context, config domain
 			}
 			workspaces, err := s.Provisioning.Provision(ctx, req, s.OnOutput)
 			if err != nil {
-				if addModules {
-					return err
-				}
 				return compensate(err, false, false, hasProvisionRollbackFailure(err))
 			}
 			requests = append(requests, req)
@@ -714,6 +722,9 @@ func (s *TaskApplicationService) addWorkspace(ctx context.Context, config domain
 		}
 		updated = manifest
 		updated.Services = append(append([]domain.ServiceWorkspace(nil), manifest.Services...), created...)
+		if err := verifyOwnedTaskDirectory(taskPath, ownedTaskDirectory); err != nil {
+			return compensate(err, false, false, false)
+		}
 		updated.UpdatedAt = s.now().UTC().Format(time.RFC3339Nano)
 		if err := s.Manifests.Save(taskPath, updated); err != nil {
 			return compensate(err, addModules, addModules, false)
@@ -791,8 +802,11 @@ func (s *TaskApplicationService) SaveTaskNotes(config domain.AppConfig, taskPath
 		if err != nil {
 			return err
 		}
-		if _, err := s.Documents.writeTaskDocuments(taskPath, manifest, repositoryInfos(config), &notes, false); err != nil {
+		if _, err := s.Documents.writeTaskDocuments(taskPath, manifest, config, &notes, false); err != nil {
 			return err
+		}
+		if s.Paths.ProfileID != "" {
+			return s.Documents.WriteTaskNotes(taskPath, notes)
 		}
 		return nil
 	})
@@ -868,7 +882,7 @@ func (s *TaskApplicationService) RestoreWorkspaces(ctx context.Context, config d
 		if err := s.Manifests.Save(taskPath, updated); err != nil {
 			return err
 		}
-		if _, err := s.Documents.WriteTaskDocument(taskPath, updated, config); err != nil {
+		if _, err := s.Documents.EnsureTaskDocuments(taskPath, updated, config); err != nil {
 			_ = s.Manifests.Save(taskPath, manifest)
 			return err
 		}
@@ -879,23 +893,32 @@ func (s *TaskApplicationService) RestoreWorkspaces(ctx context.Context, config d
 }
 
 func (s *TaskApplicationService) PreviewTaskRootMigration(config domain.AppConfig, targetRoot string) (TaskRootMigrationPreview, error) {
+	if s.Paths.ProfileID != "" {
+		return TaskRootMigrationPreview{}, errors.New("请在设置中选择所需的任务根目录")
+	}
 	return s.RootMigration.Preview(config, targetRoot)
 }
 
 func (s *TaskApplicationService) MigrateTaskRoot(ctx context.Context, config domain.AppConfig, targetRoot string, onProgress func(TaskRootMigrationProgress)) (TaskRootMigrationResult, error) {
+	if s.Paths.ProfileID != "" {
+		return TaskRootMigrationResult{}, errors.New("请在设置中选择所需的任务根目录")
+	}
 	return s.RootMigration.Migrate(ctx, config, targetRoot, onProgress)
 }
 
 func (s *TaskApplicationService) RecoverInterruptedTaskRootMigration(config domain.AppConfig) ([]string, error) {
+	if s.Paths.ProfileID != "" {
+		return nil, nil
+	}
 	return s.RootMigration.RecoverInterruptedMigration(config)
 }
 
-func (s *TaskApplicationService) LaunchWorkspaceTools(ctx context.Context, taskPath string, manifest domain.TaskManifest, toolIDs []string) (domain.TaskManifest, error) {
-	return s.WorkspaceTools.Launch(ctx, taskPath, manifest, toolIDs)
+func (s *TaskApplicationService) LaunchWorkspaceTools(ctx context.Context, config domain.AppConfig, taskPath string, manifest domain.TaskManifest, toolIDs []string) (domain.TaskManifest, error) {
+	return s.WorkspaceTools.Launch(ctx, config, taskPath, manifest, toolIDs)
 }
 
-func (s *TaskApplicationService) RetryWorkspaceTool(ctx context.Context, taskPath string, manifest domain.TaskManifest, toolID string) (domain.TaskManifest, error) {
-	return s.WorkspaceTools.Retry(ctx, taskPath, manifest, toolID)
+func (s *TaskApplicationService) RetryWorkspaceTool(ctx context.Context, config domain.AppConfig, taskPath string, manifest domain.TaskManifest, toolID string) (domain.TaskManifest, error) {
+	return s.WorkspaceTools.Retry(ctx, config, taskPath, manifest, toolID)
 }
 
 func (s *TaskApplicationService) validateFeatureBranch(branch string) error {
@@ -907,6 +930,20 @@ func (s *TaskApplicationService) validateFeatureBranch(branch string) error {
 	}
 	if s.BranchValidator == nil || !s.BranchValidator.IsValid(branch) {
 		return fmt.Errorf("任务分支不是合法的 Git 分支名：%s", branch)
+	}
+	return nil
+}
+
+func (s *TaskApplicationService) validateSelectedFeatureBranch(branch string, selections []effectiveTaskService) error {
+	if len(selections) > 0 && branch != "" {
+		return s.validateFeatureBranch(branch)
+	}
+	for _, selection := range selections {
+		for _, module := range selection.Service.Modules {
+			if module.Strategy == domain.WorkspaceStandardWorktree {
+				return s.validateFeatureBranch(branch)
+			}
+		}
 	}
 	return nil
 }
@@ -939,11 +976,7 @@ func (s *TaskApplicationService) inspectBranchReuseWithProgress(ctx context.Cont
 	return uniqueBranchReuseConflicts(conflicts), nil
 }
 
-func (s *TaskApplicationService) rollbackWorkspaces(ctx context.Context, config domain.AppConfig, groupID, taskPath string, workspaces []domain.ServiceWorkspace) error {
-	return s.rollbackWorkspacesWithProgress(ctx, config, groupID, taskPath, workspaces, nil)
-}
-
-func (s *TaskApplicationService) rollbackWorkspacesWithProgress(ctx context.Context, config domain.AppConfig, groupID, taskPath string, workspaces []domain.ServiceWorkspace, onProgress func(TaskCreationProgress)) error {
+func (s *TaskApplicationService) rollbackWorkspacesWithProgress(ctx context.Context, config domain.AppConfig, taskPath string, workspaces []domain.ServiceWorkspace, onProgress func(TaskCreationProgress)) error {
 	var failures []error
 	for i := len(workspaces) - 1; i >= 0; i-- {
 		ws := workspaces[i]
@@ -960,13 +993,8 @@ func (s *TaskApplicationService) rollbackWorkspacesWithProgress(ctx context.Cont
 			continue
 		}
 		service := domain.GroupServiceConfig{ID: ws.GroupServiceID, RepositoryID: ws.RepositoryID, DisplayName: ws.ServiceName, Modules: []domain.ServiceModuleConfig{}}
-		if group, err := config.Group(groupID); err == nil {
-			for _, configured := range group.Services {
-				if configured.ID == ws.GroupServiceID {
-					service = configured
-					break
-				}
-			}
+		if configured, err := config.Service(ws.GroupServiceID); err == nil {
+			service = configured
 		}
 		service.Modules = []domain.ServiceModuleConfig{{ID: ws.ModuleID, Name: ws.ModuleName, Strategy: ws.Strategy, MasterBranch: ws.BaseRef, TagEnabled: ws.TagEnabled, TagMode: ws.TagMode, TagTargetRef: ws.TagTargetRef, TagMessagePrefix: ws.TagMessagePrefix}}
 		request := WorkspaceProvisionRequest{TaskDirectory: taskPath, Repository: repository, Service: service, RequestedFeatureBranch: ws.Branch, ModuleBranches: map[string]string{ws.ModuleID: targetBranchValue(ws)}, ModuleSources: map[string]domain.TaskModuleSource{ws.ModuleID: ws.ModuleSource}}
@@ -1000,7 +1028,7 @@ type effectiveTaskService struct {
 	ModuleSources  map[string]domain.TaskModuleSource
 }
 
-func resolveTaskSelections(group domain.GroupConfig, legacyServiceIDs []string, selections []TaskServiceSelection, overrides []ModuleBaseOverride, feature string) ([]effectiveTaskService, error) {
+func resolveTaskSelections(config domain.AppConfig, legacyServiceIDs []string, selections []TaskServiceSelection, overrides []ModuleBaseOverride, feature string) ([]effectiveTaskService, error) {
 	if len(selections) == 0 {
 		if len(legacyServiceIDs) == 0 {
 			if len(overrides) != 0 {
@@ -1020,7 +1048,7 @@ func resolveTaskSelections(group domain.GroupConfig, legacyServiceIDs []string, 
 			seen[key] = true
 		}
 		for _, selection := range legacyServiceIDs {
-			service, err := findEnabledService(group, selection)
+			service, err := findEnabledService(config, selection)
 			if err != nil {
 				return nil, err
 			}
@@ -1032,7 +1060,7 @@ func resolveTaskSelections(group domain.GroupConfig, legacyServiceIDs []string, 
 		}
 		selections = make([]TaskServiceSelection, 0, len(legacyServiceIDs))
 		for _, serviceID := range legacyServiceIDs {
-			service, _ := findEnabledService(group, serviceID)
+			service, _ := findEnabledService(config, serviceID)
 			modules := make([]TaskModuleSelection, 0, len(service.Modules))
 			for _, module := range service.Modules {
 				base := service.EffectiveMasterBranch(module)
@@ -1060,7 +1088,7 @@ func resolveTaskSelections(group domain.GroupConfig, legacyServiceIDs []string, 
 			return nil, fmt.Errorf("服务不能重复选择")
 		}
 		seenServices[key] = true
-		service, err := findEnabledService(group, selected.ServiceID)
+		service, err := findEnabledService(config, selected.ServiceID)
 		if err != nil {
 			return nil, err
 		}
@@ -1137,13 +1165,13 @@ func configuredModuleSelection(service domain.GroupServiceConfig, module domain.
 	return TaskModuleSelection{ID: module.ID, Name: module.Name, Strategy: module.Strategy, BaseRef: baseRef, BaseRemote: service.EffectiveMasterRemote(module), TargetBranch: target, Source: domain.TaskModuleConfigured, TagEnabled: module.TagEnabled, TagMode: module.TagMode, TagTargetRef: stringValue(module.TagTargetRef), TagMessagePrefix: module.TagMessagePrefix}
 }
 
-func selectionsForAdd(group domain.GroupConfig, request AddWorkspaceRequest, feature string) ([]effectiveTaskService, error) {
+func selectionsForAdd(config domain.AppConfig, request AddWorkspaceRequest, feature string) ([]effectiveTaskService, error) {
 	selections := append([]TaskServiceSelection(nil), request.ServiceSelections...)
 	if len(selections) == 0 && len(request.Modules) > 0 {
 		selections = []TaskServiceSelection{{ServiceID: request.ServiceID, Modules: append([]TaskModuleSelection(nil), request.Modules...)}}
 	}
 	if len(selections) == 0 && request.ServiceID != "" && request.ModuleID == "" {
-		service, err := findEnabledService(group, request.ServiceID)
+		service, err := findEnabledService(config, request.ServiceID)
 		if err != nil {
 			return nil, err
 		}
@@ -1154,7 +1182,7 @@ func selectionsForAdd(group domain.GroupConfig, request AddWorkspaceRequest, fea
 		}
 		selections = []TaskServiceSelection{{ServiceID: service.ID, Modules: modules}}
 	} else if len(selections) == 0 && request.ModuleID != "" {
-		service, err := findEnabledService(group, request.ServiceID)
+		service, err := findEnabledService(config, request.ServiceID)
 		if err != nil {
 			return nil, err
 		}
@@ -1184,7 +1212,7 @@ func selectionsForAdd(group domain.GroupConfig, request AddWorkspaceRequest, fea
 		module := TaskModuleSelection{ID: moduleID, Name: moduleName, Strategy: strategy, BaseRef: base, BaseRemote: request.BaseRemote, TargetBranch: branch, Source: request.Source, TagEnabled: request.TagEnabled, TagMode: request.TagMode, TagTargetRef: request.TagTargetRef, TagMessagePrefix: request.TagMessagePrefix}
 		selections = []TaskServiceSelection{{ServiceID: request.ServiceID, Modules: []TaskModuleSelection{module}}}
 	}
-	return resolveTaskSelections(group, request.ServiceIDs, selections, request.BaseOverrides, "")
+	return resolveTaskSelections(config, request.ServiceIDs, selections, request.BaseOverrides, feature)
 }
 
 func requireNewTaskModules(manifest domain.TaskManifest, taskPath string, selection effectiveTaskService) error {
@@ -1248,13 +1276,15 @@ func requireNewTaskModules(manifest domain.TaskManifest, taskPath string, select
 	return requireNoBranchPathConflicts(branches)
 }
 
-func findEnabledService(group domain.GroupConfig, id string) (domain.GroupServiceConfig, error) {
-	for _, service := range group.Services {
-		if service.ID == id && service.Enabled {
-			return service, nil
-		}
+func findEnabledService(config domain.AppConfig, id string) (domain.ServiceConfig, error) {
+	service, err := config.Service(id)
+	if err != nil {
+		return domain.ServiceConfig{}, err
 	}
-	return domain.GroupServiceConfig{}, fmt.Errorf("组 %s 中不存在或未启用服务：%s", group.Name, id)
+	if !service.Enabled {
+		return domain.ServiceConfig{}, fmt.Errorf("服务未启用：%s", id)
+	}
+	return service, nil
 }
 
 func findModule(modules []domain.ServiceModuleConfig, id string) *domain.ServiceModuleConfig {
@@ -1326,11 +1356,11 @@ func repositoryByID(config domain.AppConfig, id string) (domain.RepositoryConfig
 	return domain.RepositoryConfig{}, false
 }
 
-func taskRoot(config domain.AppConfig) (string, error) {
-	if config.TaskRoot == nil || strings.TrimSpace(*config.TaskRoot) == "" {
+func taskRoot(root string) (string, error) {
+	if strings.TrimSpace(root) == "" {
 		return "", fmt.Errorf("尚未配置任务根目录")
 	}
-	return filepath.Abs(filepath.Clean(*config.TaskRoot))
+	return filepath.Abs(filepath.Clean(root))
 }
 
 func uniqueBranchReuseConflicts(conflicts []BranchReuseConflict) []BranchReuseConflict {
@@ -1386,6 +1416,9 @@ func (s *TaskApplicationService) now() time.Time {
 func targetBranchValue(ws domain.ServiceWorkspace) string {
 	if ws.TargetBranch != nil {
 		return *ws.TargetBranch
+	}
+	if ws.Strategy == domain.WorkspaceIndependentClone {
+		return ""
 	}
 	return ws.Branch
 }

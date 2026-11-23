@@ -10,8 +10,8 @@ type Handle struct{ state *handleState }
 type Ref = Handle
 
 type handleState struct {
-	bindings []*refState
-	pending  bool
+	bindings               []*refState
+	pending, pendingSelect bool
 }
 
 type refState struct {
@@ -19,6 +19,7 @@ type refState struct {
 	element           Element
 	id                uint64
 	requested, closed bool
+	selectAll         bool // select all of the text with the requested focus
 }
 
 func (r *Handle) init() *handleState {
@@ -47,8 +48,8 @@ func (r *Handle) binding(rt *engine, create bool) *refState {
 	if !create {
 		return nil
 	}
-	b := &refState{window: rt.public, requested: s.pending}
-	s.pending = false
+	b := &refState{window: rt.public, requested: s.pending, selectAll: s.pendingSelect}
+	s.pending, s.pendingSelect = false, false
 	s.bindings = append(s.bindings, b)
 	rt.refs = append(rt.refs, b)
 	return b
@@ -57,12 +58,20 @@ func (r *Handle) binding(rt *engine, create bool) *refState {
 // Focus requests focus, waiting while the control is hidden. Supply a Context
 // to select a window. Without one, a handle must have at most one open window.
 // A request made before its first binding waits for that binding.
-func (r *Handle) Focus(window ...*Context) {
+func (r *Handle) Focus(window ...*Context) { r.focus("Focus", false, window) }
+
+// SelectAll requests focus as Focus does, and selects all of the text of the
+// text input or area, as Tab into it does: a find box opened again selects
+// its query, and typing replaces it. It selects even when the control has
+// the focus already.
+func (r *Handle) SelectAll(window ...*Context) { r.focus("SelectAll", true, window) }
+
+func (r *Handle) focus(name string, selectAll bool, window []*Context) {
 	if r == nil {
 		return
 	}
 	if len(window) > 1 {
-		panic("ui: Handle.Focus accepts one Context")
+		panic("ui: Handle." + name + " accepts one Context")
 	}
 	var b *refState
 	if len(window) == 1 {
@@ -74,17 +83,19 @@ func (r *Handle) Focus(window ...*Context) {
 				continue
 			}
 			if b != nil {
-				panic("ui: Handle.Focus needs a Context when bound in several windows")
+				panic("ui: Handle." + name + " needs a Context when bound in several windows")
 			}
 			b = candidate
 		}
 		if b == nil {
 			s.pending = true
+			s.pendingSelect = s.pendingSelect || selectAll
 			return
 		}
 	}
 	if b != nil && !b.closed {
 		b.requested = true
+		b.selectAll = b.selectAll || selectAll
 		if rt := b.window.runtime(); rt != nil {
 			rt.requestFrame()
 		}
@@ -104,13 +115,13 @@ func (r *Handle) CancelFocus(window ...*Context) {
 	}
 	if len(window) == 1 {
 		if b := r.binding(window[0].runtime(), false); b != nil {
-			b.requested = false
+			b.requested, b.selectAll = false, false
 		}
 		return
 	}
-	r.state.pending = false
+	r.state.pending, r.state.pendingSelect = false, false
 	for _, b := range r.state.bindings {
-		b.requested = false
+		b.requested, b.selectAll = false, false
 	}
 }
 
@@ -153,6 +164,7 @@ func (r Handle) FocusWithin(c *Context) bool {
 	if b == nil || b.closed || b.id == 0 {
 		return false
 	}
+	rt.withinRead = true
 	for s := rt.states[rt.focused]; s != nil; s = rt.states[s.parent] {
 		if s.id == b.id {
 			return true
@@ -197,6 +209,13 @@ func (rt *engine) applyFocusRequests() {
 		if rt.focused != b.id {
 			n.Focus()
 			rt.consumed = true
+		}
+		if b.selectAll {
+			b.selectAll = false
+			if s := rt.states[b.id]; s != nil && s.editor != nil {
+				s.editor.selectAll()
+				rt.blinkStart = rt.now()
+			}
 		}
 	}
 	rt.applyFocusBindings()

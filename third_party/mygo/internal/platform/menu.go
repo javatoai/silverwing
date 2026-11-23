@@ -43,6 +43,34 @@ func FitIcon(w, h, box int) (int, int) {
 	return max(1, (w*box+h/2)/h), box
 }
 
+// LabelWithSubtitle is the label of a backend that can't show the subtitle
+// on a line of its own.
+func (it *MenuItem) LabelWithSubtitle() string {
+	if it.Subtitle == "" {
+		return it.Label
+	}
+	return it.Label + " — " + it.Subtitle
+}
+
+// LabelWithBadge is the label of a backend that shows the subtitle on a
+// line of its own, followed by the badge.
+func (it *MenuItem) LabelWithBadge() string {
+	if it.Badge == "" {
+		return it.Label
+	}
+	return it.Label + "  " + it.Badge
+}
+
+// LabelWithSubtitleAndBadge is the label of a backend that can show neither
+// the subtitle nor the badge on its own: both follow the label.
+func (it *MenuItem) LabelWithSubtitleAndBadge() string {
+	label := it.LabelWithSubtitle()
+	if it.Badge == "" {
+		return label
+	}
+	return label + "  " + it.Badge
+}
+
 // Apply gives the items of the menu that it is a snapshot of, by ID, its
 // state: a backend that keeps a snapshot to build menus from later (a
 // tray's, the application menu for new windows) keeps it current with the

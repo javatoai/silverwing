@@ -43,6 +43,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/internal/update"
 	"github.com/egoist/mygo/plugins/updater/internal/frontend"
 )
 
@@ -110,7 +111,8 @@ func newPlugin(opts Options, open func(*session)) mygo.Plugin {
 // or a button: the update window shows right away, says when the app is up
 // to date or the check failed, and shows updates the user skipped. It
 // returns at once; while a check is under way it brings its window to the
-// front.
+// front, and while the window offers an update it checks again first, so
+// that it offers a newer version that came out since.
 func CheckForUpdates() {
 	u := used()
 	go u.begin(true)
@@ -169,13 +171,37 @@ func LastCheck() time.Time {
 	return u.state.LastCheck
 }
 
+// AvailableVersion reports the newer version found by the last check, or "".
+// It is empty before checking, after a failed check, and for a skipped version.
+// A downloaded update keeps its version until the app relaunches.
+func AvailableVersion() string {
+	u := used()
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.available
+}
+
 // OnChange calls fn on the main thread after the choices of the user or the
-// time of the last check changed: a check succeeded, the user answered the
+// time of the last check or AvailableVersion changed: a check succeeded, the user answered the
 // update window (its checkbox, Skip This Version), or the app called
 // SetAutomaticChecks or SetAutomaticDownloads. A preferences page that shows
 // AutomaticChecks, AutomaticDownloads or LastCheck reads them again. It
 // returns a function that removes fn.
-func OnChange(fn func()) (off func()) { return used().onChange(fn) }
+func OnChange(fn func()) (off func()) {
+	u := used()
+	return u.add(&u.changes, fn)
+}
+
+// OnInstalled calls fn on the main thread once an update is installed,
+// whether the user installed it or it was installed in the background
+// (AutomaticDownloads), before the app relaunches into it. On Windows and
+// Linux the app's executable is then the new version's; on macOS the new
+// version is staged until the app quits. It returns a function that
+// removes fn.
+func OnInstalled(fn func()) (off func()) {
+	u := used()
+	return u.add(&u.installs, fn)
+}
 
 // active is the plugin that was used.
 var active atomic.Pointer[updater]
@@ -253,8 +279,10 @@ type updater struct {
 	mu       sync.Mutex
 	file     string // "" when the state cannot be saved
 	state    state
-	// changes are the functions of OnChange, in the order they were added.
-	changes []*func()
+	// changes are the functions of OnChange, and installs those of
+	// OnInstalled, in the order they were added.
+	changes  []*func()
+	installs []*func()
 	// running is set once the app is ready and can update itself: only
 	// then are checks scheduled.
 	running bool
@@ -269,6 +297,7 @@ type updater struct {
 	// while the app runs, which runs at the next launch.
 	session   *session
 	installed *release
+	available string
 }
 
 func newUpdater(opts Options, open func(*session)) *updater {
@@ -330,21 +359,28 @@ func (u *updater) update(fn func(*state)) {
 	u.load()
 	u.mu.Lock()
 	before := u.state
+	beforeAvailable := u.available
 	fn(&u.state)
 	u.save()
 	var changes []*func()
-	if !u.state.same(before) {
+	if !u.state.same(before) || u.available != beforeAvailable {
 		changes = slices.Clone(u.changes)
 	}
 	u.mu.Unlock()
-	if len(changes) > 0 {
-		// From a goroutine of its own: no caller waits for the main thread.
-		go runOnMain(func() {
-			for _, fn := range changes {
-				(*fn)()
-			}
-		})
+	call(changes)
+}
+
+// call calls fns on the main thread, from a goroutine of its own: no
+// caller waits for the main thread.
+func call(fns []*func()) {
+	if len(fns) == 0 {
+		return
 	}
+	go runOnMain(func() {
+		for _, fn := range fns {
+			(*fn)()
+		}
+	})
 }
 
 // save writes the state file. u.mu is held.
@@ -361,15 +397,17 @@ func (u *updater) save() {
 	}
 }
 
-func (u *updater) onChange(fn func()) (off func()) {
+// add adds fn to the functions fns, which u.mu guards, and returns a
+// function that removes it.
+func (u *updater) add(fns *[]*func(), fn func()) (off func()) {
 	p := &fn
 	u.mu.Lock()
-	u.changes = append(u.changes, p)
+	*fns = append(*fns, p)
 	u.mu.Unlock()
 	return func() {
 		u.mu.Lock()
 		defer u.mu.Unlock()
-		u.changes = slices.DeleteFunc(u.changes, func(q *func()) bool { return q == p })
+		*fns = slices.DeleteFunc(*fns, func(q *func()) bool { return q == p })
 	}
 }
 
@@ -413,17 +451,24 @@ func nextCheck(last, failed time.Time, interval time.Duration, now time.Time) ti
 }
 
 // checked records the outcome of a check.
-func (u *updater) checked(err error) {
+func (u *updater) checked(err error, version string, user bool) {
 	u.mu.Lock()
 	if err != nil {
 		u.failed = now()
 		u.mu.Unlock()
+		u.update(func(*state) { u.available = "" })
 		return
 	}
 	u.failed = time.Time{}
 	u.mu.Unlock()
 	t := now()
-	u.update(func(s *state) { s.LastCheck = t })
+	u.update(func(s *state) {
+		s.LastCheck = t
+		u.available = version
+		if !user && s.SkippedVersion == version {
+			u.available = ""
+		}
+	})
 }
 
 // begin starts a check, or makes the one under way show its window when
@@ -436,7 +481,7 @@ func (u *updater) begin(user bool) {
 	u.mu.Lock()
 	if s := u.session; s != nil {
 		u.mu.Unlock()
-		if user {
+		if user && !s.recheck() {
 			s.promote()
 		}
 		return
@@ -472,6 +517,7 @@ func (u *updater) run(s *session) {
 	defer u.end(s)
 	t := s.t
 	if !enabled() {
+		u.update(func(*state) { u.available = "" })
 		s.set(t.unavailableView())
 		s.show()
 		s.wait()
@@ -493,7 +539,11 @@ func (u *updater) run(s *session) {
 	if s.ctx.Err() != nil {
 		return // canceled
 	}
-	u.checked(err)
+	version := ""
+	if err == nil && r != nil {
+		version = r.version
+	}
+	u.checked(err, version, s.User())
 	switch {
 	case err != nil:
 		if s.User() {
@@ -522,9 +572,7 @@ func (u *updater) run(s *session) {
 			return
 		}
 	}
-	s.set(t.availableView(r, automatic))
-	s.show()
-	resp := s.wait()
+	r, resp := u.offer(s, r, automatic)
 	if resp.action == actionClose {
 		return
 	}
@@ -532,11 +580,58 @@ func (u *updater) run(s *session) {
 		st.AutomaticDownloads = resp.automaticDownloads
 		if resp.action == actionSkip {
 			st.SkippedVersion = r.version
+			u.available = ""
 		}
 	})
 	if resp.action == actionInstall {
+		// A newer version may have come out while the window was open.
+		s.set(t.checkingView())
+		r = u.recheck(s, r)
+		if s.ctx.Err() != nil {
+			return // canceled
+		}
 		u.install(s, r)
 	}
+}
+
+// offer shows the window offering r and waits for the user's response.
+// CheckForUpdates meanwhile checks again, and a newer version found takes
+// the place of r. It returns the release offered last.
+func (u *updater) offer(s *session, r *release, automatic bool) (*release, response) {
+	t := s.t
+	s.set(t.availableView(r, automatic))
+	s.show()
+	s.setOffering(true)
+	defer s.setOffering(false)
+	for {
+		select {
+		case resp := <-s.responses:
+			return r, resp
+		case <-s.rechecks:
+			if newer := u.recheck(s, r); newer != r {
+				r = newer
+				s.set(t.availableView(r, automatic))
+			}
+			s.promote()
+		case <-s.ctx.Done():
+			return r, response{action: actionClose}
+		}
+	}
+}
+
+// recheck checks for updates again while the window offers r, and returns
+// the newer release it finds, else r: when the check fails, finds nothing
+// newer or is canceled, r stays.
+func (u *updater) recheck(s *session, r *release) *release {
+	found, err := check(s.ctx)
+	if err != nil || found == nil || s.ctx.Err() != nil {
+		return r
+	}
+	if update.Compare(found.version, r.version) > 0 {
+		r = found
+	}
+	u.checked(nil, r.version, true)
+	return r
 }
 
 // install downloads and installs r, showing its progress when the window
@@ -564,7 +659,9 @@ func (u *updater) install(s *session, r *release) {
 	}
 	u.mu.Lock()
 	u.installed = r
+	installs := slices.Clone(u.installs)
 	u.mu.Unlock()
+	call(installs)
 	if s.User() || s.isShown() {
 		u.offerRelaunch(s, r)
 	}

@@ -146,11 +146,19 @@ func (s *EditorState) inlineScope(d *parser.Document, start, end int) (int, int)
 	return 0, len(s.source)
 }
 
+func isInlineStyleText(kind parser.InlineKind) bool {
+	switch kind {
+	case parser.Text, parser.Code, parser.Mention, parser.Reference:
+		return true
+	}
+	return false
+}
+
 func (s *EditorState) inlineVisibleOverlap(start, end int) bool {
 	d := s.editingDocument()
 	for b := 1; b < d.Len(); b++ {
 		for _, in := range d.Inlines(b) {
-			if in.Kind != parser.Text && in.Kind != parser.Code {
+			if !isInlineStyleText(in.Kind) {
 				continue
 			}
 			left, right := in.Start, in.End
@@ -333,7 +341,7 @@ func signatureOfInlineDocument(d *parser.Document) inlineSemanticSignature {
 				links.WriteString(in.Title)
 				links.WriteByte(0)
 			}
-			if in.Kind != parser.Text && in.Kind != parser.Code {
+			if !isInlineStyleText(in.Kind) {
 				continue
 			}
 			plain.WriteString(in.Text)

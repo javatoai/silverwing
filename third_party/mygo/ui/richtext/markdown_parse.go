@@ -67,11 +67,18 @@ func (m *mdReader) block(i int, st ParagraphStyle, depth int) {
 		}
 	case parser.HTMLBlock:
 		for _, p := range ParseHTML(m.d.Lines(i)).Paragraphs() {
-			p.Style.Quote = p.Style.Quote || st.Quote
+			depth := p.Style.quoteDepth() + st.quoteDepth()
+			p.Style.Quote = depth > 0
+			if depth > 1 {
+				p.Style.QuoteDepth = depth
+			}
 			p.Style.Indent += st.Indent
 			m.paras = append(m.paras, p)
 		}
 	case parser.Quote:
+		if st.Quote {
+			st.QuoteDepth = st.quoteDepth() + 1
+		}
 		st.Quote = true
 		m.blocks(i, st, depth)
 	case parser.List:
@@ -80,7 +87,7 @@ func (m *mdReader) block(i int, st ParagraphStyle, depth int) {
 			kind = Numbers
 		}
 		for it := range m.d.Children(i) {
-			ist := ParagraphStyle{List: kind, Indent: depth + 1, Quote: st.Quote}
+			ist := ParagraphStyle{List: kind, Indent: depth + 1, Quote: st.Quote, QuoteDepth: st.QuoteDepth}
 			if task := m.d.Block(it).Task; task != parser.NoTask {
 				ist.List, ist.Checked = Tasks, task == parser.Checked
 			}
@@ -118,7 +125,7 @@ func (m *mdReader) block(i int, st ParagraphStyle, depth int) {
 // item adds a list item: its first paragraph in the item's style ist, and
 // what follows indented under it.
 func (m *mdReader) item(i int, ist ParagraphStyle, depth int) {
-	under := ParagraphStyle{Indent: depth + 1, Quote: ist.Quote}
+	under := ParagraphStyle{Indent: depth + 1, Quote: ist.Quote, QuoteDepth: ist.QuoteDepth}
 	first := true
 	for k := range m.d.Children(i) {
 		b := m.d.Block(k)
@@ -156,7 +163,7 @@ func (m *mdReader) inlinePara(st ParagraphStyle, in []parser.Inline, a Attribute
 			}
 			m.paras = append(m.paras, p)
 			if st.List != NoList {
-				st = ParagraphStyle{Indent: st.Indent + 1, Quote: st.Quote}
+				st = ParagraphStyle{Indent: st.Indent + 1, Quote: st.Quote, QuoteDepth: st.QuoteDepth}
 			}
 			p = Paragraph{Style: st}
 			r.Text = rest

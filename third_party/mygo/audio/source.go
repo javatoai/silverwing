@@ -50,8 +50,12 @@ func (s *memSource) setLoop(loop bool, start, end int64) {
 }
 func (s *memSource) close() {}
 
+// decodeFrames is how many frames a stream's decoder decodes at a time.
+const decodeFrames = 2048
+
 // A stream decodes ahead of a voice on a goroutine of its own, into a ring
-// the voice reads without waiting.
+// the voice reads without waiting. The decoder fills the ring and sleeps
+// until a quarter of it is free, waking a few times a second.
 type stream struct {
 	d        Decoder
 	channels int // of d
@@ -70,29 +74,30 @@ type stream struct {
 	seekTo int64 // where to seek d next, or -1
 	gen    int   // counts seeks, to drop what was decoded before one
 	closed bool
+	full   bool // the decoder sleeps until a quarter of the ring is free
 }
 
 func newStream(d Decoder) *stream {
 	ch := max(d.Channels(), 1)
 	s := &stream{d: d, channels: ch, keep: min(ch, 2), seekTo: -1}
 	s.cond.L = &s.mu
-	// About a second ahead.
-	frames := max(d.SampleRate(), 4096)
+	// About a second ahead, and a quarter holds what the decoder decodes.
+	frames := max(d.SampleRate(), 4*decodeFrames)
 	s.ring = make([]float32, frames*s.keep)
 	go s.decode()
 	return s
 }
 
 func (s *stream) decode() {
-	buf := make([]float32, 2048*s.channels)
+	buf := make([]float32, decodeFrames*s.channels)
 	var kept []float32
 	if s.keep != s.channels {
-		kept = make([]float32, 2048*s.keep)
+		kept = make([]float32, decodeFrames*s.keep)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for {
-		for !s.closed && s.seekTo < 0 && !s.wrap && (s.atEOF && !s.loop || len(s.ring)-s.n < 2048*s.keep) {
+		for !s.closed && s.seekTo < 0 && !s.wrap && (s.atEOF && !s.loop || s.full) {
 			s.cond.Wait()
 		}
 		if s.closed {
@@ -118,6 +123,10 @@ func (s *stream) decode() {
 				s.loop = s.loop && err == nil
 				s.pos = to
 			}
+			continue
+		}
+		if len(s.ring)-s.n < decodeFrames*s.keep {
+			s.full = true
 			continue
 		}
 		gen := s.gen
@@ -173,7 +182,8 @@ func (s *stream) read(dst []float32) (int, bool) {
 		s.r = (s.r + c) % len(s.ring)
 		s.n -= c
 	}
-	if got > 0 {
+	if s.full && len(s.ring)-s.n >= len(s.ring)/4 {
+		s.full = false
 		s.cond.Signal()
 	}
 	ended := got < len(dst)/s.keep*s.keep && s.n == 0 && s.atEOF && !s.loop && s.seekTo < 0
@@ -187,6 +197,7 @@ func (s *stream) seek(frame int64) {
 	s.atEOF, s.wrap = false, false
 	s.r, s.n = 0, 0
 	s.gen++
+	s.full = false
 	s.cond.Signal()
 }
 

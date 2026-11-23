@@ -202,6 +202,23 @@ func (l *WorkspaceLifecycle) RestoreAll(ctx context.Context, config domain.AppCo
 	if _, err := l.Manifests.Load(taskPath); err != nil {
 		return nil, err
 	}
+	roots, err := l.repositoryLockRoots(config, manifest)
+	if err != nil {
+		return nil, err
+	}
+	var restored []domain.ServiceWorkspace
+	err = l.withWorkspaceLocks(roots, physicalWorkspaces(manifest), func() error {
+		if err := l.validateTaskDirectory(config, taskPath, manifest); err != nil {
+			return err
+		}
+		var err error
+		restored, err = l.restoreAllLocked(ctx, config, taskPath, manifest)
+		return err
+	})
+	return restored, err
+}
+
+func (l *WorkspaceLifecycle) restoreAllLocked(ctx context.Context, config domain.AppConfig, taskPath string, manifest domain.TaskManifest) ([]domain.ServiceWorkspace, error) {
 	var restored []domain.ServiceWorkspace
 	created := []domain.ServiceWorkspace{}
 	rollback := func(primary error) ([]domain.ServiceWorkspace, error) {
@@ -249,11 +266,17 @@ func (l *WorkspaceLifecycle) RestoreAll(ctx context.Context, config domain.AppCo
 			if err != nil {
 				return rollback(err)
 			}
-			if err := l.Git.AddExistingWorktree(repository, target, ws.Branch, ws.ForceWorktreeAttach); err != nil {
+			if err := l.Git.requireWorktreeBranchAvailable(repository, target, ws.Branch); err != nil {
+				return rollback(err)
+			}
+			if err := l.Git.removeMissingWorktreeRegistration(repository, target); err != nil {
+				return rollback(err)
+			}
+			if err := l.Git.AddExistingWorktree(repository, target, ws.Branch); err != nil {
 				return rollback(err)
 			}
 			created = append(created, ws)
-			service, _ := config.GroupService(manifest.GroupID, ws.GroupServiceID)
+			service, _ := config.Service(ws.GroupServiceID)
 			boot, err := l.Bootstrap.Initialize(ctx, repository, target, service.Bootstrap, nil)
 			if err != nil {
 				return rollback(err)
@@ -269,7 +292,7 @@ func (l *WorkspaceLifecycle) RestoreAll(ctx context.Context, config domain.AppCo
 				return rollback(err)
 			}
 			created = append(created, ws)
-			service, _ := config.GroupService(manifest.GroupID, ws.GroupServiceID)
+			service, _ := config.Service(ws.GroupServiceID)
 			source := ""
 			if repo, ok := repositoryByID(config, ws.RepositoryID); ok {
 				source = repo.RootPath
@@ -294,6 +317,9 @@ func (l *WorkspaceLifecycle) ValidateForMutation(config domain.AppConfig, taskPa
 }
 
 func (l *WorkspaceLifecycle) stageAndRemovePhysical(ctx context.Context, config domain.AppConfig, taskPath string, workspaces []domain.ServiceWorkspace) (WorkspaceRemovalResult, error) {
+	if len(workspaces) == 0 {
+		return WorkspaceRemovalResult{}, nil
+	}
 	parent := filepath.Dir(taskPath)
 	transactionRoot, err := os.MkdirTemp(parent, "."+filepath.Base(taskPath)+".silverwing-cleanup-")
 	if err != nil {
@@ -345,7 +371,6 @@ func (l *WorkspaceLifecycle) stageAndRemovePhysical(ctx context.Context, config 
 				retained = append(retained, entry.Backup)
 				continue
 			}
-			_ = l.Git.PruneWorktrees(entry.Repository)
 		} else if err := deleteOwnedClone(transactionRoot, entry.Backup, entry.Ownership); err != nil {
 			retained = append(retained, entry.Backup)
 		}
@@ -438,7 +463,6 @@ func (l *WorkspaceLifecycle) stageAndRemoveTask(ctx context.Context, config doma
 				retained = append(retained, entry.Backup)
 				continue
 			}
-			_ = l.Git.PruneWorktrees(entry.Repository)
 		} else if err := deleteOwnedClone(transactionRoot, entry.Backup, entry.Ownership); err != nil {
 			retained = append(retained, entry.Backup)
 		}
@@ -558,10 +582,14 @@ func (l *WorkspaceLifecycle) validateRemovalCandidates(config domain.AppConfig, 
 }
 
 func (l *WorkspaceLifecycle) validateTaskDirectory(config domain.AppConfig, taskPath string, manifest domain.TaskManifest) error {
-	if config.TaskRoot == nil || strings.TrimSpace(*config.TaskRoot) == "" {
+	if err := l.Locks.ValidateWorkspaceDirectory(config, taskPath, manifest); err != nil {
+		return err
+	}
+	taskRoot := l.Locks.TaskRoot(config)
+	if strings.TrimSpace(taskRoot) == "" {
 		return fmt.Errorf("尚未配置任务根目录")
 	}
-	root, err := filepath.Abs(filepath.Clean(*config.TaskRoot))
+	root, err := filepath.Abs(filepath.Clean(taskRoot))
 	if err != nil {
 		return err
 	}
@@ -590,6 +618,9 @@ func (l *WorkspaceLifecycle) validateTarget(taskPath string, ws domain.ServiceWo
 	if !samePath(filepath.Dir(target), task) {
 		return "", fmt.Errorf("工作区路径不在任务目录的直接子级，已拒绝操作：%s", target)
 	}
+	if err := requireOrdinaryDirectoryIfPresent(target); err != nil {
+		return "", err
+	}
 	return target, nil
 }
 
@@ -604,37 +635,18 @@ func (l *WorkspaceLifecycle) validateExistingIdentity(config domain.AppConfig, w
 func (l *WorkspaceLifecycle) repositoryLockRoots(config domain.AppConfig, manifest domain.TaskManifest) ([]string, error) {
 	roots := map[string]string{}
 	for _, ws := range physicalWorkspaces(manifest) {
-		var root string
-		if ws.Strategy == domain.WorkspaceStandardWorktree {
-			repository, err := l.configuredRepository(config, ws)
-			if err != nil {
-				return nil, err
-			}
-			root, err = l.Git.CommonDirectory(repository)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			repository, ok := repositoryByID(config, ws.RepositoryID)
-			if !ok {
-				return nil, fmt.Errorf("仓库配置不存在：%s", ws.RepositoryID)
-			}
-			root = repository.GitCommonDirectory
+		if ws.Strategy != domain.WorkspaceStandardWorktree {
+			continue
 		}
-		root = mustAbs(root)
-		roots[strings.ToLower(root)] = root
-	}
-	group, err := config.Group(manifest.GroupID)
-	if err != nil {
-		return nil, err
-	}
-	for _, service := range group.Services {
-		repository, ok := repositoryByID(config, service.RepositoryID)
-		if !ok {
-			return nil, fmt.Errorf("仓库配置不存在：%s", service.RepositoryID)
+		repository, err := l.configuredRepository(config, ws)
+		if err != nil {
+			return nil, err
 		}
-		root := mustAbs(repository.GitCommonDirectory)
-		roots[strings.ToLower(root)] = root
+		root, err := l.Git.CommonDirectory(repository)
+		if err != nil {
+			return nil, err
+		}
+		roots[stablePathHash(root)] = root
 	}
 	result := make([]string, 0, len(roots))
 	for _, path := range roots {
@@ -644,45 +656,32 @@ func (l *WorkspaceLifecycle) repositoryLockRoots(config domain.AppConfig, manife
 	return result, nil
 }
 
-// Clone checkouts may appear while a logical source-repository lock is being
-// acquired. Resolve their actual common directories only after those locks,
-// then revalidate all removal candidates inside both layers of locks.
 func (l *WorkspaceLifecycle) withRemovalRepositoryLocks(config domain.AppConfig, taskPath string, manifest domain.TaskManifest, action func() error) error {
 	roots, err := l.repositoryLockRoots(config, manifest)
 	if err != nil {
 		return err
 	}
+	return l.withWorkspaceLocks(roots, physicalWorkspaces(manifest), action)
+}
+
+func (l *WorkspaceLifecycle) withWorkspaceLocks(roots []string, workspaces []domain.ServiceWorkspace, action func() error) error {
+	clones := make(map[string]string)
+	for _, ws := range workspaces {
+		if ws.Strategy == domain.WorkspaceIndependentClone {
+			clones[stablePathHash(ws.WorktreePath)] = ws.WorktreePath
+		}
+	}
 	return l.withRepositoryLocks(roots, 0, func() error {
-		existing, err := l.existingWorkspaces(taskPath, physicalWorkspaces(manifest))
-		if err != nil {
-			return err
-		}
-		locked := map[string]bool{}
-		for _, root := range roots {
-			locked[strings.ToLower(root)] = true
-		}
-		cloneRoots := []string{}
-		for _, ws := range existing {
-			if ws.Strategy != domain.WorkspaceIndependentClone {
-				continue
-			}
-			target, err := l.validateTarget(taskPath, ws)
-			if err != nil {
-				return err
-			}
-			common, err := l.Git.CommonDirectory(target)
-			if err != nil {
-				return err
-			}
-			common = mustAbs(common)
-			key := strings.ToLower(common)
-			if !locked[key] {
-				locked[key] = true
-				cloneRoots = append(cloneRoots, common)
-			}
-		}
-		sort.Slice(cloneRoots, func(i, j int) bool { return strings.ToLower(cloneRoots[i]) < strings.ToLower(cloneRoots[j]) })
-		return l.withRepositoryLocks(cloneRoots, 0, action)
+		return l.withIndependentCheckoutLocks(valuesSorted(clones), action)
+	})
+}
+
+func (l *WorkspaceLifecycle) withIndependentCheckoutLocks(paths []string, action func() error) error {
+	if len(paths) == 0 {
+		return action()
+	}
+	return l.Locks.WithIndependentCheckout(paths[0], func() error {
+		return l.withIndependentCheckoutLocks(paths[1:], action)
 	})
 }
 
@@ -723,11 +722,7 @@ func (l *WorkspaceLifecycle) requireNoUntrackedWorkspaces(config domain.AppConfi
 	for _, ws := range physicalWorkspaces(manifest) {
 		ids[ws.RepositoryID] = true
 	}
-	group, err := config.Group(manifest.GroupID)
-	if err != nil {
-		return err
-	}
-	for _, service := range group.Services {
+	for _, service := range config.ServiceCatalog() {
 		ids[service.RepositoryID] = true
 	}
 	for repositoryID := range ids {
@@ -774,7 +769,10 @@ func (l *WorkspaceLifecycle) requireNoUntrackedWorkspaces(config domain.AppConfi
 			}
 		}
 	}
-	return l.walkUnrecordedGitRoots(task, recorded)
+	if err := l.walkUnrecordedGitRoots(task, recorded); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func (l *WorkspaceLifecycle) walkUnrecordedGitRoots(task string, recorded map[string]bool) error {

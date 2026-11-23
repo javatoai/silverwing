@@ -2,23 +2,21 @@ package delivery
 
 import (
 	"context"
-	"os"
+	"errors"
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 
 	"silverwing-go/internal/domain"
-	"silverwing-go/internal/process"
 	"silverwing-go/internal/production"
 )
 
 func TestObserveUATRuntimeQueriesEachEligibleServiceOnce(t *testing.T) {
-	runner := &tagRuntimeRunner{results: map[string]process.Result{
-		"service-a": {Stdout: `{"service":"service-a","environment":"UAT","pods":[{"namespace":"team","pod_name":"a","app_version":"v2","ready":true}]}`},
-		"service-b": {Stdout: `{"service":"service-b","environment":"UAT","pods":[{"namespace":"team","pod_name":"b","app_version":"v3","ready":true}]}`},
+	client := &tagRuntimeClient{results: map[string]production.ServicePods{
+		"service-a": {Service: "service-a", Environment: "uat", Pods: []production.RuntimePod{{Namespace: "team", Version: "v2", Ready: true}}},
+		"service-b": {Service: "service-b", Environment: "uat", Pods: []production.RuntimePod{{Namespace: "team", Version: "v3", Ready: true}}},
 	}}
-	task := newTagRuntimeTask(t, runner)
+	task := newTagRuntimeTask(client)
 	rows := []TagObservation{
 		newTagRuntimeObservation("service-a", "v2"),
 		newTagRuntimeObservation("service-a", "v1"),
@@ -35,9 +33,9 @@ func TestObserveUATRuntimeQueriesEachEligibleServiceOnce(t *testing.T) {
 	rows[5].Operation.GenbuStatus.NotFound = true
 	rows[6].Operation.GenbuStatus.UAT = domain.GenbuBuilding
 	task.ObserveUATRuntime(context.Background(), rows, "")
-	wantCalls := [][]string{{"query-service-pods", "--json", "uat", "service-a"}, {"query-service-pods", "--json", "uat", "service-b"}}
-	if !reflect.DeepEqual(runner.calls, wantCalls) {
-		t.Fatalf("Pod queries = %v, want %v", runner.calls, wantCalls)
+	wantCalls := []string{"uat:service-a", "uat:service-b"}
+	if !reflect.DeepEqual(client.calls, wantCalls) {
+		t.Fatalf("Pod queries = %v, want %v", client.calls, wantCalls)
 	}
 	for i, want := range []TagRuntimeState{TagRuntimeReady, TagRuntimeNotReady, TagRuntimeReady} {
 		if got := rows[i].Runtime; got == nil || got.State != want || got.Namespace != "team" {
@@ -54,20 +52,20 @@ func TestObserveUATRuntimeQueriesEachEligibleServiceOnce(t *testing.T) {
 func TestObserveUATRuntimeRejectsUnverifiedPodResponses(t *testing.T) {
 	for _, test := range []struct {
 		name   string
-		result process.Result
+		result production.ServicePods
+		err    error
 		want   string
 	}{
-		{"wrong service", process.Result{Stdout: `{"service":"other","environment":"uat","pods":[]}`}, "other"},
-		{"wrong environment", process.Result{Stdout: `{"service":"svc","environment":"prod","pods":[]}`}, "环境不匹配"},
-		{"failed query", process.Result{ExitCode: 1, Stderr: "offline"}, "offline"},
+		{"wrong service", production.ServicePods{Service: "other", Environment: "uat"}, nil, "other"},
+		{"failed query", production.ServicePods{}, errors.New("offline"), "offline"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			runner := &tagRuntimeRunner{results: map[string]process.Result{"svc": test.result}}
-			task := newTagRuntimeTask(t, runner)
+			client := &tagRuntimeClient{results: map[string]production.ServicePods{"svc": test.result}, err: test.err}
+			task := newTagRuntimeTask(client)
 			rows := []TagObservation{newTagRuntimeObservation("svc", "v2"), newTagRuntimeObservation("svc", "v1")}
 			task.ObserveUATRuntime(context.Background(), rows, "")
-			if len(runner.calls) != 1 {
-				t.Fatalf("failed Pod query was repeated: %v", runner.calls)
+			if len(client.calls) != 1 {
+				t.Fatalf("failed Pod query was repeated: %v", client.calls)
 			}
 			for _, row := range rows {
 				if got := row.Runtime; got == nil || got.State != TagRuntimeUnknown || !strings.Contains(got.Error, test.want) {
@@ -118,28 +116,25 @@ func TestSummarizeTagRuntimeRequiresAllSelectedPodsToMatchAndBeReady(t *testing.
 	}
 }
 
-type tagRuntimeRunner struct {
-	results map[string]process.Result
-	calls   [][]string
+type tagRuntimeClient struct {
+	results map[string]production.ServicePods
+	calls   []string
+	err     error
 }
 
-func (r *tagRuntimeRunner) Run(ctx context.Context, spec process.Spec) (process.Result, error) {
-	if spec.Executable == "/bin/zsh" { // macOS login-shell PATH discovery
-		return process.Result{Stdout: "/usr/bin\n"}, ctx.Err()
-	}
-	r.calls = append(r.calls, slices.Clone(spec.Arguments))
-	return r.results[spec.Arguments[len(spec.Arguments)-1]], ctx.Err()
+func (c *tagRuntimeClient) Pods(_ context.Context, _ domain.AppConfig, env, service string) (production.ServicePods, error) {
+	c.calls = append(c.calls, env+":"+service)
+	return c.results[service], c.err
 }
 
-func newTagRuntimeTask(t *testing.T, runner *tagRuntimeRunner) *TagTask {
-	t.Helper()
-	command, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	config := domain.DefaultAppConfig()
-	config.GenbuExecutablePath = &command
-	return &TagTask{service: &Service{runner: runner}, task: resolvedTask{config: config}}
+func (*tagRuntimeClient) Status(context.Context, domain.AppConfig, string, string) (domain.GenbuTagProbeStatus, error) {
+	return domain.GenbuTagProbeStatus{}, errors.New("unexpected Tag status query")
+}
+
+func (*tagRuntimeClient) CheckScope(ctx context.Context) error { return ctx.Err() }
+
+func newTagRuntimeTask(client *tagRuntimeClient) *TagTask {
+	return &TagTask{service: &Service{genbuClient: func(context.Context) (TagGenbu, error) { return client, nil }}}
 }
 
 func newTagRuntimeObservation(service, tag string) TagObservation {

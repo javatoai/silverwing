@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -28,16 +29,17 @@ type requirementIdentitySession struct {
 }
 
 type requirementIdentityRequest struct {
-	ctx        context.Context
-	cancel     context.CancelFunc
-	done       chan struct{}
-	contextKey string
-	generation uint64
-	consumers  int
-	finished   bool
-	session    requirementIdentitySession
-	loggedOut  bool
-	err        error
+	ctx             context.Context
+	cancel          context.CancelFunc
+	done            chan struct{}
+	contextKey      string
+	localContextKey string
+	generation      uint64
+	consumers       int
+	finished        bool
+	session         requirementIdentitySession
+	loggedOut       bool
+	err             error
 }
 
 type RequirementIdentityChangedError struct {
@@ -109,6 +111,7 @@ func (s *Service) recordRequirementIdentityProbeContext(probe uint64, contextKey
 		s.confirmedIdentity = identity
 		s.confirmedIdentityRaw = raw
 		s.identityContext = contextKey
+		s.identityLocalContext = ""
 		if generation > 0 {
 			s.identitySessionGeneration = generation
 		}
@@ -118,6 +121,7 @@ func (s *Service) recordRequirementIdentityProbeContext(probe uint64, contextKey
 		s.confirmedIdentity = ""
 		s.confirmedIdentityRaw = ""
 		s.identityContext = contextKey
+		s.identityLocalContext = ""
 		if generation > 0 {
 			s.identitySessionGeneration = generation
 		}
@@ -133,17 +137,67 @@ func (s *Service) requirementIdentityContextWithContext(ctx context.Context, con
 	if absolute, err := filepath.Abs(home); err == nil {
 		home = absolute
 	}
-	cli := s.commandPath(ctx, config, domain.ProxyTargetMeegle)
+	cli := s.meegleCommandPath(ctx, config)
 	if absolute, err := filepath.Abs(cli); err == nil && cli != "" {
 		cli = absolute
 	}
 	encoded, _ := marshalRequirementJSON([]any{
 		filepath.ToSlash(strings.ToLower(home)), filepath.ToSlash(strings.ToLower(cli)),
 		config.MeegleExecutablePath, config.MeegleProjects,
-		config.CommandProxyURL, config.CommandProxyNoProxy, config.CommandProxyUsername,
-		config.CommandProxyPassword, config.CommandProxyTargets,
 	})
 	return requirementCacheDigest(string(encoded))
+}
+
+func (s *Service) requirementIdentityLocalContext(config domain.AppConfig) string {
+	home := filepath.Clean(s.paths.Home)
+	if absolute, err := filepath.Abs(home); err == nil {
+		home = absolute
+	}
+	profilePath, profileModified, profileSize := "", int64(0), int64(0)
+	if userHome, err := os.UserHomeDir(); err == nil {
+		profilePath = filepath.Join(userHome, ".meegle", "config.json")
+		if info, err := os.Stat(profilePath); err == nil && !info.IsDir() {
+			profileModified, profileSize = info.ModTime().UnixNano(), info.Size()
+		}
+	}
+	encoded, _ := marshalRequirementJSON([]any{
+		filepath.ToSlash(strings.ToLower(home)), config.MeegleExecutablePath, config.MeegleProjects,
+		filepath.ToSlash(strings.ToLower(profilePath)), profileModified, profileSize,
+	})
+	return requirementCacheDigest(string(encoded))
+}
+
+// confirmedRequirementIdentityForConfig checks the already-confirmed local
+// identity snapshot without probing the CLI. Profile file metadata is part of
+// its context so a changed Meegle profile cannot authorize a local cache hit.
+func (s *Service) confirmedRequirementIdentityForConfig(ctx context.Context, config domain.AppConfig, expected string) (bool, error) {
+	if s == nil || !validOpaqueRequirementIdentity(expected) {
+		return false, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	contextKey := s.requirementIdentityLocalContext(config)
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	s.identityStateMu.Lock()
+	confirmed := s.identityConfirmed && s.identityLocalContext == contextKey
+	state, identity := s.identityState, s.confirmedIdentity
+	s.identityStateMu.Unlock()
+	if !confirmed {
+		return false, nil
+	}
+	if state == requirementIdentityLoggedOut {
+		return false, &RequirementIdentityChangedError{State: requirementIdentityLoggedOut}
+	}
+	if state != requirementIdentityAuthenticated || identity != expected {
+		return false, &RequirementIdentityChangedError{State: state, Identity: identity}
+	}
+	return true, ctx.Err()
 }
 
 // requirementIdentityFor reuses an authenticated identity only for the same
@@ -179,7 +233,7 @@ func (s *Service) requirementIdentityFor(ctx context.Context, config domain.AppC
 		return requirementIdentitySession{}, false, errors.New("需求身份读取服务正在关闭")
 	}
 	if s.identityContext != "" && s.identityContext != contextKey {
-		// A changed app home, CLI, profile-related config or proxy scope starts a
+		// A changed app home, CLI or project configuration starts a
 		// new identity session. Drop prior sessions so returning to an old config
 		// cannot silently reuse an identity captured before the context switch.
 		s.identityEpochCounter++
@@ -188,6 +242,7 @@ func (s *Service) requirementIdentityFor(ctx context.Context, config domain.AppC
 		s.identityState = requirementIdentityUnavailable
 		s.confirmedIdentity = ""
 		s.confirmedIdentityRaw = ""
+		s.identityLocalContext = ""
 		s.identitySessionGeneration = 0
 		s.identityContext = contextKey
 		for requestContext, request := range s.identityRequests {
@@ -227,7 +282,7 @@ func (s *Service) requirementIdentityFor(ctx context.Context, config domain.AppC
 		s.identityProbe++
 		shared, cancel := context.WithCancel(context.WithoutCancel(ctx))
 		request = &requirementIdentityRequest{ctx: shared, cancel: cancel, done: make(chan struct{}),
-			contextKey: contextKey, generation: s.identityProbe}
+			contextKey: contextKey, localContextKey: s.requirementIdentityLocalContext(config), generation: s.identityProbe}
 		s.identityRequests[contextKey] = request
 		go s.runRequirementIdentityProbe(request, config, probeIdentity)
 	}
@@ -338,6 +393,7 @@ func (s *Service) runRequirementIdentityProbe(request *requirementIdentityReques
 		s.confirmedIdentity = token
 		s.confirmedIdentityRaw = raw
 		s.identityContext = request.contextKey
+		s.identityLocalContext = request.localContextKey
 		s.identitySessionGeneration = request.session.generation
 	}
 }

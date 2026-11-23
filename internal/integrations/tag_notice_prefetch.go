@@ -3,7 +3,6 @@ package integrations
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"time"
 
@@ -103,14 +102,36 @@ func (s *Service) beginNoticeRefresh(ctx context.Context, url string, expectedGe
 	return &noticeRefresh{url: url, ticket: ticket, generation: c.generation, version: c.versions[url]}, nil
 }
 
-func noticePrefetchEnabled(cfg domain.AppConfig) bool {
-	// An explicitly configured notification CLI keeps ordinary requirement-only
-	// installations (and integrations) from unexpectedly launching another tool.
-	return cfg.TagEnabled && cfg.LarkExecutablePath != nil && strings.TrimSpace(*cfg.LarkExecutablePath) != "" && cfg.EffectiveLarkNotice().Profile != ""
+// SetNoticeCLIReady installs the application's non-probing readiness check.
+// Set it during construction, before publishing the service to callers.
+func (s *Service) SetNoticeCLIReady(ready func(domain.AppConfig) bool) {
+	s.noticeCLIReady = ready
+}
+
+func (s *Service) noticePrefetchEnabled(cfg domain.AppConfig) bool {
+	return cfg.TagEnabled && cfg.EffectiveLarkNotice().Profile != "" && s.noticeCLIReady != nil && s.noticeCLIReady(cfg)
+}
+
+func (s *Service) checkNoticePrefetch(ctx context.Context, cfg domain.AppConfig) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	current, err := s.config.LoadForPreview(ctx)
+	if err != nil {
+		return err
+	}
+	if noticeConfigIdentity(current) != noticeConfigIdentity(cfg) || !s.noticePrefetchEnabled(current) {
+		return noticeprep.ErrSuperseded
+	}
+	return nil
 }
 
 func (s *Service) beginNoticeMetadataRefresh(ctx context.Context, cfg domain.AppConfig, payload map[string]any) *noticeRefresh {
-	if !noticePrefetchEnabled(cfg) || !(boolValue(payload, "force") || boolValue(payload, "fullRefresh")) || ctx.Err() != nil {
+	if !(boolValue(payload, "force") || boolValue(payload, "fullRefresh")) || ctx.Err() != nil {
+		return nil
+	}
+	generation, err := s.noticeGeneration()
+	if err != nil || !s.noticePrefetchEnabled(cfg) {
 		return nil
 	}
 	base, err := noticeScope(cfg, stringValue(payload, "url", "requirementLink", "link"))
@@ -125,7 +146,7 @@ func (s *Service) beginNoticeMetadataRefresh(ctx context.Context, cfg domain.App
 			return nil
 		}
 	}
-	refresh, err := s.beginNoticeRefresh(ctx, base.Requirement, nil)
+	refresh, err := s.beginNoticeRefresh(ctx, base.Requirement, &generation)
 	if err != nil {
 		return nil
 	}
@@ -137,20 +158,20 @@ func (s *Service) finishNoticeMetadataRefresh(ctx context.Context, cfg domain.Ap
 	if refresh == nil {
 		return
 	}
+	if s.checkNoticePrefetch(ctx, cfg) != nil {
+		s.failNoticeTicket(refresh.ticket, "cancelled")
+		return
+	}
 	metadata, ok := data.(RequirementMetadataReadResult)
-	if err != nil || ctx.Err() != nil || !ok || metadata.Stale || metadata.RefreshError != "" || !metadata.ReleaseTestersConfirmed || metadata.noticeIdentity.raw == "" {
-		state := "failed"
-		if ctx.Err() != nil {
-			state = "cancelled"
-		}
-		s.failNoticeTicket(refresh.ticket, state)
+	if err != nil || !ok || metadata.Stale || metadata.RefreshError != "" || !metadata.ReleaseTestersConfirmed || metadata.noticeIdentity.raw == "" {
+		s.failNoticeTicket(refresh.ticket, "failed")
 		return
 	}
 	s.enqueueNoticePreparation(cfg, *refresh, &metadata)
 }
 
 func (s *Service) beginNoticeListRefresh(ctx context.Context, cfg domain.AppConfig, force bool) *noticeRefresh {
-	if !noticePrefetchEnabled(cfg) || ctx.Err() != nil {
+	if !s.noticePrefetchEnabled(cfg) || ctx.Err() != nil {
 		return nil
 	}
 	if force {
@@ -164,7 +185,7 @@ func (s *Service) beginNoticeListRefresh(ctx context.Context, cfg domain.AppConf
 }
 
 func (s *Service) finishNoticeListRefresh(ctx context.Context, cfg domain.AppConfig, refresh *noticeRefresh, data any, err error) {
-	if refresh == nil || err != nil || ctx.Err() != nil {
+	if refresh == nil || err != nil || ctx.Err() != nil || !s.noticePrefetchEnabled(cfg) {
 		return
 	}
 	result, ok := data.(participatedResult)
@@ -281,9 +302,9 @@ func (s *Service) runNoticePreparation(job *noticePreparationJob) {
 	defer cancel()
 	cfg, refresh := job.config, job.refresh
 	success := false
+	state := "failed"
 	defer func() {
 		if !success {
-			state := "failed"
 			if ctx.Err() != nil {
 				state = "cancelled"
 			}
@@ -291,6 +312,11 @@ func (s *Service) runNoticePreparation(job *noticePreparationJob) {
 		}
 	}()
 	if ctx.Err() != nil || s.noticeVersion(refresh.url) != refresh.version {
+		return
+	}
+	check := func(ctx context.Context) error { return s.checkNoticePrefetch(ctx, cfg) }
+	if err := check(ctx); err != nil {
+		state = "cancelled"
 		return
 	}
 	base, err := noticeScope(cfg, refresh.url)
@@ -316,7 +342,7 @@ func (s *Service) runNoticePreparation(job *noticePreparationJob) {
 	if base.MeegleIdentity == "" {
 		return
 	}
-	client := larkcli.Client{Runner: s.runner, Config: cfg, AsUser: true}
+	client := larkcli.Client{Runner: s.runner, Config: cfg, AsUser: true, BeforeRun: check}
 	identity, err := client.LocalIdentity(ctx)
 	if err != nil || identity.AppID == "" || !releasenotice.ValidOpenID(identity.OpenID) {
 		return
@@ -335,6 +361,10 @@ func (s *Service) runNoticePreparation(job *noticePreparationJob) {
 	if err != nil || latest.AppID != identity.AppID || latest.OpenID != identity.OpenID {
 		return
 	}
+	if err := check(ctx); err != nil {
+		state = "cancelled"
+		return
+	}
 	if err := proof.Commit(ctx); err != nil {
 		return
 	}
@@ -345,6 +375,12 @@ func (s *Service) failNoticeTicket(ticket noticeprep.Ticket, state string) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	_ = s.noticeStore().Fail(ctx, ticket, state)
+}
+
+// InvalidateTagNoticePreparations retires notification work independently of
+// the requirement reads that supplied it.
+func (s *Service) InvalidateTagNoticePreparations() {
+	s.retireNoticePreparations(false)
 }
 
 func (s *Service) retireNoticePreparations(closeJobs bool) {

@@ -14,7 +14,7 @@ type productionConfirmationContent struct {
 // The summary shows ref names. Full commit identities remain captured in the
 // caller's continuation and the collapsed details.
 func (s *app) confirmProduction(v *productionView, target production.Target, content productionConfirmationContent, confirmed func()) {
-	if v == nil || s.releaseUnit.state.production == nil || s.productionView() != v {
+	if !s.productionAvailable() || v == nil || s.releaseUnit.state.production == nil || s.productionView() != v {
 		return
 	}
 	if !s.showConfirmationDialog(content.Title, "", content.Detail, []confirmationDialogButton{
@@ -37,17 +37,27 @@ func (s *app) confirmProduction(v *productionView, target production.Target, con
 	dialog.Summary = append(dialog.Summary, confirmationDialogField{Label: "仓库", Value: target.Repository}, confirmationDialogField{Label: "远端", Value: target.Remote})
 	dialog.Notices = append([]string(nil), content.Notices...)
 	dialog.FoldDetail = true
-	home, batch, manual, selection, state := s.snapshot.Home, v.BatchID, v.ManualTag, v.Selection, s.releaseUnit.state.production
+	dialog.Current = s.productionConfirmationCurrent(v)
+}
+
+func (s *app) productionConfirmationCurrent(v *productionView) func() bool {
+	optionalCtx := s.integrationContext("genbu")
+	home, batch, selection, state := s.snapshot.Home, v.BatchID, v.Selection, s.releaseUnit.state.production
+	generation := v.Generation
+	baselineKnown := v.Preview != nil && v.Preview.ProductionSHA != ""
 	checkedConfig, scope, configCurrent := s.settingsUnit.state.configJSON, productionConfigScope(s.settingsUnit.state.configJSON), true
-	dialog.Current = func() bool {
+	return func() bool {
 		// Configuration parsing happens only when its immutable JSON changes,
 		// never on every frame while the dialog is displayed.
 		if checkedConfig != s.settingsUnit.state.configJSON {
 			checkedConfig = s.settingsUnit.state.configJSON
 			configCurrent = productionConfigScope(checkedConfig) == scope
 		}
-		return s.releaseUnit.state.production == state && s.page == "production" && state.views[state.selected] == v &&
-			s.snapshot.Home == home && v.BatchID == batch && v.Selection == selection && v.ManualTag == manual && configCurrent
+		if baselineKnown && (v.Preview == nil || v.Preview.ProductionSHA == "") {
+			return false
+		}
+		return optionalCtx.Err() == nil && s.productionAvailable() && s.releaseUnit.state.production == state && s.page == "production" && state.views[state.selected] == v &&
+			s.snapshot.Home == home && v.BatchID == batch && v.Selection == selection && v.Generation == generation && configCurrent
 	}
 }
 
@@ -59,8 +69,12 @@ func (s *app) confirmProductionEnd(v *productionView, b production.Batch) {
 		Detail:  productionTargetDetail(b.Target) + "\n批次：" + b.ReleaseBranch + "\nrelease 提交：" + b.ReleaseSHA,
 		Notices: []string{"保留远端分支、Tag、历史和未完成工作区。"},
 	}, func() {
-		s.productionRequestFor(v, application.Action{Kind: "production.end", Payload: map[string]any{"batchId": id, "confirmed": true}}, "")
+		s.requestProductionEnd(v, id, "")
 	})
+}
+
+func (s *app) requestProductionEnd(v *productionView, id, follow string) {
+	s.productionRequestFor(v, application.Action{Kind: "production.end", Payload: map[string]any{"batchId": id, "confirmed": true}}, follow)
 }
 
 func (s *app) confirmProductionAdopt(v *productionView, b production.Batch) {

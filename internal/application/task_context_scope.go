@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"silverwing-go/internal/documents"
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/taskscope"
 )
@@ -67,16 +68,16 @@ func (a *App) validateDesktopTaskContext(action Action, config domain.AppConfig,
 	if err != nil || !present {
 		return err
 	}
-	if expected.Page == "materials" && action.Kind != "task.archive" {
+	if expected.Page == "materials" && action.Kind != "task.archive" && action.Kind != "task.refresh-agents" {
 		return errDesktopTaskContextChanged
 	}
 	encoded, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return errDesktopTaskContextChanged
 	}
-	materialsManifest := manifest
-	materialsPath := visibleMaterialsRoot(value(manifest.RequirementMaterials.WriteRoot))
-	if err := validAnnualTaskMaterials(manifest, config); err != nil {
+	materialsManifest := documents.ResolveBoundTaskMaterials(manifest, config)
+	materialsPath := visibleMaterialsRoot(value(materialsManifest.RequirementMaterials.WriteRoot))
+	if err := validAnnualTaskMaterials(materialsManifest, config); err != nil {
 		materialsPath = ""
 		reason := err.Error()
 		materialsManifest.RequirementMaterials.Status = domain.MaterialsFailed
@@ -87,7 +88,7 @@ func (a *App) validateDesktopTaskContext(action Action, config domain.AppConfig,
 		config.TaskRoot == nil || !sameTaskContextPath(expected.TaskRoot, *config.TaskRoot) ||
 		taskContextConfigFingerprint(string(encoded)) != expected.ConfigFingerprint ||
 		manifest.TaskDirectoryName != expected.TaskID || manifest.CreatedAt != expected.TaskCreatedAt ||
-		manifest.GroupID != expected.GroupID || manifest.FeatureBranch != expected.Branch ||
+		manifest.FeatureBranch != expected.Branch ||
 		materialsPath != expected.MaterialsPath ||
 		!sameTaskContextText(projectedTaskMaterialsStatus(materialsManifest), expected.MaterialsStatus) ||
 		taskMaterialsFingerprint(materialsManifest) != expected.MaterialsFingerprint ||
@@ -107,13 +108,17 @@ func (a *App) validateDesktopTaskContext(action Action, config domain.AppConfig,
 		}
 	case "task.tools-launch":
 		var ids []string
-		if decodeField(action, "toolIds", &ids) != nil || len(ids) != 1 || ids[0] != "cursor" ||
+		if decodeField(action, "toolIds", &ids) != nil || len(ids) != 1 || ids[0] != "codex" ||
 			!slices.Contains(config.DefaultWorkspaceToolIDs, ids[0]) || action.ServiceID != "" || action.ModuleID != "" ||
 			action.Path == "" || !sameTaskContextPath(action.Path, taskPath) {
 			return errDesktopTaskContextChanged
 		}
 	case "task.materials-retry":
 		if action.ServiceID != "" || action.ModuleID != "" {
+			return errDesktopTaskContextChanged
+		}
+	case "task.refresh-agents":
+		if action.ServiceID != "" || action.ModuleID != "" || !sameTaskContextPath(action.Path, taskPath) {
 			return errDesktopTaskContextChanged
 		}
 	case "task.archive":
@@ -132,9 +137,10 @@ func (a *App) validateDesktopTaskContext(action Action, config domain.AppConfig,
 		}
 	case "system.open":
 		directory, _ := action.Payload["desktopSystemOpenDirectory"].(bool)
-		if !directory || action.ServiceID != "" || action.ModuleID != "" ||
-			!strings.EqualFold(strings.TrimSpace(expected.MaterialsStatus), string(domain.MaterialsReady)) ||
-			!sameTaskContextPath(actionPath(action), expected.MaterialsPath) {
+		openWorkspace := sameTaskContextPath(actionPath(action), taskPath)
+		openMaterials := strings.EqualFold(strings.TrimSpace(expected.MaterialsStatus), string(domain.MaterialsReady)) &&
+			sameTaskContextPath(actionPath(action), expected.MaterialsPath)
+		if !directory || action.ServiceID != "" || action.ModuleID != "" || (!openWorkspace && !openMaterials) {
 			return errDesktopTaskContextChanged
 		}
 	default:

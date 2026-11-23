@@ -320,7 +320,7 @@ export const formatters = {
    * "percent", or a skeleton ("::percent .00"), of which this formatter
    * reads percent, integer, precision-integer, the precision of fraction
    * digits (.00, .0#, .##), group-off and currency/, and writes the rest
-   * as the default. Package i18n reads the same, but currencies.
+   * as the default. Package i18n reads the same.
    */
   number(locale: string, n: number, style: string, digits?: number): string {
     const options: Intl.NumberFormatOptions & { roundingMode?: string } = {};
@@ -700,7 +700,7 @@ export function createCatalog<M>(data: CatalogData): Catalog<M> {
     const out: Record<string, (...values: unknown[]) => string> = {};
     for (const [key, names] of Object.entries(data.params)) {
       out[key] = (...values: unknown[]) => {
-        const args: Record<string, unknown> = {};
+        const args: Record<string, unknown> = Object.create(null);
         names.forEach((name, i) => (args[name] = values[i]));
         return formatKey(locale(), key, args);
       };

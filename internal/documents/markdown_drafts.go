@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"unicode/utf8"
+
+	"silverwing-go/internal/storage"
 )
 
 const MaxMarkdownDraftRecords = 100
@@ -249,7 +251,16 @@ func (s *Service) updateMaterialDraftCache(ctx context.Context, textDraft bool, 
 	if len(cache.Records) > MaxMarkdownDraftRecords {
 		return errors.New("Markdown 草稿缓存已达到 100 条上限")
 	}
-	data, err := json.Marshal(cache)
+	stored := cache
+	if s.profileHome != "" {
+		stored.Records = make(map[string]MarkdownDraft, len(cache.Records))
+		for _, draft := range cache.Records {
+			draft.Identity.TaskPath = storage.StoreProfilePath(s.profileHome, draft.Identity.TaskPath)
+			draft.Identity.MaterialsRoot = storage.StoreProfilePath(s.profileHome, draft.Identity.MaterialsRoot)
+			stored.Records[draft.Identity.key()] = draft
+		}
+	}
+	data, err := json.Marshal(stored)
 	if err != nil {
 		return err
 	}
@@ -325,12 +336,19 @@ func (s *Service) readMaterialDraftCache(ctx context.Context, textDraft bool) (s
 	if cache.Records == nil {
 		cache.Records = make(map[string]MarkdownDraft)
 	}
+	resolved := make(map[string]MarkdownDraft, len(cache.Records))
 	for key, record := range cache.Records {
+		if key != record.Identity.key() {
+			return path, cache, errors.New("Markdown 草稿缓存的身份无效")
+		}
+		record.Identity.TaskPath = storage.ResolveProfilePath(s.profileHome, record.Identity.TaskPath)
+		record.Identity.MaterialsRoot = storage.ResolveProfilePath(s.profileHome, record.Identity.MaterialsRoot)
 		draft, err := canonicalMaterialDraft(record, textDraft)
-		if err != nil || key != draft.Identity.key() {
+		if err != nil || resolved[draft.Identity.key()].Identity.TaskID != "" {
 			return path, cache, errors.New("Markdown 草稿缓存的内容或身份无效")
 		}
-		cache.Records[key] = draft
+		resolved[draft.Identity.key()] = draft
 	}
+	cache.Records = resolved
 	return path, cache, nil
 }

@@ -2,42 +2,79 @@ package desktop
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 
 	"silverwing-go/internal/application"
-	"silverwing-go/internal/domain"
 	"silverwing-go/internal/production"
 
 	"github.com/egoist/mygo/ui"
 )
 
 type taskServiceRow struct {
-	serviceID, name, genbuName, environment             string
-	pods                                                []production.RuntimePod
-	loaded, loading                                     bool
-	error, fetchedAt                                    string
-	namespace, configText, configError, configFetchedAt string
-	configLoaded, configLoading                         bool
-	configView                                          nativeCodePreviewState
+	serviceID, name, genbuName, environment string
+	pods                                    []production.RuntimePod
+	loaded, loading                         bool
+	error, fetchedAt                        string
 }
 
 func (row *taskServiceRow) key() string { return row.serviceID + ":" + row.environment }
 
+type taskServiceDetailKind uint8
+
+const (
+	taskServicePodsDetail taskServiceDetailKind = iota
+	taskServiceConfigDetail
+	taskServiceConfigEditDetail
+)
+
+type taskServiceDialog struct {
+	open                 bool
+	kind                 taskServiceDetailKind
+	row                  *taskServiceRow
+	vertical, horizontal ui.ScrollState
+	config               taskServiceConfigView
+	edit                 taskServiceConfigEditView
+}
+
+type taskServiceConfigView struct {
+	text, error, namespace string
+	namespaceOptions       []string
+	loaded, loading        bool
+	preview                nativeCodePreviewState
+}
+
 type taskServicesView struct {
-	identity                           taskFilesIdentity
-	queryIdentity, groupID, membership string
-	active                             bool
-	epoch                              uint64
-	rows                               []*taskServiceRow
-	hasServices                        bool
-	environment                        string
-	expanded, detail                   string
-	vertical, horizontal               ui.ScrollState
-	canvas                             ui.Handle
-	layout                             taskServicesLayout
+	identity                  taskFilesIdentity
+	catalog                   *catalogRuntimeScope
+	queryIdentity, membership string
+	active                    bool
+	epoch                     uint64
+	rows                      []*taskServiceRow
+	hasServices               bool
+	environment               string
+	dialog                    *taskServiceDialog
+	vertical                  ui.ScrollState
+	canvas                    ui.Handle
+	layout                    taskServicesLayout
+}
+
+func (v *taskServicesView) documentID(key string) string {
+	if v.catalog != nil {
+		return strings.Join([]string{"service-catalog", v.catalog.home, v.catalog.profile, key}, "\x00")
+	}
+	return v.identity.documentID(key)
+}
+
+func (v *taskServicesView) dialogScope(row *taskServiceRow) string {
+	environment := strings.ToUpper(row.environment)
+	if v.catalog != nil {
+		return environment + " · " + row.name
+	}
+	return row.name + " · " + environment
 }
 
 // Bounds are committed after a native frame. A host layout change needs one
@@ -56,20 +93,22 @@ type taskServicesRequest struct {
 }
 
 type taskServicesController struct {
-	views   map[string]*taskServicesView
-	current *taskServicesView
-	jobs    map[string]*taskServicesRequest
-	wg      sync.WaitGroup
-	stopped bool
+	configSubmissions  map[string]bool
+	views              map[string]*taskServicesView
+	current, catalog   *taskServicesView
+	catalogEnvironment string
+	jobs               map[string]*taskServicesRequest
+	wg                 sync.WaitGroup
+	stopped            bool
 }
 
 func (s *app) taskServicesPageActive() bool {
-	return (s.page == "tasks" || s.page == "archive") && s.tab == taskServicesTab && !s.workspaceReviewPageVisible()
+	return (s.page == "tasks" || s.page == "archive") && s.tab == taskServicesTab && s.taskContentTabAvailable(taskServicesTab) && !s.workspaceReviewPageVisible()
 }
 
 func (s *app) taskServicesProjection() (*taskServicesView, string) {
 	id := s.taskFilesIdentity()
-	if id.id == "" {
+	if id.id == "" || id.archived != (s.page == "archive") {
 		return nil, ""
 	}
 	cfg, err := s.readSnapshotAppConfig()
@@ -77,18 +116,13 @@ func (s *app) taskServicesProjection() (*taskServicesView, string) {
 		return nil, ""
 	}
 	t := s.taskUnit.currentTask()
-	groupID := t.groupID
-	if groupID == "" {
-		groupID = domain.DefaultGroupID
-	}
-	v := &taskServicesView{identity: id, groupID: groupID, queryIdentity: application.TaskServiceQueryIdentity(cfg), environment: "uat"}
+	v := &taskServicesView{identity: id, queryIdentity: application.TaskServiceQueryIdentity(cfg), environment: "uat"}
 	v.hasServices = len(t.workspaces) > 0 || len(t.serviceIDs) > 0
 	seen := map[string]bool{}
 	appendService := func(serviceID, name string) {
 		if serviceID == "" {
-			group, _ := cfg.Group(groupID)
 			matches := 0
-			for _, candidate := range group.Services {
+			for _, candidate := range cfg.ServiceCatalog() {
 				if candidate.DisplayName == name {
 					serviceID = candidate.ID
 					matches++
@@ -102,7 +136,7 @@ func (s *app) taskServicesProjection() (*taskServicesView, string) {
 			return
 		}
 		seen[serviceID] = true
-		service, lookupErr := cfg.GroupService(groupID, serviceID)
+		service, lookupErr := cfg.Service(serviceID)
 		if lookupErr != nil || !service.GenbuProbeEnabled {
 			return
 		}
@@ -126,7 +160,7 @@ func (s *app) taskServicesProjection() (*taskServicesView, string) {
 			appendService(serviceID, "")
 		}
 	}
-	parts := []string{id.documentID("services"), v.queryIdentity, groupID, fmt.Sprint(v.hasServices)}
+	parts := []string{id.documentID("services"), v.queryIdentity, fmt.Sprint(v.hasServices)}
 	for _, row := range v.rows {
 		parts = append(parts, row.key(), row.name, row.genbuName)
 	}
@@ -135,7 +169,13 @@ func (s *app) taskServicesProjection() (*taskServicesView, string) {
 }
 
 func (s *app) taskServicesCurrent(v *taskServicesView) bool {
-	if v == nil || !v.active || s.taskServicesUnit.stopped || s.taskServicesUnit.current != v || !s.taskServicesPageActive() {
+	if v == nil || !v.active || s.taskServicesUnit.stopped {
+		return false
+	}
+	if v.catalog != nil {
+		return s.catalogRuntimeCurrent(v)
+	}
+	if s.taskServicesUnit.current != v || !s.taskServicesPageActive() {
 		return false
 	}
 	_, key := s.taskServicesProjection()
@@ -148,6 +188,7 @@ func (s *app) ensureTaskServicesCurrent() *taskServicesView {
 	}
 	fresh, key := s.taskServicesProjection()
 	if fresh == nil {
+		s.leaveTaskServices()
 		return nil
 	}
 	u := &s.taskServicesUnit
@@ -167,8 +208,7 @@ func (s *app) ensureTaskServicesCurrent() *taskServicesView {
 		v.active = true
 		v.epoch++
 		v.environment = "uat"
-		v.expanded, v.detail = "", ""
-		v.vertical, v.horizontal = ui.ScrollState{}, ui.ScrollState{}
+		v.vertical = ui.ScrollState{}
 		s.refreshTaskServicesEnvironment(v)
 	}
 	return v
@@ -185,6 +225,10 @@ func (v *taskServicesView) visibleRows() []*taskServiceRow {
 }
 
 func (s *app) cancelTaskServicesRequests(v *taskServicesView) {
+	s.closeTaskServiceDialog(v, v.dialog)
+	if v.catalog == nil || (s.genbuApprovals != nil && s.genbuApprovals.source.view == v) {
+		s.closeGenbuReadDialogs()
+	}
 	v.epoch++
 	for key, request := range s.taskServicesUnit.jobs {
 		if request.view == v {
@@ -194,7 +238,6 @@ func (s *app) cancelTaskServicesRequests(v *taskServicesView) {
 	}
 	for _, row := range v.rows {
 		row.loading = false
-		row.configLoading = false
 	}
 }
 
@@ -204,8 +247,7 @@ func (s *app) selectTaskServicesEnvironment(v *taskServicesView, environment str
 	}
 	s.cancelTaskServicesRequests(v)
 	v.environment = environment
-	v.expanded, v.detail = "", ""
-	v.vertical, v.horizontal = ui.ScrollState{}, ui.ScrollState{}
+	v.vertical = ui.ScrollState{}
 	s.refreshTaskServicesEnvironment(v)
 	return true
 }
@@ -227,19 +269,64 @@ func (s *app) leaveTaskServices() {
 	}
 	v.active = false
 	s.cancelTaskServicesRequests(v)
-	for _, row := range v.rows {
-		row.loading = false
-		row.configLoading = false
-		row.configText = ""
-		row.configLoaded = false
-		row.configView = nativeCodePreviewState{}
-		row.configError = ""
+}
+
+func (s *app) taskServiceDialogCurrent(v *taskServicesView, dialog *taskServiceDialog) bool {
+	return dialog != nil && dialog.open && v != nil && v.dialog == dialog &&
+		dialog.row.environment == v.environment && s.taskServicesCurrent(v)
+}
+
+func (s *app) openTaskServiceDialog(v *taskServicesView, row *taskServiceRow, kind taskServiceDetailKind) {
+	if !s.taskServicesCurrent(v) || row == nil || row.environment != v.environment || !slices.Contains(v.rows, row) {
+		return
+	}
+	if kind == taskServiceConfigEditDetail && (v.identity.archived || row.genbuName == "") {
+		return
+	}
+	if v.dialog != nil && v.dialog.open && v.dialog.row == row && v.dialog.kind == kind {
+		return
+	}
+	s.closeTaskServiceDialog(v, v.dialog)
+	s.closeGenbuReadDialogs()
+	dialog := &taskServiceDialog{open: true, kind: kind, row: row}
+	v.dialog = dialog
+	switch kind {
+	case taskServicePodsDetail:
+		if v.catalog != nil {
+			s.requestTaskServicePods(v, row)
+		}
+	case taskServiceConfigDetail:
+		s.requestTaskServiceConfig(v, dialog)
+	case taskServiceConfigEditDetail:
+		s.requestTaskServiceConfigFiles(v, dialog)
+	}
+}
+
+func (s *app) closeTaskServiceDialog(v *taskServicesView, dialog *taskServiceDialog) {
+	if v == nil || dialog == nil || v.dialog != dialog {
+		return
+	}
+	v.dialog = nil
+	dialog.open = false
+	switch dialog.kind {
+	case taskServicePodsDetail:
+		if v.catalog != nil {
+			s.cancelTaskServiceJob(v, "pods:"+dialog.row.key())
+			dialog.row.loading = false
+		}
+	case taskServiceConfigDetail:
+		s.cancelTaskServiceJob(v, "config:"+dialog.row.key())
+		dialog.config = taskServiceConfigView{}
+	case taskServiceConfigEditDetail:
+		s.resetTaskServiceConfigEdit(v, dialog)
 	}
 }
 
 func (s *app) stopTaskServices() {
 	u := &s.taskServicesUnit
 	s.leaveTaskServices()
+	s.leaveCatalogRuntime()
+	s.closeGenbuReadDialogs()
 	u.stopped = true
 	for key, request := range u.jobs {
 		request.cancel()
@@ -260,18 +347,24 @@ func (s *app) closeTaskServices(ctx context.Context) error {
 }
 
 func (s *app) taskServiceAction(v *taskServicesView, row *taskServiceRow, kind string) application.Action {
-	id := v.identity
-	namespace := ""
-	if kind == "task.services.config" {
-		namespace = row.namespace
+	if v.catalog != nil {
+		return application.Action{Kind: "service.runtime." + strings.TrimPrefix(kind, "task.services."), ServiceID: row.serviceID, Payload: map[string]any{
+			"environment":           row.environment,
+			"serviceRuntimeContext": application.ServiceRuntimeContext{Home: v.catalog.home, GenbuServiceName: row.genbuName, QueryIdentity: v.queryIdentity},
+		}}
 	}
+	id := v.identity
 	return application.Action{Kind: kind, TaskID: id.id, ServiceID: row.serviceID, Payload: map[string]any{
-		"environment": row.environment, "namespace": namespace,
-		"taskServicesContext": application.TaskServicesContext{TaskFilesContext: application.TaskFilesContext{Home: id.home, TaskPath: id.taskPath, TaskCreatedAt: id.createdAt, TaskRoot: id.taskRoot, Archived: id.archived}, GroupID: v.groupID, GenbuServiceName: row.genbuName, QueryIdentity: v.queryIdentity},
+		"environment":         row.environment,
+		"taskServicesContext": application.TaskServicesContext{TaskFilesContext: application.TaskFilesContext{Home: id.home, TaskPath: id.taskPath, TaskCreatedAt: id.createdAt, TaskRoot: id.taskRoot, Archived: id.archived}, GenbuServiceName: row.genbuName, QueryIdentity: v.queryIdentity},
 	}}
 }
 
 func (s *app) runTaskServiceJob(v *taskServicesView, key string, action application.Action, publish func(application.ActionResult, error)) {
+	s.runTaskServiceJobWithDrop(v, key, action, publish, nil)
+}
+
+func (s *app) runTaskServiceJobWithDrop(v *taskServicesView, key string, action application.Action, publish func(application.ActionResult, error), drop func(application.ActionResult)) {
 	environment, _ := action.Payload["environment"].(string)
 	if !s.taskServicesCurrent(v) || environment != v.environment {
 		return
@@ -296,21 +389,30 @@ func (s *app) runTaskServiceJob(v *taskServicesView, key string, action applicat
 		defer u.wg.Done()
 		defer cancel()
 		result, err := backend.Dispatch(ctx, action)
+		var complete sync.Once
+		discard := func() {
+			if drop != nil {
+				complete.Do(func() { drop(result) })
+			}
+		}
 		if ctx.Err() != nil || win.IsDestroyed() {
+			discard()
 			return
 		}
 		done := make(chan struct{})
 		win.Update(func() {
 			defer close(done)
 			if ctx.Err() != nil || u.jobs[key] != request || !s.taskServicesCurrent(v) || v.epoch != request.epoch || v.environment != request.environment {
+				discard()
 				return
 			}
 			delete(u.jobs, key)
-			publish(result, err)
+			complete.Do(func() { publish(result, err) })
 		})
 		select {
 		case <-done:
 		case <-ctx.Done():
+			discard()
 		}
 	}()
 }
@@ -345,73 +447,73 @@ func (s *app) requestTaskServicePods(v *taskServicesView, row *taskServiceRow) {
 	})
 }
 
-func (s *app) requestTaskServiceConfig(v *taskServicesView, row *taskServiceRow) {
-	if !s.taskServicesCurrent(v) || row.environment != v.environment {
+func (s *app) requestTaskServiceConfig(v *taskServicesView, dialog *taskServiceDialog) {
+	if !s.taskServiceDialogCurrent(v, dialog) || dialog.kind != taskServiceConfigDetail {
 		return
 	}
-	row.namespace = strings.TrimSpace(row.namespace)
+	row, config := dialog.row, &dialog.config
 	if row.genbuName == "" {
-		row.configError = "请先配置 Genbu 服务名"
+		config.error = "请先配置 Genbu 服务名"
 		return
 	}
-	ns := taskServiceNamespaces(row.pods)
-	if row.namespace == "" && len(ns) == 1 {
-		row.namespace = ns[0]
-	}
-	if row.namespace == "" && len(ns) > 1 {
-		row.configError = "请选择或输入 namespace 后读取配置"
-		return
-	}
-	row.configLoading = true
-	row.configError = ""
-	requested := row.namespace
+	config.loading = true
+	config.error = ""
+	requested := config.namespace
 	action := s.taskServiceAction(v, row, "task.services.config")
+	if requested != "" {
+		action.Payload["namespace"] = requested
+	}
 	s.runTaskServiceJob(v, "config:"+row.key(), action, func(result application.ActionResult, err error) {
-		row.configLoading = false
-		if row.namespace != requested {
-			return
-		}
-		if err == nil {
-			data, e := decodeTaskFilesResult[application.TaskServiceConfigResult](result)
-			err = e
-			if err == nil && (data.ServiceID != row.serviceID || data.Environment != row.environment || data.GenbuServiceName != row.genbuName || data.Namespace != requested) {
-				err = fmt.Errorf("配置返回的服务、环境或 namespace 不匹配")
-			}
-			if err == nil {
-				row.configText = data.Text
-				row.configLoaded = true
-				row.configFetchedAt = data.FetchedAt
-				row.configView = nativeCodePreviewState{}
-				return
-			}
-		}
-		row.configError = err.Error()
+		s.finishTaskServiceConfig(v, dialog, requested, result, err)
 	})
 }
 
-func (s *app) changeTaskServiceNamespace(v *taskServicesView, row *taskServiceRow) {
-	if old := s.taskServicesUnit.jobs["config:"+row.key()]; old != nil {
-		old.cancel()
-		delete(s.taskServicesUnit.jobs, "config:"+row.key())
+func (s *app) finishTaskServiceConfig(v *taskServicesView, dialog *taskServiceDialog, requested string, result application.ActionResult, err error) {
+	if !s.taskServiceDialogCurrent(v, dialog) || dialog.config.namespace != requested {
+		return
 	}
-	row.configText = ""
-	row.configLoaded = false
-	row.configLoading = false
-	row.configError = ""
-	row.configView = nativeCodePreviewState{}
-}
-
-func taskServiceNamespaces(pods []production.RuntimePod) []string {
-	seen := map[string]bool{}
-	values := []string{}
-	for _, pod := range pods {
-		if pod.Namespace != "" && !seen[pod.Namespace] {
-			seen[pod.Namespace] = true
-			values = append(values, pod.Namespace)
+	row, config := dialog.row, &dialog.config
+	config.loading = false
+	config.error = ""
+	var ambiguity *production.ServiceConfigNamespaceError
+	if requested == "" && errors.As(err, &ambiguity) {
+		config.text, config.loaded, config.preview = "", false, nativeCodePreviewState{}
+		config.namespaceOptions = slices.Clone(ambiguity.Candidates)
+		return
+	}
+	if err == nil {
+		data, decodeErr := decodeTaskFilesResult[application.TaskServiceConfigResult](result)
+		err = decodeErr
+		if err == nil && (data.ServiceID != row.serviceID || data.Environment != row.environment || data.GenbuServiceName != row.genbuName || data.Namespace != requested) {
+			err = fmt.Errorf("配置返回的服务、环境或 namespace 不匹配")
+		}
+		if err == nil {
+			config.text = data.Text
+			config.loaded = true
+			return
 		}
 	}
-	sort.Strings(values)
-	return values
+	config.error = err.Error()
+}
+
+func (s *app) selectTaskServiceConfigNamespace(v *taskServicesView, dialog *taskServiceDialog, namespace string) {
+	if !s.taskServiceDialogCurrent(v, dialog) {
+		return
+	}
+	config := &dialog.config
+	if config.namespace == namespace || !slices.Contains(config.namespaceOptions, namespace) {
+		return
+	}
+	config.namespace = namespace
+	config.text, config.loaded, config.preview = "", false, nativeCodePreviewState{}
+	s.requestTaskServiceConfig(v, dialog)
+}
+
+func (s *app) cancelTaskServiceJob(v *taskServicesView, key string) {
+	if job := s.taskServicesUnit.jobs[key]; job != nil && job.view == v {
+		job.cancel()
+		delete(s.taskServicesUnit.jobs, key)
+	}
 }
 
 type taskServiceVersionCount struct {

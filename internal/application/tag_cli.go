@@ -13,7 +13,7 @@ import (
 
 // NewTagCLI uses the desktop's stores and services without running startup
 // recovery or creating a desktop session.
-func NewTagCLI(home string) (*App, error) { return newApp(home) }
+func NewTagCLI(home string) (*App, error) { return newProfileApp(home) }
 
 type CLITagTarget struct {
 	SelectionKey string              `json:"selectionKey"`
@@ -74,7 +74,7 @@ func (a *App) cliTagConfig(ctx context.Context) (domain.AppConfig, error) {
 	}
 	config, err := a.Config.LoadForPreview(ctx)
 	if err == nil && strings.TrimSpace(value(config.TaskRoot)) == "" {
-		err = errors.New("请先在 Silverwing 中配置任务根目录，或用 --home 指定已有数据目录")
+		err = errors.New("请先在 Silverwing 中配置任务目录，或用 --conf-dir 指定已配置的主数据目录")
 	}
 	return config, err
 }
@@ -101,8 +101,9 @@ func (a *App) cliTagTask(ctx context.Context, taskID string) (*delivery.TagTask,
 	return task, scope, nil
 }
 
-func cliTagTargets(task *delivery.TagTask) []CLITagTarget {
+func (a *App) cliTagTargets(task *delivery.TagTask) []CLITagTarget {
 	manifest, config := task.Manifest(), task.Config()
+	genbuReady := a.platformReadyFor(config, "genbu")
 	out := make([]CLITagTarget, 0, len(manifest.Services))
 	for _, w := range manifest.Services {
 		row := CLITagTarget{SelectionKey: w.SelectionKey(), ServiceID: w.GroupServiceID, Service: w.ServiceName,
@@ -113,7 +114,7 @@ func cliTagTargets(task *delivery.TagTask) []CLITagTarget {
 		} else {
 			row.Error = err.Error()
 		}
-		if service, err := config.GroupService(manifest.GroupID, w.GroupServiceID); err == nil && service.GenbuProbeEnabled {
+		if service, err := config.Service(w.GroupServiceID); err == nil && genbuReady && service.GenbuProbeEnabled {
 			row.GenbuService = service.GenbuServiceName
 		}
 		out = append(out, row)
@@ -126,7 +127,7 @@ func (a *App) CLITagList(ctx context.Context, taskID string) ([]CLITagTarget, er
 	if err != nil {
 		return nil, err
 	}
-	return cliTagTargets(task), nil
+	return a.cliTagTargets(task), nil
 }
 
 func selectCLITagTargets(rows []CLITagTarget, selectors []string, all bool) ([]CLITagTarget, error) {
@@ -184,7 +185,7 @@ func (a *App) CLITagPreflight(ctx context.Context, taskID, planID string, select
 	if err != nil {
 		return CLITagPreflightResult{}, err
 	}
-	rows, err := selectCLITagTargets(cliTagTargets(task), selectors, all)
+	rows, err := selectCLITagTargets(a.cliTagTargets(task), selectors, all)
 	if err != nil {
 		return CLITagPreflightResult{}, err
 	}
@@ -210,7 +211,7 @@ func (a *App) CLITagBuild(ctx context.Context, taskID, planID string, selectors 
 	if err != nil {
 		return CLITagJobResult{}, err
 	}
-	rows, err := selectCLITagTargets(cliTagTargets(task), selectors, all)
+	rows, err := selectCLITagTargets(a.cliTagTargets(task), selectors, all)
 	if err != nil {
 		return CLITagJobResult{}, err
 	}
@@ -335,6 +336,12 @@ func (a *App) findCLITagHistory(ctx context.Context, query CLITagHistoryQuery) (
 }
 
 func (a *App) CLITagStatus(ctx context.Context, query CLITagHistoryQuery) ([]delivery.TagObservation, error) {
+	withNamespace := query.UATNamespace != ""
+	if withNamespace {
+		if err := a.RequireOptionalCLI(ctx, "genbu"); err != nil {
+			return nil, err
+		}
+	}
 	folder, records, err := a.findCLITagHistory(ctx, query)
 	if err != nil {
 		return nil, err
@@ -345,14 +352,29 @@ func (a *App) CLITagStatus(ctx context.Context, query CLITagHistoryQuery) ([]del
 	}
 	out := make([]delivery.TagObservation, 0, len(records))
 	var queryErr error
+	probeGenbu := withNamespace || a.platformReadyFor(task.Config(), "genbu")
+	if probeGenbu && !withNamespace {
+		queryErr = a.RequireOptionalCLI(ctx, "genbu")
+		probeGenbu = queryErr == nil
+	}
+	observe := task.ObserveGit
+	if probeGenbu {
+		observe = task.Observe
+	}
 	for _, row := range records {
-		observation, err := task.Observe(ctx, row.Operation.OperationID)
+		observation, err := observe(ctx, row.Operation.OperationID)
+		if err != nil && probeGenbu && ctx.Err() == nil {
+			queryErr = errors.Join(queryErr, err)
+			observation, err = task.ObserveGit(ctx, row.Operation.OperationID)
+		}
 		if err != nil {
 			queryErr = errors.Join(queryErr, err)
-			observation = delivery.TagObservation{TagOperationReport: row, Git: delivery.TagPushStatus{State: "UNKNOWN", Error: err.Error()}}
+			observation = delivery.TagObservation{TagOperationReport: row, Git: delivery.TagPushStatus{State: "UNKNOWN", Error: err.Error()}, GenbuSkipped: !probeGenbu}
 		}
 		out = append(out, observation)
 	}
-	task.ObserveUATRuntime(ctx, out, query.UATNamespace)
+	if probeGenbu {
+		task.ObserveUATRuntime(ctx, out, query.UATNamespace)
+	}
 	return out, errors.Join(queryErr, ctx.Err())
 }

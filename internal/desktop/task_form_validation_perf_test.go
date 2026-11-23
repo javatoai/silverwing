@@ -10,8 +10,8 @@ import (
 
 func taskFormValidationFixture(n int) *app {
 	config := domain.DefaultAppConfig()
-	config.Groups = []domain.GroupConfig{{ID: "g", Services: []domain.GroupServiceConfig{{ID: "s", Enabled: true}}}}
-	form := &taskCreationState{token: "token", config: config, configRevision: 1, groupID: "g", phase: "editing", services: map[string]bool{"s": true}, modules: map[string]map[string]bool{"s": {}}, moduleOrder: map[string][]string{"s": {}}, moduleData: map[string]map[string]*taskCreationModuleDraft{"s": {}}, moduleExpanded: map[string]map[string]bool{"s": {}}}
+	config.Services = []domain.ServiceConfig{{ID: "s", Enabled: true}}
+	form := &taskCreationState{token: "token", config: config, configRevision: 1, phase: "editing", services: map[string]bool{"s": true}, modules: map[string]map[string]bool{"s": {}}, moduleOrder: map[string][]string{"s": {}}, moduleData: map[string]map[string]*taskCreationModuleDraft{"s": {}}}
 	form.draft.TaskName, form.draft.Branch = "fixture-task", "feature/fixture"
 	form.lastName, form.lastBranch = form.draft.TaskName, form.draft.Branch
 	for i := 0; i < n; i++ {
@@ -19,10 +19,10 @@ func taskFormValidationFixture(n int) *app {
 		form.moduleOrder["s"] = append(form.moduleOrder["s"], id)
 		form.modules["s"][id] = true
 		form.moduleData["s"][id] = &taskCreationModuleDraft{taskModuleDraftValues: taskModuleDraftValues{ID: id, Name: id, Strategy: domain.WorkspaceStandardWorktree, BaseRef: "origin/main", BaseRemote: "origin", TargetBranch: "feature/fixture"}}
-		form.config.Groups[0].Services[0].Modules = append(form.config.Groups[0].Services[0].Modules, domain.ServiceModuleConfig{ID: id, Name: id})
+		form.config.Services[0].Modules = append(form.config.Services[0].Modules, domain.ServiceModuleConfig{ID: id, Name: id})
 	}
 	s := &app{taskUnit: taskController{state: taskState{taskCreation: form}}, dialogOpen: true, form: actionForm{mode: "task-create"}}
-	s.snapshot.ConfigJSON = `{"groups":[]}`
+	s.snapshot.ConfigJSON = `{"services":[]}`
 	payload, _ := s.taskCreationPayload()
 	form.preview = s.snapshotTaskCreationPreview(payload)
 	return s
@@ -33,7 +33,8 @@ func TestTaskFormRenderSynchronizationsDeferCompleteValidation(t *testing.T) {
 	form := s.taskUnit.state.taskCreation
 	preview := form.preview
 	form.renderingInputs = true
-	form.notes = "changed notes"
+	module := form.moduleData["s"][form.moduleOrder["s"][0]]
+	module.BaseRef = "origin/changed"
 	for i := 0; i < 1000; i++ {
 		s.syncTaskCreationDraft()
 	}
@@ -43,11 +44,11 @@ func TestTaskFormRenderSynchronizationsDeferCompleteValidation(t *testing.T) {
 	s.checkTaskCreationPreviewSignature()
 	form.renderingInputs = false
 	if form.preview != nil || form.phase != "editing" {
-		t.Fatal("single post-input validation missed changed notes")
+		t.Fatal("single post-input validation missed changed module base ref")
 	}
 	payload, _ := s.taskCreationPayload()
 	form.preview = s.snapshotTaskCreationPreview(payload)
-	form.moduleData["s"][form.moduleOrder["s"][0]].TargetBranch = "feature/changed"
+	module.TargetBranch = "feature/changed"
 	s.syncTaskCreationDraft()
 	if form.preview != nil {
 		t.Fatal("non-render synchronization lost its complete validation contract")
@@ -64,14 +65,13 @@ func TestTaskFormPreflightFreshBoundaryRejectsEveryScopeMutation(t *testing.T) {
 			order := s.taskUnit.state.taskCreation.moduleOrder["s"]
 			order[0], order[1] = order[1], order[0]
 		},
-		"notes": func(s *app) { s.taskUnit.state.taskCreation.notes = "changed" },
 		"requirement": func(s *app) {
 			s.taskUnit.state.taskCreation.draft.RequirementLink = "https://project.feishu.cn/p/story/detail/2"
 		},
 		"same-config-slice": func(s *app) {
-			s.taskUnit.state.taskCreation.config.Groups[0].Services[0].DisplayName = "Changed config service"
+			s.taskUnit.state.taskCreation.config.Services[0].DisplayName = "Changed config service"
 		},
-		"snapshot-config": func(s *app) { s.snapshot.ConfigJSON = `{"groups":[],"changed":true}` },
+		"snapshot-config": func(s *app) { s.snapshot.ConfigJSON = `{"services":[],"changed":true}` },
 		"home":            func(s *app) { s.snapshot.Home = "changed-home" },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -105,7 +105,7 @@ func TestTaskFormSubmissionRechecksMutableConfigAfterPreview(t *testing.T) {
 	s := taskFormValidationFixture(2)
 	form := s.taskUnit.state.taskCreation
 	form.phase = "confirm"
-	form.config.Groups[0].Services[0].Modules[0].Name = "same-slice config edit"
+	form.config.Services[0].Modules[0].Name = "same-slice config edit"
 	s.submitTaskCreation(nil)
 	if form.preview != nil || form.phase != "editing" {
 		t.Fatal("submit reused observer cache instead of checking live config")

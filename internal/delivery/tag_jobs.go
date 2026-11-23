@@ -34,9 +34,6 @@ func (s *Service) OpenTagTask(folder string) (*TagTask, error) {
 	if !task.config.TagEnabled {
 		return nil, errors.New("全局测试Tag已关闭")
 	}
-	if _, err := task.config.Group(task.manifest.GroupID); err != nil {
-		return nil, err
-	}
 	return &TagTask{service: s, task: task}, nil
 }
 

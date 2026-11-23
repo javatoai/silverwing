@@ -6,17 +6,32 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"silverwing-go/internal/domain"
-	"silverwing-go/internal/storage"
 	"slices"
 	"testing"
+	"time"
+
+	"silverwing-go/internal/domain"
+	"silverwing-go/internal/storage"
 )
 
-// The already-built test executable acts only as a private fake Codex child.
-// No shell, real Codex executable, account, network or model is contacted.
+var fixtureProxyKeys = []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy"}
+
+// The already-built test executable acts as a private fake CLI child.
 func init() {
 	if os.Getenv("SILVERWING_NAMING_FIXTURE_CHILD") != "1" {
 		return
+	}
+	if slices.Contains(os.Args, "--fixture-meegle-proxy-env") {
+		env := map[string]string{}
+		for _, key := range fixtureProxyKeys {
+			if value, ok := os.LookupEnv(key); ok {
+				env[key] = value
+			}
+		}
+		if json.NewEncoder(os.Stdout).Encode(env) != nil {
+			os.Exit(84)
+		}
+		os.Exit(0)
 	}
 	output := ""
 	for i, arg := range os.Args {
@@ -40,7 +55,7 @@ func init() {
 	}
 	prompt, _ := io.ReadAll(os.Stdin)
 	env := map[string]string{}
-	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy"} {
+	for _, key := range fixtureProxyKeys {
 		env[key] = os.Getenv(key)
 	}
 	data, _ := json.Marshal(struct {
@@ -63,7 +78,11 @@ func init() {
 		io.WriteString(os.Stderr, "reasoning unsupported")
 		os.Exit(75)
 	}
-	if os.WriteFile(output, []byte(`{"folderName":"命名示例","branchSuffix":"naming_fixture"}`), 0600) != nil {
+	result := os.Getenv("SILVERWING_NAMING_FIXTURE_RESULT")
+	if result == "" {
+		result = `{"folderName":"命名示例","branchSuffix":"naming_fixture"}`
+	}
+	if os.WriteFile(output, []byte(result), 0600) != nil {
 		os.Exit(82)
 	}
 	os.Exit(0)
@@ -125,12 +144,60 @@ func TestNamingSpawnUsesDefaultOrExplicitModelAndCodexProxy(t *testing.T) {
 			if got.Env["NO_PROXY"] != "" || got.Env["no_proxy"] != "" {
 				t.Fatal("unexpected proxy exceptions")
 			}
-			for _, target := range []domain.CommandProxyTarget{domain.ProxyTargetGit, domain.ProxyTargetWorkspaceCommand, domain.ProxyTargetMeegle, domain.ProxyTargetGenbu} {
-				env, remove := service.childEnvironment(c, target)
-				if len(env) != 0 || !slices.Contains(remove, "HTTP_PROXY") {
-					t.Fatalf("unselected target %s inherited proxy", target)
-				}
-			}
 		})
+	}
+}
+
+func TestMeegleSpawnIgnoresRetiredProxyTarget(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SILVERWING_NAMING_FIXTURE_CHILD", "1")
+	for _, key := range fixtureProxyKeys {
+		t.Setenv(key, "inherited-proxy-value")
+	}
+	proxy, noProxy, username, password := "http://proxy.invalid:8080", "fixture.invalid", "fixture-user", "fixture-password"
+	config := domain.DefaultAppConfig()
+	config.MeegleExecutablePath = &exe
+	config.CommandProxyURL, config.CommandProxyNoProxy = &proxy, &noProxy
+	config.CommandProxyUsername, config.CommandProxyPassword = &username, &password
+	config.CommandProxyTargets = []domain.CommandProxyTarget{"MEEGLE", domain.ProxyTargetCodex, domain.ProxyTargetAppUpdates}
+	service := NewService(storage.NewPaths(t.TempDir()), nil, nil)
+	result, err := service.runMeegle(context.Background(), config, []string{"--fixture-meegle-proxy-env"}, 10*time.Second, "读取测试环境")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]string
+	if err := json.Unmarshal([]byte(result.Stdout), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("Meegle child received proxy variables: %v", got)
+	}
+}
+
+func TestOnlyCodexProxyAffectsRequirementNamingScope(t *testing.T) {
+	service := NewService(storage.NewPaths(t.TempDir()), nil, nil)
+	cli := "fixture-meegle"
+	config := domain.DefaultAppConfig()
+	config.MeegleExecutablePath = &cli
+	config.CommandProxyTargets = []domain.CommandProxyTarget{domain.ProxyTargetCodex}
+
+	changed := config
+	changed.CommandProxyTargets = []domain.CommandProxyTarget{domain.ProxyTargetCodex, domain.ProxyTargetAppUpdates, "MEEGLE"}
+	if service.requirementNamingContext(config, "fixture") != service.requirementNamingContext(changed, "fixture") {
+		t.Fatal("unrelated targets changed the Codex naming scope")
+	}
+
+	proxy := "http://proxy.invalid:8080"
+	changed.CommandProxyURL = &proxy
+	if service.requirementNamingContext(config, "fixture") == service.requirementNamingContext(changed, "fixture") {
+		t.Fatal("new Codex proxy did not change the naming scope")
+	}
+	if service.requirementIdentityContext(config) != service.requirementIdentityContext(changed) ||
+		requirementReadConfig(config) != requirementReadConfig(changed) ||
+		noticeConfigIdentity(config) != noticeConfigIdentity(changed) {
+		t.Fatal("SW proxy changed a Meegle or Lark scope")
 	}
 }

@@ -11,7 +11,7 @@ import (
 func TestUnlinkPreservesHTMLAcrossInlineDelimiterCombinations(t *testing.T) {
 	const destination = "](https://example.com)"
 	boundaries := []string{"", "*", "**", "***", "_", "__", "~~", "word ", "\\\\", "(", "[", "[[", "](/other)"}
-	labels := []string{"x", "x*", "*x*", "**x**", "x_", "_x_", "~~x~~", "**x***", "x\\*", "x\\\\*", "x&#42;", "`x*`", "**A [B]**"}
+	labels := []string{"x", "x*", "*x*", "**x**", "x_", "_x_", "~~x~~", "**x***", "x\\*", "x\\\\*", "x&#42;", "`x*`", "**A [B]**", "@octocat", "#123"}
 	checked := 0
 	for _, prefix := range boundaries {
 		for _, label := range labels {

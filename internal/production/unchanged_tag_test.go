@@ -40,7 +40,7 @@ func TestProductionTagsAllowUnmergedAndUnchangedRelease(t *testing.T) {
 		if _, err := f.s.Publish(context.Background(), b.ID, token); err == nil {
 			t.Fatal("consumed confirmation published another Tag")
 		}
-		observed, _, err := f.s.InspectBatch(context.Background(), b.ID, "")
+		observed, _, err := f.s.InspectBatch(context.Background(), b.ID)
 		if err != nil || observed.TagPlan != nil || observed.Intent != nil || len(observed.Tags) != n+1 {
 			t.Fatalf("refresh prepared or published the next Tag: %v", err)
 		}

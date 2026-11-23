@@ -58,7 +58,7 @@ func TestAppUpdateCheckAndDownloadClientsReloadSharedProxySettings(t *testing.T)
 	if downloadRequests.Load() != 1 {
 		t.Fatal("download client bypassed settings proxy")
 	}
-	config.CommandProxyTargets = []domain.CommandProxyTarget{domain.ProxyTargetGit}
+	config.CommandProxyTargets = []domain.CommandProxyTarget{domain.ProxyTargetCodex}
 	if err := s.config.Save(config); err != nil {
 		t.Fatal(err)
 	}

@@ -9,7 +9,6 @@ import (
 
 	"silverwing-go/internal/documents"
 	"silverwing-go/internal/domain"
-	"silverwing-go/internal/storage"
 )
 
 const materialsCatalogStart = "<!-- silverwing:materials:start -->"
@@ -31,35 +30,25 @@ func materialsCatalog(manifest domain.TaskManifest, planned bool) (string, error
 }
 
 func replaceMaterialsCatalog(content, block string, allowAppend bool) (string, error) {
-	starts, ends := strings.Count(content, materialsCatalogStart), strings.Count(content, materialsCatalogEnd)
-	if starts == 0 && ends == 0 {
+	if err := validateTaskAgentsBlocks(content); err != nil {
+		return "", err
+	}
+	start, end := strings.Index(content, materialsCatalogStart), strings.Index(content, materialsCatalogEnd)
+	if start < 0 {
 		if !allowAppend {
 			return "", errors.New("自定义说明缺少安全的资料目录系统管理区，原文件已保留")
 		}
 		if block == "" {
 			return content, nil
 		}
-		return strings.TrimRight(content, "\r\n") + "\n\n" + block, nil
-	}
-	start, end := strings.Index(content, materialsCatalogStart), strings.Index(content, materialsCatalogEnd)
-	if starts != 1 || ends != 1 || end < start {
-		return "", errors.New("资料目录系统管理区标记不完整或重复，原文件已保留")
+		if strings.HasSuffix(content, "\n") {
+			return content + "\n" + block, nil
+		}
+		return content + "\n\n" + block, nil
 	}
 	end += len(materialsCatalogEnd)
 	// Preserve every byte outside the managed region, including user notes.
 	return content[:start] + strings.TrimSuffix(block, "\n") + content[end:], nil
-}
-
-func renderRootRouter(manifest domain.TaskManifest, paths storage.Paths) string {
-	base := renderBaseRouter(manifest, paths)
-	block, err := materialsCatalog(manifest, false)
-	if err != nil {
-		block, _ = materialsCatalog(manifest, true)
-	}
-	if block != "" {
-		return base + "\n" + block
-	}
-	return base
 }
 
 // Refresh only the generated catalog. Caller holds the task operation lock;
@@ -82,48 +71,36 @@ func (s *AgentDocumentService) RefreshMaterialsDirectories(taskPath string, mani
 	if err != nil || block == "" {
 		return err
 	}
-	var failures []error
-	for _, relative := range []string{AgentRouterFileName, filepath.Join(AgentWorkspaceDir, AgentDirectoryName, AgentContextFileName)} {
-		path := filepath.Join(taskPath, relative)
-		if check != nil {
-			if err := check(); err != nil {
-				return errors.Join(append(failures, err)...)
-			}
-		}
-		var refreshErr error
-		if local == nil {
-			validate := func() error { return materialsGitSafePath(taskPath, path, false) }
-			refreshErr = s.refreshMaterialsDirectoryFile(taskPath, path, manifest, block, check, validate)
-		} else {
-			refreshErr = local.WithDocument(relative, func(physical string, validate func() error) error {
-				guard := func() error {
-					if err := checkMaterialsCatalogScope(check); err != nil {
-						return err
-					}
-					return checkMaterialsCatalogScope(validate)
-				}
-				return s.refreshMaterialsDirectoryFile(taskPath, physical, manifest, block, guard, validate)
-			})
-		}
-		if err := refreshErr; err != nil {
-			failures = append(failures, fmt.Errorf("%s：%w", path, err))
-			var changed *materialsCatalogScopeError
-			if errors.As(err, &changed) {
-				return errors.Join(failures...)
-			}
-		}
+	if err := checkMaterialsCatalogScope(check); err != nil {
+		return err
 	}
-	return errors.Join(failures...)
+	path := filepath.Join(taskPath, AgentRouterFileName)
+	if local == nil {
+		validate := func() error { return materialsGitSafePath(taskPath, path, false) }
+		err = s.refreshMaterialsDirectoryFile(taskPath, path, manifest, config, block, check, validate)
+	} else {
+		err = local.WithDocument(AgentRouterFileName, func(physical string, validate func() error) error {
+			guard := func() error {
+				if err := checkMaterialsCatalogScope(check); err != nil {
+					return err
+				}
+				return checkMaterialsCatalogScope(validate)
+			}
+			return s.refreshMaterialsDirectoryFile(taskPath, physical, manifest, config, block, guard, validate)
+		})
+	}
+	if err != nil {
+		return fmt.Errorf("%s：%w", path, err)
+	}
+	return nil
 }
 
-// Per-document failures do not prevent a different, safely managed document
-// from being refreshed. Scope failures still stop the whole task immediately.
-func (s *AgentDocumentService) refreshMaterialsDirectoryFile(taskPath, path string, manifest domain.TaskManifest, block string, check, validate func() error) error {
+func (s *AgentDocumentService) refreshMaterialsDirectoryFile(taskPath, path string, manifest domain.TaskManifest, config domain.AppConfig, block string, check, validate func() error) error {
 	if err := validate(); err != nil {
 		return err
 	}
 	data, err := os.ReadFile(path)
-	missing := os.IsNotExist(err) && filepath.Base(path) == AgentRouterFileName
+	missing := os.IsNotExist(err)
 	if missing {
 		// A missing generated file may be restored only in an existing,
 		// identified task. Guarded writes never recreate its parent directory.
@@ -140,17 +117,14 @@ func (s *AgentDocumentService) refreshMaterialsDirectoryFile(taskPath, path stri
 		return fmt.Errorf("读取资料目录说明：%w", err)
 	}
 	content := string(data)
-	base := renderBaseRouter(manifest, s.Paths)
+	next := ""
 	if missing {
-		content = base
-	}
-	allow := content == base || content == strings.Replace(base, taskScopeRule, legacyTaskScopeRule, 1)
-	if filepath.Base(path) == AgentContextFileName {
-		allow = strings.HasPrefix(content, "# 任务上下文\n\n> 本文件由系统生成")
-	}
-	next, err := replaceMaterialsCatalog(content, block, allow)
-	if err != nil || next == content {
-		return err
+		next = s.renderTaskAgents(manifest, config, block)
+	} else {
+		next, err = replaceMaterialsCatalog(content, block, strings.Contains(content, profileRouterStart))
+		if err != nil || next == content {
+			return err
+		}
 	}
 	if err := checkMaterialsCatalogScope(check); err != nil {
 		return err

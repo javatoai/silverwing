@@ -22,13 +22,15 @@ type Runner interface {
 type Client struct {
 	Runner     Runner
 	Config     domain.AppConfig
+	Executable string
+	BeforeRun  func(context.Context) error
 	VerifyUser bool
 	AsUser     bool
 }
 
 func (c Client) Run(ctx context.Context, args []string, timeout time.Duration) (process.Result, error) {
-	command := ""
-	if c.Config.LarkExecutablePath != nil {
+	command := c.Executable
+	if command == "" && c.Config.LarkExecutablePath != nil {
 		command = strings.TrimSpace(*c.Config.LarkExecutablePath)
 	}
 	// nil proxy policy deliberately preserves only the CLI's inherited environment.
@@ -47,6 +49,11 @@ func (c Client) Run(ctx context.Context, args []string, timeout time.Duration) (
 	}
 	spec.Env["LARKSUITE_CLI_NO_UPDATE_NOTIFIER"] = "1"
 	spec.Env["LARKSUITE_CLI_NO_SKILLS_NOTIFIER"] = "1"
+	if c.BeforeRun != nil {
+		if e := c.BeforeRun(ctx); e != nil {
+			return process.Result{}, preparationError{e}
+		}
+	}
 	return c.Runner.Run(ctx, spec)
 }
 func (c Client) Identity(ctx context.Context) (releasenotice.Identity, error) {

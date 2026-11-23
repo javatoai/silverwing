@@ -14,6 +14,33 @@ type taskRootChangeRequest struct {
 	home, config, target, stage string
 }
 
+func (s *app) snapshotTaskRoot() string {
+	if config, err := s.readSnapshotAppConfig(); err == nil && config.TaskRoot != nil {
+		return *config.TaskRoot
+	}
+	return ""
+}
+
+func (s *app) profileNeedsTaskRoot() bool {
+	return s.snapshot.ProfileID != "" && s.snapshotTaskRoot() == ""
+}
+
+func (s *app) pickProfileTaskRoot() {
+	if s.snapshot.ProfileID == "" || s.loading || s.busy || s.backend == nil {
+		return
+	}
+	home, profile, root := s.snapshot.Home, s.snapshot.ProfileID, s.snapshotTaskRoot()
+	s.pickNativePath("选择任务目录", root, true, nil, func(path string) {
+		if s.snapshot.Home != home || s.snapshot.ProfileID != profile || s.snapshotTaskRoot() != root {
+			s.lastError = "任务目录设置已变化，请重新选择。"
+			return
+		}
+		if root == "" || workspaceHealthPathKey(path) != workspaceHealthPathKey(root) {
+			s.act("config.task-root.save", "", "", "", path, "", map[string]any{"confirmed": true, "expectedTaskRoot": root})
+		}
+	})
+}
+
 func (s *app) taskRootChangeCurrent(request *taskRootChangeRequest) bool {
 	return request != nil && s.settingsUnit.state.taskRootChange == request && request.home == s.snapshot.Home &&
 		request.config == s.settingsUnit.state.configJSON && workspaceHealthPathKey(request.target) == workspaceHealthPathKey(*s.input("setting:taskRootTarget", ""))

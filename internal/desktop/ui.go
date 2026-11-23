@@ -5,6 +5,8 @@ import (
 )
 
 func (s *app) view(c *ui.Context) {
+	s.resolveInitialGenbuRoute()
+	s.observeProjectInstructions()
 	s.reconcileTaskContentTabs()
 	s.drainTaskTerminalEvents()
 	if !s.taskTerminalPageActive() {
@@ -26,6 +28,11 @@ func (s *app) view(c *ui.Context) {
 	s.beginOverflowMenuFrame()
 	defer s.endOverflowMenuFrame()
 	p := s.applyThemeFrame(c)
+	s.observeProjectMaterials()
+	if view := s.projectInstructions; view != nil && view.browser != nil {
+		view.browser.beginOverflowMenuFrame()
+		defer view.browser.endOverflowMenuFrame()
+	}
 	s.reconcileSidebarNavigation()
 	s.reconcileArchiveBatchSelection()
 	s.observePageLocalRead()
@@ -48,6 +55,10 @@ func (s *app) view(c *ui.Context) {
 	ui.Row(c).Fill().AlignItems(ui.Stretch).Background(p.bg).Children(func() {
 		s.sidebar(c, p, w < 1180 || s.navigationCollapsed)
 		ui.Column(c).Grow(1).MinWidth(0).Children(func() {
+			if s.initialGenbuRouteWaiting() && (s.page == "production" || (s.page == "tasks" || s.page == "archive") && s.tab == taskServicesTab) {
+				label(c, "正在读取 Genbu 连接设置…", 14, p.muted).Padding(24)
+				return
+			}
 			switch s.page {
 			case "production":
 				s.renderProductionPage(c, p)
@@ -82,12 +93,14 @@ func (s *app) view(c *ui.Context) {
 	s.renderWorkspaceMergeBatchDialog(c, p)
 	s.renderWorkspaceHistoryDialog(c, p)
 	s.renderTagBuildDialog(c, p)
+	s.renderDragonQADialog(c, p)
 	s.renderTagTargetDialog(c, p)
-	s.renderProductionBaselineDialog(c, p)
 	s.renderProductionDiffDialog(c, p)
 	s.renderProductionWorktreesDialog(c, p)
 	s.renderProductionHistoryDialog(c, p)
 	s.renderTaskBranchInfoDialog(c, p)
+	s.renderTaskServiceDialog(c, p)
+	s.renderGenbuReadDialogs(c, p)
 	if workspaceCommandDialogVisible(s.page, s.tab) {
 		s.renderWorkspaceCommandDialog(c, p)
 	}
@@ -109,6 +122,7 @@ func (s *app) view(c *ui.Context) {
 	s.observeRequirementDocumentPreparation()
 	s.observeMaterialsLiveRefresh()
 	s.renderConfirmationDialog(c, p)
+	s.renderProjectMaterialsLayers(c, p)
 	ui.ThemedMenus(c, s.popupMenuScope())
 	s.renderOperationNotifications(c)
 	s.renderSettingsAutosaveNotification(c)

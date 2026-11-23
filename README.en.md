@@ -109,7 +109,7 @@ Genbu and materials Git sync are optional. You can prepare repositories and use 
 | Codex / Cursor | Open task workspaces with the corresponding agent context | Install and configure the tools you use |
 | Meegle / Lark Project | Requirement lists, task creation, requirement details and comments | Connect the Meegle CLI and a project account |
 | Materials Git sync | Scheduled commits, pulls and pushes for task materials | Configure a Git repository and choose an existing remote branch |
-| Genbu | Build and UAT status for configured task Tags | Configure the team-specific Genbu integration |
+| Genbu / Dragon | View Tag build and UAT status or submit QA approvals | Save the shared account and test each connection under Settings → Tools & Connections → Platform Connections |
 
 Silverwing manages code workspaces and their context. Each project still owns its service processes, databases, containers, credentials and test environments.
 

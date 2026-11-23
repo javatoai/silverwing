@@ -13,9 +13,13 @@ import (
 var errMarkdownMaterialReadOnly = errors.New("Markdown 资料仅支持只读阅读，不能保存或修改草稿")
 
 func (a *App) documentDraftIdentity(action Action, root, path string) (documents.MarkdownDraftIdentity, error) {
-	_, taskPath, err := a.task(action)
-	if err != nil {
-		return documents.MarkdownDraftIdentity{}, err
+	taskPath := root
+	if !isProjectInstructionsDocumentAction(action) {
+		_, currentTaskPath, err := a.task(action)
+		if err != nil {
+			return documents.MarkdownDraftIdentity{}, err
+		}
+		taskPath = currentTaskPath
 	}
 	identity, err := documents.NewMarkdownDraftIdentity(action.TaskID, taskPath, root, path)
 	if err != nil {

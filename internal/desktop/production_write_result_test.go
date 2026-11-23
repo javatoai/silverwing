@@ -63,25 +63,25 @@ func TestProductionWritesUpdateVisibleStateWithoutFollowupReads(t *testing.T) {
 					t.Fatal("feature merge replaced unrelated observed state")
 				}
 			case "production.publish":
-				if v.Preview.Tags[0] != "2.3.44" || slices.Contains(v.Preview.Tags, "old-deleted-tag") {
-					t.Fatal("Tag receipt restored deleted history or lost newest display order")
+				if !slices.Contains(v.Preview.Tags, "2.3.44") || slices.Contains(v.Preview.Tags, "old-deleted-tag") {
+					t.Fatal("Tag receipt restored deleted history or omitted the pushed Tag")
 				}
 			}
 		})
 	}
 }
 
-func TestProductionTagPreparationPreservesKnownDisplayOrder(t *testing.T) {
+func TestProductionTagPreparationUsesCurrentRemoteTagNames(t *testing.T) {
 	s, v, b, backend, window := productionRequestFixture(t)
-	v.Preview.Tags = []string{"2.3.43", "1.0.0"}
+	v.Preview.Tags = []string{"2.3.43", "deleted-tag"}
 	s.productionRequestFor(v, application.Action{Kind: "production.prepare-tag", Payload: map[string]any{"batchId": b.ID}}, "")
 	productionTestCall(t, backend)
 	fresh := *v.Preview
-	fresh.Tags = []string{"1.0.0", "2.3.42", "2.3.43"}
+	fresh.Tags = []string{"new-tag", "2.3.43"}
 	backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &b, Preview: &fresh}}}
 	productionTestUpdate(t, window)
-	if !slices.Equal(v.Preview.Tags, []string{"2.3.43", "1.0.0", "2.3.42"}) || v.Busy || len(backend.calls) != 0 {
-		t.Fatal("lightweight observation changed the known Tag date order or started publishing")
+	if !slices.Equal(v.Preview.Tags, fresh.Tags) || v.Busy || len(backend.calls) != 0 {
+		t.Fatal("Tag preparation reused stale remote refs or started publishing")
 	}
 }
 

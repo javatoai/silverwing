@@ -117,13 +117,6 @@ func (s *app) switchTaskIndexCategory(archived bool) {
 	}
 }
 
-func (s *app) taskGroupName(t task) string {
-	if group, found := s.serviceCatalog().groups[t.groupID]; found {
-		return firstNonEmpty(group.Name, group.ID)
-	}
-	return firstNonEmpty(t.project, t.groupID)
-}
-
 func (s *app) taskMatchesSearch(t task, terms []string) bool {
 	if len(terms) == 0 {
 		return true

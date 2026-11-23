@@ -22,7 +22,7 @@ type tagBuildViewState struct {
 // later service-editor change only applies to subsequently created workspaces.
 func (s *app) tagWorkspaceCanBuild(t task, w application.Workspace) bool {
 	if t.id == "" || t.archived || !s.configBool("tagEnabled", false) || !w.Record.TagEnabled ||
-		w.ServiceID == "" || w.ModuleID == "" || t.groupID == "" || !s.hasGroup(t.groupID) {
+		w.ServiceID == "" || w.ModuleID == "" {
 		return false
 	}
 	return strings.EqualFold(w.State, "READY") || strings.EqualFold(w.State, "READY_WITH_WARNINGS")

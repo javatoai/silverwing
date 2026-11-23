@@ -17,6 +17,17 @@ func releaseNoticeDesktopFixture(t *testing.T) (*app, *noticeSendState, tagHisto
 	t.Helper()
 	s := taskServicesDesktopFixture(t)
 	s.tab = taskTagTab
+	cfg, err := s.readSnapshotAppConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	larkEnabled := true
+	cfg.OptionalCLIs.Lark = &larkEnabled
+	encoded, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.snapshot.ConfigJSON = string(encoded)
 	s.settingsUnit.state.configJSON = s.snapshot.ConfigJSON
 	task := s.taskUnit.currentTask()
 	tag := "1.beta-2"
@@ -24,7 +35,6 @@ func releaseNoticeDesktopFixture(t *testing.T) (*app, *noticeSendState, tagHisto
 	g := tagHistoryGroup{Item: domain.TagHistoryItem{GroupID: op.OperationID, Operations: []domain.TagOperation{op}}}
 	s.snapshot.TagHistory = []application.TagRecord{{ID: op.OperationID, TaskID: task.id, ServiceID: "s1", ServiceName: op.ServiceName, Tag: tag, State: string(op.State), GenbuStatus: op.GenbuStatus}}
 	s.ensureTaskTagHistoryView(task)
-	cfg, _ := s.readSnapshotAppConfig()
 	identity := releasenotice.Identity{AppID: "test-app", Name: "无需展示的姓名", OpenID: "ou_self", BotReady: true, UserVerified: true}
 	session := &releasenotice.Session{Title: "合成需求", Identity: identity, Rows: []releasenotice.Row{{Service: "A service", Version: tag}}}
 	session.Recipients = []releasenotice.Recipient{{Name: "测试人员", OpenID: "ou_self"}}
@@ -246,6 +256,8 @@ func TestLarkProfileChangeRejectsLateCLIStatus(t *testing.T) {
 		t.Fatal("fresh Lark status rejected")
 	}
 	cfg := domain.DefaultAppConfig()
+	larkEnabled := true
+	cfg.OptionalCLIs.Lark = &larkEnabled
 	notice := cfg.EffectiveLarkNotice()
 	notice.Profile = "another-profile"
 	cfg.LarkNotice = &notice

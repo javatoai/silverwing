@@ -17,12 +17,15 @@ func TestSidebarVisibilityCombinationsAndBottomGrouping(t *testing.T) {
 			for _, tools := range []bool{false, true} {
 				for _, compact := range []bool{false, true} {
 					config := domain.DefaultAppConfig()
+					genbuEnabled := true
+					config.OptionalCLIs.Genbu = &genbuEnabled
 					config.TagEnabled = tag
 					config.ToolVisibility = domain.ToolVisibilitySettings{JSON: tools}
 					config.SidebarVisibility = domain.SidebarVisibilitySettings{Requirements: mask&1 != 0, Tools: mask&2 != 0, Production: mask&4 != 0, Services: mask&8 != 0}
 					encoded, _ := json.Marshal(config)
 					s := newApp(nil, Options{Page: "requirements", CapturePath: "isolated-sidebar"})
 					s.loading, s.settingsUnit.state.configJSON = false, string(encoded)
+					seedPlatformConnectionsForDesktopTest(s, true, false)
 					want := []string{"tasks"}
 					if mask&1 != 0 {
 						want = append(want, "requirements")
@@ -78,8 +81,12 @@ func TestSidebarSettingsLayoutAndSaveFailure(t *testing.T) {
 			t.Run(fmt.Sprintf("%d-dark-%t", width, dark), func(t *testing.T) {
 				s := newApp(nil, Options{Page: "settings", CapturePath: "isolated-sidebar-settings"})
 				s.loading, s.dark = false, dark
-				encoded, _ := json.Marshal(domain.DefaultAppConfig())
+				config := domain.DefaultAppConfig()
+				genbuEnabled := true
+				config.OptionalCLIs.Genbu = &genbuEnabled
+				encoded, _ := json.Marshal(config)
 				s.settingsUnit.state.configJSON = string(encoded)
+				seedPlatformConnectionsForDesktopTest(s, true, false)
 				s.settingsUnit.state.settingsTab, s.settingsUnit.state.settingsPage = "外观与交互", "tool-visibility"
 				tester := ui.NewTester(func(c *ui.Context) {
 					ui.Column(c).Fill().Padding(24).Gap(16).Children(func() { s.settingsNavigation(c, setTheme(c, dark)) })
@@ -134,7 +141,6 @@ func TestSidebarSettingsLayoutAndSaveFailure(t *testing.T) {
 					t.Fatal("failed switch did not restore its applied value")
 				}
 				before := s.settingsUnit.state.configJSON
-				config := domain.DefaultAppConfig()
 				config.SidebarVisibility.Requirements = false
 				next, _ := json.Marshal(config)
 				s.syncSettingsConfigInputs(before, string(next))

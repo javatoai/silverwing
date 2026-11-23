@@ -19,16 +19,30 @@ func (s *app) settingsCLI(c *ui.Context, p palette) {
 }
 
 func (s *app) renderSettingsCLI(c *ui.Context, p palette, tool, title, pathKey string) {
-
+	optional := desktopHasOptionalCLI(tool)
+	enabled := !optional || s.optionalCLIScope(tool).enabled
 	reveal := ui.Local(c.Root(), settingsRevealKey{}, func() settingsRevealState { return settingsRevealState{} })
-	match := reveal.active && reveal.target == title+" 状态"
+	match := reveal.active && (reveal.target == title+" 状态" || !enabled && reveal.target == title+" 可执行文件")
 	active := reveal.active
 	if match {
 		reveal.active = false
 	}
 	group := ui.Column(c.Key("settings-cli-group-" + tool)).FillWidth().MinWidth(0).Gap(14).Children(func() {
+		if optional {
+			s.settingsOptionalCLISwitch(c, p, tool, title, enabled)
+		}
+		if !enabled {
+			return
+		}
 		settingsHelpCardWithActions(c, p, title+" 状态", "", func() {
-			s.settingsCLIToolsMenu(c, p, tool, title)
+			if optional && s.optionalCLIStatus(tool).Phase == application.OptionalCLIUnavailable {
+				if settingsCardAction(c, p, "optional-cli-retry-"+tool, "refresh", "重新检测") {
+					s.requestSettingsCLIStatus(tool, true)
+				}
+			}
+			if !optional || s.optionalCLIReady(tool) {
+				s.settingsCLIToolsMenu(c, p, tool, title)
+			}
 		}, func() {
 			s.settingsCLIStatusDetails(c, p, tool)
 			if tool == "meegle" {
@@ -37,6 +51,10 @@ func (s *app) renderSettingsCLI(c *ui.Context, p palette, tool, title, pathKey s
 		})
 		settingsHelpCard(c, p, title+" 命令路径", "留空时自动探测，也可以手动选择；更改后自动保存。", func() {
 			s.settingsConfigPathRow(c, p, pathKey, title+" 可执行文件", "留空时自动探测", false)
+			if optional {
+				s.settingsCLICommandActions(c, p, tool, s.optionalCLIStatus(tool).Command)
+				return
+			}
 			if s.toolsUnit.state.cliJobs == nil || s.toolsUnit.state.cliJobs.requests["status:"+tool] == nil {
 				s.settingsCLIPathDiscoveryHint(c, p, tool)
 			}
@@ -48,7 +66,7 @@ func (s *app) renderSettingsCLI(c *ui.Context, p palette, tool, title, pathKey s
 	})
 	if match {
 		reveal.active = active
-		settingsReveal(c, group, p, title+" 状态")
+		settingsReveal(c, group, p, reveal.target)
 	}
 	if tool == "meegle" {
 		s.settingsMeegleProjects(c, p)
@@ -57,16 +75,23 @@ func (s *app) renderSettingsCLI(c *ui.Context, p palette, tool, title, pathKey s
 
 func (s *app) settingsCLIStatusDetails(c *ui.Context, p palette, tool string) {
 	status := s.settingsUnit.state.settingsCLIStatus[tool]
-	state, color := settingsToolAvailability(status, p)
-	if s.settingsUnit.state.settingsCLIErrors[tool] != "" {
-		state, color = "检测失败", p.amber
-	}
-	if jobs := s.toolsUnit.state.cliJobs; jobs != nil && jobs.requests["status:"+tool] != nil {
-		state, color = "检测中…", p.muted
-	}
-	settingsToolStatusRow(c, p, "命令状态", state, color)
-	if version := strings.TrimSpace(mapString(status, "version")); version != "" && tool != "git" {
-		settingsToolStatusRow(c, p, "版本", version, p.text)
+	if desktopHasOptionalCLI(tool) {
+		s.settingsOptionalCLIStatus(c, p, tool)
+		if tool != "lark" || !s.optionalCLIReady(tool) {
+			return
+		}
+	} else {
+		state, color := settingsToolAvailability(status, p)
+		if s.settingsUnit.state.settingsCLIErrors[tool] != "" {
+			state, color = "检测失败", p.amber
+		}
+		if jobs := s.toolsUnit.state.cliJobs; jobs != nil && jobs.requests["status:"+tool] != nil {
+			state, color = "检测中…", p.muted
+		}
+		settingsToolStatusRow(c, p, "命令状态", state, color)
+		if version := strings.TrimSpace(mapString(status, "version")); version != "" && tool != "git" {
+			settingsToolStatusRow(c, p, "版本", version, p.text)
+		}
 	}
 	if tool == "lark" && dataBool(status, "installed") {
 		name := firstNonEmpty(mapString(status, "userName"), "未取得本地身份")
@@ -86,7 +111,9 @@ func (s *app) settingsCLIStatusDetails(c *ui.Context, p palette, tool string) {
 		}
 	}
 	if source := mapString(status, "source"); source != "" {
-		settingsToolStatusRow(c, p, "来源", cliStatusSourceLabel(source), p.text)
+		if tool != "lark" {
+			settingsToolStatusRow(c, p, "来源", cliStatusSourceLabel(source), p.text)
+		}
 	}
 	if message := mapString(status, "error"); message != "" {
 		settingsToolStatusRow(c, p, "检测错误", message, p.amber)
@@ -110,9 +137,7 @@ func cliAuthLinkRemaining(session map[string]any) string {
 // settingsCLICommandActions only explains a resolved command that differs from
 // the configured executable. Command actions live in the card's menu.
 func (s *app) settingsCLICommandActions(c *ui.Context, p palette, tool, command string) {
-	switch tool {
-	case "git", "codex", "genbu", "meegle", "lark":
-	default:
+	if !desktopCLIJobSupported(tool) {
 		return
 	}
 	if strings.TrimSpace(command) == "" || sameTaskRepositoryPath(s.cliConfiguredPath(tool), command) {

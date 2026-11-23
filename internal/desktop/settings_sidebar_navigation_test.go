@@ -36,10 +36,13 @@ func TestSettingsSidebarSectionsAndVisualGroups(t *testing.T) {
 	if section, ok := settingsSectionForPage("sw-install"); !ok || section.name != "工具与连接" {
 		t.Fatal("Silverwing CLI installer is outside its settings section")
 	}
-	for _, old := range []string{"basic", "tool-visibility", "paths", "config-backup", "dev-tools", "task-creation", "task-area", "git", "branch-naming", "tag", "agents", "instruction-templates", "codex-plugins", "codex-mcp", "skill-local", "skill-sources", "cli-meegle", "cli-genbu", "proxy", "logs", "about", "updates", "app-data"} {
+	for _, old := range []string{"basic", "tool-visibility", "paths", "materials-sync", "project-instructions", "config-backup", "dev-tools", "task-creation", "task-area", "git", "branch-naming", "tag", "agents", "codex-plugins", "codex-mcp", "skill-local", "skill-sources", "cli-meegle", "cli-genbu", "cli-dragon", platformConnectionsPage, "proxy", "logs", "about", "updates", "app-data"} {
 		if _, ok := settingsSectionForPage(old); !ok {
 			t.Fatalf("lost existing route %s", old)
 		}
+	}
+	if _, ok := settingsSectionForPage("instruction-templates"); ok {
+		t.Fatal("retired task instruction templates still have a route")
 	}
 }
 
@@ -62,7 +65,7 @@ func TestSettingsSidebarPointerAndKeyboardNavigation(t *testing.T) {
 			t.Fatal("keyboard category unreachable", section.name)
 		}
 	}
-	if !s.navigateSettingsPage("instruction-templates", "") {
+	if !s.navigateSettingsPage("agents", "") {
 		t.Fatal("navigate")
 	}
 	s.navigateSettingsPage("git", "")
@@ -70,7 +73,7 @@ func TestSettingsSidebarPointerAndKeyboardNavigation(t *testing.T) {
 	if err := view.Click("资料与说明"); err != nil {
 		t.Fatal(err)
 	}
-	if s.settingsUnit.state.settingsPage != "instruction-templates" {
+	if s.settingsUnit.state.settingsPage != "agents" {
 		t.Fatal("category did not remember its last subpage")
 	}
 }
@@ -99,30 +102,38 @@ func TestSettingsPreferenceAliasesAndRestore(t *testing.T) {
 			t.Fatal("category preference roundtrip", section.name, got)
 		}
 	}
-	home := t.TempDir()
-	store := NewDesktopPreferencesStore(filepath.Join(home, desktopPreferencesFile))
-	if _, err := store.Update(func(p *DesktopPreferences) { p.SettingsSection = "system" }); err != nil {
-		t.Fatal(err)
-	}
-	s := &app{desktopPreferences: &desktopPreferencesState{enabled: true}}
-	s.restoreDesktopPreferences(home)
-	if s.settingsUnit.state.settingsTab != "数据与维护" || s.settingsUnit.state.settingsPage != "config-backup" {
-		t.Fatal("restore lost maintenance category")
+	for _, want := range []struct{ key, category, page string }{
+		{"system", "数据与维护", "config-backup"},
+		{"instruction-templates", "资料与说明", "paths"},
+	} {
+		home := t.TempDir()
+		store := NewDesktopPreferencesStore(filepath.Join(home, desktopPreferencesFile))
+		if _, err := store.Update(func(p *DesktopPreferences) { p.SettingsSection = want.key }); err != nil {
+			t.Fatal(err)
+		}
+		s := &app{desktopPreferences: &desktopPreferencesState{enabled: true}}
+		s.restoreDesktopPreferences(home)
+		if s.settingsUnit.state.settingsTab != want.category || s.settingsUnit.state.settingsPage != want.page {
+			t.Fatalf("restore %q landed on %q/%q", want.key, s.settingsUnit.state.settingsTab, s.settingsUnit.state.settingsPage)
+		}
 	}
 }
 
 func TestSettingsSearchAliasesAndTargetNavigation(t *testing.T) {
-	for query, page := range map[string]string{"资料同步": "materials-sync", "AGENTS": "agents", "Meego": "cli-meegle", "配置源码": "config-backup", "端口占用": "tool-visibility", "分支名": "task-creation", "MCP": "codex-mcp"} {
+	for query, page := range map[string]string{"资料同步": "paths", "AGENTS": "agents", "Meego": "cli-meegle", "配置源码": "config-backup", "端口占用": "tool-visibility", "分支名": "task-creation", "MCP": "codex-mcp", "任务角色名": "paths", "任务资料子目录": "paths"} {
 		matches := settingsSearch(query)
 		if len(matches) == 0 || matches[0].page != page {
 			t.Fatalf("%s=%v", query, matches)
 		}
 	}
-	if len(settingsSearch("not-a-real-setting-58398")) != 0 {
-		t.Fatal("unknown query matched")
+	for _, query := range []string{"not-a-real-setting-58398", "任务说明模板"} {
+		if len(settingsSearch(query)) != 0 {
+			t.Fatalf("unexpected search results for %q", query)
+		}
 	}
 	s := newApp(nil, Options{Page: "settings", CapturePath: "settings-test"})
 	s.loading = false
+	s.snapshot.Home = t.TempDir()
 	s.settingsUnit.state.configJSON = `{}`
 	s.settingsUnit.state.settingsSearchQuery = "资料同步"
 	v := ui.NewTester(func(c *ui.Context) { s.settingsScreen(c, setTheme(c, false)) }, 1080, 800)
@@ -131,7 +142,7 @@ func TestSettingsSearchAliasesAndTargetNavigation(t *testing.T) {
 	}
 	// Aliases remain available to internal links, without a visible search UI.
 	s.openSettingsSearchResult(settingsSearch("资料同步")[0])
-	if s.settingsUnit.state.settingsPage != "materials-sync" || s.settingsUnit.state.settingsSearchQuery != "" {
+	if s.settingsUnit.state.settingsPage != "paths" || s.settingsUnit.state.settingsSearchQuery != "" {
 		t.Fatal("search did not route")
 	}
 

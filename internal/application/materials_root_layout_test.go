@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"silverwing-go/internal/domain"
@@ -12,7 +13,7 @@ import (
 	"silverwing-go/internal/workspace"
 )
 
-func TestMaterialsRootSaveNormalizesAndDoesNotOverwrite(t *testing.T) {
+func TestMaterialsRootSavePreservesExactPathAndDoesNotOverwrite(t *testing.T) {
 	paths := storage.NewPaths(t.TempDir())
 	a := &App{Paths: paths, Config: storage.NewConfigStore(paths), Manifests: storage.NewManifestStore()}
 	config, err := a.Config.Load()
@@ -26,15 +27,15 @@ func TestMaterialsRootSaveNormalizesAndDoesNotOverwrite(t *testing.T) {
 	if err := a.Config.Save(config); err != nil {
 		t.Fatal(err)
 	}
-	root := filepath.Join(t.TempDir(), "snb-work-data")
-	for _, selected := range []string{root, filepath.Join(root, "requirements"), filepath.Join(root, "requirements") + string(filepath.Separator)} {
+	root := filepath.Join(t.TempDir(), "requirements")
+	for _, selected := range []string{root, root + string(filepath.Separator)} {
 		result, err := a.saveMaterialsRoot(Action{Path: selected})
 		if err != nil || result.Path != root {
 			t.Fatalf("save %s: %+v %v", selected, result, err)
 		}
 		current, err := a.Config.Load()
 		if err != nil || current.RequirementMaterialsRoot == nil || *current.RequirementMaterialsRoot != root || current.MaterialsGitSettings().Enabled {
-			t.Fatalf("config not normalized/paused: %+v %v", current.RequirementMaterialsRoot, err)
+			t.Fatalf("saved root or pause state: %+v %v", current.RequirementMaterialsRoot, err)
 		}
 		if info, err := os.Stat(filepath.Join(root, "requirements")); err != nil || !info.IsDir() {
 			t.Fatalf("collection not created: %v", err)
@@ -47,8 +48,8 @@ func TestMaterialsRootSaveNormalizesAndDoesNotOverwrite(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(blocked, "requirements"), []byte("preserve"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.saveMaterialsRoot(Action{Path: blocked}); err == nil {
-		t.Fatal("accepted collection file")
+	if _, err := a.saveMaterialsRoot(Action{Path: blocked}); err == nil || !strings.Contains(err.Error(), filepath.Join(blocked, "requirements")) {
+		t.Fatalf("bad collection layout diagnostic: %v", err)
 	}
 	if current, err := a.Config.Load(); err != nil || *current.RequirementMaterialsRoot != root {
 		t.Fatalf("failed save changed config: %v", err)
@@ -71,8 +72,8 @@ func TestMaterialsGitDoesNotBlockLocalWritesWithoutGlobalRoot(t *testing.T) {
 	config := domain.DefaultAppConfig()
 	config.TaskRoot = &paths.Tasks
 	config.RequirementMaterialsRoot = nil
-	if MaterialsGitScope(paths.Home, config).RequireRootConfirmation {
-		t.Fatal("missing root reported as expanded upload scope")
+	if MaterialsGitScope(paths.Home, config).Root != "" {
+		t.Fatal("missing root resolved to a repository")
 	}
 	if err := a.Config.Save(config); err != nil {
 		t.Fatal(err)

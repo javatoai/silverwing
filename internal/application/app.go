@@ -13,6 +13,7 @@ import (
 
 	"silverwing-go/internal/documents"
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/dragon"
 	"silverwing-go/internal/integrations"
 	"silverwing-go/internal/platform"
 	"silverwing-go/internal/process"
@@ -37,40 +38,99 @@ type App struct {
 	startupTaskRootError        *storage.DefaultTaskRootInitializationError
 	tagJobsMu                   sync.Mutex
 	tagJobs                     *tagJobManager
+	genbuConfigPreviews         genbuConfigPreviewStore
+	genbuConfigSources          genbuConfigSourceStore
+	dragonQAClient              dragonQAClient
+	dragonQAComments            dragonQACommentClient
+	optionalCLIs                optionalCLIRegistry
+	optionalCLIRequire          func(context.Context, string) error
+	connections                 platformClients
 }
 
 func New(home string) (*App, error) {
-	app, err := newApp(home)
+	return newProfileApp(home)
+}
+
+func newProfileApp(home string) (*App, error) {
+	paths, _, err := applicationPaths(home)
 	if err != nil {
 		return nil, err
 	}
-	// Recover an interrupted migration once before the desktop scans tasks.
-	if config, loadErr := app.Config.Load(); loadErr == nil {
-		app.startupMigrationDiagnostics = app.recoverStartupTaskRootMigration(config)
-	} else {
-		errors.As(loadErr, &app.startupTaskRootError)
+	paths.ProfileID, err = storage.LoadOrCreateProfileID(paths.Home)
+	if err != nil {
+		return nil, err
 	}
+	app := composeApp(paths, storage.NewProfileManifestStore(paths))
+	app.Documents = documents.NewProfileService(paths)
+	config, err := app.Config.Load()
+	if err != nil {
+		return nil, err
+	}
+	app.rebindProfileTaskDocuments(config)
 	return app, nil
 }
 
-func newApp(home string) (*App, error) {
-	if strings.TrimSpace(home) == "" {
-		return nil, errors.New("请指定应用数据目录 --home")
+func (a *App) rebindProfileTaskDocuments(config domain.AppConfig) {
+	if config.TaskRoot == nil {
+		return
 	}
-	absolute, err := filepath.Abs(home)
+	entries, err := a.Manifests.Scan(*config.TaskRoot)
+	if err != nil {
+		a.startupMigrationDiagnostics = append(a.startupMigrationDiagnostics, "读取任务说明索引失败："+err.Error())
+		return
+	}
+	documents := workspace.NewAgentDocumentService(a.Paths, a.Manifests)
+	locks := workspace.NewTaskOperationLocks(a.Paths)
+	for _, entry := range entries.Current {
+		err := locks.WithTask(entry.Path, func() error {
+			manifest, err := a.Manifests.Load(entry.Path)
+			if err != nil {
+				return err
+			}
+			return documents.RebindProfileTaskDocuments(entry.Path, manifest, config)
+		})
+		if err != nil && !errors.Is(err, storage.ErrLockBusy) {
+			a.startupMigrationDiagnostics = append(a.startupMigrationDiagnostics, fmt.Sprintf("刷新 %s 的任务说明失败：%v", entry.Manifest.FolderName, err))
+		}
+	}
+}
+
+func newApp(home string) (*App, error) {
+	paths, userHome, err := applicationPaths(home)
 	if err != nil {
 		return nil, err
 	}
+	paths.Tasks = productprofile.DefaultTaskRoot(userHome, paths.Home)
+	return composeApp(paths, storage.NewManifestStore()), nil
+}
+
+func applicationPaths(home string) (storage.Paths, string, error) {
+	if strings.TrimSpace(home) == "" {
+		return storage.Paths{}, "", errors.New("请指定应用数据目录 --conf-dir")
+	}
+	absolute, err := filepath.Abs(home)
+	if err != nil {
+		return storage.Paths{}, "", err
+	}
 	userHome, err := os.UserHomeDir()
 	if err != nil {
-		return nil, fmt.Errorf("无法获取用户家目录：%w", err)
+		return storage.Paths{}, "", fmt.Errorf("无法获取用户家目录：%w", err)
 	}
-	paths := storage.NewPaths(absolute)
-	paths.Tasks = productprofile.DefaultTaskRoot(userHome, absolute)
-	app := &App{Paths: paths, Config: storage.NewConfigStore(paths), Manifests: storage.NewManifestStore(), Runner: process.NewRunner(), Documents: documents.NewService(paths.Cache), diffSessions: workspace.NewWorkspaceGitDiffSessionManager()}
+	return storage.NewPaths(absolute), userHome, nil
+}
+
+func composeApp(paths storage.Paths, manifests *storage.ManifestStore) *App {
+	app := &App{Paths: paths, Config: storage.NewConfigStore(paths), Manifests: manifests, Runner: process.NewRunner(), Documents: documents.NewService(paths.Cache), diffSessions: workspace.NewWorkspaceGitDiffSessionManager()}
 	app.Integrations = integrations.NewService(paths, app.Config, app.Runner)
+	app.Integrations.SetNoticeCLIReady(func(cfg domain.AppConfig) bool {
+		return OptionalCLIFeatureTagNotice.Available(func(tool string) bool { return app.optionalCLIReadyFor(cfg, tool) })
+	})
 	app.Platform = platform.NewService(paths, app.Config, app.Runner)
-	return app, nil
+	app.dragonQAClient = dragon.Native{Client: app.embeddedDragon, Identity: func(ctx context.Context, _ domain.AppConfig) (string, error) {
+		return app.embeddedAccountIdentity(ctx, "dragon")
+	}}
+	app.dragonQAComments = app.Integrations
+	return app
 }
 
 func (a *App) Snapshot(ctx context.Context) (Snapshot, error) {
@@ -93,7 +153,7 @@ func (a *App) SnapshotFor(ctx context.Context, request SnapshotRequest) (Snapsho
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return Snapshot{}, ctxErr
 		}
-		s := Snapshot{Home: a.Paths.Home, Error: err.Error(), Tasks: []Task{}, Repositories: []Repository{}, Services: []Service{}, Skills: []Skill{}, TagHistory: []TagRecord{}}
+		s := Snapshot{Home: a.Paths.Home, ProfileID: a.Paths.ProfileID, Error: err.Error(), Tasks: []Task{}, Repositories: []Repository{}, Services: []Service{}, Skills: []Skill{}, TagHistory: []TagRecord{}}
 		a.appendStartupMigrationDiagnostics(&s)
 		return s, nil
 	}
@@ -101,7 +161,7 @@ func (a *App) SnapshotFor(ctx context.Context, request SnapshotRequest) (Snapsho
 	if err != nil {
 		return Snapshot{}, err
 	}
-	s := Snapshot{Home: a.Paths.Home, Theme: string(config.Theme), ConfigJSON: string(encoded), Tasks: []Task{}, Repositories: []Repository{}, Services: []Service{}, Groups: []Group{}, Skills: []Skill{}, TagHistory: []TagRecord{}}
+	s := Snapshot{Home: a.Paths.Home, ProfileID: a.Paths.ProfileID, Theme: string(config.Theme), ConfigJSON: string(encoded), Tasks: []Task{}, Repositories: []Repository{}, Services: []Service{}, Groups: []Group{}, Skills: []Skill{}, TagHistory: []TagRecord{}}
 	s.TaskRootMigrationPending, err = a.TaskRootMigrationPending(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -133,26 +193,26 @@ func (a *App) SnapshotFor(ctx context.Context, request SnapshotRequest) (Snapsho
 	for _, repository := range config.Repositories {
 		s.Repositories = append(s.Repositories, Repository{ID: repository.ID, Name: repository.Name, RootPath: repository.RootPath, OriginURL: value(repository.OriginURL), CurrentBranch: value(repository.CurrentBranch), DefaultBranch: value(repository.DefaultRemoteBranch)})
 	}
-	groupNames := map[string]string{}
-	for _, group := range config.Groups {
-		g := Group{ID: group.ID, Name: group.Name, ServiceIDs: []string{}}
-		groupNames[group.ID] = group.Name
-		for _, service := range group.Services {
-			g.ServiceIDs = append(g.ServiceIDs, service.ID)
-			v := Service{ID: service.ID, Name: service.DisplayName, RepositoryID: service.RepositoryID, MasterBranch: service.MasterBranch, GroupID: group.ID, Modules: []Module{}}
-			for _, module := range service.Modules {
-				v.Modules = append(v.Modules, Module{ID: module.ID, Name: module.Name, MasterBranch: value(module.MasterBranch), Strategy: string(module.Strategy), TagTargetRef: value(module.TagTargetRef), TagEnabled: module.TagEnabled})
-			}
-			if len(service.Modules) > 0 {
-				v.Strategy = string(service.Modules[0].Strategy)
-			}
-			s.Services = append(s.Services, v)
+	for _, service := range config.ServiceCatalog() {
+		v := Service{ID: service.ID, Name: service.DisplayName, RepositoryID: service.RepositoryID, MasterBranch: service.MasterBranch, Modules: []Module{}}
+		for _, module := range service.Modules {
+			v.Modules = append(v.Modules, Module{ID: module.ID, Name: module.Name, MasterBranch: value(module.MasterBranch), Strategy: string(module.Strategy), TagTargetRef: value(module.TagTargetRef), TagEnabled: module.TagEnabled})
 		}
-		s.Groups = append(s.Groups, g)
+		if len(service.Modules) > 0 {
+			v.Strategy = string(service.Modules[0].Strategy)
+		}
+		s.Services = append(s.Services, v)
 	}
 	if config.TaskRoot != nil && (request.Tasks || request.TagHistory) {
 		if err := ctx.Err(); err != nil {
 			return Snapshot{}, err
+		}
+		if a.Paths.ProfileID != "" {
+			info, err := os.Stat(*config.TaskRoot)
+			if err != nil || !info.IsDir() {
+				appendSnapshotError(&s, "无法访问任务目录："+*config.TaskRoot)
+				return s, ctx.Err()
+			}
 		}
 		scan, scanErr := a.Manifests.Scan(*config.TaskRoot)
 		if scanErr != nil {
@@ -183,8 +243,14 @@ func (a *App) SnapshotFor(ctx context.Context, request SnapshotRequest) (Snapsho
 			if err := ctx.Err(); err != nil {
 				return Snapshot{}, err
 			}
-			m := entry.Manifest
-			t := Task{ID: filepath.Base(entry.Path), Title: m.FolderName, Project: groupNames[m.GroupID], Status: "进行中", Updated: m.UpdatedAt, CreatedAt: m.CreatedAt, Branch: m.FeatureBranch, Path: entry.Path, MaterialsPath: value(m.RequirementMaterials.WriteRoot), RequirementURL: m.RequirementLink, GroupID: m.GroupID, Archived: m.LifecycleStatus == domain.TaskArchived, Services: []string{}, Workspaces: []Workspace{}}
+			m := documents.ResolveBoundTaskMaterials(entry.Manifest, config)
+			if a.Paths.ProfileID != "" {
+				if err := workspace.NewTaskOperationLocks(a.Paths).ValidateWorkspaceDirectory(config, entry.Path, m); err != nil {
+					appendSnapshotError(&s, err.Error())
+					continue
+				}
+			}
+			t := Task{ID: filepath.Base(entry.Path), Title: m.FolderName, Status: "进行中", Updated: m.UpdatedAt, CreatedAt: m.CreatedAt, Branch: m.FeatureBranch, Path: entry.Path, MaterialsPath: value(m.RequirementMaterials.WriteRoot), RequirementURL: m.RequirementLink, Archived: m.LifecycleStatus == domain.TaskArchived, Services: []string{}, Workspaces: []Workspace{}}
 			t.Materials = taskMaterialsPermissions(m, config)
 			t.MaterialsPath = t.Materials.ReadRoot
 			t.RequirementID = value(m.RequirementID)
@@ -298,20 +364,26 @@ func (a *App) taskInConfig(action Action, config domain.AppConfig) (domain.TaskM
 		}
 		return domain.TaskManifest{}, "", err
 	}
+	if a.Paths.ProfileID != "" {
+		if err := workspace.NewTaskOperationLocks(a.Paths).ValidateWorkspaceDirectory(config, entry.Path, entry.Manifest); err != nil {
+			return domain.TaskManifest{}, "", err
+		}
+	}
 	return entry.Manifest, entry.Path, nil
 }
 func (a *App) materialRoot(action Action) (string, error) {
-	manifest, _, err := a.task(action)
+	config, err := a.Config.Load()
+	if err != nil {
+		return "", err
+	}
+	manifest, _, err := a.taskInConfig(action, config)
 	if err != nil {
 		return "", err
 	}
 	if manifest.RequirementMaterials.WriteRoot == nil || *manifest.RequirementMaterials.WriteRoot == "" {
 		return "", errors.New("当前任务尚未配置资料目录")
 	}
-	config, err := a.Config.Load()
-	if err != nil {
-		return "", err
-	}
+	manifest = documents.ResolveBoundTaskMaterials(manifest, config)
 	if err := validAnnualTaskMaterials(manifest, config); err != nil {
 		return "", err
 	}
@@ -330,5 +402,9 @@ var _ Backend = (*App)(nil)
 // The desktop receives this state through Snapshot; isolated adapters can
 // forward the same read without loading unrelated platform integrations.
 func (a *App) TaskRootMigrationPending(ctx context.Context) (*bool, error) {
+	if a.Paths.ProfileID != "" {
+		pending := false
+		return &pending, nil
+	}
 	return workspace.TaskRootMigrationPending(ctx, a.Paths)
 }

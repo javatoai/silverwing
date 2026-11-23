@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"path"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -21,17 +21,8 @@ type taskCreationPreview struct {
 	configurationIdentity, home string
 	signature                   string
 	payload                     map[string]any
-	workspaceToolIDs            []string
 	conflicts                   []workspace.BranchReuseConflict
 	sharedAck                   bool
-}
-
-type taskCreationWorkspaceToolOption struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"displayName"`
-	Description string `json:"description"`
-	Available   bool   `json:"available"`
-	Reason      string `json:"reason"`
 }
 
 type taskCreationState struct {
@@ -42,20 +33,16 @@ type taskCreationState struct {
 	observerConfig    taskCreationObserverConfig
 	renderingInputs   bool
 	draft             domain.RequirementDraftState
-	notes             string
-	markdown          *taskCreationMarkdownState
-	groupID           string
-	groupQuery        string
 	serviceSearch     string
-	serviceListScroll map[string]*ui.ScrollState
-	groupDrafts       map[string]*taskCreationGroupDraft
+	serviceListScroll ui.ScrollState
 	activeServiceID   string
 	requirements      *taskCreationRequirementsState
 	services          map[string]bool
 	modules           map[string]map[string]bool
 	moduleData        map[string]map[string]*taskCreationModuleDraft
 	moduleOrder       map[string][]string
-	moduleExpanded    map[string]map[string]bool
+	selectedModuleIDs map[string]string
+	revealModuleTab   bool
 	moduleFocus       string
 	moduleFieldFocus  string
 	taskFieldFocus    string
@@ -80,25 +67,12 @@ type taskCreationState struct {
 	lastLink                  string
 	configError               string
 	rightTab                  string
-	templates                 []domain.AgentTaskTemplate
-	templatesLoading          bool
-	templatesError            string
-	selectedTemplate          string
-	pendingTemplate           string
-	workspaceTools            []taskCreationWorkspaceToolOption
-	toolsLoading              bool
-	toolsError                string
-	selectedToolIDs           map[string]bool
-	toolsLoaded               bool
-	loadStep                  string
+	generatedPreview          *taskCreationGeneratedPreviewState
 	agentPreview              *workspace.AgentDocumentPreview
-	agentPreviewFile          string
-	agentPreviewTab           string
 	agentPreviewSig           string
 	agentCodePreview          nativeCodePreviewState
 	agentPreviewBusy          bool
 	agentPreviewErr           string
-	agentPreviewCopy          string
 	materialsPreview          domain.RequirementMaterialsDirectory
 	materialsPreviewInputSig  string
 	materialsPreviewPending   bool
@@ -114,20 +88,10 @@ type taskCreationValidationTarget struct {
 	field     string
 }
 
-type taskCreationGroupDraft struct {
-	services        map[string]bool
-	modules         map[string]map[string]bool
-	moduleData      map[string]map[string]*taskCreationModuleDraft
-	moduleOrder     map[string][]string
-	moduleExpanded  map[string]map[string]bool
-	activeServiceID string
-	serviceSearch   string
-}
-
 var taskCreationSequence atomic.Uint64
 
 func (s *app) initTaskCreation(title, requirementTitle, requirementURL string) {
-	closeTaskCreationMarkdown(s.taskUnit.state.taskCreation)
+	closeTaskCreationGeneratedPreview(s.taskUnit.state.taskCreation)
 	s.cancelTaskCreationReads(s.taskUnit.state.taskCreation, false)
 	s.closeTaskCreationRequirements()
 	s.closeTaskCreationAINaming()
@@ -141,7 +105,7 @@ func (s *app) initTaskCreation(title, requirementTitle, requirementURL string) {
 	if strings.TrimSpace(requirementTitle) != "" {
 		selectedTitle = &requirementTitle
 	}
-	draft := domain.RequirementDraftState{TaskName: requirementTitle, Branch: config.DefaultBranchPrefix}
+	draft := domain.RequirementDraftState{RequirementLink: requirementURL, TaskName: requirementTitle}
 	draft = draft.ChangeRequirement(requirementURL, config.DefaultBranchPrefix, selectedTitle)
 	if strings.TrimSpace(requirementURL) == "" {
 		draft.Branch = ""
@@ -150,8 +114,7 @@ func (s *app) initTaskCreation(title, requirementTitle, requirementURL string) {
 	state := &taskCreationState{
 		token: fmt.Sprintf("%d", taskCreationSequence.Add(1)), title: title, config: config, configRevision: 1, draft: draft,
 		services: make(map[string]bool), modules: make(map[string]map[string]bool), moduleData: make(map[string]map[string]*taskCreationModuleDraft), moduleOrder: make(map[string][]string),
-		moduleExpanded: make(map[string]map[string]bool), groupDrafts: make(map[string]*taskCreationGroupDraft), phase: "editing", aiEligible: strings.TrimSpace(requirementURL) != "", lastName: draft.TaskName,
-		selectedToolIDs: make(map[string]bool), agentPreviewTab: "preview",
+		selectedModuleIDs: make(map[string]string), phase: "editing", aiEligible: strings.TrimSpace(requirementURL) != "", lastName: draft.TaskName,
 		materialsPreview: domain.RequirementMaterialsDirectory{Status: domain.MaterialsNotRequested},
 		lastBranch:       draft.Branch, lastLink: draft.RequirementLink,
 	}
@@ -161,194 +124,40 @@ func (s *app) initTaskCreation(title, requirementTitle, requirementURL string) {
 	if strings.TrimSpace(requirementURL) == "" {
 		state.taskFieldFocus = "taskName"
 	}
-	if len(config.Groups) > 0 {
-		state.groupID = config.Groups[0].ID
-		state.groupQuery = firstNonEmpty(config.Groups[0].Name, config.Groups[0].ID)
-	} else if len(s.snapshot.Groups) > 0 {
-		state.groupID = s.snapshot.Groups[0].ID
-		state.groupQuery = firstNonEmpty(s.snapshot.Groups[0].Name, s.snapshot.Groups[0].ID)
-		state.configError = firstNonEmpty(state.configError, "当前配置没有可用项目组。")
-	}
 	s.taskUnit.state.taskCreation = state
 	s.syncTaskCreationLegacySelection()
-	s.loadTaskCreationTemplates()
+	s.requestTaskCreationAINaming(false)
 }
 
-func (s *app) loadTaskCreationTemplates() {
-	state := s.taskUnit.state.taskCreation
-	if state == nil {
-		return
-	}
-	if s.settingsUnit.state.settingsTemplatesLoaded {
-		state.templates = taskTemplatesFromMaps(s.settingsUnit.state.settingsTemplates)
-		s.loadTaskCreationWorkspaceTools()
-		return
-	}
-	if state.templatesLoading {
-		return
-	}
-	state.templatesLoading = true
-	state.loadStep = "templates"
-	s.startTaskCreationRead("instructions.templates.list", map[string]any{"taskCreateToken": state.token})
-}
-
-func taskTemplatesFromMaps(items []map[string]any) []domain.AgentTaskTemplate {
-	templates := make([]domain.AgentTaskTemplate, 0, len(items))
-	for _, item := range items {
-		id, name := mapString(item, "id"), mapString(item, "name")
-		if id == "" || name == "" {
-			continue
-		}
-		templates = append(templates, domain.AgentTaskTemplate{ID: id, Name: name, Content: mapString(item, "content"), UpdatedAt: mapString(item, "updatedAt")})
-	}
-	return templates
-}
-
-func normalizeTaskCreationWorkspaceTools(items []taskCreationWorkspaceToolOption, configuredIDs []string) []taskCreationWorkspaceToolOption {
-	result := make([]taskCreationWorkspaceToolOption, 0, len(items)+len(configuredIDs))
-	seen := make(map[string]bool, len(items)+len(configuredIDs))
-	for _, option := range items {
-		option.ID = strings.TrimSpace(option.ID)
-		if option.ID == "" || seen[option.ID] {
-			continue
-		}
-		if option.DisplayName == "" {
-			option.DisplayName = option.ID
-		}
-		seen[option.ID] = true
-		result = append(result, option)
-	}
-	for _, id := range configuredIDs {
-		id = strings.TrimSpace(id)
-		if id == "" || seen[id] {
-			continue
-		}
-		seen[id] = true
-		result = append(result, taskCreationWorkspaceToolOption{ID: id, DisplayName: workspaceToolDisplayName(id), Reason: "当前版本未返回此工具的注册和可用状态"})
-	}
-	return result
-}
-
-func workspaceToolDisplayName(id string) string {
-	switch id {
-	case "codex":
-		return "Codex"
-	case "cursor":
-		return "Cursor"
-	default:
-		return id
-	}
-}
-
-func (state *taskCreationState) enabledWorkspaceTools() []taskCreationWorkspaceToolOption {
-	tools := make([]taskCreationWorkspaceToolOption, 0, len(state.workspaceTools))
-	for _, option := range state.workspaceTools {
-		if containsString(state.config.DefaultWorkspaceToolIDs, option.ID) {
-			tools = append(tools, option)
-		}
-	}
-	return tools
-}
-
-func firstTaskAgentPreviewFile(files []workspace.AgentDocumentPreviewFile) string {
-	for _, file := range files {
-		name := path.Base(strings.ReplaceAll(file.RelativePath, `\`, "/"))
-		if strings.EqualFold(name, "TASK-RULES.md") {
-			return file.RelativePath
-		}
-	}
-	return ""
-}
-
-func (s *app) loadTaskCreationWorkspaceTools() {
-	state := s.taskUnit.state.taskCreation
-	if state == nil || state.toolsLoading || state.toolsLoaded {
-		return
-	}
-	state.toolsLoading = true
-	state.loadStep = "workspace-tools"
-	s.startTaskCreationRead("workspace.tools-options", map[string]any{"taskCreateToken": state.token})
-}
-
-func (s *app) finishTaskCreationInitialLoads() {
-	state := s.taskUnit.state.taskCreation
-	if state == nil || state.loadStep != "" || s.busy {
-		return
-	}
-	if state.aiEligible && state.config.AIRequirementNamingEnabled {
-		s.requestTaskCreationAINaming(false)
-	}
-}
-
-func (s *app) continueTaskCreationInitialLoads() {
-	state := s.taskUnit.state.taskCreation
-	if state == nil {
-		return
-	}
-	state.loadStep = ""
-	s.loadTaskCreationWorkspaceTools()
-	if state.loadStep == "" {
-		s.finishTaskCreationInitialLoads()
-	}
-}
-
-func (s *app) taskCreationGroup() *domain.GroupConfig {
-	state := s.taskUnit.state.taskCreation
-	if state == nil {
-		return nil
-	}
-	for i := range state.config.Groups {
-		if state.config.Groups[i].ID == state.groupID {
-			return &state.config.Groups[i]
-		}
-	}
-	return nil
-}
-
-func duplicateTaskCreationCloneTargets(order []string, drafts map[string]*taskCreationModuleDraft) []string {
-	counts := make(map[string]int)
-	labels := make(map[string]string)
+func duplicateTaskCreationCloneBranches(order []string, drafts map[string]*taskCreationModuleDraft) []string {
+	counts := make(map[domain.RemoteBranchRef]int)
+	var duplicates []string
 	for _, id := range order {
 		draft := drafts[id]
 		if draft == nil || draft.Strategy != domain.WorkspaceIndependentClone {
 			continue
 		}
-		target := strings.TrimSpace(draft.TargetBranch)
-		if target == "" {
-			continue
-		}
-		key := strings.ToLower(target)
-		counts[key]++
-		labels[key] = target
-	}
-	duplicates := make([]string, 0)
-	seen := make(map[string]bool)
-	for _, id := range order {
-		draft := drafts[id]
-		if draft == nil || draft.Strategy != domain.WorkspaceIndependentClone {
-			continue
-		}
-		target := strings.TrimSpace(draft.TargetBranch)
-		key := strings.ToLower(target)
-		if target != "" && counts[key] > 1 && !seen[key] {
-			duplicates = append(duplicates, labels[key])
-			seen[key] = true
+		ref, err := domain.ParseRemoteBranchRef(draft.BaseRef)
+		if err == nil {
+			counts[ref]++
+			if counts[ref] == 2 {
+				duplicates = append(duplicates, ref.String())
+			}
 		}
 	}
 	return duplicates
 }
 
-func (s *app) taskCreationService(serviceID string) *domain.GroupServiceConfig {
-	group := s.taskCreationGroup()
-	if group == nil {
+func (s *app) taskCreationService(serviceID string) *domain.ServiceConfig {
+	state := s.taskUnit.state.taskCreation
+	if state == nil {
 		return nil
 	}
-	for i := range group.Services {
-		if group.Services[i].ID == serviceID {
-			return &group.Services[i]
-		}
+	service, err := state.config.Service(serviceID)
+	if err != nil {
+		return nil
 	}
-	return nil
+	return &service
 }
 
 func (s *app) ensureTaskCreationService(serviceID string) {
@@ -369,15 +178,13 @@ func (s *app) ensureTaskCreationService(serviceID string) {
 	state.modules[serviceID] = make(map[string]bool, len(service.Modules))
 	state.moduleData[serviceID] = make(map[string]*taskCreationModuleDraft, len(service.Modules))
 	state.moduleOrder[serviceID] = make([]string, 0, len(service.Modules))
-	if state.moduleExpanded == nil {
-		state.moduleExpanded = make(map[string]map[string]bool)
-	}
-	state.moduleExpanded[serviceID] = make(map[string]bool, len(service.Modules))
 	for _, module := range service.Modules {
 		state.modules[serviceID][module.ID] = true
 		state.moduleData[serviceID][module.ID] = newTaskCreationModuleDraft(*service, module, state.draft.Branch)
 		state.moduleOrder[serviceID] = append(state.moduleOrder[serviceID], module.ID)
-		state.moduleExpanded[serviceID][module.ID] = true
+	}
+	if ids := state.moduleOrder[serviceID]; len(ids) > 0 {
+		s.selectTaskCreationModule(serviceID, ids[0])
 	}
 	s.syncTaskCreationLegacySelection()
 }
@@ -406,9 +213,9 @@ func (s *app) addTaskCreationModule(serviceID string, strategy domain.WorkspaceS
 	state.moduleData[serviceID][id] = draft
 	state.modules[serviceID][id] = true
 	state.moduleOrder[serviceID] = append(state.moduleOrder[serviceID], id)
-	s.setTaskCreationModuleExpanded(serviceID, id, true)
+	s.setActiveTaskCreationService(serviceID)
+	s.selectTaskCreationModule(serviceID, id)
 	state.moduleFocus = serviceID + ":" + id
-	state.activeServiceID = serviceID
 	s.retargetTaskCreationServiceModules(serviceID, state.draft.Branch)
 	s.invalidateTaskCreationPreview("模块列表已变化，请重新预检。")
 	s.syncTaskCreationLegacySelection()
@@ -416,9 +223,15 @@ func (s *app) addTaskCreationModule(serviceID string, strategy domain.WorkspaceS
 
 func (s *app) removeTaskCreationModule(serviceID, moduleID string) {
 	state := s.taskUnit.state.taskCreation
-	if state == nil || len(state.moduleData[serviceID]) <= 1 {
+	if state == nil {
 		return
 	}
+	order := state.moduleOrder[serviceID]
+	index := slices.Index(order, moduleID)
+	if len(order) <= 1 || index < 0 {
+		return
+	}
+	wasSelected := state.selectedModuleIDs[serviceID] == moduleID
 	if draft := state.moduleData[serviceID][moduleID]; draft != nil {
 		cancelTaskRepositoryPickerRequests(&draft.repositoryPicker)
 	}
@@ -430,16 +243,14 @@ func (s *app) removeTaskCreationModule(serviceID, moduleID string) {
 	}
 	delete(state.moduleData[serviceID], moduleID)
 	delete(state.modules[serviceID], moduleID)
-	delete(state.moduleExpanded[serviceID], moduleID)
-	order := state.moduleOrder[serviceID][:0]
-	for _, id := range state.moduleOrder[serviceID] {
-		if id != moduleID {
-			order = append(order, id)
-		}
-	}
+	order = slices.Delete(order, index, index+1)
 	state.moduleOrder[serviceID] = order
-	if state.activeServiceID == serviceID && len(order) == 0 {
-		state.activeServiceID = ""
+	if wasSelected {
+		nextID := order[min(index, len(order)-1)]
+		s.selectTaskCreationModule(serviceID, nextID)
+		if state.activeServiceID == serviceID {
+			state.moduleFocus = serviceID + ":" + nextID
+		}
 	}
 	s.retargetTaskCreationServiceModules(serviceID, state.draft.Branch)
 	s.invalidateTaskCreationPreview("模块列表已变化，请重新预检。")
@@ -462,15 +273,14 @@ func (s *app) setTaskCreationServiceSelected(serviceID string, selected bool) {
 		}
 		delete(state.services, serviceID)
 		if state.activeServiceID == serviceID {
-			state.activeServiceID = ""
-			if group := s.taskCreationGroup(); group != nil {
-				for _, candidate := range group.Services {
-					if candidate.Enabled && state.services[candidate.ID] {
-						state.activeServiceID = candidate.ID
-						break
-					}
+			var nextServiceID string
+			for _, candidate := range state.config.ServiceCatalog() {
+				if candidate.Enabled && state.services[candidate.ID] {
+					nextServiceID = candidate.ID
+					break
 				}
 			}
+			s.setActiveTaskCreationService(nextServiceID)
 		}
 	} else {
 		s.ensureTaskCreationService(serviceID)
@@ -493,81 +303,16 @@ func (s *app) focusTaskCreationService(serviceID string) {
 	if state == nil {
 		return
 	}
+	if state.activeServiceID == serviceID {
+		s.setActiveTaskCreationService("")
+		return
+	}
 	if !state.services[serviceID] {
 		s.setTaskCreationServiceSelected(serviceID, true)
-		if !state.services[serviceID] {
-			return
-		}
-		state.activeServiceID = serviceID
-		for _, moduleID := range state.moduleOrder[serviceID] {
-			s.taskCreationModuleExpanded(serviceID, moduleID)
-		}
-		return
 	}
-	if state.activeServiceID == serviceID {
-		state.activeServiceID = ""
-		return
+	if state.services[serviceID] {
+		s.setActiveTaskCreationService(serviceID)
 	}
-	state.activeServiceID = serviceID
-	for _, moduleID := range state.moduleOrder[serviceID] {
-		s.taskCreationModuleExpanded(serviceID, moduleID)
-	}
-}
-
-func (s *app) setTaskCreationGroup(groupID string) {
-	state := s.taskUnit.state.taskCreation
-	if state == nil || state.groupID == groupID {
-		return
-	}
-	cancelTaskRepositoryChoices(state)
-	for _, modules := range state.moduleData {
-		for _, draft := range modules {
-			if draft == nil {
-				continue
-			}
-			draft.repositoryPicker.branchOpen = false
-			draft.repositoryPicker.remoteOpen = false
-		}
-	}
-	if state.groupDrafts == nil {
-		state.groupDrafts = make(map[string]*taskCreationGroupDraft)
-	}
-	state.groupDrafts[state.groupID] = &taskCreationGroupDraft{
-		services: state.services, modules: state.modules, moduleData: state.moduleData,
-		moduleOrder: state.moduleOrder, moduleExpanded: state.moduleExpanded,
-		activeServiceID: state.activeServiceID, serviceSearch: state.serviceSearch,
-	}
-	state.groupID = groupID
-	for _, group := range state.config.Groups {
-		if group.ID == groupID {
-			state.groupQuery = firstNonEmpty(group.Name, group.ID)
-			break
-		}
-	}
-	if draft := state.groupDrafts[groupID]; draft != nil {
-		state.services = draft.services
-		state.modules = draft.modules
-		state.moduleData = draft.moduleData
-		state.moduleOrder = draft.moduleOrder
-		state.moduleExpanded = draft.moduleExpanded
-		state.activeServiceID = draft.activeServiceID
-		state.serviceSearch = draft.serviceSearch
-	} else {
-		state.serviceSearch = ""
-		state.services = make(map[string]bool)
-		state.modules = make(map[string]map[string]bool)
-		state.moduleData = make(map[string]map[string]*taskCreationModuleDraft)
-		state.moduleOrder = make(map[string][]string)
-		state.moduleExpanded = make(map[string]map[string]bool)
-		state.activeServiceID = ""
-	}
-	s.retargetUntouchedTaskCreationModules(state.draft.Branch)
-	state.moduleFocus = ""
-	state.moduleFieldFocus = ""
-	state.taskFieldFocus = ""
-	state.validationTarget = nil
-	s.invalidateTaskCreationPreview("项目组已变化，请重新选择服务并预检。")
-	s.syncTaskCreationLegacySelection()
 }
 
 func (s *app) syncTaskCreationLegacySelection() {
@@ -575,7 +320,6 @@ func (s *app) syncTaskCreationLegacySelection() {
 	if state == nil {
 		return
 	}
-	s.taskUnit.state.taskGroupID = state.groupID
 	s.taskUnit.state.taskServices = make(map[string]bool, len(state.services))
 	s.taskUnit.state.taskModules = make(map[string]map[string]bool, len(state.modules))
 	for serviceID, selected := range state.services {
@@ -661,10 +405,13 @@ func (s *app) syncTaskCreationDraft() {
 	}
 	if state.draft.RequirementLink != state.lastLink {
 		oldBranch := state.draft.Branch
+		previous := state.draft
+		previous.RequirementLink = state.lastLink
 		s.cancelTaskCreationAINaming()
-		state.draft = state.draft.ChangeRequirement(state.draft.RequirementLink, state.config.DefaultBranchPrefix, nil)
+		state.draft = previous.ChangeRequirement(state.draft.RequirementLink, state.config.DefaultBranchPrefix, nil)
 		state.lastLink = state.draft.RequirementLink
-		state.aiEligible = false // 手工输入链接不得触发对外 AI 命名请求。
+		state.lastName = state.draft.TaskName
+		state.aiEligible = false // 手工输入的链接等需求读取成功后再启用 AI 命名。
 		state.aiError = ""
 		if state.validationTarget != nil && state.validationTarget.field == "requirement" {
 			state.validationTarget = nil
@@ -730,13 +477,9 @@ func (s *app) taskCreationPayload() (map[string]any, error) {
 	if state.requirements != nil && state.requirements.inputIsQuery {
 		return nil, fmt.Errorf("请选择匹配需求，或填写完整需求链接。")
 	}
-	group := s.taskCreationGroup()
-	if group == nil {
-		return nil, fmt.Errorf("请选择有效项目组")
-	}
 	serviceIDs := make([]string, 0, len(state.services))
 	selections := make([]workspace.TaskServiceSelection, 0, len(state.services))
-	for _, service := range group.Services {
+	for _, service := range state.config.ServiceCatalog() {
 		if !service.Enabled || !state.services[service.ID] {
 			continue
 		}
@@ -749,7 +492,7 @@ func (s *app) taskCreationPayload() (map[string]any, error) {
 			modules = append(modules, workspace.TaskModuleSelection{
 				ID: draft.ID, Name: draft.Name, Strategy: draft.Strategy,
 				BaseRef: strings.TrimSpace(draft.BaseRef), BaseRemote: strings.TrimSpace(draft.BaseRemote),
-				TargetBranch: strings.TrimSpace(draft.TargetBranch), Source: draft.Source,
+				TargetBranch: draft.selectionTargetBranch(), Source: draft.Source,
 				TagEnabled: draft.TagEnabled, TagMode: draft.TagMode, TagTargetRef: strings.TrimSpace(draft.TagTargetRef),
 				TagMessagePrefix: draft.TagMessagePrefix,
 			})
@@ -759,10 +502,14 @@ func (s *app) taskCreationPayload() (map[string]any, error) {
 			selections = append(selections, workspace.TaskServiceSelection{ServiceID: service.ID, Modules: modules})
 		}
 	}
+	featureBranch := state.draft.Branch
+	if domain.ContainsUnresolvedBranchPlaceholder(featureBranch) || (taskCreationHasSelectedServices(state) && !taskCreationHasSelectedWorktreeModules(state)) {
+		featureBranch = ""
+	}
 	payload := map[string]any{
-		"folderName": state.draft.TaskName, "featureBranch": state.draft.Branch,
-		"groupId": state.groupID, "serviceIds": serviceIDs, "serviceSelections": selections,
-		"requirementLink": state.draft.RequirementLink, "taskNotes": state.notes,
+		"folderName": state.draft.TaskName, "featureBranch": featureBranch,
+		"serviceIds": serviceIDs, "serviceSelections": selections,
+		"requirementLink": state.draft.RequirementLink,
 	}
 	return payload, nil
 }
@@ -850,15 +597,12 @@ func (s *app) taskCreationValidationFailure() (string, *taskCreationValidationTa
 	if state.directoryCheck.signature == s.taskCreationDirectorySignature() && state.directoryCheck.message != "" {
 		return state.directoryCheck.message, &taskCreationValidationTarget{field: "taskName"}
 	}
-	if taskCreationHasSelectedServices(state) && strings.TrimSpace(state.draft.Branch) == "" {
+	hasWorktree := taskCreationHasSelectedWorktreeModules(state)
+	if hasWorktree && strings.TrimSpace(state.draft.Branch) == "" {
 		return "请填写任务分支。", &taskCreationValidationTarget{field: "taskBranch"}
 	}
-	if taskCreationHasSelectedServices(state) && domain.ContainsUnresolvedBranchPlaceholder(state.draft.Branch) {
+	if hasWorktree && domain.ContainsUnresolvedBranchPlaceholder(state.draft.Branch) {
 		return "任务分支仍包含未解析的 {num} 或 {ai}，请修改需求编号/链接或手工调整分支。", &taskCreationValidationTarget{field: "taskBranch"}
-	}
-	group := s.taskCreationGroup()
-	if group == nil {
-		return "请选择项目组。", &taskCreationValidationTarget{field: "service"}
 	}
 	for id, selected := range state.services {
 		service := s.taskCreationService(id)
@@ -866,7 +610,7 @@ func (s *app) taskCreationValidationFailure() (string, *taskCreationValidationTa
 			return "已选服务已不可用，请重新选择。", &taskCreationValidationTarget{field: "service"}
 		}
 	}
-	for _, service := range group.Services {
+	for _, service := range state.config.ServiceCatalog() {
 		if !service.Enabled || !state.services[service.ID] {
 			continue
 		}
@@ -878,7 +622,11 @@ func (s *app) taskCreationValidationFailure() (string, *taskCreationValidationTa
 				return "模块配置无效，请重新选择服务。", &taskCreationValidationTarget{serviceID: service.ID, moduleID: moduleID, field: "module"}
 			}
 			if strings.TrimSpace(draft.BaseRef) == "" {
-				return "模块主分支不能为空：" + firstNonEmpty(draft.Name, draft.ID), &taskCreationValidationTarget{serviceID: service.ID, moduleID: moduleID, field: "baseRef"}
+				label := "模块主分支"
+				if draft.Strategy == domain.WorkspaceIndependentClone {
+					label = "克隆分支"
+				}
+				return label + "不能为空：" + firstNonEmpty(draft.Name, draft.ID), &taskCreationValidationTarget{serviceID: service.ID, moduleID: moduleID, field: "baseRef"}
 			}
 			ref, err := domain.ParseRemoteBranchRef(draft.BaseRef)
 			if err != nil {
@@ -893,6 +641,9 @@ func (s *app) taskCreationValidationFailure() (string, *taskCreationValidationTa
 			if draft.Strategy == domain.WorkspaceStandardWorktree && strings.TrimSpace(draft.TargetBranch) == "" {
 				return "Worktree 模块目标分支不能为空：" + firstNonEmpty(draft.Name, draft.ID), &taskCreationValidationTarget{serviceID: service.ID, moduleID: moduleID, field: "targetBranch"}
 			}
+			if domain.ContainsUnresolvedBranchPlaceholder(draft.selectionTargetBranch()) {
+				return "模块目标分支仍包含未解析的 {num} 或 {ai}：" + firstNonEmpty(draft.Name, draft.ID), &taskCreationValidationTarget{serviceID: service.ID, moduleID: moduleID, field: "targetBranch"}
+			}
 		}
 		if selectedModules == 0 {
 			return "已选服务至少需要一个模块：" + service.DisplayName, &taskCreationValidationTarget{serviceID: service.ID, field: "module"}
@@ -905,6 +656,20 @@ func taskCreationHasSelectedServices(state *taskCreationState) bool {
 	if state != nil {
 		for _, selected := range state.services {
 			if selected {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func taskCreationHasSelectedWorktreeModules(state *taskCreationState) bool {
+	for serviceID, selected := range state.services {
+		if !selected {
+			continue
+		}
+		for _, moduleID := range state.moduleOrder[serviceID] {
+			if draft := state.moduleData[serviceID][moduleID]; draft != nil && draft.Strategy == domain.WorkspaceStandardWorktree {
 				return true
 			}
 		}
@@ -929,19 +694,16 @@ func (s *app) focusTaskCreationValidationTarget(target *taskCreationValidationTa
 			state.serviceSearch = ""
 		}
 	}
-	state.activeServiceID = target.serviceID
+	s.setActiveTaskCreationService(target.serviceID)
 	if target.moduleID != "" {
-		s.setTaskCreationModuleExpanded(target.serviceID, target.moduleID, true)
+		s.selectTaskCreationModule(target.serviceID, target.moduleID)
+		state.revealModuleTab = true
 		if target.field == "baseRef" {
 			if draft := state.moduleData[target.serviceID][target.moduleID]; draft != nil {
 				draft.repositoryPicker.branchFocusPending = true
 			}
 		} else if target.field != "module" {
 			state.moduleFieldFocus = target.serviceID + ":" + target.moduleID + ":" + target.field
-		}
-	} else {
-		for _, moduleID := range state.moduleOrder[target.serviceID] {
-			s.taskCreationModuleExpanded(target.serviceID, moduleID)
 		}
 	}
 }
@@ -951,12 +713,7 @@ func (s *app) beginTaskCreationPreflight() bool {
 	if state == nil {
 		return false
 	}
-	if err := s.captureTaskCreationMarkdown(state); err != nil {
-		state.inlineError = err.Error()
-		return true
-	}
 	s.syncTaskCreationDraft()
-	s.cancelTaskCreationAINaming()
 	if s.busy {
 		state.inlineError = "当前有操作正在执行，请等待完成或取消后重试。"
 		return true
@@ -981,6 +738,7 @@ func (s *app) beginTaskCreationPreflight() bool {
 		}
 		return true
 	}
+	s.cancelTaskCreationAINaming()
 	cancelTaskRepositoryChoices(state)
 	state.preview = s.snapshotTaskCreationPreview(payload)
 	state.phase = "preview"
@@ -995,19 +753,12 @@ func (s *app) beginTaskCreationPreflight() bool {
 	return true
 }
 
-func cloneTaskCreationWorkspaceToolIDs(ids []string) []string {
-	result := make([]string, len(ids))
-	copy(result, ids)
-	return result
-}
-
 func (s *app) snapshotTaskCreationPreview(payload map[string]any) *taskCreationPreview {
 	identity, _ := taskCreationSnapshotConfigFingerprint(s.snapshot, s.taskUnit.state.taskCreation.config)
 	return &taskCreationPreview{
 		configurationIdentity: identity, home: s.snapshot.Home,
-		signature:        s.taskCreationSignature(),
-		payload:          payload,
-		workspaceToolIDs: cloneTaskCreationWorkspaceToolIDs(s.taskCreationSelectedToolIDs()),
+		signature: s.taskCreationSignature(),
+		payload:   payload,
 	}
 }
 
@@ -1034,10 +785,6 @@ func taskCreationActionPayload(payload map[string]any, token string) map[string]
 func (s *app) submitTaskCreation(keys []workspace.BranchReuseKey) {
 	state := s.taskUnit.state.taskCreation
 	if state == nil || state.preview == nil {
-		return
-	}
-	if err := s.captureTaskCreationMarkdown(state); err != nil {
-		state.inlineError = err.Error()
 		return
 	}
 	if state.preview.signature != s.taskCreationSignature() {
@@ -1072,102 +819,7 @@ func taskCreationSubmissionPayload(state *taskCreationState, keys []workspace.Br
 	}
 	payload := taskCreationActionPayload(state.preview.payload, state.token)
 	payload["confirmedBranchReuseKeys"] = append([]workspace.BranchReuseKey(nil), keys...)
-	payload["workspaceToolIds"] = cloneTaskCreationWorkspaceToolIDs(state.preview.workspaceToolIDs)
 	return payload
-}
-
-func (s *app) taskCreationSelectedToolIDs() []string {
-	state := s.taskUnit.state.taskCreation
-	if state == nil {
-		return []string{}
-	}
-	ids := make([]string, 0, len(state.selectedToolIDs))
-	for _, option := range state.enabledWorkspaceTools() {
-		if option.Available && state.selectedToolIDs[option.ID] {
-			ids = append(ids, option.ID)
-		}
-	}
-	return ids
-}
-
-func (s *app) taskCreationTemplate(id string) *domain.AgentTaskTemplate {
-	state := s.taskUnit.state.taskCreation
-	if state == nil {
-		return nil
-	}
-	for index := range state.templates {
-		if state.templates[index].ID == id {
-			return &state.templates[index]
-		}
-	}
-	return nil
-}
-
-func taskCreationSelectedTemplateID(notes string, templates []domain.AgentTaskTemplate) string {
-	selected := ""
-	for _, template := range templates {
-		if template.Content != notes {
-			continue
-		}
-		if selected != "" {
-			return ""
-		}
-		selected = template.ID
-	}
-	return selected
-}
-
-func (s *app) toggleTaskCreationTemplate(template domain.AgentTaskTemplate) {
-	state := s.taskUnit.state.taskCreation
-	if state == nil {
-		return
-	}
-	if err := s.captureTaskCreationMarkdown(state); err != nil {
-		state.inlineError = err.Error()
-		return
-	}
-	var selected *domain.AgentTaskTemplate
-	selectedID := state.selectedTemplate
-	if selectedID == "" {
-		selectedID = taskCreationSelectedTemplateID(state.notes, state.templates)
-	}
-	if selectedID != "" {
-		selected = s.taskCreationTemplate(selectedID)
-	}
-	if selected != nil && selected.ID == template.ID {
-		if state.notes == template.Content {
-			if !s.replaceTaskCreationMarkdownNotes(state, "") {
-				return
-			}
-		}
-		state.selectedTemplate = ""
-		state.pendingTemplate = ""
-		return
-	}
-	if strings.TrimSpace(state.notes) == "" || selected != nil && state.notes == selected.Content {
-		if !s.replaceTaskCreationMarkdownNotes(state, template.Content) {
-			return
-		}
-		state.selectedTemplate = template.ID
-		state.pendingTemplate = ""
-		return
-	}
-	state.pendingTemplate = template.ID
-}
-
-func (s *app) confirmTaskCreationTemplateReplacement(confirm bool) {
-	state := s.taskUnit.state.taskCreation
-	if state == nil || state.pendingTemplate == "" {
-		return
-	}
-	template := s.taskCreationTemplate(state.pendingTemplate)
-	if confirm && template != nil {
-		if !s.replaceTaskCreationMarkdownNotes(state, template.Content) {
-			return
-		}
-		state.selectedTemplate = template.ID
-	}
-	state.pendingTemplate = ""
 }
 
 func (s *app) refreshTaskCreationAgentPreview() {
@@ -1205,7 +857,6 @@ func (s *app) refreshTaskCreationMaterialsPreview() {
 		state.materialsPreviewErr = ""
 		state.agentPreviewSig = ""
 		state.agentPreview = nil
-		state.agentPreviewFile = ""
 		state.agentPreviewErr = ""
 	}
 	if signature == "" || state.materialsPreviewInputSig == signature || state.materialsPreviewPending {
@@ -1275,7 +926,6 @@ func (s *app) taskCreationActionResult(action application.Action, result applica
 			state.materialsPreviewErr = ""
 			state.agentPreviewSig = ""
 			state.agentPreview = nil
-			state.agentPreviewFile = ""
 			return true
 		}
 		state.materialsPreviewInputSig = requestSignature
@@ -1295,31 +945,6 @@ func (s *app) taskCreationActionResult(action application.Action, result applica
 		state.agentPreviewSig = ""
 		s.refreshTaskCreationAgentPreview()
 		return true
-	case "instructions.templates.list":
-		state.templatesLoading = false
-		state.templatesError = ""
-		s.settingsUnit.state.settingsTemplates = mapsFromData(result.Data)
-		s.settingsUnit.state.settingsTemplatesLoaded = true
-		state.templates = taskTemplatesFromMaps(s.settingsUnit.state.settingsTemplates)
-		s.continueTaskCreationInitialLoads()
-		return true
-	case "workspace.tools-options":
-		state.toolsLoading = false
-		state.toolsLoaded = true
-		state.toolsError = ""
-		options, err := decodeData[taskCreationWorkspaceToolOption](result.Data)
-		if err != nil {
-			state.toolsError = "工作区工具列表格式错误：" + err.Error()
-			options = nil
-		}
-		state.workspaceTools = normalizeTaskCreationWorkspaceTools(options, state.config.DefaultWorkspaceToolIDs)
-		state.selectedToolIDs = make(map[string]bool, len(state.config.DefaultWorkspaceToolIDs))
-		for _, id := range state.config.DefaultWorkspaceToolIDs {
-			state.selectedToolIDs[id] = true
-		}
-		state.loadStep = ""
-		s.finishTaskCreationInitialLoads()
-		return true
 	case "task.agent-preview":
 		state.agentPreviewBusy = false
 		if s.resumeTaskCreationPreflightIfPending() {
@@ -1329,7 +954,6 @@ func (s *app) taskCreationActionResult(action application.Action, result applica
 		if requestSignature != s.taskCreationAgentPreviewSignature() {
 			state.agentPreview = nil
 			state.agentPreviewSig = ""
-			state.agentPreviewFile = ""
 			state.agentPreviewErr = ""
 			return true
 		}
@@ -1341,7 +965,6 @@ func (s *app) taskCreationActionResult(action application.Action, result applica
 		}
 		state.agentPreview = &preview
 		state.agentPreviewErr = ""
-		state.agentPreviewFile = firstTaskAgentPreviewFile(preview.Files)
 		return true
 	case "requirements.ai-name":
 		state.aiPending = false
@@ -1404,7 +1027,7 @@ func (s *app) taskCreationActionResult(action application.Action, result applica
 		}
 		return true
 	case "task.create":
-		closeTaskCreationMarkdown(state)
+		closeTaskCreationGeneratedPreview(state)
 		s.closeTaskCreationRequirements()
 		s.closeTaskCreationAINaming()
 		s.stopTaskCreationPreviewDebounce()
@@ -1448,7 +1071,6 @@ func (s *app) taskCreationActionError(action application.Action, cause error) bo
 			state.materialsPreviewErr = ""
 			state.agentPreviewSig = ""
 			state.agentPreview = nil
-			state.agentPreviewFile = ""
 			return true
 		}
 		state.materialsPreviewInputSig = requestSignature
@@ -1456,24 +1078,6 @@ func (s *app) taskCreationActionError(action application.Action, cause error) bo
 		state.materialsPreviewErr = message
 		state.agentPreviewSig = ""
 		s.refreshTaskCreationAgentPreview()
-		return true
-	case "instructions.templates.list":
-		state.templatesLoading = false
-		state.templatesError = message
-		state.templates = nil
-		s.continueTaskCreationInitialLoads()
-		return true
-	case "workspace.tools-options":
-		state.toolsLoading = false
-		state.toolsLoaded = true
-		state.toolsError = "无法读取工作区工具状态：" + message
-		state.workspaceTools = normalizeTaskCreationWorkspaceTools(nil, state.config.DefaultWorkspaceToolIDs)
-		state.selectedToolIDs = make(map[string]bool, len(state.config.DefaultWorkspaceToolIDs))
-		for _, id := range state.config.DefaultWorkspaceToolIDs {
-			state.selectedToolIDs[id] = true
-		}
-		state.loadStep = ""
-		s.finishTaskCreationInitialLoads()
 		return true
 	case "task.agent-preview":
 		state.agentPreviewBusy = false
@@ -1484,7 +1088,6 @@ func (s *app) taskCreationActionError(action application.Action, cause error) bo
 		if requestSignature != s.taskCreationAgentPreviewSignature() {
 			state.agentPreviewSig = ""
 			state.agentPreview = nil
-			state.agentPreviewFile = ""
 			state.agentPreviewErr = ""
 			return true
 		}
@@ -1523,7 +1126,7 @@ func (s *app) taskCreationActionError(action application.Action, cause error) bo
 
 func taskCreationOwnedAction(kind string) bool {
 	switch kind {
-	case "instructions.templates.list", "workspace.tools-options", "task.materials-preview", "task.agent-preview", "requirements.ai-name", "task.create-preview", "task.create":
+	case "task.materials-preview", "task.agent-preview", "requirements.ai-name", "task.create-preview", "task.create":
 		return true
 	default:
 		return false
@@ -1534,6 +1137,7 @@ func taskCreationOwnedAction(kind string) bool {
 func (s *app) renderTaskCreationDialog(c *ui.Context, p palette) bool {
 	state := s.taskUnit.state.taskCreation
 	if state == nil || !s.dialogOpen || s.form.mode != "task-create" {
+		closeTaskCreationGeneratedPreview(state)
 		s.cancelTaskCreationReads(state, false)
 		s.closeTaskCreationRequirements()
 		s.closeTaskCreationAINaming()
@@ -1592,20 +1196,20 @@ func (s *app) renderTaskCreationDialog(c *ui.Context, p palette) bool {
 							}
 						})
 						s.syncTaskCreationDraft()
-						ui.Column(c).Gap(6).Children(func() {
-							label(c, "任务分支", 12, p.muted)
-							branchInput := ui.TextInput(c.Key("task-create-branch"), &state.draft.Branch).FillWidth().Height(36).Placeholder("例如 feature/12345_fix_issue").Label("任务分支输入")
-							if state.taskFieldFocus == "taskBranch" {
-								branchInput.Focus().ScrollIntoView()
-								state.taskFieldFocus = ""
-							}
-							if state.draft.MetadataHint != nil {
-								label(c, *state.draft.MetadataHint, 11, p.amber)
-							}
-						})
+						if !taskCreationHasSelectedServices(state) || taskCreationHasSelectedWorktreeModules(state) {
+							ui.Column(c).Gap(6).Children(func() {
+								label(c, "任务分支", 12, p.muted)
+								branchInput := ui.TextInput(c.Key("task-create-branch"), &state.draft.Branch).FillWidth().Height(36).Placeholder("例如 feature/12345_fix_issue").Label("任务分支输入")
+								if state.taskFieldFocus == "taskBranch" {
+									branchInput.Focus().ScrollIntoView()
+									state.taskFieldFocus = ""
+								}
+								if state.draft.MetadataHint != nil {
+									label(c, *state.draft.MetadataHint, 11, p.amber)
+								}
+							})
+						}
 						s.syncTaskCreationDraft()
-						s.renderTaskCreationWorkspaceTools(c, p)
-						s.renderTaskCreationMarkdownNotes(c, p)
 						if state.inlineError != "" && !(state.phase == "creating" && state.creationProgress != nil) {
 							if state.validationTarget == nil || state.validationTarget.serviceID == "" && state.validationTarget.field != "service" {
 								label(c, state.inlineError, 11, p.amber).Wrap()
@@ -1640,6 +1244,11 @@ func (s *app) renderTaskCreationDialog(c *ui.Context, p palette) bool {
 					}
 					return
 				}
+				ui.Row(c).Disabled(s.busy).Children(func() {
+					if action(c, "task-create-generated-preview", "", "查看生成说明", p, false) {
+						s.openTaskCreationGeneratedPreview(state)
+					}
+				})
 				if action(c, "task-create-cancel", "close", "取消", p, false) {
 					open = false
 					return
@@ -1661,11 +1270,6 @@ func (s *app) renderTaskCreationDialog(c *ui.Context, p palette) bool {
 			})
 		})
 	})
-	dialog.OnShortcut(ui.Cmd, ui.KeyS, func() {
-		if !inputsLocked && !s.busy {
-			s.beginTaskCreationPreflight()
-		}
-	})
 	if dialog.Dismissed() {
 		if inputsLocked {
 			open = true
@@ -1679,49 +1283,12 @@ func (s *app) renderTaskCreationDialog(c *ui.Context, p palette) bool {
 		s.dialogOpen = false
 	}
 	if !s.dialogOpen {
-		if err := s.captureTaskCreationMarkdown(state); err != nil {
-			state.inlineError = err.Error()
-			s.dialogOpen = true
-			return true
-		}
 		s.requestTaskCreationDismiss()
 		return true
 	}
 	s.renderTaskCreationBranchReuseDialog(c, p, state)
-	s.renderTaskCreationGeneratedMarkdown(c, p, state)
+	s.renderTaskCreationGeneratedPreview(c, p, state)
 	return true
-}
-
-func (s *app) renderTaskCreationWorkspaceTools(c *ui.Context, p palette) {
-	state := s.taskUnit.state.taskCreation
-	if state == nil || len(state.config.DefaultWorkspaceToolIDs) == 0 {
-		return
-	}
-	tools := state.enabledWorkspaceTools()
-	ui.Column(c).FillWidth().Gap(6).Children(func() {
-		label(c, "创建后打开工作区工具", 11, p.muted).SingleLine()
-		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Wrap().Children(func() {
-			for _, option := range tools {
-				selected := state.selectedToolIDs[option.ID]
-				name := option.DisplayName
-				if !option.Available {
-					name += "（不可用）"
-				}
-				ui.Checkbox(c.Key("task-create-tool-"+option.ID), &selected, name).Height(28).Label(option.DisplayName).
-					Disabled(!option.Available || s.busy).Tooltip(firstNonEmpty(option.Description, option.Reason)).OnChange(func() {
-					state.selectedToolIDs[option.ID] = selected
-				})
-			}
-		})
-		if state.toolsLoading {
-			label(c, "正在检查可用工具…", 10, p.muted)
-		} else if state.toolsError != "" {
-			label(c, state.toolsError, 10, p.amber)
-		}
-		if len(tools) == 0 {
-			label(c, "当前没有已注册的工作区工具。", 10, p.muted)
-		}
-	})
 }
 
 func (s *app) renderTaskCreationSelections(c *ui.Context, p palette) {
@@ -1729,26 +1296,13 @@ func (s *app) renderTaskCreationSelections(c *ui.Context, p palette) {
 	if state == nil {
 		return
 	}
-	group := s.taskCreationGroup()
-	if group == nil {
-		emptyPanel(c, p, "请选择项目组", "当前任务配置中没有对应的项目组。")
-		return
-	}
-	s.renderTaskCreationServiceList(c, p, group)
+	s.renderTaskCreationServiceList(c, p, state.config.ServiceCatalog())
 }
 
-func (s *app) renderTaskCreationServiceList(c *ui.Context, p palette, group *domain.GroupConfig) {
+func (s *app) renderTaskCreationServiceList(c *ui.Context, p palette, services []domain.ServiceConfig) {
 	state := s.taskUnit.state.taskCreation
 	if state == nil {
 		return
-	}
-	if state.serviceListScroll == nil {
-		state.serviceListScroll = make(map[string]*ui.ScrollState)
-	}
-	listScroll := state.serviceListScroll[group.ID]
-	if listScroll == nil {
-		listScroll = &ui.ScrollState{}
-		state.serviceListScroll[group.ID] = listScroll
 	}
 	selectedCount := 0
 	for _, selected := range state.services {
@@ -1762,37 +1316,6 @@ func (s *app) renderTaskCreationServiceList(c *ui.Context, p palette, group *dom
 			label(c, "服务与模块", 14, p.text).FontWeight(600).Grow(1)
 			label(c, fmt.Sprintf("%d 已选", selectedCount), 10, p.muted).Shrink(0)
 		})
-		if len(state.config.Groups) > 1 {
-			var combo ui.ComboboxParts
-			ui.Row(c).FillWidth().Children(func() {
-				combo = ui.ComboboxBase(c.Key("task-create-group-picker"), &state.groupQuery)
-				combo.Input.FillWidth().MinWidth(0).Height(32).Padding(0, 28, 0, 8).Placeholder("选择项目组").Background(p.surface).Border(1, p.line).Radius(7).Label("项目组")
-				drawTaskComboboxChevron(combo.Input, p)
-			})
-			combo.Popup(func(panel ui.Element) {
-				panel.Padding(4).MaxHeight(240).Background(p.surface).Border(1, p.line).Radius(9).Shadow(0, 5, 16, 0, ui.RGBA(0, 0, 0, 0.14))
-				ui.Scroll(c).FillWidth().MaxHeight(232).Gap(2).Children(func() {
-					for _, candidate := range state.config.Groups {
-						name := firstNonEmpty(candidate.Name, candidate.ID)
-						value := candidate.ID + "\x00" + name
-						if combo.Filtering() && !strings.Contains(strings.ToLower(value), strings.ToLower(strings.TrimSpace(state.groupQuery))) {
-							continue
-						}
-						item := combo.Item(value).FillWidth().Height(32).Padding(0, 8).Radius(6)
-						if item.Highlighted() {
-							item.Background(p.selected)
-						}
-						item.Children(func() { label(c, name, 11, p.text).SingleLine() })
-					}
-				})
-			})
-			if chosen, ok := combo.Chosen(); ok {
-				if groupID, name, found := strings.Cut(chosen, "\x00"); found {
-					s.setTaskCreationGroup(groupID)
-					state.groupQuery = name
-				}
-			}
-		}
 		ui.TextInput(c.Key("task-create-service-search"), &state.serviceSearch).FillWidth().Height(34).
 			Placeholder("搜索名称、路径或 ID").Label("搜索服务名称、仓库路径或 ID")
 		if state.inlineError != "" && state.validationTarget != nil && state.validationTarget.field == "service" {
@@ -1800,7 +1323,7 @@ func (s *app) renderTaskCreationServiceList(c *ui.Context, p palette, group *dom
 		}
 		activeVisible := false
 		if state.activeServiceID != "" && strings.TrimSpace(state.serviceSearch) != "" {
-			for _, service := range group.Services {
+			for _, service := range services {
 				if service.ID != state.activeServiceID || !service.Enabled {
 					continue
 				}
@@ -1817,9 +1340,9 @@ func (s *app) renderTaskCreationServiceList(c *ui.Context, p palette, group *dom
 				}
 			})
 		}
-		ui.Scroll(c).TrackScroll(listScroll).Grow(1).FillWidth().MinHeight(0).Gap(5).Label("任务服务列表").Children(func() {
+		ui.Scroll(c).TrackScroll(&state.serviceListScroll).Grow(1).FillWidth().MinHeight(0).Gap(5).Label("任务服务列表").Children(func() {
 			visible := 0
-			for _, service := range group.Services {
+			for _, service := range services {
 				repositoryName, repositoryPath := s.repositoryDetails(service.RepositoryID)
 				if !service.Enabled || !taskCreationServiceMatches(service, repositoryName+" "+repositoryPath, state.serviceSearch) {
 					continue
@@ -1845,7 +1368,7 @@ func (s *app) renderTaskCreationServiceList(c *ui.Context, p palette, group *dom
 					onSelectionChange: func(selected bool) { s.setTaskCreationServiceSelected(service.ID, selected) },
 				})
 				if state.services[service.ID] && state.activeServiceID == service.ID {
-					s.renderTaskCreationServiceModules(c.Key("task-create-service-modules-"+service.ID), p, service)
+					s.renderTaskCreationServiceModules(c, p, service)
 				}
 			}
 			if visible == 0 {
@@ -1865,136 +1388,90 @@ func (s *app) renderTaskCreationServiceModules(c *ui.Context, p palette, service
 		return
 	}
 	serviceID := service.ID
-	moduleIDs := append([]string(nil), state.moduleOrder[serviceID]...)
-	if state.inlineError != "" && state.validationTarget != nil && state.validationTarget.serviceID == serviceID && state.validationTarget.field == "module" {
-		label(c, state.inlineError, 10, p.amber).FillWidth().Wrap()
-	}
-	if len(moduleIDs) == 0 {
-		label(c, "此服务尚无模块。", 11, p.muted).FillWidth().Wrap()
-	}
-	for _, id := range moduleIDs {
-		draft := state.moduleData[serviceID][id]
-		if draft == nil {
-			continue
+	key := [3]string{"task-create-service-modules", state.token, serviceID}
+	ui.Column(c.Key(key)).FillWidth().MinWidth(0).Shrink(0).Gap(5).Children(func() {
+		moduleIDs := state.moduleOrder[serviceID]
+		if len(moduleIDs) > 0 {
+			selected := max(0, slices.Index(moduleIDs, state.selectedModuleIDs[serviceID]))
+			s.selectTaskCreationModule(serviceID, moduleIDs[selected])
+			s.renderTaskCreationModuleTabs(c, p, serviceID, selected)
+		} else {
+			state.revealModuleTab = false
 		}
-		expanded := s.taskCreationModuleExpanded(serviceID, id)
-		s.renderTaskCreationModule(c.Key("task-create-module-editor-"+serviceID+"-"+id), p, service, draft, expanded)
-	}
-	ui.Row(c).FillWidth().Padding(8, 0).Children(func() {
-		if action(c, "task-create-module-add-"+serviceID, "plus", "添加临时模块", p, false) {
-			s.addTaskCreationModule(serviceID, domain.WorkspaceStandardWorktree)
+		if state.inlineError != "" && state.validationTarget != nil && state.validationTarget.serviceID == serviceID && state.validationTarget.field == "module" {
+			label(c, state.inlineError, 10, p.amber).FillWidth().Wrap()
 		}
-	})
-	if duplicates := duplicateTaskCreationCloneTargets(state.moduleOrder[serviceID], state.moduleData[serviceID]); len(duplicates) > 0 {
-		label(c, "多个克隆模块使用相同目标分支："+strings.Join(duplicates, "、"), 10, p.amber).FillWidth().Wrap()
-	}
-}
-
-func (s *app) taskCreationModuleExpanded(serviceID, moduleID string) bool {
-	state := s.taskUnit.state.taskCreation
-	if state == nil || moduleID == "" {
-		return false
-	}
-	if state.moduleExpanded == nil {
-		state.moduleExpanded = make(map[string]map[string]bool)
-	}
-	if state.moduleExpanded[serviceID] == nil {
-		state.moduleExpanded[serviceID] = make(map[string]bool)
-	}
-	if expanded, initialized := state.moduleExpanded[serviceID][moduleID]; initialized {
-		return expanded
-	}
-	state.moduleExpanded[serviceID][moduleID] = true
-	return true
-}
-
-func (s *app) setTaskCreationModuleExpanded(serviceID, moduleID string, expanded bool) {
-	state := s.taskUnit.state.taskCreation
-	if state == nil || moduleID == "" {
-		return
-	}
-	if state.moduleExpanded == nil {
-		state.moduleExpanded = make(map[string]map[string]bool)
-	}
-	if state.moduleExpanded[serviceID] == nil {
-		state.moduleExpanded[serviceID] = make(map[string]bool)
-	}
-	state.moduleExpanded[serviceID][moduleID] = expanded
-}
-
-func (s *app) renderTaskCreationModule(c *ui.Context, p palette, service domain.GroupServiceConfig, draft *taskCreationModuleDraft, expanded bool) {
-	state := s.taskUnit.state.taskCreation
-	id := service.ID + ":" + draft.ID
-	s.syncTaskCreationModuleDraft(service.ID, draft)
-	ui.Column(c.Key("task-create-module-section-"+id)).FillWidth().MinWidth(0).Gap(8).Padding(8, 0).
-		Label("模块设置：" + service.ID + ":" + draft.ID).Children(func() {
-		ui.Row(c.Key("task-create-module-heading-" + id)).FillWidth().MinWidth(0).Gap(8).AlignItems(ui.Center).Children(func() {
-			if expanded {
-				nameInput := ui.TextInput(c.Key("name"), &draft.Name).Grow(1).MinWidth(0).Height(34).Placeholder("例如 api-service").Label("模块名称 · " + id)
-				if state.moduleFocus == id || state.moduleFieldFocus == id+":name" {
-					nameInput.Focus().ScrollIntoView()
-					state.moduleFocus = ""
-					state.moduleFieldFocus = ""
-				}
-			} else {
-				label(c, draft.Name, 12, p.text).Grow(1).SingleLine().FontWeight(600).Tooltip(draft.Name)
-				if draft.Source == domain.TaskModuleTemporary {
-					label(c, "临时", 10, p.amber).Shrink(0).NoWrap()
-				}
-			}
-			toggleLabel := "展开模块：" + id
-			toggleIcon := "chevron-right"
-			if expanded {
-				toggleLabel = "折叠模块：" + id
-				toggleIcon = "chevron"
-			}
-			if iconButtonDisabled(c, "task-create-module-toggle-"+id, toggleIcon, toggleLabel, p, s.busy).Width(30).Height(30).Clicked() {
-				s.setTaskCreationModuleExpanded(service.ID, draft.ID, !expanded)
-			}
-			if len(state.moduleOrder[service.ID]) > 1 && iconButtonDisabled(c, "task-create-module-delete-"+service.ID+"-"+draft.ID, "delete", "删除模块 "+draft.Name, p, s.busy).Width(30).Height(30).Clicked() {
-				s.removeTaskCreationModule(service.ID, draft.ID)
+		if len(moduleIDs) == 0 {
+			label(c, "此服务尚无模块。", 11, p.muted).FillWidth().Wrap()
+		} else if draft := state.moduleData[serviceID][state.selectedModuleIDs[serviceID]]; draft != nil {
+			s.renderTaskCreationModule(c, p, service, draft)
+		}
+		ui.Row(c).FillWidth().Padding(8, 0).Children(func() {
+			if action(c, "task-create-module-add-"+serviceID, "plus", "添加临时模块", p, false) {
+				s.addTaskCreationModule(serviceID, domain.WorkspaceStandardWorktree)
+				c.Invalidate()
 			}
 		})
-		if expanded {
-			if message := taskCreationModuleFieldError(state, service.ID, draft.ID, "name"); message != "" {
-				label(c, message, 10, p.amber).FillWidth().Wrap()
-			}
-			s.syncTaskCreationModuleDraft(service.ID, draft)
+		if duplicates := duplicateTaskCreationCloneBranches(state.moduleOrder[serviceID], state.moduleData[serviceID]); len(duplicates) > 0 {
+			label(c, "多个克隆模块跟踪同一远程分支："+strings.Join(duplicates, "、"), 10, p.amber).FillWidth().Wrap()
+		}
+	})
+}
 
-			strategyRow := ui.Row(c.Key("task-create-strategy-" + id)).FillWidth().Gap(6).Wrap().AlignItems(ui.Center)
-			if state.moduleFieldFocus == id+":strategy" {
-				strategyRow.ScrollIntoView()
+func (s *app) renderTaskCreationModule(c *ui.Context, p palette, service domain.GroupServiceConfig, draft *taskCreationModuleDraft) {
+	state := s.taskUnit.state.taskCreation
+	id := service.ID + ":" + draft.ID
+	remove := false
+	s.syncTaskCreationModuleDraft(service.ID, draft)
+	ui.Column(c.Key("task-create-module-section-"+id)).FillWidth().MinWidth(0).Gap(8).Padding(8, 0).
+		Label("模块设置：" + id).Children(func() {
+		ui.Row(c.Key("task-create-module-heading-" + id)).FillWidth().MinWidth(0).Gap(8).AlignItems(ui.Center).Children(func() {
+			nameInput := ui.TextInput(c.Key("name"), &draft.Name).Grow(1).MinWidth(0).Height(34).Placeholder("例如 api-service").Label("模块名称 · " + id)
+			if state.moduleFocus == id || state.moduleFieldFocus == id+":name" {
+				nameInput.Focus().ScrollIntoView()
+				state.moduleFocus = ""
 				state.moduleFieldFocus = ""
 			}
-			strategyRow.Children(func() {
-				label(c, "工作区策略", 11, p.muted).Shrink(0)
-				s.settingsChoice(c, p, "task-create-worktree-"+id, "Worktree", draft.Strategy == domain.WorkspaceStandardWorktree, func() {
-					draft.Strategy = domain.WorkspaceStandardWorktree
-					s.clearTaskCreationFieldError(service.ID, draft.ID, "strategy")
-					s.invalidateTaskCreationPreview("模块策略已变化，请重新预检。")
-				})
-				s.settingsChoice(c, p, "task-create-clone-"+id, "独立克隆", draft.Strategy == domain.WorkspaceIndependentClone, func() {
-					draft.Strategy = domain.WorkspaceIndependentClone
-					s.clearTaskCreationFieldError(service.ID, draft.ID, "strategy")
-					s.invalidateTaskCreationPreview("模块策略已变化，请重新预检。")
-				})
-			})
-			if message := taskCreationModuleFieldError(state, service.ID, draft.ID, "strategy"); message != "" {
-				label(c, message, 10, p.amber).FillWidth().Wrap()
-			}
+			remove = len(state.moduleOrder[service.ID]) > 1 && iconButtonDisabled(c, "task-create-module-delete-"+service.ID+"-"+draft.ID, "delete", "删除模块 "+draft.Name, p, s.busy).Width(30).Height(30).Clicked()
+		})
+		if remove {
+			return
+		}
+		if message := taskCreationModuleFieldError(state, service.ID, draft.ID, "name"); message != "" {
+			label(c, message, 10, p.amber).FillWidth().Wrap()
+		}
+		s.syncTaskCreationModuleDraft(service.ID, draft)
 
-			if message := taskCreationModuleFieldError(state, service.ID, draft.ID, "baseRef"); message != "" {
-				label(c, message, 10, p.amber).FillWidth().Wrap()
-			}
-			s.renderTaskRepositoryBranchPicker(c, p, taskRepositoryChoicesCreateOwner, state.token, "", service.ID, draft.ID, service.RepositoryID, draft, false)
-			targetLabel := "目标分支"
-			if draft.Strategy == domain.WorkspaceIndependentClone {
-				targetLabel += "（可空）"
-			} else {
-				targetLabel += "（必填）"
-			}
+		strategyRow := ui.Row(c.Key("task-create-strategy-" + id)).FillWidth().Gap(6).Wrap().AlignItems(ui.Center)
+		if state.moduleFieldFocus == id+":strategy" {
+			strategyRow.ScrollIntoView()
+			state.moduleFieldFocus = ""
+		}
+		strategyRow.Children(func() {
+			label(c, "工作区策略", 11, p.muted).Shrink(0)
+			s.settingsChoice(c, p, "task-create-worktree-"+id, "Worktree", draft.Strategy == domain.WorkspaceStandardWorktree, func() {
+				draft.Strategy = domain.WorkspaceStandardWorktree
+				s.retargetTaskCreationServiceModules(service.ID, state.draft.Branch)
+				s.clearTaskCreationFieldError(service.ID, draft.ID, "strategy")
+				s.invalidateTaskCreationPreview("模块策略已变化，请重新预检。")
+			})
+			s.settingsChoice(c, p, "task-create-clone-"+id, "独立克隆", draft.Strategy == domain.WorkspaceIndependentClone, func() {
+				draft.Strategy = domain.WorkspaceIndependentClone
+				s.clearTaskCreationFieldError(service.ID, draft.ID, "strategy")
+				s.invalidateTaskCreationPreview("模块策略已变化，请重新预检。")
+			})
+		})
+		if message := taskCreationModuleFieldError(state, service.ID, draft.ID, "strategy"); message != "" {
+			label(c, message, 10, p.amber).FillWidth().Wrap()
+		}
+
+		if message := taskCreationModuleFieldError(state, service.ID, draft.ID, "baseRef"); message != "" {
+			label(c, message, 10, p.amber).FillWidth().Wrap()
+		}
+		s.renderTaskRepositoryBranchPicker(c, p, taskRepositoryChoicesCreateOwner, state.token, "", service.ID, draft.ID, service.RepositoryID, draft, false)
+		if draft.Strategy == domain.WorkspaceStandardWorktree {
 			ui.Column(c).FillWidth().Gap(4).Children(func() {
-				label(c, targetLabel, 11, p.muted)
+				label(c, "目标分支（必填）", 11, p.muted)
 				target := ui.TextInput(c.Key("target"), &draft.TargetBranch).FillWidth().Height(34).
 					Placeholder(firstNonEmpty(state.draft.Branch, "输入模块目标分支")).Label("模块目标分支 · " + id)
 				if state.moduleFieldFocus == id+":targetBranch" {
@@ -2005,10 +1482,14 @@ func (s *app) renderTaskCreationModule(c *ui.Context, p palette, service domain.
 			if message := taskCreationModuleFieldError(state, service.ID, draft.ID, "targetBranch"); message != "" {
 				label(c, message, 10, p.amber).FillWidth().Wrap()
 			}
-			s.syncTaskCreationModuleDraft(service.ID, draft)
 		}
+		s.syncTaskCreationModuleDraft(service.ID, draft)
 		ui.Divider(c)
 	})
+	if remove {
+		s.removeTaskCreationModule(service.ID, draft.ID)
+		c.Invalidate()
+	}
 }
 
 func taskCreationModuleFieldError(state *taskCreationState, serviceID, moduleID, field string) string {
@@ -2077,5 +1558,9 @@ func (s *app) focusTaskCreationConflict(conflict workspace.BranchReuseConflict) 
 		s.focusTaskCreationValidationTarget(&taskCreationValidationTarget{serviceID: conflict.ServiceID, field: "module"})
 		return
 	}
-	s.focusTaskCreationValidationTarget(&taskCreationValidationTarget{serviceID: conflict.ServiceID, moduleID: moduleID, field: "targetBranch"})
+	field := "targetBranch"
+	if state.moduleData[conflict.ServiceID][moduleID].Strategy == domain.WorkspaceIndependentClone {
+		field = "baseRef"
+	}
+	s.focusTaskCreationValidationTarget(&taskCreationValidationTarget{serviceID: conflict.ServiceID, moduleID: moduleID, field: field})
 }

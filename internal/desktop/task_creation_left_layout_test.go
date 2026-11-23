@@ -3,7 +3,6 @@ package desktop
 import (
 	"fmt"
 	"image/png"
-	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,11 +23,6 @@ func taskCreationLeftFixture(t *testing.T, width int, dark bool) (*app, *ui.Test
 		URL: "https://project.feishu.cn/synthetic/userstory/detail/1000000091", Title: taskCreationLeftTitle,
 	})
 	form.config.AIRequirementNamingEnabled = true
-	form.workspaceTools = []taskCreationWorkspaceToolOption{
-		{ID: "codex", DisplayName: "Codex", Description: "示例命令工具", Available: true},
-		{ID: "cursor", DisplayName: "Cursor", Description: "示例编辑器", Available: true},
-	}
-	form.selectedToolIDs = map[string]bool{"cursor": true}
 	form.draft.MetadataHint = nil
 	tester.Frame()
 	// Metadata reads have no backend in this isolated UI fixture. The selected
@@ -55,9 +49,6 @@ func TestTaskCreationLeftLayout(t *testing.T) {
 				name, _ := tester.Find("任务名称")
 				failure, failureFound := tester.Find(taskCreationLeftError)
 				branch, _ := tester.Find("任务分支输入")
-				toolsLabel, _ := tester.Find("创建后打开工作区工具")
-				codex, _ := tester.Find("Codex")
-				cursor, _ := tester.Find("Cursor")
 				footer, _ := tester.Find("检查并创建任务")
 				if !titleFound || title.Y < input.Y+input.H || title.Y+title.H > nameLabel.Y || title.W > left.W || title.H < 20 {
 					t.Fatalf("full muted title must wrap below the sole URL input: input=%+v title=%+v label=%+v", input, title, nameLabel)
@@ -67,9 +58,6 @@ func TestTaskCreationLeftLayout(t *testing.T) {
 				}
 				if !failureFound || failure.Y < name.Y+name.H || failure.Y+failure.H > branch.Y || failure.W > left.W || failure.H < 20 {
 					t.Fatalf("long generation failure must own wrapping rows: failure=%+v name=%+v branch=%+v", failure, name, branch)
-				}
-				if toolsLabel.Y < branch.Y+branch.H || codex.Y < toolsLabel.Y+toolsLabel.H || codex.Y != cursor.Y || math.Abs(float64(codex.X-toolsLabel.X)) > 1 {
-					t.Fatalf("workspace tools should be checkboxes on a separate row: label=%+v codex=%+v cursor=%+v", toolsLabel, codex, cursor)
 				}
 				if right.W < left.W*0.95 || right.W > left.W*1.05 || left.Y != right.Y || footer.Y < left.Y+left.H || footer.Y+footer.H > 800 {
 					t.Fatalf("1:1 independent columns and fixed footer changed: left=%+v right=%+v footer=%+v", left, right, footer)
@@ -83,40 +71,10 @@ func TestTaskCreationLeftLayout(t *testing.T) {
 	}
 }
 
-func TestTaskCreationLeftTitleAndTools(t *testing.T) {
+func TestTaskCreationLeftTitle(t *testing.T) {
 	s, tester := taskCreationLeftFixture(t, 960, false)
 	form := s.taskUnit.state.taskCreation
 	link := form.draft.RequirementLink
-	if err := tester.Click("Codex"); err != nil {
-		t.Fatal(err)
-	}
-	if !form.selectedToolIDs["codex"] || !form.selectedToolIDs["cursor"] {
-		t.Fatal("tool toggles discarded the initial selection")
-	}
-	if err := tester.Click("Cursor"); err != nil {
-		t.Fatal(err)
-	}
-	if form.selectedToolIDs["cursor"] || form.requirements.query != link {
-		t.Fatal("tool deselection or URL preservation failed")
-	}
-	form.workspaceTools = append(form.workspaceTools, taskCreationWorkspaceToolOption{ID: "custom", DisplayName: "自定义工具", Available: false, Reason: "示例工具未安装"})
-	form.config.DefaultWorkspaceToolIDs = append(form.config.DefaultWorkspaceToolIDs, "custom")
-	tester.Frame()
-	if err := tester.Click("自定义工具"); err != nil {
-		t.Fatal(err)
-	}
-	if form.selectedToolIDs["custom"] || !tester.HasText("自定义工具（不可用）") {
-		t.Fatal("dynamic unavailable option was removed or enabled")
-	}
-	s.busy = true
-	tester.Frame()
-	if err := tester.Click("Codex"); err != nil {
-		t.Fatal(err)
-	}
-	if !form.selectedToolIDs["codex"] {
-		t.Fatal("busy tool toggle should remain disabled")
-	}
-	s.busy = false
 	form.requirements.inputIsQuery = true
 	form.requirements.query = "搜索合成需求"
 	tester.Frame()

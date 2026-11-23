@@ -55,7 +55,7 @@ func applyProductionWritePreview(v *productionView, b production.Batch, kind str
 				slices.Sort(p.Branches)
 			}
 		}
-		if kind != "production.merge" {
+		if kind != "production.merge" && p.ProductionSHA != "" {
 			p.ProductionTag, p.ProductionSHA = b.ProductionTag, b.ProductionSHA
 			p.ProductionInMain = true
 		}
@@ -70,33 +70,18 @@ func applyProductionWritePreview(v *productionView, b production.Batch, kind str
 		if len(b.Tags) > 0 {
 			tag := b.Tags[len(b.Tags)-1]
 			if !slices.Contains(p.Tags, tag.Name) {
-				p.Tags = append([]string{tag.Name}, p.Tags...)
+				p.Tags = append(p.Tags, tag.Name)
 			}
 		}
 	default:
 		return
 	}
-	suggested, suggestionErr := production.SuggestedVersion(p)
-	p.SuggestedVersion = suggested
-	if suggestionErr != nil && !strings.Contains(p.Warning, suggestionErr.Error()) {
-		p.Warning = strings.TrimSpace(p.Warning + "\n" + suggestionErr.Error())
-	}
-	v.Preview = &p
-}
-
-// Lightweight build observations carry names, not display-only creation dates.
-// Keep the last known display order; new names have no date until a full read.
-func productionTagDisplayOrder(previous, current []string) []string {
-	remaining := map[string]bool{}
-	for _, name := range current {
-		remaining[name] = true
-	}
-	ordered := make([]string, 0, len(current))
-	for _, name := range append(slices.Clone(previous), current...) {
-		if remaining[name] {
-			ordered = append(ordered, name)
-			delete(remaining, name)
+	if p.ProductionSHA != "" {
+		suggested, suggestionErr := production.SuggestedVersion(p)
+		p.SuggestedVersion = suggested
+		if suggestionErr != nil && !strings.Contains(p.Warning, suggestionErr.Error()) {
+			p.Warning = strings.TrimSpace(p.Warning + "\n" + suggestionErr.Error())
 		}
 	}
-	return ordered
+	v.Preview = &p
 }

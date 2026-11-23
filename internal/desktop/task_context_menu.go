@@ -56,50 +56,46 @@ func (s *app) taskContextMenu(services ui.Services, t task, menu *ui.Menu) {
 		pinLabel = "取消置顶"
 	}
 	chosen := ""
-	toolCount := 0
-	for _, tool := range []struct{ id, name string }{{"codex", "Codex"}, {"cursor", "Cursor"}} {
-		if !s.taskOpenToolEnabled(tool.id) {
-			continue
+	if containsString(stringArray(s.configArray("defaultWorkspaceToolIds")), "codex") {
+		if menu.Item("在 Codex 中打开").IconSVG(icons["launch"]).Disabled(!valid || s.busy || s.backend == nil || t.path == "").Chosen() {
+			chosen = "codex-open"
 		}
-		toolCount++
-		if menu.Item("在 " + tool.name + " 中打开").Icon(icons["launch"]).Disabled(!valid || s.busy || s.backend == nil || t.path == "" || !s.taskOpenToolAvailable(tool.id)).Chosen() {
-			chosen = tool.id + "-open"
-		}
-	}
-	if toolCount > 0 {
 		menu.Separator()
 	}
-	if t.requirementURL == "" && menu.Item("关联需求").Icon(icons["file"]).Disabled(!valid || s.busy || s.backend == nil).Chosen() {
+	if t.requirementURL == "" && menu.Item("关联需求").IconSVG(icons["file"]).Disabled(!valid || s.busy || s.backend == nil).Chosen() {
 		chosen = "requirement-link"
 	}
-	if menu.Item("批量合并主分支").Icon(icons["branch"]).Disabled(!valid || s.busy || s.backend == nil || t.archived || !s.taskHasMainBranchMergeBatch(t)).Chosen() {
+	if menu.Item("批量合并主分支").IconSVG(icons["branch"]).Disabled(!valid || s.busy || s.backend == nil || t.archived || !s.taskHasMainBranchMergeBatch(t)).Chosen() {
 		chosen = "merge-main-batch"
 	}
 	menu.Separator()
-	if menu.Item("打开任务目录").Icon(icons["folder"]).Disabled(!valid || s.backend == nil || t.path == "").Chosen() {
+	if menu.Item("打开任务目录").IconSVG(icons["folder"]).Disabled(!valid || s.backend == nil || t.path == "").Chosen() {
 		chosen = "task-open-directory"
 	}
-	if menu.Item("复制任务目录").Icon(icons["copy"]).Disabled(!valid || t.path == "").Chosen() {
+	if menu.Item("复制任务目录").IconSVG(icons["copy"]).Disabled(!valid || t.path == "").Chosen() {
 		chosen = "task-copy-directory"
+	}
+	if menu.Item(regenerateTaskInstructionsLabel).IconSVG(icons["file"]).Disabled(!valid || s.busy || s.backend == nil || t.path == "").Chosen() {
+		chosen = "task-refresh-agents"
 	}
 	if t.materialsReady() {
 		menu.Separator()
-		if menu.Item("打开任务资料目录").Icon(icons["folder"]).Disabled(!valid || s.backend == nil).Chosen() {
+		if menu.Item("打开任务资料目录").IconSVG(icons["folder"]).Disabled(!valid || s.backend == nil).Chosen() {
 			chosen = "materials-open"
 		}
-		if menu.Item("复制任务资料路径").Icon(icons["copy"]).Disabled(!valid).Chosen() {
+		if menu.Item("复制任务资料路径").IconSVG(icons["copy"]).Disabled(!valid).Chosen() {
 			chosen = "materials-copy-path"
 		}
 	} else if t.requirementURL == "" {
 		menu.Separator()
-		if menu.Item("准备本地任务资料").Icon(icons["folder"]).Disabled(!valid || s.busy || s.backend == nil).Chosen() {
+		if menu.Item("准备本地任务资料").IconSVG(icons["folder"]).Disabled(!valid || s.busy || s.backend == nil).Chosen() {
 			chosen = "materials-retry"
 		}
 	} else {
 		menu.Separator()
 		configured := strings.TrimSpace(s.configString("requirementMaterialsRoot")) != "" && strings.TrimSpace(s.configString("requirementMaterialsSubdirectory")) != ""
 		if !configured {
-			if menu.Item("配置任务资料").Icon(icons["settings"]).Disabled(!valid).Chosen() {
+			if menu.Item("配置任务资料").IconSVG(icons["settings"]).Disabled(!valid).Chosen() {
 				chosen = "materials-configure"
 			}
 		} else {
@@ -107,28 +103,28 @@ func (s *app) taskContextMenu(services ui.Services, t task, menu *ui.Menu) {
 			if t.materialsFailed() {
 				label = "重试关联任务资料"
 			}
-			if menu.Item(label).Icon(icons["refresh"]).Disabled(!valid || s.busy || s.backend == nil).Chosen() {
+			if menu.Item(label).IconSVG(icons["refresh"]).Disabled(!valid || s.busy || s.backend == nil).Chosen() {
 				chosen = "materials-retry"
 			}
 		}
 	}
 	menu.Separator()
-	if menu.Item(pinLabel).Icon(icons["pin"]).Disabled(!valid).Chosen() {
+	if menu.Item(pinLabel).IconSVG(icons["pin"]).Disabled(!valid).Chosen() {
 		chosen = "pin"
 	}
 	menu.Separator()
 	if t.archived {
-		if menu.Item("恢复归档").Icon(icons["archive"]).Disabled(!valid || s.busy).Chosen() {
+		if menu.Item("恢复归档").IconSVG(icons["archive"]).Disabled(!valid || s.busy).Chosen() {
 			chosen = "restore"
 		}
-	} else if menu.Item("归档任务").Icon(icons["archive"]).Disabled(!valid || s.busy).Chosen() {
+	} else if menu.Item("归档任务").IconSVG(icons["archive"]).Disabled(!valid || s.busy).Chosen() {
 		chosen = "archive"
 	}
-	if menu.Item("恢复已回收工作区").Icon(icons["refresh"]).Disabled(!valid || s.busy || s.backend == nil).Chosen() {
+	if menu.Item("恢复已回收工作区").IconSVG(icons["refresh"]).Disabled(!valid || s.busy || s.backend == nil).Chosen() {
 		chosen = "restore-recycled-workspaces"
 	}
 	menu.Separator()
-	if menu.Item("删除任务").Icon(icons["delete"]).Dangerous().Disabled(!valid || s.busy).Chosen() {
+	if menu.Item("删除任务").IconSVG(icons["delete"]).Danger().Disabled(!valid || s.busy).Chosen() {
 		chosen = "delete"
 	}
 	if chosen == "" {
@@ -151,8 +147,6 @@ func (s *app) taskContextMenu(services ui.Services, t task, menu *ui.Menu) {
 		s.openTaskRequirementForm(t)
 	case "codex-open":
 		s.dispatchTaskContextAction(application.Action{Kind: "codex.run", TaskID: t.id, Path: t.path}, opened)
-	case "cursor-open":
-		s.dispatchTaskContextAction(application.Action{Kind: "task.tools-launch", TaskID: t.id, Path: t.path, Payload: map[string]any{"toolIds": []string{"cursor"}}}, opened)
 	case "merge-main-batch":
 		s.openWorkspaceMergeBatch(t)
 	case "task-open-directory":
@@ -160,6 +154,8 @@ func (s *app) taskContextMenu(services ui.Services, t task, menu *ui.Menu) {
 			Payload: map[string]any{"desktopSystemOpenDirectory": true}}, opened)
 	case "task-copy-directory":
 		s.copyTextToClipboard(services, t.path, "已复制任务目录")
+	case "task-refresh-agents":
+		s.regenerateTaskInstructions(*opened)
 	case "materials-open":
 		s.dispatchScopedSystemOpen(application.Action{Kind: "system.open", TaskID: t.id, Path: t.materialsPath,
 			Payload: map[string]any{"desktopSystemOpenDirectory": true}}, opened)

@@ -1,6 +1,7 @@
 package editor
 
 import (
+	"math"
 	"strconv"
 	"strings"
 	"testing"
@@ -140,5 +141,196 @@ func BenchmarkDiffViewerType(b *testing.B) {
 		} else {
 			tt.Key(0, ui.KeyBackspace)
 		}
+	}
+}
+
+// newFitBench shows a diff of two versions of a Go file of about n lines,
+// a change every 50 lines, as high as its content in a scrolling list
+// under a header, as an app listing a change's files shows it.
+func newFitBench(n int, layout DiffLayout, wrap bool) *ui.Tester {
+	old := bigGo(n)
+	lines := strings.Split(old, "\n")
+	for i := 10; i < len(lines); i += 50 {
+		lines[i] = strings.Replace(lines[i], "err", "e", 1) + " // changed, and a few more words to wrap on narrow windows"
+	}
+	d := &DiffState{Old: NewBuffer(old), New: NewBuffer(strings.Join(lines, "\n")), Layout: layout, Wrap: wrap, FitContent: true}
+	d.Old.SetLanguage(LanguageNamed("go"))
+	d.New.SetLanguage(LanguageNamed("go"))
+	tt := ui.NewTester(func(c *ui.Context) {
+		ui.Scroll(c).Fill().Children(func() {
+			ui.Box(c).Height(200)
+			DiffView(c, d).FillWidth()
+		})
+	}, 1400, 800)
+	tt.SetScale(2)
+	for range 4 {
+		tt.Frame()
+	}
+	tt.Move(700, 400)
+	return tt
+}
+
+func benchFitScroll(b *testing.B, layout DiffLayout) {
+	tt := newFitBench(20_000, layout, false)
+	b.ReportAllocs()
+	for i := 0; b.Loop(); i++ {
+		dy := float32(61)
+		if i/200%2 == 1 {
+			dy = -61
+		}
+		tt.Scroll(700, 400, 0, dy)
+	}
+}
+
+// BenchmarkDiffFitScroll scrolls a split diff of 20,000 lines as high as
+// its content, down and back up, in the list it is in.
+func BenchmarkDiffFitScroll(b *testing.B) { benchFitScroll(b, DiffSplit) }
+
+// BenchmarkDiffFitScrollUnified scrolls a unified one.
+func BenchmarkDiffFitScrollUnified(b *testing.B) { benchFitScroll(b, DiffUnified) }
+
+func benchFitResize(b *testing.B, layout DiffLayout, wrap bool) {
+	tt := newFitBench(20_000, layout, wrap)
+	widths := []int{1400, 1380, 1360, 1340, 1320, 1300, 1320, 1340, 1360, 1380}
+	b.ReportAllocs()
+	for i := 0; b.Loop(); i++ {
+		tt.SetSize(widths[i%len(widths)], 800)
+		tt.Frame()
+	}
+}
+
+// BenchmarkDiffFitResize renders the frames of a window resized through
+// widths over a split diff of 20,000 lines as high as its content.
+func BenchmarkDiffFitResize(b *testing.B) { benchFitResize(b, DiffSplit, false) }
+
+// BenchmarkDiffFitResizeWrap resizes with soft wraps, which each width
+// measures again.
+func BenchmarkDiffFitResizeWrap(b *testing.B) { benchFitResize(b, DiffSplit, true) }
+
+// BenchmarkDiffFitResizeUnifiedWrap resizes a unified one with soft wraps.
+func BenchmarkDiffFitResizeUnifiedWrap(b *testing.B) { benchFitResize(b, DiffUnified, true) }
+
+// BenchmarkDiffFitFrame renders a frame of a split diff of 20,000 lines
+// as high as its content in which nothing changed, as the pointer moving
+// over it asks for.
+func BenchmarkDiffFitFrame(b *testing.B) {
+	tt := newFitBench(20_000, DiffSplit, false)
+	b.ReportAllocs()
+	for i := 0; b.Loop(); i++ {
+		tt.Move(700, float32(400+i%2))
+	}
+}
+
+// BenchmarkDiffDeletedFileScroll scrolls near the end of a unified diff of
+// a deleted Go file of 20,000 lines: one run of deleted lines, most of
+// it above the view.
+func BenchmarkDiffDeletedFileScroll(b *testing.B) {
+	d := &DiffState{Old: NewBuffer(bigGo(20_000)), New: NewBuffer(""), Layout: DiffUnified}
+	d.Old.SetLanguage(LanguageNamed("go"))
+	tt := ui.NewTester(func(c *ui.Context) {
+		DiffView(c, d).Fill()
+	}, 1400, 800)
+	tt.SetScale(2)
+	tt.Frame()
+	d.SetScrollY(math.MaxFloat64)
+	tt.Frame()
+	tt.Move(700, 400)
+	b.ReportAllocs()
+	for i := 0; b.Loop(); i++ {
+		dy := float32(-61)
+		if i%2 == 1 {
+			dy = 61
+		}
+		tt.Scroll(700, 400, 0, dy)
+	}
+}
+
+// bigChinese is Chinese prose of n lines, with Latin words, numbers and
+// punctuation, each a few rows wide.
+func bigChinese(n int) string {
+	var b strings.Builder
+	for i := range n {
+		b.WriteString("这是第" + strconv.Itoa(i) + "行，用于测试软换行的中文文本：每一行都含有若干标点符号、English words 和数字 42。逗号、顿号和句号在中文排版中占一个全角字宽；分号与冒号同样如此。\n")
+	}
+	return b.String()
+}
+
+// BenchmarkCodeEditorWrapChinese measures the soft wraps of all the
+// lines of Chinese prose of 20,000 lines, as each width of a resize does.
+func BenchmarkCodeEditorWrapChinese(b *testing.B) {
+	st, _ := newBenchEditor(b, bigChinese(20_000), true)
+	v := &st.ed.view
+	width := v.wrapWidth
+	b.ReportAllocs()
+	for i := 0; b.Loop(); i++ {
+		v.setWrap(true, width-float32(i%2*10))
+		for !v.measureWraps(0, time.Hour) {
+		}
+	}
+}
+
+// BenchmarkCodeEditorScrollWrapChinese scrolls Chinese prose of 20,000
+// lines with soft wraps, whose rows are shaped to fit as they show.
+func BenchmarkCodeEditorScrollWrapChinese(b *testing.B) {
+	_, tt := newBenchEditor(b, bigChinese(20_000), true)
+	b.ReportAllocs()
+	for b.Loop() {
+		tt.Scroll(600, 400, 0, 61)
+	}
+}
+
+// benchNote is a Markdown note of n lines, and what its live preview
+// replaces: the marks of emphasis on every line, and a link's on every
+// fourth.
+func benchNote(n int) (string, []Replacement) {
+	var b strings.Builder
+	var rs []Replacement
+	for i := range n {
+		start := b.Len()
+		b.WriteString("Some **bold** words")
+		rs = append(rs, Replacement{Start: start + 5, End: start + 7}, Replacement{Start: start + 11, End: start + 13})
+		if i%4 == 0 {
+			at := b.Len()
+			b.WriteString(" and a [link](https://example.com)")
+			rs = append(rs, Replacement{Start: at + 7, End: at + 8}, Replacement{Start: at + 12, End: at + 34})
+		}
+		b.WriteString(" on line " + strconv.Itoa(i) + ".\n")
+	}
+	return b.String(), rs
+}
+
+// BenchmarkCodeEditorTypeReplacements types a character in the middle of
+// a note of 10,000 lines and renders the frame: with no replacements, as
+// its source shows; with those of a live preview, which the edits move;
+// and with the app setting them again after each key press.
+func BenchmarkCodeEditorTypeReplacements(b *testing.B) {
+	for _, mode := range []string{"source", "moved", "set"} {
+		b.Run(mode, func(b *testing.B) {
+			text, rs := benchNote(10_000)
+			st := &State{Buffer: NewBuffer(text)}
+			tt := ui.NewTester(func(c *ui.Context) {
+				View(c, st).Fill().AutoFocus()
+			}, 1200, 800)
+			tt.SetScale(2)
+			tt.Frame()
+			if mode != "source" {
+				st.SetReplacements(rs)
+			}
+			mid := st.Buffer.Offset(Pos{Line: 5_000})
+			st.Select(mid, mid)
+			tt.Frame()
+			b.ReportAllocs()
+			for i := 0; b.Loop(); i++ {
+				if i%2 == 0 {
+					tt.Type("x")
+				} else {
+					tt.Key(0, ui.KeyBackspace)
+				}
+				if mode == "set" {
+					st.SetReplacements(st.Replacements())
+				}
+				tt.Frame()
+			}
+		})
 	}
 }

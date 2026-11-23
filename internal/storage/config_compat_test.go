@@ -45,7 +45,6 @@ func TestConfigCompatibilityAllShardsReadSave(t *testing.T) {
 			t.Fatalf("read rewrote %s", name)
 		}
 	}
-	config.Groups[0].Name = "修改组名"
 	config.DefaultBranchPrefix = "feature/"
 	config.TagHistoryMaxGroups++
 	config.DefaultWorkspaceToolIDs = []string{}
@@ -122,7 +121,7 @@ func TestConfigCompatibilityMissingOptionalDefaults(t *testing.T) {
 	for _, name := range shardNames {
 		editConfigObject(t, store, name, func(fields map[string]json.RawMessage) {
 			for key := range fields {
-				if key != "schema" {
+				if key != "schema" && (name != "services.json" || key != "services") {
 					delete(fields, key)
 				}
 			}
@@ -188,7 +187,7 @@ func TestConfigCompatibilityNestedRowIdentityAndDeletion(t *testing.T) {
 	}
 	config.MeegleProjects = []domain.MeegleProjectConfig{{ProjectKey: "first", SimpleName: "one"}, {ProjectKey: "second", SimpleName: "two"}}
 	config.Repositories = []domain.RepositoryConfig{{ID: "repo", Name: "repo", RootPath: "C:/repo", GitCommonDirectory: "C:/repo/.git"}}
-	config.Groups[0].Services = []domain.GroupServiceConfig{{ID: "service", RepositoryID: "repo", DisplayName: "service", Enabled: true, GenbuServiceName: "service", MasterBranch: "origin/master", TestTagBaselineRef: "origin/release/test", DevelopmentTool: domain.DevelopmentToolIntelliJIdea,
+	config.Services = []domain.ServiceConfig{{ID: "service", RepositoryID: "repo", DisplayName: "service", Enabled: true, GenbuServiceName: "service", MasterBranch: "origin/master", TestTagBaselineRef: "origin/release/test", DevelopmentTool: domain.DevelopmentToolIntelliJIdea,
 		Modules: []domain.ServiceModuleConfig{{ID: "one", Name: "one", Strategy: domain.WorkspaceStandardWorktree, TagMode: domain.TagBuildMergeToTargetBranch}, {ID: "two", Name: "two", Strategy: domain.WorkspaceStandardWorktree, TagMode: domain.TagBuildMergeToTargetBranch}}}}
 	if err := store.Save(config); err != nil {
 		t.Fatal(err)
@@ -197,24 +196,19 @@ func TestConfigCompatibilityNestedRowIdentityAndDeletion(t *testing.T) {
 		fields["meegleProjects"] = json.RawMessage(`[{"project_key":"first","simple_name":"one","future":{"owner":"first"}},{"project_key":"second","simple_name":"two","future":{"owner":"second"}}]`)
 	})
 	editConfigObject(t, store, "services.json", func(fields map[string]json.RawMessage) {
-		// Add extensions at the group, service and module levels.
-		var groups []map[string]json.RawMessage
-		_ = json.Unmarshal(fields["groups"], &groups)
-		groups[0]["future"] = json.RawMessage(`"group"`)
 		var services []map[string]json.RawMessage
-		_ = json.Unmarshal(groups[0]["services"], &services)
+		_ = json.Unmarshal(fields["services"], &services)
 		services[0]["future"] = json.RawMessage(`"service"`)
 		var modules []map[string]json.RawMessage
 		_ = json.Unmarshal(services[0]["modules"], &modules)
 		modules[0]["future"] = json.RawMessage(`"one"`)
 		modules[1]["future"] = json.RawMessage(`"two"`)
 		services[0]["modules"], _ = json.Marshal(modules)
-		groups[0]["services"], _ = json.Marshal(services)
-		fields["groups"], _ = json.Marshal(groups)
+		fields["services"], _ = json.Marshal(services)
 	})
 	config.MeegleProjects[0], config.MeegleProjects[1] = config.MeegleProjects[1], config.MeegleProjects[0]
 	config.MeegleProjects[0].SimpleName = "renamed"
-	service := &config.Groups[0].Services[0]
+	service := &config.Services[0]
 	service.Modules[0], service.Modules[1] = service.Modules[1], service.Modules[0]
 	service.Modules[0].Name = "renamed"
 	if err := store.Save(config); err != nil {
@@ -224,19 +218,16 @@ func TestConfigCompatibilityNestedRowIdentityAndDeletion(t *testing.T) {
 	_ = json.Unmarshal(readConfigObject(t, store, "integrations.json")["meegleProjects"], &projects)
 	assertConfigJSON(t, projects[0]["future"], `{"owner":"second"}`)
 	assertConfigJSON(t, projects[1]["future"], `{"owner":"first"}`)
-	var groups []struct {
-		Future   string `json:"future"`
-		Services []struct {
-			Future  string                        `json:"future"`
-			Modules []struct{ ID, Future string } `json:"modules"`
-		} `json:"services"`
+	var services []struct {
+		Future  string                        `json:"future"`
+		Modules []struct{ ID, Future string } `json:"modules"`
 	}
-	_ = json.Unmarshal(readConfigObject(t, store, "services.json")["groups"], &groups)
-	if groups[0].Future != "group" || groups[0].Services[0].Future != "service" || groups[0].Services[0].Modules[0].ID != "two" || groups[0].Services[0].Modules[0].Future != "two" {
-		t.Fatalf("nested identities crossed rows: %+v", groups)
+	_ = json.Unmarshal(readConfigObject(t, store, "services.json")["services"], &services)
+	if services[0].Future != "service" || services[0].Modules[0].ID != "two" || services[0].Modules[0].Future != "two" {
+		t.Fatalf("nested identities crossed rows: %+v", services)
 	}
 	config.MeegleProjects = config.MeegleProjects[:1]
-	config.Groups[0].Services = nil
+	config.Services = nil
 	if err := store.Save(config); err != nil {
 		t.Fatal(err)
 	}
@@ -245,9 +236,7 @@ func TestConfigCompatibilityNestedRowIdentityAndDeletion(t *testing.T) {
 		t.Fatal("deleted row survived", projects)
 	}
 	assertConfigJSON(t, projects[0]["future"], `{"owner":"second"}`)
-	if raw := readConfigObject(t, store, "services.json")["groups"]; bytes.Contains(raw, []byte(`"service"`)) || bytes.Contains(raw, []byte(`"modules"`)) {
-		t.Fatalf("removed service retained extensions: %s", raw)
-	}
+	assertConfigJSON(t, readConfigObject(t, store, "services.json")["services"], `[]`)
 }
 
 func TestConfigCompatibilityNoIDRowsAndAmbiguity(t *testing.T) {
@@ -287,7 +276,7 @@ func TestConfigCompatibilityAmbiguousSaveDoesNotTouchFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	config.Repositories = []domain.RepositoryConfig{{ID: "repo", Name: "repo", RootPath: "C:/repo", GitCommonDirectory: "C:/repo/.git"}}
-	config.Groups[0].Services = []domain.GroupServiceConfig{{ID: "service", RepositoryID: "repo", DisplayName: "service", MasterBranch: "origin/master", TestTagBaselineRef: "origin/release/test", DevelopmentTool: domain.DevelopmentToolIntelliJIdea,
+	config.Services = []domain.ServiceConfig{{ID: "service", RepositoryID: "repo", DisplayName: "service", MasterBranch: "origin/master", TestTagBaselineRef: "origin/release/test", DevelopmentTool: domain.DevelopmentToolIntelliJIdea,
 		Modules:   []domain.ServiceModuleConfig{{ID: "module", Name: "module", Strategy: domain.WorkspaceStandardWorktree, TagMode: domain.TagBuildMergeToTargetBranch}},
 		Bootstrap: domain.BootstrapConfig{Commands: []domain.BootstrapCommand{{Name: "command", Executable: "tool", Arguments: []string{}, WorkingDirectory: ".", TimeoutSeconds: 600, Enabled: true}}}}}
 	if err := store.Save(config); err != nil {
@@ -302,13 +291,12 @@ func TestConfigCompatibilityAmbiguousSaveDoesNotTouchFiles(t *testing.T) {
 	}
 	// Other changes to this service can still be saved without an ID on an
 	// otherwise unchanged bootstrap row, even when its optional fields default.
-	config.Groups[0].Services[0].Enabled = true
+	config.Services[0].Enabled = true
 	if err := store.Save(config); err != nil {
 		t.Fatal(err)
 	}
 	before, _ := store.readShardFiles()
-	backupsBefore, _ := store.Backups()
-	config.Groups[0].Services[0].Bootstrap.Commands[0].Name = "edited-without-id"
+	config.Services[0].Bootstrap.Commands[0].Name = "edited-without-id"
 	config.Theme = domain.ThemeDark
 	if err := store.Save(config); err == nil || !strings.Contains(err.Error(), "无法唯一匹配") {
 		t.Fatal("ambiguous save was accepted", err)
@@ -319,11 +307,8 @@ func TestConfigCompatibilityAmbiguousSaveDoesNotTouchFiles(t *testing.T) {
 			t.Fatal("failed save changed shard", name)
 		}
 	}
-	backupsAfter, _ := store.Backups()
-	if len(backupsBefore) != len(backupsAfter) {
-		t.Fatal("ambiguous save began a backup/write transaction")
-	}
-	config.Groups[0].Services[0].Bootstrap.Commands = nil
+	assertConfigBackupDirectoryAbsent(t, store)
+	config.Services[0].Bootstrap.Commands = nil
 	if err := store.Save(config); err != nil {
 		t.Fatal("explicit command removal blocked", err)
 	}
@@ -338,10 +323,8 @@ func TestConfigCompatibilityIdentifiedRowTypes(t *testing.T) {
 		typ reflect.Type
 		id  string
 	}{
-		{reflect.TypeOf(groupLayoutShard{}), "id"},
-		{reflect.TypeOf(groupServicesShard{}), "groupId"},
 		{reflect.TypeOf(domain.RepositoryConfig{}), "id"},
-		{reflect.TypeOf(domain.GroupServiceConfig{}), "id"},
+		{reflect.TypeOf(domain.ServiceConfig{}), "id"},
 		{reflect.TypeOf(domain.ServiceModuleConfig{}), "id"},
 		{reflect.TypeOf(domain.WorkspaceCommandConfig{}), "id"},
 		{reflect.TypeOf(domain.SkillSource{}), "id"},
@@ -377,6 +360,7 @@ func TestConfigCompatibilityImportUnknownOnlyChangesAndRestore(t *testing.T) {
 	editConfigObject(t, store, "integrations.json", func(fields map[string]json.RawMessage) {
 		fields["future"] = json.RawMessage(futureConfigValue)
 	})
+	backup := exportConfigFixture(t, store)
 	files, err := store.readShardFiles()
 	if err != nil {
 		t.Fatal(err)
@@ -401,14 +385,10 @@ func TestConfigCompatibilityImportUnknownOnlyChangesAndRestore(t *testing.T) {
 		t.Fatal("target extensions leaked into the source archive")
 	}
 	assertConfigJSON(t, fields["newFuture"], `{"precise":90071992547409931234567890,"nil":null}`)
-	backups, err := store.Backups()
-	if err != nil || len(backups) != 1 {
-		t.Fatalf("unknown-only import was treated as a no-op: %+v %v", backups, err)
-	}
-	if _, err := store.PreviewRestore(backups[0].Path); err != nil {
+	if _, err := store.PreviewImport(backup); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Restore(backups[0].Path); err != nil {
+	if _, err := store.ImportFrom(backup); err != nil {
 		t.Fatal(err)
 	}
 	fields = readConfigObject(t, store, "integrations.json")
@@ -431,29 +411,28 @@ func TestConfigCompatibilityImportUnknownOnlyChangesAndRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertConfigJSON(t, readConfigObject(t, empty, "integrations.json")["future"], futureConfigValue)
-	before, _ := empty.Backups()
 	if _, err := empty.ImportFrom(export); err != nil {
 		t.Fatal(err)
 	}
-	after, _ := empty.Backups()
-	if len(before) != len(after) {
-		t.Fatal("identical archive created an unnecessary backup")
-	}
+	assertConfigBackupDirectoryAbsent(t, empty)
 }
 
 func TestConfigCompatibilityInvalidContentStillRejected(t *testing.T) {
 	for _, test := range []struct{ name, shard, contents string }{
-		{"syntax", "integrations.json", `{"schema":6,`},
-		{"trailing", "integrations.json", `{"schema":6} {}`},
-		{"schema", "integrations.json", `{"schema":7,"future":true}`},
+		{"syntax", "integrations.json", `{"schema":7,`},
+		{"trailing", "integrations.json", `{"schema":7} {}`},
+		{"schema", "integrations.json", `{"schema":6,"future":true}`},
 		{"missing schema", "integrations.json", `{"future":true}`},
-		{"schema type", "integrations.json", `{"schema":"6"}`},
-		{"known type", "integrations.json", `{"schema":6,"meegleExecutablePath":false,"future":true}`},
-		{"known enum", "appearance.json", `{"schema":6,"theme":"FUTURE"}`},
-		{"null boolean", "appearance.json", `{"schema":6,"sidebarVisibility":{"tools":null,"future":true}}`},
-		{"null list", "workspace.json", `{"schema":6,"repositories":null}`},
-		{"missing row ID", "workspace.json", `{"schema":6,"repositories":[{"name":"r","rootPath":"C:/r","gitCommonDirectory":"C:/r/.git","future":true}]}`},
-		{"nested type", "integrations.json", `{"schema":6,"materialsGitSync":{"branch":false,"future":true}}`},
+		{"schema type", "integrations.json", `{"schema":"7"}`},
+		{"known type", "integrations.json", `{"schema":7,"meegleExecutablePath":false,"future":true}`},
+		{"known enum", "appearance.json", `{"schema":7,"theme":"FUTURE"}`},
+		{"null boolean", "appearance.json", `{"schema":7,"sidebarVisibility":{"tools":null,"future":true}}`},
+		{"null list", "workspace.json", `{"schema":7,"repositories":null}`},
+		{"missing row ID", "workspace.json", `{"schema":7,"repositories":[{"name":"r","rootPath":"C:/r","gitCommonDirectory":"C:/r/.git","future":true}]}`},
+		{"nested type", "integrations.json", `{"schema":7,"materialsGitSync":{"branch":false,"future":true}}`},
+		{"grouped layout", "layout.json", `{"schema":7,"groups":[]}`},
+		{"grouped catalog", "services.json", `{"schema":7,"groups":[],"services":[]}`},
+		{"missing catalog", "services.json", `{"schema":7}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store := NewConfigStore(NewPaths(t.TempDir()))
@@ -523,7 +502,7 @@ func TestConfigCompatibilityConcurrentUpdatesAndLatestExtensions(t *testing.T) {
 		t.Fatalf("updates lost: %q %v", config.DefaultBranchPrefix, err)
 	}
 	assertConfigJSON(t, readConfigObject(t, store, "workspace.json")["future"], futureConfigValue)
-	if !slices.Equal(config.DefaultWorkspaceToolIDs, []string{"codex", "cursor"}) {
+	if !slices.Equal(config.DefaultWorkspaceToolIDs, []string{"codex"}) {
 		t.Fatal("unrelated settings changed")
 	}
 }

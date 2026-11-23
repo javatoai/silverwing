@@ -63,7 +63,7 @@ const layoutFlags = flagScrollX | flagScrollY | flagClipX | flagClipY | flagAbso
 
 // textLayoutSet are the text styles that lay text out (textParams) and
 // size icons, which elements inherit.
-const textLayoutSet = setFamily | setSize | setWeight | setItalic | setLineHeight | setAlign | setSpacing | setFeatures | setLang
+const textLayoutSet = setFamily | setSize | setWeight | setItalic | setLineHeight | setAlign | setSpacing | setFeatures | setLang | setTabSize
 
 // layoutRecord is what an element's state keeps of its last layout.
 type layoutRecord struct {
@@ -102,6 +102,7 @@ type layoutRecord struct {
 // one (sameLayout).
 func (rt *engine) beginLayout(root *node) {
 	rt.layouts++
+	rt.flex.dropHolds() // the last layout's elements are being built anew
 	// The text system let go of the layouts and fonts it had, or the
 	// cache is off: lay everything out anew.
 	changed := rt.noLayoutCache || !rt.layGenOK || rt.layGen != rt.gen
@@ -134,9 +135,12 @@ func sameLayout(e *node, parent uint64, index int, changed bool) bool {
 	var media [2]float32
 	switch e.kind {
 	case kindImage:
-		if e.image != nil {
+		switch {
+		case e.image != nil:
 			media[0], media[1] = e.image.imageSize()
-		} else {
+		case e.texture != nil:
+			media[0], media[1] = e.texture.Size()
+		default:
 			media[0], media[1] = e.svg.imageSize()
 		}
 	case kindIcon:
@@ -178,8 +182,8 @@ func sameLayout(e *node, parent uint64, index int, changed bool) bool {
 	// keep nothing: the next layout finds their states not seen by this
 	// one.
 	self := e.kind == kindInput || e.attach != 0 || e.ghosts
-	tree := e.list != nil || e.form != nil || e.colFit != nil || e.overflow != nil ||
-		e.gridFit != nil || e.leaving != 0 || e.kind == kindText && e.first != nil
+	tree := e.special ||
+		e.leaving != 0 || e.kind == kindText && e.first != nil
 	if tree {
 		keepNoLayout(e)
 	} else {
@@ -215,6 +219,7 @@ type textLayout struct {
 	set                       uint32
 	family, features, lang    string
 	size, lineHeight, spacing float32
+	tabSize                   float32
 	weight                    int
 	italic, fixedLine         bool
 	align                     Align
@@ -237,7 +242,8 @@ func (l *textLayout) same(t *textStyle) bool {
 		(set&setAlign == 0 || l.align == t.align) &&
 		(set&setSpacing == 0 || l.spacing == t.spacing) &&
 		(set&setFeatures == 0 || l.features == t.features) &&
-		(set&setLang == 0 || l.lang == t.lang)
+		(set&setLang == 0 || l.lang == t.lang) &&
+		(set&setTabSize == 0 || l.tabSize == t.tabSize)
 }
 
 // layoutOfText returns what of t lays text out.
@@ -273,6 +279,9 @@ func layoutOfText(t *textStyle) textLayout {
 	}
 	if set&setLang != 0 {
 		l.lang = t.lang
+	}
+	if set&setTabSize != 0 {
+		l.tabSize = t.tabSize
 	}
 	return l
 }
@@ -384,7 +393,7 @@ func (e *node) textWidths() [2]float32 {
 	if t != nil && t.leafOK && t.leafSingle == e.single && sameParams(&t.leafKey, &p) {
 		return t.leaf
 	}
-	sys := textSystem()
+	sys := e.c.rt.text
 	l := sys.Layout(p)
 	w := [2]float32{l.Width, 0}
 	switch {
@@ -407,14 +416,15 @@ func (e *node) textLayout(width float32) *text.Layout {
 	p := e.textParams(width)
 	t := e.heldText()
 	if t == nil {
-		return textSystem().Layout(p)
+		return e.c.rt.text.Layout(p)
 	}
 	for _, l := range t.at {
 		if l != nil && sameParams(&l.Params, &p) {
 			return l
 		}
 	}
-	l := textSystem().Layout(p)
+	// From the last, of the same text at another width as its box resizes.
+	l := e.c.rt.text.LayoutFrom(t.at[t.next^1], p)
 	t.at[t.next] = l
 	t.next ^= 1
 	return l

@@ -3,7 +3,45 @@ package ui
 import (
 	"image/color"
 	"testing"
+
+	"github.com/egoist/mygo/internal/scene"
 )
+
+// A card turned over in perspective around its center, near the foot of
+// a tall window, shows, and a clip it draws in turns with it at its own
+// size, not the window's (#1406): the window's origin is then behind the
+// viewer, past the turned plane's horizon.
+func TestPainterTransformTurnsFarFromTheOrigin(t *testing.T) {
+	red := RGB(255, 0, 0)
+	card := Rect{X: 24, Y: 612, W: 76, H: 76}
+	for _, deg := range []float32{-85, -75, 40} {
+		tt := coreNewTester(func(c *context) {
+			coreBox(c).Size(300, 800).Draw(func(p *Painter, r Rect) {
+				p.Transform(RotationX(deg).Then(Perspective(600)), 62, 650, func() {
+					p.Clip(card, 8, func() { p.Fill(Rect{X: 0, Y: 0, W: 300, H: 800}, red, 0) })
+				})
+			})
+		}, 300, 800)
+		if c := tt.Image().RGBAAt(62, 650); c != (color.RGBA{255, 0, 0, 255}) {
+			t.Errorf("%v°: the card's center shows as %v", deg, c)
+		}
+		if c := tt.Image().RGBAAt(62, 600); c == (color.RGBA{255, 0, 0, 255}) {
+			t.Errorf("%v°: the card shows above itself", deg)
+		}
+		clips := 0
+		for _, op := range tt.h.last.Ops {
+			if op.Kind == scene.OpPushClip && op.Transform.Perspective() {
+				clips++
+				if b := op.Transform.Bounds(op.Rect); b.W > 2*card.W || b.H > card.H+1 {
+					t.Errorf("%v°: the clip covers %+v", deg, b)
+				}
+			}
+		}
+		if clips != 1 {
+			t.Errorf("%v°: %d clips turn with the card", deg, clips)
+		}
+	}
+}
 
 func TestPainterTransform(t *testing.T) {
 	red, blue := RGB(220, 20, 30), RGB(30, 60, 220)
@@ -88,5 +126,42 @@ func TestPainterVisibleTransformed(t *testing.T) {
 	}
 	if want := (Rect{0, 0, 100, 100}); drawn != want {
 		t.Errorf("zoomed out then in by the painter, visible %+v, want %+v", drawn, want)
+	}
+}
+
+// An op painted outside any Transform carries none, and one painted inside
+// carries the transform in device pixels: Painter.add leaves the first
+// alone and multiplies the second.
+func TestPainterOpsCarryTheTransformInPixels(t *testing.T) {
+	plain, moved := RGB(10, 20, 30), RGB(40, 50, 60)
+	tt := coreNewTester(func(c *context) {
+		coreBox(c).Size(100, 100).Draw(func(p *Painter, r Rect) {
+			p.Fill(Rect{X: r.X, Y: r.Y, W: 10, H: 10}, plain, 0)
+			p.Transform(Translation(7, 3), 0, 0, func() {
+				p.Fill(Rect{X: r.X, Y: r.Y, W: 10, H: 10}, moved, 0)
+			})
+		})
+	}, 100, 100)
+	tt.SetScale(2)
+	seen := 0
+	for _, op := range tt.h.last.Ops {
+		if op.Kind != scene.OpFill {
+			continue
+		}
+		switch op.Color {
+		case plain.scene():
+			seen++
+			if op.Transform.Set {
+				t.Errorf("a fill outside a transform carries %+v", op.Transform)
+			}
+		case moved.scene():
+			seen++
+			if m := op.Transform; !m.Set || m.A != 1 || m.D != 1 || m.X != 14 || m.Y != 6 {
+				t.Errorf("a fill moved by (7, 3) DIPs at scale 2 carries %+v, want a move of (14, 6) pixels", m)
+			}
+		}
+	}
+	if seen != 2 {
+		t.Errorf("%d of the test's fills in the frame, want 2", seen)
 	}
 }

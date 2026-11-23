@@ -25,7 +25,8 @@ func readMaterialsCatalogFile(file *os.File) ([]byte, error) {
 // and retain a durable original for recovery rather than claiming portable CAS.
 func writeMaterialsCatalogFile(path string, before, next []byte, missing bool, check func() error) error {
 	if missing {
-		return createMaterialsCatalogFile(path, next, check)
+		_, err := createMaterialsCatalogFile(path, next, check)
+		return err
 	}
 	file, release, err := openMaterialsCatalogForUpdate(path)
 	if err != nil {
@@ -72,29 +73,33 @@ func writeMaterialsCatalogFile(path string, before, next []byte, missing bool, c
 // Publish a complete new document without reserving the target with an empty
 // file. Linking never replaces a file an external editor created in the
 // meantime, and failure cleanup only removes this operation's temporary path.
-func createMaterialsCatalogFile(path string, next []byte, check func() error) error {
+func createMaterialsCatalogFile(path string, next []byte, check func() error) (os.FileInfo, error) {
 	file, err := os.CreateTemp(filepath.Dir(path), ".silverwing-materials-*.new")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer file.Close()
 	defer os.Remove(file.Name())
 	if err := writeMaterialsCatalogContents(file, next); err != nil {
-		return err
+		return nil, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
 	}
 	if err := file.Close(); err != nil {
-		return err
+		return nil, err
 	}
 	if err := checkMaterialsCatalogScope(check); err != nil {
-		return err
+		return nil, err
 	}
 	if err := os.Link(file.Name(), path); err != nil {
 		if os.IsExist(err) {
-			return errMaterialsCatalogChanged
+			return nil, errMaterialsCatalogChanged
 		}
-		return err
+		return nil, err
 	}
-	return nil
+	return info, nil
 }
 
 type materialsCatalogWritable interface {

@@ -6,6 +6,32 @@ import (
 	"github.com/egoist/mygo/internal/platform"
 )
 
+func TestExplicitShortcutOverridesTextInputSubmission(t *testing.T) {
+	for _, name := range []string{"element", "window"} {
+		t.Run(name, func(t *testing.T) {
+			value := "query"
+			submissions, shortcutCalls := 0, 0
+			tt := NewTester(func(c *Context) {
+				input := TextInput(c, &value).Label("Search").OnSubmit(func() { submissions++ })
+				handler := func() { shortcutCalls++ }
+				if name == "element" {
+					input.OnShortcut(0, KeyEnter, handler)
+				} else {
+					c.OnWindowShortcut(0, KeyEnter, handler)
+				}
+			}, 300, 120)
+			defer tt.rt.close()
+			if err := tt.Click("Search"); err != nil {
+				t.Fatal(err)
+			}
+			tt.Key(0, KeyEnter)
+			if shortcutCalls != 1 || submissions != 0 {
+				t.Fatalf("Enter called the shortcut %d times and submitted %d times, want 1 and 0", shortcutCalls, submissions)
+			}
+		})
+	}
+}
+
 func TestActionQueriesReadPendingBoundEdit(t *testing.T) {
 	for _, name := range []string{"Clicked", "Clicks", "DoubleClicked", "RightClicked", "ElementShortcut", "ContextShortcut"} {
 		t.Run(name, func(t *testing.T) {

@@ -9,6 +9,18 @@ import (
 )
 
 func (s *app) requestSettingsCLIStatus(tool string, force bool) {
+	if !desktopCLIJobSupported(tool) {
+		return
+	}
+	if desktopHasOptionalCLI(tool) {
+		s.requestOptionalCLIProbe(tool, force)
+		if !s.optionalCLIReady(tool) || tool != "lark" || force {
+			return
+		}
+		if jobs := s.toolsUnit.state.cliJobs; jobs != nil && jobs.requests["status:"+tool] != nil {
+			return
+		}
+	}
 	s.act("cli.status", "", "", "", "", "", map[string]any{"tool": tool, "force": force})
 }
 
@@ -25,37 +37,54 @@ func (s *app) settingsCLIPathDiscoveryHint(c *ui.Context, p palette, tool string
 	// Keep only the actionable detection failure inline.
 }
 
-// Discovery changes only an absent persisted path. Keep unrelated configuration
-// and any text the user entered while the status worker was reading.
+// Merge the path detected or repaired by this status request while retaining
+// unrelated settings and edits the user made during the probe.
 func (s *app) applySettingsCLIDiscoverySnapshot(tool, previousConfig string, snapshot application.Snapshot) {
-	key := map[string]string{"lark": "larkExecutablePath", "git": "gitExecutablePath", "codex": "codexExecutablePath", "genbu": "genbuExecutablePath", "meegle": "meegleExecutablePath"}[tool]
+	key := map[string]string{"lark": "larkExecutablePath", "git": "gitExecutablePath", "codex": "codexExecutablePath", "meegle": "meegleExecutablePath"}[tool]
 	if key == "" || snapshot.Home != s.snapshot.Home || snapshot.ConfigJSON == "" {
 		return
 	}
 	var before, detected map[string]any
-	if json.Unmarshal([]byte(previousConfig), &before) != nil || json.Unmarshal([]byte(snapshot.ConfigJSON), &detected) != nil || strings.TrimSpace(mapString(before, key)) != "" {
+	if json.Unmarshal([]byte(previousConfig), &before) != nil || json.Unmarshal([]byte(snapshot.ConfigJSON), &detected) != nil {
 		return
 	}
+	previousPath := mapString(before, key)
+	configuredPath := strings.TrimSpace(previousPath)
 	current, err := s.settingsConfigMap()
-	if err != nil || strings.TrimSpace(mapString(current, key)) != "" {
+	if err != nil || strings.TrimSpace(mapString(current, key)) != configuredPath {
 		return
 	}
 	path := strings.TrimSpace(mapString(detected, key))
 	status := s.settingsUnit.state.settingsCLIStatus[tool]
 	command := firstNonEmpty(mapString(status, "command"), mapString(status, "commandPath"))
-	if path == "" || path != command || !dataBool(status, "installed") {
+	if configuredPath != "" && (tool != "codex" || mapString(status, "clearedConfiguredPath") != configuredPath) {
 		return
 	}
-	current[key] = path
-	if tool == "genbu" {
-		current["genbuExecutableAutoDetected"] = dataBool(detected, "genbuExecutableAutoDetected")
+	if path == "" {
+		if configuredPath == "" {
+			return
+		}
+		current[key] = nil
+	} else {
+		if path != command || !dataBool(status, "installed") {
+			return
+		}
+		current[key] = path
 	}
 	encoded, err := json.MarshalIndent(current, "", "  ")
 	if err != nil {
 		return
 	}
-	if draft := s.inputs["setting:"+key]; draft != nil && *draft == "" {
+	next := string(encoded)
+	if configuredPath != "" {
+		// The backend already saved the repair. Rebase the input so it does not
+		// enqueue another settings save and turn recovery into another probe.
+		s.syncSettingsConfigInputs(s.settingsUnit.state.configJSON, next)
+	} else if draft := s.inputs["setting:"+key]; draft != nil && *draft == "" {
 		*draft = path
 	}
-	s.settingsUnit.state.configJSON, s.snapshot.ConfigJSON = string(encoded), string(encoded)
+	s.settingsUnit.state.configJSON, s.snapshot.ConfigJSON = next, next
+	if desktopHasOptionalCLI(tool) {
+		s.observeOptionalCLIs()
+	}
 }

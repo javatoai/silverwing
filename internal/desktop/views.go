@@ -60,7 +60,7 @@ func (s *app) materials(c *ui.Context, p palette) {
 			s.documentTree(c, p, clampMaterialsDirectoryWidth(s.materialsDirectoryWidth(), availableWidth))
 			s.materialsDirectoryResizeHandle(c, p, availableWidth)
 		}
-		ui.Column(c).Grow(1).MinWidth(0).Background(p.surface).Children(func() {
+		ui.Column(c).Grow(1).MinWidth(0).Background(p.surface).Label("文档预览").Children(func() {
 			s.documentToolbar(c, p)
 			if s.materialsUnit.state.documentKind == "unsupported" {
 				s.renderMaterialsPreviewFallback(c, p, "此格式暂不支持预览")
@@ -127,7 +127,11 @@ func (s *app) materials(c *ui.Context, p palette) {
 			s.applyDocumentFindNavigation(scrollID)
 			preview.Children(func() {
 				if s.materialsUnit.state.documentPath == "" {
-					label(c, "选择一份任务资料，或从工具栏新建文档。", 13, p.muted)
+					hint := "选择一份任务资料，或从工具栏新建文档。"
+					if s.projectMaterials != nil {
+						hint = "选择文件，或从工具栏新建文档。"
+					}
+					label(c, hint, 13, p.muted)
 					return
 				}
 				if s.materialsUnit.state.documentContent == "" && !s.materialsUnit.state.documentReadPending {
@@ -191,7 +195,7 @@ func (s *app) materialsUnavailable(c *ui.Context, p palette, t task) {
 		label(c, title, 16, p.text).FontWeight(600)
 		message := "可在当前任务目录中准备本地资料。"
 		if t.requirementURL != "" && !configured {
-			message = "请先配置任务资料根目录和子目录。"
+			message = "请先配置任务资料仓库和任务角色名。"
 		} else if t.materialsFailed() && strings.TrimSpace(t.materialsFailureReason) != "" {
 			message = t.materialsFailureReason
 		} else if t.requirementURL != "" {
@@ -222,6 +226,9 @@ func (s *app) documentTree(c *ui.Context, p palette, width float32) {
 	expanded := s.readingExpandedDirectories()
 	loading := !s.materialsUnit.state.documentsLoaded || s.materialsUnit.state.documentsRequested
 	emptyMessage := "此任务资料目录为空。"
+	if s.projectMaterials != nil {
+		emptyMessage = "此目录为空。"
+	}
 	if loading {
 		emptyMessage = "正在加载资料目录…"
 	}
@@ -275,6 +282,15 @@ func (s *app) documentTree(c *ui.Context, p palette, width float32) {
 				if m.Item("refresh", "刷新资料").Icon("refresh").Chosen() {
 					s.reloadMaterialsDocuments()
 				}
+				if project := s.projectMaterials; project != nil {
+					title := "立即同步"
+					if project.syncing() {
+						title = "正在同步…"
+					}
+					if m.Item("sync-project-instructions", title).Icon("refresh").Disabled(project.syncing()).Chosen() {
+						project.syncNow()
+					}
+				}
 				if m.Item("collapse-folders", "收起全部文件夹").Icon("collapse-folders").Chosen() {
 					s.collapseMaterialsTreeDirectories()
 				}
@@ -297,7 +313,7 @@ func (s *app) documentTree(c *ui.Context, p palette, width float32) {
 		}
 		FileTree(c, p, FileTreeProps{
 			Key: "materials-file-tree", Root: FileTreeRow{ID: "@root", Name: filepath.Base(state.root), Path: state.root, Directory: true},
-			HideRoot: true, Prepared: prepared, Selected: selected, State: &state.tree,
+			HideRoot: s.projectMaterials == nil, Prepared: prepared, Selected: selected, State: &state.tree,
 			Scroll: s.readingScrollState("directory"), Empty: emptyMessage, AcceptFiles: true,
 			SuppressTooltip: s.dialogOpen || s.overflowMenus != nil && s.overflowMenus.openKey != "",
 			OnInput:         func(input FileTreeInput) { s.materialsTreeInput(state, input) },

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"runtime"
 	"slices"
 	"testing"
@@ -92,8 +93,8 @@ func TestPopoverMenuOpensAtThePointer(t *testing.T) {
 	if !menuShows(tt) {
 		t.Fatalf("no menu after a right-click: texts %q", tt.Texts())
 	}
-	if tt.Menu() != nil {
-		t.Errorf("the system shows a menu too: %q", tt.Menu())
+	if tt.h.menu != nil {
+		t.Errorf("the system shows a menu too: %v", tt.h.menu.Items)
 	}
 	open, _ := tt.Find("Open")
 	if open.X < x || open.Y < y || open.X > x+20 || open.Y > y+20 {
@@ -125,6 +126,36 @@ func TestPopoverMenuOpensAtThePointer(t *testing.T) {
 	tt.RightClickAt(x+250, y)
 	if open, _ := tt.Find("Open"); !menuShows(tt) || open.X+open.W > x+250 {
 		t.Errorf("a right-click at %v puts the menu at %+v", x+250, open)
+	}
+}
+
+// TestPopoverMenuInAScrolledElement checks the menu of an element
+// scrolled partly out of view opens at the pointer, as the menu attaches
+// to the element's whole box (#894).
+func TestPopoverMenuInAScrolledElement(t *testing.T) {
+	view := func(c *context) {
+		coreScroll(c).Fill().Children(func() {
+			col := coreColumn(c).FillWidth().Gap(10).Children(func() {
+				for i := range 60 {
+					coreText(c, fmt.Sprintf("Line %d", i))
+				}
+			})
+			col.PopoverMenu(func(m *Menu) {
+				m.Item("Open")
+			})
+		})
+	}
+	tt := coreNewTester(view, 400, 300)
+	tt.Scroll(200, 150, 0, 400)
+	tt.Frame()
+	x, y := float32(100), float32(200)
+	tt.RightClickAt(x, y)
+	open, ok := tt.Find("Open")
+	if !ok {
+		t.Fatalf("no menu: %q", tt.Texts())
+	}
+	if open.X < x || open.Y < y || open.X > x+20 || open.Y > y+20 {
+		t.Errorf("Open at %+v, not below and after the click at (%v, %v)", open, x, y)
 	}
 }
 
@@ -382,7 +413,7 @@ func TestPopoverMenuAccessibility(t *testing.T) {
 		t.Errorf("focus on %q, not the menu, which the pointer opened", f.Label)
 	}
 	open := accessNode(t, tree, platform.RoleMenuItem, "Open")
-	if open.Label != "Open" || open.Description == "" || open.PosInSet != 1 || open.SetSize != 5 {
+	if open.Label != "Open" || open.KeyShortcuts == "" || open.PosInSet != 1 || open.SetSize != 5 {
 		t.Errorf("Open: %+v", open)
 	}
 	if n := tree.Nodes[open.Parent]; n.ID != menu.ID {
@@ -591,8 +622,8 @@ func TestPopoverMenuButtonOpensBelow(t *testing.T) {
 	if !menuShows(tt) {
 		t.Fatalf("no menu as the button goes down: texts %q", tt.Texts())
 	}
-	if tt.Menu() != nil {
-		t.Errorf("the system shows a menu too: %q", tt.Menu())
+	if tt.h.menu != nil {
+		t.Errorf("the system shows a menu too: %v", tt.h.menu.Items)
 	}
 	open, _ := tt.Find("Open")
 	if open.Y < b.Y+b.H || open.Y > b.Y+b.H+20 || open.X < b.X || open.X > b.X+20 {
@@ -845,8 +876,8 @@ func TestPopoverMenuButtonAccessibility(t *testing.T) {
 	}
 	// Pressing it opens the menu, on its first item.
 	tt.send(platform.SurfaceEvent{Kind: platform.AccessAction, ID: n.ID, Action: platform.AccessPress})
-	if !menuShows(tt) || tt.Menu() != nil {
-		t.Fatalf("pressing it: drawn menu %v, system's %q", menuShows(tt), tt.Menu())
+	if !menuShows(tt) || tt.h.menu != nil {
+		t.Fatalf("pressing it: drawn menu %v, system's %v", menuShows(tt), tt.h.menu != nil)
 	}
 	wantFocus(t, tt, "Open")
 	tree := tt.h.access

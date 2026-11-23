@@ -1,13 +1,13 @@
 package desktop
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
 	"silverwing-go/internal/application"
 )
 
-type desktopServiceIdentity struct{ group, service string }
 type desktopServiceLookup struct {
 	value     application.Service
 	ambiguous bool
@@ -16,58 +16,38 @@ type desktopServiceLookup struct {
 // Owned by one published snapshot. Callers borrow read-only values; editable
 // configuration maps remain separately decoded by settingsConfigMap.
 type desktopServiceCatalog struct {
-	home          string
-	groups        map[string]application.Group
-	services      map[desktopServiceIdentity]desktopServiceLookup
-	groupServices map[string][]application.Service
-	repositories  map[string]application.Repository
+	home         string
+	services     map[string]desktopServiceLookup
+	ordered      []application.Service
+	repositories map[string]application.Repository
 }
 
 func newDesktopServiceCatalog(snapshot application.Snapshot) *desktopServiceCatalog {
-	index := &desktopServiceCatalog{home: snapshot.Home, groups: make(map[string]application.Group), services: make(map[desktopServiceIdentity]desktopServiceLookup), groupServices: make(map[string][]application.Service), repositories: make(map[string]application.Repository)}
-	fallback := make(map[string][]desktopServiceIdentity)
-	for _, group := range snapshot.Groups {
-		if _, exists := index.groups[group.ID]; !exists {
-			group.ServiceIDs = append([]string(nil), group.ServiceIDs...)
-			index.groups[group.ID] = group
-		}
-	}
+	index := &desktopServiceCatalog{home: snapshot.Home, services: make(map[string]desktopServiceLookup), repositories: make(map[string]application.Repository)}
 	for _, repository := range snapshot.Repositories {
 		if _, exists := index.repositories[repository.ID]; !exists {
 			index.repositories[repository.ID] = repository
 		}
 	}
 	for _, service := range snapshot.Services {
-		key := desktopServiceIdentity{service.GroupID, service.ID}
-		fallback[service.GroupID] = append(fallback[service.GroupID], key)
-		if previous, exists := index.services[key]; exists {
+		if previous, exists := index.services[service.ID]; exists {
 			previous.ambiguous = true
-			index.services[key] = previous
+			index.services[service.ID] = previous
 		} else {
 			service.Modules = append([]application.Module(nil), service.Modules...)
-			index.services[key] = desktopServiceLookup{value: service}
+			index.services[service.ID] = desktopServiceLookup{value: service}
 		}
 	}
-	for id, group := range index.groups {
-		if len(group.ServiceIDs) > 0 {
-			for _, serviceID := range group.ServiceIDs {
-				if service, ok := index.service(id, serviceID); ok {
-					index.groupServices[id] = append(index.groupServices[id], service)
-				}
-			}
-		} else {
-			for _, key := range fallback[id] {
-				if value, ok := index.service(key.group, key.service); ok {
-					index.groupServices[id] = append(index.groupServices[id], value)
-				}
-			}
+	for _, item := range snapshot.Services {
+		if service, ok := index.service(item.ID); ok {
+			index.ordered = append(index.ordered, service)
 		}
 	}
 	return index
 }
 
-func (index *desktopServiceCatalog) service(group, id string) (application.Service, bool) {
-	entry, found := index.services[desktopServiceIdentity{group, id}]
+func (index *desktopServiceCatalog) service(id string) (application.Service, bool) {
+	entry, found := index.services[id]
 	if !found || entry.ambiguous {
 		return application.Service{}, false
 	}
@@ -103,49 +83,29 @@ type desktopServiceConfigLookup struct {
 	value     map[string]any
 	ambiguous bool
 }
-type desktopServiceConfigIndex struct {
-	scoped   map[desktopServiceIdentity]desktopServiceConfigLookup
-	unscoped map[string]desktopServiceConfigLookup
-}
+type desktopServiceConfigIndex map[string]desktopServiceConfigLookup
 
-func newDesktopServiceConfigIndex(config map[string]any) *desktopServiceConfigIndex {
-	index := &desktopServiceConfigIndex{scoped: make(map[desktopServiceIdentity]desktopServiceConfigLookup), unscoped: make(map[string]desktopServiceConfigLookup)}
-	groups, _ := config["groups"].([]any)
-	for _, value := range groups {
-		group, _ := value.(map[string]any)
-		services, _ := group["services"].([]any)
-		for _, value := range services {
-			service, _ := value.(map[string]any)
-			id, valid := service["id"].(string)
-			if !valid {
-				continue
-			}
-			key := desktopServiceIdentity{mapString(group, "id"), id}
-			if previous, exists := index.scoped[key]; exists {
-				previous.ambiguous = true
-				index.scoped[key] = previous
-			} else {
-				index.scoped[key] = desktopServiceConfigLookup{value: service}
-			}
-			if previous, exists := index.unscoped[id]; exists {
-				previous.ambiguous = true
-				index.unscoped[id] = previous
-			} else {
-				index.unscoped[id] = desktopServiceConfigLookup{value: service}
-			}
+func newDesktopServiceConfigIndex(config map[string]any) desktopServiceConfigIndex {
+	index := make(desktopServiceConfigIndex)
+	services, _ := config["services"].([]any)
+	for _, value := range services {
+		service, _ := value.(map[string]any)
+		id, valid := service["id"].(string)
+		if !valid {
+			continue
+		}
+		if previous, exists := index[id]; exists {
+			previous.ambiguous = true
+			index[id] = previous
+		} else {
+			index[id] = desktopServiceConfigLookup{value: service}
 		}
 	}
 	return index
 }
 
-func (index *desktopServiceConfigIndex) find(serviceID string, groupIDs ...string) map[string]any {
-	if index == nil {
-		return nil
-	}
-	entry := index.unscoped[serviceID]
-	if len(groupIDs) > 0 {
-		entry = index.scoped[desktopServiceIdentity{groupIDs[0], serviceID}]
-	}
+func (index desktopServiceConfigIndex) find(serviceID string) map[string]any {
+	entry := index[serviceID]
 	if entry.ambiguous {
 		return nil
 	}
@@ -154,23 +114,43 @@ func (index *desktopServiceConfigIndex) find(serviceID string, groupIDs ...strin
 
 type serviceListBrowsingState struct {
 	index              *desktopServiceCatalog
-	groupID, query     string
+	configSource       string
+	query              string
 	services, filtered []application.Service
+	enabledCount       int
 	lower              []string
-	positions          map[desktopServiceIdentity]int
+	positions          map[string]int
 	list               ui.ListState
+	canvas             ui.Handle
+	windowWidth        float32
 }
 
-func (state *serviceListBrowsingState) project(index *desktopServiceCatalog, groupID, query string) []application.Service {
+func (state *serviceListBrowsingState) project(index *desktopServiceCatalog, configSource, query string, enabled func(string) bool) []application.Service {
 	query = strings.ToLower(strings.TrimSpace(query))
-	if state.index != index || state.groupID != groupID {
+	if state.index != index || state.configSource != configSource {
 		var list ui.ListState
-		if state.index != nil && state.index.home == index.home && state.groupID == groupID {
+		if state.index != nil && state.index.home == index.home {
 			list = state.list
 		}
-		*state = serviceListBrowsingState{index: index, groupID: groupID, services: index.groupServices[groupID], positions: make(map[desktopServiceIdentity]int), list: list}
+		services := make([]application.Service, len(index.ordered))
+		enabledCount, disabledStart := 0, len(services)
+		for _, service := range index.ordered {
+			if enabled(service.ID) {
+				services[enabledCount] = service
+				enabledCount++
+			} else {
+				disabledStart--
+				services[disabledStart] = service
+			}
+		}
+		// Restore the original order of the disabled items filled from the end.
+		slices.Reverse(services[disabledStart:])
+		*state = serviceListBrowsingState{
+			index: index, configSource: configSource, services: services, enabledCount: enabledCount,
+			positions: make(map[string]int, len(services)), list: list, canvas: state.canvas, windowWidth: state.windowWidth,
+		}
 		for i, service := range state.services {
-			state.positions[desktopServiceIdentity{service.GroupID, service.ID}] = i
+			state.positions[service.ID] = i
 		}
 		state.query = "\x00" // an empty first query must still publish the result
 	}

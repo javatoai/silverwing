@@ -7,56 +7,52 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"silverwing-go/internal/application"
 )
 
-func TestServiceCatalogGroupIdentityOrderFallbackAndDuplicates(t *testing.T) {
+func TestServiceCatalogFlatOrderAndDuplicates(t *testing.T) {
 	snapshot := application.Snapshot{
-		Groups:   []application.Group{{ID: "a", ServiceIDs: []string{"second", "same", "missing"}}, {ID: "b"}},
-		Services: []application.Service{{ID: "same", GroupID: "a", Name: "A"}, {ID: "second", GroupID: "a", Name: "Second"}, {ID: "same", GroupID: "b", Name: "B"}, {ID: "last", GroupID: "b", Name: "Last"}},
+		Services: []application.Service{
+			{ID: "second", Name: "Second"},
+			{ID: "same", Name: "Same"},
+			{ID: "last", Name: "Last"},
+		},
 	}
 	index := newDesktopServiceCatalog(snapshot)
-	if got := index.groupServices["a"]; len(got) != 2 || got[0].ID != "second" || got[1].Name != "A" {
-		t.Fatalf("explicit ServiceIDs order changed: %+v", got)
+	if got := index.ordered; len(got) != 3 || got[0].ID != "second" || got[1].ID != "same" || got[2].ID != "last" {
+		t.Fatalf("flat service order changed: %+v", got)
 	}
-	if got := index.groupServices["b"]; len(got) != 2 || got[0].Name != "B" || got[1].ID != "last" {
-		t.Fatalf("empty ServiceIDs fallback changed: %+v", got)
-	}
-	snapshot.Services = append(snapshot.Services, application.Service{ID: "same", GroupID: "a", Name: "duplicate"})
+	snapshot.Services = append(snapshot.Services, application.Service{ID: "same", Name: "duplicate"})
 	index = newDesktopServiceCatalog(snapshot)
-	if _, found := index.service("a", "same"); found {
-		t.Fatal("duplicate scoped identity silently selected one service")
-	}
-	if service, found := index.service("b", "same"); !found || service.Name != "B" {
-		t.Fatal("cross-group ID was treated as a scoped duplicate")
+	if _, found := index.service("same"); found || len(index.ordered) != 2 {
+		t.Fatal("duplicate service ID was exposed in the flat catalog")
 	}
 }
 
 func TestServiceConfigIndexPreservesAmbiguityAndEditingOwnership(t *testing.T) {
-	const source = `{"groups":[{"id":"a","services":[{"id":"same","enabled":false}]},{"id":"b","services":[{"id":"same","enabled":true}]}]}`
+	const source = `{"services":[{"id":"a","enabled":false},{"id":"b","enabled":true}]}`
 	s := &app{settingsUnit: settingsController{state: settingsState{configJSON: source}}}
-	if s.serviceEnabled("a", "same") || !s.serviceEnabled("b", "same") {
-		t.Fatal("enabled state leaked across group/service identity")
-	}
-	if s.readServiceConfig("same") != nil {
-		t.Fatal("unscoped ambiguous ID resolved")
+	if s.serviceEnabled("a") || !s.serviceEnabled("b") {
+		t.Fatal("incorrect enabled state in flat service lookup")
 	}
 	var editable map[string]any
 	if err := json.Unmarshal([]byte(source), &editable); err != nil {
 		t.Fatal(err)
 	}
-	findServiceConfig(editable, "same", "a")["enabled"] = true
-	if s.serviceEnabled("a", "same") {
+	findServiceConfig(editable, "a")["enabled"] = true
+	if s.serviceEnabled("a") {
 		t.Fatal("editing an owned map mutated the borrowed read index")
 	}
-	s.settingsUnit.state.configJSON = `{"groups":[{"id":"a","services":[{"id":"same","enabled":false},{"id":"same","enabled":true}]}]}`
-	if s.readServiceConfig("same", "a") != nil || !s.serviceEnabled("a", "same") {
-		t.Fatal("same-group duplicate lost existing nil/default semantics")
+	s.settingsUnit.state.configJSON = `{"services":[{"id":"same","enabled":false},{"id":"same","enabled":true}]}`
+	if s.readServiceConfig("same") != nil || !s.serviceEnabled("same") {
+		t.Fatal("duplicate service ID lost existing nil/default semantics")
 	}
 	s.settingsUnit.state.configJSON = "{"
-	if s.readServiceConfig("same", "a") != nil || !s.serviceEnabled("a", "same") {
+	if s.readServiceConfig("a") != nil || !s.serviceEnabled("a") {
 		t.Fatal("invalid replacement exposed the old config")
 	}
 }
@@ -66,7 +62,7 @@ func TestServiceProjectionSnapshotPublicationAndEmptySearch(t *testing.T) {
 	s := &app{snapshot: snapshot}
 	first := s.serviceCatalog()
 	var state serviceListBrowsingState
-	if got := state.project(first, "g", ""); len(got) != 1 || state.lower != nil {
+	if got := state.project(first, "", "", s.serviceEnabled); len(got) != 1 || state.lower != nil {
 		t.Fatal("empty search constructed lowercase full text")
 	}
 	snapshot.Services[0].Name = "Changed"
@@ -74,17 +70,85 @@ func TestServiceProjectionSnapshotPublicationAndEmptySearch(t *testing.T) {
 	snapshot.Repositories[0].RootPath = "/fixture/changed"
 	s.snapshot = snapshot
 	s.workspaceUnit.publishServiceCatalog(newDesktopServiceCatalog(snapshot))
-	if first.services[desktopServiceIdentity{"g", "s"}].value.Modules[0].Name != "Module" {
+	if first.services["s"].value.Modules[0].Name != "Module" {
 		t.Fatal("publication mutated a retained catalog")
 	}
-	if got := state.project(s.serviceCatalog(), "g", "CHANGED"); len(got) != 1 || got[0].Name != "Changed" {
+	if got := state.project(s.serviceCatalog(), "", "CHANGED", s.serviceEnabled); len(got) != 1 || got[0].Name != "Changed" {
 		t.Fatal("same-slice snapshot publication missed a changed value")
 	}
 	if name, path := s.repositoryDetails("r"); name != "Repository" || path != "/fixture/changed" {
 		t.Fatal("repository index remained stale")
 	}
-	if got := state.project(s.serviceCatalog(), "g", " __missing__ "); len(got) != 0 {
+	if got := state.project(s.serviceCatalog(), "", " __missing__ ", s.serviceEnabled); len(got) != 0 {
 		t.Fatal("unexpected service query result")
+	}
+}
+
+func TestServiceListOrdersDisabledServicesLast(t *testing.T) {
+	const config = `{"services":[{"id":"d1","enabled":false},{"id":"a1"},{"id":"d2","enabled":false},{"id":"a2","enabled":true}]}`
+	s := &app{settingsUnit: settingsController{state: settingsState{configJSON: config}}, snapshot: application.Snapshot{
+		Services: []application.Service{
+			{ID: "d1", Name: "Disabled first"}, {ID: "a1", Name: "Active first"},
+			{ID: "d2", Name: "Match disabled second"}, {ID: "a2", Name: "Match active second"},
+		},
+	}}
+	index := s.serviceCatalog()
+	state := &s.workspaceUnit.state.serviceList
+	check := func(query string, want ...string) {
+		t.Helper()
+		rows := state.project(index, s.settingsUnit.state.configJSON, query, s.serviceEnabled)
+		var ids []string
+		for _, service := range rows {
+			ids = append(ids, service.ID)
+		}
+		if !slices.Equal(ids, want) {
+			t.Fatalf("search %q ordered services %v, want %v", query, ids, want)
+		}
+	}
+	check("", "a1", "a2", "d1", "d2")
+	check("match", "a2", "d2")
+	if state.enabledCount != 2 || state.positions["a2"] != 1 || state.positions["d1"] != 2 || index.ordered[0].ID != "d1" {
+		t.Fatal("display order changed the original catalog or did not update row positions")
+	}
+	s.settingsUnit.state.configJSON = `{"services":[{"id":"d1","enabled":false},{"id":"a1"},{"id":"d2","enabled":true},{"id":"a2","enabled":false}]}`
+	check("match", "d2", "a2")
+	check("", "a1", "d2", "d1", "a2")
+}
+
+func TestServiceMoveSwapsNeighborsWithinTheirStatusGroup(t *testing.T) {
+	backend := &transientFormBackend{actions: make(chan application.Action, 1)}
+	s := newApp(backend, Options{Page: "repositories"})
+	s.win = &mygo.Window{}
+	s.settingsUnit.state.configJSON = `{"services":[{"id":"a1","enabled":true},{"id":"d1","enabled":false},{"id":"a2"},{"id":"d2","enabled":false}]}`
+	t.Cleanup(func() {
+		if s.cancelOperation != nil {
+			s.cancelOperation()
+		}
+	})
+	s.moveService("a2", "d1")
+	if s.busy {
+		t.Fatal("a cross-group move started saving the configuration")
+	}
+	s.moveService("a1", "a2")
+	select {
+	case action := <-backend.actions:
+		update, ok := action.Payload["update"].(application.ConfigFieldsUpdate)
+		if action.Kind != "config.fields.save" || !ok {
+			t.Fatalf("unexpected reorder action: %+v", action)
+		}
+		var services []struct{ ID string }
+		if err := json.Unmarshal(update.Fields["services"], &services); err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, service := range services {
+			ids = append(ids, service.ID)
+		}
+		if want := []string{"a2", "d1", "a1", "d2"}; !slices.Equal(ids, want) {
+			t.Fatalf("reordering across an intervening disabled row saved %v, want %v", ids, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("same-group reorder did not dispatch a save")
 	}
 }
 
@@ -132,34 +196,37 @@ func BenchmarkServiceCatalogRead(b *testing.B) {
 	s := serviceListPerformanceFixture(b.TempDir(), 5000)
 	index := s.serviceCatalog()
 	state := &s.workspaceUnit.state.serviceList
-	state.project(index, "g", "")
+	state.project(index, "", "", s.serviceEnabled)
 	b.Run("empty-query-warm", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
-			serviceIndexBenchmark = state.project(index, "g", "")
+			serviceIndexBenchmark = state.project(index, "", "", s.serviceEnabled)
 		}
 	})
-	state.project(index, "g", "__missing__")
+	state.project(index, "", "__missing__", s.serviceEnabled)
 	b.Run("same-query-warm", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
-			serviceIndexBenchmark = state.project(index, "g", "__missing__")
+			serviceIndexBenchmark = state.project(index, "", "__missing__", s.serviceEnabled)
 		}
 	})
 	b.Run("lookup-5000", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
-			for _, service := range index.groupServices["g"] {
-				_, _ = index.service("g", service.ID)
+			for _, service := range index.ordered {
+				_, _ = index.service(service.ID)
 				_, _ = s.repositoryDetails(service.RepositoryID)
 			}
 		}
 	})
 }
 
-func TestProjectTasksUsesScopedServiceNames(t *testing.T) {
-	snapshot := application.Snapshot{Services: []application.Service{{GroupID: "a", ID: "same", Name: "A"}, {GroupID: "b", ID: "same", Name: "B"}}, Tasks: []application.Task{{ID: "task", GroupID: "a", Services: []string{"same"}}}}
-	if got := projectTasks(snapshot); len(got) != 1 || !slices.Equal(got[0].services, []string{"A"}) {
-		t.Fatalf("task service name crossed group scope: %+v", got)
+func TestProjectTasksUsesFlatServiceNames(t *testing.T) {
+	snapshot := application.Snapshot{
+		Services: []application.Service{{ID: "first", Name: "First"}, {ID: "second", Name: "Second"}},
+		Tasks:    []application.Task{{ID: "task", Services: []string{"second", "first"}}},
+	}
+	if got := projectTasks(snapshot); len(got) != 1 || !slices.Equal(got[0].services, []string{"Second", "First"}) {
+		t.Fatalf("task lost flat service names: %+v", got)
 	}
 }

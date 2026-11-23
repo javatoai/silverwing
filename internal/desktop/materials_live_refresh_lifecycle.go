@@ -68,6 +68,8 @@ func materialsMutationNeedsWatchBarrier(action application.Action) bool {
 	switch action.Kind {
 	case "migration.apply", "migration.recover", "config.task-root.save", "task.delete":
 		return true
+	case "config.documents-git.bind", "config.documents-git.unbind":
+		return payloadString(action.Payload, "role") == taskMaterialsGit.role()
 	case "workspace.remove":
 		return action.Payload["preview"] != nil
 	}

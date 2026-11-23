@@ -245,7 +245,7 @@ func (s *Meegle) runMeegle(ctx context.Context, config domain.AppConfig, args []
 	if config.MeegleExecutablePath != nil {
 		configured = strings.TrimSpace(*config.MeegleExecutablePath)
 	}
-	spec, err := commandruntime.Prepare(ctx, s.runner, &config, domain.ProxyTargetMeegle, executable.ToolMeegle, configured)
+	spec, err := commandruntime.Prepare(ctx, s.runner, &config, "", executable.ToolMeegle, configured)
 	if err != nil {
 		return process.Result{}, err
 	}

@@ -67,10 +67,28 @@ export interface ThemePreferences {
   textScale: number;
 }
 
+/**
+ * The options of a call.
+ */
+export interface CallOptions {
+  /**
+   * Cancels the call when it is aborted: the Go method's context is
+   * canceled, and the promise rejects with the signal's reason, as
+   * `fetch` does. A method that takes no context runs to its end, and
+   * its reply is of no use.
+   */
+  signal?: AbortSignal;
+}
+
 /** The runtime MyGo injects into every page as `window.mygo`. */
 export interface Runtime {
   /** Calls a bound Go method, e.g. `call("Greeter.Greet", "Ada")`. */
   call<T = unknown>(method: string, ...args: unknown[]): Promise<T>;
+  /**
+   * Calls a bound Go method, with the options of the call: a signal that
+   * cancels it.
+   */
+  callWith<T = unknown>(method: string, args: unknown[], options?: CallOptions): Promise<T>;
   /**
    * Creates a channel to pass to a call of a Go method that streams values
    * through a `*mygo.Channel[T]` parameter. A channel serves one call.
@@ -100,6 +118,14 @@ export interface Runtime {
   readonly locale: string;
   /** The direction `locale` is written in, for `<html dir>`. */
   readonly dir: Direction;
+  /**
+   * Whether the window is drawn as active: the window the user's input
+   * goes to, while it or one of its flyouts has the keyboard, as native
+   * apps tell which of their windows has it. The `mygo:window-active`
+   * event tells its changes, and `<html data-mygo-window-inactive>` marks
+   * a page whose window is not, for CSS.
+   */
+  readonly windowActive: boolean;
   /** The window hosting this page. */
   readonly window: WindowControls;
 }

@@ -24,7 +24,7 @@ func TestReviewDiffMultiChangeVersion(t *testing.T) {
 	newS := strings.Join(lines, "\n") + "\n"
 	old, nw := NewBuffer(oldS), NewBuffer(newS)
 	var d diffModel
-	d.set(old, nw)
+	d.set(old, nw, false)
 	d.update()
 	r, _ := nw.snapshot()
 	nw.Edit(Edit{Start: r.LineStart(1), End: r.LineStart(21)}, Edit{Start: r.LineStart(25), End: r.LineStart(25), Text: "\n"})
@@ -40,7 +40,7 @@ func TestReviewDiffMultiChangeVersion(t *testing.T) {
 		oldS := strings.Join(a, "\n") + "\n"
 		old, nw := NewBuffer(oldS), NewBuffer(oldS)
 		var d diffModel
-		d.set(old, nw)
+		d.set(old, nw, false)
 		d.update()
 		for range 6 {
 			t, _ := nw.snapshot()
@@ -225,7 +225,7 @@ func TestReviewDiffAnnotationBeforeSeparator(t *testing.T) {
 		tt.Frame()
 		tt.Frame()
 		note, _ := tt.Find("the note")
-		sep, ok := tt.Find("Expand 22 unmodified lines")
+		sep, ok := tt.Find("Expand 21 unmodified lines")
 		if !ok || note.Y > sep.Y {
 			t.Fatalf("layout %d: the note at %v, the separator at %v (%v)", layout, note, sep, ok)
 		}
@@ -295,5 +295,48 @@ func TestReviewPatchCRLF(t *testing.T) {
 func TestReviewPatchOvercount(t *testing.T) {
 	if _, err := ParsePatch("--- a/x\n+++ b/x\n@@ -1,1 +1,3 @@\n a\n b\n+c\n"); err == nil {
 		t.Fatal("a hunk longer than it counts parsed")
+	}
+}
+
+// The annotations of deleted lines go under their rows, after those of the
+// lines before, where LineTop puts the lines, and a press on a line's
+// number below them selects it.
+func TestReviewDiffDeletedAnnotations(t *testing.T) {
+	old := "a\nfirst\n" + strings.Repeat("word ", 60) + "\nthird\nc\n"
+	d := &DiffState{Old: NewBuffer(old), New: NewBuffer("a\nc\n"), Layout: DiffUnified, Wrap: true, LineSelection: true,
+		Annotations: []DiffAnnotation{{Side: DiffOld, Line: 1, Height: 30, Key: "one"}, {Side: DiffOld, Line: 2, Height: 40, Key: "two"}}}
+	d.RenderAnnotation = func(c *ui.Context, a DiffAnnotation) { ui.Text(c, fmt.Sprint("note ", a.Key)) }
+	tt := ui.NewTester(func(c *ui.Context) { DiffView(c, d).Fill() }, 500, 400)
+	tt.Frame()
+	tt.Frame()
+	ed := &d.eds[1]
+	lh := float64(ed.view.lineHeight)
+	at := func(line int) float32 { return ed.r.Y + float32(d.LineTop(DiffOld, line)-ed.scrollY) }
+	rows := d.oldView.heights.wraps.rows(2)
+	if rows < 2 {
+		t.Fatalf("the long line wraps into %d rows", rows)
+	}
+	if got, want := at(2)-at(1), float32(lh+30); got != want {
+		t.Fatalf("line 2 is %v below line 1, want %v", got, want)
+	}
+	if got, want := at(3)-at(2), float32(float64(rows)*lh+40); got != want {
+		t.Fatalf("line 3 is %v below line 2, want %v", got, want)
+	}
+	for _, c := range []struct {
+		key  string
+		line int
+	}{{"one", 1}, {"two", 2}} {
+		r, ok := tt.Find("note " + c.key)
+		if !ok {
+			t.Fatalf("note %s missing", c.key)
+		}
+		under := at(c.line) + float32(float64(d.oldView.heights.wraps.rows(c.line))*lh)
+		if r.Y < under || r.Y > under+5 {
+			t.Fatalf("note %s at %v, line %d's rows end at %v", c.key, r.Y, c.line, under)
+		}
+	}
+	tt.ClickAt(ed.r.X+ed.gutterW-8, at(3)+float32(lh/2))
+	if r, ok := d.SelectedLines(); !ok || r.Side != DiffOld || r.Start != 3 || r.End != 3 {
+		t.Fatalf("selected %+v (%v), want old line 3", r, ok)
 	}
 }

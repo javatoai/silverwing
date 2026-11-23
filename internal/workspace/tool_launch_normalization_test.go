@@ -36,7 +36,7 @@ func TestToolLaunchRejectsTaskRebuiltWhileDiscoveringTool(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	_, err := service.Launch(context.Background(), root, manifest, []string{"fixture"})
+	_, err := service.Launch(context.Background(), domain.AppConfig{}, root, manifest, []string{"fixture"})
 	if err == nil || launcher.calls != 0 {
 		t.Fatalf("opened a task replaced during discovery: %v calls=%d", err, launcher.calls)
 	}
@@ -73,7 +73,7 @@ func launchNormalizationFixture(t *testing.T) (*WorkspaceToolLaunchService, stri
 
 func TestToolLaunchAcceptsSavedEmptyWarningLists(t *testing.T) {
 	service, root, manifest, launcher := launchNormalizationFixture(t)
-	updated, err := service.Launch(context.Background(), root, manifest, []string{"fixture"})
+	updated, err := service.Launch(context.Background(), domain.AppConfig{}, root, manifest, []string{"fixture"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestToolLaunchRejectsRealManifestChanges(t *testing.T) {
 			if err := service.Manifests.Save(root, changed); err != nil {
 				t.Fatal(err)
 			}
-			_, err := service.Launch(context.Background(), root, manifest, []string{"fixture"})
+			_, err := service.Launch(context.Background(), domain.AppConfig{}, root, manifest, []string{"fixture"})
 			if err == nil || !strings.Contains(err.Error(), "任务清单已发生变化") || launcher.calls != 0 {
 				t.Fatalf("stale manifest accepted: %v calls=%d", err, launcher.calls)
 			}
@@ -109,7 +109,7 @@ func TestToolLaunchRejectsRealManifestChanges(t *testing.T) {
 func TestToolLaunchFailureRemainsRetryable(t *testing.T) {
 	service, root, manifest, launcher := launchNormalizationFixture(t)
 	launcher.err = errors.New("fixture unavailable")
-	updated, err := service.Launch(context.Background(), root, manifest, []string{"fixture"})
+	updated, err := service.Launch(context.Background(), domain.AppConfig{}, root, manifest, []string{"fixture"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestToolLaunchFailureRemainsRetryable(t *testing.T) {
 		t.Fatal("failure not persisted")
 	}
 	launcher.err = nil
-	updated, err = service.Retry(context.Background(), root, updated, "fixture")
+	updated, err = service.Retry(context.Background(), domain.AppConfig{}, root, updated, "fixture")
 	if err != nil || updated.WorkspaceToolLaunches[0].Status != domain.WorkspaceToolOpened || launcher.calls != 2 {
 		t.Fatalf("retry failed: %v %+v", err, updated)
 	}

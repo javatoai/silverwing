@@ -49,13 +49,12 @@ func newTaskModuleDraftValues(service domain.GroupServiceConfig, module domain.S
 	draft := taskModuleDraftValues{
 		ID: module.ID, Name: module.Name, Strategy: strategy,
 		BaseRemote: service.EffectiveMasterRemote(module), BaseRef: service.EffectiveMasterBranch(module),
-		TargetBranch: taskCreationTargetBranch(feature, service, module),
-		TagEnabled:   module.TagEnabled, TagMode: tagMode, TagTargetRef: taskCreationOptionalString(service.EffectiveTagTargetRef(module)),
+		TagEnabled: module.TagEnabled, TagMode: tagMode, TagTargetRef: taskCreationOptionalString(service.EffectiveTagTargetRef(module)),
 		TagMessagePrefix: messagePrefix, Source: domain.TaskModuleConfigured,
 	}
 	draft.LastName = draft.Name
-	draft.LastBaseRemote, draft.LastBaseRef, draft.LastTargetBranch = draft.BaseRemote, draft.BaseRef, draft.TargetBranch
-	return draft
+	draft.LastBaseRemote, draft.LastBaseRef = draft.BaseRemote, draft.BaseRef
+	return retargetTaskModuleDraftValues(draft, feature, len(service.Modules))
 }
 
 func syncTaskModuleDraftValues(draft taskModuleDraftValues) (taskModuleDraftValues, taskModuleDraftChanges) {
@@ -88,11 +87,18 @@ func syncTaskModuleDraftValues(draft taskModuleDraftValues) (taskModuleDraftValu
 }
 
 func retargetTaskModuleDraftValues(draft taskModuleDraftValues, feature string, moduleCount int) taskModuleDraftValues {
-	if !draft.TargetEdited {
+	if draft.Strategy == domain.WorkspaceStandardWorktree && !draft.TargetEdited {
 		draft.TargetBranch = taskCreationTargetBranchForCount(feature, draft.Name, draft.ID, moduleCount)
 		draft.LastTargetBranch = draft.TargetBranch
 	}
 	return draft
+}
+
+func (draft taskModuleDraftValues) selectionTargetBranch() string {
+	if draft.Strategy == domain.WorkspaceStandardWorktree {
+		return strings.TrimSpace(draft.TargetBranch)
+	}
+	return ""
 }
 
 func taskCreationModuleName(module domain.ServiceModuleConfig) string {
@@ -110,14 +116,6 @@ func taskCreationOptionalString(value *string) string {
 		return ""
 	}
 	return *value
-}
-
-func taskCreationTargetBranch(feature string, service domain.GroupServiceConfig, module domain.ServiceModuleConfig) string {
-	feature = strings.TrimSpace(feature)
-	if feature == "" {
-		return ""
-	}
-	return taskCreationTargetBranchForCount(feature, taskCreationModuleName(module), module.ID, len(service.Modules))
 }
 
 func taskCreationTargetBranchForCount(feature, moduleName, moduleID string, moduleCount int) string {

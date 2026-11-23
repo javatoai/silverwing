@@ -100,28 +100,22 @@ func (s *app) workspaceCommandsFor(t task, w application.Workspace) []domain.Wor
 	if err != nil {
 		return nil
 	}
-	for _, group := range config.Groups {
-		if group.ID != t.groupID {
+	service, err := config.Service(w.ServiceID)
+	if err != nil {
+		return nil
+	}
+	for _, module := range service.Modules {
+		if module.ID != w.ModuleID {
 			continue
 		}
-		for _, service := range group.Services {
-			if service.ID != w.ServiceID {
-				continue
-			}
-			for _, module := range service.Modules {
-				if module.ID != w.ModuleID {
-					continue
-				}
-				commands := make([]domain.WorkspaceCommandConfig, 0, len(module.CustomCommands))
-				for _, command := range module.CustomCommands {
-					if command.Enabled {
-						command.Arguments = slices.Clone(command.Arguments)
-						commands = append(commands, command)
-					}
-				}
-				return commands
+		commands := make([]domain.WorkspaceCommandConfig, 0, len(module.CustomCommands))
+		for _, command := range module.CustomCommands {
+			if command.Enabled {
+				command.Arguments = slices.Clone(command.Arguments)
+				commands = append(commands, command)
 			}
 		}
+		return commands
 	}
 	return nil
 }

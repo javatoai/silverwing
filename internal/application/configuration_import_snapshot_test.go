@@ -11,25 +11,29 @@ import (
 )
 
 func TestConfigurationImportChecksConfirmedPreviewFingerprint(t *testing.T) {
+	ctx := context.Background()
 	paths := storage.NewPaths(t.TempDir())
 	a := &App{Paths: paths, Config: storage.NewConfigStore(paths)}
 	if _, err := a.Config.Load(); err != nil {
 		t.Fatal(err)
 	}
-	source := storage.NewConfigStore(storage.NewPaths(t.TempDir()))
-	config, err := source.Load()
+	sourcePaths := storage.NewPaths(t.TempDir())
+	source := &App{Paths: sourcePaths, Config: storage.NewConfigStore(sourcePaths)}
+	config, err := source.Config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
 	config.Theme = domain.ThemeLight
-	if err := source.Save(config); err != nil {
+	if err := source.Config.Save(config); err != nil {
 		t.Fatal(err)
 	}
-	archive := filepath.Join(t.TempDir(), "import.zip")
-	if _, err := source.ExportTo(archive); err != nil {
-		t.Fatal(err)
+	if _, err := source.Dispatch(ctx, Action{Kind: "config.export"}); err == nil {
+		t.Fatal("manual backup accepted an unspecified destination")
 	}
-	ctx := context.Background()
+	archive := filepath.Join(t.TempDir(), "手动备份 2026.zip")
+	if result, err := source.Dispatch(ctx, Action{Kind: "config.export", Path: archive}); err != nil || result.Path != archive {
+		t.Fatalf("backup did not use the chosen path: %+v, %v", result, err)
+	}
 	result, err := a.Dispatch(ctx, Action{Kind: "config.import-preview", Path: archive})
 	if err != nil {
 		t.Fatal(err)
@@ -39,10 +43,10 @@ func TestConfigurationImportChecksConfirmedPreviewFingerprint(t *testing.T) {
 		t.Fatal("preview did not return its archive fingerprint")
 	}
 	config.Theme = domain.ThemeDark
-	if err := source.Save(config); err != nil {
+	if err := source.Config.Save(config); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := source.ExportTo(archive); err != nil {
+	if _, err := source.Dispatch(ctx, Action{Kind: "config.export", Path: archive}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.Dispatch(ctx, Action{Kind: "config.import", Path: preview.Path, Payload: map[string]any{"expectedFingerprint": preview.Fingerprint}}); err == nil || !strings.Contains(err.Error(), "预览后已变化") {

@@ -2,6 +2,7 @@ package requirementprovider
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -35,7 +36,7 @@ func TestMaterialsNewDirectoryAndTitleShareConfiguredRuntime(t *testing.T) {
 	c.RequirementMaterialsSubdirectory = &subdir
 	c.MeegleProjects = []domain.MeegleProjectConfig{{ProjectKey: "project", SimpleName: "obt"}}
 	c.CommandProxyURL = &proxy
-	c.CommandProxyTargets = []domain.CommandProxyTarget{domain.ProxyTargetMeegle}
+	c.CommandProxyTargets = []domain.CommandProxyTarget{"MEEGLE", domain.ProxyTargetCodex}
 	runner := &materialsRuntimeRunner{}
 	provider := NewMeegle(runner)
 	service := documents.NewPreparationService(storage.NewPaths(t.TempDir()), provider)
@@ -51,8 +52,13 @@ func TestMaterialsNewDirectoryAndTitleShareConfiguredRuntime(t *testing.T) {
 		t.Fatalf("expected both remote boundaries, got %d", len(runner.specs))
 	}
 	for _, spec := range runner.specs {
-		if spec.Executable != cli || spec.Env["HTTP_PROXY"] != proxy || len(spec.RemoveEnv) == 0 {
+		if spec.Executable != cli {
 			t.Fatalf("different runtime: %+v", spec)
+		}
+		for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy"} {
+			if _, exists := spec.Env[key]; exists || !slices.Contains(spec.RemoveEnv, key) {
+				t.Fatalf("Meegle runtime allows %s: %+v", key, spec)
+			}
 		}
 	}
 	_, err = service.Ensure(context.Background(), c, "https://project.feishu.cn/obt/bug/detail/123456", "新目录")

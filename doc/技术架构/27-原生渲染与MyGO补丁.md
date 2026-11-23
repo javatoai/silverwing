@@ -10,7 +10,7 @@ Silverwing 使用 Go 与 MyGO 原生桌面组件显示任务资料、源码、�
 
 ## MyGO 版本与本地源码
 
-根模块在 `go.mod` 固定 `github.com/egoist/mygo v0.7.3`，同时用 `replace` 指向仓库内的 `third_party/mygo`。Silverwing 的原生输入和排版依赖这份本地源码，因此升级时除了更新版本号，还要检查本地扩展是否仍需要、与上游实现是否冲突。
+根模块在 `go.mod` 固定 `github.com/egoist/mygo v0.10.0`，同时用 `replace` 指向仓库内的 `third_party/mygo`。Silverwing 的原生输入和排版依赖这份本地源码，因此升级时除了更新版本号，还要检查本地扩展是否仍需要、与上游实现是否冲突。
 
 补丁主要保留应用实际使用的契约：原生 TextEditor 的源码大小限制、组合输入通知、保留混合换行与剪贴板错误处理；Markdown 阅读器的原文映射、图片和链接回调；菜单命令派发、分栏比例、Windows 文件对话框错误，以及窗口缩放呈现。详细变更和升级检查点维护在 `third_party/MYGO-PATCHES.md`。该文件记录补丁目的，不代表每个运行环境都已完成实体设备验收。
 
@@ -43,4 +43,4 @@ Mermaid 使用随应用打包的 `mmdr v0.3.1` 本地程序。首次使用时，
 - PDF/图片媒体：`internal/media/pdf.go`、`internal/media/image.go`
 - 预览打开、关闭与 PDFium 资源定位：`internal/desktop/native_media.go`
 
-相关文档：[任务资料使用](../日常使用/11-任务资料使用.md) · [AGENTS 与说明模板](../AI%20工具与上下文/14-AGENTS与说明模板.md) · [技术架构总览](07-技术架构总览.md)
+相关文档：[任务资料使用](../日常使用/11-任务资料使用.md) · [AGENTS 与任务说明](../AI%20工具与上下文/14-AGENTS与任务说明.md) · [技术架构总览](07-技术架构总览.md)

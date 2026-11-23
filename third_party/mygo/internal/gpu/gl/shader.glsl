@@ -27,7 +27,7 @@ layout(location = 10) in vec4 aParams; // kind, dashed or grayscale, sigma or pa
 
 layout(location = 11) in vec4 aTransform0;
 layout(location = 12) in vec4 aTransform1;
-layout(location = 13) in vec4 aTransform2; // the projective row's g and h
+layout(location = 13) in vec4 aTransform2; // the projective row's g and h, and 1 where its constant is -1
 
 uniform vec2 uSize;
 
@@ -53,7 +53,7 @@ flat out vec4 vParams;
 // frameH returns the frame point of local p, in homogeneous coordinates.
 vec3 frameH(vec2 p) {
 	return vec3(dot(aTransform0.xyz, vec3(p, 1.0)), dot(aTransform1.xyz, vec3(p, 1.0)),
-				dot(vec3(aTransform2.xy, 1.0), vec3(p, 1.0)));
+				dot(vec3(aTransform2.xy, 1.0 - 2.0 * aTransform2.z), vec3(p, 1.0)));
 }
 
 void main() {
@@ -171,7 +171,7 @@ Frame frameOf() {
 	// In perspective, the pixel's center, as interpolating drifts: the
 	// frame's y goes down, the window's up.
 	f.s = f.persp ? vec2(gl_FragCoord.x, uSize.y - gl_FragCoord.y) : vWorld.xy / vWorld.z;
-	vec3 r0 = vTransform0.xyz, r1 = vTransform1.xyz, r2 = vec3(vTransform2.xy, 1.0);
+	vec3 r0 = vTransform0.xyz, r1 = vTransform1.xyz, r2 = vec3(vTransform2.xy, 1.0 - 2.0 * vTransform2.z);
 	f.c0 = cross(r1, r2);
 	f.c1 = cross(r2, r0);
 	f.c2 = cross(r0, r1);
@@ -281,6 +281,28 @@ float textCoverage(float a, vec3 c, float contrast, float boost, vec4 g) {
 // What follows is the renderer's own; effects (effect.glsl) take what is
 // above.
 #ifdef FRAGMENT
+
+// The chroma of an image that is a frame of video in NV12, whose luma
+// uImage holds (gpu.ImageYUV).
+uniform sampler2D uChroma;
+
+// yuvToRGB converts the samples of a frame of video in YCbCr to RGB, as
+// scene.YUVMatrix.YUVToRGB does: m is the matrix, 0 to 2 for BT.601, 709
+// and 2020 in the limited range, plus 3 for the full range.
+vec3 yuvToRGB(float y, vec2 c, float m) {
+	float full = m > 2.5 ? 1.0 : 0.0;
+	float std = m - 3.0 * full;
+	vec2 k = std < 0.5 ? vec2(0.299, 0.114) : std < 1.5 ? vec2(0.2126, 0.0722) : vec2(0.2627, 0.0593);
+	c -= 128.0 / 255.0;
+	if (full < 0.5) {
+		y = (y - 16.0 / 255.0) * (255.0 / 219.0);
+		c *= 255.0 / 224.0;
+	}
+	float r = y + 2.0 * (1.0 - k.x) * c.y;
+	float b = y + 2.0 * (1.0 - k.y) * c.x;
+	float g = (y - k.x * r - k.y * b) / (1.0 - k.x - k.y);
+	return clamp(vec3(r, g, b), 0.0, 1.0);
+}
 
 // subpixelCoverage does the same for each subpixel of a subpixel glyph.
 vec3 subpixelCoverage(vec3 a, vec3 c, float contrast, float boost, vec4 g) {
@@ -410,8 +432,8 @@ vec4 stopsAt(vec4 c2, float t, bool lab) {
 
 // paint returns the premultiplied color at p of plain color, a gradient
 // mixed in sRGB (1) or Oklab (2), stripes (3), or a gradient of stops,
-// linear (4, 5) or conic (6, 7), mixed in sRGB or in Oklab, as
-// scene.Paint says.
+// linear (4, 5), conic (6, 7) or radial (8, 9), mixed in sRGB or in
+// Oklab, as scene.Paint says.
 vec4 paint(vec2 p, float mode, vec4 rect, vec4 c1, vec4 c2, vec4 g) {
 	if (mode < 0.5) {
 		return premul(c1);
@@ -421,12 +443,14 @@ vec4 paint(vec2 p, float mode, vec4 rect, vec4 c1, vec4 c2, vec4 g) {
 		if (mode < 5.5) {
 			vec2 d = g.zw - g.xy;
 			t = dot(p - g.xy, d) / max(dot(d, d), 0.0001);
-		} else {
+		} else if (mode < 7.5) {
 			vec2 d = p - g.xy;
 			t = (atan(d.x, -d.y) - g.z) * 0.15915494309189535;
 			t -= floor(t);
+		} else {
+			t = length(p - g.xy) / max(g.z, 0.0001);
 		}
-		return stopsAt(c2, t, mode > 4.5 && mode < 5.5 || mode > 6.5);
+		return stopsAt(c2, t, mode > 4.5 && mode < 5.5 || mode > 6.5 && mode < 7.5 || mode > 8.5);
 	}
 	if (mode < 2.5) {
 		vec2 d = g.zw - g.xy;
@@ -579,9 +603,25 @@ void main() {
 		return;
 	}
 	if (kind < 4.5) {
-		res = sampleImage(uImage, tex, vWidths, vParams.z, dtex);
-		if (vParams.y > 0.5) {
-			res.rgb = vec3(dot(res.rgb, vec3(0.2126, 0.7152, 0.0722)));
+		if (vParams.y > 1.5) {
+			// A frame of video: its luma and its chroma, converted.
+			float code = vParams.y - 2.0;
+			float gray = code > 7.5 ? 1.0 : 0.0;
+			// The chroma covers twice its size in luma, a column or row
+			// more than an odd size has.
+			vec2 cs = vec2(textureSize(uImage, 0)) / (2.0 * vec2(textureSize(uChroma, 0)));
+			res = vec4(yuvToRGB(sampleImage(uImage, tex, vWidths, vParams.z, dtex).r,
+								sampleImage(uChroma, tex * cs, vWidths * cs.xyxy, vParams.z, dtex * cs).rg,
+								code - 8.0 * gray),
+					   1.0);
+			if (gray > 0.5) {
+				res.rgb = vec3(dot(res.rgb, vec3(0.2126, 0.7152, 0.0722)));
+			}
+		} else {
+			res = sampleImage(uImage, tex, vWidths, vParams.z, dtex);
+			if (vParams.y > 0.5) {
+				res.rgb = vec3(dot(res.rgb, vec3(0.2126, 0.7152, 0.0722)));
+			}
 		}
 		res = tint(res, vColor) * localCoverage(p, vRect, vRadii, vTransform0.w, fr);
 		fragColor = res * clip * vParams.w;

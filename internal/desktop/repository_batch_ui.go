@@ -13,16 +13,9 @@ import (
 )
 
 func (s *app) openRepositoryBatchDialog() {
-	groupID := s.selectedServiceGroupID()
-	if groupID == "" {
-		s.lastError = "请先创建一个项目组，再添加仓库。"
-		return
-	}
 	s.workspaceUnit.state.repositoryBatchOpen = true
 	s.workspaceUnit.state.repositoryBatchGeneration++
-	// Capture the active group at the moment the dialog opens. A later page
-	// selection cannot redirect this import into another group.
-	s.workspaceUnit.state.repositoryBatchGroupID = groupID
+	s.workspaceUnit.state.repositoryBatchHome = s.snapshot.Home
 	s.workspaceUnit.state.repositoryBatchPaths = nil
 	s.lastError = ""
 }
@@ -33,7 +26,7 @@ func (s *app) pickRepositoryBatchDirectories() {
 	}
 	s.workspaceUnit.state.repositoryBatchPickerBusy = true
 	win := s.win
-	generation, home, groupID := s.workspaceUnit.state.repositoryBatchGeneration, s.snapshot.Home, s.workspaceUnit.state.repositoryBatchGroupID
+	generation, home := s.workspaceUnit.state.repositoryBatchGeneration, s.workspaceUnit.state.repositoryBatchHome
 	win.Invalidate()
 	go func() {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
@@ -46,7 +39,7 @@ func (s *app) pickRepositoryBatchDirectories() {
 		win.Update(func() {
 			s.workspaceUnit.state.repositoryBatchPickerBusy = false
 			if !s.workspaceUnit.state.repositoryBatchOpen || s.workspaceUnit.state.repositoryBatchGeneration != generation ||
-				s.snapshot.Home != home || s.workspaceUnit.state.repositoryBatchGroupID != groupID || !s.hasGroup(groupID) {
+				s.snapshot.Home != home {
 				return
 			}
 			if err != nil {
@@ -79,12 +72,8 @@ func (s *app) submitRepositoryBatch() {
 		s.lastError = "当前有操作正在执行，请等待完成或取消后重试。"
 		return
 	}
-	if s.workspaceUnit.state.repositoryBatchGroupID == "" {
-		s.lastError = "请选择项目组。"
-		return
-	}
-	if !s.hasGroup(s.workspaceUnit.state.repositoryBatchGroupID) {
-		s.lastError = "目标项目组已不存在，请重新打开添加仓库窗口。"
+	if s.workspaceUnit.state.repositoryBatchHome != s.snapshot.Home {
+		s.lastError = "应用数据目录已切换，请重新打开添加仓库窗口。"
 		return
 	}
 	if len(s.workspaceUnit.state.repositoryBatchPaths) == 0 {
@@ -92,12 +81,9 @@ func (s *app) submitRepositoryBatch() {
 		return
 	}
 	paths := append([]string(nil), s.workspaceUnit.state.repositoryBatchPaths...)
-	groupID := s.workspaceUnit.state.repositoryBatchGroupID
 	s.lastError = ""
-	s.workspaceUnit.state.serviceGroupID = groupID
 	s.act("service.add-repositories", "", "", "", "", "", map[string]any{
-		"groupId": groupID,
-		"paths":   paths,
+		"paths": paths,
 	})
 }
 
@@ -116,11 +102,6 @@ func (s *app) repositoryBatchDialog(c *ui.Context, p palette) {
 				if action(c, "repository-batch-close", "close", "关闭", p, false) {
 					s.workspaceUnit.state.repositoryBatchOpen = false
 				}
-			})
-			targetGroup := s.taskGroup(s.workspaceUnit.state.repositoryBatchGroupID)
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				label(c, "添加到", 11, p.muted)
-				label(c, firstNonEmpty(targetGroup.Name, "项目组已不可用"), 12, p.text).FontWeight(500)
 			})
 			label(c, "选择一个或多个本地 Git 仓库根目录。重复仓库会跳过，已有配置不会被覆盖。", 12, p.muted).Wrap()
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -142,7 +123,7 @@ func (s *app) repositoryBatchDialog(c *ui.Context, p palette) {
 					rowIndex := index
 					ui.Row(c).FillWidth().Padding(7, 9).Gap(8).AlignItems(ui.Center).Background(p.surface).Radius(7).Children(func() {
 						icon(c, "folder", 15, p.muted)
-						label(c, path, 11, p.text).Grow(1).SingleLine().Tooltip(path)
+						label(c, path, 11, p.text).Grow(1).SingleLine().TruncateStart().Tooltip(path)
 						if iconButton(c, fmt.Sprintf("repository-batch-remove-%d", rowIndex), "delete", "从选择中移除", p).Clicked() {
 							s.workspaceUnit.state.repositoryBatchPaths = append(s.workspaceUnit.state.repositoryBatchPaths[:rowIndex], s.workspaceUnit.state.repositoryBatchPaths[rowIndex+1:]...)
 						}

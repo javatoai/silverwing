@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/egoist/mygo/ui"
 	"silverwing-go/internal/documents"
 )
 
@@ -25,11 +26,13 @@ func taskTabsPreferencesFixture(t *testing.T, s *app) string {
 
 func TestTaskTabsDefaultAndLastEnabledPersistence(t *testing.T) {
 	s := newApp(nil, Options{Page: "settings"})
+	seedPlatformConnectionsForDesktopTest(s, true, false)
 	path := taskTabsPreferencesFixture(t, s)
-	if s.enabledTaskContentTabCount() != 8 || !slices.Equal(s.visibleTaskContentTabs(), []int{0, 1, 2, 3, 4, 5, 6, 7}) {
+	visible := []int{0, 1, 2, 4, 5, 6, 7}
+	if s.enabledTaskContentTabCount() != len(visible) || !slices.Equal(s.visibleTaskContentTabs(), visible) {
 		t.Fatal("old preferences must show all tabs in fixed order")
 	}
-	for index := 0; index < taskTerminalTab; index++ {
+	for _, index := range visible[:len(visible)-1] {
 		if !s.setTaskContentTabEnabled(index, false) {
 			t.Fatalf("hide %d: %s", index, s.lastError)
 		}
@@ -46,11 +49,12 @@ func TestTaskTabsDefaultAndLastEnabledPersistence(t *testing.T) {
 		t.Fatal("settings navigation started task work")
 	}
 	restarted := newApp(nil, Options{Page: "tasks"})
+	seedPlatformConnectionsForDesktopTest(restarted, true, false)
 	restarted.restoreDesktopPreferences(filepath.Dir(path))
 	if restarted.tab != taskTerminalTab || restarted.enabledTaskContentTabCount() != 1 {
 		t.Fatal("restart did not restore visibility and fallback", restarted.tab)
 	}
-	if !restarted.setTaskContentTabEnabled(taskTagTab, true) || restarted.tab != taskTerminalTab || !slices.Equal(restarted.visibleTaskContentTabs(), []int{4, 7}) {
+	if !restarted.setTaskContentTabEnabled(taskTagTab, true) || restarted.tab != taskTerminalTab || !slices.Equal(restarted.visibleTaskContentTabs(), []int{taskTagTab, taskTerminalTab}) {
 		t.Fatal("enabling a tab reordered tabs or changed selection")
 	}
 }
@@ -96,6 +100,43 @@ func TestTaskTabsTemporaryNavigationAndRestore(t *testing.T) {
 	}
 }
 
+func TestProjectInstructionsTaskTabVisibilitySetting(t *testing.T) {
+	s := newApp(nil, Options{Page: "settings"})
+	path := taskTabsPreferencesFixture(t, s)
+	tester := ui.NewTester(func(c *ui.Context) { s.settingsTaskTabs(c, setTheme(c, false)) }, 1100, 700)
+	if tester.HasText("项目资料") {
+		t.Fatal("settings showed project materials without a repository")
+	}
+
+	const configured = `{"projectInstructionsGitUrl":"https://example.invalid/project.git"}`
+	s.settingsUnit.state.configJSON = configured
+	s.tab = taskProjectInstructionsTab
+	tester.Frame()
+	files, hasFiles := tester.Find("任务文件")
+	project, hasProject := tester.Find("项目资料")
+	terminal, hasTerminal := tester.Find("终端")
+	if !hasFiles || !hasProject || !hasTerminal || project.Y <= files.Y || project.Y >= terminal.Y {
+		t.Fatalf("unexpected settings order: files=%+v project=%+v terminal=%+v", files, project, terminal)
+	}
+	if err := tester.Click("显示项目资料页签"); err != nil {
+		t.Fatal(err)
+	}
+	tester.Frame()
+	if s.taskContentTabEnabled(taskProjectInstructionsTab) || s.tab == taskProjectInstructionsTab || slices.Contains(s.visibleTaskContentTabs(), taskProjectInstructionsTab) {
+		t.Fatal("turning off the switch did not hide the project materials tab and leave it")
+	}
+
+	reopened := newApp(nil, Options{Page: "tasks"})
+	reopened.restoreDesktopPreferences(filepath.Dir(path))
+	reopened.settingsUnit.state.configJSON = configured
+	if reopened.taskContentTabEnabled(taskProjectInstructionsTab) {
+		t.Fatal("project materials visibility was not persisted")
+	}
+	if !reopened.setTaskContentTabEnabled(taskProjectInstructionsTab, true) || !slices.Contains(reopened.visibleTaskContentTabs(), taskProjectInstructionsTab) {
+		t.Fatal("turning the switch back on did not reveal the tab")
+	}
+}
+
 func TestTaskTabsCaptureAndSaveFailureKeepSelectionAndContent(t *testing.T) {
 	s, _, files := materialTextEditorFixture(t, map[string]string{"draft.txt": "draft"})
 	state := bindMaterialTextTest(s, files["draft.txt"])
@@ -135,18 +176,15 @@ func TestTaskTabsHideTerminalRetainsSessionAndOutputOwner(t *testing.T) {
 }
 
 func TestTaskTabsPreferenceNormalizationAndUnrelatedWrites(t *testing.T) {
-	all := make([]string, len(tabs))
-	for index := range tabs {
-		all[index] = readingViewForTab(index)
-	}
 	for _, test := range []struct {
 		name, raw string
 		want      []string
 	}{
 		{"old", `{}`, nil},
 		{"invalid", `{"hiddenTaskTabs":true}`, nil},
+		{"retired", `{"hiddenTaskTabs":["NOTES"]}`, nil},
 		{"mixed", `{"hiddenTaskTabs":["TAG","unknown","TAG","FILES"]}`, []string{"TAG", "FILES"}},
-		{"all", `{"hiddenTaskTabs":["DETAIL","MATERIALS","REQUIREMENT","NOTES","TAG","FILES","SERVICES","TERMINAL"]}`, all[1:]},
+		{"all", `{"hiddenTaskTabs":["DETAIL","MATERIALS","REQUIREMENT","NOTES","TAG","FILES","PROJECT_INSTRUCTIONS","SERVICES","TERMINAL"]}`, []string{"MATERIALS", "REQUIREMENT", "TAG", "FILES", "PROJECT_INSTRUCTIONS", "SERVICES", "TERMINAL"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), desktopPreferencesFile)

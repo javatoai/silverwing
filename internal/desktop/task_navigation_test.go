@@ -56,7 +56,7 @@ func TestTaskNavigationSearchAndOrdering(t *testing.T) {
 	}{
 		{"", []int{2, 0, 1, 4}},
 		{"  aPi  reQ-42 ", []int{0}},
-		{"服务端", []int{2, 0}},
+		{"服务端", []int{}},
 		{"billing payment", []int{0}},
 		{"结算 页面", []int{1}},
 		{"meta-17", []int{1}},

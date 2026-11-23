@@ -1,7 +1,7 @@
 package desktop
 
 import (
-	"path"
+	"path/filepath"
 	"strings"
 
 	"silverwing-go/internal/application"
@@ -23,9 +23,6 @@ func taskFilesTreeRows(view *taskFilesView) []FileTreeRow {
 			}
 			rows = append(rows, FileTreeRow{ID: taskFilesStatusPrefix + kind + relative, Name: name, Depth: depth})
 			return
-		}
-		if len(dir.entries) == 0 && depth > 0 {
-			rows = append(rows, FileTreeRow{ID: taskFilesStatusPrefix + "empty:" + relative, Name: "空目录", Depth: depth})
 		}
 		for _, entry := range dir.entries {
 			name := entry.Name
@@ -104,7 +101,7 @@ func (s *app) renderTaskFilesTree(c *ui.Context, p palette, view *taskFilesView)
 		}
 	}
 	FileTree(c, p, FileTreeProps{Key: "task-files-tree", HideRoot: true,
-		Root: FileTreeRow{ID: "@root", Name: path.Base(strings.ReplaceAll(view.identity.taskPath, `\`, "/")), Directory: true},
+		Root: FileTreeRow{ID: "@root", Name: filepath.Base(view.identity.taskPath), Directory: true},
 		Rows: rows, State: &view.tree, Expanded: view.expanded, Selected: map[string]bool{view.selected: true},
 		Opened: view.opened, Empty: "目录为空", AcceptFiles: false,
 		OnInput: func(input FileTreeInput) { s.taskFilesTreeInput(view, input) },

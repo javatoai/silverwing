@@ -477,6 +477,15 @@ func meegleResponseFailed(root map[string]any) bool {
 	return false
 }
 
+func meegleResponseMessage(root map[string]any) string {
+	for _, candidate := range []any{at(root, "error", "message"), root["message"], root["msg"], root["err_msg"], root["error"]} {
+		if message := text(candidate); message != "" {
+			return message
+		}
+	}
+	return ""
+}
+
 func firstDescriptor(root map[string]any) any {
 	values := array(root["list"])
 	if len(values) > 0 {
@@ -655,25 +664,18 @@ func (s *Service) queryParticipatedItemsWithProgress(ctx context.Context, config
 	if process.IsCleanupFailure(dateErr) {
 		return nil, nil, 0, dateErr
 	}
-	typeResult := make([][]domain.ParticipatedWorkItem, len(workItemTypes))
-	incompleteTypes := make([]bool, len(workItemTypes))
+	typeResult, typeErrors, err := s.queryWorkItemTypes(ctx, config, project, sprint, progress)
+	if err != nil {
+		return nil, nil, 0, err
+	}
 	failures := []string{}
 	completed := 0
-	for i, typ := range workItemTypes {
-		progress.emit(RequirementListProgress{Phase: "items", Status: "running", WorkItemType: typ.Path, Label: typ.Label, Message: "正在查询" + typ.Label + "…", Completed: i, Total: len(workItemTypes)})
-		items, err := s.queryWorkItemType(ctx, config, project, sprint, typ)
-		typeResult[i] = items
+	for i, err := range typeErrors {
 		if err != nil {
-			if process.IsCleanupFailure(err) {
-				return nil, nil, 0, err
-			}
-			incompleteTypes[i] = true
-			failures = append(failures, project.SimpleName+" · "+typ.Label+"："+err.Error())
-			progress.emit(RequirementListProgress{Phase: "items", Status: "failed", WorkItemType: typ.Path, Label: typ.Label, Message: err.Error(), Completed: i + 1, Total: len(workItemTypes)})
+			failures = append(failures, project.SimpleName+" · "+workItemTypes[i].Label+"："+err.Error())
 			continue
 		}
 		completed++
-		progress.emit(RequirementListProgress{Phase: "items", Status: "done", WorkItemType: typ.Path, Label: typ.Label, Message: fmt.Sprintf("查询完成，%d 条", len(items)), Completed: i + 1, Total: len(workItemTypes)})
 	}
 	itemsStatus, itemsMessage := "done", "工作项查询完成"
 	if len(failures) > 0 {
@@ -689,7 +691,7 @@ func (s *Service) queryParticipatedItemsWithProgress(ctx context.Context, config
 		if dateErr != nil {
 			return "", errors.New("个人估分：" + shortError(dateErr))
 		}
-		if typeIndex := workItemTypeIndex(item.Type); typeIndex >= 0 && incompleteTypes[typeIndex] {
+		if typeIndex := workItemTypeIndex(item.Type); typeIndex >= 0 && typeErrors[typeIndex] != nil {
 			return "", errors.New("个人估分：工作项的 Sprint 归属查询不完整")
 		}
 		nodes, err := s.readPages(readContext, config, []string{"workflow", "get-node", "--project-key", item.ProjectKey, "--work-item-id", item.ID, "--node-id-list", "_all", "--field-key-list", "_all", "--need-sub-task", "true"}, 20*time.Second, "读取工作项排期明细")
@@ -721,6 +723,58 @@ func (s *Service) queryParticipatedItemsWithProgress(ctx context.Context, config
 	}
 	progress.update("estimates", estimateStatus, estimateMessage, completedEstimates, len(all))
 	return all, failures, completed, nil
+}
+
+func (s *Service) queryWorkItemTypes(ctx context.Context, config domain.AppConfig, project domain.MeegleProjectConfig, sprint sprintItem, progress *requirementListReporter) ([][]domain.ParticipatedWorkItem, []error, error) {
+	total := len(workItemTypes)
+	progress.update("items", "running", "正在并行查询工作项…", 0, total)
+	for _, typ := range workItemTypes {
+		progress.emit(RequirementListProgress{Phase: "items", Status: "running", WorkItemType: typ.Path, Label: typ.Label, Message: "正在查询" + typ.Label + "…", Total: total})
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	queryContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type queryResult struct {
+		index int
+		items []domain.ParticipatedWorkItem
+		err   error
+	}
+	results := make(chan queryResult, total)
+	for index, typ := range workItemTypes {
+		go func() {
+			items, err := s.queryWorkItemType(queryContext, config, project, sprint, typ)
+			if process.IsCleanupFailure(err) {
+				cancel()
+			}
+			results <- queryResult{index: index, items: items, err: err}
+		}()
+	}
+
+	// Drain every query before estimating or returning. The coordinator reports
+	// completion promptly while retaining the configured type order in the list.
+	itemsByType := make([][]domain.ParticipatedWorkItem, total)
+	errorsByType := make([]error, total)
+	var cleanupErr error
+	for finished := 1; finished <= total; finished++ {
+		result := <-results
+		itemsByType[result.index], errorsByType[result.index] = result.items, result.err
+		if process.IsCleanupFailure(result.err) {
+			cleanupErr = errors.Join(cleanupErr, result.err)
+		}
+		if queryContext.Err() != nil {
+			continue
+		}
+		typ := workItemTypes[result.index]
+		status, message := "done", fmt.Sprintf("查询完成，%d 条", len(result.items))
+		if result.err != nil {
+			status, message = "failed", result.err.Error()
+		}
+		progress.emit(RequirementListProgress{Phase: "items", Status: status, WorkItemType: typ.Path, Label: typ.Label, Message: message, Completed: finished, Total: total})
+	}
+	return itemsByType, errorsByType, errors.Join(ctx.Err(), cleanupErr)
 }
 
 func aggregateParticipatedTypeResults(typeResults [][]domain.ParticipatedWorkItem) []domain.ParticipatedWorkItem {
@@ -1055,6 +1109,12 @@ func (s *Service) readWorkItemWithField(ctx context.Context, config domain.AppCo
 	root := object(value)
 	if root == nil {
 		return nil, errors.New("Meegle 返回不是 JSON 对象")
+	}
+	if meegleResponseFailed(root) {
+		if message := meegleResponseMessage(root); message != "" {
+			return nil, fmt.Errorf("读取需求失败：%s", truncateRunes(s.safeDiagnostic(config, message), 500))
+		}
+		return nil, errors.New("读取需求失败：Meegle 返回错误响应")
 	}
 	return root, nil
 }

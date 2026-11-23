@@ -45,7 +45,11 @@ func (s *MaterialsGitSyncService) prepareRemoteGit(ctx context.Context, scope Ma
 	if err := s.checkRemoteScope(ctx); err != nil {
 		return nil, nil, err
 	}
-	git := s.Git.withRemotePrompt(interactive)
+	git := s.Git
+	if scope.BindingID != "" {
+		git = localDocumentsGitClient(git)
+	}
+	git = git.withRemotePrompt(interactive)
 	if !MaterialsGitUsesHTTPS(scope.URL) {
 		return git, nil, nil
 	}
@@ -80,24 +84,103 @@ func (s *MaterialsGitSyncService) prepareRemoteGit(ctx context.Context, scope Ma
 }
 
 func (s *MaterialsGitSyncService) readRemoteBranchHeads(ctx context.Context, scope MaterialsGitScope, interactive bool, timeout time.Duration) (process.Result, error) {
-	git, options, err := s.prepareRemoteGit(ctx, scope, "", interactive)
-	if err != nil {
-		return process.Result{}, err
+	result, _, _, _, err := s.readRemoteBranchHeadsAt(ctx, scope, scope.remoteReadRoot(), interactive, timeout, materialsBranchOutputLimit)
+	return result, err
+}
+
+func (scope MaterialsGitScope) remoteReadRoot() string {
+	if scope.BindingID != "" {
+		return scope.Root
 	}
-	result, err := git.runReadBudget(ctx, "", timeout, materialsBranchOutputLimit, append(options, "ls-remote", "--heads", "--", scope.URL)...)
-	if process.IsCleanupFailure(err) {
-		return process.Result{}, diagnoseGitRemoteError(ctx, err)
+	return ""
+}
+
+// readRemoteBranchHeadsAt reads refs from the configured URL and returns the
+// endpoint and transport configuration that succeeded. Some GitLab instances
+// redirect a project URL without the .git suffix from HTTPS to HTTP. In that
+// specific case, retry the same HTTPS host and path with .git appended. The
+// HTTPS-only protocol allowlist remains in force for both attempts.
+func (s *MaterialsGitSyncService) readRemoteBranchHeadsAt(
+	ctx context.Context,
+	scope MaterialsGitScope,
+	root string,
+	interactive bool,
+	timeout time.Duration,
+	outputLimit int,
+	patterns ...string,
+) (process.Result, string, *GitClient, []string, error) {
+	return s.readRemoteRefsAt(ctx, scope, root, interactive, timeout, outputLimit, "--heads", patterns...)
+}
+
+func (s *MaterialsGitSyncService) readRemoteRefsAt(
+	ctx context.Context,
+	scope MaterialsGitScope,
+	root string,
+	interactive bool,
+	timeout time.Duration,
+	outputLimit int,
+	mode string,
+	patterns ...string,
+) (process.Result, string, *GitClient, []string, error) {
+	remoteURLs := []string{scope.URL}
+	if alternative := materialsGitHTTPSProjectEndpoint(scope.URL); scope.BindingID == "" && alternative != "" && alternative != scope.URL {
+		remoteURLs = append(remoteURLs, alternative)
 	}
-	if scopeErr := s.checkRemoteScope(ctx); scopeErr != nil {
-		return process.Result{}, scopeErr
+
+	for index, remoteURL := range remoteURLs {
+		remoteScope := scope
+		remoteScope.URL = remoteURL
+		git, options, err := s.prepareRemoteGit(ctx, remoteScope, root, interactive)
+		if err != nil {
+			return process.Result{}, "", nil, nil, err
+		}
+		args := append(append([]string(nil), options...), "ls-remote", mode, "--", remoteURL)
+		args = append(args, patterns...)
+		result, err := git.runReadBudget(ctx, root, timeout, outputLimit, args...)
+		if process.IsCleanupFailure(err) {
+			return process.Result{}, "", nil, nil, diagnoseGitRemoteError(ctx, err)
+		}
+		if scopeErr := s.checkRemoteScope(ctx); scopeErr != nil {
+			return process.Result{}, "", nil, nil, scopeErr
+		}
+		if errors.Is(err, errGitReadOutputLimit) {
+			return process.Result{}, "", nil, nil, errors.New("远程分支列表超过读取上限，请检查远端仓库")
+		}
+		if err == nil {
+			return result, remoteURL, git, options, nil
+		}
+		if index+1 == len(remoteURLs) || !materialsGitHTTPSDowngradeRedirect(err) {
+			return process.Result{}, "", nil, nil, diagnoseGitRemoteError(ctx, err)
+		}
 	}
-	if errors.Is(err, errGitReadOutputLimit) {
-		return process.Result{}, errors.New("远程分支列表超过读取上限，请检查远端仓库")
+	return process.Result{}, "", nil, nil, diagnoseGitRemoteError(ctx, errors.New("Git remote lookup failed"))
+}
+
+func materialsGitHTTPSProjectEndpoint(repositoryURL string) string {
+	if !MaterialsGitUsesHTTPS(repositoryURL) || domain.ValidateRemoteGitURL(repositoryURL) != nil {
+		return ""
 	}
-	if err != nil {
-		return process.Result{}, diagnoseGitRemoteError(ctx, err)
+	parsed, err := url.Parse(repositoryURL)
+	if err != nil || parsed.Path == "" {
+		return ""
 	}
-	return result, nil
+	path := strings.TrimSuffix(parsed.Path, "/")
+	if strings.HasSuffix(strings.ToLower(path), ".git") {
+		return ""
+	}
+	parsed.Path = path + ".git"
+	if parsed.RawPath != "" {
+		parsed.RawPath = strings.TrimSuffix(parsed.RawPath, "/") + ".git"
+	}
+	return parsed.String()
+}
+
+func materialsGitHTTPSDowngradeRedirect(err error) bool {
+	var gitErr *GitException
+	if !errors.As(err, &gitErr) {
+		return false
+	}
+	return strings.Contains(gitErr.Result.Stderr, `Protocol "http" disabled (in redirect)`)
 }
 
 func (s *MaterialsGitSyncService) VerifyHTTPSLogin(ctx context.Context, scope MaterialsGitScope) error {
@@ -106,6 +189,20 @@ func (s *MaterialsGitSyncService) VerifyHTTPSLogin(ctx context.Context, scope Ma
 	}
 	_, err := s.readRemoteBranchHeads(ctx, scope, true, 2*time.Minute)
 	return err
+}
+
+// VerifyLocalDocumentsScope checks the inferred remote before a branch read or
+// editor operation. It performs no network or repository writes.
+func (s *MaterialsGitSyncService) VerifyLocalDocumentsScope(ctx context.Context, scope MaterialsGitScope) error {
+	if scope.BindingID == "" {
+		return nil
+	}
+	local := *s
+	local.Git = localDocumentsGitClient(s.Git)
+	if err := local.verifyDocumentsCheckoutRoot(ctx, scope); err != nil {
+		return err
+	}
+	return local.verifyLocalDocumentsRemote(ctx, scope)
 }
 
 func (s *MaterialsGitSyncService) HTTPSLoginArguments(ctx context.Context, scope MaterialsGitScope) ([]string, error) {
@@ -130,6 +227,9 @@ func validateMaterialsHTTPSLogin(repositoryURL string) error {
 }
 
 func (s *MaterialsGitSyncService) RemoteBranches(ctx context.Context, scope MaterialsGitScope) ([]string, error) {
+	if err := s.VerifyLocalDocumentsScope(ctx, scope); err != nil {
+		return nil, err
+	}
 	result, err := s.readRemoteBranchHeads(ctx, scope, false, 20*time.Second)
 	if err != nil {
 		return nil, err

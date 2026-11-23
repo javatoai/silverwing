@@ -51,7 +51,9 @@ func renderWorkspaceNativeControls(c *ui.Context, p palette, state *workspaceHis
 		previousKey, nextKey, findKey = "Shift+Cmd+F8", "Cmd+F8", "Cmd+F"
 	}
 	run := func(command editor.Command) {
-		view.view.Run(command)
+		if view.view.Run(command) && (command == editor.PreviousHunk || command == editor.NextHunk) {
+			view.view.Focus()
+		}
 		syncWorkspaceNativeHunk(state, view)
 		c.Invalidate()
 	}

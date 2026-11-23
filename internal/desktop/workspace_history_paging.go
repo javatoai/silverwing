@@ -172,13 +172,17 @@ func (s *app) renderWorkspaceHistoryMore(c *ui.Context, p palette, state *worksp
 		return
 	}
 	ui.Row(c).FillWidth().Shrink(0).Gap(8).AlignItems(ui.Center).Children(func() {
-		text := fmt.Sprintf("已读取 %d 条", len(state.Commits))
-		if state.HistoryHasMore {
-			text += " · 还有更多提交"
-		}
-		label(c, text, 10, p.muted).Grow(1)
-		if state.HistoryHasMore && action(c, key+"-history-more", "chevron-down", "加载更多", p, state.HistoryLoading) {
-			s.readWorkspaceHistoryPage(state, false)
-		}
+		s.renderWorkspaceHistoryPagingControls(c, p, state, key)
 	})
+}
+
+func (s *app) renderWorkspaceHistoryPagingControls(c *ui.Context, p palette, state *workspaceHistoryState, key string) {
+	text := fmt.Sprintf("已读取 %d 条", len(state.Commits))
+	if state.HistoryHasMore {
+		text += " · 还有更多提交"
+	}
+	label(c, text, 10, p.muted).Grow(1).MinWidth(0).SingleLine()
+	if state.HistoryHasMore && action(c, key+"-history-more", "chevron-down", "加载更多", p, state.HistoryLoading) {
+		s.readWorkspaceHistoryPage(state, false)
+	}
 }

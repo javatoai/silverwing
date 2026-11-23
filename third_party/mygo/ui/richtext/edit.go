@@ -174,7 +174,7 @@ func (v *view) joinStep() {
 // attributes, as part of the step its start made.
 func (v *view) commitCompose() {
 	if v.compose != "" {
-		s := v.compose
+		s := normalizeNewlines(v.compose)
 		v.compose = ""
 		v.joinStep()
 		v.replace(v.caret, v.caret, s)
@@ -201,7 +201,7 @@ func unstyle(s *ParagraphStyle) {
 	case s.Heading > 0:
 		s.Heading = 0
 	case s.Quote:
-		s.Quote = false
+		s.Quote, s.QuoteDepth = false, 0
 	case s.CodeBlock:
 		s.CodeBlock = false
 	case s.Indent > 0:
@@ -226,7 +226,7 @@ func (v *view) enter() {
 			case s.List != NoList:
 				s.List, s.Checked = NoList, false
 			case s.Quote:
-				s.Quote = false
+				s.Quote, s.QuoteDepth = false, 0
 			case s.CodeBlock && p > 0 && v.para(p-1).style.CodeBlock:
 				s.CodeBlock = false
 			default:

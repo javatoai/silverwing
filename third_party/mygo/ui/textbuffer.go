@@ -202,6 +202,14 @@ func (b *buffer) end(p int) int {
 	return b.n
 }
 
+// paraEdges returns the paragraph holding rune i, from its start to after
+// its newline: what a triple click selects, as in the platforms' text views.
+func (b *buffer) paraEdges(i int) (start, end int) {
+	p := b.para(i)
+	end, _ = b.next(p)
+	return b.start(p), end
+}
+
 // byteOf returns the byte of the text rune i starts at.
 func (b *buffer) byteOf(i int) int {
 	if b.indexed {
@@ -400,6 +408,10 @@ func (b *buffer) wordAt(i int) (start, end int) {
 }
 
 func (b *buffer) runeAt(i int) rune {
+	if !b.indexed {
+		r, _ := utf8.DecodeRuneInString(b.s[b.byteOf(i):])
+		return r
+	}
 	r, _ := rope.TextOf(b.root).RuneAt(rope.ByteOfRune(b.root, i))
 	return r
 }

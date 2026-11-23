@@ -673,6 +673,25 @@ func TestDailyFormatWithExternalReferenceDefinitionRejectsCrossedLink(t *testing
 	}
 }
 
+func TestDailyInlineStylesTreatGitHubTokensAsLiteralText(t *testing.T) {
+	for _, source := range []string{"@octocat", "#123", "octocat/hello#123", "GH-123"} {
+		t.Run(source, func(t *testing.T) {
+			s, v := liveTester(source, 0, dailyOptions())
+			s.SetSelection(0, len(source))
+			if err := s.Execute(EditorCommand{Kind: CommandInlineCode}); err != nil {
+				t.Fatal(err)
+			}
+			if got, want := s.Buffer().OriginalText(), "`"+source+"`"; got != want {
+				t.Fatalf("source = %q, want %q", got, want)
+			}
+			v.Command("undo")
+			if s.Buffer().OriginalText() != source {
+				t.Fatal("inline formatting was not one exact undo")
+			}
+		})
+	}
+}
+
 func TestDailyFutureFormatsDoNotWrapPastedBlocks(t *testing.T) {
 	for _, text := range []string{"one\n\ntwo", "```sql\nx\n```"} {
 		for _, prefix := range []string{"", "hello"} {

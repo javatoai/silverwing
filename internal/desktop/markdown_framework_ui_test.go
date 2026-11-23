@@ -35,7 +35,7 @@ func saveFrameworkReadingFixture(t *testing.T, tester *ui.Tester, name string) {
 }
 
 func TestMyGOReadingLayoutCopyAndProjection(t *testing.T) {
-	if mygo.Version != "0.7.3" {
+	if mygo.Version != "0.10.0" {
 		t.Fatalf("runtime version %s", mygo.Version)
 	}
 	const code = "fmt.Println(\"原始代码\")  \r\nnext()\r\n"

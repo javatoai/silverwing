@@ -3,7 +3,7 @@ package desktop
 import "github.com/egoist/mygo/ui"
 
 var settingsCLITabs = []struct{ tool, label string }{
-	{"git", "Git"}, {"codex", "Codex"}, {"meegle", "Meegle"}, {"lark", "Lark"}, {"genbu", "Genbu"},
+	{"git", "Git"}, {"codex", "Codex"}, {"meegle", "Meegle"}, {"lark", "Lark"},
 }
 
 func settingsCLIToolFromPage(page string) string {
@@ -16,8 +16,6 @@ func settingsCLIToolFromPage(page string) string {
 		return "meegle"
 	case "cli-lark":
 		return "lark"
-	case "cli-genbu":
-		return "genbu"
 	}
 	return ""
 }

@@ -69,6 +69,9 @@ type heights struct {
 	src     []block
 	srcLen  int
 	scratch []block
+	// styles are the heights of the rows of styled lines, by line, where
+	// they are not lh (LineStyle).
+	styles []heightEntry
 }
 
 // wrapRows keeps how many rows beyond the first each line wraps into.
@@ -158,6 +161,27 @@ func (w *wrapRows) before(line int) int {
 	return s
 }
 
+// forget has the lines from to to, inclusive, measured again, as what
+// shows in them changed.
+func (w *wrapRows) forget(from, to int) {
+	if !w.on {
+		return
+	}
+	from, to = max(from, 0), min(to, len(w.extra)-1)
+	changed := false
+	for i := from; i <= to; i++ {
+		if w.extra[i] != wrapUnknown {
+			w.extra[i] = wrapUnknown
+			w.known--
+			changed = true
+		}
+	}
+	if changed {
+		w.stale = true
+		w.version++
+	}
+}
+
 // splice follows a change of lines: the lines from at to at+removed
 // replaced by added ones, which are not measured.
 func (w *wrapRows) splice(at, removed, added int) {
@@ -221,13 +245,22 @@ func (h *heights) isHidden(line int) bool {
 	return i < len(h.hidden) && h.hidden[i].from <= line
 }
 
+// hiddenSpan returns the run of hidden lines holding line, a hidden one.
+func (h *heights) hiddenSpan(line int) lineSpan {
+	i := sort.Search(len(h.hidden), func(i int) bool { return h.hidden[i].to >= line })
+	if i < len(h.hidden) && h.hidden[i].from <= line {
+		return h.hidden[i]
+	}
+	return lineSpan{line, line}
+}
+
 // update makes the entries again after the hidden lines or the blocks
-// changed.
+// changed, and the first time, as the zero heights has made none.
 func (h *heights) update() {
-	if h.wraps.on && len(h.hidden) > 0 && h.wrapsSeen != h.wraps.version {
+	if h.wraps.on && (len(h.hidden) > 0 || len(h.styles) > 0) && h.wrapsSeen != h.wraps.version {
 		h.dirty = true
 	}
-	if !h.dirty {
+	if !h.dirty && h.prefix != nil {
 		return
 	}
 	h.dirty = false
@@ -242,6 +275,15 @@ func (h *heights) update() {
 			continue
 		}
 		h.entries = append(h.entries, heightEntry{b.line, b.height})
+	}
+	for _, s := range h.styles {
+		if s.line < h.n && !h.isHidden(s.line) {
+			h.entries = append(h.entries, heightEntry{s.line, (s.extra - h.lh) * float32(h.wraps.rows(s.line))})
+		}
+	}
+	// A styled line's rows add theirs, after the blocks of the lines.
+	if len(h.styles) > 0 {
+		slices.SortFunc(h.entries, func(a, b heightEntry) int { return a.line - b.line })
 	}
 	h.prefix = slices.Grow(h.prefix[:0], len(h.entries)+1)[:len(h.entries)+1]
 	h.prefix[0] = 0
@@ -363,7 +405,7 @@ func (h *heights) geometry(line int) lineGeometry {
 	g.hidden = h.isHidden(line)
 	g.below = g.rows
 	if !g.hidden {
-		g.below += float64(h.lh) * float64(h.wraps.rows(line))
+		g.below += float64(h.rowHeight(line)) * float64(h.wraps.rows(line))
 	}
 	g.bottom = g.below
 	for _, b := range below {

@@ -14,6 +14,7 @@
  * @module
  */
 import type {
+  CallOptions,
   Channel as ChannelType,
   Direction,
   LocaleChange,
@@ -22,7 +23,7 @@ import type {
   WindowControls,
 } from "./types";
 
-export type { Direction, LocaleChange, Platform, Runtime, ThemePreferences, WindowControls } from "./types";
+export type { CallOptions, Direction, LocaleChange, Platform, Runtime, ThemePreferences, WindowControls } from "./types";
 
 declare global {
   interface Window {
@@ -57,6 +58,53 @@ export function call<T = unknown>(method: string, ...args: unknown[]): Promise<T
   } catch (err) {
     return Promise.reject(err);
   }
+}
+
+/**
+ * Calls a bound Go method by name, with the options of the call: a signal
+ * that cancels it, as `fetch` does.
+ *
+ * ```ts
+ * await callWith("Capture.Region", [rect], { signal: AbortSignal.timeout(5000) });
+ * ```
+ *
+ * Aborting cancels the Go method's context, and rejects the promise with
+ * the signal's reason. A method that takes no context runs to its end, and
+ * its reply is of no use.
+ */
+export function callWith<T = unknown>(method: string, args: unknown[], options?: CallOptions): Promise<T> {
+  try {
+    return runtime().callWith<T>(method, args, options);
+  } catch (err) {
+    return Promise.reject(err);
+  }
+}
+
+/**
+ * A bound Go method, which a call may cancel.
+ */
+export interface Cancellable<A extends unknown[], R> {
+  (...args: A): Promise<R>;
+  /**
+   * Returns the method with the options of its calls, e.g. a signal that
+   * cancels them:
+   *
+   * ```ts
+   * await Todos.list.with({ signal: AbortSignal.timeout(1000) })("todo");
+   * ```
+   */
+  with(options: CallOptions): (...args: A) => Promise<R>;
+}
+
+/**
+ * Binds a bound Go method by name, for the client that `mygo generate`
+ * writes. The arguments are built at the call, so that the options of the
+ * call can be given with them.
+ */
+export function bind<A extends unknown[], R>(method: string, args: (...a: A) => unknown[]): Cancellable<A, R> {
+  const bound = ((...a: A) => callWith<R>(method, args(...a))) as Cancellable<A, R>;
+  bound.with = (options: CallOptions) => (...a: A) => callWith<R>(method, args(...a), options);
+  return bound;
 }
 
 /**
@@ -253,6 +301,32 @@ export function preferences(): ThemePreferences {
  */
 export function onPreferences(listener: (preferences: ThemePreferences) => void): () => void {
   return on<ThemePreferences>("mygo:preferences", listener);
+}
+
+/**
+ * Returns whether the window hosting the page is drawn as active: the
+ * window the user's input goes to, while it or one of its flyouts has the
+ * keyboard, as native apps tell which of their windows has it. Not DOM
+ * focus, which a click into a flyout or the window's menus takes away.
+ * Throws outside MyGo, as {@link runtime} does.
+ *
+ * CSS gets it from `<html>`, which has the `data-mygo-window-inactive`
+ * attribute while the window is not active:
+ *
+ * ```css
+ * :root[data-mygo-window-inactive] .sidebar .selected { background: #0000001a; color: inherit; }
+ * ```
+ */
+export function windowActive(): boolean {
+  return runtime().windowActive;
+}
+
+/**
+ * Subscribes to changes of whether the window is drawn as active, which
+ * {@link windowActive} returns. Returns a function that unsubscribes.
+ */
+export function onWindowActive(listener: (active: boolean) => void): () => void {
+  return on<boolean>("mygo:window-active", listener);
 }
 
 /** The window hosting the page, e.g. for a custom title bar. */

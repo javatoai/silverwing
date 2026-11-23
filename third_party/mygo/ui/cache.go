@@ -8,26 +8,35 @@ import "github.com/egoist/mygo/internal/scene"
 // as a card of gradients, blurred images and large shadows, under or
 // around a drawing that moves. A frame redrawing where something above or
 // next to it changed then draws the bitmap there, not each of its layers,
-// and moving, scaling or rotating the element (Translate, Scale, Rotate,
-// AnimatePose) moves the bitmap, not what it holds.
+// and moving or rotating the element (Translate, Rotate, AnimatePose)
+// moves the bitmap, not what it holds.
 //
-// The bitmap is the size of the element's box at the window's scale, and
-// of what it and those inside it paint around it: shadows, focus rings,
-// and children beyond the box that it does not clip, as Draw callbacks
-// paint (within the box and the shadows' reach). It is drawn again when
-// what the subtree paints changes: built anew with other content, laid
-// out at another size, at another scale or in another theme, or as
-// something inside it moves on its own (Painter.AnimationFrame, a pose,
-// a transition), as then it is every frame. Painting the window still
-// paints the subtree, to tell; frames that only paint the drawings that
-// asked for them (Painter.AnimationFrame, Painter.After) do not.
+// The bitmap holds the element's box, and what it and those inside it
+// paint around it: shadows, focus rings, and children beyond the box that
+// it does not clip, as Draw callbacks paint (within the box and the
+// shadows' reach), in the pixels it shows on: at the window's scale times
+// the scale the element's transform draws it at (Scale, AnimatePose,
+// Transition's ScaleContent), so that scaled up it is as sharp as the
+// subtree laid out larger. At rest it is drawn at that scale itself, on
+// whole pixels where the transform only scales and moves it; while the
+// scale changes, as an animation grows it, at steps of about 9% (at or
+// above the scale), drawn again only as the scale crosses one, and once
+// more at the scale itself in the frame after it stops. It is drawn
+// again, too, when what the subtree paints changes: built anew with other
+// content, laid out at another size, at another window scale or in
+// another theme, or as something inside it moves on its own
+// (Painter.AnimationFrame, a pose, a transition), as then it is every
+// frame. Painting the window still paints the subtree, to tell; frames
+// that only paint the drawings that asked for them
+// (Painter.AnimationFrame, Painter.After) do not.
 //
 // As in an effect's bitmap (Effect), its text is smoothed in grayscale
 // where the subtree paints no opaque background under it, web views
 // inside it do not show, and a subtree larger than 8192 pixels across is
-// drawn as it is. The bitmap is drawn at the window's scale, so that
-// turned, or scaled up by a transform, it shows a little softer than the
-// shapes it holds would.
+// drawn as it is. A bitmap drawn larger than the window's scale is at
+// most 4096 pixels across, and 8 times the window's scale: beyond, it is
+// stretched as before. Turned, skewed or in perspective, the bitmap is
+// resampled, and shows a little softer than the shapes it holds would.
 func (e *node) Cache() *node { e.cache = keptLayer{}; return e }
 
 // layerKeeper renders an element's layer only when what it paints

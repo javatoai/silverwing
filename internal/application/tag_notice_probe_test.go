@@ -15,7 +15,6 @@ import (
 	"silverwing-go/internal/commandruntime"
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/executable"
-	"silverwing-go/internal/integrations"
 	"silverwing-go/internal/larkcli"
 	"silverwing-go/internal/process"
 	"silverwing-go/internal/releasenotice"
@@ -80,7 +79,7 @@ func runNoticeReadOnlyCLI(state noticeCLIFixtureState, args []string) int {
 		fmt.Fprintln(os.Stderr, "read-only probe: source configuration changed or is unavailable")
 		return 80
 	}
-	phase, target, tool := "", domain.ProxyTargetMeegle, executable.ToolMeegle
+	phase, tool := "", executable.ToolMeegle
 	switch {
 	case len(args) >= 2 && args[0] == "auth" && args[1] == "status" && slices.Contains(args, "--profile"):
 		phase = "local"
@@ -97,8 +96,6 @@ func runNoticeReadOnlyCLI(state noticeCLIFixtureState, args []string) int {
 		phase = "meegle-user"
 	case len(args) >= 2 && args[0] == "auth" && args[1] == "status":
 		phase = "meegle-auth"
-	case len(args) > 0 && args[0] == "query-tag" && state.LiveGenbu:
-		phase, target, tool = "genbu", domain.ProxyTargetGenbu, executable.ToolGenbu
 	default:
 		fmt.Fprintln(os.Stderr, "read-only probe refused a non-whitelisted command")
 		return 81
@@ -117,11 +114,8 @@ func runNoticeReadOnlyCLI(state noticeCLIFixtureState, args []string) int {
 		result, err = (larkcli.Client{Runner: runner, Config: config, AsUser: true}).Run(ctx, args, 30*time.Second)
 	} else {
 		command := config.MeegleExecutablePath
-		if target == domain.ProxyTargetGenbu {
-			command = config.GenbuExecutablePath
-		}
 		var spec process.Spec
-		spec, err = commandruntime.Prepare(ctx, runner, &config, target, tool, value(command))
+		spec, err = commandruntime.Prepare(ctx, runner, &config, "", tool, value(command))
 		if err == nil {
 			spec.Arguments, spec.Timeout = args, 30*time.Second
 			result, err = runner.Run(ctx, spec)
@@ -188,7 +182,7 @@ func readOnlyNoticeProbeFixture(t *testing.T, sourceHome, taskID, batchID string
 		t.Fatal(err)
 	}
 	profile := config.EffectiveLarkNotice().Profile
-	config.TaskRoot, config.LarkExecutablePath, config.MeegleExecutablePath, config.GenbuExecutablePath = &paths.Tasks, &program, &program, &program
+	config.TaskRoot, config.LarkExecutablePath, config.MeegleExecutablePath = &paths.Tasks, &program, &program
 	// Any unexpected Git/AI action must reach the same rejecting whitelist,
 	// rather than an installed tool inherited from the source configuration.
 	config.GitExecutablePath, config.CodexExecutablePath = &program, &program
@@ -196,7 +190,12 @@ func readOnlyNoticeProbeFixture(t *testing.T, sourceHome, taskID, batchID string
 	// the temporary app. No credentials or original receipts enter the report.
 	config.CommandProxyURL, config.CommandProxyUsername, config.CommandProxyPassword, config.CommandProxyNoProxy = nil, nil, nil, nil
 	config.CommandProxyTargets = nil
-	a := &App{Paths: paths, Config: storage.NewConfigStore(paths), Manifests: storage.NewManifestStore(), Runner: process.NewRunner()}
+	a, err := newApp(paths.Home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabled := true
+	config.OptionalCLIs.Lark, config.OptionalCLIs.Genbu = &enabled, &enabled
 	if err := a.Config.Save(config); err != nil {
 		t.Fatal(err)
 	}
@@ -208,8 +207,7 @@ func readOnlyNoticeProbeFixture(t *testing.T, sourceHome, taskID, batchID string
 	for _, op := range operations {
 		saveTagProbeFixture(t, taskPath, op)
 	}
-	a.Integrations = integrations.NewService(paths, a.Config, a.Runner)
-	state := noticeCLIFixtureState{Log: filepath.Join(paths.Home, "probe-cli-log"), Profile: profile, ReadOnlyHome: sourceHome, SourceConfigID: sourceConfigID, LiveGenbu: liveGenbu}
+	state := noticeCLIFixtureState{Log: filepath.Join(paths.Home, "probe-cli-log"), Profile: profile, ReadOnlyHome: sourceHome, SourceConfigID: sourceConfigID}
 	if err := os.MkdirAll(state.Log, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -217,6 +215,12 @@ func readOnlyNoticeProbeFixture(t *testing.T, sourceHome, taskID, batchID string
 		action: Action{Kind: "tag.notice.prepare", TaskID: taskID, Payload: map[string]any{"tagHistoryHome": paths.Home, "tagHistoryTaskRoot": paths.Tasks, "tagHistoryTaskPath": taskPath, "tagHistoryTaskCreatedAt": entry.Manifest.CreatedAt, "groupId": batchID, "noticeConfigIdentity": ReleaseNoticeConfigIdentity(config)}}}
 	f.saveState(t)
 	t.Setenv("SILVERWING_TAG_NOTICE_FIXTURE", f.path)
+	services := make([]string, 0, len(config.Services))
+	for _, service := range config.ServiceCatalog() {
+		services = append(services, service.GenbuServiceName)
+	}
+	installFixtureGenbuHTTP(t, a, services, 1, nil)
+	probeNoticeFixtureCLIs(t, a)
 	t.Cleanup(func() { _ = f.app.Integrations.CloseRequirementDocuments(context.Background()) })
 	return f
 }
@@ -276,7 +280,7 @@ func TestTagNoticePerformanceProbe(t *testing.T) {
 		Error                string             `json:"error,omitempty"`
 	}{Path: "App.Dispatch(tag.notice.prepare) -> JSON snapshot -> App.Dispatch(tag.notice.send) -> Store.SendTag", RPC: "RPC mocked: local success; no real message request", RPCMocked: true, RealReadOnlyCLI: sourceHome != "", Genbu: "fresh successful fixture", Calls: map[string]int{}, CLITotalMS: map[string]int64{}}
 	if liveGenbu {
-		report.Genbu = "normal freshness policy; read-only query-tag relay"
+		report.Genbu = "normal freshness policy with simulated embedded Genbu"
 	}
 	started := time.Now()
 	report.StartedAt, report.SetupMS = started.UTC().Format(time.RFC3339Nano), started.Sub(probeStarted).Milliseconds()

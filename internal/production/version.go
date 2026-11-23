@@ -101,12 +101,15 @@ func nextSeriesVersion(v [4]uint64, refs []versionReference) (string, error) {
 }
 
 // SuggestedVersion follows the confirmed production series, never the largest
-// version in an unrelated historical series. A manual baseline may be nonnumeric;
+// version in an unrelated historical series. The production Tag may be nonnumeric;
 // it remains usable, but cannot supply an automatic version suggestion.
 func SuggestedVersion(p Preview) (string, error) {
+	if p.ProductionTag == "" {
+		return "", ErrProductionBaselineUnavailable
+	}
 	v, ok := parseVersion(p.ProductionTag)
 	if !ok {
-		return "", errors.New("线上生产 Tag 未确认或不是三／四段正式数字，无法自动建议版本；请确认生产基线并手工填写三段基础版本")
+		return "", errors.New("线上生产 Tag 不是三／四段正式数字，无法自动建议版本，请手工填写三段基础版本")
 	}
 	return nextSeriesVersion(v, versionReferences(p))
 }
@@ -140,7 +143,7 @@ func ValidateVersion(name string, p Preview) error {
 		return versionPolicyError(fmt.Sprintf("基础版本 %s 已被远端引用占用：%s", name, strings.Join(occupied, "、")), v, p, refs)
 	}
 	if current, ok := parseVersion(p.ProductionTag); ok && compareVersion(v, current) <= 0 {
-		return versionPolicyError(fmt.Sprintf("基础版本 %s 必须大于已确认的线上生产 Tag %s", name, p.ProductionTag), v, p, refs)
+		return versionPolicyError(fmt.Sprintf("基础版本 %s 必须大于线上生产 Tag %s", name, p.ProductionTag), v, p, refs)
 	}
 	var latest versionReference
 	found := false

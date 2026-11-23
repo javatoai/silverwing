@@ -43,6 +43,21 @@ func TestViewLinks(t *testing.T) {
 	}
 }
 
+// TestViewTableHeaderLinks reaches a link in a table's header, which
+// shows what is inside it as a cell does, still named by its text.
+func TestViewTableHeaderLinks(t *testing.T) {
+	src := "| [Name](https://go.dev) | Size |\n|---|---|\n| a.txt | 1 KB |\n"
+	tt := ui.NewTester(func(c *ui.Context) { View(c, src, nil) }, 600, 400)
+	for _, name := range []string{"Name", "Size"} {
+		if _, ok := tt.AccessByRole(ui.RoleColumnHeader, name); !ok {
+			t.Errorf("no column header named %q", name)
+		}
+	}
+	if _, ok := tt.AccessByRole(ui.RoleLink, "Name"); !ok {
+		t.Error("the header's link is not in the tree")
+	}
+}
+
 func TestViewCopyButton(t *testing.T) {
 	tt := ui.NewTester(func(c *ui.Context) { View(c, sample, nil) }, 600, 800)
 	if err := tt.Click("Copy"); err != nil {
@@ -186,6 +201,45 @@ func TestThemeOverrides(t *testing.T) {
 	got := resolve(th, def)
 	if got.Link != th.Link || got.FontSize != 20 || got.Text != def.Text || got.Headings[0].Size != def.Headings[0].Size {
 		t.Errorf("resolved %+v", got)
+	}
+}
+
+// TestThemeLinkSpans checks that Theme.LinkWeight lifts link text, code
+// in a link too, which keeps the code face and wash, and leaves text
+// outside links alone.
+func TestThemeLinkSpans(t *testing.T) {
+	o := &Options{Theme: &Theme{LinkWeight: 500}}
+	th := resolve(o.Theme, DefaultTheme(ui.LightTheme()))
+	var st *viewState
+	ui.NewTester(func(c *ui.Context) {
+		st = *ui.Local(View(c, "Read [the `x.go` docs](https://example.com) and `y.go`.", o), stateKey{}, newState)
+	}, 400, 100)
+	var link, linkCode, code *ui.Span
+	for i := range st.paras {
+		for _, pc := range st.paras[i].p.pieces {
+			for k := range pc.spans {
+				switch s := &pc.spans[k]; s.Text {
+				case "the ":
+					link = s
+				case "x.go":
+					linkCode = s
+				case "y.go":
+					code = s
+				}
+			}
+		}
+	}
+	if link == nil || linkCode == nil || code == nil {
+		t.Fatalf("link or code span missing in %+v", st.paras)
+	}
+	if link.Weight != th.LinkWeight {
+		t.Errorf("link text weighs %d, want %d", link.Weight, th.LinkWeight)
+	}
+	if linkCode.Font != th.CodeFont || linkCode.Background != th.CodeBackground || linkCode.Weight != th.LinkWeight {
+		t.Errorf("code in a link shows %+v, want the code face and wash at %d", *linkCode, th.LinkWeight)
+	}
+	if code.Font != th.CodeFont || code.Background != th.CodeBackground || code.Weight == th.LinkWeight {
+		t.Errorf("code outside a link shows %+v, want the code face and wash at its own weight", *code)
 	}
 }
 

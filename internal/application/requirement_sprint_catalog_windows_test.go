@@ -34,15 +34,17 @@ throw 'unexpected catalog command'
 	if err := os.WriteFile(cli, append([]byte{0xef, 0xbb, 0xbf}, []byte(script)...), 0600); err != nil {
 		t.Fatal(err)
 	}
-	config := domain.DefaultAppConfig()
-	config.TaskRoot = &paths.Tasks
-	config.MeegleExecutablePath = &cli
-	config.MeegleProjects = []domain.MeegleProjectConfig{{ProjectKey: "project-a", SimpleName: "fixture"}}
-	if err := storage.NewConfigStore(paths).Save(config); err != nil {
-		t.Fatal(err)
-	}
 	backend, err := New(paths.Home)
 	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := backend.Config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.MeegleExecutablePath = &cli
+	config.MeegleProjects = []domain.MeegleProjectConfig{{ProjectKey: "project-a", SimpleName: "fixture"}}
+	if err := backend.Config.Save(config); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = backend.Integrations.CloseRequirementDocuments(context.Background()) })

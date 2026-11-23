@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build darwin && !ios
 
 package darwin
 
@@ -17,12 +17,50 @@ import (
 // keyboard, focusable or not, while its parent stays the key window, which
 // the popover's window says it is too. A focusable flyout's popover is
 // transient: it asks the delegate (popoverShouldClose:) before it closes on
-// a click elsewhere, as WindowHandler.ShouldClose decides.
+// a click elsewhere or on its anchor, as WindowHandler.ShouldClose decides.
 
 const (
 	popoverBehaviorApplicationDefined = 0
 	popoverBehaviorTransient          = 1
 )
+
+// holdPopover keeps a transient popover open as a window is modal to it,
+// as an application-defined one, until it hides: refusing AppKit's close
+// instead left it open for good, as AppKit then no longer closed it on
+// clicks elsewhere, and ate the clicks on its tray icon (#1055, as #1050).
+// Making it transient again once it shows does not have AppKit close it
+// on clicks elsewhere either: held (popoverHeld), the clicks elsewhere
+// close it as they close other focusable flyouts (closeHeldPopovers).
+func (w *window) holdPopover() {
+	if w.popover == 0 || w.closed || !w.flyout.Focusable || w.popoverHeld {
+		return
+	}
+	w.popoverHeld = true
+	send(w.popover, "setBehavior:", popoverBehaviorApplicationDefined)
+	w.b.watchOutsideClicks()
+}
+
+// closeHeldPopovers closes the popovers held open (holdPopover) that no
+// window is modal to anymore, for a press in another window, in the app
+// (win), or outside it (0), unless on a popover's tray icon, whose click
+// toggles it.
+func (b *Backend) closeHeldPopovers(win id) {
+	var open []*window
+	for _, w := range b.byNSWindow {
+		if !w.popoverHeld || w.closed || w.win == win || !sendBool(w.popover, "isShown") || w.modalChild() != nil {
+			continue
+		}
+		if t, ok := w.flyout.Tray.(*tray); ok && (t.pressed() || win != 0 && t.button != 0 && send(t.button, "window") == win) {
+			continue
+		}
+		open = append(open, w)
+	}
+	for _, w := range open {
+		if !w.closed && w.h.ShouldClose() {
+			w.Close()
+		}
+	}
+}
 
 func (w *window) createPopover(content NSRect) {
 	w.delegate = alloc("MyGoWindowDelegate")
@@ -30,7 +68,7 @@ func (w *window) createPopover(content NSRect) {
 	send(w.view, "setAutoresizingMask:", nsViewWidthHeightSizable)
 	w.popoverController = alloc("NSViewController")
 	send(w.popoverController, "setView:", uintptr(w.view))
-	w.popover = alloc("NSPopover")
+	w.popover = w.b.takePopover()
 	send(w.popover, "setContentViewController:", uintptr(w.popoverController))
 	msgSetSize(w.popover, sel("setContentSize:"), content.Size)
 	behavior := uintptr(popoverBehaviorApplicationDefined)
@@ -73,6 +111,13 @@ func (w *window) showPopover() {
 		return
 	}
 	w.popoverClosing = false
+	if w.popoverHeld {
+		w.popoverHeld = false
+		send(w.popover, "setBehavior:", popoverBehaviorTransient)
+	}
+	// A status item's contrast appearance can differ from the app's theme.
+	// Give the whole popover (including its arrow) the content's appearance.
+	send(w.popover, "setAppearance:", uintptr(send(w.b.app, "effectiveAppearance")))
 	if w.flyout.Tray != nil {
 		// The popover of a menu bar app takes the keyboard of an app the
 		// user did not activate, as AppKit's own status items' do.
@@ -149,34 +194,87 @@ func (w *window) closePopover() {
 
 func (w *window) cleanupPopover() {
 	w.forgetPopoverWindow()
-	send(w.popover, "setDelegate:", 0)
-	if sendBool(w.popover, "isShown") {
+	p := w.popover
+	w.popover = 0
+	// A popover that Hide closes with its animation still shows (isShown),
+	// and tells it closed (popoverDidClose:) only as the animation ends,
+	// which can be after the flyout is gone.
+	closing := w.popoverClosing || sendBool(p, "isShown")
+	w.b.givePopover(p, closing)
+	if sendBool(p, "isShown") {
 		w.highlightTray(false)
-		send(w.popover, "setAnimates:", 0)
-		send(w.popover, "close")
+		send(p, "setAnimates:", 0)
+		send(p, "close")
 	}
-	send(w.popover, "setContentViewController:", 0)
-	release(w.popover)
+	send(p, "setContentViewController:", 0)
 	release(w.popoverController)
+}
+
+// takePopover returns an NSPopover for a flyout to show in: one a closed
+// flyout gave back (givePopover), or a new one.
+func (b *Backend) takePopover() id {
+	if n := len(b.sparePopovers); n > 0 {
+		p := b.sparePopovers[n-1]
+		b.sparePopovers = b.sparePopovers[:n-1]
+		send(p, "setAnimates:", 1) // closePopover turned it off
+		return p
+	}
+	return alloc("NSPopover")
+}
+
+// givePopover keeps the NSPopover of a closed flyout for the next one to
+// show in, instead of releasing it. On macOS 26 an NSPopover that has
+// shown leaves its material's backdrop behind once it is released, a
+// graphics surface a little larger than the popover (3.4 MB for one of
+// 280×230), so an app that shows a new popover flyout at each click of
+// its tray icon grew by that much at each. Reused, a popover keeps one
+// backdrop: the app holds as many as it showed at once.
+//
+// A popover still closing becomes spare once it tells it closed, to
+// spareDelegate (spareClosed): shown by another flyout before that, it
+// showed nothing, and its late popoverDidClose: closed that flyout.
+func (b *Backend) givePopover(p id, closing bool) {
+	if b.spareDelegate == 0 {
+		b.spareDelegate = alloc("MyGoWindowDelegate") // in no window: windowFor is nil
+		b.closingPopovers = map[id]bool{}
+	}
+	send(p, "setDelegate:", uintptr(b.spareDelegate))
+	if closing {
+		b.closingPopovers[p] = true
+		return
+	}
+	b.sparePopovers = append(b.sparePopovers, p)
+}
+
+// spareClosed makes a popover a closed flyout gave back while it was
+// closing spare, as it tells it closed.
+func (b *Backend) spareClosed(p id) {
+	if b.closingPopovers[p] {
+		delete(b.closingPopovers, p)
+		b.sparePopovers = append(b.sparePopovers, p)
+	}
 }
 
 func popoverDelegateMethods() []objc.MethodDef {
 	b := func() *Backend { return theBackend }
 	return []objc.MethodDef{
-		// The user clicked elsewhere, in a transient popover. A press on
-		// its own tray icon leaves it to the icon's click, which toggles
-		// it, rather than closing it for the click to open it again.
+		// The user clicked elsewhere, in a transient popover, or on its
+		// tray icon, the positioning view, whose click AppKit eats: the
+		// icon's action never comes, so the click only closes it. AppKit
+		// asks on the release (macOS 26) or on the press, and keeping it
+		// open on a press on the icon kept it open for good, as it then no
+		// longer closed on clicks elsewhere either (#1050).
 		method("popoverShouldClose:", func(self id, _ objc.SEL, popover id) bool {
-			w := b().windowFor(self)
-			if w == nil {
-				return true
+			if w := b().windowFor(self); w != nil {
+				return w.h.ShouldClose()
 			}
-			if t, ok := w.flyout.Tray.(*tray); ok && t.pressed() {
-				return false
-			}
-			return w.h.ShouldClose()
+			return true
 		}),
 		method("popoverDidClose:", func(self id, _ objc.SEL, n id) {
+			if self == b().spareDelegate {
+				b().spareClosed(send(n, "object"))
+				return
+			}
 			w := b().windowFor(self)
 			if w == nil {
 				return
@@ -195,9 +293,10 @@ func popoverDelegateMethods() []objc.MethodDef {
 
 // pressed reports whether the user is pressing the icon's button: the
 // event being handled is a press on it, or a mouse button is down with the
-// pointer over it, as when the app hears of the press only after it made
-// the app resign, or in a monitor of other apps' events, which the menu
-// bar's are on recent macOS.
+// pointer over it, or over the copy of it the user last clicked (frame),
+// as when the app hears of the press only after it made the app resign,
+// or in a monitor of other apps' events, which the menu bar's are on
+// recent macOS.
 func (t *tray) pressed() bool {
 	if t.item == 0 {
 		return false
@@ -216,7 +315,7 @@ func (t *tray) pressed() bool {
 	if send(class("NSEvent"), "pressedMouseButtons") == 0 {
 		return false
 	}
-	return inRect(msgPoint(class("NSEvent"), sel("mouseLocation")), msgRect(win, sel("frame")))
+	return inRect(msgPoint(class("NSEvent"), sel("mouseLocation")), t.frame())
 }
 
 // inRect reports whether p is in r, its far edges excluded.

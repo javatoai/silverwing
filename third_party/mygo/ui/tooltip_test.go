@@ -170,6 +170,36 @@ func TestTooltipAnchored(t *testing.T) {
 	}
 }
 
+// TestTooltipTakesNoWheel checks that the wheel over a tip scrolls what
+// shows under it: the tip takes no pointer, its text included.
+func TestTooltipTakesNoWheel(t *testing.T) {
+	var s ScrollState
+	tt := coreNewTester(func(c *context) {
+		coreScroll(c).Fill().TrackScroll(&s).Children(func() {
+			coreBox(c).Height(80).Shrink(0)
+			coreButton(c, "Save").Label("save").Tooltip("Saves the file")
+			coreBox(c).Height(1000).Shrink(0)
+		})
+	}, 300, 300)
+	// The keyboard focus shows the tip, which stays as the pointer comes
+	// to it.
+	tt.Key(0, KeyTab)
+	tip, ok := tt.Find("Saves the file")
+	if !ok {
+		t.Fatalf("no tip for the focus; texts %q", tt.Texts())
+	}
+	x, y := tip.X+tip.W/2, tip.Y+tip.H/2
+	tt.Move(x, y)
+	if !tt.HasText("Saves the file") {
+		t.Fatalf("the tip went as the pointer came to it; texts %q", tt.Texts())
+	}
+	tt.Wheel(x, y, 0, 100)
+	tt.Advance(time.Second)
+	if s.Y == 0 {
+		t.Error("the wheel over the tip did not scroll the content under it")
+	}
+}
+
 func TestTooltipInnermost(t *testing.T) {
 	tt, now := clockTester(func(c *context) {
 		coreRow(c).Padding(20).Tooltip("The toolbar").Children(func() {
@@ -187,5 +217,223 @@ func TestTooltipInnermost(t *testing.T) {
 	tick(time.Second)
 	if tt.HasText("Cut the selection") || !tt.HasText("The toolbar") {
 		t.Errorf("over the toolbar: texts %q", tt.Texts())
+	}
+}
+
+// TestTooltipDelay checks that the theme's TooltipDelay sets how long the
+// pointer rests on an element before its tip shows, and the time within
+// which the next one shows at once, for the elements built with it.
+func TestTooltipDelay(t *testing.T) {
+	var delay time.Duration
+	tt, now := clockTester(func(c *context) {
+		th := *c.Theme()
+		th.TooltipDelay = delay
+		coreColumn(c).Padding(80, 40).Gap(20).Children(func() {
+			coreButton(c, "Default").Label("default").Tooltip("The default delay")
+			coreThemed(c, &th).Gap(20).Children(func() {
+				coreButton(c, "Save").Label("save").Tooltip("Saves the file")
+				coreButton(c, "Open").Label("open").Tooltip("Opens a file")
+			})
+		})
+	}, 400, 400)
+	tick := ticker(tt, now)
+	rest := func(label string) {
+		r, _ := tt.Find(label)
+		tt.Move(r.X+r.W/2, r.Y+r.H/2)
+		tt.Frame()
+	}
+	away := func() {
+		tt.Move(390, 390)
+		tick(10 * time.Second)
+	}
+	// A shorter delay.
+	delay = 200 * time.Millisecond
+	tt.Frame()
+	rest("save")
+	tick(150 * time.Millisecond)
+	if tt.HasText("Saves the file") {
+		t.Fatal("the tip shows before the pointer rested 0.2 seconds")
+	}
+	tick(60 * time.Millisecond)
+	if !tt.HasText("Saves the file") {
+		t.Fatalf("no tip once the pointer rested 0.2 seconds; texts %q", tt.Texts())
+	}
+	// Outside the themed column, the default 0.6 seconds.
+	away()
+	rest("default")
+	tick(300 * time.Millisecond)
+	if tt.HasText("The default delay") {
+		t.Fatal("an element outside the theme shows its tip after 0.3 seconds")
+	}
+	tick(310 * time.Millisecond)
+	if !tt.HasText("The default delay") {
+		t.Fatalf("no tip after the default delay; texts %q", tt.Texts())
+	}
+
+	// A longer delay, and the warm time scaling with it: two thirds.
+	away()
+	delay = 1500 * time.Millisecond
+	tt.Frame()
+	rest("save")
+	tick(time.Second)
+	if tt.HasText("Saves the file") {
+		t.Fatal("the tip shows before the pointer rested 1.5 seconds")
+	}
+	tick(510 * time.Millisecond)
+	if !tt.HasText("Saves the file") {
+		t.Fatalf("no tip once the pointer rested 1.5 seconds; texts %q", tt.Texts())
+	}
+	// Gone for 0.9 seconds, more than the default 0.4 but less than 1:
+	// the next one shows at once.
+	tt.Move(390, 390)
+	tick(16 * time.Millisecond)
+	tick(900 * time.Millisecond)
+	rest("open")
+	tick(16 * time.Millisecond)
+	if !tt.HasText("Opens a file") {
+		t.Errorf("the next tip waits 0.9 seconds after one went; texts %q", tt.Texts())
+	}
+	// Gone for longer than that, it waits again.
+	tt.Move(390, 390)
+	tick(16 * time.Millisecond)
+	tick(1100 * time.Millisecond)
+	rest("save")
+	tick(16 * time.Millisecond)
+	if tt.HasText("Saves the file") {
+		t.Error("the tip shows at once 1.1 seconds after the last one went")
+	}
+
+	// A negative delay shows it at once.
+	away()
+	delay = -1
+	tt.Frame()
+	rest("save")
+	if !tt.HasText("Saves the file") {
+		t.Errorf("a negative delay does not show the tip at once; texts %q", tt.Texts())
+	}
+}
+
+// TestTooltipHidesWithMenu checks that a button's tip goes as its menu or
+// popover opens, however it opens, and stays hidden while it shows, even
+// as the pointer comes back to the button, and as the menu closes, until
+// the pointer and the focus leave the button.
+func TestTooltipHidesWithMenu(t *testing.T) {
+	open := false
+	buttons := map[string]func(c *context){
+		"MenuButton": func(c *context) {
+			coreMenuButton(c, "More", func(m *Menu) { m.Item("Duplicate") }).Tooltip("More actions")
+		},
+		"PopoverMenuButton": func(c *context) {
+			corePopoverMenuButton(c, "More", func(m *Menu) { m.Item("Duplicate") }).Tooltip("More actions")
+		},
+		"MenuBase": func(c *context) {
+			m := coreMenuBase(c, &open)
+			m.Trigger.Children(func() { coreText(c, "More") }).Tooltip("More actions")
+			m.Popup(func(*node) { m.Item().Children(func() { coreText(c, "Duplicate") }) })
+		},
+		"Popover": func(c *context) {
+			b := coreButton(c, "More").Tooltip("More actions")
+			if b.Clicked() {
+				open = !open
+			}
+			corePopover(c, b, &open, func() { coreText(c, "Duplicate") })
+		},
+		"ContextMenu": func(c *context) {
+			coreButton(c, "More").Tooltip("More actions").ContextMenu(func(m *Menu) { m.Item("Duplicate") })
+		},
+	}
+	for name, button := range buttons {
+		t.Run(name, func(t *testing.T) {
+			open = false
+			tt, now := clockTester(func(c *context) {
+				coreColumn(c).Padding(60).Gap(20).Children(func() {
+					coreButton(c, "First")
+					button(c)
+				})
+			}, 400, 400)
+			tick := ticker(tt, now)
+			shows := func() bool { return tt.Menu() != nil || tt.HasText("Duplicate") }
+			b := at(t, tt, "More")
+			x, y := b.X+b.W/2, b.Y+b.H/2
+			tt.Move(x, y)
+			tick(time.Second)
+			tick(16 * time.Millisecond)
+			if !tt.HasText("More actions") {
+				t.Fatal("no tip over the button")
+			}
+			if name == "ContextMenu" {
+				tt.RightClickAt(x, y)
+			} else {
+				tt.ClickAt(x, y)
+			}
+			tick(16 * time.Millisecond)
+			if !shows() || tt.HasText("More actions") {
+				t.Fatalf("menu shows %v; the tip shows with it %v", shows(), tt.HasText("More actions"))
+			}
+			// The pointer goes onto the menu, and back to the button.
+			if d, ok := tt.Find("Duplicate"); ok {
+				tt.Move(d.X+d.W/2, d.Y+d.H/2)
+				tick(100 * time.Millisecond)
+			}
+			tt.Move(x+2, y)
+			tick(time.Second)
+			tick(16 * time.Millisecond)
+			if tt.HasText("More actions") {
+				t.Error("the tip shows while the menu does")
+			}
+			tt.CloseMenu()
+			open = false
+			tick(time.Second)
+			tick(16 * time.Millisecond)
+			if tt.HasText("More actions") {
+				t.Error("the tip shows as the menu closes, the pointer on the button")
+			}
+			tt.Move(390, 390)
+			tick(time.Second)
+			tt.Move(x, y)
+			tick(time.Second)
+			tick(16 * time.Millisecond)
+			if !tt.HasText("More actions") {
+				t.Error("no tip as the pointer comes back once the menu closed")
+			}
+		})
+	}
+}
+
+// TestTooltipHidesWithMenuByKeys checks that the tip the keyboard focus
+// brought to a menu button goes as the keys open its menu, and stays
+// hidden as the menu closes with the focus back on the button.
+func TestTooltipHidesWithMenuByKeys(t *testing.T) {
+	for _, drawn := range []bool{false, true} {
+		tt, now := clockTester(func(c *context) {
+			if drawn {
+				c.SetMenuPresentation(PopoverMenus)
+			}
+			coreColumn(c).Padding(60).Gap(20).Children(func() {
+				coreButton(c, "First")
+				coreMenuButton(c, "More", func(m *Menu) { m.Item("Duplicate") }).Tooltip("More actions")
+			})
+		}, 400, 400)
+		tick := ticker(tt, now)
+		tt.Key(0, KeyTab)
+		tt.Key(0, KeyTab)
+		tick(16 * time.Millisecond)
+		if !tt.HasText("More actions") {
+			t.Fatalf("drawn %v: no tip as the focus comes to the button", drawn)
+		}
+		tt.Key(0, KeyDown)
+		tick(16 * time.Millisecond)
+		if tt.Menu() == nil || tt.HasText("More actions") {
+			t.Errorf("drawn %v: menu %q; the tip shows with it %v", drawn, tt.Menu(), tt.HasText("More actions"))
+		}
+		if drawn {
+			tt.Key(0, KeyEscape)
+		} else {
+			tt.CloseMenu()
+		}
+		tick(time.Second)
+		if tt.HasText("More actions") {
+			t.Errorf("drawn %v: the tip shows again as the menu closes", drawn)
+		}
 	}
 }

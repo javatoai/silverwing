@@ -5,7 +5,7 @@ func (s *app) prepareWorkspaceTaskSelection(transition TaskTransition) {
 }
 
 func (s *app) refreshWorkspaceTaskSelection(force bool) {
-	if s.tab != taskFilesTab && s.tab != taskServicesTab && s.tab != taskTerminalTab {
+	if s.taskTabNeedsWorkspaceGit() {
 		s.requestWorkspaceGitStatus(force)
 	}
 }

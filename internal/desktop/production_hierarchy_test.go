@@ -204,7 +204,7 @@ func TestProductionBranchPickerKeyboardSearchAndEscClearOldFeedback(t *testing.T
 	}
 }
 
-func TestProductionResultIdentityAndHistorySwitchRejectStaleFeedback(t *testing.T) {
+func TestProductionResultIdentityRejectsStaleFeedback(t *testing.T) {
 	for _, change := range []string{"none", "branch", "batch", "home", "config", "service", "generation", "source", "target"} {
 		t.Run(change, func(t *testing.T) {
 			s, v, b := productionFixture(t)
@@ -244,7 +244,7 @@ func TestProductionResultIdentityAndHistorySwitchRejectStaleFeedback(t *testing.
 	}
 }
 
-func TestProductionHistoryMenuAndEndBatchUsesMoreConfirmation(t *testing.T) {
+func TestProductionHeaderHistoryAndEndBatchConfirmation(t *testing.T) {
 	s, v, b := productionFixture(t)
 	old := b
 	old.ID, old.Version, old.ReleaseBranch, old.Ended, old.Phase = "previous", "2.3.42", "release/2.3.42", true, "ENDED"
@@ -267,25 +267,15 @@ func TestProductionHistoryMenuAndEndBatchUsesMoreConfirmation(t *testing.T) {
 	if s.confirmationDialog != nil || s.productionBatch(v).Ended {
 		t.Fatal("canceling confirmation ended batch")
 	}
-	if err := tester.Click("更多生产发布操作"); err != nil {
-		t.Fatal(err)
-	}
-	if err := tester.Click("查看历史批次"); err != nil {
+	if err := tester.Click("历史批次"); err != nil {
 		t.Fatal(err)
 	}
 	tester.SetPreferences(ui.Preferences{ReduceMotion: true, TextScale: 1})
 	if !tester.HasText(old.ReleaseBranch) {
 		t.Fatal("past batch not accessible")
 	}
-	v.Steps = map[int]productionStepView{4: {State: "skipped", Message: "old selection result"}}
-	// Render the injected feedback before locating the shifted history action.
-	tester.Frame()
-	productionRevealControl(t, tester, "查看")
-	if err := tester.Click("查看"); err != nil {
-		t.Fatal(err)
-	}
-	if v.BatchID != old.ID || v.Preview != nil || len(v.Steps) != 0 || tester.HasText("old selection result") {
-		t.Fatalf("history switch reused another batch's preview/result: batch=%q preview=%t steps=%v text=%t", v.BatchID, v.Preview != nil, v.Steps, tester.HasText("old selection result"))
+	if _, found := tester.Find("历史批次抽屉"); !found || v.BatchID != b.ID {
+		t.Fatal("history entry failed to open the separate drawer")
 	}
 }
 
@@ -333,7 +323,7 @@ func TestProductionLateFeaturePreviewCannotConfirmAnotherContext(t *testing.T) {
 }
 
 func TestProductionDirectBuildChecksFreshDataAndPublishesWithoutConfirmation(t *testing.T) {
-	for _, scenario := range []string{"ready", "first-tag", "needs-sync", "needs-sync-after-tag", "no-changes", "read-failure", "prepare-failure", "publish-failure", "page", "service", "config", "home", "batch", "generation", "manual", "branch", "ended", "pending", "replaced-plan"} {
+	for _, scenario := range []string{"ready", "first-tag", "needs-sync", "needs-sync-after-tag", "no-changes", "read-failure", "prepare-failure", "publish-failure", "page", "service", "config", "home", "batch", "generation", "preview", "branch", "ended", "pending", "replaced-plan"} {
 		t.Run(scenario, func(t *testing.T) {
 			s, v, b, backend, window := productionRequestFixture(t)
 			s.taskUnit.state.notes[0] = "unsaved draft"
@@ -387,8 +377,8 @@ func TestProductionDirectBuildChecksFreshDataAndPublishesWithoutConfirmation(t *
 				v.selectProductionBatch("another")
 			case "generation":
 				v.Generation++
-			case "manual":
-				v.ManualTag = "other"
+			case "preview":
+				v.Preview = nil
 			case "branch":
 				v.Branch = "feature/other"
 			case "ended":

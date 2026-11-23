@@ -25,7 +25,8 @@ func (s *app) openProductionWorktrees(v *productionView, b production.Batch) {
 }
 
 func (s *app) productionWorktreesCurrent(d *productionWorktreesDialog) bool {
-	return d != nil && d.Home == s.snapshot.Home && d.Scope == s.currentProductionScope() && s.productionDisplayedBatchCurrent(d.View, d.Batch)
+	state := s.releaseUnit.state.production
+	return d != nil && d.Open && state != nil && state.worktreesDialog == d && d.Home == s.snapshot.Home && d.Scope == s.currentProductionScope() && s.productionDisplayedBatchCurrent(d.View, d.Batch)
 }
 
 func (s *app) renderProductionWorktreesDialog(c *ui.Context, p palette) {

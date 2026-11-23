@@ -13,6 +13,14 @@ const scrollbarWidth = 10
 // input takes the editor's input as it comes: keys, text, edit commands,
 // the pointer and the wheel.
 func (v *view) input(ev ui.InputEvent) bool {
+	// The app is asked first, before the editor takes the document's state
+	// and gives its own back: what the app does to the document is kept.
+	if ev.Kind == ui.InputKeyDown && v.opts.OnKey != nil && v.opts.OnKey(ev.Key, ev.Mods) {
+		return true
+	}
+	if ev.Kind == ui.InputCommand && v.opts.OnCommand != nil && v.opts.OnCommand(ev.Text) {
+		return true
+	}
 	v.sync()
 	defer v.publish()
 	switch ev.Kind {
@@ -46,10 +54,8 @@ func (v *view) input(ev ui.InputEvent) bool {
 		v.reveal = true
 		return true
 	case ui.InputScroll:
-		before := v.scroll
-		v.setScroll(max(0, min(v.scroll+float64(ev.DY), v.hs.top(len(v.paras))-float64(v.viewH))))
 		// At an end, the wheel goes on to the containers around.
-		return v.scroll != before
+		return v.scrollTo(v.scroll + float64(ev.DY))
 	}
 	return false
 }
@@ -149,14 +155,17 @@ func (v *view) grapheme(i, dir int) int {
 }
 
 // visual returns the caret one grapheme left (dir < 0) or right on screen,
-// across bidi runs, and to the next paragraph at the edge of one.
+// across bidi runs, and to the next paragraph at the edge of one. An
+// offset can have two places, the edge of a span's PaddingX (outside the
+// span and in it) or a line wrapped within a word (the end of one line and
+// the start of the next), and a step between them is a move.
 func (v *view) visual(dir int) (int, ui.TextAffinity) {
 	p := v.shown.paraAt(v.caret)
 	pv := v.paraLayout(p)
 	l := min(v.local(p, v.caret), len(pv.units)-1)
 	pos := ui.TextCaretPosition{Index: pv.units[l], Affinity: v.affinity}
 	next := pv.layout.MoveCaret(pos, dir)
-	if next.Index == pos.Index {
+	if next == pos {
 		if dir < 0 {
 			return max(v.shown.paraStart(p)-1, 0), ui.TextDownstream
 		}
@@ -167,6 +176,23 @@ func (v *view) visual(dir int) (int, ui.TextAffinity) {
 
 // vertical moves the caret up or down lines, keeping its x.
 func (v *view) vertical(lines int, extend bool) {
+	// A plain move collapses a non-empty selection to its end in the
+	// direction of travel — the start for up, the end for down — before
+	// stepping vertically, matching KeyLeft/KeyRight and ui/editor.
+	if !extend {
+		if a, z := v.selection(); a != z {
+			edge := z
+			if lines < 0 {
+				edge = a
+			}
+			aff := ui.TextDownstream
+			if edge == v.caret {
+				aff = v.affinity
+			}
+			v.moveTo(edge, aff, false)
+			v.hasDesired = false
+		}
+	}
 	x, y, h := v.caretAt(v.caret, 0, v.affinity)
 	if !v.hasDesired {
 		v.desiredX, v.hasDesired = x, true
@@ -179,6 +205,24 @@ func (v *view) vertical(lines int, extend bool) {
 		v.moveTo(v.shown.Len(), ui.TextDownstream, extend)
 	default:
 		i, a := v.positionAt(v.desiredX, target)
+		if _, ny, _ := v.caretAt(i, 0, a); ny == y {
+			// Still on the caret's line: the room to the next line
+			// that way, a heading's margin or Space, is over half a
+			// line. Past it, to the last line of the paragraph before
+			// or the first of the one after; at the text's start or
+			// end, there.
+			p := v.shown.paraAt(v.caret)
+			switch {
+			case lines < 0 && p > 0:
+				i, a = v.positionAt(v.desiredX, v.hs.top(p)-1)
+			case lines < 0:
+				i, a = 0, ui.TextDownstream
+			case p+1 < len(v.paras):
+				i, a = v.positionAt(v.desiredX, v.hs.top(p+1)+1)
+			default:
+				i, a = v.shown.Len(), ui.TextDownstream
+			}
+		}
 		v.moveTo(i, a, extend)
 	}
 	v.hasDesired = true
@@ -369,6 +413,8 @@ func (v *view) key(key ui.Key, mods ui.Modifiers) bool {
 			v.deleteRange(s, v.caret, false)
 		case word:
 			v.deleteRange(v.prevWord(v.caret), v.caret, false)
+		case v.caret > ps && text.IsCombiningMark(v.runeAt(v.caret-1)):
+			v.deleteRange(v.caret-1, v.caret, true)
 		case v.caret > 0:
 			v.deleteRange(v.grapheme(v.caret, -1), v.caret, true)
 		}
@@ -517,6 +563,19 @@ func (v *view) editCommand(name string) bool {
 
 // press handles a press of the pointer.
 func (v *view) press(ev ui.InputEvent) bool {
+	if ev.Button == 1 && !v.overScrollbar(ev.X) {
+		// A right-click outside the selection puts the caret where it
+		// is, as in a TextArea, so that the context menu acts there; the
+		// press goes on to open the menu.
+		x, y := v.contentPoint(ev.X, ev.Y)
+		i, aff := v.positionAt(x, y)
+		if a, b := min(v.selAnchor, v.caret), max(v.selAnchor, v.caret); a == b || i < a || i > b {
+			v.commitCompose()
+			v.hasDesired = false
+			v.moveTo(i, aff, false)
+		}
+		return false
+	}
 	if ev.Button != 0 {
 		return false
 	}
@@ -541,8 +600,9 @@ func (v *view) press(ev ui.InputEvent) bool {
 		return true
 	}
 	i, aff := v.positionAt(x, y)
-	if ev.Clicks == 1 && ev.Mods&ui.Shift == 0 && i < v.shown.Len() {
-		v.pressLink = v.shown.AttributesAt(i).Link
+	v.pressPoint = ui.Point{X: ev.X, Y: ev.Y}
+	if ev.Clicks == 1 && ev.Mods&ui.Shift == 0 {
+		v.pressLink = v.linkAt(x, y)
 	}
 	v.dragging = true
 	v.hasDesired = false
@@ -572,7 +632,7 @@ func (v *view) move(ev ui.InputEvent) bool {
 		cursor := ui.CursorText
 		if _, box := v.taskBox(x, y); box || v.overScrollbar(ev.X) {
 			cursor = ui.CursorDefault
-		} else if i, _ := v.positionAt(x, y); i < v.shown.Len() && v.shown.AttributesAt(i).Link != "" {
+		} else if v.linkAt(x, y) != "" {
 			cursor = ui.CursorPointer
 		}
 		if cursor != v.cursor {
@@ -606,7 +666,8 @@ func (v *view) move(ev ui.InputEvent) bool {
 	default:
 		v.caret, v.affinity = i, aff
 	}
-	if i != v.dragStart[0] || v.dragUnit != 1 {
+	dx, dy := ev.X-v.pressPoint.X, ev.Y-v.pressPoint.Y
+	if i != v.dragStart[0] || v.dragUnit != 1 || dx*dx+dy*dy >= 16 {
 		v.pressLink = ""
 	}
 	v.reveal = true
@@ -625,7 +686,10 @@ func (v *view) release(ev ui.InputEvent) bool {
 	v.dragging = false
 	link := v.pressLink
 	v.pressLink = ""
-	if link != "" && v.caret == v.selAnchor {
+	// A press the system took opens no link.
+	x, y := v.contentPoint(ev.X, ev.Y)
+	dx, dy := ev.X-v.pressPoint.X, ev.Y-v.pressPoint.Y
+	if link != "" && v.caret == v.selAnchor && !ev.Canceled && dx*dx+dy*dy < 16 && v.linkAt(x, y) == link {
 		if v.opts.OnLink != nil {
 			v.opts.OnLink(link)
 		} else if ui.SafeToOpen(link) {
@@ -633,6 +697,35 @@ func (v *view) release(ev ui.InputEvent) bool {
 		}
 	}
 	return true
+}
+
+// Attachments occupy one rune, but either half of their drawn box opens
+// the link. Keep nearest-caret hit testing for selection alone.
+func (v *view) linkAt(x float32, y float64) string {
+	p, l, _ := v.layoutPositionAt(x, y)
+	if p < 0 {
+		return ""
+	}
+	pv := v.paraLayout(p)
+	ox, oy := v.origin(p)
+	for _, object := range pv.layout.Objects() {
+		if object.Rect.Contains(x-ox, float32(y-oy)) {
+			at := pv.runeOfUnit(object.Index)
+			start := v.caret - v.shown.paraStart(p)
+			if v.compose != "" && v.shown.paraAt(v.caret) == p && at >= start && at < start+len([]rune(v.compose)) {
+				return ""
+			}
+			return v.shown.AttributesAt(v.global(p, at)).Link
+		}
+	}
+	i := v.global(p, l)
+	if i < v.shown.Len() {
+		a := v.shown.AttributesAt(i)
+		if a.Attachment == nil {
+			return a.Link
+		}
+	}
+	return ""
 }
 
 // taskBox reports whether (x, y), in the content, is on the check box of
@@ -657,33 +750,28 @@ func (v *view) taskBox(x float32, y float64) (int, bool) {
 
 // overScrollbar reports whether x of the element is on the scroll bar.
 func (v *view) overScrollbar(x float32) bool {
-	return v.hs.top(len(v.paras)) > float64(v.viewH) && x >= v.rect.W-scrollbarWidth
+	if v.opts.NoScrollbar {
+		return false
+	}
+	width := v.barStyle.TrackWidth
+	if width <= 0 {
+		width = scrollbarWidth
+	}
+	return v.hs.top(len(v.paras)) > float64(v.viewH) && x >= v.rect.W-width
+}
+
+// bar returns the scroll bar, in the element.
+func (v *view) bar() ui.Scrollbar {
+	return ui.Scrollbar{Box: ui.Rect{W: v.rect.W, H: v.rect.H}, View: v.viewH, Content: float32(v.hs.top(len(v.paras))), Offset: float32(v.scroll), Style: v.barStyle}
 }
 
 // thumbBox returns the top and the height of the scroll bar's thumb, in
 // the element.
-func (v *view) thumbBox() (top, size float32) {
-	total := v.hs.top(len(v.paras))
-	track := v.rect.H - 4
-	size = max(24, track*float32(float64(v.viewH)/max(total, 1)))
-	room := float64(track - size)
-	at := 0.0
-	if max := total - float64(v.viewH); max > 0 {
-		at = v.scroll / max
-	}
-	return 2 + float32(room*at), size
-}
+func (v *view) thumbBox() (top, size float32) { return v.bar().Thumb() }
 
 // dragThumb scrolls as the thumb is dragged to y.
 func (v *view) dragThumb(y float32) {
-	_, size := v.thumbBox()
-	track := v.rect.H - 4 - size
-	total := v.hs.top(len(v.paras)) - float64(v.viewH)
-	if track <= 0 || total <= 0 {
-		return
-	}
-	f := float64((y - v.thumbGrab - 2) / track)
-	v.setScroll(max(0, min(f, 1)) * total)
+	v.setScroll(float64(v.bar().OffsetAt(y - v.thumbGrab)))
 }
 
 // menu builds the editor's context menu.

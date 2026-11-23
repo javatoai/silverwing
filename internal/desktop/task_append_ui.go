@@ -21,7 +21,6 @@ type taskAppendUIState struct {
 	open, pending, sharedAck                          bool
 	pendingAction, pendingSignature, previewSignature string
 	inlineError                                       string
-	group                                             domain.GroupConfig
 	serviceOrder                                      []string
 	services                                          map[string]domain.GroupServiceConfig
 	selectedServices                                  map[string]bool
@@ -34,26 +33,19 @@ type taskAppendUIState struct {
 	remoteCheck                                       *taskAppendRemoteCheckState
 }
 
-func (s *app) taskAppendGroup(t task) (domain.GroupConfig, error) {
-	if t.groupID == "" {
-		return domain.GroupConfig{}, fmt.Errorf("任务没有关联项目组，无法添加服务或模块")
+func (s *app) taskAppendCatalog() ([]domain.ServiceConfig, error) {
+	var config domain.AppConfig
+	err := json.Unmarshal([]byte(s.snapshot.ConfigJSON), &config)
+	if err != nil {
+		return nil, fmt.Errorf("无法读取服务配置：%w", err)
 	}
-	config := domain.DefaultAppConfig()
-	if err := json.Unmarshal([]byte(s.snapshot.ConfigJSON), &config); err != nil {
-		return domain.GroupConfig{}, fmt.Errorf("无法读取任务项目组配置：%w", err)
-	}
-	for _, group := range config.Groups {
-		if group.ID == t.groupID {
-			return group, nil
-		}
-	}
-	return domain.GroupConfig{}, fmt.Errorf("找不到任务所属项目组：%s", t.groupID)
+	return config.ServiceCatalog(), nil
 }
 
-func taskAppendNewState(t task, mode string, group domain.GroupConfig) *taskAppendUIState {
+func taskAppendNewState(t task, mode string) *taskAppendUIState {
 	return &taskAppendUIState{
 		token: newDesktopEditorID("task-append"), taskID: t.id, taskUpdated: t.updated,
-		taskPath: t.path, taskBranch: t.branch, mode: mode, open: true, group: group,
+		taskPath: t.path, taskBranch: t.branch, mode: mode, open: true,
 		services: make(map[string]domain.GroupServiceConfig), selectedServices: make(map[string]bool),
 		moduleData:  make(map[string]map[string]*taskCreationModuleDraft),
 		moduleOrder: make(map[string][]string),
@@ -64,14 +56,14 @@ func (s *app) openTaskAppendServices(t task) {
 	if t.id == "" || t.archived {
 		return
 	}
-	group, err := s.taskAppendGroup(t)
+	catalog, err := s.taskAppendCatalog()
 	if err != nil {
 		s.lastError = err.Error()
 		return
 	}
-	state := taskAppendNewState(t, "services", group)
+	state := taskAppendNewState(t, "services")
 	used := taskUsedServiceIDs(t)
-	for _, service := range group.Services {
+	for _, service := range catalog {
 		if !service.Enabled || used[service.ID] {
 			continue
 		}
@@ -79,7 +71,7 @@ func (s *app) openTaskAppendServices(t task) {
 		state.services[service.ID] = service
 	}
 	if len(state.serviceOrder) == 0 {
-		s.lastError = "当前项目组没有可添加的服务。"
+		s.lastError = "没有可添加的服务。"
 		return
 	}
 	state.activeServiceID = state.serviceOrder[0]
@@ -95,23 +87,23 @@ func (s *app) openTaskAppendModules(t task, serviceID string) {
 	if t.id == "" || t.archived {
 		return
 	}
-	group, err := s.taskAppendGroup(t)
+	catalog, err := s.taskAppendCatalog()
 	if err != nil {
 		s.lastError = err.Error()
 		return
 	}
 	var service *domain.GroupServiceConfig
-	for i := range group.Services {
-		if group.Services[i].ID == serviceID {
-			service = &group.Services[i]
+	for i := range catalog {
+		if catalog[i].ID == serviceID {
+			service = &catalog[i]
 			break
 		}
 	}
-	if service == nil {
-		s.lastError = "找不到当前服务的配置。"
+	if service == nil || !service.Enabled {
+		s.lastError = "找不到可用的服务配置。"
 		return
 	}
-	state := taskAppendNewState(t, "modules", group)
+	state := taskAppendNewState(t, "modules")
 	state.serviceID = serviceID
 	state.activeServiceID = serviceID
 	state.services[serviceID] = *service
@@ -406,13 +398,17 @@ func (s *app) taskAppendModuleSelections(state *taskAppendUIState, serviceID str
 		if draft.Strategy != domain.WorkspaceStandardWorktree && draft.Strategy != domain.WorkspaceIndependentClone {
 			return nil, fmt.Errorf("请选择有效的模块工作区策略")
 		}
-		if draft.Strategy == domain.WorkspaceStandardWorktree && strings.TrimSpace(draft.TargetBranch) == "" {
+		targetBranch := draft.selectionTargetBranch()
+		if draft.Strategy == domain.WorkspaceStandardWorktree && targetBranch == "" {
 			return nil, fmt.Errorf("Worktree 模块目标分支不能为空：%s", draft.Name)
+		}
+		if domain.ContainsUnresolvedBranchPlaceholder(targetBranch) {
+			return nil, fmt.Errorf("模块目标分支仍包含未解析的 {num} 或 {ai}：%s", draft.Name)
 		}
 		selections = append(selections, workspace.TaskModuleSelection{
 			ID: draft.ID, Name: strings.TrimSpace(draft.Name), Strategy: draft.Strategy,
 			BaseRef: strings.TrimSpace(draft.BaseRef), BaseRemote: strings.TrimSpace(draft.BaseRemote),
-			TargetBranch: strings.TrimSpace(draft.TargetBranch), Source: draft.Source,
+			TargetBranch: targetBranch, Source: draft.Source,
 			TagEnabled: draft.TagEnabled, TagMode: draft.TagMode, TagTargetRef: strings.TrimSpace(draft.TagTargetRef),
 			TagMessagePrefix: draft.TagMessagePrefix,
 		})
@@ -581,7 +577,7 @@ func (s *app) retryFailedTaskServices(t task, serviceIDs []string) {
 	if t.id == "" || t.archived || s.busy || len(s.taskFailedServiceIDs(t)) == 0 {
 		return
 	}
-	state := taskAppendNewState(t, "retry", domain.GroupConfig{})
+	state := taskAppendNewState(t, "retry")
 	state.open = false
 	payload := map[string]any{"taskAppendToken": state.token}
 	if len(serviceIDs) > 0 {
@@ -827,9 +823,9 @@ func (s *app) renderTaskAppendServiceConfiguration(c *ui.Context, p palette, sta
 			s.renderTaskAppendModuleDraft(c, p, state, serviceID, draft, true)
 		}
 	}
-	duplicates := duplicateTaskCreationCloneTargets(state.moduleOrder[serviceID], state.moduleData[serviceID])
+	duplicates := duplicateTaskCreationCloneBranches(state.moduleOrder[serviceID], state.moduleData[serviceID])
 	if len(duplicates) > 0 {
-		label(c, "共享远程分支风险：多个克隆模块使用相同目标分支 "+strings.Join(duplicates, ", ")+"。", 11, p.amber).Wrap()
+		label(c, "多个克隆模块跟踪同一远程分支："+strings.Join(duplicates, "、"), 11, p.amber).Wrap()
 	}
 }
 
@@ -845,10 +841,18 @@ func (s *app) renderTaskAppendModuleConfiguration(c *ui.Context, p palette, stat
 	if draft.Source == domain.TaskModuleConfigured && taskUsedModuleIDs(s.taskUnit.taskByID(state.taskID), state.serviceID)[strings.ToLower(draft.ID)] {
 		state.inlineError = "所选模块已存在于任务中，请选择其他模块。"
 	}
-	if draft.Strategy == domain.WorkspaceIndependentClone && strings.TrimSpace(draft.TargetBranch) != "" {
+	if draft.Strategy == domain.WorkspaceIndependentClone {
+		selected, err := domain.ParseRemoteBranchRef(draft.BaseRef)
+		if err != nil {
+			return
+		}
 		for _, existing := range s.taskUnit.taskByID(state.taskID).workspaces {
-			if strings.EqualFold(existing.Strategy, string(domain.WorkspaceIndependentClone)) && strings.EqualFold(existing.Branch, draft.TargetBranch) {
-				label(c, "共享远程分支风险：任务中已有克隆模块使用该目标分支。", 11, p.amber).Wrap()
+			if existing.Record.RepositoryID != service.RepositoryID || existing.Record.Strategy != domain.WorkspaceIndependentClone {
+				continue
+			}
+			base, err := domain.ParseRemoteBranchRef(taskCreationOptionalString(existing.Record.BaseRef))
+			if err == nil && base.Remote == selected.Remote && existing.Record.Branch == selected.Branch {
+				label(c, "任务中已有克隆模块使用同一远程分支："+selected.String(), 11, p.amber).Wrap()
 				break
 			}
 		}
@@ -877,6 +881,7 @@ func (s *app) renderTaskAppendModuleDraft(c *ui.Context, p palette, state *taskA
 					return
 				}
 				draft.Strategy = domain.WorkspaceStandardWorktree
+				s.retargetTaskAppendModules(state, serviceID)
 				s.invalidateTaskAppendPreview("模块策略已变化，请重新预检。")
 			})
 			s.settingsChoice(c, p, "task-append-strategy-clone-"+serviceID+"-"+draft.ID, "独立克隆", draft.Strategy == domain.WorkspaceIndependentClone, func() {
@@ -889,16 +894,12 @@ func (s *app) renderTaskAppendModuleDraft(c *ui.Context, p palette, state *taskA
 		})
 		service := state.services[serviceID]
 		s.renderTaskRepositoryBranchPicker(c, p, taskRepositoryChoicesAppendOwner, state.token, state.taskID, serviceID, draft.ID, service.RepositoryID, draft, readOnly)
-		ui.Column(c).Gap(3).Children(func() {
-			targetLabel := "目标分支（必填）"
-			targetPlaceholder := "请输入目标分支"
-			if draft.Strategy == domain.WorkspaceIndependentClone {
-				targetLabel = "克隆目标分支（可空）"
-				targetPlaceholder = "请输入目标分支（可选）"
-			}
-			label(c, targetLabel, 10, p.muted)
-			ui.TextInput(c.Key("task-append-target-"+serviceID+"-"+draft.ID), &draft.TargetBranch).FillWidth().Height(34).Placeholder(targetPlaceholder).Label(targetPlaceholder).ReadOnly(readOnly)
-		})
+		if draft.Strategy == domain.WorkspaceStandardWorktree {
+			ui.Column(c).Gap(3).Children(func() {
+				label(c, "目标分支（必填）", 10, p.muted)
+				ui.TextInput(c.Key("task-append-target-"+serviceID+"-"+draft.ID), &draft.TargetBranch).FillWidth().Height(34).Placeholder("请输入目标分支").Label("请输入目标分支").ReadOnly(readOnly)
+			})
+		}
 	})
 	s.syncTaskAppendModuleDraft(state, serviceID, draft)
 }

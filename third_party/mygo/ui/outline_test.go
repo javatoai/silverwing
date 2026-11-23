@@ -259,3 +259,246 @@ func TestOutlineExpandsForAssistiveTechnology(t *testing.T) {
 		t.Fatal("expanding a tree's item")
 	}
 }
+
+// An outline's rows build their arrows without closures of their own in
+// every frame: with a Prefix that builds nothing, thirty rows with
+// children allocate as much a frame as ten, and with one that builds the
+// arrow, each row adds its arrow's click handler alone.
+func TestOutlineRowAllocs(t *testing.T) {
+	if testing.Short() {
+		t.Skip("measures")
+	}
+	kids := []int{1000}
+	frame := func(rows int, prefix func(r OutlineRow)) float64 {
+		var s OutlineState[int]
+		s.Prefix = prefix
+		roots := make([]int, rows)
+		for i := range roots {
+			roots[i] = i
+		}
+		tt := coreNewTester(func(c *context) {
+			coreOutline(c, &s, roots, func(int) []int { return kids }, func(int) {
+				coreText(c, "row")
+			}).FillWidth().Height(800)
+		}, 300, 800)
+		defer tt.rt.close()
+		tt.Frame()
+		return testing.AllocsPerRun(50, tt.Frame)
+	}
+	for _, tc := range []struct {
+		name   string
+		prefix func(r OutlineRow)
+		perRow float64
+	}{
+		{"nothing", func(OutlineRow) {}, 0},
+		{"its arrow", func(r OutlineRow) { r.Arrow().Size(16, 16) }, 1},
+	} {
+		few, many := frame(10, tc.prefix), frame(30, tc.prefix)
+		if perRow := (many - few) / 20; perRow > tc.perRow {
+			t.Errorf("a Prefix building %s: a row allocates %.1f times a frame, want at most %.0f", tc.name, perRow, tc.perRow)
+		}
+	}
+}
+
+// bigOutline is an outline of folders of files, every folder open, as a
+// change set of a work tree shown whole: folders at the top, items
+// 0 to folders-1, each with files of its own, and a count of the calls of
+// children.
+type bigOutline struct {
+	s      OutlineState[int]
+	roots  []int
+	kids   []int
+	files  int
+	calls  int
+	tester *Tester
+}
+
+func newBigOutline(folders, files int, generation uint64) *bigOutline {
+	o := &bigOutline{roots: make([]int, folders), kids: make([]int, folders*files), files: files}
+	o.s.Generation = generation
+	for i := range o.roots {
+		o.roots[i] = i
+		o.s.Open.Add(i)
+	}
+	for i := range o.kids {
+		o.kids[i] = folders + i
+	}
+	o.tester = coreNewTester(func(c *context) {
+		coreOutline(c, &o.s, o.roots, o.children, func(item int) {
+			coreTextf(c, "Item %d", item)
+		}).Grow(1)
+	}, 400, 800)
+	o.tester.SetPreferences(Preferences{ReduceMotion: true, TextScale: 1})
+	return o
+}
+
+func (o *bigOutline) children(item int) []int {
+	o.calls++
+	if item < len(o.roots) {
+		return o.kids[item*o.files : (item+1)*o.files]
+	}
+	return nil
+}
+
+// With a Generation, an outline keeps its rows while nothing they come
+// from changes: scrolling a tree of thousands of open items calls children
+// for none, where without one it walks them all in every frame.
+func TestOutlineKeepsRows(t *testing.T) {
+	for _, generation := range []uint64{0, 1} {
+		o := newBigOutline(1000, 20, generation)
+		tt := o.tester
+		o.calls = 0
+		for range 5 {
+			tt.Scroll(200, 400, 0, 60)
+		}
+		rows := 1000 * 21
+		if want := 5 * rows * int(1-generation); o.calls != want || o.s.Rows() != rows {
+			t.Errorf("Generation %d: %d rows, %d calls of children in 5 frames, want %d", generation, o.s.Rows(), o.calls, want)
+		}
+		tt.rt.close()
+	}
+}
+
+// Without a Generation, an outline shows what children returns in the
+// next frame, as it always did.
+func TestOutlineWithoutGenerationFollowsChildren(t *testing.T) {
+	tree := map[string][]string{"a": {"a/1"}}
+	var s OutlineState[string]
+	s.Open.Add("a")
+	tt := coreNewTester(func(c *context) {
+		coreOutline(c, &s, []string{"a"}, func(k string) []string { return tree[k] }, func(k string) {
+			coreText(c, k)
+		}).Grow(1)
+	}, 400, 400)
+	tree["a"] = append(tree["a"], "a/2")
+	tt.Frame()
+	if !tt.HasText("a/2") || s.Rows() != 3 {
+		t.Errorf("a new child: %d rows, shows %q", s.Rows(), tt.Texts())
+	}
+}
+
+// With a Generation, an outline walks its items again when Open, the
+// roots or the Generation change, however they change.
+func TestOutlineGeneration(t *testing.T) {
+	tree := map[string][]string{
+		"a":   {"a/1", "a/b"},
+		"a/b": {"a/b/1"},
+		"c":   {"c/1"},
+		"d":   {},
+	}
+	roots := []string{"a", "c"}
+	sel := -1
+	s := OutlineState[string]{Generation: 1}
+	s.List.Selected = &sel
+	tt := coreNewTester(func(c *context) {
+		coreOutline(c, &s, roots, func(k string) []string { return tree[k] }, func(k string) {
+			coreText(c, k)
+		}).Grow(1)
+	}, 400, 400)
+	tt.SetPreferences(Preferences{ReduceMotion: true, TextScale: 1})
+	rows := func(step string) {
+		t.Helper()
+		got := make([]string, s.Rows())
+		for i := range got {
+			got[i] = s.Item(i)
+		}
+		if shown := strings.Join(got, " "); shown != step[strings.IndexByte(step, ':')+2:] {
+			t.Fatalf("%s: rows %s", step[:strings.IndexByte(step, ':')], shown)
+		}
+	}
+	rows("at first: a c")
+	// The arrow, the keys and the app open and close items.
+	a, _ := tt.Find("a")
+	tt.ClickAt(a.X-10, a.Y+a.H/2)
+	rows("the arrow: a a/1 a/b c")
+	tt.Click("a/b")
+	tt.Key(0, KeyRight)
+	rows("Right: a a/1 a/b a/b/1 c")
+	s.Open.Add("c")
+	tt.Frame()
+	rows("Open.Add: a a/1 a/b a/b/1 c c/1")
+	s.Open.Remove("a")
+	tt.Frame()
+	rows("Open.Remove: a c c/1")
+	s.Open.Clear()
+	tt.Frame()
+	rows("Open.Clear: a c")
+	// Another Selection put in Open's place, even one changed as often.
+	var other Selection[string]
+	other.Add("a")
+	s.Open = other
+	tt.Frame()
+	rows("another Open: a a/1 a/b c")
+	s.Open = Selection[string]{}
+	tt.Frame()
+	rows("an empty Open: a c")
+	// Other roots, or the same slice changed.
+	roots = []string{"c", "d", "a"}
+	tt.Frame()
+	rows("other roots: c d a")
+	roots[1], roots[2] = roots[2], roots[1]
+	tt.Frame()
+	rows("roots changed in place: c a d")
+	roots = roots[:2]
+	tt.Frame()
+	rows("fewer roots: c a")
+	// children changing shows once Generation does.
+	s.Open.Add("c")
+	tt.Frame()
+	tree["c"] = []string{"c/1", "c/2"}
+	tt.Frame()
+	rows("children changed, Generation not: c c/1 a")
+	s.Generation++
+	tt.Frame()
+	rows("Generation changed: c c/1 c/2 a")
+	// Back to zero, it walks in every frame.
+	s.Generation = 0
+	tree["c"] = nil
+	tt.Frame()
+	rows("Generation zero: c a")
+}
+
+// A Selection's stamp changes when its keys do, and only then, to a value
+// no other Selection had.
+func TestSelectionStamp(t *testing.T) {
+	var a, b Selection[int]
+	a.Add(1)
+	b.Add(1)
+	if a.stamp == 0 || a.stamp == b.stamp {
+		t.Fatalf("stamps %d and %d", a.stamp, b.stamp)
+	}
+	st := a.stamp
+	a.Add(1)
+	a.Remove(2)
+	b.Clear()
+	b.Clear()
+	if a.stamp != st {
+		t.Error("adding a key there or removing one not there changed the stamp")
+	}
+	for _, change := range []func(){func() { a.Add(2) }, func() { a.Remove(2) }, func() { a.Clear() }} {
+		change()
+		if a.stamp == st {
+			t.Fatal("a change kept the stamp")
+		}
+		st = a.stamp
+	}
+}
+
+// BenchmarkOutlineOpen scrolls an outline of 16,347 folders open, with
+// 392,328 files, a frame at a time: Generation 0 walks them in every
+// frame, and 1 keeps the rows.
+func BenchmarkOutlineOpen(b *testing.B) {
+	for _, generation := range []uint64{0, 1} {
+		b.Run(fmt.Sprintf("Generation=%d", generation), func(b *testing.B) {
+			o := newBigOutline(16347, 24, generation)
+			defer o.tester.rt.close()
+			o.calls = 0
+			dy := float32(60)
+			for b.Loop() {
+				o.tester.Scroll(200, 400, 0, dy)
+				dy = -dy
+			}
+			b.ReportMetric(float64(o.calls)/float64(b.N), "children/frame")
+		})
+	}
+}

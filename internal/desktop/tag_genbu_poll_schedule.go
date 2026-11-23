@@ -63,7 +63,7 @@ func (s *app) tagGenbuProbeRepository(record application.TagRecord) string {
 // Each repository has its own in-flight request. A slow item cannot hold back
 // another repository's accepted result or next scheduled query.
 func (s *app) startDueTagGenbuProbes(session *tagGenbuAutoProbeSession, win tagGenbuAutoProbeWindow) {
-	if !s.tagGenbuAutoProbeSessionRelevant(session) || session.request != nil {
+	if !s.integrationReady("genbu") || !s.tagGenbuAutoProbeSessionRelevant(session) || session.request != nil {
 		return
 	}
 	state := s.releaseUnit.state.tagGenbuAutoProbe

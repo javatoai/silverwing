@@ -237,24 +237,18 @@ func (a *App) workspaceWorkflow(ctx context.Context, action Action, config domai
 				return result(nil, "", errors.New("工作区尚未就绪，无法执行快捷命令"))
 			}
 			commandID := textPayload(action, "commandId")
-			for _, group := range config.Groups {
-				if group.ID != manifest.GroupID {
+			configured, err := config.Service(item.GroupServiceID)
+			if err != nil {
+				return result(nil, "", err)
+			}
+			for _, module := range configured.Modules {
+				if module.ID != item.ModuleID {
 					continue
 				}
-				for _, configured := range group.Services {
-					if configured.ID != item.GroupServiceID {
-						continue
-					}
-					for _, module := range configured.Modules {
-						if module.ID != item.ModuleID {
-							continue
-						}
-						for _, command := range module.CustomCommands {
-							if command.ID == commandID {
-								data, e := service.Commands.Execute(ctx, config, item.WorktreePath, command, onOutput)
-								return result(data, "命令已返回，请查看退出码和输出", e)
-							}
-						}
+				for _, command := range module.CustomCommands {
+					if command.ID == commandID {
+						data, err := service.Commands.Execute(ctx, config, item.WorktreePath, command, onOutput)
+						return result(data, "命令已返回，请查看退出码和输出", err)
 					}
 				}
 			}

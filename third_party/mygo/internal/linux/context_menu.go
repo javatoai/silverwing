@@ -1,4 +1,4 @@
-//go:build linux && (amd64 || arm64)
+//go:build linux && !android && (amd64 || arm64)
 
 package linux
 
@@ -287,7 +287,7 @@ func (w *window) appContextItem(it *platform.MenuItem, natives []ptr) ptr {
 	if it.Type == platform.MenuItemSeparator {
 		return webkitContextMenuItemNewSeparator()
 	}
-	label := cs(mnemonicLabel(it.Label))
+	label := cs(mnemonicLabel(it.LabelWithSubtitle()))
 	if it.Submenu != nil {
 		sub := webkitContextMenuNew()
 		w.fillContextMenu(sub, it.Submenu.Items, natives)

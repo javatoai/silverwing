@@ -78,10 +78,10 @@ func (s *app) requirementDescription(c *ui.Context, p palette) {
 		selected = 0
 		s.taskUnit.state.noteTab = 0
 	}
-	name := []string{"AGENTS.md", "TASK-CONTEXT.md", "TASK-RULES.md"}[selected]
+	name := taskNoteNames[selected]
 	ui.Column(c).Grow(1).MinHeight(0).Padding(18).Gap(8).Background(p.surface).Children(func() {
 		ui.Row(c).Height(45).Gap(4).Children(func() {
-			for i, tab := range []string{"AGENTS.md", "TASK-CONTEXT.md", "TASK-RULES.md"} {
+			for i, tab := range taskNoteNames {
 				b := ui.ButtonBase(c.Key("note-"+tab)).Height(45).Padding(0, 20).Label(tab)
 				if selected == i {
 					b.Border(3, p.blue).BorderWidth(0, 0, 3, 0)
@@ -100,7 +100,7 @@ func (s *app) requirementDescription(c *ui.Context, p palette) {
 			path = name
 		}
 		label(c, path, 11, p.muted).Font("Consolas").Padding(0, 18)
-		if s.taskUnit.state.noteEditing {
+		if selected == taskRulesNoteTab && s.taskUnit.state.noteEditing {
 			ui.TextArea(c.Key(fmt.Sprintf("notes-editor-%d", selected)), &s.taskUnit.state.notes[selected]).Grow(1).FillWidth().MinHeight(140).Padding(14).FontSize(14).Background(p.surface).Border(1, p.line).Radius(7)
 		} else {
 			ui.Row(c).Gap(2).Children(func() {
@@ -122,7 +122,9 @@ func (s *app) requirementDescription(c *ui.Context, p palette) {
 			})
 			ui.Scroll(c).Grow(1).MinHeight(0).Padding(12, 18).Children(func() {
 				if strings.TrimSpace(s.taskUnit.state.notes[selected]) == "" {
-					label(c, "选择“编辑”填写任务说明，保存后会写入任务工作区。", 13, p.muted)
+					if selected == taskRulesNoteTab {
+						label(c, "选择“编辑”填写任务说明，保存后会写入任务工作区。", 13, p.muted)
+					}
 					return
 				}
 				for _, line := range strings.Split(s.taskUnit.state.notes[selected], "\n") {
@@ -151,6 +153,12 @@ func (s *app) requirementDescription(c *ui.Context, p palette) {
 				label(c, "已读取", 12, p.muted)
 			}
 			ui.Spacer(c)
+			if selected != taskRulesNoteTab {
+				if iconButton(c, "note-refresh", "refresh", "重新读取说明", p).Clicked() {
+					s.loadInstructions()
+				}
+				return
+			}
 			for _, mode := range []struct {
 				title   string
 				editing bool
@@ -181,6 +189,5 @@ func (s *app) loadInstructions() {
 	if t.id == "" {
 		return
 	}
-	name := []string{"AGENTS.md", "TASK-CONTEXT.md", "TASK-RULES.md"}[s.taskUnit.state.noteTab]
-	s.act("instructions.read", t.id, "", "", name, "", nil)
+	s.act("instructions.read", t.id, "", "", s.currentNoteName(), "", nil)
 }

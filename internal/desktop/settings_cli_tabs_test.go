@@ -17,6 +17,7 @@ func newSettingsCLITabsTestApp(t *testing.T) *app {
 	s.loading = false
 	s.snapshot.Home = t.TempDir()
 	s.settingsUnit.state.configJSON = `{}`
+	enableOptionalCLIsForDesktopTest(t, s, "lark")
 	s.navigateSettingsPage("cli-tools", "")
 	t.Cleanup(s.settingsUnit.stopSettingsAutosave)
 	return s
@@ -57,14 +58,14 @@ func TestSettingsCLITabsIsolateAndRemember(t *testing.T) {
 					t.Fatal("Right did not select and focus next CLI")
 				}
 				v.Key(0, ui.KeyEnd)
-				if s.currentSettingsCLITool() != "genbu" {
+				if s.currentSettingsCLITool() != "lark" {
 					t.Fatal("End did not choose last CLI")
 				}
 				s.navigateSettingsPage("dev-tools", "")
 				v.Frame()
 				s.navigateSettingsPage("cli-tools", "")
 				v.Frame()
-				if s.currentSettingsCLITool() != "genbu" || !v.HasText("Genbu CLI 状态") {
+				if s.currentSettingsCLITool() != "lark" || !v.HasText("Lark CLI 状态") {
 					t.Fatal("returning to CLI page forgot current-session selection")
 				}
 			})
@@ -74,7 +75,7 @@ func TestSettingsCLITabsIsolateAndRemember(t *testing.T) {
 
 func TestSettingsCLITabsKeepDraftAndScroll(t *testing.T) {
 	s := newSettingsCLITabsTestApp(t)
-	s.navigateSettingsPage("cli-genbu", "")
+	s.navigateSettingsPage("cli-codex", "")
 	v := ui.NewTester(func(c *ui.Context) { s.settingsScreen(c, setTheme(c, false)) }, 1100, 760)
 	found := false
 	for range 40 {
@@ -88,14 +89,14 @@ func TestSettingsCLITabsKeepDraftAndScroll(t *testing.T) {
 		t.Fatal("could not focus the visible CLI path input")
 	}
 	v.Type("fixture-unsaved-cli")
-	entry := s.settingsUnit.state.settingsAutosave.entries["path:Genbu CLI 可执行文件"]
-	if entry == nil || !entry.pending || *s.input("setting:genbuExecutablePath", "") != "fixture-unsaved-cli" {
+	entry := s.settingsUnit.state.settingsAutosave.entries["path:Codex CLI 可执行文件"]
+	if entry == nil || !entry.pending || *s.input("setting:codexExecutablePath", "") != "fixture-unsaved-cli" {
 		t.Fatal("typing did not enter normal CLI autosave queue")
 	}
 	if err := v.Click("Meegle"); err != nil {
 		t.Fatal(err)
 	}
-	if !entry.pending || *s.input("setting:genbuExecutablePath", "") != "fixture-unsaved-cli" {
+	if !entry.pending || *s.input("setting:codexExecutablePath", "") != "fixture-unsaved-cli" {
 		t.Fatal("switching CLI dropped the pending path draft")
 	}
 	projects := []map[string]any{}
@@ -116,11 +117,11 @@ func TestSettingsCLITabsKeepDraftAndScroll(t *testing.T) {
 	if before != after {
 		t.Fatal("CLI tabs scrolled with the content")
 	}
-	if err := v.Click("Genbu"); err != nil {
+	if err := v.Click("Codex"); err != nil {
 		t.Fatal(err)
 	}
-	genbuScroll := s.settingsUnit.state.settingsContentScrolls[s.settingsContentKey()]
-	if genbuScroll == meegleScroll || genbuScroll.Y != 0 || *s.input("setting:genbuExecutablePath", "") != "fixture-unsaved-cli" || !entry.pending {
+	codexScroll := s.settingsUnit.state.settingsContentScrolls[s.settingsContentKey()]
+	if codexScroll == meegleScroll || codexScroll.Y != 0 || *s.input("setting:codexExecutablePath", "") != "fixture-unsaved-cli" || !entry.pending {
 		t.Fatal("CLI tabs shared scroll state or discarded pending input")
 	}
 	if err := v.Click("Meegle"); err != nil {
@@ -132,7 +133,7 @@ func TestSettingsCLITabsKeepDraftAndScroll(t *testing.T) {
 }
 
 func TestSettingsCLITabsSearchRoutesAndDependencies(t *testing.T) {
-	for _, tool := range []string{"git", "codex", "meegle", "genbu"} {
+	for _, tool := range []string{"git", "codex", "meegle", "lark"} {
 		t.Run(tool, func(t *testing.T) {
 			s := newSettingsCLITabsTestApp(t)
 			query := settingsCLITitle(tool) + " 可执行文件"
@@ -160,17 +161,17 @@ func TestSettingsCLITabsSearchRoutesAndDependencies(t *testing.T) {
 
 func TestSettingsCLITabsLoadAndRevealIgnoreInactiveJobs(t *testing.T) {
 	s := newSettingsCLITabsTestApp(t)
-	s.navigateSettingsPage("cli-genbu", "")
+	s.navigateSettingsPage("cli-codex", "")
 	s.toolsUnit.state.cliJobs = &cliJobState{requests: map[string]*cliJobRequest{"status:meegle": {tool: "meegle"}}}
-	s.openSettingsSearchResult(settingsSearchEntry{"cli-genbu", "Genbu CLI 状态", ""})
+	s.openSettingsSearchResult(settingsSearchEntry{"cli-codex", "Codex CLI 状态", ""})
 	v := ui.NewTester(func(c *ui.Context) { s.settingsScreen(c, setTheme(c, false)) }, 1100, 760)
 	v.Frame()
 	if s.settingsUnit.state.settingsSearchPending {
 		t.Fatal("inactive CLI job blocked current search reveal")
 	}
 	loaded := s.settingsUnit.state.settingsLoaded
-	s.toolsUnit.state.cliJobs.requests["status:genbu"] = &cliJobRequest{tool: "genbu"}
-	s.openSettingsSearchResult(settingsSearchEntry{"cli-genbu", "Genbu CLI 状态", ""})
+	s.toolsUnit.state.cliJobs.requests["status:codex"] = &cliJobRequest{tool: "codex"}
+	s.openSettingsSearchResult(settingsSearchEntry{"cli-codex", "Codex CLI 状态", ""})
 	v.Frame()
 	if !s.settingsUnit.state.settingsSearchPending {
 		t.Fatal("current CLI data was not awaited")
@@ -181,7 +182,7 @@ func TestSettingsCLITabsLoadAndRevealIgnoreInactiveJobs(t *testing.T) {
 	if s.settingsUnit.state.settingsSearchPending || s.settingsUnit.state.settingsLoaded == loaded {
 		t.Fatal("manual CLI switch retained stale reveal or load marker")
 	}
-	delete(s.toolsUnit.state.cliJobs.requests, "status:genbu")
+	delete(s.toolsUnit.state.cliJobs.requests, "status:codex")
 	v.Frame()
 	if s.currentSettingsCLITool() != "meegle" || s.settingsUnit.state.settingsSearchPending {
 		t.Fatal("late previous-tab status revived its search")
@@ -195,24 +196,72 @@ func TestSettingsCLITabsLateStatusCannotReplaceVisibleFeedback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.navigateSettingsPage("cli-genbu", "")
-	current, err := s.beginCLIJob(application.Action{Kind: "cli.status", Payload: map[string]any{"tool": "genbu"}})
+	s.navigateSettingsPage("cli-codex", "")
+	current, err := s.beginCLIJob(application.Action{Kind: "cli.status", Payload: map[string]any{"tool": "codex"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.settingsUnit.state.settingsOutput, s.lastError = "current Genbu feedback", ""
+	s.settingsUnit.state.settingsOutput, s.lastError = "current Codex feedback", ""
 	old.complete(nil)
 	s.finishCLIJob(old, application.ActionResult{}, application.Snapshot{}, errors.New("old Meegle failure"))
-	if s.settingsUnit.state.settingsOutput != "current Genbu feedback" || s.lastError != "" || s.settingsUnit.state.settingsCLIErrors["meegle"] != "old Meegle failure" || current.owner.requests[current.key] != current {
+	if s.settingsUnit.state.settingsOutput != "current Codex feedback" || s.lastError != "" || s.settingsUnit.state.settingsCLIErrors["meegle"] != "old Meegle failure" || current.owner.requests[current.key] != current {
 		t.Fatal("late inactive CLI error replaced visible feedback or another request")
 	}
 	current.complete(nil)
 	s.finishCLIJob(current, application.ActionResult{Data: map[string]any{"installed": true}}, application.Snapshot{}, nil)
-	if !dataBool(s.settingsUnit.state.settingsCLIStatus["genbu"], "installed") {
+	if !dataBool(s.settingsUnit.state.settingsCLIStatus["codex"], "installed") {
 		t.Fatal("current CLI success was discarded")
 	}
 	if err := s.closeCLIJobs(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSettingsCodexRecoveryReplacesOrClearsInvalidPath(t *testing.T) {
+	const invalidPath = `D:\old\codex.exe`
+	const replacement = `D:\current\codex.exe`
+	const manualDraft = `D:\manual\codex.exe`
+	for _, tc := range []struct {
+		name, tool, path, draft, wantPath, wantDraft string
+	}{
+		{name: "replacement", tool: "codex", path: replacement, draft: invalidPath, wantPath: replacement, wantDraft: replacement},
+		{name: "unavailable", tool: "codex", draft: invalidPath},
+		{name: "retain draft", tool: "codex", path: replacement, draft: manualDraft, wantPath: replacement, wantDraft: manualDraft},
+		{name: "Meegle keeps its configuration", tool: "meegle", path: replacement, draft: invalidPath, wantPath: invalidPath, wantDraft: invalidPath},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newSettingsCLITabsTestApp(t)
+			key := tc.tool + "ExecutablePath"
+			before, err := json.Marshal(map[string]any{key: invalidPath, "gitExecutablePath": "keep-git"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.settingsUnit.state.configJSON = string(before)
+			draft := s.input("setting:"+key, invalidPath)
+			autosaveKey := "path:" + settingsCLITitle(tc.tool) + " 可执行文件"
+			save := func(string) { t.Fatal("recovery unexpectedly wrote to autosave") }
+			s.autosaveSettingsInput(autosaveKey, draft, save)
+			*draft = tc.draft
+			var path any
+			if tc.path != "" {
+				path = tc.path
+			}
+			detected, err := json.Marshal(map[string]any{key: path, "gitExecutablePath": "old-git"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.settingsUnit.state.settingsCLIStatus = map[string]map[string]any{tc.tool: {
+				"installed": tc.path != "", "command": tc.path, "clearedConfiguredPath": invalidPath,
+			}}
+			s.applySettingsCLIDiscoverySnapshot(tc.tool, string(before), application.Snapshot{Home: s.snapshot.Home, ConfigJSON: string(detected)})
+			if *draft != tc.wantDraft || s.cliConfiguredPath(tc.tool) != tc.wantPath || s.cliConfiguredPath("git") != "keep-git" {
+				t.Fatalf("unexpected recovery merge: input=%q config=%s", *draft, s.settingsUnit.state.configJSON)
+			}
+			s.autosaveSettingsInput(autosaveKey, draft, save)
+			if pending := s.settingsAutosaveInputPending(draft); pending != (tc.draft == manualDraft) {
+				t.Fatalf("unexpected autosave state after repair: pending=%t", pending)
+			}
+		})
 	}
 }
 
@@ -227,7 +276,7 @@ func TestSettingsCLITabsLeaveMeegleClosesOnlyProjectPicker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !s.navigateSettingsPage("cli-genbu", "") || state.pickerOpen || state.loading || request.ctx.Err() == nil {
+	if !s.navigateSettingsPage("cli-codex", "") || state.pickerOpen || state.loading || request.ctx.Err() == nil {
 		t.Fatal("switching nested CLI tab did not close/cancel project picker")
 	}
 	s.finishMeegleProjectCatalog(action, application.ActionResult{Data: map[string]any{"projects": []meegleCatalogProject{{Name: "late", ProjectKey: "late"}}}}, nil)

@@ -16,7 +16,11 @@ func (s *app) onMaterialsWindowFocused() {
 			s.materialsUnit.closeMaterialsLiveRefresh()
 		}
 	}
-	state.windowRefreshPending = true
+	s.requestMaterialsWindowRefresh()
+}
+
+func (s *app) requestMaterialsWindowRefresh() {
+	s.ensureMaterialsFileManagementState().windowRefreshPending = true
 	s.observeMaterialsWindowRefresh()
 }
 

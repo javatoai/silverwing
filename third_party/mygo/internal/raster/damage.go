@@ -20,12 +20,15 @@ type Renderer struct {
 	d      drawer
 	diff   scene.Differ
 	damage []image.Rectangle
+	// canvas is allocated only when a canvas needs drawing in memory,
+	// reused between its redraws, and dropped with the frame by Release.
+	canvas *canvasScratch
 }
 
 // Render draws s, and returns the rectangles of Image it changed. s may
 // change once Render returns.
 func (r *Renderer) Render(s *scene.Scene) []image.Rectangle {
-	drawCanvases(s)
+	r.drawCanvases(s)
 	if r.whole(s) || r.Image.W != s.Width || r.Image.H != s.Height {
 		// A new size, or Image was released (Release).
 		r.resize(s.Width, s.Height)

@@ -58,6 +58,47 @@ describe("call", () => {
   });
 });
 
+describe("canceling a call", () => {
+  type CancelMsg = Extract<Outgoing, { t: "cancel" }>;
+
+  test("a signal tells Go that the call may be canceled", async () => {
+    const { sent, runtime, internal } = setup();
+    const ac = new AbortController();
+    const p = runtime.callWith("Greeter.Greet", ["bun"], { signal: ac.signal });
+    const msg = sent[0] as CallMsg;
+    expect(msg).toMatchObject({ t: "call", id: 1, m: "Greeter.Greet", a: ["bun"], cancel: true });
+
+    internal.receive({ t: "reply", id: msg.id, k: msg.k, ok: true, v: "hello bun" });
+    expect(await p).toBe("hello bun");
+    // A call without a signal is not canceled.
+    runtime.call("Greeter.Greet", "bun");
+    expect((sent[1] as CallMsg).cancel).toBeUndefined();
+  });
+
+  test("aborting tells Go to cancel the call and rejects with the reason", async () => {
+    const { sent, runtime, internal } = setup();
+    const ac = new AbortController();
+    const p = runtime.callWith("Greeter.Greet", ["bun"], { signal: ac.signal });
+    const msg = sent[0] as CallMsg;
+
+    ac.abort("no time");
+    const cancel = sent[1] as CancelMsg;
+    expect(cancel).toMatchObject({ t: "cancel", id: msg.id, k: msg.k });
+    expect(await p.catch((e) => e)).toBe("no time");
+
+    // The reply of a canceled call is of no use.
+    internal.receive({ t: "reply", id: msg.id, k: msg.k, ok: true, v: "hello bun" });
+  });
+
+  test("a signal that is aborted already rejects without calling Go", async () => {
+    const { sent, runtime } = setup();
+    const ac = new AbortController();
+    ac.abort();
+    await expect(runtime.callWith("Greeter.Greet", ["bun"], { signal: ac.signal })).rejects.toBeDefined();
+    expect(sent.length).toBe(0);
+  });
+});
+
 describe("events", () => {
   test("on / once / unsubscribe", () => {
     const { runtime, internal } = setup();
@@ -186,6 +227,34 @@ describe("channels", () => {
     expect(await pending).toEqual({ value: undefined, done: true });
   });
 
+  for (const failure of ["duplicate", "serialization"]) {
+    test(`a channel can be used after ${failure} rejects before sending`, async () => {
+      const { sent, runtime, internal } = setup();
+      const got: unknown[] = [];
+      const ch = runtime.channel((value) => got.push(value));
+      const bad = failure === "duplicate"
+        ? runtime.call("Svc.Stream", ch, ch)
+        : runtime.call("Svc.Stream", ch, 1n);
+      await expect(bad).rejects.toThrow();
+      expect(sent).toHaveLength(0);
+      expect(ch.closed).toBe(false);
+
+      const pending = runtime.call("Svc.Stream", ch);
+      const reply = pending.catch((err) => err);
+      expect(sent).toHaveLength(1);
+      const { id, k, a } = sent[0] as CallMsg;
+      const channelID = a[0] as number;
+      internal.receive([
+        { t: "chan", c: channelID, k, p: "value" },
+        { t: "chan", c: channelID, k, end: true },
+        { t: "reply", id, k, ok: true },
+      ]);
+      expect(await reply).toBeUndefined();
+      expect(got).toEqual(["value"]);
+      expect(ch.closed).toBe(true);
+    });
+  }
+
   test("a failed call ends its channels", async () => {
     const { sent, runtime, internal } = setup();
     const ch = runtime.channel();
@@ -199,6 +268,36 @@ describe("channels", () => {
     await done;
     expect(ch.closed).toBe(true);
   });
+});
+
+test("a page shown again fails the calls it left unanswered, and ends their channels", async () => {
+  const { sent, runtime, internal, restored } = setup();
+  const ch = runtime.channel();
+  const abort = new AbortController();
+  const a = runtime.call("Svc.Slow", ch);
+  const b = runtime.callWith("Svc.Slow", [], { signal: abort.signal });
+  const [ma, mb] = sent as CallMsg[];
+  restored();
+  const err = (await a.catch((e) => e)) as CallError;
+  expect(err).toBeInstanceOf(CallError);
+  expect(err.method).toBe("Svc.Slow");
+  await expect(b).rejects.toThrow("the page was left");
+  expect(ch.closed).toBe(true);
+
+  // Their late replies, and a signal that aborts, are of no use.
+  internal.receive([
+    { t: "reply", id: ma!.id, k: ma!.k, ok: true, v: "late" },
+    { t: "reply", id: mb!.id, k: mb!.k, ok: true, v: "late" },
+  ]);
+  abort.abort();
+  expect(sent.length).toBe(2);
+
+  // The page calls again as before.
+  const c = runtime.call("Svc.Fast");
+  const mc = sent[2] as CallMsg;
+  expect(mc.id).toBe(3);
+  internal.receive({ t: "reply", id: mc.id, k: mc.k, ok: true, v: "ok" });
+  expect(await c).toBe("ok");
 });
 
 test("runtime object is frozen", () => {

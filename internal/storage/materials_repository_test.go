@@ -97,6 +97,31 @@ func TestMaterialsRepositoryRetiresOnlyUnusedEmptyLegacyLock(t *testing.T) {
 	}
 }
 
+func TestMaterialsRepositoryLockUsesSelectedRoot(t *testing.T) {
+	parent := t.TempDir()
+	repository := filepath.Join(parent, "requirements")
+	if err := os.Mkdir(repository, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(parent, legacyMaterialsLock)
+	release, err := AcquireLock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	selected, err := AcquireMaterialsRepositoryLock(repository)
+	if err != nil {
+		t.Fatalf("parent legacy lock blocked selected root: %v", err)
+	}
+	defer selected()
+	if _, err := AcquireMaterialsRepositoryLock(repository); !errors.Is(err, ErrLockBusy) {
+		t.Fatalf("lock for selected root was not shared: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("selected root access removed the parent legacy marker: %v", err)
+	}
+}
+
 func TestMaterialsIgnoreMigrationRecognizesBOMAtFirstLine(t *testing.T) {
 	bom := "\xef\xbb\xbf"
 	temporary := "# Silverwing local temporary files\r\n*\r\n"

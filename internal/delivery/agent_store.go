@@ -70,7 +70,7 @@ func validateAgentOperationRecord(record AgentOperationRecord) error {
 		return fmt.Errorf("Agent 操作记录中的需求资料计划无效")
 	}
 	request := record.Request
-	if request.FolderName == "" || request.FeatureBranch == "" || request.GroupID == "" || len(request.ServiceIDs) == 0 || request.RequirementLink == "" {
+	if request.FolderName == "" || request.FeatureBranch == "" || len(request.ServiceIDs) == 0 || request.RequirementLink == "" {
 		return fmt.Errorf("Agent 操作请求缺少必需字段")
 	}
 	for _, conflict := range record.BranchReuseConflicts {

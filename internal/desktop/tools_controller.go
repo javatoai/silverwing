@@ -45,6 +45,9 @@ func executeToolOperation(ctx context.Context, backend application.Backend, acti
 		case "tool.time":
 			return legacyOperation(port.ConvertTime(ctx, application.TimeToolRequestFromAction(action)))
 		case "tool.diff":
+			if action.Payload["mode"] == application.JSONDiffMode {
+				return legacyOperation(port.CompareJSON(ctx, application.JSONDiffRequestFromAction(action)))
+			}
 			request, err := application.TextDiffRequestFromAction(action)
 			if err != nil {
 				return application.ActionResult{}, err

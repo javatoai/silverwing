@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"iter"
+	"sync/atomic"
 )
 
 // A Selection is the rows chosen in a List or a Table that lets the user
@@ -22,7 +23,15 @@ import (
 //	app.list.Selection = &app.chosen
 type Selection[K comparable] struct {
 	keys map[K]struct{}
+	// stamp changes whenever the keys do, to a value no other change of
+	// any Selection had, so that an outline keeping its rows (OutlineState's
+	// Generation) sees Open change, even for another Selection put in its
+	// place.
+	stamp uint64
 }
+
+// selectionStamps gives the Selections' stamps.
+var selectionStamps atomic.Uint64
 
 // Has reports whether the row of key k is chosen.
 func (s *Selection[K]) Has(k K) bool {
@@ -35,17 +44,31 @@ func (s *Selection[K]) Len() int { return len(s.keys) }
 
 // Add chooses the row of key k.
 func (s *Selection[K]) Add(k K) {
+	if s.Has(k) {
+		return
+	}
 	if s.keys == nil {
 		s.keys = map[K]struct{}{}
 	}
 	s.keys[k] = struct{}{}
+	s.stamp = selectionStamps.Add(1)
 }
 
 // Remove takes the row of key k out of the choice.
-func (s *Selection[K]) Remove(k K) { delete(s.keys, k) }
+func (s *Selection[K]) Remove(k K) {
+	if s.Has(k) {
+		delete(s.keys, k)
+		s.stamp = selectionStamps.Add(1)
+	}
+}
 
 // Clear chooses no row.
-func (s *Selection[K]) Clear() { clear(s.keys) }
+func (s *Selection[K]) Clear() {
+	if len(s.keys) > 0 {
+		clear(s.keys)
+		s.stamp = selectionStamps.Add(1)
+	}
+}
 
 // All returns the keys of the rows chosen, in no order.
 func (s *Selection[K]) All() iter.Seq[K] {

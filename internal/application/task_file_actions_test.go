@@ -122,6 +122,77 @@ func TestTaskFilesActionsReadonlyIndependentOfMaterialsAndConfigChanges(t *testi
 }
 func stringPtrTaskFiles(s string) *string { return &s }
 
+func TestTaskFilesBrowseConfiguredTaskRoot(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	app, err := New(filepath.Join(base, "profile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := app.Config.Load()
+	if err != nil || config.TaskRoot != nil {
+		t.Fatalf("new profile selected a task root: %v, %v", config.TaskRoot, err)
+	}
+	if _, err := os.Stat(app.Paths.Tasks); !os.IsNotExist(err) {
+		t.Fatalf("new profile created an internal tasks directory: %v", err)
+	}
+
+	taskRoot := filepath.Join(base, "tasks")
+	selectProfileTaskRoot(t, app, taskRoot, "")
+	manifest := domain.DefaultTaskManifest()
+	manifest.FolderName, manifest.TaskDirectoryName = "Task", "task"
+	manifest.CreatedAt, manifest.UpdatedAt = "2026-11-01T10:00:00Z", "2026-11-01T10:00:00Z"
+	taskPath := filepath.Join(taskRoot, manifest.TaskDirectoryName)
+	manifest.Services = []domain.ServiceWorkspace{{
+		GroupServiceID: "service", ModuleID: "default", WorktreePath: filepath.Join(taskPath, "repo"),
+		Strategy: domain.WorkspaceStandardWorktree, DevelopmentTool: domain.DevelopmentToolVisualStudioCode,
+		Health: domain.WorkspaceReady, ModuleSource: domain.TaskModuleConfigured, TagMode: domain.TagBuildCurrentBranch,
+	}}
+	if err := app.Manifests.Save(taskPath, manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(taskPath, "repo"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for rel, body := range map[string]string{"local.txt": "beside the checkout", "repo/.hidden.txt": "inside the checkout"} {
+		if err := os.WriteFile(filepath.Join(taskPath, filepath.FromSlash(rel)), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := app.SnapshotFor(ctx, SnapshotRequest{Tasks: true})
+	if err != nil || len(snapshot.Tasks) != 1 || snapshot.Tasks[0].Path != taskPath {
+		t.Fatalf("wrong task root in snapshot: %v, %v", snapshot.Tasks, err)
+	}
+	expected := TaskFilesContext{Home: app.Paths.Home, TaskRoot: taskRoot, TaskPath: taskPath, TaskCreatedAt: manifest.CreatedAt}
+	action := Action{Kind: "task.files.list", TaskID: "task", Payload: map[string]any{"taskFilesContext": expected}}
+	result, err := app.Dispatch(ctx, action)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := result.Data.(TaskFilesDirectory)
+	if dir.Root != taskPath || len(dir.Entries) != 3 || dir.Entries[0].Path != "repo" || dir.Entries[1].Path != "local.txt" {
+		t.Fatalf("task files did not include checkout and sibling file: %+v", dir)
+	}
+	action.Kind, action.Path = "task.files.read", "repo/.hidden.txt"
+	result, err = app.Dispatch(ctx, action)
+	if err != nil || result.Text != "inside the checkout" {
+		t.Fatalf("read hidden checkout file: %q, %v", result.Text, err)
+	}
+
+	otherRoot := filepath.Join(base, "other tasks")
+	selectProfileTaskRoot(t, app, otherRoot, taskRoot)
+	if _, err := app.Dispatch(ctx, action); !errors.Is(err, errTaskFilesContext) {
+		t.Fatalf("accepted a stale read after switching roots: %v", err)
+	}
+	snapshot, err = app.SnapshotFor(ctx, SnapshotRequest{Tasks: true})
+	if err != nil || len(snapshot.Tasks) != 0 {
+		t.Fatalf("snapshot after switch kept previous tasks: %v, %v", snapshot.Tasks, err)
+	}
+	if _, err := os.Stat(filepath.Join(taskPath, "repo", ".hidden.txt")); err != nil {
+		t.Fatalf("directory switch affected old files: %v", err)
+	}
+}
+
 func TestTaskFilesGitSystemOpenRetainsOwnerAndContentBoundaries(t *testing.T) {
 	a, _, action := taskFilesActionFixture(t)
 	before := taskFilesBytes(t, a.Paths.Home)

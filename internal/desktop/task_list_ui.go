@@ -9,7 +9,6 @@ import (
 )
 
 func (s *app) taskIndex(c *ui.Context, p palette) {
-	s.observeTaskOpenTools()
 	archived := s.page == "archive"
 	state := s.taskIndexBrowsingFor(archived)
 	rows := s.taskIndexRows(archived)
@@ -29,6 +28,16 @@ func (s *app) taskIndex(c *ui.Context, p palette) {
 			})
 		} else {
 			ui.Scroll(c.Key("task-index-empty-" + s.page)).Grow(1).MinHeight(0).Padding(8).Children(func() {
+				if !archived && s.profileNeedsTaskRoot() {
+					ui.Column(c).FillWidth().Padding(12).Gap(8).Children(func() {
+						label(c, "请先选择存放研发任务的目录。", 12, p.muted).FillWidth().Wrap()
+						if ui.Button(c.Key("task-index-choose-directory"), "选择任务目录").
+							Disabled(s.busy || s.backend == nil || s.dialogOpen || s.settingsUnit.state.settingsPickerBusy).Clicked() {
+							s.pickProfileTaskRoot()
+						}
+					})
+					return
+				}
 				message := "还没有任务\n点击上方“新建任务”开始，也可从需求列表创建。"
 				switch {
 				case strings.TrimSpace(state.search) != "":
@@ -70,7 +79,7 @@ func (s *app) taskIndexToolbar(c *ui.Context, p palette, state *taskIndexBrowsin
 		ui.Row(c).FillWidth().MinWidth(0).Gap(4).AlignItems(ui.Center).Children(func() {
 			search := ui.TextInput(c.Key("task-index-search-"+s.page), &state.search).
 				Bind(&state.searchInput).Grow(1).MinWidth(0).Height(34).
-				Placeholder("搜索任务").Label("搜索任务").Tooltip("搜索任务名称、需求编号、项目组或分支").
+				Placeholder("搜索任务").Label("搜索任务").Tooltip("搜索任务名称、需求编号或分支").
 				Background(p.surface).Border(1, p.line).Radius(7)
 			search.OnChange(func() {
 				state.scroll.X, state.scroll.Y = 0, 0
@@ -100,7 +109,7 @@ func (s *app) taskIndexToolbar(c *ui.Context, p palette, state *taskIndexBrowsin
 					s.clearTaskIndexSearch(c, state)
 				}
 			}
-			if s.page == "tasks" && iconButtonDisabled(c, "task-index-create", "plus", "新建任务", p, s.busy || s.backend == nil || s.dialogOpen).
+			if s.page == "tasks" && !s.profileNeedsTaskRoot() && iconButtonDisabled(c, "task-index-create", "plus", "新建任务", p, s.busy || s.backend == nil || s.dialogOpen).
 				Width(30).Height(34).Shrink(0).FocusRing(true).Tooltip("新建任务，需求和服务都可以不选").Clicked() {
 				s.openTaskCreateForm("新建任务", "", "")
 			}

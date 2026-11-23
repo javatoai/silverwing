@@ -3,12 +3,12 @@ package desktop
 import "testing"
 
 func TestTaskTagNavigationPlacement(t *testing.T) {
-	if taskTagTab != 4 || taskTerminalTab != len(tabs)-1 || taskTerminalTab != taskServicesTab+1 || taskServicesTab != taskFilesTab+1 || taskFilesTab != taskTagTab+1 || tabs[taskTagTab] != "Tag" || tabs[taskTagTab-1] != "任务说明" || tabs[taskFilesTab] != "任务文件" {
-		t.Fatalf("Tag must follow requirement notes: %v", tabs)
+	if taskTagTab != 4 || taskProjectInstructionsTab != len(tabs)-1 || taskTerminalTab != taskServicesTab+1 || taskServicesTab != taskFilesTab+1 || taskFilesTab != taskTagTab+1 || tabs[taskTagTab] != "Tag" || tabs[taskFilesTab] != "任务文件" {
+		t.Fatalf("Tag and the following tabs must keep their CLI indices: %v", tabs)
 	}
 	for _, config := range []string{
-		`{"tagEnabled":true,"groups":[{"tagEnabled":true}]}`,
-		`{"tagEnabled":false,"groups":[{"tagEnabled":false}]}`,
+		`{"tagEnabled":true,"services":[]}`,
+		`{"tagEnabled":false,"services":[]}`,
 	} {
 		s := &app{
 			settingsUnit: settingsController{state: settingsState{configJSON: config}},

@@ -158,7 +158,7 @@ func (l *WorkspaceLifecycle) recycleTaskWithRecovery(ctx context.Context, config
 		}
 		records = append(records, record)
 	}
-	if err := l.recycleTaskDirectory(ctx, config, taskPath, manifest, before, func() error {
+	err := l.recycleTaskDirectory(ctx, config, taskPath, manifest, before, func() error {
 		current, err := l.Manifests.Load(taskPath)
 		if err != nil {
 			return err
@@ -175,14 +175,19 @@ func (l *WorkspaceLifecycle) recycleTaskWithRecovery(ctx context.Context, config
 			}
 		}
 		return nil
-	}); err != nil {
-		return nil, abort(err)
-	}
+	})
 	var warnings []string
 	for _, record := range records {
-		if err := record.finish(l.Git); err != nil {
-			warnings = append(warnings, err.Error())
+		if _, statErr := os.Lstat(record.Target); os.IsNotExist(statErr) {
+			if finishErr := record.finish(l.Git); finishErr != nil {
+				warnings = append(warnings, finishErr.Error())
+			}
+		} else if err == nil {
+			warnings = append(warnings, fmt.Sprintf("未确认工作区已回收：%s", record.Target))
 		}
+	}
+	if err != nil {
+		return warnings, abort(err)
 	}
 	return warnings, nil
 }

@@ -24,13 +24,14 @@ const (
 	ToolCodex  Tool = "codex"
 	ToolGit    Tool = "git"
 	ToolGenbu  Tool = "genbu"
+	ToolDragon Tool = "dragon"
 	ToolMeegle Tool = "meegle"
 	ToolLark   Tool = "lark"
 )
 
 func supportedTool(tool Tool) bool {
 	switch tool {
-	case ToolCodex, ToolGit, ToolMeegle, ToolGenbu, ToolLark:
+	case ToolCodex, ToolGit, ToolMeegle, ToolLark:
 		return true
 	default:
 		return false
@@ -111,7 +112,7 @@ func (r *Resolver) Resolve(ctx context.Context, tool Tool, configured string) Re
 		return cached
 	}
 	r.mu.Unlock()
-	resolution := r.resolve(ctx, tool, configured)
+	resolution := r.resolve(ctx, tool, configured, "")
 	if ctx.Err() == nil {
 		r.mu.Lock()
 		if epoch == r.cacheEpoch[key] {
@@ -127,6 +128,33 @@ func (r *Resolver) ResolveFresh(ctx context.Context, tool Tool, configured strin
 	if !supportedTool(tool) {
 		return Resolution{}
 	}
+	r.invalidateDiscovery(tool, configured)
+	return r.Resolve(ctx, tool, configured)
+}
+
+// ResolveCodexReplacement checks the existing discovery sources for a different
+// executable. An exclusion is specific to the failed probe, so its result does
+// not populate the regular discovery cache.
+func (r *Resolver) ResolveCodexReplacement(ctx context.Context, failedCommand string) Resolution {
+	r.invalidateDiscovery(ToolCodex, "")
+	failed, _, err := r.prepareCommand(ctx, ToolCodex, failedCommand)
+	if err != nil {
+		return Resolution{}
+	}
+	if absolute, err := filepath.Abs(failed); err == nil {
+		failed = absolute
+	}
+	resolution := r.resolve(ctx, ToolCodex, "", failed)
+	if resolution.Source == SourcePathFallback {
+		resolution.Command = executableOnPathExcept(resolution.Command, os.Getenv("PATH"), failed)
+	}
+	if !filepath.IsAbs(resolution.Command) {
+		return Resolution{}
+	}
+	return resolution
+}
+
+func (r *Resolver) invalidateDiscovery(tool Tool, configured string) {
 	key := resolutionCacheKey(tool, configured)
 	r.mu.Lock()
 	delete(r.cache, key)
@@ -137,37 +165,27 @@ func (r *Resolver) ResolveFresh(ctx context.Context, tool Tool, configured strin
 	r.loginPathEpoch++
 	r.loginPath, r.loginPathLoaded = "", false
 	r.mu.Unlock()
-	return r.Resolve(ctx, tool, configured)
 }
 
 func resolutionCacheKey(tool Tool, configured string) string {
 	return string(tool) + "\x00" + strings.TrimSpace(configured)
 }
 
-func (r *Resolver) resolve(ctx context.Context, tool Tool, configured string) Resolution {
+func (r *Resolver) resolve(ctx context.Context, tool Tool, configured, excluded string) Resolution {
 	if !supportedTool(tool) {
 		return Resolution{}
 	}
 	configured = strings.TrimSpace(configured)
-	if tool == ToolGenbu {
-		if isExecutableFile(configured, runtime.GOOS) && filepath.IsAbs(configured) {
-			return Resolution{Command: filepath.Clean(configured), Source: SourceConfigured}
-		}
-	} else if configured != "" {
+	if configured != "" {
 		return Resolution{Command: configured, Source: SourceConfigured}
 	}
 
 	if tool == ToolCodex {
-		if desktop := r.desktopCodex(); desktop != "" {
+		if desktop := r.desktopCodex(excluded); desktop != "" {
 			return Resolution{Command: desktop, Source: SourceDesktopApp}
 		}
 	}
-	if tool == ToolGenbu {
-		if bundled := r.bundledGenbu(); bundled != "" {
-			return Resolution{Command: bundled, Source: SourceProbed}
-		}
-	}
-	if command := r.probe(ctx, tool); command != "" {
+	if command := r.probe(ctx, tool, excluded); command != "" {
 		return Resolution{Command: command, Source: SourceProbed}
 	}
 	return Resolution{Command: fallback(tool, runtime.GOOS), Source: SourcePathFallback}
@@ -248,6 +266,10 @@ func (r *Resolver) prepareCommand(ctx context.Context, tool Tool, command string
 }
 
 func executableOnPath(command, searchPath string) string {
+	return executableOnPathExcept(command, searchPath, "")
+}
+
+func executableOnPathExcept(command, searchPath, excluded string) string {
 	for _, directory := range filepath.SplitList(searchPath) {
 		// An empty/relative PATH entry must not implicitly execute a file from
 		// an arbitrary repository or the desktop process's working directory.
@@ -255,11 +277,31 @@ func executableOnPath(command, searchPath string) string {
 			continue
 		}
 		candidate := filepath.Join(directory, command)
-		if isExecutableFile(candidate, runtime.GOOS) {
+		if runtime.GOOS == "windows" && excluded != "" {
+			path, err := exec.LookPath(candidate)
+			if err != nil {
+				continue
+			}
+			candidate = path
+		}
+		if isExecutableFile(candidate, runtime.GOOS) && !sameExecutable(candidate, excluded) {
 			return candidate
 		}
 	}
 	return ""
+}
+
+func sameExecutable(candidate, excluded string) bool {
+	if excluded == "" {
+		return false
+	}
+	candidatePath, excludedPath := filepath.Clean(candidate), filepath.Clean(excluded)
+	if candidatePath == excludedPath || runtime.GOOS == "windows" && strings.EqualFold(candidatePath, excludedPath) {
+		return true
+	}
+	candidateInfo, candidateErr := os.Stat(candidate)
+	excludedInfo, excludedErr := os.Stat(excluded)
+	return candidateErr == nil && excludedErr == nil && os.SameFile(candidateInfo, excludedInfo)
 }
 
 // SystemCommand avoids user PATH discovery for macOS's fixed system tools.
@@ -324,7 +366,7 @@ func (r *Resolver) macLoginShellPath(ctx context.Context) string {
 	}
 }
 
-func (r *Resolver) probe(ctx context.Context, tool Tool) string {
+func (r *Resolver) probe(ctx context.Context, tool Tool, excluded string) string {
 	if !supportedTool(tool) {
 		return ""
 	}
@@ -333,7 +375,7 @@ func (r *Resolver) probe(ctx context.Context, tool Tool) string {
 		if tool == ToolLark {
 			name = "lark-cli"
 		}
-		return executableOnPath(name, mergedPath("", r.macLoginShellPath(ctx), os.Getenv("PATH")))
+		return executableOnPathExcept(name, mergedPath("", r.macLoginShellPath(ctx), os.Getenv("PATH")), excluded)
 	}
 	commands := probeCommands(tool, runtime.GOOS)
 	for _, command := range commands {
@@ -353,7 +395,7 @@ func (r *Resolver) probe(ctx context.Context, tool Tool) string {
 			if !isAbsoluteProbeResult(line, runtime.GOOS) {
 				continue
 			}
-			if tool == ToolGenbu && !isExecutableFile(line, runtime.GOOS) {
+			if excluded != "" && (!isExecutableFile(line, runtime.GOOS) || sameExecutable(line, excluded)) {
 				continue
 			}
 			return line
@@ -369,8 +411,6 @@ func probeCommands(tool Tool, goos string) [][]string {
 			return [][]string{{"where.exe", "codex.exe"}, {"where.exe", "codex.cmd"}}
 		case ToolGit:
 			return [][]string{{"where.exe", "git.exe"}}
-		case ToolGenbu:
-			return [][]string{{"where.exe", "genbu.exe"}}
 		case ToolLark:
 			return [][]string{{"where.exe", "lark-cli.exe"}, {"where.exe", "lark-cli.cmd"}}
 		case ToolMeegle:
@@ -397,7 +437,7 @@ func isAbsoluteProbeResult(path, goos string) bool {
 	return strings.HasPrefix(path, "/")
 }
 
-func (r *Resolver) desktopCodex() string {
+func (r *Resolver) desktopCodex(excluded string) string {
 	if runtime.GOOS != "windows" {
 		return ""
 	}
@@ -426,7 +466,7 @@ func (r *Resolver) desktopCodex() string {
 	}
 	valid := make([]string, 0, len(candidates))
 	for _, candidate := range candidates {
-		if isExecutableFile(candidate, runtime.GOOS) {
+		if isExecutableFile(candidate, runtime.GOOS) && !sameExecutable(candidate, excluded) {
 			valid = append(valid, candidate)
 		}
 	}
@@ -442,44 +482,6 @@ func (r *Resolver) desktopCodex() string {
 		return ""
 	}
 	return valid[0]
-}
-
-func (r *Resolver) bundledGenbu() string {
-	name := "genbu"
-	if runtime.GOOS == "windows" {
-		name = "genbu.exe"
-	}
-	var directories []string
-	if executable, err := os.Executable(); err == nil {
-		directories = append(directories, filepath.Dir(executable))
-	}
-	if working, err := os.Getwd(); err == nil {
-		directories = append(directories, working)
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		directories = append(directories, filepath.Join(home, "Downloads"))
-	}
-	if runtime.GOOS == "windows" {
-		for drive := 'A'; drive <= 'Z'; drive++ {
-			root := string(drive) + `:\`
-			if info, err := os.Stat(root); err == nil && info.IsDir() {
-				directories = append(directories, filepath.Join(root, "Downloads"))
-			}
-		}
-	}
-	seen := map[string]bool{}
-	for _, directory := range directories {
-		directory = filepath.Clean(directory)
-		if directory == "." || seen[strings.ToLower(directory)] {
-			continue
-		}
-		seen[strings.ToLower(directory)] = true
-		candidate := filepath.Join(directory, name)
-		if isExecutableFile(candidate, runtime.GOOS) {
-			return candidate
-		}
-	}
-	return ""
 }
 
 func environmentValue(name string) string {
@@ -511,11 +513,6 @@ func fallback(tool Tool, goos string) string {
 		return "codex"
 	case ToolGit:
 		return "git"
-	case ToolGenbu:
-		if goos == "windows" {
-			return "genbu.exe"
-		}
-		return "genbu"
 	case ToolMeegle:
 		if goos == "windows" {
 			return "meegle.cmd"

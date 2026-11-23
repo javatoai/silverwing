@@ -122,32 +122,6 @@ func (s *app) settingsNestedSwitch(c *ui.Context, p palette, objectKey, fieldKey
 	})
 }
 
-func (s *app) settingsGroupSwitch(c *ui.Context, p palette, groupID, fieldKey, key, title, description string, fallback bool) {
-	config, err := s.readSettingsConfig()
-	if err != nil {
-		s.lastError = err.Error()
-		return
-	}
-	current := fallback
-	if groups, ok := config["groups"].([]any); ok {
-		for _, raw := range groups {
-			group, _ := raw.(map[string]any)
-			if mapString(group, "id") == groupID {
-				if value, ok := group[fieldKey].(bool); ok {
-					current = value
-				}
-				break
-			}
-		}
-	}
-	value, pending := s.settingsConfigSwitchInput(key, current)
-	settingsConfigSwitchRow(c, p, key, title, description, value, pending, func() {
-		if err := s.updateConfigGroup(groupID, func(group map[string]any) { group[fieldKey] = *value }); err != nil {
-			s.lastError = err.Error()
-		}
-	})
-}
-
 func (s *app) settingsLocalSwitch(c *ui.Context, p palette, key, title, description string, value *bool) {
 	old := *value
 	settingsSwitchRow(c, p, key, title, description, value)

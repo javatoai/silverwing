@@ -1,4 +1,4 @@
-//go:build linux && (amd64 || arm64)
+//go:build linux && !android && (amd64 || arm64)
 
 // Package linux implements the Linux backend (GTK 3 + WebKitGTK) in pure Go:
 // the libraries are loaded at run time with purego, no cgo.
@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -116,6 +117,8 @@ var (
 	gFilenameFromURI               func(uri string, hostname, gerr ptr) ptr
 	gErrorNewLiteral               func(domain uint32, code int32, msg *byte) ptr
 	gQuarkFromString               func(s *byte) uint32
+	gSetPrgname                    func(name *byte)
+	gGetPrgname                    func() ptr
 	gIdleAddFull                   func(priority int32, fn ptr, data ptr, notify ptr) uint32
 	gTimeoutAdd                    func(ms uint32, fn ptr, data ptr) uint32
 	gMainContextIteration          func(ctx ptr, mayBlock bool) bool
@@ -139,6 +142,7 @@ var (
 	gAppInfoLaunchDefaultForURI    func(uri *byte, ctx ptr, err *ptr) bool
 	gAppInfoGetDefaultForURIScheme func(scheme *byte) ptr
 	gAppInfoGetID                  func(info ptr) ptr
+	gAppInfoGetDefaultForType      func(contentType *byte, mustSupportURIs bool) ptr
 	gFileNewForPath                func(path *byte) ptr
 	gFileGetURI                    func(file ptr) ptr
 	gFileTrash                     func(file ptr, cancellable ptr, err *ptr) bool
@@ -194,6 +198,7 @@ var (
 	gdkMonitorGetModel              func(m ptr) ptr
 	gdkDisplayGetDefaultSeat        func(d ptr) ptr
 	gdkSeatGetPointer               func(s ptr) ptr
+	gdkSeatGetSlaves                func(s ptr, caps int32) ptr
 	gdkDeviceGetPosition            func(dev ptr, screen *ptr, x, y *int32)
 	gdkWindowGetDevicePosition      func(w, dev ptr, x, y *int32, mask *uint32) ptr
 	gdkWindowGetDisplay             func(w ptr) ptr
@@ -340,6 +345,7 @@ var (
 	gtkFileFilterNew                    func() ptr
 	gtkFileFilterSetName                func(f ptr, name *byte)
 	gtkFileFilterAddPattern             func(f ptr, pattern *byte)
+	gtkFileFilterAddMimeType            func(f ptr, mimeType *byte)
 	gtkMessageDialogNew                 func(parent ptr, flags, typ, buttons int32, format *byte, arg *byte) ptr
 	gtkMessageDialogFormatSecondaryText func(d ptr, format *byte, arg *byte)
 	gtkMessageDialogGetMessageArea      func(d ptr) ptr
@@ -491,7 +497,8 @@ var (
 	gtkRecentManagerHasItem                           func(manager ptr, uri *byte) bool
 	webkitJavascriptResultGetJSValue                  func(r ptr) ptr
 	webkitNavigationPolicyDecisionGetNavigationAction func(d ptr) ptr
-	webkitNavigationPolicyDecisionGetFrameName        func(d ptr) ptr
+	webkitNavigationActionGetTargetFrameInfo          func(a ptr) ptr  // 2.56+
+	webkitFrameInfoIsMainFrame                        func(f ptr) bool // 2.56+
 	webkitNavigationActionGetRequest                  func(a ptr) ptr
 	webkitNavigationActionGetNavigationType           func(a ptr) int32
 	webkitNavigationActionIsUserGesture               func(a ptr) bool
@@ -523,13 +530,13 @@ var (
 	cairoSurfaceWriteToPNGStream func(surface ptr, write ptr, closure ptr) int32
 	cairoSurfaceDestroy          func(s ptr)
 
-	appIndicatorNew              func(id, icon *byte, category int32) ptr
-	appIndicatorSetStatus        func(ind ptr, status int32)
-	appIndicatorSetMenu          func(ind, menu ptr)
-	appIndicatorSetIconFull      func(ind ptr, icon, desc *byte)
-	appIndicatorSetIconThemePath func(ind ptr, path *byte)
-	appIndicatorSetTitle         func(ind ptr, title *byte)
-	appIndicatorSetLabel         func(ind ptr, label, guide *byte)
+	appIndicatorNew            func(id, icon *byte, category int32) ptr
+	appIndicatorSetStatus      func(ind ptr, status int32)
+	appIndicatorSetMenu        func(ind, menu ptr)
+	appIndicatorSetIconFull    func(ind ptr, icon, desc *byte)
+	appIndicatorSetTitle       func(ind ptr, title *byte)
+	appIndicatorSetLabel       func(ind ptr, label, guide *byte)
+	appIndicatorSetTooltipFull func(ind ptr, icon, title, body *byte)
 )
 
 var webkitVersion string
@@ -566,6 +573,8 @@ func load() error {
 	mustBind(g, &gFilenameFromURI, "g_filename_from_uri")
 	mustBind(g, &gErrorNewLiteral, "g_error_new_literal")
 	mustBind(g, &gQuarkFromString, "g_quark_from_string")
+	mustBind(g, &gSetPrgname, "g_set_prgname")
+	mustBind(g, &gGetPrgname, "g_get_prgname")
 	mustBind(g, &gIdleAddFull, "g_idle_add_full")
 	mustBind(g, &gTimeoutAdd, "g_timeout_add")
 	mustBind(g, &gMainContextIteration, "g_main_context_iteration")
@@ -617,6 +626,7 @@ func load() error {
 	mustBind(i, &gAppInfoLaunchDefaultForURI, "g_app_info_launch_default_for_uri")
 	mustBind(i, &gAppInfoGetDefaultForURIScheme, "g_app_info_get_default_for_uri_scheme")
 	mustBind(i, &gAppInfoGetID, "g_app_info_get_id")
+	mustBind(i, &gAppInfoGetDefaultForType, "g_app_info_get_default_for_type")
 	mustBind(i, &gFileNewForPath, "g_file_new_for_path")
 	mustBind(i, &gFileGetURI, "g_file_get_uri")
 	mustBind(i, &gFileTrash, "g_file_trash")
@@ -643,6 +653,8 @@ func load() error {
 	mustBind(d, &gdkMonitorGetModel, "gdk_monitor_get_model")
 	mustBind(d, &gdkDisplayGetDefaultSeat, "gdk_display_get_default_seat")
 	mustBind(d, &gdkSeatGetPointer, "gdk_seat_get_pointer")
+	mustBind(d, &gdkSeatGetSlaves, "gdk_seat_get_slaves")
+	mustBind(d, &gdkDeviceGetSource, "gdk_device_get_source") // the preferences read it before a surface binds it
 	mustBind(d, &gdkDeviceGetPosition, "gdk_device_get_position")
 	mustBind(d, &gdkWindowGetDevicePosition, "gdk_window_get_device_position")
 	mustBind(d, &gdkWindowGetDisplay, "gdk_window_get_display")
@@ -777,6 +789,7 @@ func load() error {
 	mustBind(t, &gtkFileFilterNew, "gtk_file_filter_new")
 	mustBind(t, &gtkFileFilterSetName, "gtk_file_filter_set_name")
 	mustBind(t, &gtkFileFilterAddPattern, "gtk_file_filter_add_pattern")
+	mustBind(t, &gtkFileFilterAddMimeType, "gtk_file_filter_add_mime_type")
 	mustBind(t, &gtkMessageDialogNew, "gtk_message_dialog_new")
 	mustBind(t, &gtkMessageDialogFormatSecondaryText, "gtk_message_dialog_format_secondary_text")
 	mustBind(t, &gtkMessageDialogGetMessageArea, "gtk_message_dialog_get_message_area")
@@ -849,9 +862,9 @@ func load() error {
 		bind(libIndicator, &appIndicatorSetStatus, "app_indicator_set_status")
 		bind(libIndicator, &appIndicatorSetMenu, "app_indicator_set_menu")
 		bind(libIndicator, &appIndicatorSetIconFull, "app_indicator_set_icon_full")
-		bind(libIndicator, &appIndicatorSetIconThemePath, "app_indicator_set_icon_theme_path")
 		bind(libIndicator, &appIndicatorSetTitle, "app_indicator_set_title")
 		bind(libIndicator, &appIndicatorSetLabel, "app_indicator_set_label")
+		bind(libIndicator, &appIndicatorSetTooltipFull, "app_indicator_set_tooltip_full")
 	}
 	return nil
 }
@@ -859,6 +872,9 @@ func load() error {
 var (
 	webKitOnce sync.Once
 	errWebKit  error
+	// webKitLoaded reports, from any thread, that webKit loaded the
+	// libraries and bound their functions.
+	webKitLoaded atomic.Bool
 )
 
 // webKit loads WebKitGTK, JavaScriptCore and libsoup, the first time a
@@ -866,9 +882,18 @@ var (
 // did not load. Windows that show Content need GTK alone: an app whose
 // windows all do never loads them, which saves it some 75 libraries, 7 MB
 // and 20 ms of startup.
+//
+// Loading only opens the libraries and binds functions, which any thread
+// may do (WebViewAvailable). WebKitGTK takes the first thread that calls
+// into it for its UI thread, and aborts when another calls later: the
+// first call, persistCookies, waits for the main thread, whose users of
+// WebKit all call webKit first.
 func webKit() error {
-	webKitOnce.Do(func() { errWebKit = loadWebKit() })
-	if errWebKit == nil && theBackend != nil {
+	webKitOnce.Do(func() {
+		errWebKit = loadWebKit()
+		webKitLoaded.Store(errWebKit == nil)
+	})
+	if errWebKit == nil && theBackend != nil && theBackend.IsMainThread() {
 		cookiesOnce.Do(persistCookies)
 	}
 	return errWebKit
@@ -987,7 +1012,8 @@ func loadWebKit() error {
 	mustBind(w, &webkitPermissionRequestDeny, "webkit_permission_request_deny")
 	mustBind(w, &webkitJavascriptResultGetJSValue, "webkit_javascript_result_get_js_value")
 	mustBind(w, &webkitNavigationPolicyDecisionGetNavigationAction, "webkit_navigation_policy_decision_get_navigation_action")
-	bind(w, &webkitNavigationPolicyDecisionGetFrameName, "webkit_navigation_policy_decision_get_frame_name")
+	bind(w, &webkitNavigationActionGetTargetFrameInfo, "webkit_navigation_action_get_target_frame_info")
+	bind(w, &webkitFrameInfoIsMainFrame, "webkit_frame_info_is_main_frame")
 	mustBind(w, &webkitNavigationActionGetRequest, "webkit_navigation_action_get_request")
 	mustBind(w, &webkitNavigationActionGetNavigationType, "webkit_navigation_action_get_navigation_type")
 	mustBind(w, &webkitNavigationActionIsUserGesture, "webkit_navigation_action_is_user_gesture")
@@ -1020,4 +1046,10 @@ func loadWebKit() error {
 // connect connects a signal handler with the given user data.
 func connect(instance ptr, signal string, handler ptr, data ptr) uint64 {
 	return gSignalConnectData(instance, cs(signal), handler, data, 0, 0)
+}
+
+// connectAfter connects a signal handler that runs after the class's
+// (G_CONNECT_AFTER).
+func connectAfter(instance ptr, signal string, handler ptr, data ptr) uint64 {
+	return gSignalConnectData(instance, cs(signal), handler, data, 0, 1)
 }

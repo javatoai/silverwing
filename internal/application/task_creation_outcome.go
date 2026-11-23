@@ -11,7 +11,8 @@ import (
 // The task and its generated documents are committed before this boundary.
 // Materials/tool follow-ups have their own statuses and must not turn a
 // successful create into a retry of the entire provisioning transaction.
-func finishCreatedTask(ctx context.Context, service *workspace.TaskApplicationService, taskPath string, manifest domain.TaskManifest, toolIDs []string, onProgress func(workspace.TaskCreationProgress)) ActionResult {
+func finishCreatedTask(ctx context.Context, config domain.AppConfig, service *workspace.TaskApplicationService, taskPath string, manifest domain.TaskManifest, toolIDs []string, onProgress func(workspace.TaskCreationProgress)) ActionResult {
+	toolIDs = domain.WithoutLegacyCursorTool(toolIDs)
 	warnings := []string{}
 	if manifest.RequirementMaterials.Status == domain.MaterialsFailed {
 		message := "需求资料准备失败"
@@ -23,7 +24,7 @@ func finishCreatedTask(ctx context.Context, service *workspace.TaskApplicationSe
 	if hasSelectedWorkspaceTools(toolIDs) {
 		launching := workspace.TaskCreationProgress{Phase: workspace.TaskCreationPhaseLaunchingTools}
 		emitTaskCreationProgress(onProgress, launching, workspace.TaskCreationProgressStarted, "正在打开所选工作区工具")
-		launched, err := service.LaunchWorkspaceTools(ctx, taskPath, manifest, toolIDs)
+		launched, err := service.LaunchWorkspaceTools(ctx, config, taskPath, manifest, toolIDs)
 		// Launch returns the last known manifest even if status persistence fails.
 		if launched.TaskDirectoryName == manifest.TaskDirectoryName && launched.CreatedAt == manifest.CreatedAt {
 			manifest = launched

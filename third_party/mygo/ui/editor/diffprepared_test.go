@@ -49,22 +49,98 @@ func TestPreparedHunksRejectInvalidRangesAndContext(t *testing.T) {
 
 func TestPreparedHunksAddedFileFullContext(t *testing.T) {
 	d := &DiffState{Old: NewBuffer(""), New: NewBuffer("new\nfile\n")}
-	if !d.SetPreparedHunks([]DiffHunk{{0, 0, 0, 3}}) {
+	if !d.SetPreparedHunks([]DiffHunk{{0, 0, 0, 2}}) {
 		t.Fatal("added file rejected")
 	}
-	if add, remove := d.Stats(); add != 3 || remove != 0 {
+	if add, remove := d.Stats(); add != 2 || remove != 0 {
 		t.Fatalf("stats %d/%d", add, remove)
+	}
+	if got := d.Hunks(); !reflect.DeepEqual(got, []DiffHunk{{0, 0, 0, 2}}) {
+		t.Fatalf("prepared hunk includes the synthetic line after the final newline: %v", got)
 	}
 	if d.New.String() != "new\nfile\n" {
 		t.Fatal("new source lost")
 	}
 }
 
+func TestPreparedHunksUseGitRangesForFinalNewlineChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name, old, new string
+	}{
+		{"added final newline", "a\nb", "a\nb\n"},
+		{"removed final newline", "a\nb\n", "a\nb"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &DiffState{Old: NewBuffer(tc.old), New: NewBuffer(tc.new)}
+			if !d.SetPreparedHunks([]DiffHunk{{1, 2, 1, 2}}) {
+				t.Fatal("rejected the Git hunk for the line whose final newline changed")
+			}
+			if got := d.Hunks(); !reflect.DeepEqual(got, []DiffHunk{{1, 2, 1, 2}}) {
+				t.Fatalf("prepared final-line hunk changed: %v", got)
+			}
+		})
+	}
+}
+
+func TestPreparedHunksRejectSyntheticTrailingEmptyLine(t *testing.T) {
+	for _, tc := range []struct {
+		name, old, new string
+		hunk           DiffHunk
+	}{
+		{"added final newline", "a\nb", "a\nb\n", DiffHunk{2, 2, 2, 3}},
+		{"removed final newline", "a\nb\n", "a\nb", DiffHunk{2, 3, 2, 2}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &DiffState{Old: NewBuffer(tc.old), New: NewBuffer(tc.new)}
+			if d.SetPreparedHunks([]DiffHunk{tc.hunk}) {
+				t.Fatal("accepted a hunk outside the read-only line bounds")
+			}
+			if got := d.Hunks(); !reflect.DeepEqual(got, []DiffHunk{{1, 2, 1, 2}}) {
+				t.Fatalf("native EOL comparison did not retain the final line change: %v", got)
+			}
+		})
+	}
+}
+
+func TestPreparedHunksRejectUnequalTerminatorsInContext(t *testing.T) {
+	d := &DiffState{Old: NewBuffer("a\nb"), New: NewBuffer("a\nb\n")}
+	if d.SetPreparedHunks(nil) {
+		t.Fatal("accepted unchanged context whose final line terminators differ")
+	}
+	if got := d.Hunks(); !reflect.DeepEqual(got, []DiffHunk{{1, 2, 1, 2}}) {
+		t.Fatalf("native EOL comparison did not find the final line change: %v", got)
+	}
+}
+
+func TestPreparedHunksDropCompletedComparisonJob(t *testing.T) {
+	d := &DiffState{Old: NewBuffer("before\nold\nafter\n"), New: NewBuffer("before\nnew\nafter\n")}
+	d.model.set(d.Old, d.New, !d.Editable)
+	oldText, oldVer := d.Old.snapshot()
+	newText, newVer := d.New.snapshot()
+	job := &diffJob{oldText: oldText, newText: newText, oldVer: oldVer, newVer: newVer}
+	job.done.Store(true)
+	d.model.job = job
+
+	if !d.SetPreparedHunks([]DiffHunk{{1, 2, 1, 2}}) {
+		t.Fatal("valid prepared hunks rejected")
+	}
+	if d.model.job != nil {
+		t.Fatal("prepared hunks left the previous comparison job attached")
+	}
+	if got := d.Hunks(); !reflect.DeepEqual(got, []DiffHunk{{1, 2, 1, 2}}) {
+		t.Fatalf("completed comparison replaced the prepared hunks: %v", got)
+	}
+}
+
 func TestPreparedHunksRevertAcceptEmptyBufferOneStep(t *testing.T) {
-	for _, source := range []string{"first\nlast", "first\nlast\n"} {
-		t.Run(source, func(t *testing.T) {
+	for _, tc := range []struct {
+		source string
+		lines  int
+	}{{"first\nlast", 2}, {"first\nlast\n", 2}} {
+		t.Run(tc.source, func(t *testing.T) {
+			source := tc.source
 			removed := &DiffState{Old: NewBuffer(source), New: NewBuffer("")}
-			if !removed.SetPreparedHunks([]DiffHunk{{0, removed.Old.LineCount(), 0, 0}}) {
+			if !removed.SetPreparedHunks([]DiffHunk{{0, tc.lines, 0, 0}}) {
 				t.Fatal("deleted file rejected")
 			}
 			removed.Revert(0)
@@ -75,7 +151,7 @@ func TestPreparedHunksRevertAcceptEmptyBufferOneStep(t *testing.T) {
 				t.Fatal("revert was not one undo step")
 			}
 			added := &DiffState{Old: NewBuffer(""), New: NewBuffer(source)}
-			if !added.SetPreparedHunks([]DiffHunk{{0, 0, 0, added.New.LineCount()}}) {
+			if !added.SetPreparedHunks([]DiffHunk{{0, 0, 0, tc.lines}}) {
 				t.Fatal("added file rejected")
 			}
 			added.Accept(0)

@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -44,6 +46,40 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	case "exit":
 		os.Exit(3)
+	case "relaunch":
+		// Like an app whose App.Relaunch passed arguments (devRelaunch in
+		// package mygo): it writes them, each ended with NUL, and exits.
+		var b []byte
+		for _, a := range []string{"--reason", "a b", ""} {
+			b = append(append(b, a...), 0)
+		}
+		if os.WriteFile(os.Getenv("MYGO_DEV_RELAUNCH"), b, 0o600) != nil {
+			os.Exit(2)
+		}
+		os.Exit(devRelaunchCode)
+	case "spawn-output-child":
+		child := fakeChild(os.Args[0], "hold-output")
+		switch os.Getenv("MYGO_FAKE_OUTPUT") {
+		case "stdout":
+			child.Stdout = os.Stdout
+		case "stderr":
+			child.Stderr = os.Stderr
+		case "both":
+			child.Stdout, child.Stderr = os.Stdout, os.Stderr
+		}
+		if err := child.Start(); err != nil {
+			os.Exit(2)
+		}
+		os.Exit(0)
+	case "hold-output":
+		conn, err := net.Dial("tcp", os.Getenv("MYGO_FAKE_OUTPUT_ADDRESS"))
+		if err != nil {
+			os.Exit(2)
+		}
+		// Stay alive, holding inherited output open, until the test ends.
+		_, _ = io.Copy(io.Discard, conn)
+		conn.Close()
+		os.Exit(0)
 
 	case "hang":
 		signal.Ignore(syscall.SIGTERM)
@@ -119,6 +155,77 @@ func TestDevLaunch(t *testing.T) {
 	p.stop()
 	if p.err == nil {
 		t.Error("a build killed exited cleanly")
+	}
+}
+
+// TestDevRelaunchArgs: a build that mygo.App.Relaunch asks to start again
+// with arguments is started with them, once.
+func TestDevRelaunchArgs(t *testing.T) {
+	s := &devSession{root: t.TempDir()}
+	t.Setenv("MYGO_FAKE_APP", "relaunch")
+	p, err := s.launch(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	wait.For(t, "the build to exit", p.done)
+	var exit *exec.ExitError
+	if !errors.As(p.err, &exit) || exit.ExitCode() != devRelaunchCode {
+		t.Fatalf("exit: %v", p.err)
+	}
+	args := s.takeRelaunchArgs()
+	if want := []string{"--reason", "a b", ""}; !slices.Equal(args, want) {
+		t.Errorf("relaunch arguments %q, want %q", args, want)
+	}
+	if again := s.takeRelaunchArgs(); again != nil {
+		t.Errorf("taken twice: %q", again)
+	}
+	t.Setenv("MYGO_FAKE_APP", "exit")
+	if p, err = s.launch(os.Args[0], args...); err != nil {
+		t.Fatal(err)
+	}
+	wait.For(t, "the build to exit", p.done)
+	if !slices.Equal(p.cmd.Args[1:], args) {
+		t.Errorf("started with %q, want %q", p.cmd.Args[1:], args)
+	}
+}
+
+// A child can outlive the app and keep either or both output pipes open.
+// Waiting for the app must still finish without waiting for that child.
+func TestDevLaunchInheritedOutput(t *testing.T) {
+	for _, output := range []string{"none", "stdout", "stderr", "both"} {
+		t.Run(output, func(t *testing.T) {
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ln.Close()
+			t.Setenv("MYGO_FAKE_APP", "spawn-output-child")
+			t.Setenv("MYGO_FAKE_OUTPUT", output)
+			t.Setenv("MYGO_FAKE_OUTPUT_ADDRESS", ln.Addr().String())
+			type accepted struct {
+				conn net.Conn
+				err  error
+			}
+			connected := make(chan accepted, 1)
+			go func() {
+				conn, err := ln.Accept()
+				connected <- accepted{conn, err}
+			}()
+			s := &devSession{root: t.TempDir()}
+			p, err := s.launch(os.Args[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			child := wait.For(t, "the child to connect", connected)
+			if child.err != nil {
+				t.Fatal(child.err)
+			}
+			defer child.conn.Close()
+			wait.For(t, "the app's exit to be reported while its child holds output open", p.done)
+			if p.err != nil {
+				t.Fatalf("app exit: %v", p.err)
+			}
+		})
 	}
 }
 
@@ -432,5 +539,57 @@ func TestDevIcon(t *testing.T) {
 	}
 	if d := devConfig(c); d.Icon != "art/logo-dev.png" {
 		t.Errorf("dev icon %q, want art/logo-dev.png", d.Icon)
+	}
+}
+
+func TestDevDesktopEntry(t *testing.T) {
+	data := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", data)
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{"icon.png": string(defaultIcon()), "icon-dev.png": string(defaultIcon())})
+	c := &Config{root: dir, Name: "Desk Test", Identifier: "com.example.desk", Icon: "icon.png", URLSchemes: []string{"desk"}}
+	c.applyDefaults()
+	dc := devConfig(c)
+	exe := filepath.Join(dir, "my build", "desk-test-dev")
+	s := &devSession{root: dir}
+	if err := s.installDesktopEntry(dc, exe); err != nil {
+		t.Fatal(err)
+	}
+	icon := exe + ".png"
+	entry := filepath.Join(data, "applications", "desk-test-dev.desktop")
+	b, err := os.ReadFile(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Name=Desk Test Dev\n", "Exec=\"" + strings.ReplaceAll(exe, `\`, `\\\\`) + "\"\n", "Icon=" + icon + "\n", "StartupWMClass=desk-test-dev\n", "NoDisplay=true\n"} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("the entry has no %q:\n%s", want, b)
+		}
+	}
+	if strings.Contains(string(b), "MimeType=") {
+		t.Errorf("the entry claims the app's URLs:\n%s", b)
+	}
+	if _, err := os.Stat(icon); err != nil {
+		t.Fatal(err)
+	}
+
+	old := time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, f := range []string{icon, entry} {
+		if err := os.Chtimes(f, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.installDesktopEntry(dc, exe); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{icon, entry} {
+		if st, err := os.Stat(f); err != nil || !st.ModTime().Equal(old) {
+			t.Errorf("%s was written again", f)
+		}
+	}
+
+	s.removeDesktopEntry()
+	if _, err := os.Stat(entry); !os.IsNotExist(err) {
+		t.Errorf("%s is left: %v", entry, err)
 	}
 }

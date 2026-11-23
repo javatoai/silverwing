@@ -186,6 +186,7 @@ try {
     }
     else {
         $commonLdflags = "-s -w -X silverwing-go/internal/buildinfo.Version=$version -X silverwing-go/internal/buildinfo.Commit=$commit -X silverwing-go/internal/buildinfo.BuildTime=$utc"
+        $goBuildTags = 'mygo_noinspector,mygo_nowebview'
 		if ($env:MYGO_UPDATER_PUBLIC_KEY) {
 			if ([Convert]::FromBase64String($env:MYGO_UPDATER_PUBLIC_KEY).Length -ne 32) { throw 'Invalid updater public key.' }
 			$commonLdflags += " -X silverwing-go/internal/buildinfo.UpdatePublicKey=$env:MYGO_UPDATER_PUBLIC_KEY"
@@ -204,9 +205,10 @@ try {
         New-SilverwingWindowsIconResource -OutputPath $iconObject `
             -IconPath (Join-Path $repoRoot 'internal/desktop/assets/app-icon.png')
         $iconObjectCreated = $true
-        Invoke-Go @('build', '-trimpath', '-tags', 'mygo_noinspector', '-ldflags', "$commonLdflags -H=windowsgui", '-o', (Join-Path $stage $guiExecutable), './cmd/silverwing')
-        Invoke-Go @('build', '-trimpath', '-tags', 'mygo_noinspector', '-ldflags', $commonLdflags, '-o', (Join-Path $stage 'sw.exe'), './cmd/sw')
-		Invoke-Go @('build', '-trimpath', '-tags', 'mygo_noinspector', '-ldflags', "$commonLdflags -H=windowsgui", '-o', (Join-Path $resourceRoot "$($productProfile.ExecutableName)-updater.exe"), './cmd/silverwing-updater')
+        Invoke-Go @('build', '-trimpath', '-tags', $goBuildTags, '-ldflags', "$commonLdflags -H=windowsgui", '-o', (Join-Path $stage $guiExecutable), './cmd/silverwing')
+        Invoke-Go @('build', '-trimpath', '-tags', $goBuildTags, '-ldflags', $commonLdflags, '-o', (Join-Path $stage 'sw.exe'), './cmd/sw')
+        Invoke-Go @('build', '-trimpath', '-tags', $goBuildTags, '-ldflags', "$commonLdflags -H=windowsgui", '-o', (Join-Path $resourceRoot "$($productProfile.ExecutableName)-updater.exe"), './cmd/silverwing-updater')
+        Invoke-Go @('run', './scripts/licenses', '-out', (Join-Path $noticeRoot 'go'), '-tags', $goBuildTags, './cmd/silverwing', './cmd/sw', './cmd/silverwing-updater')
     }
     finally {
         $env:GOOS, $env:GOARCH, $env:CGO_ENABLED = $oldGOOS, $oldGOARCH, $oldCGO
@@ -261,11 +263,10 @@ try {
     Copy-Item -LiteralPath (Join-Path $pdfiumExtract 'licenses') -Destination (Join-Path $pdfiumNotices 'licenses') -Recurse
     Set-Content -LiteralPath (Join-Path $pdfiumNotices 'SOURCE.txt') -Value "PDFium 157.0.8086.0 (chromium/8086)`nhttps://github.com/bblanchon/pdfium-binaries/releases/tag/chromium%2F8086`nArchive: pdfium-win-x64.tgz`nArchive SHA-256: 1fd8af952832dbb0eb16d9249f68fe09e5f5ebf7c3dd9f6066ea2720cc28487d`nDLL SHA-256: 1f2aee4286b8cf0413ab4562b7121aa454f9cfd9afd6ca8609bcef80927b3f80`nThe distribution LICENSE and all dependency license files are reproduced below." -Encoding utf8
 
-    Invoke-Go @('run', './scripts/licenses', '-out', (Join-Path $noticeRoot 'go'), '-tags', 'mygo_noinspector', './cmd/silverwing', './cmd/sw')
     $notice = @'
 Silverwing native package third-party notices
 
-This file includes the complete original license and notice contents for the Go modules linked into the Silverwing GUI, mmdr v0.3.1, PDFium 157.0.8086.0 and its dependencies, and the app-local Microsoft runtime.
+This file includes the complete original license and notice contents for the Go modules used by the Silverwing GUI, CLI and updater, as well as mmdr v0.3.1, PDFium 157.0.8086.0 and its dependencies, and the app-local Microsoft runtime.
 Each section identifies its original file; original formats, including the Microsoft RTF license source, are retained.
 The app bundle contains no WebView runtime or JVM. Windows system graphics/runtime components are supplied by Windows.
 '@

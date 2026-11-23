@@ -164,7 +164,7 @@ func newServiceCommandFormTestApp(commands []workspaceCommandDraft, bootstrap []
 		rawCommands = append(rawCommands, command.raw)
 	}
 	module := serviceModuleDraft{raw: map[string]any{"id": "default", "name": "default", "strategy": "STANDARD_WORKTREE", "tagMode": "MERGE_TO_TARGET_BRANCH", "customCommands": rawCommands}, id: "default", name: "default", strategy: "STANDARD_WORKTREE", tagMode: "MERGE_TO_TARGET_BRANCH", commands: commands}
-	state := &serviceEditorState{session: "command-values", groupID: "group", serviceID: "service", modules: []serviceModuleDraft{module}, commands: bootstrap, commandsMode: "form", copiesMode: "form", initialText: map[string]string{}, initialBools: map[string]bool{}, service: map[string]any{"id": "service", "repositoryId": "repo", "displayName": "Service", "masterBranch": "origin/main", "testTagBaselineRef": "origin/release/test", "modules": []any{module.raw}}}
+	state := &serviceEditorState{session: "command-values", serviceID: "service", modules: []serviceModuleDraft{module}, commands: bootstrap, commandsMode: "form", copiesMode: "form", initialText: map[string]string{}, initialBools: map[string]bool{}, service: map[string]any{"id": "service", "repositoryId": "repo", "displayName": "Service", "masterBranch": "origin/main", "testTagBaselineRef": "origin/release/test", "modules": []any{module.raw}}}
 	state.initialModules, state.initialCopies, state.initialCommands = moduleIDs(state.modules), copyIDs(state.copies), bootstrapCommandIDs(state.commands)
 	return &app{inputs: map[string]*string{}, workspaceUnit: workspaceController{state: workspaceState{serviceEditor: state}}}
 }

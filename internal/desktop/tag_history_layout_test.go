@@ -21,7 +21,10 @@ import (
 func tagLayoutFixture(t *testing.T) *app {
 	t.Helper()
 	root := t.TempDir()
-	config, err := json.Marshal(map[string]string{"taskRoot": filepath.Join(root, "tasks"), "materialsRoot": filepath.Join(root, "materials")})
+	config, err := json.Marshal(map[string]any{
+		"taskRoot":     filepath.Join(root, "tasks"),
+		"optionalCLIs": map[string]bool{"genbu": true, "lark": true},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,6 +35,7 @@ func tagLayoutFixture(t *testing.T) *app {
 		inputs:       map[string]*string{},
 	}
 	s.snapshot.Home = filepath.Join(root, "home")
+	seedPlatformConnectionsForDesktopTest(s, true, false)
 	s.snapshot.TagHistory = []application.TagRecord{
 		{ID: "running", TaskID: "task-a", FolderName: "示例扩容适配", ServiceName: "transit-notification-service", Tag: "1.6.28.beta-4", State: "SUCCESS", CreatedAt: "2026-10-15 13:48:03", Updated: "2026-10-15 13:48:21", SourceBranch: "feature/example.user_1000000008_tns_scaleout", TargetBranch: "release/test", Detail: "transit-notification-service: 1.6.28.beta-4", GenbuStatus: domain.GenbuTagProbeStatus{Build: domain.GenbuBuilding, UAT: domain.GenbuInitial, CheckedAt: &checked}},
 		{ID: "success", TaskID: "task-a", BatchID: "batch", FolderName: "示例扩容适配", ServiceName: "ios-transit-service", Tag: "3.0.35.beta-8", State: "SUCCESS", CreatedAt: "2026-10-14 16:46:19", Updated: "2026-10-15 13:48:23", SourceBranch: "feature/" + strings.Repeat("long-branch-name/", 12), TargetBranch: "release/" + strings.Repeat("target-branch/", 8), GenbuStatus: domain.GenbuTagProbeStatus{Build: domain.GenbuSuccess, UAT: domain.GenbuSuccess, CheckedAt: &checked, BuiltCompletedAt: &completed, ReleasedCompletedAt: &completed}},

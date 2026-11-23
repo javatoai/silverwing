@@ -128,10 +128,7 @@ func (s *app) renderWorkspaceReviewPage(c *ui.Context, p palette) {
 				s.backWorkspaceReview(state)
 			}
 			ui.Box(c).Width(1).Height(22).Background(p.line)
-			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-				label(c, title, 14, p.text).FontWeight(600).SingleLine().Tooltip(title)
-				label(c, branch, 11, p.muted).SingleLine().Tooltip(branch)
-			})
+			workspaceReviewHeading(c, p, title, branch, branch)
 			ui.Row(c.Key(key + "-tools")).Shrink(0).MinWidth(0).Gap(6).AlignItems(ui.Center).Role(ui.RoleToolbar).Label("差异比较工具栏").Children(func() {
 				s.renderWorkspaceReviewComparisonControls(c, p, state, key, width)
 				if iconButtonRunning(c, key+"-refresh", "refresh", "刷新差异", p, state.FilesLoading || state.HistoryLoading || state.PreviewLoading, state.FilesLoading || state.HistoryLoading || state.PreviewLoading).Clicked() {
@@ -153,16 +150,7 @@ func (s *app) renderWorkspaceReviewPage(c *ui.Context, p palette) {
 						}
 					}
 					menu.Separator()
-					fileViewLabel, fileViewKey := "按相对路径平铺", "file-view-flat"
-					if state.FileView == "flat" {
-						fileViewLabel, fileViewKey = "按目录树排列", "file-view-tree"
-					}
-					if menu.Item(fileViewKey, fileViewLabel).Icon("folder").Chosen() {
-						if state.FileView == "flat" {
-							state.FileView = "tree"
-						} else {
-							state.FileView = "flat"
-						}
+					if workspaceReviewFileViewMenuItem(menu, state) {
 						s.saveWorkspaceReviewSelection(state)
 					}
 					menu.Separator()
@@ -188,38 +176,55 @@ func (s *app) renderWorkspaceReviewPage(c *ui.Context, p palette) {
 			s.renderWorkspaceHistoryPageError(c, p, state, key)
 		}
 
-		ui.Row(c).Grow(1).MinWidth(0).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
-			leftWidth := state.LeftWidth
-			if leftWidth <= 0 {
-				leftWidth = 260
-			}
-			if state.LeftCollapsed {
-				leftWidth = 38
-			} else {
-				leftWidth = min(max(float32(185), leftWidth), max(float32(185), width-440))
-				state.LeftWidth = leftWidth
-			}
-			ui.Column(c).Width(leftWidth).Shrink(0).MinWidth(0).MinHeight(0).Background(p.side).Border(1, p.line).Radius(12).Clip().Children(func() {
-				s.renderWorkspaceReviewFileList(c, p, state, key)
-			})
-			handle := ui.Box(c.Key(key + "-resize")).Width(8).FillHeight().Cursor(ui.CursorResizeEW).Focusable().Role(ui.RoleSplitter).Label("拖动调整文件列表宽度").Tooltip("拖动调整文件列表宽度")
-			dx, _, held := handle.Dragged()
-			if !state.LeftCollapsed {
-				if held {
-					state.LeftWidth = min(max(float32(185), state.LeftWidth+dx), max(float32(185), width-440))
-					state.LeftDragging = true
-				} else if state.LeftDragging {
-					state.LeftDragging = false
-				}
-			}
-			divider := p.line
-			if held || handle.Hovered() {
-				divider = p.blue
-			}
-			handle.Center().Children(func() { ui.Box(c).Width(2).FillHeight().Margin(14, 0).Background(divider) })
-			ui.Column(c).Grow(1).MinWidth(0).MinHeight(0).Background(p.surface).Border(1, p.line).Radius(12).Clip().Padding(8).Gap(7).Children(func() {
-				s.renderWorkspaceReviewPreview(c, p, state, key)
-			})
+		s.renderWorkspaceReviewFiles(c, p, state, key, width-16)
+	})
+}
+
+func workspaceReviewHeading(c *ui.Context, p palette, title, subtitle, subtitleTooltip string) {
+	ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+		label(c, title, 14, p.text).FontWeight(600).SingleLine().Tooltip(title)
+		label(c, subtitle, 11, p.muted).SingleLine().Tooltip(subtitleTooltip)
+	})
+}
+
+func workspaceReviewFileViewMenuItem(menu *overflowMenuBuilder, state *workspaceHistoryState) bool {
+	view, key, title := "flat", "file-view-flat", "按相对路径平铺"
+	if state.FileView == "flat" {
+		view, key, title = "tree", "file-view-tree", "按目录树排列"
+	}
+	if !menu.Item(key, title).Icon("folder").Chosen() {
+		return false
+	}
+	state.FileView = view
+	return true
+}
+
+func (s *app) renderWorkspaceReviewFiles(c *ui.Context, p palette, state *workspaceHistoryState, key string, width float32) {
+	ui.Row(c.Key(key + "-file-review")).Grow(1).FillWidth().MinWidth(0).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
+		maxLeftWidth := max(float32(185), width-424)
+		leftWidth := state.LeftWidth
+		if leftWidth <= 0 {
+			leftWidth = 260
+		}
+		leftWidth = min(max(float32(185), leftWidth), maxLeftWidth)
+		if state.LeftCollapsed {
+			leftWidth = 38
+		}
+		ui.Column(c).Width(leftWidth).Shrink(0).MinWidth(0).MinHeight(0).Background(p.side).Border(1, p.line).Radius(12).Clip().Children(func() {
+			s.renderWorkspaceReviewFileList(c, p, state, key)
+		})
+		handle := ui.Box(c.Key(key + "-resize")).Width(8).FillHeight().Cursor(ui.CursorResizeEW).Focusable().Role(ui.RoleSplitter).Label("拖动调整文件列表宽度").Tooltip("拖动调整文件列表宽度")
+		dx, _, held := handle.Dragged()
+		if !state.LeftCollapsed && held {
+			state.LeftWidth = min(max(float32(185), leftWidth+dx), maxLeftWidth)
+		}
+		divider := p.line
+		if held || handle.Hovered() {
+			divider = p.blue
+		}
+		handle.Center().Children(func() { ui.Box(c).Width(2).FillHeight().Margin(14, 0).Background(divider) })
+		ui.Column(c).Grow(1).MinWidth(0).MinHeight(0).Background(p.surface).Border(1, p.line).Radius(12).Clip().Padding(8).Gap(7).Children(func() {
+			s.renderWorkspaceReviewPreview(c, p, state, key)
 		})
 	})
 }
@@ -318,8 +323,8 @@ func workspaceReviewModeButton(c *ui.Context, key, text string, selected bool, p
 
 const workspaceReviewCommitRowHeight float32 = 60
 
-func workspaceReviewCommitPickerHeight(windowHeight float32, count int, summaries, hasError bool) float32 {
-	// Header, Done, two dividers, gaps, padding and borders take 120 DIP.
+func workspaceReviewCommitPickerHeight(windowHeight float32, count int, hasError bool) float32 {
+	// Header, footer, two dividers, gaps, padding and borders take 120 DIP.
 	// Reserve the actual collapsed row minimum instead of List's initial
 	// estimate, and cap the body at six rows before it becomes scrollable.
 	body := float32(min(max(count, 0), 6))*(workspaceReviewCommitRowHeight+3) + 3
@@ -327,9 +332,6 @@ func workspaceReviewCommitPickerHeight(windowHeight float32, count int, summarie
 		body = 100
 	}
 	chrome := float32(120)
-	if summaries {
-		chrome += 40 // progressive-loading footer and its gap
-	}
 	if hasError {
 		chrome += workspaceHistoryPageErrorHeight + 8 // bounded diagnostic and its gap
 	}
@@ -371,7 +373,7 @@ func (s *app) renderWorkspaceReviewCommitPicker(c *ui.Context, p palette, state 
 	}
 	maxWidth := max(float32(1), width-20)
 	panelWidth := min(float32(560), maxWidth)
-	panelHeight := workspaceReviewCommitPickerHeight(height, len(state.Commits), state.HistorySummaries, state.HistoryPageError != "")
+	panelHeight := workspaceReviewCommitPickerHeight(height, len(state.Commits), state.HistoryPageError != "")
 	ui.PopoverBase(c, trigger, &state.CommitPickerOpen, func(panel ui.Element) {
 		// The trigger is 32 DIP tall. Equal vertical anchors plus that height
 		// preserve below/above placement and let Popover clamp into a short
@@ -410,10 +412,13 @@ func (s *app) renderWorkspaceReviewCommitPicker(c *ui.Context, p palette, state 
 						s.renderWorkspaceReviewCommitOption(row.Context, p, state, key, state.Commits[row.Index])
 					})
 				}
-				s.renderWorkspaceHistoryMore(c, p, state, key+"-commit-picker")
 				ui.Divider(c)
 				ui.Row(c).FillWidth().Height(34).Shrink(0).Gap(7).AlignItems(ui.Center).Children(func() {
-					ui.Spacer(c)
+					if state.HistorySummaries {
+						s.renderWorkspaceHistoryPagingControls(c, p, state, key+"-commit-picker")
+					} else {
+						ui.Spacer(c)
+					}
 					done := ui.ButtonBase(c.Key(key+"-commit-picker-done")).Height(30).Padding(0, 13).Radius(8).Label("完成").FocusRing(true)
 					if done.Hovered() {
 						done.Background(p.soft)

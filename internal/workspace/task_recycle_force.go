@@ -116,11 +116,6 @@ func (s *TaskApplicationService) inspectForceDeletion(ctx context.Context, confi
 		preview.Reason = "任务目录不安全或无法确认身份"
 		return preview, nil, nil, nil
 	}
-	group, err := config.Group(manifest.GroupID)
-	if err != nil {
-		preview.Reason = "任务项目组配置不存在，无法验证工作区来源"
-		return preview, nil, nil, nil
-	}
 
 	proofs := make([]forcedWorkspaceProof, 0, len(manifest.Services))
 	knownRepositoryRoots := make(map[string]string)
@@ -216,7 +211,7 @@ func (s *TaskApplicationService) inspectForceDeletion(ctx context.Context, confi
 				proof.forced, forced = true, true
 			}
 			if proof.cloneOwner == cloneRecycleMissing {
-				service, serviceErr := config.GroupService(manifest.GroupID, ws.GroupServiceID)
+				service, serviceErr := config.Service(ws.GroupServiceID)
 				if !configured || serviceErr != nil || service.RepositoryID != ws.RepositoryID ||
 					!slices.ContainsFunc(service.Modules, func(module domain.ServiceModuleConfig) bool { return module.ID == ws.ModuleID }) ||
 					strings.TrimSpace(stringValue(repository.OriginURL)) != strings.TrimSpace(stringValue(ws.OriginURL)) {
@@ -236,7 +231,7 @@ func (s *TaskApplicationService) inspectForceDeletion(ctx context.Context, confi
 			rootKey := strings.ToLower(mustAbs(proof.repositoryRoot))
 			knownRepositoryRoots[rootKey] = mustAbs(proof.repositoryRoot)
 		}
-		if proof.commonDirectory != "" {
+		if proof.commonDirectory != "" && ws.Strategy == domain.WorkspaceStandardWorktree {
 			lockKey := strings.ToLower(mustAbs(proof.commonDirectory))
 			knownLockRoots[lockKey] = mustAbs(proof.commonDirectory)
 		}
@@ -311,7 +306,7 @@ func (s *TaskApplicationService) inspectForceDeletion(ctx context.Context, confi
 	// Discover every configured or manifest-recorded repository represented by
 	// the task's group before checking for unrecorded linked worktrees.
 	groupRepositoryIDs := make(map[string]bool)
-	for _, service := range group.Services {
+	for _, service := range config.ServiceCatalog() {
 		if groupRepositoryIDs[service.RepositoryID] {
 			continue
 		}
@@ -391,7 +386,7 @@ func (s *TaskApplicationService) inspectForceDeletion(ctx context.Context, confi
 		preview.Reason = err.Error()
 		return preview, nil, nil, nil
 	}
-	if err := s.Lifecycle.walkUnrecordedGitRoots(taskPath, recorded); err != nil {
+	if err := s.Lifecycle.walkUnrecordedGitRoots(taskPath, recorded); err != nil && !os.IsNotExist(err) {
 		preview.Reason = err.Error()
 		return preview, nil, nil, nil
 	}
@@ -611,7 +606,7 @@ func validateForceDeleteApproval(preview TaskForceDeletePreview, guard string) e
 func (s *TaskApplicationService) recycleVerifiedTask(ctx context.Context, config domain.AppConfig, taskPath string, manifest domain.TaskManifest, roots []string, guard string, before func() error) ([]string, error) {
 	l := s.Lifecycle
 	var warnings []string
-	err := l.withRepositoryLocks(roots, 0, func() error {
+	err := l.withWorkspaceLocks(roots, physicalWorkspaces(manifest), func() error {
 		current, proofs, currentRoots, err := s.inspectForceDeletion(ctx, config, taskPath, manifest)
 		if err != nil {
 			return err

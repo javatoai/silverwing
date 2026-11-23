@@ -7,6 +7,7 @@ import (
 	"sort"
 	"sync"
 
+	"silverwing-go/internal/commandruntime"
 	"silverwing-go/internal/domain"
 )
 
@@ -42,10 +43,10 @@ func (s *Service) requirementNamingCoordinator() *requirementNamingCoordinator {
 }
 
 func (s *Service) requirementNamingContext(config domain.AppConfig, account string) string {
+	proxyEnv, _ := commandruntime.ProxyEnvironment(config, domain.ProxyTargetCodex)
 	encoded, _ := json.Marshal([]any{s.paths.Home, config.MeegleExecutablePath, config.MeegleProjects,
 		config.CodexExecutablePath, config.AIRequirementNamingModel, config.AIRequirementNamingEnabled,
-		config.CommandProxyURL, config.CommandProxyTargets, config.CommandProxyNoProxy,
-		config.CommandProxyUsername, config.CommandProxyPassword, account})
+		proxyEnv, account})
 	return materialsHash(string(encoded))
 }
 
@@ -66,7 +67,7 @@ func (c *requirementNamingCoordinator) suggest(ctx context.Context, key requirem
 			return domain.RequirementAiNamingSuggestion{}, errors.New("需求命名服务正在关闭")
 		}
 		request := c.requests[key]
-		if request == nil && !force {
+		if !force {
 			if value := cached(); value != nil {
 				c.mu.Unlock()
 				return *value, nil
@@ -149,11 +150,21 @@ func (s *Service) generateRequirementNaming(ctx context.Context, config domain.A
 		if err := s.verifyRequirementIdentity(ctx, config, account); err != nil {
 			return domain.RequirementAiNamingSuggestion{}, err
 		}
+		// Recheck cached naming when the account had to be confirmed first.
+		if !force {
+			if cached := s.readRequirementAINamingCache(identity, model, account); cached != nil {
+				return *cached, nil
+			}
+		}
 	}
 	// Naming and document preparation consume the same body cache and refresh
 	// route. A cached body therefore does not require another work-item fetch.
-	content, err := s.readRequirement(ctx, config, map[string]any{"url": item.URL, "projectKey": item.ProjectKey,
-		"projectName": item.ProjectName, "type": item.Type, "id": item.ID, "title": item.Title, "force": false})
+	readPayload := map[string]any{"url": item.URL, "projectKey": item.ProjectKey,
+		"projectName": item.ProjectName, "type": item.Type, "id": item.ID, "title": item.Title, "force": false}
+	if account != "" {
+		readPayload["expectedIdentity"] = account
+	}
+	content, err := s.readRequirement(ctx, config, readPayload)
 	if err != nil {
 		return domain.RequirementAiNamingSuggestion{}, err
 	}
@@ -183,6 +194,52 @@ func (s *Service) generateRequirementNaming(ctx context.Context, config domain.A
 		s.writeRequirementAINamingCache(identity, model, suggestion)
 	}
 	return suggestion, nil
+}
+
+// ReadCachedRequirementAINaming only reads a previously generated local result.
+// The caller must pass the currently confirmed opaque Meegle identity. This
+// method intentionally performs no CLI or network access.
+func (s *Service) ReadCachedRequirementAINaming(ctx context.Context, config domain.AppConfig, link, account string) (domain.RequirementAiNamingSuggestion, bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return domain.RequirementAiNamingSuggestion{}, false, err
+	}
+	if !config.AIRequirementNamingEnabled || !validOpaqueRequirementIdentity(account) {
+		return domain.RequirementAiNamingSuggestion{}, false, nil
+	}
+	confirmed, err := s.confirmedRequirementIdentityForConfig(ctx, config, account)
+	if err != nil {
+		return domain.RequirementAiNamingSuggestion{}, false, err
+	}
+	if !confirmed {
+		return domain.RequirementAiNamingSuggestion{}, false, nil
+	}
+	model, err := domain.RequirementAiNamingModelRequireValid(config.AIRequirementNamingModel)
+	if err != nil {
+		return domain.RequirementAiNamingSuggestion{}, false, err
+	}
+	item, err := s.requirementTarget(ctx, config, map[string]any{"requirementLink": link})
+	if err != nil {
+		return domain.RequirementAiNamingSuggestion{}, false, err
+	}
+	identity := item.ProjectKey + ":" + item.Type + ":" + item.ID
+	suggestion := s.readRequirementAINamingCache(identity, model, account)
+	if err := ctx.Err(); err != nil {
+		return domain.RequirementAiNamingSuggestion{}, false, err
+	}
+	stillConfirmed, err := s.confirmedRequirementIdentityForConfig(ctx, config, account)
+	if err != nil {
+		return domain.RequirementAiNamingSuggestion{}, false, err
+	}
+	if !stillConfirmed {
+		return domain.RequirementAiNamingSuggestion{}, false, nil
+	}
+	if suggestion == nil {
+		return domain.RequirementAiNamingSuggestion{}, false, nil
+	}
+	return *suggestion, true, nil
 }
 
 // CancelRequirementNaming retires shared requests when the desktop's account

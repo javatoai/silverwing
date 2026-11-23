@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/executable"
 )
 
 type skillGitRunner func([]string) (string, error)
@@ -24,7 +25,7 @@ func skillGitArguments(args []string) []string {
 }
 
 func (s *Service) skillGit(ctx context.Context, cfg domain.AppConfig) (skillGitRunner, error) {
-	_, executable, _, err := s.resolveCLIExecutable(ctx, cfg, "git")
+	command, err := s.resolveCLIExecutable(ctx, cfg, executable.ToolGit)
 	if err != nil {
 		return nil, err
 	}
@@ -33,7 +34,7 @@ func (s *Service) skillGit(ctx context.Context, cfg domain.AppConfig) (skillGitR
 			return "", err
 		}
 		args = skillGitArguments(args)
-		result, err := s.runTool(ctx, cfg, domain.ProxyTargetGit, executable, args, s.paths.Codex, 5*time.Minute)
+		result, err := s.runTool(ctx, cfg, executable.ToolGit, command, args, s.paths.Codex, 5*time.Minute)
 		return strings.TrimSpace(result.Stdout), err
 	}, nil
 }

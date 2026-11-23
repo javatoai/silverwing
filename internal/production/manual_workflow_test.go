@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"silverwing-go/internal/process"
 	"silverwing-go/internal/workspace"
@@ -22,7 +23,7 @@ func TestProductionManualInitializationStopsAndRestoresBeforeRelease(t *testing.
 	f := newFixture(t)
 	production := f.advanceProduction()
 	main := f.feature("master", "main-only.txt", "retain main history\n", f.base)
-	p, err := f.s.Inspect(context.Background(), f.selection, "")
+	p, err := f.s.Inspect(context.Background(), f.selection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +31,7 @@ func TestProductionManualInitializationStopsAndRestoresBeforeRelease(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b.Intent != nil || b.Version != "" || b.ReleaseBranch != "" || b.InitialSHA != "" || b.MainSHA == "" {
+	if b.Intent != nil || b.Version != "" || b.ReleaseBranch != "" || b.InitialSHA != "" || b.ReleaseCreatedAt != "" || b.MainSHA == "" {
 		t.Fatalf("main merge continued initialization: %+v", b)
 	}
 	for _, source := range []string{production, main} {
@@ -46,16 +47,17 @@ func TestProductionManualInitializationStopsAndRestoresBeforeRelease(t *testing.
 	f.s = New(f.s.Paths, f.s.Config, f.git, process.NewRunner())
 	f.s.Genbu = f.g
 	stored, err := f.s.Store.Load(b.ID)
-	if err != nil || stored.MainSHA != b.MainSHA {
+	if err != nil || stored.MainSHA != b.MainSHA || stored.ReleaseCreatedAt != "" {
 		t.Fatalf("unversioned initialization did not restore: %v", err)
 	}
-	_, p, err = f.s.InspectBatch(context.Background(), b.ID, "")
+	_, p, err = f.s.InspectBatch(context.Background(), b.ID)
 	if err != nil || !p.ProductionInMain {
 		t.Fatalf("main inclusion not reflected: %v", err)
 	}
 	if _, wrongErr := f.s.Create(context.Background(), p, "2.3.44", strings.Repeat("a", 32)); wrongErr == nil {
 		t.Fatal("creation adopted another initialization batch")
 	}
+	requestedAt := time.Now()
 	b, err = f.s.Create(context.Background(), p, "2.3.44", b.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -66,6 +68,14 @@ func TestProductionManualInitializationStopsAndRestoresBeforeRelease(t *testing.
 	if got := f.run(f.remote, "rev-parse", "refs/heads/release/2.3.44"); got != b.InitialSHA {
 		t.Fatal("release not created from confirmed main")
 	}
+	created, err := time.Parse(time.RFC3339Nano, b.ReleaseCreatedAt)
+	if err != nil || created.Location() != time.UTC || created.Before(requestedAt) {
+		t.Fatalf("release creation timestamp must record the confirmed push in UTC: %q, %v", b.ReleaseCreatedAt, err)
+	}
+	stored, err = f.s.Store.Load(b.ID)
+	if err != nil || stored.ReleaseCreatedAt != b.ReleaseCreatedAt {
+		t.Fatalf("release creation timestamp was not persisted: %q, %v", stored.ReleaseCreatedAt, err)
+	}
 }
 
 func TestProductionMainAndReleaseMergesStopBeforeTagPreparation(t *testing.T) {
@@ -74,7 +84,7 @@ func TestProductionMainAndReleaseMergesStopBeforeTagPreparation(t *testing.T) {
 	one := f.feature("feature/one", "one.txt", "one\n", f.base)
 	b = f.merge(b, "feature/one", one)
 	f.advanceProduction()
-	_, p, err := f.s.InspectBatch(context.Background(), b.ID, "")
+	_, p, err := f.s.InspectBatch(context.Background(), b.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +96,7 @@ func TestProductionMainAndReleaseMergesStopBeforeTagPreparation(t *testing.T) {
 	if b.ReleaseSHA != before || b.Intent != nil || b.TagPlan != nil {
 		t.Fatal("main merge continued into release")
 	}
-	_, p, err = f.s.InspectBatch(context.Background(), b.ID, "")
+	_, p, err = f.s.InspectBatch(context.Background(), b.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +110,7 @@ func TestProductionMainAndReleaseMergesStopBeforeTagPreparation(t *testing.T) {
 	if b.Intent != nil || b.TagPlan != nil || len(b.Tags) != 0 || b.ReleaseSHA == before {
 		t.Fatal("release merge prepared or pushed a Tag")
 	}
-	_, p, err = f.s.InspectBatch(context.Background(), b.ID, "")
+	_, p, err = f.s.InspectBatch(context.Background(), b.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +132,7 @@ func TestProductionDifferenceUsesImmutableIncomingTreesAndDoesNotTouchCheckout(t
 	f := newFixture(t)
 	f.feature("master", "main-only.txt", "retain this\n", f.base)
 	f.advanceProduction()
-	p, err := f.s.Inspect(context.Background(), f.selection, "")
+	p, err := f.s.Inspect(context.Background(), f.selection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +191,7 @@ func TestProductionLegacyPendingStagesResumeOnlyTheirCurrentOperation(t *testing
 			var err error
 			if step == "main" {
 				f.advanceProduction()
-				p, err = f.s.Inspect(ctx, f.selection, "")
+				p, err = f.s.Inspect(ctx, f.selection)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -191,7 +201,7 @@ func TestProductionLegacyPendingStagesResumeOnlyTheirCurrentOperation(t *testing
 				one := f.feature("feature/one", "one.txt", "one\n", f.base)
 				b = f.merge(b, "feature/one", one)
 				f.feature("master", "extra.txt", "extra main\n", f.base)
-				_, p, err = f.s.InspectBatch(ctx, b.ID, "")
+				_, p, err = f.s.InspectBatch(ctx, b.ID)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -227,7 +237,7 @@ func TestProductionBuildCheckRejectsConfigChangedDuringRead(t *testing.T) {
 	b := f.create()
 	one := f.feature("feature/one", "one.txt", "one\n", f.base)
 	b = f.merge(b, "feature/one", one)
-	_, p, err := f.s.InspectBatch(context.Background(), b.ID, "")
+	_, p, err := f.s.InspectBatch(context.Background(), b.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +246,7 @@ func TestProductionBuildCheckRejectsConfigChangedDuringRead(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		c.Groups[0].Services[0].GenbuServiceName = "changed-during-check"
+		c.Services[0].GenbuServiceName = "changed-during-check"
 		if e = f.s.Config.Save(c); e != nil {
 			t.Fatal(e)
 		}
@@ -253,7 +263,7 @@ func TestProductionBuildCheckRejectsConfigChangedDuringRead(t *testing.T) {
 func TestProductionCreateRequiresExplicitBaselineMerge(t *testing.T) {
 	f := newFixture(t)
 	f.advanceProduction()
-	p, err := f.s.Inspect(context.Background(), f.selection, "")
+	p, err := f.s.Inspect(context.Background(), f.selection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +286,7 @@ func TestProductionBuildCheckDoesNotMerge(t *testing.T) {
 	feature := f.feature("feature/one", "one.txt", "one\n", f.base)
 	b = f.merge(b, "feature/one", feature)
 	f.advanceProduction()
-	_, p, err := f.s.InspectBatch(context.Background(), b.ID, "")
+	_, p, err := f.s.InspectBatch(context.Background(), b.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

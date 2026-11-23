@@ -10,22 +10,14 @@ import (
 	"testing"
 
 	"silverwing-go/internal/domain"
-	"silverwing-go/internal/storage"
 )
 
-// Root runs this filesystem case in an isolated temp/home. The child agent's
-// focused run selects only the pure metadata and race checks below.
 func TestTaskRefreshDispatchDocuments(t *testing.T) {
-	paths := storage.NewPaths(filepath.Join(t.TempDir(), "home"))
-	isolated := domain.DefaultAppConfig()
-	isolated.TaskRoot = &paths.Tasks
-	if err := storage.NewConfigStore(paths).Save(isolated); err != nil {
-		t.Fatal(err)
-	}
-	app, err := New(paths.Home)
+	app, err := New(filepath.Join(t.TempDir(), "home"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	selectProfileTaskRoot(t, app, t.TempDir(), "")
 	config, err := app.Config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -41,7 +33,8 @@ func TestTaskRefreshDispatchDocuments(t *testing.T) {
 	if err = app.Manifests.Save(taskPath, manifest); err != nil {
 		t.Fatal(err)
 	}
-	router := []byte("# 用户根路由\n保持原文\n")
+	userText := "# 用户说明\n保持原文\n"
+	router := []byte(userText + "\n<!-- silverwing:instructions:start -->\n先读取 `.workspace/agent/TASK-CONTEXT.md`。\n<!-- silverwing:instructions:end -->\n")
 	notes := []byte("# 用户备注\n保留手工内容\n")
 	if err = os.WriteFile(filepath.Join(taskPath, "AGENTS.md"), router, 0600); err != nil {
 		t.Fatal(err)
@@ -49,7 +42,7 @@ func TestTaskRefreshDispatchDocuments(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(taskPath, ".workspace", "agent", "TASK-RULES.md"), notes, 0600); err != nil {
 		t.Fatal(err)
 	}
-	oldContext := []byte("# 旧生成上下文\nrefresh must replace this generated content\n")
+	oldContext := []byte("# 旧生成上下文\n保留原文件\n")
 	if err = os.WriteFile(filepath.Join(taskPath, ".workspace", "agent", "TASK-CONTEXT.md"), oldContext, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -65,13 +58,13 @@ func TestTaskRefreshDispatchDocuments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reflect.DeepEqual(contextBytes, oldContext) || !strings.HasPrefix(string(contextBytes), "# 任务上下文\n\n") ||
-		!strings.Contains(string(contextBytes), "### 本任务可改动的 Worktree\n\n| 服务名 | 创建基线 | 策略 | Worktree 路径 |\n|--------|----------|------|---------------|\n| （无） |  |  |  |\n") {
-		t.Fatalf("generated context %q", contextBytes)
+	if !reflect.DeepEqual(contextBytes, oldContext) {
+		t.Fatalf("legacy context changed: %q", contextBytes)
 	}
 	routerAfter, err := os.ReadFile(filepath.Join(taskPath, "AGENTS.md"))
-	if err != nil || !reflect.DeepEqual(routerAfter, router) {
-		t.Fatalf("root router changed: %q, err %v", routerAfter, err)
+	if err != nil || !strings.HasPrefix(string(routerAfter), userText) || strings.Contains(string(routerAfter), "TASK-CONTEXT.md") ||
+		!strings.Contains(string(routerAfter), "### 本任务可改动的 Worktree\n\n| 服务名 | 创建基线 | 策略 | Worktree 路径 |\n|--------|----------|------|---------------|\n| （无） |  |  |  |\n") {
+		t.Fatalf("merged task instructions: %q, err %v", routerAfter, err)
 	}
 	notesAfter, err := os.ReadFile(filepath.Join(taskPath, ".workspace", "agent", "TASK-RULES.md"))
 	if err != nil || !reflect.DeepEqual(notesAfter, notes) {

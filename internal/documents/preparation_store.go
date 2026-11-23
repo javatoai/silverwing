@@ -116,7 +116,8 @@ func (f *preparationFileStore) readManagedManifest(writeRoot string, identity Re
 	if err != nil {
 		return nil, err
 	}
-	if manifest.Identity != identity {
+	if manifest.Identity.WorkItemID != identity.WorkItemID || !strings.EqualFold(manifest.Identity.Space, identity.Space) ||
+		!compatibleRequirementKinds(manifest.Identity.Kind, identity.Kind) {
 		return nil, fmt.Errorf("任务资料 manifest 与当前需求不一致，已停止写入：%s", path)
 	}
 	return &manifest, nil
@@ -209,13 +210,9 @@ type requirementDirectoryContext struct {
 	WriteRoot            string
 }
 
-func requireMaterialsRoot(configured *string) (string, error) {
-	return configuredRequirementsRoot(configured, false)
-}
-
 func requireMaterialsSubdirectory(configured *string) (string, error) {
 	if configured == nil {
-		return "", fmt.Errorf("尚未配置任务资料子目录；请在 silverwing 设置 > 路径设置中配置")
+		return "", fmt.Errorf("请在 Silverwing 的资料与说明设置中填写任务角色名")
 	}
 	value := strings.TrimSpace(*configured)
 	if strings.EqualFold(value, TemporaryMaterialsDirectory) || strings.EqualFold(value, ".git") || strings.HasPrefix(strings.ToLower(value), ".silverwing-") {
@@ -283,11 +280,7 @@ func buildRequirementDirectory(root, id, folder string, years ...int) (string, e
 	return path, nil
 }
 
-func resolveExistingRequirementDirectory(root, id, folder, subdirectory string, identity RequirementIdentity, files *preparationFileStore, years ...int) (*requirementDirectoryContext, error) {
-	path, err := buildRequirementDirectory(root, id, folder, years...)
-	if err != nil {
-		return nil, err
-	}
+func resolveExistingRequirementDirectory(path, subdirectory string, identity RequirementIdentity, files *preparationFileStore) (*requirementDirectoryContext, error) {
 	exists, err := files.exists(path)
 	if err != nil || !exists {
 		return nil, err
@@ -339,7 +332,7 @@ func validateExistingRequirementDirectoryInput(path, subdirectory, requirementID
 			if !strings.EqualFold(found.Space, identity.Space) {
 				return fmt.Errorf("任务资料目录中的 manifest 与当前需求空间不一致，已停止写入：%s", current)
 			}
-			if !strings.EqualFold(found.Kind, identity.Kind) {
+			if !compatibleRequirementKinds(found.Kind, identity.Kind) {
 				return fmt.Errorf("任务资料目录中的 manifest 与当前需求类型不一致，已停止写入：%s", current)
 			}
 		}

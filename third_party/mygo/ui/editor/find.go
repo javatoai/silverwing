@@ -38,6 +38,7 @@ type finder struct {
 	lower    string // the text lowered, for searching without case
 	lowerVer uint64
 	scrollTo bool
+	builtW   float32 // the editor's width the bar was built for
 }
 
 // maxMatches bounds the matches a search finds.
@@ -311,7 +312,7 @@ func (f *finder) replaceOne(ed *editor) {
 	text := f.textForReplacing(ed)
 	for i, m := range f.matches {
 		if m.start == p.start() && m.end == p.end() {
-			with := f.replacement(text, i)
+			with := lf(f.replacement(text, i))
 			ed.apply([]Edit{{Start: m.start, End: m.end, Text: with}}, editOther, func(move func(int, bias) int) []sel {
 				at := move(m.start, biasLeft) + len(with)
 				return []sel{ed.newSel(at, at)}

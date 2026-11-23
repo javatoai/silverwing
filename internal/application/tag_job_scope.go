@@ -108,6 +108,11 @@ func (m *tagJobManager) prepare(ctx context.Context, scope TagJobScope, action A
 			return nil, err
 		}
 		record := tagRecord(scope.TaskID, delivery.DescribeTagOperation(planned.Operation, scope.TaskID))
+		if action.Kind == "tag.retry" && record.RetryKind == string(delivery.TagRetryRetag) {
+			if err := m.app.RequireOptionalCLI(ctx, "genbu"); err != nil {
+				return nil, err
+			}
+		}
 		works = append(works, &tagJobWork{planned: planned, view: TagJobItem{ID: delivery.NewTagJobID(), Kind: action.Kind,
 			SelectionKey: planned.SelectionKey, ServiceID: record.ServiceID, ModuleID: record.ModuleID,
 			WorkspacePath: planned.WorkspacePath, OperationID: record.ID, Phase: TagJobPhaseQueued, Step: "等待执行", Busy: true, Queued: true, Record: &record}})

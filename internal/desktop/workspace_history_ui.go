@@ -67,7 +67,6 @@ type workspaceHistoryState struct {
 	InitialChange                                         *domain.WorkspaceGitFileChange
 	LeftWidth                                             float32
 	LeftCollapsed                                         bool
-	LeftDragging                                          bool
 	PreviewMode                                           workspace.WorkspaceFilePreviewMode
 	ChangedLinesOnly                                      bool
 	DiffHunkIndex                                         int
@@ -127,7 +126,7 @@ func (s *app) workspaceHistoryBaseline(task task, item application.Workspace) (d
 	_ = task
 	var sourceRef string
 	for _, service := range s.snapshot.Services {
-		if service.ID != item.ServiceID || task.groupID != "" && service.GroupID != task.groupID {
+		if service.ID != item.ServiceID {
 			continue
 		}
 		sourceRef = strings.TrimSpace(service.MasterBranch)

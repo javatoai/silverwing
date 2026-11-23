@@ -27,10 +27,21 @@ type materialsGitBranchesState struct {
 }
 
 func (s *app) materialsGitBranchesCurrent() *materialsGitBranchesState {
-	state := s.materialsUnit.state.materialsGitBranches
+	return s.documentsGitBranchesCurrent(taskMaterialsGit)
+}
+
+func (s *app) documentsGitBranchesSlot(target documentsGitTarget) **materialsGitBranchesState {
+	if target == projectInstructionsGit {
+		return &s.materialsUnit.state.projectGitBranches
+	}
+	return &s.materialsUnit.state.materialsGitBranches
+}
+
+func (s *app) documentsGitBranchesCurrent(target documentsGitTarget) *materialsGitBranchesState {
+	state := *s.documentsGitBranchesSlot(target)
 	config, ok := s.materialsGitConfig()
 	if state == nil || state.closed || state.invalidated || !ok ||
-		application.MaterialsGitScope(s.snapshot.Home, config) != state.scope || s.materialsGitSettingsPending(config) {
+		target.scope(s.snapshot.Home, config) != state.scope || s.documentsGitSettingsPending(target, config) {
 		return nil
 	}
 	return state
@@ -42,24 +53,35 @@ func (s *app) materialsGitBranchReady(branch string) bool {
 }
 
 func (s *app) observeMaterialsGitBranches() {
-	state := s.materialsUnit.state.materialsGitBranches
-	if state == nil {
-		return
-	}
-	if s.page != "settings" || s.settingsUnit.state.settingsPage != "materials-sync" && s.settingsUnit.state.settingsPage != "paths" {
-		state.visible = false
-	}
-	if s.materialsGitBranchesCurrent() == nil {
-		state.invalidated = true
-		if state.cancel != nil {
-			state.cancel()
+	for _, target := range []documentsGitTarget{taskMaterialsGit, projectInstructionsGit} {
+		state := *s.documentsGitBranchesSlot(target)
+		if state == nil {
+			continue
+		}
+		page := s.settingsUnit.state.settingsPage
+		visible := page == "project-instructions"
+		if target == taskMaterialsGit {
+			visible = page == "materials-sync" || page == "paths"
+		}
+		if s.page != "settings" || !visible {
+			state.visible = false
+		}
+		if s.documentsGitBranchesCurrent(target) == nil {
+			state.invalidated = true
+			if state.cancel != nil {
+				state.cancel()
+			}
 		}
 	}
 }
 
 func (s *app) loadMaterialsGitBranches(force bool) {
+	s.loadDocumentsGitBranches(taskMaterialsGit, force)
+}
+
+func (s *app) loadDocumentsGitBranches(target documentsGitTarget, force bool) {
 	config, ok := s.materialsGitConfig()
-	if !ok || s.materialsUnit.state.materialsGitCapture || s.materialsGitSettingsPending(config) {
+	if !ok || s.materialsUnit.state.materialsGitCapture || s.documentsGitSettingsPending(target, config) {
 		return
 	}
 	backend, ok := s.backend.(application.MaterialsGitBranchesBackend)
@@ -67,8 +89,8 @@ func (s *app) loadMaterialsGitBranches(force bool) {
 	if !ok || update == nil {
 		return
 	}
-	scope := application.MaterialsGitScope(s.snapshot.Home, config)
-	previous := s.materialsUnit.state.materialsGitBranches
+	scope := target.scope(s.snapshot.Home, config)
+	previous := *s.documentsGitBranchesSlot(target)
 	if previous != nil && previous.closed {
 		return
 	}
@@ -79,11 +101,15 @@ func (s *app) loadMaterialsGitBranches(force bool) {
 			return
 		}
 	}
-	s.startMaterialsGitBranchRead(scope, backend, nil, update)
+	s.startMaterialsGitBranchRead(target, scope, backend, nil, update)
 }
 
 func (s *app) beginMaterialsGitLogin() {
-	state := s.materialsGitBranchesCurrent()
+	s.beginDocumentsGitLogin(taskMaterialsGit)
+}
+
+func (s *app) beginDocumentsGitLogin(target documentsGitTarget) {
+	state := s.documentsGitBranchesCurrent(target)
 	login, canLogin := s.backend.(application.MaterialsGitLoginBackend)
 	branches, canRead := s.backend.(application.MaterialsGitBranchesBackend)
 	update := taskContextUpdater(s.win, s.taskUnit.state.taskContextUpdate)
@@ -91,11 +117,12 @@ func (s *app) beginMaterialsGitLogin() {
 		!workspace.MaterialsGitUsesHTTPS(state.scope.URL) {
 		return
 	}
-	s.startMaterialsGitBranchRead(state.scope, branches, login, update)
+	s.startMaterialsGitBranchRead(target, state.scope, branches, login, update)
 }
 
-func (s *app) startMaterialsGitBranchRead(scope workspace.MaterialsGitScope, backend application.MaterialsGitBranchesBackend, login application.MaterialsGitLoginBackend, update func(func())) {
-	previous := s.materialsUnit.state.materialsGitBranches
+func (s *app) startMaterialsGitBranchRead(target documentsGitTarget, scope workspace.MaterialsGitScope, backend application.MaterialsGitBranchesBackend, login application.MaterialsGitLoginBackend, update func(func())) {
+	slot := s.documentsGitBranchesSlot(target)
+	previous := *slot
 	state := &materialsGitBranchesState{scope: scope, visible: true, loading: true, authenticating: login != nil, branches: []string{}}
 	if previous != nil {
 		if previous.cancel != nil {
@@ -112,7 +139,7 @@ func (s *app) startMaterialsGitBranchRead(scope workspace.MaterialsGitScope, bac
 			}
 		}
 	}
-	s.materialsUnit.state.materialsGitBranches = state
+	*slot = state
 	if scope.URL == "" {
 		state.loading, state.loadedAt = false, time.Now()
 		return
@@ -147,7 +174,7 @@ func (s *app) startMaterialsGitBranchRead(scope workspace.MaterialsGitScope, bac
 			return
 		}
 		update(func() {
-			if s.materialsGitBranchesCurrent() != state {
+			if s.documentsGitBranchesCurrent(target) != state {
 				return
 			}
 			state.loading, state.loaded, state.authenticating, state.loadedAt = false, true, false, time.Now()
@@ -174,8 +201,8 @@ func (s *app) startMaterialsGitBranchRead(scope workspace.MaterialsGitScope, bac
 	}()
 }
 
-func (s *app) prepareMaterialsGitLoginTerminal(services ui.Services, open bool) {
-	state := s.materialsGitBranchesCurrent()
+func (s *app) prepareDocumentsGitLoginTerminal(target documentsGitTarget, services ui.Services, open bool) {
+	state := s.documentsGitBranchesCurrent(target)
 	backend, ok := s.backend.(application.MaterialsGitLoginBackend)
 	window := s.win
 	update := taskContextUpdater(window, s.taskUnit.state.taskContextUpdate)
@@ -193,7 +220,7 @@ func (s *app) prepareMaterialsGitLoginTerminal(services ui.Services, open bool) 
 			return
 		}
 		update(func() {
-			if s.materialsGitBranchesCurrent() != state {
+			if s.documentsGitBranchesCurrent(target) != state {
 				return
 			}
 			state.terminalPreparing = false
@@ -210,7 +237,10 @@ func (s *app) prepareMaterialsGitLoginTerminal(services ui.Services, open bool) 
 }
 
 func (s *materialsController) stopMaterialsGitBranches() {
-	if state := s.state.materialsGitBranches; state != nil {
+	for _, state := range []*materialsGitBranchesState{s.state.materialsGitBranches, s.state.projectGitBranches} {
+		if state == nil {
+			continue
+		}
 		for _, old := range append(state.retired, state) {
 			old.closed = true
 			if old.cancel != nil {
@@ -222,7 +252,10 @@ func (s *materialsController) stopMaterialsGitBranches() {
 
 func (s *materialsController) closeMaterialsGitBranches(ctx context.Context) error {
 	s.stopMaterialsGitBranches()
-	if state := s.state.materialsGitBranches; state != nil {
+	for _, state := range []*materialsGitBranchesState{s.state.materialsGitBranches, s.state.projectGitBranches} {
+		if state == nil {
+			continue
+		}
 		for _, old := range append(state.retired, state) {
 			if old.done == nil {
 				continue

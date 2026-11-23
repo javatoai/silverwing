@@ -150,9 +150,9 @@ func (s *app) applyRequirementListProgress(request *requirementListJob, event ap
 	}
 	if event.Phase == "items" && event.WorkItemType != "" {
 		p.steps["items:"+event.WorkItemType] = event
-		parent := event
-		parent.Status = "running"
-		parent.WorkItemType = ""
+		parent := p.steps[key]
+		parent.Phase, parent.Status = key, "running"
+		parent.Sequence, parent.Completed, parent.Total = event.Sequence, event.Completed, event.Total
 		p.steps[key] = parent
 		return
 	}

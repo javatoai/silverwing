@@ -122,7 +122,7 @@ func (s *app) renderTaskFilesDocument(c *ui.Context, p palette, view *taskFilesV
 		if view.opened == "" {
 			ui.Column(c).Grow(1).FillWidth().Padding(20).Gap(7).Children(func() {
 				label(c, "选择文件查看内容", 15, p.text)
-				label(c, "点击左侧文件查看内容。此处只读取当前任务工作目录。", 12, p.muted).Wrap()
+				label(c, "点击左侧文件查看内容。", 12, p.muted).Wrap()
 			})
 			return
 		}

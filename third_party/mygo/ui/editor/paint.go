@@ -47,7 +47,7 @@ func (ed *editor) layout(w, h, scale float32) {
 	if ed.o.signs {
 		ed.textX += 2 * v.charWidth
 	}
-	ed.viewH = h
+	ed.viewH, ed.laidW = h, w
 	wrap := ed.o.wrap != ed.toggledWrap
 	ww := w - ed.textX - ed.trackWidth() - 4
 	if ed.o.wrapColumn > 0 {
@@ -58,16 +58,13 @@ func (ed *editor) layout(w, h, scale float32) {
 		// Wrapped lines fit: nothing is sideways.
 		ed.scrollX = 0
 	}
+	v.refreshLineHeights()
 	v.heights.setLines(v.text.LineCount())
-	hidden := ed.hiddenSpans()
 	var blocks []block
-	if ed.o.decor != nil {
-		if ds, ok := ed.o.decor.(*diffSide); ok {
-			hidden = mergeSpans(append(hidden, ds.hidden()...))
-			blocks = ds.blocks()
-		}
+	if ds, ok := ed.o.decor.(*diffSide); ok {
+		blocks = ds.blocks()
 	}
-	v.heights.setHidden(hidden)
+	v.heights.setHidden(ed.hiddenLines())
 	v.heights.setBlocks(blocks)
 }
 
@@ -90,6 +87,15 @@ func (ed *editor) paint(p *ui.Painter, r ui.Rect) {
 	ed.frameNow = p.Now()
 	ed.r = r
 	ed.layout(r.W, r.H, p.Scale())
+	if ed.viewH != ed.builtViewH && !ed.o.fitContent {
+		// Resized: what read ViewportHeight as the view was built reads
+		// it again.
+		ed.builtViewH = ed.viewH
+		ed.services.Invalidate()
+	}
+	if ed.find.open && findBarSize(ed.laidW) != findBarSize(ed.find.builtW) {
+		ed.services.Invalidate()
+	}
 	more := false
 	if !v.measureWraps(ed.anchorLine, 4*time.Millisecond) {
 		more = true
@@ -112,11 +118,24 @@ func (ed *editor) paint(p *ui.Painter, r ui.Rect) {
 	}
 	y0 := ed.scrollY + float64(max(0, clip.Y-r.Y))
 	y1 := ed.scrollY + float64(min(r.H, clip.Y+clip.H-r.Y))
+	// The horizontal scroll bar at the bottom of what shows, as an editor
+	// as high as its content may run far below the window's.
+	ed.hbarY = max(0, min(r.H, clip.Y+clip.H-r.Y)) - ed.barWidth()
 	var f frame
 	f.first, f.last = ed.visibleLines(y0, y1)
 	ed.shown = [2]int{f.first, f.last}
-	syntaxFinal := v.advanceSyntax(f.last+1, 4*time.Millisecond)
-	if !syntaxFinal {
+	ed.shownY = [2]float64{min(max(y0, 0), float64(r.H)), min(max(y1, 0), float64(r.H))}
+	if ed.shownY[1] < ed.shownY[0] {
+		ed.shownY[0], ed.shownY[1] = ed.shownY[1], ed.shownY[0]
+	}
+	ed.pad, ed.paintedBuild = float64(max(clip.H, 400)), ed.builds
+	// Scrolled past what the blocks were built for, by its container in
+	// one turn of the wheel or a drag of its scroll bar: build them again
+	// around what shows, which no other change asks for.
+	if ed.o.fitContent && (ed.shownY[0] < ed.builtY[0] || ed.shownY[1] > ed.builtY[1]) {
+		ed.services.Invalidate()
+	}
+	if !v.advanceSyntax(f.last+1, 4*time.Millisecond) {
 		more = true
 	}
 	v.approx = false
@@ -135,6 +154,12 @@ func (ed *editor) paint(p *ui.Painter, r ui.Rect) {
 		// keyboard.
 		f.caretsOn = true
 	}
+	// Scrolled, or laid out anew, since the elements of replacements were
+	// placed, by a frame painting without building, as dragging past the
+	// edge scrolls: place them again.
+	if ed.replacementsMoved() {
+		ed.services.Invalidate()
+	}
 	ed.paintBlocks(p, r, &f)
 	text := ui.Rect{X: r.X + ed.gutterW, Y: r.Y, W: r.W - ed.gutterW, H: r.H}
 	p.Clip(text, 0, func() {
@@ -148,6 +173,11 @@ func (ed *editor) paint(p *ui.Painter, r ui.Rect) {
 	v.endFrame()
 	ed.syntaxPaintedAt, ed.syntaxBuffer, ed.syntaxVersion, ed.syntaxLanguage = p.Now(), v.buf, v.version, language
 	ed.syntaxFinal, ed.syntaxVisible = !v.approx, visible
+	// A unified diff's deleted lines are the old text's, which its view
+	// lays out and shapes as this one paints them.
+	if ds, ok := ed.o.decor.(*diffSide); ok && ds.unified {
+		ds.d.oldView.endFrame()
+	}
 }
 
 // prepare works out what highlights the lines in view.
@@ -311,11 +341,44 @@ func (ed *editor) blocksInView(fn func(b *block, top float64)) {
 	if len(h.blocks) == 0 || h.n == 0 {
 		return
 	}
-	y0, y1 := ed.scrollY, ed.scrollY+float64(ed.viewH)
-	if ed.o.fitContent {
-		y0, y1 = 0, h.total()
-	}
+	y0, y1 := ed.buildRange()
 	ed.eachBlock(h.lineAt(y0), min(h.lineAt(y1), h.n-1), fn)
+}
+
+// fitWidth is the width an editor as high as its content lays out at as
+// it builds: the one it was laid out at last, else its box's, else a
+// guess until it shows.
+func (ed *editor) fitWidth() float32 {
+	switch {
+	case ed.laidW > 0:
+		return ed.laidW
+	case ed.r.W > 0:
+		return ed.r.W
+	}
+	return 600
+}
+
+// buildRange is the part of the content whose blocks build elements: the
+// view's, or for an editor as high as its content the part its build
+// chose (fitRange).
+func (ed *editor) buildRange() (y0, y1 float64) {
+	if !ed.o.fitContent {
+		return ed.scrollY, ed.scrollY + float64(ed.viewH)
+	}
+	return ed.builtY[0], ed.builtY[1]
+}
+
+// fitRange is the part of the content an editor as high as its content
+// builds the blocks of: what it showed as it painted last, a view's
+// height to either side for a scroll since, or all of it where it has not
+// painted since its last build, as out of view: else each frame would
+// build the blocks of every line, of a long file too. It counts builds,
+// not time, so that the first frame after a pause builds no more.
+func (ed *editor) fitRange() (y0, y1 float64) {
+	if ed.paintedBuild == 0 || ed.paintedBuild != ed.builds {
+		return 0, ed.view.heights.total()
+	}
+	return ed.shownY[0] - ed.pad, ed.shownY[1] + ed.pad
 }
 
 func (ed *editor) paintBlock(p *ui.Painter, r ui.Rect, b *block, top float64) {
@@ -326,7 +389,7 @@ func (ed *editor) paintBlock(p *ui.Painter, r ui.Rect, b *block, top float64) {
 	if br.Y > p.Visible().Y+p.Visible().H || br.Y+br.H < p.Visible().Y {
 		return
 	}
-	ed.o.decor.paintBlock(p, ed, b, br)
+	ed.o.decor.paintBlock(p, ed, b, br, top)
 }
 
 // paintLine paints the rows of a line.
@@ -334,7 +397,7 @@ func (ed *editor) paintLine(p *ui.Painter, r ui.Rect, f *frame, line int, g line
 	v := &ed.view
 	ct := ed.theme
 	l := v.line(line)
-	lh := v.lineHeight
+	lh := l.rowHeight
 	ox := r.X + ed.textX - ed.scrollX
 	textRect := ui.Rect{X: r.X + ed.gutterW, W: r.W - ed.gutterW}
 	var style lineLook
@@ -436,15 +499,29 @@ func (ed *editor) paintLine(p *ui.Painter, r ui.Rect, f *frame, line int, g line
 			}
 		}
 		if ri == 0 && ed.o.indentGuides {
-			ed.paintGuides(p, f, line, ox, y, len(l.rows))
+			ed.paintGuides(p, f, l, ox, y)
 		}
 		if ri == 0 && ed.o.signs && style.sign != "" {
 			if ds, ok := ed.o.decor.(*diffSide); ok {
 				ds.paintSign(p, ed, style.sign, r.X+ed.textX-v.charWidth*1.5, y, style.number)
 			}
 		}
-		v.paintRow(p, l, row, ox, y, &f.colors, nil)
+		// The word Cmd+click goes from, as a link.
+		var link func(int, ui.Color) ui.Color
+		if a, z := ed.link[0], ed.link[1]; z > a && a >= l.start && z <= l.start+len(l.text) {
+			da, dz := l.toDisp(a-l.start, false), l.toDisp(z-l.start, false)
+			c := ct.TokenColor(TokenLink)
+			link = func(d int, cc ui.Color) ui.Color {
+				if d >= da && d < dz {
+					return c
+				}
+				return cc
+			}
+			ed.ruleRange(p, f, l, row, ox, y, da, dz, c)
+		}
+		v.paintRow(p, l, row, ox, y, &f.colors, link)
 		ed.paintWhitespace(p, f, l, row, ox, y)
+		ed.paintMarked(p, f, l, row, ox, y)
 		// Diagnostics under the text.
 		for _, d := range ed.diags {
 			if d.End < l.start || d.Start > l.start+len(l.text) {
@@ -500,10 +577,11 @@ func (ed *editor) paintLine(p *ui.Painter, r ui.Rect, f *frame, line int, g line
 
 // caretWidth returns the width of a block or underline caret at offset
 // at, x in row: that of the character after it, with its combining marks,
-// or of a space at the end of the line or of the row.
+// or what a replacement shows there, or of a space at the end of the line
+// or of the row.
 func (ed *editor) caretWidth(l *lineLayout, row *rowLayout, at int, x float32) float32 {
 	v := &ed.view
-	end := min(graphemeRight(v.text, at), l.start+len(l.text))
+	end := min(ed.overReplacements(at, graphemeRight(v.text, at)), l.start+len(l.text))
 	if end <= at {
 		return v.charWidth
 	}
@@ -539,18 +617,41 @@ func (ed *editor) fillRange(p *ui.Painter, f *frame, l *lineLayout, row *rowLayo
 	}
 	f.rects = mergeRects(ed.view.rangeRects(l, row, a, b, f.rects[:0]))
 	for _, rc := range f.rects {
-		p.Fill(ui.Rect{X: ox + rc.X, Y: y, W: rc.W, H: ed.view.lineHeight}, c, radius)
+		p.Fill(ui.Rect{X: ox + rc.X, Y: y, W: rc.W, H: l.rowHeight}, c, radius)
+	}
+}
+
+// paintMarked rules a line under what an input method composes in a row, as
+// the app's text inputs underline theirs until they are committed.
+func (ed *editor) paintMarked(p *ui.Painter, f *frame, l *lineLayout, row *rowLayout, ox, y float32) {
+	if !ed.markedActive {
+		return
+	}
+	for _, m := range ed.marked {
+		if m.End <= l.start || m.Start >= l.start+len(l.text) {
+			continue
+		}
+		a, b := max(m.Start-l.start, 0), min(m.End-l.start, len(l.text))
+		ed.ruleRange(p, f, l, row, ox, y, l.toDisp(a, false), l.toDisp(b, true), ed.theme.Text)
+	}
+}
+
+// ruleRange rules a line under displayed bytes a to b of a row.
+func (ed *editor) ruleRange(p *ui.Painter, f *frame, l *lineLayout, row *rowLayout, ox, y float32, a, b int, c ui.Color) {
+	f.rects = mergeRects(ed.view.rangeRects(l, row, a, b, f.rects[:0]))
+	for _, rc := range f.rects {
+		p.Fill(ui.Rect{X: ox + rc.X, Y: y + l.rowHeight - 2, W: rc.W, H: 1}, c, 0)
 	}
 }
 
 // paintGuides draws the indent guides of a line, down its rows.
-func (ed *editor) paintGuides(p *ui.Painter, f *frame, line int, ox, y float32, rows int) {
+func (ed *editor) paintGuides(p *ui.Painter, f *frame, l *lineLayout, ox, y float32) {
 	v := &ed.view
 	ct := ed.theme
 	tab := ed.tabSize()
+	line := l.n
 	in := ed.lineIndent(line)
-	h := v.lineHeight * float32(rows)
-	l := v.line(line)
+	h := l.rowHeight * float32(len(l.rows))
 	for level := 0; level*tab < in; level++ {
 		x := float32(math.Round(float64(ox + v.indentGuideX(l, level*tab))))
 		c := ct.IndentGuide
@@ -570,6 +671,9 @@ func (ed *editor) paintGuides(p *ui.Painter, f *frame, line int, ox, y float32, 
 // beside fallback glyphs or in a long line split into shaping pieces. Blank
 // lines continue the surrounding block's guides using shaped virtual spaces.
 func (v *view) indentGuideX(l *lineLayout, column int) float32 {
+	if l.owner != nil {
+		v = l.owner
+	}
 	columns := 0
 	for i := 0; i < len(l.text); i++ {
 		if columns == column {
@@ -616,7 +720,7 @@ func (ed *editor) paintWhitespace(p *ui.Painter, f *frame, l *lineLayout, row *r
 	}
 	for i := a; i < b; i++ {
 		c := s[i]
-		if c != ' ' && c != '\t' {
+		if c != ' ' && c != '\t' || l.replaced(i) {
 			continue
 		}
 		show := false
@@ -645,7 +749,7 @@ func (ed *editor) paintWhitespace(p *ui.Painter, f *frame, l *lineLayout, row *r
 		}
 		x0 := ox + v.xOf(l, row, d)
 		x1 := ox + v.xOf(l, row, l.toDisp(i+1, false))
-		cy := y + v.lineHeight/2
+		cy := y + l.rowHeight/2
 		if c == ' ' {
 			dot := float32(2)
 			p.Fill(ui.Rect{X: (x0+x1)/2 - dot/2, Y: cy - dot/2, W: dot, H: dot}, ct.Whitespace, dot/2)
@@ -707,6 +811,14 @@ func (ed *editor) paintGutter(p *ui.Painter, r ui.Rect, f *frame) {
 			}
 			y := r.Y + float32(g.rows-ed.scrollY)
 			rowsH := float32(g.below - g.rows)
+			// A styled line's number, mark and fold marker stand on the
+			// baseline of its first row, in the editor's font: in the band
+			// of a row of the editor's with that baseline.
+			ny := y
+			if v.rowHeight(line) != lh {
+				l := v.line(line)
+				ny = y + (l.rowHeight-(l.ascent+l.descent))/2 + l.ascent - ((lh-(v.ascent+v.descent))/2 + v.ascent)
+			}
 			var style lineLook
 			if ed.o.decor != nil {
 				style = ed.o.decor.lineStyle(line)
@@ -734,13 +846,13 @@ func (ed *editor) paintGutter(p *ui.Painter, r ui.Rect, f *frame) {
 					if style.number.A > 0 {
 						col = style.number
 					}
-					v.paintRow(p, &lineLayout{disp: s}, &row, numRight-lay.Width, y, &cc, func(int, ui.Color) ui.Color { return col })
+					v.paintRow(p, &lineLayout{disp: s}, &row, numRight-lay.Width, ny, &cc, func(int, ui.Color) ui.Color { return col })
 				}
 			}
 			for _, m := range ed.o.gutterMarks {
 				if m.Line == line {
 					d := lh * 0.45
-					p.Fill(ui.Rect{X: r.X + 3, Y: y + (lh-d)/2, W: d, H: d}, m.Color, d/2)
+					p.Fill(ui.Rect{X: r.X + 3, Y: ny + (lh-d)/2, W: d, H: d}, m.Color, d/2)
 				}
 			}
 			// Change bars.
@@ -769,7 +881,7 @@ func (ed *editor) paintGutter(p *ui.Painter, r ui.Rect, f *frame) {
 				folded := ed.isFolded(line)
 				hovered := ed.pointerIn && ed.pointer.X < ed.gutterW
 				if folded || hovered && ed.foldable(line) {
-					cx, cy := r.X+ed.gutterW-4-lh*0.4, y+lh/2
+					cx, cy := r.X+ed.gutterW-4-lh*0.4, ny+lh/2
 					d := lh * 0.16
 					var path ui.Path
 					if folded {
@@ -797,6 +909,13 @@ func (ed *editor) paintBar(p *ui.Painter, r ui.Rect, s lineLook) {
 		p.Fill(r, s.bar, 0)
 		return
 	}
+	// Only the stripes in view: a long line's bar runs thousands of rows.
+	vis := p.Visible()
+	y0, y1 := max(r.Y, vis.Y), min(r.Y+r.H, vis.Y+vis.H)
+	if y1 <= y0 {
+		return
+	}
+	r.Y, r.H = y0, y1-y0
 	barStripes(r, float64(r.Y-ed.r.Y)+ed.scrollY, func(sr ui.Rect) { p.Fill(sr, s.bar, 0) })
 }
 
@@ -816,20 +935,32 @@ func barStripes(r ui.Rect, top float64, fn func(ui.Rect)) {
 	}
 }
 
+// barIn returns a scroll bar in the window, the element at r.
+func (ed *editor) barIn(r ui.Rect, horizontal bool) ui.Scrollbar {
+	b := ed.bar(horizontal)
+	b.Box.X += r.X
+	b.Box.Y += r.Y
+	return b
+}
+
 // paintScrollbars draws the scroll bars, the vertical one with markers
 // of the matches, diagnostics, changes and carets.
 func (ed *editor) paintScrollbars(p *ui.Painter, r ui.Rect, f *frame) {
 	v := &ed.view
 	ct := ed.theme
-	t := p.Theme()
 	vertical, horizontal := ed.scrollbars()
+	// The thumbs and the carets' marks show while the pointer is over the
+	// editor, or drags a thumb, as a scroll container's do, or always
+	// when kept (KeepScrollbars), looking the same; the marks of changes,
+	// matches and diagnostics always.
+	shown := ed.pointerIn || ed.scrollbar.active || ed.o.keepScrollbars
 	if vertical {
-		x := r.X + r.W - scrollbarWidth
-		track := ui.Rect{X: x, Y: r.Y, W: scrollbarWidth, H: r.H}
-		hovered := ed.pointerIn && ed.region == regionVScroll
-		if hovered || ed.scrollbar.active {
-			p.Fill(track, t.Scrollbar.Alpha(0.15), 0)
-		}
+		width := ed.barWidth()
+		x := r.X + r.W - width
+		bar := ed.barIn(r, false)
+		// The track goes under the marks of changes, matches and
+		// diagnostics, and the thumb over them.
+		p.ScrollbarTrack(bar)
 		span := float32(ed.scrollMax()) + ed.viewH
 		mark := func(y float64, h float32, x0, w float32, c ui.Color) {
 			yy := r.Y + float32(y/float64(span))*r.H
@@ -886,29 +1017,26 @@ func (ed *editor) paintScrollbars(p *ui.Painter, r ui.Rect, f *frame) {
 			if i > 2000 {
 				break
 			}
-			mark(h.top(v.text.LineOf(d.Start)), v.lineHeight, 7, 3, ct.SeverityColor(d.Severity))
+			mark(h.top(v.text.LineOf(d.Start)), v.lineHeight, width-3, 3, ct.SeverityColor(d.Severity))
+		}
+		if !shown {
+			return
 		}
 		// Carets.
 		if len(ed.sels) <= 100 {
 			for _, s := range ed.sels {
-				mark(h.top(v.text.LineOf(s.head)), 2, 0, scrollbarWidth, ct.Text.Alpha(0.5))
+				mark(h.top(v.text.LineOf(s.head)), 2, 0, width, ct.Text.Alpha(0.5))
 			}
 		}
-		t0, t1 := ed.thumb(false)
-		thumb := ui.Rect{X: x + 2, Y: r.Y + t0, W: scrollbarWidth - 4, H: t1 - t0}
-		alpha := float32(0.5)
-		if hovered || ed.scrollbar.active {
-			alpha = 0.9
-		}
-		p.Fill(thumb, t.Scrollbar.Alpha(alpha), (scrollbarWidth-4)/2)
+		p.ScrollbarThumb(bar, ui.ScrollbarState{
+			Hovered:  ed.pointerIn && ed.region == regionVScroll,
+			Dragging: ed.scrollbar.active && !ed.scrollbar.horizontal,
+		})
 	}
-	if horizontal {
-		t0, t1 := ed.thumb(true)
-		y := r.Y + r.H - scrollbarWidth
-		alpha := float32(0.4)
-		if ed.pointerIn && ed.region == regionHScroll || ed.scrollbar.active {
-			alpha = 0.9
-		}
-		p.Fill(ui.Rect{X: r.X + ed.textX + t0, Y: y + 2, W: t1 - t0, H: scrollbarWidth - 4}, t.Scrollbar.Alpha(alpha), (scrollbarWidth-4)/2)
+	if horizontal && shown {
+		p.Scrollbar(ed.barIn(r, true), ui.ScrollbarState{
+			Hovered:  ed.pointerIn && ed.region == regionHScroll,
+			Dragging: ed.scrollbar.active && ed.scrollbar.horizontal,
+		})
 	}
 }

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"silverwing-go/internal/larkcli"
 	"silverwing-go/internal/releasenotice"
 )
 
@@ -17,7 +16,11 @@ type CLITagNoticeResult struct {
 
 func (a *App) CLITagNotify(ctx context.Context, taskID, batchID string) (CLITagNoticeResult, error) {
 	out := CLITagNoticeResult{BatchID: batchID, Recipients: []releasenotice.RecipientDelivery{}}
-	taskID, _, err := a.findCLITagHistory(ctx, CLITagHistoryQuery{Task: taskID, Batch: batchID})
+	client, err := a.noticeCLI(ctx, OptionalCLIFeatureTagNotice)
+	if err != nil {
+		return out, err
+	}
+	taskID, _, err = a.findCLITagHistory(ctx, CLITagHistoryQuery{Task: taskID, Batch: batchID})
 	if err != nil {
 		return out, err
 	}
@@ -35,22 +38,25 @@ func (a *App) CLITagNotify(ctx context.Context, taskID, batchID string) (CLITagN
 			"tagHistoryHome": scope.Home, "tagHistoryTaskRoot": scope.TaskRoot,
 			"tagHistoryTaskPath": scope.TaskPath, "tagHistoryTaskCreatedAt": scope.TaskCreatedAt,
 		}}
-		batch, err := a.readReleaseNoticeBatch(ctx, action, true, true)
+		batch, err := a.readReleaseNoticeBatch(ctx, action, true, true, client.BeforeRun)
 		if err != nil {
 			return err
 		}
 		for _, operation := range batch.operations {
+			if err := client.BeforeRun(ctx); err != nil {
+				return err
+			}
 			push := task.PushStatus(ctx, operation)
 			if push.State != "PUSHED" {
 				return fmt.Errorf("无法确认 %s 的 Tag %s 已推送（%s） %s", operation.ServiceName, value(operation.Tag), push.State, push.Error)
 			}
 		}
-		client := larkcli.Client{Runner: a.Runner, Config: config, AsUser: true}
+		client.Config = batch.config
 		session, preparation, err := a.prepareUserTagNotice(ctx, batch, client)
 		if err != nil {
 			return err
 		}
-		if err = a.checkUserTagNotice(ctx, action, session, preparation); err != nil {
+		if err = a.checkUserTagNotice(ctx, action, session, preparation, client); err != nil {
 			return err
 		}
 		store := releasenotice.Store{Directory: filepath.Join(a.Paths.Home, "release-notices")}
@@ -64,7 +70,7 @@ func (a *App) CLITagNotify(ctx context.Context, taskID, batchID string) (CLITagN
 		if err != nil {
 			return err
 		}
-		sent, sendErr := store.SendTag(ctx, session.ID, prepared.RetryChoice(), client, a.userTagNoticeChecks(action))
+		sent, sendErr := store.SendTag(ctx, session.ID, prepared.RetryChoice(), client, a.userTagNoticeChecks(action, client))
 		out.Recipients = sent.Deliveries()
 		previous := prepared.Deliveries()
 		for i := range out.Recipients {

@@ -84,9 +84,13 @@ func settingsConfigInputValues(config map[string]any) (map[string]any, map[strin
 	if data, err := json.Marshal(config["materialsGitSync"]); err == nil && string(data) != "null" {
 		_ = json.Unmarshal(data, &gitSettings)
 	}
-	text["setting:materialsGitSync:repositoryUrl"] = gitSettings.RepositoryURL
 	text["setting:materialsGitSync:intervalMinutes"] = fmt.Sprint(gitSettings.IntervalMinutes)
 	booleans["materials-git-enabled"] = gitSettings.Enabled
+	projectInterval, ok := config["projectInstructionsGitIntervalMinutes"].(float64)
+	if !ok {
+		projectInterval = float64(domain.AppConfig{}.ProjectInstructionsGitSettings().IntervalMinutes)
+	}
+	text[projectInstructionsGit.inputKey("intervalMinutes")] = projectInterval
 	text["setting:taskRootTarget"] = config["taskRoot"]
 	proxy := proxyParts(mapString(config, "commandProxyUrl"))
 	for index, key := range []string{"scheme", "host", "port"} {
@@ -97,8 +101,9 @@ func settingsConfigInputValues(config map[string]any) (map[string]any, map[strin
 	}
 	booleans["local:proxy-auth-enabled"] = mapString(config, "commandProxyUsername") != "" && mapString(config, "commandProxyPassword") != ""
 	targets := stringArray(mustArray(config["commandProxyTargets"]))
-	for _, target := range []string{"CODEX", "GIT", "WORKSPACE_COMMAND", "MEEGLE", "GENBU", "APP_UPDATES"} {
-		booleans["proxy-target:"+target] = containsString(targets, target)
+	for _, target := range settingsProxyTargets {
+		id := string(target.id)
+		booleans["proxy-target:"+id] = containsString(targets, id)
 	}
 	visibility, _ := config["toolVisibility"].(map[string]any)
 	for key, value := range visibility {
@@ -107,9 +112,6 @@ func settingsConfigInputValues(config map[string]any) (map[string]any, map[strin
 	sidebar, _ := config["sidebarVisibility"].(map[string]any)
 	for key, value := range sidebar {
 		booleans["sidebar-visibility-"+key] = value
-	}
-	for _, group := range mapsFromArray(mustArray(config["groups"])) {
-		booleans["group-tag-"+mapString(group, "id")] = group["tagEnabled"]
 	}
 	for index, project := range mapsFromArray(mustArray(config["meegleProjects"])) {
 		text[fmt.Sprintf("setting:meegle-project-key:%d", index)] = project["project_key"]

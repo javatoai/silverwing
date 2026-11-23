@@ -12,8 +12,10 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // resourceProject writes a project with a resources directory and extra
@@ -22,14 +24,16 @@ func resourceProject(t *testing.T, json string) *Config {
 	t.Helper()
 	dir := t.TempDir()
 	writeFiles(t, dir, map[string]string{
-		"mygo.json":                  json,
-		"resources/icon.png":         string(defaultIcon()),
-		"resources/data/words.txt":   "hello",
-		"resources/data/.DS_Store":   "junk",
-		"resources/.gitkeep":         "",
-		"legal/NOTICE.txt":           "notice",
-		"vendor/models/tiny.bin":     "model",
-		"vendor/models/sub/more.bin": "more",
+		"mygo.json":                     json,
+		"resources/icon.png":            string(defaultIcon()),
+		"resources/data/words.txt":      "hello",
+		"resources/data/.DS_Store":      "junk",
+		"resources/data/.manifest.json": "{}",
+		"resources/data/.cache/keep":    "",
+		"resources/.gitkeep":            "",
+		"legal/NOTICE.txt":              "notice",
+		"vendor/models/tiny.bin":        "model",
+		"vendor/models/sub/more.bin":    "more",
 	})
 	tool := filepath.Join(dir, "resources", "bin", "tool")
 	writeFiles(t, dir, map[string]string{"resources/bin/tool": "#!/bin/sh\n"})
@@ -87,10 +91,20 @@ func TestResources(t *testing.T) {
 			t.Errorf("%s = %q, %v", name, got, err)
 		}
 	}
-	for _, hidden := range []string{".gitkeep", "data/.DS_Store"} {
-		if _, err := os.Lstat(filepath.Join(dst, filepath.FromSlash(hidden))); err == nil {
-			t.Errorf("%s was copied", hidden)
-		}
+	// A dotfile in a resource is data the app may read by name — dsh's
+	// provider catalog is dist/providers/data/.manifest.json — so it ships;
+	// a hidden directory is still junk.
+	if _, err := os.Lstat(filepath.Join(dst, "data", ".manifest.json")); err != nil {
+		t.Errorf("a dotfile inside a resource was not copied: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "data", ".DS_Store")); err == nil {
+		t.Error("a file manager's droppings were copied")
+	}
+	if _, err := os.Lstat(filepath.Join(dst, ".gitkeep")); err == nil {
+		t.Error("a hidden entry of resources/ was copied")
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "data", ".cache")); err == nil {
+		t.Error("a hidden directory was copied")
 	}
 	if runtime.GOOS != "windows" {
 		if info, err := os.Stat(filepath.Join(dst, "bin", "tool")); err != nil || info.Mode().Perm()&0o111 == 0 {
@@ -104,7 +118,7 @@ func TestResources(t *testing.T) {
 		}
 	}
 
-	// Changes show in the hash, hidden files do not.
+	// Changes show in the hash, dotfiles included.
 	hash := func() []byte {
 		var b bytes.Buffer
 		if err := hashResources(&b, list); err != nil {
@@ -113,9 +127,9 @@ func TestResources(t *testing.T) {
 		return b.Bytes()
 	}
 	before := hash()
-	writeFiles(t, c.root, map[string]string{"resources/data/.DS_Store": "more junk"})
-	if !bytes.Equal(before, hash()) {
-		t.Error("a hidden file changed the hash")
+	writeFiles(t, c.root, map[string]string{"resources/data/.manifest.json": `{"more":true}`})
+	if bytes.Equal(before, hash()) {
+		t.Error("an edited dotfile did not change the hash")
 	}
 	writeFiles(t, c.root, map[string]string{"vendor/models/sub/more.bin": "changed"})
 	if bytes.Equal(before, hash()) {
@@ -172,6 +186,143 @@ func TestResourceErrors(t *testing.T) {
 	}
 }
 
+// TestResourcesExclude leaves Go sources, and what resourcesExclude
+// matches, out of the resources of builds and development builds alike.
+func TestResourcesExclude(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		"mygo.json":                             `{"name": "App", "resources": ["vendor/models"], "resourcesExclude": ["**/*.psd", "drafts", "data/raw/**"]}`,
+		"resources/embed.go":                    "package resources",
+		"resources/logo.png":                    "logo",
+		"resources/logo.psd":                    "layers",
+		"resources/data/words.txt":              "hello",
+		"resources/data/words_gen.go":           "package data",
+		"resources/data/art/cover.psd":          "layers",
+		"resources/data/raw/dump.csv":           "raw",
+		"resources/data/lib.go/x.txt":           "a directory named like a Go file",
+		"resources/drafts/notes.txt":            "draft",
+		"resources/bin/tool":                    "tool",
+		"resources/linux-amd64/bin/server":      "server",
+		"resources/linux-amd64/bin/server.go":   "package main",
+		"resources/linux-amd64/drafts/x.txt":    "kept: patterns are relative to resources",
+		"resources/linux-amd64/icons/tray.psd":  "layers",
+		"resources/darwin-arm64/bin/main.go":    "package main",
+		"resources/darwin-arm64/bin/server.txt": "same",
+		"resources/darwin-amd64/bin/server.txt": "same",
+		"vendor/models/tiny.bin":                "model",
+		"vendor/models/convert.go":              "package models",
+		"vendor/models/source.psd":              "layers",
+	})
+	c, err := loadConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared := map[string]string{
+		"logo.png":          "logo",
+		"data/words.txt":    "hello",
+		"data/lib.go/x.txt": "a directory named like a Go file",
+		"bin/tool":          "tool",
+		"models/tiny.bin":   "model",
+		"models/convert.go": "package models",
+		"models/source.psd": "layers",
+	}
+	for _, tc := range []struct {
+		goos, goarch string
+		want         map[string]string
+	}{
+		{"linux", "amd64", map[string]string{"bin/server": "server", "drafts/x.txt": "kept: patterns are relative to resources"}},
+		// darwin-arm64 has a Go source that darwin-amd64 lacks.
+		{"darwin", "universal", map[string]string{"bin/server.txt": "same"}},
+	} {
+		list, err := c.resources(tc.goos, tc.goarch, reservedNames(c, tc.goos)...)
+		if err != nil {
+			t.Fatalf("%s/%s: %v", tc.goos, tc.goarch, err)
+		}
+		out := t.TempDir()
+		if err := copyResources(list, out); err != nil {
+			t.Fatal(err)
+		}
+		want := maps.Clone(shared)
+		maps.Copy(want, tc.want)
+		if got := dirFiles(t, out); !maps.Equal(got, want) {
+			t.Errorf("%s/%s: resources = %q, want %q", tc.goos, tc.goarch, got, want)
+		}
+		for _, name := range []string{"drafts", "data/raw"} {
+			if _, err := os.Stat(filepath.Join(out, filepath.FromSlash(name))); err == nil && !(name == "drafts" && tc.goos == "linux") {
+				t.Errorf("%s/%s: the excluded directory %s was copied", tc.goos, tc.goarch, name)
+			}
+		}
+	}
+
+	// Development builds place the same files, and excluded ones do not
+	// change their fingerprint.
+	list, err := devConfig(c).resources("linux", "amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage, placed := t.TempDir(), t.TempDir()
+	if err := placeBuild(stage, placed, list); err != nil {
+		t.Fatal(err)
+	}
+	want := maps.Clone(shared)
+	maps.Copy(want, map[string]string{"bin/server": "server", "drafts/x.txt": "kept: patterns are relative to resources"})
+	if got := dirFiles(t, placed); !maps.Equal(got, want) {
+		t.Errorf("development build: resources = %q, want %q", got, want)
+	}
+	hash := func() []byte {
+		var b bytes.Buffer
+		if err := hashResources(&b, list); err != nil {
+			t.Fatal(err)
+		}
+		return b.Bytes()
+	}
+	before := hash()
+	writeFiles(t, dir, map[string]string{"resources/data/words_gen.go": "package data // edited", "resources/data/art/cover.psd": "more layers"})
+	if !bytes.Equal(before, hash()) {
+		t.Error("an excluded file changed the hash")
+	}
+	writeFiles(t, dir, map[string]string{"resources/data/words.txt": "hello, world"})
+	if bytes.Equal(before, hash()) {
+		t.Error("an edited resource did not change the hash")
+	}
+}
+
+func TestResourcePatterns(t *testing.T) {
+	for _, tc := range []struct {
+		pattern, name string
+		want          bool
+	}{
+		{"**/*.psd", "a.psd", true},
+		{"**/*.psd", "art/deep/a.psd", true},
+		{"**/*.psd", "a.psd.txt", false},
+		{"*.psd", "a.psd", true},
+		{"*.psd", "art/a.psd", false},
+		{"design", "design", true},
+		{"design", "design/a.txt", false}, // the directory is left out whole
+		{"design/**", "design", true},
+		{"design/**", "design/a/b.txt", true},
+		{"design/**", "designs/a.txt", false},
+		{"a/**/b", "a/b", true},
+		{"a/**/b", "a/x/y/b", true},
+		{"a/**/b", "a/x/y/c", false},
+		{"**", "anything/at/all", true},
+		{"data/?.bin", "data/a.bin", true},
+		{"data/[ab].bin", "data/c.bin", false},
+	} {
+		if got := matchPattern(tc.pattern, tc.name); got != tc.want {
+			t.Errorf("matchPattern(%q, %q) = %v, want %v", tc.pattern, tc.name, got, tc.want)
+		}
+	}
+
+	for _, p := range []string{"", "/abs/*.psd", "art/", "a//b", "./a", "../outside", "[", `art\a.psd`} {
+		dir := t.TempDir()
+		writeFiles(t, dir, map[string]string{"mygo.json": `{"resourcesExclude": [` + strconv.Quote(p) + `]}`})
+		if _, err := loadConfig(dir); err == nil || !strings.Contains(err.Error(), "resourcesExclude") {
+			t.Errorf("resourcesExclude %q: err = %v", p, err)
+		}
+	}
+}
+
 // TestPlaceBuild places a development build next to an earlier one.
 func TestPlaceBuild(t *testing.T) {
 	dir, stage := t.TempDir(), t.TempDir()
@@ -196,6 +347,72 @@ func TestPlaceBuild(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(dir, "kept", "x")); string(b) != "x2" {
 		t.Errorf("kept/x = %q", b)
+	}
+}
+
+// TestPlaceBuildSyncsResources places a development build twice: the
+// second keeps the resources that did not change as they are, even one
+// that cannot be replaced, as a program the app started on Windows, and
+// replaces, adds and removes the others.
+func TestPlaceBuildSyncsResources(t *testing.T) {
+	dir, src := t.TempDir(), t.TempDir()
+	writeFiles(t, src, map[string]string{"extra/svc.exe": "service", "extra/data.txt": "v1", "extra/gone.txt": "", "extra/old/x": "", "top.txt": "top"})
+	res := []resource{{name: "extra", src: filepath.Join(src, "extra")}, {name: "top.txt", src: filepath.Join(src, "top.txt")}}
+	place := func(app string) error {
+		stage := t.TempDir()
+		writeFiles(t, stage, map[string]string{"app": app})
+		return placeBuild(stage, dir, res)
+	}
+	if err := place("1"); err != nil {
+		t.Fatal(err)
+	}
+	stat := func(name string) fs.FileInfo {
+		info, err := os.Stat(filepath.Join(dir, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return info
+	}
+	extra, svc := stat("extra"), stat("extra/svc.exe")
+
+	locked := filepath.Join(dir, "extra", "svc.exe")
+	defer func(rename func(string, string) error) { renameResource = rename }(renameResource)
+	renameResource = func(from, to string) error {
+		if to == locked {
+			return &os.LinkError{Op: "rename", Old: from, New: to, Err: fs.ErrPermission}
+		}
+		return renamePackageStage(from, to)
+	}
+	writeFiles(t, src, map[string]string{"extra/data.txt": "v2", "extra/new/y": "y"})
+	later := time.Now().Add(time.Hour)
+	if err := os.Chtimes(filepath.Join(src, "extra", "data.txt"), later, later); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(src, "extra", "gone.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(src, "extra", "old")); err != nil {
+		t.Fatal(err)
+	}
+	if err := place("2"); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"app": "2", "extra/svc.exe": "service", "extra/data.txt": "v2", "extra/new/y": "y", "top.txt": "top"}
+	if got := dirFiles(t, dir); !maps.Equal(got, want) {
+		t.Errorf("dir = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "extra", "old")); err == nil {
+		t.Error("the removed directory extra/old is still there")
+	}
+	if !os.SameFile(extra, stat("extra")) || !os.SameFile(svc, stat("extra/svc.exe")) {
+		t.Error("the second build replaced resources that did not change")
+	}
+
+	// A changed resource that cannot be replaced fails the build, by name.
+	writeFiles(t, src, map[string]string{"extra/svc.exe": "service 2"})
+	err := place("3")
+	if err == nil || !strings.Contains(err.Error(), locked) {
+		t.Errorf("placing a changed resource in use: err = %v, want one naming %s", err, locked)
 	}
 }
 
@@ -377,6 +594,23 @@ func TestNestedCodesignArgs(t *testing.T) {
 	}
 }
 
+func TestKeepsSignatures(t *testing.T) {
+	for _, tc := range []struct {
+		identity   string
+		production bool
+		want       bool
+	}{
+		{"-", true, true},
+		{"-", false, true},
+		{"Apple Development: X", false, true}, // mygo dev
+		{"Developer ID Application: X", true, false},
+	} {
+		if got := keepsSignatures(tc.identity, tc.production); got != tc.want {
+			t.Errorf("keepsSignatures(%q, %v) = %v", tc.identity, tc.production, got)
+		}
+	}
+}
+
 // TestBuildResources builds an app for each platform and finds its
 // resources, and only those of its platform, where the app looks for them,
 // then builds again without one.
@@ -386,8 +620,10 @@ func TestBuildResources(t *testing.T) {
 	}
 	dir := testModule(t, map[string]string{
 		"main.go":                                "package main\n\nimport \"github.com/egoist/mygo\"\n\nfunc main() { mygo.App.Run() }\n",
-		"mygo.json":                              `{"name": "Res App", "resources": ["extra.txt"]}`,
+		"mygo.json":                              `{"name": "Res App", "resources": ["extra.txt"], "resourcesExclude": ["**/*.psd"]}`,
 		"resources/data/a.txt":                   "a",
+		"resources/data/a.psd":                   "layers",
+		"resources/embed.go":                     "package resources",
 		"resources/icon.png":                     string(defaultIcon()),
 		"resources/darwin/bin/server":            "darwin",
 		"resources/linux-amd64/bin/server":       "linux",
@@ -423,6 +659,11 @@ func TestBuildResources(t *testing.T) {
 		}
 		if names, err := entryNames(filepath.Join(res, "bin")); err != nil || !slices.Equal(names, []string{server}) {
 			t.Errorf("%s: bin holds %q, %v", tc.goos, names, err)
+		}
+		for _, name := range []string{"embed.go", "data/a.psd"} {
+			if _, err := os.Stat(filepath.Join(res, filepath.FromSlash(name))); err == nil {
+				t.Errorf("%s: the excluded %s was copied", tc.goos, name)
+			}
 		}
 		for _, name := range []string{"darwin", "linux-amd64", "windows-amd64", "windows-arm64"} {
 			if _, err := os.Stat(filepath.Join(res, name)); err == nil {
@@ -779,5 +1020,52 @@ func TestUniversalResources(t *testing.T) {
 		if _, err := c.resources("darwin", "universal"); err == nil || !fragments(err.Error(), tc.want...) {
 			t.Errorf("%q: err = %v, want %q", slices.Sorted(maps.Keys(tc.files)), err, tc.want)
 		}
+	}
+}
+
+// TestPlaceBuildRunningResource places a development build again while a
+// program the app started from its resources runs, as a service the app
+// launches: Windows keeps that program, and the directory it runs from,
+// from being moved, which failed the rebuild before (#1905).
+func TestPlaceBuildRunningResource(t *testing.T) {
+	dir, src := t.TempDir(), t.TempDir()
+	exe := "svc"
+	if runtime.GOOS == "windows" {
+		exe += ".exe"
+	}
+	if err := os.MkdirAll(filepath.Join(src, "extra"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyFile(os.Args[0], filepath.Join(src, "extra", exe), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFiles(t, src, map[string]string{"extra/data.txt": "v1"})
+	res := []resource{{name: "extra", src: filepath.Join(src, "extra")}}
+	place := func(app string) error {
+		stage := t.TempDir()
+		writeFiles(t, stage, map[string]string{"app": app})
+		return placeBuild(stage, dir, res)
+	}
+	if err := place("1"); err != nil {
+		t.Fatal(err)
+	}
+	svc := fakeChild(filepath.Join(dir, "extra", exe), "sleep")
+	if err := svc.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = svc.Process.Kill()
+		_ = svc.Wait()
+	}()
+	writeFiles(t, src, map[string]string{"extra/data.txt": "v2"})
+	later := time.Now().Add(time.Hour)
+	if err := os.Chtimes(filepath.Join(src, "extra", "data.txt"), later, later); err != nil {
+		t.Fatal(err)
+	}
+	if err := place("2"); err != nil {
+		t.Fatalf("placing a build while a resource runs: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "extra", "data.txt")); err != nil || string(b) != "v2" {
+		t.Errorf("extra/data.txt = %q, %v; want v2", b, err)
 	}
 }

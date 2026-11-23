@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"silverwing-go/internal/domain"
 	"silverwing-go/internal/integrations"
 	"silverwing-go/internal/noticeprep"
 	"silverwing-go/internal/releasenotice"
@@ -50,6 +51,9 @@ func (f *tagNoticeDispatchFixture) newIntegrations(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.app.Integrations = integrations.NewService(f.app.Paths, f.app.Config, f.app.Runner)
+	f.app.Integrations.SetNoticeCLIReady(func(cfg domain.AppConfig) bool {
+		return OptionalCLIFeatureTagNotice.Available(func(tool string) bool { return f.app.optionalCLIReadyFor(cfg, tool) })
+	})
 }
 
 func TestTagNoticeRefreshRoutesWarmAsynchronouslyAndNewInstanceReadsDisk(t *testing.T) {
@@ -103,6 +107,46 @@ func TestTagNoticeRefreshRoutesWarmAsynchronouslyAndNewInstanceReadsDisk(t *test
 			}
 			if f.count(t, "metadata") != beforeMetadata || f.count(t, "contact-TesterA") != beforeContacts || f.count(t, "verify") != 2 {
 				t.Fatal("send did not share permanent preparation")
+			}
+		})
+	}
+}
+
+func TestTagNoticePrefetchRequiresActiveOptionalCLIs(t *testing.T) {
+	for _, mode := range []string{"lark-disabled", "lark-path", "genbu-disabled"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newTagNoticeDispatchFixture(t, "TesterA")
+			f.arm(t, "contact-TesterA")
+			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+			defer cancel()
+			metadata := Action{Kind: "requirements.metadata", Payload: map[string]any{"url": f.taskURL(), "force": true, "fullRefresh": true}}
+			if _, err := f.app.Dispatch(ctx, metadata); err != nil {
+				t.Fatal(err)
+			}
+			if err := waitNoticeFixtureFile(f.state.Gate + ".started"); err != nil {
+				t.Fatal(err)
+			}
+			if mode == "lark-path" {
+				f.changeLarkPath(t)
+			} else {
+				setOptionalCLISwitch(t, f.app, strings.TrimSuffix(mode, "-disabled"), false)
+			}
+			// The blocked lookup must exit without releasing the fake command.
+			f.waitWarm(t)
+			if _, err := f.app.Dispatch(ctx, metadata); err != nil {
+				t.Fatal("Meegle metadata unavailable", err)
+			}
+			result, err := f.app.ReadRequirementList(ctx, RequirementListRequest{Refresh: true, SprintKey: "notice-project:900"}, nil)
+			if err != nil || len(result.Data.Items) == 0 {
+				t.Fatal("Meegle list unavailable", result, err)
+			}
+			f.waitWarm(t)
+			if f.count(t, "metadata") != 2 || f.count(t, "contact-TesterA") != 1 || f.count(t, "local") != 1 {
+				t.Fatal("optional CLI work continued after retirement")
+			}
+			store := noticeprep.Store{Directory: filepath.Join(f.app.Paths.Cache, "tag-notice-preparation")}
+			if _, _, hit, err := store.Load(ctx, f.taskURL()); err != nil || hit {
+				t.Fatal("retired prefetch committed a snapshot", hit, err)
 			}
 		})
 	}

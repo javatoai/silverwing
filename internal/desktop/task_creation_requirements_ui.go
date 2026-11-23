@@ -20,13 +20,23 @@ func (s *app) renderTaskCreationRequirements(c *ui.Context, p palette) {
 			combo = ui.ComboboxBase(c.Key("task-create-requirement"), &state.query)
 			combo.Input.Grow(1).MinWidth(0).FillWidth().Height(36).Padding(0, 30, 0, 9).
 				Placeholder("可留空，或粘贴需求链接 / 搜索标题").Background(p.surface).Border(1, p.line).Radius(8).
-				Label("需求链接或搜索").Tooltip(firstNonEmpty(state.selectedTitle, taskCreationRequirementTitle(form.draft.RequirementTitle), "粘贴完整需求链接或输入标题搜索")).
+				Label("需求链接或搜索").Tooltip(firstNonEmpty(taskCreationRequirementTitle(form.draft.RequirementTitle), state.selectedTitle, "粘贴完整需求链接或输入标题搜索")).
 				OnChange(s.editTaskCreationRequirementInput)
 			if form.taskFieldFocus == "requirement" {
 				combo.Input.Focus().ScrollIntoView()
 				form.taskFieldFocus = ""
 			}
 			drawTaskComboboxChevron(combo.Input, p)
+			if state.hasWorkItemLink() {
+				refreshLabel := "重新读取需求"
+				if state.linkReadError != "" {
+					refreshLabel = "重试读取需求"
+				}
+				if iconButtonDisabled(c, "task-create-requirement-link-refresh", "refresh", refreshLabel, p, form.draft.MetadataLoading).Clicked() {
+					s.startTaskCreationRequirementRead(form, state, true)
+				}
+				return
+			}
 			refreshLabel := "刷新需求候选"
 			if state.candidatesError != "" {
 				refreshLabel = "重试读取需求候选"
@@ -37,6 +47,10 @@ func (s *app) renderTaskCreationRequirements(c *ui.Context, p palette) {
 				s.startTaskCreationRequirementCandidates(form, state)
 			}
 		})
+		link := state.hasWorkItemLink()
+		if link && combo.Filtering() {
+			combo.SetOpen(false)
+		}
 		combo.Popup(func(panel ui.Element) {
 			panel.Padding(4).MaxHeight(280).Background(p.surface).Border(1, p.line).Radius(9).Shadow(0, 5, 16, 0, ui.RGBA(0, 0, 0, 0.14))
 			ui.Scroll(c).FillWidth().MaxHeight(272).Padding(2).Gap(3).Children(func() {
@@ -58,7 +72,7 @@ func (s *app) renderTaskCreationRequirements(c *ui.Context, p palette) {
 						})
 					})
 				}
-				if len(options) == 0 {
+				if len(options) == 0 && (!link || state.candidatesLoading) {
 					message := "没有匹配的需求，可直接填写完整链接。"
 					if state.candidatesLoading {
 						message = "正在读取需求候选…"
@@ -84,9 +98,14 @@ func (s *app) renderTaskCreationRequirements(c *ui.Context, p palette) {
 		if state.inputIsQuery {
 			label(c, "请选择匹配需求，或填写完整需求链接。", 10, p.muted).Wrap()
 		}
-		if state.candidatesError != "" {
+		switch {
+		case link && form.draft.MetadataLoading:
+			label(c, "正在读取需求…", 11, p.muted).FillWidth().Wrap()
+		case link && state.linkReadError != "":
+			label(c, "读取需求失败："+state.linkReadError, 11, p.amber).FillWidth().Wrap()
+		case !link && state.candidatesError != "":
 			label(c, state.candidatesError, 10, p.amber).Wrap()
-		} else if state.candidatesWarning != "" {
+		case !link && state.candidatesWarning != "":
 			label(c, state.candidatesWarning, 10, p.amber).Wrap()
 		}
 	})

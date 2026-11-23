@@ -114,7 +114,7 @@ func TestProductionOldToastCannotCancelANewerRequest(t *testing.T) {
 }
 
 func TestProductionProgressToastRejectsStaleContext(t *testing.T) {
-	for _, change := range []string{"home", "config", "batch", "branch", "manual", "selection", "generation", "view", "closed"} {
+	for _, change := range []string{"home", "config", "batch", "branch", "preview", "selection", "generation", "view", "closed"} {
 		t.Run(change, func(t *testing.T) {
 			s, v, _, base, _ := productionRequestFixture(t)
 			backend := &productionProgressBackend{productionTestBackend: base, contexts: make(chan context.Context, 1)}
@@ -134,8 +134,8 @@ func TestProductionProgressToastRejectsStaleContext(t *testing.T) {
 				v.BatchID = "another-batch"
 			case "branch":
 				v.Branch = "feature/another"
-			case "manual":
-				v.ManualTag = "9.9.9"
+			case "preview":
+				v.Preview = nil
 			case "selection":
 				v.Selection.ServiceID = "another-service"
 			case "generation":

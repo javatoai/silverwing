@@ -2,6 +2,7 @@ package tools
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -53,56 +54,93 @@ type jsonEntry struct {
 	value *orderedJSON
 }
 
+type jsonReader struct {
+	ctx              context.Context
+	decoder          *json.Decoder
+	source           string
+	nodes            *[]JSONSourceNode
+	rejectDuplicates bool
+}
+
 func ParseJSON(source string) (JSONDocument, error) {
 	if err := checkSize(source); err != nil {
 		return JSONDocument{}, err
 	}
 	normalized, trailingClosings := jsonToolInputWithTrailingCommas(source)
 	decoder := json.NewDecoder(strings.NewReader(normalized))
-	decoder.UseNumber()
 	var nodes []JSONSourceNode
-	root, err := readJSON(decoder, source, 0, "", &nodes)
-	if err == nil {
-		if _, e := decoder.Token(); e != io.EOF {
-			if e == nil {
-				e = errors.New("JSON 结束后存在多余内容")
-			}
-			err = e
-		}
-	}
-	var formatted string
-	if err == nil {
-		formatted, err = formatJSONTool(normalized, trailingClosings)
-	}
+	reader := jsonReader{ctx: context.Background(), decoder: decoder, source: source, nodes: &nodes}
+	root, err := reader.readDocument()
 	if err != nil {
-		offset := int(decoder.InputOffset())
-		var syntax *json.SyntaxError
-		if errors.As(err, &syntax) {
-			offset = int(syntax.Offset) - 1
-		}
-		line, column := location(source, offset)
-		return JSONDocument{}, &JSONError{err.Error(), line, column}
+		return JSONDocument{}, err
+	}
+	formatted, err := formatJSONTool(normalized, trailingClosings)
+	if err != nil {
+		return JSONDocument{}, reader.errorAtOffset(err)
 	}
 	indexJSONNodes(source, nodes)
 	return JSONDocument{Formatted: formatted, Compact: root.render(false, 0), Nodes: nodes}, nil
 }
-func readJSON(d *json.Decoder, source string, depth int, pointer string, nodes *[]JSONSourceNode) (*orderedJSON, error) {
-	start := int(d.InputOffset())
-	for start < len(source) && strings.ContainsRune(" \r\n\t,:", rune(source[start])) {
-		start++
+
+func (r *jsonReader) readDocument() (*orderedJSON, error) {
+	r.decoder.UseNumber()
+	root, err := r.readValue(0, "")
+	if err == nil {
+		if _, trailing := r.decoder.Token(); trailing != io.EOF {
+			if trailing == nil {
+				trailing = errors.New("JSON 结束后存在多余内容")
+			}
+			err = trailing
+		}
+	}
+	if canceled := r.ctx.Err(); canceled != nil {
+		return nil, canceled
+	}
+	if err != nil {
+		return nil, r.errorAtOffset(err)
+	}
+	return root, nil
+}
+
+func (r *jsonReader) errorAtOffset(err error) *JSONError {
+	offset := int(r.decoder.InputOffset())
+	var syntax *json.SyntaxError
+	if errors.As(err, &syntax) {
+		offset = int(syntax.Offset) - 1
+	}
+	line, column := location(r.source, offset)
+	return &JSONError{err.Error(), line, column}
+}
+
+func (r *jsonReader) readValue(depth int, pointer string) (*orderedJSON, error) {
+	if err := r.ctx.Err(); err != nil {
+		return nil, err
+	}
+	d := r.decoder
+	var start int
+	if r.nodes != nil {
+		start = int(d.InputOffset())
+		for start < len(r.source) && strings.ContainsRune(" \r\n\t,:", rune(r.source[start])) {
+			start++
+		}
 	}
 	token, err := d.Token()
 	if err != nil {
 		return nil, err
 	}
-	nodeIndex := len(*nodes)
-	*nodes = append(*nodes, JSONSourceNode{Pointer: pointer, StartOffset: start})
+	var nodeIndex int
+	if r.nodes != nil {
+		nodeIndex = len(*r.nodes)
+		*r.nodes = append(*r.nodes, JSONSourceNode{Pointer: pointer, StartOffset: start})
+	}
 	n := &orderedJSON{}
 	if delimiter, ok := token.(json.Delim); ok {
 		if depth >= MaxJSONDepth {
 			return nil, fmt.Errorf("JSON 嵌套不能超过 %d 层", MaxJSONDepth)
 		}
-		(*nodes)[nodeIndex].IsContainer = true
+		if r.nodes != nil {
+			(*r.nodes)[nodeIndex].IsContainer = true
+		}
 		switch delimiter {
 		case '{':
 			n.object = true
@@ -116,12 +154,20 @@ func readJSON(d *json.Decoder, source string, depth int, pointer string, nodes *
 				if !ok {
 					return nil, errors.New("对象的键必须是字符串")
 				}
-				child, e := readJSON(d, source, depth+1, pointer+"/"+strings.ReplaceAll(strings.ReplaceAll(key, "~", "~0"), "/", "~1"), nodes)
+				index, exists := indexes[key]
+				if exists && r.rejectDuplicates {
+					return nil, fmt.Errorf("JSON 对象包含重复键 %s", quoteJSON(key))
+				}
+				var childPointer string
+				if r.nodes != nil {
+					childPointer = pointer + "/" + strings.ReplaceAll(strings.ReplaceAll(key, "~", "~0"), "/", "~1")
+				}
+				child, e := r.readValue(depth+1, childPointer)
 				if e != nil {
 					return nil, e
 				}
-				if i, exists := indexes[key]; exists {
-					n.entries[i].value = child
+				if exists {
+					n.entries[index].value = child
 				} else {
 					indexes[key] = len(n.entries)
 					n.entries = append(n.entries, jsonEntry{key, child})
@@ -130,7 +176,11 @@ func readJSON(d *json.Decoder, source string, depth int, pointer string, nodes *
 		case '[':
 			n.array = make([]*orderedJSON, 0)
 			for d.More() {
-				child, e := readJSON(d, source, depth+1, fmt.Sprintf("%s/%d", pointer, len(n.array)), nodes)
+				var childPointer string
+				if r.nodes != nil {
+					childPointer = fmt.Sprintf("%s/%d", pointer, len(n.array))
+				}
+				child, e := r.readValue(depth+1, childPointer)
 				if e != nil {
 					return nil, e
 				}
@@ -145,8 +195,9 @@ func readJSON(d *json.Decoder, source string, depth int, pointer string, nodes *
 	} else {
 		n.value = token
 	}
-	end := int(d.InputOffset())
-	(*nodes)[nodeIndex].EndOffset = end
+	if r.nodes != nil {
+		(*r.nodes)[nodeIndex].EndOffset = int(d.InputOffset())
+	}
 	return n, nil
 }
 

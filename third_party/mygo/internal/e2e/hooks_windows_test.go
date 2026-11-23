@@ -18,6 +18,11 @@ func activateMenu(w *mygo.Window, path ...string) (err error) {
 	return err
 }
 
+func menuItemEnabled(w *mygo.Window, path ...string) (enabled bool, err error) {
+	mygo.RunOnMain(func() { enabled, err = win.TestMenuItemEnabled(w.NativeHandle(), path...) })
+	return enabled, err
+}
+
 // Keyboard, dialog and popup automation are not wired on Windows.
 func pressShortcut(string, bool) (bool, bool) { return false, false }
 
@@ -74,13 +79,22 @@ func drag(w *mygo.Window, points [][2]float64) (ok bool) {
 	return ok
 }
 
+// wheel turns the mouse's wheel a notch down at (x, y), with the message
+// Windows sends.
+func wheel(w *mygo.Window, x, y float64) (ok bool) {
+	mygo.RunOnMain(func() { ok = win.TestWheelSurface(w.NativeHandle(), x, y) })
+	return ok
+}
+
 func webViewAttached(*mygo.Window) (bool, bool) { return false, false }
 
 // Collection behaviors and deactivating the app are macOS's.
 func collectionBehavior(*mygo.Window) (uint, bool)               { return 0, false }
 func deactivateApp() bool                                        { return false }
 func material(*mygo.Window) (string, int, float64, bool, bool)   { return "", 0, 0, false, false }
+func materialState(*mygo.Window) (int, bool)                     { return 0, false }
 func roundedBacking(*mygo.Window) (bool, float64, float64, bool) { return false, 0, 0, false }
+func windowBacking(*mygo.Window) (bool, float64, bool)           { return false, 0, false }
 func appActive() (bool, bool)                                    { return false, false }
 
 // WebView2 opens DevTools in a window of its own.
@@ -172,6 +186,13 @@ func openMenus(w *mygo.Window, letter byte) (supported bool) {
 	return true
 }
 
+// inMenuLoop reports whether the window runs a menu loop, which reads the
+// keys typed from then on.
+func inMenuLoop(w *mygo.Window) (in bool) {
+	mygo.RunOnMain(func() { in = win.TestInMenuLoop(w.NativeHandle()) })
+	return in
+}
+
 // closeMenus leaves the menus, as Escape does.
 func closeMenus() { mygo.RunOnMain(win.TestEndMenu) }
 
@@ -199,6 +220,13 @@ func menuBarColors(w *mygo.Window) (bar, line uint32, supported bool) {
 func topNonClient(w *mygo.Window) (px, want int32, supported bool) {
 	mygo.RunOnMain(func() { px, want = win.TestTopNonClient(w.NativeHandle()) })
 	return px, want, true
+}
+
+// frameExtension returns how far a window's frame extends over the top and
+// the bottom of its client area, -1 for all over.
+func frameExtension(w *mygo.Window) (top, bottom int32) {
+	mygo.RunOnMain(func() { top, bottom = win.TestFrameExtension(w.NativeHandle()) })
+	return top, bottom
 }
 
 // titleButtonColor puts the pointer over a window control of a hidden
@@ -237,6 +265,8 @@ func failWebViews(n int) bool {
 
 // A Control-click is a secondary click on macOS only.
 func controlClick(*mygo.Window, float64, float64) bool { return false }
+
+func secondaryClickAsPrimary(*mygo.Window, float64, float64) bool { return false }
 
 // composeOver does what an input method that converts typed text again
 // does through IMM32: it settles the range it reconverts, then composes or
@@ -323,10 +353,17 @@ func choosePopupItem(label string) (ok bool) {
 	return ok
 }
 
+func popupItemEnabled(label string) (enabled, ok bool) {
+	mygo.RunOnMain(func() { enabled, ok = win.TestPopupItemEnabled(label) })
+	return enabled, ok
+}
+
 // Input methods keep the keys typed while they compose from the content
 // themselves here (GTK's filtering, IMM32's VK_PROCESSKEY), which a
 // composition the test makes up does not show.
 func pressKey(*mygo.Window, uint16, string) bool { return false }
+
+func pressKeyComposing(*mygo.Window, uint16, string, string, string) bool { return false }
 
 // dragFiles drags files from another application to (x, y) of a window of
 // native UI and drops them, as OLE does, waiting for the target to answer.
@@ -438,3 +475,37 @@ func takeForeground(w *mygo.Window) {
 		}
 	})
 }
+
+// pressLetter presses the key of an uppercase letter, with Ctrl held when
+// cmd is set, like a keyboard, in the window brought to the foreground.
+func pressLetter(w *mygo.Window, letter byte, cmd bool) (ok bool) {
+	mygo.RunOnMain(func() {
+		if ok = win.TestForeground(w.NativeHandle()); !ok {
+			return
+		}
+		if cmd {
+			win.TestPressKeys(0x11, letter) // VK_CONTROL
+		} else {
+			win.TestPressKeys(letter)
+		}
+	})
+	return ok
+}
+
+func glassTint(*mygo.Window) (red, green, blue, alpha float64, ok bool) { return 0, 0, 0, 0, false }
+
+func nativeGlassSupported() bool { return false }
+
+func nativeGlass(*mygo.Window) (class string, frame [4]float64, style int, ok bool) {
+	return "", frame, 0, false
+}
+
+func nativeGlassTint(*mygo.Window) (red, green, blue, alpha float64) { return 0, 0, 0, 0 }
+
+func activateApp() {}
+
+func hitView(*mygo.Window, float64, float64) string { return "" }
+
+// Only X servers keep a keyboard's state for the tests after a test: see
+// left_behind_linux_test.go.
+func keyboardState() (state string, restore func()) { return "", func() {} }

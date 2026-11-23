@@ -31,7 +31,7 @@ func productionCardsTester(s *app, width int, dark bool) *ui.Tester {
 			s.renderProductionPage(c, p)
 		})
 		s.renderProductionWorktreesDialog(c, p)
-		s.renderProductionBaselineDialog(c, p)
+		s.renderProductionHistoryDialog(c, p)
 		s.renderConfirmationDialog(c, p)
 		ui.ThemedMenus(c, s.popupMenuScope())
 	}, width, 1400)
@@ -136,7 +136,7 @@ func TestProductionUninitializedCardsRemainVisibleAndDisabled(t *testing.T) {
 						v.Preview.ProductionSHA = strings.Repeat("f", 40)
 						v.Preview.Diff = " example.go | 1 +\n 1 file changed, 1 insertion(+)"
 						if state == "first-read" {
-							v.Preview, v.Busy, v.ActiveStep = nil, true, 1
+							v.Preview, v.Busy, v.ActiveStep, v.ReleaseStarted = nil, true, 1, true
 						}
 					}
 					tester := productionCardsTester(s, width, dark)
@@ -234,12 +234,6 @@ func TestProductionTagRecordsCopyAndHistoryRemainScoped(t *testing.T) {
 	if third.Y <= second.Y || !productionExactText(tester, "示例服务：2.3.44") {
 		t.Fatal("new Tag did not append below existing records")
 	}
-	b.Ended = true
-	s.releaseUnit.state.production.batches[0] = b
-	tester.Frame()
-	if err := tester.Click("复制 Tag 记录 2.3.44.2"); err != nil || tester.Clipboard() != "示例服务：2.3.44.2" {
-		t.Fatalf("ended batch lost record copy: %v", err)
-	}
 	v.BatchID = "different-batch"
 	if s.productionDisplayedBatchCurrent(v, b) {
 		t.Fatal("old copy context survived a batch switch")
@@ -300,7 +294,7 @@ func TestProductionNavigationStaysInBottomGroup(t *testing.T) {
 		for _, enabled := range []bool{false, true} {
 			for _, compact := range []bool{false, true} {
 				s, _, _ := productionFixture(t)
-				s.settingsUnit.state.configJSON = fmt.Sprintf(`{"tagEnabled":%t,"toolVisibility":{"json":%t,"dateTime":%t,"textDiff":%t,"killPort":false,"base64":false,"qrCode":false,"textCount":false}}`, enabled, tools, tools, tools)
+				s.settingsUnit.state.configJSON = fmt.Sprintf(`{"tagEnabled":%t,"optionalCLIs":{"genbu":true},"toolVisibility":{"json":%t,"dateTime":%t,"textDiff":%t,"killPort":false,"base64":false,"qrCode":false,"textCount":false}}`, enabled, tools, tools, tools)
 				tester := ui.NewTester(func(c *ui.Context) {
 					ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() { s.sidebar(c, setTheme(c, false), compact) })
 				}, 240, 900)
@@ -331,6 +325,7 @@ func TestProductionRecordRefreshKeepsExactBatchAndNoWrite(t *testing.T) {
 	for _, state := range []string{"active", "pending-sync", "pending-tag", "ended"} {
 		t.Run(state, func(t *testing.T) {
 			s, v, b, backend, window := productionRequestFixture(t)
+			activeID := b.ID
 			b.Tags = []production.Tag{{Name: "2.3.44"}}
 			cardTitle := "构建生产 Tag"
 			switch state {
@@ -339,10 +334,16 @@ func TestProductionRecordRefreshKeepsExactBatchAndNoWrite(t *testing.T) {
 			case "pending-tag":
 				b.Phase, b.Intent = "PAUSED", &production.Intent{Kind: "tag", Step: "tag", Tag: "2.3.44.1"}
 			case "ended":
-				b.Ended, b.Phase = true, "ENDED"
+				b.ID, b.ReleaseBranch, b.Ended, b.Phase = "history-build-refresh", "release/older", true, "ENDED"
 				cardTitle = "生产 Tag 记录"
 			}
-			s.releaseUnit.state.production.batches[0] = b
+			if state == "ended" {
+				s.releaseUnit.state.production.batches = append(s.releaseUnit.state.production.batches, b)
+				d := openProductionHistoryTest(t, s, v, backend, window)
+				s.viewProductionHistory(d, b)
+			} else {
+				s.releaseUnit.state.production.batches[0] = b
+			}
 			tester := productionCardsTester(s, 1440, false)
 			footer := productionAlignmentRect(t, tester, cardTitle+"操作栏")
 			refresh := productionAlignmentRect(t, tester, "刷新构建状态")
@@ -364,11 +365,11 @@ func TestProductionRecordRefreshKeepsExactBatchAndNoWrite(t *testing.T) {
 			if call := productionTestCall(t, backend); call.Kind != "production.refresh-build" || call.Payload["batchId"] != b.ID {
 				t.Fatalf("record action dispatched wrong request: %+v", call)
 			}
-			b.Tags[0].Status.Build = domain.GenbuSuccess
+			b.Tags = []production.Tag{{Name: b.Tags[0].Name, Status: domain.GenbuTagProbeStatus{Build: domain.GenbuSuccess}}}
 			backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &b}}}
 			productionTestUpdate(t, window)
 			tester.Frame()
-			if !tester.HasText("构建成功") || s.confirmationDialog != nil || len(backend.calls) != 0 {
+			if !tester.HasText("构建成功") || v.BatchID != activeID || s.confirmationDialog != nil || len(backend.calls) != 0 {
 				t.Fatal("refresh failed to update the record or started an extra operation")
 			}
 			captureProductionSummary(t, tester, "refresh-footer-"+state)

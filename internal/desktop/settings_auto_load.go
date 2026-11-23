@@ -31,6 +31,9 @@ func (s *app) localPageReadKey() string {
 }
 
 func (s *app) observePageLocalRead() {
+	if state := s.settingsUnit.state.platformConnections; state != nil && !s.platformAccountPageActive() {
+		state.leavePlatformAccountPage()
+	}
 	if s.loading || s.backend == nil || s.win == nil || s.win.IsDestroyed() {
 		return
 	}
@@ -176,12 +179,10 @@ func (s *app) ensureSettingsPageData() {
 	}
 	s.settingsUnit.state.settingsLoaded, s.settingsUnit.state.settingsOutput = key, ""
 	switch s.settingsUnit.state.settingsPage {
-	case "config-backup":
-		s.act("config.backups", "", "", "", "", "", nil)
 	case "agents":
 		s.loadSettingsAgentInstructions()
-	case "instruction-templates":
-		s.requestSettingsInstructionTemplates()
+	case "task-creation":
+		s.requestSettingsCLIStatus("codex", false)
 	case "codex-plugins":
 		s.requestSettingsCLIStatus("codex", false)
 		s.act("codex.extensions/snapshot", "", "", "", "", "", nil)
@@ -190,10 +191,14 @@ func (s *app) ensureSettingsPageData() {
 		s.act("codex.extensions/mcp/status", "", "", "", "", "", s.settingsMCPPayload(nil))
 	case "cli-tools":
 		s.requestSettingsCLIStatus(s.currentSettingsCLITool(), false)
+	case platformConnectionsPage:
+		if state := s.settingsUnit.state.platformConnections; state != nil && state.read == nil {
+			s.requestPlatformConnections(true)
+		}
 	case "sw-install":
 		s.settingsUnit.state.settingsCLIBundleStatus = nil
 		s.act("cli.bundle.status", "", "", "", "", "", map[string]any{"settingsCLIBundleHome": s.snapshot.Home})
-	case "cli-git", "cli-codex", "cli-meegle", "cli-lark", "cli-genbu":
+	case "cli-git", "cli-codex", "cli-meegle", "cli-lark":
 		s.requestSettingsCLIStatus(strings.TrimPrefix(s.settingsUnit.state.settingsPage, "cli-"), false)
 	case "skill-sources":
 		s.act("skills.sources/catalog", "", "", "", "", "", nil)
@@ -205,16 +210,4 @@ func (s *app) ensureSettingsPageData() {
 	case "logs":
 		s.act("logs.list", "", "", "", "", "", map[string]any{"filter": "recent"})
 	}
-}
-
-func (s *app) requestSettingsInstructionTemplates() {
-	state := s.ensureTaskNotesUI()
-	state.settingsTemplatesRequestGeneration++
-	state.settingsTemplatesLoading = true
-	state.settingsTemplatesError = ""
-	s.act("instructions.templates.list", "", "", "", "", "", map[string]any{
-		"settingsTemplatesGeneration": state.settingsTemplatesRequestGeneration,
-		"settingsTemplatesHome":       s.snapshot.Home,
-		"settingsTemplatesPage":       "instruction-templates",
-	})
 }

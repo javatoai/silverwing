@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"silverwing-go/internal/domain"
 )
 
 func TestTagPreflightReattachesInterruptedConflictWithoutChangingFiles(t *testing.T) {
@@ -32,7 +34,7 @@ func TestTagPreflightReattachesInterruptedConflictWithoutChangingFiles(t *testin
 	tagRecoveryGit(t, service, repository, "commit", "-am", "target")
 	target := tagRecoveryGit(t, service, repository, "rev-parse", "HEAD")
 
-	path, err := service.conflictWorktreePath(newUUID())
+	path, err := service.conflictWorktreePath(domain.AppConfig{}, newUUID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +48,7 @@ func TestTagPreflightReattachesInterruptedConflictWithoutChangingFiles(t *testin
 	resolvedFile := filepath.Join(path, "overlap.txt")
 	write(resolvedFile, "in-progress resolution\n")
 	var conflict *mergeConflictError
-	err = service.verifyMergeInTemporaryWorktree(ctx, repository, target, source, "test", path)
+	err = service.verifyMergeInTemporaryWorktree(ctx, domain.AppConfig{}, repository, target, source, path)
 	if !errors.As(err, &conflict) || conflict.path != path || len(conflict.files) != 1 || conflict.targetSHA != target {
 		t.Fatalf("interrupted conflict was not recognized: %+v %v", conflict, err)
 	}
@@ -55,7 +57,7 @@ func TestTagPreflightReattachesInterruptedConflictWithoutChangingFiles(t *testin
 		t.Fatalf("retry altered a manual resolution: %q %v", content, err)
 	}
 	tagRecoveryGit(t, service, path, "add", "overlap.txt")
-	err = service.verifyMergeInTemporaryWorktree(ctx, repository, target, source, "test", path)
+	err = service.verifyMergeInTemporaryWorktree(ctx, domain.AppConfig{}, repository, target, source, path)
 	if !errors.As(err, &conflict) || len(conflict.files) != 0 {
 		t.Fatalf("resolved and staged merge was not recovered: %+v %v", conflict, err)
 	}
@@ -64,7 +66,7 @@ func TestTagPreflightReattachesInterruptedConflictWithoutChangingFiles(t *testin
 	write(filepath.Join(repository, ".git", "info", "exclude"), "build.ignored\n")
 	ignored := filepath.Join(path, "build.ignored")
 	write(ignored, "generated during resolution\n")
-	recovered, err := service.recoverTagWorktree(ctx, repository, path, target, source)
+	recovered, err := service.recoverTagWorktree(ctx, domain.AppConfig{}, repository, path, target, source)
 	if err != nil || recovered.mergedSHA != merged {
 		t.Fatalf("existing merge commit not accepted: %+v %v", recovered, err)
 	}
@@ -74,7 +76,7 @@ func TestTagPreflightReattachesInterruptedConflictWithoutChangingFiles(t *testin
 	if content, err := os.ReadFile(ignored); err != nil || string(content) != "generated during resolution\n" {
 		t.Fatalf("cleanup changed the ignored file: %q %v", content, err)
 	}
-	if err := service.verifyMergeInTemporaryWorktree(ctx, repository, base, source, "test", path); err == nil || !strings.Contains(err.Error(), path) {
+	if err := service.verifyMergeInTemporaryWorktree(ctx, domain.AppConfig{}, repository, base, source, path); err == nil || !strings.Contains(err.Error(), path) {
 		t.Fatalf("drifted baseline did not produce an actionable worktree path: %v", err)
 	}
 	if head := tagRecoveryGit(t, service, path, "rev-parse", "HEAD"); head != merged {
@@ -89,14 +91,14 @@ func TestTagPreflightPreservesIgnoredFilesInInterruptedWorktree(t *testing.T) {
 	base := tagRecoveryGit(t, service, repository, "rev-parse", "HEAD")
 	tagRecoveryGit(t, service, repository, "commit", "--allow-empty", "-m", "source")
 	source := tagRecoveryGit(t, service, repository, "rev-parse", "HEAD")
-	path, err := service.conflictWorktreePath(newUUID())
+	path, err := service.conflictWorktreePath(domain.AppConfig{}, newUUID())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := service.addDetachedWorktree(ctx, repository, path, base); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.verifyMergeInTemporaryWorktree(ctx, repository, base, source, "test", path); err != nil {
+	if err := service.verifyMergeInTemporaryWorktree(ctx, domain.AppConfig{}, repository, base, source, path); err != nil {
 		t.Fatalf("clean interrupted worktree cannot be reused: %v", err)
 	}
 	if head := tagRecoveryGit(t, service, path, "rev-parse", "HEAD"); head != base {
@@ -109,7 +111,7 @@ func TestTagPreflightPreservesIgnoredFilesInInterruptedWorktree(t *testing.T) {
 	if err := os.WriteFile(ignored, []byte("keep these bytes"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.verifyMergeInTemporaryWorktree(ctx, repository, base, source, "test", path); err == nil || !strings.Contains(err.Error(), path) {
+	if err := service.verifyMergeInTemporaryWorktree(ctx, domain.AppConfig{}, repository, base, source, path); err == nil || !strings.Contains(err.Error(), path) {
 		t.Fatalf("uncertain contents did not produce the exact worktree path: %v", err)
 	}
 	if bytes, err := os.ReadFile(ignored); err != nil || string(bytes) != "keep these bytes" {

@@ -34,6 +34,16 @@ func dmgFileName(c *Config, goarch string) string {
 // .DS_Store (see dsstore.go). Only hdiutil, which ships with macOS, is
 // needed.
 func buildDMG(c *Config, app, dir, goarch string, opts buildOptions) (_ string, err error) {
+	notary := c.MacOS.Notarize != nil && !opts.skipNotarize
+	// The app is notarized and stapled before it is copied into the image,
+	// so that the copy users drag to /Applications has its ticket, which
+	// Gatekeeper reads when it cannot ask Apple. Updates install the same
+	// stapled app.
+	if notary {
+		if err := notarizeApp(c.MacOS.Notarize, app); err != nil {
+			return "", err
+		}
+	}
 	file := dmgFileName(c, goarch)
 	t := con.start("Creating " + file)
 	defer func() { t.end(err, "Created "+file) }()
@@ -44,10 +54,11 @@ func buildDMG(c *Config, app, dir, goarch string, opts buildOptions) (_ string, 
 	defer os.RemoveAll(work)
 
 	// The image starts as a copy of a folder holding all it shows, which
-	// hdiutil sizes: on HFS+ every file takes whole blocks, more than the
-	// sizes add up to. ditto keeps the bundle exactly as signed, and copies
-	// it without cloning: hdiutil counts the blocks a file takes, fewer
-	// than its size in a sparse file, which HFS+ cannot keep sparse.
+	// hdiutil sizes: on HFS+ and APFS every file takes whole blocks, more
+	// than the sizes add up to. ditto keeps the bundle exactly as signed,
+	// and copies it without cloning: hdiutil counts the blocks a file
+	// takes, fewer than its size in a sparse file, which HFS+ cannot keep
+	// sparse.
 	src := filepath.Join(work, "src")
 	appName := filepath.Base(app)
 	if err := os.Mkdir(src, 0o755); err != nil {
@@ -73,7 +84,7 @@ func buildDMG(c *Config, app, dir, goarch string, opts buildOptions) (_ string, 
 		}
 	}
 	rw := filepath.Join(work, "rw.dmg")
-	if err := hdiutilRetrying(hdiutilCreateArgs(c.MacOS.DMGTitle, src, rw)...); err != nil {
+	if err := createDMG(c.MacOS.DMGTitle, src, rw); err != nil {
 		return "", err
 	}
 
@@ -107,41 +118,75 @@ func buildDMG(c *Config, app, dir, goarch string, opts buildOptions) (_ string, 
 	// LZMA gives the smallest images; it needs macOS 10.15, below the
 	// minimum MyGo supports.
 	dmg := filepath.Join(dir, file)
-	if err := command("hdiutil", "convert", rw, "-format", "ULMO", "-ov", "-o", dmg); err != nil {
+	if err := convertDMG(rw, dmg); err != nil {
 		return "", err
 	}
 	if opts.sign != "-" {
-		if err := command("codesign", "--force", "--timestamp", "--sign", opts.sign, dmg); err != nil {
-			return "", err
+		args := []string{"--force", "--timestamp", "--sign", opts.sign, dmg}
+		if out, err := signCode(file, opts.sign, args...); err != nil {
+			return "", fmt.Errorf("codesign %s: %v\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 		}
 	}
 	t.done("Created " + file)
-	if c.MacOS.Notarize != nil && !opts.skipNotarize {
+	if notary {
 		if err := notarize(c.MacOS.Notarize, dmg); err != nil {
-			return "", err
-		}
-		// The ticket covers the app too: staple it for updates, which
-		// install the bare app. The image's copy stays without it, which
-		// deltas allow for (stapledTicket in internal/update).
-		if err := command("xcrun", "stapler", "staple", app); err != nil {
 			return "", err
 		}
 	}
 	return dmg, nil
 }
 
-// hdiutilCreateArgs creates a writable HFS+ image of src, as large as its
-// contents need. hdiutil runs without -quiet, which would leave out of the
-// error why it failed.
-func hdiutilCreateArgs(volume, src, out string) []string {
-	return []string{
-		"create", "-ov",
-		"-volname", volume,
-		"-srcfolder", src,
-		"-fs", "HFS+", "-fsargs", "-c c=64,a=16,e=16",
-		"-format", "UDRW",
-		out,
+// convertDMG writes rw as a compressed read-only image. macOS 27 fails
+// "hdiutil convert" with "Resource temporarily unavailable", and asks for
+// "diskutil image create from" instead, which overwrites dmg as -ov does;
+// older systems, whose diskutil has no image verb, use hdiutil.
+func convertDMG(rw, dmg string) error {
+	if exec.Command("diskutil", "image", "create", "from", "-h").Run() == nil {
+		return command("diskutil", "image", "create", "from", "--format", "ULMO", rw, dmg)
 	}
+	return command("hdiutil", "convert", rw, "-format", "ULMO", "-ov", "-o", dmg)
+}
+
+// dmgFilesystems are the filesystems createDMG tries, in order. Tests
+// leave out HFS+ to build an image on APFS.
+var dmgFilesystems = []string{"HFS+", "APFS"}
+
+// createDMG creates a writable image of src, on HFS+, or on APFS when
+// HFS+ fails for another reason than a busy resource: on macOS 26.7.1,
+// "hdiutil create -srcfolder" fails on HFS+ with "no mountable file
+// systems" or "Device not configured", and works on APFS (#1352). APFS
+// needs macOS 10.13, and the ULMO image buildDMG converts it to 10.15
+// already. An error says how each filesystem failed.
+func createDMG(volume, src, out string) error {
+	var errs []error
+	for _, fs := range dmgFilesystems {
+		err := hdiutilRetrying(hdiutilCreateArgs(fs, volume, src, out)...)
+		if err == nil {
+			return nil
+		}
+		errs = append(errs, fmt.Errorf("on %s: %w", fs, err))
+		// Still busy after hdiutilRetrying's retries, which wrap the last
+		// attempt's error: another filesystem would wait for the same.
+		last := err
+		if u := errors.Unwrap(err); u != nil {
+			last = u
+		}
+		if hdiutilBusy(last) {
+			break
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// hdiutilCreateArgs creates a writable image of src on the filesystem fs,
+// HFS+ or APFS, as large as its contents need. hdiutil runs without
+// -quiet, which would leave out of the error why it failed.
+func hdiutilCreateArgs(fs, volume, src, out string) []string {
+	args := []string{"create", "-ov", "-volname", volume, "-srcfolder", src, "-fs", fs}
+	if fs == "HFS+" {
+		args = append(args, "-fsargs", "-c c=64,a=16,e=16")
+	}
+	return append(args, "-format", "UDRW", out)
 }
 
 // hdiutilAttach attaches a disk image and returns the device of its whole
@@ -215,11 +260,39 @@ func setFinderFlags(path string, flags uint16) error {
 
 // notarize submits a disk image to Apple's notary service, waits for the
 // verdict and staples the ticket to the image.
-func notarize(n *Notarize, dmg string) (err error) {
-	t := con.start("Notarizing " + filepath.Base(dmg))
+func notarize(n *Notarize, dmg string) error {
+	if err := submitNotary(n, dmg, filepath.Base(dmg)); err != nil {
+		return err
+	}
+	return command("xcrun", "stapler", "staple", dmg)
+}
+
+// notarizeApp notarizes an app bundle and staples the ticket to it. The
+// notary service takes no bundles, so a zip of it is submitted, made with
+// ditto, which keeps the bundle's signature and extended attributes.
+func notarizeApp(n *Notarize, app string) error {
+	work, err := os.MkdirTemp("", "mygo-notarize-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(work)
+	zip := filepath.Join(work, strings.TrimSuffix(filepath.Base(app), ".app")+".zip")
+	if err := command("ditto", "-c", "-k", "--keepParent", app, zip); err != nil {
+		return err
+	}
+	if err := submitNotary(n, zip, filepath.Base(app)); err != nil {
+		return err
+	}
+	return command("xcrun", "stapler", "staple", app)
+}
+
+// submitNotary submits file to Apple's notary service, as what it names,
+// and waits for the verdict.
+func submitNotary(n *Notarize, file, what string) (err error) {
+	t := con.start("Notarizing " + what)
 	t.set("usually takes a few minutes")
-	defer func() { t.end(err, "Notarized "+filepath.Base(dmg)) }()
-	args := []string{"notarytool", "submit", dmg, "--keychain-profile", n.KeychainProfile, "--wait", "--output-format", "json"}
+	defer func() { t.end(err, "Notarized "+what) }()
+	args := []string{"notarytool", "submit", file, "--keychain-profile", n.KeychainProfile, "--wait", "--output-format", "json"}
 	if n.Keychain != "" {
 		args = append(args, "--keychain", n.Keychain)
 	}
@@ -247,7 +320,7 @@ func notarize(n *Notarize, dmg string) (err error) {
 		}
 		return fmt.Errorf("%s\n%s", msg, strings.TrimSpace(string(out)))
 	}
-	return command("xcrun", "stapler", "staple", dmg)
+	return nil
 }
 
 func fileExists(path string) bool {

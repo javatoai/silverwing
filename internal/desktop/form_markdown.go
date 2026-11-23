@@ -23,12 +23,11 @@ const (
 )
 
 type transientMarkdownDraft struct {
-	editor   *markdownui.EditorState
-	value    *string
-	synced   string
-	active   bool
-	error    string
-	onChange func()
+	editor *markdownui.EditorState
+	value  *string
+	synced string
+	active bool
+	error  string
 }
 
 type actionFormMarkdownState struct {
@@ -50,12 +49,7 @@ func (draft *transientMarkdownDraft) commit(snapshot markdownui.Snapshot) {
 	if draft == nil || draft.value == nil || snapshot.Composing {
 		return
 	}
-	if *draft.value != snapshot.Source {
-		*draft.value = snapshot.Source
-		if draft.onChange != nil {
-			draft.onChange()
-		}
-	}
+	*draft.value = snapshot.Source
 	draft.synced = snapshot.Source
 }
 
@@ -100,9 +94,8 @@ func (draft *transientMarkdownDraft) capture() error {
 	return nil
 }
 
-// replace is used only for an accepted template replacement or for edits from
-// the same field's plain-text presentation. The editor and Buffer keep their
-// document owner; changing a filename never creates a second draft.
+// replace applies edits from the same field's plain-text presentation while
+// preserving the editor and Buffer owner when a filename changes.
 func (draft *transientMarkdownDraft) replace(source string) error {
 	if err := draft.capture(); err != nil {
 		return err
@@ -152,8 +145,7 @@ func (s *app) transientMarkdownReaderOptions(p palette, onError func(error)) mar
 	}}
 }
 
-func (s *app) renderTransientMarkdown(c *ui.Context, p palette, draft *transientMarkdownDraft, current func() bool, changed, save func(), labelText string, height float32) {
-	draft.onChange = changed
+func (s *app) renderTransientMarkdown(c *ui.Context, p palette, draft *transientMarkdownDraft, current func() bool, save func(), labelText string, height float32) {
 	if err := draft.syncExternal(); err != nil {
 		draft.error = err.Error()
 	}
@@ -213,7 +205,7 @@ func (s *app) renderActionFormMarkdown(c *ui.Context, p palette, field *formFiel
 	current := func() bool {
 		return s.dialogOpen && s.form.markdown == owner && owner.drafts[field.key] == draft && draft.active
 	}
-	s.renderTransientMarkdown(c, p, draft, current, nil, s.submitForm, field.label+" Markdown 编辑区", 240)
+	s.renderTransientMarkdown(c, p, draft, current, s.submitForm, field.label+" Markdown 编辑区", 240)
 	return true
 }
 

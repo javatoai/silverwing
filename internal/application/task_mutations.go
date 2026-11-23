@@ -117,9 +117,25 @@ func (a *App) RetryTaskMaterials(ctx context.Context, target TaskTarget) (Operat
 		return OperationResult[domain.TaskManifest]{Message: "资料目录操作已返回，请查看状态", Data: manifest}, err
 	})
 }
+
+func (a *App) RefreshTaskAgents(ctx context.Context, target TaskTarget) (OperationResult[domain.TaskManifest], error) {
+	return a.mutateTask(ctx, target, "task.refresh-agents", nil, func(ctx context.Context, config domain.AppConfig, service *workspace.TaskApplicationService, _ domain.TaskManifest, path string) (OperationResult[domain.TaskManifest], error) {
+		if (target.Path != "" && !sameTaskContextPath(target.Path, path)) || target.serviceID != "" || target.moduleID != "" {
+			return OperationResult[domain.TaskManifest]{}, errDesktopTaskContextChanged
+		}
+		router, err := service.RegenerateTaskAgents(ctx, config, path)
+		return OperationResult[domain.TaskManifest]{Message: "任务说明已重新生成", Path: router, omitData: true}, err
+	})
+}
+
 func (a *App) LaunchTaskTools(ctx context.Context, request TaskToolsRequest) (OperationResult[domain.TaskManifest], error) {
-	return a.mutateTask(ctx, request.Target, "task.tools-launch", map[string]any{"toolIds": request.ToolIDs}, func(ctx context.Context, _ domain.AppConfig, service *workspace.TaskApplicationService, manifest domain.TaskManifest, path string) (OperationResult[domain.TaskManifest], error) {
-		updated, err := service.LaunchWorkspaceTools(ctx, path, manifest, request.ToolIDs)
+	for _, id := range request.ToolIDs {
+		if domain.IsLegacyCursorToolID(id) {
+			return OperationResult[domain.TaskManifest]{}, errors.New("任务打开工具已移除 Cursor 支持")
+		}
+	}
+	return a.mutateTask(ctx, request.Target, "task.tools-launch", map[string]any{"toolIds": request.ToolIDs}, func(ctx context.Context, config domain.AppConfig, service *workspace.TaskApplicationService, manifest domain.TaskManifest, path string) (OperationResult[domain.TaskManifest], error) {
+		updated, err := service.LaunchWorkspaceTools(ctx, config, path, manifest, request.ToolIDs)
 		if err == nil {
 			if failure := workspaceToolLaunchFailure(updated, request.ToolIDs); failure != "" {
 				err = errors.New("任务工具打开失败：" + failure)
@@ -129,8 +145,11 @@ func (a *App) LaunchTaskTools(ctx context.Context, request TaskToolsRequest) (Op
 	})
 }
 func (a *App) RetryTaskTool(ctx context.Context, request TaskToolRetryRequest) (OperationResult[domain.TaskManifest], error) {
-	return a.mutateTask(ctx, request.Target, "task.tools-retry", map[string]any{"toolId": request.ToolID}, func(ctx context.Context, _ domain.AppConfig, service *workspace.TaskApplicationService, manifest domain.TaskManifest, path string) (OperationResult[domain.TaskManifest], error) {
-		updated, err := service.RetryWorkspaceTool(ctx, path, manifest, request.ToolID)
+	if domain.IsLegacyCursorToolID(request.ToolID) {
+		return OperationResult[domain.TaskManifest]{}, errors.New("任务打开工具已移除 Cursor 支持")
+	}
+	return a.mutateTask(ctx, request.Target, "task.tools-retry", map[string]any{"toolId": request.ToolID}, func(ctx context.Context, config domain.AppConfig, service *workspace.TaskApplicationService, manifest domain.TaskManifest, path string) (OperationResult[domain.TaskManifest], error) {
+		updated, err := service.RetryWorkspaceTool(ctx, config, path, manifest, request.ToolID)
 		return OperationResult[domain.TaskManifest]{Message: "工作区工具重试已返回", Data: updated}, err
 	})
 }

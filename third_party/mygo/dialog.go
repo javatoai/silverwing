@@ -1,6 +1,7 @@
 package mygo
 
 import (
+	"os"
 	"strings"
 
 	"github.com/egoist/mygo/internal/platform"
@@ -14,10 +15,22 @@ type DialogModule struct{}
 var Dialog DialogModule
 
 // FileFilter limits the files a file dialog shows, e.g.
-// {Name: "Images", Extensions: []string{"png", "jpg"}}.
+// {Name: "Images", Extensions: []string{"png", "jpg"}}, or by type, as
+// HTML's accept: {Name: "Images", MIMETypes: []string{"image/*"}} takes
+// every picture the system knows.
 type FileFilter struct {
-	Name       string
+	Name string
+	// Extensions are file name extensions, with or without the dot, or
+	// "*" for every file.
 	Extensions []string
+	// MIMETypes are media types, as "image/png", or all of one kind, as
+	// "image/*", which the system's picker takes as its own: types
+	// (UTType) on macOS 11 and later, which knows image/*, audio/*,
+	// video/*, text/* and font/* (earlier versions only those kinds), GTK's
+	// MIME patterns, and on Windows the extensions the registry gives the
+	// type, or of the kind (its PerceivedType too). The filter takes the
+	// files of its extensions and of its types.
+	MIMETypes []string
 }
 
 // OpenDialogOptions configures Dialog.Open.
@@ -81,13 +94,23 @@ type MessageOptions struct {
 	Detail string
 	// Buttons defaults to a single "OK" button.
 	Buttons []string
-	// DefaultButton is the index of the button activated with Enter.
+	// DefaultButton is the index of the button activated with Enter, or -1
+	// for none (macOS only). Windows uses the first button for -1;
+	// GTK gives Enter to the focused control.
 	DefaultButton int
-	// CancelButton is the index of the button activated with Escape. When
-	// zero, the first button labeled "Cancel" or "No" is used.
-	CancelButton    int
-	CheckboxLabel   string
-	CheckboxChecked bool
+	// CancelButton is the index of the button activated with Escape (and
+	// Cmd+. on macOS), also when it is the default button. When zero, the
+	// first button labeled "Cancel" or "No" is used, else the first button,
+	// even a destructive one. -1 is none: Escape then does nothing on
+	// macOS, and dismissing the dialog reports Button -1 on Linux, in
+	// Windows task dialogs and in browsers' confirm dialogs.
+	CancelButton int
+	// DestructiveButtons are the indexes of buttons whose actions delete
+	// data or can't be undone. macOS 11 and later and Linux set them apart;
+	// macOS may keep Enter from activating them, even as the default.
+	DestructiveButtons []int
+	CheckboxLabel      string
+	CheckboxChecked    bool
 }
 
 // MessageResult is the outcome of Dialog.Message.
@@ -144,6 +167,49 @@ func (DialogModule) Open(opts OpenDialogOptions) ([]string, error) {
 	}
 	r := await(ch)
 	return r.paths, r.err
+}
+
+// SaveCopy has the user choose where a copy of the file at path goes, under
+// name, and returns where it went, or "" when canceled: the save dialog and a
+// copy on desktops; on phones, whose apps have no paths of other apps'
+// folders, the system's picker (Files on iOS, the storage access framework on
+// Android, which answers with a content URI). It suits an app that has made
+// the file already, as an export.
+func (d DialogModule) SaveCopy(path, name string) (string, error) {
+	needsApp("Dialog.SaveCopy")
+	type result struct {
+		path string
+		err  error
+	}
+	ch := make(chan result, 1)
+	var phone bool
+	if !postMain(func() {
+		dev, ok := device()
+		if !ok {
+			deliver(ch, result{})
+			return
+		}
+		phone = true
+		dev.SaveFile(path, name, func(saved string, err error) { deliver(ch, result{saved, err}) })
+	}) {
+		return "", errLoopStopped
+	}
+	r := await(ch)
+	if phone {
+		return r.path, r.err
+	}
+	to, err := d.Save(SaveDialogOptions{DefaultPath: name})
+	if err != nil || to == "" {
+		return "", err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(to, data, 0o644); err != nil {
+		return "", err
+	}
+	return to, nil
 }
 
 // Save shows a dialog to choose where to save a file and returns the path,
@@ -205,6 +271,7 @@ func (DialogModule) Message(opts MessageOptions) (MessageResult, error) {
 		Buttons:         buttons,
 		DefaultID:       opts.DefaultButton,
 		CancelID:        cancel,
+		DestructiveIDs:  opts.DestructiveButtons,
 		CheckboxLabel:   opts.CheckboxLabel,
 		CheckboxChecked: opts.CheckboxChecked,
 	}

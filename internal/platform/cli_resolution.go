@@ -11,52 +11,60 @@ import (
 	"silverwing-go/internal/executable"
 )
 
-func (s *Service) resolveCLIExecutable(ctx context.Context, cfg domain.AppConfig, tool string) (domain.AppConfig, string, domain.CommandProxyTarget, error) {
-	updated, resolution, target, err := s.resolveCLIExecutableWithSource(ctx, cfg, tool)
-	return updated, resolution.Command, target, err
+func (s *Service) resolveCLIExecutable(ctx context.Context, cfg domain.AppConfig, tool executable.Tool) (string, error) {
+	resolution, err := s.resolveCLIExecutableWithSource(ctx, cfg, tool)
+	return resolution.Command, err
 }
 
-func (s *Service) resolveCLIExecutableWithSource(ctx context.Context, cfg domain.AppConfig, tool string) (domain.AppConfig, executable.Resolution, domain.CommandProxyTarget, error) {
+func (s *Service) resolveCLIExecutableWithSource(ctx context.Context, cfg domain.AppConfig, tool executable.Tool) (executable.Resolution, error) {
 	return s.resolveCLIExecutableWithSourceForce(ctx, cfg, tool, false)
 }
 
-func (s *Service) resolveCLIExecutableWithSourceForce(ctx context.Context, cfg domain.AppConfig, tool string, force bool) (domain.AppConfig, executable.Resolution, domain.CommandProxyTarget, error) {
-	tool = strings.ToLower(strings.TrimSpace(tool))
+func (s *Service) resolveCLIExecutableWithSourceForce(ctx context.Context, cfg domain.AppConfig, tool executable.Tool, force bool) (executable.Resolution, error) {
+	if !isSupportedCLI(tool) {
+		return executable.Resolution{}, fmt.Errorf("不支持的 CLI：%s", tool)
+	}
 	configured := ""
 	if path := cliConfiguredPath(cfg, tool); path != nil {
 		configured = strings.TrimSpace(*path)
 	}
-	target, ok := cliProxyTarget(tool)
-	if !ok {
-		return cfg, executable.Resolution{}, "", fmt.Errorf("不支持的 CLI：%s", tool)
-	}
 	if configured != "" {
-		source := executable.SourceConfigured
-		if tool == "genbu" && cfg.GenbuExecutableAutoDetected {
-			source = executable.SourceProbed
-		}
-		return cfg, executable.Resolution{Command: configured, Source: source}, target, nil
+		return executable.Resolution{Command: configured, Source: executable.SourceConfigured}, nil
 	}
 	resolver := executable.NewResolver(s.runner)
 	var resolution executable.Resolution
 	if force {
-		resolution = resolver.ResolveFresh(ctx, executable.Tool(tool), configured)
+		resolution = resolver.ResolveFresh(ctx, tool, configured)
 	} else {
-		resolution = resolver.Resolve(ctx, executable.Tool(tool), configured)
+		resolution = resolver.Resolve(ctx, tool, configured)
 	}
 	if resolution.Command == "" {
-		return cfg, executable.Resolution{}, "", fmt.Errorf("不支持的 CLI：%s", tool)
+		return executable.Resolution{}, fmt.Errorf("不支持的 CLI：%s", tool)
 	}
-	return cfg, resolution, target, nil
+	return resolution, nil
 }
 
-// A candidate is persisted only after its version command succeeds. Re-read
-// under the config lock so a concurrently entered path always takes precedence.
-func (s *Service) persistDiscoveredCLIExecutable(ctx context.Context, cfg domain.AppConfig, tool string, resolution executable.Resolution) (domain.AppConfig, error) {
+func (s *Service) clearFailedCodexExecutable(ctx context.Context, failed string) (domain.AppConfig, error) {
+	return s.config.Update(func(current domain.AppConfig) (domain.AppConfig, error) {
+		if err := ctx.Err(); err != nil {
+			return current, err
+		}
+		if current.CodexExecutablePath == nil || strings.TrimSpace(*current.CodexExecutablePath) != failed {
+			return current, fmt.Errorf("CLI 命令路径已变化，请重新读取状态")
+		}
+		current.CodexExecutablePath = nil
+		return current, nil
+	})
+}
+
+// Re-read under the config lock so a concurrent settings change takes priority
+// over a candidate whose version check has just succeeded.
+func (s *Service) persistDiscoveredCLIExecutable(ctx context.Context, cfg domain.AppConfig, tool executable.Tool, resolution executable.Resolution) (domain.AppConfig, error) {
 	if path := cliConfiguredPath(cfg, tool); path != nil && strings.TrimSpace(*path) != "" {
 		return cfg, nil
 	}
-	if resolution.Source != executable.SourceProbed && resolution.Source != executable.SourceDesktopApp {
+	discoveredSystemPath := tool == executable.ToolCodex && resolution.Source == executable.SourcePathFallback && filepath.IsAbs(resolution.Command)
+	if resolution.Source != executable.SourceProbed && resolution.Source != executable.SourceDesktopApp && !discoveredSystemPath {
 		return cfg, nil
 	}
 	info, err := os.Stat(resolution.Command)
@@ -69,6 +77,16 @@ func (s *Service) persistDiscoveredCLIExecutable(ctx context.Context, cfg domain
 	updated, err := s.config.Update(func(current domain.AppConfig) (domain.AppConfig, error) {
 		if err := ctx.Err(); err != nil {
 			return current, err
+		}
+		if isOptionalCLI(tool) {
+			name := string(tool)
+			if !current.OptionalCLIEnabled(name) {
+				return current, fmt.Errorf("CLI 已停用，请重新读取状态")
+			}
+			path := current.OptionalCLIPath(name)
+			if path != cfg.OptionalCLIPath(name) && path != resolution.Command {
+				return current, fmt.Errorf("CLI 命令路径已变化，请重新读取状态")
+			}
 		}
 		if path := cliConfiguredPath(current, tool); path == nil || strings.TrimSpace(*path) == "" {
 			setCLIConfiguredPath(&current, tool, resolution.Command)
@@ -84,80 +102,62 @@ func (s *Service) persistDiscoveredCLIExecutable(ctx context.Context, cfg domain
 	return updated, nil
 }
 
-func setCLIConfiguredPath(config *domain.AppConfig, tool, path string) {
+// SaveOptionalCLIDiscovery is called while the application still owns the
+// version probe's generation. The store then checks the current saved intent.
+func (s *Service) SaveOptionalCLIDiscovery(ctx context.Context, cfg domain.AppConfig, tool, command, source string) (domain.AppConfig, error) {
+	cliTool := executable.Tool(tool)
+	if !isOptionalCLI(cliTool) || !cfg.OptionalCLIEnabled(tool) {
+		return cfg, fmt.Errorf("CLI 已停用，请重新读取状态")
+	}
+	return s.persistDiscoveredCLIExecutable(ctx, cfg, cliTool, executable.Resolution{Command: command, Source: executable.Source(source)})
+}
+
+func setCLIConfiguredPath(config *domain.AppConfig, tool executable.Tool, path string) {
 	switch tool {
-	case "lark":
+	case executable.ToolLark:
 		config.LarkExecutablePath = &path
-	case "git":
+	case executable.ToolGit:
 		config.GitExecutablePath = &path
-	case "meegle":
+	case executable.ToolMeegle:
 		config.MeegleExecutablePath = &path
-	case "codex":
+	case executable.ToolCodex:
 		config.CodexExecutablePath = &path
-	case "genbu":
-		config.GenbuExecutablePath = &path
-		config.GenbuExecutableAutoDetected = true
 	}
 }
 
-func cliConfiguredPath(cfg domain.AppConfig, tool string) *string {
+func cliConfiguredPath(cfg domain.AppConfig, tool executable.Tool) *string {
 	switch tool {
-	case "lark":
+	case executable.ToolLark:
 		return cfg.LarkExecutablePath
-	case "git":
+	case executable.ToolGit:
 		return cfg.GitExecutablePath
-	case "meegle":
+	case executable.ToolMeegle:
 		return cfg.MeegleExecutablePath
-	case "codex":
+	case executable.ToolCodex:
 		return cfg.CodexExecutablePath
-	case "genbu":
-		return cfg.GenbuExecutablePath
 	default:
 		return nil
 	}
 }
 
-func cliProxyTarget(tool string) (domain.CommandProxyTarget, bool) {
+func isSupportedCLI(tool executable.Tool) bool {
 	switch tool {
-	case "lark":
-		return "", true // Supported CLI, with no SW proxy target.
-	case "git":
-		return domain.ProxyTargetGit, true
-	case "meegle":
-		return domain.ProxyTargetMeegle, true
-	case "genbu":
-		return domain.ProxyTargetGenbu, true
-	case "codex":
-		return domain.ProxyTargetCodex, true
+	case executable.ToolLark, executable.ToolGit, executable.ToolMeegle, executable.ToolCodex:
+		return true
 	default:
-		return "", false
+		return false
 	}
 }
 
-func cliEnvironment(tool, command string) map[string]string {
-	return cliEnvironmentContext(context.Background(), tool, command)
-}
-
-func cliEnvironmentContext(ctx context.Context, tool, command string) map[string]string {
-	return cliEnvironmentWithRunner(ctx, nil, tool, command)
-}
-
-func cliEnvironmentWithRunner(ctx context.Context, runner executable.Runner, tool, command string) map[string]string {
-	var resolvedTool executable.Tool
+func isOptionalCLI(tool executable.Tool) bool {
 	switch tool {
-	case "lark":
-		resolvedTool = executable.ToolLark
-	case "codex":
-		resolvedTool = executable.ToolCodex
-	case "git":
-		resolvedTool = executable.ToolGit
-	case "genbu":
-		resolvedTool = executable.ToolGenbu
-	case "meegle":
-		resolvedTool = executable.ToolMeegle
+	case executable.ToolLark:
+		return true
 	default:
-		return nil
+		return false
 	}
-	environment := executable.NewResolver(runner).Environment(ctx, resolvedTool, command)
-	return environment
+}
+
+func cliEnvironmentWithRunner(ctx context.Context, runner executable.Runner, tool executable.Tool, command string) map[string]string {
+	return executable.NewResolver(runner).Environment(ctx, tool, command)
 }

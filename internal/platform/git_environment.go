@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"silverwing-go/internal/domain"
+	"silverwing-go/internal/executable"
 	"silverwing-go/internal/process"
 )
 
@@ -37,20 +37,20 @@ func (s *Service) gitEnvironment(ctx context.Context) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg, resolution, _, err := s.resolveCLIExecutableWithSource(ctx, cfg, "git")
+	resolution, err := s.resolveCLIExecutableWithSource(ctx, cfg, executable.ToolGit)
 	if err != nil {
 		return nil, err
 	}
-	executable := resolution.Command
+	command := resolution.Command
 	snapshot := gitEnvironmentSnapshot{
-		GitExecutable:           stringPtr(executable),
+		GitExecutable:           stringPtr(command),
 		GitExecutableSource:     string(resolution.Source),
 		SystemUser:              systemUserName(),
 		GlobalCredentialHelpers: []gitConfigValue{},
 		GlobalKeyConfig:         []gitConfigValue{},
 		Errors:                  []string{},
 	}
-	versionResult, versionErr := s.runTool(ctx, cfg, domain.ProxyTargetGit, executable, []string{"--version"}, "", 10*time.Second)
+	versionResult, versionErr := s.runTool(ctx, cfg, executable.ToolGit, command, []string{"--version"}, "", 10*time.Second)
 	if process.IsCleanupFailure(versionErr) {
 		return nil, versionErr
 	}
@@ -59,7 +59,7 @@ func (s *Service) gitEnvironment(ctx context.Context) (any, error) {
 	} else if version := firstNonBlank(strings.TrimSpace(versionResult.Stdout), strings.TrimSpace(versionResult.Stderr)); version != "" {
 		snapshot.GitVersion = &version
 	}
-	configResult, configErr := s.runTool(ctx, cfg, domain.ProxyTargetGit, executable, []string{"config", "--global", "--show-origin", "--list"}, "", 10*time.Second)
+	configResult, configErr := s.runTool(ctx, cfg, executable.ToolGit, command, []string{"config", "--global", "--show-origin", "--list"}, "", 10*time.Second)
 	if process.IsCleanupFailure(configErr) {
 		return nil, configErr
 	}

@@ -67,11 +67,18 @@ type Glyph struct {
 	// and Advance its width. Move X to draw the glyph elsewhere, as in the
 	// cell of a grid.
 	X, Advance float32
+	// RTL marks a glyph of a right-to-left run, as of Hebrew or Arabic,
+	// whose clusters go from right to left: its cluster's first rune is
+	// at the right of its advance.
+	RTL bool
 
-	font  *text.Font
-	id    uint32
-	thick bool
-	flat  bool
+	// After RTL, so that a Glyph takes no more room with it.
+	thick, flat bool
+	id          uint32
+	font        *text.Font
+	// y is how far below the baseline shaping put the glyph, as a mark
+	// above or below its base: negative above.
+	y float32
 }
 
 // Shape shapes s in font f, on one line, for Painter.Glyphs: the
@@ -79,12 +86,18 @@ type Glyph struct {
 // lacks, and applies ligatures and kerning. Unlike the text of elements,
 // which ui caches by content, it caches nothing: keep the glyphs of text
 // drawn in several frames.
+//
+// The glyphs are in visual order, on every platform, as they show from
+// left to right: X ascends, and through a right-to-left run Cluster
+// descends, with RTL set. Find the glyphs of a range of runes by their
+// Cluster and Runes, not by their place in the slice; the glyphs of a
+// cluster are next to each other.
 func Shape(s string, f Font) []Glyph {
 	l := text.Shared().Shape(text.Params{Text: s, Style: f.style(), NoWrap: true, KeepSpaces: true})
 	var out []Glyph
 	for _, line := range l.Lines {
 		for _, g := range line.Glyphs {
-			out = append(out, Glyph{Cluster: g.Cluster, Runes: g.Runes, X: line.X + g.X, Advance: g.Advance, font: g.Font, id: g.ID, thick: f.Thicken, flat: f.Antialiased})
+			out = append(out, Glyph{Cluster: g.Cluster, Runes: g.Runes, X: line.X + g.X, Advance: g.Advance, RTL: g.RTL, font: g.Font, id: g.ID, thick: f.Thicken, flat: f.Antialiased, y: g.Y - line.Baseline})
 		}
 	}
 	return out
@@ -94,22 +107,35 @@ func Shape(s string, f Font) []Glyph {
 // color c.
 func (p *Painter) Glyphs(glyphs []Glyph, x, y float32, c Color) {
 	sys := p.rt.text
-	s := p.scale
+	var gs glyphSpace
+	if p.transform.Set && len(glyphs) > 0 {
+		var w, size float32
+		for _, g := range glyphs {
+			w = max(w, g.X+g.Advance)
+			if g.font != nil {
+				size = max(size, g.font.Size)
+			}
+		}
+		gs = p.glyphSpaceAt(x+w/2, y, size, false)
+	} else {
+		gs = glyphSpace{scale: p.scale, q: 1}
+	}
+	s := gs.scale
 	shade := text.ShadeOf(c.R, c.G, c.B)
 	c = c.Alpha(p.opacity)
 	color := c.scene()
-	baseline := sys.Baseline(y * s)
+	baseline := sys.Baseline(y*s + gs.dy)
 	start := int32(len(p.s.Glyphs))
 	left, right := p.clip.X*s, (p.clip.X+p.clip.W)*s
 	var run *glyphRun
 	if sys.JoinsGlyphs() {
-		run = &glyphRun{}
+		run = &glyphRun{scale: s}
 	}
 	for _, g := range glyphs {
 		if g.font == nil {
 			continue
 		}
-		pen := (x + g.X) * s
+		pen := (x+g.X)*s + gs.dx
 		if !p.transform.Set && (pen > right || pen+(g.Advance+g.font.Size)*s < left) {
 			continue
 		}
@@ -124,22 +150,26 @@ func (p *Painter) Glyphs(glyphs []Glyph, x, y float32, c Color) {
 		if !gi.OK {
 			continue
 		}
+		gb := baseline
+		if g.y != 0 {
+			gb = sys.Baseline((y+g.y)*s + gs.dy)
+		}
 		sg := scene.Glyph{
-			X: ix + gi.Left, Y: baseline + gi.Top, W: float32(gi.W), H: float32(gi.H),
+			X: ix + gi.Left, Y: gb + gi.Top, W: float32(gi.W), H: float32(gi.H),
 			U: gi.X, V: gi.Y, UW: gi.W, VH: gi.H,
 			Color: color, Wide: p.glyphWide(c), Colored: gi.Colored, Subpixel: gi.Subpixel, Thin: gi.Thin,
 		}
 		if run != nil {
-			run.add(p, text.Glyph{Font: g.font, ID: g.id}, gi, pen, sg, shade, baseline)
+			run.add(p, text.Glyph{Font: g.font, ID: g.id}, gi, pen, sg, shade, gb)
 			continue
 		}
 		p.s.Glyphs = append(p.s.Glyphs, sg)
 	}
 	if run != nil {
-		run.flush(p, baseline)
+		run.flush(p)
 	}
 	if end := int32(len(p.s.Glyphs)); end > start {
-		p.add(scene.Op{Kind: scene.OpGlyphs, Start: start, End: end})
+		gs.add(p, scene.Op{Kind: scene.OpGlyphs, Start: start, End: end})
 	}
 }
 
@@ -153,18 +183,25 @@ func (p *Painter) TextLine(l *text.Layout, x, y float32, color func(cluster int)
 		return
 	}
 	sys := p.rt.text
-	s := p.scale
-	baseline := sys.Baseline(y * s)
+	gs := glyphSpace{scale: p.scale, q: 1}
+	if p.transform.Set {
+		gs = p.glyphSpaceAt(x+l.Lines[0].Width/2, y, l.Params.Style.FontSize(), false)
+	}
+	s := gs.scale
+	baseline := sys.Baseline(y*s + gs.dy)
 	left, right := p.clip.X*s, (p.clip.X+p.clip.W)*s
 	start := int32(len(p.s.Glyphs))
 	var run *glyphRun
 	if sys.JoinsGlyphs() {
 		run = &p.rt.glyphRun
 		run.ids, run.pens, run.glyphs = run.ids[:0], run.pens[:0], run.glyphs[:0]
+		run.scale = s
 	}
-	for _, g := range l.Lines[0].Glyphs {
-		pen := (x + g.X) * s
-		if !p.transform.Set && (pen > right || pen+(g.Advance+g.Size)*s < left) {
+	line := &l.Lines[0]
+	for _, g := range line.Glyphs {
+		pen := (x+g.X)*s + gs.dx
+		// An inline object's box draws no glyph (text.Span.ObjectWidth).
+		if g.Object || !p.transform.Set && (pen > right || pen+(g.Advance+g.Size)*s < left) {
 			continue
 		}
 		c := color(g.Cluster)
@@ -174,22 +211,24 @@ func (p *Painter) TextLine(l *text.Layout, x, y float32, color func(cluster int)
 			continue
 		}
 		c = c.Alpha(p.opacity)
+		// y is the line's baseline: the layout's lies Baseline below it.
+		gb := glyphBaseline(sys, &g, line, y-line.Baseline, baseline, gs)
 		sg := scene.Glyph{
-			X: float32(math.Floor(float64(pen))) + gi.Left, Y: baseline + gi.Top, W: float32(gi.W), H: float32(gi.H),
+			X: float32(math.Floor(float64(pen))) + gi.Left, Y: gb + gi.Top, W: float32(gi.W), H: float32(gi.H),
 			U: gi.X, V: gi.Y, UW: gi.W, VH: gi.H,
 			Color: c.scene(), Wide: p.glyphWide(c), Colored: gi.Colored, Subpixel: gi.Subpixel, Thin: gi.Thin,
 		}
 		if run != nil {
-			run.add(p, text.Glyph{Font: g.Font, ID: g.ID}, gi, pen, sg, shade, baseline)
+			run.add(p, text.Glyph{Font: g.Font, ID: g.ID}, gi, pen, sg, shade, gb)
 			continue
 		}
 		p.s.Glyphs = append(p.s.Glyphs, sg)
 	}
 	if run != nil {
-		run.flush(p, baseline)
+		run.flush(p)
 	}
 	if end := int32(len(p.s.Glyphs)); end > start {
-		p.add(scene.Op{Kind: scene.OpGlyphs, Start: start, End: end})
+		gs.add(p, scene.Op{Kind: scene.OpGlyphs, Start: start, End: end})
 	}
 }
 

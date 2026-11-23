@@ -11,10 +11,17 @@ import (
 )
 
 func tagHistoryAction(kind string) bool {
-	return kind == "tag.history" || kind == "tag.history.refresh" || kind == "tag.history.delete" || kind == "tag.history.clear"
+	return kind == "tag.history" || kind == "tag.history.refresh" || kind == "tag.history.delete" || kind == "tag.history.clear" || kind == "tag.history.build-log"
 }
 
 func (a *App) tagHistoryAction(ctx context.Context, action Action) (ActionResult, error) {
+	if action.Kind == "tag.history.build-log" {
+		client, err := a.genbuClient(ctx)
+		if err != nil {
+			return ActionResult{}, err
+		}
+		return a.tagHistoryBuildLogAction(ctx, action, client)
+	}
 	if err := ctx.Err(); err != nil {
 		return ActionResult{}, err
 	}
@@ -41,6 +48,9 @@ func (a *App) tagHistoryAction(ctx context.Context, action Action) (ActionResult
 		items, err := a.readRetainedTagHistoryRecords(ctx, config, scope)
 		if err != nil {
 			return ActionResult{}, err
+		}
+		if !a.platformReadyFor(config, "genbu") {
+			return ActionResult{Message: "Tag 历史已刷新", Data: TagHistoryRefreshResult{Records: items}}, nil
 		}
 		_, probeErr := service.Probe(ctx, config, scope, true)
 		refreshed, readErr := a.readTagHistoryRecords(ctx, config, scope)

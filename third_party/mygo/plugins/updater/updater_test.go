@@ -33,7 +33,7 @@ func newHarness(t *testing.T, opts Options) *harness {
 	saved := []func(){
 		func(e func() bool) func() { return func() { enabled = e } }(enabled),
 		func(c func(context.Context) (*release, error)) func() { return func() { check = c } }(check),
-		func(r func()) func() { return func() { relaunch = r } }(relaunch),
+		func(r func(...string)) func() { return func() { relaunch = r } }(relaunch),
 		func(v func() string) func() { return func() { appVersion = v } }(appVersion),
 		func(l func() string) func() { return func() { locale = l } }(locale),
 		func(d func() (string, error)) func() { return func() { stateDir = d } }(stateDir),
@@ -50,7 +50,7 @@ func newHarness(t *testing.T, opts Options) *harness {
 		h.checks.Add(1)
 		return h.result(ctx)
 	}
-	relaunch = func() { h.relaunches.Add(1) }
+	relaunch = func(...string) { h.relaunches.Add(1) }
 	appVersion = func() string { return "1.0.0" }
 	locale = func() string { return "en-US" }
 	stateDir = func() (string, error) { return h.dir, nil }
@@ -221,6 +221,111 @@ func TestInstallAndRelaunch(t *testing.T) {
 	if h.relaunches.Load() != 1 {
 		t.Error("Later relaunched")
 	}
+}
+
+// releaseInstalls returns a release whose install sends its version to
+// installed.
+func releaseInstalls(version string, installed chan<- string) *release {
+	return newRelease(version, func(context.Context, func(int64, int64)) error {
+		installed <- version
+		return nil
+	})
+}
+
+// A release that came out while the window offered an older one is the
+// one Install installs.
+func TestInstallNewerRelease(t *testing.T) {
+	h := newHarness(t, Options{})
+	installed := make(chan string, 2)
+	h.result = func(context.Context) (*release, error) { return releaseInstalls("2.0.0", installed), nil }
+	done := h.begin(false)
+	s := h.shown()
+	v := waitView(t, s, "A new version of")
+	h.result = func(context.Context) (*release, error) { return releaseInstalls("2.1.0", installed), nil }
+	s.Respond(v.Prompt, actionInstall, false)
+	v = waitView(t, s, "Ready to Relaunch")
+	if !strings.Contains(v.Message, "2.1.0 is installed") {
+		t.Errorf("message %q", v.Message)
+	}
+	if got := wait.For(t, "the install", installed); got != "2.1.0" {
+		t.Errorf("installed %s, want 2.1.0", got)
+	}
+	s.Respond(v.Prompt, actionLater, false)
+	waitDone(t, done)
+	if h.u.available != "2.1.0" || h.u.installed == nil || h.u.installed.version != "2.1.0" {
+		t.Errorf("available %q, installed %+v", h.u.available, h.u.installed)
+	}
+	if n := h.checks.Load(); n != 2 {
+		t.Errorf("%d checks, want 2", n)
+	}
+}
+
+// When checking again before installing fails, Install installs the
+// release the window shows.
+func TestInstallRecheckFails(t *testing.T) {
+	h := newHarness(t, Options{})
+	installed := make(chan string, 2)
+	h.result = func(context.Context) (*release, error) { return releaseInstalls("2.0.0", installed), nil }
+	done := h.begin(true)
+	s := h.shown()
+	v := waitView(t, s, "A new version of")
+	h.result = func(context.Context) (*release, error) { return nil, errors.New("offline") }
+	s.Respond(v.Prompt, actionInstall, false)
+	v = waitView(t, s, "Ready to Relaunch")
+	if !strings.Contains(v.Message, "2.0.0 is installed") {
+		t.Errorf("message %q", v.Message)
+	}
+	if got := wait.For(t, "the install", installed); got != "2.0.0" {
+		t.Errorf("installed %s, want 2.0.0", got)
+	}
+	s.Respond(v.Prompt, actionLater, false)
+	waitDone(t, done)
+	if h.u.available != "2.0.0" {
+		t.Errorf("available %q", h.u.available)
+	}
+	if n := h.checks.Load(); n != 2 {
+		t.Errorf("%d checks, want 2", n)
+	}
+}
+
+// CheckForUpdates while the window offers an update checks again, and the
+// window then offers the newer version that came out.
+func TestCheckWhileOffering(t *testing.T) {
+	h := activateAvailabilityHarness(t)
+	installed := make(chan string, 2)
+	h.result = func(context.Context) (*release, error) { return releaseInstalls("2.0.0", installed), nil }
+	done := h.begin(false)
+	s := h.shown()
+	waitView(t, s, "A new version of")
+	if AvailableVersion() != "2.0.0" {
+		t.Fatalf("available %q", AvailableVersion())
+	}
+	h.result = func(context.Context) (*release, error) {
+		r := releaseInstalls("2.1.0", installed)
+		r.notes = "- Newer"
+		return r, nil
+	}
+	waitDone(t, h.begin(true)) // returns at once
+	wait.Until(t, "the window offers 2.1.0", func() bool {
+		v, _ := s.Current()
+		return strings.Contains(v.Message, "2.1.0 is now available")
+	})
+	v, _ := s.Current()
+	if !strings.Contains(markdown.HTML(v.Notes), "Newer") {
+		t.Errorf("notes %q", markdown.HTML(v.Notes))
+	}
+	if AvailableVersion() != "2.1.0" {
+		t.Errorf("available %q", AvailableVersion())
+	}
+	wait.Until(t, "the window promoted", s.User)
+	h.noWindow() // the same window, not another one
+	s.Respond(v.Prompt, actionInstall, false)
+	v = waitView(t, s, "Ready to Relaunch")
+	if got := wait.For(t, "the install", installed); got != "2.1.0" {
+		t.Errorf("installed %s, want 2.1.0", got)
+	}
+	s.Respond(v.Prompt, actionLater, false)
+	waitDone(t, done)
 }
 
 // A window keeps the language it opened in; after the app's language
@@ -520,6 +625,65 @@ func TestOnChange(t *testing.T) {
 	off()
 	SetAutomaticDownloads(false)
 	told(false, "a function removed")
+}
+
+func TestOnInstalled(t *testing.T) {
+	h := newHarness(t, Options{})
+	active.Store(h.u)
+	t.Cleanup(func() { active.Store(nil) })
+	installs := make(chan struct{}, 10)
+	off := OnInstalled(func() { installs <- struct{}{} })
+	told := func(want int, what string) {
+		t.Helper()
+		for range want {
+			select {
+			case <-installs:
+			case <-time.After(wait.Guard):
+				t.Fatalf("%s: not told", what)
+			}
+		}
+		// The calls run in a goroutine of their own: a call that should
+		// not happen may come later, and then the next count sees it.
+		if len(installs) > 0 {
+			t.Errorf("%s: told %d more times", what, len(installs))
+		}
+	}
+
+	// A failed install does not count.
+	h.result = func(context.Context) (*release, error) {
+		return newRelease("2.0.0", func(context.Context, func(int64, int64)) error { return errors.New("disk full") }), nil
+	}
+	done := h.begin(true)
+	s := h.shown()
+	s.Respond(waitView(t, s, "A new version of").Prompt, actionInstall, false)
+	s.Respond(waitView(t, s, "Update Error").Prompt, actionOK, false)
+	waitDone(t, done)
+	told(0, "a failed install")
+
+	// Installed in the background.
+	h.result = func(context.Context) (*release, error) { return newRelease("2.0.0", nil), nil }
+	h.u.update(func(s *state) { s.AutomaticDownloads = true })
+	waitDone(t, h.begin(false))
+	told(1, "an automatic install")
+
+	// Only once: the update installed runs at the next launch.
+	done = h.begin(true)
+	s = h.shown()
+	s.Respond(waitView(t, s, "Ready to Relaunch").Prompt, actionLater, false)
+	waitDone(t, done)
+	told(0, "Ready to Relaunch again")
+
+	// Installed by the user, after a function was removed.
+	h.u.installed = nil
+	off2 := OnInstalled(func() { installs <- struct{}{} })
+	off()
+	done = h.begin(true)
+	s = h.shown()
+	s.Respond(waitView(t, s, "A new version of").Prompt, actionInstall, false)
+	s.Respond(waitView(t, s, "Ready to Relaunch").Prompt, actionLater, false)
+	waitDone(t, done)
+	told(1, "the user's install")
+	off2()
 }
 
 func TestSchedule(t *testing.T) {

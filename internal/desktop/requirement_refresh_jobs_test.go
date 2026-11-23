@@ -265,7 +265,7 @@ func TestRequirementRefreshOlderMetadataCannotReplaceNewerList(t *testing.T) {
 }
 
 func TestRequirementRefreshQueuedCompletionChecksRelevantConfig(t *testing.T) {
-	for _, change := range []string{"proxy", "theme"} {
+	for _, change := range []string{"meegle-cli", "proxy", "theme"} {
 		t.Run(change, func(t *testing.T) {
 			s, b, w := refreshTestFixture(t)
 			s.startRequirementRefresh(s.requirementUnit.state.requirements[1].URL)
@@ -278,7 +278,9 @@ func TestRequirementRefreshQueuedCompletionChecksRelevantConfig(t *testing.T) {
 				t.Fatal("no queued completion")
 			}
 			field := `,"commandProxyUrl":"http://127.0.0.1:9000"}`
-			if change == "theme" {
+			if change == "meegle-cli" {
+				field = `,"meegleExecutablePath":"C:/meegle.exe"}`
+			} else if change == "theme" {
 				field = `,"theme":"DARK"}`
 			}
 			s.settingsUnit.state.configJSON = strings.TrimSuffix(s.settingsUnit.state.configJSON, "}") + field
@@ -288,11 +290,11 @@ func TestRequirementRefreshQueuedCompletionChecksRelevantConfig(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("worker not joined")
 			}
-			if change == "proxy" && s.requirementUnit.state.requirements[1].Title != "B" {
-				t.Fatal("queued result ignored relevant config change")
+			if change == "meegle-cli" && s.requirementUnit.state.requirements[1].Title != "B" {
+				t.Fatal("queued result ignored Meegle CLI path change")
 			}
-			if change == "theme" && s.requirementUnit.state.requirements[1].Title != "updated B" {
-				t.Fatal("unrelated theme change discarded valid refresh")
+			if change != "meegle-cli" && s.requirementUnit.state.requirements[1].Title != "updated B" {
+				t.Fatal("irrelevant config change discarded valid refresh", change)
 			}
 		})
 	}

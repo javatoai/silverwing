@@ -94,7 +94,7 @@ func NewWorkspaceGitDiffService(git *GitClient, locks *OperationLocks) *Workspac
 // ResolveWorkspaceDiffMainBranch deliberately ignores the task's creation BaseRef:
 // the review baseline always follows the current configured module/service master.
 func ResolveWorkspaceDiffMainBranch(config domain.AppConfig, task domain.TaskManifest, ws domain.ServiceWorkspace) (WorkspaceMainBranch, bool, error) {
-	service, err := config.GroupService(task.GroupID, ws.GroupServiceID)
+	service, err := config.Service(ws.GroupServiceID)
 	if err != nil {
 		return WorkspaceMainBranch{}, false, fmt.Errorf("无法读取工作区对应的仓库主分支配置：%w", err)
 	}

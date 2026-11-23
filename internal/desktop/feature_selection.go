@@ -29,6 +29,14 @@ func newTaskTransition(previous, next task, origin taskTransitionOrigin, indexCh
 
 func (t TaskTransition) changed() bool { return t.previous != t.next }
 
+func (s *app) resetTaskDirectoryViews() {
+	s.leaveTaskFiles()
+	s.taskFilesUnit.current, s.taskFilesUnit.views = nil, nil
+	s.leaveTaskServices()
+	s.taskServicesUnit.current, s.taskServicesUnit.views = nil, nil
+	s.taskTerminalUnit.current = nil
+}
+
 // The shell coordinates owners; it does not reach into their cancel functions,
 // editor fields, or job registries. Reading is captured before presentation reset.
 func (s *app) prepareFeatureTaskSelection(transition TaskTransition) error {

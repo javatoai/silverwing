@@ -45,15 +45,16 @@ const NORMALIZED = new Set(["DELETE", "GET", "HEAD", "OPTIONS", "POST", "PUT"]);
  * Makes an HTTP request from Go, with the options and result of the
  * standard `fetch`. `mode`, `credentials`, `cache` and the like have no
  * meaning there and are ignored; cookies are those of the Go side's
- * `http.Client`. Response headers are all there but `Set-Cookie`.
+ * `http.Client`. Response headers are all there but `Set-Cookie` and `Set-Cookie2`.
  */
 export async function fetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
   const req = typeof Request !== "undefined" && input instanceof Request ? input : null;
   const base = typeof location !== "undefined" ? location.href : undefined;
   const url = new URL(req ? req.url : input instanceof URL ? input.href : String(input), base);
   if (url.protocol !== "http:" && url.protocol !== "https:") return globalThis.fetch(input, init);
+  if (url.username || url.password) throw new TypeError("fetch: URL must not include credentials");
 
-  const signal = init.signal ?? req?.signal ?? null;
+  const signal = init.signal === undefined ? req?.signal ?? null : init.signal;
   signal?.throwIfAborted();
   let method = init.method ?? req?.method ?? "GET";
   if (NORMALIZED.has(method.toUpperCase())) method = method.toUpperCase();
@@ -65,9 +66,11 @@ export async function fetch(input: RequestInfo | URL, init: RequestInit = {}): P
     const type = r.headers.get("content-type");
     if (type && !headers.has("content-type")) headers.set("content-type", type);
     body = new Uint8Array(await r.arrayBuffer());
-  } else if (init.body === undefined && req?.body) {
+  } else if (req?.body) {
     body = new Uint8Array(await req.arrayBuffer());
   }
+  // Reading the body yields: it may have been aborted before Go sees it.
+  signal?.throwIfAborted();
   if (body && (method === "GET" || method === "HEAD")) {
     throw new TypeError(`fetch: a ${method} request cannot have a body`);
   }
@@ -153,14 +156,26 @@ export async function fetch(input: RequestInfo | URL, init: RequestInit = {}): P
     statusText: head.statusText ?? "",
     headers: head.headers ?? [],
   });
-  const own = (name: string, value: unknown) => Object.defineProperty(res, name, { value, enumerable: true });
-  own("url", head.url ?? url.href);
-  own("redirected", head.redirected ?? false);
-  if (!valid) own("status", status);
-  return res;
+  return withMetadata(res, head.url ?? url.href, head.redirected ?? false, status);
 }
 
 export default fetch;
+
+/** Native clones copy internal response data, not the properties we add. */
+function withMetadata(res: Response, url: string, redirected: boolean, status: number): Response {
+  // Capture the native method before installing the wrapper to avoid recursion.
+  const clone = res.clone;
+  const own = (name: string, value: unknown) => Object.defineProperty(res, name, { value, enumerable: true });
+  own("url", url);
+  own("redirected", redirected);
+  if (res.status !== status) own("status", status);
+  Object.defineProperty(res, "clone", {
+    value(this: Response): Response {
+      return withMetadata(clone.call(this), this.url, this.redirected, this.status);
+    },
+  });
+  return res;
+}
 
 /** The error a failed request rejects with. */
 function failure(err: unknown): Error {

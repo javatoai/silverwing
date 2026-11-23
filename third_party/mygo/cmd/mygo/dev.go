@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -31,6 +32,13 @@ identifier "<identifier>.dev", in .mygo/dev: a real bundle on macOS, and
 on Windows an executable with the icon, manifest and version information
 that mygo build embeds.
 
+On macOS it signs the development app with an Apple Development identity
+of the user's keychains, as Xcode signs Debug builds. Its signature stays
+the same from build to build, so macOS keeps what the user allowed the app,
+such as Accessibility, Screen Recording or reading its Keychain items; ad
+hoc signatures, which it falls back to without one, change with every
+build. -sign signs with another identity; -sign - signs ad hoc.
+
 Changes to the Go code, mygo.json or mygo.config.ts, the icon, the
 resources or the catalogs of messages rebuild the app, regenerate the
 TypeScript client and the accessors of the catalogs, and relaunch it. A build that fails to compile keeps the previous one running; the next
@@ -49,11 +57,14 @@ zh-Hant, or a pseudo locale: en-XA (accented and longer text) or ar-XB
 (right to left), which test layouts without translations. It does not
 keep it: the app's own setting is left as it is.`)
 	skipDevCommand := flags.Bool("skip-dev-command", false, "do not run devCommand")
-	sign := flags.String("sign", "-", "macOS signing identity for the development app")
+	sign := flags.String("sign", "", `macOS signing identity for the development app (default: an Apple Development identity, which keeps permissions and Keychain access across builds, else "-", ad hoc)`)
 	web := flags.Bool("web", false, "develop the app in browsers")
 	port := flags.Int("port", 5174, "with -web, the port to serve the app at, or the next free one")
 	openPage := flags.Bool("open", true, "with -web, open the app in the browser")
 	lang := flags.String("lang", "", "run the app in this language (as de, or the pseudo locales en-XA and ar-XB), without keeping it")
+	platform := flags.String("platform", "", "develop the app on a phone: ios (the simulator) or android (a device or an emulator)")
+	device := flags.String("device", "", "with -platform, what to run on (mygo devices lists them): an iOS simulator or device (name or UDID), an Android device (adb serial) or emulator, which it starts")
+	background := flags.Bool("background", false, "start the app, and again after each rebuild, without bringing it to the front")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -75,6 +86,26 @@ keep it: the app's own setting is left as it is.`)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	s := &devSession{root: c.root, sign: *sign, name: devConfig(c).Name, env: []string{"MYGO_ENV=development"}}
+	switch *platform {
+	case "":
+		s.sign = devSign(c, *sign)
+	case "ios":
+		if s.device, err = iosRunTarget(*device); err != nil {
+			return err
+		}
+	case "android":
+		if s.device, err = androidDevice(ctx, *device); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+	default:
+		return fmt.Errorf("unknown platform %q: dev takes ios or android", *platform)
+	}
+	if *background {
+		s.env = append(s.env, "MYGO_DEV_BACKGROUND=1")
+	}
 	if locale != "" {
 		// The app reads it as it starts, over the language it keeps.
 		s.env = append(s.env, "MYGO_LOCALE="+locale)
@@ -153,7 +184,13 @@ keep it: the app's own setting is left as it is.`)
 		if err := starting.end(err, "Dev server ready at "+cyan(c.DevURL)); err != nil {
 			return err
 		}
-		s.env = append(s.env, "MYGO_DEV_URL="+c.DevURL)
+		devURL := c.DevURL
+		if s.device != nil {
+			if devURL, err = s.device.reachDevURL(devURL); err != nil {
+				return err
+			}
+		}
+		s.env = append(s.env, "MYGO_DEV_URL="+devURL)
 	case starting != nil:
 		starting.done("Started " + c.DevCommand)
 	}
@@ -176,18 +213,47 @@ keep it: the app's own setting is left as it is.`)
 			}
 		}()
 	}
-	if c.DevURL == "" && c.FrontendDist != "" {
+	if c.DevURL == "" && c.FrontendDist != "" && s.device == nil {
 		s.env = append(s.env, "MYGO_FRONTEND_DIST="+c.path(c.FrontendDist))
 	}
 	return s.run(ctx, c)
 }
 
+// devSign returns the identity that signs the development app: sign, when
+// given, else on macOS a development identity of the user's keychains
+// (developmentIdentity), as Xcode signs Debug builds, and ad hoc without
+// one. A provisioning profile needs the identity it names, which -sign
+// gives; without it, ad hoc signing leads to the error that says so.
+func devSign(c *Config, sign string) string {
+	if sign != "" {
+		return sign
+	}
+	if runtime.GOOS != "darwin" || c.MacOS.ProvisioningProfile != "" {
+		return "-"
+	}
+	out, _ := exec.Command("security", "find-identity", "-v", "-p", "codesigning").Output()
+	team := signingTeam(c.MacOS.SigningIdentity)
+	var teams map[string]string
+	if team != "" {
+		certs, _ := exec.Command("security", "find-certificate", "-a", "-p").Output()
+		teams = certificateTeams(certs)
+	}
+	hash, name := developmentIdentity(string(out), teams, team)
+	if hash == "" {
+		warnf("Signing the development app ad hoc: macOS asks again for its permissions and Keychain items after each build. An Apple Development certificate keeps them; Xcode makes one for an Apple ID, free, in Settings > Accounts > Manage Certificates")
+		return "-"
+	}
+	logf("Signing the development app as %s", name)
+	return hash
+}
+
 // devSession builds and runs development builds of an app.
 type devSession struct {
-	root string
-	sign string
-	name string   // of the development app, for messages
-	env  []string // for the app
+	root   string
+	device *mobileDevice // the phone it runs on, nil for this computer
+	sign   string
+	name   string   // of the development app, for messages
+	env    []string // for the app
 
 	// Used by one build at a time.
 	i18nWarnings string // the warnings of the catalogs last shown
@@ -195,6 +261,12 @@ type devSession struct {
 	icns         []byte
 	mainFor      string // the Main that mainDir is the package directory of
 	mainDir      string
+	// What the phone has installed, which a change of the Go code keeps: the
+	// device, the iOS bundle but its executable, the Android host.
+	installedOn     string
+	installedBundle [32]byte
+	androidHost     string
+	desktopEntry    string
 
 	// Used by the run loop only.
 	app *devProcess // the running build
@@ -302,6 +374,7 @@ func (s *devSession) run(ctx context.Context, c *Config) error {
 			s.app.stop()
 		}
 		stopping.Wait()
+		s.removeDesktopEntry()
 		t.stop()
 	}()
 
@@ -323,8 +396,9 @@ func (s *devSession) run(ctx context.Context, c *Config) error {
 			s.setApp(nil)
 			var exit *exec.ExitError
 			if errors.As(err, &exit) && exit.ExitCode() == devRelaunchCode {
-				// mygo.App.Relaunch: start the same build again.
-				p, err := s.launch(exe)
+				// mygo.App.Relaunch: start the same build again, with
+				// the arguments it passed.
+				p, err := s.launch(exe, s.takeRelaunchArgs()...)
 				if err != nil {
 					con.println("  " + red(con.sym.fail) + " Relaunching " + s.name)
 					con.details(err)
@@ -503,6 +577,7 @@ func devHelp() string {
 // sibling for its icon, when there is one, to tell it from the app's.
 func devConfig(c *Config) *Config {
 	d := *c
+	d.deps = nil // a build of its own, which lists its packages anew
 	d.Name += " Dev"
 	d.Identifier += ".dev"
 	if d.Slug != "" {
@@ -518,6 +593,9 @@ func devConfig(c *Config) *Config {
 // running build, whose fingerprint is running, showing its progress on t.
 // It returns the new process.
 func (s *devSession) buildAndLaunch(ctx context.Context, t *task, running [32]byte) (p *devProcess, sum [32]byte, err error) {
+	if s.device != nil {
+		return s.buildAndLaunchMobile(ctx, t, running)
+	}
 	c, err := loadConfig(s.root)
 	if err != nil {
 		return nil, sum, err
@@ -552,6 +630,10 @@ func (s *devSession) buildAndLaunch(ctx context.Context, t *task, running [32]by
 		cleanup()
 		return nil, sum, err
 	}
+	if err := prepareNative(dc, runtime.GOOS, runtime.GOARCH, nativeDev); err != nil {
+		cleanup()
+		return nil, sum, err
+	}
 	err = goBuild(ctx, c, t, bin, nil, "-ldflags", strings.TrimSpace(packageFlags(dc)))
 	cleanup()
 	if err != nil {
@@ -578,6 +660,9 @@ func (s *devSession) buildAndLaunch(ctx context.Context, t *task, running [32]by
 	if err := hashResources(h, res); err != nil {
 		return nil, sum, err
 	}
+	if err := hashNative(h, dc); err != nil {
+		return nil, sum, err
+	}
 	var icns []byte
 	if runtime.GOOS == "darwin" {
 		if icns, err = s.icon(dc); err != nil {
@@ -591,6 +676,11 @@ func (s *devSession) buildAndLaunch(ctx context.Context, t *task, running [32]by
 		h.Write(infoPlist(dc, name, iconFile, ""))
 		if err := hashEntitlements(h, dc); err != nil {
 			return nil, sum, err
+		}
+	}
+	if runtime.GOOS == "linux" {
+		if err := s.installDesktopEntry(dc, filepath.Join(dir, name)); err != nil {
+			warnf("The desktop entry for the app's icon: %v", err)
 		}
 	}
 	copy(sum[:], h.Sum(nil))
@@ -676,31 +766,26 @@ func hashEntitlements(w io.Writer, c *Config) error {
 	return nil
 }
 
-// placeBuild moves the executable in stage and the resources res next to
-// it into dir, and removes what an earlier build left there and this one
-// does not have.
+// placeBuild moves the executable in stage into dir, syncs the resources
+// res next to it, and removes what an earlier build left there and this
+// one does not have. Resources that did not change stay as they are, so a
+// program the running app started from them, which Windows keeps from
+// being moved, does not stop the rebuild.
 func placeBuild(stage, dir string, res []resource) error {
-	if err := copyResources(res, stage); err != nil {
-		return err
-	}
 	entries, err := os.ReadDir(stage)
 	if err != nil {
 		return err
 	}
-	placed := map[string]bool{}
+	own := map[string]bool{}
 	for _, e := range entries {
-		if err := replacePath(filepath.Join(stage, e.Name()), filepath.Join(dir, e.Name())); err != nil {
-			return err
-		}
-		placed[e.Name()] = true
+		own[e.Name()] = true
 	}
-	entries, err = os.ReadDir(dir)
-	if err != nil {
+	if err := syncResources(res, dir, stage, own); err != nil {
 		return err
 	}
 	for _, e := range entries {
-		if !placed[e.Name()] && !hiddenName(e.Name()) {
-			_ = os.RemoveAll(filepath.Join(dir, e.Name()))
+		if err := replacePath(filepath.Join(stage, e.Name()), filepath.Join(dir, e.Name())); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -741,9 +826,86 @@ func (s *devSession) icon(c *Config) ([]byte, error) {
 	return s.icns, nil
 }
 
-// launch starts a build. MYGO_DEV=1 tells it that mygo dev runs it, which
-// mygo.App.Relaunch asks to start it again.
-func (s *devSession) launch(exe string) (*devProcess, error) {
+// installDesktopEntry gives the dev build on Linux a desktop entry in the
+// user's data directory, which desktops match its windows to by the
+// executable's name, with its icon next to the executable: by path, as the
+// installed app's, which shells find without an icon theme.
+func (s *devSession) installDesktopEntry(dc *Config, exe string) error {
+	if dc.Icon == "" {
+		s.removeDesktopEntry()
+		return nil
+	}
+	src, err := os.ReadFile(dc.path(dc.Icon))
+	if err != nil {
+		return err
+	}
+	name := filepath.Base(exe)
+	icon := exe + ".png"
+	if _, err := writeIfChanged(icon, src); err != nil {
+		return err
+	}
+	entry := filepath.Join(xdgDataHome(), "applications", name+".desktop")
+	// The dev build must not take the app's files and URLs.
+	e := *dc
+	e.FileAssociations, e.URLSchemes = nil, nil
+	hidden := strings.Replace(linuxDesktopEntry(&e, exe, icon), "Type=Application\n", "Type=Application\nNoDisplay=true\n", 1)
+	if _, err := writeIfChanged(entry, []byte(hidden)); err != nil {
+		return err
+	}
+	if s.desktopEntry != "" && s.desktopEntry != entry {
+		_ = os.Remove(s.desktopEntry)
+	}
+	s.desktopEntry = entry
+	return nil
+}
+
+// removeDesktopEntry removes what installDesktopEntry wrote.
+func (s *devSession) removeDesktopEntry() {
+	if s.desktopEntry != "" {
+		_ = os.Remove(s.desktopEntry)
+		s.desktopEntry = ""
+	}
+}
+
+// xdgDataHome mirrors xdgDir in internal/linux.
+func xdgDataHome() string {
+	if d := os.Getenv("XDG_DATA_HOME"); filepath.IsAbs(d) {
+		return d
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "share")
+}
+
+// desktopExec quotes path for the Exec key as execArg in internal/linux
+// does, only when it needs it.
+func desktopExec(path string) string {
+	if !strings.ContainsAny(path, " \t\"`$\\%") {
+		return path
+	}
+	return `"` + strings.NewReplacer(`\`, `\\\\`, `"`, `\\"`, "`", "\\\\`", `$`, `\\$`, `%`, `%%`).Replace(path) + `"`
+}
+
+// writeIfChanged writes data to path unless it holds it already, and
+// reports whether it wrote.
+func writeIfChanged(path string, data []byte) (bool, error) {
+	if old, err := os.ReadFile(path); err == nil && bytes.Equal(old, data) {
+		return false, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return false, err
+	}
+	return true, os.WriteFile(path, data, 0o644)
+}
+
+// launch starts a build with args. MYGO_DEV=1 tells it that mygo dev runs
+// it, which mygo.App.Relaunch asks to start it again, with the arguments
+// it writes in the file MYGO_DEV_RELAUNCH names (takeRelaunchArgs).
+func (s *devSession) launch(exe string, args ...string) (*devProcess, error) {
+	relaunch := s.relaunchFile()
+	if err := os.MkdirAll(filepath.Dir(relaunch), 0o755); err != nil {
+		return nil, err
+	}
+	_ = os.Remove(relaunch) // left by a build that did not relaunch
 	stdout, outDone, err := pipe(con.output("app", os.Stdout))
 	if err != nil {
 		return nil, err
@@ -753,10 +915,10 @@ func (s *devSession) launch(exe string) (*devProcess, error) {
 		stdout.Close()
 		return nil, err
 	}
-	cmd := exec.Command(exe)
+	cmd := exec.Command(exe, args...)
 	cmd.Dir = s.root
 	cmd.Stdout, cmd.Stderr = stdout, stderr
-	cmd.Env = append(append(os.Environ(), s.env...), "MYGO_DEV=1")
+	cmd.Env = append(append(os.Environ(), s.env...), "MYGO_DEV=1", "MYGO_DEV_RELAUNCH="+relaunch)
 	setProcessGroup(cmd)
 	err = cmd.Start()
 	stdout.Close()
@@ -770,15 +932,36 @@ func (s *devSession) launch(exe string) (*devProcess, error) {
 		// What the app printed last, as a panic, comes before what mygo
 		// says of its exit, unless processes it started hold its output.
 		timeout := time.After(250 * time.Millisecond)
+	drain:
 		for _, copied := range []<-chan struct{}{outDone, errDone} {
 			select {
 			case <-copied:
 			case <-timeout:
+				break drain
 			}
 		}
 		close(p.done)
 	}()
 	return p, nil
+}
+
+// relaunchFile is where a build that mygo.App.Relaunch asks to start
+// again writes the arguments it passes.
+func (s *devSession) relaunchFile() string {
+	return filepath.Join(s.root, ".mygo", "dev", "relaunch-args")
+}
+
+// takeRelaunchArgs returns the arguments that the build that exited with
+// devRelaunchCode passed to mygo.App.Relaunch, each ended with a NUL
+// byte, and removes their file: none when it passed none.
+func (s *devSession) takeRelaunchArgs() []string {
+	b, err := os.ReadFile(s.relaunchFile())
+	if err != nil {
+		return nil
+	}
+	_ = os.Remove(s.relaunchFile())
+	args := strings.Split(string(b), "\x00")
+	return args[:len(args)-1]
 }
 
 // devProcess is a running development build.
@@ -789,6 +972,8 @@ type devProcess struct {
 	err  error         // how it exited, set before done is closed
 	// replaced is set when the build is stopped for the next one.
 	replaced atomic.Bool
+	// onStop ends the app where cmd only follows it (phones).
+	onStop func()
 }
 
 // stopGrace is how long a stopped build may take to quit.
@@ -803,6 +988,9 @@ func (p *devProcess) stop() {
 	case <-p.done:
 		return
 	default:
+	}
+	if p.onStop != nil {
+		p.onStop()
 	}
 	interrupt(p.cmd)
 	select {

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"silverwing-go/internal/domain"
 )
 
 const legacyMaterialsLock = ".silverwing-requirement-materials.lock"
@@ -52,6 +54,16 @@ func MaterialsRepositoryLockPath(root string) (string, error) {
 // AcquireMaterialsRepositoryLock is shared by preparation, document mutations
 // and Git, including processes using different application homes.
 func AcquireMaterialsRepositoryLock(root string) (func(), error) {
+	return acquireMaterialsRepositoryLock(root, true)
+}
+
+// AcquireDocumentsRepositoryLock uses the same lock identity without migrating
+// historical runtime files that might belong to a user's existing checkout.
+func AcquireDocumentsRepositoryLock(root string) (func(), error) {
+	return acquireMaterialsRepositoryLock(root, false)
+}
+
+func acquireMaterialsRepositoryLock(root string, retireLegacy bool) (func(), error) {
 	path, err := MaterialsRepositoryLockPath(root)
 	if err != nil {
 		return nil, err
@@ -63,11 +75,33 @@ func AcquireMaterialsRepositoryLock(root string) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := RetireLegacyMaterialsLock(root); err != nil {
-		release()
-		return nil, err
+	if retireLegacy && !isManagedMaterialsCheckout(root) {
+		if err := RetireLegacyMaterialsLock(root); err != nil {
+			release()
+			return nil, err
+		}
 	}
 	return release, nil
+}
+
+// Managed checkouts can receive a similarly named file from their remote.
+// It belongs to the repository and must not be touched by the lock.
+func isManagedMaterialsCheckout(root string) bool {
+	role := filepath.Base(filepath.Dir(root))
+	if (role != domain.TaskMaterialsRepositoryRole && role != domain.ProjectInstructionsRepositoryRole) ||
+		filepath.Base(filepath.Dir(filepath.Dir(root))) != domain.ManagedDocumentsDirectory {
+		return false
+	}
+	digest := filepath.Base(root)
+	if len(digest) != 2*domain.ManagedDocumentsRepositoryIDSize {
+		return false
+	}
+	for _, c := range digest {
+		if !strings.ContainsRune("0123456789abcdef", c) {
+			return false
+		}
+	}
+	return true
 }
 
 // RetireLegacyMaterialsLock removes only an identifiable empty old runtime

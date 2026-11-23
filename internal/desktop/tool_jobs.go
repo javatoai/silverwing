@@ -320,7 +320,9 @@ func developerToolActionInputMatches(action application.Action, state *toolPageS
 	case "tool.diff":
 		left, _ := action.Payload["left"].(string)
 		right, _ := action.Payload["right"].(string)
-		return payloadUint64(action.Payload, "revision") == state.diffRevision && left == state.diffLeft && right == state.diffRight
+		jsonMode := action.Payload["mode"] == application.JSONDiffMode
+		return payloadUint64(action.Payload, "revision") == state.diffRevision && left == state.diffLeft && right == state.diffRight &&
+			jsonMode == state.diffJSONMode && (!jsonMode || action.Payload["ignore"] == state.diffJSONIgnore)
 	case "tool.ports":
 		port := payloadInt(action.Payload, "port")
 		filter, err := parseDeveloperToolPort(state.portFilter)

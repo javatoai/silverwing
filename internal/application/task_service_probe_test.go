@@ -17,7 +17,7 @@ func setTaskServicesProbe(t *testing.T, a *App, enabled bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.Groups[0].Services[0].GenbuProbeEnabled = enabled
+	cfg.Services[0].GenbuProbeEnabled = enabled
 	if err := a.Config.Save(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ type taskServicesQueueContext struct {
 
 func (ctx *taskServicesQueueContext) Done() <-chan struct{} {
 	if pc, _, _, ok := runtime.Caller(1); ok {
-		if f := runtime.FuncForPC(pc); f != nil && strings.HasSuffix(f.Name(), ".taskServicesActionWithReader") {
+		if f := runtime.FuncForPC(pc); f != nil && strings.HasSuffix(f.Name(), ".acquireTaskServiceReadSlot") {
 			ctx.once.Do(func() { close(ctx.waiting) })
 		}
 	}

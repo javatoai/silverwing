@@ -82,6 +82,10 @@ type Language struct {
 	// "Makefile" (LanguageFor).
 	Extensions []string
 	Filenames  []string
+	// Interpreters are the programs a script's #! line runs it with, as
+	// "python" or "bash", without a version: LanguageForText finds the
+	// language of a file its name does not tell by them.
+	Interpreters []string
 	// LineComment starts a comment to the end of the line, as "//";
 	// BlockComment encloses one, as {"/*", "*/"}. Toggling comments uses
 	// the first, else the second.
@@ -119,6 +123,11 @@ type Language struct {
 	// the buffer's text, and invalidate draws the windows showing it
 	// again, from any goroutine, for work done in the background. When
 	// nil, Tokenizer highlights.
+	//
+	// A patch's texts (DiffState.SetPatch) are its hunks' lines one after
+	// another: the default highlighter starts each hunk in state 0, as
+	// the start of a text, and a Highlighter finds the lines where they
+	// start in its snapshots' Restarts.
 	Highlighter func(text Snapshot, invalidate func()) Highlighter
 }
 
@@ -188,7 +197,7 @@ type Indenter interface {
 // which a line starting as it did then, past dirty, confirms.
 type tokenHighlighter struct {
 	t      Tokenizer
-	text   Snapshot
+	text   Snapshot // its restarts start in state 0
 	states []uint64 // the state line i starts in
 	// frontier is how many lines from the top start in states known
 	// right. confirmed is how many would be, were the edits since the
@@ -206,8 +215,13 @@ type tokenHighlighter struct {
 // uses by default: t tokenizes each line from the state the line before
 // ends in, and an edit tokenizes the lines after it again until one
 // starts in the state it started in before, as TextMate grammars and
-// Monaco do, a frame's budget at a time.
+// Monaco do, a frame's budget at a time. The text's Restarts start in
+// the tokenizer's first state.
 func NewTokenHighlighter(t Tokenizer, text Snapshot) Highlighter {
+	return newTokenHighlighter(t, text)
+}
+
+func newTokenHighlighter(t Tokenizer, text Snapshot) *tokenHighlighter {
 	return &tokenHighlighter{t: t, text: text, states: []uint64{0}, frontier: 1, confirmed: 1, dirty: -1}
 }
 
@@ -235,6 +249,13 @@ func (h *tokenHighlighter) Edit(old, new Snapshot, changes []Change) {
 		}
 		h.dirty = max(h.dirty, newEndLine)
 	}
+	// A line restarting may have moved to the line a change starts or
+	// ends in, which kept the state of the line there.
+	for _, r := range h.text.restarts {
+		if r < len(h.states) {
+			h.states[r] = 0
+		}
+	}
 }
 
 func (h *tokenHighlighter) Highlight(last int, budget time.Duration) bool {
@@ -257,16 +278,42 @@ func (h *tokenHighlighter) Highlight(last int, budget time.Duration) bool {
 		}
 	}()
 	start := time.Now()
-	count := 0
+	count, work := 0, 0
 	for h.frontier <= last {
 		stopped := false
+		// The next line starting in state 0, -1 for none.
+		restarts := h.text.restarts
+		k, _ := slices.BinarySearch(restarts, h.frontier)
+		restart := -1
+		if k < len(restarts) {
+			restart = restarts[k]
+		}
 		h.text.t.EachLine(h.frontier-1, last, func(i, _ int, line string) bool {
-			if count++; count&63 == 0 && time.Since(start) > budget {
-				stopped = true
-				return false
+			// The clock is read every 64 lines, and sooner after long ones:
+			// 64 lines of a minified file are megabytes.
+			if count++; count&63 == 0 || work >= highlightCheckBytes {
+				if time.Since(start) > budget {
+					stopped = true
+					return false
+				}
+				work = 0
 			}
-			var end uint64
-			h.scratch, end = h.t.Tokenize(line, h.states[i], h.scratch[:0])
+			// A line too long to color shows plain (Tokens), so it isn't
+			// tokenized here either: the line after it starts as it did, as
+			// VS Code's maxTokenizationLineLength leaves it.
+			end := h.states[i]
+			if len(line) <= maxTokenize {
+				h.scratch, end = h.t.Tokenize(line, h.states[i], h.scratch[:0])
+				work += len(line)
+			}
+			if i+1 == restart {
+				end = 0
+				if k++; k < len(restarts) {
+					restart = restarts[k]
+				} else {
+					restart = -1
+				}
+			}
 			if i+1 < len(h.states) {
 				if h.states[i+1] == end && i+1 > h.dirty && h.confirmed > i+2 {
 					// The lines after start as they did, up to those
@@ -307,9 +354,41 @@ func (h *tokenHighlighter) stateOf(line int) (uint64, bool) {
 	return 0, false
 }
 
+// moveRestarts moves lines starting in state 0, in order, through an
+// edit's changes from old to new: a line moves with its first byte, and
+// goes when a change replaced it. They stay in order, without
+// duplicates. It leaves lines as they are, which snapshots share.
+func moveRestarts(lines []int, old, new Snapshot, changes []Change) []int {
+	out := make([]int, 0, len(lines))
+	k, delta := 0, 0
+	for _, line := range lines {
+		if line >= old.LineCount() {
+			break
+		}
+		at := old.LineStart(line)
+		// The changes before the line's first byte move it by the lines
+		// they add and remove; one starting at it leaves it where it is.
+		for ; k < len(changes) && changes[k].OldStart < at && changes[k].OldEnd <= at; k++ {
+			c := changes[k]
+			delta += new.LineOf(c.NewEnd) - new.LineOf(c.NewStart) - (old.LineOf(c.OldEnd) - old.LineOf(c.OldStart))
+		}
+		if k < len(changes) && changes[k].OldStart < at {
+			continue
+		}
+		if n := line + delta; len(out) == 0 || out[len(out)-1] < n {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 // maxTokenize leaves longer lines plain, as Pierre's
 // tokenizeMaxLineLength does.
 const maxTokenize = 10000
+
+// highlightCheckBytes is how much text Highlight tokenizes before it reads
+// the clock again, well under a millisecond of it.
+const highlightCheckBytes = 16 << 10
 
 // syntaxState is a buffer's highlighter and the text it follows.
 type syntaxState struct {
@@ -329,8 +408,11 @@ func (b *Buffer) highlighter() Highlighter {
 	}
 	s := b.syntax
 	if s == nil || s.lang != lang {
-		s = &syntaxState{lang: lang, text: b.snapshotLocked()}
+		s = &syntaxState{lang: lang}
 		b.syntax = s
+	}
+	if s.h == nil {
+		s.text = b.snapshotLocked()
 	}
 	b.mu.Unlock()
 	if s.h == nil {
@@ -339,7 +421,9 @@ func (b *Buffer) highlighter() Highlighter {
 	entries, version, ok := b.entriesSince(s.text.version)
 	if !ok {
 		// Too far behind: a highlighter of the text as it is.
-		s.text = b.Snapshot()
+		b.mu.Lock()
+		s.text = b.snapshotLocked()
+		b.mu.Unlock()
 		s.h = newHighlighter(lang, s.text, b.invalidate)
 		return s.h
 	}
@@ -352,9 +436,22 @@ func (b *Buffer) highlighter() Highlighter {
 	return s.h
 }
 
+// newHighlighter makes the highlighter of text in l: l's own, else the
+// default one.
 func newHighlighter(l *Language, text Snapshot, invalidate func()) Highlighter {
 	if l.Highlighter != nil {
 		return l.Highlighter(text, invalidate)
 	}
-	return NewTokenHighlighter(l.Tokenizer, text)
+	return newTokenHighlighter(l.Tokenizer, text)
+}
+
+// setRestarts makes lines, in order, start in state 0 in the default
+// highlighter whatever the line before ends in, as the first lines of a
+// patch's hunks do: they move with the text's edits.
+func (b *Buffer) setRestarts(lines []int) {
+	lines = slices.Compact(slices.Clone(lines))
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.restarts, b.restartsText = lines, b.text
+	b.syntax = nil
 }

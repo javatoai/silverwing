@@ -15,8 +15,6 @@ import (
 
 	"silverwing-go/internal/delivery"
 	"silverwing-go/internal/domain"
-	"silverwing-go/internal/integrations"
-	"silverwing-go/internal/process"
 	"silverwing-go/internal/releasenotice"
 )
 
@@ -32,7 +30,6 @@ type noticeCLIFixtureState struct {
 	GatePhase, Gate                   string
 	ReadOnlyHome                      string
 	SourceConfigID                    string
-	LiveGenbu                         bool
 	BackendFixture                    string
 	MeegleUser, MeegleProfile         string
 	MetadataFailure, IncompleteRoster bool
@@ -77,6 +74,10 @@ func runNoticeFixtureCLI(path string, args []string) int {
 	if err != nil {
 		return 90
 	}
+	if args[0] == "--version" {
+		fmt.Println("notice-fixture-1")
+		return 0
+	}
 	if state.ReadOnlyHome != "" && args[0] != "im" {
 		return runNoticeReadOnlyCLI(state, args)
 	}
@@ -94,9 +95,6 @@ func runNoticeFixtureCLI(path string, args []string) int {
 	}
 	phase := ""
 	switch args[0] {
-	case "--version":
-		fmt.Println("notice-fixture-1")
-		return 0
 	case "workflow":
 		fmt.Println(`{"list":[],"pagination":{"page_num":1,"has_more":false}}`)
 		return 0
@@ -155,9 +153,6 @@ func runNoticeFixtureCLI(path string, args []string) int {
 			return 92
 		}
 		phase = "send-" + value("--user-id")
-	case "query-tag":
-		fmt.Println(`{"build_status":"成功","uat_status":"初始","production_status":"初始"}`)
-		return 0
 	default:
 		fmt.Fprintln(os.Stderr, "unexpected fixture command", args[0])
 		return 93
@@ -302,13 +297,13 @@ func newTagNoticeDispatchFixture(t *testing.T, testers ...string) *tagNoticeDisp
 	batch, now := "notice-fixture-batch", domain.FormatSilverWingTime(time.Now())
 	for name, op := range operations {
 		cfg.Repositories = append(cfg.Repositories, domain.RepositoryConfig{ID: name, Name: name, RootPath: filepath.Join(scope.TaskPath, name), GitCommonDirectory: filepath.Join(scope.TaskPath, name, ".git")})
-		cfg.Groups[0].Services = append(cfg.Groups[0].Services, domain.GroupServiceConfig{ID: name, DisplayName: name, RepositoryID: name, GenbuServiceName: name, GenbuProbeEnabled: true, MasterBranch: "origin/master", TestTagBaselineRef: "origin/release/test", DevelopmentTool: domain.DevelopmentToolVisualStudioCode, Modules: []domain.ServiceModuleConfig{{ID: "module", Name: "default", Strategy: domain.WorkspaceStandardWorktree, TagMode: domain.TagBuildCurrentBranch, TagEnabled: true}}})
+		cfg.Services = append(cfg.Services, domain.GroupServiceConfig{ID: name, DisplayName: name, RepositoryID: name, GenbuServiceName: name, GenbuProbeEnabled: true, MasterBranch: "origin/master", TestTagBaselineRef: "origin/release/test", DevelopmentTool: domain.DevelopmentToolVisualStudioCode, Modules: []domain.ServiceModuleConfig{{ID: "module", Name: "default", Strategy: domain.WorkspaceStandardWorktree, TagMode: domain.TagBuildCurrentBranch, TagEnabled: true}}})
 		op.BatchID = &batch
 		op.GenbuStatus = domain.GenbuTagProbeStatus{Build: domain.GenbuSuccess, UAT: domain.GenbuInitial, Production: domain.GenbuInitial, CheckedAt: &now}
 		operations[name] = op
 		saveTagProbeFixture(t, scope.TaskPath, op)
 	}
-	cfg.LarkExecutablePath, cfg.MeegleExecutablePath, cfg.GenbuExecutablePath = &executable, &executable, &executable
+	cfg.LarkExecutablePath, cfg.MeegleExecutablePath = &executable, &executable
 	cfg.CommandProxyURL, cfg.CommandProxyTargets = nil, nil
 	cfg.LarkNotice = &domain.LarkNoticeConfig{Profile: "notice-fixture", AppID: "cli_notice_fixture", Contacts: []domain.LarkNoticeContact{}}
 	cfg.MeegleProjects = []domain.MeegleProjectConfig{{SimpleName: "notice", ProjectKey: "notice-project"}}
@@ -324,8 +319,15 @@ func newTagNoticeDispatchFixture(t *testing.T, testers ...string) *tagNoticeDisp
 	if err := a.Manifests.Save(scope.TaskPath, entry.Manifest); err != nil {
 		t.Fatal(err)
 	}
-	a.Runner = process.NewRunner()
-	a.Integrations = integrations.NewService(a.Paths, a.Config, a.Runner)
+	a, err = newApp(a.Paths.Home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	services := make([]string, 0, len(cfg.Services))
+	for _, service := range cfg.ServiceCatalog() {
+		services = append(services, service.GenbuServiceName)
+	}
+	installFixtureGenbuHTTP(t, a, services, 1, nil)
 	action := tagProbeFixtureAction(scope, "tag.notice.prepare", "")
 	action.Payload["groupId"], action.Payload["noticeConfigIdentity"] = batch, ReleaseNoticeConfigIdentity(cfg)
 	f := &tagNoticeDispatchFixture{app: a, scope: scope, operations: operations, action: action, path: filepath.Join(a.Paths.Home, "notice-fixture.json"), state: noticeCLIFixtureState{
@@ -340,8 +342,19 @@ func newTagNoticeDispatchFixture(t *testing.T, testers ...string) *tagNoticeDisp
 	}
 	f.saveState(t)
 	t.Setenv("SILVERWING_TAG_NOTICE_FIXTURE", f.path)
+	probeNoticeFixtureCLIs(t, a)
 	t.Cleanup(func() { _ = a.Integrations.CloseRequirementDocuments(context.Background()) })
 	return f
+}
+
+func probeNoticeFixtureCLIs(t *testing.T, app *App) {
+	t.Helper()
+	for _, tool := range []string{"lark", "genbu"} {
+		status, err := app.ProbeOptionalCLI(context.Background(), tool, false)
+		if err != nil || !status.Ready() {
+			t.Fatal("fake notification CLI unavailable", tool, status, err)
+		}
+	}
 }
 
 func (f *tagNoticeDispatchFixture) saveState(t *testing.T) {
@@ -603,7 +616,7 @@ func (f *tagNoticeDispatchFixture) mutate(t *testing.T, mode string, cancel cont
 }
 
 func TestTagNoticeDispatchStopsAfterChangesBetweenRecipients(t *testing.T) {
-	for _, mode := range []string{"account", "profile", "roster", "task-recreated", "batch-tag", "cancel"} {
+	for _, mode := range []string{"account", "profile", "roster", "task-recreated", "batch-tag", "lark-disabled", "lark-path", "genbu-disabled", "cancel"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newTagNoticeDispatchFixture(t, "TesterA", "TesterB")
 			prepared := f.prepare(t)
@@ -620,7 +633,14 @@ func TestTagNoticeDispatchStopsAfterChangesBetweenRecipients(t *testing.T) {
 			if err := waitNoticeFixtureFile(f.state.Gate + ".started"); err != nil {
 				t.Fatal(err)
 			}
-			f.mutate(t, mode, cancel)
+			switch mode {
+			case "lark-disabled", "genbu-disabled":
+				setOptionalCLISwitch(t, f.app, strings.TrimSuffix(mode, "-disabled"), false)
+			case "lark-path":
+				f.changeLarkPath(t)
+			default:
+				f.mutate(t, mode, cancel)
+			}
 			if mode == "roster" {
 				f.refresh(t)
 			}
@@ -633,6 +653,21 @@ func TestTagNoticeDispatchStopsAfterChangesBetweenRecipients(t *testing.T) {
 			if sent.Deliveries()[1].State != "queued" || sent.Receipts[1].Key == "" {
 				t.Fatal("unstarted recipient reservation lost", sent)
 			}
+			if strings.HasSuffix(mode, "-disabled") || mode == "lark-path" {
+				if sent.Deliveries()[0].MessageID != "om_ou_a" || sent.Deliveries()[0].State != "sent" {
+					t.Fatal("CLI change lost an issued message receipt", sent)
+				}
+			}
 		})
+	}
+}
+
+func (f *tagNoticeDispatchFixture) changeLarkPath(t *testing.T) {
+	t.Helper()
+	_, err := f.app.Dispatch(context.Background(), Action{Kind: "config.fields.save", Payload: map[string]any{
+		"update": map[string]any{"fields": map[string]string{"larkExecutablePath": filepath.Join(t.TempDir(), "missing-lark.exe")}},
+	}})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

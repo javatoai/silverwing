@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import {
   Channel,
+  bind,
   call,
   currentWindow,
   direction,
@@ -14,13 +15,16 @@ import {
   onFileDrop,
   onLocaleChange,
   onPreferences,
+  onWindowActive,
   preferences,
   runtime,
+  windowActive,
   type DocumentState,
   type FileDrop,
   type Runtime,
   type ThemePreferences,
 } from "./index";
+import type { CallOptions } from "./types";
 
 const calls: [string, unknown[]][] = [];
 const listeners = new Map<string, (payload: unknown) => void>();
@@ -34,6 +38,11 @@ const fake: Runtime = {
       err.method = method;
       throw err;
     }
+    return method as T;
+  },
+  callWith: async <T>(method: string, args: unknown[], options?: CallOptions) => {
+    calls.push([method, args]);
+    if (options?.signal?.aborted) throw options.signal.reason;
     return method as T;
   },
   channel: <T>(onmessage?: (value: T) => void) =>
@@ -52,6 +61,7 @@ const fake: Runtime = {
   preferences: { accent: null, reduceMotion: false, reduceTransparency: true, highContrast: false, textScale: 1 },
   locale: "en",
   dir: "ltr",
+  windowActive: false,
   window: {
     minimize: () => fake.call("mygo:window.Minimize"),
     maximize: () => fake.call("mygo:window.Maximize"),
@@ -100,6 +110,23 @@ test("delegates to window.mygo", async () => {
   expect(isCallError(new Error("other"))).toBe(false);
 });
 
+test("bind and with", async () => {
+  (globalThis as { mygo?: Runtime }).mygo = fake;
+  const greet = bind<[string], string>("Greeter.Greet", (name: string) => [name]);
+  expect(await greet("Ada")).toBe("Greeter.Greet");
+  expect(calls).toEqual([["Greeter.Greet", ["Ada"]]]);
+
+  // The options of the call go with the arguments.
+  const ac = new AbortController();
+  expect(await greet.with({ signal: ac.signal })("Ada")).toBe("Greeter.Greet");
+  expect(calls.at(-1)).toEqual(["Greeter.Greet", ["Ada"]]);
+
+  // A signal that is aborted already rejects the call.
+  const aborted = new AbortController();
+  aborted.abort("no time");
+  await expect(greet.with({ signal: aborted.signal })("Ada")).rejects.toBeDefined();
+});
+
 test("Channel", () => {
   expect(() => new Channel()).toThrow("runtime not found");
   (globalThis as { mygo?: Runtime }).mygo = fake;
@@ -146,6 +173,17 @@ test("preferences and onPreferences", () => {
   expect(got).toEqual([changed]);
   off();
   expect(listeners.has("mygo:preferences")).toBe(false);
+});
+
+test("windowActive and onWindowActive", () => {
+  (globalThis as { mygo?: Runtime }).mygo = fake;
+  expect(windowActive()).toBe(false);
+  const got: boolean[] = [];
+  const off = onWindowActive((a) => got.push(a));
+  listeners.get("mygo:window-active")?.(true);
+  expect(got).toEqual([true]);
+  off();
+  expect(listeners.has("mygo:window-active")).toBe(false);
 });
 
 test("locale, direction and onLocaleChange", () => {

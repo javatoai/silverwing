@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -18,7 +19,7 @@ func draw(t *testing.T, src string, w, h int) *image.RGBA {
 		t.Fatalf("Parse: %v", err)
 	}
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	d.Draw(img, red, false)
+	d.Draw(img, Options{Current: red})
 	return img
 }
 
@@ -397,7 +398,7 @@ func TestSizeAndAspect(t *testing.T) {
 	}
 	d, _ := Parse([]byte(`<svg viewBox="0 0 10 5">` + wide))
 	img := image.NewRGBA(image.Rect(0, 0, 10, 10))
-	d.Draw(img, red, true)
+	d.Draw(img, Options{Current: red, Stretch: true})
 	if alphaSum(img) != 100 {
 		t.Error("the viewBox is not stretched")
 	}
@@ -446,12 +447,45 @@ func TestIcons(t *testing.T) {
 	}
 }
 
+// TestParseBasic draws icons as Parse does, and leaves out text, markers
+// and style sheets.
+func TestParseBasic(t *testing.T) {
+	basic := func(src string) *image.RGBA {
+		t.Helper()
+		d, err := ParseBasic([]byte(src))
+		if err != nil {
+			t.Fatalf("ParseBasic: %v", err)
+		}
+		img := image.NewRGBA(image.Rect(0, 0, 24, 24))
+		d.Draw(img, Options{Current: red, Fonts: boxFonts{}})
+		return img
+	}
+	for _, src := range []string{
+		checkIcon,
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>`,
+		`<svg viewBox="0 0 24 24"><g transform="rotate(20 12 12)" opacity=".5" style="fill: currentColor; stroke: blue"><rect x="4" y="4" width="16" height="16" rx="3"/></g></svg>`,
+		`<svg viewBox="0 0 24 24"><linearGradient id="g"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient><clipPath id="c"><circle cx="12" cy="12" r="10"/></clipPath><rect width="24" height="24" fill="url(#g)" clip-path="url(#c)"/></svg>`,
+	} {
+		want := draw(t, src, 24, 24)
+		if got := basic(src); !slices.Equal(got.Pix, want.Pix) {
+			t.Errorf("ParseBasic draws differently from Parse:\n%s", src)
+		}
+	}
+	empty := basic(`<svg viewBox="0 0 24 24"><style>rect{fill:red}</style><rect width="24" height="24" fill="none"/><text y="20" font-size="20">a</text><marker id="m" viewBox="0 0 2 2"><rect width="2" height="2"/></marker><path d="M2 2H22" fill="none" marker-end="url(#m)"/></svg>`)
+	if alphaSum(empty) != 0 {
+		t.Errorf("ParseBasic drew text, a marker or a style sheet's rule: %v pixels", alphaSum(empty))
+	}
+}
+
 func FuzzParse(f *testing.F) {
 	for _, s := range []string{
 		`<svg viewBox="0 0 10 10"><path d="M1 1a5 5 0 1 0 8 8z" stroke="red" stroke-dasharray="1 2"/></svg>`,
 		`<svg><g opacity=".5" clip-path="url(#c)"><use href="#u"/></g><clipPath id="c"><use href="#r"/></clipPath><rect id="r" width="5" height="5"/></svg>`,
 		`<svg><mask id="m"><rect width="1" height="1" mask="url(#m)"/></mask><circle r="5" mask="url(#m)"/></svg>`,
 		`<svg><linearGradient id="a" href="#b"/><radialGradient id="b" href="#a" fr="2"/><rect width="9" height="9" fill="url(#a)"/></svg>`,
+		`<svg><style>:root{--a:var(--b,red);--b:var(--a)} g > .c{fill:var(--a,#0f0)} @media not (prefers-color-scheme:dark){*{stroke:blue}}</style><g><rect class="c" width="9" height="9"/></g></svg>`,
+		`<svg><marker id="m" orient="auto-start-reverse" viewBox="0 0 4 4" refX="2"><path d="M0 0L4 2L0 4z" fill="context-stroke" marker-end="url(#m)"/></marker><path d="M1 1a4 4 0 1 1 8 8Z" stroke="red" marker-start="url(#m)" marker-mid="url(#m)"/></svg>`,
+		`<svg><text x="1 2" dx="3" y="9" text-anchor="middle" transform="rotate(30)" font="bold 8px serif" stroke="red">a <tspan dy="-2" xml:space="preserve"> b  </tspan>c</text></svg>`,
 	} {
 		f.Add([]byte(s))
 	}
@@ -460,7 +494,11 @@ func FuzzParse(f *testing.F) {
 		if err != nil {
 			return
 		}
-		d.Draw(image.NewRGBA(image.Rect(0, 0, 16, 16)), red, false)
+		d.Draw(image.NewRGBA(image.Rect(0, 0, 16, 16)), Options{Current: red, Fonts: boxFonts{}})
+		if d, err = ParseBasic(data); err != nil {
+			t.Fatalf("ParseBasic fails where Parse does not: %v", err)
+		}
+		d.Draw(image.NewRGBA(image.Rect(0, 0, 16, 16)), Options{Current: red, Fonts: boxFonts{}})
 	})
 }
 
@@ -510,7 +548,7 @@ func BenchmarkDrawIcon(b *testing.B) {
 			img := image.NewRGBA(image.Rect(0, 0, bc.size, bc.size))
 			for b.Loop() {
 				clear(img.Pix)
-				d.Draw(img, red, false)
+				d.Draw(img, Options{Current: red})
 			}
 		})
 	}
@@ -530,5 +568,295 @@ func TestUsesCurrentColor(t *testing.T) {
 		if got := d.UsesCurrentColor(); got != want {
 			t.Errorf("%s: UsesCurrentColor %v", src, got)
 		}
+	}
+}
+
+// drawWith draws a document as o says.
+func drawWith(t *testing.T, src string, w, h int, o Options) *image.RGBA {
+	t.Helper()
+	d, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	d.Draw(img, o)
+	return img
+}
+
+// TestCustomProperties draws colors of var(), as the diagrams of READMEs
+// set them.
+func TestCustomProperties(t *testing.T) {
+	// The repro of #1691: white, not the black of a fill MyGo did not
+	// understand.
+	img := draw(t, `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><style>svg { --bg: #ffffff; } .bg { fill: var(--bg); }</style><rect class="bg" width="100" height="100"/></svg>`, 100, 100)
+	if c := at(img, 50, 50); c != (color.RGBA{255, 255, 255, 255}) {
+		t.Errorf("var(--bg) = #ffffff draws %v", c)
+	}
+	img = draw(t, `<svg viewBox="0 0 6 1">
+		<style>
+			:root { --a: #00f; --b: var(--a); --loop1: var(--loop2); --loop2: var(--loop1) }
+			.a { fill: var(--a) } .b { fill: var(--b) }
+			.fallback { fill: var(--missing, var(--also-missing, #0f0)) }
+			.loop { fill: var(--loop1, #ff0) }
+			.bad { fill: var(--missing) }
+		</style>
+		<rect class="a" width="1" height="1"/>
+		<rect class="b" x="1" width="1" height="1"/>
+		<rect class="fallback" x="2" width="1" height="1"/>
+		<g style="--c: rgb(255, 0, 255)"><rect x="3" width="1" height="1" style="fill: var(--c)"/></g>
+		<rect class="loop" x="4" width="1" height="1"/>
+		<g fill="#0ff"><rect class="bad" x="5" width="1" height="1"/></g>
+	</svg>`, 6, 1)
+	for x, want := range []color.RGBA{
+		{0, 0, 255, 255},   // var()
+		{0, 0, 255, 255},   // a var() of a var()
+		{0, 255, 0, 255},   // nested fallbacks
+		{255, 0, 255, 255}, // inherited from a style attribute
+		{255, 255, 0, 255}, // a cycle, which falls back
+		{0, 255, 255, 255}, // undefined: unset, which inherits
+	} {
+		if got := at(img, x, 0); got != want {
+			t.Errorf("rect %d: %v, want %v", x, got, want)
+		}
+	}
+}
+
+// TestColorScheme draws the colors of prefers-color-scheme media queries
+// in the scheme Draw is asked for.
+func TestColorScheme(t *testing.T) {
+	const src = `<svg viewBox="0 0 2 1">
+		<style>
+			:root { --fg: #000; --bg: #fff }
+			@media (prefers-color-scheme: dark) { :root { --fg: #fff; --bg: #000 } .only { fill: #f00 } }
+			@media screen and (prefers-color-scheme: light) { .only { fill: #00f } }
+			.bg { fill: var(--bg) } .only { fill: #0f0 }
+		</style>
+		<rect class="bg" width="1" height="1"/><rect class="only" x="1" width="1" height="1"/>
+	</svg>`
+	light := drawWith(t, src, 2, 1, Options{})
+	dark := drawWith(t, src, 2, 1, Options{Dark: true})
+	if c := at(light, 0, 0); c != (color.RGBA{255, 255, 255, 255}) {
+		t.Errorf("light background %v", c)
+	}
+	if c := at(dark, 0, 0); c != (color.RGBA{0, 0, 0, 255}) {
+		t.Errorf("dark background %v", c)
+	}
+	// The rule after the media queries wins either way, as it would in a
+	// browser.
+	if at(light, 1, 0) != at(dark, 1, 0) || at(light, 1, 0) != (color.RGBA{0, 255, 0, 255}) {
+		t.Errorf("a later rule: light %v, dark %v", at(light, 1, 0), at(dark, 1, 0))
+	}
+	d, _ := Parse([]byte(src))
+	if !d.UsesColorScheme() {
+		t.Error("a document of prefers-color-scheme does not use the color scheme")
+	}
+	d, _ = Parse([]byte(checkIcon))
+	if d.UsesColorScheme() {
+		t.Error("an icon uses the color scheme")
+	}
+}
+
+// TestSelectors matches descendant and child combinators, and :root.
+func TestSelectors(t *testing.T) {
+	img := draw(t, `<svg viewBox="0 0 4 1">
+		<style>
+			.diagram .node rect { fill: #00f }
+			g > rect.direct { fill: #0f0 }
+			:root > rect { fill: #f0f }
+			.x + rect { fill: #fff }
+		</style>
+		<g class="diagram"><g class="node"><rect width="1" height="1"/></g></g>
+		<g><rect class="direct" x="1" width="1" height="1"/></g>
+		<rect x="2" width="1" height="1"/>
+		<g class="node"><rect x="3" width="1" height="1"/></g>
+	</svg>`, 4, 1)
+	for x, want := range []color.RGBA{{0, 0, 255, 255}, {0, 255, 0, 255}, {255, 0, 255, 255}, {0, 0, 0, 255}} {
+		if got := at(img, x, 0); got != want {
+			t.Errorf("rect %d: %v, want %v", x, got, want)
+		}
+	}
+}
+
+// TestUnsupported lists what a document has that is not drawn, and
+// nothing for one that is drawn whole.
+func TestUnsupported(t *testing.T) {
+	d, err := Parse([]byte(`<svg viewBox="0 0 10 10">
+		<style>@font-face { font-family: X; src: url(x.woff) } .a + .b { fill: red } .c:hover { fill: blue }
+		@media (min-width: 600px) { rect { fill: red } }</style>
+		<pattern id="p" width="2" height="2"><rect width="1" height="1"/></pattern>
+		<filter id="f"><feGaussianBlur stdDeviation="2"/></filter>
+		<rect width="5" height="5" fill="url(#p)" style="filter: url(#f)"/>
+		<image href="a.png" width="5" height="5"/>
+		<text>a<textPath href="#q">b</textPath></text>
+	</svg>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"<image>", "<pattern>", "<textPath>", "@font-face", "@media (min-width: 600px)", "filter", "selector .a + .b"}
+	if got := d.Unsupported(); !slices.Equal(got, want) {
+		t.Errorf("Unsupported() = %q, want %q", got, want)
+	}
+	for _, src := range []string{checkIcon, gearIcon, diagram} {
+		d, err := Parse([]byte(src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := d.Unsupported(); len(got) != 0 {
+			t.Errorf("Unsupported() = %q for a document drawn whole", got)
+		}
+	}
+}
+
+// diagram is a diagram as READMEs have them: colors of custom properties
+// with a dark scheme, labels and an arrow.
+const diagram = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 40">
+<style>
+	:root { --fg: #1f2328 } @media (prefers-color-scheme: dark) { :root { --fg: #e6edf3 } }
+	text { fill: var(--fg); font: 600 10px sans-serif; text-anchor: middle; dominant-baseline: central }
+	.edge { stroke: var(--fg); marker-end: url(#arrow) }
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="context-stroke"/></marker></defs>
+<text x="20" y="20">A</text><path class="edge" d="M30 20H70"/><text x="80" y="20">B</text>
+</svg>`
+
+// boxFonts measures every character half an em wide, 0.8 em high and 0.2
+// em deep, and draws it as a box that wide and high.
+type boxFonts struct{}
+
+func (boxFonts) Measure(s string, f Font) (float64, float64, float64) {
+	return float64(len([]rune(s))) * f.Size / 2, 0.8 * f.Size, 0.2 * f.Size
+}
+
+func (boxFonts) Rasterize(s string, f Font, x, stroke float64) Bitmap {
+	w := int(math.Round(x + float64(len([]rune(s)))*f.Size/2))
+	h := int(math.Round(0.8 * f.Size))
+	pix := make([]byte, w*h)
+	for i := range pix {
+		pix[i] = 255
+	}
+	return Bitmap{Left: 0, Top: -h, W: w, H: h, Pix: pix}
+}
+
+// inkX returns the columns of row y an image covers, from the first to
+// after the last.
+func inkX(img *image.RGBA, y int) (x0, x1 int) {
+	x0, x1 = -1, -1
+	for x := range img.Bounds().Dx() {
+		if at(img, x, y).A > 127 {
+			if x0 < 0 {
+				x0 = x
+			}
+			x1 = x + 1
+		}
+	}
+	return x0, x1
+}
+
+// TestText lays out text with the Fonts of Options: anchored, placed and
+// moved, and between the shapes around it.
+func TestText(t *testing.T) {
+	o := Options{Fonts: boxFonts{}}
+	img := drawWith(t, `<svg viewBox="0 0 100 100">
+		<text x="50" y="20" font-size="10" text-anchor="middle">abcd</text>
+		<text x="50" y="40" font-size="10" text-anchor="end">ab</text>
+		<text x="10" y="60" font-size="10">ab<tspan dx="10">c</tspan></text>
+		<text x="10 30" y="80" font-size="10">a<tspan font-size="20">b</tspan></text>
+	</svg>`, 100, 100, o)
+	for _, c := range []struct {
+		y, x0, x1 int
+	}{
+		{16, 40, 60}, // middle: centered on x
+		{36, 40, 50}, // end: ending at x
+		{56, 10, 35}, // a run, then one 10 further
+	} {
+		if x0, x1 := inkX(img, c.y); x0 != c.x0 || x1 != c.x1 {
+			t.Errorf("row %d: ink from %d to %d, want %d to %d", c.y, x0, x1, c.x0, c.x1)
+		}
+	}
+	// dx moves the run after it; a list of x places each character.
+	if at(img, 22, 56).A != 0 || at(img, 32, 56).A != 255 {
+		t.Errorf("dx: %v at 22, %v at 32", at(img, 22, 56), at(img, 32, 56))
+	}
+	if at(img, 20, 70).A != 0 || at(img, 35, 70).A != 255 || at(img, 12, 78).A != 255 {
+		t.Errorf("x list: %v at 20, %v at 35", at(img, 20, 70), at(img, 35, 70))
+	}
+	// Central puts the middle of the em box on y.
+	img = drawWith(t, `<svg viewBox="0 0 100 100"><text x="0" y="50" font-size="20" dominant-baseline="central">a</text></svg>`, 100, 100, o)
+	// The box of 0.8 em above the baseline and 0.2 em below it is from 40
+	// to 60: what is above the baseline, from 40 to 56, is drawn.
+	if at(img, 5, 41).A != 255 || at(img, 5, 55).A != 255 || at(img, 5, 38).A != 0 || at(img, 5, 57).A != 0 {
+		t.Errorf("central: %v %v %v %v", at(img, 5, 38), at(img, 5, 41), at(img, 5, 55), at(img, 5, 57))
+	}
+	// Text between shapes, in document order, scaled and rotated.
+	img = drawWith(t, `<svg viewBox="0 0 50 50">
+		<rect width="50" height="50" fill="#00f"/>
+		<text x="5" y="20" font-size="10" fill="#0f0">abc</text>
+		<rect x="0" y="30" width="50" height="20" fill="#f00"/>
+		<text x="5" y="45" font-size="10" fill="#ff0" opacity=".5">abc</text>
+		<text transform="rotate(90 40 5)" x="40" y="5" font-size="10" fill="#fff">abc</text>
+	</svg>`, 100, 100, o)
+	if c := at(img, 20, 30); c != (color.RGBA{0, 255, 0, 255}) {
+		t.Errorf("text over a shape: %v", c)
+	}
+	if c := at(img, 20, 86); c.R != 255 || c.G < 120 || c.G > 135 {
+		t.Errorf("translucent text over a shape: %v", c)
+	}
+	if c := at(img, 88, 30); c != (color.RGBA{255, 255, 255, 255}) {
+		t.Errorf("rotated text: %v", c)
+	}
+	// Without Fonts, no text is drawn.
+	if img := draw(t, `<svg viewBox="0 0 10 10"><text y="10" font-size="10">a</text></svg>`, 10, 10); alphaSum(img) != 0 {
+		t.Error("text drawn without Fonts")
+	}
+}
+
+// TestMarkers draws arrowheads along the direction of a path's end, and
+// at its start reversed.
+func TestMarkers(t *testing.T) {
+	const defs = `<defs><marker id="a" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#00f"/></marker></defs>`
+	// Down the middle, then right: the arrowhead at the end points right,
+	// its tip at the end; the one at the start points up.
+	img := draw(t, `<svg viewBox="0 0 100 100">`+defs+`<path d="M20 30V70H80" fill="none" stroke="#000" stroke-width="4" marker-start="url(#a)" marker-end="url(#a)"/></svg>`, 100, 100)
+	blue := func(x, y int) bool { c := at(img, x, y); return c.B > 200 && c.R < 50 }
+	// The end: 20 wide (5 × the stroke's 4) and 20 high, from x 60 to 80.
+	if !blue(62, 70) || !blue(62, 62) || !blue(76, 70) || blue(76, 64) || blue(82, 70) {
+		t.Errorf("the end's arrowhead does not point right: %v %v %v %v", blue(62, 70), blue(62, 62), blue(76, 70), blue(76, 64))
+	}
+	// The start: reversed, pointing up, its tip at (20, 30).
+	if !blue(20, 32) || !blue(12, 48) || blue(12, 33) || blue(20, 27) {
+		t.Errorf("the start's arrowhead does not point up: %v %v %v %v", blue(20, 32), blue(12, 48), blue(12, 33), blue(20, 27))
+	}
+	// userSpaceOnUse sizes it in user units; a fixed orient turns it
+	// whatever the path's direction.
+	img = draw(t, `<svg viewBox="0 0 100 100"><defs><marker id="b" markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="90"><path d="M0 0H10L5 10z" fill="#00f"/></marker></defs>
+		<line x1="10" y1="50" x2="50" y2="50" stroke="#000" stroke-width="10" marker-end="url(#b)"/></svg>`, 100, 100)
+	// Turned a quarter: its point at the left.
+	if !blue(53, 47) || !blue(53, 52) || blue(46, 46) {
+		t.Errorf("a marker of a fixed orient: %v %v %v", blue(53, 47), blue(53, 52), blue(46, 46))
+	}
+	// A marker's overflow is hidden: what is past its viewport is cut.
+	img = draw(t, `<svg viewBox="0 0 100 100"><defs><marker id="c" markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="10"><rect width="20" height="20" fill="#00f"/></marker></defs>
+		<line x1="10" y1="10" x2="50" y2="10" stroke="#000" marker-end="url(#c)"/></svg>`, 100, 100)
+	if !blue(55, 15) || blue(65, 15) {
+		t.Errorf("a marker's overflow: %v inside, %v outside", blue(55, 15), blue(65, 15))
+	}
+}
+
+// TestMarkerVertices finds the vertices of paths: arcs split into curves
+// are one segment, and closed subpaths turn at their start.
+func TestMarkerVertices(t *testing.T) {
+	pa := parsePath("M0 0A10 10 0 1 1 0 20L0 30")
+	if vs := pa.vertices(); len(vs) != 3 {
+		t.Errorf("an arc and a line: %d vertices, want 3", len(vs))
+	}
+	pa = parsePath("M0 0H10V10Z")
+	vs := pa.vertices()
+	if len(vs) != 4 {
+		t.Fatalf("a closed triangle: %d vertices, want 4", len(vs))
+	}
+	// At its start, between the closing segment's direction (up and to
+	// the left, -135 degrees) and the first's (right, 0).
+	if a := vs[0].angle(); math.Abs(a+67.5) > 1e-9 {
+		t.Errorf("the start of a closed subpath turns %v degrees, want -67.5", a)
 	}
 }

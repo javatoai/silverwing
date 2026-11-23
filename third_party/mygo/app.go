@@ -27,6 +27,24 @@ const (
 	ActivationPolicyProhibited ActivationPolicy = "prohibited"
 )
 
+// DMABUFRenderer says whether WebKitGTK draws web pages with its DMA-BUF
+// renderer on Linux; see Application.SetDMABUFRenderer.
+type DMABUFRenderer string
+
+// DMA-BUF renderer settings.
+const (
+	// DMABUFRendererOff turns the renderer off, unless the user set
+	// WEBKIT_DISABLE_DMABUF_RENDERER: the default.
+	DMABUFRendererOff DMABUFRenderer = "off"
+	// DMABUFRendererOn leaves the renderer to WebKitGTK, which uses it
+	// wherever it can.
+	DMABUFRendererOn DMABUFRenderer = "on"
+	// DMABUFRendererAuto leaves the renderer on where the host is known to
+	// draw with it: on Wayland, with a GPU of Mesa's, outside containers
+	// and virtual machines. Elsewhere it is off.
+	DMABUFRendererAuto DMABUFRenderer = "auto"
+)
+
 // Application controls the event loop and the lifecycle of the process.
 // Use the App singleton.
 type Application struct {
@@ -34,6 +52,7 @@ type Application struct {
 	name      string
 	version   string
 	policy    ActivationPolicy
+	dmabuf    DMABUFRenderer
 	running   bool
 	ready     bool
 	readyCh   chan struct{}
@@ -52,6 +71,10 @@ type Application struct {
 	relaunch    bool // Relaunch: start again once quit (main thread)
 	initialized bool // Run initialized the backend (main thread)
 
+	// relaunchArgs are Relaunch's arguments, nil for the ones the app
+	// started with (main thread).
+	relaunchArgs []string
+
 	// Dock controls the Dock icon on macOS.
 	Dock *Dock
 	// JumpList controls the jump list of the taskbar button on Windows.
@@ -61,7 +84,11 @@ type Application struct {
 	onWindowAllClosed listeners[func()]
 	onBeforeQuit      listeners[func(*QuitEvent)]
 	onWillQuit        listeners[func(*QuitEvent)]
+	onQuitCanceled    listeners[func()]
 	onQuit            listeners[func()]
+	onMemoryWarning   listeners[func()]
+	saveState         func() []byte
+	keepingState      bool
 	onActivate        listeners[func(bool)]
 	onDidBecomeActive listeners[func()]
 	onDidResignActive listeners[func()]
@@ -90,6 +117,7 @@ func (a *Application) Run() error {
 	if out := os.Getenv("MYGO_GENERATE"); out != "" {
 		return writeClient(out)
 	}
+	takeDevMarker()
 	if !isMainThread() {
 		return errors.New("mygo: App.Run must be called from the main goroutine")
 	}
@@ -106,12 +134,18 @@ func (a *Application) Run() error {
 	if err := b.Init(appHandler{}, platform.AppOptions{
 		Name:             a.Name(),
 		ActivationPolicy: string(a.ActivationPolicy()),
+		DMABUFRenderer:   string(a.dmabuf),
+		Background:       devBackground,
 	}); err != nil {
 		return err
 	}
 	a.initialized = true
 	// Settings made before Run, which the backend could not take yet.
 	Theme.apply()
+	if load := pendingGTKCSS; load != nil {
+		pendingGTKCSS = nil
+		load()
+	}
 	a.startLocale()
 	if m := a.Dock.Menu(); m != nil {
 		b.App().SetDockMenu(m.snapshot())
@@ -211,6 +245,7 @@ func (a *Application) Exit(code int) {
 			w.destroy()
 		}
 		saveWindowStates()
+		backendExiting()
 	})
 	os.Exit(code)
 }
@@ -224,12 +259,14 @@ func (a *Application) prepareQuit() bool {
 	before := &QuitEvent{}
 	fire1(&a.onBeforeQuit, before)
 	if before.prevented {
+		fire(&a.onQuitCanceled)
 		return false
 	}
 	a.quitting = true
 	for _, w := range Windows() {
 		if !w.close() {
 			a.quitting = false
+			fire(&a.onQuitCanceled)
 			return false
 		}
 	}
@@ -237,6 +274,7 @@ func (a *Application) prepareQuit() bool {
 	fire1(&a.onWillQuit, will)
 	if will.prevented {
 		a.quitting = false
+		fire(&a.onQuitCanceled)
 		return false
 	}
 	// Providers are application-owned, independent of the windows just
@@ -245,6 +283,31 @@ func (a *Application) prepareQuit() bool {
 	_ = Clipboard.Flush()
 	stopNativeCalls()
 	return true
+}
+
+// endSession runs the quit sequence when the OS ends the session
+// (Terminating: logout, restart or shutdown on Windows and macOS), on
+// the main thread before finish. The OS has decided, so it cannot be
+// canceled: QuitEvent.SessionEnding is set, and what OnBeforeQuit,
+// OnClose and OnWillQuit listeners prevent is ignored. A quit whose
+// sequence ran, or is running in a nested loop, already called them,
+// so they are not called again.
+func (a *Application) endSession() {
+	if a.quitting || a.stopping || a.ended {
+		return
+	}
+	a.quitting = true // the windows closing below do not quit
+	a.stopping = true // a Quit from a listener only asks the loop to stop
+	fire1(&a.onBeforeQuit, &QuitEvent{SessionEnding: true})
+	for _, w := range Windows() {
+		if w.native != nil {
+			fire1(&w.onClose, &CloseEvent{Window: w})
+			w.destroy()
+		}
+	}
+	fire1(&a.onWillQuit, &QuitEvent{SessionEnding: true})
+	_ = Clipboard.Flush()
+	stopNativeCalls()
 }
 
 // finish runs once after the event loop has stopped.
@@ -257,11 +320,24 @@ func (a *Application) finish() {
 		backend().Clipboard().Close()
 		saveWindowStates()
 		fire(&a.onQuit)
+		backendExiting()
 		if a.relaunch {
-			relaunchNow() // after OnQuit, which releases the single instance lock
+			// After OnQuit, which stops taking the command lines of later
+			// instances: the new one waits for this process to exit, which
+			// holds the single instance lock until then.
+			relaunchNow()
 		}
 		loop.shutdown()
 	})
+}
+
+// backendExiting tells the backend that the process is about to exit,
+// once the app has finished (or Exit was called): see
+// platform.ExitBackend. Main thread only.
+func backendExiting() {
+	if b, ok := backend().(platform.ExitBackend); ok {
+		b.Exiting()
+	}
 }
 
 // lastWindowClosed is called on the main thread when the last window has
@@ -409,6 +485,21 @@ func (a *Application) SetActivationPolicy(p ActivationPolicy) {
 	}
 }
 
+// SetDMABUFRenderer sets whether WebKitGTK may draw web pages with its
+// DMA-BUF renderer on Linux, which MyGo turns off by default because it
+// shows blank windows on NVIDIA's driver, in virtual machines and in
+// containers. Where it works, pages scroll at several times the frame
+// rate with less CPU. WEBKIT_DISABLE_DMABUF_RENDERER, set by the user,
+// overrides it. Call it before Run; other systems ignore it.
+func (a *Application) SetDMABUFRenderer(r DMABUFRenderer) {
+	if r == DMABUFRendererAuto {
+		linkDMABUFProbe()
+	}
+	a.mu.Lock()
+	a.dmabuf = r
+	a.mu.Unlock()
+}
+
 // Focus brings the application to the foreground.
 func (a *Application) Focus() {
 	needsApp("App.Focus")
@@ -478,18 +569,71 @@ func (a *Application) OnWindowAllClosed(fn func()) (off func()) {
 }
 
 // OnBeforeQuit is called when a quit starts, before windows are closed.
+// e.PreventDefault cancels the quit.
+//
+// When the OS ends the session (logout, restart, shutdown), on Windows
+// (WM_ENDSESSION) and macOS (applicationWillTerminate:), OnBeforeQuit,
+// the windows' OnClose and OnWillQuit listeners are called too, with
+// e.SessionEnding set: the quit cannot be canceled, and the process may
+// be ended as soon as the listeners and OnQuit return, so they must do
+// their work synchronously, without dialogs or goroutines to wait for.
+// They are not called twice: when a quit had already called them, the
+// session's end only finishes it. On Linux, MyGo hears of no session end:
+// at shutdown, and at a logout that stops the user's processes, the app
+// gets SIGTERM, which quits like Quit, cancelable.
 func (a *Application) OnBeforeQuit(fn func(e *QuitEvent)) (off func()) {
 	return a.onBeforeQuit.add(fn, false)
 }
 
 // OnWillQuit is called after all windows have been closed, right before the
-// event loop stops.
+// event loop stops. e.PreventDefault cancels the quit, unless the OS ends
+// the session (e.SessionEnding; see OnBeforeQuit).
 func (a *Application) OnWillQuit(fn func(e *QuitEvent)) (off func()) {
 	return a.onWillQuit.add(fn, false)
 }
 
-// OnQuit is called after the event loop has stopped.
+// OnQuitCanceled is called when a quit that started was canceled: a
+// listener prevented it in OnBeforeQuit or OnWillQuit, or a window kept
+// itself open in OnClose. The windows a canceled OnWillQuit had already
+// closed stay closed. Apps that track the quit in their own state from
+// OnBeforeQuit clear it here; without this event that state would stay set
+// although the app goes on running.
+func (a *Application) OnQuitCanceled(fn func()) (off func()) {
+	return a.onQuitCanceled.add(fn, false)
+}
+
+// OnQuit is called after the event loop has stopped, and after the
+// windows' states are saved (WindowOptions.StateKey). When the OS ends
+// the session, it is called after OnBeforeQuit and OnWillQuit (see
+// OnBeforeQuit), and the process may end as soon as it returns: it is the
+// last hook, and must finish its work synchronously.
 func (a *Application) OnQuit(fn func()) (off func()) { return a.onQuit.add(fn, false) }
+
+// OnSaveState has fn give what the app needs to come back as it was, called on
+// the main thread as a phone's app goes to the background, where the system may
+// end it without a word. The next launch finds it in RestoredState. Keep it
+// small: it is written before the app may do no more. Desktops never call it,
+// but under mygo dev, which restarts the app as the code changes: it is called
+// every second there, for the app to come back as it was on every platform.
+func (a *Application) OnSaveState(fn func() []byte) {
+	a.saveState = fn
+	a.keepStateInDevelopment()
+}
+
+// RestoredState returns what OnSaveState gave as the app went to the background,
+// if the system ended it there. Android tells when the user meant to leave, which
+// gives nil. iOS doesn't say by the time the app starts: an app the user force-quit
+// from the background gets it too. An end while the app is on screen, as a crash,
+// gives nil.
+func (a *Application) RestoredState() []byte { return restoredState() }
+
+// OnMemoryWarning is called on the main thread when the system is short of
+// memory: let go of what can be made again, as caches. Phones end apps that
+// keep too much; desktops do not report it. Native UI drops its own caches
+// after these listeners ran, and the garbage collector returns what it can.
+func (a *Application) OnMemoryWarning(fn func()) (off func()) {
+	return a.onMemoryWarning.add(fn, false)
+}
 
 // OnActivate is called when the application is re-activated, for example by
 // clicking its Dock icon (macOS). Apps usually open a window when
@@ -640,11 +784,17 @@ func (appHandler) QuitRequested() bool {
 	App.loopStopping()
 	return true
 }
-func (appHandler) Terminating() { App.finish() }
+func (appHandler) Terminating() {
+	App.endSession()
+	App.finish()
+}
 func (appHandler) Activated(visible bool) {
 	fire1(&App.onActivate, visible)
 }
-func (appHandler) DidBecomeActive() { fire(&App.onDidBecomeActive) }
+func (appHandler) DidBecomeActive() {
+	backgroundShow = false
+	fire(&App.onDidBecomeActive)
+}
 func (appHandler) DidResignActive() { fire(&App.onDidResignActive) }
 func (appHandler) OpenURLs(urls []string) {
 	for _, u := range urls {
@@ -665,10 +815,20 @@ func (appHandler) ThemeChanged() {
 	// media queries do not tell them.
 	sendPreferences()
 }
-func (appHandler) DisplaysChanged()              { Screen.changed() }
-func (appHandler) LocaleChanged()                { App.localeChangedFromSystem() }
-func (appHandler) PowerEvent(event string)       { Power.event(event) }
+func (appHandler) MemoryWarning()   { fire(&App.onMemoryWarning) }
+func (appHandler) DisplaysChanged() { Screen.changed() }
+func (appHandler) LocaleChanged()   { App.localeChangedFromSystem() }
+func (appHandler) PowerEvent(event string) {
+	switch event {
+	case "suspend":
+		App.writeState()
+	case "resume":
+		forgetKeptState()
+	}
+	Power.event(event)
+}
 func (appHandler) HotkeyPressed(id int)          { GlobalShortcut.pressed(id) }
 func (appHandler) NotificationClicked(id string) { notificationClicked(id) }
 
 func (appHandler) NetworkChanged(s platform.NetworkStatus) { Network.changed(networkStatus(s)) }
+func (appHandler) HotkeyBound(id int, keys string)         { GlobalShortcut.bound(id, keys) }

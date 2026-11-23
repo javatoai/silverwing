@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/egoist/mygo/ui"
+	"silverwing-go/internal/domain"
 )
 
 type settingsSearchEntry struct{ page, title, aliases string }
@@ -21,9 +22,10 @@ var settingsSearchEntries = []settingsSearchEntry{
 	{"proxy", "代理认证", "代理账号 代理密码 验证"},
 	{"proxy", "不通过代理的地址", "代理例外 no_proxy"},
 	{"proxy", "代理目标", "命令目标"},
-	{"materials-sync", "同步周期（分钟）", "自动同步周期 时间 间隔"},
-	{"materials-sync", "同步分支", "资料Git分支"},
-	{"materials-sync", "Git 仓库地址", "资料仓库地址 repository"},
+	{"paths", "同步周期（分钟）", "自动同步周期 时间 间隔"},
+	{"paths", "同步分支", "资料Git分支"},
+	{"paths", "Git 仓库地址", "远程地址 资料仓库地址 repository"},
+	{"project-instructions", "项目资料 Git 自动同步", "项目说明 " + domain.ProjectInstructionsDirectory + " 仓库地址 分支 周期 打开仓库 立即同步"},
 	{"tool-visibility", "JSON", "格式化 压缩 转义"},
 	{"tool-visibility", "日期时间", "时间戳 转换"},
 	{"tool-visibility", "文本对比", "text diff"},
@@ -41,17 +43,21 @@ var settingsSearchEntries = []settingsSearchEntry{
 	{"cli-meegle", "Meegle CLI 可执行文件", "meegleExecutablePath 命令路径"},
 	{"cli-lark", "Lark CLI 可执行文件", "larkExecutablePath 命令路径 飞书机器人"},
 	{"cli-lark", "Lark CLI 状态", "飞书 通知 机器人 身份"},
-	{"cli-genbu", "Genbu CLI 可执行文件", "genbuExecutablePath 命令路径"},
+	{"cli-lark", "启用 Lark CLI", "可选 CLI 飞书 通知 开关"},
+	{platformConnectionsPage, "共用平台账号", "平台连接 平台账号 密码 登录"},
+	{platformConnectionsPage, "Genbu 连接", "genbu 玄武 启用 构建 发布 登录 状态 CLI 可执行文件 命令路径 genbuExecutablePath"},
+	{platformConnectionsPage, "Dragon 连接", "dragon 青龙 启用 提测审批 登录 状态 CLI 可执行文件 命令路径 dragonExecutablePath"},
 	{"basic", "界面主题", "外观 浅色 深色 系统 theme"}, {"basic", "折叠工作空间导航", "最左侧 图标 宽度"},
 	{"tool-visibility", "侧边栏展示", "导航 需求 生产发布 服务 入口"},
 	{"tool-visibility", "研发工具", "快捷工具 JSON 日期时间 时间戳 文本对比 diff 杀端口 端口占用 Base64 二维码 文字计数"},
 	{"task-area", "任务详情工具栏", "Git 路径 提交 推送 终端 Git 工具组 路径工具组"}, {"task-area", "工作区卡片工具栏", "Git 路径 打开文件夹 Git 工具组 路径工具组"}, {"task-area", "需求链接和需求编号复制", "复制图标 信息复制"},
-	{"task-paths", "任务根目录", "任务目录 迁移 切换 taskRoot"}, {"task-creation", "任务打开工具", "创建 默认勾选 工作区"},
+	{"task-paths", "任务目录", "任务根目录 taskRoot 工作区根目录 临时工作区 Tag 生产发布"},
+	{"task-creation", "任务打开工具", "创建后自动打开 Codex 工作区"},
 	{"task-creation", "默认分支名规则", "分支名 feature 编号 num ai"}, {"task-creation", "AI 命名", "模型 预热 自动命名 文件夹"},
 	{"task-creation", "AI 命名模型", "AI命名 模型"},
-	{"paths", "任务资料根目录", "资料目录 requirements 研发"}, {"paths", "任务资料子目录", "研发 子目录"}, {"paths", "默认展开目录层级", "折叠 目录树"},
-	{"materials-sync", "资料 Git 自动同步", "资料同步 自动同步 仓库 分支 周期 立即同步 恢复"},
-	{"agents", "全局与组说明", "AGENTS.md agent 指令 说明文档 markdown"}, {"instruction-templates", "任务说明模板", "新增 编辑 删除 模板 markdown"},
+	{"paths", "本地仓库目录", "任务资料根目录 资料目录 requirements 研发 选择仓库 解除关联"}, {"paths", "任务角色名", "任务资料子目录 研发 子目录"}, {"paths", "默认展开目录层级", "折叠 目录树"},
+	{"paths", "Git 自动同步", "资料同步 自动同步 仓库 分支 周期 立即同步 恢复"},
+	{"agents", "全局说明", "AGENTS.md agent 指令 说明文档 markdown"},
 	{"git", "Git 状态", "环境 身份 user.name user.email"}, {"git", "分支写保护", "保护分支 master commit push"},
 	{"tag", "Tag 设置", "构建 发布 测试目标 分支 保留数量 历史"},
 	{"codex-plugins", "Codex 插件", "plugin marketplace 来源 安装 接管 卸载 预览"}, {"codex-mcp", "MCP 服务", "连接 授权 全局 当前任务 添加 删除 编辑"},
@@ -60,9 +66,8 @@ var settingsSearchEntries = []settingsSearchEntry{
 	{"cli-git", "Git 状态", "Git 命令 路径 检测 可执行文件"}, {"cli-codex", "Codex CLI 状态", "codex 命令 路径 检测 可执行文件"},
 	{"cli-meegle", "Meegle CLI 状态", "meego meegle 飞书 登录 账号 命令 路径 授权"}, {"cli-meegle", "Meegle 项目空间", "meego meegle 飞书 项目 key 短名 sprint 默认空间"},
 	{"cli-meegle", "默认 Sprint 团队空间", "meego meegle 默认迭代 default sprint team space"},
-	{"cli-genbu", "Genbu CLI 状态", "genbu 玄武 构建 发布 命令 路径"},
 	{"proxy", "网络代理", "proxy http https socks5 协议 代理主机 端口 认证 账号 密码 例外 目标 测试 清除 应用更新 下载"},
-	{"config-backup", "配置与备份", "配置源码 JSON 导入 导出 预览 恢复 删除 backup"},
+	{"config-backup", "配置与备份", "配置源码 手动备份 手动恢复 导入 导出 预览 ZIP backup"},
 	{"app-data", "数据目录", "应用数据目录 home 存储 打开 复制 路径"}, {"logs", "日志与诊断", "日志 错误 清理 复制 导出 diagnostics"},
 	{"about", "关于与更新", "版本 下载 release github 仓库 更新"},
 }
@@ -179,7 +184,7 @@ func (s *app) renderSettingsContent(c *ui.Context, p palette, reveal *settingsRe
 
 func settingsSearchWholePage(page string) bool {
 	switch page {
-	case "codex-plugins", "codex-mcp", "instruction-templates", "logs", "about", "app-data":
+	case "codex-plugins", "codex-mcp", "logs", "about", "app-data":
 		return true
 	}
 	return false

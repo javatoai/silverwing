@@ -13,11 +13,10 @@ func (a *App) documentLinkPreview(ctx context.Context, action Action) (ActionRes
 	if err := ctx.Err(); err != nil {
 		return ActionResult{}, err
 	}
-	path := actionPath(action)
-	if path == "" || !filepath.IsAbs(path) || strings.HasPrefix(path, `\\`) || strings.HasPrefix(path, "//") {
-		return ActionResult{}, errors.New("文件预览需要本地绝对路径")
+	path, err := documentLinkPreviewPath(action)
+	if err != nil {
+		return ActionResult{}, err
 	}
-	path = filepath.Clean(path)
 	readRoot := filepath.Dir(path)
 	if action.TaskID != "" {
 		root, err := a.materialRoot(action)
@@ -33,7 +32,19 @@ func (a *App) documentLinkPreview(ctx context.Context, action Action) (ActionRes
 			readRoot = root
 		}
 	}
-	content, err := a.Documents.ReadMaterialsPreview(readRoot, path)
+	return a.readDocumentLinkPreview(ctx, readRoot, path)
+}
+
+func documentLinkPreviewPath(action Action) (string, error) {
+	path := actionPath(action)
+	if path == "" || !filepath.IsAbs(path) || strings.HasPrefix(path, `\\`) || strings.HasPrefix(path, "//") {
+		return "", errors.New("文件预览需要本地绝对路径")
+	}
+	return filepath.Clean(path), nil
+}
+
+func (a *App) readDocumentLinkPreview(ctx context.Context, root, path string) (ActionResult, error) {
+	content, err := a.Documents.ReadMaterialsPreview(root, path)
 	if err != nil {
 		return ActionResult{}, err
 	}

@@ -125,7 +125,7 @@ func TestInstructionMarkdownImportRejectsGeneratedAndLegacyTaskEditors(t *testin
 			case "local-capability":
 				ref.localTaskRules = false
 			case "generated":
-				ref.path = filepath.Join(ref.taskPath, workspace.AgentWorkspaceDir, workspace.AgentDirectoryName, workspace.AgentContextFileName)
+				ref.path = filepath.Join(ref.taskPath, workspace.AgentRouterFileName)
 				state.path, request.DocumentPath = ref.path, ref.path
 			case "other-kind":
 				ref.kind = "material-markdown"

@@ -167,7 +167,7 @@ func renderTagGenbuNotes(c *ui.Context, p palette, dark bool, record application
 	if status.NotFound {
 		label(c, "Genbu：未找到该 Tag", 11, p.muted)
 	} else if status.FailureReason != nil && strings.TrimSpace(*status.FailureReason) != "" {
-		label(c, "Genbu CLI 查询失败："+strings.TrimSpace(*status.FailureReason), 11, tagStatusErrorColor(dark)).LineHeight(1.4)
+		label(c, "Genbu 查询失败："+strings.TrimSpace(*status.FailureReason), 11, tagStatusErrorColor(dark)).LineHeight(1.4)
 	}
 	if status.StoppedByNewerRelease {
 		label(c, "后续 Tag 已发布，停止自动探测", 10, p.muted)

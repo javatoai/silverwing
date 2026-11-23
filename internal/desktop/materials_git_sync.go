@@ -11,6 +11,7 @@ import (
 
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/storage"
 	"silverwing-go/internal/workspace"
 )
 
@@ -48,9 +49,7 @@ func (s *app) materialsGitRunning() bool {
 func (s *app) materialsGitSettingsPending(config domain.AppConfig) bool {
 	settings := config.MaterialsGitSettings()
 	expected := map[string]string{
-		"setting:materialsGitSync:repositoryUrl":   settings.RepositoryURL,
 		"setting:materialsGitSync:intervalMinutes": fmt.Sprint(settings.IntervalMinutes),
-		"setting:requirementMaterialsRoot":         materialsGitOptional(config.RequirementMaterialsRoot),
 		"setting:requirementMaterialsSubdirectory": materialsGitOptional(config.RequirementMaterialsSubdirectory),
 	}
 	for key, value := range expected {
@@ -79,21 +78,27 @@ func (s *app) observeMaterialsGitSync() {
 		return
 	}
 	scope := application.MaterialsGitScope(s.snapshot.Home, config)
+	settings := config.MaterialsGitSettings()
 	state := s.materialsUnit.state.materialsGit
 	if state != nil && state.closed {
 		return
 	}
 	if state != nil && state.scope == scope {
-		minutes := config.MaterialsGitSettings().IntervalMinutes
+		minutes := settings.IntervalMinutes
 		if state.intervalMinutes != minutes {
 			state.intervalMinutes = minutes
-			if !state.running && !state.reading && config.MaterialsGitSettings().Enabled && !state.status.Paused && !state.needsResume {
+			if !state.running && !state.reading && settings.Enabled && !state.status.Paused && !state.needsResume {
 				s.scheduleMaterialsGit(state, time.Duration(minutes)*time.Minute)
 			}
 		}
 		return
 	}
-	changedTarget := state != nil && (state.scope.Root != scope.Root || state.scope.URL != scope.URL || state.scope.Branch != scope.Branch || state.scope.Subdirectory != scope.Subdirectory || state.scope.Home != scope.Home)
+	changedTarget := state != nil && (state.scope.Root != scope.Root ||
+		!domain.SameMaterialsGitRepositoryURL(state.scope.URL, scope.URL) || state.scope.Branch != scope.Branch ||
+		state.scope.Subdirectory != scope.Subdirectory || state.scope.Home != scope.Home ||
+		state.scope.RemoteName != scope.RemoteName || state.scope.BindingID != scope.BindingID)
+	spellingChanged := state != nil && !changedTarget && state.scope.URL != scope.URL
+	needsResume := changedTarget || (spellingChanged && state.needsResume)
 	if state != nil {
 		if state.timer != nil {
 			state.timer.Stop()
@@ -118,7 +123,7 @@ func (s *app) observeMaterialsGitSync() {
 			}
 		}
 	}
-	state = &materialsGitDesktopState{scope: scope, reading: true, needsResume: changedTarget, intervalMinutes: config.MaterialsGitSettings().IntervalMinutes, retired: retired}
+	state = &materialsGitDesktopState{scope: scope, reading: true, needsResume: needsResume, intervalMinutes: settings.IntervalMinutes, retired: retired}
 	s.materialsUnit.state.materialsGit = state
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	state.cancel, state.done = cancel, make(chan struct{})
@@ -139,11 +144,15 @@ func (s *app) observeMaterialsGitSync() {
 			if err != nil {
 				state.status.Paused, state.status.Error = true, err.Error()
 			}
-			if changedTarget {
+			if state.needsResume {
 				state.phase = "同步目标已变化，请重新检查并恢复"
 			}
-			if config.MaterialsGitSettings().Enabled && !state.status.Paused && !state.needsResume {
-				s.scheduleMaterialsGit(state, 0)
+			if settings.Enabled && !state.status.Paused && !state.needsResume {
+				delay := time.Duration(0)
+				if spellingChanged {
+					delay = time.Duration(state.intervalMinutes) * time.Minute
+				}
+				s.scheduleMaterialsGit(state, delay)
 			}
 			if window != nil {
 				window.Invalidate()
@@ -219,6 +228,36 @@ func (s *app) materialsGitHasDraft(root string) bool {
 	return false
 }
 
+func (s *app) sharedDocumentsGitPeer(config domain.AppConfig, target documentsGitTarget) (browser *app, root string, syncing bool) {
+	if !storage.SharedDocumentsCheckout(s.snapshot.Home, config) {
+		return nil, "", false
+	}
+	if target == projectInstructionsGit {
+		return s, application.MaterialsGitScope(s.snapshot.Home, config).Root, s.materialsGitRunning()
+	}
+	current := application.ProjectInstructionsGitScope(s.snapshot.Home, config)
+	if view := s.projectInstructions; view != nil && view.scope.Home == current.Home && workspace.SameDocumentsCheckout(view.scope.Root, current.Root) {
+		// A branch change can retire the view while its draft or an operation
+		// still belongs to the same physical checkout.
+		return view.browser, view.scope.Root, view.syncing
+	}
+	return nil, "", false
+}
+
+func (s *app) sharedDocumentsGitPeerBusy(config domain.AppConfig, target documentsGitTarget) bool {
+	browser, root, syncing := s.sharedDocumentsGitPeer(config, target)
+	return syncing || browser != nil && (browser.materialsFileMutationRunning() || browser.materialsFilePathBlocked() || browser.materialsGitHasDraft(root))
+}
+
+func (s *app) refreshSharedDocumentsGitPeer(config domain.AppConfig, target documentsGitTarget) {
+	if target == taskMaterialsGit && !s.projectInstructionsCurrent(s.projectInstructions) {
+		return
+	}
+	if browser, _, _ := s.sharedDocumentsGitPeer(config, target); browser != nil {
+		browser.requestMaterialsWindowRefresh()
+	}
+}
+
 func (s *app) beginMaterialsGitSync(manual bool) {
 	state := s.materialsUnit.state.materialsGit
 	backend, ok := s.backend.(application.MaterialsGitBackend)
@@ -241,10 +280,10 @@ func (s *app) beginMaterialsGitSync(manual bool) {
 		state.status.Paused, state.status.Error = true, "请先填写有效的 Git 地址、分支、周期和任务资料目录"
 		return
 	}
-	if s.busy || s.loading || s.materialsFileMutationRunning() || s.materialsFilePathBlocked() || s.materialsGitHasDraft(state.scope.Root) {
+	if s.busy || s.loading || s.materialsFileMutationRunning() || s.materialsFilePathBlocked() || s.materialsGitHasDraft(state.scope.Root) || s.sharedDocumentsGitPeerBusy(config, taskMaterialsGit) {
 		state.phase = "等待资料保存或文件操作完成"
 		if manual {
-			s.lastError = "请先保存资料并等待文件操作完成，再同步 Git"
+			s.lastError = "请先保存资料，并等待文件操作和同步完成后再同步 Git"
 		}
 		if settings.Enabled {
 			s.scheduleMaterialsGit(state, time.Duration(settings.IntervalMinutes)*time.Minute)
@@ -303,20 +342,20 @@ func (s *app) beginMaterialsGitSync(manual bool) {
 				if manual || status.Paused {
 					s.lastError = "任务资料 Git 同步失败：" + err.Error()
 				}
-			} else if err == nil {
-				if manual {
-					s.lastMessage = "任务资料 Git 同步完成"
-				}
-				s.ensureMaterialsFileManagementState().windowRefreshPending = true
-				s.observeMaterialsWindowRefresh()
+			} else if err == nil && manual {
+				s.lastMessage = "任务资料 Git 同步完成"
 			}
-			if status.Changed && err != nil {
-				s.ensureMaterialsFileManagementState().windowRefreshPending = true
-				s.observeMaterialsWindowRefresh()
+			if err == nil || status.Changed {
+				s.requestMaterialsWindowRefresh()
 			}
 			current, valid := s.materialsGitConfig()
-			if valid && current.MaterialsGitSettings().Enabled && !state.status.Paused {
-				s.scheduleMaterialsGit(state, time.Duration(current.MaterialsGitSettings().IntervalMinutes)*time.Minute)
+			if valid {
+				if status.Changed {
+					s.refreshSharedDocumentsGitPeer(current, taskMaterialsGit)
+				}
+				if current.MaterialsGitSettings().Enabled && !state.status.Paused {
+					s.scheduleMaterialsGit(state, time.Duration(current.MaterialsGitSettings().IntervalMinutes)*time.Minute)
+				}
 			}
 			if window != nil {
 				window.Invalidate()

@@ -130,6 +130,58 @@ func TestTaskFilesIdentityAndScopeAreIsolatedFromDraftSettings(t *testing.T) {
 	}
 }
 
+func TestTaskFilesSnapshotCancelsStaleJobs(t *testing.T) {
+	for _, change := range []string{"root", "incarnation"} {
+		t.Run(change, func(t *testing.T) {
+			s, previous, _ := taskFilesFixture(t)
+			s.snapshot.ProfileID = "fixture"
+			jobs := &s.taskFilesUnit.jobs
+			jobs.current = make(map[string]*taskFilesRequest)
+			stale := make(map[string]*taskFilesRequest)
+			for _, key := range []string{"list:", "search", "preview:read", "preview:media"} {
+				ctx, cancel := context.WithCancel(context.Background())
+				t.Cleanup(cancel)
+				request := &taskFilesRequest{key: key, view: previous, epoch: previous.epoch, ctx: ctx, cancel: cancel}
+				jobs.current[key] = request
+				stale[key] = request
+			}
+			snapshot := s.snapshot
+			taskPath, createdAt := previous.identity.taskPath, previous.identity.createdAt
+			if change == "root" {
+				root := t.TempDir()
+				config, err := json.Marshal(map[string]string{"taskRoot": root})
+				if err != nil {
+					t.Fatal(err)
+				}
+				snapshot.ConfigJSON = string(config)
+				taskPath = filepath.Join(root, previous.identity.id)
+			} else {
+				createdAt = "2026-11-01T11:00:00Z"
+			}
+			snapshot.Tasks = []application.Task{{ID: previous.identity.id, CreatedAt: createdAt, Path: taskPath}}
+			s.applySnapshot(snapshot)
+			for key, request := range stale {
+				if request.ctx.Err() != context.Canceled || jobs.accepts(request, previous) || jobs.current[key] != nil {
+					t.Fatalf("previous task's job survived: %s", key)
+				}
+			}
+			active := s.ensureTaskFilesCurrent()
+			if active == nil || s.taskFilesCurrent(previous) || active.identity.taskPath != taskPath ||
+				active.identity.documentID("guide.md") == previous.identity.documentID("guide.md") {
+				t.Fatal("snapshot left the previous task files view active")
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			search := &taskFilesRequest{key: "search", view: active, epoch: active.epoch, ctx: ctx, cancel: cancel}
+			jobs.current[search.key] = search
+			s.cancelTaskFilesSearch(previous)
+			if !jobs.accepts(search, active) {
+				t.Fatal("old task's callback cancelled the current search")
+			}
+		})
+	}
+}
+
 func TestTaskFilesLazyTreeIncludesHiddenIgnoredAndRestrictedLeaves(t *testing.T) {
 	s, view, backend := taskFilesFixture(t)
 	view.directory("").entries = []application.TaskFileEntry{
@@ -151,6 +203,12 @@ func TestTaskFilesLazyTreeIncludesHiddenIgnoredAndRestrictedLeaves(t *testing.T)
 		if row.ID == ".git" && row.Name != ".git" {
 			t.Fatal("Git metadata still has a restricted suffix", row)
 		}
+	}
+	view.directory(".workspace").loaded = true
+	view.expanded[".workspace"] = true
+	rows = taskFilesTreeRows(view)
+	if len(rows) != 7 || rows[1].ID != ".workspace" || !rows[1].Directory {
+		t.Fatalf("an expanded empty directory should have only its real folder row: %+v", rows)
 	}
 	view.expanded["src"] = true
 	rows = taskFilesTreeRows(view)

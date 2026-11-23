@@ -30,7 +30,7 @@ func (l *TextLines) area() *area {
 	}
 	a, b := l.ed.area, &l.ed.buf
 	if a.version != b.version || len(a.hs.measured) != len(b.paras)+1 {
-		a.sync(b, a.params)
+		a.sync(l.ed, b, a.params)
 	}
 	return a
 }

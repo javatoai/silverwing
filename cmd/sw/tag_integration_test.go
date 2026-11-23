@@ -3,29 +3,42 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/delivery"
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/snowball/genbuapi"
 	"silverwing-go/internal/storage"
 )
 
 func TestMain(m *testing.M) {
 	if os.Getenv("SW_TAG_TEST_CHILD") == "1" {
 		args := os.Args[1:]
-		if len(args) > 0 && args[0] == "--home" {
+		if len(args) > 0 && (args[0] == "--conf-dir" || args[0] == "--home") {
+			if err := installTagTestTransport(); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(89)
+			}
 			os.Exit(run(context.Background(), args, os.Stdout, os.Stderr))
 		}
 		os.Exit(runTagTestCLI(args))
@@ -34,6 +47,10 @@ func TestMain(m *testing.M) {
 }
 
 func runTagTestCLI(args []string) int {
+	if name := strings.ToLower(filepath.Base(os.Args[0])); name == "genbu" || name == "genbu.exe" {
+		_ = os.WriteFile(os.Getenv("SW_TAG_TEST_GENBU_CLI_MARKER"), []byte(strings.Join(args, " ")), 0600)
+		return 88
+	}
 	if len(args) == 0 {
 		return 90
 	}
@@ -92,18 +109,8 @@ func runTagTestCLI(args []string) int {
 		_ = file.Close()
 	}
 	switch args[0] {
-	case "query-tag":
-		uat := "初始"
-		if os.Getenv("SW_TAG_TEST_UAT_POD_VERSION") != "" {
-			uat = "成功"
-		}
-		fmt.Printf("{\"build_status\":\"成功\",\"uat_status\":%q,\"production_status\":\"初始\"}\n", uat)
-	case "query-service-pods":
-		if len(args) != 4 || args[1] != "--json" || args[2] != "uat" {
-			return 97
-		}
-		fmt.Printf("{\"service\":%q,\"environment\":\"uat\",\"pods\":[{\"namespace\":\"bp\",\"pod_name\":\"fixture-pod\",\"ready\":true,\"app_version\":%q}]}\n",
-			args[3], os.Getenv("SW_TAG_TEST_UAT_POD_VERSION"))
+	case "--version":
+		fmt.Println("tag-cli-fixture-1")
 	case "config":
 		fmt.Println("fixture-meegle")
 	case "user":
@@ -171,16 +178,143 @@ func runTagTestCLI(args []string) int {
 	return 0
 }
 
-// No Tag build or Git write is executed: all CLI tools, including Git, are
-// this test binary, and the successful batch exists only as isolated JSON.
-func newNotifyOnlyCLIFixture(t *testing.T) (cliFixture, string, string) {
-	t.Helper()
-	executable, err := os.Executable()
+func installTagTestTransport() error {
+	address := os.Getenv("SW_TAG_TEST_GENBU_ADDRESS")
+	host, _, err := net.SplitHostPort(address)
+	if err != nil || !net.ParseIP(host).IsLoopback() {
+		return errors.New("Genbu fixture requires a loopback server address")
+	}
+	certificateDER, err := base64.StdEncoding.DecodeString(os.Getenv("SW_TAG_TEST_GENBU_CERT"))
 	if err != nil {
+		return err
+	}
+	certificate, err := x509.ParseCertificate(certificateDER)
+	if err != nil {
+		return err
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(certificate)
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{RootCAs: pool, ServerName: host}
+	transport.DialContext = func(ctx context.Context, network, remote string) (net.Conn, error) {
+		switch remote {
+		case "beast.snowballtech.com:443", "genbu.snowballtech.com:443":
+			return (&net.Dialer{}).DialContext(ctx, network, address)
+		default:
+			return nil, fmt.Errorf("unexpected destination in sw Tag test: %s", remote)
+		}
+	}
+	http.DefaultTransport = transport
+	return nil
+}
+
+func tagTestGenbuFixture(t *testing.T, userHome, executable string) (string, *atomic.Int32) {
+	t.Helper()
+	credentialsDir := filepath.Join(userHome, ".snowball-config")
+	if err := os.MkdirAll(credentialsDir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	root := t.TempDir()
-	accountDir := filepath.Join(root, "isolated-account", ".meegle")
+	// Seed the same file and JSON shape as the standalone Genbu and Dragon tools.
+	if err := os.WriteFile(filepath.Join(credentialsDir, "credentials.json"), []byte(`{"version":1,"username":"tag-fixture","password":"fixture-password"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	legacyCommand := filepath.Join(dir, "genbu")
+	if runtime.GOOS == "windows" {
+		legacyCommand += ".exe"
+	}
+	if err := os.Link(executable, legacyCommand); err != nil {
+		binary, err := os.ReadFile(executable)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(legacyCommand, binary, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	marker := filepath.Join(dir, "invoked")
+	t.Setenv("SW_TAG_TEST_GENBU_CLI_MARKER", marker)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Cleanup(func() {
+		if data, err := os.ReadFile(marker); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("sw used the legacy Genbu executable: %q, %v", data, err)
+		}
+	})
+	var calls atomic.Int32
+	tokenPayload := fmt.Appendf(nil, `{"exp":%d}`, time.Now().Add(time.Hour).Unix())
+	token := "eyJhbGciOiJIUzI1NiJ9." + base64.RawURLEncoding.EncodeToString(tokenPayload) + ".fixture"
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == genbuapi.LoginPath {
+			var account struct{ Username, Password string }
+			if err := json.NewDecoder(r.Body).Decode(&account); err != nil || r.Method != http.MethodPost || r.Host != "beast.snowballtech.com" ||
+				account.Username != "tag-fixture" || account.Password != "fixture-password" {
+				t.Errorf("invalid fixture Beast login %v", err)
+			}
+			fmt.Fprint(w, `{"code":"000000","data":{"token":"fixture-beast-token"}}`)
+			return
+		}
+		if r.Host != "genbu.snowballtech.com" || r.Header.Get("System-Code") != "ANDCN" {
+			t.Errorf("invalid fixture Genbu target %s %s", r.Host, r.URL.Path)
+		}
+		if r.URL.Path != genbuapi.DragonUserPath && r.Header.Get("X-Token") != token {
+			t.Errorf("missing Genbu session for %s", r.URL.Path)
+		}
+		if r.URL.Path != genbuapi.DragonUserPath && r.URL.Path != genbuapi.ApplicationsPath && !slices.Contains([]string{"101", "102"}, r.Header.Get("App-Id")) {
+			t.Errorf("missing Genbu application for %s", r.URL.Path)
+		}
+		version := os.Getenv("SW_TAG_TEST_UAT_POD_VERSION")
+		switch r.URL.Path {
+		case genbuapi.DragonUserPath:
+			if r.URL.Query().Get("token") != "fixture-beast-token" {
+				t.Error("Genbu exchange did not use the Beast token")
+			}
+			fmt.Fprintf(w, `{"code":20000,"token":%q}`, token)
+		case genbuapi.ApplicationsPath:
+			fmt.Fprint(w, `{"code":20000,"response":[{"app_name":"svc-genbu","app_id":101},{"app_name":"independent-genbu","app_id":102}]}`)
+		case genbuapi.VersionPath:
+			var query struct {
+				Conditions struct {
+					Tag string `json:"key_word"`
+				}
+			}
+			if err := json.NewDecoder(r.Body).Decode(&query); err != nil || query.Conditions.Tag == "" {
+				t.Errorf("missing Tag in version query %v", err)
+			}
+			fmt.Fprintf(w, `{"code":20000,"response":[{"version_id":3,"version_name":%q}]}`, query.Conditions.Tag)
+		case genbuapi.BaseInfoPath:
+			uat := 0
+			if version != "" {
+				uat = 1
+			}
+			fmt.Fprintf(w, `{"code":20000,"response":[{"step":1,"status":1},{"step":7,"status":%d},{"step":9,"status":0}]}`, uat)
+		case genbuapi.PodGroupPath:
+			if r.URL.Query().Get("env") != "UAT" {
+				t.Error("expected a UAT Pod Group query")
+			}
+			fmt.Fprint(w, `{"code":20000,"response":{"groups":[{"group_id":1,"namespace":"bp","match_labels":"app=svc"}]}}`)
+		case genbuapi.PodPath:
+			if r.URL.Query().Get("namespace") != "bp" || r.URL.Query().Get("env") != "UAT" {
+				t.Error("expected a UAT Pod query for namespace bp")
+			}
+			fmt.Fprintf(w, `{"code":20000,"response":[{"pod_name":"fixture-pod","ready":true,"restart_count":0,"app_version":%q}]}`, version)
+		default:
+			t.Errorf("unexpected Genbu request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("SW_TAG_TEST_GENBU_ADDRESS", server.Listener.Addr().String())
+	t.Setenv("SW_TAG_TEST_GENBU_CERT", base64.StdEncoding.EncodeToString(server.Certificate().Raw))
+	t.Setenv("SW_TAG_TEST_UAT_POD_VERSION", "")
+	return legacyCommand, &calls
+}
+
+func isolateTagTestUserHome(t *testing.T, root string) string {
+	t.Helper()
+	userHome := filepath.Join(root, "isolated-user-home")
+	accountDir := filepath.Join(userHome, ".meegle")
 	if err := os.MkdirAll(accountDir, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -189,9 +323,24 @@ func newNotifyOnlyCLIFixture(t *testing.T) (cliFixture, string, string) {
 			t.Fatal(err)
 		}
 	}
-	t.Setenv("USERPROFILE", filepath.Dir(accountDir))
-	t.Setenv("HOME", filepath.Dir(accountDir))
-	f := cliFixture{executable: executable, git: executable, home: filepath.Join(root, "home"), taskDir: filepath.Join(root, "tasks", "notice-task"), sends: filepath.Join(root, "sends.log")}
+	t.Setenv("USERPROFILE", userHome)
+	t.Setenv("HOME", userHome)
+	return userHome
+}
+
+// Git and messaging commands use this test binary. The successful batch is persisted as fixture JSON.
+func newNotifyOnlyCLIFixture(t *testing.T) (cliFixture, string, string) {
+	t.Helper()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	userHome := isolateTagTestUserHome(t, root)
+	paths := newTagCLIProfilePaths(t, root)
+	f := cliFixture{executable: executable, git: executable, confDir: paths.Home, userHome: userHome, taskDir: filepath.Join(paths.Tasks, "notice-task"), sends: filepath.Join(root, "sends.log")}
+	config := domain.DefaultAppConfig()
+	config.TaskRoot = &paths.Tasks
 	calls := filepath.Join(root, "calls")
 	repository, worktree := filepath.Join(root, "repository"), filepath.Join(f.taskDir, "svc-primary")
 	for _, directory := range []string{calls, repository, worktree, filepath.Join(f.taskDir, "tag-operations")} {
@@ -205,24 +354,24 @@ func newNotifyOnlyCLIFixture(t *testing.T) (cliFixture, string, string) {
 	t.Setenv("SW_TAG_TEST_ROSTER", "unique")
 	t.Setenv("SW_TAG_TEST_LOGIN", "")
 	t.Setenv("SW_TAG_TEST_SEND_MODE", "")
-	config := domain.DefaultAppConfig()
-	taskRoot := filepath.Dir(f.taskDir)
-	config.TaskRoot, config.GitExecutablePath, config.GenbuExecutablePath, config.LarkExecutablePath, config.MeegleExecutablePath = &taskRoot, &executable, &executable, &executable, &executable
+	legacyGenbu, genbuCalls := tagTestGenbuFixture(t, f.userHome, executable)
+	f.genbuCalls = genbuCalls
+	config.GitExecutablePath, config.GenbuExecutablePath, config.LarkExecutablePath, config.MeegleExecutablePath = &executable, &legacyGenbu, &executable, &executable
 	config.TagEnabled = true
 	config.CommandProxyURL, config.CommandProxyTargets = nil, nil
 	config.MeegleProjects = []domain.MeegleProjectConfig{{SimpleName: "fixture", ProjectKey: "fixture-project"}}
 	config.LarkNotice = &domain.LarkNoticeConfig{Profile: "fixture-lark", AppID: "cli_fixture", Contacts: []domain.LarkNoticeContact{}}
 	config.Repositories = []domain.RepositoryConfig{{ID: "svc", Name: "svc", RootPath: repository, GitCommonDirectory: filepath.Join(repository, ".git")}}
-	config.Groups[0].Services = []domain.GroupServiceConfig{{ID: "svc", DisplayName: "svc", RepositoryID: "svc", Enabled: true, GenbuServiceName: "svc-genbu", GenbuProbeEnabled: true, MasterBranch: "origin/uat", TestTagBaselineRef: "origin/uat", DevelopmentTool: domain.DevelopmentToolVisualStudioCode, Modules: []domain.ServiceModuleConfig{{ID: "primary", Name: "primary", Strategy: domain.WorkspaceStandardWorktree, TagMode: domain.TagBuildCurrentBranch, TagEnabled: true}}}}
+	config.Services = []domain.ServiceConfig{{ID: "svc", DisplayName: "svc", RepositoryID: "svc", Enabled: true, GenbuServiceName: "svc-genbu", GenbuProbeEnabled: true, MasterBranch: "origin/uat", TestTagBaselineRef: "origin/uat", DevelopmentTool: domain.DevelopmentToolVisualStudioCode, Modules: []domain.ServiceModuleConfig{{ID: "primary", Name: "primary", Strategy: domain.WorkspaceStandardWorktree, TagMode: domain.TagBuildCurrentBranch, TagEnabled: true}}}}
 	manifest := domain.DefaultTaskManifest()
 	manifest.FolderName, manifest.TaskDirectoryName, manifest.FeatureBranch = "notice-task", "notice-task", "feature/primary"
 	manifest.CreatedAt, manifest.UpdatedAt = "2026-11-10 01:02:03", "2026-11-10 01:02:03"
 	manifest.RequirementLink = "https://project.feishu.cn/fixture/userstory/detail/101"
 	manifest.Services = []domain.ServiceWorkspace{{RepositoryID: "svc", ServiceName: "svc", RepositoryPath: repository, WorktreePath: worktree, Branch: "feature/primary", DevelopmentTool: domain.DevelopmentToolVisualStudioCode, Health: domain.WorkspaceReady, Strategy: domain.WorkspaceStandardWorktree, ModuleSource: domain.TaskModuleConfigured, Warnings: []string{}, GroupServiceID: "svc", ModuleID: "primary", ModuleName: "primary", TagEnabled: true, TagMode: domain.TagBuildCurrentBranch, PushRemote: "origin"}}
-	if err := storage.NewConfigStore(storage.NewPaths(f.home)).Save(config); err != nil {
+	if err := storage.NewConfigStore(paths).Save(config); err != nil {
 		t.Fatal(err)
 	}
-	if err := storage.NewManifestStore().Save(f.taskDir, manifest); err != nil {
+	if err := storage.NewProfileManifestStore(paths).Save(f.taskDir, manifest); err != nil {
 		t.Fatal(err)
 	}
 	batch, tag, sha := "notification-only-batch", "1.2.3.beta-1", strings.Repeat("a", 40)
@@ -324,9 +473,104 @@ func TestTagCLINotifyOnlyEmptyRosterSendsSelfOnce(t *testing.T) {
 	t.Log("actual sw tag notify with fake tools: empty roster sent ou_self once; new process used disk preparation and skipped the successful receipt")
 }
 
+func TestTagCLINotifyRequiresLarkAndGenbuConnections(t *testing.T) {
+	for _, tool := range []string{"lark", "genbu"} {
+		t.Run(tool, func(t *testing.T) {
+			f, batch, calls := newNotifyOnlyCLIFixture(t)
+			store := storage.NewConfigStore(storage.NewPaths(f.confDir))
+			disabled := false
+			if _, err := store.Update(func(cfg domain.AppConfig) (domain.AppConfig, error) {
+				if tool == "lark" {
+					cfg.OptionalCLIs.Lark = &disabled
+				} else {
+					cfg.OptionalCLIs.Genbu = &disabled
+				}
+				return cfg, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			_, reply := callTag[application.CLITagNoticeResult](t, f, exitError, "notify", "--batch", batch)
+			wantError := "Lark CLI 未启用"
+			if tool == "genbu" {
+				wantError = "Genbu 已关闭"
+			}
+			if !strings.Contains(reply.Error, wantError) {
+				t.Fatal(reply.Error)
+			}
+			if files, err := os.ReadDir(calls); err != nil || len(files) != 0 {
+				t.Fatal("disabled notification launched an identity, metadata or contacts process", files, err)
+			}
+			if _, err := os.Stat(f.sends); !os.IsNotExist(err) {
+				t.Fatal("disabled notification reached the message command", err)
+			}
+			if got := f.genbuCalls.Load(); got != 0 {
+				t.Fatalf("disabled notification made %d Genbu HTTP requests", got)
+			}
+		})
+	}
+}
+
+func TestTagCLIStatusUsesGitWithoutGenbu(t *testing.T) {
+	f, batch, _ := newNotifyOnlyCLIFixture(t)
+	t.Setenv("SW_TAG_TEST_UAT_POD_VERSION", "1.2.3.beta-1")
+	ready, _ := callTag[[]delivery.TagObservation](t, f, 0, "status", "--batch", batch, "--namespace", "bp")
+	if len(ready) != 1 || ready[0].Runtime == nil || ready[0].Runtime.State != delivery.TagRuntimeReady {
+		t.Fatal("enabled Genbu did not confirm the UAT runtime", ready)
+	}
+	calls := f.genbuCalls.Load()
+	if calls == 0 {
+		t.Fatal("enabled status did not make Genbu HTTP requests")
+	}
+	store := storage.NewConfigStore(storage.NewPaths(f.confDir))
+	disabled := false
+	if _, err := store.Update(func(cfg domain.AppConfig) (domain.AppConfig, error) {
+		cfg.OptionalCLIs.Genbu = &disabled
+		return cfg, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gitOnly, _ := callTag[[]delivery.TagObservation](t, f, 0, "status", "--batch", batch)
+	if len(gitOnly) != 1 || gitOnly[0].Git.State != "PUSHED" || !gitOnly[0].GenbuSkipped || gitOnly[0].Runtime != nil ||
+		gitOnly[0].Operation.GenbuStatus.CheckedAt != nil {
+		t.Fatal("disabled Genbu affected Git status or exposed stale pipeline results", gitOnly)
+	}
+	_, denied := callTag[[]delivery.TagObservation](t, f, exitError, "status", "--operation", "missing", "--namespace", "bp")
+	if !strings.Contains(denied.Error, "Genbu 已关闭") {
+		t.Fatal("namespace status did not reject disabled Genbu at admission", denied)
+	}
+	if got := f.genbuCalls.Load(); got != calls {
+		t.Fatalf("disabled status made %d Genbu HTTP requests", got-calls)
+	}
+
+	if err := os.Remove(filepath.Join(f.userHome, ".snowball-config", "credentials.json")); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"credentials.json", "genbu.json"} {
+		path := filepath.Join(f.confDir, name)
+		if err := os.WriteFile(path, []byte(`{"version":1,"username":"profile-only","password":"fixture-password"}`), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.Update(func(cfg domain.AppConfig) (domain.AppConfig, error) {
+		enabled := true
+		cfg.OptionalCLIs.Genbu = &enabled
+		return cfg, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, denied = callTag[[]delivery.TagObservation](t, f, exitError, "status", "--batch", batch, "--namespace", "bp")
+	if !strings.Contains(denied.Error, "共用账号") {
+		t.Fatal("namespace status did not require the user home credentials", denied)
+	}
+	if got := f.genbuCalls.Load(); got != calls {
+		t.Fatalf("status with profile-only credentials made %d Genbu HTTP requests", got-calls)
+	}
+}
+
 type cliFixture struct {
-	executable, git, home, taskDir, sends string
-	repository, remote, base, source      string
+	executable, git, confDir, userHome, taskDir, sends string
+	repository, remote, base, source                   string
+	genbuCalls                                         *atomic.Int32
 }
 
 func (f cliFixture) gitRun(t *testing.T, dir string, args ...string) string {
@@ -347,6 +591,18 @@ func writeFixtureFile(t *testing.T, path, content string) {
 	}
 }
 
+func newTagCLIProfilePaths(t *testing.T, root string) storage.Paths {
+	t.Helper()
+	paths := storage.NewPaths(filepath.Join(root, "profile"))
+	paths.Tasks = filepath.Join(root, "tasks")
+	var err error
+	paths.ProfileID, err = storage.LoadOrCreateProfileID(paths.Home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return paths
+}
+
 func newCLIFixture(t *testing.T, moreServices bool) cliFixture {
 	t.Helper()
 	git, err := exec.LookPath("git")
@@ -358,19 +614,23 @@ func newCLIFixture(t *testing.T, moreServices bool) cliFixture {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
+	userHome := isolateTagTestUserHome(t, root)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(root, "gitconfig"))
 	t.Setenv("GIT_TERMINAL_PROMPT", "0")
-	f := cliFixture{executable: executable, git: git, home: filepath.Join(root, "home"),
-		taskDir: filepath.Join(root, "tasks", "验收 task"), sends: filepath.Join(root, "sent.log")}
+	paths := newTagCLIProfilePaths(t, root)
+	f := cliFixture{executable: executable, git: git, confDir: paths.Home, userHome: userHome,
+		taskDir: filepath.Join(paths.Tasks, "验收 task"), sends: filepath.Join(root, "sent.log")}
 	t.Setenv("SW_TAG_TEST_SEND_LOG", f.sends)
 	if err := os.MkdirAll(f.taskDir, 0700); err != nil {
 		t.Fatal(err)
 	}
 	cfg := domain.DefaultAppConfig()
-	taskRoot := filepath.Dir(f.taskDir)
-	cfg.TaskRoot, cfg.GitExecutablePath = &taskRoot, &git
-	cfg.GenbuExecutablePath, cfg.LarkExecutablePath, cfg.MeegleExecutablePath = &executable, &executable, &executable
+	cfg.TaskRoot = &paths.Tasks
+	cfg.GitExecutablePath = &git
+	legacyGenbu, genbuCalls := tagTestGenbuFixture(t, f.userHome, executable)
+	f.genbuCalls = genbuCalls
+	cfg.GenbuExecutablePath, cfg.LarkExecutablePath, cfg.MeegleExecutablePath = &legacyGenbu, &executable, &executable
 	cfg.MeegleProjects = []domain.MeegleProjectConfig{{SimpleName: "fixture", ProjectKey: "fixture-project"}}
 	cfg.CommandProxyURL, cfg.CommandProxyTargets = nil, nil
 	cfg.LarkNotice = &domain.LarkNoticeConfig{Profile: "fixture-lark", AppID: "cli_fixture", CLIDefaultTester: "Fallback",
@@ -395,7 +655,7 @@ func newCLIFixture(t *testing.T, moreServices bool) cliFixture {
 		f.gitRun(t, repo, "remote", "add", "origin", remote)
 		f.gitRun(t, repo, "push", "--tags", "origin", "uat")
 		cfg.Repositories = append(cfg.Repositories, domain.RepositoryConfig{ID: id, Name: id, RootPath: repo, GitCommonDirectory: filepath.Join(repo, ".git")})
-		service := domain.GroupServiceConfig{ID: id, DisplayName: id, RepositoryID: id, Enabled: true,
+		service := domain.ServiceConfig{ID: id, DisplayName: id, RepositoryID: id, Enabled: true,
 			GenbuServiceName: id + "-genbu", GenbuProbeEnabled: true, MasterBranch: "origin/uat",
 			TestTagBaselineRef: "origin/uat", DevelopmentTool: domain.DevelopmentToolVisualStudioCode}
 		for i, module := range modules {
@@ -421,7 +681,7 @@ func newCLIFixture(t *testing.T, moreServices bool) cliFixture {
 				Warnings: []string{}, GroupServiceID: id, ModuleID: module, ModuleName: module,
 				TagEnabled: true, TagMode: mode, TagTargetRef: ref, PushRemote: "origin", TagMessagePrefix: "test"})
 		}
-		cfg.Groups[0].Services = append(cfg.Groups[0].Services, service)
+		cfg.Services = append(cfg.Services, service)
 		if conflict {
 			writeFixtureFile(t, filepath.Join(repo, "base.txt"), "target\n")
 			f.gitRun(t, repo, "add", "base.txt")
@@ -441,10 +701,10 @@ func newCLIFixture(t *testing.T, moreServices bool) cliFixture {
 	if moreServices {
 		addRepo("independent", []string{"module"}, false)
 	}
-	if err := storage.NewConfigStore(storage.NewPaths(f.home)).Save(cfg); err != nil {
+	if err := storage.NewConfigStore(paths).Save(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if err := storage.NewManifestStore().Save(f.taskDir, manifest); err != nil {
+	if err := storage.NewProfileManifestStore(paths).Save(f.taskDir, manifest); err != nil {
 		t.Fatal(err)
 	}
 	return f
@@ -459,14 +719,17 @@ type cliReply struct {
 }
 
 func (f cliFixture) call(args ...string) (cliReply, int, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	args = append([]string{"--home", f.home, "tag"}, args...)
+	args = append([]string{"--conf-dir", f.confDir, "tag"}, args...)
 	command := exec.CommandContext(ctx, f.executable, append(args, "--json")...)
 	command.Env = append(os.Environ(), "SW_TAG_TEST_CHILD=1")
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	out, err := command.Output()
+	if ctx.Err() != nil {
+		return cliReply{}, -1, ctx.Err()
+	}
 	code := 0
 	var failure *exec.ExitError
 	if errors.As(err, &failure) {

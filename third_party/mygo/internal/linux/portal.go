@@ -1,4 +1,4 @@
-//go:build linux && (amd64 || arm64)
+//go:build linux && !android && (amd64 || arm64)
 
 package linux
 
@@ -44,14 +44,30 @@ func portalSignal(conn, sender, path, iface, signal, params, data ptr) {
 		gVariantUnref(results)
 	case "Activated":
 		theBackend.shortcutActivated(params)
+	case "ShortcutsChanged":
+		if changed := theBackend.portal.changed; changed != nil {
+			changed(params)
+		}
 	case "SettingChanged":
 		// A preference, or the color scheme, changed.
 		ns := gVariantGetChildValue(params, 0)
 		name := goStr(gVariantGetString(ns, nil))
 		gVariantUnref(ns)
-		if name == appearanceSettings || name == gnomeInterfaceSettings {
-			theBackend.h.ThemeChanged()
+		k := gVariantGetChildValue(params, 1)
+		key := goStr(gVariantGetString(k, nil))
+		gVariantUnref(k)
+		if name != appearanceSettings && name != gnomeInterfaceSettings {
+			return
 		}
+		if name == appearanceSettings && key == "color-scheme" && traysAppearanceChanged != nil {
+			// The panels follow the desktop's scheme, whatever the app's.
+			traysAppearanceChanged()
+		}
+		// GTK tells ThemeChanged itself when its setting changes.
+		if name == appearanceSettings && key == "color-scheme" && followsSystem() && followSystemScheme(gtkSettingsGetDefault()) {
+			return
+		}
+		theBackend.h.ThemeChanged()
 	}
 }
 

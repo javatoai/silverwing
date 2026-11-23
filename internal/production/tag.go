@@ -22,17 +22,9 @@ func (s *Service) PrepareTag(ctx context.Context, id string, expected Preview) (
 		if err := s.beginTagCheck(b); err != nil {
 			return err
 		}
-		manual := ""
-		if expected.Manual {
-			manual = expected.ProductionTag
-		}
-		var err error
-		fresh, err := s.observe(ctx, b.Target, c, manual, b.ReleaseBranch, false)
+		fresh, err := s.observe(ctx, b.Target, c, b.ReleaseBranch, false)
 		if err != nil {
 			return err
-		}
-		if expected.Manual && !sameProductionBaseline(expected, fresh) {
-			return errors.New("人工确认的生产基线已变化，请重新检查并确认")
 		}
 		p = fresh
 		return s.prepareCheckedTag(ctx, b, p)
@@ -54,8 +46,8 @@ func (s *Service) beginTagCheck(b *Batch) error {
 }
 
 func (s *Service) prepareCheckedTag(ctx context.Context, b *Batch, p Preview) error {
-	if p.ProductionSHA == "" {
-		return errors.New("请先确认生产基线 Tag")
+	if !p.hasProductionBaseline() {
+		return ErrProductionBaselineUnavailable
 	}
 	if p.ReleaseSHA == "" || p.ReleaseSHA != b.ReleaseSHA {
 		return errors.New("release 已变化，请先核对并采纳远端状态")
@@ -103,6 +95,9 @@ func (s *Service) Publish(ctx context.Context, id, token string) (Batch, error) 
 		if b.Intent != nil || p == nil || p.Token != token || token == "" {
 			return errors.New("构建确认已失效，请重新检查生产基线")
 		}
+		if !p.Preview.hasProductionBaseline() {
+			return fmt.Errorf("%w：本次构建缺少线上生产版本的核验结果，请重新检查生产基线", ErrProductionBaselineUnavailable)
+		}
 		if p.Preview.Target != b.Target || p.Commit == "" || p.Commit != b.ReleaseSHA || p.MainSHA != b.MainSHA ||
 			p.Preview.ReleaseSHA != p.Commit || p.Preview.MainSHA != p.MainSHA {
 			return errors.New("构建目标或提交已变化，请重新检查生产基线")
@@ -132,7 +127,7 @@ func (s *Service) makeTag(ctx context.Context, c domain.AppConfig, b *Batch, p *
 	if c.GitExecutablePath != nil {
 		command = *c.GitExecutablePath
 	}
-	spec, err := commandruntime.Prepare(ctx, s.Runner, &c, domain.ProxyTargetGit, executable.ToolGit, command)
+	spec, err := commandruntime.Prepare(ctx, s.Runner, &c, "", executable.ToolGit, command)
 	if err != nil {
 		return "", err
 	}
@@ -174,11 +169,7 @@ func (s *Service) resumeTag(ctx context.Context, b *Batch, c domain.AppConfig) e
 		return errors.New("同名远端 Tag 已存在且不属于本次操作，不能覆盖")
 	}
 	if refs[ref] == "" {
-		manual := ""
-		if i.Preview.Manual {
-			manual = i.Preview.ProductionTag
-		}
-		fresh, err := s.observe(ctx, b.Target, c, manual, b.ReleaseBranch, false)
+		fresh, err := s.observe(ctx, b.Target, c, b.ReleaseBranch, false)
 		if err != nil {
 			return err
 		}
@@ -204,6 +195,14 @@ func (s *Service) finishTagPush(ctx context.Context, b *Batch) error {
 	return nil
 }
 
+func (s *Service) readTagStatus(ctx context.Context, cfg domain.AppConfig, service, tag string) (domain.GenbuTagProbeStatus, error) {
+	status, err := s.Genbu.Status(ctx, cfg, service, tag)
+	if err == nil && status.NotFound {
+		err = errors.New("Genbu 未找到服务或 Tag")
+	}
+	return status, err
+}
+
 func (s *Service) RefreshBuild(ctx context.Context, id string) (Batch, error) {
 	return s.withRecord(ctx, id, true, func(b *Batch, c domain.AppConfig) error {
 		if len(b.Tags) == 0 {
@@ -219,7 +218,7 @@ func (s *Service) RefreshBuild(ctx context.Context, id string) (Batch, error) {
 			if n != len(tags)-1 && tags[n].Status.Build == domain.GenbuSuccess {
 				continue
 			}
-			status, probeErr := s.Genbu.Status(ctx, c, b.Target.GenbuService, tags[n].Name)
+			status, probeErr := s.readTagStatus(ctx, c, b.Target.GenbuService, tags[n].Name)
 			if _, err := s.validate(ctx, b.Target); err != nil {
 				return err
 			}

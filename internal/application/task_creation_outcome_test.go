@@ -81,7 +81,7 @@ func TestCreatedTaskFollowUpFailuresDoNotBecomeCreationFailures(t *testing.T) {
 				cancel()
 			}
 			var final workspace.TaskCreationProgress
-			result := finishCreatedTask(ctx, service, root, manifest, []string{"fixture"}, func(event workspace.TaskCreationProgress) { final = event })
+			result := finishCreatedTask(ctx, domain.AppConfig{}, service, root, manifest, []string{"fixture"}, func(event workspace.TaskCreationProgress) { final = event })
 			returned, ok := result.Data.(domain.TaskManifest)
 			if !ok || returned.TaskDirectoryName != "task" || returned.CreatedAt != manifest.CreatedAt || result.Message != "任务已创建" || final.Phase != workspace.TaskCreationPhaseCompleted {
 				t.Fatalf("lost committed task: %+v final=%+v", result, final)

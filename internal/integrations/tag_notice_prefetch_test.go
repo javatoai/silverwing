@@ -42,11 +42,18 @@ func newNoticeRefreshTestService(t *testing.T) (*Service, domain.AppConfig, stri
 	if err := os.WriteFile(filepath.Join(home, ".meegle", "config.json"), []byte(`{"current":"notice-order-fixture"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	s := NewService(storage.NewPaths(t.TempDir()), nil, nil)
+	paths := storage.NewPaths(t.TempDir())
+	s := NewService(paths, nil, nil)
 	cli := "notice-order-fixture"
-	cfg := domain.AppConfig{TagEnabled: true, LarkExecutablePath: &cli, MeegleExecutablePath: &cli,
-		LarkNotice:     &domain.LarkNoticeConfig{Profile: "notice-order-fixture"},
-		MeegleProjects: []domain.MeegleProjectConfig{{SimpleName: "notice", ProjectKey: "notice-project"}}}
+	cfg := domain.DefaultAppConfig()
+	cfg.TagEnabled = true
+	cfg.LarkExecutablePath, cfg.GenbuExecutablePath, cfg.MeegleExecutablePath = &cli, &cli, &cli
+	cfg.LarkNotice = &domain.LarkNoticeConfig{Profile: "notice-order-fixture", AppID: "cli_notice_order", Contacts: []domain.LarkNoticeContact{}}
+	cfg.MeegleProjects = []domain.MeegleProjectConfig{{SimpleName: "notice", ProjectKey: "notice-project"}}
+	if err := s.config.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	s.SetNoticeCLIReady(func(domain.AppConfig) bool { return true })
 	url := "https://project.feishu.cn/notice/userstory/detail/101"
 	return s, cfg, url
 }

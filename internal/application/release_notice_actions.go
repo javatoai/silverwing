@@ -21,8 +21,9 @@ import (
 // Only notification-relevant configuration invalidates an open composer.
 // This is an opaque digest: credentials and configuration are never in receipts.
 func ReleaseNoticeConfigIdentity(c domain.AppConfig) string {
-	return releasenotice.Digest([]any{c.TaskRoot, c.TagEnabled, c.Groups, c.Repositories,
-		c.LarkExecutablePath, releasenotice.UserTesters, c.EffectiveLarkNotice().Profile, c.EffectiveLarkNotice().AppID, c.EffectiveLarkNotice().Contacts, c.GenbuExecutablePath, c.GitExecutablePath,
+	return releasenotice.Digest([]any{c.TaskRoot, c.TagEnabled, c.ServiceCatalog(), c.Repositories,
+		c.OptionalCLIEnabled("lark"), c.LarkExecutablePath, releasenotice.UserTesters, c.EffectiveLarkNotice().Profile, c.EffectiveLarkNotice().AppID, c.EffectiveLarkNotice().Contacts,
+		c.OptionalCLIs.Genbu, c.GitExecutablePath,
 		c.MeegleExecutablePath, c.MeegleProjects, c.CommandProxyURL, c.CommandProxyTargets,
 		c.CommandProxyUsername, c.CommandProxyPassword, c.CommandProxyNoProxy})
 }
@@ -37,11 +38,14 @@ type releaseNoticeBatch struct {
 
 // Load the complete persisted batch, never a client-provided or filtered list.
 func (a *App) releaseNoticeBatch(ctx context.Context, action Action, refresh bool) (releaseNoticeBatch, error) {
-	return a.readReleaseNoticeBatch(ctx, action, refresh, false)
+	return a.readReleaseNoticeBatch(ctx, action, refresh, false, context.Context.Err)
 }
 
-func (a *App) readReleaseNoticeBatch(ctx context.Context, action Action, refresh, forceProbe bool) (releaseNoticeBatch, error) {
+func (a *App) readReleaseNoticeBatch(ctx context.Context, action Action, refresh, forceProbe bool, check func(context.Context) error) (releaseNoticeBatch, error) {
 	var b releaseNoticeBatch
+	if e := check(ctx); e != nil {
+		return b, e
+	}
 	c, e := a.Config.Load()
 	if e != nil {
 		return b, e
@@ -87,18 +91,25 @@ func (a *App) readReleaseNoticeBatch(ctx context.Context, action Action, refresh
 		return b.operations[i].OperationID < b.operations[j].OperationID
 	})
 	for _, op := range b.operations {
-		service, e := c.GroupService(b.task.GroupID, op.GroupServiceID)
+		service, e := c.Service(op.GroupServiceID)
 		if e != nil || !service.GenbuProbeEnabled {
 			return b, errors.New("批次服务未开启 Genbu 探测，不能确认编译完成")
 		}
 		if op.State != domain.TagOperationSuccess || strings.TrimSpace(value(op.Tag)) == "" {
 			return b, errors.New("本批次的 Tag 尚未全部推送成功")
 		}
+		probe := forceProbe || refresh && !releaseNoticeProbeFresh(op.GenbuStatus)
+		if !probe {
+			continue
+		}
+		if e := check(ctx); e != nil {
+			return b, e
+		}
 		if forceProbe {
 			if e = a.delivery(c).CheckLiveTagBuild(ctx, action.TaskID, op); e != nil {
 				return b, e
 			}
-		} else if refresh && !releaseNoticeProbeFresh(op.GenbuStatus) {
+		} else {
 			if _, e = a.delivery(c).Status(ctx, action.TaskID, op.OperationID); e != nil {
 				return b, fmt.Errorf("核对构建状态：%w", e)
 			}
@@ -124,7 +135,7 @@ func (a *App) readReleaseNoticeBatch(ctx context.Context, action Action, refresh
 	}
 	b.scope = releasenotice.Digest([]any{a.Paths.Home, value(c.TaskRoot), textPayload(action, "tagHistoryTaskPath"),
 		b.task.CreatedAt, b.task.RequirementLink, b.task.GroupID, ReleaseNoticeConfigIdentity(c), b.rows})
-	return b, ctx.Err()
+	return b, check(ctx)
 }
 
 func releaseNoticeProbeFresh(status domain.GenbuTagProbeStatus) bool {
@@ -140,33 +151,61 @@ func (a *App) releaseNoticeAction(ctx context.Context, action Action) (ActionRes
 	if action.Kind != "tag.notice.prepare" && action.Kind != "tag.notice.send" {
 		return ActionResult{}, errors.New("不支持的通知操作")
 	}
-	b, e := a.releaseNoticeBatch(ctx, action, true)
+	if action.Kind == "tag.notice.send" && !boolPayload(action, "confirmed") {
+		return ActionResult{}, errors.New("通知缺少显式发送操作")
+	}
+	client, e := a.noticeCLI(ctx, OptionalCLIFeatureTagNotice)
+	if e != nil {
+		return ActionResult{}, e
+	}
+	b, e := a.readReleaseNoticeBatch(ctx, action, true, false, client.BeforeRun)
 	if e != nil {
 		return ActionResult{}, e
 	}
 	store := releasenotice.Store{Directory: filepath.Join(a.Paths.Home, "release-notices")}
-	client := larkcli.Client{Runner: a.Runner, Config: b.config, AsUser: true}
+	client.Config = b.config
 	if action.Kind == "tag.notice.prepare" {
 		session, prepared, e := a.prepareUserTagNotice(ctx, b, client)
 		if e != nil {
 			return ActionResult{}, e
 		}
-		if e = a.checkUserTagNotice(ctx, action, session, prepared); e != nil {
+		if e = a.checkUserTagNotice(ctx, action, session, prepared, client); e != nil {
 			return ActionResult{}, e
 		}
 		saved, e := store.Prepare(session)
 		message := strings.Trim(strings.Join([]string{session.Warning, session.PreparationStatus}, "；"), "；")
 		return ActionResult{Data: saved, Message: message}, e
 	}
-	if !boolPayload(action, "confirmed") {
-		return ActionResult{}, errors.New("通知缺少显式发送操作")
-	}
 	choice, e := noticeSelection(action)
 	if e != nil {
 		return ActionResult{}, e
 	}
-	session, e := store.SendTag(ctx, textPayload(action, "sessionId"), choice, client, a.userTagNoticeChecks(action))
+	session, e := store.SendTag(ctx, textPayload(action, "sessionId"), choice, client, a.userTagNoticeChecks(action, client))
 	return ActionResult{Data: session}, e
+}
+
+func (a *App) noticeCLI(ctx context.Context, feature OptionalCLIFeature) (larkcli.Client, error) {
+	client := larkcli.Client{Runner: a.Runner, AsUser: feature == OptionalCLIFeatureTagNotice}
+	var checks []func(context.Context) error
+	for _, tool := range optionalCLIFeatureTools[feature] {
+		command, check, err := a.optionalCLIScope(ctx, tool)
+		if err != nil {
+			return larkcli.Client{}, err
+		}
+		if tool == "lark" {
+			client.Executable = command
+		}
+		checks = append(checks, check)
+	}
+	client.BeforeRun = func(ctx context.Context) error {
+		for _, check := range checks {
+			if err := check(ctx); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return client, client.BeforeRun(ctx)
 }
 
 func noticeSelection(action Action) (releasenotice.Selection, error) {

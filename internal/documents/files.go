@@ -57,11 +57,16 @@ type Content struct {
 	MarkdownEditContext string             `json:"markdownEditContext,omitempty"`
 }
 type Service struct {
-	CacheRoot string
-	draftMu   sync.Mutex
+	CacheRoot   string
+	draftMu     sync.Mutex
+	profileHome string
 }
 
 func NewService(cacheRoot string) *Service { return &Service{CacheRoot: cacheRoot} }
+
+func NewProfileService(paths storage.Paths) *Service {
+	return &Service{CacheRoot: paths.Cache, profileHome: paths.Home}
+}
 
 func Kind(path string) string {
 	switch strings.ToLower(filepath.Ext(path)) {
@@ -608,6 +613,28 @@ func validateName(name string) error {
 	}
 	return nil
 }
+
+func AcquireWaitingLock(ctx context.Context, path string) (func(), error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	for {
+		release, err := storage.AcquireLock(path)
+		if err == nil {
+			return release, nil
+		}
+		if !errors.Is(err, storage.ErrLockBusy) {
+			return nil, err
+		}
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
 func atomicWrite(path string, data []byte, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err

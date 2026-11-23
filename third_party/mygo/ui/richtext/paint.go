@@ -13,23 +13,45 @@ import (
 func (v *view) paint(p *ui.Painter, r ui.Rect) {
 	v.rect = r
 	w, h := max(r.W-2*v.padX, 1), max(r.H-2*v.padY, 1)
+	// What of the text the clip shows, with a screen more above and below
+	// it, laid out ahead of a scroll.
+	if vis := p.Visible(); vis.H < h {
+		top := vis.Y - (r.Y + v.padY)
+		v.clip, v.clipped = [2]float32{top - vis.H, top + 2*vis.H}, true
+	} else {
+		v.clipped = false
+	}
 	v.layout(w, h)
 	ox, oy := r.X+v.padX, r.Y+v.padY
 	look := &v.look
 	if v.shown.Len() == 0 && v.compose == "" && v.opts.Placeholder != "" {
-		pl := ui.ShapeRichTextWith([]ui.Span{{Text: v.opts.Placeholder}}, v.paraFont(v.para(0).style), ui.TextShape{Width: w})
-		p.TextLayout(pl, ox, oy, look.Muted)
+		// where the text would start: past a list's marker, a task's box or a quote's bar, not under them
+		px, py := v.origin(0)
+		pl := ui.ShapeRichTextWith([]ui.Span{{Text: v.opts.Placeholder}}, v.paraFont(v.para(0).style), ui.TextShape{Width: max(w-px, 1)})
+		p.TextLayout(pl, ox+px, oy+float32(py-v.scroll), look.Muted)
 	}
 	a, z := v.selection()
 	focused := v.focused
-	for i := v.first; i <= v.last && i < len(v.paras); i++ {
+	// Only the paragraphs the painter's clip shows are painted: an editor as
+	// tall as its text, in a scroll container, has all of them in its box.
+	// Each one's start is counted on from the one before it; found from the
+	// start of the text, it cost as much as the text is long, for each one.
+	vis := p.Visible()
+	compose := -1
+	if v.compose != "" {
+		compose = v.shown.paraAt(v.caret)
+	}
+	ps := v.shown.paraStart(v.first)
+	for i := v.first; i <= v.last && i < len(v.paras); i, ps = i+1, ps+v.para(i).n+1 {
+		top := oy + float32(v.hs.top(i)-v.scroll)
+		if bottom := oy + float32(v.hs.top(i+1)-v.scroll); bottom < vis.Y || top > vis.Y+vis.H {
+			continue
+		}
 		pv := v.paraLayout(i)
 		st := v.para(i).style
-		top := oy + float32(v.hs.top(i)-v.scroll)
 		px, py := v.origin(i)
 		x, y := ox+px, oy+float32(py-v.scroll)
 		v.paintBlock(p, i, st, ox, top, pv.h, w)
-		ps := v.shown.paraStart(i)
 		pe := ps + v.para(i).n
 		if a != z && a <= pe && z >= ps && (focused || v.opts.ReadOnly) {
 			from, to := v.local(i, max(a, ps)), v.local(i, min(z, pe))
@@ -46,7 +68,7 @@ func (v *view) paint(p *ui.Painter, r ui.Rect) {
 		p.TextLayout(pv.layout, x, y, look.Text)
 		v.paintAttachments(p, i, pv, x, y)
 		v.paintMarker(p, i, st, pv, x, y)
-		if v.compose != "" && v.shown.paraAt(v.caret) == i {
+		if compose == i {
 			c := v.local(i, v.caret)
 			n := len([]rune(v.compose))
 			for _, s := range pv.layout.SelectionRects(ui.TextInputRange{Start: pv.units[c], End: pv.units[min(c+n, len(pv.units)-1)]}) {
@@ -62,9 +84,13 @@ func (v *view) paint(p *ui.Painter, r ui.Rect) {
 			p.Fill(ui.Rect{X: ox + cx, Y: oy + float32(cy-v.scroll), W: max(1/scale, 1), H: ch}, look.Caret, 0)
 		}
 	}
-	if total := v.hs.top(len(v.paras)); total > float64(h) {
-		top, size := v.thumbBox()
-		p.Fill(ui.Rect{X: r.X + r.W - 8, Y: r.Y + top, W: 5, H: size}, look.Text.Alpha(0.3), 2.5)
+	// The scroll bar while the pointer is over the editor or drags its
+	// thumb, as a scroll container's.
+	if !v.opts.NoScrollbar && (v.inView || v.thumb) {
+		v.barStyle = ui.ScrollbarStyle{}.Resolve(p.Theme())
+		bar := v.bar()
+		bar.Box.X, bar.Box.Y = r.X, r.Y
+		p.Scrollbar(bar, ui.ScrollbarState{Hovered: v.inView, Dragging: v.thumb})
 	}
 	v.moved()
 }
@@ -78,9 +104,15 @@ func (v *view) paintBlock(p *ui.Painter, i int, st ParagraphStyle, x, top, heigh
 		// One block for the paragraphs of code next to each other, rounded
 		// at its ends.
 		radius := look.size * look.CodeBlockRadius
-		box := ui.Rect{X: x + indent, Y: top, W: width - indent, H: height}
 		first := i == 0 || !v.para(i-1).style.CodeBlock
 		last := i+1 >= len(v.paras) || !v.para(i+1).style.CodeBlock
+		if first && v.opts.Space != nil {
+			// The room an app leaves above the block, as a place opened
+			// for an item dragged, is outside it.
+			room := max(0, v.opts.Space(i))
+			top, height = top+room, height-room
+		}
+		box := ui.Rect{X: x + indent, Y: top, W: width - indent, H: height}
 		fill := box
 		if !first {
 			fill.Y, fill.H = fill.Y-2*radius, fill.H+2*radius
@@ -93,12 +125,44 @@ func (v *view) paintBlock(p *ui.Painter, i int, st ParagraphStyle, x, top, heigh
 	if st.Quote {
 		if i == 0 || !v.para(i-1).style.Quote {
 			// The spacing above the first paragraph of a quotation is
-			// outside it.
+			// outside it. A heading that starts one keeps outside only
+			// Space's room and the spacing a body paragraph would take
+			// there, the rest of its room inside, so that the room
+			// above the quotation matches the spacing below it.
 			above, _ := v.space(i, st)
+			if st.Heading > 0 {
+				var room, gap float32
+				if v.opts.Space != nil {
+					room = max(0, v.opts.Space(i))
+				}
+				if look.ParagraphSpacing > 0 && i > 0 && body(v.para(i-1).style) {
+					gap = look.size * look.ParagraphSpacing
+				}
+				above = room + min(above-room, gap)
+			}
 			top, height = top+above, height-above
 		}
+		// A bar is rounded only at the ends of its quotation: where the
+		// paragraph above or below goes on at its level, the bars join
+		// square, as one.
 		w := look.QuoteBarWidth
-		p.Fill(ui.Rect{X: x + indent, Y: top, W: w, H: height}, look.QuoteBar, w/2)
+		var above, below int
+		if i > 0 {
+			above = v.para(i - 1).style.quoteDepth()
+		}
+		if i+1 < len(v.paras) {
+			below = v.para(i + 1).style.quoteDepth()
+		}
+		for level := range st.quoteDepth() {
+			r := [4]float32{w / 2, w / 2, w / 2, w / 2}
+			if above > level {
+				r[0], r[1] = 0, 0
+			}
+			if below > level {
+				r[2], r[3] = 0, 0
+			}
+			p.FillRadii(ui.Rect{X: x + indent + float32(level)*look.indent*0.75, Y: top, W: w, H: height}, r, look.QuoteBar)
+		}
 	}
 }
 

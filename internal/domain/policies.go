@@ -9,15 +9,21 @@ import (
 	"unicode"
 )
 
-var requirementLinkPattern = regexp.MustCompile(`(?i)^https?://project\.feishu\.cn/([A-Za-z0-9_-]+)/(userstory|othertask|bug|technical)/detail/(\d+)(?:[/?#].*)?$`)
+const opaqueFeishuWorkItemKind = `[0-9a-f]{24}`
+
+var requirementLinkPattern = regexp.MustCompile(`(?i)^https?://project\.feishu\.cn/([A-Za-z0-9_-]+)/(userstory|othertask|bug|technical|` + opaqueFeishuWorkItemKind + `)/detail/(\d+)(?:[/?#].*)?$`)
+var opaqueFeishuWorkItemKindPattern = regexp.MustCompile(`(?i)^` + opaqueFeishuWorkItemKind + `$`)
 var requirementNumberPattern = regexp.MustCompile(`\d+`)
-var aiBranchSuffixPattern = regexp.MustCompile(`^[a-z0-9]+(?:_[a-z0-9]+){0,3}$`)
 
 type FeishuWorkItemLink struct {
 	Space      string
 	Kind       string
 	WorkItemID string
 	ProjectKey *string
+}
+
+func IsOpaqueFeishuWorkItemKind(kind string) bool {
+	return opaqueFeishuWorkItemKindPattern.MatchString(kind)
 }
 
 func ParseFeishuWorkItemLink(value string) *FeishuWorkItemLink {
@@ -112,41 +118,12 @@ func RequirementAiNamingModelRequireValid(value string) (string, error) {
 	return value, nil
 }
 
-const (
-	MaxAIFolderCodePoints = 12
-	MaxAIFolderHanChars   = 6
-	MaxAIBranchWords      = 4
-)
-
 func ValidateRequirementAiNamingSuggestion(suggestion RequirementAiNamingSuggestion) (RequirementAiNamingSuggestion, error) {
-	folderName, branchSuffix := suggestion.FolderName, suggestion.BranchSuffix
-	if strings.TrimSpace(folderName) != folderName {
-		return suggestion, fmt.Errorf("AI 生成的文件夹名不能包含首尾空白")
-	}
-	if strings.TrimSpace(branchSuffix) != branchSuffix {
-		return suggestion, fmt.Errorf("AI 生成的分支后缀不能包含首尾空白")
-	}
-	if err := DirectoryNameValidationError(folderName); err != nil {
+	if err := DirectoryNameValidationError(suggestion.FolderName); err != nil {
 		return suggestion, err
 	}
-	runes := []rune(folderName)
-	if len(runes) > MaxAIFolderCodePoints {
-		return suggestion, fmt.Errorf("AI 生成的文件夹名不能超过 %d 个字符", MaxAIFolderCodePoints)
-	}
-	hanCount := 0
-	for _, r := range runes {
-		if unicode.Is(unicode.Han, r) {
-			hanCount++
-		}
-	}
-	if hanCount < 1 || hanCount > MaxAIFolderHanChars {
-		return suggestion, fmt.Errorf("AI 生成的文件夹名必须含有 1 到 %d 个汉字", MaxAIFolderHanChars)
-	}
-	if hanCount < len(runes)-hanCount {
-		return suggestion, fmt.Errorf("AI 生成的文件夹名应以中文为主")
-	}
-	if !aiBranchSuffixPattern.MatchString(branchSuffix) {
-		return suggestion, fmt.Errorf("AI 生成的分支后缀只能包含小写英文、数字和下划线，且最多 %d 个单词", MaxAIBranchWords)
+	if strings.TrimSpace(suggestion.BranchSuffix) == "" {
+		return suggestion, fmt.Errorf("AI 生成的分支后缀不能为空")
 	}
 	return suggestion, nil
 }
@@ -297,9 +274,6 @@ func requireTagWorkspace(config AppConfig, manifest TaskManifest, selection stri
 		return ServiceWorkspace{}, fmt.Errorf("测试Tag目标不唯一，请选择具体模块：%s", selection)
 	}
 	workspace := candidates[0]
-	if _, err := config.Group(manifest.GroupID); err != nil {
-		return ServiceWorkspace{}, err
-	}
 	if !workspace.TagEnabled {
 		return ServiceWorkspace{}, fmt.Errorf("模块 %s 已关闭测试Tag", workspace.ModuleName)
 	}

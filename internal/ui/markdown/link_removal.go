@@ -213,7 +213,7 @@ func inlinePresentation(inlines []parser.Inline, removedStart int) string {
 					continue
 				}
 			}
-			if node.Kind == parser.Text {
+			if node.Kind == parser.Text || node.Kind == parser.Mention || node.Kind == parser.Reference {
 				text.WriteString(node.Text)
 			} else if node.Kind == parser.Link && node.Start == removedStart {
 				visit(index+1, node.Next)

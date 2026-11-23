@@ -5,6 +5,7 @@ import (
 	"image/png"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"weak"
 
@@ -23,6 +24,37 @@ const (
 	MenuItemCheckbox  MenuItemType = "checkbox"
 	MenuItemRadio     MenuItemType = "radio"
 )
+
+// BadgeAlignment is where an item's badge sits in the column the badges of
+// its menu share (macOS).
+type BadgeAlignment string
+
+const (
+	BadgeAlignLeft   BadgeAlignment = "left"
+	BadgeAlignCenter BadgeAlignment = "center"
+	BadgeAlignRight  BadgeAlignment = "right" // the default
+)
+
+// BadgeShape is the background behind a badge.
+type BadgeShape string
+
+const (
+	BadgeShapeSquare  BadgeShape = "square"
+	BadgeShapeRounded BadgeShape = "rounded"
+	BadgeShapePill    BadgeShape = "pill"
+)
+
+// menuColor parses a badge color, nil for empty or invalid.
+func menuColor(s string) *platform.Color {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	c, err := parseColor(s)
+	if err != nil {
+		return nil
+	}
+	return &c
+}
 
 // MenuRole gives a menu item a predefined behavior, label and accelerator.
 type MenuRole string
@@ -104,11 +136,43 @@ type MenuItem struct {
 	// Checked is the state of checkbox and radio items. It is toggled
 	// before Click is called.
 	Checked bool
-	ToolTip string
+	// KeepOpen keeps the menu open when the item is chosen (macOS): the
+	// item's menu and the menu above it stay up, so choosing a node or
+	// starting a test can show its state change without reopening the
+	// menus. macOS draws such an item itself, with its label, badge and
+	// check mark; items with a submenu, and menus elsewhere, are not
+	// affected.
+	KeepOpen bool
+	ToolTip  string
 	// Icon is an image shown beside the label (see NewMenuIcon), nil for
 	// none.
-	Icon    *MenuIcon
-	Submenu []*MenuItem
+	Icon *MenuIcon
+	// Subtitle is a second, smaller line under the label: macOS 14 and
+	// browsers show it so, and earlier macOS, Windows and Linux after the
+	// label, as "Label — Subtitle".
+	Subtitle string
+	// Badge is text at the trailing edge of the item, such as a count or a
+	// latency. macOS puts the badges of a menu in a column after its longest
+	// label, aligned as BadgeAlign says, and draws them in a
+	// monospaced-digit font; other platforms show the badge after the label
+	// and subtitle.
+	Badge string
+	// BadgeAlign is where Badge sits in that column: BadgeAlignLeft,
+	// BadgeAlignCenter, or BadgeAlignRight (the default).
+	BadgeAlign BadgeAlignment
+	// BadgeShape draws a background behind Badge: BadgeShapeSquare,
+	// BadgeShapeRounded or BadgeShapePill. The zero value draws none.
+	// macOS system-drawn items show a square background; KeepOpen items
+	// round it as asked. Other platforms ignore it.
+	BadgeShape BadgeShape
+	// BadgeColor is the badge background, as a CSS color (see Window
+	// BackgroundColor). Empty uses the system's subtle background.
+	BadgeColor string
+	// BadgeTextColor is the badge text color, as a CSS color, with or
+	// without a background. Empty picks white or black for contrast with
+	// BadgeColor, or the menu's color when there is none.
+	BadgeTextColor string
+	Submenu        []*MenuItem
 	// Click is called on the main thread when the item is chosen. On Linux
 	// and Windows, win is the window whose menu bar or context menu was
 	// chosen. Other menus use the focused window, which may be nil.
@@ -300,8 +364,38 @@ func (it *MenuItem) IsChecked() bool { return it.get(func() bool { return it.Che
 // SetLabel changes the label of the item.
 func (it *MenuItem) SetLabel(label string) { it.update(func() { it.Label = label }) }
 
+// SetBadge changes the badge of the item, empty to remove it.
+func (it *MenuItem) SetBadge(badge string) { it.update(func() { it.Badge = badge }) }
+
+// SetBadgeAlign changes where the badge sits in the menu's badge column:
+// BadgeAlignLeft, BadgeAlignCenter or BadgeAlignRight (the default).
+func (it *MenuItem) SetBadgeAlign(align BadgeAlignment) {
+	it.update(func() { it.BadgeAlign = align })
+}
+
+// SetBadgeShape draws a background behind the badge: BadgeShapeSquare,
+// BadgeShapeRounded, BadgeShapePill, or "" for none.
+func (it *MenuItem) SetBadgeShape(shape BadgeShape) {
+	it.update(func() { it.BadgeShape = shape })
+}
+
+// SetBadgeColor changes the badge background, as a CSS color; "" uses the
+// system's subtle background.
+func (it *MenuItem) SetBadgeColor(color string) {
+	it.update(func() { it.BadgeColor = color })
+}
+
+// SetBadgeTextColor changes the badge text color, as a CSS color; "" picks
+// white or black for contrast with BadgeColor.
+func (it *MenuItem) SetBadgeTextColor(color string) {
+	it.update(func() { it.BadgeTextColor = color })
+}
+
 // SetAccelerator changes the keyboard shortcut of the item.
 func (it *MenuItem) SetAccelerator(acc string) { it.update(func() { it.Accelerator = acc }) }
+
+// SetSubtitle changes the second line of the item; "" removes it.
+func (it *MenuItem) SetSubtitle(subtitle string) { it.update(func() { it.Subtitle = subtitle }) }
 
 // SetIcon replaces the image beside the label; nil removes it.
 func (it *MenuItem) SetIcon(icon *MenuIcon) { it.update(func() { it.Icon = icon }) }
@@ -421,12 +515,21 @@ func prepareItem(it *MenuItem, parent *Menu) *MenuItem {
 // given to any number of items (MenuItem.Icon, SetIcon).
 type MenuIcon struct{ p *platform.MenuIcon }
 
+// PlatformMenuIcon returns what the icon shows, for the items of package
+// ui's menus (ui.MenuItem.Icon), nil for a nil icon.
+func (m *MenuIcon) PlatformMenuIcon() *platform.MenuIcon {
+	if m == nil {
+		return nil
+	}
+	return m.p
+}
+
 // NewMenuIcon makes an icon for menu items of a PNG image, which it copies.
 // The image is shown in its own colors, as a flag; with template, it is a
 // black and transparent image shown in the color of the menu's text, white
 // in a dark menu and on the highlight, as macOS tints template images
 // (Linux shows it as it is). It returns an error for data that is not a
-// PNG image.
+// PNG image. NewMenuIconSVG makes one of an SVG document.
 //
 // The image fits a box of 16 by 16 points, keeping its aspect: give it at
 // least 32 by 32 pixels, for high-resolution displays. A checkbox or radio
@@ -524,14 +627,21 @@ func (m *Menu) snapshotLocked() *platform.Menu {
 
 func (it *MenuItem) snapshotLocked() *platform.MenuItem {
 	p := &platform.MenuItem{
-		ID:          it.uid,
-		Label:       it.Label,
-		Role:        string(it.Role),
-		Accelerator: it.Accelerator,
-		Enabled:     !it.Disabled,
-		Visible:     !it.Hidden,
-		Checked:     it.Checked,
-		ToolTip:     it.ToolTip,
+		ID:             it.uid,
+		Label:          it.Label,
+		Subtitle:       it.Subtitle,
+		Badge:          it.Badge,
+		BadgeAlign:     platform.BadgeAlignment(it.BadgeAlign),
+		BadgeShape:     platform.BadgeShape(it.BadgeShape),
+		BadgeColor:     menuColor(it.BadgeColor),
+		BadgeTextColor: menuColor(it.BadgeTextColor),
+		KeepOpen:       it.KeepOpen,
+		Role:           string(it.Role),
+		Accelerator:    it.Accelerator,
+		Enabled:        !it.Disabled,
+		Visible:        !it.Hidden,
+		Checked:        it.Checked,
+		ToolTip:        it.ToolTip,
 	}
 	if it.Icon != nil {
 		p.Icon = it.Icon.p
@@ -627,7 +737,7 @@ func performRole(role MenuRole, win *Window) {
 			return
 		}
 	case RoleReload, RoleForceReload, RoleResetZoom, RoleZoomIn, RoleZoomOut:
-		if win.content != nil {
+		if win.content {
 			return
 		}
 	}
@@ -668,7 +778,7 @@ func performRole(role MenuRole, win *Window) {
 			RoleUndo: "undo", RoleRedo: "redo", RoleCut: "cut", RoleCopy: "copy", RolePaste: "paste",
 			RoleDelete: "delete", RoleSelectAll: "selectAll", RolePasteAndMatchStyle: "pasteAndMatchStyle",
 		}[role]
-		if win.content != nil {
+		if win.content {
 			win.contentCommand(cmd)
 			return
 		}
@@ -677,7 +787,7 @@ func performRole(role MenuRole, win *Window) {
 		}
 		n.Eval("document.execCommand(" + `"` + cmd + `"` + ")")
 	case RoleBold, RoleItalic, RoleUnderline, RoleStrikethrough, RoleAlignLeft, RoleAlignCenter, RoleAlignRight:
-		if win.content != nil {
+		if win.content {
 			win.contentCommand(string(role))
 			return
 		}

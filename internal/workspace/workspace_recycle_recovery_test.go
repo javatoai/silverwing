@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -10,6 +11,76 @@ import (
 
 	"silverwing-go/internal/domain"
 )
+
+func TestRestoreRecycledModuleRefreshesTaskAgents(t *testing.T) {
+	f, manifest, repository := newSingleMissingRepositoryForceFixture(t)
+	ws := manifest.Services[0]
+	configureRecycleRecoveryRepository(f, ws, repository)
+	f.service.ModuleRemoval.Recycler = f.recycler
+	agentsPath, err := f.service.Documents.WriteTaskDocument(f.task, manifest, f.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agents, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tail := []byte("\r\nUser recovery rule.\r\n")
+	if err := os.WriteFile(agentsPath, append(agents, tail...), 0600); err != nil {
+		t.Fatal(err)
+	}
+	agentsInfo, err := os.Stat(agentsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin := gitCompareOutput(t, ws.WorktreePath, "rev-parse", "--absolute-git-dir")
+	preview, err := f.service.InspectModuleRemoval(f.config, f.task, ws.WorktreePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmation := WorkspaceModuleRemovalConfirmation{Fingerprint: preview.Fingerprint, AcknowledgeDataLoss: true}
+	if result, err := f.service.RemoveModule(t.Context(), f.config, f.task, preview, confirmation); err != nil || !result.DirectoryRecycled || result.CleanupError != "" {
+		t.Fatalf("module removal failed: %+v, %v", result, err)
+	}
+	if err := os.Rename(filepath.Join(f.recycler.bin, filepath.Base(ws.WorktreePath)), ws.WorktreePath); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := os.ReadFile(agentsPath)
+	if err != nil || bytes.Contains(removed, []byte(ws.WorktreePath)) || !bytes.HasSuffix(removed, tail) {
+		t.Fatalf("removed workspace scope or user text is wrong: %q, %v", removed, err)
+	}
+	broken := bytes.Replace(removed, []byte("<!-- silverwing:instructions:end -->"), []byte("user-edited marker"), 1)
+	if bytes.Equal(removed, broken) {
+		t.Fatal("task AGENTS.md is missing its generated instruction marker")
+	}
+	if err := os.WriteFile(agentsPath, broken, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := f.service.RestoreRecycledWorkspaces(t.Context(), f.config, f.task); err == nil || count != 0 {
+		t.Fatalf("restore accepted a malformed instruction block: %d, %v", count, err)
+	}
+	if got, err := os.ReadFile(agentsPath); err != nil || !bytes.Equal(got, broken) {
+		t.Fatalf("failed restore changed AGENTS.md: %q, %v", got, err)
+	}
+	if current, err := f.service.Manifests.Load(f.task); err != nil || len(current.Services) != 0 {
+		t.Fatalf("failed restore did not roll back the module record: %+v, %v", current.Services, err)
+	}
+	if _, err := os.Lstat(admin); !os.IsNotExist(err) {
+		t.Fatalf("failed restore did not roll back Git registration: %v", err)
+	}
+	if err := os.WriteFile(agentsPath, removed, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := f.service.RestoreRecycledWorkspaces(t.Context(), f.config, f.task); err != nil || count != 1 {
+		t.Fatalf("restore after fixing AGENTS.md returned %d, %v", count, err)
+	}
+	if got, err := os.ReadFile(agentsPath); err != nil || !bytes.HasSuffix(got, tail) || !bytes.Contains(got, []byte(ws.WorktreePath)) {
+		t.Fatalf("restore did not refresh only the workspace instructions: %q, %v", got, err)
+	}
+	if info, err := os.Stat(agentsPath); err != nil || !os.SameFile(info, agentsInfo) {
+		t.Fatalf("restore replaced AGENTS.md: %v", err)
+	}
+}
 
 func TestRestoreRecycledTaskPreservesSeparateIndexAndWorkingFile(t *testing.T) {
 	ctx := context.Background()

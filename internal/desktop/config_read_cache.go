@@ -11,7 +11,7 @@ import (
 // source, so direct assignments, snapshots and detected settings all invalidate
 // the cache without depending on a particular update path.
 type desktopConfigReadCache struct {
-	services            configSourceReadCache[*desktopServiceConfigIndex]
+	services            configSourceReadCache[desktopServiceConfigIndex]
 	settings            configSourceReadCache[map[string]any]
 	currentApp          configSourceReadCache[domain.AppConfig]
 	snapshotApp         configSourceReadCache[domain.AppConfig]
@@ -19,8 +19,8 @@ type desktopConfigReadCache struct {
 	requirementProjects configSourceReadCache[string]
 }
 
-func (s *app) readServiceConfig(serviceID string, groupIDs ...string) map[string]any {
-	index, err := s.settingsUnit.state.configReads.services.read(s.settingsUnit.state.configJSON, func(string) (*desktopServiceConfigIndex, error) {
+func (s *app) readServiceConfig(serviceID string) map[string]any {
+	index, err := s.settingsUnit.state.configReads.services.read(s.settingsUnit.state.configJSON, func(string) (desktopServiceConfigIndex, error) {
 		config, err := s.readSettingsConfig()
 		if err != nil {
 			return nil, err
@@ -30,7 +30,7 @@ func (s *app) readServiceConfig(serviceID string, groupIDs ...string) map[string
 	if err != nil {
 		return nil
 	}
-	return index.find(serviceID, groupIDs...)
+	return index.find(serviceID)
 }
 
 // Keep invalidation independent of the projection. Errors are cached as well,

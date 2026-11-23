@@ -89,16 +89,16 @@ func (s *Service) withCodexRPCSession(ctx context.Context, cfg domain.AppConfig,
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	_, resolution, _, err := s.resolveCLIExecutableWithSource(ctx, cfg, string(executable.ToolCodex))
+	configuredCommand, err := s.resolveCLIExecutable(ctx, cfg, executable.ToolCodex)
 	if err != nil {
 		return nil, err
 	}
-	command, err := codexStdioCommand(resolution.Command)
+	command, err := codexStdioCommand(configuredCommand)
 	if err != nil {
 		return nil, err
 	}
 	env, removals := commandEnvironment(cfg, domain.ProxyTargetCodex)
-	for name, value := range cliEnvironmentWithRunner(ctx, s.runner, string(executable.ToolCodex), command) {
+	for name, value := range cliEnvironmentWithRunner(ctx, s.runner, executable.ToolCodex, command) {
 		env[name] = value
 	}
 	if isolatedHome != nil {

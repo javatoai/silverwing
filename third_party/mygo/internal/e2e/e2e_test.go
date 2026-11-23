@@ -17,6 +17,7 @@ import (
 	"image/draw"
 	"image/png"
 	"io"
+	"maps"
 	"math"
 	"net/http"
 	"os"
@@ -33,6 +34,7 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/internal/wait"
+	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -112,6 +114,10 @@ func TestMain(m *testing.M) {
 		clipboardPeer(mode)
 		return
 	}
+	if os.Getenv("MYGO_E2E_FAKE_PORTAL") == "1" {
+		fakePortal()
+		return
+	}
 	if os.Getenv("MYGO_E2E_QUIT_DURING_DIALOG") == "1" {
 		quitDuringDialog()
 		return
@@ -124,8 +130,20 @@ func TestMain(m *testing.M) {
 		cookiesWhileOpening()
 		return
 	}
+	if os.Getenv("MYGO_E2E_WEBVIEW_OFF_MAIN") == "1" {
+		webViewOffMain()
+		return
+	}
+	if os.Getenv("MYGO_E2E_COOKIE_VIEW") == "1" {
+		cookieViewApp()
+		return
+	}
 	if os.Getenv("MYGO_E2E_AUTOMATION_APP") == "1" {
 		automationApp()
+		return
+	}
+	if os.Getenv("MYGO_E2E_PROGRAM_NAME") == "1" {
+		programName()
 		return
 	}
 	mygo.Bind(Greeter{}, probe, streams, Bench{})
@@ -148,12 +166,17 @@ func TestMain(m *testing.M) {
 		io.WriteString(w, pipPage)
 	})
 	mux.HandleFunc("/session/", sessionPage)
+	mux.HandleFunc("/cross-origin-frame", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		io.WriteString(w, crossOriginFramePage)
+	})
 	mux.HandleFunc("POST /echo", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		fmt.Fprintf(w, "echo:%s", b)
 	})
 	usePlugins(mux)
 	useBench(mux)
+	useSchemeStreams(mux)
 	if err := mygo.Protocol.Handle("app", mux); err != nil {
 		panic(err)
 	}
@@ -166,6 +189,16 @@ func TestMain(m *testing.M) {
 	assets.HandleFunc("POST /data", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		fmt.Fprintf(w, "posted:%s", b)
+	})
+	// An iframe's document of another host, which loads its script and
+	// fetches through the scheme (TestSchemeCrossOriginFrame).
+	assets.HandleFunc("GET /frame.html", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		io.WriteString(w, `<!doctype html><script>parent.postMessage("inline", "*")</script><script src="/frame.js" onerror="parent.postMessage('no script', '*')"></script>`)
+	})
+	assets.HandleFunc("GET /frame.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/javascript")
+		io.WriteString(w, `fetch("/data").then(r => r.text()).then(t => parent.postMessage("script, " + t, "*"), e => parent.postMessage("fetch failed: " + e, "*"))`)
 	})
 	if err := mygo.Protocol.Handle("assets", assets); err != nil {
 		panic(err)
@@ -297,6 +330,7 @@ func beforeRun(source mygo.ThemeSource) {
 	// Asked before the first window, which may then show native UI.
 	fmt.Println("webview:", mygo.WebViewAvailable())
 	mygo.Power.IsOnBattery()
+	styled := gtkCSSBeforeRun()
 	for _, c := range beforeRunCalls {
 		func() {
 			defer func() { fmt.Printf("%s: %v\n", c.name, recover()) }()
@@ -305,6 +339,7 @@ func beforeRun(source mygo.ThemeSource) {
 	}
 	mygo.App.WhenReady(func() {
 		fmt.Println("dark:", mygo.Theme.IsDark())
+		fmt.Println("gtk css:", styled())
 		go func() {
 			defer mygo.App.Quit()
 			titles, ok := dockMenu(0)
@@ -326,9 +361,9 @@ func beforeRun(source mygo.ThemeSource) {
 }
 
 // TestBeforeRun: apps set up and configure themselves in main, before Run,
-// e.g. with a saved appearance, while calls that need the running app fail
-// clearly on every platform. Both appearances are tried, so one differs
-// from the system's.
+// e.g. with a saved appearance or a GTK style sheet, while calls that need
+// the running app fail clearly on every platform. Both appearances are
+// tried, so one differs from the system's.
 func TestBeforeRun(t *testing.T) {
 	for _, source := range []mygo.ThemeSource{mygo.ThemeDark, mygo.ThemeLight} {
 		ctx, cancel := context.WithTimeout(t.Context(), wait.Guard)
@@ -341,7 +376,7 @@ func TestBeforeRun(t *testing.T) {
 			t.Errorf("%s: %v:\n%s", source, err, out)
 			continue
 		}
-		wants := []string{"locale: true\n", "webview: true\n", fmt.Sprintf("dark: %v\n", source == mygo.ThemeDark)}
+		wants := []string{"locale: true\n", "webview: true\n", fmt.Sprintf("dark: %v\n", source == mygo.ThemeDark), "gtk css: true\n"}
 		for _, c := range beforeRunCalls {
 			wants = append(wants, c.name+": mygo: "+c.name+" called before ")
 		}
@@ -526,6 +561,10 @@ func pageState(p *mygo.Page) string {
 
 func newWindow(t *testing.T, opts mygo.WindowOptions) *mygo.Window {
 	t.Helper()
+	// Registered first, it runs last, with the test's own cleanups and
+	// this window's Destroy done.
+	check := watchLeftBehind()
+	t.Cleanup(func() { check(t.Errorf) })
 	w := mygo.NewWindow(opts)
 	t.Cleanup(w.Destroy)
 	return w
@@ -651,7 +690,7 @@ func TestReloadLoadHTML(t *testing.T) {
 		{"Reload", w.Page().Reload},
 		{"location.reload()", func() { w.Page().Eval("setTimeout(() => location.reload())") }},
 	}
-	for _, base := range []string{"", "app://localhost/"} {
+	for _, base := range []string{"", "about:blank", "app://localhost/"} {
 		w.Page().LoadHTML(fmt.Sprintf("<p id=html data-base=%q>html</p>", base), base)
 		shown := fmt.Sprintf("document.getElementById('html')?.dataset.base === %q", base)
 		for _, r := range reloads {
@@ -756,6 +795,21 @@ func TestGlass(t *testing.T) {
 	if !glass && class != "NSVisualEffectView" || glass && style != 1 || radius != 16 {
 		t.Errorf("material %s, style %d, corners %v; want the clear glass, or the HUD material before macOS 26, cut to 16", class, style, radius)
 	}
+	if glass {
+		if err := w.SetVibrancyTint("rgba(255, 0, 0, 0.5)"); err != nil {
+			t.Fatalf("tint: %v", err)
+		}
+		r, g, b, a, _ := glassTint(w)
+		if math.Abs(r-1) > 0.02 || math.Abs(g) > 0.02 || math.Abs(b) > 0.02 || math.Abs(a-0.5) > 0.02 {
+			t.Errorf("tint is %v, %v, %v, %v; want red at half alpha", r, g, b, a)
+		}
+		if err := w.SetVibrancyTint(""); err != nil {
+			t.Fatalf("clear tint: %v", err)
+		}
+		if _, _, _, a, _ := glassTint(w); a != 0 {
+			t.Errorf("tint alpha is %v after clearing it", a)
+		}
+	}
 	// Without SetActiveAppearance, a window draws as inactive once the app is.
 	// Focusing other activates the app, done once other is key: it is waited
 	// for so that the activation does not land after the Finder's and bring
@@ -787,6 +841,145 @@ func TestGlass(t *testing.T) {
 	if class, _, _, _, _ := material(w); class != "" {
 		t.Errorf("no material: %s", class)
 	}
+}
+
+// TestGlassWithoutTransparent gives Liquid Glass to windows that are not
+// transparent (macOS 26). The glass shows what is under it in the window,
+// which is made clear while it shows, and opaque again once another
+// material or none takes its place. A rounded window's content view gives
+// its color up to the glass too, and gets it back, the color set meanwhile.
+// A transparent window stays clear.
+func TestGlassWithoutTransparent(t *testing.T) {
+	w := newWindow(t, mygo.WindowOptions{Width: 300, Height: 200, Vibrancy: mygo.VibrancyGlass})
+	class, _, _, _, ok := material(w)
+	if !ok {
+		t.Skip("the material is macOS's")
+	}
+	if class != "NSGlassEffectView" {
+		t.Skip("the system has no NSGlassEffectView")
+	}
+	wantClear := func(name string, w *mygo.Window) {
+		t.Helper()
+		if opaque, alpha, _ := windowBacking(w); opaque || alpha != 0 {
+			t.Errorf("%s: opaque %v, background alpha %v; want a clear window", name, opaque, alpha)
+		}
+	}
+	wantClear("glass", w)
+	w.SetVibrancy(mygo.VibrancyPopover)
+	if opaque, alpha, _ := windowBacking(w); !opaque || alpha == 0 {
+		t.Errorf("popover: opaque %v, background alpha %v; want the window opaque again", opaque, alpha)
+	}
+	w.SetVibrancy(mygo.VibrancyGlassClear)
+	wantClear("clear glass", w)
+	w.SetVibrancy(mygo.VibrancyNone)
+	if opaque, alpha, _ := windowBacking(w); !opaque || alpha == 0 {
+		t.Errorf("no material: opaque %v, background alpha %v; want the window opaque again", opaque, alpha)
+	}
+
+	view := ui.View(func(c *ui.Context) { c.Root().Background(ui.Transparent) })
+	r := newWindow(t, mygo.WindowOptions{Width: 300, Height: 200, Frameless: true, CornerRadius: 12, BackgroundColor: "#ff0000",
+		Vibrancy: mygo.VibrancyGlass, Content: view})
+	if opaque, alpha, _, _ := roundedBacking(r); opaque || alpha != 0 {
+		t.Errorf("rounded glass: opaque %v, the content view's color's alpha %v; want both clear", opaque, alpha)
+	}
+	r.SetBackgroundColor("#00ff0080")
+	if _, alpha, _, _ := roundedBacking(r); alpha != 0 {
+		t.Errorf("rounded glass after SetBackgroundColor: the content view's color's alpha %v; want it clear", alpha)
+	}
+	r.SetVibrancy(mygo.VibrancyNone)
+	if opaque, alpha, _, _ := roundedBacking(r); opaque || alpha < .49 || alpha > .51 {
+		t.Errorf("rounded, no material: opaque %v, the content view's color's alpha %v; want a clear window, the new color on the content view", opaque, alpha)
+	}
+	if _, _, radius, _, _ := material(r); radius != 12 {
+		t.Errorf("rounded, no material: corners %v, want 12", radius)
+	}
+
+	tr := newWindow(t, mygo.WindowOptions{Width: 300, Height: 200, Transparent: true, Vibrancy: mygo.VibrancyGlass})
+	wantClear("transparent glass", tr)
+	tr.SetVibrancy(mygo.VibrancyNone)
+	wantClear("transparent, no material", tr)
+}
+
+// TestNativeGlassOverWebView puts a toolbar of the system's glass over a
+// web view: NSGlassEffectView sits under the content and above the web
+// view, with the toolbar's frame, where it samples the page.
+func TestNativeGlassOverWebView(t *testing.T) {
+	if !nativeGlassSupported() {
+		t.Skip("the system has no Liquid Glass, or reduces transparency")
+	}
+	var view *mygo.WebView
+	var clicks atomic.Int32
+	var show atomic.Bool
+	show.Store(true)
+	w := newWindow(t, mygo.WindowOptions{Width: 400, Height: 300, Content: ui.View(func(c *ui.Context) {
+		c.Root().Background(ui.Transparent)
+		ui.Box(c).Fill().Children(func() {
+			if view != nil {
+				ui.WebView(c, view).Fill()
+			}
+			if show.Load() {
+				ui.Row(c).Absolute().Top(0).Left(0).Right(0).Height(60).Radius(18).Padding(0, 16).AlignItems(ui.Center).Material(glass.Glass{Native: true, Tint: ui.RGBA(255, 0, 0, 0.5)}).Children(func() {
+					if ui.Button(c, "On glass").Width(100).Clicked() {
+						clicks.Add(1)
+					}
+				})
+			}
+		})
+	})})
+	v, err := w.NewWebView(mygo.WebViewOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Update(func() { view = v })
+	v.Page().LoadHTML(`<body style="margin:0;height:3000px;background:#ff0000"><script>requestAnimationFrame(() => requestAnimationFrame(() => { window.ready = true }))</script></body>`, "")
+	waitForPage(t, v.Page(), "window.ready")
+	eventually(t, "the system's glass", func() bool { class, _, _, _ := nativeGlass(w); return class != "" })
+	class, frame, style, ok := nativeGlass(w)
+	if !ok || class != "NSGlassEffectView" {
+		t.Fatalf("the system's glass is %q, not NSGlassEffectView", class)
+	}
+	if style != 0 {
+		t.Errorf("glass style is %d, not regular", style)
+	}
+	if r, g, b, a := nativeGlassTint(w); math.Abs(r-1) > 0.02 || math.Abs(g) > 0.02 || math.Abs(b) > 0.02 || math.Abs(a-0.5) > 0.02 {
+		t.Errorf("glass tint is %v, %v, %v, %v; want red at half alpha", r, g, b, a)
+	}
+	// The toolbar is 60 DIPs at the top of the content, whose height the
+	// title bar leaves.
+	h := float64(w.ContentBounds().Height)
+	want := [4]float64{0, h - 60, 400, 60}
+	for i := range want {
+		if math.Abs(frame[i]-want[i]) > 1 {
+			t.Errorf("glass frame is %v, want %v", frame, want)
+			break
+		}
+	}
+	// The glass is under the content, which takes the pointer: its button
+	// works through it. TestGlass may have left another app in front.
+	activateApp()
+	w.Show()
+	if _, ok := appActive(); ok {
+		eventually(t, "the app in front", func() bool { active, _ := appActive(); return active })
+	}
+	w.Focus()
+	eventually(t, "the glass window focused", w.IsFocused)
+	if !click(w, 66, 30) {
+		t.Skip("click automation not available")
+	}
+	// The first click after another app was in front may only activate the
+	// app; the next one is the button's.
+	if clicks.Load() == 0 {
+		click(w, 66, 30)
+	}
+	eventually(t, "the click on the glass", func() bool { return clicks.Load() == 1 })
+	// The page is under the glass, and the glass is under the content: the
+	// web view takes the pointer where the page shows.
+	if class := hitView(w, 200, 250); !strings.Contains(class, "WebView") {
+		t.Errorf("the view at the page is %q, not the web view", class)
+	}
+	// The glass of an element that goes away is removed, not only hidden.
+	w.Update(func() { show.Store(false) })
+	eventually(t, "the glass removed", func() bool { class, _, _, ok := nativeGlass(w); return !ok || class == "" })
 }
 
 // TestRoundedOpaqueWindow rounds a frameless window that is not
@@ -846,8 +1039,10 @@ func TestVibrancyWindowControls(t *testing.T) {
 	prev := mygo.App.Menu()
 	defer mygo.App.SetMenu(prev)
 	mygo.App.SetMenu(mygo.NewMenu([]*mygo.MenuItem{{Label: "App", Submenu: []*mygo.MenuItem{{Label: "Item"}}}}))
+	// Transparency also selects the no-redirection path on Windows 10. Ask for
+	// the material alone so the check below tests whether backdrops are supported.
 	opts := mygo.WindowOptions{X: 40, Y: 40, Width: 360, Height: 200, TitleBarStyle: mygo.TitleBarHidden,
-		Vibrancy: mygo.VibrancyMica, Transparent: true}
+		Vibrancy: mygo.VibrancyMica}
 	a := newWindow(t, opts)
 	opts.X = 440
 	b := newWindow(t, opts)
@@ -989,6 +1184,15 @@ func TestTrafficLightPosition(t *testing.T) {
 	w.Page().LoadHTML("<title>Traffic lights</title>", "")
 	eventually(t, "the page's title", func() bool { return w.Title() == "Traffic lights" })
 	placed("once the window takes the page's title")
+	// The title bar leaves as much room below the lights as above them, and
+	// the page hears where they end.
+	v, _ := mygo.EvalAs[[]float64](w.Page(), `(() => {
+		const s = getComputedStyle(document.documentElement);
+		return ["height", "controls-bottom"].map((k) => parseFloat(s.getPropertyValue("--mygo-titlebar-" + k)) || 0);
+	})()`)
+	if len(v) != 2 || v[1] == 0 || v[1] != v[0]-19 {
+		t.Errorf("title bar height and controls bottom %v, want the lights to end 19 above its bottom", v)
+	}
 	defer mygo.Theme.SetSource(mygo.Theme.Source())
 	if mygo.Theme.IsDark() {
 		mygo.Theme.SetSource(mygo.ThemeLight)
@@ -1071,6 +1275,12 @@ func TestRestoreMaximizedCaptionless(t *testing.T) {
 				b.X+b.Width <= d.Bounds.X+d.Bounds.Width && b.Y+b.Height <= d.Bounds.Y+d.Bounds.Height
 		})
 		want := w.ContentBounds()
+		// Restore undoes minimizing alone: a window not minimized stays
+		// maximized.
+		w.Restore()
+		if !w.IsMaximized() {
+			t.Errorf("display %d: Restore took a visible window out of maximized", i)
+		}
 		w.Minimize()
 		eventually(t, "a minimized window", w.IsMinimized)
 		w.Restore()
@@ -1125,6 +1335,28 @@ func TestDockedDevTools(t *testing.T) {
 	if place := dockedDevToolsPlace(w); place != "content" {
 		t.Errorf("docked inspector place = %q, want %q", place, "content")
 	}
+}
+
+// A minimized window is still visible, as Show and Hide set it, on every
+// platform (#1542): AppKit's isVisible is false for a window in the Dock.
+func TestMinimizedWindowIsVisible(t *testing.T) {
+	if runtime.GOOS == "linux" {
+		t.Skip("Xvfb has no window manager to minimize windows")
+	}
+	w := newWindow(t, mygo.WindowOptions{Width: 400, Height: 300})
+	w.Minimize()
+	eventually(t, "the window minimized", w.IsMinimized)
+	if !w.IsVisible() {
+		t.Error("a minimized window is not visible")
+	}
+	w.Hide()
+	if w.IsVisible() {
+		t.Error("Hide left a minimized window visible")
+	}
+	w.Show()
+	eventually(t, "the window shown again", w.IsVisible)
+	w.Restore()
+	eventually(t, "the window restored", func() bool { return !w.IsMinimized() && w.IsVisible() })
 }
 
 func TestWindowGeometryAndState(t *testing.T) {
@@ -1186,6 +1418,51 @@ func TestPageProcessID(t *testing.T) {
 	}
 	if pid <= 0 || pid == os.Getpid() {
 		t.Errorf("ProcessID = %d, want another process than the app's (%d)", pid, os.Getpid())
+	}
+}
+
+// gpuPage draws on a canvas with 2D and WebGL contexts and loads a second
+// of silence in an audio element, which WebKit does in its GPU process,
+// starting it.
+const gpuPage = `<canvas id=c width=64 height=64></canvas><script>
+const g = c.getContext('2d'); g.fillStyle = 'red'; g.fillRect(0, 0, 64, 64);
+const gl = document.createElement('canvas').getContext('webgl'); if (gl) gl.clear(gl.COLOR_BUFFER_BIT);
+const n = 8000, wav = new Uint8Array(44 + n).fill(128), v = new DataView(wav.buffer);
+const tag = (at, s) => [...s].forEach((ch, i) => v.setUint8(at + i, ch.charCodeAt(0)));
+tag(0, 'RIFF'); v.setUint32(4, 36 + n, true); tag(8, 'WAVEfmt '); v.setUint32(16, 16, true);
+v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, 8000, true); v.setUint32(28, 8000, true);
+v.setUint16(32, 1, true); v.setUint16(34, 8, true); tag(36, 'data'); v.setUint32(40, n, true);
+const a = new Audio(URL.createObjectURL(new Blob([wav], {type: 'audio/wav'}))); a.load(); document.body.append(a);
+</script>`
+
+// GPUProcessID is WebKit's GPU process on macOS (com.apple.WebKit.GPU) and
+// WebView2's GPU process on Windows, one of WebView2's processes, neither
+// the app's own nor ProcessID's; Linux has none.
+func TestPageGPUProcessID(t *testing.T) {
+	w := newWindow(t, mygo.WindowOptions{Width: 300, Height: 200})
+	w.Page().LoadHTML(gpuPage, "")
+	waitFor(t, w, "document.readyState === 'complete'")
+	if runtime.GOOS == "linux" {
+		if pid := w.Page().GPUProcessID(); pid != 0 {
+			t.Errorf("GPUProcessID = %d on Linux, want 0", pid)
+		}
+		return
+	}
+	var pid int
+	wait.Until(t, "a GPU process", func() bool { pid = w.Page().GPUProcessID(); return pid != 0 })
+	if pid < 0 || pid == os.Getpid() || pid == w.Page().ProcessID() {
+		t.Errorf("GPUProcessID = %d, want another process than the app's (%d) and ProcessID's (%d)", pid, os.Getpid(), w.Page().ProcessID())
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		out, err := exec.Command("ps", "-o", "comm=", "-p", strconv.Itoa(pid)).Output()
+		if err != nil || !strings.Contains(string(out), "com.apple.WebKit.GPU") {
+			t.Errorf("GPUProcessID %d is %q (%v), want com.apple.WebKit.GPU", pid, strings.TrimSpace(string(out)), err)
+		}
+	case "windows":
+		if procs := webViewProcesses(); !slices.Contains(procs, pid) {
+			t.Errorf("GPUProcessID %d is none of WebView2's processes %v", pid, procs)
+		}
 	}
 }
 
@@ -1478,6 +1755,49 @@ func TestNewWindowBounds(t *testing.T) {
 	steady(w, "centered window", w.Bounds())
 }
 
+// A window created in the work area of a display, or moved there from
+// every display, lands where it was asked to, on that display: on Windows,
+// a position on a display of another scale than the primary's, or than
+// the window's, was turned into pixels at the wrong scale (#1039). The
+// displays never overlap. CI has one display; a computer with displays of
+// different scales checks the rest.
+func TestWindowOnEveryDisplay(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows puts displays of different scales in one space of DIPs")
+	}
+	displays := mygo.Screen.Displays()
+	for i, a := range displays {
+		for j, b := range displays[i+1:] {
+			p, q := a.Bounds, b.Bounds
+			if max(p.X, q.X) < min(p.X+p.Width, q.X+q.Width) && max(p.Y, q.Y) < min(p.Y+p.Height, q.Y+q.Height) {
+				t.Errorf("displays %d %+v and %d %+v overlap", i, a.Bounds, i+1+j, b.Bounds)
+			}
+		}
+	}
+	at := func(d mygo.Display, dx, dy int) mygo.Rectangle {
+		return mygo.Rectangle{X: d.WorkArea.X + dx, Y: d.WorkArea.Y + dy, Width: min(400, d.WorkArea.Width-2*dx), Height: min(300, d.WorkArea.Height-2*dy)}
+	}
+	for i, d := range displays {
+		want := at(d, 40, 30)
+		w := newWindow(t, mygo.WindowOptions{X: want.X, Y: want.Y, Width: want.Width, Height: want.Height})
+		if b := w.Bounds(); b != want {
+			t.Errorf("a window created on display %d (scale %v): bounds %+v, want %+v", i, d.ScaleFactor, b, want)
+		}
+		if on := mygo.Screen.DisplayMatching(w.Bounds()); on.ID != d.ID {
+			t.Errorf("a window created on display %d is on display %+v", i, on)
+		}
+		for j, e := range displays {
+			want := at(e, 60, 50)
+			w.SetBounds(want)
+			var b mygo.Rectangle
+			if !wait.Poll(func() bool { b = w.Bounds(); return b == want }) {
+				t.Errorf("a window moved from display %d (scale %v) to %d (scale %v): bounds %+v, want %+v", i, d.ScaleFactor, j, e.ScaleFactor, b, want)
+			}
+			w.SetBounds(at(d, 40, 30))
+		}
+	}
+}
+
 // Small windows the user cannot resize keep the sizes the app gives them:
 // GTK made them at least 200x200, their natural size with only a web view,
 // and asked for their previous size again from an early report of it.
@@ -1572,10 +1892,11 @@ func TestCloseInFrame(t *testing.T) {
 	mygo.App.SetPath(mygo.PathUserData, t.TempDir())
 	defer mygo.App.SetPath(mygo.PathUserData, "")
 	var self atomic.Pointer[mygo.Window]
-	var frames, closes atomic.Int32
+	var frames, closes, closeFrame atomic.Int32
 	w := newWindow(t, mygo.WindowOptions{StateKey: "e2e-close-" + run, Width: 320, Height: 240, Content: ui.View(func(c *ui.Context) {
-		if frames.Add(1) >= 2 {
+		if n := frames.Add(1); n >= 2 {
 			if w := self.Load(); w != nil {
+				closeFrame.CompareAndSwap(0, n)
 				w.Close()
 				w.Close()
 			}
@@ -1585,7 +1906,12 @@ func TestCloseInFrame(t *testing.T) {
 	})})
 	w.OnClosed(func() { closes.Add(1) })
 	self.Store(w)
-	eventually(t, "the window closed", w.IsDestroyed)
+	if !wait.Poll(w.IsDestroyed) {
+		// Whether the frames stopped, and where: before the second, or
+		// after the view closed the window.
+		t.Fatalf("the window closed never happened (waited %v): %d views built, closed in view %d, OnClosed ran %d times, visible %v",
+			wait.Guard, frames.Load(), closeFrame.Load(), closes.Load(), w.IsVisible())
+	}
 
 	var later atomic.Int32
 	other := newWindow(t, mygo.WindowOptions{Width: 200, Height: 150, Content: ui.View(func(c *ui.Context) {
@@ -1951,6 +2277,14 @@ func TestPower(t *testing.T) {
 	if runtime.GOOS == "darwin" {
 		eventually(t, "the assertion to go", func() bool { return !strings.Contains(assertions(), reason) })
 	}
+	// KeepRunning keeps App Nap off, and the computer free to sleep: no
+	// assertion keeps it awake.
+	const running = "MyGo e2e keeps running"
+	release = mygo.Power.KeepRunning(running)
+	if runtime.GOOS == "darwin" && strings.Contains(assertions(), running) {
+		t.Error("KeepRunning keeps the computer awake")
+	}
+	release()
 	t.Logf("on battery: %v, idle: %v", mygo.Power.IsOnBattery(), mygo.Power.IdleTime())
 	if idle := mygo.Power.IdleTime(); idle < 0 || runtime.GOOS == "darwin" && idle == 0 {
 		t.Errorf("idle time = %v", idle)
@@ -2047,6 +2381,34 @@ func TestSchemeCORS(t *testing.T) {
 	blocked := `try { await fetch("` + data + `"); return "read" } catch (e) { return "blocked" }`
 	if got, err := mygo.EvalAs[string](other.Page(), blocked); err != nil || got != "blocked" {
 		t.Errorf("another site: %q, %v", got, err)
+	}
+}
+
+// crossOriginFramePage shows an iframe of the assets scheme's demo host,
+// another origin than the page's, and keeps what it posts.
+const crossOriginFramePage = `<!doctype html>
+<script>
+window.posted = [];
+addEventListener("message", e => posted.push(e.data));
+</script>
+<iframe></iframe>
+<script>
+// On Windows, WebView2 serves assets://demo/ at http://demo.assets.localhost/.
+document.querySelector("iframe").src = location.protocol === "http:" ? "http://demo.assets.localhost/frame.html" : "assets://demo/frame.html";
+</script>`
+
+// An iframe of another custom scheme's host, another origin than the
+// page's, loads its scripts and fetches through the scheme, not only its
+// document (#1912): WebView2's older filters reach only the main frame and
+// its same-origin iframes.
+func TestSchemeCrossOriginFrame(t *testing.T) {
+	w := newWindow(t, mygo.WindowOptions{Width: 300, Height: 200})
+	if err := w.Page().LoadURL("app://localhost/cross-origin-frame"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, w, `window.posted && posted.length === 2`)
+	if got := mustEval(t, w, `posted.join(" | ")`); got != "inline | script, asset data" {
+		t.Errorf("the iframe posted %q, want %q", got, "inline | script, asset data")
 	}
 }
 
@@ -2263,9 +2625,23 @@ func TestGlobalShortcutPortal(t *testing.T) {
 		}
 		t.Fatalf("%s was not reported", acc)
 	}
-	register("Ctrl+Shift+K")
+	// The desktop tells the keys it bound to a shortcut that asks.
+	keys := make(chan string, 8)
+	opts := mygo.GlobalShortcutOptions{Description: "Test the portal", OnKeys: func(k string) { keys <- k }}
+	if err := mygo.GlobalShortcut.RegisterWith("Ctrl+Shift+K", opts, func() { pressed <- "Ctrl+Shift+K" }); err != nil {
+		t.Fatal(err)
+	}
 	defer mygo.GlobalShortcut.UnregisterAll()
 	expect("Ctrl+Shift+K", "Control_L", "Shift_L", "k")
+	select {
+	case k := <-keys:
+		if k == "" {
+			t.Error("the desktop bound Ctrl+Shift+K and told no keys for it")
+		}
+		t.Logf("the desktop bound Ctrl+Shift+K to %q", k)
+	case <-time.After(wait.Guard):
+		t.Error("the keys the desktop bound were not told")
+	}
 	register("Alt+Shift+J")
 	expect("Alt+Shift+J", "Alt_L", "Shift_L", "j")
 	expect("Ctrl+Shift+K", "Control_L", "Shift_L", "k")
@@ -2521,6 +2897,29 @@ func TestUserInitiated(t *testing.T) {
 	navigated("https://example.com/went", true)
 }
 
+// TestSrcdocIframes checks that srcdoc iframes load in a page whose
+// OnWillNavigate cancels every navigation it is asked about, as it is
+// asked about the main frame's alone: on Linux before WebKitGTK 2.56,
+// which tells no navigation's frame, it was asked about theirs, named or
+// not, and they stayed blank (mainFrameNavigation).
+func TestSrcdocIframes(t *testing.T) {
+	w := newWindow(t, mygo.WindowOptions{Hidden: true})
+	var srcdoc atomic.Bool
+	w.Page().OnWillNavigate(func(e *mygo.NavigateEvent) {
+		if e.URL == "about:srcdoc" {
+			srcdoc.Store(true)
+		}
+		e.PreventDefault()
+	})
+	w.Page().LoadHTML(`<iframe id=a srcdoc="<p id=x>unnamed</p>"></iframe><iframe id=b name=named srcdoc="<p id=x>named</p>"></iframe>`, "https://example.com/")
+	for _, id := range []string{"a", "b"} {
+		waitFor(t, w, `document.getElementById("`+id+`").contentDocument?.getElementById("x")`)
+	}
+	if srcdoc.Load() {
+		t.Error("OnWillNavigate was asked about an iframe's about:srcdoc")
+	}
+}
+
 func TestMenuActivation(t *testing.T) {
 	w := newWindow(t, mygo.WindowOptions{Width: 400, Height: 300})
 	w.Page().LoadHTML("<p>menus</p>", "")
@@ -2699,10 +3098,10 @@ func TestHiddenTitleBar(t *testing.T) {
 	})
 	w.Page().LoadHTML("<p>hidden title bar</p>", "")
 	waitFor(t, w, "document.querySelector('p')")
-	room := func(win *mygo.Window) (r [3]string) {
+	room := func(win *mygo.Window) (r [4]string) {
 		v, _ := mygo.EvalAs[[]string](win.Page(), `(() => {
 			const s = getComputedStyle(document.documentElement);
-			return ["height", "inset-left", "inset-right"].map((k) => s.getPropertyValue("--mygo-titlebar-" + k).trim());
+			return ["height", "inset-left", "inset-right", "controls-bottom"].map((k) => s.getPropertyValue("--mygo-titlebar-" + k).trim());
 		})()`)
 		copy(r[:], v)
 		return r
@@ -2710,19 +3109,27 @@ func TestHiddenTitleBar(t *testing.T) {
 	shown := room(w)
 	switch runtime.GOOS {
 	case "windows":
-		if shown != [3]string{"40px", "0px", "138px"} {
-			t.Errorf("room = %q, want the title bar's height and three buttons 46 wide at the right", shown)
+		if shown != [4]string{"40px", "0px", "138px", "40px"} {
+			t.Errorf("room = %q, want the title bar's height and three buttons 46 wide at the right, as high as it", shown)
 		}
 	case "linux":
 		if shown[0] != "40px" {
 			t.Errorf("room = %q, want the title bar's height", shown)
 		}
+		if shown[3] != "0px" && shown[3] != shown[0] {
+			t.Errorf("room = %q, want the bars as high as the title bar", shown)
+		}
 		if shown[1] == "0px" && shown[2] == "0px" {
 			t.Log("the desktop's button layout names no buttons")
 		}
 	case "darwin":
-		if shown[0] == "0px" || shown[1] == "0px" || shown[2] != "0px" {
+		if shown[0] == "0px" || shown[1] == "0px" || shown[2] != "0px" || shown[3] == "0px" {
 			t.Errorf("room = %q, want the traffic lights at the left of the title bar", shown)
+		}
+		height, _ := strconv.ParseFloat(strings.TrimSuffix(shown[0], "px"), 64)
+		bottom, _ := strconv.ParseFloat(strings.TrimSuffix(shown[3], "px"), 64)
+		if bottom > height {
+			t.Errorf("room = %q, want the traffic lights to end within the title bar", shown)
 		}
 	}
 
@@ -2730,7 +3137,7 @@ func TestHiddenTitleBar(t *testing.T) {
 	plain := newWindow(t, mygo.WindowOptions{Width: 300, Height: 200})
 	plain.Page().LoadHTML("<p>title bar</p>", "")
 	waitFor(t, plain, "document.querySelector('p')")
-	if r := room(plain); r != ([3]string{}) {
+	if r := room(plain); r != ([4]string{}) {
 		t.Errorf("a window with its title bar: room = %q", r)
 	}
 
@@ -2765,7 +3172,7 @@ func TestHiddenTitleBar(t *testing.T) {
 		return // no window manager under Xvfb; the macOS animation is slow
 	}
 	w.SetFullScreen(true)
-	eventually(t, "no room for the controls in full screen", func() bool { return room(w) == [3]string{"0px", "0px", "0px"} })
+	eventually(t, "no room for the controls in full screen", func() bool { return room(w) == [4]string{"0px", "0px", "0px", "0px"} })
 	w.SetFullScreen(false)
 	eventually(t, "the room of the controls back", func() bool { return room(w) == shown })
 }
@@ -2899,6 +3306,24 @@ func TestClick(t *testing.T) {
 	}
 }
 
+// TestFirstClick clicks a page once in a window that is not key: the click
+// makes it key and reaches the page, as it does native UI.
+func TestFirstClick(t *testing.T) {
+	w := newWindow(t, mygo.WindowOptions{Width: 400, Height: 300})
+	w.Page().LoadHTML(`<body style="margin:0"><button id="b" style="width:200px;height:100px" onclick="window.clicked=(window.clicked||0)+1">x</button></body>`, "")
+	waitFor(t, w, "document.getElementById('b')")
+	other := newWindow(t, mygo.WindowOptions{Width: 200, Height: 150, X: 600, Y: 400})
+	other.Focus()
+	eventually(t, "the other window focused", other.IsFocused)
+	if w.IsFocused() {
+		t.Skip("the page's window stayed key")
+	}
+	if !appClick(w, 50, 50) {
+		t.Skip("click automation not available on this platform")
+	}
+	waitFor(t, w, "window.clicked === 1")
+}
+
 // deviceScale returns the device pixels per DIP of the display w shows on.
 func deviceScale(w *mygo.Window) float64 {
 	b := w.Bounds()
@@ -2948,6 +3373,99 @@ func TestContentWindowTextSelection(t *testing.T) {
 			return copied == "First paragraph.\nSecond paragraph."
 		})
 	}
+}
+
+// TestContentWindowEditMenuEnabled checks that menus enable the items of the
+// edit roles as the focus of native UI can act on them, and keep the state
+// the app gave its other items.
+func TestContentWindowEditMenuEnabled(t *testing.T) {
+	var frames atomic.Int32
+	value := "hello"
+	view := func(c *ui.Context) {
+		frames.Add(1)
+		ui.Column(c).Fill().Padding(20).Gap(20).Children(func() {
+			ui.TextInput(c, &value).Label("field")
+			ui.Box(c).Size(200, 40).Focusable().Label("list").OnShortcut(ui.Cmd, ui.KeyC, func() {})
+		})
+	}
+	minimize := &mygo.MenuItem{Role: mygo.RoleMinimize, Disabled: true}
+	w := newWindow(t, mygo.WindowOptions{Title: "Edit menu", Width: 400, Height: 200, Content: ui.View(view)})
+	mygo.App.SetMenu(mygo.NewMenu([]*mygo.MenuItem{{Label: "Edit", Submenu: []*mygo.MenuItem{
+		{Role: mygo.RoleUndo},
+		{Role: mygo.RoleCut, Disabled: true},
+		{Role: mygo.RoleCopy},
+		{Role: mygo.RolePaste},
+		{Role: mygo.RoleSelectAll},
+		{Label: "Insert Date", Disabled: true},
+		{Label: "Insert Time"},
+		minimize,
+	}}}))
+	defer mygo.App.SetMenu(nil)
+	clipboard := mygo.Clipboard.ReadText()
+	defer mygo.Clipboard.WriteText(clipboard)
+	w.Focus()
+	eventually(t, "a frame", func() bool { return frames.Load() > 0 })
+	if _, err := menuItemEnabled(w, "Edit", "Copy"); errors.Is(err, errors.ErrUnsupported) {
+		t.Skip("menu validation automation not available on this platform")
+	}
+	expect := func(where string, want map[string]bool) {
+		t.Helper()
+		for _, label := range slices.Sorted(maps.Keys(want)) {
+			enabled, err := menuItemEnabled(w, "Edit", label)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if enabled != want[label] {
+				t.Errorf("%s: Edit > %s enabled = %v, want %v", where, label, enabled, want[label])
+			}
+		}
+	}
+
+	expect("nothing focused", map[string]bool{"Copy": false, "Paste": false, "Select All": false, "Insert Date": false, "Insert Time": true, "Minimize": false})
+	minimize.SetEnabled(true)
+	expect("Minimize enabled", map[string]bool{"Minimize": true})
+	minimize.SetEnabled(false)
+	expect("Minimize disabled again", map[string]bool{"Minimize": false})
+	if !click(w, 300, 36) {
+		t.Skip("click automation not available on this platform")
+	}
+	expect("the text input focused", map[string]bool{"Undo": false, "Copy": false, "Paste": true, "Select All": true})
+	if err := activateMenu(w, "Edit", "Select All"); err != nil {
+		t.Fatal(err)
+	}
+	expect("its text selected", map[string]bool{"Copy": true, "Cut": false})
+	mygo.Clipboard.WriteText("bye")
+	if err := activateMenu(w, "Edit", "Paste"); err != nil {
+		t.Fatal(err)
+	}
+	expect("a paste done", map[string]bool{"Undo": true})
+	if !click(w, 100, 92) {
+		t.Fatal("the click on the list missed")
+	}
+	expect("the list focused", map[string]bool{"Copy": runtime.GOOS == "darwin", "Paste": false, "Insert Time": true})
+
+	if _, supported := popupMenus(); !supported {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		mygo.NewMenu([]*mygo.MenuItem{{Role: mygo.RoleCopy}, {Label: "Other"}}).PopupAt(w, 100, 92)
+		close(done)
+	}()
+	t.Cleanup(func() { choosePopupItem("Other") })
+	var copyOn, otherOn, shown bool
+	eventually(t, "the popup", func() bool {
+		copyOn, shown = popupItemEnabled("Copy")
+		otherOn, _ = popupItemEnabled("Other")
+		return shown
+	})
+	if copyOn || !otherOn {
+		t.Errorf("the list focused: the popup's Copy enabled = %v and Other %v, want false and true", copyOn, otherOn)
+	}
+	if !choosePopupItem("Other") {
+		t.Fatal("the popup has no item Other")
+	}
+	wait.For(t, "the popup to close", done)
 }
 
 // TestContentWindowInputMethod checks that input methods see the text
@@ -3153,6 +3671,91 @@ func TestContentWindowAccessibility(t *testing.T) {
 	}
 }
 
+// TestContentWindowIgnoreInput shows a row with a button ignoring input,
+// transparent, over it: assistive technology finds the button and presses
+// it through the platform's bridge, and a click on it is the row's (#926).
+func TestContentWindowIgnoreInput(t *testing.T) {
+	var frames atomic.Int32
+	rowClicks, deletes := 0, 0
+	view := func(c *ui.Context) {
+		frames.Add(1)
+		row := ui.Row(c).Width(300).Height(40).Label("Session")
+		if row.Clicked() {
+			rowClicks++
+		}
+		row.Children(func() {
+			if ui.Button(c, "Delete").Width(100).Height(40).Opacity(0).IgnoreInput(true).Clicked() {
+				deletes++
+			}
+		})
+	}
+	get := func() (r, d int) {
+		mygo.RunOnMain(func() { r, d = rowClicks, deletes })
+		return r, d
+	}
+	w := newWindow(t, mygo.WindowOptions{Title: "Ignore input", Width: 400, Height: 200, Content: ui.View(view)})
+	eventually(t, "a frame", func() bool { return frames.Load() > 0 })
+	if _, ok := accessibility(w); !ok {
+		t.Skip("accessibility automation not available on this platform")
+	}
+	eventually(t, "the button in the tree", func() bool {
+		nodes, _ := accessibility(w)
+		return slices.ContainsFunc(nodes, func(n accessNode) bool { return n.role == roleButton && n.label == "Delete" })
+	})
+	if !accessPerform(w, "Delete", "press", "") {
+		t.Fatal("cannot press the button ignoring input")
+	}
+	eventually(t, "the press", func() bool { r, d := get(); return d == 1 && r == 0 })
+	if click(w, 50, 20) {
+		eventually(t, "the click on the row", func() bool { r, _ := get(); return r == 1 })
+		if _, d := get(); d != 1 {
+			t.Errorf("the click went to the button ignoring input: %d deletes", d)
+		}
+	}
+}
+
+// TestContentWindowAccessHidden shows a card behind the front one, hidden
+// from assistive technology: the platform's tree has the front card's
+// button but not the one behind, which a click still presses (#1093).
+func TestContentWindowAccessHidden(t *testing.T) {
+	var frames atomic.Int32
+	backs := 0
+	view := func(c *ui.Context) {
+		frames.Add(1)
+		ui.Column(c).Children(func() {
+			ui.Button(c, "Front").Width(100).Height(40)
+			ui.Column(c).AccessHidden(true).Children(func() {
+				if ui.Button(c, "Behind").Width(100).Height(40).Clicked() {
+					backs++
+				}
+			})
+		})
+	}
+	w := newWindow(t, mygo.WindowOptions{Title: "Access hidden", Width: 400, Height: 200, Content: ui.View(view)})
+	eventually(t, "a frame", func() bool { return frames.Load() > 0 })
+	if _, ok := accessibility(w); !ok {
+		t.Skip("accessibility automation not available on this platform")
+	}
+	var nodes []accessNode
+	eventually(t, "the front button in the tree", func() bool {
+		nodes, _ = accessibility(w)
+		return slices.ContainsFunc(nodes, func(n accessNode) bool { return n.role == roleButton && n.label == "Front" })
+	})
+	if slices.ContainsFunc(nodes, func(n accessNode) bool { return n.label == "Behind" }) {
+		t.Errorf("the button hidden from assistive technology is in the tree: %v", nodes)
+	}
+	if accessPerform(w, "Behind", "press", "") {
+		t.Error("assistive technology pressed the hidden button")
+	}
+	if click(w, 50, 60) {
+		eventually(t, "the click on the hidden button", func() bool {
+			var n int
+			mygo.RunOnMain(func() { n = backs })
+			return n == 1
+		})
+	}
+}
+
 // TestContentWindowObserved resizes a window of native UI and acts on its
 // elements as assistive technology does while key-value observing watches
 // them, as other code may: the runtime gives each a generated subclass of
@@ -3224,6 +3827,42 @@ func TestContentWindowObserved(t *testing.T) {
 	}
 	if mark, _, named, ok := axAttribute(w, "Bold", "AXMenuItemMarkChar"); ok && (mark != "✓" || !named) {
 		t.Errorf("the menu item's mark is %q, named %v", mark, named)
+	}
+	// What never opens says nothing of being open, which VoiceOver
+	// would read as "collapsed".
+	for _, label := range []string{"Settings", "Name", "Edit menu", "Bold"} {
+		if v, _, named, ok := axAttribute(w, label, "AXExpanded"); ok && named {
+			t.Errorf("%s names AXExpanded, %q", label, v)
+		}
+	}
+}
+
+// TestContentWindowValueText reads the text a slider gives for its value
+// (aria-valuetext) beside the number, as VoiceOver does.
+func TestContentWindowValueText(t *testing.T) {
+	var frames atomic.Int32
+	volume, steps := 30.0, 3.0
+	view := func(c *ui.Context) {
+		frames.Add(1)
+		ui.Column(c).Fill().Padding(20).Gap(10).Children(func() {
+			ui.Slider(c, &volume, 0, 100).Label("Volume").Value("30 percent")
+			ui.Slider(c, &steps, 0, 10).Label("Steps")
+		})
+	}
+	w := newWindow(t, mygo.WindowOptions{Title: "Value text", Width: 400, Height: 200, Content: ui.View(view)})
+	eventually(t, "a frame", func() bool { return frames.Load() > 0 })
+	eventually(t, "the sliders", func() bool {
+		nodes, _ := accessibility(w)
+		return slices.ContainsFunc(nodes, func(n accessNode) bool { return n.role == roleSlider && n.label == "Steps" })
+	})
+	if _, _, _, ok := axAttribute(w, "Volume", "AXValue"); !ok {
+		t.Skip("only macOS reads attributes")
+	}
+	if v, _, named, _ := axAttribute(w, "Volume", "AXValueDescription"); v != "30 percent" || !named {
+		t.Errorf("the slider's value text is %q, named %v, want %q", v, named, "30 percent")
+	}
+	if v, _, named, _ := axAttribute(w, "Steps", "AXValueDescription"); named {
+		t.Errorf("a slider without a value text names AXValueDescription, %q", v)
 	}
 }
 
@@ -3360,6 +3999,66 @@ func TestContentWindowComposingKeys(t *testing.T) {
 	eventually(t, "Escape closing the dialog", func() bool { o, _, _ := state(); return !o })
 }
 
+// TestContentWindowComposingReturn presses Return in a chat box while an
+// input method composes. The Korean one commits the syllable and passes
+// Return on (doCommandBySelector:): the box sends the message on that
+// press, as a text view acts on it. The Japanese one commits the
+// candidate and keeps Return: nothing is sent. A command asked for while
+// the input method still composes, or for a key the content got already,
+// sends no key.
+func TestContentWindowComposingReturn(t *testing.T) {
+	var frames atomic.Int32
+	draft := ""
+	var sent []string
+	view := func(c *ui.Context) {
+		frames.Add(1)
+		ui.TextArea(c, &draft).AutoFocus().OnTextKey(func(k ui.TextKey) bool {
+			if k.Key == ui.KeyEnter && k.Mods == 0 {
+				sent = append(sent, k.Text())
+				k.SetText("")
+				return true
+			}
+			return false
+		})
+	}
+	state := func() (d string, s []string) {
+		mygo.RunOnMain(func() { d, s = draft, slices.Clone(sent) })
+		return
+	}
+	w := newWindow(t, mygo.WindowOptions{Title: "Composing Return", Width: 400, Height: 200, Content: ui.View(view)})
+	eventually(t, "a frame", func() bool { return frames.Load() > 1 })
+
+	// Korean: Return commits 한 and sends it.
+	compose(w, "한", 1, false)
+	if !pressKeyComposing(w, 36, "\r", "한", "insertNewline:") {
+		t.Skip("input method automation not available on this platform")
+	}
+	eventually(t, "Return sending the committed syllable", func() bool { _, s := state(); return len(s) == 1 })
+	if d, s := state(); s[0] != "한" || d != "" {
+		t.Fatalf("sent %q, the draft %q", s, d)
+	}
+
+	// Japanese: Return commits 日本 and is the input method's.
+	compose(w, "にほん", 3, false)
+	pressKeyComposing(w, 36, "\r", "日本", "")
+	eventually(t, "the committed candidate", func() bool { d, _ := state(); return d == "日本" })
+
+	// The input method asks for the command while it still composes.
+	compose(w, "ㄱ", 1, false)
+	pressKeyComposing(w, 36, "\r", "", "insertNewline:")
+	compose(w, "가", 0, true)
+	eventually(t, "the composition committed", func() bool { d, _ := state(); return d == "日本가" })
+
+	// No composition: the key goes to the content once, not again for its
+	// command.
+	pressKeyComposing(w, 36, "\r", "", "insertNewline:")
+	compose(w, "x", 0, true)
+	eventually(t, "the text typed after Return", func() bool { d, _ := state(); return d == "x" })
+	if _, s := state(); len(s) != 2 || s[1] != "日本가" {
+		t.Fatalf("sent %q, want [한 日本가]", s)
+	}
+}
+
 // TestContentWindowTextKeys has a composer's OnTextKey take Return and
 // Tab as the platform delivers them, reading the text typed before them:
 // the text area inserts no newline, and the focus stays.
@@ -3492,6 +4191,16 @@ func TestContentWindow(t *testing.T) {
 		eventually(t, "the Control-click", func() bool { return rightClicks.Load() == 1 })
 		if clicks.Load() != 2 {
 			t.Errorf("the Control-click clicked: %d clicks", clicks.Load())
+		}
+	}
+	// So is a press of the secondary button that an event tap posted again
+	// as the primary button's, keeping its number, as data loss prevention
+	// agents do.
+	secondaries := rightClicks.Load()
+	if secondaryClickAsPrimary(w, 100, 50) {
+		eventually(t, "the secondary click posted as a primary one", func() bool { return rightClicks.Load() == secondaries+1 })
+		if clicks.Load() != 2 {
+			t.Errorf("the secondary click posted as a primary one clicked: %d clicks", clicks.Load())
 		}
 	}
 }
@@ -3741,6 +4450,60 @@ func TestContentWindowPopoverMenuButton(t *testing.T) {
 	pressKeys("Down")
 	pressKeys("Return")
 	eventually(t, "the choice", func() bool { return chosen.Load() == "As PNG" })
+}
+
+// TestContentWindowDrawnEditMenu right-clicks a text input of a window
+// that draws its menus (SetMenuPresentation): its editing menu draws in the
+// window and takes the focus, the system shows none, and its keys choose
+// Select All, after which the focus is back in the input, whose typing
+// replaces the text.
+func TestContentWindowDrawnEditMenu(t *testing.T) {
+	var frames atomic.Int32
+	var text atomic.Value
+	var inInput atomic.Bool
+	value := "hello world"
+	text.Store(value)
+	view := func(c *ui.Context) {
+		frames.Add(1)
+		c.SetMenuPresentation(ui.PopoverMenus)
+		ui.Box(c).Fill().Padding(20).Children(func() {
+			ui.TextInput(c, &value).Size(200, 32)
+		})
+		text.Store(value)
+		inInput.Store(c.FocusTakesText())
+	}
+	w := newWindow(t, mygo.WindowOptions{Title: "Drawn editing menu", Width: 400, Height: 300, Content: ui.View(view)})
+	eventually(t, "a frame", func() bool { return frames.Load() > 0 })
+	// focusIs asks for a frame each time it looks, so that the view reads
+	// the focus as it is, not as it was when the window last drew.
+	focusIs := func(input bool) func() bool {
+		return func() bool {
+			w.Invalidate()
+			return inInput.Load() == input
+		}
+	}
+	// A click first gives the window the keyboard, with no window manager.
+	if _, ok := popupMenus(); !ok || !click(w, 120, 36) {
+		t.Skip("context menu automation not available on this platform")
+	}
+	eventually(t, "the input's focus", focusIs(true))
+	rightClick(w, 120, 36)
+	if !wait.Poll(focusIs(false)) {
+		menus, _ := popupMenus()
+		t.Fatalf("the menu never took the focus: %d frames, the system's menus %q", frames.Load(), menus)
+	}
+	if menus, _ := popupMenus(); len(menus) != 0 {
+		t.Fatalf("the system shows a menu: %q", menus)
+	}
+	// It opened on no item: End goes to its last, Select All, on every
+	// platform.
+	if !pressKeys("End") {
+		t.Skip("key automation not available on this platform")
+	}
+	pressKeys("Return")
+	eventually(t, "the focus back in the input", focusIs(true))
+	pressKeys("x")
+	eventually(t, "the text replaced", func() bool { return text.Load() == "x" })
 }
 
 // TestReorderByDragging drags a row of a list below another with the

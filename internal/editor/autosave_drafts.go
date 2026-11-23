@@ -144,12 +144,19 @@ func (a *Autosave) submitDraftLocked(key string, force bool) <-chan error {
 }
 
 func (a *Autosave) FlushDrafts(ctx context.Context) error {
+	return a.flushDrafts(ctx, nil)
+}
+
+func (a *Autosave) flushDrafts(ctx context.Context, selected map[string]bool) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	a.mu.Lock()
 	journal := a.draftJournal
 	for key, entry := range a.entries {
+		if selected != nil && !selected[key] {
+			continue
+		}
 		if entry.revision > entry.savedRevision {
 			entry.draftPending = true
 		}
@@ -164,7 +171,10 @@ func (a *Autosave) FlushDrafts(ctx context.Context) error {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	for _, entry := range a.entries {
+	for key, entry := range a.entries {
+		if selected != nil && !selected[key] {
+			continue
+		}
 		if entry.revision > entry.savedRevision && entry.cacheError != "" {
 			return errors.New(entry.cacheError)
 		}

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"silverwing-go/internal/domain"
 )
 
 type recoveredTagWorktree struct {
@@ -16,11 +18,11 @@ type recoveredTagWorktree struct {
 	conflict  *mergeConflictError
 }
 
-func (s *Service) recoverTagWorktree(ctx context.Context, repository, path, base, source string) (recoveredTagWorktree, error) {
+func (s *Service) recoverTagWorktree(ctx context.Context, config domain.AppConfig, repository, path, base, source string) (recoveredTagWorktree, error) {
 	if path == "" {
 		return recoveredTagWorktree{}, nil
 	}
-	expected, err := s.conflictWorktreePath(filepath.Base(path))
+	expected, err := s.conflictWorktreePath(config, filepath.Base(path))
 	if err != nil {
 		return recoveredTagWorktree{}, tagWorktreeNeedsReview(path, err)
 	}

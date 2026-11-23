@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build darwin && !ios
 
 package darwin
 
@@ -322,7 +322,7 @@ func (c *contextFill) app(it *platform.MenuItem) id {
 	}
 	plain := *it
 	plain.Submenu = nil
-	item := theBackend.buildItem(&plain, contextOwner)
+	item := theBackend.buildItem(&plain, contextOwner, menuMetrics{})
 	if it.Submenu != nil {
 		sub := autorelease(send(send(class("NSMenu"), "alloc"), "initWithTitle:", uintptr(nsString(it.Label))))
 		send(sub, "setAutoenablesItems:", 0)

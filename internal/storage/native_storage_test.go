@@ -2,7 +2,9 @@ package storage
 
 import (
 	"archive/zip"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -49,7 +51,7 @@ func TestNativeConfigRejectsInvalidKnownFields(t *testing.T) {
 	}
 }
 
-func TestNativeConfigSaveImportExportBackupRestoreRoundTrip(t *testing.T) {
+func TestNativeConfigManualBackupRestoreRoundTrip(t *testing.T) {
 	sourcePaths := NewPaths(filepath.Join(t.TempDir(), "source"))
 	sourceStore := NewConfigStore(sourcePaths)
 	source, err := sourceStore.Load()
@@ -61,6 +63,7 @@ func TestNativeConfigSaveImportExportBackupRestoreRoundTrip(t *testing.T) {
 	if err := sourceStore.Save(source); err != nil {
 		t.Fatal(err)
 	}
+	assertConfigBackupDirectoryAbsent(t, sourceStore)
 	loaded, err := sourceStore.Load()
 	if err != nil || loaded.DefaultBranchPrefix != source.DefaultBranchPrefix || loaded.Theme != source.Theme {
 		t.Fatalf("saved config did not round trip: %+v %v", loaded, err)
@@ -80,17 +83,60 @@ func TestNativeConfigSaveImportExportBackupRestoreRoundTrip(t *testing.T) {
 	if err := targetStore.Save(target); err != nil {
 		t.Fatal(err)
 	}
+	updated, err := targetStore.Update(func(config domain.AppConfig) (domain.AppConfig, error) {
+		config.DefaultBranchPrefix = "updated/"
+		return config, nil
+	})
+	if err != nil || updated.DefaultBranchPrefix != "updated/" {
+		t.Fatalf("update did not save native values: %+v %v", updated, err)
+	}
+	assertConfigBackupDirectoryAbsent(t, targetStore)
+	legacyArchive := filepath.Join(targetStore.Paths().Backups, "silverwing-config-255068208.zip")
+	if _, err := targetStore.ExportTo(legacyArchive); err != nil {
+		t.Fatal(err)
+	}
+	legacyBytes, err := os.ReadFile(legacyArchive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const legacyCopies = 10
+	for i := range legacyCopies {
+		path := filepath.Join(targetStore.Paths().Backups, fmt.Sprintf("silverwing-config-%d.zip", i))
+		if err := os.WriteFile(path, legacyBytes, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	imported, err := targetStore.ImportFrom(exportPath)
 	if err != nil || imported.DefaultBranchPrefix != "source/" || imported.Theme != domain.ThemeDark {
 		t.Fatalf("import did not replace native values: %+v %v", imported, err)
 	}
-	backups, err := targetStore.Backups()
-	if err != nil || len(backups) == 0 {
-		t.Fatalf("import backup missing: %+v %v", backups, err)
+	preview, fingerprint, err := targetStore.PreviewImportSnapshotContext(context.Background(), legacyArchive)
+	if err != nil || preview.DefaultBranchPrefix != "updated/" || preview.Theme != domain.ThemeLight {
+		t.Fatalf("previous backup format did not preview: %+v %v", preview, err)
 	}
-	restored, err := targetStore.Restore(backups[0].Path)
-	if err != nil || restored.DefaultBranchPrefix != "target/" || restored.Theme != domain.ThemeLight {
+	restored, err := targetStore.ImportFromPreview(legacyArchive, fingerprint)
+	if err != nil || restored.DefaultBranchPrefix != "updated/" || restored.Theme != domain.ThemeLight {
 		t.Fatalf("backup did not restore prior config: %+v %v", restored, err)
+	}
+	entries, err := os.ReadDir(targetStore.Paths().Backups)
+	if err != nil || len(entries) != legacyCopies+1 {
+		t.Fatalf("configuration writes changed the backup directory: %v %v", entries, err)
+	}
+}
+
+func exportConfigFixture(t *testing.T, store *ConfigStore) string {
+	t.Helper()
+	path, err := store.ExportTo(filepath.Join(t.TempDir(), "config.zip"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func assertConfigBackupDirectoryAbsent(t *testing.T, store *ConfigStore) {
+	t.Helper()
+	if _, err := os.Stat(store.Paths().Backups); !os.IsNotExist(err) {
+		t.Fatalf("unexpected backup directory: %v", err)
 	}
 }
 

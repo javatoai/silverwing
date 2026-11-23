@@ -1,0 +1,848 @@
+[
+  {
+    "alias": "Alipay-Applet",
+    "aliases": [
+      "Alipay-Applet"
+    ],
+    "appId": "11050017",
+    "appName": "Alipay-Applet",
+    "appCnName": "雪球交通卡 支付宝小程序",
+    "version": "最新"
+  },
+  {
+    "alias": "Android-SaaS-SDK",
+    "aliases": [
+      "Android-SaaS-SDK"
+    ],
+    "appId": "11050015",
+    "appName": "Android-SaaS-SDK",
+    "appCnName": "Android-SaaS-SDK",
+    "version": "最新"
+  },
+  {
+    "alias": "Android-SaaS-SDK-Support",
+    "aliases": [
+      "Android-SaaS-SDK-Support"
+    ],
+    "appId": "11050016",
+    "appName": "Android-SaaS-SDK-Support",
+    "appCnName": "Android-SaaS-SDK-Support",
+    "version": "最新"
+  },
+  {
+    "alias": "apdu",
+    "aliases": [
+      "apdu",
+      "fp-apdu-build-service-logstore",
+      "fp-apdu-build-service",
+      "fp-apdu-build",
+      "apdu-build-service",
+      "apdu-build"
+    ],
+    "appId": "11010021",
+    "appName": "fp-apdu-build-service",
+    "appCnName": "apdu指令生成服务",
+    "version": "最新"
+  },
+  {
+    "alias": "api",
+    "aliases": [
+      "api",
+      "bp-api-service-logstore",
+      "bp-api-service",
+      "bp-api",
+      "api-service"
+    ],
+    "appId": "11020028",
+    "appName": "bp-api-service",
+    "appCnName": "运营外部接口",
+    "version": "最新"
+  },
+  {
+    "alias": "app",
+    "aliases": [
+      "app",
+      "bp-operate-app",
+      "bp-operation-app",
+      "operation-app"
+    ],
+    "appId": "11020024",
+    "appName": "bp-operate-app",
+    "appCnName": "OBOS管理系统前端服务",
+    "version": "最新"
+  },
+  {
+    "alias": "atj",
+    "aliases": [
+      "atj",
+      "fp-android-transit-job-logstore",
+      "fp-android-transit-job",
+      "android-transit-job"
+    ],
+    "appId": "11010020",
+    "appName": "fp-android-transit-job",
+    "appCnName": "国内安卓业务核心Job",
+    "version": "最新"
+  },
+  {
+    "alias": "ats",
+    "aliases": [
+      "ats",
+      "fp-android-transit-service-logstore",
+      "fp-android-transit-service",
+      "fp-android-transit",
+      "android-transit-service",
+      "android-transit"
+    ],
+    "appId": "11010016",
+    "appName": "fp-android-transit-service",
+    "appCnName": "安卓ATS",
+    "version": "最新"
+  },
+  {
+    "alias": "cius-collector",
+    "aliases": [
+      "cius-collector"
+    ],
+    "appId": "11010022",
+    "appName": "mp-cius-collector",
+    "appCnName": "站点信息收集器服务",
+    "version": "最新"
+  },
+  {
+    "alias": "dc",
+    "aliases": [
+      "dc",
+      "bp-data-center-logstore",
+      "bp-data-center",
+      "data-center"
+    ],
+    "appId": "11020008",
+    "appName": "bp-data-center",
+    "appCnName": "数据服务",
+    "version": "最新"
+  },
+  {
+    "alias": "di",
+    "aliases": [
+      "di",
+      "mp-pta-dp-import-logstore",
+      "mp-pta-dp-import",
+      "dpimport",
+      "pta-dp-import"
+    ],
+    "appId": "10010077",
+    "appName": "mp-pta-dp-import",
+    "appCnName": "数据导入服务",
+    "version": "最新"
+  },
+  {
+    "alias": "digital-carkey-server",
+    "aliases": [
+      "digital-carkey-server"
+    ],
+    "appId": "110200028",
+    "appName": "digital-carkey-server",
+    "appCnName": "数字车钥匙服务",
+    "version": "最新"
+  },
+  {
+    "alias": "digital-key",
+    "aliases": [
+      "digital-key"
+    ],
+    "appId": "12010001",
+    "appName": "fp-digital-key",
+    "appCnName": "门禁服务",
+    "version": "最新"
+  },
+  {
+    "alias": "dss",
+    "aliases": [
+      "dss",
+      "data-sync-service-sidecar",
+      "data-sync-service",
+      "bp-data-sync-service",
+      "data-sync"
+    ],
+    "appId": "11020055",
+    "appName": "bp-data-sync-service",
+    "appCnName": "数据同步服务",
+    "version": "最新"
+  },
+  {
+    "alias": "eid-issue",
+    "aliases": [
+      "eid-issue"
+    ],
+    "appId": "13010001",
+    "appName": "fp-eid-issue",
+    "appCnName": "eid开卡服务",
+    "version": "最新"
+  },
+  {
+    "alias": "genbu-test",
+    "aliases": [
+      "genbu-test"
+    ],
+    "appId": "999999999",
+    "appName": "genbu-test",
+    "appCnName": "genbu测试应用",
+    "version": "最新"
+  },
+  {
+    "alias": "hsm-gateway",
+    "aliases": [
+      "hsm-gateway"
+    ],
+    "appId": "11020091",
+    "appName": "mp-hsm-gateway",
+    "appCnName": "HSM网关",
+    "version": "最新"
+  },
+  {
+    "alias": "iot-docs",
+    "aliases": [
+      "iot-docs"
+    ],
+    "appId": "10000991",
+    "appName": "iot-docs",
+    "appCnName": "iot指导文档",
+    "version": "最新"
+  },
+  {
+    "alias": "iot-obis-platform-factory-edge",
+    "aliases": [
+      "iot-obis-platform-factory-edge"
+    ],
+    "appId": "11060203",
+    "appName": "iot-obis-platform-factory-edge",
+    "appCnName": "11",
+    "version": "最新"
+  },
+  {
+    "alias": "its",
+    "aliases": [
+      "its",
+      "fp-ios-transit-service-logstore",
+      "fp-ios-transit-service",
+      "fp-ios-transit",
+      "ios-transit-service",
+      "ios-transit"
+    ],
+    "appId": "11010012",
+    "appName": "fp-ios-transit-service",
+    "appCnName": "苹果公交服务",
+    "version": "最新"
+  },
+  {
+    "alias": "jm",
+    "aliases": [
+      "jm",
+      "bp-job-manager-logstore",
+      "bp-job-manager",
+      "job-manager"
+    ],
+    "appId": "11020020",
+    "appName": "bp-job-manager",
+    "appCnName": "运营定时任务执行器",
+    "version": "最新"
+  },
+  {
+    "alias": "kds",
+    "aliases": [
+      "kds"
+    ],
+    "appId": "10010011",
+    "appName": "mp-kds",
+    "appCnName": "kds",
+    "version": "最新"
+  },
+  {
+    "alias": "kds-front",
+    "aliases": [
+      "kds-front"
+    ],
+    "appId": "10010012",
+    "appName": "mp-kds-front",
+    "appCnName": "kds_front",
+    "version": "最新"
+  },
+  {
+    "alias": "kms",
+    "aliases": [
+      "kms",
+      "mp-kms-logstore",
+      "mp-kms"
+    ],
+    "appId": "10010028",
+    "appName": "mp-kms",
+    "appCnName": "KMS",
+    "version": "最新"
+  },
+  {
+    "alias": "market",
+    "aliases": [
+      "market",
+      "marketing-activities-service-log",
+      "marketing-activities-service",
+      "marketing-activities"
+    ],
+    "appId": "11020027",
+    "appName": "marketing-activities-service",
+    "appCnName": "营销活动平台",
+    "version": "最新"
+  },
+  {
+    "alias": "mcs",
+    "aliases": [
+      "mcs",
+      "mp-mifare-crack-service"
+    ],
+    "appId": "11020026",
+    "appName": "mp-mifare-crack-service",
+    "appCnName": "mifare门禁卡破解服务",
+    "version": "最新"
+  },
+  {
+    "alias": "migration-mp-sei-tsm",
+    "aliases": [
+      "migration-mp-sei-tsm"
+    ],
+    "appId": "10020011",
+    "appName": "migration-mp-sei-tsm",
+    "appCnName": "MP-SEI-TSM数据迁移服务",
+    "version": "最新"
+  },
+  {
+    "alias": "mini",
+    "aliases": [
+      "mini",
+      "fp-mini-app-server-logstore",
+      "fp-mini-app-server",
+      "mini-app-server"
+    ],
+    "appId": "11010025",
+    "appName": "fp-mini-app-server",
+    "appCnName": "小程序Server",
+    "version": "最新"
+  },
+  {
+    "alias": "minip-invoice",
+    "aliases": [
+      "minip-invoice"
+    ],
+    "appId": "12050023",
+    "appName": "minip-invoice",
+    "appCnName": "小程序发票",
+    "version": "最新"
+  },
+  {
+    "alias": "mobile-gateway-go",
+    "aliases": [
+      "mobile-gateway-go",
+      "fp-mobile-gateway-go"
+    ],
+    "appId": "11010030",
+    "appName": "fp-mobile-gateway-go",
+    "appCnName": "移动端网关",
+    "version": "最新"
+  },
+  {
+    "alias": "mobile-gw",
+    "aliases": [
+      "mobile-gw",
+      "fp-mobile-gateway-logstore",
+      "fp-mobile-gateway",
+      "mg",
+      "mobile-gateway"
+    ],
+    "appId": "11010028",
+    "appName": "fp-mobile-gateway",
+    "appCnName": "mobileGateWay",
+    "version": "最新"
+  },
+  {
+    "alias": "mock-unionpay",
+    "aliases": [
+      "mock-unionpay"
+    ],
+    "appId": "100100133",
+    "appName": "mp-mock-unionpay",
+    "appCnName": "mp-mock-unionpay-group",
+    "version": "最新"
+  },
+  {
+    "alias": "mp",
+    "aliases": [
+      "mp",
+      "fp-message-push-logstore",
+      "fp-message-push",
+      "message-push"
+    ],
+    "appId": "11010005",
+    "appName": "fp-message-push",
+    "appCnName": "消息推送",
+    "version": "最新"
+  },
+  {
+    "alias": "ob-pki-service",
+    "aliases": [
+      "ob-pki-service"
+    ],
+    "appId": "12020044",
+    "appName": "ob-pki-service",
+    "appCnName": "PKI证书管理服务",
+    "version": "最新"
+  },
+  {
+    "alias": "oc",
+    "aliases": [
+      "oc",
+      "fp-order-center-logstore",
+      "fp-order-center",
+      "order-center"
+    ],
+    "appId": "11010017",
+    "appName": "fp-order-center",
+    "appCnName": "订单中心",
+    "version": "最新"
+  },
+  {
+    "alias": "opc",
+    "aliases": [
+      "opc",
+      "bp-operation-center-logstore",
+      "bp-operation-center",
+      "center",
+      "operation-center"
+    ],
+    "appId": "11020023",
+    "appName": "bp-operation-center",
+    "appCnName": "雪球saas平台运营系统后端服务",
+    "version": "最新"
+  },
+  {
+    "alias": "os-admin-job",
+    "aliases": [
+      "os-admin-job"
+    ],
+    "appId": "11030102",
+    "appName": "os-admin-job",
+    "appCnName": "海外管理后台计划任务",
+    "version": "最新"
+  },
+  {
+    "alias": "os-admin-service",
+    "aliases": [
+      "os-admin-service"
+    ],
+    "appId": "11030101",
+    "appName": "os-admin-service",
+    "appCnName": "海外管理Service",
+    "version": "最新"
+  },
+  {
+    "alias": "os-app-service",
+    "aliases": [
+      "os-app-service"
+    ],
+    "appId": "11010103",
+    "appName": "os-app-service",
+    "appCnName": "海外AppService",
+    "version": "最新"
+  },
+  {
+    "alias": "os-card-manager-service",
+    "aliases": [
+      "os-card-manager-service"
+    ],
+    "appId": "11020102",
+    "appName": "os-card-manager-service",
+    "appCnName": "海外CardManagerService",
+    "version": "最新"
+  },
+  {
+    "alias": "os-command-service",
+    "aliases": [
+      "os-command-service"
+    ],
+    "appId": "11020101",
+    "appName": "os-command-service",
+    "appCnName": "海外CommandService",
+    "version": "最新"
+  },
+  {
+    "alias": "os-key-manager-service",
+    "aliases": [
+      "os-key-manager-service"
+    ],
+    "appId": "11020104",
+    "appName": "os-key-manager-service",
+    "appCnName": "海外KMS服务",
+    "version": "最新"
+  },
+  {
+    "alias": "os-mobile-gateway",
+    "aliases": [
+      "os-mobile-gateway"
+    ],
+    "appId": "11010101",
+    "appName": "os-mobile-gateway",
+    "appCnName": "海外MobileGateway",
+    "version": "最新"
+  },
+  {
+    "alias": "os-pay-center-service",
+    "aliases": [
+      "os-pay-center-service"
+    ],
+    "appId": "11010105",
+    "appName": "os-pay-center-service",
+    "appCnName": "海外PayCenterService",
+    "version": "最新"
+  },
+  {
+    "alias": "os-rta-card-analysis-service",
+    "aliases": [
+      "os-rta-card-analysis-service"
+    ],
+    "appId": "11020106",
+    "appName": "os-rta-card-analysis-service",
+    "appCnName": "海外RTA卡数据解析服务",
+    "version": "最新"
+  },
+  {
+    "alias": "os-server-gateway",
+    "aliases": [
+      "os-server-gateway"
+    ],
+    "appId": "11010102",
+    "appName": "os-server-gateway",
+    "appCnName": "海外ServerGateway",
+    "version": "最新"
+  },
+  {
+    "alias": "os-strategy-service",
+    "aliases": [
+      "os-strategy-service"
+    ],
+    "appId": "11020103",
+    "appName": "os-strategy-service",
+    "appCnName": "海外StrategyService",
+    "version": "最新"
+  },
+  {
+    "alias": "os-transit-service",
+    "aliases": [
+      "os-transit-service"
+    ],
+    "appId": "11010104",
+    "appName": "os-transit-service",
+    "appCnName": "海外TransitService",
+    "version": "最新"
+  },
+  {
+    "alias": "os-trusted-service-manager",
+    "aliases": [
+      "os-trusted-service-manager"
+    ],
+    "appId": "11020105",
+    "appName": "os-trusted-service-manager",
+    "appCnName": "海外TSM",
+    "version": "最新"
+  },
+  {
+    "alias": "pc",
+    "aliases": [
+      "pc",
+      "mp-pay-center-logstore",
+      "mp-pay-center",
+      "pay",
+      "pay-center"
+    ],
+    "appId": "10010003",
+    "appName": "mp-pay-center",
+    "appCnName": "支付中心",
+    "version": "最新"
+  },
+  {
+    "alias": "pps",
+    "aliases": [
+      "pps",
+      "pta-proxy-service",
+      "pta-proxy"
+    ],
+    "appId": "11020030",
+    "appName": "pta-proxy-service",
+    "appCnName": "PTA统一前置服务",
+    "version": "最新"
+  },
+  {
+    "alias": "pta",
+    "aliases": [
+      "pta",
+      "mp-ptaservice-logstore",
+      "mp-ptaservice",
+      "ptaservice"
+    ],
+    "appId": "10010032",
+    "appName": "mp-ptaservice",
+    "appCnName": "PTA接入服务",
+    "version": "最新"
+  },
+  {
+    "alias": "sei-tsm",
+    "aliases": [
+      "sei-tsm"
+    ],
+    "appId": "10010087",
+    "appName": "mp-sei-tsm",
+    "appCnName": "一加SEI-TSM",
+    "version": "最新"
+  },
+  {
+    "alias": "sentinel",
+    "aliases": [
+      "sentinel"
+    ],
+    "appId": "110200239",
+    "appName": "sentinel",
+    "appCnName": "sentinel熔断",
+    "version": "最新"
+  },
+  {
+    "alias": "server-gw",
+    "aliases": [
+      "server-gw",
+      "fp-server-gateway-logstore",
+      "fp-server-gateway",
+      "华为网关",
+      "server_gw",
+      "server-gateway"
+    ],
+    "appId": "11010027",
+    "appName": "fp-server-gateway",
+    "appCnName": "服务端网关",
+    "version": "最新"
+  },
+  {
+    "alias": "si",
+    "aliases": [
+      "si",
+      "mp-siteinfo-logstore",
+      "mp-siteinfo",
+      "siteinfo"
+    ],
+    "appId": "10010004",
+    "appName": "mp-siteinfo",
+    "appCnName": "站点信息",
+    "version": "最新"
+  },
+  {
+    "alias": "sls",
+    "aliases": [
+      "sls",
+      "alibabacloud-observability-mcp-server"
+    ],
+    "appId": "16000001",
+    "appName": "alibabacloud-observability-mcp-server",
+    "appCnName": "阿里云SLS日志MCP",
+    "version": "最新"
+  },
+  {
+    "alias": "Smart-AC-SDK",
+    "aliases": [
+      "Smart-AC-SDK"
+    ],
+    "appId": "13050001",
+    "appName": "Smart-AC-SDK",
+    "appCnName": "门禁SDK",
+    "version": "最新"
+  },
+  {
+    "alias": "smart-carkey",
+    "aliases": [
+      "smart-carkey"
+    ],
+    "appId": "15010001",
+    "appName": "fp-smart-carkey",
+    "appCnName": "车钥匙微服务",
+    "version": "最新"
+  },
+  {
+    "alias": "sms-gateway",
+    "aliases": [
+      "sms-gateway"
+    ],
+    "appId": "10010005",
+    "appName": "mp-sms-gateway",
+    "appCnName": "短信网关",
+    "version": "最新"
+  },
+  {
+    "alias": "snb-transit-ios",
+    "aliases": [
+      "snb-transit-ios"
+    ],
+    "appId": "11050012",
+    "appName": "snb-transit-ios",
+    "appCnName": "雪球交通卡IOS App",
+    "version": "最新"
+  },
+  {
+    "alias": "standard-checkin",
+    "aliases": [
+      "standard-checkin"
+    ],
+    "appId": "10010075",
+    "appName": "standard-checkin",
+    "appCnName": "PTA统一签到服务",
+    "version": "最新"
+  },
+  {
+    "alias": "std-gw",
+    "aliases": [
+      "std-gw",
+      "fp-standard-gateway-logstore",
+      "fp-standard-gateway",
+      "标准网关",
+      "stagate",
+      "standard-gateway"
+    ],
+    "appId": "11010001",
+    "appName": "fp-standard-gateway",
+    "appCnName": "标准接入",
+    "version": "最新"
+  },
+  {
+    "alias": "ticket-go",
+    "aliases": [
+      "ticket-go"
+    ],
+    "appId": "11030029",
+    "appName": "bp-ticket-go",
+    "appCnName": "OBOS工单系统服务",
+    "version": "最新"
+  },
+  {
+    "alias": "tns",
+    "aliases": [
+      "tns",
+      "mp-transit-notification-service-logstore",
+      "mp-transit-notification-service",
+      "mp-transit-notification",
+      "transit-notification-service",
+      "transit-notification"
+    ],
+    "appId": "10010089",
+    "appName": "mp-transit-notification-service",
+    "appCnName": "PTA通知服务",
+    "version": "最新"
+  },
+  {
+    "alias": "transit-h5-portal",
+    "aliases": [
+      "transit-h5-portal"
+    ],
+    "appId": "12050024",
+    "appName": "fp-transit-h5-portal",
+    "appCnName": "国内公交静态资源库",
+    "version": "最新"
+  },
+  {
+    "alias": "tsm",
+    "aliases": [
+      "tsm",
+      "mp-tsm-logstore",
+      "mp-tsm"
+    ],
+    "appId": "10010006",
+    "appName": "mp-tsm",
+    "appCnName": "TSM",
+    "version": "最新"
+  },
+  {
+    "alias": "ucmp",
+    "aliases": [
+      "ucmp",
+      "mp-ucmp-logstore",
+      "mp-ucmp"
+    ],
+    "appId": "10010025",
+    "appName": "mp-ucmp",
+    "appCnName": "统一卡管服务",
+    "version": "最新"
+  },
+  {
+    "alias": "web-gw",
+    "aliases": [
+      "web-gw",
+      "bp-web-gateway-logstore",
+      "bp-web-gateway",
+      "web 网关",
+      "web_gw",
+      "web-gateway"
+    ],
+    "appId": "11020025",
+    "appName": "bp-web-gateway",
+    "appCnName": "OBOS管理系统网关服务",
+    "version": "最新"
+  },
+  {
+    "alias": "WeChat-Applet",
+    "aliases": [
+      "WeChat-Applet"
+    ],
+    "appId": "11050018",
+    "appName": "WeChat-Applet",
+    "appCnName": "雪球交通卡 微信小程序",
+    "version": "最新"
+  },
+  {
+    "alias": "wulu-hsm-gateway",
+    "aliases": [
+      "wulu-hsm-gateway"
+    ],
+    "appId": "11020092",
+    "appName": "mp-wulu-hsm-gateway",
+    "appCnName": "苹果HSM网关",
+    "version": "最新"
+  },
+  {
+    "alias": "WULU-SDK",
+    "aliases": [
+      "WULU-SDK"
+    ],
+    "appId": "11050014",
+    "appName": "WULU-SDK",
+    "appCnName": "WULU-SDK",
+    "version": "最新"
+  },
+  {
+    "alias": "xiaomi-gateway",
+    "aliases": [
+      "xiaomi-gateway",
+      "fp-xiaomi-gateway",
+      "fp-xiaomi-gateway-logstore"
+    ],
+    "appId": "11010002",
+    "appName": "fp-xiaomi-gateway",
+    "appCnName": "小米接入",
+    "version": "最新"
+  },
+  {
+    "alias": "xxl",
+    "aliases": [
+      "xxl",
+      "bp-xxl-job-sidecar",
+      "bp-xxl-job",
+      "xj",
+      "xxl-job"
+    ],
+    "appId": "11020021",
+    "appName": "bp-xxl-job",
+    "appCnName": "任务调度中心",
+    "version": "最新"
+  }
+]

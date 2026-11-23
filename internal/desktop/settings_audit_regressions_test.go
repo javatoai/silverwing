@@ -95,17 +95,55 @@ func TestSettingsAuditMeeglePickerPreservesNewerInput(t *testing.T) {
 	}
 }
 
+func TestSettingsConfigBackupPageOnlyOffersManualActions(t *testing.T) {
+	s := newApp(nil, Options{Page: "settings", CapturePath: "manual-config-backup-probe"})
+	s.loading = false
+	s.snapshot.Home = t.TempDir()
+	s.settingsUnit.state.configJSON = `{}`
+	s.navigateSettingsPage("config-backup", "")
+	s.ensureSettingsPageData()
+	if s.settingsUnit.state.settingsConfigRecovery != nil {
+		t.Fatal("entering the settings page started a backup operation")
+	}
+	for _, width := range []int{480, 1200} {
+		tester := settingsSystemPageTester(s, width, false, s.settingsConfigBackup)
+		for _, name := range []string{"手动备份", "手动恢复"} {
+			assertSettingsVisibleBounds(t, tester, name, width, 720)
+		}
+		for _, name := range []string{"查看配置", "导出配置", "导入配置", "读取备份", "备份目录", "删除所选"} {
+			if tester.HasText(name) {
+				t.Fatalf("obsolete backup control is still visible: %s", name)
+			}
+		}
+	}
+}
+
 func TestSettingsAuditImportUsesPreviewFingerprint(t *testing.T) {
 	s := newApp(nil, Options{Page: "settings", CapturePath: "audit-import-probe"})
 	s.loading = false
 	s.snapshot.Home = t.TempDir()
 	s.settingsUnit.state.configJSON = `{}`
 	s.settingsUnit.state.settingsPage = "config-backup"
-	s.applySettingsConfigPreview(application.ConfigImportPreview{Path: filepath.Join(t.TempDir(), "preview.zip"), Fingerprint: "immutable-preview-digest"})
+	archive := filepath.Join(t.TempDir(), "preview.zip")
+	preview := application.ConfigImportPreview{Path: archive, Fingerprint: "immutable-preview-digest", Changes: []string{"模拟配置变更"}}
+	s.applySettingsConfigPreview(preview)
+	tester := ui.NewTester(func(c *ui.Context) { s.settingsImportDialog(c, setTheme(c, false)) }, 800, 740)
+	for _, text := range []string{"配置恢复预览", "模拟配置变更", archive, "确认恢复"} {
+		if !tester.HasText(text) {
+			t.Fatalf("missing restore preview content %q", text)
+		}
+	}
 	action, ok := s.settingsConfigImportAction()
-	if !ok || payloadString(action.Payload, "expectedFingerprint") != "immutable-preview-digest" {
+	if !ok || action.Kind != "config.import" || action.Path != archive || payloadString(action.Payload, "expectedFingerprint") != "immutable-preview-digest" {
 		t.Errorf("import confirmation did not carry preview fingerprint: valid=%t payload=%v", ok, action.Payload)
 	}
+	if err := tester.Click("取消"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.settingsConfigImportAction(); ok {
+		t.Fatal("canceling the preview did not retire the restore action")
+	}
+	s.applySettingsConfigPreview(preview)
 	s.settingsUnit.state.settingsConfigRecovery.preview.Fingerprint = ""
 	if _, ok := s.settingsConfigImportAction(); ok {
 		t.Fatal("preview without a fingerprint enabled import")

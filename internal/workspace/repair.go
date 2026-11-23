@@ -132,18 +132,10 @@ func (s *WorkspaceRepairService) Repair(ctx context.Context, config domain.AppCo
 			result, inner = s.executeRepair(ctx, config, taskPath, manifest, ws, current, repository)
 			return inner
 		}
-		lockRoot := repository.GitCommonDirectory
 		if ws.Strategy == domain.WorkspaceIndependentClone {
-			target := mustAbs(ws.WorktreePath)
-			if _, err := os.Stat(target); err == nil {
-				if common, e := s.Git.CommonDirectory(target); e == nil {
-					lockRoot = common
-				} else {
-					lockRoot = target
-				}
-			}
+			return s.Locks.WithIndependentCheckout(ws.WorktreePath, execute)
 		}
-		return s.Locks.WithRepository(lockRoot, execute)
+		return s.Locks.WithRepository(repository.GitCommonDirectory, execute)
 	})
 	return result, err
 }
@@ -210,8 +202,8 @@ func (s *WorkspaceRepairService) inspectWorktree(ws domain.ServiceWorkspace, hea
 		}
 	}
 	fingerprint := repairFingerprint(ws, health, target, local, sha, occupied)
-	if len(locked) > 0 {
-		return s.repairPreview(ws, health, RepairManual, false, fingerprint, "期望分支被锁定 Worktree 占用，请先执行 git worktree unlock", occupied, locked)
+	if len(occupied) > 0 {
+		return s.repairPreview(ws, health, RepairManual, false, fingerprint, "期望分支已在其他工作树检出", occupied, locked)
 	}
 	if health.Issue == domain.WorkspaceGitIssueOperationInProgress || health.Issue == domain.WorkspaceGitIssueInspectionFailed {
 		return s.repairPreview(ws, health, RepairManual, false, fingerprint, repairMessage(health, "无法自动修复"), nil, nil)
@@ -350,6 +342,11 @@ func (s *WorkspaceRepairService) executeRepair(ctx context.Context, config domai
 	if err != nil {
 		return WorkspaceRepairResult{}, err
 	}
+	if ws.Strategy == domain.WorkspaceStandardWorktree {
+		if err := s.Git.requireWorktreeBranchAvailable(repo.RootPath, target, ws.Branch); err != nil {
+			return WorkspaceRepairResult{}, err
+		}
+	}
 	backup := preview.BackupPath
 	backupMoved, created, manifestSaved := false, false, false
 	var previousBranch, previousHead string
@@ -385,7 +382,6 @@ func (s *WorkspaceRepairService) executeRepair(ctx context.Context, config domai
 				if e := s.Git.RemoveWorktree(repo.RootPath, target, true); e != nil {
 					failures = append(failures, e)
 				}
-				_ = s.Git.PruneWorktrees(repo.RootPath)
 			} else if e := deleteOwnedClone(taskPath, target, ownership); e != nil {
 				failures = append(failures, e)
 			}
@@ -408,7 +404,7 @@ func (s *WorkspaceRepairService) executeRepair(ctx context.Context, config domai
 	}
 	if backup != "" {
 		if _, err := os.Stat(target); err == nil {
-			if !samePath(filepath.Dir(target), mustAbs(taskPath)) {
+			if !samePath(filepath.Dir(target), taskPath) {
 				return WorkspaceRepairResult{}, fmt.Errorf("只能备份任务目录内的工作区")
 			}
 			if _, err := os.Stat(backup); err == nil {
@@ -429,11 +425,11 @@ func (s *WorkspaceRepairService) executeRepair(ctx context.Context, config domai
 			if err := s.Git.Fetch(repository, ws.PushRemote); err != nil {
 				return WorkspaceRepairResult{}, rollback(err)
 			}
-			if err := s.switchToExpected(target, ws, preview.RequiresSharedBranchConfirmation); err != nil {
+			if err := s.switchToExpected(target, ws); err != nil {
 				return WorkspaceRepairResult{}, rollback(err)
 			}
 		} else {
-			if err := s.Git.PruneWorktrees(repository); err != nil {
+			if err := s.Git.removeMissingWorktreeRegistration(repository, target); err != nil {
 				return WorkspaceRepairResult{}, rollback(err)
 			}
 			if err := s.Git.Fetch(repository, ws.PushRemote); err != nil {
@@ -457,7 +453,7 @@ func (s *WorkspaceRepairService) executeRepair(ctx context.Context, config domai
 				}
 			}
 			if local {
-				err = s.Git.AddExistingWorktree(repository, target, ws.Branch, preview.RequiresSharedBranchConfirmation)
+				err = s.Git.AddExistingWorktree(repository, target, ws.Branch)
 			} else if remote {
 				err = s.Git.AddTrackedRemoteWorktree(repository, target, ws.Branch, ws.PushRemote)
 			} else {
@@ -479,7 +475,7 @@ func (s *WorkspaceRepairService) executeRepair(ctx context.Context, config domai
 			if err := s.Git.Fetch(target, ws.PushRemote); err != nil {
 				return WorkspaceRepairResult{}, rollback(err)
 			}
-			if err := s.switchToExpected(target, ws, false); err != nil {
+			if err := s.switchToExpected(target, ws); err != nil {
 				return WorkspaceRepairResult{}, rollback(err)
 			}
 		} else {
@@ -529,7 +525,7 @@ func (s *WorkspaceRepairService) executeRepair(ctx context.Context, config domai
 	return WorkspaceRepairResult{WorkspacePath: ws.WorktreePath, ServiceName: workspaceOperationName(ws), BackupPath: backup, Warnings: warnings, Message: "工作区已修复并重新检查"}, nil
 }
 
-func (s *WorkspaceRepairService) switchToExpected(target string, ws domain.ServiceWorkspace, allowShared bool) error {
+func (s *WorkspaceRepairService) switchToExpected(target string, ws domain.ServiceWorkspace) error {
 	branch, err := s.Git.CurrentBranch(target)
 	if err != nil {
 		return err
@@ -547,11 +543,7 @@ func (s *WorkspaceRepairService) switchToExpected(target string, ws domain.Servi
 		return err
 	}
 	if local {
-		args := []string{"switch", ws.Branch}
-		if allowShared {
-			args = []string{"switch", "--ignore-other-worktrees", ws.Branch}
-		}
-		_, err = s.Git.RunContext(context.Background(), target, 2*time.Minute, true, false, args...)
+		_, err = s.Git.RunContext(context.Background(), target, 2*time.Minute, true, false, "switch", ws.Branch)
 		return err
 	}
 	if remote {
@@ -561,7 +553,7 @@ func (s *WorkspaceRepairService) switchToExpected(target string, ws domain.Servi
 	return fmt.Errorf("期望分支已经不存在，请重新预检")
 }
 func (s *WorkspaceRepairService) initialize(config domain.AppConfig, manifest domain.TaskManifest, ws domain.ServiceWorkspace, source, target string, ctx context.Context) ([]string, error) {
-	service, err := config.GroupService(manifest.GroupID, ws.GroupServiceID)
+	service, err := config.Service(ws.GroupServiceID)
 	if err != nil {
 		return []string{"服务配置已经不存在，未执行 Bootstrap"}, nil
 	}
@@ -606,14 +598,11 @@ func (s *WorkspaceRepairService) manual(ws domain.ServiceWorkspace, h domain.Wor
 	return s.repairPreview(ws, h, RepairManual, false, fingerprint, message, nil, nil)
 }
 func (s *WorkspaceRepairService) validateTarget(config domain.AppConfig, taskPath string, manifest domain.TaskManifest, ws domain.ServiceWorkspace) (string, error) {
-	if config.TaskRoot == nil || !samePath(filepath.Dir(mustAbs(taskPath)), mustAbs(*config.TaskRoot)) || filepath.Base(taskPath) != manifest.TaskDirectoryName {
-		return "", fmt.Errorf("任务目录不属于当前任务根目录或与任务清单不一致：%s", taskPath)
+	lifecycle := WorkspaceLifecycle{Locks: s.Locks}
+	if err := lifecycle.validateTaskDirectory(config, taskPath, manifest); err != nil {
+		return "", err
 	}
-	target := mustAbs(ws.WorktreePath)
-	if !samePath(filepath.Dir(target), mustAbs(taskPath)) {
-		return "", fmt.Errorf("工作区路径不是任务目录的直接子级，已拒绝修复：%s", target)
-	}
-	return target, nil
+	return lifecycle.validateTarget(taskPath, ws)
 }
 func repairFingerprint(ws domain.ServiceWorkspace, h domain.WorkspaceGitHealth, target string, local bool, remoteSHA string, worktrees []WorktreeRecord) string {
 	parts := []string{"path=" + target, "exists=" + fmt.Sprint(fileExists(target)), "issue=" + string(h.Issue), "actual=" + stringValue(h.ActualBranch), "expected=" + ws.Branch, "local=" + fmt.Sprint(local), "remote=" + remoteSHA}

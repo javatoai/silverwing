@@ -67,15 +67,12 @@ func TestSidebarVisibilityConfigurationDefaultsAndRoundTrip(t *testing.T) {
 	if _, err := target.Load(); err != nil {
 		t.Fatal(err)
 	}
+	backup := exportConfigFixture(t, target)
 	imported, err := target.ImportFrom(archive)
 	if err != nil || imported.SidebarVisibility != config.SidebarVisibility {
 		t.Fatalf("export/import lost visibility: %+v %v", imported.SidebarVisibility, err)
 	}
-	backups, err := target.Backups()
-	if err != nil || len(backups) == 0 {
-		t.Fatalf("import backup missing: %v", err)
-	}
-	restored, err := target.Restore(backups[0].Path)
+	restored, err := target.ImportFrom(backup)
 	if err != nil || restored.SidebarVisibility != all {
 		t.Fatalf("backup restore lost original visibility: %+v %v", restored.SidebarVisibility, err)
 	}

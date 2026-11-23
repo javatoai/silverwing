@@ -13,11 +13,7 @@ func (s *Service) checkResumedBaseline(ctx context.Context, b *Batch, c domain.A
 	if i == nil || (i.Kind != "sync" && i.Kind != "create" && i.Kind != "main" && i.Kind != "release") {
 		return nil
 	}
-	manual := ""
-	if i.Preview.Manual {
-		manual = i.Preview.ProductionTag
-	}
-	fresh, err := s.observe(ctx, b.Target, c, manual, b.ReleaseBranch, false)
+	fresh, err := s.observe(ctx, b.Target, c, b.ReleaseBranch, false)
 	if err != nil {
 		return err
 	}
@@ -77,11 +73,13 @@ func (s *Service) ReconcileEnded(ctx context.Context, id string) (Batch, error) 
 			b.Intent, b.Message = nil, "已核对原生产 Tag 推送成功；批次仍已结束，可刷新构建状态"
 			return s.save(b)
 		}
-		if i.Step == "release-create" && refs["refs/heads/"+b.ReleaseBranch] == b.MainSHA {
+		releaseSHA := refs["refs/heads/"+b.ReleaseBranch]
+		if i.Step == "release-create" && releaseSHA != "" && releaseSHA == b.MainSHA {
 			if _, err := s.validate(ctx, b.Target); err != nil {
 				return err
 			}
-			b.InitialSHA, b.ReleaseSHA, i.ResultConfirmed = b.MainSHA, b.MainSHA, true
+			b.confirmReleaseCreation()
+			i.ResultConfirmed = true
 			b.Message = "已核对 release 创建成功；批次仍已结束，未继续后续操作"
 			return s.save(b)
 		}

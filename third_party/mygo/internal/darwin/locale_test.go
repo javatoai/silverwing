@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build darwin && !ios
 
 package darwin
 
@@ -12,6 +12,17 @@ func TestHourCycle(t *testing.T) {
 		if got := hourCycle(pattern); got != want {
 			t.Errorf("hourCycle(%q) = %d, want %d", pattern, got, want)
 		}
+	}
+}
+
+// The current locale's change is observed under the name Foundation posts
+// it under: observed by the constant's name, it never comes, and the region
+// is read only at the time format's notification, before the current
+// locale has the new format, one change behind.
+func TestCurrentLocaleDidChangeName(t *testing.T) {
+	load()
+	if got := goString(currentLocaleDidChange()); got != "kCFLocaleCurrentLocaleDidChangeNotification" {
+		t.Errorf("NSCurrentLocaleDidChangeNotification is posted as %q", got)
 	}
 }
 

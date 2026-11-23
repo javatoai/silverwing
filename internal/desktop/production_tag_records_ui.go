@@ -16,7 +16,7 @@ func productionTagRecordText(b production.Batch, tag production.Tag) string {
 }
 
 func (s *app) productionDisplayedBatchCurrent(v *productionView, b production.Batch) bool {
-	if v == nil || s.page != "production" || s.productionView() != v || v.BatchID != b.ID ||
+	if !s.productionAvailable() || v == nil || s.page != "production" || s.productionView() != v || v.BatchID != b.ID ||
 		s.releaseUnit.state.production.loadedHome != s.snapshot.Home || s.releaseUnit.state.production.configScope != s.currentProductionScope() {
 		return false
 	}
@@ -40,12 +40,30 @@ func productionTagBuildLabel(stage domain.GenbuStageStatus) string {
 }
 
 func (s *app) renderProductionTagRecords(c *ui.Context, p palette, v *productionView, b production.Batch) {
-	if len(b.Tags) == 0 || v == nil {
+	if v == nil {
 		return
 	}
-	ui.Column(c.Key("production-tag-records-" + b.ID)).FillWidth().MaxWidth(600).AlignSelf(ui.Start).MinWidth(0).Gap(12).Label("Tag 记录").Children(func() {
+	s.renderProductionBatchTagRecords(c, p, "production", b, func() *production.Batch {
+		if !s.productionDisplayedBatchCurrent(v, b) {
+			return nil
+		}
+		return s.productionBatch(v)
+	})
+}
+
+func (s *app) renderProductionHistoryTagRecords(c *ui.Context, p palette, d *productionHistoryDialog, b production.Batch) {
+	s.renderProductionBatchTagRecords(c, p, "production-history", b, func() *production.Batch {
+		return s.productionHistoryDetail(d)
+	})
+}
+
+func (s *app) renderProductionBatchTagRecords(c *ui.Context, p palette, key string, b production.Batch, currentBatch func() *production.Batch) {
+	if len(b.Tags) == 0 {
+		return
+	}
+	ui.Column(c.Key(key + "-tag-records-" + b.ID)).FillWidth().MaxWidth(600).AlignSelf(ui.Start).MinWidth(0).Gap(12).Label("Tag 记录").Children(func() {
 		for _, tag := range b.Tags {
-			s.renderProductionTagRecord(c, p, v, b, tag)
+			s.renderProductionTagRecord(c, p, key, b, tag, currentBatch)
 		}
 	})
 }
@@ -59,9 +77,9 @@ func (s *app) renderProductionBuildRefresh(c *ui.Context, p palette, v *producti
 	}
 }
 
-func (s *app) renderProductionTagRecord(c *ui.Context, p palette, v *productionView, b production.Batch, tag production.Tag) {
+func (s *app) renderProductionTagRecord(c *ui.Context, p palette, key string, b production.Batch, tag production.Tag, currentBatch func() *production.Batch) {
 	text := productionTagRecordText(b, tag)
-	ui.Column(c.Key("production-tag-record-" + b.ID + "-" + tag.Name)).FillWidth().MinWidth(0).Gap(8).Children(func() {
+	ui.Column(c.Key(key + "-tag-record-" + b.ID + "-" + tag.Name)).FillWidth().MinWidth(0).Gap(8).Children(func() {
 		ui.Row(c).FillWidth().MinWidth(0).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 			timestamp := "时间未知"
 			if pushed, err := time.Parse(time.RFC3339Nano, tag.PushedAt); err == nil {
@@ -77,8 +95,11 @@ func (s *app) renderProductionTagRecord(c *ui.Context, p palette, v *productionV
 				ui.Row(c).Shrink(0).AlignItems(ui.Center).Label("Tag 构建状态 " + tag.Name).Children(func() {
 					compactState(c, productionTagBuildLabel(tag.Status.Build), p)
 				})
-				if tagRecordAction(c, p, "production-copy-tag-"+tag.Name, "copy", "复制", false).Label("复制 Tag 记录 "+tag.Name).Tooltip("复制 "+text).Clicked() && s.productionDisplayedBatchCurrent(v, b) {
+				if tagRecordAction(c, p, key+"-copy-tag-"+tag.Name, "copy", "复制", false).Label("复制 Tag 记录 "+tag.Name).Tooltip("复制 "+text).Clicked() && productionTagRecordCurrent(currentBatch(), b, tag) {
 					s.copyTextToClipboard(c.Services(), text, "Tag 记录已复制")
+				}
+				if tagRecordAction(c, p, key+"-build-log-"+tag.Name, "terminal", "构建日志", b.Target.GenbuService == "").Clicked() {
+					s.openProductionBuildLog(b, tag, currentBatch)
 				}
 			})
 		})

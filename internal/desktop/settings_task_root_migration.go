@@ -147,6 +147,9 @@ func (s *app) previewTaskRootMigrationTarget(target string) {
 }
 
 func (s *app) observeTaskRootMigrationNavigation() {
+	if s.snapshot.ProfileID != "" {
+		return
+	}
 	if !s.taskUnit.state.taskRootTargetFocused || s.page == "settings" && s.settingsUnit.state.settingsPage == "task-paths" {
 		return
 	}

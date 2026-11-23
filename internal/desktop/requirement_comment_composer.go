@@ -51,7 +51,7 @@ func newCommentRequestID() string {
 }
 
 func (s *app) commentComposerConfig() string {
-	return fmt.Sprint(s.snapshot.Home, s.configString("meegleExecutablePath"), s.readConfigArray("meegleProjects"), s.configString("commandProxyUrl"), s.configString("commandProxyNoProxy"), s.configString("commandProxyUsername"), s.configString("commandProxyPassword"), s.readConfigArray("commandProxyTargets"))
+	return fmt.Sprint(s.snapshot.Home, s.configString("meegleExecutablePath"), s.readConfigArray("meegleProjects"))
 }
 
 func (s *app) commentComposerNavigation() string {

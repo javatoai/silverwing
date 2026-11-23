@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build darwin && !ios
 
 package darwin
 
@@ -125,6 +125,16 @@ func (a appController) Region() platform.Region {
 		r.HourCycle = hourCycle(format)
 	})
 	return r
+}
+
+// currentLocaleDidChange is NSCurrentLocaleDidChangeNotification: the name
+// Foundation posts it under, kCFLocaleCurrentLocaleDidChangeNotification,
+// which isn't the constant's name.
+func currentLocaleDidChange() id {
+	if name := constString(libFoundation, "NSCurrentLocaleDidChangeNotification"); name != 0 {
+		return name
+	}
+	return nsString("kCFLocaleCurrentLocaleDidChangeNotification")
 }
 
 // hourCycle returns the hour cycle of a date format pattern: 12 for h and

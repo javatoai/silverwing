@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build darwin && !ios
 
 package darwin
 
@@ -55,7 +55,7 @@ var hotKeyHandler = purego.NewCallback(func(next, event, userData uintptr) uintp
 	return 0
 })
 
-func (b *Backend) RegisterHotkey(hid int, acc string) error {
+func (b *Backend) RegisterHotkey(hid int, acc, _ string) error {
 	a, err := accelerator.Parse(acc, "darwin")
 	if err != nil {
 		return err

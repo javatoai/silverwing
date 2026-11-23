@@ -45,9 +45,20 @@ func (s *app) confirmProductionDeleteRecord(v *productionView, b production.Batc
 }
 
 func (state *productionUIState) replaceBatches(records []production.Batch) {
+	state.batchRevision++
+	ended := make(map[string]production.Batch)
+	for _, b := range state.batches {
+		if b.Ended {
+			ended[b.ID] = b
+		}
+	}
 	state.batches = nil
 	for _, b := range records {
 		if !state.deletedBatches[b.ID] {
+			if previous, found := ended[b.ID]; found && !b.Ended {
+				// A list read started before End can still return the active record.
+				b = previous
+			}
 			state.batches = append(state.batches, b)
 		}
 	}
@@ -74,12 +85,7 @@ func (s *app) forgetProductionBatch(state *productionUIState, id string) {
 	state.deletedBatches[id] = true
 	records := state.batches
 	state.replaceBatches(records)
-	state.mu.Lock()
-	if timer := state.timers[id]; timer != nil {
-		timer.Stop()
-		delete(state.timers, id)
-	}
-	state.mu.Unlock()
+	state.stopProductionProbe(id)
 	if state.diffDialog != nil && state.diffDialog.BatchID == id {
 		s.closeProductionDiff()
 	}
@@ -92,7 +98,10 @@ func (s *app) forgetProductionBatch(state *productionUIState, id string) {
 			view.Busy, view.request = false, nil
 		}
 		view.Generation++
-		s.restoreProductionHistoryInputs(view)
+		view.resetProductionRelease()
+		if active := s.productionCurrentBatch(view); active != nil {
+			view.BatchID, view.Version = active.ID, active.ReleaseBranch
+		}
 	}
 	s.pruneProductionHistoricalChoices(state)
 }
@@ -100,7 +109,7 @@ func (s *app) forgetProductionBatch(state *productionUIState, id string) {
 func (s *app) pruneProductionHistoricalChoices(state *productionUIState) {
 	choices := state.choices[:0]
 	for _, choice := range state.choices {
-		key := productionKey(production.Selection{GroupID: choice.GroupID, ServiceID: choice.ID})
+		key := productionKey(production.Selection{ServiceID: choice.ID})
 		retained := !choice.Historical
 		if d := state.historyDialog; d != nil && d.Open && productionKey(d.Selection) == key {
 			// Keep the empty list visible until it is dismissed, including for
@@ -121,6 +130,6 @@ func (s *app) pruneProductionHistoricalChoices(state *productionUIState) {
 	}
 	state.choices = choices
 	if state.selected == "" && len(choices) > 0 {
-		state.selected = productionKey(production.Selection{GroupID: choices[0].GroupID, ServiceID: choices[0].ID})
+		state.selected = productionKey(production.Selection{ServiceID: choices[0].ID})
 	}
 }

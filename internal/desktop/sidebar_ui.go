@@ -79,16 +79,17 @@ func (s *app) sidebar(c *ui.Context, p palette, compact bool) {
 				}
 			})
 			if b.Clicked() {
-				if (s.page == "settings" || s.page == "tasks" && s.tab == 3) && !s.leaveSettingsInstructionEditor() {
+				if s.tab == taskProjectInstructionsTab && n.page != s.page && !s.captureProjectInstructionsInput() {
 					continue
 				}
+				if s.page == "settings" && !s.leaveSettingsInstructionEditor() {
+					continue
+				}
+				s.initialGenbuRoute = false
 				s.markReadingInteraction()
 				if n.page == "tasks" && (s.page == "archive" || s.taskUnit.currentTask().archived) {
 					s.switchTaskIndexCategory(false)
 					continue
-				}
-				if s.tab == 3 {
-					s.deactivateInstructionEditor()
 				}
 				s.page = n.page
 				if n.page == "production" {
@@ -120,10 +121,7 @@ func (s *app) sidebarBadge(page string, compact bool) (string, bool) {
 	case "requirements":
 		return s.requirementsEstimateBadge(), true
 	case "services":
-		count := 0
-		for _, group := range s.snapshot.Groups {
-			count += len(group.ServiceIDs)
-		}
+		count := len(s.snapshot.Services)
 		return fmt.Sprint(count), !compact || count > 0
 	default:
 		return "", false

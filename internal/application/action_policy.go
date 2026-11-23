@@ -18,13 +18,18 @@ type ActionDescriptor struct {
 }
 
 func DescribeAction(kind string) ActionDescriptor {
-	descriptor, known := actionDescriptors[kind]
-	if !known {
-		descriptor = ActionDescriptor{Kind: kind, Label: kind}
+	key := kind
+	if operation, ok := strings.CutPrefix(kind, serviceRuntimeActionPrefix); ok {
+		key = taskServicesActionPrefix + operation
 	}
+	descriptor, known := actionDescriptors[key]
+	if !known {
+		descriptor = ActionDescriptor{Label: kind}
+	}
+	descriptor.Kind = kind
 	descriptor.DedicatedResult = descriptor.DedicatedResult || strings.HasPrefix(kind, "instructions.")
 	descriptor.SettingsDedicatedResult = strings.HasPrefix(kind, "config.") || strings.HasPrefix(kind, "migration.") ||
-		strings.HasPrefix(kind, "instructions.templates.") || strings.HasPrefix(kind, "skills.") ||
+		strings.HasPrefix(kind, "skills.") ||
 		strings.HasPrefix(kind, "codex.extensions/") || strings.HasPrefix(kind, "codex.ai/") ||
 		strings.HasPrefix(kind, "cli.") || strings.HasPrefix(kind, "logs.") || strings.HasPrefix(kind, "development-tools/") || strings.HasPrefix(kind, "git.environment") ||
 		kind == "terminal.resolve" || kind == "diagnostics.export" || kind == "proxy.test" || kind == "git.version" || kind == "update.check"
@@ -40,6 +45,15 @@ var actionDescriptors = map[string]ActionDescriptor{
 	"tag.notice.send":                              {Kind: "tag.notice.send", Label: "发送发版通知", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},
 	"task.services.pods":                           {Kind: "task.services.pods", Label: "读取服务 Pod", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},
 	"task.services.config":                         {Kind: "task.services.config", Label: "读取服务配置", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},
+	"task.services.config-files":                   {Kind: "task.services.config-files", Label: "读取服务配置文件列表", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},
+	"task.services.config-source":                  {Kind: "task.services.config-source", Label: "读取服务配置原文", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},
+	"task.services.approvals":                      {Kind: "task.services.approvals", Label: "查询 Genbu 审批", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},
+	"task.services.approval-detail":                {Kind: "task.services.approval-detail", Label: "读取 Genbu 审批详情", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},
+	"task.services.config-preview":                 {Kind: "task.services.config-preview", Label: "预览服务配置编辑", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},
+	"task.services.config-submit":                  {Kind: "task.services.config-submit", Label: "提交服务配置编辑", Known: true, QuietSuccess: true, DedicatedResult: true},
+	"task.services.config-preview-discard":         {Kind: "task.services.config-preview-discard", Label: "丢弃配置编辑预览", Known: true, QuietSuccess: true, DedicatedResult: true},
+	"tag.history.build-log":                        {Kind: "tag.history.build-log", Label: "读取任务 Tag 构建日志", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},
+	"production.build-log":                         {Kind: "production.build-log", Label: "读取生产 Tag 构建日志", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},
 	"task.files.list":                              {Kind: "task.files.list", Label: "读取任务文件", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},
 	"task.files.read":                              {Kind: "task.files.read", Label: "预览任务文件", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},
 	"task.files.search":                            {Kind: "task.files.search", Label: "查找任务文件", Known: true, QuietSuccess: true, DedicatedResult: true, Cancellable: true},
@@ -69,13 +83,14 @@ var actionDescriptors = map[string]ActionDescriptor{
 	"codex.extensions/snapshot":                    {Kind: "codex.extensions/snapshot", Label: "读取 Codex 扩展", Known: true},
 	"codex.run":                                    {Kind: "codex.run", Label: "在 Codex 中打开", Known: true, TaskMenuScoped: true, ReloadSnapshot: true, RefreshOnError: true},
 	"config.fields.save":                           {Kind: "config.fields.save", Label: "保存设置", Known: true, ReloadSnapshot: true},
-	"config.import":                                {Kind: "config.import", Label: "导入配置", Known: true, ReloadSnapshot: true},
-	"config.import-preview":                        {Kind: "config.import-preview", Label: "预览配置", Known: true},
+	"config.export":                                {Kind: "config.export", Label: "手动备份", Known: true},
+	"config.import":                                {Kind: "config.import", Label: "手动恢复", Known: true, ReloadSnapshot: true},
+	"config.import-preview":                        {Kind: "config.import-preview", Label: "预览恢复变更", Known: true},
 	"config.materials-root.save":                   {Kind: "config.materials-root.save", Label: "config.materials-root.save", Known: true, ReloadSnapshot: true},
-	"config.restore-backup":                        {Kind: "config.restore-backup", Label: "config.restore-backup", Known: true, ReloadSnapshot: true},
 	"config.save":                                  {Kind: "config.save", Label: "保存配置", Known: true, ReloadSnapshot: true},
 	"config.task-root.save":                        {Kind: "config.task-root.save", Label: "切换任务目录", Known: true, ReloadSnapshot: true},
-	"config.view":                                  {Kind: "config.view", Label: "config.view", Known: true, DedicatedResult: true},
+	"config.documents-git.bind":                    {Kind: "config.documents-git.bind", Label: "绑定资料仓库", Known: true, ReloadSnapshot: true},
+	"config.documents-git.unbind":                  {Kind: "config.documents-git.unbind", Label: "解绑资料仓库", Known: true, ReloadSnapshot: true},
 	"development-tools/detect":                     {Kind: "development-tools/detect", Label: "检测开发工具", Known: true, ReloadSnapshot: true},
 	"development-tools/snapshot":                   {Kind: "development-tools/snapshot", Label: "读取开发工具配置", Known: true, ReloadSnapshot: true},
 	"diagnostics.export":                           {Kind: "diagnostics.export", Label: "导出诊断信息", Known: true, Cancellable: true},
@@ -136,6 +151,7 @@ var actionDescriptors = map[string]ActionDescriptor{
 	"task.restore-recycled-workspaces":             {Kind: "task.restore-recycled-workspaces", Label: "恢复已回收工作区", Known: true, TaskMenuScoped: true, ReloadSnapshot: true, RefreshOnError: true, Cancellable: true},
 	"task.delete-risks":                            {Kind: "task.delete-risks", Label: "检查删除风险", Known: true},
 	"task.materials-retry":                         {Kind: "task.materials-retry", Label: "关联任务资料", Known: true, TaskMenuScoped: true, ReloadSnapshot: true, Cancellable: true},
+	"task.refresh-agents":                          {Kind: "task.refresh-agents", Label: "重新生成任务说明", Known: true, TaskMenuScoped: true},
 	"task.modules-add":                             {Kind: "task.modules-add", Label: "添加模块", Known: true, ReloadSnapshot: true, Cancellable: true},
 	"task.modules-add-preview":                     {Kind: "task.modules-add-preview", Label: "预检新增模块", Known: true},
 	"task.refresh":                                 {Kind: "task.refresh", Label: "刷新任务", Known: true, ReloadSnapshot: true, Cancellable: true},

@@ -35,7 +35,8 @@ func (a *App) openCodex(ctx context.Context, action Action) (ActionResult, error
 		}
 	}
 	path := taskPath
-	if !forceNew && (action.ServiceID != "" || action.ModuleID != "") {
+	wholeTask := forceNew || action.ServiceID == "" && action.ModuleID == ""
+	if !wholeTask {
 		found := false
 		for _, workspace := range manifest.Services {
 			if workspace.GroupServiceID != action.ServiceID || action.ModuleID != "" && workspace.ModuleID != action.ModuleID {
@@ -75,7 +76,7 @@ func (a *App) openCodex(ctx context.Context, action Action) (ActionResult, error
 		if runtime.GOOS == "windows" {
 			same = strings.EqualFold(filepath.Clean(requested), filepath.Clean(path))
 		}
-		if !same {
+		if !same && !(wholeTask && sameTaskContextPath(requested, taskPath)) {
 			return ActionResult{}, errors.New("Codex 目录与任务清单不一致")
 		}
 	}
@@ -83,7 +84,7 @@ func (a *App) openCodex(ctx context.Context, action Action) (ActionResult, error
 		return ActionResult{}, errors.New("任务或工作区目录不存在")
 	}
 	if forceNew {
-		return a.retryCodexWorkspaceTool(ctx, path, manifest, true, false)
+		return a.retryCodexWorkspaceTool(ctx, taskPath, manifest, true, false)
 	}
 	if action.ServiceID == "" && action.ModuleID == "" {
 		if a.Platform == nil {
@@ -94,7 +95,7 @@ func (a *App) openCodex(ctx context.Context, action Action) (ActionResult, error
 			return ActionResult{}, err
 		}
 		if boundThreadID == nil {
-			return a.retryCodexWorkspaceTool(ctx, path, manifest, false, true)
+			return a.retryCodexWorkspaceTool(ctx, taskPath, manifest, false, true)
 		}
 		if err := a.validateTaskContextFromCurrentSource(action); err != nil {
 			return ActionResult{}, err
@@ -129,7 +130,7 @@ func (a *App) retryCodexWorkspaceTool(ctx context.Context, path string, manifest
 		return ActionResult{}, err
 	}
 	service.WorkspaceTools.Registry = registry
-	updated, err := service.RetryWorkspaceTool(ctx, path, manifest, "codex")
+	updated, err := service.RetryWorkspaceTool(ctx, config, path, manifest, "codex")
 	if err != nil {
 		if updated.SchemaVersion == "" {
 			updated = manifest

@@ -440,10 +440,8 @@ func commentCreateResponseFailure(value any) string {
 		return "响应格式无效，无法确认远端是否已受理。"
 	}
 	if meegleResponseFailed(root) {
-		for _, candidate := range []any{at(root, "error", "message"), root["message"], root["msg"], root["error"]} {
-			if message := text(candidate); message != "" {
-				return message
-			}
+		if message := meegleResponseMessage(root); message != "" {
+			return message
 		}
 		return "Meegle 返回失败状态，发布结果仍需核对。"
 	}

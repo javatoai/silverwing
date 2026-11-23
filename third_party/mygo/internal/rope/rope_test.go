@@ -178,3 +178,25 @@ func TestChunks(t *testing.T) {
 		t.Fatalf("WriteTo differs from the string: %v", err)
 	}
 }
+
+func TestByteAfterRunes(t *testing.T) {
+	s := sample()
+	n := New(s).Root()
+	starts := []int{} // the byte each rune starts at, and the end
+	for i := range s {
+		starts = append(starts, i)
+	}
+	starts = append(starts, len(s))
+	r := rand.New(rand.NewPCG(5, 6))
+	for range 2000 {
+		from := r.IntN(len(starts))
+		count := r.IntN(3*ChunkBytes) - 2
+		want := starts[min(max(from+count, from), len(starts)-1)]
+		if got := ByteAfterRunes(n, starts[from], count); got != want {
+			t.Fatalf("ByteAfterRunes(%d, %d) = %d, want %d", starts[from], count, got, want)
+		}
+	}
+	if got := ByteAfterRunes(nil, 0, 3); got != 0 {
+		t.Fatalf("ByteAfterRunes of the empty text = %d", got)
+	}
+}

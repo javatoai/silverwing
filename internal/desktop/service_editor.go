@@ -12,44 +12,46 @@ import (
 	"time"
 
 	"silverwing-go/internal/application"
+	"silverwing-go/internal/domain"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
 type serviceEditorState struct {
-	session, section, groupID, serviceID string
-	service                              map[string]any
-	modules                              []serviceModuleDraft
-	copies                               []copyRuleDraft
-	commands                             []bootstrapCommandDraft
-	initialText                          map[string]string
-	initialBools                         map[string]bool
-	initialModules, initialCopies        []string
-	initialCommands                      []string
-	expandedModules                      map[string]bool
-	expandedTags, expandedCommands       map[string]bool
-	error                                string
-	saving                               bool
-	remotes, branches                    []string
-	activeRemote                         string
-	choicesRequest                       string
-	choicesLoading                       bool
-	choicesError                         string
-	remotesLoaded                        bool
-	branchChoices                        map[string][]string
-	branchChoicesLoaded                  map[string]bool
-	branchChoicesFailed                  map[string]bool
-	pendingChoiceRemotes                 []string
-	repositoryScope                      serviceRepositoryChoiceScope
-	repositoryScopeSet                   bool
-	remoteAddresses                      []map[string]any
-	addressesRequest                     string
-	addressesLoading, addressesLoaded    bool
-	addressesError                       string
-	copiesMode, commandsMode             string
-	exampleOpen                          bool
-	exampleTitle, exampleJSON            string
+	session, section, serviceID       string
+	service                           map[string]any
+	modules                           []serviceModuleDraft
+	copies                            []copyRuleDraft
+	commands                          []bootstrapCommandDraft
+	initialText                       map[string]string
+	initialBools                      map[string]bool
+	initialModules, initialCopies     []string
+	initialCommands                   []string
+	selectedModuleID                  string
+	revealSelectedModule              bool
+	modulePopup                       *serviceModulePopup
+	error                             string
+	saving                            bool
+	remotes, branches                 []string
+	activeRemote                      string
+	choicesRequest                    string
+	choicesLoading                    bool
+	choicesError                      string
+	remotesLoaded                     bool
+	branchChoices                     map[string][]string
+	branchChoicesLoaded               map[string]bool
+	branchChoicesFailed               map[string]bool
+	pendingChoiceRemotes              []string
+	repositoryScope                   serviceRepositoryChoiceScope
+	repositoryScopeSet                bool
+	remoteAddresses                   []map[string]any
+	addressesRequest                  string
+	addressesLoading, addressesLoaded bool
+	addressesError                    string
+	copiesMode, commandsMode          string
+	exampleOpen                       bool
+	exampleTitle, exampleJSON         string
 }
 
 type serviceModuleDraft struct {
@@ -80,16 +82,16 @@ var serviceEditorSections = []struct{ id, title string }{
 	{"modules", "工作区模块"}, {"copies", "复制规则"}, {"commands", "初始化命令"},
 }
 
-func (s *app) openServiceEditor(groupID, serviceID, section string) {
+func (s *app) openServiceEditor(serviceID, section string) {
 	s.cancelServiceRepositoryChoiceReads()
 	s.clearServiceEditorInputs()
-	state := &serviceEditorState{session: fmt.Sprintf("%x", time.Now().UTC().UnixNano()), section: section, groupID: groupID, serviceID: serviceID,
-		initialText: make(map[string]string), initialBools: make(map[string]bool), expandedModules: make(map[string]bool),
-		expandedTags: make(map[string]bool), expandedCommands: make(map[string]bool), copiesMode: "form", commandsMode: "form"}
+	state := &serviceEditorState{session: fmt.Sprintf("%x", time.Now().UTC().UnixNano()), section: section, serviceID: serviceID,
+		initialText: make(map[string]string), initialBools: make(map[string]bool),
+		copiesMode: "form", commandsMode: "form"}
 	state.branchChoices = make(map[string][]string)
 	state.branchChoicesLoaded = make(map[string]bool)
 	state.branchChoicesFailed = make(map[string]bool)
-	if state.section == "" {
+	if state.section == "" || state.section == "genbu" && !s.integrationReady("genbu") {
 		state.section = "basic"
 	}
 	state.service = map[string]any{
@@ -106,7 +108,7 @@ func (s *app) openServiceEditor(groupID, serviceID, section string) {
 			s.lastError = err.Error()
 			return
 		}
-		stored := findServiceConfig(config, serviceID, groupID)
+		stored := findServiceConfig(config, serviceID)
 		if stored == nil {
 			s.lastError = fmt.Sprintf("服务 %q 不在当前配置中", serviceID)
 			return
@@ -122,7 +124,7 @@ func (s *app) openServiceEditor(groupID, serviceID, section string) {
 		state.modules = []serviceModuleDraft{newServiceModuleDraft("default", "default", "STANDARD_WORKTREE")}
 	}
 	if len(state.modules) > 0 {
-		state.expandedModules[state.modules[0].id] = true
+		state.selectedModuleID = state.modules[0].id
 	}
 	bootstrap := mapData(state.service["bootstrap"])
 	state.copies = copyRuleDrafts(bootstrap["copyRules"])
@@ -130,6 +132,9 @@ func (s *app) openServiceEditor(groupID, serviceID, section string) {
 	state.initialModules, state.initialCopies, state.initialCommands = moduleIDs(state.modules), copyIDs(state.copies), bootstrapCommandIDs(state.commands)
 	branch := mapString(state.service, "masterBranch")
 	state.activeRemote = branchRemote(branch)
+	if previous := s.workspaceUnit.state.serviceEditor; previous != nil {
+		previous.modulePopup = nil
+	}
 	s.workspaceUnit.state.serviceEditor = state
 	s.form = actionForm{kind: "service.save", mode: "service-editor", serviceID: serviceID}
 	s.dialogTitle = "服务配置"
@@ -469,8 +474,12 @@ func (s *app) renderServiceEditorDialog(c *ui.Context, p palette) {
 		return
 	}
 	if !s.dialogOpen {
+		state.modulePopup = nil
 		s.cancelServiceRepositoryChoiceReads()
 		return
+	}
+	if state.section == "genbu" && !s.integrationReady("genbu") {
+		state.section = "basic"
 	}
 	open := s.dialogOpen
 	if ui.DialogBase(c.Key("service-editor-dialog"), &open, func(backdrop, panel ui.Element) {
@@ -496,8 +505,19 @@ func (s *app) renderServiceEditorDialog(c *ui.Context, p palette) {
 			ui.Divider(c)
 			ui.Row(c).Grow(1).MinHeight(0).Gap(12).AlignItems(ui.Stretch).Children(func() {
 				s.renderServiceEditorSectionSidebar(c, p, state, sidebarWidth)
-				ui.Scroll(c.Key("service-editor-content-"+state.session+"-"+state.section)).Grow(1).MinWidth(0).MinHeight(0).Padding(4, 4, 8, 2).Children(func() {
-					ui.Column(c).FillWidth().MaxWidth(720).Gap(12).Children(func() {
+				key := "service-editor-content-" + state.session + "-" + state.section
+				var viewport ui.Element
+				if state.section == "modules" {
+					viewport = ui.Column(c.Key(key))
+				} else {
+					viewport = ui.Scroll(c.Key(key))
+				}
+				viewport.Grow(1).MinWidth(0).MinHeight(0).Padding(4, 4, 8, 2).Children(func() {
+					content := ui.Column(c).FillWidth().MaxWidth(720).Gap(12)
+					if state.section == "modules" {
+						content.Grow(1).MinHeight(0)
+					}
+					content.Children(func() {
 						s.renderServiceEditorSectionContent(c, p, state)
 					})
 				})
@@ -505,7 +525,7 @@ func (s *app) renderServiceEditorDialog(c *ui.Context, p palette) {
 			ui.Divider(c)
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				label(c, "修改仅影响后续任务", 11, p.muted).Grow(1)
-				if action(c, "service-editor-cancel", "close", "取消", p, false) && !state.saving {
+				if action(c, "service-editor-cancel", "close", "取消", p, false) && !state.saving && state.modulePopup == nil {
 					s.dismissServiceEditor()
 				}
 				if action(c, "service-editor-save", "save", "保存配置", p, true) && !state.saving {
@@ -513,7 +533,7 @@ func (s *app) renderServiceEditorDialog(c *ui.Context, p palette) {
 				}
 			})
 		})
-	}).Dismissed() {
+	}).Dismissed() && state.modulePopup == nil {
 		s.dismissServiceEditor()
 	}
 	if state.exampleOpen {
@@ -538,17 +558,20 @@ func (s *app) renderServiceEditorDialog(c *ui.Context, p palette) {
 			})
 		})
 	}
+	s.renderServiceModulePopup(c, p, state)
 }
 
 func (s *app) selectServiceEditorSection(section string) {
-	if s.workspaceUnit.state.serviceEditor == nil {
+	state := s.workspaceUnit.state.serviceEditor
+	if state == nil || section == "genbu" && !s.integrationReady("genbu") {
 		return
 	}
-	if s.workspaceUnit.state.serviceEditor.section != section {
+	if state.section != section {
+		state.modulePopup = nil
 		s.cancelServiceRepositoryChoiceReads()
 	}
-	s.workspaceUnit.state.serviceEditor.section = section
-	if (section == "git" || section == "modules") && !s.workspaceUnit.state.serviceEditor.remotesLoaded && s.workspaceUnit.state.serviceEditor.choicesError == "" {
+	state.section = section
+	if (section == "git" || section == "modules") && !state.remotesLoaded && state.choicesError == "" {
 		s.requestServiceRepositoryChoices("", false)
 	}
 	if section == "git" {
@@ -559,6 +582,9 @@ func (s *app) selectServiceEditorSection(section string) {
 func (s *app) renderServiceEditorSectionSidebar(c *ui.Context, p palette, state *serviceEditorState, width float32) {
 	ui.Scroll(c.Key("service-editor-sidebar-" + state.session)).Width(width).Shrink(0).MinHeight(0).Padding(6).Gap(4).Background(p.soft).Radius(12).Children(func() {
 		for _, section := range serviceEditorSections {
+			if section.id == "genbu" && !s.integrationReady("genbu") {
+				continue
+			}
 			selected := state.section == section.id
 			button := ui.ButtonBase(c.Key("service-editor-section-"+section.id)).FillWidth().Height(38).Padding(0, 10).Radius(9).Label(section.title)
 			if selected {
@@ -608,6 +634,7 @@ func (s *app) dismissServiceEditor() {
 		if s.workspaceUnit.state.serviceEditor != state || state.session != session || state.saving {
 			return
 		}
+		state.modulePopup = nil
 		s.cancelServiceRepositoryChoiceReads()
 		s.workspaceUnit.state.serviceEditor = nil
 		s.dialogOpen = false
@@ -636,7 +663,7 @@ func (s *app) serviceEditorDirty() bool {
 		}
 	}
 	for _, initial := range mapsFromData(state.service["modules"]) {
-		module := valueModule(state.modules, mapString(initial, "id"))
+		module := findServiceModuleDraft(state.modules, mapString(initial, "id"))
 		if module == nil {
 			continue
 		}
@@ -709,8 +736,8 @@ func (s *app) renderServiceEditorGit(c *ui.Context, p palette, state *serviceEdi
 	}
 	label(c, "仓库远程地址", 11, p.muted)
 	s.renderServiceRemoteAddresses(c, p, state)
-	s.serviceEditorBranchField(c, p, state, "masterBranch", "主分支", mapString(state.service, "masterBranch"), "git-master")
-	s.serviceEditorBranchField(c, p, state, "testTagBaselineRef", "测试 Tag 默认目标", mapString(state.service, "testTagBaselineRef"), "git-test-tag")
+	s.serviceEditorBranchField(c, p, state, "masterBranch", "主分支", mapString(state.service, "masterBranch"))
+	s.serviceEditorBranchField(c, p, state, "testTagBaselineRef", "测试 Tag 默认目标", mapString(state.service, "testTagBaselineRef"))
 	s.serviceEditorField(c, p, "commitMessageTemplate", "提交信息模板", mapString(state.service, "commitMessageTemplate"), false)
 }
 
@@ -815,7 +842,7 @@ func gitRemoteBrowserURL(raw string) string {
 }
 
 func (s *app) renderServiceEditorGenbu(c *ui.Context, p palette, state *serviceEditorState) {
-	sectionHeading(c, p, "tag", "Genbu", "只读取此服务的 Tag 构建与发布状态")
+	sectionHeading(c, p, "tag", "Genbu", "查看服务运行、配置和 Tag 状态，提交配置审批")
 	s.serviceEditorSwitch(c, p, "genbuProbeEnabled", "启用 Genbu 探测", mapBool(state.service, "genbuProbeEnabled", false))
 	if *s.serviceEditorBool("genbuProbeEnabled", mapBool(state.service, "genbuProbeEnabled", false)) {
 		s.serviceEditorField(c, p, "genbuServiceName", "Genbu 服务名", firstNonEmpty(mapString(state.service, "genbuServiceName"), mapString(state.service, "displayName")), false)
@@ -823,45 +850,48 @@ func (s *app) renderServiceEditorGenbu(c *ui.Context, p palette, state *serviceE
 }
 
 func (s *app) renderServiceEditorModules(c *ui.Context, p palette, state *serviceEditorState) {
-	sectionHeading(c, p, "code", "工作区模块", "模块保存到服务配置。删除和新增只在点击保存后生效。")
-	for index := range state.modules {
-		module := &state.modules[index]
-		s.renderServiceModuleCard(c, p, state, module)
+	sectionHeading(c, p, "code", "工作区模块", "")
+	if index := state.selectedModuleIndex(); index >= 0 {
+		state.selectModule(state.modules[index].id)
+		s.renderServiceModuleTabs(c, p, state, index)
 	}
 	ui.Row(c).FillWidth().Wrap().Gap(8).Children(func() {
 		if action(c, "service-editor-module-worktree", "plus", "添加 Worktree 模块", p, false) {
 			module := newServiceModuleDraft(newDesktopEditorID("module"), "default", "STANDARD_WORKTREE")
 			state.modules = append(state.modules, module)
-			state.expandedModules[module.id] = true
+			state.selectModule(module.id)
+			c.Invalidate()
 		}
 		if action(c, "service-editor-module-clone", "plus", "添加克隆模块", p, false) {
 			module := newServiceModuleDraft(newDesktopEditorID("module"), "default", "INDEPENDENT_CLONE")
 			state.modules = append(state.modules, module)
-			state.expandedModules[module.id] = true
+			state.selectModule(module.id)
+			c.Invalidate()
 		}
 	})
+	index := state.selectedModuleIndex()
+	if index < 0 {
+		label(c, "还没有工作区模块", 12, p.muted)
+		return
+	}
+	module := &state.modules[index]
+	remove := false
+	ui.Scroll(c.Key("service-editor-module-content-"+state.session+"-"+module.id)).FillWidth().Grow(1).MinHeight(0).Padding(0, 2, 8, 0).Children(func() {
+		remove = s.renderServiceModuleForm(c, p, state, module)
+	})
+	if remove {
+		state.modules = removeServiceModule(state.modules, module.id)
+		state.selectModule(state.modules[min(index, len(state.modules)-1)].id)
+		c.Invalidate()
+	}
 }
 
-func (s *app) renderServiceModuleCard(c *ui.Context, p palette, state *serviceEditorState, module *serviceModuleDraft) {
-	ui.Column(c).FillWidth().Padding(12).Gap(9).Background(p.soft).Border(1, p.line).Radius(10).Children(func() {
-		ui.Row(c).Gap(8).Children(func() {
-			label(c, firstNonEmpty(module.name, module.id)+" · "+serviceStrategyLabel(*s.serviceEditorModuleText(module, "strategy", module.strategy)), 12, p.text).Grow(1).SingleLine()
-			if action(c, "service-editor-module-toggle-"+module.id, map[bool]string{true: "chevron", false: "chevron-left"}[state.expandedModules[module.id]], map[bool]string{true: "收起模块", false: "展开模块"}[state.expandedModules[module.id]], p, false) {
-				state.expandedModules[module.id] = !state.expandedModules[module.id]
-			}
-		})
-		if !state.expandedModules[module.id] {
-			label(c, "主分支："+firstNonEmpty(module.masterBranch, *s.serviceEditorText("masterBranch", mapString(state.service, "masterBranch"))), 10, p.muted)
-			return
-		}
+func (s *app) renderServiceModuleForm(c *ui.Context, p palette, state *serviceEditorState, module *serviceModuleDraft) bool {
+	remove := false
+	ui.Column(c.Key("service-editor-module-form-"+module.id)).FillWidth().Padding(12).Gap(9).Background(p.soft).Border(1, p.line).Radius(10).Children(func() {
 		ui.Row(c).Gap(8).Children(func() {
 			label(c, "模块 ID · "+module.id, 9, p.muted).Grow(1).SingleLine()
-			if len(state.modules) > 1 && action(c, "service-editor-module-remove-"+module.id, "delete", "删除模块", p, false) {
-				state.modules = removeServiceModule(state.modules, module.id)
-				delete(state.expandedModules, module.id)
-				delete(state.expandedTags, module.id)
-				delete(state.expandedCommands, module.id)
-			}
+			remove = len(state.modules) > 1 && action(c, "service-editor-module-remove-"+module.id, "delete", "删除模块", p, false)
 		})
 		s.serviceEditorModuleField(c, p, module, "name", "模块名", module.name, false)
 		ui.Column(c).Gap(5).Children(func() {
@@ -879,112 +909,18 @@ func (s *app) renderServiceModuleCard(c *ui.Context, p palette, state *serviceEd
 			ui.Switch(c.Key("service-editor-inherit-master-"+module.id), inheritBranch)
 		})
 		if !*inheritBranch {
-			s.serviceEditorBranchField(c, p, state, "module:"+module.id+":masterBranch", "模块主分支", module.masterBranch, "module-branch-"+module.id)
+			branchLabel := "模块主分支"
+			if *s.serviceEditorModuleText(module, "strategy", module.strategy) == string(domain.WorkspaceIndependentClone) {
+				branchLabel = "默认克隆分支"
+			}
+			s.serviceEditorBranchField(c, p, state, "module:"+module.id+":masterBranch", branchLabel, module.masterBranch)
 		} else {
 			label(c, "当前继承："+*s.serviceEditorText("masterBranch", mapString(state.service, "masterBranch")), 10, p.muted)
 		}
-		if s.configBool("tagEnabled", false) {
-			tagEnabledInitial := mapBool(module.raw, "tagEnabled", module.strategy == "STANDARD_WORKTREE")
-			if action(c, "service-editor-tag-toggle-"+module.id, "tag", fmt.Sprintf("测试 Tag · %s %s", map[bool]string{true: "已启用", false: "已关闭"}[*s.serviceEditorBool("module:"+module.id+":tagEnabled", tagEnabledInitial)], map[bool]string{true: "▴", false: "▾"}[state.expandedTags[module.id]]), p, false) {
-				state.expandedTags[module.id] = !state.expandedTags[module.id]
-			}
-			if state.expandedTags[module.id] {
-				s.serviceEditorSwitch(c, p, "module:"+module.id+":tagEnabled", "启用测试 Tag", tagEnabledInitial)
-				tagEnabled := s.serviceEditorBool("module:"+module.id+":tagEnabled", tagEnabledInitial)
-				if *tagEnabled {
-					ui.Column(c).Gap(6).Children(func() {
-						label(c, "Tag 模式", 11, p.muted)
-						ui.Row(c).FillWidth().Wrap().Gap(6).Children(func() {
-							for _, mode := range []string{"MERGE_TO_TARGET_BRANCH", "CURRENT_BRANCH"} {
-								value := mode
-								title := map[string]string{"MERGE_TO_TARGET_BRANCH": "合并到目标分支后构建", "CURRENT_BRANCH": "当前分支直接构建"}[value]
-								s.settingsChoice(c, p, "service-editor-tag-mode-"+module.id+"-"+value, title, *s.serviceEditorModuleText(module, "tagMode", module.tagMode) == value, func() { *s.serviceEditorModuleText(module, "tagMode", module.tagMode) = value })
-							}
-						})
-					})
-					currentMode := *s.serviceEditorModuleText(module, "tagMode", module.tagMode)
-					if currentMode == "MERGE_TO_TARGET_BRANCH" {
-						inheritTarget := s.serviceEditorBool("module:"+module.id+":inherit-tag-target", module.tagTargetRef == "")
-						ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-							label(c, "继承服务 Tag 目标", 11, p.text).Grow(1)
-							ui.Switch(c.Key("service-editor-inherit-tag-"+module.id), inheritTarget)
-						})
-						if *inheritTarget {
-							label(c, "当前继承："+*s.serviceEditorText("testTagBaselineRef", mapString(state.service, "testTagBaselineRef")), 10, p.muted)
-						} else {
-							s.serviceEditorBranchField(c, p, state, "module:"+module.id+":tagTargetRef", "Tag 目标分支", module.tagTargetRef, "module-tag-"+module.id)
-						}
-					}
-					s.serviceEditorModuleField(c, p, module, "tagMessagePrefix", "Tag 信息前缀", module.tagMessagePrefix, false)
-				}
-			}
-		}
 		ui.Divider(c)
-		if action(c, "service-editor-command-toggle-"+module.id, "terminal", fmt.Sprintf("快捷命令 · %d %s", len(module.commands), map[bool]string{true: "▴", false: "▾"}[state.expandedCommands[module.id]]), p, false) {
-			state.expandedCommands[module.id] = !state.expandedCommands[module.id]
-		}
-		if state.expandedCommands[module.id] {
-			for commandIndex := range module.commands {
-				s.renderWorkspaceCommand(c, p, "module:"+module.id, &module.commands[commandIndex])
-			}
-			if action(c, "service-editor-command-add-"+module.id, "plus", "添加快捷命令", p, false) {
-				module.commands = append(module.commands, workspaceCommandDraft{raw: map[string]any{}, id: newDesktopEditorID("command"), name: "Maven 命令", iconKey: "maven", executable: "mvn", directory: ".", timeout: "1800"})
-			}
-		}
+		s.renderServiceModulePopupButtons(c, p, state, module)
 	})
-}
-
-func serviceStrategyLabel(value string) string {
-	if value == "INDEPENDENT_CLONE" {
-		return "独立克隆"
-	}
-	return "Worktree"
-}
-
-func (s *app) renderWorkspaceCommand(c *ui.Context, p palette, owner string, command *workspaceCommandDraft) {
-	ui.Column(c).FillWidth().Padding(9).Gap(7).Background(p.surface).Border(1, p.line).Radius(8).Children(func() {
-		ui.Row(c).Gap(8).Children(func() {
-			label(c, command.id, 9, p.muted).Grow(1).SingleLine()
-			if action(c, "service-editor-command-delete-"+command.id, "delete", "删除快捷命令", p, false) {
-				if strings.HasPrefix(owner, "module:") {
-					moduleID := strings.TrimPrefix(owner, "module:")
-					for index := range s.workspaceUnit.state.serviceEditor.modules {
-						if s.workspaceUnit.state.serviceEditor.modules[index].id == moduleID {
-							s.workspaceUnit.state.serviceEditor.modules[index].commands = removeWorkspaceCommand(s.workspaceUnit.state.serviceEditor.modules[index].commands, command.id)
-							break
-						}
-					}
-				} else {
-					s.workspaceUnit.state.serviceEditor.commands = removeBootstrapCommand(s.workspaceUnit.state.serviceEditor.commands, command.id)
-				}
-			}
-		})
-		s.serviceCommandField(c, p, owner, command, "name", "命令名称", command.name, false)
-		s.serviceCommandField(c, p, owner, command, "executable", "可执行程序", command.executable, false)
-		ui.Column(c).Gap(5).Children(func() {
-			label(c, "图标", 10, p.muted)
-			ui.Row(c).FillWidth().Wrap().Gap(4).Children(func() {
-				for _, iconKey := range []string{"build", "maven", "maven-clean", "maven-install", "maven-deploy", "play", "terminal", "package", "upload", "refresh", "code", "database", "settings"} {
-					icon := iconKey
-					short := icon
-					if len(short) > 12 {
-						short = short[:12]
-					}
-					s.settingsChoice(c, p, "service-editor-icon-"+command.id+"-"+icon, short, *s.serviceCommandText(owner, command, "iconKey", command.iconKey) == icon, func() { *s.serviceCommandText(owner, command, "iconKey", command.iconKey) = icon })
-				}
-			})
-		})
-		args := s.serviceCommandText(owner, command, "arguments", command.arguments)
-		label(c, "参数（每行一个；不经过 Shell）", 10, p.muted)
-		ui.TextArea(c.Key("service-editor-"+owner+"-"+command.id+"-arguments"), args).FillWidth().Height(76).Padding(9).Background(p.surface).Border(1, p.line).Radius(7)
-		s.serviceCommandField(c, p, owner, command, "directory", "工作目录", firstNonEmpty(command.directory, "."), false)
-		s.serviceCommandField(c, p, owner, command, "timeout", "超时（秒）", firstNonEmpty(command.timeout, "600"), false)
-		if strings.HasPrefix(owner, "module:") {
-			s.serviceCommandSwitch(c, p, owner, command, "enabled", "启用", mapBool(command.raw, "enabled", true))
-		}
-		preview := strings.Join(append([]string{*s.serviceCommandText(owner, command, "executable", command.executable)}, nonBlankLines(*args)...), " ")
-		label(c, "预览："+preview, 10, p.muted).SingleLine().Tooltip(preview)
-	})
+	return remove
 }
 
 func (s *app) renderServiceEditorCopies(c *ui.Context, p palette, state *serviceEditorState) {
@@ -996,13 +932,14 @@ func (s *app) renderServiceEditorCopies(c *ui.Context, p palette, state *service
 		ui.TextArea(c.Key("service-editor-copies-json"), jsonText).FillWidth().Height(360).Padding(12).Font("Consolas").FontSize(12).Background(p.surface).Border(1, p.line).Radius(8)
 		return
 	}
+	var removeID string
 	for index := range state.copies {
 		rule := &state.copies[index]
-		ui.Column(c).FillWidth().Padding(11).Gap(7).Background(p.soft).Border(1, p.line).Radius(9).Children(func() {
+		ui.Column(c.Key("service-editor-copy-card-"+rule.id)).FillWidth().Padding(11).Gap(7).Background(p.soft).Border(1, p.line).Radius(9).Children(func() {
 			ui.Row(c).Gap(8).Children(func() {
 				label(c, "规则 "+fmt.Sprint(index+1), 11, p.text).Grow(1)
 				if action(c, "service-editor-copy-delete-"+rule.id, "delete", "删除复制规则", p, false) {
-					state.copies = removeCopyRule(state.copies, rule.id)
+					removeID = rule.id
 				}
 			})
 			s.serviceCopyField(c, p, rule, "source", "仓库内源路径", rule.source)
@@ -1019,6 +956,10 @@ func (s *app) renderServiceEditorCopies(c *ui.Context, p palette, state *service
 			})
 		})
 	}
+	if removeID != "" {
+		state.copies = removeCopyRule(state.copies, removeID)
+		c.Invalidate()
+	}
 	if action(c, "service-editor-copy-add", "plus", "添加复制规则", p, false) {
 		state.copies = append(state.copies, copyRuleDraft{raw: map[string]any{}, id: newDesktopEditorID("copy")})
 	}
@@ -1033,15 +974,16 @@ func (s *app) renderServiceEditorCommands(c *ui.Context, p palette, state *servi
 		ui.TextArea(c.Key("service-editor-commands-json"), jsonText).FillWidth().Height(360).Padding(12).Font("Consolas").FontSize(12).Background(p.surface).Border(1, p.line).Radius(8)
 		return
 	}
+	var removeID string
 	for index := range state.commands {
 		command := &state.commands[index]
 		commandFields := workspaceCommandDraft{raw: command.raw, id: command.id, name: command.name,
 			executable: command.executable, arguments: command.arguments, directory: command.directory, timeout: command.timeout}
-		ui.Column(c).FillWidth().Padding(11).Gap(7).Background(p.soft).Border(1, p.line).Radius(9).Children(func() {
+		ui.Column(c.Key("service-editor-bootstrap-command-card-"+command.id)).FillWidth().Padding(11).Gap(7).Background(p.soft).Border(1, p.line).Radius(9).Children(func() {
 			ui.Row(c).Gap(8).Children(func() {
 				label(c, "命令 "+fmt.Sprint(index+1), 11, p.text).Grow(1)
 				if action(c, "service-editor-bootstrap-command-delete-"+command.id, "delete", "删除初始化命令", p, false) {
-					state.commands = removeBootstrapCommand(state.commands, command.id)
+					removeID = command.id
 				}
 			})
 			s.serviceCommandField(c, p, "bootstrap", &commandFields, "name", "命令名称", command.name, false)
@@ -1053,6 +995,10 @@ func (s *app) renderServiceEditorCommands(c *ui.Context, p palette, state *servi
 			preview := strings.Join(append([]string{*s.serviceCommandText("bootstrap", &commandFields, "executable", command.executable)}, nonBlankLines(*s.serviceCommandText("bootstrap", &commandFields, "arguments", command.arguments))...), " ")
 			label(c, "预览："+preview, 10, p.muted).SingleLine().Tooltip(preview)
 		})
+	}
+	if removeID != "" {
+		state.commands = removeBootstrapCommand(state.commands, removeID)
+		c.Invalidate()
 	}
 	if action(c, "service-editor-bootstrap-command-add", "plus", "添加初始化命令", p, false) {
 		state.commands = append(state.commands, bootstrapCommandDraft{raw: map[string]any{}, id: newDesktopEditorID("bootstrap-command"), directory: ".", timeout: "600"})
@@ -1182,9 +1128,13 @@ func (s *app) serviceEditorSwitch(c *ui.Context, p palette, key, title string, i
 	})
 }
 
-func (s *app) serviceEditorBranchField(c *ui.Context, p palette, state *serviceEditorState, key, title, initial, keySuffix string) {
-	s.observeServiceRepositoryChoiceScope()
+func (s *app) serviceEditorBranchField(c *ui.Context, p palette, state *serviceEditorState, key, title, initial string) {
 	value := s.serviceEditorText(key, initial)
+	s.renderServiceEditorBranchInput(c, p, state, value, title, "service-editor-branch-"+state.session+"-"+key)
+}
+
+func (s *app) renderServiceEditorBranchInput(c *ui.Context, p palette, state *serviceEditorState, value *string, title, key string) {
+	s.observeServiceRepositoryChoiceScope()
 	remote := branchRemote(*value)
 	branches, loaded, failed := s.serviceEditorBranchChoices(remote)
 	if !loaded && !failed && state.choicesError == "" && (state.section == "git" || state.section == "modules") {
@@ -1192,7 +1142,7 @@ func (s *app) serviceEditorBranchField(c *ui.Context, p palette, state *serviceE
 	}
 	ui.Column(c).Gap(5).Children(func() {
 		label(c, title, 11, p.muted)
-		combo := ui.ComboboxBase(c.Key("service-editor-branch-"+s.workspaceUnit.state.serviceEditor.session+"-"+key), value)
+		combo := ui.ComboboxBase(c.Key(key), value)
 		combo.Input.FillWidth().Height(38).Padding(10, 30, 10, 10).Placeholder("remote/branch").Background(p.surface).Border(1, p.line).Radius(7).Label(title)
 		combo.Input.Draw(func(draw *ui.Painter, rect ui.Rect) {
 			var arrow ui.Path
@@ -1601,13 +1551,12 @@ func (s *app) buildServiceEditorConfig() (map[string]any, error) {
 		service = map[string]any{}
 	}
 	serviceID := strings.TrimSpace(*s.serviceEditorText("serviceId", state.serviceID))
-	groupID := strings.TrimSpace(*s.serviceEditorText("groupId", state.groupID))
 	repositoryID := strings.TrimSpace(*s.serviceEditorText("repositoryId", mapString(state.service, "repositoryId")))
 	name := strings.TrimSpace(*s.serviceEditorText("name", mapString(state.service, "displayName")))
 	masterBranch := strings.TrimSpace(*s.serviceEditorText("masterBranch", mapString(state.service, "masterBranch")))
 	testTagBaselineRef := strings.TrimSpace(*s.serviceEditorText("testTagBaselineRef", mapString(state.service, "testTagBaselineRef")))
-	if serviceID == "" || groupID == "" || repositoryID == "" || name == "" {
-		return nil, fmt.Errorf("项目组、服务 ID、名称和仓库均不能为空")
+	if serviceID == "" || repositoryID == "" || name == "" {
+		return nil, fmt.Errorf("服务 ID、名称和仓库均不能为空")
 	}
 	if masterBranch == "" || !validRemoteBranch(masterBranch) {
 		return nil, fmt.Errorf("主分支必须是 remote/branch 格式")
@@ -1619,12 +1568,14 @@ func (s *app) buildServiceEditorConfig() (map[string]any, error) {
 	service["masterBranch"], service["testTagBaselineRef"] = masterBranch, testTagBaselineRef
 	service["enabled"] = *s.serviceEditorBool("enabled", mapBool(state.service, "enabled", true))
 	service["developmentTool"] = firstNonEmpty(*s.serviceEditorText("developmentTool", mapString(state.service, "developmentTool")), "INTELLIJ_IDEA")
-	service["genbuProbeEnabled"] = *s.serviceEditorBool("genbuProbeEnabled", mapBool(state.service, "genbuProbeEnabled", false))
-	genbuName := strings.TrimSpace(*s.serviceEditorText("genbuServiceName", firstNonEmpty(mapString(state.service, "genbuServiceName"), name)))
-	if *s.serviceEditorBool("genbuProbeEnabled", mapBool(state.service, "genbuProbeEnabled", false)) && genbuName == "" {
-		return nil, fmt.Errorf("启用 Genbu 探测时必须填写 Genbu 服务名")
+	if s.integrationReady("genbu") {
+		probeEnabled := *s.serviceEditorBool("genbuProbeEnabled", mapBool(state.service, "genbuProbeEnabled", false))
+		genbuName := strings.TrimSpace(*s.serviceEditorText("genbuServiceName", firstNonEmpty(mapString(state.service, "genbuServiceName"), name)))
+		if probeEnabled && genbuName == "" {
+			return nil, fmt.Errorf("启用 Genbu 探测时必须填写 Genbu 服务名")
+		}
+		service["genbuProbeEnabled"], service["genbuServiceName"] = probeEnabled, genbuName
 	}
-	service["genbuServiceName"] = genbuName
 	service["commitMessageTemplate"] = *s.serviceEditorText("commitMessageTemplate", mapString(state.service, "commitMessageTemplate"))
 	modules := make([]any, 0, len(state.modules))
 	if len(state.modules) == 0 {
@@ -1634,16 +1585,16 @@ func (s *app) buildServiceEditorConfig() (map[string]any, error) {
 	seenModuleNames, seenModuleDirectories := map[string]bool{}, map[string]bool{}
 	for _, draft := range state.modules {
 		id := strings.TrimSpace(draft.id)
-		name := strings.TrimSpace(*s.serviceEditorModuleText(valueModule(state.modules, draft.id), "name", draft.name))
+		name := strings.TrimSpace(*s.serviceEditorModuleText(&draft, "name", draft.name))
 		if name == "" {
 			name = "default"
 		}
-		strategy := *s.serviceEditorModuleText(valueModule(state.modules, draft.id), "strategy", draft.strategy)
+		strategy := *s.serviceEditorModuleText(&draft, "strategy", draft.strategy)
 		if id == "" {
 			return nil, fmt.Errorf("每个模块都必须填写 ID")
 		}
-		if !validServiceModuleName(name) {
-			return nil, fmt.Errorf("模块 %s 名称不合法：只允许英文字母、数字、-、_、/，且 / 不能连续或位于首尾", id)
+		if err := domain.ValidateModuleName(name); err != nil {
+			return nil, fmt.Errorf("模块名 %q 不合法：%w", name, err)
 		}
 		if seenModuleIDs[strings.ToLower(id)] {
 			return nil, fmt.Errorf("模块 ID 重复：%s", id)
@@ -1678,21 +1629,16 @@ func (s *app) buildServiceEditorConfig() (map[string]any, error) {
 			}
 			module["masterBranch"] = branch
 		}
-		tagEnabled := *s.serviceEditorBool("module:"+id+":tagEnabled", mapBool(draft.raw, "tagEnabled", strategy == "STANDARD_WORKTREE"))
-		tagMode := *s.serviceEditorModuleText(valueModule(state.modules, id), "tagMode", draft.tagMode)
-		if tagMode != "MERGE_TO_TARGET_BRANCH" && tagMode != "CURRENT_BRANCH" {
-			return nil, fmt.Errorf("模块 %s 的 Tag 模式无效", name)
+		draft.strategy = strategy
+		tag := s.readServiceModuleTagDraft(&draft)
+		target, err := tag.targetForSave()
+		if err != nil {
+			return nil, fmt.Errorf("模块 %s：%w", name, err)
 		}
-		module["tagEnabled"], module["tagMode"] = tagEnabled, tagMode
-		module["tagMessagePrefix"] = strings.TrimSpace(*s.serviceEditorModuleText(valueModule(state.modules, id), "tagMessagePrefix", draft.tagMessagePrefix))
-		if tagMode == "CURRENT_BRANCH" || *s.serviceEditorBool("module:"+id+":inherit-tag-target", draft.tagTargetRef == "") {
-			module["tagTargetRef"] = nil
-		} else {
-			branch := strings.TrimSpace(*s.serviceEditorText("module:"+id+":tagTargetRef", draft.tagTargetRef))
-			if !validRemoteBranch(branch) {
-				return nil, fmt.Errorf("模块 %s Tag 目标必须是 remote/branch 格式", name)
-			}
-			module["tagTargetRef"] = branch
+		module["tagEnabled"], module["tagMode"] = tag.Enabled, tag.Mode
+		module["tagMessagePrefix"], module["tagTargetRef"] = strings.TrimSpace(tag.MessagePrefix), nil
+		if target != nil {
+			module["tagTargetRef"] = *target
 		}
 		commands := make([]any, 0, len(draft.commands))
 		for _, command := range draft.commands {
@@ -1723,30 +1669,13 @@ func (s *app) buildServiceEditorConfig() (map[string]any, error) {
 	return service, nil
 }
 
-func validServiceModuleName(value string) bool {
-	if value == "" || strings.TrimSpace(value) != value {
-		return false
-	}
-	for _, segment := range strings.Split(value, "/") {
-		if segment == "" {
-			return false
-		}
-		for _, char := range segment {
-			if !((char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') || char == '-' || char == '_') {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func valueModule(modules []serviceModuleDraft, id string) *serviceModuleDraft {
+func findServiceModuleDraft(modules []serviceModuleDraft, id string) *serviceModuleDraft {
 	for index := range modules {
 		if modules[index].id == id {
 			return &modules[index]
 		}
 	}
-	return &serviceModuleDraft{id: id}
+	return nil
 }
 
 func validRemoteBranch(value string) bool {
@@ -1787,7 +1716,7 @@ func (s *app) buildWorkspaceCommand(owner string, draft workspaceCommandDraft, m
 
 func (s *app) submitServiceEditor() {
 	state := s.workspaceUnit.state.serviceEditor
-	if state == nil || s.busy {
+	if state == nil || state.modulePopup != nil || s.busy {
 		return
 	}
 	service, err := s.buildServiceEditorConfig()
@@ -1795,25 +1724,14 @@ func (s *app) submitServiceEditor() {
 		state.error = err.Error()
 		return
 	}
-	groupID := strings.TrimSpace(*s.serviceEditorText("groupId", state.groupID))
 	serviceID := mapString(service, "id")
 	s.cancelServiceRepositoryChoiceReads()
 	state.saving, state.error = true, ""
-	s.act("service.save", "", serviceID, "", "", "", map[string]any{"groupId": groupID, "serviceId": serviceID, "service": service})
+	s.act("service.save", "", serviceID, "", "", "", map[string]any{"serviceId": serviceID, "service": service})
 }
 
 func removeServiceModule(items []serviceModuleDraft, id string) []serviceModuleDraft {
 	result := make([]serviceModuleDraft, 0, len(items))
-	for _, item := range items {
-		if item.id != id {
-			result = append(result, item)
-		}
-	}
-	return result
-}
-
-func removeWorkspaceCommand(items []workspaceCommandDraft, id string) []workspaceCommandDraft {
-	result := make([]workspaceCommandDraft, 0, len(items))
 	for _, item := range items {
 		if item.id != id {
 			result = append(result, item)

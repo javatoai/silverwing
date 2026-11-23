@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/internal/rope"
+	"github.com/egoist/mygo/internal/text"
 )
 
 // apply makes edits to the buffer as one step of undo, and gives the
@@ -14,16 +15,21 @@ import (
 // moving offsets through the edits; nil moves them as the text around
 // them moves.
 func (ed *editor) apply(edits []Edit, kind editKind, after func(move func(int, bias) int) []sel) bool {
+	return ed.applyEnds(edits, nil, kind, after)
+}
+
+// applyEnds is apply with optional line-ending codes for inserted breaks.
+func (ed *editor) applyEnds(edits []Edit, ends func(lineEnds) []string, kind editKind, after func(move func(int, bias) int) []sel) bool {
 	var mapped func(func(int, bias) int, rope.Text, rope.Text) []sel
 	if after != nil {
 		mapped = func(move func(int, bias) int, _, _ rope.Text) []sel { return after(move) }
 	}
-	return ed.applyText(edits, kind, mapped)
+	return ed.applyText(edits, ends, kind, mapped)
 }
 
 // applyText also exposes the immutable resulting trees for source-coordinate
 // composition ranges, whose boundaries can fall inside a projected CRLF.
-func (ed *editor) applyText(edits []Edit, kind editKind, after func(func(int, bias) int, rope.Text, rope.Text) []sel) bool {
+func (ed *editor) applyText(edits []Edit, ends func(lineEnds) []string, kind editKind, after func(func(int, bias) int, rope.Text, rope.Text) []sel) bool {
 	b := ed.buf()
 	if b == nil || ed.o.readOnly || len(edits) == 0 {
 		return false
@@ -41,10 +47,13 @@ func (ed *editor) applyText(edits []Edit, kind editKind, after func(func(int, bi
 	}
 	oldText, oldOriginal := b.text, b.original
 	var sourceChanges []change
-	if b.preserveLineEndings {
+	var codes []string
+	if ends != nil {
+		codes = ends(b.ends)
+	} else if b.preserveLineEndings {
 		sourceChanges = b.originalByteChanges(edits)
 	}
-	changes := b.edit(edits, kind, ed, before)
+	changes := b.editEnds(edits, codes, kind, ed, before)
 	rejected := b.limitExceeded
 	newText, newOriginal := b.text, b.original
 	made := b.version
@@ -55,6 +64,9 @@ func (ed *editor) applyText(edits []Edit, kind editKind, after func(func(int, bi
 			ed.o.onLimitExceeded()
 		}
 		return false
+	}
+	if ed.snippet != nil && !ed.snippet.accepts(edits) {
+		ed.snippet = nil
 	}
 	if changes == nil {
 		// The edits change nothing, as pasting the text selected over
@@ -70,6 +82,9 @@ func (ed *editor) applyText(edits []Edit, kind editKind, after func(func(int, bi
 		ed.setSels(mergeSels(sels), revealFit)
 		ed.blinkStart = ed.frameNow
 		return true
+	}
+	if ed.snippet != nil {
+		ed.snippet.local = true
 	}
 	ed.dropSuggestion()
 	move := func(off int, bias bias) int { return mapOffset(off, changes, bias) }
@@ -104,18 +119,7 @@ func (ed *editor) applyText(edits []Edit, kind editKind, after func(func(int, bi
 	if sels != nil {
 		// Placed in the text the edit made, and moved through the edits
 		// made after it before the editor followed.
-		if ed.view.version != made {
-			entries, _, _ := b.entriesSince(made)
-			for _, e := range entries {
-				if e.version > ed.view.version {
-					break
-				}
-				for i := range sels {
-					sels[i] = mapSel(sels[i], e.changes)
-				}
-			}
-		}
-		ed.sels = mergeSels(sels)
+		ed.sels = mergeSels(followSels(b, sels, made, newText, ed.view.version, ed.view.text))
 	}
 	b.setSelectionsAfter(ed, slices.Clone(ed.sels))
 	ed.reveal = max(ed.reveal, revealFit)
@@ -124,16 +128,48 @@ func (ed *editor) applyText(edits []Edit, kind editKind, after func(func(int, bi
 	return true
 }
 
+// followSels moves sels, placed in text of version made, through the
+// buffer's edits up to version to and its text: by the edits themselves,
+// or, when the log no longer reaches back to made, as another goroutine
+// edited the buffer many times meanwhile, by the lines changed between
+// the two texts, as an editor that far behind follows (view.sync).
+func followSels(b *Buffer, sels []sel, made uint64, madeText rope.Text, to uint64, toText rope.Text) []sel {
+	if to == made {
+		return sels
+	}
+	entries, _, ok := b.entriesSince(made)
+	if !ok {
+		cs := changesBetween(madeText, toText)
+		for i := range sels {
+			sels[i] = mapSel(sels[i], cs)
+		}
+		return sels
+	}
+	for _, e := range entries {
+		if e.version > to {
+			break
+		}
+		for i := range sels {
+			sels[i] = mapSel(sels[i], e.changes)
+		}
+	}
+	return sels
+}
+
 // replaceEach replaces each selection with the text of fn and puts the
 // caret after it, or selects it.
 func (ed *editor) replaceEach(kind editKind, selectInserted bool, fn func(i int, s sel) string) bool {
 	edits := make([]Edit, len(ed.sels))
 	texts := make([]string, len(ed.sels))
+	b := ed.buf()
+	preserving := b != nil && b.preserveLineEndings
 	for i, s := range ed.sels {
-		texts[i] = fn(i, s)
-		edits[i] = Edit{Start: s.start(), End: s.end(), Text: texts[i]}
-		// Carets use the LF projection even when the buffer retains CRLF source.
-		texts[i] = lf(texts[i])
+		inserted := fn(i, s)
+		texts[i] = lf(inserted)
+		if !preserving {
+			inserted = texts[i]
+		}
+		edits[i] = Edit{Start: s.start(), End: s.end(), Text: inserted}
 	}
 	sels := slices.Clone(ed.sels)
 	return ed.apply(edits, kind, func(move func(int, bias) int) []sel {
@@ -143,7 +179,7 @@ func (ed *editor) replaceEach(kind editKind, selectInserted bool, fn func(i int,
 			start := s.start() + delta
 			end := start + len(texts[i])
 			delta += len(texts[i]) - (s.end() - s.start())
-			if b := ed.buf(); b != nil && b.preserveLineEndings {
+			if preserving {
 				start, end = move(s.start(), biasLeft), move(s.end(), biasRight)
 			}
 			if selectInserted {
@@ -315,13 +351,14 @@ func (ed *editor) autoPair(t string) bool {
 	// comment for quotes.
 	for _, s := range ed.sels {
 		next, _ := r.RuneAt(s.head)
-		if s.head < r.Len() && next != '\n' && !unicode.IsSpace(next) && !strings.ContainsRune(")]}>,;:", next) {
+		if s.head < r.Len() && next != '\n' && !unicode.IsSpace(next) && !strings.ContainsRune(")]}>,;:", next) && !isCJKAfterPunct(next) {
 			return false
 		}
 		if pair.Open == pair.Close {
-			// A quote after a word character starts nothing.
+			// A quote after a word character starts nothing, except after
+			// CJK characters.
 			prev, _ := r.RuneBefore(s.head)
-			if isWordRune(prev) {
+			if isWordRune(prev) && !isCJKQuoteRune(prev) {
 				return false
 			}
 		}
@@ -340,6 +377,27 @@ func (ed *editor) autoPair(t string) bool {
 	}
 	ed.afterTyping(t)
 	return true
+}
+
+// isCJKQuoteRune reports whether a word rune before a symmetric quote still
+// allows auto-pairing.
+func isCJKQuoteRune(r rune) bool {
+	return unicode.In(r, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Hangul)
+}
+
+// isCJKAfterPunct reports whether r is a non-ASCII closing bracket or quote,
+// or a trailing CJK sentence/clause punctuation mark that permits auto-pairing
+// immediately before it.
+func isCJKAfterPunct(r rune) bool {
+	if r <= unicode.MaxASCII {
+		return false
+	}
+	if unicode.In(r, unicode.Pe, unicode.Pf) {
+		return true
+	}
+	return strings.ContainsRune("，。、；：？！…‥—–―·‧～〜〰．︰｡､･‼⁇⁈⁉", r) ||
+		r >= 0xfe10 && r <= 0xfe16 || r == 0xfe19 ||
+		r >= 0xfe50 && r <= 0xfe58
 }
 
 // tokenAt returns the kind of the token holding the byte before off, or
@@ -374,6 +432,7 @@ func (ed *editor) indentUnit() string {
 // undo takes back (or makes again) the buffer's last step, and puts this
 // editor's selections where they were, when it made the step.
 func (ed *editor) undo(redo bool) bool {
+	ed.snippet = nil
 	b := ed.buf()
 	if b == nil || ed.o.readOnly {
 		return false
@@ -415,9 +474,10 @@ func (ed *editor) copy(cut bool) {
 	for _, s := range ed.sels {
 		if s.empty() {
 			line := r.LineOf(s.head)
-			a, z := r.LineStart(line), min(r.Len(), r.LineEnd(line)+1)
+			end := r.LineEnd(line)
+			a, z := r.LineStart(line), min(r.Len(), end+1)
 			t := ed.clipboardSlice(a, z)
-			if !strings.HasSuffix(t, "\n") {
+			if z == end {
 				t += "\n"
 			}
 			pieces, whole = append(pieces, t), append(whole, true)
@@ -467,7 +527,7 @@ func (ed *editor) paste(text string) {
 		return
 	}
 	if b := ed.buf(); b == nil || !b.preserveLineEndings {
-		text = lf(text)
+		text = strings.ReplaceAll(text, "\r\n", "\n")
 	}
 	r := &ed.view.text
 	pieces := []string{text}
@@ -510,13 +570,13 @@ func (ed *editor) deleteMove(fn func(sel) int) bool {
 	var edits []Edit
 	for _, s := range ed.sels {
 		if s.empty() {
-			to := fn(s)
-			edits = append(edits, Edit{Start: min(to, s.head), End: max(to, s.head)})
+			a, z := ed.deletion(s, fn)
+			edits = append(edits, Edit{Start: a, End: z})
 			continue
 		}
 		edits = append(edits, Edit{Start: s.start(), End: s.end()})
 	}
-	return ed.apply(mergeEdits(edits), editDeleting, nil)
+	return ed.apply(ed.mergeDeletes(edits), editDeleting, nil)
 }
 
 // mergeEdits sorts edits and merges those that overlap.
@@ -534,7 +594,9 @@ func mergeEdits(edits []Edit) []Edit {
 }
 
 // backspace deletes before the carets: back to the previous tab stop in
-// indentation, a pair of brackets just opened, else a character.
+// indentation, a pair of brackets just opened, else a character, all of
+// a replacement as one, from before those next to the caret that show
+// nothing within a line, as hidden marks.
 func (ed *editor) backspace() bool {
 	r := &ed.view.text
 	tab := ed.tabSize()
@@ -544,32 +606,37 @@ func (ed *editor) backspace() bool {
 			edits = append(edits, Edit{Start: s.start(), End: s.end()})
 			continue
 		}
-		line := r.LineOf(s.head)
+		head, _ := ed.view.passHidden(s.head, false)
+		line := r.LineOf(head)
 		a := r.LineStart(line)
-		before := r.Slice(a, s.head)
+		before := r.Slice(a, head)
 		// In the indentation, back to the previous tab stop.
 		if before != "" && strings.TrimLeft(before, " ") == "" && !ed.hardTabs() {
 			col := len(before)
 			to := (col - 1) / tab * tab
-			edits = append(edits, Edit{Start: a + to, End: s.head})
+			edits = append(edits, Edit{Start: ed.overReplacements(head, a+to), End: head})
 			continue
 		}
-		start := graphemeLeft(*r, s.head)
-		end := s.head
+		left := graphemeLeft(*r, head)
+		if c, size := r.RuneBefore(head); text.IsCombiningMark(c) {
+			left = head - size
+		}
+		start := ed.overReplacements(head, left)
+		end := head
 		// A pair of brackets just opened, its closer closed by the editor,
 		// goes together, as Zed's.
-		if l := ed.language(); l != nil && ed.o.autoClose {
-			prev := r.Slice(start, s.head)
+		if l := ed.language(); l != nil && ed.o.autoClose && head == s.head {
+			prev := r.Slice(start, head)
 			for _, p := range l.AutoClose {
-				if p.Open == prev && r.Slice(s.head, s.head+len(p.Close)) == p.Close && ed.autoclosedAt(s.head, p.Close) {
-					end = s.head + len(p.Close)
+				if p.Open == prev && r.Slice(head, head+len(p.Close)) == p.Close && ed.autoclosedAt(head, p.Close) {
+					end = head + len(p.Close)
 					break
 				}
 			}
 		}
 		edits = append(edits, Edit{Start: start, End: end})
 	}
-	return ed.apply(mergeEdits(edits), editDeleting, nil)
+	return ed.apply(ed.mergeDeletes(edits), editDeleting, nil)
 }
 
 func (ed *editor) generatedLineEndings(s string) string {

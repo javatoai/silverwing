@@ -98,9 +98,8 @@ func (s *app) ensureInstructionMarkdownEditor(key, kind string, tab int, source 
 					s.taskUnit.currentTask().id == taskID && s.taskUnit.state.noteTab == tab && (markdownReadingOnly || s.taskUnit.state.noteEditing) &&
 					s.instructionAutosaveKey("task", taskID, "", s.taskUnit.state.notePaths[tab]) == key
 			case "settings":
-				scope, groupID := s.settingsInstructionScope()
 				return current.activeKind == "settings" && s.page == "settings" && s.settingsUnit.state.settingsPage == "agents" && s.settingsUnit.state.settingsAgentLoaded &&
-					s.instructionAutosaveKey(scope, "", groupID, s.settingsUnit.state.settingsAgentPath) == key
+					s.instructionAutosaveKey("global", "", "", s.settingsUnit.state.settingsAgentPath) == key
 			default:
 				return false
 			}

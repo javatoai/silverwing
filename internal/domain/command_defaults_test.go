@@ -42,10 +42,10 @@ func TestCommandAndNamingDefaultsRespectExplicitSettings(t *testing.T) {
 		}
 	}
 	var custom AppConfig
-	if err := json.Unmarshal([]byte(`{"commandProxyUrl":"socks5://127.0.0.1:1080","commandProxyTargets":["GIT"],"aiRequirementNamingModel":"my-model"}`), &custom); err != nil {
+	if err := json.Unmarshal([]byte(`{"commandProxyUrl":"socks5://127.0.0.1:1080","commandProxyTargets":["CODEX"],"aiRequirementNamingModel":"my-model"}`), &custom); err != nil {
 		t.Fatal(err)
 	}
-	if *custom.CommandProxyURL != "socks5://127.0.0.1:1080" || !reflect.DeepEqual(custom.CommandProxyTargets, []CommandProxyTarget{ProxyTargetGit}) || custom.AIRequirementNamingModel != "my-model" {
+	if *custom.CommandProxyURL != "socks5://127.0.0.1:1080" || !reflect.DeepEqual(custom.CommandProxyTargets, []CommandProxyTarget{ProxyTargetCodex}) || custom.AIRequirementNamingModel != "my-model" {
 		t.Fatal("custom preference overwritten")
 	}
 	var onlyTargets AppConfig
@@ -55,10 +55,28 @@ func TestCommandAndNamingDefaultsRespectExplicitSettings(t *testing.T) {
 	if len(onlyTargets.CommandProxyTargets) != 0 {
 		t.Fatal("explicit empty targets replaced")
 	}
-	for _, raw := range []string{`{"commandProxyTargets":null}`, `{"commandProxyTargets":["OTHER"]}`, `{"aiRequirementNamingEnabled":"true"}`, `{"aiRequirementNamingPrewarmEnabled":null}`, `{"commandProxyUrl":7897}`, `{"unknown":true}`} {
+	for _, raw := range []string{`{"commandProxyTargets":null}`, `{"commandProxyTargets":["OTHER"]}`, `{"commandProxyTargets":["GIT","OTHER"]}`, `{"commandProxyTargets":["GENBU",null]}`, `{"aiRequirementNamingEnabled":"true"}`, `{"aiRequirementNamingPrewarmEnabled":null}`, `{"commandProxyUrl":7897}`, `{"unknown":true}`} {
 		var c AppConfig
 		if json.Unmarshal([]byte(raw), &c) == nil {
 			t.Fatalf("invalid JSON accepted: %s", raw)
 		}
+	}
+}
+
+func TestNormalizeAndValidateRetiredCommandProxyTargets(t *testing.T) {
+	config := DefaultAppConfig()
+	config.CommandProxyTargets = []CommandProxyTarget{"GIT", ProxyTargetAppUpdates, "WORKSPACE_COMMAND", "MEEGLE", ProxyTargetCodex, "GENBU", "LARK", ProxyTargetAppUpdates}
+	if err := config.Validate(); err == nil {
+		t.Fatal("retired target passed validation")
+	}
+	if err := config.NormalizeAndValidate(); err != nil {
+		t.Fatal(err)
+	}
+	if want := []CommandProxyTarget{ProxyTargetAppUpdates, ProxyTargetCodex}; !reflect.DeepEqual(config.CommandProxyTargets, want) {
+		t.Fatalf("proxy targets = %v, want %v", config.CommandProxyTargets, want)
+	}
+	config.CommandProxyTargets = []CommandProxyTarget{"GIT", "OTHER"}
+	if err := config.NormalizeAndValidate(); err == nil {
+		t.Fatal("unknown target passed validation")
 	}
 }

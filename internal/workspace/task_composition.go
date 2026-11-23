@@ -47,7 +47,7 @@ func ComposeTaskApplicationDependencies(manifests *storage.ManifestStore, git *G
 	if manifests == nil {
 		manifests = storage.NewManifestStore()
 	}
-	locks := NewOperationLocks(paths.Locks)
+	locks := NewTaskOperationLocks(paths)
 	bootstrap := NewBootstrapService(git.Runner, git)
 	dependencies := TaskApplicationDependencies{
 		Manifests: manifests, Git: git, Paths: paths, Locks: locks,

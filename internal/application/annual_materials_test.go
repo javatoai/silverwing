@@ -15,7 +15,8 @@ import (
 func annualApplicationFixture(t *testing.T) (*App, documents.AnnualMaterialsScope, string) {
 	t.Helper()
 	a, _, taskPath := materialTextApplicationFixture(t)
-	base := filepath.Join(a.Paths.Home, "annual", "requirements")
+	repository := filepath.Join(a.Paths.Home, "annual", "requirements")
+	base := filepath.Join(repository, "requirements")
 	owned := filepath.Join(base, "2026", "123-需求", "研发")
 	scope, _ := documents.AnnualScope(owned)
 	if err := os.MkdirAll(base, 0755); err != nil {
@@ -28,7 +29,7 @@ func annualApplicationFixture(t *testing.T) (*App, documents.AnnualMaterialsScop
 	if err != nil {
 		t.Fatal(err)
 	}
-	config.RequirementMaterialsRoot = &base
+	config.RequirementMaterialsRoot = &repository
 	sub := "研发"
 	config.RequirementMaterialsSubdirectory = &sub
 	if err := a.Config.Save(config); err != nil {
@@ -141,13 +142,11 @@ func TestAnnualApplicationCatalogAllTasksAndLocalRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, task := range []string{taskPath, archivedPath} {
-		for _, file := range []string{"AGENTS.md", filepath.Join(".workspace", "agent", "TASK-CONTEXT.md")} {
-			data, err := os.ReadFile(filepath.Join(task, file))
-			if err != nil {
-				t.Fatal(task, file, string(data), err)
-			}
-			assertGenericMaterialsGuidance(t, string(data), scope, peer)
+		data, err := os.ReadFile(filepath.Join(task, workspace.AgentRouterFileName))
+		if err != nil {
+			t.Fatal(task, string(data), err)
 		}
+		assertGenericMaterialsGuidance(t, string(data), scope, peer)
 	}
 	target := filepath.Join(taskPath, "AGENTS.md")
 	original, _ := os.ReadFile(target)

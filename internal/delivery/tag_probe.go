@@ -48,7 +48,12 @@ func (s *Service) ProbeWithProgress(ctx context.Context, config domain.AppConfig
 		}
 		workerCount++
 		go func(candidates []genbuCandidate) {
-			changed, err := s.probeCandidates(ctx, config, candidates, force, selected, emit)
+			client, err := s.requireGenbuClient(ctx)
+			if err != nil {
+				results <- result{err: err}
+				return
+			}
+			changed, err := s.probeCandidates(ctx, client, config, candidates, force, selected, emit)
 			results <- result{changed, err}
 		}(append([]genbuCandidate(nil), candidates...))
 	}
@@ -64,13 +69,13 @@ func (s *Service) ProbeWithProgress(ctx context.Context, config domain.AppConfig
 	return changed, failure
 }
 
-func (s *Service) probeCandidates(ctx context.Context, config domain.AppConfig, candidates []genbuCandidate, force bool, selected map[string]bool, emit func(string, domain.TagOperation)) (bool, error) {
+func (s *Service) probeCandidates(ctx context.Context, client TagGenbu, config domain.AppConfig, candidates []genbuCandidate, force bool, selected map[string]bool, emit func(string, domain.TagOperation)) (bool, error) {
 	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].operation.CreatedAt > candidates[j].operation.CreatedAt })
 	changed := false
 	// Deduplicate identical service/tag queries while still CAS-updating every
 	// owning operation. Values are local to this service worker.
 	type answer struct {
-		value genbuTagQueryResult
+		value domain.GenbuTagProbeStatus
 		err   error
 	}
 	queried := map[string]answer{}
@@ -102,8 +107,11 @@ func (s *Service) probeCandidates(ctx context.Context, config domain.AppConfig, 
 		key := item.service + "\x00" + value(item.operation.Tag)
 		response, exists := queried[key]
 		if !exists {
-			response.value, response.err = s.queryGenbu(ctx, config, item.service, value(item.operation.Tag))
+			response.value, response.err = client.Status(ctx, config, item.service, value(item.operation.Tag))
 			queried[key] = response
+		}
+		if err := client.CheckScope(ctx); err != nil {
+			return changed, err
 		}
 		if err := ctx.Err(); err != nil {
 			return changed, err

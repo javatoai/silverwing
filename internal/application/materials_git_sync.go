@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"silverwing-go/internal/commandruntime"
-	"silverwing-go/internal/documents"
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/executable"
 	"silverwing-go/internal/storage"
@@ -36,18 +35,21 @@ type MaterialsGitLoginBackend interface {
 }
 
 func (a *App) MaterialsGitBranches(ctx context.Context, expected workspace.MaterialsGitScope) ([]string, error) {
-	service, err := a.materialsGitService(expected)
+	service, err := a.documentsGitRemoteService(expected)
 	if err != nil {
 		return nil, err
 	}
-	if err := domain.ValidateRemoteGitURL(expected.URL); err != nil {
+	if expected.URL == "" {
+		return nil, domain.ValidateRemoteGitURL(expected.URL)
+	}
+	if err := validateDocumentsGitScopeURL(expected); err != nil {
 		return nil, err
 	}
 	return service.RemoteBranches(ctx, expected)
 }
 
 func (a *App) VerifyMaterialsGitLogin(ctx context.Context, expected workspace.MaterialsGitScope) error {
-	service, err := a.materialsGitService(expected)
+	service, err := a.documentsGitRemoteService(expected)
 	if err != nil {
 		return err
 	}
@@ -55,7 +57,7 @@ func (a *App) VerifyMaterialsGitLogin(ctx context.Context, expected workspace.Ma
 }
 
 func (a *App) MaterialsGitTerminalLoginCommand(ctx context.Context, expected workspace.MaterialsGitScope) (string, error) {
-	service, err := a.materialsGitService(expected)
+	service, err := a.documentsGitRemoteService(expected)
 	if err != nil {
 		return "", err
 	}
@@ -71,6 +73,13 @@ func (a *App) MaterialsGitTerminalLoginCommand(ctx context.Context, expected wor
 		return "", err
 	}
 	return materialsGitTerminalLoginCommand(runtime.GOOS, git.Executable, args), ctx.Err()
+}
+
+func (a *App) documentsGitRemoteService(expected workspace.MaterialsGitScope) (*workspace.MaterialsGitSyncService, error) {
+	if expected.RepositoryRole == domain.ProjectInstructionsRepositoryRole {
+		return a.projectInstructionsGitService(expected)
+	}
+	return a.materialsGitService(expected)
 }
 
 func materialsGitTerminalLoginCommand(osName, git string, args []string) string {
@@ -91,15 +100,20 @@ func materialsGitTerminalLoginCommand(osName, git string, args []string) string 
 // The provisioner already shares this root lock. Document writes take it as
 // well, including writes made by another CLI/desktop process.
 func (a *App) lockMaterialsGitDocumentMutation(kind, root string) (func(), error) {
-	switch kind {
-	case "document.read", "document.search", "document.draft", "document.draft-read", "document.draft-discard":
-		return func() {}, nil
-	}
 	config, err := a.Config.Load()
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(value(config.RequirementMaterialsRoot)) == "" {
+	local := config.MaterialsGitSettings().LocalRoot != ""
+	switch kind {
+	case "document.draft", "document.draft-read", "document.draft-discard":
+		return func() {}, nil
+	case "document.read", "document.search":
+		if !local {
+			return func() {}, nil
+		}
+	}
+	if strings.TrimSpace(value(config.RequirementMaterialsRoot)) == "" && !local {
 		return func() {}, nil
 	}
 	paths, pathErr := config.MaterialsPaths()
@@ -114,7 +128,12 @@ func (a *App) lockMaterialsGitDocumentMutation(kind, root string) (func(), error
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 		return func() {}, nil
 	}
-	release, err := storage.AcquireMaterialsRepositoryLock(base)
+	var release func()
+	if local {
+		release, err = storage.AcquireDocumentsRepositoryLock(base)
+	} else {
+		release, err = storage.AcquireMaterialsRepositoryLock(base)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("资料 Git 同步或文件操作正在执行，请稍后重试：%w", err)
 	}
@@ -123,12 +142,29 @@ func (a *App) lockMaterialsGitDocumentMutation(kind, root string) (func(), error
 
 func MaterialsGitScope(home string, config domain.AppConfig) workspace.MaterialsGitScope {
 	settings := config.MaterialsGitSettings()
-	// Include execution/credential routing and enablement, but not unrelated
-	// service configuration. The digest never exposes proxy credentials to UI.
-	env, _ := json.Marshal([]any{config.GitExecutablePath, config.CommandProxyURL, config.CommandProxyNoProxy, config.CommandProxyUsername, config.CommandProxyPassword, config.CommandProxyTargets, settings.Enabled})
-	paths, pathsErr := config.MaterialsPaths()
-	rawRoot := filepath.Clean(value(config.RequirementMaterialsRoot))
-	return workspace.MaterialsGitScope{Home: home, Root: paths.Root, RequirementsRoot: paths.Requirements, RequireRootConfirmation: pathsErr == nil && !sameTaskContextPath(rawRoot, paths.Root), Subdirectory: value(config.RequirementMaterialsSubdirectory), URL: settings.RepositoryURL, Branch: settings.Branch, EnvironmentID: fmt.Sprintf("%x", sha256.Sum256(env))}
+	root := domain.TaskMaterialsRepositoryRoot(home, settings)
+	role := domain.TaskMaterialsRepositoryRole
+	if root == "" {
+		paths, _ := config.MaterialsPaths()
+		root, role = paths.Root, ""
+	}
+	return workspace.MaterialsGitScope{
+		Home: home, Root: root, Subdirectory: value(config.RequirementMaterialsSubdirectory), RepositoryRole: role,
+		URL: settings.RepositoryURL, Branch: settings.Branch, EnvironmentID: documentsGitEnvironmentID(config.GitExecutablePath, settings.Enabled),
+		RemoteName: settings.RemoteName, BindingID: settings.BindingID,
+	}
+}
+
+func validateDocumentsGitScopeURL(scope workspace.MaterialsGitScope) error {
+	if scope.BindingID != "" {
+		return domain.ValidateLocalDocumentsGitURL(scope.URL)
+	}
+	return domain.ValidateSynchronizationGitURL(scope.URL)
+}
+
+func documentsGitEnvironmentID(executable *string, enabled bool) string {
+	environment, _ := json.Marshal([]any{executable, enabled})
+	return fmt.Sprintf("%x", sha256.Sum256(environment))
 }
 
 func (a *App) materialsGitService(expected workspace.MaterialsGitScope) (*workspace.MaterialsGitSyncService, error) {
@@ -139,6 +175,12 @@ func (a *App) materialsGitService(expected workspace.MaterialsGitScope) (*worksp
 	if MaterialsGitScope(a.Paths.Home, config) != expected {
 		return nil, workspace.ErrMaterialsGitScopeChanged
 	}
+	return a.configuredDocumentsGitService(config, func(config domain.AppConfig) workspace.MaterialsGitScope {
+		return MaterialsGitScope(a.Paths.Home, config)
+	}, expected), nil
+}
+
+func (a *App) configuredDocumentsGitService(config domain.AppConfig, resolve func(domain.AppConfig) workspace.MaterialsGitScope, expected workspace.MaterialsGitScope) *workspace.MaterialsGitSyncService {
 	git := workspace.NewGitClientWithConfig(a.Runner, config)
 	if git.Environment == nil {
 		git.Environment = map[string]string{}
@@ -150,11 +192,11 @@ func (a *App) materialsGitService(expected workspace.MaterialsGitScope) (*worksp
 		if err != nil {
 			return err
 		}
-		if MaterialsGitScope(a.Paths.Home, current) != expected {
+		if resolve(current) != expected {
 			return workspace.ErrMaterialsGitScopeChanged
 		}
 		return nil
-	}}, nil
+	}}
 }
 
 func (a *App) MaterialsGitStatus(ctx context.Context, expected workspace.MaterialsGitScope) (workspace.MaterialsGitSyncStatus, error) {
@@ -184,9 +226,6 @@ func (a *App) SyncMaterialsGit(ctx context.Context, expected workspace.Materials
 	if err := config.MaterialsGitSettings().Validate(); err != nil {
 		return workspace.MaterialsGitSyncStatus{}, err
 	}
-	if _, err := documents.ValidateMaterialsPaths(value(config.RequirementMaterialsRoot)); err != nil {
-		return workspace.MaterialsGitSyncStatus{}, err
-	}
 	if strings.TrimSpace(expected.URL) == "" {
 		return workspace.MaterialsGitSyncStatus{}, errors.New("请填写 Git 仓库地址")
 	}
@@ -200,8 +239,8 @@ func (a *App) SyncMaterialsGit(ctx context.Context, expected workspace.Materials
 func (a *App) finishMaterialsGitSync(ctx context.Context, expected workspace.MaterialsGitScope, status workspace.MaterialsGitSyncStatus, syncErr error, check func() error) (workspace.MaterialsGitSyncStatus, error) {
 	// Git may have applied a checkout/merge before a push failed (or stopped
 	// with conflicts). Describe the actual local tree regardless of push outcome.
-	if check != nil && check() == nil {
-		unlock, lockErr := storage.AcquireMaterialsRepositoryLock(expected.Root)
+	if status.Changed && check != nil && check() == nil {
+		unlock, lockErr := expected.AcquireRepositoryLock()
 		if lockErr == nil {
 			catalogErr := a.refreshMaterialsAgentCatalogs(ctx, expected)
 			unlock()

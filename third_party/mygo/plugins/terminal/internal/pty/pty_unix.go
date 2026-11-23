@@ -1,4 +1,4 @@
-//go:build darwin || linux
+//go:build (darwin && !ios) || (linux && !android)
 
 package pty
 
@@ -59,15 +59,32 @@ func (p *PTY) wait() (int, error) {
 // Read reads the output of the process; it returns io.EOF once no process
 // has the terminal open any more, or after Close.
 func (p *PTY) Read(b []byte) (int, error) {
-	n, err := p.master.Read(b)
-	if err != nil && n == 0 {
+	for {
+		n, err := p.master.Read(b)
+		if n > 0 {
+			return n, nil
+		}
+		if err == nil {
+			return 0, nil
+		}
+		// Nothing to read yet, which a read on a master that the os package
+		// cannot wait on says with EAGAIN: that is not the end of the
+		// program. A reader that takes it for the end closes the master,
+		// and the kernel then hangs the program up with SIGHUP, before it
+		// runs a single command.
+		if errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.EINTR) {
+			if werr := p.waitReadable(); werr != nil {
+				return 0, werr
+			}
+			continue
+		}
 		// Linux reports EIO when the last process with the terminal
 		// open closes it.
 		if errors.Is(err, syscall.EIO) || errors.Is(err, os.ErrClosed) {
 			err = io.EOF
 		}
+		return 0, err
 	}
-	return n, err
 }
 
 // Write types b into the terminal.
@@ -90,6 +107,16 @@ func (p *PTY) ClearScreen() error { return nil }
 
 // Pid returns the process's ID.
 func (p *PTY) Pid() int { return p.cmd.Process.Pid }
+
+// Foreground returns the ID of the process group in the foreground of
+// the terminal, 0 when it can't tell.
+func (p *PTY) Foreground() int {
+	var pgrp int32
+	if ioctl(p.master, syscall.TIOCGPGRP, unsafe.Pointer(&pgrp)) != nil {
+		return 0
+	}
+	return int(pgrp)
+}
 
 // Close closes the terminal, which hangs up the processes that have it:
 // they get SIGHUP. It does not wait for them to exit.

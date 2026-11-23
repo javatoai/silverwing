@@ -97,5 +97,9 @@ func (s *app) rejectDiffToolInput(state *toolPageState) {
 	}
 	state.diffRevision++
 	state.diffPending = false
+	if state.diffJSONMode {
+		state.diffHasData = false
+		state.diffJSONResult = tools.JSONDiffResult{}
+	}
 	state.diffError = developerToolInputSizeError
 }

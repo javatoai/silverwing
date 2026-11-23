@@ -24,7 +24,7 @@ func productionEndedDeleteFixture(t *testing.T) (*app, *productionView, producti
 	return s, v, b
 }
 
-func TestProductionDeleteMenuOnlyAppearsForEndedBatches(t *testing.T) {
+func TestProductionDeleteMenuOnlyAppearsOnHistoryRows(t *testing.T) {
 	for _, state := range []string{"active", "ended", "busy", "none"} {
 		t.Run(state, func(t *testing.T) {
 			s, v, b := productionEndedDeleteFixture(t)
@@ -38,15 +38,36 @@ func TestProductionDeleteMenuOnlyAppearsForEndedBatches(t *testing.T) {
 			v.Busy = state == "busy"
 			s.win = &mygo.Window{}
 			tester := productionIterationTester(s, 960, false)
-			if err := tester.Click("更多生产发布操作"); err != nil {
+			_, hasMainMenu := tester.Find("更多生产发布操作")
+			if hasMainMenu {
+				if err := tester.Click("更多生产发布操作"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tester.HasText("删除批次") {
+				t.Fatal("main production menu exposed batch deletion")
+			}
+			if hasMainMenu {
+				tester.Key(0, ui.KeyEscape)
+			}
+			if err := tester.Click("历史批次"); err != nil {
 				t.Fatal(err)
 			}
-			found := tester.HasText("删除批次")
-			if found != (state == "ended") {
-				t.Fatalf("invalid deletion availability: %s text=%v", state, tester.Texts())
+			if state == "busy" {
+				if s.releaseUnit.state.production.historyDialog != nil {
+					t.Fatal("history opened while the active release was busy")
+				}
+				return
+			}
+			menu := "更多批次操作 · " + b.ReleaseBranch
+			if _, found := tester.Find(menu); found != (state == "ended") {
+				t.Fatalf("invalid history row deletion availability: %s text=%v", state, tester.Texts())
 			}
 			if state == "ended" {
-				if err := tester.Click("删除批次"); err != nil {
+				if err := tester.Click(menu); err != nil {
+					t.Fatal(err)
+				}
+				if err := tester.Click("删除"); err != nil {
 					t.Fatal(err)
 				}
 				d := s.confirmationDialog
@@ -209,14 +230,15 @@ func TestProductionDeleteConfirmationLayouts(t *testing.T) {
 			t.Run(fmt.Sprintf("%d-dark-%t", width, dark), func(t *testing.T) {
 				s, v, b := productionEndedDeleteFixture(t)
 				s.win = &mygo.Window{}
-				s.confirmProductionDelete(v, b)
+				s.openProductionHistory(v)
+				s.confirmProductionDeleteRecord(v, b, s.releaseUnit.state.production.historyDialog)
 				tester := productionIterationTester(s, width, dark)
 				if !tester.HasText("仅删除本地批次记录，保留工作区及其中的修改、远端分支和 Tag。") || !tester.HasText("取消") || !tester.Focused("取消") {
 					t.Fatal("local-only scope or safe keyboard focus is missing")
 				}
 				captureProductionSummary(t, tester, fmt.Sprintf("delete-confirm-%d-dark-%t", width, dark))
 				tester.Key(0, ui.KeyEscape)
-				if err := tester.Click("更多生产发布操作"); err != nil {
+				if err := tester.Click("更多批次操作 · " + b.ReleaseBranch); err != nil {
 					t.Fatal(err)
 				}
 				captureProductionSummary(t, tester, fmt.Sprintf("delete-menu-%d-dark-%t", width, dark))

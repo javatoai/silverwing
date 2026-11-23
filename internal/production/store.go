@@ -87,7 +87,7 @@ func (s Store) List() ([]Batch, error) {
 	return result, nil
 }
 
-// Callers hold the repository lock across intent, Git mutation and result save.
+// Callers lock the batch record and also hold the Git lock during repository changes.
 func (s Store) Save(b *Batch) error {
 	if !batchIDPattern.MatchString(b.ID) {
 		return errors.New("生产批次标识无效")

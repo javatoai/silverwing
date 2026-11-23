@@ -57,8 +57,8 @@ func newMaterialsGitFixture(t *testing.T, populated bool) *materialsGitFixture {
 	materialsGitTestRun(t, f.seed, "init", "--initial-branch=master")
 	materialsGitTestRun(t, f.seed, "remote", "add", "origin", f.remote)
 	if populated {
-		materialsGitTestFile(t, f.seed, "2026/123-需求/研发/remote.md", "remote\n")
-		materialsGitTestFile(t, f.seed, "2026/123-需求/产品/design.md", "product\n")
+		materialsGitTestFile(t, f.seed, "requirements/2026/123-需求/研发/remote.md", "remote\n")
+		materialsGitTestFile(t, f.seed, "requirements/2026/123-需求/产品/design.md", "product\n")
 		materialsGitTestRun(t, f.seed, "add", ".")
 		materialsGitTestRun(t, f.seed, "commit", "-m", "seed")
 		materialsGitTestRun(t, f.seed, "push", "origin", "master")
@@ -95,14 +95,14 @@ func (f *materialsGitFixture) sync() MaterialsGitSyncStatus {
 
 func TestMaterialsGitInitialJoinKeepsBothSidesAndScope(t *testing.T) {
 	f := newMaterialsGitFixture(t, true)
-	materialsGitTestFile(t, f.root, "2026/123-需求/研发/local [draft].md", "local\n")
-	materialsGitTestFile(t, f.root, "2025/456-另一需求/研发/image.bin", "\x00\x01\x02")
+	materialsGitTestFile(t, f.root, "requirements/2026/123-需求/研发/local [draft].md", "local\n")
+	materialsGitTestFile(t, f.root, "requirements/2025/456-另一需求/研发/image.bin", "\x00\x01\x02")
 	materialsGitTestFile(t, f.root, "outside.txt", "outside")
-	materialsGitTestFile(t, f.root, "2026/123-需求/研发/.silverwing-import-temp", "private")
-	materialsGitTestFile(t, f.root, "2026/123-需求/研发/ignored.log", "ignored")
+	materialsGitTestFile(t, f.root, "requirements/2026/123-需求/研发/.silverwing-import-temp", "private")
+	materialsGitTestFile(t, f.root, "requirements/2026/123-需求/研发/ignored.log", "ignored")
 	materialsGitTestFile(t, f.root, ".gitignore", "*.log\n")
 	f.sync()
-	for _, p := range []string{"2026/123-需求/研发/remote.md", "2026/123-需求/研发/local [draft].md", "2026/123-需求/产品/design.md"} {
+	for _, p := range []string{"requirements/2026/123-需求/研发/remote.md", "requirements/2026/123-需求/研发/local [draft].md", "requirements/2026/123-需求/产品/design.md"} {
 		if _, err := os.Stat(filepath.Join(f.root, p)); err != nil {
 			t.Fatal(p, err)
 		}
@@ -121,7 +121,7 @@ func TestMaterialsGitInitialJoinKeepsBothSidesAndScope(t *testing.T) {
 	if materialsGitTestRun(t, f.root, "rev-parse", "HEAD") != head {
 		t.Fatal("no-op sync created a commit")
 	}
-	if err := os.Remove(filepath.Join(f.root, "2026/123-需求/研发/local [draft].md")); err != nil {
+	if err := os.Remove(filepath.Join(f.root, "requirements/2026/123-需求/研发/local [draft].md")); err != nil {
 		t.Fatal(err)
 	}
 	f.sync()
@@ -133,7 +133,7 @@ func TestMaterialsGitInitialJoinKeepsBothSidesAndScope(t *testing.T) {
 func TestMaterialsGitEmptyDirectoryClones(t *testing.T) {
 	f := newMaterialsGitFixture(t, true)
 	f.sync()
-	if data, err := os.ReadFile(filepath.Join(f.root, "2026/123-需求/研发/remote.md")); err != nil || string(data) != "remote\n" {
+	if data, err := os.ReadFile(filepath.Join(f.root, "requirements/2026/123-需求/研发/remote.md")); err != nil || string(data) != "remote\n" {
 		t.Fatalf("clone content: %q %v", data, err)
 	}
 	if dirty := materialsGitTestRun(t, f.root, "status", "--porcelain"); strings.Contains(dirty, "remote.md") {
@@ -144,7 +144,7 @@ func TestMaterialsGitEmptyDirectoryClones(t *testing.T) {
 func TestMaterialsGitEmptyRemoteRequiresRemoteBranch(t *testing.T) {
 	f := newMaterialsGitFixture(t, false)
 	f.scope.Branch = "docs/team"
-	materialsGitTestFile(t, f.root, "2026/123-需求/研发/a.md", "a")
+	materialsGitTestFile(t, f.root, "requirements/2026/123-需求/研发/a.md", "a")
 	status, err := f.service.Sync(context.Background(), f.scope, true, nil)
 	if err == nil || !status.Paused || !strings.Contains(err.Error(), "请先在远程仓库创建分支") {
 		t.Fatalf("empty remote must pause: %+v %v", status, err)
@@ -160,11 +160,11 @@ func TestMaterialsGitEmptyRemoteRequiresRemoteBranch(t *testing.T) {
 func TestMaterialsGitConflictPauseAndManualRecovery(t *testing.T) {
 	f := newMaterialsGitFixture(t, true)
 	f.sync()
-	materialsGitTestFile(t, f.seed, "2026/123-需求/研发/remote.md", "other edit\n")
+	materialsGitTestFile(t, f.seed, "requirements/2026/123-需求/研发/remote.md", "other edit\n")
 	materialsGitTestRun(t, f.seed, "add", ".")
 	materialsGitTestRun(t, f.seed, "commit", "-m", "other")
 	materialsGitTestRun(t, f.seed, "push", "origin", "master")
-	materialsGitTestFile(t, f.root, "2026/123-需求/研发/remote.md", "my edit\n")
+	materialsGitTestFile(t, f.root, "requirements/2026/123-需求/研发/remote.md", "my edit\n")
 	materialsGitTestRun(t, f.root, "add", ".")
 	materialsGitTestRun(t, f.root, "commit", "-m", "local edit before conflict")
 	remoteHead := materialsGitTestRun(t, f.remote, "rev-parse", "master")
@@ -180,11 +180,11 @@ func TestMaterialsGitConflictPauseAndManualRecovery(t *testing.T) {
 	if materialsGitTestRun(t, f.remote, "rev-parse", "master") != remoteHead {
 		t.Fatal("conflict changed remote")
 	}
-	materialsGitTestFile(t, f.root, "2026/123-需求/研发/remote.md", "resolved\n")
+	materialsGitTestFile(t, f.root, "requirements/2026/123-需求/研发/remote.md", "resolved\n")
 	materialsGitTestRun(t, f.root, "add", ".")
 	materialsGitTestRun(t, f.root, "commit", "-m", "resolve")
 	f.sync()
-	if data, err := os.ReadFile(filepath.Join(f.root, "2026/123-需求/研发/remote.md")); err != nil || string(data) != "resolved\n" {
+	if data, err := os.ReadFile(filepath.Join(f.root, "requirements/2026/123-需求/研发/remote.md")); err != nil || string(data) != "resolved\n" {
 		t.Fatal("manual resolution lost")
 	}
 }
@@ -228,14 +228,14 @@ func TestMaterialsGitParentRepositoryAndUnpushedBranchStaySafe(t *testing.T) {
 	f := newMaterialsGitFixture(t, true)
 	parent := filepath.Dir(f.root)
 	materialsGitTestRun(t, parent, "init", "--initial-branch=parent")
-	materialsGitTestFile(t, f.root, "2026/123-需求/研发/local.md", "local")
+	materialsGitTestFile(t, f.root, "requirements/2026/123-需求/研发/local.md", "local")
 	f.sync()
 	if materialsGitTestRun(t, parent, "branch", "--show-current") != "parent" {
 		t.Fatal("parent changed")
 	}
 	materialsGitTestRun(t, f.root, "branch", "docs/next")
 	materialsGitTestRun(t, f.root, "push", "origin", "docs/next")
-	materialsGitTestFile(t, f.root, "2026/123-需求/研发/local.md", "unpublished")
+	materialsGitTestFile(t, f.root, "requirements/2026/123-需求/研发/local.md", "unpublished")
 	materialsGitTestRun(t, f.root, "add", ".")
 	materialsGitTestRun(t, f.root, "commit", "-m", "unpublished")
 	f.scope.Branch = "docs/next"
@@ -251,14 +251,14 @@ func TestMaterialsGitParentRepositoryAndUnpushedBranchStaySafe(t *testing.T) {
 func TestMaterialsGitPushRaceRetriesWithoutDuplicateLocalCommit(t *testing.T) {
 	f := newMaterialsGitFixture(t, true)
 	f.sync()
-	materialsGitTestFile(t, f.root, "2026/123-需求/研发/mine.md", "mine")
+	materialsGitTestFile(t, f.root, "requirements/2026/123-需求/研发/mine.md", "mine")
 	var raced bool
 	status, err := f.service.Sync(context.Background(), f.scope, true, func(phase string) {
 		if phase != "推送资料" || raced {
 			return
 		}
 		raced = true
-		materialsGitTestFile(t, f.seed, "2025/456-另一需求/研发/theirs.md", "theirs")
+		materialsGitTestFile(t, f.seed, "requirements/2025/456-另一需求/研发/theirs.md", "theirs")
 		materialsGitTestRun(t, f.seed, "add", ".")
 		materialsGitTestRun(t, f.seed, "commit", "-m", "race")
 		materialsGitTestRun(t, f.seed, "push", "origin", "master")
@@ -270,7 +270,7 @@ func TestMaterialsGitPushRaceRetriesWithoutDuplicateLocalCommit(t *testing.T) {
 	if got := materialsGitTestRun(t, f.root, "log", "--format=%s", "--all"); strings.Count(got, "docs: sync task materials") != 1 {
 		t.Fatalf("duplicate local commit: %s", got)
 	}
-	for _, path := range []string{"2026/123-需求/研发/mine.md", "2025/456-另一需求/研发/theirs.md"} {
+	for _, path := range []string{"requirements/2026/123-需求/研发/mine.md", "requirements/2025/456-另一需求/研发/theirs.md"} {
 		if _, err := os.Stat(filepath.Join(f.root, path)); err != nil {
 			t.Fatal(path, err)
 		}
@@ -280,7 +280,7 @@ func TestMaterialsGitPushRaceRetriesWithoutDuplicateLocalCommit(t *testing.T) {
 func TestMaterialsGitInterruptedStagingRecoversNativeIndex(t *testing.T) {
 	f := newMaterialsGitFixture(t, true)
 	f.sync()
-	materialsGitTestFile(t, f.root, "2026/123-需求/研发/new.md", "new")
+	materialsGitTestFile(t, f.root, "requirements/2026/123-需求/研发/new.md", "new")
 	head := materialsGitTestRun(t, f.root, "rev-parse", "HEAD")
 	state, err := f.service.load(f.scope)
 	if err != nil {
@@ -288,11 +288,11 @@ func TestMaterialsGitInterruptedStagingRecoversNativeIndex(t *testing.T) {
 	}
 	state.Staging = true
 	state.StageHead = head
-	state.StagePaths = []string{"2026/123-需求/研发/new.md"}
+	state.StagePaths = []string{"requirements/2026/123-需求/研发/new.md"}
 	if err := f.service.save(f.scope, state); err != nil {
 		t.Fatal(err)
 	}
-	materialsGitTestRun(t, f.root, "add", "--", "2026/123-需求/研发/new.md")
+	materialsGitTestRun(t, f.root, "add", "--", "requirements/2026/123-需求/研发/new.md")
 	f.sync()
 	if strings.Count(materialsGitTestRun(t, f.root, "log", "--format=%s"), "docs: sync task materials") != 1 {
 		t.Fatal("staging recovery duplicated commit")
@@ -310,7 +310,7 @@ func TestMaterialsGitBranchSwitchUsesConfiguredBranch(t *testing.T) {
 		t.Fatal("did not switch")
 	}
 	master := materialsGitTestRun(t, f.remote, "rev-parse", "master")
-	materialsGitTestFile(t, f.root, "2026/123-需求/研发/team.md", "team")
+	materialsGitTestFile(t, f.root, "requirements/2026/123-需求/研发/team.md", "team")
 	f.sync()
 	if master != materialsGitTestRun(t, f.remote, "rev-parse", "master") {
 		t.Fatal("pushed to previous branch")

@@ -313,6 +313,7 @@ func (s *app) updateRequirementReaderBody(reader *requirementReaderState, body a
 		updateReadonlyMarkdownState(reader.bodyMarkdown, body.Body, images)
 	}
 	reader.bodyMarkdown.richTextReading = true
+	reader.bodyMarkdown.renderHTMLTables = true
 }
 
 func (s *app) updateRequirementReaderComments(reader *requirementReaderState, comments application.RequirementComments) {

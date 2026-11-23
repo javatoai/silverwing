@@ -4,12 +4,19 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
+	"image"
+	"image/png"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/egoist/mygo/internal/update"
 )
 
 // debData returns the files of the data archive of a Debian package: their
@@ -19,6 +26,20 @@ func debData(t *testing.T, deb string) map[string]string { return debMember(t, d
 // debMember returns the files of an archive of a Debian package, such as
 // control.tar.gz or data.tar.gz.
 func debMember(t *testing.T, deb, archive string) map[string]string {
+	t.Helper()
+	files := map[string]string{}
+	debEntries(t, deb, archive, func(hdr *tar.Header, content []byte) {
+		if hdr.Typeflag == tar.TypeSymlink {
+			content = []byte(hdr.Linkname)
+		}
+		files[strings.TrimPrefix(hdr.Name, "./")] = string(content)
+	})
+	return files
+}
+
+// debEntries calls f with each entry of an archive of a Debian package and
+// its content.
+func debEntries(t *testing.T, deb, archive string, f func(hdr *tar.Header, content []byte)) {
 	t.Helper()
 	b, err := os.ReadFile(deb)
 	if err != nil {
@@ -43,31 +64,26 @@ func debMember(t *testing.T, deb, archive string) map[string]string {
 		if err != nil {
 			t.Fatal(err)
 		}
-		files := map[string]string{}
 		tr := tar.NewReader(gz)
 		for {
 			hdr, err := tr.Next()
 			if err == io.EOF {
-				return files
+				return
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
 			content, _ := io.ReadAll(tr)
-			if hdr.Typeflag == tar.TypeSymlink {
-				content = []byte(hdr.Linkname)
-			}
-			files[strings.TrimPrefix(hdr.Name, "./")] = string(content)
+			f(hdr, content)
 		}
 	}
 	t.Fatal("no " + archive)
-	return nil
 }
 
 func TestDebCommand(t *testing.T) {
-	for _, command := range []string{"", "my-app-gui"} {
+	for _, commands := range []commandNames{nil, {"my-app-gui"}, {"my-app", "ma"}} {
 		c := &Config{root: t.TempDir(), Name: "My App", Version: "1.0.0"}
-		c.Linux.Command = command
+		c.Linux.Command = commands
 		stage := t.TempDir()
 		if err := os.WriteFile(filepath.Join(stage, "my-app"), []byte("#!/bin/sh\n"), 0o755); err != nil {
 			t.Fatal(err)
@@ -77,17 +93,18 @@ func TestDebCommand(t *testing.T) {
 			t.Fatal(err)
 		}
 		files := debData(t, deb)
-		var commands []string
-		for name := range files {
+		var linked []string
+		for name, target := range files {
 			if rest, ok := strings.CutPrefix(name, "usr/bin/"); ok && rest != "" {
-				commands = append(commands, rest)
+				linked = append(linked, rest)
+				if target != "../../opt/my-app/my-app" {
+					t.Errorf("with the commands %q, %s links to %q", commands, name, target)
+				}
 			}
 		}
-		switch {
-		case command == "" && len(commands) != 0:
-			t.Errorf("without a command, the package has %v", commands)
-		case command != "" && (len(commands) != 1 || files["usr/bin/"+command] != "../../opt/my-app/my-app"):
-			t.Errorf("with the command %s, the package has %v, linked to %q", command, commands, files["usr/bin/"+command])
+		slices.Sort(linked)
+		if !slices.Equal(linked, slices.Sorted(slices.Values(commands))) {
+			t.Errorf("with the commands %q, the package has %v", commands, linked)
 		}
 		if entry := files["usr/share/applications/my-app.desktop"]; !strings.Contains(entry, "\nExec=/opt/my-app/my-app\n") {
 			t.Errorf("desktop entry:\n%s", entry)
@@ -101,7 +118,7 @@ func TestLinuxWebView(t *testing.T) {
 	for _, webview := range []*bool{nil, new(true), new(false)} {
 		c := &Config{root: t.TempDir(), Name: "My App", Version: "1.0.0"}
 		c.Linux.WebView = webview
-		c.Linux.Depends = []string{"libayatana-appindicator3-1"}
+		c.Linux.Depends.Deb = []string{"libayatana-appindicator3-1"}
 		stage := t.TempDir()
 		if err := os.WriteFile(filepath.Join(stage, "my-app"), []byte("#!/bin/sh\n"), 0o755); err != nil {
 			t.Fatal(err)
@@ -126,18 +143,202 @@ func TestLinuxWebView(t *testing.T) {
 }
 
 func TestLinuxCommandName(t *testing.T) {
-	for command, ok := range map[string]bool{"": true, "my-app": true, "my_app2.1+": true, "-v": false, "my app": false, "../app": false, "bin/app": false} {
+	for _, tc := range []struct {
+		command commandNames
+		ok      bool
+	}{
+		{nil, true},
+		{commandNames{"my-app"}, true},
+		{commandNames{"my_app2.1+"}, true},
+		{commandNames{"my-app", "ma"}, true},
+		{commandNames{"-v"}, false},
+		{commandNames{"my app"}, false},
+		{commandNames{"../app"}, false},
+		{commandNames{"bin/app"}, false},
+		{commandNames{"my-app", ""}, false},
+		{commandNames{"ma", "my-app", "ma"}, false},
+	} {
 		c := &Config{}
-		c.Linux.Command = command
-		if err := c.validate(); (err == nil) != ok {
-			t.Errorf("linux.command %q: %v", command, err)
+		c.Linux.Command = tc.command
+		if err := c.validate(); (err == nil) != tc.ok {
+			t.Errorf("linux.command %q: %v", tc.command, err)
+		}
+	}
+}
+
+// linux.command takes a name, or a list of them.
+func TestLinuxCommandJSON(t *testing.T) {
+	load := func(command string) (*Config, error) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, jsonConfig), []byte(`{"name": "My App", "linux": {"command": `+command+`}}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return loadConfig(dir)
+	}
+	for command, want := range map[string]commandNames{`"my-app"`: {"my-app"}, `["my-app", "ma"]`: {"my-app", "ma"}, `""`: nil, `[]`: nil, `null`: nil} {
+		c, err := load(command)
+		if err != nil {
+			t.Fatalf("linux.command %s: %v", command, err)
+		}
+		if !slices.Equal(c.Linux.Command, want) {
+			t.Errorf("linux.command %s loaded as %q", command, c.Linux.Command)
+		}
+	}
+	// Anything else fails, naming the field.
+	for _, command := range []string{`1`, `["my-app", 1]`} {
+		if _, err := load(command); err == nil || !strings.Contains(err.Error(), "linux.command") {
+			t.Errorf("linux.command %s: %v", command, err)
+		}
+	}
+}
+
+// linux.formats chooses the packages a build writes, all of them when it
+// is left out, and the archive with install.sh always.
+func TestLinuxFormats(t *testing.T) {
+	root := t.TempDir()
+	f, err := os.Create(filepath.Join(root, "icon.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = png.Encode(f, image.NewNRGBA(image.Rect(0, 0, 300, 300)))
+	f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		deb     = "note-pad_1.2.0_amd64.deb"
+		rpm     = "note-pad-1.2.0-1.x86_64.rpm"
+		archive = "note-pad-1.2.0-linux-amd64.tar.gz"
+	)
+	for _, tc := range []struct {
+		formats string // in mygo.json
+		want    []string
+	}{
+		{``, []string{deb, rpm, archive, "note-pad-256x256.png", "note-pad-512x512.png", pkgbuildName}},
+		{`, "formats": null`, []string{deb, rpm, archive, "note-pad-256x256.png", "note-pad-512x512.png", pkgbuildName}},
+		{`, "formats": ["deb"]`, []string{deb, archive}},
+		{`, "formats": ["pkgbuild", "rpm"]`, []string{rpm, archive, "note-pad-256x256.png", "note-pad-512x512.png", pkgbuildName}},
+		{`, "formats": []`, []string{archive}},
+	} {
+		// A Debian package with neither an RPM nor an Arch Linux package
+		// known for it: only the packages written warn about it.
+		config := `{"name": "Note Pad", "version": "1.2.0", "icon": "icon.png", "linux": {"depends": ["libunknown-thing0"]` + tc.formats + `}}`
+		if err := os.WriteFile(filepath.Join(root, jsonConfig), []byte(config), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		c, err := loadConfig(root)
+		if err != nil {
+			t.Fatalf("%s: %v", config, err)
+		}
+		stage := t.TempDir()
+		if os.WriteFile(filepath.Join(stage, "note-pad"), []byte("app"), 0o755) != nil {
+			t.Fatal("cannot write the app")
+		}
+		if _, err := writeLinuxDesktop(c, stage, "note-pad"); err != nil {
+			t.Fatal(err)
+		}
+		installed, err := entryNames(stage)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before, _ := entryNames(stage)
+		warnings := captureWarnings(t, func() {
+			var written []string
+			if written, err = writeLinuxPackages(c, stage, "linux-amd64", "amd64", installed); err != nil {
+				t.Fatalf("%s: %v", config, err)
+			}
+			var names []string
+			for _, w := range written {
+				names = append(names, filepath.Base(w))
+			}
+			if !slices.Equal(names, tc.want) {
+				t.Errorf("%s: wrote %q, want %q", config, names, tc.want)
+			}
+		})
+		// Nothing else is left in the stage, which the build moves into
+		// build/linux-amd64.
+		after, _ := entryNames(stage)
+		if extra := slices.DeleteFunc(after, func(n string) bool { return slices.Contains(before, n) || slices.Contains(tc.want, n) }); len(extra) > 0 {
+			t.Errorf("%s: also wrote %q", config, extra)
+		}
+		for format, warning := range map[string]string{"rpm": "RPM package's dependencies", "pkgbuild": "PKGBUILD's dependencies"} {
+			if got, want := strings.Contains(warnings, warning), c.Linux.builds(format); got != want {
+				t.Errorf("%s: warned about the %s dependencies %v, want %v:\n%s", config, format, got, want, warnings)
+			}
+		}
+	}
+}
+
+// captureWarnings returns what f writes to the console.
+func captureWarnings(t *testing.T, f func()) string {
+	var b bytes.Buffer
+	con.mu.Lock()
+	w := con.w
+	con.w = &b
+	con.mu.Unlock()
+	defer func() {
+		con.mu.Lock()
+		con.w = w
+		con.mu.Unlock()
+	}()
+	f()
+	return b.String()
+}
+
+// linux.formats names only the packages MyGo writes.
+func TestLinuxFormatsName(t *testing.T) {
+	for _, tc := range []struct {
+		formats []string
+		ok      bool
+	}{
+		{nil, true},
+		{[]string{}, true},
+		{[]string{"deb"}, true},
+		{[]string{"deb", "rpm", "pkgbuild"}, true},
+		{[]string{"appimage"}, false},
+		{[]string{"deb", "Deb"}, false},
+		{[]string{"arch"}, false},
+	} {
+		c := &Config{}
+		c.Linux.Formats = tc.formats
+		err := c.validate()
+		if (err == nil) != tc.ok {
+			t.Errorf("linux.formats %q: %v", tc.formats, err)
+		}
+		if err != nil && !strings.Contains(err.Error(), "deb, rpm, pkgbuild") {
+			t.Errorf("linux.formats %q: the error does not name the formats: %v", tc.formats, err)
+		}
+	}
+}
+
+func TestLinuxDependsJSON(t *testing.T) {
+	for _, tc := range []struct {
+		json    string
+		want    linuxDepends
+		wantErr bool
+	}{
+		{`null`, linuxDepends{}, false},
+		{`[]`, linuxDepends{legacy: false}, false},
+		{`["libnotify4", "curl"]`, linuxDepends{Deb: []string{"libnotify4", "curl"}, legacy: true}, false},
+		{`{"deb": ["libnotify4"], "rpm": ["libnotify.so.4"], "arch": ["libnotify"]}`, linuxDepends{Deb: []string{"libnotify4"}, RPM: []string{"libnotify.so.4"}, Arch: []string{"libnotify"}, legacy: false}, false},
+		{`{"unknown": ["foo"]}`, linuxDepends{}, true},
+		{`"not-an-array-or-object"`, linuxDepends{}, true},
+		{`123`, linuxDepends{}, true},
+	} {
+		var got linuxDepends
+		err := json.Unmarshal([]byte(tc.json), &got)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("Unmarshal %s: err %v, wantErr %v", tc.json, err, tc.wantErr)
+		}
+		if !tc.wantErr && (!slices.Equal(got.Deb, tc.want.Deb) || !slices.Equal(got.RPM, tc.want.RPM) || !slices.Equal(got.Arch, tc.want.Arch) || got.legacy != tc.want.legacy) {
+			t.Errorf("Unmarshal %s: got %+v, want %+v", tc.json, got, tc.want)
 		}
 	}
 }
 
 // TestBuildLinuxSlug builds an app with a slug of its own, which names the
-// executable, the Debian package and its directory, the update archive
-// and install.sh's files and variables.
+// executable, the Debian and RPM packages and their directory, the update archive,
+// the PKGBUILD and install.sh's files and variables.
 func TestBuildLinuxSlug(t *testing.T) {
 	if testing.Short() {
 		t.Skip("building the app")
@@ -165,7 +366,7 @@ func TestBuildLinuxSlug(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := filepath.Join(dir, "build", "linux-amd64")
-	for _, name := range []string{"cloud-music", "cloud-music.desktop", "cloud-music-0.1.0-linux-amd64.tar.gz", "cloud-music_0.1.0_amd64.deb"} {
+	for _, name := range []string{"cloud-music", "cloud-music.desktop", "cloud-music-0.1.0-linux-amd64.tar.gz", "cloud-music_0.1.0_amd64.deb", pkgbuildName, "cloud-music-0.1.0-1.x86_64.rpm"} {
 		if _, err := os.Stat(filepath.Join(out, name)); err != nil {
 			t.Error(err)
 		}
@@ -177,8 +378,43 @@ func TestBuildLinuxSlug(t *testing.T) {
 	if _, ok := files["opt/cloud-music/cloud-music"]; !ok {
 		t.Error("the package has no opt/cloud-music/cloud-music")
 	}
+	// The list of what the version installs, from which its update knows
+	// what to remove, is in the app's archive.
+	f, err := os.Open(filepath.Join(out, "cloud-music-0.1.0-linux-amd64.tar.gz"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	unpacked := filepath.Join(t.TempDir(), "app")
+	err = update.ExtractArchive(f, unpacked)
+	f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := os.ReadFile(filepath.Join(unpacked, update.FileList))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries, _ := entryNames(unpacked); len(entries) < 2 || !slices.Equal(update.ParseFileList(list), entries) {
+		t.Errorf("the list names %q, the archive holds %q", list, entries)
+	}
 	if !strings.HasPrefix(debMember(t, filepath.Join(out, "cloud-music_0.1.0_amd64.deb"), "control.tar.gz")["control"], "Package: cloud-music\n") {
 		t.Error("the package is not named cloud-music")
+	}
+	pkgbuild, err := os.ReadFile(filepath.Join(out, pkgbuildName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(pkgbuild), "\npkgname='cloud-music'\n") || !strings.Contains(string(pkgbuild), "\nsource=('cloud-music-0.1.0-linux-amd64.tar.gz')\n") || !strings.Contains(string(pkgbuild), "\ndepends=('gtk3')\n") {
+		t.Errorf("the PKGBUILD does not package cloud-music:\n%s", pkgbuild)
+	}
+	if rpm, err := exec.LookPath("rpm"); err == nil {
+		written := filepath.Join(out, "cloud-music-0.1.0-1.x86_64.rpm")
+		if out := rpmQuery(t, rpm, written, "-qp", "--qf", "%{NAME}\n[%{FILENAMES}\n]"); !strings.HasPrefix(out, "cloud-music\n") || !strings.Contains(out, "\n/opt/cloud-music/cloud-music\n") {
+			t.Errorf("the RPM does not package cloud-music:\n%s", out)
+		}
+		if depends, want := rpmRequirements(t, rpm, written), []string{"libgtk-3.so.0()(64bit)"}; !slices.Equal(depends, want) {
+			t.Errorf("RPM dependencies %q, want %q", depends, want)
+		}
 	}
 	script, err := os.ReadFile(filepath.Join(out, installScriptName))
 	if err != nil {

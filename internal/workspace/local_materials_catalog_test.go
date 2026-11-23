@@ -87,11 +87,9 @@ func localMaterialsCatalogExpectBytes(t *testing.T, path string, expected []byte
 
 func localMaterialsCatalogNoStaging(t *testing.T, task string) {
 	t.Helper()
-	for _, directory := range []string{task, filepath.Join(task, AgentWorkspaceDir, AgentDirectoryName)} {
-		paths, err := filepath.Glob(filepath.Join(directory, ".silverwing-materials-*"))
-		if err != nil || len(paths) != 0 {
-			t.Fatalf("catalog guard leaked staged files: %v %v", paths, err)
-		}
+	paths, err := filepath.Glob(filepath.Join(task, ".silverwing-materials-*"))
+	if err != nil || len(paths) != 0 {
+		t.Fatalf("catalog guard leaked staged files: %v %v", paths, err)
 	}
 }
 
@@ -99,11 +97,9 @@ func TestLocalMaterialsCatalogPreservesCheckAndCancellation(t *testing.T) {
 	for _, failure := range []error{context.Canceled, errors.New("task/config identity changed")} {
 		t.Run(failure.Error(), func(t *testing.T) {
 			f := newLocalMaterialsCatalogFixture(t)
-			paths := []string{filepath.Join(f.physical.Base, AgentRouterFileName), filepath.Join(f.physical.Base, AgentWorkspaceDir, AgentDirectoryName, AgentContextFileName)}
-			before := map[string][]byte{}
-			for _, path := range paths {
-				before[path] = localMaterialsCatalogBytes(t, path)
-			}
+			markMaterialsCatalogStale(t, f.physical.Base)
+			path := filepath.Join(f.physical.Base, AgentRouterFileName)
+			before := localMaterialsCatalogBytes(t, path)
 			if err := os.Mkdir(filepath.Join(f.physical.Root, "new-peer"), 0700); err != nil {
 				t.Fatal(err)
 			}
@@ -118,9 +114,7 @@ func TestLocalMaterialsCatalogPreservesCheckAndCancellation(t *testing.T) {
 			if !errors.Is(err, failure) || checks != 2 {
 				t.Fatalf("catalog write ignored the caller's live guard: checks=%d error=%v", checks, err)
 			}
-			for path, data := range before {
-				localMaterialsCatalogExpectBytes(t, path, data)
-			}
+			localMaterialsCatalogExpectBytes(t, path, before)
 			localMaterialsCatalogNoStaging(t, f.physical.Base)
 		})
 	}
@@ -128,6 +122,7 @@ func TestLocalMaterialsCatalogPreservesCheckAndCancellation(t *testing.T) {
 
 func TestLocalMaterialsCatalogRejectsAliasRetargetBeforeCommit(t *testing.T) {
 	f := newLocalMaterialsCatalogFixture(t)
+	markMaterialsCatalogStale(t, f.physical.Base)
 	if err := os.Mkdir(filepath.Join(f.physical.Root, "new-peer"), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -136,11 +131,7 @@ func TestLocalMaterialsCatalogRejectsAliasRetargetBeforeCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	routerRelative := filepath.Join("one", AgentRouterFileName)
-	contextRelative := filepath.Join("one", AgentWorkspaceDir, AgentDirectoryName, AgentContextFileName)
-	before := map[string][]byte{}
-	for _, relative := range []string{routerRelative, contextRelative} {
-		before[relative] = localMaterialsCatalogBytes(t, filepath.Join(f.realRoot, relative))
-	}
+	before := localMaterialsCatalogBytes(t, filepath.Join(f.realRoot, routerRelative))
 	checks := 0
 	err := f.service.RefreshMaterialsDirectories(f.public.Base, f.manifest, f.config, func() error {
 		checks++
@@ -155,53 +146,44 @@ func TestLocalMaterialsCatalogRejectsAliasRetargetBeforeCommit(t *testing.T) {
 	if err == nil || checks != 2 {
 		t.Fatalf("retargeted TaskRoot retained catalog commit authority: checks=%d error=%v", checks, err)
 	}
-	for relative, data := range before {
-		for _, root := range []string{f.realRoot, newRoot, f.aliasRoot} {
-			localMaterialsCatalogExpectBytes(t, filepath.Join(root, relative), data)
-		}
+	for _, root := range []string{f.realRoot, newRoot, f.aliasRoot} {
+		localMaterialsCatalogExpectBytes(t, filepath.Join(root, routerRelative), before)
 	}
 	localMaterialsCatalogNoStaging(t, f.physical.Base)
 	localMaterialsCatalogNoStaging(t, filepath.Join(newRoot, "one"))
 }
 
-func TestLocalMaterialsCatalogRejectsAgentReplacementBeforeCommit(t *testing.T) {
+func TestLocalMaterialsCatalogRejectsTaskReplacementBeforeCommit(t *testing.T) {
 	f := newLocalMaterialsCatalogFixture(t)
 	markMaterialsCatalogStale(t, f.physical.Base)
-	router := filepath.Join(f.physical.Base, AgentRouterFileName)
-	custom := []byte("# custom user router\r\n")
-	if err := os.WriteFile(router, custom, 0600); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.Mkdir(filepath.Join(f.physical.Root, "new-peer"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	agent := filepath.Join(f.physical.Base, AgentWorkspaceDir, AgentDirectoryName)
-	original := localMaterialsCatalogBytes(t, filepath.Join(agent, AgentContextFileName))
-	moved := agent + "-old-identity"
+	task := f.physical.Base
+	original := localMaterialsCatalogBytes(t, filepath.Join(task, AgentRouterFileName))
+	moved := task + "-old-identity"
 	checks := 0
+	var renameErr error
 	err := f.service.RefreshMaterialsDirectories(f.public.Base, f.manifest, f.config, func() error {
 		checks++
-		// The custom router fails before its pre-write callback. The third
-		// callback belongs to context, after its real parent has been pinned.
-		if checks == 3 {
-			if err := os.Rename(agent, moved); err != nil {
-				return err
+		if checks == 2 {
+			renameErr = os.Rename(task, moved)
+			if renameErr != nil {
+				return renameErr
 			}
-			return os.CopyFS(agent, os.DirFS(moved))
+			return os.CopyFS(task, os.DirFS(moved))
 		}
 		return nil
 	})
-	if err == nil || checks != 3 {
-		t.Fatalf("real context-parent replacement retained commit authority: checks=%d error=%v", checks, err)
+	if err == nil || checks != 2 {
+		t.Fatalf("real task replacement retained commit authority: checks=%d error=%v", checks, err)
 	}
-	for _, directory := range []string{agent, moved} {
-		localMaterialsCatalogExpectBytes(t, filepath.Join(directory, AgentContextFileName), original)
-	}
-	localMaterialsCatalogExpectBytes(t, router, custom)
-	localMaterialsCatalogNoStaging(t, f.physical.Base)
-	paths, err := filepath.Glob(filepath.Join(moved, ".silverwing-materials-*"))
-	if err != nil || len(paths) != 0 {
-		t.Fatalf("rejected parent replacement leaked staged files in old directory: %v %v", paths, err)
+	for _, directory := range []string{task, moved} {
+		if directory == moved && runtime.GOOS == "windows" && os.IsPermission(renameErr) {
+			continue
+		}
+		localMaterialsCatalogExpectBytes(t, filepath.Join(directory, AgentRouterFileName), original)
+		localMaterialsCatalogNoStaging(t, directory)
 	}
 }
 

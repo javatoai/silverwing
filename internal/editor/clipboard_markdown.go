@@ -53,18 +53,6 @@ func ClipboardHTMLToMarkdown(fragment string) (string, error) {
 		}
 		return ""
 	}
-	target := func(raw string) string {
-		u, e := url.Parse(strings.TrimSpace(raw))
-		if e != nil {
-			return ""
-		}
-		switch strings.ToLower(u.Scheme) {
-		case "", "http", "https", "mailto", "file":
-		default:
-			return ""
-		}
-		return parser.EscapeLinkDestination(strings.ReplaceAll(strings.TrimSpace(raw), "|", "%7C"))
-	}
 	var rawText func(*html.Node) string
 	rawText = func(n *html.Node) string {
 		if n.Type == html.TextNode {
@@ -146,28 +134,11 @@ func ClipboardHTMLToMarkdown(fragment string) (string, error) {
 				}
 			}
 			walk(n)
-			if len(rows) == 0 {
+			table := formatMarkdownTable(rows, nil)
+			if table == "" {
 				return ""
 			}
-			columns := 0
-			for _, r := range rows {
-				columns = max(columns, len(r))
-			}
-			var lines []string
-			for i, row := range rows {
-				for len(row) < columns {
-					row = append(row, "")
-				}
-				lines = append(lines, "| "+strings.Join(row, " | ")+" |")
-				if i == 0 {
-					sep := make([]string, columns)
-					for k := range sep {
-						sep[k] = "---"
-					}
-					lines = append(lines, "| "+strings.Join(sep, " | ")+" |")
-				}
-			}
-			return "\n\n" + strings.Join(lines, "\n") + "\n\n"
+			return "\n\n" + table + "\n\n"
 		}
 		if tag == "ul" || tag == "ol" {
 			number := 1
@@ -211,12 +182,12 @@ func ClipboardHTMLToMarkdown(fragment string) (string, error) {
 			}
 			return parser.EncodeCodeSpan(content)
 		case "a":
-			if destination := target(attr(n, "href")); destination != "" {
+			if destination := markdownHTMLLinkTarget(attr(n, "href")); destination != "" {
 				return "[" + content + "](<" + destination + ">)"
 			}
 			return content
 		case "img":
-			if destination := target(attr(n, "src")); destination != "" {
+			if destination := markdownHTMLLinkTarget(attr(n, "src")); destination != "" {
 				return "![" + escapeIncomingText(attr(n, "alt")) + "](<" + destination + ">)"
 			}
 			return escapeIncomingText(attr(n, "alt"))
@@ -233,6 +204,53 @@ func ClipboardHTMLToMarkdown(fragment string) (string, error) {
 	}
 	result := strings.TrimSpace(render(root, false))
 	return result, nil
+}
+
+func markdownHTMLLinkTarget(raw string) string {
+	value := strings.TrimSpace(raw)
+	u, err := url.Parse(value)
+	if err != nil {
+		return ""
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "", "http", "https", "mailto", "file":
+		return parser.EscapeLinkDestination(strings.ReplaceAll(value, "|", "%7C"))
+	}
+	return ""
+}
+
+func formatMarkdownTable(rows [][]string, cellPosition func(row, column, offset int)) string {
+	columns := 0
+	for _, row := range rows {
+		columns = max(columns, len(row))
+	}
+	if columns == 0 {
+		return ""
+	}
+	var table strings.Builder
+	for rowIndex, row := range rows {
+		if rowIndex > 0 {
+			table.WriteByte('\n')
+		}
+		table.WriteString("| ")
+		for column := 0; column < columns; column++ {
+			if column > 0 {
+				table.WriteString(" | ")
+			}
+			if column < len(row) {
+				if cellPosition != nil {
+					cellPosition(rowIndex, column, table.Len())
+				}
+				table.WriteString(row[column])
+			}
+		}
+		table.WriteString(" |")
+		if rowIndex == 0 {
+			table.WriteString("\n|")
+			table.WriteString(strings.Repeat(" --- |", columns))
+		}
+	}
+	return table.String()
 }
 
 func oddSlashPipe(text string) bool {

@@ -1,4 +1,4 @@
-//go:build linux && (amd64 || arm64)
+//go:build linux && !android && (amd64 || arm64)
 
 package linux
 
@@ -18,17 +18,28 @@ import (
 // binds its shortcuts once, so a change replaces it with a new session
 // binding them all. Desktops remember the keys the user picks for each
 // shortcut id, the canonical accelerator, and may ask the user to confirm
-// new shortcuts.
+// new shortcuts: users may decline them, or pick other keys later, so the
+// app hears the keys of each shortcut (HotkeyBound) when the desktop bound
+// them and when they change.
 
 const shortcutsPortal = "org.freedesktop.portal.GlobalShortcuts"
 
 // portalShortcuts is the state of the shortcuts bound through the portal.
 type portalShortcuts struct {
 	available bool
-	shortcuts map[int]accelerator.Accelerator
+	shortcuts map[int]portalShortcut
 	session   string // the session the shortcuts are bound in
 	busy      bool   // a session is being created and bound
 	stale     bool   // the shortcuts changed while busy
+	// changed handles the portal's ShortcutsChanged, from the first
+	// shortcut on: apps without global shortcuts link none of it.
+	changed func(params ptr)
+}
+
+// portalShortcut is a shortcut and what it does, in the app's words.
+type portalShortcut struct {
+	accelerator.Accelerator
+	description string
 }
 
 // portalShortcutsOnly makes X11 sessions bind global shortcuts through the
@@ -41,20 +52,22 @@ var wayland struct {
 	setStartupID func(display ptr, id *byte)
 }
 
-func (b *Backend) bindShortcut(id int, a accelerator.Accelerator) error {
+func (b *Backend) bindShortcut(id int, a accelerator.Accelerator, description string) error {
 	p := &b.portal
 	if !p.available {
 		if portalVersion(shortcutsPortal) == 0 {
 			return fmt.Errorf("mygo: global shortcuts need an X11 session or a desktop with the GlobalShortcuts portal: %w", platform.ErrUnsupported)
 		}
 		p.available = true
+		p.changed = b.shortcutsChanged
 		conn, _ := bus()
 		gDBusConnectionSignalSubscribe(conn, cs(portalName), cs(shortcutsPortal), cs("Activated"), cs(portalPath), nil, 0, cbPortalSignal, 0, 0)
+		gDBusConnectionSignalSubscribe(conn, cs(portalName), cs(shortcutsPortal), cs("ShortcutsChanged"), cs(portalPath), nil, 0, cbPortalSignal, 0, 0)
 	}
 	if p.shortcuts == nil {
-		p.shortcuts = map[int]accelerator.Accelerator{}
+		p.shortcuts = map[int]portalShortcut{}
 	}
-	p.shortcuts[id] = a
+	p.shortcuts[id] = portalShortcut{a, description}
 	if err := b.syncShortcuts(); err != nil {
 		delete(p.shortcuts, id)
 		return err
@@ -88,18 +101,18 @@ func (b *Backend) syncShortcuts() error {
 	if len(p.shortcuts) == 0 {
 		return nil
 	}
-	_, list := p.list()
 	options := []ptr{
 		vardictEntry("session_handle_token", gVariantNewString(cs(shortcutSessionToken()))),
 		// KDE Plasma 5 binds the shortcuts given here, as drafts of the
 		// portal had it; portals before 1.17 pass them on.
-		vardictEntry("shortcuts", list),
+		vardictEntry("shortcuts", p.list()),
 	}
 	err := portalRequest(shortcutsPortal, "CreateSession", nil, options, func(code uint32, results ptr) {
 		session := vardictString(results, "session_handle")
 		if code != 0 || session == "" {
 			p.busy = false
 			log.Printf("mygo: global shortcuts: the desktop portal did not create a session (response %d)", code)
+			b.reportShortcuts(0, false)
 			return
 		}
 		p.stale = false
@@ -114,6 +127,7 @@ func (b *Backend) syncShortcuts() error {
 		if err := b.bindShortcuts(); err != nil {
 			p.busy = false
 			log.Printf("mygo: global shortcuts: %v", err)
+			b.reportShortcuts(0, false)
 		}
 	})
 	if err != nil {
@@ -129,14 +143,19 @@ func (b *Backend) syncShortcuts() error {
 // bindShortcuts binds the shortcuts in the new session.
 func (b *Backend) bindShortcuts() error {
 	p := &b.portal
-	accs, list := p.list()
-	args := []ptr{gVariantNewObjectPath(cs(p.session)), list, gVariantNewString(cs(""))} // no parent window
+	args := []ptr{gVariantNewObjectPath(cs(p.session)), p.list(), gVariantNewString(cs(b.portalParent()))}
 	return portalRequest(shortcutsPortal, "BindShortcuts", args, nil, func(code uint32, results ptr) {
 		p.busy = false
 		if code != 0 {
+			// KDE answers so when the user declined every shortcut.
 			log.Printf("mygo: global shortcuts: the desktop did not bind them (response %d)", code)
+			b.reportShortcuts(0, false)
 		} else {
-			reportUnbound(accs, results)
+			list := gVariantLookupValue(results, cs("shortcuts"), 0)
+			b.reportShortcuts(list, false)
+			if list != 0 {
+				gVariantUnref(list)
+			}
 		}
 		if p.stale {
 			if err := b.syncShortcuts(); err != nil {
@@ -146,49 +165,113 @@ func (b *Backend) bindShortcuts() error {
 	})
 }
 
-// list returns the shortcuts in the order they were registered, and the
-// a(sa{sv}) that describes them to the portal.
-func (p *portalShortcuts) list() ([]accelerator.Accelerator, ptr) {
+// portalParent identifies to a portal the window its dialog shows over: the
+// app's window that has the keyboard, else the first one that shows. GNOME
+// opens the dialog of an app that names none behind the windows in front.
+// X11 windows only (x11:XID, XWayland's too): a Wayland window would have
+// to be exported first (xdg-foreign), which this does not do.
+func (b *Backend) portalParent() string {
+	if b.x11ID == nil {
+		return ""
+	}
+	var parent *window
+	for _, w := range b.windows {
+		if w.closed || !gtkWidgetGetVisible(w.win) {
+			continue
+		}
+		if gtkWindowIsActive(w.win) {
+			parent = w
+			break
+		}
+		if parent == nil || w.id < parent.id {
+			parent = w
+		}
+	}
+	if parent == nil {
+		return ""
+	}
+	gw := gtkWidgetGetWindow(parent.win)
+	if gw == 0 {
+		return ""
+	}
+	return fmt.Sprintf("x11:%x", b.x11ID(gw))
+}
+
+// ids returns the shortcuts' ids in the order they were registered.
+func (p *portalShortcuts) ids() []int {
 	ids := make([]int, 0, len(p.shortcuts))
 	for id := range p.shortcuts {
 		ids = append(ids, id)
 	}
 	slices.Sort(ids)
-	accs := make([]accelerator.Accelerator, len(ids))
-	items := make([]ptr, len(ids))
-	for i, id := range ids {
-		a := p.shortcuts[id]
-		accs[i] = a
-		items[i] = tuple(gVariantNewString(cs(a.String())), vardict(
-			vardictEntry("description", gVariantNewString(cs(a.String()))),
-			vardictEntry("preferred_trigger", gVariantNewString(cs(a.XDGTrigger()))),
-		))
-	}
-	return accs, gVariantNewArray(0, unsafe.Pointer(&items[0]), uintptr(len(items)))
+	return ids
 }
 
-// reportUnbound logs the shortcuts the desktop bound to no keys: users may
-// decline them, and KDE Plasma 5 binds none with portals from 1.17 on.
-func reportUnbound(accs []accelerator.Accelerator, results ptr) {
+// list returns the a(sa{sv}) that describes the shortcuts to the portal,
+// in the order they were registered: the desktop shows a shortcut's
+// description where it asks the user to confirm it and in its settings.
+func (p *portalShortcuts) list() ptr {
+	ids := p.ids()
+	items := make([]ptr, len(ids))
+	for i, id := range ids {
+		s := p.shortcuts[id]
+		description := s.description
+		if description == "" {
+			description = s.String()
+		}
+		items[i] = tuple(gVariantNewString(cs(s.String())), vardict(
+			vardictEntry("description", gVariantNewString(cs(description))),
+			vardictEntry("preferred_trigger", gVariantNewString(cs(s.XDGTrigger()))),
+		))
+	}
+	return gVariantNewArray(0, unsafe.Pointer(&items[0]), uintptr(len(items)))
+}
+
+// reportShortcuts tells the app the keys the desktop has for its
+// shortcuts, from the a(sa{sv}) the portal lists them in (0: it bound
+// none), and logs those it has no keys for: users may decline them, and
+// KDE Plasma 5 binds none with portals from 1.17 on. A shortcut the list
+// leaves out has no keys, unless the list is of those that changed.
+func (b *Backend) reportShortcuts(list ptr, changed bool) {
 	keys := map[string]string{}
-	if list := gVariantLookupValue(results, cs("shortcuts"), 0); list != 0 {
-		if goStr(gVariantGetTypeString(list)) == "a(sa{sv})" {
-			for i := uintptr(0); i < gVariantNChildren(list); i++ {
-				item := gVariantGetChildValue(list, i)
-				id, props := gVariantGetChildValue(item, 0), gVariantGetChildValue(item, 1)
-				keys[goStr(gVariantGetString(id, nil))] = vardictString(props, "trigger_description")
-				gVariantUnref(id)
-				gVariantUnref(props)
-				gVariantUnref(item)
-			}
-		}
-		gVariantUnref(list)
-	}
-	for _, a := range accs {
-		if keys[a.String()] == "" {
-			log.Printf("mygo: global shortcuts: the desktop bound no keys to %s", a)
+	if list != 0 && goStr(gVariantGetTypeString(list)) == "a(sa{sv})" {
+		for i := uintptr(0); i < gVariantNChildren(list); i++ {
+			item := gVariantGetChildValue(list, i)
+			id, props := gVariantGetChildValue(item, 0), gVariantGetChildValue(item, 1)
+			keys[goStr(gVariantGetString(id, nil))] = vardictString(props, "trigger_description")
+			gVariantUnref(id)
+			gVariantUnref(props)
+			gVariantUnref(item)
 		}
 	}
+	for _, id := range b.portal.ids() {
+		s, ok := b.portal.shortcuts[id]
+		if !ok {
+			continue // unregistered by the app as it heard of another's keys
+		}
+		k, listed := keys[s.String()]
+		if changed && !listed {
+			continue
+		}
+		if k == "" {
+			log.Printf("mygo: global shortcuts: the desktop bound no keys to %s", s.Accelerator)
+		}
+		b.h.HotkeyBound(id, k)
+	}
+}
+
+// shortcutsChanged handles the portal's ShortcutsChanged signal, (session
+// handle, shortcuts), sent when the user gave the shortcuts other keys.
+func (b *Backend) shortcutsChanged(params ptr) {
+	session := gVariantGetChildValue(params, 0)
+	ours := goStr(gVariantGetString(session, nil)) == b.portal.session
+	gVariantUnref(session)
+	if !ours {
+		return
+	}
+	list := gVariantGetChildValue(params, 1)
+	b.reportShortcuts(list, true)
+	gVariantUnref(list)
 }
 
 // shortcutActivated handles the portal's Activated signal: (session
@@ -206,8 +289,8 @@ func (b *Backend) shortcutActivated(params ptr) {
 	options := gVariantGetChildValue(params, 3)
 	token := vardictString(options, "activation_token")
 	gVariantUnref(options)
-	for id, a := range b.portal.shortcuts {
-		if a.String() == name {
+	for id, s := range b.portal.shortcuts {
+		if s.String() == name {
 			withActivationToken(token, func() { b.h.HotkeyPressed(id) })
 			return
 		}

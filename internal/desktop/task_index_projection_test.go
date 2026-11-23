@@ -112,12 +112,6 @@ func TestTaskProjectionRevisionsMetadataPointerAndSameSlicePublication(t *testin
 	if got := s.taskIndexRows(false); !slices.Equal(got, []int{1}) {
 		t.Fatal("same-slice task publication did not invalidate search")
 	}
-	state.search = "renamed group"
-	s.snapshot.Groups[0].Name = "Renamed group"
-	s.workspaceUnit.publishServiceCatalog(newDesktopServiceCatalog(s.snapshot))
-	if got := s.taskIndexRows(false); len(got) != 2 {
-		t.Fatal("group metadata revision did not invalidate task text")
-	}
 	s.deleteTaskRequirementMetadata(items[0].id)
 	state.search = "changed metadata"
 	if got := s.taskIndexRows(false); len(got) != 0 {

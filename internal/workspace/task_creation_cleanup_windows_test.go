@@ -20,7 +20,7 @@ func TestCreateTaskRollbackDoesNotFollowWorkspaceJunction(t *testing.T) {
 	defer cancel()
 	taskPath := filepath.Join(root, "junction-task")
 	external := filepath.Join(root, "external-task-documents")
-	externalDocument := filepath.Join(external, AgentDirectoryName, AgentContextFileName)
+	externalDocument := filepath.Join(external, HandoffFileName)
 	if err := os.MkdirAll(filepath.Dir(externalDocument), 0755); err != nil {
 		t.Fatal(err)
 	}

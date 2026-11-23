@@ -21,6 +21,7 @@ type TagObservation struct {
 	TagOperationReport
 	Git          TagPushStatus     `json:"git"`
 	GenbuService string            `json:"genbuService,omitempty"`
+	GenbuSkipped bool              `json:"genbuSkipped,omitempty"`
 	Runtime      *TagRuntimeStatus `json:"runtime,omitempty"`
 }
 
@@ -54,20 +55,35 @@ func (t *TagTask) Preflight(ctx context.Context, selection string) (TagPreflight
 }
 
 func (t *TagTask) Observe(ctx context.Context, operationID string) (TagObservation, error) {
-	operation, err := t.service.probeOperation(ctx, t.task, operationID, nil)
+	return t.observe(ctx, operationID, true)
+}
+
+// ObserveGit reports fresh Git evidence without presenting saved pipeline status.
+func (t *TagTask) ObserveGit(ctx context.Context, operationID string) (TagObservation, error) {
+	return t.observe(ctx, operationID, false)
+}
+
+func (t *TagTask) observe(ctx context.Context, operationID string, probeGenbu bool) (TagObservation, error) {
+	var operation domain.TagOperation
+	var err error
+	if probeGenbu {
+		operation, err = t.service.probeOperation(ctx, t.task, operationID, nil)
+	} else {
+		operation, err = t.service.store.load(t.task.directory, operationID)
+	}
 	if err != nil {
 		return TagObservation{}, err
 	}
-	service, serviceErr := t.task.config.GroupService(t.task.manifest.GroupID, operation.GroupServiceID)
+	service, serviceErr := t.task.config.Service(operation.GroupServiceID)
 	name := ""
-	if serviceErr == nil && service.GenbuProbeEnabled {
+	if probeGenbu && serviceErr == nil && service.GenbuProbeEnabled {
 		name = service.GenbuServiceName
 	} else {
 		operation.GenbuStatus = initialGenbuStatus()
 	}
 	return TagObservation{
 		TagOperationReport: operationReport(operation, t.task.manifest.TaskDirectoryName),
-		Git:                t.PushStatus(ctx, operation), GenbuService: name,
+		Git:                t.PushStatus(ctx, operation), GenbuService: name, GenbuSkipped: !probeGenbu,
 	}, ctx.Err()
 }
 
@@ -100,7 +116,6 @@ func (t *TagTask) ObserveUATRuntime(ctx context.Context, observations []TagObser
 		pods production.ServicePods
 		err  error
 	}
-	genbu := production.CLIGenbu{Runner: t.service.runner}
 	queries := make(map[string]podQuery)
 	namespace = strings.TrimSpace(namespace)
 	for i := range observations {
@@ -115,7 +130,14 @@ func (t *TagTask) ObserveUATRuntime(ctx context.Context, observations []TagObser
 		}
 		query, found := queries[service]
 		if !found {
-			query.pods, query.err = genbu.Pods(ctx, t.task.config, "uat", service)
+			genbu, err := t.service.requireGenbuClient(ctx)
+			query.err = err
+			if query.err == nil {
+				query.pods, query.err = genbu.Pods(ctx, t.task.config, "uat", service)
+				if scopeErr := genbu.CheckScope(ctx); scopeErr != nil {
+					query.err = scopeErr
+				}
+			}
 			if query.err == nil && query.pods.Service != service {
 				query.err = fmt.Errorf("Genbu 返回的 Pod 服务为 %q，当前配置为 %q", query.pods.Service, service)
 			}

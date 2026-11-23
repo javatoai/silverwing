@@ -77,31 +77,12 @@ func taskCreationHasDraftChanges(state *taskCreationState) bool {
 		return false
 	}
 	if strings.TrimSpace(state.draft.TaskName) != "" || strings.TrimSpace(state.draft.RequirementLink) != "" ||
-		state.draft.BranchEdited || strings.TrimSpace(state.notes) != "" {
+		state.draft.BranchEdited {
 		return true
 	}
 	for _, selected := range state.services {
 		if selected {
 			return true
-		}
-	}
-	if len(state.config.Groups) > 0 && state.groupID != state.config.Groups[0].ID {
-		return true
-	}
-	if state.toolsLoaded {
-		defaults := make(map[string]bool, len(state.config.DefaultWorkspaceToolIDs))
-		for _, id := range state.config.DefaultWorkspaceToolIDs {
-			defaults[id] = true
-		}
-		for id, selected := range state.selectedToolIDs {
-			if selected != defaults[id] {
-				return true
-			}
-		}
-		for id := range defaults {
-			if !state.selectedToolIDs[id] {
-				return true
-			}
 		}
 	}
 	return false
@@ -115,11 +96,7 @@ func (s *app) discardTaskCreation(state *taskCreationState) {
 	if state == nil || s.taskUnit.state.taskCreation != state {
 		return
 	}
-	if err := s.captureTaskCreationMarkdown(state); err != nil {
-		state.inlineError, s.dialogOpen = err.Error(), true
-		return
-	}
-	closeTaskCreationMarkdown(state)
+	closeTaskCreationGeneratedPreview(state)
 	s.cancelTaskCreationReads(state, false)
 	s.closeTaskCreationRequirements()
 	s.closeTaskCreationAINaming()
@@ -141,7 +118,7 @@ func (s *app) renderTaskCreationDiscardConfirmation(c *ui.Context, p palette) {
 		panel.Width(min(440, width-48)).Padding(22).Gap(16).Background(p.surface).Border(1, p.line).Radius(18)
 		panel.Children(func() {
 			label(c, "放弃创建任务？", 18, p.text).FontWeight(600)
-			label(c, "已填写的任务信息、服务选择和人工说明将不会保留。", 12, p.muted)
+			label(c, "已填写的任务信息和服务选择将不会保留。", 12, p.muted)
 			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
 				if action(c, "task-create-keep-draft", "", "继续编辑", p, false) {
 					state.discardConfirmation = false

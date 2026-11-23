@@ -65,6 +65,11 @@ func (s *app) initializeReadingSession(home string, restoreLastTask bool) {
 	if s.desktopPreferences != nil && !s.desktopPreferences.enabled {
 		return
 	}
+	paths := storage.NewPaths(home)
+	s.initializeReadingSessionAt(home, filepath.Join(paths.Cache, "reading-state.json"), restoreLastTask)
+}
+
+func (s *app) initializeReadingSessionAt(home, statePath string, restoreLastTask bool) {
 	if strings.TrimSpace(home) == "" {
 		return
 	}
@@ -76,9 +81,8 @@ func (s *app) initializeReadingSession(home string, restoreLastTask bool) {
 	if s.readingSession != nil && normalizedReadingPath(s.readingSession.home) == normalizedReadingPath(cleanHome) {
 		return
 	}
-	paths := storage.NewPaths(cleanHome)
 	session := &desktopReadingSession{
-		store:             NewReadingStateStore(filepath.Join(paths.Cache, "reading-state.json")),
+		store:             NewReadingStateStore(statePath),
 		cache:             EmptyReadingSnapshot(),
 		home:              cleanHome,
 		restoreLastTask:   restoreLastTask,
@@ -86,6 +90,7 @@ func (s *app) initializeReadingSession(home string, restoreLastTask bool) {
 		restoredMaterials: make(map[string]bool),
 		scrollStates:      make(map[string]readingScrollBinding),
 	}
+	session.store.profileHome = cleanHome
 	s.readingSession = session
 
 	go func() {
@@ -168,8 +173,10 @@ func (s *app) afterReadingTaskSelection() {
 	if current.path != "" {
 		delete(session.restoredMaterials, readingMaterialsKey(current.path, current.materialsPath))
 	}
-	if tab, ok := readingTabForView(session.cache.View); ok {
-		s.tab = s.restoredTaskContentTab(tab)
+	if s.tab != taskProjectInstructionsTab {
+		if tab, ok := readingTabForView(session.cache.View); ok {
+			s.tab = s.restoredTaskContentTab(tab)
+		}
 	}
 	s.observeReadingSession()
 }
@@ -1067,8 +1074,6 @@ func readingViewForTab(tab int) string {
 		return "MATERIALS"
 	case 2:
 		return "REQUIREMENT"
-	case 3:
-		return "NOTES"
 	case taskTagTab:
 		return "TAG"
 	case taskFilesTab:
@@ -1077,6 +1082,8 @@ func readingViewForTab(tab int) string {
 		return "SERVICES"
 	case taskTerminalTab:
 		return "TERMINAL"
+	case taskProjectInstructionsTab:
+		return "PROJECT_INSTRUCTIONS"
 	default:
 		return "DETAIL"
 	}
@@ -1090,8 +1097,6 @@ func readingTabForView(view string) (int, bool) {
 		return 1, true
 	case "REQUIREMENT":
 		return 2, true
-	case "NOTES":
-		return 3, true
 	case "TAG":
 		return taskTagTab, true
 	case "FILES":
@@ -1100,6 +1105,8 @@ func readingTabForView(view string) (int, bool) {
 		return taskServicesTab, true
 	case "TERMINAL":
 		return taskTerminalTab, true
+	case "PROJECT_INSTRUCTIONS":
+		return taskProjectInstructionsTab, true
 	default:
 		return 0, false
 	}

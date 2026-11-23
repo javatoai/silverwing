@@ -133,6 +133,24 @@ func TestEditsMatchWhole(t *testing.T) {
 	}
 }
 
+// TestEditJoinsTableParagraph edits the first line of a paragraph whose
+// last line is a table's header into an item of the list above it, which
+// the paragraph then joins.
+func TestEditJoinsTableParagraph(t *testing.T) {
+	for _, c := range []struct{ src, text string }{
+		{"- one\n\ntwo\n| a | b |\n|---|---|\n| 1 | 2 |\n", "- "},
+		{"1. one\n\ntwo\n| a |\n|---|\n", "2. "},
+	} {
+		at := strings.Index(c.src, "\n\n") + 2
+		d := New(Default)
+		d.Set(c.src)
+		d.Edit(at, at, c.text)
+		if want := render(d.Source(), Default); d.HTML() != want {
+			t.Errorf("%q:\ngot  %q\nwant %q", d.Source(), d.HTML(), want)
+		}
+	}
+}
+
 // TestDefinitionLater checks that a definition appended after its link
 // makes the link a link, and that removing it unmakes it.
 func TestDefinitionLater(t *testing.T) {

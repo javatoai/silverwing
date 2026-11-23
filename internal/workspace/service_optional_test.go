@@ -151,6 +151,24 @@ func TestServiceOptionalAddRemoveAndReaddLocalWorkspaces(t *testing.T) {
 			if err := os.Rename(remote, remote+"-offline"); err != nil {
 				t.Fatal(err)
 			}
+			agentsPath := filepath.Join(path, AgentRouterFileName)
+			agents, err := os.ReadFile(agentsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			catalogue := materialsCatalogStart + "\r\nCatalogue text.\r\n" + materialsCatalogEnd
+			edited, err := replaceMaterialsCatalog(string(agents), catalogue+"\n", true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			userTail := "\r\nUser rules.\r\n"
+			if err := os.WriteFile(agentsPath, []byte(edited+userTail), 0600); err != nil {
+				t.Fatal(err)
+			}
+			agentsInfo, err := os.Stat(agentsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
 			for len(manifest.Services) > 0 {
 				ws := manifest.Services[0]
 				clean, err := service.ModuleRemoval.Inspect(config, path, ws.WorktreePath)
@@ -199,22 +217,23 @@ func TestServiceOptionalAddRemoveAndReaddLocalWorkspaces(t *testing.T) {
 					t.Fatal(err)
 				}
 				confirm := WorkspaceModuleRemovalConfirmation{Fingerprint: preview.Fingerprint, AcknowledgeDataLoss: true}
-				contextPath := filepath.Join(path, AgentWorkspaceDir, AgentDirectoryName, AgentContextFileName)
-				beforeContext, err := os.ReadFile(contextPath)
+				beforeAgents, err := os.ReadFile(agentsPath)
 				if err != nil {
 					t.Fatal(err)
 				}
-				beforeContext = append(beforeContext, "\nOriginal context bytes.\n"...)
-				if err := os.WriteFile(contextPath, beforeContext, 0600); err != nil {
-					t.Fatal(err)
+				if !bytes.Contains(beforeAgents, []byte(ws.WorktreePath)) {
+					t.Fatal("workspace missing from its task instructions before recycle")
 				}
 				recycler.fail = ws.WorktreePath
 				if _, err := service.ModuleRemoval.Remove(context.Background(), config, path, preview, confirm); err == nil || !strings.Contains(err.Error(), "fixture recycle failure") {
 					t.Fatalf("expected recycler failure: %v", err)
 				}
 				recycler.fail = ""
-				if got, err := os.ReadFile(contextPath); err != nil || !bytes.Equal(got, beforeContext) {
-					t.Fatalf("module recycle failure did not restore exact context bytes: %v", err)
+				if got, err := os.ReadFile(agentsPath); err != nil || !bytes.Equal(got, beforeAgents) {
+					t.Fatalf("module recycle failure did not restore exact AGENTS.md bytes: %v", err)
+				}
+				if info, err := os.Stat(agentsPath); err != nil || !os.SameFile(info, agentsInfo) {
+					t.Fatalf("module recycle failure replaced AGENTS.md: %v", err)
 				}
 				if current, err := service.Manifests.Load(path); err != nil || len(current.Services) != len(manifest.Services) {
 					t.Fatalf("module recycle failure lost records: %+v %v", current, err)
@@ -225,6 +244,13 @@ func TestServiceOptionalAddRemoveAndReaddLocalWorkspaces(t *testing.T) {
 				result, err := service.ModuleRemoval.Remove(context.Background(), config, path, preview, WorkspaceModuleRemovalConfirmation{Fingerprint: preview.Fingerprint, AcknowledgeDataLoss: true})
 				if err != nil || result.CleanupError != "" || !result.DirectoryRecycled {
 					t.Fatalf("remove: %v %+v", err, result)
+				}
+				if got, err := os.ReadFile(agentsPath); err != nil || bytes.Contains(got, []byte(ws.WorktreePath)) ||
+					!bytes.Contains(got, []byte(catalogue)) || !bytes.HasSuffix(got, []byte(userTail)) {
+					t.Fatalf("recycle did not refresh only the workspace instructions: %q, %v", got, err)
+				}
+				if info, err := os.Stat(agentsPath); err != nil || !os.SameFile(info, agentsInfo) {
+					t.Fatalf("module recycle replaced AGENTS.md: %v", err)
 				}
 				recycled := filepath.Join(recycler.bin, filepath.Base(ws.WorktreePath))
 				if moved := recycler.calls[len(recycler.calls)-1]; moved != ws.WorktreePath {
@@ -291,27 +317,20 @@ func TestServiceOptionalRouterUpgradePreservesUserEdits(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(root, "analysis")
-	router := filepath.Join(path, AgentRouterFileName)
-	generated := renderRootRouter(manifest, service.Paths)
-	legacy := strings.Replace(generated, taskScopeRule, legacyTaskScopeRule, 1)
-	for _, content := range []string{legacy, legacy + "\nUser rule: keep this file.\n"} {
-		if err := os.WriteFile(router, []byte(content), 0600); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := service.Documents.WriteTaskDocument(path, manifest, config); err != nil {
-			t.Fatal(err)
-		}
-		actual, err := os.ReadFile(router)
-		if err != nil {
-			t.Fatal(err)
-		}
-		want := content
-		if content == legacy {
-			want = generated
-		}
-		if string(actual) != want {
-			t.Fatal("generated router not upgraded, or user edits changed")
-		}
+	agentsPath := filepath.Join(path, AgentRouterFileName)
+	custom := "\ufeff# User instructions\r\n\r\nUser rule: keep this file.\r\n"
+	if err := os.WriteFile(agentsPath, []byte(custom), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Documents.WriteTaskDocument(path, manifest, config); err != nil {
+		t.Fatal(err)
+	}
+	actual, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(actual, []byte(custom)) || !bytes.Contains(actual, []byte("## Worktree 范围")) {
+		t.Fatalf("generated scope missing or original user bytes changed: %q", actual)
 	}
 }
 
@@ -327,11 +346,11 @@ func TestServiceOptionalFinalRemovalDocumentFailureRestoresRecord(t *testing.T) 
 	if err := service.Manifests.Save(path, manifest); err != nil {
 		t.Fatal(err)
 	}
-	contextPath := filepath.Join(path, AgentWorkspaceDir, AgentDirectoryName, AgentContextFileName)
-	if err := os.Remove(contextPath); err != nil {
+	agentsPath := filepath.Join(path, AgentRouterFileName)
+	if err := os.Remove(agentsPath); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(contextPath, 0700); err != nil {
+	if err := os.Mkdir(agentsPath, 0700); err != nil {
 		t.Fatal(err)
 	}
 	preview, err := service.ModuleRemoval.Inspect(config, path, missing)
@@ -347,5 +366,46 @@ func TestServiceOptionalFinalRemovalDocumentFailureRestoresRecord(t *testing.T) 
 	}
 	if notes, err := service.Documents.ReadTaskNotes(path); err != nil || notes != "keep notes" {
 		t.Fatal("failed removal lost notes")
+	}
+}
+
+func TestWorkspaceTaskAgentsRollbackRemovesOnlyPublishedFile(t *testing.T) {
+	service, config, root := optionalServiceFixture(t)
+	manifest, err := service.CreateTask(t.Context(), config, CreateTaskRequest{FolderName: "analysis"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskPath := filepath.Join(root, "analysis")
+	agentsPath := filepath.Join(taskPath, AgentRouterFileName)
+	if err := os.Remove(agentsPath); err != nil {
+		t.Fatal(err)
+	}
+	update, err := captureWorkspaceTaskAgents(taskPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := update.write(service.Documents, manifest, config); err != nil {
+		t.Fatal(err)
+	}
+	if err := update.rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(agentsPath); !os.IsNotExist(err) {
+		t.Fatalf("rollback kept the newly published document: %v", err)
+	}
+	if err := update.write(service.Documents, manifest, config); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(agentsPath, filepath.Join(taskPath, "superseded-agents.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(agentsPath, update.written, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := update.rollback(); !errors.Is(err, errModuleRemovalChanged) {
+		t.Fatalf("rollback did not distinguish a replacement with identical bytes: %v", err)
+	}
+	if got, err := os.ReadFile(agentsPath); err != nil || !bytes.Equal(got, update.written) {
+		t.Fatalf("rollback touched the replacement document: %q, %v", got, err)
 	}
 }

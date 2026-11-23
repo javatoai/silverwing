@@ -29,7 +29,7 @@ type taskCreationRequirementFailure struct {
 	Message      string `json:"message"`
 }
 
-// taskCreationRequirementsState owns candidate and metadata reads for one task
+// taskCreationRequirementsState owns candidate and linked requirement reads for one task
 // creation form. Each read is independent of the desktop's global busy action.
 type taskCreationRequirementsState struct {
 	candidates        []taskCreationRequirementCandidate
@@ -42,6 +42,7 @@ type taskCreationRequirementsState struct {
 	inputLink         string
 	inputIsQuery      bool
 	selectedTitle     string
+	linkReadError     string
 
 	candidateGeneration uint64
 	metadataGeneration  uint64
@@ -54,16 +55,15 @@ type taskCreationRequirementsState struct {
 }
 
 type taskCreationRequirementsScope struct {
-	token, home, groupID, link, config string
-	listIdentity                       requirementListIdentity
-	identityContext                    requirementIdentityContext
+	token, home, link, config string
+	listIdentity              requirementListIdentity
+	identityContext           requirementIdentityContext
 }
 
 type taskCreationRequirementRequest struct {
 	form       *taskCreationState
 	token      string
 	home       string
-	groupID    string
 	link       string
 	config     string
 	identity   requirementListIdentity
@@ -109,7 +109,13 @@ func (s *app) ensureTaskCreationRequirements() *taskCreationRequirementsState {
 			state.candidatesError = ""
 			state.candidatesWarning = ""
 			state.scope = next
-			if previous.link != next.link {
+			accountChanged := previous.listIdentity.account != next.listIdentity.account || previous.identityContext != next.identityContext
+			if accountChanged {
+				form.draft.RequirementTitle = nil
+				state.selectedTitle = ""
+				form.aiEligible = false
+			}
+			if previous.link != next.link || accountChanged {
 				s.handleTaskCreationRequirementLinkChange(form, state, next.link)
 			}
 		} else if previous.link != next.link {
@@ -120,23 +126,23 @@ func (s *app) ensureTaskCreationRequirements() *taskCreationRequirementsState {
 		}
 	}
 
-	if form.draft.MetadataLoading && domain.ParseFeishuWorkItemLink(form.draft.RequirementLink) != nil && state.metadataRequest == nil {
-		s.startTaskCreationRequirementMetadata(form, state)
+	if form.draft.MetadataLoading && !state.inputIsQuery && state.metadataRequest == nil {
+		s.startTaskCreationRequirementRead(form, state, false)
 	}
-	if !state.candidatesLoaded && !state.candidatesLoading && len(form.config.MeegleProjects) > 0 && (form.draft.RequirementLink != "" || state.candidatesOpen) {
+	if !state.candidatesLoaded && !state.candidatesLoading && len(form.config.MeegleProjects) > 0 && state.candidatesOpen {
 		s.startTaskCreationRequirementCandidates(form, state)
 	}
 	return state
 }
 
 func taskCreationRequirementBaseScopeEqual(a, b taskCreationRequirementsScope) bool {
-	return a.token == b.token && a.home == b.home && a.groupID == b.groupID && a.config == b.config &&
+	return a.token == b.token && a.home == b.home && a.config == b.config &&
 		a.listIdentity == b.listIdentity && a.identityContext == b.identityContext
 }
 
 func (s *app) taskCreationRequirementsScope(form *taskCreationState) taskCreationRequirementsScope {
 	return taskCreationRequirementsScope{
-		token: form.token, home: s.snapshot.Home, groupID: form.groupID,
+		token: form.token, home: s.snapshot.Home,
 		link: form.draft.RequirementLink, config: taskCreationRequirementsConfigFingerprint(s.snapshot.ConfigJSON, form.config),
 		listIdentity: s.currentRequirementListIdentity(), identityContext: s.currentRequirementIdentityContext(),
 	}
@@ -152,22 +158,20 @@ func taskCreationRequirementsConfigFingerprint(snapshot string, config domain.Ap
 }
 
 func (s *app) handleTaskCreationRequirementLinkChange(form *taskCreationState, state *taskCreationRequirementsState, link string) {
-	if form == nil || state == nil {
-		return
-	}
+	state.linkReadError = ""
 	if strings.TrimSpace(link) == "" {
 		form.draft.MetadataHint = nil
 		form.draft.MetadataLoading = false
+		return
+	}
+	if form.draft.RequirementTitle != nil {
 		return
 	}
 	if domain.ParseFeishuWorkItemLink(link) == nil {
 		form.draft = form.draft.ApplyMetadata(link, nil)
 		return
 	}
-	if !form.draft.MetadataLoading {
-		form.draft.MetadataLoading = true
-	}
-	s.startTaskCreationRequirementMetadata(form, state)
+	form.draft.MetadataLoading = true
 }
 
 func (s *app) startTaskCreationRequirementCandidates(form *taskCreationState, state *taskCreationRequirementsState) {
@@ -193,7 +197,7 @@ func (s *app) startTaskCreationRequirementCandidates(form *taskCreationState, st
 	state.candidateGeneration++
 	ctx, cancel := context.WithCancel(context.Background())
 	request := &taskCreationRequirementRequest{
-		form: form, token: form.token, home: s.snapshot.Home, groupID: form.groupID, link: form.draft.RequirementLink,
+		form: form, token: form.token, home: s.snapshot.Home, link: form.draft.RequirementLink,
 		config:   taskCreationRequirementsConfigFingerprint(s.snapshot.ConfigJSON, form.config),
 		identity: s.currentRequirementListIdentity(), profile: s.currentRequirementIdentityContext(), account: identity, accountSet: expected,
 		generation: state.candidateGeneration, ctx: ctx, cancel: cancel,
@@ -249,7 +253,7 @@ func taskCreationExpectedRequirementIdentity(s *app) (string, bool, error) {
 	return "", false, nil
 }
 
-// Source binds metadata reads to the active Meegle profile. The application
+// Bind requirement reads to the active Meegle profile. The application
 // identity interface is read-only; unavailable identity keeps the same
 // uncached-read behavior while request generations still guard the UI.
 func taskCreationRequirementIdentityBeforeRead(ctx context.Context, backend application.Backend, expected string, confirmed bool) (string, bool, error) {
@@ -379,110 +383,112 @@ func taskCreationRequirementFailureSummary(failure taskCreationRequirementFailur
 	return fmt.Sprintf("%s：%s", stage, message)
 }
 
-func (s *app) startTaskCreationRequirementMetadata(form *taskCreationState, state *taskCreationRequirementsState) {
-	if form == nil || state == nil || state.closed || state.metadataRequest != nil || !form.draft.MetadataLoading {
+func (s *app) startTaskCreationRequirementRead(form *taskCreationState, state *taskCreationRequirementsState, force bool) {
+	if state.closed || state.inputIsQuery || state.metadataRequest != nil {
 		return
 	}
 	link := form.draft.RequirementLink
 	if domain.ParseFeishuWorkItemLink(link) == nil {
-		form.draft = form.draft.ApplyMetadata(link, nil)
+		form.draft.MetadataLoading = false
 		return
 	}
+	form.draft.MetadataLoading = true
+	state.linkReadError = ""
 	if s.backend == nil {
-		form.draft = form.draft.ApplyMetadata(link, nil)
+		form.draft.MetadataLoading = false
+		state.linkReadError = "需求读取服务不可用。"
 		return
 	}
 	if s.win == nil || s.win.IsDestroyed() {
-		form.draft = form.draft.ApplyMetadata(link, nil)
+		form.draft.MetadataLoading = false
+		state.linkReadError = "需求读取窗口不可用，请重新打开任务创建表单。"
+		return
+	}
+	identity, confirmed, identityErr := taskCreationExpectedRequirementIdentity(s)
+	if identityErr != nil {
+		form.draft.MetadataLoading = false
+		state.linkReadError = identityErr.Error()
 		return
 	}
 	state.metadataGeneration++
 	ctx, cancel := context.WithCancel(context.Background())
 	request := &taskCreationRequirementRequest{
-		form: form, token: form.token, home: s.snapshot.Home, groupID: form.groupID, link: link,
+		form: form, token: form.token, home: s.snapshot.Home, link: link,
 		config:   taskCreationRequirementsConfigFingerprint(s.snapshot.ConfigJSON, form.config),
-		identity: s.currentRequirementListIdentity(), profile: s.currentRequirementIdentityContext(),
+		identity: s.currentRequirementListIdentity(), profile: s.currentRequirementIdentityContext(), account: identity, accountSet: confirmed,
 		generation: state.metadataGeneration, ctx: ctx, cancel: cancel,
-	}
-	if identity, confirmed, identityErr := taskCreationExpectedRequirementIdentity(s); identityErr != nil {
-		form.draft = form.draft.ApplyMetadata(link, nil)
-		return
-	} else {
-		request.account, request.accountSet = identity, confirmed
 	}
 	state.metadataRequest = request
 	backend, win := s.backend, s.win
 	go func() {
+		defer cancel()
 		wait := time.NewTimer(250 * time.Millisecond)
 		defer wait.Stop()
 		select {
 		case <-ctx.Done():
-			cancel()
 			return
 		case <-wait.C:
 		}
 		account, hasAccount, err := taskCreationRequirementIdentityBeforeRead(ctx, backend, request.account, request.accountSet)
 		var result application.ActionResult
 		if err == nil {
-			result, err = backend.Dispatch(ctx, application.Action{Kind: "requirements.metadata", Path: link})
+			payload := map[string]any{"url": link, "force": force}
+			if hasAccount {
+				payload["expectedIdentity"] = account
+			}
+			result, err = executeRequirementOperation(ctx, backend, application.Action{Kind: "requirements.read", Path: link, Payload: payload}, nil)
 		}
 		if err == nil && hasAccount {
 			err = taskCreationRequirementIdentityAfterRead(ctx, backend, account)
 		}
-		if ctx.Err() != nil {
-			err = errors.Join(ctx.Err(), err)
-		}
-		if win.IsDestroyed() {
-			cancel()
+		if ctx.Err() != nil || win.IsDestroyed() {
 			return
 		}
 		updated := make(chan struct{})
 		win.Update(func() {
 			defer close(updated)
-			s.finishTaskCreationRequirementMetadata(request, result, err)
+			s.finishTaskCreationRequirementRead(request, result, err)
 		})
 		select {
 		case <-updated:
 		case <-ctx.Done():
 		}
-		cancel()
 	}()
 }
 
-func (s *app) finishTaskCreationRequirementMetadata(request *taskCreationRequirementRequest, result application.ActionResult, requestErr error) {
+func (s *app) finishTaskCreationRequirementRead(request *taskCreationRequirementRequest, result application.ActionResult, requestErr error) {
 	if !s.taskCreationRequirementRequestRelevant(request, true) {
 		return
 	}
-	state := request.form.requirements
+	form := request.form
+	state := form.requirements
 	state.metadataRequest = nil
-	var metadata *domain.RequirementMetadata
-	if requestErr == nil {
-		var decoded domain.RequirementMetadata
-		if err := decodeTaskCreationRequirementValue(result.Data, &decoded); err == nil {
-			metadata = &decoded
-		} else {
-			requestErr = fmt.Errorf("需求元数据格式错误：%w", err)
-		}
-	}
+	form.draft.MetadataLoading = false
 	if requestErr != nil {
 		var changed *application.RequirementIdentityChangedError
 		if errors.As(requestErr, &changed) {
 			s.applyRequirementListIdentityFailure(changed.Snapshot, requestErr)
 		}
-		metadata = nil
+		state.linkReadError = requestErr.Error()
+		return
 	}
-	request.form.draft = request.form.draft.ApplyMetadata(request.link, metadata)
-}
-
-func decodeTaskCreationRequirementValue(data any, target any) error {
-	if data == nil {
-		return errors.New("应用未返回需求元数据")
-	}
-	encoded, err := json.Marshal(data)
+	content, err := application.ResultData[application.RequirementContent](result)
 	if err != nil {
-		return err
+		state.linkReadError = err.Error()
+		return
 	}
-	return json.Unmarshal(encoded, target)
+	title := strings.TrimSpace(content.Title)
+	if title != "" {
+		form.draft.RequirementTitle = &title
+	}
+	if content.Stale {
+		state.linkReadError = firstNonEmpty(content.RefreshError, "未能刷新需求，请重试。")
+	} else if form.draft.RequirementTitle == nil {
+		state.linkReadError = "Meegle 未返回需求标题。"
+	} else if title != "" && !form.aiEligible {
+		form.aiEligible = true
+		s.requestTaskCreationAINaming(false)
+	}
 }
 
 func (s *app) taskCreationRequirementRequestRelevant(request *taskCreationRequirementRequest, metadata bool) bool {
@@ -491,14 +497,14 @@ func (s *app) taskCreationRequirementRequestRelevant(request *taskCreationRequir
 	}
 	form := s.taskUnit.state.taskCreation
 	if form == nil || form != request.form || form.requirements == nil || form.requirements.closed || form.token != request.token ||
-		s.snapshot.Home != request.home || form.groupID != request.groupID ||
+		s.snapshot.Home != request.home ||
 		taskCreationRequirementsConfigFingerprint(s.snapshot.ConfigJSON, form.config) != request.config ||
 		s.currentRequirementListIdentity() != request.identity || s.currentRequirementIdentityContext() != request.profile {
 		return false
 	}
 	state := form.requirements
 	if metadata {
-		return form.draft.RequirementLink == request.link && state.metadataRequest == request && state.metadataGeneration == request.generation
+		return !state.inputIsQuery && form.draft.RequirementLink == request.link && state.metadataRequest == request && state.metadataGeneration == request.generation
 	}
 	return form.draft.RequirementLink == request.link && state.candidateRequest == request && state.candidateGeneration == request.generation
 }
@@ -551,6 +557,7 @@ func (s *app) selectTaskCreationRequirementCandidate(candidate taskCreationRequi
 	form.requirements.query, form.requirements.inputLink = candidate.URL, candidate.URL
 	form.requirements.inputIsQuery = false
 	form.requirements.selectedTitle = candidate.Title
+	form.requirements.linkReadError = ""
 	form.aiEligible = true
 	form.aiError = ""
 	if oldBranch != form.draft.Branch {
@@ -583,6 +590,10 @@ func taskCreationRequirementInputLink(input string) (string, bool) {
 	return value, err == nil && (parsed.Scheme == "https" || parsed.Scheme == "http") && parsed.Host != ""
 }
 
+func (s *taskCreationRequirementsState) hasWorkItemLink() bool {
+	return !s.inputIsQuery && domain.ParseFeishuWorkItemLink(s.inputLink) != nil
+}
+
 func (s *app) editTaskCreationRequirementInput() {
 	form := s.taskUnit.state.taskCreation
 	if form == nil || form.requirements == nil || form.requirements.closed {
@@ -591,6 +602,9 @@ func (s *app) editTaskCreationRequirementInput() {
 	state := form.requirements
 	value, valid := taskCreationRequirementInputLink(state.query)
 	state.inputIsQuery = !valid
+	if !valid || value != form.draft.RequirementLink {
+		s.taskUnit.cancelTaskCreationRequirementMetadata(state)
+	}
 	if valid {
 		if value != form.draft.RequirementLink {
 			state.selectedTitle = ""
@@ -598,6 +612,9 @@ func (s *app) editTaskCreationRequirementInput() {
 		form.draft.RequirementLink = value
 		s.syncTaskCreationDraft()
 		state.inputLink = value
+		if state.hasWorkItemLink() {
+			state.candidatesOpen = false
+		}
 	}
 	s.invalidateTaskCreationPreview("需求输入已变化，请重新预检。")
 }

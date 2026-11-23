@@ -25,10 +25,9 @@ type workspaceState struct {
 	workspaceMergeBatch        *workspaceMergeBatchUIState
 	workspaceCommand           *workspaceCommandUIState
 	workspaceCommandJobs       *workspaceCommandJobsState
-	serviceGroupID             string
 	serviceReorderMode         bool
 	repositoryBatchOpen        bool
-	repositoryBatchGroupID     string
+	repositoryBatchHome        string
 	repositoryBatchPaths       []string
 	repositoryBatchPickerBusy  bool
 	repositoryBatchGeneration  uint64

@@ -7,9 +7,54 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
+	"silverwing-go/internal/application"
 	"silverwing-go/internal/documents"
 	"silverwing-go/internal/domain"
 )
+
+func TestProfileTaskListOffersSetupUntilTaskRootIsConfigured(t *testing.T) {
+	s := taskNavigationFixture()
+	s.taskUnit.state.tasks = nil
+	s.backend = &annualMaterialsUIBackend{}
+	s.snapshot = application.Snapshot{ProfileID: "fixture", Home: t.TempDir()}
+	config := domain.DefaultAppConfig()
+	raw, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.snapshot.ConfigJSON = string(raw)
+	s.settingsUnit.state.configJSON = string(raw)
+	tester := taskNavigationTester(s, 960, 800)
+	if !tester.HasText("请先选择存放研发任务的目录。") {
+		t.Fatal("unconfigured profile is missing task directory guidance")
+	}
+	if _, found := tester.Find("选择任务目录"); !found {
+		t.Fatal("unconfigured profile is missing directory setup")
+	}
+	if _, found := tester.Find("新建任务"); found {
+		t.Fatal("unconfigured profile offers task creation")
+	}
+	s.openTaskCreateForm("基于需求创建任务", "fixture", "")
+	if s.dialogOpen {
+		t.Fatal("requirement creation opened without a task directory")
+	}
+	taskRoot := filepath.Join(t.TempDir(), "tasks")
+	config.TaskRoot = &taskRoot
+	raw, err = json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := s.snapshot
+	snapshot.ConfigJSON = string(raw)
+	s.applySnapshot(snapshot)
+	tester.Frame()
+	if _, found := tester.Find("新建任务"); !found {
+		t.Fatal("configured profile does not offer task creation")
+	}
+	if _, found := tester.Find("选择任务目录"); found {
+		t.Fatal("configured profile still displays directory setup")
+	}
+}
 
 func TestStandaloneTaskCreateEntryAndLayouts(t *testing.T) {
 	for _, width := range []int{960, 1440} {
@@ -43,8 +88,6 @@ func TestStandaloneTaskCreateEntryAndLayouts(t *testing.T) {
 				if form == nil || form.draft.RequirementLink != "" || form.draft.Branch != "" || taskCreationHasSelectedServices(form) {
 					t.Fatal("standalone form inherited a requirement, branch or service")
 				}
-				form.toolsLoaded, form.toolsLoading = true, false
-				s.busy = false // The headless fixture has completed its synthetic tool read.
 				form.draft.TaskName = "临时订单分析"
 				s.syncTaskCreationDraft()
 				payload, err := s.taskCreationPayload()

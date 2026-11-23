@@ -3,7 +3,9 @@ package desktop
 import (
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/domain"
@@ -92,28 +94,80 @@ func TestRequirementFindToolbarStaysCompact(t *testing.T) {
 	}
 }
 
-func TestRepositoryRowHasQuietDirectRemovalEntry(t *testing.T) {
+func TestRepositoryRowRemovalUsesMenuAndConfirmation(t *testing.T) {
+	backend := &transientFormBackend{actions: make(chan application.Action, 1)}
 	s := &app{
-		settingsUnit: settingsController{state: settingsState{configJSON: `{"groups":[{"id":"g","name":"国内组","services":[{"id":"s","displayName":"api-service","enabled":true}]}]}`}},
+		settingsUnit: settingsController{state: settingsState{configJSON: `{"services":[{"id":"s","displayName":"api-service","enabled":false}]}`}},
 		page:         "repositories",
 		inputs:       make(map[string]*string),
-		snapshot:     application.Snapshot{Groups: []application.Group{{ID: "g", Name: "国内组"}}, Services: []application.Service{{ID: "s", GroupID: "g", Name: "api-service", RepositoryID: "repo", MasterBranch: "origin/main", Modules: []application.Module{{ID: "m"}}}}, Repositories: []application.Repository{{ID: "repo", RootPath: `C:\synthetic\repo`}}},
+		snapshot:     application.Snapshot{Services: []application.Service{{ID: "s", Name: "api-service", RepositoryID: "repo", MasterBranch: "origin/main", Modules: []application.Module{{ID: "m"}}}}, Repositories: []application.Repository{{ID: "repo", RootPath: `C:\synthetic\repo`}}},
+		win:          &mygo.Window{},
+		backend:      backend,
+		backendGate:  make(chan struct{}, 1),
 	}
+	t.Cleanup(func() {
+		if s.cancelOperation != nil {
+			s.cancelOperation()
+		}
+	})
 	tester := ui.NewTester(func(c *ui.Context) {
-		ui.Column(c).Fill().Padding(12).Children(func() { s.serviceList(c, setTheme(c, false)) })
+		p := setTheme(c, false)
+		s.beginOverflowMenuFrame()
+		defer s.endOverflowMenuFrame()
+		ui.Column(c).Fill().Padding(12).Children(func() { s.serviceList(c, p) })
+		s.renderConfirmationDialog(c, p)
 	}, 1200, 800)
 	if tester.HasText("主分支 · main") {
 		t.Fatal("repository row still repeats mainline config")
 	}
 	if _, found := tester.Find("仓库操作"); found {
-		t.Fatal("one-item row overflow remains")
+		t.Fatal("single-repository list has unnecessary global actions")
 	}
-	if err := tester.Click("从当前组移除仓库 api-service"); err != nil {
+	badge, found := tester.Find("已停用")
+	if !found {
+		t.Fatal("disabled repository status is missing")
+	}
+	const menuName = "查看更多 api-service"
+	for _, name := range []string{"配置仓库 api-service", menuName} {
+		button, found := tester.Find(name)
+		offset := button.Y + button.H/2 - (badge.Y + badge.H/2)
+		if !found || offset < -1 || offset > 1 || badge.X+badge.W > button.X {
+			t.Fatalf("disabled status must align with %s: status=%+v action=%+v", name, badge, button)
+		}
+	}
+	if tester.HasText("移除") {
+		t.Fatal("remove action still appears directly on the row")
+	}
+	openConfirmation := func() {
+		t.Helper()
+		if err := tester.Click(menuName); err != nil {
+			t.Fatal(err)
+		}
+		if err := tester.Click("移除"); err != nil {
+			t.Fatal(err)
+		}
+		if s.confirmationDialog == nil || s.confirmationDialog.Title != "移除仓库？" ||
+			s.confirmationDialog.Detail != "api-service" || s.busy {
+			t.Fatal("removing from the menu did not prompt for the active repository")
+		}
+	}
+	openConfirmation()
+	if err := tester.Click("取消"); err != nil {
 		t.Fatal(err)
 	}
-	// A Tester has no OS window: the existing confirmation guard cannot open
-	// its dialog, so the click must not dispatch the destructive action.
-	if s.busy {
-		t.Fatal("removal proceeded without a confirmation window")
+	if s.confirmationDialog != nil || s.busy || len(backend.actions) != 0 {
+		t.Fatal("canceling confirmation dispatched a remove action")
+	}
+	openConfirmation()
+	if err := tester.Click("继续"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case action := <-backend.actions:
+		if action.Kind != "service.remove" || action.ServiceID != "s" {
+			t.Fatalf("unexpected operation after confirming removal: %+v", action)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("confirmed removal did not dispatch")
 	}
 }

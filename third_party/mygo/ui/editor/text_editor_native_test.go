@@ -78,6 +78,26 @@ func TestSourcePreservingGeneratedNewlineAndMixedSource(t *testing.T) {
 	}
 }
 
+func TestPreservingEditorKeepsNativeTextAndWholeLineClipboardBytes(t *testing.T) {
+	b := NewBufferPreservingLineEndings("a\rb")
+	st := &State{Buffer: b}
+	tt := ui.NewTester(func(c *ui.Context) { View(c, st).Fill().AutoFocus() }, 600, 300)
+	tt.Frame()
+	tt.Key(ui.Cmd, ui.KeyC)
+	if got := tt.Clipboard(); got != "a\r" {
+		t.Fatalf("clipboard = %q", got)
+	}
+	st.Select(b.Len(), b.Len())
+	tt.Frame()
+	tt.Type("\r\n甲\r乙\n")
+	if got := b.OriginalText(); got != "a\rb\r\n甲\r乙\n" {
+		t.Fatalf("native text changed source bytes: %q", got)
+	}
+	if got := st.Cursor(); got != b.Len() {
+		t.Fatalf("cursor = %d, want %d", got, b.Len())
+	}
+}
+
 func TestSourceLimitRejectsAtomicMulticaretAndComposition(t *testing.T) {
 	const source = "甲\r\nx"
 	buffer := NewBufferPreservingLineEndings(source)

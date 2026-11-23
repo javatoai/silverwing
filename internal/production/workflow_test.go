@@ -56,12 +56,12 @@ func TestProductionConfigChangesRejectBeforeBatchMutation(t *testing.T) {
 		change    func(*domain.AppConfig)
 		operation func() error
 	}{
-		{"merge-service-change", func(c *domain.AppConfig) { c.Groups[0].Services[0].GenbuServiceName = "changed" }, func() error {
+		{"merge-service-change", func(c *domain.AppConfig) { c.Services[0].GenbuServiceName = "changed" }, func() error {
 			_, e := f.s.MergeFeature(context.Background(), b.ID, "feature/one", sha, b.ReleaseSHA)
 			return e
 		}},
-		{"publish-main-change", func(c *domain.AppConfig) { c.Groups[0].Services[0].MasterBranch = "origin/changed" }, func() error { _, e := f.s.Publish(context.Background(), b.ID, b.TagPlan.Token); return e }},
-		{"adopt-disabled-service", func(c *domain.AppConfig) { c.Groups[0].Services[0].Enabled = false }, func() error { _, e := f.s.AcceptRemote(context.Background(), b.ID, b.ReleaseSHA); return e }},
+		{"publish-main-change", func(c *domain.AppConfig) { c.Services[0].MasterBranch = "origin/changed" }, func() error { _, e := f.s.Publish(context.Background(), b.ID, b.TagPlan.Token); return e }},
+		{"adopt-disabled-service", func(c *domain.AppConfig) { c.Services[0].Enabled = false }, func() error { _, e := f.s.AcceptRemote(context.Background(), b.ID, b.ReleaseSHA); return e }},
 		{"probe-disabled-tag", func(c *domain.AppConfig) { c.TagEnabled = false }, func() error { _, e := f.s.RefreshBuild(context.Background(), b.ID); return e }},
 	}
 	for _, tc := range cases {
@@ -112,7 +112,7 @@ func TestProductionBuildProbeRejectsLateConfigChange(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		c.Groups[0].Services[0].GenbuServiceName = "changed-during-probe"
+		c.Services[0].GenbuServiceName = "changed-during-probe"
 		if err := f.s.Config.Save(c); err != nil {
 			t.Fatal(err)
 		}
@@ -155,44 +155,37 @@ func TestProductionBuildProbeRejectsLateConfigChange(t *testing.T) {
 	}
 }
 
-func TestProductionChangedMixedRuntimeInvalidatesManualConfirmation(t *testing.T) {
+func TestProductionMixedRuntimeInvalidatesBuildConfirmation(t *testing.T) {
 	f := newFixture(t)
-	f.g.versions = []string{"2.3.43", "2.3.42"}
-	p, err := f.s.Inspect(context.Background(), f.selection, "2.3.43")
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.g.versions = []string{"2.3.43", "2.3.41"}
-	if _, err := f.s.Create(context.Background(), p, "2.3.44", ""); err == nil {
-		t.Fatal("changed mixed runtime accepted stale confirmation")
-	}
-	if batches, err := f.s.Store.List(); err != nil || len(batches) != 0 {
-		t.Fatalf("stale confirmation created batch: %d / %v", len(batches), err)
-	}
-	p, err = f.s.Inspect(context.Background(), f.selection, "2.3.43")
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := f.s.Create(context.Background(), p, "2.3.44", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sha := f.feature("feature/manual", "manual.txt", "manual\n", f.base)
-	b = f.merge(b, "feature/manual", sha)
-	_, p, err = f.s.InspectBatch(context.Background(), b.ID, "2.3.43")
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err = f.s.CheckForTag(context.Background(), b.ID, p)
-	if err != nil {
-		t.Fatal(err)
-	}
+	ctx := context.Background()
+	b := f.sync(f.create())
+	git := &observedGit{Git: f.git}
+	f.s.Git = git
 	f.g.versions = []string{"2.3.43", "2.3.40"}
-	if _, _, err := f.s.PrepareTag(context.Background(), b.ID, b.TagPlan.Preview); err == nil {
-		t.Fatal("changed mixed runtime bypassed preparation")
+	if _, _, err := f.s.InspectBatch(ctx, b.ID); !errors.Is(err, ErrProductionBaselineUnavailable) {
+		t.Fatalf("inspection reused the stored baseline: %v", err)
 	}
-	if refs, err := f.s.remoteRefs(context.Background(), b.Target); err != nil || refs["refs/tags/2.3.44"] != "" {
-		t.Fatal("stale mixed runtime pushed Tag")
+	if _, _, err := f.s.PrepareTag(ctx, b.ID, b.TagPlan.Preview); !errors.Is(err, ErrProductionBaselineUnavailable) {
+		t.Fatalf("preparation reused the stored baseline: %v", err)
+	}
+	if _, err := f.s.Publish(ctx, b.ID, b.TagPlan.Token); err == nil || git.pushes != 0 {
+		t.Fatalf("failed preparation left the previous confirmation usable: pushes=%d, err=%v", git.pushes, err)
+	}
+}
+
+func TestProductionPublishRejectsUnverifiedBaselinePlan(t *testing.T) {
+	f := newFixture(t)
+	b := f.sync(f.create())
+	// A plan saved by the former manual path may have a valid Git Tag but
+	// lack a unique observation of the running production version.
+	b.TagPlan.Preview.ProductionCandidates = []string{"2.3.43", "2.3.42"}
+	if err := f.s.Store.Save(&b); err != nil {
+		t.Fatal(err)
+	}
+	git := &observedGit{Git: f.git}
+	f.s.Git = git
+	if _, err := f.s.Publish(context.Background(), b.ID, b.TagPlan.Token); !errors.Is(err, ErrProductionBaselineUnavailable) || git.pushes != 0 {
+		t.Fatalf("unverified saved plan reached publication: pushes=%d, err=%v", git.pushes, err)
 	}
 }
 
@@ -206,6 +199,10 @@ type fixture struct {
 }
 
 func newFixture(t *testing.T) *fixture {
+	return newProductionFixture(t, false)
+}
+
+func newProductionFixture(t *testing.T, managed bool) *fixture {
 	t.Helper()
 	root := t.TempDir()
 	empty := filepath.Join(root, "empty-config")
@@ -231,13 +228,19 @@ func newFixture(t *testing.T) *fixture {
 	f.run(f.seed, "push", "origin", "master", "--tags")
 	f.run(root, "clone", f.remote, f.repo)
 	paths := storage.NewPaths(filepath.Join(root, "app home"))
+	if managed {
+		paths.ProfileID = "production-profile"
+	}
 	store := storage.NewConfigStore(paths)
 	c := domain.DefaultAppConfig()
 	tasks := filepath.Join(root, "tasks")
 	c.TaskRoot = &tasks
 	c.Repositories = []domain.RepositoryConfig{{ID: "repo", Name: "synthetic", RootPath: f.repo, GitCommonDirectory: filepath.Join(f.repo, ".git")}}
-	c.Groups[0].Services = []domain.GroupServiceConfig{{ID: "service", RepositoryID: "repo", DisplayName: "synthetic-service", Enabled: true, MasterBranch: "origin/master", TestTagBaselineRef: "origin/release/test", GenbuProbeEnabled: true, GenbuServiceName: "synthetic", DevelopmentTool: domain.DevelopmentToolVisualStudioCode,
+	c.Services = []domain.GroupServiceConfig{{ID: "service", RepositoryID: "repo", DisplayName: "synthetic-service", Enabled: true, MasterBranch: "origin/master", TestTagBaselineRef: "origin/release/test", GenbuProbeEnabled: true, GenbuServiceName: "synthetic", DevelopmentTool: domain.DevelopmentToolVisualStudioCode,
 		Modules: []domain.ServiceModuleConfig{{ID: "default", Name: "default", Strategy: domain.WorkspaceStandardWorktree, TagMode: domain.TagBuildMergeToTargetBranch}}}}
+	if managed {
+		f.selection = Selection{ServiceID: "service"}
+	}
 	if err := store.Save(c); err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +275,7 @@ func (f *fixture) feature(branch, name, text, base string) string {
 }
 func (f *fixture) create() Batch {
 	f.t.Helper()
-	p, err := f.s.Inspect(context.Background(), f.selection, "")
+	p, err := f.s.Inspect(context.Background(), f.selection)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -296,7 +299,7 @@ func (f *fixture) merge(b Batch, branch, sha string) Batch {
 func (f *fixture) sync(b Batch) Batch {
 	f.t.Helper()
 	ctx := context.Background()
-	_, p, err := f.s.InspectBatch(ctx, b.ID, "")
+	_, p, err := f.s.InspectBatch(ctx, b.ID)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -305,7 +308,7 @@ func (f *fixture) sync(b Batch) Batch {
 		if err != nil {
 			f.t.Fatal(err)
 		}
-		_, p, err = f.s.InspectBatch(ctx, b.ID, "")
+		_, p, err = f.s.InspectBatch(ctx, b.ID)
 		if err != nil {
 			f.t.Fatal(err)
 		}
@@ -315,7 +318,7 @@ func (f *fixture) sync(b Batch) Batch {
 		if err != nil {
 			f.t.Fatal(err)
 		}
-		_, p, err = f.s.InspectBatch(ctx, b.ID, "")
+		_, p, err = f.s.InspectBatch(ctx, b.ID)
 		if err != nil {
 			f.t.Fatal(err)
 		}
@@ -436,7 +439,7 @@ func TestProductionPreparationRejectsProductionAndConfigChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.Groups[0].Services[0].GenbuServiceName = "another-service"
+	c.Services[0].GenbuServiceName = "another-service"
 	if err := f.s.Config.Save(c); err != nil {
 		t.Fatal(err)
 	}
@@ -516,7 +519,7 @@ func TestProductionBranchPushRejectsLateRollbackAndCreation(t *testing.T) {
 			}}
 			var err error
 			if create {
-				p, e := f.s.Inspect(context.Background(), f.selection, "")
+				p, e := f.s.Inspect(context.Background(), f.selection)
 				if e != nil {
 					t.Fatal(e)
 				}
@@ -537,7 +540,7 @@ func TestProductionBranchPushRejectsLateRollbackAndCreation(t *testing.T) {
 func TestProductionBranchGuardNeverRewritesHistory(t *testing.T) {
 	f := newFixture(t)
 	f.feature("master", "keep.txt", "must retain this commit\n", f.base)
-	p, err := f.s.Inspect(context.Background(), f.selection, "")
+	p, err := f.s.Inspect(context.Background(), f.selection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -556,7 +559,7 @@ func TestProductionResumeRechecksRuntimeBeforeSyncWrites(t *testing.T) {
 	f.run(f.seed, "tag", "2.3.43.1", fix)
 	f.run(f.seed, "push", "origin", "2.3.43.1")
 	f.g.versions = []string{"2.3.43.1"}
-	_, p, err := f.s.InspectBatch(context.Background(), b.ID, "")
+	_, p, err := f.s.InspectBatch(context.Background(), b.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -574,7 +577,7 @@ func TestProductionResumeRechecksRuntimeBeforeSyncWrites(t *testing.T) {
 	if actual := f.run(f.remote, "rev-parse", "refs/heads/master"); actual != f.base {
 		t.Fatal("old baseline pushed before revalidation")
 	}
-	_, p, err = f.s.InspectBatch(context.Background(), b.ID, "")
+	_, p, err = f.s.InspectBatch(context.Background(), b.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -702,7 +705,7 @@ func TestProductionEndedUnpublishedTagStaysVisibleAndEnded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.Groups[0].Services = nil
+	c.Services = nil
 	if err := f.s.Config.Save(c); err != nil {
 		t.Fatal(err)
 	}
@@ -734,7 +737,7 @@ func TestProductionResumeVerifiesAmbiguousSuccessfulPush(t *testing.T) {
 func TestProductionSingleActiveBatchAndFirstTagWithoutFeature(t *testing.T) {
 	f := newFixture(t)
 	b := f.create()
-	p, err := f.s.Inspect(context.Background(), f.selection, "")
+	p, err := f.s.Inspect(context.Background(), f.selection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -753,29 +756,39 @@ func TestProductionSingleActiveBatchAndFirstTagWithoutFeature(t *testing.T) {
 	}
 }
 
-func TestProductionMixedPodsRequireExplicitBaseline(t *testing.T) {
+func TestProductionInvalidRuntimeBlocksBaselineAndCreation(t *testing.T) {
 	f := newFixture(t)
-	f.g.versions = []string{"2.3.43", "2.3.42"}
-	p, err := f.s.Inspect(context.Background(), f.selection, "")
-	if err != nil || p.ProductionTag != "" || p.SuggestedVersion != "" {
-		t.Fatalf("mixed versions auto-selected: %+v / %v", p, err)
+	ctx := context.Background()
+	preview, err := f.s.Inspect(ctx, f.selection)
+	if err != nil || preview.ProductionTag != "2.3.43" || preview.ProductionSHA != f.base {
+		t.Fatalf("automatic baseline was not resolved: %+v / %v", preview, err)
 	}
-	p, err = f.s.Inspect(context.Background(), f.selection, "2.3.43")
-	if err != nil || !p.Manual {
-		t.Fatalf("manual baseline: %v", err)
-	}
-	// The agreed manual fallback may select another existing Git Tag when Pod
-	// versions are mixed or unavailable; it is explicitly shown as manual.
-	f.run(f.seed, "tag", "2.3.40", f.base)
-	f.run(f.seed, "push", "origin", "2.3.40")
-	p, err = f.s.Inspect(context.Background(), f.selection, "2.3.40")
-	if err != nil || !p.Manual || !strings.Contains(p.Warning, "人工指定") {
-		t.Fatalf("explicit mixed-version fallback rejected: %v", err)
-	}
-	f.g.versionErr = errors.New("synthetic authentication failure")
-	p, err = f.s.Inspect(context.Background(), f.selection, "")
-	if err != nil || !strings.Contains(p.Warning, "authentication") || p.ProductionTag != "" || p.SuggestedVersion != "" {
-		t.Fatal("runtime query failure treated as valid baseline")
+	git := &observedGit{Git: f.git}
+	f.s.Git = git
+	for _, tc := range []struct {
+		name       string
+		versions   []string
+		versionErr error
+		wantError  string
+	}{
+		{name: "empty", wantError: "Genbu 未发现线上生产版本"},
+		{name: "mixed", versions: []string{"2.3.43", "2.3.42"}, wantError: "Genbu 发现多个线上生产版本"},
+		{name: "unavailable", versions: []string{"2.3.43"}, versionErr: errors.New("synthetic authentication failure"), wantError: "读取 Genbu 线上生产版本失败"},
+		{name: "missing remote Tag", versions: []string{"2.3.42"}, wantError: "线上生产 Tag 2.3.42 在远端不存在"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f.g.versions, f.g.versionErr = tc.versions, tc.versionErr
+			p, err := f.s.Inspect(ctx, f.selection)
+			if !errors.Is(err, ErrProductionBaselineUnavailable) || !strings.Contains(err.Error(), tc.wantError) || p.ProductionSHA != "" || p.SuggestedVersion != "" {
+				t.Fatalf("invalid baseline accepted: %+v / %v", p, err)
+			}
+			if _, err := f.s.Create(ctx, preview, "2.3.44", ""); !errors.Is(err, ErrProductionBaselineUnavailable) || !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("creation reused a stale valid baseline: %v", err)
+			}
+			if batches, err := f.s.Store.List(); err != nil || len(batches) != 0 || git.pushes != 0 {
+				t.Fatalf("rejected baseline started release creation: batches=%d, pushes=%d, err=%v", len(batches), git.pushes, err)
+			}
+		})
 	}
 }
 
@@ -809,7 +822,7 @@ func TestProductionMainConflictAndReleaseSyncConflictKeepTheirStages(t *testing.
 		f.run(f.seed, "tag", "2.3.43.1", fix)
 		f.run(f.seed, "push", "origin", "2.3.43.1")
 		f.g.versions = []string{"2.3.43.1"}
-		p, err := f.s.Inspect(context.Background(), f.selection, "")
+		p, err := f.s.Inspect(context.Background(), f.selection)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -841,7 +854,7 @@ func TestProductionMainConflictAndReleaseSyncConflictKeepTheirStages(t *testing.
 		f.run(f.seed, "tag", "2.3.43.1", fix)
 		f.run(f.seed, "push", "origin", "2.3.43.1")
 		f.g.versions = []string{"2.3.43.1"}
-		_, p, err := f.s.InspectBatch(context.Background(), b.ID, "")
+		_, p, err := f.s.InspectBatch(context.Background(), b.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -849,7 +862,7 @@ func TestProductionMainConflictAndReleaseSyncConflictKeepTheirStages(t *testing.
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, p, err = f.s.InspectBatch(context.Background(), b.ID, "")
+		_, p, err = f.s.InspectBatch(context.Background(), b.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -893,18 +906,45 @@ func TestProductionInterruptedTagPushAndWriteFailureAreIdempotent(t *testing.T) 
 		t.Fatal("Tag pushed before its intent was durable")
 	}
 	f.s.Store.writeAtomic = nil
-	f.s.Git = &afterPushFailure{Git: f.git}
-	paused, err := f.s.Publish(context.Background(), b.ID, b.TagPlan.Token)
-	if err == nil || paused.Intent == nil {
-		t.Fatal("expected ambiguous Tag push")
+	f.s.Git = &beforePushHook{Git: f.git, hook: func([]string) error { return errors.New("synthetic interruption before Tag push") }}
+	if paused, err := f.s.Publish(context.Background(), b.ID, b.TagPlan.Token); err == nil || paused.Intent == nil {
+		t.Fatalf("expected recoverable Tag write: %+v / %v", paused, err)
 	}
-	f.s.Git = f.git
-	done, err := f.s.Resume(context.Background(), b.ID)
+	git := &observedGit{Git: f.git}
+	f.s.Git = git
+	f.g.versionErr = errors.New("synthetic production query failure")
+	batchFile := filepath.Join(f.s.Store.Directory, b.ID+".json")
+	before, err := os.ReadFile(batchFile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(done.Tags) != 1 || done.Intent != nil {
-		t.Fatal("Tag push was repeated or lost")
+	if _, _, err := f.s.InspectBatch(context.Background(), b.ID); !errors.Is(err, ErrProductionBaselineUnavailable) {
+		t.Fatalf("pending batch inspection did not report the failed baseline: %v", err)
+	}
+	after, err := os.ReadFile(batchFile)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("failed inspection changed the pending batch: %v", err)
+	}
+	if _, err := f.s.Resume(context.Background(), b.ID); !errors.Is(err, ErrProductionBaselineUnavailable) || git.pushes != 0 {
+		t.Fatalf("recovery retried an unpushed Tag without a live baseline: pushes=%d, err=%v", git.pushes, err)
+	}
+	f.g.versionErr = nil
+	lostReceipt := &afterPushFailure{Git: f.git}
+	f.s.Git = lostReceipt
+	paused, err := f.s.Resume(context.Background(), b.ID)
+	if err == nil || paused.Intent == nil || !lostReceipt.fired {
+		t.Fatal("expected ambiguous Tag push")
+	}
+	f.s.Git = git
+	f.g.versionErr = errors.New("synthetic production query failure")
+	calls := f.g.calls
+	done, err := f.s.Resume(context.Background(), b.ID)
+	f.g.versionErr = nil
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(done.Tags) != 1 || done.Intent != nil || f.g.calls != calls || git.pushes != 0 {
+		t.Fatalf("receipt reconciliation did not finish read-only: live queries=%d, pushes=%d", f.g.calls-calls, git.pushes)
 	}
 	if _, err = f.s.Publish(context.Background(), b.ID, b.TagPlan.Token); err == nil {
 		t.Fatal("stale Tag confirmation reused")
@@ -1004,7 +1044,7 @@ func TestProductionPushScopeExcludesOtherTagsAndRejectsOtherPushRepository(t *te
 		t.Fatal("branch push published an unrelated user Tag")
 	}
 	f.run(f.repo, "remote", "set-url", "--push", "origin", filepath.Join(f.root, "another.git"))
-	if _, err = f.s.Inspect(context.Background(), f.selection, ""); err == nil {
+	if _, err = f.s.Inspect(context.Background(), f.selection); err == nil {
 		t.Fatal("different push repository accepted")
 	}
 }

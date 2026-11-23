@@ -23,6 +23,10 @@ func (a *App) developerToolAction(ctx context.Context, action Action) (ActionRes
 		result, err := a.ConvertTime(ctx, TimeToolRequestFromAction(action))
 		return result.ToActionResult(), err
 	case "tool.diff":
+		if textPayload(action, "mode") == JSONDiffMode {
+			result, err := a.CompareJSON(ctx, JSONDiffRequestFromAction(action))
+			return result.ToActionResult(), err
+		}
 		request, err := TextDiffRequestFromAction(action)
 		if err != nil {
 			return ActionResult{}, err

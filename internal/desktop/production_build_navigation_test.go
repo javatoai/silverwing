@@ -1,6 +1,7 @@
 package desktop
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -20,8 +21,21 @@ type productionBuildNavigationHarness struct {
 	otherBatch production.Batch
 	preview    production.Preview
 	backend    *productionTestBackend
+	entry      *productionTestBackend
 	window     *refreshTestWindow
 	tester     *ui.Tester
+}
+
+type productionBuildNavigationBackend struct {
+	*productionTestBackend
+	entry *productionTestBackend
+}
+
+func (b productionBuildNavigationBackend) Dispatch(ctx context.Context, action application.Action) (application.ActionResult, error) {
+	if action.Kind == "production.list" {
+		return b.entry.Dispatch(ctx, action)
+	}
+	return b.productionTestBackend.Dispatch(ctx, action)
 }
 
 func newProductionBuildNavigationHarness(t *testing.T) *productionBuildNavigationHarness {
@@ -33,9 +47,9 @@ func newProductionBuildNavigationHarness(t *testing.T) *productionBuildNavigatio
 	if err := json.Unmarshal([]byte(s.settingsUnit.state.configJSON), &config); err != nil {
 		t.Fatal(err)
 	}
-	service := config.Groups[0].Services[0]
+	service := config.Services[0]
 	service.ID, service.RepositoryID, service.DisplayName = "other-service", "other-repo", "另一个服务"
-	config.Groups[0].Services = append(config.Groups[0].Services, service)
+	config.Services = append(config.Services, service)
 	encoded, err := json.Marshal(config)
 	if err != nil {
 		t.Fatal(err)
@@ -55,7 +69,9 @@ func newProductionBuildNavigationHarness(t *testing.T) *productionBuildNavigatio
 	s.releaseUnit.state.production.views[productionKey(other.Selection)] = other
 	s.releaseUnit.state.production.choices = append(s.releaseUnit.state.production.choices, productionChoice(choice, s.snapshot))
 	s.releaseUnit.state.production.batches = append(s.releaseUnit.state.production.batches, otherBatch)
-	h := &productionBuildNavigationHarness{s: s, v: v, other: other, batch: b, otherBatch: otherBatch, preview: *v.Preview, backend: backend, window: window}
+	entry := &productionTestBackend{calls: make(chan application.Action, 2), replies: make(chan productionTestAnswer, 2)}
+	s.backend = productionBuildNavigationBackend{productionTestBackend: backend, entry: entry}
+	h := &productionBuildNavigationHarness{s: s, v: v, other: other, batch: b, otherBatch: otherBatch, preview: *v.Preview, backend: backend, entry: entry, window: window}
 	// Both navigation controls and the build button are the real production
 	// renderers. Only the unrelated task page body is omitted from this harness.
 	h.tester = ui.NewTester(func(c *ui.Context) {
@@ -92,6 +108,7 @@ func (h *productionBuildNavigationHarness) navigate(t *testing.T, route string, 
 		if h.s.page != "production" || h.s.productionView() != h.other {
 			t.Fatal("service button did not leave the original target")
 		}
+		h.finishEntry(t)
 		if roundTrip {
 			h.click(t, "示例服务")
 		}
@@ -107,6 +124,18 @@ func (h *productionBuildNavigationHarness) navigate(t *testing.T, route string, 
 	if roundTrip && (h.s.page != "production" || h.s.productionView() != h.v) {
 		t.Fatal("navigation did not return to the original target")
 	}
+}
+
+func (h *productionBuildNavigationHarness) finishEntry(t *testing.T) {
+	t.Helper()
+	state := h.s.ensureProduction()
+	if state.entryRead == nil {
+		return
+	}
+	productionTestCall(t, h.entry)
+	current := append([]production.Batch(nil), state.batches...)
+	h.entry.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batches: current}}}
+	productionTestUpdate(t, h.window)
 }
 
 func (h *productionBuildNavigationHarness) startBuild(t *testing.T) {
@@ -141,6 +170,7 @@ func (h *productionBuildNavigationHarness) finishPublish(t *testing.T) {
 	h.batch.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	h.backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &h.batch, Preview: &h.preview}}}
 	productionTestUpdate(t, h.window)
+	h.finishEntry(t)
 	h.tester.Frame()
 	saved, other := h.s.productionBatch(h.v), h.s.productionBatch(h.other)
 	if h.v.Busy || h.v.request != nil || len(h.backend.calls) != 0 || saved == nil || saved.ID != h.batch.ID || saved.Target != h.batch.Target || len(saved.Tags) != 1 || saved.Tags[0].Name != plan.Tag || saved.Tags[0].Commit != plan.Commit {
@@ -180,6 +210,7 @@ func TestProductionBuildNavigationPermanentlyRevokesContinuation(t *testing.T) {
 					apply = h.queuedResult(t)
 				}
 				apply()
+				h.finishEntry(t)
 				if h.v.Busy || h.v.request != nil || h.v.Generation != generation || !h.v.PreparationInvalid || len(h.backend.calls) != 0 || h.s.confirmationDialog != nil {
 					t.Fatal("navigation left a busy request or continued an old build without a new click")
 				}

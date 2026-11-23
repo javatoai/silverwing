@@ -169,7 +169,7 @@ func (r *workspaceRecycleRecord) verifyLive(ctx context.Context, git *GitClient)
 			return err
 		}
 	} else {
-		owner, err := verifyModuleRecycleClone(ctx, git, r.TaskPath, r.Workspace, r.Target)
+		owner, err := verifyModuleRecycleClone(ctx, git, r.workspaceDirectory(), r.Workspace, r.Target)
 		if err != nil {
 			return err
 		}

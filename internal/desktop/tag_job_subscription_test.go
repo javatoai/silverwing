@@ -145,7 +145,7 @@ func (b *tagDesktopTestBackend) CloseTagJobs(context.Context) error {
 func tagDesktopTestApp() (*app, *tagDesktopTestBackend, *tagDesktopTestWindow) {
 	b := newTagDesktopTestBackend()
 	w := newTagDesktopTestWindow()
-	config := `{"taskRoot":"C:/fixture/tasks","tagEnabled":true}`
+	config := `{"taskRoot":"C:/fixture/tasks","tagEnabled":true,"optionalCLIs":{"genbu":true,"lark":true}}`
 	s := &app{
 		taskUnit:     taskController{state: taskState{tasks: []task{{id: "task-a", path: "C:/fixture/tasks/task-a", createdAt: "2026-10-15T10:00:00Z"}, {id: "task-b", path: "C:/fixture/tasks/task-b", createdAt: "2026-10-15T10:01:00Z"}}}},
 		settingsUnit: settingsController{state: settingsState{configJSON: config}},
@@ -155,6 +155,7 @@ func tagDesktopTestApp() (*app, *tagDesktopTestBackend, *tagDesktopTestWindow) {
 		inputs:       map[string]*string{},
 		snapshot:     application.Snapshot{Home: "C:/fixture/home", ConfigJSON: config},
 	}
+	seedPlatformConnectionsForDesktopTest(s, true, false)
 	s.ensureTagDesktopJobs().window = w
 	return s, b, w
 }

@@ -12,12 +12,12 @@ import (
 // The stable owner is the manifest's task directory identity. Requirement
 // links and display names may change or repeat and are never deletion keys.
 func (a *App) tagHistoryActionScope(config domain.AppConfig, action Action) ([]domain.TaskManifest, []domain.TaskManifest, error) {
-	mutation := action.Kind == "tag.history.delete" || action.Kind == "tag.history.clear"
+	requireScope := action.Kind == "tag.history.delete" || action.Kind == "tag.history.clear" || action.Kind == "tag.history.build-log"
 	if strings.TrimSpace(action.TaskID) == "" {
 		return nil, nil, errors.New("查看或清理Tag历史必须指定当前研发任务")
 	}
 	_, scopedRequest := action.Payload["tagHistoryTaskPath"]
-	if mutation || scopedRequest {
+	if requireScope || scopedRequest {
 		for _, key := range []string{"tagHistoryHome", "tagHistoryTaskRoot", "tagHistoryTaskPath", "tagHistoryTaskCreatedAt"} {
 			if text, ok := action.Payload[key].(string); !ok || strings.TrimSpace(text) == "" {
 				return nil, nil, errors.New("缺少Tag历史所属任务身份，请刷新后重新确认")

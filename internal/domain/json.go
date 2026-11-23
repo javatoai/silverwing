@@ -82,9 +82,8 @@ func stripRetiredCloudConfig(data []byte, target reflect.Type) ([]byte, error) {
 	return json.Marshal(fields)
 }
 
-// normalizeCommandProxyTargetsJSON mirrors Kotlin's Set serializer for the one
-// persisted set-valued config field. It leaves malformed values for the strict
-// shape/enum decoder to reject and preserves first occurrence order.
+// normalizeCommandProxyTargetsJSON migrates retired targets and preserves set
+// ordering before applying the strict shape and enum checks.
 func normalizeCommandProxyTargetsJSON(data []byte, targetType reflect.Type) ([]byte, error) {
 	if targetType.Kind() != reflect.Struct {
 		return data, nil
@@ -104,9 +103,13 @@ func normalizeCommandProxyTargetsJSON(data []byte, targetType reflect.Type) ([]b
 		if !exists || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 			return data, nil
 		}
-		var values []CommandProxyTarget
-		if err := json.Unmarshal(raw, &values); err != nil {
+		var rawValues []string
+		if err := json.Unmarshal(raw, &rawValues); err != nil {
 			return data, err
+		}
+		values := make([]CommandProxyTarget, len(rawValues))
+		for i, value := range rawValues {
+			values[i] = CommandProxyTarget(value)
 		}
 		unique := NormalizeCommandProxyTargets(values)
 		if len(unique) == len(values) {

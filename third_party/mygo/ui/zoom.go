@@ -23,7 +23,8 @@ const (
 // What the view sees is zoomed: Size, TitleBar, Bounds and every length
 // are in the content's DIPs, z of them to the window's. The pointer, text
 // input, input methods, accessibility, context menus, drags and web views
-// follow it.
+// follow it. The window's own sizes are not zoomed: Window.SetContentSize
+// and Window.ContentSize are in the window's DIPs, z times the content's.
 //
 //	c.SetZoom(app.zoom) // 1.25 for 125%
 func (c *context) SetZoom(z float32) { c.rt.setZoom(z) }
@@ -77,14 +78,16 @@ func (rt *engine) pixels(w, h, scale float32) (int, int) {
 }
 
 // fromWindow maps a surface event from the window's DIPs to the
-// content's: its position, and the distance a touchpad scrolls, which the
-// content follows; a wheel's lines scroll as far as unzoomed.
+// content's: its position, a finger's contact, and the distance a
+// touchpad scrolls, which the content follows; a wheel's lines scroll as
+// far as unzoomed.
 func (rt *engine) fromWindow(ev *platform.SurfaceEvent) {
 	if !rt.zoomed() {
 		return
 	}
 	z := float64(rt.contentZoom)
 	ev.X, ev.Y = ev.X/z, ev.Y/z
+	ev.Width, ev.Height = ev.Width/z, ev.Height/z
 	if ev.Precise {
 		ev.DX, ev.DY = ev.DX/z, ev.DY/z
 	}
@@ -105,7 +108,7 @@ func (rt *engine) titleBar() TitleBar {
 	b := rt.host.titleBar()
 	if rt.zoomed() {
 		z := rt.contentZoom
-		b = TitleBar{Height: b.Height / z, Left: b.Left / z, Right: b.Right / z}
+		b = TitleBar{Height: b.Height / z, Left: b.Left / z, Right: b.Right / z, Bottom: b.Bottom / z}
 	}
 	return b
 }
@@ -116,6 +119,10 @@ func (rt *engine) windowAccess(t *platform.AccessTree) *platform.AccessTree {
 	if rt.zoomed() {
 		for i := range t.Nodes {
 			t.Nodes[i].Bounds = rt.toWindow(t.Nodes[i].Bounds)
+			for j := range t.Nodes[i].LineBoxes {
+				b := &t.Nodes[i].LineBoxes[j].Bounds
+				*b = rt.toWindow(*b)
+			}
 		}
 	}
 	return t
@@ -130,6 +137,12 @@ func (rt *engine) windowWebViews(views []placedWebView) []placedWebView {
 	for i := range views {
 		v := &views[i]
 		v.frame, v.clip = rt.toWindow(v.frame), rt.toWindow(v.clip)
+		// The page lays out at the window's DIPs, unscaled by the zoom.
+		z := float64(rt.contentZoom)
+		v.size = [2]float64{v.size[0] * z, v.size[1] * z}
+		for j := range v.radii {
+			v.radii[j] *= z
+		}
 		for j := range v.covers {
 			v.covers[j] = rt.toWindow(v.covers[j])
 		}

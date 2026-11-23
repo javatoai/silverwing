@@ -3,6 +3,8 @@ package desktop
 import (
 	"strings"
 
+	"silverwing-go/internal/domain"
+
 	"github.com/egoist/mygo/ui"
 )
 
@@ -95,11 +97,15 @@ func (s *app) renderTaskRepositoryBranchPicker(
 		}
 
 		ui.Column(c).FillWidth().Gap(3).Children(func() {
-			label(c, "基础分支引用", 10, p.muted)
+			branchLabel := "基础分支引用"
+			if draft.Strategy == domain.WorkspaceIndependentClone {
+				branchLabel = "克隆分支"
+			}
+			label(c, branchLabel, 10, p.muted)
 			var combo ui.ComboboxParts
 			ui.Row(c).FillWidth().Gap(5).Children(func() {
 				combo = ui.ComboboxBase(c.Key("task-repository-ref-"+owner+"-"+token+"-"+serviceID+"-"+moduleID), &draft.BaseRef)
-				combo.Input.Grow(1).FillWidth().MinWidth(0).Height(34).Padding(0, 30, 0, 9).Placeholder("origin/main").ReadOnly(readOnly).Background(p.surface).Border(1, p.line).Radius(7).Label("基础分支引用选择器")
+				combo.Input.Grow(1).FillWidth().MinWidth(0).Height(34).Padding(0, 30, 0, 9).Placeholder("origin/main").ReadOnly(readOnly).Background(p.surface).Border(1, p.line).Radius(7).Label(branchLabel + "选择器")
 				if picker.branchFocusPending {
 					combo.Input.Focus().ScrollIntoView()
 					picker.branchFocusPending = false

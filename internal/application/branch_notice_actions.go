@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"silverwing-go/internal/domain"
-	"silverwing-go/internal/larkcli"
 	"silverwing-go/internal/releasenotice"
 )
 
@@ -15,7 +14,7 @@ import (
 // not need Tag configuration, Git commands, Genbu probes, builds or deployments.
 func BranchNoticeConfigIdentity(c domain.AppConfig) string {
 	n := c.EffectiveLarkNotice()
-	return releasenotice.Digest([]any{c.TaskRoot, c.LarkExecutablePath, n.Profile, n.AppID, releasenotice.SelfOnly,
+	return releasenotice.Digest([]any{c.TaskRoot, c.OptionalCLIEnabled("lark"), c.LarkExecutablePath, n.Profile, n.AppID, releasenotice.SelfOnly,
 		c.MeegleExecutablePath, c.MeegleProjects, c.CommandProxyURL, c.CommandProxyTargets,
 		c.CommandProxyUsername, c.CommandProxyPassword, c.CommandProxyNoProxy})
 }
@@ -58,11 +57,18 @@ func (a *App) branchNoticeAction(ctx context.Context, action Action) (ActionResu
 	if action.Kind != "task.branch-notice.prepare" && action.Kind != "task.branch-notice.send" {
 		return ActionResult{}, errors.New("不支持的分支通知操作")
 	}
+	if action.Kind == "task.branch-notice.send" && !boolPayload(action, "confirmed") {
+		return ActionResult{}, errors.New("通知缺少显式发送操作")
+	}
+	client, e := a.noticeCLI(ctx, OptionalCLIFeatureBranchNotice)
+	if e != nil {
+		return ActionResult{}, e
+	}
 	b, e := a.branchNoticeScope(ctx, action)
 	if e != nil {
 		return ActionResult{}, e
 	}
-	client := larkcli.Client{Runner: a.Runner, Config: b.config}
+	client.Config = b.config
 	store := releasenotice.Store{Directory: filepath.Join(a.Paths.Home, "release-notices")}
 	if action.Kind == "task.branch-notice.prepare" {
 		identity, e := client.Identity(ctx)
@@ -85,15 +91,15 @@ func (a *App) branchNoticeAction(ctx context.Context, action Action) (ActionResu
 		if current.scope != b.scope {
 			return ActionResult{}, errors.New("任务服务或分支已变化，请重新发起通知")
 		}
+		if e := client.BeforeRun(ctx); e != nil {
+			return ActionResult{}, e
+		}
 		saved, e := store.Prepare(session)
 		message := ""
 		if metadata.Stale || metadata.RefreshError != "" {
 			message = "需求标题来自本地缓存，请核对"
 		}
 		return ActionResult{Data: saved, Message: message}, e
-	}
-	if !boolPayload(action, "confirmed") {
-		return ActionResult{}, errors.New("通知缺少显式发送操作")
 	}
 	selection, e := noticeSelection(action)
 	if e != nil {
@@ -110,7 +116,7 @@ func (a *App) branchNoticeAction(ctx context.Context, action Action) (ActionResu
 		if s.Kind != releasenotice.Branches || s.Scope != current.scope {
 			return errors.New("任务分支已变化，请重新发起通知")
 		}
-		return nil
+		return client.BeforeRun(ctx)
 	})
 	return ActionResult{Data: session}, e
 }

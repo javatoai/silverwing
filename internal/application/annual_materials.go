@@ -37,6 +37,11 @@ func (a *App) documentAnnualScope(root string) (documents.AnnualMaterialsScope, 
 	if ok && !sameTaskContextPath(scope.Base, configuredRequirementsPath(config)) {
 		return scope, false, errors.New("资料目录配置已变化，请重新打开任务")
 	}
+	if settings := config.MaterialsGitSettings(); ok && settings.LocalRoot != "" {
+		if err := documents.ValidateLocalDocumentsBranch(settings.LocalRoot, settings.Branch); err != nil {
+			return scope, false, err
+		}
+	}
 	return scope, ok, nil
 }
 
@@ -203,11 +208,16 @@ func validAnnualTaskMaterials(manifest domain.TaskManifest, config domain.AppCon
 	if !ok {
 		return errors.New("无法识别任务资料目录")
 	}
-	if value(config.RequirementMaterialsRoot) == "" || value(config.RequirementMaterialsSubdirectory) == "" {
-		return errors.New("请先配置任务资料根目录和可写子目录")
+	if configuredRequirementsPath(config) == "" || value(config.RequirementMaterialsSubdirectory) == "" {
+		return errors.New("请先配置任务资料仓库和任务角色名")
 	}
 	if !sameTaskContextPath(scope.Base, configuredRequirementsPath(config)) || !strings.EqualFold(filepath.Base(scope.Owned), value(config.RequirementMaterialsSubdirectory)) {
-		return errors.New("资料根目录或可写子目录已变化，请重新准备任务资料")
+		return errors.New("任务资料仓库或任务角色名已变化，请重新准备任务资料")
+	}
+	if settings := config.MaterialsGitSettings(); settings.LocalRoot != "" {
+		if err := documents.ValidateLocalDocumentsBranch(settings.LocalRoot, settings.Branch); err != nil {
+			return err
+		}
 	}
 	id := value(manifest.RequirementID)
 	if link := domain.ParseFeishuWorkItemLink(manifest.RequirementLink); link != nil {

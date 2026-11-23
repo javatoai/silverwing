@@ -163,8 +163,12 @@ type ParagraphStyle struct {
 	Align ui.Align `json:"align,omitempty"`
 	// Quote and CodeBlock show the paragraph as a quotation, or as code in
 	// the monospaced font, its spaces kept.
-	Quote     bool `json:"quote,omitempty"`
-	CodeBlock bool `json:"codeBlock,omitempty"`
+	Quote bool `json:"quote,omitempty"`
+	// QuoteDepth is the number of nested quotations when Quote is true.
+	// Zero and one both mean one quotation, for existing documents. It is
+	// independent of Indent, which remains the nesting level of a list item.
+	QuoteDepth int  `json:"quoteDepth,omitempty"`
+	CodeBlock  bool `json:"codeBlock,omitempty"`
 	// ID is the app's name for the paragraph, the key of what it keeps
 	// about it, which the editor does not show. It stays with the
 	// paragraph's text as it is edited (see Text.Replace): a paragraph
@@ -175,6 +179,14 @@ type ParagraphStyle struct {
 	// back with the text, JSON saves it, and the clipboard, Markdown,
 	// HTML and RTF leave it out.
 	ID string `json:"id,omitempty"`
+}
+
+// quoteDepth is the effective quotation nesting of a paragraph.
+func (s ParagraphStyle) quoteDepth() int {
+	if !s.Quote {
+		return 0
+	}
+	return max(1, s.QuoteDepth)
 }
 
 // Run is a run of text with its attributes.
@@ -414,8 +426,14 @@ func (t Text) Paragraphs() iter.Seq2[int, Paragraph] {
 	return func(yield func(int, Paragraph) bool) {
 		start := 0
 		tx := rope.TextOf(t.text)
-		seqEach(t.seq(), 0, func(i int, p *richPara) bool {
-			line := tx.Line(i)
+		// Each line starts after the newline of the one before: the walk
+		// carries the byte it starts at on, rather than finding each line
+		// in the tree, which reads its chunk from the start every time.
+		lineAt := 0
+		seqEach(t.seq(), 0, func(_ int, p *richPara) bool {
+			lineEnd := rope.ByteAfterRunes(t.text, lineAt, p.n)
+			line := tx.Slice(lineAt, lineEnd)
+			lineAt = lineEnd + 1
 			par := Paragraph{Style: p.style}
 			off := 0
 			for _, r := range p.runs {
@@ -452,25 +470,30 @@ func (t Text) Runs(start, end int) iter.Seq2[int, Run] {
 		tx := rope.TextOf(t.text)
 		pa := t.paraAt(start)
 		at := t.paraStart(pa)
-		off := rope.ByteOfRune(t.text, at)
+		// The byte rune at starts at: found in the tree for the first run,
+		// then carried on from one run to the next, each run's end read on
+		// from its start.
+		off := -1
 		seqEach(t.seq(), pa, func(_ int, p *richPara) bool {
 			for _, r := range p.runs {
-				a, z := max(at, start), min(at+r.n, end, n)
-				if a < z {
-					ba := off
-					if a > at {
-						ba = rope.ByteOfRune(t.text, a)
-					}
-					bz := rope.ByteOfRune(t.text, z)
-					if !yield(a, Run{Text: tx.Slice(ba, bz), Attributes: r.a}) {
-						return false
-					}
+				if at+r.n <= start {
+					at += r.n
+					continue
 				}
+				a, z := max(at, start), min(at+r.n, end, n)
+				if off < 0 {
+					off = rope.ByteOfRune(t.text, a)
+				}
+				bz := rope.ByteAfterRunes(t.text, off, z-a)
+				if !yield(a, Run{Text: tx.Slice(off, bz), Attributes: r.a}) {
+					return false
+				}
+				// A run cut short by end or the end of the text is the last.
+				off = bz
 				at += r.n
 				if at >= end {
 					return false
 				}
-				off = rope.ByteOfRune(t.text, min(at, n))
 			}
 			return true
 		})

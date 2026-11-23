@@ -24,7 +24,7 @@ func (s *app) availableModules(t task, service application.Service) []applicatio
 func (s *app) setWorkspaceAddSelection(serviceID, moduleID string) {
 	s.workspaceUnit.state.workspaceAddServiceID = serviceID
 	s.workspaceUnit.state.workspaceAddModuleID = moduleID
-	service, ok := s.serviceByID(s.taskUnit.taskByID(s.form.taskID).groupID, serviceID)
+	service, ok := s.serviceByID(serviceID)
 	if !ok {
 		return
 	}

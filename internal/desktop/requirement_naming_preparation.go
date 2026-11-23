@@ -87,7 +87,8 @@ func executeRequirementNamingPreparation(ctx context.Context, backend applicatio
 		return errors.New("需求命名后端不可用")
 	}
 	provider, hasIdentity := backend.(application.RequirementIdentityBackend)
-	if hasIdentity {
+	_, cacheAware := backend.(application.RequirementNamingCacheBackend)
+	if hasIdentity && (!cacheAware || expected == "") {
 		account, err := provider.RequirementIdentity(ctx)
 		if err != nil {
 			return err
@@ -120,7 +121,7 @@ func executeRequirementNamingPreparation(ctx context.Context, backend applicatio
 	if _, err = domain.ValidateRequirementAiNamingSuggestion(suggestion); err != nil {
 		return err
 	}
-	if hasIdentity {
+	if hasIdentity && !cacheAware {
 		account, err := provider.RequirementIdentity(ctx)
 		if err != nil {
 			return err

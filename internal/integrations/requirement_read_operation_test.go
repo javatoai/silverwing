@@ -56,10 +56,24 @@ func init() {
 	case "user me":
 		emit(map[string]any{"user_key": string(account), "tenant_key": "fixture-tenant"})
 	case "workitem get":
-		if string(mode) == "fail-workitem" {
+		switch string(mode) {
+		case "fail-workitem":
 			os.Exit(3)
+		case "denied-workitem":
+			emit(map[string]any{"code": 403, "error": map[string]any{"message": "permission denied"}})
+		case "missing-workitem":
+			emit(map[string]any{"code": 404, "message": "work item not found"})
+		case "workitem-network-error":
+			fmt.Fprintln(os.Stderr, "network temporarily unavailable")
+			os.Exit(3)
+		case "empty-workitem-body":
+			emit(map[string]any{"name": "Requirement with no body", "work_item_attribute": map[string]any{"work_item_type": map[string]any{"key": "remote-type"}}})
 		}
 		emit(map[string]any{"name": "Fixture requirement", "description": "fixture body", "work_item_attribute": map[string]any{"name": "Fixture requirement", "work_item_status": map[string]any{"name": "In Progress"}, "role_members": []any{}}})
+	case "workitem meta-fields":
+		if string(mode) == "empty-workitem-body" && flag("--work-item-type") == "remote-type" {
+			emit(map[string]any{"list": []any{}, "pagination": map[string]any{"page_num": 1, "has_more": false}})
+		}
 	case "comment list":
 		emit(map[string]any{"comments": []any{}, "pagination": map[string]any{"page_num": 1, "total": 0, "total_pages": 1, "has_more": false}})
 	case "attachment +download":
@@ -133,6 +147,39 @@ func (f requirementReadFixture) calls(t *testing.T) []string {
 
 func (f requirementReadFixture) payload() map[string]any {
 	return map[string]any{"url": f.item.URL, "projectKey": f.item.ProjectKey, "expectedIdentity": f.token}
+}
+
+func TestDirectRequirementLinkReportsReadErrorsAndCanRetry(t *testing.T) {
+	f := newRequirementReadFixture(t)
+	payload := map[string]any{
+		"url":              "https://project.feishu.cn/space/6785bc520a0621258bcf0583/detail/7143084336",
+		"expectedIdentity": f.token,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	setMode := func(mode string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(f.root, "mode"), []byte(mode), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, failure := range []struct{ mode, message string }{
+		{"denied-workitem", "permission denied"},
+		{"missing-workitem", "work item not found"},
+		{"workitem-network-error", "network temporarily unavailable"},
+	} {
+		setMode(failure.mode)
+		if _, err := f.service.Execute(ctx, "requirements.read", payload); err == nil || !strings.Contains(err.Error(), failure.message) {
+			t.Fatalf("%s returned the wrong read error: %v", failure.mode, err)
+		}
+	}
+	setMode("empty-workitem-body")
+	payload["force"] = true
+	value, err := f.service.Execute(ctx, "requirements.read", payload)
+	read, ok := value.(RequirementReadResult)
+	if err != nil || !ok || read.Title != "Requirement with no body" || read.Body != "" || read.Stale {
+		t.Fatalf("retry did not read the requirement with empty body: %+v, %v", value, err)
+	}
 }
 
 func TestRequirementImageEntryReusesProbeForTwentyColdCommentImages(t *testing.T) {
@@ -255,8 +302,7 @@ func TestRequirementReadOperationRejectsChangedEpochAndRetiresOnFailure(t *testi
 				}
 			case "config":
 				changed := f.config
-				proxy := "http://127.0.0.1:23456"
-				changed.CommandProxyURL = &proxy
+				changed.MeegleProjects = []domain.MeegleProjectConfig{{ProjectKey: "project-a", SimpleName: "space"}, {ProjectKey: "other", SimpleName: "other"}}
 				if err := f.service.config.Save(changed); err != nil {
 					t.Fatal(err)
 				}

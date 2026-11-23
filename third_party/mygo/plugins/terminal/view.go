@@ -30,7 +30,9 @@ import (
 // and zooms with Control held (Command on macOS; Options.OnZoom). Hold
 // Shift to select while a program takes the mouse, and Command (Control
 // elsewhere) to underline a link and open it on click: a hyperlink (OSC 8),
-// a URL printed as text, or a file path with Options.OpenLink.
+// a URL printed as text, or a file path with Options.OpenLink. Alt+click
+// (Option+click on macOS) on the input of a shell's prompt moves the
+// shell's cursor there, when the shell marks its prompt (OSC 133).
 func View(c *ui.Context, t *Terminal) ui.Element {
 	v := t.viewOf(c)
 	// A terminal's grid is left to right in a right-to-left interface too.
@@ -83,22 +85,22 @@ func cursorOf(shape int) ui.Cursor {
 	shapes := [...]ui.Cursor{
 		ui.CursorDefault,      // default
 		ui.CursorContextMenu,  // context-menu
-		ui.CursorDefault,      // help
+		ui.CursorHelp,         // help
 		ui.CursorPointer,      // pointer
-		ui.CursorDefault,      // progress
-		ui.CursorDefault,      // wait
-		ui.CursorCrosshair,    // cell
+		ui.CursorProgress,     // progress
+		ui.CursorWait,         // wait
+		ui.CursorCell,         // cell
 		ui.CursorCrosshair,    // crosshair
 		ui.CursorText,         // text
 		ui.CursorVerticalText, // vertical-text
 		ui.CursorAlias,        // alias
 		ui.CursorCopy,         // copy
 		ui.CursorMove,         // move
-		ui.CursorNotAllowed,   // no-drop
+		ui.CursorNoDrop,       // no-drop
 		ui.CursorNotAllowed,   // not-allowed
 		ui.CursorGrab,         // grab
 		ui.CursorGrabbing,     // grabbing
-		ui.CursorMove,         // all-scroll
+		ui.CursorAllScroll,    // all-scroll
 		ui.CursorResizeColumn, // col-resize
 		ui.CursorResizeRow,    // row-resize
 		ui.CursorResizeN,      // n-resize
@@ -113,8 +115,8 @@ func cursorOf(shape int) ui.Cursor {
 		ui.CursorResizeNS,     // ns-resize
 		ui.CursorResizeNESW,   // nesw-resize
 		ui.CursorResizeNWSE,   // nwse-resize
-		ui.CursorDefault,      // zoom-in
-		ui.CursorDefault,      // zoom-out
+		ui.CursorZoomIn,       // zoom-in
+		ui.CursorZoomOut,      // zoom-out
 	}
 	if shape < 0 || shape >= len(shapes) {
 		return ui.CursorDefault
@@ -154,12 +156,15 @@ type view struct {
 
 	// The grid, in device pixels: the cells, the baseline in a cell, and
 	// the origin of the grid relative to the element; scale is device
-	// pixels per DIP, and size the element's in DIPs.
+	// pixels per DIP, and size the element's in DIPs. fitW is the width of
+	// a cell at the font's own advance, which glyphs too wide for their
+	// cells shrink to, whatever Font.CellWidth makes the cells.
 	size                   [2]float32
 	font                   fontKey
 	fonts                  [4]ui.Font
 	scale                  float32
 	cellW, cellH, baseline int
+	fitW                   int
 	ox, oy                 int
 	cols, rows             int
 
@@ -169,6 +174,17 @@ type view struct {
 	scrollbar vt.Scrollbar
 	lines     []rowCache
 	shaped    lru
+	// spare holds the rows of the frame before, whose slices the next
+	// frame's rows take (updateRows); taken marks the rows of the last
+	// frame the next has taken, and key, keyStyles and graphemes hold a
+	// row's key as it is written (rowKey).
+	spare     []rowCache
+	taken     []bool
+	key       []byte
+	keyStyles []uint16
+	graphemes []rune
+	// shapeKey holds the key of text to shape as it is written (shape).
+	shapeKey []byte
 	// images are the placements of images that show, and bitmaps their
 	// images' (readImages).
 	images  []shownImage
@@ -198,14 +214,13 @@ type view struct {
 	pointer   [2]float32
 	// barHeld tells that the primary button drags the scroll bar, held
 	// barGrab DIPs below the thumb's top; overBar that the pointer is over
-	// the bar, as of its last move, and barHover as of the last build.
-	// barLit is whether the last paint showed the bar hovered or held,
-	// barBack how many rows the viewport was above the bottom, and barSeen
-	// when either last changed, from which the bar fades out.
-	barHeld, overBar, barHover, barLit bool
-	barGrab                            float32
-	barBack                            int64
-	barSeen                            time.Time
+	// the bar, as of its last move, and barHover as of the last build;
+	// inView that the pointer was over the terminal, which shows the bar.
+	barHeld, overBar, barHover, inView bool
+	// barStyle is how the scroll bar looks, the theme's as of the last
+	// paint.
+	barStyle ui.ScrollbarStyle
+	barGrab  float32
 	// hover is the link Command is held over, which a click opens and
 	// which shows underlined, hoverLink what it opens and hoverPath
 	// whether that is a file path (HoveredLink); linkPress: the primary
@@ -260,13 +275,19 @@ type pendingKey struct {
 	// taken: Options.OnKey took the key, whose text and release are
 	// dropped.
 	taken bool
+	// sent: the key went as Alt (Option as Alt on macOS), and the text
+	// macOS still types or composes for it is dropped; its release goes
+	// as any key's.
+	sent bool
 }
 
 // build updates the view as a frame builds.
 func (v *view) build(c *ui.Context, e ui.Element) {
 	t := v.t
 	if files := e.DroppedFiles(); len(files) > 0 {
-		t.dropFiles(files)
+		if on := t.opts.OnDrop; on == nil || !on(files) {
+			t.dropFiles(files)
+		}
 	}
 	v.lang = c.Locale()
 	dark := c.Theme().Dark
@@ -300,7 +321,8 @@ func (v *view) build(c *ui.Context, e ui.Element) {
 			v.hoverLink, v.hoverPath, v.hover = v.linkUnder(c.Modifiers(), v.pointer[0], v.pointer[1])
 		}
 		v.pointerAt = v.pointerShape(t.term, c.Modifiers())
-		v.barHover = e.Hovered() && v.overScrollbar(v.pointer[0], v.pointer[1])
+		v.inView = e.Hovered()
+		v.barHover = v.inView && v.overScrollbar(v.pointer[0], v.pointer[1])
 		if v.barHover || v.barHeld {
 			v.pointerAt = ui.CursorDefault // the bar's, not the text's
 		}
@@ -319,7 +341,17 @@ func (v *view) build(c *ui.Context, e ui.Element) {
 	term := t.term
 	searching := term != nil && t.find.drive(term)
 	searched := t.find.status
+	// A synchronized update that does not end shows a second after it
+	// started (paint). Nothing else may ask for that frame: a program that
+	// writes nothing more, its cursor hidden or not blinking, asks for none.
+	var holdDue time.Time
+	if term != nil && t.held {
+		holdDue = t.heldSince.Add(time.Second)
+	}
 	t.mu.Unlock()
+	if !holdDue.IsZero() {
+		c.After(max(time.Until(holdDue), 0) + time.Millisecond)
+	}
 	if searched != v.searched {
 		v.searched = searched
 		if t.opts.OnSearch != nil {
@@ -585,6 +617,11 @@ func (v *view) input(ev ui.InputEvent) bool {
 		v.typed(ev.Text)
 		return true
 	case ui.InputCompose:
+		if p := v.pending; p != nil && p.sent {
+			// A dead key's, as ´ of Option-E: refused, so that macOS
+			// gives it up rather than compose the next key with it.
+			return false
+		}
 		v.preedit, v.preeditCaret, v.pending = ev.Text, ev.Caret, nil
 		return true
 	case ui.InputCommand:
@@ -636,14 +673,20 @@ func (v *view) input(ev ui.InputEvent) bool {
 	return false
 }
 
+// goos is the system whose keys keyDown reads; tests read macOS's.
+var goos = runtime.GOOS
+
 func (v *view) keyDown(ev ui.InputEvent) bool {
+	if ev.Key == ui.KeyUnknown {
+		return false // a modifier on its own, or a key of no name
+	}
 	t := v.t
 	if on := t.opts.OnKey; on != nil && on(ev.Mods, ev.Key) {
 		k, _ := vtKey(ev.Key)
 		v.pending = &pendingKey{key: k, taken: true}
 		return true
 	}
-	mac := runtime.GOOS == "darwin"
+	mac := goos == "darwin"
 	mods, key := ev.Mods, ev.Key
 	if b, ok := t.binding(mods, key); ok {
 		if v.perform(b.Action, b.Performable) || !b.Performable {
@@ -662,7 +705,7 @@ func (v *view) keyDown(ev ui.InputEvent) bool {
 	}
 	altMeta := mods&ui.Alt != 0 && (!mac || t.opts.OptionAsAlt)
 	// AltGr types text on Windows, where it is Control and Alt.
-	altGr := runtime.GOOS == "windows" && mods&(ui.Ctrl|ui.Alt) == ui.Ctrl|ui.Alt
+	altGr := goos == "windows" && mods&(ui.Ctrl|ui.Alt) == ui.Ctrl|ui.Alt
 	if typesText(key) && (mods&(ui.Ctrl|ui.Alt) == 0 || mods&ui.Alt != 0 && !altMeta && mods&ui.Ctrl == 0 || altGr) {
 		// The text it types comes next.
 		v.pending = &pendingKey{key: k, unshifted: unshifted, mods: mods, repeat: ev.Repeat}
@@ -675,6 +718,11 @@ func (v *view) keyDown(ev ui.InputEvent) bool {
 		text = string(unshifted)
 		if mods&ui.Shift != 0 {
 			text = shiftedText(key, unshifted)
+		}
+		if mac {
+			// interpretKeyEvents still types the key's text, or
+			// composes it, after this.
+			v.pending = &pendingKey{key: k, sent: true}
 		}
 	}
 	action := vt.KeyPress
@@ -772,12 +820,18 @@ func (v *view) clearScreen() bool {
 }
 
 func (v *view) keyUp(ev ui.InputEvent) bool {
+	if ev.Key == ui.KeyUnknown {
+		return false
+	}
 	k, unshifted := vtKey(ev.Key)
 	if p := v.pending; p != nil && p.taken && p.key == k {
 		// The release of a key OnKey or a keybind took, Command held or
 		// not.
 		v.pending = nil
 		return true
+	}
+	if p := v.pending; p != nil && p.sent && p.key == k {
+		v.pending = nil // sent as it went down
 	}
 	if k == vt.KeyUnidentified || ev.Mods&ui.Super != 0 {
 		return false
@@ -807,8 +861,8 @@ func (v *view) typed(text string) {
 	v.preedit = ""
 	p := v.pending
 	v.pending = nil
-	if p != nil && p.taken {
-		return // the text of a key OnKey took
+	if p != nil && (p.taken || p.sent) {
+		return // the text of a key OnKey took, or sent as Alt
 	}
 	if p == nil {
 		// Text without a key: of an input method, or every key typing
@@ -829,17 +883,23 @@ func (v *view) typed(text string) {
 		v.sendText(text)
 		return
 	}
+	mods := p.mods
+	if goos == "windows" && mods&(ui.Ctrl|ui.Alt) == ui.Ctrl|ui.Alt {
+		// AltGr made the character: the encoder would make a Control
+		// sequence of it with Control held, consumed or not (#1203).
+		mods &^= ui.Ctrl | ui.Alt
+	}
 	var consumed vt.Mods
 	r, _ := utf8.DecodeRuneInString(text)
 	if r != p.unshifted {
 		// Shift or Option made the character.
-		consumed = vtMods(p.mods & (ui.Shift | ui.Alt))
+		consumed = vtMods(mods & (ui.Shift | ui.Alt))
 	}
 	action := vt.KeyPress
 	if p.repeat {
 		action = vt.KeyRepeat
 	}
-	v.sendKey(vt.KeyEvent{Action: action, Key: p.key, Mods: vtMods(p.mods), Consumed: consumed, Text: text, Unshifted: p.unshifted})
+	v.sendKey(vt.KeyEvent{Action: action, Key: p.key, Mods: vtMods(mods), Consumed: consumed, Text: text, Unshifted: p.unshifted})
 }
 
 // sendKey sends a key, scrolling to the bottom and clearing the selection
@@ -866,6 +926,9 @@ func (v *view) encodeKey(k vt.KeyEvent, press bool) bool {
 	v.keys.Sync(t.term, t.opts.OptionAsAlt)
 	b := v.keys.Encode(k)
 	if len(b) == 0 {
+		b = controlKey(k)
+	}
+	if len(b) == 0 {
 		return false
 	}
 	t.in.push(append([]byte(nil), b...))
@@ -874,6 +937,25 @@ func (v *view) encodeKey(k vt.KeyEvent, press bool) bool {
 		t.term.SetSelection(nil)
 	}
 	return true
+}
+
+// controlKeys are the Control keys Ghostty's legacy encoding leaves to
+// fixterms' CSI u, which it makes of a key's text only: these keys come
+// without text, as Control keys do, and it sends nothing for them. xterm
+// and most terminals send their C0 controls, which shells and editors
+// read: Ctrl+I is Tab, Ctrl+M Enter and Ctrl+[ Esc.
+var controlKeys = map[vt.Key]string{vt.KeyI: "\t", vt.KeyM: "\r", vt.KeyBracketLeft: "\x1b"}
+
+// controlKey returns the C0 control of a Control key the encoder sent
+// nothing for, as other Control keys send theirs (Ctrl+C is ^C). The
+// Kitty keyboard protocol encodes these keys itself, so they never come
+// here with it.
+func controlKey(k vt.KeyEvent) []byte {
+	c, ok := controlKeys[k.Key]
+	if !ok || k.Action == vt.KeyRelease || k.Mods != vt.ModCtrl || k.Text != "" {
+		return nil
+	}
+	return []byte(c)
 }
 
 // sendText sends text that is no key, as of an input method.
@@ -1052,6 +1134,9 @@ func (v *view) pointerEvent(ev ui.InputEvent) bool {
 		if ev.Button != 0 {
 			return false // the context menu
 		}
+		if ev.Mods&ui.Alt != 0 && v.clickToMove(col, row) {
+			return true
+		}
 		ref, ok := t.term.CellAt(col, row)
 		if !ok {
 			return false
@@ -1109,16 +1194,46 @@ func (v *view) pointerEvent(ev ui.InputEvent) bool {
 	return false
 }
 
-// linkSpan is the cells of a link in a row of the viewport, columns x0 up
-// to x1; the zero span is no link.
-type linkSpan struct{ row, x0, x1 int }
+// linkSpan is the cells of a link in the viewport: from column x0 of row
+// up to column x1 of row last, over the rows between in full, as a link
+// soft-wraps from one row onto the next; the zero span is no link.
+type linkSpan struct{ row, x0, x1, last int }
 
-func (s linkSpan) on() bool { return s.x1 > s.x0 }
+func (s linkSpan) on() bool { return s.last > s.row || s.x1 > s.x0 }
+
+// cells returns the columns of the span on row r, a up to b.
+func (s linkSpan) cells(r, cols int) (a, b int) {
+	a, b = 0, cols
+	if r == s.row {
+		a = s.x0
+	}
+	if r == s.last {
+		b = s.x1
+	}
+	return a, b
+}
+
+// spanOf is the span of the cells a up to b, counted across the viewport
+// row after row.
+func (v *view) spanOf(a, b int) linkSpan {
+	return linkSpan{row: a / v.cols, x0: a % v.cols, x1: (b-1)%v.cols + 1, last: (b - 1) / v.cols}
+}
+
+// wraps reports whether row r of the viewport soft-wraps into the next;
+// t.mu is held.
+func (v *view) wraps(r int) bool {
+	if r < 0 || r >= v.rows-1 {
+		return false
+	}
+	_, wrap := v.t.term.Row(r)
+	return wrap
+}
 
 // HoveredLink returns the link Command (Control elsewhere) is held over
 // in the view, which a click opens and which shows underlined, as
 // Options.OpenLink takes it; whether it is a file path; and the rectangle
-// of its cells in DIPs, relative to the view. It returns "" over no link,
+// of its cells in DIPs, relative to the view: around the rows it wraps
+// over, for one that does. It returns "" over no link,
 // or while no view shows the terminal. An app shows a preview of a link
 // with it, over the view: read it in the view function, after View.
 func (t *Terminal) HoveredLink() (link string, path bool, at ui.Rect) {
@@ -1130,11 +1245,15 @@ func (t *Terminal) HoveredLink() (link string, path bool, at ui.Rect) {
 	}
 	cw, ch := float32(v.cellW)/v.scale, float32(v.cellH)/v.scale
 	h := v.hover
+	x0, x1 := h.x0, h.x1
+	if h.last > h.row {
+		x0, x1 = 0, v.cols // around the rows it wraps over
+	}
 	return v.hoverLink, v.hoverPath, ui.Rect{
-		X: float32(v.ox)/v.scale + float32(h.x0)*cw,
+		X: float32(v.ox)/v.scale + float32(x0)*cw,
 		Y: float32(v.oy)/v.scale + float32(h.row)*ch,
-		W: float32(h.x1-h.x0) * cw,
-		H: ch,
+		W: float32(x1-x0) * cw,
+		H: float32(h.last-h.row+1) * ch,
 	}
 }
 
@@ -1159,8 +1278,12 @@ func (v *view) overScrollbar(x, y float32) bool {
 	if v.barHeld {
 		return true
 	}
+	width := v.barStyle.TrackWidth
+	if width <= 0 {
+		width = scrollbarStrip
+	}
 	w, h := v.size[0], v.size[1]
-	if x < w-scrollbarStrip || x >= w || y < 0 || y >= h {
+	if x < w-width || x >= w || y < 0 || y >= h {
 		return false
 	}
 	sb := v.t.term.Scrollbar()
@@ -1183,7 +1306,9 @@ func (v *view) scrollbarEvent(ev ui.InputEvent) bool {
 	case v.barHeld:
 		v.dragScrollbar(ev.Y)
 	case v.overBar && ev.Kind == ui.InputPointerDown && ev.Button == 0:
-		y, h := thumb(v.t.term.Scrollbar(), v.size[1])
+		b := bar(v.t.term.Scrollbar(), ui.Rect{H: v.size[1]})
+		b.Style = v.barStyle
+		y, h := b.Thumb()
 		v.barGrab = h / 2
 		if ev.Y >= y && ev.Y < y+h {
 			v.barGrab = ev.Y - y
@@ -1204,13 +1329,9 @@ func (v *view) dragScrollbar(y float32) {
 	if sb.Total <= sb.Len {
 		return
 	}
-	_, h := thumb(sb, v.size[1])
-	travel := v.size[1] - h
-	if travel <= 0 {
-		return
-	}
-	f := max(0, min((y-v.barGrab)/travel, 1))
-	to := int(math.Round(float64(f) * float64(sb.Total-sb.Len)))
+	b := bar(sb, ui.Rect{H: v.size[1]})
+	b.Style = v.barStyle
+	to := int(math.Round(float64(b.OffsetAt(y - v.barGrab))))
 	if d := to - int(sb.Offset); d != 0 {
 		term.ScrollBy(d)
 		v.services.Invalidate()
@@ -1218,27 +1339,53 @@ func (v *view) dragScrollbar(y float32) {
 }
 
 // linkAt is the link at the cell: a hyperlink (OSC 8), a URL printed as
-// text, or with Options.OpenLink a file path, or ""; t.mu is held.
+// text, or with Options.OpenLink a file path, or ""; one that soft-wraps
+// onto the next rows, as a long URL does, is the link as a whole. t.mu is
+// held.
 func (v *view) linkAt(col, row int) (link string, path bool, at linkSpan) {
 	t := v.t
-	if url := v.hyperlinkAt(col, row); url != "" {
-		// The hyperlink's cells are those around the cell with its URL.
-		x0, x1 := col, col+1
-		for x0 > 0 && v.hyperlinkAt(x0-1, row) == url {
-			x0--
-		}
-		for x1 < v.cols && v.hyperlinkAt(x1, row) == url {
-			x1++
-		}
-		return url, false, linkSpan{row, x0, x1}
+	if v.cols == 0 {
+		return "", false, linkSpan{}
 	}
-	text, cols := t.term.RowText(row)
-	if url, x0, x1 := urlAt(text, cols, col); url != "" {
-		return url, false, linkSpan{row, x0, x1}
+	if url := v.hyperlinkAt(col, row); url != "" {
+		// The hyperlink's cells are those around the cell with its URL,
+		// counted across the rows it wraps over.
+		// A row's edge is crossed only where it wraps.
+		at := func(i int) bool { return v.hyperlinkAt(i%v.cols, i/v.cols) == url }
+		a, b := row*v.cols+col, row*v.cols+col+1
+		for a > 0 && (a%v.cols != 0 || v.wraps(a/v.cols-1)) && at(a-1) {
+			a--
+		}
+		for b < v.rows*v.cols && (b%v.cols != 0 || v.wraps(b/v.cols-1)) && at(b) {
+			b++
+		}
+		return url, false, v.spanOf(a, b)
+	}
+	// The text of the rows the cell's row wraps with, each rune at its
+	// cell counted across the viewport.
+	top, bottom := row, row
+	for top > 0 && v.wraps(top-1) {
+		top--
+	}
+	for v.wraps(bottom) {
+		bottom++
+	}
+	var text []rune
+	var cols []int
+	for r := top; r <= bottom; r++ {
+		rt, rc := t.term.RowText(r)
+		text = append(text, rt...)
+		for _, c := range rc {
+			cols = append(cols, r*v.cols+c)
+		}
+	}
+	i := row*v.cols + col
+	if url, a, b := urlAt(text, cols, i); url != "" {
+		return url, false, v.spanOf(a, b)
 	}
 	if t.opts.OpenLink != nil {
-		if p, x0, x1 := pathAt(text, cols, col); p != "" {
-			return p, true, linkSpan{row, x0, x1}
+		if p, a, b := pathAt(text, cols, i); p != "" {
+			return p, true, v.spanOf(a, b)
 		}
 	}
 	return "", false, linkSpan{}

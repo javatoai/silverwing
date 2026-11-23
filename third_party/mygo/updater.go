@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -266,7 +268,7 @@ func installUpdate(ctx context.Context, get update.Getter, m update.Manifest, ke
 		return err
 	}
 	// Next to the app, so that it can be renamed into place.
-	work, err := os.MkdirTemp(filepath.Dir(target), "."+filepath.Base(target)+".update-")
+	work, err := os.MkdirTemp(filepath.Dir(target), workPattern(target))
 	if err != nil {
 		return fmt.Errorf("cannot write next to the app: %w", err)
 	}
@@ -317,6 +319,18 @@ func installUpdate(ctx context.Context, get update.Getter, m update.Manifest, ke
 		return err
 	}
 	return swap(unpacked, target)
+}
+
+// workPattern returns the pattern of the directory an update of the app
+// at target is unpacked in, next to it: named after the app, or after no
+// name where target is the root of a drive or share, as D:\ (#1529),
+// whose base name is a separator, which os.MkdirTemp rejects.
+func workPattern(target string) string {
+	name := filepath.Base(target)
+	if name == "." || strings.ContainsFunc(name, func(r rune) bool { return r < 0x80 && os.IsPathSeparator(uint8(r)) }) {
+		name = "app"
+	}
+	return "." + name + ".update-"
 }
 
 // applyDelta downloads the delta d into work and makes the new version of
@@ -400,11 +414,7 @@ func stageBundle(work, dir, target string) error {
 		return errors.New("the update holds no app bundle")
 	}
 	p := &stagedUpdate{work: work, bundle: filepath.Join(dir, entries[0].Name()), target: target}
-	args := []string{"-c", installAfterExit, "mygo-update", strconv.Itoa(appPid), p.target, p.bundle, p.work, p.target}
-	if len(os.Args) > 1 {
-		args = append(append(args, "--args"), os.Args[1:]...)
-	}
-	p.helper = exec.Command("/bin/sh", args...)
+	p.helper = exec.Command("/bin/sh", "-c", installAfterExit, "mygo-update", strconv.Itoa(appPid), p.target, p.bundle, p.work)
 	if err := p.helper.Start(); err != nil {
 		return err
 	}
@@ -417,65 +427,142 @@ func stageBundle(work, dir, target string) error {
 }
 
 // installAfterExit is the script of /bin/sh that installs a staged update:
-// with the pid of the app, the target, bundle and work of the update and
-// then the arguments of open, it waits for the app to exit, swaps the
-// bundles, putting the old one back if the new one cannot be moved in, and
-// opens the app again when Relaunch asked for it (relaunchUpdated). Through
+// with the pid of the app, the target, bundle and work of the update, it
+// waits for the app to exit, swaps the bundles, putting the old one back
+// if the new one cannot be moved in, and opens the app again when Relaunch
+// asked for it (relaunchUpdated), with the arguments of open that
+// work/relaunch sets: Relaunch's arguments are known only then. Through
 // Launch Services, as openBundle, but without -n: the app has exited, and
 // the Dock gives the new version the app's tile.
 const installAfterExit = `pid=$1 target=$2 new=$3 work=$4
-shift 4
 trap '' HUP
 while kill -0 "$pid" 2>/dev/null; do sleep 0.05; done
 if mv "$target" "$work/old"; then
 	mv "$new" "$target" || mv "$work/old" "$target"
 fi
 relaunch=
-if [ -e "$work/relaunch" ]; then relaunch=1; fi
+if [ -e "$work/relaunch" ]; then relaunch=1; . "$work/relaunch"; fi
 rm -rf "$work"
 if [ -n "$relaunch" ]; then exec /usr/bin/open "$@"; fi
 `
 
 // relaunchUpdated asks the helper of a staged update to open the app once
-// it has installed the update, reporting whether there is one.
-func relaunchUpdated() bool {
+// it has installed the update, with args, reporting whether there is one.
+func relaunchUpdated(args []string) bool {
 	p := pendingUpdate.Load()
-	return p != nil && os.WriteFile(filepath.Join(p.work, "relaunch"), nil, 0o644) == nil
+	return p != nil && os.WriteFile(filepath.Join(p.work, "relaunch"), []byte(setArgs(openArgs(p.target, args))), 0o644) == nil
+}
+
+// openArgs returns the arguments of /usr/bin/open that open the app bundle
+// with the arguments args.
+func openArgs(bundle string, args []string) []string {
+	if len(args) == 0 {
+		return []string{bundle}
+	}
+	return append([]string{bundle, "--args"}, args...)
+}
+
+// setArgs returns the command of /bin/sh that makes args its positional
+// parameters.
+func setArgs(args []string) string {
+	var b strings.Builder
+	b.WriteString("set --")
+	for _, a := range args {
+		b.WriteString(" '")
+		b.WriteString(strings.ReplaceAll(a, "'", `'\''`))
+		b.WriteString("'")
+	}
+	b.WriteString("\n")
+	return b.String()
 }
 
 // swapFiles replaces the entries of the app directory target with those in
-// dir. The running executable is renamed away, which Windows allows, and
-// removed at the next launch (cleanUpdateLeftovers).
+// dir, and removes those that the version it replaces installed and dir
+// lacks, which target's update.FileList names. Entries that no list names
+// stay, as the data of a portable copy, and so do all the entries of an
+// app installed before versions had a list: they cannot be told from the
+// user's. Replaced and removed entries are renamed aside, and deleted once
+// every entry of dir is in place; if one cannot be, dir's go back and the
+// others are put back. The running executable is renamed away, which
+// Windows allows, and removed at the next launch (cleanUpdateLeftovers).
+// dir gets the list of its entries, which moves into target with them.
 func swapFiles(dir, target string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
 	}
-	if len(entries) == 0 {
+	var names []string
+	ours := map[string]bool{}
+	for _, e := range entries {
+		if e.Name() != update.FileList {
+			names = append(names, e.Name())
+			ours[e.Name()] = true
+		}
+	}
+	if len(names) == 0 {
 		return errors.New("the update is empty")
 	}
 	suffix := ".old-" + strconv.Itoa(os.Getpid())
-	var moved [][2]string // renamed away: old name, new name
+	var moved, placed [][2]string // renamed: old name, new name
 	undo := func() {
+		for i := len(placed) - 1; i >= 0; i-- {
+			if rename(placed[i][1], placed[i][0]) != nil {
+				_ = os.RemoveAll(placed[i][1])
+			}
+		}
 		for i := len(moved) - 1; i >= 0; i-- {
-			_ = os.RemoveAll(moved[i][0])
 			_ = rename(moved[i][1], moved[i][0])
 		}
 	}
-	for _, e := range entries {
-		dst := filepath.Join(target, e.Name())
+	moveAside := func(dst string) error {
+		aside := filepath.Join(target, "."+filepath.Base(dst)+suffix)
+		if err := rename(dst, aside); err != nil {
+			return err
+		}
+		moved = append(moved, [2]string{dst, aside})
+		return nil
+	}
+
+	// The entries that the replaced version installed and dir lacks go
+	// first, so that one that dir has under another case, which is the same
+	// entry on Windows and macOS, is moved aside before dir's takes its
+	// place. The executable the app runs from stays, whatever the new
+	// version calls its own: shortcuts, the desktop entry and Relaunch start
+	// it. One that cannot be moved stays listed, for the next update to
+	// remove.
+	running := runningEntry(target)
+	var left []string
+	for _, name := range installedEntries(target) {
+		dst := filepath.Join(target, name)
+		if ours[name] || name == running {
+			continue
+		}
+		if _, err := os.Lstat(dst); err != nil {
+			continue
+		}
+		if err := moveAside(dst); err != nil {
+			log.Printf("mygo: leaving %s, which the update no longer has: %v", dst, err)
+			left = append(left, name)
+		}
+	}
+	if err := update.WriteFileList(dir, append(names, left...)); err != nil {
+		undo()
+		return err
+	}
+
+	for _, name := range append(names, update.FileList) {
+		src, dst := filepath.Join(dir, name), filepath.Join(target, name)
 		if _, err := os.Lstat(dst); err == nil {
-			aside := filepath.Join(target, "."+e.Name()+suffix)
-			if err := rename(dst, aside); err != nil {
+			if err := moveAside(dst); err != nil {
 				undo()
 				return err
 			}
-			moved = append(moved, [2]string{dst, aside})
 		}
-		if err := rename(filepath.Join(dir, e.Name()), dst); err != nil {
+		if err := rename(src, dst); err != nil {
 			undo()
 			return err
 		}
+		placed = append(placed, [2]string{src, dst})
 	}
 	for _, m := range moved {
 		_ = os.RemoveAll(m[1])
@@ -483,17 +570,51 @@ func swapFiles(dir, target string) error {
 	return nil
 }
 
+// installedEntries returns the entries of the app directory target that
+// its version installed, which its update.FileList names: none without
+// one.
+func installedEntries(target string) []string {
+	b, err := readAppFile(filepath.Join(target, update.FileList))
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			log.Printf("mygo: removing none of the files that the update no longer has: %v", err)
+		}
+		return nil
+	}
+	return update.ParseFileList(b)
+}
+
+// runningEntry returns the entry of the app directory target that the app
+// runs from, or "" when it runs from elsewhere.
+func runningEntry(target string) string {
+	if startExe == "" {
+		return ""
+	}
+	exe, dir := startExe, target
+	if real, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = real
+	}
+	if real, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = real
+	}
+	if filepath.Dir(exe) != filepath.Clean(dir) {
+		return ""
+	}
+	return filepath.Base(exe)
+}
+
 // relaunchNow starts the app again; it runs after the quit sequence.
 func relaunchNow() {
+	args := relaunchArguments()
 	if launchedByDev() {
-		os.Exit(devRelaunchCode)
+		devRelaunch(App.relaunchArgs)
 	}
-	if runtime.GOOS == "darwin" && (relaunchUpdated() || openBundle()) {
+	if runtime.GOOS == "darwin" && (relaunchUpdated(args) || openBundle(args)) {
 		return
 	}
 	// The executable the app started from, which an update may have
 	// replaced.
-	cmd := exec.Command(startExe, os.Args[1:]...)
+	cmd := exec.Command(startExe, args...)
 	cmd.Dir = startDir
 	if runtime.GOOS != "windows" {
 		// GUI executables on Windows have no standard streams to pass on.
@@ -504,23 +625,43 @@ func relaunchNow() {
 	}
 }
 
+// devRelaunch exits for `mygo dev` to start the build again, with args
+// unless they are nil, which it reads from the file that
+// MYGO_DEV_RELAUNCH names.
+func devRelaunch(args []string) {
+	if args != nil {
+		if devRelaunchFile == "" {
+			log.Print("mygo: this mygo dev cannot pass Relaunch's arguments to the build; update it")
+		} else if err := os.WriteFile(devRelaunchFile, devRelaunchData(args), 0o600); err != nil {
+			log.Printf("mygo: cannot pass Relaunch's arguments to mygo dev: %v", err)
+		}
+	}
+	os.Exit(devRelaunchCode)
+}
+
+// devRelaunchData is what devRelaunch writes: each argument, ended with
+// a NUL byte, which no argument holds.
+func devRelaunchData(args []string) []byte {
+	var b []byte
+	for _, a := range args {
+		b = append(append(b, a...), 0)
+	}
+	return b
+}
+
 // openBundle starts the app bundle again through Launch Services, as the
-// Dock does, reporting whether it did. A child of this process would stay
+// Dock does, with args, reporting whether it did. A child of this process would stay
 // in this instance's coalition, which has no app once this instance exits:
 // when an app that the new instance started quits, as one a terminal's
 // shell ran, loginwindow takes the coalition's other processes for that
 // app's and ends them with SIGTERM.
-func openBundle() bool {
+func openBundle(args []string) bool {
 	bundle, err := installTarget()
 	if err != nil {
 		return false
 	}
 	// -n: this instance still runs, and would only be brought forward.
-	args := []string{"-n", bundle}
-	if len(os.Args) > 1 {
-		args = append(append(args, "--args"), os.Args[1:]...)
-	}
-	return exec.Command("/usr/bin/open", args...).Run() == nil
+	return exec.Command("/usr/bin/open", append([]string{"-n"}, openArgs(bundle, args)...)...).Run() == nil
 }
 
 // cleanUpdateLeftovers removes what an update could not remove while the
@@ -537,6 +678,15 @@ func cleanUpdateLeftovers() {
 
 // httpGet fetches a URL over HTTPS (or plain HTTP from the loopback
 // interface, for tests), through the system's proxy (package netproxy).
+// A failure that a moment may mend, as a gateway timing out in front of
+// the store of a release's assets, is tried again (httpRetries).
+//
+// The deadlines of the request are these: the headers must arrive within
+// httpHeaderTimeout, and a body that sends nothing for httpStallTimeout is
+// given up. Without them a connection that the network dropped without a
+// reset holds the caller until the socket times out, which keepalive may
+// never do, and a check in the background has no window to cancel it from
+// and keeps the updater from scheduling the next one.
 func httpGet(ctx context.Context, rawURL string) (io.ReadCloser, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -545,23 +695,162 @@ func httpGet(ctx context.Context, rawURL string) (io.ReadCloser, error) {
 	if u.Scheme != "https" && !(u.Scheme == "http" && isLoopback(u.Hostname())) {
 		return nil, fmt.Errorf("refusing to download %s: updates need HTTPS", rawURL)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return nil, err
+	client := httpClient()
+	for try := 0; ; try++ {
+		// Canceled when the body closes, or when nothing arrives: the one
+		// cancels the request of a body that stopped, the other ends a
+		// request whose response was refused.
+		reqCtx, cancel := context.WithCancel(ctx)
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, rawURL, nil)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+		// Not the app's name: GitHub's release assets come from a store that
+		// answers 400 to a User-Agent with bytes outside ASCII, as 云音乐, for
+		// every file its CDN has not cached yet.
+		req.Header.Set("User-Agent", "mygo-updater")
+		resp, err := client.Do(req)
+		var wait time.Duration
+		switch {
+		case err != nil:
+			cancel()
+			if ctx.Err() != nil || try >= len(httpRetries) {
+				return nil, err
+			}
+		case resp.StatusCode == http.StatusOK:
+			return newStalledBody(resp.Body, cancel), nil
+		default:
+			resp.Body.Close()
+			cancel()
+			if !transientStatus(resp.StatusCode) || try >= len(httpRetries) {
+				return nil, fmt.Errorf("GET %s: %s", rawURL, resp.Status)
+			}
+			wait = retryAfter(resp.Header.Get("Retry-After"))
+		}
+		wait = max(wait, httpRetries[try])
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(wait):
+		}
 	}
-	// Not the app's name: GitHub's release assets come from a store that
-	// answers 400 to a User-Agent with bytes outside ASCII, as 云音乐, for
-	// every file its CDN has not cached yet.
-	req.Header.Set("User-Agent", "mygo-updater")
-	resp, err := (&http.Client{Transport: netproxy.Transport()}).Do(req)
-	if err != nil {
-		return nil, err
+}
+
+// httpHeaderTimeout is how long the headers of a response may take to
+// arrive: the client has no deadline above the socket. Five minutes of a
+// check in the background would be five minutes without the next check.
+var httpHeaderTimeout = 30 * time.Second
+
+// httpStallTimeout is how long a body may send nothing before the download
+// is given up. A slow download is fine, however long it takes; one that
+// stopped is not, and its reads never return.
+var httpStallTimeout = time.Minute
+
+// httpClient is the client of the updater's requests: the transport of
+// package netproxy, so that the system's proxy settings apply, with the
+// deadline for the headers that it leaves to its callers. A test that needs
+// another deadline changes the transport for its run.
+var updateHTTPClient struct {
+	once   sync.Once
+	client *http.Client
+}
+
+func httpClient() *http.Client {
+	updateHTTPClient.once.Do(func() { updateHTTPClient.client = newHTTPClient() })
+	return updateHTTPClient.client
+}
+
+func newHTTPClient() *http.Client {
+	transport := netproxy.Transport().Clone()
+	transport.ResponseHeaderTimeout = httpHeaderTimeout
+	return &http.Client{Transport: transport}
+}
+
+// stalledBody cancels the request of a body that stops arriving, and says
+// so instead of the canceled request it would otherwise be read as.
+type stalledBody struct {
+	body   io.ReadCloser
+	cancel context.CancelFunc
+	// d is the timeout it was made with, which the watch reads in its own
+	// goroutine: reading the setting there would race with a test's change.
+	d time.Duration
+	// last is when the last byte arrived, in Unix nanoseconds; stalled is
+	// set once cancel was called, so that the error can say why; done ends
+	// the watch when the body closes.
+	last    atomic.Int64
+	stalled atomic.Bool
+	done    atomic.Bool
+	timer   *time.Timer
+}
+
+func newStalledBody(body io.ReadCloser, cancel context.CancelFunc) *stalledBody {
+	b := &stalledBody{body: body, cancel: cancel, d: httpStallTimeout}
+	b.last.Store(time.Now().UnixNano())
+	// Publish the timer before its callback can read it to rearm it.
+	b.timer = time.AfterFunc(1<<63-1, b.check)
+	b.timer.Stop()
+	b.timer.Reset(b.d / 4)
+	return b
+}
+
+// check cancels the request when nothing arrived for its timeout, and looks
+// again a quarter of that later otherwise: often enough to stop a download
+// soon after it stops, rarely enough to cost nothing while it runs.
+func (b *stalledBody) check() {
+	if b.done.Load() {
+		return
 	}
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return nil, fmt.Errorf("GET %s: %s", rawURL, resp.Status)
+	if time.Since(time.Unix(0, b.last.Load())) >= b.d {
+		b.stalled.Store(true)
+		b.cancel()
+		return
 	}
-	return resp.Body, nil
+	b.timer.Reset(b.d / 4)
+}
+
+func (b *stalledBody) Read(p []byte) (int, error) {
+	n, err := b.body.Read(p)
+	if n > 0 {
+		b.last.Store(time.Now().UnixNano())
+	}
+	if err != nil && b.stalled.Load() {
+		return n, errors.New("the download stalled: the connection sent nothing")
+	}
+	return n, err
+}
+
+func (b *stalledBody) Close() error {
+	b.done.Store(true)
+	b.timer.Stop()
+	b.cancel()
+	return b.body.Close()
+}
+
+// httpRetries are how long httpGet waits before each try after the first
+// of a request that failed for a while: three tries in all.
+var httpRetries = []time.Duration{time.Second, 3 * time.Second}
+
+// transientStatus reports whether a response of status code may succeed
+// when asked again: too many requests, or a server or gateway failing for
+// now.
+func transientStatus(code int) bool {
+	switch code {
+	case http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway,
+		http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	}
+	return false
+}
+
+// retryAfter is the wait of a Retry-After header in seconds, up to 30
+// seconds; 0 for none, or for a date.
+func retryAfter(h string) time.Duration {
+	n, err := strconv.Atoi(strings.TrimSpace(h))
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return min(time.Duration(n)*time.Second, 30*time.Second)
 }
 
 func isLoopback(host string) bool {

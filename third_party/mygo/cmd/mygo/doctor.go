@@ -81,7 +81,7 @@ func runDoctor(args []string) error {
 	if compiler := makensis(); compiler != "" || runtime.GOOS != "windows" {
 		optional("makensis", "the Windows installer, https://nsis.sourceforge.io", compiler != "", compiler)
 	} else {
-		fmt.Printf("- %-10s not found (mygo build downloads NSIS %s for the Windows installer)\n", "makensis", nsis.Release.Version)
+		fmt.Printf("- %-10s not found (mygo build downloads NSIS %s for the Windows installer, unless -skip-installer)\n", "makensis", nsis.Release.Version)
 	}
 	if runtime.GOOS == "windows" {
 		st := signtool()
@@ -92,10 +92,29 @@ func runDoctor(args []string) error {
 	}
 	gh := tool("gh")
 	optional("gh", "mygo build -upload to GitHub releases, https://cli.github.com", gh != "", gh)
+	// The tools of native libraries built from their sources.
+	cargo := tool("cargo")
+	optional("cargo", "native libraries in Rust, https://rustup.rs", cargo != "", cargo)
+	zig := tool("zig")
+	optional("zig", "native libraries in Zig, https://ziglang.org/download", zig != "", zig)
+	if cargo != "" {
+		zb := tool("cargo-zigbuild")
+		optional("zigbuild", "Rust libraries for older Linux and other platforms (cargo install cargo-zigbuild)", zb != "" && zig != "", zb)
+	}
 	if runtime.GOOS == "darwin" {
 		out, _ := exec.Command("security", "find-identity", "-v", "-p", "codesigning").Output()
 		ids := strings.Count(string(out), "Developer ID Application")
 		optional("codesign", "a Developer ID to sign apps for other Macs", ids > 0, fmt.Sprintf("%d Developer ID identities", ids))
+	}
+
+	// Phones: what is missing only warns, as desktop apps need none of it.
+	if runtime.GOOS == "darwin" {
+		for _, l := range iosDoctorLines(probeIOS()) {
+			l.print()
+		}
+	}
+	for _, l := range androidDoctorLines(probeAndroid()) {
+		l.print()
 	}
 
 	if !ok {

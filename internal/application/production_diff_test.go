@@ -3,6 +3,8 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +14,7 @@ import (
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/process"
 	"silverwing-go/internal/production"
+	"silverwing-go/internal/snowball/genbuapi"
 	"silverwing-go/internal/storage"
 	"silverwing-go/internal/workspace"
 )
@@ -81,21 +84,44 @@ func TestProductionDiffActionsReadOnlyAcrossPayloads(t *testing.T) {
 	config := domain.DefaultAppConfig()
 	config.TaskRoot = &paths.Tasks
 	config.Repositories = []domain.RepositoryConfig{{ID: "repo", Name: "synthetic", RootPath: repo, GitCommonDirectory: filepath.Join(repo, ".git")}}
-	config.Groups[0].Services = []domain.GroupServiceConfig{{ID: "service", RepositoryID: "repo", DisplayName: "synthetic", Enabled: true, MasterBranch: "origin/master", TestTagBaselineRef: "origin/release/test", GenbuServiceName: "synthetic", DevelopmentTool: domain.DevelopmentToolVisualStudioCode,
+	config.Services = []domain.GroupServiceConfig{{ID: "service", RepositoryID: "repo", DisplayName: "synthetic", Enabled: true, MasterBranch: "origin/master", TestTagBaselineRef: "origin/release/test", GenbuServiceName: "synthetic", DevelopmentTool: domain.DevelopmentToolVisualStudioCode,
 		Modules: []domain.ServiceModuleConfig{{ID: "default", Name: "default", Strategy: domain.WorkspaceStandardWorktree, TagMode: domain.TagBuildMergeToTargetBranch}}}}
 	if err := a.Config.Save(config); err != nil {
 		t.Fatal(err)
 	}
+	useVerifiedGenbuFixture(t, a)
 	service, err := a.productionService()
 	if err != nil {
 		t.Fatal(err)
 	}
 	service.Genbu = productionDiffGenbu{}
-	preview, err := service.Inspect(context.Background(), production.Selection{GroupID: config.Groups[0].ID, ServiceID: "service"}, "1.0.1")
+	preview, err := service.Inspect(context.Background(), production.Selection{ServiceID: "service"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	beforeRefs := run(repo, "show-ref")
+	t.Run("production-baseline-rejects-manual-override", func(t *testing.T) {
+		installFixtureGenbuHTTP(t, a, []string{"synthetic"}, 0, nil)
+		transport := a.connections.transport
+		a.connections.transport = platformFixtureTransport(func(req *http.Request) (*http.Response, error) {
+			switch req.URL.Path {
+			case genbuapi.PodGroupPath:
+				return platformFixtureResponse(`{"code":20000,"response":{"groups":[{"group_id":1,"name":"stable","namespace":"fixture","match_labels":"test"}]}}`)
+			case genbuapi.PodPath:
+				return platformFixtureResponse(`{"code":20000,"response":[{"pod_name":"a","app_version":"1.0.1","phase":"Running","ready":true,"restart_count":0},{"pod_name":"b","app_version":"1.0.2","phase":"Running","ready":true,"restart_count":0}]}`)
+			default:
+				return transport.RoundTrip(req)
+			}
+		})
+		result, err := a.Dispatch(context.Background(), Action{Kind: "production.inspect", ServiceID: "service", Payload: map[string]any{"productionTag": "1.0.1"}})
+		if !errors.Is(err, production.ErrProductionBaselineUnavailable) {
+			t.Fatalf("expected automatic baseline error, got %v", err)
+		}
+		report := result.Data.(production.Report)
+		if report.Preview == nil || len(report.Preview.ProductionCandidates) != 2 || report.Preview.ProductionTag != "" || report.Preview.ProductionSHA != "" || len(report.Batches) != 0 {
+			t.Fatalf("expected two candidates and no baseline, got %+v with %v", report.Preview, err)
+		}
+	})
 	for _, legacy := range []bool{false, true} {
 		for _, wire := range []bool{false, true} {
 			for _, incoming := range []bool{false, true} {
@@ -203,7 +229,7 @@ func TestProductionDiffActionsReadOnlyAcrossPayloads(t *testing.T) {
 	})
 	t.Run("config-changed", func(t *testing.T) {
 		_, err := a.Config.Update(func(c domain.AppConfig) (domain.AppConfig, error) {
-			c.Groups[0].Services[0].MasterBranch = "origin/another-main"
+			c.Services[0].MasterBranch = "origin/another-main"
 			return c, nil
 		})
 		if err != nil {

@@ -38,8 +38,8 @@ func TestAnnualRequirementReuseAndDuplicates(t *testing.T) {
 
 func TestAnnualPlanRaceReusesWinnerAndCapturedYear(t *testing.T) {
 	root := annualCollectionRoot(t)
-	sub := "资料"
-	config := domain.AppConfig{RequirementMaterialsRoot: &root, RequirementMaterialsSubdirectory: &sub}
+	repository, sub := filepath.Dir(root), "资料"
+	config := domain.AppConfig{RequirementMaterialsRoot: &repository, RequirementMaterialsSubdirectory: &sub}
 	service := NewPreparationService(storage.NewPaths(t.TempDir()), nil)
 	ctx := WithMaterialsCreationTime(context.Background(), time.Date(2024, 12, 31, 20, 0, 0, 0, time.Local))
 	link := "https://project.feishu.cn/obt/userstory/detail/123"
@@ -138,12 +138,12 @@ func TestAnnualScopeTempAndPermissions(t *testing.T) {
 
 func TestAnnualPreviewDoesNotCreateAndEnsureReuses(t *testing.T) {
 	root := annualCollectionRoot(t)
-	sub := "文档"
+	repository, sub := filepath.Dir(root), "文档"
 	existing := filepath.Join(root, "2023", "123-老名字")
 	if err := os.MkdirAll(existing, 0755); err != nil {
 		t.Fatal(err)
 	}
-	config := domain.AppConfig{RequirementMaterialsRoot: &root, RequirementMaterialsSubdirectory: &sub}
+	config := domain.AppConfig{RequirementMaterialsRoot: &repository, RequirementMaterialsSubdirectory: &sub}
 	service := NewPreparationService(storage.NewPaths(t.TempDir()), nil)
 	link := "https://project.feishu.cn/obt/userstory/detail/123"
 	preview, err := service.Preview(context.Background(), config, link, "新名字")

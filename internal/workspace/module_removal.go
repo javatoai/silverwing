@@ -105,7 +105,7 @@ func (s *WorkspaceModuleRemovalService) Remove(ctx context.Context, config domai
 		return WorkspaceModuleRemovalResult{}, errModuleRemovalChanged
 	}
 	var result WorkspaceModuleRemovalResult
-	err := s.Locks.WithTaskRoot(stringValue(config.TaskRoot), func() error {
+	err := s.Locks.WithTaskRoot(s.Locks.TaskRoot(config), func() error {
 		return s.withModuleRemovalTarget(ctx, config, taskPath, preview.WorkspacePath, func(l *WorkspaceLifecycle, target moduleRemovalTarget) error {
 			current, risk, err := target.inspect(ctx, l.Git)
 			if err != nil {
@@ -144,14 +144,15 @@ func (s *WorkspaceModuleRemovalService) withModuleRemovalTarget(ctx context.Cont
 		if err != nil {
 			return err
 		}
-		if config.TaskRoot == nil || strings.TrimSpace(*config.TaskRoot) == "" || !samePath(filepath.Dir(taskPath), *config.TaskRoot) {
+		root := s.Locks.TaskRoot(config)
+		if root == "" || !samePath(filepath.Dir(taskPath), root) {
 			return fmt.Errorf("任务目录与配置的任务根目录不匹配：%s", taskPath)
 		}
 		taskIdentity, err := documents.DirectoryFingerprint(taskPath)
 		if err != nil {
 			return err
 		}
-		entry, err := s.Manifests.LoadTask(*config.TaskRoot, filepath.Base(taskPath))
+		entry, err := s.Manifests.LoadTask(root, filepath.Base(taskPath))
 		if err != nil {
 			return err
 		}
@@ -193,7 +194,7 @@ func (s *WorkspaceModuleRemovalService) withModuleRemovalTarget(ctx context.Cont
 			target.repository = repo
 			return s.Locks.WithRepository(repo.GitCommonDirectory, run)
 		case domain.WorkspaceIndependentClone:
-			return s.Locks.WithRepository(filepath.Join(path, ".git"), run)
+			return s.Locks.WithIndependentCheckout(path, run)
 		default:
 			return fmt.Errorf("未知工作区策略：%s", ws.Strategy)
 		}
@@ -305,7 +306,7 @@ func (s *WorkspaceModuleRemovalService) recycleModule(ctx context.Context, l *Wo
 	if err := taskscope.Validate(ctx, config, target.taskPath, target.manifest); err != nil {
 		return WorkspaceModuleRemovalResult{}, err
 	}
-	taskContext, err := captureWorkspaceTaskContext(target.taskPath)
+	taskAgents, err := captureWorkspaceTaskAgents(target.taskPath)
 	if err != nil {
 		return WorkspaceModuleRemovalResult{}, err
 	}
@@ -327,7 +328,7 @@ func (s *WorkspaceModuleRemovalService) recycleModule(ctx context.Context, l *Wo
 	}
 	manifestSaved := false
 	fail := func(primary error) (WorkspaceModuleRemovalResult, error) {
-		rollbackErr := s.rollbackModuleRemoval(target, taskContext, updated, manifestSaved)
+		rollbackErr := s.rollbackModuleRemoval(target, taskAgents, updated, manifestSaved)
 		if rollbackErr != nil {
 			return WorkspaceModuleRemovalResult{}, fmt.Errorf("模块回收失败且自动恢复未完成：%w", errors.Join(primary, rollbackErr))
 		}
@@ -351,7 +352,7 @@ func (s *WorkspaceModuleRemovalService) recycleModule(ctx context.Context, l *Wo
 		return fail(err)
 	}
 	manifestSaved = true
-	if err := taskContext.write(s.Documents, updated, config); err != nil {
+	if err := taskAgents.write(s.Documents, updated, config); err != nil {
 		return fail(err)
 	}
 	result := WorkspaceModuleRemovalResult{Manifest: updated}
@@ -393,7 +394,7 @@ func (s *WorkspaceModuleRemovalService) recycleModule(ctx context.Context, l *Wo
 	return result, nil
 }
 
-func (s *WorkspaceModuleRemovalService) rollbackModuleRemoval(target moduleRemovalTarget, taskContext *workspaceTaskContextUpdate, updated domain.TaskManifest, manifestSaved bool) error {
+func (s *WorkspaceModuleRemovalService) rollbackModuleRemoval(target moduleRemovalTarget, taskAgents *workspaceTaskAgentsUpdate, updated domain.TaskManifest, manifestSaved bool) error {
 	if !manifestSaved {
 		return nil
 	}
@@ -403,7 +404,7 @@ func (s *WorkspaceModuleRemovalService) rollbackModuleRemoval(target moduleRemov
 	if err := s.checkModuleRemovalManifest(target.taskPath, updated); err != nil {
 		return err
 	}
-	return errors.Join(s.Manifests.Save(target.taskPath, target.manifest), taskContext.rollback())
+	return errors.Join(s.Manifests.Save(target.taskPath, target.manifest), taskAgents.rollback())
 }
 
 func (s *WorkspaceModuleRemovalService) checkModuleRemovalManifest(path string, expected domain.TaskManifest) error {

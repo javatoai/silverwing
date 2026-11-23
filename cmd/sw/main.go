@@ -15,7 +15,7 @@ import (
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/buildinfo"
 	"silverwing-go/internal/domain"
-	"silverwing-go/internal/productprofile"
+	"silverwing-go/internal/profilelaunch"
 )
 
 const (
@@ -25,7 +25,7 @@ const (
 )
 
 const usage = `用法:
-  sw [--home <目录>] [--json] tag <命令> [选项]
+  sw [--conf-dir <目录>] [--json] tag <命令> [选项]
   sw --version
 
 命令:
@@ -49,11 +49,12 @@ const usage = `用法:
     sw tag notify --batch <ID> [--task <任务目录名>]
 
 选项:
-  --home <目录>: 指定 Silverwing 数据目录，默认使用本机桌面数据目录。
+  --conf-dir <目录>: 指定 Silverwing 数据目录，默认使用本机桌面数据目录。
+  --home <目录>: --conf-dir 的兼容别名。
   --json: 输出结构化 JSON，默认输出中文结果。
   --version: 显示版本。
   --help, -h: 显示帮助。
-  --home 和 --json 也可放在子命令之后。
+  --conf-dir、--home 和 --json 也可放在子命令之后。
 
 退出码:
   0: 成功
@@ -85,8 +86,9 @@ func main() {
 
 func run(ctx context.Context, args []string, out, stderr io.Writer) int {
 	var o options
+	var directories profilelaunch.DirectoryFlags
 	global := newCLIFlagSet("sw")
-	global.StringVar(&o.home, "home", "", "Silverwing 数据目录")
+	directories.Register(global)
 	global.BoolVar(&o.asJSON, "json", false, "JSON 输出")
 	version := global.Bool("version", false, "显示版本")
 	if err := global.Parse(args); err != nil {
@@ -110,7 +112,7 @@ func run(ctx context.Context, args []string, out, stderr io.Writer) int {
 	}
 	o.command = args[1]
 	flags := newCLIFlagSet("sw tag " + o.command)
-	flags.StringVar(&o.home, "home", o.home, "Silverwing 数据目录")
+	directories.Register(flags)
 	flags.BoolVar(&o.asJSON, "json", o.asJSON, "JSON 输出")
 	flags.StringVar(&o.task, "task", "", "任务目录名")
 	switch o.command {
@@ -134,19 +136,28 @@ func run(ctx context.Context, args []string, out, stderr io.Writer) int {
 	if err := flags.Parse(args[2:]); err != nil {
 		return flagExit(stderr, err)
 	}
+	blankNamespace := false
+	flags.Visit(func(f *flag.Flag) {
+		blankNamespace = blankNamespace || f.Name == "namespace" && strings.TrimSpace(o.namespace) == ""
+	})
+	if blankNamespace {
+		return o.outputResult(out, stderr, nil, exitUsage, errors.New("请为 --namespace 指定 UAT namespace"))
+	}
 	if flags.NArg() != 0 {
 		return o.outputResult(out, stderr, nil, exitUsage, errors.New("存在多余参数"))
 	}
 	if err := o.validate(); err != nil {
 		return o.outputResult(out, stderr, nil, exitUsage, err)
 	}
-	if o.home == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return o.outputResult(out, stderr, nil, exitError, err)
+	home, err := directories.Resolve()
+	if err != nil {
+		code := exitError
+		if directories.Explicit() {
+			code = exitUsage
 		}
-		o.home = productprofile.DefaultHome(home)
+		return o.outputResult(out, stderr, nil, code, err)
 	}
+	o.home = home
 	app, err := application.NewTagCLI(o.home)
 	if err != nil {
 		return o.outputResult(out, stderr, nil, exitError, err)

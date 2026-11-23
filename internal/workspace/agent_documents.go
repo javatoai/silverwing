@@ -16,14 +16,13 @@ import (
 )
 
 const (
-	AgentRouterFileName  = "AGENTS.md"
-	AgentWorkspaceDir    = ".workspace"
-	AgentDirectoryName   = "agent"
-	AgentContextFileName = "TASK-CONTEXT.md"
-	AgentRulesFileName   = "TASK-RULES.md"
-	HandoffFileName      = "HANDOFF.md"
-	legacyTaskScopeRule  = "只允许修改 `TASK-CONTEXT.md` 中“Worktree 范围”标明可改动的 Worktree。"
-	taskScopeRule        = "修改范围以 `TASK-CONTEXT.md` 中的任务范围说明为准；未关联服务时可在任务目录处理分析和文档。"
+	AgentRouterFileName = "AGENTS.md"
+	AgentWorkspaceDir   = ".workspace"
+	AgentDirectoryName  = "agent"
+	AgentRulesFileName  = "TASK-RULES.md"
+	HandoffFileName     = "HANDOFF.md"
+	legacyTaskScopeRule = "只允许修改 `TASK-CONTEXT.md` 中“Worktree 范围”标明可改动的 Worktree。"
+	taskScopeRule       = "修改范围以 `TASK-CONTEXT.md` 中的任务范围说明为准；未关联服务时可在任务目录处理分析和文档。"
 )
 
 type AgentDocumentPreviewFile struct {
@@ -93,14 +92,13 @@ func (s *AgentDocumentService) SaveGroup(groupID, content string) error {
 	return writeAtomicDocument(path, content)
 }
 
-// EnsureTaskDocuments initializes or refreshes generated files. User-authored
-// TASK-RULES.md and existing root AGENTS.md are preserved unless notes are given.
+// EnsureTaskDocuments initializes missing generated files and refreshes task context.
 func (s *AgentDocumentService) EnsureTaskDocuments(taskPath string, manifest domain.TaskManifest, config domain.AppConfig) (string, error) {
-	return s.writeTaskDocuments(taskPath, manifest, repositoryInfos(config), nil, true)
+	return s.writeTaskDocuments(taskPath, manifest, config, nil, true)
 }
 
 func (s *AgentDocumentService) WriteTaskDocument(taskPath string, manifest domain.TaskManifest, config domain.AppConfig) (string, error) {
-	return s.writeTaskDocuments(taskPath, manifest, repositoryInfos(config), nil, false)
+	return s.writeTaskDocuments(taskPath, manifest, config, nil, false)
 }
 
 func (s *AgentDocumentService) WriteTaskNotes(taskPath, notes string) error {
@@ -194,72 +192,74 @@ func (s *AgentDocumentService) RenderPreview(taskPath string, manifest domain.Ta
 	return preview
 }
 
-func (s *AgentDocumentService) RenderPreviewChecked(taskPath string, manifest domain.TaskManifest, config domain.AppConfig, taskNotes string) (AgentDocumentPreview, error) {
+func (s *AgentDocumentService) RenderPreviewChecked(_ string, manifest domain.TaskManifest, config domain.AppConfig, taskNotes string) (AgentDocumentPreview, error) {
 	block, err := materialsCatalog(manifest, true)
 	if err != nil {
 		return AgentDocumentPreview{}, err
 	}
-	context := renderTaskContext(manifest, repositoryInfos(config), s.Paths)
-	if block != "" {
-		context, err = replaceMaterialsCatalog(context, block, true)
-		if err != nil {
-			return AgentDocumentPreview{}, err
-		}
+	files := []AgentDocumentPreviewFile{
+		{RelativePath: AgentRouterFileName, Content: s.renderTaskAgents(manifest, config, block)},
 	}
-	root := renderBaseRouter(manifest, s.Paths)
-	if block != "" {
-		root += "\n" + block
+	if s.Paths.ProfileID == "" {
+		files = append(files, AgentDocumentPreviewFile{RelativePath: filepath.ToSlash(filepath.Join(AgentWorkspaceDir, AgentDirectoryName, AgentRulesFileName)), Content: trimTaskNotesEnd(taskNotes)})
 	}
-	return AgentDocumentPreview{Files: []AgentDocumentPreviewFile{
-		{RelativePath: AgentRouterFileName, Content: root},
-		{RelativePath: filepath.ToSlash(filepath.Join(AgentWorkspaceDir, AgentDirectoryName, AgentContextFileName)), Content: context},
-		{RelativePath: filepath.ToSlash(filepath.Join(AgentWorkspaceDir, AgentDirectoryName, AgentRulesFileName)), Content: trimTaskNotesEnd(taskNotes)},
-	}}, nil
+	return AgentDocumentPreview{Files: files}, nil
 }
 
 func (s *AgentDocumentService) taskNotesPath(taskPath string) string {
 	return filepath.Join(taskPath, AgentWorkspaceDir, AgentDirectoryName, AgentRulesFileName)
 }
 
-func (s *AgentDocumentService) writeTaskDocuments(taskPath string, manifest domain.TaskManifest, repositories []domain.RepositoryInfo, taskNotes *string, restoreRoot bool) (string, error) {
-	if err := os.MkdirAll(taskPath, 0o755); err != nil {
-		return "", err
-	}
+type taskDocumentWriteOptions struct {
+	restoreRoot, regenerate bool
+}
+
+func (s *AgentDocumentService) writeTaskDocuments(taskPath string, manifest domain.TaskManifest, config domain.AppConfig, taskNotes *string, restoreRoot bool) (string, error) {
+	return s.writeTaskDocumentsWithOptions(taskPath, manifest, config, taskNotes, taskDocumentWriteOptions{restoreRoot: restoreRoot})
+}
+
+func (s *AgentDocumentService) regenerateTaskDocuments(taskPath string, manifest domain.TaskManifest, config domain.AppConfig) (string, error) {
+	manifest = documents.ResolveBoundTaskMaterials(manifest, config)
+	return s.writeTaskDocumentsWithOptions(taskPath, manifest, config, nil, taskDocumentWriteOptions{restoreRoot: true, regenerate: true})
+}
+
+func (s *AgentDocumentService) writeTaskDocumentsWithOptions(taskPath string, manifest domain.TaskManifest, config domain.AppConfig, taskNotes *string, options taskDocumentWriteOptions) (string, error) {
 	root := filepath.Join(taskPath, AgentRouterFileName)
-	if restoreRoot {
-		if _, err := os.Stat(root); os.IsNotExist(err) {
-			if err := writeAtomicDocument(root, renderRootRouter(manifest, s.Paths)); err != nil {
+	profile := s.Paths.ProfileID != ""
+	if profile {
+		if err := NewTaskOperationLocks(s.Paths).ValidateWorkspaceDirectory(config, taskPath, manifest); err != nil {
+			return "", err
+		}
+	} else {
+		if err := os.MkdirAll(taskPath, 0o755); err != nil {
+			return "", err
+		}
+		if options.regenerate {
+			if err := validateAgentTaskDocumentPaths(taskPath, filepath.Join(AgentWorkspaceDir, AgentDirectoryName, AgentRulesFileName)); err != nil {
 				return "", err
 			}
-		} else if err != nil {
-			return "", err
 		}
 	}
-	// Upgrade only the exact old generated router. Custom/user-edited AGENTS.md
-	// stays intact, including when the final workspace is removed.
-	router := renderRootRouter(manifest, s.Paths)
-	legacyRouter := strings.Replace(router, taskScopeRule, legacyTaskScopeRule, 1)
-	if content, err := os.ReadFile(root); err == nil && string(content) == legacyRouter {
-		if err := writeAtomicDocument(root, router); err != nil {
-			return "", err
-		}
+	if err := s.writeTaskInstructions(taskPath, manifest, config, options.restoreRoot, true); err != nil {
+		return "", err
 	}
 	if _, err := s.EnsureGlobalFile(); err != nil {
 		return "", err
 	}
-	if _, err := s.EnsureGroupFile(manifest.GroupID); err != nil {
-		return "", err
+	if !profile {
+		if _, err := s.EnsureGroupFile(manifest.GroupID); err != nil {
+			return "", err
+		}
 	}
-	agentDir := filepath.Join(taskPath, AgentWorkspaceDir, AgentDirectoryName)
-	if err := writeIfChanged(filepath.Join(agentDir, AgentContextFileName), renderTaskContext(manifest, repositories, s.Paths)); err != nil {
-		return "", err
-	}
-	if err := s.RefreshMaterialsDirectories(taskPath, manifest, domain.AppConfig{}, nil); err != nil {
+	if err := s.RefreshMaterialsDirectories(taskPath, manifest, config, nil); err != nil {
 		s.catalogWarningsMu.Lock()
 		s.catalogWarnings = append(s.catalogWarnings, err)
 		s.catalogWarningsMu.Unlock()
 	}
-	rules := filepath.Join(agentDir, AgentRulesFileName)
+	if profile {
+		return root, nil
+	}
+	rules := s.taskNotesPath(taskPath)
 	if taskNotes != nil {
 		if err := writeIfChanged(rules, trimTaskNotesEnd(*taskNotes)); err != nil {
 			return "", err
@@ -274,13 +274,8 @@ func (s *AgentDocumentService) writeTaskDocuments(taskPath string, manifest doma
 	return root, nil
 }
 
-func renderBaseRouter(manifest domain.TaskManifest, paths storage.Paths) string {
-	groupPath, err := paths.GroupAgents(manifest.GroupID)
-	if err != nil {
-		groupPath = "<无效组 ID>"
-	}
-	globalPath := absoluteClean(paths.GlobalAgents)
-	groupPath = absoluteClean(groupPath)
+// Used only to recognize and replace the exact old generated preamble.
+func renderLegacyTaskRouter(globalPath, groupPath string) string {
 	var b strings.Builder
 	b.WriteString("# 任务说明\n\n")
 	b.WriteString("> 本文件是稳定的系统路由。不要在这里写任务专属要求；请编辑 `.workspace/agent/TASK-RULES.md`。\n\n")
@@ -292,23 +287,6 @@ func renderBaseRouter(manifest domain.TaskManifest, paths storage.Paths) string 
 	b.WriteString("### 全局规则\n\n`" + globalPath + "`\n\n")
 	b.WriteString("### 组规则\n\n`" + groupPath + "`\n\n")
 	b.WriteString("### 规则优先级\n\n发生冲突时按：任务专属规则 > 组规则 > 全局规则。\n")
-	return b.String()
-}
-
-func renderTaskContext(manifest domain.TaskManifest, repositories []domain.RepositoryInfo, _ storage.Paths) string {
-	var b strings.Builder
-	b.WriteString("# 任务上下文\n\n> 本文件由系统生成，会随需求、任务上下文、服务和 Worktree 变动更新。\n\n")
-	b.WriteString(renderTaskFacts(manifest))
-	b.WriteString("## 系统元数据\n\n- 任务清单是只读元数据；不要手动改写。\n")
-	b.WriteString("- `.workspace/HANDOFF.md` 存在时，是 Agent CLI 任务的交接记录。\n\n")
-	b.WriteString(renderWorktreeScope(manifest, repositories))
-	block, err := materialsCatalog(manifest, false)
-	if err != nil {
-		block, _ = materialsCatalog(manifest, true)
-	}
-	if block != "" {
-		b.WriteString("\n" + block)
-	}
 	return b.String()
 }
 
@@ -430,14 +408,6 @@ func stringValue(value *string) string {
 	return *value
 }
 func escapeTableCell(value string) string { return strings.ReplaceAll(value, "|", "\\|") }
-func absoluteClean(path string) string {
-	absolute, err := filepath.Abs(path)
-	if err != nil {
-		return filepath.Clean(path)
-	}
-	return filepath.Clean(absolute)
-}
-
 func readDocument(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {

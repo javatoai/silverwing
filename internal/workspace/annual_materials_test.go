@@ -15,15 +15,19 @@ import (
 
 func TestAnnualGitFullRepositoryIncludesTempAndNonAnnual(t *testing.T) {
 	f := newMaterialsGitFixture(t, true)
-	scope, _ := documents.AnnualScope(filepath.Join(f.root, "2026", "123-需求", "研发"))
+	paths, err := documents.EnsureMaterialsPaths(f.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, _ := documents.AnnualScope(filepath.Join(paths.Requirements, "2026", "123-需求", "研发"))
 	if err := scope.EnsureLocal(); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"2026/123-需求/temp/log.txt", "123-平铺/研发/old.md", "outside.txt", ".silverwing-persistent.json"} {
+	for _, path := range []string{"requirements/2026/123-需求/temp/log.txt", "123-平铺/研发/old.md", "outside.txt", ".silverwing-persistent.json"} {
 		materialsGitTestFile(t, f.root, path, "native content")
 	}
 	f.sync()
-	for _, path := range []string{"2026/123-需求/temp/log.txt", "123-平铺/研发/old.md", "outside.txt", ".silverwing-persistent.json"} {
+	for _, path := range []string{"requirements/2026/123-需求/temp/log.txt", "123-平铺/研发/old.md", "outside.txt", ".silverwing-persistent.json"} {
 		if content := materialsGitTestRun(t, f.remote, "show", "master:"+path); content != "native content" {
 			t.Fatal(path, content)
 		}
@@ -35,7 +39,7 @@ func TestAnnualGitFullRepositoryIncludesTempAndNonAnnual(t *testing.T) {
 
 func TestAnnualGitTempNativeDirtyCollisionStops(t *testing.T) {
 	f := newMaterialsGitFixture(t, true)
-	path := "2026/123-需求/temp/log.txt"
+	path := "requirements/2026/123-需求/temp/log.txt"
 	materialsGitTestFile(t, f.root, path, "initial temp")
 	f.sync()
 	materialsGitTestRun(t, f.seed, "pull", "--ff-only", "origin", "master")
@@ -60,12 +64,12 @@ func TestAnnualGitTempNativeDirtyCollisionStops(t *testing.T) {
 func TestAnnualGitManualPeerCommitUsesNativeHistory(t *testing.T) {
 	f := newMaterialsGitFixture(t, true)
 	f.sync()
-	materialsGitTestFile(t, f.root, "2026/123-需求/产品/design.md", "manual peer edit")
-	materialsGitTestRun(t, f.root, "add", "--", "2026/123-需求/产品/design.md")
+	materialsGitTestFile(t, f.root, "requirements/2026/123-需求/产品/design.md", "manual peer edit")
+	materialsGitTestRun(t, f.root, "add", "--", "requirements/2026/123-需求/产品/design.md")
 	materialsGitTestRun(t, f.root, "commit", "-m", "manual peer")
-	materialsGitTestFile(t, f.root, "2026/123-需求/研发/new.txt", "owned")
+	materialsGitTestFile(t, f.root, "requirements/2026/123-需求/研发/new.txt", "owned")
 	f.sync()
-	if content := materialsGitTestRun(t, f.remote, "show", "master:2026/123-需求/产品/design.md"); content != "manual peer edit" {
+	if content := materialsGitTestRun(t, f.remote, "show", "master:requirements/2026/123-需求/产品/design.md"); content != "manual peer edit" {
 		t.Fatal(content)
 	}
 }
@@ -73,24 +77,24 @@ func TestAnnualGitManualPeerCommitUsesNativeHistory(t *testing.T) {
 func TestAnnualGitPeerRenameDeleteAndDirtyCollision(t *testing.T) {
 	f := newMaterialsGitFixture(t, true)
 	f.sync()
-	materialsGitTestFile(t, f.seed, "2026/123-需求/测试/case.md", "case")
-	materialsGitTestRun(t, f.seed, "mv", "2026/123-需求/产品", "2026/123-需求/产品新版")
+	materialsGitTestFile(t, f.seed, "requirements/2026/123-需求/测试/case.md", "case")
+	materialsGitTestRun(t, f.seed, "mv", "requirements/2026/123-需求/产品", "requirements/2026/123-需求/产品新版")
 	materialsGitTestRun(t, f.seed, "add", ".")
 	materialsGitTestRun(t, f.seed, "commit", "-m", "peer rename")
 	materialsGitTestRun(t, f.seed, "push", "origin", "master")
 	f.sync()
-	if _, err := os.Stat(filepath.Join(f.root, "2026/123-需求/产品新版/design.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(f.root, "requirements/2026/123-需求/产品新版/design.md")); err != nil {
 		t.Fatal(err)
 	}
-	materialsGitTestFile(t, f.root, "2026/123-需求/测试/case.md", "unsaved externally")
-	materialsGitTestRun(t, f.seed, "rm", "2026/123-需求/测试/case.md")
+	materialsGitTestFile(t, f.root, "requirements/2026/123-需求/测试/case.md", "unsaved externally")
+	materialsGitTestRun(t, f.seed, "rm", "requirements/2026/123-需求/测试/case.md")
 	materialsGitTestRun(t, f.seed, "commit", "-m", "peer delete")
 	materialsGitTestRun(t, f.seed, "push", "origin", "master")
 	status, err := f.service.Sync(context.Background(), f.scope, true, nil)
 	if err == nil || !status.Paused {
 		t.Fatal("dirty peer did not pause", status, err)
 	}
-	if data, _ := os.ReadFile(filepath.Join(f.root, "2026/123-需求/测试/case.md")); string(data) != "unsaved externally" {
+	if data, _ := os.ReadFile(filepath.Join(f.root, "requirements/2026/123-需求/测试/case.md")); string(data) != "unsaved externally" {
 		t.Fatal("lost peer changes")
 	}
 }
@@ -115,7 +119,8 @@ func annualAgentFixture(t *testing.T) (*AgentDocumentService, domain.TaskManifes
 	m.RequirementLink = "https://project.feishu.cn/obt/userstory/detail/123"
 	m.RequirementMaterials = domain.RequirementMaterialsDirectory{Status: domain.MaterialsReady, WriteRoot: &owned}
 	config := domain.DefaultAppConfig()
-	config.RequirementMaterialsRoot = &scope.Base
+	repository := filepath.Dir(scope.Base)
+	config.RequirementMaterialsRoot = &repository
 	sub := "文档"
 	config.RequirementMaterialsSubdirectory = &sub
 	manifests := storage.NewManifestStore()
@@ -133,19 +138,17 @@ func annualAgentFixture(t *testing.T) (*AgentDocumentService, domain.TaskManifes
 // directory change alone no longer requires rewriting generic instructions.
 func markMaterialsCatalogStale(t *testing.T, task string) {
 	t.Helper()
-	for _, relative := range []string{AgentRouterFileName, filepath.Join(AgentWorkspaceDir, AgentDirectoryName, AgentContextFileName)} {
-		path := filepath.Join(task, relative)
-		data, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.Count(string(data), materialsCatalogEnd) != 1 {
-			t.Fatal("missing managed block", path)
-		}
-		next := strings.Replace(string(data), materialsCatalogEnd, "旧版本资料目录说明，等待迁移\n"+materialsCatalogEnd, 1)
-		if err := os.WriteFile(path, []byte(next), 0600); err != nil {
-			t.Fatal(err)
-		}
+	path := filepath.Join(task, AgentRouterFileName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(data), materialsCatalogEnd) != 1 {
+		t.Fatal("missing managed block", path)
+	}
+	next := strings.Replace(string(data), materialsCatalogEnd, "旧版本资料目录说明，等待迁移\n"+materialsCatalogEnd, 1)
+	if err := os.WriteFile(path, []byte(next), 0600); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -178,11 +181,9 @@ func TestAnnualAgentCatalogPreservesNotesAndNoOp(t *testing.T) {
 	if err := service.RefreshMaterialsDirectories(task, m, c, nil); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []string{root, filepath.Join(task, AgentWorkspaceDir, AgentDirectoryName, AgentContextFileName)} {
-		data, _ := os.ReadFile(p)
-		if strings.Contains(string(data), peer) || !strings.Contains(string(data), scope.Owned) || !strings.Contains(string(data), "主动阅读") || !strings.Contains(string(data), "只读") {
-			t.Fatal("catalog missing", p, string(data))
-		}
+	updated, err := os.ReadFile(root)
+	if err != nil || strings.Contains(string(updated), peer) || !strings.Contains(string(updated), scope.Owned) || !strings.Contains(string(updated), "主动阅读") || !strings.Contains(string(updated), "只读") || strings.Count(string(updated), materialsCatalogStart) != 1 {
+		t.Fatal("missing or repeated catalog", string(updated), err)
 	}
 	if data, _ := os.ReadFile(root); !strings.Contains(string(data), "用户追加内容") {
 		t.Fatal("user content lost")

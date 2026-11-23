@@ -1,11 +1,16 @@
 package application
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/storage"
 	"silverwing-go/internal/workspace"
 )
 
@@ -16,7 +21,7 @@ type scopedOpenTool struct {
 }
 
 func (*scopedOpenTool) Descriptor() workspace.TaskWorkspaceToolDescriptor {
-	return workspace.TaskWorkspaceToolDescriptor{ID: "cursor", DisplayName: "Cursor"}
+	return workspace.TaskWorkspaceToolDescriptor{ID: "codex", DisplayName: "Codex"}
 }
 func (l *scopedOpenTool) Availability(context.Context) workspace.TaskWorkspaceToolAvailability {
 	if l.available != nil {
@@ -48,7 +53,7 @@ func TestTaskOpenToolsScopeRecheckedBeforeLaunch(t *testing.T) {
 			}
 			action := taskContextActionForTest(t, app, config, manifest, path, "task.tools-launch")
 			action.Path = path
-			action.Payload["toolIds"] = []string{"cursor"}
+			action.Payload["toolIds"] = []string{"codex"}
 			validation := app.validateDesktopTaskContext(action, config, manifest, path)
 			if mode == "disabled-before" {
 				if !errors.Is(validation, errDesktopTaskContextChanged) {
@@ -89,7 +94,7 @@ func TestTaskOpenToolsScopeRecheckedBeforeLaunch(t *testing.T) {
 				cancel()
 				ctx = canceled
 			}
-			updated, err := service.LaunchWorkspaceTools(ctx, path, manifest, []string{"cursor"})
+			updated, err := service.LaunchWorkspaceTools(ctx, config, path, manifest, []string{"codex"})
 			if mode == "active" || mode == "archived" {
 				if err != nil || launcher.calls != 1 || launcher.directory != path || len(updated.Services) != 0 {
 					t.Fatalf("launch: %v %d %q", err, launcher.calls, launcher.directory)
@@ -98,5 +103,59 @@ func TestTaskOpenToolsScopeRecheckedBeforeLaunch(t *testing.T) {
 				t.Fatalf("stale tool opened: %v calls=%d", err, launcher.calls)
 			}
 		})
+	}
+}
+
+func TestRetiredWorkspaceToolActionsLeaveManifestIntact(t *testing.T) {
+	app, _, manifest, path := taskContextScopeFixture(t)
+	manifest.WorkspaceToolLaunches = []domain.WorkspaceToolLaunch{
+		{ToolID: "cursor", Status: domain.WorkspaceToolFailed, UpdatedAt: manifest.CreatedAt},
+	}
+	if err := app.Manifests.Save(path, manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifestFile := filepath.Join(path, storage.TaskManifestFileName)
+	before, err := os.ReadFile(manifestFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []Action{
+		{Kind: "task.tools-launch", TaskID: manifest.TaskDirectoryName, Path: path, Payload: map[string]any{"toolIds": []string{"cursor"}}},
+		{Kind: "task.tools-launch", TaskID: manifest.TaskDirectoryName, Path: path, Payload: map[string]any{"toolIds": []string{"codex", "cursor"}}},
+		{Kind: "task.tools-retry", TaskID: manifest.TaskDirectoryName, Path: path, Payload: map[string]any{"toolId": "cursor"}},
+	} {
+		if _, err := app.Dispatch(context.Background(), action); err == nil || !strings.Contains(err.Error(), "Cursor") {
+			t.Fatalf("retired workspace tool request returned %+v: %v", action, err)
+		}
+		after, err := os.ReadFile(manifestFile)
+		if err != nil || !bytes.Equal(before, after) {
+			t.Fatalf("retired workspace tool changed the manifest: action=%+v err=%v", action, err)
+		}
+	}
+}
+
+func TestWorkspaceToolOptionsAdvertiseCodex(t *testing.T) {
+	app, _, _, _ := taskContextScopeFixture(t)
+	result, err := app.Dispatch(context.Background(), Action{Kind: "workspace.tools-options"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	options, err := ResultData[[]taskCreationWorkspaceToolOption](result)
+	if err != nil || len(options) != 1 || options[0].ID != "codex" {
+		t.Fatalf("unexpected workspace tools: %+v, %v", options, err)
+	}
+}
+
+func TestTaskCreationIgnoresRetiredWorkspaceTool(t *testing.T) {
+	app, _, _, _ := taskContextScopeFixture(t)
+	result, err := app.Dispatch(context.Background(), Action{Kind: "task.create", Payload: map[string]any{
+		"title": "legacy-tool-choice", "workspaceToolIds": []string{"cursor"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := ResultData[domain.TaskManifest](result)
+	if err != nil || manifest.TaskDirectoryName != "legacy-tool-choice" || len(manifest.WorkspaceToolLaunches) != 0 || result.Text != "" {
+		t.Fatalf("retired workspace tool changed creation outcome: %+v, %v", result, err)
 	}
 }

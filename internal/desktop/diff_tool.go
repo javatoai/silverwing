@@ -5,6 +5,9 @@ import (
 	"math"
 	"strings"
 
+	"silverwing-go/internal/application"
+	"silverwing-go/internal/tools"
+
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
 )
@@ -13,8 +16,13 @@ func (s *app) renderDiffTool(c *ui.Context, p palette, state *toolPageState) {
 	s.pullDiffInput(state, &state.diffLeft, &state.diffInputHistory[0])
 	s.pullDiffInput(state, &state.diffRight, &state.diffInputHistory[1])
 	ui.Column(c).Grow(1).MinHeight(0).Gap(9).Children(func() {
+		s.renderDiffModes(c, p, state)
 		state.diffInputHistory[0].sync(state.diffLeft)
 		state.diffInputHistory[1].sync(state.diffRight)
+		if state.diffJSONMode {
+			s.renderJSONDiffTool(c, p, state)
+			return
+		}
 		state.syncDiffEditableDecorations(p)
 		s.renderDiffToolToolbar(c, p, state)
 		// Keep the splitter ratio in the tool state so resizing survives tab
@@ -235,31 +243,19 @@ func (s *app) diffEditor(c *ui.Context, p palette, state *toolPageState, title, 
 	history.sync(*value)
 	ui.Column(c).Grow(1).MinWidth(0).MinHeight(0).Background(p.surface).Border(1, p.line).Radius(10).Children(func() {
 		ui.Row(c).Height(32).Shrink(0).Padding(0, 8).Gap(4).AlignItems(ui.Center).Children(func() {
-			label(c, title, 11, p.muted).FontWeight(600)
-			if side == 0 {
-				label(c, "− 删除", 10, p.danger)
-			} else {
-				label(c, "+ 新增", 10, p.green)
-			}
-			ui.Spacer(c)
-			if toolButtonWithEnabled(c, key+"-undo", "撤销", p, false, history.canMove(-1)) {
-				s.moveDiffInputHistory(value, history, -1)
-			}
-			if toolButtonWithEnabled(c, key+"-redo", "重做", p, false, history.canMove(1)) {
-				s.moveDiffInputHistory(value, history, 1)
-			}
-			if toolToggle(c, key+"-find", "查找", history.search.open, p) {
-				history.search.toggle()
-			}
+			label(c, title, 11, p.muted).FontWeight(600).NoWrap()
+			s.renderDiffEditorControls(c, p, state, key, side, value, history)
 		})
 		ui.Divider(c)
 		s.renderDiffInputSearch(c, p, history, *value, key)
-		state.syncDiffEditableDecorations(p)
+		if !state.diffJSONMode {
+			state.syncDiffEditableDecorations(p)
+		}
 		history.view.Label = title + "输入"
 		history.view.LineNumbers = editor.LineNumbersOn
 		history.view.NoAutoClose = true
 		history.view.NoFolding, history.view.NoScrollPastEnd = history.decorations == nil, true
-		history.view.SoftWrap = state.diffWrap
+		history.view.SoftWrap = state.diffJSONMode || state.diffWrap
 		history.view.OnLimitExceeded = func() { s.rejectDiffToolInput(state) }
 		theme := textEditorTheme(p)
 		clipboardServices := c.Services()
@@ -286,6 +282,37 @@ func (s *app) diffEditor(c *ui.Context, p palette, state *toolPageState, title, 
 	})
 }
 
+func (s *app) renderDiffEditorControls(c *ui.Context, p palette, state *toolPageState, key string, side int, value *string, history *diffInputHistory) {
+	if state.diffJSONMode {
+		ui.Spacer(c)
+		if jsonEditorIconButton(c, key+"-undo", "撤销", "undo", p, history.canMove(-1), false) {
+			s.moveDiffInputHistory(value, history, -1)
+		}
+		if jsonEditorIconButton(c, key+"-redo", "重做", "redo", p, history.canMove(1), false) {
+			s.moveDiffInputHistory(value, history, 1)
+		}
+		if jsonEditorIconButton(c, key+"-find", "查找", "search", p, true, history.search.open) {
+			history.search.toggle()
+		}
+		return
+	}
+	if side == 0 {
+		label(c, "− 删除", 10, p.danger)
+	} else {
+		label(c, "+ 新增", 10, p.green)
+	}
+	ui.Spacer(c)
+	if toolButtonWithEnabled(c, key+"-undo", "撤销", p, false, history.canMove(-1)) {
+		s.moveDiffInputHistory(value, history, -1)
+	}
+	if toolButtonWithEnabled(c, key+"-redo", "重做", p, false, history.canMove(1)) {
+		s.moveDiffInputHistory(value, history, 1)
+	}
+	if toolToggle(c, key+"-find", "查找", history.search.open, p) {
+		history.search.toggle()
+	}
+}
+
 func (s *app) dispatchDiff() {
 	state := s.ensureToolState()
 	s.cancelDeveloperToolJob("tool.diff")
@@ -297,7 +324,12 @@ func (s *app) dispatchDiff() {
 	state.diffRevision++
 	state.diffError = ""
 	state.diffHasData = false
-	s.act("tool.diff", "", "", "", "", "", map[string]any{
-		"left": state.diffLeft, "right": state.diffRight, "options": state.diffOptions, "revision": state.diffRevision,
-	})
+	state.diffJSONResult = tools.JSONDiffResult{}
+	payload := map[string]any{"left": state.diffLeft, "right": state.diffRight, "revision": state.diffRevision}
+	if state.diffJSONMode {
+		payload["mode"], payload["ignore"] = application.JSONDiffMode, state.diffJSONIgnore
+	} else {
+		payload["options"] = state.diffOptions
+	}
+	s.act("tool.diff", "", "", "", "", "", payload)
 }

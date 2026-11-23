@@ -59,7 +59,7 @@ func (s *WorkspaceCommandService) Execute(ctx context.Context, config domain.App
 	if err != nil {
 		return domain.CommandResult{}, err
 	}
-	spec, err := commandruntime.Prepare(ctx, s.Runner, &config, domain.ProxyTargetWorkspaceCommand, "", executable)
+	spec, err := commandruntime.Prepare(ctx, s.Runner, &config, "", "", executable)
 	if err != nil {
 		return domain.CommandResult{}, err
 	}
@@ -183,8 +183,4 @@ func (s *WorkspaceCommandService) resolveWorkspaceExecutableContext(ctx context.
 		}
 	}
 	return exe, nil
-}
-
-func workspaceCommandProxyEnvironment(config domain.AppConfig) (map[string]string, []string) {
-	return proxyProcessEnvironment(config, domain.ProxyTargetWorkspaceCommand)
 }

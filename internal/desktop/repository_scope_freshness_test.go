@@ -114,11 +114,11 @@ func TestTaskRepositoryCreateAndAppendPickersRejectOldRootResults(t *testing.T) 
 			const token, taskID = "picker-token", "task"
 			if owner == taskRepositoryChoicesCreateOwner {
 				s.dialogOpen, s.form.mode = true, "task-create"
-				s.taskUnit.state.taskCreation = &taskCreationState{token: token, phase: "editing", groupID: group.ID, config: domain.AppConfig{Groups: []domain.GroupConfig{group}}, services: map[string]bool{"service": true}, moduleData: moduleData}
+				s.taskUnit.state.taskCreation = &taskCreationState{token: token, phase: "editing", config: domain.AppConfig{Services: group.Services}, services: map[string]bool{"service": true}, moduleData: moduleData}
 			} else {
 				item := task{id: taskID, path: "/task", branch: "feature/task", createdAt: "created", updated: "updated"}
 				s.taskUnit.replaceTasks([]task{item}, 0)
-				state := taskAppendNewState(item, "services", group)
+				state := taskAppendNewState(item, "services")
 				state.token, state.services[service.ID], state.selectedServices[service.ID], state.moduleData = token, service, true, moduleData
 				s.workspaceUnit.state.workspaceAppend = state
 			}

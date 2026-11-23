@@ -13,6 +13,12 @@ import (
 )
 
 func (a *App) documentAction(ctx context.Context, action Action) (result ActionResult, resultErr error) {
+	if isProjectInstructionsDocumentAction(action) {
+		return a.projectInstructionsDocumentAction(ctx, action)
+	}
+	if action.Kind == "document.link-preview" {
+		return a.documentLinkPreview(ctx, action)
+	}
 	if action.Kind == "document.list" {
 		manifest, _, err := a.task(action)
 		if err != nil {
@@ -64,6 +70,15 @@ func (a *App) documentActionLocked(ctx context.Context, action Action) (result A
 			}
 		}
 	}()
+	if action.Kind == "document.list" {
+		return a.listTaskMaterials(ctx, action, root)
+	}
+	return a.documentActionAtRoot(ctx, action, root)
+}
+
+// Entry points resolve and authorize the document root before calling this
+// dispatcher. Project instructions do not have a task catalog or peer areas.
+func (a *App) documentActionAtRoot(ctx context.Context, action Action, root string) (ActionResult, error) {
 	path := actionPath(action)
 	switch action.Kind {
 	case "document.search":
@@ -71,25 +86,14 @@ func (a *App) documentActionLocked(ctx context.Context, action Action) (result A
 		result, err := a.Documents.SearchMaterials(ctx, root, query)
 		return ActionResult{Message: "全文搜索已完成", Path: root, Data: result}, err
 	case "document.list":
-		if scope, ok, err := a.documentAnnualScope(root); err != nil {
-			return ActionResult{}, err
-		} else if ok {
-			if err := scope.EnsureLocal(); err != nil {
-				return ActionResult{}, err
-			}
-		}
 		entries, err := a.Documents.List(root)
-		message := "资料已刷新"
-		if _, local := documents.LocalScope(filepath.Join(root, documents.LocalMaterialsSubdirectory)); local {
-			if catalogErr := a.refreshLocalMaterialsCatalog(ctx, action, root); catalogErr != nil {
-				message += "；本地说明更新失败（刷新资料可单独重试）：" + catalogErr.Error()
-			}
-		} else if config, configErr := a.Config.Load(); configErr == nil {
-			if catalogErr := a.refreshMaterialsAgentCatalogs(ctx, MaterialsGitScope(a.Paths.Home, config)); catalogErr != nil {
-				message += "；本地说明更新失败（刷新资料可单独重试）：" + catalogErr.Error()
-			}
+		return ActionResult{Message: "资料已刷新", Path: root, Data: entries}, err
+	case "document.link-preview":
+		path, err := documentLinkPreviewPath(action)
+		if err != nil {
+			return ActionResult{}, err
 		}
-		return ActionResult{Message: message, Path: root, Data: entries}, err
+		return a.readDocumentLinkPreview(ctx, root, path)
 	case "document.read":
 		if documents.EditableMaterialText(path) {
 			return a.materialTextReadResult(ctx, action, root, path)
@@ -214,10 +218,12 @@ func (a *App) documentActionLocked(ctx context.Context, action Action) (result A
 		if err != nil {
 			return ActionResult{}, err
 		}
-		if scope, ok, _ := a.documentAnnualScope(root); ok {
-			for _, source := range payload.Files {
-				if !scope.Writable(filepath.Join(documentDirectory(action, root), filepath.Base(source)), false) {
-					return ActionResult{}, materialWriteDenied(source)
+		if !isProjectInstructionsDocumentAction(action) {
+			if scope, ok, _ := a.documentAnnualScope(root); ok {
+				for _, source := range payload.Files {
+					if !scope.Writable(filepath.Join(documentDirectory(action, root), filepath.Base(source)), false) {
+						return ActionResult{}, materialWriteDenied(source)
+					}
 				}
 			}
 		}
@@ -275,7 +281,7 @@ func (a *App) documentActionLocked(ctx context.Context, action Action) (result A
 			message += "；草稿缓存清理失败：" + strings.Join(draftFailures, "；")
 		}
 		return ActionResult{Message: message, Data: results}, err
-	case "document.open", "document.reveal":
+	case "document.open", "document.open-with", "document.reveal":
 		if path == "" || filepath.Clean(path) == filepath.Clean(root) {
 			if _, err := a.Documents.List(root); err != nil {
 				return ActionResult{}, err
@@ -288,13 +294,31 @@ func (a *App) documentActionLocked(ctx context.Context, action Action) (result A
 			}
 			path = selected[0]
 		}
-		kind := "system.open"
-		if action.Kind == "document.reveal" {
-			kind = "system.reveal"
-		}
+		kind := "system." + strings.TrimPrefix(action.Kind, "document.")
 		return a.systemAction(ctx, Action{Kind: kind, Path: path, Payload: action.Payload})
 	}
 	return ActionResult{}, fmt.Errorf("资料操作 %s 尚未接入", action.Kind)
+}
+
+func (a *App) listTaskMaterials(ctx context.Context, action Action, root string) (ActionResult, error) {
+	if scope, ok, err := a.documentAnnualScope(root); err != nil {
+		return ActionResult{}, err
+	} else if ok {
+		if err := scope.EnsureLocal(); err != nil {
+			return ActionResult{}, err
+		}
+	}
+	result, err := a.documentActionAtRoot(ctx, action, root)
+	var catalogErr error
+	if _, local := documents.LocalScope(filepath.Join(root, documents.LocalMaterialsSubdirectory)); local {
+		catalogErr = a.refreshLocalMaterialsCatalog(ctx, action, root)
+	} else if config, configErr := a.Config.Load(); configErr == nil {
+		catalogErr = a.refreshMaterialsAgentCatalogs(ctx, MaterialsGitScope(a.Paths.Home, config))
+	}
+	if catalogErr != nil {
+		result.Message += "；本地说明更新失败（刷新资料可单独重试）：" + catalogErr.Error()
+	}
+	return result, err
 }
 
 // The document action already owns this task's lock. Local catalogs do not

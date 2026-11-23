@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 
 	"silverwing-go/internal/application"
-	"silverwing-go/internal/domain"
 	"silverwing-go/internal/editor"
 	"silverwing-go/internal/storage"
 	markdownui "silverwing-go/internal/ui/markdown"
@@ -87,21 +86,9 @@ func (s *app) instructionReadMayReplaceDraft(action application.Action, key stri
 	return false
 }
 
-func (s *app) captureSettingsInstructionSaveVersion(payload map[string]any, scope, groupID string) {
-	paths := storage.NewPaths(s.snapshot.Home)
-	path := paths.GlobalAgents
-	if scope == "group" {
-		pathGroup := groupID
-		if pathGroup == "" {
-			pathGroup = domain.DefaultGroupID
-		}
-		var err error
-		path, err = paths.GroupAgents(pathGroup)
-		if err != nil {
-			return
-		}
-	}
-	key := s.instructionAutosaveKey(scope, "", groupID, path)
+func (s *app) captureSettingsInstructionSaveVersion(payload map[string]any) {
+	path := storage.NewPaths(s.snapshot.Home).GlobalAgents
+	key := s.instructionAutosaveKey("global", "", "", path)
 	if ref, ok := s.instructionSaveRef(key); ok {
 		// A retained, inactive editor can still have a pending autosave while
 		// returning to its scope. Capture its save progress before that read too.

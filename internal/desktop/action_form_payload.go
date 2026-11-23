@@ -62,22 +62,11 @@ func (s *app) submitForm() {
 	if moduleID == "" {
 		moduleID = payloadString(payload, "moduleId")
 	}
-	if form.kind == "config.import-preview" || form.kind == "config.import" {
-		path = payloadString(payload, "path")
-	}
 	if form.kind == "repository.add" {
 		path = payloadString(payload, "path")
 	}
-	if form.kind == "config.import-preview" {
-		s.materialsUnit.state.importPath = path
-	}
 	if form.mode == "task-create" {
-		groupID, serviceIDs, selections := s.taskSelectionPayload(payloadString(payload, "branch"))
-		if groupID == "" {
-			s.lastError = "请选择项目组。"
-			return
-		}
-		payload["groupId"] = groupID
+		serviceIDs, selections := s.taskSelectionPayload(payloadString(payload, "branch"))
 		payload["serviceIds"] = serviceIDs
 		payload["serviceSelections"] = selections
 	}
@@ -113,7 +102,6 @@ func (s *app) submitForm() {
 			return
 		}
 		payload["serviceId"] = serviceID
-		payload["groupId"] = s.serviceFormGroupID(payload)
 		payload["moduleId"] = moduleID
 		payload["tagEnabled"] = tagEnabled
 		if err := s.moduleFormPayload(serviceID, moduleID, payload); err != nil {
@@ -123,11 +111,7 @@ func (s *app) submitForm() {
 	}
 	if form.kind == "service.module-remove" {
 		payload["serviceId"] = serviceID
-		payload["groupId"] = s.serviceFormGroupID(payload)
 		payload["moduleId"] = moduleID
-	}
-	if form.kind == "service.remove" {
-		payload["groupId"] = s.serviceFormGroupID(payload)
 	}
 	if s.settingsActionForm(form, payload) {
 		if !s.dialogOpen {
@@ -156,11 +140,11 @@ func (s *app) confirmationValue(form actionForm, serviceID, moduleID string) str
 			}
 		}
 	case "service.remove":
-		if service, ok := s.serviceByID(s.selectedServiceGroupID(), serviceID); ok {
+		if service, ok := s.serviceByID(serviceID); ok {
 			return service.Name
 		}
 	case "service.module-remove":
-		if service, ok := s.serviceByID(s.selectedServiceGroupID(), serviceID); ok {
+		if service, ok := s.serviceByID(serviceID); ok {
 			for _, module := range service.Modules {
 				if module.ID == moduleID {
 					return module.ID
@@ -175,16 +159,12 @@ func (s *app) confirmationValue(form actionForm, serviceID, moduleID string) str
 	return ""
 }
 
-func (s *app) taskSelectionPayload(branch string) (string, []string, []any) {
-	group := s.taskGroup(s.taskUnit.state.taskGroupID)
+func (s *app) taskSelectionPayload(branch string) ([]string, []any) {
 	serviceIDs := make([]string, 0)
 	selections := make([]any, 0)
-	for _, serviceID := range group.ServiceIDs {
+	for _, service := range s.serviceCatalog().ordered {
+		serviceID := service.ID
 		if !s.taskUnit.state.taskServices[serviceID] {
-			continue
-		}
-		service, ok := s.serviceByID(group.ID, serviceID)
-		if !ok {
 			continue
 		}
 		modules := make([]any, 0)
@@ -214,7 +194,7 @@ func (s *app) taskSelectionPayload(branch string) (string, []string, []any) {
 		serviceIDs = append(serviceIDs, serviceID)
 		selections = append(selections, map[string]any{"serviceId": serviceID, "modules": modules})
 	}
-	return group.ID, serviceIDs, selections
+	return serviceIDs, selections
 }
 
 func (s *app) serviceFormPayload(form actionForm, payload map[string]any) (string, error) {
@@ -231,9 +211,8 @@ func (s *app) serviceFormPayload(form actionForm, payload map[string]any) (strin
 	}
 
 	if form.mode == "service-add" {
-		groupID := payloadString(payload, "groupId")
-		if groupID == "" || serviceID == "" || name == "" || repositoryID == "" || masterBranch == "" {
-			return "", fmt.Errorf("项目组、服务 ID、名称、仓库和主分支均不能为空")
+		if serviceID == "" || name == "" || repositoryID == "" || masterBranch == "" {
+			return "", fmt.Errorf("服务 ID、名称、仓库和主分支均不能为空")
 		}
 		enabled, err := parseFormBool(payload, "enabled", true)
 		if err != nil {
@@ -275,17 +254,13 @@ func (s *app) serviceFormPayload(form actionForm, payload map[string]any) (strin
 			"bootstrap":             map[string]any{"copyRules": copyRules, "commands": bootstrapCommands},
 			"commitMessageTemplate": payloadString(payload, "commitMessageTemplate"),
 		}
-		payload["groupId"] = groupID
 		return serviceID, nil
 	}
-	groupID := s.serviceFormGroupID(payload)
-	payload["groupId"] = groupID
-
 	var config map[string]any
 	if err := json.Unmarshal([]byte(s.settingsUnit.state.configJSON), &config); err != nil {
 		return "", fmt.Errorf("读取当前服务配置失败：%w", err)
 	}
-	service := findServiceConfig(config, serviceID, groupID)
+	service := findServiceConfig(config, serviceID)
 	if service == nil {
 		return "", fmt.Errorf("服务 %q 不在当前配置中", serviceID)
 	}
@@ -366,7 +341,7 @@ func (s *app) moduleFormPayload(serviceID, moduleID string, payload map[string]a
 	if err != nil {
 		return err
 	}
-	service := findServiceConfig(config, serviceID, s.serviceFormGroupID(payload))
+	service := findServiceConfig(config, serviceID)
 	if service == nil {
 		return fmt.Errorf("服务 %q 不在当前配置中", serviceID)
 	}
@@ -413,18 +388,9 @@ func (s *app) moduleFormPayload(serviceID, moduleID string, payload map[string]a
 	return nil
 }
 
-func (s *app) serviceFormGroupID(payload map[string]any) string {
-	if groupID := payloadString(payload, "groupId"); groupID != "" {
-		return groupID
-	}
-	return s.selectedServiceGroupID()
-}
-
-// A service ID is unique only within its owning group. An unscoped lookup is
-// allowed only when the ID resolves unambiguously.
-func findServiceConfig(config map[string]any, serviceID string, groupIDs ...string) map[string]any {
+func findServiceConfig(config map[string]any, serviceID string) map[string]any {
 	// Editing callers own config; do not borrow the settings read cache here.
-	return newDesktopServiceConfigIndex(config).find(serviceID, groupIDs...)
+	return newDesktopServiceConfigIndex(config).find(serviceID)
 }
 
 func payloadString(payload map[string]any, key string) string {

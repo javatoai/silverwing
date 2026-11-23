@@ -24,7 +24,7 @@ func TestUpdateProxyOffIgnoresEnvironmentAndOtherTargets(t *testing.T) {
 	t.Setenv("HTTPS_PROXY", "http://inherited.invalid:99")
 	t.Setenv("HTTP_PROXY", "http://inherited.invalid:99")
 	t.Setenv("ALL_PROXY", "socks5://inherited.invalid:99")
-	for _, config := range []domain.AppConfig{domain.DefaultAppConfig(), {CommandProxyTargets: []domain.CommandProxyTarget{domain.ProxyTargetGit}}} {
+	for _, config := range []domain.AppConfig{domain.DefaultAppConfig(), {CommandProxyTargets: []domain.CommandProxyTarget{domain.ProxyTargetCodex}}} {
 		client, err := NewHTTPClient(config, domain.ProxyTargetAppUpdates, time.Second)
 		if err != nil {
 			t.Fatal(err)

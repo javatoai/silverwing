@@ -32,7 +32,7 @@ func (s *app) taskWorkspace(c *ui.Context, p palette) {
 		s.renderWorkspaceReviewPage(c, p)
 		return
 	}
-	if s.tab != taskFilesTab && s.tab != taskServicesTab && s.tab != taskTerminalTab {
+	if s.taskTabNeedsWorkspaceGit() {
 		s.ensureTaskRequirementMetadata()
 		s.requestWorkspaceGitStatus(false)
 	}
@@ -71,6 +71,10 @@ func (s *app) taskWorkspaceDetail(c *ui.Context, p palette) {
 			}
 		})
 		ui.Divider(c)
+		if s.tab == taskProjectInstructionsTab && s.taskContentTabAvailable(taskProjectInstructionsTab) {
+			s.renderProjectInstructions(c, p)
+			return
+		}
 		if s.taskUnit.currentTask().id == "" {
 			s.emptyTask(c, p)
 			return
@@ -78,8 +82,6 @@ func (s *app) taskWorkspaceDetail(c *ui.Context, p palette) {
 		switch s.tab {
 		case 1:
 			s.materials(c, p)
-		case 3:
-			s.renderTaskNotes(c, p)
 		case taskTagTab:
 			s.renderTaskTagHistory(c, p, s.taskUnit.currentTask())
 		case taskFilesTab:
@@ -107,11 +109,11 @@ func (s *app) emptyTask(c *ui.Context, p palette) {
 			title = "没有归档任务"
 		}
 		label(c, title, 18, p.text).FontWeight(600)
-		message := "请在需求列表中创建任务。"
 		if archived {
-			message = "已归档的任务会保留在这里，可随时恢复。"
+			label(c, "已归档的任务会保留在这里，可随时恢复。", 13, p.muted)
+		} else if !s.profileNeedsTaskRoot() {
+			label(c, "请在需求列表中创建任务。", 13, p.muted)
 		}
-		label(c, message, 13, p.muted)
 	})
 }
 
@@ -142,7 +144,9 @@ func (s *app) taskDetails(c *ui.Context, p palette) {
 		s.taskHeader(c, p)
 		failedServiceIDs := s.taskFailedServiceIDs(t)
 		showWorkspaceTools := len(t.workspaces) > 0 || len(s.taskAddableServices(t)) > 0 || len(failedServiceIDs) > 0 && !t.archived
-		if showWorkspaceTools || s.configBool("showTaskDetailPathActionGroup", false) || s.taskCanBuildAnyTag(t) {
+		canBuildTag := s.taskCanBuildAnyTag(t)
+		showDragonQA := s.dragonQAAvailable(t)
+		if showWorkspaceTools || s.configBool("showTaskDetailPathActionGroup", false) || canBuildTag || showDragonQA {
 			ui.Row(c).Gap(8).Children(func() {
 				if s.configBool("showTaskDetailPathActionGroup", false) {
 					iconGroup(c, p, func() {
@@ -157,10 +161,13 @@ func (s *app) taskDetails(c *ui.Context, p palette) {
 						}
 					})
 				}
-				if s.taskCanBuildAnyTag(t) {
+				if canBuildTag || showDragonQA {
 					iconGroup(c, p, func() {
-						if iconButton(c, "batch-tag", "tag", "批量构建 Tag", p).Clicked() {
+						if canBuildTag && iconButton(c, "batch-tag", "tag", "批量构建 Tag", p).Clicked() {
 							s.openTagBuildBatch(t)
+						}
+						if showDragonQA && dragonQAIconButton(c, p).Clicked() {
+							s.openDragonQA(t)
 						}
 					})
 				}
@@ -204,7 +211,7 @@ func (s *app) taskDetails(c *ui.Context, p palette) {
 			s.workspaceCard(c, p, t, workspace, i)
 		}
 		for _, launch := range t.workspaceToolLaunches {
-			if launch.Status == domain.WorkspaceToolOpened {
+			if launch.Status == domain.WorkspaceToolOpened || domain.IsLegacyCursorToolID(launch.ToolID) {
 				continue
 			}
 			ui.Row(c).FillWidth().Padding(11, 13).Gap(10).AlignItems(ui.Center).Background(p.surface).Border(1, p.line).Radius(10).Children(func() {
@@ -239,28 +246,22 @@ func taskHasPhysicalWorkspace(t task) bool {
 }
 
 func (s *app) taskAddableServices(t task) []application.Service {
-	if t.archived || t.groupID == "" {
+	if t.archived {
 		return nil
 	}
 	used := taskUsedServiceIDs(t)
 	services := make([]application.Service, 0)
 	config, err := s.readSnapshotAppConfig()
 	if err == nil {
-		for _, group := range config.Groups {
-			if group.ID != t.groupID {
+		for _, configured := range config.ServiceCatalog() {
+			if !configured.Enabled || used[configured.ID] {
 				continue
 			}
-			for _, configured := range group.Services {
-				if !configured.Enabled || used[configured.ID] {
-					continue
-				}
-				service := application.Service{ID: configured.ID, Name: configured.DisplayName, RepositoryID: configured.RepositoryID, GroupID: group.ID}
-				for _, module := range configured.Modules {
-					service.Modules = append(service.Modules, application.Module{ID: module.ID, Name: module.Name, MasterBranch: configured.EffectiveMasterBranch(module), Strategy: string(module.Strategy)})
-				}
-				services = append(services, service)
+			service := application.Service{ID: configured.ID, Name: configured.DisplayName, RepositoryID: configured.RepositoryID}
+			for _, module := range configured.Modules {
+				service.Modules = append(service.Modules, application.Module{ID: module.ID, Name: module.Name, MasterBranch: configured.EffectiveMasterBranch(module), Strategy: string(module.Strategy)})
 			}
-			break
+			services = append(services, service)
 		}
 	}
 	return services
@@ -280,13 +281,4 @@ func (s *app) taskCanBuildAnyTag(t task) bool {
 
 func (s *app) workspaceCanBuildTag(t task, workspace application.Workspace) bool {
 	return s.tagWorkspaceCanBuild(t, workspace)
-}
-
-func (s *app) hasGroup(groupID string) bool {
-	for _, group := range s.snapshot.Groups {
-		if group.ID == groupID {
-			return true
-		}
-	}
-	return false
 }

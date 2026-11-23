@@ -299,7 +299,7 @@ func (s *WorkspaceGitOperationService) preflightBatch(ctx context.Context, ws do
 func (s *WorkspaceGitOperationService) executeBatch(ctx context.Context, item workspaceGitPreflight, mode WorkspaceGitBatchMode, message string, blocked []string) (WorkspaceGitBatchItemResult, error) {
 	result := WorkspaceGitBatchItemResult{WorkspacePath: WorkspaceGitPathKey(item.Workspace), ServiceName: workspaceOperationName(item.Workspace), Branch: item.Workspace.Branch, CommitState: WorkspaceGitNotRun, PushState: WorkspaceGitNotRun}
 	entered := false
-	err := s.Locks.WithRepository(item.Common, func() error {
+	err := s.withWorkspaceGitLock(item.Workspace, item.Common, func() error {
 		entered = true
 		branch, err := s.requireWriteAllowedContext(ctx, item.Workspace, item.Target, blocked, workspaceBatchLabel(mode))
 		if err != nil {
@@ -397,12 +397,19 @@ func (s *WorkspaceGitOperationService) withRepositoryLock(ctx context.Context, w
 	if err != nil {
 		return err
 	}
-	return s.Locks.WithRepository(common, func() error {
+	return s.withWorkspaceGitLock(ws, common, func() error {
 		if _, _, err := s.validateContext(ctx, ws); err != nil {
 			return err
 		}
 		return action(target)
 	})
+}
+
+func (s *WorkspaceGitOperationService) withWorkspaceGitLock(ws domain.ServiceWorkspace, common string, action func() error) error {
+	if ws.Strategy == domain.WorkspaceIndependentClone {
+		return s.Locks.WithIndependentCheckout(ws.WorktreePath, action)
+	}
+	return s.Locks.WithRepository(common, action)
 }
 func (s *WorkspaceGitOperationService) requireWriteAllowed(ctx context.Context, ws domain.ServiceWorkspace, target string, blocked []string, operation string) (string, error) {
 	return s.requireWriteAllowedContext(ctx, ws, target, blocked, operation)

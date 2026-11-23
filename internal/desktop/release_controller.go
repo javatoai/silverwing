@@ -9,12 +9,13 @@ import (
 type releaseController struct{ state releaseState }
 
 type releaseState struct {
-	tagGenbuAutoProbe *tagGenbuAutoProbeState
-	tagJobs           *tagDesktopJobs
-	production        *productionUIState
-	tagHistory        *tagHistoryViewState
-	tagBuild          *tagBuildViewState
-	tagTarget         *tagTargetViewState
+	tagGenbuAutoProbe   *tagGenbuAutoProbeState
+	tagJobs             *tagDesktopJobs
+	production          *productionUIState
+	productionReminders map[productionReleaseReminderKey]struct{}
+	tagHistory          *tagHistoryViewState
+	tagBuild            *tagBuildViewState
+	tagTarget           *tagTargetViewState
 }
 
 func (s *releaseController) stopFeature() { s.stopProductionJobs() }

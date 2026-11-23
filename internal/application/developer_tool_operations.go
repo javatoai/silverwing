@@ -16,6 +16,10 @@ type TextDiffRequest struct {
 	Left, Right string
 	Options     tools.DiffOptions
 }
+type JSONDiffRequest struct{ Left, Right, Ignore string }
+
+const JSONDiffMode = "json"
+
 type PortQueryRequest struct{ Port int }
 type PortStopRequest struct {
 	Process   tools.PortProcess
@@ -26,6 +30,7 @@ type DeveloperTools interface {
 	ProcessJSON(context.Context, JSONToolRequest) (OperationResult[*tools.JSONDocument], error)
 	ConvertTime(context.Context, TimeToolRequest) (OperationResult[tools.TimeConversion], error)
 	CompareText(context.Context, TextDiffRequest) (OperationResult[tools.DiffResult], error)
+	CompareJSON(context.Context, JSONDiffRequest) (OperationResult[tools.JSONDiffResult], error)
 	ListPorts(context.Context, PortQueryRequest) (OperationResult[[]tools.PortProcess], error)
 	StopPort(context.Context, PortStopRequest) (OperationResult[tools.PortTerminationResult], error)
 }
@@ -68,6 +73,9 @@ func TextDiffRequestFromAction(action Action) (TextDiffRequest, error) {
 		}
 	}
 	return request, nil
+}
+func JSONDiffRequestFromAction(action Action) JSONDiffRequest {
+	return JSONDiffRequest{Left: textPayload(action, "left"), Right: textPayload(action, "right"), Ignore: textPayload(action, "ignore")}
 }
 func PortQueryRequestFromAction(action Action) (PortQueryRequest, error) {
 	if action.Payload["port"] == nil && actionText(action) != "" {
@@ -130,6 +138,13 @@ func (a *App) CompareText(ctx context.Context, request TextDiffRequest) (Operati
 	}
 	value, err := tools.CompareText(ctx, request.Left, request.Right, request.Options)
 	return OperationResult[tools.DiffResult]{Message: "差异已计算", Text: value.Unified, Data: value}, err
+}
+func (a *App) CompareJSON(ctx context.Context, request JSONDiffRequest) (OperationResult[tools.JSONDiffResult], error) {
+	if err := operationContextError(ctx); err != nil {
+		return OperationResult[tools.JSONDiffResult]{}, err
+	}
+	value, err := tools.CompareJSON(ctx, request.Left, request.Right, request.Ignore)
+	return computedOperationResult(ctx, OperationResult[tools.JSONDiffResult]{Message: "差异已计算", Data: value}, err)
 }
 func (a *App) ListPorts(ctx context.Context, request PortQueryRequest) (OperationResult[[]tools.PortProcess], error) {
 	if err := operationContextError(ctx); err != nil {

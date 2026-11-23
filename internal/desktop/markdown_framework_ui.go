@@ -15,14 +15,15 @@ import (
 // The application owns source, resource trust and reader state. MyGO owns the
 // complete ordinary Markdown view, including lists, tables and highlighted code.
 type frameworkMarkdownState struct {
-	original        string
-	richTextReading bool
-	projection      editor.ReadingProjection
-	document        *parser.Document
-	imageTargets    []string
-	blocks          []documentFindBlock
-	options         markdown.Options
-	sourceOffset    func(int) int
+	original         string
+	richTextReading  bool
+	renderHTMLTables bool
+	projection       editor.ReadingProjection
+	document         *parser.Document
+	imageTargets     []string
+	blocks           []documentFindBlock
+	options          markdown.Options
+	sourceOffset     func(int) int
 }
 
 func frameworkMarkdownImageTargets(doc *parser.Document) []string {
@@ -51,14 +52,26 @@ func (native *frameworkMarkdownState) originalOffset(offset int) int {
 
 func ensureFrameworkMarkdown(state *markdownEditorState) *frameworkMarkdownState {
 	source := state.doc.Source()
-	if state.frameworkMarkdown != nil && state.frameworkMarkdown.original == source && state.frameworkMarkdown.richTextReading == state.richTextReading {
-		return state.frameworkMarkdown
+	if cached := state.frameworkMarkdown; cached != nil && cached.original == source &&
+		cached.richTextReading == state.richTextReading && cached.renderHTMLTables == state.renderHTMLTables {
+		return cached
 	}
 	projection := editor.ProjectReading(source)
 	if state.richTextReading {
 		projection = editor.ProjectRichTextReading(source)
 	}
-	native := &frameworkMarkdownState{original: source, richTextReading: state.richTextReading, projection: projection}
+	native := &frameworkMarkdownState{
+		original: source, richTextReading: state.richTextReading, renderHTMLTables: state.renderHTMLTables, projection: projection,
+	}
+	if state.renderHTMLTables {
+		preview, tableOffset := editor.ProjectHTMLTables(projection.Source)
+		if tableOffset != nil {
+			native.projection.Source = preview
+			native.sourceOffset = func(offset int) int {
+				return projection.OriginalOffset(tableOffset(offset))
+			}
+		}
+	}
 	native.document = parser.Parse(native.projection.Source)
 	native.blocks = frameworkMarkdownBlocks(native.document)
 	state.frameworkMarkdown = native

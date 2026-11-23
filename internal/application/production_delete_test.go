@@ -9,14 +9,16 @@ import (
 	"testing"
 
 	"silverwing-go/internal/production"
-	"silverwing-go/internal/storage"
 )
 
 func TestProductionDeleteActionOnlyRemovesConfirmedLocalHistory(t *testing.T) {
 	for _, scenario := range []string{"unconfirmed", "active", "stale", "missing-token", "delete", "repeat"} {
 		t.Run(scenario, func(t *testing.T) {
-			// No config, CLI runner or network dependencies are supplied.
-			a := &App{Paths: storage.NewPaths(t.TempDir())}
+			a, err := NewTagCLI(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			useVerifiedGenbuFixture(t, a)
 			s := production.New(a.Paths, nil, nil, nil)
 			b := production.Batch{ID: strings.Repeat("a", 32), Ended: true, Version: "1.0.2", ReleaseBranch: "release/1.0.2", CreatedAt: "created", Phase: "ENDED",
 				Target: production.Target{Selection: production.Selection{GroupID: "removed-group", ServiceID: "removed-service"}, CommonDirectory: filepath.Join(a.Paths.Home, "missing-repo", ".git")}}

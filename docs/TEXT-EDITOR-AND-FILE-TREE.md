@@ -23,7 +23,7 @@ JSON 工具保留格式化、错误定位、内联折叠、原文投影和会话
 
 **Markdown 阅读模式使用 MyGO 自带的 `markdown.View` 阅读器**：正文、列表、表格、普通代码块的排版与连续选取由框架提供，代码块使用 `DefaultCodeBlock`。应用只衔接原文复制、查找、图片权限、链接和现有 Mermaid 渲染。图表按阅读宽度等比缩放，点击可放大。
 
-任务资料中的可写 Markdown 默认进入“实时预览”，可切换“阅读”和“源码”。原生 `markdown.Editor` 在整篇文档上只绑定一个输入客户端；光标进入的内容显示必要 Markdown 语法，其余保持排版。表格可在单元格中直接编辑，代码块可在卡片内编辑并切换语言；Mermaid 等图表保留源码编辑。模式切换共用 Buffer、选区与撤销历史。正文沿用 15 DIP 与 1.6 倍行高。TASK-RULES.md 等可写说明复用公共 MarkdownEditor；生成的 AGENTS.md、TASK-CONTEXT.md、Skills、生成预览、Git 和无写入权限的资料继续只读；原文预览保留精确复制与查找。新建、导入、重命名、删除和明确发起的外部同步仍由原文件管理业务负责。
+任务资料中的可写 Markdown 默认进入“实时预览”，可切换“阅读”和“源码”。原生 `markdown.Editor` 在整篇文档上只绑定一个输入客户端；光标进入的内容显示必要 Markdown 语法，其余保持排版。表格可在单元格中直接编辑，代码块可在卡片内编辑并切换语言；Mermaid 等图表保留源码编辑。模式切换共用 Buffer、选区与撤销历史。正文沿用 15 DIP 与 1.6 倍行高。可写说明复用公共 MarkdownEditor。任务根 `AGENTS.md`、创建时的说明预览、Skills、Git 和无写入权限的资料使用只读阅读器，支持原文复制与查找。新建、导入、重命名、删除和明确发起的外部同步仍由原文件管理业务负责。
 
 Markdown 的 AST、Frontmatter、源区间、表格、围栏、阅读投影及评论图片算法已移到 `internal/markdowntext`，只依赖标准库、Goldmark 与 YAML v3。`internal/editor` 保留原 API 包装、运行时 part ID、自动保存和撤销等状态。domain 的需求评论处理直接使用纯算法；此次拆分不开放 Markdown 编辑、草稿写入或保存。
 

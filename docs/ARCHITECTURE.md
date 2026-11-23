@@ -41,7 +41,7 @@ flowchart TD
     ui --> language[filelanguage]
 ```
 
-MyGO 固定为 v0.7.3，使用 `third_party/mygo` 的本地源码。字体回退、输入法、菜单、剪贴板及绘制由框架负责；本地扩展和升级注意事项见 [MYGO-PATCHES.md](../third_party/MYGO-PATCHES.md)。
+MyGO 固定为 v0.10.0，使用 `third_party/mygo` 的本地源码。字体回退、输入法、菜单、剪贴板及绘制由框架负责；本地扩展和升级注意事项见 [MYGO-PATCHES.md](../third_party/MYGO-PATCHES.md)。
 
 ## 功能单元与应用边界
 
@@ -79,7 +79,7 @@ typed 请求在兼容转换时保留捕获的任务路径、创建时间、配�
 
 ## 编辑与持久化
 
-MyGO 固定为 v0.7.3，使用 `third_party/mygo` 的本地源码。输入法、字体回退、菜单、剪贴板和绘制由框架负责；本地补丁见 [MYGO-PATCHES.md](../third_party/MYGO-PATCHES.md)。
+MyGO 固定为 v0.10.0，使用 `third_party/mygo` 的本地源码。输入法、字体回退、菜单、剪贴板和绘制由框架负责；本地补丁见 [MYGO-PATCHES.md](../third_party/MYGO-PATCHES.md)。
 
 资料与 Skills 复用 FileTree 的展示与输入组件。普通文本和代码复用 TextEditor；宿主持有文档身份、草稿、权限、保存和冲突状态。成功保存不重建 Buffer。普通资料文本上限为含 BOM 的 3 MiB，开发工具单个输入上限为 2 MiB。
 

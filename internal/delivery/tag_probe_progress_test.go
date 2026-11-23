@@ -3,28 +3,23 @@ package delivery
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"silverwing-go/internal/domain"
-	"silverwing-go/internal/process"
+	"silverwing-go/internal/production"
 )
 
-type tagProbeBarrierRunner struct {
+type tagProbeBarrierClient struct {
 	mu      sync.Mutex
 	calls   map[string]int
 	started chan string
 	slow    chan struct{}
 }
 
-func (r *tagProbeBarrierRunner) Run(ctx context.Context, spec process.Spec) (process.Result, error) {
-	if len(spec.Arguments) != 4 || spec.Arguments[0] != "query-tag" || spec.Arguments[1] != "--json" {
-		return process.Result{}, errors.New("unexpected synthetic command")
-	}
-	key := spec.Arguments[3]
+func (r *tagProbeBarrierClient) Status(ctx context.Context, _ domain.AppConfig, _ string, key string) (domain.GenbuTagProbeStatus, error) {
 	r.mu.Lock()
 	r.calls[key]++
 	r.mu.Unlock()
@@ -33,24 +28,25 @@ func (r *tagProbeBarrierRunner) Run(ctx context.Context, spec process.Spec) (pro
 		select {
 		case <-r.slow:
 		case <-ctx.Done():
-			return process.Result{}, ctx.Err()
+			return domain.GenbuTagProbeStatus{}, ctx.Err()
 		}
 	}
-	return process.Result{ExitCode: 0, Stdout: `{"build_status":"构建中","uat_status":"初始","production_status":"初始"}`}, nil
+	return domain.GenbuTagProbeStatus{Build: domain.GenbuBuilding, UAT: domain.GenbuInitial, Production: domain.GenbuInitial}, nil
 }
 
-func tagProbeProgressFixture(t *testing.T) (*Service, domain.AppConfig, []domain.TaskManifest, []domain.TagOperation, *tagProbeBarrierRunner) {
+func (*tagProbeBarrierClient) Pods(context.Context, domain.AppConfig, string, string) (production.ServicePods, error) {
+	return production.ServicePods{}, errors.New("unexpected Pod query")
+}
+
+func (*tagProbeBarrierClient) CheckScope(ctx context.Context) error { return ctx.Err() }
+
+func tagProbeProgressFixture(t *testing.T) (*Service, domain.AppConfig, []domain.TaskManifest, []domain.TagOperation, *tagProbeBarrierClient) {
 	t.Helper()
 	task, _ := tagProgressTaskFixture(t)
 	service := task.service
-	runner := &tagProbeBarrierRunner{calls: map[string]int{}, started: make(chan string, 10), slow: make(chan struct{})}
-	service.runner = runner
+	client := &tagProbeBarrierClient{calls: map[string]int{}, started: make(chan string, 10), slow: make(chan struct{})}
+	service.genbuClient = func(context.Context) (TagGenbu, error) { return client, nil }
 	config := task.Config()
-	executable := filepath.Join(t.TempDir(), "synthetic-genbu.exe")
-	if err := os.WriteFile(executable, []byte("synthetic fixture only"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	config.GenbuExecutablePath = &executable
 	config.Groups[0].Services = []domain.GroupServiceConfig{{ID: "fast-service", GenbuServiceName: "fast-service", GenbuProbeEnabled: true}, {ID: "slow-service", GenbuServiceName: "slow-service", GenbuProbeEnabled: true}}
 	var operations []domain.TagOperation
 	for i, key := range []string{"fast", "slow", "fast"} {
@@ -60,7 +56,7 @@ func tagProbeProgressFixture(t *testing.T) (*Service, domain.AppConfig, []domain
 		}
 		operations = append(operations, operation)
 	}
-	return service, config, []domain.TaskManifest{task.Manifest()}, operations, runner
+	return service, config, []domain.TaskManifest{task.Manifest()}, operations, client
 }
 
 func TestTagProbeStreamsFastCASBeforeSlowAndDeduplicatesTag(t *testing.T) {

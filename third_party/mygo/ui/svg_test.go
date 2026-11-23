@@ -3,6 +3,7 @@ package ui
 import (
 	"image"
 	"image/color"
+	"slices"
 	"testing"
 
 	"github.com/egoist/mygo/internal/platform"
@@ -143,6 +144,67 @@ func TestImageOfAnSVG(t *testing.T) {
 	}
 }
 
+// ObjectPosition places a picture where Fit crops it or leaves room
+// around it, an SVG's and a bitmap's alike, as CSS's object-position.
+func TestObjectPosition(t *testing.T) {
+	logo := MustParseSVG([]byte(logoSVG)) // red, green and currentColor, 30×10
+	strip := image.NewRGBA(image.Rect(0, 0, 3, 1))
+	for i, c := range []color.RGBA{{255, 0, 0, 255}, {0, 255, 0, 255}, {0, 0, 255, 255}} {
+		strip.SetRGBA(i, 0, c)
+	}
+	bitmap := NewBitmap(strip)
+	red, green, blue, white := color.RGBA{255, 0, 0, 255}, color.RGBA{0, 255, 0, 255}, color.RGBA{0, 0, 255, 255}, color.RGBA{255, 255, 255, 255}
+	for _, src := range []ImageSource{logo, bitmap} {
+		var x, y float32
+		set := false
+		fit := Cover
+		tt := coreNewTester(func(c *context) {
+			coreColumn(c).Fill().Background(RGB(255, 255, 255)).TextColor(RGB(0, 0, 255)).AlignItems(Start).Children(func() {
+				e := coreImage(c, src).Size(60, 60).Fit(fit).Label("picture")
+				if set {
+					e.ObjectPosition(x, y)
+				}
+			})
+		}, 100, 100)
+		at := func(px, py float32) color.RGBA {
+			r, _ := tt.Find("picture")
+			return tt.Image().RGBAAt(int(r.X+px), int(r.Y+py))
+		}
+		check := func(what string, px, py float32, want color.RGBA) {
+			t.Helper()
+			if c := at(px, py); c != want {
+				t.Errorf("%T, %s: %v at %v, %v, want %v", src, what, c, px, py, want)
+			}
+		}
+		check("covering, in the middle by default", 2, 30, green)
+		set, x, y = true, 0, 0.5
+		tt.Frame()
+		// 180×60, of which the left third shows.
+		check("covering, by the left edge", 2, 30, red)
+		check("covering, by the left edge", 58, 30, red)
+		x = 1
+		tt.Frame()
+		check("covering, by the right edge", 2, 30, blue)
+		check("covering, by the right edge", 58, 30, blue)
+		x = 0.5
+		tt.Frame()
+		check("covering, at 50% 50%", 2, 30, green)
+		// Contained, 60×20, at the top and at the bottom.
+		fit, x, y = Contain, 0.5, 0
+		tt.Frame()
+		check("contained, at the top", 2, 5, red)
+		check("contained, at the top", 2, 50, white)
+		y = 1
+		tt.Frame()
+		check("contained, at the bottom", 2, 55, red)
+		check("contained, at the bottom", 2, 5, white)
+		// Past the edge, clipped to the box.
+		y = 2
+		tt.Frame()
+		check("contained, past the bottom", 2, 55, white)
+	}
+}
+
 func TestPictureFollowsTheTextColor(t *testing.T) {
 	logo := MustParseSVG([]byte(logoSVG))
 	col := RGB(0, 0, 255)
@@ -229,4 +291,111 @@ func TestParseSVGErrors(t *testing.T) {
 		}
 	}()
 	MustParseSVG([]byte("nope"))
+}
+
+// A diagram of two colors that a prefers-color-scheme media query sets.
+const schemeSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+<style>:root { --bg: #ffffff } @media (prefers-color-scheme: dark) { :root { --bg: #0d1117 } } rect { fill: var(--bg) }</style>
+<rect width="10" height="10"/></svg>`
+
+// TestSVGCustomProperties is #1691's repro: a fill of var() draws its
+// color, not the black of a fill MyGo did not understand.
+func TestSVGCustomProperties(t *testing.T) {
+	const plain = `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><style>.bg { fill: #ffffff; }</style><rect class="bg" width="100" height="100"/></svg>`
+	const custom = `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><style>svg { --bg: #ffffff; } .bg { fill: var(--bg); }</style><rect class="bg" width="100" height="100"/></svg>`
+	for _, src := range []string{plain, custom} {
+		s := MustParseSVG([]byte(src))
+		tt := coreNewTester(func(c *context) { coreImage(c, s).Size(100, 100) }, 100, 100)
+		if c := tt.Image().RGBAAt(50, 50); c != (color.RGBA{255, 255, 255, 255}) {
+			t.Errorf("%s: the center is %v, want white", src, c)
+		}
+	}
+}
+
+// TestSVGFollowsTheTheme draws an SVG's dark colors in a dark theme,
+// unless WithDark says otherwise.
+func TestSVGFollowsTheTheme(t *testing.T) {
+	s := MustParseSVG([]byte(schemeSVG))
+	light, dark := color.RGBA{255, 255, 255, 255}, color.RGBA{0x0d, 0x11, 0x17, 255}
+	view := func(c *context) {
+		coreRow(c).Children(func() {
+			coreImage(c, s).Label("theme")
+			coreImage(c, s.WithDark(false)).Label("light")
+			coreImage(c, s.WithDark(true)).Label("dark")
+		})
+	}
+	tt := coreNewTester(view, 100, 100)
+	check := func(label string, want color.RGBA) {
+		t.Helper()
+		r, _ := tt.Find(label)
+		if c := colorIn(tt.Image(), r, 1); c != want {
+			t.Errorf("%s: %v, want %v", label, c, want)
+		}
+	}
+	check("theme", light)
+	check("light", light)
+	check("dark", dark)
+	tt.SetDark(true)
+	check("theme", dark)
+	check("light", light)
+	check("dark", dark)
+	// Image, the method, draws light unless told.
+	if c := s.Image(4, 4, nil).RGBAAt(2, 2); c != light {
+		t.Errorf("Image: %v, want light", c)
+	}
+	if c := s.WithDark(true).Image(4, 4, nil).RGBAAt(2, 2); c != dark {
+		t.Errorf("Image of WithDark(true): %v, want dark", c)
+	}
+}
+
+func TestSVGUnsupported(t *testing.T) {
+	s := MustParseSVG([]byte(`<svg viewBox="0 0 10 10"><rect width="5" height="5" filter="url(#f)"/><image href="a.png" width="5" height="5"/></svg>`))
+	if got := s.Unsupported(); !slices.Equal(got, []string{"<image>", "filter"}) {
+		t.Errorf("Unsupported() = %q", got)
+	}
+	for _, src := range []string{squareSVG, checkSVG, logoSVG, schemeSVG, textSVG} {
+		if got := MustParseSVG([]byte(src)).Unsupported(); len(got) != 0 {
+			t.Errorf("Unsupported() = %q for an SVG drawn whole", got)
+		}
+	}
+	var none *SVG
+	if none.Unsupported() != nil {
+		t.Error("a nil SVG has something unsupported")
+	}
+}
+
+// A label centered on x = 100, in the system's fonts.
+const textSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60">
+<text x="100" y="40" font-family="sans-serif" font-size="32" text-anchor="middle" fill="#00f">HIH</text></svg>`
+
+// TestSVGText draws text with the system's fonts, centered where
+// text-anchor says.
+func TestSVGText(t *testing.T) {
+	s := MustParseSVG([]byte(textSVG))
+	tt := coreNewTester(func(c *context) {
+		coreImage(c, s).Background(RGB(255, 255, 255))
+	}, 200, 60)
+	img := tt.Image()
+	x0, x1, y0, y1 := 200, 0, 60, 0
+	for y := range 60 {
+		for x := range 200 {
+			if c := img.RGBAAt(x, y); c.B > 200 && c.R < 100 {
+				x0, x1, y0, y1 = min(x0, x), max(x1, x+1), min(y0, y), max(y1, y+1)
+			}
+		}
+	}
+	if x1 <= x0 {
+		t.Fatal("no text drawn")
+	}
+	// The letters, as wide as 32 pixels' three capitals, stand on the
+	// baseline at 40, centered on 100.
+	if mid := float32(x0+x1) / 2; mid < 98 || mid > 102 {
+		t.Errorf("the text is from x %d to %d: centered on %v, not 100", x0, x1, mid)
+	}
+	if w := x1 - x0; w < 40 || w > 90 {
+		t.Errorf("the text is %d pixels wide", w)
+	}
+	if y1 < 38 || y1 > 41 || y0 > 22 || y0 < 10 {
+		t.Errorf("the text is from y %d to %d, not on the baseline at 40", y0, y1)
+	}
 }

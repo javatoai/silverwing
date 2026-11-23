@@ -33,7 +33,7 @@ func (ed *editor) run(cmd Command) bool {
 	case MoveSubwordRight, SelectSubwordRight:
 		return ed.move(cmd == SelectSubwordRight, func(s sel) int { return wordRight(*r, s.head, extra, true) })
 	case MoveUp, SelectUp, MoveDown, SelectDown, MovePageUp, SelectPageUp, MovePageDown, SelectPageDown:
-		if ed.complete.open() && (cmd == MoveUp || cmd == MoveDown) {
+		if ed.completing() && (cmd == MoveUp || cmd == MoveDown) {
 			ed.complete.step(direction(cmd == MoveUp))
 			return true
 		}
@@ -164,7 +164,7 @@ func (ed *editor) run(cmd Command) bool {
 		return true
 	case Cancel:
 		switch {
-		case ed.complete.open():
+		case ed.completing():
 			ed.complete.close()
 		case ed.hover.open():
 			ed.hover.close()
@@ -174,6 +174,11 @@ func (ed *editor) run(cmd Command) bool {
 			ed.find.open = false
 			ed.needsBuild = true
 			ed.refocus = true
+		case ed.snippet != nil:
+			ed.snippet = nil
+			p := ed.primary()
+			p.collapse(p.head)
+			ed.setSels([]sel{p}, revealFit)
 		case len(ed.sels) > 1:
 			p := ed.primary()
 			ed.setSels([]sel{p}, revealFit)
@@ -242,7 +247,7 @@ func (ed *editor) run(cmd Command) bool {
 	case DeleteLine:
 		return ed.deleteLines()
 	case Newline:
-		if ed.complete.open() {
+		if ed.completing() {
 			return ed.acceptCompletion()
 		}
 		return ed.newline()
@@ -267,10 +272,16 @@ func (ed *editor) run(cmd Command) bool {
 	case Indent:
 		return ed.indentLines(1)
 	case Outdent, Backtab:
+		if cmd == Backtab && ed.stepSnippet(true) {
+			return true
+		}
 		return ed.indentLines(-1)
 	case Tab:
-		if ed.complete.open() {
+		if ed.completing() {
 			return ed.acceptCompletion()
+		}
+		if ed.stepSnippet(false) {
+			return true
 		}
 		if ed.acceptSuggestion() {
 			return true
@@ -388,7 +399,7 @@ func (ed *editor) move(extend bool, fn func(sel) int) bool {
 	sels := slices.Clone(ed.sels)
 	for i := range sels {
 		s := &sels[i]
-		to := ed.overFolds(s.head, fn(*s))
+		to := ed.stepTo(*s, fn)
 		if extend {
 			s.head = to
 		} else {
@@ -499,10 +510,15 @@ func direction(back bool) int {
 // overFolds moves a caret going from off to to over the lines a fold
 // hides rather than into them, which would unfold them: going forward to
 // the first line shown after them, back to the end of the line folding
-// them, as Zed and VS Code skip a fold.
+// them, as Zed and VS Code skip a fold. It moves over the lines
+// replacements hide alike.
 func (ed *editor) overFolds(off, to int) int {
 	r := &ed.view.text
-	h := heights{hidden: ed.hiddenSpans()}
+	hidden := ed.hiddenSpans()
+	if rl := ed.view.replacedLines(); len(rl) > 0 {
+		hidden = mergeSpans(append(hidden, rl...))
+	}
+	h := heights{hidden: hidden}
 	line := r.LineOf(to)
 	if !h.isHidden(line) {
 		return to
@@ -511,10 +527,10 @@ func (ed *editor) overFolds(off, to int) int {
 		if line < sp.from || line > sp.to {
 			continue
 		}
-		if to > off && sp.to+1 < r.LineCount() {
+		if (to > off || sp.from == 0) && sp.to+1 < r.LineCount() {
 			return r.LineStart(sp.to + 1)
 		}
-		return r.LineEnd(sp.from - 1)
+		return r.LineEnd(max(sp.from-1, 0))
 	}
 	return to
 }

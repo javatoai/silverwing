@@ -56,7 +56,7 @@ func (a *area) wrappedHeight(e *node, ed *editor, cw float32) float32 {
 		if params != a.wrappedParams || a.wrappedVersion != ed.buf.version || a.wrappedCompose != ed.compose {
 			empty := params
 			empty.Text = ""
-			limit := float32(ed.lines[1]) * textSystem().Layout(empty).Lines[0].Height
+			limit := float32(ed.lines[1]) * ed.sys.Layout(empty).Lines[0].Height
 			var height float32
 			for p := 0; p < len(ed.buf.paras) && height < limit; p++ {
 				part := params
@@ -66,7 +66,7 @@ func (a *area) wrappedHeight(e *node, ed *editor, cw float32) float32 {
 					part.Text = part.Text[:at] + ed.compose + part.Text[at:]
 				}
 				part.Spans = ed.rangeKey(ed.buf.start(p), ed.buf.end(p))
-				height += textSystem().Shape(part).Height
+				height += ed.sys.Shape(part).Height
 			}
 			a.wrapped, a.wrappedParams, a.wrappedVersion = height, params, ed.buf.version
 			a.wrappedCompose = ed.compose
@@ -79,7 +79,7 @@ func (a *area) wrappedHeight(e *node, ed *editor, cw float32) float32 {
 	params.Spans = ed.rangeKey(0, ed.buf.n)
 	if params != a.wrappedParams {
 		a.wrappedParams = params
-		a.wrapped = textSystem().Layout(params).Height
+		a.wrapped = ed.sys.Layout(params).Height
 	}
 	return a.wrapped
 }
@@ -120,7 +120,7 @@ func (a *area) edited(b *buffer, first int, old []paragraph, after int) {
 
 // sync gets the heights in step with the buffer and the layouts' params,
 // which a new width or style changes.
-func (a *area) sync(b *buffer, params text.Params) {
+func (a *area) sync(ed *editor, b *buffer, params text.Params) {
 	if params != a.params {
 		for i := range b.paras {
 			b.paras[i].layout, b.paras[i].h = nil, 0
@@ -130,7 +130,7 @@ func (a *area) sync(b *buffer, params text.Params) {
 		a.version = 0
 		empty := params
 		empty.Text = ""
-		a.line = textSystem().Layout(empty).Lines[0]
+		a.line = ed.sys.Layout(empty).Lines[0]
 	}
 	if a.version != b.version || len(a.hs.measured) != len(b.paras)+1 {
 		if a.version != b.version {
@@ -173,7 +173,7 @@ func (a *area) paraLayout(ed *editor, p int) *text.Layout {
 		t = strings.Clone(t)
 	}
 	params.Text, params.Spans = t, spans
-	l := textSystem().Shape(params)
+	l := ed.sys.Shape(params)
 	if pr.layout == nil {
 		a.laid++
 	}
@@ -257,6 +257,12 @@ func (a *area) documentPositionAt(ed *editor, x float32, y float64) text.CaretPo
 }
 
 func (a *area) hitPosition(ed *editor, x float32, y float64, virtual bool) text.CaretPosition {
+	if a.version != ed.buf.version {
+		// The app replaced the text since the layout, and a drag that
+		// goes on looks for the pointer in the new one before it is
+		// laid out: the heights are still the old paragraphs'.
+		a.sync(ed, &ed.buf, a.params)
+	}
 	n := len(ed.buf.paras)
 	y = max(y, 0)
 	p := a.hs.at(y)
@@ -301,7 +307,7 @@ func (a *area) layout(e *node, cw, ch float32) {
 	b := &ed.buf
 	params := e.textParams(cw)
 	params.KeepSpaces, params.MaxLines = true, 0
-	a.sync(b, params)
+	a.sync(ed, b, params)
 
 	st := e.st
 	if st.scrollY != a.lastScroll {
@@ -386,7 +392,7 @@ func (a *area) forget(b *buffer) {
 func (a *area) paint(e *node, p *Painter, ox, oy float32) {
 	ed := e.st.editor
 	b := &ed.buf
-	t := e.c.theme
+	t := p.Theme()
 	ts := e.resolvedText()
 	focused := e.Focused()
 	last := len(b.paras) - 1
@@ -420,11 +426,12 @@ func (a *area) paint(e *node, p *Painter, ox, oy float32) {
 		rt := e.c.rt
 		phase := e.c.now.Sub(rt.blinkStart)
 		const blink = 530 * time.Millisecond
-		if (phase/blink)%2 == 0 {
+		if (phase/blink)%2 == 0 && ed.caretWidth > 0 {
 			x, y, h := a.caretAt(ed, ed.caret, ed.composeCaret)
-			p.add(scene.Op{Kind: scene.OpFill, Rect: p.snap(Rect{ox + x, oy + float32(y-a.scroll), 0, h}), Color: t.Accent.scene(), Wide: p.wide(t.Accent, Color{}, Color{}), Opacity: p.opacity})
+			caret := ts.caretColor(t)
+			p.add(scene.Op{Kind: scene.OpFill, Rect: p.snap(Rect{ox + x, oy + float32(y-a.scroll), 0, h}), Color: caret.scene(), Wide: p.wide(caret, Color{}, Color{}), Opacity: p.opacity})
 			op := &p.s.Ops[len(p.s.Ops)-1]
-			op.Rect.W = max(round(p.scale), 1)
+			op.Rect.W = max(round(ed.caretWidth*p.scale), 1)
 		}
 		if phase < 30*time.Second {
 			e.c.After(blink - phase%blink)

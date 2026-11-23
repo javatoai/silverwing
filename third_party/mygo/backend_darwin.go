@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build darwin && !ios
 
 package mygo
 
@@ -10,6 +10,8 @@ import (
 func newBackend() platform.Backend { return darwin.New() }
 
 func enableNotificationSenders() { darwin.EnableNotificationSenders() }
+
+func linkNotificationImages() { darwin.LinkNotificationImages() }
 
 func linkContentRules() { darwin.LinkContentRules() }
 

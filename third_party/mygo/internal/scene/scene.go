@@ -87,7 +87,12 @@ const (
 	// being its right or bottom edge; nothing outside Src shows.
 	OpImage
 	// OpPushClip clips the following ops to Rect with Radii, intersected
-	// with the clip in effect, until the matching OpPopClip.
+	// with the clip in effect, until the matching OpPopClip. Unless
+	// PaintSolid, the alpha of its Paint, a gradient of Color and Color2
+	// or of Stops as an OpFill's, masks what it clips too, as CSS's
+	// mask-image does; so does, with Image, the alpha of Image's Src
+	// drawn over Rect, as OpImage draws it: a coverage mask, as a path's
+	// (ClipShape.Masks).
 	OpPushClip
 	// OpPopClip restores the clip in effect before the matching OpPushClip.
 	OpPopClip
@@ -200,6 +205,12 @@ const (
 	// CSS's conic-gradient() is; PaintConicOklab mixes them in Oklab.
 	PaintConic
 	PaintConicOklab
+	// PaintRadial is a radial gradient of the op's Stops from (Gradient[0],
+	// Gradient[1]) at 0 to a circle of radius Gradient[2] around it at 1,
+	// mixed in sRGB, as CSS's radial-gradient() is; PaintRadialOklab mixes
+	// them in Oklab.
+	PaintRadial
+	PaintRadialOklab
 )
 
 // Stop is a color of a gradient with stops (Op.Stops), at a place along
@@ -216,7 +227,7 @@ type Stop struct {
 const MaxStops = 32
 
 // HasStops reports whether paint takes its colors from the op's Stops.
-func (p Paint) HasStops() bool { return p >= PaintLinearStops && p <= PaintConicOklab }
+func (p Paint) HasStops() bool { return p >= PaintLinearStops && p <= PaintRadialOklab }
 
 // Uniform returns the widths of a border as wide on every side.
 func Uniform(w float32) [4]float32 { return [4]float32{w, w, w, w} }
@@ -464,7 +475,41 @@ type Image struct {
 	// nil for images that keep their pixels.
 	Restore func() []byte
 	Dropped func()
+	// GPU, for an image something draws on the GPU (native.Texture),
+	// gives GPU renderers a texture of their own showing its pixels with
+	// no copy, which they make again as Version changes. A renderer it
+	// gives none, as the CPU renderer, draws the pixels Restore reads. An
+	// interface its owner implements, so that renderers link no code of
+	// it.
+	GPU GPUSource
+	// Surface, unless nil, is a frame of video that renderers sample where
+	// a decoder left it, rather than upload Pix (see Surface); Restore
+	// converts it for those that need Pix.
+	Surface *Surface
 }
+
+// GPUSource gives renderers a texture showing an image that something
+// draws on the GPU (Image.GPU).
+type GPUSource interface {
+	// GPUTexture returns a new texture of device, of the API api, that
+	// shows the image's pixels now, which the renderer owns, or 0 where it
+	// has none for api: the renderer then draws the image's pixels.
+	GPUTexture(api GPUAPI, device uintptr) uintptr
+}
+
+// GPUAPI names the API of a GPU renderer, for a GPUSource.
+type GPUAPI uint8
+
+const (
+	// Metal: device is an id<MTLDevice>, the texture an id<MTLTexture>.
+	Metal GPUAPI = iota + 1
+	// Direct3D11: device is an ID3D11Device*, the texture an
+	// ID3D11ShaderResourceView*.
+	Direct3D11
+	// OpenGL: device is 0, in the renderer's context; the texture is a
+	// texture name.
+	OpenGL
+)
 
 // NewCanvas returns a w×h image that renderers draw from a scene of its
 // own, cleared to transparent: render to texture.
@@ -518,16 +563,21 @@ func (m *Image) Uploaded() {
 // Resize keeps the image's texture-cache identity while changing its size.
 // Renderers replace the backing texture on a size change, so an animated
 // clip does not leave a new texture in the cache on every frame.
+//
+// It reuses the pixels' memory where they fit, unless they take up less
+// than a quarter of it: an image that shrank much doesn't keep its
+// largest size, as a clip mask that turned would (#1407).
 func (m *Image) Resize(w, h int) {
 	m.W, m.H = w, h
+	n := 4 * w * h
 	switch {
 	case m.Scene != nil && m.Pix == nil:
 		// A canvas no renderer drew in memory: its pixels are made when
 		// one does.
-	case cap(m.Pix) >= 4*w*h:
-		m.Pix = m.Pix[:4*w*h]
+	case cap(m.Pix) >= n && n >= cap(m.Pix)/4:
+		m.Pix = m.Pix[:n]
 	default:
-		m.Pix = make([]byte, 4*w*h)
+		m.Pix = make([]byte, n)
 	}
 	m.Changed()
 }

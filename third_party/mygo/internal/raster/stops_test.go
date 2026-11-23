@@ -59,6 +59,51 @@ func TestConic(t *testing.T) {
 	}
 }
 
+// A radial gradient spreads from its center, its stops at their fractions
+// of its radius: its first color at the center, its last past the radius,
+// and between them the sRGB mix, or the Oklab one, which is lighter.
+func TestRadial(t *testing.T) {
+	s := &scene.Scene{Width: 100, Height: 100}
+	s.Stops = []scene.Stop{{Color: red, At: 0}, {Color: blue, At: 1}}
+	s.Ops = []scene.Op{{Kind: scene.OpFill, Rect: scene.Rect{W: 100, H: 100}, Paint: scene.PaintRadial,
+		Gradient: [4]float32{50, 50, 40, 0}, Stops: [2]int32{0, 2}}}
+	img := NewImage(100, 100)
+	Render(img, s)
+	for _, c := range []struct {
+		x, y int
+		want [4]byte
+	}{
+		{50, 50, [4]byte{251, 0, 4, 255}},   // the center
+		{70, 50, [4]byte{125, 0, 130, 255}}, // halfway out, to the right
+		{50, 29, [4]byte{125, 0, 130, 255}}, // and up: a circle
+		{95, 50, [4]byte{0, 0, 255, 255}},   // past the radius
+		{2, 2, [4]byte{0, 0, 255, 255}},     // the corner
+	} {
+		if got := at(img, c.x, c.y); !nearRGBA(got, c.want, 4) {
+			t.Errorf("(%d, %d) = %v, want %v", c.x, c.y, got, c.want)
+		}
+	}
+	// Off center, with the radius as far as the right edge.
+	s.Ops[0].Gradient = [4]float32{20, 50, 80, 0}
+	Render(img, s)
+	if got := at(img, 20, 50); !nearRGBA(got, [4]byte{253, 0, 2, 255}, 4) {
+		t.Errorf("the center moved left %v, want red", got)
+	}
+	if got := at(img, 59, 50); !nearRGBA(got, [4]byte{128, 0, 127, 255}, 4) {
+		t.Errorf("halfway to the right edge %v, want the mix", got)
+	}
+	mid := at(img, 59, 50)
+	s.Ops[0].Paint = scene.PaintRadialOklab
+	Render(img, s)
+	ok := at(img, 59, 50)
+	if int(ok[0])+int(ok[1])+int(ok[2]) <= int(mid[0])+int(mid[1])+int(mid[2]) {
+		t.Errorf("the Oklab mix %v is no lighter than the sRGB one %v", ok, mid)
+	}
+	if got := at(img, 20, 50); got[0] < 245 || got[1] > 20 || got[2] > 20 || got[3] != 255 {
+		t.Errorf("the Oklab center %v, want red", got)
+	}
+}
+
 // A linear gradient with stops shows its first color before its first
 // stop and its last after its last, and mixes in sRGB, or in Oklab, whose
 // middle between red and blue is lighter.
@@ -153,5 +198,62 @@ func TestImageBlur(t *testing.T) {
 		if got := at(img, 2, 2); got[3] != 0 {
 			t.Errorf("blur %v: the corner %v, want transparent", sigma, got)
 		}
+	}
+}
+
+// The sRGB table that Oklab mixes convert with is toSRGB within the
+// rounding of a channel, and nothing else.
+func TestSRGBTable(t *testing.T) {
+	for c := float32(-0.5); c <= 1; c += 1.0 / 100003 {
+		if got, want := srgb(c), toSRGB(c); math.Abs(float64(got-want))*255 > 0.001 {
+			t.Fatalf("srgb(%v) = %v, toSRGB %v: %v of 255 off", c, got, want, math.Abs(float64(got-want))*255)
+		}
+	}
+	if got := srgb(2); got != srgbTable[srgbSteps] || got > 1 {
+		t.Errorf("srgb(2) = %v, want white: %v", got, srgbTable[srgbSteps])
+	}
+	if got := srgb(-1); got != -12.92 {
+		t.Errorf("srgb(-1) = %v, want the linear part", got)
+	}
+}
+
+// An Oklab mix converts through the table, and is what fromOklab gives
+// with toSRGB, a channel within 1 of 255: each pixel's center mixes the
+// stops at its own fraction of the gradient.
+func TestOklabFillMatchesToSRGB(t *testing.T) {
+	s := &scene.Scene{Width: 256, Height: 8}
+	s.Stops = []scene.Stop{{Color: scene.Color{R: 255, G: 64, A: 255}, At: 0}, {Color: scene.Color{B: 200, G: 255, A: 255}, At: 1}}
+	s.Ops = []scene.Op{{Kind: scene.OpFill, Rect: scene.Rect{W: 256, H: 8}, Paint: scene.PaintLinearStopsOklab,
+		Gradient: [4]float32{0, 0, 256, 0}, Stops: [2]int32{0, 2}}}
+	img := NewImage(256, 8)
+	Render(img, s)
+	lab := [][3]float32{oklab(s.Stops[0].Color), oklab(s.Stops[1].Color)}
+	for x := range 256 {
+		k := (float32(x) + 0.5) / 256
+		var l [3]float32
+		for i := range l {
+			l[i] = lab[0][i]*(1-k) + lab[1][i]*k
+		}
+		want := exactOklab(l)
+		got := at(img, x, 4)
+		for ch, name := range []string{"red", "green", "blue"} {
+			d := int(got[ch]) - int(math.Round(float64(want[ch])*255))
+			if got[3] != 255 || d > 1 || d < -1 {
+				t.Errorf("at %d, %s is %d, want %v: %v", x, name, got[ch], want[ch]*255, got)
+			}
+		}
+	}
+}
+
+// exactOklab is fromOklab with toSRGB, as it was before the table.
+func exactOklab(lab [3]float32) [3]float32 {
+	l := lab[0] + 0.3963377774*lab[1] + 0.2158037573*lab[2]
+	m := lab[0] - 0.1055613458*lab[1] - 0.0638541728*lab[2]
+	s := lab[0] - 0.0894841775*lab[1] - 1.2914855480*lab[2]
+	l, m, s = l*l*l, m*m*m, s*s*s
+	return [3]float32{
+		toSRGB(4.0767416621*l - 3.3077115913*m + 0.2309699292*s),
+		toSRGB(-1.2684380046*l + 2.6097574011*m - 0.3413193965*s),
+		toSRGB(-0.0041960863*l - 0.7034186147*m + 1.7076147010*s),
 	}
 }

@@ -8,5 +8,5 @@ const taskMaterialsMarkdownEditContext = "task-materials"
 
 func markdownSaveRefWritable(ref documentSaveRef) bool {
 	return !ref.readOnly && (ref.kind == "material-text" || ref.kind == "material-markdown" ||
-		ref.kind == "instruction" && (ref.scope == "global" || ref.scope == "group" || ref.scope == "task" && ref.localTaskRules))
+		ref.kind == "instruction" && (ref.scope == "global" || ref.scope == "task" && ref.localTaskRules))
 }

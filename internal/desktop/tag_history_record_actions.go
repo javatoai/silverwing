@@ -51,6 +51,19 @@ func (s *app) tagHistoryAnnouncementCopiedMessage(group tagHistoryGroup, text st
 	return tagReleaseNoticeCopiedPrefix + text + tagReleaseNoticeRecipientSeparator + recipients
 }
 
+func (s *app) tagHistoryAnnouncementForCopy(group tagHistoryGroup) string {
+	text := s.tagHistoryAnnouncement(group)
+	if s.integrationReady("genbu") || len(group.Item.Operations) == 0 {
+		return text
+	}
+	for _, operation := range group.Item.Operations {
+		if operation.State != domain.TagOperationSuccess || operation.Tag == nil || strings.TrimSpace(*operation.Tag) == "" {
+			return text
+		}
+	}
+	return strings.Replace(text, "测试Tag已构建完毕，辛苦发版：", "测试Tag已推送，辛苦发版：", 1)
+}
+
 func tagHistoryRetryPresentation(record application.TagRecord) (string, string) {
 	switch record.RetryKind {
 	case "RETAG":

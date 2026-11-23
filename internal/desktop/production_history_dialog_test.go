@@ -3,6 +3,8 @@ package desktop
 import (
 	"errors"
 	"fmt"
+	"maps"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +19,7 @@ import (
 
 func productionHistoryRecord(b production.Batch, id, branch string, created time.Time) production.Batch {
 	b.ID, b.ReleaseBranch, b.CreatedAt = id, branch, created.UTC().Format(time.RFC3339Nano)
+	b.ReleaseCreatedAt = b.CreatedAt
 	b.Ended, b.Phase = true, "ENDED"
 	b.Tags = []production.Tag{{Name: "2.3.42", PushedAt: b.CreatedAt, Status: domain.GenbuTagProbeStatus{Build: domain.GenbuSuccess}}}
 	return b
@@ -75,11 +78,65 @@ func TestProductionHistoryListLocalReadFailureRetryAndScope(t *testing.T) {
 	}
 }
 
-func TestProductionHistoryViewReturnPreservesInputsAndInvalidatesPreparation(t *testing.T) {
+func TestProductionHistoryClosingLoadingDrawerRetiresItsListResult(t *testing.T) {
+	s, v, b, backend, window := productionRequestFixture(t)
+	v.Message, v.BuildChecked = "kept result", true
+	before := *v
+	now := time.Now()
+	retired := productionHistoryRecord(b, "retired-read", "release/retired-read", now)
+	fresh := productionHistoryRecord(b, "current-read", "release/current-read", now)
+	state := s.releaseUnit.state.production
+	tester := productionIterationTester(s, 960, false)
+	open := func() *productionHistoryDialog {
+		t.Helper()
+		if err := tester.Click("历史批次"); err != nil {
+			t.Fatal(err)
+		}
+		if call := productionTestCall(t, backend); call.Kind != "production.list" {
+			t.Fatalf("opening the drawer dispatched %s", call.Kind)
+		}
+		drawer := state.historyDialog
+		if drawer == nil || !drawer.Loading || !v.Busy || v.request == nil {
+			t.Fatal("drawer did not start a list read")
+		}
+		return drawer
+	}
+	oldDrawer := open()
+	oldWorker := v.request
+	// Simulate a completed read whose UI callback is queued behind the user's close.
+	backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batches: []production.Batch{b, retired}}}}
+	var retiredUpdate func()
+	select {
+	case retiredUpdate = <-window.updates:
+	case <-time.After(time.Second):
+		t.Fatal("retired list result was not queued")
+	}
+	if err := tester.Click("关闭"); err != nil {
+		t.Fatal(err)
+	}
+	if oldDrawer.Open || state.historyDialog != nil || v.Busy || v.request != nil || !oldWorker.canceled.Load() {
+		t.Fatal("closing the loading drawer did not immediately release its request")
+	}
+	newDrawer := open()
+	newWorker := v.request
+	retiredUpdate()
+	if newDrawer == oldDrawer || state.historyDialog != newDrawer || !newDrawer.Loading || !v.Busy || v.request != newWorker || len(s.productionHistoryRecords(newDrawer)) != 0 {
+		t.Fatal("retired result modified the reopened drawer or its request")
+	}
+	backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batches: []production.Batch{b, fresh}}}}
+	productionTestUpdate(t, window)
+	list := s.productionHistoryRecords(newDrawer)
+	if !newDrawer.Open || newDrawer.Loading || newDrawer.Error != "" || len(list) != 1 || list[0].ID != fresh.ID || !reflect.DeepEqual(*v, before) {
+		t.Fatal("the reopened drawer did not show its own result and preserve the release view")
+	}
+}
+
+func TestProductionHistoryDrawerNavigationPreservesCurrentView(t *testing.T) {
 	for _, active := range []bool{false, true} {
 		t.Run(fmt.Sprint(active), func(t *testing.T) {
 			s, v, b := productionFixture(t)
 			old := productionHistoryRecord(b, "old", "release/old", time.Now())
+			old.Branches = []production.MergedBranch{{Branch: "feature/only-in-history"}}
 			other := productionHistoryRecord(b, "other", "release/other", time.Now().Add(-time.Hour))
 			s.releaseUnit.state.production.batches = []production.Batch{old, other}
 			if active {
@@ -87,63 +144,87 @@ func TestProductionHistoryViewReturnPreservesInputsAndInvalidatesPreparation(t *
 			} else {
 				v.BatchID = ""
 			}
-			v.Version, v.Branch, v.BranchQuery, v.SuggestedBranch, v.ManualTag = "release/manually-typed", "feature/typed", "query", "suggestion", "2.3.43"
-			preview := v.Preview
-			s.openProductionHistory(v)
-			d := s.releaseUnit.state.production.historyDialog
-			s.viewProductionHistory(d, old)
-			if d.Open || v.BatchID != old.ID || v.Preview != nil || !v.PreparationInvalid {
-				t.Fatal("view did not isolate history")
+			v.Version, v.Branch, v.BranchQuery, v.SuggestedBranch = "release/manually-typed", "feature/typed", "query", "suggestion"
+			v.BuildChecked, v.Generation, v.ActiveStep = active, 12, 4
+			v.Error, v.Message = "kept error", "kept result"
+			v.Steps = map[int]productionStepView{4: {State: "complete", Message: "kept step"}}
+			before := *v
+			before.Steps = maps.Clone(v.Steps)
+			assertPreserved := func() {
+				t.Helper()
+				if s.productionView() != v || v.Preview != before.Preview || !reflect.DeepEqual(*v, before) {
+					t.Fatalf("drawer navigation changed the release view: got %+v, want %+v", *v, before)
+				}
 			}
 			tester := productionIterationTester(s, 960, false)
-			wantReturn := "返回发布操作"
-			if active {
-				wantReturn = "返回当前批次"
+			if err := tester.Click("历史批次"); err != nil {
+				t.Fatal(err)
 			}
-			if !tester.HasText(wantReturn) || !tester.HasText("已合并：feature/synthetic") {
-				t.Fatal("missing return or ended merge record")
+			d := s.releaseUnit.state.production.historyDialog
+			if d == nil || !d.Open || d.SelectedBatchID != "" {
+				t.Fatal("opening history did not show the list")
 			}
-			s.openProductionHistory(v)
-			d = s.releaseUnit.state.production.historyDialog
-			if len(s.productionHistoryRecords(d)) != 2 {
-				t.Fatal("current historical row was excluded")
+			assertPreserved()
+			if err := tester.Click(old.ReleaseBranch); err != nil {
+				t.Fatal(err)
 			}
-			tester.Frame()
-			if !tester.HasText("当前查看") {
-				t.Fatal("current row not marked")
+			if !d.Open || d.SelectedBatchID != old.ID || !tester.HasText("已合并：feature/only-in-history") || !tester.HasText("示例服务：2.3.42") {
+				t.Fatal("opening the row did not show the recorded merge and Tag inside the drawer")
 			}
-			s.viewProductionHistory(d, other)
-			s.returnFromProductionHistory(v)
-			wantID := ""
-			if active {
-				wantID = b.ID
+			assertPreserved()
+			if err := tester.Click("返回历史批次"); err != nil {
+				t.Fatal(err)
 			}
-			if v.BatchID != wantID || v.Version != "release/manually-typed" || v.Branch != "feature/typed" || v.BranchQuery != "query" || v.SuggestedBranch != "suggestion" || v.ManualTag != "2.3.43" || v.Preview != preview || !v.PreparationInvalid || v.BuildChecked || v.historyReturn != nil {
-				t.Fatal("return lost inputs or restored build authorization")
+			if !d.Open || d.SelectedBatchID != "" || !tester.HasText(old.ReleaseBranch) || !tester.HasText(other.ReleaseBranch) {
+				t.Fatal("returning from detail did not restore the scoped list")
 			}
+			assertPreserved()
+			if err := tester.Click(other.ReleaseBranch); err != nil {
+				t.Fatal(err)
+			}
+			if !d.Open || d.SelectedBatchID != other.ID || tester.HasText("已合并：feature/only-in-history") {
+				t.Fatal("second row did not replace the historical detail")
+			}
+			if err := tester.Click("关闭"); err != nil {
+				t.Fatal(err)
+			}
+			if d.Open || tester.HasText(other.ReleaseBranch) {
+				t.Fatal("closing from detail left historical data on the release page")
+			}
+			assertPreserved()
 		})
 	}
 }
 
 func TestProductionHistoryRowDeletionKeepsDialogAndExactTarget(t *testing.T) {
-	for _, scenario := range []string{"other", "current-with-active", "current-last"} {
+	for _, scenario := range []string{"multiple-history", "with-active", "history-only"} {
 		t.Run(scenario, func(t *testing.T) {
 			s, v, b, backend, window := productionRequestFixture(t)
 			old := productionHistoryRecord(b, "history-delete", "release/history", time.Now())
 			s.releaseUnit.state.production.batches = append(s.releaseUnit.state.production.batches, old)
-			if scenario == "current-last" {
+			var wantRecords int
+			switch scenario {
+			case "multiple-history":
+				other := productionHistoryRecord(b, "history-kept", "release/kept", time.Now().Add(-time.Hour))
+				s.releaseUnit.state.production.batches = append(s.releaseUnit.state.production.batches, other)
+				wantRecords = 1
+			case "history-only":
 				s.releaseUnit.state.production.batches, v.BatchID = []production.Batch{old}, ""
 			}
 			v.Version, v.Branch, v.BranchQuery = "release/manual", "feature/manual", "search"
 			d := openProductionHistoryTest(t, s, v, backend, window)
-			if scenario != "other" {
-				s.viewProductionHistory(d, old)
-				d = openProductionHistoryTest(t, s, v, backend, window)
-			}
 			ownerID := v.BatchID
-			confirm := func() {
+			tester := productionIterationTester(s, 960, false)
+			confirm := func(action string) {
+				t.Helper()
 				s.win = &mygo.Window{}
-				s.confirmProductionDeleteRecord(v, old, d)
+				tester.Frame()
+				if err := tester.Click("更多批次操作 · " + old.ReleaseBranch); err != nil {
+					t.Fatal(err)
+				}
+				if err := tester.Click(action); err != nil {
+					t.Fatal(err)
+				}
 				confirmation := s.confirmationDialog
 				if confirmation == nil || !confirmation.Current() || confirmation.Buttons[0].label != "删除本地记录" {
 					t.Fatal("missing protected confirmation")
@@ -151,7 +232,7 @@ func TestProductionHistoryRowDeletionKeepsDialogAndExactTarget(t *testing.T) {
 				s.win = nil
 				s.finishConfirmationDialog(confirmation, 0)
 			}
-			confirm()
+			confirm("删除")
 			call := productionTestCall(t, backend)
 			token, _ := production.BatchRecordToken(old)
 			if call.Kind != "production.delete" || call.Payload["batchId"] != old.ID || call.Payload["recordToken"] != token || v.BatchID != ownerID {
@@ -166,15 +247,15 @@ func TestProductionHistoryRowDeletionKeepsDialogAndExactTarget(t *testing.T) {
 			if !d.Open || d.RowErrors[old.ID] != "save denied" || s.releaseUnit.state.production.deletedBatches[old.ID] || v.BatchID != ownerID {
 				t.Fatal("failed deletion changed record/page")
 			}
-			confirm()
+			tester.Frame()
+			if !tester.HasText("删除失败：save denied") {
+				t.Fatal("failed deletion did not show the row error")
+			}
+			confirm("重试删除")
 			productionTestCall(t, backend)
 			backend.replies <- productionTestAnswer{result: application.ActionResult{Message: "本地批次记录已删除"}}
 			productionTestUpdate(t, window)
-			wantID := b.ID
-			if scenario == "current-last" {
-				wantID = ""
-			}
-			if !d.Open || !s.releaseUnit.state.production.deletedBatches[old.ID] || len(s.productionHistoryRecords(d)) != 0 || v.BatchID != wantID || v.Version != "release/manual" || v.Branch != "feature/manual" || v.BranchQuery != "search" || len(backend.calls) != 0 || s.lastMessage == "" {
+			if !d.Open || !s.releaseUnit.state.production.deletedBatches[old.ID] || len(s.productionHistoryRecords(d)) != wantRecords || v.BatchID != ownerID || v.Version != "release/manual" || v.Branch != "feature/manual" || v.BranchQuery != "search" || len(backend.calls) != 0 || s.lastMessage == "" {
 				t.Fatal("success failed to retain the dialog/inputs or removed the wrong record")
 			}
 		})
@@ -189,18 +270,30 @@ func TestProductionHistoryDeleteNestedEscapeAndNoClickThrough(t *testing.T) {
 	s.openProductionHistory(v)
 	d := s.releaseUnit.state.production.historyDialog
 	tester := productionIterationTester(s, 960, false)
-	if err := tester.Click("删除"); err != nil {
-		t.Fatal(err)
+	row, found := tester.Find(old.ReleaseBranch)
+	if !found {
+		t.Fatal("missing historical row")
 	}
-	if s.confirmationDialog == nil || !tester.Focused("取消") {
-		t.Fatal("delete did not focus cancel")
+	openDelete := func() {
+		t.Helper()
+		if err := tester.Click("更多批次操作 · " + old.ReleaseBranch); err != nil {
+			t.Fatal(err)
+		}
+		if err := tester.Click("删除"); err != nil {
+			t.Fatal(err)
+		}
+		if s.confirmationDialog == nil || !tester.Focused("取消") {
+			t.Fatal("delete did not focus cancel")
+		}
 	}
-	// A button in the lower dialog must not navigate underneath confirmation.
-	if r, ok := tester.Find("查看"); ok {
-		tester.ClickAt(r.X+r.W/2, r.Y+r.H/2)
-	}
-	if v.BatchID != b.ID || s.confirmationDialog == nil || !d.Open {
+	openDelete()
+	// The row must not navigate underneath confirmation.
+	tester.ClickAt(row.X+row.W-3, row.Y+row.H/2)
+	if v.BatchID != b.ID || d.SelectedBatchID != "" || !d.Open {
 		t.Fatal("click passed through confirmation")
+	}
+	if s.confirmationDialog == nil {
+		openDelete()
 	}
 	tester.Key(0, ui.KeyEscape)
 	if s.confirmationDialog != nil || !d.Open || v.Busy || v.BatchID != b.ID {
@@ -296,7 +389,7 @@ func TestProductionHistoryLateReadAndDeleteDoNotCrossScopes(t *testing.T) {
 	}
 }
 
-func TestProductionHistoryDialogLayoutsAndMergedEmptyState(t *testing.T) {
+func TestProductionHistoryDrawerLayoutsAndMergedEmptyState(t *testing.T) {
 	for _, width := range []int{960, 1440} {
 		for _, dark := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%d-dark-%t", width, dark), func(t *testing.T) {
@@ -314,17 +407,17 @@ func TestProductionHistoryDialogLayoutsAndMergedEmptyState(t *testing.T) {
 				s.openProductionHistory(v)
 				tester.Frame()
 				d := s.releaseUnit.state.production.historyDialog
-				panel, ok := tester.Find("历史批次弹窗")
+				panel, ok := tester.Find("历史批次抽屉")
 				close, closeOK := tester.Find("关闭")
 				list, listOK := tester.Find("历史批次列表")
-				if !ok || !closeOK || !listOK || panel.W > 721 || panel.Y < 0 || close.Y+close.H > 900 || list.Y+list.H > close.Y {
-					t.Fatalf("dialog overflow or non-fixed footer: panel=%+v list=%+v close=%+v", panel, list, close)
+				if !ok || !closeOK || !listOK || panel.X <= 0 || panel.X+panel.W != float32(width) || panel.Y != 0 || panel.H != 900 || close.Y+close.H > list.Y || list.Y+list.H > 900 {
+					t.Fatalf("drawer is not right-aligned and full-height with a fixed header: panel=%+v list=%+v close=%+v", panel, list, close)
 				}
 				captureProductionSummary(t, tester, fmt.Sprintf("history-list-%d-dark-%t", width, dark))
 				tester.Scroll(list.X+list.W/2, list.Y+list.H/2, 0, 10000)
 				closeAfter, _ := tester.Find("关闭")
 				if closeAfter != close {
-					t.Fatal("list scroll moved footer")
+					t.Fatal("list scroll moved the close button")
 				}
 				s.win = &mygo.Window{}
 				s.confirmProductionDeleteRecord(v, s.productionHistoryRecords(d)[0], d)
@@ -337,10 +430,9 @@ func TestProductionHistoryDialogLayoutsAndMergedEmptyState(t *testing.T) {
 				if !d.Open {
 					t.Fatal("nested Esc dismissed list")
 				}
-				d.Open = false
-				v.selectProductionBatch(s.releaseUnit.state.production.batches[1].ID)
+				s.viewProductionHistory(d, s.productionHistoryRecords(d)[0])
 				tester.Frame()
-				if !tester.HasText("暂无已合并分支") {
+				if !tester.HasText("返回历史批次") || !tester.HasText("暂无已合并分支") {
 					t.Fatal("ended detail omitted merge empty state")
 				}
 				captureProductionSummary(t, tester, fmt.Sprintf("history-ended-%d-dark-%t", width, dark))
@@ -349,31 +441,41 @@ func TestProductionHistoryDialogLayoutsAndMergedEmptyState(t *testing.T) {
 	}
 }
 
-func TestProductionHistoryNarrowRowsAndDisabledCurrentFocus(t *testing.T) {
+func TestProductionHistoryNarrowRowsShowBuildAndAcceptKeyboard(t *testing.T) {
 	s, v, b := productionFixture(t)
-	old := productionHistoryRecord(b, "old", "release/"+strings.Repeat("很长的名称/", 12), time.Now())
-	s.releaseUnit.state.production.batches = append(s.releaseUnit.state.production.batches, old)
-	v.BatchID = old.ID
+	created := time.Date(2026, 11, 15, 14, 20, 0, 0, time.Local)
+	old := productionHistoryRecord(b, "old", "release/"+strings.Repeat("很长的名称/", 12), created)
+	old.Tags = append(old.Tags, production.Tag{Name: "2.3.42.1", PushedAt: created.Add(time.Hour).UTC().Format(time.RFC3339), Status: domain.GenbuTagProbeStatus{Build: domain.GenbuFailed}})
+	unbuilt := productionHistoryRecord(b, "unbuilt", "release/unbuilt", created.Add(-time.Hour))
+	unbuilt.Tags = nil
+	s.releaseUnit.state.production.batches = append(s.releaseUnit.state.production.batches, old, unbuilt)
 	s.openProductionHistory(v)
 	// Render just this overlay so duplicate branch/status text in the page
 	// header cannot be mistaken for the row under test.
 	tester := ui.NewTester(func(c *ui.Context) {
 		s.renderProductionHistoryDialog(c, setTheme(c, false))
 	}, 640, 900)
-	name, found := tester.Find(old.ReleaseBranch)
-	status, statusFound := tester.Find("已结束")
-	button, buttonFound := tester.Find("当前查看")
-	panel, panelFound := tester.Find("历史批次弹窗")
-	if !found || !statusFound || !buttonFound || !panelFound || button.Y < name.Y+name.H || status.Y < button.Y || status.Y+status.H > button.Y+button.H || button.X+button.W > panel.X+panel.W {
-		t.Fatalf("narrow row did not wrap its actions below the name: name=%+v status=%+v button=%+v panel=%+v", name, status, button, panel)
+	row, found := tester.Find(old.ReleaseBranch)
+	more, menuFound := tester.Find("更多批次操作 · " + old.ReleaseBranch)
+	panel, panelFound := tester.Find("历史批次抽屉")
+	if !found || !menuFound || !panelFound || row.X < panel.X || more.X < row.X+row.W || more.X+more.W > panel.X+panel.W {
+		t.Fatalf("narrow row and more menu overlap or overflow: row=%+v more=%+v panel=%+v", row, more, panel)
 	}
-	for i := 0; i < 12; i++ {
-		tester.Key(0, ui.KeyTab)
-		if tester.Focused("当前查看") {
-			t.Fatal("disabled current row entered keyboard focus")
-		}
+	if !tester.HasText(created.Format("2006-01-02")) || !tester.HasText("构建失败") || !tester.HasText("未构建") || tester.HasText("构建成功") {
+		t.Fatalf("row date or latest build result is wrong: %v", tester.Texts())
 	}
 	captureProductionSummary(t, tester, "history-list-640-light")
+	for i := 0; i < 8 && !tester.Focused(old.ReleaseBranch); i++ {
+		tester.Key(0, ui.KeyTab)
+	}
+	if !tester.Focused(old.ReleaseBranch) {
+		t.Fatal("historical row could not be focused")
+	}
+	tester.Key(0, ui.KeyEnter)
+	d := s.releaseUnit.state.production.historyDialog
+	if !d.Open || d.SelectedBatchID != old.ID || v.BatchID != b.ID {
+		t.Fatal("keyboard activation did not select only the drawer row")
+	}
 }
 
 func TestProductionHistoryDeleteLastRemovedServiceKeepsEmptyDialogUntilClose(t *testing.T) {

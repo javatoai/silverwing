@@ -97,54 +97,46 @@ type RequirementDraftState struct {
 }
 
 func (s RequirementDraftState) ChangeRequirement(value, branchPrefix string, title *string) RequirementDraftState {
-	resolved := ResolveBranchPrefix(branchPrefix, value)
-	branch := s.Branch
-	if !s.BranchEdited {
-		if resolved != nil {
-			branch = *resolved
-		} else {
-			branch = branchPrefix
+	if value != s.RequirementLink {
+		if !s.NameEdited {
+			s.TaskName = ""
 		}
+		s.AIBranchSuffix = nil
 	}
-	var cleanTitle *string
+	s.RequirementLink = value
+	s.RequirementTitle = nil
 	if title != nil && strings.TrimSpace(*title) != "" {
-		cleanTitle = title
+		s.RequirementTitle = title
 	}
-	var hint *string
-	if ContainsUnresolvedBranchPlaceholder(branchPrefix) && resolved == nil {
-		message := "未从需求编号或链接中解析到编号"
-		hint = &message
+	s.MetadataLoading = s.RequirementTitle == nil && ParseFeishuWorkItemLink(value) != nil
+	s.MetadataHint = nil
+	if !s.BranchEdited {
+		s.Branch, s.MetadataHint = requirementDraftBranch(branchPrefix, value, s.AIBranchSuffix)
 	}
-	return RequirementDraftState{RequirementLink: value, TaskName: s.TaskName, RequirementTitle: cleanTitle, Branch: branch,
-		NameEdited: s.NameEdited, BranchEdited: s.BranchEdited, MetadataLoading: ParseFeishuWorkItemLink(value) != nil, MetadataHint: hint}
+	return s
 }
 
 func (s RequirementDraftState) ChangeGroup(branchPrefix string) RequirementDraftState {
-	branch, hint := s.Branch, s.MetadataHint
 	if !s.BranchEdited {
-		resolved := ResolveBranchPrefix(branchPrefix, s.RequirementLink)
-		if resolved != nil {
-			branch = *resolved
-		} else {
-			branch = branchPrefix
-		}
-		if s.AIBranchSuffix != nil {
-			base := branchPrefix
-			if resolved != nil {
-				base = *resolved
-			}
-			branch = ComposeAIRequirementBranch(base, *s.AIBranchSuffix)
-		}
-		if ContainsUnresolvedBranchPlaceholder(branchPrefix) && resolved == nil {
-			message := "未从需求编号或链接中解析到编号"
-			hint = &message
-		} else {
-			hint = nil
-		}
+		s.Branch, s.MetadataHint = requirementDraftBranch(branchPrefix, s.RequirementLink, s.AIBranchSuffix)
 	}
-	return RequirementDraftState{RequirementLink: s.RequirementLink, TaskName: s.TaskName, RequirementTitle: s.RequirementTitle,
-		Branch: branch, NameEdited: s.NameEdited, BranchEdited: s.BranchEdited, AIBranchSuffix: s.AIBranchSuffix,
-		MetadataLoading: s.MetadataLoading, MetadataHint: hint}
+	return s
+}
+
+func requirementDraftBranch(prefix, link string, suffix *string) (string, *string) {
+	resolved := ResolveBranchPrefix(prefix, link)
+	if resolved == nil {
+		message := "未从需求编号或链接中解析到编号"
+		return "", &message
+	}
+	branch := *resolved
+	if suffix != nil {
+		branch = ComposeAIRequirementBranch(branch, *suffix)
+	}
+	if ContainsUnresolvedBranchPlaceholder(branch) {
+		return "", nil
+	}
+	return branch, nil
 }
 
 func (s RequirementDraftState) EditName(value string) RequirementDraftState {
@@ -165,17 +157,12 @@ func (s RequirementDraftState) ApplyAINaming(requestedLink string, suggestion Re
 	if err != nil {
 		return s, err
 	}
-	resolved := ResolveBranchPrefix(branchPrefix, s.RequirementLink)
-	base := branchPrefix
-	if resolved != nil {
-		base = *resolved
-	}
 	if !s.NameEdited {
 		s.TaskName = validated.FolderName
 	}
 	if !s.BranchEdited {
-		s.Branch = ComposeAIRequirementBranch(base, validated.BranchSuffix)
 		s.AIBranchSuffix = &validated.BranchSuffix
+		s.Branch, s.MetadataHint = requirementDraftBranch(branchPrefix, s.RequirementLink, s.AIBranchSuffix)
 	}
 	return s, nil
 }

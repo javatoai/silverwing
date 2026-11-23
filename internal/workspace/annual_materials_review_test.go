@@ -20,18 +20,18 @@ func TestAnnualGitMergeHistoryPublishesAllNativePaths(t *testing.T) {
 			remoteHead := materialsGitTestRun(t, f.remote, "rev-parse", "master")
 			materialsGitTestRun(t, f.root, "branch", "right")
 			materialsGitTestRun(t, f.root, "checkout", "-b", "left")
-			materialsGitTestFile(t, f.root, "2026/123-需求/研发/left.txt", "left")
-			materialsGitTestRun(t, f.root, "add", "--", "2026/123-需求/研发/left.txt")
+			materialsGitTestFile(t, f.root, "requirements/2026/123-需求/研发/left.txt", "left")
+			materialsGitTestRun(t, f.root, "add", "--", "requirements/2026/123-需求/研发/left.txt")
 			materialsGitTestRun(t, f.root, "commit", "-m", "owned left")
 			materialsGitTestRun(t, f.root, "checkout", "right")
-			materialsGitTestFile(t, f.root, "2026/123-需求/研发/right.txt", "right")
-			materialsGitTestRun(t, f.root, "add", "--", "2026/123-需求/研发/right.txt")
+			materialsGitTestFile(t, f.root, "requirements/2026/123-需求/研发/right.txt", "right")
+			materialsGitTestRun(t, f.root, "add", "--", "requirements/2026/123-需求/研发/right.txt")
 			materialsGitTestRun(t, f.root, "commit", "-m", "owned right")
 			materialsGitTestRun(t, f.root, "checkout", "master")
 			materialsGitTestRun(t, f.root, "merge", "--no-ff", "--no-commit", "left")
-			target, original := "2026/123-需求/temp/private.txt", ""
+			target, original := "requirements/2026/123-需求/temp/private.txt", ""
 			if kind == "peer" {
-				target, original = "2026/123-需求/产品/design.md", "product\n"
+				target, original = "requirements/2026/123-需求/产品/design.md", "product\n"
 			}
 			materialsGitTestFile(t, f.root, target, "transient local content")
 			materialsGitTestRun(t, f.root, "add", "-f", "--", target)
@@ -65,10 +65,10 @@ func TestAnnualGitMergeMayInheritAlreadyRemotePeerContent(t *testing.T) {
 			f.sync()
 			base := materialsGitTestRun(t, f.root, "rev-parse", "HEAD")
 			materialsGitTestRun(t, f.root, "checkout", "-b", "owned-side", base)
-			materialsGitTestFile(t, f.root, "2026/123-需求/研发/local.txt", "owned")
-			materialsGitTestRun(t, f.root, "add", "--", "2026/123-需求/研发/local.txt")
+			materialsGitTestFile(t, f.root, "requirements/2026/123-需求/研发/local.txt", "owned")
+			materialsGitTestRun(t, f.root, "add", "--", "requirements/2026/123-需求/研发/local.txt")
 			materialsGitTestRun(t, f.root, "commit", "-m", "owned side")
-			materialsGitTestFile(t, f.seed, "2026/123-需求/产品/design.md", "already remote peer")
+			materialsGitTestFile(t, f.seed, "requirements/2026/123-需求/产品/design.md", "already remote peer")
 			materialsGitTestRun(t, f.seed, "add", ".")
 			materialsGitTestRun(t, f.seed, "commit", "-m", "peer published remotely")
 			materialsGitTestRun(t, f.seed, "push", "origin", "master")
@@ -82,7 +82,7 @@ func TestAnnualGitMergeMayInheritAlreadyRemotePeerContent(t *testing.T) {
 				materialsGitTestRun(t, f.root, "merge", "--no-ff", "--no-edit", "origin/master")
 			}
 			f.sync()
-			if content := materialsGitTestRun(t, f.remote, "show", "master:2026/123-需求/产品/design.md"); content != "already remote peer" {
+			if content := materialsGitTestRun(t, f.remote, "show", "master:requirements/2026/123-需求/产品/design.md"); content != "already remote peer" {
 				t.Fatal("legitimate remote peer ancestry was blocked or changed", content)
 			}
 		})
@@ -92,10 +92,10 @@ func TestAnnualGitMergeMayInheritAlreadyRemotePeerContent(t *testing.T) {
 func TestAnnualGitMergeRetainsUserSelectedPeerHistory(t *testing.T) {
 	f := newMaterialsGitFixture(t, true)
 	f.sync()
-	peer := "2026/123-需求/产品/design.md"
+	peer := "requirements/2026/123-需求/产品/design.md"
 	materialsGitTestRun(t, f.root, "checkout", "-b", "owned-A")
-	materialsGitTestFile(t, f.root, "2026/123-需求/研发/a.md", "owned A")
-	materialsGitTestRun(t, f.root, "add", "--", "2026/123-需求/研发/a.md")
+	materialsGitTestFile(t, f.root, "requirements/2026/123-需求/研发/a.md", "owned A")
+	materialsGitTestRun(t, f.root, "add", "--", "requirements/2026/123-需求/研发/a.md")
 	materialsGitTestRun(t, f.root, "commit", "-m", "owned A before remote peer update")
 	materialsGitTestFile(t, f.seed, peer, "new remote peer\n")
 	materialsGitTestRun(t, f.seed, "add", "--", peer)
@@ -112,8 +112,8 @@ func TestAnnualGitMergeRetainsUserSelectedPeerHistory(t *testing.T) {
 	materialsGitTestRun(t, f.root, "commit", "-m", "merge manually selects old local parent peer")
 	forbidden := materialsGitTestRun(t, f.root, "rev-parse", "HEAD")
 	materialsGitTestRun(t, f.root, "checkout", "owned-C")
-	materialsGitTestFile(t, f.root, "2026/123-需求/研发/c.md", "owned C")
-	materialsGitTestRun(t, f.root, "add", "--", "2026/123-需求/研发/c.md")
+	materialsGitTestFile(t, f.root, "requirements/2026/123-需求/研发/c.md", "owned C")
+	materialsGitTestRun(t, f.root, "add", "--", "requirements/2026/123-需求/研发/c.md")
 	materialsGitTestRun(t, f.root, "commit", "-m", "owned C after remote peer update")
 	materialsGitTestRun(t, f.root, "checkout", "master")
 	materialsGitTestRun(t, f.root, "merge", "--no-ff", "--no-commit", "owned-C")
@@ -139,11 +139,11 @@ func TestAnnualGitMergeRetainsUserSelectedPeerHistory(t *testing.T) {
 func TestAnnualGitOwnedHistoryBehindRemotePeerUsesTrustedAncestor(t *testing.T) {
 	f := newMaterialsGitFixture(t, true)
 	f.sync()
-	owned := "2026/123-需求/研发/owned-behind-remote.md"
+	owned := "requirements/2026/123-需求/研发/owned-behind-remote.md"
 	materialsGitTestFile(t, f.root, owned, "owned local commit")
 	materialsGitTestRun(t, f.root, "add", "--", owned)
 	materialsGitTestRun(t, f.root, "commit", "-m", "owned commit based on old remote")
-	peer := "2026/123-需求/产品/design.md"
+	peer := "requirements/2026/123-需求/产品/design.md"
 	materialsGitTestFile(t, f.seed, peer, "new remote peer")
 	materialsGitTestRun(t, f.seed, "add", "--", peer)
 	materialsGitTestRun(t, f.seed, "commit", "-m", "peer moves ahead of owned branch")
@@ -157,7 +157,7 @@ func TestAnnualGitOwnedHistoryBehindRemotePeerUsesTrustedAncestor(t *testing.T) 
 	}
 }
 
-func TestAnnualAgentConcurrentUserEditPreservedAndSafeContextUpdated(t *testing.T) {
+func TestAnnualAgentConcurrentUserEditPreservedAndCatalogCanRetry(t *testing.T) {
 	service, manifest, config, task, scope := annualAgentFixture(t)
 	markMaterialsCatalogStale(t, task)
 	router := filepath.Join(task, AgentRouterFileName)
@@ -185,11 +185,6 @@ func TestAnnualAgentConcurrentUserEditPreservedAndSafeContextUpdated(t *testing.
 	if err != nil || !strings.Contains(string(data), "CONCURRENT USER NOTE") || strings.Contains(string(data), peer) {
 		t.Fatal("a stale router replacement overwrote the concurrent editor", string(data), err)
 	}
-	contextPath := filepath.Join(task, AgentWorkspaceDir, AgentDirectoryName, AgentContextFileName)
-	data, err = os.ReadFile(contextPath)
-	if err != nil || strings.Contains(string(data), peer) || !strings.Contains(string(data), "主动阅读") {
-		t.Fatal("router conflict prevented safe context refresh", string(data), err)
-	}
 	if err := service.RefreshMaterialsDirectories(task, manifest, config, nil); err != nil {
 		t.Fatal("local retry failed", err)
 	}
@@ -199,7 +194,7 @@ func TestAnnualAgentConcurrentUserEditPreservedAndSafeContextUpdated(t *testing.
 	}
 }
 
-func TestAnnualAgentCustomAndMalformedRouterDoNotBlockContext(t *testing.T) {
+func TestAnnualAgentCatalogPreservesCustomAndMalformedInstructions(t *testing.T) {
 	for _, custom := range []string{"# custom router\nkeep this note\n", materialsCatalogStart + "\nmissing end"} {
 		service, manifest, config, task, scope := annualAgentFixture(t)
 		router := filepath.Join(task, AgentRouterFileName)
@@ -214,20 +209,13 @@ func TestAnnualAgentCustomAndMalformedRouterDoNotBlockContext(t *testing.T) {
 			t.Fatal("unmanageable router did not report a warning")
 		}
 		data, _ := os.ReadFile(router)
-		contextData, _ := os.ReadFile(filepath.Join(task, AgentWorkspaceDir, AgentDirectoryName, AgentContextFileName))
-		if string(data) != custom || strings.Contains(string(contextData), peer) || !strings.Contains(string(contextData), "主动阅读") {
-			t.Fatal("per-document catalogue refresh overwrote the custom router or skipped safe context")
-		}
-		if _, err := service.WriteTaskDocument(task, manifest, config); err != nil {
-			t.Fatal("optional catalogue warning became a fatal ordinary document error", err)
-		}
-		if service.MaterialsDirectoryWarnings() == nil {
-			t.Fatal("ordinary document generation hid its catalogue warning")
+		if string(data) != custom {
+			t.Fatal("catalog refresh overwrote user instructions")
 		}
 	}
 }
 
-func TestAnnualAgentHardLinkedRouterPreservesOutsideFileAndUpdatesSafeContext(t *testing.T) {
+func TestAnnualAgentHardLinkedInstructionsPreserveOutsideFile(t *testing.T) {
 	service, manifest, config, task, scope := annualAgentFixture(t)
 	markMaterialsCatalogStale(t, task)
 	router := filepath.Join(task, AgentRouterFileName)
@@ -256,10 +244,6 @@ func TestAnnualAgentHardLinkedRouterPreservesOutsideFileAndUpdatesSafeContext(t 
 		if err != nil || string(data) != string(before) {
 			t.Fatal("catalogue update changed a linked user file", path, string(data), err)
 		}
-	}
-	contextData, err := os.ReadFile(filepath.Join(task, AgentWorkspaceDir, AgentDirectoryName, AgentContextFileName))
-	if err != nil || strings.Contains(string(contextData), peer) || !strings.Contains(string(contextData), "主动阅读") {
-		t.Fatal("hard-linked router prevented safe context refresh", string(contextData), err)
 	}
 	if err := os.Remove(outside); err != nil {
 		t.Fatal(err)
@@ -393,7 +377,7 @@ func TestMaterialsCatalogMissingCreateFailurePreservesConcurrentFileAndAllowsRet
 	}
 }
 
-func TestAnnualAgentRequiredContextFailureStillRollsBackModuleRemoval(t *testing.T) {
+func TestAnnualAgentRequiredInstructionsFailureStillRollsBackModuleRemoval(t *testing.T) {
 	documents, manifest, config, task, _ := annualAgentFixture(t)
 	taskRoot := filepath.Dir(task)
 	config.TaskRoot = &taskRoot
@@ -406,11 +390,11 @@ func TestAnnualAgentRequiredContextFailureStillRollsBackModuleRemoval(t *testing
 	if err := service.Documents.WriteTaskNotes(task, "keep rules"); err != nil {
 		t.Fatal(err)
 	}
-	contextPath := filepath.Join(task, AgentWorkspaceDir, AgentDirectoryName, AgentContextFileName)
-	if err := os.Remove(contextPath); err != nil {
+	agents := filepath.Join(task, AgentRouterFileName)
+	if err := os.Remove(agents); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(contextPath, 0700); err != nil {
+	if err := os.Mkdir(agents, 0700); err != nil {
 		t.Fatal(err)
 	}
 	preview, err := service.ModuleRemoval.Inspect(config, task, missing)
@@ -418,7 +402,7 @@ func TestAnnualAgentRequiredContextFailureStillRollsBackModuleRemoval(t *testing
 		t.Fatal(err)
 	}
 	if _, err := service.ModuleRemoval.Remove(context.Background(), config, task, preview, WorkspaceModuleRemovalConfirmation{Fingerprint: preview.Fingerprint}); err == nil {
-		t.Fatal("required TASK-CONTEXT I/O failure became an optional catalogue warning")
+		t.Fatal("required AGENTS.md I/O failure became an optional catalog warning")
 	}
 	saved, err := service.Manifests.Load(task)
 	if err != nil || len(saved.Services) != 1 || service.Documents.MaterialsDirectoryWarnings() != nil {

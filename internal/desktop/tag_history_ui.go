@@ -83,8 +83,10 @@ func (s *app) renderTaskTagHistory(c *ui.Context, p palette, t task) {
 				})
 			})
 		}
-		if message := strings.TrimSpace(*s.input(tagGenbuTaskErrorKey(t.id), "")); message != "" {
-			label(c, "Genbu 刷新失败："+message, 12, tagStatusErrorColor(s.dark)).Wrap()
+		if s.integrationReady("genbu") {
+			if message := strings.TrimSpace(*s.input(tagGenbuTaskErrorKey(t.id), "")); message != "" {
+				label(c, "Genbu 刷新失败："+message, 12, tagStatusErrorColor(s.dark)).Wrap()
+			}
 		}
 		if state.Error != "" {
 			label(c, state.Error, 12, tagStatusErrorColor(s.dark)).Wrap()
@@ -137,23 +139,25 @@ func (s *app) renderTagHistoryGroup(c *ui.Context, p palette, state *tagHistoryV
 				label(c, "复制发版通知", 11, p.muted).NoWrap()
 			})
 			if copy.Clicked() {
-				text := s.tagHistoryAnnouncement(group)
+				text := s.tagHistoryAnnouncementForCopy(group)
 				s.copyTextToClipboard(c.Services(), text, s.tagHistoryAnnouncementCopiedMessage(group, text))
 			}
-			sending := s.releaseNotices.running()
-			enabled := !s.busy && !sending && s.releaseNoticeReady(group)
-			send := ui.ButtonBase(c.Key("send-announcement")).Row().Shrink(0).Height(28).Padding(0, 8).Gap(5).AlignItems(ui.Center).
-				Background(p.surface).Radius(8).Border(1, p.line).Label(s.noticeButtonText("", group.Item.GroupID) + " · " + group.Item.GroupID).Disabled(!enabled).
-				Tooltip("全部 Tag 推送且 Genbu 编译成功后，以当前用户身份通知测试负责人；无法确认接收人时回退本人")
-			if send.Hovered() && enabled {
-				send.Background(p.soft)
-			}
-			send.Children(func() {
-				icon(c, "launch", 14, p.muted)
-				label(c, s.noticeButtonText("", group.Item.GroupID), 11, p.muted).NoWrap()
-			})
-			if send.Clicked() {
-				s.sendTagNotice(state, group)
+			if s.tagNoticeAvailable() {
+				sending := s.releaseNotices.running()
+				enabled := !s.busy && !sending && s.releaseNoticeReady(group)
+				send := ui.ButtonBase(c.Key("send-announcement")).Row().Shrink(0).Height(28).Padding(0, 8).Gap(5).AlignItems(ui.Center).
+					Background(p.surface).Radius(8).Border(1, p.line).Label(s.noticeButtonText("", group.Item.GroupID) + " · " + group.Item.GroupID).Disabled(!enabled).
+					Tooltip("全部 Tag 推送且 Genbu 编译成功后，以当前用户身份通知测试负责人；无法确认接收人时回退本人")
+				if send.Hovered() && enabled {
+					send.Background(p.soft)
+				}
+				send.Children(func() {
+					icon(c, "launch", 14, p.muted)
+					label(c, s.noticeButtonText("", group.Item.GroupID), 11, p.muted).NoWrap()
+				})
+				if send.Clicked() && s.tagNoticeAvailable() {
+					s.sendTagNotice(state, group)
+				}
 			}
 		})
 		if progress := s.tagBatchProgress(group.Item.GroupID); progress.Total > 0 {
@@ -170,7 +174,8 @@ func (s *app) renderTagHistoryGroup(c *ui.Context, p palette, state *tagHistoryV
 }
 
 func (s *app) renderTagHistoryRecord(c *ui.Context, p palette, state *tagHistoryViewState, record application.TagRecord) {
-	genbuEligible := domain.TagGenbuProbeEligible(domain.TagOperationState(record.State), record.Tag)
+	genbuEnabled := s.integrationReady("genbu")
+	genbuEligible := genbuEnabled && domain.TagGenbuProbeEligible(domain.TagOperationState(record.State), record.Tag)
 	item, _ := s.tagRecordJobItem(record)
 	recordActive := item.Busy || item.Queued
 	phase := s.tagRecordPhase(record)
@@ -206,6 +211,9 @@ func (s *app) renderTagHistoryRecord(c *ui.Context, p palette, state *tagHistory
 			})
 			if genbuEligible {
 				ui.Row(c).Shrink(0).Gap(8).AlignItems(ui.Center).Children(func() {
+					if tagRecordAction(c, p, "tag-build-log-"+record.ID, "terminal", "构建日志", false).Clicked() {
+						s.openTagHistoryBuildLog(state, record)
+					}
 					renderTagGenbuStages(c, p, s.dark, record)
 				})
 			}
@@ -246,10 +254,11 @@ func (s *app) renderTagHistoryRecord(c *ui.Context, p palette, state *tagHistory
 			renderTagGenbuNotes(c, p, s.dark, record, s.tagGenbuError(record.ID))
 		}
 		retryLabel, retryExplanation := tagHistoryRetryPresentation(record)
-		if retryExplanation != "" && tagHistoryRetryable(record) && !compactFailure && !recordActive {
+		retryAvailable := tagHistoryRetryable(record) && (record.RetryKind != "RETAG" || genbuEnabled)
+		if retryExplanation != "" && retryAvailable && !compactFailure && !recordActive {
 			label(c, retryExplanation, 12, tagStatusErrorColor(s.dark)).Wrap().LineHeight(1.5)
 		}
-		if !compactFailure && tagHistoryRetryable(record) && !recordActive {
+		if !compactFailure && retryAvailable && !recordActive {
 			ui.Row(c).Gap(8).Children(func() {
 				if tagRecordAction(c, p, "tag-retry-"+record.ID, "refresh", retryLabel, s.tagRecordBusy(record)).Clicked() {
 					s.queueTagAction(application.Action{Kind: "tag.retry", TaskID: record.TaskID, ServiceID: record.ServiceID, ModuleID: record.ModuleID, Payload: s.tagHistoryRecordPayload(record)})

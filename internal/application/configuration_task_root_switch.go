@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/storage"
 )
 
 // Only the explicitly confirmed direct-switch action reaches this helper.
@@ -20,7 +21,26 @@ func (a *App) prepareTaskRootSwitch(ctx context.Context, current, next domain.Ap
 	if next.TaskRoot == nil || strings.TrimSpace(*next.TaskRoot) == "" {
 		return current, errors.New("请选择任务存放目录")
 	}
-	root, err := filepath.Abs(strings.TrimSpace(*next.TaskRoot))
+	root := strings.TrimSpace(*next.TaskRoot)
+	if a.Paths.ProfileID != "" {
+		validated, err := storage.ValidateTaskRootPath(a.Paths.Home, root)
+		if err != nil {
+			return current, err
+		}
+		info, err := os.Stat(validated)
+		if err != nil || !info.IsDir() {
+			return current, fmt.Errorf("请选择已有的任务目录：%s", validated)
+		}
+		if err := checkTaskRootWritable(validated); err != nil {
+			return current, err
+		}
+		if err := ctx.Err(); err != nil {
+			return current, err
+		}
+		next.TaskRoot = &validated
+		return next, nil
+	}
+	root, err := filepath.Abs(root)
 	if err != nil {
 		return current, fmt.Errorf("规范任务存放目录失败：%w", err)
 	}
@@ -34,21 +54,28 @@ func (a *App) prepareTaskRootSwitch(ctx context.Context, current, next domain.Ap
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return current, fmt.Errorf("创建任务存放目录失败：%w", err)
 	}
-	probe, err := os.CreateTemp(root, ".silverwing-directory-check-")
-	if err != nil {
-		return current, fmt.Errorf("任务存放目录不可写：%w", err)
-	}
-	probePath := probe.Name()
-	_, writeErr := probe.Write([]byte("silverwing"))
-	probeErr := errors.Join(writeErr, probe.Close(), os.Remove(probePath))
-	if probeErr != nil {
-		return current, fmt.Errorf("校验任务存放目录可写失败：%w", probeErr)
+	if err := checkTaskRootWritable(root); err != nil {
+		return current, err
 	}
 	if err := ctx.Err(); err != nil {
 		return current, err
 	}
 	next.TaskRoot = &root
 	return next, nil
+}
+
+func checkTaskRootWritable(root string) error {
+	probe, err := os.CreateTemp(root, ".silverwing-directory-check-")
+	if err != nil {
+		return fmt.Errorf("任务存放目录不可写：%w", err)
+	}
+	probePath := probe.Name()
+	_, writeErr := probe.Write([]byte("silverwing"))
+	probeErr := errors.Join(writeErr, probe.Close(), os.Remove(probePath))
+	if probeErr != nil {
+		return fmt.Errorf("校验任务存放目录可写失败：%w", probeErr)
+	}
+	return nil
 }
 
 func (a *App) saveTaskRootSwitch(ctx context.Context, action Action) (ActionResult, error) {

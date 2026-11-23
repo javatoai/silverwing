@@ -164,8 +164,8 @@ func TestTaskModuleDraftValuesConfigurationDefaults(t *testing.T) {
 	module.Strategy, module.TagMessagePrefix = domain.WorkspaceIndependentClone, " Custom "
 	service.Modules = service.Modules[:1]
 	got = newTaskModuleDraftValues(service, module, "feature/task")
-	if got.BaseRemote != "mirror" || got.BaseRef != baseRef || got.TagTargetRef != tagRef || got.Strategy != domain.WorkspaceIndependentClone || got.TagMessagePrefix != " Custom " || got.TargetBranch != "feature/task" {
-		t.Fatalf("module overrides or single-module defaults changed: %+v", got)
+	if got.BaseRemote != "mirror" || got.BaseRef != baseRef || got.TagTargetRef != tagRef || got.Strategy != domain.WorkspaceIndependentClone || got.TagMessagePrefix != " Custom " || got.TargetBranch != "" {
+		t.Fatalf("module overrides or direct clone defaults changed: %+v", got)
 	}
 	module.TagMode = domain.TagBuildCurrentBranch
 	if got := newTaskModuleDraftValues(service, module, ""); got.TagTargetRef != "" || got.TargetBranch != "" || got.TagMode != domain.TagBuildCurrentBranch {

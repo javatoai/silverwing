@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"silverwing-go/internal/application"
-	"silverwing-go/internal/domain"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -31,141 +30,85 @@ func (s *app) replicaRepositories(c *ui.Context, p palette) {
 }
 
 func (s *app) serviceList(c *ui.Context, p palette) {
-	groupID := s.selectedServiceGroupID()
-	group := s.taskGroup(groupID)
-	query := strings.TrimSpace(*s.input("service-search:"+groupID, ""))
+	const searchKey = "service-search"
+	query := strings.TrimSpace(*s.input(searchKey, ""))
 	browsing := &s.workspaceUnit.state.serviceList
-	filtered := browsing.project(s.serviceCatalog(), groupID, query)
+	filtered := browsing.project(s.serviceCatalog(), s.settingsUnit.state.configJSON, query, s.serviceEnabled)
 	services := browsing.services
+	runtimeVisible := len(services) > 0 && s.integrationReady("genbu") && !s.workspaceUnit.state.serviceReorderMode
+	windowWidth, _ := c.Size()
+	listWidth := browsing.canvas.Bounds(c).W
+	if browsing.windowWidth != windowWidth || listWidth <= 0 {
+		browsing.windowWidth = windowWidth
+		c.AnimationFrame()
+	}
+	compactRuntime := listWidth < serviceCatalogDirectActionsMinWidth
 
-	showGroupSidebar := len(s.snapshot.Groups) > 1 || (len(s.snapshot.Groups) == 1 && s.snapshot.Groups[0].ID != domain.DefaultGroupID)
-	ui.Row(c).Grow(1).MinHeight(0).Gap(12).AlignItems(ui.Stretch).Children(func() {
-		if showGroupSidebar {
-			s.repositoryGroupSidebar(c, p, groupID)
-		}
-
-		ui.Column(c).Grow(1).MinWidth(0).MinHeight(0).Gap(10).Children(func() {
-			if showGroupSidebar {
-				ui.Row(c).FillWidth().Padding(10, 14).Gap(10).AlignItems(ui.Center).Background(p.soft).Radius(12).Children(func() {
-					icon(c, "repo", 18, p.blue)
-					label(c, firstNonEmpty(group.Name, "项目组"), 14, p.text).FontWeight(600).Grow(1).SingleLine()
-					label(c, fmt.Sprintf("%d 个仓库", len(services)), 11, p.muted).SingleLine()
+	ui.Column(c.Key("service-catalog")).Bind(&browsing.canvas).Grow(1).MinWidth(0).MinHeight(0).Gap(10).Children(func() {
+		ui.Row(c).FillWidth().MinWidth(0).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.TextInput(c.Key(searchKey), s.input(searchKey, "")).Grow(1).MinWidth(0).Height(36).Placeholder("按仓库名称或本地路径筛选")
+			if runtimeVisible {
+				label(c, "运行环境", 12, p.muted).NoWrap()
+				renderServiceEnvironmentTabs(c, p, "catalog-runtime-environments", "运行环境", s.catalogRuntimeEnvironment(), s.selectCatalogRuntimeEnvironment)
+			}
+			if action(c, "repository-add", "plus", "添加仓库", p, true) {
+				s.openRepositoryBatchDialog()
+			}
+			if len(services) > 1 {
+				s.overflowMenu(c, p, "repository-more", "仓库操作", s.busy, func(m *overflowMenuBuilder) {
+					text := "调整顺序"
+					if s.workspaceUnit.state.serviceReorderMode {
+						text = "完成排序"
+					}
+					if m.Item("service-reorder-toggle", text).Icon("sort").Chosen() {
+						s.workspaceUnit.state.serviceReorderMode = !s.workspaceUnit.state.serviceReorderMode
+					}
 				})
 			}
-			ui.Row(c).FillWidth().MinWidth(0).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.TextInput(c.Key("service-search:"+groupID), s.input("service-search:"+groupID, "")).Grow(1).MinWidth(0).Height(36).Placeholder("按仓库名称或本地路径筛选")
-				if action(c, "repository-add", "plus", "添加仓库", p, true) {
-					s.openRepositoryBatchDialog()
-				}
-				currentServices := services
-				s.overflowMenu(c, p, "repository-groups-more", "仓库与项目组操作", s.busy, func(m *overflowMenuBuilder) {
-					if len(currentServices) > 1 {
-						text := "调整顺序"
-						if s.workspaceUnit.state.serviceReorderMode {
-							text = "完成排序"
-						}
-						if m.Item("service-reorder-toggle", text).Icon("sort").Chosen() {
-							s.workspaceUnit.state.serviceReorderMode = !s.workspaceUnit.state.serviceReorderMode
-						}
-					}
-					m.Separator()
-					if m.Item("group-add", "新建组").Icon("plus").Chosen() {
-						s.openForm("settings.group.add", "新建项目组", "", "", "", "", formField{key: "name", label: "项目组名称"})
-					}
-					if groupID == "" {
-						return
-					}
-					group := s.taskGroup(groupID)
-					m.Separator()
-					if m.Item("group-rename", "重命名当前组").Icon("edit").Chosen() {
-						s.openForm("settings.group.rename", "重命名项目组", "", group.ID, "", "", formField{key: "name", label: "项目组名称", value: group.Name})
-					}
-					if len(s.snapshot.Groups) > 1 && len(currentServices) == 0 {
-						m.Separator()
-						if m.Item("group-remove", "删除空组").Icon("delete").Dangerous().Chosen() {
-							s.confirmNative("删除项目组", "只允许删除没有服务的项目组。", group.Name, func() {
-								s.workspaceUnit.state.serviceReorderMode = false
-								s.removeConfigGroup(group.ID)
-							})
-						}
-					}
-				})
-			})
+		})
 
-			ui.Column(c).Grow(1).MinHeight(0).Gap(0).Children(func() {
-				if len(s.snapshot.Groups) == 0 {
-					emptyPanel(c, p, "还没有项目组", "新建一个组后即可添加本地 Git 仓库。")
-					return
-				}
-				if len(services) == 0 {
-					emptyPanel(c, p, "此组还没有仓库", "添加一个或多个本地 Git 仓库。")
-					return
-				}
-				if len(filtered) == 0 {
-					emptyPanel(c, p, "没有匹配的仓库", "请调整仓库名称或本地路径筛选条件。")
-					return
-				}
-				browsing.list.Key = func(position int) any {
-					service := filtered[position]
-					return desktopServiceIdentity{service.GroupID, service.ID}
-				}
-				ui.List(c.Key("service-list-"+groupID), &browsing.list, len(filtered)).Grow(1).MinHeight(0).Gap(0).Rows(func(row ui.ListRow) {
-					index, c := row.Index, row.Context
-					service := filtered[index]
-					repositoryName, repositoryPath := s.repositoryDetails(service.RepositoryID)
-					ui.Row(c.Key("service-row-"+service.ID)).FillWidth().Padding(12, 9).Gap(11).AlignItems(ui.Center).Children(func() {
-						icon(c, "repo", 18, p.blue)
-						ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
-							ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
-								label(c, service.Name, 13, p.text).FontWeight(600).Grow(1).SingleLine()
-								if !s.serviceEnabled(groupID, service.ID) {
-									pill(c, "已停用", p)
-								}
-							})
-							label(c, firstNonEmpty(repositoryPath, repositoryName, "仓库路径未配置"), 11, p.muted).SingleLine().Tooltip(firstNonEmpty(repositoryPath, repositoryName))
-							label(c, fmt.Sprintf("%d 个模块", len(service.Modules)), 10, p.muted).SingleLine()
-						})
-						if s.workspaceUnit.state.serviceReorderMode {
-							position := browsing.positions[desktopServiceIdentity{service.GroupID, service.ID}]
-							if position > 0 && serviceMoveAction(c, "service-up-"+service.ID, "上移", -90, p) {
-								s.moveService(groupID, service.ID, -1)
-							}
-							if position >= 0 && position < len(services)-1 && serviceMoveAction(c, "service-down-"+service.ID, "下移", 90, p) {
-								s.moveService(groupID, service.ID, 1)
-							}
-						} else {
-							if repositoryRowAction(c, "service-config-"+service.ID, "edit", "配置", "配置仓库 "+service.Name, p, p.text, s.busy) {
-								s.openServiceEditor(groupID, service.ID, "basic")
-							}
-							if repositoryRowAction(c, "service-remove-"+service.ID, "delete", "移除", "从当前组移除仓库 "+service.Name, p, p.danger, s.busy) {
-								s.confirmNative("从当前组移除仓库？", "这不会删除本地 Git 仓库，也不会改动已有任务；如果仍被任务引用，后端会阻止移除。", service.Name, func() {
-									s.act("service.remove", "", service.ID, "", "", "", map[string]any{"groupId": groupID})
-								})
-							}
-						}
+		ui.Column(c).Grow(1).MinHeight(0).Gap(0).Children(func() {
+			if len(services) == 0 {
+				emptyPanel(c, p, "还没有仓库", "添加一个或多个本地 Git 仓库。")
+				return
+			}
+			if len(filtered) == 0 {
+				emptyPanel(c, p, "没有匹配的仓库", "请调整仓库名称或本地路径筛选条件。")
+				return
+			}
+			browsing.list.Key = func(position int) any { return filtered[position].ID }
+			ui.List(c.Key("service-list"), &browsing.list, len(filtered)).Grow(1).MinHeight(0).Gap(0).Rows(func(row ui.ListRow) {
+				index, c := row.Index, row.Context
+				service := filtered[index]
+				repositoryName, repositoryPath := s.repositoryDetails(service.RepositoryID)
+				ui.Row(c.Key("service-row-"+service.ID)).FillWidth().Padding(12, 9).Gap(11).AlignItems(ui.Center).Children(func() {
+					icon(c, "repo", 18, p.blue)
+					ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
+						label(c, service.Name, 13, p.text).FontWeight(600).SingleLine()
+						label(c, firstNonEmpty(repositoryPath, repositoryName, "仓库路径未配置"), 11, p.muted).SingleLine().TruncateStart().Tooltip(firstNonEmpty(repositoryPath, repositoryName))
+						label(c, fmt.Sprintf("%d 个模块", len(service.Modules)), 10, p.muted).SingleLine()
 					})
-					if index < len(filtered)-1 {
-						ui.Divider(c)
+					if !s.serviceEnabled(service.ID) {
+						pill(c, "已停用", p)
+					}
+					if s.workspaceUnit.state.serviceReorderMode {
+						position := browsing.positions[service.ID]
+						if position > 0 && position != browsing.enabledCount && serviceMoveAction(c, "service-up-"+service.ID, "上移", -90, p) {
+							s.moveService(service.ID, services[position-1].ID)
+						}
+						if position >= 0 && position+1 < len(services) && position+1 != browsing.enabledCount && serviceMoveAction(c, "service-down-"+service.ID, "下移", 90, p) {
+							s.moveService(service.ID, services[position+1].ID)
+						}
+					} else {
+						s.renderServiceCatalogActions(c, p, service, runtimeVisible, compactRuntime)
 					}
 				})
+				if index < len(filtered)-1 {
+					ui.Divider(c)
+				}
 			})
 		})
 	})
-}
-
-func repositoryRowAction(c *ui.Context, key, image, text, description string, p palette, color ui.Color, disabled bool) bool {
-	button := ui.ButtonBase(c.Key(key)).Row().Height(32).Padding(0, 10).Gap(6).Radius(8).AlignItems(ui.Center).
-		Label(description).Tooltip(description).FocusRing(true).Disabled(disabled)
-	if disabled {
-		color = p.muted
-	} else if button.Hovered() {
-		button.Background(p.soft)
-	}
-	button.Children(func() {
-		icon(c, image, 14, color)
-		label(c, text, 12, color).NoWrap()
-	})
-	return button.Clicked()
 }
 
 func serviceMoveAction(c *ui.Context, key, title string, rotation float32, p palette) bool {
@@ -181,43 +124,6 @@ func serviceMoveAction(c *ui.Context, key, title string, rotation float32, p pal
 	return button.Clicked()
 }
 
-func (s *app) selectedServiceGroupID() string {
-	for _, group := range s.snapshot.Groups {
-		if group.ID == s.workspaceUnit.state.serviceGroupID {
-			return group.ID
-		}
-	}
-	if len(s.snapshot.Groups) == 0 {
-		s.workspaceUnit.state.serviceGroupID = ""
-		s.workspaceUnit.state.serviceReorderMode = false
-		return ""
-	}
-	previous := s.workspaceUnit.state.serviceGroupID
-	s.workspaceUnit.state.serviceGroupID = s.snapshot.Groups[0].ID
-	if previous != "" && previous != s.workspaceUnit.state.serviceGroupID {
-		s.workspaceUnit.state.serviceReorderMode = false
-	}
-	return s.workspaceUnit.state.serviceGroupID
-}
-
-func (s *app) servicesForGroup(group application.Group) []application.Service {
-	services := make([]application.Service, 0, len(group.ServiceIDs))
-	if len(group.ServiceIDs) > 0 {
-		for _, id := range group.ServiceIDs {
-			if service, ok := s.serviceByID(group.ID, id); ok {
-				services = append(services, service)
-			}
-		}
-		return services
-	}
-	for _, service := range s.snapshot.Services {
-		if service.GroupID == group.ID {
-			services = append(services, service)
-		}
-	}
-	return services
-}
-
 func (s *app) repositoryDetails(repositoryID string) (name, path string) {
 	if repository, found := s.serviceCatalog().repositories[repositoryID]; found {
 		return repository.Name, repository.RootPath
@@ -225,51 +131,31 @@ func (s *app) repositoryDetails(repositoryID string) (name, path string) {
 	return repositoryID, ""
 }
 
-func (s *app) serviceEnabled(groupID, serviceID string) bool {
-	service := s.readServiceConfig(serviceID, groupID)
-	if enabled, ok := service["enabled"].(bool); ok {
-		return enabled
-	}
-	return true
+func (s *app) serviceEnabled(serviceID string) bool {
+	return mapBool(s.readServiceConfig(serviceID), "enabled", true)
 }
 
-func (s *app) groupTagEnabled(groupID string) bool {
-	// Group-level Tag controls were removed. Keep this compatibility predicate
-	// only as an existence guard; a saved legacy false must not disable Tag.
-	return s.hasGroup(groupID)
-}
-
-func (s *app) moveService(groupID, serviceID string, delta int) {
+func (s *app) moveService(serviceID, adjacentID string) {
 	config, err := s.settingsConfigMap()
 	if err != nil {
 		s.lastError = err.Error()
 		return
 	}
-	groups, _ := config["groups"].([]any)
-	for _, item := range groups {
-		group := mapData(item)
-		if mapString(group, "id") != groupID {
-			continue
+	services, _ := config["services"].([]any)
+	current, adjacent := -1, -1
+	for position, item := range services {
+		switch mapString(mapData(item), "id") {
+		case serviceID:
+			current = position
+		case adjacentID:
+			adjacent = position
 		}
-		services, _ := group["services"].([]any)
-		position := -1
-		for index, raw := range services {
-			if mapString(mapData(raw), "id") == serviceID {
-				position = index
-				break
-			}
-		}
-		next := position + delta
-		if position < 0 || next < 0 || next >= len(services) {
-			return
-		}
-		services[position], services[next] = services[next], services[position]
-		group["services"] = services
-		config["groups"] = groups
-		s.saveSettingsConfigMap(config)
+	}
+	if current < 0 || adjacent < 0 || mapBool(mapData(services[current]), "enabled", true) != mapBool(mapData(services[adjacent]), "enabled", true) {
 		return
 	}
-	s.lastError = "找不到当前服务所属的项目组。"
+	services[current], services[adjacent] = services[adjacent], services[current]
+	s.saveSettingsConfigMap(config, "services")
 }
 
 func servicePosition(services []application.Service, id string) int {
@@ -281,9 +167,8 @@ func servicePosition(services []application.Service, id string) int {
 	return -1
 }
 
-func serviceAddFields(groupID string) []formField {
+func serviceAddFields() []formField {
 	return []formField{
-		{key: "groupId", label: "项目组", value: groupID},
 		{key: "serviceId", label: "服务 ID"},
 		{key: "name", label: "服务名称"},
 		{key: "repositoryId", label: "仓库", value: ""},
@@ -318,7 +203,7 @@ func (s *app) serviceEditorFields(serviceID string, service application.Service)
 		{key: "bootstrapCopyRules", label: "初始化复制规则（JSON 数组）", multiline: true, value: "[]"},
 		{key: "bootstrapCommands", label: "初始化命令（JSON 数组）", multiline: true, value: "[]"},
 	}
-	item := s.readServiceConfig(serviceID, service.GroupID)
+	item := s.readServiceConfig(serviceID)
 	if item == nil {
 		return fields
 	}
@@ -361,14 +246,14 @@ func jsonStringOrDefault(value any, fallback string) string {
 	return string(encoded)
 }
 
-func (s *app) moduleConfigurationFields(groupID, serviceID string, module application.Module) []formField {
+func (s *app) moduleConfigurationFields(serviceID string, module application.Module) []formField {
 	name := module.Name
 	masterBranch := module.MasterBranch
 	strategy := module.Strategy
 	tagEnabled := fmt.Sprint(module.TagEnabled)
 	tagMode, tagTargetRef, tagMessagePrefix := "MERGE_TO_TARGET_BRANCH", module.TagTargetRef, "Tag"
 	customCommands := "[]"
-	if service := s.readServiceConfig(serviceID, groupID); service != nil {
+	if service := s.readServiceConfig(serviceID); service != nil {
 		if modules, ok := service["modules"].([]any); ok {
 			for _, raw := range modules {
 				candidate, _ := raw.(map[string]any)
@@ -402,8 +287,8 @@ func (s *app) moduleConfigurationFields(groupID, serviceID string, module applic
 	}
 }
 
-func (s *app) moduleConfigurationFieldsWithoutID(groupID, serviceID string, module application.Module) []formField {
-	fields := s.moduleConfigurationFields(groupID, serviceID, module)
+func (s *app) moduleConfigurationFieldsWithoutID(serviceID string, module application.Module) []formField {
+	fields := s.moduleConfigurationFields(serviceID, module)
 	return fields[1:]
 }
 

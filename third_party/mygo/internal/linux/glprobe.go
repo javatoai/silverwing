@@ -1,4 +1,4 @@
-//go:build linux && (amd64 || arm64)
+//go:build linux && !android && (amd64 || arm64)
 
 package linux
 
@@ -62,8 +62,15 @@ type gdkWindowAttr struct {
 func gpuGL() bool {
 	glProbe.probe.Do(func() {
 		// MYGO_GPU=1 draws with OpenGL wherever GDK makes a context, on
-		// the CPU too: tests of the GL surface run so without a GPU.
+		// the CPU too: tests of the GL surface run so without a GPU. The
+		// renderer calls OpenGL through libepoxy all the same, which GTK
+		// links but a program run by an emulator, as box64, may not load:
+		// a GtkGLArea would then show nothing.
 		if os.Getenv("MYGO_GPU") == "1" {
+			if _, err := purego.Dlopen("libepoxy.so.0", purego.RTLD_NOW|purego.RTLD_GLOBAL); err != nil {
+				log.Print("mygo: native UI draws without the GPU: no libepoxy")
+				return
+			}
 			glProbe.gpu = true
 			return
 		}

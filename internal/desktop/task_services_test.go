@@ -124,11 +124,11 @@ func TestTaskServicesEnvironmentSwitchCancelsClosesAndRetainsIndependentCache(t 
 	s.openTaskServiceDialog(v, v.rows[0], taskServiceConfigDetail)
 	dialog := v.dialog
 	dialog.config.text = "memory-only data"
-	v.vertical.Y = 120
+	v.scroll.X, v.scroll.Y = 60, 120
 	cancelled := false
 	s.taskServicesUnit.jobs = map[string]*taskServicesRequest{"old-env": {view: v, epoch: v.epoch, environment: "uat", cancel: func() { cancelled = true }}}
 	before := v.epoch
-	if !s.selectTaskServicesEnvironment(v, "prod") || !cancelled || v.epoch <= before || v.dialog != nil || dialog.open || dialog.config.text != "" || v.vertical.Y != 0 || len(s.taskServicesUnit.jobs) != 0 {
+	if !s.selectTaskServicesEnvironment(v, "prod") || !cancelled || v.epoch <= before || v.dialog != nil || dialog.open || dialog.config.text != "" || v.scroll.X != 60 || v.scroll.Y != 0 || len(s.taskServicesUnit.jobs) != 0 {
 		t.Fatal("environment switch retained old request, detail or position", v)
 	}
 	for _, row := range v.visibleRows() {

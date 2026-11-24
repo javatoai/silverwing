@@ -113,12 +113,10 @@ type requirementCommentsEnvelope struct {
 }
 
 type requirementMetadataEnvelope struct {
-	Version                 int                           `json:"version"`
-	Key                     string                        `json:"key"`
-	FetchedAt               int64                         `json:"fetchedAt"`
-	Data                    RequirementMetadataReadResult `json:"data"`
-	ReleaseTesters          []domain.RequirementPerson    `json:"releaseTesters"`
-	ReleaseTestersConfirmed bool                          `json:"releaseTestersConfirmed"`
+	Version   int                           `json:"version"`
+	Key       string                        `json:"key"`
+	FetchedAt int64                         `json:"fetchedAt"`
+	Data      RequirementMetadataReadResult `json:"data"`
 }
 
 func requirementCacheKey(kind, identity string, item domain.ParticipatedWorkItem) string {
@@ -630,7 +628,12 @@ func (s *Service) readRequirementMetadataCache(key string) (*requirementMetadata
 	if err != nil {
 		return nil, path, err
 	}
-	var saved requirementMetadataEnvelope
+	var saved struct {
+		requirementMetadataEnvelope
+		// Older metadata caches also stored Tag notification recipients.
+		ReleaseTesters          json.RawMessage `json:"releaseTesters"`
+		ReleaseTestersConfirmed json.RawMessage `json:"releaseTestersConfirmed"`
+	}
 	if err := strictRequirementJSON(data, &saved); err != nil {
 		return nil, path, fmt.Errorf("需求元数据缓存无法读取：%w", err)
 	}
@@ -641,13 +644,6 @@ func (s *Service) readRequirementMetadataCache(key string) (*requirementMetadata
 	if saved.Data.Participants.QCOwners == nil {
 		saved.Data.Participants.QCOwners = []domain.RequirementPerson{}
 	}
-	// Older metadata caches intentionally cannot establish a complete roster.
-	// Preserve the explicit empty-list distinction instead of inferring it from
-	// the display-only QCOwners projection, which may have dropped members.
-	if saved.ReleaseTestersConfirmed && saved.ReleaseTesters != nil {
-		saved.Data.ReleaseTesters = saved.ReleaseTesters
-		saved.Data.ReleaseTestersConfirmed = true
-	}
 	if saved.Data.Participants.ProductManagers == nil {
 		saved.Data.Participants.ProductManagers = []domain.RequirementPerson{}
 	}
@@ -656,7 +652,7 @@ func (s *Service) readRequirementMetadataCache(key string) (*requirementMetadata
 			delete(saved.Data.SprintEstimates, sprint)
 		}
 	}
-	return &saved, path, nil
+	return &saved.requirementMetadataEnvelope, path, nil
 }
 
 func (s *Service) writeRequirementMetadataCache(key string, data RequirementMetadataReadResult, fetchedAt int64) (string, error) {
@@ -675,8 +671,7 @@ func (s *Service) writeRequirementMetadataCache(key string, data RequirementMeta
 	data.RefreshError = ""
 	data.CacheError = ""
 	data.EstimateError = ""
-	envelope := requirementMetadataEnvelope{Version: requirementMetadataCacheVersion, Key: requirementCacheDigest(key), FetchedAt: fetchedAt, Data: data,
-		ReleaseTesters: data.ReleaseTesters, ReleaseTestersConfirmed: data.ReleaseTestersConfirmed && data.ReleaseTesters != nil}
+	envelope := requirementMetadataEnvelope{Version: requirementMetadataCacheVersion, Key: requirementCacheDigest(key), FetchedAt: fetchedAt, Data: data}
 	encoded, err := marshalRequirementJSON(envelope)
 	if err != nil {
 		return "", err

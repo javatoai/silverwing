@@ -3,6 +3,8 @@ package desktop
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 
 	"github.com/egoist/mygo/ui"
 	"silverwing-go/internal/application"
@@ -14,7 +16,11 @@ func (s *app) settingsCLIBundle(c *ui.Context, p palette) {
 	if current := s.settingsUnit.state.settingsCLIBundleStatus; current != nil {
 		status = *current
 	}
-	settingsCard(c, p, "sw 命令行", "在终端批量构建 Tag、查询 Genbu 状态和发送通知。", func() {
+	description := "在终端批量构建 Tag、查询 Genbu 状态和执行 UAT 操作。"
+	if runtime.GOOS == "windows" {
+		description += " 安装目录会自动加入用户 PATH。"
+	}
+	settingsCard(c, p, "sw 命令行", description, func() {
 		s.settingsCLIBundleAction(c, p, "install-sw-cli", "folder", "选择目录并安装", status.CLIPath != "", true, func() {
 			var start string
 			if status.CLIPath != "" {
@@ -91,7 +97,7 @@ func (s *app) applyCLIBundleInstall(action application.Action, result applicatio
 		case "skill":
 			state.settingsCLIBundleStatus.SkillPath = installed.Path
 		}
-		state.settingsOutput = installed.RecordError
+		state.settingsOutput = strings.TrimSpace(strings.Join([]string{installed.RecordError, installed.PATHMessage}, "\n"))
 		return
 	}
 	s.confirmNative("替换已有安装文件", "此位置已有不同版本的文件。", installed.Path, func() {

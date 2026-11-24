@@ -27,6 +27,11 @@ const (
 	ConfigMapListPath        = configMapListPath
 	PodGroupPath             = podGroupPath
 	PodPath                  = podPath
+	UATRedeployPath          = uatRedeployPath
+	UATReleaseGroupsPath     = uatReleaseGroupsPath
+	UATDeployInfoPath        = uatDeployInfoPath
+	UATReleasePath           = uatReleasePath
+	UATReleaseEnablePath     = uatReleaseEnablePath
 	BuildStepNumber          = buildStepNumber
 	UATStepNumber            = uatStepNumber
 	ProductionStepNumber     = productionStepNumber

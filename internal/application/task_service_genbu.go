@@ -19,6 +19,7 @@ type taskServiceGenbuClient interface {
 	genbuConfigSourceReader
 	ApprovalList(context.Context, domain.AppConfig, production.GenbuApprovalListRequest) (production.GenbuApprovalPage, error)
 	ApprovalDetail(context.Context, domain.AppConfig, string, string, int64) (production.GenbuApprovalDetail, error)
+	ApproveUATConfigChange(context.Context, domain.AppConfig, string, string, int64, string) (production.GenbuApprovalDetail, error)
 }
 
 type GenbuBuildLogResult struct {
@@ -27,6 +28,8 @@ type GenbuBuildLogResult struct {
 	Text    string `json:"text"`
 }
 
+var errProdServiceRuntimeReadOnly = errors.New("PROD 服务运行操作仅支持查看 Pod 明细和脱敏配置")
+
 func (a *App) taskServiceGenbuAction(ctx context.Context, action Action, client taskServiceGenbuClient) (ActionResult, error) {
 	scope, err := serviceScopeForAction(action)
 	if err != nil {
@@ -34,11 +37,16 @@ func (a *App) taskServiceGenbuAction(ctx context.Context, action Action, client 
 	}
 	env := scope.Environment
 	operation := taskServiceOperation(action.Kind)
+	if env == "prod" && operation != "config-preview-discard" {
+		return ActionResult{}, errProdServiceRuntimeReadOnly
+	}
 	switch operation {
 	case "config-files", "config-source":
 		return a.taskServiceConfigReadAction(ctx, action, scope, client)
 	case "config-preview", "config-submit", "config-preview-discard":
 		return a.taskServiceConfigEditAction(ctx, action, scope, client)
+	case "approval-approve":
+		return a.approveTaskServiceConfigChange(ctx, action, scope, client)
 	case "approvals", "approval-detail":
 	default:
 		return ActionResult{}, errors.New("不支持的 Genbu 服务操作")
@@ -72,7 +80,14 @@ func (a *App) taskServiceGenbuAction(ctx context.Context, action Action, client 
 		if parseErr != nil || id <= 0 {
 			return ActionResult{}, errors.New("审批单号无效")
 		}
-		result, err = client.ApprovalDetail(ctx, cfg, env, service.GenbuServiceName, id)
+		var detail production.GenbuApprovalDetail
+		detail, err = client.ApprovalDetail(ctx, cfg, env, service.GenbuServiceName, id)
+		if err == nil && detail.CanApprove {
+			if pending := checkGenbuConfigSubmission(a.genbuApprovalSubmissionPath(id)); pending != nil {
+				detail.CanApprove, detail.ComparisonNote = false, production.ErrGenbuApprovalUnknown.Error()
+			}
+		}
+		result = detail
 	}
 	if err != nil {
 		return ActionResult{}, err

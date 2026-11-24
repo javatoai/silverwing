@@ -1,6 +1,7 @@
 package desktop
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -194,6 +195,72 @@ func TestProductionEntryReadsBatchesAndPreparesOnlySelectedConfiguredService(t *
 				t.Fatalf("%s automatically inspected the baseline", name)
 			}
 		})
+	}
+}
+
+func TestProductionDisabledGenbuProbeKeepsOnlyLocalHistory(t *testing.T) {
+	s, v, b, backend, window := productionRequestFixture(t)
+	state := s.ensureProduction()
+	b.Target.GenbuService = "fixture-service"
+	b.ReleaseCreatedAt = time.Now().Add(-13 * time.Hour).UTC().Format(time.RFC3339Nano)
+	b.Tags = []production.Tag{{Name: "2.3.44", PushedAt: time.Now().UTC().Format(time.RFC3339Nano), Status: domain.GenbuTagProbeStatus{Build: domain.GenbuBuilding}}}
+	ended := productionHistoryRecord(b, strings.Repeat("a", 32), "release/2.3.42", time.Now().Add(-24*time.Hour))
+	state.batches = []production.Batch{b, ended}
+	s.scheduleProductionProbe(v, b, window)
+	if state.timers[b.ID] == nil {
+		t.Fatal("enabled service did not schedule an active build probe")
+	}
+
+	var cfg domain.AppConfig
+	if err := json.Unmarshal([]byte(s.settingsUnit.state.configJSON), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Services[0].GenbuProbeEnabled = false
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.settingsUnit.state.configJSON = string(data)
+	s.enterProductionPage()
+	if call := productionTestCall(t, backend); call.Kind != "production.list" {
+		t.Fatalf("disabled service requested a remote operation: %+v", call)
+	}
+	backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batches: []production.Batch{b, ended}}}}
+	productionTestUpdate(t, window)
+	if len(state.choices) != 1 || !state.choices[0].Historical || v.Busy || s.confirmationDialog != nil || len(state.timers) != 0 {
+		t.Fatal("disabled service retained active publishing, an old-release prompt, or a build probe")
+	}
+	s.productionInspect("")
+	s.scheduleProductionProbe(v, b, window)
+	if v.Busy || len(backend.calls) != 0 || len(state.timers) != 0 {
+		t.Fatal("disabled service accepted an inspection or scheduled another probe")
+	}
+
+	tester := productionIterationTester(s, 960, false)
+	if !tester.HasText("示例服务（历史）") || tester.HasText("开始新发布") || tester.HasText("构建生产 Tag") || tester.HasText("合并分支") {
+		t.Fatal("the main page did not switch to history-only access")
+	}
+	if _, found := tester.Find("更多生产发布操作"); found {
+		t.Fatal("active production actions remained accessible")
+	}
+
+	d := openProductionHistoryTest(t, s, v, backend, window)
+	if len(s.productionHistoryRecords(d)) != 2 {
+		t.Fatal("read-only history should retain both active and ended batches")
+	}
+	tester.Frame()
+	if _, found := tester.Find("更多批次操作 · " + ended.ReleaseBranch); found {
+		t.Fatal("read-only history still exposes changes")
+	}
+	s.viewProductionHistory(d, ended)
+	tester.Frame()
+	if !tester.HasText("生产 Tag 记录") || !tester.HasText(ended.Tags[0].Name) ||
+		tester.HasText("构建成功") || tester.HasText("构建日志") || tester.HasText("刷新构建状态") {
+		t.Fatal("local Tag details or Genbu visibility were incorrect")
+	}
+	s.requestProductionHistoryDetail(d, ended, "production.refresh-build")
+	if v.Busy || len(backend.calls) != 0 {
+		t.Fatal("read-only history accepted a remote refresh")
 	}
 }
 

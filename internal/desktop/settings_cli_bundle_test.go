@@ -29,4 +29,12 @@ func TestSettingsCLIBundleShowsInstalledInsteadOfInstall(t *testing.T) {
 	if !view.HasText("已安装") || view.HasText("安装 Skill") {
 		t.Fatal("successful Skill installation did not update its status immediately")
 	}
+	s.applyCLIBundleInstall(application.Action{Payload: map[string]any{"artifact": "cli"}},
+		application.ActionResult{Data: platform.CLIBundleInstallResult{
+			Path: filepath.Join(s.snapshot.Home, "sw.exe"), PATHMessage: "已加入用户 PATH，请重新打开终端",
+		}})
+	view.Frame()
+	if !view.HasText("已加入用户 PATH，请重新打开终端") {
+		t.Fatal("successful CLI installation did not show PATH feedback")
+	}
 }

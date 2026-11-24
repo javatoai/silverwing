@@ -10,7 +10,6 @@ import (
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/delivery"
 	"silverwing-go/internal/domain"
-	"silverwing-go/internal/releasenotice"
 )
 
 func TestTagTextListGroupsSelectableAndUnavailableServices(t *testing.T) {
@@ -149,7 +148,7 @@ func TestTagTextStatusSeparatesBuildAndUAT(t *testing.T) {
 	checkTagText(t, out.String(), "  Genbu 编译: 查询未确认\n  UAT 发版: 查询未确认")
 }
 
-func TestTagTextConflictAndNotificationKeepActionDetails(t *testing.T) {
+func TestTagTextConflictKeepsActionDetails(t *testing.T) {
 	var out bytes.Buffer
 	o := options{command: "build"}
 	o.outputResult(&out, io.Discard, application.CLITagJobResult{BatchID: "batch-a", Items: []application.CLITagJobItem{
@@ -163,18 +162,6 @@ func TestTagTextConflictAndNotificationKeepActionDetails(t *testing.T) {
 		"  合并提示: 禁止将 B 分支合并到 A 分支", "  冲突工作区: D:/temp/冲突 目录", "  冲突文件: README.md",
 		"\n\n账单: 等待关联操作\n  操作 ID: op-b\n  阻塞操作 ID: op-a")
 
-	out.Reset()
-	o.command = "notify"
-	o.outputResult(&out, io.Discard, application.CLITagNoticeResult{
-		BatchID: "batch-a",
-		Recipients: []releasenotice.RecipientDelivery{
-			{Self: true, State: "unknown", Error: "等待飞书确认"},
-			{Name: "测试甲", State: "sent", MessageID: "om_a"},
-		},
-		Warnings: []string{"未取得需求标题，卡片使用任务名称"},
-	}, exitError, nil)
-	checkTagText(t, out.String(), "批次 ID: batch-a\n\n本人: 结果待核实\n  原因: 等待飞书确认",
-		"\n\n测试甲: 已发送\n  飞书消息 ID: om_a\n\n通知提示: 未取得需求标题，卡片使用任务名称")
 }
 
 func TestTagTextRetryShowsOperationAndPushedTag(t *testing.T) {
@@ -191,58 +178,12 @@ func TestTagTextRetryShowsOperationAndPushedTag(t *testing.T) {
 	}
 }
 
-func TestTagCLINotifyRejectsTestRecipients(t *testing.T) {
+func TestTagCLIRemovesBatchNotification(t *testing.T) {
 	var out, stderr bytes.Buffer
-	code := run(context.Background(), []string{"tag", "notify", "--batch", "synthetic", "--with-testers"}, &out, &stderr)
-	if code != exitUsage || out.Len() != 0 {
-		t.Fatal("removed recipient option reached the notification workflow", code, out.String(), stderr.String())
-	}
-}
-
-func TestTagCLINotifyValidationErrorTextAndJSON(t *testing.T) {
-	var out, stderr bytes.Buffer
-	code := run(context.Background(), []string{"tag", "notify"}, &out, &stderr)
-	if code != exitUsage || out.Len() != 0 || stderr.String() != "错误: 请指定 --batch\n" {
-		t.Fatal("unexpected text error", code, out.String(), stderr.String())
-	}
-	stderr.Reset()
-	code = run(context.Background(), []string{"tag", "notify", "--json"}, &out, &stderr)
-	if code != exitUsage || out.String() != "{\"ok\":false,\"error\":\"请指定 --batch\"}\n" || stderr.Len() != 0 {
-		t.Fatal("unexpected JSON error", code, out.String(), stderr.String())
-	}
-}
-
-func TestTagTextNoticeDistinguishesUnsentAndUnknown(t *testing.T) {
-	for _, tt := range []struct {
-		state, messageID, want string
-		skipped                bool
-	}{
-		{state: "pending", want: "待发送"},
-		{state: "queued", want: "待发送"},
-		{state: "unknown", want: "结果待核实"},
-		{state: "sending", want: "结果待核实"},
-		{state: "failed", want: "发送失败"},
-		{state: "sent", want: "结果待核实"},
-		{state: "sent", messageID: "om_sent", want: "已发送"},
-		{state: "sent", messageID: "om_sent", skipped: true, want: "已发送（沿用回执）"},
-	} {
-		t.Run(tt.state+"/"+tt.want, func(t *testing.T) {
-			var out bytes.Buffer
-			o := options{}
-			o.outputResult(&out, io.Discard, application.CLITagNoticeResult{
-				BatchID: "batch-a",
-				Recipients: []releasenotice.RecipientDelivery{{
-					Self: true, State: tt.state, MessageID: tt.messageID, Skipped: tt.skipped,
-				}},
-			}, 0, nil)
-			want := "批次 ID: batch-a\n\n本人: " + tt.want + "\n"
-			if tt.messageID != "" {
-				want += "  飞书消息 ID: " + tt.messageID + "\n"
-			}
-			if got := out.String(); got != want {
-				t.Fatalf("state %q: got %q, want %q", tt.state, got, want)
-			}
-		})
+	code := run(context.Background(), []string{"tag", "notify", "--batch", "sample"}, &out, &stderr)
+	if code != exitUsage || out.Len() != 0 || !strings.Contains(stderr.String(), "未知 Tag 命令") ||
+		strings.Contains(stderr.String(), "sw tag notify") {
+		t.Fatalf("exit = %d, stdout = %q, stderr = %q", code, out.String(), stderr.String())
 	}
 }
 

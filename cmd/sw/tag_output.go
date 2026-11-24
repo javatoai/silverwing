@@ -24,8 +24,12 @@ func (o options) printResult(out io.Writer, data any, code int) {
 		if len(result) > 0 || code == 0 {
 			printTagStatus(out, result, o.batch, code == 0)
 		}
-	case application.CLITagNoticeResult:
-		printTagNotice(out, result)
+	case application.CLIUATOperationResult:
+		printUATOperation(out, result)
+	case application.CLIUATBatchResult:
+		printUATBatch(out, result)
+	case application.CLIRemoteTagResult:
+		printRemoteTag(out, result)
 	}
 }
 
@@ -300,42 +304,6 @@ func genbuStageText(state domain.GenbuStageStatus) string {
 		return "失败"
 	default:
 		return "未知"
-	}
-}
-
-func printTagNotice(out io.Writer, result application.CLITagNoticeResult) {
-	printTagField(out, "批次 ID", result.BatchID)
-	for i, receipt := range result.Recipients {
-		if result.BatchID != "" || i > 0 {
-			fmt.Fprintln(out)
-		}
-		name := receipt.Name
-		if receipt.Self {
-			name = "本人"
-		} else if name == "" {
-			name = "收件人"
-		}
-		state := "结果待核实"
-		switch {
-		case receipt.State == "sent" && receipt.MessageID != "":
-			state = "已发送"
-			if receipt.Skipped {
-				state = "已发送（沿用回执）"
-			}
-		case receipt.State == "failed":
-			state = "发送失败"
-		case receipt.State == "pending" || receipt.State == "queued":
-			state = "待发送"
-		}
-		printTagField(out, name, state)
-		printTagDetail(out, "飞书消息 ID", receipt.MessageID)
-		printTagDetail(out, "原因", receipt.Error)
-	}
-	if len(result.Warnings) > 0 && (result.BatchID != "" || len(result.Recipients) > 0) {
-		fmt.Fprintln(out)
-	}
-	for _, warning := range result.Warnings {
-		printTagField(out, "通知提示", warning)
 	}
 }
 

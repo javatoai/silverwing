@@ -156,6 +156,46 @@ func TestNativeGenbuPipelineStatusAndBuildLog(t *testing.T) {
 	}
 }
 
+func TestNativeGenbuUATPipelineLifecycle(t *testing.T) {
+	const completedAt = "2026-11-19 16:03:00"
+	for _, step := range []struct {
+		name   string
+		status any
+		want   domain.GenbuStageStatus
+	}{
+		{"initial", 0, domain.GenbuInitial},
+		{"running", 3, domain.GenbuBuilding},
+		{"running as text", "3", domain.GenbuBuilding},
+		{"successful", 1, domain.GenbuSuccess},
+		{"failed", 2, domain.GenbuFailed},
+		{"unrecognized", 99, domain.GenbuUnknown},
+	} {
+		t.Run(step.name, func(t *testing.T) {
+			client := newNativeGenbu(t, func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case genbuapi.VersionPath:
+					writeGenbuResponse(w, map[string]any{"response": []map[string]any{
+						{"version_id": 42, "version_name": "2.0.0", "app_name": "mp-pay-center"},
+					}})
+				case genbuapi.BaseInfoPath:
+					writeGenbuResponse(w, map[string]any{"response": []map[string]any{
+						{"step": 1, "status": 1, "created_time": completedAt},
+						{"step": 7, "status": step.status, "created_time": completedAt},
+					}})
+				default:
+					t.Errorf("unexpected request: %s", r.URL)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			})
+			status, err := client.Status(context.Background(), domain.DefaultAppConfig(), "pc", "2.0.0")
+			if err != nil || status.Build != domain.GenbuSuccess || status.UAT != step.want ||
+				(status.ReleasedCompletedAt != nil) != (step.want == domain.GenbuSuccess) {
+				t.Fatalf("UAT status = %+v, %v", status, err)
+			}
+		})
+	}
+}
+
 func TestNativeGenbuStatusDistinguishesMissingTagOrService(t *testing.T) {
 	for _, tc := range []struct {
 		name, service, path string

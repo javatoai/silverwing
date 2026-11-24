@@ -28,7 +28,7 @@ func newerProductionBatch(a, b production.Batch) bool {
 }
 
 func (s *app) viewProductionHistory(d *productionHistoryDialog, b production.Batch) {
-	if !s.productionHistoryCurrent(d) || d.View.Busy || s.confirmationDialog != nil || !b.Ended || b.Target.Selection != d.View.Selection {
+	if !s.productionHistoryCurrent(d) || d.View.Busy || s.confirmationDialog != nil || b.Target.Selection != d.View.Selection {
 		return
 	}
 	if current := d.record(b.ID); current != nil && current.Target == b.Target {
@@ -43,7 +43,7 @@ func (d *productionHistoryDialog) record(id string) *production.Batch {
 	}
 	for i := range d.State.batches {
 		b := &d.State.batches[i]
-		if b.ID == id && b.Ended && b.Target.Selection == d.Selection {
+		if b.ID == id && (b.Ended || d.readOnly) && b.Target.Selection == d.Selection {
 			return b
 		}
 	}

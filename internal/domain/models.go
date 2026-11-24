@@ -2,7 +2,7 @@ package domain
 
 // Persisted schema versions are deliberately independent of the product version.
 const (
-	CurrentProductVersion            = "0.0.21"
+	CurrentProductVersion            = "0.0.22"
 	CurrentAppConfigSchemaVersion    = "7.0.0"
 	CurrentTaskManifestSchemaVersion = "3.0.0"
 	DefaultGroupID                   = "default"

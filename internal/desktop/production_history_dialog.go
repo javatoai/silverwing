@@ -23,6 +23,7 @@ type productionHistoryDialog struct {
 	DetailError, DetailMessage string
 	ListScroll                 ui.ScrollState
 	request                    *productionWorker
+	readOnly                   bool
 }
 
 func (s *app) productionHistoryCurrent(d *productionHistoryDialog) bool {
@@ -57,7 +58,8 @@ func (s *app) openProductionHistory(v *productionView) {
 		}
 	}
 	d := &productionHistoryDialog{Open: true, View: v, State: s.releaseUnit.state.production, Selection: v.Selection,
-		Home: s.snapshot.Home, Scope: s.currentProductionScope(), ServiceName: name, RowErrors: map[string]string{}}
+		Home: s.snapshot.Home, Scope: s.currentProductionScope(), ServiceName: name, RowErrors: map[string]string{},
+		readOnly: s.productionGenbuProbeDisabled(v.Selection.ServiceID)}
 	s.releaseUnit.state.production.historyDialog = d
 	s.readProductionHistory(d)
 }
@@ -82,7 +84,7 @@ func (s *app) readProductionHistory(d *productionHistoryDialog) {
 func (s *app) productionHistoryRecords(d *productionHistoryDialog) []production.Batch {
 	var records []production.Batch
 	for _, b := range d.State.batches {
-		if b.Ended && b.Target.Selection == d.Selection && !d.State.deletedBatches[b.ID] {
+		if (b.Ended || d.readOnly) && b.Target.Selection == d.Selection && !d.State.deletedBatches[b.ID] {
 			records = append(records, b)
 		}
 	}
@@ -289,12 +291,17 @@ func productionHistoryBuild(b production.Batch) string {
 }
 
 func (s *app) renderProductionHistoryRow(c *ui.Context, p palette, d *productionHistoryDialog, b production.Batch, blocked bool) {
-	name, timestamp, build := productionHistoryTitle(b), productionHistoryCreated(b), productionHistoryBuild(b)
+	name, timestamp := productionHistoryTitle(b), productionHistoryCreated(b)
+	build, description := "", timestamp
+	if !d.readOnly {
+		build = productionHistoryBuild(b)
+		description += "，" + build
+	}
 	ui.Column(c.Key("production-history-row-" + b.ID)).FillWidth().MinWidth(0).Gap(4).Children(func() {
 		ui.Row(c).FillWidth().MinWidth(0).Gap(4).AlignItems(ui.Center).Children(func() {
 			row := ui.ButtonBase(c.Key("production-history-view-"+b.ID)).Row().Grow(1).MinWidth(0).MinHeight(60).
 				Padding(8, 10).Gap(8).Radius(8).AlignItems(ui.Center).FocusRing(true).Label(name).
-				Description(timestamp + "，" + build).Disabled(blocked)
+				Description(description).Disabled(blocked)
 			if row.Hovered() {
 				row.Background(p.soft)
 			}
@@ -303,20 +310,24 @@ func (s *app) renderProductionHistoryRow(c *ui.Context, p palette, d *production
 					label(c, name, 13, p.text).FontWeight(600).SingleLine().Tooltip(name)
 					label(c, timestamp, 11, p.muted).SingleLine().Tooltip("创建时间")
 				})
-				compactState(c, build, p)
+				if build != "" {
+					compactState(c, build, p)
+				}
 			})
 			if row.Clicked() {
 				s.viewProductionHistory(d, b)
 			}
-			miniButton(c, p, "production-history-more-"+b.ID, "more", "更多批次操作 · "+name, false).Shrink(0).Disabled(blocked).Menu(func(menu *ui.Menu) {
-				deleteLabel := "删除"
-				if d.RowErrors[b.ID] != "" {
-					deleteLabel = "重试删除"
-				}
-				if menu.Item(deleteLabel).IconSVG(icons["delete"]).Danger().Disabled(blocked).Chosen() {
-					s.confirmProductionDeleteRecord(d.View, b, d)
-				}
-			})
+			if !d.readOnly {
+				miniButton(c, p, "production-history-more-"+b.ID, "more", "更多批次操作 · "+name, false).Shrink(0).Disabled(blocked).Menu(func(menu *ui.Menu) {
+					deleteLabel := "删除"
+					if d.RowErrors[b.ID] != "" {
+						deleteLabel = "重试删除"
+					}
+					if menu.Item(deleteLabel).IconSVG(icons["delete"]).Danger().Disabled(blocked).Chosen() {
+						s.confirmProductionDeleteRecord(d.View, b, d)
+					}
+				})
+			}
 		})
 		if message := d.RowErrors[b.ID]; message != "" {
 			label(c, "删除失败："+message, 12, p.danger).FillWidth().Wrap().Selectable()
@@ -331,7 +342,11 @@ func (s *app) renderProductionHistoryDetail(c *ui.Context, p palette, d *product
 		if !productionReleaseCreatedTime(b).IsZero() {
 			summary = "创建于 " + summary
 		}
-		label(c, "已结束 · "+summary, 12, p.muted).Wrap()
+		status := "已结束"
+		if !b.Ended {
+			status = productionPhase(b.Phase)
+		}
+		label(c, status+" · "+summary, 12, p.muted).Wrap()
 		if d.DetailError != "" {
 			label(c, d.DetailError, 12, p.danger).Wrap().Selectable()
 		} else if d.DetailMessage != "" {
@@ -348,7 +363,7 @@ func (s *app) renderProductionHistoryDetail(c *ui.Context, p palette, d *product
 			}
 			s.renderProductionHistoryTagRecords(c, p, d, b)
 		}, func() {
-			if len(b.Tags) > 0 && productionButton(c, "production-ended-refresh-build", "刷新构建状态", p, false, blocked) {
+			if !d.readOnly && len(b.Tags) > 0 && productionButton(c, "production-ended-refresh-build", "刷新构建状态", p, false, blocked) {
 				s.requestProductionHistoryDetail(d, b, "production.refresh-build")
 			}
 		})

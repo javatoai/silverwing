@@ -27,23 +27,13 @@ type RequirementMetadataReadResult struct {
 	FetchedAt       int64                                `json:"fetchedAt,omitempty"`
 	WorkItem        *domain.ParticipatedWorkItem         `json:"workItem,omitempty"`
 	SprintEstimates map[string]RequirementSprintEstimate `json:"sprintEstimates,omitempty"`
-	// Only a fresh, well-formed roles response can confirm an empty roster.
-	ReleaseTesters          []domain.RequirementPerson `json:"-"`
-	ReleaseTestersConfirmed bool                       `json:"-"`
-	noticeIdentity          requirementIdentitySession
 }
 
 type requirementMetadataResult = RequirementMetadataReadResult
 
 // requirementMetadata reads only the source provider's metadata work-item
 // response. It deliberately does not call requirementBody or meta-fields.
-func (s *Service) requirementMetadata(ctx context.Context, config domain.AppConfig, payload map[string]any) (data any, err error) {
-	refresh := s.beginNoticeMetadataRefresh(ctx, config, payload)
-	defer func() { s.finishNoticeMetadataRefresh(ctx, config, refresh, data, err) }()
-	return s.readRequirementMetadata(ctx, config, payload, nil)
-}
-
-func (s *Service) readRequirementMetadata(ctx context.Context, config domain.AppConfig, payload map[string]any, supplied *requirementIdentitySession) (any, error) {
+func (s *Service) requirementMetadata(ctx context.Context, config domain.AppConfig, payload map[string]any) (any, error) {
 	linkText := stringValue(payload, "url", "requirementLink", "link")
 	space, kind, id, builtinProjectKey, err := parseRemoteRequirementURL(linkText)
 	if err != nil {
@@ -81,18 +71,7 @@ func (s *Service) readRequirementMetadata(ctx context.Context, config domain.App
 		return nil, err
 	}
 	force := boolValue(payload, "force")
-	var session requirementIdentitySession
-	var loggedOut bool
-	var identityErr error
-	if supplied == nil {
-		session, loggedOut, identityErr = s.requirementIdentityAtReadStart(ctx, config, expected, force)
-	} else {
-		session = *supplied
-		identityErr = s.verifyRequirementIdentitySession(ctx, config, session.raw, session.generation)
-		if identityErr == nil {
-			_, loggedOut, identityErr = checkRequirementIdentitySession(session, expected)
-		}
-	}
+	session, loggedOut, identityErr := s.requirementIdentityAtReadStart(ctx, config, expected, force)
 	if process.IsCleanupFailure(identityErr) {
 		return nil, identityErr
 	}
@@ -176,7 +155,6 @@ func (s *Service) readRequirementMetadata(ctx context.Context, config domain.App
 	if err := s.verifyRequirementIdentitySession(ctx, config, session.raw, session.generation); err != nil {
 		return nil, err
 	}
-	result.noticeIdentity = session
 	writeErr := s.commitRequirementRead(ctx, config, key, generation, func() error {
 		// A refresh in another Sprint may have saved its estimate while this
 		// request ran. Merge scoped values without replacing unrelated Sprints.
@@ -233,39 +211,10 @@ func (s *Service) fetchRequirementMetadata(ctx context.Context, config domain.Ap
 	if attributes == nil && title == nil && status == nil && participants.IsEmpty() {
 		return RequirementMetadataReadResult{}, errors.New("Meegle 未返回可用需求元数据")
 	}
-	roster := releaseTesterRoster(attributes["role_members"])
 	return RequirementMetadataReadResult{
 		ID: id, ProjectKey: projectKey, Type: kind, Title: title, Status: status, Participants: participants,
-		WorkItem:       metadataWorkItem(projectKey, kind, id, title, status, attributes["role_members"]),
-		ReleaseTesters: roster, ReleaseTestersConfirmed: roster != nil,
+		WorkItem: metadataWorkItem(projectKey, kind, id, title, status, attributes["role_members"]),
 	}, nil
-}
-
-func releaseTesterRoster(roles any) []domain.RequirementPerson {
-	list, ok := roles.([]any)
-	if !ok {
-		return nil
-	}
-	for _, raw := range list {
-		role := object(raw)
-		name, ok := requirementMetadataPrimitiveContent(role["name"])
-		if !ok || name == "" {
-			return nil
-		}
-		if name != "QC Owner" {
-			continue
-		}
-		members, ok := role["members"].([]any)
-		if !ok {
-			return nil
-		}
-		for _, raw := range members {
-			if requirementMetadataText(object(raw)["name"]) == "" {
-				return nil
-			}
-		}
-	}
-	return requirementMetadataMembers(roles, "QC Owner")
 }
 
 // The metadata provider consumes work_item_attribute.role_members, whose shape

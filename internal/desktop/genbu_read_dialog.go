@@ -6,7 +6,6 @@ import (
 	"slices"
 
 	"silverwing-go/internal/application"
-	"silverwing-go/internal/domain"
 	"silverwing-go/internal/production"
 
 	"github.com/egoist/mygo/ui"
@@ -87,41 +86,6 @@ func (s *app) genbuServiceReadCurrent(scope genbuServiceReadScope) bool {
 		v.epoch == scope.epoch && row.environment == v.environment && slices.Contains(v.rows, row)
 }
 
-func (s *app) openTagHistoryBuildLog(state *tagHistoryViewState, record application.TagRecord) {
-	if !s.integrationReady("genbu") || record.ID == "" || !s.tagHistoryStateCurrent(state) || record.TaskID != state.TaskID ||
-		!domain.TagGenbuProbeEligible(domain.TagOperationState(record.State), record.Tag) {
-		return
-	}
-	configuration := s.tagConfigurationIdentity()
-	page := s.page
-	current := func() bool {
-		if s.page != page || (page != "tasks" && page != "archive") || s.tab != taskTagTab || s.workspaceReviewPageVisible() ||
-			!s.tagHistoryStateCurrent(state) || s.tagConfigurationIdentity() != configuration {
-			return false
-		}
-		for _, item := range s.snapshot.TagHistory {
-			if item.ID == record.ID && item.TaskID == state.TaskID && item.Tag == record.Tag && item.CreatedAt == record.CreatedAt &&
-				item.ServiceID == record.ServiceID && item.ServiceName == record.ServiceName && item.ModuleID == record.ModuleID {
-				return domain.TagGenbuProbeEligible(domain.TagOperationState(item.State), item.Tag)
-			}
-		}
-		return false
-	}
-	if !current() {
-		return
-	}
-	var service string
-	if cfg, err := s.readSnapshotAppConfig(); err == nil {
-		if configured, err := cfg.Service(record.ServiceID); err == nil {
-			service = configured.GenbuServiceName
-		}
-	}
-	payload := tagHistoryScopePayload(state)
-	payload["operationId"] = record.ID
-	s.openGenbuBuildLog(firstNonEmpty(record.ServiceName, record.ServiceID), service, "", record.Tag, current,
-		application.Action{Kind: "tag.history.build-log", TaskID: state.TaskID, ServiceID: record.ServiceID, ModuleID: record.ModuleID, Payload: payload})
-}
-
 func productionTagRecordCurrent(current *production.Batch, b production.Batch, tag production.Tag) bool {
 	if current == nil || current.ID != b.ID || current.Target != b.Target {
 		return false
@@ -161,6 +125,8 @@ func (s *app) closeGenbuReadDialogs() {
 		cancelGenbuRead(&d.listRequest)
 		cancelGenbuRead(&d.detailRequest)
 		d.list, d.detail = production.GenbuApprovalPage{}, production.GenbuApprovalDetail{}
+		d.comparison, d.comparisonFile = nil, ""
+		d.metadataOpen = false
 	}
 }
 

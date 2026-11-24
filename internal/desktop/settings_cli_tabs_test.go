@@ -9,7 +9,48 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"silverwing-go/internal/application"
+	"silverwing-go/internal/domain"
 )
+
+func TestLarkSettingsHaveNoGroupOrContactsControls(t *testing.T) {
+	s := newSettingsCLITabsTestApp(t)
+	v := ui.NewTester(func(c *ui.Context) {
+		s.renderSettingsCLI(c, setTheme(c, false), "lark", "Lark CLI", "larkExecutablePath")
+	}, 1000, 760)
+	for _, text := range []string{"通知配置", "测试联系人", "上线分支通知群", "添加联系人", "保存通知配置"} {
+		if v.HasText(text) {
+			t.Fatal("retired settings remain", text)
+		}
+	}
+}
+
+func TestLarkProfileChangeRejectsLateCLIStatus(t *testing.T) {
+	s := newSettingsCLITabsTestApp(t)
+	request, e := s.beginCLIJob(application.Action{Kind: "cli.status", Payload: map[string]any{"tool": "lark"}})
+	if e != nil || request == nil {
+		t.Fatal(e)
+	}
+	defer request.complete(nil)
+	if !s.cliJobRelevant(request) {
+		t.Fatal("fresh Lark status rejected")
+	}
+	cfg := domain.DefaultAppConfig()
+	larkEnabled := true
+	cfg.OptionalCLIs.Lark = &larkEnabled
+	notice := cfg.EffectiveLarkNotice()
+	notice.Profile = "another-profile"
+	cfg.LarkNotice = &notice
+	b, _ := json.Marshal(cfg)
+	s.settingsUnit.state.configJSON = string(b)
+	if s.cliJobRelevant(request) {
+		t.Fatal("old profile response accepted")
+	}
+	request.cancel()
+	request.complete(nil)
+	if e = s.closeCLIJobs(context.Background()); e != nil {
+		t.Fatal(e)
+	}
+}
 
 func newSettingsCLITabsTestApp(t *testing.T) *app {
 	t.Helper()

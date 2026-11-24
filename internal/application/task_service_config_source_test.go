@@ -60,7 +60,6 @@ func TestTaskServiceInlineConfigReadsAndSubmitsExactDraft(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			app, base := taskServicesFixture(t)
-			base.Payload["environment"] = "prod"
 			// Initialize both persistent lock files before the snapshot so it
 			// detects other writes through preview and submission.
 			path := base.Payload["taskServicesContext"].(TaskServicesContext).TaskPath
@@ -77,13 +76,13 @@ func TestTaskServiceInlineConfigReadsAndSubmitsExactDraft(t *testing.T) {
 			client := &genbuConfigSourceFake{
 				genbuEditRouteFake: genbuEditRouteFake{identity: "account-cli"},
 				files: func(env, service string) (production.GenbuConfigFiles, error) {
-					if env != "prod" || service != "alias" {
+					if env != "uat" || service != "alias" {
 						t.Fatal("file list lost task scope")
 					}
 					return production.GenbuConfigFiles{GenbuConfigSnapshot: genbuTestConfigSnapshot(env), Files: []string{file}}, nil
 				},
 				source: func(env, service, requested string) (production.GenbuConfigFile, error) {
-					if env != "prod" || service != "alias" || requested != file {
+					if env != "uat" || service != "alias" || requested != file {
 						t.Fatal("source read lost task scope or exact file name")
 					}
 					return production.GenbuConfigFile{GenbuConfigSnapshot: genbuTestConfigSnapshot(env), File: file, Content: original}, nil
@@ -111,7 +110,7 @@ func TestTaskServiceInlineConfigReadsAndSubmitsExactDraft(t *testing.T) {
 			var previewed production.GenbuConfigEditRequest
 			var remotePreview production.GenbuConfigEditResult
 			client.preview = func(req production.GenbuConfigEditRequest) (production.GenbuConfigEditResult, error) {
-				if !req.StdinReplacement || req.Replacement == nil || string(req.Replacement) != draft || req.File != file || req.Environment != "prod" || req.Service != "alias" {
+				if !req.StdinReplacement || req.Replacement == nil || string(req.Replacement) != draft || req.File != file || req.Environment != "uat" || req.Service != "alias" {
 					t.Fatal("preview changed the draft or target before sending through stdin")
 				}
 				previewed, remotePreview = req, genbuConfigTestPreview(req)
@@ -210,12 +209,16 @@ func TestTaskServiceInlineConfigRejectsStaleSourceBeforeToken(t *testing.T) {
 				return result, nil
 			}
 			result, err = app.taskServiceGenbuAction(ctx, preview, client)
+			wantError := production.ErrGenbuConfigPreviewStale
+			if change == "source request environment" {
+				wantError = errProdServiceRuntimeReadOnly
+			}
 			if change == "no-change same snapshot" {
 				if err != nil || result.Data.(TaskServiceConfigPreviewResult).Status != "no-change" || result.Data.(TaskServiceConfigPreviewResult).PreviewToken != "" {
 					t.Fatal("no-change preview should succeed without a token", err)
 				}
-			} else if !errors.Is(err, production.ErrGenbuConfigPreviewStale) || result.Data != nil {
-				t.Fatal("stale result was not rejected with the stale classification", err)
+			} else if !errors.Is(err, wantError) || result.Data != nil {
+				t.Fatal("invalid source was not rejected with the expected error", err)
 			}
 			if previewCalls != wantPreviewCalls || len(app.genbuConfigPreviews.entries) != 0 {
 				t.Fatal("invalid source reached Genbu or created a submit token")

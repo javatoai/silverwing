@@ -61,13 +61,18 @@ type ApprovalItem struct {
 
 // ApprovalDetailRequest identifies one approval by its Genbu record number.
 type ApprovalDetailRequest struct {
-	ID int64 `json:"id"`
+	ID                  int64  `json:"id"`
+	Service             string `json:"service,omitempty"`
+	IncludeConfigReview bool   `json:"include_config_review,omitempty"`
 }
 
-// ApprovalDetailResult includes the stored approval proposal and original configuration file contents.
+// ApprovalDetailResult includes approval metadata and optional redacted configuration changes.
 type ApprovalDetailResult struct {
 	ApprovalItem
-	Details map[string]string `json:"details"`
+	Details     map[string]string     `json:"details"`
+	FileNames   []string              `json:"file_names,omitempty"`
+	Review      *ApprovalConfigReview `json:"review,omitempty"`
+	ReviewError string                `json:"review_error,omitempty"`
 }
 
 // ListApprovals gets one filtered page from Genbu's approval management list.
@@ -94,6 +99,9 @@ func (client *Client) ListApprovals(ctx context.Context, request ApprovalListReq
 			if item.Environment != query.Get("env") {
 				return fmt.Errorf("Genbu 返回了不符合环境筛选条件的审批记录")
 			}
+			if code, present := row["approve_type"]; present && query.Get("approve_type") != "" && fmt.Sprint(code) != query.Get("approve_type") {
+				return fmt.Errorf("Genbu 返回了不符合类型筛选条件的审批记录")
+			}
 			items = append(items, item)
 		}
 		result = ApprovalListResult{Page: page, PageSize: pageSize, Total: total, Items: items}
@@ -109,7 +117,11 @@ func (client *Client) ApprovalDetail(ctx context.Context, request ApprovalDetail
 	}
 	var result ApprovalDetailResult
 	err := client.requestToken(ctx, func(worker *genbuClient, token string) error {
-		row, err := worker.findApproval(request.ID, token)
+		environmentFilter := ""
+		if request.IncludeConfigReview {
+			environmentFilter = "UAT"
+		}
+		row, err := worker.findApproval(request.ID, token, environmentFilter)
 		if err != nil {
 			return err
 		}
@@ -118,6 +130,10 @@ func (client *Client) ApprovalDetail(ctx context.Context, request ApprovalDetail
 			return fmt.Errorf("该审批记录不在支持的环境范围内")
 		}
 		secrets := []string{client.ConfigSnapshot().Password, token}
+		if request.IncludeConfigReview {
+			result, _, err = worker.configApprovalReview(row, request.Service, token, secrets)
+			return err
+		}
 		item, err := approvalListItem(row, secrets...)
 		if err != nil {
 			return err
@@ -290,13 +306,17 @@ func (client *genbuClient) queryApprovals(query url.Values, token string) ([]map
 	return rows, total, nil
 }
 
-func (client *genbuClient) findApproval(id int64, token string) (map[string]any, error) {
+func (client *genbuClient) findApproval(id int64, token, configEnvironment string) (map[string]any, error) {
 	// The page opens the selected list row for details. Its keyword filter searches
 	// external identifiers, so look up the local record number in descending ID order.
 	const pageSize = ApprovalListDefaultPageSize
 	query := url.Values{
 		"size":      {strconv.Itoa(pageSize)},
 		"time_type": {"1"}, "date_begin": {""}, "date_end": {""},
+	}
+	if configEnvironment != "" {
+		query.Set("env", configEnvironment)
+		query.Set("approve_type", "7")
 	}
 	for attempt := 0; attempt < 2; attempt++ {
 		low, high := 1, 1

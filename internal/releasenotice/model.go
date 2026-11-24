@@ -20,11 +20,18 @@ type Identity struct {
 	UserVerified bool   `json:"userVerified,omitempty"`
 }
 
+type Recipient struct {
+	Name   string `json:"name"`
+	OpenID string `json:"openId"`
+}
+
 // Person only decodes retired recipient lists so stale sessions can be rejected.
 type Person struct {
 	OpenID string `json:"openId"`
 	ChatID string `json:"chatId,omitempty"`
 }
+
+// Empty operationId and version fields are part of the persisted branch digest.
 type Row struct {
 	OperationID string `json:"operationId"`
 	Service     string `json:"service"`
@@ -43,24 +50,17 @@ type Receipt struct {
 	ChatID    string    `json:"chatId,omitempty"`
 }
 type Session struct {
-	ID                  string      `json:"id"`
-	Scope               string      `json:"scope"`
-	Identity            Identity    `json:"identity"`
-	Title               string      `json:"title"`
-	URL                 string      `json:"url"`
-	Rows                []Row       `json:"rows"`
-	Testers             []string    `json:"testers,omitempty"`
-	People              []Person    `json:"people,omitempty"`
-	Receipts            []Receipt   `json:"receipts"`
-	Kind                string      `json:"kind,omitempty"`
-	Audience            string      `json:"audience,omitempty"`
-	Owner               string      `json:"owner,omitempty"`
-	Sender              string      `json:"sender,omitempty"`
-	Profile             string      `json:"profile,omitempty"`
-	Recipients          []Recipient `json:"recipients,omitempty"`
-	Warning             string      `json:"warning,omitempty"`
-	RequirementIdentity string      `json:"requirementIdentity,omitempty"`
-	PreparationStatus   string      `json:"preparationStatus,omitempty"`
+	ID       string    `json:"id"`
+	Scope    string    `json:"scope"`
+	Identity Identity  `json:"identity"`
+	Title    string    `json:"title"`
+	URL      string    `json:"url"`
+	Rows     []Row     `json:"rows"`
+	People   []Person  `json:"people,omitempty"`
+	Receipts []Receipt `json:"receipts"`
+	Kind     string    `json:"kind,omitempty"`
+	Audience string    `json:"audience,omitempty"`
+	Owner    string    `json:"owner,omitempty"`
 }
 
 // A request's configuration scope may change while its task/content is the
@@ -71,7 +71,6 @@ func (s *Session) BindOwner(owner string) {
 }
 
 type Selection struct {
-	Snapshot    string `json:"snapshot,omitempty"`
 	Retry       bool   `json:"retry"`
 	Resend      bool   `json:"resend"`
 	ResendAfter string `json:"resendAfter,omitempty"`
@@ -110,7 +109,17 @@ func (i Identity) ValidateSelf() error {
 	return nil
 }
 
+func (i Identity) ValidateUser() error {
+	if i.AppID == "" || !ValidOpenID(i.OpenID) || !i.UserVerified {
+		return errors.New("当前 Lark 用户未通过登录验证，请使用当前 profile 登录后重试")
+	}
+	return nil
+}
+
 func (s Session) ValidateSelf() error {
+	if s.Kind != Branches {
+		return errors.New("通知类型无法识别")
+	}
 	if s.Audience != SelfOnly || len(s.People) != 0 {
 		return errors.New("通知接收策略已变化，请重新发起仅本人通知")
 	}
@@ -129,9 +138,6 @@ func (s Session) LatestReceipt() (Receipt, bool) {
 
 // A fresh explicit click may resend a success; uncertain attempts keep their key.
 func (s Session) SendChoice() (Selection, error) {
-	if s.Audience == UserTesters {
-		return s.tagSendChoice()
-	}
 	choice := Selection{Retry: true}
 	if e := s.ValidateSelf(); e != nil {
 		return choice, e

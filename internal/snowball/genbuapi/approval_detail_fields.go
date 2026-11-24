@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"net/url"
 	"regexp"
 	"strings"
 	"unicode"
@@ -16,16 +17,11 @@ var (
 	approvalNamedSetting     = regexp.MustCompile(`(?im)^\s*(?:-\s*)?(?:name|key)[ \t]*:[ \t]*["']?([a-z0-9_.-]+)["']?[ \t]*(?:#[^\r\n]*)?$`)
 	approvalBasicAuth        = regexp.MustCompile(`(?i)(\b(?:proxy-)?authorization["']?[ \t]*[:=][ \t]*["']?)Basic[ \t]+[a-z0-9+/_=-]+`)
 	approvalSpaceProperty    = regexp.MustCompile(`^[ \t]*([a-zA-Z0-9_.-]+)[ \t]+[^ \t:=]`)
+	approvalQueryParameter   = regexp.MustCompile(`([?&;])([^?&;#=\s"']+)=([^&#;\s"']+)`)
 )
 
 func approvalDetailFields(row map[string]any, exactSecrets ...string) map[string]string {
-	fields := make(map[string]string)
-	addApprovalFields(fields, row, map[string]string{
-		"reason":              "审批备注",
-		"message":             "执行消息",
-		"external_id":         "工单号",
-		"ding_approve_number": "钉钉审批号",
-	}, exactSecrets)
+	fields := approvalDetailMetadata(row, exactSecrets)
 
 	content, _ := row["content"].(map[string]any)
 	switch valueString(row, "approve_type") {
@@ -65,6 +61,17 @@ func approvalDetailFields(row map[string]any, exactSecrets ...string) map[string
 	return fields
 }
 
+func approvalDetailMetadata(row map[string]any, exactSecrets []string) map[string]string {
+	fields := make(map[string]string)
+	addApprovalFields(fields, row, map[string]string{
+		"reason":              "审批备注",
+		"message":             "执行消息",
+		"external_id":         "工单号",
+		"ding_approve_number": "钉钉审批号",
+	}, exactSecrets)
+	return fields
+}
+
 func addApprovalFields(fields map[string]string, source map[string]any, labels map[string]string, exactSecrets []string) {
 	for key, label := range labels {
 		switch source[key].(type) {
@@ -89,8 +96,15 @@ func addApprovalConfigFiles(fields map[string]string, content map[string]any, ex
 		if name != "" {
 			label += " (" + redactApprovalText(name, exactSecrets...) + ")"
 		}
-		fields[label] = body
+		fields[label] = redactApprovalConfigFile(name, body, exactSecrets)
 	}
+}
+
+func redactApprovalConfigFile(name, body string, exactSecrets []string) string {
+	if isSensitiveConfigKey(name) {
+		return redactedConfigValue
+	}
+	return redactApprovalText(body, exactSecrets...)
 }
 
 func redactApprovalText(value string, exactSecrets ...string) string {
@@ -172,6 +186,18 @@ func redactApprovalPlainText(value string, exactSecrets []string) string {
 
 func redactApprovalValues(value string, exactSecrets []string) string {
 	value = RedactSensitiveConfig(value, exactSecrets...)
+	value = approvalQueryParameter.ReplaceAllStringFunc(value, func(parameter string) string {
+		parts := approvalQueryParameter.FindStringSubmatch(parameter)
+		name, err := url.QueryUnescape(parts[2])
+		if err != nil {
+			name = parts[2]
+		}
+		key := compactConfigKey(name)
+		if isSensitiveConfigKey(name) || key == "signature" || key == "xamzsignature" {
+			return parts[1] + parts[2] + "=" + redactedConfigValue
+		}
+		return parameter
+	})
 	value = approvalBasicAuth.ReplaceAllString(value, `${1}`+redactedConfigValue)
 	lines := strings.Split(value, "\n")
 	for index, line := range lines {

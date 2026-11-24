@@ -300,8 +300,5 @@ func (s *operationNotificationState) presentWithErrorAction(c *ui.Context, scope
 	if kind == "warning" {
 		toast.ContentMaxHeight = 360
 	}
-	if scope == "operation" && kind == "success" && isTagReleaseNoticeCopiedMessage(text) {
-		toast.ContentMaxHeight = 360
-	}
 	c.AddToast(toast)
 }

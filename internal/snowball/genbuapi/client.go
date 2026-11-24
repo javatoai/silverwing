@@ -73,7 +73,7 @@ type genbuAPI interface {
 	login(username, password string) (string, error)
 	queryStatus(service, tag, token string) (genbuStatus, error)
 	buildLog(service, tag string, tailLines int, token string) (genbuBuildLog, error)
-	queryConfig(service, namespace, environment, token string) (configSnapshot, error)
+	queryConfig(service, namespace, environment, file, token string) (configSnapshot, error)
 	queryPods(service, environment, token string) (podSnapshot, error)
 }
 
@@ -195,7 +195,7 @@ func (client *genbuClient) buildLog(service, tag string, tailLines int, token st
 	return genbuBuildLog{Service: resolved.Name, Tag: version.VersionName, Content: content}, nil
 }
 
-func (client *genbuClient) queryConfig(service, namespace, environment, token string) (configSnapshot, error) {
+func (client *genbuClient) queryConfig(service, namespace, environment, file, token string) (configSnapshot, error) {
 	resolved, err := client.resolveServiceContext(service, token)
 	if err != nil {
 		return configSnapshot{}, err
@@ -223,7 +223,16 @@ func (client *genbuClient) queryConfig(service, namespace, environment, token st
 	if err != nil {
 		return configSnapshot{}, err
 	}
-	contents, updateTime, err := extractLatestConfigContents(response)
+	latest, updateTime, err := selectLatestConfigMap(response)
+	if err != nil {
+		return configSnapshot{}, err
+	}
+	for key, expected := range map[string]string{"env": environment, "namespace": selectedNamespace, "app_id": resolved.AppID} {
+		if value, present := latest[key]; present && (value == nil || fmt.Sprint(value) != expected) {
+			return configSnapshot{}, fmt.Errorf("最新 ConfigMap 与查询环境、命名空间或应用不符：%w", ErrConfigTarget)
+		}
+	}
+	files, err := readConfigBodies(latest, file)
 	if err != nil {
 		return configSnapshot{}, err
 	}
@@ -232,7 +241,7 @@ func (client *genbuClient) queryConfig(service, namespace, environment, token st
 		Environment: environment,
 		Namespace:   selectedNamespace,
 		UpdateTime:  updateTime,
-		Contents:    contents,
+		Files:       files,
 	}, nil
 }
 
@@ -248,6 +257,9 @@ func (client *genbuClient) queryPods(service, environment, token string) (podSna
 
 	pods := make([]genbuPod, 0)
 	for _, group := range groups {
+		if group.scopeMismatch {
+			return podSnapshot{}, fmt.Errorf("Genbu 返回了与查询环境或服务不符的 Pod Group")
+		}
 		if group.MatchLabels == "" || group.Namespace == "" {
 			continue
 		}
@@ -255,16 +267,22 @@ func (client *genbuClient) queryPods(service, environment, token string) (podSna
 		if err != nil {
 			return podSnapshot{}, err
 		}
+		for _, pod := range items {
+			if pod.scopeMismatch {
+				return podSnapshot{}, fmt.Errorf("Genbu 返回了与查询环境或服务不符的 Pod")
+			}
+		}
 		pods = append(pods, items...)
 	}
 	return podSnapshot{Service: resolved.Name, Environment: environment, Pods: pods}, nil
 }
 
 type podGroup struct {
-	ID          int
-	Name        string
-	Namespace   string
-	MatchLabels string
+	ID            int
+	Name          string
+	Namespace     string
+	MatchLabels   string
+	scopeMismatch bool
 }
 
 func (client *genbuClient) queryPodGroups(environment, token, appID string) ([]podGroup, error) {
@@ -296,10 +314,11 @@ func (client *genbuClient) queryPodGroups(environment, token, appID string) ([]p
 			return nil, fmt.Errorf("Pod Group 响应格式错误：第 %d 项 group_id 无效", index+1)
 		}
 		groups = append(groups, podGroup{
-			ID:          id,
-			Name:        strings.TrimSpace(valueString(record, "pod_group_name", "group_name", "name")),
-			Namespace:   strings.TrimSpace(valueString(record, "k8s_namespace", "namespace")),
-			MatchLabels: strings.TrimSpace(valueString(record, "match_labels", "matchLabels")),
+			ID:            id,
+			Name:          strings.TrimSpace(valueString(record, "pod_group_name", "group_name", "name")),
+			Namespace:     strings.TrimSpace(valueString(record, "k8s_namespace", "namespace")),
+			MatchLabels:   strings.TrimSpace(valueString(record, "match_labels", "matchLabels")),
+			scopeMismatch: !matchesPodOperationScope(record, environment, appID),
 		})
 	}
 	return groups, nil
@@ -348,17 +367,21 @@ func (client *genbuClient) queryPodsForGroup(group podGroup, environment, token,
 		if value, ok := record["ready"].(bool); ok {
 			ready = value
 		}
+		operationID, missingPodID := uatPodOperationID(record)
 		pods = append(pods, genbuPod{
-			GroupName:    group.Name,
-			Namespace:    group.Namespace,
-			Name:         name,
-			IP:           strings.TrimSpace(valueString(record, "pod_ip", "podIP", "ip")),
-			AppVersion:   strings.TrimSpace(valueString(record, "app_version", "appVersion", "version")),
-			RestartCount: restartCount,
-			Phase:        strings.TrimSpace(valueString(record, "phase", "status")),
-			Ready:        ready,
-			Reason:       reason,
-			CreatedTime:  strings.TrimSpace(valueString(record, "created_time", "createdTime")),
+			GroupName:     group.Name,
+			Namespace:     group.Namespace,
+			Name:          name,
+			IP:            strings.TrimSpace(valueString(record, "pod_ip", "podIP", "ip")),
+			AppVersion:    strings.TrimSpace(valueString(record, "app_version", "appVersion", "version")),
+			RestartCount:  restartCount,
+			Phase:         strings.TrimSpace(valueString(record, "phase", "status")),
+			Ready:         ready,
+			Reason:        reason,
+			CreatedTime:   strings.TrimSpace(valueString(record, "created_time", "createdTime")),
+			operationID:   operationID,
+			missingPodID:  missingPodID,
+			scopeMismatch: !matchesPodOperationScope(record, environment, appID),
 		})
 	}
 	return pods, nil
@@ -492,23 +515,45 @@ func extractLatestConfigContents(response any) ([]string, string, error) {
 	if err != nil || latest == nil {
 		return nil, "", err
 	}
-	encodedData, ok := latest["encoded_data"].([]any)
-	if !ok {
-		return nil, "", fmt.Errorf("配置响应格式错误：最新 ConfigMap 的 encoded_data 不是数组")
+	files, err := readConfigBodies(latest, "")
+	if err != nil {
+		return nil, "", err
 	}
-	contents := make([]string, 0, len(encodedData))
-	for index, value := range encodedData {
-		entry, ok := value.(map[string]any)
-		if !ok {
-			return nil, "", fmt.Errorf("配置响应格式错误：encoded_data 第 %d 项不是对象", index+1)
-		}
-		content, ok := entry["content"].(string)
-		if !ok {
-			return nil, "", fmt.Errorf("配置响应格式错误：encoded_data 第 %d 项缺少文本 content", index+1)
-		}
-		contents = append(contents, content)
+	contents := make([]string, 0, len(files))
+	for _, file := range files {
+		contents = append(contents, file.Body)
 	}
 	return contents, latestTimeText, nil
+}
+
+func readConfigBodies(row map[string]any, file string) ([]configBody, error) {
+	if file == "" && row == nil {
+		return nil, nil
+	}
+	var entries []map[string]any
+	if file != "" {
+		entry, err := configEditFile(row, file)
+		if err != nil {
+			return nil, err
+		}
+		entries = []map[string]any{entry}
+	} else {
+		var err error
+		entries, err = configFileRecords(row)
+		if err != nil {
+			return nil, err
+		}
+	}
+	files := make([]configBody, 0, len(entries))
+	for index, entry := range entries {
+		content, ok := entry["content"].(string)
+		if !ok {
+			return nil, fmt.Errorf("配置响应格式错误：encoded_data 第 %d 项缺少文本 content", index+1)
+		}
+		name, _ := entry["name"].(string)
+		files = append(files, configBody{Name: name, Body: content})
+	}
+	return files, nil
 }
 
 func (client *genbuClient) resolveServiceContext(service, token string) (resolvedService, error) {

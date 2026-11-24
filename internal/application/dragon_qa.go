@@ -104,63 +104,73 @@ func (a *App) DragonQAStatus(ctx context.Context, task DragonQATask) (DragonQASt
 
 func (a *App) SubmitDragonQA(ctx context.Context, request DragonQASubmitRequest) (DragonQAState, error) {
 	return a.withDragonQA(ctx, request.DragonQATask, func(cfg domain.AppConfig, form DragonQAState, store dragonQAStore, record dragonQARecord) (DragonQAState, error) {
-		if record.Phase != "" && record.Phase != DragonQAFailed {
-			return record.view(form), nil
-		}
-		link := domain.ParseFeishuWorkItemLink(form.RequirementURL)
-		if link == nil {
-			return form, errors.New("请先为任务关联有效的飞书项目需求")
-		}
-		if form.RequirementURL != request.RequirementURL {
-			return form, errors.New("任务关联需求已变化，请重新打开提测弹框")
-		}
-		services, err := dragonQASubmissionServices(form.Services, request.Services)
-		if err != nil {
-			return form, err
-		}
-		ctx, err := a.platformIntegrationContext(ctx, cfg, "dragon")
-		if err != nil {
-			return record.view(form), err
-		}
-		account, err := a.dragonQAClient.AccountIdentity(ctx, cfg)
-		if err != nil {
-			return form, err
-		}
-		if err := commandruntime.CheckAdmission(ctx); err != nil {
-			return record.view(form), err
-		}
-		record = dragonQARecord{
-			DragonQAState: DragonQAState{TaskID: form.TaskID, RequirementURL: form.RequirementURL, Services: request.Services,
-				Phase: DragonQASubmitting, Message: "正在提交提测审批…"},
-			Account: account, RequirementID: link.WorkItemID, Remark: request.Remark,
-			AttemptedAt: time.Now().UTC(), SyncComment: request.SyncComment,
-		}
-		if err := store.save(record); err != nil {
-			return form, err
-		}
-		var approval dragon.Approval
-		if err = commandruntime.CheckAdmission(ctx); err != nil {
-			err = &dragon.CreateError{Err: err}
-		} else {
-			approval, err = a.dragonQAClient.Create(ctx, cfg, record.RequirementURL, record.Remark, services)
-		}
-		if err != nil {
-			var createErr *dragon.CreateError
-			record.Phase = DragonQAUnknown
-			record.ApprovalID = approval.ID
-			if errors.As(err, &createErr) {
-				if createErr.ApprovalID != "" {
-					record.ApprovalID = createErr.ApprovalID
-				}
-				if !createErr.PossiblyCreated && record.ApprovalID == "" {
-					record.Phase = DragonQAFailed
-				}
-			}
-			record.Message = err.Error()
-			return record.view(form), store.save(record)
-		}
-		return a.finishDragonQA(ctx, store, record, approval)
+		return a.submitDragonQA(ctx, request, cfg, form, store, record, "")
 	})
+}
+
+func (a *App) submitDragonQA(ctx context.Context, request DragonQASubmitRequest, cfg domain.AppConfig, form DragonQAState, store dragonQAStore, record dragonQARecord, expectedAccount string) (DragonQAState, error) {
+	if record.Phase != "" && record.Phase != DragonQAFailed {
+		return record.view(form), nil
+	}
+	link := domain.ParseFeishuWorkItemLink(form.RequirementURL)
+	if link == nil {
+		return form, errors.New("请先为任务关联有效的飞书项目需求")
+	}
+	if form.RequirementURL != request.RequirementURL {
+		return form, errors.New("任务关联需求已变化，请重新打开提测弹框")
+	}
+	services, err := dragonQASubmissionServices(form.Services, request.Services)
+	if err != nil {
+		return form, err
+	}
+	ctx, err = a.platformIntegrationContext(ctx, cfg, "dragon")
+	if err != nil {
+		return record.view(form), err
+	}
+	account, err := a.dragonQAClient.AccountIdentity(ctx, cfg)
+	if err != nil {
+		return form, err
+	}
+	if expectedAccount != "" {
+		current, err := loadPlatformAccount()
+		if err != nil || current.Fingerprint() != expectedAccount {
+			return form, errCLIDragonPreflightStale
+		}
+	}
+	if err := commandruntime.CheckAdmission(ctx); err != nil {
+		return record.view(form), err
+	}
+	record = dragonQARecord{
+		DragonQAState: DragonQAState{TaskID: form.TaskID, RequirementURL: form.RequirementURL, Services: request.Services,
+			Phase: DragonQASubmitting, Message: "正在提交提测审批…"},
+		Account: account, RequirementID: link.WorkItemID, Remark: request.Remark,
+		AttemptedAt: time.Now().UTC(), SyncComment: request.SyncComment,
+	}
+	if err := store.save(record); err != nil {
+		return form, err
+	}
+	var approval dragon.Approval
+	if err = commandruntime.CheckAdmission(ctx); err != nil {
+		err = &dragon.CreateError{Err: err}
+	} else {
+		approval, err = a.dragonQAClient.Create(ctx, cfg, record.RequirementURL, record.Remark, services)
+	}
+	if err != nil {
+		var createErr *dragon.CreateError
+		record.Phase = DragonQAUnknown
+		record.ApprovalID = approval.ID
+		if errors.As(err, &createErr) {
+			if createErr.ApprovalID != "" {
+				record.ApprovalID = createErr.ApprovalID
+			}
+			if !createErr.PossiblyCreated && record.ApprovalID == "" {
+				record.Phase = DragonQAFailed
+			}
+		}
+		record.Message = err.Error()
+		return record.view(form), store.save(record)
+	}
+	return a.finishDragonQA(ctx, store, record, approval)
 }
 
 func (a *App) withDragonQA(ctx context.Context, task DragonQATask, run func(domain.AppConfig, DragonQAState, dragonQAStore, dragonQARecord) (DragonQAState, error)) (DragonQAState, error) {

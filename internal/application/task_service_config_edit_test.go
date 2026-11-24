@@ -62,14 +62,13 @@ func TestTaskServiceConfigEditUsesExactPreviewOnce(t *testing.T) {
 	} {
 		t.Run(input.name, func(t *testing.T) {
 			app, base := taskServicesFixture(t)
-			base.Payload["environment"] = "prod"
 			preview, submit := genbuConfigTestActions(base, input.file, input.field, input.value)
 			before := taskFilesBytes(t, app.Paths.Home)
 			var remotePreview production.GenbuConfigEditResult
 			var previewed production.GenbuConfigEditRequest
 			var submitCalls int
 			client := &genbuEditRouteFake{identity: "account-cli", preview: func(req production.GenbuConfigEditRequest) (production.GenbuConfigEditResult, error) {
-				if req.Environment != "prod" || req.Service != "alias" || req.File != input.file || req.StdinReplacement || !reflect.DeepEqual(req.Replacement, input.replacement) || !reflect.DeepEqual(req.Edits, input.edits) {
+				if req.Environment != "uat" || req.Service != "alias" || req.File != input.file || req.StdinReplacement || !reflect.DeepEqual(req.Replacement, input.replacement) || !reflect.DeepEqual(req.Edits, input.edits) {
 					t.Fatalf("preview changed edit or destination: %+v", req)
 				}
 				previewed, remotePreview = req, genbuConfigTestPreview(req)
@@ -95,11 +94,11 @@ func TestTaskServiceConfigEditUsesExactPreviewOnce(t *testing.T) {
 			submit.Payload["previewToken"] = previewResult.PreviewToken
 			wrong := submit
 			wrong.Payload = maps.Clone(submit.Payload)
-			wrong.Payload["environment"] = "uat"
-			if _, err = app.taskServiceGenbuAction(ctx, wrong, client); !errors.Is(err, errGenbuConfigPreviewGone) || submitCalls != 0 {
+			wrong.Payload["environment"] = "prod"
+			if _, err = app.taskServiceGenbuAction(ctx, wrong, client); !errors.Is(err, errProdServiceRuntimeReadOnly) || submitCalls != 0 {
 				t.Fatalf("preview crossed environment: %v", err)
 			}
-			wrong.Payload["environment"], wrong.Payload["content"] = "prod", "changed"
+			wrong.Payload["environment"], wrong.Payload["content"] = "uat", "changed"
 			if _, err = app.taskServiceGenbuAction(ctx, wrong, client); err == nil || submitCalls != 0 {
 				t.Fatal("submit accepted a replacement body alongside its token")
 			}

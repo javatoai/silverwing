@@ -8,6 +8,8 @@ import (
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/delivery"
 	"silverwing-go/internal/domain"
+
+	"github.com/egoist/mygo/ui"
 )
 
 type tagHistoryViewState struct {
@@ -23,6 +25,13 @@ type tagHistoryViewState struct {
 	DeleteIDs      []string
 	DeleteGroupIDs []string
 	Error          string
+	canvas         ui.Handle
+	layout         tagHistoryLayout
+}
+
+type tagHistoryLayout struct {
+	windowWidth, taskListWidth float32
+	navigationCollapsed        bool
 }
 
 type tagHistoryGroup struct {
@@ -97,11 +106,8 @@ func tagHistoryScopePayload(state *tagHistoryViewState) map[string]any {
 		"tagHistoryTaskPath": state.TaskPath, "tagHistoryTaskCreatedAt": state.TaskCreatedAt}
 }
 
-func tagHistoryMenuKey(state *tagHistoryViewState, item string) string {
-	if state == nil {
-		return "tag-history\x00" + item
-	}
-	return strings.Join([]string{"tag-history", state.Home, state.TaskRoot, state.TaskPath, state.TaskCreatedAt, state.TaskID, item}, "\x00")
+func tagHistoryActionsKey(state *tagHistoryViewState) string {
+	return strings.Join([]string{"tag-history-actions", state.Home, state.TaskRoot, state.TaskPath, state.TaskCreatedAt, state.TaskID}, "\x00")
 }
 
 func (s *app) tagHistoryRecordPayload(record application.TagRecord) map[string]any {
@@ -145,8 +151,7 @@ func filterTagHistory(records []application.TagRecord, query string, onlyProblem
 				group.Visible = append(group.Visible, record)
 			}
 		}
-		// The delivery group preserves update-time order for retention and
-		// announcements. Sort only this presentation copy by creation time.
+		// Sort only the visible records by creation time, preserving retention order.
 		sort.SliceStable(group.Visible, func(i, j int) bool {
 			if group.Visible[i].CreatedAt != group.Visible[j].CreatedAt {
 				return group.Visible[i].CreatedAt > group.Visible[j].CreatedAt
@@ -194,30 +199,6 @@ func tagHistoryGroupState(operations []domain.TagOperation) string {
 		return string(operations[0].State)
 	}
 	return "CREATED"
-}
-
-func (s *app) tagHistoryAnnouncement(group tagHistoryGroup) string {
-	operations := append([]domain.TagOperation(nil), group.Item.Operations...)
-	sort.SliceStable(operations, func(i, j int) bool {
-		if operations[i].CreatedAt != operations[j].CreatedAt {
-			return operations[i].CreatedAt < operations[j].CreatedAt
-		}
-		return operations[i].OperationID < operations[j].OperationID
-	})
-	title := ""
-	if len(group.Visible) > 0 {
-		for _, item := range s.taskUnit.state.tasks {
-			if item.id == group.Visible[0].TaskID {
-				metadata := s.taskRequirementMetadataFor(item)
-				if metadata.Metadata.Title != nil {
-					title = strings.TrimSpace(*metadata.Metadata.Title)
-				}
-				title = firstNonEmpty(title, item.requirementTitle, item.title)
-				break
-			}
-		}
-	}
-	return delivery.FormatTagAnnouncement(firstNonEmpty(title, group.Item.FolderName, "未命名需求"), operations, true)
 }
 
 func tagHistoryDeleteSelection(groups []tagHistoryGroup, selected map[string]bool, all bool) ([]string, []string) {

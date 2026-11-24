@@ -18,8 +18,13 @@ func (s *app) productionWaitingToStart(v *productionView, b *production.Batch) b
 	return !v.ReleaseStarted && v.Preview == nil
 }
 
+func (s *app) productionGenbuProbeDisabled(serviceID string) bool {
+	service := s.readServiceConfig(serviceID)
+	return service != nil && !mapBool(service, "genbuProbeEnabled", false)
+}
+
 func (s *app) productionServiceConfigured(v *productionView) bool {
-	if v == nil || v.Selection.ServiceID == "" {
+	if v == nil || v.Selection.ServiceID == "" || s.productionGenbuProbeDisabled(v.Selection.ServiceID) {
 		return false
 	}
 	for _, choice := range s.ensureProduction().choices {
@@ -99,6 +104,9 @@ func (s *app) applyProductionEntry(v *productionView) {
 	if v.BatchID != b.ID {
 		v.resetProductionRelease()
 		v.BatchID = b.ID
+	}
+	if s.productionGenbuProbeDisabled(v.Selection.ServiceID) {
+		return
 	}
 	if !s.maybePromptOldProductionRelease(v, *b) {
 		s.inspectSelectedProductionRelease(v)

@@ -66,9 +66,6 @@ func (s *app) taskWorkspaceDetail(c *ui.Context, p palette) {
 					}
 				})
 			})
-			if s.tab == taskTagTab && s.taskUnit.currentTask().id != "" {
-				s.renderTagHistoryPageMenu(c, p, s.taskUnit.currentTask())
-			}
 		})
 		ui.Divider(c)
 		if s.tab == taskProjectInstructionsTab && s.taskContentTabAvailable(taskProjectInstructionsTab) {

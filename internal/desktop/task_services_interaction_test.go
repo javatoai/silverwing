@@ -117,9 +117,10 @@ func TestTaskServicesLongVersionKeepsCountVisible(t *testing.T) {
 	s := taskServicesDesktopFixture(t)
 	v, _ := activateTaskServicesFixture(t, s, "tasks", "uat")
 	row := v.rows[0]
-	row.pods = []production.RuntimePod{{Name: "p1", Version: strings.Repeat("very-long-version-", 20)}}
+	version := strings.Repeat("very-long-version-", 20)
+	row.pods = []production.RuntimePod{{Name: "p1", Version: version}}
 	tester := newTaskServicesTester(s, 1100, 650)
-	count, ok := tester.Find("× 1")
+	count, ok := tester.Find(version + " · 1 个 Pod")
 	if !ok || count.W <= 0 || count.X+count.W > 1100 {
 		t.Fatal("long version clipped its independent count", count, ok)
 	}
@@ -180,7 +181,7 @@ func TestTaskServicesEnvironmentTabsAndDialogActions(t *testing.T) {
 	}
 }
 
-func TestTaskServicesRowsFitContentPane(t *testing.T) {
+func TestTaskServicesTableScrollKeepsColumnsAndToolbarAligned(t *testing.T) {
 	const sidebar, inset, height = 260, 16, 680
 	const paneLabel = "Service content pane"
 	const created = "2026-11-02 12:34:56"
@@ -188,17 +189,17 @@ func TestTaskServicesRowsFitContentPane(t *testing.T) {
 	for _, dark := range []bool{false, true} {
 		t.Run(fmt.Sprintf("dark-%t", dark), func(t *testing.T) {
 			s := taskServicesDesktopFixture(t)
+			updateCatalogRuntimeService(t, s, "s2", func(service *domain.ServiceConfig) { service.Enabled = true })
 			v, row := activateTaskServicesFixture(t, s, "tasks", "uat")
 			row.pods = []production.RuntimePod{
 				{Name: "first-pod", Version: longVersion, CreatedTime: created},
 				{Name: "second-pod", Version: longVersion},
 				{Name: "third-pod", Version: "v2.3.4"},
 			}
-			var createdTextWidth, versionCountWidth float32
+			var createdTextWidth float32
 			tester := ui.NewTester(func(c *ui.Context) {
 				p := setTheme(c, dark)
 				createdTextWidth, _ = c.MeasureText(0, ui.Span{Text: created, Size: 12})
-				versionCountWidth, _ = c.MeasureText(0, ui.Span{Text: "× 2", Size: 12})
 				ui.Row(c).Fill().Padding(inset).Children(func() {
 					ui.Box(c).Width(sidebar).Shrink(0)
 					ui.Column(c).Grow(1).FillHeight().MinWidth(0).Label(paneLabel).Children(func() { s.renderTaskServices(c, p) })
@@ -206,86 +207,134 @@ func TestTaskServicesRowsFitContentPane(t *testing.T) {
 				s.renderTaskServiceDialog(c, p)
 			}, sidebar+2*inset+1260, height)
 			tester.SetLocale("en-US")
-			fullSize := map[string]ui.Rect{}
+			columns := [...]struct{ heading, value string }{
+				{"服务", row.name},
+				{"Pod 数量", "3 个"},
+				{"运行版本", longVersion},
+				{"Pod 创建时间", created},
+				{"操作", taskServiceOpenTarget(row, "detail")},
+			}
+			var baselineHeaders, baselineCells [len(columns)]ui.Rect
 			for _, layout := range []struct {
-				name    string
-				width   int
-				compact bool
+				name  string
+				width int
 			}{
-				{"wide", 1260, false}, {"screenshot", 820, false}, {"narrow", 480, true}, {"small", 350, true}, {"restored", 820, false},
+				{"minimum", int(taskServiceTableMinWidth)}, {"wide", 1260}, {"screenshot", 820}, {"narrow", 480}, {"small", 350}, {"restored", 1260},
 			} {
 				t.Run(layout.name, func(t *testing.T) {
+					if float32(layout.width) < taskServiceTableMinWidth {
+						v.scroll.X = 0
+					}
 					tester.SetSize(sidebar+2*inset+layout.width, height)
 					pane, ok := tester.Find(paneLabel)
 					wantPane := ui.Rect{X: sidebar + inset, Y: inset, W: float32(layout.width), H: height - 2*inset}
 					if !ok || pane != wantPane {
 						t.Fatalf("service content pane = %+v, want %+v", pane, wantPane)
 					}
-					for _, control := range []string{"UAT 环境", "PROD 环境", "刷新当前环境全部服务"} {
-						taskServicesBoundsWithin(t, tester, pane, control)
+					wantMaxX := max(0, taskServiceTableMinWidth-pane.W)
+					if v.scroll.MaxX < wantMaxX-1 || v.scroll.MaxX > wantMaxX+1 || v.scroll.X != 0 {
+						t.Fatalf("scroll range = %+v, want start at zero with MaxX %.1f", v.scroll, wantMaxX)
 					}
-					for _, service := range v.visibleRows() {
-						rowBounds := taskServicesBoundsWithin(t, tester, pane, taskServiceOpenTarget(service, "row"))
-						scope := service.name + " " + service.environment
-						actions := []string{taskServiceOpenTarget(service, "detail"), "查看 " + scope + " 配置", "修改 " + scope + " 配置", "刷新 " + scope}
-						more := "更多 · " + service.name
-						moreBounds := taskServicesBoundsWithin(t, tester, rowBounds, more)
-						baseline, seen := fullSize[more]
-						if !seen {
-							fullSize[more] = moreBounds
-						} else if moreBounds.W < baseline.W-1 || moreBounds.H < baseline.H-1 {
-							t.Errorf("overflow button was clipped from %+v to %+v", baseline, moreBounds)
+
+					toolbar := [...]string{"UAT 环境", "PROD 环境", "刷新当前环境全部服务"}
+					var toolbarRects [len(toolbar)]ui.Rect
+					for i, control := range toolbar {
+						toolbarRects[i] = taskServicesBoundsWithin(t, tester, pane, control)
+					}
+					rowLabel := taskServiceOpenTarget(row, "row")
+					rowBounds := taskServicesBoundsWithin(t, tester, pane, rowLabel)
+					if rowBounds.W != pane.W {
+						t.Fatalf("visible row bounds = %+v, want pane width %.1f", rowBounds, pane.W)
+					}
+
+					if wantMaxX == 0 {
+						var headers, cells [len(columns)]ui.Rect
+						for i, column := range columns {
+							heading := taskServicesBoundsWithin(t, tester, pane, column.heading)
+							cell := taskServicesBoundsWithin(t, tester, rowBounds, column.value)
+							dataColumn := i < len(columns)-1
+							if heading.Y+heading.H > rowBounds.Y || dataColumn && (cell.X < heading.X-.5 || cell.X+cell.W > heading.X+heading.W+.5) ||
+								i > 0 && heading.X < headers[i-1].X+headers[i-1].W-.5 {
+								t.Errorf("column %q at %+v (cell %+v) does not align in the table", column.heading, heading, cell)
+							}
+							headers[i], cells[i] = heading, cell
 						}
-						for _, action := range actions {
-							if layout.compact {
-								if _, found := tester.Find(action); found {
-									t.Errorf("compact table still renders %q inline", action)
+						if pane.W == taskServiceTableMinWidth {
+							baselineHeaders, baselineCells = headers, cells
+						} else {
+							for i, column := range columns {
+								wantHeading, wantCell := baselineHeaders[i], baselineCells[i]
+								if i == len(columns)-1 {
+									extraWidth := pane.W - taskServiceTableMinWidth
+									wantHeading.X += extraWidth
+									wantCell.X += extraWidth
 								}
-								continue
+								if headers[i] != wantHeading || cells[i] != wantCell {
+									t.Errorf("column %q header: got %+v, want %+v; cell: got %+v, want %+v",
+										column.heading, headers[i], wantHeading, cells[i], wantCell)
+								}
 							}
-							bounds := taskServicesBoundsWithin(t, tester, rowBounds, action)
-							if baseline, seen := fullSize[action]; seen && (bounds.W < baseline.W-1 || bounds.H < baseline.H-1) {
-								t.Errorf("inline action %q was clipped from %+v to %+v", action, baseline, bounds)
-							} else if !seen {
-								fullSize[action] = bounds
+						}
+
+						stamp := cells[3]
+						for _, entry := range []struct{ version, count string }{{longVersion, "2"}, {"v2.3.4", "1"}} {
+							version := taskServicesBoundsWithin(t, tester, rowBounds, entry.version)
+							count := taskServicesBoundsWithin(t, tester, rowBounds, entry.version+" · "+entry.count+" 个 Pod")
+							gap := count.X - (version.X + version.W)
+							if count.W != 18 || count.H != 18 || gap < 5 || gap > 7 || count.X+count.W > stamp.X+0.5 {
+								t.Errorf("version count must sit in a circle just after its version: version=%+v count=%+v creation=%+v", version, count, stamp)
 							}
-							if bounds.X+bounds.W > moreBounds.X+0.5 || bounds.Y >= moreBounds.Y+moreBounds.H || moreBounds.Y >= bounds.Y+bounds.H {
-								t.Errorf("inline action %q at %+v must precede the overflow button on the same line at %+v", action, bounds, moreBounds)
+						}
+						if stamp.W < createdTextWidth-1 {
+							t.Errorf("creation time lacks space: %+v", stamp)
+						}
+					} else {
+						assertScrolled := func() {
+							t.Helper()
+							for i, column := range columns {
+								for _, item := range []struct {
+									label string
+									want  ui.Rect
+								}{{column.heading, baselineHeaders[i]}, {column.value, baselineCells[i]}} {
+									item.want.X -= v.scroll.X
+									if item.want.X >= pane.X && item.want.X+item.want.W <= pane.X+pane.W {
+										if got, found := tester.Find(item.label); !found || got != item.want {
+											t.Errorf("column element %q at scroll %.1f = %+v, want %+v", item.label, v.scroll.X, got, item.want)
+										}
+									}
+								}
+							}
+						}
+						assertScrolled()
+						tester.ScrollWith(ui.Shift, pane.X+pane.W/2, rowBounds.Y+rowBounds.H/2, 0, taskServiceTableMinWidth)
+						if v.scroll.X != v.scroll.MaxX || v.scroll.Y != 0 {
+							t.Fatalf("Shift-wheel did not scroll the table sideways: %+v", v.scroll)
+						}
+						assertScrolled()
+						for i, control := range toolbar {
+							if bounds := taskServicesBoundsWithin(t, tester, pane, control); bounds != toolbarRects[i] {
+								t.Errorf("table scroll moved the toolbar control %q: %+v -> %+v", control, toolbarRects[i], bounds)
 							}
 						}
 					}
-					rowBounds := taskServicesBoundsWithin(t, tester, pane, taskServiceOpenTarget(row, "row"))
-					var previousHeader, previousCell ui.Rect
-					for _, column := range []struct{ heading, value string }{
-						{"服务", row.name}, {"Pod 数量", "3 个"}, {"运行版本", longVersion}, {"Pod 创建时间", created}, {"操作", "更多 · " + row.name},
-					} {
-						heading := taskServicesBoundsWithin(t, tester, pane, column.heading)
-						cell := taskServicesBoundsWithin(t, tester, rowBounds, column.value)
-						if heading.Y+heading.H > rowBounds.Y || heading.X < previousHeader.X+previousHeader.W-0.5 || cell.X < previousCell.X+previousCell.W-0.5 {
-							t.Errorf("column %q at %+v (cell %+v) does not align in the table", column.heading, heading, cell)
-						}
-						previousHeader, previousCell = heading, cell
+
+					detail := taskServiceOpenTarget(row, "detail")
+					target := row.name + " uat"
+					runtimeActions := []string{uatReleaseLabel + " · " + row.name, detail, uatRestartLabel + " · " + row.name}
+					if layout.width < 480 {
+						// The leading release button can be clipped at the rightmost scroll position.
+						runtimeActions = runtimeActions[1:]
 					}
-					taskServicesBoundsWithin(t, tester, rowBounds, "v2.3.4")
-					version := taskServicesBoundsWithin(t, tester, rowBounds, longVersion)
-					count := taskServicesBoundsWithin(t, tester, rowBounds, "× 2")
-					stamp := taskServicesBoundsWithin(t, tester, rowBounds, created)
-					if count.W < versionCountWidth-1 || version.X+version.W > count.X+0.5 || count.X+count.W > stamp.X+0.5 || !layout.compact && stamp.W < createdTextWidth-1 {
-						t.Errorf("version count or creation time lacks space: version=%+v count=%+v creation=%+v", version, count, stamp)
+					runtime := taskServicesActionGroupBounds(t, tester, rowBounds, "运行操作", runtimeActions...)
+					config := taskServicesActionGroupBounds(t, tester, rowBounds, "配置操作", "查看 "+target+" 配置", "修改 "+target+" 配置", "查看 "+target+" 配置审批")
+					refresh := taskServicesBoundsWithin(t, tester, rowBounds, "刷新 "+target)
+					if runtime.X+runtime.W >= config.X || config.X+config.W >= refresh.X ||
+						runtime.Y != config.Y || runtime.H != config.H || config.Y+config.H/2 != refresh.Y+refresh.H/2 {
+						t.Errorf("expected separate runtime, configuration and refresh controls in one row: runtime=%+v config=%+v refresh=%+v", runtime, config, refresh)
 					}
-					detailAction := taskServiceOpenTarget(row, "detail")
-					if layout.compact {
-						if err := tester.Click("更多 · " + row.name); err != nil {
-							t.Fatal(err)
-						}
-						for _, action := range []string{"Pod 明细", "查看配置", "修改配置", "刷新", "查看配置审批"} {
-							if _, found := tester.Find(action); !found {
-								t.Errorf("compact menu omitted %q", action)
-							}
-						}
-						detailAction = "Pod 明细"
-					}
-					if err := tester.Click(detailAction); err != nil {
+					taskServicesAssertRightEdge(t, pane, "操作", taskServicesBoundsWithin(t, tester, pane, "操作"))
+					taskServicesAssertRightEdge(t, pane, "刷新", refresh)
+					if err := tester.Click(detail); err != nil {
 						t.Fatal(err)
 					}
 					if v.dialog == nil || v.dialog.row != row || v.dialog.kind != taskServicePodsDetail {
@@ -307,15 +356,44 @@ func taskServicesBoundsWithin(t *testing.T, tester *ui.Tester, parent ui.Rect, l
 	return bounds
 }
 
+func taskServicesAssertRightEdge(t *testing.T, pane ui.Rect, label string, bounds ui.Rect) {
+	t.Helper()
+	want := pane.X + pane.W - taskServiceRowInset
+	if right := bounds.X + bounds.W; right < want-.5 || right > want+.5 {
+		t.Errorf("%q right edge = %.1f, want %.1f", label, right, want)
+	}
+}
+
+func taskServicesActionGroupBounds(t *testing.T, tester *ui.Tester, row ui.Rect, name string, actions ...string) ui.Rect {
+	t.Helper()
+	group := taskServicesBoundsWithin(t, tester, row, name)
+	right := group.X
+	for _, action := range actions {
+		bounds := taskServicesBoundsWithin(t, tester, group, action)
+		centerOffset := bounds.Y + bounds.H/2 - (group.Y + group.H/2)
+		if bounds.X < right-.5 || centerOffset < -.5 || centerOffset > .5 {
+			t.Errorf("action %q at %+v is out of order or vertically misaligned in %q at %+v", action, bounds, name, group)
+		}
+		right = bounds.X + bounds.W
+	}
+	return group
+}
+
 func TestTaskServicesGenbuActionsFollowTaskScope(t *testing.T) {
 	for _, page := range []string{"tasks", "archive"} {
 		t.Run(page, func(t *testing.T) {
 			s := taskServicesDesktopFixture(t)
+			updateCatalogRuntimeService(t, s, "s2", func(service *domain.ServiceConfig) { service.Enabled = true })
 			v, row := activateTaskServicesFixture(t, s, page, "uat")
-			tester := newTaskServicesTester(s, 1100, 650)
-			edit := "修改 " + row.name + " uat 配置"
+			tester := newTaskServicesTester(s, 1200, 650)
+			target := row.name + " uat"
+			edit, refresh, approvals := "修改 "+target+" 配置", "刷新 "+target, "查看 "+target+" 配置审批"
+			restart := uatRestartLabel + " · " + row.name
+			if _, found := tester.Find(restart); found != (page == "tasks") {
+				t.Fatalf("inline restart access did not follow task scope: found=%t", found)
+			}
 			if _, found := tester.Find(edit); found != (page == "tasks") {
-				t.Fatalf("edit access did not follow task scope: found=%t", found)
+				t.Fatalf("inline edit access did not follow task scope: found=%t", found)
 			}
 			if page == "tasks" {
 				if err := tester.Click(edit); err != nil {
@@ -328,13 +406,10 @@ func TestTaskServicesGenbuActionsFollowTaskScope(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := tester.Click("更多 · " + row.name); err != nil {
-				t.Fatal(err)
+			if _, found := tester.Find(refresh); !found {
+				t.Fatal("service row omitted inline refresh")
 			}
-			if tester.HasText("构建日志") || !tester.HasText("查看配置审批") {
-				t.Fatal("service menu must offer approvals with no build log entry")
-			}
-			if err := tester.Click("查看配置审批"); err != nil {
+			if err := tester.Click(approvals); err != nil {
 				t.Fatal(err)
 			}
 			if s.genbuApprovals == nil || s.genbuApprovals.source.row != row || v.dialog != nil {
@@ -344,16 +419,63 @@ func TestTaskServicesGenbuActionsFollowTaskScope(t *testing.T) {
 			if s.genbuApprovals != nil {
 				t.Fatal("previous environment's approval dialog survived the environment switch")
 			}
+			tester.Frame()
+			for _, label := range []string{"Pod", row.name + " prod Pod 明细", "查看 " + row.name + " prod 配置"} {
+				if _, found := tester.Find(label); !found {
+					t.Fatalf("wide PROD lost %q", label)
+				}
+			}
+			if _, found := tester.Find(restart); found || tester.HasText("修改配置") || tester.HasText("查看审批") {
+				t.Fatal("wide PROD exposed a prohibited operation")
+			}
+			prodRow := v.visibleRows()[0]
+			assertProdGroups := func(pane ui.Rect) {
+				t.Helper()
+				bounds := taskServicesBoundsWithin(t, tester, pane, taskServiceOpenTarget(prodRow, "row"))
+				runtime := taskServicesActionGroupBounds(t, tester, bounds, "运行操作", taskServiceOpenTarget(prodRow, "detail"))
+				config := taskServicesActionGroupBounds(t, tester, bounds, "配置操作", "查看 "+prodRow.name+" prod 配置")
+				if runtime.X+runtime.W >= config.X {
+					t.Errorf("PROD action groups are out of order or overlap: runtime=%+v config=%+v", runtime, config)
+				}
+				taskServicesAssertRightEdge(t, pane, "配置操作", config)
+			}
+			wide := ui.Rect{W: 1200, H: 650}
+			taskServicesAssertRightEdge(t, wide, "操作", taskServicesBoundsWithin(t, tester, wide, "操作"))
+			assertProdGroups(wide)
+			s.openTaskServiceDialog(v, prodRow, taskServiceConfigDetail)
+			read := v.dialog
+			s.openTaskServiceDialog(v, prodRow, taskServiceConfigEditDetail)
+			s.openTaskServiceApprovals(v, prodRow, 42)
+			if read == nil || v.dialog != read || s.genbuApprovals != nil {
+				t.Fatal("a blocked PROD operation displaced the read dialog")
+			}
+			s.closeTaskServiceDialog(v, read)
 			tester.SetSize(480, 650)
-			if err := tester.Click("更多 · " + row.name); err != nil {
+			tester.ScrollWith(ui.Shift, 240, 110, 0, float32(taskServiceTableMinWidth))
+			if v.scroll.X <= 0 {
+				t.Fatal("narrow PROD table could not scroll to its rightmost actions")
+			}
+			beforeEnvironmentSwitch := v.scroll.X
+			root := ui.Rect{W: 480, H: 650}
+			actionsHeading := taskServicesBoundsWithin(t, tester, root, "操作")
+			taskServicesAssertRightEdge(t, root, "操作", actionsHeading)
+			assertProdGroups(root)
+			for _, action := range []string{restart, "修改配置", "查看审批", "刷新"} {
+				if _, found := tester.Find(action); found {
+					t.Fatalf("narrow PROD exposed %q", action)
+				}
+			}
+			if err := tester.Click("UAT 环境"); err != nil {
 				t.Fatal(err)
 			}
-			if _, found := tester.Find("修改配置"); found != (page == "tasks") {
-				t.Fatalf("compact menu edit access did not follow task scope: found=%t", found)
+			if v.scroll.X != beforeEnvironmentSwitch || taskServicesBoundsWithin(t, tester, root, "操作") != actionsHeading {
+				t.Fatal("switching environments changed the table columns or horizontal scroll")
 			}
-			if _, found := tester.Find("查看配置审批"); !found {
-				t.Fatal("compact menu omitted configuration approvals")
+			if _, found := tester.Find(edit); found != (page == "tasks") {
+				t.Fatalf("narrow table inline edit access did not follow task scope: found=%t", found)
 			}
+			taskServicesBoundsWithin(t, tester, root, approvals)
+			taskServicesAssertRightEdge(t, root, refresh, taskServicesBoundsWithin(t, tester, root, refresh))
 		})
 	}
 }
@@ -362,10 +484,10 @@ func TestTaskServicesResizeSettlesColumnsBeforeMouseInput(t *testing.T) {
 	s := taskServicesDesktopFixture(t)
 	v, row := activateTaskServicesFixture(t, s, "tasks", "uat")
 	tester := newTaskServicesTester(s, 1000, 650)
-	for _, width := range []int{1400, 940, 1200} {
+	for _, width := range []int{1400, 700, 940, 1200} {
 		tester.SetSize(width, 650)
 		bounds, ok := tester.Find("Second service UAT")
-		if !ok || bounds.W != float32(width) {
+		if !ok || bounds.W != float32(width) || v.scroll.MaxX != max(0, taskServiceTableMinWidth-float32(width)) {
 			t.Fatal("resized table did not settle", bounds, width)
 		}
 		if err := tester.Click("查看 Second service uat Pod 明细"); err != nil {
@@ -380,7 +502,7 @@ func TestTaskServicesResizeSettlesColumnsBeforeMouseInput(t *testing.T) {
 	}
 }
 
-func TestTaskServicesRowRefreshScopeAndDialogReplacement(t *testing.T) {
+func TestTaskServicesRefreshScopeAndDialogReplacement(t *testing.T) {
 	for _, environment := range []string{"uat", "prod"} {
 		t.Run(environment, func(t *testing.T) {
 			s := taskServicesDesktopFixture(t)
@@ -388,16 +510,18 @@ func TestTaskServicesRowRefreshScopeAndDialogReplacement(t *testing.T) {
 			for _, other := range v.rows {
 				other.error = "untouched"
 			}
-			tester := newTaskServicesTester(s, 1100, 650)
-			if err := tester.Click("刷新 " + row.name + " " + environment); err != nil {
+			tester := newTaskServicesTester(s, 1200, 650)
+			refresh := "刷新当前环境全部服务"
+			if environment == "uat" {
+				refresh = "刷新 " + row.name + " uat"
+			}
+			if err := tester.Click(refresh); err != nil {
 				t.Fatal(err)
 			}
-			if row.error == "untouched" {
-				t.Fatal("row refresh did not update its target service")
-			}
 			for _, other := range v.rows {
-				if other != row && other.error != "untouched" {
-					t.Fatal("row refresh affected another service or environment", other)
+				shouldRefresh := other == row || environment == "prod" && other.environment == "prod"
+				if refreshed := other.error != "untouched"; refreshed != shouldRefresh {
+					t.Fatal("refresh did not stay in its service and environment scope", other)
 				}
 			}
 			if err := tester.Click(taskServiceOpenTarget(row, "detail")); err != nil {
@@ -494,11 +618,16 @@ func TestTaskServicesDialogScrollingIsIsolatedFromServiceList(t *testing.T) {
 		pageBounds = v.canvas.Bounds(c)
 	}, 800, 640)
 	initialBounds := pageBounds
+	header, _ := tester.Find("运行版本")
+	tester.ScrollWith(ui.Shift, 420, 500, 0, 120)
 	tester.Scroll(420, 500, 0, 150)
-	if v.vertical.Y <= 0 {
-		t.Fatal("service rows did not scroll before opening the dialog")
+	if v.scroll.X <= 0 || v.scroll.Y <= 0 {
+		t.Fatal("service table did not scroll on both axes before opening the dialog")
 	}
-	pageScroll := v.vertical
+	if scrolledHeader, ok := tester.Find("运行版本"); !ok || scrolledHeader.X != header.X-v.scroll.X || scrolledHeader.Y != header.Y {
+		t.Fatalf("header must move horizontally and stay pinned vertically: %+v -> %+v", header, scrolledHeader)
+	}
+	pageScroll := v.scroll
 	row := v.rows[8]
 	row.pods = make([]production.RuntimePod, 80)
 	for index := range row.pods {
@@ -511,8 +640,8 @@ func TestTaskServicesDialogScrollingIsIsolatedFromServiceList(t *testing.T) {
 	if detail == nil || detail.row != row {
 		t.Fatal("scrolled service count did not open its Pod dialog")
 	}
-	if pageBounds != initialBounds || v.vertical != pageScroll {
-		t.Fatalf("opening the modal changed the underlying page geometry or scroll: bounds %+v -> %+v, scroll %+v -> %+v", initialBounds, pageBounds, pageScroll, v.vertical)
+	if pageBounds != initialBounds || v.scroll != pageScroll {
+		t.Fatalf("opening the modal changed the underlying page geometry or scroll: bounds %+v -> %+v, scroll %+v -> %+v", initialBounds, pageBounds, pageScroll, v.scroll)
 	}
 	firstPod, ok := tester.Find("pod-00")
 	if !ok {
@@ -530,7 +659,7 @@ func TestTaskServicesDialogScrollingIsIsolatedFromServiceList(t *testing.T) {
 	if detail.horizontal.X <= 0 {
 		t.Fatal("wide Pod columns did not scroll inside the modal")
 	}
-	if v.vertical != pageScroll || pageBounds != initialBounds {
+	if v.scroll != pageScroll || pageBounds != initialBounds {
 		t.Fatal("modal scrolling changed the service list's scroll or bounds")
 	}
 }

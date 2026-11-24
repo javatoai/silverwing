@@ -12,7 +12,7 @@ import (
 	"silverwing-go/internal/production"
 )
 
-func genbuTaskHistoryLogFixture(t *testing.T, page string) (*app, application.TagRecord) {
+func genbuTaskHistoryFixture(t *testing.T, page string) (*app, application.TagRecord) {
 	t.Helper()
 	s := taskServicesDesktopFixture(t)
 	s.page, s.tab = page, taskTagTab
@@ -64,57 +64,30 @@ func genbuAwaitRead(t *testing.T, calls <-chan genbuReadTestCall) genbuReadTestC
 	}
 }
 
-func TestGenbuReadTaskHistoryRowsAutomaticallyReadSelectedRecord(t *testing.T) {
+func TestGenbuReadTaskHistoryOmitsBuildLogAction(t *testing.T) {
 	for _, page := range []string{"tasks", "archive"} {
 		t.Run(page, func(t *testing.T) {
-			s, record := genbuTaskHistoryLogFixture(t, page)
-			calls := genbuPendingReads(t, s)
+			s, record := genbuTaskHistoryFixture(t, page)
 			tester := ui.NewTester(func(c *ui.Context) {
-				p := setTheme(c, false)
-				s.renderTagHistory(c, p)
-				s.renderGenbuReadDialogs(c, p)
+				s.renderTagHistory(c, setTheme(c, false))
 			}, 1100, 650)
-			if err := tester.Click("构建日志"); err != nil {
-				t.Fatal(err)
-			}
-			call := genbuAwaitRead(t, calls)
-			d := s.genbuBuildLog
-			if d == nil || !d.open || d.tag != record.Tag || d.tail != "1000" {
-				t.Fatalf("build log did not pin the selected Tag: %+v", d)
-			}
-			state := s.releaseUnit.state.tagHistory
-			if action := call.action; action.Kind != "tag.history.build-log" || action.TaskID != record.TaskID ||
-				action.ServiceID != record.ServiceID || action.ModuleID != record.ModuleID || action.Payload["operationId"] != record.ID ||
-				action.Payload["tagHistoryHome"] != state.Home || action.Payload["tagHistoryTaskRoot"] != state.TaskRoot ||
-				action.Payload["tagHistoryTaskPath"] != state.TaskPath || action.Payload["tagHistoryTaskCreatedAt"] != state.TaskCreatedAt ||
-				action.Payload["tailLines"] != 1000 {
-				t.Fatalf("build log lost record/task identity: %+v", action)
-			}
-			if page == "archive" {
-				if err := tester.Click("关闭"); err != nil {
-					t.Fatal(err)
-				}
-			} else {
-				s.backend = nil
-				s.taskUnit.state.tasks = append(s.taskUnit.state.tasks, task{id: "second", title: "Second task"})
-				if !s.selectTaskIndex(1) {
-					t.Fatal("task switch failed")
-				}
-				tester.Frame()
-			}
-			if call.ctx.Err() != context.Canceled || s.genbuBuildLog != nil || d.loaded || d.text != "" {
-				t.Fatal("leaving the Tag log retained the prior request or output")
+			if !tester.HasText(record.Tag) || tester.HasText("构建日志") {
+				t.Fatal("Tag history lost the record or retained the build log action")
 			}
 		})
 	}
 }
 
-func TestGenbuReadTaskHistoryLogFindCopyAndTail(t *testing.T) {
-	s, record := genbuTaskHistoryLogFixture(t, "tasks")
-	s.openTagHistoryBuildLog(s.ensureTagHistoryView(), record)
+func TestGenbuReadProductionLogFindCopyAndTail(t *testing.T) {
+	s, view, batch := productionFixture(t)
+	batch.Target.GenbuService = "build-service"
+	tag := production.Tag{Name: "2.3.44", Commit: batch.ReleaseSHA, Object: "original-tag-object"}
+	batch.Tags = []production.Tag{tag}
+	s.releaseUnit.state.production.batches[0] = batch
+	s.openProductionBuildLog(batch, tag, func() *production.Batch { return s.productionBatch(view) })
 	d := s.genbuBuildLog
 	if d == nil || d.logRequest != nil || !strings.Contains(d.logError, "窗口或后端不可用") {
-		t.Fatalf("opening a Tag log did not attempt the initial read: %+v", d)
+		t.Fatalf("opening a production log did not attempt the initial read: %+v", d)
 	}
 	d.tail = "1001"
 	s.readGenbuBuildLog(d)
@@ -133,7 +106,7 @@ func TestGenbuReadTaskHistoryLogFindCopyAndTail(t *testing.T) {
 	}, 980, 650)
 	tester.Frame()
 	tester.Frame()
-	if !tester.HasText(record.ServiceName+" · "+record.Tag) || tester.HasText("运行版本候选") || tester.HasText("搜索 Tag") ||
+	if !tester.HasText(batch.Target.ServiceName+" · PROD · "+tag.Name) || tester.HasText("运行版本候选") || tester.HasText("搜索 Tag") ||
 		!tester.HasText("刷新日志") || d.preview.view == nil || !d.preview.view.ReadOnly {
 		t.Fatal("build log lost the selected Tag context, refresh, or read-only preview, or exposed a Tag selector")
 	}
@@ -193,7 +166,7 @@ func TestGenbuReadProductionLogClosesWhenDisplayedTagChanges(t *testing.T) {
 
 func TestGenbuReadConfigApprovalListOpensRetriesAndPaginatesWithSameDate(t *testing.T) {
 	s := taskServicesDesktopFixture(t)
-	v, row := activateTaskServicesFixture(t, s, "tasks", "prod")
+	v, row := activateTaskServicesFixture(t, s, "tasks", "uat")
 	calls := genbuPendingReads(t, s)
 	s.openTaskServiceApprovals(v, row, 0)
 	d := s.genbuApprovals
@@ -251,7 +224,7 @@ func TestGenbuReadConfigApprovalListOpensRetriesAndPaginatesWithSameDate(t *test
 
 func TestGenbuReadApprovalDetailSeparatesStatusAndExecutionResult(t *testing.T) {
 	s := taskServicesDesktopFixture(t)
-	v, row := activateTaskServicesFixture(t, s, "tasks", "prod")
+	v, row := activateTaskServicesFixture(t, s, "tasks", "uat")
 	s.openTaskServiceApprovals(v, row, 42)
 	d := s.genbuApprovals
 	if d == nil || d.detailID != 42 || d.detailError == "" {
@@ -259,7 +232,7 @@ func TestGenbuReadApprovalDetailSeparatesStatusAndExecutionResult(t *testing.T) 
 	}
 	d.detailError = ""
 	detail := production.GenbuApprovalDetail{GenbuApprovalItem: production.GenbuApprovalItem{
-		ID: 42, Service: row.genbuName, Environment: "prod", Status: "approved", Result: "执行失败: 超时",
+		ID: 42, Service: row.genbuName, Environment: "uat", Status: "approved", Result: "执行失败: 超时",
 	}}
 	d.detailID, d.detail, d.detailed = detail.ID, detail, true
 	tester := ui.NewTester(func(c *ui.Context) {

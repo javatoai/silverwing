@@ -34,7 +34,7 @@ func TestSWHelpText(t *testing.T) {
 			if code != 0 || other.Len() != 0 {
 				t.Fatalf("exit %d, stdout %q, stderr %q", code, out.String(), stderr.String())
 			}
-			for _, line := range []string{"用法:", "命令:", "选项:", "退出码:", "  list:", "  build:", "  status:", "  retry:", "  notify:"} {
+			for _, line := range []string{"用法:", "Tag 命令:", "选项:", "退出码:", "  list:", "  build:", "  status:", "  retry:", "sw uat release", "sw uat restart"} {
 				if !strings.Contains(help.String(), line) {
 					t.Fatalf("help missing %q in %q", line, help.String())
 				}

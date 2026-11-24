@@ -172,7 +172,7 @@ func (s *app) captureDocumentCloseInput() error {
 // The CLI owner reports its auth mutation boundary; status reads and device-code polling do not
 // block closing and are cancelled by closeCLIJobs after the window exits.
 func (s *app) documentCloseOperationBusy() bool {
-	if s.busy || s.materialsFileMutationRunning() || s.releaseNotices.running() || len(s.taskServicesUnit.configSubmissions) > 0 {
+	if s.busy || s.materialsFileMutationRunning() || len(s.taskServicesUnit.configSubmissions) > 0 || s.taskServicesUnit.uatWriteRunning() {
 		return true
 	}
 	if state := s.toolsUnit.state.cliJobs; state != nil && state.authMutationRunning() {

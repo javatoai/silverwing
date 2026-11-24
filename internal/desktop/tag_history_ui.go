@@ -2,6 +2,7 @@ package desktop
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -17,26 +18,12 @@ func (s *app) replicaTags(c *ui.Context, p palette) {
 	s.renderTaskTagHistory(c, p, s.taskUnit.currentTask())
 }
 
-func (s *app) renderTagHistoryPageMenu(c *ui.Context, p palette, t task) {
-	if t.id == "" {
-		return
-	}
-	state := s.ensureTaskTagHistoryView(t)
-	records := s.taskTagHistoryRecords(t.id)
-	s.overflowMenu(c, p, tagHistoryMenuKey(state, "page"), "Tag 历史更多操作", s.busy, func(menu *overflowMenuBuilder) {
-		if menu.Item("refresh", "刷新").Icon("refresh").Chosen() {
-			s.requestTagHistoryRefresh()
-		}
-		if menu.Item("select-groups", "选择批次").Icon("check").Disabled(state.Managing || len(records) == 0).Chosen() {
-			state.Managing = true
-			state.Selected = map[string]bool{}
-		}
-		menu.Separator()
-		if menu.Item("clear-history", "清空该任务历史").Icon("delete").Dangerous().Disabled(len(records) == 0).Chosen() {
-			s.beginTagHistoryDelete(true)
-		}
-	})
-}
+const (
+	tagHistoryActionHeight = 28
+	tagHistoryPublishLabel = "发布"
+	tagHistoryPublishWidth = 56
+)
+const tagHistoryWideContentWidth = 650
 
 func (s *app) renderTaskTagHistory(c *ui.Context, p palette, t task) {
 	if t.id == "" {
@@ -46,6 +33,17 @@ func (s *app) renderTaskTagHistory(c *ui.Context, p palette, t task) {
 	state := s.ensureTaskTagHistoryView(t)
 	records := s.taskTagHistoryRecords(t.id)
 	groups := filterTagHistory(records, "", false)
+	width, _ := c.Size()
+	contentWidth := state.canvas.Bounds(c).W
+	layout := tagHistoryLayout{width, s.taskListPaneLayout().width, s.navigationCollapsed}
+	if state.layout != layout || contentWidth <= 0 {
+		state.layout = layout
+		c.AnimationFrame()
+	}
+	reserveReleaseColumn := contentWidth >= tagHistoryWideContentWidth && slices.ContainsFunc(records, func(record application.TagRecord) bool {
+		_, reason := s.tagUATPodService(record)
+		return reason == ""
+	})
 	ui.Column(c).Grow(1).MinHeight(0).Padding(8, 28, 28, 8).Gap(10).Children(func() {
 		if state.Managing {
 			allVisibleSelected := len(groups) > 0
@@ -83,7 +81,7 @@ func (s *app) renderTaskTagHistory(c *ui.Context, p palette, t task) {
 				})
 			})
 		}
-		if s.integrationReady("genbu") {
+		if s.integrationReady("genbu") && slices.ContainsFunc(records, s.tagServiceProbeEnabled) {
 			if message := strings.TrimSpace(*s.input(tagGenbuTaskErrorKey(t.id), "")); message != "" {
 				label(c, "Genbu 刷新失败："+message, 12, tagStatusErrorColor(s.dark)).Wrap()
 			}
@@ -91,25 +89,45 @@ func (s *app) renderTaskTagHistory(c *ui.Context, p palette, t task) {
 		if state.Error != "" {
 			label(c, state.Error, 12, tagStatusErrorColor(s.dark)).Wrap()
 		}
-		ui.Scroll(c).Grow(1).MinHeight(0).Gap(10).Children(func() {
+		ui.Scroll(c).Bind(&state.canvas).Grow(1).MinHeight(0).Gap(10).Children(func() {
 			pending := s.renderPendingTagSubmissions(c, p)
 			if len(groups) == 0 && !pending {
-				emptyPanel(c, p, "没有构建记录", "构建 Tag 后可在这里查看构建和 UAT 结果。")
+				emptyPanel(c, p, "没有构建记录", "创建 Tag 后可在这里查看历史记录。")
 			}
 			for _, group := range groups {
-				s.renderTagHistoryGroup(c.Key("tag-group-"+group.Item.GroupID), p, state, group)
+				s.renderTagHistoryGroup(c.Key("tag-group-"+group.Item.GroupID), p, state, group, reserveReleaseColumn)
 			}
+			s.renderTagHistoryActions(c, p, state, len(groups) > 0)
 		})
 	})
 	s.renderTagHistoryDeleteDialog(c, p, state)
 }
 
-func (s *app) renderTagHistoryGroup(c *ui.Context, p palette, state *tagHistoryViewState, group tagHistoryGroup) {
+func (s *app) renderTagHistoryActions(c *ui.Context, p palette, state *tagHistoryViewState, hasGroups bool) {
+	ui.Row(c.Key(tagHistoryActionsKey(state))).FillWidth().MinWidth(0).Gap(8).Wrap().Justify(ui.End).
+		AlignItems(ui.Center).Label("Tag 历史操作").Children(func() {
+		if tagRecordAction(c, p, "refresh", "refresh", "刷新", s.busy).FocusRing(true).Clicked() {
+			s.requestTagHistoryRefresh()
+		}
+		if tagRecordAction(c, p, "select-groups", "check", "选择批次", s.busy || state.Managing || !hasGroups).FocusRing(true).Clicked() {
+			state.Managing = true
+			state.Selected = map[string]bool{}
+		}
+		danger := p
+		danger.text = p.danger
+		if tagRecordAction(c, danger, "clear-history", "delete", "清空该任务历史", s.busy || !hasGroups).FocusRing(true).Clicked() {
+			s.beginTagHistoryDelete(true)
+		}
+	})
+}
+
+func (s *app) renderTagHistoryGroup(c *ui.Context, p palette, state *tagHistoryViewState, group tagHistoryGroup, reserveReleaseColumn bool) {
 	card := ui.Column(c).FillWidth().Padding(8, 12).Gap(4).Background(p.surface).Border(1, p.line).Radius(12).Label("Tag 批次 · " + group.Item.GroupID)
 	if s.consumeTagBatchFocus(group.Item.GroupID) {
 		card.ScrollIntoView()
 	}
 	card.Children(func() {
+		var uatUnavailable string
 		ui.Row(c).FillWidth().MinWidth(0).Gap(8).Wrap().Justify(ui.End).AlignItems(ui.Center).Label("Tag 批次标题 · " + group.Item.GroupID).Children(func() {
 			if state.Managing {
 				selected := state.Selected[group.Item.GroupID]
@@ -129,37 +147,11 @@ func (s *app) renderTagHistoryGroup(c *ui.Context, p palette, state *tagHistoryV
 				label(c, title, 12, p.text).FontWeight(600).FillWidth().MinWidth(0).SingleLine().Tooltip(title).Label("Tag 批次名称 · " + group.Item.GroupID)
 				label(c, tagHistoryBuildTimeLabel(group.Item.CreatedAt), 10, p.muted).SingleLine().Tooltip("发起构建时间").Label("Tag 构建时间 · " + group.Item.GroupID)
 			})
-			copy := ui.ButtonBase(c.Key("copy-announcement")).Row().Shrink(0).Height(28).Padding(0, 8).Gap(5).AlignItems(ui.Center).
-				Radius(8).Border(1, p.line).Label("复制发版通知 · " + group.Item.GroupID).Tooltip("复制整个批次的发版通知").Disabled(s.busy)
-			if copy.Hovered() && !s.busy {
-				copy.Background(p.soft)
-			}
-			copy.Children(func() {
-				icon(c, "copy", 14, p.muted)
-				label(c, "复制发版通知", 11, p.muted).NoWrap()
-			})
-			if copy.Clicked() {
-				text := s.tagHistoryAnnouncementForCopy(group)
-				s.copyTextToClipboard(c.Services(), text, s.tagHistoryAnnouncementCopiedMessage(group, text))
-			}
-			if s.tagNoticeAvailable() {
-				sending := s.releaseNotices.running()
-				enabled := !s.busy && !sending && s.releaseNoticeReady(group)
-				send := ui.ButtonBase(c.Key("send-announcement")).Row().Shrink(0).Height(28).Padding(0, 8).Gap(5).AlignItems(ui.Center).
-					Background(p.surface).Radius(8).Border(1, p.line).Label(s.noticeButtonText("", group.Item.GroupID) + " · " + group.Item.GroupID).Disabled(!enabled).
-					Tooltip("全部 Tag 推送且 Genbu 编译成功后，以当前用户身份通知测试负责人；无法确认接收人时回退本人")
-				if send.Hovered() && enabled {
-					send.Background(p.soft)
-				}
-				send.Children(func() {
-					icon(c, "launch", 14, p.muted)
-					label(c, s.noticeButtonText("", group.Item.GroupID), 11, p.muted).NoWrap()
-				})
-				if send.Clicked() && s.tagNoticeAvailable() {
-					s.sendTagNotice(state, group)
-				}
-			}
+			uatUnavailable = s.renderUATBatchActions(c, p, state, group)
 		})
+		if uatUnavailable != "" {
+			label(c, uatUnavailable, 11, p.muted).Wrap()
+		}
 		if progress := s.tagBatchProgress(group.Item.GroupID); progress.Total > 0 {
 			text := fmt.Sprintf("本次操作 %d 项 · 执行中 %d · 完成 %d · 失败 %d", progress.Total, progress.Running, progress.Completed, progress.Failed)
 			label(c, text, 11, p.muted).Wrap()
@@ -168,13 +160,22 @@ func (s *app) renderTagHistoryGroup(c *ui.Context, p palette, state *tagHistoryV
 			if i > 0 {
 				ui.Divider(c)
 			}
-			s.renderTagHistoryRecord(c.Key("tag-record-"+record.ID), p, state, record)
+			s.renderTagHistoryRecord(c.Key("tag-record-"+record.ID), p, state, record, reserveReleaseColumn)
 		}
 	})
 }
 
-func (s *app) renderTagHistoryRecord(c *ui.Context, p palette, state *tagHistoryViewState, record application.TagRecord) {
-	genbuEnabled := s.integrationReady("genbu")
+func (s *app) tagServiceProbeEnabled(record application.TagRecord) bool {
+	cfg, err := s.readSnapshotAppConfig()
+	if err != nil {
+		return false
+	}
+	service, err := cfg.Service(record.ServiceID)
+	return err == nil && service.GenbuProbeEnabled
+}
+
+func (s *app) renderTagHistoryRecord(c *ui.Context, p palette, state *tagHistoryViewState, record application.TagRecord, reserveReleaseColumn bool) {
+	genbuEnabled := s.integrationReady("genbu") && s.tagServiceProbeEnabled(record)
 	genbuEligible := genbuEnabled && domain.TagGenbuProbeEligible(domain.TagOperationState(record.State), record.Tag)
 	item, _ := s.tagRecordJobItem(record)
 	recordActive := item.Busy || item.Queued
@@ -186,36 +187,28 @@ func (s *app) renderTagHistoryRecord(c *ui.Context, p palette, state *tagHistory
 		recordActive = true
 	}
 	ui.Column(c).FillWidth().MinWidth(0).Padding(5, 0).Gap(5).Children(func() {
-		ui.Row(c).FillWidth().MinWidth(0).Gap(12).Wrap().Justify(ui.End).AlignItems(ui.Center).Children(func() {
-			ui.Row(c).Grow(1).Basis(230).MinWidth(0).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
-					name := record.ServiceName
-					if name == "" {
-						name = record.ServiceID
-					}
-					text := record.Tag
-					if text == "" {
-						text = "尚未生成 Tag"
-					}
-					ui.Row(c).FillWidth().MinWidth(0).Gap(10).AlignItems(ui.Center).Children(func() {
-						label(c, name, 13, p.text).FontWeight(600).Shrink(1).MinWidth(0).SingleLine().Tooltip(name).Selectable()
-						label(c, text, 13, p.blue).FontWeight(600).Shrink(1).MinWidth(0).SingleLine().Tooltip(text).Selectable()
-					})
-					branches := record.SourceBranch + " → " + record.TargetBranch
-					ui.Row(c).FillWidth().MinWidth(0).Gap(5).AlignItems(ui.Center).Label("合并分支 · " + record.ID).Tooltip(branches).Children(func() {
-						label(c, record.SourceBranch, 11, p.muted).Shrink(1).MinWidth(0).SingleLine().Label("来源分支 · " + record.ID)
-						label(c, "→", 11, p.muted).Shrink(0).NoWrap()
-						label(c, record.TargetBranch, 11, p.muted).Shrink(1).MinWidth(0).SingleLine().Label("目标分支 · " + record.ID)
-					})
+		ui.Row(c).FillWidth().MinWidth(0).Gap(8).Wrap().Justify(ui.End).AlignItems(ui.Start).Children(func() {
+			ui.Column(c).Grow(1).Basis(230).MinWidth(0).Gap(2).Children(func() {
+				name := firstNonEmpty(record.ServiceName, record.ServiceID)
+				text := firstNonEmpty(record.Tag, "尚未生成 Tag")
+				identity := ui.Row(c).FillWidth().MinWidth(0).Gap(10).AlignItems(ui.Center)
+				if genbuEligible {
+					identity.MinHeight(tagHistoryActionHeight)
+				}
+				identity.Children(func() {
+					label(c, name, 13, p.text).FontWeight(600).Shrink(1).MinWidth(0).SingleLine().Tooltip(name).Selectable()
+					label(c, text, 13, p.blue).FontWeight(600).Shrink(1).MinWidth(0).SingleLine().Tooltip(text).Selectable()
+				})
+				branches := record.SourceBranch + " → " + record.TargetBranch
+				ui.Row(c).FillWidth().MinWidth(0).Gap(5).AlignItems(ui.Center).Label("合并分支 · " + record.ID).Tooltip(branches).Children(func() {
+					label(c, record.SourceBranch, 11, p.muted).Shrink(1).MinWidth(0).SingleLine().Label("来源分支 · " + record.ID)
+					label(c, "→", 11, p.muted).Shrink(0).NoWrap()
+					label(c, record.TargetBranch, 11, p.muted).Shrink(1).MinWidth(0).SingleLine().Label("目标分支 · " + record.ID)
 				})
 			})
 			if genbuEligible {
-				ui.Row(c).Shrink(0).Gap(8).AlignItems(ui.Center).Children(func() {
-					if tagRecordAction(c, p, "tag-build-log-"+record.ID, "terminal", "构建日志", false).Clicked() {
-						s.openTagHistoryBuildLog(state, record)
-					}
-					renderTagGenbuStages(c, p, s.dark, record)
-				})
+				_, uatUnavailable := s.tagUATPodService(record)
+				s.renderTagHistoryGenbuActions(c, p, state, record, uatUnavailable == "", reserveReleaseColumn)
 			}
 		})
 		// SUCCESS is the local create/push operation, not the remote build.
@@ -264,6 +257,21 @@ func (s *app) renderTagHistoryRecord(c *ui.Context, p palette, state *tagHistory
 					s.queueTagAction(application.Action{Kind: "tag.retry", TaskID: record.TaskID, ServiceID: record.ServiceID, ModuleID: record.ModuleID, Payload: s.tagHistoryRecordPayload(record)})
 				}
 			})
+		}
+	})
+}
+
+func (s *app) renderTagHistoryGenbuActions(c *ui.Context, p palette, state *tagHistoryViewState, record application.TagRecord, canRelease, reserveReleaseColumn bool) {
+	ui.Row(c).Shrink(0).MinWidth(0).MaxWidthPercent(100).Gap(16).Wrap().Justify(ui.End).AlignItems(ui.Center).Children(func() {
+		renderTagGenbuStages(c.Key("stages"), p, s.dark, record)
+		if canRelease {
+			if tagPublishAction(c, p, "tag-uat-release-"+record.ID, tagHistoryPublishLabel, s.busy || s.taskServicesUnit.uatWriteRunning()).
+				Width(tagHistoryPublishWidth).Justify(ui.Center).Label(tagHistoryPublishLabel + " · " + record.Tag).
+				Tooltip(uatReleaseLabel + " · " + record.Tag).Clicked() {
+				s.openTagUATPodAction(state, record)
+			}
+		} else if reserveReleaseColumn {
+			ui.Box(c).Width(tagHistoryPublishWidth).Shrink(0)
 		}
 	})
 }

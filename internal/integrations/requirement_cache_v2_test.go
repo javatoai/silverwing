@@ -2,7 +2,9 @@ package integrations
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -57,6 +59,40 @@ func TestRequirementCacheV2MetadataIsScopedAndPersistent(t *testing.T) {
 
 	if filepath.Ext(path) != ".json" {
 		t.Fatalf("unexpected cache path: %q", path)
+	}
+}
+
+func TestRequirementMetadataReadsExistingCacheWithNoticeFields(t *testing.T) {
+	service := &Service{paths: storage.NewPaths(t.TempDir())}
+	title := "Existing requirement"
+	metadata := RequirementMetadataReadResult{ID: "123", ProjectKey: "project-a", Type: "bug", Title: &title}
+	path, err := service.writeRequirementMetadataCache("metadata", metadata, 1234)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prior map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &prior); err != nil {
+		t.Fatal(err)
+	}
+	if prior["releaseTesters"] != nil || prior["releaseTestersConfirmed"] != nil {
+		t.Fatal("new metadata cache still saves Tag notification fields")
+	}
+	prior["releaseTesters"] = json.RawMessage(`[{"name":"prior tester"}]`)
+	prior["releaseTestersConfirmed"] = json.RawMessage(`true`)
+	encoded, err = json.Marshal(prior)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	saved, _, err := service.readRequirementMetadataCache("metadata")
+	if err != nil || saved == nil || saved.Data.ID != metadata.ID || saved.Data.Title == nil || *saved.Data.Title != title {
+		t.Fatalf("existing requirement metadata was lost: %+v, error = %v", saved, err)
 	}
 }
 

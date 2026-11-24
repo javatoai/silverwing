@@ -382,8 +382,8 @@ func TestTaskServiceConfigEditUATAutomaticallySubmitsMatchingPreview(t *testing.
 	}
 }
 
-func TestTaskServiceConfigEditPRODRequiresConfirmationAndSubmitSurvivesPageExit(t *testing.T) {
-	s, v, dialog := taskServiceConfigEditFixture(t, "prod")
+func TestTaskServiceConfigEditUATSubmitSurvivesPageExit(t *testing.T) {
+	s, v, dialog := taskServiceConfigEditFixture(t, "uat")
 	edit := bindTaskServiceConfigFixture(dialog, "alpha=old\n")
 	edit.diff.New.Set("alpha=draft\n")
 	edit.draftVersion = edit.diff.New.Version()
@@ -410,27 +410,10 @@ func TestTaskServiceConfigEditPRODRequiresConfirmationAndSubmitSurvivesPageExit(
 	if err := tester.Click("提交配置审批"); err != nil {
 		t.Fatal(err)
 	}
-	if s.confirmationDialog == nil || s.confirmationDialog.DefaultIndex != s.confirmationDialog.CancelIndex ||
-		!tester.HasText("确认提交生产配置审批") || len(s.taskServicesUnit.configSubmissions) != 0 {
-		t.Fatal("first click should only show production confirmation")
-	}
-	if !tester.HasText(edit.source.Namespace+" / "+edit.source.Name) || !tester.HasText(edit.file) {
-		t.Fatal("production confirmation did not identify the actual target and file")
-	}
-	tester.Key(0, ui.KeyEscape)
-	if s.confirmationDialog != nil || len(s.taskServicesUnit.configSubmissions) != 0 || dialog.edit.preview == nil {
-		t.Fatal("cancel should leave the preview available without dispatching")
-	}
-	if err := tester.Click("提交配置审批"); err != nil {
-		t.Fatal(err)
-	}
-	if err := tester.Click("提交 PROD 审批"); err != nil {
-		t.Fatal(err)
-	}
 	select {
 	case action := <-dispatched:
 		if action.Kind != "task.services.config-submit" || action.TaskID != v.identity.id ||
-			action.ServiceID != dialog.row.serviceID || action.Payload["environment"] != "prod" ||
+			action.ServiceID != dialog.row.serviceID || action.Payload["environment"] != "uat" ||
 			action.Payload["previewToken"] != "test-token" || action.Payload["confirmed"] != true || len(action.Payload) != 4 {
 			t.Fatal("submission did not carry only the active scope, token, and confirmation")
 		}

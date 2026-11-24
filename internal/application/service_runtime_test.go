@@ -97,6 +97,41 @@ func TestServiceRuntimeReadsSavedMappingWithoutTask(t *testing.T) {
 	}
 }
 
+func TestProdServiceRuntimeRejectsEditorAndApprovalActions(t *testing.T) {
+	for _, entry := range []struct {
+		prefix  string
+		fixture func(*testing.T) (*App, Action)
+	}{
+		{taskServicesActionPrefix, taskServicesFixture},
+		{serviceRuntimeActionPrefix, serviceRuntimeFixture},
+	} {
+		t.Run(entry.prefix, func(t *testing.T) {
+			app, base := entry.fixture(t)
+			app.connections.transport = platformFixtureTransport(func(req *http.Request) (*http.Response, error) {
+				t.Errorf("a restricted PROD action reached Genbu at %s", req.URL.Path)
+				return nil, errors.New("unexpected Genbu call")
+			})
+			base.Payload["environment"] = "prod"
+			for _, operation := range []string{"config-files", "config-source", "config-preview", "config-submit", "approvals", "approval-detail", "approval-approve"} {
+				action := base
+				action.Kind = entry.prefix + operation
+				result, err := app.Dispatch(context.Background(), action)
+				if !errors.Is(err, errProdServiceRuntimeReadOnly) || result.Data != nil {
+					t.Errorf("%s: expected PROD read-only policy, got %v", action.Kind, err)
+				}
+			}
+			for _, operation := range []string{"uat-tags", "uat-preview", "uat-submit"} {
+				action := base
+				action.Kind = entry.prefix + operation
+				result, err := app.Dispatch(context.Background(), action)
+				if err == nil || !strings.Contains(err.Error(), "仅支持 UAT") || result.Data != nil {
+					t.Errorf("%s: expected UAT-only policy, got %v", action.Kind, err)
+				}
+			}
+		})
+	}
+}
+
 func TestServiceRuntimeRejectsStaleOrUnavailableService(t *testing.T) {
 	ctx := context.Background()
 	app, action := serviceRuntimeFixture(t)
@@ -139,18 +174,18 @@ func TestServiceRuntimeRejectsStaleOrUnavailableService(t *testing.T) {
 func TestServiceRuntimeApprovalQueryUsesSelectedServiceAndEnvironment(t *testing.T) {
 	app, action := serviceRuntimeFixture(t)
 	ctx := context.Background()
-	action.Kind, action.Payload["environment"] = "service.runtime.approvals", "prod"
+	action.Kind = "service.runtime.approvals"
 	const approvalID = 702
-	item := production.GenbuApprovalItem{ID: approvalID, Environment: "prod", Service: "fixture-runtime"}
+	item := production.GenbuApprovalItem{ID: approvalID, Environment: "uat", Service: "fixture-runtime"}
 	client := genbuApprovalRouteFake{
 		list: func(query production.GenbuApprovalListRequest) (production.GenbuApprovalPage, error) {
-			if query.Environment != "prod" || query.Service != "fixture-runtime" || query.Type != "7" {
+			if query.Environment != "uat" || query.Service != "fixture-runtime" || query.Type != "7" {
 				t.Fatalf("unexpected approval query %+v", query)
 			}
 			return production.GenbuApprovalPage{Items: []production.GenbuApprovalItem{item}}, nil
 		},
 		detail: func(env, service string, id int64) (production.GenbuApprovalDetail, error) {
-			if env != "prod" || service != "fixture-runtime" || id != approvalID {
+			if env != "uat" || service != "fixture-runtime" || id != approvalID {
 				t.Fatalf("unexpected approval detail target %s %s %d", env, service, id)
 			}
 			return production.GenbuApprovalDetail{GenbuApprovalItem: item}, nil
@@ -187,24 +222,24 @@ func TestServiceRuntimeConfigEditRequiresCurrentConfirmedPreview(t *testing.T) {
 	app, action := serviceRuntimeFixture(t)
 	ctx := context.Background()
 	const file, draft = "app.yml", "edited: true\n"
-	snapshot := genbuTestConfigSnapshot("prod")
+	snapshot := genbuTestConfigSnapshot("uat")
 	snapshot.Service = "fixture-runtime"
 	client := &serviceRuntimeConfigFake{}
 	client.identity = "fixture-account"
 	client.files = func(env, service string) (production.GenbuConfigFiles, error) {
-		if env != "prod" || service != snapshot.Service {
+		if env != "uat" || service != snapshot.Service {
 			t.Fatalf("wrong file list target %s %s", env, service)
 		}
 		return production.GenbuConfigFiles{GenbuConfigSnapshot: snapshot, Files: []string{file}}, nil
 	}
 	client.source = func(env, service, filename string) (production.GenbuConfigFile, error) {
-		if env != "prod" || service != snapshot.Service || filename != file {
+		if env != "uat" || service != snapshot.Service || filename != file {
 			t.Fatalf("wrong source target %s %s %s", env, service, filename)
 		}
 		return production.GenbuConfigFile{GenbuConfigSnapshot: snapshot, File: file, Content: "edited: false\n"}, nil
 	}
 	client.preview = func(request production.GenbuConfigEditRequest) (production.GenbuConfigEditResult, error) {
-		if request.Environment != "prod" || request.Service != snapshot.Service || request.File != file || !request.StdinReplacement || string(request.Replacement) != draft {
+		if request.Environment != "uat" || request.Service != snapshot.Service || request.File != file || !request.StdinReplacement || string(request.Replacement) != draft {
 			t.Fatalf("preview changed the catalog draft or target: %+v", request)
 		}
 		preview := genbuConfigTestPreview(request)
@@ -215,7 +250,7 @@ func TestServiceRuntimeConfigEditRequiresCurrentConfirmedPreview(t *testing.T) {
 		t.Fatal("unconfirmed, discarded or stale catalog preview reached Genbu submission")
 		return production.GenbuConfigEditResult{}, nil
 	}
-	action.Kind, action.Payload["environment"] = "service.runtime.config-files", "prod"
+	action.Kind = "service.runtime.config-files"
 	result, err := app.taskServiceGenbuAction(ctx, action, client)
 	files, ok := result.Data.(production.GenbuConfigFiles)
 	if err != nil || !ok || len(files.Files) != 1 || files.Files[0] != file {
@@ -241,7 +276,7 @@ func TestServiceRuntimeConfigEditRequiresCurrentConfirmedPreview(t *testing.T) {
 	}
 	submit.Payload["previewToken"], submit.Payload["confirmed"] = getToken(), false
 	if _, err := app.taskServiceGenbuAction(ctx, submit, client); err == nil {
-		t.Fatal("catalog PROD submission accepted without confirmation")
+		t.Fatal("catalog UAT submission accepted without confirmation")
 	}
 	discard := action
 	discard.Kind, discard.Payload = "service.runtime.config-preview-discard", maps.Clone(action.Payload)

@@ -21,6 +21,7 @@ type CLIBundleInstallResult struct {
 	Path        string `json:"path"`
 	Replacement string `json:"replacement,omitempty"`
 	RecordError string `json:"recordError,omitempty"`
+	PATHMessage string `json:"pathMessage,omitempty"`
 }
 
 type CLIBundleStatus struct {
@@ -108,18 +109,33 @@ func (s *Service) installCLIBundle(ctx context.Context, payload map[string]any) 
 	default:
 		return CLIBundleInstallResult{}, errors.New("无法识别要安装的 Silverwing 工具")
 	}
-	result, err := s.installCLIBundleFile(ctx, path, data, mode, payloadString(payload, "expectedReplacement"))
-	if err == nil && result.Replacement == "" && artifact == "cli" {
-		record := s.cliBundlePathRecord()
-		recordErr := ensureNoExistingSymlinks(record)
-		if recordErr == nil {
-			recordErr = storage.WriteFileAtomic(record, []byte(result.Path), 0o600)
-		}
-		if recordErr != nil {
-			result.RecordError = "已安装，无法记录安装路径"
-		}
+	expected := payloadString(payload, "expectedReplacement")
+	if artifact == "cli" {
+		return s.installCLIBundleCLI(ctx, path, data, mode, expected, addCLIUserPath)
 	}
-	return result, err
+	return s.installCLIBundleFile(ctx, path, data, mode, expected)
+}
+
+func (s *Service) installCLIBundleCLI(ctx context.Context, path string, data []byte, mode os.FileMode, expected string, registerPath func(context.Context, string) (string, error)) (CLIBundleInstallResult, error) {
+	result, err := s.installCLIBundleFile(ctx, path, data, mode, expected)
+	if err != nil || result.Replacement != "" {
+		return result, err
+	}
+	record := s.cliBundlePathRecord()
+	recordErr := ensureNoExistingSymlinks(record)
+	if recordErr == nil {
+		recordErr = storage.WriteFileAtomic(record, []byte(result.Path), 0o600)
+	}
+	if recordErr != nil {
+		result.RecordError = "已安装，无法记录安装路径"
+	}
+	message, pathErr := registerPath(ctx, filepath.Dir(result.Path))
+	if pathErr != nil {
+		result.PATHMessage = fmt.Sprintf("sw 已安装，但用户 PATH 未更新。%v", pathErr)
+	} else {
+		result.PATHMessage = message
+	}
+	return result, nil
 }
 
 func (s *Service) installCLIBundleFile(ctx context.Context, path string, data []byte, mode os.FileMode, expected string) (CLIBundleInstallResult, error) {

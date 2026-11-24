@@ -49,14 +49,12 @@ const (
 	OptionalCLIFeatureBranchNotice OptionalCLIFeature = iota
 	OptionalCLIFeatureGenbu
 	OptionalCLIFeatureDragonQA
-	OptionalCLIFeatureTagNotice
 )
 
 var optionalCLIFeatureTools = [...][]string{
 	OptionalCLIFeatureBranchNotice: {"lark"},
 	OptionalCLIFeatureGenbu:        {"genbu"},
 	OptionalCLIFeatureDragonQA:     {"dragon"},
-	OptionalCLIFeatureTagNotice:    {"lark", "genbu"},
 }
 
 func (f OptionalCLIFeature) Available(ready func(string) bool) bool {
@@ -114,16 +112,6 @@ func (r *optionalCLIRegistry) matching(cfg domain.AppConfig, tool string) *optio
 		return record
 	}
 	return nil
-}
-
-func (a *App) optionalCLIReadyFor(cfg domain.AppConfig, tool string) bool {
-	if nativePlatform(tool) {
-		return a.platformReadyFor(cfg, tool)
-	}
-	a.optionalCLIs.mu.Lock()
-	defer a.optionalCLIs.mu.Unlock()
-	record := a.optionalCLIs.matching(cfg, tool)
-	return record != nil && record.status.Ready()
 }
 
 func (a *App) OptionalCLIStatus(tool string) OptionalCLIStatus {
@@ -191,8 +179,7 @@ func (a *App) ProbeOptionalCLI(ctx context.Context, tool string, force bool) (Op
 			return status, nil
 		}
 	}
-	previous := r.records[tool]
-	if previous != nil {
+	if previous := r.records[tool]; previous != nil {
 		previous.cancel()
 	}
 	if r.records == nil {
@@ -204,10 +191,6 @@ func (a *App) ProbeOptionalCLI(ctx context.Context, tool string, force bool) (Op
 	record := &optionalCLIRecord{status: status, scope: scope, cancel: func() { cancel(); cancelProbe() }, done: make(chan struct{})}
 	r.records[tool] = record
 	r.mu.Unlock()
-	if previous != nil {
-		a.invalidateOptionalCLIFeatures(tool)
-	}
-
 	defer cancelProbe()
 	data, probeErr := a.Platform.Execute(probeCtx, "cli.status", map[string]any{
 		"tool": tool, "force": force, "versionOnly": true, "deferDiscovery": true,
@@ -340,12 +323,6 @@ func (a *App) optionalCLIScope(ctx context.Context, tool string) (string, func(c
 	}, nil
 }
 
-func (a *App) invalidateOptionalCLIFeatures(tool string) {
-	if a.Integrations != nil && (tool == "lark" || tool == "genbu") {
-		a.Integrations.InvalidateTagNoticePreparations()
-	}
-}
-
 // Serialize in-process configuration changes with admission and retirement.
 // Probe subprocesses never hold this lock, and their path writes use the store's
 // own compare-and-update check.
@@ -361,8 +338,6 @@ func (a *App) updateOptionalCLIConfig(replace bool, apply func() (ActionResult, 
 		return result, err
 	}
 	cfg, readErr := a.Config.LoadForPreview(context.Background())
-	var retired []string
-	oldGenbu := p.genbuState.generation
 	if readErr == nil {
 		a.refreshPlatformConnections(cfg)
 	}
@@ -371,20 +346,13 @@ func (a *App) updateOptionalCLIConfig(replace bool, apply func() (ActionResult, 
 		p.retire("dragon")
 		p.revision++
 	}
-	if p.genbuState.generation != oldGenbu {
-		retired = append(retired, "genbu")
-	}
 	for tool, record := range r.records {
 		if replace || readErr != nil || r.matching(cfg, tool) == nil {
 			record.cancel()
 			delete(r.records, tool)
-			retired = append(retired, tool)
 		}
 	}
 	p.mu.Unlock()
 	r.mu.Unlock()
-	for _, tool := range retired {
-		a.invalidateOptionalCLIFeatures(tool)
-	}
 	return result, nil
 }

@@ -15,6 +15,13 @@ func (s *app) renderTaskServiceDialog(c *ui.Context, p palette) {
 	if catalog := s.taskServicesUnit.catalog; catalog != nil {
 		v = catalog
 	}
+	if linked := s.taskServicesUnit.linked; linked != nil {
+		if s.taskServicesCurrent(linked) {
+			v = linked
+		} else {
+			s.leaveLinkedTaskServices()
+		}
+	}
 	if v == nil || v.dialog == nil {
 		return
 	}

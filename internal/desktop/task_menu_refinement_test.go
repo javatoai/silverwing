@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"image/png"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -14,6 +16,25 @@ import (
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/domain"
 )
+
+func captureTaskWorkspaceEvidence(t *testing.T, tester *ui.Tester, name string) {
+	t.Helper()
+	dir := os.Getenv("SILVERWING_RELEASE_NOTICE_EVIDENCE_DIR")
+	if dir == "" {
+		return
+	}
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Create(filepath.Join(dir, name+".png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodeErr := png.Encode(file, tester.Image())
+	if closeErr := file.Close(); encodeErr != nil || closeErr != nil {
+		t.Fatalf("capture: %v / %v", encodeErr, closeErr)
+	}
+}
 
 type taskMenuBackend struct {
 	calls     chan application.Action
@@ -312,7 +333,7 @@ func TestTaskMenuRefinementVisuals(t *testing.T) {
 						t.Fatalf("removed toolbar or path row remains: %q", removed)
 					}
 				}
-				captureReleaseNotice(t, tester, fmt.Sprintf("task-layout-%d-dark-%t", width, dark))
+				captureTaskWorkspaceEvidence(t, tester, fmt.Sprintf("task-layout-%d-dark-%t", width, dark))
 				if err := tester.RightClick(s.taskUnit.state.tasks[1].title); err != nil {
 					t.Fatal(err)
 				}
@@ -322,7 +343,7 @@ func TestTaskMenuRefinementVisuals(t *testing.T) {
 						t.Fatalf("context menu is clipped: %s %+v", label, bounds)
 					}
 				}
-				captureReleaseNotice(t, tester, fmt.Sprintf("task-layout-menu-%d-dark-%t", width, dark))
+				captureTaskWorkspaceEvidence(t, tester, fmt.Sprintf("task-layout-menu-%d-dark-%t", width, dark))
 				tester.Key(0, ui.KeyEscape)
 				if tester.HasText("在 Codex 中打开") || s.taskUnit.state.selected != 1 {
 					t.Fatal("Escape failed to dismiss the task menu")

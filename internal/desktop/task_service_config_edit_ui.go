@@ -112,7 +112,7 @@ func (s *app) renderTaskServiceConfigEdit(c *ui.Context, p palette, v *taskServi
 		canSubmit := !locked && !pending && !edit.stale && !edit.noChange && edit.sourceToken != "" && edit.draftDirty()
 		if productionButton(c, "config-edit-submit", "提交配置审批", p, true, !canSubmit) && canSubmit {
 			if edit.previewCurrent(edit.preview, time.Now()) {
-				s.confirmTaskServiceConfigSubmit(v, dialog, edit.preview)
+				s.submitTaskServiceConfig(v, dialog, edit.preview)
 			} else {
 				s.requestTaskServiceConfigPreview(v, dialog)
 			}

@@ -122,9 +122,6 @@ func applicationPaths(home string) (storage.Paths, string, error) {
 func composeApp(paths storage.Paths, manifests *storage.ManifestStore) *App {
 	app := &App{Paths: paths, Config: storage.NewConfigStore(paths), Manifests: manifests, Runner: process.NewRunner(), Documents: documents.NewService(paths.Cache), diffSessions: workspace.NewWorkspaceGitDiffSessionManager()}
 	app.Integrations = integrations.NewService(paths, app.Config, app.Runner)
-	app.Integrations.SetNoticeCLIReady(func(cfg domain.AppConfig) bool {
-		return OptionalCLIFeatureTagNotice.Available(func(tool string) bool { return app.optionalCLIReadyFor(cfg, tool) })
-	})
 	app.Platform = platform.NewService(paths, app.Config, app.Runner)
 	app.dragonQAClient = dragon.Native{Client: app.embeddedDragon, Identity: func(ctx context.Context, _ domain.AppConfig) (string, error) {
 		return app.embeddedAccountIdentity(ctx, "dragon")

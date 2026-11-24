@@ -54,15 +54,7 @@ func runTagTestCLI(args []string) int {
 	if len(args) == 0 {
 		return 90
 	}
-	value := func(flag string) string {
-		for i, arg := range args[:len(args)-1] {
-			if arg == flag {
-				return args[i+1]
-			}
-		}
-		return ""
-	}
-	if root := os.Getenv("SW_TAG_TEST_NOTIFY_ONLY_ROOT"); root != "" {
+	if root := os.Getenv("SW_TAG_TEST_STATUS_ROOT"); root != "" {
 		if index := slices.Index(args, "-C"); index >= 0 && index+2 < len(args) {
 			repository, command := args[index+1], args[index+2:]
 			switch {
@@ -75,107 +67,14 @@ func runTagTestCLI(args []string) int {
 			case len(command) == 3 && command[0] == "ls-remote":
 				fmt.Println(strings.Repeat("a", 40) + "\t" + command[2])
 			default:
-				fmt.Fprintln(os.Stderr, "notification-only fixture rejects Git command", command)
+				fmt.Fprintln(os.Stderr, "status fixture rejects Git command", command)
 				return 98
 			}
 			return 0
 		}
 	}
-	phase := ""
-	switch args[0] {
-	case "config":
-		phase = "meegleProfile"
-	case "user":
-		phase = "meegleUser"
-	case "workitem":
-		phase = "metadata"
-	case "contact":
-		phase = "contact"
-	case "auth":
-		if value("--profile") != "" {
-			phase = "local"
-			if slices.Contains(args, "--verify") {
-				phase = "verify"
-			}
-		} else {
-			phase = "meegleAuth"
-		}
-	}
-	if directory := os.Getenv("SW_TAG_TEST_NOTICE_CALLS"); directory != "" && phase != "" {
-		file, err := os.CreateTemp(directory, phase+"-")
-		if err != nil {
-			return 99
-		}
-		_ = file.Close()
-	}
-	switch args[0] {
-	case "--version":
-		fmt.Println("tag-cli-fixture-1")
-	case "config":
-		fmt.Println("fixture-meegle")
-	case "user":
-		fmt.Println(`{"user_key":"fixture-account","tenant_key":"fixture-tenant"}`)
-	case "workitem":
-		switch os.Getenv("SW_TAG_TEST_ROSTER") {
-		case "failed":
-			fmt.Fprintln(os.Stderr, "fixture metadata unavailable")
-			return 92
-		case "empty":
-			fmt.Println(`{"name":"隔离测试需求","work_item_attribute":{"role_members":[]}}`)
-		case "unique":
-			fmt.Println(`{"name":"隔离测试需求","work_item_attribute":{"role_members":[{"name":"QC Owner","members":[{"name":"Tester"}]}]}}`)
-		default:
-			fmt.Println(`{"name":"隔离测试需求","work_item_attribute":{"role_members":[{"name":"QC Owner","members":[{"name":"Tester"},{"name":"Unmapped"}]}]}}`)
-		}
-	case "auth":
-		if value("--profile") == "" {
-			fmt.Println(`{"authenticated":true,"host":"project.feishu.cn","tenant_key":"fixture-tenant"}`)
-		} else {
-			if value("--profile") != "fixture-lark" {
-				return 93
-			}
-			verified := slices.Contains(args, "--verify") && os.Getenv("SW_TAG_TEST_LOGIN") != "expired"
-			fmt.Printf("{\"appId\":\"cli_fixture\",\"identities\":{\"user\":{\"userName\":\"Fixture applicant\",\"openId\":\"ou_self\",\"verified\":%t},\"bot\":{\"status\":\"ready\",\"verified\":true}}}\n", verified)
-		}
-	case "contact":
-		if os.Getenv("SW_TAG_TEST_ROSTER") == "unique" && value("--query") == "Tester" {
-			fmt.Println(`{"ok":true,"data":{"users":[{"open_id":"ou_qa","localized_name":"Tester","is_activated":true}]}}`)
-		} else {
-			fmt.Println(`{"ok":true,"data":{"users":[]}}`)
-		}
-	case "im":
-		if value("--profile") != "fixture-lark" || value("--as") != "user" || value("--msg-type") != "interactive" {
-			return 94
-		}
-		card, recipient, key := value("--content"), value("--user-id"), value("--idempotency-key")
-		var notice struct {
-			Header struct{ Title struct{ Content string } }
-			Config struct{ Summary struct{ Content string } }
-		}
-		const wantHeader = "辛苦发版UAT"
-		if json.Unmarshal([]byte(card), &notice) != nil || notice.Header.Title.Content != wantHeader || !strings.HasPrefix(notice.Config.Summary.Content, wantHeader+"｜") || strings.Contains(card, "申请人：") || key == "" {
-			return 95
-		}
-		log, err := os.OpenFile(os.Getenv("SW_TAG_TEST_SEND_LOG"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
-		if err != nil {
-			return 96
-		}
-		fmt.Fprintln(log, recipient+" "+key)
-		log.Close()
-		if os.Getenv("SW_TAG_TEST_SEND_MODE") == "unknown" {
-			fmt.Println("incomplete response")
-			return 0
-		}
-		if os.Getenv("SW_TAG_TEST_SEND_MODE") == "failed" {
-			fmt.Fprintln(os.Stderr, `{"ok":false,"error":{"code":123,"message":"fixture rejected"}}`)
-			return 1
-		}
-		fmt.Printf("{\"ok\":true,\"data\":{\"message_id\":\"om_%s\"}}\n", recipient)
-	default:
-		fmt.Fprintln(os.Stderr, "unexpected fixture command", args[0])
-		return 91
-	}
-	return 0
+	fmt.Fprintln(os.Stderr, "unexpected fixture command", args[0])
+	return 91
 }
 
 func installTagTestTransport() error {
@@ -208,7 +107,7 @@ func installTagTestTransport() error {
 	return nil
 }
 
-func tagTestGenbuFixture(t *testing.T, userHome, executable string) (string, *atomic.Int32) {
+func tagTestGenbuFixture(t *testing.T, userHome, executable string, override func(http.ResponseWriter, *http.Request) bool) (string, *atomic.Int32) {
 	t.Helper()
 	credentialsDir := filepath.Join(userHome, ".snowball-config")
 	if err := os.MkdirAll(credentialsDir, 0700); err != nil {
@@ -261,8 +160,12 @@ func tagTestGenbuFixture(t *testing.T, userHome, executable string) (string, *at
 		if r.URL.Path != genbuapi.DragonUserPath && r.Header.Get("X-Token") != token {
 			t.Errorf("missing Genbu session for %s", r.URL.Path)
 		}
-		if r.URL.Path != genbuapi.DragonUserPath && r.URL.Path != genbuapi.ApplicationsPath && !slices.Contains([]string{"101", "102"}, r.Header.Get("App-Id")) {
+		if r.URL.Path != genbuapi.DragonUserPath && r.URL.Path != genbuapi.ApplicationsPath && r.URL.Path != cliServiceApprovalPath &&
+			!slices.Contains([]string{"101", "102"}, r.Header.Get("App-Id")) {
 			t.Errorf("missing Genbu application for %s", r.URL.Path)
+		}
+		if override != nil && override(w, r) {
+			return
 		}
 		version := os.Getenv("SW_TAG_TEST_UAT_POD_VERSION")
 		switch r.URL.Path {
@@ -314,22 +217,16 @@ func tagTestGenbuFixture(t *testing.T, userHome, executable string) (string, *at
 func isolateTagTestUserHome(t *testing.T, root string) string {
 	t.Helper()
 	userHome := filepath.Join(root, "isolated-user-home")
-	accountDir := filepath.Join(userHome, ".meegle")
-	if err := os.MkdirAll(accountDir, 0700); err != nil {
+	if err := os.MkdirAll(userHome, 0700); err != nil {
 		t.Fatal(err)
-	}
-	for name, data := range map[string][]byte{"config.json": []byte(`{"current":"fixture-meegle","profiles":{"fixture-meegle":{"host":"project.feishu.cn"}}}`), "credentials-fixture-meegle.enc": []byte("fake encrypted fixture account")} {
-		if err := os.WriteFile(filepath.Join(accountDir, name), data, 0600); err != nil {
-			t.Fatal(err)
-		}
 	}
 	t.Setenv("USERPROFILE", userHome)
 	t.Setenv("HOME", userHome)
 	return userHome
 }
 
-// Git and messaging commands use this test binary. The successful batch is persisted as fixture JSON.
-func newNotifyOnlyCLIFixture(t *testing.T) (cliFixture, string, string) {
+// The status fixture serves Git reads from the test binary and stores a completed Tag operation.
+func newTagCLIStatusFixture(t *testing.T, override func(http.ResponseWriter, *http.Request) bool) (cliFixture, string) {
 	t.Helper()
 	executable, err := os.Executable()
 	if err != nil {
@@ -338,33 +235,25 @@ func newNotifyOnlyCLIFixture(t *testing.T) (cliFixture, string, string) {
 	root := t.TempDir()
 	userHome := isolateTagTestUserHome(t, root)
 	paths := newTagCLIProfilePaths(t, root)
-	f := cliFixture{executable: executable, git: executable, confDir: paths.Home, userHome: userHome, taskDir: filepath.Join(paths.Tasks, "notice-task"), sends: filepath.Join(root, "sends.log")}
+	f := cliFixture{executable: executable, git: executable, confDir: paths.Home, userHome: userHome, taskDir: filepath.Join(paths.Tasks, "status-task")}
 	config := domain.DefaultAppConfig()
 	config.TaskRoot = &paths.Tasks
-	calls := filepath.Join(root, "calls")
 	repository, worktree := filepath.Join(root, "repository"), filepath.Join(f.taskDir, "svc-primary")
-	for _, directory := range []string{calls, repository, worktree, filepath.Join(f.taskDir, "tag-operations")} {
+	for _, directory := range []string{repository, worktree, filepath.Join(f.taskDir, "tag-operations")} {
 		if err := os.MkdirAll(directory, 0700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	t.Setenv("SW_TAG_TEST_NOTIFY_ONLY_ROOT", root)
-	t.Setenv("SW_TAG_TEST_NOTICE_CALLS", calls)
-	t.Setenv("SW_TAG_TEST_SEND_LOG", f.sends)
-	t.Setenv("SW_TAG_TEST_ROSTER", "unique")
-	t.Setenv("SW_TAG_TEST_LOGIN", "")
-	t.Setenv("SW_TAG_TEST_SEND_MODE", "")
-	legacyGenbu, genbuCalls := tagTestGenbuFixture(t, f.userHome, executable)
+	t.Setenv("SW_TAG_TEST_STATUS_ROOT", root)
+	legacyGenbu, genbuCalls := tagTestGenbuFixture(t, f.userHome, executable, override)
 	f.genbuCalls = genbuCalls
-	config.GitExecutablePath, config.GenbuExecutablePath, config.LarkExecutablePath, config.MeegleExecutablePath = &executable, &legacyGenbu, &executable, &executable
+	config.GitExecutablePath, config.GenbuExecutablePath = &executable, &legacyGenbu
 	config.TagEnabled = true
 	config.CommandProxyURL, config.CommandProxyTargets = nil, nil
-	config.MeegleProjects = []domain.MeegleProjectConfig{{SimpleName: "fixture", ProjectKey: "fixture-project"}}
-	config.LarkNotice = &domain.LarkNoticeConfig{Profile: "fixture-lark", AppID: "cli_fixture", Contacts: []domain.LarkNoticeContact{}}
 	config.Repositories = []domain.RepositoryConfig{{ID: "svc", Name: "svc", RootPath: repository, GitCommonDirectory: filepath.Join(repository, ".git")}}
 	config.Services = []domain.ServiceConfig{{ID: "svc", DisplayName: "svc", RepositoryID: "svc", Enabled: true, GenbuServiceName: "svc-genbu", GenbuProbeEnabled: true, MasterBranch: "origin/uat", TestTagBaselineRef: "origin/uat", DevelopmentTool: domain.DevelopmentToolVisualStudioCode, Modules: []domain.ServiceModuleConfig{{ID: "primary", Name: "primary", Strategy: domain.WorkspaceStandardWorktree, TagMode: domain.TagBuildCurrentBranch, TagEnabled: true}}}}
 	manifest := domain.DefaultTaskManifest()
-	manifest.FolderName, manifest.TaskDirectoryName, manifest.FeatureBranch = "notice-task", "notice-task", "feature/primary"
+	manifest.FolderName, manifest.TaskDirectoryName, manifest.FeatureBranch = "status-task", "status-task", "feature/primary"
 	manifest.CreatedAt, manifest.UpdatedAt = "2026-11-10 01:02:03", "2026-11-10 01:02:03"
 	manifest.RequirementLink = "https://project.feishu.cn/fixture/userstory/detail/101"
 	manifest.Services = []domain.ServiceWorkspace{{RepositoryID: "svc", ServiceName: "svc", RepositoryPath: repository, WorktreePath: worktree, Branch: "feature/primary", DevelopmentTool: domain.DevelopmentToolVisualStudioCode, Health: domain.WorkspaceReady, Strategy: domain.WorkspaceStandardWorktree, ModuleSource: domain.TaskModuleConfigured, Warnings: []string{}, GroupServiceID: "svc", ModuleID: "primary", ModuleName: "primary", TagEnabled: true, TagMode: domain.TagBuildCurrentBranch, PushRemote: "origin"}}
@@ -374,144 +263,18 @@ func newNotifyOnlyCLIFixture(t *testing.T) (cliFixture, string, string) {
 	if err := storage.NewProfileManifestStore(paths).Save(f.taskDir, manifest); err != nil {
 		t.Fatal(err)
 	}
-	batch, tag, sha := "notification-only-batch", "1.2.3.beta-1", strings.Repeat("a", 40)
+	batch, tag, sha := "status-batch", "1.2.3.beta-1", strings.Repeat("a", 40)
 	now := domain.FormatSilverWingTime(time.Now())
-	op := domain.TagOperation{OperationID: delivery.NewTagJobID(), BatchID: &batch, FolderName: "notice-task", ServiceName: "svc", RepositoryID: "svc", SourceBranch: "feature/primary", Remote: "origin", TagMode: domain.TagBuildCurrentBranch, State: domain.TagOperationSuccess, CreatedAt: now, UpdatedAt: now, SourceSHA: &sha, Tag: &tag, GroupServiceID: "svc", ModuleID: "primary", ConflictFiles: []string{}, GenbuStatus: domain.GenbuTagProbeStatus{Build: domain.GenbuSuccess, UAT: domain.GenbuInitial, Production: domain.GenbuInitial, CheckedAt: &now}}
+	op := domain.TagOperation{OperationID: delivery.NewTagJobID(), BatchID: &batch, FolderName: "status-task", ServiceName: "svc", RepositoryID: "svc", SourceBranch: "feature/primary", Remote: "origin", TagMode: domain.TagBuildCurrentBranch, State: domain.TagOperationSuccess, CreatedAt: now, UpdatedAt: now, SourceSHA: &sha, Tag: &tag, GroupServiceID: "svc", ModuleID: "primary", ConflictFiles: []string{}, GenbuStatus: domain.GenbuTagProbeStatus{Build: domain.GenbuSuccess, UAT: domain.GenbuInitial, Production: domain.GenbuInitial, CheckedAt: &now}}
 	data, err := json.Marshal(op)
 	if err != nil || os.WriteFile(filepath.Join(f.taskDir, "tag-operations", op.OperationID+".json"), data, 0600) != nil {
-		t.Fatal("cannot save isolated notification batch", err)
+		t.Fatal("cannot save isolated Tag batch", err)
 	}
-	return f, batch, calls
-}
-
-func TestTagCLINotifyOnlyOptimizedChecksAndRetry(t *testing.T) {
-	for _, outcome := range []string{"success", "unknown", "failed"} {
-		t.Run(outcome, func(t *testing.T) {
-			f, batch, calls := newNotifyOnlyCLIFixture(t)
-			expectedCode := 0
-			if outcome != "success" {
-				t.Setenv("SW_TAG_TEST_SEND_MODE", outcome)
-				expectedCode = exitError
-			}
-			first, _ := callTag[application.CLITagNoticeResult](t, f, expectedCode, "notify", "--batch", batch)
-			if len(first.Recipients) != 1 || first.Recipients[0].Name != "Tester" || first.Recipients[0].Self || first.Recipients[0].Skipped {
-				t.Fatal(first)
-			}
-			counts := map[string]int{}
-			files, err := os.ReadDir(calls)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, file := range files {
-				counts[strings.SplitN(file.Name(), "-", 2)[0]]++
-			}
-			if !reflect.DeepEqual(counts, map[string]int{"verify": 2, "metadata": 1, "contact": 1, "local": 2, "meegleProfile": 1, "meegleAuth": 1, "meegleUser": 1}) {
-				t.Fatal("sw tag notify did not share optimized dispatch checks", counts)
-			}
-			t.Setenv("SW_TAG_TEST_SEND_MODE", "")
-			repeated, _ := callTag[application.CLITagNoticeResult](t, f, 0, "notify", "--batch", batch)
-			if len(repeated.Recipients) != 1 || repeated.Recipients[0].State != "sent" || repeated.Recipients[0].Skipped != (outcome == "success") {
-				t.Fatal(repeated)
-			}
-			data, err := os.ReadFile(f.sends)
-			fields := strings.Fields(string(data))
-			wantFields := 2
-			if outcome != "success" {
-				wantFields = 4
-			}
-			if err != nil || len(fields) != wantFields || fields[0] != "ou_qa" || (wantFields == 4 && fields[1] != fields[3]) {
-				t.Fatal("CLI duplicate/retry changed recipient or idempotency key", string(data), err)
-			}
-			counts = map[string]int{}
-			files, err = os.ReadDir(calls)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, file := range files {
-				counts[strings.SplitN(file.Name(), "-", 2)[0]]++
-			}
-			if !reflect.DeepEqual(counts, map[string]int{"verify": 4, "metadata": 1, "contact": 1, "local": 4, "meegleProfile": 1, "meegleAuth": 1, "meegleUser": 1}) {
-				t.Fatal("new CLI process ignored disk preparation", counts)
-			}
-			t.Log("actual sw tag notify cold: verify=2 metadata=1 directory=1 Meegle identity=3 local=2; new process hit: verify=2 metadata=0 directory=0 Meegle identity=0 local=2; successful receipts skipped, unknown/failed key retained")
-		})
-	}
-}
-
-func TestTagCLINotifyOnlyEmptyRosterSendsSelfOnce(t *testing.T) {
-	f, batch, calls := newNotifyOnlyCLIFixture(t)
-	t.Setenv("SW_TAG_TEST_ROSTER", "empty")
-	first, _ := callTag[application.CLITagNoticeResult](t, f, 0, "notify", "--batch", batch)
-	if len(first.Recipients) != 1 || !first.Recipients[0].Self || first.Recipients[0].State != "sent" || first.Recipients[0].Skipped || first.Recipients[0].MessageID != "om_ou_self" {
-		t.Fatal("empty roster did not send the isolated self fallback", first)
-	}
-	if !strings.Contains(strings.Join(first.Warnings, ";"), "需求未配置测试负责人") {
-		t.Fatal("empty-roster fallback reason was lost", first.Warnings)
-	}
-	// This is a new CLI process: its preparation comes from the temporary disk
-	// cache, and its successful receipt must suppress a second message RPC.
-	repeated, _ := callTag[application.CLITagNoticeResult](t, f, 0, "notify", "--batch", batch)
-	if len(repeated.Recipients) != 1 || !repeated.Recipients[0].Self || repeated.Recipients[0].State != "sent" || !repeated.Recipients[0].Skipped || repeated.Recipients[0].MessageID != first.Recipients[0].MessageID {
-		t.Fatal("cached empty roster did not retain the successful receipt", repeated)
-	}
-	data, err := os.ReadFile(f.sends)
-	fields := strings.Fields(string(data))
-	if err != nil || len(fields) != 2 || fields[0] != "ou_self" || fields[1] == "" {
-		t.Fatal("empty-roster fallback sent more than once or changed recipients", string(data), err)
-	}
-	counts := map[string]int{}
-	files, err := os.ReadDir(calls)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, file := range files {
-		counts[strings.SplitN(file.Name(), "-", 2)[0]]++
-	}
-	if !reflect.DeepEqual(counts, map[string]int{"verify": 4, "metadata": 1, "local": 4, "meegleProfile": 1, "meegleAuth": 1, "meegleUser": 1}) {
-		t.Fatal("repeat did not use the empty-roster disk cache or performed a contact lookup", counts)
-	}
-	t.Log("actual sw tag notify with fake tools: empty roster sent ou_self once; new process used disk preparation and skipped the successful receipt")
-}
-
-func TestTagCLINotifyRequiresLarkAndGenbuConnections(t *testing.T) {
-	for _, tool := range []string{"lark", "genbu"} {
-		t.Run(tool, func(t *testing.T) {
-			f, batch, calls := newNotifyOnlyCLIFixture(t)
-			store := storage.NewConfigStore(storage.NewPaths(f.confDir))
-			disabled := false
-			if _, err := store.Update(func(cfg domain.AppConfig) (domain.AppConfig, error) {
-				if tool == "lark" {
-					cfg.OptionalCLIs.Lark = &disabled
-				} else {
-					cfg.OptionalCLIs.Genbu = &disabled
-				}
-				return cfg, nil
-			}); err != nil {
-				t.Fatal(err)
-			}
-			_, reply := callTag[application.CLITagNoticeResult](t, f, exitError, "notify", "--batch", batch)
-			wantError := "Lark CLI 未启用"
-			if tool == "genbu" {
-				wantError = "Genbu 已关闭"
-			}
-			if !strings.Contains(reply.Error, wantError) {
-				t.Fatal(reply.Error)
-			}
-			if files, err := os.ReadDir(calls); err != nil || len(files) != 0 {
-				t.Fatal("disabled notification launched an identity, metadata or contacts process", files, err)
-			}
-			if _, err := os.Stat(f.sends); !os.IsNotExist(err) {
-				t.Fatal("disabled notification reached the message command", err)
-			}
-			if got := f.genbuCalls.Load(); got != 0 {
-				t.Fatalf("disabled notification made %d Genbu HTTP requests", got)
-			}
-		})
-	}
+	return f, batch
 }
 
 func TestTagCLIStatusUsesGitWithoutGenbu(t *testing.T) {
-	f, batch, _ := newNotifyOnlyCLIFixture(t)
+	f, batch := newTagCLIStatusFixture(t, nil)
 	t.Setenv("SW_TAG_TEST_UAT_POD_VERSION", "1.2.3.beta-1")
 	ready, _ := callTag[[]delivery.TagObservation](t, f, 0, "status", "--batch", batch, "--namespace", "bp")
 	if len(ready) != 1 || ready[0].Runtime == nil || ready[0].Runtime.State != delivery.TagRuntimeReady {
@@ -568,9 +331,9 @@ func TestTagCLIStatusUsesGitWithoutGenbu(t *testing.T) {
 }
 
 type cliFixture struct {
-	executable, git, confDir, userHome, taskDir, sends string
-	repository, remote, base, source                   string
-	genbuCalls                                         *atomic.Int32
+	executable, git, confDir, userHome, taskDir string
+	repository, remote, base, source            string
+	genbuCalls                                  *atomic.Int32
 }
 
 func (f cliFixture) gitRun(t *testing.T, dir string, args ...string) string {
@@ -620,21 +383,17 @@ func newCLIFixture(t *testing.T, moreServices bool) cliFixture {
 	t.Setenv("GIT_TERMINAL_PROMPT", "0")
 	paths := newTagCLIProfilePaths(t, root)
 	f := cliFixture{executable: executable, git: git, confDir: paths.Home, userHome: userHome,
-		taskDir: filepath.Join(paths.Tasks, "验收 task"), sends: filepath.Join(root, "sent.log")}
-	t.Setenv("SW_TAG_TEST_SEND_LOG", f.sends)
+		taskDir: filepath.Join(paths.Tasks, "验收 task")}
 	if err := os.MkdirAll(f.taskDir, 0700); err != nil {
 		t.Fatal(err)
 	}
 	cfg := domain.DefaultAppConfig()
 	cfg.TaskRoot = &paths.Tasks
 	cfg.GitExecutablePath = &git
-	legacyGenbu, genbuCalls := tagTestGenbuFixture(t, f.userHome, executable)
+	legacyGenbu, genbuCalls := tagTestGenbuFixture(t, f.userHome, executable, nil)
 	f.genbuCalls = genbuCalls
-	cfg.GenbuExecutablePath, cfg.LarkExecutablePath, cfg.MeegleExecutablePath = &legacyGenbu, &executable, &executable
-	cfg.MeegleProjects = []domain.MeegleProjectConfig{{SimpleName: "fixture", ProjectKey: "fixture-project"}}
+	cfg.GenbuExecutablePath = &legacyGenbu
 	cfg.CommandProxyURL, cfg.CommandProxyTargets = nil, nil
-	cfg.LarkNotice = &domain.LarkNoticeConfig{Profile: "fixture-lark", AppID: "cli_fixture", CLIDefaultTester: "Fallback",
-		Contacts: []domain.LarkNoticeContact{{Name: "Tester", OpenID: "ou_qa"}, {Name: "Fallback", OpenID: "ou_fallback"}}}
 	manifest := domain.DefaultTaskManifest()
 	manifest.FolderName, manifest.TaskDirectoryName, manifest.FeatureBranch = "验收 task", "验收 task", "feature/primary"
 	manifest.RequirementLink = "https://project.feishu.cn/fixture/userstory/detail/101"
@@ -719,9 +478,13 @@ type cliReply struct {
 }
 
 func (f cliFixture) call(args ...string) (cliReply, int, error) {
+	return f.callCommand(append([]string{"tag"}, args...)...)
+}
+
+func (f cliFixture) callCommand(args ...string) (cliReply, int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	args = append([]string{"--conf-dir", f.confDir, "tag"}, args...)
+	args = append([]string{"--conf-dir", f.confDir}, args...)
 	command := exec.CommandContext(ctx, f.executable, append(args, "--json")...)
 	command.Env = append(os.Environ(), "SW_TAG_TEST_CHILD=1")
 	var stderr bytes.Buffer
@@ -759,7 +522,7 @@ func callTag[T any](t *testing.T, f cliFixture, code int, args ...string) (T, cl
 	return result, reply
 }
 
-func TestTagCLIRecoversConflictAndNotifiesFromPersistedBatch(t *testing.T) {
+func TestTagCLIRecoversConflictAndReadsPersistedBatch(t *testing.T) {
 	f := newCLIFixture(t, true)
 	task := filepath.Base(f.taskDir)
 	rows, _ := callTag[[]application.CLITagTarget](t, f, 0, "list", "--task", task)
@@ -813,7 +576,6 @@ func TestTagCLIRecoversConflictAndNotifiesFromPersistedBatch(t *testing.T) {
 		interrupted[0].Operation.Message == nil || !strings.Contains(*interrupted[0].Operation.Message, "推送远端分支") {
 		t.Fatal("status did not persist branch failure and recovery location", interrupted)
 	}
-	callTag[application.CLITagNoticeResult](t, f, exitError, "notify", "--batch", batch.BatchID)
 
 	// Fail the Tag push after both branch pushes. A new process must reuse
 	// the confirmed merge and the reserved Tag.
@@ -871,32 +633,6 @@ func TestTagCLIRecoversConflictAndNotifiesFromPersistedBatch(t *testing.T) {
 	runtime, _ := callTag[[]delivery.TagObservation](t, f, 0, "status", "--operation", conflict.OperationID, "--namespace", "bp")
 	if len(runtime) != 1 || runtime[0].Runtime == nil || runtime[0].Runtime.State != delivery.TagRuntimeReady {
 		t.Fatal("CLI did not confirm the target runtime version", runtime)
-	}
-	t.Setenv("SW_TAG_TEST_UAT_POD_VERSION", "")
-	t.Setenv("SW_TAG_TEST_LOGIN", "expired")
-	_, denied := callTag[application.CLITagNoticeResult](t, f, exitError, "notify", "--batch", batch.BatchID)
-	if !strings.Contains(denied.Error, "fixture-lark") {
-		t.Fatal("unverified user did not receive a profile-specific error", denied.Error)
-	}
-	if _, err := os.Stat(f.sends); !os.IsNotExist(err) {
-		t.Fatal("messages reached the fake CLI before all gates passed")
-	}
-	t.Setenv("SW_TAG_TEST_LOGIN", "")
-	first, _ := callTag[application.CLITagNoticeResult](t, f, 0, "notify", "--batch", batch.BatchID)
-	if len(first.Recipients) != 1 || !first.Recipients[0].Self || first.Recipients[0].MessageID != "om_ou_self" {
-		t.Fatal(first)
-	}
-	for _, roster := range []string{"failed", "empty", ""} {
-		t.Setenv("SW_TAG_TEST_ROSTER", roster)
-		repeated, _ := callTag[application.CLITagNoticeResult](t, f, 0, "notify", "--batch", batch.BatchID)
-		if len(repeated.Recipients) != 1 || !repeated.Recipients[0].Self || !repeated.Recipients[0].Skipped || repeated.Recipients[0].MessageID != "om_ou_self" {
-			t.Fatal("tester metadata changed the self-only recipient or duplicated the message", repeated)
-		}
-	}
-	sends, err := os.ReadFile(f.sends)
-	fields := strings.Fields(string(sends))
-	if err != nil || len(fields) != 2 || fields[0] != "ou_self" {
-		t.Fatal("notification repeated a successful receipt", string(sends), err)
 	}
 }
 

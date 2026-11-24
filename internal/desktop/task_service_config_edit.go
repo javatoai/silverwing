@@ -87,7 +87,7 @@ func taskServiceConfigEditKey(_ *taskServicesView, row *taskServiceRow) string {
 }
 
 func (s *app) taskServiceConfigEditCurrent(v *taskServicesView, dialog *taskServiceDialog) bool {
-	return s.taskServiceDialogCurrent(v, dialog) && dialog.kind == taskServiceConfigEditDetail && !v.identity.archived
+	return s.taskServiceDialogCurrent(v, dialog) && dialog.kind == taskServiceConfigEditDetail
 }
 
 func (s *app) taskServiceConfigEditBlocked(v *taskServicesView, dialog *taskServiceDialog) bool {
@@ -301,7 +301,7 @@ func (s *app) finishTaskServiceConfigPreview(v *taskServicesView, dialog *taskSe
 		edit.failure = "无法确认配置预览，请重试"
 		return
 	}
-	s.confirmTaskServiceConfigSubmit(v, dialog, &preview)
+	s.submitTaskServiceConfig(v, dialog, &preview)
 }
 
 func (edit *taskServiceConfigEditView) setSubmissionError(err error) {
@@ -339,34 +339,6 @@ func (edit *taskServiceConfigEditView) previewCurrent(preview *application.TaskS
 	}
 	expiresAt, err := time.Parse(time.RFC3339, preview.ExpiresAt)
 	return err == nil && now.Before(expiresAt)
-}
-
-func (s *app) confirmTaskServiceConfigSubmit(v *taskServicesView, dialog *taskServiceDialog, preview *application.TaskServiceConfigPreviewResult) {
-	if !s.taskServiceConfigEditCurrent(v, dialog) || !dialog.edit.previewCurrent(preview, time.Now()) {
-		return
-	}
-	if dialog.row.environment != "prod" {
-		s.submitTaskServiceConfig(v, dialog, preview)
-		return
-	}
-	buttons := []confirmationDialogButton{{label: "取消"}, {label: "提交 PROD 审批", primary: true}}
-	if !s.showConfirmationDialog("确认提交生产配置审批", "请核对要修改的生产配置。", "", buttons, 0, 0, func(button int) {
-		if button == 1 {
-			s.submitTaskServiceConfig(v, dialog, preview)
-		}
-	}) {
-		dialog.edit.failure = "暂时无法打开生产确认，请重试"
-		return
-	}
-	s.confirmationDialog.Current = func() bool {
-		return s.taskServiceConfigEditCurrent(v, dialog) && dialog.edit.previewCurrent(preview, time.Now())
-	}
-	s.confirmationDialog.Summary = []confirmationDialogField{
-		{Label: "环境", Value: "PROD"},
-		{Label: "服务", Value: preview.Service},
-		{Label: "目标", Value: preview.Namespace + " / " + preview.Name},
-		{Label: "文件", Value: preview.File},
-	}
 }
 
 func (s *app) submitTaskServiceConfig(v *taskServicesView, dialog *taskServiceDialog, preview *application.TaskServiceConfigPreviewResult) {

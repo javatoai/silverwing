@@ -26,9 +26,12 @@ const (
 
 const usage = `用法:
   sw [--conf-dir <目录>] [--json] tag <命令> [选项]
+  sw [--conf-dir <目录>] [--json] uat <命令> [选项]
+  sw [--conf-dir <目录>] [--json] service <命令> [选项]
+  sw [--conf-dir <目录>] [--json] dragon <命令> [选项]
   sw --version
 
-命令:
+Tag 命令:
   list: 列出任务的服务和分支
     sw tag list --task <任务目录名>
 
@@ -45,8 +48,26 @@ const usage = `用法:
   retry: 续接指定操作
     sw tag retry --operation <ID> [--task <任务目录名>]
 
-  notify: 发送指定批次的 UAT 通知并显示回执
-    sw tag notify --batch <ID> [--task <任务目录名>]
+  remote-list: 列出服务的远端 Tag
+    sw tag remote-list --service <服务> [--keyword <关键词>] [--page <页>]
+  query: 查询指定 Tag 的构建和发布状态
+    sw tag query --service <服务> --tag <Tag>
+  logs: 查看 Tag 构建日志
+    sw tag logs --service <服务> --tag <Tag> [--tail-lines <1-1000>]
+
+UAT 命令（默认预检，确认后传入 --preflight）:
+  sw uat release --service <服务> --tag <Tag> [--preflight <预检编号>]
+  sw uat restart --service <服务> [--preflight <预检编号>]
+  sw uat release-batch --batch <批次ID> [--task <任务目录名>] [--preflight <预检编号>]
+
+` + serviceUsage + `
+青龙提测:
+  sw dragon submit --task <任务目录名> [--remark <备注>] [--sync-comment] [--preflight <预检编号>]
+  sw dragon status --task <任务目录名>
+  sw dragon recheck --task <任务目录名> [--approval-id <审批ID>]
+  sw dragon retry-comment --task <任务目录名>
+  sw dragon approvals [--no <审批编号>] [--keyword <关键词>] [--page <页>] [--size <每页条数>]
+  sw dragon detail --approval-id <审批ID>
 
 选项:
   --conf-dir <目录>: 指定 Silverwing 数据目录，默认使用本机桌面数据目录。
@@ -99,9 +120,17 @@ func run(ctx context.Context, args []string, out, stderr io.Writer) int {
 		return 0
 	}
 	args = global.Args()
-	if len(args) == 0 || len(args) == 1 && args[0] == "tag" {
+	if len(args) == 0 || len(args) == 1 && (args[0] == "tag" || args[0] == "uat") {
 		fmt.Fprint(out, usage)
 		return 0
+	}
+	switch args[0] {
+	case "uat":
+		return runUAT(ctx, args[1:], directories, o.asJSON, out, stderr)
+	case "service":
+		return runService(ctx, args[1:], directories, o.asJSON, out, stderr)
+	case "dragon":
+		return runDragon(ctx, args[1:], directories, o.asJSON, out, stderr)
 	}
 	if len(args) < 2 || args[0] != "tag" {
 		return usageError(stderr, fmt.Sprintf("未知命令 %q", args[0]))
@@ -109,6 +138,10 @@ func run(ctx context.Context, args []string, out, stderr io.Writer) int {
 	if args[1] == "--help" || args[1] == "-h" || args[1] == "help" {
 		fmt.Fprint(out, usage)
 		return 0
+	}
+	switch args[1] {
+	case "remote-list", "query", "logs":
+		return runRemoteTag(ctx, args[1:], directories, o.asJSON, out, stderr)
 	}
 	o.command = args[1]
 	flags := newCLIFlagSet("sw tag " + o.command)
@@ -128,8 +161,6 @@ func run(ctx context.Context, args []string, out, stderr io.Writer) int {
 		flags.StringVar(&o.namespace, "namespace", "", "核对指定 UAT namespace 的 Pod")
 	case "retry":
 		flags.StringVar(&o.operation, "operation", "", "操作 ID")
-	case "notify":
-		flags.StringVar(&o.batch, "batch", "", "批次 ID")
 	default:
 		return usageError(stderr, fmt.Sprintf("未知 Tag 命令 %q", o.command))
 	}
@@ -212,10 +243,6 @@ func (o options) validate() error {
 		if o.operation == "" {
 			return errors.New("请指定 --operation")
 		}
-	case "notify":
-		if o.batch == "" {
-			return errors.New("请指定 --batch")
-		}
 	}
 	return nil
 }
@@ -254,15 +281,6 @@ func (o options) execute(ctx context.Context, app *application.App) (any, int, e
 			}
 		}
 		return items, code, err
-	case "notify":
-		result, err := app.CLITagNotify(ctx, o.task, o.batch)
-		code := 0
-		for _, recipient := range result.Recipients {
-			if recipient.State != "sent" || recipient.Error != "" {
-				code = exitError
-			}
-		}
-		return result, code, err
 	}
 	return nil, exitUsage, errors.New("未知 Tag 命令")
 }
@@ -295,8 +313,15 @@ func (o options) outputResult(out, stderr io.Writer, data any, code int, err err
 	if o.asJSON {
 		preflight := ""
 		var warnings []string
-		if result, ok := data.(application.CLITagPreflightResult); ok {
+		switch result := data.(type) {
+		case application.CLITagPreflightResult:
 			preflight, data, warnings = result.ID, result.Items, result.Warnings
+		case application.CLIUATOperationResult:
+			preflight = result.Preflight
+		case application.CLIUATBatchResult:
+			preflight = result.Preflight
+		case application.CLIDragonQAResult:
+			preflight = result.Preflight
 		}
 		response := struct {
 			OK          bool     `json:"ok"`

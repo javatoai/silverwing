@@ -196,8 +196,7 @@ func TestOnlyCodexProxyAffectsRequirementNamingScope(t *testing.T) {
 		t.Fatal("new Codex proxy did not change the naming scope")
 	}
 	if service.requirementIdentityContext(config) != service.requirementIdentityContext(changed) ||
-		requirementReadConfig(config) != requirementReadConfig(changed) ||
-		noticeConfigIdentity(config) != noticeConfigIdentity(changed) {
-		t.Fatal("SW proxy changed a Meegle or Lark scope")
+		requirementReadConfig(config) != requirementReadConfig(changed) {
+		t.Fatal("SW proxy changed a Meegle scope")
 	}
 }

@@ -25,6 +25,7 @@ type ServiceConfigRequest struct {
 	Service     string `json:"service"`
 	Environment string `json:"environment"`
 	Namespace   string `json:"namespace"`
+	File        string `json:"file,omitempty"`
 	Filter      string `json:"filter"`
 }
 
@@ -41,6 +42,7 @@ type ServiceConfigResult struct {
 	Environment string   `json:"environment"`
 	Namespace   string   `json:"namespace"`
 	UpdateTime  string   `json:"update_time"`
+	File        string   `json:"file,omitempty"`
 	Content     string   `json:"content"`
 	Contents    []string `json:"contents,omitempty"`
 	Matches     []string `json:"matches,omitempty"`
@@ -112,16 +114,28 @@ func (client *Client) QueryServiceConfig(ctx context.Context, request ServiceCon
 	request.Environment = environment
 	var result ServiceConfigResult
 	err = client.requestToken(ctx, func(worker *genbuClient, token string) error {
-		snapshot, err := worker.queryConfig(request.Service, request.Namespace, request.Environment, token)
+		snapshot, err := worker.queryConfig(request.Service, request.Namespace, request.Environment, request.File, token)
 		if err != nil {
 			return err
 		}
 		config := client.ConfigSnapshot()
-		contents := make([]string, len(snapshot.Contents))
-		for index, item := range snapshot.Contents {
-			contents[index] = RedactSensitiveConfig(item, config.Password, token)
+		secrets := []string{config.Password, token}
+		bodies := make([]string, len(snapshot.Files))
+		contents := make([]string, len(snapshot.Files))
+		for index, file := range snapshot.Files {
+			body := file.Body
+			if isSensitiveConfigKey(file.Name) {
+				body = redactedConfigValue
+			}
+			bodies[index] = body
+			contents[index] = redactApprovalText(body, secrets...)
 		}
-		content := RedactSensitiveConfig(JoinConfigContents(snapshot.Contents), config.Password, token)
+		// Some responses split one document across records. Keep the full
+		// context when redacting multiline values.
+		content := redactApprovalText(JoinConfigContents(bodies), secrets...)
+		if JoinConfigContents(contents) != content {
+			contents = []string{content}
+		}
 		var matches []string
 		if strings.TrimSpace(request.Filter) != "" {
 			matches = FilterConfigLines(content, request.Filter)
@@ -131,6 +145,7 @@ func (client *Client) QueryServiceConfig(ctx context.Context, request ServiceCon
 			Environment: snapshot.Environment,
 			Namespace:   snapshot.Namespace,
 			UpdateTime:  snapshot.UpdateTime,
+			File:        request.File,
 			Content:     content,
 			Contents:    contents,
 			Matches:     matches,

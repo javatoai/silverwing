@@ -85,17 +85,24 @@ func TestCatalogRuntimeDialogsReadOnlyChosenServiceWithoutTask(t *testing.T) {
 	if !tester.HasText("查看配置") || !tester.HasText("PROD · Second service") {
 		t.Fatal("the configuration dialog did not show the selected service and environment")
 	}
+	productionView := s.taskServicesUnit.catalog
+	s.openCatalogRuntimeDialog("s1", taskServiceConfigEditDetail)
+	s.openCatalogRuntimeApprovals("s2")
+	if config.ctx.Err() != nil || s.taskServicesUnit.catalog != productionView || s.genbuApprovals != nil || len(calls) != 0 {
+		t.Fatal("a blocked PROD operation displaced the approved read dialog or dispatched a request")
+	}
+	s.selectCatalogRuntimeEnvironment("uat")
 	s.openCatalogRuntimeDialog("s1", taskServiceConfigEditDetail)
 	files := genbuAwaitRead(t, calls)
-	expectCatalogRuntimeAction(t, s, files.action, "config-files", "s1", "prod", "alias-one")
+	expectCatalogRuntimeAction(t, s, files.action, "config-files", "s1", "uat", "alias-one")
 	if config.ctx.Err() != context.Canceled {
 		t.Fatal("opening another service did not cancel the prior configuration read")
 	}
 	s.openCatalogRuntimeApprovals("s2")
 	approvals := genbuAwaitRead(t, calls)
-	expectCatalogRuntimeAction(t, s, approvals.action, "approvals", "s2", "prod", "alias-two")
+	expectCatalogRuntimeAction(t, s, approvals.action, "approvals", "s2", "uat", "alias-two")
 	tester.Frame()
-	if files.ctx.Err() != context.Canceled || !tester.HasText("配置审批") || !tester.HasText("PROD · Second service") {
+	if files.ctx.Err() != context.Canceled || !tester.HasText("配置审批") || !tester.HasText("UAT · Second service") {
 		t.Fatal("the approval dialog did not replace the old service operation")
 	}
 	s.page = "settings"
@@ -131,9 +138,8 @@ func TestCatalogRuntimeRejectsChangedSavedMappingAndRetriesPodRead(t *testing.T)
 	expectCatalogRuntimeAction(t, s, genbuAwaitRead(t, calls).action, "pods", "s1", "uat", "changed-mapping")
 }
 
-func TestCatalogRuntimeProdApprovalAndPreviewLifecycle(t *testing.T) {
+func TestCatalogRuntimeUATApprovalAndPreviewLifecycle(t *testing.T) {
 	s := catalogRuntimeDialogFixture(t)
-	s.selectCatalogRuntimeEnvironment("prod")
 	s.openCatalogRuntimeDialog("s1", taskServiceConfigEditDetail)
 	v := s.taskServicesUnit.catalog
 	dialog := v.dialog
@@ -160,39 +166,25 @@ func TestCatalogRuntimeProdApprovalAndPreviewLifecycle(t *testing.T) {
 		}
 	})
 	tester := newTaskServiceConfigEditTester(s, 900, 650)
-	confirm := func() {
-		t.Helper()
-		if err := tester.Click("提交配置审批"); err != nil {
-			t.Fatal(err)
-		}
-		if s.confirmationDialog == nil || !tester.HasText("确认提交生产配置审批") || !tester.HasText(edit.file) || len(s.taskServicesUnit.configSubmissions) != 0 {
-			t.Fatal("a production catalog draft could submit without identifying and confirming the target")
-		}
-	}
-	confirm()
-	tester.Key(0, ui.KeyEscape)
-	if s.confirmationDialog != nil || edit.preview == nil || len(calls) != 0 {
-		t.Fatal("canceling production confirmation did not keep the unsent preview")
-	}
-	confirm()
-	if err := tester.Click("提交 PROD 审批"); err != nil {
+	if err := tester.Click("提交配置审批"); err != nil {
 		t.Fatal(err)
 	}
 	submit := genbuAwaitRead(t, calls)
-	expectCatalogRuntimeAction(t, s, submit.action, "config-submit", "s1", "prod", "alias-one")
+	expectCatalogRuntimeAction(t, s, submit.action, "config-submit", "s1", "uat", "alias-one")
 	if submit.action.Payload["previewToken"] != "test-token" || submit.action.Payload["confirmed"] != true || edit.preview != nil {
 		t.Fatal("submission did not consume the exact confirmed preview")
 	}
 	key := taskServiceConfigEditKey(v, dialog.row)
-	s.selectCatalogRuntimeEnvironment("uat")
+	s.selectCatalogRuntimeEnvironment("prod")
 	if submit.ctx.Err() != nil || !s.taskServicesUnit.configSubmissions[key] || dialog.edit.diff != nil {
 		t.Fatal("switching environments canceled an in-flight approval or retained the old draft")
 	}
 	s.finishTaskServiceConfigSubmit(v, dialog, key, application.ActionResult{}, &application.GenbuConfigPendingError{AttemptedAt: time.Now()}, true)
-	if s.taskServicesUnit.configSubmissions[key] || !strings.Contains(s.lastError, "PROD 配置审批提交结果待确认") || s.genbuApprovals != nil {
+	if s.taskServicesUnit.configSubmissions[key] || !strings.Contains(s.lastError, "UAT 配置审批提交结果待确认") || s.genbuApprovals != nil {
 		t.Fatal("a detached pending result did not notify the original environment or moved the new view")
 	}
 	// A still-unsubmitted preview is discarded on page exit with its original service scope.
+	s.selectCatalogRuntimeEnvironment("uat")
 	s.openCatalogRuntimeDialog("s2", taskServiceConfigEditDetail)
 	expectCatalogRuntimeAction(t, s, genbuAwaitRead(t, calls).action, "config-files", "s2", "uat", "alias-two")
 	unsent := s.taskServicesUnit.catalog.dialog

@@ -151,7 +151,7 @@ func TestTaskAppendServiceRowTogglesOnce(t *testing.T) {
 				if !state.selectedServices["beta"] || state.activeServiceID != "beta" {
 					t.Fatal("another row did not select and activate")
 				}
-				captureReleaseNotice(t, tester, fmt.Sprintf("append-selected-%d-dark-%t", width, dark))
+				captureTaskWorkspaceEvidence(t, tester, fmt.Sprintf("append-selected-%d-dark-%t", width, dark))
 				if err := tester.Click("合成服务乙"); err != nil {
 					t.Fatal(err)
 				}
@@ -178,7 +178,7 @@ func TestTaskAppendServiceRowTogglesOnce(t *testing.T) {
 				if _, _, err := s.taskAppendRequest(); err == nil || !reflect.DeepEqual(before, s.taskUnit.state.tasks) {
 					t.Fatal("empty selection produced a payload or changed real task services")
 				}
-				captureReleaseNotice(t, tester, fmt.Sprintf("append-empty-%d-dark-%t", width, dark))
+				captureTaskWorkspaceEvidence(t, tester, fmt.Sprintf("append-empty-%d-dark-%t", width, dark))
 			})
 		}
 	}

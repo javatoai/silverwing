@@ -290,17 +290,14 @@ func (c *requirementDocumentCoordinator) retire(ctx context.Context, closeServic
 // not wait on CLI shutdown and cannot retire requests registered afterwards.
 func (s *Service) InvalidateRequirementDocuments() {
 	s.requirementDocumentCoordinator().beginRetirement(false)
-	s.retireNoticePreparations(false)
 }
 
 func (s *Service) CancelRequirementDocuments(ctx context.Context) error {
-	s.retireNoticePreparations(false)
 	return s.requirementDocumentCoordinator().retire(ctx, false)
 }
 
 func (s *Service) CloseRequirementDocuments(ctx context.Context) error {
-	noticeErr := s.closeNoticePreparations(ctx)
 	documentsErr := s.requirementDocumentCoordinator().retire(ctx, true)
 	identityErr := s.CloseRequirementIdentityRequests(ctx)
-	return errors.Join(noticeErr, documentsErr, identityErr)
+	return errors.Join(documentsErr, identityErr)
 }

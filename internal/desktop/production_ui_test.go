@@ -50,7 +50,7 @@ func productionFixture(t *testing.T) (*app, *productionView, production.Batch) {
 	c := domain.DefaultAppConfig()
 	genbuEnabled := true
 	c.OptionalCLIs.Genbu = &genbuEnabled
-	c.Services = []domain.GroupServiceConfig{{ID: "service", RepositoryID: "repo", DisplayName: "示例服务", Enabled: true, MasterBranch: "origin/master", TestTagBaselineRef: "origin/release/test", DevelopmentTool: domain.DevelopmentToolVisualStudioCode, Modules: []domain.ServiceModuleConfig{}}}
+	c.Services = []domain.GroupServiceConfig{{ID: "service", RepositoryID: "repo", DisplayName: "示例服务", Enabled: true, GenbuProbeEnabled: true, GenbuServiceName: "fixture-service", MasterBranch: "origin/master", TestTagBaselineRef: "origin/release/test", DevelopmentTool: domain.DevelopmentToolVisualStudioCode, Modules: []domain.ServiceModuleConfig{}}}
 	c.Services[0].Bootstrap = domain.BootstrapConfig{CopyRules: []domain.BootstrapCopyRule{}, Commands: []domain.BootstrapCommand{}}
 	data, err := json.Marshal(c)
 	if err != nil {

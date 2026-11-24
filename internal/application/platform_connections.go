@@ -342,7 +342,6 @@ func (a *App) platformConnectionAction(ctx context.Context, action Action) (Acti
 		if err := a.savePlatformCredentials(ctx, action); err != nil {
 			return ActionResult{}, err
 		}
-		a.invalidateOptionalCLIFeatures("genbu")
 		message = "共用账号已保存"
 	case "platform.connection.set":
 		enabled, ok := action.Payload["enabled"].(bool)
@@ -364,9 +363,6 @@ func (a *App) platformConnectionAction(ctx context.Context, action Action) (Acti
 		a.connections.mu.Unlock()
 		if err != nil {
 			return ActionResult{}, err
-		}
-		if tool == "genbu" {
-			a.invalidateOptionalCLIFeatures(tool)
 		}
 	case "platform.login.test":
 		if err := a.testPlatformLogin(ctx, tool); err != nil {

@@ -54,6 +54,8 @@ func pipelineStatusFromNumber(value float64) pipelineStatus {
 		return pipelineStatusSuccess
 	case 2:
 		return pipelineStatusFailed
+	case 3:
+		return pipelineStatusBuilding
 	default:
 		return pipelineStatusUnknown
 	}
@@ -94,24 +96,28 @@ type genbuBuildLog struct {
 }
 
 type configSnapshot struct {
-	Service     string   `json:"service"`
-	Environment string   `json:"environment"`
-	Namespace   string   `json:"namespace"`
-	UpdateTime  string   `json:"update_time"`
-	Contents    []string `json:"contents"`
+	Service, Environment, Namespace, UpdateTime string
+	Files                                       []configBody
+}
+
+type configBody struct {
+	Name, Body string
 }
 
 type genbuPod struct {
-	GroupName    string `json:"group_name"`
-	Namespace    string `json:"namespace"`
-	Name         string `json:"pod_name"`
-	IP           string `json:"pod_ip"`
-	AppVersion   string `json:"app_version"`
-	RestartCount int    `json:"restart_count"`
-	Phase        string `json:"phase"`
-	Ready        bool   `json:"ready"`
-	Reason       string `json:"reason,omitempty"`
-	CreatedTime  string `json:"created_time"`
+	GroupName     string `json:"group_name"`
+	Namespace     string `json:"namespace"`
+	Name          string `json:"pod_name"`
+	IP            string `json:"pod_ip"`
+	AppVersion    string `json:"app_version"`
+	RestartCount  int    `json:"restart_count"`
+	Phase         string `json:"phase"`
+	Ready         bool   `json:"ready"`
+	Reason        string `json:"reason,omitempty"`
+	CreatedTime   string `json:"created_time"`
+	operationID   string
+	missingPodID  bool
+	scopeMismatch bool
 }
 
 type podSnapshot struct {

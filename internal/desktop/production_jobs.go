@@ -200,6 +200,17 @@ func (s *app) enterProductionPage() {
 			view.Steps = nil
 			view.PreparationInvalid = true
 			view.BuildChecked = false
+			if worker := view.request; worker != nil && s.productionGenbuProbeDisabled(view.Selection.ServiceID) {
+				worker.buildContinuation = false
+				if worker.cancelOnDisable {
+					worker.cancel()
+				}
+			}
+		}
+		for _, batch := range state.batches {
+			if s.productionGenbuProbeDisabled(batch.Target.ServiceID) {
+				state.stopProductionProbe(batch.ID)
+			}
 		}
 	}
 	state.configScope = productionConfigScope(s.settingsUnit.state.configJSON)
@@ -208,7 +219,7 @@ func (s *app) enterProductionPage() {
 	state.choices = nil
 	enabled := map[string]bool{}
 	for _, service := range c.ServiceCatalog() {
-		enabled[service.ID] = service.Enabled
+		enabled[service.ID] = service.Enabled && service.GenbuProbeEnabled
 	}
 	for _, service := range s.snapshot.Services {
 		selection := production.Selection{ServiceID: service.ID}
@@ -321,6 +332,9 @@ func (s *app) productionRequestView(v *productionView, action application.Action
 // but never replace the current operation's feedback or run a follow-up action.
 func (s *app) productionRequestViewFromHistory(v *productionView, action application.Action, follow string, history *productionHistoryDialog) {
 	if !s.productionAvailable() || v == nil || v.Busy || s.backend == nil {
+		return
+	}
+	if action.Kind != "production.list" && s.productionGenbuProbeDisabled(v.Selection.ServiceID) {
 		return
 	}
 	state := s.ensureProduction()
@@ -746,7 +760,7 @@ func (s *app) productionRequestFor(v *productionView, action application.Action,
 }
 
 func (s *app) scheduleProductionProbe(v *productionView, b production.Batch, window productionWindow) {
-	if !s.productionAvailable() || b.Ended || len(b.Tags) == 0 {
+	if !s.productionAvailable() || s.productionGenbuProbeDisabled(b.Target.ServiceID) || b.Ended || len(b.Tags) == 0 {
 		return
 	}
 	pending := make([]production.Tag, 0, len(b.Tags))

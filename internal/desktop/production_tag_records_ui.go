@@ -79,6 +79,7 @@ func (s *app) renderProductionBuildRefresh(c *ui.Context, p palette, v *producti
 
 func (s *app) renderProductionTagRecord(c *ui.Context, p palette, key string, b production.Batch, tag production.Tag, currentBatch func() *production.Batch) {
 	text := productionTagRecordText(b, tag)
+	showGenbu := !s.productionGenbuProbeDisabled(b.Target.ServiceID)
 	ui.Column(c.Key(key + "-tag-record-" + b.ID + "-" + tag.Name)).FillWidth().MinWidth(0).Gap(8).Children(func() {
 		ui.Row(c).FillWidth().MinWidth(0).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 			timestamp := "时间未知"
@@ -92,18 +93,20 @@ func (s *app) renderProductionTagRecord(c *ui.Context, p palette, key string, b 
 				label(c, text, 14, p.text).FontWeight(550).MinWidth(0).MinHeight(28).Padding(4, 0).Wrap().Selectable()
 			})
 			ui.Row(c).Shrink(0).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Row(c).Shrink(0).AlignItems(ui.Center).Label("Tag 构建状态 " + tag.Name).Children(func() {
-					compactState(c, productionTagBuildLabel(tag.Status.Build), p)
-				})
+				if showGenbu {
+					ui.Row(c).Shrink(0).AlignItems(ui.Center).Label("Tag 构建状态 " + tag.Name).Children(func() {
+						compactState(c, productionTagBuildLabel(tag.Status.Build), p)
+					})
+				}
 				if tagRecordAction(c, p, key+"-copy-tag-"+tag.Name, "copy", "复制", false).Label("复制 Tag 记录 "+tag.Name).Tooltip("复制 "+text).Clicked() && productionTagRecordCurrent(currentBatch(), b, tag) {
 					s.copyTextToClipboard(c.Services(), text, "Tag 记录已复制")
 				}
-				if tagRecordAction(c, p, key+"-build-log-"+tag.Name, "terminal", "构建日志", b.Target.GenbuService == "").Clicked() {
+				if showGenbu && tagRecordAction(c, p, key+"-build-log-"+tag.Name, "terminal", "构建日志", b.Target.GenbuService == "").Clicked() {
 					s.openProductionBuildLog(b, tag, currentBatch)
 				}
 			})
 		})
-		if tag.Status.FailureReason != nil {
+		if showGenbu && tag.Status.FailureReason != nil {
 			label(c, *tag.Status.FailureReason, 11, p.amber).Wrap()
 		}
 	})

@@ -62,7 +62,7 @@ func (s *app) catalogRuntimeTarget(serviceID string) (taskServiceRow, string, bo
 	}
 	return taskServiceRow{
 		serviceID: service.ID, name: firstNonEmpty(service.DisplayName, service.ID),
-		genbuName: service.GenbuServiceName, environment: s.catalogRuntimeEnvironment(),
+		genbuName: service.GenbuServiceName, environment: s.catalogRuntimeEnvironment(), enabled: service.Enabled,
 	}, application.TaskServiceQueryIdentity(cfg), true
 }
 
@@ -93,6 +93,9 @@ func (s *app) openCatalogRuntime(serviceID string) (*taskServicesView, *taskServ
 }
 
 func (s *app) openCatalogRuntimeDialog(serviceID string, kind taskServiceDetailKind) {
+	if kind == taskServiceConfigEditDetail && s.catalogRuntimeEnvironment() != "uat" {
+		return
+	}
 	v, row := s.openCatalogRuntime(serviceID)
 	if v != nil {
 		s.openTaskServiceDialog(v, row, kind)
@@ -100,6 +103,9 @@ func (s *app) openCatalogRuntimeDialog(serviceID string, kind taskServiceDetailK
 }
 
 func (s *app) openCatalogRuntimeApprovals(serviceID string) {
+	if s.catalogRuntimeEnvironment() != "uat" {
+		return
+	}
 	v, row := s.openCatalogRuntime(serviceID)
 	if v != nil {
 		s.openTaskServiceApprovals(v, row, 0)

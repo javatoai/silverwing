@@ -1,12 +1,29 @@
 package application
 
 import (
+	"context"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"strconv"
 	"testing"
 )
+
+func TestRemovedBranchNoticeActionsAreUnavailable(t *testing.T) {
+	app, err := newApp(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"task.branch-notice.prepare", "task.branch-notice.send"} {
+		if DescribeAction(kind).Known {
+			t.Fatalf("retired action is still registered: %s", kind)
+		}
+		_, err := app.Dispatch(context.Background(), Action{Kind: kind, Payload: map[string]any{"confirmed": true}})
+		if err == nil {
+			t.Fatalf("retired action %s was accepted", kind)
+		}
+	}
+}
 
 func TestActionPolicyCoversTypedAdapterOperations(t *testing.T) {
 	source, err := parser.ParseFile(token.NewFileSet(), "task_action_adapter.go", nil, 0)

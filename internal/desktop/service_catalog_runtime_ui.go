@@ -47,16 +47,26 @@ func (s *app) renderServiceCatalogActions(c *ui.Context, p palette, service appl
 	if runtimeVisible {
 		reason = catalogRuntimeDisabledReason(config)
 	}
-	target := service.Name + " " + strings.ToUpper(s.catalogRuntimeEnvironment())
-	actions := []struct {
+	environment := s.catalogRuntimeEnvironment()
+	uat := environment == "uat"
+	showUAT := runtimeVisible && reason == "" && uat
+	uatBusy := s.busy || s.taskServicesUnit.uatWriteRunning()
+	target := service.Name + " " + strings.ToUpper(environment)
+	type runtimeAction struct {
 		key, label string
 		kind       taskServiceDetailKind
-	}{
+	}
+	actions := []runtimeAction{
 		{"pods", "Pod 明细", taskServicePodsDetail},
 		{"config", "查看配置", taskServiceConfigDetail},
-		{"edit", "修改配置", taskServiceConfigEditDetail},
+	}
+	if uat {
+		actions = append(actions, runtimeAction{"edit", "修改配置", taskServiceConfigEditDetail})
 	}
 	ui.Row(c.Key("catalog-row-actions-" + service.ID)).Shrink(0).Gap(6).AlignItems(ui.Center).Children(func() {
+		if showUAT && uatReleaseButton(c, p, "catalog-uat-release-"+service.ID, service.Name, serviceCatalogActionHeight, uatBusy) {
+			s.openCatalogUATPodAction(service.ID, uatRelease)
+		}
 		if runtimeVisible && !compact {
 			for _, action := range actions {
 				if serviceCatalogTextAction(c, p, "catalog-runtime-"+action.key+"-"+service.ID, action.label,
@@ -72,7 +82,7 @@ func (s *app) renderServiceCatalogActions(c *ui.Context, p palette, service appl
 		trigger := serviceCatalogButton(c, p, key).Width(serviceCatalogActionHeight).Padding(0)
 		s.renderOverflowMenu(c, p, trigger, key, "查看更多 "+service.Name, s.busy,
 			ui.AnchorBottomRight, ui.AnchorTopRight, func(menu *overflowMenuBuilder) {
-				if runtimeVisible {
+				if runtimeVisible && (compact || uat) {
 					if compact {
 						for _, action := range actions {
 							if menu.Item(action.key, action.label).DisabledReason(reason).Chosen() {
@@ -80,8 +90,11 @@ func (s *app) renderServiceCatalogActions(c *ui.Context, p palette, service appl
 							}
 						}
 					}
-					if menu.Item("approvals", "查看配置审批").DisabledReason(reason).Chosen() {
+					if uat && menu.Item("approvals", "查看配置审批").DisabledReason(reason).Chosen() {
 						s.openCatalogRuntimeApprovals(service.ID)
+					}
+					if showUAT && menu.Item("uat-restart", uatRestartLabel).Icon("refresh").Disabled(uatBusy).Chosen() {
+						s.openCatalogUATPodAction(service.ID, uatRestart)
 					}
 					menu.Separator()
 				}

@@ -7,63 +7,6 @@ import (
 	"silverwing-go/internal/domain"
 )
 
-const tagReleaseNoticeCopiedPrefix = "已复制：\n\n"
-const tagReleaseNoticeRecipientSeparator = "\n\n请发送给："
-
-func isTagReleaseNoticeCopiedMessage(message string) bool {
-	if !strings.HasPrefix(message, tagReleaseNoticeCopiedPrefix) {
-		return false
-	}
-	separator := strings.LastIndex(message, tagReleaseNoticeRecipientSeparator)
-	if separator <= len(tagReleaseNoticeCopiedPrefix) {
-		return false
-	}
-	recipients := message[separator+len(tagReleaseNoticeRecipientSeparator):]
-	return strings.TrimSpace(recipients) != "" && strings.TrimSpace(recipients) == recipients
-}
-
-func (s *app) tagHistoryAnnouncementCopiedMessage(group tagHistoryGroup, text string) string {
-	names := []string{}
-	seen := map[string]bool{}
-	if len(group.Visible) > 0 {
-		for _, item := range s.taskUnit.state.tasks {
-			if item.id != group.Visible[0].TaskID {
-				continue
-			}
-			metadata := s.taskRequirementMetadataFor(item)
-			for _, person := range metadata.Metadata.Participants.QCOwners {
-				name := strings.TrimSpace(person.Name)
-				if name == "" && person.Email != nil {
-					name = strings.TrimSpace(*person.Email)
-				}
-				if name != "" && !seen[name] {
-					seen[name] = true
-					names = append(names, name)
-				}
-			}
-			break
-		}
-	}
-	recipients := "未设置测试负责人"
-	if len(names) > 0 {
-		recipients = strings.Join(names, "、")
-	}
-	return tagReleaseNoticeCopiedPrefix + text + tagReleaseNoticeRecipientSeparator + recipients
-}
-
-func (s *app) tagHistoryAnnouncementForCopy(group tagHistoryGroup) string {
-	text := s.tagHistoryAnnouncement(group)
-	if s.integrationReady("genbu") || len(group.Item.Operations) == 0 {
-		return text
-	}
-	for _, operation := range group.Item.Operations {
-		if operation.State != domain.TagOperationSuccess || operation.Tag == nil || strings.TrimSpace(*operation.Tag) == "" {
-			return text
-		}
-	}
-	return strings.Replace(text, "测试Tag已构建完毕，辛苦发版：", "测试Tag已推送，辛苦发版：", 1)
-}
-
 func tagHistoryRetryPresentation(record application.TagRecord) (string, string) {
 	switch record.RetryKind {
 	case "RETAG":

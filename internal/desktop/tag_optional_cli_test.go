@@ -2,8 +2,6 @@ package desktop
 
 import (
 	"context"
-	"encoding/json"
-	"strings"
 	"testing"
 	"time"
 
@@ -11,30 +9,9 @@ import (
 	"silverwing-go/internal/domain"
 )
 
-func setTagTestOptionalCLI(t *testing.T, s *app, tool string, enabled bool) {
-	t.Helper()
-	var config map[string]any
-	if err := json.Unmarshal([]byte(s.settingsUnit.state.configJSON), &config); err != nil {
-		t.Fatal(err)
-	}
-	optional, _ := config["optionalCLIs"].(map[string]any)
-	if optional == nil {
-		optional = map[string]any{}
-		config["optionalCLIs"] = optional
-	}
-	optional[tool] = enabled
-	encoded, err := json.Marshal(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.settingsUnit.state.configJSON = string(encoded)
-	s.snapshot.ConfigJSON = string(encoded)
-}
-
-func TestTagHistoryHidesGenbuControlsButKeepsGitHistoryAndCopy(t *testing.T) {
+func TestTagHistoryHidesGenbuControlsButKeepsGitHistory(t *testing.T) {
 	s := tagLayoutFixture(t)
 	setTestPlatformSwitch(s, "genbu", false)
-	setTagTestOptionalCLI(t, s, "lark", false)
 	s.snapshot.TagHistory[0].RetryKind = "RETRY_BUILD"
 	s.snapshot.TagHistory[2].RetryKind = "RETAG"
 	*s.input(tagGenbuTaskErrorKey("task-a"), "") = "fixture Genbu failure"
@@ -44,17 +21,8 @@ func TestTagHistoryHidesGenbuControlsButKeepsGitHistoryAndCopy(t *testing.T) {
 			t.Fatalf("Genbu-only control or state remains visible while disabled: %s", hidden)
 		}
 	}
-	if !tester.HasText("重试构建Tag") || s.tagNoticeAvailable() {
-		t.Fatal("ordinary Git retry or optional notice gate changed")
-	}
-	if tester.HasText("发送发版通知 · running") {
-		t.Fatal("Tag notice entry remained visible without Lark and Genbu")
-	}
-	if err := tester.Click("复制发版通知 · running"); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(tester.Clipboard(), "测试Tag已推送，辛苦发版：") || strings.Contains(tester.Clipboard(), "测试Tag已构建完毕") {
-		t.Fatalf("copy announced a Genbu build without status evidence: %q", tester.Clipboard())
+	if !tester.HasText("重试构建Tag") || !tester.HasText("3.11.82.beta-1") {
+		t.Fatal("ordinary Git retry or Tag history changed")
 	}
 }
 

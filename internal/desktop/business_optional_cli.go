@@ -1,7 +1,5 @@
 package desktop
 
-import "silverwing-go/internal/releasenotice"
-
 func (s *app) initialGenbuRouteWaiting() bool {
 	state := s.settingsUnit.state.platformConnections
 	return s.initialGenbuRoute && (s.loading || state != nil && state.read != nil && !state.loaded)
@@ -19,15 +17,13 @@ func (s *app) resolveInitialGenbuRoute() {
 
 func (s *app) retireIntegrationViews(tool string) {
 	switch tool {
-	case "lark":
-		s.dismissReleaseNotice()
 	case "genbu":
-		if d := s.releaseNotices.pending; d != nil && d.kind != releasenotice.Branches {
-			s.dismissReleaseNotice()
-		}
 		s.disableTagGenbuOptionalState()
 		s.leaveTaskServices()
 		s.leaveCatalogRuntime()
+		s.leaveLinkedTaskServices()
+		s.closeUATPodAction(s.taskServicesUnit.uatDialog)
+		s.closeUATBatchDialog(s.taskServicesUnit.uatBatchDialog)
 		s.closeGenbuReadDialogs()
 		s.suspendProductionUI()
 		s.reconcileTaskContentTabs()

@@ -151,11 +151,10 @@ func renderTagGenbuStages(c *ui.Context, p palette, dark bool, record applicatio
 	if status.NotFound {
 		build, uat = domain.GenbuUnknown, domain.GenbuUnknown
 	}
-	// This row stays intact when the owning record wraps. Genbu currently has
-	// no log/detail action in the desktop contract, so these are status controls.
-	ui.Row(c).Shrink(0).Gap(6).AlignItems(ui.Center).Children(func() {
-		renderGenbuStage(c, p, dark, "构建", build)
-		renderGenbuStage(c, p, dark, "UAT", uat)
+	ui.Row(c).Height(tagHistoryActionHeight).Shrink(0).Padding(2).Gap(2).AlignItems(ui.Center).
+		Radius(8).Background(p.surface).Border(1, p.line).Label("构建与 UAT 状态").Children(func() {
+		renderGenbuStage(c.Key("build"), p, dark, "构建", build)
+		renderGenbuStage(c.Key("uat"), p, dark, "UAT", uat)
 	})
 }
 
@@ -169,15 +168,15 @@ func renderTagGenbuNotes(c *ui.Context, p palette, dark bool, record application
 	} else if status.FailureReason != nil && strings.TrimSpace(*status.FailureReason) != "" {
 		label(c, "Genbu 查询失败："+strings.TrimSpace(*status.FailureReason), 11, tagStatusErrorColor(dark)).LineHeight(1.4)
 	}
-	if status.StoppedByNewerRelease {
-		label(c, "后续 Tag 已发布，停止自动探测", 10, p.muted)
-	}
 }
 
 func renderGenbuStage(c *ui.Context, p palette, dark bool, stage string, status domain.GenbuStageStatus) {
 	name, tint := genbuStageLabel(status)
+	if stage == "UAT" && status == domain.GenbuBuilding {
+		name = "发布中"
+	}
 	text := stage + " " + name
-	ui.Box(c).Shrink(0).Height(28).Padding(0, 9).Center().Radius(8).Border(1, p.line).
+	ui.Box(c).Width(82).Shrink(0).Height(tagHistoryActionHeight - 4).Center().Radius(5).
 		Background(tint.background(p, dark)).Label(text).Tooltip(text).Children(func() {
 		label(c, text, 11, tint.foreground(p, dark)).NoWrap()
 	})

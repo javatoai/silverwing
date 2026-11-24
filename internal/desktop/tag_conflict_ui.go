@@ -184,16 +184,32 @@ func (s *app) renderTagFailureDetails(c *ui.Context, p palette, record applicati
 }
 
 func tagRecordAction(c *ui.Context, p palette, key, image, text string, disabled bool) ui.Element {
+	return tagActionButton(c, p, key, image, text, false, disabled)
+}
+
+func tagPublishAction(c *ui.Context, p palette, key, text string, disabled bool) ui.Element {
+	return tagActionButton(c, p, key, "", text, true, disabled).FocusRing(true)
+}
+
+func tagActionButton(c *ui.Context, p palette, key, image, text string, accent, disabled bool) ui.Element {
 	b := ui.ButtonBase(c.Key(key)).Row().Shrink(0).Height(28).Padding(0, 8).Gap(5).AlignItems(ui.Center).
 		Radius(8).Border(1, p.line).Label(text).Tooltip(text).Disabled(disabled)
 	color := p.text
 	if disabled {
 		color = p.muted
+	} else if accent {
+		color = p.blue
+		b.Background(p.selected)
+		if b.Hovered() {
+			b.Border(1, p.blue)
+		}
 	} else if b.Hovered() {
 		b.Background(p.soft)
 	}
 	b.Children(func() {
-		icon(c, image, 13, color)
+		if image != "" {
+			icon(c, image, 13, color)
+		}
 		label(c, text, 11, color).NoWrap()
 	})
 	return b

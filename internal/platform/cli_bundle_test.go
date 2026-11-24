@@ -2,13 +2,66 @@ package platform
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"silverwing-go/internal/storage"
 )
+
+func TestCLIBundleCLIRegistersDirectoryAfterSuccessfulInstallation(t *testing.T) {
+	s := NewService(storage.NewPaths(t.TempDir()), nil, nil)
+	ctx := context.Background()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sw.exe")
+	calls := 0
+	content := "first build"
+	register := func(_ context.Context, installedDir string) (string, error) {
+		calls++
+		data, err := os.ReadFile(path)
+		if installedDir != dir || err != nil || string(data) != content {
+			t.Fatalf("PATH registration preceded a successful install: %q %q %v", installedDir, data, err)
+		}
+		return "用户 PATH 已就绪", nil
+	}
+	install := func(expected string) (CLIBundleInstallResult, error) {
+		return s.installCLIBundleCLI(ctx, path, []byte(content), 0o755, expected, register)
+	}
+	first, err := install("")
+	if err != nil || first.PATHMessage != "用户 PATH 已就绪" || calls != 1 {
+		t.Fatalf("first install: %+v calls=%d err=%v", first, calls, err)
+	}
+	same, err := install("")
+	if err != nil || same.PATHMessage == "" || calls != 2 {
+		t.Fatalf("reinstall did not repair the PATH entry: %+v calls=%d err=%v", same, calls, err)
+	}
+	content = "second build"
+	pending, err := install("")
+	if err != nil || pending.Replacement == "" || pending.PATHMessage != "" || calls != 2 {
+		t.Fatalf("unconfirmed overwrite registered PATH: %+v calls=%d err=%v", pending, calls, err)
+	}
+	replaced, err := install(pending.Replacement)
+	if err != nil || replaced.Replacement != "" || replaced.PATHMessage == "" || calls != 3 {
+		t.Fatalf("confirmed overwrite did not register PATH: %+v calls=%d err=%v", replaced, calls, err)
+	}
+}
+
+func TestCLIBundleCLIKeepsInstalledFileAndReportsPathFailure(t *testing.T) {
+	s := NewService(storage.NewPaths(t.TempDir()), nil, nil)
+	path := filepath.Join(t.TempDir(), "sw.exe")
+	result, err := s.installCLIBundleCLI(context.Background(), path, []byte("payload"), 0o755, "",
+		func(context.Context, string) (string, error) { return "", errors.New("注册表访问被拒绝") })
+	if err != nil || result.Path != path || !strings.Contains(result.PATHMessage, "用户 PATH 未更新") {
+		t.Fatalf("partial installation result: %+v err=%v", result, err)
+	}
+	record, err := os.ReadFile(s.cliBundlePathRecord())
+	if err != nil || string(record) != path {
+		t.Fatalf("installation path was not recorded: %q %v", record, err)
+	}
+}
 
 func TestCLIBundleInstallRequiresCurrentOverwriteConfirmation(t *testing.T) {
 	s := NewService(storage.NewPaths(t.TempDir()), nil, nil)

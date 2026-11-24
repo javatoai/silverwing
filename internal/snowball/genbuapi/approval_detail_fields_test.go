@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestApprovalDetailFieldsPreservesConfigFileBodies(t *testing.T) {
+func TestApprovalDetailFieldsRedactsConfigFileBodies(t *testing.T) {
 	const yaml = "feature: enabled\r\ncredentials:\r\n  password: sample-password\r\n"
 	const configJSON = `{"port":8080,"token":"sample-token"}`
 	const properties = "webhook.url=https://example.test/send?access_token=sample-webhook-token\n"
@@ -37,10 +37,10 @@ func TestApprovalDetailFieldsPreservesConfigFileBodies(t *testing.T) {
 		"执行消息":                    "saved using <redacted>",
 		"工单号":                     "1234",
 		"钉钉审批号":                   "DING-2345",
-		"配置文件 1 (app.yaml)":       yaml,
-		"配置文件 2 (app.json)":       configJSON,
-		"配置文件 3 (app.properties)": properties,
-		"配置文件 4 (api-key)":        "sample-key",
+		"配置文件 1 (app.yaml)":       "feature: enabled\ncredentials:<redacted>",
+		"配置文件 2 (app.json)":       "{\n  \"port\": 8080,\n  \"token\": \"<redacted>\"\n}",
+		"配置文件 3 (app.properties)": "webhook.url=https://example.test/send?access_token=<redacted>\n",
+		"配置文件 4 (api-key)":        "<redacted>",
 	}
 	if !reflect.DeepEqual(fields, want) {
 		t.Errorf("detail fields = %v, want %v", fields, want)

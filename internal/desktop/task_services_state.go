@@ -16,6 +16,7 @@ import (
 
 type taskServiceRow struct {
 	serviceID, name, genbuName, environment string
+	enabled                                 bool
 	pods                                    []production.RuntimePod
 	loaded, loading                         bool
 	error, fetchedAt                        string
@@ -50,6 +51,7 @@ type taskServiceConfigView struct {
 type taskServicesView struct {
 	identity                  taskFilesIdentity
 	catalog                   *catalogRuntimeScope
+	linkedScope               func() bool
 	queryIdentity, membership string
 	active                    bool
 	epoch                     uint64
@@ -57,7 +59,7 @@ type taskServicesView struct {
 	hasServices               bool
 	environment               string
 	dialog                    *taskServiceDialog
-	vertical                  ui.ScrollState
+	scroll                    ui.ScrollState
 	canvas                    ui.Handle
 	layout                    taskServicesLayout
 }
@@ -93,13 +95,20 @@ type taskServicesRequest struct {
 }
 
 type taskServicesController struct {
-	configSubmissions  map[string]bool
-	views              map[string]*taskServicesView
-	current, catalog   *taskServicesView
-	catalogEnvironment string
-	jobs               map[string]*taskServicesRequest
-	wg                 sync.WaitGroup
-	stopped            bool
+	configSubmissions                  map[string]bool
+	approvalWrites                     map[int64]genbuApprovalWriteState
+	views                              map[string]*taskServicesView
+	current, catalog, linked           *taskServicesView
+	uatDialog, uatSubmission           *uatPodActionDialog
+	uatBatchDialog, uatBatchSubmission *uatBatchReleaseDialog
+	catalogEnvironment                 string
+	jobs                               map[string]*taskServicesRequest
+	wg                                 sync.WaitGroup
+	stopped                            bool
+}
+
+func (u *taskServicesController) uatWriteRunning() bool {
+	return u.uatSubmission != nil || u.uatBatchSubmission != nil
 }
 
 func (s *app) taskServicesPageActive() bool {
@@ -146,7 +155,7 @@ func (s *app) taskServicesProjection() (*taskServicesView, string) {
 			name = serviceID
 		}
 		for _, env := range []string{"uat", "prod"} {
-			v.rows = append(v.rows, &taskServiceRow{serviceID: serviceID, name: name, genbuName: genbu, environment: env})
+			v.rows = append(v.rows, &taskServiceRow{serviceID: serviceID, name: name, genbuName: genbu, environment: env, enabled: service.Enabled})
 		}
 	}
 	// Snapshot.Services contains display names. Workspace.ServiceID is the
@@ -162,7 +171,7 @@ func (s *app) taskServicesProjection() (*taskServicesView, string) {
 	}
 	parts := []string{id.documentID("services"), v.queryIdentity, fmt.Sprint(v.hasServices)}
 	for _, row := range v.rows {
-		parts = append(parts, row.key(), row.name, row.genbuName)
+		parts = append(parts, row.key(), row.name, row.genbuName, fmt.Sprint(row.enabled))
 	}
 	v.membership = strings.Join(parts, "\x00")
 	return v, v.membership
@@ -174,6 +183,9 @@ func (s *app) taskServicesCurrent(v *taskServicesView) bool {
 	}
 	if v.catalog != nil {
 		return s.catalogRuntimeCurrent(v)
+	}
+	if v.linkedScope != nil {
+		return s.taskServicesUnit.linked == v && v.linkedScope()
 	}
 	if s.taskServicesUnit.current != v || !s.taskServicesPageActive() {
 		return false
@@ -208,7 +220,7 @@ func (s *app) ensureTaskServicesCurrent() *taskServicesView {
 		v.active = true
 		v.epoch++
 		v.environment = "uat"
-		v.vertical = ui.ScrollState{}
+		v.scroll = ui.ScrollState{}
 		s.refreshTaskServicesEnvironment(v)
 	}
 	return v
@@ -225,6 +237,9 @@ func (v *taskServicesView) visibleRows() []*taskServiceRow {
 }
 
 func (s *app) cancelTaskServicesRequests(v *taskServicesView) {
+	if d := s.taskServicesUnit.uatDialog; d != nil && d.serviceView == v {
+		s.closeUATPodAction(d)
+	}
 	s.closeTaskServiceDialog(v, v.dialog)
 	if v.catalog == nil || (s.genbuApprovals != nil && s.genbuApprovals.source.view == v) {
 		s.closeGenbuReadDialogs()
@@ -247,7 +262,7 @@ func (s *app) selectTaskServicesEnvironment(v *taskServicesView, environment str
 	}
 	s.cancelTaskServicesRequests(v)
 	v.environment = environment
-	v.vertical = ui.ScrollState{}
+	v.scroll.Y = 0
 	s.refreshTaskServicesEnvironment(v)
 	return true
 }
@@ -271,16 +286,30 @@ func (s *app) leaveTaskServices() {
 	s.cancelTaskServicesRequests(v)
 }
 
+func (s *app) leaveLinkedTaskServices() {
+	v := s.taskServicesUnit.linked
+	if v != nil {
+		s.taskServicesUnit.linked = nil
+		v.active = false
+		s.cancelTaskServicesRequests(v)
+	}
+}
+
 func (s *app) taskServiceDialogCurrent(v *taskServicesView, dialog *taskServiceDialog) bool {
 	return dialog != nil && dialog.open && v != nil && v.dialog == dialog &&
-		dialog.row.environment == v.environment && s.taskServicesCurrent(v)
+		dialog.row.environment == v.environment && s.taskServicesCurrent(v) &&
+		(dialog.kind != taskServiceConfigEditDetail || canEditTaskServiceConfig(v, dialog.row))
+}
+
+func canEditTaskServiceConfig(v *taskServicesView, row *taskServiceRow) bool {
+	return row.environment == "uat" && !v.identity.archived && row.genbuName != ""
 }
 
 func (s *app) openTaskServiceDialog(v *taskServicesView, row *taskServiceRow, kind taskServiceDetailKind) {
 	if !s.taskServicesCurrent(v) || row == nil || row.environment != v.environment || !slices.Contains(v.rows, row) {
 		return
 	}
-	if kind == taskServiceConfigEditDetail && (v.identity.archived || row.genbuName == "") {
+	if kind == taskServiceConfigEditDetail && !canEditTaskServiceConfig(v, row) {
 		return
 	}
 	if v.dialog != nil && v.dialog.open && v.dialog.row == row && v.dialog.kind == kind {
@@ -292,7 +321,7 @@ func (s *app) openTaskServiceDialog(v *taskServicesView, row *taskServiceRow, ki
 	v.dialog = dialog
 	switch kind {
 	case taskServicePodsDetail:
-		if v.catalog != nil {
+		if v.catalog != nil || v.linkedScope != nil {
 			s.requestTaskServicePods(v, row)
 		}
 	case taskServiceConfigDetail:
@@ -310,7 +339,7 @@ func (s *app) closeTaskServiceDialog(v *taskServicesView, dialog *taskServiceDia
 	dialog.open = false
 	switch dialog.kind {
 	case taskServicePodsDetail:
-		if v.catalog != nil {
+		if v.catalog != nil || v.linkedScope != nil {
 			s.cancelTaskServiceJob(v, "pods:"+dialog.row.key())
 			dialog.row.loading = false
 		}
@@ -326,6 +355,9 @@ func (s *app) stopTaskServices() {
 	u := &s.taskServicesUnit
 	s.leaveTaskServices()
 	s.leaveCatalogRuntime()
+	s.leaveLinkedTaskServices()
+	s.closeUATPodAction(s.taskServicesUnit.uatDialog)
+	s.closeUATBatchDialog(s.taskServicesUnit.uatBatchDialog)
 	s.closeGenbuReadDialogs()
 	u.stopped = true
 	for key, request := range u.jobs {

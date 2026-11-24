@@ -155,9 +155,10 @@ func (s *app) renderProductionDetail(c *ui.Context, p palette) {
 	state := s.ensureProduction()
 	v := s.productionView()
 	if v == nil || v.Selection.ServiceID == "" {
-		label(c, "先在服务页添加并启用一个仓库服务。", 14, p.muted).Wrap()
+		label(c, "请在服务页添加仓库服务并开启 Genbu 探测。", 14, p.muted).Wrap()
 		return
 	}
+	probeDisabled := s.productionGenbuProbeDisabled(v.Selection.ServiceID)
 	b := s.productionBatch(v)
 	s.productionDisclosures(v, b)
 	waiting := s.productionWaitingToStart(v, b)
@@ -165,7 +166,9 @@ func (s *app) renderProductionDetail(c *ui.Context, p palette) {
 	for _, choice := range s.releaseUnit.state.production.choices {
 		if choice.ID == v.Selection.ServiceID && choice.Historical {
 			historical = true
-			label(c, "原服务已停用或移除。可查看历史、保留工作区或结束批次；继续发布前请恢复并核对服务配置。", 12, p.amber).Wrap()
+			if !probeDisabled {
+				label(c, "原服务已停用或移除。可查看历史、保留工作区或结束批次；继续发布前请恢复并核对服务配置。", 12, p.amber).Wrap()
+			}
 			break
 		}
 	}
@@ -185,14 +188,14 @@ func (s *app) renderProductionDetail(c *ui.Context, p palette) {
 				phase = "准备中"
 			}
 			compactState(c, phase, p)
-		} else if v.ReleaseStarted && b == nil {
+		} else if !probeDisabled && v.ReleaseStarted && b == nil {
 			compactState(c, "准备中", p)
 		}
 		ui.Box(c).Grow(1)
 		if productionButton(c, "production-history-open", "历史批次", p, false, v.Busy) {
 			s.openProductionHistory(v)
 		}
-		if !waiting && b != nil {
+		if !probeDisabled && !waiting && b != nil {
 			miniButton(c, p, "production-more", "more", "更多生产发布操作", false).Disabled(v.Busy).Menu(func(menu *ui.Menu) {
 				if len(b.RetainedWorktrees) > 0 {
 					if menu.Item(fmt.Sprintf("保留的工作区 · %d 个", len(b.RetainedWorktrees))).Chosen() {
@@ -206,6 +209,9 @@ func (s *app) renderProductionDetail(c *ui.Context, p palette) {
 			})
 		}
 	})
+	if probeDisabled {
+		return
+	}
 	if state.entryError != "" {
 		productionCard(c, p, "production-entry-read-error", "读取发布批次失败", productionCardStatus{}, func() {
 			label(c, state.entryError, 12, p.danger).Wrap().Selectable()
@@ -487,13 +493,13 @@ func (s *app) renderProductionPendingHistory(c *ui.Context, p palette, d *produc
 		if len(m.Conflicts) > 0 {
 			label(c, strings.Join(m.Conflicts, "\n"), 11, p.amber).Wrap()
 		}
-		if productionButton(c, "production-ended-open-ide", "打开保留工作区", p, false, blocked) {
+		if !d.readOnly && productionButton(c, "production-ended-open-ide", "打开保留工作区", p, false, blocked) {
 			s.requestProductionHistoryDetail(d, b, "production.open-ide")
 		}
 	}
 	if i.ResultConfirmed {
 		label(c, "原步骤已确认；后续阶段未继续。", 12, p.muted).Wrap()
-	} else if productionButton(c, "production-ended-reconcile", "核对远端结果", p, false, blocked) {
+	} else if !d.readOnly && productionButton(c, "production-ended-reconcile", "核对远端结果", p, false, blocked) {
 		s.requestProductionHistoryDetail(d, b, "production.reconcile-ended")
 	}
 }

@@ -16,6 +16,8 @@ import (
 
 const genbuOutputLimit = 4 << 20
 
+var ErrGenbuApprovalUnknown = errors.New("Genbu 审批结果待核实，请刷新详情或到 Genbu 核对")
+
 type GenbuTagItem struct {
 	Tag       string `json:"tag"`
 	CreatedAt string `json:"created_at"`
@@ -39,6 +41,7 @@ type GenbuApprovalListRequest struct {
 	Scope       string
 	DateKind    string
 	Page        int
+	PageSize    int
 }
 
 type GenbuApprovalItem struct {
@@ -62,8 +65,18 @@ type GenbuApprovalPage struct {
 
 type GenbuApprovalDetail struct {
 	GenbuApprovalItem
-	Details   map[string]string `json:"details"`
-	FileNames []string          `json:"file_names"`
+	Details        map[string]string           `json:"details"`
+	FileNames      []string                    `json:"file_names"`
+	Changes        []GenbuApprovalConfigChange `json:"-"`
+	ComparisonNote string                      `json:"comparison_note,omitempty"`
+	HasComparison  bool                        `json:"-"`
+	CanApprove     bool                        `json:"can_approve"`
+	Revision       string                      `json:"-"`
+}
+
+type GenbuApprovalConfigChange struct {
+	File, Before, After       string
+	BeforeExists, AfterExists bool
 }
 
 func (g NativeGenbu) BuildLog(ctx context.Context, cfg domain.AppConfig, service, tag string, tail int) (string, error) {
@@ -136,7 +149,7 @@ func (g NativeGenbu) ApprovalList(ctx context.Context, cfg domain.AppConfig, req
 	wire, err := client.ListApprovals(ctx, genbuapi.ApprovalListRequest{
 		Environment: env, Service: service, Status: request.Status, Type: request.Type,
 		StartDate: request.StartDate, EndDate: request.EndDate, Scope: request.Scope,
-		DateKind: request.DateKind, Page: max(request.Page, 1),
+		DateKind: request.DateKind, Page: max(request.Page, 1), PageSize: request.PageSize,
 	})
 	if scopeErr := checkGenbuReadScope(ctx); scopeErr != nil {
 		return GenbuApprovalPage{}, scopeErr
@@ -175,13 +188,61 @@ func (g NativeGenbu) ApprovalDetail(ctx context.Context, cfg domain.AppConfig, e
 	if err != nil {
 		return GenbuApprovalDetail{}, err
 	}
-	wire, err := client.ApprovalDetail(ctx, genbuapi.ApprovalDetailRequest{ID: id})
+	wire, err := client.ApprovalDetail(ctx, genbuapi.ApprovalDetailRequest{ID: id, Service: service, IncludeConfigReview: env == "uat"})
 	if scopeErr := checkGenbuReadScope(ctx); scopeErr != nil {
 		return GenbuApprovalDetail{}, scopeErr
 	}
 	if err != nil {
 		return GenbuApprovalDetail{}, genbuReadError(ctx, cfg, client, err)
 	}
+	return genbuApprovalDetail(cfg, wire, env, service, id)
+}
+
+func (g NativeGenbu) ReadConfigApproval(ctx context.Context, cfg domain.AppConfig, env, service string, id int64, includeDiff bool) (GenbuApprovalDetail, error) {
+	env, err := serviceEnvironment(env)
+	if err != nil {
+		return GenbuApprovalDetail{}, err
+	}
+	service = strings.TrimSpace(service)
+	if !genbuName(service) || id < 1 {
+		return GenbuApprovalDetail{}, errors.New("请选择有效的 Genbu 服务和审批编号")
+	}
+	ctx, client, err := g.client(ctx, cfg)
+	if err != nil {
+		return GenbuApprovalDetail{}, err
+	}
+	wire, err := client.ReadConfigApproval(ctx, genbuapi.ConfigApprovalReadRequest{
+		ID: id, Service: service, Environment: env, IncludeDiff: includeDiff,
+	})
+	if scopeErr := checkGenbuReadScope(ctx); scopeErr != nil {
+		return GenbuApprovalDetail{}, scopeErr
+	}
+	if err != nil {
+		return GenbuApprovalDetail{}, genbuReadError(ctx, cfg, client, err)
+	}
+	return genbuApprovalDetail(cfg, wire, env, service, id)
+}
+
+func (g NativeGenbu) ApproveUATConfigChange(ctx context.Context, cfg domain.AppConfig, env, service string, id int64, revision string) (GenbuApprovalDetail, error) {
+	if env != "uat" || !genbuName(service) || id < 1 {
+		return GenbuApprovalDetail{}, errors.New("请选择有效的 UAT 配置审批")
+	}
+	ctx, client, err := g.client(ctx, cfg)
+	if err != nil {
+		return GenbuApprovalDetail{}, err
+	}
+	wire, err := client.ApproveUATConfigChange(ctx, genbuapi.ApprovalConfigApproveRequest{ID: id, Service: service, Revision: revision})
+	if err != nil && !errors.Is(err, genbuapi.ErrApprovalOutcomeUnknown) {
+		return GenbuApprovalDetail{}, genbuReadError(ctx, cfg, client, err)
+	}
+	detail, detailErr := genbuApprovalDetail(cfg, wire, env, service, id)
+	if err != nil || detailErr != nil {
+		return detail, ErrGenbuApprovalUnknown
+	}
+	return detail, nil
+}
+
+func genbuApprovalDetail(cfg domain.AppConfig, wire genbuapi.ApprovalDetailResult, env, service string, id int64) (GenbuApprovalDetail, error) {
 	approval := GenbuApprovalItem(wire.ApprovalItem)
 	if approval.ID != id || !normalizeGenbuApproval(&approval, env) {
 		return GenbuApprovalDetail{}, errors.New("Genbu 返回的审批编号或环境与查询不匹配")
@@ -190,9 +251,38 @@ func (g NativeGenbu) ApprovalDetail(ctx context.Context, cfg domain.AppConfig, e
 		return GenbuApprovalDetail{}, errors.New("Genbu 返回的审批服务与查询不匹配")
 	}
 	result := GenbuApprovalDetail{GenbuApprovalItem: approval, Details: map[string]string{}, FileNames: []string{}}
+	if genbuApprovalText(wire.ReviewError) {
+		result.ComparisonNote = networkproxy.Redact(cfg, wire.ReviewError)
+	}
+	if review := wire.Review; review != nil {
+		result.HasComparison = true
+		if env == "uat" {
+			result.CanApprove, result.Revision = review.CanApprove, review.Revision
+		}
+		result.Details["命名空间"], result.Details["ConfigMap"] = review.Namespace, review.ConfigMap
+		for _, file := range review.Files {
+			result.FileNames = append(result.FileNames, file.Name)
+			result.Changes = append(result.Changes, GenbuApprovalConfigChange{
+				File: file.Name, Before: networkproxy.Redact(cfg, file.Before), After: networkproxy.Redact(cfg, file.After),
+				BeforeExists: file.BeforeExists, AfterExists: file.AfterExists,
+			})
+		}
+	}
 	for label := range wire.Details {
 		if match := genbuApprovalFileLabel.FindStringSubmatch(label); match != nil && genbuIdentifier(match[1]) {
 			result.FileNames = append(result.FileNames, match[1])
+		}
+	}
+	if !result.HasComparison {
+		for _, name := range wire.FileNames {
+			if genbuIdentifier(name) {
+				result.FileNames = append(result.FileNames, networkproxy.Redact(cfg, name))
+			}
+		}
+		for _, label := range []string{"命名空间", "ConfigMap"} {
+			if value := wire.Details[label]; genbuIdentifier(value) {
+				result.Details[label] = networkproxy.Redact(cfg, value)
+			}
 		}
 	}
 	sort.Strings(result.FileNames)

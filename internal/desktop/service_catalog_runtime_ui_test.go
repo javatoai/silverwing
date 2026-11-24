@@ -61,14 +61,27 @@ func TestServiceCatalogRuntimeActionsAdaptToWindow(t *testing.T) {
 		}
 		previous = bounds
 	}
-	if err := tester.Click("PROD 环境"); err != nil {
-		t.Fatal(err)
-	}
 	if err := tester.Click(menuName); err != nil {
 		t.Fatal(err)
 	}
 	if !tester.HasText("查看配置审批") || !tester.HasText("移除") {
 		t.Fatal("wide menu did not expose the approval list and remove action")
+	}
+	tester.Key(0, ui.KeyEscape)
+	if err := tester.Click("PROD 环境"); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"Pod 明细", "查看配置"} {
+		taskServicesBoundsWithin(t, tester, root, name+" PROD "+action)
+	}
+	if tester.HasText("修改配置") {
+		t.Fatal("wide PROD catalog exposed config editing")
+	}
+	if err := tester.Click(menuName); err != nil {
+		t.Fatal(err)
+	}
+	if tester.HasText("查看配置审批") || !tester.HasText("移除") {
+		t.Fatal("wide PROD catalog exposed approvals or lost repository removal")
 	}
 	tester.Key(0, ui.KeyEscape)
 	tester.SetSize(narrow, 650)
@@ -85,10 +98,23 @@ func TestServiceCatalogRuntimeActionsAdaptToWindow(t *testing.T) {
 	if err := tester.Click(menuName); err != nil {
 		t.Fatal(err)
 	}
-	for _, action := range []string{"Pod 明细", "查看配置", "修改配置", "查看配置审批", "移除"} {
+	for _, action := range []string{"Pod 明细", "查看配置", "移除"} {
 		if !tester.HasText(action) {
-			t.Errorf("narrow runtime menu omitted %q", action)
+			t.Errorf("narrow PROD runtime menu omitted %q", action)
 		}
+	}
+	if tester.HasText("修改配置") || tester.HasText("查看配置审批") {
+		t.Fatal("narrow PROD catalog exposed config editing or approvals")
+	}
+	tester.Key(0, ui.KeyEscape)
+	if err := tester.Click("UAT 环境"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tester.Click(menuName); err != nil {
+		t.Fatal(err)
+	}
+	if !tester.HasText("修改配置") || !tester.HasText("查看配置审批") {
+		t.Fatal("narrow UAT catalog lost config editing or approvals")
 	}
 }
 

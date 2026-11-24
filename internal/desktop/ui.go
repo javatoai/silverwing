@@ -42,7 +42,6 @@ func (s *app) view(c *ui.Context) {
 	s.observeRequirementIdentityJobs()
 	s.observeRequirementNamingPreparation()
 	s.observeTagJobs()
-	s.observeReleaseNotice()
 	if !s.localSkillsViewActive() || s.pageLocalReadReady() {
 		s.observeSkillsBrowserNavigation()
 	}
@@ -101,6 +100,8 @@ func (s *app) view(c *ui.Context) {
 	s.renderTaskBranchInfoDialog(c, p)
 	s.renderTaskServiceDialog(c, p)
 	s.renderGenbuReadDialogs(c, p)
+	s.renderUATPodActionDialog(c, p)
+	s.renderUATBatchDialog(c, p)
 	if workspaceCommandDialogVisible(s.page, s.tab) {
 		s.renderWorkspaceCommandDialog(c, p)
 	}

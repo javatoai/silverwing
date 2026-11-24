@@ -2,7 +2,6 @@ package releasenotice
 
 import (
 	"encoding/json"
-	"silverwing-go/internal/domain"
 	"strings"
 	"testing"
 )
@@ -45,16 +44,5 @@ func TestBranchCardDynamicLinkedHeadlineAndServiceTable(t *testing.T) {
 	}
 	if table["rows"].([]any)[1].(map[string]any)["branch"] != "release/b" || strings.Contains(raw, "UAT") || strings.Contains(raw, "genbu") {
 		t.Fatal(raw)
-	}
-}
-func TestBranchRowsPreserveTaskOrderAndDistinctBranches(t *testing.T) {
-	rows, e := BranchRows([]domain.ServiceWorkspace{{ServiceName: "B", Branch: "feature/b"}, {ServiceName: "A", Branch: "feature/a"}, {ServiceName: "B", Branch: "feature/b"}, {ServiceName: "B", Branch: "release/b"}})
-	if e != nil || len(rows) != 3 || rows[0].Service != "B" || rows[1].Service != "A" || rows[2].Branch != "release/b" {
-		t.Fatal(rows, e)
-	}
-	for _, services := range [][]domain.ServiceWorkspace{nil, {{ServiceName: "api"}}, {{Branch: "feature/a"}}} {
-		if _, e = BranchRows(services); e == nil {
-			t.Fatal("incomplete branches accepted")
-		}
 	}
 }

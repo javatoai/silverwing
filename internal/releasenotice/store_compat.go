@@ -9,19 +9,11 @@ import (
 
 // Earlier receipts were keyed by the full configuration, including contacts.
 // Copy matching history into the current ledger; never alter the old files.
-// Legacy UAT ownership is proven by the complete globally-unique operation IDs.
 // Branch notifications require the explicit task owner, since branch names
 // alone may repeat in different tasks.
 func (s Store) compatibleReceipts(v Session) ([]Receipt, error) {
-	if len(v.Rows) == 0 {
+	if len(v.Rows) == 0 || v.Owner == "" {
 		return nil, nil
-	}
-	if v.Owner == "" && v.Kind != Branches {
-		for _, r := range v.Rows {
-			if r.OperationID == "" {
-				return nil, nil
-			}
-		}
 	}
 	entries, e := os.ReadDir(s.Directory)
 	if e != nil {
@@ -36,16 +28,7 @@ func (s Store) compatibleReceipts(v Session) ([]Receipt, error) {
 		if e != nil || old.ID == v.ID {
 			continue
 		}
-		owned := v.Owner != "" && old.Owner == v.Owner
-		if !owned && v.Kind == "" && old.Owner == "" {
-			owned = true
-			for _, r := range v.Rows {
-				if r.OperationID == "" {
-					owned = false
-				}
-			}
-		}
-		if !owned || old.Kind != v.Kind || old.URL != v.URL || old.Identity.AppID != v.Identity.AppID ||
+		if old.Owner != v.Owner || old.Kind != v.Kind || old.URL != v.URL || old.Identity.AppID != v.Identity.AppID ||
 			old.Identity.OpenID != v.Identity.OpenID || Digest(old.Rows) != Digest(v.Rows) {
 			continue
 		}

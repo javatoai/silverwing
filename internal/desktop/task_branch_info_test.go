@@ -41,6 +41,7 @@ func TestTaskBranchInfoMatrixPreviewAndCopy(t *testing.T) {
 					taskUnit: taskController{state: taskState{tasks: []task{fixture}}},
 					page:     "tasks",
 				}
+				enableOptionalCLIsForDesktopTest(t, s, "lark")
 				tester := ui.NewTester(func(c *ui.Context) {
 					p := setTheme(c, dark)
 					if ui.Button(c, "打开分支信息").Clicked() {
@@ -50,6 +51,9 @@ func TestTaskBranchInfoMatrixPreviewAndCopy(t *testing.T) {
 				}, width, 780)
 				if err := tester.Click("打开分支信息"); err != nil {
 					t.Fatal(err)
+				}
+				if _, found := tester.Find("发送分支通知给自己"); found {
+					t.Fatal("branch information still shows the retired Lark send action")
 				}
 				var cells [2]ui.Rect
 				options := taskBranchInfoCopyOptions(fixture)

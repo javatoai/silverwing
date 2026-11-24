@@ -6,12 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/egoist/mygo/ui"
-
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/asyncjob"
 	"silverwing-go/internal/production"
-	"silverwing-go/internal/releasenotice"
 )
 
 func TestOptionalGenbuHidesCurrentServiceAndProductionPages(t *testing.T) {
@@ -134,89 +131,6 @@ func TestOptionalGenbuStopsProductionProbeAndDropsQueuedResult(t *testing.T) {
 	defer cancel()
 	if err := s.releaseUnit.closeProductionJobs(ctx); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestOptionalLarkHidesSendAndKeepsBranchCopies(t *testing.T) {
-	s, _, group := releaseNoticeDesktopFixture(t)
-	s.tab = 0
-	s.openTaskBranchInfo(s.taskUnit.currentTask())
-	tester := ui.NewTester(func(c *ui.Context) {
-		s.renderTaskBranchInfoDialog(c, setTheme(c, false))
-	}, 1000, 630)
-	button := s.noticeButtonText(releasenotice.Branches, "")
-	if _, found := tester.Find(button); !found {
-		t.Fatal("enabled Lark did not show the branch send action")
-	}
-	s.optionalCLIContext("lark")
-	ctx, cancel := context.WithCancel(context.Background())
-	s.releaseNotices.pending.cancel = cancel
-	s.settingsUnit.state.configJSON = `{"optionalCLIs":{"lark":false,"genbu":true}}`
-	s.observeOptionalCLIs()
-	tester.Frame()
-	if _, found := tester.Find(button); found || s.releaseNoticeReady(group) || s.releaseNotices.pending != nil || ctx.Err() == nil {
-		t.Fatal("disabled Lark left a send action or pending notification active")
-	}
-	for _, label := range []string{"复制服务名称", "复制服务与分支"} {
-		if _, found := tester.Find(label); !found {
-			t.Fatalf("disabled Lark hid the local action %q", label)
-		}
-	}
-	s.settingsUnit.state.configJSON = `{"optionalCLIs":{"lark":true}}`
-	setTestPlatformSwitch(s, "genbu", false)
-	tester.Frame()
-	if _, found := tester.Find(button); !found || s.releaseNoticeReady(group) {
-		t.Fatal("Genbu disabled the independent Lark branch send or enabled Tag send")
-	}
-}
-
-func TestOptionalLarkKeepsAdmittedSendAndReceiptAfterDisable(t *testing.T) {
-	s, d, group := releaseNoticeDesktopFixture(t)
-	prepCtx, cancel := context.WithCancel(s.optionalCLIContext("lark"))
-	defer cancel()
-	d.cancel = cancel
-	session := *d.session
-	started := make(chan context.Context, 1)
-	finished := make(chan bool, 1)
-	reply := make(chan struct{})
-	defer close(reply)
-	go func() {
-		prepare, send := application.Action{Kind: "prepare"}, application.Action{Kind: "send"}
-		result, err := executeNoticeSend(prepCtx, prepare, send, func(ctx context.Context, action application.Action) (application.ActionResult, error) {
-			if action.Kind == "send" {
-				started <- ctx
-				select {
-				case <-ctx.Done():
-					return application.ActionResult{}, ctx.Err()
-				case <-reply:
-				}
-				session.Receipts = []releasenotice.Receipt{{OpenID: session.Identity.OpenID, State: "sent", MessageID: "receipt"}}
-			}
-			return application.ActionResult{Data: session}, nil
-		}, nil)
-		receipt, found := result.LatestReceipt()
-		finished <- err == nil && found && receipt.MessageID == "receipt"
-	}()
-	var sendCtx context.Context
-	select {
-	case sendCtx = <-started:
-	case <-time.After(time.Second):
-		t.Fatal("prepared send did not reach the backend")
-	}
-	s.settingsUnit.state.configJSON = `{"optionalCLIs":{"lark":false,"genbu":true}}`
-	s.observeOptionalCLIs()
-	s.sendTagNotice(s.releaseUnit.state.tagHistory, group)
-	if prepCtx.Err() == nil || sendCtx.Err() != nil || s.releaseNotices.pending != nil {
-		t.Fatal("disabling Lark canceled an admitted send or allowed another send")
-	}
-	reply <- struct{}{}
-	select {
-	case received := <-finished:
-		if !received {
-			t.Fatal("admitted send lost its receipt after disabling Lark")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("the admitted send did not complete")
 	}
 }
 

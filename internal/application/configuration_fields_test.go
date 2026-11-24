@@ -8,6 +8,20 @@ import (
 	"silverwing-go/internal/domain"
 )
 
+func TestLarkNoticeConfigFieldsPreserveContacts(t *testing.T) {
+	cfg := domain.DefaultAppConfig()
+	notice := cfg.EffectiveLarkNotice()
+	notice.Contacts = append(notice.Contacts, domain.LarkNoticeContact{Name: "测试同事", OpenID: "ou_synthetic"})
+	data, _ := json.Marshal(notice)
+	next, err := mergeConfigurationFields(cfg, ConfigFieldsUpdate{Fields: map[string]json.RawMessage{"larkNotice": data}})
+	if err != nil || len(next.EffectiveLarkNotice().Contacts) != 1 {
+		t.Fatal(next.LarkNotice, err)
+	}
+	if cfg.LarkNotice != nil {
+		t.Fatal("mutated original config")
+	}
+}
+
 func TestPlatformExecutableSettingsRejectFieldUpdates(t *testing.T) {
 	config := domain.DefaultAppConfig()
 	for _, test := range []struct {

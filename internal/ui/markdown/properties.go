@@ -32,7 +32,6 @@ type TagChange struct {
 type PropertiesState struct {
 	documentID, source string
 	model              *markdowntext.Properties
-	Collapsed, More    bool
 	dialog             *propertyTagDialog
 	viewportWidth      float32
 }
@@ -65,7 +64,6 @@ func (s *PropertiesState) setDocument(id, source string) {
 		return
 	}
 	if s.documentID != id {
-		s.Collapsed, s.More = false, false
 		s.dialog = nil
 	}
 	s.documentID, s.source = id, source
@@ -82,7 +80,7 @@ func MarkdownProperties(c *ui.Context, s *PropertiesState, o PropertiesOptions) 
 	if d := s.dialog; d != nil && !d.open && pendingPropertyTagInput(d) {
 		d.open = true
 	}
-	root := ui.Column(c.Key("properties-"+o.DocumentID)).FillWidth().MinWidth(0).Gap(6).Padding(4, 0, 12, 0).HandleInput(func(event ui.InputEvent) bool {
+	root := ui.Column(c.Key("properties-" + o.DocumentID)).FillWidth().MinWidth(0).HandleInput(func(event ui.InputEvent) bool {
 		if o.OnInteraction != nil && (event.Kind == ui.InputPointerDown || event.Kind == ui.InputKeyDown || event.Kind == ui.InputText || event.Kind == ui.InputCommand) {
 			o.OnInteraction()
 		}
@@ -96,7 +94,11 @@ func MarkdownProperties(c *ui.Context, s *PropertiesState, o PropertiesOptions) 
 		return root.Height(0)
 	}
 	th := c.Theme()
+	root.Gap(6).Padding(10, 12).Margin(0, 0, 12, 0).Radius(8).Background(th.SurfaceHover)
 	available := root.Bounds().W
+	if s.viewportWidth > 0 && (available <= 0 || s.viewportWidth < available) {
+		available = s.viewportWidth
+	}
 	if available <= 0 {
 		available, _ = c.Size()
 	}
@@ -117,56 +119,16 @@ func MarkdownProperties(c *ui.Context, s *PropertiesState, o PropertiesOptions) 
 		tagAnchor, hasTagAnchor = anchor, true
 		s.dialog = &propertyTagDialog{open: true, focus: true, value: value, originalValue: value, change: TagChange{DocumentID: o.DocumentID, Version: o.Version, Action: action, Index: index}}
 	}
-	toggle := func() {
-		if pendingPropertyTagInput(s.dialog) {
-			s.dialog.open, s.dialog.focus = true, true
-			return
-		}
-		s.Collapsed = !s.Collapsed
-	}
 	root.Children(func() {
-		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-			button := ui.ButtonBase(c.Key("properties-toggle")).Row().Gap(5).Padding(2, 0).Label(map[bool]string{true: "展开文档属性", false: "收起文档属性"}[s.Collapsed])
-			button.Children(func() {
-				name := "chevron-down"
-				if s.Collapsed {
-					name = "chevron-right"
-				}
-				ui.Icon(c, propertyIcons[name]).Size(12, 12).TextColor(th.TextMuted)
-				ui.Text(c, "文档属性").FontSize(12).TextColor(th.TextMuted)
-			})
-			button.OnShortcut(0, ui.KeyEnter, func() {
-				if o.OnInteraction != nil {
-					o.OnInteraction()
-				}
-				toggle()
-			}).OnShortcut(0, ui.KeySpace, func() {
-				if o.OnInteraction != nil {
-					o.OnInteraction()
-				}
-				toggle()
-			})
-			if button.Clicked() {
-				if o.OnInteraction != nil {
-					o.OnInteraction()
-				}
-				toggle()
-			}
-			if s.Collapsed {
-				ui.Text(c, fmt.Sprintf("%d 个标签", len(m.Tags))).FontSize(12).TextColor(th.TextMuted)
-			}
-		})
-		if s.Collapsed {
-			s.dialog = nil
-			return
-		}
-		ui.Row(c.Key("properties-tags")).FillWidth().MinWidth(0).Wrap().GapX(6).GapY(6).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "文档属性").FontSize(12).FontWeight(600).TextColor(th.Text)
+		ui.Box(c).FillWidth().Height(1).Background(th.Border)
+		ui.Row(c.Key("properties-tags")).Hidden(len(m.Tags) == 0 && !editable).FillWidth().MinWidth(0).Wrap().GapX(6).GapY(6).AlignItems(ui.Center).Children(func() {
 			for i, tag := range m.Tags {
 				bg, ink := ui.Hex("#f3efff"), ui.Hex("#7047c7")
 				if th.Dark {
 					bg, ink = ui.Hex("#352b49"), ui.Hex("#d2bcff")
 				}
-				chip := ui.Row(c.Key(fmt.Sprintf("property-tag-%d", i))).Radius(999).Background(bg).MinWidth(0).Shrink(1).MaxWidth(max(float32(40), min(float32(480), available-16))).AlignItems(ui.Center)
+				chip := ui.Row(c.Key(fmt.Sprintf("property-tag-%d", i))).Radius(999).Background(bg).MinWidth(0).Shrink(1).MaxWidth(max(float32(40), min(float32(480), available-24))).AlignItems(ui.Center)
 				chip.Children(func() {
 					body := ui.ButtonBase(c.Key("tag-text")).Padding(3, 8).MinWidth(0).Shrink(1).Label("标签：" + tag).Tooltip(tag)
 					body.Children(func() { ui.Text(c, strings.ReplaceAll(tag, "/", " / ")).FontSize(12).TextColor(ink).Wrap().MinWidth(0) })
@@ -236,62 +198,9 @@ func MarkdownProperties(c *ui.Context, s *PropertiesState, o PropertiesOptions) 
 				b.OnShortcut(0, ui.KeyEnter, func() { openTag(b, AddTag, len(m.Tags), "") }).OnShortcut(0, ui.KeySpace, func() { openTag(b, AddTag, len(m.Tags), "") })
 			}
 		})
-		ui.Row(c).FillWidth().MinWidth(0).Wrap().GapX(16).GapY(4).Children(func() {
-			for _, field := range m.Fields {
-				if name := propertyDateName(field.Name); name != "" {
-					ui.Text(c, name+"："+field.Value).FontSize(11).TextColor(th.TextMuted).Wrap().MinWidth(0)
-				}
-			}
-		})
-		other := false
 		for _, field := range m.Fields {
-			if field.Name != "tags" && propertyDateName(field.Name) == "" {
-				other = true
-				break
-			}
-		}
-		if other {
-			b := ui.ButtonBase(c.Key("properties-more")).Padding(2, 0).Label("更多属性")
-			b.Children(func() {
-				ui.Text(c, map[bool]string{true: "收起更多属性", false: "更多属性"}[s.More]).FontSize(12).TextColor(th.TextMuted)
-			})
-			if b.Clicked() {
-				if o.OnInteraction != nil {
-					o.OnInteraction()
-				}
-				s.More = !s.More
-			}
-			b.OnShortcut(0, ui.KeyEnter, func() {
-				if o.OnInteraction != nil {
-					o.OnInteraction()
-				}
-				s.More = !s.More
-			}).OnShortcut(0, ui.KeySpace, func() {
-				if o.OnInteraction != nil {
-					o.OnInteraction()
-				}
-				s.More = !s.More
-			})
-			if s.More {
-				for _, field := range m.Fields {
-					if field.Name == "tags" || propertyDateName(field.Name) != "" {
-						continue
-					}
-					ui.Column(c).FillWidth().MinWidth(0).Gap(2).Children(func() {
-						ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-							name := field.Name
-							if name == "ai_thread_id" {
-								name = "AI 会话 ID"
-							}
-							ui.Text(c, name).FontSize(11).TextColor(th.TextMuted)
-							ui.Spacer(c)
-							if ui.ButtonBase(c).Label("复制属性 " + field.Name).Padding(3).Children(func() { ui.Icon(c, propertyIcons["copy"]).Size(12, 12).TextColor(th.TextMuted) }).Clicked() {
-								c.WriteClipboard(field.Value)
-							}
-						})
-						ui.Text(c, field.Value).FontSize(12).TextColor(th.Text).Wrap().FillWidth().MinWidth(0).Selectable()
-					})
-				}
+			if field.Name != "tags" {
+				renderPropertyField(c, field, available >= 420)
 			}
 		}
 		if !m.TagsEditable && o.OnViewSource != nil {
@@ -350,14 +259,41 @@ func MarkdownProperties(c *ui.Context, s *PropertiesState, o PropertiesOptions) 
 	}
 	return root
 }
-func propertyDateName(key string) string {
+func renderPropertyField(c *ui.Context, field markdowntext.PropertyField, wide bool) {
+	th := c.Theme()
+	row := ui.Column(c.Key("property-field-" + field.Name)).FillWidth().MinWidth(0).Gap(2)
+	if wide {
+		row.Row().AlignItems(ui.Start).Gap(12)
+	}
+	row.Children(func() {
+		label := ui.Text(c, propertyFieldName(field.Name)).FontSize(12).TextColor(th.TextMuted).Wrap().MinWidth(0)
+		if wide {
+			label.Width(120).Shrink(0).Padding(3, 0)
+		}
+		ui.Row(c).Grow(1).MinWidth(0).Gap(8).AlignItems(ui.Start).Children(func() {
+			ui.Text(c, field.Value).FontSize(13).TextColor(th.Text).Wrap().Grow(1).MinWidth(0).Padding(3, 0).Selectable()
+			copyValue := func() { c.WriteClipboard(field.Value) }
+			copyButton := ui.ButtonBase(c.Key("copy")).Row().Size(24, 24).Shrink(0).Radius(4).
+				AlignItems(ui.Center).Justify(ui.Center).Label("复制属性 " + field.Name).Tooltip("复制属性值")
+			copyButton.Children(func() { ui.Icon(c, propertyIcons["copy"]).Size(13, 13).TextColor(th.TextMuted) })
+			copyButton.OnShortcut(0, ui.KeyEnter, copyValue).OnShortcut(0, ui.KeySpace, copyValue)
+			if copyButton.Clicked() {
+				copyValue()
+			}
+		})
+	})
+}
+
+func propertyFieldName(key string) string {
 	switch key {
 	case "created_at":
 		return "创建时间"
 	case "updated_at":
 		return "更新时间"
+	case "ai_thread_id":
+		return "AI 会话 ID"
 	}
-	return ""
+	return key
 }
 
 func (s *ReaderState) configureProperties(native *md.Options, edit func(TagChange) error, version func() uint64) {

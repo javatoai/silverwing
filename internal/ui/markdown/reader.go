@@ -191,12 +191,16 @@ func MarkdownReader(c *ui.Context, s *ReaderState, options ReaderOptions) ui.Ele
 		return ui.Text(c, "Markdown 预览暂不可用。")
 	}
 	root := ui.Column(c.Key("markdown-reader-" + s.document.ID)).FillWidth().MinWidth(0).MinHeight(0)
-	root.Draw(func(_ *ui.Painter, r ui.Rect) {
-		if r.W > 0 && s.properties.viewportWidth != r.W {
-			s.properties.viewportWidth = r.W
-			c.Invalidate()
-		}
-	})
+	if options.PropertiesWidth > 0 {
+		s.properties.viewportWidth = options.PropertiesWidth
+	} else {
+		root.Draw(func(_ *ui.Painter, r ui.Rect) {
+			if r.W > 0 && s.properties.viewportWidth != r.W {
+				s.properties.viewportWidth = r.W
+				c.Invalidate()
+			}
+		})
+	}
 	native := s.prepare(c, options)
 	if options.ContentOnly {
 		return root.Children(func() {

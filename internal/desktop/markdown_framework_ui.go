@@ -122,7 +122,11 @@ func (s *app) renderFrameworkMarkdown(c *ui.Context, p palette, state *markdownE
 		state.componentReader.RevealLocation(line, s.materialsUnit.state.documentLinkFragment)
 		s.materialsUnit.state.documentLinkFragment = ""
 	}
-	markdownui.MarkdownReader(c.Key("framework-markdown-"+s.snapshot.Home+"-"+markdownEditorHostID(state)), state.componentReader, markdownui.ReaderOptions{Native: &native.options, ContentOnly: true}).FillWidth().MinWidth(0)
+	options := markdownui.ReaderOptions{Native: &native.options, ContentOnly: true}
+	if reader := state.readonlyReader; reader != nil {
+		options.PropertiesWidth = reader.propertiesWidth
+	}
+	markdownui.MarkdownReader(c.Key("framework-markdown-"+s.snapshot.Home+"-"+markdownEditorHostID(state)), state.componentReader, options).FillWidth().MinWidth(0)
 }
 
 func (s *app) configureFrameworkMarkdown(c *ui.Context, p palette, state *markdownEditorState, native *frameworkMarkdownState) {

@@ -17,6 +17,7 @@ type readonlyMarkdownReaderState struct {
 	findFocusPending bool
 	sourceMode       bool
 	zoom             float32
+	propertiesWidth  float32
 
 	previewScroll  ui.ScrollState
 	sourceScroll   ui.ScrollState
@@ -279,8 +280,20 @@ func (s *app) renderReadonlyMarkdownReaderContentWithInset(c *ui.Context, p pale
 				}
 			}
 		}
+		const leftPadding float32 = 26
+		rightPadding := leftPadding
+		if rightInset > 0 {
+			rightPadding = rightInset
+		}
 		preview := ui.ScrollBoth(c).TrackScroll(readonlyMarkdownReaderScroll(reader, reader.sourceMode)).Grow(1).MinHeight(0)
-		preview.Draw(func(_ *ui.Painter, rect ui.Rect) { reader.find.viewport = rect })
+		preview.Draw(func(_ *ui.Painter, rect ui.Rect) {
+			reader.find.viewport = rect
+			width := max(1, rect.W-leftPadding-rightPadding)
+			if reader.propertiesWidth != width {
+				reader.propertiesWidth = width
+				c.Invalidate()
+			}
+		})
 		preview.ContextMenu(func(menu *ui.Menu) {
 			menu.EditItems()
 			if state.contextMenu != nil {
@@ -301,11 +314,11 @@ func (s *app) renderReadonlyMarkdownReaderContentWithInset(c *ui.Context, p pale
 			renderReadonlyMarkdownSource(preview, c, p, state, reader, rightInset)
 			return
 		}
-		padding := []float32{18, 26}
+		padding := []float32{18, leftPadding}
 		if rightInset > 0 {
 			// Preserve the document's normal top inset while keeping the text
 			// clear of the floating actions button.
-			padding = []float32{18, rightInset, 26, 26}
+			padding = []float32{18, rightPadding, 26, leftPadding}
 		}
 		preview.Padding(padding...).Children(func() { s.renderMarkdownPreview(c, p, state) })
 	})

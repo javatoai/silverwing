@@ -86,7 +86,7 @@ SDK 的 `ApplyEdits`／`ReplaceRange` 始终表示原文编辑；已编码的富
 
 ## 文档属性
 
-Reader 和 Editor 自动将完整、有效的文首 YAML 映射展示为公共 `MarkdownProperties`：标签按层级路径换行，日期用中文名称，其他属性在“更多属性”内查看与复制，整个区域可折叠。独立宿主也可使用 `NewPropertiesState(Document)` 和 `PropertiesOptions` 组合此组件。读取组件和只读选项不暴露编辑入口；Source 模式始终保留完整原文。
+Reader 和 Editor 通过 `MarkdownProperties` 在正文上方直接展示文首 YAML 属性。标签按层级路径显示，日期使用中文名称。各属性值可复制，窄区域中字段名显示在属性值上方。独立宿主可使用 `NewPropertiesState(Document)` 和 `PropertiesOptions` 组合此组件。Source 模式保留完整原文。
 
 编辑器通过 `ApplyTagChange(TagChange)` 统一处理新增、改名和删除，校验文档身份、版本、只读及 IME。弹框 Enter 保存、Esc 取消；提交为原 Buffer 中一次可撤销的局部事务，不更新日期，不重新序列化 YAML。原字段、注释、顺序、BOM/CRLF 与正文保持。属性动作保留视口并恢复正文输入焦点。
 

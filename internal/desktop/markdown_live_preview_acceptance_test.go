@@ -338,9 +338,11 @@ func TestMarkdownLivePreviewAcceptancePreservesSourceAndConflict(t *testing.T) {
 }
 
 func TestMarkdownLivePreviewAcceptanceOtherReadersRemainReadonly(t *testing.T) {
-	const source = "# 只读入口\n\n正文 **保留** 中文😀。\n"
+	const body = "# 只读入口\n\n正文 **保留** 中文😀。\n"
+	const skillDescription = "用 sw 构建测试 Tag、处理冲突、批量发布或重启 UAT Pod。也用于查询构建日志、配置审批及差异，或基于 Silverwing 任务提交提测。"
 	for _, route := range []string{"generic", "requirement-body", "requirement-comment", "skill-preview"} {
 		t.Run(route, func(t *testing.T) {
+			source := body
 			s := &app{page: "requirements"}
 			var state *markdownEditorState
 			var render func(*ui.Context, palette)
@@ -362,6 +364,7 @@ func TestMarkdownLivePreviewAcceptanceOtherReadersRemainReadonly(t *testing.T) {
 				}
 				render = func(c *ui.Context, p palette) { s.renderRequirementReadonlyMarkdownReader(c, p, reader) }
 			case "skill-preview":
+				source = "---\nname: silverwing-tag\ndescription: " + skillDescription + "\n---\n\n" + source
 				state = newReadonlyMarkdownState("acceptance-skill", source, nil)
 				browser := &skillsBrowserState{app: s, selectedDirectory: "acceptance-skill", selectedPath: "SKILL.md", preview: source, previewLoaded: true, previewMarkdown: true, markdown: state}
 				render = func(c *ui.Context, p palette) { s.renderSkillsBrowserPreview(c, p, browser) }
@@ -375,6 +378,21 @@ func TestMarkdownLivePreviewAcceptanceOtherReadersRemainReadonly(t *testing.T) {
 				ui.Column(c).Fill().Children(func() { render(c, setTheme(c, false)) })
 				s.endOverflowMenuFrame()
 			}, 800, 500)
+			if route == "skill-preview" {
+				tester.Frame()
+				for _, label := range []string{"文档属性", "name", "silverwing-tag", "description", "用 sw 构建测试 Tag"} {
+					if !tester.HasText(label) {
+						t.Errorf("skill preview missing visible property content %q", label)
+					}
+				}
+				if tester.HasText("更多属性") {
+					t.Error("skill preview still has additional properties toggle")
+				}
+				if maxX := state.readonlyReader.previewScroll.MaxX; maxX > 1 {
+					t.Errorf("skill properties overflow the preview by %.1f points", maxX)
+				}
+				captureDesktopTestFrame(t, tester, "markdown-other-reader-readonly-skill-preview")
+			}
 			clickMarkdownAcceptance(t, tester, "正文 保留 中文😀。")
 			tester.Command("selectAll")
 			tester.Type("blocked")
@@ -387,7 +405,25 @@ func TestMarkdownLivePreviewAcceptanceOtherReadersRemainReadonly(t *testing.T) {
 					t.Fatalf("read-only host exposed materials editing control %q", forbidden)
 				}
 			}
-			captureDesktopTestFrame(t, tester, "markdown-other-reader-readonly-"+route)
+			if route != "skill-preview" {
+				captureDesktopTestFrame(t, tester, "markdown-other-reader-readonly-"+route)
+				return
+			}
+			tester.SetSize(360, 500)
+			tester.Frame()
+			tester.Frame()
+			label, labelFound := tester.Find("description")
+			value, valueFound := tester.Find(skillDescription)
+			if !labelFound || !valueFound || value.Y < label.Y+label.H || state.readonlyReader.previewScroll.MaxX > 1 {
+				t.Fatal("skill properties did not stack and wrap in the narrow preview", label, value)
+			}
+			captureDesktopTestFrame(t, tester, "markdown-other-reader-readonly-skill-preview-narrow")
+			if err := tester.Click("复制属性 name"); err != nil {
+				t.Fatal(err)
+			}
+			if tester.Clipboard() != "silverwing-tag" {
+				t.Fatal("copying a property did not write its original value")
+			}
 		})
 	}
 }

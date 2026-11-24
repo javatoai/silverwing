@@ -52,6 +52,8 @@ type ReaderOptions struct {
 	Find *FindController
 	// ContentOnly embeds the renderer into a host-owned scroll/search surface.
 	ContentOnly bool
+	// PropertiesWidth bounds the attributes inside a host that scrolls horizontally.
+	PropertiesWidth float32
 }
 
 type EditorOptions struct {

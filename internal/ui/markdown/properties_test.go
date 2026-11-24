@@ -22,14 +22,15 @@ func TestPublicPropertiesSharedReadingEditingAndUndo(t *testing.T) {
 				c.SetTheme(theme)
 				MarkdownEditor(c, state, EditorOptions{}).Fill()
 			}, width, 650)
-			if !v.HasText("文档属性") || !v.HasText("业务 / 订单支付") || !v.HasText("创建时间：2026-08-28 11:30:39") || v.HasText("ai_thread_id") || v.HasText("# keep") {
-				t.Fatal("metadata not compactly projected")
+			for _, label := range []string{"文档属性", "业务 / 订单支付", "创建时间", "2026-08-28 11:30:39", "AI 会话 ID", "01a03b2-long-identifier"} {
+				if !v.HasText(label) {
+					t.Errorf("initial properties missing %q at width=%d dark=%t", label, width, dark)
+				}
 			}
-			if err := v.Click("更多属性"); err != nil {
-				t.Fatal(err)
-			}
-			if !v.HasText("01a03b2-long-identifier") {
-				t.Fatal("details not readable")
+			for _, label := range []string{"更多属性", "收起文档属性", "# keep"} {
+				if v.HasText(label) {
+					t.Errorf("unexpected properties content %q", label)
+				}
 			}
 			buffer := state.native.Buffer()
 			caret := strings.Index(buffer.String(), "正文不改") + len("正文")
@@ -54,12 +55,6 @@ func TestPublicPropertiesSharedReadingEditingAndUndo(t *testing.T) {
 				}
 				v.Command("redo")
 				v.Command("undo")
-			}
-			if err := v.Click("收起文档属性"); err != nil {
-				t.Fatal(err)
-			}
-			if v.HasText("业务 / 订单支付") {
-				t.Fatal("collapse did not hide properties")
 			}
 			state.Close()
 		}
@@ -287,7 +282,7 @@ func TestPropertiesReaderStaysBelowHostHeader(t *testing.T) {
 	}, 900, 600)
 	view.Frame()
 	view.Frame()
-	if rect, ok := view.Find("收起文档属性"); !ok || rect.Y < 100 {
+	if rect, ok := view.Find("文档属性"); !ok || rect.Y < 100 {
 		for _, label := range []string{"Host header", "文档属性", "原文标题", "Other pane"} {
 			at, found := view.Find(label)
 			t.Log(label, at, found)

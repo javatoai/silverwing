@@ -390,20 +390,20 @@ func (g *GitClient) AddWorktree(repository, target, branch, baseRef string, trac
 	if len(trackingRemote) > 0 && strings.TrimSpace(trackingRemote[0]) != "" {
 		remote = trackingRemote[0]
 	}
-	created := false
-	_, err := g.RunContext(context.Background(), repository, 5*time.Minute, true, false,
-		"-c", "core.symlinks=false", "worktree", "add", "-b", branch, "--no-track", target, baseRef)
-	if err == nil {
-		created = true
-		_, err = g.Run(repository, "config", "branch."+branch+".remote", remote)
+	if err := g.addUntrackedWorktree(repository, target, branch, baseRef); err != nil {
+		return err
 	}
-	if err == nil {
-		_, err = g.Run(repository, "config", "branch."+branch+".merge", "refs/heads/"+branch)
-	}
-	if err != nil && created {
+	err := g.SetBranchUpstream(repository, branch, remote)
+	if err != nil {
 		_ = g.RemoveWorktree(repository, target, true)
 		_, _ = g.RunContext(context.Background(), repository, 10*time.Minute, false, false, "branch", "-D", branch)
 	}
+	return err
+}
+
+func (g *GitClient) addUntrackedWorktree(repository, target, branch, baseRef string) error {
+	_, err := g.RunContext(context.Background(), repository, 5*time.Minute, true, false,
+		"-c", "core.symlinks=false", "worktree", "add", "-b", branch, "--no-track", target, baseRef)
 	return err
 }
 

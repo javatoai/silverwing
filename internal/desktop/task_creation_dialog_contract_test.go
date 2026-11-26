@@ -84,6 +84,32 @@ func TestTaskCreationDialogFixedGeometry(t *testing.T) {
 	}
 }
 
+func TestTaskCreationProgressFollowsTaskFields(t *testing.T) {
+	const preflightError = "创建前预检失败：分支已在其他工作树检出。"
+	for _, size := range [][2]int{{960, 640}, {1440, 900}} {
+		t.Run(fmt.Sprintf("%dx%d", size[0], size[1]), func(t *testing.T) {
+			s, tester := taskCreationLeftFixture(t, size[0], false)
+			form := s.taskUnit.state.taskCreation
+			form.creationProgress = newTaskCreationProgressState(s, form, form.progressGeneration)
+			form.creationProgress.mode = "preflight"
+			form.creationProgress.finished = true
+			form.inlineError, form.creationProgress.failure = preflightError, preflightError
+			tester.SetSize(size[0], size[1])
+			tester.Frame()
+			fields, fieldsFound := tester.Find("任务基本信息")
+			branch, branchFound := tester.Find("任务分支输入")
+			progress, progressFound := tester.Find("任务创建进度")
+			footer, footerFound := tester.Find("检查并创建任务")
+			if !fieldsFound || !branchFound || !progressFound || !footerFound ||
+				progress.Y < fields.Y+fields.H || progress.Y-branch.Y-branch.H > 60 ||
+				progress.H <= 0 || progress.Y+progress.H > footer.Y {
+				t.Fatalf("progress should follow the fields and stay above the footer: fields=%+v branch=%+v progress=%+v footer=%+v", fields, branch, progress, footer)
+			}
+			captureTaskCreationLeft(t, tester, fmt.Sprintf("progress-below-fields-%dx%d", size[0], size[1]))
+		})
+	}
+}
+
 func TestTaskCreationDialogDismissesDirectly(t *testing.T) {
 	for _, way := range []string{"cancel", "close", "backdrop", "escape"} {
 		t.Run(way, func(t *testing.T) {

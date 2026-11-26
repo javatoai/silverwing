@@ -285,7 +285,15 @@ func (s *app) renderReadonlyMarkdownReaderContentWithInset(c *ui.Context, p pale
 		if rightInset > 0 {
 			rightPadding = rightInset
 		}
-		preview := ui.ScrollBoth(c).TrackScroll(readonlyMarkdownReaderScroll(reader, reader.sourceMode)).Grow(1).MinHeight(0)
+		// Tables and code blocks have their own horizontal scroll. Only the
+		// source view needs to scroll the entire document sideways.
+		var preview ui.Element
+		if reader.sourceMode {
+			preview = ui.ScrollBoth(c)
+		} else {
+			preview = ui.Scroll(c)
+		}
+		preview = preview.TrackScroll(readonlyMarkdownReaderScroll(reader, reader.sourceMode)).FillWidth().MinWidth(0).Grow(1).MinHeight(0)
 		preview.Draw(func(_ *ui.Painter, rect ui.Rect) {
 			reader.find.viewport = rect
 			width := max(1, rect.W-leftPadding-rightPadding)

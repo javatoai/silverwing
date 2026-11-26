@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/systemtrash"
@@ -56,6 +57,39 @@ func TestTypedTaskOperationsAndActionAdapterSharePersistedLifecycle(t *testing.T
 	manifest, err := ResultData[domain.TaskManifest](legacy)
 	if err != nil || manifest.TaskDirectoryName != "legacy" {
 		t.Fatalf("legacy alias create: %+v %v", manifest, err)
+	}
+}
+
+func TestOrderedTaskProgressSerializesDelivery(t *testing.T) {
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	delivered := make(chan uint64, 2)
+	publish := orderedTaskProgress(func(event workspace.TaskCreationProgress) {
+		if event.Sequence == 1 {
+			close(firstStarted)
+			<-releaseFirst
+		}
+		delivered <- event.Sequence
+	})
+	go publish(workspace.TaskCreationProgress{ServiceID: "first"})
+	<-firstStarted
+	secondStarted := make(chan struct{})
+	go func() {
+		close(secondStarted)
+		publish(workspace.TaskCreationProgress{ServiceID: "second"})
+	}()
+	<-secondStarted
+	select {
+	case sequence := <-delivered:
+		close(releaseFirst)
+		t.Fatalf("delivered sequence %d while sequence 1 was still in its callback", sequence)
+	case <-time.After(50 * time.Millisecond):
+		close(releaseFirst)
+	}
+	for want := uint64(1); want <= 2; want++ {
+		if got := <-delivered; got != want {
+			t.Fatalf("delivered sequence %d, want %d", got, want)
+		}
 	}
 }
 

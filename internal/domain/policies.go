@@ -122,9 +122,11 @@ func ValidateRequirementAiNamingSuggestion(suggestion RequirementAiNamingSuggest
 	if err := DirectoryNameValidationError(suggestion.FolderName); err != nil {
 		return suggestion, err
 	}
-	if strings.TrimSpace(suggestion.BranchSuffix) == "" {
+	suffix := strings.Join(strings.Fields(suggestion.BranchSuffix), "_")
+	if suffix == "" {
 		return suggestion, fmt.Errorf("AI 生成的分支后缀不能为空")
 	}
+	suggestion.BranchSuffix = suffix
 	return suggestion, nil
 }
 

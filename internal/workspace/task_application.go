@@ -90,8 +90,8 @@ func (s *TaskApplicationService) InspectCreateBranchReuse(ctx context.Context, c
 	return s.InspectCreateBranchReuseWithProgress(ctx, config, request, nil)
 }
 
-// InspectCreateBranchReuseWithProgress performs the same read-only preflight
-// while reporting its real validation and per-module inspection boundaries.
+// InspectCreateBranchReuseWithProgress checks prospective workspaces and
+// reports per-module progress while independent repositories are checked.
 func (s *TaskApplicationService) InspectCreateBranchReuseWithProgress(ctx context.Context, config domain.AppConfig, request CreateTaskRequest, onProgress func(TaskCreationProgress)) ([]BranchReuseConflict, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -99,6 +99,7 @@ func (s *TaskApplicationService) InspectCreateBranchReuseWithProgress(ctx contex
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	onProgress = serialTaskCreationObserver(onProgress)
 	checking := TaskCreationProgress{Phase: TaskCreationPhaseChecking, ServiceName: "任务"}
 	var conflicts []BranchReuseConflict
 	err := runTaskCreationProgress(onProgress, checking, "正在检查任务信息与远程分支", "任务信息与远程分支检查完成", func() error {
@@ -125,7 +126,7 @@ func (s *TaskApplicationService) InspectCreateBranchReuseWithProgress(ctx contex
 		if err := requireUniqueWorkspacePaths(taskPath, nil, resolved); err != nil {
 			return err
 		}
-		conflicts, err = s.inspectBranchReuseWithProgress(ctx, config, resolved, feature, onProgress)
+		conflicts, err = s.inspectNewTaskBranchReuse(ctx, config, resolved, feature, onProgress)
 		return err
 	})
 	if err != nil {
@@ -147,6 +148,7 @@ func (s *TaskApplicationService) CreateTaskWithProgress(ctx context.Context, con
 	if err := ctx.Err(); err != nil {
 		return domain.TaskManifest{}, err
 	}
+	onProgress = serialTaskCreationObserver(onProgress)
 	checking := TaskCreationProgress{Phase: TaskCreationPhaseChecking, ServiceName: "任务", Message: "正在检查任务信息与远程分支"}
 	root := ""
 	folderName := ""
@@ -181,7 +183,7 @@ func (s *TaskApplicationService) CreateTaskWithProgress(ctx context.Context, con
 		if checkErr = requireUniqueWorkspacePaths(taskPath, nil, selections); checkErr != nil {
 			return checkErr
 		}
-		_, checkErr = s.inspectBranchReuseWithProgress(ctx, config, selections, feature, onProgress)
+		_, checkErr = s.inspectNewTaskBranchReuse(ctx, config, selections, feature, onProgress)
 		return checkErr
 	})
 	if err != nil {
@@ -252,6 +254,7 @@ func (s *TaskApplicationService) createLocked(ctx context.Context, config domain
 		emitTaskCreationProgress(onProgress, completed)
 	}
 	workspaces := []domain.ServiceWorkspace{}
+	var provisionCleanupErr error
 	var ownedTaskDirectory os.FileInfo
 	localMaterials := strings.TrimSpace(request.RequirementLink) == ""
 	rollback := func(primary error) error {
@@ -271,13 +274,15 @@ func (s *TaskApplicationService) createLocked(ctx context.Context, config domain
 		}
 		if cleanupErr := verifyOwnedTaskDirectory(taskPath, ownedTaskDirectory); cleanupErr != nil {
 			finishRollback(cleanupErr)
-			return fmt.Errorf("任务目录身份已变化，跳过工作区回滚以保护新目录；已保留现场：%s: %w", taskPath, errors.Join(primary, cleanupErr))
+			return fmt.Errorf("任务目录身份已变化，跳过工作区回滚以保护新目录；已保留现场：%s: %w", taskPath, errors.Join(primary, provisionCleanupErr, cleanupErr))
 		}
+		cleanupErr := provisionCleanupErr
 		if len(workspaces) > 0 {
-			if cleanupErr := s.rollbackWorkspacesWithProgress(ctx, config, taskPath, workspaces, onProgress); cleanupErr != nil {
-				finishRollback(cleanupErr)
-				return fmt.Errorf("任务创建失败且自动回滚未完成；为避免 Git 元数据损坏，已保留目录供人工检查：%s: %w", taskPath, errors.Join(primary, cleanupErr))
-			}
+			cleanupErr = errors.Join(cleanupErr, s.rollbackWorkspacesWithProgress(ctx, config, taskPath, ownedTaskDirectory, workspaces, onProgress))
+		}
+		if cleanupErr != nil {
+			finishRollback(cleanupErr)
+			return fmt.Errorf("任务创建失败且自动回滚未完成；已保留目录供人工检查：%s: %w", taskPath, errors.Join(primary, cleanupErr))
 		}
 		if localMaterials {
 			if cleanErr := documents.CleanupLocalTaskMaterials(taskPath); cleanErr != nil {
@@ -342,28 +347,20 @@ func (s *TaskApplicationService) createLocked(ctx context.Context, config domain
 	if err := verifyOwnedTaskDirectory(taskPath, ownedTaskDirectory); err != nil {
 		return domain.TaskManifest{}, rollback(err)
 	}
-	for _, effective := range selections {
-		if err := ctx.Err(); err != nil {
-			return domain.TaskManifest{}, rollback(err)
-		}
-		repository, ok := repositoryByID(config, effective.Service.RepositoryID)
-		if !ok {
-			return domain.TaskManifest{}, rollback(fmt.Errorf("服务 %s 的仓库配置不存在", effective.Service.DisplayName))
-		}
-		created, err := s.Provisioning.ProvisionWithProgress(ctx, WorkspaceProvisionRequest{
-			TaskDirectory: taskPath, Repository: repository, Service: effective.Service,
-			RequestedFeatureBranch: feature, ConfirmedBranchReuseKeys: request.ConfirmedBranchReuseKeys,
-			ModuleBranches: effective.ModuleBranches, ModuleSources: effective.ModuleSources,
-		}, s.OnOutput, onProgress)
-		if err != nil {
-			return domain.TaskManifest{}, rollback(err)
-		}
-		workspaces = append(workspaces, created...)
-		if err := ctx.Err(); err != nil {
+	if len(selections) > 0 {
+		preparing := TaskCreationProgress{Phase: TaskCreationPhaseProvisioningWorkspaces}
+		if err := runTaskCreationProgress(onProgress, preparing, "正在准备服务工作区", "服务工作区已准备", func() error {
+			var err error
+			workspaces, provisionCleanupErr, err = s.provisionNewTask(ctx, config, selections, request, taskPath, feature, ownedTaskDirectory, onProgress)
+			return err
+		}); err != nil {
 			return domain.TaskManifest{}, rollback(err)
 		}
 	}
 	if err := ctx.Err(); err != nil {
+		return domain.TaskManifest{}, rollback(err)
+	}
+	if err := verifyOwnedTaskDirectory(taskPath, ownedTaskDirectory); err != nil {
 		return domain.TaskManifest{}, rollback(err)
 	}
 	if localMaterials {
@@ -949,25 +946,13 @@ func (s *TaskApplicationService) validateSelectedFeatureBranch(branch string, se
 }
 
 func (s *TaskApplicationService) inspectBranchReuse(ctx context.Context, config domain.AppConfig, selections []effectiveTaskService, requested string) ([]BranchReuseConflict, error) {
-	return s.inspectBranchReuseWithProgress(ctx, config, selections, requested, nil)
-}
-
-func (s *TaskApplicationService) inspectBranchReuseWithProgress(ctx context.Context, config domain.AppConfig, selections []effectiveTaskService, requested string, onProgress func(TaskCreationProgress)) ([]BranchReuseConflict, error) {
 	var conflicts []BranchReuseConflict
 	for _, effective := range selections {
-		serviceChecking := TaskCreationProgress{
-			Phase: TaskCreationPhaseChecking, ServiceID: effective.Service.ID, ServiceName: effective.Service.DisplayName,
+		repository, ok := repositoryByID(config, effective.Service.RepositoryID)
+		if !ok {
+			return nil, fmt.Errorf("服务 %s 的仓库配置不存在", effective.Service.DisplayName)
 		}
-		var found []BranchReuseConflict
-		err := runTaskCreationProgress(onProgress, serviceChecking, "正在检查服务仓库与分支引用", "服务仓库与分支引用检查完成", func() error {
-			repository, ok := repositoryByID(config, effective.Service.RepositoryID)
-			if !ok {
-				return fmt.Errorf("服务 %s 的仓库配置不存在", effective.Service.DisplayName)
-			}
-			var inspectErr error
-			found, inspectErr = s.BranchReuse.InspectWithProgress(ctx, repository, effective.Service, requested, effective.ModuleBranches, onProgress)
-			return inspectErr
-		})
+		found, err := s.inspectServiceBranchReuse(ctx, repository, effective, requested, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -976,7 +961,18 @@ func (s *TaskApplicationService) inspectBranchReuseWithProgress(ctx context.Cont
 	return uniqueBranchReuseConflicts(conflicts), nil
 }
 
-func (s *TaskApplicationService) rollbackWorkspacesWithProgress(ctx context.Context, config domain.AppConfig, taskPath string, workspaces []domain.ServiceWorkspace, onProgress func(TaskCreationProgress)) error {
+func (s *TaskApplicationService) inspectServiceBranchReuse(ctx context.Context, repository domain.RepositoryConfig, effective effectiveTaskService, requested string, onProgress func(TaskCreationProgress)) ([]BranchReuseConflict, error) {
+	checking := TaskCreationProgress{Phase: TaskCreationPhaseChecking, ServiceID: effective.Service.ID, ServiceName: effective.Service.DisplayName}
+	var conflicts []BranchReuseConflict
+	err := runTaskCreationProgress(onProgress, checking, "正在检查服务仓库与分支引用", "服务仓库与分支引用检查完成", func() error {
+		var err error
+		conflicts, err = s.BranchReuse.InspectWithProgress(ctx, repository, effective.Service, requested, effective.ModuleBranches, onProgress)
+		return err
+	})
+	return conflicts, err
+}
+
+func (s *TaskApplicationService) rollbackWorkspacesWithProgress(ctx context.Context, config domain.AppConfig, taskPath string, ownedTaskDirectory os.FileInfo, workspaces []domain.ServiceWorkspace, onProgress func(TaskCreationProgress)) error {
 	var failures []error
 	for i := len(workspaces) - 1; i >= 0; i-- {
 		ws := workspaces[i]
@@ -997,7 +993,7 @@ func (s *TaskApplicationService) rollbackWorkspacesWithProgress(ctx context.Cont
 			service = configured
 		}
 		service.Modules = []domain.ServiceModuleConfig{{ID: ws.ModuleID, Name: ws.ModuleName, Strategy: ws.Strategy, MasterBranch: ws.BaseRef, TagEnabled: ws.TagEnabled, TagMode: ws.TagMode, TagTargetRef: ws.TagTargetRef, TagMessagePrefix: ws.TagMessagePrefix}}
-		request := WorkspaceProvisionRequest{TaskDirectory: taskPath, Repository: repository, Service: service, RequestedFeatureBranch: ws.Branch, ModuleBranches: map[string]string{ws.ModuleID: targetBranchValue(ws)}, ModuleSources: map[string]domain.TaskModuleSource{ws.ModuleID: ws.ModuleSource}}
+		request := WorkspaceProvisionRequest{TaskDirectory: taskPath, Repository: repository, Service: service, RequestedFeatureBranch: ws.Branch, ModuleBranches: map[string]string{ws.ModuleID: targetBranchValue(ws)}, ModuleSources: map[string]domain.TaskModuleSource{ws.ModuleID: ws.ModuleSource}, taskDirectoryOwner: ownedTaskDirectory}
 		if err := s.Provisioning.RollbackWithProgress(ctx, request, []domain.ServiceWorkspace{ws}, onProgress); err != nil {
 			failures = append(failures, err)
 		}

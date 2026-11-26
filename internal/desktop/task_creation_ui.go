@@ -1109,13 +1109,13 @@ func (s *app) taskCreationActionError(action application.Action, cause error) bo
 		state.aiError = "AI 命名失败，可继续手工填写：" + message
 		return true
 	case "task.create-preview":
-		s.failTaskCreationProgress(state, "预检未完成："+message)
+		s.failTaskCreationProgress(state, cause)
 		state.preview = nil
 		state.phase = "editing"
 		state.inlineError = "创建前预检失败：" + message
 		return true
 	case "task.create":
-		s.failTaskCreationProgress(state, message)
+		s.failTaskCreationProgress(state, cause)
 		state.preview = nil
 		state.phase = "editing"
 		state.inlineError = "任务创建未完成，请修正后重新预检：" + message
@@ -1167,7 +1167,11 @@ func (s *app) renderTaskCreationDialog(c *ui.Context, p palette) bool {
 				modalWidth := min(1120, windowWidth-24)
 				leftWidth := max(250, (modalWidth-32-12)/2)
 				ui.Column(c).Width(leftWidth).MinWidth(250).FillHeight().MinHeight(0).Gap(8).Children(func() {
-					ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).Padding(2).Gap(11).Label("任务基本信息").Focusable().Disabled(s.busy || inputsLocked).Children(func() {
+					fields := ui.Scroll(c).FillWidth().MinHeight(0).Padding(2).Gap(11).Label("任务基本信息").Focusable().Disabled(s.busy || inputsLocked)
+					if state.creationProgress == nil {
+						fields.Grow(1)
+					}
+					fields.Children(func() {
 						s.renderTaskCreationRequirements(c, p)
 						s.syncTaskCreationDraft()
 						ui.Column(c).Gap(6).Children(func() {

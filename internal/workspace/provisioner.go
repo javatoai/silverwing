@@ -72,6 +72,56 @@ type WorkspaceProvisionRequest struct {
 	ModuleBranches           map[string]string
 	ModuleSources            map[string]domain.TaskModuleSource
 	ModuleDisplayNames       map[string]string
+	taskDirectoryOwner       os.FileInfo
+
+	// A new task collects partial workspaces for rollback after all services exit.
+	deferWorkspaceRollback bool
+}
+
+func (r WorkspaceProvisionRequest) verifyTaskDirectory() error {
+	if r.taskDirectoryOwner == nil {
+		return nil
+	}
+	return verifyOwnedTaskDirectory(r.TaskDirectory, r.taskDirectoryOwner)
+}
+
+func (r WorkspaceProvisionRequest) prepareTaskDirectory() error {
+	if r.taskDirectoryOwner != nil {
+		return r.verifyTaskDirectory()
+	}
+	return os.MkdirAll(r.TaskDirectory, 0o755)
+}
+
+type workspaceProvisionCleanupError struct {
+	Path  string
+	Cause error
+}
+
+func (e *workspaceProvisionCleanupError) Error() string {
+	return fmt.Sprintf("工作区清理未完成，请检查 %s：%v", e.Path, e.Cause)
+}
+
+func (e *workspaceProvisionCleanupError) Unwrap() error { return e.Cause }
+
+func emitProvisionCleanupFailure(onProgress func(TaskCreationProgress), service domain.GroupServiceConfig, module domain.ServiceModuleConfig, err error) {
+	var cleanup *workspaceProvisionCleanupError
+	if !errors.As(err, &cleanup) {
+		return
+	}
+	event := taskCreationProgressForModule(service, module, TaskCreationPhaseRollback)
+	event.Status = TaskCreationProgressFailed
+	event.Message = cleanup.Error()
+	emitTaskCreationProgress(onProgress, event)
+}
+
+func runWorkspaceRollback(onProgress func(TaskCreationProgress), ws domain.ServiceWorkspace, cleanup func() error) error {
+	event := taskCreationProgressForWorkspace(ws, TaskCreationPhaseRollback)
+	return runTaskCreationProgress(onProgress, event, "正在回滚模块工作区", "模块工作区已回滚", func() error {
+		if err := cleanup(); err != nil {
+			return &workspaceProvisionCleanupError{Path: ws.WorktreePath, Cause: err}
+		}
+		return nil
+	})
 }
 
 type WorkspaceProvisioner interface {
@@ -136,6 +186,7 @@ func (s *WorkspaceProvisioningService) Provision(ctx context.Context, request Wo
 }
 
 func (s *WorkspaceProvisioningService) ProvisionWithProgress(ctx context.Context, request WorkspaceProvisionRequest, onOutput func(process.StreamEvent), onProgress func(TaskCreationProgress)) ([]domain.ServiceWorkspace, error) {
+	ctx = workspaceBatchContext(ctx)
 	checking := TaskCreationProgress{Phase: TaskCreationPhaseChecking, ServiceID: request.Service.ID, ServiceName: request.Service.DisplayName}
 	var branches, names map[string]string
 	if err := runTaskCreationProgress(onProgress, checking, "正在检查模块配置", "模块配置检查完成", func() error {
@@ -150,7 +201,20 @@ func (s *WorkspaceProvisioningService) ProvisionWithProgress(ctx context.Context
 		return nil, err
 	}
 	var completed []completedProvision
+	finish := func(cause error) ([]domain.ServiceWorkspace, error) {
+		if cause != nil && !request.deferWorkspaceRollback {
+			return rollbackProvisioning(ctx, s, completed, cause, onProgress)
+		}
+		var result []domain.ServiceWorkspace
+		for _, item := range completed {
+			result = append(result, item.workspaces...)
+		}
+		return result, cause
+	}
 	for _, module := range request.Service.Modules {
+		if err := ctx.Err(); err != nil {
+			return finish(err)
+		}
 		moduleRequest := request
 		moduleRequest.Service = request.Service
 		moduleRequest.Service.Modules = []domain.ServiceModuleConfig{module}
@@ -162,7 +226,7 @@ func (s *WorkspaceProvisioningService) ProvisionWithProgress(ctx context.Context
 		moduleRequest.ModuleDisplayNames = map[string]string{module.ID: names[module.ID]}
 		p := s.byStrategy[module.Strategy]
 		if p == nil {
-			return rollbackProvisioning(ctx, s, completed, fmt.Errorf("未注册工作区策略：%s", module.Strategy), onProgress)
+			return finish(fmt.Errorf("未注册工作区策略：%s", module.Strategy))
 		}
 		var workspaces []domain.ServiceWorkspace
 		var err error
@@ -171,16 +235,14 @@ func (s *WorkspaceProvisioningService) ProvisionWithProgress(ctx context.Context
 		} else {
 			workspaces, err = p.Provision(ctx, moduleRequest, onOutput)
 		}
-		if err != nil {
-			return rollbackProvisioning(ctx, s, completed, err, onProgress)
+		if err == nil || request.deferWorkspaceRollback {
+			completed = append(completed, completedProvision{moduleRequest, workspaces})
 		}
-		completed = append(completed, completedProvision{moduleRequest, workspaces})
+		if err != nil {
+			return finish(err)
+		}
 	}
-	var result []domain.ServiceWorkspace
-	for _, item := range completed {
-		result = append(result, item.workspaces...)
-	}
-	return result, nil
+	return finish(nil)
 }
 
 func rollbackProvisioning(ctx context.Context, s *WorkspaceProvisioningService, completed []completedProvision, primary error, onProgress func(TaskCreationProgress)) ([]domain.ServiceWorkspace, error) {
@@ -198,9 +260,9 @@ func (s *WorkspaceProvisioningService) Rollback(ctx context.Context, request Wor
 }
 
 func (s *WorkspaceProvisioningService) RollbackWithProgress(ctx context.Context, request WorkspaceProvisionRequest, workspaces []domain.ServiceWorkspace, onProgress func(TaskCreationProgress)) error {
+	ctx = context.WithoutCancel(workspaceBatchContext(ctx))
 	for i := len(workspaces) - 1; i >= 0; i-- {
 		ws := workspaces[i]
-		event := taskCreationProgressForWorkspace(ws, TaskCreationPhaseRollback)
 		var module *domain.ServiceModuleConfig
 		for j := range request.Service.Modules {
 			if request.Service.Modules[j].ID == ws.ModuleID {
@@ -209,13 +271,9 @@ func (s *WorkspaceProvisioningService) RollbackWithProgress(ctx context.Context,
 			}
 		}
 		if module == nil {
-			err := fmt.Errorf("回滚请求缺少模块快照：%s", ws.ModuleID)
-			emitTaskCreationProgress(onProgress, TaskCreationProgress{Phase: event.Phase, Status: TaskCreationProgressStarted, ServiceID: event.ServiceID, ServiceName: event.ServiceName, ModuleID: event.ModuleID, ModuleName: event.ModuleName, Message: "正在回滚模块工作区"})
-			failed := event
-			failed.Status = TaskCreationProgressFailed
-			failed.Message = err.Error()
-			emitTaskCreationProgress(onProgress, failed)
-			return err
+			return runWorkspaceRollback(onProgress, ws, func() error {
+				return fmt.Errorf("回滚请求缺少模块快照：%s", ws.ModuleID)
+			})
 		}
 		r := request
 		r.Service = request.Service
@@ -227,19 +285,18 @@ func (s *WorkspaceProvisioningService) RollbackWithProgress(ctx context.Context,
 				}
 				continue
 			}
-			if err := runTaskCreationProgress(onProgress, event, "正在回滚模块工作区", "模块工作区回滚完成", func() error {
+			if err := runWorkspaceRollback(onProgress, ws, func() error {
+				if err := r.verifyTaskDirectory(); err != nil {
+					return err
+				}
 				return p.Rollback(ctx, r, []domain.ServiceWorkspace{ws})
 			}); err != nil {
 				return err
 			}
 		} else {
-			err := fmt.Errorf("未注册工作区策略：%s", ws.Strategy)
-			emitTaskCreationProgress(onProgress, TaskCreationProgress{Phase: event.Phase, Status: TaskCreationProgressStarted, ServiceID: event.ServiceID, ServiceName: event.ServiceName, ModuleID: event.ModuleID, ModuleName: event.ModuleName, Message: "正在回滚模块工作区"})
-			failed := event
-			failed.Status = TaskCreationProgressFailed
-			failed.Message = err.Error()
-			emitTaskCreationProgress(onProgress, failed)
-			return err
+			return runWorkspaceRollback(onProgress, ws, func() error {
+				return fmt.Errorf("未注册工作区策略：%s", ws.Strategy)
+			})
 		}
 	}
 	return nil
@@ -388,11 +445,12 @@ func (i *WorkspaceBranchReuseInspector) Inspect(ctx context.Context, repository 
 }
 
 func (i *WorkspaceBranchReuseInspector) InspectWithProgress(ctx context.Context, repository domain.RepositoryConfig, service domain.GroupServiceConfig, requestedBranch string, moduleBranches map[string]string, onProgress func(TaskCreationProgress)) ([]BranchReuseConflict, error) {
+	ctx = workspaceBatchContext(ctx)
 	root, err := filepath.Abs(repository.RootPath)
 	if err != nil {
 		return nil, err
 	}
-	common, err := i.Git.CommonDirectory(root)
+	common, err := gitCommonDirectoryContext(ctx, i.Git, root)
 	if err != nil {
 		return nil, err
 	}
@@ -422,6 +480,9 @@ func (i *WorkspaceBranchReuseInspector) InspectWithProgress(ctx context.Context,
 			return err
 		}
 		for _, module := range service.Modules {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			target := targets[module.ID]
 			checking := taskCreationProgressForModule(service, module, TaskCreationPhaseChecking)
 			var conflict *BranchReuseConflict
@@ -583,6 +644,7 @@ func (p *StandardWorktreeProvisioner) Provision(ctx context.Context, request Wor
 }
 
 func (p *StandardWorktreeProvisioner) ProvisionWithProgress(ctx context.Context, request WorkspaceProvisionRequest, onOutput func(process.StreamEvent), onProgress func(TaskCreationProgress)) ([]domain.ServiceWorkspace, error) {
+	ctx = workspaceBatchContext(ctx)
 	checking := TaskCreationProgress{Phase: TaskCreationPhaseChecking, ServiceID: request.Service.ID, ServiceName: request.Service.DisplayName}
 	root := ""
 	common := ""
@@ -592,7 +654,7 @@ func (p *StandardWorktreeProvisioner) ProvisionWithProgress(ctx context.Context,
 		if err != nil {
 			return err
 		}
-		common, err = p.Git.CommonDirectory(root)
+		common, err = gitCommonDirectoryContext(ctx, p.Git, root)
 		return err
 	}); err != nil {
 		return nil, err
@@ -627,7 +689,7 @@ func (p *StandardWorktreeProvisioner) provisionLocked(ctx context.Context, reque
 		if common != expectedCommon {
 			return fmt.Errorf("仓库 Git 身份已变化，请先手动刷新并检查配置")
 		}
-		if err := os.MkdirAll(request.TaskDirectory, 0o755); err != nil {
+		if err := request.prepareTaskDirectory(); err != nil {
 			return err
 		}
 		branches, err = resolveModuleTargets(request)
@@ -643,6 +705,9 @@ func (p *StandardWorktreeProvisioner) provisionLocked(ctx context.Context, reque
 	}
 	created := []domain.ServiceWorkspace{}
 	for _, module := range request.Service.Modules {
+		if err := ctx.Err(); err != nil {
+			return rollbackStandardWithProgress(ctx, p, request, created, err, onProgress)
+		}
 		preparing := taskCreationProgressForModule(request.Service, module, TaskCreationPhasePreparingWorktree)
 		emitTaskCreationProgress(onProgress, TaskCreationProgress{Phase: preparing.Phase, Status: TaskCreationProgressStarted, ServiceID: preparing.ServiceID, ServiceName: preparing.ServiceName, ModuleID: preparing.ModuleID, ModuleName: preparing.ModuleName, Message: "正在准备 Worktree"})
 		failPreparation := func(cause error) ([]domain.ServiceWorkspace, error) {
@@ -727,21 +792,55 @@ func (p *StandardWorktreeProvisioner) provisionLocked(ctx context.Context, reque
 		if (localExists || len(remoteRefs) > 0) && !confirmedReuse(request, key) {
 			return failPreparation(fmt.Errorf("分支复用状态已变化或尚未确认，请重新预检：%s", branch))
 		}
+		if request.deferWorkspaceRollback && !localExists && len(remoteRefs) == 0 {
+			for _, confirmed := range request.ConfirmedBranchReuseKeys {
+				if confirmed.RepositoryID == key.RepositoryID && confirmed.Branch == key.Branch && strings.HasPrefix(confirmed.StateFingerprint, "local=") {
+					return failPreparation(fmt.Errorf("分支复用状态已变化，请重新预检：%s", branch))
+				}
+			}
+		}
+		if err := request.verifyTaskDirectory(); err != nil {
+			return failPreparation(err)
+		}
+		if request.taskDirectoryOwner != nil {
+			if _, err := os.Lstat(target); !os.IsNotExist(err) {
+				return failPreparation(fmt.Errorf("目标目录已存在或不可检查：%s", target))
+			}
+			for _, wt := range worktrees {
+				if samePath(wt.Path, target) {
+					return failPreparation(fmt.Errorf("目标路径已有 Worktree 登记：%s", target))
+				}
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return failPreparation(err)
+		}
+		trackAfterRegistration := request.deferWorkspaceRollback && !localExists && len(remoteRefs) == 0
 		switch {
 		case localExists:
 			err = p.Git.AddExistingWorktree(root, target, branch)
 		case len(remoteRefs) > 0:
 			err = p.Git.AddTrackedRemoteWorktree(root, target, branch, base.Remote)
+		case trackAfterRegistration:
+			err = p.Git.addUntrackedWorktree(root, target, branch, remoteBaseRef)
 		default:
 			err = p.Git.AddWorktree(root, target, branch, remoteBaseRef, base.Remote)
 		}
-		if err != nil {
-			return failPreparation(err)
+		addErr := err
+		if addErr != nil {
+			if !request.deferWorkspaceRollback {
+				return failPreparation(addErr)
+			}
+			registered, proofErr := p.worktreeRegisteredAfterFailedAdd(request, target, branch, !localExists)
+			if proofErr != nil {
+				cleanupErr := &workspaceProvisionCleanupError{Path: target, Cause: proofErr}
+				emitProvisionCleanupFailure(onProgress, request.Service, module, cleanupErr)
+				return failPreparation(errors.Join(addErr, cleanupErr))
+			}
+			if !registered {
+				return failPreparation(addErr)
+			}
 		}
-		completedPreparation := preparing
-		completedPreparation.Status = TaskCreationProgressCompleted
-		completedPreparation.Message = "Worktree 已准备"
-		emitTaskCreationProgress(onProgress, completedPreparation)
 		source := domain.TaskModuleConfigured
 		if v, ok := request.ModuleSources[module.ID]; ok {
 			source = v
@@ -753,10 +852,28 @@ func (p *StandardWorktreeProvisioner) provisionLocked(ctx context.Context, reque
 		}
 		workspace := domain.ServiceWorkspace{RepositoryID: request.Repository.ID, ServiceName: request.Service.DisplayName, RepositoryPath: request.Repository.RootPath, WorktreePath: target, DevelopmentTool: request.Service.DevelopmentTool, Branch: branch, Health: domain.WorkspaceReady, GroupServiceID: request.Service.ID, ModuleID: module.ID, ModuleName: moduleName, Strategy: domain.WorkspaceStandardWorktree, ModuleSource: source, OriginURL: request.Repository.OriginURL, BaseRef: ptr(remoteBaseRef), TargetBranch: ptr(branch), TagEnabled: module.TagEnabled, TagMode: module.TagMode, TagTargetRef: optionalPtr(moduleEffectiveTagTarget(request.Service, module)), TagMessagePrefix: module.TagMessagePrefix, BranchCreatedByTask: !localExists, PushRemote: base.Remote}
 		created = append(created, workspace)
-		var initialized BootstrapResult
+		if addErr != nil {
+			return failPreparation(addErr)
+		}
+		if trackAfterRegistration {
+			if err := ctx.Err(); err != nil {
+				return failPreparation(err)
+			}
+			if err := p.Git.SetBranchUpstream(root, branch, base.Remote); err != nil {
+				return failPreparation(err)
+			}
+		}
+		completedPreparation := preparing
+		completedPreparation.Status = TaskCreationProgressCompleted
+		completedPreparation.Message = "Worktree 已准备"
+		emitTaskCreationProgress(onProgress, completedPreparation)
 		initializing := taskCreationProgressForModule(request.Service, module, TaskCreationPhaseInitializingWorkspace)
 		emitTaskCreationProgress(onProgress, TaskCreationProgress{Phase: initializing.Phase, Status: TaskCreationProgressStarted, ServiceID: initializing.ServiceID, ServiceName: initializing.ServiceName, ModuleID: initializing.ModuleID, ModuleName: initializing.ModuleName, Message: "正在初始化工作区"})
-		initialized, bootstrapErr := p.Bootstrap.Initialize(ctx, root, target, request.Service.Bootstrap, onOutput)
+		var initialized BootstrapResult
+		bootstrapErr := request.verifyTaskDirectory()
+		if bootstrapErr == nil {
+			initialized, bootstrapErr = p.Bootstrap.Initialize(ctx, root, target, request.Service.Bootstrap, onOutput)
+		}
 		if bootstrapErr != nil {
 			failed := initializing
 			failed.Status = TaskCreationProgressFailed
@@ -780,125 +897,160 @@ func (p *StandardWorktreeProvisioner) provisionLocked(ctx context.Context, reque
 	}
 	return created, nil
 }
+
+func (p *StandardWorktreeProvisioner) worktreeRegisteredAfterFailedAdd(request WorkspaceProvisionRequest, target, branch string, newBranch bool) (bool, error) {
+	if request.taskDirectoryOwner == nil {
+		return false, errors.New("无法确认任务目录所有权")
+	}
+	if err := request.verifyTaskDirectory(); err != nil {
+		return false, err
+	}
+	root := request.Repository.RootPath
+	worktrees, err := p.Git.Worktrees(root)
+	if err != nil {
+		return false, err
+	}
+	for _, wt := range worktrees {
+		if !samePath(wt.Path, target) {
+			continue
+		}
+		if wt.Branch != branch {
+			return false, fmt.Errorf("目标路径的 Worktree 登记使用了其他分支：%s", wt.Branch)
+		}
+		if err := p.verifyRollbackWorktree(context.Background(), request, target); err != nil {
+			return false, err
+		}
+		return true, request.verifyTaskDirectory()
+	}
+	if _, err := os.Lstat(target); !os.IsNotExist(err) {
+		return false, errors.New("无法确认目标路径的 Worktree 登记")
+	}
+	if newBranch {
+		exists, err := p.Git.RefExists(root, "refs/heads/"+branch)
+		if err != nil {
+			return false, err
+		}
+		if exists {
+			return false, fmt.Errorf("分支存在但未找到对应的 Worktree 登记：%s", branch)
+		}
+	}
+	return false, request.verifyTaskDirectory()
+}
+
 func rollbackStandard(ctx context.Context, p *StandardWorktreeProvisioner, request WorkspaceProvisionRequest, workspaces []domain.ServiceWorkspace, cause error) ([]domain.ServiceWorkspace, error) {
 	return rollbackStandardWithProgress(ctx, p, request, workspaces, cause, nil)
 }
 
 func rollbackStandardWithProgress(ctx context.Context, p *StandardWorktreeProvisioner, request WorkspaceProvisionRequest, workspaces []domain.ServiceWorkspace, cause error, onProgress func(TaskCreationProgress)) ([]domain.ServiceWorkspace, error) {
+	if request.deferWorkspaceRollback {
+		return workspaces, cause
+	}
 	// Compensation must finish after the creating request is cancelled. Each Git
 	// cleanup command retains its own timeout.
-	ctx = context.WithoutCancel(ctx)
-	for i := len(workspaces) - 1; i >= 0; i-- {
-		ws := workspaces[i]
-		event := taskCreationProgressForWorkspace(ws, TaskCreationPhaseRollback)
-		emitTaskCreationProgress(onProgress, TaskCreationProgress{Phase: event.Phase, Status: TaskCreationProgressStarted, ServiceID: event.ServiceID, ServiceName: event.ServiceName, ModuleID: event.ModuleID, ModuleName: event.ModuleName, Message: "正在回滚模块工作区"})
-		var cleanupErr error
-		var progressFailure error
-		if err := p.Git.RemoveWorktree(request.Repository.RootPath, ws.WorktreePath, true); err != nil {
-			cleanupErr = errors.Join(cleanupErr, err)
-			progressFailure = errors.Join(progressFailure, err)
-		}
-		if ws.BranchCreatedByTask {
-			result, err := p.Git.RunContext(ctx, request.Repository.RootPath, 2*time.Minute, false, false, "branch", "-D", ws.Branch)
-			if err != nil {
-				cleanupErr = errors.Join(cleanupErr, err)
-				progressFailure = errors.Join(progressFailure, err)
-			} else if err := gitCleanupProgressFailure("删除任务分支 "+ws.Branch, result); err != nil {
-				progressFailure = errors.Join(progressFailure, err)
-			}
-		}
-		if progressFailure != nil {
-			failed := event
-			failed.Status = TaskCreationProgressFailed
-			failed.Message = progressFailure.Error()
-			emitTaskCreationProgress(onProgress, failed)
-		} else {
-			completed := event
-			completed.Status = TaskCreationProgressCompleted
-			completed.Message = "模块工作区已回滚"
-			emitTaskCreationProgress(onProgress, completed)
-		}
-		if cleanupErr != nil {
-			cause = errors.Join(cause, cleanupErr)
-		}
+	ctx = context.WithoutCancel(workspaceBatchContext(ctx))
+	if err := p.rollbackWorktreesLocked(ctx, request, workspaces, onProgress); err != nil {
+		cause = errors.Join(cause, err)
 	}
 	return nil, cause
 }
+
 func (p *StandardWorktreeProvisioner) Rollback(ctx context.Context, request WorkspaceProvisionRequest, workspaces []domain.ServiceWorkspace) error {
 	return p.RollbackWithProgress(ctx, request, workspaces, nil)
 }
 
 func (p *StandardWorktreeProvisioner) RollbackWithProgress(ctx context.Context, request WorkspaceProvisionRequest, workspaces []domain.ServiceWorkspace, onProgress func(TaskCreationProgress)) error {
-	ctx = context.WithoutCancel(ctx)
-	root := request.Repository.RootPath
-	events := make([]TaskCreationProgress, len(workspaces))
-	for i := len(workspaces) - 1; i >= 0; i-- {
-		events[i] = taskCreationProgressForWorkspace(workspaces[i], TaskCreationPhaseRollback)
-		emitTaskCreationProgress(onProgress, TaskCreationProgress{Phase: events[i].Phase, Status: TaskCreationProgressStarted, ServiceID: events[i].ServiceID, ServiceName: events[i].ServiceName, ModuleID: events[i].ModuleID, ModuleName: events[i].ModuleName, Message: "正在回滚模块工作区"})
+	if len(workspaces) == 0 {
+		return nil
 	}
-	common, err := p.Git.CommonDirectory(root)
-	if err != nil {
-		for i := len(workspaces) - 1; i >= 0; i-- {
-			failed := events[i]
-			failed.Status = TaskCreationProgressFailed
-			failed.Message = err.Error()
-			emitTaskCreationProgress(onProgress, failed)
+	ctx = context.WithoutCancel(workspaceBatchContext(ctx))
+	common, err := gitCommonDirectoryContext(ctx, p.Git, request.Repository.RootPath)
+	if err == nil && request.taskDirectoryOwner != nil && !samePath(common, request.Repository.GitCommonDirectory) {
+		err = fmt.Errorf("仓库 Git 身份已变化：%s", request.Repository.RootPath)
+	}
+	if err == nil {
+		entered := false
+		err = p.Locks.WithRepository(common, func() error {
+			entered = true
+			return p.rollbackWorktreesLocked(ctx, request, workspaces, onProgress)
+		})
+		if entered {
+			return err
 		}
+	}
+	var failures []error
+	for i := len(workspaces) - 1; i >= 0; i-- {
+		failures = append(failures, runWorkspaceRollback(onProgress, workspaces[i], func() error { return err }))
+	}
+	return errors.Join(failures...)
+}
+
+func (p *StandardWorktreeProvisioner) rollbackWorktreesLocked(ctx context.Context, request WorkspaceProvisionRequest, workspaces []domain.ServiceWorkspace, onProgress func(TaskCreationProgress)) error {
+	var failures []error
+	for i := len(workspaces) - 1; i >= 0; i-- {
+		ws := workspaces[i]
+		if err := runWorkspaceRollback(onProgress, ws, func() error {
+			return p.rollbackWorktree(ctx, request, ws)
+		}); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
+}
+
+func (p *StandardWorktreeProvisioner) rollbackWorktree(ctx context.Context, request WorkspaceProvisionRequest, ws domain.ServiceWorkspace) error {
+	if err := request.verifyTaskDirectory(); err != nil {
 		return err
 	}
-	entered := false
-	err = p.Locks.WithRepository(common, func() error {
-		entered = true
-		var failure error
-		progressFailures := make([]error, len(workspaces))
-		for i := len(workspaces) - 1; i >= 0; i-- {
-			ws := workspaces[i]
-			target, _ := filepath.Abs(ws.WorktreePath)
-			task, _ := filepath.Abs(request.TaskDirectory)
-			if filepath.Dir(target) != filepath.Clean(task) {
-				cleanupErr := fmt.Errorf("拒绝回滚任务目录之外的 Worktree：%s", target)
-				failure = errors.Join(failure, cleanupErr)
-				progressFailures[i] = errors.Join(progressFailures[i], cleanupErr)
-				continue
-			}
-			if err := p.Git.RemoveWorktree(root, target, true); err != nil {
-				failure = errors.Join(failure, err)
-				progressFailures[i] = errors.Join(progressFailures[i], err)
-			}
-			if ws.BranchCreatedByTask {
-				result, err := p.Git.RunContext(ctx, root, 2*time.Minute, false, false, "branch", "-D", ws.Branch)
-				if err != nil {
-					failure = errors.Join(failure, err)
-					progressFailures[i] = errors.Join(progressFailures[i], err)
-				} else if err := gitCleanupProgressFailure("删除任务分支 "+ws.Branch, result); err != nil {
-					progressFailures[i] = errors.Join(progressFailures[i], err)
-				}
-			}
-		}
-		for i := len(workspaces) - 1; i >= 0; i-- {
-			if progressFailures[i] != nil {
-				failed := events[i]
-				failed.Status = TaskCreationProgressFailed
-				failed.Message = progressFailures[i].Error()
-				emitTaskCreationProgress(onProgress, failed)
-			} else {
-				completed := events[i]
-				completed.Status = TaskCreationProgressCompleted
-				completed.Message = "模块工作区已回滚"
-				emitTaskCreationProgress(onProgress, completed)
-			}
-		}
-		return failure
-	})
-	if err != nil && !entered {
-		for i := len(workspaces) - 1; i >= 0; i-- {
-			failed := events[i]
-			failed.Status = TaskCreationProgressFailed
-			failed.Message = err.Error()
-			emitTaskCreationProgress(onProgress, failed)
+	target, _ := filepath.Abs(ws.WorktreePath)
+	task, _ := filepath.Abs(request.TaskDirectory)
+	if filepath.Dir(target) != filepath.Clean(task) {
+		return fmt.Errorf("拒绝回滚任务目录之外的 Worktree：%s", target)
+	}
+	if request.taskDirectoryOwner != nil {
+		if err := p.verifyRollbackWorktree(ctx, request, target); err != nil {
+			return err
 		}
 	}
-	return err
+	root := request.Repository.RootPath
+	cleanupErr := p.Git.RemoveWorktree(root, target, true)
+	if !ws.BranchCreatedByTask {
+		return cleanupErr
+	}
+	if err := request.verifyTaskDirectory(); err != nil {
+		return errors.Join(cleanupErr, err)
+	}
+	result, err := p.Git.RunContext(ctx, root, 2*time.Minute, false, false, "branch", "-D", ws.Branch)
+	if err != nil {
+		return errors.Join(cleanupErr, err)
+	}
+	return errors.Join(cleanupErr, gitCleanupProgressFailure("删除任务分支 "+ws.Branch, result))
+}
+
+func (p *StandardWorktreeProvisioner) verifyRollbackWorktree(ctx context.Context, request WorkspaceProvisionRequest, target string) error {
+	info, err := os.Lstat(target)
+	if os.IsNotExist(err) {
+		// Git can still remove the registration of a missing checkout.
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	reparse, err := bootstrapPathIsReparsePoint(target, info)
+	if err != nil {
+		return err
+	}
+	marker, markerErr := os.Lstat(filepath.Join(target, ".git"))
+	if !info.IsDir() || reparse || markerErr != nil || !marker.Mode().IsRegular() {
+		return fmt.Errorf("Worktree 目录或 Git 标记已变化：%s", target)
+	}
+	common, err := gitCommonDirectoryContext(ctx, p.Git, target)
+	if err != nil {
+		return err
+	}
+	if !samePath(common, request.Repository.GitCommonDirectory) {
+		return fmt.Errorf("Worktree 已指向其他仓库：%s", target)
+	}
+	return request.verifyTaskDirectory()
 }
 
 type IndependentCloneProvisioner struct {
@@ -914,10 +1066,14 @@ func (p *IndependentCloneProvisioner) Provision(ctx context.Context, request Wor
 }
 
 func (p *IndependentCloneProvisioner) ProvisionWithProgress(ctx context.Context, request WorkspaceProvisionRequest, onOutput func(process.StreamEvent), onProgress func(TaskCreationProgress)) ([]domain.ServiceWorkspace, error) {
+	ctx = workspaceBatchContext(ctx)
 	created := []domain.ServiceWorkspace{}
 	for _, module := range request.Service.Modules {
 		fail := func(cause error) ([]domain.ServiceWorkspace, error) {
 			return rollbackClonesWithProgress(request, created, p, cause, onProgress)
+		}
+		if err := ctx.Err(); err != nil {
+			return fail(err)
 		}
 		checking := taskCreationProgressForModule(request.Service, module, TaskCreationPhaseChecking)
 		emitTaskCreationProgress(onProgress, TaskCreationProgress{Phase: checking.Phase, Status: TaskCreationProgressStarted, ServiceID: checking.ServiceID, ServiceName: checking.ServiceName, ModuleID: checking.ModuleID, ModuleName: checking.ModuleName, Message: "正在检查克隆配置和目标目录"})
@@ -985,7 +1141,7 @@ func (p *IndependentCloneProvisioner) ProvisionWithProgress(ctx context.Context,
 					}
 				}
 			}
-			return cloneIntoPlace(request.TaskDirectory, target, ownership, func(staging string) error {
+			return request.cloneIntoPlace(ctx, target, ownership, func(staging string) error {
 				if targetSHA != "" {
 					key := BranchReuseKey{request.Repository.ID, targetBranch, fmt.Sprintf("clone-remote=%s/%s@%s", base.Remote, targetBranch, targetSHA)}
 					if !confirmedReuse(request, key) {
@@ -1026,6 +1182,7 @@ func (p *IndependentCloneProvisioner) ProvisionWithProgress(ctx context.Context,
 			})
 		})
 		if err != nil {
+			emitProvisionCleanupFailure(onProgress, request.Service, module, err)
 			return fail(err)
 		}
 		moduleName := request.ModuleDisplayNames[module.ID]
@@ -1045,7 +1202,11 @@ func (p *IndependentCloneProvisioner) ProvisionWithProgress(ctx context.Context,
 		created = append(created, ws)
 		initializing := taskCreationProgressForModule(request.Service, module, TaskCreationPhaseInitializingWorkspace)
 		emitTaskCreationProgress(onProgress, TaskCreationProgress{Phase: initializing.Phase, Status: TaskCreationProgressStarted, ServiceID: initializing.ServiceID, ServiceName: initializing.ServiceName, ModuleID: initializing.ModuleID, ModuleName: initializing.ModuleName, Message: "正在初始化工作区"})
-		initialized, bootstrapErr := p.Bootstrap.Initialize(ctx, request.Repository.RootPath, target, request.Service.Bootstrap, onOutput)
+		var initialized BootstrapResult
+		bootstrapErr := request.verifyTaskDirectory()
+		if bootstrapErr == nil {
+			initialized, bootstrapErr = p.Bootstrap.Initialize(ctx, request.Repository.RootPath, target, request.Service.Bootstrap, onOutput)
+		}
 		if bootstrapErr != nil {
 			failed := initializing
 			failed.Status = TaskCreationProgressFailed
@@ -1090,42 +1251,34 @@ func rollbackClones(request WorkspaceProvisionRequest, workspaces []domain.Servi
 }
 
 func rollbackClonesWithProgress(request WorkspaceProvisionRequest, workspaces []domain.ServiceWorkspace, p *IndependentCloneProvisioner, cause error, onProgress func(TaskCreationProgress)) ([]domain.ServiceWorkspace, error) {
-	for i := len(workspaces) - 1; i >= 0; i-- {
-		ws := workspaces[i]
-		event := taskCreationProgressForWorkspace(ws, TaskCreationPhaseRollback)
-		emitTaskCreationProgress(onProgress, TaskCreationProgress{Phase: event.Phase, Status: TaskCreationProgressStarted, ServiceID: event.ServiceID, ServiceName: event.ServiceName, ModuleID: event.ModuleID, ModuleName: event.ModuleName, Message: "正在回滚独立克隆"})
-		moduleID := ws.ModuleID
-		ownership := cloneOwnership(request.TaskDirectory, request.Repository.ID, request.Service.ID, moduleID)
-		if err := deleteOwnedClone(request.TaskDirectory, ws.WorktreePath, ownership); err != nil {
-			failed := event
-			failed.Status = TaskCreationProgressFailed
-			failed.Message = err.Error()
-			emitTaskCreationProgress(onProgress, failed)
-			cause = errors.Join(cause, err)
-			continue
-		}
-		completed := event
-		completed.Status = TaskCreationProgressCompleted
-		completed.Message = "独立克隆已回滚"
-		emitTaskCreationProgress(onProgress, completed)
+	if request.deferWorkspaceRollback {
+		return workspaces, cause
+	}
+	if err := p.RollbackWithProgress(context.Background(), request, workspaces, onProgress); err != nil {
+		cause = errors.Join(cause, err)
 	}
 	return nil, cause
 }
+
 func (p *IndependentCloneProvisioner) Rollback(ctx context.Context, request WorkspaceProvisionRequest, workspaces []domain.ServiceWorkspace) error {
-	var failure error
+	return p.RollbackWithProgress(ctx, request, workspaces, nil)
+}
+
+func (p *IndependentCloneProvisioner) RollbackWithProgress(_ context.Context, request WorkspaceProvisionRequest, workspaces []domain.ServiceWorkspace, onProgress func(TaskCreationProgress)) error {
+	var failures []error
 	for i := len(workspaces) - 1; i >= 0; i-- {
 		ws := workspaces[i]
-		target, _ := filepath.Abs(ws.WorktreePath)
-		task, _ := filepath.Abs(request.TaskDirectory)
-		if filepath.Dir(target) != filepath.Clean(task) {
-			failure = errors.Join(failure, fmt.Errorf("拒绝删除任务目录之外的独立克隆：%s", target))
-			continue
-		}
-		if err := deleteOwnedClone(request.TaskDirectory, target, cloneOwnership(request.TaskDirectory, request.Repository.ID, request.Service.ID, ws.ModuleID)); err != nil {
-			failure = errors.Join(failure, err)
+		if err := runWorkspaceRollback(onProgress, ws, func() error {
+			if err := request.verifyTaskDirectory(); err != nil {
+				return err
+			}
+			ownership := cloneOwnership(request.TaskDirectory, request.Repository.ID, request.Service.ID, ws.ModuleID)
+			return deleteOwnedClone(request.TaskDirectory, ws.WorktreePath, ownership)
+		}); err != nil {
+			failures = append(failures, err)
 		}
 	}
-	return failure
+	return errors.Join(failures...)
 }
 
 func normalizeBaseRef(value string) string {
@@ -1175,12 +1328,20 @@ func cloneOwnership(taskDirectory, repositoryID, serviceID, moduleID string) str
 }
 func cloneMarker(path string) string { return filepath.Join(path, ".git", "silverwing-owner") }
 func cloneIntoPlace(taskDirectory, target, ownership string, clone func(staging string) error) error {
-	task, _ := filepath.Abs(taskDirectory)
+	request := WorkspaceProvisionRequest{TaskDirectory: taskDirectory}
+	return request.cloneIntoPlace(context.Background(), target, ownership, clone)
+}
+
+func (r WorkspaceProvisionRequest) cloneIntoPlace(ctx context.Context, target, ownership string, clone func(staging string) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	task, _ := filepath.Abs(r.TaskDirectory)
 	targetAbs, _ := filepath.Abs(target)
 	if filepath.Dir(targetAbs) != filepath.Clean(task) {
 		return fmt.Errorf("独立克隆必须位于任务目录的直接子级")
 	}
-	if err := os.MkdirAll(task, 0o755); err != nil {
+	if err := r.prepareTaskDirectory(); err != nil {
 		return err
 	}
 	if _, err := os.Lstat(targetAbs); err == nil {
@@ -1190,27 +1351,44 @@ func cloneIntoPlace(taskDirectory, target, ownership string, clone func(staging 
 	if err != nil {
 		return err
 	}
+	cleanupStage := func(cause error) error {
+		cleanupErr := r.verifyTaskDirectory()
+		if cleanupErr == nil {
+			cleanupErr = os.RemoveAll(stagingRoot)
+		}
+		if cleanupErr != nil {
+			return errors.Join(cause, &workspaceProvisionCleanupError{Path: stagingRoot, Cause: cleanupErr})
+		}
+		return cause
+	}
 	ownerFile := filepath.Join(stagingRoot, ".silverwing-owner")
 	if err = os.WriteFile(ownerFile, []byte(ownership), 0o600); err != nil {
-		_ = os.RemoveAll(stagingRoot)
-		return err
+		return cleanupStage(err)
 	}
 	staging := filepath.Join(stagingRoot, "workspace")
-	if err = clone(staging); err == nil {
-		err = os.MkdirAll(filepath.Dir(cloneMarker(staging)), 0o755)
+	if err = clone(staging); err != nil {
+		return cleanupStage(err)
 	}
-	if err == nil {
-		err = os.WriteFile(cloneMarker(staging), []byte(ownership), 0o600)
+	if err = ctx.Err(); err != nil {
+		return cleanupStage(err)
 	}
-	if err == nil {
-		err = os.Rename(staging, targetAbs)
+	if err = r.verifyTaskDirectory(); err != nil {
+		return cleanupStage(err)
 	}
-	if err != nil {
-		if _, statErr := os.Lstat(targetAbs); statErr == nil {
-			_ = deleteOwnedClone(task, targetAbs, ownership)
-		}
-		_ = os.RemoveAll(stagingRoot)
-		return err
+	if err = os.MkdirAll(filepath.Dir(cloneMarker(staging)), 0o755); err != nil {
+		return cleanupStage(err)
+	}
+	if err = os.WriteFile(cloneMarker(staging), []byte(ownership), 0o600); err != nil {
+		return cleanupStage(err)
+	}
+	if err = r.verifyTaskDirectory(); err != nil {
+		return cleanupStage(err)
+	}
+	if _, statErr := os.Lstat(targetAbs); !os.IsNotExist(statErr) {
+		return cleanupStage(fmt.Errorf("目标目录已存在或不可检查：%s", targetAbs))
+	}
+	if err = os.Rename(staging, targetAbs); err != nil {
+		return cleanupStage(err)
 	}
 	_ = os.Remove(ownerFile)
 	_ = os.Remove(stagingRoot)

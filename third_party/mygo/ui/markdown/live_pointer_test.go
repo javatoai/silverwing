@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/editor"
 )
 
 // A custom fence may render native shapes or images without contributing any
@@ -76,5 +77,66 @@ func TestLiveEditorPointerEmptyDocumentKeepsInputPosition(t *testing.T) {
 	tester.Type("中文")
 	if s.Buffer().OriginalText() != "中文" {
 		t.Fatalf("empty document lost native input: %q", s.Buffer().OriginalText())
+	}
+}
+
+func TestLiveEditorPointerLongSQLKeepsViewport(t *testing.T) {
+	const visibleLine = "SELECT 111;"
+	const offscreenLine = "SELECT 222;"
+	source := "Before SQL.\n\n```sql\n" + strings.Repeat("SELECT 0;\n", 10) + visibleLine + "\n" +
+		strings.Repeat("SELECT 0;\n", 80) + offscreenLine + "\n```\n\nAfter SQL."
+	lineStart := strings.Index(source, visibleLine)
+	lineEnd := lineStart + len(visibleLine)
+	target := lineStart + len("SELECT ")
+	s := NewEditorState(editor.NewBufferPreservingLineEndings(source))
+	var paintedRows []ui.Rect
+	observe := false
+	tester := ui.NewTester(func(c *ui.Context) {
+		ui.Column(c).Fill().DrawOver(func(_ *ui.Painter, _ ui.Rect) {
+			if observe {
+				row, _ := s.ownedCaretBounds(target)
+				paintedRows = append(paintedRows, row)
+			}
+		}).Children(func() {
+			Editor(c, s, EditorOptions{InPlaceCode: true}).Fill()
+		})
+	}, 600, 300)
+	tester.Scroll(300, 150, 0, 80)
+	row, ok := s.ownedCaretBounds(target)
+	before := s.scroll.Y
+	if !ok || before == 0 || row.Y < 16 || row.Y+row.H > s.rect.H-16 {
+		t.Fatalf("SQL fixture needs a visible interior line after scrolling: row=%+v scroll=%g viewport=%+v", row, before, s.rect)
+	}
+	x, y := s.rect.X+row.X, s.rect.Y+row.Y+row.H/2
+	observe = true
+	checkViewport := func(phase string) {
+		t.Helper()
+		if s.scroll.Y != before {
+			t.Errorf("%s shifted document scroll from %g to %g", phase, before, s.scroll.Y)
+		}
+		for _, painted := range paintedRows {
+			if delta := painted.Y - row.Y; painted.H == 0 || delta < -0.5 || delta > 0.5 {
+				t.Errorf("%s moved the clicked SQL line during paint: before=%+v painted=%+v", phase, row, painted)
+				break
+			}
+		}
+		paintedRows = paintedRows[:0]
+	}
+	tester.Press(x, y)
+	checkViewport("pointer down")
+	tester.Release(x, y)
+	checkViewport("pointer up")
+	tester.Frame()
+	checkViewport("settled frame")
+	observe = false
+	if anchor, caret := s.Selection(); anchor != caret || caret < lineStart || caret > lineEnd {
+		t.Fatalf("click placed selection %d:%d outside SQL line %d:%d", anchor, caret, lineStart, lineEnd)
+	}
+
+	offscreen := strings.Index(source, offscreenLine) + len("SELECT ")
+	s.SetSelection(offscreen, offscreen)
+	tester.Frame()
+	if caret, active := tester.TextCaret(); !active || caret.H <= 0 || caret.Y < 0 || caret.Y+caret.H > s.rect.H || s.scroll.Y <= before {
+		t.Fatalf("explicit selection did not reveal the offscreen SQL caret: caret=%+v active=%v scroll=%g", caret, active, s.scroll.Y)
 	}
 }

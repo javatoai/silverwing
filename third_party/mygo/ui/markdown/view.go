@@ -470,6 +470,9 @@ func (st *viewState) blocks(c *ui.Context, parent int, tight bool, base spanStyl
 			}
 		}
 		el := st.block(c, j, tight, base)
+		if th.ProseMaxWidth > 0 && (b.Kind == parser.Heading || b.Kind == parser.Paragraph && !imagesOnly(d.Inlines(j))) {
+			el.MaxWidth(th.em(th.ProseMaxWidth)).AlignSelf(ui.Start)
+		}
 		st.fadeIn(el, b)
 		if top > 0 {
 			el.Margin(top, 0, 0, 0)

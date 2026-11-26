@@ -428,6 +428,44 @@ func TestMarkdownLivePreviewAcceptanceOtherReadersRemainReadonly(t *testing.T) {
 	}
 }
 
+func TestMarkdownReadingReadonlyPreviewWrapsWhileSourceScrolls(t *testing.T) {
+	const paragraph = "开始开发前，先核对需求和任务分支，阅读全局规则及对应服务的项目资料。跨服务修改时，沿用现有接口的行为，记录本次涉及的服务和验证范围。完成后，把验证结果和待确认的问题补充到任务资料，便于下一次继续开发。"
+	source := "# 开发任务指南\n\n" + paragraph + "\n\n" +
+		"## 验证记录\n\n按本次改动填写服务、验证范围和实际结果。\n\n" +
+		"| 服务 | 验证范围 | 结果 |\n| --- | --- | --- |\n" +
+		"| api-service | 请求校验与错误响应 | 通过 |\n| data-center | 查询结果与分页 | 通过 |\n| job-manager | 调度与重复执行 | 待验证 |\n\n" +
+		"```shell\ngo test ./internal/service\n```\n"
+	s := &app{}
+	state := newReadonlyMarkdownState("reading-layout", source, nil)
+	t.Cleanup(func() { closeMarkdownPreviewState(state) })
+	tester := ui.NewTester(func(c *ui.Context) {
+		s.beginOverflowMenuFrame()
+		ui.Column(c).Fill().Children(func() { s.renderReadonlyMarkdownReader(c, setTheme(c, false), state) })
+		s.endOverflowMenuFrame()
+	}, 1440, 680)
+	tester.SetLocale("zh-Hans")
+	tester.Frame()
+	wide, ok := tester.Find(paragraph)
+	if !ok || wide.W > 800 || wide.H < 35 {
+		t.Fatalf("wide preview did not limit the paragraph width: %+v, found=%t", wide, ok)
+	}
+	captureDesktopTestFrame(t, tester, "markdown-reading-wide")
+
+	tester.SetSize(420, 680)
+	tester.Frame()
+	narrow, ok := tester.Find(paragraph)
+	if !ok || narrow.X+narrow.W > 420 || narrow.H <= wide.H || state.readonlyReader.previewScroll.MaxX > 1 {
+		t.Fatalf("narrow preview did not wrap immediately: %+v, found=%t, horizontal overflow=%v", narrow, ok, state.readonlyReader.previewScroll.MaxX)
+	}
+	captureDesktopTestFrame(t, tester, "markdown-reading-narrow")
+
+	setReadonlyMarkdownSourceMode(state, true)
+	tester.Frame()
+	if state.readonlyReader.sourceScroll.MaxX <= 1 || state.doc.Source() != source {
+		t.Fatal("source view lost horizontal scrolling or changed the document")
+	}
+}
+
 // This opt-in fixture writes only synthetic state into a new, isolated home.
 // It deliberately avoids App.Snapshot, which also discovers user-local tools.
 func TestPrepareMarkdownLivePreviewNativeSmokeHome(t *testing.T) {

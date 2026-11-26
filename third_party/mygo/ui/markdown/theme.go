@@ -42,6 +42,9 @@ type Theme struct {
 	// BlockSpacing is the space between blocks, in ems: 0.75. ItemSpacing
 	// is that between the items of a tight list: 0.25.
 	BlockSpacing, ItemSpacing float32
+	// ProseMaxWidth limits headings and paragraphs in ems. Zero uses the
+	// available width. Tables and other non-prose blocks use their own layout.
+	ProseMaxWidth float32
 	// Headings are the styles of headings of levels 1 to 6.
 	Headings [6]HeadingStyle
 	// ListIndent is how far list items are from their list's edge, their

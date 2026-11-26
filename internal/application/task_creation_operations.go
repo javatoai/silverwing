@@ -75,10 +75,11 @@ func orderedTaskProgress(progress func(workspace.TaskCreationProgress)) func(wor
 	var sequence uint64
 	var mutex sync.Mutex
 	return func(event workspace.TaskCreationProgress) {
+		// Deliver the event in the same critical section as assigning its sequence.
 		mutex.Lock()
+		defer mutex.Unlock()
 		sequence++
 		event.Sequence = sequence
-		mutex.Unlock()
 		progress(event)
 	}
 }

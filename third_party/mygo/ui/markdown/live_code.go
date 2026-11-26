@@ -208,9 +208,6 @@ func (s *EditorState) codeBody(c *ui.Context, index int) ui.Element {
 					el.NoWrap()
 				}
 				s.observe(el, ch.spans, mapped, mapped, font, th.CodeLineHeight, !st.o.WrapCode)
-				if s.reveal && s.caret >= code.bodyStart && s.caret <= code.bodyEnd {
-					el.ScrollIntoView()
-				}
 				at += logicalCount + 1 // the newline between display chunks
 			}
 		})

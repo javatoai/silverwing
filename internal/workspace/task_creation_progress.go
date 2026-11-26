@@ -5,17 +5,18 @@ import "silverwing-go/internal/domain"
 type TaskCreationProgressPhase string
 
 const (
-	TaskCreationPhaseChecking              TaskCreationProgressPhase = "checking"
-	TaskCreationPhasePreparingMaterials    TaskCreationProgressPhase = "preparing-materials"
-	TaskCreationPhaseRefreshingRemote      TaskCreationProgressPhase = "refreshing-remote"
-	TaskCreationPhasePreparingWorktree     TaskCreationProgressPhase = "preparing-worktree"
-	TaskCreationPhaseCloningRepository     TaskCreationProgressPhase = "cloning-repository"
-	TaskCreationPhaseInitializingWorkspace TaskCreationProgressPhase = "initializing-workspace"
-	TaskCreationPhaseSavingManifest        TaskCreationProgressPhase = "saving-manifest"
-	TaskCreationPhaseWritingDocuments      TaskCreationProgressPhase = "writing-documents"
-	TaskCreationPhaseLaunchingTools        TaskCreationProgressPhase = "launching-tools"
-	TaskCreationPhaseRollback              TaskCreationProgressPhase = "rollback"
-	TaskCreationPhaseCompleted             TaskCreationProgressPhase = "completed"
+	TaskCreationPhaseChecking               TaskCreationProgressPhase = "checking"
+	TaskCreationPhasePreparingMaterials     TaskCreationProgressPhase = "preparing-materials"
+	TaskCreationPhaseRefreshingRemote       TaskCreationProgressPhase = "refreshing-remote"
+	TaskCreationPhasePreparingWorktree      TaskCreationProgressPhase = "preparing-worktree"
+	TaskCreationPhaseProvisioningWorkspaces TaskCreationProgressPhase = "provisioning-workspaces"
+	TaskCreationPhaseCloningRepository      TaskCreationProgressPhase = "cloning-repository"
+	TaskCreationPhaseInitializingWorkspace  TaskCreationProgressPhase = "initializing-workspace"
+	TaskCreationPhaseSavingManifest         TaskCreationProgressPhase = "saving-manifest"
+	TaskCreationPhaseWritingDocuments       TaskCreationProgressPhase = "writing-documents"
+	TaskCreationPhaseLaunchingTools         TaskCreationProgressPhase = "launching-tools"
+	TaskCreationPhaseRollback               TaskCreationProgressPhase = "rollback"
+	TaskCreationPhaseCompleted              TaskCreationProgressPhase = "completed"
 )
 
 type TaskCreationProgressStatus string
@@ -24,6 +25,7 @@ const (
 	TaskCreationProgressStarted   TaskCreationProgressStatus = "started"
 	TaskCreationProgressCompleted TaskCreationProgressStatus = "completed"
 	TaskCreationProgressFailed    TaskCreationProgressStatus = "failed"
+	TaskCreationProgressCancelled TaskCreationProgressStatus = "cancelled"
 )
 
 // TaskCreationProgress describes an observable milestone in the existing

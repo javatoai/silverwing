@@ -22,6 +22,22 @@ func TestApplyAINamingPreservesGeneratedNames(t *testing.T) {
 	}
 }
 
+func TestApplyAINamingNormalizesGeneratedBranchWhitespace(t *testing.T) {
+	const link = "https://project.feishu.cn/obt/userstory/detail/123456"
+	state := RequirementDraftState{RequirementLink: link}
+	suggestion := RequirementAiNamingSuggestion{
+		FolderName:   "Improve cache consistency",
+		BranchSuffix: " Fix cache   refresh\t\u3000v2 ",
+	}
+	updated, err := state.ApplyAINaming(link, suggestion, "feature/{num}_{ai}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.TaskName != suggestion.FolderName || updated.Branch != "feature/123456_Fix_cache_refresh_v2" {
+		t.Fatalf("got task name %q and branch %q", updated.TaskName, updated.Branch)
+	}
+}
+
 func TestValidateRequirementAiNamingSuggestionRequiresUsableFields(t *testing.T) {
 	for _, suggestion := range []RequirementAiNamingSuggestion{
 		{BranchSuffix: "cache"},

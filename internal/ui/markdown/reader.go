@@ -202,6 +202,7 @@ func MarkdownReader(c *ui.Context, s *ReaderState, options ReaderOptions) ui.Ele
 		})
 	}
 	native := s.prepare(c, options)
+	native.Theme = readerTypography(c.Theme(), native.Theme)
 	if options.ContentOnly {
 		return root.Children(func() {
 			if s.mode == Source {
@@ -249,16 +250,32 @@ func MarkdownReader(c *ui.Context, s *ReaderState, options ReaderOptions) ui.Ele
 			code.View(c.Key("markdown-source"), s.sourceView).Grow(1).FillWidth()
 			return
 		}
-		ui.ScrollBoth(c.Key("markdown-scroll")).TrackScroll(&s.scroll).Grow(1).MinHeight(0).Children(func() {
-			body := md.View(c.Key("markdown-body"), s.document.Source, native).FillWidth().MinWidth(0)
-			if s.properties.viewportWidth > 0 {
-				// A two-axis scroll measures content with unbounded width. Keep
-				// prose and card controls within the actual reader viewport.
-				body.Width(s.properties.viewportWidth)
-			}
+		ui.Scroll(c.Key("markdown-scroll")).TrackScroll(&s.scroll).FillWidth().MinWidth(0).Grow(1).MinHeight(0).Children(func() {
+			md.View(c.Key("markdown-body"), s.document.Source, native).FillWidth().MinWidth(0)
 		})
 	})
 	return root
+}
+
+func readerTypography(window *ui.Theme, native *md.Theme) *md.Theme {
+	theme := md.Theme{}
+	if native != nil {
+		theme = *native
+	}
+	if theme.ProseMaxWidth == 0 {
+		theme.ProseMaxWidth = 52
+	}
+	theme.LineHeight = max(theme.LineHeight, 1.65)
+	theme.BlockSpacing = max(theme.BlockSpacing, .95)
+	for i := range theme.Headings {
+		heading := &theme.Headings[i]
+		heading.Top = max(heading.Top, 1.65)
+		heading.Bottom = max(heading.Bottom, .65)
+	}
+	if theme.TableStripe.A == 0 {
+		theme.TableStripe = window.Text.Alpha(.03)
+	}
+	return &theme
 }
 
 func (s *ReaderState) zoomInput(event ui.InputEvent) bool {

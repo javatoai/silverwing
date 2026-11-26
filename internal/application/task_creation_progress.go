@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"errors"
-	"sync"
 
 	"silverwing-go/internal/workspace"
 )
@@ -27,17 +26,5 @@ func (a *App) DispatchTaskCreation(ctx context.Context, action Action, onProgres
 	if err := ctx.Err(); err != nil {
 		return ActionResult{}, err
 	}
-	var forward func(workspace.TaskCreationProgress)
-	if onProgress != nil {
-		var sequence uint64
-		var mu sync.Mutex
-		forward = func(progress workspace.TaskCreationProgress) {
-			mu.Lock()
-			sequence++
-			progress.Sequence = sequence
-			mu.Unlock()
-			onProgress(progress)
-		}
-	}
-	return a.workspaceActionWithProgress(ctx, action, nil, forward)
+	return a.workspaceActionWithProgress(ctx, action, nil, onProgress)
 }

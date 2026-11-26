@@ -68,7 +68,7 @@ func TestRequirementNamingCacheRetainsV1IdentityOnlyEntries(t *testing.T) {
 	want := domain.RequirementAiNamingSuggestion{FolderName: "命名示例", BranchSuffix: "improve_cache"}
 	confirmRequirementNamingTestIdentity(service, config, account)
 
-	legacy := `{"version":1,"entries":{"project-a:bug:123456":{"folderName":"命名示例","branchSuffix":"improve_cache","model":"gpt-6-luna","rulesVersion":2}}}`
+	legacy := `{"version":1,"entries":{"project-a:bug:123456":{"folderName":"命名示例","branchSuffix":"improve  cache","model":"gpt-6-luna","rulesVersion":2}}}`
 	if err := os.MkdirAll(service.paths.Cache, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -157,12 +157,12 @@ func TestRequirementNamingPrewarmPersistsGeneratedNameForForeground(t *testing.T
 	t.Setenv("SILVERWING_NAMING_FIXTURE_CHILD", "1")
 	t.Setenv("SILVERWING_NAMING_FIXTURE_CAPTURE", filepath.Join(f.root, "naming-capture.json"))
 	t.Setenv("SILVERWING_NAMING_FIXTURE_RUN_LOG", runLog)
-	t.Setenv("SILVERWING_NAMING_FIXTURE_RESULT", `{"folderName":"武汉通退卡场景对账","branchSuffix":"Wuhan-MOC_Reconcile"}`)
+	t.Setenv("SILVERWING_NAMING_FIXTURE_RESULT", `{"folderName":"武汉通退卡场景对账","branchSuffix":"Wuhan-MOC  Reconcile UAT"}`)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	payload := f.payload()
 	payload["background"] = true
-	want := domain.RequirementAiNamingSuggestion{FolderName: "武汉通退卡场景对账", BranchSuffix: "Wuhan-MOC_Reconcile"}
+	want := domain.RequirementAiNamingSuggestion{FolderName: "武汉通退卡场景对账", BranchSuffix: "Wuhan-MOC_Reconcile_UAT"}
 	result, err := f.service.requirementAINaming(ctx, f.config, payload)
 	if err != nil || result != want {
 		t.Fatalf("prewarm did not preserve the generated suggestion: %v %v", result, err)

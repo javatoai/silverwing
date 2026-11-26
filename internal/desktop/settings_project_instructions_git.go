@@ -113,12 +113,12 @@ func (s *app) settingsDocumentsGitLocation(c *ui.Context, p palette, target docu
 			}
 			label(c, path, 12, p.text).Grow(1).MinWidth(0).Wrap().Selectable()
 			ui.Row(c).Shrink(0).Gap(8).AlignItems(ui.Center).Children(func() {
-				if settingsSystemAction(c, key+"-bind", "folder", choose, p, settingsSystemActionOutline, disabled) {
+				if settingsSystemAction(c, key+"-bind", "folder", choose, p, disabled) {
 					s.pickNativePath("选择已克隆的 Git 仓库", firstNonEmpty(scope.Root, s.snapshot.Home), true, nil, func(path string) {
 						s.changeDocumentsGitBinding(target, scope, path)
 					})
 				}
-				if bound && settingsSystemAction(c, key+"-unbind", "", "解除关联", p, settingsSystemActionOutline, disabled) {
+				if bound && settingsSystemAction(c, key+"-unbind", "", "解除关联", p, disabled) {
 					s.changeDocumentsGitBinding(target, scope, "")
 				}
 			})

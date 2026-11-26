@@ -2,7 +2,7 @@ package domain
 
 // Persisted schema versions are deliberately independent of the product version.
 const (
-	CurrentProductVersion            = "0.0.24"
+	CurrentProductVersion            = "0.0.25"
 	CurrentAppConfigSchemaVersion    = "7.0.0"
 	CurrentTaskManifestSchemaVersion = "3.0.0"
 	DefaultGroupID                   = "default"
@@ -118,6 +118,7 @@ type MeegleProjectConfig struct {
 	ProjectKey string `json:"project_key"`
 	SimpleName string `json:"simple_name"`
 }
+// CodexPluginMarketplaceSource preserves marketplace records from older profiles.
 type CodexPluginMarketplaceSource struct {
 	ID                   string  `json:"id"`
 	Name                 string  `json:"name"`

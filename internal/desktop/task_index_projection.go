@@ -1,6 +1,12 @@
 package desktop
 
-import "strings"
+import (
+	"slices"
+	"strings"
+	"time"
+
+	"silverwing-go/internal/domain"
+)
 
 // Publication is the authority for content changes. This constant-time stamp
 // also tolerates legacy callers replacing or splicing the task slice without
@@ -68,6 +74,7 @@ type taskIndexProjection struct {
 	rows         []int
 	positions    map[int]int
 	keyPositions map[string]int
+	groupStarts  map[int]bool
 }
 
 type taskIndexSearchProjection struct {
@@ -97,11 +104,7 @@ func (s *app) cachedTaskIndexRows(archived bool) []int {
 		}
 		text = search.text
 	}
-	category := 0
-	if archived {
-		category = 1
-	}
-	rows := projectTaskIndexOrder(catalog.categories[category], catalog.keys, navigation.value.Pinned, func(i int) bool {
+	rows, groupStarts := s.projectTaskIndexRows(s.taskUnit.state.tasks, catalog, navigation, archived, func(i int) bool {
 		for _, term := range terms {
 			if !strings.Contains(text[i], term) {
 				return false
@@ -109,7 +112,8 @@ func (s *app) cachedTaskIndexRows(archived bool) []int {
 		}
 		return true
 	})
-	projection := taskIndexProjection{key: key, valid: true, rows: rows, positions: make(map[int]int, len(rows)), keyPositions: make(map[string]int, len(rows))}
+	projection := taskIndexProjection{key: key, valid: true, rows: rows, groupStarts: groupStarts,
+		positions: make(map[int]int, len(rows)), keyPositions: make(map[string]int, len(rows))}
 	for position, index := range rows {
 		projection.positions[index] = position
 		projection.keyPositions[catalog.keys[index]] = position
@@ -118,8 +122,81 @@ func (s *app) cachedTaskIndexRows(archived bool) []int {
 	return rows
 }
 
-// Both paths retain pin order followed by the source's stable order. The
-// standalone path can consume a mutable next-snapshot slice before publication.
+type taskIndexGroup int
+
+const (
+	taskIndexGroupDesign taskIndexGroup = iota
+	taskIndexGroupDevelopment
+	taskIndexGroupTesting
+	taskIndexGroupComplete
+	taskIndexGroupUnknown
+)
+
+func taskIndexStatusGroup(status string) taskIndexGroup {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "需求提出", "产品设计中", "待评审", "待技术调研", "技术设计中", "设计中", "待技术评审", "待测试用例评审":
+		return taskIndexGroupDesign
+	case "待排期", "待开发", "待办", "TO DO", "开发中", "进行中", "IN PROGRESS":
+		return taskIndexGroupDevelopment
+	case "待提测", "待测试", "测试中", "TESTING", "待验收":
+		return taskIndexGroupTesting
+	case "已验收", "DONE", "CLOSED", "已终止":
+		return taskIndexGroupComplete
+	default:
+		return taskIndexGroupUnknown
+	}
+}
+
+type taskIndexSortEntry struct {
+	index   int
+	group   taskIndexGroup
+	updated time.Time
+}
+
+func (s *app) projectTaskIndexRows(tasks []task, catalog *taskIndexCatalog, navigation *taskNavigationState, archived bool, matches func(int) bool) ([]int, map[int]bool) {
+	if archived {
+		return projectTaskIndexOrder(catalog.categories[1], catalog.keys, navigation.value.Pinned, matches), nil
+	}
+	rows := projectTaskIndexOrder(catalog.categories[0], catalog.keys, navigation.value.Pinned, matches)
+	firstUnpinned := 0
+	for firstUnpinned < len(rows) && navigation.pinned[catalog.keys[rows[firstUnpinned]]] {
+		firstUnpinned++
+	}
+	entries := make([]taskIndexSortEntry, 0, len(rows)-firstUnpinned)
+	for _, index := range rows[firstUnpinned:] {
+		item := tasks[index]
+		group := taskIndexGroupUnknown
+		if strings.TrimSpace(item.requirementURL) != "" {
+			// A refresh keeps metadata for the same link while the badge is loading.
+			if status := s.taskRequirementMetadataFor(item).Metadata.Status; status != nil {
+				group = taskIndexStatusGroup(*status)
+			}
+		}
+		updated, err := domain.ParseSilverWingTime(strings.TrimSpace(item.updated))
+		if err != nil {
+			updated, _ = domain.ParseSilverWingTime(strings.TrimSpace(item.createdAt))
+		}
+		entries = append(entries, taskIndexSortEntry{index: index, group: group, updated: updated})
+	}
+	slices.SortStableFunc(entries, func(a, b taskIndexSortEntry) int {
+		if a.group != b.group {
+			return int(a.group - b.group)
+		}
+		return b.updated.Compare(a.updated)
+	})
+	groupStarts := make(map[int]bool, taskIndexGroupUnknown)
+	previous := taskIndexGroupUnknown
+	for position, entry := range entries {
+		rows[firstUnpinned+position] = entry.index
+		if entry.group != previous && entry.group != taskIndexGroupUnknown {
+			groupStarts[entry.index] = true
+		}
+		previous = entry.group
+	}
+	return rows, groupStarts
+}
+
+// Retain pin order followed by the source's stable order.
 func projectTaskIndexOrder(candidates []int, keys, pins []string, matches func(int) bool) []int {
 	rows := make([]int, 0, len(candidates))
 	byKey := make(map[string]int, len(candidates))

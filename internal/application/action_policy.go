@@ -30,9 +30,9 @@ func DescribeAction(kind string) ActionDescriptor {
 	descriptor.DedicatedResult = descriptor.DedicatedResult || strings.HasPrefix(kind, "instructions.")
 	descriptor.SettingsDedicatedResult = strings.HasPrefix(kind, "config.") || strings.HasPrefix(kind, "migration.") ||
 		strings.HasPrefix(kind, "skills.") ||
-		strings.HasPrefix(kind, "codex.extensions/") || strings.HasPrefix(kind, "codex.ai/") ||
+		strings.HasPrefix(kind, "codex.ai/") ||
 		strings.HasPrefix(kind, "cli.") || strings.HasPrefix(kind, "logs.") || strings.HasPrefix(kind, "development-tools/") || strings.HasPrefix(kind, "git.environment") ||
-		kind == "terminal.resolve" || kind == "diagnostics.export" || kind == "proxy.test" || kind == "git.version" || kind == "update.check"
+		kind == "terminal.resolve" || kind == "diagnostics.export" || kind == "proxy.test" || kind == "git.version"
 	return descriptor
 }
 
@@ -71,20 +71,6 @@ var actionDescriptors = map[string]ActionDescriptor{
 	"cli.auth.start":                               {Kind: "cli.auth.start", Label: "cli.auth.start", Known: true, Cancellable: true},
 	"cli.bundle.install":                           {Kind: "cli.bundle.install", Label: "安装 Silverwing 工具", Known: true, SettingsDedicatedResult: true, Cancellable: true},
 	"cli.bundle.status":                            {Kind: "cli.bundle.status", Label: "检测安装状态", Known: true, QuietSuccess: true},
-	"codex.ai/mcp/authenticate":                    {Kind: "codex.ai/mcp/authenticate", Label: "codex.ai/mcp/authenticate", Known: true, Cancellable: true},
-	"codex.extensions":                             {Kind: "codex.extensions", Label: "读取 Codex 扩展", Known: true},
-	"codex.extensions/marketplaces/add-source":     {Kind: "codex.extensions/marketplaces/add-source", Label: "codex.extensions/marketplaces/add-source", Known: true, RefreshOnError: true, Cancellable: true},
-	"codex.extensions/marketplaces/refresh-source": {Kind: "codex.extensions/marketplaces/refresh-source", Label: "codex.extensions/marketplaces/refresh-source", Known: true, Cancellable: true},
-	"codex.extensions/marketplaces/remove-source":  {Kind: "codex.extensions/marketplaces/remove-source", Label: "codex.extensions/marketplaces/remove-source", Known: true, Cancellable: true},
-	"codex.extensions/mcp/add":                     {Kind: "codex.extensions/mcp/add", Label: "codex.extensions/mcp/add", Known: true, Cancellable: true},
-	"codex.extensions/mcp/check":                   {Kind: "codex.extensions/mcp/check", Label: "codex.extensions/mcp/check", Known: true, Cancellable: true},
-	"codex.extensions/mcp/edit":                    {Kind: "codex.extensions/mcp/edit", Label: "codex.extensions/mcp/edit", Known: true, Cancellable: true},
-	"codex.extensions/mcp/remove":                  {Kind: "codex.extensions/mcp/remove", Label: "codex.extensions/mcp/remove", Known: true, Cancellable: true},
-	"codex.extensions/mcp/set":                     {Kind: "codex.extensions/mcp/set", Label: "codex.extensions/mcp/set", Known: true, Cancellable: true},
-	"codex.extensions/mcp/status":                  {Kind: "codex.extensions/mcp/status", Label: "codex.extensions/mcp/status", Known: true, Cancellable: true},
-	"codex.extensions/plugin/install":              {Kind: "codex.extensions/plugin/install", Label: "codex.extensions/plugin/install", Known: true, Cancellable: true},
-	"codex.extensions/plugin/uninstall":            {Kind: "codex.extensions/plugin/uninstall", Label: "codex.extensions/plugin/uninstall", Known: true, Cancellable: true},
-	"codex.extensions/snapshot":                    {Kind: "codex.extensions/snapshot", Label: "读取 Codex 扩展", Known: true},
 	"codex.run":                                    {Kind: "codex.run", Label: "在 Codex 中打开", Known: true, TaskMenuScoped: true, ReloadSnapshot: true, RefreshOnError: true},
 	"config.fields.save":                           {Kind: "config.fields.save", Label: "保存设置", Known: true, ReloadSnapshot: true},
 	"config.export":                                {Kind: "config.export", Label: "手动备份", Known: true},

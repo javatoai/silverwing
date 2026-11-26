@@ -125,7 +125,10 @@ func (rt *engine) buildThemedMenu(c *context) {
 	}
 	open, choice := true, 0
 	var first *node
-	maxHeight := max(float32(1), min(float32(480), c.h-24))
+	maxHeight := max(float32(1), c.h-24)
+	if !p.shown.useViewportHeight {
+		maxHeight = min(float32(480), maxHeight)
+	}
 	t := c.theme
 	c.nextKey, c.keySet = "themed-menu-popup", true
 	panel := corePopoverBase(c, anchor, &open, func(panel *node) {

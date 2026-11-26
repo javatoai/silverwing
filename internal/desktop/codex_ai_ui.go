@@ -2,8 +2,6 @@ package desktop
 
 import (
 	"fmt"
-	"net/url"
-	"sort"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -34,7 +32,7 @@ func (s *app) renderCodexAI(c *ui.Context, p palette) {
 					label(c, state.identity.cwd, 10, p.muted).SingleLine().Tooltip(state.identity.cwd)
 				})
 				if codexAIAction(c, "codex-ai-refresh", "refresh", "刷新", p, false,
-					state.snapshotLoading || state.tab == codexAITabSessions && state.threadsLoading || state.bindLoading || codexAIMCPBusy(state)) {
+					state.snapshotLoading || state.tab == codexAITabSessions && state.threadsLoading || state.bindLoading) {
 					s.requestCodexAISnapshot()
 					if state.tab == codexAITabSessions {
 						s.requestCodexAIThreads()
@@ -45,14 +43,9 @@ func (s *app) renderCodexAI(c *ui.Context, p palette) {
 				}
 			})
 			ui.Row(c).Gap(7).Children(func() {
-				for _, tab := range []string{codexAITabMCP, codexAITabSkills, codexAITabGuides, codexAITabSessions} {
+				for _, tab := range []string{codexAITabSkills, codexAITabGuides, codexAITabSessions} {
 					selected := state.tab == tab
 					s.settingsChoice(c, p, "codex-ai-tab-"+tab, tab, selected, func() {
-						if state.tab == codexAITabMCP && tab != codexAITabMCP {
-							state.mcpManaging = false
-							s.cancelCodexAIRequest(state, "mcp-status")
-							s.cancelCodexAIRequest(state, "mcp-check")
-						}
 						state.tab = tab
 						state.filePath, state.fileContent, state.fileError = "", "", ""
 						state.resetFilePreview()
@@ -70,7 +63,7 @@ func (s *app) renderCodexAI(c *ui.Context, p palette) {
 			if state.snapshotLoading {
 				label(c, "正在读取当前目录的 Codex 配置…", 11, p.muted)
 			}
-			s.renderCodexAIOperations(c, p, state)
+			s.renderCodexAIBinding(c, p, state)
 			if state.snapshotError != "" {
 				codexAIErrorPanel(c, p, state.snapshotError)
 			}
@@ -85,14 +78,12 @@ func (s *app) renderCodexAI(c *ui.Context, p palette) {
 			} else {
 				ui.Scroll(c).Grow(1).MinHeight(0).Padding(2).Gap(10).Children(func() {
 					switch state.tab {
-					case codexAITabSkills:
-						s.renderCodexAISkills(c, p, state)
 					case codexAITabGuides:
 						s.renderCodexAIGuides(c, p, state)
 					case codexAITabSessions:
 						s.renderCodexAISessions(c, p, state)
 					default:
-						s.renderCodexAIMCP(c, p, state)
+						s.renderCodexAISkills(c, p, state)
 					}
 				})
 			}
@@ -101,182 +92,6 @@ func (s *app) renderCodexAI(c *ui.Context, p palette) {
 	if !state.Open {
 		s.closeCodexAI()
 	}
-}
-
-func (s *app) renderCodexAIMCP(c *ui.Context, p palette, state *codexAIState) {
-	if state.mcpManaging {
-		s.renderCodexAIMCPManagement(c, p, state)
-		return
-	}
-	snapshot := state.mcpSnapshot
-	if snapshot == nil {
-		snapshot = state.snapshot
-	}
-	settingsCard(c, p, "MCP 服务", "按任务目录读取 Codex 配置；会话内临时覆盖不在这里显示。", func() {
-		label(c, "当前任务没有配置 MCP？可以先查看清单，或进入管理页面添加本地命令和 HTTP 服务。", 10, p.muted).Wrap()
-		if action(c, "codex-ai-mcp-manage", "settings", "管理 MCP", p, true) {
-			state.mcpManaging = true
-			state.mcpScope = "ALL"
-			state.mcpMessage, state.mcpError, state.mcpCheckError = "", "", ""
-			s.requestCodexAIMCPSnapshot()
-		}
-		if state.mcpStatusLoading {
-			label(c, "正在读取当前任务的 MCP 配置…", 10, p.muted)
-		}
-		if state.mcpError != "" {
-			codexAIErrorPanel(c, p, state.mcpError)
-		}
-		if snapshot == nil {
-			if !state.snapshotLoading && !state.mcpStatusLoading && state.snapshotError == "" && state.mcpError == "" {
-				settingsMuted(c, p, "等待读取 Codex 配置。")
-			}
-			return
-		}
-		servers := codexAISortedServers(snapshot.Servers, "ALL")
-		if len(servers) == 0 {
-			settingsMuted(c, p, "当前任务没有配置 MCP。")
-		}
-		for _, server := range servers {
-			ui.Column(c).FillWidth().Gap(3).Padding(7, 0).Children(func() {
-				label(c, server.Name, 11, p.text).FontWeight(600)
-				label(c, codexAIMCPScopeLabel(server.Scope)+" · "+codexAIEnabledLabel(codexAIMCPEnabled(server))+server.Note, 9, p.muted).Wrap()
-			})
-		}
-	})
-}
-
-func (s *app) renderCodexAIMCPServer(c *ui.Context, p palette, state *codexAIState, server codexAIMCPServer, index int) {
-	name := strings.TrimSpace(server.Name)
-	if name == "" {
-		name = "未命名 MCP"
-	}
-	enabled := true
-	if value, ok := server.Raw["enabled"].(bool); ok {
-		enabled = value
-	}
-	activeLabel, activeColor := "已启用", p.green
-	if !enabled {
-		activeLabel, activeColor = "已停用", p.muted
-	} else if !server.Active {
-		activeLabel, activeColor = "未生效", p.amber
-	}
-	detail := codexAIMCPEndpoint(server)
-	ui.Column(c).FillWidth().Padding(10, 11).Gap(5).Background(p.soft).Radius(8).Children(func() {
-		ui.Row(c).Gap(7).Children(func() {
-			label(c, name, 12, p.text).FontWeight(600)
-			label(c, codexAIMCPScopeLabel(server.Scope), 9, p.muted)
-			ui.Spacer(c)
-			label(c, activeLabel, 9, activeColor)
-		})
-		if detail != "" {
-			label(c, detail, 10, p.muted).SingleLine().Tooltip(detail).Selectable()
-		}
-		if server.PluginID != "" {
-			label(c, "插件："+server.PluginID, 9, p.muted).SingleLine()
-		}
-		if server.File != "" {
-			label(c, server.File, 9, p.muted).Wrap().Selectable()
-		}
-		if server.Note != "" {
-			label(c, server.Note, 10, p.amber).Wrap()
-		}
-		if server.File != "" && codexAIFileAllowed(state.snapshot, server.File) {
-			if action(c, fmt.Sprintf("codex-ai-mcp-open-%d", index), "launch", "外部编辑", p, false) {
-				s.openCodexAIFileExternally(server.File)
-			}
-		}
-	})
-}
-
-func codexAISortedServers(servers []codexAIMCPServer, scope string) []codexAIMCPServer {
-	result := make([]codexAIMCPServer, 0, len(servers))
-	for _, server := range servers {
-		if scope == "ALL" || strings.EqualFold(server.Scope, scope) {
-			result = append(result, server)
-		}
-	}
-	sort.SliceStable(result, func(i, j int) bool {
-		if result[i].Scope != result[j].Scope {
-			return codexAIMCPScopeOrder(result[i].Scope) < codexAIMCPScopeOrder(result[j].Scope)
-		}
-		return strings.ToLower(result[i].Name) < strings.ToLower(result[j].Name)
-	})
-	return result
-}
-
-func codexAIMCPScopeOrder(scope string) int {
-	switch strings.ToUpper(scope) {
-	case "GLOBAL":
-		return 0
-	case "TASK":
-		return 1
-	case "PLUGIN":
-		return 2
-	case "MANAGED":
-		return 3
-	default:
-		return 4
-	}
-}
-
-func codexAIHasMCPScope(snapshot *codexAISnapshot, scope string) bool {
-	if snapshot == nil {
-		return false
-	}
-	for _, server := range snapshot.Servers {
-		if strings.EqualFold(server.Scope, scope) {
-			return true
-		}
-	}
-	return false
-}
-
-func codexAIMCPScopeLabel(scope string) string {
-	switch strings.ToUpper(scope) {
-	case "GLOBAL":
-		return "全局"
-	case "TASK":
-		return "当前任务"
-	case "PLUGIN":
-		return "插件提供"
-	case "MANAGED":
-		return "受管理"
-	default:
-		return scope
-	}
-}
-
-func codexAILayerTypeLabel(layerType string) string {
-	switch strings.ToLower(layerType) {
-	case "user":
-		return "用户配置"
-	case "project":
-		return "项目配置"
-	case "managed":
-		return "受管理配置"
-	default:
-		return firstNonEmpty(layerType, "Codex 配置")
-	}
-}
-
-func codexAIMCPEndpoint(server codexAIMCPServer) string {
-	if rawURL, _ := server.Raw["url"].(string); strings.TrimSpace(rawURL) != "" {
-		parsed, err := url.Parse(strings.TrimSpace(rawURL))
-		if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && parsed.Scheme != "http") {
-			return "HTTP 服务"
-		}
-		parsed.User = nil
-		parsed.RawQuery = ""
-		parsed.Fragment = ""
-		return parsed.String()
-	}
-	if command, _ := server.Raw["command"].(string); strings.TrimSpace(command) != "" {
-		return strings.TrimSpace(command)
-	}
-	if server.PluginID != "" {
-		return "由插件启动"
-	}
-	return ""
 }
 
 func (s *app) renderCodexAISkills(c *ui.Context, p palette, state *codexAIState) {

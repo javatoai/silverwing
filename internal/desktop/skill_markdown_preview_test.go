@@ -73,7 +73,7 @@ func skillPreviewResolverFixture(t *testing.T, kind string, files localPreviewFi
 }
 
 func TestSkillPreviewProductionBindersConsumeInjectedFileResolver(t *testing.T) {
-	for _, kind := range []string{"local browser", "skills.preview", "skills.files/preview", "codex.extensions/plugin/skill-preview"} {
+	for _, kind := range []string{"local browser", "skills.preview", "skills.files/preview"} {
 		t.Run(kind, func(t *testing.T) {
 			failure := errors.New("injected local resource rejection")
 			files := &fakeSkillPreviewFiles{err: failure}

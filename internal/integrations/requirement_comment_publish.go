@@ -501,17 +501,8 @@ func (s *Service) reconcileCommentPublishWithIdentity(ctx context.Context, confi
 			completed.Images = []domain.CommentDraftAsset{}
 			completed.Attachment = nil
 			if err = s.saveCommentDraft(&completed); err == nil {
-				// Replace the read cache under a fresh generation so a read
-				// started before publishing cannot restore the previous list.
 				if identity, loggedOut, e := s.requirementIdentityFor(ctx, config, d.Identity, false, s.requirementCacheIdentity); e == nil && !loggedOut {
-					key := requirementCacheKey("comments", identity.raw, d.Item)
-					if generation, e := s.beginRequirementRead(key, true); e == nil {
-						_ = s.commitRequirementRead(ctx, config, key, generation, func() error {
-							_, e := s.writeRequirementCommentsCache(key, comments, requirementUnixMillis())
-							return e
-						})
-						s.finishRequirementRead(key, generation)
-					}
+					s.cacheVerifiedRequirementComments(ctx, config, d.Item, identity.raw, comments)
 				}
 				s.removeCommentDraftAssets(*d)
 				*d = completed
@@ -549,6 +540,20 @@ func (s *Service) reconcileCommentPublishWithIdentity(ctx context.Context, confi
 		message += e.Error()
 	}
 	return domain.CommentPublishResult{Status: "unknown", Message: message, Draft: s.commentDraftView(*d)}, nil
+}
+
+func (s *Service) cacheVerifiedRequirementComments(ctx context.Context, config domain.AppConfig, item domain.ParticipatedWorkItem, identity string, comments domain.RequirementComments) {
+	// A read started before publishing must not overwrite the new list.
+	key := requirementCacheKey("comments", identity, item)
+	generation, err := s.beginRequirementRead(key, true)
+	if err != nil {
+		return
+	}
+	defer s.finishRequirementRead(key, generation)
+	_ = s.commitRequirementRead(ctx, config, key, generation, func() error {
+		_, err := s.writeRequirementCommentsCache(key, comments, requirementUnixMillis())
+		return err
+	})
 }
 
 func (s *Service) checkRequirementCommentPublish(ctx context.Context, config domain.AppConfig, p map[string]any) (any, error) {

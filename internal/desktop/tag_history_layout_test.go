@@ -179,6 +179,15 @@ func TestTagHistoryWideUATActionAlignment(t *testing.T) {
 				if !tagHistoryBoundsNear(right, singleBatch.X+singleBatch.W) || batch.H != tagHistoryActionHeight || singleBatch.H != batch.H {
 					t.Fatalf("batch header actions do not align: shared=%+v single=%+v", batch, singleBatch)
 				}
+				for _, pair := range []struct {
+					id      string
+					publish ui.Rect
+				}{{uatTestBatchID, batch}, {single.BatchID, singleBatch}} {
+					copy := taskServicesBoundsWithin(t, tester, root, "复制发版通知 · "+pair.id)
+					if copy.X+copy.W >= pair.publish.X || !tagHistoryBoundsNear(copy.Y, pair.publish.Y) || copy.H != pair.publish.H {
+						t.Fatalf("batch %s copy should sit immediately left of publish: copy=%+v publish=%+v", pair.id, copy, pair.publish)
+					}
+				}
 				statusGroup := taskServicesBoundsWithin(t, tester, root, "构建与 UAT 状态")
 				firstBuild := taskServicesBoundsWithin(t, tester, statusGroup, "构建 成功")
 				firstStage := taskServicesBoundsWithin(t, tester, statusGroup, "UAT 未开始")
@@ -224,11 +233,11 @@ func tagHistoryBoundsNear(a, b float32) bool {
 	return math.Abs(float64(a-b)) <= 1
 }
 
-func TestTagHistoryManagementWithoutReleaseNotice(t *testing.T) {
+func TestTagHistoryManagementWithReleaseNoticeCopy(t *testing.T) {
 	s := tagLayoutFixture(t)
 	tester := tagLayoutTester(s, 900, false)
-	if tester.HasText("复制发版通知") || tester.HasText("发送发版通知") || !tester.HasText("3.11.82.beta-1") {
-		t.Fatal("Tag history retained a release notice or lost the individual Tag")
+	if !tester.HasText("复制发版通知") || tester.HasText("发送发版通知") || !tester.HasText("3.11.82.beta-1") {
+		t.Fatal("Tag history should retain copy and individual Tags without a send action")
 	}
 	if err := tester.Click("选择批次"); err != nil {
 		t.Fatal(err)
@@ -251,6 +260,52 @@ func TestTagHistoryManagementWithoutReleaseNotice(t *testing.T) {
 	}
 	if !s.releaseUnit.state.tagHistory.Selected["batch"] || len(s.snapshot.TagHistory) != 4 {
 		t.Fatal("cancel changed selection or records")
+	}
+}
+
+func TestTagHistoryCopiesCompleteFilteredBatchNotice(t *testing.T) {
+	s := tagLayoutFixture(t)
+	s.page, s.tab = "tasks", taskTagTab
+	s.snapshot.TagHistory[2].GenbuStatus.Build = domain.GenbuSuccess
+	s.snapshot.TagHistory[3].BatchID = "batch"
+	title := "合成需求的完整标题"
+	email := "qa@example.invalid"
+	s.requirementUnit.state.taskRequirementMetadata = map[string]taskRequirementMetadataState{
+		"task-a": {URL: s.taskUnit.currentTask().requirementURL, Status: requirementMetadataLoaded, Metadata: requirementMetadata{
+			Title: &title,
+			Participants: domain.RequirementParticipants{QCOwners: []domain.RequirementPerson{
+				{Name: "测试甲"}, {Name: " 测试甲 "}, {Email: &email},
+			}},
+		}},
+	}
+	backend := &tagLayoutCaptureBackend{actions: make(chan application.Action, 1)}
+	s.backend, s.backendGate = backend, make(chan struct{}, 1)
+	tester := ui.NewTester(func(c *ui.Context) {
+		p := setTheme(c, false)
+		state := s.ensureTagHistoryView()
+		for _, group := range filterTagHistory(s.taskTagHistoryRecords(state.TaskID), "ios-transit-service", false) {
+			s.renderTagHistoryGroup(c.Key(group.Item.GroupID), p, state, group, false)
+		}
+		s.renderOperationNotifications(c)
+	}, 900, 600)
+	if !tester.HasText("ios-transit-service") || tester.HasText("android-transit-service") || tester.HasText("other-task-service") {
+		t.Fatal("fixture must show only the matching service in this task")
+	}
+	if err := tester.Click("复制发版通知 · batch"); err != nil {
+		t.Fatal(err)
+	}
+	want := "需求：" + title + "\n测试Tag已构建完毕，辛苦发版：\n\nandroid-transit-service · 3.11.82.beta-1\nios-transit-service · 3.0.35.beta-8"
+	if got := tester.Clipboard(); got != want {
+		t.Fatalf("clipboard should contain the complete selected batch, got %q", got)
+	}
+	feedback := "已复制：\n\n" + want + "\n\n请发送给：测试甲、" + email
+	if !tester.HasText(feedback) || s.lastMessage != feedback || s.lastError != "" {
+		t.Fatalf("copy feedback should include the cached test owners, got %q / %q", s.lastMessage, s.lastError)
+	}
+	select {
+	case request := <-backend.actions:
+		t.Fatalf("clipboard copy dispatched a business operation: %+v", request)
+	default:
 	}
 }
 

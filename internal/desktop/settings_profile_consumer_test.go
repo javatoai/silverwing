@@ -34,19 +34,10 @@ func TestSettingsProfileConsumersPreserveNamesAndReleaseLinks(t *testing.T) {
 	if backend.clipboard != repository {
 		t.Fatalf("repository copy = %q, want %q", backend.clipboard, repository)
 	}
-	updates := settingsSystemPageTester(state, 640, false, func(context *ui.Context, theme palette) {
-		state.settingsUpdates(context, theme)
-	})
-	if !updates.HasText(want.releases) {
-		t.Fatalf("Updates showed another channel: %v", updates.Texts())
+	if !about.HasText("版本发布") || silverwingReleasesURL != want.releases {
+		t.Fatalf("About release link was lost or uses another channel: %q", silverwingReleasesURL)
 	}
-	if err := updates.Click("复制链接"); err != nil {
-		t.Fatal(err)
-	}
-	if backend.clipboard != want.releases {
-		t.Fatalf("release link copy = %q, want %q", backend.clipboard, want.releases)
-	}
-	if len(backend.actions) != 0 || len(about.OpenedURLs()) != 0 || len(updates.OpenedURLs()) != 0 {
-		t.Fatal("copying profile links performed an external action")
+	if len(backend.actions) != 0 || len(about.OpenedURLs()) != 0 {
+		t.Fatal("copying the repository link performed an external action")
 	}
 }

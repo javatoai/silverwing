@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -30,30 +29,11 @@ const (
 	skillBackupsName    = "skill-backups"
 	skillFileName       = "SKILL.md"
 	maxSkillBytes       = 512 * 1024
-	maxPluginBytes      = 512 * 1024
 )
 
 var skillNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 var skillFrontMatter = regexp.MustCompile(`(?s)\A---\r?\n(.*?)\r?\n---(?:\r?\n|$)`)
 var localSkillFrontMatter = regexp.MustCompile(`(?s)\A---\s*\r?\n(.*?)\r?\n---(?:\r?\n|\z)`)
-
-type PluginCatalogItem struct {
-	Name          string   `json:"name"`
-	Description   string   `json:"description"`
-	Version       *string  `json:"version,omitempty"`
-	Installed     bool     `json:"installed"`
-	SourcePath    *string  `json:"sourcePath,omitempty"`
-	BundledSkills []string `json:"bundledSkills"`
-}
-
-type MarketplaceSnapshot struct {
-	SourceID        string              `json:"sourceId"`
-	MarketplaceName *string             `json:"marketplaceName,omitempty"`
-	CacheDirectory  *string             `json:"cacheDirectory,omitempty"`
-	Plugins         []PluginCatalogItem `json:"plugins"`
-	UpdatedAt       *string             `json:"updatedAt,omitempty"`
-	Error           *string             `json:"error,omitempty"`
-}
 
 type ExternalSkill struct {
 	Name        string `json:"name"`
@@ -72,25 +52,19 @@ type SkillSourceSnapshot struct {
 }
 
 type extensionState struct {
-	Schema         int                            `json:"schema"`
-	Marketplaces   map[string]MarketplaceSnapshot `json:"marketplaces"`
-	SkillSources   map[string]SkillSourceSnapshot `json:"skillSources"`
-	ManagedPlugins []managedPlugin                `json:"managedPlugins"`
-	ManagedSkills  []managedSkill                 `json:"managedSkills"`
-}
-type managedPlugin struct {
-	SourceID  string `json:"sourceId"`
-	Name      string `json:"pluginName"`
-	ManagedAt string `json:"managedAt"`
+	Schema        int                            `json:"schema"`
+	SkillSources  map[string]SkillSourceSnapshot `json:"skillSources"`
+	ManagedSkills []managedSkill                 `json:"managedSkills"`
+
+	// Keep earlier versions' plugin state when saving Skill changes.
+	LegacyMarketplaces   json.RawMessage `json:"marketplaces,omitempty"`
+	LegacyManagedPlugins json.RawMessage `json:"managedPlugins,omitempty"`
 }
 type managedSkill struct {
 	SourceID        string                `json:"sourceId"`
 	Name            string                `json:"skillName"`
 	ManagedAt       string                `json:"managedAt"`
 	InstalledOrigin *SkillInstalledOrigin `json:"installedOrigin,omitempty"`
-}
-type marketplaceRecord struct {
-	Name, Source, Cache string
 }
 
 func (s *Service) executeSkills(ctx context.Context, kind string, payload map[string]any) (any, error) {
@@ -257,643 +231,6 @@ func (s *Service) executeSkills(ctx context.Context, kind string, payload map[st
 	}
 }
 
-func (s *Service) executeCodexExtensions(ctx context.Context, kind string, payload map[string]any) (any, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if strings.HasPrefix(kind, "codex.extensions/mcp/") {
-		return s.executeMCP(ctx, strings.TrimPrefix(kind, "codex.extensions/mcp/"), payload)
-	}
-	if kind == "codex.extensions/branches/list" || kind == "skills.sources/branches/list" {
-		return s.loadExtensionBranches(ctx, payload)
-	}
-	release, err := acquireExtensionOperation(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer release()
-	cfg, err := s.loadConfig()
-	if err != nil {
-		return nil, err
-	}
-	state, err := s.loadExtensionState()
-	if err != nil {
-		return nil, err
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	switch kind {
-	case "codex.extensions/snapshot", "codex.extensions/marketplaces/list":
-		return s.extensionsSnapshot(cfg, state), nil
-	case "codex.extensions/marketplaces/add-source":
-		if err := requireConfirmed(payload, "添加并注册 Codex Marketplace"); err != nil {
-			return nil, err
-		}
-		source, err := decodePayload[domain.CodexPluginMarketplaceSource](payload, "source")
-		if err != nil {
-			return nil, err
-		}
-		if err := source.Validate(); err != nil {
-			return nil, err
-		}
-		updated, err := s.config.Update(func(current domain.AppConfig) (domain.AppConfig, error) {
-			if err := ctx.Err(); err != nil {
-				return current, err
-			}
-			for _, configured := range current.CodexPluginMarketplaceSources {
-				if strings.EqualFold(configured.ID, source.ID) {
-					return current, fmt.Errorf("插件来源 ID 已存在：%s", source.ID)
-				}
-			}
-			current.CodexPluginMarketplaceSources = append(current.CodexPluginMarketplaceSources, source)
-			return current, nil
-		})
-		if err != nil {
-			return nil, err
-		}
-		status, err := s.refreshMarketplace(ctx, updated, source, state, true, false)
-		if err != nil {
-			return nil, err
-		}
-		return marketplaceStatusView(status, state), nil
-	case "codex.extensions/marketplaces/refresh-source":
-		source, ok := findMarketplace(cfg.CodexPluginMarketplaceSources, payloadString(payload, "sourceId"))
-		if !ok {
-			return nil, fmt.Errorf("找不到插件来源：%s", payloadString(payload, "sourceId"))
-		}
-		status, err := s.refreshMarketplace(ctx, cfg, source, state, true, true)
-		if err != nil {
-			return nil, err
-		}
-		return marketplaceStatusView(status, state), nil
-	case "codex.extensions/marketplaces/remove-source":
-		if err := requireConfirmed(payload, "移除 Codex Marketplace 来源"); err != nil {
-			return nil, err
-		}
-		id := payloadString(payload, "sourceId")
-		source, ok := findMarketplace(cfg.CodexPluginMarketplaceSources, id)
-		if !ok {
-			return nil, fmt.Errorf("找不到插件来源：%s", id)
-		}
-		if status, ok := state.Marketplaces[id]; ok && status.MarketplaceName != nil && strings.TrimSpace(*status.MarketplaceName) != "" {
-			if _, err := s.runCodex(ctx, cfg, "plugin", "marketplace", "remove", *status.MarketplaceName, "--json"); err != nil {
-				return nil, err
-			}
-		}
-		delete(state.Marketplaces, source.ID)
-		plugins := state.ManagedPlugins[:0]
-		for _, managed := range state.ManagedPlugins {
-			if managed.SourceID != source.ID {
-				plugins = append(plugins, managed)
-			}
-		}
-		state.ManagedPlugins = plugins
-		if err := s.saveExtensionState(state); err != nil {
-			return nil, err
-		}
-		_, err = s.config.Update(func(current domain.AppConfig) (domain.AppConfig, error) {
-			current.CodexPluginMarketplaceSources = filterMarketplaces(current.CodexPluginMarketplaceSources, id)
-			return current, nil
-		})
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"removed": true, "sourceId": id, "installedPluginsKept": true}, nil
-	case "codex.extensions/plugin/install", "codex.extensions/plugins/install":
-		if err := requireConfirmed(payload, "安装 Codex 插件"); err != nil {
-			return nil, err
-		}
-		sourceID, pluginName := payloadString(payload, "sourceId"), payloadString(payload, "name")
-		source, ok := findMarketplace(cfg.CodexPluginMarketplaceSources, sourceID)
-		if !ok {
-			return nil, fmt.Errorf("找不到插件来源：%s", sourceID)
-		}
-		status, ok := state.Marketplaces[sourceID]
-		if !ok || status.MarketplaceName == nil {
-			return nil, fmt.Errorf("请先加载插件来源“%s”", source.Name)
-		}
-		var plugin *PluginCatalogItem
-		for i := range status.Plugins {
-			if status.Plugins[i].Name == pluginName {
-				plugin = &status.Plugins[i]
-				break
-			}
-		}
-		if plugin == nil {
-			return nil, fmt.Errorf("插件来源“%s”中找不到 %s", source.Name, pluginName)
-		}
-		managed := managedPluginOwned(state, sourceID, pluginName)
-		if plugin.Installed && !managed && !payloadBool(payload, "takeOver") {
-			return nil, fmt.Errorf("%s 已由外部方式安装；确认接管后才能由 SilverWing 卸载它", pluginName)
-		}
-		if !plugin.Installed {
-			if _, err := s.runCodex(ctx, cfg, "plugin", "add", pluginName, "--marketplace", *status.MarketplaceName, "--json"); err != nil {
-				return nil, err
-			}
-		}
-		for i := range status.Plugins {
-			if status.Plugins[i].Name == pluginName {
-				status.Plugins[i].Installed = true
-			}
-		}
-		status.Error = nil
-		state.Marketplaces[sourceID] = status
-		state.ManagedPlugins = append(filterManagedPlugins(state.ManagedPlugins, sourceID, pluginName), managedPlugin{SourceID: sourceID, Name: pluginName, ManagedAt: time.Now().UTC().Format(time.RFC3339Nano)})
-		if err := s.saveExtensionState(state); err != nil {
-			return nil, err
-		}
-		return marketplaceStatusView(status, state), nil
-	case "codex.extensions/plugin/uninstall", "codex.extensions/plugins/uninstall":
-		if err := requireConfirmed(payload, "卸载 Codex 插件"); err != nil {
-			return nil, err
-		}
-		sourceID, pluginName := payloadString(payload, "sourceId"), payloadString(payload, "name")
-		source, ok := findMarketplace(cfg.CodexPluginMarketplaceSources, sourceID)
-		if !ok {
-			return nil, fmt.Errorf("找不到插件来源：%s", sourceID)
-		}
-		status, ok := state.Marketplaces[sourceID]
-		if !ok || status.MarketplaceName == nil {
-			return nil, fmt.Errorf("请先加载插件来源“%s”", source.Name)
-		}
-		if !managedPluginOwned(state, sourceID, pluginName) {
-			return nil, fmt.Errorf("%s 不是 SilverWing 管理的插件；请先确认接管", pluginName)
-		}
-		if _, err := s.runCodex(ctx, cfg, "plugin", "remove", pluginName, "--marketplace", *status.MarketplaceName, "--json"); err != nil {
-			return nil, err
-		}
-		for i := range status.Plugins {
-			if status.Plugins[i].Name == pluginName {
-				status.Plugins[i].Installed = false
-			}
-		}
-		status.Error = nil
-		state.Marketplaces[sourceID] = status
-		state.ManagedPlugins = filterManagedPlugins(state.ManagedPlugins, sourceID, pluginName)
-		if err := s.saveExtensionState(state); err != nil {
-			return nil, err
-		}
-		return marketplaceStatusView(status, state), nil
-	case "codex.extensions/plugin/preview":
-		return s.previewPlugin(cfg, state, payloadString(payload, "sourceId"), payloadString(payload, "name"))
-	case "codex.extensions/plugin/skill-preview":
-		return s.previewPluginSkill(cfg, state, payloadString(payload, "sourceId"), payloadString(payload, "pluginName"), payloadString(payload, "skillName"))
-	default:
-		return nil, fmt.Errorf("未知 Codex 扩展操作：%s", kind)
-	}
-}
-
-func (s *Service) refreshMarketplace(ctx context.Context, cfg domain.AppConfig, source domain.CodexPluginMarketplaceSource, state extensionState, register, upgrade bool) (MarketplaceSnapshot, error) {
-	if err := ctx.Err(); err != nil {
-		return MarketplaceSnapshot{}, err
-	}
-	old, exists := state.Marketplaces[source.ID]
-	if !exists {
-		old = MarketplaceSnapshot{SourceID: source.ID, Plugins: []PluginCatalogItem{}}
-	}
-	if source.RequiresRootMarketplaceMigration() {
-		old.Error = stringPtr(fmt.Sprintf("插件来源“%s”使用旧版子目录 Marketplace（%s）。请移除后按仓库根目录重新添加。", source.Name, source.MarketplaceDirectory))
-		state.Marketplaces[source.ID] = old
-		if err := s.saveExtensionState(state); err != nil {
-			return MarketplaceSnapshot{}, err
-		}
-		return old, nil
-	}
-	marketplaceName := old.MarketplaceName
-	var opErr error
-	if marketplaceName == nil || strings.TrimSpace(*marketplaceName) == "" {
-		if register {
-			marketplaceName, opErr = s.registerMarketplace(ctx, cfg, source)
-		}
-	}
-	if opErr == nil && marketplaceName != nil {
-		if upgrade {
-			_, opErr = s.runCodex(ctx, cfg, "plugin", "marketplace", "upgrade", *marketplaceName, "--json")
-		}
-	}
-	if opErr == nil && marketplaceName != nil {
-		var plugins []PluginCatalogItem
-		var raw string
-		raw, opErr = s.runCodexOutput(ctx, cfg, "plugin", "list", "--marketplace", *marketplaceName, "--available", "--json")
-		if opErr == nil {
-			plugins, opErr = parsePluginCatalog(raw)
-		}
-		if opErr == nil {
-			var records []marketplaceRecord
-			list, listErr := s.runCodexOutput(ctx, cfg, "plugin", "marketplace", "list", "--json")
-			if process.IsCleanupFailure(listErr) {
-				return MarketplaceSnapshot{}, listErr
-			}
-			opErr = listErr
-			if opErr == nil {
-				records, opErr = parseMarketplaceCatalog(list)
-			}
-			if opErr == nil {
-				var cache *string
-				for _, record := range records {
-					if record.Name == *marketplaceName && record.Cache != "" {
-						cache = stringPtr(record.Cache)
-						break
-					}
-				}
-				if cache == nil {
-					cache = old.CacheDirectory
-				}
-				if err := ctx.Err(); err != nil {
-					return MarketplaceSnapshot{}, err
-				}
-				status := MarketplaceSnapshot{SourceID: source.ID, MarketplaceName: marketplaceName, CacheDirectory: cache, Plugins: plugins, UpdatedAt: stringPtr(time.Now().UTC().Format(time.RFC3339Nano))}
-				state.Marketplaces[source.ID] = status
-				if err := s.saveExtensionState(state); err != nil {
-					return MarketplaceSnapshot{}, err
-				}
-				return status, nil
-			}
-		}
-	}
-	if process.IsCleanupFailure(opErr) {
-		return MarketplaceSnapshot{}, opErr
-	}
-	if err := ctx.Err(); err != nil {
-		return MarketplaceSnapshot{}, err
-	}
-	if opErr == nil {
-		opErr = fmt.Errorf("无法识别 Codex Marketplace 名称")
-	}
-	old.Error = stringPtr(redactProxy(cfg, truncate(opErr.Error(), 4000)))
-	state.Marketplaces[source.ID] = old
-	if err := s.saveExtensionState(state); err != nil {
-		return MarketplaceSnapshot{}, err
-	}
-	return old, nil
-}
-
-func (s *Service) registerMarketplace(ctx context.Context, cfg domain.AppConfig, source domain.CodexPluginMarketplaceSource) (*string, error) {
-	beforeRaw, err := s.runCodexOutput(ctx, cfg, "plugin", "marketplace", "list", "--json")
-	if err != nil {
-		return nil, err
-	}
-	before, err := parseMarketplaceCatalog(beforeRaw)
-	if err != nil {
-		return nil, err
-	}
-	args := []string{"plugin", "marketplace", "add", source.RepositoryURL}
-	if source.Ref != nil {
-		args = append(args, "--ref", *source.Ref)
-	}
-	args = append(args, "--json")
-	added, err := s.runCodexOutput(ctx, cfg, args...)
-	if err != nil {
-		return nil, err
-	}
-	afterRaw, err := s.runCodexOutput(ctx, cfg, "plugin", "marketplace", "list", "--json")
-	if err != nil {
-		return nil, err
-	}
-	after, err := parseMarketplaceCatalog(afterRaw)
-	if err != nil {
-		return nil, err
-	}
-	normalized := normalizeRemote(source.RepositoryURL)
-	for _, record := range after {
-		if record.Source != "" && normalizeRemote(record.Source) == normalized {
-			return stringPtr(record.Name), nil
-		}
-	}
-	newNames := []string{}
-	beforeNames := map[string]bool{}
-	for _, record := range before {
-		beforeNames[record.Name] = true
-	}
-	for _, record := range after {
-		if !beforeNames[record.Name] {
-			newNames = append(newNames, record.Name)
-		}
-	}
-	if len(newNames) == 1 {
-		return stringPtr(newNames[0]), nil
-	}
-	addedRecords, _ := parseMarketplaceCatalog(added)
-	if len(addedRecords) > 0 {
-		return stringPtr(addedRecords[0].Name), nil
-	}
-	return nil, fmt.Errorf("Codex 已执行 Marketplace 添加，但未返回可识别的名称")
-}
-
-func (s *Service) previewPlugin(cfg domain.AppConfig, state extensionState, sourceID, name string) (map[string]any, error) {
-	source, ok := findMarketplace(cfg.CodexPluginMarketplaceSources, sourceID)
-	if !ok {
-		return nil, fmt.Errorf("找不到插件来源：%s", sourceID)
-	}
-	_ = source
-	status, ok := state.Marketplaces[sourceID]
-	if !ok {
-		return nil, fmt.Errorf("请先加载插件来源")
-	}
-	var plugin *PluginCatalogItem
-	for i := range status.Plugins {
-		if status.Plugins[i].Name == name {
-			plugin = &status.Plugins[i]
-			break
-		}
-	}
-	if plugin == nil {
-		return nil, fmt.Errorf("插件来源中找不到 %s", name)
-	}
-	if status.CacheDirectory == nil || plugin.SourcePath == nil {
-		return nil, fmt.Errorf("Codex 未提供插件本地缓存目录，请先刷新来源")
-	}
-	root, err := filepath.Abs(*status.CacheDirectory)
-	if err != nil {
-		return nil, err
-	}
-	dir, err := filepath.Abs(*plugin.SourcePath)
-	if err != nil {
-		return nil, err
-	}
-	manifest, err := readPluginPreviewManifest(root, dir)
-	if err != nil {
-		return nil, err
-	}
-	interfaceInfo, _ := manifest["interface"].(map[string]any)
-	previewName := firstString(manifest, "name")
-	if previewName == "" {
-		previewName = plugin.Name
-	}
-	version := plugin.Version
-	if manifestVersion := firstString(manifest, "version"); manifestVersion != "" {
-		version = stringPtr(manifestVersion)
-	}
-	description := firstString(manifest, "description")
-	if description == "" {
-		description = firstString(interfaceInfo, "longDescription", "shortDescription")
-	}
-	if description == "" {
-		description = plugin.Description
-	}
-	author, _ := manifest["author"].(map[string]any)
-	previewAuthor := firstString(author, "name")
-	if previewAuthor == "" {
-		previewAuthor = firstString(interfaceInfo, "developerName")
-	}
-	capabilities := []string{}
-	if values, ok := interfaceInfo["capabilities"].([]any); ok {
-		for _, value := range values {
-			if text, ok := value.(string); ok {
-				capabilities = append(capabilities, text)
-			}
-		}
-	}
-	var skills []map[string]string
-	if raw, ok := manifest["skills"].(string); ok && strings.TrimSpace(raw) != "" {
-		relative := strings.TrimSuffix(strings.TrimPrefix(raw, "./"), "/")
-		skillsRoot, err := safeChild(dir, relative)
-		if err != nil {
-			return nil, fmt.Errorf("插件 Skill 目录不安全：%w", err)
-		}
-		skills, err = discoverPluginSkills(skillsRoot)
-		if err != nil {
-			return nil, err
-		}
-	}
-	readme, err := readOptional(filepath.Join(dir, "README.md"))
-	if err != nil {
-		return nil, err
-	}
-	return map[string]any{
-		"name": previewName, "version": version, "description": description,
-		"author":       optionalString(map[string]any{"author": previewAuthor}, "author"),
-		"category":     optionalString(map[string]any{"category": firstString(interfaceInfo, "category")}, "category"),
-		"capabilities": capabilities, "readme": readme, "skills": skills,
-		"plugin": plugin,
-	}, nil
-}
-
-func discoverPluginSkills(root string) ([]map[string]string, error) {
-	if !isDir(root) || isSymlink(root) {
-		return nil, fmt.Errorf("插件 Skill 目录不存在或不是普通目录：%s", root)
-	}
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return nil, err
-	}
-	items := []map[string]string{}
-	for _, entry := range entries {
-		if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
-			continue
-		}
-		directory := filepath.Join(root, entry.Name())
-		if err := validateSkillTree(directory); err != nil {
-			return nil, err
-		}
-		content, err := readExtensionText(filepath.Join(directory, skillFileName), maxSkillBytes)
-		if err != nil {
-			return nil, err
-		}
-		front := skillFrontMatter.FindSubmatch(content)
-		if len(front) < 2 {
-			return nil, fmt.Errorf("Skill 缺少 YAML frontmatter：%s", directory)
-		}
-		name := frontMatterValue(string(front[1]), "name")
-		if name == "" {
-			name = entry.Name()
-		}
-		items = append(items, map[string]string{
-			"name":        name,
-			"description": frontMatterValue(string(front[1]), "description"),
-		})
-	}
-	sort.Slice(items, func(i, j int) bool { return items[i]["name"] < items[j]["name"] })
-	return items, nil
-}
-
-func (s *Service) previewPluginSkill(cfg domain.AppConfig, state extensionState, sourceID, pluginName, skillName string) (map[string]any, error) {
-	preview, err := s.previewPlugin(cfg, state, sourceID, pluginName)
-	if err != nil {
-		return nil, err
-	}
-	discovered, _ := preview["skills"].([]map[string]string)
-	found := false
-	for _, skill := range discovered {
-		if skill["name"] == skillName {
-			found = true
-			break
-		}
-	}
-	if !found {
-		return nil, fmt.Errorf("插件中找不到内置 Skill：%s", skillName)
-	}
-	status := state.Marketplaces[sourceID]
-	var plugin *PluginCatalogItem
-	for i := range status.Plugins {
-		if status.Plugins[i].Name == pluginName {
-			plugin = &status.Plugins[i]
-			break
-		}
-	}
-	if plugin == nil || plugin.SourcePath == nil || status.CacheDirectory == nil {
-		return nil, fmt.Errorf("插件缓存路径不可用")
-	}
-	dir, err := filepath.Abs(*plugin.SourcePath)
-	if err != nil {
-		return nil, err
-	}
-	root, err := filepath.Abs(*status.CacheDirectory)
-	if err != nil {
-		return nil, err
-	}
-	if !within(root, dir) {
-		return nil, fmt.Errorf("插件路径越界")
-	}
-	manifest, err := readPluginPreviewManifest(root, dir)
-	if err != nil {
-		return nil, err
-	}
-	relative, _ := manifest["skills"].(string)
-	if relative == "" {
-		return nil, fmt.Errorf("插件没有配置内置 Skill 目录")
-	}
-	skillsRoot, err := safeChild(dir, strings.TrimPrefix(strings.TrimSuffix(relative, "/"), "./"))
-	if err != nil {
-		return nil, err
-	}
-	if err := ensureNoSymlinksBetween(root, skillsRoot); err != nil {
-		return nil, err
-	}
-	entries, err := os.ReadDir(skillsRoot)
-	if err != nil {
-		return nil, err
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() || entry.Name() != skillName || entry.Type()&os.ModeSymlink != 0 {
-			continue
-		}
-		if err := validateNamedSkillTree(filepath.Join(skillsRoot, skillName), skillName); err != nil {
-			return nil, err
-		}
-		content, err := readExtensionText(filepath.Join(skillsRoot, skillName, skillFileName), maxSkillBytes)
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"name": skillName, "text": string(content), "path": filepath.Join(skillsRoot, skillName, skillFileName)}, nil
-	}
-	return nil, fmt.Errorf("插件中找不到内置 Skill：%s", skillName)
-}
-
-func parseMarketplaceCatalog(output string) ([]marketplaceRecord, error) {
-	var root any
-	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &root); err != nil {
-		return nil, fmt.Errorf("Codex 未返回可识别的 JSON：%w", err)
-	}
-	items := selectObjectList(root, "marketplaces", "items", "sources")
-	records := []marketplaceRecord{}
-	seen := map[string]bool{}
-	for _, item := range items {
-		name := firstString(item, "name", "marketplaceName", "marketplace", "id")
-		if name == "" || seen[name] {
-			continue
-		}
-		seen[name] = true
-		source := firstString(item, "source", "url", "repositoryUrl")
-		if nested, ok := item["source"].(map[string]any); ok && source == "" {
-			source = firstString(nested, "source", "url", "repositoryUrl", "path")
-		}
-		if nested, ok := item["marketplaceSource"].(map[string]any); ok && source == "" {
-			source = firstString(nested, "source", "url", "repositoryUrl", "path")
-		}
-		cache := firstString(item, "cacheDirectory", "cache_path", "cachePath", "resolvedPath", "installedRoot", "root", "directory", "path")
-		records = append(records, marketplaceRecord{name, source, cache})
-	}
-	return records, nil
-}
-
-func parsePluginCatalog(output string) ([]PluginCatalogItem, error) {
-	var root any
-	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &root); err != nil {
-		return nil, fmt.Errorf("Codex 未返回可识别的 JSON：%w", err)
-	}
-	items := selectObjectList(root, "plugins", "items", "available", "installed")
-	plugins := []PluginCatalogItem{}
-	seen := map[string]bool{}
-	for _, item := range items {
-		nested, ok := item["plugin"].(map[string]any)
-		if !ok {
-			nested = item
-		}
-		name := firstString(nested, "name", "id")
-		if name == "" || seen[name] {
-			continue
-		}
-		seen[name] = true
-		description := firstString(nested, "description", "summary")
-		if description == "" {
-			if ui, ok := nested["interface"].(map[string]any); ok {
-				description = firstString(ui, "description", "shortDescription")
-			}
-		}
-		version := optionalString(nested, "version", "latestVersion")
-		installed, hasInstalled := optionalBool(nested, "installed", "isInstalled")
-		if !hasInstalled {
-			status := strings.ToLower(firstString(nested, "status"))
-			installed = status == "installed" || status == "enabled"
-			if _, hasEnabled := optionalBool(nested, "enabled"); hasEnabled {
-				installed, _ = optionalBool(nested, "enabled")
-			}
-		}
-		var skills []string
-		if values, ok := nested["skills"].([]any); ok {
-			for _, raw := range values {
-				switch value := raw.(type) {
-				case string:
-					skills = append(skills, value)
-				case map[string]any:
-					if name := firstString(value, "name", "id"); name != "" {
-						skills = append(skills, name)
-					}
-				}
-			}
-		}
-		sourcePath := optionalString(nested, "sourcePath", "path")
-		if source, ok := nested["source"].(map[string]any); ok {
-			if candidate := firstString(source, "path", "directory"); candidate != "" {
-				sourcePath = stringPtr(candidate)
-			}
-		}
-		plugins = append(plugins, PluginCatalogItem{Name: name, Description: description, Version: version, Installed: installed, SourcePath: sourcePath, BundledSkills: uniqueStrings(skills)})
-	}
-	sort.Slice(plugins, func(i, j int) bool { return plugins[i].Name < plugins[j].Name })
-	return plugins, nil
-}
-
-func selectObjectList(root any, names ...string) []map[string]any {
-	if object, ok := root.(map[string]any); ok {
-		for _, name := range names {
-			if values, ok := object[name]; ok {
-				if result := objectList(values); len(result) > 0 {
-					return result
-				}
-			}
-		}
-	}
-	return objectList(root)
-}
-func objectList(value any) []map[string]any {
-	switch typed := value.(type) {
-	case []any:
-		out := []map[string]any{}
-		for _, item := range typed {
-			if object, ok := item.(map[string]any); ok {
-				out = append(out, object)
-			}
-		}
-		return out
-	case map[string]any:
-		return []map[string]any{typed}
-	default:
-		return nil
-	}
-}
 func firstString(object map[string]any, keys ...string) string {
 	for _, key := range keys {
 		if value, ok := object[key].(string); ok && strings.TrimSpace(value) != "" {
@@ -901,20 +238,6 @@ func firstString(object map[string]any, keys ...string) string {
 		}
 	}
 	return ""
-}
-func optionalString(object map[string]any, keys ...string) *string {
-	if value := firstString(object, keys...); value != "" {
-		return stringPtr(value)
-	}
-	return nil
-}
-func optionalBool(object map[string]any, keys ...string) (bool, bool) {
-	for _, key := range keys {
-		if value, ok := object[key].(bool); ok {
-			return value, true
-		}
-	}
-	return false, false
 }
 func uniqueStrings(values []string) []string {
 	seen := map[string]bool{}
@@ -928,65 +251,6 @@ func uniqueStrings(values []string) []string {
 	return out
 }
 
-func findMarketplace(values []domain.CodexPluginMarketplaceSource, id string) (domain.CodexPluginMarketplaceSource, bool) {
-	for _, value := range values {
-		if value.ID == id {
-			return value, true
-		}
-	}
-	return domain.CodexPluginMarketplaceSource{}, false
-}
-func filterMarketplaces(values []domain.CodexPluginMarketplaceSource, id string) []domain.CodexPluginMarketplaceSource {
-	out := values[:0]
-	for _, value := range values {
-		if value.ID != id {
-			out = append(out, value)
-		}
-	}
-	return out
-}
-func managedPluginOwned(state extensionState, sourceID, name string) bool {
-	for _, entry := range state.ManagedPlugins {
-		if entry.SourceID == sourceID && entry.Name == name {
-			return true
-		}
-	}
-	return false
-}
-func filterManagedPlugins(values []managedPlugin, sourceID, name string) []managedPlugin {
-	out := values[:0]
-	for _, entry := range values {
-		if entry.SourceID != sourceID || entry.Name != name {
-			out = append(out, entry)
-		}
-	}
-	return out
-}
-func normalizeRemote(value string) string {
-	parsed, err := url.Parse(strings.TrimSpace(value))
-	if err == nil && parsed.Host != "" {
-		parsed.User = nil
-		parsed.Scheme = strings.ToLower(parsed.Scheme)
-		parsed.Host = strings.ToLower(parsed.Host)
-		return strings.TrimSuffix(parsed.String(), "/")
-	}
-	return strings.TrimSuffix(strings.TrimSpace(value), ".git")
-}
-func readOptional(path string) (*string, error) {
-	if !isRegular(path) || isSymlink(path) {
-		return nil, nil
-	}
-	data, err := readExtensionText(path, maxPluginBytes)
-	if err != nil {
-		return nil, err
-	}
-	value := string(data)
-	return &value, nil
-}
-
-var _ = sha256.Size
-var _ = hashBytes
-
 func (s *Service) skillSourcesSnapshot(cfg domain.AppConfig, state extensionState) map[string]any {
 	items := make([]map[string]any, 0, len(cfg.SkillSources))
 	for _, source := range cfg.SkillSources {
@@ -999,50 +263,11 @@ func (s *Service) skillSourcesSnapshot(cfg domain.AppConfig, state extensionStat
 	return map[string]any{"sources": items}
 }
 
-func (s *Service) extensionsSnapshot(cfg domain.AppConfig, state extensionState) map[string]any {
-	marketplaces := make([]map[string]any, 0, len(cfg.CodexPluginMarketplaceSources))
-	for _, source := range cfg.CodexPluginMarketplaceSources {
-		status, ok := state.Marketplaces[source.ID]
-		if !ok {
-			status = MarketplaceSnapshot{SourceID: source.ID, Plugins: []PluginCatalogItem{}}
-		}
-		marketplaces = append(marketplaces, map[string]any{"source": source, "status": marketplaceStatusView(status, state)})
-	}
-	skillSources := make([]map[string]any, 0, len(cfg.SkillSources))
-	for _, source := range cfg.SkillSources {
-		status, ok := state.SkillSources[source.ID]
-		if !ok {
-			status = SkillSourceSnapshot{SourceID: source.ID, Skills: []ExternalSkill{}, DiscoveredRoots: []string{}}
-		}
-		skillSources = append(skillSources, map[string]any{"source": source, "status": s.skillSourceStatusView(status, state, source)})
-	}
-	return map[string]any{"marketplaces": marketplaces, "skillSources": skillSources}
-}
-
 const (
 	extensionOwnershipManaged      = "MANAGED"
 	extensionOwnershipExternal     = "EXTERNAL"
 	extensionOwnershipNotInstalled = "NOT_INSTALLED"
 )
-
-func marketplaceStatusView(status MarketplaceSnapshot, state extensionState) map[string]any {
-	result := jsonObject(status)
-	plugins := make([]map[string]any, 0, len(status.Plugins))
-	for _, plugin := range status.Plugins {
-		item := jsonObject(plugin)
-		switch {
-		case managedPluginOwned(state, status.SourceID, plugin.Name):
-			item["ownership"] = extensionOwnershipManaged
-		case plugin.Installed:
-			item["ownership"] = extensionOwnershipExternal
-		default:
-			item["ownership"] = extensionOwnershipNotInstalled
-		}
-		plugins = append(plugins, item)
-	}
-	result["plugins"] = plugins
-	return result
-}
 
 func (s *Service) skillSourceStatusView(status SkillSourceSnapshot, state extensionState, source domain.SkillSource) map[string]any {
 	result := jsonObject(status)
@@ -1106,13 +331,6 @@ func (s *Service) localSkillDirectoryExists(name string) bool {
 // Resolve the preview's source identity again before copying its file reference.
 // A path supplied by the desktop is never a copy target.
 func (s *Service) extensionSkillCopyFilePath(ctx context.Context, cfg domain.AppConfig, state extensionState, payload map[string]any) (string, error) {
-	if pluginName := payloadString(payload, "pluginName"); pluginName != "" {
-		preview, err := s.previewPluginSkill(cfg, state, payloadString(payload, "sourceId"), pluginName, payloadString(payload, "skillName"))
-		if err != nil {
-			return "", err
-		}
-		return preview["path"].(string), nil
-	}
 	if sourceID := payloadString(payload, "sourceId"); sourceID != "" {
 		expected, err := skillFingerprintExpectation(payload)
 		if err != nil {
@@ -1729,10 +947,6 @@ func copyBackup(source, target string) error {
 	return copyOne(source, target)
 }
 
-func copySkillDirectory(source, target string) error {
-	return copySkillDirectoryWithContext(context.Background(), source, target)
-}
-
 func walkCopyWithContext(ctx context.Context, source, target string, skipGit bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -1818,10 +1032,6 @@ func copyOneWithContext(ctx context.Context, source, target string) error {
 	return nil
 }
 
-func validateSkillTree(root string) error {
-	return validateSkillTreeWithContext(context.Background(), root)
-}
-
 func validateSkillTreeWithContext(ctx context.Context, root string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -1847,10 +1057,6 @@ func validateSkillTreeWithContext(ctx context.Context, root string) error {
 		}
 		return nil
 	})
-}
-
-func validateNamedSkillTree(root, expectedName string) error {
-	return validateNamedSkillTreeWithContext(context.Background(), root, expectedName)
 }
 
 func validateNamedSkillTreeWithContext(ctx context.Context, root, expectedName string) error {
@@ -1918,20 +1124,14 @@ func (s *Service) saveExtensionState(state extensionState) error {
 }
 
 func emptyExtensionState() extensionState {
-	return extensionState{Schema: 1, Marketplaces: map[string]MarketplaceSnapshot{}, SkillSources: map[string]SkillSourceSnapshot{}, ManagedPlugins: []managedPlugin{}, ManagedSkills: []managedSkill{}}
+	return extensionState{Schema: 1, SkillSources: map[string]SkillSourceSnapshot{}, ManagedSkills: []managedSkill{}}
 }
 func (s *extensionState) normalize() {
 	if s.Schema == 0 {
 		s.Schema = 1
 	}
-	if s.Marketplaces == nil {
-		s.Marketplaces = map[string]MarketplaceSnapshot{}
-	}
 	if s.SkillSources == nil {
 		s.SkillSources = map[string]SkillSourceSnapshot{}
-	}
-	if s.ManagedPlugins == nil {
-		s.ManagedPlugins = []managedPlugin{}
 	}
 	if s.ManagedSkills == nil {
 		s.ManagedSkills = []managedSkill{}
@@ -2008,17 +1208,6 @@ func safeChild(root, relative string) (string, error) {
 	return target, nil
 }
 
-func ensureNoSymlinks(root string) error {
-	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("Skill 缓存不允许符号链接：%s", path)
-		}
-		return nil
-	})
-}
 func ensureNoSymlinksBetween(root, target string) error {
 	if !within(root, target) {
 		return fmt.Errorf("路径超出根目录")

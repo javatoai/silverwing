@@ -2,8 +2,10 @@ package desktop
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 	"silverwing-go/internal/application"
@@ -77,6 +79,12 @@ func TestRequirementCardLongTitleAndStatusFit(t *testing.T) {
 				}
 				if !v.HasText("估时：0 天") {
 					t.Fatal("zero estimate hidden")
+				}
+				before := v.Texts()
+				v.Move(card.X+12, card.Y+14)
+				v.Advance(750 * time.Millisecond)
+				if !slices.Equal(before, v.Texts()) {
+					t.Fatal("hovering the card title displayed additional text")
 				}
 				if err := v.Click(item.Title); err != nil {
 					t.Fatal(err)

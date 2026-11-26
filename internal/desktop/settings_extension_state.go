@@ -34,7 +34,6 @@ type settingsExtensionRequestState struct {
 	previewError          string
 	previewPath           string
 	previewMarkdown       *markdownEditorState
-	previewPluginSkills   []string
 	catalogToken          string
 	filesToken            string
 	workspaceToolsToken   string
@@ -67,13 +66,13 @@ func settingsExtensionRead(action application.Action) bool {
 	switch action.Kind {
 	case "workspace.tools-options":
 		return payloadString(action.Payload, "taskCreateToken") == "settings-workspace-tools"
-	case "skills.catalog", "skills.files/list", "skills.sources/branches/list", "codex.extensions/branches/list", "skills.files/preview", "skills.preview", "codex.extensions/plugin/preview", "codex.extensions/plugin/skill-preview":
+	case "skills.catalog", "skills.files/list", "skills.sources/branches/list", "skills.files/preview", "skills.preview":
 		return true
 	}
 	return false
 }
 
-// The settings UI has one preview dialog. Replacing its skill, source or plugin
+// The settings UI has one preview dialog. Replacing its skill or source
 // retires that dialog's read; branches and local catalog/file reads are separate.
 func settingsExtensionReadKey(action application.Action) string {
 	if extensionBranchesRead(action.Kind) {
@@ -110,7 +109,7 @@ func settingsExtensionReadToken(state *settingsExtensionRequestState, key string
 }
 
 func extensionBranchesRead(kind string) bool {
-	return kind == "skills.sources/branches/list" || kind == "codex.extensions/branches/list"
+	return kind == "skills.sources/branches/list"
 }
 
 func (s *app) prepareSettingsExtensionRead(action *application.Action) {
@@ -162,7 +161,6 @@ func (s *app) prepareSettingsExtensionRead(action *application.Action) {
 		state.previewToken, state.previewLoading, state.previewError = token, true, ""
 		closeMarkdownPreviewState(state.previewMarkdown)
 		state.previewMarkdown = nil
-		state.previewPluginSkills = nil
 		state.previewPath = ""
 		s.settingsUnit.state.settingsSkillPreviewText = ""
 		s.settingsUnit.state.settingsSkillPreviewName = firstNonEmpty(payloadString(payload, "relativePath"), payloadString(payload, "skillName"), payloadString(payload, "name"), "Skill 预览")
@@ -235,7 +233,6 @@ func (s *app) invalidateSettingsExtensionRead(key, reason string) {
 		state.previewToken, state.previewLoading, state.previewError = "", false, reason
 		closeMarkdownPreviewState(state.previewMarkdown)
 		state.previewMarkdown = nil
-		state.previewPluginSkills = nil
 		state.previewPath = ""
 		s.settingsUnit.state.settingsSkillPreviewText = ""
 		if reason == "" {
@@ -298,7 +295,6 @@ func (s *app) applySettingsExtensionPreview(action application.Action, result ap
 	state.previewLoading, state.previewError = false, ""
 	closeMarkdownPreviewState(state.previewMarkdown)
 	state.previewMarkdown = nil
-	state.previewPluginSkills = nil
 	s.settingsUnit.state.settingsSkillPreviewName = firstNonEmpty(dataString(result.Data, "name"), payloadString(action.Payload, "relativePath"), payloadString(action.Payload, "skillName"), payloadString(action.Payload, "name"))
 	s.settingsUnit.state.settingsSkillPreviewText = resultText(result)
 	if data, ok := result.Data.(map[string]any); ok {
@@ -307,38 +303,11 @@ func (s *app) applySettingsExtensionPreview(action application.Action, result ap
 		}
 	}
 	state.previewPath = dataString(result.Data, "path")
-	if strings.HasPrefix(action.Kind, "codex.extensions/plugin/") {
-		s.settingsUnit.state.settingsSkillPreviewText = pluginPreviewText(result.Data)
-	}
-	if action.Kind == "codex.extensions/plugin/preview" {
-		seen := make(map[string]bool)
-		add := func(name string) {
-			if name != "" && !seen[name] {
-				seen[name] = true
-				state.previewPluginSkills = append(state.previewPluginSkills, name)
-			}
-		}
-		for _, skill := range mapsFromData(dataValue(result.Data, "skills")) {
-			add(mapString(skill, "name"))
-		}
-		for _, marketplace := range s.settingsUnit.state.settingsMarketplaces {
-			if mapString(mapData(marketplace["source"]), "id") != payloadString(action.Payload, "sourceId") {
-				continue
-			}
-			for _, plugin := range mapsFromData(mapData(marketplace["status"])["plugins"]) {
-				if mapString(plugin, "name") == payloadString(action.Payload, "name") {
-					for _, name := range stringArray(mustArray(plugin["bundledSkills"])) {
-						add(name)
-					}
-				}
-			}
-		}
-	}
 	markdown := action.Kind != "skills.files/preview" || strings.HasSuffix(strings.ToLower(s.settingsUnit.state.settingsSkillPreviewName), ".md")
 	if markdown {
 		state.previewMarkdown = newReadonlyMarkdownState("extension-preview:"+state.previewToken, s.settingsUnit.state.settingsSkillPreviewText, nil)
 		switch action.Kind {
-		case "skills.preview", "codex.extensions/plugin/skill-preview":
+		case "skills.preview":
 			if state.previewPath != "" {
 				bindSkillMarkdownPreviewImages(state.previewMarkdown, state.previewPath, filepath.Dir(state.previewPath), s.settingsUnit.previewResourceResolver())
 			}
@@ -358,29 +327,4 @@ func (s *app) settingsExtensionPreviewRetryAction() (application.Action, bool) {
 	}
 	action := state.readActions["preview"]
 	return action, s.settingsExtensionActionRelevant(action)
-}
-
-func (s *app) navigateSettingsPluginPreview(skillName string) {
-	state := s.settingsUnit.state.settingsExtensionRequests
-	if state == nil || state.previewLoading || state.previewError != "" {
-		return
-	}
-	current := state.readActions["preview"]
-	if !s.settingsExtensionActionRelevant(current) {
-		return
-	}
-	sourceID := payloadString(current.Payload, "sourceId")
-	if current.Kind == "codex.extensions/plugin/skill-preview" && skillName == "" {
-		s.act("codex.extensions/plugin/preview", "", "", "", "", "", map[string]any{"sourceId": sourceID, "name": payloadString(current.Payload, "pluginName")})
-		return
-	}
-	if current.Kind != "codex.extensions/plugin/preview" {
-		return
-	}
-	for _, discovered := range state.previewPluginSkills {
-		if discovered == skillName {
-			s.act("codex.extensions/plugin/skill-preview", "", "", "", "", "", map[string]any{"sourceId": sourceID, "pluginName": payloadString(current.Payload, "name"), "skillName": skillName})
-			return
-		}
-	}
 }

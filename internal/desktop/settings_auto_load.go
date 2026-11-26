@@ -183,12 +183,6 @@ func (s *app) ensureSettingsPageData() {
 		s.loadSettingsAgentInstructions()
 	case "task-creation":
 		s.requestSettingsCLIStatus("codex", false)
-	case "codex-plugins":
-		s.requestSettingsCLIStatus("codex", false)
-		s.act("codex.extensions/snapshot", "", "", "", "", "", nil)
-	case "codex-mcp":
-		s.requestSettingsCLIStatus("codex", false)
-		s.act("codex.extensions/mcp/status", "", "", "", "", "", s.settingsMCPPayload(nil))
 	case "cli-tools":
 		s.requestSettingsCLIStatus(s.currentSettingsCLITool(), false)
 	case platformConnectionsPage:

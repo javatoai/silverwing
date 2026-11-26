@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 
-	"silverwing-go/internal/appupdate"
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/process"
 	"silverwing-go/internal/storage"
@@ -23,10 +22,6 @@ type Service struct {
 	codexURIOpener func(context.Context, string) error
 	authMu         sync.Mutex
 	authSessions   map[string]*cliAuthSession
-	updateChecker  *githubReleaseChecker
-	updateBackoff  appUpdateCheckBackoff
-	updateMu       sync.Mutex
-	updates        *appupdate.Coordinator
 }
 
 func NewService(paths storage.Paths, config *storage.ConfigStore, runner *process.Runner) *Service {
@@ -50,13 +45,9 @@ func (s *Service) Execute(ctx context.Context, kind string, payload map[string]a
 	switch kind {
 	case "skills.sources/save", "skills.sources/remove", "skills.sources/catalog", "skills.catalog", "skills.files/list", "skills.files/preview", "skills.files/copy-path", "skills.preview", "skills.preview/path", "skills.install", "skills.update", "skills.remove":
 		return s.executeSkills(ctx, kind, payload)
-	case "codex.extensions/snapshot", "codex.extensions/marketplaces/list", "codex.extensions/marketplaces/add-source", "codex.extensions/marketplaces/refresh-source", "codex.extensions/marketplaces/remove-source",
-		"codex.extensions/branches/list", "skills.sources/branches/list",
-		"codex.extensions/plugin/install", "codex.extensions/plugin/uninstall", "codex.extensions/plugins/install", "codex.extensions/plugins/uninstall",
-		"codex.extensions/plugin/preview", "codex.extensions/plugin/skill-preview",
-		"codex.extensions/mcp/status", "codex.extensions/mcp/check", "codex.extensions/mcp/set", "codex.extensions/mcp/add", "codex.extensions/mcp/edit", "codex.extensions/mcp/remove":
-		return s.executeCodexExtensions(ctx, kind, payload)
-	case "codex.ai/snapshot", "codex.ai/threads/list", "codex.ai/threads/bind", "codex.ai/file/read", "codex.ai/mcp/authenticate", "codex.ai/open":
+	case "skills.sources/branches/list":
+		return s.loadSkillSourceBranches(ctx, payload)
+	case "codex.ai/snapshot", "codex.ai/threads/list", "codex.ai/threads/bind", "codex.ai/file/read", "codex.ai/open":
 		return s.executeCodexAI(ctx, kind, payload)
 	case "cli.status":
 		return s.executeCLI(ctx, kind, payload)
@@ -86,10 +77,6 @@ func (s *Service) Execute(ctx context.Context, kind string, payload map[string]a
 		return s.executeLogs(kind, payload)
 	case "logs.clear":
 		return s.clearApplicationLogs(ctx, payload)
-	case "update.check":
-		return s.checkApplicationUpdate(ctx)
-	case "update.prepare", "update.status", "update.cancel", "update.apply":
-		return s.executeAppUpdate(ctx, kind, payload)
 	default:
 		return nil, fmt.Errorf("未知平台操作：%s", kind)
 	}

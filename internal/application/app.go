@@ -23,28 +23,31 @@ import (
 )
 
 type App struct {
-	directoryRecycler           documents.DirectoryRecycler
-	materialsGitGate            sync.RWMutex
-	Paths                       storage.Paths
-	Config                      *storage.ConfigStore
-	Manifests                   *storage.ManifestStore
-	Runner                      *process.Runner
-	Documents                   *documents.Service
-	Integrations                *integrations.Service
-	Platform                    *platform.Service
-	diffSessionsMu              sync.Mutex
-	diffSessions                *workspace.WorkspaceGitDiffSessionManager
-	startupMigrationDiagnostics []string
-	startupTaskRootError        *storage.DefaultTaskRootInitializationError
-	tagJobsMu                   sync.Mutex
-	tagJobs                     *tagJobManager
-	genbuConfigPreviews         genbuConfigPreviewStore
-	genbuConfigSources          genbuConfigSourceStore
-	dragonQAClient              dragonQAClient
-	dragonQAComments            dragonQACommentClient
-	optionalCLIs                optionalCLIRegistry
-	optionalCLIRequire          func(context.Context, string) error
-	connections                 platformClients
+	directoryRecycler            documents.DirectoryRecycler
+	materialsGitGate             sync.RWMutex
+	Paths                        storage.Paths
+	Config                       *storage.ConfigStore
+	Manifests                    *storage.ManifestStore
+	Runner                       *process.Runner
+	Documents                    *documents.Service
+	Integrations                 *integrations.Service
+	Platform                     *platform.Service
+	diffSessionsMu               sync.Mutex
+	diffSessions                 *workspace.WorkspaceGitDiffSessionManager
+	startupMigrationDiagnostics  []string
+	startupTaskRootError         *storage.DefaultTaskRootInitializationError
+	tagJobsMu                    sync.Mutex
+	tagJobs                      *tagJobManager
+	genbuConfigPreviews          genbuConfigPreviewStore
+	genbuConfigSources           genbuConfigSourceStore
+	dragonQAClient               dragonQAClient
+	dragonQAComments             dragonQACommentClient
+	taskRequirementCommentsMu    sync.Mutex
+	taskRequirementComments      *taskRequirementCommentSync
+	taskRequirementCommentClient taskRequirementCommentClient
+	optionalCLIs                 optionalCLIRegistry
+	optionalCLIRequire           func(context.Context, string) error
+	connections                  platformClients
 }
 
 func New(home string) (*App, error) {
@@ -127,6 +130,7 @@ func composeApp(paths storage.Paths, manifests *storage.ManifestStore) *App {
 		return app.embeddedAccountIdentity(ctx, "dragon")
 	}}
 	app.dragonQAComments = app.Integrations
+	app.taskRequirementCommentClient = app.Integrations
 	return app
 }
 

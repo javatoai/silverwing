@@ -97,7 +97,6 @@ func TestSettingsSystemCopyFailureAndRecovery(test *testing.T) {
 		render                       func(*app, *ui.Context, palette)
 	}{
 		{"repository", "复制地址", silverwingRepositoryURL, "GitHub 仓库地址已复制", (*app).settingsAbout},
-		{"updates", "复制链接", silverwingReleasesURL, "更新链接已复制", (*app).settingsUpdates},
 		{"app-data", "复制路径", `C:\用户 数据\Silver Wing`, "应用数据目录路径已复制", (*app).settingsAppData},
 	} {
 		test.Run(scenario.name, func(test *testing.T) {

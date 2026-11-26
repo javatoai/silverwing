@@ -41,10 +41,6 @@ func (s *app) sidebar(c *ui.Context, p palette, compact bool) {
 			if compact {
 				b.Height(48).Width(44).AlignSelf(ui.Center).Center().Tooltip(n.name)
 			}
-			updateAvailable := n.page == "settings" && s.hasAppUpdate()
-			if updateAvailable {
-				b.Label("设置，有新版本可更新").Tooltip("设置 · 有新版本可更新")
-			}
 			b.Children(func() {
 				if !compact {
 					if active {
@@ -54,9 +50,6 @@ func (s *app) sidebar(c *ui.Context, p palette, compact bool) {
 					}
 				}
 				icon(c, n.image, 20, fg)
-				if updateAvailable {
-					appUpdateDot(c, p, compact)
-				}
 				if !compact {
 					weight := 400
 					if active {

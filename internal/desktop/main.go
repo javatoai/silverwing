@@ -21,19 +21,19 @@ import (
 // Options controls the initial native desktop state. It is also used by the
 // command line to capture stable screenshots for visual verification.
 type Options struct {
-	Home              string
-	RestoreSession    bool
-	Page              string
-	Dark              bool
-	Width             int
-	Height            int
-	Tab               int
-	TabExplicit       bool
-	CapturePath       string
-	CaptureOnly       bool
+	Home           string
+	RestoreSession bool
+	Page           string
+	Dark           bool
+	Width          int
+	Height         int
+	Tab            int
+	TabExplicit    bool
+	CapturePath    string
+	CaptureOnly    bool
+	// Older updater helpers require a readiness receipt when replacing the application.
 	UpdateHealthPath  string
 	UpdateHealthToken string
-	UpdateResultPath  string
 }
 
 // Run starts the native MyGO window and talks to the application in-process.
@@ -95,7 +95,6 @@ func Run(backend application.Backend, opts Options) error {
 
 	captureFrame := &captureFrameState{}
 	updateHealthReported := false
-	updateOutcomeLoaded := false
 	mygo.App.WhenReady(func() {
 		s.win = mygo.NewWindow(mygo.WindowOptions{
 			Title:     buildinfo.ProductName,
@@ -106,20 +105,6 @@ func Run(backend application.Backend, opts Options) error {
 			MinHeight: 760,
 			Content: ui.View(func(c *ui.Context) {
 				s.view(c)
-				if !updateOutcomeLoaded && opts.UpdateResultPath != "" && s.snapshot.Home != "" {
-					updateOutcomeLoaded = true
-					home, window := s.snapshot.Home, s.win
-					go func() {
-						outcome, err := native.ReadOutcome(home, opts.UpdateResultPath)
-						if err == nil && outcome.Error != "" && window != nil && !window.IsDestroyed() {
-							window.Update(func() {
-								if s.snapshot.Home == home {
-									s.ensureAppUpdateState().failure = "上次更新：" + outcome.Error
-								}
-							})
-						}
-					}()
-				}
 				if !updateHealthReported && !s.loading && s.snapshot.Home == opts.Home && opts.UpdateHealthPath != "" && s.win != nil {
 					width, height := c.Size()
 					if width > 0 && height > 0 {
@@ -148,7 +133,6 @@ func Run(backend application.Backend, opts Options) error {
 		}
 		s.win.OnClosed(s.stopDesktopFeatures)
 		s.win.OnFocus(func() {
-			s.observeAppUpdates()
 			s.onMaterialsWindowFocused()
 			if pane := s.visibleProjectMaterials(); pane != nil {
 				pane.onMaterialsWindowFocused()
@@ -161,21 +145,20 @@ func Run(backend application.Backend, opts Options) error {
 		s.win.OnUnmaximize(s.recordDesktopWindowBounds)
 		s.win.OnClose(func(event *mygo.CloseEvent) {
 			s.recordDesktopWindowBounds()
-			if s.guardAppUpdateClose(event) {
-				return
-			}
 			if s.handleSettingsAutosaveClose(event) {
 				return
 			}
 			s.handleDocumentClose(event)
 		})
+		if opts.CapturePath == "" {
+			s.startTaskRequirementCommentSync()
+		}
 		go s.loadInitialSnapshot()
 		if opts.CapturePath != "" {
 			go captureWindow(s, captureFrame, opts.CapturePath, opts.CaptureOnly)
 		}
 	})
-	runErr := mygo.App.Run()
-	return s.applyAppUpdateAfterExit(s.closeDesktopFeatures(runErr))
+	return s.closeDesktopFeatures(mygo.App.Run())
 }
 
 func (s *app) loadInitialSnapshot() {

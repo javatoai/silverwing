@@ -567,9 +567,6 @@ func (c AppConfig) RequirementMaterialsConfigured() bool {
 func (c AppConfig) TagNavigationVisible() bool {
 	return c.TagEnabled
 }
-func (s CodexPluginMarketplaceSource) RequiresRootMarketplaceMigration() bool {
-	return s.MarketplaceDirectory != "."
-}
 func (s ServiceWorkspace) SelectionKey() string { return s.GroupServiceID + ":" + s.ModuleID }
 func (m TaskManifest) Health() WorkspaceHealth  { return AggregateWorkspaceHealth(m.Services) }
 func AggregateWorkspaceHealth(workspaces []ServiceWorkspace) WorkspaceHealth {

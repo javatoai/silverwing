@@ -147,7 +147,14 @@ func (s *app) renderTagHistoryGroup(c *ui.Context, p palette, state *tagHistoryV
 				label(c, title, 12, p.text).FontWeight(600).FillWidth().MinWidth(0).SingleLine().Tooltip(title).Label("Tag 批次名称 · " + group.Item.GroupID)
 				label(c, tagHistoryBuildTimeLabel(group.Item.CreatedAt), 10, p.muted).SingleLine().Tooltip("发起构建时间").Label("Tag 构建时间 · " + group.Item.GroupID)
 			})
-			uatUnavailable = s.renderUATBatchActions(c, p, state, group)
+			ui.Row(c).Shrink(0).Gap(8).AlignItems(ui.Center).Children(func() {
+				if tagRecordAction(c, p, "copy-announcement", "copy", "复制发版通知", s.busy).FocusRing(true).
+					Label("复制发版通知 · "+group.Item.GroupID).Tooltip("复制整个批次的发版通知").Clicked() && s.tagHistoryStateCurrent(state) {
+					text, feedback := s.tagReleaseNoticeCopy(state.TaskID, group)
+					s.copyTextToClipboard(c.Services(), text, feedback)
+				}
+				uatUnavailable = s.renderUATBatchActions(c, p, state, group)
+			})
 		})
 		if uatUnavailable != "" {
 			label(c, uatUnavailable, 11, p.muted).Wrap()

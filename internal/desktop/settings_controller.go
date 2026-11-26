@@ -32,17 +32,11 @@ type settingsState struct {
 	settingsLoaded                   string
 	settingsOutput                   string
 	settingsConfigRecovery           *settingsConfigRecoveryState
-	settingsMarketplaces             []map[string]any
 	settingsAgentContent             string
 	settingsAgentPath                string
 	settingsAgentLoaded              bool
 	settingsAgentContext             string
 	settingsSkillsCatalog            string
-	settingsExtensions               []map[string]any
-	settingsMCPServers               []map[string]any
-	settingsMCPPath                  string
-	settingsMCPWarnings              []string
-	settingsMCPTaskScope             bool
 	settingsSkillSources             []map[string]any
 	settingsLocalSkills              []map[string]any
 	settingsSkillRoot                string
@@ -55,8 +49,6 @@ type settingsState struct {
 	settingsBranchChoices            []string
 	settingsExtensionRequests        *settingsExtensionRequestState
 	settingsLogEntries               []map[string]any
-	settingsMCPConnections           map[string]any
-	settingsMCPConnectionError       string
 	settingsGitEnvironment           map[string]any
 	settingsDevelopmentToolsSnapshot map[string]any
 	settingsCLIStatus                map[string]map[string]any

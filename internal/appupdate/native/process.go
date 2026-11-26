@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"time"
 
 	"silverwing-go/internal/appupdate"
@@ -22,16 +21,6 @@ func (Runner) Run(_ context.Context, executable string, args []string) (int, err
 		return exit.ExitCode(), nil
 	}
 	return 0, err
-}
-
-func LaunchHelper(helper, plan string) error {
-	cmd := exec.Command(helper, "--job", plan)
-	cmd.Dir = filepath.Dir(plan)
-	hide(cmd)
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	return cmd.Process.Release()
 }
 
 type Started struct{ done <-chan error }

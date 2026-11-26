@@ -39,7 +39,7 @@ func TestTaskContextMenuKeepsSelectionAndDraft(t *testing.T) {
 	if err := tester.RightClick("界面体验"); err != nil {
 		t.Fatal(err)
 	}
-	if got := tester.Menu(); !slices.Equal(got, []string{"在 Codex 中打开", "-", "批量合并主分支", "-", "打开任务目录", "复制任务目录", regenerateTaskInstructionsLabel, "-", "配置任务资料", "-", "置顶任务", "-", "归档任务", "恢复已回收工作区", "-", "删除任务"}) {
+	if got := tester.Menu(); !slices.Equal(got, []string{"在 Codex 中打开", "-", "重试同步", "批量合并主分支", "-", "打开任务目录", "复制任务目录", regenerateTaskInstructionsLabel, "-", "配置任务资料", "-", "置顶任务", "-", "归档任务", "恢复已回收工作区", "-", "删除任务"}) {
 		t.Fatalf("active menu: %v", got)
 	}
 	if err := tester.ChooseMenuItem("置顶任务"); err != nil {
@@ -99,7 +99,7 @@ func TestTaskContextMenuArchiveAndDeleteTarget(t *testing.T) {
 	if err := tester.RightClick("已归档任务"); err != nil {
 		t.Fatal(err)
 	}
-	if got := tester.Menu(); !slices.Equal(got, []string{"在 Codex 中打开", "-", "关联需求", "批量合并主分支", "-", "打开任务目录", "复制任务目录", regenerateTaskInstructionsLabel, "-", "准备本地任务资料", "-", "置顶任务", "-", "恢复归档", "恢复已回收工作区", "-", "删除任务"}) {
+	if got := tester.Menu(); !slices.Equal(got, []string{"在 Codex 中打开", "-", "关联需求", "重试同步", "批量合并主分支", "-", "打开任务目录", "复制任务目录", regenerateTaskInstructionsLabel, "-", "准备本地任务资料", "-", "置顶任务", "-", "恢复归档", "恢复已回收工作区", "-", "删除任务"}) {
 		t.Fatalf("archive menu: %v", got)
 	}
 }
@@ -441,7 +441,7 @@ func TestTaskContextMenuThemedLayout(t *testing.T) {
 						t.Fatal(err)
 					}
 					tester.Frame()
-					for _, label := range []string{"置顶任务", lifecycleLabel, "删除任务"} {
+					for _, label := range []string{"重试同步", "置顶任务", lifecycleLabel, "删除任务"} {
 						bounds, found := tester.Find(label)
 						if !found || bounds.X < 0 || bounds.Y < 0 || bounds.X+bounds.W > float32(width) || bounds.Y+bounds.H > 520 {
 							t.Fatalf("context item %q is clipped: %+v texts=%q native=%q", label, bounds, tester.Texts(), tester.Menu())
@@ -459,6 +459,47 @@ func TestTaskContextMenuThemedLayout(t *testing.T) {
 					}
 				})
 			}
+		}
+	}
+}
+
+func TestTaskContextMenuExpandsAllActions(t *testing.T) {
+	for _, height := range []int{560, 760} {
+		for _, archived := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%d-archive-%t", height, archived), func(t *testing.T) {
+				s, _ := taskMenuFixture(t)
+				s.win = &mygo.Window{}
+				index := 1
+				if archived {
+					index, s.page, s.taskUnit.state.selected = 3, "archive", 3
+				}
+				target := s.taskUnit.state.tasks[index]
+				tester := ui.NewTester(func(c *ui.Context) {
+					p := setTheme(c, archived)
+					ui.MenuScope(c, "expanded-task-menu")
+					ui.Column(c).Fill().Children(func() { s.taskIndex(c, p) })
+					ui.ThemedMenus(c, "expanded-task-menu")
+				}, 340, height)
+				if err := tester.RightClick(target.title); err != nil {
+					t.Fatal(err)
+				}
+				top, topVisible := tester.Find("在 Codex 中打开")
+				bottom, bottomVisible := tester.Find("删除任务")
+				if !topVisible || !bottomVisible || top.Y < 0 || bottom.Y+bottom.H > float32(height) {
+					t.Fatalf("whole task menu is not in the window: first=%+v last=%+v", top, bottom)
+				}
+				tester.Wheel(top.X+10, top.Y+top.H/2, 0, 1000)
+				tester.Advance(time.Second)
+				if after, found := tester.Find("在 Codex 中打开"); !found || after != top {
+					t.Fatalf("task menu still scrolls: first item %+v -> %+v", top, after)
+				}
+				if err := tester.Click("删除任务"); err != nil {
+					t.Fatal(err)
+				}
+				if dialog := s.taskUnit.state.taskDeleteDialog; dialog == nil || dialog.TaskID != target.id {
+					t.Fatal("clicking the bottom item did not open the target task's confirmation")
+				}
+			})
 		}
 	}
 }

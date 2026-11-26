@@ -45,6 +45,7 @@ func (s *app) renderOperationNotifications(c *ui.Context) {
 	s.operationNotifications.present(c, "operation", &s.lastMessage, &s.lastError)
 	emptyWarningError := ""
 	s.operationNotifications.presentWithKind(c, "task-create-warning", &s.taskUnit.state.taskCreationWarning, &emptyWarningError, "warning")
+	s.renderTaskRequirementCommentSyncNotifications(c)
 	if state := s.settingsUnit.state.pageLocalRead; state != nil {
 		empty := ""
 		entry := state.entry
@@ -77,8 +78,7 @@ func operationProgressTitle(kind, title string) string {
 	switch kind {
 	case "development-tools/detect":
 		return "正在检测开发工具…"
-	case "development-tools/snapshot", "codex.extensions/snapshot", "codex.extensions/mcp/status",
-		"skills.sources/catalog",
+	case "development-tools/snapshot", "skills.sources/catalog",
 		"git.environment", "git.environment/snapshot", "logs.list", "logs.read", "terminal.resolve":
 		return "" // Routine local reads update their pages silently.
 	}
@@ -297,7 +297,7 @@ func (s *operationNotificationState) presentWithErrorAction(c *ui.Context, scope
 			s.shown[scope] = ""
 		}
 	}}
-	if kind == "warning" {
+	if kind == "warning" || (scope == "operation" && kind == "success" && isTagReleaseNoticeCopiedMessage(text)) {
 		toast.ContentMaxHeight = 360
 	}
 	c.AddToast(toast)

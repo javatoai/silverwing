@@ -54,4 +54,4 @@ Codex 会话列表为空时，确认任务 cwd、Codex 配置读取和 app-serve
 - Codex 线程绑定与打开：`internal/platform/codex_ai.go`、`internal/platform/codex_open_uri.go`
 - 桌面任务入口：`internal/desktop/codex_ai_jobs.go`、`internal/desktop/task_workspace_ui.go`
 
-相关文档：[IDE 与 Agent 配置](../AI%20工具与上下文/13-IDE与Agent配置.md) · [Codex 插件与 MCP](../AI%20工具与上下文/16-Codex插件与MCP.md) · [网络代理与 CLI 环境](../配置与数据/22-网络代理与CLI环境.md)
+相关文档：[IDE 与 Agent 配置](../AI%20工具与上下文/13-IDE与Agent配置.md) · [Skills 管理](../AI%20工具与上下文/15-Skills管理.md) · [网络代理与 CLI 环境](../配置与数据/22-网络代理与CLI环境.md)

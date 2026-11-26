@@ -18,7 +18,6 @@ var settingsProxyTargets = [...]struct {
 	title, description string
 }{
 	{domain.ProxyTargetCodex, "Codex CLI", "AI 命名与 Codex 扩展。"},
-	{domain.ProxyTargetAppUpdates, "应用更新", "检查更新和下载更新包。"},
 }
 
 func (s *app) renderGitEnvironment(c *ui.Context, p palette) {

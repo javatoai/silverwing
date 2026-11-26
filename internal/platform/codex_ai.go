@@ -10,13 +10,13 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"silverwing-go/internal/executable"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"silverwing-go/internal/codexprotocol"
 	"silverwing-go/internal/domain"
+	"silverwing-go/internal/executable"
 	"silverwing-go/internal/process"
 	"silverwing-go/internal/storage"
 )
@@ -69,7 +69,7 @@ func (s *Service) executeCodexAI(ctx context.Context, kind string, payload map[s
 				return nil, err
 			}
 		}
-		return s.withCodexRPCSession(ctx, cfg, cwd, nil, time.Minute, true, func(sessionContext context.Context) (any, error) {
+		return s.withCodexRPCSession(ctx, cfg, cwd, time.Minute, true, func(sessionContext context.Context) (any, error) {
 			return s.codexAISnapshot(sessionContext, cfg, cwd, payloadBool(payload, "includeSkills"))
 		})
 	case "codex.ai/threads/list":
@@ -149,56 +149,30 @@ func (s *Service) executeCodexAI(ctx context.Context, kind string, payload map[s
 		return s.readCodexFile(path)
 	case "codex.ai/open":
 		return s.openCodexWorkspace(ctx, payload)
-	case "codex.ai/mcp/authenticate":
-		name := payloadString(payload, "name")
-		if name == "" {
-			return nil, fmt.Errorf("MCP 名称不能为空")
-		}
-		login, ok := payload["login"].(bool)
-		if !ok {
-			return nil, fmt.Errorf("login 必须明确为布尔值")
-		}
-		verb := "logout"
-		if login {
-			verb = "login"
-		}
-		cwd := payloadString(payload, "cwd")
-		if cwd == "" {
-			cwd = payloadString(payload, "taskPath")
-		}
-		if cwd != "" {
-			cwd, err = filepath.Abs(cwd)
-			if err != nil {
-				return nil, err
-			}
-		}
-		command, err := s.resolveCLIExecutable(ctx, cfg, executable.ToolCodex)
-		if err != nil {
-			return nil, err
-		}
-		env := cliEnvironmentWithRunner(ctx, s.runner, executable.ToolCodex, command)
-		if _, err := s.runToolWithEnv(ctx, cfg, executable.ToolCodex, command, []string{"mcp", verb, name}, cwd, 3*time.Minute, env); err != nil {
-			return nil, err
-		}
-		return map[string]any{"server": name, "authenticated": login}, nil
 	default:
 		return nil, fmt.Errorf("未知 Codex AI 操作：%s", kind)
 	}
 }
 
 func (s *Service) codexAISnapshot(ctx context.Context, cfg domain.AppConfig, cwd string, includeSkills bool) (any, error) {
-	snapshot, err := s.readCodexConfig(ctx, cfg, cwd)
+	params := map[string]any{"includeLayers": true}
+	if cwd != "" {
+		params["cwd"] = cwd
+	}
+	response, err := s.rpcRequest(ctx, cfg, cwd, "config/read", params, 30*time.Second)
 	if err != nil {
 		return nil, err
 	}
 	files := []codexInstructionFile{}
 	if cwd != "" {
-		files = instructionFiles(cwd, filepath.Dir(snapshot["userFile"].(string)), asMap(snapshot["rawConfig"]))
+		layers, _ := response["layers"].([]any)
+		config, _ := response["config"].(map[string]any)
+		files = instructionFiles(cwd, codexGuideHome(layers), config)
 	}
-	warnings, _ := snapshot["warnings"].([]string)
+	warnings := []string{}
 	skills := []codexAISkill{}
 	if includeSkills && cwd != "" {
-		result, listErr := s.rpcRequest(ctx, cfg, cwd, nil, "skills/list", map[string]any{
+		result, listErr := s.rpcRequest(ctx, cfg, cwd, "skills/list", map[string]any{
 			"cwds": []string{cwd}, "forceReload": true,
 		}, 30*time.Second)
 		if listErr != nil {
@@ -216,8 +190,7 @@ func (s *Service) codexAISnapshot(ctx context.Context, cfg domain.AppConfig, cwd
 		}
 	}
 	return map[string]any{
-		"cwd": nullableString(cwd), "userFile": snapshot["userFile"], "layers": snapshot["layers"],
-		"servers": snapshot["servers"], "skills": skills, "files": files, "warnings": warnings,
+		"cwd": nullableString(cwd), "skills": skills, "files": files, "warnings": warnings,
 	}, nil
 }
 
@@ -344,7 +317,7 @@ func (s *Service) BoundCodexThread(workspacePath string) (*string, error) {
 }
 
 func (s *Service) codexThreads(ctx context.Context, cfg domain.AppConfig, cwd string) ([]codexThreadChoice, error) {
-	response, err := s.rpcRequest(ctx, cfg, cwd, nil, "thread/list", map[string]any{
+	response, err := s.rpcRequest(ctx, cfg, cwd, "thread/list", map[string]any{
 		"cwd": cwd, "limit": 100, "sortKey": "updated_at", "useStateDbOnly": true,
 	}, 30*time.Second)
 	if err != nil {
@@ -575,12 +548,28 @@ func stringSlice(value any) []string {
 	return result
 }
 
-func asMap(value any) map[string]any {
-	result, _ := value.(map[string]any)
-	if result == nil {
-		return map[string]any{}
+func codexGuideHome(layers []any) string {
+	home := ""
+	for _, raw := range layers {
+		layer, _ := raw.(map[string]any)
+		name, _ := layer["name"].(map[string]any)
+		if name["type"] != "user" {
+			continue
+		}
+		if file := firstString(name, "file"); file != "" {
+			home = filepath.Dir(file)
+		} else if folder := firstString(name, "dotCodexFolder"); folder != "" {
+			home = filepath.Clean(folder)
+		}
 	}
-	return result
+	if home == "" {
+		home = strings.TrimSpace(os.Getenv("CODEX_HOME"))
+	}
+	if home == "" {
+		userHome, _ := os.UserHomeDir()
+		home = filepath.Join(userHome, ".codex")
+	}
+	return home
 }
 
 func nullableString(value string) any {

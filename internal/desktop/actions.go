@@ -810,10 +810,6 @@ func platformResultSummary(kind string, result application.ActionResult) string 
 		if size := dataInt64(data, "size"); size > 0 {
 			lines = append(lines, "大小："+formatBytes(size))
 		}
-	case "update.check":
-		appendField("当前版本：", "currentVersion")
-		lines = append(lines, "更新方式：前往 GitHub Releases 手动下载。")
-		appendField("页面：", "releasesUrl")
 	case "logs.list":
 		lines = append(lines, fmt.Sprintf("最近错误记录：%d 条。", len(mapsFromData(result.Data))))
 	case "logs.read":

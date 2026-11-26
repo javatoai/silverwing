@@ -114,6 +114,9 @@ func (a *App) DeleteTask(ctx context.Context, request TaskDeleteRequest) (Operat
 func (a *App) RetryTaskMaterials(ctx context.Context, target TaskTarget) (OperationResult[domain.TaskManifest], error) {
 	return a.mutateTask(ctx, target, "task.materials-retry", nil, func(ctx context.Context, config domain.AppConfig, service *workspace.TaskApplicationService, _ domain.TaskManifest, path string) (OperationResult[domain.TaskManifest], error) {
 		manifest, err := service.RetryRequirementMaterials(ctx, config, path)
+		if err == nil {
+			a.enqueueTaskRequirementComment(path, manifest)
+		}
 		return OperationResult[domain.TaskManifest]{Message: "资料目录操作已返回，请查看状态", Data: manifest}, err
 	})
 }
@@ -167,6 +170,9 @@ var _ TaskRequirementLinker = (*App)(nil)
 func (a *App) LinkTaskRequirement(ctx context.Context, request TaskRequirementLinkRequest) (OperationResult[domain.TaskManifest], error) {
 	return a.mutateTask(ctx, request.Target, "task.requirement-link", map[string]any{"requirementLink": request.RequirementLink}, func(ctx context.Context, config domain.AppConfig, service *workspace.TaskApplicationService, _ domain.TaskManifest, path string) (OperationResult[domain.TaskManifest], error) {
 		manifest, err := service.LinkRequirement(ctx, config, path, request.RequirementLink)
+		if err == nil {
+			a.enqueueTaskRequirementComment(path, manifest)
+		}
 		return OperationResult[domain.TaskManifest]{Message: "需求已关联，本地资料保留在原位置", Data: manifest}, err
 	})
 }

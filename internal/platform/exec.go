@@ -62,22 +62,6 @@ func (s *Service) runToolWithEnv(ctx context.Context, config domain.AppConfig, t
 	return result, nil
 }
 
-func (s *Service) runCodex(ctx context.Context, config domain.AppConfig, args ...string) (process.Result, error) {
-	command, err := s.resolveCLIExecutable(ctx, config, executable.ToolCodex)
-	if err != nil {
-		return process.Result{}, err
-	}
-	return s.runToolWithEnv(ctx, config, executable.ToolCodex, command, args, "", 2*time.Minute, cliEnvironmentWithRunner(ctx, s.runner, executable.ToolCodex, command))
-}
-
-func (s *Service) runCodexOutput(ctx context.Context, config domain.AppConfig, args ...string) (string, error) {
-	result, err := s.runCodex(ctx, config, args...)
-	if err != nil {
-		return "", err
-	}
-	return result.Stdout, nil
-}
-
 func (s *Service) gitExecutable(ctx context.Context, config domain.AppConfig) string {
 	command, err := s.resolveCLIExecutable(ctx, config, executable.ToolGit)
 	if err != nil {

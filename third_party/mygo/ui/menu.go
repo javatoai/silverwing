@@ -126,6 +126,7 @@ func (e *node) buildMenu(button, drawn bool, build func(m *Menu)) {
 		rt.openMenu(e.id, button, pm, run.labels, run.keys, commands)
 		if mr.pending != nil {
 			mr.pending.decorations = run.decorations
+			mr.pending.useViewportHeight = run.useViewportHeight
 		}
 	case mr.chosen == e.id && mr.chosenButton == button:
 		mr.chosen = 0
@@ -185,6 +186,8 @@ type menuRun struct {
 	// widths are the widths MaxWidth gave the menu and its submenus, when
 	// collecting.
 	widths map[*platform.Menu]float32
+	// useViewportHeight lets ThemedMenus expand within the window height.
+	useViewportHeight bool
 }
 
 // menuRef identifies an item of a menu across runs of its function: by
@@ -306,6 +309,15 @@ func (m *Menu) MaxWidth(w float32) *Menu {
 			r.widths = map[*platform.Menu]float32{}
 		}
 		r.widths[m.menu] = max(w, 0)
+	}
+	return m
+}
+
+// UseViewportHeight lets a popup drawn by ThemedMenus use the available
+// window height. It scrolls only if its contents would exceed that space.
+func (m *Menu) UseViewportHeight() *Menu {
+	if m.run.collect {
+		m.run.useViewportHeight = true
 	}
 	return m
 }
@@ -638,6 +650,8 @@ type shownMenu struct {
 	x, y        float32
 	// text is the text the menu opened on, which takes its commands.
 	text uint64
+
+	useViewportHeight bool
 }
 
 // textMenu returns the element whose context menu opens on the text input

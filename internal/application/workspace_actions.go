@@ -56,7 +56,7 @@ func (a *App) workspaceActionWithProgress(ctx context.Context, action Action, on
 	if err != nil {
 		return ActionResult{}, err
 	}
-	if result, handled, appendErr := taskWorkspaceAppendAction(ctx, action, config, service, path); handled {
+	if result, handled, appendErr := a.taskWorkspaceAppendAction(ctx, action, config, service, path); handled {
 		return result, appendErr
 	}
 	if action.Kind == "workspace.status" {
@@ -95,8 +95,11 @@ func (a *App) workspaceActionWithProgress(ctx context.Context, action Action, on
 		if action.ModuleID != "" {
 			req.ModuleID = action.ModuleID
 		}
-		m, e := service.AddWorkspace(ctx, config, path, req)
-		return ActionResult{Message: "工作区已添加", Data: m}, e
+		added, addErr := service.AddWorkspace(ctx, config, path, req)
+		if addErr == nil {
+			a.enqueueTaskRequirementComment(path, added)
+		}
+		return ActionResult{Message: "工作区已添加", Data: added}, addErr
 	}
 	var selected *domain.ServiceWorkspace
 	for i := range manifest.Services {

@@ -27,7 +27,7 @@ IDE 打开入口按“服务配置优先，应用默认值兜底”的方式工�
 
 **在 Codex 中打开** 是任务详情“更多操作”里的桌面应用入口。它通过系统注册的 `codex://` 链接，把任务目录交给 Codex 桌面应用，并请求创建一个新会话；这条路径不启动 Codex CLI。因此能从 Silverwing 打开任务目录，不代表 CLI 已配置；CLI 状态可用也不单独证明桌面应用的链接处理器正常。
 
-Codex CLI 用于 AI 命名、Marketplace 插件和 MCP 配置等功能。可到 **设置 → 工具与连接 → 命令行与账号 → Codex** 检查状态，路径留空时由 Silverwing 自动探测，也可手动选择。Silverwing 的 Codex 配置管理通过本机 CLI 启动 `app-server --stdio` 通信。
+Codex CLI 用于 AI 命名和查询 Codex 会话。可到 **设置 → 工具与连接 → 命令行与账号 → Codex** 检查状态，路径留空时由 Silverwing 自动探测，也可手动选择。Silverwing 通过本机 CLI 启动 `app-server --stdio` 查询会话。
 
 在 **设置 → 任务与工作区 → 创建与命名 → 任务打开工具** 中启用 Codex，Silverwing 会在任务创建成功后自动用 Codex 桌面应用打开任务目录。
 
@@ -46,4 +46,4 @@ Codex CLI 用于 AI 命名、Marketplace 插件和 MCP 配置等功能。可到 
 - Codex 工作区入口：`internal/application/workspace_tools.go`、`internal/platform/codex_ai.go`
 - Codex CLI 定位与进程通信：`internal/executable/resolver.go`、`internal/platform/codex_rpc.go`
 
-相关阅读：[首次配置](../入门与基础/03-首次配置.md)、[第一个多仓库任务](../入门与基础/05-第一个多仓库任务.md)、[Skills 管理](15-Skills管理.md)、[Codex 插件与 MCP](16-Codex插件与MCP.md)。
+相关阅读：[首次配置](../入门与基础/03-首次配置.md)、[第一个多仓库任务](../入门与基础/05-第一个多仓库任务.md)、[Skills 管理](15-Skills管理.md)。

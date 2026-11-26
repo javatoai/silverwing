@@ -65,6 +65,7 @@ func (a *App) CreateTask(ctx context.Context, request TaskCreateRequest, progres
 		return result, err
 	}
 	path := filepath.Join(taskRoot, manifest.TaskDirectoryName)
+	a.enqueueTaskRequirementComment(path, manifest)
 	return operationResultFromAction[domain.TaskManifest](finishCreatedTask(ctx, config, service, path, manifest, ids, progress))
 }
 

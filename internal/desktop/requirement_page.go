@@ -747,7 +747,7 @@ func (s *app) requirementListItem(c *ui.Context, p palette, item application.Req
 	}
 	button.Children(func() {
 		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-			label(c, item.Title, 12, p.text).FontWeight(500).Grow(1).MinWidth(0).SingleLine().Tooltip(item.Title)
+			label(c, item.Title, 12, p.text).FontWeight(500).Grow(1).MinWidth(0).SingleLine()
 			requirementCardStatus(c, p, item.Status)
 		})
 		estimate := "估时：-"

@@ -36,7 +36,7 @@ One feature often spans several services. Silverwing brings their workspaces int
 - **Git review:** inspect committed changes against the configured mainline, local uncommitted files or a commit range, with a changed-file tree and side-by-side diffs.
 - **Agent context:** combine global, group and task instructions into generated `AGENTS.md` context, and open the right workspace in Codex, Cursor or your IDE.
 - **Task materials:** browse local files and read Markdown, PDF, images, tables and diagrams; find text, inspect source and follow document links.
-- **Skills and Codex configuration:** browse local Skills, manage Git-based Skill sources and Codex plugins, and inspect MCP configuration.
+- **Skill management:** browse local Skills, and install and update Skills from Git sources.
 - **Developer tools:** format and fold JSON, convert dates and timestamps, compare text, encode and decode Base64, generate and read QR codes, count text, and optionally inspect local port usage.
 - **Connected workflows:** bring in Meegle requirements and comments, sync task materials through Git, and track task Tag delivery with optional Genbu status.
 - **Local workspace management:** keep configuration and task records on disk, switch between light and dark themes, and archive tasks while retaining their workspaces.
@@ -76,6 +76,8 @@ Download published packages from [GitHub Releases](https://github.com/javatoai/s
 | macOS Apple silicon (arm64) | DMG |
 
 For the Windows portable version, extract the entire archive and run `silverwing/silverwing.exe`. Keep the `resources` directory beside the executable. Packaged apps include their native PDF and diagram dependencies; Go and a JVM are not required to run them.
+
+To upgrade, download a package from the release page and install it using the same package type. Check the installed version in **Settings → 数据与维护 (Data and maintenance) → 关于 (About)**.
 
 The macOS app is ad-hoc signed and is **not Developer ID signed or notarized**. macOS may block the first launch; review the download and use the system's Privacy & Security controls if you choose to allow it. Intel Mac, Windows ARM and Linux packages are not currently provided.
 

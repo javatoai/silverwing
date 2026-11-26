@@ -48,6 +48,7 @@ func (s *app) taskMenuScopeCurrent(expected taskMenuScope) bool {
 }
 
 func (s *app) taskContextMenu(services ui.Services, t task, menu *ui.Menu) {
+	menu.UseViewportHeight()
 	scope, valid := s.taskMenuScopeFor(t)
 	valid = valid && (s.page == "tasks" || s.page == "archive")
 	pinned := s.taskIsPinned(t)
@@ -64,6 +65,9 @@ func (s *app) taskContextMenu(services ui.Services, t task, menu *ui.Menu) {
 	}
 	if t.requirementURL == "" && menu.Item("关联需求").IconSVG(icons["file"]).Disabled(!valid || s.busy || s.backend == nil).Chosen() {
 		chosen = "requirement-link"
+	}
+	if menu.Item("重试同步").IconSVG(icons["refresh"]).Disabled(!valid || !s.canRetryTaskRequirementCommentSync(t)).Chosen() {
+		chosen = "retry-requirement-comment-sync"
 	}
 	if menu.Item("批量合并主分支").IconSVG(icons["branch"]).Disabled(!valid || s.busy || s.backend == nil || t.archived || !s.taskHasMainBranchMergeBatch(t)).Chosen() {
 		chosen = "merge-main-batch"
@@ -145,6 +149,10 @@ func (s *app) taskContextMenu(services ui.Services, t task, menu *ui.Menu) {
 	switch chosen {
 	case "requirement-link":
 		s.openTaskRequirementForm(t)
+	case "retry-requirement-comment-sync":
+		if s.taskMenuScopeCurrent(*opened) {
+			s.retryTaskRequirementCommentSync(t)
+		}
 	case "codex-open":
 		s.dispatchTaskContextAction(application.Action{Kind: "codex.run", TaskID: t.id, Path: t.path}, opened)
 	case "merge-main-batch":

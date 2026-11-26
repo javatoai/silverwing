@@ -8,7 +8,6 @@ import (
 )
 
 const (
-	codexAITabMCP      = "MCP"
 	codexAITabSkills   = "Skills"
 	codexAITabGuides   = "说明文件"
 	codexAITabSessions = "会话"
@@ -34,7 +33,6 @@ type codexAIState struct {
 	identity         codexAIIdentity
 	identityRevision uint64
 	tab              string
-	mcpScope         string
 
 	snapshot         *codexAISnapshot
 	snapshotLoading  bool
@@ -64,22 +62,9 @@ type codexAIState struct {
 	externalError   string
 	externalMessage string
 
-	mcpManaging        bool
-	mcpSnapshot        *codexAISnapshot
-	mcpStatusLoading   bool
-	mcpCheckLoading    bool
-	mcpMutationLoading bool
-	mcpAuthLoading     bool
-	mcpError           string
-	mcpCheckError      string
-	mcpMessage         string
-	mcpConnections     map[string]codexAIMCPConnection
-	mcpSwitches        map[string]*bool
-	mcpEditor          *codexAIMCPForm
-	mcpDelete          *codexAIMCPDelete
-	newSessionLoading  bool
-	newSessionError    string
-	newSessionMessage  string
+	newSessionLoading bool
+	newSessionError   string
+	newSessionMessage string
 
 	requests    map[string]*codexAIRequest
 	generations map[string]uint64
@@ -91,32 +76,9 @@ type codexAIState struct {
 
 type codexAISnapshot struct {
 	CWD      *string                  `json:"cwd"`
-	UserFile string                   `json:"userFile"`
-	Layers   []codexAIConfigLayer     `json:"layers"`
-	Servers  []codexAIMCPServer       `json:"servers"`
 	Skills   []codexAISkill           `json:"skills"`
 	Files    []codexAIInstructionFile `json:"files"`
 	Warnings []string                 `json:"warnings"`
-}
-
-type codexAIConfigLayer struct {
-	File           string         `json:"file"`
-	Type           string         `json:"type"`
-	Version        string         `json:"version"`
-	Config         map[string]any `json:"config"`
-	DisabledReason string         `json:"disabledReason"`
-	Fingerprint    string         `json:"fingerprint"`
-}
-
-type codexAIMCPServer struct {
-	Name     string         `json:"name"`
-	Scope    string         `json:"scope"`
-	File     string         `json:"file"`
-	Version  string         `json:"version"`
-	Raw      map[string]any `json:"raw"`
-	Active   bool           `json:"active"`
-	PluginID string         `json:"pluginId"`
-	Note     string         `json:"note"`
 }
 
 type codexAISkill struct {
@@ -147,14 +109,12 @@ type codexAIThreadsResult struct {
 
 func codexAITab(tab string) string {
 	switch strings.TrimSpace(tab) {
-	case codexAITabSkills:
-		return codexAITabSkills
 	case codexAITabGuides:
 		return codexAITabGuides
 	case codexAITabSessions:
 		return codexAITabSessions
 	default:
-		return codexAITabMCP
+		return codexAITabSkills
 	}
 }
 
@@ -186,7 +146,6 @@ func (s *app) openCodexAI(taskPath, tab string) {
 		state = &codexAIState{
 			requests:    make(map[string]*codexAIRequest),
 			generations: make(map[string]uint64), running: make(map[*codexAIRequest]struct{}),
-			mcpScope: "ALL",
 		}
 		s.toolsUnit.state.codexAI = state
 		state.identity = identity
@@ -199,7 +158,6 @@ func (s *app) openCodexAI(taskPath, tab string) {
 		state.identity = identity
 		state.identityRevision++
 		state.tab = ""
-		state.mcpScope = "ALL"
 		state.snapshot = nil
 		state.snapshotLoaded = false
 		state.skillsLoaded = false
@@ -223,7 +181,6 @@ func (s *app) openCodexAI(taskPath, tab string) {
 		state.fileRevision = 0
 		state.externalPath = ""
 		state.externalError = ""
-		resetCodexAIMCPState(state)
 		state.newSessionLoading = false
 		state.newSessionError = ""
 		state.newSessionMessage = ""
@@ -245,30 +202,10 @@ func (s *app) closeCodexAI() {
 	state.filePath = ""
 	state.fileContent = ""
 	state.resetFilePreview()
-	resetCodexAIMCPState(state)
 	state.newSessionLoading = false
 	state.newSessionError = ""
 	state.newSessionMessage = ""
 	s.invalidateCodexAIRequests(state)
-}
-
-func resetCodexAIMCPState(state *codexAIState) {
-	if state == nil {
-		return
-	}
-	state.mcpManaging = false
-	state.mcpSnapshot = nil
-	state.mcpStatusLoading = false
-	state.mcpCheckLoading = false
-	state.mcpMutationLoading = false
-	state.mcpAuthLoading = false
-	state.mcpError = ""
-	state.mcpCheckError = ""
-	state.mcpMessage = ""
-	state.mcpConnections = nil
-	state.mcpSwitches = nil
-	state.mcpEditor = nil
-	state.mcpDelete = nil
 }
 
 func (s *app) codexAIIdentityCurrent(state *codexAIState) bool {

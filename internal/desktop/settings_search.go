@@ -60,16 +60,15 @@ var settingsSearchEntries = []settingsSearchEntry{
 	{"agents", "全局说明", "AGENTS.md agent 指令 说明文档 markdown"},
 	{"git", "Git 状态", "环境 身份 user.name user.email"}, {"git", "分支写保护", "保护分支 master commit push"},
 	{"tag", "Tag 设置", "构建 发布 测试目标 分支 保留数量 历史"},
-	{"codex-plugins", "Codex 插件", "plugin marketplace 来源 安装 接管 卸载 预览"}, {"codex-mcp", "MCP 服务", "连接 授权 全局 当前任务 添加 删除 编辑"},
 	{"skill-local", "本机 Skill", "本地 已安装 技能 浏览 SKILL.md"}, {"skill-sources", "Skill 来源", "技能 安装 来源 更新 接管 卸载"},
 	{"dev-tools", "开发工具", "编辑器 IDE idea webstorm pycharm vscode android deveco 默认 临时 选择 检测 路径"},
 	{"cli-git", "Git 状态", "Git 命令 路径 检测 可执行文件"}, {"cli-codex", "Codex CLI 状态", "codex 命令 路径 检测 可执行文件"},
 	{"cli-meegle", "Meegle CLI 状态", "meego meegle 飞书 登录 账号 命令 路径 授权"}, {"cli-meegle", "Meegle 项目空间", "meego meegle 飞书 项目 key 短名 sprint 默认空间"},
 	{"cli-meegle", "默认 Sprint 团队空间", "meego meegle 默认迭代 default sprint team space"},
-	{"proxy", "网络代理", "proxy http https socks5 协议 代理主机 端口 认证 账号 密码 例外 目标 测试 清除 应用更新 下载"},
+	{"proxy", "网络代理", "proxy http https socks5 协议 代理主机 端口 认证 账号 密码 例外 目标 测试 清除"},
 	{"config-backup", "配置与备份", "配置源码 手动备份 手动恢复 导入 导出 预览 ZIP backup"},
 	{"app-data", "数据目录", "应用数据目录 home 存储 打开 复制 路径"}, {"logs", "日志与诊断", "日志 错误 清理 复制 导出 diagnostics"},
-	{"about", "关于与更新", "版本 下载 release github 仓库 更新"},
+	{"about", "关于", "版本 release github 仓库"},
 }
 
 func settingsSearch(query string) []settingsSearchEntry {
@@ -184,7 +183,7 @@ func (s *app) renderSettingsContent(c *ui.Context, p palette, reveal *settingsRe
 
 func settingsSearchWholePage(page string) bool {
 	switch page {
-	case "codex-plugins", "codex-mcp", "logs", "about", "app-data":
+	case "logs", "about", "app-data":
 		return true
 	}
 	return false

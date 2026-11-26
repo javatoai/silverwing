@@ -82,7 +82,7 @@ func (s *app) actionDialog(c *ui.Context, p palette) {
 							label(c, field.error, 11, p.danger).Wrap()
 						}
 					})
-					if (s.form.kind == "skills.sources/save" || s.form.kind == "codex.extensions/marketplaces/add-source") && field.key == "repositoryUrl" {
+					if s.form.kind == "skills.sources/save" && field.key == "repositoryUrl" {
 						requests := s.ensureSettingsExtensionRequests()
 						if requests.branchLoading {
 							label(c, "正在读取远程分支…", 11, p.muted)

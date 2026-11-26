@@ -131,7 +131,6 @@ func (s *app) taskMatchesSearch(t task, terms []string) bool {
 }
 
 // Return filtered task indices without mutating snapshot order or selection.
-// Pinned tasks precede the remaining rows in the snapshot's stable order.
 func (s *app) taskIndexRows(archived bool) []int {
 	return s.cachedTaskIndexRows(archived)
 }
@@ -140,11 +139,10 @@ func (s *app) taskIndexRowsFor(tasks []task, archived bool) []int {
 	state := s.taskIndexBrowsingFor(archived)
 	terms := strings.Fields(strings.ToLower(state.search))
 	catalog := newTaskIndexCatalog(tasks)
-	category := 0
-	if archived {
-		category = 1
-	}
-	return projectTaskIndexOrder(catalog.categories[category], catalog.keys, s.taskNavigationFor().value.Pinned, func(i int) bool { return s.taskMatchesSearch(tasks[i], terms) })
+	rows, _ := s.projectTaskIndexRows(tasks, catalog, s.taskNavigationFor(), archived, func(i int) bool {
+		return s.taskMatchesSearch(tasks[i], terms)
+	})
+	return rows
 }
 
 // Explicit creation reveals its result even from a filtered task index.

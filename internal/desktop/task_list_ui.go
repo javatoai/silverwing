@@ -24,7 +24,11 @@ func (s *app) taskIndex(c *ui.Context, p palette) {
 				state.list.ScrollIntoView(position)
 			}
 			ui.List(c.Key("task-index-"+s.page), &state.list, len(rows)).TrackScroll(&state.scroll).Grow(1).MinHeight(0).Padding(8).Gap(4).Rows(func(row ui.ListRow) {
-				s.taskIndexTask(row.Context, p, state, rows[row.Index])
+				index := rows[row.Index]
+				if state.projection.groupStarts[index] {
+					ui.Box(row.Context.Key("task-group-divider")).AlignSelf(ui.Stretch).Height(1).Margin(0, 8, 4).Background(p.line)
+				}
+				s.taskIndexTask(row.Context, p, state, index)
 			})
 		} else {
 			ui.Scroll(c.Key("task-index-empty-" + s.page)).Grow(1).MinHeight(0).Padding(8).Children(func() {
@@ -342,7 +346,7 @@ func (s *app) taskIndexTask(c *ui.Context, p palette, state *taskIndexBrowsingSt
 			ui.Box(c).Width(1).FillHeight().Background(p.blue)
 		}
 		button := ui.ButtonBase(c.Key("task-"+key)).Bind(state.rowHandles[key]).Grow(1).MinWidth(0).
-			FillHeight().Padding(5, 8).Radius(7).Label(t.title).Tooltip(t.title)
+			FillHeight().Padding(5, 8).Radius(7).Label(t.title)
 		pinned := s.taskNavigationFor().pinned[key]
 		if pinned {
 			button.Description("已置顶")

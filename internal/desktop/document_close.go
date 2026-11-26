@@ -225,7 +225,6 @@ func (s *app) documentCloseFailures(failures []editor.FlushFailure) error {
 }
 
 func (s *app) showDocumentCloseError(err error) {
-	s.abortAppUpdateExit(err)
 	if err != nil {
 		s.lastError = err.Error()
 	}

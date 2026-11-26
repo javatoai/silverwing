@@ -155,7 +155,7 @@ type ActionResult struct {
 // instructions.read, instructions.save, requirements.refresh, requirements.list,
 // requirements.read, requirements.comments, requirements.comment,
 // tag.build, tag.status, tag.history, tag.genbu.refresh, tag.retry, tag.workspace-check,
-// skills.refresh, skills.install, skills.remove, codex.extensions, codex.run,
+// skills.refresh, skills.install, skills.remove, codex.run,
 // tool.json, tool.time, tool.diff, tool.ports, tool.port-stop,
 // system.open, system.reveal, system.logs, system.terminal, system.ide, diagnostics.export.
 // production.* actions manage service-scoped release batches independently of task Tag history.

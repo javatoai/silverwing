@@ -25,6 +25,26 @@ func TestRemovedBranchNoticeActionsAreUnavailable(t *testing.T) {
 	}
 }
 
+func TestRemovedCodexExtensionActionsAreUnavailable(t *testing.T) {
+	app, err := newApp(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{
+		"codex.extensions", "codex.extensions/snapshot", "codex.extensions/branches/list",
+		"codex.extensions/marketplaces/add-source", "codex.extensions/plugin/install", "codex.extensions/plugin/uninstall",
+		"codex.extensions/mcp/status", "codex.extensions/mcp/add", "codex.extensions/mcp/edit", "codex.extensions/mcp/remove",
+		"codex.ai/mcp/authenticate",
+	} {
+		if DescribeAction(kind).Known {
+			t.Errorf("retired action is still registered: %s", kind)
+		}
+		if _, err := app.Dispatch(context.Background(), Action{Kind: kind}); err == nil {
+			t.Errorf("retired action %s was accepted", kind)
+		}
+	}
+}
+
 func TestActionPolicyCoversTypedAdapterOperations(t *testing.T) {
 	source, err := parser.ParseFile(token.NewFileSet(), "task_action_adapter.go", nil, 0)
 	if err != nil {
@@ -92,7 +112,7 @@ func TestActionPolicyRetainsDynamicFeedbackPrefixes(t *testing.T) {
 	if !DescribeAction("instructions.extension/unregistered").DedicatedResult {
 		t.Fatal("instruction prefix feedback changed")
 	}
-	for _, kind := range []string{"config.extension", "migration.extension", "skills.extension", "codex.extensions/new", "codex.ai/new", "cli.extension", "logs.extension"} {
+	for _, kind := range []string{"config.extension", "migration.extension", "skills.extension", "codex.ai/new", "cli.extension", "logs.extension"} {
 		if !DescribeAction(kind).SettingsDedicatedResult {
 			t.Errorf("settings feedback prefix changed: %s", kind)
 		}

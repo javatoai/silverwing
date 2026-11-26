@@ -6,9 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
-	"time"
 
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"silverwing-go/internal/application"
 )
@@ -21,51 +19,6 @@ func (b *settingsAuditCaptureBackend) Dispatch(_ context.Context, a application.
 }
 func (*settingsAuditCaptureBackend) Snapshot(context.Context) (application.Snapshot, error) {
 	return application.Snapshot{}, nil
-}
-
-func TestSettingsAuditMCPExplicitScope(t *testing.T) {
-	for _, scenario := range []struct {
-		name, scope    string
-		backgroundTask bool
-	}{
-		{"task-from-global", "当前任务", false},
-		{"global-from-task", "全局配置", true},
-		{"task-from-task", "当前任务", true},
-		{"global-from-global", "全局配置", false},
-	} {
-		t.Run(scenario.name, func(t *testing.T) {
-			b := &settingsAuditCaptureBackend{calls: make(chan application.Action, 1)}
-			s := newApp(b, Options{Page: "settings", CapturePath: "audit-form-probe"})
-			s.loading = false
-			s.snapshot.Home = t.TempDir()
-			s.settingsUnit.state.configJSON = `{}`
-			s.settingsUnit.state.settingsPage = "codex-mcp"
-			s.settingsUnit.state.settingsMCPTaskScope = scenario.backgroundTask
-			taskPath := t.TempDir()
-			s.taskUnit.state.tasks = []task{{id: "audit-task", path: taskPath, createdAt: "audit-created"}}
-			s.win = &mygo.Window{}
-			payload := map[string]any{"name": "audit-service", "transport": "本地命令", "endpoint": "audit-command", "args": "", "env": "{}", "httpHeaders": "{}", "startupTimeoutSec": "10", "toolTimeoutSec": "60", "scope": scenario.scope}
-			if !s.settingsActionForm(actionForm{kind: "codex.extensions/mcp/add"}, payload) || s.confirmationDialog == nil {
-				t.Fatal("valid form did not prepare confirmation", s.lastError)
-			}
-			d := s.confirmationDialog
-			s.win = nil // Dispatch to a recording backend; never create a native window.
-			s.finishConfirmationDialog(d, 0)
-			var action application.Action
-			select {
-			case action = <-b.calls:
-			case <-time.After(3 * time.Second):
-				t.Fatal("confirmed form did not dispatch isolated action", s.lastError)
-			}
-			wantCwd, wantFile := "", ""
-			if scenario.scope == "当前任务" {
-				wantCwd, wantFile = taskPath, filepath.Join(taskPath, ".codex", "config.toml")
-			}
-			if payloadString(action.Payload, "cwd") != wantCwd || payloadString(action.Payload, "file") != wantFile {
-				t.Errorf("explicit scope lost: got cwd=%q file=%q, want cwd=%q file=%q", payloadString(action.Payload, "cwd"), payloadString(action.Payload, "file"), wantCwd, wantFile)
-			}
-		})
-	}
 }
 
 func TestSettingsAuditMeeglePickerPreservesNewerInput(t *testing.T) {

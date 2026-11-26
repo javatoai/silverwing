@@ -26,6 +26,20 @@ const (
 var errCodexRPCNoResponse = errors.New("Codex 未返回操作结果：配置服务已退出")
 var errCodexRPCOutputLimit = errors.New("Codex 配置服务输出超过安全预算")
 
+func categorizeCodexError(message string) string {
+	lower := strings.ToLower(message)
+	switch {
+	case strings.Contains(lower, "version") || strings.Contains(lower, "modified") || strings.Contains(lower, "conflict"):
+		return "配置已被其他程序修改，请刷新后重试"
+	case strings.Contains(lower, "trust"):
+		return "该任务目录尚未受 Codex 信任，请先在 Codex 中打开并确认目录"
+	case strings.Contains(lower, "method"):
+		return "当前 Codex 不支持此接口，请更新 Codex 后重试"
+	default:
+		return "Codex 未完成此操作，请检查配置后重试"
+	}
+}
+
 type codexRPCSessionKey struct{}
 
 // A session exists only inside one synchronous operation. The runner owns its
@@ -50,17 +64,17 @@ func codexRPCConfiguration(config domain.AppConfig) string {
 	return string(data)
 }
 
-func (s *Service) codexRPCScope(config domain.AppConfig, cwd string, isolatedHome *string) string {
-	data, _ := json.Marshal([]any{s.paths.Home, codexRPCConfiguration(config), cwd, isolatedHome})
+func (s *Service) codexRPCScope(config domain.AppConfig, cwd string) string {
+	data, _ := json.Marshal([]any{s.paths.Home, codexRPCConfiguration(config), cwd})
 	return string(data)
 }
 
-func (s *Service) rpcRequest(ctx context.Context, cfg domain.AppConfig, cwd string, isolatedHome *string, method string, params map[string]any, timeout time.Duration) (map[string]any, error) {
+func (s *Service) rpcRequest(ctx context.Context, cfg domain.AppConfig, cwd string, method string, params map[string]any, timeout time.Duration) (map[string]any, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if session, ok := ctx.Value(codexRPCSessionKey{}).(*codexRPCSession); ok {
-		if session.service != s || session.scope != s.codexRPCScope(cfg, cwd, isolatedHome) {
+		if session.service != s || session.scope != s.codexRPCScope(cfg, cwd) {
 			return nil, errors.New("Codex 配置服务的目录或配置身份已变化，请重新读取")
 		}
 		if session.checkConfig {
@@ -74,8 +88,8 @@ func (s *Service) rpcRequest(ctx context.Context, cfg domain.AppConfig, cwd stri
 		}
 		return session.request(ctx, cfg, method, params, timeout)
 	}
-	value, err := s.withCodexRPCSession(ctx, cfg, cwd, isolatedHome, timeout, false, func(sessionContext context.Context) (any, error) {
-		return s.rpcRequest(sessionContext, cfg, cwd, isolatedHome, method, params, timeout)
+	value, err := s.withCodexRPCSession(ctx, cfg, cwd, timeout, false, func(sessionContext context.Context) (any, error) {
+		return s.rpcRequest(sessionContext, cfg, cwd, method, params, timeout)
 	})
 	if err != nil {
 		return nil, err
@@ -84,7 +98,7 @@ func (s *Service) rpcRequest(ctx context.Context, cfg domain.AppConfig, cwd stri
 	return response, nil
 }
 
-func (s *Service) withCodexRPCSession(ctx context.Context, cfg domain.AppConfig, cwd string, isolatedHome *string, timeout time.Duration, checkConfig bool,
+func (s *Service) withCodexRPCSession(ctx context.Context, cfg domain.AppConfig, cwd string, timeout time.Duration, checkConfig bool,
 	operation func(context.Context) (any, error)) (any, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -101,9 +115,6 @@ func (s *Service) withCodexRPCSession(ctx context.Context, cfg domain.AppConfig,
 	for name, value := range cliEnvironmentWithRunner(ctx, s.runner, executable.ToolCodex, command) {
 		env[name] = value
 	}
-	if isolatedHome != nil {
-		env["CODEX_HOME"] = *isolatedHome
-	}
 	var value any
 	var operationErr error
 	var session *codexRPCSession
@@ -119,7 +130,7 @@ func (s *Service) withCodexRPCSession(ctx context.Context, cfg domain.AppConfig,
 			MaxStderrBytes: codexRPCMaxDiagnosticBytes, KillOnOutputLimit: true},
 		func(exchangeContext context.Context, stdin io.WriteCloser, output <-chan process.StreamEvent) error {
 			defer stdin.Close()
-			session = &codexRPCSession{service: s, configuration: codexRPCConfiguration(cfg), scope: s.codexRPCScope(cfg, cwd, isolatedHome),
+			session = &codexRPCSession{service: s, configuration: codexRPCConfiguration(cfg), scope: s.codexRPCScope(cfg, cwd),
 				checkConfig: checkConfig, stdin: stdin, output: output, nextID: 1, cancel: cancelOperation}
 			initialize := map[string]any{"clientInfo": map[string]any{"name": "silverwing", "version": codexRPCVersion},
 				"capabilities": map[string]any{"experimentalApi": true}}
@@ -140,7 +151,7 @@ func (s *Service) withCodexRPCSession(ctx context.Context, cfg domain.AppConfig,
 				current, err := s.loadConfig()
 				if err != nil {
 					operationErr = err
-				} else if session.scope != s.codexRPCScope(current, cwd, isolatedHome) {
+				} else if session.scope != s.codexRPCScope(current, cwd) {
 					operationErr = errors.New("Codex 配置服务的目录或配置身份已变化，请重新读取")
 				}
 			}

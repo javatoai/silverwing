@@ -12,7 +12,7 @@ func TestDesktopPreferencesAtomicWriterRetainsPolicy(t *testing.T) {
 	root := t.TempDir()
 	t.Chdir(root)
 	path := filepath.Join("private", "desktop.json")
-	if err := atomicWriteFile(path, []byte(`{"width":1200,"height":800,"maximized":false,"settingsSection":"system","exampleUnknown":{"text":"中文"}}`), 0o600); err != nil {
+	if err := atomicWriteFile(path, []byte(`{"width":1200,"height":800,"maximized":false,"settingsSection":"system","exampleUnknown":{"text":"中文"},"updates":{"checkTime":"16:30"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store := NewDesktopPreferencesStore(path)
@@ -26,6 +26,10 @@ func TestDesktopPreferencesAtomicWriterRetainsPolicy(t *testing.T) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil || string(raw["exampleUnknown"]) == "" {
 		t.Fatalf("replacement lost unknown preference keys: %s %v", data, err)
+	}
+	var legacyUpdates struct{ CheckTime string }
+	if err := json.Unmarshal(raw["updates"], &legacyUpdates); err != nil || legacyUpdates.CheckTime != "16:30" {
+		t.Fatalf("replacement changed legacy update preferences: %s %v", raw["updates"], err)
 	}
 	value, err := store.Load()
 	if err != nil || value.Width != 1300 || value.Height != 800 || value.SettingsSection != "system" {

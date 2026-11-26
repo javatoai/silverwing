@@ -20,25 +20,3 @@ func TestCompareReleaseVersionsNumericAndStable(t *testing.T) {
 		}
 	}
 }
-
-func TestAppUpdateReceiptRejectsForeignOrTamperedLinks(t *testing.T) {
-	result := UpdateCheckResult{Repository: "owner/repo", TagPrefix: "v", Release: &UpdateRelease{
-		Version: "0.0.10", Tag: "v0.0.10", URL: "https://github.com/owner/repo/releases/tag/v0.0.10",
-		Package: &UpdateAsset{Name: "app.exe", URL: "https://github.com/owner/repo/releases/download/v0.0.10/app.exe", Size: 10},
-	}}
-	if !result.Available("0.0.9", "owner/repo", "v") || result.Available("0.0.10", "owner/repo", "v") {
-		t.Fatal("a new build must clear the old version's notification")
-	}
-	if result.Available("0.0.9", "other/repo", "v") || result.Available("0.0.9", "owner/repo", "qa-v") {
-		t.Fatal("release channel isolation failed")
-	}
-	result.Release.Package.URL = "https://example.com/app.exe"
-	if result.Valid("owner/repo", "v") {
-		t.Fatal("untrusted persisted download was accepted")
-	}
-	result.Release.Package = nil
-	result.Release.URL = "file:///C:/example.exe"
-	if result.Valid("owner/repo", "v") {
-		t.Fatal("untrusted persisted release URL was accepted")
-	}
-}

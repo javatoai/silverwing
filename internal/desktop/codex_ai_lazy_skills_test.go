@@ -49,7 +49,10 @@ func TestCodexSnapshotTracksSkillLoadAndDropsStaleSkillPaths(t *testing.T) {
 	apply(true)
 	other := t.TempDir()
 	s.taskUnit.state.tasks = []task{{id: "other", createdAt: "other-created", path: other}}
-	s.openCodexAI(other, codexAITabSkills)
+	s.openCodexAI(other, "")
+	if state.tab != codexAITabSkills {
+		t.Fatalf("default Codex tab = %q, want %q", state.tab, codexAITabSkills)
+	}
 	if state.skillsLoaded || state.snapshot != nil || state.identity.cwd != other {
 		t.Fatal("Skills load state survived a task identity change")
 	}

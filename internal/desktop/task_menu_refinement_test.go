@@ -227,7 +227,7 @@ func TestTaskMenuOrderAndMaterialsVariants(t *testing.T) {
 			if s.taskUnit.state.tasks[index].requirementURL == "" {
 				want = append(want, "关联需求")
 			}
-			want = append(want, "批量合并主分支", "-", "打开任务目录", "复制任务目录", regenerateTaskInstructionsLabel, "-")
+			want = append(want, "重试同步", "批量合并主分支", "-", "打开任务目录", "复制任务目录", regenerateTaskInstructionsLabel, "-")
 			want = append(want, materials...)
 			want = append(want, "-", "置顶任务", "-", lifecycle, "恢复已回收工作区", "-", "删除任务")
 			if got := tester.Menu(); !slices.Equal(got, want) {

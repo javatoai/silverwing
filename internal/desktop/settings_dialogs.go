@@ -1,8 +1,6 @@
 package desktop
 
 import (
-	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,7 +8,6 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
-	"silverwing-go/internal/application"
 )
 
 var configBackupZIPFilters = []mygo.FileFilter{{Name: "配置备份 ZIP", Extensions: []string{"zip"}}}
@@ -168,21 +165,6 @@ func (s *app) settingsSkillPreviewDialog(c *ui.Context, p palette) {
 					s.settingsUnit.state.settingsSkillPreviewOpen = false
 				}
 			})
-			if state != nil && !state.previewLoading && state.previewError == "" && s.settingsExtensionActionRelevant(state.readActions["preview"]) {
-				if len(state.previewPluginSkills) > 0 {
-					ui.Scroll(c.Key("settings-plugin-skills-" + state.previewToken)).FillWidth().Height(float32(min(160, len(state.previewPluginSkills)*34))).Gap(4).Children(func() {
-						for index, name := range state.previewPluginSkills {
-							if action(c, fmt.Sprintf("settings-plugin-skill-%s-%d", state.previewToken, index), "file", "预览 Skill · "+name, p, false) {
-								s.navigateSettingsPluginPreview(name)
-							}
-						}
-					})
-				} else if state.readActions["preview"].Kind == "codex.extensions/plugin/skill-preview" {
-					if action(c, "settings-plugin-return-overview", "chevron-left", "返回概览", p, false) {
-						s.navigateSettingsPluginPreview("")
-					}
-				}
-			}
 			ui.Column(c).Grow(1).MinHeight(260).Padding(14).Background(p.soft).Border(1, p.line).Radius(10).Children(func() {
 				state := s.settingsUnit.state.settingsExtensionRequests
 				if state != nil && state.previewLoading {
@@ -208,58 +190,9 @@ func (s *app) settingsSkillPreviewDialog(c *ui.Context, p palette) {
 	})
 }
 
-func pluginPreviewText(data any) string {
-	if text := dataString(data, "text"); text != "" {
-		return text
-	}
-	name := dataString(data, "name")
-	if name == "" {
-		return resultText(application.ActionResult{Data: data})
-	}
-	lines := []string{name}
-	if version := dataString(data, "version"); version != "" {
-		lines[0] += "  ·  " + version
-	}
-	if description := dataString(data, "description"); description != "" {
-		lines = append(lines, "", description)
-	}
-	if author := dataString(data, "author"); author != "" {
-		lines = append(lines, "", "作者："+author)
-	}
-	if category := dataString(data, "category"); category != "" {
-		lines = append(lines, "分类："+category)
-	}
-	capabilities := mapsString(dataValue(data, "capabilities"))
-	if len(capabilities) > 0 {
-		lines = append(lines, "", "能力")
-		for _, capability := range capabilities {
-			lines = append(lines, "• "+capability)
-		}
-	}
-	for _, skill := range mapsFromData(dataValue(data, "skills")) {
-		if skillName := mapString(skill, "name"); skillName != "" {
-			lines = append(lines, "", "Skill · "+skillName)
-			if description := mapString(skill, "description"); description != "" {
-				lines = append(lines, description)
-			}
-		}
-	}
-	if readme := dataString(data, "readme"); readme != "" {
-		lines = append(lines, "", readme)
-	}
-	return strings.Join(lines, "\n")
-}
-
 func settingsOutputPanel(c *ui.Context, p palette, value string) {
 	ui.Scroll(c).FillWidth().Height(110).Padding(11).Background(p.soft).Border(1, p.line).Radius(8).Children(func() {
 		label(c, value, 10, p.text).Font("Consolas").LineHeight(1.45).Selectable()
-	})
-}
-
-func settingsPathValue(c *ui.Context, p palette, title, value string) {
-	ui.Row(c).Padding(9, 10).Gap(9).Background(p.soft).Radius(8).Children(func() {
-		label(c, title, 10, p.muted).Width(120)
-		label(c, value, 10, p.text).Grow(1).SingleLine().Selectable()
 	})
 }
 
@@ -267,23 +200,6 @@ func (s *app) settingsActionForm(form actionForm, payload map[string]any) bool {
 	switch form.kind {
 	case "settings.meegle-project.add":
 		s.lastError = "请从 Meegle 项目目录中选择项目空间后添加。"
-		return true
-	case "codex.extensions/marketplaces/add-source":
-		name, repository := strings.TrimSpace(payloadString(payload, "name")), strings.TrimSpace(payloadString(payload, "repositoryUrl"))
-		if name == "" || repository == "" {
-			s.lastError = "Marketplace 名称和 Git 仓库地址不能为空。"
-			return true
-		}
-		ref := strings.TrimSpace(payloadString(payload, "ref"))
-		var refValue any
-		if ref != "" {
-			refValue = ref
-		}
-		source := map[string]any{"id": newSettingsSourceID(), "name": name, "repositoryUrl": repository, "marketplaceDirectory": ".", "ref": refValue}
-		s.dialogOpen = false
-		s.confirmNative("添加 Codex Marketplace", "将把此 Git 仓库注册为 Codex 插件来源并读取目录。", repository, func() {
-			s.act("codex.extensions/marketplaces/add-source", "", "", "", "", "", map[string]any{"source": source, "confirmed": true})
-		})
 		return true
 	case "skills.sources/save":
 		name, repository := strings.TrimSpace(payloadString(payload, "name")), strings.TrimSpace(payloadString(payload, "repositoryUrl"))
@@ -304,56 +220,6 @@ func (s *app) settingsActionForm(form actionForm, payload map[string]any) bool {
 		s.dialogOpen = false
 		s.confirmNative("添加 Skill 来源", "将克隆此 Git 仓库并读取其中的 SKILL.md。", repository, func() {
 			s.act("skills.sources/save", "", "", "", "", "", map[string]any{"source": source, "confirmed": true})
-		})
-		return true
-	case "codex.extensions/mcp/add", "codex.extensions/mcp/edit":
-		name := strings.TrimSpace(payloadString(payload, "name"))
-		oldName := strings.TrimSpace(payloadString(payload, "oldName"))
-		if !validMCPServerName(name) || form.kind == "codex.extensions/mcp/edit" && !validMCPServerName(oldName) {
-			s.lastError = "MCP 名称只能包含英文、数字、点、下划线和短横线，长度为 1 到 100 个字符。"
-			return true
-		}
-		original := map[string]any{}
-		if form.kind == "codex.extensions/mcp/edit" {
-			if err := json.Unmarshal([]byte(form.text), &original); err != nil || original == nil {
-				s.lastError = "无法读取现有 MCP 配置。"
-				return true
-			}
-		}
-		config, err := mcpConfigFromForm(payload, original)
-		if err != nil {
-			s.lastError = err.Error()
-			return true
-		}
-		extra := map[string]any{"name": name, "config": config, "confirmed": true}
-		if form.kind == "codex.extensions/mcp/edit" {
-			extra["oldName"], extra["file"] = oldName, form.path
-		}
-		scope := payloadString(payload, "scope")
-		payload = s.settingsMCPPayload(extra)
-		if form.kind == "codex.extensions/mcp/add" {
-			if scope == "" || scope == "全局配置" {
-				delete(payload, "cwd")
-			} else if scope == "当前任务" {
-				if taskPath := s.taskUnit.currentTask().path; taskPath != "" {
-					payload["cwd"] = taskPath
-					payload["file"] = filepath.Join(taskPath, ".codex", "config.toml")
-				} else {
-					s.lastError = "没有可用的当前任务目录。"
-					return true
-				}
-			} else {
-				s.lastError = "请选择有效的 MCP 配置范围。"
-				return true
-			}
-		}
-		s.dialogOpen = false
-		message := "将写入当前 Codex MCP 配置。保存后需新建或重启 Codex 会话。"
-		if form.kind == "codex.extensions/mcp/edit" {
-			message = "将更新 Codex MCP 配置。未知字段会保留；保存后需新建或重启 Codex 会话。"
-		}
-		s.confirmNative("保存 MCP 配置", message, name, func() {
-			s.act(form.kind, "", "", "", "", "", payload)
 		})
 		return true
 	}

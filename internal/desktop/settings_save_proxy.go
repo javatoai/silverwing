@@ -84,6 +84,8 @@ func updateSettingsProxyConfig(config map[string]any, draft settingsProxyDraft) 
 	if endpoint == nil && (noProxy != nil || username != "" || password != "") {
 		return fmt.Errorf("请先填写代理主机和端口，再设置例外地址或认证信息")
 	}
+	legacyTarget := string(domain.ProxyTargetAppUpdates)
+	legacyUpdates := containsString(mapsString(config["commandProxyTargets"]), legacyTarget)
 	config["commandProxyUrl"], config["commandProxyNoProxy"], config["commandProxyUsername"], config["commandProxyPassword"] = nil, nil, nil, nil
 	config["commandProxyTargets"] = []string{}
 	if endpoint != nil {
@@ -94,7 +96,11 @@ func updateSettingsProxyConfig(config map[string]any, draft settingsProxyDraft) 
 		if draft.authentication {
 			config["commandProxyUsername"], config["commandProxyPassword"] = username, password
 		}
-		config["commandProxyTargets"] = append([]string{}, draft.targets...)
+		targets := append([]string{}, draft.targets...)
+		if legacyUpdates && !containsString(targets, legacyTarget) {
+			targets = append(targets, legacyTarget)
+		}
+		config["commandProxyTargets"] = targets
 	}
 	return nil
 }

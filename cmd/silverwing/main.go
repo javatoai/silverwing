@@ -36,7 +36,7 @@ func run(args []string) error {
 	captureOnly := flags.Bool("capture-only", false, "exit after writing the requested capture")
 	updateHealth := flags.String("update-health", "", "internal updater readiness receipt")
 	updateToken := flags.String("update-token", "", "internal updater readiness token")
-	updateResult := flags.String("update-result", "", "internal updater result receipt")
+	flags.String("update-result", "", "legacy updater result receipt")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -102,6 +102,5 @@ func run(args []string) error {
 		TabExplicit: explicitTab,
 		CapturePath: *capture, CaptureOnly: *captureOnly,
 		UpdateHealthPath: *updateHealth, UpdateHealthToken: *updateToken,
-		UpdateResultPath: *updateResult,
 	})
 }

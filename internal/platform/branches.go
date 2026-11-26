@@ -12,9 +12,12 @@ import (
 	"silverwing-go/internal/executable"
 )
 
-// loadExtensionBranches mirrors the source editor's read-only git ls-remote
+// loadSkillSourceBranches mirrors the source editor's read-only git ls-remote
 // branch picker. It does not clone, fetch, or execute repository content.
-func (s *Service) loadExtensionBranches(ctx context.Context, payload map[string]any) ([]string, error) {
+func (s *Service) loadSkillSourceBranches(ctx context.Context, payload map[string]any) ([]string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	cfg, err := s.loadConfig()
 	if err != nil {
 		return nil, err

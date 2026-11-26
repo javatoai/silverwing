@@ -2,7 +2,7 @@
 
 [返回知识库目录](../Index.md) · [上一篇：备份恢复与迁移](21-备份恢复与迁移.md) · [配置持久化与恢复机制](../技术架构/24-配置持久化与恢复机制.md)
 
-本文说明 Silverwing 如何解析 Git、Codex、Meegle 和 Lark 命令，以及 Codex CLI 和应用更新的代理配置。示意图中的命令和路径均为虚构例子。
+本文说明 Silverwing 如何解析 Git、Codex、Meegle 和 Lark 命令，以及如何配置 Codex CLI 的代理。示意图中的命令和路径均为虚构例子。
 
 ![Silverwing 配置、CLI 路径解析、代理环境和子进程之间的关系](../assets/proxy-cli-chain.png)
 
@@ -21,7 +21,7 @@
 
 - Git：打开「设置 → Git 与发布 → Git 环境与写保护」，查看命令状态和版本；路径留空表示由程序探测。
 - Meegle：打开「设置 → 工具与连接 → 命令行与账号」的 Meegle 页签，查看安装、版本和登录状态。
-- Codex：在「设置 → 工具与连接 → 命令行与账号 → Codex」核对 Codex CLI 状态；Codex 扩展和 MCP 还有各自的设置页。
+- 在「设置 → 工具与连接 → 命令行与账号 → Codex」核对 Codex CLI 状态。
 
 不要因为终端里可以输入命令就认定桌面应用能找到同一个程序。Silverwing 的版本检测实际启动子进程；目录存在、PATH 中看见一项或登录状态缓存都不能代替状态页的成功结果。CLI 安装和登录依团队发行版说明完成，不要在这里照抄其它机器的绝对路径或凭据。
 
@@ -29,18 +29,13 @@
 
 打开「设置 → 工具与连接 → 网络代理 → 网络代理」。选择 HTTP、HTTPS 或 SOCKS5，分别填写主机和端口；地址不能带用户名密码、路径、查询参数或片段。需要认证时单独启用代理认证，并同时填写账号与密码。例外地址以逗号分隔，只填写主机、IP 或通配符，不写协议。
 
-「代理目标」控制 Codex CLI 与应用更新的代理开关。
-
-| 目标 | 主要覆盖范围 |
-| --- | --- |
-| Codex CLI | Codex AI 命名、扩展相关命令和 Codex app-server |
-| 应用更新 | 检查 Silverwing 更新和下载更新包 |
+在「代理目标」启用 Codex CLI 后，Codex AI 命名和 Codex app-server 使用配置的代理。
 
 表单变更会自动保存到 Silverwing 配置。页面上的「测试代理」只尝试连接代理主机和端口，超时为 3 秒；它不验证 HTTP 响应、代理账号密码是否有效、目标服务能否访问，也不等同于某个 CLI 的登录检查。测试前等待配置保存完成，再分别运行相关工具的状态检查。
 
 ## 子进程环境与继承
 
-Silverwing 启动 Git、服务快捷命令、Meegle CLI 和 Codex CLI 时，会移除继承的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY` 及其小写版本。启用 Codex CLI 代理后，程序会为 Codex 进程注入设置里的代理变量与例外地址。更新请求根据自己的开关使用同一套代理设置。代理错误会隐藏配置中的地址和账号。
+Silverwing 启动 Git、服务快捷命令、Meegle CLI 和 Codex CLI 时，会移除继承的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY` 及其小写版本。启用 Codex CLI 代理后，程序会为 Codex 进程注入设置里的代理变量与例外地址。代理错误会隐藏配置中的地址和账号。
 
 该规则仅作用于 Silverwing 启动的受控命令，不会改写 Windows、macOS 或 Linux 的用户/系统环境，也不会改变已打开的终端、IDE 或正在运行的进程。保存设置后，新启动的受控命令读取新配置；已运行的命令继续使用启动时拿到的环境。普通终端从父进程继承的 PATH 和代理变量也不由此设置页改变。
 

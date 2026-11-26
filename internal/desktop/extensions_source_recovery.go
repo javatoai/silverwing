@@ -10,7 +10,7 @@ import (
 )
 
 func settingsExtensionSourceSaveAction(kind string) bool {
-	return kind == "skills.sources/save" || kind == "codex.extensions/marketplaces/add-source"
+	return kind == "skills.sources/save"
 }
 
 func settingsExtensionSourceConfiguration(action application.Action, snapshot application.Snapshot) ([]map[string]any, string, bool, error) {
@@ -28,11 +28,7 @@ func settingsExtensionSourceConfiguration(action application.Action, snapshot ap
 	if config == nil {
 		return nil, sourceID, false, fmt.Errorf("读取到的配置为空")
 	}
-	key := "skillSources"
-	if action.Kind == "codex.extensions/marketplaces/add-source" {
-		key = "codexPluginMarketplaceSources"
-	}
-	sources := mapsFromData(config[key])
+	sources := mapsFromData(config["skillSources"])
 	for _, source := range sources {
 		if mapString(source, "id") == sourceID && settingsExtensionSourceValuesMatch(mapData(action.Payload["source"]), source) {
 			return sources, sourceID, true, nil
@@ -56,10 +52,6 @@ func settingsExtensionSourceValue(source map[string]any, key string) any {
 	case "ref", "skillRoot":
 		if value == nil {
 			return ""
-		}
-	case "marketplaceDirectory":
-		if value == nil {
-			return "plugins"
 		}
 	case "enabled":
 		if value == nil {
@@ -95,11 +87,7 @@ func (s *app) reconcileSettingsExtensionSourceSave(action application.Action, sn
 		s.lastError = "来源未保存，输入已保留：" + operationErr.Error()
 		return false
 	}
-	if action.Kind == "skills.sources/save" {
-		s.settingsUnit.state.settingsSkillSources = reconcileSettingsExtensionSourceRows(s.settingsUnit.state.settingsSkillSources, sources, sourceID, operationErr.Error())
-	} else {
-		s.settingsUnit.state.settingsMarketplaces = reconcileSettingsExtensionSourceRows(s.settingsUnit.state.settingsMarketplaces, sources, sourceID, operationErr.Error())
-	}
+	s.settingsUnit.state.settingsSkillSources = reconcileSettingsExtensionSourceRows(s.settingsUnit.state.settingsSkillSources, sources, sourceID, operationErr.Error())
 	if s.settingsExtensionSourceFormMatches(action) {
 		s.dialogOpen = false
 		s.resetSettingsExtensionForm()

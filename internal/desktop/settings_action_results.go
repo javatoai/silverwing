@@ -50,44 +50,6 @@ func (s *app) applySettingsActionResult(action application.Action, result applic
 		s.settingsUnit.state.settingsOutput = "配置备份已保存。"
 	case "config.import":
 		s.settingsUnit.state.settingsOutput = "配置备份已恢复。"
-	case "codex.extensions/snapshot":
-		s.settingsUnit.state.settingsMarketplaces = mapsFromData(dataValue(result.Data, "marketplaces"))
-		s.settingsUnit.state.settingsSkillSources = mapsFromData(dataValue(result.Data, "skillSources"))
-		s.settingsUnit.state.settingsOutput = ""
-	case "codex.extensions/marketplaces/add-source", "codex.extensions/marketplaces/refresh-source", "codex.extensions/marketplaces/remove-source":
-		s.settingsUnit.state.settingsOutput = result.Message
-		s.act("codex.extensions/snapshot", "", "", "", "", "", nil)
-	case "codex.extensions/plugin/install", "codex.extensions/plugin/uninstall":
-		s.settingsUnit.state.settingsOutput = result.Message
-		s.act("codex.extensions/snapshot", "", "", "", "", "", nil)
-	case "codex.extensions/mcp/status":
-		s.settingsUnit.state.settingsMCPServers = mapsFromData(dataValue(result.Data, "servers"))
-		s.settingsUnit.state.settingsMCPPath = mapString(mapData(result.Data), "userFile")
-		s.settingsUnit.state.settingsMCPWarnings = mapsString(dataValue(result.Data, "warnings"))
-		// A status read is config-only; do not leave older live connection results visible.
-		s.settingsUnit.state.settingsMCPConnections = nil
-		s.settingsUnit.state.settingsMCPConnectionError = mapString(mapData(result.Data), "connectionError")
-		s.settingsUnit.state.settingsOutput = ""
-	case "codex.extensions/mcp/check":
-		// Connection checks return only live status and retain the configuration list.
-		s.settingsUnit.state.settingsMCPConnections = mapData(dataValue(result.Data, "connections"))
-		s.settingsUnit.state.settingsMCPConnectionError = mapString(mapData(result.Data), "connectionError")
-		s.settingsUnit.state.settingsOutput = ""
-	case "codex.extensions/mcp/add", "codex.extensions/mcp/edit", "codex.extensions/mcp/set", "codex.extensions/mcp/remove":
-		if action.Kind == "codex.extensions/mcp/set" && !s.settingsMCPSwitchResultCurrent(action) {
-			return true
-		}
-		s.settingsUnit.state.settingsMCPConnections = nil
-		if snapshot := dataValue(result.Data, "snapshot"); snapshot != nil {
-			s.settingsUnit.state.settingsMCPServers = mapsFromData(dataValue(snapshot, "servers"))
-			s.settingsUnit.state.settingsMCPPath = mapString(mapData(snapshot), "userFile")
-			s.settingsUnit.state.settingsMCPWarnings = mapsString(dataValue(snapshot, "warnings"))
-		}
-		s.settingsUnit.state.settingsOutput = result.Message
-		s.act("codex.extensions/mcp/status", "", "", "", "", "", s.settingsMCPPayload(nil))
-	case "codex.ai/mcp/authenticate":
-		s.settingsUnit.state.settingsOutput = result.Message
-		s.act("codex.extensions/mcp/status", "", "", "", "", "", s.settingsMCPPayload(nil))
 	case "git.environment", "git.environment/snapshot":
 		s.settingsUnit.state.settingsGitEnvironment = mapData(result.Data)
 		s.settingsUnit.state.settingsOutput = ""
@@ -144,9 +106,7 @@ func (s *app) applySettingsActionResult(action application.Action, result applic
 		s.settingsUnit.state.settingsSkillFiles = mapsFromData(dataValue(result.Data, "files"))
 		s.settingsUnit.state.settingsSkillFilesDirectory = payloadString(action.Payload, "directoryName")
 		s.settingsUnit.state.settingsSkillFilesTruncated = dataBool(result.Data, "truncated")
-	case "skills.files/preview":
-		s.applySettingsExtensionPreview(action, result)
-	case "skills.preview":
+	case "skills.files/preview", "skills.preview":
 		s.applySettingsExtensionPreview(action, result)
 	case "skills.preview/path":
 		s.settingsUnit.state.settingsOutput = resultText(result)
@@ -154,11 +114,9 @@ func (s *app) applySettingsActionResult(action application.Action, result applic
 		s.settingsUnit.state.settingsOutput = result.Message
 		s.invalidateLocalSkillsCatalog()
 		s.act("skills.sources/catalog", "", "", "", "", "", nil)
-	case "skills.sources/branches/list", "codex.extensions/branches/list":
+	case "skills.sources/branches/list":
 		s.applySourceBranches(action, result)
-	case "codex.extensions/plugin/preview", "codex.extensions/plugin/skill-preview":
-		s.applySettingsExtensionPreview(action, result)
-	case "cli.status", "proxy.test", "git.version", "diagnostics.export", "logs.list", "logs.read", "update.check":
+	case "cli.status", "proxy.test", "git.version", "diagnostics.export", "logs.list", "logs.read":
 		s.settingsUnit.state.settingsOutput = platformResultSummary(action.Kind, result)
 		if action.Kind == "cli.status" {
 			tool := strings.ToLower(payloadString(action.Payload, "tool"))

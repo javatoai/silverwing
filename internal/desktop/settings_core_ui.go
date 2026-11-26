@@ -52,7 +52,7 @@ func (s *app) settingsTaskPaths(c *ui.Context, p palette) {
 					if taskRoot != "" {
 						buttonText = "更改目录"
 					}
-					if settingsSystemAction(c, "settings-browse-task-root", "folder", buttonText, p, settingsSystemActionOutline, s.busy || s.backend == nil || s.settingsUnit.state.settingsPickerBusy) {
+					if settingsSystemAction(c, "settings-browse-task-root", "folder", buttonText, p, s.busy || s.backend == nil || s.settingsUnit.state.settingsPickerBusy) {
 						s.pickProfileTaskRoot()
 					}
 				})
@@ -84,10 +84,10 @@ func (s *app) settingsConfigBackup(c *ui.Context, p palette) {
 		state := s.ensureSettingsConfigRecovery()
 		disabled := s.busy || s.settingsUnit.state.settingsPickerBusy || state.previewLoading
 		ui.Row(c).Gap(8).Wrap().Children(func() {
-			if settingsSystemAction(c, "settings-config-backup", "save", "手动备份", p, settingsSystemActionOutline, disabled) {
+			if settingsSystemAction(c, "settings-config-backup", "save", "手动备份", p, disabled) {
 				s.backupConfig()
 			}
-			if settingsSystemAction(c, "settings-config-restore", "folder", "手动恢复", p, settingsSystemActionOutline, disabled) {
+			if settingsSystemAction(c, "settings-config-restore", "folder", "手动恢复", p, disabled) {
 				s.restoreConfig()
 			}
 		})

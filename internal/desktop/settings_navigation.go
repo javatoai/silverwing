@@ -19,13 +19,15 @@ var settingsSections = []settingsSection{
 	{"任务与工作区", 0, []settingsPage{{"task-paths", "任务目录"}, {"task-creation", "创建与命名"}}},
 	{"资料与说明", 0, []settingsPage{{"paths", "任务资料"}, {"project-instructions", "项目资料"}, {"agents", "全局说明"}}},
 	{"Git 与发布", 1, []settingsPage{{"git", "Git 环境与写保护"}, {"tag", "Tag 与构建"}}},
-	{"AI 与扩展", 1, []settingsPage{{"codex-plugins", "Codex 插件"}, {"codex-mcp", "MCP 服务"}, {"skill-local", "本机 Skill"}, {"skill-sources", "Skill 来源与安装"}}},
+	{"AI 与扩展", 1, []settingsPage{{"skill-local", "本机 Skill"}, {"skill-sources", "Skill 来源与安装"}}},
 	{"工具与连接", 1, []settingsPage{{"dev-tools", "编辑器与 IDE"}, {"cli-tools", "命令行与账号"}, {platformConnectionsPage, "平台连接"}, {"sw-install", "Silverwing CLI"}, {"proxy", "网络代理"}}},
-	{"数据与维护", 2, []settingsPage{{"config-backup", "配置与备份"}, {"app-data", "数据目录"}, {"logs", "日志与诊断"}, {"about", "关于与更新"}}},
+	{"数据与维护", 2, []settingsPage{{"config-backup", "配置与备份"}, {"app-data", "数据目录"}, {"logs", "日志与诊断"}, {"about", "关于"}}},
 }
 
 func settingsCanonicalPage(key string) string {
 	switch key {
+	case "codex-plugins", "codex-mcp":
+		return "skill-local"
 	case "cli-meegle", "cli-lark", "cli-codex", "cli-git":
 		return "cli-tools"
 	case "cli-genbu", "cli-dragon":
@@ -194,9 +196,6 @@ func (s *app) renderSettingsSidebar(c *ui.Context, p palette) {
 			}
 			button.Children(func() {
 				label(c, item.name, 14, fg).FontWeight(weight).NoWrap()
-				if item.name == "数据与维护" && s.hasAppUpdate() {
-					appUpdateDot(c, p, false)
-				}
 			})
 			if button.Clicked() && s.settingsUnit.state.settingsTab != item.name {
 				key := s.settingsUnit.state.settingsLastPages[item.name]
@@ -223,9 +222,6 @@ func (s *app) settingsTabButton(c *ui.Context, p palette, key, name string) {
 	}
 	b.Children(func() {
 		label(c, name, 12, fg).FontWeight(500)
-		if key == "about" && s.hasAppUpdate() {
-			appUpdateDot(c, p, false)
-		}
 	})
 	if b.Clicked() && s.settingsUnit.state.settingsPage != key {
 		s.navigateSettingsPage(key, "")
@@ -287,10 +283,6 @@ func (s *app) settingsPageContent(c *ui.Context, p palette) {
 		s.settingsTaskTabs(c, p)
 	case "agents":
 		s.settingsAgents(c, p)
-	case "codex-plugins":
-		s.settingsCodexPlugins(c, p)
-	case "codex-mcp":
-		s.settingsCodexMCP(c, p)
 	case "cli-tools":
 		s.settingsCommandTools(c, p)
 	case platformConnectionsPage:
@@ -309,7 +301,6 @@ func (s *app) settingsPageContent(c *ui.Context, p palette) {
 		s.settingsLogs(c, p)
 	case "about":
 		s.settingsAbout(c, p)
-		s.settingsUpdates(c, p)
 	case "app-data":
 		s.settingsAppData(c, p)
 	}

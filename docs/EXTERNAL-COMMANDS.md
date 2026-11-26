@@ -18,7 +18,7 @@
 | integrations 的 Meegle 正文、评论、身份及列表 | 共享命令准备 | 各业务既有超时，调用方上下文，Runner 清理 |
 | documents 的资料项目核对与标题读取 | 共享 Meegle 准备，保留显式路径和 macOS Node PATH | 核对 20 秒、标题 8 秒；取消不变为资料查询失败 |
 | platform 的 CLI 状态、登录、退出、诊断 | 同一共享环境；诊断不再遗漏 Node PATH | 既有操作超时，调用方上下文 |
-| Codex RPC、扩展和 MCP 管理 | 共享 CODEX 环境，保留独立 HOME 与操作参数 | 既有超时；RPC 交互与子进程清理保持原路径 |
+| Codex RPC | 共享 CODEX 环境，保留独立 HOME 与操作参数 | 既有超时；RPC 交互与子进程清理保持原路径 |
 | AI 命名、预热 | 共享 CODEX 环境；仅该用途关闭插件、Apps、Hooks、analytics、OTEL；读取 MCP 名称后逐项禁用 | 整体 60 秒；MCP 枚举 5 秒；推理参数降级保持隔离，不因重名重试 |
 | 工作区 Git、clone、Git 版本 | 共享 Git 命令准备 | 原有 Git 超时、取消、只读锁设置与清理 |
 | Git 差异读取 | 共享命令及 PATH；保留独立索引和原有 GIT_* 移除策略 | 原有输出上限、超时与取消 |

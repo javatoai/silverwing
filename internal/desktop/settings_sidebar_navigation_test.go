@@ -30,13 +30,19 @@ func TestSettingsSidebarSectionsAndVisualGroups(t *testing.T) {
 			seen[page.key] = true
 		}
 	}
-	if len(seen) != 24 {
+	if len(seen) != 22 {
 		t.Fatalf("pages=%d", len(seen))
+	}
+	section, ok := settingsSectionForPage("skill-local")
+	if !ok || section.name != "AI 与扩展" || len(section.pages) != 2 ||
+		section.pages[0] != (settingsPage{"skill-local", "本机 Skill"}) ||
+		section.pages[1] != (settingsPage{"skill-sources", "Skill 来源与安装"}) {
+		t.Fatalf("unexpected AI settings pages: %v", section.pages)
 	}
 	if section, ok := settingsSectionForPage("sw-install"); !ok || section.name != "工具与连接" {
 		t.Fatal("Silverwing CLI installer is outside its settings section")
 	}
-	for _, old := range []string{"basic", "tool-visibility", "paths", "materials-sync", "project-instructions", "config-backup", "dev-tools", "task-creation", "task-area", "git", "branch-naming", "tag", "agents", "codex-plugins", "codex-mcp", "skill-local", "skill-sources", "cli-meegle", "cli-genbu", "cli-dragon", platformConnectionsPage, "proxy", "logs", "about", "updates", "app-data"} {
+	for _, old := range []string{"basic", "tool-visibility", "paths", "materials-sync", "project-instructions", "config-backup", "dev-tools", "task-creation", "task-area", "git", "branch-naming", "tag", "agents", "skill-local", "skill-sources", "cli-meegle", "cli-genbu", "cli-dragon", platformConnectionsPage, "proxy", "logs", "about", "updates", "app-data"} {
 		if _, ok := settingsSectionForPage(old); !ok {
 			t.Fatalf("lost existing route %s", old)
 		}
@@ -105,6 +111,8 @@ func TestSettingsPreferenceAliasesAndRestore(t *testing.T) {
 	for _, want := range []struct{ key, category, page string }{
 		{"system", "数据与维护", "config-backup"},
 		{"instruction-templates", "资料与说明", "paths"},
+		{"codex-plugins", "AI 与扩展", "skill-local"},
+		{"codex-mcp", "AI 与扩展", "skill-local"},
 	} {
 		home := t.TempDir()
 		store := NewDesktopPreferencesStore(filepath.Join(home, desktopPreferencesFile))
@@ -116,17 +124,20 @@ func TestSettingsPreferenceAliasesAndRestore(t *testing.T) {
 		if s.settingsUnit.state.settingsTab != want.category || s.settingsUnit.state.settingsPage != want.page {
 			t.Fatalf("restore %q landed on %q/%q", want.key, s.settingsUnit.state.settingsTab, s.settingsUnit.state.settingsPage)
 		}
+		if want.category == "AI 与扩展" && settingsCanonicalPage(want.key) != want.page {
+			t.Fatalf("legacy page %q does not redirect to %q", want.key, want.page)
+		}
 	}
 }
 
 func TestSettingsSearchAliasesAndTargetNavigation(t *testing.T) {
-	for query, page := range map[string]string{"资料同步": "paths", "AGENTS": "agents", "Meego": "cli-meegle", "配置源码": "config-backup", "端口占用": "tool-visibility", "分支名": "task-creation", "MCP": "codex-mcp", "任务角色名": "paths", "任务资料子目录": "paths"} {
+	for query, page := range map[string]string{"资料同步": "paths", "AGENTS": "agents", "Meego": "cli-meegle", "配置源码": "config-backup", "端口占用": "tool-visibility", "分支名": "task-creation", "本机 Skill": "skill-local", "Skill 来源": "skill-sources", "任务角色名": "paths", "任务资料子目录": "paths", "关于": "about"} {
 		matches := settingsSearch(query)
 		if len(matches) == 0 || matches[0].page != page {
 			t.Fatalf("%s=%v", query, matches)
 		}
 	}
-	for _, query := range []string{"not-a-real-setting-58398", "任务说明模板"} {
+	for _, query := range []string{"not-a-real-setting-58398", "任务说明模板", "Codex 插件", "MCP", "Marketplace", "关于与更新", "检查更新", "应用更新"} {
 		if len(settingsSearch(query)) != 0 {
 			t.Fatalf("unexpected search results for %q", query)
 		}

@@ -73,7 +73,6 @@ type app struct {
 	backend                    application.Backend
 	systemOpenJobs             *systemOpenJobs
 	desktopPreferences         *desktopPreferencesState
-	appUpdates                 *appUpdateState
 	readingSession             *desktopReadingSession
 	overflowMenus              *overflowMenuState
 	page                       string
@@ -192,6 +191,7 @@ func (s *app) applySnapshot(snapshot application.Snapshot) {
 	s.restoreReadingSessionOnSnapshot()
 	s.observePendingTaskRootMigration(snapshot)
 	s.restoreActiveTagJobRecords()
+	s.observeTaskRequirementCommentSync()
 	if s.page == "production" && (s.releaseUnit.state.production == nil || s.releaseUnit.state.production.loadedHome != snapshot.Home || s.releaseUnit.state.production.configScope != productionConfigScope(s.settingsUnit.state.configJSON)) {
 		s.enterProductionPage()
 	}

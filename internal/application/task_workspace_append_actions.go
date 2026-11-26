@@ -8,7 +8,7 @@ import (
 	"silverwing-go/internal/workspace"
 )
 
-func taskWorkspaceAppendAction(
+func (a *App) taskWorkspaceAppendAction(
 	ctx context.Context,
 	action Action,
 	config domain.AppConfig,
@@ -51,6 +51,7 @@ func taskWorkspaceAppendAction(
 		if err != nil {
 			return ActionResult{}, true, err
 		}
+		a.enqueueTaskRequirementComment(taskPath, manifest)
 		return ActionResult{Message: "服务已追加", Data: manifest}, true, nil
 	case "task.modules-add":
 		request, err := addWorkspaceRequest(action)
@@ -61,6 +62,7 @@ func taskWorkspaceAppendAction(
 		if err != nil {
 			return ActionResult{}, true, err
 		}
+		a.enqueueTaskRequirementComment(taskPath, manifest)
 		return ActionResult{Message: "模块已追加", Data: manifest}, true, nil
 	case "task.services-retry":
 		var payload struct {
@@ -77,6 +79,7 @@ func taskWorkspaceAppendAction(
 		if err != nil {
 			return ActionResult{}, true, err
 		}
+		a.enqueueTaskRequirementComment(taskPath, manifest)
 		return ActionResult{Message: "失败服务已重试", Data: manifest}, true, nil
 	default:
 		return ActionResult{}, false, nil

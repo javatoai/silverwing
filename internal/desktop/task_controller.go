@@ -43,9 +43,11 @@ type taskState struct {
 	archiveBatchDelete     *archiveBatchDeleteState
 	taskNotesUI            *taskNotesUIState
 	taskCreationWarning    string
+	requirementCommentSync *taskRequirementCommentSyncView
 }
 
 func (s *taskController) stopFeature() {
+	s.stopTaskRequirementCommentSync()
 	s.closeTaskCreationRequirements()
 	s.closeTaskCreationAINaming()
 }

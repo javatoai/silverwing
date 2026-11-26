@@ -83,7 +83,7 @@ func settingsPreferenceName(key string) string {
 		return "资料与说明"
 	case "git", "tag":
 		return "Git 与发布"
-	case "codex", "codex-plugins", "codex-mcp", "skill-sources":
+	case "codex", "codex-plugins", "codex-mcp", "skill-local", "skill-sources":
 		return "AI 与扩展"
 	case "groups", "development", "feishu", "lark", "genbu", "cli", "advanced", "commands", "network-proxy", "proxy":
 		return "工具与连接"

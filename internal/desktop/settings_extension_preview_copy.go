@@ -11,22 +11,17 @@ func (s *app) settingsExtensionPreviewFileAction() (application.Action, bool) {
 	if !s.settingsExtensionActionRelevant(preview) {
 		return application.Action{}, false
 	}
-	payload := map[string]any{}
-	switch preview.Kind {
-	case "skills.preview":
-		fingerprint := payloadString(preview.Payload, "sourceFingerprint")
-		if !s.skillSourceFingerprintCurrent(payloadString(preview.Payload, "sourceId"), fingerprint) {
-			return application.Action{}, false
-		}
-		payload["sourceId"] = payloadString(preview.Payload, "sourceId")
-		payload["name"] = payloadString(preview.Payload, "name")
-		payload["sourceFingerprint"] = fingerprint
-	case "codex.extensions/plugin/skill-preview":
-		payload["sourceId"] = payloadString(preview.Payload, "sourceId")
-		payload["pluginName"] = payloadString(preview.Payload, "pluginName")
-		payload["skillName"] = payloadString(preview.Payload, "skillName")
-	default:
+	if preview.Kind != "skills.preview" {
 		return application.Action{}, false
 	}
-	return application.Action{Kind: "skills.files/copy", Payload: payload}, true
+	sourceID := payloadString(preview.Payload, "sourceId")
+	fingerprint := payloadString(preview.Payload, "sourceFingerprint")
+	if !s.skillSourceFingerprintCurrent(sourceID, fingerprint) {
+		return application.Action{}, false
+	}
+	return application.Action{Kind: "skills.files/copy", Payload: map[string]any{
+		"sourceId":          sourceID,
+		"name":              payloadString(preview.Payload, "name"),
+		"sourceFingerprint": fingerprint,
+	}}, true
 }

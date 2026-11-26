@@ -17,13 +17,6 @@ const silverwingRepositoryURL = productprofile.RepositoryURL
 
 var silverwingReleasesURL = productprofile.ReleasesURL()
 
-type settingsSystemActionStyle uint8
-
-const (
-	settingsSystemActionOutline settingsSystemActionStyle = iota
-	settingsSystemActionPrimary
-)
-
 var settingsAboutLogoCache struct {
 	once   sync.Once
 	bitmap *ui.Bitmap
@@ -43,23 +36,13 @@ func settingsSystemCard(context *ui.Context, theme palette, children func()) {
 	ui.Column(context).FillWidth().MinWidth(0).Padding(16).Gap(20).Background(theme.surface).Border(1, theme.line).Radius(12).Label("系统设置卡片").Children(children)
 }
 
-func settingsSystemAction(context *ui.Context, key, iconName, text string, theme palette, style settingsSystemActionStyle, disabled bool) bool {
-	button := ui.ButtonBase(context.Key(key)).Row().Height(34).Padding(0, 12).Gap(7).Radius(8).AlignItems(ui.Center).Label(text).Disabled(disabled)
+func settingsSystemAction(context *ui.Context, key, iconName, text string, theme palette, disabled bool) bool {
+	button := ui.ButtonBase(context.Key(key)).Row().Height(34).Padding(0, 12).Gap(7).Radius(8).Border(1, theme.line).AlignItems(ui.Center).Label(text).Disabled(disabled)
 	background, foreground := theme.surface, theme.text
-	switch style {
-	case settingsSystemActionPrimary:
-		background, foreground = ui.Hex("#356AE6"), ui.Hex("#FFFFFF")
-	default:
-		button.Border(1, theme.line)
-	}
 	if disabled {
 		background, foreground = theme.soft, theme.muted
 	} else if button.Hovered() {
-		if style == settingsSystemActionPrimary {
-			background = ui.Hex("#285CD3")
-		} else {
-			background = theme.soft
-		}
+		background = theme.soft
 	}
 	button.Background(background).TextColor(foreground).Children(func() {
 		icon(context, iconName, 17, foreground)
@@ -87,22 +70,18 @@ func (state *app) settingsAbout(context *ui.Context, theme palette) {
 			label(context, "GitHub", 13, theme.text).FontWeight(500)
 			label(context, silverwingRepositoryURL, 11, theme.muted).FillWidth().MinWidth(0).Wrap().Selectable()
 			ui.Row(context).FillWidth().MinWidth(0).Wrap().Gap(8).Label("GitHub 仓库操作").Children(func() {
-				if settingsSystemAction(context, "about-open-GitHub", "launch", "打开仓库", theme, settingsSystemActionOutline, false) {
+				if settingsSystemAction(context, "about-open-GitHub", "launch", "打开仓库", theme, false) {
 					mygo.Shell.OpenExternal(silverwingRepositoryURL)
 				}
-				if settingsSystemAction(context, "about-copy-GitHub", "copy", "复制地址", theme, settingsSystemActionOutline, false) {
+				if settingsSystemAction(context, "about-copy-GitHub", "copy", "复制地址", theme, false) {
 					state.copyTextToClipboard(context.Services(), silverwingRepositoryURL, "GitHub 仓库地址已复制")
 				}
-				if settingsSystemAction(context, "about-releases", "launch", "版本发布", theme, settingsSystemActionOutline, false) {
+				if settingsSystemAction(context, "about-releases", "launch", "版本发布", theme, false) {
 					mygo.Shell.OpenExternal(silverwingReleasesURL)
 				}
 			})
 		})
 	})
-}
-
-func (state *app) settingsUpdates(context *ui.Context, theme palette) {
-	state.renderAppUpdates(context, theme)
 }
 
 func (state *app) settingsAppData(context *ui.Context, theme palette) {
@@ -116,19 +95,19 @@ func (state *app) settingsAppData(context *ui.Context, theme palette) {
 			label(context, home, 11, theme.muted).FillWidth().MinWidth(0).Wrap().Selectable()
 		}
 		ui.Row(context).FillWidth().MinWidth(0).Wrap().Gap(8).Label("应用数据目录操作").Children(func() {
-			if settingsSystemAction(context, "settings-app-data-open", "folder", "打开目录", theme, settingsSystemActionOutline, disabled) && !disabled {
+			if settingsSystemAction(context, "settings-app-data-open", "folder", "打开目录", theme, disabled) && !disabled {
 				state.act("system.open", "", "", "", home, "", map[string]any{"desktopSystemOpenDirectory": true})
 			}
-			if settingsSystemAction(context, "settings-app-data-copy", "copy", "复制路径", theme, settingsSystemActionOutline, disabled) && !disabled {
+			if settingsSystemAction(context, "settings-app-data-copy", "copy", "复制路径", theme, disabled) && !disabled {
 				state.copyTextToClipboard(context.Services(), home, "应用数据目录路径已复制")
 			}
 			pickerDisabled := disabled || state.settingsUnit.state.settingsPickerBusy
-			if settingsSystemAction(context, "settings-app-data-new-instance", "launch", "选择目录并打开新窗口", theme, settingsSystemActionOutline, pickerDisabled) {
+			if settingsSystemAction(context, "settings-app-data-new-instance", "launch", "选择目录并打开新窗口", theme, pickerDisabled) {
 				state.chooseNewProfile(home)
 			}
 			if extension := profilelaunch.ShortcutExtension(); extension != "" {
 				shortcutDisabled := pickerDisabled || state.snapshot.ProfileID == ""
-				if settingsSystemAction(context, "settings-app-data-shortcut", "file", "另存为快捷方式", theme, settingsSystemActionOutline, shortcutDisabled) {
+				if settingsSystemAction(context, "settings-app-data-shortcut", "file", "另存为快捷方式", theme, shortcutDisabled) {
 					state.chooseProfileShortcut(home, state.snapshot.ProfileID, extension)
 				}
 			}

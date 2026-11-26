@@ -32,5 +32,6 @@ func (s *app) drainTaskFeature() error {
 		featureCleanupStep{"退出前任务分支预检清理未完成", 10 * time.Second, s.taskUnit.closeTaskCreationPreflights},
 		featureCleanupStep{"退出前任务删除风险读取清理未完成", 10 * time.Second, s.taskUnit.closeTaskDeleteRiskJobs},
 		featureCleanupStep{"退出前归档批量删除预检清理未完成", 10 * time.Second, s.drainArchiveBatchDelete},
+		featureCleanupStep{"退出前任务需求评论同步收尾未完成", 10 * time.Second, s.closeTaskRequirementCommentSync},
 	)
 }

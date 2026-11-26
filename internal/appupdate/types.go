@@ -1,5 +1,4 @@
-// Package appupdate coordinates explicit application updates. It does not know
-// about desktop controls, GitHub authentication or platform installer commands.
+// Package appupdate defines release bundle formats and the legacy installer protocol.
 package appupdate
 
 import "context"
@@ -69,26 +68,11 @@ type Bundle struct {
 	Metadata  Metadata `json:"metadata"`
 }
 
-type Progress func(downloaded, total int64)
-
-type Source interface {
-	Prepare(context.Context, Installation, string, string, Progress) (Bundle, error)
-}
-
 // Installer runs only in the external helper after the original process exits.
 // Each implementation keeps the installation form, including MSI registration.
 type Installer interface {
 	Apply(context.Context, Plan) error
 	Rollback(context.Context, Plan) error
-}
-
-type Snapshot struct {
-	ID         string `json:"id"`
-	Version    string `json:"version"`
-	Phase      string `json:"phase"`
-	Downloaded int64  `json:"downloaded"`
-	Total      int64  `json:"total"`
-	Error      string `json:"error,omitempty"`
 }
 
 type Plan struct {

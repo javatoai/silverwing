@@ -6,8 +6,6 @@
 
 Silverwing 提供两件独立的事：浏览本机已安装的 Skill 文件，以及从 Git 仓库发现、安装和更新 Skill。它展示和管理文件，不会在应用里执行 Skill；外部 Agent 是否发现新安装的 Skill，还取决于该工具自己的读取方式。
 
-![扩展来源、预览、安装与配置边界的通用示意图](../assets/extensions-lifecycle.png)
-
 ## 浏览本机 Skills
 
 打开 **设置 → AI 与扩展 → 本机 Skill**。页面读取当前操作系统用户主目录下 `~/.agents/skills` 中带有 `SKILL.md` 的普通文件夹，显示已安装列表、文件树和预览。选择 Skill 后可点文件查看内容；支持复制文件内容、复制路径、刷新列表，以及对当前 Skill 执行 **备份并卸载**。
@@ -56,4 +54,4 @@ team-skills/
 - Git 缓存、元数据发现、安装、备份与卸载：`internal/platform/extensions.go`、`internal/platform/extensions_context.go`
 - Silverwing home 下的缓存路径：`internal/storage/paths.go`
 
-相关阅读：[首次配置](../入门与基础/03-首次配置.md)、[IDE 与 Agent 配置](13-IDE与Agent配置.md)、[Codex 插件与 MCP](16-Codex插件与MCP.md)、[目录与数据存储](../配置与数据/20-目录与数据存储.md)。
+相关阅读：[首次配置](../入门与基础/03-首次配置.md)、[IDE 与 Agent 配置](13-IDE与Agent配置.md)、[目录与数据存储](../配置与数据/20-目录与数据存储.md)。

@@ -64,9 +64,9 @@ func init() {
 				time.Sleep(time.Minute)
 			}
 		}
-		if message.Method == "config/batchWrite" {
+		if message.Method == "fixture/lost-response" {
 			os.Exit(11)
-		} // Indeterminate write response: never replay.
+		}
 		if string(mode) == "initialize-error" && message.Method == "initialize" || string(mode) == "skills-error" && message.Method == "skills/list" {
 			_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"id": message.ID, "error": map[string]any{"code": -32001, "message": "fixture unavailable"}})
 			continue
@@ -83,18 +83,10 @@ func init() {
 			}
 			result = map[string]any{"payload": strings.Repeat("x", int(size))}
 		case "config/read":
-			config := map[string]any{"mcp_servers": map[string]any{"fixture": map[string]any{"command": "fixture"}}}
+			config := map[string]any{"project_doc_fallback_filenames": []string{"PROJECT.md"}}
 			result = map[string]any{"config": config, "layers": []any{map[string]any{"name": map[string]any{"type": "user", "file": filepath.Join(os.Getenv("CODEX_HOME"), "config.toml")}, "config": config, "version": "fixture-version"}}}
 		case "skills/list":
 			result = map[string]any{"data": []any{map[string]any{"skills": []any{map[string]any{"name": "fixture", "path": filepath.Join(cwd, "SKILL.md"), "enabled": true}}}}}
-		case "mcpServerStatus/list":
-			name := "first"
-			if message.Params["cursor"] == "page-2" {
-				name = "second"
-			} else {
-				result["nextCursor"] = "page-2"
-			}
-			result["data"] = []any{map[string]any{"name": name, "tools": map[string]any{"fixture": map[string]any{}}}}
 		}
 		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"id": message.ID, "result": result})
 	}
@@ -183,6 +175,16 @@ func TestCodexSnapshotReusesOneInitializedSessionAndLoadsSkillsOnDemand(t *testi
 	for _, includeSkills := range []bool{false, true} {
 		t.Run(fmt.Sprintf("skills-%v", includeSkills), func(t *testing.T) {
 			f := newCodexRPCFixture(t)
+			globalGuide := filepath.Join(os.Getenv("CODEX_HOME"), "AGENTS.md")
+			taskGuide := filepath.Join(f.cwd, "PROJECT.md")
+			for _, path := range []string{globalGuide, taskGuide} {
+				if err := os.WriteFile(path, []byte("# fixture guide\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Mkdir(filepath.Join(f.cwd, ".git"), 0700); err != nil {
+				t.Fatal(err)
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			value, err := f.service.Execute(ctx, "codex.ai/snapshot", map[string]any{"cwd": f.cwd, "includeSkills": includeSkills})
@@ -199,9 +201,20 @@ func TestCodexSnapshotReusesOneInitializedSessionAndLoadsSkillsOnDemand(t *testi
 			if counts["$start"] != 1 || counts["initialize"] != 1 || counts["initialized"] != 1 || counts["config/read"] != 1 || counts["skills/list"] != wantSkills || len(skills) != wantSkills {
 				t.Fatalf("snapshot repeated startup/handshake or eagerly loaded skills: counts=%v snapshot=%+v", counts, snapshot)
 			}
+			files := snapshot["files"].([]codexInstructionFile)
+			if len(files) != 2 || !files[0].Exists || !files[1].Exists || !samePath(files[0].File, globalGuide) || !samePath(files[1].File, taskGuide) {
+				t.Fatalf("snapshot omitted configured instruction files: %+v", files)
+			}
+			ids := map[int]bool{}
 			for _, event := range f.events(t) {
 				if !samePath(event.CWD, f.cwd) || event.Home != os.Getenv("CODEX_HOME") || !strings.Contains(event.Proxy, "127.0.0.1:12345") {
 					t.Fatalf("session scope escaped: %+v", event)
+				}
+				if event.ID > 0 {
+					if ids[event.ID] {
+						t.Fatalf("RPC request ID %d reused", event.ID)
+					}
+					ids[event.ID] = true
 				}
 			}
 			assertCodexRPCFixtureExited(t, f.events(t)[0].PID)
@@ -216,45 +229,20 @@ func TestCodexSnapshotReusesOneInitializedSessionAndLoadsSkillsOnDemand(t *testi
 	}
 }
 
-func TestCodexMCPCheckReusesOneSessionForConfigAndAllPages(t *testing.T) {
-	f := newCodexRPCFixture(t)
-	value, err := f.service.Execute(context.Background(), "codex.extensions/mcp/check", map[string]any{"cwd": f.cwd})
-	if err != nil {
-		t.Fatal(err)
-	}
-	connections := value.(map[string]any)["connections"].(map[string]map[string]any)
-	counts := codexRPCMethodCounts(f.events(t))
-	if len(connections) != 2 || counts["$start"] != 1 || counts["initialize"] != 1 || counts["config/read"] != 1 || counts["mcpServerStatus/list"] != 2 {
-		t.Fatalf("MCP pagination repeated startup or dropped results: counts=%v connections=%+v", counts, connections)
-	}
-	ids := map[int]bool{}
-	for _, event := range f.events(t) {
-		if event.ID > 0 {
-			if ids[event.ID] {
-				t.Fatalf("RPC request IDs reused: %+v", f.events(t))
-			}
-			ids[event.ID] = true
-		}
-	}
-	assertCodexRPCFixtureExited(t, f.events(t)[0].PID)
-}
-
 func TestCodexRPCSessionRejectsChangedScopeBeforeNextRequest(t *testing.T) {
 	for _, changed := range []string{"cwd", "home", "executable", "proxy", "saved-config", "after-last-response"} {
 		t.Run(changed, func(t *testing.T) {
 			f := newCodexRPCFixture(t)
-			_, err := f.service.withCodexRPCSession(context.Background(), f.config, f.cwd, nil, 10*time.Second, true, func(ctx context.Context) (any, error) {
-				if _, err := f.service.rpcRequest(ctx, f.config, f.cwd, nil, "config/read", nil, time.Second); err != nil {
+			_, err := f.service.withCodexRPCSession(context.Background(), f.config, f.cwd, 10*time.Second, true, func(ctx context.Context) (any, error) {
+				if _, err := f.service.rpcRequest(ctx, f.config, f.cwd, "config/read", nil, time.Second); err != nil {
 					return nil, err
 				}
 				cfg, cwd := f.config, f.cwd
-				var home *string
 				switch changed {
 				case "cwd":
 					cwd = filepath.Join(f.root, "other")
 				case "home":
-					value := filepath.Join(f.root, "other-home")
-					home = &value
+					t.Setenv("CODEX_HOME", filepath.Join(f.root, "other-home"))
 				case "executable":
 					value := filepath.Join(f.root, "other.exe")
 					cfg.CodexExecutablePath = &value
@@ -273,7 +261,7 @@ func TestCodexRPCSessionRejectsChangedScopeBeforeNextRequest(t *testing.T) {
 						return map[string]any{}, nil
 					}
 				}
-				return f.service.rpcRequest(ctx, cfg, cwd, home, "skills/list", nil, time.Second)
+				return f.service.rpcRequest(ctx, cfg, cwd, "skills/list", nil, time.Second)
 			})
 			if err == nil || !strings.Contains(err.Error(), "身份已变化") {
 				t.Fatalf("changed %s scope was reused: %v", changed, err)
@@ -299,8 +287,8 @@ func TestCodexRPCSessionCancellationAndTimeoutJoinProcess(t *testing.T) {
 				if mode == "timeout" {
 					requestTimeout = 50 * time.Millisecond
 				}
-				_, err := f.service.withCodexRPCSession(ctx, f.config, f.cwd, nil, 10*time.Second, true, func(ctx context.Context) (any, error) {
-					return f.service.rpcRequest(ctx, f.config, f.cwd, nil, "fixture/hang", nil, requestTimeout)
+				_, err := f.service.withCodexRPCSession(ctx, f.config, f.cwd, 10*time.Second, true, func(ctx context.Context) (any, error) {
+					return f.service.rpcRequest(ctx, f.config, f.cwd, "fixture/hang", nil, requestTimeout)
 				})
 				done <- err
 			}()
@@ -336,15 +324,15 @@ func TestCodexRPCSessionCancellationAndTimeoutJoinProcess(t *testing.T) {
 	}
 }
 
-func TestCodexRPCWriteWithLostResponseIsNeverReplayed(t *testing.T) {
+func TestCodexRPCRequestWithLostResponseIsNeverReplayed(t *testing.T) {
 	f := newCodexRPCFixture(t)
-	_, err := f.service.rpcRequest(context.Background(), f.config, f.cwd, nil, "config/batchWrite", map[string]any{"edits": []any{}}, 5*time.Second)
+	_, err := f.service.rpcRequest(context.Background(), f.config, f.cwd, "fixture/lost-response", nil, 5*time.Second)
 	if err == nil {
-		t.Fatal("indeterminate write claimed success")
+		t.Fatal("request with a lost response claimed success")
 	}
 	counts := codexRPCMethodCounts(f.events(t))
-	if counts["$start"] != 1 || counts["initialize"] != 1 || counts["config/batchWrite"] != 1 {
-		t.Fatalf("indeterminate write was replayed: %v", counts)
+	if counts["$start"] != 1 || counts["initialize"] != 1 || counts["fixture/lost-response"] != 1 {
+		t.Fatalf("request with a lost response was replayed: %v", counts)
 	}
 	assertCodexRPCFixtureExited(t, f.events(t)[0].PID)
 }
@@ -374,10 +362,10 @@ func TestCodexRPCSessionReceivesTwoLargeLegalFrames(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	const payloadBytes = 2_100_000
-	value, err := f.service.withCodexRPCSession(ctx, f.config, f.cwd, nil, 30*time.Second, true, func(ctx context.Context) (any, error) {
+	value, err := f.service.withCodexRPCSession(ctx, f.config, f.cwd, 30*time.Second, true, func(ctx context.Context) (any, error) {
 		lengths := make([]int, 0, 2)
 		for frame := 0; frame < 2; frame++ {
-			response, err := f.service.rpcRequest(ctx, f.config, f.cwd, nil, "fixture/payload", map[string]any{"bytes": payloadBytes}, 30*time.Second)
+			response, err := f.service.rpcRequest(ctx, f.config, f.cwd, "fixture/payload", map[string]any{"bytes": payloadBytes}, 30*time.Second)
 			if err != nil {
 				return nil, err
 			}
@@ -418,9 +406,9 @@ func TestCodexRPCOutputBudgetFailuresAreExplicitAndJoinProcess(t *testing.T) {
 			// regression test but must never be the reported overflow cause.
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			_, err := f.service.withCodexRPCSession(ctx, f.config, f.cwd, nil, 30*time.Second, true, func(ctx context.Context) (any, error) {
+			_, err := f.service.withCodexRPCSession(ctx, f.config, f.cwd, 30*time.Second, true, func(ctx context.Context) (any, error) {
 				for frame := 0; frame < tc.frames; frame++ {
-					if _, err := f.service.rpcRequest(ctx, f.config, f.cwd, nil, "fixture/payload", map[string]any{"bytes": tc.bytes, "stream": tc.stream}, 30*time.Second); err != nil {
+					if _, err := f.service.rpcRequest(ctx, f.config, f.cwd, "fixture/payload", map[string]any{"bytes": tc.bytes, "stream": tc.stream}, 30*time.Second); err != nil {
 						return nil, err
 					}
 				}

@@ -26,6 +26,13 @@ type codexAIRequest struct {
 	done             chan struct{}
 }
 
+type codexAINewSessionOutcome struct {
+	Dispatch      application.ActionResult
+	DispatchError string
+	Snapshot      application.Snapshot
+	SnapshotError string
+}
+
 func (s *app) requestCodexAISnapshot() {
 	state := s.toolsUnit.state.codexAI
 	if state == nil || !state.Open {
@@ -49,32 +56,6 @@ func (s *app) requestCodexAIThreads() {
 	state.bindError = ""
 	s.startCodexAIRequest("threads", application.Action{
 		Kind: "codex.ai/threads/list", TaskID: state.identity.taskID,
-		Payload: map[string]any{"cwd": state.identity.cwd},
-	})
-}
-
-func (s *app) requestCodexAIMCPSnapshot() {
-	state := s.toolsUnit.state.codexAI
-	if state == nil || !state.Open || !s.codexAIIdentityCurrent(state) || state.mcpStatusLoading || codexAIMCPBusy(state) {
-		return
-	}
-	state.mcpStatusLoading = true
-	state.mcpError, state.mcpCheckError = "", ""
-	s.startCodexAIRequest("mcp-status", application.Action{
-		Kind: "codex.extensions/mcp/status", TaskID: state.identity.taskID,
-		Payload: map[string]any{"cwd": state.identity.cwd},
-	})
-}
-
-func (s *app) requestCodexAIMCPCheck() {
-	state := s.toolsUnit.state.codexAI
-	if state == nil || !state.Open || !s.codexAIIdentityCurrent(state) || state.mcpSnapshot == nil || state.mcpCheckLoading || state.mcpStatusLoading || codexAIMCPBusy(state) {
-		return
-	}
-	state.mcpCheckLoading = true
-	state.mcpCheckError = ""
-	s.startCodexAIRequest("mcp-check", application.Action{
-		Kind: "codex.extensions/mcp/check", TaskID: state.identity.taskID,
 		Payload: map[string]any{"cwd": state.identity.cwd},
 	})
 }
@@ -152,7 +133,7 @@ func (s *app) readCodexAIFile(path string) {
 	}
 	path = filepath.Clean(strings.TrimSpace(path))
 	if !codexAIFileAllowed(state.snapshot, path) {
-		state.fileError = "只能读取当前 Codex 快照列出的配置或说明文件。"
+		state.fileError = "只能读取当前任务列出的 Skill 或说明文件。"
 		return
 	}
 	if codexAIPathKey(state.filePath) != codexAIPathKey(path) {
@@ -200,11 +181,6 @@ func codexAIFileAllowed(snapshot *codexAISnapshot, path string) bool {
 			return true
 		}
 	}
-	for _, layer := range snapshot.Layers {
-		if strings.TrimSpace(layer.File) != "" && codexAIPathKey(layer.File) == target {
-			return true
-		}
-	}
 	return false
 }
 
@@ -212,10 +188,6 @@ func (s *app) startCodexAIRequest(key string, action application.Action) {
 	state := s.toolsUnit.state.codexAI
 	if state == nil || !s.codexAIIdentityCurrent(state) {
 		return
-	}
-	if key == "mcp-mutate" || key == "mcp-auth" {
-		s.cancelCodexAIRequest(state, "mcp-status")
-		s.cancelCodexAIRequest(state, "mcp-check")
 	}
 	if s.backend == nil || s.win == nil || s.win.IsDestroyed() {
 		s.setCodexAIRequestFailure(key, errors.New("Codex 后端或窗口不可用。"))
@@ -315,17 +287,6 @@ func (s *app) cancelCodexAIRequest(state *codexAIState, key string) {
 		state.bindLoading = false
 	case "file-read":
 		state.fileLoading = false
-	case "mcp-status":
-		state.mcpStatusLoading = false
-	case "mcp-check":
-		state.mcpCheckLoading = false
-	case "mcp-mutate":
-		state.mcpMutationLoading = false
-		if state.mcpEditor != nil {
-			state.mcpEditor.Saving = false
-		}
-	case "mcp-auth":
-		state.mcpAuthLoading = false
 	case "new-session":
 		state.newSessionLoading = false
 	}
@@ -355,9 +316,6 @@ func (s *app) codexAIRequestRelevant(request *codexAIRequest) bool {
 		!codexAIFileAllowed(state.snapshot, request.action.Path)) {
 		return false
 	}
-	if strings.HasPrefix(request.key, "mcp-") && payloadString(request.action.Payload, "cwd") != request.identity.cwd {
-		return false
-	}
 	if request.key == "new-session" && (payloadString(request.action.Payload, "workspacePath") != request.identity.taskPath ||
 		request.action.Payload["forceNew"] != true || request.action.TaskID != request.identity.taskID) {
 		return false
@@ -376,17 +334,11 @@ func (s *app) finishCodexAIRequest(request *codexAIRequest, result application.A
 	delete(state.requests, request.key)
 	cleanupFailure := process.IsCleanupFailure(err)
 	if request.cancelRequested && !cleanupFailure {
-		if request.key == "mcp-mutate" {
-			s.resetCodexAIMCPSwitch(request.action)
-		}
 		s.setCodexAIRequestFailure(request.key, errors.New("操作已取消，可刷新确认当前状态后重试"))
 		return
 	}
 	if err != nil {
 		if cleanupFailure || !errors.Is(err, context.Canceled) {
-			if request.key == "mcp-mutate" {
-				s.resetCodexAIMCPSwitch(request.action)
-			}
 			s.setCodexAIRequestFailure(request.key, err)
 		}
 		return
@@ -411,7 +363,7 @@ func (s *app) finishCodexAIRequest(request *codexAIRequest, result application.A
 		}
 		state.snapshot = &snapshot
 		state.snapshotLoading, state.snapshotLoaded, state.snapshotError = false, true, ""
-		state.skillsLoaded = codexAIPayloadBool(request.action.Payload, "includeSkills")
+		state.skillsLoaded = request.action.Payload["includeSkills"] == true
 		state.snapshotRevision++
 		if previousFile != "" {
 			if !codexAIFileAllowed(state.snapshot, previousFile) {
@@ -490,72 +442,6 @@ func (s *app) finishCodexAIRequest(request *codexAIRequest, result application.A
 	case "external-open":
 		state.externalError = ""
 		state.externalMessage = "已交由系统默认应用打开：" + filepath.Base(state.externalPath)
-	case "mcp-status":
-		var snapshot codexAISnapshot
-		if err := decodeCodexAIData(result.Data, &snapshot); err != nil {
-			s.setCodexAIRequestFailure(request.key, fmt.Errorf("MCP 配置响应无效：%w", err))
-			return
-		}
-		if snapshot.CWD == nil || normalizeIdentityPath(*snapshot.CWD) != normalizeIdentityPath(request.identity.cwd) {
-			s.setCodexAIRequestFailure(request.key, errors.New("MCP 配置响应目录与当前任务不一致。"))
-			return
-		}
-		state.mcpSnapshot = &snapshot
-		state.mcpStatusLoading, state.mcpError = false, ""
-		state.mcpConnections = nil
-		state.mcpSwitches = nil
-	case "mcp-check":
-		var response struct {
-			CWD         string                          `json:"cwd"`
-			Connections map[string]codexAIMCPConnection `json:"connections"`
-		}
-		if err := decodeCodexAIData(result.Data, &response); err != nil {
-			s.setCodexAIRequestFailure(request.key, fmt.Errorf("MCP 连接检测响应无效：%w", err))
-			return
-		}
-		if normalizeIdentityPath(response.CWD) != normalizeIdentityPath(request.identity.cwd) {
-			s.setCodexAIRequestFailure(request.key, errors.New("MCP 连接检测响应目录与当前任务不一致。"))
-			return
-		}
-		state.mcpConnections = response.Connections
-		state.mcpCheckLoading, state.mcpCheckError = false, ""
-	case "mcp-mutate":
-		var response codexAIMCPMutationResult
-		if err := decodeCodexAIData(result.Data, &response); err != nil {
-			s.setCodexAIRequestFailure(request.key, fmt.Errorf("MCP 保存响应无效：%w", err))
-			return
-		}
-		if !response.Saved {
-			s.setCodexAIRequestFailure(request.key, errors.New("MCP 后端未确认配置已保存。"))
-			return
-		}
-		if response.Snapshot != nil {
-			if response.Snapshot.CWD == nil || normalizeIdentityPath(*response.Snapshot.CWD) != normalizeIdentityPath(request.identity.cwd) {
-				s.setCodexAIRequestFailure(request.key, errors.New("MCP 保存响应目录与当前任务不一致。"))
-				return
-			}
-			state.mcpSnapshot = response.Snapshot
-			state.mcpConnections = nil
-			state.mcpSwitches = nil
-		}
-		state.mcpMutationLoading, state.mcpError = false, ""
-		state.mcpEditor, state.mcpDelete = nil, nil
-		state.mcpMessage = "MCP 配置已保存；新建或重启 Codex 会话后生效。"
-		if response.RefreshError != "" || response.Snapshot == nil {
-			state.mcpMessage = "配置已保存，正在重新读取 MCP 状态。"
-			s.requestCodexAIMCPSnapshot()
-		}
-	case "mcp-auth":
-		state.mcpAuthLoading, state.mcpError = false, ""
-		if result.Message != "" {
-			state.mcpMessage = result.Message
-		} else if codexAIPayloadBool(request.action.Payload, "login") {
-			state.mcpMessage = "MCP 授权操作已完成。"
-		} else {
-			state.mcpMessage = "MCP 退出授权操作已完成。"
-		}
-		state.mcpConnections = nil
-		s.requestCodexAIMCPSnapshot()
 	case "new-session":
 		outcome, ok := result.Data.(codexAINewSessionOutcome)
 		if !ok {
@@ -590,7 +476,10 @@ func (s *app) finishCodexAIRequest(request *codexAIRequest, result application.A
 			for _, launch := range current.workspaceToolLaunches {
 				if launch.ToolID == "codex" && string(launch.Status) == "FAILED" {
 					failed = true
-					state.newSessionError = firstNonEmptyCodexAI(launch.Message, outcome.Dispatch.Message, "Codex 未能新建会话。")
+					state.newSessionError = firstNonEmpty(strings.TrimSpace(outcome.Dispatch.Message), "Codex 未能新建会话。")
+					if launch.Message != nil {
+						state.newSessionError = firstNonEmpty(strings.TrimSpace(*launch.Message), state.newSessionError)
+					}
 					state.newSessionMessage = ""
 				}
 			}
@@ -611,22 +500,6 @@ func (s *app) refreshCodexAITaskLaunchesFromManifest(identity codexAIIdentity, m
 		if s.taskUnit.state.tasks[index].id == identity.taskID && s.taskUnit.state.tasks[index].createdAt == identity.taskCreatedAt &&
 			normalizeIdentityPath(s.taskUnit.state.tasks[index].path) == normalizeIdentityPath(identity.taskPath) {
 			s.taskUnit.state.tasks[index].workspaceToolLaunches = append(s.taskUnit.state.tasks[index].workspaceToolLaunches[:0], manifest.WorkspaceToolLaunches...)
-			return
-		}
-	}
-}
-
-func (s *app) resetCodexAIMCPSwitch(action application.Action) {
-	state := s.toolsUnit.state.codexAI
-	if state == nil || state.mcpSnapshot == nil || action.Kind != "codex.extensions/mcp/set" {
-		return
-	}
-	name, file := payloadString(action.Payload, "name"), payloadString(action.Payload, "file")
-	for _, server := range state.mcpSnapshot.Servers {
-		if server.Name == name && codexAIPathKey(server.File) == codexAIPathKey(file) {
-			if value := state.mcpSwitches[codexAIMCPServerKey(server)]; value != nil {
-				*value = codexAIMCPEnabled(server)
-			}
 			return
 		}
 	}
@@ -683,18 +556,6 @@ func (s *app) setCodexAIRequestFailure(key string, err error) {
 		state.fileLoading, state.fileError = false, message
 	case "external-open":
 		state.externalError = message
-	case "mcp-status":
-		state.mcpStatusLoading, state.mcpError = false, message
-	case "mcp-check":
-		state.mcpCheckLoading, state.mcpCheckError = false, message
-	case "mcp-mutate":
-		state.mcpMutationLoading, state.mcpError = false, message
-		if state.mcpEditor != nil {
-			state.mcpEditor.Saving = false
-			state.mcpEditor.Error = message
-		}
-	case "mcp-auth":
-		state.mcpAuthLoading, state.mcpError = false, message
 	case "new-session":
 		state.newSessionLoading, state.newSessionError = false, message
 	}

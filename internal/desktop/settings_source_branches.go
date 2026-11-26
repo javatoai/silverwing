@@ -22,7 +22,7 @@ type sourceBranchFormState struct {
 }
 
 func extensionSourceForm(kind string) bool {
-	return kind == "skills.sources/save" || kind == "codex.extensions/marketplaces/add-source"
+	return kind == "skills.sources/save"
 }
 
 func newSourceBranchForm(kind string) *sourceBranchFormState {
@@ -102,7 +102,7 @@ func (s *app) observeSourceBranchFormAt(now time.Time) {
 	stopSourceBranchTimer(form)
 	s.invalidateSettingsExtensionRead("branches", "")
 	form.home, form.url = s.snapshot.Home, repository
-	if s.form.kind != "skills.sources/save" || !validSourceBranchURL(repository) {
+	if !validSourceBranchURL(repository) {
 		return
 	}
 	form.due = now.Add(skillSourceBranchDelay)
@@ -147,11 +147,7 @@ func (s *app) sourceBranchesActionAt(now time.Time, force bool) (application.Act
 		return application.Action{}, false
 	}
 	stopSourceBranchTimer(form)
-	kind := "skills.sources/branches/list"
-	if s.form.kind == "codex.extensions/marketplaces/add-source" {
-		kind = "codex.extensions/branches/list"
-	}
-	return application.Action{Kind: kind, Payload: map[string]any{"repositoryUrl": form.url}}, true
+	return application.Action{Kind: "skills.sources/branches/list", Payload: map[string]any{"repositoryUrl": form.url}}, true
 }
 
 func (s *app) requestSourceBranches(force bool) {

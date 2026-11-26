@@ -28,12 +28,17 @@ func TestSettingsSystemScreensIsolatedLayout(test *testing.T) {
 					})
 				}, size[0], size[1])
 				assertSettingsVisibleBounds(test, tester, "外观与交互", size[0], size[1])
-				for _, tab := range []string{"关于与更新", "数据目录", "日志与诊断", "配置与备份"} {
+				for _, tab := range []string{"关于", "数据目录", "日志与诊断", "配置与备份"} {
 					assertSettingsVisibleBounds(test, tester, tab, size[0], size[1])
 				}
 				assertSettingsSystemCardAlignment(test, tester, size[0])
 				assertSettingsVisibleBounds(test, tester, "打开仓库", size[0], size[1])
 				assertSettingsVisibleBounds(test, tester, "版本发布", size[0], size[1])
+				for _, retired := range []string{"关于与更新", "获取新版", "自动检查更新", "每日检查时间", "检查更新", "打开更新页面"} {
+					if _, found := tester.Find(retired); found {
+						test.Errorf("removed update control %q still renders", retired)
+					}
+				}
 				if tester.HasText(state.snapshot.Home) {
 					test.Fatal("application data path still appears on the about page")
 				}
@@ -54,7 +59,7 @@ func TestSettingsSystemScreensIsolatedLayout(test *testing.T) {
 				if tester.Clipboard() != state.snapshot.Home {
 					test.Fatalf("data tab copied %q, want %q", tester.Clipboard(), state.snapshot.Home)
 				}
-				if err := tester.Click("关于与更新"); err != nil {
+				if err := tester.Click("关于"); err != nil {
 					test.Fatal(err)
 				}
 				if state.settingsUnit.state.settingsPage != "about" || !tester.HasText("SilverWing") || tester.HasText(state.snapshot.Home) {

@@ -32,7 +32,10 @@ func (s *nativeCodePreviewState) bind(identity, filename, source string) *codeed
 }
 
 func renderNativeCodePreview(c *ui.Context, p palette, owner *nativeCodePreviewState, identity, filename, source, key string) ui.Element {
-	view := owner.bind(identity, filename, source)
+	return renderNativeCodePreviewView(c, p, owner.bind(identity, filename, source), key)
+}
+
+func renderNativeCodePreviewView(c *ui.Context, p palette, view *codeeditor.State, key string) ui.Element {
 	return ui.Box(c.Key(key)).FillWidth().MinHeight(0).Padding(5).Background(p.surface).Border(1, p.line).Radius(8).Children(func() {
 		TextEditor(c, p, view).Grow(1).FillWidth()
 	})

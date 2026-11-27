@@ -230,17 +230,16 @@ func (s *app) renderTaskServiceActions(c *ui.Context, p palette, v *taskServices
 	uatBusy := s.busy || s.taskServicesUnit.uatWriteRunning()
 	ui.Row(c).FillWidth().MinWidth(0).Gap(6).AlignItems(ui.Center).Justify(ui.End).Children(func() {
 		taskServiceActionGroup(c.Key("runtime-actions"), p, "运行操作").Children(func() {
+			if taskServiceDetailAction(c.Key("pods-detail-action"), p, "查看").
+				Label(target + " Pod 明细").Tooltip("查看 Pod 明细").Clicked() {
+				s.openTaskServiceDialog(v, row, taskServicePodsDetail)
+			}
 			if showUAT {
 				publish := uatReleaseLabel + " · " + row.name
 				if taskServiceDetailAction(c.Key("uat-release"), p, "发布").Width(taskServicePublishWidth).
 					Label(publish).Tooltip(publish).Disabled(uatBusy).Clicked() {
 					s.openTaskUATPodAction(v, row, uatRelease)
 				}
-			}
-			if taskServiceDetailAction(c.Key("pods-detail-action"), p, "Pod").Label(target + " Pod 明细").Clicked() {
-				s.openTaskServiceDialog(v, row, taskServicePodsDetail)
-			}
-			if showUAT {
 				restart := uatRestartLabel + " · " + row.name
 				if taskServiceDetailAction(c.Key("uat-restart"), p, "重启").
 					Label(restart).Tooltip(restart).Disabled(uatBusy).Clicked() {

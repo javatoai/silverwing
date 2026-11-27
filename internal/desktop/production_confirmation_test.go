@@ -173,6 +173,8 @@ func TestProductionAllConfirmationsUseSummaryAndKeepOriginalPayload(t *testing.T
 
 func TestProductionContentRecheckOnlyReadsAndKeepsManualBranch(t *testing.T) {
 	s, v, b := productionFixture(t)
+	b.InitialSHA = ""
+	s.releaseUnit.state.production.batches[0] = b
 	v.Version = "release/2.3.90"
 	s.taskUnit.state.tasks = []task{{id: "selected-task"}}
 	s.taskUnit.state.notes[0] = "unsaved draft"

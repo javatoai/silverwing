@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"silverwing-go/internal/application"
 	"silverwing-go/internal/production"
@@ -18,6 +19,7 @@ func TestProductionNoDiffButtonIsDisabled(t *testing.T) {
 	for _, kind := range []string{"same-commit", "included", "commit-only", "release-report-only"} {
 		t.Run(kind, func(t *testing.T) {
 			s, v, _ := productionFixture(t)
+			s.releaseUnit.state.production.batches, v.BatchID = nil, ""
 			v.Branch = ""
 			if kind != "same-commit" {
 				v.Preview.ProductionSHA = strings.Repeat("e", 40)
@@ -62,6 +64,7 @@ func TestProductionUnifiedBaselineStatusUsesCurrentEvidence(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, v, b := productionFixture(t)
+			b.InitialSHA = ""
 			v.Branch = ""
 			v.Steps = map[int]productionStepView{1: {State: "complete"}, 2: {State: "complete"}}
 			switch tc.name {
@@ -108,6 +111,95 @@ func TestProductionUnifiedBaselineStatusUsesCurrentEvidence(t *testing.T) {
 				if err := tester.Click("查看差异"); err != nil || s.releaseUnit.state.production.diffDialog != nil {
 					t.Fatal("failed comparison remained actionable")
 				}
+			}
+		})
+	}
+}
+
+func TestProductionCompletedBaselineUsesSavedBatchAndBuildCheckOwnsSync(t *testing.T) {
+	s, v, b, backend, window := productionRequestFixture(t)
+	b.ProductionTag, b.ProductionSHA, b.MainSHA = v.Preview.ProductionTag, v.Preview.ProductionSHA, v.Preview.MainSHA
+	s.releaseUnit.state.production.batches[0] = b
+	fresh := *v.Preview
+	fresh.ProductionTag, fresh.ProductionSHA, fresh.ProductionInMain = "2.3.44", strings.Repeat("e", 40), false
+	fresh.MainInRelease = true
+	fresh.Diff = " incoming.go | 1 +"
+	v.Preview = nil
+	tester := productionCardsTester(s, 960, false)
+	assertCompletedSummary := func() {
+		t.Helper()
+		if status := s.productionBaselineStatus(v, &b); status.Text != "已完成" || status.State != "complete" {
+			t.Fatalf("saved initialization lost its completion: %+v", status)
+		}
+		if !tester.HasText(b.ProductionTag) || !tester.HasText("基线生产 Tag") || tester.HasText("重新检查") {
+			t.Fatal("first card did not show the saved baseline as a read-only result")
+		}
+		if _, exists := tester.Find("生产 Tag → 主分支操作栏"); exists {
+			t.Fatal("completed initialization rendered an action bar")
+		}
+	}
+	assertCompletedSummary()
+	v.Preview, v.ActiveStep, v.Error = &fresh, 1, "fixture stale baseline error"
+	tester.Frame()
+	assertCompletedSummary()
+	if tester.HasText(v.Error) || tester.HasText("合并生产 Tag 到 master") {
+		t.Fatal("a stale live baseline brought back the first step controls or error")
+	}
+	if err := tester.Click("构建 Tag"); err != nil {
+		t.Fatal(err)
+	}
+	if call := productionTestCall(t, backend); call.Kind != "production.prepare-tag" || call.Payload["batchId"] != b.ID {
+		t.Fatalf("build did not request a fresh baseline for its own batch: %+v", call)
+	}
+	backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &b, Preview: &fresh}}}
+	productionTestUpdate(t, window)
+	tester.Frame()
+	assertCompletedSummary()
+	build := productionAlignmentRect(t, tester, "构建生产 Tag卡片")
+	merge := productionAlignmentRect(t, tester, "合并生产 Tag 到 master")
+	if merge.Y < build.Y || merge.Y+merge.H > build.Y+build.H || len(backend.calls) != 0 {
+		t.Fatal("build check did not keep the required sync inside the build card")
+	}
+}
+
+func TestProductionBuildUsesOwnDeployedTagAlreadyOnRelease(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		mainInRelease bool
+	}{
+		{name: "current-main", mainInRelease: true},
+		{name: "new-main-commits"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, v, b := productionFixture(t)
+			s.win = &mygo.Window{}
+			p := v.Preview
+			b.ProductionTag, b.ProductionSHA = p.ProductionTag, p.ProductionSHA
+			p.ProductionTag, p.ProductionSHA = b.Version, strings.Repeat("e", 40)
+			b.Tags = []production.Tag{{Name: p.ProductionTag, Commit: p.ProductionSHA}}
+			s.releaseUnit.state.production.batches[0] = b
+			v.BuildChecked = true
+			p.RuntimeAvailable, p.ProductionCandidates = true, []string{p.ProductionTag}
+			p.ProductionInMain, p.ProductionInRelease, p.MainInRelease = false, true, tc.mainInRelease
+
+			tester := productionCardsTester(s, 1440, false)
+			if tester.HasText("合并生产 Tag 到 master") || tester.HasText("先将生产 Tag 合入 master，再同步 release。") || !tester.HasText(b.ProductionTag) {
+				t.Fatal("own deployed Tag incorrectly requires updating master or replaced the saved initialization baseline")
+			}
+			if m := s.productionReleaseModel(v, &b); m.ShowSync == tc.mainInRelease || !m.CanBuild {
+				t.Fatalf("wrong build availability and sync state: %+v", m)
+			}
+			if tc.mainInRelease {
+				if tester.HasText("合并主分支到 release") {
+					t.Fatal("up-to-date release still requires a branch merge")
+				}
+				return
+			}
+			if err := tester.Click("合并主分支到 release"); err != nil {
+				t.Fatal(err)
+			}
+			if d := s.confirmationDialog; d == nil || d.Title != "合并主分支到 release" {
+				t.Fatal("genuine main branch changes cannot be confirmed")
 			}
 		})
 	}
@@ -197,6 +289,7 @@ func TestProductionMergedBranchesAreFlatUniqueAndScoped(t *testing.T) {
 
 func TestProductionBaselineDiffFullPageLoadingErrorAndRetry(t *testing.T) {
 	s, v, _, backend, window := productionRequestFixture(t)
+	s.releaseUnit.state.production.batches, v.BatchID = nil, ""
 	v.Preview.ProductionSHA, v.Preview.ProductionInMain = strings.Repeat("f", 40), false
 	v.Preview.Diff = " changed.go | 1 +\n 1 file changed, 1 insertion(+)"
 	v.Branch = ""

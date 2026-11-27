@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
+
 	"silverwing-go/internal/commandruntime"
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/executable"
-	"strings"
-	"time"
 )
 
 // PrepareTag observes the remote and runtime once for this build click. It
@@ -52,10 +53,19 @@ func (s *Service) prepareCheckedTag(ctx context.Context, b *Batch, p Preview) er
 	if p.ReleaseSHA == "" || p.ReleaseSHA != b.ReleaseSHA {
 		return errors.New("release 已变化，请先核对并采纳远端状态")
 	}
-	if !p.ProductionInMain || !p.MainInRelease {
+	baselineReady := b.ProductionBaselineReady(p)
+	switch {
+	case !baselineReady && !p.MainInRelease:
 		return errors.New("构建前检查未通过，请分别点击合并生产 Tag 到主分支、合并主分支到 release")
+	case !baselineReady:
+		return errors.New("构建前检查未通过，请先合并生产 Tag 到主分支")
+	case !p.MainInRelease:
+		return errors.New("构建前检查未通过，请先合并主分支到 release")
 	}
-	b.MainSHA, b.ProductionTag, b.ProductionSHA = p.MainSHA, p.ProductionTag, p.ProductionSHA
+	b.MainSHA = p.MainSHA
+	if p.ProductionInMain {
+		b.ProductionTag, b.ProductionSHA = p.ProductionTag, p.ProductionSHA
+	}
 	if err := s.prepareTag(ctx, b, p); err != nil {
 		return err
 	}

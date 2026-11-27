@@ -244,8 +244,11 @@ func (s *Service) withTargetLock(ctx context.Context, target Target, operation f
 type references map[string]string
 
 func (s *Service) remoteRefs(ctx context.Context, t Target, patterns ...string) (references, error) {
-	args := append([]string{"ls-remote", "--heads", "--tags", t.Remote}, patterns...)
-	out, err := s.run(ctx, t.Repository, args...)
+	return s.lsRemote(ctx, t, append([]string{"--heads", "--tags", t.Remote}, patterns...)...)
+}
+
+func (s *Service) lsRemote(ctx context.Context, t Target, args ...string) (references, error) {
+	out, err := s.run(ctx, t.Repository, append([]string{"ls-remote"}, args...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -321,16 +324,7 @@ func (s *Service) observe(ctx context.Context, t Target, c domain.AppConfig, rel
 		return p, errors.New("服务主分支在远端不存在")
 	}
 	p.Tags = tagNames(refs)
-	p.BranchHeads = map[string]string{}
-	for ref, sha := range refs {
-		if strings.HasPrefix(ref, "refs/heads/") {
-			name := strings.TrimPrefix(ref, "refs/heads/")
-			p.Branches = append(p.Branches, name)
-			p.BranchHeads[name] = sha
-		}
-	}
-	sort.Strings(p.Branches)
-	p.ReleaseSHA = p.BranchHeads[release]
+	p.setBranchHeads(refs, release)
 	p.ProductionCandidates, err = s.Genbu.Versions(ctx, c, t.GenbuService)
 	p.RuntimeAvailable = err == nil
 	if err := ctx.Err(); err != nil {
@@ -386,6 +380,13 @@ func (s *Service) observe(ctx context.Context, t Target, c domain.AppConfig, rel
 		if err != nil {
 			return p, err
 		}
+		p.ProductionInRelease = (p.ProductionInMain && p.MainInRelease) || p.ProductionSHA == p.ReleaseSHA
+		if !p.ProductionInRelease {
+			p.ProductionInRelease, err = s.ancestor(ctx, t, p.ProductionSHA, p.ReleaseSHA)
+			if err != nil {
+				return p, err
+			}
+		}
 	}
 	if suggested, suggestionErr := SuggestedVersion(p); suggestionErr != nil {
 		p.Warning = strings.TrimSpace(p.Warning + "\n" + suggestionErr.Error())
@@ -423,6 +424,19 @@ func (s *Service) observe(ctx context.Context, t Target, c domain.AppConfig, rel
 		EmitProgress(ctx, Progress{Selection: t.Selection, Step: 1, State: "complete", Message: "生产 Tag 与主分支差异已就绪"})
 	}
 	return p, err
+}
+
+func (p *Preview) setBranchHeads(refs references, release string) {
+	p.BranchHeads = map[string]string{}
+	for ref, sha := range refs {
+		if strings.HasPrefix(ref, "refs/heads/") {
+			name := strings.TrimPrefix(ref, "refs/heads/")
+			p.Branches = append(p.Branches, name)
+			p.BranchHeads[name] = sha
+		}
+	}
+	sort.Strings(p.Branches)
+	p.ReleaseSHA = p.BranchHeads[release]
 }
 
 func (s *Service) save(b *Batch) error { return s.Store.Save(b) }

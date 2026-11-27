@@ -38,24 +38,19 @@ func TestProductionDeleteMenuOnlyAppearsOnHistoryRows(t *testing.T) {
 			v.Busy = state == "busy"
 			s.win = &mygo.Window{}
 			tester := productionIterationTester(s, 960, false)
-			_, hasMainMenu := tester.Find("更多生产发布操作")
-			if hasMainMenu {
-				if err := tester.Click("更多生产发布操作"); err != nil {
-					t.Fatal(err)
-				}
-			}
 			if tester.HasText("删除批次") {
-				t.Fatal("main production menu exposed batch deletion")
+				t.Fatal("main production header exposed batch deletion")
 			}
-			if hasMainMenu {
-				tester.Key(0, ui.KeyEscape)
+			history := "历史批次：1"
+			if state == "active" || state == "none" {
+				history = "历史批次：0"
 			}
-			if err := tester.Click("历史批次"); err != nil {
+			if err := tester.Click(history); err != nil {
 				t.Fatal(err)
 			}
-			if state == "busy" {
+			if state != "ended" {
 				if s.releaseUnit.state.production.historyDialog != nil {
-					t.Fatal("history opened while the active release was busy")
+					t.Fatal("history opened while busy or no historical records were visible")
 				}
 				return
 			}

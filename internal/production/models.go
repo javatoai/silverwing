@@ -34,6 +34,7 @@ type Preview struct {
 	ProductionTag        string                     `json:"productionTag"`
 	ProductionSHA        string                     `json:"productionSha"`
 	ProductionInMain     bool                       `json:"productionInMain,omitempty"`
+	ProductionInRelease  bool                       `json:"productionInRelease,omitempty"`
 	MainInRelease        bool                       `json:"mainInRelease,omitempty"`
 	ProductionStatus     domain.GenbuTagProbeStatus `json:"productionStatus"`
 	Warning              string                     `json:"warning"`
@@ -45,6 +46,11 @@ type Preview struct {
 	Tags                 []string                   `json:"tags"`
 	Commits              string                     `json:"commits"`
 	Diff                 string                     `json:"diff"`
+}
+
+type ReleaseBranchPlan struct {
+	Version string  `json:"version"`
+	Preview Preview `json:"preview"`
 }
 
 type Merge struct {
@@ -103,6 +109,7 @@ type Batch struct {
 	Target            Target         `json:"target"`
 	Version           string         `json:"version"`
 	ReleaseBranch     string         `json:"releaseBranch"`
+	ReleaseReused     bool           `json:"releaseReused,omitempty"`
 	CreatedAt         string         `json:"createdAt"`
 	ReleaseCreatedAt  string         `json:"releaseCreatedAt,omitempty"`
 	UpdatedAt         string         `json:"updatedAt"`
@@ -121,8 +128,33 @@ type Batch struct {
 	RetainedWorktrees []string       `json:"retainedWorktrees,omitempty"`
 }
 
+// ProductionBaselineReady reports whether this batch can use the observed
+// production Tag as a build baseline. A Tag already pushed by this batch may
+// remain on the release branch while the batch continues.
+func (b Batch) ProductionBaselineReady(p Preview) bool {
+	if p.Target != b.Target || p.ProductionSHA == "" || p.MainSHA == "" {
+		return false
+	}
+	if p.ProductionInMain {
+		return true
+	}
+	if !p.hasProductionBaseline() || !p.ProductionInRelease || p.ReleaseSHA == "" || p.ReleaseSHA != b.ReleaseSHA {
+		return false
+	}
+	for _, tag := range b.Tags {
+		if tag.Name == p.ProductionTag && tag.Commit == p.ProductionSHA {
+			return true
+		}
+	}
+	return false
+}
+
 func (b *Batch) confirmReleaseCreation() {
-	b.InitialSHA, b.ReleaseSHA = b.MainSHA, b.MainSHA
+	b.recordReleaseHead(b.MainSHA)
+}
+
+func (b *Batch) recordReleaseHead(sha string) {
+	b.InitialSHA, b.ReleaseSHA = sha, sha
 	if b.ReleaseCreatedAt == "" {
 		b.ReleaseCreatedAt = timestamp()
 	}
@@ -132,11 +164,15 @@ func (b Batch) LastTagCommit() string {
 	if len(b.Tags) > 0 {
 		return b.Tags[len(b.Tags)-1].Commit
 	}
+	if b.ReleaseReused {
+		return b.MainSHA
+	}
 	return b.InitialSHA
 }
 
 type Report struct {
-	Batches []Batch  `json:"batches"`
-	Preview *Preview `json:"preview,omitempty"`
-	Batch   *Batch   `json:"batch,omitempty"`
+	Batches     []Batch            `json:"batches"`
+	Preview     *Preview           `json:"preview,omitempty"`
+	Batch       *Batch             `json:"batch,omitempty"`
+	ReleasePlan *ReleaseBranchPlan `json:"releasePlan,omitempty"`
 }

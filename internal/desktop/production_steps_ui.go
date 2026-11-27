@@ -64,7 +64,7 @@ func productionActionStep(kind, follow string, b *production.Batch) int {
 			return 5
 		}
 		return 1
-	case "production.create":
+	case "production.release-preview", "production.create", "production.reuse-release":
 		return 3
 	case "production.merge-main":
 		if b == nil || b.InitialSHA == "" {
@@ -73,7 +73,7 @@ func productionActionStep(kind, follow string, b *production.Batch) int {
 		return 5
 	case "production.merge-release":
 		return 5
-	case "production.merge", "production.feature-preview":
+	case "production.merge", "production.feature-preview", "production.release-branches":
 		return 4
 	case "production.sync", "production.reprepare-tag":
 		return 5
@@ -143,9 +143,25 @@ func productionStep(v *productionView, b *production.Batch, step int) production
 
 func (s *app) renderProductionInitialization(c *ui.Context, p palette, v *productionView, b *production.Batch) {
 	pending := productionIntentStep(b)
+	initialized := b != nil && b.InitialSHA != ""
+	var baselineActions func()
+	if !initialized {
+		baselineActions = func() {
+			s.renderProductionCheckButtons(c, p, v)
+			if pending == 2 {
+				s.renderProductionRecoveryActions(c, p, v, *b)
+			} else if pending != 3 || productionMainIncluded(v.Preview) {
+				s.renderProductionMainMerge(c, p, v, b, "initial")
+			}
+		}
+	}
 	productionCard(c, p, "production-initialization-baseline", "生产 Tag → 主分支", s.productionBaselineStatus(v, b), func() {
+		if initialized {
+			s.renderProductionBaselineSummary(c, p, nil, b)
+			return
+		}
 		if v.Preview != nil {
-			s.renderProductionBaseline(c, p, v)
+			s.renderProductionBaselineSummary(c, p, v.Preview, nil)
 		} else {
 			label(c, "检查线上运行版本及远端 Git Tag，再核对与主分支的差异。", 12, p.muted).Wrap()
 		}
@@ -157,14 +173,7 @@ func (s *app) renderProductionInitialization(c *ui.Context, p palette, v *produc
 		if pending == 2 {
 			s.renderProductionRecoveryDetails(c, p, v, *b)
 		}
-	}, func() {
-		s.renderProductionCheckButtons(c, p, v)
-		if pending == 2 {
-			s.renderProductionRecoveryActions(c, p, v, *b)
-		} else if pending != 3 || productionMainIncluded(v.Preview) {
-			s.renderProductionMainMerge(c, p, v, b, "initial")
-		}
-	})
+	}, baselineActions)
 
 	var releaseActions func()
 	if pending == 3 {
@@ -173,7 +182,7 @@ func (s *app) renderProductionInitialization(c *ui.Context, p palette, v *produc
 		releaseActions = func() {
 			if productionButton(c, "production-create", "创建 release", p, true, v.Busy || b != nil && b.Intent != nil || !productionMainIncluded(v.Preview)) {
 				v.ActiveStep = 3
-				s.confirmProductionCreate(v)
+				s.checkProductionReleaseBranch(v)
 			}
 		}
 	}

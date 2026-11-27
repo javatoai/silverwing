@@ -91,8 +91,8 @@ func TestGenbuReadProductionLogFindCopyAndTail(t *testing.T) {
 	}
 	d.tail = "1001"
 	s.readGenbuBuildLog(d)
-	if !strings.Contains(d.logError, "1 到 1000") || d.logRequest != nil {
-		t.Fatalf("out-of-range tail started a read: request=%v error=%q", d.logRequest, d.logError)
+	if !strings.Contains(d.tailError, "1 到 1000") || d.logRequest != nil {
+		t.Fatalf("out-of-range tail started a read: request=%v error=%q", d.logRequest, d.tailError)
 	}
 	d.tail = " 12 "
 	s.readGenbuBuildLog(d)

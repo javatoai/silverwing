@@ -1,6 +1,7 @@
 package desktop
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -35,6 +36,58 @@ func openProductionHistoryTest(t *testing.T, s *app, v *productionView, backend 
 	backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batches: append([]production.Batch(nil), s.releaseUnit.state.production.batches...)}}}
 	productionTestUpdate(t, window)
 	return s.releaseUnit.state.production.historyDialog
+}
+
+func TestProductionHeaderHistoryCountMatchesDrawer(t *testing.T) {
+	s, v, b := productionFixture(t)
+	state := s.releaseUnit.state.production
+	now := time.Now()
+	other := productionHistoryRecord(b, "another-service", "release/other-service", now)
+	other.Target.ServiceID = "another"
+	deleted := productionHistoryRecord(b, "deleted", "release/deleted", now)
+	state.batches = append(state.batches, other, deleted)
+	state.deletedBatches = map[string]bool{deleted.ID: true}
+	tester := productionIterationTester(s, 960, false)
+	if err := tester.Click("历史批次：0"); err != nil {
+		t.Fatal(err)
+	}
+	if state.historyDialog != nil {
+		t.Fatal("zero history count opened the drawer")
+	}
+
+	for _, branch := range []string{"release/2.3.41", "release/2.3.42", "release/2.3.43"} {
+		state.batches = append(state.batches, productionHistoryRecord(b, branch, branch, now))
+	}
+	tester.Frame()
+	if err := tester.Click("历史批次：3"); err != nil {
+		t.Fatal(err)
+	}
+	d := state.historyDialog
+	if d == nil || d.Selection != v.Selection || len(s.productionHistoryRecords(d)) != 3 || d.record(b.ID) != nil || d.record(deleted.ID) != nil || d.record(other.ID) != nil {
+		t.Fatal("header count did not match the selected service's drawer")
+	}
+	if err := tester.Click("关闭"); err != nil {
+		t.Fatal(err)
+	}
+
+	var config domain.AppConfig
+	if err := json.Unmarshal([]byte(s.settingsUnit.state.configJSON), &config); err != nil {
+		t.Fatal(err)
+	}
+	config.Services[0].GenbuProbeEnabled = false
+	data, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.settingsUnit.state.configJSON = string(data)
+	tester.Frame()
+	if err := tester.Click("历史批次：4"); err != nil {
+		t.Fatal(err)
+	}
+	d = state.historyDialog
+	if d == nil || !d.readOnly || len(s.productionHistoryRecords(d)) != 4 || d.record(b.ID) == nil {
+		t.Fatal("read-only header count lost the active record visible in the drawer")
+	}
 }
 
 func TestProductionHistoryListLocalReadFailureRetryAndScope(t *testing.T) {
@@ -85,11 +138,13 @@ func TestProductionHistoryClosingLoadingDrawerRetiresItsListResult(t *testing.T)
 	now := time.Now()
 	retired := productionHistoryRecord(b, "retired-read", "release/retired-read", now)
 	fresh := productionHistoryRecord(b, "current-read", "release/current-read", now)
+	cached := productionHistoryRecord(b, "cached-read", "release/cached-read", now)
 	state := s.releaseUnit.state.production
+	state.batches = append(state.batches, cached)
 	tester := productionIterationTester(s, 960, false)
 	open := func() *productionHistoryDialog {
 		t.Helper()
-		if err := tester.Click("历史批次"); err != nil {
+		if err := tester.Click("历史批次：1"); err != nil {
 			t.Fatal(err)
 		}
 		if call := productionTestCall(t, backend); call.Kind != "production.list" {
@@ -120,12 +175,13 @@ func TestProductionHistoryClosingLoadingDrawerRetiresItsListResult(t *testing.T)
 	newDrawer := open()
 	newWorker := v.request
 	retiredUpdate()
-	if newDrawer == oldDrawer || state.historyDialog != newDrawer || !newDrawer.Loading || !v.Busy || v.request != newWorker || len(s.productionHistoryRecords(newDrawer)) != 0 {
+	list := s.productionHistoryRecords(newDrawer)
+	if newDrawer == oldDrawer || state.historyDialog != newDrawer || !newDrawer.Loading || !v.Busy || v.request != newWorker || len(list) != 1 || list[0].ID != cached.ID {
 		t.Fatal("retired result modified the reopened drawer or its request")
 	}
 	backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batches: []production.Batch{b, fresh}}}}
 	productionTestUpdate(t, window)
-	list := s.productionHistoryRecords(newDrawer)
+	list = s.productionHistoryRecords(newDrawer)
 	if !newDrawer.Open || newDrawer.Loading || newDrawer.Error != "" || len(list) != 1 || list[0].ID != fresh.ID || !reflect.DeepEqual(*v, before) {
 		t.Fatal("the reopened drawer did not show its own result and preserve the release view")
 	}
@@ -157,7 +213,7 @@ func TestProductionHistoryDrawerNavigationPreservesCurrentView(t *testing.T) {
 				}
 			}
 			tester := productionIterationTester(s, 960, false)
-			if err := tester.Click("历史批次"); err != nil {
+			if err := tester.Click("历史批次：2"); err != nil {
 				t.Fatal(err)
 			}
 			d := s.releaseUnit.state.production.historyDialog

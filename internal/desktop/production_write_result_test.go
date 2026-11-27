@@ -71,6 +71,23 @@ func TestProductionWritesUpdateVisibleStateWithoutFollowupReads(t *testing.T) {
 	}
 }
 
+func TestProductionReleaseSyncKeepsOwnDeployedTagEvidence(t *testing.T) {
+	_, v, b := productionFixture(t)
+	p := v.Preview
+	b.ProductionTag, b.ProductionSHA, b.MainSHA = p.ProductionTag, p.ProductionSHA, p.MainSHA
+	p.ProductionTag, p.ProductionSHA = b.Version, strings.Repeat("e", 40)
+	b.Tags = []production.Tag{{Name: p.ProductionTag, Commit: p.ProductionSHA}}
+	p.RuntimeAvailable, p.ProductionCandidates = true, []string{p.ProductionTag}
+	p.ProductionInMain, p.ProductionInRelease, p.MainInRelease = false, true, false
+	b.ReleaseSHA = strings.Repeat("f", 40)
+
+	applyProductionWritePreview(v, b, "production.merge-release")
+	got := v.Preview
+	if got.ProductionTag != p.ProductionTag || got.ProductionSHA != p.ProductionSHA || got.ProductionInMain || !got.MainInRelease || !got.ProductionInRelease || got.ReleaseSHA != b.ReleaseSHA || !b.ProductionBaselineReady(*got) {
+		t.Fatalf("release sync replaced the observed baseline or lost release ancestry: %+v", got)
+	}
+}
+
 func TestProductionTagPreparationUsesCurrentRemoteTagNames(t *testing.T) {
 	s, v, b, backend, window := productionRequestFixture(t)
 	v.Preview.Tags = []string{"2.3.43", "deleted-tag"}

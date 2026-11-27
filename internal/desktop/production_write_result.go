@@ -39,13 +39,16 @@ func applyProductionWritePreview(v *productionView, b production.Batch, kind str
 		p.BranchHeads = map[string]string{}
 	}
 	switch kind {
-	case "production.create", "production.merge", "production.merge-main", "production.merge-release":
+	case "production.create", "production.reuse-release", "production.merge", "production.merge-main", "production.merge-release":
 		if kind != "production.merge" {
 			if p.MainSHA != b.MainSHA {
-				p.MainInRelease = false
+				p.MainInRelease, p.ProductionInMain = false, false
 			}
 			p.MainSHA = b.MainSHA
 			p.BranchHeads[b.Target.MainBranch] = b.MainSHA
+		}
+		if kind == "production.create" || kind == "production.reuse-release" && p.ReleaseSHA != b.ReleaseSHA {
+			p.ProductionInRelease = false
 		}
 		p.ReleaseSHA = b.ReleaseSHA
 		if b.ReleaseSHA != "" {
@@ -55,12 +58,22 @@ func applyProductionWritePreview(v *productionView, b production.Batch, kind str
 				slices.Sort(p.Branches)
 			}
 		}
-		if kind != "production.merge" && p.ProductionSHA != "" {
+		// A successful release sync can include the live Tag on release alone.
+		// Keep the observed live identity and the actual main relationship.
+		if kind != "production.merge" && kind != "production.merge-release" && p.ProductionSHA != "" {
+			if p.ProductionSHA != b.ProductionSHA {
+				p.ProductionInRelease = false
+			}
 			p.ProductionTag, p.ProductionSHA = b.ProductionTag, b.ProductionSHA
 			p.ProductionInMain = true
 		}
 		if kind == "production.create" || kind == "production.merge-release" || p.MainSHA == p.ReleaseSHA {
 			p.MainInRelease = true
+		} else if kind == "production.reuse-release" && v.Preview.ReleaseSHA != b.ReleaseSHA {
+			p.MainInRelease = false
+		}
+		if productionMainIncluded(&p) && productionReleaseIncluded(&p) {
+			p.ProductionInRelease = true
 		}
 		if kind == "production.merge-main" {
 			// The production Tag is now contained; the old incoming diff is stale.

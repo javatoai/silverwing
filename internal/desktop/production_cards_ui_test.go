@@ -63,7 +63,7 @@ func TestProductionCardsGroupStatusesAndRightAlignedActions(t *testing.T) {
 						t.Fatalf("cards must stack with equal widths and gaps: previous=%+v card=%+v", previous, card)
 					}
 					previous = card
-					button := map[string]string{productionInitializationCardTitles[0]: "无需合并", "合并分支": "合并到 release", "构建生产 Tag": "构建 Tag"}[title]
+					button := map[string]string{"合并分支": "合并到 release", "构建生产 Tag": "构建 Tag"}[title]
 					if button == "" {
 						if _, exists := tester.Find(title + "操作栏"); exists {
 							t.Fatal("completed step kept an empty action bar")
@@ -83,7 +83,7 @@ func TestProductionCardsGroupStatusesAndRightAlignedActions(t *testing.T) {
 				if tester.HasText("批次初始化") {
 					t.Fatal("old initialization wrapper remains")
 				}
-				if tester.HasText(b.RetainedWorktrees[0]) || tester.HasText("保留的工作区 · 1 个") || tester.HasText("最近 Tag") || tester.HasText("构建 构建中") {
+				if tester.HasText(b.RetainedWorktrees[0]) || tester.HasText("最近 Tag") || tester.HasText("构建 构建中") {
 					t.Fatal("main content still exposes recovery paths or duplicate Tag labels")
 				}
 				captureProductionSummary(t, tester, fmt.Sprintf("cards-%d-dark-%t", width, dark))
@@ -240,7 +240,7 @@ func TestProductionTagRecordsCopyAndHistoryRemainScoped(t *testing.T) {
 	}
 }
 
-func TestProductionWorktreesMenuDialogAndStaleContext(t *testing.T) {
+func TestProductionWorktreesHeaderDialogAndStaleContext(t *testing.T) {
 	for _, change := range []string{"escape", "batch", "service", "home", "config", "removed"} {
 		t.Run(change, func(t *testing.T) {
 			s, v, b := productionFixture(t)
@@ -248,9 +248,6 @@ func TestProductionWorktreesMenuDialogAndStaleContext(t *testing.T) {
 			b.RetainedWorktrees = []string{path, "C:/synthetic/second"}
 			s.releaseUnit.state.production.batches[0] = b
 			tester := productionCardsTester(s, 960, true)
-			if err := tester.Click("更多生产发布操作"); err != nil {
-				t.Fatal(err)
-			}
 			if err := tester.Click("保留的工作区 · 2 个"); err != nil {
 				t.Fatal(err)
 			}
@@ -416,8 +413,10 @@ func TestProductionCardRefreshRejectsStaleContextAndHidesWithoutTags(t *testing.
 	}
 }
 
-func TestProductionInitializationCompletionUsesCurrentEvidence(t *testing.T) {
+func TestProductionPendingInitializationCompletionUsesCurrentEvidence(t *testing.T) {
 	s, v, b := productionFixture(t)
+	initialSHA := b.InitialSHA
+	b.InitialSHA = ""
 	v.Steps = map[int]productionStepView{1: {State: "complete"}, 2: {State: "complete"}, 3: {State: "complete"}}
 	if status := s.productionInitializationStepStatus(v, &b, 2); status.Text != "已完成" || !strings.Contains(status.Tooltip, v.Preview.ProductionTag) {
 		t.Fatal("verified containment lost its completion or tooltip")
@@ -432,6 +431,7 @@ func TestProductionInitializationCompletionUsesCurrentEvidence(t *testing.T) {
 			t.Fatalf("step %d completed with an unknown target", step)
 		}
 	}
+	b.InitialSHA = initialSHA
 	if s.productionInitializationStepStatus(v, &b, 3).Text != "已完成" {
 		t.Fatal("a new comparison erased the saved release creation result")
 	}

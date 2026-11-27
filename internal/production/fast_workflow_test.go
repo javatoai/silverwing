@@ -17,6 +17,7 @@ import (
 type observedGit struct {
 	Git
 	reads, fetches, pushes, readsAfterPush int
+	readArgs                               []string
 	fetchArgs                              []string
 	acknowledged                           bool
 }
@@ -40,6 +41,7 @@ func (g *observedGit) RunContext(ctx context.Context, path string, timeout time.
 			}
 			if args[0] == "ls-remote" {
 				g.reads++
+				g.readArgs = append(g.readArgs, args...)
 			} else {
 				g.fetches++
 				g.fetchArgs = append(g.fetchArgs, args...)

@@ -58,7 +58,7 @@ type versionReference struct {
 
 // Remote release branches reserve their version even before a Tag is pushed.
 // Both preview representations are accepted, including older partial previews.
-func versionReferences(p Preview) []versionReference {
+func versionReferences(p Preview, reusedBranch string) []versionReference {
 	var refs []versionReference
 	for _, name := range p.Tags {
 		if v, ok := parseVersion(name); ok {
@@ -75,7 +75,7 @@ func versionReferences(p Preview) []versionReference {
 		}
 	}
 	for name := range branches {
-		if !strings.HasPrefix(name, "release/") {
+		if name == reusedBranch || !strings.HasPrefix(name, "release/") {
 			continue
 		}
 		if v, ok := parseVersion(strings.TrimPrefix(name, "release/")); ok {
@@ -111,7 +111,7 @@ func SuggestedVersion(p Preview) (string, error) {
 	if !ok {
 		return "", errors.New("线上生产 Tag 不是三／四段正式数字，无法自动建议版本，请手工填写三段基础版本")
 	}
-	return nextSeriesVersion(v, versionReferences(p))
+	return nextSeriesVersion(v, versionReferences(p, ""))
 }
 
 func versionPolicyError(message string, v [4]uint64, p Preview, refs []versionReference) error {
@@ -128,11 +128,15 @@ func versionPolicyError(message string, v [4]uint64, p Preview, refs []versionRe
 // ValidateVersion checks a new release only. Existing batch records validate
 // syntax separately and continue to use their original release and Tag family.
 func ValidateVersion(name string, p Preview) error {
+	return validateVersion(name, p, "")
+}
+
+func validateVersion(name string, p Preview, reusedBranch string) error {
 	v, err := parseBaseVersion(name)
 	if err != nil {
 		return err
 	}
-	refs := versionReferences(p)
+	refs := versionReferences(p, reusedBranch)
 	var occupied []string
 	for _, ref := range refs {
 		if sameSeries(v, ref.version) && v[2] == ref.version[2] {

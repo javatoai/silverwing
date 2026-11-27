@@ -366,7 +366,7 @@ func (s *app) productionRequestViewFromHistory(v *productionView, action applica
 	ctx, cancel := context.WithCancel(context.Background())
 	worker := &productionWorker{done: make(chan struct{}), buildContinuation: follow == "build-preview" || follow == "build-publish"}
 	switch action.Kind {
-	case "production.list", "production.inspect", "production.feature-preview", "production.pending-preview", "production.refresh-build":
+	case "production.list", "production.inspect", "production.release-branches", "production.release-preview", "production.feature-preview", "production.pending-preview", "production.refresh-build":
 		worker.cancelOnDisable = true
 	}
 	worker.cancel = func() {
@@ -455,7 +455,8 @@ func (s *app) productionRequestViewFromHistory(v *productionView, action applica
 			if optionalCtx.Err() != nil || v.Steps == nil || !s.productionProgressCurrent(state, v, worker) || progress.Selection != selection {
 				return
 			}
-			if progress.BatchID != "" && action.Kind != "production.create" && !(action.Kind == "production.merge-main" && selectedBatch == "") && progress.BatchID != selectedBatch {
+			if progress.BatchID != "" && action.Kind != "production.create" && action.Kind != "production.reuse-release" &&
+				!(action.Kind == "production.merge-main" && selectedBatch == "") && progress.BatchID != selectedBatch {
 				return
 			}
 			step := progress.Step
@@ -557,6 +558,9 @@ func (s *app) productionRequestViewFromHistory(v *productionView, action applica
 			}
 			v.Busy = false
 			v.request = nil
+			if action.Kind == "production.release-preview" {
+				delete(v.Steps, 3)
+			}
 			if s.releaseUnit.state.production != state || s.snapshot.Home != home {
 				return
 			}
@@ -620,7 +624,8 @@ func (s *app) productionRequestViewFromHistory(v *productionView, action applica
 						}
 					}
 					state.mergeBatch(incoming)
-					if (action.Kind == "production.create" || action.Kind == "production.merge-main" && selectedBatch == "") && v.BatchID == selectedBatch && v.Preview == previewAtStart {
+					if (action.Kind == "production.create" || action.Kind == "production.reuse-release" && err == nil ||
+						action.Kind == "production.merge-main" && selectedBatch == "") && v.BatchID == selectedBatch && v.Preview == previewAtStart {
 						v.BatchID = report.Batch.ID
 					}
 				}
@@ -637,6 +642,25 @@ func (s *app) productionRequestViewFromHistory(v *productionView, action applica
 				v.Preview, v.Error = nil, "相关配置已变化，请重新检查生产发布目标。"
 				v.Steps, v.PreparationInvalid = nil, true
 				return
+			}
+			if action.Kind == "production.release-preview" {
+				version, _ := action.Payload["version"].(string)
+				if worker.canceled.Load() || s.page != "production" || s.productionView() != v || !s.productionReleaseInputCurrent(v, selectedBatch, version) {
+					window.Invalidate()
+					return
+				}
+				if err == nil {
+					plan := report.ReleasePlan
+					if plan == nil || plan.Version != version || !productionMainIncluded(&plan.Preview) ||
+						!productionReleaseBaselineMatches(v.Preview, plan.Preview) ||
+						(plan.Preview.ReleaseSHA != "" && !productionFullSHA(plan.Preview.ReleaseSHA)) {
+						err = errors.New("未能确认远端 release 分支，请重新检查。")
+					} else {
+						s.confirmProductionReleasePlan(v, *plan)
+						window.Invalidate()
+						return
+					}
+				}
 			}
 			baselineFailed := err != nil && (errors.Is(err, production.ErrProductionBaselineUnavailable) || action.Kind == "production.inspect" ||
 				action.Kind == "production.prepare-tag" && (report.Preview == nil || report.Preview.ProductionSHA == ""))
@@ -696,7 +720,11 @@ func (s *app) productionRequestViewFromHistory(v *productionView, action applica
 					v.invalidateProductionBranchResult(report.Preview)
 					preview := *report.Preview
 					v.Preview = &preview
-					v.updateSuggestedBranch(report.Preview.SuggestedVersion)
+					if action.Kind == "production.release-branches" {
+						v.BuildChecked = false
+					} else {
+						v.updateSuggestedBranch(report.Preview.SuggestedVersion)
+					}
 				}
 				if b := s.productionBatch(v); b != nil && b.TagPlan != nil && !productionTagPlanCurrent(v, b) {
 					v.PreparationInvalid = true

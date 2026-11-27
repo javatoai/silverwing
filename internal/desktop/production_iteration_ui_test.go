@@ -15,6 +15,7 @@ import (
 	"silverwing-go/internal/domain"
 	"silverwing-go/internal/production"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -46,21 +47,24 @@ func TestProductionCompactServiceLabelsDoNotChangeWithSearch(t *testing.T) {
 	}
 }
 
-func TestProductionMoreOffersBatchActionsWithoutManualBaseline(t *testing.T) {
+func TestProductionEndBatchOnlyAvailableForActiveBatch(t *testing.T) {
 	s, v, _ := productionFixture(t)
+	s.win = &mygo.Window{}
 	tester := productionIterationTester(s, 960, false)
-	if err := tester.Click("更多生产发布操作"); err != nil {
-		t.Fatal(err)
-	}
 	if tester.HasText("手动确认生产 Tag") || !tester.HasText("结束批次") {
-		t.Fatal("more menu must expose only the applicable batch actions")
+		t.Fatal("active release header is missing the end action or exposes a manual baseline")
 	}
-	tester.Key(0, ui.KeyEscape)
+	v.Busy = true
+	tester.Frame()
+	if err := tester.Click("结束批次"); err != nil || s.confirmationDialog != nil {
+		t.Fatal("busy batch exposed the end confirmation")
+	}
+	v.Busy = false
 	s.ensureProduction().batches = nil
 	v.BatchID = ""
 	tester.Frame()
-	if tester.HasText("更多生产发布操作") || !tester.HasText("重新检查") {
-		t.Fatal("unstarted release must show baseline inspection without an empty action menu")
+	if tester.HasText("结束批次") || !tester.HasText("重新检查") {
+		t.Fatal("unstarted release must show baseline inspection without an end action")
 	}
 }
 

@@ -8,7 +8,7 @@ import (
 	"silverwing-go/internal/domain"
 )
 
-func (s *Service) checkPreview(ctx context.Context, p Preview, release string) (Preview, domain.AppConfig, error) {
+func (s *Service) observeMatchingBaseline(ctx context.Context, p Preview, release string) (Preview, domain.AppConfig, error) {
 	c, err := s.validate(ctx, p.Target)
 	if err != nil {
 		return p, c, err
@@ -23,6 +23,14 @@ func (s *Service) checkPreview(ctx context.Context, p Preview, release string) (
 	if !sameProductionBaseline(p, fresh) || fresh.MainSHA != p.MainSHA {
 		return fresh, c, errors.New("生产基线或主分支已变化，请重新检查")
 	}
+	return fresh, c, nil
+}
+
+func (s *Service) checkPreview(ctx context.Context, p Preview, release string) (Preview, domain.AppConfig, error) {
+	fresh, c, err := s.observeMatchingBaseline(ctx, p, release)
+	if err != nil {
+		return fresh, c, err
+	}
 	if release != "" && fresh.BranchHeads[release] != p.ReleaseSHA {
 		return fresh, c, errors.New("release 已变化，请重新检查差异并确认")
 	}
@@ -31,7 +39,7 @@ func (s *Service) checkPreview(ctx context.Context, p Preview, release string) (
 }
 
 func (s *Service) Create(ctx context.Context, preview Preview, version, expectedID string) (Batch, error) {
-	return s.initialize(ctx, preview, version, false, expectedID)
+	return s.initialize(ctx, preview, version, false, expectedID, "")
 }
 
 func (s *Service) InspectBatch(ctx context.Context, id string) (Batch, Preview, error) {
@@ -40,22 +48,59 @@ func (s *Service) InspectBatch(ctx context.Context, id string) (Batch, Preview, 
 	b, err := s.withBatch(ctx, id, func(b *Batch, c domain.AppConfig) error {
 		// Read failures leave the persisted state of an unfinished action alone.
 		p, readErr = s.observe(ctx, b.Target, c, b.ReleaseBranch, true)
-		if readErr != nil || p.ReleaseSHA == "" || b.ReleaseSHA == "" || p.ReleaseSHA == b.ReleaseSHA {
-			return nil
-		}
-		var diff, commits string
-		diff, readErr = s.run(ctx, b.Target.Repository, "diff", "--stat", b.ReleaseSHA, p.ReleaseSHA, "--")
-		if readErr != nil {
-			return nil
-		}
-		commits, readErr = s.run(ctx, b.Target.Repository, "log", "--oneline", "--max-count=80", b.ReleaseSHA+".."+p.ReleaseSHA)
-		if readErr == nil {
-			p.Diff += "\n\n远端 release 相对本地批次的文件变化：\n" + diff
-			p.Commits += "\n\n远端 release 相对本地批次的新增提交（最多 80 条）：\n" + commits
+		if readErr == nil && releaseBranchDrifted(b, p) {
+			readErr = s.readReleaseBranchDrift(ctx, b, &p)
 		}
 		return nil
 	})
 	return b, p, errors.Join(err, readErr)
+}
+
+// InspectReleaseBranches loads the branch choices and release drift for an
+// initialized batch. Baseline and Tag checks remain with their own actions.
+func (s *Service) InspectReleaseBranches(ctx context.Context, id string) (Batch, Preview, error) {
+	var p Preview
+	var readErr error
+	b, err := s.withBatch(ctx, id, func(b *Batch, _ domain.AppConfig) error {
+		if b.InitialSHA == "" || b.ReleaseBranch == "" {
+			readErr = errors.New("请先创建或复用当前批次的 release 分支")
+			return nil
+		}
+		p = Preview{Target: b.Target, ObservedAt: timestamp(), ProductionStatus: unknownStatus()}
+		var refs references
+		refs, readErr = s.lsRemote(ctx, b.Target, "--heads", b.Target.Remote)
+		if readErr != nil {
+			return nil
+		}
+		p.MainSHA = refs["refs/heads/"+b.Target.MainBranch]
+		p.setBranchHeads(refs, b.ReleaseBranch)
+		if releaseBranchDrifted(b, p) {
+			readErr = s.fetchMissing(ctx, b.Target, refs, "refs/heads/"+b.ReleaseBranch)
+			if readErr == nil {
+				readErr = s.readReleaseBranchDrift(ctx, b, &p)
+			}
+		}
+		return nil
+	})
+	return b, p, errors.Join(err, readErr)
+}
+
+func releaseBranchDrifted(b *Batch, p Preview) bool {
+	return p.ReleaseSHA != "" && b.ReleaseSHA != "" && p.ReleaseSHA != b.ReleaseSHA
+}
+
+func (s *Service) readReleaseBranchDrift(ctx context.Context, b *Batch, p *Preview) error {
+	diff, err := s.run(ctx, b.Target.Repository, "diff", "--stat", b.ReleaseSHA, p.ReleaseSHA, "--")
+	if err != nil {
+		return err
+	}
+	commits, err := s.run(ctx, b.Target.Repository, "log", "--oneline", "--max-count=80", b.ReleaseSHA+".."+p.ReleaseSHA)
+	if err != nil {
+		return err
+	}
+	p.Diff += "\n\n远端 release 相对本地批次的文件变化：\n" + diff
+	p.Commits += "\n\n远端 release 相对本地批次的新增提交（最多 80 条）：\n" + commits
+	return nil
 }
 
 func (s *Service) FeaturePreview(ctx context.Context, id, branch string) (Batch, Preview, error) {

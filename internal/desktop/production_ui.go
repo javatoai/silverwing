@@ -162,6 +162,7 @@ func (s *app) renderProductionDetail(c *ui.Context, p palette) {
 	b := s.productionBatch(v)
 	s.productionDisclosures(v, b)
 	waiting := s.productionWaitingToStart(v, b)
+	canManageBatch := !probeDisabled && !waiting && b != nil
 	historical := false
 	for _, choice := range s.releaseUnit.state.production.choices {
 		if choice.ID == v.Selection.ServiceID && choice.Historical {
@@ -192,22 +193,21 @@ func (s *app) renderProductionDetail(c *ui.Context, p palette) {
 			compactState(c, "准备中", p)
 		}
 		ui.Box(c).Grow(1)
-		if productionButton(c, "production-history-open", "历史批次", p, false, v.Busy) {
-			s.openProductionHistory(v)
-		}
-		if !probeDisabled && !waiting && b != nil {
-			miniButton(c, p, "production-more", "more", "更多生产发布操作", false).Disabled(v.Busy).Menu(func(menu *ui.Menu) {
-				if len(b.RetainedWorktrees) > 0 {
-					if menu.Item(fmt.Sprintf("保留的工作区 · %d 个", len(b.RetainedWorktrees))).Chosen() {
-						s.openProductionWorktrees(v, *b)
-					}
-					menu.Separator()
+		ui.Row(c).Shrink(0).Gap(10).AlignItems(ui.Center).Children(func() {
+			if canManageBatch && len(b.RetainedWorktrees) > 0 {
+				name := fmt.Sprintf("保留的工作区 · %d 个", len(b.RetainedWorktrees))
+				if iconButtonDisabled(c, "production-worktrees-open", "folder", name, p, v.Busy).Clicked() {
+					s.openProductionWorktrees(v, *b)
 				}
-				if menu.Item("结束批次").Disabled(v.Busy).Chosen() {
-					s.confirmProductionEnd(v, *b)
-				}
-			})
-		}
+			}
+			count := state.productionHistoryCount(v.Selection, probeDisabled)
+			if productionButton(c, "production-history-open", fmt.Sprintf("历史批次：%d", count), p, false, v.Busy || count == 0) {
+				s.openProductionHistory(v)
+			}
+			if canManageBatch && productionButton(c, "production-end", "结束批次", p, false, v.Busy) {
+				s.confirmProductionEnd(v, *b)
+			}
+		})
 	})
 	if probeDisabled {
 		return
@@ -250,9 +250,13 @@ func (s *app) renderProductionDetail(c *ui.Context, p palette) {
 	}
 }
 
-func (s *app) renderProductionBaseline(c *ui.Context, p palette, v *productionView) {
-	preview := v.Preview
+func (s *app) renderProductionBaselineSummary(c *ui.Context, p palette, preview *production.Preview, completed *production.Batch) {
 	ui.Column(c).FillWidth().MaxWidth(600).MinWidth(0).AlignSelf(ui.Start).Gap(8).Label("生产基线摘要").Children(func() {
+		if completed != nil {
+			productionInfoRow(c, p, "production-baseline-tag", "基线生产 Tag", firstNonEmpty(completed.ProductionTag, "未记录"), "")
+			productionInfoRow(c, p, "production-baseline-main", "主分支", completed.Target.Remote+"/"+completed.Target.MainBranch, completed.MainSHA)
+			return
+		}
 		productionInfoRow(c, p, "production-baseline-tag", "线上生产 Tag", firstNonEmpty(preview.ProductionTag, "未识别"), "")
 		productionInfoRow(c, p, "production-baseline-main", "主分支", preview.Target.Remote+"/"+preview.Target.MainBranch, preview.MainSHA)
 		if len(preview.ProductionCandidates) > 1 {
@@ -278,6 +282,9 @@ func (s *app) renderProductionActive(c *ui.Context, p palette, v *productionView
 		mergeActions = func() { s.renderProductionRecoveryActions(c, p, v, b) }
 	} else if !conflict {
 		mergeActions = func() {
+			if productionButton(c, "production-release-branches", "刷新分支", p, false, blocked) {
+				s.requestProductionReleaseBranches(v, &b)
+			}
 			if remoteChanged && productionButton(c, "production-adopt", "查看并采纳远端", p, false, v.Busy) {
 				s.confirmProductionAdopt(v, b)
 			}
@@ -325,7 +332,11 @@ func (s *app) renderProductionActive(c *ui.Context, p palette, v *productionView
 				diffLabel = "无差异"
 			}
 			if productionButton(c, "production-tag-diff", diffLabel, p, false, false) {
-				s.openProductionDiff(v, "本次构建差异", b.ReleaseBranch, firstNonEmpty(lastProductionTagName(b), "release 初始提交"), b.TagPlan.Commit, b.LastTagCommit(), false)
+				baseline := "release 初始提交"
+				if b.ReleaseReused {
+					baseline = "主分支提交"
+				}
+				s.openProductionDiff(v, "本次构建差异", b.ReleaseBranch, firstNonEmpty(lastProductionTagName(b), baseline), b.TagPlan.Commit, b.LastTagCommit(), false)
 			}
 		}
 		s.renderProductionBuildRefresh(c, p, v, b)
@@ -513,17 +524,23 @@ func (s *app) confirmProductionCreate(v *productionView) {
 		v.Error = "请先重新检查生产基线。"
 		return
 	}
-	p, id := *v.Preview, v.BatchID
+	p := *v.Preview
 	version, err := production.ReleaseVersion(v.Version, p)
 	if err != nil {
 		v.Error = err.Error()
 		return
 	}
+	s.confirmProductionNewRelease(v, p, version, nil)
+}
+
+func (s *app) confirmProductionNewRelease(v *productionView, p production.Preview, version string, current func() bool) {
+	id := v.BatchID
 	detail := productionTargetDetail(p.Target) + fmt.Sprintf("\n生产 Tag：%s (%s)\n主分支提交：%s\n新分支：release/%s\n主分支已有提交会全部保留。\n\n%s\n%s", p.ProductionTag, p.ProductionSHA, p.MainSHA, version, p.Commits, p.Diff)
 	s.confirmProduction(v, p.Target, productionConfirmationContent{
 		Title: "创建 release 分支", ConfirmLabel: "创建并推送", Detail: detail,
 		Source: p.Target.Remote + "/" + p.Target.MainBranch, Destination: p.Target.Remote + "/release/" + version,
 		Notices: []string{"本次仅创建并推送新分支。"},
+		Current: current,
 	}, func() {
 		s.productionRequestFor(v, application.Action{Kind: "production.create", Payload: map[string]any{"batchId": id, "preview": p, "version": version, "confirmed": true}}, "")
 	})
@@ -547,7 +564,7 @@ func (s *app) confirmProductionFeature(v *productionView, p production.Preview, 
 
 func (s *app) confirmProductionSync(v *productionView, p production.Preview) {
 	b := s.productionBatch(v)
-	if b == nil || b.Ended || p.ProductionSHA == "" {
+	if b == nil || b.Ended || !b.ProductionBaselineReady(p) {
 		return
 	}
 	id := b.ID

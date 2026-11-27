@@ -67,12 +67,12 @@ func TestProductionHierarchyHasDirectBuildAndPermanentInitialization(t *testing.
 				if productionExactText(tester, "release 分支") || tester.HasText("选择要合并的远端分支") {
 					t.Error("redundant release label or branch picker instructions are still visible")
 				}
-				for _, result := range []string{"生产 Tag → 主分支", "创建 release 分支", "重新检查"} {
+				for _, result := range []string{"生产 Tag → 主分支", "创建 release 分支"} {
 					if !tester.HasText(result) {
 						t.Errorf("initialization result must remain visible: %s", result)
 					}
 				}
-				if tester.HasText("展开初始化结果") || tester.HasText("收起初始化结果") || tester.HasText("结束批次") || tester.HasText("处理中…") || tester.HasText("构建前检查") || tester.HasText("检查构建条件") {
+				if tester.HasText("展开初始化结果") || tester.HasText("收起初始化结果") || tester.HasText("处理中…") || tester.HasText("构建前检查") || tester.HasText("检查构建条件") || tester.HasText("重新检查") {
 					t.Error("obsolete disclosure or generic controls still clutter the page")
 				}
 				field, found := tester.Find("待合并的单个远端分支")
@@ -250,13 +250,21 @@ func TestProductionHeaderHistoryAndEndBatchConfirmation(t *testing.T) {
 	old.ID, old.Version, old.ReleaseBranch, old.Ended, old.Phase = "previous", "2.3.42", "release/2.3.42", true, "ENDED"
 	s.releaseUnit.state.production.batches = append(s.releaseUnit.state.production.batches, old)
 	tester := productionIterationTester(s, 960, false)
-	if tester.HasText(old.ReleaseBranch) || tester.HasText("结束批次") {
-		t.Fatal("historical content or end action is expanded by default")
+	if tester.HasText(old.ReleaseBranch) {
+		t.Fatal("historical content is expanded by default")
+	}
+	if _, found := tester.Find("更多生产发布操作"); found {
+		t.Fatal("header retains an overflow for the end action")
+	}
+	for _, width := range []int{800, 960, 1440} {
+		tester.SetSize(width, 900)
+		history := productionAlignmentRect(t, tester, "历史批次：1")
+		end := productionAlignmentRect(t, tester, "结束批次")
+		if end.X-history.X-history.W != 10 || end.Y != history.Y || end.H != history.H || end.X+end.W > float32(width) {
+			t.Fatalf("header actions are not adjacent or in bounds at width %d: history=%+v end=%+v", width, history, end)
+		}
 	}
 	s.win = &mygo.Window{}
-	if err := tester.Click("更多生产发布操作"); err != nil {
-		t.Fatal(err)
-	}
 	if err := tester.Click("结束批次"); err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +275,7 @@ func TestProductionHeaderHistoryAndEndBatchConfirmation(t *testing.T) {
 	if s.confirmationDialog != nil || s.productionBatch(v).Ended {
 		t.Fatal("canceling confirmation ended batch")
 	}
-	if err := tester.Click("历史批次"); err != nil {
+	if err := tester.Click("历史批次：1"); err != nil {
 		t.Fatal(err)
 	}
 	tester.SetPreferences(ui.Preferences{ReduceMotion: true, TextScale: 1})

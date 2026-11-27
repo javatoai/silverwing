@@ -353,6 +353,9 @@ func TestProductionEveryTagRefreshesAndMergesRuntimeBaseline(t *testing.T) {
 	if len(parents) != 3 {
 		t.Fatalf("feature merge lost --no-ff: %v", parents)
 	}
+	if subject := f.run(f.remote, "show", "-s", "--format=%s", b.ReleaseSHA); subject != "Merge branch 'feature/one' into 'release/2.3.44'" {
+		t.Fatalf("feature merge subject: %q", subject)
+	}
 	b = f.publish(f.sync(b))
 	if len(b.Tags) != 1 || b.Tags[0].Name != "2.3.44" {
 		t.Fatalf("first Tag: %+v", b.Tags)
@@ -410,7 +413,7 @@ func TestProductionConflictSurvivesRestartAndRequiresCommittedResolution(t *test
 	if _, err := f.s.Resume(context.Background(), b.ID); err == nil {
 		t.Fatal("staged but uncommitted resolution accepted")
 	}
-	f.run(worktree, "commit", "-m", "resolve synthetic conflict")
+	f.run(worktree, "commit", "--no-edit")
 	completed, err := f.s.Resume(context.Background(), b.ID)
 	if err != nil || completed.Intent != nil {
 		t.Fatalf("resume failed: %v", err)
@@ -420,6 +423,9 @@ func TestProductionConflictSurvivesRestartAndRequiresCommittedResolution(t *test
 	}
 	if f.run(f.remote, "rev-parse", "refs/heads/"+b.ReleaseBranch) != completed.ReleaseSHA {
 		t.Fatal("resolution not pushed")
+	}
+	if subject := f.run(f.remote, "show", "-s", "--format=%s", completed.ReleaseSHA); subject != "Merge branch 'feature/two' into 'release/2.3.44'" {
+		t.Fatalf("conflict resolution lost its feature merge subject: %q", subject)
 	}
 }
 

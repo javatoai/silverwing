@@ -10,8 +10,8 @@ import (
 )
 
 // initialize persists an unversioned batch before its first main-branch write.
-// A release version is fixed only by the separate create-release confirmation.
-func (s *Service) initialize(ctx context.Context, preview Preview, version string, merge bool, expectedID string) (Batch, error) {
+// A release version is fixed only by the separate create or reuse confirmation.
+func (s *Service) initialize(ctx context.Context, preview Preview, version string, merge bool, expectedID, reusedBranch string) (Batch, error) {
 	id := expectedID
 	if id == "" {
 		id = newID()
@@ -19,23 +19,13 @@ func (s *Service) initialize(ctx context.Context, preview Preview, version strin
 	var b Batch
 	err := s.withBatchRecordLock(id, func() error {
 		return s.withTargetLock(ctx, preview.Target, func(_ domain.AppConfig) error {
-			p, c, err := s.checkPreview(ctx, preview, "")
+			p, c, err := s.checkPreview(ctx, preview, reusedBranch)
 			if err != nil {
 				return err
 			}
 			if !merge {
-				if err = ValidateVersion(version, p); err != nil {
+				if err = validateReleaseInitialization(p, c, version, reusedBranch); err != nil {
 					return err
-				}
-				if err = domain.NewGitWritePolicy(c.BlockedGitWriteBranches).RequireAllowed("release/"+version, "创建生产 release"); err != nil {
-					return err
-				}
-				ok, e := s.ancestor(ctx, p.Target, p.ProductionSHA, p.MainSHA)
-				if e != nil {
-					return e
-				}
-				if !ok {
-					return errors.New("生产 Tag 尚未合入主分支，请先点击合并生产 Tag")
 				}
 			}
 			batches, err := s.Store.List()
@@ -54,6 +44,11 @@ func (s *Service) initialize(ctx context.Context, preview Preview, version strin
 			if expectedID != "" && b.ID != expectedID {
 				return errors.New("确认的初始化批次已结束或变化，请重新选择批次")
 			}
+			if reusedBranch != "" {
+				if _, err = s.validate(ctx, p.Target); err != nil {
+					return err
+				}
+			}
 			if b.ID == "" {
 				b = Batch{ID: id, Target: p.Target, CreatedAt: timestamp(), Branches: []MergedBranch{}, Tags: []Tag{}}
 			}
@@ -62,6 +57,16 @@ func (s *Service) initialize(ctx context.Context, preview Preview, version strin
 			} else {
 				b.Version, b.ReleaseBranch, b.MainSHA = version, "release/"+version, p.MainSHA
 				b.ProductionTag, b.ProductionSHA = p.ProductionTag, p.ProductionSHA
+				if reusedBranch != "" {
+					b.recordReleaseHead(p.ReleaseSHA)
+					b.ReleaseReused, b.Phase, b.Message = true, "READY", "已复用远端 release 分支"
+					if err = s.save(&b); err != nil {
+						b = Batch{}
+						return err
+					}
+					batchProgress(ctx, &b, 3, "complete", b.Message)
+					return nil
+				}
 				b.Phase, b.Intent = "CREATE_RELEASE", &Intent{Kind: "create", Step: "release-create", Preview: p}
 			}
 			if err = s.save(&b); err != nil {
@@ -87,7 +92,7 @@ func (s *Service) initialize(ctx context.Context, preview Preview, version strin
 // MergeProduction performs exactly one confirmed production-Tag -> main merge.
 func (s *Service) MergeProduction(ctx context.Context, id string, preview Preview) (Batch, error) {
 	if id == "" {
-		return s.initialize(ctx, preview, "", true, "")
+		return s.initialize(ctx, preview, "", true, "", "")
 	}
 	return s.withBatch(ctx, id, func(b *Batch, c domain.AppConfig) error {
 		if err := mergeAbortPending(b); err != nil {
@@ -146,17 +151,16 @@ func (s *Service) MergeMainToRelease(ctx context.Context, id string, preview Pre
 		if p.ReleaseSHA == "" || p.ReleaseSHA != b.ReleaseSHA {
 			return errors.New("release 已变化，请先核对并采纳远端状态")
 		}
-		ok, err := s.ancestor(ctx, b.Target, p.ProductionSHA, p.MainSHA)
-		if err != nil {
-			return err
-		}
-		if !ok {
+		if !b.ProductionBaselineReady(p) {
 			return errors.New("生产 Tag 尚未合入主分支，请先点击合并生产 Tag")
 		}
 		if err = domain.NewGitWritePolicy(c.BlockedGitWriteBranches).RequireAllowed(b.ReleaseBranch, "合并主分支到 release"); err != nil {
 			return err
 		}
-		b.MainSHA, b.ProductionTag, b.ProductionSHA = p.MainSHA, p.ProductionTag, p.ProductionSHA
+		b.MainSHA = p.MainSHA
+		if p.ProductionInMain {
+			b.ProductionTag, b.ProductionSHA = p.ProductionTag, p.ProductionSHA
+		}
 		b.TagPlan = nil
 		b.Intent = &Intent{Kind: "release", Step: "release-sync", Preview: p}
 		if err = s.save(b); err != nil {
@@ -169,10 +173,20 @@ func (s *Service) MergeMainToRelease(ctx context.Context, id string, preview Pre
 // ReleaseVersion accepts the full branch name shown in the UI. The fixed
 // prefix is parsed once, and version policy remains shared with creation.
 func ReleaseVersion(branch string, p Preview) (string, error) {
+	version, err := ParseReleaseBranch(branch)
+	if err != nil {
+		return "", err
+	}
+	return version, ValidateVersion(version, p)
+}
+
+// ParseReleaseBranch validates a branch name before the remote version lookup.
+func ParseReleaseBranch(branch string) (string, error) {
 	branch = strings.TrimSpace(branch)
 	if !strings.HasPrefix(branch, "release/") {
 		return "", errors.New("分支名必须以 release/ 开头")
 	}
 	version := strings.TrimPrefix(branch, "release/")
-	return version, ValidateVersion(version, p)
+	_, err := parseBaseVersion(version)
+	return version, err
 }

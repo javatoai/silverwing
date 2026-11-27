@@ -38,12 +38,12 @@ func (s *app) viewProductionHistory(d *productionHistoryDialog, b production.Bat
 }
 
 func (d *productionHistoryDialog) record(id string) *production.Batch {
-	if id == "" || d.State.deletedBatches[id] {
+	if id == "" {
 		return nil
 	}
 	for i := range d.State.batches {
 		b := &d.State.batches[i]
-		if b.ID == id && (b.Ended || d.readOnly) && b.Target.Selection == d.Selection {
+		if b.ID == id && d.State.includesProductionHistoryBatch(*b, d.Selection, d.readOnly) {
 			return b
 		}
 	}

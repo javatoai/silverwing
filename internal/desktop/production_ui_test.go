@@ -175,9 +175,6 @@ func TestProductionRemovedServiceBatchRemainsSelectableAfterReload(t *testing.T)
 		t.Fatal("history service duplicated")
 	}
 	tester := productionIterationTester(s, 960, false)
-	if err := tester.Click("更多生产发布操作"); err != nil {
-		t.Fatal(err)
-	}
 	if !tester.HasText("示例服务（历史）") || !tester.HasText("结束批次") || !tester.HasText(b.ReleaseBranch) {
 		t.Fatal("removed service history/end action inaccessible")
 	}
@@ -195,7 +192,7 @@ func TestProductionHistoryDetailKeepsUnconfirmedTagVisible(t *testing.T) {
 			if tester.HasText("未确认 Tag：2.3.42") {
 				t.Fatal("an ambiguous history Tag was shown in the active release")
 			}
-			if err := tester.Click("历史批次"); err != nil {
+			if err := tester.Click("历史批次：1"); err != nil {
 				t.Fatal(err)
 			}
 			if call := productionTestCall(t, backend); call.Kind != "production.list" {

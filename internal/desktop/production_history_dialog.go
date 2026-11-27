@@ -84,7 +84,7 @@ func (s *app) readProductionHistory(d *productionHistoryDialog) {
 func (s *app) productionHistoryRecords(d *productionHistoryDialog) []production.Batch {
 	var records []production.Batch
 	for _, b := range d.State.batches {
-		if (b.Ended || d.readOnly) && b.Target.Selection == d.Selection && !d.State.deletedBatches[b.ID] {
+		if d.State.includesProductionHistoryBatch(b, d.Selection, d.readOnly) {
 			records = append(records, b)
 		}
 	}
@@ -96,6 +96,20 @@ func (s *app) productionHistoryRecords(d *productionHistoryDialog) []production.
 		return a.After(b)
 	})
 	return records
+}
+
+func (state *productionUIState) includesProductionHistoryBatch(b production.Batch, selection production.Selection, readOnly bool) bool {
+	return (b.Ended || readOnly) && b.Target.Selection == selection && !state.deletedBatches[b.ID]
+}
+
+func (state *productionUIState) productionHistoryCount(selection production.Selection, readOnly bool) int {
+	count := 0
+	for _, b := range state.batches {
+		if state.includesProductionHistoryBatch(b, selection, readOnly) {
+			count++
+		}
+	}
+	return count
 }
 
 func (s *app) productionHistoryRequestCurrent(d *productionHistoryDialog, action application.Action) bool {

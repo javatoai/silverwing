@@ -115,8 +115,17 @@ func (s *app) applyProductionEntry(v *productionView) {
 
 func (s *app) inspectSelectedProductionRelease(v *productionView) {
 	if s.page == "production" && v != nil && v == s.productionView() && !v.Busy && v.Preview == nil && s.productionServiceConfigured(v) {
+		if b := s.productionBatch(v); b != nil && b.InitialSHA != "" {
+			s.requestProductionReleaseBranches(v, b)
+			return
+		}
 		s.productionInspect("")
 	}
+}
+
+func (s *app) requestProductionReleaseBranches(v *productionView, b *production.Batch) {
+	s.productionRequestFor(v, application.Action{Kind: "production.release-branches", ServiceID: b.Target.ServiceID,
+		Payload: map[string]any{"batchId": b.ID}}, "")
 }
 
 func productionBatchOrderTime(b production.Batch) time.Time {

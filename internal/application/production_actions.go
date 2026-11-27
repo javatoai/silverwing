@@ -111,6 +111,9 @@ func (a *App) productionAction(ctx context.Context, action Action) (ActionResult
 			preview, err = s.Inspect(ctx, production.Selection{ServiceID: action.ServiceID})
 		}
 		report.Preview = &preview
+	case "production.release-branches":
+		batch, preview, err = s.InspectReleaseBranches(ctx, id)
+		report.Preview = &preview
 	case "production.feature-preview":
 		batch, preview, err = s.FeaturePreview(ctx, id, textPayload(action, "branch"))
 		report.Preview = &preview
@@ -124,13 +127,24 @@ func (a *App) productionAction(ctx context.Context, action Action) (ActionResult
 		if preview.Target.ServiceID != "" {
 			report.Preview = &preview
 		}
-	case "production.create", "production.merge-main", "production.merge-release", "production.merge", "production.publish", "production.end", "production.accept-remote", "production.rebase-pending", "production.reprepare-tag":
+	case "production.release-preview":
+		plan, err := s.PreviewRelease(ctx, preview, textPayload(action, "version"), boolPayload(action, "allowReuse"))
+		if err != nil {
+			return ActionResult{}, err
+		}
+		return ActionResult{Data: production.Report{ReleasePlan: &plan}}, nil
+	case "production.create", "production.reuse-release", "production.merge-main", "production.merge-release", "production.merge", "production.publish", "production.end", "production.accept-remote", "production.rebase-pending", "production.reprepare-tag":
 		if !confirmed {
 			return ActionResult{}, errors.New("请先确认生产发布目标和提交范围")
 		}
 		switch action.Kind {
 		case "production.create":
 			batch, err = s.Create(ctx, preview, textPayload(action, "version"), id)
+		case "production.reuse-release":
+			batch, err = s.ReuseRelease(ctx, preview, textPayload(action, "version"), id)
+			if err == nil {
+				report.Preview = &preview
+			}
 		case "production.merge-main":
 			batch, err = s.MergeProduction(ctx, id, preview)
 		case "production.merge-release":
@@ -186,7 +200,7 @@ func (a *App) productionAction(ctx context.Context, action Action) (ActionResult
 		}
 		report.Batch = &batch
 	}
-	if action.Kind != "production.refresh-build" {
+	if action.Kind != "production.refresh-build" && action.Kind != "production.release-branches" {
 		var listErr error
 		report.Batches, listErr = s.Store.List()
 		if listErr != nil {

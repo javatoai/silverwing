@@ -259,6 +259,7 @@ func TestTaskServicesTableScrollKeepsColumnsAndToolbarAligned(t *testing.T) {
 							}
 							headers[i], cells[i] = heading, cell
 						}
+						taskServicesBoundsWithin(t, tester, cells[4], "查看")
 						if pane.W == taskServiceTableMinWidth {
 							baselineHeaders, baselineCells = headers, cells
 						} else {
@@ -320,9 +321,9 @@ func TestTaskServicesTableScrollKeepsColumnsAndToolbarAligned(t *testing.T) {
 
 					detail := taskServiceOpenTarget(row, "detail")
 					target := row.name + " uat"
-					runtimeActions := []string{uatReleaseLabel + " · " + row.name, detail, uatRestartLabel + " · " + row.name}
+					runtimeActions := []string{detail, uatReleaseLabel + " · " + row.name, uatRestartLabel + " · " + row.name}
 					if layout.width < 480 {
-						// The leading release button can be clipped at the rightmost scroll position.
+						// The leading detail button can be clipped at the rightmost scroll position.
 						runtimeActions = runtimeActions[1:]
 					}
 					runtime := taskServicesActionGroupBounds(t, tester, rowBounds, "运行操作", runtimeActions...)
@@ -420,7 +421,7 @@ func TestTaskServicesGenbuActionsFollowTaskScope(t *testing.T) {
 				t.Fatal("previous environment's approval dialog survived the environment switch")
 			}
 			tester.Frame()
-			for _, label := range []string{"Pod", row.name + " prod Pod 明细", "查看 " + row.name + " prod 配置"} {
+			for _, label := range []string{"查看", row.name + " prod Pod 明细", "查看 " + row.name + " prod 配置"} {
 				if _, found := tester.Find(label); !found {
 					t.Fatalf("wide PROD lost %q", label)
 				}

@@ -3,6 +3,7 @@ package desktop
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -139,7 +140,7 @@ func TestProductionStartKeepsInitializationAfterBaselineFailure(t *testing.T) {
 }
 
 func TestProductionEntryReadsBatchesAndPreparesOnlySelectedConfiguredService(t *testing.T) {
-	for _, name := range []string{"idle", "ended", "recovery", "draft", "cached-preparation", "removed", "read-error"} {
+	for _, name := range []string{"idle", "ended", "recovery", "active", "draft", "cached-preparation", "removed", "read-error"} {
 		t.Run(name, func(t *testing.T) {
 			s, v, b, backend, window := productionRequestFixture(t)
 			if name != "cached-preparation" {
@@ -155,6 +156,8 @@ func TestProductionEntryReadsBatchesAndPreparesOnlySelectedConfiguredService(t *
 			case "recovery":
 				b.InitialSHA = ""
 				b.Intent = &production.Intent{Kind: "create", Step: "release-create"}
+				records = []production.Batch{b}
+			case "active":
 				records = []production.Batch{b}
 			case "draft", "cached-preparation":
 				v.BatchID, v.ReleaseStarted = "", true
@@ -177,11 +180,15 @@ func TestProductionEntryReadsBatchesAndPreparesOnlySelectedConfiguredService(t *
 			productionTestUpdate(t, window)
 			if name != "removed" && name != "read-error" {
 				call := productionTestCall(t, backend)
+				kind := "production.inspect"
 				var id any
-				if name == "recovery" {
+				if name == "recovery" || name == "active" {
 					id = b.ID
 				}
-				if call.Kind != "production.inspect" || call.Payload["batchId"] != id || call.ServiceID != b.Target.ServiceID {
+				if name == "active" {
+					kind = "production.release-branches"
+				}
+				if call.Kind != kind || call.Payload["batchId"] != id || call.ServiceID != b.Target.ServiceID {
 					t.Fatalf("failed to resume %s inspection: %+v", name, call)
 				}
 				backend.replies <- productionTestAnswer{err: errors.New("fixture baseline read failed")}
@@ -195,6 +202,37 @@ func TestProductionEntryReadsBatchesAndPreparesOnlySelectedConfiguredService(t *
 				t.Fatalf("%s automatically inspected the baseline", name)
 			}
 		})
+	}
+}
+
+func TestProductionActiveBranchRefreshKeepsCompletedBaselineAndShowsRemoteDrift(t *testing.T) {
+	s, v, b, backend, window := productionRequestFixture(t)
+	b.ProductionTag, b.ProductionSHA, b.MainSHA = v.Preview.ProductionTag, v.Preview.ProductionSHA, v.Preview.MainSHA
+	s.releaseUnit.state.production.batches[0] = b
+	v.Preview = nil
+	s.inspectSelectedProductionRelease(v)
+	if call := productionTestCall(t, backend); call.Kind != "production.release-branches" || call.Payload["batchId"] != b.ID {
+		t.Fatalf("active release checked initialization again: %+v", call)
+	}
+	err := errors.New("fixture remote branch read failed")
+	backend.replies <- productionTestAnswer{err: err}
+	productionTestUpdate(t, window)
+	tester := productionCardsTester(s, 960, false)
+	if s.productionBaselineStatus(v, &b).Text != "已完成" || !tester.HasText(err.Error()) || tester.HasText("重新检查") {
+		t.Fatal("branch refresh failure lost its retry path or reopened initialization")
+	}
+	if err := tester.Click("刷新分支"); err != nil {
+		t.Fatal(err)
+	}
+	if call := productionTestCall(t, backend); call.Kind != "production.release-branches" || call.Payload["batchId"] != b.ID {
+		t.Fatalf("branch refresh retry left its active release: %+v", call)
+	}
+	preview := production.Preview{Target: b.Target, ReleaseSHA: strings.Repeat("e", 40), Branches: []string{b.ReleaseBranch, "feature/refreshed"}}
+	backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &b, Preview: &preview}}}
+	productionTestUpdate(t, window)
+	tester.Frame()
+	if v.Error != "" || !tester.HasText("查看并采纳远端") || v.Preview == nil || !slices.Contains(v.Preview.Branches, "feature/refreshed") || len(backend.calls) != 0 {
+		t.Fatal("remote branch refresh failed to restore choices and expose new release commits")
 	}
 }
 
@@ -240,7 +278,7 @@ func TestProductionDisabledGenbuProbeKeepsOnlyLocalHistory(t *testing.T) {
 	if !tester.HasText("示例服务（历史）") || tester.HasText("开始新发布") || tester.HasText("构建生产 Tag") || tester.HasText("合并分支") {
 		t.Fatal("the main page did not switch to history-only access")
 	}
-	if _, found := tester.Find("更多生产发布操作"); found {
+	if _, found := tester.Find("结束批次"); found {
 		t.Fatal("active production actions remained accessible")
 	}
 
@@ -301,7 +339,7 @@ func TestProductionEntryChoosesLatestReleaseForSelectionWhenListArrives(t *testi
 	s.inspectProductionOnSelection(other)
 	backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batches: []production.Batch{older, preparing, b, latest}}}}
 	productionTestUpdate(t, window)
-	if call := productionTestCall(t, backend); call.Kind != "production.inspect" || call.ServiceID != "other" || call.Payload["batchId"] != latest.ID {
+	if call := productionTestCall(t, backend); call.Kind != "production.release-branches" || call.ServiceID != "other" || call.Payload["batchId"] != latest.ID {
 		t.Fatalf("entry did not choose the latest release for the visible service: %+v", call)
 	}
 	if first.Busy || first.BatchID != b.ID || other.BatchID != latest.ID {
@@ -336,15 +374,17 @@ func TestProductionOldEndStartsNextReleaseOnlyInItsOwnView(t *testing.T) {
 			}
 			records := []production.Batch{b}
 			var expected any
+			kind := "production.inspect"
 			if name == "another-active" {
 				next := b
 				next.ID, next.Ended = strings.Repeat("e", 32), false
 				records, expected = append(records, next), next.ID
+				kind = "production.release-branches"
 			}
 			backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batches: records}}}
 			productionTestUpdate(t, window)
-			if call := productionTestCall(t, backend); call.Kind != "production.inspect" || call.Payload["batchId"] != expected {
-				t.Fatalf("end did not route to the expected baseline check: %+v", call)
+			if call := productionTestCall(t, backend); call.Kind != kind || call.Payload["batchId"] != expected {
+				t.Fatalf("end did not route to the expected release read: %+v", call)
 			}
 		})
 	}

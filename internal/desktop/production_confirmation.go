@@ -9,6 +9,7 @@ type productionConfirmationContent struct {
 	Title, Source, Destination, Detail string
 	ConfirmLabel                       string
 	Notices                            []string
+	Current                            func() bool
 }
 
 // The summary shows ref names. Full commit identities remain captured in the
@@ -37,7 +38,10 @@ func (s *app) confirmProduction(v *productionView, target production.Target, con
 	dialog.Summary = append(dialog.Summary, confirmationDialogField{Label: "仓库", Value: target.Repository}, confirmationDialogField{Label: "远端", Value: target.Remote})
 	dialog.Notices = append([]string(nil), content.Notices...)
 	dialog.FoldDetail = true
-	dialog.Current = s.productionConfirmationCurrent(v)
+	current := s.productionConfirmationCurrent(v)
+	dialog.Current = func() bool {
+		return current() && (content.Current == nil || content.Current())
+	}
 }
 
 func (s *app) productionConfirmationCurrent(v *productionView) func() bool {

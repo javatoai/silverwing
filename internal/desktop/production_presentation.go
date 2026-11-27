@@ -48,7 +48,11 @@ func productionRelations(p *production.Preview, b production.Batch) []production
 		rows[0].Known, rows[0].Included = p.ProductionSHA != "" && p.MainSHA != "", productionMainIncluded(p)
 		rows[1].SourceSHA, rows[1].TargetSHA = p.MainSHA, p.ReleaseSHA
 		rows[1].Known, rows[1].Included = p.MainSHA != "" && p.ReleaseSHA != "", productionReleaseIncluded(p)
-		rows[1].NeedsMainSync = !productionMainIncluded(p)
+		rows[1].NeedsMainSync = !b.ProductionBaselineReady(*p)
+		if !rows[1].NeedsMainSync && !rows[0].Included {
+			// A previously deployed Tag from this batch is already on release.
+			rows = rows[1:]
+		}
 	}
 	for index := range rows {
 		if !rows[index].Known {
@@ -113,7 +117,7 @@ func (s *app) productionReleaseModel(v *productionView, b *production.Batch) pro
 	// Builds do not require feature history or a changed commit. The action
 	// always reads again; unresolved operations still block Tag preparation.
 	m.CanBuild = b.InitialSHA != "" && !b.Ended && b.Intent == nil && !v.Busy
-	m.ShowSync = v.BuildChecked && v.Preview != nil && (!productionMainIncluded(v.Preview) || !productionReleaseIncluded(v.Preview))
+	m.ShowSync = v.BuildChecked && v.Preview != nil && (!b.ProductionBaselineReady(*v.Preview) || !productionReleaseIncluded(v.Preview))
 	if !m.Ready {
 		m.BuildReason = "构建时自动检查线上版本和提交，通过后推送 Tag。"
 		if v.Busy && v.ActiveAction == "production.abort-merge" {
@@ -133,6 +137,8 @@ func (s *app) productionReleaseModel(v *productionView, b *production.Batch) pro
 
 func productionActivity(kind string) string {
 	switch kind {
+	case "production.release-branches":
+		return "正在读取远端分支…"
 	case "production.feature-preview":
 		return "正在检查所选分支的提交…"
 	case "production.merge":
@@ -145,6 +151,10 @@ func productionActivity(kind string) string {
 		return "正在同步主分支到 release…"
 	case "production.create":
 		return "正在创建并推送 release…"
+	case "production.release-preview":
+		return "正在检查远端 release 分支…"
+	case "production.reuse-release":
+		return "正在复核并复用远端 release 分支…"
 	case "production.publish":
 		return "正在创建并推送生产 Tag…"
 	case "production.prepare-tag":
@@ -172,7 +182,7 @@ func productionActivity(kind string) string {
 
 func productionBranchWrite(kind string) bool {
 	switch kind {
-	case "production.create", "production.merge-main", "production.merge-release", "production.merge", "production.resume", "production.rebase-pending":
+	case "production.create", "production.reuse-release", "production.merge-main", "production.merge-release", "production.merge", "production.resume", "production.rebase-pending":
 		return true
 	}
 	return false

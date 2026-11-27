@@ -53,6 +53,9 @@ func TestProductionCheckEntryBelongsToContent(t *testing.T) {
 						b.Ended, b.Phase = true, "ENDED"
 						s.releaseUnit.state.production.batches[0], v.BatchID = b, ""
 						v.ReleaseStarted = true
+					case "completed":
+						b.ProductionTag, b.MainSHA = v.Preview.ProductionTag, v.Preview.MainSHA
+						s.releaseUnit.state.production.batches[0] = b
 					}
 					tester := ui.NewTester(func(c *ui.Context) {
 						p := setTheme(c, dark)
@@ -62,17 +65,23 @@ func TestProductionCheckEntryBelongsToContent(t *testing.T) {
 						})
 					}, width, 900)
 					check, found := tester.Find("重新检查")
-					section, ok := tester.Find("生产 Tag → 主分支")
-					if !found || !ok || check.Y < section.Y+section.H || check.W > 180 || check.H != 34 {
-						t.Errorf("check is outside content section: check=%+v section=%+v found=%t/%t", check, section, found, ok)
-					}
-					diffText := "无差异"
-					if state == "first" {
-						diffText = "查看差异"
-					}
-					diff, ok := tester.Find(diffText)
-					if !ok || diff.Y != check.Y || diff.X <= check.X+check.W {
-						t.Errorf("check/diff are not compact siblings: check=%+v diff=%+v", check, diff)
+					section, hasSection := tester.Find("生产 Tag → 主分支")
+					if state == "completed" {
+						if !hasSection || found || tester.HasText("无差异") {
+							t.Fatal("completed initialization must remain visible without check controls")
+						}
+					} else {
+						if !found || !hasSection || check.Y < section.Y+section.H || check.W > 180 || check.H != 34 {
+							t.Errorf("check is outside content section: check=%+v section=%+v found=%t/%t", check, section, found, hasSection)
+						}
+						diffText := "无差异"
+						if state == "first" {
+							diffText = "查看差异"
+						}
+						diff, ok := tester.Find(diffText)
+						if !ok || diff.Y != check.Y || diff.X <= check.X+check.W {
+							t.Errorf("check/diff are not compact siblings: check=%+v diff=%+v", check, diff)
+						}
 					}
 					if v.Preview != nil {
 						baseline, present := tester.Find("生产基线摘要")
@@ -113,12 +122,14 @@ func TestProductionIncludedRelationsDisableMergeButtons(t *testing.T) {
 						t.Errorf("already-included relation retained button %q", button)
 					}
 				}
-				if s.productionInitializationStepStatus(v, s.productionBatch(v), 2).Text != "已完成" || !productionExactText(tester, "无需合并") {
-					t.Fatal("missing completed status or disabled no-merge action")
+				if s.productionInitializationStepStatus(v, s.productionBatch(v), 2).Text != "已完成" || productionExactText(tester, "无需合并") != initial {
+					t.Fatal("completed status or disabled initialization action is incorrect")
 				}
 				generation := v.Generation
-				if err := tester.Click("无需合并"); err != nil {
-					t.Fatal(err)
+				if initial {
+					if err := tester.Click("无需合并"); err != nil {
+						t.Fatal(err)
+					}
 				}
 				if s.confirmationDialog != nil || v.Generation != generation {
 					t.Fatal("disabled no-merge action triggered a confirmation or request")
@@ -224,7 +235,9 @@ func TestProductionCreateConfirmationHasCollapsedTechnicalDetail(t *testing.T) {
 func TestProductionUnknownRelationsDoNotClaimIncluded(t *testing.T) {
 	for _, mode := range []string{"no-preview", "incomplete", "needs-merge", "busy"} {
 		t.Run(mode, func(t *testing.T) {
-			s, v, _ := productionFixture(t)
+			s, v, b := productionFixture(t)
+			b.InitialSHA = ""
+			s.releaseUnit.state.production.batches[0] = b
 			v.Preview.ProductionInMain, v.Preview.MainInRelease = false, false
 			switch mode {
 			case "no-preview":

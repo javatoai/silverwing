@@ -37,6 +37,7 @@ func TestProductionBaselineDiffReflectsIncomingFileChanges(t *testing.T) {
 	for _, state := range []string{"unknown", "incomplete", "same-commit", "main-ahead", "same-tree", "remote-only", "changed", "changed-and-remote"} {
 		t.Run(state, func(t *testing.T) {
 			s, v, _ := productionFixture(t)
+			s.releaseUnit.state.production.batches, v.BatchID, v.ReleaseStarted = nil, "", true
 			v.Preview.ProductionSHA = strings.Repeat("f", 40)
 			v.Preview.ProductionInMain = false
 			want, enabled := "无差异", false
@@ -85,6 +86,7 @@ func TestProductionInitializationFeedbackIsConciseAndColored(t *testing.T) {
 			for _, changes := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%d-dark-%t-changes-%t", width, dark, changes), func(t *testing.T) {
 					s, v, _ := productionFixture(t)
+					s.releaseUnit.state.production.batches, v.BatchID = nil, ""
 					v.Steps = map[int]productionStepView{1: {State: "complete", Message: "生产 Tag 与主分支差异已就绪"}}
 					if changes {
 						v.Preview.ProductionInMain = false
@@ -97,7 +99,6 @@ func TestProductionInitializationFeedbackIsConciseAndColored(t *testing.T) {
 						t.Fatal("redundant baseline status or success message remains")
 					}
 					p := colors(dark)
-					productionAssertTextColor(t, tester, "已完成", p.green)
 					if changes {
 						productionAssertTextColor(t, tester, "查看差异", p.amber)
 					} else {
@@ -115,6 +116,7 @@ func TestProductionInitializationFeedbackIsConciseAndColored(t *testing.T) {
 
 func TestProductionBaselineFeedbackRetainsActivityAndFailures(t *testing.T) {
 	s, v, b := productionFixture(t)
+	b.InitialSHA = ""
 	v.ActiveStep = 1
 	v.Steps = map[int]productionStepView{1: {State: "complete", Message: "生产 Tag 与主分支差异已就绪"}}
 	if got := s.productionSection(v, &b, 1); got.Message != "" {
@@ -140,8 +142,8 @@ func TestProductionBaselineFailureInvalidatesPreparedBuildAndKeepsRetry(t *testi
 		kind string
 		err  error
 	}{
-		{"production.inspect", fmt.Errorf("%w：Genbu 发现多个线上生产版本", production.ErrProductionBaselineUnavailable)},
-		{"production.inspect", errors.New("读取远端 Git 引用失败")},
+		{"production.prepare-tag", fmt.Errorf("%w：Genbu 发现多个线上生产版本", production.ErrProductionBaselineUnavailable)},
+		{"production.prepare-tag", errors.New("读取远端 Git 引用失败")},
 		{"production.prepare-tag", production.ErrProductionBaselineUnavailable},
 		{"production.sync", production.ErrProductionBaselineUnavailable},
 	} {
@@ -154,10 +156,14 @@ func TestProductionBaselineFailureInvalidatesPreparedBuildAndKeepsRetry(t *testi
 			if !productionTagPlanCurrent(v, &b) {
 				t.Fatal("fixture does not have a prepared build")
 			}
-			s.productionRequestFor(v, application.Action{Kind: tc.kind, Payload: map[string]any{"batchId": b.ID}}, "")
+			follow := ""
+			if tc.kind == "production.prepare-tag" {
+				follow = "build-publish"
+			}
+			s.productionRequestFor(v, application.Action{Kind: tc.kind, Payload: map[string]any{"batchId": b.ID}}, follow)
 			productionTestCall(t, backend)
 			report := production.Report{Batch: &b}
-			if tc.kind == "production.inspect" {
+			if errors.Is(tc.err, production.ErrProductionBaselineUnavailable) {
 				// The failure can return partial evidence gathered before the error.
 				report.Preview = &old
 			}
@@ -172,13 +178,17 @@ func TestProductionBaselineFailureInvalidatesPreparedBuildAndKeepsRetry(t *testi
 			if !tester.HasText(tc.err.Error()) {
 				t.Fatalf("baseline failure was not shown: %v", tc.err)
 			}
-			if err := tester.Click("重新检查"); err != nil {
+			if tester.HasText("重新检查") {
+				t.Fatal("build failure reopened initialization")
+			}
+			if err := tester.Click("构建 Tag"); err != nil {
 				t.Fatal(err)
 			}
 			call := productionTestCall(t, backend)
-			if call.Kind != "production.inspect" || len(call.Payload) != 1 || call.Payload["batchId"] != b.ID {
-				t.Fatalf("retry must only reread this batch's automatic baseline: %+v", call)
+			if call.Kind != "production.prepare-tag" || call.Payload["batchId"] != b.ID || call.Payload["confirmed"] != nil {
+				t.Fatalf("retry must start with a fresh build check for this batch: %+v", call)
 			}
+			b.TagPlan = nil
 			backend.replies <- productionTestAnswer{result: application.ActionResult{Data: production.Report{Batch: &b, Preview: &old}}}
 			productionTestUpdate(t, window)
 			if v.Error != "" || v.Preview == nil || v.Preview.ProductionSHA != old.ProductionSHA || productionTagPlanCurrent(v, &b) || len(backend.calls) != 0 {
@@ -190,6 +200,7 @@ func TestProductionBaselineFailureInvalidatesPreparedBuildAndKeepsRetry(t *testi
 
 func TestProductionBaselineDiffLabelUpdatesWithoutReplacingTarget(t *testing.T) {
 	s, v, _ := productionFixture(t)
+	s.releaseUnit.state.production.batches, v.BatchID = nil, ""
 	s.taskUnit.state.notes[0] = "unsaved draft"
 	tester := productionIterationTester(s, 960, false)
 	if _, ok := tester.Find("无差异"); !ok {

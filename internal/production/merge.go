@@ -120,7 +120,12 @@ func (s *Service) mergeAndPush(ctx context.Context, b *Batch, recovering bool) (
 			if m.NoFF {
 				mode = "--no-ff"
 			}
-			_, mergeErr := s.run(ctx, m.Worktree, "merge", mode, "--no-edit", "--no-autostash", "--no-squash", "--commit", m.SourceSHA)
+			args := []string{"merge", mode, "--no-edit", "--no-autostash", "--no-squash", "--commit"}
+			if b.Intent.Step == "feature" && b.Intent.SourceBranch != "" {
+				subject := fmt.Sprintf("Merge branch '%s' into '%s'", b.Intent.SourceBranch, m.TargetBranch)
+				args = append(args, "-m", subject)
+			}
+			_, mergeErr := s.run(ctx, m.Worktree, append(args, m.SourceSHA)...)
 			if mergeErr != nil {
 				check, checkErr := s.Git.RunContext(ctx, m.Worktree, time.Minute, false, true, "rev-parse", "--verify", "MERGE_HEAD")
 				if checkErr == nil && check.ExitCode == 0 {

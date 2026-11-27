@@ -95,6 +95,9 @@ func (s *app) productionCardActivity(v *productionView, b *production.Batch, ste
 }
 
 func (s *app) productionInitializationStepStatus(v *productionView, b *production.Batch, step int) productionCardStatus {
+	if step < 3 && b != nil && b.InitialSHA != "" {
+		return productionCardStatus{Text: "已完成", State: "complete"}
+	}
 	if status, ok := s.productionCardActivity(v, b, step); ok {
 		return status
 	}
@@ -119,8 +122,10 @@ func (s *app) productionInitializationStepStatus(v *productionView, b *productio
 }
 
 func (s *app) productionBaselineStatus(v *productionView, b *production.Batch) productionCardStatus {
-	if status, ok := s.productionCardActivity(v, b, 1, 2); ok {
-		return status
+	if b == nil || b.InitialSHA == "" {
+		if status, ok := s.productionCardActivity(v, b, 1, 2); ok {
+			return status
+		}
 	}
 	status := s.productionInitializationStepStatus(v, b, 2)
 	if status.State == "pending" && status.Text == "待执行" {
